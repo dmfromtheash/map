@@ -72,7 +72,8 @@ git diff --stat BASE..HEAD
 git diff --check BASE..HEAD
 git ls-files
 dotnet sln spike/Map.Spike.slnx list
-dotnet list spike/Map.Spike.slnx reference
+Get-ChildItem spike -Recurse -Filter *.csproj |
+  ForEach-Object { dotnet list $_.FullName reference }
 ```
 
 Отдельно считать `A` (added), `M` (modified), `D` (deleted), `R` (renamed) и общее число tracked files. Проверить:
@@ -109,8 +110,8 @@ dotnet restore spike/Map.Spike.slnx --force-evaluate
 dotnet build spike/Map.Spike.slnx -c Release --no-restore
 dotnet test spike/Map.Spike.slnx -c Release --no-build --blame-hang --blame-hang-timeout 2m
 dotnet format spike/Map.Spike.slnx --verify-no-changes --severity info --no-restore
-dotnet package list spike/Map.Spike.slnx --vulnerable --include-transitive
-dotnet package list spike/Map.Spike.slnx --deprecated --include-transitive
+dotnet package list --project spike/Map.Spike.slnx --vulnerable --include-transitive
+dotnet package list --project spike/Map.Spike.slnx --deprecated --include-transitive
 ```
 
 Команды уточняются под этап. Opus обязан проверить исходный симптом и failure path, а не только happy path.

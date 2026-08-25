@@ -2,10 +2,10 @@
 
 ## Последнее обновление
 
-2026-08-25. Codex завершил независимую проверку Stage 1 по
-`docs/11_CLAUDE_VERIFICATION_PROTOCOL.md`. Итог: `BLOCKED` для перехода к Stage 2 из-за
-воспроизводимого дефекта geometry chunk culling. Точный fix-prompt для Opus:
-`artifacts/opus-prompt-stage01-fix01.md`.
+2026-08-25. Codex завершил Gate D для Fix 01 (`fcc2d7f..9e07874`): geometry chunk culling
+исправлен и принят как `FACT`. Stage 1 остаётся `BLOCKED` из-за воспроизводимого падения на
+неизвестном `state` recovery-журнала. Следующий fix-prompt для Opus:
+`artifacts/opus-prompt-stage01-fix02-recovery-state.md`.
 
 ## FACT — среда
 
@@ -95,8 +95,8 @@ Base `fcc2d7f`. Изменены только разрешённые задан�
 - Контрпример из ревью воспроизведён тестом до исправления: object bounds
   `X=486,0588745…, Right=553,9411254…`, viewport `[480,511)`, `visible chunks 0`. После
   исправления тест проходит. Полный suite: **67/67** (было 55).
-- Узкий Stryker только по `AtomicDocumentStore.cs`: 47 протестированных мутантов, 29 killed,
-  16 survived, 2 timeout, 9 NoCoverage, score `55,36 %`. Мутант удаления вызова
+- Узкий Stryker только по `AtomicDocumentStore.cs`: 47 протестированных мутантов, 28 killed,
+  17 survived, 2 timeout, 9 NoCoverage, score `55,36 %`. Мутант удаления вызова
   `ValidateReadBack` (L101, statement → `;`) теперь **Killed**; отдельно подтверждено ручной
   мутацией — тест падает. Отчёт: `artifacts/stage01-fix01/stryker/`.
 - `drive-window.ps1` стал самопроверяющимся: каждое состояние читается через UI Automation
@@ -123,6 +123,24 @@ Base `fcc2d7f`. Изменены только разрешённые задан�
 - Вывод: интервал квантуется частотой обновления и равен двум периодам по `6,94 мс`; время уходит
   в ожидание цепочки dispatcher → композитор → present, а не в GC и не в наш рендер.
 
+## FACT — независимый Gate D Fix 01
+
+- Точный range `fcc2d7f978554f7b96578c94d9635a748a58b0d4..`
+  `9e07874ec16281915e61d582d5cf35d2146427a0`: `A=0`, `M=6`, `D=0`, `R=0`, `+706/-42`.
+- Red/green подтверждён изолированно: без fix оба новых culling-теста падают, с fix — 4/4.
+- Fresh clean/restore/build — 0 warnings/errors; suite 67/67; targeted 45/45; format, package
+  checks, pre-commit и doctor проходят.
+- Coverage: 86,71% lines / 77,51% branches overall; основной `ObjectGeometryCache` —
+  96,20% lines / 90% branches.
+- Узкий Stryker culling: критический mutant отключения inflate killed; оставшиеся survivors
+  разобраны в `docs/reviews/STAGE_01_VERIFICATION.md` и не воспроизводят исходный пропуск.
+- Свежий независимый GPU-window: interval median `13,58 мс`, P95 `14,84 мс`; Skia draw median
+  `0,11 мс`, P95 `0,25 мс`; listeners 0; WebView/Chromium 0.
+- Все 13 PNG Opus независимо просмотрены; selection, brush/undo/redo, mask, save/export/reopen и
+  benchmark соответствуют UIA evidence. Файлы имеют одинаковый размер `2576x1408`.
+- PNG 4096x4096 декодируется как 8-bit TrueColorAlpha; mapspike содержит 28 ZIP entries, оба
+  manifest checksum совпадают с реальными entries.
+
 ## PARTIAL
 
 - Сколько именно из двух периодов обновления можно вернуть — не доказано. Нужен эксперимент со
@@ -131,7 +149,7 @@ Base `fcc2d7f`. Изменены только разрешённые задан�
 - Сглаживание объектов отключено (`DrawVertices` без MSAA) — визуальный размен ради бюджета.
 - Fault injection для «во время `File.Replace`» проверяет наблюдаемый результат, а не разрыв
   внутри самой операции: `ReplaceFile` атомарна на уровне NTFS и не делится из managed-кода.
-- В узком Stryker остаются 16 survived и 9 NoCoverage мутантов. Значимые: удаление
+- В узком Stryker остаются 17 survived и 9 NoCoverage мутантов. Значимые: удаление
   `SpikeDocumentSerializer.Read` внутри `IsReadable` и замена его `return false` на `true`
   (ослабляют признак `TargetStillIntact`), удаление `stream.Flush(flushToDisk: true)`, а также
   три непокрытых сообщения несоответствия внутри `ValidateReadBack`.
@@ -145,22 +163,17 @@ Base `fcc2d7f`. Изменены только разрешённые задан�
   более новой версией). Из-за этого `HasRecoverableWork` падает вместо ответа «предлагать нечего».
   Тест намеренно не добавлен: единственное корректное исправление лежит в
   `spike/src/Map.Spike.Persistence/Recovery/RecoveryJournal.cs`, а этот файл **не входит** в
-  список путей, разрешённых fix-срезом. Требуется решение владельца на точечную правку
-  (`Enum.TryParse` с трактовкой неизвестного состояния как невосстановимого).
+  список путей, разрешённых Fix 01. Точечная правка разрешена текущим запросом владельца и вынесена
+  в отдельный Fix 02 для Opus (`Enum.TryParse` плюс проверка defined-state).
 - Ручные аккаунтные сценарии Inkarnate требуют входа владельца.
 - Автоматическое исследование закрытого UI не выполняется из-за условий использования.
 - Точные визуальные токены и производственные ассеты отложены до материалов владельца.
 
 ## Следующий безопасный шаг
 
-Fix-срез по `artifacts/opus-prompt-stage01-fix01.md` выполнен и закоммичен отдельным коммитом от
-base `fcc2d7f`. Opus остановился. Дальше Codex повторяет Gate D на новом `BASE..HEAD`:
-воспроизводит исходный culling-дефект, подтверждает red/green нового regression-теста, прогоняет
-весь Gate A и Gate B и относящийся к этапу Gate C. Stage 2 и prompt для Stage 2 не начинать до
-`FACT` по Gate D.
-
-Отдельно требуется решение владельца по единственному `BLOCKED`-пункту выше: разрешить ли точечную
-правку `RecoveryJournal.cs` вне списка путей fix-среза.
+Opus выполняет только Fix 02 по `artifacts/opus-prompt-stage01-fix02-recovery-state.md` от точного
+base внутри prompt, создаёт отдельный fix-коммит и останавливается. Затем Codex повторяет Gate D.
+Stage 2 и prompt для Stage 2 не начинать до `FACT` по новому Gate D.
 
 ## Проверка среды
 

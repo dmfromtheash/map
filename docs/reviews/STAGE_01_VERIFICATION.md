@@ -6,14 +6,14 @@
 
 `BLOCKED` для перехода к Stage 2.
 
-Стек из DEC-002 подтверждён и не требует сравнительного Qt spike: настоящее окно использует
-GPU/OpenGL через ANGLE поверх Direct3D, время нашего Skia draw укладывается в бюджет, hit-test и
-offscreen export имеют большой запас. Этап не принят из-за отдельного алгоритмического дефекта:
-geometry chunk culling пропускает объект, который пересекает viewport, если центр объекта лежит
-в соседнем chunk.
+Стек из DEC-002 подтверждён и не требует сравнительного Qt spike. Блокирующий geometry chunk
+culling defect исправлен коммитом `9e07874` и прошёл независимый Gate D. Этап всё ещё не принят:
+валидный recovery journal с неизвестным значением `state` приводит к `ArgumentException` при
+чтении `HasRecoverableWork` вместо безопасного ответа «восстановление не предлагать».
 
 Следующий шаг — только fix-срез Opus по
-`artifacts/opus-prompt-stage01-fix01.md`, затем полный Gate D. Stage 2 до этого не начинать.
+`artifacts/opus-prompt-stage01-fix02-recovery-state.md`, затем новый полный Gate D. Stage 2 до
+этого не начинать.
 
 ## Git identity и область
 
@@ -28,6 +28,8 @@ geometry chunk culling пропускает объект, который пер�
 | Tracked files на baseline `06e494f` | `96` |
 | Диапазон реализации `7f03200..f80c8e9` | `A=66, M=1, D=0, R=0`; 67 файлов; `+6595/-16` |
 | Процессный коммит `06e494f` | 6 modified files; `+50/-28`; отдельный от кода Opus |
+| Fix 01 base/head | `fcc2d7f978554f7b96578c94d9635a748a58b0d4..9e07874ec16281915e61d582d5cf35d2146427a0` |
+| Fix 01 range | `A=0, M=6, D=0, R=0`; `+706/-42`; tracked files `97` |
 
 `git diff --check 7f03200..f80c8e9` и staged diff процессного коммита ошибок не показали.
 Security/secret scans намеренно не запускались по прямому решению владельца и актуальному
@@ -117,17 +119,17 @@ A spike/tools/drive-window.ps1
 | 1 | `doctor.ps1` проходит | `FACT` | exit 0 после процессного коммита |
 | 2 | clean restore/build/test | `FACT` | clean/restore/build/test exit 0; build 0 warnings/errors; 55/55 |
 | 3 | native Windows process без listener | `FACT / PARTIAL` | GPU native window и ANGLE наблюдались; прежний полный driver показал TCP listeners 0; свежий полный повтор остановлен потерей focus |
-| 4 | 10 000 объектов, pan/zoom, culling и измерения | `BLOCKED` | 10 000 и pan/zoom видны, но edge-culling probe воспроизводит пропуск пересекающегося объекта |
+| 4 | 10 000 объектов, pan/zoom, culling и измерения | `FACT` | Fix 01 прошёл red/green и brute-force oracle; 1:1 benchmark оставляет 15 chunks/2454 objects |
 | 5 | spatial hit-test и ожидаемый stable ID | `FACT` | targeted 12/12; benchmark median 0,003 мс, P95 0,007 мс, 22,6 кандидата |
 | 6 | brush tiles и одна undo/redo command | `FACT` | targeted 10/10; предыдущие реальные PNG 04–06 показывают stroke/undo/redo |
 | 7 | mask изолирована, overlay не в export | `FACT` | render/export 10/10; реальные PNG 07–09; pixel test export без overlay |
 | 8 | save/reopen semantic equality | `FACT` | persistence targeted 21/21; свежий `.mapspike` открыт и manifest проверен |
-| 9 | fault/kill сохраняет last-good и recoverable work | `FACT / PARTIAL` | 2/2 реальных process-kill и fault suite зелёные; validate/torn-journal test strength требует усиления |
+| 9 | fault/kill сохраняет last-good и recoverable work | `BLOCKED` | validate/torn-journal усилены, но unknown valid `state` воспроизводимо валит `HasRecoverableWork` |
 | 10 | настоящий PNG 4096×4096 с alpha | `FACT` | свежий decode: PNG signature, 4096×4096, bit depth 8, colour type 6, 1 353 694 B |
-| 11 | все тесты и ручной native smoke | `PARTIAL` | тесты зелёные; полный предыдущий smoke есть, свежий driver остановлен после 2 кадров и второй PNG невалиден |
+| 11 | все тесты и ручной native smoke | `FACT` | 67/67; 13/13 полных PNG; selection с GUID; свежий независимый GPU-window check |
 | 12 | нет production/out-of-scope features | `FACT` | код изолирован в `spike/`; нет dashboard, `.mapproj`, WebView/server/cloud |
 
-Поскольку критерий 4 имеет `BLOCKED`, писать `готово` и выдавать Stage 2 нельзя.
+Поскольку критерий 9 имеет `BLOCKED`, писать `готово` и выдавать Stage 2 нельзя.
 
 ## Свежие автоматические проверки
 
@@ -209,32 +211,33 @@ trace-ом и остаётся `PARTIAL`.
 
 ## Findings
 
-### [P1] Edge-crossing object пропускается geometry chunk culling
+### [P1 — RESOLVED] Edge-crossing object пропускался geometry chunk culling
 
 `spike/src/Map.Spike.Rendering/ObjectGeometryCache.cs:90` перебирает только chunk-координаты
 viewport, хотя chunks сгруппированы по центрам объектов. Контрпример с центром `(520,256)` и
 viewport `[480,511)` имеет пересекающиеся bounds, но `VisibleChunks` возвращает 0. Пользователь
-может видеть исчезновение фигур у края при pan/zoom. Требуется fix и red/green regression.
+мог видеть исчезновение фигур у края при pan/zoom. Исправлено в `9e07874`; точный red/green и
+полный Gate D подтверждены разделом ниже.
 
-### [P2] Persistence tests не убивают важные мутации read-back/recovery
+### [P2 — PARTIAL] Persistence tests не убивали важные мутации read-back/recovery
 
-Узкий Stryker оставил 33 survivors. В частности, удаление вызова `ValidateReadBack` в
-`AtomicDocumentStore.cs:101` переживает suite; ветка torn journal не покрыта. Это не доказывает
-новый runtime-дефект текущего кода, но ослабляет доказательство критериев 8–9. Fix-prompt требует
-corrupt-durable-temp и corrupt-journal tests и повтор узкого Stryker.
+Fix 01 добавил corrupt-durable-temp и corrupt-journal tests; удаление `ValidateReadBack` теперь
+killed. В фактическом JSON остаются 17 survived, 2 timeout и 9 NoCoverage; значимые остатки
+перечислены в handoff. Отдельный unknown-state blocker найден уже при проверке этих ветвей.
 
-### [P2] Selection и полный свежий UI smoke недоказаны
+### [P2 — RESOLVED] Selection и полный свежий UI smoke были недоказаны
 
 Сохранённый selection screenshot содержит `Nothing under the cursor`; свежий driver получил
 невалидный `160×28` PNG после потери focus. Нужен детерминированный UIA-confirmed selection и
-проверка одинаковых полных dimensions всех 13 PNG.
+проверка одинаковых полных dimensions всех 13 PNG. Fix 01 добавил эти проверки; 13/13 кадров
+имеют `2576x1408`, selection содержит GUID и видимое жёлтое кольцо.
 
-### [P3] Документированная reference-команда не работает с `.slnx`
+### [P3 — RESOLVED] Документированная reference-команда не работала с `.slnx`
 
 `spike/README.md:23` и `docs/11_CLAUDE_VERIFICATION_PROTOCOL.md:75` предлагают
 `dotnet list spike/Map.Spike.slnx reference`; SDK 10 возвращает exit 1, `Проект ... недопустим`.
-Фактическая проверка выполнена отдельно для каждого `.csproj`. README разрешён к исправлению Opus;
-протокол можно скорректировать отдельным docs-коммитом после Gate D.
+Фактическая проверка выполнена отдельно для каждого `.csproj`. README исправлен Opus, протокол —
+отдельным документационным коммитом Codex после Gate D.
 
 ### [P3] xUnit 2.9.3 помечен Legacy
 
@@ -247,9 +250,11 @@ foundation в Stage 2.
 
 - .NET 10 + Avalonia 12.1 + Skia запускаются нативно на GPU без WebView/server;
 - Core не зависит от Avalonia/Skia;
-- 55/55 и targeted suites зелёные;
+- 67/67 и targeted suites зелёные;
 - command/undo, raster/mask isolation, atomic save, kill recovery, semantic reopen и 4K alpha PNG
   работают в проверенных сценариях;
+- edge-culling fix прошёл независимый red/green и не отключает culling;
+- полный self-checking UI smoke и отдельный свежий GPU-window check прошли;
 - числа поддерживают DEC-002; Qt spike не нужен.
 
 ### PARTIAL
@@ -259,18 +264,82 @@ foundation в Stage 2.
 - raster stroke может выходить за canvas;
 - `DuringReplace` fault point проверяет результат до атомарного Win32 replace, а не разрыв внутри;
 - self-contained `win-x64` и clean VM вне Stage 1;
-- mutation strength и свежий full visual smoke требуют усиления;
+- mutation strength persistence остаётся неполной: 17 survived и 9 NoCoverage;
+- mutation strength culling: критический no-inflate mutant killed, но остаются разобранные
+  performance/metrics survivors;
 - xUnit 2.9.3 Legacy.
 
 ### BLOCKED
 
-- Stage 1 не закрыт, пока edge-culling defect не исправлен отдельным коммитом Opus и не пройден
-  полный Gate D.
+- Stage 1 не закрыт, пока unknown recovery `state` не перестанет выбрасывать исключение, fix не
+  будет сделан отдельным коммитом Opus и не пройдёт полный Gate D.
+
+## Gate D — Fix 01 (`fcc2d7f..9e07874`)
+
+### Git и red/green
+
+- точный диапазон: `fcc2d7f978554f7b96578c94d9635a748a58b0d4..`
+  `9e07874ec16281915e61d582d5cf35d2146427a0`;
+- `A=0`, `M=6`, `D=0`, `R=0`; `+706/-42`; tracked files `97`; tracked artifacts/bin/obj `0`;
+- `git diff --check` чистый, worktree перед проверкой чистый;
+- в изолированном base-worktree новые тесты с диагностическим `Cell`, но без fix, падают 0/2:
+  точный viewport-контрпример и `straddle-128` oracle;
+- на fix-коммите те же проверки проходят 4/4, включая «не рисовать всё» и отсутствие дубликатов.
+
+### Автоматические gates
+
+- hook установлен; `pre-commit --all-files` и `scripts/doctor.ps1` — exit 0;
+- fresh clean/restore/build — exit 0, 0 warnings/errors;
+- полный suite 67/67; targeted render/fault/process-kill/save-reopen 45/45;
+- `dotnet format --verify-no-changes` — exit 0;
+- package vulnerable: 0 известных уязвимых пакетов в 7 проектах;
+- package deprecated: только xUnit 2.9.3 и transitives со статусом Legacy;
+- все 7 `.csproj` входят в solution; ссылки проверены по каждому проекту; Core имеет 0 references,
+  его `.deps.json` содержит только `Map.Spike.Core/1.0.0`;
+- coverage: 86,71% lines / 77,51% branches overall; основной класс
+  `ObjectGeometryCache` — 96,20% lines / 90% branches;
+- независимый Stryker по `ObjectGeometryCache.cs`: score 55,68%; в файле 44 killed,
+  35 survived, 5 timeout, 4 NoCoverage, 10 CompileError, 14 Ignored. Мутация, полностью
+  отключающая inflate/culling fix, killed. Оставшиеся arithmetic survivors в основном
+  переоценивают scan range либо относятся к метрикам/triangulation; это `PARTIAL`, не новый
+  доказанный пропуск объекта;
+- фактический JSON Opus Stryker по `AtomicDocumentStore.cs`: 28 killed, 17 survived, 2 timeout,
+  9 NoCoverage, 3 CompileError, 16 Ignored. Удаление `ValidateReadBack` killed. Числа 29/16 в
+  handoff Fix 01 были ошибкой отчёта и исправлены.
+
+### Benchmark, файлы и настоящее окно
+
+- свежий console benchmark: geometry cache 64 chunks/63772 triangles; 1:1 viewport — 15 chunks,
+  2454 objects; save median 309,799 мс; reopen 124,065 мс; 4K export median 1789,578 мс;
+- 13 PNG Opus проверены как файлы: каждый `2576x1408`, sRGBA; vision review подтверждает
+  selection с GUID/жёлтым кольцом, brush undo/redo, mask overlay on/off, mask disabled, save,
+  reopen и benchmark;
+- свежий независимый targetable window: один `Map.Spike.App.exe`, GPU/OpenGL + ANGLE/d3d11/
+  DirectComposition, 10000 objects; interval median 13,58 мс, P95 14,84 мс; Skia median
+  0,11 мс, P95 0,25 мс; TCP listeners 0; WebView/Chromium modules 0;
+- `export-4096.png`: 1420315 bytes, SHA-256
+  `9777528ADF5C75AEF699845BE5BE1EB65CA5F9AE110FCD5C3E3873AA6AEF5B74`, 4096x4096,
+  8-bit TrueColorAlpha, визуально без selection/mask edit overlay;
+- `spike-session.mapspike`: 844890 bytes, SHA-256
+  `475C7CABBC88CAC93E95524FDE26CD0BA0CAE8C32E8AD1B8288567BFF9D4E0F3`, 28 ZIP entries;
+  оба manifest SHA-256 совпадают с `scene.json` и `tile-manifest.json`.
+
+### Новый blocker
+
+Изолированный probe записал валидный JSON journal с `state=FutureVersionDurable` и существующим
+temp-файлом. `TryRead` вернул record, но чтение `HasRecoverableWork` выбросило:
+
+```text
+ArgumentException: Requested value 'FutureVersionDurable' was not found.
+```
+
+Это forward-compatibility и crash-recovery failure path Stage 1. Он требует отдельного fix-коммита
+Opus; Codex production-код не менял. Security/secret scans не запускались.
 
 ## Точный следующий prompt
 
-`artifacts/opus-prompt-stage01-fix01.md`; точный рабочий base записан внутри prompt после
-документационных коммитов проверки.
+`artifacts/opus-prompt-stage01-fix02-recovery-state.md`; точный рабочий base записан внутри prompt
+после документационных коммитов проверки.
 
 После отчёта и fix-коммита Opus обязан остановиться. Codex повторяет red/green, Gate A, весь Gate B,
 относящийся Gate C, пересчитывает A/M/D/R и только затем создаёт Stage 2 prompt с новым точным base.
