@@ -2,9 +2,10 @@
 
 ## Последнее обновление
 
-2026-08-25. Opus выполнил Fix 02 (`be323ed` → см. раздел Fix 02): неизвестное значение `state`
-recovery-журнала больше не роняет чтение `HasRecoverableWork` и не предлагается как
-восстанавливаемое. Кодовых `BLOCKED` у Stage 1 не осталось. Ожидается независимый Gate D Codex.
+2026-08-25. Fix 02 принят после сокращённого независимого Gate D Codex, разрешённого владельцем:
+проверены точный diff, изменённая ветвь recovery, свежая Release-сборка и 44 целевых теста.
+Неизвестное значение `state` recovery-журнала не роняет чтение и не предлагается как
+восстанавливаемое. Кодовых `BLOCKED` у Stage 1 нет; можно начинать первый ограниченный срез Stage 2.
 
 ## FACT — среда
 
@@ -168,6 +169,27 @@ Base `be323ed`. Изменены только три разрешённых за
   Отчёт: `artifacts/stage01-fix02/stryker-recovery/`.
 - UI smoke не перезапускался: срез не касается UI/rendering (по заданию).
 
+## FACT — сокращённый независимый Gate D Fix 02
+
+По прямому решению владельца финальная проверка ограничена критическими точками, без повторения
+уже выполненных тяжёлых прогонов.
+
+- Точный range `be323ed20fe701025fab7c467a00bc58b285b6c2..`
+  `b543896ce60fc5164a1949f8007404b474d03f4a`: изменены ровно три ожидаемых файла,
+  `A=0`, `M=3`, `D=0`, `R=0`, `+171/-20`; кодовый worktree перед проверкой чистый.
+- Codex прочитал production diff и новые regression tests. Ветка использует nullable safe parse
+  через `TryParse` + `IsDefined`; сырой `State` сохраняется, неизвестные/числовые/wrong-case/null
+  значения не считаются recoverable, известный `TempDurable` сохранил прежний контракт.
+- Red исходного дефекта ранее воспроизведён Codex на base отдельным probe:
+  `FutureVersionDurable` приводил к `ArgumentException` при чтении `HasRecoverableWork`.
+- На новом head свежая `Release --no-restore` сборка прошла с 0 warnings/errors; целевой набор
+  `FaultInjectionTests|ProcessKillRecoveryTests|SaveReopenTests` прошёл **44/44**.
+- По решению владельца Codex не повторял full 80/80, clean/restore, UI smoke, coverage,
+  benchmark, Stryker и package audits. Эти результаты остаются evidence self-check Opus, а не
+  повторной независимой проверкой.
+- Итог: исправление и Stage 1 приняты в согласованном сокращённом режиме; существующие `PARTIAL`
+  ниже не превращаются в доказанные `FACT` и переносятся дальше как известные ограничения.
+
 ## PARTIAL
 
 - Сколько именно из двух периодов обновления можно вернуть — не доказано. Нужен эксперимент со
@@ -191,11 +213,11 @@ Base `be323ed`. Изменены только три разрешённых за
 
 ## Следующий безопасный шаг
 
-Fix 02 по `artifacts/opus-prompt-stage01-fix02-recovery-state.md` выполнен от base `be323ed` и
-закоммичен отдельным коммитом. Opus остановился. Codex повторяет полный Gate D на новом
-`BASE..HEAD`: воспроизводит red на base (контрпример `FutureVersionDurable`), подтверждает green,
-прогоняет Gate A/B и recovery failure paths. Кодовых `BLOCKED` у Stage 1 больше нет; Stage 2 и
-prompt для Stage 2 не начинать до `FACT` по этому Gate D.
+Передать Opus только первый issue-sized срез Stage 2 по
+`artifacts/opus-prompt-stage02a-foundation-persistence.md`: production foundation для `Map.Core`
+и `Map.Persistence` с минимальным `.mapproj` v1 и семантическим save/reopen. Dashboard, wizard,
+canvas/UI, rendering, thumbnail и весь остальной Stage 2 в этот коммит не включать. После одного
+коммита Opus останавливается, Codex проверяет только точный diff и ключевые тесты.
 
 ## Проверка среды
 

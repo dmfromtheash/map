@@ -4,16 +4,14 @@
 
 ## Итог
 
-`BLOCKED` для перехода к Stage 2.
+`FACT` для перехода к первому ограниченному срезу Stage 2 в согласованном владельцем сокращённом
+режиме проверки.
 
-Стек из DEC-002 подтверждён и не требует сравнительного Qt spike. Блокирующий geometry chunk
-culling defect исправлен коммитом `9e07874` и прошёл независимый Gate D. Этап всё ещё не принят:
-валидный recovery journal с неизвестным значением `state` приводит к `ArgumentException` при
-чтении `HasRecoverableWork` вместо безопасного ответа «восстановление не предлагать».
-
-Следующий шаг — только fix-срез Opus по
-`artifacts/opus-prompt-stage01-fix02-recovery-state.md`, затем новый полный Gate D. Stage 2 до
-этого не начинать.
+Стек из DEC-002 подтверждён и не требует сравнительного Qt spike. Geometry chunk culling
+исправлен коммитом `9e07874` и прошёл полный независимый Gate D. Unknown recovery state исправлен
+отдельным коммитом `b543896`; Codex проверил точный diff, ранее воспроизведённый failure path,
+свежую Release-сборку и 44 целевых persistence/recovery теста. Тяжёлые повторы full suite, UI,
+coverage, benchmark и mutation testing не выполнялись по прямому решению владельца.
 
 ## Git identity и область
 
@@ -30,6 +28,8 @@ culling defect исправлен коммитом `9e07874` и прошёл н�
 | Процессный коммит `06e494f` | 6 modified files; `+50/-28`; отдельный от кода Opus |
 | Fix 01 base/head | `fcc2d7f978554f7b96578c94d9635a748a58b0d4..9e07874ec16281915e61d582d5cf35d2146427a0` |
 | Fix 01 range | `A=0, M=6, D=0, R=0`; `+706/-42`; tracked files `97` |
+| Fix 02 base/head | `be323ed20fe701025fab7c467a00bc58b285b6c2..b543896ce60fc5164a1949f8007404b474d03f4a` |
+| Fix 02 range | `A=0, M=3, D=0, R=0`; `+171/-20`; tracked files `97` |
 
 `git diff --check 7f03200..f80c8e9` и staged diff процессного коммита ошибок не показали.
 Security/secret scans намеренно не запускались по прямому решению владельца и актуальному
@@ -250,7 +250,7 @@ foundation в Stage 2.
 
 - .NET 10 + Avalonia 12.1 + Skia запускаются нативно на GPU без WebView/server;
 - Core не зависит от Avalonia/Skia;
-- 67/67 и targeted suites зелёные;
+- self-check Opus 80/80; свежий сокращённый targeted suite Codex 44/44;
 - command/undo, raster/mask isolation, atomic save, kill recovery, semantic reopen и 4K alpha PNG
   работают в проверенных сценариях;
 - edge-culling fix прошёл независимый red/green и не отключает culling;
@@ -271,8 +271,8 @@ foundation в Stage 2.
 
 ### BLOCKED
 
-- Stage 1 не закрыт, пока unknown recovery `state` не перестанет выбрасывать исключение, fix не
-  будет сделан отдельным коммитом Opus и не пройдёт полный Gate D.
+- Кодовых блокеров Stage 1 не осталось. Ручные аккаунтные сценарии закрытого Inkarnate UI и
+  производственные визуальные материалы остаются внешними `BLOCKED`, но не блокируют Stage 2A.
 
 ## Gate D — Fix 01 (`fcc2d7f..9e07874`)
 
@@ -336,10 +336,26 @@ ArgumentException: Requested value 'FutureVersionDurable' was not found.
 Это forward-compatibility и crash-recovery failure path Stage 1. Он требует отдельного fix-коммита
 Opus; Codex production-код не менял. Security/secret scans не запускались.
 
+## Gate D — Fix 02, сокращённый по решению владельца (`be323ed..b543896`)
+
+- Точный diff прочитан: три ожидаемых modified-файла, `+171/-20`, кодовый worktree чистый.
+- Реализация заменяет бросающий `Enum.Parse` на nullable `TryParse` + `IsDefined`; неизвестные,
+  числовые вне enum, wrong-case, пустые и null состояния не предлагаются к recovery. Известный
+  `TempDurable` и невосстанавливаемые известные состояния покрыты положительными контролями.
+- Red был независимо доказан на base: `FutureVersionDurable` + существующий temp приводил к
+  `ArgumentException` при чтении `HasRecoverableWork`.
+- На head свежая Release-сборка `--no-restore` прошла с 0 warnings/errors; targeted
+  `FaultInjectionTests|ProcessKillRecoveryTests|SaveReopenTests` прошёл 44/44.
+- Не повторялись full 80/80, clean/restore, UI, coverage, benchmark, Stryker и package audits.
+  Это намеренное ограничение глубины проверки владельцем; соответствующие числа Opus не
+  переобозначаются как независимые результаты Codex.
+- Security/secret scans не запускались согласно действующему протоколу.
+
+Итог: исходный blocker закрыт, regression покрывает forward-compatible unknown state, Stage 1
+принят с сохранением перечисленных `PARTIAL`.
+
 ## Точный следующий prompt
 
-`artifacts/opus-prompt-stage01-fix02-recovery-state.md`; точный рабочий base записан внутри prompt
-после документационных коммитов проверки.
-
-После отчёта и fix-коммита Opus обязан остановиться. Codex повторяет red/green, Gate A, весь Gate B,
-относящийся Gate C, пересчитывает A/M/D/R и только затем создаёт Stage 2 prompt с новым точным base.
+`artifacts/opus-prompt-stage02a-foundation-persistence.md`. Это только production foundation
+`Map.Core`/`Map.Persistence` и минимальный `.mapproj` v1 save/reopen; UI и остальные результаты
+Stage 2 остаются следующими отдельными срезами. После одного коммита Opus останавливается.
