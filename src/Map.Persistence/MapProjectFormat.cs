@@ -13,6 +13,7 @@ public static class MapProjectFormat
     public const string PreviewEntry = "preview.png";
     public const string RasterPrefix = "rasters/";
     public const string MaskPrefix = "masks/";
+    public const string AssetPrefix = "assets/";
 
     /// <summary>Every entry a v1 container must contain.</summary>
     public static readonly IReadOnlyList<string> RequiredEntries =
@@ -41,6 +42,8 @@ public static class MapProjectFormat
 
     /// <summary>One raw tile is fixed-size and bounded (256x256 RGBA at most).</summary>
     public const long MaxTileEntryBytes = 256L * 256 * 4;
+
+    public const long MaxAssetEntryBytes = 512L * 1024 * 1024;
 
     /// <summary>Upper bound of the stored preview image bytes.</summary>
     public const long MaxPreviewBytes = 8L * 1024 * 1024;

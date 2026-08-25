@@ -4,6 +4,7 @@
     <ProjectReference Include="..\Map.Core\Map.Core.csproj" />
     <ProjectReference Include="..\Map.Persistence\Map.Persistence.csproj" />
     <ProjectReference Include="..\Map.Rendering\Map.Rendering.csproj" />
+    <ProjectReference Include="..\Map.Assets\Map.Assets.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

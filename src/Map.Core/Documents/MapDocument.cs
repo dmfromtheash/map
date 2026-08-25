@@ -17,11 +17,13 @@ public sealed record MapDocument
         string title,
         DateTimeOffset createdUtc,
         CanvasDefinition canvas,
-        IReadOnlyList<MapLayer> layers)
+        IReadOnlyList<MapLayer> layers,
+        IReadOnlyList<MapAssetReference>? assets = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
         ArgumentNullException.ThrowIfNull(canvas);
         ArgumentNullException.ThrowIfNull(layers);
+        assets ??= [];
 
         if (layers.Count == 0 || layers[0] is not BaseColorLayer)
         {
@@ -61,6 +63,13 @@ public sealed record MapDocument
         CreatedUtc = createdUtc;
         Canvas = canvas;
         Layers = new ReadOnlyCollection<MapLayer>([.. layers]);
+        Assets = new ReadOnlyCollection<MapAssetReference>([.. assets]);
+
+        if (Assets.Select(asset => asset.Sha256).Distinct(StringComparer.OrdinalIgnoreCase).Count()
+            != Assets.Count)
+        {
+            throw new ArgumentException("Asset hashes are unique within a document.", nameof(assets));
+        }
     }
 
     public DocumentId Id { get; init; }
@@ -74,13 +83,18 @@ public sealed record MapDocument
     /// <summary>Layers in composition order, base colour first. Never aliases a caller list.</summary>
     public IReadOnlyList<MapLayer> Layers { get; init; }
 
+    public IReadOnlyList<MapAssetReference> Assets { get; init; }
+
     /// <summary>The mandatory background layer.</summary>
     public BaseColorLayer BaseColor => (BaseColorLayer)Layers[0];
 
     public MapLayer? FindLayer(LayerId id) => Layers.FirstOrDefault(l => l.Id == id);
 
     public MapDocument WithLayers(IReadOnlyList<MapLayer> layers) =>
-        new(Id, Title, CreatedUtc, Canvas, layers);
+        new(Id, Title, CreatedUtc, Canvas, layers, Assets);
+
+    public MapDocument WithAssets(IReadOnlyList<MapAssetReference> assets) =>
+        new(Id, Title, CreatedUtc, Canvas, Layers, assets);
 
     /// <summary>New snapshot with one layer replaced in place.</summary>
     public MapDocument WithLayer(LayerId id, Func<MapLayer, MapLayer> rewrite)

@@ -92,6 +92,117 @@ public sealed class AddObjectsCommand : IEditCommand
 }
 
 /// <summary>
+/// A stamp placement/scatter plus its project asset reference as one reversible transaction.
+/// The reference is removed on undo only when this command introduced it and no remaining stamp
+/// uses it; content identity therefore stays stable across redo and repeated placement.
+/// </summary>
+public sealed class PlaceAssetObjectsCommand : IEditCommand
+{
+    private readonly LayerId _layerId;
+    private readonly MapAssetReference _asset;
+    private readonly IReadOnlyList<SceneObject> _objects;
+    private bool _introducedAsset;
+
+    public PlaceAssetObjectsCommand(
+        LayerId layerId, MapAssetReference asset, IReadOnlyList<SceneObject> objects)
+    {
+        ArgumentNullException.ThrowIfNull(asset);
+        ArgumentNullException.ThrowIfNull(objects);
+        if (objects.Count == 0
+            || objects.Any(item => item.Kind != SceneObjectKind.Stamp
+                || item.Stamp?.AssetSha256 != asset.Sha256))
+        {
+            throw new ArgumentException("Every placed object must reference the supplied stamp asset.");
+        }
+
+        _layerId = layerId;
+        _asset = asset;
+        _objects = [.. objects];
+    }
+
+    public string Name => _objects.Count == 1 ? "Place stamp" : $"Scatter {_objects.Count} stamps";
+    public int Count => _objects.Count;
+
+    public MapDocument Apply(MapDocument document)
+    {
+        _introducedAsset = document.Assets.All(asset => asset.Sha256 != _asset.Sha256);
+        var withAsset = _introducedAsset
+            ? document.WithAssets([.. document.Assets, _asset])
+            : document;
+        return withAsset.WithLayer(_layerId, layer =>
+        {
+            var objects = layer as ObjectLayer
+                ?? throw new InvalidOperationException($"Layer {_layerId} does not hold objects.");
+            return objects with { Objects = [.. objects.Objects, .. _objects] };
+        });
+    }
+
+    public MapDocument Revert(MapDocument document)
+    {
+        var ids = _objects.Select(item => item.Id).ToHashSet();
+        var withoutObjects = document.WithLayer(_layerId, layer =>
+        {
+            var objects = (ObjectLayer)layer;
+            return objects with { Objects = [.. objects.Objects.Where(item => !ids.Contains(item.Id))] };
+        });
+
+        var stillUsed = withoutObjects.Layers.OfType<ObjectLayer>()
+            .SelectMany(layer => layer.Objects)
+            .Any(item => item.Stamp?.AssetSha256 == _asset.Sha256);
+        return _introducedAsset && !stillUsed
+            ? withoutObjects.WithAssets(
+                [.. withoutObjects.Assets.Where(asset => asset.Sha256 != _asset.Sha256)])
+            : withoutObjects;
+    }
+}
+
+/// <summary>Explicit missing-asset replacement: changes the hash and adds metadata in one undo step.</summary>
+public sealed class ReplaceStampAssetCommand : IEditCommand
+{
+    private readonly SceneObject _before;
+    private readonly SceneObject _after;
+    private readonly MapAssetReference _asset;
+    private bool _introducedAsset;
+
+    public ReplaceStampAssetCommand(SceneObject before, MapAssetReference replacement)
+    {
+        if (before.Stamp is null)
+        {
+            throw new ArgumentException("The selected object is not a stamp.", nameof(before));
+        }
+
+        _before = before;
+        _asset = replacement;
+        _after = before with
+        {
+            Stamp = before.Stamp with { AssetSha256 = replacement.Sha256 },
+            Name = replacement.DisplayName,
+        };
+    }
+
+    public string Name => "Replace stamp asset";
+
+    public MapDocument Apply(MapDocument document)
+    {
+        _introducedAsset = document.Assets.All(asset => asset.Sha256 != _asset.Sha256);
+        var withAsset = _introducedAsset
+            ? document.WithAssets([.. document.Assets, _asset])
+            : document;
+        return DocumentEditor.ReplaceObject(withAsset, _after);
+    }
+
+    public MapDocument Revert(MapDocument document)
+    {
+        var reverted = DocumentEditor.ReplaceObject(document, _before);
+        var stillUsed = reverted.Layers.OfType<ObjectLayer>().SelectMany(layer => layer.Objects)
+            .Any(item => item.Stamp?.AssetSha256 == _asset.Sha256);
+        return _introducedAsset && !stillUsed
+            ? reverted.WithAssets([.. reverted.Assets.Where(asset => asset.Sha256 != _asset.Sha256)])
+            : reverted;
+    }
+}
+
+/// <summary>
 /// Replaces the captured objects with their edited counterparts, wherever they live. Covers one
 /// completed transform/style gesture over one object or a whole group - one history entry.
 /// </summary>

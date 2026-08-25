@@ -5,8 +5,10 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Map.App.Controls;
+using Map.Assets;
 using Map.Core.Documents;
 using Map.Presentation.ViewModels;
 
@@ -34,6 +36,9 @@ public sealed class EditorView : UserControl
     private readonly StackPanel _objectList = new() { Spacing = 4 };
     private readonly TextBox _layerName = new() { Name = "LayerNameBox", PlaceholderText = "Имя слоя" };
     private readonly TextBox _objectSearch = new() { Name = "ObjectSearchBox", PlaceholderText = "Поиск объектов" };
+    private readonly StackPanel _assetList = new() { Spacing = 4 };
+    private readonly TextBox _assetSearch = new() { Name = "AssetSearchBox", PlaceholderText = "Поиск ассетов" };
+    private AssetRecord? _selectedAsset;
 
     public EditorView(EditorViewModel editor, Func<System.Threading.Tasks.Task> requestBack)
     {
@@ -158,6 +163,7 @@ public sealed class EditorView : UserControl
             SyncSidePanels();
         });
         _objectSearch.TextChanged += (_, _) => SyncObjectList();
+        _assetSearch.TextChanged += (_, _) => SyncAssetList();
 
         SyncStatus();
         SyncInspector();
@@ -225,10 +231,64 @@ public sealed class EditorView : UserControl
                         ActionButton("ObjectVisibilityButton", "Показать/скрыть", _editor.ToggleSelectedObjectVisibility),
                         ActionButton("ObjectLockButton", "Замок", _editor.ToggleSelectedObjectLock),
                         ActionButton("DeleteObjectButton", "Удалить", _editor.DeleteSelectedObject),
+                        ActionButton("StampFlipButton", "Stamp: отразить", () =>
+                            _editor.UpdateSelectedStamp(toggleFlip: true)),
+                        ActionButton("StampShadowButton", "Stamp: тень", () =>
+                            _editor.UpdateSelectedStamp(toggleShadow: true)),
+                        ActionButton("StampHueButton", "Stamp: цвет", () =>
+                            _editor.UpdateSelectedStamp(hue: 35, saturation: 0.2)),
                     },
                 },
                 new Separator(),
                 BuildInspector(),
+            },
+        };
+
+        var assets = new StackPanel
+        {
+            Margin = new Thickness(10),
+            Spacing = 6,
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = "Локальный каталог · PNG/JPEG/WebP",
+                    FontWeight = FontWeight.SemiBold,
+                },
+                _assetSearch,
+                new ScrollViewer { MaxHeight = 420, Content = _assetList },
+                new WrapPanel
+                {
+                    Children =
+                    {
+                        ActionButton("ImportAssetButton", "Импорт", () => _ = ImportAssetAsync(linked: false)),
+                        ActionButton("LinkAssetButton", "Связать", () => _ = ImportAssetAsync(linked: true)),
+                        ActionButton("PlaceStampButton", "Разместить", () =>
+                        {
+                            if (_selectedAsset is not null) _editor.PlaceStamp(_selectedAsset, embedded: true);
+                        }),
+                        ActionButton("PlaceLinkedStampButton", "Разместить linked", () =>
+                        {
+                            if (_selectedAsset is not null) _editor.PlaceStamp(_selectedAsset, embedded: false);
+                        }),
+                        ActionButton("ScatterStampButton", "Scatter ×100", () =>
+                        {
+                            if (_selectedAsset is not null) _editor.ScatterStamp(_selectedAsset, 100);
+                        }),
+                        ActionButton("ReplaceStampAssetButton", "Заменить у stamp", () =>
+                        {
+                            if (_selectedAsset is not null) _editor.ReplaceSelectedStampAsset(_selectedAsset);
+                        }),
+                        ActionButton("KeepStampPlaceholderButton", "Оставить placeholder",
+                            _editor.KeepSelectedStampPlaceholder),
+                    },
+                },
+                new TextBlock
+                {
+                    Text = "Linked-файл проверяется по SHA-256; пропажа или подмена видна на холсте.",
+                    TextWrapping = TextWrapping.Wrap,
+                    Opacity = 0.75,
+                },
             },
         };
 
@@ -239,6 +299,7 @@ public sealed class EditorView : UserControl
             {
                 new TabItem { Header = "Слои", Content = layers },
                 new TabItem { Header = "Объекты", Content = objects },
+                new TabItem { Header = "Ассеты", Content = assets },
             },
         };
     }
@@ -374,6 +435,7 @@ public sealed class EditorView : UserControl
 
         _layerName.Text = _editor.ActiveLayer?.Name ?? "";
         SyncObjectList();
+        SyncAssetList();
     }
 
     private void SyncObjectList()
@@ -400,6 +462,60 @@ public sealed class EditorView : UserControl
             };
             _objectList.Children.Add(button);
         }
+    }
+
+    private void SyncAssetList()
+    {
+        var query = (_assetSearch.Text ?? "").Trim();
+        _assetList.Children.Clear();
+        foreach (var asset in _editor.SearchAssets(query))
+        {
+            var selected = asset.Sha256 == _selectedAsset?.Sha256 ? "▶ " : "";
+            var button = new Button
+            {
+                Name = "Asset_" + asset.Sha256[..12],
+                HorizontalContentAlignment = HorizontalAlignment.Left,
+                Content = $"{selected}{asset.DisplayName} · {asset.Width}×{asset.Height} · " +
+                          $"{(asset.LinkedPath is null ? "local" : "linked")}",
+            };
+            button.Click += (_, _) =>
+            {
+                _selectedAsset = asset;
+                SyncAssetList();
+            };
+            _assetList.Children.Add(button);
+        }
+    }
+
+    private async System.Threading.Tasks.Task ImportAssetAsync(bool linked)
+    {
+        var topLevel = TopLevel.GetTopLevel(this);
+        if (topLevel is null)
+        {
+            return;
+        }
+
+        var files = await topLevel.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = linked ? "Связать изображение" : "Импортировать изображение",
+            AllowMultiple = false,
+            FileTypeFilter =
+            [
+                new FilePickerFileType("Изображения")
+                {
+                    Patterns = ["*.png", "*.jpg", "*.jpeg", "*.webp"],
+                },
+            ],
+        });
+        var path = files.Count == 1 ? files[0].TryGetLocalPath() : null;
+        if (path is null)
+        {
+            return;
+        }
+
+        _selectedAsset = _editor.ImportAsset(path, linked);
+        SyncAssetList();
+        SyncStatus();
     }
 
     public MapCanvasControl Canvas => _canvas;

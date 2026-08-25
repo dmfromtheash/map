@@ -131,11 +131,12 @@ public static class MapProjectStore
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
-        var (manifest, scene, previewPng, tiles) = ReadAndValidate(Path.GetFullPath(path));
+        var (manifest, scene, assetManifest, previewPng, tiles, assets) =
+            ReadAndValidate(Path.GetFullPath(path));
 
         return new OpenedProject
         {
-            Document = ToDomain(manifest, scene, tiles),
+            Document = ToDomain(manifest, scene, assetManifest, tiles, assets),
             AppVersion = manifest.AppVersion,
             ModifiedUtc = ParseTimestamp(manifest.ModifiedUtc, "modifiedUtc"),
             PreviewPng = previewPng,
@@ -148,7 +149,7 @@ public static class MapProjectStore
         Stream destination, MapDocument document, SaveMetadata metadata, byte[] previewPng)
     {
         var sceneBytes = JsonSerializer.SerializeToUtf8Bytes(ToSceneDto(document), JsonOptions);
-        var assetManifestBytes = JsonSerializer.SerializeToUtf8Bytes(new AssetManifestDto(), JsonOptions);
+        var assetManifestBytes = JsonSerializer.SerializeToUtf8Bytes(ToAssetManifestDto(document), JsonOptions);
 
         var manifest = new ManifestDto
         {
@@ -177,6 +178,10 @@ public static class MapProjectStore
         {
             WriteEntry(archive, name, bytes);
         }
+        foreach (var (name, bytes) in EnumerateAssetEntries(document).OrderBy(p => p.Name, StringComparer.Ordinal))
+        {
+            WriteEntry(archive, name, bytes);
+        }
     }
 
     private static void WriteEntry(ZipArchive archive, string name, byte[] data)
@@ -194,8 +199,8 @@ public static class MapProjectStore
     /// </summary>
     private static void ValidateReadBack(string tempPath, MapDocument expected)
     {
-        var (manifest, scene, _, tiles) = ReadAndValidate(tempPath);
-        var reloaded = ToDomain(manifest, scene, tiles);
+        var (manifest, scene, assetManifest, _, tiles, assets) = ReadAndValidate(tempPath);
+        var reloaded = ToDomain(manifest, scene, assetManifest, tiles, assets);
 
         if (reloaded.Id != expected.Id)
         {
@@ -207,7 +212,8 @@ public static class MapProjectStore
                 p.First.GetType() != p.Second.GetType()
                 || ObjectCount(p.First) != ObjectCount(p.Second)
                 || TileCount(p.First) != TileCount(p.Second)
-                || (p.First.Mask?.Tiles.TileCount ?? 0) != (p.Second.Mask?.Tiles.TileCount ?? 0)))
+                || (p.First.Mask?.Tiles.TileCount ?? 0) != (p.Second.Mask?.Tiles.TileCount ?? 0))
+            || reloaded.Assets.Count != expected.Assets.Count)
         {
             throw new MapProjectCorruptedException("Read-back layer/object shape does not match the saved snapshot.");
         }
@@ -218,8 +224,10 @@ public static class MapProjectStore
     private static (
         ManifestDto Manifest,
         SceneDto Scene,
+        AssetManifestDto AssetManifest,
         byte[] PreviewPng,
-        IReadOnlyDictionary<string, byte[]> Tiles) ReadAndValidate(string fullPath)
+        IReadOnlyDictionary<string, byte[]> Tiles,
+        IReadOnlyDictionary<string, byte[]> Assets) ReadAndValidate(string fullPath)
     {
         using var stream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read);
 
@@ -284,11 +292,18 @@ public static class MapProjectStore
                     "manifest.json and scene.json disagree about the document id.");
             }
 
-            // The empty catalog must still be a well-formed document.
-            _ = ParseJson<AssetManifestDto>(assetManifestBytes, MapProjectFormat.AssetManifestEntry);
+            var assetManifest = ParseJson<AssetManifestDto>(
+                assetManifestBytes, MapProjectFormat.AssetManifestEntry);
 
             var tiles = ReadAndValidateTiles(archive, scene);
-            return (manifest, scene, ReadEntry(archive, MapProjectFormat.PreviewEntry), tiles);
+            var assets = ReadAndValidateAssets(archive, assetManifest);
+            return (
+                manifest,
+                scene,
+                assetManifest,
+                ReadEntry(archive, MapProjectFormat.PreviewEntry),
+                tiles,
+                assets);
         }
     }
 
@@ -334,6 +349,8 @@ public static class MapProjectStore
                 : name.StartsWith(MapProjectFormat.RasterPrefix, StringComparison.Ordinal)
                     || name.StartsWith(MapProjectFormat.MaskPrefix, StringComparison.Ordinal)
                     ? MapProjectFormat.MaxTileEntryBytes
+                    : name.StartsWith(MapProjectFormat.AssetPrefix, StringComparison.Ordinal)
+                        ? MapProjectFormat.MaxAssetEntryBytes
                     : MapProjectFormat.MaxJsonEntryBytes;
 
             if (entry.Length > perEntryLimit)
@@ -485,7 +502,122 @@ public static class MapProjectStore
         }
     }
 
+    private static IReadOnlyDictionary<string, byte[]> ReadAndValidateAssets(
+        ZipArchive archive, AssetManifestDto manifest)
+    {
+        if (manifest.Assets is null || manifest.Assets.Any(asset => asset is null))
+        {
+            throw new MapProjectCorruptedException("asset-manifest.json has a null assets array or entry.");
+        }
+
+        var result = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        var referenced = new HashSet<string>(StringComparer.Ordinal);
+        var hashes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var asset in manifest.Assets)
+        {
+            var hash = RequireSha256(asset.Sha256, "asset sha256");
+            if (!hashes.Add(hash))
+            {
+                throw new MapProjectCorruptedException($"Asset {hash} occurs more than once.");
+            }
+
+            if (asset.Storage == nameof(ProjectAssetStorage.Embedded))
+            {
+                var expected = AssetContentEntry(hash, asset.Extension);
+                if (!string.Equals(asset.ContentEntry, expected, StringComparison.Ordinal))
+                {
+                    throw new MapProjectCorruptedException(
+                        $"Embedded asset {hash} has a non-canonical content entry.");
+                }
+
+                ReadAssetEntry(expected, hash);
+                if (!string.Equals(Sha256Hex(result[expected]), hash, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new MapProjectCorruptedException(
+                        $"Embedded asset {hash} does not match its content hash.");
+                }
+            }
+            else if (asset.Storage != nameof(ProjectAssetStorage.Linked))
+            {
+                throw new MapProjectCorruptedException(
+                    $"Asset {hash} has unsupported storage mode \"{asset.Storage}\".");
+            }
+
+            if (asset.ThumbnailEntry is { } thumbnailEntry)
+            {
+                var expected = AssetThumbnailEntry(hash);
+                if (!string.Equals(thumbnailEntry, expected, StringComparison.Ordinal))
+                {
+                    throw new MapProjectCorruptedException(
+                        $"Asset {hash} has a non-canonical thumbnail entry.");
+                }
+
+                ReadAssetEntry(expected, hash);
+                if (!string.Equals(
+                        Sha256Hex(result[expected]), asset.ThumbnailSha256, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new MapProjectCorruptedException(
+                        $"Asset {hash} fallback thumbnail does not match its checksum.");
+                }
+            }
+        }
+
+        foreach (var entry in archive.Entries)
+        {
+            if (entry.FullName.StartsWith(MapProjectFormat.AssetPrefix, StringComparison.Ordinal)
+                && !referenced.Contains(entry.FullName))
+            {
+                throw new MapProjectCorruptedException(
+                    $"Asset entry {entry.FullName} is not referenced by asset-manifest.json.");
+            }
+        }
+
+        return result;
+
+        void ReadAssetEntry(string name, string hash)
+        {
+            if (!referenced.Add(name))
+            {
+                throw new MapProjectCorruptedException($"Asset entry {name} is referenced more than once.");
+            }
+
+            if (archive.GetEntry(name) is null)
+            {
+                throw new MapProjectCorruptedException($"Asset {hash} entry {name} is missing.");
+            }
+
+            result[name] = ReadEntry(archive, name);
+        }
+    }
+
     // ---------------------------------------------------------------- mapping
+
+    private static AssetManifestDto ToAssetManifestDto(MapDocument document) => new()
+    {
+        Assets = [.. document.Assets.OrderBy(asset => asset.Sha256).Select(asset => new AssetEntryDto
+        {
+            Sha256 = asset.Sha256,
+            DisplayName = asset.DisplayName,
+            MediaType = asset.MediaType,
+            Extension = asset.Extension,
+            Storage = asset.Storage.ToString(),
+            ImportedUtc = FormatTimestamp(asset.ImportedUtc),
+            Provenance = asset.Provenance,
+            License = asset.License,
+            CatalogId = asset.CatalogId,
+            RelativePath = asset.RelativePath,
+            ContentEntry = asset.Storage == ProjectAssetStorage.Embedded
+                ? AssetContentEntry(asset.Sha256, asset.Extension)
+                : null,
+            ThumbnailEntry = asset.FallbackThumbnailPng is null
+                ? null
+                : AssetThumbnailEntry(asset.Sha256),
+            ThumbnailSha256 = asset.FallbackThumbnailPng is null
+                ? null
+                : Sha256Hex(asset.FallbackThumbnailPng),
+        })],
+    };
 
     private static SceneDto ToSceneDto(MapDocument document) => new()
     {
@@ -562,7 +694,11 @@ public static class MapProjectStore
     };
 
     private static MapDocument ToDomain(
-        ManifestDto manifest, SceneDto scene, IReadOnlyDictionary<string, byte[]> tileEntries)
+        ManifestDto manifest,
+        SceneDto scene,
+        AssetManifestDto assetManifest,
+        IReadOnlyDictionary<string, byte[]> tileEntries,
+        IReadOnlyDictionary<string, byte[]> assetEntries)
     {
         // Explicit JSON null can overwrite any DTO default, so every object/array the mapping
         // walks is checked up front - a damaged file must produce a clear error, never an NRE.
@@ -599,7 +735,8 @@ public static class MapProjectStore
                     manifest.Canvas.Height,
                     RequireString(manifest.Canvas.Unit, "canvas unit"),
                     RequireString(manifest.Canvas.Background, "canvas background")),
-                layers);
+                layers,
+                assetManifest.Assets.Select(asset => ToAsset(asset, assetEntries)).ToList());
         }
         catch (Exception ex) when (ex is ArgumentException or FormatException or InvalidOperationException)
         {
@@ -708,6 +845,51 @@ public static class MapProjectStore
         }
     }
 
+    private static IEnumerable<(string Name, byte[] Bytes)> EnumerateAssetEntries(MapDocument document)
+    {
+        foreach (var asset in document.Assets)
+        {
+            if (asset.Storage == ProjectAssetStorage.Embedded)
+            {
+                yield return (
+                    AssetContentEntry(asset.Sha256, asset.Extension),
+                    asset.EmbeddedContent
+                        ?? throw new InvalidOperationException($"Embedded asset {asset.Sha256} has no bytes."));
+            }
+
+            if (asset.FallbackThumbnailPng is { } thumbnail)
+            {
+                yield return (AssetThumbnailEntry(asset.Sha256), thumbnail);
+            }
+        }
+    }
+
+    private static MapAssetReference ToAsset(
+        AssetEntryDto asset, IReadOnlyDictionary<string, byte[]> entries)
+    {
+        var hash = RequireSha256(asset.Sha256, "asset sha256");
+        if (!Enum.TryParse<ProjectAssetStorage>(asset.Storage, out var storage)
+            || !Enum.IsDefined(storage))
+        {
+            throw new MapProjectCorruptedException(
+                $"Asset {hash} has unsupported storage mode \"{asset.Storage}\".");
+        }
+
+        return new MapAssetReference(
+            hash,
+            RequireString(asset.DisplayName, "asset display name"),
+            RequireString(asset.MediaType, "asset media type"),
+            RequireExtension(asset.Extension),
+            storage,
+            ParseTimestamp(asset.ImportedUtc, "asset importedUtc"),
+            RequireString(asset.Provenance, "asset provenance"),
+            RequireString(asset.License, "asset license"),
+            embeddedContent: asset.ContentEntry is { } content ? entries[content] : null,
+            catalogId: asset.CatalogId,
+            relativePath: asset.RelativePath,
+            fallbackThumbnailPng: asset.ThumbnailEntry is { } thumbnail ? entries[thumbnail] : null);
+    }
+
     private static TileMap ToTileMap(
         IEnumerable<TileDto> tiles,
         string prefix,
@@ -723,6 +905,31 @@ public static class MapProjectStore
 
     private static string TileEntryName(string prefix, string layerId, int x, int y) =>
         $"{prefix}{layerId}/{x}_{y}.bin";
+
+    private static string AssetContentEntry(string sha256, string extension) =>
+        $"{MapProjectFormat.AssetPrefix}{sha256}.{RequireExtension(extension)}";
+
+    private static string AssetThumbnailEntry(string sha256) =>
+        $"{MapProjectFormat.AssetPrefix}thumbnails/{sha256}.png";
+
+    private static string RequireExtension(string? extension)
+    {
+        var value = RequireString(extension, "asset extension").TrimStart('.').ToLowerInvariant();
+        return value is "png" or "jpg" or "jpeg" or "webp"
+            ? value
+            : throw new MapProjectCorruptedException($"Asset extension \"{extension}\" is not supported.");
+    }
+
+    private static string RequireSha256(string? value, string what)
+    {
+        var hash = RequireString(value, what).ToLowerInvariant();
+        if (hash.Length != 64 || hash.Any(c => !Uri.IsHexDigit(c)))
+        {
+            throw new MapProjectCorruptedException($"The container has an invalid {what}.");
+        }
+
+        return hash;
+    }
 
     private static string RequireCanonicalLayerId(string? value)
     {

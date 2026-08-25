@@ -20,5 +20,6 @@
     <ProjectReference Include="..\Map.Rendering\Map.Rendering.csproj" />
     <ProjectReference Include="..\Map.Presentation\Map.Presentation.csproj" />
     <ProjectReference Include="..\Map.Platform.Windows\Map.Platform.Windows.csproj" />
+    <ProjectReference Include="..\Map.Assets\Map.Assets.csproj" />
   </ItemGroup>
 </Project>

@@ -123,4 +123,26 @@ internal sealed class AssetManifestDto
 internal sealed class AssetEntryDto
 {
     [JsonPropertyName("sha256")] public string Sha256 { get; set; } = "";
+    [JsonPropertyName("displayName")] public string DisplayName { get; set; } = "";
+    [JsonPropertyName("mediaType")] public string MediaType { get; set; } = "";
+    [JsonPropertyName("extension")] public string Extension { get; set; } = "";
+    [JsonPropertyName("storage")] public string Storage { get; set; } = "";
+    [JsonPropertyName("importedUtc")] public string ImportedUtc { get; set; } = "";
+    [JsonPropertyName("provenance")] public string Provenance { get; set; } = "";
+    [JsonPropertyName("license")] public string License { get; set; } = "";
+    [JsonPropertyName("catalogId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? CatalogId { get; set; }
+    [JsonPropertyName("relativePath")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RelativePath { get; set; }
+    [JsonPropertyName("contentEntry")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ContentEntry { get; set; }
+    [JsonPropertyName("thumbnailEntry")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ThumbnailEntry { get; set; }
+    [JsonPropertyName("thumbnailSha256")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ThumbnailSha256 { get; set; }
 }

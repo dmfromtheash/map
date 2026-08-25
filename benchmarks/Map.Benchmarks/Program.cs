@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using Map.Assets;
 using Map.Core.Documents;
 using Map.Rendering;
 using SkiaSharp;
@@ -52,6 +53,45 @@ for (var iteration = 0; iteration < 35; iteration++)
 }
 
 samples.Sort();
+var assetRoot = Path.Combine(Path.GetTempPath(), "map-asset-benchmark-" + Guid.NewGuid().ToString("N"));
+var catalog = new AssetCatalog(assetRoot);
+var assetRecords = Enumerable.Range(0, 10_000).Select(index => new AssetRecord
+{
+    Sha256 = index.ToString("x64"),
+    DisplayName = $"asset-{index:D5}",
+    OriginalFileName = $"asset-{index:D5}.png",
+    MediaType = "image/png",
+    Extension = "png",
+    Width = 256,
+    Height = 256,
+    HasAlpha = true,
+    ByteLength = 4_096,
+    ImportedUtc = DateTimeOffset.UnixEpoch.AddSeconds(index),
+    Pack = index % 2 == 0 ? "even" : "odd",
+    Tags = [index % 10 == 0 ? "forest" : "other"],
+    Favorite = index % 100 == 0,
+    Provenance = new AssetProvenance(),
+    ThumbnailRelativePath = $"thumbnails/{index:x64}.png",
+}).ToList();
+catalog.ReplaceIndex(assetRecords);
+var loadTimer = Stopwatch.StartNew();
+var loadedCatalog = new AssetCatalog(assetRoot);
+loadTimer.Stop();
+_ = loadedCatalog.Search("forest", pack: "even");
+var searchSamples = new List<double>();
+for (var iteration = 0; iteration < 30; iteration++)
+{
+    var timer = Stopwatch.StartNew();
+    _ = loadedCatalog.Search("forest", pack: "even");
+    timer.Stop();
+    searchSamples.Add(timer.Elapsed.TotalMilliseconds);
+}
+
+searchSamples.Sort();
+var renderMedian = Percentile(samples, 0.50);
+var searchP95 = Percentile(searchSamples, 0.95);
+var assetLoadMs = Math.Round(loadTimer.Elapsed.TotalMilliseconds, 3);
+var gatePassed = renderMedian <= 33.3 && searchP95 <= 100 && assetLoadMs <= 2_000;
 var result = new
 {
     recordedUtc = DateTimeOffset.UtcNow,
@@ -61,20 +101,33 @@ var result = new
         processorCount = Environment.ProcessorCount,
         framework = Environment.Version.ToString(),
     },
-    canvas = "65536x65536",
-    viewport = "1920x1080",
-    objectCount = objects.Count,
-    candidateCount = candidates.Count,
-    drawnCount = stats.ObjectsDrawn,
-    medianMs = Percentile(samples, 0.50),
-    p95Ms = Percentile(samples, 0.95),
-    gateMedianMs = 33.3,
-    gatePassed = Percentile(samples, 0.50) <= 33.3,
+    render = new
+    {
+        canvas = "65536x65536",
+        viewport = "1920x1080",
+        objectCount = objects.Count,
+        candidateCount = candidates.Count,
+        drawnCount = stats.ObjectsDrawn,
+        medianMs = renderMedian,
+        p95Ms = Percentile(samples, 0.95),
+        gateMedianMs = 33.3,
+    },
+    assetCatalog = new
+    {
+        recordCount = loadedCatalog.Records.Count,
+        metadataLoadMs = assetLoadMs,
+        warmSearchP95Ms = searchP95,
+        decodedOriginalCount = 0,
+        gateLoadMs = 2_000,
+        gateSearchP95Ms = 100,
+    },
+    gatePassed,
 };
 
 var json = JsonSerializer.Serialize(result, new JsonSerializerOptions { WriteIndented = true });
 Console.WriteLine(json);
-return result.gatePassed ? 0 : 2;
+Directory.Delete(assetRoot, recursive: true);
+return gatePassed ? 0 : 2;
 
 static double Percentile(IReadOnlyList<double> values, double percentile)
 {

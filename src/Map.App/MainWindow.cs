@@ -5,6 +5,7 @@ using Avalonia.Input;
 using Avalonia.Media;
 using Map.App.Services;
 using Map.App.Views;
+using Map.Assets;
 using Map.Persistence;
 using Map.Presentation.Services;
 using Map.Presentation.ViewModels;
@@ -20,16 +21,18 @@ public sealed class MainWindow : Window
     private readonly IProjectStore _store;
     private readonly IRecentMaps _recent;
     private readonly IAppLog _log;
+    private readonly AssetCatalog _assets;
     private readonly ContentControl _host = new() { Name = "ViewHost" };
     private readonly DashboardViewModel _dashboard;
 
     private EditorView? _editorView;
 
-    public MainWindow(IProjectStore store, IRecentMaps recent, IAppLog log)
+    public MainWindow(IProjectStore store, IRecentMaps recent, IAppLog log, AssetCatalog assets)
     {
         _store = store;
         _recent = recent;
         _log = log;
+        _assets = assets;
 
         Title = "Map";
         Name = "MainWindow";
@@ -77,7 +80,8 @@ public sealed class MainWindow : Window
             _recent,
             new AvaloniaFilePicker(this),
             new DialogPrompts(this),
-            _log);
+            _log,
+            assetCatalog: _assets);
 
     private async Task NewMapAsync()
     {

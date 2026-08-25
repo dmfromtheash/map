@@ -1,4 +1,5 @@
 using System.Globalization;
+using Map.Assets;
 using Map.Core.Documents;
 using Map.Core.Editing;
 using Map.Persistence;
@@ -53,6 +54,7 @@ public sealed class EditorViewModel : ViewModelBase
     private readonly Func<DateTimeOffset> _clock;
     private readonly string _appVersion;
     private readonly SemaphoreSlim _saveGate = new(1, 1);
+    private readonly AssetCatalog? _assetCatalog;
 
     private SaveState _saveState;
     private string _statusDetail = "";
@@ -77,7 +79,8 @@ public sealed class EditorViewModel : ViewModelBase
         IUserPrompts prompts,
         IAppLog log,
         Func<DateTimeOffset>? clock = null,
-        string appVersion = "0.2.0")
+        string appVersion = "0.2.0",
+        AssetCatalog? assetCatalog = null)
     {
         Session = new EditingSession(document);
         DocumentPath = documentPath;
@@ -88,6 +91,10 @@ public sealed class EditorViewModel : ViewModelBase
         _log = log;
         _clock = clock ?? (static () => DateTimeOffset.UtcNow);
         _appVersion = appVersion;
+        _assetCatalog = assetCatalog;
+        StampImages = assetCatalog is null
+            ? null
+            : new CatalogStampImageSource(assetCatalog, () => Session.Document, () => DocumentPath);
 
         if (startDirty)
         {
@@ -101,6 +108,8 @@ public sealed class EditorViewModel : ViewModelBase
     }
 
     public EditingSession Session { get; }
+
+    public IStampImageSource? StampImages { get; }
 
     public string? DocumentPath { get; private set; }
 
@@ -189,6 +198,199 @@ public sealed class EditorViewModel : ViewModelBase
 
     public LayerId? MaskEditLayerId =>
         ActiveTool == EditorTool.Mask && ActiveLayer?.Mask is not null ? _activeLayerId : null;
+
+    public IReadOnlyList<AssetRecord> Assets => _assetCatalog?.Records ?? [];
+
+    public IReadOnlyList<AssetRecord> SearchAssets(string? query) =>
+        _assetCatalog?.Search(query) ?? [];
+
+    public AssetRecord? ImportAsset(string path, bool linked)
+    {
+        if (_assetCatalog is null)
+        {
+            StatusDetail = "Локальный каталог ассетов недоступен.";
+            return null;
+        }
+
+        try
+        {
+            var imported = _assetCatalog.Import(path, new AssetImportOptions
+            {
+                Linked = linked,
+                Provenance = new AssetProvenance
+                {
+                    Source = "user-imported",
+                    LicenseStatus = AssetLicenseStatus.Unknown,
+                },
+            }, _clock());
+            Raise(nameof(Assets));
+            StatusDetail = $"Импортирован ассет «{imported.DisplayName}».";
+            return imported;
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            StatusDetail = "Не удалось импортировать изображение: " + ex.Message;
+            _log.Error("Asset import failed", ex);
+            return null;
+        }
+    }
+
+    public void PlaceStamp(AssetRecord record, bool embedded = true, double? x = null, double? y = null)
+    {
+        if (_assetCatalog is null)
+        {
+            return;
+        }
+
+        var layer = ActiveLayer as ObjectLayer
+            ?? Session.Document.Layers.OfType<ObjectLayer>().LastOrDefault(item => item.Visible && !item.Locked);
+        var resolution = _assetCatalog.Resolve(record);
+        if (layer is null || layer.Locked || !layer.Visible
+            || resolution.Status != AssetResolutionStatus.Available || resolution.Path is null)
+        {
+            StatusDetail = resolution.Status == AssetResolutionStatus.HashMismatch
+                ? "Файл ассета изменился и не совпадает с сохранённым hash. Выберите замену явно."
+                : "Выберите доступный ассет и разблокированный слой объектов.";
+            return;
+        }
+
+        var thumbnail = File.Exists(_assetCatalog.ThumbnailPath(record))
+            ? File.ReadAllBytes(_assetCatalog.ThumbnailPath(record))
+            : null;
+        var projectDirectory = DocumentPath is null ? null : Path.GetDirectoryName(DocumentPath);
+        var relative = projectDirectory is null
+            ? record.OriginalFileName
+            : Path.GetRelativePath(projectDirectory, resolution.Path);
+        var reference = new MapAssetReference(
+            record.Sha256,
+            record.DisplayName,
+            record.MediaType,
+            record.Extension,
+            embedded ? ProjectAssetStorage.Embedded : ProjectAssetStorage.Linked,
+            record.ImportedUtc,
+            record.Provenance.Source,
+            record.Provenance.LicenseId,
+            embeddedContent: embedded ? File.ReadAllBytes(resolution.Path) : null,
+            catalogId: embedded ? null : record.Sha256,
+            relativePath: embedded ? null : relative,
+            fallbackThumbnailPng: thumbnail);
+        var width = Math.Min(256.0, Session.Document.Canvas.Width / 4.0);
+        var height = width * record.Height / record.Width;
+        var stamp = new SceneObject(
+            ObjectId.New(), SceneObjectKind.Stamp, record.DisplayName,
+            x ?? ((Session.Document.Canvas.Width - width) / 2),
+            y ?? ((Session.Document.Canvas.Height - height) / 2),
+            width, height, 0, "#FFFFFFFF", "#00000000", 0, true, false)
+        {
+            Stamp = new StampStyle(record.Sha256),
+        };
+
+        Session.Execute(new PlaceAssetObjectsCommand(layer.Id, reference, [stamp]));
+        Session.SelectedObjectId = stamp.Id;
+        _activeLayerId = layer.Id;
+        AfterEdit();
+    }
+
+    public void ScatterStamp(AssetRecord record, int count, int seed = 12345)
+    {
+        if (_assetCatalog is null || count is < 1 or > 5_000)
+        {
+            return;
+        }
+
+        var layer = ActiveLayer as ObjectLayer
+            ?? Session.Document.Layers.OfType<ObjectLayer>().LastOrDefault(item => item.Visible && !item.Locked);
+        var resolution = _assetCatalog.Resolve(record);
+        if (layer is null || resolution.Status != AssetResolutionStatus.Available || resolution.Path is null)
+        {
+            StatusDetail = "Ассет недоступен для размещения.";
+            return;
+        }
+
+        var reference = new MapAssetReference(
+            record.Sha256, record.DisplayName, record.MediaType, record.Extension,
+            ProjectAssetStorage.Embedded, record.ImportedUtc,
+            record.Provenance.Source, record.Provenance.LicenseId,
+            embeddedContent: File.ReadAllBytes(resolution.Path),
+            fallbackThumbnailPng: File.ReadAllBytes(_assetCatalog.ThumbnailPath(record)));
+        var random = new Random(seed);
+        var objects = new List<SceneObject>(count);
+        for (var i = 0; i < count; i++)
+        {
+            var size = 48 + (random.NextDouble() * 80);
+            objects.Add(new SceneObject(
+                ObjectId.New(), SceneObjectKind.Stamp, $"{record.DisplayName} {i + 1}",
+                random.NextDouble() * Math.Max(1, Session.Document.Canvas.Width - size),
+                random.NextDouble() * Math.Max(1, Session.Document.Canvas.Height - size),
+                size, size * record.Height / record.Width,
+                random.Next(-180, 181), "#FFFFFFFF", "#00000000", 0, true, false)
+            {
+                Stamp = new StampStyle(record.Sha256)
+                {
+                    FlipHorizontal = random.Next(2) == 0,
+                },
+            });
+        }
+
+        Session.Execute(new PlaceAssetObjectsCommand(layer.Id, reference, objects));
+        Session.SelectedObjectId = objects[^1].Id;
+        AfterEdit();
+    }
+
+    public void ReplaceSelectedStampAsset(AssetRecord record)
+    {
+        if (_assetCatalog is null || Session.SelectedObject is not { Stamp: not null } selected)
+        {
+            StatusDetail = "Выберите stamp и новый ассет.";
+            return;
+        }
+
+        var resolution = _assetCatalog.Resolve(record);
+        if (resolution.Status != AssetResolutionStatus.Available || resolution.Path is null)
+        {
+            StatusDetail = "Новый ассет отсутствует или не совпадает с его SHA-256.";
+            return;
+        }
+
+        var reference = new MapAssetReference(
+            record.Sha256, record.DisplayName, record.MediaType, record.Extension,
+            ProjectAssetStorage.Embedded, record.ImportedUtc,
+            record.Provenance.Source, record.Provenance.LicenseId,
+            embeddedContent: File.ReadAllBytes(resolution.Path),
+            fallbackThumbnailPng: File.ReadAllBytes(_assetCatalog.ThumbnailPath(record)));
+        Session.Execute(new ReplaceStampAssetCommand(selected, reference));
+        AfterEdit();
+    }
+
+    public void KeepSelectedStampPlaceholder()
+    {
+        StatusDetail = "Placeholder оставлен: ссылка и исходный SHA-256 не изменены.";
+    }
+
+    public void UpdateSelectedStamp(
+        double? opacity = null, bool toggleFlip = false, bool toggleShadow = false,
+        double? hue = null, double? saturation = null)
+    {
+        if (Session.SelectedObject is not { Stamp: { } style } before || before.Locked)
+        {
+            StatusDetail = "Выберите разблокированный stamp.";
+            return;
+        }
+
+        var after = CopyObject(before) with
+        {
+            ObjectOpacity = opacity ?? before.ObjectOpacity,
+            Stamp = style with
+            {
+                FlipHorizontal = toggleFlip ? !style.FlipHorizontal : style.FlipHorizontal,
+                ShadowOpacity = toggleShadow ? (style.ShadowOpacity > 0 ? 0 : 0.55) : style.ShadowOpacity,
+                Hue = hue ?? style.Hue,
+                Saturation = saturation ?? style.Saturation,
+            },
+        };
+        Session.Execute(new ReplaceObjectsCommand([before], [after], "Edit stamp style"));
+        AfterEdit();
+    }
 
     // ---------------------------------------------------------------- editing
 

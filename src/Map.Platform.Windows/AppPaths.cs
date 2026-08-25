@@ -11,4 +11,6 @@ public static class AppPaths
     public static string DiagnosticsDirectory => Path.Combine(Root, "Diagnostics");
 
     public static string RecentIndexPath => Path.Combine(Root, "recent.json");
+
+    public static string AssetCatalogRoot => Path.Combine(Root, "Assets");
 }

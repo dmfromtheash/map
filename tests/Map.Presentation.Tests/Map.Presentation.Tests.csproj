@@ -23,6 +23,7 @@
     <ProjectReference Include="..\..\src\Map.Persistence\Map.Persistence.csproj" />
     <ProjectReference Include="..\..\src\Map.Rendering\Map.Rendering.csproj" />
     <ProjectReference Include="..\..\src\Map.Presentation\Map.Presentation.csproj" />
+    <ProjectReference Include="..\..\src\Map.Assets\Map.Assets.csproj" />
   </ItemGroup>
 
 </Project>

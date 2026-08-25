@@ -113,6 +113,7 @@ public sealed class MapCanvasControl : Control
                 TileCache = tileCache,
                 Preview = editor.StrokePreview,
                 MaskEditLayerId = editor.MaskEditLayerId,
+                Stamps = editor.StampImages,
             });
 
             canvas.Restore();
