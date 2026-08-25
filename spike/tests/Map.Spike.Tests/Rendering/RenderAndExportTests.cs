@@ -316,6 +316,180 @@ public class RenderAndExportTests
             $"Culling to 1/64 of the canvas still kept {corner.Count} of {everything.Count} buckets.");
     }
 
+    [Fact]
+    public void An_object_whose_centre_sits_in_the_next_chunk_still_gets_drawn()
+    {
+        // The exact counterexample from the Stage 1 review. The object's centre is at x=520, so it
+        // belongs to chunk column 1 ([512,1024)), but its bounds reach back to x~486 and overlap a
+        // viewport that ends at x=511 and therefore only covers chunk column 0. Selecting chunks by
+        // the viewport's own cell range alone makes this object vanish at the edge during pan/zoom.
+        var layer = new ObjectLayer(LayerId.New(), "objects");
+        var edgeObject = new SpikeObject
+        {
+            Id = ObjectId.New(),
+            Kind = SpikeObjectKind.Square,
+            Center = new Vec2(520, 256),
+            Size = 48,
+            Rotation = 0,
+            ColorArgb = 0xFF3E5C76,
+        };
+
+        layer.Add(edgeObject);
+        layer.RebuildIndex();
+
+        using var cache = ObjectGeometryCache.Build(layer);
+
+        var viewport = new Rect2(480, 240, 31, 32);
+        Assert.True(edgeObject.Bounds.Intersects(viewport), "The fixture no longer reproduces the case.");
+
+        var visible = cache.VisibleChunks(viewport).ToList();
+
+        Assert.True(
+            visible.Count > 0,
+            $"Object bounds {edgeObject.Bounds} intersect viewport {viewport}, but chunk culling returned nothing.");
+    }
+
+    [Fact]
+    public void Chunk_culling_never_drops_an_object_that_really_intersects_the_viewport()
+    {
+        // Oracle test: brute force over every object decides the truth, chunk culling has to agree.
+        // Scenes and viewports are fixed, not random, so a failure is always reproducible.
+        foreach (var scene in EdgeCullingScenes())
+        {
+            using var cache = ObjectGeometryCache.Build(scene.Layer, scene.ChunkSize);
+
+            foreach (var viewport in scene.Viewports)
+            {
+                var visibleCells = cache.VisibleChunks(viewport).Select(c => c.Cell).ToHashSet();
+
+                foreach (var o in scene.Layer.Objects)
+                {
+                    if (!o.Bounds.Intersects(viewport))
+                    {
+                        continue;
+                    }
+
+                    var cell = (
+                        (int)Math.Floor(o.Center.X / scene.ChunkSize),
+                        (int)Math.Floor(o.Center.Y / scene.ChunkSize));
+
+                    Assert.True(
+                        visibleCells.Contains(cell),
+                        $"[{scene.Name}] object at {o.Center} (size {o.Size}) intersects {viewport}, " +
+                        $"but its chunk {cell} was not returned. Returned: " +
+                        $"{string.Join(", ", visibleCells.OrderBy(c => c.Y).ThenBy(c => c.X))}");
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public void Chunk_culling_still_excludes_chunks_that_do_not_reach_the_viewport()
+    {
+        // The fix must not degenerate into "draw everything": a far-away chunk stays excluded.
+        var layer = new ObjectLayer(LayerId.New(), "objects");
+        layer.Add(Square(new Vec2(100, 100), 32));
+        layer.Add(Square(new Vec2(5000, 5000), 32));
+        layer.RebuildIndex();
+
+        using var cache = ObjectGeometryCache.Build(layer);
+
+        var visible = cache.VisibleChunks(new Rect2(0, 0, 256, 256)).ToList();
+
+        Assert.Single(visible);
+        Assert.Equal((0, 0), visible[0].Cell);
+    }
+
+    [Fact]
+    public void Every_object_lives_in_exactly_one_chunk_so_nothing_is_drawn_twice()
+    {
+        var document = SpikeFixtures.CreateObjectScene(10_000);
+        using var cache = ObjectGeometryCache.Build(document.Objects);
+
+        var all = cache.VisibleChunks(new Rect2(-100_000, -100_000, 200_000, 200_000)).ToList();
+
+        Assert.Equal(all.Count, all.Select(c => c.Cell).Distinct().Count());
+        Assert.Equal(document.Objects.Count, all.Sum(c => c.ObjectCount));
+    }
+
+    private sealed record EdgeCullingScene(
+        string Name, ObjectLayer Layer, double ChunkSize, IReadOnlyList<Rect2> Viewports);
+
+    private static SpikeObject Square(Vec2 center, double size) => new()
+    {
+        Id = ObjectId.New(),
+        Kind = SpikeObjectKind.Square,
+        Center = center,
+        Size = size,
+        Rotation = 0,
+        ColorArgb = 0xFF5B8266,
+    };
+
+    private static IEnumerable<EdgeCullingScene> EdgeCullingScenes()
+    {
+        // 1. Objects straddling every chunk boundary of a small grid, scanned by a narrow viewport
+        //    that slides across those boundaries one pixel at a time.
+        var straddle = new ObjectLayer(LayerId.New(), "straddle");
+        for (var i = -2; i <= 2; i++)
+        {
+            straddle.Add(Square(new Vec2((i * 128) + 2, 64), 40));
+            straddle.Add(Square(new Vec2((i * 128) - 2, 192), 40));
+        }
+
+        straddle.RebuildIndex();
+
+        var narrow = new List<Rect2>();
+        for (var x = -300; x <= 300; x += 7)
+        {
+            narrow.Add(new Rect2(x, 0, 3, 256));
+        }
+
+        yield return new EdgeCullingScene("straddle-128", straddle, 128, narrow);
+
+        // 2. Negative coordinates only, where integer floor division is easy to get wrong.
+        var negative = new ObjectLayer(LayerId.New(), "negative");
+        negative.Add(Square(new Vec2(-1, -1), 60));
+        negative.Add(Square(new Vec2(-129, -129), 60));
+        negative.Add(Square(new Vec2(-255, -255), 60));
+        negative.RebuildIndex();
+
+        yield return new EdgeCullingScene("negative", negative, 128,
+        [
+            new Rect2(-300, -300, 40, 40),
+            new Rect2(-140, -140, 20, 20),
+            new Rect2(-10, -10, 5, 5),
+            new Rect2(-260, -20, 300, 40),
+        ]);
+
+        // 3. One object far larger than a chunk: the scan range cannot assume a single-chunk overhang.
+        var huge = new ObjectLayer(LayerId.New(), "huge");
+        huge.Add(Square(new Vec2(2048, 2048), 3000));
+        huge.Add(Square(new Vec2(60, 60), 24));
+        huge.RebuildIndex();
+
+        yield return new EdgeCullingScene("huge-object", huge, 512,
+        [
+            new Rect2(600, 600, 16, 16),
+            new Rect2(3400, 2040, 8, 8),
+            new Rect2(2040, 600, 8, 8),
+            new Rect2(0, 0, 128, 128),
+        ]);
+
+        // 4. The real 10 000-object fixture, swept along the exact chunk boundaries it uses.
+        var document = SpikeFixtures.CreateObjectScene(10_000);
+        var sweep = new List<Rect2>();
+        for (var i = 0; i <= 8; i++)
+        {
+            var boundary = i * ObjectGeometryCache.DefaultChunkSize;
+            sweep.Add(new Rect2(boundary - 1, 0, 2, 4096));
+            sweep.Add(new Rect2(0, boundary - 1, 4096, 2));
+            sweep.Add(new Rect2(boundary - 31, boundary - 31, 31, 31));
+        }
+
+        yield return new EdgeCullingScene(
+            "fixture-10k", document.Objects, ObjectGeometryCache.DefaultChunkSize, sweep);
+    }
+
     private static int CountDifferingPixels(SKBitmap a, SKBitmap b, SKRectI? region = null)
     {
         var rect = region ?? new SKRectI(0, 0, a.Width, a.Height);

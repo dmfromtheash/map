@@ -84,36 +84,83 @@
   стеком Avalonia/Skia.
 - Полный отчёт: `docs/reviews/STAGE_01_VERIFICATION.md`.
 
+## FACT — fix-срез Stage 1 Fix 01
+
+Base `fcc2d7f`. Изменены только разрешённые заданием пути.
+
+- **Блокирующий дефект culling закрыт.** Объекты по-прежнему хранятся по чанку своего центра, а
+  `VisibleChunks` теперь расширяет диапазон сканируемых ячеек на `MaxOverhang` — измеренный при
+  сборке максимум, на который bounds любого чанка выходят за собственную ячейку. Точная проверка
+  `WorldBounds.Intersects` осталась, поэтому набор отрисованного не расширился и дублирования нет.
+- Контрпример из ревью воспроизведён тестом до исправления: object bounds
+  `X=486,0588745…, Right=553,9411254…`, viewport `[480,511)`, `visible chunks 0`. После
+  исправления тест проходит. Полный suite: **67/67** (было 55).
+- Узкий Stryker только по `AtomicDocumentStore.cs`: 47 протестированных мутантов, 29 killed,
+  16 survived, 2 timeout, 9 NoCoverage, score `55,36 %`. Мутант удаления вызова
+  `ValidateReadBack` (L101, statement → `;`) теперь **Killed**; отдельно подтверждено ручной
+  мутацией — тест падает. Отчёт: `artifacts/stage01-fix01/stryker/`.
+- `drive-window.ps1` стал самопроверяющимся: каждое состояние читается через UI Automation
+  (Avalonia публикует `x:Name` как `AutomationId`), ожидания ограничены по времени, каждый PNG
+  декодируется и сверяется с размером окна.
+- Свежий UI smoke прошёл целиком: **13/13 PNG по `2576x1408`**, selection доказана после 3 из 40
+  ограниченных probe-кликов — `Selected Square bc832c58-5ecc-4536-b8ce-1719b1ea5b83`,
+  hit-test `61,5 us, cells=1 candidates=24 precise=1`. Артефакты:
+  `artifacts/stage01-fix01/ui-smoke/` и `ui-evidence.txt`.
+
+### Дополнительное измерение интервала кадра
+
+Дисплей **144 Гц**, период обновления `6,94 мс`. Шесть прогонов, полный разбор:
+`artifacts/stage01-fix01/frame-trace/ANALYSIS.md`.
+
+- На чистом документе interval median `12,37–13,11 мс`, P95 `14,94–15,27 мс` — **ниже** 16,67 мс.
+- P95 `19,82 мс` получен один раз, на документе после brush+mask+save+export+reopen.
+- Skia draw median `0,14–1,40 мс`, P95 `0,93–2,35 мс`.
+- `dotnet-counters`: **ноль сборок GC** всех поколений и **нулевая пауза GC** за всё окно;
+  аллокации пик `1,62 МБ/с`; CPU около 25 % одного ядра из 16.
+- `dotnet-trace` (`dotnet-sampled-thread-time`): `Win32DispatcherImpl.RunLoop` 46,82 %,
+  `WaitHandle.WaitOneNoCheck` 31,47 %, `WinUiCompositorConnection.RunLoop` 15,22 %;
+  на всю нашу отрисовку Skia приходится менее 1 %.
+- Вывод: интервал квантуется частотой обновления и равен двум периодам по `6,94 мс`; время уходит
+  в ожидание цепочки dispatcher → композитор → present, а не в GC и не в наш рендер.
+
 ## PARTIAL
 
-- Бюджет «60 FPS» выполнен по времени оценки сцены (`1,59 мс` median / `2,84 мс` P95), но
-  сквозной интервал кадра имеет P95 `21,22 мс`. Разница `~18 мс` находится вне `SceneRenderer`
-  (композитор Avalonia, present, планирование 1 мс DispatcherTimer) и **не диагностирована**.
+- Сколько именно из двух периодов обновления можно вернуть — не доказано. Нужен эксперимент со
+  способом запроса кадра и `Win32CompositionMode`, это изменение конфигурации приложения и в
+  fix-срез не входило. Числа на 60-герцовом экране не измерялись.
 - Сглаживание объектов отключено (`DrawVertices` без MSAA) — визуальный размен ради бюджета.
 - Fault injection для «во время `File.Replace`» проверяет наблюдаемый результат, а не разрыв
   внутри самой операции: `ReplaceFile` атомарна на уровне NTFS и не делится из managed-кода.
-- Узкий Stryker по persistence дал score `50,56 %`: 45 killed, 33 survived, 11 NoCoverage,
-  4 CompileError. В частности, тесты не убивают удаление вызова `ValidateReadBack`.
-- Сохранённый visual smoke не доказывает selection: на кадре видно `Nothing under the cursor`.
-  Свежая полная UI-последовательность не завершена из-за потери focus внешним драйвером.
-- UI frame interval заметно меняется между прогонами; trace причины выбросов не снят.
+- В узком Stryker остаются 16 survived и 9 NoCoverage мутантов. Значимые: удаление
+  `SpikeDocumentSerializer.Read` внутри `IsReadable` и замена его `return false` на `true`
+  (ослабляют признак `TargetStillIntact`), удаление `stream.Flush(flushToDisk: true)`, а также
+  три непокрытых сообщения несоответствия внутри `ValidateReadBack`.
 - xUnit `2.9.3` и его transitives помечены `Legacy` в package audit.
 - Self-contained `win-x64` publish и запуск на чистой VM не выполнялись (вне scope Stage 1).
 
 ## BLOCKED
 
-- Stage 1 не принят: `ObjectGeometryCache.VisibleChunks` может пропустить объект, который
-  пересекает viewport, если центр объекта находится в соседнем chunk. Изолированный probe получил
-  `object-intersects=True` и `visible-chunks=0`.
+- `RecoveryRecord.StateValue` использует `Enum.Parse` и бросает `ArgumentException` на журнале,
+  который является валидным JSON, но содержит незнакомое значение `state` (например, записанное
+  более новой версией). Из-за этого `HasRecoverableWork` падает вместо ответа «предлагать нечего».
+  Тест намеренно не добавлен: единственное корректное исправление лежит в
+  `spike/src/Map.Spike.Persistence/Recovery/RecoveryJournal.cs`, а этот файл **не входит** в
+  список путей, разрешённых fix-срезом. Требуется решение владельца на точечную правку
+  (`Enum.TryParse` с трактовкой неизвестного состояния как невосстановимого).
 - Ручные аккаунтные сценарии Inkarnate требуют входа владельца.
 - Автоматическое исследование закрытого UI не выполняется из-за условий использования.
 - Точные визуальные токены и производственные ассеты отложены до материалов владельца.
 
 ## Следующий безопасный шаг
 
-Opus выполняет только fix-срез по `artifacts/opus-prompt-stage01-fix01.md` от точного рабочего base,
-записанного внутри prompt, коммитит его отдельным коммитом и останавливается. После этого Codex
-повторяет Gate D. Stage 2 и prompt для Stage 2 не начинать до `FACT` по Gate D.
+Fix-срез по `artifacts/opus-prompt-stage01-fix01.md` выполнен и закоммичен отдельным коммитом от
+base `fcc2d7f`. Opus остановился. Дальше Codex повторяет Gate D на новом `BASE..HEAD`:
+воспроизводит исходный culling-дефект, подтверждает red/green нового regression-теста, прогоняет
+весь Gate A и Gate B и относящийся к этапу Gate C. Stage 2 и prompt для Stage 2 не начинать до
+`FACT` по Gate D.
+
+Отдельно требуется решение владельца по единственному `BLOCKED`-пункту выше: разрешить ли точечную
+правку `RecoveryJournal.cs` вне списка путей fix-среза.
 
 ## Проверка среды
 

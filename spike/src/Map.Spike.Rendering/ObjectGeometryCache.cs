@@ -33,6 +33,13 @@ public sealed class ObjectGeometryCache : IDisposable
     public int SourceObjectCount { get; private set; }
     public int TriangleCount { get; private set; }
 
+    /// <summary>
+    /// Largest distance by which any chunk's real bounds stick out past its own cell, measured from
+    /// the built data rather than assumed. This is what makes <see cref="VisibleChunks"/> correct for
+    /// an object of any size instead of only for objects smaller than one chunk.
+    /// </summary>
+    public double MaxOverhang { get; private set; }
+
     /// <summary>Bytes of vertex data held, for the memory report: 8 per position + 4 per colour.</summary>
     public long ApproximateVertexBytes => (long)TriangleCount * 3 * 12;
 
@@ -79,20 +86,44 @@ public sealed class ObjectGeometryCache : IDisposable
                 [.. positions],
                 [.. colors]);
 
-            cache._chunks[entry.Key] = new Chunk(vertices, bounds, entry.Value.Count, positions.Count / 3);
+            cache._chunks[entry.Key] = new Chunk(
+                entry.Key, vertices, bounds, entry.Value.Count, positions.Count / 3);
             cache.TriangleCount += positions.Count / 3;
+
+            // How far this chunk's content reaches outside its own cell, in each direction.
+            var cellLeft = entry.Key.X * chunkSize;
+            var cellTop = entry.Key.Y * chunkSize;
+
+            cache.MaxOverhang = Math.Max(cache.MaxOverhang, Math.Max(
+                Math.Max(cellLeft - bounds.X, bounds.Right - (cellLeft + chunkSize)),
+                Math.Max(cellTop - bounds.Y, bounds.Bottom - (cellTop + chunkSize))));
         }
 
         return cache;
     }
 
-    /// <summary>Chunks overlapping <paramref name="visibleWorld"/>.</summary>
+    /// <summary>
+    /// Chunks whose actual content overlaps <paramref name="visibleWorld"/>.
+    ///
+    /// An object is filed under the chunk of its CENTRE, so its bounds routinely stick out past that
+    /// chunk's cell. Scanning only the cells the viewport itself covers therefore drops objects that
+    /// genuinely intersect the viewport, and they blink out at the edge during pan and zoom.
+    ///
+    /// The scan range is widened by <see cref="MaxOverhang"/> - the largest distance by which any
+    /// chunk's real bounds exceed its own cell, measured from the data at build time. Because every
+    /// chunk's bounds fit inside its cell inflated by that value, a chunk touching the viewport is
+    /// always inside the widened range, whatever the object sizes are. The exact
+    /// <see cref="Rect2.Intersects"/> test below then drops the extra candidates, so the drawn set
+    /// stays exact and each object is still drawn exactly once.
+    /// </summary>
     public IEnumerable<Chunk> VisibleChunks(Rect2 visibleWorld)
     {
-        var minX = (int)Math.Floor(visibleWorld.X / ChunkSize);
-        var maxX = (int)Math.Floor(visibleWorld.Right / ChunkSize);
-        var minY = (int)Math.Floor(visibleWorld.Y / ChunkSize);
-        var maxY = (int)Math.Floor(visibleWorld.Bottom / ChunkSize);
+        var search = MaxOverhang > 0 ? visibleWorld.Inflate(MaxOverhang) : visibleWorld;
+
+        var minX = (int)Math.Floor(search.X / ChunkSize);
+        var maxX = (int)Math.Floor(search.Right / ChunkSize);
+        var minY = (int)Math.Floor(search.Y / ChunkSize);
+        var maxY = (int)Math.Floor(search.Bottom / ChunkSize);
 
         for (var y = minY; y <= maxY; y++)
         {
@@ -187,5 +218,12 @@ public sealed class ObjectGeometryCache : IDisposable
         (byte)(argb & 0xFF),
         (byte)((argb >> 24) & 0xFF));
 
-    public sealed record Chunk(SKVertices Vertices, Rect2 WorldBounds, int ObjectCount, int TriangleCount);
+    /// <param name="Cell">Grid coordinate this chunk is stored under. Exposed so a test can compare
+    /// culling against a brute-force oracle, and so diagnostics can name a chunk.</param>
+    public sealed record Chunk(
+        (int X, int Y) Cell,
+        SKVertices Vertices,
+        Rect2 WorldBounds,
+        int ObjectCount,
+        int TriangleCount);
 }

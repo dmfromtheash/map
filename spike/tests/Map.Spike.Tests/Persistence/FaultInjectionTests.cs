@@ -189,6 +189,122 @@ public class FaultInjectionTests
         Assert.Equal(firstBytes, File.ReadAllBytes(path));
     }
 
+    /// <summary>
+    /// Corrupts the durable temp file at a chosen phase instead of throwing. This models the case the
+    /// read-back exists for: the bytes reached the device, the write reported success, and the file
+    /// is still not a loadable document.
+    /// </summary>
+    private sealed class CorruptTempAtPhase(SavePhase corruptAt, string directory) : ISaveFaultInjector
+    {
+        private readonly SavePhase _corruptAt = corruptAt;
+        private readonly string _directory = directory;
+
+        public string? CorruptedPath { get; private set; }
+
+        public void OnPhase(SavePhase phase)
+        {
+            if (phase != _corruptAt || CorruptedPath is not null)
+            {
+                return;
+            }
+
+            var temp = Directory.GetFiles(_directory, "*.tmp-*").Single();
+
+            // Chop off the ZIP end-of-central-directory record: exactly what a torn write leaves.
+            using var stream = new FileStream(temp, FileMode.Open, FileAccess.Write, FileShare.None);
+            stream.SetLength(Math.Max(0, stream.Length - 96));
+            stream.Flush(flushToDisk: true);
+
+            CorruptedPath = temp;
+        }
+    }
+
+    [Fact]
+    public void A_temp_that_is_durable_but_unreadable_fails_the_save_and_never_reaches_the_target()
+    {
+        using var workspace = new TempWorkspace();
+        var (document, path, journal, firstBytes) = SetUpSavedDocument(workspace, "corrupt-temp");
+
+        var savedRevisionBefore = document.SavedRevision;
+        Edited(document, 640, 640);
+        Assert.True(document.IsDirty);
+
+        var injector = new CorruptTempAtPhase(SavePhase.AfterFlushBeforeValidate, workspace.Root);
+        var store = new AtomicDocumentStore(journal, injector);
+
+        var failure = Assert.Throws<SaveFailedException>(() => store.Save(document, path));
+
+        Assert.NotNull(injector.CorruptedPath);
+
+        // 1. The corrupt bytes never replaced the last good file.
+        Assert.Equal(firstBytes, File.ReadAllBytes(path));
+        Assert.True(failure.TargetStillIntact);
+        Assert.Equal(savedRevisionBefore, AtomicDocumentStore.Load(path).Revision);
+
+        // 2. No false success: the document still knows it is unsaved.
+        Assert.True(document.IsDirty);
+        Assert.Equal(savedRevisionBefore, document.SavedRevision);
+
+        // 3. The failure is attributed to the validation step, not to a later phase.
+        Assert.Equal(SavePhase.AfterFlushBeforeValidate, failure.Phase);
+
+        // 4. The journal must not advertise the broken temp as recovered work.
+        var record = journal.TryRead(document.DocumentId);
+        Assert.NotNull(record);
+        Assert.Equal(RecoveryState.Started, record!.StateValue);
+        Assert.False(record.HasRecoverableWork);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("{\"documentId\": \"not-json")]
+    [InlineData("\0\0\0\0\0\0\0\0")]
+    [InlineData("null")]
+    [InlineData("{\"documentId\": 12345}")]
+    public void A_torn_recovery_journal_is_read_without_crashing_the_process(string content)
+    {
+        using var workspace = new TempWorkspace();
+        var journal = new RecoveryJournal(workspace.JournalRoot);
+        var documentId = Guid.NewGuid();
+
+        Directory.CreateDirectory(journal.DirectoryFor(documentId));
+        File.WriteAllText(journal.PathFor(documentId), content);
+
+        // A journal we cannot parse carries no usable paths, so the honest answer is "nothing to
+        // offer" - not an exception, and never a guess about which file holds the user's work.
+        var record = journal.TryRead(documentId);
+
+        if (record is not null)
+        {
+            Assert.False(record.HasRecoverableWork);
+        }
+    }
+
+    // NOTE for review: a journal that is valid JSON but carries an unrecognised "state" value still
+    // throws ArgumentException out of RecoveryRecord.StateValue (Enum.Parse), so HasRecoverableWork
+    // crashes instead of answering "nothing to offer". A test for it is deliberately NOT added here:
+    // the only correct fix is in Map.Spike.Persistence/Recovery/RecoveryJournal.cs, which is outside
+    // the paths this fix-slice is allowed to touch. Reported instead of silently widening the scope.
+
+    [Fact]
+    public void A_torn_journal_does_not_stop_the_next_save_from_succeeding()
+    {
+        using var workspace = new TempWorkspace();
+        var journal = new RecoveryJournal(workspace.JournalRoot);
+        var document = Edited(SpikeFixtures.CreateObjectScene(40, canvasSize: 512), 120, 120);
+        var path = workspace.File("after-torn-journal" + SpikeFormat.Extension);
+
+        Directory.CreateDirectory(journal.DirectoryFor(document.DocumentId));
+        File.WriteAllText(journal.PathFor(document.DocumentId), "{ this is not json");
+
+        new AtomicDocumentStore(journal).Save(document, path);
+
+        Assert.False(document.IsDirty);
+        Assert.Equal(document.Revision, AtomicDocumentStore.Load(path).Revision);
+        Assert.Null(journal.TryRead(document.DocumentId));
+    }
+
     [Fact]
     public void Recovery_journal_lives_outside_the_document_directory()
     {

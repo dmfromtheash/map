@@ -19,8 +19,26 @@ dashboard, финального дизайна, каталога ассетов 
 | `src/Map.Spike.Benchmarks` | консольный benchmark + помощник аварийного завершения процесса | Core, Persistence, Rendering, Export |
 | `tests/Map.Spike.Tests` | xUnit: команды, hit-test, save/reopen, fault/recovery, рендер, export | все |
 
-`Map.Spike.Core` не ссылается ни на Avalonia, ни на SkiaSharp — это проверяется чтением
-`dotnet list spike/Map.Spike.slnx reference` и содержимым `Map.Spike.Core.csproj`.
+`Map.Spike.Core` не ссылается ни на Avalonia, ни на SkiaSharp.
+
+Проверять это нужно по одному проекту: `dotnet list` в .NET 10 не принимает `.slnx` и на
+`dotnet list spike/Map.Spike.slnx reference` отвечает `Проект ... недопустим` с кодом выхода 1.
+Рабочая форма — путь к `.csproj`:
+
+```powershell
+Get-ChildItem spike -Recurse -Filter *.csproj |
+  ForEach-Object { "== $($_.Name) =="; dotnet list $_.FullName reference }
+```
+
+Самое сильное доказательство даёт не файл проекта, а собранный результат: после
+`dotnet build spike/Map.Spike.slnx -c Release` файл
+`spike/src/Map.Spike.Core/bin/Release/net10.0/Map.Spike.Core.deps.json` должен содержать
+единственную библиотеку `Map.Spike.Core`, а рядом с DLL не должно быть ни Avalonia, ни SkiaSharp:
+
+```powershell
+Get-Content spike\src\Map.Spike.Core\bin\Release\net10.0\Map.Spike.Core.deps.json
+Get-ChildItem spike\src\Map.Spike.Core\bin\Release\net10.0
+```
 
 ## Сборка и проверки
 
@@ -97,8 +115,27 @@ powershell -ExecutionPolicy Bypass -File .\spike\tools\drive-window.ps1 -OutDir 
 ```
 
 Скрипт запускает собранный exe, отправляет **настоящий** ввод Win32 (`keybd_event`, `mouse_event`)
-и сохраняет снимки окна через `PrintWindow`. Он ничего не утверждает — доказательством являются
-сохранённые PNG и напечатанные факты о процессе.
+и сохраняет снимки окна через `PrintWindow`.
+
+Скрипт самопроверяющийся: сохранённый PNG сам по себе доказательством не считается.
+
+- Каждый шаг подтверждается чтением живого состояния через **UI Automation**. Avalonia публикует
+  каждый статусный `TextBlock` с его `x:Name` как `AutomationId`, а текущий текст как UIA `Name`,
+  поэтому `StatusText`, `DirtyText`, `ModeText`, `SceneText`, `RendererText`, `HitTestText` и
+  `BenchmarkText` читаются как данные, а не распознаются с картинки.
+- Ожидания ограничены по времени (`Wait-UiaText`). Не дождались нужного состояния — прогон падает
+  и печатает, что реально было в строке, а не молча идёт дальше.
+- **Selection** считается доказанной, только когда `StatusText` содержит конкретный GUID
+  выбранного объекта, а `HitTestText` не равен `selected=none`. Поиск объекта — ограниченный
+  детерминированный обход сетки из 40 точек, а не бесконечное случайное тыканье. Не нашли —
+  прогон падает.
+- Каждый снимок **проверяется как файл на диске**: он декодируется, и его размеры сверяются с
+  размером окна. Обрезанный кадр вроде `160x28` завершает smoke ошибкой. В конце проверяется, что
+  все 13 кадров имеют одинаковые полные размеры.
+- В конце проверяется, что процесс не слушает TCP-порты и не загрузил модули WebView/Chromium.
+  Имена модулей сверяются точным списком, а не подстрокой: подстрока `cef` совпадает с системной
+  `wuceffects.dll` и давала бы ложное срабатывание.
+- Сводка пишется в `ui-evidence.txt` рядом с PNG.
 
 Две особенности, из-за которых наивная версия скрипта молча ничего не делала:
 
