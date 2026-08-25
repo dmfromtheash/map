@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Map.Core/Map.Core.csproj" />
+    <Project Path="src/Map.Persistence/Map.Persistence.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Map.Core.Tests/Map.Core.Tests.csproj" />
+    <Project Path="tests/Map.Persistence.Tests/Map.Persistence.Tests.csproj" />
+  </Folder>
+</Solution>

@@ -211,13 +211,44 @@ Base `be323ed`. Изменены только три разрешённых за
 - Автоматическое исследование закрытого UI не выполняется из-за условий использования.
 - Точные визуальные токены и производственные ассеты отложены до материалов владельца.
 
+## FACT — срез Stage 2A: production foundation и минимальный `.mapproj` v1
+
+Ветка `stage/02-foundation-persistence` от base `a1f8796`. Изменения только в allowlist.
+
+- Создано production-решение `Map.slnx` ровно с четырьмя проектами: `src/Map.Core`,
+  `src/Map.Persistence`, `tests/Map.Core.Tests`, `tests/Map.Persistence.Tests`. На `spike/**`
+  ссылок нет; runtime NuGet-пакетов нет (тестовые проекты — стандартный шаблон xUnit).
+- `Map.Core`: immutable-модель — `MapDocument` (id, title, createdUtc, canvas, слои),
+  `CanvasDefinition` (width/height/unit/background), `Layer` (id, name, visible, locked, opacity,
+  упорядоченные objects), `SceneObject` (id, kind Rectangle/Ellipse, name, x/y/width/height/
+  rotationDegrees, fill/stroke/strokeWidth, visible, locked); типизированные `DocumentId`/
+  `LayerId`/`ObjectId` с канонической строкой «D»; дубли ID отвергаются конструктором;
+  сохранённые коллекции не алиасят списки вызывающего. Ссылок и пакетов у Core — ноль.
+- `Map.Persistence` (зависит только от Core): `.mapproj` v1 — ZIP ровно с четырьмя entries:
+  `manifest.json` (format/schemaVersion=1/appVersion/documentId/title/createdUtc/modifiedUtc/
+  canvas/preset/sceneSha256/assetManifestSha256), `scene.json`, `asset-manifest.json` (пустой
+  каталог), `preview.png` (bytes от вызывающего, persistence не рисует). `SaveMetadata`
+  (appVersion, modifiedUtc) передаётся явно — clock-DI нет, сериализация детерминирована
+  (фиксированный порядок полей, фиксированные ZIP-timestamps). Save: sibling temp → flush
+  (flushToDisk) → полный read-back с проверкой entries/format/schema/checksums/cross-check id →
+  единственная fault-граница `AfterDurableTempBeforeReplace` → `File.Replace`/`Move`. При отказе
+  temp не удаляется, target не тронут, бросается `MapProjectSaveException` с путями. Open
+  оборачивает сырые ZIP/JSON-ошибки в `MapProjectCorruptedException` с именем entry;
+  `schemaVersion=2` → `UnsupportedSchemaVersionException`, файл не изменяется.
+- **Red → green доказан**: тесты написаны до реализации; на стабах все 12 persistence-тестов
+  красные (`NotImplementedException` в round-trip и в atomic failure path), после реализации —
+  зелёные. Итог **23/23** (10 Core + 13 Persistence).
+- Проверки: restore/build Release **0 warnings/0 errors**; `dotnet format --verify-no-changes`
+  exit 0; `.deps.json` обоих production-проектов не содержат Avalonia/Skia/spike; pre-commit и
+  doctor — exit 0.
+- Не входило и не делалось: UI/dashboard/wizard, viewport/rendering, command stack/undo,
+  thumbnail-генерация, recovery journal, process-kill harness, migrations, export.
+
 ## Следующий безопасный шаг
 
-Передать Opus только первый issue-sized срез Stage 2 по
-`artifacts/opus-prompt-stage02a-foundation-persistence.md`: production foundation для `Map.Core`
-и `Map.Persistence` с минимальным `.mapproj` v1 и семантическим save/reopen. Dashboard, wizard,
-canvas/UI, rendering, thumbnail и весь остальной Stage 2 в этот коммит не включать. После одного
-коммита Opus останавливается, Codex проверяет только точный diff и ключевые тесты.
+Codex проверяет точный diff среза Stage 2A и ключевые тесты. Следующий срез после приёмки —
+первый UI foundation slice поверх этой основы (минимальное окно Avalonia c dashboard
+recent/new/open, использующее `MapProjectStore`), отдельным prompt-файлом. Opus его не начинал.
 
 ## Проверка среды
 
