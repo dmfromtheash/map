@@ -2,7 +2,6 @@ using System;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Input;
-using Avalonia.Media;
 using Map.App.Services;
 using Map.App.Views;
 using Map.Assets;
@@ -40,7 +39,6 @@ public sealed class MainWindow : Window
         Height = 900;
         MinWidth = 960;
         MinHeight = 640;
-        Background = new SolidColorBrush(Color.FromRgb(0x14, 0x16, 0x1A));
         Content = _host;
 
         _dashboard = new DashboardViewModel(_store, _recent, _log);

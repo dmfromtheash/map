@@ -31,7 +31,7 @@ public sealed class DashboardView : UserControl
     };
 
     private readonly StackPanel _recoveryPanel = new() { Spacing = 8 };
-    private readonly WrapPanel _recentPanel = new() { };
+    private readonly WrapPanel _recentPanel = new() { Orientation = Orientation.Horizontal };
 
     public DashboardView(
         DashboardViewModel dashboard,
@@ -47,44 +47,116 @@ public sealed class DashboardView : UserControl
         _restoreRequested = restoreRequested;
         Name = "DashboardView";
 
-        var newButton = new Button { Name = "NewMapButton", Content = "Новая карта" };
+        var newButton = Styled(new Button { Name = "NewMapButton", Content = "+ Новая карта" }, "primary");
         newButton.Click += async (_, _) => await _newMapRequested();
 
-        var openButton = new Button { Name = "OpenFileButton", Content = "Открыть файл" };
+        var openButton = new Button { Name = "OpenFileButton", Content = "Открыть проект" };
         openButton.Click += async (_, _) => await _openFileRequested();
 
-        Content = new ScrollViewer
+        var header = Styled(new Border
         {
-            Content = new StackPanel
+            Padding = new Thickness(28, 10),
+            Child = new DockPanel
             {
-                Margin = new Thickness(28),
-                Spacing = 16,
                 Children =
                 {
+                    WithDock(Styled(new TextBlock
+                    {
+                        Text = "ОФЛАЙН",
+                        FontSize = 11,
+                        FontWeight = FontWeight.SemiBold,
+                        VerticalAlignment = VerticalAlignment.Center,
+                    }, "muted"), Dock.Right),
                     new TextBlock
                     {
-                        Name = "DashboardTitle",
-                        Text = "Библиотека карт",
-                        FontSize = 24,
-                        FontWeight = FontWeight.SemiBold,
+                        Text = "MAP",
+                        FontSize = 16,
+                        FontWeight = FontWeight.Bold,
+                        VerticalAlignment = VerticalAlignment.Center,
                     },
-                    new StackPanel
+                    Styled(new TextBlock
+                    {
+                        Text = "Локальная библиотека",
+                        Margin = new Thickness(16, 0, 0, 0),
+                        VerticalAlignment = VerticalAlignment.Center,
+                    }, "muted"),
+                },
+            },
+        }, "top-bar");
+
+        var hero = Styled(new Border
+        {
+            Child = new DockPanel
+            {
+                Children =
+                {
+                    WithDock(new StackPanel
                     {
                         Orientation = Orientation.Horizontal,
-                        Spacing = 12,
-                        Children = { newButton, openButton },
-                    },
-                    _error,
-                    _recoveryPanel,
-                    new TextBlock
+                        Spacing = 10,
+                        VerticalAlignment = VerticalAlignment.Center,
+                        Children = { openButton, newButton },
+                    }, Dock.Right),
+                    new StackPanel
                     {
-                        Name = "RecentHeader",
-                        Text = "Недавние карты",
-                        FontSize = 16,
-                        FontWeight = FontWeight.SemiBold,
-                        Margin = new Thickness(0, 12, 0, 0),
+                        Spacing = 5,
+                        Children =
+                        {
+                            new TextBlock
+                            {
+                                Name = "DashboardTitle",
+                                Text = "Ваши карты",
+                                FontSize = 24,
+                                FontWeight = FontWeight.SemiBold,
+                            },
+                            Styled(new TextBlock
+                            {
+                                Text = "Создавайте, открывайте и восстанавливайте проекты без облака.",
+                                TextWrapping = TextWrapping.Wrap,
+                            }, "muted"),
+                        },
                     },
-                    _recentPanel,
+                },
+            },
+        }, "hero-card");
+
+        Content = new DockPanel
+        {
+            Children =
+            {
+                WithDock(header, Dock.Top),
+                new ScrollViewer
+                {
+                    Content = new StackPanel
+                    {
+                        Margin = new Thickness(28, 24, 28, 40),
+                        Spacing = 18,
+                        Children =
+                        {
+                            hero,
+                            _error,
+                            _recoveryPanel,
+                            new DockPanel
+                            {
+                                Margin = new Thickness(0, 10, 0, 0),
+                                Children =
+                                {
+                                    WithDock(Styled(new TextBlock
+                                    {
+                                        Text = "Проекты хранятся только на этом компьютере",
+                                        VerticalAlignment = VerticalAlignment.Center,
+                                    }, "muted"), Dock.Right),
+                                    new TextBlock
+                                    {
+                                        Name = "RecentHeader",
+                                        Text = "Недавние карты",
+                                        Classes = { "section-title" },
+                                    },
+                                },
+                            },
+                            _recentPanel,
+                        },
+                    },
                 },
             },
         };
@@ -108,26 +180,23 @@ public sealed class DashboardView : UserControl
         var recoveryIndex = 0;
         foreach (var card in _dashboard.RecoveryCards)
         {
-            var restore = new Button
+            var restore = Styled(new Button
             {
                 Name = recoveryIndex == 0 ? "RestoreButton" : $"RestoreButton{recoveryIndex}",
                 Content = "Восстановить",
-            };
+            }, "primary");
             var captured = card;
             restore.Click += async (_, _) => await _restoreRequested(captured);
 
-            var discard = new Button
+            var discard = Styled(new Button
             {
                 Name = recoveryIndex == 0 ? "DiscardButton" : $"DiscardButton{recoveryIndex}",
                 Content = "Отбросить",
-            };
+            }, "danger");
             discard.Click += (_, _) => _dashboard.Discard(captured);
 
-            _recoveryPanel.Children.Add(new Border
+            _recoveryPanel.Children.Add(Styled(new Border
             {
-                Background = new SolidColorBrush(Color.FromRgb(0x3A, 0x33, 0x22)),
-                CornerRadius = new CornerRadius(6),
-                Padding = new Thickness(14, 10),
                 Child = new StackPanel
                 {
                     Orientation = Orientation.Horizontal,
@@ -144,7 +213,7 @@ public sealed class DashboardView : UserControl
                         discard,
                     },
                 },
-            });
+            }, "recovery-card"));
 
             recoveryIndex++;
         }
@@ -159,12 +228,12 @@ public sealed class DashboardView : UserControl
 
         if (recentIndex == 0)
         {
-            _recentPanel.Children.Add(new TextBlock
+            _recentPanel.Children.Add(Styled(new TextBlock
             {
                 Name = "NoRecentText",
                 Text = "Пока нет недавних карт. Создайте первую.",
-                Foreground = new SolidColorBrush(Color.FromRgb(0x8A, 0x92, 0x9E)),
-            });
+                Margin = new Thickness(4, 12),
+            }, "muted"));
         }
     }
 
@@ -175,12 +244,17 @@ public sealed class DashboardView : UserControl
         {
             try
             {
-                thumbnail = new Image
+                thumbnail = new Border
                 {
-                    Source = new Bitmap(new MemoryStream(bytes)),
-                    Width = 200,
-                    Height = 112,
-                    Stretch = Stretch.Uniform,
+                    Width = 216,
+                    Height = 121,
+                    CornerRadius = new CornerRadius(8),
+                    ClipToBounds = true,
+                    Child = new Image
+                    {
+                        Source = new Bitmap(new MemoryStream(bytes)),
+                        Stretch = Stretch.UniformToFill,
+                    },
                 };
             }
             catch (Exception)
@@ -193,15 +267,14 @@ public sealed class DashboardView : UserControl
             thumbnail = ThumbnailPlaceholder();
         }
 
-        var button = new Button
+        var button = Styled(new Button
         {
             Name = $"RecentCard{index}",
-            Margin = new Thickness(0, 0, 12, 12),
-            Padding = new Thickness(10),
+            Margin = new Thickness(0, 0, 14, 14),
             IsEnabled = card.IsAvailable,
             Content = new StackPanel
             {
-                Spacing = 6,
+                Spacing = 8,
                 Children =
                 {
                     thumbnail,
@@ -215,12 +288,13 @@ public sealed class DashboardView : UserControl
                     {
                         Name = $"RecentSubtitle{index}",
                         Text = card.Subtitle,
-                        Foreground = new SolidColorBrush(Color.FromRgb(0x8A, 0x92, 0x9E)),
                         FontSize = 12,
+                        Classes = { "muted" },
+                        TextTrimming = TextTrimming.CharacterEllipsis,
                     },
                 },
             },
-        };
+        }, "map-card");
 
         var captured = card;
         button.Click += async (_, _) => await _openRecentRequested(captured);
@@ -229,16 +303,32 @@ public sealed class DashboardView : UserControl
 
     private static Control ThumbnailPlaceholder() => new Border
     {
-        Width = 200,
-        Height = 112,
-        Background = new SolidColorBrush(Color.FromRgb(0x2A, 0x2F, 0x38)),
-        Child = new TextBlock
+        Width = 216,
+        Height = 121,
+        CornerRadius = new CornerRadius(8),
+        Background = new SolidColorBrush(Color.FromRgb(0x22, 0x28, 0x32)),
+        Child = Styled(new TextBlock
         {
-            Text = "нет миниатюры",
+            Text = "Нет миниатюры",
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
-            Foreground = new SolidColorBrush(Color.FromRgb(0x6C, 0x74, 0x80)),
             FontSize = 12,
-        },
+        }, "muted"),
     };
+
+    private static T Styled<T>(T control, params string[] classes) where T : StyledElement
+    {
+        foreach (var className in classes)
+        {
+            control.Classes.Add(className);
+        }
+
+        return control;
+    }
+
+    private static Control WithDock(Control control, Dock dock)
+    {
+        DockPanel.SetDock(control, dock);
+        return control;
+    }
 }
