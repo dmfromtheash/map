@@ -1,0 +1,32 @@
+# Build output
+bin/
+obj/
+artifacts/
+TestResults/
+*.user
+*.suo
+
+# Local IDE state
+.vs/
+.vscode/
+.idea/
+
+# Secrets and machine-local settings
+.env
+.env.*
+!.env.example
+secrets/
+
+# Local research scratch data and downloaded transcripts
+tmp/
+
+# Runtime and recovery artifacts
+*.mapproj.tmp
+*.mapproj.bak
+*.autosave
+crash-dumps/
+
+# OS files
+Thumbs.db
+Desktop.ini
+
