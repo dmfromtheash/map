@@ -7,8 +7,8 @@ namespace Map.Core.Editing;
 /// </summary>
 public sealed class Viewport
 {
-    public const double MinScale = 0.05;
-    public const double MaxScale = 32.0;
+    public const double MinScale = 0.005;
+    public const double MaxScale = 64.0;
 
     public double Scale { get; private set; } = 1.0;
     public double OffsetX { get; private set; }

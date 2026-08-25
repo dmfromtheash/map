@@ -2,10 +2,10 @@
 
 ## Последнее обновление
 
-2026-08-25. Fix 02 принят после сокращённого независимого Gate D Codex, разрешённого владельцем:
-проверены точный diff, изменённая ветвь recovery, свежая Release-сборка и 44 целевых теста.
-Неизвестное значение `state` recovery-журнала не роняет чтение и не предлагается как
-восстанавливаемое. Кодовых `BLOCKED` у Stage 1 нет; можно начинать первый ограниченный срез Stage 2.
+2026-08-25. Реализация Stages 3–5 завершена тремя отдельными stage-коммитами. Последний срез
+проверен сокращённо по решению владельца: Release-сборка, целевые Core/Persistence/Rendering/
+Presentation тесты, benchmark и один настоящий UIA-smoke окна. Security-проверки не запускались
+по прямому правилу проекта. Следующий крупный блок — Stages 6–8, по одному коммиту на этап.
 
 ## FACT — среда
 
@@ -294,7 +294,7 @@ package audits и повторного pre-commit/doctor.
   recovery API отдаёт новую версию не трогая старую.
 - **UI.** Dashboard (recent-карточки с настоящими миниатюрами из контейнера, honest «Файл не
   найден», recovery-баннер Восстановить/Отбросить), мастер новой карты с валидацией размеров
-  16–16384 и сменой ориентации, editor: canvas (select/move/**resize/rotate ручками gizmo** с
+  16–65536 и сменой ориентации, editor: canvas (select/move/**resize/rotate ручками gizmo** с
   курсорами-подсказками, pan средней кнопкой, wheel-zoom вокруг курсора), inspector
   X/Y/W/H/поворот с commit одним command, undo/redo, статусы
   Сохранено/Сохранение…/Не сохранено/Ошибка сохранения, фоновое сохранение с
@@ -335,13 +335,36 @@ package audits и повторного pre-commit/doctor.
   но `SceneRenderer` пока линейно перебирает все objects. До массовых слоёв/кисти/ассетов обязательны
   spatial culling, tiled raster и LOD согласно DEC-009.
 
+## FACT — Stages 3–5: large-map foundation, assets и Land
+
+- Stage 3 (`1afdf35`): полиморфные слои, tiled brush/masks, spatial culling, checksummed tile
+  persistence, UIA-холст и вкладки слоёв/объектов. Профиль 50 000 объектов возвращает 28
+  кандидатов; render median 0,748 мс, P95 1,001 мс.
+- Stage 4 (`577abdf`): локальный каталог ассетов, SHA-256 identity/dedupe, lazy decode/cache,
+  embedded/linked roundtrip, stamp/replace/scatter/placeholder. 10 000 metadata records грузятся
+  за 141,947 мс; warm search P95 1,344 мс; originals decoded при открытии каталога: 0.
+- Stage 5: несколько независимых Land layers, add/subtract brush, circle/rect/ellipse/polygon/
+  grid-block/bounded-fill, bounded move-area, masks, blend и небейкнутые edge styles. Изменение
+  стиля не меняет coverage bytes; save/reopen сохраняет геометрию, стиль, mask и blend.
+- Deep zoom доступен в диапазоне 0,5–6400%; мастер позволяет создать целевой canvas
+  65 536×65 536. Интерактивный Land preview median 0,656 мс; exact idle median 75,094 мс.
+- `scripts/drive-stages03-05.ps1` прошёл в настоящем Release-окне: карта 65 536×65 536,
+  brush/mask/land gestures, land shape/style/move, blend, undo/redo, UIA Pane холста и отсутствие
+  TCP listeners. Снимок просмотрен; переполнение toolbar исправлено переносом на вторую строку.
+- Во время smoke исправлены два пользовательских blocker: pointer release теперь завершает
+  raster gesture, а wizard больше не отсекает целевой large-map profile.
+- Сырые числа и методика: `docs/benchmarks/STAGES_03_05.json` и
+  `docs/benchmarks/STAGES_03_05.md`. Артефакты окна лежат в игнорируемом
+  `artifacts/stages03-05/ui-smoke/`.
+- **PARTIAL:** native smoke проверяет наличие Stage 4 controls, но повторно не проходит системный
+  file-dialog импорта. Полный visual/coverage/mutation/package аудит пропущен по решению владельца.
+
 ## Следующий безопасный шаг
 
-Один крупный блок объединяет Stages 3–5 и large-map foundation:
-`artifacts/opus-prompt-stages03-05-large-map-editor.md`. Он закрывает слои/дерево/маски/кисть,
-Stamp + локальный Asset Manager, Land и одновременно вводит spatial culling, tiled raster,
-mip/LOD, deep zoom и профили 50 000 объектов/10 000 ассетов. После итогового коммита Opus
-останавливается; Stages 6–8 не начинает.
+Один крупный блок для Opus объединяет Stages 6–8, но сохраняет три отдельных коммита и остановку
+после каждого stage self-check: editable Line/Shape geometry и boolean fixtures; Text/Notes/Grid;
+Filters/compositions/cross-document copy-paste/reference calibration. Codex после блока делает
+только сокращённую проверку критических gates. Stage 9 в этот блок не включать.
 
 ## Проверка среды
 

@@ -47,14 +47,14 @@ public sealed class EditorView : UserControl
 
         Button Tool(string name, string text, Action action)
         {
-            var button = new Button { Name = name, Content = text };
+            var button = new Button { Name = name, Content = text, Margin = new Thickness(3) };
             button.Click += (_, _) => action();
             return button;
         }
 
         Button AsyncTool(string name, string text, Func<System.Threading.Tasks.Task> action)
         {
-            var button = new Button { Name = name, Content = text };
+            var button = new Button { Name = name, Content = text, Margin = new Thickness(3) };
             button.Click += async (_, _) => await action();
             return button;
         }
@@ -66,6 +66,7 @@ public sealed class EditorView : UserControl
             Maximum = 256,
             Value = 24,
             Width = 110,
+            Margin = new Thickness(3),
         };
         brushSize.ValueChanged += (_, _) =>
             _editor.BrushSettings = _editor.BrushSettings with { Radius = brushSize.Value };
@@ -77,6 +78,7 @@ public sealed class EditorView : UserControl
             Maximum = 1,
             Value = 1,
             Width = 80,
+            Margin = new Thickness(3),
         };
         brushOpacity.ValueChanged += (_, _) =>
             _editor.BrushSettings = _editor.BrushSettings with { Opacity = brushOpacity.Value };
@@ -88,11 +90,10 @@ public sealed class EditorView : UserControl
             eraser.Content = _editor.BrushSettings.Eraser ? "Ластик: вкл" : "Ластик: выкл";
         };
 
-        var toolbar = new StackPanel
+        var toolbar = new WrapPanel
         {
             Orientation = Orientation.Horizontal,
-            Spacing = 8,
-            Margin = new Thickness(10, 8),
+            Margin = new Thickness(7, 5),
             Children =
             {
                 AsyncTool("BackButton", "← Библиотека", requestBack),
@@ -100,6 +101,7 @@ public sealed class EditorView : UserControl
                 Tool("SelectToolButton", "Выбор", () => _editor.ActiveTool = EditorTool.Select),
                 Tool("BrushToolButton", "Кисть", () => _editor.ActiveTool = EditorTool.Brush),
                 Tool("MaskToolButton", "Маска", () => _editor.ActiveTool = EditorTool.Mask),
+                Tool("LandToolButton", "Земля", () => _editor.ActiveTool = EditorTool.Land),
                 brushSize,
                 brushOpacity,
                 eraser,
@@ -192,13 +194,32 @@ public sealed class EditorView : UserControl
             {
                 ActionButton("AddObjectLayerButton", "+ Объекты", _editor.AddObjectLayer),
                 ActionButton("AddBrushLayerButton", "+ Кисть", _editor.AddBrushLayer),
+                ActionButton("AddLandLayerButton", "+ Земля", _editor.AddLandLayer),
                 ActionButton("LayerUpButton", "↑", () => _editor.ReorderActiveLayer(true)),
                 ActionButton("LayerDownButton", "↓", () => _editor.ReorderActiveLayer(false)),
                 ActionButton("LayerVisibilityButton", "Показать/скрыть", _editor.ToggleActiveLayerVisibility),
                 ActionButton("LayerLockButton", "Замок", _editor.ToggleActiveLayerLock),
+                ActionButton("LayerBlendButton", "Blend", _editor.CycleActiveLayerBlend),
                 ActionButton("LayerMaskButton", "Маска", _editor.ToggleActiveMask),
                 ActionButton("DuplicateLayerButton", "Копия", _editor.DuplicateActiveLayer),
                 ActionButton("DeleteLayerButton", "Удалить", _editor.DeleteActiveLayer),
+                ActionButton("LandModeButton", "Земля +/−", () =>
+                    _editor.LandSubtract = !_editor.LandSubtract),
+                ActionButton("LandCircleButton", "Круг", () =>
+                    _editor.ApplyLandShape(Map.Core.Editing.LandShapeKind.Circle)),
+                ActionButton("LandRectangleButton", "Прямоуг.", () =>
+                    _editor.ApplyLandShape(Map.Core.Editing.LandShapeKind.Rectangle)),
+                ActionButton("LandEllipseButton", "Эллипс", () =>
+                    _editor.ApplyLandShape(Map.Core.Editing.LandShapeKind.Ellipse)),
+                ActionButton("LandPolygonButton", "Полигон", () =>
+                    _editor.ApplyLandShape(Map.Core.Editing.LandShapeKind.Polygon)),
+                ActionButton("LandGridButton", "Grid-block", () =>
+                    _editor.ApplyLandShape(Map.Core.Editing.LandShapeKind.GridBlock)),
+                ActionButton("LandFillButton", "Fill", () =>
+                    _editor.ApplyLandShape(Map.Core.Editing.LandShapeKind.BoundedFill)),
+                ActionButton("LandStyleButton", "Стиль берега", _editor.CycleActiveLandStyle),
+                ActionButton("LandMoveButton", "Сдвинуть →", () =>
+                    _editor.MoveActiveLandArea(128, 0)),
             },
         };
 
@@ -413,6 +434,7 @@ public sealed class EditorView : UserControl
                 BaseColorLayer => "Фон",
                 ObjectLayer => "Объекты",
                 BrushLayer => "Кисть",
+                LandLayer => "Земля",
                 _ => layer.GetType().Name,
             };
             var active = layer.Id == _editor.ActiveLayerId ? "▶ " : "";
@@ -422,7 +444,7 @@ public sealed class EditorView : UserControl
             {
                 Name = "Layer_" + layer.Id,
                 HorizontalContentAlignment = HorizontalAlignment.Left,
-                Content = $"{active}{state} {layer.Name} · {kind}",
+                Content = $"{active}{state} {layer.Name} · {kind} · {layer.Blend}",
             };
             button.Click += (_, _) =>
             {

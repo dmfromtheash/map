@@ -10,7 +10,7 @@ namespace Map.Presentation.ViewModels;
 public sealed class NewMapWizardViewModel : ViewModelBase
 {
     public const int MinDimension = 16;
-    public const int MaxDimension = 16384;
+    public const int MaxDimension = 65_536;
 
     private string _title = "Новая карта";
     private string _widthText = "1920";

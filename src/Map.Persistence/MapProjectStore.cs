@@ -439,7 +439,11 @@ public static class MapProjectStore
         foreach (var layer in scene.Layers)
         {
             var layerId = RequireCanonicalLayerId(layer.Id);
-            ReadTileList(layer.Tiles, MapProjectFormat.RasterPrefix, layerId, bytesPerPixel: 4);
+            ReadTileList(
+                layer.Tiles,
+                MapProjectFormat.RasterPrefix,
+                layerId,
+                bytesPerPixel: layer.Type == "Land" ? 1 : 4);
             ReadTileList(layer.Mask?.Tiles, MapProjectFormat.MaskPrefix, layerId, bytesPerPixel: 1);
         }
 
@@ -635,12 +639,14 @@ public static class MapProjectStore
                 BaseColorLayer => "BaseColor",
                 ObjectLayer => "Object",
                 BrushLayer => "Brush",
+                LandLayer => "Land",
                 _ => throw new InvalidOperationException($"Unknown layer type {layer.GetType().Name}."),
             },
             Name = layer.Name,
             Visible = layer.Visible,
             Locked = layer.Locked,
             Opacity = layer.Opacity,
+            Blend = layer.Blend,
             Color = (layer as BaseColorLayer)?.Color,
             Objects = layer is ObjectLayer objectLayer
                 ? [.. objectLayer.Objects.Select(ToObjectDto)]
@@ -651,6 +657,7 @@ public static class MapProjectStore
             Mask = layer.Mask is { } mask
                 ? new MaskDto { Enabled = mask.Enabled, Tiles = ToTileDtos(mask.Tiles) }
                 : null,
+            LandStyle = layer is LandLayer land ? ToLandStyleDto(land.EdgeStyle) : null,
         };
         return dto;
     }
@@ -758,7 +765,7 @@ public static class MapProjectStore
                 maskDto.Enabled)
             : null;
 
-        return layer.Type switch
+        MapLayer result = layer.Type switch
         {
             null or "Object" => new ObjectLayer(
                 id, name, layer.Visible, layer.Locked, layer.Opacity,
@@ -769,9 +776,14 @@ public static class MapProjectStore
             "Brush" => new BrushLayer(
                 id, name, layer.Visible, layer.Locked, layer.Opacity,
                 ToTileMap(layer.Tiles ?? [], MapProjectFormat.RasterPrefix, id, 4, tileEntries), mask),
+            "Land" => new LandLayer(
+                id, name, layer.Visible, layer.Locked, layer.Opacity,
+                ToTileMap(layer.Tiles ?? [], MapProjectFormat.RasterPrefix, id, 1, tileEntries),
+                ToLandStyle(layer.LandStyle), mask),
             _ => throw new MapProjectCorruptedException(
                 $"scene.json holds layer type \"{layer.Type}\" this version does not define."),
         };
+        return result with { Blend = RequireString(layer.Blend, "layer blend") };
     }
 
     private static SceneObject ToObject(SceneObjectDto dto) => new(
@@ -818,6 +830,42 @@ public static class MapProjectStore
             Y = key.Y,
             Sha256 = Sha256Hex(tiles.TryGet(key)!),
         })];
+
+    private static LandStyleDto ToLandStyleDto(LandEdgeStyle style) => new()
+    {
+        FillColor = style.FillColor,
+        OutlineColor = style.OutlineColor,
+        OutlineWidth = style.OutlineWidth,
+        InnerShadowOpacity = style.InnerShadowOpacity,
+        OuterShadowOpacity = style.OuterShadowOpacity,
+        ShadowBlur = style.ShadowBlur,
+        RippleColor = style.RippleColor,
+        RippleWidth = style.RippleWidth,
+        RippleSpacing = style.RippleSpacing,
+        RippleCount = style.RippleCount,
+    };
+
+    private static LandEdgeStyle ToLandStyle(LandStyleDto? style)
+    {
+        if (style is null)
+        {
+            throw new MapProjectCorruptedException("A land layer has no landStyle object.");
+        }
+
+        return new LandEdgeStyle
+        {
+            FillColor = RequireString(style.FillColor, "land fill color"),
+            OutlineColor = RequireString(style.OutlineColor, "land outline color"),
+            OutlineWidth = style.OutlineWidth,
+            InnerShadowOpacity = style.InnerShadowOpacity,
+            OuterShadowOpacity = style.OuterShadowOpacity,
+            ShadowBlur = style.ShadowBlur,
+            RippleColor = RequireString(style.RippleColor, "land ripple color"),
+            RippleWidth = style.RippleWidth,
+            RippleSpacing = style.RippleSpacing,
+            RippleCount = style.RippleCount,
+        };
+    }
 
     private static IEnumerable<(string Name, byte[] Bytes)> EnumerateTileEntries(MapDocument document)
     {

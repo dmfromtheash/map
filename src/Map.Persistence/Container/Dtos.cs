@@ -46,6 +46,7 @@ internal sealed class LayerDto
     [JsonPropertyName("visible")] public bool Visible { get; set; }
     [JsonPropertyName("locked")] public bool Locked { get; set; }
     [JsonPropertyName("opacity")] public double Opacity { get; set; }
+    [JsonPropertyName("blend")] public string Blend { get; set; } = "Normal";
     [JsonPropertyName("color")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Color { get; set; }
@@ -56,6 +57,23 @@ internal sealed class LayerDto
     [JsonPropertyName("mask")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public MaskDto? Mask { get; set; }
+    [JsonPropertyName("landStyle")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public LandStyleDto? LandStyle { get; set; }
+}
+
+internal sealed class LandStyleDto
+{
+    [JsonPropertyName("fillColor")] public string FillColor { get; set; } = "";
+    [JsonPropertyName("outlineColor")] public string OutlineColor { get; set; } = "";
+    [JsonPropertyName("outlineWidth")] public double OutlineWidth { get; set; }
+    [JsonPropertyName("innerShadowOpacity")] public double InnerShadowOpacity { get; set; }
+    [JsonPropertyName("outerShadowOpacity")] public double OuterShadowOpacity { get; set; }
+    [JsonPropertyName("shadowBlur")] public double ShadowBlur { get; set; }
+    [JsonPropertyName("rippleColor")] public string RippleColor { get; set; } = "";
+    [JsonPropertyName("rippleWidth")] public double RippleWidth { get; set; }
+    [JsonPropertyName("rippleSpacing")] public double RippleSpacing { get; set; }
+    [JsonPropertyName("rippleCount")] public int RippleCount { get; set; }
 }
 
 internal sealed class MaskDto

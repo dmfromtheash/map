@@ -29,6 +29,7 @@ public enum EditorTool
     Select,
     Brush,
     Mask,
+    Land,
 }
 
 /// <summary>Live drag preview: never part of the document and never part of history.</summary>
@@ -184,13 +185,17 @@ public sealed class EditorViewModel : ViewModelBase
 
     public MaskPaintMode MaskMode { get; set; } = MaskPaintMode.Hide;
 
+    public bool LandSubtract { get; set; }
+
     public StrokePreview? StrokePreview => _stroke is null || _activeLayerId is null
         ? null
         : new StrokePreview
         {
             LayerId = _activeLayerId.Value,
             Coverage = _stroke.Coverage,
-            Color = _stroke.Settings.Color,
+            Color = ActiveTool == EditorTool.Land && ActiveLayer is LandLayer land
+                ? land.EdgeStyle.FillColor
+                : _stroke.Settings.Color,
             Opacity = _stroke.Settings.Opacity,
             Eraser = _stroke.Settings.Eraser,
             IsMask = ActiveTool == EditorTool.Mask,
@@ -468,6 +473,15 @@ public sealed class EditorViewModel : ViewModelBase
         AfterEdit();
     }
 
+    public void AddLandLayer()
+    {
+        var layer = LandLayer.CreateEmpty(LayerId.New(), "Земля");
+        Session.Execute(new AddLayerCommand(layer, _activeLayerId));
+        _activeLayerId = layer.Id;
+        ActiveTool = EditorTool.Land;
+        AfterEdit();
+    }
+
     public void RenameActiveLayer(string name)
     {
         if (ActiveLayer is not { } layer || string.IsNullOrWhiteSpace(name))
@@ -498,6 +512,23 @@ public sealed class EditorViewModel : ViewModelBase
         }
 
         Session.Execute(UpdateLayerCommand.SetLocked(layer, !layer.Locked));
+        AfterEdit();
+    }
+
+    public void CycleActiveLayerBlend()
+    {
+        if (ActiveLayer is not { } layer)
+        {
+            return;
+        }
+
+        var next = layer.Blend switch
+        {
+            "Normal" => "Multiply",
+            "Multiply" => "Screen",
+            _ => "Normal",
+        };
+        Session.Execute(UpdateLayerCommand.SetBlend(layer, next));
         AfterEdit();
     }
 
@@ -569,11 +600,18 @@ public sealed class EditorViewModel : ViewModelBase
         {
             target = mask.Tiles;
         }
+        else if (ActiveTool == EditorTool.Land && layer is LandLayer land)
+        {
+            target = land.GeometryTiles;
+        }
         else
         {
-            StatusDetail = ActiveTool == EditorTool.Mask
-                ? "Сначала добавьте маску к выбранному слою."
-                : "Для рисования выберите слой кисти.";
+            StatusDetail = ActiveTool switch
+            {
+                EditorTool.Mask => "Сначала добавьте маску к выбранному слою.",
+                EditorTool.Land => "Для земли выберите Land layer.",
+                _ => "Для рисования выберите слой кисти.",
+            };
             return false;
         }
 
@@ -616,6 +654,13 @@ public sealed class EditorViewModel : ViewModelBase
                 subtract: MaskMode == MaskPaintMode.Hide);
             Session.Execute(new MaskStrokeCommand(_activeLayerId.Value, Before, After));
         }
+        else if (ActiveTool == EditorTool.Land)
+        {
+            var (Before, After) = stroke.CommitCoverage(missingTileValue: 0, subtract: LandSubtract);
+            Session.Execute(new BrushStrokeCommand(
+                _activeLayerId.Value, Before, After,
+                LandSubtract ? "Subtract land" : "Add land"));
+        }
         else
         {
             var (Before, After) = stroke.Commit();
@@ -624,6 +669,89 @@ public sealed class EditorViewModel : ViewModelBase
                 BrushSettings.Eraser ? "Erase stroke" : "Brush stroke"));
         }
 
+        AfterEdit();
+    }
+
+    public void ApplyLandShape(LandShapeKind kind)
+    {
+        if (ActiveLayer is not LandLayer land || land.Locked || !land.Visible)
+        {
+            StatusDetail = "Выберите видимый разблокированный Land layer.";
+            return;
+        }
+
+        var centre = Session.Viewport.ScreenToWorld(
+            Session.Viewport.ViewWidth / 2, Session.Viewport.ViewHeight / 2);
+        const double size = 512;
+        var bounds = new WorldBounds(
+            centre.X - (size / 2), centre.Y - (size / 2),
+            centre.X + (size / 2), centre.Y + (size / 2));
+        IReadOnlyList<LandPoint> polygon = kind == LandShapeKind.Polygon
+            ?
+            [
+                new LandPoint(bounds.Left, bounds.Bottom),
+                new LandPoint(centre.X, bounds.Top),
+                new LandPoint(bounds.Right, bounds.Bottom),
+            ]
+            : [];
+        var (Before, After) = LandRasterizer.ApplyShape(land.GeometryTiles, new LandShape
+        {
+            Kind = kind,
+            Bounds = bounds,
+            Points = polygon,
+            GridSize = 64,
+        }, LandSubtract);
+        if (Before.Count == 0)
+        {
+            return;
+        }
+
+        Session.Execute(new BrushStrokeCommand(
+            land.Id, Before, After,
+            LandSubtract ? $"Subtract land {kind}" : $"Add land {kind}"));
+        AfterEdit();
+    }
+
+    public void CycleActiveLandStyle()
+    {
+        if (ActiveLayer is not LandLayer land)
+        {
+            return;
+        }
+
+        var coast = land.EdgeStyle.RippleCount == 0;
+        var style = land.EdgeStyle with
+        {
+            FillColor = coast ? "#FF8CA36B" : "#FFC69B62",
+            OutlineColor = coast ? "#FF405533" : "#FF65452B",
+            RippleCount = coast ? 3 : 0,
+            RippleSpacing = coast ? 12 : 10,
+            OuterShadowOpacity = coast ? 0.3 : 0.15,
+        };
+        Session.Execute(new UpdateLandStyleCommand(land, style));
+        AfterEdit();
+    }
+
+    public void MoveActiveLandArea(int deltaX, int deltaY)
+    {
+        if (ActiveLayer is not LandLayer land || land.Locked)
+        {
+            return;
+        }
+
+        var centre = Session.Viewport.ScreenToWorld(
+            Session.Viewport.ViewWidth / 2, Session.Viewport.ViewHeight / 2);
+        var (Before, After) = LandRasterizer.MoveRegion(
+            land.GeometryTiles,
+            new WorldBounds(centre.X - 256, centre.Y - 256, centre.X + 256, centre.Y + 256),
+            deltaX,
+            deltaY);
+        if (Before.Count == 0)
+        {
+            return;
+        }
+
+        Session.Execute(new BrushStrokeCommand(land.Id, Before, After, "Move land area"));
         AfterEdit();
     }
 

@@ -586,6 +586,15 @@ public sealed class UpdateLayerCommand : IEditCommand
         l => Mutate(l, opacity: opacity),
         l => Mutate(l, opacity: layer.Opacity));
 
+    public static UpdateLayerCommand SetBlend(MapLayer layer, string blend)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(blend);
+        return new UpdateLayerCommand(
+            "Layer blend", layer.Id,
+            l => Mutate(l, blend: blend),
+            l => Mutate(l, blend: layer.Blend));
+    }
+
     public static UpdateLayerCommand SetBaseColor(BaseColorLayer layer, string color)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(color);
@@ -597,7 +606,12 @@ public sealed class UpdateLayerCommand : IEditCommand
     }
 
     private static MapLayer Mutate(
-        MapLayer layer, string? name = null, bool? visible = null, bool? locked = null, double? opacity = null)
+        MapLayer layer,
+        string? name = null,
+        bool? visible = null,
+        bool? locked = null,
+        double? opacity = null,
+        string? blend = null)
         => layer switch
         {
             BaseColorLayer b => b with
@@ -606,6 +620,7 @@ public sealed class UpdateLayerCommand : IEditCommand
                 Visible = visible ?? b.Visible,
                 Locked = locked ?? b.Locked,
                 Opacity = opacity ?? b.Opacity,
+                Blend = blend ?? b.Blend,
             },
             ObjectLayer o => o with
             {
@@ -613,6 +628,7 @@ public sealed class UpdateLayerCommand : IEditCommand
                 Visible = visible ?? o.Visible,
                 Locked = locked ?? o.Locked,
                 Opacity = opacity ?? o.Opacity,
+                Blend = blend ?? o.Blend,
             },
             BrushLayer br => br with
             {
@@ -620,6 +636,15 @@ public sealed class UpdateLayerCommand : IEditCommand
                 Visible = visible ?? br.Visible,
                 Locked = locked ?? br.Locked,
                 Opacity = opacity ?? br.Opacity,
+                Blend = blend ?? br.Blend,
+            },
+            LandLayer land => land with
+            {
+                Name = name ?? land.Name,
+                Visible = visible ?? land.Visible,
+                Locked = locked ?? land.Locked,
+                Opacity = opacity ?? land.Opacity,
+                Blend = blend ?? land.Blend,
             },
             _ => throw new InvalidOperationException($"Unknown layer type {layer.GetType().Name}."),
         };
@@ -765,6 +790,31 @@ public sealed class UpdateMaskCommand : IEditCommand
 
     public MapDocument Revert(MapDocument document) =>
         document.WithLayer(_layerId, layer => MaskStrokeCommand.WithMask(layer, _before));
+}
+
+/// <summary>Changes evaluated coast effects without touching the source coverage tiles.</summary>
+public sealed class UpdateLandStyleCommand : IEditCommand
+{
+    private readonly LayerId _layerId;
+    private readonly LandEdgeStyle _before;
+    private readonly LandEdgeStyle _after;
+
+    public UpdateLandStyleCommand(LandLayer layer, LandEdgeStyle after)
+    {
+        _layerId = layer.Id;
+        _before = layer.EdgeStyle;
+        _after = after;
+    }
+
+    public string Name => "Land edge style";
+
+    public MapDocument Apply(MapDocument document) => Write(document, _after);
+    public MapDocument Revert(MapDocument document) => Write(document, _before);
+
+    private MapDocument Write(MapDocument document, LandEdgeStyle style) =>
+        document.WithLayer(_layerId, layer => layer is LandLayer land
+            ? land with { EdgeStyle = style }
+            : throw new InvalidOperationException($"Layer {_layerId} is not land."));
 }
 
 // ---------------------------------------------------------------- helpers

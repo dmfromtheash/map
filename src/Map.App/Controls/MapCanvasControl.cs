@@ -70,11 +70,12 @@ public sealed class MapCanvasControl : Control
 
         _editor.Session.Viewport.Resize(Bounds.Width, Bounds.Height);
         context.Custom(new SceneDrawOperation(
-            new Rect(0, 0, Bounds.Width, Bounds.Height), _editor, _tileCache));
+            new Rect(0, 0, Bounds.Width, Bounds.Height), _editor, _tileCache,
+            _isPanning || _isStroking || _dragStartWorld is not null));
     }
 
     private sealed class SceneDrawOperation(
-        Rect bounds, EditorViewModel editor, TileImageCache tileCache) : ICustomDrawOperation
+        Rect bounds, EditorViewModel editor, TileImageCache tileCache, bool fastPreview) : ICustomDrawOperation
     {
         public Rect Bounds { get; } = bounds;
 
@@ -114,6 +115,7 @@ public sealed class MapCanvasControl : Control
                 Preview = editor.StrokePreview,
                 MaskEditLayerId = editor.MaskEditLayerId,
                 Stamps = editor.StampImages,
+                FastPreview = fastPreview || editor.StrokePreview is not null,
             });
 
             canvas.Restore();
@@ -154,7 +156,7 @@ public sealed class MapCanvasControl : Control
 
         var world = _editor.Session.Viewport.ScreenToWorld(position.X, position.Y);
 
-        if (_editor.ActiveTool is EditorTool.Brush or EditorTool.Mask)
+        if (_editor.ActiveTool is EditorTool.Brush or EditorTool.Mask or EditorTool.Land)
         {
             _isStroking = _editor.BeginStroke(world.X, world.Y);
             if (_isStroking)
@@ -216,12 +218,7 @@ public sealed class MapCanvasControl : Control
         }
 
 
-        if (_isStroking)
-        {
-            _isStroking = false;
-            _editor.EndStroke();
-        }
-        else
+        if (!_isStroking)
         {
             // Pointer feedback over the gizmo: resize arrows on the handles, a hand on rotate.
             Cursor = _editor.HitHandle(X, Y, _editor.Session.Viewport.Scale) switch
@@ -254,6 +251,13 @@ public sealed class MapCanvasControl : Control
         {
             _dragStartWorld = null;
             _editor.EndDrag();
+        }
+
+        if (_isStroking)
+        {
+            _isStroking = false;
+            _editor.EndStroke();
+            Cursor = Cursor.Default;
         }
 
         _isPanning = false;

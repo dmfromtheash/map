@@ -1,0 +1,35 @@
+{
+  "recordedUtc": "2026-08-25T18:25:40.1905885+00:00",
+  "machine": {
+    "os": "Microsoft Windows NT 10.0.26200.0",
+    "processorCount": 16,
+    "framework": "10.0.10"
+  },
+  "render": {
+    "canvas": "65536x65536",
+    "viewport": "1920x1080",
+    "objectCount": 50000,
+    "candidateCount": 28,
+    "drawnCount": 28,
+    "medianMs": 0.748,
+    "p95Ms": 1.001,
+    "gateMedianMs": 33.3
+  },
+  "assetCatalog": {
+    "recordCount": 10000,
+    "metadataLoadMs": 141.947,
+    "warmSearchP95Ms": 1.344,
+    "decodedOriginalCount": 0,
+    "gateLoadMs": 2000,
+    "gateSearchP95Ms": 100
+  },
+  "land": {
+    "sourceTileCount": 4,
+    "fastPreviewMedianMs": 0.656,
+    "exactIdleMedianMs": 75.094,
+    "cacheEntries": 4,
+    "cacheCapacity": 32,
+    "geometryBytes": 262144
+  },
+  "gatePassed": true
+}

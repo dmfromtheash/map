@@ -95,6 +95,7 @@ public static class ProjectFixtures
             Assert.Equal(expectedLayer.Visible, actualLayer.Visible);
             Assert.Equal(expectedLayer.Locked, actualLayer.Locked);
             Assert.Equal(expectedLayer.Opacity, actualLayer.Opacity);
+            Assert.Equal(expectedLayer.Blend, actualLayer.Blend);
             Assert.Equal(expectedLayer.GetType(), actualLayer.GetType());
 
             if (expectedLayer is BaseColorLayer expectedBase)

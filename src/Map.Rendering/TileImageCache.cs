@@ -14,6 +14,9 @@ public enum TileImageKind
 
     /// <summary>Red overlay showing the hidden part of a mask while it is being edited.</summary>
     MaskOverlay = 2,
+
+    /// <summary>White-alpha source coverage tinted by the current non-destructive land style.</summary>
+    LandCoverage = 3,
 }
 
 /// <summary>
@@ -108,7 +111,7 @@ public sealed class TileImageCache : IDisposable
         for (var i = 0; i < source.Length; i++)
         {
             var offset = i * 4;
-            if (kind == TileImageKind.MaskAlpha)
+            if (kind is TileImageKind.MaskAlpha or TileImageKind.LandCoverage)
             {
                 var v = source[i];
                 pixels[offset] = v;

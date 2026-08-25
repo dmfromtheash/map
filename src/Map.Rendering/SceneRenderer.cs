@@ -81,6 +81,9 @@ public sealed class RenderOptions
     public LayerId? MaskEditLayerId { get; init; }
 
     public RenderStats? Stats { get; init; }
+
+    /// <summary>During pan/gesture draw source land fill only; idle/export evaluates all effects.</summary>
+    public bool FastPreview { get; init; }
 }
 
 /// <summary>
@@ -126,13 +129,14 @@ public static class SceneRenderer
     {
         var mask = layer.Mask is { Enabled: true } m && m.Tiles.TileCount > 0 ? m : null;
         var maskEdit = options.MaskEditLayerId == layer.Id && layer.Mask is not null;
-        var needsGroup = mask is not null || layer.Opacity < 1.0;
+        var needsGroup = mask is not null || layer.Opacity < 1.0 || layer.Blend != "Normal";
 
         if (needsGroup)
         {
             using var groupPaint = new SKPaint
             {
                 Color = SKColors.White.WithAlpha((byte)Math.Clamp(Math.Round(layer.Opacity * 255), 0, 255)),
+                BlendMode = ParseBlend(layer.Blend),
             };
 
             canvas.SaveLayer(ToRect(view), groupPaint);
@@ -154,6 +158,10 @@ public static class SceneRenderer
 
             case ObjectLayer objectLayer:
                 DrawObjects(canvas, objectLayer, view, options);
+                break;
+
+            case LandLayer landLayer:
+                DrawLand(canvas, landLayer, view, options);
                 break;
 
             case IRasterContentLayer raster:
@@ -178,6 +186,147 @@ public static class SceneRenderer
 
         canvas.Restore();
     }
+
+    private static void DrawLand(
+        SKCanvas canvas, LandLayer layer, WorldBounds view, RenderOptions options)
+    {
+        if (layer.GeometryTiles.TileCount == 0)
+        {
+            return;
+        }
+
+        var style = layer.EdgeStyle;
+        var sampling = options.ViewScale < 0.9
+            ? new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear)
+            : new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None);
+        var keys = layer.GeometryTiles
+            .KeysIntersecting(view.Left, view.Top, view.Right, view.Bottom)
+            .ToList();
+
+        if (!options.FastPreview)
+        {
+            if (style.OuterShadowOpacity > 0 && style.ShadowBlur > 0)
+            {
+                using var filter = SKImageFilter.CreateDropShadowOnly(
+                    0, 0, (float)style.ShadowBlur, (float)style.ShadowBlur,
+                    SKColors.Black.WithAlpha(Alpha(style.OuterShadowOpacity)));
+                DrawFilteredCoverage(filter, color: null, SKBlendMode.SrcOver);
+            }
+
+            for (var ripple = Math.Clamp(style.RippleCount, 0, 8); ripple >= 1; ripple--)
+            {
+                var radius = Math.Max(0, style.RippleSpacing * ripple);
+                DrawCoverageRing(
+                    radius,
+                    Math.Max(0.5, style.RippleWidth),
+                    ParseColor(style.RippleColor));
+            }
+
+            if (style.OutlineWidth > 0)
+            {
+                DrawExpandedCoverage(style.OutlineWidth, ParseColor(style.OutlineColor));
+            }
+        }
+
+        using (var tint = SKColorFilter.CreateBlendMode(ParseColor(style.FillColor), SKBlendMode.SrcIn))
+        using (var fill = new SKPaint { ColorFilter = tint, IsAntialias = true })
+        {
+            DrawCoverageImages(fill);
+        }
+
+        if (!options.FastPreview && style.InnerShadowOpacity > 0 && style.ShadowBlur > 0)
+        {
+            using var filter = SKImageFilter.CreateDropShadowOnly(
+                0, 0, (float)style.ShadowBlur, (float)style.ShadowBlur,
+                SKColors.Black.WithAlpha(Alpha(style.InnerShadowOpacity)));
+            DrawFilteredCoverage(filter, color: null, SKBlendMode.SrcATop);
+        }
+
+        if (options.Stats is { } stats)
+        {
+            stats.TilesDrawn += keys.Count;
+            if (options.ViewScale < 0.9)
+            {
+                stats.MipmappedTiles += keys.Count;
+            }
+        }
+
+        void DrawFilteredCoverage(SKImageFilter filter, SKColor? color, SKBlendMode blend)
+        {
+            using var tint = color is { } value
+                ? SKColorFilter.CreateBlendMode(value, SKBlendMode.SrcIn)
+                : null;
+            using var paint = new SKPaint
+            {
+                ImageFilter = filter,
+                ColorFilter = tint,
+                BlendMode = blend,
+                IsAntialias = true,
+            };
+            canvas.SaveLayer(ToRect(view), paint);
+            DrawCoverageImages(null);
+            canvas.Restore();
+        }
+
+        void DrawCoverageImages(SKPaint? paint)
+        {
+            foreach (var key in keys)
+            {
+                var coverage = layer.GeometryTiles.TryGet(key)!;
+                var image = options.TileCache is not null
+                    ? options.TileCache.Get(layer.Id, key, TileImageKind.LandCoverage, coverage)
+                    : BuildCoverageImage(coverage, TileImageKind.LandCoverage);
+                canvas.DrawImage(image, TileRect(key), sampling, paint);
+                if (options.TileCache is null)
+                {
+                    image.Dispose();
+                }
+            }
+        }
+
+        void DrawCoverageRing(double radius, double width, SKColor color)
+        {
+            canvas.SaveLayer(ToRect(view), null);
+            DrawExpandedCoverage(radius + width, color);
+            using var erase = new SKPaint { BlendMode = SKBlendMode.DstOut };
+            DrawExpandedCoverageCore(radius, null, erase);
+            canvas.Restore();
+        }
+
+        void DrawExpandedCoverage(double radius, SKColor color) =>
+            DrawExpandedCoverageCore(radius, color, paint: null);
+
+        void DrawExpandedCoverageCore(double radius, SKColor? color, SKPaint? paint)
+        {
+            using var tint = paint is null && color is { } value
+                ? SKColorFilter.CreateBlendMode(value, SKBlendMode.SrcIn)
+                : null;
+            using var ownedPaint = paint is null
+                ? new SKPaint { ColorFilter = tint, IsAntialias = true }
+                : null;
+            var drawPaint = paint ?? ownedPaint;
+            DrawCoverageImages(drawPaint);
+            if (radius <= 0)
+            {
+                return;
+            }
+
+            const int directionCount = 8;
+            for (var direction = 0; direction < directionCount; direction++)
+            {
+                var angle = (Math.PI * 2 * direction) / directionCount;
+                canvas.Save();
+                canvas.Translate(
+                    (float)(Math.Cos(angle) * radius),
+                    (float)(Math.Sin(angle) * radius));
+                DrawCoverageImages(drawPaint);
+                canvas.Restore();
+            }
+        }
+    }
+
+    private static byte Alpha(double opacity) =>
+        (byte)Math.Clamp(Math.Round(opacity * 255), 0, 255);
 
     private static void DrawObjects(
         SKCanvas canvas, ObjectLayer layer, WorldBounds view, RenderOptions options)
@@ -397,7 +546,7 @@ public static class SceneRenderer
         for (var i = 0; i < coverage.Length; i++)
         {
             var offset = i * 4;
-            if (kind == TileImageKind.MaskAlpha)
+            if (kind is TileImageKind.MaskAlpha or TileImageKind.LandCoverage)
             {
                 var v = coverage[i];
                 pixels[offset] = v;

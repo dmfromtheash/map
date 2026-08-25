@@ -52,6 +52,7 @@ public abstract record MapLayer
     public bool Visible { get; init; }
     public bool Locked { get; init; }
     public double Opacity { get; init; }
+    public string Blend { get; init; } = "Normal";
 
     /// <summary>The layer's mask, or null when it has none. Base colour cannot carry one.</summary>
     public abstract LayerMask? Mask { get; init; }
@@ -163,5 +164,62 @@ public sealed record BrushLayer : MapLayer, IRasterContentLayer
 
     public override MapLayer WithNewIds() => this with { Id = LayerId.New() };
 
+    public override MapLayer WithMask(LayerMask? mask) => this with { Mask = mask };
+}
+
+/// <summary>Appearance evaluated from land coverage at render time; never baked into geometry.</summary>
+public sealed record LandEdgeStyle
+{
+    public string FillColor { get; init; } = "#FF8CA36B";
+    public string OutlineColor { get; init; } = "#FF3F5131";
+    public double OutlineWidth { get; init; } = 3;
+    public double InnerShadowOpacity { get; init; } = 0.18;
+    public double OuterShadowOpacity { get; init; } = 0.25;
+    public double ShadowBlur { get; init; } = 8;
+    public string RippleColor { get; init; } = "#665A83A1";
+    public double RippleWidth { get; init; } = 2;
+    public double RippleSpacing { get; init; } = 10;
+    public int RippleCount { get; init; } = 2;
+}
+
+/// <summary>
+/// Independent land coverage. Edge styling is evaluated from <see cref="GeometryTiles"/> and can
+/// change without changing a single source byte; the ordinary layer mask remains separate.
+/// </summary>
+public sealed record LandLayer : MapLayer, IRasterContentLayer
+{
+    public LandLayer(
+        LayerId id,
+        string name,
+        bool visible,
+        bool locked,
+        double opacity,
+        TileMap geometryTiles,
+        LandEdgeStyle edgeStyle,
+        LayerMask? mask = null)
+        : base(id, name, visible, locked, opacity)
+    {
+        ArgumentNullException.ThrowIfNull(geometryTiles);
+        ArgumentNullException.ThrowIfNull(edgeStyle);
+        if (geometryTiles.BytesPerPixel != 1)
+        {
+            throw new ArgumentException("Land geometry stores single-channel coverage.", nameof(geometryTiles));
+        }
+
+        GeometryTiles = geometryTiles;
+        EdgeStyle = edgeStyle;
+        Mask = mask;
+    }
+
+    public static LandLayer CreateEmpty(LayerId id, string name) => new(
+        id, name, true, false, 1, TileMap.Empty(1), new LandEdgeStyle());
+
+    public TileMap GeometryTiles { get; init; }
+    public LandEdgeStyle EdgeStyle { get; init; }
+    public override LayerMask? Mask { get; init; }
+
+    TileMap IRasterContentLayer.ContentTiles => GeometryTiles;
+    public MapLayer WithContentTiles(TileMap tiles) => this with { GeometryTiles = tiles };
+    public override MapLayer WithNewIds() => this with { Id = LayerId.New() };
     public override MapLayer WithMask(LayerMask? mask) => this with { Mask = mask };
 }

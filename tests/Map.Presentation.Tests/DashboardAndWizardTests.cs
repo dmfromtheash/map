@@ -57,6 +57,17 @@ public class NewMapWizardTests
     }
 
     [Fact]
+    public void Large_map_profile_is_available_at_the_wizard_boundary()
+    {
+        var accepted = new NewMapWizardViewModel { WidthText = "65536", HeightText = "65536" };
+        var refused = new NewMapWizardViewModel { WidthText = "65537", HeightText = "65536" };
+
+        Assert.True(accepted.Validate());
+        Assert.Equal(65_536, accepted.Create(DateTimeOffset.UnixEpoch)!.Canvas.Width);
+        Assert.False(refused.Validate());
+    }
+
+    [Fact]
     public void Swap_orientation_swaps_the_dimensions()
     {
         var wizard = new NewMapWizardViewModel { WidthText = "1920", HeightText = "1080" };
