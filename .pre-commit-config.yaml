@@ -1,6 +1,18 @@
 minimum_pre_commit_version: "4.6.2"
 default_install_hook_types: [pre-commit]
 
+# Область хуков: структура репозитория и локальные ссылки.
+#
+# Сканера секретов здесь намеренно нет. Map — локальная офлайн-программа для
+# личного использования: нет сервера, аккаунтов, API-ключей и внешних
+# получателей данных, поэтому искать такому сканеру нечего. Практическая цена
+# была высокой: hook `gitleaks` объявлен как `language: golang`, то есть
+# pre-commit скачивает Go-тулчейн и собирает gitleaks из исходников, а
+# `gitleaks git` дополнительно проходит по истории. Это надолго вешало коммит.
+#
+# Возврат такой проверки — отдельное решение владельца, и только если в проекте
+# реально появятся секреты (интеграция, ключ, аккаунт).
+
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
@@ -13,17 +25,11 @@ repos:
       - id: check-symlinks
       - id: check-yaml
       - id: destroyed-symlinks
-      - id: detect-private-key
       - id: forbid-submodules
       - id: mixed-line-ending
         args: ["--fix=no"]
       - id: no-commit-to-branch
         args: ["--branch", "main"]
-
-  - repo: https://github.com/gitleaks/gitleaks
-    rev: v8.30.1
-    hooks:
-      - id: gitleaks
 
   - repo: https://github.com/lycheeverse/lychee
     rev: lychee-v0.24.2

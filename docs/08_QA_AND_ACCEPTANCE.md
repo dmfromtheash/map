@@ -21,7 +21,7 @@
 - document → save → reopen → semantic equality;
 - embedded/linked/missing assets;
 - autosave/recovery/checkpoint;
-- import limits и malicious ZIP/SVG fixtures;
+- import limits и fixtures повреждённых/неподходящих ZIP и SVG;
 - offscreen rendering pipeline;
 - cancellation и error propagation.
 
@@ -85,7 +85,7 @@ Automation пригодна для dashboard/dialog/inspectors, но canvas же
 - каждая поддерживаемая schemaVersion;
 - Unicode/кириллица в названии и заметках;
 - linked/embedded/missing asset;
-- malicious path traversal и compression bomb metadata;
+- неканонические пути в ZIP и метаданные с нереальным разжатым размером;
 - partially corrupted project.
 
 ## Приёмка визуала

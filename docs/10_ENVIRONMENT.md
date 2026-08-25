@@ -15,7 +15,6 @@
 | winget | 1.29.290 | официальная установка Windows SDK/tools |
 | Claude project plugins | Superpowers 6.3.0 / Interfaces 1.6.2 | TDD/debugging/verification и отдельный UI/accessibility review |
 | pre-commit | 4.6.2 | менеджер быстрых Git-гейтов |
-| Gitleaks | 8.30.1 | поиск известных форматов секретов |
 | Lychee | 0.24.2 | проверка Markdown-ссылок и anchors |
 | dotnet-coverage | 18.10.0 local tool | фактическое покрытие .NET-кода |
 | dotnet-stryker | 4.16.0 local tool | мутационная проверка силы тестов |
@@ -35,7 +34,7 @@
 - дизайнерские клонеры/экстракторы — риск прав и не нужны собственному дизайну;
 - Cloudflare/Vercel/серверы — офлайн-программа.
 - OmniParser — официальный исследовательский screen parser Microsoft, но требует отдельного Python/Conda-окружения и весов моделей; текущие локальные screenshots уже понимаются Claude/Codex без него;
-- сторонние Windows control MCP (`Windows-MCP`, `UIAutomationMCP`) — имеют доступ ко всему рабочему столу. Консольный Claude на Windows получает контролируемые PNG и проектные test drivers; широкий MCP не устанавливается без отдельного security review и ограничения области.
+- сторонние Windows control MCP (`Windows-MCP`, `UIAutomationMCP`) — дают агенту доступ ко всему рабочему столу владельца и этапу не нужны. Консольный Claude на Windows получает контролируемые PNG и проектные test drivers.
 
 ## Проверка
 
@@ -44,7 +43,6 @@ powershell -ExecutionPolicy Bypass -File .\scripts\doctor.ps1
 dotnet tool restore
 dotnet tool list
 python -m pre_commit --version
-gitleaks version
 lychee --version
 magick -version
 Get-Item "$env:LOCALAPPDATA\Programs\AccessibilityInsights\1.1\AccessibilityInsights.exe"
@@ -52,7 +50,9 @@ Get-Item "$env:LOCALAPPDATA\Programs\AccessibilityInsights\1.1\AccessibilityInsi
 
 Успех doctor означает только готовность среды, не готовность приложения.
 
-После первой установки Gitleaks/Lychee через WinGet нужно открыть новую консоль, чтобы обновлённый `PATH` применился. До этого они вызываются по фактическому пути WinGet package. Git-hook устанавливается один раз на checkout: `python -m pre_commit install`.
+После первой установки Lychee через WinGet нужно открыть новую консоль, чтобы обновлённый `PATH` применился. До этого он вызывается по фактическому пути WinGet package. Git-hook устанавливается один раз на checkout: `python -m pre_commit install`.
+
+Gitleaks и любые другие сканеры секретов из набора удалены: у офлайн-программы без сервера, аккаунтов и ключей им нечего искать, а hook `gitleaks` (`language: golang`) тянул Go-тулчейн и вешал коммит. Подробности и условия возврата — в `docs/11_CLAUDE_VERIFICATION_PROTOCOL.md`.
 
 ImageMagick установлен как Windows app execution alias. Если текущая консоль ещё не видит `magick`, открыть новую или вызвать `%LOCALAPPDATA%\Microsoft\WindowsApps\magick.exe`. Accessibility Insights установлен per-user из официального MSI; подпись установщика и EXE должна иметь статус `Valid`, signer `Microsoft Corporation`.
 
@@ -64,7 +64,7 @@ ImageMagick установлен как Windows app execution alias. Если т
 2. официальный источник и актуальная версия;
 3. лицензия и влияние на распространение `.exe`;
 4. runtime/build/dev-only;
-5. размер и security/telemetry/network последствия;
+5. размер, telemetry и сетевые последствия — офлайн-контур не нарушается;
 6. как удалить/откатить;
 7. как проверить, что он действительно использован.
 

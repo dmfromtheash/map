@@ -13,8 +13,7 @@
 | Claude Superpowers | plugin `6.3.0`, официальный Claude marketplace | TDD, системная отладка, запрос ревью, обязательные свежие доказательства перед завершением | не заменяет независимое ревью Codex; автоматическая оркестрация субагентов не разрешена этим проектом |
 | Interfaces | plugin `1.6.2`, `jakubkrehel/skills` | accessibility, layout, typography и diff-review интерфейса | автор прямо отделяет это от correctness, security, tests и performance |
 | pre-commit | `4.6.2` | запускает готовые быстрые Git-hooks до каждого коммита | не принимает функциональность этапа |
-| pre-commit-hooks | `v6.0.0` | конфликт имён/регистра, merge markers, JSON/YAML, symlinks, большие файлы, private keys, line endings, запрет submodules и прямого коммита в `main` | не анализирует поведение приложения |
-| Gitleaks | `8.30.1` | ищет известные форматы секретов в staged diff и истории | эвристика не гарантирует отсутствие любого секрета |
+| pre-commit-hooks | `v6.0.0` | конфликт имён/регистра, merge markers, JSON/YAML, symlinks, большие файлы, line endings, запрет submodules и прямого коммита в `main` | не анализирует поведение приложения |
 | Lychee | `0.24.2` | проверяет локальные Markdown-ссылки и anchors перед коммитом; полный сетевой прогон запускается отдельно | доступность внешнего сайта не гарантирует правильность содержания |
 | dotnet-coverage | local tool `18.10.0`, Microsoft | фактическое покрытие исполнявшегося .NET-кода и объединение отчётов | высокий процент не означает сильные assertions |
 | Stryker.NET | local tool `4.16.0` | временно вносит ошибки в production code и показывает, способны ли тесты их заметить | один mutation score без разбора survivors не является приёмкой |
@@ -25,7 +24,6 @@
 | FsCheck | подключается к тестовому проекту для инвариантов | ищет минимальный контрпример на множестве сгенерированных входов | свойства должны быть корректно сформулированы и проверены ревьюером |
 | ArchUnitNET | подключается при закреплении слоёв архитектуры | автоматически ловит запрещённые зависимости, например `Map.Core -> Avalonia/Skia` | не заменяет смысловое архитектурное ревью |
 | Repomix | `v1.18.0`, одноразовый `npx`, только локальный repo | полный снимок учитываемых файлов, tree/token inventory и контекст diff для ревью | не является тестом и не заменяет `git diff` |
-| Codex Security | уже установленный security diff/full scan | отдельный security-проход по коммиту или repository | запускается со своей явно указанной областью; не заменяет runtime checks |
 | Computer Use | уже доступен Codex | ручной smoke настоящего Windows-окна и проверка видимого результата | наблюдение без файла/process evidence недостаточно |
 | Claude Code image input | встроено в Claude Code; официальный способ — локальный image path | Claude действительно получает содержимое screenshot/mockup в vision-контекст | не управляет Windows-окном в консольной версии и не доказывает корректность сценария |
 | ImageMagick | `7.1.2-30 Q16-HDRI`, официальный пакет | dimensions/channels/alpha, математический RMSE и отдельный diff PNG | метрика не объясняет, является ли видимое отличие правильным; требуется AI/human review |
@@ -33,7 +31,22 @@
 
 FsCheck, ArchUnitNET, Avalonia Headless, Appium и диагностические CLI не добавляются «на всякий случай». Они подключаются в том этапе, где существует проверяемый объект и acceptance-сценарий.
 
-Широкий сторонний Windows-control MCP не является обязательной зависимостью. Официальный Computer Use консольного Claude Code сейчас недоступен на Windows, поэтому Opus получает vision через локальные PNG, а управляемость доказывает project-owned driver/Appium. Любой MCP с desktop control сначала проходит отдельный security review; популярность и наличие в registry не считаются достаточным основанием.
+## Киберзащитные проверки в этом проекте не применяются
+
+Map — локальная офлайн-программа для личного использования. Нет сервера, аккаунтов, API-ключей, телеметрии, приёма чужих файлов и внешних получателей данных, поэтому сканеры секретов и security-проходы по коммиту здесь ничего полезного не находят, а время и надёжность цикла тратят. Практически это уже мешало: hook `gitleaks` объявлен как `language: golang`, из-за чего pre-commit пытается скачать Go-тулчейн и собрать сканер из исходников, а `gitleaks git` дополнительно идёт по истории.
+
+Поэтому:
+
+- отдельный security diff/full scan **не является** гейтом ни на одном этапе;
+- сканеры секретов **не входят** в Gate A;
+- ни Opus, ни Codex не обязаны запускать и не должны запускать такие проверки для приёмки среза;
+- `dotnet package list --vulnerable` остаётся, потому что это часть обычной гигиены зависимостей и стоит секунды.
+
+Это решение владельца для текущего офлайн-контура. Если когда-нибудь появится сеть, аккаунт, ключ или приём чужих файлов, вопрос открывается заново отдельной записью в `docs/DECISIONS.md`.
+
+**Что этим НЕ отменяется:** устойчивость к битым и великанским файлам. Обрезанный `.mapproj`, повреждённый tile, некорректный manifest, ZIP с неканоническими путями и картинка на 40 000 пикселей — это обычные пользовательские ситуации после сбоя записи, копирования на флешку или ошибки экспорта. Редактор обязан на них давать понятную ошибку, а не падать, зависать или писать файл мимо контейнера. Это требование к надёжности, оно остаётся в силе и проверяется в разделах про import/archive.
+
+Широкий сторонний Windows-control MCP не является обязательной зависимостью. Официальный Computer Use консольного Claude Code сейчас недоступен на Windows, поэтому Opus получает vision через локальные PNG, а управляемость доказывает project-owned driver/Appium. MCP с полным desktop control не ставится потому, что он этапу не нужен и даёт агенту доступ ко всему рабочему столу владельца; популярность и наличие в registry не считаются достаточным основанием.
 
 ## Git-протокол одного среза
 
@@ -78,7 +91,7 @@ Repomix можно использовать как второй инвентар
 
 ### Gate A — быстрый перед каждым коммитом
 
-`pre-commit` запускает готовые hooks: структура файлов, конфликты, секреты и локальные ссылки. Hook должен быть установлен командой:
+`pre-commit` запускает готовые hooks: структура файлов, конфликты и локальные ссылки. Сканеров секретов в наборе нет — см. раздел о киберзащитных проверках выше. Hook должен быть установлен командой:
 
 ```powershell
 python -m pre_commit install
@@ -113,8 +126,7 @@ Codex выполняет свежий clean restore/build/test и не испо�
 - corrupted, missing, read-only, locked, full-disk-like и kill-process сценарии для файлов;
 - semantic roundtrip, hash, dimensions, alpha и декодирование созданного файла;
 - реальный EXE: process identity, отсутствие запрещённого listener, ввод, focus, high-DPI, screenshot и видимый результат;
-- counters/trace/GC evidence и median/P95 после warmup для performance claims;
-- security diff scan для security-sensitive изменения и полный scan на release gate.
+- counters/trace/GC evidence и median/P95 после warmup для performance claims.
 
 Coverage и mutation testing оцениваются по риску. Нельзя «поднять процент» тестами без assertions или автоматически принять новые golden-файлы, созданные тем же дефектным кодом.
 
@@ -156,7 +168,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\compare-ui-screenshots.ps1 `
 | geometry / hit-test | отрицательные/огромные координаты, zoom extremes, overlapping objects, stable ID, сравнение spatial index с brute-force oracle на сгенерированных сценах |
 | raster / mask | край tile, соседние tiles неизменны, zero/full alpha, mask ownership, overlay отсутствует в export |
 | save / recovery | kill отдельного процесса в каждой фазе, locked/read-only target, corrupt temp/journal, повторное recovery, semantic equality после reopen |
-| import / archive | path traversal, duplicate canonical names, compression bomb limits, oversized dimensions, unsupported/corrupt file |
+| import / archive | неканонические пути, дубликаты canonical names, лимиты разжатого размера, oversized dimensions, unsupported/corrupt file |
 | export | настоящий decode, width/height, alpha, deterministic content при фиксированном seed, отсутствие edit overlays, нехватка памяти/отмена |
 | native UI | AutomationId, keyboard-only path, focus, long Russian text, Windows scale 100/150/200%, реальное окно и screenshot |
 | performance | Release без debugger, warmup, одинаковый fixture/seed, median/P95, allocation/GC, минимум один trace для провала |
