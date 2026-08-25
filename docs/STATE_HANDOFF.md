@@ -111,9 +111,9 @@
 
 ## Следующий безопасный шаг
 
-Opus выполняет только fix-срез по `artifacts/opus-prompt-stage01-fix01.md` от точного base
-`06e494fb15e99eeda87a86d000e0283fe80a224b`, коммитит его отдельным коммитом и останавливается.
-После этого Codex повторяет Gate D. Stage 2 и prompt для Stage 2 не начинать до `FACT` по Gate D.
+Opus выполняет только fix-срез по `artifacts/opus-prompt-stage01-fix01.md` от точного рабочего base,
+записанного внутри prompt, коммитит его отдельным коммитом и останавливается. После этого Codex
+повторяет Gate D. Stage 2 и prompt для Stage 2 не начинать до `FACT` по Gate D.
 
 ## Проверка среды
 

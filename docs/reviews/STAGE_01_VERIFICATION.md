@@ -269,8 +269,8 @@ foundation в Stage 2.
 
 ## Точный следующий prompt
 
-`artifacts/opus-prompt-stage01-fix01.md` от base
-`06e494fb15e99eeda87a86d000e0283fe80a224b`.
+`artifacts/opus-prompt-stage01-fix01.md`; точный рабочий base записан внутри prompt после
+документационных коммитов проверки.
 
 После отчёта и fix-коммита Opus обязан остановиться. Codex повторяет red/green, Gate A, весь Gate B,
 относящийся Gate C, пересчитывает A/M/D/R и только затем создаёт Stage 2 prompt с новым точным base.
