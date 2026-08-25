@@ -2,12 +2,93 @@
 
 Дата проверки: 2026-08-26.
 
-Статус: **PARTIAL / НЕ ПРИНЯТО**.
+Текущий статус: **FACT / ИСПРАВЛЕНИЯ ПРИНЯТЫ**.
+
+Ниже сохранён исходный отрицательный срез проверки `d42433b`, чтобы замечания и доказательства не
+исчезли из истории. Повторная проверка исправлений выполнена отдельно на снимке `b35c20a`.
 
 Проверяемый снимок собирается и запускается, полный набор тестов зелёный, а основной оконный
 сценарий воспроизводится. Приёмку блокируют два accessibility-дефекта и неверная семантика
 счётчика несохранённых изменений. Автодрайвер также не покрывает один из семи инструментов и не
 доказывает эффект undo/redo.
+
+## Повторная проверка после исправлений
+
+Проверенный implementation snapshot:
+
+- branch: `fix/editor-ux-rebuild`;
+- BASE: `7eae9f3afba5a64e6804b852c350d1b7d8997b52`;
+- HEAD: `b35c20a92029a67530a2f8c7d6a1a0945a4041ac`;
+- диапазон: `A=8`, `M=16`, `D=0`, `R=0`, всего 24 файла, `+5187/-957`;
+- tracked files: 220;
+- `git diff --check BASE..HEAD`: exit 0;
+- worktree перед обновлением отчёта был чистым;
+- pre-commit hook установлен в `.git/hooks/pre-commit`.
+
+Исправления разделены на самостоятельные коммиты без amend/rebase:
+
+- `f3c73c6` — семантические checked/selected states для инструментов, пресетов, режимов и строк;
+- `0f988e6` — контраст фактического слабого текста не ниже WCAG AA;
+- `4cb453f` — логическое сохранённое состояние через undo/redo и save checkpoint;
+- `3eaadb2` — обновлённые нативные UI-регрессии Stages 2-8;
+- `b35c20a` — принятая матрица функциональной паритетности панели объекта и сеток.
+
+Свежий Gate C на этом снимке:
+
+| Проверка | Результат |
+|---|---|
+| `dotnet clean Map.slnx -c Release` | exit 0 |
+| `dotnet restore Map.slnx --force-evaluate` | exit 0 |
+| `dotnet build Map.slnx -c Release --no-restore` | exit 0; 0 warnings, 0 errors |
+| `dotnet test Map.slnx -c Release --no-build --no-restore --blame-hang --blame-hang-timeout 2m` | exit 0; 185/185 |
+| Core / Persistence / Rendering / Assets / Presentation | 63 / 45 / 16 / 6 / 55 |
+| `dotnet format ... analyzers --severity warn` | exit 0 |
+| `dotnet format ... whitespace` | exit 2; репозиторный долг, в изменённом диапазоне только две старые строки `EditorViewModel.cs:905-906`, обе принадлежат `d657dcf6` |
+| `git diff --check BASE..HEAD` | exit 0 |
+| `pre_commit run --all-files` | exit 0; все hooks Passed |
+| `scripts/doctor.ps1` | exit 0 |
+| NuGet vulnerable, direct + transitive | exit 0; известных уязвимостей нет |
+| NuGet deprecated, direct + transitive | exit 0; существующий xUnit 2.9.3 Legacy в пяти test-проектах |
+
+Массовая нормализация старых переносов строк не входит в UX-срез: она затронула бы benchmarks,
+Core, Persistence, Rendering и старые тесты. Текущий diff не содержит trailing whitespace или
+ошибок `git diff --check`, а mixed-line-ending hook проходит.
+
+Свежий Release EXE имеет SHA-256
+`0F4470B29DA4872E6F2ED2DCAC8E854203642A3011DCAE94CEDE282E27A08B5F`.
+После проверок процессов `Map.App` не осталось.
+
+### Нативные сценарии
+
+- `artifacts/fix-driver-coverage/ui-smoke-final/`: exit 0, 17 PNG и `evidence.json`; все семь
+  инструментов, UIA checked/selected states, Shape, реальный эффект двух undo и двух redo,
+  Ctrl+Z/Ctrl+Y, keyboard focus, два нативных окна, minimum client area 960x640, TCP listeners 0.
+- `artifacts/regression-refresh/stage02-final2/`: exit 0, 12 PNG; create, selection, drag,
+  transform, undo/redo, pan/zoom, Save As, чистое закрытие, новый процесс, recent и reopen с той же
+  геометрией `X=783.09 Y=438.73 W=400 H=260 R=30`.
+- `artifacts/regression-refresh/stages03-05-final/`: exit 0; large-map/Land/asset regression.
+- `artifacts/regression-refresh/stages06-08-retry2/`: exit 0; Line/Shape, Text/Grid,
+  filters/compositions regression.
+
+Финальные кадры Shape, Layers, keyboard-only и reopened selection дополнительно открыты и
+просмотрены. Видимых обрезаний, наложений или недоступных ключевых областей на проверенных
+размерах не найдено.
+
+### Итоговая acceptance matrix исправлений
+
+| Пункт | Статус | Доказательство |
+|---|---|---|
+| Семантическое активное/выбранное состояние | FACT | Toggle/selection patterns и UIA assertions |
+| Контраст фактического текста | FACT | 4.716:1 на panel и 5.030:1 на surface |
+| Undo/redo и число несохранённых изменений | FACT | model tests + UIA document/pending assertions |
+| Все семь инструментов, включая Shape | FACT | 17-кадровый UX driver |
+| Регресс Stages 2-8 | FACT | три обновлённых нативных драйвера, все exit 0 |
+| Save As / close / новый процесс / reopen | FACT | Stage 2, тот же объект и геометрия |
+| 100/150/200% DPI и будущий полный export | PARTIAL | 100% и minimum 960x640 проверены; системный DPI не менялся, полный export относится к Stage 9 |
+
+Первоначальные P1/P2 ниже закрыты указанными отдельными fix-коммитами. Требования к панели
+выбранного объекта и видам сетки не объявляются реализованными: они приняты как следующий
+функциональный срез в `docs/research/OBJECT_AND_GRID_PARITY.md`, `DEC-010` и roadmap.
 
 ## Git identity и область
 
