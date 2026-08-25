@@ -46,10 +46,21 @@ function Wait-Id([string]$id, [int]$timeout = 15000) {
 }
 function Invoke-Id([string]$id) {
     $item = Wait-Id $id; $pattern = $null
-    if (-not $item.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {
-        throw "'$id' has no InvokePattern"
+    if ($item.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {
+        $pattern.Invoke()
     }
-    $pattern.Invoke(); Start-Sleep -Milliseconds 180
+    elseif ($item.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref]$pattern)) {
+        $pattern.Toggle()
+    }
+    elseif ($item.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$pattern)) {
+        if ($pattern.Current.ExpandCollapseState -ne [System.Windows.Automation.ExpandCollapseState]::Expanded) {
+            $pattern.Expand()
+        }
+    }
+    else {
+        throw "'$id' has no supported activation pattern"
+    }
+    Start-Sleep -Milliseconds 180
 }
 function Set-Value([string]$id, [string]$value) {
     $item = Wait-Id $id
@@ -82,16 +93,20 @@ function Save-Capture([string]$path) {
 }
 
 try {
+    $env:MAP_UI_TEST_MODE = '1'
     $process = Start-Process -FilePath $Exe -PassThru
     Wait-Id 'NewMapButton' 20000 | Out-Null
     Invoke-Id 'NewMapButton'; Set-Value 'WizardTitleBox' 'Stages 06-08 smoke'
+    Invoke-Id 'WizardPresetCustom'
     Set-Value 'WizardWidthBox' '65536'; Set-Value 'WizardHeightBox' '65536'; Invoke-Id 'CreateMapButton'
     Wait-Id 'MapCanvas' 30000 | Out-Null
 
-    Invoke-Id 'AddLineButton'; Select-Tab 1; Invoke-Id 'MoveVectorNodeButton'; Invoke-Id 'AddPortalButton'
-    Invoke-Id 'AddShapeEllipseButton'; Invoke-Id 'AddShapeEllipseButton'; Invoke-Id 'BooleanSubtractButton'
+    Invoke-Id 'LineToolButton'; Invoke-Id 'AddLineButton'; Select-Tab 1
+    Invoke-Id 'MoveVectorNodeButton'; Invoke-Id 'VectorAdvanced'; Invoke-Id 'AddPortalButton'
+    Invoke-Id 'ShapeToolButton'; Invoke-Id 'AddShapeEllipseButton'
+    Invoke-Id 'ShapeToolButton'; Invoke-Id 'AddShapeEllipseButton'; Invoke-Id 'BooleanSubtractButton'
     Invoke-Id 'UndoButton'; Invoke-Id 'RedoButton'
-    Invoke-Id 'AddTextButton'; Select-Tab 1; Invoke-Id 'TextMissingFontButton'
+    Invoke-Id 'TextToolButton'; Invoke-Id 'AddTextButton'; Select-Tab 1; Invoke-Id 'TextMissingFontButton'
     Select-Tab 0; Invoke-Id 'AddGridLayerButton'; Invoke-Id 'GridGeometryButton'; Invoke-Id 'GridSnapObjectButton'
     Invoke-Id 'AddFilterLayerButton'; Invoke-Id 'LayerMaskButton'; Invoke-Id 'FilterStyleButton'
     Select-Tab 3; Invoke-Id 'AddWorldNoteButton'
@@ -117,6 +132,7 @@ try {
     Write-Host "Stages 06-08 smoke passed: $OutDir"
 }
 finally {
+    Remove-Item Env:\MAP_UI_TEST_MODE -ErrorAction SilentlyContinue
     if ($null -ne $process -and -not $process.HasExited) {
         $process.Kill(); $process.WaitForExit(10000) | Out-Null
     }

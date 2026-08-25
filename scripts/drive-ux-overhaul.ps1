@@ -211,7 +211,8 @@ function Save-Step([string]$slug, [string]$note) {
 # reproduce exactly what a user's fingers do regardless of layout.
 $script:VirtualKeys = @{
     'Tab' = 0x09; 'Ctrl' = 0x11; 'Esc' = 0x1B
-    'B' = 0x42; 'E' = 0x45; 'L' = 0x4C; 'M' = 0x4D; 'R' = 0x52; 'T' = 0x54; 'V' = 0x56; 'Z' = 0x5A
+    'B' = 0x42; 'E' = 0x45; 'L' = 0x4C; 'M' = 0x4D; 'R' = 0x52; 'T' = 0x54; 'V' = 0x56
+    'Y' = 0x59; 'Z' = 0x5A
 }
 
 function Send-Keystrokes {
@@ -310,6 +311,28 @@ function Assert-OneToggleOnByPrefix([string]$prefix, [string]$what) {
     Write-Host "      ok  $what exposes one checked row"
 }
 
+function Count-IdsByPrefix([string]$prefix) {
+    $count = 0
+    foreach ($window in Get-AppWindows) {
+        $items = $window.FindAll(
+            [System.Windows.Automation.TreeScope]::Descendants,
+            [System.Windows.Automation.Condition]::TrueCondition)
+        foreach ($item in $items) {
+            if ($item.Current.AutomationId.StartsWith($prefix, [StringComparison]::Ordinal)) {
+                $count++
+            }
+        }
+    }
+    return $count
+}
+
+function Get-UnsavedCount {
+    $summary = Get-Text 'SaveStateText'
+    $match = [regex]::Match($summary, 'Не сохранено:\s+(\d+)')
+    if (-not $match.Success) { throw "Save state does not expose an unsaved count: '$summary'" }
+    return [long]$match.Groups[1].Value
+}
+
 # ============================================================================ run
 
 $contextTitles = [ordered]@{}
@@ -352,6 +375,7 @@ try {
     $tools = @(
         @{ Id = 'SelectToolButton'; Title = 'Инструмент: Выбор';  Slug = 'tool-select' },
         @{ Id = 'LineToolButton';   Title = 'Инструмент: Линия';  Slug = 'tool-line' },
+        @{ Id = 'ShapeToolButton';  Title = 'Инструмент: Фигура'; Slug = 'tool-shape' },
         @{ Id = 'TextToolButton';   Title = 'Инструмент: Текст';  Slug = 'tool-text' },
         @{ Id = 'BrushToolButton';  Title = 'Инструмент: Кисть';  Slug = 'tool-brush' },
         @{ Id = 'MaskToolButton';   Title = 'Инструмент: Маска';  Slug = 'tool-mask' },
@@ -435,9 +459,19 @@ try {
     Write-Host 'Undo, redo and save state'
     $dirty = Get-Text 'SaveStateText'
     Assert-Contains $dirty 'Не сохранено' 'status bar counts unsaved work'
+    $objectsBeforeUndo = Count-IdsByPrefix 'Object_'
+    $changesBeforeUndo = Get-UnsavedCount
     Invoke-Id 'UndoButton' 380
+    Assert-Equal (Get-UnsavedCount) ($changesBeforeUndo - 1) 'undo reduces pending changes'
+    Invoke-Id 'UndoButton' 380
+    Assert-Equal (Count-IdsByPrefix 'Object_') ($objectsBeforeUndo - 1) 'a second undo removes the last object'
+    Assert-Equal (Get-UnsavedCount) ($changesBeforeUndo - 2) 'two undos reduce pending changes twice'
     Invoke-Id 'RedoButton' 380
-    Write-Host "      ok  save state = '$dirty'"
+    Assert-Equal (Count-IdsByPrefix 'Object_') $objectsBeforeUndo 'redo restores the last object'
+    Assert-Equal (Get-UnsavedCount) ($changesBeforeUndo - 1) 'redo restores one pending change'
+    Invoke-Id 'RedoButton' 380
+    Assert-Equal (Get-UnsavedCount) $changesBeforeUndo 'redo restores pending changes'
+    Write-Host "      ok  save state before undo = '$dirty'"
 
     Write-Host 'Assets and notes'
     Select-SideTab 2
@@ -459,9 +493,15 @@ try {
     Assert-Equal (Get-Text 'ContextPanelTitle') 'Инструмент: Кисть' 'tool switched by keyboard'
     Send-Keystrokes -Chord @('L')
     Assert-Equal (Get-Text 'ContextPanelTitle') 'Инструмент: Линия' 'a second tool key also works'
+    Send-Keystrokes -Chord @('R')
+    Assert-Equal (Get-Text 'ContextPanelTitle') 'Инструмент: Фигура' 'shape tool shortcut works'
     Send-Keystrokes -Chord @('V')
+    $changesBeforeKeyboardUndo = Get-UnsavedCount
     Send-Keystrokes -Chord @('Ctrl', 'Z')
-    Save-Step 'keyboard-only' "keyboard: Tab focus '$focusName', then B and V switch tools, Ctrl+Z undoes" | Out-Null
+    Assert-Equal (Get-UnsavedCount) ($changesBeforeKeyboardUndo - 1) 'Ctrl+Z reduces pending changes'
+    Send-Keystrokes -Chord @('Ctrl', 'Y')
+    Assert-Equal (Get-UnsavedCount) $changesBeforeKeyboardUndo 'Ctrl+Y restores pending changes'
+    Save-Step 'keyboard-only' "keyboard: Tab focus '$focusName', B/L/R/V switch tools, Ctrl+Z/Ctrl+Y change state" | Out-Null
 
     Write-Host 'Second native window'
     Invoke-Id 'SecondWindowButton' 900

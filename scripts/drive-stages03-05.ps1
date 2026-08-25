@@ -167,6 +167,7 @@ try {
 
     Invoke-Element 'NewMapButton'
     Set-ElementValue 'WizardTitleBox' 'Stages 03-05 smoke'
+    Invoke-Element 'WizardPresetCustom'
     Set-ElementValue 'WizardWidthBox' '65536'
     Set-ElementValue 'WizardHeightBox' '65536'
     Invoke-Element 'CreateMapButton'
@@ -187,6 +188,7 @@ try {
     Invoke-Element 'LandRectangleButton'
     Invoke-Element 'LandStyleButton'
     Invoke-Element 'LayerBlendButton'
+    Invoke-Element 'LandAdvanced'
     Invoke-Element 'LandMoveButton'
     Invoke-Element 'LandToolButton'
     Invoke-CanvasGesture $canvas
@@ -204,6 +206,7 @@ try {
     Select-SideTab 1
     Wait-Element 'ObjectSearchBox' | Out-Null
     Select-SideTab 2
+    Invoke-Element 'AssetAdvanced'
     foreach ($required in @('AssetSearchBox', 'ImportAssetButton', 'PlaceStampButton', 'ScatterStampButton')) {
         Wait-Element $required | Out-Null
     }

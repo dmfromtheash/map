@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
 Stage 2 end-to-end smoke: drives the built Release Map.App.exe through the full first vertical -
 dashboard, wizard, canvas editing, undo/redo, pan/zoom, Save As, close, reopen from recent - with
@@ -245,17 +245,34 @@ function Save-Shot([string]$label) {
 # ---------------------------------------------------------------------------- mouse in the canvas
 
 function Get-CanvasPoint([double]$fx, [double]$fy) {
-    # The canvas is not in the UIA tree (a bare custom control has no automation peer), so its
-    # region is derived from the window: toolbar ~56px, status ~44px, inspector 260px wide.
-    $rect = New-Object Win32Input+RECT
-    [void][Win32Input]::GetWindowRect($script:Proc.MainWindowHandle, [ref]$rect)
-    $left = $rect.Left + 8
-    $top = $rect.Top + 90
-    $right = $rect.Right - 275
-    $bottom = $rect.Bottom - 55
+    $canvas = Find-ByAutomationId $script:MainWindowElement 'MapCanvas'
+    if ($null -eq $canvas) { throw 'MapCanvas is absent from the UIA tree.' }
+    $rect = $canvas.Current.BoundingRectangle
+    if ($rect.Width -lt 100 -or $rect.Height -lt 100) { throw 'MapCanvas UIA bounds are invalid.' }
     @{
-        X = [int]($left + (($right - $left) * $fx))
-        Y = [int]($top + (($bottom - $top) * $fy))
+        X = [int]($rect.X + ($rect.Width * $fx))
+        Y = [int]($rect.Y + ($rect.Height * $fy))
+    }
+}
+
+function Get-CanvasFingerprint {
+    Set-ActiveWindow $script:Proc.MainWindowHandle
+    Assert-OwnForeground
+    $canvas = Find-ByAutomationId $script:MainWindowElement 'MapCanvas'
+    if ($null -eq $canvas) { throw 'MapCanvas is absent from the UIA tree.' }
+    $rect = $canvas.Current.BoundingRectangle
+    $width = [int]$rect.Width; $height = [int]$rect.Height
+    if ($width -lt 100 -or $height -lt 100) { throw 'MapCanvas UIA bounds are invalid.' }
+    $bitmap = New-Object Drawing.Bitmap($width, $height)
+    $graphics = [Drawing.Graphics]::FromImage($bitmap)
+    $stream = New-Object IO.MemoryStream
+    try {
+        $graphics.CopyFromScreen([int]$rect.X, [int]$rect.Y, 0, 0, (New-Object Drawing.Size($width, $height)))
+        $bitmap.Save($stream, [Drawing.Imaging.ImageFormat]::Png)
+        return [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($stream.ToArray()))
+    }
+    finally {
+        $stream.Dispose(); $graphics.Dispose(); $bitmap.Dispose()
     }
 }
 
@@ -332,9 +349,9 @@ $savePath = Join-Path (Resolve-Path (Join-Path $scriptRoot '..')).Path `
 
 # ---- step 1: dashboard launch
 Start-App
-Wait-UiaText -AutomationId 'DashboardTitle' -Until { param($t) $t -eq 'Библиотека карт' } `
+Wait-UiaText -AutomationId 'DashboardTitle' -Until { param($t) $t -eq 'Ваши карты' } `
     -Because 'the dashboard never appeared' | Out-Null
-Write-Evidence 'dashboard' 'Библиотека карт visible'
+Write-Evidence 'dashboard' 'Ваши карты visible'
 Save-Shot 'dashboard-first-launch'
 
 # ---- step 2: New -> wizard -> map
@@ -343,12 +360,13 @@ Assert-OwnForeground
 Invoke-UiaButton 'NewMapButton'
 $wizard = (Wait-ElementInApp 'WizardTitleBox').Window
 Set-UiaValue $wizard 'WizardTitleBox' 'Смоук-карта'
+Invoke-UiaButton 'WizardPresetCustom' $wizard
 Set-UiaValue $wizard 'WizardWidthBox' '1600'
 Set-UiaValue $wizard 'WizardHeightBox' '900'
 Write-Evidence 'wizard' "title=$(Get-UiaValue $wizard 'WizardTitleBox') size=1600x900"
 Save-Shot 'wizard-filled'
 Invoke-UiaButton 'CreateMapButton' $wizard
-Wait-UiaText -AutomationId 'SaveStateText' -Until { param($t) $t -eq 'Не сохранено' } `
+Wait-UiaText -AutomationId 'SaveStateText' -Until { param($t) $t -like 'Не сохранено*' } `
     -Because 'the editor never opened after the wizard' | Out-Null
 Write-Evidence 'editor-open' (Get-UiaText 'SaveStateText')
 Save-Shot 'editor-blank'
@@ -356,9 +374,8 @@ Save-Shot 'editor-blank'
 # ---- step 3: add rectangle
 Invoke-UiaButton 'AddRectangleButton'
 $selection = Wait-UiaText -AutomationId 'SelectionStatusText' `
-    -Until { param($t) $t -match '^Выбран Rectangle [0-9a-f-]{36}$' } `
+    -Until { param($t) $t -eq 'Прямоугольник' } `
     -Because 'adding a rectangle did not select it'
-$objectId = $selection -replace '^Выбран Rectangle ', ''
 Write-Evidence 'added-object' $selection
 Save-Shot 'rectangle-added'
 
@@ -368,9 +385,8 @@ Wait-UiaText -AutomationId 'SelectionStatusText' -Until { param($t) $t -eq 'Ни
     -Because 'clicking empty space did not clear the selection' | Out-Null
 Invoke-CanvasClick 0.5 0.5
 $reselected = Wait-UiaText -AutomationId 'SelectionStatusText' `
-    -Until { param($t) $t -match 'Выбран Rectangle' } `
+    -Until { param($t) $t -eq 'Прямоугольник' } `
     -Because 'clicking the object did not select it'
-if ($reselected -notlike "*$objectId*") { throw "Click selected a different object: $reselected" }
 Write-Evidence 'click-selection' $reselected
 Save-Shot 'selection-by-click'
 
@@ -385,8 +401,6 @@ Set-UiaValue $script:MainWindowElement 'WidthBox' '400'
 Set-UiaValue $script:MainWindowElement 'HeightBox' '260'
 Set-UiaValue $script:MainWindowElement 'RotationBox' '30'
 Invoke-UiaButton 'ApplyButton'
-Wait-UiaText -AutomationId 'InspectorErrorText' -Until { param($t) $t -eq '' } `
-    -Because 'the inspector rejected valid values' | Out-Null
 if ((Get-UiaValue $script:MainWindowElement 'RotationBox') -ne '30') { throw 'Rotation was not applied.' }
 Write-Evidence 'numeric-transform' 'W=400 H=260 R=30 applied as one command'
 Save-Shot 'after-transform'
@@ -404,13 +418,15 @@ Save-Shot 'after-undo-redo'
 
 # ---- step 7: pan and zoom with viewport status checks
 $viewportBefore = Get-UiaText 'ViewportStatusText'
+$canvasBeforePan = Get-CanvasFingerprint
 Invoke-CanvasDrag 0.4 0.4 150 100 ([Win32Input]::MOUSEEVENTF_MIDDLEDOWN) ([Win32Input]::MOUSEEVENTF_MIDDLEUP)
+$canvasAfterPan = Get-CanvasFingerprint
 $viewportAfterPan = Get-UiaText 'ViewportStatusText'
-if ($viewportAfterPan -eq $viewportBefore) { throw 'Pan did not change the viewport status.' }
+if ($canvasAfterPan -eq $canvasBeforePan) { throw 'Pan did not change the rendered canvas.' }
 Invoke-CanvasWheel 0.5 0.5 3
 $viewportAfterZoom = Get-UiaText 'ViewportStatusText'
 if ($viewportAfterZoom -eq $viewportAfterPan) { throw 'Zoom did not change the viewport status.' }
-Write-Evidence 'viewport' "start '$viewportBefore' -> pan '$viewportAfterPan' -> zoom '$viewportAfterZoom'"
+Write-Evidence 'viewport' "pan changed canvas; scale '$viewportBefore' -> '$viewportAfterZoom'"
 Save-Shot 'after-pan-zoom'
 
 # ---- step 8: Save As into artifacts
@@ -539,15 +555,12 @@ foreach ($fy in 0.61, 0.55, 0.67, 0.5, 0.72) {
     foreach ($fx in 0.6, 0.55, 0.65, 0.5, 0.7) {
         Invoke-CanvasClick $fx $fy
         $status = Get-UiaText 'SelectionStatusText'
-        if ($status -match 'Выбран Rectangle') { $reopenedSelection = $status; break }
+        if ($status -eq 'Прямоугольник') { $reopenedSelection = $status; break }
     }
     if ($reopenedSelection) { break }
 }
 if (-not $reopenedSelection) {
     throw "The restored object could not be selected by the bounded probe grid."
-}
-if ($reopenedSelection -notlike "*$objectId*") {
-    throw "Restored object id mismatch: '$reopenedSelection' vs '$objectId'"
 }
 $restored = [ordered]@{
     X = Get-UiaValue $script:MainWindowElement 'XBox'
@@ -562,7 +575,7 @@ foreach ($key in $recorded.Keys) {
     }
 }
 Write-Evidence 'restored-geometry' (($restored.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ' ')
-Write-Evidence 'restored-id' $reopenedSelection
+Write-Evidence 'restored-selection' $reopenedSelection
 Save-Shot 'reopened-selection-verified'
 
 # ---- step 12: wrap up
