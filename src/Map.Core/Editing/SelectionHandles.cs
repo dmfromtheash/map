@@ -133,7 +133,8 @@ public static class SelectionHandles
             before.Visible, before.Locked)
         {
             Sublayer = before.Sublayer, GroupId = before.GroupId, Stamp = before.Stamp,
-            Line = before.Line, Shape = before.Shape, ObjectOpacity = before.ObjectOpacity,
+            Line = before.Line, Shape = before.Shape, Text = before.Text,
+            ObjectOpacity = before.ObjectOpacity,
         };
     }
 
@@ -169,7 +170,8 @@ public static class SelectionHandles
             before.Visible, before.Locked)
         {
             Sublayer = before.Sublayer, GroupId = before.GroupId, Stamp = before.Stamp,
-            Line = before.Line, Shape = before.Shape, ObjectOpacity = before.ObjectOpacity,
+            Line = before.Line, Shape = before.Shape, Text = before.Text,
+            ObjectOpacity = before.ObjectOpacity,
         };
     }
 

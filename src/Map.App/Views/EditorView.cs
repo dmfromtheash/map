@@ -38,6 +38,14 @@ public sealed class EditorView : UserControl
     private readonly TextBox _objectSearch = new() { Name = "ObjectSearchBox", PlaceholderText = "Поиск объектов" };
     private readonly StackPanel _assetList = new() { Spacing = 4 };
     private readonly TextBox _assetSearch = new() { Name = "AssetSearchBox", PlaceholderText = "Поиск ассетов" };
+    private readonly StackPanel _noteList = new() { Spacing = 4 };
+    private readonly TextBox _noteSearch = new() { Name = "NoteSearchBox", PlaceholderText = "Поиск заметок" };
+    private readonly TextBox _noteTitle = new() { Name = "NoteTitleBox", PlaceholderText = "Заголовок" };
+    private readonly TextBox _noteMarkdown = new()
+    {
+        Name = "NoteMarkdownBox", PlaceholderText = "Markdown без HTML", AcceptsReturn = true, MinHeight = 90,
+    };
+    private NoteId? _selectedNoteId;
     private AssetRecord? _selectedAsset;
 
     public EditorView(EditorViewModel editor, Func<System.Threading.Tasks.Task> requestBack)
@@ -48,6 +56,7 @@ public sealed class EditorView : UserControl
         Button Tool(string name, string text, Action action)
         {
             var button = new Button { Name = name, Content = text, Margin = new Thickness(3) };
+            ToolTip.SetTip(button, text);
             button.Click += (_, _) => action();
             return button;
         }
@@ -104,6 +113,7 @@ public sealed class EditorView : UserControl
                 Tool("LandToolButton", "Земля", () => _editor.ActiveTool = EditorTool.Land),
                 Tool("LineToolButton", "Line draw", () => _editor.ActiveTool = EditorTool.Line),
                 Tool("ShapeToolButton", "Shape draw", () => _editor.ActiveTool = EditorTool.Shape),
+                Tool("TextToolButton", "Текст", () => _editor.ActiveTool = EditorTool.Text),
                 brushSize,
                 brushOpacity,
                 eraser,
@@ -116,6 +126,7 @@ public sealed class EditorView : UserControl
                 Tool("AddEllipseButton", "Эллипс", () => _editor.AddObject(SceneObjectKind.Ellipse)),
                 Tool("AddLineButton", "+ Line", _editor.AddLine),
                 Tool("AddVectorRectangleButton", "+ Shape", () => _editor.AddShape(ShapePrimitiveKind.Rectangle)),
+                Tool("AddTextButton", "+ Текст", _editor.AddText),
                 new Separator { Width = 12 },
                 Tool("UndoButton", "Отменить", _editor.Undo),
                 Tool("RedoButton", "Повторить", _editor.Redo),
@@ -170,6 +181,7 @@ public sealed class EditorView : UserControl
         });
         _objectSearch.TextChanged += (_, _) => SyncObjectList();
         _assetSearch.TextChanged += (_, _) => SyncAssetList();
+        _noteSearch.TextChanged += (_, _) => SyncNoteList();
 
         SyncStatus();
         SyncInspector();
@@ -185,6 +197,7 @@ public sealed class EditorView : UserControl
         Button ActionButton(string name, string text, Action action)
         {
             var button = new Button { Name = name, Content = text, Margin = new Thickness(2) };
+            ToolTip.SetTip(button, text);
             button.Click += (_, _) => action();
             return button;
         }
@@ -199,6 +212,7 @@ public sealed class EditorView : UserControl
                 ActionButton("AddObjectLayerButton", "+ Объекты", _editor.AddObjectLayer),
                 ActionButton("AddBrushLayerButton", "+ Кисть", _editor.AddBrushLayer),
                 ActionButton("AddLandLayerButton", "+ Земля", _editor.AddLandLayer),
+                ActionButton("AddGridLayerButton", "+ Сетка", _editor.AddGridLayer),
                 ActionButton("LayerUpButton", "↑", () => _editor.ReorderActiveLayer(true)),
                 ActionButton("LayerDownButton", "↓", () => _editor.ReorderActiveLayer(false)),
                 ActionButton("LayerVisibilityButton", "Показать/скрыть", _editor.ToggleActiveLayerVisibility),
@@ -224,6 +238,11 @@ public sealed class EditorView : UserControl
                 ActionButton("LandStyleButton", "Стиль берега", _editor.CycleActiveLandStyle),
                 ActionButton("LandMoveButton", "Сдвинуть →", () =>
                     _editor.MoveActiveLandArea(128, 0)),
+                ActionButton("GridGeometryButton", "Тип сетки", _editor.CycleActiveGridGeometry),
+                ActionButton("GridExportButton", "Сетка в экспорт", _editor.ToggleActiveGridExport),
+                ActionButton("GridSnapObjectButton", "Snap object", _editor.SnapSelectedObjectToGrid),
+                ActionButton("GridSnapNodeButton", "Snap node", _editor.SnapSelectedNodeToGrid),
+                ActionButton("GridSnapPortalButton", "Snap portal", _editor.SnapSelectedPortalToGrid),
             },
         };
 
@@ -278,6 +297,8 @@ public sealed class EditorView : UserControl
                             _editor.ApplyShapeBoolean(Map.Core.Editing.ShapeBooleanOperation.Subtract)),
                         ActionButton("BooleanMergeButton", "Boolean merge", () =>
                             _editor.ApplyShapeBoolean(Map.Core.Editing.ShapeBooleanOperation.Merge)),
+                        ActionButton("TextStyleButton", "Text style", _editor.CycleSelectedTextStyle),
+                        ActionButton("TextMissingFontButton", "Missing font test", _editor.UseMissingFontOnSelectedText),
                     },
                 },
                 new Separator(),
@@ -337,6 +358,39 @@ public sealed class EditorView : UserControl
             },
         };
 
+        var notes = new StackPanel
+        {
+            Margin = new Thickness(10), Spacing = 6,
+            Children =
+            {
+                new TextBlock { Text = "Локальные заметки · не попадают на карту и в экспорт", TextWrapping = TextWrapping.Wrap },
+                _noteSearch,
+                new ScrollViewer { MaxHeight = 220, Content = _noteList },
+                _noteTitle, _noteMarkdown,
+                new WrapPanel
+                {
+                    Children =
+                    {
+                        ActionButton("AddWorldNoteButton", "+ В центре", _editor.AddNoteAtViewCentre),
+                        ActionButton("AddObjectNoteButton", "+ К объекту", _editor.AddNoteForSelection),
+                        ActionButton("SaveNoteButton", "Сохранить", () =>
+                        {
+                            if (_selectedNoteId is { } id)
+                                _editor.EditNote(id, _noteTitle.Text ?? "", _noteMarkdown.Text ?? "");
+                        }),
+                        ActionButton("GoToNoteButton", "Перейти", () =>
+                        {
+                            if (_selectedNoteId is { } id) _editor.GoToNote(id);
+                        }),
+                        ActionButton("DeleteNoteButton", "Удалить", () =>
+                        {
+                            if (_selectedNoteId is { } id) { _editor.DeleteNote(id); _selectedNoteId = null; }
+                        }),
+                    },
+                },
+            },
+        };
+
         return new TabControl
         {
             Name = "EditorSideTabs",
@@ -345,6 +399,7 @@ public sealed class EditorView : UserControl
                 new TabItem { Header = "Слои", Content = layers },
                 new TabItem { Header = "Объекты", Content = objects },
                 new TabItem { Header = "Ассеты", Content = assets },
+                new TabItem { Header = "Заметки", Content = notes },
             },
         };
     }
@@ -459,6 +514,7 @@ public sealed class EditorView : UserControl
                 ObjectLayer => "Объекты",
                 BrushLayer => "Кисть",
                 LandLayer => "Земля",
+                GridLayer => "Сетка",
                 _ => layer.GetType().Name,
             };
             var active = layer.Id == _editor.ActiveLayerId ? "▶ " : "";
@@ -482,6 +538,7 @@ public sealed class EditorView : UserControl
         _layerName.Text = _editor.ActiveLayer?.Name ?? "";
         SyncObjectList();
         SyncAssetList();
+        SyncNoteList();
     }
 
     private void SyncObjectList()
@@ -530,6 +587,30 @@ public sealed class EditorView : UserControl
                 SyncAssetList();
             };
             _assetList.Children.Add(button);
+        }
+    }
+
+    private void SyncNoteList()
+    {
+        var query = (_noteSearch.Text ?? "").Trim();
+        _noteList.Children.Clear();
+        foreach (var note in _editor.SearchNotes(query))
+        {
+            var selected = note.Id == _selectedNoteId ? "▶ " : "";
+            var state = note.IsDetached(_editor.Session.Document) ? " · якорь удалён" : "";
+            var button = new Button
+            {
+                Name = "Note_" + note.Id,
+                HorizontalContentAlignment = HorizontalAlignment.Left,
+                Content = selected + note.Title + state,
+            };
+            ToolTip.SetTip(button, "Открыть локальную заметку");
+            button.Click += (_, _) =>
+            {
+                _selectedNoteId = note.Id; _noteTitle.Text = note.Title; _noteMarkdown.Text = note.Markdown;
+                SyncNoteList();
+            };
+            _noteList.Children.Add(button);
         }
     }
 

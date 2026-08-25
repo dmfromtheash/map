@@ -37,7 +37,7 @@ public static class ThumbnailRenderer
         canvas.Translate((float)dx, (float)dy);
         canvas.Scale((float)scale);
 
-        SceneRenderer.Render(canvas, document, new RenderOptions()); // no selection, no chrome
+        SceneRenderer.Render(canvas, document, new RenderOptions { IsExport = true }); // no editor-only grid or chrome
 
         canvas.Restore();
         canvas.Flush();

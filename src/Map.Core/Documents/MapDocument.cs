@@ -18,12 +18,14 @@ public sealed record MapDocument
         DateTimeOffset createdUtc,
         CanvasDefinition canvas,
         IReadOnlyList<MapLayer> layers,
-        IReadOnlyList<MapAssetReference>? assets = null)
+        IReadOnlyList<MapAssetReference>? assets = null,
+        IReadOnlyList<MapNote>? notes = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
         ArgumentNullException.ThrowIfNull(canvas);
         ArgumentNullException.ThrowIfNull(layers);
         assets ??= [];
+        notes ??= [];
 
         if (layers.Count == 0 || layers[0] is not BaseColorLayer)
         {
@@ -41,6 +43,7 @@ public sealed record MapDocument
         var nodeIds = new HashSet<VectorNodeId>();
         var portalIds = new HashSet<PortalId>();
         var regionIds = new HashSet<ShapeRegionId>();
+        var gridIds = new HashSet<GridId>();
         foreach (var layer in layers)
         {
             if (!layerIds.Add(layer.Id))
@@ -70,6 +73,11 @@ public sealed record MapDocument
                     }
                 }
             }
+
+            if (layer is GridLayer gridLayer && gridLayer.Grids.Any(grid => !gridIds.Add(grid.Id)))
+            {
+                throw new ArgumentException("Grid ids are unique across the document.", nameof(layers));
+            }
         }
 
         Id = id;
@@ -78,11 +86,16 @@ public sealed record MapDocument
         Canvas = canvas;
         Layers = new ReadOnlyCollection<MapLayer>([.. layers]);
         Assets = new ReadOnlyCollection<MapAssetReference>([.. assets]);
+        Notes = new ReadOnlyCollection<MapNote>([.. notes]);
 
         if (Assets.Select(asset => asset.Sha256).Distinct(StringComparer.OrdinalIgnoreCase).Count()
             != Assets.Count)
         {
             throw new ArgumentException("Asset hashes are unique within a document.", nameof(assets));
+        }
+        if (Notes.Select(note => note.Id).Distinct().Count() != Notes.Count)
+        {
+            throw new ArgumentException("Note ids are unique within a document.", nameof(notes));
         }
     }
 
@@ -98,6 +111,7 @@ public sealed record MapDocument
     public IReadOnlyList<MapLayer> Layers { get; init; }
 
     public IReadOnlyList<MapAssetReference> Assets { get; init; }
+    public IReadOnlyList<MapNote> Notes { get; init; }
 
     /// <summary>The mandatory background layer.</summary>
     public BaseColorLayer BaseColor => (BaseColorLayer)Layers[0];
@@ -105,10 +119,13 @@ public sealed record MapDocument
     public MapLayer? FindLayer(LayerId id) => Layers.FirstOrDefault(l => l.Id == id);
 
     public MapDocument WithLayers(IReadOnlyList<MapLayer> layers) =>
-        new(Id, Title, CreatedUtc, Canvas, layers, Assets);
+        new(Id, Title, CreatedUtc, Canvas, layers, Assets, Notes);
 
     public MapDocument WithAssets(IReadOnlyList<MapAssetReference> assets) =>
-        new(Id, Title, CreatedUtc, Canvas, Layers, assets);
+        new(Id, Title, CreatedUtc, Canvas, Layers, assets, Notes);
+
+    public MapDocument WithNotes(IReadOnlyList<MapNote> notes) =>
+        new(Id, Title, CreatedUtc, Canvas, Layers, Assets, notes);
 
     /// <summary>New snapshot with one layer replaced in place.</summary>
     public MapDocument WithLayer(LayerId id, Func<MapLayer, MapLayer> rewrite)

@@ -34,6 +34,7 @@ internal sealed class SceneDto
 {
     [JsonPropertyName("documentId")] public string DocumentId { get; set; } = "";
     [JsonPropertyName("layers")] public List<LayerDto> Layers { get; set; } = [];
+    [JsonPropertyName("notes")] public List<NoteDto> Notes { get; set; } = [];
 }
 
 internal sealed class LayerDto
@@ -60,6 +61,38 @@ internal sealed class LayerDto
     [JsonPropertyName("landStyle")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public LandStyleDto? LandStyle { get; set; }
+    [JsonPropertyName("grids")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<GridDefinitionDto>? Grids { get; set; }
+}
+
+internal sealed class GridDefinitionDto
+{
+    [JsonPropertyName("id")] public string Id { get; set; } = "";
+    [JsonPropertyName("geometry")] public string Geometry { get; set; } = "Square";
+    [JsonPropertyName("cellSize")] public double CellSize { get; set; }
+    [JsonPropertyName("subdivisions")] public int Subdivisions { get; set; } = 1;
+    [JsonPropertyName("lineWidth")] public double LineWidth { get; set; } = 1;
+    [JsonPropertyName("color")] public string Color { get; set; } = "";
+    [JsonPropertyName("opacity")] public double Opacity { get; set; }
+    [JsonPropertyName("offsetX")] public double OffsetX { get; set; }
+    [JsonPropertyName("offsetY")] public double OffsetY { get; set; }
+    [JsonPropertyName("rotationDegrees")] public double RotationDegrees { get; set; }
+    [JsonPropertyName("snapEnabled")] public bool SnapEnabled { get; set; }
+    [JsonPropertyName("includeInExport")] public bool IncludeInExport { get; set; }
+}
+
+internal sealed class NoteDto
+{
+    [JsonPropertyName("id")] public string Id { get; set; } = "";
+    [JsonPropertyName("title")] public string Title { get; set; } = "";
+    [JsonPropertyName("markdown")] public string Markdown { get; set; } = "";
+    [JsonPropertyName("anchorKind")] public string AnchorKind { get; set; } = "World";
+    [JsonPropertyName("worldX")] public double WorldX { get; set; }
+    [JsonPropertyName("worldY")] public double WorldY { get; set; }
+    [JsonPropertyName("objectId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ObjectId { get; set; }
 }
 
 internal sealed class LandStyleDto
@@ -118,6 +151,33 @@ internal sealed class SceneObjectDto
     [JsonPropertyName("shape")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ShapeStyleDto? Shape { get; set; }
+    [JsonPropertyName("text")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public TextStyleDto? Text { get; set; }
+}
+
+internal sealed class TextStyleDto
+{
+    [JsonPropertyName("content")] public string Content { get; set; } = "";
+    [JsonPropertyName("requestedFontFamily")] public string RequestedFontFamily { get; set; } = "";
+    [JsonPropertyName("fallbackFontFamily")] public string FallbackFontFamily { get; set; } = "";
+    [JsonPropertyName("fontWeight")] public int FontWeight { get; set; }
+    [JsonPropertyName("fontSize")] public double FontSize { get; set; }
+    [JsonPropertyName("fillColor")] public string FillColor { get; set; } = "";
+    [JsonPropertyName("outlineColor")] public string OutlineColor { get; set; } = "";
+    [JsonPropertyName("outlineWidth")] public double OutlineWidth { get; set; }
+    [JsonPropertyName("shadowOffsetX")] public double ShadowOffsetX { get; set; }
+    [JsonPropertyName("shadowOffsetY")] public double ShadowOffsetY { get; set; }
+    [JsonPropertyName("shadowBlur")] public double ShadowBlur { get; set; }
+    [JsonPropertyName("shadowOpacity")] public double ShadowOpacity { get; set; }
+    [JsonPropertyName("curve")] public double Curve { get; set; }
+    [JsonPropertyName("letterSpacing")] public double LetterSpacing { get; set; }
+    [JsonPropertyName("lineHeight")] public double LineHeight { get; set; }
+    [JsonPropertyName("alignment")] public string Alignment { get; set; } = "Left";
+    [JsonPropertyName("flipHorizontal")] public bool FlipHorizontal { get; set; }
+    [JsonPropertyName("flipVertical")] public bool FlipVertical { get; set; }
+    [JsonPropertyName("blur")] public double Blur { get; set; }
+    [JsonPropertyName("blend")] public string Blend { get; set; } = "Normal";
 }
 
 internal sealed class StampStyleDto

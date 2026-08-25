@@ -84,6 +84,9 @@ public sealed class RenderOptions
 
     /// <summary>During pan/gesture draw source land fill only; idle/export evaluates all effects.</summary>
     public bool FastPreview { get; init; }
+
+    /// <summary>Export paths opt in so editor-only grids can be omitted independently.</summary>
+    public bool IsExport { get; init; }
 }
 
 /// <summary>
@@ -162,6 +165,10 @@ public static class SceneRenderer
 
             case LandLayer landLayer:
                 DrawLand(canvas, landLayer, view, options);
+                break;
+
+            case GridLayer gridLayer:
+                DrawGridLayer(canvas, gridLayer, view, options);
                 break;
 
             case IRasterContentLayer raster:
@@ -604,6 +611,13 @@ public static class SceneRenderer
             return;
         }
 
+        if (sceneObject.Kind == SceneObjectKind.Text && sceneObject.Text is { } text)
+        {
+            DrawText(canvas, sceneObject, text, rect, objectAlpha);
+            canvas.Restore();
+            return;
+        }
+
         using (var fill = new SKPaint
         {
             Color = ParseColor(sceneObject.FillColor).WithScaledAlpha(objectAlpha),
@@ -628,6 +642,165 @@ public static class SceneRenderer
         }
 
         canvas.Restore();
+    }
+
+    private static void DrawGridLayer(
+        SKCanvas canvas, GridLayer layer, WorldBounds view, RenderOptions options)
+    {
+        foreach (var grid in layer.Grids)
+        {
+            if (options.IsExport && !grid.IncludeInExport) continue;
+            DrawGrid(canvas, grid, view);
+        }
+    }
+
+    private static void DrawGrid(SKCanvas canvas, GridDefinition grid, WorldBounds view)
+    {
+        var radians = -grid.RotationDegrees * Math.PI / 180;
+        var cos = Math.Cos(radians); var sin = Math.Sin(radians);
+        var corners = new[]
+        {
+            (view.Left, view.Top), (view.Right, view.Top),
+            (view.Right, view.Bottom), (view.Left, view.Bottom),
+        }.Select(point =>
+        {
+            var x = point.Item1 - grid.OffsetX; var y = point.Item2 - grid.OffsetY;
+            return (X: x * cos - y * sin, Y: x * sin + y * cos);
+        }).ToArray();
+        var minX = corners.Min(point => point.X); var maxX = corners.Max(point => point.X);
+        var minY = corners.Min(point => point.Y); var maxY = corners.Max(point => point.Y);
+
+        using var paint = new SKPaint
+        {
+            Color = ParseColor(grid.Color).WithScaledAlpha((byte)Math.Clamp(Math.Round(grid.Opacity * 255), 0, 255)),
+            StrokeWidth = (float)Math.Max(0.1, grid.LineWidth), IsAntialias = true,
+            Style = SKPaintStyle.Stroke,
+        };
+        canvas.Save();
+        canvas.Translate((float)grid.OffsetX, (float)grid.OffsetY);
+        canvas.RotateDegrees((float)grid.RotationDegrees);
+
+        var size = grid.CellSize / Math.Max(1, grid.Subdivisions);
+        if (grid.Geometry == GridGeometry.Square)
+        {
+            var stride = size;
+            var count = (maxX - minX + maxY - minY) / Math.Max(stride, 0.001);
+            if (count > 4000) stride *= Math.Ceiling(count / 4000);
+            for (var x = Math.Floor(minX / stride) * stride; x <= maxX; x += stride)
+                canvas.DrawLine((float)x, (float)minY, (float)x, (float)maxY, paint);
+            for (var y = Math.Floor(minY / stride) * stride; y <= maxY; y += stride)
+                canvas.DrawLine((float)minX, (float)y, (float)maxX, (float)y, paint);
+        }
+        else
+        {
+            DrawHexGrid(canvas, paint, grid.Geometry, size, minX, minY, maxX, maxY);
+        }
+        canvas.Restore();
+    }
+
+    private static void DrawHexGrid(
+        SKCanvas canvas, SKPaint paint, GridGeometry geometry, double size,
+        double minX, double minY, double maxX, double maxY)
+    {
+        var pointy = geometry == GridGeometry.HexPointy;
+        var dx = pointy ? Math.Sqrt(3) * size : 1.5 * size;
+        var dy = pointy ? 1.5 * size : Math.Sqrt(3) * size;
+        var columns = Math.Max(1, (int)Math.Ceiling((maxX - minX) / Math.Max(dx, 0.001)) + 4);
+        var rows = Math.Max(1, (int)Math.Ceiling((maxY - minY) / Math.Max(dy, 0.001)) + 4);
+        var lod = Math.Max(1, (int)Math.Ceiling(Math.Sqrt(columns * (double)rows / 2000)));
+        var startColumn = (int)Math.Floor(minX / dx) - 2;
+        var startRow = (int)Math.Floor(minY / dy) - 2;
+        for (var column = startColumn; column <= startColumn + columns; column += lod)
+        for (var row = startRow; row <= startRow + rows; row += lod)
+        {
+            var cx = pointy ? column * dx + (row % 2 == 0 ? 0 : dx / 2) : column * dx;
+            var cy = pointy ? row * dy : row * dy + (column % 2 == 0 ? 0 : dy / 2);
+            using var path = new SKPath();
+            for (var vertex = 0; vertex < 6; vertex++)
+            {
+                var angle = (pointy ? -90 : 0) + vertex * 60;
+                var vx = cx + Math.Cos(angle * Math.PI / 180) * size;
+                var vy = cy + Math.Sin(angle * Math.PI / 180) * size;
+                if (vertex == 0) path.MoveTo((float)vx, (float)vy); else path.LineTo((float)vx, (float)vy);
+            }
+            path.Close(); canvas.DrawPath(path, paint);
+        }
+    }
+
+    private static void DrawText(
+        SKCanvas canvas, SceneObject owner, TextStyle style, SKRect rect, byte objectAlpha)
+    {
+        var resolution = TextFontResolver.Resolve(style.RequestedFontFamily, style.FallbackFontFamily);
+        using var typeface = SKTypeface.FromFamilyName(
+            resolution.ResolvedFamily,
+            new SKFontStyle(style.FontWeight, (int)SKFontStyleWidth.Normal, SKFontStyleSlant.Upright));
+        using var font = new SKFont(typeface ?? SKTypeface.Default, (float)Math.Max(1, style.FontSize));
+        using var paint = new SKPaint
+        {
+            IsAntialias = true,
+            Color = ParseColor(style.FillColor).WithScaledAlpha(objectAlpha),
+            BlendMode = ParseBlend(style.Blend), Style = SKPaintStyle.Fill,
+            ImageFilter = style.Blur > 0 ? SKImageFilter.CreateBlur((float)style.Blur, (float)style.Blur) : null,
+        };
+        var centreX = rect.MidX; var centreY = rect.MidY;
+        canvas.Save();
+        canvas.ClipRect(rect);
+        canvas.Scale(style.FlipHorizontal ? -1 : 1, style.FlipVertical ? -1 : 1, centreX, centreY);
+        var lines = style.Content.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        var lineHeight = Math.Max(1, style.FontSize * style.LineHeight);
+        var y = rect.Top + (float)style.FontSize;
+        for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++, y += (float)lineHeight)
+        {
+            var line = lines[lineIndex];
+            var width = font.MeasureText(line) + (float)(Math.Max(0, line.Length - 1) * style.LetterSpacing);
+            var x = style.Alignment switch
+            {
+                TextAlignment.Center => rect.MidX - width / 2,
+                TextAlignment.Right => rect.Right - width,
+                _ => rect.Left,
+            };
+            if (style.ShadowOpacity > 0)
+            {
+                using var shadow = new SKPaint
+                {
+                    Color = SKColors.Black.WithAlpha((byte)Math.Clamp(Math.Round(style.ShadowOpacity * objectAlpha), 0, 255)),
+                    ImageFilter = SKImageFilter.CreateBlur((float)style.ShadowBlur, (float)style.ShadowBlur),
+                    IsAntialias = true, BlendMode = ParseBlend(style.Blend), Style = SKPaintStyle.Fill,
+                };
+                DrawTextRun(canvas, line, x + (float)style.ShadowOffsetX, y + (float)style.ShadowOffsetY,
+                    lineIndex, style, font, shadow);
+            }
+            if (style.OutlineWidth > 0)
+            {
+                using var outline = new SKPaint
+                {
+                    Style = SKPaintStyle.Stroke, StrokeWidth = (float)style.OutlineWidth,
+                    Color = ParseColor(style.OutlineColor).WithScaledAlpha(objectAlpha),
+                    IsAntialias = true, BlendMode = ParseBlend(style.Blend),
+                };
+                DrawTextRun(canvas, line, x, y, lineIndex, style, font, outline);
+            }
+            DrawTextRun(canvas, line, x, y, lineIndex, style, font, paint);
+        }
+        canvas.Restore();
+    }
+
+    private static void DrawTextRun(
+        SKCanvas canvas, string text, float x, float y, int lineIndex,
+        TextStyle style, SKFont font, SKPaint paint)
+    {
+        if (style.LetterSpacing == 0 && style.Curve == 0)
+        {
+            canvas.DrawText(text, x, y, SKTextAlign.Left, font, paint); return;
+        }
+        var cursor = x;
+        for (var index = 0; index < text.Length; index++)
+        {
+            var glyph = text[index].ToString();
+            var curveY = (float)(style.Curve * Math.Sin((index + lineIndex * 0.5) * Math.PI / Math.Max(2, text.Length - 1)));
+            canvas.DrawText(glyph, cursor, y - curveY, SKTextAlign.Left, font, paint);
+            cursor += font.MeasureText(glyph) + (float)style.LetterSpacing;
+        }
     }
 
     private static void DrawVectorShape(

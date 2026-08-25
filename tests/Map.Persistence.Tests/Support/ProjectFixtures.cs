@@ -131,7 +131,13 @@ public static class ProjectFixtures
                     Assert.Equal(expectedObject.Stamp, actualObject.Stamp);
                     Assert.Equivalent(expectedObject.Line, actualObject.Line, strict: true);
                     Assert.Equivalent(expectedObject.Shape, actualObject.Shape, strict: true);
+                    Assert.Equivalent(expectedObject.Text, actualObject.Text, strict: true);
                 }
+            }
+
+            if (expectedLayer is GridLayer expectedGrid)
+            {
+                Assert.Equivalent(expectedGrid.Grids, ((GridLayer)actualLayer).Grids, strict: true);
             }
 
             if (expectedLayer is IRasterContentLayer expectedRaster)
@@ -145,6 +151,8 @@ public static class ProjectFixtures
                 AssertTilesEqual(expectedMask.Tiles, actualLayer.Mask!.Tiles);
             }
         }
+
+        Assert.Equivalent(expected.Notes, actual.Notes, strict: true);
     }
 
     private static void AssertTilesEqual(TileMap expected, TileMap actual)

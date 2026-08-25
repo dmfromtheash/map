@@ -26,6 +26,28 @@ public class EditorViewModelTests
     }
 
     [Fact]
+    public void Stage7_text_grid_snap_notes_and_shortcuts_are_available_from_native_view_model()
+    {
+        var (editor, _, _, _, _) = NewEditor();
+        editor.Session.Viewport.Resize(1000, 700);
+        editor.AddText();
+        Assert.Equal(SceneObjectKind.Text, editor.Session.SelectedObject!.Kind);
+        editor.CycleSelectedTextStyle();
+        Assert.True(editor.Session.SelectedObject.Text!.OutlineWidth > 0);
+
+        editor.AddGridLayer();
+        editor.CycleActiveGridGeometry();
+        editor.ToggleActiveGridExport();
+        Assert.IsType<GridLayer>(editor.ActiveLayer);
+        Assert.True(((GridLayer)editor.ActiveLayer).Grids[0].IncludeInExport);
+
+        editor.AddNoteForSelection();
+        Assert.Single(editor.SearchNotes("О "));
+        editor.Shortcuts.Set("text", "Alt+T");
+        Assert.Equal("Alt+T", editor.Shortcuts.Get("text"));
+    }
+
+    [Fact]
     public void A_new_document_starts_unsaved_and_add_object_keeps_it_dirty()
     {
         var (editor, _, _, _, _) = NewEditor();

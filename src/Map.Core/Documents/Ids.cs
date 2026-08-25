@@ -47,3 +47,17 @@ public readonly record struct ShapeRegionId(Guid Value)
     public override string ToString() => Value.ToString("D");
     public static ShapeRegionId Parse(string s) => new(Guid.ParseExact(s, "D"));
 }
+
+public readonly record struct NoteId(Guid Value)
+{
+    public static NoteId New() => new(Guid.NewGuid());
+    public override string ToString() => Value.ToString("D");
+    public static NoteId Parse(string s) => new(Guid.ParseExact(s, "D"));
+}
+
+public readonly record struct GridId(Guid Value)
+{
+    public static GridId New() => new(Guid.NewGuid());
+    public override string ToString() => Value.ToString("D");
+    public static GridId Parse(string s) => new(Guid.ParseExact(s, "D"));
+}

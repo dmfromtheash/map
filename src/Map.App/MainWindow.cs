@@ -164,6 +164,23 @@ public sealed class MainWindow : Window
     {
         base.OnKeyDown(e);
 
+        if (_editorView is { } editorView)
+        {
+            var shortcuts = editorView.Editor.Shortcuts;
+            if (MatchesShortcut(e, shortcuts.Get("select")))
+            {
+                editorView.Editor.ActiveTool = EditorTool.Select; e.Handled = true; return;
+            }
+            if (MatchesShortcut(e, shortcuts.Get("text")))
+            {
+                editorView.Editor.AddText(); e.Handled = true; return;
+            }
+            if (MatchesShortcut(e, shortcuts.Get("grid-snap")))
+            {
+                editorView.Editor.SnapSelectedObjectToGrid(); e.Handled = true; return;
+            }
+        }
+
         var control = e.KeyModifiers.HasFlag(KeyModifiers.Control);
         if (!control)
         {
@@ -197,6 +214,25 @@ public sealed class MainWindow : Window
         }
 
         e.Handled = true;
+    }
+
+    private static bool MatchesShortcut(KeyEventArgs e, string gesture)
+    {
+        if (string.IsNullOrWhiteSpace(gesture)) return false;
+        var parts = gesture.Split('+', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        if (!Enum.TryParse<Key>(parts[^1], ignoreCase: true, out var key) || key != e.Key) return false;
+        var expected = KeyModifiers.None;
+        foreach (var part in parts[..^1])
+        {
+            expected |= part.ToUpperInvariant() switch
+            {
+                "CTRL" or "CONTROL" => KeyModifiers.Control,
+                "SHIFT" => KeyModifiers.Shift,
+                "ALT" => KeyModifiers.Alt,
+                _ => KeyModifiers.None,
+            };
+        }
+        return e.KeyModifiers == expected;
     }
 
     private async Task HandleNewShortcutAsync()

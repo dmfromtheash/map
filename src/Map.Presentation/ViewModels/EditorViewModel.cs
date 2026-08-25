@@ -32,6 +32,7 @@ public enum EditorTool
     Land,
     Line,
     Shape,
+    Text,
 }
 
 /// <summary>Live drag preview: never part of the document and never part of history.</summary>
@@ -113,6 +114,8 @@ public sealed class EditorViewModel : ViewModelBase
 
     public EditingSession Session { get; }
 
+    public EditorShortcutSettings Shortcuts { get; } = new();
+
     public IStampImageSource? StampImages { get; }
 
     public string? DocumentPath { get; private set; }
@@ -160,6 +163,13 @@ public sealed class EditorViewModel : ViewModelBase
             : "Ничего не выбрано";
 
     public IReadOnlyList<MapLayer> Layers => Session.Document.Layers;
+
+    public IReadOnlyList<MapNote> Notes => Session.Document.Notes;
+
+    public IReadOnlyList<MapNote> SearchNotes(string? query) => string.IsNullOrWhiteSpace(query)
+        ? Notes
+        : [.. Notes.Where(note => note.Title.Contains(query, StringComparison.OrdinalIgnoreCase)
+            || note.Markdown.Contains(query, StringComparison.OrdinalIgnoreCase))];
 
     public MapLayer? ActiveLayer =>
         _activeLayerId is { } id ? Session.Document.FindLayer(id) : null;
@@ -529,6 +539,55 @@ public sealed class EditorViewModel : ViewModelBase
         AfterEdit();
     }
 
+    public void AddText()
+    {
+        var layer = ActiveObjectLayer();
+        if (layer is null) return;
+        var centre = ViewCentre();
+        var text = new SceneObject(
+            ObjectId.New(), SceneObjectKind.Text, "Текст",
+            centre.X - 180, centre.Y - 70, 360, 140, 0,
+            "#FF20242B", "#FFFFFFFF", 0, true, false)
+        {
+            Text = new TextStyle { Content = "Новый текст\nна карте" },
+        };
+        Session.Execute(new AddObjectCommand(layer.Id, text));
+        Session.SelectedObjectId = text.Id;
+        _activeLayerId = layer.Id;
+        AfterEdit();
+    }
+
+    public void CycleSelectedTextStyle()
+    {
+        if (EditableSelection() is not { Text: { } style } before) return;
+        var after = before with
+        {
+            Text = style with
+            {
+                Alignment = style.Alignment == TextAlignment.Left ? TextAlignment.Center : TextAlignment.Left,
+                OutlineWidth = style.OutlineWidth == 0 ? 2 : 0,
+                ShadowOpacity = style.ShadowOpacity == 0 ? 0.35 : 0,
+                Curve = style.Curve == 0 ? 12 : 0,
+            },
+        };
+        ReplaceSelected(before, after, "Edit text style");
+    }
+
+    public TextFontResolution? SelectedTextFontResolution =>
+        Session.SelectedObject?.Text is { } text
+            ? TextFontResolver.Resolve(text.RequestedFontFamily, text.FallbackFontFamily)
+            : null;
+
+    public void UseMissingFontOnSelectedText()
+    {
+        if (EditableSelection() is not { Text: { } style } before) return;
+        ReplaceSelected(before, before with
+        {
+            Text = style with { RequestedFontFamily = "Map Stage 7 Missing Font", FallbackFontFamily = "Arial" },
+        }, "Set requested text font");
+        Raise(nameof(SelectedTextFontResolution));
+    }
+
     public void AddNodeToSelectedLine()
     {
         if (EditableSelection() is not { Line: not null } before) return;
@@ -716,6 +775,131 @@ public sealed class EditorViewModel : ViewModelBase
         AfterEdit();
     }
 
+    public void AddGridLayer()
+    {
+        var grid = new GridLayer(LayerId.New(), "Сетка", true, false, 1,
+        [
+            new GridDefinition(GridId.New(), GridGeometry.Square, 128)
+            {
+                Subdivisions = 2, IncludeInExport = false,
+            },
+        ]);
+        Session.Execute(new AddLayerCommand(grid, _activeLayerId));
+        _activeLayerId = grid.Id;
+        AfterEdit();
+    }
+
+    public void CycleActiveGridGeometry()
+    {
+        if (ActiveLayer is not GridLayer { Locked: false, Grids.Count: > 0 } before) return;
+        var current = before.Grids[0];
+        var next = current.Geometry switch
+        {
+            GridGeometry.Square => GridGeometry.HexFlat,
+            GridGeometry.HexFlat => GridGeometry.HexPointy,
+            _ => GridGeometry.Square,
+        };
+        Session.Execute(new ReplaceGridLayerCommand(before, before with
+        {
+            Grids = [current with { Geometry = next }, .. before.Grids.Skip(1)],
+        }));
+        AfterEdit();
+    }
+
+    public void ToggleActiveGridExport()
+    {
+        if (ActiveLayer is not GridLayer { Locked: false, Grids.Count: > 0 } before) return;
+        var current = before.Grids[0];
+        Session.Execute(new ReplaceGridLayerCommand(before, before with
+        {
+            Grids = [current with { IncludeInExport = !current.IncludeInExport }, .. before.Grids.Skip(1)],
+        }));
+        AfterEdit();
+    }
+
+    private GridDefinition? ActiveSnapGrid() => Session.Document.Layers
+        .OfType<GridLayer>().Where(layer => layer.Visible)
+        .SelectMany(layer => layer.Grids).LastOrDefault(grid => grid.SnapEnabled);
+
+    public void SnapSelectedObjectToGrid()
+    {
+        if (EditableSelection() is not { } before || ActiveSnapGrid() is not { } grid) return;
+        ReplaceSelected(before, GridSnapService.SnapObject(before, grid), "Snap object to grid");
+    }
+
+    public void SnapSelectedNodeToGrid()
+    {
+        if (EditableSelection() is not { } before || ActiveSnapGrid() is not { } grid) return;
+        var node = before.Line?.Nodes.FirstOrDefault()
+            ?? before.Shape?.Regions.SelectMany(region => region.Nodes).FirstOrDefault();
+        if (node is null) return;
+        ReplaceSelected(before, GridSnapService.SnapNode(before, node.Id, grid), "Snap node to grid");
+    }
+
+    public void SnapSelectedPortalToGrid()
+    {
+        if (EditableSelection() is not { Line: { } line } before || ActiveSnapGrid() is not { } grid) return;
+        var portal = line.Portals.FirstOrDefault();
+        if (portal is null) return;
+        ReplaceSelected(before, GridSnapService.SnapPortal(before, portal.Id, grid), "Snap portal to grid");
+    }
+
+    public void AddNoteAtViewCentre()
+    {
+        var centre = ViewCentre();
+        var note = new MapNote(NoteId.New(), $"Заметка {Notes.Count + 1}", "Локальная заметка",
+            NoteAnchorKind.World, centre.X, centre.Y);
+        Session.Execute(new AddNoteCommand(note));
+        AfterEdit();
+    }
+
+    public void AddNoteForSelection()
+    {
+        if (Session.SelectedObject is not { } selected) return;
+        Session.Execute(new AddNoteCommand(new MapNote(
+            NoteId.New(), $"О {selected.Name}", "Локальная заметка объекта",
+            NoteAnchorKind.Object, objectId: selected.Id)));
+        AfterEdit();
+    }
+
+    public void EditNote(NoteId id, string title, string markdown)
+    {
+        var before = Notes.FirstOrDefault(note => note.Id == id);
+        if (before is null || string.IsNullOrWhiteSpace(title)) return;
+        try
+        {
+            Session.Execute(new ReplaceNoteCommand(before, before with { Title = title.Trim(), Markdown = markdown }));
+            AfterEdit();
+        }
+        catch (ArgumentException ex) { StatusDetail = ex.Message; }
+    }
+
+    public void DeleteNote(NoteId id)
+    {
+        if (Notes.All(note => note.Id != id)) return;
+        Session.Execute(new DeleteNoteCommand(Session.Document, id));
+        AfterEdit();
+    }
+
+    public void GoToNote(NoteId id)
+    {
+        var note = Notes.FirstOrDefault(item => item.Id == id);
+        if (note is null) return;
+        var point = (X: note.WorldX, Y: note.WorldY);
+        if (note.AnchorKind == NoteAnchorKind.Object && note.ObjectId is { } objectId)
+        {
+            var target = Session.Document.Layers.OfType<ObjectLayer>().SelectMany(layer => layer.Objects)
+                .FirstOrDefault(item => item.Id == objectId);
+            if (target is null) { StatusDetail = "Якорный объект заметки удалён."; return; }
+            Session.SelectedObjectId = target.Id;
+            point = (target.X + target.Width / 2, target.Y + target.Height / 2);
+        }
+        var viewport = Session.Viewport;
+        viewport.Set(point.X - viewport.ViewWidth / (2 * viewport.Scale),
+            point.Y - viewport.ViewHeight / (2 * viewport.Scale), viewport.Scale);
+        Raise(nameof(ViewportStatus)); SceneChanged?.Invoke(this, EventArgs.Empty);
+    }
+
     public void RenameActiveLayer(string name)
     {
         if (ActiveLayer is not { } layer || string.IsNullOrWhiteSpace(name))
@@ -815,6 +999,8 @@ public sealed class EditorViewModel : ViewModelBase
             : UpdateMaskCommand.SetEnabled(ActiveLayer, !ActiveLayer.Mask.Enabled));
         AfterEdit();
         Raise(nameof(MaskEditLayerId));
+        Raise(nameof(Notes));
+        Raise(nameof(SelectedTextFontResolution));
     }
 
     public bool BeginStroke(double worldX, double worldY)
@@ -1287,6 +1473,7 @@ public sealed class EditorViewModel : ViewModelBase
             Stamp = source.Stamp,
             Line = source.Line,
             Shape = source.Shape,
+            Text = source.Text,
             ObjectOpacity = source.ObjectOpacity,
         };
 
@@ -1303,6 +1490,7 @@ public sealed class EditorViewModel : ViewModelBase
             Stamp = source.Stamp,
             Line = source.Line,
             Shape = source.Shape,
+            Text = source.Text,
             ObjectOpacity = source.ObjectOpacity,
         };
 

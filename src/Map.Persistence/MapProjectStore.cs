@@ -627,6 +627,7 @@ public static class MapProjectStore
     {
         DocumentId = document.Id.ToString(),
         Layers = [.. document.Layers.Select(ToLayerDto)],
+        Notes = [.. document.Notes.Select(ToNoteDto)],
     };
 
     private static LayerDto ToLayerDto(MapLayer layer)
@@ -640,6 +641,7 @@ public static class MapProjectStore
                 ObjectLayer => "Object",
                 BrushLayer => "Brush",
                 LandLayer => "Land",
+                GridLayer => "Grid",
                 _ => throw new InvalidOperationException($"Unknown layer type {layer.GetType().Name}."),
             },
             Name = layer.Name,
@@ -658,6 +660,9 @@ public static class MapProjectStore
                 ? new MaskDto { Enabled = mask.Enabled, Tiles = ToTileDtos(mask.Tiles) }
                 : null,
             LandStyle = layer is LandLayer land ? ToLandStyleDto(land.EdgeStyle) : null,
+            Grids = layer is GridLayer gridLayer
+                ? [.. gridLayer.Grids.Select(ToGridDto)]
+                : null,
         };
         return dto;
     }
@@ -700,6 +705,36 @@ public static class MapProjectStore
             : null,
         Line = sceneObject.Line is { } line ? ToLineDto(line) : null,
         Shape = sceneObject.Shape is { } shape ? ToShapeDto(shape) : null,
+        Text = sceneObject.Text is { } text ? ToTextDto(text) : null,
+    };
+
+    private static NoteDto ToNoteDto(MapNote note) => new()
+    {
+        Id = note.Id.ToString(), Title = note.Title, Markdown = note.Markdown,
+        AnchorKind = note.AnchorKind.ToString(), WorldX = note.WorldX, WorldY = note.WorldY,
+        ObjectId = note.ObjectId?.ToString(),
+    };
+
+    private static GridDefinitionDto ToGridDto(GridDefinition grid) => new()
+    {
+        Id = grid.Id.ToString(), Geometry = grid.Geometry.ToString(), CellSize = grid.CellSize,
+        Subdivisions = grid.Subdivisions, LineWidth = grid.LineWidth, Color = grid.Color,
+        Opacity = grid.Opacity, OffsetX = grid.OffsetX, OffsetY = grid.OffsetY,
+        RotationDegrees = grid.RotationDegrees, SnapEnabled = grid.SnapEnabled,
+        IncludeInExport = grid.IncludeInExport,
+    };
+
+    private static TextStyleDto ToTextDto(TextStyle text) => new()
+    {
+        Content = text.Content, RequestedFontFamily = text.RequestedFontFamily,
+        FallbackFontFamily = text.FallbackFontFamily, FontWeight = text.FontWeight,
+        FontSize = text.FontSize, FillColor = text.FillColor, OutlineColor = text.OutlineColor,
+        OutlineWidth = text.OutlineWidth, ShadowOffsetX = text.ShadowOffsetX,
+        ShadowOffsetY = text.ShadowOffsetY, ShadowBlur = text.ShadowBlur,
+        ShadowOpacity = text.ShadowOpacity, Curve = text.Curve,
+        LetterSpacing = text.LetterSpacing, LineHeight = text.LineHeight,
+        Alignment = text.Alignment.ToString(), FlipHorizontal = text.FlipHorizontal,
+        FlipVertical = text.FlipVertical, Blur = text.Blur, Blend = text.Blend,
     };
 
     private static MapDocument ToDomain(
@@ -716,8 +751,9 @@ public static class MapProjectStore
             throw new MapProjectCorruptedException("manifest.json has no canvas object.");
         }
 
-        if (scene.Layers is null
+        if (scene.Layers is null || scene.Notes is null
             || scene.Layers.Any(l => l is null || l.Objects is null || l.Mask is { Tiles: null }
+                || l.Grids is null && l.Type == "Grid"
                 || l.Objects.Any(HasInvalidVectorDto)))
         {
             throw new MapProjectCorruptedException(
@@ -746,7 +782,8 @@ public static class MapProjectStore
                     RequireString(manifest.Canvas.Unit, "canvas unit"),
                     RequireString(manifest.Canvas.Background, "canvas background")),
                 layers,
-                assetManifest.Assets.Select(asset => ToAsset(asset, assetEntries)).ToList());
+                assetManifest.Assets.Select(asset => ToAsset(asset, assetEntries)).ToList(),
+                scene.Notes.Select(ToNote).ToList());
         }
         catch (Exception ex) when (ex is ArgumentException or FormatException or InvalidOperationException)
         {
@@ -783,6 +820,9 @@ public static class MapProjectStore
                 id, name, layer.Visible, layer.Locked, layer.Opacity,
                 ToTileMap(layer.Tiles ?? [], MapProjectFormat.RasterPrefix, id, 1, tileEntries),
                 ToLandStyle(layer.LandStyle), mask),
+            "Grid" => new GridLayer(
+                id, name, layer.Visible, layer.Locked, layer.Opacity,
+                [.. (layer.Grids ?? []).Select(ToGrid)], mask),
             _ => throw new MapProjectCorruptedException(
                 $"scene.json holds layer type \"{layer.Type}\" this version does not define."),
         };
@@ -826,6 +866,41 @@ public static class MapProjectStore
             : null,
         Line = dto.Line is { } line ? ToLine(line) : null,
         Shape = dto.Shape is { } shape ? ToShape(shape) : null,
+        Text = dto.Text is { } text ? ToText(text) : null,
+    };
+
+    private static MapNote ToNote(NoteDto note) => new(
+        NoteId.Parse(RequireString(note.Id, "note id")),
+        RequireString(note.Title, "note title"), note.Markdown ?? throw new MapProjectCorruptedException("A note has no markdown."),
+        ParseDefined<NoteAnchorKind>(note.AnchorKind, "note anchor kind"),
+        note.WorldX, note.WorldY,
+        note.ObjectId is null ? null : ObjectId.Parse(note.ObjectId));
+
+    private static GridDefinition ToGrid(GridDefinitionDto grid) => new(
+        GridId.Parse(RequireString(grid.Id, "grid id")),
+        ParseDefined<GridGeometry>(grid.Geometry, "grid geometry"), grid.CellSize)
+    {
+        Subdivisions = grid.Subdivisions, LineWidth = grid.LineWidth,
+        Color = RequireString(grid.Color, "grid color"), Opacity = grid.Opacity,
+        OffsetX = grid.OffsetX, OffsetY = grid.OffsetY,
+        RotationDegrees = grid.RotationDegrees, SnapEnabled = grid.SnapEnabled,
+        IncludeInExport = grid.IncludeInExport,
+    };
+
+    private static TextStyle ToText(TextStyleDto text) => new()
+    {
+        Content = text.Content ?? "", RequestedFontFamily = RequireString(text.RequestedFontFamily, "requested font family"),
+        FallbackFontFamily = RequireString(text.FallbackFontFamily, "fallback font family"),
+        FontWeight = text.FontWeight, FontSize = text.FontSize,
+        FillColor = RequireString(text.FillColor, "text fill color"),
+        OutlineColor = RequireString(text.OutlineColor, "text outline color"),
+        OutlineWidth = text.OutlineWidth, ShadowOffsetX = text.ShadowOffsetX,
+        ShadowOffsetY = text.ShadowOffsetY, ShadowBlur = text.ShadowBlur,
+        ShadowOpacity = text.ShadowOpacity, Curve = text.Curve,
+        LetterSpacing = text.LetterSpacing, LineHeight = text.LineHeight,
+        Alignment = ParseDefined<TextAlignment>(text.Alignment, "text alignment"),
+        FlipHorizontal = text.FlipHorizontal, FlipVertical = text.FlipVertical,
+        Blur = text.Blur, Blend = RequireString(text.Blend, "text blend"),
     };
 
     private static LineStyleDto ToLineDto(LineStyle line) => new()
