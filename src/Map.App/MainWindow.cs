@@ -3,6 +3,7 @@ using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Threading;
 using Map.App.Services;
 using Map.App.Views;
 using Map.Assets;
@@ -24,8 +25,10 @@ public sealed class MainWindow : Window
     private readonly AssetCatalog _assets;
     private readonly ContentControl _host = new() { Name = "ViewHost" };
     private readonly DashboardViewModel _dashboard;
+    private readonly DispatcherTimer _autosaveTimer;
 
     private EditorView? _editorView;
+    private bool _autosaveTickRunning;
 
     public MainWindow(IProjectStore store, IRecentMaps recent, IAppLog log, AssetCatalog assets)
     {
@@ -43,6 +46,8 @@ public sealed class MainWindow : Window
         Content = _host;
 
         _dashboard = new DashboardViewModel(_store, _recent, _log);
+        _autosaveTimer = new DispatcherTimer { Interval = TestMode.AutosaveInterval };
+        _autosaveTimer.Tick += OnAutosaveTick;
 
         ShowDashboard();
         Closing += OnClosing;
@@ -57,6 +62,7 @@ public sealed class MainWindow : Window
 
     private void ShowDashboard()
     {
+        _autosaveTimer.Stop();
         _editorView = null;
         var view = new DashboardView(
             _dashboard,
@@ -71,8 +77,13 @@ public sealed class MainWindow : Window
 
     private void ShowEditor(EditorViewModel editor)
     {
+        _autosaveTimer.Stop();
         _editorView = new EditorView(editor, requestBack: LeaveEditorAsync, requestSecondWindow: OpenSecondWindow);
         _host.Content = _editorView;
+        if (TestMode.AutosaveEnabled)
+        {
+            _autosaveTimer.Start();
+        }
 
         // Without a focused element inside the window, key input has nowhere to route and every
         // shortcut silently does nothing. The canvas is the natural first owner of the keyboard.
@@ -155,6 +166,24 @@ public sealed class MainWindow : Window
         }
     }
 
+    private async void OnAutosaveTick(object? sender, EventArgs e)
+    {
+        if (_autosaveTickRunning || _editorView is not { } editorView)
+        {
+            return;
+        }
+
+        _autosaveTickRunning = true;
+        try
+        {
+            await editorView.Editor.TryAutosaveAsync();
+        }
+        finally
+        {
+            _autosaveTickRunning = false;
+        }
+    }
+
     // ---------------------------------------------------------------- window close
 
     private bool _closeApproved;
@@ -169,6 +198,7 @@ public sealed class MainWindow : Window
         e.Cancel = true;
         if (await _editorView.Editor.ConfirmCloseAsync())
         {
+            _autosaveTimer.Stop();
             _closeApproved = true;
             Close();
         }

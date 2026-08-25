@@ -57,6 +57,11 @@ public interface IProjectStore
 
     void Save(MapDocument document, string path, SaveMetadata metadata, byte[] previewPng);
 
+    void SaveAutosave(
+        MapDocument document, string? targetPath, SaveMetadata metadata, byte[] previewPng);
+
+    void ClearRecovery(Guid documentId);
+
     IReadOnlyList<RecoveryCandidate> FindRecoveryCandidates();
 
     OpenedProject RestoreRecovery(RecoveryCandidate candidate);
@@ -71,6 +76,12 @@ public sealed class ProjectStore(RecoveryJournal journal) : IProjectStore
 
     public void Save(MapDocument document, string path, SaveMetadata metadata, byte[] previewPng) =>
         MapProjectStore.Save(document, path, metadata, previewPng, journal);
+
+    public void SaveAutosave(
+        MapDocument document, string? targetPath, SaveMetadata metadata, byte[] previewPng) =>
+        AutosaveSnapshots.Save(journal, document, targetPath, metadata, previewPng);
+
+    public void ClearRecovery(Guid documentId) => journal.Clear(documentId);
 
     public IReadOnlyList<RecoveryCandidate> FindRecoveryCandidates() => RecoveryCandidates.Find(journal);
 

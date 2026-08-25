@@ -63,6 +63,11 @@ public sealed class FakeProjectStore : IProjectStore
 {
     public Dictionary<string, (MapDocument Document, SaveMetadata Metadata, byte[] Preview)> Saved { get; } = [];
     public Queue<Exception> NextSaveFailures { get; } = new();
+    public Queue<Exception> NextAutosaveFailures { get; } = new();
+    public List<(MapDocument Document, string? TargetPath, SaveMetadata Metadata, byte[] Preview)> Autosaves { get; } = [];
+    public List<Guid> ClearedRecovery { get; } = [];
+    public ManualResetEventSlim? ManualSaveEntered { get; set; }
+    public ManualResetEventSlim? ManualSaveRelease { get; set; }
     public List<RecoveryCandidate> Candidates { get; } = [];
     public Func<string, OpenedProject>? OnOpen { get; set; }
     public int SaveCalls { get; private set; }
@@ -91,12 +96,35 @@ public sealed class FakeProjectStore : IProjectStore
     public void Save(MapDocument document, string path, SaveMetadata metadata, byte[] previewPng)
     {
         SaveCalls++;
+        ManualSaveEntered?.Set();
+        if (ManualSaveRelease is not null && !ManualSaveRelease.Wait(TimeSpan.FromSeconds(10)))
+        {
+            throw new IOException("Timed out waiting for the scripted save release.");
+        }
+
         if (NextSaveFailures.Count > 0)
         {
             throw NextSaveFailures.Dequeue();
         }
 
         Saved[path] = (document, metadata, previewPng);
+    }
+
+    public void SaveAutosave(
+        MapDocument document, string? targetPath, SaveMetadata metadata, byte[] previewPng)
+    {
+        if (NextAutosaveFailures.Count > 0)
+        {
+            throw NextAutosaveFailures.Dequeue();
+        }
+
+        Autosaves.Add((document, targetPath, metadata, previewPng));
+    }
+
+    public void ClearRecovery(Guid documentId)
+    {
+        ClearedRecovery.Add(documentId);
+        Candidates.RemoveAll(candidate => candidate.DocumentId == documentId);
     }
 
     public IReadOnlyList<RecoveryCandidate> FindRecoveryCandidates() => [.. Candidates];

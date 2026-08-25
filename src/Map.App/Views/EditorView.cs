@@ -34,6 +34,7 @@ public sealed class EditorView : UserControl
 
     // ------------------------------------------------------------ status line
     private readonly TextBlock _saveState = Status("SaveStateText");
+    private readonly TextBlock _autosaveState = Status("AutosaveStatusText");
     private readonly TextBlock _statusDetail = Status("StatusDetailText");
     private readonly TextBlock _viewportStatus = Status("ViewportStatusText");
     private readonly TextBlock _selectionStatus = Status("SelectionStatusText");
@@ -1220,7 +1221,10 @@ public sealed class EditorView : UserControl
 
     private Control BuildStatusBar()
     {
-        foreach (var block in new[] { _selectionStatus, _activeLayerStatus, _gridStatus, _viewportStatus })
+        foreach (var block in new[]
+                 {
+                     _autosaveState, _selectionStatus, _activeLayerStatus, _gridStatus, _viewportStatus,
+                 })
         {
             block.Classes.Add("role-caption");
             block.Classes.Add("muted");
@@ -1240,7 +1244,7 @@ public sealed class EditorView : UserControl
             VerticalAlignment = VerticalAlignment.Center,
             Children =
             {
-                _saveState, StatusDot(), _activeLayerStatus, StatusDot(), _selectionStatus,
+                _saveState, StatusDot(), _autosaveState, StatusDot(), _activeLayerStatus, StatusDot(), _selectionStatus,
                 StatusDot(), _gridStatus,
             },
         };
@@ -1293,6 +1297,10 @@ public sealed class EditorView : UserControl
         Ui.SetClass(_saveState, "danger", _editor.SaveState == SaveState.SaveFailed);
         Ui.SetClass(_saveState, "success", _editor.SaveState == SaveState.Saved);
         Ui.SetClass(_saveState, "warn", _editor.SaveState == SaveState.Unsaved);
+
+        _autosaveState.Text = _editor.AutosaveSummary;
+        Ui.SetClass(_autosaveState, "danger", _editor.AutosaveState == AutosaveState.Failed);
+        Ui.SetClass(_autosaveState, "success", _editor.AutosaveState == AutosaveState.Saved);
 
         _statusDetail.Text = _editor.StatusDetail;
         _statusDetail.IsVisible = _editor.StatusDetail.Length > 0;

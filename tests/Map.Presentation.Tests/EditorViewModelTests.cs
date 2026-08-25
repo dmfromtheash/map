@@ -112,6 +112,112 @@ public class EditorViewModelTests
     }
 
     [Fact]
+    public async Task Autosave_protects_the_snapshot_without_claiming_the_main_file_is_saved()
+    {
+        var (editor, store, _, _, _) = NewEditor(path: @"C:\maps\source.mapproj");
+        editor.AddObject(SceneObjectKind.Rectangle);
+        var pending = editor.PendingChanges;
+
+        Assert.True(await editor.TryAutosaveAsync());
+
+        var autosave = Assert.Single(store.Autosaves);
+        Assert.Same(editor.Session.Document, autosave.Document);
+        Assert.Equal(@"C:\maps\source.mapproj", autosave.TargetPath);
+        Assert.True(autosave.Preview.Length > 100);
+        Assert.Equal(pending, editor.PendingChanges);
+        Assert.True(editor.Session.IsDirty);
+        Assert.Equal(SaveState.Unsaved, editor.SaveState);
+        Assert.Equal(AutosaveState.Saved, editor.AutosaveState);
+        Assert.StartsWith("Автокопия:", editor.AutosaveSummary, StringComparison.Ordinal);
+        Assert.Equal(@"C:\maps\source.mapproj", editor.DocumentPath);
+
+        Assert.False(await editor.TryAutosaveAsync());
+        Assert.Single(store.Autosaves);
+    }
+
+    [Fact]
+    public async Task Autosave_failure_is_separate_from_manual_save_and_the_next_tick_can_retry()
+    {
+        var (editor, store, _, _, _) = NewEditor();
+        editor.AddObject(SceneObjectKind.Rectangle);
+        store.NextAutosaveFailures.Enqueue(new IOException("no space"));
+
+        Assert.False(await editor.TryAutosaveAsync());
+        Assert.Equal(AutosaveState.Failed, editor.AutosaveState);
+        Assert.Equal(SaveState.Unsaved, editor.SaveState);
+        Assert.True(editor.Session.IsDirty);
+
+        Assert.True(await editor.TryAutosaveAsync());
+        Assert.Equal(AutosaveState.Saved, editor.AutosaveState);
+        Assert.Single(store.Autosaves);
+    }
+
+    [Fact]
+    public async Task Returning_to_the_saved_state_clears_a_stale_autosave_without_writing_a_clean_one()
+    {
+        var (editor, store, _, _, _) = NewEditor(startDirty: false);
+        editor.AddObject(SceneObjectKind.Rectangle);
+        Assert.True(await editor.TryAutosaveAsync());
+
+        editor.Undo();
+        Assert.False(editor.Session.IsDirty);
+        Assert.False(await editor.TryAutosaveAsync());
+
+        Assert.Equal([editor.Session.Document.Id.Value], store.ClearedRecovery);
+        Assert.Equal(AutosaveState.Idle, editor.AutosaveState);
+        Assert.Single(store.Autosaves);
+    }
+
+    [Fact]
+    public async Task Clean_close_after_undo_waits_for_stale_autosave_cleanup()
+    {
+        var (editor, store, _, _, _) = NewEditor(startDirty: false);
+        editor.AddObject(SceneObjectKind.Rectangle);
+        Assert.True(await editor.TryAutosaveAsync());
+        editor.Undo();
+
+        Assert.True(await editor.ConfirmCloseAsync());
+
+        Assert.Equal([editor.Session.Document.Id.Value], store.ClearedRecovery);
+        Assert.Equal(AutosaveState.Idle, editor.AutosaveState);
+    }
+
+    [Fact]
+    public async Task Dont_save_is_an_explicit_recovery_discard()
+    {
+        var (editor, store, _, _, prompts) = NewEditor();
+        editor.AddObject(SceneObjectKind.Rectangle);
+        Assert.True(await editor.TryAutosaveAsync());
+        prompts.NextCloseChoice = CloseChoice.DontSave;
+
+        Assert.True(await editor.ConfirmCloseAsync());
+        Assert.Equal([editor.Session.Document.Id.Value], store.ClearedRecovery);
+        Assert.True(editor.Session.IsDirty);
+    }
+
+    [Fact]
+    public async Task Autosave_tick_is_skipped_while_a_manual_save_owns_the_gate()
+    {
+        var (editor, store, _, picker, _) = NewEditor();
+        picker.NextSavePath = @"C:\maps\manual-wins.mapproj";
+        editor.AddObject(SceneObjectKind.Rectangle);
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        store.ManualSaveEntered = entered;
+        store.ManualSaveRelease = release;
+
+        var manualSave = editor.SaveAsync();
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+
+        Assert.False(await editor.TryAutosaveAsync());
+        Assert.Empty(store.Autosaves);
+
+        release.Set();
+        Assert.True(await manualSave);
+        Assert.Equal(SaveState.Saved, editor.SaveState);
+    }
+
+    [Fact]
     public async Task Save_failure_keeps_the_document_dirty_and_shows_the_recovery_path()
     {
         var (editor, store, _, picker, _) = NewEditor();

@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using Map.Core.Documents;
 using Map.Persistence.Recovery;
 using Map.Persistence.Tests.Support;
 
@@ -128,6 +129,126 @@ public class RecoveryJournalTests
 
         Assert.True(journal.TryRead(documentId)!.HasRecoverableWork); // journal says durable...
         Assert.Empty(RecoveryCandidates.Find(journal));               // ...but validation gates the offer
+    }
+}
+
+public class AutosaveSnapshotTests
+{
+    [Fact]
+    public void Two_autosaves_keep_current_and_previous_and_fall_back_when_current_is_corrupt()
+    {
+        using var workspace = new TempWorkspace();
+        var journal = new RecoveryJournal(Path.Combine(workspace.Root, "journal"));
+        var firstTime = new DateTimeOffset(2026, 8, 26, 1, 0, 0, TimeSpan.Zero);
+        var secondTime = firstTime.AddMinutes(1);
+        const string target = @"C:\maps\source.mapproj";
+
+        AutosaveSnapshots.Save(
+            journal, ProjectFixtures.Document("first"), target,
+            new SaveMetadata("test", firstTime, 4), ProjectFixtures.PreviewPng());
+        var firstCandidate = Assert.Single(RecoveryCandidates.Find(journal));
+        Assert.Equal(RecoveryCandidateKind.Autosave, firstCandidate.Kind);
+        Assert.Equal("first", firstCandidate.Title);
+        Assert.Equal(4, firstCandidate.Revision);
+
+        var secondRecord = AutosaveSnapshots.Save(
+            journal, ProjectFixtures.Document("second"), target,
+            new SaveMetadata("test", secondTime, 5), ProjectFixtures.PreviewPng());
+
+        var directory = journal.DirectoryFor(ProjectFixtures.FixedDocumentId.Value);
+        Assert.Equal(2, Directory.GetFiles(directory, "autosave-*" + MapProjectFormat.Extension).Length);
+        Assert.NotEmpty(secondRecord.PreviousSnapshotFileName);
+
+        var current = Assert.Single(RecoveryCandidates.Find(journal));
+        Assert.Equal("second", current.Title);
+        Assert.Equal(secondTime, current.UpdatedUtc);
+        Assert.Equal(target, current.TargetPath);
+
+        File.WriteAllText(Path.Combine(directory, secondRecord.SnapshotFileName), "corrupt");
+
+        var fallback = Assert.Single(RecoveryCandidates.Find(journal));
+        Assert.Equal("first", fallback.Title);
+        Assert.Equal(firstTime, fallback.UpdatedUtc);
+        Assert.Equal(4, fallback.Revision);
+
+        var thirdRecord = AutosaveSnapshots.Save(
+            journal, ProjectFixtures.Document("third"), target,
+            new SaveMetadata("test", secondTime.AddMinutes(1), 6), ProjectFixtures.PreviewPng());
+        Assert.Equal(Path.GetFileName(firstCandidate.CandidatePath), thirdRecord.PreviousSnapshotFileName);
+        Assert.Equal(2, Directory.GetFiles(directory, "autosave-*" + MapProjectFormat.Extension).Length);
+
+        File.WriteAllText(Path.Combine(directory, thirdRecord.SnapshotFileName), "corrupt again");
+        Assert.Equal("first", Assert.Single(RecoveryCandidates.Find(journal)).Title);
+    }
+
+    [Fact]
+    public void A_durable_temp_is_promoted_when_autosave_faults_before_replace()
+    {
+        using var workspace = new TempWorkspace();
+        var journal = new RecoveryJournal(Path.Combine(workspace.Root, "journal"));
+        var faults = new SaveFaultInjection
+        {
+            AfterDurableTempBeforeReplace = () => throw new IOException("injected"),
+        };
+
+        var record = AutosaveSnapshots.Save(
+            journal, ProjectFixtures.Document("durable temp"), null,
+            new SaveMetadata("test", ProjectFixtures.FixedModifiedUtc, 7),
+            ProjectFixtures.PreviewPng(), faults);
+
+        Assert.Contains(".tmp-", record.SnapshotFileName, StringComparison.Ordinal);
+        var candidate = Assert.Single(RecoveryCandidates.Find(journal));
+        Assert.Equal("durable temp", candidate.Title);
+        Assert.Equal(7, candidate.Revision);
+        Assert.Equal("", candidate.TargetPath);
+    }
+
+    [Fact]
+    public void A_snapshot_whose_document_id_does_not_match_its_directory_is_not_offered()
+    {
+        using var workspace = new TempWorkspace();
+        var journal = new RecoveryJournal(Path.Combine(workspace.Root, "journal"));
+        var record = AutosaveSnapshots.Save(
+            journal, ProjectFixtures.Document(), null,
+            new SaveMetadata("test", ProjectFixtures.FixedModifiedUtc, 1),
+            ProjectFixtures.PreviewPng());
+
+        var other = ProjectFixtures.Document("other") with { Id = DocumentId.New() };
+        var snapshotPath = Path.Combine(
+            journal.DirectoryFor(ProjectFixtures.FixedDocumentId.Value), record.SnapshotFileName);
+        MapProjectStore.Save(
+            other, snapshotPath, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
+
+        Assert.Empty(RecoveryCandidates.Find(journal));
+    }
+
+    [Fact]
+    public void Manual_save_clears_autosave_only_after_the_target_replace_succeeds()
+    {
+        using var workspace = new TempWorkspace();
+        var journal = new RecoveryJournal(Path.Combine(workspace.Root, "journal"));
+        var document = ProjectFixtures.Document();
+        var path = workspace.File("manual" + MapProjectFormat.Extension);
+
+        AutosaveSnapshots.Save(
+            journal, document, path, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
+
+        var faults = new SaveFaultInjection
+        {
+            AfterDurableTempBeforeReplace = () => throw new IOException("injected"),
+        };
+        Assert.Throws<MapProjectSaveException>(() => MapProjectStore.Save(
+            document, path, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng(), journal, faults));
+        Assert.NotNull(AutosaveSnapshots.TryRead(journal, document.Id.Value));
+        Assert.Equal(
+            RecoveryCandidateKind.InterruptedSave,
+            Assert.Single(RecoveryCandidates.Find(journal)).Kind);
+
+        MapProjectStore.Save(
+            document, path, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng(), journal);
+
+        Assert.False(Directory.Exists(journal.DirectoryFor(document.Id.Value)));
+        Assert.Empty(RecoveryCandidates.Find(journal));
     }
 }
 

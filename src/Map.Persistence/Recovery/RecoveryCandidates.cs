@@ -2,6 +2,12 @@ using Map.Core.Documents;
 
 namespace Map.Persistence.Recovery;
 
+public enum RecoveryCandidateKind
+{
+    InterruptedSave,
+    Autosave,
+}
+
 /// <summary>An interrupted save whose durable temp validated as a complete .mapproj.</summary>
 public sealed record RecoveryCandidate
 {
@@ -10,6 +16,8 @@ public sealed record RecoveryCandidate
     public required string CandidatePath { get; init; }
     public required DateTimeOffset UpdatedUtc { get; init; }
     public required string Title { get; init; }
+    public RecoveryCandidateKind Kind { get; init; } = RecoveryCandidateKind.InterruptedSave;
+    public long Revision { get; init; }
 }
 
 /// <summary>
@@ -28,6 +36,21 @@ public static class RecoveryCandidates
     {
         ArgumentNullException.ThrowIfNull(journal);
 
+        var candidates = FindInterruptedSaves(journal)
+            .Concat(AutosaveSnapshots.Find(journal))
+            .GroupBy(candidate => candidate.DocumentId)
+            .Select(group => group
+                .OrderByDescending(candidate => candidate.UpdatedUtc)
+                .ThenByDescending(candidate => candidate.Kind == RecoveryCandidateKind.InterruptedSave)
+                .First())
+            .OrderByDescending(candidate => candidate.UpdatedUtc)
+            .ToList();
+
+        return candidates;
+    }
+
+    private static IReadOnlyList<RecoveryCandidate> FindInterruptedSaves(RecoveryJournal journal)
+    {
         var candidates = new List<RecoveryCandidate>();
         foreach (var documentId in journal.ListDocumentIds())
         {
@@ -50,6 +73,15 @@ public static class RecoveryCandidates
             {
                 continue;
             }
+            catch (UnauthorizedAccessException)
+            {
+                continue;
+            }
+
+            if (validated.Document.Id.Value != documentId)
+            {
+                continue;
+            }
 
             if (!DateTimeOffset.TryParse(record.UpdatedUtc, out var updatedUtc))
             {
@@ -63,6 +95,8 @@ public static class RecoveryCandidates
                 CandidatePath = record.TempPath,
                 UpdatedUtc = updatedUtc,
                 Title = validated.Document.Title,
+                Kind = RecoveryCandidateKind.InterruptedSave,
+                Revision = record.BaseSavedRevision,
             });
         }
 

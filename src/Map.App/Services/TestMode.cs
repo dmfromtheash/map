@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 
 namespace Map.App.Services;
 
@@ -10,9 +11,37 @@ namespace Map.App.Services;
 public static class TestMode
 {
     public const string Variable = "MAP_UI_TEST_MODE";
+    public const string RecoveryRootVariable = "MAP_UI_TEST_RECOVERY_ROOT";
 
     private static readonly bool Value =
         string.Equals(Environment.GetEnvironmentVariable(Variable), "1", StringComparison.Ordinal);
 
     public static bool Enabled => Value;
+
+    public static TimeSpan AutosaveInterval => Enabled
+        ? TimeSpan.FromSeconds(1)
+        : TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Existing UI drivers use test mode without a recovery sandbox. They must never write test
+    /// documents into the user's real recovery root; the Stage 9 driver opts in with an explicit
+    /// isolated root.
+    /// </summary>
+    public static bool AutosaveEnabled => !Enabled || RecoveryRootOverride is not null;
+
+    public static string? RecoveryRootOverride
+    {
+        get
+        {
+            if (!Enabled)
+            {
+                return null;
+            }
+
+            var value = Environment.GetEnvironmentVariable(RecoveryRootVariable);
+            return string.IsNullOrWhiteSpace(value) || !Path.IsPathFullyQualified(value)
+                ? null
+                : Path.GetFullPath(value);
+        }
+    }
 }

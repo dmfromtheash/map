@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
+using Map.App.Services;
 using Map.Assets;
 using Map.Persistence.Recovery;
 using Map.Platform.Windows;
@@ -18,7 +19,7 @@ public partial class App : Application
         {
             // Composition root: local app-data services, the production journal, the real store.
             var diagnostics = new DiagnosticsLog();
-            var journal = new RecoveryJournal(AppPaths.RecoveryRoot);
+            var journal = new RecoveryJournal(TestMode.RecoveryRootOverride ?? AppPaths.RecoveryRoot);
 
             desktop.MainWindow = new MainWindow(
                 new ProjectStore(journal),

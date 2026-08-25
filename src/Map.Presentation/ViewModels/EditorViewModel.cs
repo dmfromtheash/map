@@ -16,6 +16,14 @@ public enum SaveState
     SaveFailed,
 }
 
+public enum AutosaveState
+{
+    Idle,
+    Saving,
+    Saved,
+    Failed,
+}
+
 /// <summary>What a canvas drag is doing to the selected object.</summary>
 public enum DragMode
 {
@@ -61,6 +69,9 @@ public sealed class EditorViewModel : ViewModelBase
     private readonly AssetCatalog? _assetCatalog;
 
     private SaveState _saveState;
+    private AutosaveState _autosaveState;
+    private DateTimeOffset? _lastAutosaveUtc;
+    private MapDocument? _lastAutosavedDocument;
     private string _statusDetail = "";
     private string _inspectorError = "";
     private DragPreview? _dragPreview;
@@ -143,6 +154,35 @@ public sealed class EditorViewModel : ViewModelBase
         SaveState.Saving => "Сохранение…",
         SaveState.SaveFailed => "Ошибка сохранения",
         _ => "Не сохранено",
+    };
+
+    public AutosaveState AutosaveState
+    {
+        get => _autosaveState;
+        private set
+        {
+            if (SetField(ref _autosaveState, value))
+            {
+                Raise(nameof(AutosaveSummary));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Recovery status is deliberately separate from manual save. A durable autosave protects
+    /// work after a crash, but it never claims that the user's .mapproj matches the editor.
+    /// </summary>
+    public string AutosaveSummary => _autosaveState switch
+    {
+        AutosaveState.Saving => "Автокопия создаётся…",
+        AutosaveState.Failed => "Автокопия: ошибка",
+        AutosaveState.Saved when _lastAutosaveUtc is { } time
+            && ReferenceEquals(_lastAutosavedDocument, Session.Document) =>
+            $"Автокопия: {time.ToLocalTime():t}",
+        AutosaveState.Saved when _lastAutosaveUtc is { } time =>
+            $"Автокопия до {time.ToLocalTime():t}",
+        _ when Session.IsDirty => "Автокопия ожидает",
+        _ => "Автокопия не требуется",
     };
 
     /// <summary>Short human explanation of the last failure, with the recovery path when one exists.</summary>
@@ -1547,6 +1587,7 @@ public sealed class EditorViewModel : ViewModelBase
     {
         Raise(nameof(PendingChanges));
         Raise(nameof(SaveSummary));
+        Raise(nameof(AutosaveSummary));
         Raise(nameof(CanUndo));
         Raise(nameof(CanRedo));
     }
@@ -1673,6 +1714,96 @@ public sealed class EditorViewModel : ViewModelBase
             ObjectOpacity = source.ObjectOpacity,
         };
 
+    // ---------------------------------------------------------------- autosave
+
+    /// <summary>
+    /// Writes one recovery snapshot if the current dirty state is not already covered. The call
+    /// never queues behind a manual save: a timer tick may be skipped, while Ctrl+S must win.
+    /// </summary>
+    public async Task<bool> TryAutosaveAsync()
+    {
+        if (!Session.IsDirty)
+        {
+            await ClearAutosaveIfCleanAsync().ConfigureAwait(false);
+            return false;
+        }
+
+        if (ReferenceEquals(_lastAutosavedDocument, Session.Document)
+            || !await _saveGate.WaitAsync(0).ConfigureAwait(false))
+        {
+            return false;
+        }
+
+        try
+        {
+            var checkpoint = Session.CaptureSaveCheckpoint();
+            var snapshot = checkpoint.Document;
+            var timestamp = _clock();
+            var metadata = new SaveMetadata(_appVersion, timestamp, checkpoint.Revision);
+
+            AutosaveState = AutosaveState.Saving;
+            try
+            {
+                await Task.Run(() =>
+                {
+                    var thumbnail = ThumbnailRenderer.RenderPng(snapshot);
+                    _store.SaveAutosave(snapshot, DocumentPath, metadata, thumbnail);
+                }).ConfigureAwait(false);
+
+                _lastAutosavedDocument = snapshot;
+                _lastAutosaveUtc = timestamp;
+                AutosaveState = AutosaveState.Saved;
+                _log.Info($"Autosaved document {snapshot.Id} revision {checkpoint.Revision}.");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                // Autosave is a safety net, never a reason to close the editor. The exception is
+                // retained in the local diagnostic log and the next timer tick may retry.
+                AutosaveState = AutosaveState.Failed;
+                _log.Error($"Autosave of document {snapshot.Id} failed", ex);
+                return false;
+            }
+        }
+        finally
+        {
+            _saveGate.Release();
+        }
+    }
+
+    private async Task<bool> ClearAutosaveIfCleanAsync()
+    {
+        if (_lastAutosavedDocument is null || !await _saveGate.WaitAsync(0).ConfigureAwait(false))
+        {
+            return false;
+        }
+
+        try
+        {
+            await Task.Run(() => _store.ClearRecovery(Session.Document.Id.Value)).ConfigureAwait(false);
+            ForgetAutosave();
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            AutosaveState = AutosaveState.Failed;
+            _log.Error($"Autosave cleanup for document {Session.Document.Id} failed", ex);
+            return false;
+        }
+        finally
+        {
+            _saveGate.Release();
+        }
+    }
+
+    private void ForgetAutosave()
+    {
+        _lastAutosavedDocument = null;
+        _lastAutosaveUtc = null;
+        AutosaveState = AutosaveState.Idle;
+        Raise(nameof(AutosaveSummary));
+    }
+
     // ---------------------------------------------------------------- saving
 
     public async Task<bool> SaveAsync(bool saveAs = false)
@@ -1711,6 +1842,7 @@ public sealed class EditorViewModel : ViewModelBase
 
                 DocumentPath = path;
                 Session.MarkSaved(checkpoint);
+                ForgetAutosave();
                 SaveState = Session.IsDirty ? SaveState.Unsaved : SaveState.Saved;
                 Raise(nameof(DocumentPath));
                 RaiseSessionState();
@@ -1740,14 +1872,36 @@ public sealed class EditorViewModel : ViewModelBase
     {
         if (!Session.IsDirty)
         {
-            return true;
+            return _lastAutosavedDocument is null
+                || await DiscardRecoveryAsync().ConfigureAwait(false);
         }
 
         return await _prompts.ConfirmCloseDirtyAsync(Session.Document.Title).ConfigureAwait(false) switch
         {
             CloseChoice.Save => await SaveAsync().ConfigureAwait(false) && !Session.IsDirty,
-            CloseChoice.DontSave => true,
+            CloseChoice.DontSave => await DiscardRecoveryAsync().ConfigureAwait(false),
             _ => false,
         };
+    }
+
+    private async Task<bool> DiscardRecoveryAsync()
+    {
+        await _saveGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await Task.Run(() => _store.ClearRecovery(Session.Document.Id.Value)).ConfigureAwait(false);
+            ForgetAutosave();
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            StatusDetail = "Не удалось удалить локальную recovery-копию. Документ остаётся открытым.";
+            _log.Error($"Recovery discard for document {Session.Document.Id} failed", ex);
+            return false;
+        }
+        finally
+        {
+            _saveGate.Release();
+        }
     }
 }

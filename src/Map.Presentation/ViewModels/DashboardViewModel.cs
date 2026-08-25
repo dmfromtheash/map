@@ -21,7 +21,8 @@ public sealed record RecentCard(
 public sealed record RecoveryCard(RecoveryCandidate Candidate)
 {
     public string Description =>
-        $"Несохранённая копия «{Candidate.Title}» от {Candidate.UpdatedUtc.ToLocalTime():g}";
+        $"{(Candidate.Kind == RecoveryCandidateKind.Autosave ? "Автосохранённая" : "Несохранённая")} " +
+        $"копия «{Candidate.Title}» от {Candidate.UpdatedUtc.ToLocalTime():g}";
 }
 
 /// <summary>
