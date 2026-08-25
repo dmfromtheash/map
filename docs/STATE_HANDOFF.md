@@ -318,12 +318,30 @@ package audits и повторного pre-commit/doctor.
   не видны как дети UIA-Root (искать в поддереве главного окна); системный диалог сохранения
   ловится по foreground `#32770`, путь вставляется через буфер обмена.
 
+## FACT — сокращённая независимая проверка Stage 2B
+
+- Точный range `bacebe6a755cfc2d328b61774f91f14a5ae8da1f..`
+  `cda582ffd54b0724afe04043d249c7ef726c19cd`: `A=45`, `M=9`, `D=0`, `R=0`, 54 файла,
+  `+6125/-25`; allowlist соблюдён, tracked artifacts/bin/obj отсутствуют, diff/worktree чистые.
+- Codex проверил production project graph, renderer/viewport, настоящий child-process kill test,
+  UI evidence и ключевые screenshots dashboard/editor/reopen/recovery.
+- Свежая Release-сборка прошла с 0 warnings/errors; тесты **103/103** (33 Core, 37 Persistence,
+  5 Rendering, 28 Presentation).
+- Полный UI driver повторно не запускался по решению владельца экономить проверочный ресурс;
+  сохранённые 12 кадров имеют `2576×1408`, evidence согласован с видимыми состояниями и файлом.
+- Stage 2 принят. UI функциональный, но визуальный стиль остаётся `PROPOSED`; автоматизация
+  recovery-баннера, UIA-peer canvas и shortcut smoke остаются `PARTIAL`, не блокерами.
+- Large-map audit перед Stage 3: canvas рисуется прямо в поверхность окна без full-canvas bitmap,
+  но `SceneRenderer` пока линейно перебирает все objects. До массовых слоёв/кисти/ассетов обязательны
+  spatial culling, tiled raster и LOD согласно DEC-009.
+
 ## Следующий безопасный шаг
 
-Stage 2B выполнен одним коммитом на `stage/02-complete-vertical`; Opus остановился. Codex
-проводит независимую приёмку крупного блока: точный `BASE..HEAD`, свежие build/test, прогон
-`scripts/drive-stage02.ps1`, kill-gate и просмотр скриншотов. Stage 3 (слои, дерево объектов,
-кисть) не начинать до приёмки.
+Один крупный блок объединяет Stages 3–5 и large-map foundation:
+`artifacts/opus-prompt-stages03-05-large-map-editor.md`. Он закрывает слои/дерево/маски/кисть,
+Stamp + локальный Asset Manager, Land и одновременно вводит spatial culling, tiled raster,
+mip/LOD, deep zoom и профили 50 000 объектов/10 000 ассетов. После итогового коммита Opus
+останавливается; Stages 6–8 не начинает.
 
 ## Проверка среды
 

@@ -104,6 +104,8 @@ DEC-002 принимается только по числам и визуаль�
 ### Gate
 
 Большой brush stroke не создаёт full-canvas snapshot на каждое pointer move. Маска влияет только на свой слой. Сохранение/undo совместимы.
+Renderer не перебирает всю сцену и не создаёт bitmap размером с документ: spatial culling,
+tiled raster и mip/LOD доказаны на canvas 65 536×65 536 units и профиле 50 000 объектов.
 
 ## Stage 4 — Stamp и локальный Asset Manager
 
@@ -120,6 +122,7 @@ DEC-002 принимается только по числам и визуаль�
 ### Gate
 
 Ассет с тем же именем, но другим hash не подменяется тихо. Массовое размещение остаётся интерактивным и отменяется одной транзакцией на gesture.
+Каталог из 10 000 пользовательских ассетов открывается/фильтруется без полного decode изображений.
 
 ## Stage 5 — Land
 
@@ -188,7 +191,7 @@ Preview и export визуально совпадают по golden tests. Ко�
 - startup recovery UI;
 - checkpoints и возврат;
 - resize/crop/new-from-region;
-- full export PNG/JPEG/WebP до 8K;
+- full export PNG/JPEG/WebP до 16K и tiled/region export больше 16K;
 - отмена долгих операций;
 - migrations и corrupted-file diagnostics.
 
@@ -210,6 +213,9 @@ Fault-injection suite доказывает отсутствие потери п�
 ## Stage 11 — Performance, packaging, release candidate
 
 - 1K/10K/50K object profiles;
+- large-map profile: 65 536×65 536 units, deep zoom 0,5–6400%, 20+ layers/masks;
+- 10 000-asset catalog profile и bounded thumbnail/decode cache;
+- 8K/16K и greater-than-16K tiled/region export profiles без full-canvas allocation;
 - long brush/mask/export stress;
 - memory/cache/undo budgets;
 - self-contained `win-x64`;
@@ -225,4 +231,7 @@ Fault-injection suite доказывает отсутствие потери п�
 
 ## Definition of MVP
 
-MVP закрывает Stages 1–7 и базовую часть Stage 9: dashboard, файл/recovery, viewport/select, layers/masks, brush, stamps/assets, land, line/shape/text/notes/grid и 4K export. Filters, compositions, 8K и финальная упаковка могут перейти в beta, если владелец предпочтет раннюю проверку.
+MVP закрывает Stages 1–7 и базовую часть Stage 9: dashboard, файл/recovery, viewport/select,
+layers/masks, brush, stamps/assets, land, line/shape/text/notes/grid и 8K export. Filters,
+compositions, 16K и финальная упаковка могут перейти в beta, но архитектурные инварианты large-map,
+tiled raster и отсутствие full-canvas allocation обязательны до кисти/ассетов и не откладываются.
