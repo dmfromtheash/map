@@ -23,3 +23,27 @@ public readonly record struct ObjectId(Guid Value)
     public override string ToString() => Value.ToString("D");
     public static ObjectId Parse(string s) => new(Guid.ParseExact(s, "D"));
 }
+
+/// <summary>Stable identity of an editable vector node.</summary>
+public readonly record struct VectorNodeId(Guid Value)
+{
+    public static VectorNodeId New() => new(Guid.NewGuid());
+    public override string ToString() => Value.ToString("D");
+    public static VectorNodeId Parse(string s) => new(Guid.ParseExact(s, "D"));
+}
+
+/// <summary>Stable identity of a nondestructive gap in a line or shape stroke.</summary>
+public readonly record struct PortalId(Guid Value)
+{
+    public static PortalId New() => new(Guid.NewGuid());
+    public override string ToString() => Value.ToString("D");
+    public static PortalId Parse(string s) => new(Guid.ParseExact(s, "D"));
+}
+
+/// <summary>Stable identity of one operand in a nondestructive shape expression.</summary>
+public readonly record struct ShapeRegionId(Guid Value)
+{
+    public static ShapeRegionId New() => new(Guid.NewGuid());
+    public override string ToString() => Value.ToString("D");
+    public static ShapeRegionId Parse(string s) => new(Guid.ParseExact(s, "D"));
+}

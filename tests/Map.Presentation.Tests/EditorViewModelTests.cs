@@ -1,4 +1,5 @@
 using Map.Core.Documents;
+using Map.Core.Editing;
 using Map.Persistence;
 using Map.Presentation.Services;
 using Map.Presentation.Tests.Support;
@@ -293,5 +294,36 @@ public class EditorViewModelTests
         Assert.Equal(SaveState.Unsaved, editor.SaveState);
         Assert.Empty(store.Saved);
         Assert.Null(editor.DocumentPath);
+    }
+
+    [Fact]
+    public void Stage6_vector_tools_edit_nodes_portals_boolean_and_free_draw_as_commands()
+    {
+        var (editor, _, _, _, _) = NewEditor();
+        editor.AddLine();
+        var lineId = editor.Session.SelectedObjectId;
+        editor.AddNodeToSelectedLine();
+        editor.ToggleSelectedNodeCurve();
+        editor.AddPortalToSelected();
+        editor.MoveSelectedPortal();
+        editor.CycleSelectedVectorStroke();
+        var line = DocumentEditor.FindObject(editor.Session.Document, lineId!.Value)!;
+        Assert.Equal(4, line.Line!.Nodes.Count);
+        Assert.Single(line.Line.Portals);
+        Assert.Equal(12, line.Line.Stroke.Offset);
+
+        editor.AddShape(ShapePrimitiveKind.Rectangle);
+        editor.AddShape(ShapePrimitiveKind.Ellipse);
+        editor.ApplyShapeBoolean(ShapeBooleanOperation.Subtract);
+        Assert.Single(editor.Session.Document.Layers.OfType<ObjectLayer>().Single().Objects, o => o.Shape is not null);
+
+        var depth = editor.Session.UndoDepth;
+        editor.ActiveTool = EditorTool.Line;
+        Assert.True(editor.BeginVectorDraw(10, 10));
+        editor.ContinueVectorDraw(50, 30);
+        editor.ContinueVectorDraw(100, 80);
+        editor.EndVectorDraw();
+        Assert.Equal(depth + 1, editor.Session.UndoDepth);
+        Assert.Equal(SceneObjectKind.Line, editor.Session.SelectedObject!.Kind);
     }
 }

@@ -698,6 +698,8 @@ public static class MapProjectStore
                 Contrast = stamp.Contrast,
             }
             : null,
+        Line = sceneObject.Line is { } line ? ToLineDto(line) : null,
+        Shape = sceneObject.Shape is { } shape ? ToShapeDto(shape) : null,
     };
 
     private static MapDocument ToDomain(
@@ -715,7 +717,8 @@ public static class MapProjectStore
         }
 
         if (scene.Layers is null
-            || scene.Layers.Any(l => l is null || l.Objects is null || l.Mask is { Tiles: null }))
+            || scene.Layers.Any(l => l is null || l.Objects is null || l.Mask is { Tiles: null }
+                || l.Objects.Any(HasInvalidVectorDto)))
         {
             throw new MapProjectCorruptedException(
                 "scene.json has a null layers array, layer, objects array or mask tiles array.");
@@ -821,7 +824,110 @@ public static class MapProjectStore
                 Contrast = stamp.Contrast,
             }
             : null,
+        Line = dto.Line is { } line ? ToLine(line) : null,
+        Shape = dto.Shape is { } shape ? ToShape(shape) : null,
     };
+
+    private static LineStyleDto ToLineDto(LineStyle line) => new()
+    {
+        Nodes = [.. line.Nodes.Select(ToNodeDto)],
+        Stroke = ToStrokeDto(line.Stroke),
+        Portals = [.. line.Portals.Select(ToPortalDto)],
+        Closed = line.Closed,
+    };
+
+    private static ShapeStyleDto ToShapeDto(ShapeStyle shape) => new()
+    {
+        Regions = [.. shape.Regions.Select(region => new ShapeRegionDto
+        {
+            Id = region.Id.ToString(),
+            Mode = region.Mode.ToString(),
+            Primitive = region.Primitive.ToString(),
+            Nodes = [.. region.Nodes.Select(ToNodeDto)],
+        })],
+        Fill = new ShapeFillDto
+        {
+            Color = shape.Fill.Color,
+            TextureAssetSha256 = shape.Fill.TextureAssetSha256,
+            TextureScale = shape.Fill.TextureScale,
+            TextureRotation = shape.Fill.TextureRotation,
+            TextureOffsetX = shape.Fill.TextureOffsetX,
+            TextureOffsetY = shape.Fill.TextureOffsetY,
+            Opacity = shape.Fill.Opacity,
+        },
+        Stroke = ToStrokeDto(shape.Stroke),
+        Portals = [.. shape.Portals.Select(ToPortalDto)],
+    };
+
+    private static VectorNodeDto ToNodeDto(VectorNode node) => new()
+    {
+        Id = node.Id.ToString(), X = node.X, Y = node.Y, Kind = node.Kind.ToString(),
+        ControlInX = node.ControlInX, ControlInY = node.ControlInY,
+        ControlOutX = node.ControlOutX, ControlOutY = node.ControlOutY,
+    };
+
+    private static LinePortalDto ToPortalDto(LinePortal portal) => new()
+    {
+        Id = portal.Id.ToString(), Position = portal.Position, Width = portal.Width,
+    };
+
+    private static VectorStrokeDto ToStrokeDto(VectorStrokeStyle stroke) => new()
+    {
+        Color = stroke.Color, Width = stroke.Width, Opacity = stroke.Opacity, Blend = stroke.Blend,
+        Offset = stroke.Offset, EndCap = stroke.EndCap.ToString(), NodeCap = stroke.NodeCap.ToString(),
+        ShadowOffsetX = stroke.ShadowOffsetX, ShadowOffsetY = stroke.ShadowOffsetY,
+        ShadowBlur = stroke.ShadowBlur, ShadowOpacity = stroke.ShadowOpacity,
+        AssetSha256 = stroke.AssetSha256, AssetSpacing = stroke.AssetSpacing,
+        Hue = stroke.Hue, Saturation = stroke.Saturation,
+    };
+
+    private static LineStyle ToLine(LineStyleDto line) => new(
+        [.. line.Nodes.Select(ToNode)], ToStroke(line.Stroke),
+        [.. line.Portals.Select(ToPortal)], line.Closed);
+
+    private static ShapeStyle ToShape(ShapeStyleDto shape) => new(
+        [.. shape.Regions.Select(region => new ShapeRegion(
+            ShapeRegionId.Parse(RequireString(region.Id, "shape region id")),
+            ParseDefined<ShapeCombineMode>(region.Mode, "shape combine mode"),
+            ParseDefined<ShapePrimitiveKind>(region.Primitive, "shape primitive"),
+            [.. region.Nodes.Select(ToNode)]))],
+        new ShapeFillStyle
+        {
+            Color = RequireString(shape.Fill.Color, "shape fill color"),
+            TextureAssetSha256 = shape.Fill.TextureAssetSha256,
+            TextureScale = shape.Fill.TextureScale,
+            TextureRotation = shape.Fill.TextureRotation,
+            TextureOffsetX = shape.Fill.TextureOffsetX,
+            TextureOffsetY = shape.Fill.TextureOffsetY,
+            Opacity = shape.Fill.Opacity,
+        },
+        ToStroke(shape.Stroke), [.. shape.Portals.Select(ToPortal)]);
+
+    private static VectorNode ToNode(VectorNodeDto node) => new(
+        VectorNodeId.Parse(RequireString(node.Id, "vector node id")), node.X, node.Y,
+        ParseDefined<VectorNodeKind>(node.Kind, "vector node kind"),
+        node.ControlInX, node.ControlInY, node.ControlOutX, node.ControlOutY);
+
+    private static LinePortal ToPortal(LinePortalDto portal) => new(
+        PortalId.Parse(RequireString(portal.Id, "portal id")), portal.Position, portal.Width);
+
+    private static VectorStrokeStyle ToStroke(VectorStrokeDto stroke) => new()
+    {
+        Color = RequireString(stroke.Color, "vector stroke color"),
+        Width = stroke.Width, Opacity = stroke.Opacity, Blend = RequireString(stroke.Blend, "vector stroke blend"),
+        Offset = stroke.Offset,
+        EndCap = ParseDefined<VectorCap>(stroke.EndCap, "line end cap"),
+        NodeCap = ParseDefined<VectorCap>(stroke.NodeCap, "line node cap"),
+        ShadowOffsetX = stroke.ShadowOffsetX, ShadowOffsetY = stroke.ShadowOffsetY,
+        ShadowBlur = stroke.ShadowBlur, ShadowOpacity = stroke.ShadowOpacity,
+        AssetSha256 = stroke.AssetSha256, AssetSpacing = stroke.AssetSpacing,
+        Hue = stroke.Hue, Saturation = stroke.Saturation,
+    };
+
+    private static bool HasInvalidVectorDto(SceneObjectDto? item) => item is null
+        || item.Line is { Nodes: null } or { Stroke: null } or { Portals: null }
+        || item.Shape is { Regions: null } or { Fill: null } or { Stroke: null } or { Portals: null }
+        || item.Shape?.Regions.Any(region => region is null || region.Nodes is null) == true;
 
     private static List<TileDto> ToTileDtos(TileMap tiles) =>
         [.. tiles.Keys.OrderBy(k => k.Y).ThenBy(k => k.X).Select(key => new TileDto
@@ -1021,6 +1127,18 @@ public static class MapProjectStore
 
         throw new MapProjectCorruptedException(
             $"scene.json holds an object kind \"{kind}\" this version does not define.");
+    }
+
+    private static T ParseDefined<T>(string? value, string what) where T : struct, Enum
+    {
+        if (value is not null && Enum.TryParse<T>(value, ignoreCase: false, out var parsed)
+            && Enum.IsDefined(parsed))
+        {
+            return parsed;
+        }
+
+        throw new MapProjectCorruptedException(
+            $"scene.json holds {what} \"{value}\" this version does not define.");
     }
 
     private static string FormatTimestamp(DateTimeOffset value) =>

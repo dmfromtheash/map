@@ -127,7 +127,7 @@ public sealed record ObjectLayer : MapLayer
     {
         Id = LayerId.New(),
         Objects = new ReadOnlyCollection<SceneObject>(
-            [.. Objects.Select(o => o with { Id = ObjectId.New() })]),
+            [.. Objects.Select(VectorGeometry.WithNewIds)]),
     };
 
     public override MapLayer WithMask(LayerMask? mask) => this with { Mask = mask };

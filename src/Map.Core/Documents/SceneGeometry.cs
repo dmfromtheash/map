@@ -24,6 +24,8 @@ public static class SceneGeometry
 
         return sceneObject.Kind switch
         {
+            SceneObjectKind.Line => VectorGeometry.ContainsLine(sceneObject, worldX, worldY),
+            SceneObjectKind.Shape => VectorGeometry.ContainsShape(sceneObject, worldX, worldY),
             SceneObjectKind.Ellipse =>
                 ((localX * localX) / (halfW * halfW)) + ((localY * localY) / (halfH * halfH)) <= 1.0,
             _ => Math.Abs(localX) <= halfW && Math.Abs(localY) <= halfH,
@@ -60,6 +62,24 @@ public static class SceneGeometry
             {
                 shadowX = Math.Abs(stamp.ShadowOffsetX) + (stamp.ShadowBlur * 3);
                 shadowY = Math.Abs(stamp.ShadowOffsetY) + (stamp.ShadowBlur * 3);
+            }
+        }
+        else if (sceneObject.Line?.Stroke is { } lineStroke)
+        {
+            pad += (lineStroke.Width / 2) + Math.Abs(lineStroke.Offset);
+            if (lineStroke.ShadowOpacity > 0)
+            {
+                shadowX = Math.Abs(lineStroke.ShadowOffsetX) + (lineStroke.ShadowBlur * 3);
+                shadowY = Math.Abs(lineStroke.ShadowOffsetY) + (lineStroke.ShadowBlur * 3);
+            }
+        }
+        else if (sceneObject.Shape?.Stroke is { } shapeStroke)
+        {
+            pad += (shapeStroke.Width / 2) + Math.Abs(shapeStroke.Offset);
+            if (shapeStroke.ShadowOpacity > 0)
+            {
+                shadowX = Math.Abs(shapeStroke.ShadowOffsetX) + (shapeStroke.ShadowBlur * 3);
+                shadowY = Math.Abs(shapeStroke.ShadowOffsetY) + (shapeStroke.ShadowBlur * 3);
             }
         }
 

@@ -130,7 +130,11 @@ public static class SelectionHandles
             newCentre.X - (newWidth / 2), newCentre.Y - (newHeight / 2),
             newWidth, newHeight, before.RotationDegrees,
             before.FillColor, before.StrokeColor, before.StrokeWidth,
-            before.Visible, before.Locked);
+            before.Visible, before.Locked)
+        {
+            Sublayer = before.Sublayer, GroupId = before.GroupId, Stamp = before.Stamp,
+            Line = before.Line, Shape = before.Shape, ObjectOpacity = before.ObjectOpacity,
+        };
     }
 
     /// <summary>
@@ -162,7 +166,11 @@ public static class SelectionHandles
             before.X, before.Y, before.Width, before.Height,
             Math.Round(rotation, 2),
             before.FillColor, before.StrokeColor, before.StrokeWidth,
-            before.Visible, before.Locked);
+            before.Visible, before.Locked)
+        {
+            Sublayer = before.Sublayer, GroupId = before.GroupId, Stamp = before.Stamp,
+            Line = before.Line, Shape = before.Shape, ObjectOpacity = before.ObjectOpacity,
+        };
     }
 
     private static (double X, double Y) LocalToWorld(SceneObject o, double localX, double localY)

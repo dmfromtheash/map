@@ -6,6 +6,8 @@ public enum SceneObjectKind
     Rectangle = 0,
     Ellipse = 1,
     Stamp = 2,
+    Line = 3,
+    Shape = 4,
 }
 
 /// <summary>
@@ -99,6 +101,12 @@ public sealed record SceneObject
 
     /// <summary>Set only for kind == Stamp: how the referenced asset is drawn.</summary>
     public StampStyle? Stamp { get; init; }
+
+    /// <summary>Editable line geometry and appearance when <see cref="Kind"/> is Line.</summary>
+    public LineStyle? Line { get; init; }
+
+    /// <summary>Nondestructive vector expression when <see cref="Kind"/> is Shape.</summary>
+    public ShapeStyle? Shape { get; init; }
 
     /// <summary>Whole-object opacity 0..1 (stamps expose it in the editor).</summary>
     public double ObjectOpacity { get; init; } = 1.0;

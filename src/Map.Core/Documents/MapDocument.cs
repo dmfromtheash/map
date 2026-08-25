@@ -38,6 +38,9 @@ public sealed record MapDocument
 
         var layerIds = new HashSet<LayerId>();
         var objectIds = new HashSet<ObjectId>();
+        var nodeIds = new HashSet<VectorNodeId>();
+        var portalIds = new HashSet<PortalId>();
+        var regionIds = new HashSet<ShapeRegionId>();
         foreach (var layer in layers)
         {
             if (!layerIds.Add(layer.Id))
@@ -53,6 +56,17 @@ public sealed record MapDocument
                     {
                         throw new ArgumentException(
                             $"Duplicate object id {sceneObject.Id}.", nameof(layers));
+                    }
+
+                    var nodes = sceneObject.Line?.Nodes
+                        ?? sceneObject.Shape?.Regions.SelectMany(region => region.Nodes).ToList()
+                        ?? [];
+                    var portals = sceneObject.Line?.Portals ?? sceneObject.Shape?.Portals ?? [];
+                    if (nodes.Any(node => !nodeIds.Add(node.Id))
+                        || portals.Any(portal => !portalIds.Add(portal.Id))
+                        || sceneObject.Shape?.Regions.Any(region => !regionIds.Add(region.Id)) == true)
+                    {
+                        throw new ArgumentException("Vector node, portal and region ids are unique across the document.", nameof(layers));
                     }
                 }
             }

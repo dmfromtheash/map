@@ -26,6 +26,7 @@ public sealed class MapCanvasControl : Control
     private (double X, double Y)? _dragStartWorld;
     private bool _isPanning;
     private bool _isStroking;
+    private bool _isVectorDrawing;
     private readonly TileImageCache _tileCache = new(512);
 
     public MapCanvasControl()
@@ -71,7 +72,7 @@ public sealed class MapCanvasControl : Control
         _editor.Session.Viewport.Resize(Bounds.Width, Bounds.Height);
         context.Custom(new SceneDrawOperation(
             new Rect(0, 0, Bounds.Width, Bounds.Height), _editor, _tileCache,
-            _isPanning || _isStroking || _dragStartWorld is not null));
+            _isPanning || _isStroking || _isVectorDrawing || _dragStartWorld is not null));
     }
 
     private sealed class SceneDrawOperation(
@@ -169,6 +170,14 @@ public sealed class MapCanvasControl : Control
             return;
         }
 
+        if (_editor.ActiveTool is EditorTool.Line or EditorTool.Shape)
+        {
+            _isVectorDrawing = _editor.BeginVectorDraw(world.X, world.Y);
+            if (_isVectorDrawing) e.Pointer.Capture(this);
+            e.Handled = true;
+            return;
+        }
+
         // One entry point: a gizmo handle grab resizes/rotates the current selection; otherwise
         // the press selects and, on an editable object, starts a move.
         if (_editor.BeginCanvasInteraction(world.X, world.Y, _editor.Session.Viewport.Scale))
@@ -206,6 +215,14 @@ public sealed class MapCanvasControl : Control
         if (_isStroking)
         {
             _editor.ContinueStroke(X, Y);
+            Cursor = new Cursor(StandardCursorType.Cross);
+            e.Handled = true;
+            return;
+        }
+
+        if (_isVectorDrawing)
+        {
+            _editor.ContinueVectorDraw(X, Y);
             Cursor = new Cursor(StandardCursorType.Cross);
             e.Handled = true;
             return;
@@ -257,6 +274,13 @@ public sealed class MapCanvasControl : Control
         {
             _isStroking = false;
             _editor.EndStroke();
+            Cursor = Cursor.Default;
+        }
+
+        if (_isVectorDrawing)
+        {
+            _isVectorDrawing = false;
+            _editor.EndVectorDraw();
             Cursor = Cursor.Default;
         }
 

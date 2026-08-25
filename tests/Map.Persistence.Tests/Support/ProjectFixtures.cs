@@ -129,6 +129,8 @@ public static class ProjectFixtures
                     Assert.Equal(expectedObject.GroupId, actualObject.GroupId);
                     Assert.Equal(expectedObject.ObjectOpacity, actualObject.ObjectOpacity);
                     Assert.Equal(expectedObject.Stamp, actualObject.Stamp);
+                    Assert.Equivalent(expectedObject.Line, actualObject.Line, strict: true);
+                    Assert.Equivalent(expectedObject.Shape, actualObject.Shape, strict: true);
                 }
             }
 

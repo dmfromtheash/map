@@ -102,6 +102,8 @@ public sealed class EditorView : UserControl
                 Tool("BrushToolButton", "Кисть", () => _editor.ActiveTool = EditorTool.Brush),
                 Tool("MaskToolButton", "Маска", () => _editor.ActiveTool = EditorTool.Mask),
                 Tool("LandToolButton", "Земля", () => _editor.ActiveTool = EditorTool.Land),
+                Tool("LineToolButton", "Line draw", () => _editor.ActiveTool = EditorTool.Line),
+                Tool("ShapeToolButton", "Shape draw", () => _editor.ActiveTool = EditorTool.Shape),
                 brushSize,
                 brushOpacity,
                 eraser,
@@ -112,6 +114,8 @@ public sealed class EditorView : UserControl
                 new Separator { Width = 12 },
                 Tool("AddRectangleButton", "Прямоугольник", () => _editor.AddObject(SceneObjectKind.Rectangle)),
                 Tool("AddEllipseButton", "Эллипс", () => _editor.AddObject(SceneObjectKind.Ellipse)),
+                Tool("AddLineButton", "+ Line", _editor.AddLine),
+                Tool("AddVectorRectangleButton", "+ Shape", () => _editor.AddShape(ShapePrimitiveKind.Rectangle)),
                 new Separator { Width = 12 },
                 Tool("UndoButton", "Отменить", _editor.Undo),
                 Tool("RedoButton", "Повторить", _editor.Redo),
@@ -258,6 +262,22 @@ public sealed class EditorView : UserControl
                             _editor.UpdateSelectedStamp(toggleShadow: true)),
                         ActionButton("StampHueButton", "Stamp: цвет", () =>
                             _editor.UpdateSelectedStamp(hue: 35, saturation: 0.2)),
+                        ActionButton("AddLineNodeButton", "Line: + node", _editor.AddNodeToSelectedLine),
+                        ActionButton("MoveVectorNodeButton", "Node: move", _editor.MoveSelectedVectorNode),
+                        ActionButton("CurveNodeButton", "Node: curve", _editor.ToggleSelectedNodeCurve),
+                        ActionButton("CutLineButton", "Line: cut", _editor.CutSelectedLine),
+                        ActionButton("AddPortalButton", "+ Portal", _editor.AddPortalToSelected),
+                        ActionButton("MovePortalButton", "Portal: move", _editor.MoveSelectedPortal),
+                        ActionButton("DeletePortalButton", "Portal: delete", _editor.DeleteSelectedPortal),
+                        ActionButton("VectorStrokeButton", "Stroke style", _editor.CycleSelectedVectorStroke),
+                        ActionButton("AddShapeEllipseButton", "+ Shape ellipse", () =>
+                            _editor.AddShape(ShapePrimitiveKind.Ellipse)),
+                        ActionButton("BooleanAddButton", "Boolean add", () =>
+                            _editor.ApplyShapeBoolean(Map.Core.Editing.ShapeBooleanOperation.Add)),
+                        ActionButton("BooleanSubtractButton", "Boolean subtract", () =>
+                            _editor.ApplyShapeBoolean(Map.Core.Editing.ShapeBooleanOperation.Subtract)),
+                        ActionButton("BooleanMergeButton", "Boolean merge", () =>
+                            _editor.ApplyShapeBoolean(Map.Core.Editing.ShapeBooleanOperation.Merge)),
                     },
                 },
                 new Separator(),
@@ -302,6 +322,10 @@ public sealed class EditorView : UserControl
                         }),
                         ActionButton("KeepStampPlaceholderButton", "Оставить placeholder",
                             _editor.KeepSelectedStampPlaceholder),
+                        ActionButton("UseAssetStrokeButton", "Asset stroke", () =>
+                        {
+                            if (_selectedAsset is not null) _editor.UseAssetAsSelectedVectorStroke(_selectedAsset);
+                        }),
                     },
                 },
                 new TextBlock

@@ -30,6 +30,8 @@ public enum EditorTool
     Brush,
     Mask,
     Land,
+    Line,
+    Shape,
 }
 
 /// <summary>Live drag preview: never part of the document and never part of history.</summary>
@@ -69,6 +71,7 @@ public sealed class EditorViewModel : ViewModelBase
     private LayerId? _activeLayerId;
     private EditorTool _activeTool;
     private RasterStrokeSession? _stroke;
+    private List<VectorPoint>? _vectorPoints;
 
     public EditorViewModel(
         MapDocument document,
@@ -174,6 +177,7 @@ public sealed class EditorViewModel : ViewModelBase
             }
 
             CancelStroke();
+            CancelVectorDraw();
             _activeTool = value;
             Raise();
             Raise(nameof(MaskEditLayerId));
@@ -399,6 +403,58 @@ public sealed class EditorViewModel : ViewModelBase
 
     // ---------------------------------------------------------------- editing
 
+    public bool BeginVectorDraw(double worldX, double worldY)
+    {
+        if (ActiveTool is not (EditorTool.Line or EditorTool.Shape)
+            || ActiveObjectLayer() is not { Visible: true, Locked: false })
+        {
+            return false;
+        }
+
+        _vectorPoints = [new VectorPoint(worldX, worldY)];
+        return true;
+    }
+
+    public void ContinueVectorDraw(double worldX, double worldY)
+    {
+        if (_vectorPoints is not { Count: > 0 } points)
+        {
+            return;
+        }
+
+        var last = points[^1];
+        if (Math.Pow(worldX - last.X, 2) + Math.Pow(worldY - last.Y, 2) >= 4)
+        {
+            points.Add(new VectorPoint(worldX, worldY));
+        }
+    }
+
+    public void EndVectorDraw()
+    {
+        if (_vectorPoints is not { } points)
+        {
+            return;
+        }
+
+        _vectorPoints = null;
+        var layer = ActiveObjectLayer();
+        var required = ActiveTool == EditorTool.Shape ? 3 : 2;
+        if (layer is null || points.Count < required)
+        {
+            return;
+        }
+
+        var added = ActiveTool == EditorTool.Shape
+            ? VectorGeometry.CreateFreeShape(ObjectId.New(), "Свободная фигура", points)
+            : VectorGeometry.CreateLine(ObjectId.New(), "Свободная линия", points);
+        Session.Execute(new AddObjectCommand(layer.Id, added));
+        Session.SelectedObjectId = added.Id;
+        _activeLayerId = layer.Id;
+        AfterEdit();
+    }
+
+    public void CancelVectorDraw() => _vectorPoints = null;
+
     public DragPreview? DragPreview
     {
         get => _dragPreview;
@@ -440,6 +496,184 @@ public sealed class EditorViewModel : ViewModelBase
 
         Session.Execute(new AddObjectCommand(layer.Id, added));
         Session.SelectedObjectId = added.Id;
+        AfterEdit();
+    }
+
+    public void AddLine()
+    {
+        var layer = ActiveObjectLayer();
+        if (layer is null) return;
+        var centre = ViewCentre();
+        var line = VectorGeometry.CreateLine(ObjectId.New(), "Линия",
+        [
+            new VectorPoint(centre.X - 240, centre.Y + 80),
+            new VectorPoint(centre.X, centre.Y - 100),
+            new VectorPoint(centre.X + 240, centre.Y + 40),
+        ]);
+        Session.Execute(new AddObjectCommand(layer.Id, line));
+        Session.SelectedObjectId = line.Id;
+        _activeLayerId = layer.Id;
+        AfterEdit();
+    }
+
+    public void AddShape(ShapePrimitiveKind kind)
+    {
+        var layer = ActiveObjectLayer();
+        if (layer is null) return;
+        var centre = ViewCentre();
+        var shape = VectorGeometry.CreateShape(ObjectId.New(), $"Фигура {kind}", kind,
+            new WorldBounds(centre.X - 180, centre.Y - 130, centre.X + 180, centre.Y + 130));
+        Session.Execute(new AddObjectCommand(layer.Id, shape));
+        Session.SelectedObjectId = shape.Id;
+        _activeLayerId = layer.Id;
+        AfterEdit();
+    }
+
+    public void AddNodeToSelectedLine()
+    {
+        if (EditableSelection() is not { Line: not null } before) return;
+        ReplaceSelected(before, VectorObjectEditor.AddLineNode(before, 1, 0.5), "Add line node");
+    }
+
+    public void MoveSelectedVectorNode()
+    {
+        if (EditableSelection() is not { } before) return;
+        var node = before.Line?.Nodes.FirstOrDefault() ?? before.Shape?.Regions[0].Nodes.FirstOrDefault();
+        if (node is null) return;
+        ReplaceSelected(before,
+            VectorObjectEditor.MoveNode(before, node.Id, Math.Clamp(node.X + 0.08, -1, 2), Math.Clamp(node.Y + 0.05, -1, 2)),
+            "Move vector node");
+    }
+
+    public void ToggleSelectedNodeCurve()
+    {
+        if (EditableSelection() is not { Line: { } line } before) return;
+        var node = line.Nodes[Math.Min(1, line.Nodes.Count - 1)];
+        ReplaceSelected(before, VectorObjectEditor.SetNodeCurve(before, node.Id, node.Kind != VectorNodeKind.Curve),
+            "Toggle line curve");
+    }
+
+    public void AddPortalToSelected()
+    {
+        if (EditableSelection() is not { } before || before.Line is null && before.Shape is null) return;
+        ReplaceSelected(before, VectorObjectEditor.AddPortal(before, 0.5, 48), "Add portal");
+    }
+
+    public void MoveSelectedPortal()
+    {
+        if (EditableSelection() is not { } before) return;
+        var portal = before.Line?.Portals.FirstOrDefault() ?? before.Shape?.Portals.FirstOrDefault();
+        if (portal is null) return;
+        ReplaceSelected(before, VectorObjectEditor.MovePortal(before, portal.Id, Math.Min(0.9, portal.Position + 0.1)),
+            "Move portal");
+    }
+
+    public void DeleteSelectedPortal()
+    {
+        if (EditableSelection() is not { } before) return;
+        var portal = before.Line?.Portals.FirstOrDefault() ?? before.Shape?.Portals.FirstOrDefault();
+        if (portal is null) return;
+        ReplaceSelected(before, VectorObjectEditor.DeletePortal(before, portal.Id), "Delete portal");
+    }
+
+    public void CutSelectedLine()
+    {
+        if (EditableSelection() is not { Line: { Nodes.Count: >= 3 } line } before
+            || DocumentEditor.FindLayerOf(Session.Document, before.Id) is not { } layer)
+        {
+            return;
+        }
+
+        var points = line.Nodes.Select(node => new VectorPoint(
+            before.X + node.X * before.Width, before.Y + node.Y * before.Height)).ToList();
+        var cut = points.Count / 2;
+        var pieces = new[]
+        {
+            VectorGeometry.CreateLine(ObjectId.New(), before.Name + " A", points.Take(cut + 1).ToList(), line.Stroke),
+            VectorGeometry.CreateLine(ObjectId.New(), before.Name + " B", points.Skip(cut).ToList(), line.Stroke),
+        };
+        Session.Execute(new ReplaceObjectWithManyCommand(Session.Document, layer.Id, before.Id, pieces));
+        Session.SelectedObjectId = pieces[0].Id;
+        AfterEdit();
+    }
+
+    public void CycleSelectedVectorStroke()
+    {
+        if (EditableSelection() is not { } before) return;
+        var current = before.Line?.Stroke ?? before.Shape?.Stroke;
+        if (current is null) return;
+        var changed = current with
+        {
+            Offset = current.Offset == 0 ? 12 : 0,
+            EndCap = current.EndCap == VectorCap.Round ? VectorCap.Square : VectorCap.Round,
+            ShadowOpacity = current.ShadowOpacity == 0 ? 0.35 : 0,
+        };
+        var after = before.Line is { } line
+            ? before with { Line = new LineStyle(line.Nodes, changed, line.Portals, line.Closed) }
+            : before with
+            {
+                Shape = new ShapeStyle(before.Shape!.Regions, before.Shape.Fill, changed, before.Shape.Portals),
+            };
+        ReplaceSelected(before, after, "Edit vector stroke");
+    }
+
+    public void UseAssetAsSelectedVectorStroke(AssetRecord record)
+    {
+        if (_assetCatalog is null || EditableSelection() is not { } before)
+        {
+            return;
+        }
+
+        var stroke = before.Line?.Stroke ?? before.Shape?.Stroke;
+        var resolution = _assetCatalog.Resolve(record);
+        if (stroke is null || resolution.Status != AssetResolutionStatus.Available || resolution.Path is null)
+        {
+            StatusDetail = "Выберите Line/Shape и доступный локальный ассет.";
+            return;
+        }
+
+        var changed = stroke with { AssetSha256 = record.Sha256, AssetSpacing = 1.25 };
+        var after = before.Line is { } line
+            ? before with { Line = new LineStyle(line.Nodes, changed, line.Portals, line.Closed) }
+            : before with
+            {
+                Shape = new ShapeStyle(before.Shape!.Regions, before.Shape.Fill, changed, before.Shape.Portals),
+            };
+        var reference = new MapAssetReference(
+            record.Sha256, record.DisplayName, record.MediaType, record.Extension,
+            ProjectAssetStorage.Embedded, record.ImportedUtc,
+            record.Provenance.Source, record.Provenance.LicenseId,
+            embeddedContent: File.ReadAllBytes(resolution.Path),
+            fallbackThumbnailPng: File.ReadAllBytes(_assetCatalog.ThumbnailPath(record)));
+        Session.Execute(new VectorAssetStyleCommand(before, after, reference));
+        AfterEdit();
+    }
+
+    public void ApplyShapeBoolean(ShapeBooleanOperation operation)
+    {
+        var layer = ActiveObjectLayer();
+        var shapes = layer?.Objects.Where(item => item.Shape is not null).TakeLast(2).ToList();
+        if (layer is null || shapes?.Count != 2)
+        {
+            StatusDetail = "Для boolean нужны две последние фигуры на активном Object layer.";
+            return;
+        }
+
+        var command = new ShapeBooleanCommand(Session.Document, layer.Id, shapes[0].Id, shapes[1].Id, operation);
+        Session.Execute(command);
+        Session.SelectedObjectId = command.ResultId;
+        AfterEdit();
+    }
+
+    private ObjectLayer? ActiveObjectLayer() => ActiveLayer as ObjectLayer
+        ?? Session.Document.Layers.OfType<ObjectLayer>().LastOrDefault(layer => layer.Visible && !layer.Locked);
+
+    private (double X, double Y) ViewCentre() => Session.Viewport.ScreenToWorld(
+        Session.Viewport.ViewWidth / 2, Session.Viewport.ViewHeight / 2);
+
+    private void ReplaceSelected(SceneObject before, SceneObject after, string name)
+    {
+        Session.Execute(new ReplaceObjectsCommand([before], [after], name));
         AfterEdit();
     }
 
@@ -1051,6 +1285,8 @@ public sealed class EditorViewModel : ViewModelBase
             Sublayer = source.Sublayer,
             GroupId = source.GroupId,
             Stamp = source.Stamp,
+            Line = source.Line,
+            Shape = source.Shape,
             ObjectOpacity = source.ObjectOpacity,
         };
 
@@ -1065,6 +1301,8 @@ public sealed class EditorViewModel : ViewModelBase
             Sublayer = source.Sublayer,
             GroupId = source.GroupId,
             Stamp = source.Stamp,
+            Line = source.Line,
+            Shape = source.Shape,
             ObjectOpacity = source.ObjectOpacity,
         };
 

@@ -112,6 +112,12 @@ internal sealed class SceneObjectDto
     [JsonPropertyName("stamp")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public StampStyleDto? Stamp { get; set; }
+    [JsonPropertyName("line")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public LineStyleDto? Line { get; set; }
+    [JsonPropertyName("shape")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ShapeStyleDto? Shape { get; set; }
 }
 
 internal sealed class StampStyleDto
@@ -129,6 +135,83 @@ internal sealed class StampStyleDto
     [JsonPropertyName("saturation")] public double Saturation { get; set; }
     [JsonPropertyName("brightness")] public double Brightness { get; set; }
     [JsonPropertyName("contrast")] public double Contrast { get; set; }
+}
+
+internal sealed class VectorNodeDto
+{
+    [JsonPropertyName("id")] public string Id { get; set; } = "";
+    [JsonPropertyName("x")] public double X { get; set; }
+    [JsonPropertyName("y")] public double Y { get; set; }
+    [JsonPropertyName("kind")] public string Kind { get; set; } = "Corner";
+    [JsonPropertyName("controlInX")] public double ControlInX { get; set; }
+    [JsonPropertyName("controlInY")] public double ControlInY { get; set; }
+    [JsonPropertyName("controlOutX")] public double ControlOutX { get; set; }
+    [JsonPropertyName("controlOutY")] public double ControlOutY { get; set; }
+}
+
+internal sealed class LinePortalDto
+{
+    [JsonPropertyName("id")] public string Id { get; set; } = "";
+    [JsonPropertyName("position")] public double Position { get; set; }
+    [JsonPropertyName("width")] public double Width { get; set; }
+}
+
+internal sealed class VectorStrokeDto
+{
+    [JsonPropertyName("color")] public string Color { get; set; } = "";
+    [JsonPropertyName("width")] public double Width { get; set; }
+    [JsonPropertyName("opacity")] public double Opacity { get; set; }
+    [JsonPropertyName("blend")] public string Blend { get; set; } = "Normal";
+    [JsonPropertyName("offset")] public double Offset { get; set; }
+    [JsonPropertyName("endCap")] public string EndCap { get; set; } = "Round";
+    [JsonPropertyName("nodeCap")] public string NodeCap { get; set; } = "Round";
+    [JsonPropertyName("shadowOffsetX")] public double ShadowOffsetX { get; set; }
+    [JsonPropertyName("shadowOffsetY")] public double ShadowOffsetY { get; set; }
+    [JsonPropertyName("shadowBlur")] public double ShadowBlur { get; set; }
+    [JsonPropertyName("shadowOpacity")] public double ShadowOpacity { get; set; }
+    [JsonPropertyName("assetSha256")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? AssetSha256 { get; set; }
+    [JsonPropertyName("assetSpacing")] public double AssetSpacing { get; set; }
+    [JsonPropertyName("hue")] public double Hue { get; set; }
+    [JsonPropertyName("saturation")] public double Saturation { get; set; }
+}
+
+internal sealed class LineStyleDto
+{
+    [JsonPropertyName("nodes")] public List<VectorNodeDto> Nodes { get; set; } = [];
+    [JsonPropertyName("stroke")] public VectorStrokeDto Stroke { get; set; } = new();
+    [JsonPropertyName("portals")] public List<LinePortalDto> Portals { get; set; } = [];
+    [JsonPropertyName("closed")] public bool Closed { get; set; }
+}
+
+internal sealed class ShapeFillDto
+{
+    [JsonPropertyName("color")] public string Color { get; set; } = "";
+    [JsonPropertyName("textureAssetSha256")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TextureAssetSha256 { get; set; }
+    [JsonPropertyName("textureScale")] public double TextureScale { get; set; }
+    [JsonPropertyName("textureRotation")] public double TextureRotation { get; set; }
+    [JsonPropertyName("textureOffsetX")] public double TextureOffsetX { get; set; }
+    [JsonPropertyName("textureOffsetY")] public double TextureOffsetY { get; set; }
+    [JsonPropertyName("opacity")] public double Opacity { get; set; }
+}
+
+internal sealed class ShapeRegionDto
+{
+    [JsonPropertyName("id")] public string Id { get; set; } = "";
+    [JsonPropertyName("mode")] public string Mode { get; set; } = "Add";
+    [JsonPropertyName("primitive")] public string Primitive { get; set; } = "Polygon";
+    [JsonPropertyName("nodes")] public List<VectorNodeDto> Nodes { get; set; } = [];
+}
+
+internal sealed class ShapeStyleDto
+{
+    [JsonPropertyName("regions")] public List<ShapeRegionDto> Regions { get; set; } = [];
+    [JsonPropertyName("fill")] public ShapeFillDto Fill { get; set; } = new();
+    [JsonPropertyName("stroke")] public VectorStrokeDto Stroke { get; set; } = new();
+    [JsonPropertyName("portals")] public List<LinePortalDto> Portals { get; set; } = [];
 }
 
 /// <summary>asset-manifest.json — empty catalog in this slice, but a real versionable document.</summary>

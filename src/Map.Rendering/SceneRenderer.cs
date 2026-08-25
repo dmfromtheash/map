@@ -587,6 +587,23 @@ public static class SceneRenderer
             return;
         }
 
+        if (sceneObject.Kind == SceneObjectKind.Line && sceneObject.Line is { } line)
+        {
+            DrawVectorStroke(
+                canvas, sceneObject,
+                VectorGeometry.Flatten(sceneObject, line.Nodes, line.Closed),
+                line.Closed, line.Portals, line.Stroke, objectAlpha, options);
+            canvas.Restore();
+            return;
+        }
+
+        if (sceneObject.Kind == SceneObjectKind.Shape && sceneObject.Shape is { } shape)
+        {
+            DrawVectorShape(canvas, sceneObject, shape, objectAlpha, options);
+            canvas.Restore();
+            return;
+        }
+
         using (var fill = new SKPaint
         {
             Color = ParseColor(sceneObject.FillColor).WithScaledAlpha(objectAlpha),
@@ -612,6 +629,271 @@ public static class SceneRenderer
 
         canvas.Restore();
     }
+
+    private static void DrawVectorShape(
+        SKCanvas canvas, SceneObject owner, ShapeStyle shape, byte objectAlpha, RenderOptions options)
+    {
+        canvas.SaveLayer(ToRect(SceneGeometry.BoundsOf(owner)), null);
+        foreach (var region in shape.Regions)
+        {
+            using var path = BuildRegionPath(owner, region);
+            using var fill = new SKPaint
+            {
+                Color = region.Mode == ShapeCombineMode.Subtract
+                    ? SKColors.Black
+                    : ParseColor(shape.Fill.Color).WithScaledAlpha((byte)Math.Clamp(
+                        Math.Round(objectAlpha * shape.Fill.Opacity), 0, 255)),
+                IsAntialias = true,
+                Style = SKPaintStyle.Fill,
+                BlendMode = region.Mode == ShapeCombineMode.Subtract ? SKBlendMode.DstOut : SKBlendMode.SrcOver,
+            };
+            canvas.DrawPath(path, fill);
+
+            if (region.Mode == ShapeCombineMode.Add
+                && shape.Fill.TextureAssetSha256 is { } hash
+                && options.Stamps?.TryGetImage(hash) is { } texture)
+            {
+                canvas.Save();
+                canvas.ClipPath(path, SKClipOperation.Intersect, antialias: true);
+                canvas.Translate(
+                    (float)(owner.X + owner.Width / 2 + shape.Fill.TextureOffsetX),
+                    (float)(owner.Y + owner.Height / 2 + shape.Fill.TextureOffsetY));
+                canvas.RotateDegrees((float)shape.Fill.TextureRotation);
+                canvas.Scale((float)Math.Max(0.01, shape.Fill.TextureScale));
+                canvas.Translate((float)-(owner.X + owner.Width / 2), (float)-(owner.Y + owner.Height / 2));
+                using var texturePaint = new SKPaint
+                {
+                    Color = SKColors.White.WithAlpha((byte)Math.Clamp(
+                        Math.Round(objectAlpha * shape.Fill.Opacity), 0, 255)),
+                    IsAntialias = true,
+                };
+                canvas.DrawImage(texture, new SKRect(
+                    (float)owner.X, (float)owner.Y,
+                    (float)(owner.X + owner.Width), (float)(owner.Y + owner.Height)),
+                    new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear), texturePaint);
+                canvas.Restore();
+            }
+        }
+        canvas.Restore();
+
+        foreach (var region in shape.Regions)
+        {
+            var points = RegionPoints(owner, region);
+            DrawVectorStroke(canvas, owner, points, closed: true, shape.Portals, shape.Stroke, objectAlpha, options);
+        }
+    }
+
+    private static SKPath BuildRegionPath(SceneObject owner, ShapeRegion region)
+    {
+        var path = new SKPath();
+        if (region.Primitive == ShapePrimitiveKind.Ellipse)
+        {
+            var a = region.Nodes[0]; var b = region.Nodes[1];
+            path.AddOval(new SKRect(
+                (float)(owner.X + Math.Min(a.X, b.X) * owner.Width),
+                (float)(owner.Y + Math.Min(a.Y, b.Y) * owner.Height),
+                (float)(owner.X + Math.Max(a.X, b.X) * owner.Width),
+                (float)(owner.Y + Math.Max(a.Y, b.Y) * owner.Height)));
+            return path;
+        }
+
+        var points = VectorGeometry.Flatten(owner, region.Nodes, closed: true);
+        path.MoveTo((float)points[0].X, (float)points[0].Y);
+        foreach (var point in points.Skip(1)) path.LineTo((float)point.X, (float)point.Y);
+        path.Close();
+        return path;
+    }
+
+    private static IReadOnlyList<VectorPoint> RegionPoints(SceneObject owner, ShapeRegion region)
+    {
+        if (region.Primitive != ShapePrimitiveKind.Ellipse)
+        {
+            return VectorGeometry.Flatten(owner, region.Nodes, closed: true);
+        }
+
+        var a = region.Nodes[0]; var b = region.Nodes[1];
+        var cx = (a.X + b.X) / 2; var cy = (a.Y + b.Y) / 2;
+        var rx = Math.Abs(b.X - a.X) / 2; var ry = Math.Abs(b.Y - a.Y) / 2;
+        return [.. Enumerable.Range(0, 33).Select(index =>
+        {
+            var angle = index * Math.PI * 2 / 32;
+            return new VectorPoint(
+                owner.X + ((cx + Math.Cos(angle) * rx) * owner.Width),
+                owner.Y + ((cy + Math.Sin(angle) * ry) * owner.Height));
+        })];
+    }
+
+    private static void DrawVectorStroke(
+        SKCanvas canvas, SceneObject owner, IReadOnlyList<VectorPoint> points, bool closed,
+        IReadOnlyList<LinePortal> portals, VectorStrokeStyle style, byte objectAlpha, RenderOptions options)
+    {
+        if (style.Width <= 0 || points.Count < 2)
+        {
+            return;
+        }
+
+        var pieces = VisibleSegments(points, portals);
+        if (pieces.Count == 0) return;
+
+        if (style.AssetSha256 is { } hash && options.Stamps?.TryGetImage(hash) is { } image)
+        {
+            DrawAssetStroke(canvas, [.. pieces.Select(piece => Offset(piece.A, piece.B, style.Offset))],
+                image, style, objectAlpha);
+        }
+        else
+        {
+            using var paint = new SKPaint
+            {
+                Color = ParseColor(style.Color).WithScaledAlpha((byte)Math.Clamp(
+                    Math.Round(objectAlpha * style.Opacity), 0, 255)),
+                IsAntialias = true,
+                Style = SKPaintStyle.Stroke,
+                StrokeWidth = (float)style.Width,
+                StrokeCap = ToStrokeCap(style.EndCap),
+                StrokeJoin = SKStrokeJoin.Round,
+                BlendMode = ParseBlend(style.Blend),
+            };
+            if (style.ShadowOpacity > 0)
+            {
+                paint.ImageFilter = SKImageFilter.CreateDropShadow(
+                    (float)style.ShadowOffsetX, (float)style.ShadowOffsetY,
+                    (float)style.ShadowBlur, (float)style.ShadowBlur,
+                    SKColors.Black.WithAlpha(Alpha(style.ShadowOpacity)));
+            }
+
+            using var path = new SKPath();
+            foreach (var piece in pieces)
+            {
+                var (a, b) = Offset(piece.A, piece.B, style.Offset);
+                path.MoveTo((float)a.X, (float)a.Y);
+                path.LineTo((float)b.X, (float)b.Y);
+            }
+            canvas.DrawPath(path, paint);
+            paint.ImageFilter?.Dispose();
+        }
+
+        if (style.NodeCap != VectorCap.Butt)
+        {
+            using var cap = new SKPaint
+            {
+                Color = ParseColor(style.Color).WithScaledAlpha((byte)Math.Clamp(
+                    Math.Round(objectAlpha * style.Opacity), 0, 255)),
+                IsAntialias = true,
+            };
+            foreach (var point in points.Take(closed ? points.Count - 1 : points.Count))
+            {
+                if (style.NodeCap == VectorCap.Round)
+                    canvas.DrawCircle((float)point.X, (float)point.Y, (float)(style.Width / 2), cap);
+                else
+                    canvas.DrawRect((float)(point.X - style.Width / 2), (float)(point.Y - style.Width / 2),
+                        (float)style.Width, (float)style.Width, cap);
+            }
+        }
+    }
+
+    private static List<(VectorPoint A, VectorPoint B)> VisibleSegments(
+        IReadOnlyList<VectorPoint> points, IReadOnlyList<LinePortal> portals)
+    {
+        var lengths = points.Zip(points.Skip(1)).Select(pair => Distance(pair.First, pair.Second)).ToList();
+        var total = lengths.Sum();
+        if (total <= 0) return [];
+        var gaps = portals.Select(portal => (
+            Start: Math.Max(0, portal.Position * total - portal.Width / 2),
+            End: Math.Min(total, portal.Position * total + portal.Width / 2))).OrderBy(g => g.Start).ToList();
+        var result = new List<(VectorPoint A, VectorPoint B)>();
+        var cursor = 0.0;
+        for (var index = 0; index < lengths.Count; index++)
+        {
+            var length = lengths[index];
+            if (length <= 0) continue;
+            var visible = new List<(double Start, double End)> { (cursor, cursor + length) };
+            foreach (var gap in gaps)
+            {
+                visible = [.. visible.SelectMany(part => Subtract(part, gap))];
+            }
+            foreach (var part in visible)
+            {
+                result.Add((
+                    Lerp(points[index], points[index + 1], (part.Start - cursor) / length),
+                    Lerp(points[index], points[index + 1], (part.End - cursor) / length)));
+            }
+            cursor += length;
+        }
+        return result;
+    }
+
+    private static IEnumerable<(double Start, double End)> Subtract(
+        (double Start, double End) part, (double Start, double End) gap)
+    {
+        if (gap.End <= part.Start || gap.Start >= part.End) { yield return part; yield break; }
+        if (gap.Start > part.Start) yield return (part.Start, Math.Min(gap.Start, part.End));
+        if (gap.End < part.End) yield return (Math.Max(gap.End, part.Start), part.End);
+    }
+
+    private static void DrawAssetStroke(
+        SKCanvas canvas, IReadOnlyList<(VectorPoint A, VectorPoint B)> pieces,
+        SKImage image, VectorStrokeStyle style, byte objectAlpha)
+    {
+        using var paint = new SKPaint
+        {
+            Color = SKColors.White.WithAlpha((byte)Math.Clamp(Math.Round(objectAlpha * style.Opacity), 0, 255)),
+            IsAntialias = true,
+            BlendMode = ParseBlend(style.Blend),
+            ColorFilter = BuildColorFilter(new StampStyle(style.AssetSha256!)
+            {
+                Hue = style.Hue, Saturation = style.Saturation,
+            }),
+        };
+        if (style.ShadowOpacity > 0)
+        {
+            paint.ImageFilter = SKImageFilter.CreateDropShadow(
+                (float)style.ShadowOffsetX, (float)style.ShadowOffsetY,
+                (float)style.ShadowBlur, (float)style.ShadowBlur,
+                SKColors.Black.WithAlpha(Alpha(style.ShadowOpacity)));
+        }
+        var spacing = Math.Max(1, style.Width * Math.Max(0.1, style.AssetSpacing));
+        var drawn = 0;
+        foreach (var piece in pieces)
+        {
+            var length = Distance(piece.A, piece.B);
+            var count = Math.Max(1, (int)Math.Floor(length / spacing));
+            for (var index = 0; index <= count && drawn < 4096; index++, drawn++)
+            {
+                var point = Lerp(piece.A, piece.B, index / (double)Math.Max(1, count));
+                var angle = Math.Atan2(piece.B.Y - piece.A.Y, piece.B.X - piece.A.X) * 180 / Math.PI;
+                canvas.Save();
+                canvas.RotateDegrees((float)angle, (float)point.X, (float)point.Y);
+                canvas.DrawImage(image, new SKRect(
+                    (float)(point.X - style.Width / 2), (float)(point.Y - style.Width / 2),
+                    (float)(point.X + style.Width / 2), (float)(point.Y + style.Width / 2)),
+                    new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear), paint);
+                canvas.Restore();
+            }
+        }
+        paint.ImageFilter?.Dispose();
+        paint.ColorFilter?.Dispose();
+    }
+
+    private static (VectorPoint A, VectorPoint B) Offset(VectorPoint a, VectorPoint b, double amount)
+    {
+        var length = Distance(a, b);
+        if (length <= 0 || amount == 0) return (a, b);
+        var dx = -(b.Y - a.Y) / length * amount;
+        var dy = (b.X - a.X) / length * amount;
+        return (new VectorPoint(a.X + dx, a.Y + dy), new VectorPoint(b.X + dx, b.Y + dy));
+    }
+
+    private static SKStrokeCap ToStrokeCap(VectorCap cap) => cap switch
+    {
+        VectorCap.Round => SKStrokeCap.Round,
+        VectorCap.Square => SKStrokeCap.Square,
+        _ => SKStrokeCap.Butt,
+    };
+
+    private static double Distance(VectorPoint a, VectorPoint b) =>
+        Math.Sqrt(Math.Pow(b.X - a.X, 2) + Math.Pow(b.Y - a.Y, 2));
+    private static VectorPoint Lerp(VectorPoint a, VectorPoint b, double t) =>
+        new(a.X + ((b.X - a.X) * t), a.Y + ((b.Y - a.Y) * t));
 
     private static void DrawStamp(
         SKCanvas canvas, SceneObject sceneObject, StampStyle stamp, SKRect rect,
