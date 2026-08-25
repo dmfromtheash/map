@@ -1,6 +1,6 @@
 # Источники и проверка
 
-Дата актуальной проверки: **25.08.2026**.
+Дата актуальной проверки: **26.08.2026**.
 
 При конфликте источников приоритет: более свежая официальная документация/updates → официальный tutorial → наблюдаемое ручное поведение → вторичный обзор. Субтитры — вспомогательный источник и не доказывают неясную деталь сами по себе.
 
@@ -32,6 +32,10 @@
 | [Layers Overview](https://www.youtube.com/watch?v=Rf5bVBKFnZ0) | layer types, object tree, masks/effects |
 | [Brush Tool Overview](https://www.youtube.com/watch?v=IJl_R3E4tHo) | brush presets/dynamics/material/shape |
 | [Land Tool Overview](https://www.youtube.com/watch?v=fo0v-4jSwcU) | add/subtract, shapes, move area, land style |
+
+Фокусный повторный проход 26.08.2026 сопоставил актуальный публичный `Stamp Tool Overview`,
+предоставленный владельцем снимок выбранного stamp и текущую реализацию Map. Результат:
+`OBJECT_AND_GRID_PARITY.md`.
 
 ### Известная временная оговорка
 

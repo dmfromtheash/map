@@ -207,6 +207,10 @@ Fault-injection suite доказывает отсутствие потери п�
 - light/dark/high-contrast;
 - neutral built-in starter pack с доказанным происхождением;
 - onboarding и локальная help;
+- полный object inspector parity: stamp transform/effects/color tweaks, shape fill/stroke и общий
+  sublayer/opacity/blend/blur без копирования trade dress;
+- полный grid property sheet: square/diamond/hex-flat/hex-pointy presets и точные size/subdivision/
+  line/color/opacity/offset/rotation/snap/export controls;
 - usability sessions: новичок/опытный/keyboard/high-DPI;
 - никаких заимствованных Inkarnate assets или trade dress.
 

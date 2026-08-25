@@ -117,6 +117,12 @@
 - recent/favorite;
 - предупреждение о missing/unlicensed asset без уничтожения объекта.
 
+Панель выделенного stamp обязана давать точные controls для каждого перечисленного свойства, а не
+фиксированные demo-кнопки. Основной блок: replace asset, пропорциональный scale плюс точные W/H,
+rotation, sublayer, оба flip и opacity. Расширенный блок: shadow preset/custom, blend, blur и
+Hue/Saturation/Brightness/Contrast с отдельным reset. Полная матрица и acceptance:
+`research/OBJECT_AND_GRID_PARITY.md`.
+
 ## 7. Line (`P1`)
 
 Единый инструмент покрывает дороги, стены, границы, реки и маршруты. Отдельный legacy Path не создаётся.
@@ -141,6 +147,9 @@
 - fill scale/rotation/offset/opacity;
 - overall opacity/blend/blur;
 - построение помещений, зон и подложек без растрирования до явного flatten.
+
+Fill color, stroke color/width и общий opacity/blend/blur доступны как фактические значения в
+inspector и меняются undoable-командами; одного циклического preset недостаточно.
 
 ## 9. Text (`P1`)
 
@@ -200,7 +209,7 @@
 
 ## 13. Grid (`P1`)
 
-- square и hex (flat/pointy); дополнительные типы позже;
+- видимые presets: square, diagonal diamond (`Square` + rotation `45°`), hex flat и hex pointy;
 - размер ячейки, subdivisions, line width/color/opacity;
 - offset и rotation;
 - выше/ниже других слоёв;
