@@ -1,12 +1,8 @@
 namespace Map.Persistence;
 
 /// <summary>Base of every persistence failure this library reports deliberately.</summary>
-public abstract class MapProjectException : Exception
+public abstract class MapProjectException(string message, Exception? inner = null) : Exception(message, inner)
 {
-    protected MapProjectException(string message, Exception? inner = null)
-        : base(message, inner)
-    {
-    }
 }
 
 /// <summary>
@@ -14,45 +10,37 @@ public abstract class MapProjectException : Exception
 /// not match, JSON does not parse, or the identifiers inside disagree with each other. The message
 /// names what exactly failed; the raw ZIP/JSON exception, when there was one, is the inner one.
 /// </summary>
-public sealed class MapProjectCorruptedException : MapProjectException
+public sealed class MapProjectCorruptedException(string message, Exception? inner = null) : MapProjectException(message, inner)
 {
-    public MapProjectCorruptedException(string message, Exception? inner = null)
-        : base(message, inner)
-    {
-    }
+}
+
+/// <summary>A materialized raster or mask tile is missing, malformed or fails its checksum.</summary>
+public sealed class MapProjectTileCorruptedException(string entryName, string layerId, int tileX, int tileY, string reason) : MapProjectException($"Tile {tileX}_{tileY} of layer {layerId} ({entryName}) {reason}.")
+{
+    public string EntryName { get; } = entryName;
+    public string LayerId { get; } = layerId;
+    public int TileX { get; } = tileX;
+    public int TileY { get; } = tileY;
 }
 
 /// <summary>
 /// The container is a well-formed map project written by a schema this build does not support.
 /// Opening never migrates and never rewrites the source file (docs/05).
 /// </summary>
-public sealed class UnsupportedSchemaVersionException : MapProjectException
-{
-    public UnsupportedSchemaVersionException(int schemaVersion)
-        : base($"Schema version {schemaVersion} is not supported by this build " +
+public sealed class UnsupportedSchemaVersionException(int schemaVersion) : MapProjectException($"Schema version {schemaVersion} is not supported by this build " +
                $"(expected {MapProjectFormat.SchemaVersion}). The file was not modified.")
-    {
-        SchemaVersion = schemaVersion;
-    }
-
-    public int SchemaVersion { get; }
+{
+    public int SchemaVersion { get; } = schemaVersion;
 }
 
 /// <summary>
 /// A save did not complete. The target file was not replaced, so the last correct version is
 /// still on disk; a durable temp, when one was written, is named so nothing is silently lost.
 /// </summary>
-public sealed class MapProjectSaveException : MapProjectException
+public sealed class MapProjectSaveException(string message, string targetPath, string? tempPath, Exception? inner = null) : MapProjectException(message, inner)
 {
-    public MapProjectSaveException(string message, string targetPath, string? tempPath, Exception? inner = null)
-        : base(message, inner)
-    {
-        TargetPath = targetPath;
-        TempPath = tempPath;
-    }
-
-    public string TargetPath { get; }
+    public string TargetPath { get; } = targetPath;
 
     /// <summary>The sibling temp file left on disk, or null when none survived.</summary>
-    public string? TempPath { get; }
+    public string? TempPath { get; } = tempPath;
 }

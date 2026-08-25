@@ -11,6 +11,8 @@ public static class MapProjectFormat
     public const string SceneEntry = "scene.json";
     public const string AssetManifestEntry = "asset-manifest.json";
     public const string PreviewEntry = "preview.png";
+    public const string RasterPrefix = "rasters/";
+    public const string MaskPrefix = "masks/";
 
     /// <summary>Every entry a v1 container must contain.</summary>
     public static readonly IReadOnlyList<string> RequiredEntries =
@@ -31,17 +33,20 @@ public static class MapProjectFormat
     // These bound what a truncated, mis-copied or mislabeled file can cost before the reader
     // commits memory to it, so a damaged container fails with a clear error instead of a hang.
 
-    /// <summary>A v1 writer stores 4 entries; anything past this is not a plausible v1 container.</summary>
-    public const int MaxEntries = 64;
+    /// <summary>Bounds sparse tiles/assets without tying the limit to the four Stage 2 entries.</summary>
+    public const int MaxEntries = 16_384;
 
     /// <summary>Upper bound of any single JSON entry once decompressed.</summary>
     public const long MaxJsonEntryBytes = 32L * 1024 * 1024;
+
+    /// <summary>One raw tile is fixed-size and bounded (256x256 RGBA at most).</summary>
+    public const long MaxTileEntryBytes = 256L * 256 * 4;
 
     /// <summary>Upper bound of the stored preview image bytes.</summary>
     public const long MaxPreviewBytes = 8L * 1024 * 1024;
 
     /// <summary>Upper bound of the whole container once decompressed.</summary>
-    public const long MaxTotalUncompressedBytes = 256L * 1024 * 1024;
+    public const long MaxTotalUncompressedBytes = 2L * 1024 * 1024 * 1024;
 
     /// <summary>Largest preview dimension the reader accepts, read from the PNG IHDR.</summary>
     public const int MaxPreviewDimension = 8192;

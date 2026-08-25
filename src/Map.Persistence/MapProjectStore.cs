@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Globalization;
 using System.IO.Compression;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Map.Core.Documents;
 using Map.Persistence.Container;
@@ -130,11 +131,11 @@ public static class MapProjectStore
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
-        var (manifest, scene, previewPng) = ReadAndValidate(Path.GetFullPath(path));
+        var (manifest, scene, previewPng, tiles) = ReadAndValidate(Path.GetFullPath(path));
 
         return new OpenedProject
         {
-            Document = ToDomain(manifest, scene),
+            Document = ToDomain(manifest, scene, tiles),
             AppVersion = manifest.AppVersion,
             ModifiedUtc = ParseTimestamp(manifest.ModifiedUtc, "modifiedUtc"),
             PreviewPng = previewPng,
@@ -172,6 +173,10 @@ public static class MapProjectStore
         WriteEntry(archive, MapProjectFormat.SceneEntry, sceneBytes);
         WriteEntry(archive, MapProjectFormat.AssetManifestEntry, assetManifestBytes);
         WriteEntry(archive, MapProjectFormat.PreviewEntry, previewPng);
+        foreach (var (name, bytes) in EnumerateTileEntries(document).OrderBy(p => p.Name, StringComparer.Ordinal))
+        {
+            WriteEntry(archive, name, bytes);
+        }
     }
 
     private static void WriteEntry(ZipArchive archive, string name, byte[] data)
@@ -189,8 +194,8 @@ public static class MapProjectStore
     /// </summary>
     private static void ValidateReadBack(string tempPath, MapDocument expected)
     {
-        var (manifest, scene, _) = ReadAndValidate(tempPath);
-        var reloaded = ToDomain(manifest, scene);
+        var (manifest, scene, _, tiles) = ReadAndValidate(tempPath);
+        var reloaded = ToDomain(manifest, scene, tiles);
 
         if (reloaded.Id != expected.Id)
         {
@@ -198,7 +203,11 @@ public static class MapProjectStore
         }
 
         if (reloaded.Layers.Count != expected.Layers.Count
-            || reloaded.Layers.Zip(expected.Layers).Any(p => p.First.Objects.Count != p.Second.Objects.Count))
+            || reloaded.Layers.Zip(expected.Layers).Any(p =>
+                p.First.GetType() != p.Second.GetType()
+                || ObjectCount(p.First) != ObjectCount(p.Second)
+                || TileCount(p.First) != TileCount(p.Second)
+                || (p.First.Mask?.Tiles.TileCount ?? 0) != (p.Second.Mask?.Tiles.TileCount ?? 0)))
         {
             throw new MapProjectCorruptedException("Read-back layer/object shape does not match the saved snapshot.");
         }
@@ -206,7 +215,11 @@ public static class MapProjectStore
 
     // ---------------------------------------------------------------- read path
 
-    private static (ManifestDto Manifest, SceneDto Scene, byte[] PreviewPng) ReadAndValidate(string fullPath)
+    private static (
+        ManifestDto Manifest,
+        SceneDto Scene,
+        byte[] PreviewPng,
+        IReadOnlyDictionary<string, byte[]> Tiles) ReadAndValidate(string fullPath)
     {
         using var stream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read);
 
@@ -274,7 +287,8 @@ public static class MapProjectStore
             // The empty catalog must still be a well-formed document.
             _ = ParseJson<AssetManifestDto>(assetManifestBytes, MapProjectFormat.AssetManifestEntry);
 
-            return (manifest, scene, ReadEntry(archive, MapProjectFormat.PreviewEntry));
+            var tiles = ReadAndValidateTiles(archive, scene);
+            return (manifest, scene, ReadEntry(archive, MapProjectFormat.PreviewEntry), tiles);
         }
     }
 
@@ -317,7 +331,10 @@ public static class MapProjectStore
 
             var perEntryLimit = name == MapProjectFormat.PreviewEntry
                 ? MapProjectFormat.MaxPreviewBytes
-                : MapProjectFormat.MaxJsonEntryBytes;
+                : name.StartsWith(MapProjectFormat.RasterPrefix, StringComparison.Ordinal)
+                    || name.StartsWith(MapProjectFormat.MaskPrefix, StringComparison.Ordinal)
+                    ? MapProjectFormat.MaxTileEntryBytes
+                    : MapProjectFormat.MaxJsonEntryBytes;
 
             if (entry.Length > perEntryLimit)
             {
@@ -389,38 +406,163 @@ public static class MapProjectStore
         }
     }
 
+    private static IReadOnlyDictionary<string, byte[]> ReadAndValidateTiles(
+        ZipArchive archive, SceneDto scene)
+    {
+        if (scene.Layers is null
+            || scene.Layers.Any(layer => layer is null || layer.Objects is null || layer.Mask is { Tiles: null }))
+        {
+            throw new MapProjectCorruptedException(
+                "scene.json has null layers, layer, objects array or mask tiles array.");
+        }
+
+        var result = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        var referenced = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var layer in scene.Layers)
+        {
+            var layerId = RequireCanonicalLayerId(layer.Id);
+            ReadTileList(layer.Tiles, MapProjectFormat.RasterPrefix, layerId, bytesPerPixel: 4);
+            ReadTileList(layer.Mask?.Tiles, MapProjectFormat.MaskPrefix, layerId, bytesPerPixel: 1);
+        }
+
+        foreach (var entry in archive.Entries)
+        {
+            if ((entry.FullName.StartsWith(MapProjectFormat.RasterPrefix, StringComparison.Ordinal)
+                    || entry.FullName.StartsWith(MapProjectFormat.MaskPrefix, StringComparison.Ordinal))
+                && !referenced.Contains(entry.FullName))
+            {
+                throw new MapProjectCorruptedException(
+                    $"Tile entry {entry.FullName} is not referenced by scene.json.");
+            }
+        }
+
+        return result;
+
+        void ReadTileList(
+            List<TileDto>? tiles, string prefix, string layerId, int bytesPerPixel)
+        {
+            if (tiles is null)
+            {
+                return;
+            }
+
+            var keys = new HashSet<(int X, int Y)>();
+            foreach (var tile in tiles)
+            {
+                if (!keys.Add((tile.X, tile.Y)))
+                {
+                    throw new MapProjectTileCorruptedException(
+                        prefix, layerId, tile.X, tile.Y, "is listed more than once");
+                }
+
+                var name = TileEntryName(prefix, layerId, tile.X, tile.Y);
+                if (!referenced.Add(name))
+                {
+                    throw new MapProjectTileCorruptedException(
+                        name, layerId, tile.X, tile.Y, "is referenced more than once");
+                }
+
+                var entry = archive.GetEntry(name) ?? throw new MapProjectTileCorruptedException(
+                        name, layerId, tile.X, tile.Y, "is missing");
+                var bytes = ReadEntry(archive, name);
+                var expectedLength = TileMap.TileSize * TileMap.TileSize * bytesPerPixel;
+                if (bytes.Length != expectedLength)
+                {
+                    throw new MapProjectTileCorruptedException(
+                        name, layerId, tile.X, tile.Y,
+                        $"has {bytes.Length} bytes instead of {expectedLength}");
+                }
+
+                if (!string.Equals(Sha256Hex(bytes), tile.Sha256, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new MapProjectTileCorruptedException(
+                        name, layerId, tile.X, tile.Y, "does not match its SHA-256 checksum");
+                }
+
+                result.Add(name, bytes);
+            }
+        }
+    }
+
     // ---------------------------------------------------------------- mapping
 
     private static SceneDto ToSceneDto(MapDocument document) => new()
     {
         DocumentId = document.Id.ToString(),
-        Layers = document.Layers.Select(layer => new LayerDto
+        Layers = [.. document.Layers.Select(ToLayerDto)],
+    };
+
+    private static LayerDto ToLayerDto(MapLayer layer)
+    {
+        var dto = new LayerDto
         {
             Id = layer.Id.ToString(),
+            Type = layer switch
+            {
+                BaseColorLayer => "BaseColor",
+                ObjectLayer => "Object",
+                BrushLayer => "Brush",
+                _ => throw new InvalidOperationException($"Unknown layer type {layer.GetType().Name}."),
+            },
             Name = layer.Name,
             Visible = layer.Visible,
             Locked = layer.Locked,
             Opacity = layer.Opacity,
-            Objects = layer.Objects.Select(sceneObject => new SceneObjectDto
+            Color = (layer as BaseColorLayer)?.Color,
+            Objects = layer is ObjectLayer objectLayer
+                ? [.. objectLayer.Objects.Select(ToObjectDto)]
+                : [],
+            Tiles = layer is IRasterContentLayer raster
+                ? ToTileDtos(raster.ContentTiles)
+                : null,
+            Mask = layer.Mask is { } mask
+                ? new MaskDto { Enabled = mask.Enabled, Tiles = ToTileDtos(mask.Tiles) }
+                : null,
+        };
+        return dto;
+    }
+
+    private static SceneObjectDto ToObjectDto(SceneObject sceneObject) => new()
+    {
+        Id = sceneObject.Id.ToString(),
+        Kind = sceneObject.Kind.ToString(),
+        Name = sceneObject.Name,
+        X = sceneObject.X,
+        Y = sceneObject.Y,
+        Width = sceneObject.Width,
+        Height = sceneObject.Height,
+        RotationDegrees = sceneObject.RotationDegrees,
+        FillColor = sceneObject.FillColor,
+        StrokeColor = sceneObject.StrokeColor,
+        StrokeWidth = sceneObject.StrokeWidth,
+        Visible = sceneObject.Visible,
+        Locked = sceneObject.Locked,
+        Sublayer = sceneObject.Sublayer,
+        GroupId = sceneObject.GroupId?.ToString("D"),
+        ObjectOpacity = sceneObject.ObjectOpacity,
+        Stamp = sceneObject.Stamp is { } stamp
+            ? new StampStyleDto
             {
-                Id = sceneObject.Id.ToString(),
-                Kind = sceneObject.Kind.ToString(),
-                Name = sceneObject.Name,
-                X = sceneObject.X,
-                Y = sceneObject.Y,
-                Width = sceneObject.Width,
-                Height = sceneObject.Height,
-                RotationDegrees = sceneObject.RotationDegrees,
-                FillColor = sceneObject.FillColor,
-                StrokeColor = sceneObject.StrokeColor,
-                StrokeWidth = sceneObject.StrokeWidth,
-                Visible = sceneObject.Visible,
-                Locked = sceneObject.Locked,
-            }).ToList(),
-        }).ToList(),
+                AssetSha256 = stamp.AssetSha256,
+                FlipHorizontal = stamp.FlipHorizontal,
+                FlipVertical = stamp.FlipVertical,
+                Blend = stamp.Blend,
+                Blur = stamp.Blur,
+                ShadowOffsetX = stamp.ShadowOffsetX,
+                ShadowOffsetY = stamp.ShadowOffsetY,
+                ShadowBlur = stamp.ShadowBlur,
+                ShadowOpacity = stamp.ShadowOpacity,
+                Hue = stamp.Hue,
+                Saturation = stamp.Saturation,
+                Brightness = stamp.Brightness,
+                Contrast = stamp.Contrast,
+            }
+            : null,
     };
 
-    private static MapDocument ToDomain(ManifestDto manifest, SceneDto scene)
+    private static MapDocument ToDomain(
+        ManifestDto manifest, SceneDto scene, IReadOnlyDictionary<string, byte[]> tileEntries)
     {
         // Explicit JSON null can overwrite any DTO default, so every object/array the mapping
         // walks is checked up front - a damaged file must produce a clear error, never an NRE.
@@ -429,33 +571,24 @@ public static class MapProjectStore
             throw new MapProjectCorruptedException("manifest.json has no canvas object.");
         }
 
-        if (scene.Layers is null || scene.Layers.Any(l => l is null || l.Objects is null))
+        if (scene.Layers is null
+            || scene.Layers.Any(l => l is null || l.Objects is null || l.Mask is { Tiles: null }))
         {
-            throw new MapProjectCorruptedException("scene.json has a null layers array, layer or objects array.");
+            throw new MapProjectCorruptedException(
+                "scene.json has a null layers array, layer, objects array or mask tiles array.");
         }
 
         try
         {
-            var layers = scene.Layers.Select(layer => new Layer(
-                LayerId.Parse(RequireString(layer.Id, "layer id")),
-                RequireString(layer.Name, "layer name"),
-                layer.Visible,
-                layer.Locked,
-                layer.Opacity,
-                layer.Objects.Select(sceneObject => new SceneObject(
-                    ObjectId.Parse(RequireString(sceneObject.Id, "object id")),
-                    ParseKind(sceneObject.Kind),
-                    RequireString(sceneObject.Name, "object name"),
-                    sceneObject.X,
-                    sceneObject.Y,
-                    sceneObject.Width,
-                    sceneObject.Height,
-                    sceneObject.RotationDegrees,
-                    sceneObject.FillColor,
-                    sceneObject.StrokeColor,
-                    sceneObject.StrokeWidth,
-                    sceneObject.Visible,
-                    sceneObject.Locked)).ToList())).ToList();
+            var legacyStage2 = scene.Layers.All(layer => layer.Type is null);
+            var layers = scene.Layers.Select(layer => ToLayer(layer, tileEntries)).ToList();
+            if (legacyStage2)
+            {
+                layers.Insert(0, new BaseColorLayer(
+                    LegacyBaseLayerId(manifest.DocumentId),
+                    "Цвет фона", visible: true, locked: false, opacity: 1.0,
+                    RequireString(manifest.Canvas.Background, "canvas background")));
+            }
 
             return new MapDocument(
                 DocumentId.Parse(RequireString(manifest.DocumentId, "document id")),
@@ -468,13 +601,151 @@ public static class MapProjectStore
                     RequireString(manifest.Canvas.Background, "canvas background")),
                 layers);
         }
-        catch (Exception ex) when (ex is ArgumentException or FormatException)
+        catch (Exception ex) when (ex is ArgumentException or FormatException or InvalidOperationException)
         {
             // A container that parses as JSON but violates the domain's own rules is a damaged
             // project, not an application bug worth an unhandled crash.
             throw new MapProjectCorruptedException(
                 "The container holds values the document model rejects: " + ex.Message, ex);
         }
+    }
+
+    private static MapLayer ToLayer(
+        LayerDto layer, IReadOnlyDictionary<string, byte[]> tileEntries)
+    {
+        var id = LayerId.Parse(RequireString(layer.Id, "layer id"));
+        var name = RequireString(layer.Name, "layer name");
+        var mask = layer.Mask is { } maskDto
+            ? new LayerMask(
+                ToTileMap(maskDto.Tiles, MapProjectFormat.MaskPrefix, id, 1, tileEntries),
+                maskDto.Enabled)
+            : null;
+
+        return layer.Type switch
+        {
+            null or "Object" => new ObjectLayer(
+                id, name, layer.Visible, layer.Locked, layer.Opacity,
+                [.. layer.Objects.Select(ToObject)], mask),
+            "BaseColor" => new BaseColorLayer(
+                id, name, layer.Visible, layer.Locked, layer.Opacity,
+                RequireString(layer.Color, "base color")),
+            "Brush" => new BrushLayer(
+                id, name, layer.Visible, layer.Locked, layer.Opacity,
+                ToTileMap(layer.Tiles ?? [], MapProjectFormat.RasterPrefix, id, 4, tileEntries), mask),
+            _ => throw new MapProjectCorruptedException(
+                $"scene.json holds layer type \"{layer.Type}\" this version does not define."),
+        };
+    }
+
+    private static SceneObject ToObject(SceneObjectDto dto) => new(
+        ObjectId.Parse(RequireString(dto.Id, "object id")),
+        ParseKind(dto.Kind),
+        RequireString(dto.Name, "object name"),
+        dto.X,
+        dto.Y,
+        dto.Width,
+        dto.Height,
+        dto.RotationDegrees,
+        RequireString(dto.FillColor, "object fill color"),
+        RequireString(dto.StrokeColor, "object stroke color"),
+        dto.StrokeWidth,
+        dto.Visible,
+        dto.Locked)
+    {
+        Sublayer = dto.Sublayer,
+        GroupId = dto.GroupId is null ? null : Guid.ParseExact(dto.GroupId, "D"),
+        ObjectOpacity = dto.ObjectOpacity,
+        Stamp = dto.Stamp is { } stamp
+            ? new StampStyle(RequireString(stamp.AssetSha256, "stamp asset hash"))
+            {
+                FlipHorizontal = stamp.FlipHorizontal,
+                FlipVertical = stamp.FlipVertical,
+                Blend = stamp.Blend,
+                Blur = stamp.Blur,
+                ShadowOffsetX = stamp.ShadowOffsetX,
+                ShadowOffsetY = stamp.ShadowOffsetY,
+                ShadowBlur = stamp.ShadowBlur,
+                ShadowOpacity = stamp.ShadowOpacity,
+                Hue = stamp.Hue,
+                Saturation = stamp.Saturation,
+                Brightness = stamp.Brightness,
+                Contrast = stamp.Contrast,
+            }
+            : null,
+    };
+
+    private static List<TileDto> ToTileDtos(TileMap tiles) =>
+        [.. tiles.Keys.OrderBy(k => k.Y).ThenBy(k => k.X).Select(key => new TileDto
+        {
+            X = key.X,
+            Y = key.Y,
+            Sha256 = Sha256Hex(tiles.TryGet(key)!),
+        })];
+
+    private static IEnumerable<(string Name, byte[] Bytes)> EnumerateTileEntries(MapDocument document)
+    {
+        foreach (var layer in document.Layers)
+        {
+            if (layer is IRasterContentLayer raster)
+            {
+                foreach (var key in raster.ContentTiles.Keys)
+                {
+                    yield return (
+                        TileEntryName(MapProjectFormat.RasterPrefix, layer.Id.ToString(), key.X, key.Y),
+                        raster.ContentTiles.TryGet(key)!);
+                }
+            }
+
+            if (layer.Mask is { } mask)
+            {
+                foreach (var key in mask.Tiles.Keys)
+                {
+                    yield return (
+                        TileEntryName(MapProjectFormat.MaskPrefix, layer.Id.ToString(), key.X, key.Y),
+                        mask.Tiles.TryGet(key)!);
+                }
+            }
+        }
+    }
+
+    private static TileMap ToTileMap(
+        IEnumerable<TileDto> tiles,
+        string prefix,
+        LayerId layerId,
+        int bytesPerPixel,
+        IReadOnlyDictionary<string, byte[]> entries)
+    {
+        var map = TileMap.Empty(bytesPerPixel);
+        return map.WithMany(tiles.Select(tile => new KeyValuePair<TileKey, byte[]?>(
+            new TileKey(tile.X, tile.Y),
+            entries[TileEntryName(prefix, layerId.ToString(), tile.X, tile.Y)])));
+    }
+
+    private static string TileEntryName(string prefix, string layerId, int x, int y) =>
+        $"{prefix}{layerId}/{x}_{y}.bin";
+
+    private static string RequireCanonicalLayerId(string? value)
+    {
+        try
+        {
+            return LayerId.Parse(RequireString(value, "layer id")).ToString();
+        }
+        catch (FormatException ex)
+        {
+            throw new MapProjectCorruptedException("scene.json has an invalid layer id.", ex);
+        }
+    }
+
+    private static int ObjectCount(MapLayer layer) =>
+        layer is ObjectLayer objectLayer ? objectLayer.Objects.Count : 0;
+
+    private static int TileCount(MapLayer layer) =>
+        layer is IRasterContentLayer raster ? raster.ContentTiles.TileCount : 0;
+
+    private static LayerId LegacyBaseLayerId(string documentId)
+    {
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes("map/base-color/" + documentId));
+        return new LayerId(new Guid(hash.AsSpan(0, 16)));
     }
 
     private static string RequireString(string? value, string what) =>

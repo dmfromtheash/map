@@ -1,5 +1,7 @@
 using System;
 using Avalonia;
+using Avalonia.Automation;
+using Avalonia.Automation.Peers;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Media;
@@ -23,22 +25,31 @@ public sealed class MapCanvasControl : Control
     private Point? _lastPointer;
     private (double X, double Y)? _dragStartWorld;
     private bool _isPanning;
+    private bool _isStroking;
+    private readonly TileImageCache _tileCache = new(512);
 
     public MapCanvasControl()
     {
         Focusable = true;
         ClipToBounds = true;
         Name = "CanvasControl";
+        AutomationProperties.SetAutomationId(this, "MapCanvas");
+        AutomationProperties.SetName(this, "Холст карты");
+    }
+
+    protected override AutomationPeer OnCreateAutomationPeer() => new MapCanvasAutomationPeer(this);
+
+    private sealed class MapCanvasAutomationPeer(MapCanvasControl owner) : ControlAutomationPeer(owner)
+    {
+        protected override AutomationControlType GetAutomationControlTypeCore() => AutomationControlType.Pane;
+        protected override string GetClassNameCore() => nameof(MapCanvasControl);
     }
 
     public event EventHandler? ViewportChanged;
 
     public void Attach(EditorViewModel editor)
     {
-        if (_editor is not null)
-        {
-            _editor.SceneChanged -= OnSceneChanged;
-        }
+        _editor?.SceneChanged -= OnSceneChanged;
 
         _editor = editor;
         _editor.SceneChanged += OnSceneChanged;
@@ -58,10 +69,12 @@ public sealed class MapCanvasControl : Control
         }
 
         _editor.Session.Viewport.Resize(Bounds.Width, Bounds.Height);
-        context.Custom(new SceneDrawOperation(new Rect(0, 0, Bounds.Width, Bounds.Height), _editor));
+        context.Custom(new SceneDrawOperation(
+            new Rect(0, 0, Bounds.Width, Bounds.Height), _editor, _tileCache));
     }
 
-    private sealed class SceneDrawOperation(Rect bounds, EditorViewModel editor) : ICustomDrawOperation
+    private sealed class SceneDrawOperation(
+        Rect bounds, EditorViewModel editor, TileImageCache tileCache) : ICustomDrawOperation
     {
         public Rect Bounds { get; } = bounds;
 
@@ -81,6 +94,8 @@ public sealed class MapCanvasControl : Control
             using var lease = feature.Lease();
             var canvas = lease.SkCanvas;
             var viewport = editor.Session.Viewport;
+            var (X, Y) = viewport.ScreenToWorld(0, 0);
+            var bottomRight = viewport.ScreenToWorld(Bounds.Width, Bounds.Height);
 
             canvas.Save();
             canvas.ClipRect(new SKRect(0, 0, (float)Bounds.Width, (float)Bounds.Height));
@@ -93,6 +108,11 @@ public sealed class MapCanvasControl : Control
             {
                 SelectedObjectId = editor.Session.SelectedObjectId,
                 ViewScale = viewport.Scale,
+                VisibleWorld = new Map.Core.Documents.WorldBounds(
+                    X, Y, bottomRight.X, bottomRight.Y),
+                TileCache = tileCache,
+                Preview = editor.StrokePreview,
+                MaskEditLayerId = editor.MaskEditLayerId,
             });
 
             canvas.Restore();
@@ -133,6 +153,19 @@ public sealed class MapCanvasControl : Control
 
         var world = _editor.Session.Viewport.ScreenToWorld(position.X, position.Y);
 
+        if (_editor.ActiveTool is EditorTool.Brush or EditorTool.Mask)
+        {
+            _isStroking = _editor.BeginStroke(world.X, world.Y);
+            if (_isStroking)
+            {
+                e.Pointer.Capture(this);
+            }
+
+            e.Handled = true;
+            InvalidateVisual();
+            return;
+        }
+
         // One entry point: a gizmo handle grab resizes/rotates the current selection; otherwise
         // the press selects and, on an editable object, starts a move.
         if (_editor.BeginCanvasInteraction(world.X, world.Y, _editor.Session.Viewport.Scale))
@@ -165,17 +198,32 @@ public sealed class MapCanvasControl : Control
             return;
         }
 
-        var worldNow = _editor.Session.Viewport.ScreenToWorld(position.X, position.Y);
+        var (X, Y) = _editor.Session.Viewport.ScreenToWorld(position.X, position.Y);
+
+        if (_isStroking)
+        {
+            _editor.ContinueStroke(X, Y);
+            Cursor = new Cursor(StandardCursorType.Cross);
+            e.Handled = true;
+            return;
+        }
 
         if (_dragStartWorld is not null)
         {
-            _editor.UpdateDragTo(worldNow.X, worldNow.Y);
+            _editor.UpdateDragTo(X, Y);
             e.Handled = true;
+        }
+
+
+        if (_isStroking)
+        {
+            _isStroking = false;
+            _editor.EndStroke();
         }
         else
         {
             // Pointer feedback over the gizmo: resize arrows on the handles, a hand on rotate.
-            Cursor = _editor.HitHandle(worldNow.X, worldNow.Y, _editor.Session.Viewport.Scale) switch
+            Cursor = _editor.HitHandle(X, Y, _editor.Session.Viewport.Scale) switch
             {
                 HandleKind.Rotate => new Cursor(StandardCursorType.Hand),
                 HandleKind.TopLeft => new Cursor(StandardCursorType.TopLeftCorner),

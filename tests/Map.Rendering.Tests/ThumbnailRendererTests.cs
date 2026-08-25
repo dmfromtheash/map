@@ -9,7 +9,10 @@ public class ThumbnailRendererTests
     private static MapDocument Document(params SceneObject[] objects) => new(
         DocumentId.New(), "map", DateTimeOffset.UnixEpoch,
         new CanvasDefinition(1600, 900, "px", "#FF204060"),
-        [new Layer(LayerId.New(), "objects", true, false, 1.0, objects)]);
+        [
+            new BaseColorLayer(LayerId.New(), "background", true, false, 1.0, "#FF204060"),
+            new ObjectLayer(LayerId.New(), "objects", true, false, 1.0, objects),
+        ]);
 
     private static SceneObject Rectangle(string fill = "#FFCC3344") => new(
         ObjectId.New(), SceneObjectKind.Rectangle, "rect",

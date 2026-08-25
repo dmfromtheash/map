@@ -31,22 +31,77 @@ public static class SceneGeometry
     }
 
     /// <summary>
+    /// World-space bounding box including rotation and everything that can spill past the shape:
+    /// stroke half-width, blur and drop shadow of a stamp. Culling that ignored the overhang used
+    /// to clip strokes at the viewport edge (Stage 1 Fix 01), so the padding stays here, in the
+    /// one place both the renderer and the spatial index read it from.
+    /// </summary>
+    public static WorldBounds BoundsOf(SceneObject sceneObject)
+    {
+        var halfW = sceneObject.Width / 2;
+        var halfH = sceneObject.Height / 2;
+        var centerX = sceneObject.X + halfW;
+        var centerY = sceneObject.Y + halfH;
+
+        var radians = sceneObject.RotationDegrees * Math.PI / 180.0;
+        var cos = Math.Abs(Math.Cos(radians));
+        var sin = Math.Abs(Math.Sin(radians));
+
+        var extentX = (halfW * cos) + (halfH * sin);
+        var extentY = (halfW * sin) + (halfH * cos);
+
+        var pad = sceneObject.StrokeWidth / 2;
+        var shadowX = 0.0;
+        var shadowY = 0.0;
+        if (sceneObject.Stamp is { } stamp)
+        {
+            pad += stamp.Blur * 3;
+            if (stamp.ShadowOpacity > 0)
+            {
+                shadowX = Math.Abs(stamp.ShadowOffsetX) + (stamp.ShadowBlur * 3);
+                shadowY = Math.Abs(stamp.ShadowOffsetY) + (stamp.ShadowBlur * 3);
+            }
+        }
+
+        return new WorldBounds(
+            centerX - extentX - pad - shadowX,
+            centerY - extentY - pad - shadowY,
+            centerX + extentX + pad + shadowX,
+            centerY + extentY + pad + shadowY);
+    }
+
+    /// <summary>
+    /// Objects of one layer in draw order: sublayer band first (low draws below), list order
+    /// inside a band. Stable, so an edit that does not touch the sublayer keeps the z-order.
+    /// </summary>
+    public static IReadOnlyList<SceneObject> InDrawOrder(ObjectLayer layer)
+    {
+        ArgumentNullException.ThrowIfNull(layer);
+        return layer.Objects.All(o => o.Sublayer == 0)
+            ? layer.Objects
+            : [.. layer.Objects.OrderBy(o => o.Sublayer)];
+    }
+
+    /// <summary>
     /// Topmost visible object under the point, or null. Hidden objects are not pickable; locked
     /// objects ARE pickable (the user must be able to see why nothing moves) but not editable.
+    /// Only visible object layers take part.
     /// </summary>
     public static SceneObject? HitTest(MapDocument document, double worldX, double worldY)
     {
+        ArgumentNullException.ThrowIfNull(document);
+
         for (var l = document.Layers.Count - 1; l >= 0; l--)
         {
-            var layer = document.Layers[l];
-            if (!layer.Visible)
+            if (document.Layers[l] is not ObjectLayer layer || !layer.Visible)
             {
                 continue;
             }
 
-            for (var o = layer.Objects.Count - 1; o >= 0; o--)
+            var ordered = InDrawOrder(layer);
+            for (var o = ordered.Count - 1; o >= 0; o--)
             {
-                var candidate = layer.Objects[o];
+                var candidate = ordered[o];
                 if (candidate.Visible && Contains(candidate, worldX, worldY))
                 {
                     return candidate;
@@ -56,4 +111,15 @@ public static class SceneGeometry
 
         return null;
     }
+
+    /// <summary>Every object of the document that shares the group id, across layers.</summary>
+    public static IReadOnlyList<SceneObject> GroupMembers(MapDocument document, Guid groupId) =>
+        [.. document.Layers.OfType<ObjectLayer>().SelectMany(l => l.Objects).Where(o => o.GroupId == groupId)];
+}
+
+/// <summary>Axis-aligned world rectangle used by culling and the spatial index.</summary>
+public readonly record struct WorldBounds(double Left, double Top, double Right, double Bottom)
+{
+    public bool Intersects(WorldBounds other) =>
+        Left <= other.Right && Right >= other.Left && Top <= other.Bottom && Bottom >= other.Top;
 }

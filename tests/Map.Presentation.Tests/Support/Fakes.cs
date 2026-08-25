@@ -47,7 +47,7 @@ public sealed class FakeRecentMaps : IRecentMaps
 {
     public List<RecentMapItem> Items { get; } = [];
 
-    public IReadOnlyList<RecentMapItem> Load() => Items.ToList();
+    public IReadOnlyList<RecentMapItem> Load() => [.. Items];
 
     public void Touch(string path, Guid documentId, string title, DateTimeOffset modifiedUtc)
     {
@@ -99,7 +99,7 @@ public sealed class FakeProjectStore : IProjectStore
         Saved[path] = (document, metadata, previewPng);
     }
 
-    public IReadOnlyList<RecoveryCandidate> FindRecoveryCandidates() => Candidates.ToList();
+    public IReadOnlyList<RecoveryCandidate> FindRecoveryCandidates() => [.. Candidates];
 
     public OpenedProject RestoreRecovery(RecoveryCandidate candidate) => Open(candidate.CandidatePath);
 
@@ -111,5 +111,8 @@ public static class TestData
     public static MapDocument Document(string title = "map") => new(
         DocumentId.New(), title, DateTimeOffset.UnixEpoch,
         new CanvasDefinition(1920, 1080, "px", "#FF1E2430"),
-        [new Layer(LayerId.New(), "Объекты", true, false, 1.0, [])]);
+        [
+            new BaseColorLayer(LayerId.New(), "Фон", true, false, 1.0, "#FF1E2430"),
+            new ObjectLayer(LayerId.New(), "Объекты", true, false, 1.0, []),
+        ]);
 }

@@ -21,16 +21,16 @@ public class ProcessKillGateTests
         var targetPath = workspace.File("killed" + MapProjectFormat.Extension);
         var journalRoot = Path.Combine(workspace.Root, "journal");
 
-        var run = RunKillHost(targetPath, journalRoot);
-        Assert.NotEqual(0, run.ExitCode);
-        Assert.Contains("BASELINE", run.StdOut);
-        Assert.Contains("READY", run.StdOut);
-        Assert.DoesNotContain("ERROR-NOT-KILLED", run.StdOut);
+        var (ExitCode, StdOut) = RunKillHost(targetPath, journalRoot);
+        Assert.NotEqual(0, ExitCode);
+        Assert.Contains("BASELINE", StdOut);
+        Assert.Contains("READY", StdOut);
+        Assert.DoesNotContain("ERROR-NOT-KILLED", StdOut);
 
         // 1. The old target survived the kill, opens, and is semantically the old version.
         var survivor = MapProjectStore.Open(targetPath);
         Assert.Equal("old", survivor.Document.Title);
-        Assert.Equal(100, survivor.Document.Layers[0].Objects[0].X);
+        Assert.Equal(100, survivor.Document.Layers.OfType<ObjectLayer>().Single().Objects[0].X);
 
         // 2. The journal reads without crashing and records the durable temp.
         var journal = new RecoveryJournal(journalRoot);
@@ -42,10 +42,10 @@ public class ProcessKillGateTests
         // 3. The candidate itself opens and is semantically the NEW version.
         var candidateProject = MapProjectStore.Open(record.TempPath);
         Assert.Equal("new", candidateProject.Document.Title);
-        Assert.Equal(400, candidateProject.Document.Layers[0].Objects[0].X);
+        Assert.Equal(400, candidateProject.Document.Layers.OfType<ObjectLayer>().Single().Objects[0].X);
         Assert.Equal(
-            survivor.Document.Layers[0].Objects[0].Id,
-            candidateProject.Document.Layers[0].Objects[0].Id); // stable ids across versions
+            survivor.Document.Layers.OfType<ObjectLayer>().Single().Objects[0].Id,
+            candidateProject.Document.Layers.OfType<ObjectLayer>().Single().Objects[0].Id); // stable ids across versions
 
         // 4. The recovery API surfaces the new version without destroying the old one.
         var oldBytes = File.ReadAllBytes(targetPath);

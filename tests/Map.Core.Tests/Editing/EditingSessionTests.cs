@@ -15,7 +15,10 @@ public class EditingSessionTests
         var document = new MapDocument(
             DocumentId.New(), "map", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(1024, 768, "px", "#FFFFFFFF"),
-            [new Layer(layerId, "objects", true, false, 1.0, [])]);
+            [
+                new BaseColorLayer(LayerId.New(), "background", true, false, 1.0, "#FFFFFFFF"),
+                new ObjectLayer(layerId, "objects", true, false, 1.0, []),
+            ]);
 
         return (new EditingSession(document), layerId);
     }
@@ -27,7 +30,7 @@ public class EditingSessionTests
         var rectangle = Rectangle();
 
         session.Execute(new AddObjectCommand(layerId, rectangle));
-        Assert.Single(session.Document.Layers[0].Objects);
+        Assert.Single(((ObjectLayer)session.Document.Layers[1]).Objects);
         Assert.True(session.IsDirty);
 
         var moved = new SceneObject(
@@ -37,20 +40,20 @@ public class EditingSessionTests
             rectangle.Visible, rectangle.Locked);
 
         session.Execute(new TransformObjectCommand(rectangle, moved));
-        var after = session.Document.Layers[0].Objects[0];
+        var after = ((ObjectLayer)session.Document.Layers[1]).Objects[0];
         Assert.Equal(250, after.X);
         Assert.Equal(45, after.RotationDegrees);
         Assert.Equal(rectangle.Id, after.Id);
 
         Assert.True(session.Undo());
-        Assert.Equal(100, session.Document.Layers[0].Objects[0].X);
+        Assert.Equal(100, ((ObjectLayer)session.Document.Layers[1]).Objects[0].X);
 
         Assert.True(session.Undo());
-        Assert.Empty(session.Document.Layers[0].Objects);
+        Assert.Empty(((ObjectLayer)session.Document.Layers[1]).Objects);
 
         Assert.True(session.Redo());
         Assert.True(session.Redo());
-        Assert.Equal(250, session.Document.Layers[0].Objects[0].X);
+        Assert.Equal(250, ((ObjectLayer)session.Document.Layers[1]).Objects[0].X);
         Assert.Equal(2, session.UndoDepth);
         Assert.Equal(0, session.RedoDepth);
     }
@@ -73,7 +76,7 @@ public class EditingSessionTests
 
         Assert.Equal(2, session.UndoDepth);
         Assert.True(session.Undo());
-        Assert.Equal(100, session.Document.Layers[0].Objects[0].X); // one undo reverts the whole drag
+        Assert.Equal(100, ((ObjectLayer)session.Document.Layers[1]).Objects[0].X); // one undo reverts the whole drag
     }
 
     [Fact]
@@ -115,8 +118,8 @@ public class EditingSessionTests
 
         session.Execute(new AddObjectCommand(layerId, Rectangle()));
 
-        Assert.Empty(before.Layers[0].Objects);
-        Assert.Single(session.Document.Layers[0].Objects);
+        Assert.Empty(((ObjectLayer)before.Layers[1]).Objects);
+        Assert.Single(((ObjectLayer)session.Document.Layers[1]).Objects);
         Assert.NotSame(before, session.Document);
     }
 }
@@ -133,12 +136,12 @@ public class ViewportTests
         viewport.Resize(800, 600);
         viewport.Set(123.5, -44.25, 0.7);
 
-        var before = viewport.ScreenToWorld(sx, sy);
+        var (X, Y) = viewport.ScreenToWorld(sx, sy);
         viewport.ZoomAt(sx, sy, factor);
         var after = viewport.ScreenToWorld(sx, sy);
 
-        Assert.Equal(before.X, after.X, 9);
-        Assert.Equal(before.Y, after.Y, 9);
+        Assert.Equal(X, after.X, 9);
+        Assert.Equal(Y, after.Y, 9);
     }
 
     [Fact]
@@ -184,9 +187,9 @@ public class ViewportTests
 
         // Scale limited by height: 500/2000*0.96 = 0.24; canvas horizontally centred.
         Assert.Equal(0.24, viewport.Scale, 9);
-        var centre = viewport.ScreenToWorld(500, 250);
-        Assert.Equal(1000, centre.X, 6);
-        Assert.Equal(1000, centre.Y, 6);
+        var (X, Y) = viewport.ScreenToWorld(500, 250);
+        Assert.Equal(1000, X, 6);
+        Assert.Equal(1000, Y, 6);
     }
 }
 
@@ -195,7 +198,10 @@ public class HitTestTests
     private static MapDocument DocumentWith(params SceneObject[] objects) => new(
         DocumentId.New(), "map", DateTimeOffset.UnixEpoch,
         new CanvasDefinition(1024, 768, "px", "#FFFFFFFF"),
-        [new Layer(LayerId.New(), "objects", true, false, 1.0, objects)]);
+        [
+            new BaseColorLayer(LayerId.New(), "background", true, false, 1.0, "#FFFFFFFF"),
+            new ObjectLayer(LayerId.New(), "objects", true, false, 1.0, objects),
+        ]);
 
     [Fact]
     public void Topmost_visible_object_wins_and_hidden_objects_are_not_pickable()

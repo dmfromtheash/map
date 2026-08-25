@@ -1,5 +1,6 @@
 using System;
 using System.ComponentModel;
+using System.Linq;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Layout;
@@ -29,6 +30,10 @@ public sealed class EditorView : UserControl
     private readonly TextBox _widthBox = NumberBox("WidthBox");
     private readonly TextBox _heightBox = NumberBox("HeightBox");
     private readonly TextBox _rotationBox = NumberBox("RotationBox");
+    private readonly StackPanel _layerList = new() { Spacing = 4 };
+    private readonly StackPanel _objectList = new() { Spacing = 4 };
+    private readonly TextBox _layerName = new() { Name = "LayerNameBox", PlaceholderText = "Имя слоя" };
+    private readonly TextBox _objectSearch = new() { Name = "ObjectSearchBox", PlaceholderText = "Поиск объектов" };
 
     public EditorView(EditorViewModel editor, Func<System.Threading.Tasks.Task> requestBack)
     {
@@ -49,6 +54,35 @@ public sealed class EditorView : UserControl
             return button;
         }
 
+        var brushSize = new Slider
+        {
+            Name = "BrushSizeSlider",
+            Minimum = 1,
+            Maximum = 256,
+            Value = 24,
+            Width = 110,
+        };
+        brushSize.ValueChanged += (_, _) =>
+            _editor.BrushSettings = _editor.BrushSettings with { Radius = brushSize.Value };
+
+        var brushOpacity = new Slider
+        {
+            Name = "BrushOpacitySlider",
+            Minimum = 0.05,
+            Maximum = 1,
+            Value = 1,
+            Width = 80,
+        };
+        brushOpacity.ValueChanged += (_, _) =>
+            _editor.BrushSettings = _editor.BrushSettings with { Opacity = brushOpacity.Value };
+
+        var eraser = Tool("EraserButton", "Ластик: выкл", () => { });
+        eraser.Click += (_, _) =>
+        {
+            _editor.BrushSettings = _editor.BrushSettings with { Eraser = !_editor.BrushSettings.Eraser };
+            eraser.Content = _editor.BrushSettings.Eraser ? "Ластик: вкл" : "Ластик: выкл";
+        };
+
         var toolbar = new StackPanel
         {
             Orientation = Orientation.Horizontal,
@@ -57,6 +91,17 @@ public sealed class EditorView : UserControl
             Children =
             {
                 AsyncTool("BackButton", "← Библиотека", requestBack),
+                new Separator { Width = 12 },
+                Tool("SelectToolButton", "Выбор", () => _editor.ActiveTool = EditorTool.Select),
+                Tool("BrushToolButton", "Кисть", () => _editor.ActiveTool = EditorTool.Brush),
+                Tool("MaskToolButton", "Маска", () => _editor.ActiveTool = EditorTool.Mask),
+                brushSize,
+                brushOpacity,
+                eraser,
+                Tool("MaskModeButton", "Маска +/−", () =>
+                    _editor.MaskMode = _editor.MaskMode == Map.Core.Editing.MaskPaintMode.Hide
+                        ? Map.Core.Editing.MaskPaintMode.Reveal
+                        : Map.Core.Editing.MaskPaintMode.Hide),
                 new Separator { Width = 12 },
                 Tool("AddRectangleButton", "Прямоугольник", () => _editor.AddObject(SceneObjectKind.Rectangle)),
                 Tool("AddEllipseButton", "Эллипс", () => _editor.AddObject(SceneObjectKind.Ellipse)),
@@ -70,7 +115,7 @@ public sealed class EditorView : UserControl
             },
         };
 
-        var inspector = BuildInspector();
+        var rightPanel = BuildRightPanel();
 
         var statusBar = new StackPanel
         {
@@ -98,7 +143,7 @@ public sealed class EditorView : UserControl
                 {
                     Width = 260,
                     Background = new SolidColorBrush(Color.FromRgb(0x23, 0x27, 0x30)),
-                    Child = inspector,
+                    Child = rightPanel,
                 }, Dock.Right),
                 _canvas,
             },
@@ -107,19 +152,100 @@ public sealed class EditorView : UserControl
         _canvas.Attach(_editor);
         _canvas.ViewportChanged += (_, _) => _viewportStatus.Text = _editor.ViewportStatus;
         _editor.PropertyChanged += OnEditorChanged;
-        _editor.SceneChanged += (_, _) => Dispatcher.UIThread.Post(SyncStatus);
+        _editor.SceneChanged += (_, _) => Dispatcher.UIThread.Post(() =>
+        {
+            SyncStatus();
+            SyncSidePanels();
+        });
+        _objectSearch.TextChanged += (_, _) => SyncObjectList();
 
         SyncStatus();
         SyncInspector();
+        SyncSidePanels();
 
         AttachedToVisualTree += (_, _) => Dispatcher.UIThread.Post(_canvas.FitToCanvas, DispatcherPriority.Loaded);
     }
 
     public EditorViewModel Editor => _editor;
 
+    private Control BuildRightPanel()
+    {
+        Button ActionButton(string name, string text, Action action)
+        {
+            var button = new Button { Name = name, Content = text, Margin = new Thickness(2) };
+            button.Click += (_, _) => action();
+            return button;
+        }
+
+        var rename = ActionButton("RenameLayerButton", "Переименовать", () =>
+            _editor.RenameActiveLayer(_layerName.Text ?? ""));
+
+        var layerActions = new WrapPanel
+        {
+            Children =
+            {
+                ActionButton("AddObjectLayerButton", "+ Объекты", _editor.AddObjectLayer),
+                ActionButton("AddBrushLayerButton", "+ Кисть", _editor.AddBrushLayer),
+                ActionButton("LayerUpButton", "↑", () => _editor.ReorderActiveLayer(true)),
+                ActionButton("LayerDownButton", "↓", () => _editor.ReorderActiveLayer(false)),
+                ActionButton("LayerVisibilityButton", "Показать/скрыть", _editor.ToggleActiveLayerVisibility),
+                ActionButton("LayerLockButton", "Замок", _editor.ToggleActiveLayerLock),
+                ActionButton("LayerMaskButton", "Маска", _editor.ToggleActiveMask),
+                ActionButton("DuplicateLayerButton", "Копия", _editor.DuplicateActiveLayer),
+                ActionButton("DeleteLayerButton", "Удалить", _editor.DeleteActiveLayer),
+            },
+        };
+
+        var layers = new StackPanel
+        {
+            Margin = new Thickness(10),
+            Spacing = 6,
+            Children =
+            {
+                new TextBlock { Text = "Слои карты", FontWeight = FontWeight.SemiBold },
+                new ScrollViewer { MaxHeight = 420, Content = _layerList },
+                _layerName,
+                rename,
+                layerActions,
+            },
+        };
+
+        var objects = new StackPanel
+        {
+            Margin = new Thickness(10),
+            Spacing = 6,
+            Children =
+            {
+                _objectSearch,
+                new ScrollViewer { MaxHeight = 220, Content = _objectList },
+                new WrapPanel
+                {
+                    Children =
+                    {
+                        ActionButton("ObjectVisibilityButton", "Показать/скрыть", _editor.ToggleSelectedObjectVisibility),
+                        ActionButton("ObjectLockButton", "Замок", _editor.ToggleSelectedObjectLock),
+                        ActionButton("DeleteObjectButton", "Удалить", _editor.DeleteSelectedObject),
+                    },
+                },
+                new Separator(),
+                BuildInspector(),
+            },
+        };
+
+        return new TabControl
+        {
+            Name = "EditorSideTabs",
+            ItemsSource = new[]
+            {
+                new TabItem { Header = "Слои", Content = layers },
+                new TabItem { Header = "Объекты", Content = objects },
+            },
+        };
+    }
+
     private Control BuildInspector()
     {
-        Control Row(string label, TextBox box)
+        static Control Row(string label, TextBox box)
         {
             return new DockPanel
             {
@@ -214,6 +340,66 @@ public sealed class EditorView : UserControl
         _widthBox.IsEnabled = editable;
         _heightBox.IsEnabled = editable;
         _rotationBox.IsEnabled = editable;
+    }
+
+    private void SyncSidePanels()
+    {
+        _layerList.Children.Clear();
+        foreach (var layer in _editor.Layers.Reverse())
+        {
+            var kind = layer switch
+            {
+                BaseColorLayer => "Фон",
+                ObjectLayer => "Объекты",
+                BrushLayer => "Кисть",
+                _ => layer.GetType().Name,
+            };
+            var active = layer.Id == _editor.ActiveLayerId ? "▶ " : "";
+            var state = $"{(layer.Visible ? "◉" : "○")} {(layer.Locked ? "🔒" : "")} " +
+                        $"{(layer.Mask is null ? "" : layer.Mask.Enabled ? "М" : "М×")}";
+            var button = new Button
+            {
+                Name = "Layer_" + layer.Id,
+                HorizontalContentAlignment = HorizontalAlignment.Left,
+                Content = $"{active}{state} {layer.Name} · {kind}",
+            };
+            button.Click += (_, _) =>
+            {
+                _editor.SelectLayer(layer.Id);
+                _layerName.Text = layer.Name;
+                SyncSidePanels();
+            };
+            _layerList.Children.Add(button);
+        }
+
+        _layerName.Text = _editor.ActiveLayer?.Name ?? "";
+        SyncObjectList();
+    }
+
+    private void SyncObjectList()
+    {
+        var query = (_objectSearch.Text ?? "").Trim();
+        _objectList.Children.Clear();
+        foreach (var sceneObject in _editor.Layers.OfType<ObjectLayer>()
+                     .SelectMany(layer => layer.Objects)
+                     .Where(item => query.Length == 0
+                         || item.Name.Contains(query, StringComparison.OrdinalIgnoreCase)))
+        {
+            var selected = sceneObject.Id == _editor.Session.SelectedObjectId ? "▶ " : "";
+            var button = new Button
+            {
+                Name = "Object_" + sceneObject.Id,
+                HorizontalContentAlignment = HorizontalAlignment.Left,
+                Content = $"{selected}{(sceneObject.Visible ? "◉" : "○")} " +
+                          $"{(sceneObject.Locked ? "🔒 " : "")}{sceneObject.Name} · {sceneObject.Kind}",
+            };
+            button.Click += (_, _) =>
+            {
+                _editor.SelectObject(sceneObject.Id);
+                SyncObjectList();
+            };
+            _objectList.Children.Add(button);
+        }
     }
 
     public MapCanvasControl Canvas => _canvas;

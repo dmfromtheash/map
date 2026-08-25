@@ -1,4 +1,7 @@
 <Solution>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/Map.Benchmarks/Map.Benchmarks.csproj" />
+  </Folder>
   <Folder Name="/src/">
     <Project Path="src/Map.App/Map.App.csproj" />
     <Project Path="src/Map.Core/Map.Core.csproj" />

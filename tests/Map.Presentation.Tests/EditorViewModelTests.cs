@@ -32,7 +32,7 @@ public class EditorViewModelTests
 
         editor.AddObject(SceneObjectKind.Rectangle);
         Assert.Equal(SaveState.Unsaved, editor.SaveState);
-        Assert.Single(editor.Session.Document.Layers[0].Objects);
+        Assert.Single(editor.Session.Document.Layers.OfType<ObjectLayer>().Single().Objects);
         Assert.NotNull(editor.Session.SelectedObjectId);
     }
 
@@ -50,13 +50,13 @@ public class EditorViewModelTests
         Assert.False(editor.Session.IsDirty);
         Assert.Equal(@"C:\maps\one.mapproj", editor.DocumentPath);
 
-        var stored = store.Saved[@"C:\maps\one.mapproj"];
-        Assert.Equal(editor.Session.Document.Id, stored.Document.Id);
+        var (Document, Metadata, Preview) = store.Saved[@"C:\maps\one.mapproj"];
+        Assert.Equal(editor.Session.Document.Id, Document.Id);
 
         // The preview is a real PNG from the renderer, not placeholder bytes.
-        Assert.True(stored.Preview.Length > 100);
-        Assert.Equal(0x89, stored.Preview[0]);
-        Assert.Equal((byte)'P', stored.Preview[1]);
+        Assert.True(Preview.Length > 100);
+        Assert.Equal(0x89, Preview[0]);
+        Assert.Equal((byte)'P', Preview[1]);
 
         Assert.Single(recent.Items);
         Assert.Equal(@"C:\maps\one.mapproj", recent.Items[0].Path);
@@ -200,7 +200,8 @@ public class EditorViewModelTests
         editor.UpdateDrag(50, 50);
 
         Assert.Equal(before.X, editor.Session.SelectedObject!.X); // snapshot untouched
-        var previewObject = editor.RenderDocument.Layers[0].Objects.Single(o => o.Id == before.Id);
+        var previewObject = editor.RenderDocument.Layers.OfType<ObjectLayer>()
+            .Single().Objects.Single(o => o.Id == before.Id);
         Assert.Equal(before.X + 50, previewObject.X); // but the canvas sees the preview
 
         editor.CancelDrag();
@@ -216,13 +217,13 @@ public class EditorViewModelTests
         var depth = editor.Session.UndoDepth;
 
         // Grab the bottom-right handle exactly where the gizmo puts it, then drag outward.
-        var handle = Map.Core.Editing.SelectionHandles
+        var (Kind, X, Y) = Map.Core.Editing.SelectionHandles
             .Compute(before, EditorViewModel.RotationHandleOffset(1.0))
             .Single(h => h.Kind == Map.Core.Editing.HandleKind.BottomRight);
 
-        Assert.True(editor.BeginCanvasInteraction(handle.X, handle.Y, 1.0));
-        editor.UpdateDragTo(handle.X + 50, handle.Y + 30);
-        editor.UpdateDragTo(handle.X + 100, handle.Y + 60); // many previews...
+        Assert.True(editor.BeginCanvasInteraction(X, Y, 1.0));
+        editor.UpdateDragTo(X + 50, Y + 30);
+        editor.UpdateDragTo(X + 100, Y + 60); // many previews...
         editor.EndDrag();                                    // ...one command
 
         Assert.Equal(depth + 1, editor.Session.UndoDepth);
@@ -244,11 +245,11 @@ public class EditorViewModelTests
         var before = editor.Session.SelectedObject!;
         var depth = editor.Session.UndoDepth;
 
-        var rotate = Map.Core.Editing.SelectionHandles
+        var (Kind, X, Y) = Map.Core.Editing.SelectionHandles
             .Compute(before, EditorViewModel.RotationHandleOffset(1.0))
             .Single(h => h.Kind == Map.Core.Editing.HandleKind.Rotate);
 
-        Assert.True(editor.BeginCanvasInteraction(rotate.X, rotate.Y, 1.0));
+        Assert.True(editor.BeginCanvasInteraction(X, Y, 1.0));
 
         // Drag the handle from above the centre to the right of the centre: +90 degrees.
         var centreX = before.X + (before.Width / 2);

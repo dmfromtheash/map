@@ -18,6 +18,7 @@ var journal = new RecoveryJournal(args[1]);
 
 var documentId = DocumentId.Parse("11111111-2222-3333-4444-555555555555");
 var layerId = LayerId.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+var baseLayerId = LayerId.Parse("bbbbbbbb-cccc-dddd-eeee-ffffffffffff");
 var objectId = ObjectId.Parse("01234567-89ab-cdef-0123-456789abcdef");
 var createdUtc = new DateTimeOffset(2026, 8, 25, 12, 0, 0, TimeSpan.Zero);
 
@@ -25,7 +26,8 @@ MapDocument Build(string title, double x) => new(
     documentId, title, createdUtc,
     new CanvasDefinition(1024, 768, "px", "#FF203040"),
     [
-        new Layer(layerId, "objects", visible: true, locked: false, opacity: 1.0,
+        new BaseColorLayer(baseLayerId, "background", true, false, 1.0, "#FF203040"),
+        new ObjectLayer(layerId, "objects", visible: true, locked: false, opacity: 1.0,
         [
             new SceneObject(
                 objectId, SceneObjectKind.Rectangle, "witness",

@@ -23,6 +23,13 @@ public enum DragMode
     Rotate,
 }
 
+public enum EditorTool
+{
+    Select,
+    Brush,
+    Mask,
+}
+
 /// <summary>Live drag preview: never part of the document and never part of history.</summary>
 public sealed record DragPreview(
     SceneObject Before,
@@ -56,6 +63,9 @@ public sealed class EditorViewModel : ViewModelBase
     private string _widthText = "";
     private string _heightText = "";
     private string _rotationText = "";
+    private LayerId? _activeLayerId;
+    private EditorTool _activeTool;
+    private RasterStrokeSession? _stroke;
 
     public EditorViewModel(
         MapDocument document,
@@ -86,6 +96,8 @@ public sealed class EditorViewModel : ViewModelBase
         }
 
         _saveState = Session.IsDirty ? SaveState.Unsaved : SaveState.Saved;
+        _activeLayerId = document.Layers.LastOrDefault(layer => layer is not BaseColorLayer)?.Id
+            ?? document.BaseColor.Id;
     }
 
     public EditingSession Session { get; }
@@ -134,6 +146,50 @@ public sealed class EditorViewModel : ViewModelBase
             ? $"Выбран {selected.Kind} {selected.Id}"
             : "Ничего не выбрано";
 
+    public IReadOnlyList<MapLayer> Layers => Session.Document.Layers;
+
+    public MapLayer? ActiveLayer =>
+        _activeLayerId is { } id ? Session.Document.FindLayer(id) : null;
+
+    public LayerId? ActiveLayerId => _activeLayerId;
+
+    public EditorTool ActiveTool
+    {
+        get => _activeTool;
+        set
+        {
+            if (_activeTool == value)
+            {
+                return;
+            }
+
+            CancelStroke();
+            _activeTool = value;
+            Raise();
+            Raise(nameof(MaskEditLayerId));
+            SceneChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    public BrushSettings BrushSettings { get; set; } = new();
+
+    public MaskPaintMode MaskMode { get; set; } = MaskPaintMode.Hide;
+
+    public StrokePreview? StrokePreview => _stroke is null || _activeLayerId is null
+        ? null
+        : new StrokePreview
+        {
+            LayerId = _activeLayerId.Value,
+            Coverage = _stroke.Coverage,
+            Color = _stroke.Settings.Color,
+            Opacity = _stroke.Settings.Opacity,
+            Eraser = _stroke.Settings.Eraser,
+            IsMask = ActiveTool == EditorTool.Mask,
+        };
+
+    public LayerId? MaskEditLayerId =>
+        ActiveTool == EditorTool.Mask && ActiveLayer?.Mask is not null ? _activeLayerId : null;
+
     // ---------------------------------------------------------------- editing
 
     public DragPreview? DragPreview
@@ -150,11 +206,18 @@ public sealed class EditorViewModel : ViewModelBase
 
     public void AddObject(SceneObjectKind kind)
     {
-        var layer = Session.Document.Layers[0];
+        var layer = ActiveLayer as ObjectLayer
+            ?? Session.Document.Layers.OfType<ObjectLayer>().LastOrDefault();
+        if (layer is null || layer.Locked || !layer.Visible)
+        {
+            StatusDetail = "Выберите видимый разблокированный слой объектов.";
+            return;
+        }
+
         var canvas = Session.Document.Canvas;
 
         // Stagger new objects so consecutive adds stay individually visible.
-        var offset = (Session.Document.Layers.Sum(l => l.Objects.Count) % 5) * 40;
+        var offset = (Session.Document.Layers.OfType<ObjectLayer>().Sum(l => l.Objects.Count) % 5) * 40;
         var width = Math.Min(240.0, canvas.Width / 4.0);
         var height = Math.Min(160.0, canvas.Height / 4.0);
 
@@ -173,12 +236,266 @@ public sealed class EditorViewModel : ViewModelBase
         AfterEdit();
     }
 
+    public void SelectLayer(LayerId id)
+    {
+        if (Session.Document.FindLayer(id) is null)
+        {
+            return;
+        }
+
+        _activeLayerId = id;
+        Raise(nameof(ActiveLayerId));
+        Raise(nameof(ActiveLayer));
+        Raise(nameof(MaskEditLayerId));
+        SceneChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void AddObjectLayer()
+    {
+        var layer = new ObjectLayer(LayerId.New(), "Объекты", true, false, 1.0, []);
+        Session.Execute(new AddLayerCommand(layer, _activeLayerId));
+        _activeLayerId = layer.Id;
+        AfterEdit();
+    }
+
+    public void AddBrushLayer()
+    {
+        var layer = BrushLayer.CreateEmpty(LayerId.New(), "Кисть");
+        Session.Execute(new AddLayerCommand(layer, _activeLayerId));
+        _activeLayerId = layer.Id;
+        AfterEdit();
+    }
+
+    public void RenameActiveLayer(string name)
+    {
+        if (ActiveLayer is not { } layer || string.IsNullOrWhiteSpace(name))
+        {
+            return;
+        }
+
+        Session.Execute(UpdateLayerCommand.Rename(layer, name.Trim()));
+        AfterEdit();
+    }
+
+    public void ToggleActiveLayerVisibility()
+    {
+        if (ActiveLayer is not { } layer)
+        {
+            return;
+        }
+
+        Session.Execute(UpdateLayerCommand.SetVisible(layer, !layer.Visible));
+        AfterEdit();
+    }
+
+    public void ToggleActiveLayerLock()
+    {
+        if (ActiveLayer is not { } layer)
+        {
+            return;
+        }
+
+        Session.Execute(UpdateLayerCommand.SetLocked(layer, !layer.Locked));
+        AfterEdit();
+    }
+
+    public void ReorderActiveLayer(bool up)
+    {
+        if (ActiveLayer is null)
+        {
+            return;
+        }
+
+        Session.Execute(new ReorderLayerCommand(ActiveLayer.Id, up));
+        AfterEdit();
+    }
+
+    public void DuplicateActiveLayer()
+    {
+        if (ActiveLayer is null or BaseColorLayer)
+        {
+            return;
+        }
+
+        var command = new DuplicateLayerCommand(ActiveLayer.Id);
+        Session.Execute(command);
+        _activeLayerId = command.CopyLayerId;
+        AfterEdit();
+    }
+
+    public void DeleteActiveLayer()
+    {
+        if (ActiveLayer is null or BaseColorLayer)
+        {
+            return;
+        }
+
+        var deleted = ActiveLayer.Id;
+        Session.Execute(new DeleteLayerCommand(Session.Document, deleted));
+        _activeLayerId = Session.Document.Layers[Session.Document.Layers.Count - 1].Id;
+        AfterEdit();
+    }
+
+    public void ToggleActiveMask()
+    {
+        if (ActiveLayer is null or BaseColorLayer)
+        {
+            return;
+        }
+
+        Session.Execute(ActiveLayer.Mask is null
+            ? UpdateMaskCommand.AddMask(ActiveLayer)
+            : UpdateMaskCommand.SetEnabled(ActiveLayer, !ActiveLayer.Mask.Enabled));
+        AfterEdit();
+        Raise(nameof(MaskEditLayerId));
+    }
+
+    public bool BeginStroke(double worldX, double worldY)
+    {
+        if (ActiveLayer is not { Visible: true, Locked: false } layer)
+        {
+            StatusDetail = "Активный слой скрыт или заблокирован.";
+            return false;
+        }
+
+        TileMap target;
+        if (ActiveTool == EditorTool.Brush && layer is BrushLayer brush)
+        {
+            target = brush.Tiles;
+        }
+        else if (ActiveTool == EditorTool.Mask && layer.Mask is { } mask && layer is not BaseColorLayer)
+        {
+            target = mask.Tiles;
+        }
+        else
+        {
+            StatusDetail = ActiveTool == EditorTool.Mask
+                ? "Сначала добавьте маску к выбранному слою."
+                : "Для рисования выберите слой кисти.";
+            return false;
+        }
+
+        _stroke = new RasterStrokeSession(target, BrushSettings);
+        _stroke.AddPoint(worldX, worldY);
+        SceneChanged?.Invoke(this, EventArgs.Empty);
+        return true;
+    }
+
+    public void ContinueStroke(double worldX, double worldY)
+    {
+        if (_stroke is null)
+        {
+            return;
+        }
+
+        _stroke.AddPoint(worldX, worldY);
+        SceneChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void EndStroke()
+    {
+        if (_stroke is null || _activeLayerId is null)
+        {
+            return;
+        }
+
+        var stroke = _stroke;
+        _stroke = null;
+        if (stroke.IsEmpty)
+        {
+            SceneChanged?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+
+        if (ActiveTool == EditorTool.Mask)
+        {
+            var (Before, After) = stroke.CommitCoverage(
+                missingTileValue: 255,
+                subtract: MaskMode == MaskPaintMode.Hide);
+            Session.Execute(new MaskStrokeCommand(_activeLayerId.Value, Before, After));
+        }
+        else
+        {
+            var (Before, After) = stroke.Commit();
+            Session.Execute(new BrushStrokeCommand(
+                _activeLayerId.Value, Before, After,
+                BrushSettings.Eraser ? "Erase stroke" : "Brush stroke"));
+        }
+
+        AfterEdit();
+    }
+
+    public void CancelStroke()
+    {
+        if (_stroke is null)
+        {
+            return;
+        }
+
+        _stroke = null;
+        SceneChanged?.Invoke(this, EventArgs.Empty);
+    }
+
     public void SelectAt(double worldX, double worldY)
     {
         Session.SelectedObjectId = SceneGeometry.HitTest(Session.Document, worldX, worldY)?.Id;
         RefreshInspector();
         Raise(nameof(SelectionStatus));
         SceneChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void SelectObject(ObjectId id)
+    {
+        var layer = DocumentEditor.FindLayerOf(Session.Document, id);
+        if (layer is null)
+        {
+            return;
+        }
+
+        Session.SelectedObjectId = id;
+        _activeLayerId = layer.Id;
+        RefreshInspector();
+        Raise(nameof(SelectionStatus));
+        Raise(nameof(ActiveLayer));
+        Raise(nameof(ActiveLayerId));
+        SceneChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void ToggleSelectedObjectVisibility()
+    {
+        if (Session.SelectedObject is not { } before)
+        {
+            return;
+        }
+
+        var after = CopyObject(before, visible: !before.Visible);
+        Session.Execute(new ReplaceObjectsCommand([before], [after], "Object visibility"));
+        AfterEdit();
+    }
+
+    public void ToggleSelectedObjectLock()
+    {
+        if (Session.SelectedObject is not { } before)
+        {
+            return;
+        }
+
+        var after = CopyObject(before, locked: !before.Locked);
+        Session.Execute(new ReplaceObjectsCommand([before], [after], "Object lock"));
+        AfterEdit();
+    }
+
+    public void DeleteSelectedObject()
+    {
+        if (Session.SelectedObject is not { } selected
+            || DocumentEditor.FindLayerOf(Session.Document, selected.Id) is not { } layer)
+        {
+            return;
+        }
+
+        Session.Execute(new RemoveObjectsCommand(Session.Document, layer.Id, [selected.Id]));
+        Session.SelectedObjectId = null;
+        AfterEdit();
     }
 
     /// <summary>Selected, editable object - locked and hidden objects cannot be edited.</summary>
@@ -255,13 +572,11 @@ public sealed class EditorViewModel : ViewModelBase
             DragMode.Resize => SelectionHandles.Resize(before, preview.Handle!.Value, worldX, worldY),
             DragMode.Rotate => SelectionHandles.Rotate(
                 before, preview.StartWorldX, preview.StartWorldY, worldX, worldY),
-            _ => new SceneObject(
-                before.Id, before.Kind, before.Name,
+            _ => WithGeometry(
+                before,
                 before.X + (worldX - preview.StartWorldX),
                 before.Y + (worldY - preview.StartWorldY),
-                before.Width, before.Height, before.RotationDegrees,
-                before.FillColor, before.StrokeColor, before.StrokeWidth,
-                before.Visible, before.Locked),
+                before.Width, before.Height, before.RotationDegrees),
         };
 
         DragPreview = preview with { Proposed = proposed };
@@ -321,6 +636,10 @@ public sealed class EditorViewModel : ViewModelBase
         StatusDetail = "";
         RefreshInspector();
         Raise(nameof(SelectionStatus));
+        Raise(nameof(Layers));
+        Raise(nameof(ActiveLayer));
+        Raise(nameof(ActiveLayerId));
+        Raise(nameof(MaskEditLayerId));
         SceneChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -374,11 +693,7 @@ public sealed class EditorViewModel : ViewModelBase
             return false;
         }
 
-        var after = new SceneObject(
-            before.Id, before.Kind, before.Name,
-            x, y, width, height, rotation,
-            before.FillColor, before.StrokeColor, before.StrokeWidth,
-            before.Visible, before.Locked);
+        var after = WithGeometry(before, x, y, width, height, rotation);
 
         if (after == before)
         {
@@ -394,6 +709,34 @@ public sealed class EditorViewModel : ViewModelBase
     private static bool TryParse(string text, out double value) =>
         double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value)
         && double.IsFinite(value);
+
+    private static SceneObject WithGeometry(
+        SceneObject source, double x, double y, double width, double height, double rotation) =>
+        new(
+            source.Id, source.Kind, source.Name,
+            x, y, width, height, rotation,
+            source.FillColor, source.StrokeColor, source.StrokeWidth,
+            source.Visible, source.Locked)
+        {
+            Sublayer = source.Sublayer,
+            GroupId = source.GroupId,
+            Stamp = source.Stamp,
+            ObjectOpacity = source.ObjectOpacity,
+        };
+
+    private static SceneObject CopyObject(
+        SceneObject source, bool? visible = null, bool? locked = null) =>
+        new(
+            source.Id, source.Kind, source.Name,
+            source.X, source.Y, source.Width, source.Height, source.RotationDegrees,
+            source.FillColor, source.StrokeColor, source.StrokeWidth,
+            visible ?? source.Visible, locked ?? source.Locked)
+        {
+            Sublayer = source.Sublayer,
+            GroupId = source.GroupId,
+            Stamp = source.Stamp,
+            ObjectOpacity = source.ObjectOpacity,
+        };
 
     // ---------------------------------------------------------------- saving
 

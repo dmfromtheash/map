@@ -1,3 +1,4 @@
+using Map.Core.Documents;
 using Map.Persistence;
 using Map.Persistence.Recovery;
 using Map.Presentation.Services;
@@ -49,8 +50,9 @@ public class NewMapWizardTests
         Assert.Equal(800, document.Canvas.Width);
         Assert.Equal(600, document.Canvas.Height);
         Assert.Equal("#FFF2E9DC", document.Canvas.Background);
-        Assert.Single(document.Layers);
-        Assert.Empty(document.Layers[0].Objects);
+        Assert.Equal(2, document.Layers.Count);
+        Assert.IsType<BaseColorLayer>(document.Layers[0]);
+        Assert.Empty(document.Layers.OfType<ObjectLayer>().Single().Objects);
         Assert.Equal("", wizard.ValidationError);
     }
 

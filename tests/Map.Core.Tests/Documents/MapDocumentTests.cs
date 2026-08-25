@@ -4,6 +4,9 @@ namespace Map.Core.Tests.Documents;
 
 public class MapDocumentTests
 {
+    private static BaseColorLayer Base() => new(
+        LayerId.New(), "background", true, false, 1.0, "#FFFFFFFF");
+
     private static SceneObject Object(string name = "object") => new(
         ObjectId.New(), SceneObjectKind.Rectangle, name,
         x: 10, y: 20, width: 30, height: 40, rotationDegrees: 15,
@@ -29,23 +32,24 @@ public class MapDocumentTests
     public void Layers_and_objects_keep_their_order()
     {
         var objects = new[] { Object("first"), Object("second"), Object("third") };
-        var layer = new Layer(LayerId.New(), "layer", visible: true, locked: false, opacity: 1.0, objects);
+        var layer = new ObjectLayer(
+            LayerId.New(), "layer", visible: true, locked: false, opacity: 1.0, objects);
 
         var document = new MapDocument(
             DocumentId.New(), "map", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(1024, 768, "px", "#FFFFFFFF"),
-            [layer]);
+            [Base(), layer]);
 
-        Assert.Equal(["first", "second", "third"], document.Layers[0].Objects.Select(o => o.Name));
+        Assert.Equal(["first", "second", "third"], layer.Objects.Select(o => o.Name));
     }
 
     [Fact]
     public void The_stored_collections_do_not_alias_the_caller_lists()
     {
         var objects = new List<SceneObject> { Object() };
-        var layer = new Layer(LayerId.New(), "layer", true, false, 1.0, objects);
+        var layer = new ObjectLayer(LayerId.New(), "layer", true, false, 1.0, objects);
 
-        var layers = new List<Layer> { layer };
+        var layers = new List<MapLayer> { Base(), layer };
         var document = new MapDocument(
             DocumentId.New(), "map", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(64, 64, "px", "#FFFFFFFF"),
@@ -54,8 +58,8 @@ public class MapDocumentTests
         objects.Add(Object("smuggled"));
         layers.Clear();
 
-        Assert.Single(document.Layers);
-        Assert.Single(document.Layers[0].Objects);
+        Assert.Equal(2, document.Layers.Count);
+        Assert.Single(((ObjectLayer)document.Layers[1]).Objects);
     }
 
     [Fact]
@@ -64,21 +68,23 @@ public class MapDocumentTests
         var layerId = LayerId.New();
         var canvas = new CanvasDefinition(64, 64, "px", "#FFFFFFFF");
 
-        var duplicateLayers = new[]
-        {
-            new Layer(layerId, "a", true, false, 1.0, []),
-            new Layer(layerId, "b", true, false, 1.0, []),
-        };
+        MapLayer[] duplicateLayers =
+        [
+            Base(),
+            new ObjectLayer(layerId, "a", true, false, 1.0, []),
+            new ObjectLayer(layerId, "b", true, false, 1.0, []),
+        ];
 
         Assert.Throws<ArgumentException>(() =>
             new MapDocument(DocumentId.New(), "map", DateTimeOffset.UnixEpoch, canvas, duplicateLayers));
 
         var sharedObject = Object();
-        var duplicateObjects = new[]
-        {
-            new Layer(LayerId.New(), "a", true, false, 1.0, [sharedObject]),
-            new Layer(LayerId.New(), "b", true, false, 1.0, [sharedObject]),
-        };
+        MapLayer[] duplicateObjects =
+        [
+            Base(),
+            new ObjectLayer(LayerId.New(), "a", true, false, 1.0, [sharedObject]),
+            new ObjectLayer(LayerId.New(), "b", true, false, 1.0, [sharedObject]),
+        ];
 
         Assert.Throws<ArgumentException>(() =>
             new MapDocument(DocumentId.New(), "map", DateTimeOffset.UnixEpoch, canvas, duplicateObjects));
@@ -90,7 +96,7 @@ public class MapDocumentTests
     public void Layer_opacity_outside_the_unit_range_is_rejected(double opacity)
     {
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            new Layer(LayerId.New(), "layer", true, false, opacity, []));
+            new ObjectLayer(LayerId.New(), "layer", true, false, opacity, []));
     }
 
     [Theory]

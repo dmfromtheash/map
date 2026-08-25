@@ -1,10 +1,47 @@
 namespace Map.Core.Documents;
 
-/// <summary>Minimal object kinds for the foundation slice. Extended in later slices.</summary>
+/// <summary>Object kinds of the current model.</summary>
 public enum SceneObjectKind
 {
     Rectangle = 0,
     Ellipse = 1,
+    Stamp = 2,
+}
+
+/// <summary>
+/// Appearance of a placed asset (kind == Stamp). The asset itself lives in the catalog or the
+/// container, addressed by content hash - the object never embeds pixels.
+/// </summary>
+public sealed record StampStyle
+{
+    public StampStyle(string assetSha256)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(assetSha256);
+        AssetSha256 = assetSha256.ToLowerInvariant();
+    }
+
+    public string AssetSha256 { get; init; }
+
+    public bool FlipHorizontal { get; init; }
+    public bool FlipVertical { get; init; }
+
+    /// <summary>Blend mode name from a fixed supported set; "Normal" is source-over.</summary>
+    public string Blend { get; init; } = "Normal";
+
+    /// <summary>Gaussian blur sigma in canvas units; 0 = none.</summary>
+    public double Blur { get; init; }
+
+    /// <summary>Drop shadow; disabled when opacity is 0.</summary>
+    public double ShadowOffsetX { get; init; } = 4;
+    public double ShadowOffsetY { get; init; } = 4;
+    public double ShadowBlur { get; init; } = 6;
+    public double ShadowOpacity { get; init; }
+
+    /// <summary>Colour adjustments: hue in degrees, the rest as -1..1 offsets.</summary>
+    public double Hue { get; init; }
+    public double Saturation { get; init; }
+    public double Brightness { get; init; }
+    public double Contrast { get; init; }
 }
 
 /// <summary>
@@ -50,9 +87,21 @@ public sealed record SceneObject
         Locked = locked;
     }
 
-    public ObjectId Id { get; }
-    public SceneObjectKind Kind { get; }
-    public string Name { get; }
+    public ObjectId Id { get; init; }
+    public SceneObjectKind Kind { get; init; }
+    public string Name { get; init; }
+
+    /// <summary>Coarse draw order band within the layer (-10..10); ties break by list order.</summary>
+    public int Sublayer { get; init; }
+
+    /// <summary>Objects sharing a group id select and move together. Null = ungrouped.</summary>
+    public Guid? GroupId { get; init; }
+
+    /// <summary>Set only for kind == Stamp: how the referenced asset is drawn.</summary>
+    public StampStyle? Stamp { get; init; }
+
+    /// <summary>Whole-object opacity 0..1 (stamps expose it in the editor).</summary>
+    public double ObjectOpacity { get; init; } = 1.0;
 
     /// <summary>World position of the top-left corner, in canvas units.</summary>
     public double X { get; }

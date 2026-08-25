@@ -90,7 +90,12 @@ public sealed class NewMapWizardViewModel : ViewModelBase
             Title.Trim(),
             createdUtc,
             new CanvasDefinition(width, height, "px", Background),
-            [new Layer(LayerId.New(), "Объекты", visible: true, locked: false, opacity: 1.0, [])]);
+            [
+                new BaseColorLayer(
+                    LayerId.New(), "Цвет фона", visible: true, locked: false, opacity: 1.0, Background),
+                new ObjectLayer(
+                    LayerId.New(), "Объекты", visible: true, locked: false, opacity: 1.0, []),
+            ]);
     }
 
     private static bool TryParseDimension(string text, out int value) =>

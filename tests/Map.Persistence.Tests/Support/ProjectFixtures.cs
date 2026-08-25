@@ -12,6 +12,9 @@ public static class ProjectFixtures
     public static readonly LayerId FixedLayerId =
         LayerId.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
 
+    public static readonly LayerId FixedBaseLayerId =
+        LayerId.Parse("bbbbbbbb-cccc-dddd-eeee-ffffffffffff");
+
     public static readonly ObjectId FixedRectangleId =
         ObjectId.Parse("01234567-89ab-cdef-0123-456789abcdef");
 
@@ -55,14 +58,18 @@ public static class ProjectFixtures
             fillColor: "#80FFD60A", strokeColor: "#FF000000", strokeWidth: 0,
             visible: false, locked: true);
 
-        var layer = new Layer(
+        var layer = new ObjectLayer(
             FixedLayerId, "ground", visible: true, locked: false, opacity: 0.85,
             [rectangle, ellipse]);
 
         return new MapDocument(
             FixedDocumentId, title, FixedCreatedUtc,
             new CanvasDefinition(1920, 1080, "px", "#FF10131A"),
-            [layer]);
+            [
+                new BaseColorLayer(
+                    FixedBaseLayerId, "background", true, false, 1.0, "#FF10131A"),
+                layer,
+            ]);
     }
 
     /// <summary>Field-by-field semantic equality with exact values, independent of record Equals.</summary>
@@ -88,27 +95,63 @@ public static class ProjectFixtures
             Assert.Equal(expectedLayer.Visible, actualLayer.Visible);
             Assert.Equal(expectedLayer.Locked, actualLayer.Locked);
             Assert.Equal(expectedLayer.Opacity, actualLayer.Opacity);
+            Assert.Equal(expectedLayer.GetType(), actualLayer.GetType());
 
-            Assert.Equal(expectedLayer.Objects.Count, actualLayer.Objects.Count);
-            for (var o = 0; o < expectedLayer.Objects.Count; o++)
+            if (expectedLayer is BaseColorLayer expectedBase)
             {
-                var expectedObject = expectedLayer.Objects[o];
-                var actualObject = actualLayer.Objects[o];
-
-                Assert.Equal(expectedObject.Id, actualObject.Id);
-                Assert.Equal(expectedObject.Kind, actualObject.Kind);
-                Assert.Equal(expectedObject.Name, actualObject.Name);
-                Assert.Equal(expectedObject.X, actualObject.X);
-                Assert.Equal(expectedObject.Y, actualObject.Y);
-                Assert.Equal(expectedObject.Width, actualObject.Width);
-                Assert.Equal(expectedObject.Height, actualObject.Height);
-                Assert.Equal(expectedObject.RotationDegrees, actualObject.RotationDegrees);
-                Assert.Equal(expectedObject.FillColor, actualObject.FillColor);
-                Assert.Equal(expectedObject.StrokeColor, actualObject.StrokeColor);
-                Assert.Equal(expectedObject.StrokeWidth, actualObject.StrokeWidth);
-                Assert.Equal(expectedObject.Visible, actualObject.Visible);
-                Assert.Equal(expectedObject.Locked, actualObject.Locked);
+                Assert.Equal(expectedBase.Color, ((BaseColorLayer)actualLayer).Color);
             }
+
+            if (expectedLayer is ObjectLayer expectedObjects)
+            {
+                var actualObjects = (ObjectLayer)actualLayer;
+                Assert.Equal(expectedObjects.Objects.Count, actualObjects.Objects.Count);
+                for (var o = 0; o < expectedObjects.Objects.Count; o++)
+                {
+                    var expectedObject = expectedObjects.Objects[o];
+                    var actualObject = actualObjects.Objects[o];
+
+                    Assert.Equal(expectedObject.Id, actualObject.Id);
+                    Assert.Equal(expectedObject.Kind, actualObject.Kind);
+                    Assert.Equal(expectedObject.Name, actualObject.Name);
+                    Assert.Equal(expectedObject.X, actualObject.X);
+                    Assert.Equal(expectedObject.Y, actualObject.Y);
+                    Assert.Equal(expectedObject.Width, actualObject.Width);
+                    Assert.Equal(expectedObject.Height, actualObject.Height);
+                    Assert.Equal(expectedObject.RotationDegrees, actualObject.RotationDegrees);
+                    Assert.Equal(expectedObject.FillColor, actualObject.FillColor);
+                    Assert.Equal(expectedObject.StrokeColor, actualObject.StrokeColor);
+                    Assert.Equal(expectedObject.StrokeWidth, actualObject.StrokeWidth);
+                    Assert.Equal(expectedObject.Visible, actualObject.Visible);
+                    Assert.Equal(expectedObject.Locked, actualObject.Locked);
+                    Assert.Equal(expectedObject.Sublayer, actualObject.Sublayer);
+                    Assert.Equal(expectedObject.GroupId, actualObject.GroupId);
+                    Assert.Equal(expectedObject.ObjectOpacity, actualObject.ObjectOpacity);
+                    Assert.Equal(expectedObject.Stamp, actualObject.Stamp);
+                }
+            }
+
+            if (expectedLayer is IRasterContentLayer expectedRaster)
+            {
+                AssertTilesEqual(expectedRaster.ContentTiles, ((IRasterContentLayer)actualLayer).ContentTiles);
+            }
+
+            Assert.Equal(expectedLayer.Mask?.Enabled, actualLayer.Mask?.Enabled);
+            if (expectedLayer.Mask is { } expectedMask)
+            {
+                AssertTilesEqual(expectedMask.Tiles, actualLayer.Mask!.Tiles);
+            }
+        }
+    }
+
+    private static void AssertTilesEqual(TileMap expected, TileMap actual)
+    {
+        Assert.Equal(expected.BytesPerPixel, actual.BytesPerPixel);
+        Assert.Equal(expected.Keys.OrderBy(key => key.X).ThenBy(key => key.Y),
+            actual.Keys.OrderBy(key => key.X).ThenBy(key => key.Y));
+        foreach (var key in expected.Keys)
+        {
+            Assert.Equal(expected.TryGet(key), actual.TryGet(key));
         }
     }
 }
