@@ -2,8 +2,10 @@
 
 ## Последнее обновление
 
-2026-08-25. Stage 1 (технический spike) реализован и измерен. Ожидает независимой приёмки Codex
-по `docs/11_CLAUDE_VERIFICATION_PROTOCOL.md`.
+2026-08-25. Codex завершил независимую проверку Stage 1 по
+`docs/11_CLAUDE_VERIFICATION_PROTOCOL.md`. Итог: `BLOCKED` для перехода к Stage 2 из-за
+воспроизводимого дефекта geometry chunk culling. Точный fix-prompt для Opus:
+`artifacts/opus-prompt-stage01-fix01.md`.
 
 ## FACT — среда
 
@@ -62,6 +64,26 @@
    с `InvalidOperationException: Visual was invalidated during the render pass`. Завершение
    вынесено в `Dispatcher.UIThread.Post`. Добавлен `Diagnostics/CrashLog`.
 
+## FACT — независимая проверка Codex
+
+- Проверен точный implementation diff `7f03200386f77d8e98dfbdb2074f85315cbb0587..`
+  `f80c8e995b05c0c86619e7319e953408801a9f88`: `A=66`, `M=1`, `D=0`, `R=0`, всего 67 файлов.
+- Свежие clean/restore/build прошли; build завершился с 0 ошибок и 0 предупреждений.
+- Полный набор тестов: 55/55. Targeted suites: commands 10/10, spatial/viewport 12/12,
+  save/fault 21/21, process-kill 2/2, render/export 10/10.
+- `dotnet format --verify-no-changes`, vulnerable/deprecated package audits, `pre-commit` и
+  `scripts/doctor.ps1` прошли. Уязвимых пакетов не найдено.
+- `dotnet tool restore` из корня работает и восстанавливает 5 local tools; прежняя запись об
+  отсутствии manifest была ошибочной.
+- Свежий benchmark: hit-test median `0,003 мс`, P95 `0,007 мс`; save median `306,752 мс`;
+  reopen `113,364 мс`; 4096x4096 export median `1571,188 мс`.
+- В настоящем окне подтверждены GPU/OpenGL через ANGLE поверх Direct3D и отсутствие WebView.
+  Свежий ограниченный прогон показал frame interval median `13,73 мс`, P95 `15,43 мс`,
+  Skia draw median `0,11 мс`, P95 `0,27 мс` на поверхности `1400x680`.
+- DEC-002 подтверждён: Qt spike не нужен. Найденный blocker алгоритмический и не связан со
+  стеком Avalonia/Skia.
+- Полный отчёт: `docs/reviews/STAGE_01_VERIFICATION.md`.
+
 ## PARTIAL
 
 - Бюджет «60 FPS» выполнен по времени оценки сцены (`1,59 мс` median / `2,84 мс` P95), но
@@ -70,21 +92,28 @@
 - Сглаживание объектов отключено (`DrawVertices` без MSAA) — визуальный размен ради бюджета.
 - Fault injection для «во время `File.Replace`» проверяет наблюдаемый результат, а не разрыв
   внутри самой операции: `ReplaceFile` атомарна на уровне NTFS и не делится из managed-кода.
-- `dotnet-tools.json` лежит в корне репозитория, а `dotnet tool restore` ищет
-  `.config/dotnet-tools.json`, поэтому local tools не восстанавливаются. Не трогал: файл не мой.
+- Узкий Stryker по persistence дал score `50,56 %`: 45 killed, 33 survived, 11 NoCoverage,
+  4 CompileError. В частности, тесты не убивают удаление вызова `ValidateReadBack`.
+- Сохранённый visual smoke не доказывает selection: на кадре видно `Nothing under the cursor`.
+  Свежая полная UI-последовательность не завершена из-за потери focus внешним драйвером.
+- UI frame interval заметно меняется между прогонами; trace причины выбросов не снят.
+- xUnit `2.9.3` и его transitives помечены `Legacy` в package audit.
 - Self-contained `win-x64` publish и запуск на чистой VM не выполнялись (вне scope Stage 1).
 
 ## BLOCKED
 
+- Stage 1 не принят: `ObjectGeometryCache.VisibleChunks` может пропустить объект, который
+  пересекает viewport, если центр объекта находится в соседнем chunk. Изолированный probe получил
+  `object-intersects=True` и `visible-chunks=0`.
 - Ручные аккаунтные сценарии Inkarnate требуют входа владельца.
 - Автоматическое исследование закрытого UI не выполняется из-за условий использования.
 - Точные визуальные токены и производственные ассеты отложены до материалов владельца.
 
 ## Следующий безопасный шаг
 
-Независимая приёмка Stage 1 по Gate C (`docs/11_CLAUDE_VERIFICATION_PROTOCOL.md`): свежие
-restore/build/test, отдельный прогон fault/kill-тестов, запуск настоящего окна и просмотр
-`export-4096.png` и `spike-session.mapspike`, сверка `BASE..HEAD`. Stage 2 не начинать до `FACT`.
+Opus выполняет только fix-срез по `artifacts/opus-prompt-stage01-fix01.md` от точного base
+`06e494fb15e99eeda87a86d000e0283fe80a224b`, коммитит его отдельным коммитом и останавливается.
+После этого Codex повторяет Gate D. Stage 2 и prompt для Stage 2 не начинать до `FACT` по Gate D.
 
 ## Проверка среды
 
