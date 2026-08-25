@@ -262,14 +262,68 @@ package audits и повторного pre-commit/doctor.
   валидного JSON также переносится в следующий крупный блок.
 - Итог: Stage 2A принят как foundation. Это не закрытие всего Stage 2.
 
+## FACT — срез Stage 2B: вся первая сквозная вертикаль
+
+Ветка `stage/02-complete-vertical` от base `bacebe6`. Изменения только в allowlist задания.
+
+- **Проекты.** В `Map.slnx` добавлены `Map.Rendering` (Core + SkiaSharp 3.119.4),
+  `Map.Presentation` (view-models без зависимости от Avalonia; INPC написан руками —
+  CommunityToolkit.Mvvm не добавлялся), `Map.Platform.Windows` (пути, bounded diagnostics log с
+  ротацией, bounded recent-индекс на 10 записей), `Map.App` (Avalonia WinExe, весь XAML-слой в
+  code-behind с явными UIA-именами) и тесты `Map.Rendering.Tests`, `Map.Presentation.Tests`,
+  `Map.Persistence.KillHost`. Новых runtime-пакетов ноль сверх принятых Avalonia 12.1.1 и
+  SkiaSharp 3.119.4.
+- **Core.** `Viewport` (zoom-at-cursor с clamp, fit), `EditingSession` (immutable snapshot,
+  selection, revision/savedRevision, dirty; редактирование только командами),
+  `AddObjectCommand`/`TransformObjectCommand` над снапшотами, `SceneGeometry.HitTest` с учётом
+  поворота, `SelectionHandles` — математика gizmo: 8 ручек растяжения + ручка поворота, resize с
+  пином противоположной стороны в мировых координатах при любом повороте, clamp на MinSize без
+  инверсии, нормализация угла в (-180,180].
+- **Rendering.** `SceneRenderer` (страница, слои с opacity, Rectangle/Ellipse с поворотом,
+  selection-gizmo constant-screen-size только по opt-in) и `ThumbnailRenderer` 320×180 PNG через
+  тот же evaluator, без overlay.
+- **Persistence gate.** Bounded `.bak` при replace; production `RecoveryJournal`
+  (Started/TempDurable/Replaced, durable запись, unknown-state урок Fix 02);
+  `RecoveryCandidates` — Find (кандидат обязан валидироваться полным reader-ом), Restore (только
+  чтение, target не трогается), Discard (удаляет ровно записанные temp+journal). Hardening
+  чтения: дубликаты entries, неканонические/абсолютные/`..` пути, лимиты
+  entries/размеров/суммарного разжатия, PNG-подпись+IHDR-размеры preview, null-shape JSON,
+  unknown object kind — всё типизированные ошибки. **Настоящий process-kill тест**: child
+  (`Map.Persistence.KillHost`) сигналит после durable temp, убивается до replace; старый target
+  открывается и равен старой версии, journal читается, кандидат открывается и равен новой,
+  recovery API отдаёт новую версию не трогая старую.
+- **UI.** Dashboard (recent-карточки с настоящими миниатюрами из контейнера, honest «Файл не
+  найден», recovery-баннер Восстановить/Отбросить), мастер новой карты с валидацией размеров
+  16–16384 и сменой ориентации, editor: canvas (select/move/**resize/rotate ручками gizmo** с
+  курсорами-подсказками, pan средней кнопкой, wheel-zoom вокруг курсора), inspector
+  X/Y/W/H/поворот с commit одним command, undo/redo, статусы
+  Сохранено/Сохранение…/Не сохранено/Ошибка сохранения, фоновое сохранение с
+  semaphore-guard и thumbnail из снапшота, dirty-close Сохранить/Не сохранять/Отмена, Ctrl+N/O/S/Z/Y,
+  диагностический лог без содержимого документов.
+- **Тесты: 103/103** (33 Core + 37 Persistence + 5 Rendering + 28 Presentation), Release
+  0 warnings/0 errors, `dotnet format` чист.
+- **UI smoke 12/12** по Release EXE (`scripts/drive-stage02.ps1`, самопроверяющийся: UIA-état,
+  bounded waits, все PNG полного размера `2576×1408`): dashboard → wizard → добавление →
+  selection по клику с GUID → drag-move → числовой resize/rotate → undo/redo по значениям →
+  pan/zoom по статусу → Save As через системный диалог → «Сохранено» → чистое закрытие
+  (exit 0) → новый процесс → recent-карточка с миниатюрой → reopen → выбор объекта: **тот же
+  GUID** и та же геометрия `X=766.96 Y=427.97 W=400 H=260 R=30`. Артефакты:
+  `artifacts/stage02b/ui-smoke/`. TCP-listeners 0; WebView/Chromium-модулей нет; загружены
+  `av_libGLESv2.dll`, `d3d11.dll`, `dcomp.dll` (GPU-путь как в Stage 1).
+- Recovery в настоящем окне: прерванное сохранение (KillHost в production-журнале) даёт на
+  dashboard баннер «Несохранённая копия … Восстановить/Отбросить» — снимок
+  `artifacts/stage02b/recovery-demo/dashboard-with-recovery.png`.
+- Найденные и решённые в срезе проблемы драйвера: `InvokePattern` недетерминирован рядом с
+  модальными диалогами (заменён физическими кликами по UIA-прямоугольникам); owned-окна Avalonia
+  не видны как дети UIA-Root (искать в поддереве главного окна); системный диалог сохранения
+  ловится по foreground `#32770`, путь вставляется через буфер обмена.
+
 ## Следующий безопасный шаг
 
-По решению владельца больше не дробить Stage 2 на мелкие UI-срезы. Передать Opus один крупный
-prompt `artifacts/opus-prompt-stage02b-complete-vertical.md`, который закрывает весь оставшийся
-Stage 2: нативное окно, dashboard recent/new/open, create wizard, canvas viewport, добавление/
-selection/transform тестового объекта, command undo/redo, видимые save states, thumbnail,
-recovery/process-kill gate, диагностику и реальный end-to-end UI smoke. После одного отдельного
-коммита Opus останавливается.
+Stage 2B выполнен одним коммитом на `stage/02-complete-vertical`; Opus остановился. Codex
+проводит независимую приёмку крупного блока: точный `BASE..HEAD`, свежие build/test, прогон
+`scripts/drive-stage02.ps1`, kill-gate и просмотр скриншотов. Stage 3 (слои, дерево объектов,
+кисть) не начинать до приёмки.
 
 ## Проверка среды
 

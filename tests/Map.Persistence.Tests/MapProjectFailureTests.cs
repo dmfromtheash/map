@@ -26,7 +26,8 @@ public class MapProjectFailureTests
 
         var failure = Assert.Throws<MapProjectSaveException>(() =>
             MapProjectStore.Save(
-                secondVersion, path, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng(), faults));
+                secondVersion, path, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng(),
+                journal: null, faults));
 
         // The failure is reported, never masked as success, and it names the paths involved.
         Assert.Equal(Path.GetFullPath(path), failure.TargetPath);

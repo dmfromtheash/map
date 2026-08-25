@@ -6,11 +6,12 @@ namespace Map.Persistence;
 /// </summary>
 public sealed record SaveMetadata
 {
-    public SaveMetadata(string appVersion, DateTimeOffset modifiedUtc)
+    public SaveMetadata(string appVersion, DateTimeOffset modifiedUtc, long savedRevision = 0)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(appVersion);
         AppVersion = appVersion;
         ModifiedUtc = modifiedUtc;
+        SavedRevision = savedRevision;
     }
 
     /// <summary>Version of the application that wrote the file, e.g. "0.1.0".</summary>
@@ -18,4 +19,7 @@ public sealed record SaveMetadata
 
     /// <summary>Moment this revision was saved. Recorded verbatim in the manifest.</summary>
     public DateTimeOffset ModifiedUtc { get; }
+
+    /// <summary>Editing-session revision this save represents; recorded in the recovery journal.</summary>
+    public long SavedRevision { get; }
 }

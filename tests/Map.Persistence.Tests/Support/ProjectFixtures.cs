@@ -24,10 +24,20 @@ public static class ProjectFixtures
     public static readonly DateTimeOffset FixedModifiedUtc =
         new(2026, 8, 25, 12, 34, 56, TimeSpan.Zero);
 
-    /// <summary>Tiny but real PNG bytes: the 8-byte signature plus filler. Persistence must store
-    /// them verbatim; it never draws or validates image content in this slice.</summary>
+    /// <summary>
+    /// Tiny but real PNG header: signature plus a well-formed 1x1 RGBA IHDR, then filler bytes.
+    /// The reader validates the signature and IHDR dimensions only - it never decodes pixels -
+    /// and persistence stores the caller's bytes verbatim.
+    /// </summary>
     public static byte[] PreviewPng() =>
-        [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4, 5, 6, 7, 8];
+    [
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG signature
+        0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, // IHDR chunk length + type
+        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, // width = 1, height = 1
+        0x08, 0x06, 0x00, 0x00, 0x00,                   // bit depth 8, colour type 6 (RGBA)
+        0x1F, 0x15, 0xC4, 0x89,                         // IHDR CRC
+        1, 2, 3, 4, 5, 6, 7, 8,                         // filler; stored and compared verbatim
+    ];
 
     public static SaveMetadata Metadata() => new("0.1.0-test", FixedModifiedUtc);
 

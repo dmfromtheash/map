@@ -1,10 +1,17 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/Map.App/Map.App.csproj" />
     <Project Path="src/Map.Core/Map.Core.csproj" />
     <Project Path="src/Map.Persistence/Map.Persistence.csproj" />
+    <Project Path="src/Map.Platform.Windows/Map.Platform.Windows.csproj" />
+    <Project Path="src/Map.Presentation/Map.Presentation.csproj" />
+    <Project Path="src/Map.Rendering/Map.Rendering.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Map.Core.Tests/Map.Core.Tests.csproj" />
+    <Project Path="tests/Map.Persistence.KillHost/Map.Persistence.KillHost.csproj" />
     <Project Path="tests/Map.Persistence.Tests/Map.Persistence.Tests.csproj" />
+    <Project Path="tests/Map.Presentation.Tests/Map.Presentation.Tests.csproj" />
+    <Project Path="tests/Map.Rendering.Tests/Map.Rendering.Tests.csproj" />
   </Folder>
 </Solution>

@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -21,6 +21,9 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Map.Core\Map.Core.csproj" />
     <ProjectReference Include="..\..\src\Map.Persistence\Map.Persistence.csproj" />
+    <!-- Build-order only: the kill test launches this console app as a separate process. -->
+    <ProjectReference Include="..\Map.Persistence.KillHost\Map.Persistence.KillHost.csproj"
+                      ReferenceOutputAssembly="false" />
   </ItemGroup>
 
 </Project>

@@ -12,6 +12,28 @@
 - .NET SDK 10.0.400 и шаблоны Avalonia 12.1.1 установлены.
 - Код приложения ещё не создавался.
 
+## Запуск production-приложения
+
+Из корня репозитория:
+
+```powershell
+# сборка и тесты
+dotnet build .\Map.slnx -c Release
+dotnet test .\Map.slnx -c Release --no-build
+
+# запуск настоящего окна (Release)
+dotnet run --project .\src\Map.App -c Release
+# или собранный exe:
+.\src\Map.App\bin\Release\net10.0\Map.App.exe
+
+# сквозной UI smoke: 12 шагов по настоящему окну через UI Automation,
+# скриншоты и evidence попадают в artifacts\stage02b\ui-smoke
+powershell -ExecutionPolicy Bypass -File .\scripts\drive-stage02.ps1
+```
+
+Локальные данные приложения: `%LOCALAPPDATA%\Map` (recent-индекс, журнал восстановления,
+диагностический лог `Diagnostics\diagnostics.log`).
+
 ## С чего читать
 
 1. [START_HERE](docs/00_START_HERE.md)
