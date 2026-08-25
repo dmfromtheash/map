@@ -16,7 +16,7 @@
 
 ## Итог установки
 
-Установлены только официальный .NET SDK 10.0.400 и Avalonia Templates 12.1.1. Claude Code, document skills, Git и исследовательские утилиты уже были. Ни один сторонний skill bundle, scraper, website cloner, облачный генератор, local LLM или deployment service не установлен.
+После принятия владельцем проверочного контура дополнительно установлены project plugins Superpowers 6.3.0 и Interfaces 1.6.2, готовые Git/.NET gates, ImageMagick 7.1.2-30 и подписанный Microsoft Accessibility Insights 1.1.2924.1. Scraper, website cloner, облачный генератор, local LLM, deployment service и MCP с полным управлением Windows не установлены.
 
 ## 1. Агенты и методики
 
@@ -77,6 +77,21 @@
 | PromptCard | LATER | Возможен только для собственного moodboard, не как доказательство design tokens |
 | ai-website-cloner-template | REJECT | Прямо противоречит независимому собственному desktop-дизайну |
 | Claude Design | LATER | Возможен low-fidelity prototype, но данные нужно проверять и финальный дизайн остаётся нашим |
+
+### Компьютерное зрение и проверка Windows UI
+
+| Инструмент | Вердикт | Решение для Map |
+|---|---|---|
+| Claude Code image input | USE | Официально принимает local image path; Opus обязан открыть и письменно разобрать каждый screenshot интерфейса |
+| Claude Code Computer Use | BLOCKED для CLI Windows | Официальный CLI preview работает только на macOS; Windows Desktop не подменяет запрошенный консольный Opus |
+| Codex Computer Use | USE | Независимо наблюдает и управляет одним выбранным настоящим окном Map; не заменяет воспроизводимый driver/tests |
+| ImageMagick `compare` | USE | Установлен; dimensions/channels, normalized RMSE и diff PNG. Метрика дополняется vision review |
+| Accessibility Insights for Windows | USE | Установлен официальный подписанный MSI Microsoft; UIA tree, FastPass, Tab order, events и contrast |
+| Avalonia Headless | LATER по этапу | Подключить после появления UI test project для deterministic layout/input/pixel capture; не заменяет native window |
+| Appium + WinAppDriver | LATER по этапу | Подключить после AutomationId и устойчивого UI; semantic E2E для настоящего EXE |
+| Microsoft OmniParser | LATER/NO сейчас | Сильный screen parser, но требует отдельного Conda/Python и weights; дублирует vision на текущем масштабе |
+| Windows-MCP | REJECT сейчас | Существующий MIT MCP, но даёт широкий file/app/UI control, фоновый режим и имел security advisory; без отдельного security review не ставить |
+| UIAutomation MCP | REJECT сейчас | Существующий MIT/WinGet UIA server, но маленькая база пользователей и полный desktop control; проектные drivers безопаснее и воспроизводимее |
 
 ## 4. Инфраструктура и деплой
 
@@ -199,6 +214,9 @@
 - .NET SDK 10 / Avalonia 12.1 / Skia packages на этапе spike;
 - Git, ripgrep;
 - official document/PDF/spreadsheet skills для проектной документации;
+- Superpowers и Interfaces как project-only skills;
+- pre-commit, Gitleaks, Lychee, dotnet-coverage, Stryker.NET и .NET diagnostics;
+- ImageMagick и Accessibility Insights для screenshot/UIA проверки;
 - локальные tests/benchmarks/diagnostics по мере stage.
 
 ### Позже только по отдельной задаче

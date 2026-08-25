@@ -20,6 +20,8 @@
 | dotnet-coverage | 18.10.0 local tool | фактическое покрытие .NET-кода |
 | dotnet-stryker | 4.16.0 local tool | мутационная проверка силы тестов |
 | dotnet-counters / trace / gcdump | 9.0.661903 local tools | runtime metrics, performance trace и GC heap evidence |
+| ImageMagick Q16-HDRI | 7.1.2-30 | локальные dimensions/alpha/metadata, математический RMSE и diff PNG для визуальных состояний |
+| Accessibility Insights for Windows | 1.1.2924.1, подписано Microsoft | Live Inspect UIA tree, FastPass, Tab stops, automated accessibility checks и contrast inspection настоящего окна |
 
 Исследовательские Python-пакеты: PyMuPDF 1.28.0, pypdf 6.16.2, pdfplumber 0.11.10, pypdfium2 5.13.0, openpyxl 3.1.5, yt-dlp 2026.7.4. Они использовались для чтения источников и не входят в продукт.
 
@@ -32,6 +34,8 @@
 - Ollama/local LLM — карта не требует встроенного ИИ;
 - дизайнерские клонеры/экстракторы — риск прав и не нужны собственному дизайну;
 - Cloudflare/Vercel/серверы — офлайн-программа.
+- OmniParser — официальный исследовательский screen parser Microsoft, но требует отдельного Python/Conda-окружения и весов моделей; текущие локальные screenshots уже понимаются Claude/Codex без него;
+- сторонние Windows control MCP (`Windows-MCP`, `UIAutomationMCP`) — имеют доступ ко всему рабочему столу. Консольный Claude на Windows получает контролируемые PNG и проектные test drivers; широкий MCP не устанавливается без отдельного security review и ограничения области.
 
 ## Проверка
 
@@ -42,11 +46,15 @@ dotnet tool list
 python -m pre_commit --version
 gitleaks version
 lychee --version
+magick -version
+Get-Item "$env:LOCALAPPDATA\Programs\AccessibilityInsights\1.1\AccessibilityInsights.exe"
 ```
 
 Успех doctor означает только готовность среды, не готовность приложения.
 
 После первой установки Gitleaks/Lychee через WinGet нужно открыть новую консоль, чтобы обновлённый `PATH` применился. До этого они вызываются по фактическому пути WinGet package. Git-hook устанавливается один раз на checkout: `python -m pre_commit install`.
+
+ImageMagick установлен как Windows app execution alias. Если текущая консоль ещё не видит `magick`, открыть новую или вызвать `%LOCALAPPDATA%\Microsoft\WindowsApps\magick.exe`. Accessibility Insights установлен per-user из официального MSI; подпись установщика и EXE должна иметь статус `Valid`, signer `Microsoft Corporation`.
 
 ## Добавление нового инструмента
 

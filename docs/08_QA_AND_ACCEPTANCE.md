@@ -29,9 +29,13 @@
 
 Маленькие детерминированные сцены для blend, mask, shadow, text, line caps/portals, shape boolean, grid и filters. Сравнение включает pixel tolerance, metadata renderer и утверждённое обновление golden image. Нельзя автоматически перезаписывать expected.
 
+Для screen/golden comparison фиксировать reference и actual раздельно, предварительно выровнять dimensions/DPI/renderer/seed/state, затем сохранить normalized RMSE и отдельный diff PNG через ImageMagick. Нулевой или допустимый RMSE подтверждает только пиксельную близость; правильность состояния проверяется vision-review и сценарием ввода.
+
 ### 4. Desktop UI tests и ручные smoke
 
 Automation пригодна для dashboard/dialog/inspectors, но canvas жесты и визуальная композиция дополнительно проверяются вручную. В отчёте фиксируются Windows scale, renderer и ввод.
+
+Стандартные controls проверяются по UI Automation tree: доступное имя, role/control type, AutomationId, enabled/selected state, keyboard focus и Tab order. Canvas проверяется двумя каналами: реальный ввод/результат и screenshot/diff; отсутствие canvas-объектов в accessibility tree само по себе не считается визуальной проверкой.
 
 ## Обязательные сценарии P0
 
@@ -108,4 +112,3 @@ Automation пригодна для dashboard/dialog/inspectors, но canvas же
 | `PARTIAL` | часть критериев пройдена; перечислить остальные |
 | `PROPOSED` | идея/план, не результат |
 | `BLOCKED` | объективно нужен выбор/доступ/среда; указать точный блокер |
-

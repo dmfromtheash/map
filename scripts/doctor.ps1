@@ -34,9 +34,22 @@ if ($dotnetExists) {
     Write-Check 'Avalonia templates' $hasAvalonia 'avalonia.app and avalonia.mvvm expected'
 }
 
-foreach ($commandName in @('git', 'rg', 'claude')) {
+foreach ($commandName in @('git', 'rg', 'claude', 'magick')) {
     $command = Get-Command $commandName -ErrorAction SilentlyContinue
     Write-Check $commandName ([bool]$command) $(if ($command) { $command.Source } else { 'not found in PATH' })
+}
+
+$accessibilityInsightsPath = Join-Path $env:LOCALAPPDATA 'Programs\AccessibilityInsights\1.1\AccessibilityInsights.exe'
+$accessibilityInsightsExists = Test-Path -LiteralPath $accessibilityInsightsPath -PathType Leaf
+Write-Check 'Accessibility Insights' $accessibilityInsightsExists $accessibilityInsightsPath
+
+if ($accessibilityInsightsExists) {
+    $signature = Get-AuthenticodeSignature -LiteralPath $accessibilityInsightsPath
+    $signedByMicrosoft = $signature.Status -eq 'Valid' -and
+        $signature.SignerCertificate.Subject -match 'O=Microsoft Corporation'
+    Write-Check 'Accessibility Insights signature' $signedByMicrosoft (
+        '{0}; {1}' -f $signature.Status, $signature.SignerCertificate.Subject
+    )
 }
 
 $requiredDocs = @(
@@ -45,7 +58,9 @@ $requiredDocs = @(
     'docs\00_START_HERE.md',
     'docs\06_DEVELOPMENT_ROADMAP.md',
     'docs\07_OPUS_RUNBOOK.md',
-    'docs\STATE_HANDOFF.md'
+    'docs\STATE_HANDOFF.md',
+    'docs\11_CLAUDE_VERIFICATION_PROTOCOL.md',
+    'scripts\compare-ui-screenshots.ps1'
 )
 
 foreach ($relativePath in $requiredDocs) {

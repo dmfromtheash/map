@@ -27,8 +27,13 @@
 | Repomix | `v1.18.0`, одноразовый `npx`, только локальный repo | полный снимок учитываемых файлов, tree/token inventory и контекст diff для ревью | не является тестом и не заменяет `git diff` |
 | Codex Security | уже установленный security diff/full scan | отдельный security-проход по коммиту или repository | запускается со своей явно указанной областью; не заменяет runtime checks |
 | Computer Use | уже доступен Codex | ручной smoke настоящего Windows-окна и проверка видимого результата | наблюдение без файла/process evidence недостаточно |
+| Claude Code image input | встроено в Claude Code; официальный способ — локальный image path | Claude действительно получает содержимое screenshot/mockup в vision-контекст | не управляет Windows-окном в консольной версии и не доказывает корректность сценария |
+| ImageMagick | `7.1.2-30 Q16-HDRI`, официальный пакет | dimensions/channels/alpha, математический RMSE и отдельный diff PNG | метрика не объясняет, является ли видимое отличие правильным; требуется AI/human review |
+| Accessibility Insights for Windows | `1.1.2924.1`, Microsoft | UIA properties/tree, Tab stops, 60+ automated requirements, patterns/events/contrast настоящего Windows UI | canvas pixels и бизнес-логика остаются вне области |
 
 FsCheck, ArchUnitNET, Avalonia Headless, Appium и диагностические CLI не добавляются «на всякий случай». Они подключаются в том этапе, где существует проверяемый объект и acceptance-сценарий.
+
+Широкий сторонний Windows-control MCP не является обязательной зависимостью. Официальный Computer Use консольного Claude Code сейчас недоступен на Windows, поэтому Opus получает vision через локальные PNG, а управляемость доказывает project-owned driver/Appium. Любой MCP с desktop control сначала проходит отдельный security review; популярность и наличие в registry не считаются достаточным основанием.
 
 ## Git-протокол одного среза
 
@@ -122,6 +127,26 @@ Coverage и mutation testing оцениваются по риску. Нельз�
 3. для нового regression test доказать red/green: без исправления тест падает, с исправлением проходит;
 4. повторить Gate A, весь Gate B и относящийся к этапу Gate C;
 5. пересчитать файлы и убедиться, что исправление не расширило scope.
+
+### Visual gate — настоящее окно плюс независимые виды доказательств
+
+Для каждого принятого UI/canvas-состояния нужны не менее трёх разных свидетельств:
+
+1. **Сценарий:** настоящий собранный EXE, точные действия ввода, process identity и пронумерованный PNG после визуально стабильного состояния.
+2. **Vision review:** Claude открывает PNG по локальному пути и письменно описывает фактически видимые controls, выбранный tool/state, обрезания, наложения, hierarchy, alignment, focus и canvas-результат. Codex независимо захватывает и смотрит свежее окно; пересказ Opus не переиспользуется как факт.
+3. **Машинная проверка:** ImageMagick проверяет одинаковые dimensions/channels и создаёт RMSE + diff PNG; Accessibility Insights/UI Automation проверяет labels, roles, focus и Tab order стандартных controls.
+
+Команда сравнения использует официальный ImageMagick через небольшой project wrapper, а не собственный алгоритм:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\compare-ui-screenshots.ps1 `
+  -Reference .\path\expected.png `
+  -Actual .\path\actual.png `
+  -Difference .\artifacts\visual-diff\screen.png `
+  -MaximumNormalizedRmse 0.002
+```
+
+Сравниваются одно разрешение, DPI, renderer, seed, zoom, viewport и состояние документа. Diff threshold задаётся до прогона и обосновывается. Новый expected создаётся отдельно и принимается только после просмотра; `actual -> expected` внутри теста запрещён. Для нового экрана без утверждённого golden фиксируется baseline-кандидат, но он имеет статус `PROPOSED`, а не `FACT` fidelity.
 
 ## Практические проверки по типу изменения
 

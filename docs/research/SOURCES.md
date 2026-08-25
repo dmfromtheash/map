@@ -62,10 +62,17 @@
 
 ## AI/process candidates — официальные или исходные страницы
 
-- [Claude Code workflows](https://code.claude.com/docs/en/workflows)
+- [Claude Code common workflows — Work with images](https://code.claude.com/docs/en/common-workflows#work-with-images)
+- [Claude Code computer use](https://code.claude.com/docs/en/computer-use) — CLI preview только macOS; Windows Desktop не равен запрошенной консольной версии
 - [Anthropic official skills](https://github.com/anthropics/skills)
 - [Chrome DevTools MCP](https://github.com/ChromeDevTools/chrome-devtools-mcp)
 - [Repomix](https://github.com/yamadashy/repomix)
+- [ImageMagick compare](https://imagemagick.org/script/compare.php)
+- [Accessibility Insights for Windows](https://accessibilityinsights.io/docs/windows/overview/)
+- [Accessibility Insights for Windows source](https://github.com/microsoft/accessibility-insights-windows)
+- [Microsoft OmniParser](https://github.com/microsoft/OmniParser)
+- [Windows-MCP](https://github.com/CursorTouch/Windows-MCP) — изучен как широкий desktop-control MCP, не установлен
+- [UIAutomation MCP](https://github.com/locomorange/uiautomation-mcp) — изучен как UIA MCP, не установлен
 - [Qwen-Image-Layered](https://github.com/QwenLM/Qwen-Image-Layered)
 - [Microsoft TRELLIS.2](https://github.com/microsoft/TRELLIS.2)
 - [Kanka](https://kanka.io/)
@@ -81,4 +88,3 @@
 - название видео без просмотра;
 - зелёная unit-сборка без desktop/file/export smoke;
 - старый пост, если официальная текущая документация ему противоречит.
-
