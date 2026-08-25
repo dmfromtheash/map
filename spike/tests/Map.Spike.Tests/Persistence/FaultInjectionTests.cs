@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Map.Spike.Core.Commands;
 using Map.Spike.Core.Documents;
 using Map.Spike.Core.Fixtures;
@@ -281,11 +282,124 @@ public class FaultInjectionTests
         }
     }
 
-    // NOTE for review: a journal that is valid JSON but carries an unrecognised "state" value still
-    // throws ArgumentException out of RecoveryRecord.StateValue (Enum.Parse), so HasRecoverableWork
-    // crashes instead of answering "nothing to offer". A test for it is deliberately NOT added here:
-    // the only correct fix is in Map.Spike.Persistence/Recovery/RecoveryJournal.cs, which is outside
-    // the paths this fix-slice is allowed to touch. Reported instead of silently widening the scope.
+    /// <summary>
+    /// Writes a syntactically valid journal whose "state" holds an arbitrary JSON fragment, next to
+    /// a real durable-looking temp file - the strongest possible temptation to offer recovery.
+    /// </summary>
+    private static (RecoveryJournal Journal, Guid DocumentId, string JournalPath, string TempPath)
+        WriteJournalWithRawState(TempWorkspace workspace, string stateJsonFragment)
+    {
+        var journal = new RecoveryJournal(workspace.JournalRoot);
+        var documentId = Guid.NewGuid();
+
+        var tempPath = workspace.File("recovered-work.tmp-deadbeef");
+        File.WriteAllText(tempPath, "durable bytes left behind by an interrupted save");
+
+        var journalPath = journal.PathFor(documentId);
+        Directory.CreateDirectory(journal.DirectoryFor(documentId));
+        File.WriteAllText(
+            journalPath,
+            "{\"documentId\":\"" + documentId.ToString("D") + "\"," +
+            "\"tempPath\":" + JsonSerializer.Serialize(tempPath) + "," +
+            "\"state\":" + stateJsonFragment + "}");
+
+        return (journal, documentId, journalPath, tempPath);
+    }
+
+    [Fact]
+    public void A_journal_from_a_future_version_with_an_unknown_state_is_not_offered_and_does_not_throw()
+    {
+        // The independently confirmed counterexample: valid JSON, state written by a newer version,
+        // and an existing temp file. Reading HasRecoverableWork used to throw
+        // ArgumentException: Requested value 'FutureVersionDurable' was not found.
+        using var workspace = new TempWorkspace();
+        var (journal, documentId, journalPath, tempPath) =
+            WriteJournalWithRawState(workspace, "\"FutureVersionDurable\"");
+
+        var record = journal.TryRead(documentId);
+
+        // Valid JSON still yields a record, so diagnostics keep the raw state...
+        Assert.NotNull(record);
+        Assert.Equal("FutureVersionDurable", record!.State);
+
+        // ...but a state this version does not understand is never offered as recoverable,
+        // and deciding that must not throw.
+        Assert.False(record.HasRecoverableWork);
+        Assert.Null(record.StateValue);
+
+        // Nothing is deleted on a guess: both the journal and the temp survive for a newer
+        // version (or the user) to look at.
+        Assert.True(File.Exists(journalPath));
+        Assert.True(File.Exists(tempPath));
+    }
+
+    [Theory]
+    [InlineData("\"999\"")]         // parses numerically, but 999 is not a defined member
+    [InlineData("\"-1\"")]          // same, negative
+    [InlineData("\"tempdurable\"")] // wrong case is not the state our writer records
+    [InlineData("\"TEMPDURABLE\"")]
+    [InlineData("\"\"")]            // empty
+    [InlineData("\"   \"")]         // whitespace
+    [InlineData("null")]            // JSON null
+    public void A_state_this_version_does_not_recognise_is_never_recoverable(string stateJsonFragment)
+    {
+        using var workspace = new TempWorkspace();
+        var (journal, documentId, journalPath, tempPath) =
+            WriteJournalWithRawState(workspace, stateJsonFragment);
+
+        var record = journal.TryRead(documentId);
+
+        Assert.NotNull(record);
+        Assert.False(record!.HasRecoverableWork);
+        Assert.Null(record.StateValue);
+        Assert.True(File.Exists(journalPath));
+        Assert.True(File.Exists(tempPath));
+    }
+
+    [Fact]
+    public void A_known_TempDurable_state_with_an_existing_temp_stays_recoverable()
+    {
+        // Positive control for the safe parse: the recognised durable state must keep working.
+        using var workspace = new TempWorkspace();
+        var (journal, documentId, _, _) = WriteJournalWithRawState(workspace, "\"TempDurable\"");
+
+        var record = journal.TryRead(documentId);
+
+        Assert.NotNull(record);
+        Assert.Equal(RecoveryState.TempDurable, record!.StateValue);
+        Assert.True(record.HasRecoverableWork);
+    }
+
+    [Fact]
+    public void A_known_TempDurable_state_without_the_temp_file_is_not_recoverable()
+    {
+        using var workspace = new TempWorkspace();
+        var (journal, documentId, _, tempPath) = WriteJournalWithRawState(workspace, "\"TempDurable\"");
+        File.Delete(tempPath);
+
+        var record = journal.TryRead(documentId);
+
+        Assert.NotNull(record);
+        Assert.Equal(RecoveryState.TempDurable, record!.StateValue);
+        Assert.False(record.HasRecoverableWork);
+    }
+
+    [Theory]
+    [InlineData("Started", RecoveryState.Started)]
+    [InlineData("Replaced", RecoveryState.Replaced)]
+    [InlineData("Completed", RecoveryState.Completed)]
+    public void Known_non_durable_states_stay_non_recoverable_even_with_a_temp_present(
+        string state, RecoveryState expected)
+    {
+        using var workspace = new TempWorkspace();
+        var (journal, documentId, _, _) = WriteJournalWithRawState(workspace, "\"" + state + "\"");
+
+        var record = journal.TryRead(documentId);
+
+        Assert.NotNull(record);
+        Assert.Equal(expected, record!.StateValue);
+        Assert.False(record.HasRecoverableWork);
+    }
 
     [Fact]
     public void A_torn_journal_does_not_stop_the_next_save_from_succeeding()

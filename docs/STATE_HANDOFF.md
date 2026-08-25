@@ -2,10 +2,9 @@
 
 ## Последнее обновление
 
-2026-08-25. Codex завершил Gate D для Fix 01 (`fcc2d7f..9e07874`): geometry chunk culling
-исправлен и принят как `FACT`. Stage 1 остаётся `BLOCKED` из-за воспроизводимого падения на
-неизвестном `state` recovery-журнала. Следующий fix-prompt для Opus:
-`artifacts/opus-prompt-stage01-fix02-recovery-state.md`.
+2026-08-25. Opus выполнил Fix 02 (`be323ed` → см. раздел Fix 02): неизвестное значение `state`
+recovery-журнала больше не роняет чтение `HasRecoverableWork` и не предлагается как
+восстанавливаемое. Кодовых `BLOCKED` у Stage 1 не осталось. Ожидается независимый Gate D Codex.
 
 ## FACT — среда
 
@@ -141,6 +140,34 @@ Base `fcc2d7f`. Изменены только разрешённые задан�
 - PNG 4096x4096 декодируется как 8-bit TrueColorAlpha; mapspike содержит 28 ZIP entries, оба
   manifest checksum совпадают с реальными entries.
 
+## FACT — fix-срез Stage 1 Fix 02
+
+Base `be323ed`. Изменены только три разрешённых заданием пути.
+
+- **Последний блокер закрыт.** `RecoveryRecord.StateValue` стал `RecoveryState?`:
+  `Enum.TryParse` (без ignoreCase) плюс `Enum.IsDefined`, иначе `null`. `TryParse` одного
+  недостаточно — строка `"999"` разбирается в значение, которого нет среди членов enum;
+  `IsDefined` отсекает такие случаи. Неизвестное состояние никогда не бросает исключение и
+  никогда не предлагается как восстанавливаемое.
+- Red/green доказан на base: контрпример `FutureVersionDurable` + существующий temp падал с
+  `ArgumentException: Requested value 'FutureVersionDurable' was not found`; wrong-case и
+  empty/whitespace — с `ArgumentException`, JSON `null` — с `ArgumentNullException`; `"999"` и
+  `"-1"` не бросали, но выдавали неопределённое число за состояние (красный через
+  `Assert.Null(StateValue)`). После fix все 13 новых кейсов зелёные.
+- Сырой неизвестный `State` остаётся в record; journal и temp-файл не удаляются — проверено
+  assert-ами на существование обоих файлов после чтения.
+- Известные состояния сохранили поведение: `TempDurable`+temp → recoverable; `TempDurable` без
+  temp, `Started`, `Replaced`, `Completed` → нет. Позитивные контроли проходили и на base.
+- Полный suite **80/80** (было 67, +13); targeted Fault/ProcessKill/SaveReopen 44/44; build
+  0 warnings/0 errors; format, vulnerable/deprecated audits, pre-commit, doctor — exit 0.
+- Узкий Stryker по `RecoveryJournal.cs`: 34 протестированных, 19 killed, 14 survived,
+  1 timeout, 1 NoCoverage, 2 CompileError, score 57,14 %. Все мутанты изменённых ветвей убиты:
+  в safe parse `&&`→`||` и условие→`true` — Killed; в `HasRecoverableWork` `==`→`!=` и
+  `&&`→`||` — Killed; тернарные Conditional-мутации — CompileError (нетестируемы). Survivors —
+  дефолты JSON-имён полей, `Flush` в `Write` и блок `Clear`, к изменённым ветвям не относятся.
+  Отчёт: `artifacts/stage01-fix02/stryker-recovery/`.
+- UI smoke не перезапускался: срез не касается UI/rendering (по заданию).
+
 ## PARTIAL
 
 - Сколько именно из двух периодов обновления можно вернуть — не доказано. Нужен эксперимент со
@@ -158,22 +185,17 @@ Base `fcc2d7f`. Изменены только разрешённые задан�
 
 ## BLOCKED
 
-- `RecoveryRecord.StateValue` использует `Enum.Parse` и бросает `ArgumentException` на журнале,
-  который является валидным JSON, но содержит незнакомое значение `state` (например, записанное
-  более новой версией). Из-за этого `HasRecoverableWork` падает вместо ответа «предлагать нечего».
-  Тест намеренно не добавлен: единственное корректное исправление лежит в
-  `spike/src/Map.Spike.Persistence/Recovery/RecoveryJournal.cs`, а этот файл **не входит** в
-  список путей, разрешённых Fix 01. Точечная правка разрешена текущим запросом владельца и вынесена
-  в отдельный Fix 02 для Opus (`Enum.TryParse` плюс проверка defined-state).
 - Ручные аккаунтные сценарии Inkarnate требуют входа владельца.
 - Автоматическое исследование закрытого UI не выполняется из-за условий использования.
 - Точные визуальные токены и производственные ассеты отложены до материалов владельца.
 
 ## Следующий безопасный шаг
 
-Opus выполняет только Fix 02 по `artifacts/opus-prompt-stage01-fix02-recovery-state.md` от точного
-base внутри prompt, создаёт отдельный fix-коммит и останавливается. Затем Codex повторяет Gate D.
-Stage 2 и prompt для Stage 2 не начинать до `FACT` по новому Gate D.
+Fix 02 по `artifacts/opus-prompt-stage01-fix02-recovery-state.md` выполнен от base `be323ed` и
+закоммичен отдельным коммитом. Opus остановился. Codex повторяет полный Gate D на новом
+`BASE..HEAD`: воспроизводит red на base (контрпример `FutureVersionDurable`), подтверждает green,
+прогоняет Gate A/B и recovery failure paths. Кодовых `BLOCKED` у Stage 1 больше нет; Stage 2 и
+prompt для Stage 2 не начинать до `FACT` по этому Gate D.
 
 ## Проверка среды
 

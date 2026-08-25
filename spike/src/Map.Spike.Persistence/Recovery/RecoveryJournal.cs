@@ -34,13 +34,28 @@ public sealed class RecoveryRecord
     /// <summary>Hash of the target file as it was before this save began, or empty for a new file.</summary>
     [JsonPropertyName("baseTargetSha256")] public string BaseTargetSha256 { get; set; } = "";
 
+    /// <summary>
+    /// The state as a member this version actually defines, or null when it does not recognise the
+    /// recorded value (a journal written by a newer version, or a damaged one).
+    ///
+    /// The raw string stays in <see cref="State"/> for diagnostics. TryParse alone is not enough
+    /// here: a numeric string such as "999" parses into an enum value that no member defines, and
+    /// treating it as a real state would invent a recovery decision from garbage - hence the
+    /// additional <see cref="Enum.IsDefined{TEnum}(TEnum)"/> check. Unknown never throws: a crash
+    /// journal is read at startup, and startup must not die on a file a newer version left behind.
+    /// </summary>
     [JsonIgnore]
-    public RecoveryState StateValue => Enum.Parse<RecoveryState>(State);
+    public RecoveryState? StateValue =>
+        Enum.TryParse<RecoveryState>(State, ignoreCase: false, out var parsed) && Enum.IsDefined(parsed)
+            ? parsed
+            : null;
 
     /// <summary>
     /// True when a crash left durable content that the target file does not have yet.
     /// This is what the UI must offer the user - it must never be inferred from the temp
     /// file merely existing, because a temp file may also be a half-written fragment.
+    /// An unrecognised state is never offered: only a state this version verified as durable
+    /// when writing it is trusted, and the journal/temp are left on disk rather than guessed at.
     /// </summary>
     [JsonIgnore]
     public bool HasRecoverableWork =>
