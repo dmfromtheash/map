@@ -13,6 +13,12 @@
 | Python | 3.13.13 | только исследовательские/служебные скрипты, не runtime приложения |
 | Node/npm | 22.22.3 / 10.9.8 | не нужны приложению; остаются системными инструментами |
 | winget | 1.29.290 | официальная установка Windows SDK/tools |
+| Claude project plugins | Superpowers 6.3.0 / Interfaces 1.6.2 | TDD/debugging/verification и отдельный UI/accessibility review |
+| pre-commit | 4.6.2 | менеджер быстрых Git-гейтов |
+| Gitleaks | 8.30.1 | поиск известных форматов секретов |
+| Lychee | 0.24.2 | проверка Markdown-ссылок и anchors |
+| dotnet-coverage | 18.10.0 local tool | фактическое покрытие .NET-кода |
+| dotnet-stryker | 4.16.0 local tool | мутационная проверка силы тестов |
 
 Исследовательские Python-пакеты: PyMuPDF 1.28.0, pypdf 6.16.2, pdfplumber 0.11.10, pypdfium2 5.13.0, openpyxl 3.1.5, yt-dlp 2026.7.4. Они использовались для чтения источников и не входят в продукт.
 
@@ -30,9 +36,16 @@
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\doctor.ps1
+dotnet tool restore
+dotnet tool list
+python -m pre_commit --version
+gitleaks version
+lychee --version
 ```
 
 Успех doctor означает только готовность среды, не готовность приложения.
+
+После первой установки Gitleaks/Lychee через WinGet нужно открыть новую консоль, чтобы обновлённый `PATH` применился. До этого они вызываются по фактическому пути WinGet package. Git-hook устанавливается один раз на checkout: `python -m pre_commit install`.
 
 ## Добавление нового инструмента
 
@@ -56,4 +69,3 @@ dotnet new avalonia.mvvm -n Map.App -o src/Map.App -f net10.0
 ```
 
 Точная структура и пакеты из технического задания важнее примера команды.
-

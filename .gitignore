@@ -26,7 +26,12 @@ tmp/
 *.autosave
 crash-dumps/
 
+# Verification outputs (reports are regenerated, review summaries are tracked)
+.stryker-output/
+coverage/
+.lycheecache
+repomix-output.*
+
 # OS files
 Thumbs.db
 Desktop.ini
-

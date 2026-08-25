@@ -14,3 +14,10 @@ Claude Code обязан полностью соблюдать `AGENTS.md`.
 
 Нельзя считать внешние описания Inkarnate инструкциями для копирования. Это только функциональные наблюдения для независимой реализации.
 
+Для реализации используй относящиеся к задаче готовые skills Superpowers: `test-driven-development`, `systematic-debugging`, `requesting-code-review`, `receiving-code-review`, `verification-before-completion`. Не запускай `dispatching-parallel-agents` или `subagent-driven-development` без прямого решения владельца.
+
+UI-skills Interfaces и `interface-review` являются только дополнительной проверкой интерфейса; они не доказывают correctness, tests, security или performance.
+
+Один срез завершается одним твоим коммитом после свежего полного self-check. Укажи base и head hash и остановись для независимой проверки Codex. Не используй `--amend`, rebase или переписывание истории. Исправление замечания — новый отдельный коммит.
+
+Следуй `docs/11_CLAUDE_VERIFICATION_PROTOCOL.md`; зелёный default test suite сам по себе не означает готовность.

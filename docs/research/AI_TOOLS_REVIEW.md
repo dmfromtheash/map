@@ -36,7 +36,7 @@
 
 | Инструмент | Вердикт | Решение для Map |
 |---|---|---|
-| `jakubkrehel/skills`, семь better-* | LATER | Возможен точечный review `better-interface` после чтения кода/лицензии; весь bundle не ставить |
+| `jakubkrehel/skills`, семь better-* | USE (project only) | По прямому решению владельца установлен plugin `interfaces 1.6.2`; применять как второй UI/accessibility review, не как проверку correctness/security/performance |
 | Agent-Reach | REJECT | Автоматический доступ/скрейпинг площадок не нужен; для Inkarnate противоречит исследовательской границе |
 | Claude SEO | NO | SEO относится к сайтам |
 | i-have-adhd | NO | Стиль ответов решается проектными инструкциями без third-party skill |
@@ -45,11 +45,11 @@
 | diffusionstudio/lottie | LATER | Возможна точечная анимация onboarding, но не до UI system и performance proof |
 | papercuts | LATER | Интересен как UX-regression/polish checklist на beta, не как фундамент |
 | `anthropics/skills` | USE | Официальные document/PDF/spreadsheet skills уже использованы для исследования; не runtime dependency |
-| Superpowers | REFERENCE | TDD/review идеи полезны; установка всего auto-activating bundle может конфликтовать с AGENTS/roadmap |
+| Superpowers | USE (project only) | По прямому решению владельца установлен официальный plugin `6.3.0`; использовать TDD/debugging/review/verification, а parallel/subagent workflows запрещены проектными инструкциями без отдельного решения |
 | claude-mem | NO | Документированный handoff/decisions надёжнее и проверяемее для этого проекта; не хранить лишний контекст |
 | awesome-claude-code-subagents | NO | На старте один Opus и одна цель; каталог субагентов не нужен |
 | awesome-design-md | REJECT/REFERENCE | Общие design-system паттерны можно изучать, но брать язык бренда и копировать trade dress нельзя |
-| Repomix | LATER | Уместен, если repo станет слишком большим для review; сейчас пустой/малый и не нуждается |
+| Repomix | USE on demand | Версия `1.18.0` проверена; запускать через pinned `npx` для локального inventory/review, не считать его тестом и не хранить packed output в Git |
 | everything-claude-code | NO | Чужая полная конфигурация конфликтует с узкими правилами проекта |
 | Get Shit Done (GSD) | REFERENCE | Spec-driven идеи уже покрыты нашими docs; ещё один framework не ставить |
 | skillsmp.com | NO | Массовый marketplace повышает supply-chain риск; искать skill только под конкретный блокер |
