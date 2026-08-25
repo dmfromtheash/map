@@ -1,4 +1,4 @@
-﻿<#
+<#
     Bounded native UIA smoke for the dashboard/editor UX rebuild.
 
     Everything it asserts is read back from UI Automation on the real Release window: the context
@@ -244,6 +244,38 @@ function Assert-Contains([string]$actual, [string]$fragment, [string]$what) {
     Write-Host "      ok  $what contains '$fragment'"
 }
 
+function Get-BrushColor([string]$key) {
+    $appXaml = Join-Path $root '..\src\Map.App\App.axaml'
+    $source = Get-Content -LiteralPath $appXaml -Raw
+    $pattern = '<SolidColorBrush\s+x:Key="' + [regex]::Escape($key) + '"\s+Color="(#[0-9A-Fa-f]{6})"\s*/>'
+    $match = [regex]::Match($source, $pattern)
+    if (-not $match.Success) { throw "Brush '$key' was not found in App.axaml." }
+    return $match.Groups[1].Value
+}
+
+function Get-RelativeLuminance([string]$color) {
+    $channels = @(1, 3, 5 | ForEach-Object {
+        $value = [Convert]::ToInt32($color.Substring($_, 2), 16) / 255.0
+        if ($value -le 0.04045) { $value / 12.92 }
+        else { [Math]::Pow(($value + 0.055) / 1.055, 2.4) }
+    })
+    return 0.2126 * $channels[0] + 0.7152 * $channels[1] + 0.0722 * $channels[2]
+}
+
+function Assert-Contrast([string]$foregroundKey, [string]$backgroundKey, [double]$minimum) {
+    $foreground = Get-BrushColor $foregroundKey
+    $background = Get-BrushColor $backgroundKey
+    $first = Get-RelativeLuminance $foreground
+    $second = Get-RelativeLuminance $background
+    $lighter = [Math]::Max($first, $second)
+    $darker = [Math]::Min($first, $second)
+    $ratio = ($lighter + 0.05) / ($darker + 0.05)
+    if ($ratio -lt $minimum) {
+        throw "$foregroundKey on $backgroundKey has contrast $($ratio.ToString('F3')), below $minimum."
+    }
+    Write-Host "      ok  $foregroundKey on $backgroundKey contrast = $($ratio.ToString('F3'))"
+}
+
 function Assert-ToggleOn([string]$id, [string]$what) {
     $item = Wait-Id $id
     $pattern = $null
@@ -282,6 +314,10 @@ function Assert-OneToggleOnByPrefix([string]$prefix, [string]$what) {
 
 $contextTitles = [ordered]@{}
 try {
+    Write-Host 'Static accessibility checks'
+    Assert-Contrast 'MapFaintBrush' 'MapPanelBrush' 4.5
+    Assert-Contrast 'MapFaintBrush' 'MapSurfaceBrush' 4.5
+
     # Test mode exposes the font-substitution probe, which is a fixture and never a user command.
     $env:MAP_UI_TEST_MODE = '1'
     $script:process = Start-Process -FilePath $Exe -PassThru

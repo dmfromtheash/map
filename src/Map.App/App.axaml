@@ -23,7 +23,7 @@
         <!-- text -->
         <SolidColorBrush x:Key="MapTextBrush" Color="#EEF1F4" />
         <SolidColorBrush x:Key="MapMutedBrush" Color="#97A2B0" />
-        <SolidColorBrush x:Key="MapFaintBrush" Color="#6B7583" />
+        <SolidColorBrush x:Key="MapFaintBrush" Color="#7A8695" />
 
         <!-- meaning -->
         <SolidColorBrush x:Key="MapAccentBrush" Color="#6FB3A8" />
