@@ -15,6 +15,27 @@
         "dotnet-stryker"
       ],
       "rollForward": false
+    },
+    "dotnet-counters": {
+      "version": "9.0.661903",
+      "commands": [
+        "dotnet-counters"
+      ],
+      "rollForward": false
+    },
+    "dotnet-trace": {
+      "version": "9.0.661903",
+      "commands": [
+        "dotnet-trace"
+      ],
+      "rollForward": false
+    },
+    "dotnet-gcdump": {
+      "version": "9.0.661903",
+      "commands": [
+        "dotnet-gcdump"
+      ],
+      "rollForward": false
     }
   }
 }

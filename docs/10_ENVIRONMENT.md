@@ -19,6 +19,7 @@
 | Lychee | 0.24.2 | проверка Markdown-ссылок и anchors |
 | dotnet-coverage | 18.10.0 local tool | фактическое покрытие .NET-кода |
 | dotnet-stryker | 4.16.0 local tool | мутационная проверка силы тестов |
+| dotnet-counters / trace / gcdump | 9.0.661903 local tools | runtime metrics, performance trace и GC heap evidence |
 
 Исследовательские Python-пакеты: PyMuPDF 1.28.0, pypdf 6.16.2, pdfplumber 0.11.10, pypdfium2 5.13.0, openpyxl 3.1.5, yt-dlp 2026.7.4. Они использовались для чтения источников и не входят в продукт.
 

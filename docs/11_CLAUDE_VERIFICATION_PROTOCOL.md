@@ -19,7 +19,7 @@
 | dotnet-coverage | local tool `18.10.0`, Microsoft | фактическое покрытие исполнявшегося .NET-кода и объединение отчётов | высокий процент не означает сильные assertions |
 | Stryker.NET | local tool `4.16.0` | временно вносит ошибки в production code и показывает, способны ли тесты их заметить | один mutation score без разбора survivors не является приёмкой |
 | .NET SDK analyzers / NuGet Audit | SDK `10.0.400` | compiler/analyzer diagnostics и известные уязвимости прямых и транзитивных NuGet-зависимостей | не доказывает отсутствие логических или неизвестных уязвимостей |
-| .NET diagnostics | Microsoft `dotnet-counters`, `dotnet-trace`, `dotnet-gcdump`, `dotnet-dump`, `dotnet-stack` по необходимости | реальные CPU, exceptions, allocation/GC, trace, dump и thread stacks работающего процесса | не заменяет воспроизводимый benchmark и пользовательский сценарий |
+| .NET diagnostics | Microsoft local tools `dotnet-counters`, `dotnet-trace`, `dotnet-gcdump` `9.0.661903`; `dotnet-dump`/`dotnet-stack` по необходимости | реальные CPU, exceptions, allocation/GC, trace, dump и thread stacks работающего процесса | не заменяет воспроизводимый benchmark и пользовательский сценарий |
 | Avalonia Headless | официальный Avalonia test package, подключается когда появляется UI test project | control tree, layout, binding, ввод и pixel capture через Skia без окна | не доказывает работу native window, focus, menus и accessibility ОС |
 | Appium + WinAppDriver | официальный путь Avalonia для Windows, подключается на UI-этапе | управляет собранным EXE через accessibility tree в настоящем окне | не оценивает визуальное качество canvas без screenshot/golden/manual review |
 | FsCheck | подключается к тестовому проекту для инвариантов | ищет минимальный контрпример на множестве сгенерированных входов | свойства должны быть корректно сформулированы и проверены ревьюером |
@@ -162,4 +162,3 @@ Coverage и mutation testing оцениваются по риску. Нельз�
 - `FACT`, `PARTIAL`, `BLOCKED` и точный следующий fix-prompt.
 
 Этот файл создаётся по фактам после проверки, а не заранее как обещание.
-
