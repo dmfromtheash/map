@@ -134,6 +134,7 @@ public static class SelectionHandles
         {
             Sublayer = before.Sublayer, GroupId = before.GroupId, Stamp = before.Stamp,
             Line = before.Line, Shape = before.Shape, Text = before.Text,
+            Composition = before.Composition, PlaceholderReason = before.PlaceholderReason,
             ObjectOpacity = before.ObjectOpacity,
         };
     }
@@ -171,6 +172,7 @@ public static class SelectionHandles
         {
             Sublayer = before.Sublayer, GroupId = before.GroupId, Stamp = before.Stamp,
             Line = before.Line, Shape = before.Shape, Text = before.Text,
+            Composition = before.Composition, PlaceholderReason = before.PlaceholderReason,
             ObjectOpacity = before.ObjectOpacity,
         };
     }

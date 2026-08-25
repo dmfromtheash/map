@@ -9,6 +9,8 @@ public enum SceneObjectKind
     Line = 3,
     Shape = 4,
     Text = 5,
+    Composition = 6,
+    Placeholder = 7,
 }
 
 /// <summary>
@@ -111,6 +113,12 @@ public sealed record SceneObject
 
     /// <summary>Editable text request and appearance; resolved fonts are machine-local derived state.</summary>
     public TextStyle? Text { get; init; }
+
+    /// <summary>Editable nested object structure when <see cref="Kind"/> is Composition.</summary>
+    public EditableComposition? Composition { get; init; }
+
+    /// <summary>User-facing reason retained for a missing/incompatible pasted item.</summary>
+    public string? PlaceholderReason { get; init; }
 
     /// <summary>Whole-object opacity 0..1 (stamps expose it in the editor).</summary>
     public double ObjectOpacity { get; init; } = 1.0;

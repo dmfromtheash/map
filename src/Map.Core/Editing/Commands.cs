@@ -654,6 +654,14 @@ public sealed class UpdateLayerCommand : IEditCommand
                 Opacity = opacity ?? grid.Opacity,
                 Blend = blend ?? grid.Blend,
             },
+            FilterLayer filter => filter with
+            {
+                Name = name ?? filter.Name,
+                Visible = visible ?? filter.Visible,
+                Locked = locked ?? filter.Locked,
+                Opacity = opacity ?? filter.Opacity,
+                Blend = blend ?? filter.Blend,
+            },
             _ => throw new InvalidOperationException($"Unknown layer type {layer.GetType().Name}."),
         };
 

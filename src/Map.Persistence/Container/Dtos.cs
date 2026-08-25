@@ -64,6 +64,23 @@ internal sealed class LayerDto
     [JsonPropertyName("grids")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<GridDefinitionDto>? Grids { get; set; }
+    [JsonPropertyName("filter")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public FilterSettingsDto? Filter { get; set; }
+}
+
+internal sealed class FilterSettingsDto
+{
+    [JsonPropertyName("brightness")] public double Brightness { get; set; }
+    [JsonPropertyName("contrast")] public double Contrast { get; set; }
+    [JsonPropertyName("saturation")] public double Saturation { get; set; }
+    [JsonPropertyName("hueDegrees")] public double HueDegrees { get; set; }
+    [JsonPropertyName("temperature")] public double Temperature { get; set; }
+    [JsonPropertyName("textureAssetSha256")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? TextureAssetSha256 { get; set; }
+    [JsonPropertyName("textureOpacity")] public double TextureOpacity { get; set; }
+    [JsonPropertyName("textureScale")] public double TextureScale { get; set; }
 }
 
 internal sealed class GridDefinitionDto
@@ -154,6 +171,42 @@ internal sealed class SceneObjectDto
     [JsonPropertyName("text")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public TextStyleDto? Text { get; set; }
+    [JsonPropertyName("composition")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public EditableCompositionDto? Composition { get; set; }
+    [JsonPropertyName("placeholderReason")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? PlaceholderReason { get; set; }
+}
+
+internal sealed class EditableCompositionDto
+{
+    [JsonPropertyName("id")] public string Id { get; set; } = "";
+    [JsonPropertyName("sourceDocumentId")] public string SourceDocumentId { get; set; } = "";
+    [JsonPropertyName("name")] public string Name { get; set; } = "";
+    [JsonPropertyName("sourceWidth")] public double SourceWidth { get; set; }
+    [JsonPropertyName("sourceHeight")] public double SourceHeight { get; set; }
+    [JsonPropertyName("anchorX")] public double AnchorX { get; set; }
+    [JsonPropertyName("anchorY")] public double AnchorY { get; set; }
+    [JsonPropertyName("referenceGridScale")] public double ReferenceGridScale { get; set; }
+    [JsonPropertyName("items")] public List<SceneObjectDto> Items { get; set; } = [];
+    [JsonPropertyName("assets")] public List<CompositionAssetDto> Assets { get; set; } = [];
+    [JsonPropertyName("includeBackground")] public bool IncludeBackground { get; set; }
+    [JsonPropertyName("backgroundColor")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? BackgroundColor { get; set; }
+    [JsonPropertyName("includeGrids")] public bool IncludeGrids { get; set; }
+    [JsonPropertyName("grids")] public List<GridDefinitionDto> Grids { get; set; } = [];
+    [JsonPropertyName("includeFilters")] public bool IncludeFilters { get; set; }
+    [JsonPropertyName("filters")] public List<FilterSettingsDto> Filters { get; set; } = [];
+}
+
+internal sealed class CompositionAssetDto
+{
+    [JsonPropertyName("sha256")] public string Sha256 { get; set; } = "";
+    [JsonPropertyName("displayName")] public string DisplayName { get; set; } = "";
+    [JsonPropertyName("provenance")] public string Provenance { get; set; } = "";
+    [JsonPropertyName("license")] public string License { get; set; } = "";
 }
 
 internal sealed class TextStyleDto

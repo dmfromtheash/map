@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using Map.Assets;
 using Map.Core.Documents;
+using Map.Core.Editing;
 using Map.Rendering;
 using SkiaSharp;
 
@@ -53,6 +54,45 @@ for (var iteration = 0; iteration < 35; iteration++)
 }
 
 samples.Sort();
+var baseDrawnCount = stats.ObjectsDrawn;
+var mixedObjects = new List<SceneObject>();
+for (var i = 0; i < 100; i++)
+{
+    mixedObjects.Add(new SceneObject(
+        ObjectId.New(), SceneObjectKind.Text, $"label-{i}",
+        10_020 + (i % 10) * 180, 10_020 + (i / 10) * 100,
+        160, 70, 0, "#FF24354A", "#FFFFFFFF", 0, true, false)
+    { Text = new TextStyle { Content = $"Grid {i}", FontSize = 20 } });
+}
+var line = VectorGeometry.CreateLine(ObjectId.New(), "route",
+    [new VectorPoint(10_000, 10_900), new VectorPoint(10_900, 10_100), new VectorPoint(11_900, 10_900)]);
+mixedObjects.Add(line);
+var package = CompositionTransfer.Copy(document, [objects[0].Id],
+    new CompositionCaptureOptions { ReferenceGridScale = 64 });
+mixedObjects.Add(CompositionTransfer.CreateInstance(package, 10_900, 10_540, 64));
+var mixedDocument = new MapDocument(
+    DocumentId.New(), "mixed benchmark", DateTimeOffset.UnixEpoch,
+    document.Canvas,
+    [
+        new BaseColorLayer(LayerId.New(), "background", true, false, 1, "#FFFFFFFF"),
+        layer,
+        new ObjectLayer(LayerId.New(), "mixed vector/text", true, false, 1, mixedObjects),
+        new GridLayer(LayerId.New(), "grid", true, false, 1,
+            [new GridDefinition(GridId.New(), GridGeometry.HexPointy, 96) { Subdivisions = 2 }]),
+        new FilterLayer(LayerId.New(), "filter", true, false, 1,
+            new FilterSettings { Brightness = 0.08, Contrast = 0.12, Temperature = 0.1 }),
+    ]);
+var mixedSamples = new List<double>();
+for (var iteration = 0; iteration < 18; iteration++)
+{
+    surface.Canvas.Clear(SKColors.Transparent); surface.Canvas.Save();
+    surface.Canvas.Translate(-10_000, -10_000); var timer = Stopwatch.StartNew();
+    SceneRenderer.Render(surface.Canvas, mixedDocument, new RenderOptions
+    { VisibleWorld = view, ViewScale = 1, Stats = stats });
+    surface.Canvas.Flush(); timer.Stop(); surface.Canvas.Restore();
+    if (iteration >= 3) mixedSamples.Add(timer.Elapsed.TotalMilliseconds);
+}
+mixedSamples.Sort();
 var assetRoot = Path.Combine(Path.GetTempPath(), "map-asset-benchmark-" + Guid.NewGuid().ToString("N"));
 var catalog = new AssetCatalog(assetRoot);
 var assetRecords = Enumerable.Range(0, 10_000).Select(index => new AssetRecord
@@ -115,7 +155,8 @@ var landExactSamples = MeasureLand(landDocument, landCache, fast: false, iterati
 var renderMedian = Percentile(samples, 0.50);
 var searchP95 = Percentile(searchSamples, 0.95);
 var assetLoadMs = Math.Round(loadTimer.Elapsed.TotalMilliseconds, 3);
-var gatePassed = renderMedian <= 33.3 && searchP95 <= 100 && assetLoadMs <= 2_000;
+var mixedMedian = Percentile(mixedSamples, 0.50);
+var gatePassed = renderMedian <= 33.3 && mixedMedian <= 33.3 && searchP95 <= 100 && assetLoadMs <= 2_000;
 var result = new
 {
     recordedUtc = DateTimeOffset.UtcNow,
@@ -131,9 +172,19 @@ var result = new
         viewport = "1920x1080",
         objectCount = objects.Count,
         candidateCount = candidates.Count,
-        drawnCount = stats.ObjectsDrawn,
+        drawnCount = baseDrawnCount,
         medianMs = renderMedian,
         p95Ms = Percentile(samples, 0.95),
+        gateMedianMs = 33.3,
+    },
+    mixedStage8 = new
+    {
+        canvas = "65536x65536", viewport = "1920x1080",
+        baseObjectCount = objects.Count, textCount = 100, vectorCount = 1,
+        compositionCount = 1, grid = "hex-pointy/2", filterCount = 1,
+        candidateCount = stats.ObjectCandidates, drawnCount = stats.ObjectsDrawn,
+        warmupIterations = 3, measuredIterations = mixedSamples.Count,
+        medianMs = mixedMedian, p95Ms = Percentile(mixedSamples, 0.95),
         gateMedianMs = 33.3,
     },
     assetCatalog = new

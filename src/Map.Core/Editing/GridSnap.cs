@@ -135,6 +135,7 @@ public static class GridSnapService
     {
         Sublayer = source.Sublayer, GroupId = source.GroupId, Stamp = source.Stamp,
         Line = source.Line, Shape = source.Shape, Text = source.Text, ObjectOpacity = source.ObjectOpacity,
+        Composition = source.Composition, PlaceholderReason = source.PlaceholderReason,
     };
 }
 

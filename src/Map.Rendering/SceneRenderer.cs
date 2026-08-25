@@ -171,6 +171,10 @@ public static class SceneRenderer
                 DrawGridLayer(canvas, gridLayer, view, options);
                 break;
 
+            case FilterLayer filterLayer:
+                DrawFilterOverlay(canvas, filterLayer.Settings, view, options);
+                break;
+
             case IRasterContentLayer raster:
                 DrawTiles(canvas, layer.Id, raster.ContentTiles, view, options, TileImageKind.Content);
                 break;
@@ -618,6 +622,20 @@ public static class SceneRenderer
             return;
         }
 
+        if (sceneObject.Kind == SceneObjectKind.Composition && sceneObject.Composition is { } composition)
+        {
+            DrawComposition(canvas, sceneObject, composition, objectAlpha, options);
+            canvas.Restore();
+            return;
+        }
+
+        if (sceneObject.Kind == SceneObjectKind.Placeholder)
+        {
+            DrawPlaceholder(canvas, rect, objectAlpha);
+            canvas.Restore();
+            return;
+        }
+
         using (var fill = new SKPaint
         {
             Color = ParseColor(sceneObject.FillColor).WithScaledAlpha(objectAlpha),
@@ -652,6 +670,111 @@ public static class SceneRenderer
             if (options.IsExport && !grid.IncludeInExport) continue;
             DrawGrid(canvas, grid, view);
         }
+    }
+
+    private static void DrawComposition(
+        SKCanvas canvas, SceneObject owner, EditableComposition composition,
+        byte objectAlpha, RenderOptions options)
+    {
+        var ownerRect = new SKRect((float)owner.X, (float)owner.Y,
+            (float)(owner.X + owner.Width), (float)(owner.Y + owner.Height));
+        using var ownerPaint = new SKPaint
+        {
+            Color = SKColors.White.WithAlpha(objectAlpha), BlendMode = SKBlendMode.SrcOver,
+        };
+        canvas.SaveLayer(ownerRect, ownerPaint);
+        canvas.ClipRect(ownerRect);
+        canvas.Translate((float)owner.X, (float)owner.Y);
+        canvas.Scale((float)(owner.Width / composition.SourceWidth),
+            (float)(owner.Height / composition.SourceHeight));
+        if (composition.IncludeBackground && composition.BackgroundColor is { } background)
+        {
+            using var paint = new SKPaint
+            {
+                Color = ParseColor(background).WithScaledAlpha(objectAlpha), Style = SKPaintStyle.Fill,
+            };
+            canvas.DrawRect(0, 0, (float)composition.SourceWidth, (float)composition.SourceHeight, paint);
+        }
+        foreach (var item in composition.Items.Where(item => item.Visible)
+                     .OrderBy(item => item.Sublayer))
+            DrawObject(canvas, item, options);
+        if (composition.IncludeGrids)
+        {
+            var localView = new WorldBounds(0, 0, composition.SourceWidth, composition.SourceHeight);
+            foreach (var grid in composition.Grids) DrawGrid(canvas, grid, localView);
+        }
+        if (composition.IncludeFilters)
+        {
+            var localView = new WorldBounds(0, 0, composition.SourceWidth, composition.SourceHeight);
+            foreach (var filter in composition.Filters) DrawFilterOverlay(canvas, filter, localView, options);
+        }
+        canvas.Restore();
+    }
+
+    private static void DrawPlaceholder(SKCanvas canvas, SKRect rect, byte objectAlpha)
+    {
+        using var fill = new SKPaint
+        {
+            Color = new SKColor(255, 0, 255, (byte)Math.Min(180, (int)objectAlpha)), Style = SKPaintStyle.Fill,
+        };
+        using var stroke = new SKPaint
+        {
+            Color = new SKColor(60, 0, 60, objectAlpha), StrokeWidth = 3,
+            Style = SKPaintStyle.Stroke, IsAntialias = true,
+        };
+        canvas.DrawRect(rect, fill); canvas.DrawRect(rect, stroke);
+        canvas.DrawLine(rect.Left, rect.Top, rect.Right, rect.Bottom, stroke);
+        canvas.DrawLine(rect.Right, rect.Top, rect.Left, rect.Bottom, stroke);
+    }
+
+    private static void DrawFilterOverlay(
+        SKCanvas canvas, FilterSettings filter, WorldBounds view, RenderOptions options)
+    {
+        var rect = ToRect(view);
+        static byte Alpha(double value, double scale = 0.45) =>
+            (byte)Math.Clamp(Math.Round(Math.Abs(value) * scale * 255), 0, 255);
+        void Overlay(SKColor color, SKBlendMode blend)
+        {
+            if (color.Alpha == 0) return;
+            using var paint = new SKPaint { Color = color, BlendMode = blend, Style = SKPaintStyle.Fill };
+            canvas.DrawRect(rect, paint);
+        }
+
+        Overlay(filter.Brightness >= 0
+            ? SKColors.White.WithAlpha(Alpha(filter.Brightness))
+            : SKColors.Black.WithAlpha(Alpha(filter.Brightness)), SKBlendMode.SrcOver);
+        Overlay(filter.Contrast >= 0
+            ? SKColors.Gray.WithAlpha(Alpha(filter.Contrast, 0.35))
+            : SKColors.White.WithAlpha(Alpha(filter.Contrast, 0.25)),
+            filter.Contrast >= 0 ? SKBlendMode.Overlay : SKBlendMode.SoftLight);
+        if (filter.Saturation != 0)
+        {
+            var color = filter.Saturation > 0 ? new SKColor(255, 90, 50) : SKColors.Gray;
+            Overlay(color.WithAlpha(Alpha(filter.Saturation, 0.35)), SKBlendMode.Color);
+        }
+        if (filter.HueDegrees != 0)
+        {
+            var hueColor = SKColor.FromHsv((float)((filter.HueDegrees % 360 + 360) % 360), 80, 85);
+            Overlay(hueColor.WithAlpha(Alpha(filter.HueDegrees / 180, 0.35)), SKBlendMode.Hue);
+        }
+        if (filter.Temperature != 0)
+        {
+            var temperature = filter.Temperature > 0 ? new SKColor(255, 126, 40) : new SKColor(45, 130, 255);
+            Overlay(temperature.WithAlpha(Alpha(filter.Temperature, 0.3)), SKBlendMode.SoftLight);
+        }
+
+        if (filter.TextureAssetSha256 is not { } hash) return;
+        var image = options.Stamps?.TryGetImage(hash);
+        if (image is null) { if (options.Stats is { } stats) stats.MissingAssets++; return; }
+        var scale = (float)Math.Max(0.05, filter.TextureScale);
+        using var shader = image.ToShader(
+            SKShaderTileMode.Repeat, SKShaderTileMode.Repeat, SKMatrix.CreateScale(scale, scale));
+        using var texturePaint = new SKPaint
+        {
+            Color = SKColors.White.WithAlpha((byte)Math.Clamp(Math.Round(filter.TextureOpacity * 255), 0, 255)),
+            BlendMode = SKBlendMode.SoftLight, IsAntialias = false, Shader = shader,
+        };
+        canvas.DrawRect(rect, texturePaint);
     }
 
     private static void DrawGrid(SKCanvas canvas, GridDefinition grid, WorldBounds view)
@@ -710,12 +833,12 @@ public static class SceneRenderer
         var lod = Math.Max(1, (int)Math.Ceiling(Math.Sqrt(columns * (double)rows / 2000)));
         var startColumn = (int)Math.Floor(minX / dx) - 2;
         var startRow = (int)Math.Floor(minY / dy) - 2;
+        using var path = new SKPath();
         for (var column = startColumn; column <= startColumn + columns; column += lod)
         for (var row = startRow; row <= startRow + rows; row += lod)
         {
             var cx = pointy ? column * dx + (row % 2 == 0 ? 0 : dx / 2) : column * dx;
             var cy = pointy ? row * dy : row * dy + (column % 2 == 0 ? 0 : dy / 2);
-            using var path = new SKPath();
             for (var vertex = 0; vertex < 6; vertex++)
             {
                 var angle = (pointy ? -90 : 0) + vertex * 60;
@@ -723,18 +846,17 @@ public static class SceneRenderer
                 var vy = cy + Math.Sin(angle * Math.PI / 180) * size;
                 if (vertex == 0) path.MoveTo((float)vx, (float)vy); else path.LineTo((float)vx, (float)vy);
             }
-            path.Close(); canvas.DrawPath(path, paint);
+            path.Close();
         }
+        canvas.DrawPath(path, paint);
     }
 
     private static void DrawText(
         SKCanvas canvas, SceneObject owner, TextStyle style, SKRect rect, byte objectAlpha)
     {
         var resolution = TextFontResolver.Resolve(style.RequestedFontFamily, style.FallbackFontFamily);
-        using var typeface = SKTypeface.FromFamilyName(
-            resolution.ResolvedFamily,
-            new SKFontStyle(style.FontWeight, (int)SKFontStyleWidth.Normal, SKFontStyleSlant.Upright));
-        using var font = new SKFont(typeface ?? SKTypeface.Default, (float)Math.Max(1, style.FontSize));
+        var typeface = TextFontResolver.GetTypeface(resolution, style.FontWeight);
+        using var font = new SKFont(typeface, (float)Math.Max(1, style.FontSize));
         using var paint = new SKPaint
         {
             IsAntialias = true,

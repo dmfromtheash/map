@@ -61,3 +61,10 @@ public readonly record struct GridId(Guid Value)
     public override string ToString() => Value.ToString("D");
     public static GridId Parse(string s) => new(Guid.ParseExact(s, "D"));
 }
+
+public readonly record struct CompositionId(Guid Value)
+{
+    public static CompositionId New() => new(Guid.NewGuid());
+    public override string ToString() => Value.ToString("D");
+    public static CompositionId Parse(string s) => new(Guid.ParseExact(s, "D"));
+}

@@ -47,8 +47,18 @@ public sealed class EditorView : UserControl
     };
     private NoteId? _selectedNoteId;
     private AssetRecord? _selectedAsset;
+    private readonly WrapPanel _commonObjectActions = new() { Name = "CommonObjectActions" };
+    private readonly WrapPanel _stampObjectActions = new() { Name = "StampObjectActions" };
+    private readonly WrapPanel _vectorObjectActions = new() { Name = "VectorObjectActions" };
+    private readonly WrapPanel _textObjectActions = new() { Name = "TextObjectActions" };
+    private readonly WrapPanel _compositionObjectActions = new() { Name = "CompositionObjectActions" };
+    private Control _stampObjectGroup = null!;
+    private Control _vectorObjectGroup = null!;
+    private Control _textObjectGroup = null!;
+    private Control _compositionObjectGroup = null!;
 
-    public EditorView(EditorViewModel editor, Func<System.Threading.Tasks.Task> requestBack)
+    public EditorView(
+        EditorViewModel editor, Func<System.Threading.Tasks.Task> requestBack, Action requestSecondWindow)
     {
         _editor = editor;
         Name = "EditorView";
@@ -99,41 +109,66 @@ public sealed class EditorView : UserControl
             eraser.Content = _editor.BrushSettings.Eraser ? "Ластик: вкл" : "Ластик: выкл";
         };
 
-        var toolbar = new WrapPanel
+        var primaryToolbar = new WrapPanel
         {
             Orientation = Orientation.Horizontal,
             Margin = new Thickness(7, 5),
             Children =
             {
                 AsyncTool("BackButton", "← Библиотека", requestBack),
+                Tool("SecondWindowButton", "Второе окно", requestSecondWindow),
                 new Separator { Width = 12 },
                 Tool("SelectToolButton", "Выбор", () => _editor.ActiveTool = EditorTool.Select),
-                Tool("BrushToolButton", "Кисть", () => _editor.ActiveTool = EditorTool.Brush),
-                Tool("MaskToolButton", "Маска", () => _editor.ActiveTool = EditorTool.Mask),
-                Tool("LandToolButton", "Земля", () => _editor.ActiveTool = EditorTool.Land),
-                Tool("LineToolButton", "Line draw", () => _editor.ActiveTool = EditorTool.Line),
-                Tool("ShapeToolButton", "Shape draw", () => _editor.ActiveTool = EditorTool.Shape),
-                Tool("TextToolButton", "Текст", () => _editor.ActiveTool = EditorTool.Text),
-                brushSize,
-                brushOpacity,
-                eraser,
-                Tool("MaskModeButton", "Маска +/−", () =>
-                    _editor.MaskMode = _editor.MaskMode == Map.Core.Editing.MaskPaintMode.Hide
-                        ? Map.Core.Editing.MaskPaintMode.Reveal
-                        : Map.Core.Editing.MaskPaintMode.Hide),
-                new Separator { Width = 12 },
-                Tool("AddRectangleButton", "Прямоугольник", () => _editor.AddObject(SceneObjectKind.Rectangle)),
-                Tool("AddEllipseButton", "Эллипс", () => _editor.AddObject(SceneObjectKind.Ellipse)),
-                Tool("AddLineButton", "+ Line", _editor.AddLine),
-                Tool("AddVectorRectangleButton", "+ Shape", () => _editor.AddShape(ShapePrimitiveKind.Rectangle)),
-                Tool("AddTextButton", "+ Текст", _editor.AddText),
-                new Separator { Width = 12 },
                 Tool("UndoButton", "Отменить", _editor.Undo),
                 Tool("RedoButton", "Повторить", _editor.Redo),
                 new Separator { Width = 12 },
                 AsyncTool("SaveButton", "Сохранить", () => _editor.SaveAsync()),
                 AsyncTool("SaveAsButton", "Сохранить как…", () => _editor.SaveAsync(saveAs: true)),
                 Tool("FitButton", "Вписать", _canvas.FitToCanvas),
+            },
+        };
+        var objectTools = new WrapPanel
+        {
+            Children =
+            {
+                Tool("LineToolButton", "Линия", () => _editor.ActiveTool = EditorTool.Line),
+                Tool("ShapeToolButton", "Фигура", () => _editor.ActiveTool = EditorTool.Shape),
+                Tool("TextToolButton", "Текст", () => _editor.ActiveTool = EditorTool.Text),
+                Tool("AddRectangleButton", "Прямоугольник", () => _editor.AddObject(SceneObjectKind.Rectangle)),
+                Tool("AddEllipseButton", "Эллипс", () => _editor.AddObject(SceneObjectKind.Ellipse)),
+                Tool("AddLineButton", "+ Линия", _editor.AddLine),
+                Tool("AddVectorRectangleButton", "+ Фигура", () => _editor.AddShape(ShapePrimitiveKind.Rectangle)),
+                Tool("AddTextButton", "+ Текст", _editor.AddText),
+            },
+        };
+        var rasterTools = new WrapPanel
+        {
+            Children =
+            {
+                Tool("BrushToolButton", "Кисть", () => _editor.ActiveTool = EditorTool.Brush),
+                Tool("MaskToolButton", "Маска", () => _editor.ActiveTool = EditorTool.Mask),
+                Tool("LandToolButton", "Земля", () => _editor.ActiveTool = EditorTool.Land),
+                brushSize, brushOpacity, eraser,
+                Tool("MaskModeButton", "Маска +/−", () =>
+                    _editor.MaskMode = _editor.MaskMode == Map.Core.Editing.MaskPaintMode.Hide
+                        ? Map.Core.Editing.MaskPaintMode.Reveal
+                        : Map.Core.Editing.MaskPaintMode.Hide),
+            },
+        };
+        var toolbar = new StackPanel
+        {
+            Children =
+            {
+                primaryToolbar,
+                new TabControl
+                {
+                    Name = "ToolPaletteTabs", Margin = new Thickness(7, 0, 7, 5),
+                    ItemsSource = new[]
+                    {
+                        new TabItem { Header = "Объекты", Content = objectTools },
+                        new TabItem { Header = "Кисти и маски", Content = rasterTools },
+                    },
+                },
             },
         };
 
@@ -163,7 +198,7 @@ public sealed class EditorView : UserControl
                 }, Dock.Bottom),
                 WithDock(new Border
                 {
-                    Width = 260,
+                    Width = 310,
                     Background = new SolidColorBrush(Color.FromRgb(0x23, 0x27, 0x30)),
                     Child = rightPanel,
                 }, Dock.Right),
@@ -202,6 +237,16 @@ public sealed class EditorView : UserControl
             return button;
         }
 
+        static Control ContextGroup(string title, Control content) => new StackPanel
+        {
+            Spacing = 3,
+            Children =
+            {
+                new TextBlock { Text = title, FontWeight = FontWeight.SemiBold, Opacity = 0.8 },
+                content,
+            },
+        };
+
         var rename = ActionButton("RenameLayerButton", "Переименовать", () =>
             _editor.RenameActiveLayer(_layerName.Text ?? ""));
 
@@ -213,6 +258,7 @@ public sealed class EditorView : UserControl
                 ActionButton("AddBrushLayerButton", "+ Кисть", _editor.AddBrushLayer),
                 ActionButton("AddLandLayerButton", "+ Земля", _editor.AddLandLayer),
                 ActionButton("AddGridLayerButton", "+ Сетка", _editor.AddGridLayer),
+                ActionButton("AddFilterLayerButton", "+ Фильтр", _editor.AddFilterLayer),
                 ActionButton("LayerUpButton", "↑", () => _editor.ReorderActiveLayer(true)),
                 ActionButton("LayerDownButton", "↓", () => _editor.ReorderActiveLayer(false)),
                 ActionButton("LayerVisibilityButton", "Показать/скрыть", _editor.ToggleActiveLayerVisibility),
@@ -243,6 +289,7 @@ public sealed class EditorView : UserControl
                 ActionButton("GridSnapObjectButton", "Snap object", _editor.SnapSelectedObjectToGrid),
                 ActionButton("GridSnapNodeButton", "Snap node", _editor.SnapSelectedNodeToGrid),
                 ActionButton("GridSnapPortalButton", "Snap portal", _editor.SnapSelectedPortalToGrid),
+                ActionButton("FilterStyleButton", "Стиль фильтра", _editor.CycleActiveFilter),
             },
         };
 
@@ -260,6 +307,11 @@ public sealed class EditorView : UserControl
             },
         };
 
+        _stampObjectGroup = ContextGroup("Stamp", _stampObjectActions);
+        _vectorObjectGroup = ContextGroup("Line / Shape", _vectorObjectActions);
+        _textObjectGroup = ContextGroup("Text", _textObjectActions);
+        _compositionObjectGroup = ContextGroup("Composition", _compositionObjectActions);
+
         var objects = new StackPanel
         {
             Margin = new Thickness(10),
@@ -268,19 +320,35 @@ public sealed class EditorView : UserControl
             {
                 _objectSearch,
                 new ScrollViewer { MaxHeight = 220, Content = _objectList },
-                new WrapPanel
-                {
-                    Children =
-                    {
+                ContextGroup("Основное", _commonObjectActions),
+                _stampObjectGroup,
+                _vectorObjectGroup,
+                _textObjectGroup,
+                _compositionObjectGroup,
+                new Separator(),
+                BuildInspector(),
+            },
+        };
+
+        _commonObjectActions.Children.AddRange(
+        [
                         ActionButton("ObjectVisibilityButton", "Показать/скрыть", _editor.ToggleSelectedObjectVisibility),
                         ActionButton("ObjectLockButton", "Замок", _editor.ToggleSelectedObjectLock),
                         ActionButton("DeleteObjectButton", "Удалить", _editor.DeleteSelectedObject),
+                        ActionButton("MakeCompositionButton", "Собрать композицию", () => _editor.CreateEditableComposition()),
+                        ActionButton("PasteCompositionButton", "Вставить композицию", _editor.PasteComposition),
+        ]);
+        _stampObjectActions.Children.AddRange(
+        [
                         ActionButton("StampFlipButton", "Stamp: отразить", () =>
                             _editor.UpdateSelectedStamp(toggleFlip: true)),
                         ActionButton("StampShadowButton", "Stamp: тень", () =>
                             _editor.UpdateSelectedStamp(toggleShadow: true)),
                         ActionButton("StampHueButton", "Stamp: цвет", () =>
                             _editor.UpdateSelectedStamp(hue: 35, saturation: 0.2)),
+        ]);
+        _vectorObjectActions.Children.AddRange(
+        [
                         ActionButton("AddLineNodeButton", "Line: + node", _editor.AddNodeToSelectedLine),
                         ActionButton("MoveVectorNodeButton", "Node: move", _editor.MoveSelectedVectorNode),
                         ActionButton("CurveNodeButton", "Node: curve", _editor.ToggleSelectedNodeCurve),
@@ -297,14 +365,17 @@ public sealed class EditorView : UserControl
                             _editor.ApplyShapeBoolean(Map.Core.Editing.ShapeBooleanOperation.Subtract)),
                         ActionButton("BooleanMergeButton", "Boolean merge", () =>
                             _editor.ApplyShapeBoolean(Map.Core.Editing.ShapeBooleanOperation.Merge)),
+        ]);
+        _textObjectActions.Children.AddRange(
+        [
                         ActionButton("TextStyleButton", "Text style", _editor.CycleSelectedTextStyle),
                         ActionButton("TextMissingFontButton", "Missing font test", _editor.UseMissingFontOnSelectedText),
-                    },
-                },
-                new Separator(),
-                BuildInspector(),
-            },
-        };
+        ]);
+        _compositionObjectActions.Children.AddRange(
+        [
+                        ActionButton("CopyCompositionButton", "Копировать композицию", _editor.CopySelectedComposition),
+                        ActionButton("FlattenCompositionButton", "Растеризовать", _editor.FlattenSelectedComposition),
+        ]);
 
         var assets = new StackPanel
         {
@@ -346,6 +417,10 @@ public sealed class EditorView : UserControl
                         ActionButton("UseAssetStrokeButton", "Asset stroke", () =>
                         {
                             if (_selectedAsset is not null) _editor.UseAssetAsSelectedVectorStroke(_selectedAsset);
+                        }),
+                        ActionButton("UseAssetFilterButton", "Texture filter", () =>
+                        {
+                            if (_selectedAsset is not null) _editor.UseAssetAsActiveFilterTexture(_selectedAsset);
                         }),
                     },
                 },
@@ -396,10 +471,10 @@ public sealed class EditorView : UserControl
             Name = "EditorSideTabs",
             ItemsSource = new[]
             {
-                new TabItem { Header = "Слои", Content = layers },
-                new TabItem { Header = "Объекты", Content = objects },
-                new TabItem { Header = "Ассеты", Content = assets },
-                new TabItem { Header = "Заметки", Content = notes },
+                new TabItem { Header = "Слои", Content = new ScrollViewer { Content = layers } },
+                new TabItem { Header = "Объекты", Content = new ScrollViewer { Content = objects } },
+                new TabItem { Header = "Ассеты", Content = new ScrollViewer { Content = assets } },
+                new TabItem { Header = "Заметки", Content = new ScrollViewer { Content = notes } },
             },
         };
     }
@@ -515,6 +590,7 @@ public sealed class EditorView : UserControl
                 BrushLayer => "Кисть",
                 LandLayer => "Земля",
                 GridLayer => "Сетка",
+                FilterLayer => "Фильтр",
                 _ => layer.GetType().Name,
             };
             var active = layer.Id == _editor.ActiveLayerId ? "▶ " : "";
@@ -565,6 +641,17 @@ public sealed class EditorView : UserControl
             };
             _objectList.Children.Add(button);
         }
+        SyncObjectActions();
+    }
+
+    private void SyncObjectActions()
+    {
+        var selected = _editor.Session.SelectedObject;
+        _commonObjectActions.IsVisible = true; // Paste remains useful even before a selection.
+        _stampObjectGroup.IsVisible = selected?.Kind == SceneObjectKind.Stamp;
+        _vectorObjectGroup.IsVisible = selected?.Kind is SceneObjectKind.Line or SceneObjectKind.Shape;
+        _textObjectGroup.IsVisible = selected?.Kind == SceneObjectKind.Text;
+        _compositionObjectGroup.IsVisible = selected?.Kind == SceneObjectKind.Composition;
     }
 
     private void SyncAssetList()

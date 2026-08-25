@@ -197,6 +197,18 @@ public static class VectorGeometry
                     [.. shape.Portals.Select(portal => portal with { Id = PortalId.New() })]),
             };
         }
+        if (source.Composition is { } composition)
+        {
+            result = result with
+            {
+                Composition = composition with
+                {
+                    Id = CompositionId.New(),
+                    Items = [.. composition.Items.Select(WithNewIds)],
+                    Grids = [.. composition.Grids.Select(grid => grid with { Id = GridId.New() })],
+                },
+            };
+        }
         return result;
     }
 

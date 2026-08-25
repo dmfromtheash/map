@@ -67,8 +67,14 @@ public sealed class MainWindow : Window
 
     private void ShowEditor(EditorViewModel editor)
     {
-        _editorView = new EditorView(editor, requestBack: LeaveEditorAsync);
+        _editorView = new EditorView(editor, requestBack: LeaveEditorAsync, requestSecondWindow: OpenSecondWindow);
         _host.Content = _editorView;
+    }
+
+    private void OpenSecondWindow()
+    {
+        var window = new MainWindow(_store, _recent, _log, _assets) { Title = "Map · второе окно" };
+        window.Show();
     }
 
     private EditorViewModel CreateEditor(Map.Core.Documents.MapDocument document, string? path, bool startDirty) =>

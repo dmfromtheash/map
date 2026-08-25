@@ -44,6 +44,27 @@ public sealed record MapDocument
         var portalIds = new HashSet<PortalId>();
         var regionIds = new HashSet<ShapeRegionId>();
         var gridIds = new HashSet<GridId>();
+        var compositionIds = new HashSet<CompositionId>();
+
+        void ValidateComposition(SceneObject owner)
+        {
+            if (owner.Composition is not { } composition) return;
+            if (!compositionIds.Add(composition.Id))
+                throw new ArgumentException("Composition ids are unique across the document.", nameof(layers));
+            foreach (var child in composition.Items)
+            {
+                if (!objectIds.Add(child.Id))
+                    throw new ArgumentException("Composition internal object ids cannot collide.", nameof(layers));
+                var childNodes = child.Line?.Nodes
+                    ?? child.Shape?.Regions.SelectMany(region => region.Nodes).ToList() ?? [];
+                var childPortals = child.Line?.Portals ?? child.Shape?.Portals ?? [];
+                if (childNodes.Any(node => !nodeIds.Add(node.Id))
+                    || childPortals.Any(portal => !portalIds.Add(portal.Id))
+                    || child.Shape?.Regions.Any(region => !regionIds.Add(region.Id)) == true)
+                    throw new ArgumentException("Composition vector ids cannot collide.", nameof(layers));
+                ValidateComposition(child);
+            }
+        }
         foreach (var layer in layers)
         {
             if (!layerIds.Add(layer.Id))
@@ -71,6 +92,7 @@ public sealed record MapDocument
                     {
                         throw new ArgumentException("Vector node, portal and region ids are unique across the document.", nameof(layers));
                     }
+                    ValidateComposition(sceneObject);
                 }
             }
 

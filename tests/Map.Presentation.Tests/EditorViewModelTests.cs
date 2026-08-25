@@ -48,6 +48,32 @@ public class EditorViewModelTests
     }
 
     [Fact]
+    public void Stage8_two_editors_share_editable_composition_and_explicit_flatten_is_undoable()
+    {
+        var (first, _, _, _, _) = NewEditor();
+        var (second, _, _, _, _) = NewEditor();
+        first.Session.Viewport.Resize(800, 600); second.Session.Viewport.Resize(800, 600);
+        first.AddObject(SceneObjectKind.Ellipse);
+        var originalId = first.Session.SelectedObjectId;
+        first.CreateEditableComposition();
+        Assert.Equal(SceneObjectKind.Composition, first.Session.SelectedObject!.Kind);
+        first.CopySelectedComposition();
+
+        second.PasteComposition();
+        Assert.Equal(SceneObjectKind.Composition, second.Session.SelectedObject!.Kind);
+        Assert.NotEqual(first.Session.SelectedObjectId, second.Session.SelectedObjectId);
+        Assert.NotEqual(originalId, second.Session.SelectedObject.Composition!.Items.Single().Id);
+
+        first.FlattenSelectedComposition();
+        Assert.Equal(SceneObjectKind.Stamp, first.Session.SelectedObject!.Kind);
+        first.Undo();
+        Assert.Equal(SceneObjectKind.Composition, first.Session.SelectedObject!.Kind);
+
+        second.AddFilterLayer(); second.ToggleActiveMask(); second.CycleActiveFilter();
+        Assert.NotNull(((FilterLayer)second.ActiveLayer!).Mask);
+    }
+
+    [Fact]
     public void A_new_document_starts_unsaved_and_add_object_keeps_it_dirty()
     {
         var (editor, _, _, _, _) = NewEditor();

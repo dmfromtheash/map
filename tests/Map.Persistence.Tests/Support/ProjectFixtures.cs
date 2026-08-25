@@ -132,12 +132,19 @@ public static class ProjectFixtures
                     Assert.Equivalent(expectedObject.Line, actualObject.Line, strict: true);
                     Assert.Equivalent(expectedObject.Shape, actualObject.Shape, strict: true);
                     Assert.Equivalent(expectedObject.Text, actualObject.Text, strict: true);
+                    Assert.Equivalent(expectedObject.Composition, actualObject.Composition, strict: true);
+                    Assert.Equal(expectedObject.PlaceholderReason, actualObject.PlaceholderReason);
                 }
             }
 
             if (expectedLayer is GridLayer expectedGrid)
             {
                 Assert.Equivalent(expectedGrid.Grids, ((GridLayer)actualLayer).Grids, strict: true);
+            }
+
+            if (expectedLayer is FilterLayer expectedFilter)
+            {
+                Assert.Equivalent(expectedFilter.Settings, ((FilterLayer)actualLayer).Settings, strict: true);
             }
 
             if (expectedLayer is IRasterContentLayer expectedRaster)

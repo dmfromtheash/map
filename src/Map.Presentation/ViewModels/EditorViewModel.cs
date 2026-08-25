@@ -789,6 +789,114 @@ public sealed class EditorViewModel : ViewModelBase
         AfterEdit();
     }
 
+    public void AddFilterLayer()
+    {
+        var layer = new FilterLayer(LayerId.New(), "Фильтр", true, false, 1,
+            new FilterSettings { Brightness = 0.08, Contrast = 0.12, Saturation = 0.1 });
+        Session.Execute(new AddLayerCommand(layer, _activeLayerId));
+        _activeLayerId = layer.Id;
+        AfterEdit();
+    }
+
+    public void CycleActiveFilter()
+    {
+        if (ActiveLayer is not FilterLayer { Locked: false } before) return;
+        var warm = before.Settings.Temperature <= 0;
+        var after = before with
+        {
+            Settings = before.Settings with
+            {
+                Brightness = warm ? 0.1 : -0.05,
+                Contrast = warm ? 0.18 : 0.05,
+                Saturation = warm ? 0.16 : -0.12,
+                HueDegrees = warm ? 12 : -18,
+                Temperature = warm ? 0.25 : -0.2,
+            },
+        };
+        Session.Execute(new UpdateFilterCommand(before, after)); AfterEdit();
+    }
+
+    public void UseAssetAsActiveFilterTexture(AssetRecord record)
+    {
+        if (_assetCatalog is null || ActiveLayer is not FilterLayer { Locked: false } before) return;
+        var resolution = _assetCatalog.Resolve(record);
+        if (resolution.Status != AssetResolutionStatus.Available || resolution.Path is null)
+        { StatusDetail = "Текстура фильтра недоступна или изменила SHA-256."; return; }
+        var reference = new MapAssetReference(
+            record.Sha256, record.DisplayName, record.MediaType, record.Extension,
+            ProjectAssetStorage.Embedded, record.ImportedUtc,
+            record.Provenance.Source, record.Provenance.LicenseId,
+            embeddedContent: File.ReadAllBytes(resolution.Path),
+            fallbackThumbnailPng: File.ReadAllBytes(_assetCatalog.ThumbnailPath(record)));
+        var after = before with
+        {
+            Settings = before.Settings with
+            { TextureAssetSha256 = record.Sha256, TextureOpacity = 0.28, TextureScale = 1 },
+        };
+        Session.Execute(new UpdateFilterWithAssetCommand(before, after, reference)); AfterEdit();
+    }
+
+    public void CreateEditableComposition(
+        bool includeBackground = false, bool includeGrids = false, bool includeFilters = false)
+    {
+        if (Session.SelectedObject is not { } selected
+            || DocumentEditor.FindLayerOf(Session.Document, selected.Id) is not { } layer) return;
+        var ids = selected.GroupId is { } group
+            ? SceneGeometry.GroupMembers(Session.Document, group).Select(item => item.Id).ToArray()
+            : [selected.Id];
+        var sourceObjects = layer.Objects.Where(item => ids.Contains(item.Id)).ToList();
+        ids = [.. sourceObjects.Select(item => item.Id)];
+        var bounds = sourceObjects.Select(SceneGeometry.BoundsOf).Aggregate((a, b) => new WorldBounds(
+            Math.Min(a.Left, b.Left), Math.Min(a.Top, b.Top), Math.Max(a.Right, b.Right), Math.Max(a.Bottom, b.Bottom)));
+        var reference = ActiveSnapGrid()?.CellSize ?? 1;
+        var package = CompositionTransfer.Copy(Session.Document, ids, new CompositionCaptureOptions
+        {
+            IncludeBackground = includeBackground, IncludeGrids = includeGrids,
+            IncludeFilters = includeFilters, ReferenceGridScale = reference,
+        }, selected.Name + " composition");
+        var instance = CompositionTransfer.CreateInstance(package,
+            (bounds.Left + bounds.Right) / 2, (bounds.Top + bounds.Bottom) / 2, reference);
+        Session.Execute(new ReplaceObjectsWithCompositionCommand(Session.Document, layer.Id, ids, instance));
+        Session.SelectedObjectId = instance.Id; CompositionClipboard.Set(package); AfterEdit();
+    }
+
+    public void CopySelectedComposition()
+    {
+        if (Session.SelectedObject is not { } selected) return;
+        var package = CompositionTransfer.Copy(Session.Document, [selected.Id],
+            new CompositionCaptureOptions { ReferenceGridScale = ActiveSnapGrid()?.CellSize ?? 1 },
+            selected.Name + " copy");
+        CompositionClipboard.Set(package); StatusDetail = "Композиция скопирована для другого окна карты.";
+    }
+
+    public void PasteComposition()
+    {
+        var layer = ActiveObjectLayer(); var package = CompositionClipboard.Get();
+        if (layer is null || package is null) { StatusDetail = "Сначала скопируйте композицию."; return; }
+        var centre = ViewCentre();
+        var instance = CompositionTransfer.CreateInstance(package, centre.X, centre.Y, ActiveSnapGrid()?.CellSize);
+        Session.Execute(new PasteCompositionCommand(layer.Id, instance, package.Assets));
+        Session.SelectedObjectId = instance.Id; _activeLayerId = layer.Id; AfterEdit();
+    }
+
+    public void FlattenSelectedComposition()
+    {
+        if (EditableSelection() is not { Composition: not null } source) return;
+        var flattened = CompositionFlattener.Flatten(source, StampImages);
+        var hash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(flattened.Png));
+        var provenance = source.Composition!.Assets.Count == 0
+            ? "flattened user composition"
+            : "flattened composition: " + string.Join(", ", source.Composition.Assets.Select(item => item.Provenance).Distinct());
+        var asset = new MapAssetReference(hash, source.Name + " flattened", "image/png", "png",
+            ProjectAssetStorage.Embedded, _clock(), provenance, "derived from user-provided content",
+            embeddedContent: flattened.Png);
+        var stamp = new SceneObject(source.Id, SceneObjectKind.Stamp, source.Name + " flattened",
+            source.X, source.Y, source.Width, source.Height, source.RotationDegrees,
+            "#FFFFFFFF", "#00000000", 0, source.Visible, source.Locked)
+        { Stamp = new StampStyle(hash), ObjectOpacity = source.ObjectOpacity };
+        Session.Execute(new FlattenCompositionCommand(source, stamp, asset)); AfterEdit();
+    }
+
     public void CycleActiveGridGeometry()
     {
         if (ActiveLayer is not GridLayer { Locked: false, Grids.Count: > 0 } before) return;
@@ -1474,6 +1582,8 @@ public sealed class EditorViewModel : ViewModelBase
             Line = source.Line,
             Shape = source.Shape,
             Text = source.Text,
+            Composition = source.Composition,
+            PlaceholderReason = source.PlaceholderReason,
             ObjectOpacity = source.ObjectOpacity,
         };
 
@@ -1491,6 +1601,8 @@ public sealed class EditorViewModel : ViewModelBase
             Line = source.Line,
             Shape = source.Shape,
             Text = source.Text,
+            Composition = source.Composition,
+            PlaceholderReason = source.PlaceholderReason,
             ObjectOpacity = source.ObjectOpacity,
         };
 

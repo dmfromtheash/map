@@ -642,6 +642,7 @@ public static class MapProjectStore
                 BrushLayer => "Brush",
                 LandLayer => "Land",
                 GridLayer => "Grid",
+                FilterLayer => "Filter",
                 _ => throw new InvalidOperationException($"Unknown layer type {layer.GetType().Name}."),
             },
             Name = layer.Name,
@@ -663,6 +664,7 @@ public static class MapProjectStore
             Grids = layer is GridLayer gridLayer
                 ? [.. gridLayer.Grids.Select(ToGridDto)]
                 : null,
+            Filter = layer is FilterLayer filterLayer ? ToFilterDto(filterLayer.Settings) : null,
         };
         return dto;
     }
@@ -706,6 +708,8 @@ public static class MapProjectStore
         Line = sceneObject.Line is { } line ? ToLineDto(line) : null,
         Shape = sceneObject.Shape is { } shape ? ToShapeDto(shape) : null,
         Text = sceneObject.Text is { } text ? ToTextDto(text) : null,
+        Composition = sceneObject.Composition is { } composition ? ToCompositionDto(composition) : null,
+        PlaceholderReason = sceneObject.PlaceholderReason,
     };
 
     private static NoteDto ToNoteDto(MapNote note) => new()
@@ -737,6 +741,31 @@ public static class MapProjectStore
         FlipVertical = text.FlipVertical, Blur = text.Blur, Blend = text.Blend,
     };
 
+    private static FilterSettingsDto ToFilterDto(FilterSettings filter) => new()
+    {
+        Brightness = filter.Brightness, Contrast = filter.Contrast,
+        Saturation = filter.Saturation, HueDegrees = filter.HueDegrees,
+        Temperature = filter.Temperature, TextureAssetSha256 = filter.TextureAssetSha256,
+        TextureOpacity = filter.TextureOpacity, TextureScale = filter.TextureScale,
+    };
+
+    private static EditableCompositionDto ToCompositionDto(EditableComposition composition) => new()
+    {
+        Id = composition.Id.ToString(), SourceDocumentId = composition.SourceDocumentId.ToString(),
+        Name = composition.Name, SourceWidth = composition.SourceWidth, SourceHeight = composition.SourceHeight,
+        AnchorX = composition.AnchorX, AnchorY = composition.AnchorY,
+        ReferenceGridScale = composition.ReferenceGridScale,
+        Items = [.. composition.Items.Select(ToObjectDto)],
+        Assets = [.. composition.Assets.Select(asset => new CompositionAssetDto
+        {
+            Sha256 = asset.Sha256, DisplayName = asset.DisplayName,
+            Provenance = asset.Provenance, License = asset.License,
+        })],
+        IncludeBackground = composition.IncludeBackground, BackgroundColor = composition.BackgroundColor,
+        IncludeGrids = composition.IncludeGrids, Grids = [.. composition.Grids.Select(ToGridDto)],
+        IncludeFilters = composition.IncludeFilters, Filters = [.. composition.Filters.Select(ToFilterDto)],
+    };
+
     private static MapDocument ToDomain(
         ManifestDto manifest,
         SceneDto scene,
@@ -754,6 +783,7 @@ public static class MapProjectStore
         if (scene.Layers is null || scene.Notes is null
             || scene.Layers.Any(l => l is null || l.Objects is null || l.Mask is { Tiles: null }
                 || l.Grids is null && l.Type == "Grid"
+                || l.Filter is null && l.Type == "Filter"
                 || l.Objects.Any(HasInvalidVectorDto)))
         {
             throw new MapProjectCorruptedException(
@@ -823,6 +853,9 @@ public static class MapProjectStore
             "Grid" => new GridLayer(
                 id, name, layer.Visible, layer.Locked, layer.Opacity,
                 [.. (layer.Grids ?? []).Select(ToGrid)], mask),
+            "Filter" => new FilterLayer(
+                id, name, layer.Visible, layer.Locked, layer.Opacity,
+                ToFilter(layer.Filter!), mask),
             _ => throw new MapProjectCorruptedException(
                 $"scene.json holds layer type \"{layer.Type}\" this version does not define."),
         };
@@ -867,6 +900,8 @@ public static class MapProjectStore
         Line = dto.Line is { } line ? ToLine(line) : null,
         Shape = dto.Shape is { } shape ? ToShape(shape) : null,
         Text = dto.Text is { } text ? ToText(text) : null,
+        Composition = dto.Composition is { } composition ? ToComposition(composition) : null,
+        PlaceholderReason = dto.PlaceholderReason,
     };
 
     private static MapNote ToNote(NoteDto note) => new(
@@ -901,6 +936,35 @@ public static class MapProjectStore
         Alignment = ParseDefined<TextAlignment>(text.Alignment, "text alignment"),
         FlipHorizontal = text.FlipHorizontal, FlipVertical = text.FlipVertical,
         Blur = text.Blur, Blend = RequireString(text.Blend, "text blend"),
+    };
+
+    private static FilterSettings ToFilter(FilterSettingsDto filter) => new()
+    {
+        Brightness = filter.Brightness, Contrast = filter.Contrast,
+        Saturation = filter.Saturation, HueDegrees = filter.HueDegrees,
+        Temperature = filter.Temperature, TextureAssetSha256 = filter.TextureAssetSha256,
+        TextureOpacity = filter.TextureOpacity, TextureScale = filter.TextureScale,
+    };
+
+    private static EditableComposition ToComposition(EditableCompositionDto composition) => new(
+        CompositionId.Parse(RequireString(composition.Id, "composition id")),
+        DocumentId.Parse(RequireString(composition.SourceDocumentId, "composition source document id")),
+        RequireString(composition.Name, "composition name"),
+        composition.SourceWidth, composition.SourceHeight,
+        [.. composition.Items.Select(ToObject)])
+    {
+        AnchorX = composition.AnchorX, AnchorY = composition.AnchorY,
+        ReferenceGridScale = composition.ReferenceGridScale,
+        Assets = [.. composition.Assets.Select(asset => new CompositionAssetProvenance(
+            RequireSha256(asset.Sha256, "composition asset hash"),
+            RequireString(asset.DisplayName, "composition asset name"),
+            asset.Provenance ?? "", asset.License ?? ""))],
+        IncludeBackground = composition.IncludeBackground,
+        BackgroundColor = composition.BackgroundColor,
+        IncludeGrids = composition.IncludeGrids,
+        Grids = [.. composition.Grids.Select(ToGrid)],
+        IncludeFilters = composition.IncludeFilters,
+        Filters = [.. composition.Filters.Select(ToFilter)],
     };
 
     private static LineStyleDto ToLineDto(LineStyle line) => new()
@@ -1002,7 +1066,9 @@ public static class MapProjectStore
     private static bool HasInvalidVectorDto(SceneObjectDto? item) => item is null
         || item.Line is { Nodes: null } or { Stroke: null } or { Portals: null }
         || item.Shape is { Regions: null } or { Fill: null } or { Stroke: null } or { Portals: null }
-        || item.Shape?.Regions.Any(region => region is null || region.Nodes is null) == true;
+        || item.Shape?.Regions.Any(region => region is null || region.Nodes is null) == true
+        || item.Composition is { Items: null } or { Assets: null } or { Grids: null } or { Filters: null }
+        || item.Composition?.Items.Any(HasInvalidVectorDto) == true;
 
     private static List<TileDto> ToTileDtos(TileMap tiles) =>
         [.. tiles.Keys.OrderBy(k => k.Y).ThenBy(k => k.X).Select(key => new TileDto

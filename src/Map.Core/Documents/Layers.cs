@@ -223,3 +223,21 @@ public sealed record LandLayer : MapLayer, IRasterContentLayer
     public override MapLayer WithNewIds() => this with { Id = LayerId.New() };
     public override MapLayer WithMask(LayerMask? mask) => this with { Mask = mask };
 }
+
+/// <summary>Nondestructive, bounded adjustment of the already composed lower scene.</summary>
+public sealed record FilterLayer : MapLayer
+{
+    public FilterLayer(
+        LayerId id, string name, bool visible, bool locked, double opacity,
+        FilterSettings settings, LayerMask? mask = null)
+        : base(id, name, visible, locked, opacity)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        Settings = settings; Mask = mask;
+    }
+
+    public FilterSettings Settings { get; init; }
+    public override LayerMask? Mask { get; init; }
+    public override MapLayer WithNewIds() => this with { Id = LayerId.New() };
+    public override MapLayer WithMask(LayerMask? mask) => this with { Mask = mask };
+}
