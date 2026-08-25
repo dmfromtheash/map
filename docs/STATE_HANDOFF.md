@@ -244,11 +244,32 @@ Base `be323ed`. Изменены только три разрешённых за
 - Не входило и не делалось: UI/dashboard/wizard, viewport/rendering, command stack/undo,
   thumbnail-генерация, recovery journal, process-kill harness, migrations, export.
 
+## FACT — сокращённая независимая проверка Stage 2A
+
+По решению владельца Codex проверил только критические точки, без coverage, mutation, benchmark,
+package audits и повторного pre-commit/doctor.
+
+- Точный range `a1f879651eeefb5c2ee73d4edcbf0d95a813542a..`
+  `6faa5c9bfcc6c686f0bf36aecf3de1cc09029bc6`: `A=21`, `M=1`, `D=0`, `R=0`, 22 файла,
+  `+1422/-5`; список совпадает с allowlist, `git diff --check` чистый, worktree чистый.
+- Codex прочитал production solution, доменную модель, `MapProjectStore`, DTO и набор тестов.
+  `Map.Core` не имеет project/package references; `Map.Persistence` ссылается только на Core;
+  зависимостей от Avalonia/Skia/spike нет.
+- Свежая Release-сборка прошла с 0 warnings/errors; все тесты нового solution прошли **23/23**
+  (10 Core + 13 Persistence).
+- Основные риски не скрыты: настоящий process-kill, recovery journal, bounded backup, UI и
+  валидация preview ещё отсутствуют. Более широкое ужесточение чтения повреждённого, но формально
+  валидного JSON также переносится в следующий крупный блок.
+- Итог: Stage 2A принят как foundation. Это не закрытие всего Stage 2.
+
 ## Следующий безопасный шаг
 
-Codex проверяет точный diff среза Stage 2A и ключевые тесты. Следующий срез после приёмки —
-первый UI foundation slice поверх этой основы (минимальное окно Avalonia c dashboard
-recent/new/open, использующее `MapProjectStore`), отдельным prompt-файлом. Opus его не начинал.
+По решению владельца больше не дробить Stage 2 на мелкие UI-срезы. Передать Opus один крупный
+prompt `artifacts/opus-prompt-stage02b-complete-vertical.md`, который закрывает весь оставшийся
+Stage 2: нативное окно, dashboard recent/new/open, create wizard, canvas viewport, добавление/
+selection/transform тестового объекта, command undo/redo, видимые save states, thumbnail,
+recovery/process-kill gate, диагностику и реальный end-to-end UI smoke. После одного отдельного
+коммита Opus останавливается.
 
 ## Проверка среды
 
