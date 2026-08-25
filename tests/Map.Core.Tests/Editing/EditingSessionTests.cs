@@ -96,18 +96,51 @@ public class EditingSessionTests
     {
         var (session, layerId) = NewSession();
         session.Execute(new AddObjectCommand(layerId, Rectangle()));
-        var capturedRevision = session.Revision;
+        var checkpoint = session.CaptureSaveCheckpoint();
         Assert.True(session.IsDirty);
 
         // An edit lands while a background save of the captured snapshot is in flight.
         session.Execute(new AddObjectCommand(layerId, Rectangle(20, 20)));
 
         // The save of the OLD snapshot succeeds: only that revision becomes saved.
-        session.MarkSaved(capturedRevision);
+        session.MarkSaved(checkpoint);
         Assert.True(session.IsDirty); // newer edit is still unsaved
+        Assert.Equal(1, session.PendingChanges);
 
-        session.MarkSaved(session.Revision);
+        session.MarkSaved(session.CaptureSaveCheckpoint());
         Assert.False(session.IsDirty);
+        Assert.Equal(0, session.PendingChanges);
+    }
+
+    [Fact]
+    public void Undo_and_redo_cross_the_saved_state_without_inflating_pending_changes()
+    {
+        var (session, layerId) = NewSession();
+        session.Execute(new AddObjectCommand(layerId, Rectangle()));
+        Assert.Equal(1, session.PendingChanges);
+
+        Assert.True(session.Undo());
+        Assert.False(session.IsDirty);
+        Assert.Equal(0, session.PendingChanges);
+
+        Assert.True(session.Redo());
+        Assert.True(session.IsDirty);
+        Assert.Equal(1, session.PendingChanges);
+    }
+
+    [Fact]
+    public void Pending_changes_follow_the_command_tree_after_branching_from_undo()
+    {
+        var (session, layerId) = NewSession();
+        session.Execute(new AddObjectCommand(layerId, Rectangle()));
+        session.Execute(new AddObjectCommand(layerId, Rectangle(20, 20)));
+        session.MarkSaved(session.CaptureSaveCheckpoint());
+
+        Assert.True(session.Undo());
+        session.Execute(new AddObjectCommand(layerId, Rectangle(40, 40)));
+
+        Assert.True(session.IsDirty);
+        Assert.Equal(2, session.PendingChanges);
     }
 
     [Fact]

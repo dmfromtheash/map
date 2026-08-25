@@ -104,7 +104,7 @@ public sealed class EditorViewModel : ViewModelBase
         if (startDirty)
         {
             // A brand-new or recovered document has no durable revision yet.
-            Session.MarkSaved(-1);
+            Session.MarkUnsaved();
         }
 
         _saveState = Session.IsDirty ? SaveState.Unsaved : SaveState.Saved;
@@ -169,7 +169,7 @@ public sealed class EditorViewModel : ViewModelBase
     public SceneObjectKind? SelectionKind => Session.SelectedObject?.Kind;
 
     /// <summary>Edits made since the last durable save. Zero means the file matches the screen.</summary>
-    public long PendingChanges => Math.Max(0, Session.Revision - Session.SavedRevision);
+    public long PendingChanges => Session.PendingChanges;
 
     /// <summary>
     /// Save state as one honest phrase. Unsaved work is reported with a count, because "не
@@ -1692,9 +1692,9 @@ public sealed class EditorViewModel : ViewModelBase
         await _saveGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            var snapshot = Session.Document;
-            var revision = Session.Revision;
-            var metadata = new SaveMetadata(_appVersion, _clock(), revision);
+            var checkpoint = Session.CaptureSaveCheckpoint();
+            var snapshot = checkpoint.Document;
+            var metadata = new SaveMetadata(_appVersion, _clock(), checkpoint.Revision);
 
             SaveState = SaveState.Saving;
             StatusDetail = "";
@@ -1710,13 +1710,13 @@ public sealed class EditorViewModel : ViewModelBase
                 }).ConfigureAwait(false);
 
                 DocumentPath = path;
-                Session.MarkSaved(revision);
+                Session.MarkSaved(checkpoint);
                 SaveState = Session.IsDirty ? SaveState.Unsaved : SaveState.Saved;
                 Raise(nameof(DocumentPath));
                 RaiseSessionState();
 
                 _recent.Touch(path!, Session.Document.Id.Value, snapshot.Title, metadata.ModifiedUtc);
-                _log.Info($"Saved {path} (revision {revision}).");
+                _log.Info($"Saved {path} (revision {checkpoint.Revision}).");
                 return true;
             }
             catch (MapProjectSaveException ex)

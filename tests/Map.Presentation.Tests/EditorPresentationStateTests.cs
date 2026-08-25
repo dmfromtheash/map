@@ -92,6 +92,25 @@ public class EditorPresentationStateTests
     }
 
     [Fact]
+    public void Undo_and_redo_restore_the_saved_summary_instead_of_counting_history_actions()
+    {
+        var editor = NewEditor();
+        editor.AddObject(SceneObjectKind.Rectangle);
+        Assert.Equal(1, editor.PendingChanges);
+        Assert.Equal("Не сохранено: 1 изменение", editor.SaveSummary);
+
+        editor.Undo();
+        Assert.Equal(0, editor.PendingChanges);
+        Assert.Equal(SaveState.Saved, editor.SaveState);
+        Assert.Equal("Сохранено", editor.SaveSummary);
+
+        editor.Redo();
+        Assert.Equal(1, editor.PendingChanges);
+        Assert.Equal(SaveState.Unsaved, editor.SaveState);
+        Assert.Equal("Не сохранено: 1 изменение", editor.SaveSummary);
+    }
+
+    [Fact]
     public void Status_line_reports_the_active_layer_by_name_and_the_grid_by_state()
     {
         var editor = NewEditor();

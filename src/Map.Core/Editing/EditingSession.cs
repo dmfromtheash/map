@@ -9,13 +9,17 @@ namespace Map.Core.Editing;
 /// </summary>
 public sealed class EditingSession
 {
-    private readonly List<IEditCommand> _undo = [];
-    private readonly List<IEditCommand> _redo = [];
+    private readonly List<HistoryEntry> _undo = [];
+    private readonly List<HistoryEntry> _redo = [];
+    private StateNode _currentState;
+    private StateNode? _savedState;
 
     public EditingSession(MapDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
         Document = document;
+        _currentState = new StateNode(parent: null);
+        _savedState = _currentState;
         SavedRevision = 0;
     }
 
@@ -35,7 +39,15 @@ public sealed class EditingSession
     /// </summary>
     public long SavedRevision { get; private set; }
 
-    public bool IsDirty => Revision != SavedRevision;
+    public bool IsDirty => !ReferenceEquals(_currentState, _savedState);
+
+    /// <summary>
+    /// Number of commands between the current state and the durable state. A new or recovered
+    /// document with no durable state starts at one so the UI never reports zero work at risk.
+    /// </summary>
+    public long PendingChanges => _savedState is null
+        ? _currentState.Depth + 1
+        : DistanceBetween(_currentState, _savedState);
 
     public bool CanUndo => _undo.Count > 0;
     public bool CanRedo => _redo.Count > 0;
@@ -50,7 +62,9 @@ public sealed class EditingSession
         ArgumentNullException.ThrowIfNull(command);
         Document = command.Apply(Document);
         Revision++;
-        _undo.Add(command);
+        var afterState = new StateNode(_currentState);
+        _undo.Add(new HistoryEntry(command, _currentState, afterState));
+        _currentState = afterState;
         _redo.Clear();
     }
 
@@ -61,11 +75,12 @@ public sealed class EditingSession
             return false;
         }
 
-        var command = _undo[^1];
+        var entry = _undo[^1];
         _undo.RemoveAt(_undo.Count - 1);
-        Document = command.Revert(Document);
+        Document = entry.Command.Revert(Document);
         Revision++;
-        _redo.Add(command);
+        _currentState = entry.BeforeState;
+        _redo.Add(entry);
         return true;
     }
 
@@ -76,17 +91,96 @@ public sealed class EditingSession
             return false;
         }
 
-        var command = _redo[^1];
+        var entry = _redo[^1];
         _redo.RemoveAt(_redo.Count - 1);
-        Document = command.Apply(Document);
+        Document = entry.Command.Apply(Document);
         Revision++;
-        _undo.Add(command);
+        _currentState = entry.AfterState;
+        _undo.Add(entry);
         return true;
     }
 
     /// <summary>
-    /// Marks a specific revision saved. The caller passes the revision captured when the saved
-    /// snapshot was taken, so edits made during a background save keep the document dirty.
+    /// Captures one immutable document state for persistence. Keeping the state identity together
+    /// with the snapshot prevents a background save from marking a newer edit as durable.
     /// </summary>
-    public void MarkSaved(long revision) => SavedRevision = revision;
+    public SaveCheckpoint CaptureSaveCheckpoint() =>
+        new(this, Document, Revision, _currentState);
+
+    /// <summary>Marks only the captured state durable after its atomic save succeeds.</summary>
+    public void MarkSaved(SaveCheckpoint checkpoint)
+    {
+        ArgumentNullException.ThrowIfNull(checkpoint);
+        if (!ReferenceEquals(checkpoint._owner, this))
+        {
+            throw new ArgumentException("The save checkpoint belongs to another editing session.", nameof(checkpoint));
+        }
+
+        _savedState = checkpoint._state;
+        SavedRevision = checkpoint.Revision;
+    }
+
+    /// <summary>Marks a new or recovered document as having no durable state yet.</summary>
+    public void MarkUnsaved()
+    {
+        _savedState = null;
+        SavedRevision = -1;
+    }
+
+    private static long DistanceBetween(StateNode first, StateNode second)
+    {
+        long distance = 0;
+        while (first.Depth > second.Depth)
+        {
+            first = first.Parent!;
+            distance++;
+        }
+
+        while (second.Depth > first.Depth)
+        {
+            second = second.Parent!;
+            distance++;
+        }
+
+        while (!ReferenceEquals(first, second))
+        {
+            first = first.Parent!;
+            second = second.Parent!;
+            distance += 2;
+        }
+
+        return distance;
+    }
+
+    public sealed class SaveCheckpoint
+    {
+        internal readonly EditingSession _owner;
+        internal readonly StateNode _state;
+
+        internal SaveCheckpoint(
+            EditingSession owner,
+            MapDocument document,
+            long revision,
+            StateNode state)
+        {
+            _owner = owner;
+            _state = state;
+            Document = document;
+            Revision = revision;
+        }
+
+        public MapDocument Document { get; }
+        public long Revision { get; }
+    }
+
+    private sealed record HistoryEntry(
+        IEditCommand Command,
+        StateNode BeforeState,
+        StateNode AfterState);
+
+    internal sealed class StateNode(StateNode? parent)
+    {
+        public StateNode? Parent { get; } = parent;
+        public long Depth { get; } = parent?.Depth + 1 ?? 0;
+    }
 }

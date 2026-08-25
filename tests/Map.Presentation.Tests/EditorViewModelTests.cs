@@ -150,6 +150,27 @@ public class EditorViewModelTests
     }
 
     [Fact]
+    public async Task Undo_to_the_saved_checkpoint_is_clean_and_redo_is_dirty_again()
+    {
+        var (editor, _, _, picker, _) = NewEditor(startDirty: false);
+        picker.NextSavePath = @"C:\maps\undo-save.mapproj";
+        editor.AddObject(SceneObjectKind.Rectangle);
+        Assert.True(await editor.SaveAsync());
+
+        editor.AddObject(SceneObjectKind.Ellipse);
+        Assert.Equal(1, editor.PendingChanges);
+        editor.Undo();
+        Assert.False(editor.Session.IsDirty);
+        Assert.Equal(SaveState.Saved, editor.SaveState);
+        Assert.Equal(0, editor.PendingChanges);
+
+        editor.Redo();
+        Assert.True(editor.Session.IsDirty);
+        Assert.Equal(SaveState.Unsaved, editor.SaveState);
+        Assert.Equal(1, editor.PendingChanges);
+    }
+
+    [Fact]
     public async Task Close_flow_honours_save_dontsave_and_cancel()
     {
         var (editor, _, _, picker, prompts) = NewEditor();
