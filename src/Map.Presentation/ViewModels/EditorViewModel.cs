@@ -132,6 +132,7 @@ public sealed class EditorViewModel : ViewModelBase
             if (SetField(ref _saveState, value))
             {
                 Raise(nameof(SaveStateText));
+                Raise(nameof(SaveSummary));
             }
         }
     }
@@ -153,14 +154,63 @@ public sealed class EditorViewModel : ViewModelBase
 
     public string Title => Session.Document.Title;
 
-    public string ViewportStatus =>
-        $"Масштаб {Math.Round(Session.Viewport.Scale * 100)}% · " +
-        $"X {Session.Viewport.OffsetX:F0} · Y {Session.Viewport.OffsetY:F0}";
+    public string ViewportStatus => $"Масштаб {Math.Round(Session.Viewport.Scale * 100)}%";
 
+    /// <summary>
+    /// Selection shown the way a person reads it: the object's own name and its kind in Russian.
+    /// The stable id stays available to code and to the driver, but never reaches the status bar.
+    /// </summary>
     public string SelectionStatus =>
         Session.SelectedObject is { } selected
-            ? $"Выбран {selected.Kind} {selected.Id}"
+            ? EditorLabels.DescribeObject(selected)
             : "Ничего не выбрано";
+
+    /// <summary>Kind of the current selection, or null - the only switch the inspector may use.</summary>
+    public SceneObjectKind? SelectionKind => Session.SelectedObject?.Kind;
+
+    /// <summary>Edits made since the last durable save. Zero means the file matches the screen.</summary>
+    public long PendingChanges => Math.Max(0, Session.Revision - Session.SavedRevision);
+
+    /// <summary>
+    /// Save state as one honest phrase. Unsaved work is reported with a count, because "не
+    /// сохранено" alone does not tell the user how much is at stake.
+    /// </summary>
+    public string SaveSummary => _saveState switch
+    {
+        SaveState.Saved => "Сохранено",
+        SaveState.Saving => "Сохранение…",
+        SaveState.SaveFailed => "Ошибка сохранения",
+        _ => PendingChanges > 0 ? $"Не сохранено: {EditorLabels.Changes(PendingChanges)}" : "Не сохранено",
+    };
+
+    /// <summary>Active layer for the status bar: its name, never its id.</summary>
+    public string ActiveLayerSummary =>
+        ActiveLayer is { } layer ? $"Слой: {layer.Name}" : "Слой не выбран";
+
+    /// <summary>Grid and snapping state, resolved across every grid definition in the document.</summary>
+    public string GridSummary
+    {
+        get
+        {
+            var grids = Session.Document.Layers.OfType<GridLayer>()
+                .Where(layer => layer.Visible)
+                .SelectMany(layer => layer.Grids)
+                .ToList();
+
+            if (grids.Count == 0)
+            {
+                return "Сетка выключена";
+            }
+
+            return grids.Any(grid => grid.SnapEnabled)
+                ? "Сетка вкл · привязка вкл"
+                : "Сетка вкл · привязка выкл";
+        }
+    }
+
+    public bool CanUndo => Session.CanUndo;
+
+    public bool CanRedo => Session.CanRedo;
 
     public IReadOnlyList<MapLayer> Layers => Session.Document.Layers;
 
@@ -746,6 +796,7 @@ public sealed class EditorViewModel : ViewModelBase
         _activeLayerId = id;
         Raise(nameof(ActiveLayerId));
         Raise(nameof(ActiveLayer));
+        Raise(nameof(ActiveLayerSummary));
         Raise(nameof(MaskEditLayerId));
         SceneChanged?.Invoke(this, EventArgs.Empty);
     }
@@ -1299,6 +1350,7 @@ public sealed class EditorViewModel : ViewModelBase
         Session.SelectedObjectId = SceneGeometry.HitTest(Session.Document, worldX, worldY)?.Id;
         RefreshInspector();
         Raise(nameof(SelectionStatus));
+        Raise(nameof(SelectionKind));
         SceneChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -1314,8 +1366,10 @@ public sealed class EditorViewModel : ViewModelBase
         _activeLayerId = layer.Id;
         RefreshInspector();
         Raise(nameof(SelectionStatus));
+        Raise(nameof(SelectionKind));
         Raise(nameof(ActiveLayer));
         Raise(nameof(ActiveLayerId));
+        Raise(nameof(ActiveLayerSummary));
         SceneChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -1488,16 +1542,29 @@ public sealed class EditorViewModel : ViewModelBase
         }
     }
 
+    /// <summary>Republishes the derived session state the status bar and the toolbar read.</summary>
+    private void RaiseSessionState()
+    {
+        Raise(nameof(PendingChanges));
+        Raise(nameof(SaveSummary));
+        Raise(nameof(CanUndo));
+        Raise(nameof(CanRedo));
+    }
+
     private void AfterEdit()
     {
         SaveState = Session.IsDirty ? SaveState.Unsaved : SaveState.Saved;
         StatusDetail = "";
         RefreshInspector();
         Raise(nameof(SelectionStatus));
+        Raise(nameof(SelectionKind));
         Raise(nameof(Layers));
         Raise(nameof(ActiveLayer));
         Raise(nameof(ActiveLayerId));
+        Raise(nameof(ActiveLayerSummary));
+        Raise(nameof(GridSummary));
         Raise(nameof(MaskEditLayerId));
+        RaiseSessionState();
         SceneChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -1646,6 +1713,7 @@ public sealed class EditorViewModel : ViewModelBase
                 Session.MarkSaved(revision);
                 SaveState = Session.IsDirty ? SaveState.Unsaved : SaveState.Saved;
                 Raise(nameof(DocumentPath));
+                RaiseSessionState();
 
                 _recent.Touch(path!, Session.Document.Id.Value, snapshot.Title, metadata.ModifiedUtc);
                 _log.Info($"Saved {path} (revision {revision}).");

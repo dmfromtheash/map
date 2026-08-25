@@ -2,6 +2,7 @@ using System;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Map.App.Services;
 using Map.App.Views;
 using Map.Assets;
@@ -45,6 +46,11 @@ public sealed class MainWindow : Window
 
         ShowDashboard();
         Closing += OnClosing;
+
+        // KeyDown is a bubbling-only event in Avalonia, so a tunnel handler would never fire.
+        // Listening on the bubble route with handledEventsToo keeps the shortcuts working even
+        // when a child control has already marked the key as handled.
+        AddHandler(KeyDownEvent, OnWindowKeyDown, RoutingStrategies.Bubble, handledEventsToo: true);
     }
 
     // ---------------------------------------------------------------- navigation
@@ -67,6 +73,12 @@ public sealed class MainWindow : Window
     {
         _editorView = new EditorView(editor, requestBack: LeaveEditorAsync, requestSecondWindow: OpenSecondWindow);
         _host.Content = _editorView;
+
+        // Without a focused element inside the window, key input has nowhere to route and every
+        // shortcut silently does nothing. The canvas is the natural first owner of the keyboard.
+        Avalonia.Threading.Dispatcher.UIThread.Post(
+            () => _editorView?.Canvas.Focus(),
+            Avalonia.Threading.DispatcherPriority.Loaded);
     }
 
     private void OpenSecondWindow()
@@ -164,26 +176,32 @@ public sealed class MainWindow : Window
 
     // ---------------------------------------------------------------- shortcuts
 
+    private void OnWindowKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (_editorView is not { } editorView || IsTypingInText())
+        {
+            return;
+        }
+
+        // One key per tool, matching the tooltips on the rail. Text entry is excluded above so
+        // typing a Russian or Latin letter into a name field can never switch the tool.
+        if (e.KeyModifiers == KeyModifiers.None && ToolForKey(e.Key) is { } tool)
+        {
+            editorView.Editor.ActiveTool = tool;
+            e.Handled = true;
+            return;
+        }
+
+        if (MatchesShortcut(e, editorView.Editor.Shortcuts.Get("grid-snap")))
+        {
+            editorView.Editor.SnapSelectedObjectToGrid();
+            e.Handled = true;
+        }
+    }
+
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
-
-        if (_editorView is { } editorView)
-        {
-            var shortcuts = editorView.Editor.Shortcuts;
-            if (MatchesShortcut(e, shortcuts.Get("select")))
-            {
-                editorView.Editor.ActiveTool = EditorTool.Select; e.Handled = true; return;
-            }
-            if (MatchesShortcut(e, shortcuts.Get("text")))
-            {
-                editorView.Editor.AddText(); e.Handled = true; return;
-            }
-            if (MatchesShortcut(e, shortcuts.Get("grid-snap")))
-            {
-                editorView.Editor.SnapSelectedObjectToGrid(); e.Handled = true; return;
-            }
-        }
 
         var control = e.KeyModifiers.HasFlag(KeyModifiers.Control);
         if (!control)
@@ -219,6 +237,21 @@ public sealed class MainWindow : Window
 
         e.Handled = true;
     }
+
+    /// <summary>The rail's single-key bindings; null for any key that is not a tool.</summary>
+    private static EditorTool? ToolForKey(Key key) => key switch
+    {
+        Key.V => EditorTool.Select,
+        Key.L => EditorTool.Line,
+        Key.R => EditorTool.Shape,
+        Key.T => EditorTool.Text,
+        Key.B => EditorTool.Brush,
+        Key.M => EditorTool.Mask,
+        Key.E => EditorTool.Land,
+        _ => null,
+    };
+
+    private bool IsTypingInText() => FocusManager?.GetFocusedElement() is TextBox;
 
     private static bool MatchesShortcut(KeyEventArgs e, string gesture)
     {
