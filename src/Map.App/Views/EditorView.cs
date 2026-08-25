@@ -123,7 +123,7 @@ public sealed class EditorView : UserControl
     private readonly List<Button> _assetSelectionCommands = [];
     private Button _objectVisibilityValue = null!;
     private Button _objectLockValue = null!;
-    private Button _eraserButton = null!;
+    private ToggleButton _eraserButton = null!;
     private Button _undoButton = null!;
     private Button _redoButton = null!;
 
@@ -377,14 +377,29 @@ public sealed class EditorView : UserControl
 
     private Control BuildBrushPanel()
     {
-        _eraserButton = Ui.CommandButton("EraserButton", "Ластик", MapIcons.Eraser, () =>
+        _eraserButton = new ToggleButton
+        {
+            Content = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 7,
+                Children =
+                {
+                    MapIcons.Stroked(MapIcons.Eraser, 16),
+                    new TextBlock { Text = "Ластик", VerticalAlignment = VerticalAlignment.Center },
+                },
+            },
+        }.Named("EraserButton").Classed("button-command", "segment");
+        AutomationProperties.SetName(_eraserButton, "Ластик");
+        _eraserButton.Click += (_, _) =>
         {
             _editor.BrushSettings = _editor.BrushSettings with { Eraser = !_editor.BrushSettings.Eraser };
+            _eraserButton.IsChecked = _editor.BrushSettings.Eraser;
             Ui.SetClass(_eraserButton, "active", _editor.BrushSettings.Eraser);
             ToolTip.SetTip(_eraserButton, _editor.BrushSettings.Eraser
                 ? "Ластик включён: штрих стирает"
                 : "Ластик выключен: штрих рисует");
-        }, "segment");
+        };
         _eraserButton.HorizontalAlignment = HorizontalAlignment.Left;
 
         return new StackPanel
@@ -1423,7 +1438,9 @@ public sealed class EditorView : UserControl
     {
         for (var index = 0; index < _landActionButtons.Count; index++)
         {
-            Ui.SetClass(_landActionButtons[index], "active", (index == 1) == _editor.LandSubtract);
+            var active = (index == 1) == _editor.LandSubtract;
+            Ui.SetClass(_landActionButtons[index], "active", active);
+            if (_landActionButtons[index] is ToggleButton toggle) toggle.IsChecked = active;
         }
     }
 
@@ -1431,7 +1448,9 @@ public sealed class EditorView : UserControl
     {
         for (var index = 0; index < _maskModeButtons.Count; index++)
         {
-            Ui.SetClass(_maskModeButtons[index], "active", (index == 1) == (_editor.MaskMode == MaskPaintMode.Reveal));
+            var active = (index == 1) == (_editor.MaskMode == MaskPaintMode.Reveal);
+            Ui.SetClass(_maskModeButtons[index], "active", active);
+            if (_maskModeButtons[index] is ToggleButton toggle) toggle.IsChecked = active;
         }
     }
 
@@ -1561,7 +1580,7 @@ public sealed class EditorView : UserControl
                 tooltip,
                 [.. actions]);
 
-            Ui.SetClass(row, "selected", layer.Id == _editor.ActiveLayerId);
+            Ui.SetStructureSelected(row, layer.Id == _editor.ActiveLayerId);
             _layerList.Children.Add(row);
         }
 
@@ -1639,7 +1658,7 @@ public sealed class EditorView : UserControl
                 },
                 $"{sceneObject.Name} · {EditorLabels.ObjectKind(sceneObject.Kind)}");
 
-            Ui.SetClass(row, "selected", sceneObject.Id == _editor.Session.SelectedObjectId);
+            Ui.SetSelected(row, sceneObject.Id == _editor.Session.SelectedObjectId);
             _objectList.Children.Add(row);
         }
     }
@@ -1698,7 +1717,7 @@ public sealed class EditorView : UserControl
                         ? $"{asset.DisplayName} · хранится в проекте"
                         : $"{asset.DisplayName} · связанный файл");
 
-                Ui.SetClass(row, "selected", asset.Sha256 == _selectedAsset?.Sha256);
+                Ui.SetSelected(row, asset.Sha256 == _selectedAsset?.Sha256);
                 _assetList.Children.Add(row);
             }
         }
@@ -1755,7 +1774,7 @@ public sealed class EditorView : UserControl
                 },
                 note.Title);
 
-            Ui.SetClass(row, "selected", note.Id == _selectedNoteId);
+            Ui.SetSelected(row, note.Id == _selectedNoteId);
             _noteList.Children.Add(row);
         }
     }

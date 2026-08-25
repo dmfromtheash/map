@@ -145,7 +145,7 @@ public static class Ui
             IsVisible = false,
         }.Named(name + "Marker");
 
-        var button = new Button
+        var button = new ToggleButton
         {
             Content = new Panel
             {
@@ -155,13 +155,24 @@ public static class Ui
 
         AutomationProperties.SetName(button, title);
         ToolTip.SetTip(button, shortcut.Length > 0 ? $"{title}  ({shortcut})" : title);
-        button.Click += (_, _) => action();
+        button.Click += (_, _) =>
+        {
+            action();
+            // The active tool is a mode, not an on/off command. Clicking it again must not
+            // publish an unchecked state to UI Automation.
+            button.IsChecked = true;
+        };
         return button;
     }
 
     public static void SetToolActive(Button button, bool active)
     {
         SetClass(button, "active", active);
+        if (button is ToggleButton toggle)
+        {
+            toggle.IsChecked = active;
+        }
+
         if (button.Content is Panel panel && panel.Children.Count > 0 && panel.Children[0] is Border marker)
         {
             marker.IsVisible = active;
@@ -329,7 +340,7 @@ public static class Ui
                     },
                 };
 
-            var button = new Button { Content = content }
+            var button = new ToggleButton { Content = content }
                 .Named(namePrefix + option.Key)
                 .Classed("segment");
             AutomationProperties.SetName(button, option.Text);
@@ -437,11 +448,25 @@ public static class Ui
 
         content.Children.Add(Trimmed(primary));
 
-        var row = new Button { Content = content }.Named(name).Classed("list-row");
+        var row = new ToggleButton { Content = content }.Named(name).Classed("list-row");
         AutomationProperties.SetName(row, tooltip ?? primary);
         ToolTip.SetTip(row, tooltip ?? primary);
-        row.Click += (_, _) => activate();
+        row.Click += (_, _) =>
+        {
+            activate();
+            row.IsChecked = true;
+        };
         return row;
+    }
+
+    /// <summary>Synchronises a selectable row with both its visual class and UIA TogglePattern.</summary>
+    public static void SetSelected(Button button, bool selected)
+    {
+        SetClass(button, "selected", selected);
+        if (button is ToggleButton toggle)
+        {
+            toggle.IsChecked = selected;
+        }
     }
 
     /// <summary>
@@ -516,7 +541,7 @@ public static class Ui
     /// <summary>A trailing toggle that lives inside a structure row.</summary>
     public static Button RowAction(string name, string title, string icon, Action action)
     {
-        var button = new Button { Content = MapIcons.Stroked(icon, 15) }.Named(name).Classed("row-action");
+        var button = new ToggleButton { Content = MapIcons.Stroked(icon, 15) }.Named(name).Classed("row-action");
         AutomationProperties.SetName(button, title);
         ToolTip.SetTip(button, title);
         button.Click += (_, _) => action();
@@ -528,6 +553,10 @@ public static class Ui
         AutomationProperties.SetName(button, title);
         ToolTip.SetTip(button, title);
         SetClass(button, "on", on);
+        if (button is ToggleButton toggle)
+        {
+            toggle.IsChecked = on;
+        }
     }
 
     /// <summary>
@@ -560,10 +589,14 @@ public static class Ui
 
         label.Children.Add(Trimmed(primary));
 
-        var select = new Button { Content = label }.Named(name).Classed("list-row");
+        var select = new ToggleButton { Content = label }.Named(name).Classed("list-row");
         AutomationProperties.SetName(select, tooltip);
         ToolTip.SetTip(select, tooltip);
-        select.Click += (_, _) => activate();
+        select.Click += (_, _) =>
+        {
+            activate();
+            select.IsChecked = true;
+        };
 
         var trailing = new StackPanel
         {
@@ -578,6 +611,18 @@ public static class Ui
         {
             Child = new DockPanel { Children = { trailing.Docked(Dock.Right), select } },
         }.Classed("row-host");
+    }
+
+    /// <summary>Synchronises a composite structure row without nesting its trailing actions.</summary>
+    public static void SetStructureSelected(Border row, bool selected)
+    {
+        SetClass(row, "selected", selected);
+        if (row.Child is DockPanel panel
+            && panel.Children.Count > 0
+            && panel.Children[panel.Children.Count - 1] is ToggleButton toggle)
+        {
+            toggle.IsChecked = selected;
+        }
     }
 
     // ------------------------------------------------------------------ states

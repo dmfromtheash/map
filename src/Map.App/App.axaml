@@ -217,7 +217,7 @@
         </Style>
 
         <!-- Tool rail button: 44x44, active state marked by fill AND a left marker bar. -->
-        <Style Selector="Button.tool-button">
+        <Style Selector=":is(Button).tool-button">
             <Setter Property="Width" Value="44" />
             <Setter Property="Height" Value="44" />
             <Setter Property="MinHeight" Value="44" />
@@ -226,17 +226,26 @@
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderBrush" Value="Transparent" />
         </Style>
-        <Style Selector="Button.tool-button:pointerover">
+        <Style Selector=":is(Button).tool-button:pointerover">
             <Setter Property="Background" Value="{DynamicResource MapControlHoverBrush}" />
         </Style>
-        <Style Selector="Button.tool-button.active">
+        <Style Selector=":is(Button).tool-button.active">
             <Setter Property="Background" Value="{DynamicResource MapAccentDimBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
         </Style>
+        <Style Selector="ToggleButton.tool-button:checked /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapAccentDimBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+        </Style>
+        <Style Selector="ToggleButton.tool-button:checked:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapAccentDimBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
+        </Style>
 
         <!-- Segmented control: one row of mutually exclusive choices. -->
-        <Style Selector="Button.segment">
+        <Style Selector=":is(Button).segment">
             <Setter Property="MinHeight" Value="30" />
             <Setter Property="Padding" Value="11,4" />
             <Setter Property="CornerRadius" Value="5" />
@@ -245,15 +254,26 @@
             <Setter Property="BorderBrush" Value="Transparent" />
             <Setter Property="Foreground" Value="{DynamicResource MapMutedBrush}" />
         </Style>
-        <Style Selector="Button.segment:pointerover">
+        <Style Selector=":is(Button).segment:pointerover">
             <Setter Property="Background" Value="{DynamicResource MapControlHoverBrush}" />
             <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
         </Style>
-        <Style Selector="Button.segment.active">
+        <Style Selector=":is(Button).segment.active">
             <Setter Property="Background" Value="{DynamicResource MapAccentDimBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
             <Setter Property="Foreground" Value="{DynamicResource MapAccentHoverBrush}" />
             <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <Style Selector="ToggleButton.segment:checked /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapAccentDimBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapAccentHoverBrush}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <Style Selector="ToggleButton.segment:checked:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapAccentDimBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapAccentHoverBrush}" />
         </Style>
 
         <!-- Panel tab: right-hand panel mode switch. -->
@@ -278,7 +298,7 @@
         </Style>
 
         <!-- List row: layers, objects, assets and notes share exactly this pattern. -->
-        <Style Selector="Button.list-row">
+        <Style Selector=":is(Button).list-row">
             <Setter Property="MinHeight" Value="34" />
             <Setter Property="Padding" Value="8,4" />
             <Setter Property="CornerRadius" Value="5" />
@@ -288,10 +308,18 @@
             <Setter Property="FontWeight" Value="Normal" />
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
         </Style>
-        <Style Selector="Button.list-row:pointerover">
+        <Style Selector=":is(Button).list-row:pointerover">
             <Setter Property="Background" Value="{DynamicResource MapControlBrush}" />
         </Style>
-        <Style Selector="Button.list-row.selected">
+        <Style Selector=":is(Button).list-row.selected">
+            <Setter Property="Background" Value="{DynamicResource MapSelectionBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapSelectionBorderBrush}" />
+        </Style>
+        <Style Selector="ToggleButton.list-row:checked /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapSelectionBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapSelectionBorderBrush}" />
+        </Style>
+        <Style Selector="ToggleButton.list-row:checked:pointerover /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="{DynamicResource MapSelectionBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource MapSelectionBorderBrush}" />
         </Style>
@@ -316,7 +344,7 @@
             <Setter Property="BorderBrush" Value="{DynamicResource MapSelectionBorderBrush}" />
         </Style>
 
-        <Style Selector="Button.row-action">
+        <Style Selector=":is(Button).row-action">
             <Setter Property="Width" Value="26" />
             <Setter Property="Height" Value="26" />
             <Setter Property="MinHeight" Value="26" />
@@ -327,19 +355,23 @@
             <Setter Property="Foreground" Value="{DynamicResource MapMutedBrush}" />
             <Setter Property="Opacity" Value="0" />
         </Style>
-        <Style Selector="Border.row-host:pointerover Button.row-action">
+        <Style Selector="Border.row-host:pointerover :is(Button).row-action">
             <Setter Property="Opacity" Value="1" />
         </Style>
-        <Style Selector="Button.row-action:focus-visible">
+        <Style Selector=":is(Button).row-action:focus-visible">
             <Setter Property="Opacity" Value="1" />
             <Setter Property="BorderBrush" Value="{DynamicResource MapFocusBrush}" />
             <Setter Property="BorderThickness" Value="2" />
         </Style>
-        <Style Selector="Button.row-action.on">
+        <Style Selector=":is(Button).row-action.on">
             <Setter Property="Opacity" Value="1" />
             <Setter Property="Foreground" Value="{DynamicResource MapWarnBrush}" />
         </Style>
-        <Style Selector="Button.row-action:pointerover">
+        <Style Selector="ToggleButton.row-action:checked /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+        </Style>
+        <Style Selector=":is(Button).row-action:pointerover">
             <Setter Property="Background" Value="{DynamicResource MapControlHoverBrush}" />
             <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
         </Style>

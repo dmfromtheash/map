@@ -40,8 +40,8 @@ public sealed class WizardWindow : Window
     ];
 
     private readonly NewMapWizardViewModel _wizard = new();
-    private readonly List<Button> _presetButtons = [];
-    private readonly List<Button> _backgroundButtons = [];
+    private readonly List<ToggleButton> _presetButtons = [];
+    private readonly List<ToggleButton> _backgroundButtons = [];
     private readonly TextBox _titleBox = new() { Name = "WizardTitleBox" };
     private readonly TextBox _widthBox = new() { Name = "WizardWidthBox" };
     private readonly TextBox _heightBox = new() { Name = "WizardHeightBox" };
@@ -198,9 +198,9 @@ public sealed class WizardWindow : Window
         };
     }
 
-    private Button PresetCard(string key, string title, string detail)
+    private ToggleButton PresetCard(string key, string title, string detail)
     {
-        var button = new Button
+        var button = new ToggleButton
         {
             Height = 78,
             Margin = new Thickness(2),
@@ -266,7 +266,7 @@ public sealed class WizardWindow : Window
                 VerticalAlignment = VerticalAlignment.Center,
             };
 
-            var button = new Button
+            var button = new ToggleButton
             {
                 Content = new StackPanel
                 {
@@ -339,7 +339,9 @@ public sealed class WizardWindow : Window
     {
         foreach (var button in _presetButtons)
         {
-            Ui.SetClass(button, "active", button.Name == "WizardPreset" + _presetKey);
+            var active = button.Name == "WizardPreset" + _presetKey;
+            Ui.SetClass(button, "active", active);
+            button.IsChecked = active;
         }
 
         _customBlock.IsVisible = _presetKey == "Custom";
@@ -349,7 +351,9 @@ public sealed class WizardWindow : Window
     {
         foreach (var button in _backgroundButtons)
         {
-            Ui.SetClass(button, "active", button.Name == "WizardBackground" + _wizard.Background.TrimStart('#'));
+            var active = button.Name == "WizardBackground" + _wizard.Background.TrimStart('#');
+            Ui.SetClass(button, "active", active);
+            button.IsChecked = active;
         }
 
         var index = Backgrounds.ToList().FindIndex(item => item.Key == _wizard.Background);

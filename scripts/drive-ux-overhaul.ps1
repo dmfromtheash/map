@@ -88,11 +88,17 @@ function Test-Id([string]$id) { return $null -ne (Find-Id $id) }
 function Invoke-Id([string]$id, [int]$settle = 220) {
     $item = Wait-Id $id
     $pattern = $null
-    if (-not $item.TryGetCurrentPattern(
+    if ($item.TryGetCurrentPattern(
             [System.Windows.Automation.InvokePattern]::Pattern, [ref]$pattern)) {
-        throw "'$id' has no InvokePattern"
+        $pattern.Invoke()
     }
-    $pattern.Invoke()
+    elseif ($item.TryGetCurrentPattern(
+            [System.Windows.Automation.TogglePattern]::Pattern, [ref]$pattern)) {
+        $pattern.Toggle()
+    }
+    else {
+        throw "'$id' has neither InvokePattern nor TogglePattern"
+    }
     Start-Sleep -Milliseconds $settle
 }
 
@@ -238,6 +244,40 @@ function Assert-Contains([string]$actual, [string]$fragment, [string]$what) {
     Write-Host "      ok  $what contains '$fragment'"
 }
 
+function Assert-ToggleOn([string]$id, [string]$what) {
+    $item = Wait-Id $id
+    $pattern = $null
+    if (-not $item.TryGetCurrentPattern(
+            [System.Windows.Automation.TogglePattern]::Pattern, [ref]$pattern)) {
+        throw "$what : '$id' does not expose TogglePattern"
+    }
+    if ($pattern.Current.ToggleState -ne [System.Windows.Automation.ToggleState]::On) {
+        throw "$what : '$id' is not checked"
+    }
+    Write-Host "      ok  $what exposes checked state"
+}
+
+function Assert-OneToggleOnByPrefix([string]$prefix, [string]$what) {
+    $matches = [System.Collections.Generic.List[string]]::new()
+    foreach ($window in Get-AppWindows) {
+        $items = $window.FindAll(
+            [System.Windows.Automation.TreeScope]::Descendants,
+            [System.Windows.Automation.Condition]::TrueCondition)
+        foreach ($item in $items) {
+            $id = $item.Current.AutomationId
+            if (-not $id.StartsWith($prefix, [StringComparison]::Ordinal)) { continue }
+            $pattern = $null
+            if ($item.TryGetCurrentPattern(
+                    [System.Windows.Automation.TogglePattern]::Pattern, [ref]$pattern) -and
+                $pattern.Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On) {
+                $matches.Add($id)
+            }
+        }
+    }
+    if ($matches.Count -ne 1) { throw "$what : expected one checked '$prefix*' row, got $($matches.Count)" }
+    Write-Host "      ok  $what exposes one checked row"
+}
+
 # ============================================================================ run
 
 $contextTitles = [ordered]@{}
@@ -261,6 +301,8 @@ try {
     Set-Value 'WizardTitleBox' 'Северо-западный предел Кирандийского архипелага'
     if (Test-Id 'WizardWidthBox') { throw 'Raw canvas numbers must stay hidden until "Свой размер".' }
     Invoke-Id 'WizardPresetCustom' 400
+    Assert-ToggleOn 'WizardPresetCustom' 'custom size preset'
+    Assert-ToggleOn 'WizardBackgroundFF1E2430' 'default background'
     Set-Value 'WizardWidthBox' '65536'
     Set-Value 'WizardHeightBox' '65536'
     Save-Step 'wizard-custom-size' 'wizard: presets, disclosure of exact size, long Russian title' | Out-Null
@@ -283,6 +325,7 @@ try {
         Invoke-Id $tool.Id 380
         $title = Get-Text 'ContextPanelTitle'
         Assert-Equal $title $tool.Title "context title after $($tool.Id)"
+        Assert-ToggleOn $tool.Id "active tool $($tool.Title)"
         $contextTitles[$tool.Id] = $title
         Save-Step $tool.Slug "context panel for $($tool.Title)" | Out-Null
     }
@@ -304,7 +347,9 @@ try {
     }
     Invoke-Id 'LandCircleButton' 320
     Invoke-Id 'LandActionSubtract' 260
+    Assert-ToggleOn 'LandActionSubtract' 'land subtract mode'
     Invoke-Id 'LandActionAdd' 260
+    Assert-ToggleOn 'LandActionAdd' 'land add mode'
     Write-Host '      ok  all six land shapes kept their automation ids'
 
     Write-Host 'Layers'
@@ -321,6 +366,7 @@ try {
     Invoke-Id 'LayerMaskButton' 320
     $layerStatus = Get-Text 'ActiveLayerText'
     Assert-Contains $layerStatus 'Слой:' 'status bar names the active layer'
+    Assert-OneToggleOnByPrefix 'Layer_' 'active layer'
     Save-Step 'layers' 'layers list, typed add row, properties of the active layer' | Out-Null
 
     Write-Host 'Objects, selection and inspector'
@@ -329,6 +375,7 @@ try {
     Select-SideTab 1
     $selection = Get-Text 'SelectionStatusText'
     Assert-Contains $selection 'Линия' 'selection status names the kind in Russian'
+    Assert-OneToggleOnByPrefix 'Object_' 'selected object'
     $contextTitle = Get-Text 'ContextPanelTitle'
     Assert-Equal $contextTitle 'Свойства: Линия' 'inspector title follows the selection'
     if (-not (Test-Id 'MoveVectorNodeButton')) { throw 'Line geometry actions are missing.' }
