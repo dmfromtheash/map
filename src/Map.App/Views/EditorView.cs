@@ -1,13 +1,16 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.IO;
 using System.Linq;
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Controls.Templates;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Map.App.Controls;
@@ -63,7 +66,11 @@ public sealed class EditorView : UserControl
     private readonly StackPanel _noteList = new() { Spacing = 2 };
     private readonly TextBox _layerName = new() { Name = "LayerNameBox", PlaceholderText = "Имя слоя" };
     private readonly TextBox _objectSearch = new() { Name = "ObjectSearchBox", PlaceholderText = "Найти объект" };
-    private readonly TextBox _assetSearch = new() { Name = "AssetSearchBox", PlaceholderText = "Найти ассет" };
+    private readonly TextBox _assetSearch = new()
+    {
+        Name = "AssetSearchBox",
+        PlaceholderText = "Найти в библиотеке",
+    };
     private readonly TextBox _noteSearch = new() { Name = "NoteSearchBox", PlaceholderText = "Найти заметку" };
     private readonly TextBox _noteTitle = new() { Name = "NoteTitleBox", PlaceholderText = "Заголовок заметки" };
     private readonly TextBox _noteMarkdown = new()
@@ -124,6 +131,56 @@ public sealed class EditorView : UserControl
     private AssetRecord? _selectedAsset;
     private readonly TextBlock _assetSelectionText = new() { Name = "SelectedAssetText" };
     private readonly List<Button> _assetSelectionCommands = [];
+
+    // ---------------------------------------------------------------- library
+    private readonly ListBox _libraryGrid = new()
+    {
+        Name = "LibraryGrid",
+        MinHeight = 220,
+        MaxHeight = 340,
+        SelectionMode = SelectionMode.Single,
+    };
+
+    private readonly StackPanel _collectionTree = new() { Spacing = 2 };
+    // A DockPanel, not a StackPanel: the ancestor segments keep their natural width while the
+    // trailing segment takes what is left and ellipsises, so the trail can never run underneath
+    // the import buttons docked beside it.
+    private readonly DockPanel _breadcrumbs = new()
+    {
+        Name = "LibraryBreadcrumbs",
+        LastChildFill = true,
+        Margin = new Thickness(0, 0, 8, 0),
+    };
+
+    private readonly StackPanel _variantStrip = new()
+    {
+        Name = "VariantStrip",
+        Orientation = Orientation.Horizontal,
+        Spacing = 4,
+    };
+
+    private readonly TextBlock _libraryCountText = new() { Name = "LibraryCountText" };
+    private readonly TextBlock _selectedSetNameText = new() { Name = "SelectedSetNameText" };
+    private readonly TextBlock _variantPositionText = new() { Name = "VariantPositionText" };
+    private readonly TextBlock _stampAreaSummaryText = new() { Name = "StampAreaSummaryText" };
+    private readonly Border _libraryDiagnostic = new() { Name = "LibraryDiagnosticBanner", IsVisible = false };
+    private readonly TextBlock _libraryDiagnosticText = new() { Name = "LibraryDiagnosticText" };
+    private Border _setBadge = null!;
+    private TextBlock _setBadgeText = null!;
+    private ToggleButton _favoriteButton = null!;
+    private Button _previousVariantButton = null!;
+    private Button _nextVariantButton = null!;
+    private readonly Dictionary<string, Button> _librarySortButtons = [];
+    private readonly Dictionary<string, Button> _libraryGroupButtons = [];
+    private readonly Dictionary<string, Button> _libraryFilterButtons = [];
+    private readonly Dictionary<string, Button> _placementModeButtons = [];
+    private ToggleButton _randomVariantToggle = null!;
+    private ToggleButton _randomAngleToggle = null!;
+    private ToggleButton _randomFlipToggle = null!;
+    private TextBlock _stampToolCurrentText = null!;
+    private TextBlock _stampToolAreaText = null!;
+    private bool _syncingLibrary;
+    private readonly ThumbnailCache _thumbnails = new(96);
     private Button _objectVisibilityValue = null!;
     private Button _objectLockValue = null!;
     private ToggleButton _eraserButton = null!;
@@ -161,6 +218,8 @@ public sealed class EditorView : UserControl
 
         _canvas.Attach(_editor);
         _canvas.ViewportChanged += (_, _) => _viewportStatus.Text = _editor.ViewportStatus;
+        _canvas.StampPlaced += (_, _) => RefreshLibraryPanel();
+        _canvas.VariantCycled += (_, _) => RefreshLibraryPanel();
         _editor.PropertyChanged += OnEditorChanged;
         _editor.SceneChanged += (_, _) => Dispatcher.UIThread.Post(() =>
         {
@@ -210,6 +269,13 @@ public sealed class EditorView : UserControl
     }
 
     public void ToggleSidePanel() => _sidePanel.IsVisible = !_sidePanel.IsVisible;
+
+    /// <summary>Re-reads the library panel after a shortcut or a canvas gesture changed it.</summary>
+    public void RefreshLibraryPanel()
+    {
+        SyncAssetList();
+        SyncStatus();
+    }
 
     // ======================================================================= top
 
@@ -301,6 +367,7 @@ public sealed class EditorView : UserControl
                 Tool("LineToolButton", EditorTool.Line, MapIcons.Line),
                 Tool("ShapeToolButton", EditorTool.Shape, MapIcons.Shape),
                 Tool("TextToolButton", EditorTool.Text, MapIcons.Text),
+                Tool("StampToolButton", EditorTool.Stamp, MapIcons.ObjectStamp),
                 RailDivider(),
                 Tool("BrushToolButton", EditorTool.Brush, MapIcons.Brush),
                 Tool("MaskToolButton", EditorTool.Mask, MapIcons.Mask),
@@ -353,6 +420,7 @@ public sealed class EditorView : UserControl
         _toolPanels[EditorTool.Brush] = BuildBrushPanel();
         _toolPanels[EditorTool.Mask] = BuildMaskPanel();
         _toolPanels[EditorTool.Land] = BuildLandPanel();
+        _toolPanels[EditorTool.Stamp] = BuildStampToolPanel();
     }
 
     // No explanation here: this panel is only ever shown beneath the "Ничего не выбрано" state,
@@ -563,6 +631,57 @@ public sealed class EditorView : UserControl
         _ => LandShapeKind.BoundedFill,
     });
 
+    /// <summary>
+    /// The stamp tool's context panel. It states what is current and how to change it; the full
+    /// library, the variant strip and the Area/Density controls live in the side panel.
+    /// </summary>
+    private Control BuildStampToolPanel()
+    {
+        var current = new TextBlock { Name = "StampToolCurrentText", TextWrapping = TextWrapping.Wrap }
+            .Classed("muted");
+        var area = new TextBlock { Name = "StampToolAreaText", TextWrapping = TextWrapping.Wrap }
+            .Classed("faint", "role-caption");
+
+        _stampToolCurrentText = current;
+        _stampToolAreaText = area;
+
+        return new StackPanel
+        {
+            Spacing = 8,
+            Children =
+            {
+                Explanation(EditorLabels.ToolHint(EditorTool.Stamp)),
+                current,
+                area,
+                Ui.TextButton("OpenLibraryButton", "Открыть библиотеку (F)",
+                    () => OpenAssetCatalog(focusSearch: true), "compact"),
+                ChipRow(["Alt+←", "Alt+→"], "вариант"),
+                ChipRow(["Q", "A"], "область"),
+                ChipRow(["Alt+Q", "Alt+A"], "плотность"),
+            },
+        };
+    }
+
+    /// <summary>One key-hint row. Each row holds one meaning so nothing overflows the panel.</summary>
+    private static Control ChipRow(IReadOnlyList<string> keys, string meaning)
+    {
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        foreach (var key in keys)
+        {
+            var chip = Ui.KeyChip(key);
+            chip.Margin = new Thickness(0, 2, 4, 2);
+            row.Children.Add(chip);
+        }
+
+        row.Children.Add(new TextBlock
+        {
+            Text = meaning,
+            Margin = new Thickness(0, 2, 0, 2),
+            VerticalAlignment = VerticalAlignment.Center,
+        }.Classed("faint", "role-caption"));
+        return row;
+    }
+
     private static Control Explanation(string text) => new TextBlock
     {
         Text = text,
@@ -742,7 +861,7 @@ public sealed class EditorView : UserControl
             {
                 new TabItem { Header = "Слои", Content = BuildLayersTab() },
                 new TabItem { Header = "Объекты", Content = BuildObjectsTab() },
-                new TabItem { Header = "Ассеты", Content = BuildAssetsTab() },
+                new TabItem { Header = "Библиотека", Content = BuildAssetsTab() },
                 new TabItem { Header = "Заметки", Content = BuildNotesTab() },
             },
         };
@@ -1047,6 +1166,18 @@ public sealed class EditorView : UserControl
         _assetSelectionText.Classes.Add("role-caption");
         _assetSelectionText.Classes.Add("faint");
         _assetSelectionText.TextWrapping = TextWrapping.Wrap;
+        _libraryCountText.Classes.Add("faint");
+        _libraryCountText.Classes.Add("role-caption");
+        _libraryCountText.TextWrapping = TextWrapping.Wrap;
+        _selectedSetNameText.Classes.Add("muted");
+        _selectedSetNameText.TextTrimming = TextTrimming.CharacterEllipsis;
+        _variantPositionText.Classes.Add("muted");
+        _stampAreaSummaryText.Classes.Add("faint");
+        _stampAreaSummaryText.Classes.Add("role-caption");
+        _stampAreaSummaryText.TextWrapping = TextWrapping.Wrap;
+
+        BuildLibraryDiagnosticBanner();
+        BuildLibraryGrid();
 
         var body = new StackPanel
         {
@@ -1064,69 +1195,25 @@ public sealed class EditorView : UserControl
                             Spacing = 2,
                             Children =
                             {
-                                Ui.IconButton("ImportAssetButton", "Импортировать изображение в проект",
+                                Ui.IconButton("ImportAssetButton", "Импортировать одно изображение",
                                     MapIcons.Plus, () => _ = ImportAssetAsync(linked: false)),
+                                Ui.IconButton("ImportAssetSetButton", "Импортировать набор вариантов",
+                                    MapIcons.Duplicate, () => _ = ImportAssetSetAsync()),
                                 Ui.IconButton("LinkAssetButton", "Связать с файлом на диске",
                                     MapIcons.Open, () => _ = ImportAssetAsync(linked: true)),
                             },
                         }.Docked(Dock.Right),
-                        new TextBlock
-                        {
-                            Text = "Каталог ассетов",
-                            VerticalAlignment = VerticalAlignment.Center,
-                        }.Classed("role-panel"),
+                        _breadcrumbs,
                     },
                 },
+                _libraryDiagnostic,
                 _assetSearch,
-                _assetList,
-                new Border
-                {
-                    Child = new StackPanel
-                    {
-                        Spacing = 6,
-                        Children =
-                        {
-                            new TextBlock { Text = "Выбранный ассет" }.Classed("role-panel"),
-                            _assetSelectionText,
-                            AssetCommand("PlaceStampButton", "Разместить на карте", () =>
-                            {
-                                if (_selectedAsset is not null) _editor.PlaceStamp(_selectedAsset, embedded: true);
-                            }, "compact"),
-                            AssetCommand("PlaceLinkedStampButton", "Разместить как связанный", () =>
-                            {
-                                if (_selectedAsset is not null) _editor.PlaceStamp(_selectedAsset, embedded: false);
-                            }, "compact"),
-                            Ui.Advanced("AssetAdvanced", new StackPanel
-                            {
-                                Spacing = 5,
-                                Children =
-                                {
-                                    AssetCommand("ScatterStampButton", "Рассыпать по области", () =>
-                                    {
-                                        if (_selectedAsset is not null) _editor.ScatterStamp(_selectedAsset, 100);
-                                    }, "compact"),
-                                    AssetCommand("ReplaceStampAssetButton", "Заменить у выделенного штампа", () =>
-                                    {
-                                        if (_selectedAsset is not null)
-                                            _editor.ReplaceSelectedStampAsset(_selectedAsset);
-                                    }, "compact"),
-                                    Ui.TextButton("KeepStampPlaceholderButton", "Оставить заменитель",
-                                        _editor.KeepSelectedStampPlaceholder, "compact"),
-                                    AssetCommand("UseAssetStrokeButton", "Использовать для обводки", () =>
-                                    {
-                                        if (_selectedAsset is not null)
-                                            _editor.UseAssetAsSelectedVectorStroke(_selectedAsset);
-                                    }, "compact"),
-                                    AssetCommand("UseAssetFilterButton", "Использовать в фильтре", () =>
-                                    {
-                                        if (_selectedAsset is not null)
-                                            _editor.UseAssetAsActiveFilterTexture(_selectedAsset);
-                                    }, "compact"),
-                                },
-                            }),
-                        },
-                    },
-                }.Classed("group"),
+                BuildLibraryFilterControls(),
+                Ui.Section("Коллекции", _collectionTree),
+                new DockPanel { Children = { _libraryCountText } },
+                _libraryGrid,
+                BuildSelectedSetBlock(),
+                BuildStampGestureBlock(),
                 new TextBlock
                 {
                     Text = "Связанный файл сверяется по контрольной сумме: подмена или пропажа видна на карте.",
@@ -1140,6 +1227,611 @@ public sealed class EditorView : UserControl
             HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
             Content = body,
         };
+    }
+
+    private void BuildLibraryDiagnosticBanner()
+    {
+        _libraryDiagnosticText.TextWrapping = TextWrapping.Wrap;
+        _libraryDiagnosticText.Classes.Add("role-caption");
+        _libraryDiagnostic.Classes.Add("group");
+        _libraryDiagnostic.Padding = new Thickness(8, 6);
+        _libraryDiagnostic.Child = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            Children = { MapIcons.Stroked(MapIcons.Warning, 16), _libraryDiagnosticText },
+        };
+        AutomationProperties.SetName(_libraryDiagnostic, "Состояние библиотеки");
+    }
+
+    /// <summary>
+    /// A real virtualized list: Avalonia realises only the containers it can show, and each
+    /// container asks the bounded cache for its own cover. Ten thousand cards therefore never
+    /// become ten thousand controls or ten thousand bitmaps.
+    /// </summary>
+    private void BuildLibraryGrid()
+    {
+        AutomationProperties.SetName(_libraryGrid, "Карточки библиотеки");
+        _libraryGrid.ItemTemplate = new FuncDataTemplate<AssetSetSummary>(
+            summary => summary is not null,
+            (summary, _) => BuildLibraryTile(summary),
+            supportsRecycling: true);
+
+        _libraryGrid.SelectionChanged += (_, _) =>
+        {
+            if (_syncingLibrary || _libraryGrid.SelectedItem is not AssetSetSummary summary)
+            {
+                return;
+            }
+
+            _editor.SelectAssetSet(summary.SetId);
+            SyncAssetList();
+            SyncStatus();
+        };
+
+        // A Border or panel inside the item template never reaches the accessibility tree, so the
+        // realised container itself is what gets named.
+        _libraryGrid.ContainerPrepared += (_, e) =>
+        {
+            if (e.Container is ListBoxItem item && e.Index >= 0 && e.Index < _editor.LibrarySets.Count)
+            {
+                var summary = _editor.LibrarySets[e.Index];
+                var name = summary.IsSet
+                    ? $"{summary.Name}, набор, {summary.VariantCount} вариантов"
+                    : $"{summary.Name}, один вариант";
+                AutomationProperties.SetName(item, name);
+                ToolTip.SetTip(item, name);
+            }
+        };
+
+        // The realised range is reported back so the view-model knows what is actually on screen.
+        _libraryGrid.LayoutUpdated += (_, _) => ReportVisibleLibraryRange();
+    }
+
+    private Control BuildLibraryTile(AssetSetSummary? summary)
+    {
+        if (summary is null)
+        {
+            return new Border();
+        }
+
+        var thumbnail = new Border
+        {
+            Width = 44,
+            Height = 44,
+            Child = _thumbnails.Image(_editor.LibraryThumbnailPath(summary)) is { } bitmap
+                ? new Image { Source = bitmap, Stretch = Stretch.Uniform }
+                : MapIcons.Stroked(MapIcons.Missing, 20),
+        }.Classed("group");
+
+        var title = new TextBlock
+        {
+            Text = summary.Name,
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        };
+
+        var caption = new TextBlock
+        {
+            Text = $"{summary.CoverWidth}×{summary.CoverHeight}",
+            VerticalAlignment = VerticalAlignment.Center,
+        }.Classed("faint", "role-caption");
+
+        var badges = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 4,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        if (summary.IsSet)
+        {
+            // The count is never a mute digit: it carries its own accessible name.
+            var badge = new Border
+            {
+                Padding = new Thickness(6, 2),
+                Child = new TextBlock { Text = summary.VariantCount.ToString(), FontSize = 11 },
+            }.Classed("badge").Named("SetBadge_" + summary.SetId);
+            var badgeName = $"{summary.VariantCount} вариантов";
+            AutomationProperties.SetName(badge, badgeName);
+            ToolTip.SetTip(badge, badgeName);
+            badges.Children.Add(badge);
+        }
+
+        if (summary.Favorite)
+        {
+            var star = new Border { Padding = new Thickness(3, 2), Child = MapIcons.Stroked(MapIcons.Check, 13) }
+                .Classed("badge");
+            AutomationProperties.SetName(star, "В избранном");
+            ToolTip.SetTip(star, "В избранном");
+            badges.Children.Add(star);
+        }
+
+        var row = new DockPanel
+        {
+            LastChildFill = true,
+            Children =
+            {
+                badges.Docked(Dock.Right),
+                thumbnail.Docked(Dock.Left),
+                new StackPanel
+                {
+                    Margin = new Thickness(8, 0, 6, 0),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Children = { title, caption },
+                },
+            },
+        };
+
+        var host = new Border { Padding = new Thickness(4), Child = row }
+            .Named("LibraryTile_" + summary.SetId);
+        var accessibleName = summary.IsSet
+            ? $"{summary.Name}, набор, {summary.VariantCount} вариантов"
+            : $"{summary.Name}, один вариант";
+        AutomationProperties.SetName(host, accessibleName);
+        ToolTip.SetTip(host, accessibleName);
+        return host;
+    }
+
+    private void ReportVisibleLibraryRange()
+    {
+        var total = _editor.LibrarySets.Count;
+        if (total == 0)
+        {
+            _editor.SetLibraryVisibleRange(0, 0);
+            return;
+        }
+
+        var first = 0;
+        var realised = 0;
+        for (var index = 0; index < total; index++)
+        {
+            if (_libraryGrid.ContainerFromIndex(index) is null)
+            {
+                continue;
+            }
+
+            if (realised == 0)
+            {
+                first = index;
+            }
+
+            realised++;
+        }
+
+        _editor.SetLibraryVisibleRange(first, realised);
+    }
+
+    private Control BuildLibraryFilterControls()
+    {
+        var (sort, sortButtons) = Ui.Segmented("LibrarySort", [
+            ("Newest", "Новые", null),
+            ("Oldest", "Старые", null),
+            ("NameAsc", "А–Я", null),
+            ("NameDesc", "Я–А", null),
+        ], key =>
+        {
+            _editor.LibrarySort = key switch
+            {
+                "Oldest" => AssetSortOrder.ImportedOldest,
+                "NameAsc" => AssetSortOrder.NameAscending,
+                "NameDesc" => AssetSortOrder.NameDescending,
+                _ => AssetSortOrder.ImportedNewest,
+            };
+            SyncAssetList();
+        });
+        Register(_librarySortButtons, ["Newest", "Oldest", "NameAsc", "NameDesc"], sortButtons);
+
+        var (group, groupButtons) = Ui.Segmented("LibraryGroup", [
+            ("None", "Без групп", null),
+            ("Collection", "По коллекции", null),
+            ("Tag", "По тегу", null),
+        ], key =>
+        {
+            _editor.LibraryGrouping = key switch
+            {
+                "Collection" => AssetGrouping.Collection,
+                "Tag" => AssetGrouping.Tag,
+                _ => AssetGrouping.None,
+            };
+            SyncAssetList();
+        });
+        Register(_libraryGroupButtons, ["None", "Collection", "Tag"], groupButtons);
+
+        var filters = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2 };
+        foreach (var (key, title, icon) in new[]
+        {
+            ("Favorites", "Только избранное", MapIcons.Check),
+            ("Recent", "Только недавние", MapIcons.Undo),
+            ("Untagged", "Только без тегов", MapIcons.Close),
+            ("UsedInMap", "Только используемое на карте", MapIcons.Objects),
+        })
+        {
+            var button = FilterToggle("LibraryFilter" + key, title, icon, () =>
+            {
+                switch (key)
+                {
+                    case "Favorites":
+                        _editor.LibraryFavoritesOnly = !_editor.LibraryFavoritesOnly;
+                        break;
+                    case "Recent":
+                        _editor.LibraryRecentOnly = !_editor.LibraryRecentOnly;
+                        break;
+                    case "Untagged":
+                        _editor.LibraryUntaggedOnly = !_editor.LibraryUntaggedOnly;
+                        break;
+                    default:
+                        _editor.LibraryUsedInMapOnly = !_editor.LibraryUsedInMapOnly;
+                        break;
+                }
+
+                SyncAssetList();
+            });
+            _libraryFilterButtons[key] = button;
+            filters.Children.Add(button);
+        }
+
+        return new StackPanel
+        {
+            Spacing = 6,
+            Children = { sort, group, filters },
+        };
+
+        static void Register(
+            Dictionary<string, Button> target, string[] keys, IReadOnlyList<Button> buttons)
+        {
+            for (var index = 0; index < keys.Length; index++)
+            {
+                target[keys[index]] = buttons[index];
+            }
+        }
+    }
+
+    private Control BuildSelectedSetBlock()
+    {
+        _setBadgeText = new TextBlock { Text = "", FontSize = 11 }.Named("SelectedSetBadge");
+        _setBadge = new Border
+        {
+            Padding = new Thickness(6, 2),
+            Child = _setBadgeText,
+            IsVisible = false,
+        }.Classed("badge");
+
+        _favoriteButton = FilterToggle(
+            "SetFavoriteButton", "В избранное", MapIcons.Check, () =>
+            {
+                _editor.ToggleSelectedSetFavorite();
+                SyncAssetList();
+                SyncStatus();
+            });
+
+        _previousVariantButton = Ui.IconButton(
+            "PreviousVariantButton", "Предыдущий вариант (Alt+Влево)", MapIcons.Back, () =>
+            {
+                _editor.PreviousVariant();
+                SyncAssetList();
+                SyncStatus();
+            });
+
+        _nextVariantButton = Ui.IconButton(
+            "NextVariantButton", "Следующий вариант (Alt+Вправо)", MapIcons.ChevronRight, () =>
+            {
+                _editor.NextVariant();
+                SyncAssetList();
+                SyncStatus();
+            });
+
+        AutomationProperties.SetName(_variantStrip, "Варианты набора");
+
+        return new Border
+        {
+            Child = new StackPanel
+            {
+                Spacing = 6,
+                Children =
+                {
+                    new DockPanel
+                    {
+                        Children =
+                        {
+                            new StackPanel
+                            {
+                                Orientation = Orientation.Horizontal,
+                                Spacing = 4,
+                                Children = { _setBadge, _favoriteButton },
+                            }.Docked(Dock.Right),
+                            new TextBlock { Text = "Выбранный набор" }.Classed("role-panel"),
+                        },
+                    },
+                    _selectedSetNameText,
+                    _assetSelectionText,
+                    new DockPanel
+                    {
+                        Children =
+                        {
+                            new StackPanel
+                            {
+                                Orientation = Orientation.Horizontal,
+                                Spacing = 2,
+                                Children = { _previousVariantButton, _nextVariantButton },
+                            }.Docked(Dock.Right),
+                            _variantPositionText,
+                        },
+                    },
+                    new ScrollViewer
+                    {
+                        HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
+                        VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
+                        MaxHeight = 64,
+                        Content = _variantStrip,
+                    },
+                },
+            },
+        }.Classed("group");
+    }
+
+    private Control BuildStampGestureBlock()
+    {
+        var (mode, modeButtons) = Ui.Segmented("StampMode", [
+            ("One", "Один", null),
+            ("Area", "Область", null),
+        ], key =>
+        {
+            _editor.StampPlacementMode = key == "Area" ? StampPlacementMode.Area : StampPlacementMode.One;
+            SyncAssetList();
+        });
+        _placementModeButtons["One"] = modeButtons[0];
+        _placementModeButtons["Area"] = modeButtons[1];
+
+        _randomVariantToggle = FilterToggle(
+            "RandomVariantToggle", "Случайный вариант после размещения", MapIcons.Duplicate, () =>
+            {
+                _editor.RandomVariantAfterPlacement = !_editor.RandomVariantAfterPlacement;
+                SyncAssetList();
+            });
+        _randomAngleToggle = FilterToggle(
+            "RandomAngleToggle", "Случайный угол", MapIcons.Redo, () =>
+            {
+                _editor.StampRandomAngle = !_editor.StampRandomAngle;
+                SyncAssetList();
+            });
+        _randomFlipToggle = FilterToggle(
+            "RandomFlipToggle", "Случайное отражение", MapIcons.Select, () =>
+            {
+                _editor.StampRandomFlip = !_editor.StampRandomFlip;
+                SyncAssetList();
+            });
+
+        return new Border
+        {
+            Child = new StackPanel
+            {
+                Spacing = 6,
+                Children =
+                {
+                    new TextBlock { Text = "Размещение" }.Classed("role-panel"),
+                    mode,
+                    Ui.SliderRow("StampAreaSlider", "Область", 1, 1024, _editor.StampAreaRadius, "ед.",
+                        value =>
+                        {
+                            _editor.StampAreaRadius = value;
+                            SyncStampGestureReadout();
+                        }),
+                    Ui.SliderRow("StampDensitySlider", "Плотность", 0, 400, _editor.StampDensity, "",
+                        value =>
+                        {
+                            _editor.StampDensity = value;
+                            SyncStampGestureReadout();
+                        }),
+                    _stampAreaSummaryText,
+                    new StackPanel
+                    {
+                        Orientation = Orientation.Horizontal,
+                        Spacing = 2,
+                        Children = { _randomVariantToggle, _randomAngleToggle, _randomFlipToggle },
+                    },
+                    AssetCommand("PlaceStampButton", "Разместить в центре вида", () =>
+                    {
+                        _editor.PlaceCurrentVariantAtViewCentre();
+                        RefreshLibraryPanel();
+                    }, "compact"),
+                    AssetCommand("ReplaceStampVariantButton", "Заменить вариант у выделенного штампа", () =>
+                    {
+                        _editor.ReplaceSelectedStampWithCurrentVariant();
+                        SyncAssetList();
+                        SyncStatus();
+                    }, "compact"),
+                    Ui.Advanced("AssetAdvanced", new StackPanel
+                    {
+                        Spacing = 5,
+                        Children =
+                        {
+                            AssetCommand("PlaceLinkedStampButton", "Разместить как связанный", () =>
+                            {
+                                if (_selectedAsset is not null) _editor.PlaceStamp(_selectedAsset, embedded: false);
+                            }, "compact"),
+                            AssetCommand("ReplaceStampAssetButton", "Заменить ассет у выделенного штампа", () =>
+                            {
+                                if (_selectedAsset is not null)
+                                    _editor.ReplaceSelectedStampAsset(_selectedAsset);
+                            }, "compact"),
+                            Ui.TextButton("KeepStampPlaceholderButton", "Оставить заменитель",
+                                _editor.KeepSelectedStampPlaceholder, "compact"),
+                            AssetCommand("UseAssetStrokeButton", "Использовать для обводки", () =>
+                            {
+                                if (_selectedAsset is not null)
+                                    _editor.UseAssetAsSelectedVectorStroke(_selectedAsset);
+                            }, "compact"),
+                            AssetCommand("UseAssetFilterButton", "Использовать в фильтре", () =>
+                            {
+                                if (_selectedAsset is not null)
+                                    _editor.UseAssetAsActiveFilterTexture(_selectedAsset);
+                            }, "compact"),
+                        },
+                    }),
+                },
+            },
+        }.Classed("group");
+    }
+
+    /// <summary>
+    /// A standalone, always-visible toggle. The row-action class is deliberately invisible until
+    /// its host row is hovered, which is right inside a list row and wrong for a filter bar.
+    /// </summary>
+    private static ToggleButton FilterToggle(string name, string title, string icon, Action action)
+    {
+        var button = new ToggleButton { Content = MapIcons.Stroked(icon, 15) }
+            .Named(name).Classed("segment");
+        AutomationProperties.SetName(button, title);
+        ToolTip.SetTip(button, title);
+        button.Click += (_, _) => action();
+        return button;
+    }
+
+    private static void SetToggle(Button button, string title, bool on)
+    {
+        AutomationProperties.SetName(button, title);
+        ToolTip.SetTip(button, title);
+        Ui.SetSelected(button, on);
+    }
+
+    private void SyncStampGestureReadout()
+    {
+        _stampAreaSummaryText.Text = _editor.StampAreaSummary;
+        AutomationProperties.SetName(_stampAreaSummaryText, _editor.StampAreaSummary);
+        SyncStampToolPanel();
+    }
+
+    private void SyncStampToolPanel()
+    {
+        if (_stampToolCurrentText is null || _stampToolAreaText is null)
+        {
+            return;
+        }
+
+        var set = _editor.SelectedSet;
+        _stampToolCurrentText.Text = set is null
+            ? "Набор не выбран. Откройте библиотеку и выберите карточку."
+            : $"{set.Name} · вариант {_editor.CurrentVariantLabel}";
+        _stampToolAreaText.Text = _editor.StampAreaSummary;
+        AutomationProperties.SetName(_stampToolCurrentText, _stampToolCurrentText.Text);
+        AutomationProperties.SetName(_stampToolAreaText, _stampToolAreaText.Text);
+    }
+
+    /// <summary>
+    /// Asks for the name of a newly imported set. It lives here rather than beside the other
+    /// prompts because it belongs to this one flow and needs its own automation ids.
+    /// </summary>
+    private static async System.Threading.Tasks.Task<string?> AskSetNameAsync(
+        Window? owner, string suggested)
+    {
+        var input = new TextBox { Name = "SetNameBox", Text = suggested, MinWidth = 320 };
+        AutomationProperties.SetName(input, "Имя набора");
+
+        var completion = new System.Threading.Tasks.TaskCompletionSource<string?>();
+        var window = new Window
+        {
+            Title = "Имя набора",
+            Name = "SetNameWindow",
+            SizeToContent = SizeToContent.WidthAndHeight,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            CanResize = false,
+        };
+
+        var confirm = Ui.TextButton("ConfirmSetNameButton", "Создать набор", () =>
+        {
+            completion.TrySetResult((input.Text ?? "").Trim());
+            window.Close();
+        });
+        var cancel = Ui.TextButton("CancelSetNameButton", "Отмена", () =>
+        {
+            completion.TrySetResult(null);
+            window.Close();
+        });
+
+        window.Content = new Border
+        {
+            Padding = new Thickness(18),
+            Child = new StackPanel
+            {
+                Spacing = 12,
+                Children =
+                {
+                    new TextBlock { Text = "Как назвать набор вариантов?" }.Classed("role-panel"),
+                    input,
+                    new StackPanel
+                    {
+                        Orientation = Orientation.Horizontal,
+                        Spacing = 8,
+                        HorizontalAlignment = HorizontalAlignment.Right,
+                        Children = { cancel, confirm },
+                    },
+                },
+            },
+        };
+
+        window.Closed += (_, _) => completion.TrySetResult(null);
+        window.Opened += (_, _) => input.Focus();
+
+        if (owner is not null)
+        {
+            await window.ShowDialog(owner);
+        }
+        else
+        {
+            window.Show();
+        }
+
+        return await completion.Task;
+    }
+
+    /// <summary>
+    /// A tiny bounded LRU of decoded covers. Without the bound, scrolling a large library would
+    /// hold every thumbnail it ever showed.
+    /// </summary>
+    private sealed class ThumbnailCache(int capacity)
+    {
+        private readonly Dictionary<string, (Bitmap Image, long Used)> _entries = new(StringComparer.OrdinalIgnoreCase);
+        private long _clock;
+
+        public Bitmap? Image(string? path)
+        {
+            if (string.IsNullOrEmpty(path))
+            {
+                return null;
+            }
+
+            if (_entries.TryGetValue(path, out var hit))
+            {
+                _entries[path] = (hit.Image, ++_clock);
+                return hit.Image;
+            }
+
+            if (!File.Exists(path))
+            {
+                return null;
+            }
+
+            Bitmap bitmap;
+            try
+            {
+                bitmap = new Bitmap(path);
+            }
+            catch (Exception exception) when (exception is IOException or ArgumentException)
+            {
+                return null;
+            }
+
+            _entries[path] = (bitmap, ++_clock);
+            while (_entries.Count > capacity)
+            {
+                var oldest = _entries.OrderBy(pair => pair.Value.Used).First();
+                oldest.Value.Image.Dispose();
+                _entries.Remove(oldest.Key);
+            }
+
+            return bitmap;
+        }
     }
 
     /// <summary>
@@ -1715,58 +2407,309 @@ public sealed class EditorView : UserControl
 
     private void SyncAssetList()
     {
-        var query = (_assetSearch.Text ?? "").Trim();
-        _assetList.Children.Clear();
-
-        var assets = _editor.SearchAssets(query).ToList();
-        if (assets.Count == 0)
+        _syncingLibrary = true;
+        try
         {
-            _assetList.Children.Add(Ui.EmptyState(
-                "NoAssetsText",
-                MapIcons.Assets,
-                query.Length == 0 ? "Каталог пуст" : "Ничего не найдено",
-                query.Length == 0
-                    ? "Импортируйте PNG, JPEG или WebP, чтобы размещать их на карте."
-                    : "Измените запрос или очистите поле поиска."));
+            _editor.LibrarySearchText = (_assetSearch.Text ?? "").Trim();
+            SyncLibraryDiagnostic();
+            SyncLibraryFilterState();
+            SyncCollectionTree();
+            SyncBreadcrumbs();
+            SyncLibraryGrid();
+            SyncSelectedSet();
+            SyncStampGestureReadout();
+            SyncStampToolPanel();
         }
-        else
+        finally
         {
-            foreach (var asset in assets)
+            _syncingLibrary = false;
+        }
+    }
+
+    private void SyncLibraryDiagnostic()
+    {
+        var (visible, text) = _editor.LibraryStatus switch
+        {
+            AssetLibraryStatus.Damaged => (true, "Индекс библиотеки повреждён и защищён от записи. "
+                + _editor.LibraryDiagnostic),
+            AssetLibraryStatus.Migrated => (true, _editor.LibraryDiagnostic),
+            _ => (false, ""),
+        };
+
+        _libraryDiagnostic.IsVisible = visible;
+        _libraryDiagnosticText.Text = text;
+        AutomationProperties.SetName(_libraryDiagnosticText, visible ? text : "Библиотека в порядке");
+    }
+
+    private void SyncLibraryFilterState()
+    {
+        SetSegment(_librarySortButtons, _editor.LibrarySort switch
+        {
+            AssetSortOrder.ImportedOldest => "Oldest",
+            AssetSortOrder.NameAscending => "NameAsc",
+            AssetSortOrder.NameDescending => "NameDesc",
+            _ => "Newest",
+        });
+        SetSegment(_libraryGroupButtons, _editor.LibraryGrouping switch
+        {
+            AssetGrouping.Collection => "Collection",
+            AssetGrouping.Tag => "Tag",
+            _ => "None",
+        });
+        SetSegment(_placementModeButtons,
+            _editor.StampPlacementMode == StampPlacementMode.Area ? "Area" : "One");
+
+        SetToggle(_libraryFilterButtons["Favorites"], "Только избранное", _editor.LibraryFavoritesOnly);
+        SetToggle(_libraryFilterButtons["Recent"], "Только недавние", _editor.LibraryRecentOnly);
+        SetToggle(_libraryFilterButtons["Untagged"], "Только без тегов", _editor.LibraryUntaggedOnly);
+        SetToggle(
+            _libraryFilterButtons["UsedInMap"], "Только используемое на карте", _editor.LibraryUsedInMapOnly);
+        SetToggle(
+            _randomVariantToggle, "Случайный вариант после размещения", _editor.RandomVariantAfterPlacement);
+        SetToggle(_randomAngleToggle, "Случайный угол", _editor.StampRandomAngle);
+        SetToggle(_randomFlipToggle, "Случайное отражение", _editor.StampRandomFlip);
+
+        static void SetSegment(Dictionary<string, Button> buttons, string activeKey)
+        {
+            foreach (var (key, button) in buttons)
             {
-                var states = new List<(string, string)>();
-                if (asset.LinkedPath is not null)
-                {
-                    states.Add((MapIcons.Open, "Связанный файл на диске"));
-                }
-
-                var captured = asset;
-                var row = Ui.ListRow(
-                    "Asset_" + asset.Sha256[..12],
-                    MapIcons.Assets,
-                    asset.DisplayName,
-                    $"{asset.Width}×{asset.Height}",
-                    states,
-                    () =>
-                    {
-                        _selectedAsset = captured;
-                        SyncAssetList();
-                    },
-                    asset.LinkedPath is null
-                        ? $"{asset.DisplayName} · хранится в проекте"
-                        : $"{asset.DisplayName} · связанный файл");
-
-                Ui.SetSelected(row, asset.Sha256 == _selectedAsset?.Sha256);
-                _assetList.Children.Add(row);
+                Ui.SetSelected(button, key == activeKey);
             }
         }
+    }
+
+    private void SyncCollectionTree()
+    {
+        _collectionTree.Children.Clear();
+        var all = Ui.ListRow(
+            "Collection_All", MapIcons.Layers, "Все коллекции",
+            _editor.LibrarySets.Count.ToString(), [],
+            () =>
+            {
+                _editor.LibraryCollectionId = null;
+                SyncAssetList();
+            },
+            "Все коллекции");
+        Ui.SetSelected(all, _editor.LibraryCollectionId is null);
+        _collectionTree.Children.Add(all);
+
+        Add(_editor.LibraryCollections, 0);
+
+        if (_editor.LibraryCollections.Count == 0)
+        {
+            _collectionTree.Children.Add(new TextBlock
+            {
+                Text = "Коллекции появятся после первого импорта.",
+                TextWrapping = TextWrapping.Wrap,
+            }.Classed("faint", "role-caption").Named("NoCollectionsText"));
+        }
+
+        void Add(IReadOnlyList<AssetCollectionNode> nodes, int depth)
+        {
+            foreach (var node in nodes)
+            {
+                var captured = node.Id;
+                var row = Ui.ListRow(
+                    "Collection_" + node.Id, MapIcons.Layers, node.Name,
+                    node.TotalCount.ToString(), [],
+                    () =>
+                    {
+                        _editor.LibraryCollectionId = captured;
+                        SyncAssetList();
+                    },
+                    $"{node.Name}, карточек: {node.TotalCount}");
+                row.Margin = new Thickness(depth * 12, 0, 0, 0);
+                Ui.SetSelected(row, _editor.LibraryCollectionId == node.Id);
+                _collectionTree.Children.Add(row);
+                Add(node.Children, depth + 1);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The breadcrumb trail. Each ancestor segment is a real button that navigates back up, so
+    /// the trail is reachable from the keyboard and visible to UI Automation; a bare panel of
+    /// text blocks would not appear in the accessibility tree at all.
+    /// </summary>
+    private void SyncBreadcrumbs()
+    {
+        _breadcrumbs.Children.Clear();
+        _breadcrumbs.VerticalAlignment = VerticalAlignment.Center;
+
+        var root = Ui.TextButton("BreadcrumbRoot", "Библиотека", () =>
+        {
+            _editor.LibraryCollectionId = null;
+            _editor.SelectAssetSet(null);
+            SyncAssetList();
+        }, "compact");
+        AutomationProperties.SetName(root, "Библиотека, все коллекции");
+        ToolTip.SetTip(root, "Показать все коллекции");
+        _breadcrumbs.Children.Add(root.Docked(Dock.Left));
+
+        var current = "Все коллекции";
+        if (_editor.LibraryCollectionId is { } collectionId
+            && FindCollectionName(_editor.LibraryCollections, collectionId) is { } collectionName)
+        {
+            current = collectionName;
+            _breadcrumbs.Children.Add(Separator().Docked(Dock.Left));
+            var collection = Ui.TextButton("BreadcrumbCollection", collectionName, () =>
+            {
+                _editor.SelectAssetSet(null);
+                SyncAssetList();
+            }, "compact");
+            AutomationProperties.SetName(collection, $"Коллекция {collectionName}");
+            _breadcrumbs.Children.Add(collection.Docked(Dock.Left));
+        }
+
+        if (_editor.SelectedSet is { } selected)
+        {
+            current = selected.Name;
+            _breadcrumbs.Children.Add(Separator().Docked(Dock.Left));
+        }
+
+        var leaf = new TextBlock
+        {
+            Text = current,
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        }.Classed("muted", "role-caption").Named("BreadcrumbCurrent");
+        AutomationProperties.SetName(leaf, current);
+        _breadcrumbs.Children.Add(leaf);
+
+        static Control Separator() => new TextBlock
+        {
+            Text = "/",
+            Margin = new Thickness(4, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        }.Classed("faint");
+
+        static string? FindCollectionName(IReadOnlyList<AssetCollectionNode> nodes, string id)
+        {
+            foreach (var node in nodes)
+            {
+                if (node.Id == id)
+                {
+                    return node.Name;
+                }
+
+                if (FindCollectionName(node.Children, id) is { } nested)
+                {
+                    return nested;
+                }
+            }
+
+            return null;
+        }
+    }
+
+    private void SyncLibraryGrid()
+    {
+        var sets = _editor.LibrarySets;
+        _libraryGrid.ItemsSource = sets;
+        _libraryGrid.SelectedItem = sets.FirstOrDefault(item => item.SetId == _editor.SelectedSetId);
+        // The grid stays in the accessibility tree even when empty - a control that disappears
+        // cannot be found, focused or reported by a screen reader.
+        _libraryGrid.MinHeight = sets.Count > 0 ? 220 : 0;
+
+        _libraryCountText.Text = _editor.LibraryStatus == AssetLibraryStatus.Damaged
+            ? "Библиотека недоступна"
+            : sets.Count == 0
+                ? ((_assetSearch.Text ?? "").Trim().Length == 0
+                    ? "Библиотека пуста. Импортируйте PNG, JPEG или WebP."
+                    : "Ничего не найдено. Измените запрос или снимите фильтры.")
+                : $"Карточек: {sets.Count}";
+        AutomationProperties.SetName(_libraryGrid, $"Карточки библиотеки, {sets.Count}");
+    }
+
+    private void SyncSelectedSet()
+    {
+        var set = _editor.SelectedSet;
+        _selectedAsset = _editor.CurrentVariant is { } current
+            ? _editor.Assets.FirstOrDefault(record =>
+                string.Equals(record.Sha256, current.Sha256, StringComparison.OrdinalIgnoreCase))
+            : null;
+
+        _selectedSetNameText.Text = set?.Name ?? "Набор не выбран";
+        _setBadge.IsVisible = set is { IsSet: true };
+        if (set is { IsSet: true })
+        {
+            // A TextBlock reports its own Text to UI Automation, so a bare digit here would be
+            // exactly the mute badge the catalog research rules out. The panel has room for the
+            // whole phrase, so the badge simply says it.
+            var badgeName = $"{set.VariantCount} вариантов";
+            _setBadgeText.Text = badgeName;
+            AutomationProperties.SetName(_setBadgeText, badgeName);
+            ToolTip.SetTip(_setBadge, badgeName);
+        }
+
+        SetToggle(
+            _favoriteButton, set?.Favorite == true ? "Убрать из избранного" : "В избранное",
+            set?.Favorite == true);
+        _favoriteButton.IsEnabled = set is not null;
+
+        _variantPositionText.Text = _editor.CurrentVariantLabel.Length == 0
+            ? "Вариант не выбран"
+            : $"Вариант {_editor.CurrentVariantLabel}"
+                + (_editor.IsCurrentVariantTheCover ? " · обложка" : "");
+        AutomationProperties.SetName(_variantPositionText, _variantPositionText.Text);
+
+        var many = _editor.SelectedSetVariants.Count > 1;
+        _previousVariantButton.IsEnabled = many;
+        _nextVariantButton.IsEnabled = many;
 
         _assetSelectionText.Text = _selectedAsset is { } selected
             ? $"{selected.DisplayName} · {selected.Width}×{selected.Height}"
-            : "Ассет не выбран. Выберите его в списке выше.";
+            : "Ассет не выбран. Выберите карточку в списке выше.";
+
+        SyncVariantStrip();
 
         foreach (var command in _assetSelectionCommands)
         {
             command.IsEnabled = _selectedAsset is not null;
+        }
+    }
+
+    private void SyncVariantStrip()
+    {
+        _variantStrip.Children.Clear();
+        var variants = _editor.SelectedSetVariants;
+        if (variants.Count == 0)
+        {
+            return;
+        }
+
+        var cover = _editor.SelectedSet?.CoverVariantId;
+        for (var index = 0; index < variants.Count; index++)
+        {
+            var variant = variants[index];
+            var position = index;
+            var thumbnail = _thumbnails.Image(_editor.LibraryThumbnailPathForVariant(variant.Id));
+            var button = new ToggleButton
+            {
+                Content = new Border
+                {
+                    Width = 40,
+                    Height = 40,
+                    Child = thumbnail is null
+                        ? MapIcons.Stroked(MapIcons.Missing, 16)
+                        : new Image { Source = thumbnail, Stretch = Stretch.Uniform },
+                },
+            }.Named("Variant_" + variant.Id).Classed("segment");
+
+            var isCover = variant.Id == cover;
+            var name = $"Вариант {position + 1} из {variants.Count}"
+                + (isCover ? ", обложка" : "")
+                + (position == _editor.CurrentVariantIndex ? ", текущий" : "");
+            AutomationProperties.SetName(button, name);
+            ToolTip.SetTip(button, name);
+            Ui.SetSelected(button, position == _editor.CurrentVariantIndex);
+            button.Click += (_, _) =>
+            {
+                _editor.SelectVariantAt(position);
+                SyncAssetList();
+                SyncStatus();
+            };
+            _variantStrip.Children.Add(button);
         }
     }
 
@@ -1837,23 +2780,92 @@ public sealed class EditorView : UserControl
             return;
         }
 
-        var files = await topLevel.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        string? path;
+        if (UiTestFilePaths.NextImportGroup() is { } supplied)
         {
-            Title = linked ? "Связать изображение" : "Импортировать изображение",
-            AllowMultiple = false,
-            FileTypeFilter =
-            [
-                new FilePickerFileType("Изображения") { Patterns = ["*.png", "*.jpg", "*.jpeg", "*.webp"] },
-            ],
-        });
+            path = supplied[0];
+        }
+        else
+        {
+            var files = await topLevel.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title = linked ? "Связать изображение" : "Импортировать изображение",
+                AllowMultiple = false,
+                FileTypeFilter =
+                [
+                    new FilePickerFileType("Изображения") { Patterns = ["*.png", "*.jpg", "*.jpeg", "*.webp"] },
+                ],
+            });
 
-        var path = files.Count == 1 ? files[0].TryGetLocalPath() : null;
+            path = files.Count == 1 ? files[0].TryGetLocalPath() : null;
+        }
+
         if (path is null)
         {
             return;
         }
 
         _selectedAsset = _editor.ImportAsset(path, linked);
+        if (_selectedAsset is { } imported)
+        {
+            _editor.RefreshLibrary();
+            if (_editor.LibrarySets.FirstOrDefault(set =>
+                string.Equals(set.CoverSha256, imported.Sha256, StringComparison.OrdinalIgnoreCase))
+                is { } card)
+            {
+                _editor.SelectAssetSet(card.SetId);
+            }
+        }
+
+        SyncAssetList();
+        SyncStatus();
+    }
+
+    /// <summary>One import of many files becomes one named logical card with ordered variants.</summary>
+    private async System.Threading.Tasks.Task ImportAssetSetAsync()
+    {
+        var topLevel = TopLevel.GetTopLevel(this);
+        if (topLevel is null)
+        {
+            return;
+        }
+
+        List<string> paths;
+        if (UiTestFilePaths.NextImportGroup() is { } supplied)
+        {
+            paths = [.. supplied];
+        }
+        else
+        {
+            var files = await topLevel.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title = "Импортировать набор вариантов",
+                AllowMultiple = true,
+                FileTypeFilter =
+                [
+                    new FilePickerFileType("Изображения") { Patterns = ["*.png", "*.jpg", "*.jpeg", "*.webp"] },
+                ],
+            });
+
+            paths = [.. files.Select(file => file.TryGetLocalPath())
+                .Where(path => path is not null)
+                .Select(path => path!)];
+        }
+        if (paths.Count == 0)
+        {
+            return;
+        }
+
+        var suggested = paths.Count == 1
+            ? Path.GetFileNameWithoutExtension(paths[0])
+            : Path.GetFileName(Path.GetDirectoryName(paths[0])) ?? "Новый набор";
+        var name = await AskSetNameAsync(topLevel as Window, suggested);
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return;
+        }
+
+        _editor.ImportAssetSet(paths, name);
         SyncAssetList();
         SyncStatus();
     }

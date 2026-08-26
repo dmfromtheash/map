@@ -99,37 +99,70 @@ public sealed class AddObjectsCommand : IEditCommand
 public sealed class PlaceAssetObjectsCommand : IEditCommand
 {
     private readonly LayerId _layerId;
-    private readonly MapAssetReference _asset;
+    private readonly IReadOnlyList<MapAssetReference> _assets;
     private readonly IReadOnlyList<SceneObject> _objects;
-    private bool _introducedAsset;
+    private readonly HashSet<string> _introduced = new(StringComparer.OrdinalIgnoreCase);
 
     public PlaceAssetObjectsCommand(
         LayerId layerId, MapAssetReference asset, IReadOnlyList<SceneObject> objects)
+        : this(layerId, [asset ?? throw new ArgumentNullException(nameof(asset))], objects)
     {
-        ArgumentNullException.ThrowIfNull(asset);
+    }
+
+    /// <summary>
+    /// One gesture may place stamps from several variants of a set. The whole plan is resolved by
+    /// the caller before this command exists, so Apply never chooses anything.
+    /// </summary>
+    public PlaceAssetObjectsCommand(
+        LayerId layerId, IReadOnlyList<MapAssetReference> assets, IReadOnlyList<SceneObject> objects)
+    {
+        ArgumentNullException.ThrowIfNull(assets);
         ArgumentNullException.ThrowIfNull(objects);
+        if (assets.Count == 0)
+        {
+            throw new ArgumentException("A placement carries at least one asset reference.", nameof(assets));
+        }
+
+        var hashes = assets.Select(asset => asset.Sha256).ToHashSet(StringComparer.OrdinalIgnoreCase);
         if (objects.Count == 0
             || objects.Any(item => item.Kind != SceneObjectKind.Stamp
-                || item.Stamp?.AssetSha256 != asset.Sha256))
+                || item.Stamp is null
+                || !hashes.Contains(item.Stamp.AssetSha256)))
         {
-            throw new ArgumentException("Every placed object must reference the supplied stamp asset.");
+            throw new ArgumentException("Every placed object must reference one of the supplied stamp assets.");
         }
 
         _layerId = layerId;
-        _asset = asset;
+        _assets = [.. assets.GroupBy(asset => asset.Sha256, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())];
         _objects = [.. objects];
     }
 
-    public string Name => _objects.Count == 1 ? "Place stamp" : $"Scatter {_objects.Count} stamps";
+    public string Name => _objects.Count == 1
+        ? "Place stamp"
+        : $"Scatter {_objects.Count} stamps ({VariantCount} variants)";
+
     public int Count => _objects.Count;
+
+    /// <summary>How many distinct contents this one gesture introduced into the document.</summary>
+    public int VariantCount => _assets.Count;
 
     public MapDocument Apply(MapDocument document)
     {
-        _introducedAsset = document.Assets.All(asset => asset.Sha256 != _asset.Sha256);
-        var withAsset = _introducedAsset
-            ? document.WithAssets([.. document.Assets, _asset])
-            : document;
-        return withAsset.WithLayer(_layerId, layer =>
+        _introduced.Clear();
+        var known = document.Assets.Select(asset => asset.Sha256).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var added = new List<MapAssetReference>();
+        foreach (var asset in _assets)
+        {
+            if (known.Add(asset.Sha256))
+            {
+                _introduced.Add(asset.Sha256);
+                added.Add(asset);
+            }
+        }
+
+        var withAssets = added.Count == 0 ? document : document.WithAssets([.. document.Assets, .. added]);
+        return withAssets.WithLayer(_layerId, layer =>
         {
             var objects = layer as ObjectLayer
                 ?? throw new InvalidOperationException($"Layer {_layerId} does not hold objects.");
@@ -146,13 +179,24 @@ public sealed class PlaceAssetObjectsCommand : IEditCommand
             return objects with { Objects = [.. objects.Objects.Where(item => !ids.Contains(item.Id))] };
         });
 
+        if (_introduced.Count == 0)
+        {
+            return withoutObjects;
+        }
+
+        // Only references this command actually introduced, and only those no surviving stamp
+        // still points at, are withdrawn. Anything else would break another object's content.
         var stillUsed = withoutObjects.Layers.OfType<ObjectLayer>()
             .SelectMany(layer => layer.Objects)
-            .Any(item => item.Stamp?.AssetSha256 == _asset.Sha256);
-        return _introducedAsset && !stillUsed
-            ? withoutObjects.WithAssets(
-                [.. withoutObjects.Assets.Where(asset => asset.Sha256 != _asset.Sha256)])
-            : withoutObjects;
+            .Select(item => item.Stamp?.AssetSha256)
+            .Where(sha => sha is not null)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase)!;
+        var withdraw = _introduced.Where(sha => !stillUsed.Contains(sha))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return withdraw.Count == 0
+            ? withoutObjects
+            : withoutObjects.WithAssets(
+                [.. withoutObjects.Assets.Where(asset => !withdraw.Contains(asset.Sha256))]);
     }
 }
 

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -123,7 +123,7 @@ public sealed class MainWindow : Window
 
     private async Task OpenFileAsync()
     {
-        var path = await new AvaloniaFilePicker(this).PickOpenAsync();
+        var path = UiTestFilePaths.MapPath ?? await new AvaloniaFilePicker(this).PickOpenAsync();
         if (path is not null)
         {
             await OpenPathAsync(path);
@@ -252,6 +252,9 @@ public sealed class MainWindow : Window
             switch (e.Key)
             {
                 case Key.O:
+                    // The stamp tool and its library are one thought: the key selects the tool
+                    // and opens the panel the tool needs, exactly as it did before it had a tool.
+                    editor.ActiveTool = EditorTool.Stamp;
                     editorView.OpenAssetCatalog();
                     e.Handled = true;
                     return;
@@ -342,11 +345,45 @@ public sealed class MainWindow : Window
         if (!control && !alt && e.Key is Key.Q or Key.A)
         {
             var direction = e.Key == Key.Q ? 1 : -1;
-            if (editor.ActiveTool == EditorTool.Brush)
+            if (editor.ActiveTool == EditorTool.Stamp)
+            {
+                editor.AdjustStampArea(direction, shift);
+                editorView.RefreshLibraryPanel();
+            }
+            else if (editor.ActiveTool == EditorTool.Brush)
                 editor.AdjustBrushSoftness(direction, shift);
             else if (editor.ActiveTool == EditorTool.Text)
                 editor.AdjustSelectedTextCurve(direction, shift);
             e.Handled = true;
+            return;
+        }
+
+        // ------------------------------------------------------------ stamp context
+
+        if (alt && !control && e.Key is Key.Q or Key.A)
+        {
+            if (editor.ActiveTool == EditorTool.Stamp)
+            {
+                editor.AdjustStampDensity(e.Key == Key.Q ? 1 : -1, shift);
+                editorView.RefreshLibraryPanel();
+                e.Handled = true;
+            }
+
+            return;
+        }
+
+        if (alt && !control && e.Key is Key.Left or Key.Right)
+        {
+            if (editor.ActiveTool == EditorTool.Stamp)
+            {
+                if (e.Key == Key.Right)
+                    editor.NextVariant();
+                else
+                    editor.PreviousVariant();
+                editorView.RefreshLibraryPanel();
+                e.Handled = true;
+            }
+
             return;
         }
 

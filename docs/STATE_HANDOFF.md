@@ -1,4 +1,4 @@
-# STATE HANDOFF
+﻿# STATE HANDOFF
 
 ## Последнее обновление
 
@@ -6,7 +6,9 @@
 `stage/09-reliability-cycle` выполнен и независимо проверен первый срез Stage 9: 9A autosave
 journal + startup recovery (`03372d7`). Полный Stage 9 остаётся `PARTIAL`: следующий отдельный
 срез — 9B named checkpoints. Stage 10 object/grid parity описан и принят в `DEC-010`, но ещё не
-реализован полностью.
+реализован полностью. Реализованы срезы Stage 10 input parity (`95d2fe8`) и Stage 10B Library v2 /
+variant sets / deterministic stamp placement на branch `stage/10-asset-library-sets`; последний
+ожидает независимой проверки Codex.
 
 ## FACT — среда
 
@@ -432,9 +434,51 @@ package audits и повторного pre-commit/doctor.
 - Diagnostic scope уточнён до двух logical fixtures: 12-variant stamp set + singleton brush tip.
 - Это подготовка/контракт, не реализация: код Stage 10B, новые PNG и его gates ещё `PROPOSED`.
 
-Следующий owner-approved шаг: передать Opus только Stage 10B Library v2/variant sets/stamp scatter
-и после его одного commit остановить Opus для независимого Codex review `BASE..HEAD`. Не смешивать
-с 10C multi-selection/groups, 10D inspectors, 10E `IsometricSquares`, 10F fonts или Stage 9B.
+## FACT / PARTIAL — Stage 10B выполнен, 26.08.2026
+
+Branch `stage/10-asset-library-sets`, BASE `70148c5`, один commit Opus. Ожидает независимой
+проверки Codex; Stage 10 в целом остаётся `PARTIAL`.
+
+- Library schema v2: версионированный `catalog.json` с `records/collections/variants/sets/recent`.
+  Миграция плоского v1-массива создаёт singleton sets с id, выведенными из SHA-256, сохраняет все
+  поля записи, пишет `catalog.v1.<timestamp>.json` и идемпотентна при повторном открытии.
+- Повреждённый индекс переводит каталог в read-only `Damaged`, показывается в панели и **не**
+  перезаписывается пустым каталогом; индекс новой schema сообщает о себе, а не деградирует тихо.
+- Query по логическим карточкам: text/collection/tag/untagged/favorite/recent/used-in-map/
+  media type/imported range, 4 сортировки, группировка по коллекции и тегу, дерево коллекций
+  со счётчиками и bounded окно видимых плиток.
+- Профиль 10 000 логических sets: load `< 2 s`, warm query P95 `≤ 100 ms`, каталог `originals`
+  вообще не создаётся — ни один оригинал не декодируется.
+- `StampPlacement` — собственная измеримая семантика: Area = радиус в world units, Density =
+  штампов на 10 000 кв. единиц, `count = clamp(round(density*PI*r^2/10000), 1, 5000)`, равномерная
+  выборка в круге и собственный SplitMix64 PRNG (framework `Random` не гарантирует стабильность).
+- `PlaceAssetObjectsCommand` принимает несколько `MapAssetReference`: один gesture = одна запись
+  истории; undo снимает только введённые этой командой и больше не используемые ссылки; redo
+  возвращает тот же план без повторного розыгрыша.
+- Настоящее окно (`scripts/drive-stage10b-asset-library.ps1`, 15 PNG): импорт singleton и набора
+  из 12 вариантов, дерево/breadcrumbs/поиск/фильтры/favorite/recent, `Вариант 1/12` мышью и
+  `Alt+←/Alt+→`, `Q/A` и `Alt+Q/Alt+A`, One и Area, undo/redo, save и reopen без каталога,
+  missing/hash-mismatch и damaged index. Сохранённая карта: **323 штампа, 12 разных SHA**.
+- Два собственных diagnostic fixtures в `tests/fixtures/assets/`: 12 PNG 512×512 RGBA + один
+  256×256 brush tip, генератор `tools/Map.DiagnosticAssets` воспроизводит их byte-identical.
+
+`PARTIAL` этого среза:
+
+- High-DPI: окно рендерится одинаково при 100 % и 200 % (normalized RMSE `0,0034`);
+  `AVALONIA_SCREEN_SCALE_FACTORS` в этой среде не применяется. Доказан только запуск и разрешение
+  контролов, не реальное масштабирование.
+- Нативный файловый диалог Windows в этой среде не открывается и не возвращается — проверено и на
+  прежнем пути одиночного импорта. Поэтому driver передаёт пути через `MAP_UI_TEST_*`, а не через
+  OS-диалог; сам диалог остаётся непроверенным автоматически.
+- Вне allowlist изменён один файл: `src/Map.Presentation/ViewModels/EditorLabels.cs` — три
+  additive ветки для нового `EditorTool.Stamp`, которых требует существующий тест «у каждого
+  инструмента есть имя, клавиша и подсказка». Требует подтверждения владельца.
+- Найдено, но не исправлено (соседняя область): в статус-баре длинный текст состояния вплотную
+  примыкает к «Масштаб NN %» без отступа.
+
+Следующий owner-approved шаг: независимая проверка Codex `BASE..HEAD`, затем отдельный срез
+10C multi-selection/groups. Не смешивать с 10D inspectors, 10E `IsometricSquares`, 10F fonts
+или Stage 9B.
 
 ## Проверка среды
 

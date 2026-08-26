@@ -21,6 +21,7 @@ public static class EditorLabels
         EditorTool.Brush => "Кисть",
         EditorTool.Mask => "Маска",
         EditorTool.Land => "Земля",
+        EditorTool.Stamp => "Штамп",
         _ => "Инструмент",
     };
 
@@ -35,6 +36,7 @@ public static class EditorLabels
         EditorTool.Mask => "M",
         // Inkarnate has no separate Land key; assigning E here conflicts with its property/edit key.
         EditorTool.Land => "",
+        EditorTool.Stamp => "O",
         _ => "",
     };
 
@@ -48,6 +50,7 @@ public static class EditorLabels
         EditorTool.Brush => "Рисуйте по холсту. Размер и непрозрачность — слева.",
         EditorTool.Mask => "Рисуйте по маске активного слоя: скрывайте или возвращайте участки.",
         EditorTool.Land => "Протяните по холсту, чтобы добавить сушу. Режим «Убрать» стирает её.",
+        EditorTool.Stamp => "Выберите набор в библиотеке и щёлкните по холсту. Q/A — область, Alt+Q/Alt+A — плотность.",
         _ => "",
     };
 

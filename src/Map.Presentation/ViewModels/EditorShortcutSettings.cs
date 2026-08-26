@@ -17,6 +17,18 @@ public sealed class EditorShortcutSettings
         ["side-panel"] = "/",
         ["previous-tool"] = "Tab",
         ["grid-snap"] = "G",
+
+        // Stamp-tool context. Each of these drives a real command on a real set; a binding
+        // without a working function is not a shortcut (DEC-012).
+        ["stamp-next-variant"] = "Alt+Right",
+        ["stamp-previous-variant"] = "Alt+Left",
+        ["stamp-cycle-variant"] = "Alt+Wheel",
+        ["stamp-focus-library"] = "F",
+        ["stamp-area-up"] = "Q",
+        ["stamp-area-down"] = "A",
+        ["stamp-density-up"] = "Alt+Q",
+        ["stamp-density-down"] = "Alt+A",
+
         ["undo"] = "Ctrl+Z",
         ["redo"] = "Ctrl+Shift+Z",
         ["save"] = "Ctrl+S",

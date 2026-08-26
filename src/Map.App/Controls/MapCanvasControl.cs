@@ -50,6 +50,12 @@ public sealed class MapCanvasControl : Control
 
     public event EventHandler? ViewportChanged;
 
+    /// <summary>Raised after a stamp gesture so the library panel can re-read the tool state.</summary>
+    public event EventHandler? StampPlaced;
+
+    /// <summary>Raised when Alt+wheel moved the current variant of the selected set.</summary>
+    public event EventHandler? VariantCycled;
+
     public void Attach(EditorViewModel editor)
     {
         _editor?.SceneChanged -= OnSceneChanged;
@@ -181,6 +187,17 @@ public sealed class MapCanvasControl : Control
             return;
         }
 
+        // One press is the whole stamp gesture: the plan is resolved and committed as exactly one
+        // undoable command, whether it places a single stamp or a full Area scatter.
+        if (_editor.ActiveTool == EditorTool.Stamp)
+        {
+            _editor.PlaceCurrentVariantAt(world.X, world.Y);
+            StampPlaced?.Invoke(this, EventArgs.Empty);
+            e.Handled = true;
+            InvalidateVisual();
+            return;
+        }
+
         // One entry point: a gizmo handle grab resizes/rotates the current selection; otherwise
         // the press selects and, on an editable object, starts a move.
         if (_editor.BeginCanvasInteraction(world.X, world.Y, _editor.Session.Viewport.Scale))
@@ -302,6 +319,30 @@ public sealed class MapCanvasControl : Control
 
         var position = e.GetPosition(this);
         var direction = Math.Sign(e.Delta.Y);
+
+        // Alt+wheel cycles the current variant, but only inside the stamp tool and only when a
+        // set is actually selected; everywhere else the wheel keeps its existing meaning.
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Alt)
+            && !e.KeyModifiers.HasFlag(KeyModifiers.Control)
+            && !e.KeyModifiers.HasFlag(KeyModifiers.Shift)
+            && _editor.ActiveTool == EditorTool.Stamp
+            && _editor.SelectedSetVariants.Count > 1)
+        {
+            if (direction > 0)
+            {
+                _editor.NextVariant();
+            }
+            else if (direction < 0)
+            {
+                _editor.PreviousVariant();
+            }
+
+            VariantCycled?.Invoke(this, EventArgs.Empty);
+            InvalidateVisual();
+            e.Handled = true;
+            return;
+        }
+
         if (e.KeyModifiers.HasFlag(KeyModifiers.Control))
         {
             _editor.RotateSelectedObject(direction,

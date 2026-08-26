@@ -1,4 +1,4 @@
-# 06. Дорожная карта разработки
+﻿# 06. Дорожная карта разработки
 
 ## Почему порядок именно такой
 
@@ -205,9 +205,14 @@ Fault-injection suite доказывает отсутствие потери п�
 ## Stage 10 — Собственный UX/UI и asset pilot
 
 Текущий статус: **PARTIAL**. Первый input-parity slice реализует работающие global/tool/selection
-и Brush/Mask/Text shortcuts. Владелец принял следующим крупным срезом **10B Library v2 + variant
-sets + set-aware stamp placement + diagnostic fixtures**. Полный object/grid inspector,
-`IsometricSquares`, multi-selection UI/groups и font catalog остаются после 10B.
+и Brush/Mask/Text shortcuts. Срез **10B Library v2 + variant sets + set-aware stamp placement +
+diagnostic fixtures** реализован на branch `stage/10-asset-library-sets` и ожидает независимой
+проверки Codex: schema v2 с миграцией и защитой повреждённого индекса, collections/sets/variants,
+поиск/сортировка/группировка/фильтры/recent/favorite, виртуализированный каталог, `EditorTool.Stamp`
+с Area/Density и детерминированным многовариантным размещением одной undoable командой, а также два
+собственных diagnostic fixtures. High-DPI и нативный файловый диалог остались `PARTIAL` — причины
+в `docs/STATE_HANDOFF.md`. Полный object/grid inspector, `IsometricSquares`, multi-selection
+UI/groups и font catalog остаются после 10B.
 
 Этот этап начинается после предоставления владельцем материалов, но отдельные UX-прототипы идут раньше каждого инструмента.
 
@@ -233,7 +238,7 @@ sets + set-aware stamp placement + diagnostic fixtures**. Полный object/gr
 ### Порядок оставшихся срезов Stage 10
 
 1. **10B — Library v2 и variant-set stamp workflow:** единый owner-approved крупный срез;
-   контракт — `prompts/STAGE_10B_ASSET_LIBRARY_VARIANT_SETS.md`.
+   контракт — `prompts/STAGE_10B_ASSET_LIBRARY_VARIANT_SETS.md`. Реализован, ожидает Codex.
 2. **10C — Multi-selection/groups:** Ctrl+A/Ctrl+click, group/ungroup, group transform и UIA.
 3. **10D — Object inspectors:** Stamp/Text/Line/Shape/Brush controls и color/effects parity.
 4. **10E — Grid geometry:** отдельная `IsometricSquares`, property sheet, snap/golden fixtures.
