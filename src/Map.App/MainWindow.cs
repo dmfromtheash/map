@@ -56,6 +56,7 @@ public sealed class MainWindow : Window
         // Listening on the bubble route with handledEventsToo keeps the shortcuts working even
         // when a child control has already marked the key as handled.
         AddHandler(KeyDownEvent, OnWindowKeyDown, RoutingStrategies.Bubble, handledEventsToo: true);
+        AddHandler(KeyUpEvent, OnWindowKeyUp, RoutingStrategies.Bubble, handledEventsToo: true);
     }
 
     // ---------------------------------------------------------------- navigation
@@ -213,6 +214,156 @@ public sealed class MainWindow : Window
             return;
         }
 
+        var editor = editorView.Editor;
+        var shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+        var control = e.KeyModifiers.HasFlag(KeyModifiers.Control);
+        var alt = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
+
+        if (e.Key == Key.Space && e.KeyModifiers == KeyModifiers.None)
+        {
+            editorView.Canvas.IsSpacePanHeld = true;
+            e.Handled = true;
+            return;
+        }
+
+        if (e.KeyModifiers == KeyModifiers.None && e.Key is Key.K)
+        {
+            ShowShortcutHelp();
+            e.Handled = true;
+            return;
+        }
+
+        if (e.PhysicalKey == PhysicalKey.Slash && shift && !control && !alt)
+        {
+            ShowShortcutHelp();
+            e.Handled = true;
+            return;
+        }
+
+        if (e.PhysicalKey == PhysicalKey.Slash && e.KeyModifiers == KeyModifiers.None)
+        {
+            editorView.ToggleSidePanel();
+            e.Handled = true;
+            return;
+        }
+
+        if (e.KeyModifiers == KeyModifiers.None)
+        {
+            switch (e.Key)
+            {
+                case Key.O:
+                    editorView.OpenAssetCatalog();
+                    e.Handled = true;
+                    return;
+                case Key.N:
+                    editorView.OpenNotes();
+                    e.Handled = true;
+                    return;
+                case Key.F:
+                    editorView.OpenAssetCatalog(focusSearch: true);
+                    e.Handled = true;
+                    return;
+                case Key.Tab when editorView.Canvas.IsFocused:
+                    editor.SelectPreviousTool();
+                    e.Handled = true;
+                    return;
+                case Key.G:
+                    editor.ToggleGridSnap();
+                    e.Handled = true;
+                    return;
+                case Key.Escape:
+                    editor.DeselectObject();
+                    e.Handled = true;
+                    return;
+                case Key.Delete:
+                case Key.Back:
+                    editor.DeleteSelectedObject();
+                    e.Handled = true;
+                    return;
+                case Key.Left:
+                    editor.NudgeSelectedObject(-1, 0);
+                    e.Handled = true;
+                    return;
+                case Key.Right:
+                    editor.NudgeSelectedObject(1, 0);
+                    e.Handled = true;
+                    return;
+                case Key.Up:
+                    editor.NudgeSelectedObject(0, -1);
+                    e.Handled = true;
+                    return;
+                case Key.Down:
+                    editor.NudgeSelectedObject(0, 1);
+                    e.Handled = true;
+                    return;
+                case Key.X when editor.ActiveTool == EditorTool.Mask:
+                    editor.ToggleMaskPaintMode();
+                    e.Handled = true;
+                    return;
+            }
+        }
+
+        if (shift && !control && !alt && e.Key is Key.Left or Key.Right or Key.Up or Key.Down)
+        {
+            var step = 10.0;
+            editor.NudgeSelectedObject(
+                e.Key == Key.Left ? -step : e.Key == Key.Right ? step : 0,
+                e.Key == Key.Up ? -step : e.Key == Key.Down ? step : 0);
+            e.Handled = true;
+            return;
+        }
+
+        if (!control && !alt && e.Key is Key.W or Key.S)
+        {
+            var direction = e.Key == Key.W ? 1 : -1;
+            if (editor.ActiveTool is EditorTool.Brush or EditorTool.Mask or EditorTool.Land)
+                editor.AdjustBrushSize(direction, shift);
+            else if (editor.ActiveTool == EditorTool.Text)
+                editor.AdjustSelectedTextFontSize(direction, shift);
+            else if (editor.ActiveTool == EditorTool.Select)
+                editor.ResizeSelectedObject(direction, shift);
+            e.Handled = true;
+            return;
+        }
+
+        if (!control && !alt && e.Key is Key.E or Key.D)
+        {
+            var direction = e.Key == Key.E ? 1 : -1;
+            if (e.Key == Key.E && editorView.IsNotesOpen)
+                editorView.OpenNotes(focusEditor: true);
+            else if (editor.ActiveTool is EditorTool.Brush or EditorTool.Mask or EditorTool.Land)
+                editor.AdjustBrushOpacity(direction, shift);
+            else if (editor.ActiveTool == EditorTool.Select)
+                editor.AdjustSelectedOpacity(direction, shift);
+            e.Handled = true;
+            return;
+        }
+
+        if (!control && !alt && e.Key is Key.Q or Key.A)
+        {
+            var direction = e.Key == Key.Q ? 1 : -1;
+            if (editor.ActiveTool == EditorTool.Brush)
+                editor.AdjustBrushSoftness(direction, shift);
+            else if (editor.ActiveTool == EditorTool.Text)
+                editor.AdjustSelectedTextCurve(direction, shift);
+            e.Handled = true;
+            return;
+        }
+
+        if (shift && !control && !alt && e.PhysicalKey is PhysicalKey.Period or PhysicalKey.Comma)
+        {
+            editor.RotateSelectedObject(e.PhysicalKey == PhysicalKey.Period ? 1 : -1);
+            e.Handled = true;
+            return;
+        }
+
+        if (!control && !alt && e.PhysicalKey == PhysicalKey.Backquote)
+        {
+            editor.RestoreLastSelection();
+            e.Handled = true;
+            return;
+        }
+
         // One key per tool, matching the tooltips on the rail. Text entry is excluded above so
         // typing a Russian or Latin letter into a name field can never switch the tool.
         if (e.KeyModifiers == KeyModifiers.None && ToolForKey(e.Key) is { } tool)
@@ -222,10 +373,13 @@ public sealed class MainWindow : Window
             return;
         }
 
-        if (MatchesShortcut(e, editorView.Editor.Shortcuts.Get("grid-snap")))
+    }
+
+    private void OnWindowKeyUp(object? sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Space && _editorView is { } editorView)
         {
-            editorView.Editor.SnapSelectedObjectToGrid();
-            e.Handled = true;
+            editorView.Canvas.IsSpacePanHeld = false;
         }
     }
 
@@ -238,6 +392,8 @@ public sealed class MainWindow : Window
         {
             return;
         }
+
+        var typing = IsTypingInText();
 
         switch (e.Key)
         {
@@ -253,12 +409,41 @@ public sealed class MainWindow : Window
                 _ = _editorView.Editor.SaveAsync();
                 break;
 
-            case Key.Z when _editorView is not null:
-                _editorView.Editor.Undo();
+            case Key.Z when _editorView is not null && !typing:
+                if (e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+                    _editorView.Editor.Redo();
+                else
+                    _editorView.Editor.Undo();
                 break;
 
-            case Key.Y when _editorView is not null:
+            case Key.Y when _editorView is not null && !typing:
                 _editorView.Editor.Redo();
+                break;
+
+            case Key.C when _editorView is not null && !typing:
+                _editorView.Editor.CopySelectedComposition();
+                break;
+
+            case Key.V when _editorView is not null && !typing:
+                _editorView.Editor.PasteComposition();
+                break;
+
+            case Key.L when _editorView is not null && !typing:
+                _editorView.Editor.ToggleSelectedObjectLock();
+                break;
+
+            case Key.Up when _editorView is not null && !typing:
+                if (e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+                    _editorView.Editor.ReorderActiveLayer(up: true);
+                else
+                    _editorView.Editor.AdjustSelectedSublayer(1);
+                break;
+
+            case Key.Down when _editorView is not null && !typing:
+                if (e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+                    _editorView.Editor.ReorderActiveLayer(up: false);
+                else
+                    _editorView.Editor.AdjustSelectedSublayer(-1);
                 break;
 
             default:
@@ -277,29 +462,52 @@ public sealed class MainWindow : Window
         Key.T => EditorTool.Text,
         Key.B => EditorTool.Brush,
         Key.M => EditorTool.Mask,
-        Key.E => EditorTool.Land,
         _ => null,
     };
 
     private bool IsTypingInText() => FocusManager?.GetFocusedElement() is TextBox;
 
-    private static bool MatchesShortcut(KeyEventArgs e, string gesture)
+    private void ShowShortcutHelp()
     {
-        if (string.IsNullOrWhiteSpace(gesture)) return false;
-        var parts = gesture.Split('+', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-        if (!Enum.TryParse<Key>(parts[^1], ignoreCase: true, out var key) || key != e.Key) return false;
-        var expected = KeyModifiers.None;
-        foreach (var part in parts[..^1])
+        var dialog = new Window
         {
-            expected |= part.ToUpperInvariant() switch
+            Title = "Горячие клавиши Map",
+            Width = 760,
+            Height = 680,
+            MinWidth = 520,
+            MinHeight = 420,
+            Content = new ScrollViewer
             {
-                "CTRL" or "CONTROL" => KeyModifiers.Control,
-                "SHIFT" => KeyModifiers.Shift,
-                "ALT" => KeyModifiers.Alt,
-                _ => KeyModifiers.None,
-            };
-        }
-        return e.KeyModifiers == expected;
+                Content = new TextBlock
+                {
+                    Margin = new Avalonia.Thickness(24),
+                    TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+                    Text = """
+                    ГЛОБАЛЬНО
+                    Колесо — масштаб · средняя кнопка или Пробел+drag — панорама
+                    K или ? — эта справка · / — правая панель · G — привязка к сетке
+                    Ctrl+Z / Ctrl+Shift+Z — отмена / повтор · Tab — предыдущий инструмент
+                    V Выбор · M Маска · B Кисть · O Ассеты/штампы · R Фигура · L Линия · T Текст · N Заметки
+
+                    ВЫБОР
+                    Esc — снять выбор · ` / ~ — вернуть последний выбор
+                    Delete / Backspace — удалить · стрелки — сдвинуть · Shift+стрелки — крупный шаг
+                    W/S — размер · Shift+W/S — крупный шаг · </> — поворот
+                    Ctrl+колесо — поворот · Ctrl+Alt+колесо — точный поворот · Shift+колесо — размер
+                    Ctrl+C / Ctrl+V — копировать / вставить · Ctrl+L — блокировка
+                    Ctrl+↑/↓ — подслой · Ctrl+Shift+↑/↓ — слой
+
+                    КИСТЬ / МАСКА / ТЕКСТ
+                    W/S — размер · E/D — непрозрачность · Q/A — мягкость кисти или кривизна текста
+                    X — режим маски · F — каталог ассетов · E в заметках — редактирование
+
+                    Shift увеличивает шаг. Сочетания, которым нужна множественная модель выбора,
+                    наборы штампов или каталог шрифтов, будут добавлены отдельным проверяемым срезом.
+                    """,
+                },
+            },
+        };
+        _ = dialog.ShowDialog(this);
     }
 
     private async Task HandleNewShortcutAsync()

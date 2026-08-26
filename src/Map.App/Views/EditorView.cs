@@ -84,6 +84,8 @@ public sealed class EditorView : UserControl
     private readonly Dictionary<string, Button> _landShapeButtons = [];
     private readonly List<Button> _landActionButtons = [];
     private readonly List<Button> _maskModeButtons = [];
+    private TabControl _sideTabs = null!;
+    private Border _sidePanel = null!;
 
     // ------------------------------------------------------ selection sections
     // Every reusable block below lives in exactly one container for the lifetime of the view.
@@ -182,6 +184,32 @@ public sealed class EditorView : UserControl
     public EditorViewModel Editor => _editor;
 
     public MapCanvasControl Canvas => _canvas;
+
+    public bool IsNotesOpen => _sidePanel.IsVisible && _sideTabs.SelectedIndex == 3;
+
+    public void OpenAssetCatalog(bool focusSearch = false)
+    {
+        _sidePanel.IsVisible = true;
+        _sideTabs.SelectedIndex = 2;
+        if (focusSearch)
+        {
+            Dispatcher.UIThread.Post(() => _assetSearch.Focus(), DispatcherPriority.Input);
+        }
+    }
+
+    public void OpenNotes(bool focusEditor = false)
+    {
+        _sidePanel.IsVisible = true;
+        _sideTabs.SelectedIndex = 3;
+        if (focusEditor)
+        {
+            Dispatcher.UIThread.Post(
+                () => (_selectedNoteId is not null ? _noteTitle : _noteSearch).Focus(),
+                DispatcherPriority.Input);
+        }
+    }
+
+    public void ToggleSidePanel() => _sidePanel.IsVisible = !_sidePanel.IsVisible;
 
     // ======================================================================= top
 
@@ -707,7 +735,7 @@ public sealed class EditorView : UserControl
 
     private Control BuildSidePanel()
     {
-        var tabs = new TabControl
+        _sideTabs = new TabControl
         {
             Name = "EditorSideTabs",
             ItemsSource = new[]
@@ -719,7 +747,9 @@ public sealed class EditorView : UserControl
             },
         };
 
-        return new Border { Width = Ui.SidePanelWidth, Child = tabs }.Classed("panel");
+        _sidePanel = new Border { Width = Ui.SidePanelWidth, Child = _sideTabs }.Classed("panel");
+        _sidePanel.Name = "EditorSidePanel";
+        return _sidePanel;
     }
 
     private Control BuildLayersTab()

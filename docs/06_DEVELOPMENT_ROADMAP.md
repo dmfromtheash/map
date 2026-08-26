@@ -204,8 +204,9 @@ Fault-injection suite доказывает отсутствие потери п�
 
 ## Stage 10 — Собственный UX/UI и asset pilot
 
-Текущий статус: **PROPOSED**. Поведенческий контракт object inspector и grid property sheet принят
-в `DEC-010`, но полная панель и все presets ещё не реализованы.
+Текущий статус: **PARTIAL**. Первый input-parity slice реализует работающие global/tool/selection
+и Brush/Mask/Text shortcuts. Полный object/grid inspector, `IsometricSquares`, multi-selection,
+stamp sets/scatter и asset fixtures ещё не реализованы.
 
 Этот этап начинается после предоставления владельцем материалов, но отдельные UX-прототипы идут раньше каждого инструмента.
 
@@ -215,8 +216,12 @@ Fault-injection suite доказывает отсутствие потери п�
 - onboarding и локальная help;
 - полный object inspector parity: stamp transform/effects/color tweaks, shape fill/stroke и общий
   sublayer/opacity/blend/blur без копирования trade dress;
-- полный grid property sheet: square/diamond/hex-flat/hex-pointy presets и точные size/subdivision/
+- полный grid property sheet: square/isometric-squares/hex-flat/hex-pointy presets и точные size/subdivision/
   line/color/opacity/offset/rotation/snap/export controls;
+- input parity отдельными slices: работающие global/tool/selection shortcuts, затем multi-select,
+  groups, stamp-set/scatter controls и licensed-font navigation; пустые bindings запрещены;
+- два собственных diagnostic PNG fixtures по `research/TEST_ASSET_FIXTURES.md` для transform,
+  color/alpha/effects/scatter/brush проверок; они не являются release starter pack;
 - usability sessions: новичок/опытный/keyboard/high-DPI;
 - никаких заимствованных Inkarnate assets или trade dress.
 

@@ -33,7 +33,8 @@ public static class EditorLabels
         EditorTool.Text => "T",
         EditorTool.Brush => "B",
         EditorTool.Mask => "M",
-        EditorTool.Land => "E",
+        // Inkarnate has no separate Land key; assigning E here conflicts with its property/edit key.
+        EditorTool.Land => "",
         _ => "",
     };
 

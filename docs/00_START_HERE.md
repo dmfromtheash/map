@@ -8,11 +8,11 @@
 
 | Область | Статус | Что это значит |
 |---|---|---|
-| Публичное исследование Inkarnate | `FACT / PARTIAL` | Официальные страницы, обновления и полный официальный обзор редактора 2.0 изучены; закрытый аккаунт вручную ещё не пройден |
+| Исследование Inkarnate | `FACT / PARTIAL` | Публичные источники изучены; в тестовой карте владельца пройдены text/line/shape/brush/stamp/grid/shortcuts, оставшиеся неоднозначности перечислены отдельно |
 | Правовые границы | `FACT` | Автоскрейпинг, обратная разработка и копирование материалов исключены |
 | Продуктовый объём | `ACCEPTED` | Офлайн-эквивалент редактора и локального dashboard; без облачного сообщества и Marketplace |
 | Технологический стек | `ACCEPTED` | .NET 10 + Avalonia 12.1 + Skia; SDK установлен |
-| Код приложения | `PARTIAL` | Stages 1–8 реализованы; Editor UX принят; Stage 9A autosave/recovery проверен, 9B–9E ещё впереди |
+| Код приложения | `PARTIAL` | Stages 1–8 и Stage 9A реализованы; начат Stage 10 input parity, 9B–9E и остальные slices Stage 10 ещё впереди |
 | Дизайн и ассеты | `PARTIAL` | Есть собственная visual system и локальный asset pipeline; полный object/grid inspector и asset pilot относятся к Stage 10 |
 
 ## Карта документов
@@ -40,6 +40,8 @@
 | `prompts/STAGE_09_RELIABILITY_CYCLE.md` | принятый контракт текущего цикла надёжности |
 | `reviews/STAGE_09A_AUTOSAVE_VERIFICATION.md` | проверка autosave и восстановления после аварийного завершения |
 | `research/OBJECT_AND_GRID_PARITY.md` | clean-room матрица object/grid функций и разрывов текущего UI |
+| `research/INKARNATE_ACCOUNT_WALKTHROUGH_20260826.md` | наблюдаемые text/road/shape/brush/stamp/grid/keyboard механики тестовой карты |
+| `research/TEST_ASSET_FIXTURES.md` | план двух собственных diagnostic PNG для проверки эффектов и кистей |
 
 ## Подтверждённая основа первой реализации
 
@@ -51,5 +53,6 @@
 
 ## Следующее действие
 
-Выполнить отдельный срез Stage 9B — именованные checkpoints и безопасный возврат. Не смешивать его
-с resize/crop, export, migrations или Stage 10 object/grid parity.
+Завершить следующий отдельный срез Stage 10 input parity: multi-selection/group shortcuts либо
+stamp area/density/set navigation — только один вертикальный срез после выбора приоритета. Не
+смешивать его с `IsometricSquares`, полным inspector или Stage 9B checkpoints.

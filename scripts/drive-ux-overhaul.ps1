@@ -1,4 +1,4 @@
-<#
+﻿<#
     Bounded native UIA smoke for the dashboard/editor UX rebuild.
 
     Everything it asserts is read back from UI Automation on the real Release window: the context
@@ -125,6 +125,19 @@ function Select-SideTab([int]$position) {
     Start-Sleep -Milliseconds 260
 }
 
+function Get-SelectedSideTabName {
+    $condition = New-Object System.Windows.Automation.PropertyCondition(
+        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+        [System.Windows.Automation.ControlType]::TabItem)
+    $tabs = Wait-Id 'EditorSideTabs'
+    $items = $tabs.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)
+    foreach ($item in $items) {
+        $pattern = $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+        if ($pattern.Current.IsSelected) { return $item.Current.Name }
+    }
+    throw 'No selected side tab was exposed through UI Automation.'
+}
+
 # --------------------------------------------------------------- window helpers
 
 function Set-WindowSize([int]$width, [int]$height) {
@@ -210,8 +223,9 @@ function Save-Step([string]$slug, [string]$note) {
 # keyboard layout is active, and this machine runs one. Virtual keys are positional, so they
 # reproduce exactly what a user's fingers do regardless of layout.
 $script:VirtualKeys = @{
-    'Tab' = 0x09; 'Ctrl' = 0x11; 'Esc' = 0x1B
-    'B' = 0x42; 'E' = 0x45; 'L' = 0x4C; 'M' = 0x4D; 'R' = 0x52; 'T' = 0x54; 'V' = 0x56
+    'Tab' = 0x09; 'Shift' = 0x10; 'Ctrl' = 0x11; 'Esc' = 0x1B
+    'B' = 0x42; 'E' = 0x45; 'G' = 0x47; 'K' = 0x4B; 'L' = 0x4C; 'M' = 0x4D
+    'N' = 0x4E; 'O' = 0x4F; 'R' = 0x52; 'T' = 0x54; 'V' = 0x56
     'Y' = 0x59; 'Z' = 0x5A
 }
 
@@ -496,12 +510,20 @@ try {
     Send-Keystrokes -Chord @('R')
     Assert-Equal (Get-Text 'ContextPanelTitle') 'Инструмент: Фигура' 'shape tool shortcut works'
     Send-Keystrokes -Chord @('V')
+    Send-Keystrokes -Chord @('O')
+    Assert-Equal (Get-SelectedSideTabName) 'Ассеты' 'O opens the stamp asset catalog'
+    Send-Keystrokes -Chord @('N')
+    Assert-Equal (Get-SelectedSideTabName) 'Заметки' 'N opens notes'
+    $gridBeforeShortcut = Get-Text 'GridStatusText'
+    Send-Keystrokes -Chord @('G')
+    $gridAfterShortcut = Get-Text 'GridStatusText'
+    if ($gridBeforeShortcut -eq $gridAfterShortcut) { throw 'G did not toggle grid snapping.' }
     $changesBeforeKeyboardUndo = Get-UnsavedCount
     Send-Keystrokes -Chord @('Ctrl', 'Z')
     Assert-Equal (Get-UnsavedCount) ($changesBeforeKeyboardUndo - 1) 'Ctrl+Z reduces pending changes'
-    Send-Keystrokes -Chord @('Ctrl', 'Y')
-    Assert-Equal (Get-UnsavedCount) $changesBeforeKeyboardUndo 'Ctrl+Y restores pending changes'
-    Save-Step 'keyboard-only' "keyboard: Tab focus '$focusName', B/L/R/V switch tools, Ctrl+Z/Ctrl+Y change state" | Out-Null
+    Send-Keystrokes -Chord @('Ctrl', 'Shift', 'Z')
+    Assert-Equal (Get-UnsavedCount) $changesBeforeKeyboardUndo 'Ctrl+Shift+Z restores pending changes'
+    Save-Step 'keyboard-only' "keyboard: Tab focus '$focusName', B/L/R/V tools, O/N panels, G snap, Ctrl+Z/Ctrl+Shift+Z" | Out-Null
 
     Write-Host 'Second native window'
     Invoke-Id 'SecondWindowButton' 900

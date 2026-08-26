@@ -82,6 +82,8 @@ public sealed class EditorViewModel : ViewModelBase
     private string _rotationText = "";
     private LayerId? _activeLayerId;
     private EditorTool _activeTool;
+    private EditorTool _previousTool = EditorTool.Select;
+    private ObjectId? _lastSelectedObjectId;
     private RasterStrokeSession? _stroke;
     private List<VectorPoint>? _vectorPoints;
 
@@ -278,11 +280,19 @@ public sealed class EditorViewModel : ViewModelBase
 
             CancelStroke();
             CancelVectorDraw();
+            _previousTool = _activeTool;
             _activeTool = value;
             Raise();
             Raise(nameof(MaskEditLayerId));
             SceneChanged?.Invoke(this, EventArgs.Empty);
         }
+    }
+
+    /// <summary>Returns to the previously active canvas tool; repeated calls toggle the pair.</summary>
+    public void SelectPreviousTool()
+    {
+        var previous = _previousTool;
+        ActiveTool = previous;
     }
 
     public BrushSettings BrushSettings { get; set; } = new();
@@ -942,8 +952,10 @@ public sealed class EditorViewModel : ViewModelBase
         var reference = ActiveSnapGrid()?.CellSize ?? 1;
         var package = CompositionTransfer.Copy(Session.Document, ids, new CompositionCaptureOptions
         {
-            IncludeBackground = includeBackground, IncludeGrids = includeGrids,
-            IncludeFilters = includeFilters, ReferenceGridScale = reference,
+            IncludeBackground = includeBackground,
+            IncludeGrids = includeGrids,
+            IncludeFilters = includeFilters,
+            ReferenceGridScale = reference,
         }, selected.Name + " composition");
         var instance = CompositionTransfer.CreateInstance(package,
             (bounds.Left + bounds.Right) / 2, (bounds.Top + bounds.Bottom) / 2, reference);
@@ -1014,6 +1026,26 @@ public sealed class EditorViewModel : ViewModelBase
             Grids = [current with { IncludeInExport = !current.IncludeInExport }, .. before.Grids.Skip(1)],
         }));
         AfterEdit();
+    }
+
+    /// <summary>Global snap switch used by the G shortcut. The topmost visible grid is authoritative.</summary>
+    public void ToggleGridSnap()
+    {
+        var before = Session.Document.Layers.OfType<GridLayer>()
+            .LastOrDefault(layer => layer.Visible && !layer.Locked && layer.Grids.Count > 0);
+        if (before is null)
+        {
+            StatusDetail = "Нет видимой разблокированной сетки для привязки.";
+            return;
+        }
+
+        var current = before.Grids[0];
+        Session.Execute(new ReplaceGridLayerCommand(before, before with
+        {
+            Grids = [current with { SnapEnabled = !current.SnapEnabled }, .. before.Grids.Skip(1)],
+        }));
+        AfterEdit();
+        StatusDetail = current.SnapEnabled ? "Привязка к сетке выключена." : "Привязка к сетке включена.";
     }
 
     private GridDefinition? ActiveSnapGrid() => Session.Document.Layers
@@ -1387,7 +1419,13 @@ public sealed class EditorViewModel : ViewModelBase
 
     public void SelectAt(double worldX, double worldY)
     {
-        Session.SelectedObjectId = SceneGeometry.HitTest(Session.Document, worldX, worldY)?.Id;
+        var hit = SceneGeometry.HitTest(Session.Document, worldX, worldY)?.Id;
+        if (hit is null && Session.SelectedObjectId is { } selected)
+        {
+            _lastSelectedObjectId = selected;
+        }
+
+        Session.SelectedObjectId = hit;
         RefreshInspector();
         Raise(nameof(SelectionStatus));
         Raise(nameof(SelectionKind));
@@ -1402,6 +1440,11 @@ public sealed class EditorViewModel : ViewModelBase
             return;
         }
 
+        if (Session.SelectedObjectId is { } selected && selected != id)
+        {
+            _lastSelectedObjectId = selected;
+        }
+
         Session.SelectedObjectId = id;
         _activeLayerId = layer.Id;
         RefreshInspector();
@@ -1411,6 +1454,128 @@ public sealed class EditorViewModel : ViewModelBase
         Raise(nameof(ActiveLayerId));
         Raise(nameof(ActiveLayerSummary));
         SceneChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void DeselectObject()
+    {
+        if (Session.SelectedObjectId is { } selected)
+        {
+            _lastSelectedObjectId = selected;
+        }
+
+        Session.SelectedObjectId = null;
+        RefreshInspector();
+        Raise(nameof(SelectionStatus));
+        Raise(nameof(SelectionKind));
+        SceneChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void RestoreLastSelection()
+    {
+        if (_lastSelectedObjectId is not { } id || DocumentEditor.FindLayerOf(Session.Document, id) is null)
+        {
+            return;
+        }
+
+        SelectObject(id);
+    }
+
+    public void NudgeSelectedObject(double deltaX, double deltaY)
+    {
+        if (EditableSelection() is not { } before) return;
+        ReplaceSelected(before, WithGeometry(before, before.X + deltaX, before.Y + deltaY,
+            before.Width, before.Height, before.RotationDegrees), "Nudge object");
+    }
+
+    public void ResizeSelectedObject(int direction, bool largerStep = false)
+    {
+        if (EditableSelection() is not { } before || direction == 0) return;
+        var factor = 1 + Math.Sign(direction) * (largerStep ? 0.1 : 0.01);
+        var width = Math.Max(1, before.Width * factor);
+        var height = Math.Max(1, before.Height * factor);
+        ReplaceSelected(before, WithGeometry(before,
+            before.X + (before.Width - width) / 2,
+            before.Y + (before.Height - height) / 2,
+            width, height, before.RotationDegrees), "Resize object from shortcut");
+    }
+
+    public void RotateSelectedObject(int direction, bool largerStep = false, bool fineStep = false)
+    {
+        if (EditableSelection() is not { } before || direction == 0) return;
+        var step = fineStep ? 0.25 : largerStep ? 15 : 1;
+        ReplaceSelected(before, WithGeometry(before, before.X, before.Y, before.Width, before.Height,
+            NormalizeAngle(before.RotationDegrees + Math.Sign(direction) * step)), "Rotate object from shortcut");
+    }
+
+    public void AdjustSelectedSublayer(int direction)
+    {
+        if (EditableSelection() is not { } before || direction == 0) return;
+        var value = Math.Clamp(before.Sublayer + Math.Sign(direction), -10, 10);
+        if (value == before.Sublayer) return;
+        ReplaceSelected(before, CopyObject(before) with { Sublayer = value }, "Change object sublayer");
+    }
+
+    public void AdjustSelectedOpacity(int direction, bool largerStep = false)
+    {
+        if (EditableSelection() is not { } before || direction == 0) return;
+        var step = largerStep ? 0.1 : 0.05;
+        var value = Math.Clamp(before.ObjectOpacity + Math.Sign(direction) * step, 0, 1);
+        if (value == before.ObjectOpacity) return;
+        ReplaceSelected(before, CopyObject(before) with { ObjectOpacity = value }, "Change object opacity");
+    }
+
+    public void AdjustBrushSize(int direction, bool largerStep = false)
+    {
+        if (direction == 0) return;
+        BrushSettings = BrushSettings with
+        {
+            Radius = Math.Clamp(BrushSettings.Radius + Math.Sign(direction) * (largerStep ? 10 : 1), 1, 256),
+        };
+        StatusDetail = $"Размер кисти: {BrushSettings.Radius:0}.";
+        SceneChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void AdjustBrushOpacity(int direction, bool largerStep = false)
+    {
+        if (direction == 0) return;
+        BrushSettings = BrushSettings with
+        {
+            Opacity = Math.Clamp(BrushSettings.Opacity + Math.Sign(direction) * (largerStep ? 0.1 : 0.05), 0.05, 1),
+        };
+        StatusDetail = $"Непрозрачность кисти: {BrushSettings.Opacity:P0}.";
+        SceneChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void AdjustBrushSoftness(int direction, bool largerStep = false)
+    {
+        if (direction == 0) return;
+        BrushSettings = BrushSettings with
+        {
+            Softness = Math.Clamp(BrushSettings.Softness + Math.Sign(direction) * (largerStep ? 0.1 : 0.05), 0, 1),
+        };
+        StatusDetail = $"Мягкость кисти: {BrushSettings.Softness:P0}.";
+        SceneChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void ToggleMaskPaintMode()
+    {
+        MaskMode = MaskMode == MaskPaintMode.Hide ? MaskPaintMode.Reveal : MaskPaintMode.Hide;
+        StatusDetail = MaskMode == MaskPaintMode.Hide ? "Маска: скрывать." : "Маска: возвращать.";
+        SceneChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void AdjustSelectedTextFontSize(int direction, bool largerStep = false)
+    {
+        if (EditableSelection() is not { Text: { } text } before || direction == 0) return;
+        var value = Math.Clamp(text.FontSize + Math.Sign(direction) * (largerStep ? 5 : 1), 1, 512);
+        ReplaceSelected(before, before with { Text = text with { FontSize = value } }, "Change text size");
+    }
+
+    public void AdjustSelectedTextCurve(int direction, bool largerStep = false)
+    {
+        if (EditableSelection() is not { Text: { } text } before || direction == 0) return;
+        var value = Math.Clamp(text.Curve + Math.Sign(direction) * (largerStep ? 10 : 1), -100, 100);
+        ReplaceSelected(before, before with { Text = text with { Curve = value } }, "Change text curve");
     }
 
     public void ToggleSelectedObjectVisibility()
@@ -1675,6 +1840,14 @@ public sealed class EditorViewModel : ViewModelBase
     private static bool TryParse(string text, out double value) =>
         double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value)
         && double.IsFinite(value);
+
+    private static double NormalizeAngle(double angle)
+    {
+        var normalized = angle % 360;
+        if (normalized <= -180) normalized += 360;
+        if (normalized > 180) normalized -= 360;
+        return normalized;
+    }
 
     private static SceneObject WithGeometry(
         SceneObject source, double x, double y, double width, double height, double rotation) =>

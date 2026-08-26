@@ -100,3 +100,13 @@ UI даёт только циклическое переключение трё�
 - `docs/02_FUNCTIONAL_SPEC.md`, `docs/03_UX_UI_SYSTEM.md`, DEC-003 и DEC-004.
 
 Снимок конкурента не добавляется в репозиторий: документ хранит только наблюдаемую семантику.
+
+## Поправка после account walkthrough 26.08.2026
+
+Владелец разрешил bounded-проход уже открытой тестовой карты. Наблюдаемый `Isometric Squares`
+оказался отдельной косоугольной сеткой, а не square с rotation `45°`. Поэтому четвёртый preset из
+первичной матрицы superseded решением DEC-011: требуются `Square`, `IsometricSquares`, `HexFlat` и
+`HexPointy` с отдельными snap/golden fixtures. Остальная матрица DEC-010 не меняется.
+
+Текст, линии/дороги, shape boolean, brush/mask, stamp scatter и полный keyboard profile вынесены в
+`INKARNATE_ACCOUNT_WALKTHROUGH_20260826.md`.

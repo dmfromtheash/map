@@ -388,6 +388,30 @@ package audits и повторного pre-commit/doctor.
 или Stage 10 object/grid parity. Основание и точные gates 9A:
 `docs/reviews/STAGE_09A_AUTOSAVE_VERIFICATION.md`.
 
+## FACT / PARTIAL — Stage 10 input parity, 26.08.2026
+
+- На branch `stage/10-input-parity` начат отдельный owner-requested срез поверх `03372d7`.
+- Добавлены работающие defaults: `V/M/B/O/R/L/T/N`, `K/?`, `/`, `G`, `Tab` на canvas,
+  `Ctrl+Z/Ctrl+Shift+Z`, Space-pan, select move/size/rotate/opacity/sublayer/lock/delete/copy,
+  Brush/Mask/Text adjustments и modifier-wheel. `E` больше не конфликтует с отдельным Land key.
+- `G` теперь действительно переключает `GridDefinition.SnapEnabled` одной undoable command, а не
+  выполняет одноразовый snap выбранного объекта.
+- Clean-room account walkthrough, поправка отдельной isometric topology (DEC-011), default keyboard
+  profile (DEC-012) и два planned diagnostic assets записаны в `docs/research/`.
+- Release build: 0 warnings/errors; полный suite: **199/199**.
+- Native UIA подтвердил B/L/R/V, O/N, G и Ctrl+Z/Ctrl+Shift+Z в настоящем окне; доказательный кадр:
+  `artifacts/stage10-input-parity/ui-smoke/15-keyboard-only.png`.
+- Полный regression-driver после успешного keyboard gate остановился на старом minimum-window
+  ожидании: запрошено client `960×640`, наблюдалось `1200×800`. Это `PARTIAL`, не исправлялось в
+  input-срезе и требует отдельной DPI/window-size диагностики.
+- Ещё не реализованы: Ctrl+A/Ctrl+click multi-selection и group/ungroup; stamp Area/Density/set
+  navigation; text font cycling; snap rotation; отдельная `IsometricSquares`; полные inspectors и
+  сами два diagnostic PNG.
+
+Следующий безопасный шаг этого owner-requested направления: один из перечисленных отсутствующих
+вертикальных срезов, без смешивания с остальными. Stage 9B checkpoints остаётся параллельным
+запланированным срезом, но не входит в текущий commit.
+
 ## Проверка среды
 
 Из PowerShell в корне проекта:

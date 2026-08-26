@@ -29,6 +29,8 @@ public sealed class MapCanvasControl : Control
     private bool _isVectorDrawing;
     private readonly TileImageCache _tileCache = new(512);
 
+    public bool IsSpacePanHeld { get; set; }
+
     public MapCanvasControl()
     {
         Focusable = true;
@@ -142,7 +144,8 @@ public sealed class MapCanvasControl : Control
         var point = e.GetCurrentPoint(this);
         _lastPointer = position;
 
-        if (point.Properties.IsMiddleButtonPressed)
+        if (point.Properties.IsMiddleButtonPressed
+            || point.Properties.IsLeftButtonPressed && IsSpacePanHeld)
         {
             _isPanning = true;
             e.Pointer.Capture(this);
@@ -298,9 +301,22 @@ public sealed class MapCanvasControl : Control
         }
 
         var position = e.GetPosition(this);
-        _editor.Session.Viewport.ZoomAt(position.X, position.Y, Math.Pow(1.15, e.Delta.Y));
+        var direction = Math.Sign(e.Delta.Y);
+        if (e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        {
+            _editor.RotateSelectedObject(direction,
+                fineStep: e.KeyModifiers.HasFlag(KeyModifiers.Alt));
+        }
+        else if (e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+        {
+            _editor.ResizeSelectedObject(direction, largerStep: true);
+        }
+        else
+        {
+            _editor.Session.Viewport.ZoomAt(position.X, position.Y, Math.Pow(1.15, e.Delta.Y));
+            ViewportChanged?.Invoke(this, EventArgs.Empty);
+        }
 
-        ViewportChanged?.Invoke(this, EventArgs.Empty);
         InvalidateVisual();
         e.Handled = true;
     }

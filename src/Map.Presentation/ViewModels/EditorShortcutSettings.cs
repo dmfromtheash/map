@@ -5,8 +5,21 @@ public sealed class EditorShortcutSettings
 {
     private readonly Dictionary<string, string> _bindings = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["select"] = "V", ["text"] = "T", ["grid-snap"] = "G",
-        ["undo"] = "Ctrl+Z", ["redo"] = "Ctrl+Y", ["save"] = "Ctrl+S",
+        ["select"] = "V",
+        ["mask"] = "M",
+        ["brush"] = "B",
+        ["stamp"] = "O",
+        ["shape"] = "R",
+        ["line"] = "L",
+        ["text"] = "T",
+        ["notes"] = "N",
+        ["shortcut-help"] = "K",
+        ["side-panel"] = "/",
+        ["previous-tool"] = "Tab",
+        ["grid-snap"] = "G",
+        ["undo"] = "Ctrl+Z",
+        ["redo"] = "Ctrl+Shift+Z",
+        ["save"] = "Ctrl+S",
     };
 
     public IReadOnlyDictionary<string, string> Bindings => _bindings;

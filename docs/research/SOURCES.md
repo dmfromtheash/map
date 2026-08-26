@@ -37,6 +37,18 @@
 предоставленный владельцем снимок выбранного stamp и текущую реализацию Map. Результат:
 `OBJECT_AND_GRID_PARITY.md`.
 
+Bounded account walkthrough тестовой карты владельца 26.08.2026 проверил через видимые controls
+keyboard profile, Text, Line/roads, Shape boolean/contours, Brush/Mask/Land, stamp Many/Area/Density
+и четыре Grid geometry. DevTools/network/storage и извлечение ассетов не использовались. Результат:
+`INKARNATE_ACCOUNT_WALKTHROUGH_20260826.md`.
+
+## Публичные open-source ориентиры clean-room прохода
+
+| Источник | Что использовано / не использовано |
+|---|---|
+| [Clipper2](https://github.com/AngusJohnson/Clipper2) | Подтверждает публичную C# библиотеку clipping/offsetting/triangulation и BSL-1.0; пакет не добавлен, нужен отдельный dependency decision |
+| [Azgaar Fantasy Map Generator](https://github.com/Azgaar/Fantasy-Map-Generator) | Только публичный архитектурный ориентир separation state/editors/renderers; web stack, код, UI и assets не переносятся |
+
 ### Известная временная оговорка
 
 Главный video опубликован 10.12.2025. Update от 12.01.2026 о retiring Path и более поздние изменения dashboard/Windows app считаются актуальнее. Неясные Q&A ведущего помечены как открытые, потому что в нескольких местах он сам исправлял ответ.

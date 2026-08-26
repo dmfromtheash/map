@@ -141,8 +141,15 @@ public class EditorPresentationStateTests
 
             Assert.False(string.IsNullOrWhiteSpace(name));
             Assert.False(string.IsNullOrWhiteSpace(hint));
-            Assert.Single(shortcut);
-            Assert.True(keys.Add(shortcut), $"Tool key '{shortcut}' is used twice.");
+            if (tool == EditorTool.Land)
+            {
+                Assert.Empty(shortcut);
+            }
+            else
+            {
+                Assert.Single(shortcut);
+                Assert.True(keys.Add(shortcut), $"Tool key '{shortcut}' is used twice.");
+            }
             Assert.DoesNotContain(tool.ToString(), name, StringComparison.Ordinal);
         }
     }
