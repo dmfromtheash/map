@@ -7,8 +7,10 @@
 journal + startup recovery (`03372d7`). Полный Stage 9 остаётся `PARTIAL`: следующий отдельный
 срез — 9B named checkpoints. Stage 10 object/grid parity описан и принят в `DEC-010`, но ещё не
 реализован полностью. Реализованы срезы Stage 10 input parity (`95d2fe8`) и Stage 10B Library v2 /
-variant sets / deterministic stamp placement на branch `stage/10-asset-library-sets`; последний
-ожидает независимой проверки Codex.
+variant sets / deterministic stamp placement на branch `stage/10-asset-library-sets`. Поверх него
+одним отдельным commit выполнен Stage 10B Fix 01 по findings независимого Codex-review; он тоже
+ожидает независимой проверки Codex, и до неё его результаты не являются `FACT`. Stage 10 в целом
+остаётся `PARTIAL`, Stage 10C не начат.
 
 ## FACT — среда
 
@@ -479,6 +481,85 @@ Branch `stage/10-asset-library-sets`, BASE `70148c5`, один commit Opus. Ож
 Следующий owner-approved шаг: независимая проверка Codex `BASE..HEAD`, затем отдельный срез
 10C multi-selection/groups. Не смешивать с 10D inspectors, 10E `IsometricSquares`, 10F fonts
 или Stage 9B.
+
+## PROPOSED — Stage 10B Fix 01 выполнен, 26.08.2026
+
+Branch `stage/10-asset-library-sets`, BASE `8ef4e4f`, один новый commit Opus поверх него.
+Исправляющий срез по независимому Codex-review Stage 10B. **Ожидает независимой проверки Codex**;
+до неё ничего из перечисленного не является `FACT`. Stage 10 в целом остаётся `PARTIAL`.
+
+Что закрыто из findings Codex:
+
+- Группировка больше не декоративная: `Без групп / По коллекции / По тегу` меняют одну и ту же
+  виртуализированную поверхность. `AssetLibraryRow` — плоская последовательность header/card, один
+  `ListBox` реализует только видимые контейнеры; header никогда не становится выбранным набором и
+  не блокирует навигацию с клавиатуры.
+- Панель фильтров получила недостающие контролы: exact tag, media type, imported from/to, сброс
+  всех фильтров и строку активных фильтров словами. Icon-only тумблеры заменены подписанными.
+- Управление набором: переименование (пустое имя отклоняется), перемещение текущего варианта
+  раньше/позже, назначение обложкой. Set ID и variant IDs не меняются, изменения переживают
+  перезапуск каталога.
+- Явные состояния содержимого: `available / checking / missing / hash mismatch / unsupported`
+  видны на карточке, в полосе вариантов и в UIA-имени. Проверка ограничена видимым окном и
+  выбранным набором, идёт вне UI-потока, устаревший результат отбрасывается по generation.
+- One/Area gesture стал атомарным: сначала неизменяемый plan, затем разрешение каждого уникального
+  SHA ровно один раз, и только потом одна команда. Любой недоступный SHA отменяет весь жест;
+  документ, assets, история, selection, recent, текущий вариант и dirty-состояние не меняются, а
+  сообщение называет конкретный вариант и причину.
+- Статус успешного One называет фактически размещённый вариант, а не следующий.
+- Seed жеста больше не зависит от randomized string hash: `GestureSeed.From` — фиксированный
+  FNV-1a по байтам кортежа, закреплён golden-значениями и pin-тестом на месте вызова.
+- `used-in-current-map` учитывает stamps, line stroke, shape stroke, shape texture fill, вложенные
+  composition items и filter textures через существующий `CompositionTransfer.UsedAssetHashes`.
+- `AssetLibraryStore.Validate` проверяет полную схему v2 за линейное время: null-списки, уникальные
+  SHA/variant/set/collection ID, ссылки variant→record, set→variant/collection, обложка внутри
+  набора, отсутствие self-parent и циклов коллекций, согласованность recent и current variant.
+  Семантически повреждённый индекс открывается как `Damaged`, остаётся read-only, сохраняет байты
+  и не доходит до `CollectionTree`.
+- `ReportRealizedLibraryRows` считает только реально созданные контейнеры, а не все строки
+  результата.
+- Устранены 7 analyzer-findings, введённых Stage 10B (6 × `CA1859`, 1 × `IDE0042`).
+
+Отдельное решение владельца внутри этого среза: **scatter размножает вариант, а не крутит его**.
+`Случайный угол` и `Случайное отражение` теперь выключены по умолчанию и остаются явными
+тумблерами.
+
+Проверки этого среза (все выполнены свежими прогонами):
+
+- Release build: 0 warnings / 0 errors; полный suite **333/333** (Core 82, Rendering 16,
+  Persistence 52, Assets 65, Presentation 118).
+- `dotnet format --verify-no-changes --severity info` по-прежнему возвращает **exit 2** из-за
+  legacy-базы репозитория: 263 → 256 findings, **ни одного нового**. Утверждать «format успешен»
+  нельзя.
+- NuGet: уязвимых пакетов нет; из устаревших — только прежний `xunit 2.9.3` (Legacy).
+- `pre-commit run --all-files` и `scripts/doctor.ps1`: PASS.
+- Профиль 10 000 логических наборов: load `436,7 мс`, warm query median `1,034 мс`,
+  P95 `3,202 мс` (30 измерений после прогрева), originals не читаются.
+- Жест 5000 штампов / 12 SHA: resolver вызван ровно **12** раз; median `32,8 мс` по 5 прогонам.
+- Targeted mutation testing (local Stryker.NET 4.16.0): atomic placement + resolver seam
+  50,00 % → **75,00 %**; `AssetLibraryDocument` 75,85 % → **79,23 %**. Каждый оставшийся
+  `Survived`/`NoCoverage` разобран: константы `image/jpeg`/`image/webp` (нет JPEG/WebP fixtures),
+  `ArgumentNullException.ThrowIfNull` guard-clauses, недостижимые catch-ветви гонки
+  «файл исчез после проверки», и message-строки правил, существовавших до этого среза.
+- Настоящее окно: `scripts/drive-stage10b-asset-library.ps1` прошёл **три раза подряд** на свежей
+  Release-сборке без ручного вмешательства (один полный прогон с DPI-секцией, два с `-SkipDpi`),
+  23 + 20 + 20 PNG, 98 UIA-проверок за прогон. Сохранённая карта: **323 штампа, 12 разных SHA**,
+  все объекты в файле без поворота и зеркала. После прогонов менялись только тестовые файлы и
+  переносы строк.
+
+`PARTIAL` / `BLOCKED` этого среза:
+
+- **High-DPI остаётся `PARTIAL`.** Окно рендерится одинаково при 100 % и 200 %
+  (normalized RMSE `0,00188`); `AVALONIA_SCREEN_SCALE_FACTORS` эта среда не применяет. Доказаны
+  только запуск и разрешение контролов, не реальное масштабирование.
+- **Нативный файловый диалог Windows остаётся `BLOCKED`.** Драйвер передаёт пути через
+  `MAP_UI_TEST_*`; сам OS-диалог автоматически не проверен.
+- Тег для проверки exact-tag фильтра и tag-группировки вписан в индекс напрямую: UI для
+  редактирования тегов в этой сборке нет.
+- Соседний дефект статус-бара (текст вплотную к «Масштаб NN %») не исправлялся: вне среза.
+
+Stage 10C multi-selection/groups **не начат**. Следующий шаг — независимая проверка Codex точного
+диапазона `8ef4e4f..HEAD`.
 
 ## Проверка среды
 

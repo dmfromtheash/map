@@ -1,4 +1,4 @@
-using Map.Assets;
+﻿using Map.Assets;
 using Map.Core.Documents;
 using Map.Core.Editing;
 using Map.Presentation.Tests.Support;
@@ -217,6 +217,10 @@ public sealed class Stage10LibraryStampTests : IDisposable
         var stamp = Assert.Single(Stamps(editor));
         Assert.Equal(expected, stamp.Stamp!.AssetSha256);
         Assert.Equal(1, editor.Session.UndoDepth);
+
+        // The reference carries the catalog thumbnail, so a map opened without the catalog still
+        // has something to show for the asset.
+        Assert.NotNull(Assert.Single(editor.Session.Document.Assets).FallbackThumbnailPng);
     }
 
     [Fact]
@@ -386,6 +390,703 @@ public sealed class Stage10LibraryStampTests : IDisposable
         Assert.Equal("1 / 12", editor.CurrentVariantLabel);
     }
 
+    /// <summary>
+    /// Owner decision: a scatter multiplies the chosen variant, it does not turn or mirror it.
+    /// Both randomisations stay available as explicit toggles, but neither is on by default.
+    /// </summary>
+    [Fact]
+    public void An_area_gesture_multiplies_the_variant_without_turning_or_mirroring_it()
+    {
+        var editor = Editor(out var catalog);
+        editor.RefreshLibrary();
+        editor.SelectAssetSet(ImportTwelve(catalog).Id);
+        editor.StampPlacementMode = StampPlacementMode.Area;
+        editor.StampAreaRadius = 200;
+        editor.StampDensity = 40;
+
+        Assert.False(editor.StampRandomAngle);
+        Assert.False(editor.StampRandomFlip);
+        Assert.True(editor.PlaceCurrentVariantAt(700, 400));
+
+        var placed = Stamps(editor);
+        Assert.True(placed.Count > 100, $"Only {placed.Count} stamps were placed.");
+        Assert.All(placed, item => Assert.Equal(0, item.RotationDegrees));
+        Assert.All(placed, item => Assert.False(item.Stamp!.FlipHorizontal));
+        Assert.All(placed, item => Assert.False(item.Stamp!.FlipVertical));
+
+        // Turning them on is still one property away, so the ability is not lost.
+        editor.StampRandomAngle = true;
+        Assert.True(editor.PlaceCurrentVariantAt(700, 400));
+        Assert.Contains(Stamps(editor), item => item.RotationDegrees != 0);
+    }
+
+    // ---------------------------------------------------------------- atomic gestures
+
+    /// <summary>
+    /// Two catalogs seeded from the same twelve files hold the same content hashes, so two fresh
+    /// view models plan the same gesture. That is what makes the refusal tests below exact: the
+    /// hash broken in the second catalog is provably one the second plan needs.
+    /// </summary>
+    [Fact]
+    public void Two_fresh_sessions_with_the_same_history_plan_the_identical_gesture()
+    {
+        var first = AreaEditor("a", out _);
+        var second = AreaEditor("b", out _);
+
+        Assert.True(first.PlaceCurrentVariantAt(900, 500));
+        Assert.True(second.PlaceCurrentVariantAt(900, 500));
+
+        Assert.Equal(
+            [.. Stamps(first).Select(Plan)],
+            [.. Stamps(second).Select(Plan)]);
+    }
+
+    [Fact]
+    public void One_missing_original_cancels_the_whole_area_gesture_and_changes_nothing()
+    {
+        var probe = AreaEditor("probe-missing", out _);
+        Assert.True(probe.PlaceCurrentVariantAt(900, 500));
+        var needed = Stamps(probe)[0].Stamp!.AssetSha256;
+        Assert.Equal(12, Stamps(probe).Select(item => item.Stamp!.AssetSha256).Distinct().Count());
+
+        var editor = AreaEditor("missing", out var catalog);
+        File.Delete(Original(catalog, needed));
+        var before = new Untouched(editor);
+
+        Assert.False(editor.PlaceCurrentVariantAt(900, 500));
+
+        before.AssertUnchanged(editor);
+        Assert.Contains("отсутствует", editor.StatusDetail, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(catalog.Find(needed)!.DisplayName, editor.StatusDetail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void One_changed_original_cancels_the_whole_area_gesture_and_changes_nothing()
+    {
+        var probe = AreaEditor("probe-mismatch", out _);
+        Assert.True(probe.PlaceCurrentVariantAt(900, 500));
+        var needed = Stamps(probe)[0].Stamp!.AssetSha256;
+
+        var editor = AreaEditor("mismatch", out var catalog);
+        File.WriteAllBytes(Original(catalog, needed), File.ReadAllBytes(Source("intruder", SKColors.Fuchsia)));
+        var before = new Untouched(editor);
+
+        Assert.False(editor.PlaceCurrentVariantAt(900, 500));
+
+        before.AssertUnchanged(editor);
+        Assert.Contains("не совпадает", editor.StatusDetail, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(catalog.Find(needed)!.DisplayName, editor.StatusDetail, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The cost of a gesture must follow the number of distinct variants it needs, not the number
+    /// of stamps it places: five thousand stamps over twelve variants is twelve file resolutions.
+    /// </summary>
+    [Fact]
+    public void Five_thousand_planned_stamps_over_twelve_variants_resolve_twelve_originals()
+    {
+        var editor = AreaEditor("cost", out var catalog, out var counting);
+        editor.StampAreaRadius = 4_000;
+        editor.StampDensity = 10_000;
+        Assert.Equal(5_000, editor.PlannedStampCount);
+
+        Assert.True(editor.PlaceCurrentVariantAt(0, 0));
+
+        Assert.Equal(5_000, Stamps(editor).Count);
+        Assert.Equal(12, counting.Resolved.Count);
+        Assert.Equal(12, counting.Resolved.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Equal(12, catalog.Sets.Single(set => set.VariantIds.Count == 12).VariantIds.Count);
+    }
+
+    [Fact]
+    public void A_successful_one_placement_names_the_variant_it_placed_not_the_next_one()
+    {
+        var editor = Editor(out var catalog);
+        editor.RefreshLibrary();
+        editor.SelectAssetSet(ImportTwelve(catalog).Id);
+        editor.NextVariant();
+        editor.StampPlacementMode = StampPlacementMode.One;
+        editor.RandomVariantAfterPlacement = true;
+        var placed = editor.CurrentVariantLabel;
+
+        Assert.True(editor.PlaceCurrentVariantAt(300, 300));
+
+        Assert.NotEqual(placed, editor.CurrentVariantLabel);
+        Assert.Contains(placed, editor.StatusDetail, StringComparison.Ordinal);
+        Assert.DoesNotContain(editor.CurrentVariantLabel, editor.StatusDetail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_variant_whose_format_is_not_supported_refuses_the_gesture_by_name()
+    {
+        var editor = Editor(out var catalog);
+        var record = catalog.Import(Source("gif-like", SKColors.Teal), new AssetImportOptions(), Stamp(0));
+
+        // The catalog only imports PNG, JPEG and WebP, so an unsupported media type can only be
+        // reached through an index that already claims one. It must still refuse cleanly.
+        var document = new AssetLibraryDocument();
+        document.Records.Add(record with { MediaType = "image/gif", DisplayName = "Чужой формат" });
+        AssetLibraryStore.AddSingleton(document, document.Records[0]);
+        catalog.ReplaceLibrary(document);
+
+        editor.RefreshLibrary();
+        editor.SelectAssetSet(catalog.FindSetForContent(record.Sha256)!.Id);
+        var before = new Untouched(editor);
+
+        Assert.False(editor.PlaceCurrentVariantAt(100, 100));
+
+        before.AssertUnchanged(editor);
+        Assert.Contains("Формат", editor.StatusDetail, StringComparison.Ordinal);
+        Assert.Contains("Чужой формат", editor.StatusDetail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void An_original_that_cannot_be_opened_refuses_the_gesture_instead_of_throwing()
+    {
+        var editor = Editor(out var catalog);
+        var record = catalog.Import(Source("locked", SKColors.Maroon), new AssetImportOptions(), Stamp(0));
+        editor.RefreshLibrary();
+        editor.SelectAssetSet(catalog.FindSetForContent(record.Sha256)!.Id);
+        var before = new Untouched(editor);
+
+        // Exclusive share: the file is there and unchanged, but nothing else may read it.
+        using var exclusive = new FileStream(
+            Original(catalog, record.Sha256), FileMode.Open, FileAccess.Read, FileShare.None);
+
+        Assert.False(editor.PlaceCurrentVariantAt(100, 100));
+
+        before.AssertUnchanged(editor);
+        Assert.Contains("Ничего не размещено", editor.StatusDetail, StringComparison.Ordinal);
+
+        // The reason has to be the concrete one, not a shrug: an unreadable original is reported
+        // as an absent file rather than as "currently unavailable".
+        Assert.Contains("отсутствует", editor.StatusDetail, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The thumbnail travels with a placed asset as a convenience. Losing it must not stop the
+    /// placement: the content itself is what the map needs.
+    /// </summary>
+    [Fact]
+    public void A_missing_thumbnail_does_not_stop_a_placement()
+    {
+        var editor = Editor(out var catalog);
+        var record = catalog.Import(Source("no-thumb", SKColors.Navy), new AssetImportOptions(), Stamp(0));
+        File.Delete(catalog.ThumbnailPath(record));
+        editor.RefreshLibrary();
+        editor.SelectAssetSet(catalog.FindSetForContent(record.Sha256)!.Id);
+
+        Assert.True(editor.PlaceCurrentVariantAt(100, 100));
+
+        var placed = Assert.Single(editor.Session.Document.Assets);
+        Assert.Equal(record.Sha256, placed.Sha256);
+        Assert.Null(placed.FallbackThumbnailPng);
+    }
+
+    [Fact]
+    public void A_resolution_without_a_reference_is_never_treated_as_available()
+    {
+        Assert.False(AssetContentResolution.Failed(AssetAvailability.Missing).IsAvailable);
+        Assert.False(AssetContentResolution.Failed(AssetAvailability.Available).IsAvailable);
+        Assert.False(new AssetContentResolution(AssetAvailability.HashMismatch, null).IsAvailable);
+    }
+
+    [Fact]
+    public void A_group_header_row_and_a_card_row_can_never_share_a_key()
+    {
+        var summary = new AssetSetSummary
+        {
+            SetId = "лес",
+            Name = "Лес",
+            VariantCount = 1,
+            CoverVariantId = "var-1",
+            CoverSha256 = "0".PadLeft(64, '0'),
+            CoverThumbnailRelativePath = "thumbnails/a.png",
+            Favorite = false,
+            ImportedUtc = DateTimeOffset.UnixEpoch,
+        };
+
+        var header = AssetLibraryRow.Header("лес", "лес", 1);
+        var card = AssetLibraryRow.ForCard("", summary);
+
+        // The exact shape is the contract: a header is namespaced away from every card, and a card
+        // repeated under two groups carries the group in its key so the two rows stay distinct.
+        Assert.Equal("group:лес", header.Key);
+        Assert.Equal("/лес", card.Key);
+        Assert.Equal("лес/лес", AssetLibraryRow.ForCard("лес", summary).Key);
+        Assert.NotEqual(header.Key, card.Key);
+        Assert.True(header.IsHeader);
+        Assert.False(card.IsHeader);
+    }
+
+    // ---------------------------------------------------------------- used in map
+
+    [Fact]
+    public void Used_in_the_current_map_finds_line_shape_fill_composition_and_filter_assets()
+    {
+        var catalog = new AssetCatalog(CatalogRoot());
+        var hashes = new List<string>();
+        foreach (var name in new[] { "stamp", "line", "stroke", "fill", "nested", "filter", "unused" })
+        {
+            hashes.Add(catalog.Import(
+                Source(name, Shade(hashes.Count * 7)), new AssetImportOptions(), Stamp(hashes.Count)).Sha256);
+        }
+
+        var editor = EditorFor(UsingAssets(hashes), catalog);
+        Assert.Equal(7, editor.LibrarySets.Count);
+
+        editor.LibraryUsedInMapOnly = true;
+
+        var found = editor.LibrarySets
+            .Select(card => catalog.FindVariant(card.CoverVariantId)!.Sha256)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        Assert.Equal(6, found.Count);
+        Assert.All(hashes.Take(6), sha => Assert.Contains(sha, found));
+        Assert.DoesNotContain(hashes[6], found);
+    }
+
+    // ---------------------------------------------------------------- gesture seed
+
+    /// <summary>
+    /// Pins the seed at the place it is actually used. The golden below proves the mix itself is
+    /// fixed; this proves the view model feeds that mix into the plan it commits, so swapping in
+    /// a process-randomised hash would move every stamp.
+    /// </summary>
+    [Fact]
+    public void The_gesture_the_view_model_commits_is_planned_from_the_stable_seed()
+    {
+        var editor = AreaEditor("seeded", out var catalog);
+        var set = catalog.Sets.Single(item => item.VariantIds.Count == 12);
+        Assert.Equal(0, editor.Session.Revision);
+
+        Assert.True(editor.PlaceCurrentVariantAt(900, 500));
+
+        var placed = Stamps(editor);
+        var expected = StampPlacement.PlanArea(
+            new StampPlacementRequest
+            {
+                CenterX = 900,
+                CenterY = 500,
+                AreaRadius = 200,
+                Density = 40,
+                Seed = GestureSeed.From(0, set.Id, 0, 1),
+                RandomizeVariant = true,
+                RandomAngle = true,
+                RandomFlip = true,
+                BaseWidth = placed[0].Width,
+            },
+            [
+                .. set.VariantIds
+                    .Select(id => catalog.Find(catalog.FindVariant(id)!.Sha256)!)
+                    .Select(record => new StampVariantSource(record.Sha256, record.Width, record.Height)),
+            ]);
+
+        Assert.Equal(
+            [.. expected.Select(item => string.Join('|', item.Sha256, item.X.ToString("F6"), item.Y.ToString("F6")))],
+            [.. placed.Select(item => string.Join('|', item.Stamp!.AssetSha256, item.X.ToString("F6"), item.Y.ToString("F6")))]);
+    }
+
+    /// <summary>
+    /// The seed has to be reproducible between processes: the framework string hash is randomised
+    /// per run, so a golden value is the only thing that keeps a documented replay honest.
+    /// </summary>
+    [Fact]
+    public void The_gesture_seed_is_a_stable_mix_rather_than_a_randomised_string_hash()
+    {
+        Assert.Equal(1_564_375_367, GestureSeed.From(7, "set-diagnostic", 3, 2));
+        Assert.Equal(1_775_412_548, GestureSeed.From(0, null, 0, 1));
+
+        // Every part of the tuple has to reach the result, or two gestures would replay alike.
+        Assert.NotEqual(GestureSeed.From(7, "set-diagnostic", 3, 2), GestureSeed.From(8, "set-diagnostic", 3, 2));
+        Assert.NotEqual(GestureSeed.From(7, "set-diagnostic", 3, 2), GestureSeed.From(7, "set-other", 3, 2));
+        Assert.NotEqual(GestureSeed.From(7, "set-diagnostic", 3, 2), GestureSeed.From(7, "set-diagnostic", 4, 2));
+        Assert.NotEqual(GestureSeed.From(7, "set-diagnostic", 3, 2), GestureSeed.From(7, "set-diagnostic", 3, 3));
+    }
+
+    // ---------------------------------------------------------------- grouped rows
+
+    /// <summary>
+    /// Grouping has to change the surface the user actually looks at, and it has to do so without
+    /// building a second control tree: headers and cards are one flat, virtualizable sequence.
+    /// </summary>
+    [Fact]
+    public void Grouping_by_collection_turns_the_result_into_header_and_card_rows()
+    {
+        var editor = Editor(out var catalog);
+        var set = ImportTwelve(catalog);
+        catalog.Import(Source("одиночка", SKColors.Sienna), new AssetImportOptions { Pack = "Другое" }, Stamp(5));
+        editor.RefreshLibrary();
+
+        Assert.All(editor.LibraryRows, row => Assert.False(row.IsHeader));
+        Assert.Equal(2, editor.LibraryRows.Count);
+
+        editor.LibraryGrouping = AssetGrouping.Collection;
+
+        var headers = editor.LibraryRows.Where(row => row.IsHeader).ToList();
+        Assert.Equal(2, headers.Count);
+        Assert.Contains(headers, row => row.Title.Contains("Диагностика", StringComparison.Ordinal));
+        Assert.Contains(headers, row => row.Title.Contains("Другое", StringComparison.Ordinal));
+        Assert.Equal(2, editor.LibraryRows.Count(row => !row.IsHeader));
+        Assert.All(headers, row => Assert.Equal(1, row.Count));
+
+        // Every header is immediately followed by the cards it covers.
+        var first = editor.LibraryRows[0];
+        Assert.True(first.IsHeader);
+        Assert.False(editor.LibraryRows[1].IsHeader);
+        Assert.Contains(editor.LibraryRows, row => row.Card?.SetId == set.Id);
+    }
+
+    [Fact]
+    public void Grouping_by_tag_lists_a_card_under_each_of_its_tags_with_distinct_row_keys()
+    {
+        var editor = Editor(out var catalog);
+        var set = catalog.ImportSet(
+            [Source("двутег", SKColors.Teal)], "Двутеговый",
+            new AssetImportOptions { Tags = ["лес", "камень"] }, Stamp(1));
+        catalog.SetTags(set.Id, ["лес", "камень"]);
+        editor.RefreshLibrary();
+
+        editor.LibraryGrouping = AssetGrouping.Tag;
+
+        var cards = editor.LibraryRows.Where(row => !row.IsHeader).ToList();
+        Assert.Equal(2, cards.Count);
+        Assert.All(cards, row => Assert.Equal(set.Id, row.Card!.SetId));
+        Assert.Equal(2, cards.Select(row => row.Key).Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Fact]
+    public void A_header_row_can_never_become_the_selected_asset_set()
+    {
+        var editor = Editor(out var catalog);
+        var set = ImportTwelve(catalog);
+        editor.RefreshLibrary();
+        editor.LibraryGrouping = AssetGrouping.Collection;
+        var header = editor.LibraryRows.ToList().FindIndex(row => row.IsHeader);
+        var card = editor.LibraryRows.ToList().FindIndex(row => !row.IsHeader);
+
+        Assert.True(editor.SelectLibraryRow(card));
+        Assert.Equal(set.Id, editor.SelectedSetId);
+
+        Assert.False(editor.SelectLibraryRow(header));
+        Assert.Equal(set.Id, editor.SelectedSetId);
+    }
+
+    [Fact]
+    public void A_card_that_survives_a_regroup_keeps_the_selection_and_its_row()
+    {
+        var editor = Editor(out var catalog);
+        var set = ImportTwelve(catalog);
+        catalog.Import(Source("сосед", SKColors.Olive), new AssetImportOptions { Pack = "Другое" }, Stamp(6));
+        editor.RefreshLibrary();
+        editor.SelectAssetSet(set.Id);
+        editor.NextVariant();
+
+        editor.LibraryGrouping = AssetGrouping.Collection;
+
+        Assert.Equal(set.Id, editor.SelectedSetId);
+        Assert.Equal("2 / 12", editor.CurrentVariantLabel);
+        Assert.True(editor.SelectedLibraryRowIndex >= 0);
+        Assert.Equal(set.Id, editor.LibraryRows[editor.SelectedLibraryRowIndex].Card!.SetId);
+    }
+
+    // ---------------------------------------------------------------- filters
+
+    [Fact]
+    public void The_tag_media_type_and_import_date_filters_all_narrow_the_cards()
+    {
+        var editor = Editor(out var catalog);
+        // A one-file import is a singleton card, so it keeps the file's own name.
+        var tagged = catalog.ImportSet(
+            [Source("хвоя", SKColors.DarkGreen)], "Ель", new AssetImportOptions { Tags = ["лес"] }, Stamp(100));
+        catalog.SetTags(tagged.Id, ["лес"]);
+        catalog.Import(Source("камень", SKColors.Gray), new AssetImportOptions(), Stamp(500));
+        editor.RefreshLibrary();
+        Assert.Equal(2, editor.LibrarySets.Count);
+
+        Assert.Contains("лес", editor.LibraryTagChoices);
+        editor.LibraryTag = "лес";
+        Assert.Equal(["хвоя"], editor.LibrarySets.Select(card => card.Name));
+
+        editor.LibraryTag = null;
+        Assert.Contains("image/png", editor.LibraryMediaTypeChoices);
+        editor.LibraryMediaType = "image/jpeg";
+        Assert.Empty(editor.LibrarySets);
+
+        editor.LibraryMediaType = null;
+        editor.LibraryImportedFromText = "1970-01-01";
+        editor.LibraryImportedToText = "1970-01-01";
+        Assert.False(editor.HasLibraryDateError);
+        Assert.Equal(2, editor.LibrarySets.Count);
+
+        editor.LibraryImportedFromText = "1971-01-01";
+        Assert.Empty(editor.LibrarySets);
+
+        editor.LibraryImportedFromText = "не дата";
+        Assert.True(editor.HasLibraryDateError);
+    }
+
+    [Fact]
+    public void Clearing_the_filters_restores_the_whole_library_at_once()
+    {
+        var editor = Editor(out var catalog);
+        ImportTwelve(catalog);
+        catalog.Import(Source("вторая", SKColors.Sienna), new AssetImportOptions(), Stamp(7));
+        editor.RefreshLibrary();
+        editor.LibrarySearchText = "Диагностический";
+        editor.LibraryFavoritesOnly = true;
+        editor.LibraryUntaggedOnly = true;
+        editor.LibraryTag = "diagnostic";
+        editor.LibraryMediaType = "image/webp";
+        editor.LibraryImportedFromText = "1999-01-01";
+        editor.LibraryCollectionId = AssetIdentity.CollectionId("Диагностика");
+        Assert.True(editor.HasActiveLibraryFilters);
+        Assert.Empty(editor.LibrarySets);
+
+        editor.ClearLibraryFilters();
+
+        Assert.False(editor.HasActiveLibraryFilters);
+        Assert.Equal(2, editor.LibrarySets.Count);
+        Assert.Equal("", editor.LibrarySearchText);
+        Assert.Null(editor.LibraryTag);
+        Assert.Null(editor.LibraryMediaType);
+        Assert.Null(editor.LibraryCollectionId);
+        Assert.Equal("", editor.LibraryImportedFromText);
+        Assert.False(editor.LibraryFavoritesOnly);
+        Assert.False(editor.LibraryUntaggedOnly);
+    }
+
+    [Fact]
+    public void The_active_filter_summary_names_what_is_switched_on()
+    {
+        var editor = Editor(out var catalog);
+        ImportTwelve(catalog);
+        editor.RefreshLibrary();
+
+        Assert.False(editor.HasActiveLibraryFilters);
+        Assert.Equal("Фильтры не заданы", editor.ActiveLibraryFilterSummary);
+
+        editor.LibraryFavoritesOnly = true;
+        editor.LibraryTag = "diagnostic";
+
+        Assert.True(editor.HasActiveLibraryFilters);
+        Assert.Contains("избранное", editor.ActiveLibraryFilterSummary, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("diagnostic", editor.ActiveLibraryFilterSummary, StringComparison.Ordinal);
+    }
+
+    // ---------------------------------------------------------------- set management
+
+    [Fact]
+    public void Renaming_the_selected_set_refuses_blank_names_and_survives_a_restart()
+    {
+        var editor = Editor(out var catalog);
+        var set = ImportTwelve(catalog);
+        editor.RefreshLibrary();
+        editor.SelectAssetSet(set.Id);
+
+        Assert.False(editor.RenameSelectedSet("   "));
+        Assert.False(editor.RenameSelectedSet(""));
+        Assert.Equal("Диагностический набор", editor.SelectedSet!.Name);
+
+        Assert.True(editor.RenameSelectedSet("  Свой набор  "));
+
+        Assert.Equal("Свой набор", editor.SelectedSet!.Name);
+        Assert.Equal(set.Id, editor.SelectedSetId);
+        Assert.Equal("Свой набор", new AssetCatalog(CatalogRoot()).FindSet(set.Id)!.Name);
+    }
+
+    [Fact]
+    public void Moving_the_current_variant_later_reorders_the_set_and_keeps_that_variant_current()
+    {
+        var editor = Editor(out var catalog);
+        var set = ImportTwelve(catalog);
+        editor.RefreshLibrary();
+        editor.SelectAssetSet(set.Id);
+        editor.NextVariant();
+        var moving = editor.CurrentVariant!.Id;
+        Assert.Equal(1, editor.CurrentVariantIndex);
+
+        Assert.True(editor.MoveCurrentVariant(1));
+
+        Assert.Equal(2, editor.CurrentVariantIndex);
+        Assert.Equal(moving, editor.CurrentVariant!.Id);
+        Assert.Equal(moving, new AssetCatalog(CatalogRoot()).FindSet(set.Id)!.VariantIds[2]);
+
+        Assert.True(editor.MoveCurrentVariant(-1));
+        Assert.Equal(1, editor.CurrentVariantIndex);
+        Assert.Equal(moving, new AssetCatalog(CatalogRoot()).FindSet(set.Id)!.VariantIds[1]);
+    }
+
+    [Fact]
+    public void The_first_variant_cannot_move_earlier_and_the_last_cannot_move_later()
+    {
+        var editor = Editor(out var catalog);
+        var set = ImportTwelve(catalog);
+        editor.RefreshLibrary();
+        editor.SelectAssetSet(set.Id);
+
+        Assert.False(editor.CanMoveCurrentVariant(-1));
+        Assert.False(editor.MoveCurrentVariant(-1));
+        Assert.Equal(0, editor.CurrentVariantIndex);
+
+        editor.SelectVariantAt(11);
+        Assert.False(editor.CanMoveCurrentVariant(1));
+        Assert.True(editor.CanMoveCurrentVariant(-1));
+        Assert.Equal(set.VariantIds, [.. new AssetCatalog(CatalogRoot()).FindSet(set.Id)!.VariantIds]);
+    }
+
+    [Fact]
+    public void Making_the_current_variant_the_cover_survives_a_restart()
+    {
+        var editor = Editor(out var catalog);
+        var set = ImportTwelve(catalog);
+        editor.RefreshLibrary();
+        editor.SelectAssetSet(set.Id);
+        editor.NextVariant();
+        editor.NextVariant();
+        var wanted = editor.CurrentVariant!.Id;
+        Assert.False(editor.IsCurrentVariantTheCover);
+        Assert.True(editor.CanMakeCurrentVariantCover);
+
+        Assert.True(editor.MakeCurrentVariantCover());
+
+        Assert.True(editor.IsCurrentVariantTheCover);
+        Assert.False(editor.CanMakeCurrentVariantCover);
+        Assert.Equal(wanted, editor.SelectedSet!.CoverVariantId);
+        Assert.Equal(wanted, new AssetCatalog(CatalogRoot()).FindSet(set.Id)!.CoverVariantId);
+
+        // The cover moved, but the content and the order behind it did not.
+        Assert.Equal(12, editor.SelectedSetVariants.Count);
+        Assert.Equal(2, editor.CurrentVariantIndex);
+    }
+
+    [Fact]
+    public void A_singleton_card_offers_no_reorder_and_no_cover_choice()
+    {
+        var editor = Editor(out var catalog);
+        var record = catalog.Import(Source("один", SKColors.Teal), new AssetImportOptions(), Stamp(0));
+        editor.RefreshLibrary();
+        editor.SelectAssetSet(catalog.FindSetForContent(record.Sha256)!.Id);
+
+        Assert.True(editor.CanRenameSelectedSet);
+        Assert.False(editor.CanMoveCurrentVariant(1));
+        Assert.False(editor.CanMoveCurrentVariant(-1));
+        Assert.False(editor.CanMakeCurrentVariantCover);
+        Assert.False(editor.MoveCurrentVariant(1));
+        Assert.False(editor.MakeCurrentVariantCover());
+    }
+
+    [Fact]
+    public void Set_management_is_refused_outright_while_no_card_is_selected()
+    {
+        var editor = Editor(out _);
+
+        Assert.False(editor.CanRenameSelectedSet);
+        Assert.False(editor.RenameSelectedSet("Имя"));
+        Assert.False(editor.MoveCurrentVariant(1));
+        Assert.False(editor.MakeCurrentVariantCover());
+    }
+
+    // ---------------------------------------------------------------- visible rows
+
+    /// <summary>
+    /// The view reports the containers it really realised. The cost of that report must follow
+    /// that handful of rows, not the ten thousand the result holds, or every layout pass would
+    /// walk the whole library.
+    /// </summary>
+    [Fact]
+    public void Reporting_the_realised_rows_costs_the_realised_rows_not_the_whole_result()
+    {
+        var editor = Editor(out var catalog);
+        var document = new AssetLibraryDocument();
+        for (var index = 0; index < 10_000; index++)
+        {
+            var record = Synthetic(index);
+            document.Records.Add(record);
+            AssetLibraryStore.AddSingleton(document, record);
+        }
+
+        catalog.ReplaceLibrary(document);
+        editor.RefreshLibrary();
+        Assert.Equal(10_000, editor.LibraryRows.Count);
+
+        var counted = new CountingSequence(Enumerable.Range(4_000, 40));
+        editor.ReportRealizedLibraryRows(counted);
+
+        Assert.Equal(40, counted.Steps);
+        Assert.Equal(4_000, editor.VisibleLibraryTileWindow.FirstIndex);
+        Assert.Equal(40, editor.VisibleLibraryTiles.Count);
+    }
+
+    [Fact]
+    public void Reporting_no_realised_rows_empties_the_visible_window()
+    {
+        var editor = Editor(out var catalog);
+        ImportTwelve(catalog);
+        editor.RefreshLibrary();
+        editor.ReportRealizedLibraryRows(new CountingSequence([0]));
+        Assert.Single(editor.VisibleLibraryTiles);
+
+        editor.ReportRealizedLibraryRows(new CountingSequence([]));
+
+        Assert.Empty(editor.VisibleLibraryTiles);
+    }
+
+    // ---------------------------------------------------------------- availability
+
+    [Fact]
+    public async Task Availability_reports_missing_and_changed_content_apart_from_a_healthy_card()
+    {
+        var editor = Editor(out var catalog);
+        var healthy = catalog.Import(Source("цел", SKColors.Green), new AssetImportOptions(), Stamp(0));
+        var gone = catalog.Import(Source("пропал", SKColors.Red), new AssetImportOptions(), Stamp(1));
+        var changed = catalog.Import(Source("подменён", SKColors.Blue), new AssetImportOptions(), Stamp(2));
+        File.Delete(Original(catalog, gone.Sha256));
+        File.WriteAllBytes(Original(catalog, changed.Sha256), File.ReadAllBytes(Source("чужой", SKColors.Coral)));
+        editor.RefreshLibrary();
+
+        Assert.Equal(AssetAvailability.Unknown, editor.AvailabilityOf(healthy.Sha256));
+
+        editor.ReportRealizedLibraryRows(Enumerable.Range(0, editor.LibraryRows.Count));
+        await editor.RefreshVisibleAvailabilityAsync();
+
+        Assert.Equal(AssetAvailability.Available, editor.AvailabilityOf(healthy.Sha256));
+        Assert.Equal(AssetAvailability.Missing, editor.AvailabilityOf(gone.Sha256));
+        Assert.Equal(AssetAvailability.HashMismatch, editor.AvailabilityOf(changed.Sha256));
+        Assert.Contains("отсутствует", EditorViewModel.AvailabilityText(AssetAvailability.Missing),
+            StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("не совпадает", EditorViewModel.AvailabilityText(AssetAvailability.HashMismatch),
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Ten thousand cards must not become ten thousand hashed files: only what the grid realised
+    /// and the set the tool holds are ever verified.
+    /// </summary>
+    [Fact]
+    public async Task Availability_is_checked_only_for_the_rows_in_view_and_the_selected_set()
+    {
+        var editor = AreaEditor("bounded", out var catalog, out var counting);
+        editor.RefreshLibrary();
+        for (var index = 0; index < 40; index++)
+        {
+            catalog.Import(Source($"extra-{index}", Shade(index + 30)), new AssetImportOptions(), Stamp(index));
+        }
+
+        editor.RefreshLibrary();
+        Assert.Equal(41, editor.LibraryRows.Count);
+        counting.Resolved.Clear();
+        counting.Checked.Clear();
+
+        editor.ReportRealizedLibraryRows(Enumerable.Range(0, 6));
+        await editor.RefreshVisibleAvailabilityAsync();
+
+        // Six visible covers plus the twelve variants of the card the stamp tool holds.
+        Assert.True(counting.Checked.Count <= 18, $"Checked {counting.Checked.Count} originals.");
+        Assert.Empty(counting.Resolved);
+        Assert.All(editor.VisibleLibraryTiles, tile =>
+            Assert.NotEqual(AssetAvailability.Unknown, editor.AvailabilityOf(tile.CoverSha256)));
+    }
+
     // ---------------------------------------------------------------- shortcuts
 
     [Fact]
@@ -441,6 +1142,175 @@ public sealed class Stage10LibraryStampTests : IDisposable
             item.Stamp.FlipHorizontal,
             item.Stamp.FlipVertical)),
     ];
+
+    /// <summary>
+    /// A view model over its own catalog, already holding the twelve-variant card in Area mode
+    /// with random variants on. Two of these differ only in which directory they wrote to.
+    /// </summary>
+    private EditorViewModel AreaEditor(string slot, out AssetCatalog catalog) =>
+        AreaEditor(slot, out catalog, out _);
+
+    private EditorViewModel AreaEditor(string slot, out AssetCatalog catalog, out CountingResolver resolver)
+    {
+        catalog = new AssetCatalog(Path.Combine(_root, slot));
+        resolver = new CountingResolver(new CatalogAssetContentResolver(catalog));
+        var editor = new EditorViewModel(
+            TestData.Document(), documentPath: null, startDirty: false,
+            new FakeProjectStore(), new FakeRecentMaps(), new FakeFilePicker(),
+            new FakePrompts(), new FakeLog(), clock: () => Stamp(0), assetCatalog: catalog,
+            assetResolver: resolver);
+        var set = ImportTwelve(catalog);
+        editor.RefreshLibrary();
+        editor.SelectAssetSet(set.Id);
+        editor.StampPlacementMode = StampPlacementMode.Area;
+        editor.RandomVariantAfterPlacement = true;
+
+        // Explicit rather than inherited: these tests exercise the randomised plan on purpose,
+        // and must keep doing so whatever the product defaults are.
+        editor.StampRandomAngle = true;
+        editor.StampRandomFlip = true;
+        editor.StampAreaRadius = 200;
+        editor.StampDensity = 40;
+        return editor;
+    }
+
+    private static EditorViewModel EditorFor(MapDocument document, AssetCatalog catalog)
+    {
+        var editor = new EditorViewModel(
+            document, documentPath: null, startDirty: false,
+            new FakeProjectStore(), new FakeRecentMaps(), new FakeFilePicker(),
+            new FakePrompts(), new FakeLog(), clock: () => Stamp(0), assetCatalog: catalog);
+        editor.RefreshLibrary();
+        return editor;
+    }
+
+    private static string Original(AssetCatalog catalog, string sha256) =>
+        Path.Combine(catalog.Root, "originals", sha256 + ".png");
+
+    /// <summary>The part of a placed stamp that a replay must reproduce, minus its fresh id.</summary>
+    private static string Plan(SceneObject item) => string.Join(
+        '|',
+        item.Stamp!.AssetSha256,
+        item.X.ToString("F6"),
+        item.Y.ToString("F6"),
+        item.Width.ToString("F6"),
+        item.Height.ToString("F6"),
+        item.RotationDegrees.ToString("F6"),
+        item.Stamp.FlipHorizontal,
+        item.Stamp.FlipVertical);
+
+    /// <summary>
+    /// Everything a refused gesture must leave exactly as it found it. A partial placement would
+    /// show up here as a changed object count, a new asset, a deeper history or a moved variant.
+    /// </summary>
+    private sealed class Untouched(EditorViewModel editor)
+    {
+        private readonly int _objects = Stamps(editor).Count;
+        private readonly int _assets = editor.Session.Document.Assets.Count;
+        private readonly int _undo = editor.Session.UndoDepth;
+        private readonly int _redo = editor.Session.RedoDepth;
+        private readonly ObjectId? _selected = editor.Session.SelectedObjectId;
+        private readonly int _variant = editor.CurrentVariantIndex;
+        private readonly int _recent = editor.RecentCount;
+        private readonly bool _dirty = editor.Session.IsDirty;
+        private readonly SaveState _saveState = editor.SaveState;
+
+        public void AssertUnchanged(EditorViewModel editor)
+        {
+            Assert.Equal(_objects, Stamps(editor).Count);
+            Assert.Equal(_assets, editor.Session.Document.Assets.Count);
+            Assert.Equal(_undo, editor.Session.UndoDepth);
+            Assert.Equal(_redo, editor.Session.RedoDepth);
+            Assert.Equal(_selected, editor.Session.SelectedObjectId);
+            Assert.Equal(_variant, editor.CurrentVariantIndex);
+            Assert.Equal(_recent, editor.RecentCount);
+            Assert.Equal(_dirty, editor.Session.IsDirty);
+            Assert.Equal(_saveState, editor.SaveState);
+        }
+    }
+
+    /// <summary>Counts how many originals a gesture really opened, in order.</summary>
+    private sealed class CountingResolver(IAssetContentResolver inner) : IAssetContentResolver
+    {
+        public List<string> Resolved { get; } = [];
+
+        public List<string> Checked { get; } = [];
+
+        public AssetContentResolution Resolve(AssetRecord record)
+        {
+            Resolved.Add(record.Sha256);
+            return inner.Resolve(record);
+        }
+
+        public AssetAvailability Check(AssetRecord record)
+        {
+            Checked.Add(record.Sha256);
+            return inner.Check(record);
+        }
+    }
+
+    /// <summary>
+    /// Reports how far a consumer walked. A visible-range report that enumerated the whole result
+    /// instead of the realised containers would show up here as ten thousand steps.
+    /// </summary>
+    private sealed class CountingSequence(IEnumerable<int> source) : IEnumerable<int>
+    {
+        public int Steps { get; private set; }
+
+        public IEnumerator<int> GetEnumerator()
+        {
+            foreach (var value in source)
+            {
+                Steps++;
+                yield return value;
+            }
+        }
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    /// <summary>
+    /// A document that reaches an asset through every route the model allows: a plain stamp, a
+    /// line stroke, a shape stroke, a shape texture fill, a nested composition item and a filter.
+    /// </summary>
+    private static MapDocument UsingAssets(List<string> hashes)
+    {
+        // Node ids are unique across the whole document, so the line and the shape get their own.
+        static VectorNode[] Nodes(int count) =>
+            [.. Enumerable.Range(0, count).Select(index => new VectorNode(VectorNodeId.New(), index, index))];
+
+        var stamp = Shell(SceneObjectKind.Stamp) with { Stamp = new StampStyle(hashes[0]) };
+        var line = Shell(SceneObjectKind.Line) with
+        {
+            Line = new LineStyle(Nodes(2), new VectorStrokeStyle { AssetSha256 = hashes[1] }),
+        };
+        var shape = Shell(SceneObjectKind.Shape) with
+        {
+            Shape = new ShapeStyle(
+                [new ShapeRegion(ShapeRegionId.New(), ShapeCombineMode.Add, ShapePrimitiveKind.Polygon, Nodes(3))],
+                new ShapeFillStyle { TextureAssetSha256 = hashes[3] },
+                new VectorStrokeStyle { AssetSha256 = hashes[2] }),
+        };
+        var nested = Shell(SceneObjectKind.Composition) with
+        {
+            Composition = new EditableComposition(
+                CompositionId.New(), DocumentId.New(), "вложенная", 10, 10,
+                [Shell(SceneObjectKind.Stamp) with { Stamp = new StampStyle(hashes[4]) }]),
+        };
+
+        return new MapDocument(
+            DocumentId.New(), "used", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(1920, 1080, "px", "#FF1E2430"),
+            [
+                new BaseColorLayer(LayerId.New(), "Фон", true, false, 1.0, "#FF1E2430"),
+                new ObjectLayer(LayerId.New(), "Объекты", true, false, 1.0, [stamp, line, shape, nested]),
+                new FilterLayer(LayerId.New(), "Фильтр", true, false, 1.0,
+                    new FilterSettings { TextureAssetSha256 = hashes[5] }),
+            ]);
+    }
+
+    private static SceneObject Shell(SceneObjectKind kind) => new(
+        ObjectId.New(), kind, kind.ToString(), 0, 0, 10, 10, 0, "#FFFFFFFF", "#00000000", 1, true, false);
 
     private EditorViewModel Editor(out AssetCatalog catalog)
     {

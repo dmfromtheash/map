@@ -554,6 +554,9 @@ public sealed class AssetCatalog
             .ToDictionary(group => group.Key, group => group.OrderBy(item => item.Order).ToList(),
                 StringComparer.Ordinal);
 
+        // Validation already refuses a document whose parents form a ring, so this set is belt
+        // and braces: the tree walk must be incapable of unbounded recursion on any input.
+        var walking = new HashSet<string>(StringComparer.Ordinal);
         return Build("");
 
         List<AssetCollectionNode> Build(string parentId)
@@ -566,6 +569,11 @@ public sealed class AssetCatalog
             var nodes = new List<AssetCollectionNode>(children.Count);
             foreach (var collection in children)
             {
+                if (!walking.Add(collection.Id))
+                {
+                    continue;
+                }
+
                 var sub = Build(collection.Id);
                 var own = direct.GetValueOrDefault(collection.Id);
                 nodes.Add(new AssetCollectionNode(

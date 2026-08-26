@@ -189,6 +189,21 @@ public sealed class EditorViewModel : ViewModelBase
     private DateTimeOffset? _libraryImportedToUtc;
     private AssetSortOrder _librarySort = AssetSortOrder.ImportedNewest;
     private AssetGrouping _libraryGrouping = AssetGrouping.None;
+    private List<AssetLibraryRow> _libraryRows = [];
+    private IReadOnlyList<string> _libraryTagChoices = [];
+    private IReadOnlyList<string> _libraryMediaTypeChoices = [];
+    private int _selectedLibraryRowIndex = -1;
+    private int _visibleRowFirst;
+    private int _visibleRowCount;
+    private string _libraryImportedFromText = "";
+    private string _libraryImportedToText = "";
+    private bool _libraryDateError;
+    private bool _suppressLibraryRefresh;
+    private readonly Dictionary<string, AssetAvailability> _availability =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    private int _availabilityGeneration;
+    private int _availabilityRevision;
 
     private string? _selectedSetId;
     private IReadOnlyList<AssetVariant> _selectedSetVariants = [];
@@ -197,9 +212,13 @@ public sealed class EditorViewModel : ViewModelBase
     private double _stampAreaRadius = 160;
     private double _stampDensity = 40;
     private bool _randomVariantAfterPlacement;
-    private bool _stampRandomAngle = true;
-    private bool _stampRandomFlip = true;
+    // A scatter multiplies the chosen variant; it does not turn or mirror it. Both randomisations
+    // remain available as explicit toggles, because a forest wants them and a row of houses does
+    // not - but neither is something the user has to notice and switch off first.
+    private bool _stampRandomAngle;
+    private bool _stampRandomFlip;
     private int _gestureCounter;
+    private readonly IAssetContentResolver? _assetResolver;
 
     public EditorViewModel(
         MapDocument document,
@@ -212,7 +231,8 @@ public sealed class EditorViewModel : ViewModelBase
         IAppLog log,
         Func<DateTimeOffset>? clock = null,
         string appVersion = "0.2.0",
-        AssetCatalog? assetCatalog = null)
+        AssetCatalog? assetCatalog = null,
+        IAssetContentResolver? assetResolver = null)
     {
         Session = new EditingSession(document);
         DocumentPath = documentPath;
@@ -224,6 +244,8 @@ public sealed class EditorViewModel : ViewModelBase
         _clock = clock ?? (static () => DateTimeOffset.UtcNow);
         _appVersion = appVersion;
         _assetCatalog = assetCatalog;
+        _assetResolver = assetResolver
+            ?? (assetCatalog is null ? null : new CatalogAssetContentResolver(assetCatalog));
         StampImages = assetCatalog is null
             ? null
             : new CatalogStampImageSource(assetCatalog, () => Session.Document, () => DocumentPath);
@@ -612,12 +634,23 @@ public sealed class EditorViewModel : ViewModelBase
     /// <summary>Re-runs the current query. Metadata only: no original image is opened here.</summary>
     public void RefreshLibrary()
     {
+        if (_suppressLibraryRefresh)
+        {
+            return;
+        }
+
         if (_assetCatalog is null || _assetCatalog.Status == AssetLibraryStatus.Damaged)
         {
             _librarySets = [];
             _libraryGroups = [];
             _libraryCollections = [];
+            _libraryRows = [];
+            _libraryTagChoices = [];
+            _libraryMediaTypeChoices = [];
             _visibleTiles = AssetTileWindow.Empty;
+            _visibleRowFirst = 0;
+            _visibleRowCount = 0;
+            ForgetAvailability();
             RaiseLibrary();
             return;
         }
@@ -641,27 +674,191 @@ public sealed class EditorViewModel : ViewModelBase
         _librarySets = result.Sets;
         _libraryGroups = result.Groups;
         _libraryCollections = _assetCatalog.CollectionTree();
-        _visibleTiles = AssetTileWindow.Slice(_librarySets, _visibleTiles.FirstIndex, _visibleTiles.Count);
+        _libraryRows = BuildLibraryRows(result);
+        RefreshFilterChoices();
+        SyncSelectedLibraryRow();
+
+        // A new result means the previous verdicts describe rows that may no longer be on screen,
+        // and a file may have changed since. Nothing is carried over as "still fine".
+        ForgetAvailability();
+        _visibleTiles = SliceVisibleRows(_visibleRowFirst, _visibleRowCount);
         RaiseLibrary();
     }
 
     /// <summary>
-    /// Declares which slice of the result the grid can actually show. Only these tiles ever ask
-    /// for a thumbnail, so ten thousand cards never become ten thousand bitmaps.
+    /// Turns one query result into the flat row sequence the grid virtualizes. Without grouping
+    /// every row is a card; with grouping each header is followed by the cards it covers, so the
+    /// same single list control shows both without ever materialising the whole library.
     /// </summary>
-    public void SetLibraryVisibleRange(int firstIndex, int count)
+    private List<AssetLibraryRow> BuildLibraryRows(AssetQueryResult result)
     {
-        var window = AssetTileWindow.Slice(_librarySets, firstIndex, count);
-        if (window.FirstIndex == _visibleTiles.FirstIndex && window.Count == _visibleTiles.Count)
+        if (_libraryGrouping == AssetGrouping.None || result.Groups.Count == 0)
+        {
+            return [.. result.Sets.Select(card => AssetLibraryRow.ForCard("", card))];
+        }
+
+        var rows = new List<AssetLibraryRow>(result.Sets.Count + result.Groups.Count);
+        foreach (var group in result.Groups)
+        {
+            rows.Add(AssetLibraryRow.Header(group.Key, group.Title, group.Items.Count));
+            foreach (var card in group.Items)
+            {
+                rows.Add(AssetLibraryRow.ForCard(group.Key, card));
+            }
+        }
+
+        return rows;
+    }
+
+    /// <summary>
+    /// The choices the filter controls offer. They come from the whole catalog rather than from
+    /// the current result, so choosing one tag does not make every other tag disappear.
+    /// </summary>
+    private void RefreshFilterChoices()
+    {
+        if (_assetCatalog is null)
         {
             return;
         }
 
+        var tags = new SortedSet<string>(StringComparer.CurrentCultureIgnoreCase);
+        foreach (var set in _assetCatalog.Sets)
+        {
+            foreach (var tag in set.Tags)
+            {
+                tags.Add(tag);
+            }
+        }
+
+        var media = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var record in _assetCatalog.Records)
+        {
+            if (record.MediaType.Length > 0)
+            {
+                media.Add(record.MediaType);
+            }
+        }
+
+        _libraryTagChoices = [.. tags];
+        _libraryMediaTypeChoices = [.. media];
+    }
+
+    private void SyncSelectedLibraryRow()
+    {
+        _selectedLibraryRowIndex = -1;
+        if (_selectedSetId is null)
+        {
+            return;
+        }
+
+        for (var index = 0; index < _libraryRows.Count; index++)
+        {
+            if (_libraryRows[index].Card is { } card
+                && string.Equals(card.SetId, _selectedSetId, StringComparison.Ordinal))
+            {
+                _selectedLibraryRowIndex = index;
+                return;
+            }
+        }
+    }
+
+    /// <summary>The rows a virtualized grid may realise, and the cards inside that span.</summary>
+    public IReadOnlyList<AssetLibraryRow> LibraryRows => _libraryRows;
+
+    /// <summary>Row of the selected card in the current grouping, or -1 when it is not shown.</summary>
+    public int SelectedLibraryRowIndex => _selectedLibraryRowIndex;
+
+    /// <summary>
+    /// Makes the card on one row current. A header is not a card: selecting it must leave the
+    /// tool holding whatever set it already had, so the answer is simply no.
+    /// </summary>
+    public bool SelectLibraryRow(int index)
+    {
+        if (index < 0 || index >= _libraryRows.Count || _libraryRows[index].Card is not { } card)
+        {
+            return false;
+        }
+
+        SelectAssetSet(card.SetId);
+        return true;
+    }
+
+    /// <summary>
+    /// Declares which slice of the result the grid can actually show. Only these rows ever ask
+    /// for a thumbnail or a file check, so ten thousand cards never become ten thousand bitmaps.
+    /// </summary>
+    public void SetLibraryVisibleRange(int firstIndex, int count)
+    {
+        var window = SliceVisibleRows(firstIndex, count);
+        if (window.FirstIndex == _visibleTiles.FirstIndex && window.Count == _visibleTiles.Count
+            && _visibleRowFirst == Math.Max(0, firstIndex))
+        {
+            return;
+        }
+
+        _visibleRowFirst = window.FirstIndex;
+        _visibleRowCount = Math.Max(0, Math.Min(count, _libraryRows.Count - window.FirstIndex));
         _visibleTiles = window;
         Raise(nameof(VisibleLibraryTiles));
         Raise(nameof(VisibleLibraryTileWindow));
     }
 
+    /// <summary>
+    /// Reports the rows the grid really realised. The cost of this is the number of realised
+    /// containers, never the size of the result: a layout pass must not walk the whole library.
+    /// </summary>
+    public void ReportRealizedLibraryRows(IEnumerable<int> realizedRowIndexes)
+    {
+        ArgumentNullException.ThrowIfNull(realizedRowIndexes);
+        var first = int.MaxValue;
+        var last = -1;
+        foreach (var index in realizedRowIndexes)
+        {
+            if (index < 0 || index >= _libraryRows.Count)
+            {
+                continue;
+            }
+
+            if (index < first)
+            {
+                first = index;
+            }
+
+            if (index > last)
+            {
+                last = index;
+            }
+        }
+
+        if (last < 0)
+        {
+            SetLibraryVisibleRange(0, 0);
+            return;
+        }
+
+        SetLibraryVisibleRange(first, last - first + 1);
+    }
+
+    private AssetTileWindow SliceVisibleRows(int firstIndex, int count)
+    {
+        if (_libraryRows.Count == 0 || count <= 0)
+        {
+            return AssetTileWindow.Empty;
+        }
+
+        var first = Math.Clamp(firstIndex, 0, Math.Max(0, _libraryRows.Count - 1));
+        var take = Math.Clamp(count, 0, _libraryRows.Count - first);
+        var cards = new List<AssetSetSummary>(take);
+        for (var index = first; index < first + take; index++)
+        {
+            if (_libraryRows[index].Card is { } card)
+            {
+                cards.Add(card);
+            }
+        }
+
+        return new AssetTileWindow(first, cards.Count, cards);
+    }
     /// <summary>Absolute path of a card cover thumbnail, or null when the library has none.</summary>
     public string? LibraryThumbnailPath(AssetSetSummary summary)
     {
@@ -677,13 +874,484 @@ public sealed class EditorViewModel : ViewModelBase
     public string? LibraryThumbnailPathForVariant(string variantId) =>
         _assetCatalog?.ThumbnailPathForVariant(variantId);
 
-    private HashSet<string> UsedContentHashes() =>
-        Session.Document.Layers.OfType<ObjectLayer>()
-            .SelectMany(layer => layer.Objects)
-            .Select(item => item.Stamp?.AssetSha256)
-            .Where(sha => !string.IsNullOrEmpty(sha))
-            .Select(sha => sha!)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    // ---------------------------------------------------------------- filter controls
+
+    /// <summary>Every tag the catalog knows, so choosing one never hides the others.</summary>
+    public IReadOnlyList<string> LibraryTagChoices => _libraryTagChoices;
+
+    public IReadOnlyList<string> LibraryMediaTypeChoices => _libraryMediaTypeChoices;
+
+    /// <summary>Import date bound as the user types it, in ISO <c>ГГГГ-ММ-ДД</c> form.</summary>
+    public string LibraryImportedFromText
+    {
+        get => _libraryImportedFromText;
+        set => SetImportedBound(value, from: true);
+    }
+
+    public string LibraryImportedToText
+    {
+        get => _libraryImportedToText;
+        set => SetImportedBound(value, from: false);
+    }
+
+    /// <summary>True while one of the date fields holds something that is not a date.</summary>
+    public bool HasLibraryDateError => _libraryDateError;
+
+    public bool HasActiveLibraryFilters =>
+        _librarySearchText.Length > 0
+        || _libraryCollectionId is not null
+        || _libraryTag is not null
+        || _libraryMediaType is not null
+        || _libraryUntaggedOnly
+        || _libraryFavoritesOnly
+        || _libraryRecentOnly
+        || _libraryUsedInMapOnly
+        || _libraryImportedFromText.Length > 0
+        || _libraryImportedToText.Length > 0;
+
+    /// <summary>
+    /// Says in words which filters are on. Icon-only toggles alone would leave the user guessing
+    /// why the library looks empty, so the panel can always show the reason.
+    /// </summary>
+    public string ActiveLibraryFilterSummary
+    {
+        get
+        {
+            var parts = new List<string>();
+            if (_librarySearchText.Length > 0)
+            {
+                parts.Add($"поиск «{_librarySearchText}»");
+            }
+
+            if (_libraryCollectionId is not null)
+            {
+                parts.Add("коллекция " + CollectionTitle(_libraryCollectionId));
+            }
+
+            if (_libraryTag is { } tag)
+            {
+                parts.Add($"тег «{tag}»");
+            }
+
+            if (_libraryUntaggedOnly)
+            {
+                parts.Add("без тегов");
+            }
+
+            if (_libraryFavoritesOnly)
+            {
+                parts.Add("избранное");
+            }
+
+            if (_libraryRecentOnly)
+            {
+                parts.Add("недавние");
+            }
+
+            if (_libraryUsedInMapOnly)
+            {
+                parts.Add("используется на карте");
+            }
+
+            if (_libraryMediaType is { } media)
+            {
+                parts.Add("тип " + media);
+            }
+
+            if (_libraryImportedFromText.Length > 0)
+            {
+                parts.Add(_libraryImportedFromUtc is null
+                    ? "с (дата не распознана)"
+                    : "с " + _libraryImportedFromText);
+            }
+
+            if (_libraryImportedToText.Length > 0)
+            {
+                parts.Add(_libraryImportedToUtc is null
+                    ? "по (дата не распознана)"
+                    : "по " + _libraryImportedToText);
+            }
+
+            return parts.Count == 0 ? "Фильтры не заданы" : string.Join(" · ", parts);
+        }
+    }
+
+    /// <summary>Drops every filter in one pass, so the grid is rebuilt once rather than ten times.</summary>
+    public void ClearLibraryFilters()
+    {
+        _suppressLibraryRefresh = true;
+        try
+        {
+            LibrarySearchText = "";
+            LibraryCollectionId = null;
+            LibraryTag = null;
+            LibraryMediaType = null;
+            LibraryUntaggedOnly = false;
+            LibraryFavoritesOnly = false;
+            LibraryRecentOnly = false;
+            LibraryUsedInMapOnly = false;
+            LibraryImportedFromText = "";
+            LibraryImportedToText = "";
+        }
+        finally
+        {
+            _suppressLibraryRefresh = false;
+        }
+
+        RefreshLibrary();
+        RaiseFilterState();
+        StatusDetail = "Фильтры библиотеки сброшены.";
+    }
+
+    private void SetImportedBound(string? value, bool from)
+    {
+        var text = (value ?? "").Trim();
+        if (from ? text == _libraryImportedFromText : text == _libraryImportedToText)
+        {
+            return;
+        }
+
+        DateTimeOffset? bound = null;
+        if (text.Length > 0 && DateTimeOffset.TryParseExact(
+            text, "yyyy-MM-dd", CultureInfo.InvariantCulture,
+            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var parsed))
+        {
+            // "to" means the whole of that day, otherwise a card imported at noon would fall
+            // outside a range whose upper bound is its own import date.
+            bound = from ? parsed : parsed.AddDays(1).AddTicks(-1);
+        }
+
+        if (from)
+        {
+            _libraryImportedFromText = text;
+            _libraryImportedFromUtc = bound;
+        }
+        else
+        {
+            _libraryImportedToText = text;
+            _libraryImportedToUtc = bound;
+        }
+
+        _libraryDateError = IsInvalidDate(_libraryImportedFromText) || IsInvalidDate(_libraryImportedToText);
+        Raise(from ? nameof(LibraryImportedFromText) : nameof(LibraryImportedToText));
+        Raise(nameof(HasLibraryDateError));
+        RefreshLibrary();
+        RaiseFilterState();
+
+        static bool IsInvalidDate(string text) => text.Length > 0 && !DateTimeOffset.TryParseExact(
+            text, "yyyy-MM-dd", CultureInfo.InvariantCulture,
+            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out _);
+    }
+
+    private string CollectionTitle(string id)
+    {
+        string? found = null;
+        Walk(_libraryCollections);
+        return found ?? id;
+
+        void Walk(IReadOnlyList<AssetCollectionNode> nodes)
+        {
+            foreach (var node in nodes)
+            {
+                if (found is not null)
+                {
+                    return;
+                }
+
+                if (string.Equals(node.Id, id, StringComparison.Ordinal))
+                {
+                    found = "«" + node.Name + "»";
+                    return;
+                }
+
+                Walk(node.Children);
+            }
+        }
+    }
+
+    private void RaiseFilterState()
+    {
+        Raise(nameof(HasActiveLibraryFilters));
+        Raise(nameof(ActiveLibraryFilterSummary));
+        Raise(nameof(LibraryTagChoices));
+        Raise(nameof(LibraryMediaTypeChoices));
+    }
+
+    // ---------------------------------------------------------------- set management
+
+    public bool CanRenameSelectedSet =>
+        _assetCatalog is not null && IsLibraryAvailable && _selectedSetId is not null;
+
+    /// <summary>Whether the current variant has anywhere to move in the set's manual order.</summary>
+    public bool CanMoveCurrentVariant(int direction)
+    {
+        if (!CanRenameSelectedSet || direction == 0 || _selectedSetVariants.Count <= 1)
+        {
+            return false;
+        }
+
+        var target = _currentVariantIndex + Math.Sign(direction);
+        return target >= 0 && target < _selectedSetVariants.Count;
+    }
+
+    public bool CanMakeCurrentVariantCover =>
+        CanRenameSelectedSet && _selectedSetVariants.Count > 1
+        && CurrentVariant is { } variant && SelectedSet is { } set
+        && !string.Equals(set.CoverVariantId, variant.Id, StringComparison.Ordinal);
+
+    /// <summary>Renames the card. The set id and every variant id stay exactly as they were.</summary>
+    public bool RenameSelectedSet(string? name)
+    {
+        if (!CanRenameSelectedSet)
+        {
+            StatusDetail = "Сначала выберите набор в библиотеке.";
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            StatusDetail = "Имя набора не может быть пустым.";
+            return false;
+        }
+
+        if (!MutateSet(() => _assetCatalog!.RenameSet(_selectedSetId!, name)))
+        {
+            return false;
+        }
+
+        StatusDetail = $"Набор переименован: «{name.Trim()}».";
+        return true;
+    }
+
+    /// <summary>
+    /// Moves the current variant one place in the set's own order. The variant stays current, so
+    /// the position readout follows the thumbnail the user is looking at.
+    /// </summary>
+    public bool MoveCurrentVariant(int direction)
+    {
+        if (!CanMoveCurrentVariant(direction))
+        {
+            StatusDetail = _selectedSetId is null
+                ? "Сначала выберите набор в библиотеке."
+                : "Этот вариант уже на краю набора.";
+            return false;
+        }
+
+        var order = _selectedSetVariants.Select(variant => variant.Id).ToList();
+        var from = _currentVariantIndex;
+        var to = from + Math.Sign(direction);
+        (order[from], order[to]) = (order[to], order[from]);
+        var moved = order[to];
+        if (!MutateSet(() => _assetCatalog!.ReorderSetVariants(_selectedSetId!, order)))
+        {
+            return false;
+        }
+
+        SelectVariantById(moved);
+        StatusDetail = $"Порядок изменён: вариант {CurrentVariantLabel}.";
+        return true;
+    }
+
+    /// <summary>Promotes the current variant to the card's cover without touching the order.</summary>
+    public bool MakeCurrentVariantCover()
+    {
+        if (!CanMakeCurrentVariantCover)
+        {
+            StatusDetail = _selectedSetId is null
+                ? "Сначала выберите набор в библиотеке."
+                : "Этот вариант уже является обложкой набора.";
+            return false;
+        }
+
+        var variantId = CurrentVariant!.Id;
+        if (!MutateSet(() => _assetCatalog!.SetCoverVariant(_selectedSetId!, variantId)))
+        {
+            return false;
+        }
+
+        SelectVariantById(variantId);
+        StatusDetail = $"Обложкой набора стал вариант {CurrentVariantLabel}.";
+        return true;
+    }
+
+    /// <summary>Runs one catalog mutation and rebuilds the panel, or reports why it failed.</summary>
+    private bool MutateSet(Action mutation)
+    {
+        try
+        {
+            mutation();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException
+            or ArgumentException or KeyNotFoundException)
+        {
+            StatusDetail = "Не удалось изменить набор: " + ex.Message;
+            _log.Error("Asset set change failed", ex);
+            return false;
+        }
+
+        var setId = _selectedSetId;
+        RefreshLibrary();
+        SelectAssetSet(setId);
+        Raise(nameof(SelectedSet));
+        RaiseSetManagementState();
+        return true;
+    }
+
+    private void SelectVariantById(string variantId)
+    {
+        for (var index = 0; index < _selectedSetVariants.Count; index++)
+        {
+            if (string.Equals(_selectedSetVariants[index].Id, variantId, StringComparison.Ordinal))
+            {
+                _currentVariantIndex = index;
+                break;
+            }
+        }
+
+        RememberCurrentVariant();
+        RaiseVariantState();
+        RaiseSetManagementState();
+    }
+
+    private void RaiseSetManagementState()
+    {
+        Raise(nameof(CanRenameSelectedSet));
+        Raise(nameof(CanMakeCurrentVariantCover));
+    }
+
+    // ---------------------------------------------------------------- availability
+
+    /// <summary>What the library currently knows about one content file.</summary>
+    public AssetAvailability AvailabilityOf(string? sha256) =>
+        sha256 is not null && _availability.TryGetValue(sha256, out var state)
+            ? state
+            : AssetAvailability.Unknown;
+
+    /// <summary>Bumped whenever a verdict lands, so the panel knows to redraw its badges.</summary>
+    public int AvailabilityRevision => _availabilityRevision;
+
+    public static string AvailabilityText(AssetAvailability availability) => availability switch
+    {
+        AssetAvailability.Available => "файл на месте",
+        AssetAvailability.Missing => "файл отсутствует",
+        AssetAvailability.HashMismatch => "файл не совпадает с сохранённым SHA-256",
+        AssetAvailability.Unsupported => "формат не поддерживается",
+        AssetAvailability.Checking => "проверка файла…",
+        _ => "файл не проверен",
+    };
+
+    /// <summary>
+    /// Verifies the content behind the rows that are actually on screen and behind the set the
+    /// stamp tool holds - and nothing else. Hashing happens off the UI thread, and a verdict from
+    /// a query the user has already moved on from is discarded rather than shown.
+    /// </summary>
+    public async Task RefreshVisibleAvailabilityAsync()
+    {
+        if (_assetCatalog is null || _assetResolver is null
+            || _assetCatalog.Status == AssetLibraryStatus.Damaged)
+        {
+            return;
+        }
+
+        var pending = new List<AssetRecord>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var tile in _visibleTiles.Tiles)
+        {
+            Consider(tile.CoverSha256);
+        }
+
+        foreach (var variant in _selectedSetVariants)
+        {
+            Consider(variant.Sha256);
+        }
+
+        if (pending.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var record in pending)
+        {
+            _availability[record.Sha256] = AssetAvailability.Checking;
+        }
+
+        var generation = ++_availabilityGeneration;
+        BumpAvailability();
+
+        var resolver = _assetResolver;
+        var verdicts = await Task.Run(
+            () => pending.Select(record => (record.Sha256, State: resolver.Check(record))).ToList());
+
+        // The query moved on while we were hashing: this answer describes rows nobody is looking
+        // at any more, and writing it back would show a stale state.
+        if (generation != _availabilityGeneration)
+        {
+            return;
+        }
+
+        foreach (var (sha256, state) in verdicts)
+        {
+            _availability[sha256] = state;
+        }
+
+        BumpAvailability();
+
+        void Consider(string? sha256)
+        {
+            if (string.IsNullOrEmpty(sha256) || !seen.Add(sha256)
+                || AvailabilityOf(sha256) != AssetAvailability.Unknown)
+            {
+                return;
+            }
+
+            if (_assetCatalog.Find(sha256) is { } record)
+            {
+                pending.Add(record);
+            }
+        }
+    }
+
+    private void ForgetAvailability()
+    {
+        if (_availability.Count == 0)
+        {
+            return;
+        }
+
+        _availability.Clear();
+        _availabilityGeneration++;
+        BumpAvailability();
+    }
+
+    private void BumpAvailability()
+    {
+        _availabilityRevision++;
+        Raise(nameof(AvailabilityRevision));
+    }
+
+    /// <summary>
+    /// Every content hash the open map really reaches: stamps, line and shape strokes, shape
+    /// texture fills and nested composition items all come from the one walk the composition
+    /// transfer already defines, and filter textures are added on top of it.
+    /// </summary>
+    private HashSet<string> UsedContentHashes()
+    {
+        var objects = Session.Document.Layers.OfType<ObjectLayer>().SelectMany(layer => layer.Objects);
+        var hashes = new HashSet<string>(
+            CompositionTransfer.UsedAssetHashes(objects), StringComparer.OrdinalIgnoreCase);
+        foreach (var filter in Session.Document.Layers.OfType<FilterLayer>())
+        {
+            if (filter.Settings.TextureAssetSha256 is { Length: > 0 } texture)
+            {
+                hashes.Add(texture);
+            }
+        }
+
+        return hashes;
+    }
+
+    /// <summary>How many entries the bounded recent list currently holds.</summary>
+    public int RecentCount => _assetCatalog?.Recent.Count ?? 0;
 
     // ---------------------------------------------------------------- set and variant
 
@@ -717,6 +1385,7 @@ public sealed class EditorViewModel : ViewModelBase
             _selectedSetId = null;
             _selectedSetVariants = [];
             _currentVariantIndex = 0;
+            SyncSelectedLibraryRow();
             RaiseVariantState();
             return;
         }
@@ -733,6 +1402,7 @@ public sealed class EditorViewModel : ViewModelBase
             ? -1
             : _selectedSetVariants.ToList().FindIndex(variant => variant.Id == remembered);
         _currentVariantIndex = index >= 0 ? index : 0;
+        SyncSelectedLibraryRow();
         RaiseVariantState();
     }
 
@@ -936,12 +1606,14 @@ public sealed class EditorViewModel : ViewModelBase
     // ---------------------------------------------------------------- placement
 
     /// <summary>
-    /// One pointer gesture. The whole plan - every object id, hash, position and transform - is
-    /// resolved first, then committed as exactly one undoable command. Nothing is rerolled later.
+    /// One pointer gesture, all or nothing. The plan is resolved first, then every distinct hash
+    /// it needs is verified and read exactly once, and only a fully resolved plan is committed as
+    /// a single undoable command. If one variant is missing or changed, nothing is placed at all:
+    /// a shortened plan committed as a success is the one outcome the user cannot detect.
     /// </summary>
     public bool PlaceCurrentVariantAt(double worldX, double worldY)
     {
-        if (_assetCatalog is null)
+        if (_assetCatalog is null || _assetResolver is null)
         {
             StatusDetail = "Локальный каталог ассетов недоступен.";
             return false;
@@ -992,6 +1664,9 @@ public sealed class EditorViewModel : ViewModelBase
             return false;
         }
 
+        // The seed is derived from the counter this gesture WOULD take, and the counter only moves
+        // once the command is committed. A refused gesture therefore leaves no trace at all, and
+        // retrying it after the file is restored replays the very same plan.
         var request = new StampPlacementRequest
         {
             CenterX = worldX,
@@ -1008,28 +1683,16 @@ public sealed class EditorViewModel : ViewModelBase
             ? StampPlacement.PlanOne(request, sources[0])
             : StampPlacement.PlanArea(request, sources);
 
-        var references = new List<MapAssetReference>();
+        if (ResolvePlan(plan, records, out var references, out var refusal) is not { } byHash)
+        {
+            StatusDetail = refusal;
+            return false;
+        }
+
         var objects = new List<SceneObject>(plan.Count);
-        var unavailable = 0;
         foreach (var item in plan)
         {
-            if (!records.TryGetValue(item.Sha256, out var record))
-            {
-                continue;
-            }
-
-            if (BuildReference(record) is not { } reference)
-            {
-                unavailable++;
-                continue;
-            }
-
-            if (references.All(existing => !string.Equals(
-                existing.Sha256, reference.Sha256, StringComparison.OrdinalIgnoreCase)))
-            {
-                references.Add(reference);
-            }
-
+            var record = records[item.Sha256];
             objects.Add(new SceneObject(
                 ObjectId.New(), SceneObjectKind.Stamp, record.DisplayName,
                 item.X, item.Y, item.Width, item.Height, item.RotationDegrees,
@@ -1043,14 +1706,10 @@ public sealed class EditorViewModel : ViewModelBase
             });
         }
 
-        if (objects.Count == 0 || references.Count == 0)
-        {
-            StatusDetail = unavailable > 0
-                ? "Файл ассета отсутствует или не совпадает с сохранённым SHA-256."
-                : "Не удалось подготовить размещение.";
-            return false;
-        }
-
+        // Captured before the random toggle is allowed to move on, so the confirmation names the
+        // variant that was actually placed rather than the one that will be placed next.
+        var placedLabel = CurrentVariantLabel;
+        _gestureCounter++;
         Session.Execute(new PlaceAssetObjectsCommand(layer.Id, references, objects));
         Session.SelectedObjectId = objects[^1].Id;
         _activeLayerId = layer.Id;
@@ -1072,17 +1731,70 @@ public sealed class EditorViewModel : ViewModelBase
         // Phrased as "noun: number" so the Russian numeral never has to agree with the noun -
         // "Размещено 322 штампов" is simply wrong, and 1/2/5 would each need a different form.
         StatusDetail = objects.Count == 1
-            ? $"Размещён вариант {CurrentVariantLabel}."
-            : $"Размещено штампов: {objects.Count}, вариантов: {references.Count}.";
+            ? $"Размещён вариант {placedLabel}."
+            : $"Размещено штампов: {objects.Count}, вариантов: {byHash.Count}.";
         RefreshLibrary();
         return true;
     }
 
+    /// <summary>
+    /// Resolves every distinct hash the plan needs, once each, and returns null the moment one of
+    /// them cannot be placed. The cost of a gesture therefore follows the number of variants it
+    /// uses, not the thousands of stamps it may put on the canvas.
+    /// </summary>
+    private Dictionary<string, MapAssetReference>? ResolvePlan(
+        IReadOnlyList<StampPlacementItem> plan,
+        Dictionary<string, AssetRecord> records,
+        out List<MapAssetReference> references,
+        out string refusal)
+    {
+        var byHash = new Dictionary<string, MapAssetReference>(StringComparer.OrdinalIgnoreCase);
+        references = [];
+        refusal = "";
+        foreach (var item in plan)
+        {
+            if (byHash.ContainsKey(item.Sha256))
+            {
+                continue;
+            }
+
+            if (!records.TryGetValue(item.Sha256, out var record))
+            {
+                refusal = "Содержимое выбранного набора отсутствует в каталоге. Ничего не размещено.";
+                return null;
+            }
+
+            var resolution = _assetResolver!.Resolve(record);
+            if (!resolution.IsAvailable)
+            {
+                refusal = Unplaceable(record, resolution.Availability);
+                return null;
+            }
+
+            byHash[item.Sha256] = resolution.Reference!;
+            references.Add(resolution.Reference!);
+        }
+
+        return byHash;
+    }
+
+    /// <summary>Names the variant and the exact reason it stopped the whole gesture.</summary>
+    private static string Unplaceable(AssetRecord record, AssetAvailability availability) => availability switch
+    {
+        AssetAvailability.Missing =>
+            $"Вариант «{record.DisplayName}» отсутствует на диске. Ничего не размещено.",
+        AssetAvailability.HashMismatch =>
+            $"Файл варианта «{record.DisplayName}» не совпадает с сохранённым SHA-256. Ничего не размещено.",
+        AssetAvailability.Unsupported =>
+            $"Формат варианта «{record.DisplayName}» не поддерживается. Ничего не размещено.",
+        _ => $"Вариант «{record.DisplayName}» сейчас недоступен. Ничего не размещено.",
+    };
+
     /// <summary>The same gesture a canvas press runs, centred on the current view.</summary>
     public bool PlaceCurrentVariantAtViewCentre()
     {
-        var centre = ViewCentre();
-        return PlaceCurrentVariantAt(centre.X, centre.Y);
+        var (x, y) = ViewCentre();
+        return PlaceCurrentVariantAt(x, y);
     }
 
     /// <summary>Swaps only the asset of the selected stamp; transform and style are untouched.</summary>
@@ -1144,33 +1856,13 @@ public sealed class EditorViewModel : ViewModelBase
         : Math.Clamp(_stampAreaRadius / 3.0, 8, 256);
 
     /// <summary>
-    /// A fresh seed per gesture, derived from the session revision so a test with a fixed clock
-    /// and a fixed history replays identically while two live gestures still differ.
+    /// The seed of the gesture that is about to be planned. It is a fixed mix rather than a
+    /// framework hash, because the framework randomises string hashing per process and a replay
+    /// promised in the documentation has to survive a restart. The counter is not consumed here:
+    /// only a committed gesture advances it, so a refused one changes nothing.
     /// </summary>
     private int NextGestureSeed() =>
-        HashCode.Combine(Session.Revision, _selectedSetId, _currentVariantIndex, ++_gestureCounter);
-
-    private MapAssetReference? BuildReference(AssetRecord record)
-    {
-        if (_assetCatalog is null)
-        {
-            return null;
-        }
-
-        var resolution = _assetCatalog.Resolve(record);
-        if (resolution.Status != AssetResolutionStatus.Available || resolution.Path is null)
-        {
-            return null;
-        }
-
-        var thumbnailPath = _assetCatalog.ThumbnailPath(record);
-        return new MapAssetReference(
-            record.Sha256, record.DisplayName, record.MediaType, record.Extension,
-            ProjectAssetStorage.Embedded, record.ImportedUtc,
-            record.Provenance.Source, record.Provenance.LicenseId,
-            embeddedContent: File.ReadAllBytes(resolution.Path),
-            fallbackThumbnailPng: File.Exists(thumbnailPath) ? File.ReadAllBytes(thumbnailPath) : null);
-    }
+        GestureSeed.From(Session.Revision, _selectedSetId, _currentVariantIndex, _gestureCounter + 1);
 
     private void RaiseLibrary()
     {
@@ -1182,6 +1874,10 @@ public sealed class EditorViewModel : ViewModelBase
         Raise(nameof(LibraryStatus));
         Raise(nameof(LibraryDiagnostic));
         Raise(nameof(IsLibraryAvailable));
+        Raise(nameof(LibraryRows));
+        Raise(nameof(SelectedLibraryRowIndex));
+        Raise(nameof(HasActiveLibraryFilters));
+        Raise(nameof(ActiveLibraryFilterSummary));
     }
 
     private void RaiseVariantState()
@@ -1193,6 +1889,8 @@ public sealed class EditorViewModel : ViewModelBase
         Raise(nameof(CurrentVariant));
         Raise(nameof(CurrentVariantLabel));
         Raise(nameof(IsCurrentVariantTheCover));
+        Raise(nameof(SelectedLibraryRowIndex));
+        Raise(nameof(CanMakeCurrentVariantCover));
     }
 
     public AssetRecord? ImportAsset(string path, bool linked)

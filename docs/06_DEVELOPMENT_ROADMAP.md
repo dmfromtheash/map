@@ -206,12 +206,20 @@ Fault-injection suite доказывает отсутствие потери п�
 
 Текущий статус: **PARTIAL**. Первый input-parity slice реализует работающие global/tool/selection
 и Brush/Mask/Text shortcuts. Срез **10B Library v2 + variant sets + set-aware stamp placement +
-diagnostic fixtures** реализован на branch `stage/10-asset-library-sets` и ожидает независимой
-проверки Codex: schema v2 с миграцией и защитой повреждённого индекса, collections/sets/variants,
-поиск/сортировка/группировка/фильтры/recent/favorite, виртуализированный каталог, `EditorTool.Stamp`
-с Area/Density и детерминированным многовариантным размещением одной undoable командой, а также два
-собственных diagnostic fixtures. High-DPI и нативный файловый диалог остались `PARTIAL` — причины
-в `docs/STATE_HANDOFF.md`. Полный object/grid inspector, `IsometricSquares`, multi-selection
+diagnostic fixtures** реализован на branch `stage/10-asset-library-sets`: schema v2 с миграцией и
+защитой повреждённого индекса, collections/sets/variants, поиск/сортировка/группировка/фильтры/
+recent/favorite, виртуализированный каталог, `EditorTool.Stamp` с Area/Density и детерминированным
+многовариантным размещением одной undoable командой, а также два собственных diagnostic fixtures.
+
+Поверх него отдельным commit выполнен **10B Fix 01** по findings независимого Codex-review:
+настоящая группировка на одной виртуализированной поверхности, полный набор фильтров с
+переименованием/reorder/cover набора, явные состояния missing/hash-mismatch/checking/unsupported,
+атомарный One/Area gesture со стоимостью по числу уникальных SHA, стабильный между процессами
+seed, полный `used-in-current-map` и полная проверка схемы v2 с отказом на семантически
+повреждённом индексе. По решению владельца scatter теперь размножает вариант, не поворачивая и не
+отражая его. **Оба среза ожидают независимой проверки Codex**; до неё их результаты не являются
+`FACT`. High-DPI и нативный файловый диалог остались `PARTIAL`/`BLOCKED` — причины в
+`docs/STATE_HANDOFF.md`. Полный object/grid inspector, `IsometricSquares`, multi-selection
 UI/groups и font catalog остаются после 10B.
 
 Этот этап начинается после предоставления владельцем материалов, но отдельные UX-прототипы идут раньше каждого инструмента.
@@ -238,7 +246,8 @@ UI/groups и font catalog остаются после 10B.
 ### Порядок оставшихся срезов Stage 10
 
 1. **10B — Library v2 и variant-set stamp workflow:** единый owner-approved крупный срез;
-   контракт — `prompts/STAGE_10B_ASSET_LIBRARY_VARIANT_SETS.md`. Реализован, ожидает Codex.
+   контракт — `prompts/STAGE_10B_ASSET_LIBRARY_VARIANT_SETS.md`. Реализован; поверх него выполнен
+   отдельный commit 10B Fix 01. Оба ожидают независимой проверки Codex.
 2. **10C — Multi-selection/groups:** Ctrl+A/Ctrl+click, group/ungroup, group transform и UIA.
 3. **10D — Object inspectors:** Stamp/Text/Line/Shape/Brush controls и color/effects parity.
 4. **10E — Grid geometry:** отдельная `IsometricSquares`, property sheet, snap/golden fixtures.

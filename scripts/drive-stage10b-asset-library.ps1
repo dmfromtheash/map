@@ -35,9 +35,15 @@ if (-not $OutDir.StartsWith($workspace + [IO.Path]::DirectorySeparatorChar, [Str
 $fixtureRoot = Join-Path $workspace 'tests\fixtures\assets'
 if (-not (Test-Path -LiteralPath $fixtureRoot)) { throw "Diagnostic fixtures are missing: $fixtureRoot" }
 
+# The run owns its sandbox. A leftover catalog from an interrupted run would make the very first
+# assertion fail for the wrong reason, so a dirty output directory is refused up front.
 $catalogRoot = Join-Path $OutDir 'catalog'
 $recoveryRoot = Join-Path $OutDir 'recovery'
 $mapRoot = Join-Path $OutDir 'maps'
+if (Test-Path -LiteralPath (Join-Path $catalogRoot 'catalog.json')) {
+    throw "OutDir already holds a catalog from an earlier run: $catalogRoot. Use a fresh -OutDir."
+}
+
 New-Item -ItemType Directory -Force -Path $OutDir, $catalogRoot, $recoveryRoot, $mapRoot | Out-Null
 
 Add-Type -AssemblyName System.Drawing
@@ -56,6 +62,11 @@ public static class Stage10Native
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int command);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, IntPtr pid);
+    [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint attach, uint attachTo, bool join);
+    [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
 }
 "@
 }
@@ -73,6 +84,7 @@ $script:Keys = @{
     'Alt' = 0x12; 'Shift' = 0x10; 'Ctrl' = 0x11; 'Left' = 0x25; 'Right' = 0x27
     'A' = 0x41; 'F' = 0x46; 'O' = 0x4F; 'Q' = 0x51; 'Z' = 0x5A; 'Y' = 0x59
 }
+$script:Modifiers = @(0x12, 0x11, 0x10)
 
 # ------------------------------------------------------------------ UIA helpers
 
@@ -81,6 +93,38 @@ function Find-Uia([string]$automationId, [System.Windows.Automation.AutomationEl
     $condition = New-Object System.Windows.Automation.PropertyCondition(
         [System.Windows.Automation.AutomationElement]::AutomationIdProperty, $automationId)
     $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+}
+
+function Find-UiaByName([string]$name) {
+    $condition = New-Object System.Windows.Automation.PropertyCondition(
+        [System.Windows.Automation.AutomationElement]::NameProperty, $name)
+    $script:Root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+}
+
+<#
+Finds one realised library row by a fragment of its accessible name. It looks only at list items,
+because the badge inside a card carries its own name and a card whose file check is still running
+legitimately gains a ", проверка файла…" suffix - an exact-name lookup would race with both.
+#>
+function Find-UiaCard([string]$fragment) {
+    $type = New-Object System.Windows.Automation.PropertyCondition(
+        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+        [System.Windows.Automation.ControlType]::ListItem)
+    $items = $script:Root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $type)
+    foreach ($item in $items) {
+        if ($item.Current.Name -like "*$fragment*") { return $item }
+    }
+    return $null
+}
+
+function Find-UiaNameLike([string]$fragment) {
+    $all = $script:Root.FindAll(
+        [System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.Condition]::TrueCondition)
+    foreach ($element in $all) {
+        if ($element.Current.Name -like "*$fragment*") { return $element }
+    }
+    return $null
 }
 
 function Wait-Uia([string]$automationId, [scriptblock]$until, [int]$timeoutMs = 20000) {
@@ -95,6 +139,17 @@ function Wait-Uia([string]$automationId, [scriptblock]$until, [int]$timeoutMs = 
         Start-Sleep -Milliseconds 200
     }
     throw "TIMEOUT waiting for '$automationId'. Last name: '$last'"
+}
+
+# Waits for the UI to settle after ONE action. This is not a retry of the action: the input is
+# sent exactly once and this only bounds how long its visible result may take to appear.
+function Wait-State([scriptblock]$condition, [string]$what, [int]$timeoutMs = 8000) {
+    $deadline = (Get-Date).AddMilliseconds($timeoutMs)
+    while ((Get-Date) -lt $deadline) {
+        if (& $condition) { return }
+        Start-Sleep -Milliseconds 150
+    }
+    throw "TIMEOUT waiting for state: $what"
 }
 
 function Require-Uia([string]$automationId) {
@@ -128,7 +183,43 @@ function Set-UiaValue([string]$automationId, [string]$value) {
     Start-Sleep -Milliseconds 260
 }
 
+function Select-UiaChoice([string]$automationId, [string]$value) {
+    $element = Require-Uia $automationId
+    $expand = $element.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+    $expand.Expand()
+    Start-Sleep -Milliseconds 300
+    $condition = New-Object System.Windows.Automation.PropertyCondition(
+        [System.Windows.Automation.AutomationElement]::NameProperty, $value)
+    # A drop-down is not always a descendant of its combo: on Windows it can be an overlay in the
+    # same window or a top-level popup window of its own. All three are searched before giving up.
+    $item = $element.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+    if ($null -eq $item) {
+        $item = $script:Root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+    }
+    if ($null -eq $item) {
+        $owned = New-Object System.Windows.Automation.PropertyCondition(
+            [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $script:Proc.Id)
+        foreach ($window in [System.Windows.Automation.AutomationElement]::RootElement.FindAll(
+            [System.Windows.Automation.TreeScope]::Children, $owned)) {
+            $item = $window.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+            if ($null -ne $item) { break }
+        }
+    }
+    if ($null -eq $item) {
+        $expand.Collapse()
+        throw "Choice '$value' is not offered by '$automationId'."
+    }
+    $item.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+    Start-Sleep -Milliseconds 400
+}
+
 function Get-UiaName([string]$automationId) { (Require-Uia $automationId).Current.Name }
+
+function Test-UiaFocus([string]$automationId) {
+    $element = Find-Uia $automationId
+    if ($null -eq $element) { return $false }
+    return $element.Current.HasKeyboardFocus
+}
 
 function Select-UiaTab([string]$name) {
     $nameCondition = New-Object System.Windows.Automation.PropertyCondition(
@@ -143,18 +234,64 @@ function Select-UiaTab([string]$name) {
     Start-Sleep -Milliseconds 320
 }
 
+# ------------------------------------------------------------------ input gate
+
+<#
+Takes the foreground deliberately instead of hoping for it. SetForegroundWindow is refused when
+the calling thread does not own the current foreground window, which is exactly why the previous
+driver dropped an Alt+Right once and passed on the immediate repeat. Attaching this thread's input
+queue to the window's thread is the documented way to be allowed, and the result is verified.
+#>
+function Set-AppForeground {
+    $handle = $script:Proc.MainWindowHandle
+    if ($handle -eq [IntPtr]::Zero) { throw 'The Map window has no handle.' }
+    if ([Stage10Native]::GetForegroundWindow() -eq $handle) { return }
+
+    $ours = [Stage10Native]::GetCurrentThreadId()
+    $theirs = [Stage10Native]::GetWindowThreadProcessId($handle, [IntPtr]::Zero)
+    $attached = $false
+    try {
+        if ($ours -ne $theirs) { $attached = [Stage10Native]::AttachThreadInput($ours, $theirs, $true) }
+        $deadline = (Get-Date).AddMilliseconds(6000)
+        while ((Get-Date) -lt $deadline) {
+            # Deliberately not SW_RESTORE: that would un-maximize the window and quietly change
+            # the size of every screenshot taken after the first keyboard chord.
+            [void][Stage10Native]::BringWindowToTop($handle)
+            [void][Stage10Native]::SetForegroundWindow($handle)
+            if ([Stage10Native]::GetForegroundWindow() -eq $handle) { return }
+            Start-Sleep -Milliseconds 150
+        }
+        throw 'The Map window did not accept the foreground within 6000 ms.'
+    }
+    finally {
+        if ($attached) { [void][Stage10Native]::AttachThreadInput($ours, $theirs, $false) }
+    }
+}
+
+<#
+Sends one chord to a window proven to be in the foreground. Every modifier is released in the
+finally block, so a failure in the middle can never leave Alt or Ctrl stuck down for the rest of
+the run - which would silently corrupt every later keystroke.
+#>
 function Send-Chord([string[]]$Chord) {
-    [void][Stage10Native]::SetForegroundWindow($script:Proc.MainWindowHandle)
-    Start-Sleep -Milliseconds 200
+    Set-AppForeground
     $codes = @()
     foreach ($name in $Chord) {
         if (-not $script:Keys.ContainsKey($name)) { throw "Unknown key '$name'" }
         $codes += [byte]$script:Keys[$name]
     }
-    foreach ($code in $codes) { [Stage10Native]::keybd_event($code, 0, 0, [UIntPtr]::Zero) }
-    [array]::Reverse($codes)
-    foreach ($code in $codes) { [Stage10Native]::keybd_event($code, 0, 2, [UIntPtr]::Zero) }
-    Start-Sleep -Milliseconds 320
+    try {
+        foreach ($code in $codes) { [Stage10Native]::keybd_event($code, 0, 0, [UIntPtr]::Zero) }
+        $reversed = @($codes)
+        [array]::Reverse($reversed)
+        foreach ($code in $reversed) { [Stage10Native]::keybd_event($code, 0, 2, [UIntPtr]::Zero) }
+    }
+    finally {
+        foreach ($modifier in $script:Modifiers) {
+            [Stage10Native]::keybd_event([byte]$modifier, 0, 2, [UIntPtr]::Zero)
+        }
+    }
+    Start-Sleep -Milliseconds 260
 }
 
 function Assert-Equal([string]$actual, [string]$expected, [string]$what) {
@@ -174,7 +311,6 @@ function Assert-True([bool]$condition, [string]$what) {
     Write-Host "      ok  $what"
     $script:Checks[$what] = 'true'
 }
-
 # ------------------------------------------------------------------ app control
 
 function Start-TestApp([string]$ImportGroups = '', [string]$MapPath = '') {
@@ -260,6 +396,17 @@ function Get-CatalogJson {
     return Get-Content -LiteralPath $path -Raw -Encoding UTF8
 }
 
+function Get-SceneJson([string]$mapPath) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [IO.Compression.ZipFile]::OpenRead($mapPath)
+    try {
+        $entry = $archive.Entries | Where-Object { $_.FullName -eq 'scene.json' }
+        $reader = New-Object IO.StreamReader($entry.Open())
+        try { return $reader.ReadToEnd() } finally { $reader.Dispose() }
+    }
+    finally { $archive.Dispose() }
+}
+
 function Get-PlacedHashes([string]$mapPath) {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $archive = [IO.Compression.ZipFile]::OpenRead($mapPath)
@@ -318,7 +465,7 @@ try {
     Assert-True (([regex]::Matches($catalog, '"sha256"')).Count -ge 13) '13 content records stored'
 
     # ---------------------------------------------------------- 2. navigation
-    Write-Host "`n[2] Tree, breadcrumbs, search, filters, favourite and recent"
+    Write-Host "`n[2] Tree, breadcrumbs, search and the full filter bar"
     Assert-Contains (Get-UiaName 'BreadcrumbRoot') 'Библиотека' 'the breadcrumb root is a real control'
     # The singleton import selects its own card, so the trail must name that card, not the root.
     Assert-Contains (Get-UiaName 'BreadcrumbCurrent') 'diagnostic-brush-tip' 'the breadcrumb leaf names the selection'
@@ -328,19 +475,79 @@ try {
     Assert-True ($null -ne (Find-Uia 'Collection_All')) 'collection tree lists all collections'
 
     Set-UiaValue 'AssetSearchBox' 'Диагностический'
-    Start-Sleep -Milliseconds 600
+    Wait-State { (Get-UiaName 'LibraryCountText') -like '*Карточек: 1*' } 'search narrows the grid'
     Assert-Contains (Get-UiaName 'LibraryCountText') 'Карточек: 1' 'search narrows to one card'
+    Assert-Contains (Get-UiaName 'LibraryFilterSummary') 'поиск' 'the summary names the active search'
     Set-UiaValue 'AssetSearchBox' ''
-    Start-Sleep -Milliseconds 600
+    Wait-State { (Get-UiaName 'LibraryCountText') -like '*Карточек: 2*' } 'clearing the search restores both'
     Assert-Contains (Get-UiaName 'LibraryCountText') 'Карточек: 2' 'clearing the search restores both'
 
-    # ---------------------------------------------------- 3. set and variants
-    Write-Host "`n[3] Expand the set, walk its variants, toggle random"
-    $tile = $script:Root.FindFirst(
-        [System.Windows.Automation.TreeScope]::Descendants,
-        (New-Object System.Windows.Automation.PropertyCondition(
-            [System.Windows.Automation.AutomationElement]::NameProperty,
-            'Диагностический набор, набор, 12 вариантов')))
+    # ------------------------------------------------------- 3. real grouping
+    Write-Host "`n[3] Без групп -> По коллекции -> По тегу with visible group headers"
+    Assert-True ($null -eq (Find-UiaNameLike 'Группа ')) 'ungrouped catalog shows no group header'
+    Save-Shot 'grouping-none' | Out-Null
+
+    Invoke-Uia 'LibraryGroupCollection'
+    Wait-State { $null -ne (Find-UiaNameLike 'Группа ') } 'collection headers appear'
+    $collectionHeader = Find-UiaNameLike 'Группа '
+    Assert-Contains $collectionHeader.Current.Name 'карточек:' 'a collection group header states its count'
+    Assert-Equal $collectionHeader.Current.ControlType.ProgrammaticName 'ControlType.ListItem' `
+        'a group header is a row of the same virtualized list'
+    $collectionHeaderName = $collectionHeader.Current.Name
+    Save-Shot 'grouping-collection' | Out-Null
+
+    # A header must never become the selected card: selecting it moves on to a real card.
+    $selectable = $null
+    if ($collectionHeader.TryGetCurrentPattern(
+        [System.Windows.Automation.SelectionItemPattern]::Pattern, [ref]$selectable)) {
+        $selectable.Select()
+        Start-Sleep -Milliseconds 500
+    }
+    Assert-True ((Get-UiaName 'SelectedSetNameText') -notlike '*Группа*') `
+        'selecting a group header never makes it the selected set'
+
+    # Nothing carries a tag yet, so grouping by tag is the "without tags" bucket. It is still a
+    # different header over the same cards, which is exactly what must change on screen.
+    Invoke-Uia 'LibraryGroupTag'
+    Wait-State { $null -ne (Find-UiaNameLike 'Группа Без тегов') } 'tag headers appear'
+    Assert-True ($null -ne (Find-UiaNameLike 'Группа Без тегов')) 'the tag grouping names its bucket'
+    Assert-True ((Find-UiaNameLike 'Группа ').Current.Name -ne $collectionHeaderName) `
+        'switching the grouping really changes the same catalog area'
+    Save-Shot 'grouping-tag' | Out-Null
+
+    Invoke-Uia 'LibraryGroupNone'
+    Wait-State { $null -eq (Find-UiaNameLike 'Группа ') } 'headers disappear again'
+    Assert-True ($null -eq (Find-UiaNameLike 'Группа ')) 'Без групп returns to a flat card list'
+
+    # ------------------------------------------------------------- 4. filters
+    Write-Host "`n[4] Tag, media, date, untagged, favourite, recent, used and reset"
+    Assert-True ($null -ne (Find-Uia 'LibraryTagFilter')) 'the exact tag filter is a real control'
+    Assert-Equal (Get-UiaName 'LibraryTagFilter') 'Тег' 'the tag filter is named'
+
+    Select-UiaChoice 'LibraryMediaFilter' 'image/png'
+    Wait-State { (Get-UiaName 'LibraryCountText') -like '*Карточек: 2*' } 'both diagnostic fixtures are PNG'
+    Assert-Contains (Get-UiaName 'LibraryFilterSummary') 'image/png' 'the summary names the media type'
+
+    Set-UiaValue 'LibraryImportedFromBox' '2099-01-01'
+    Wait-State { (Get-UiaName 'LibraryCountText') -like '*Ничего не найдено*' } 'a future lower bound empties the grid'
+    Assert-Contains (Get-UiaName 'LibraryCountText') 'Ничего не найдено' 'a date range can empty the library'
+    Set-UiaValue 'LibraryImportedFromBox' 'не дата'
+    Wait-State { (Get-UiaName 'LibraryDateHint') -like '*не распознана*' } 'a bad date is reported'
+    Assert-Contains (Get-UiaName 'LibraryDateHint') 'не распознана' 'an unparsable date says so instead of filtering'
+
+    Invoke-Uia 'LibraryFilterUntagged'
+    Start-Sleep -Milliseconds 400
+    Assert-Contains (Get-UiaName 'LibraryFilterSummary') 'без тегов' 'the untagged filter is named in the summary'
+    Save-Shot 'filters-active' | Out-Null
+
+    Invoke-Uia 'LibraryClearFiltersButton'
+    Wait-State { (Get-UiaName 'LibraryCountText') -like '*Карточек: 2*' } 'the reset restores the library'
+    Assert-Contains (Get-UiaName 'LibraryFilterSummary') 'не заданы' 'the reset clears every filter'
+    Assert-Contains (Get-UiaName 'LibraryCountText') 'Карточек: 2' 'the reset brings both cards back'
+
+    # ---------------------------------------------------- 5. set and variants
+    Write-Host "`n[5] Select the set, walk its variants, exercise the keyboard"
+    $tile = Find-UiaCard 'набор, 12 вариантов'
     if ($null -eq $tile) { throw 'The 12-variant tile was not found by its accessible name.' }
     Assert-True $true 'set tile badge is named "12 вариантов"'
 
@@ -352,12 +559,13 @@ try {
     }
     Assert-Equal $tile.Current.ControlType.ProgrammaticName 'ControlType.ListItem' 'the set tile is a list item'
     $selectionPattern.Select()
-    Start-Sleep -Milliseconds 800
+    Wait-State { (Get-UiaName 'VariantPositionText') -like '*1 / 12*' } 'the set becomes current'
     Assert-True $tile.Current.HasKeyboardFocus 'the selected set tile takes keyboard focus'
 
     Assert-Contains (Get-UiaName 'SelectedSetBadge') '12 вариантов' 'selected set badge is accessible'
     Assert-Contains (Get-UiaName 'VariantPositionText') 'Вариант 1 / 12' 'set starts on its cover'
     Assert-Contains (Get-UiaName 'VariantPositionText') 'обложка' 'the cover is named as the cover'
+    Assert-Contains (Get-UiaName 'VariantStateText') 'файл на месте' 'a healthy variant says its file is there'
     Save-Shot 'set-selected' | Out-Null
 
     Invoke-Uia 'NextVariantButton'
@@ -366,26 +574,48 @@ try {
     Assert-Contains (Get-UiaName 'VariantPositionText') 'Вариант 1 / 12' 'mouse walks back to variant 1'
 
     Send-Chord @('O')
+    Wait-State { (Get-UiaName 'ContextPanelTitle') -like '*Штамп*' } 'O selects the stamp tool'
+    Assert-Contains (Get-UiaName 'ContextPanelTitle') 'Штамп' 'O selects the stamp tool'
+
     Send-Chord @('Alt', 'Right')
+    Wait-State { (Get-UiaName 'VariantPositionText') -like '*2 / 12*' } 'Alt+Right advances the variant'
     Assert-Contains (Get-UiaName 'VariantPositionText') 'Вариант 2 / 12' 'Alt+Right moves to the next variant'
     Send-Chord @('Alt', 'Left')
+    Wait-State { (Get-UiaName 'VariantPositionText') -like '*1 / 12*' } 'Alt+Left steps back'
     Assert-Contains (Get-UiaName 'VariantPositionText') 'Вариант 1 / 12' 'Alt+Left moves to the previous variant'
+
+    Send-Chord @('F')
+    Wait-State { Test-UiaFocus 'AssetSearchBox' } 'F puts the caret in the library search'
+    Assert-True (Test-UiaFocus 'AssetSearchBox') 'F focuses the library search box'
+
+    # A focused text box owns the letter keys, which is correct: on this Russian layout O types
+    # "щ". Focus is therefore handed back to the card deliberately before any further shortcut,
+    # rather than firing keys at whatever happens to hold the caret.
+    Set-UiaValue 'AssetSearchBox' ''
+    $tile = Find-UiaCard 'набор, 12 вариантов'
+    if ($null -eq $tile) { throw 'The set tile was not found when taking focus back.' }
+    $tile.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+    Wait-State { -not (Test-UiaFocus 'AssetSearchBox') } 'focus leaves the search box'
+    Assert-True (-not (Test-UiaFocus 'AssetSearchBox')) 'the card takes the focus back from the search'
+    Send-Chord @('O')
+    Wait-State { (Get-UiaName 'ContextPanelTitle') -like '*Штамп*' } 'the stamp tool is active again'
+    Assert-Contains (Get-UiaName 'AssetSearchBox') '' 'the search box did not swallow a shortcut'
 
     # Density only appears in the Area readout, because in One mode it places nothing.
     Invoke-Uia 'StampModeArea'
     Start-Sleep -Milliseconds 400
     $areaBefore = Get-UiaName 'StampAreaSummaryText'
     Send-Chord @('Q')
-    $areaAfter = Get-UiaName 'StampAreaSummaryText'
-    Assert-True ($areaBefore -ne $areaAfter) 'Q changes the stamp area'
+    Wait-State { (Get-UiaName 'StampAreaSummaryText') -ne $areaBefore } 'Q changes the area'
     Send-Chord @('A')
+    Wait-State { (Get-UiaName 'StampAreaSummaryText') -eq $areaBefore } 'A returns the area'
     Assert-Equal (Get-UiaName 'StampAreaSummaryText') $areaBefore 'A returns the area to where it was'
 
     $densityBefore = Get-UiaName 'StampAreaSummaryText'
     Send-Chord @('Alt', 'Q')
-    $densityAfter = Get-UiaName 'StampAreaSummaryText'
-    Assert-True ($densityBefore -ne $densityAfter) 'Alt+Q changes the stamp density'
+    Wait-State { (Get-UiaName 'StampAreaSummaryText') -ne $densityBefore } 'Alt+Q changes the density'
     Send-Chord @('Alt', 'A')
+    Wait-State { (Get-UiaName 'StampAreaSummaryText') -eq $densityBefore } 'Alt+A returns the density'
     Assert-Equal (Get-UiaName 'StampAreaSummaryText') $densityBefore 'Alt+A returns the density to where it was'
     Assert-Contains $densityBefore 'плотность' 'the Area readout states area, density and count'
     Save-Shot 'stamp-tool-context' | Out-Null
@@ -393,23 +623,110 @@ try {
     Invoke-Uia 'SetFavoriteButton'
     Assert-Contains (Get-UiaName 'SetFavoriteButton') 'Убрать из избранного' 'favourite is set-level and reflected'
     Invoke-Uia 'LibraryFilterFavorites'
-    Start-Sleep -Milliseconds 500
+    Wait-State { (Get-UiaName 'LibraryCountText') -like '*Карточек: 1*' } 'the favourites filter narrows'
     Assert-Contains (Get-UiaName 'LibraryCountText') 'Карточек: 1' 'the favourites filter keeps only the set'
     Invoke-Uia 'LibraryFilterFavorites'
     Start-Sleep -Milliseconds 500
     Invoke-Uia 'LibraryFilterRecent'
-    Start-Sleep -Milliseconds 500
+    Wait-State { (Get-UiaName 'LibraryCountText') -like '*Карточек: 1*' } 'the recent filter narrows'
     Assert-Contains (Get-UiaName 'LibraryCountText') 'Карточек: 1' 'the recent filter shows the touched set'
     Invoke-Uia 'LibraryFilterRecent'
     Start-Sleep -Milliseconds 500
 
-    # ------------------------------------------------------- 4. placement
-    Write-Host "`n[4] One placement, then an Area gesture over several variants"
+    # ------------------------------------------------- 6. managing the set
+    Write-Host "`n[6] Rename the set, reorder a variant, choose a cover"
+    Set-UiaValue 'SetRenameBox' '   '
+    Invoke-Uia 'SetRenameButton'
+    Start-Sleep -Milliseconds 400
+    Assert-Contains (Get-UiaName 'StatusDetailText') 'не может быть пустым' 'a blank set name is refused'
+    Assert-Contains (Get-UiaName 'SelectedSetNameText') 'Диагностический набор' 'the refused rename changed nothing'
+
+    Set-UiaValue 'SetRenameBox' 'Проверочный набор'
+    Invoke-Uia 'SetRenameButton'
+    Wait-State { (Get-UiaName 'SelectedSetNameText') -like '*Проверочный набор*' } 'the set is renamed'
+    Assert-Contains (Get-UiaName 'SelectedSetNameText') 'Проверочный набор' 'the set takes its new name'
+
+    Invoke-Uia 'NextVariantButton'
+    Assert-Contains (Get-UiaName 'VariantPositionText') 'Вариант 2 / 12' 'variant 2 is current before the reorder'
+    Invoke-Uia 'VariantMoveLaterButton'
+    Wait-State { (Get-UiaName 'VariantPositionText') -like '*3 / 12*' } 'the moved variant stays current'
+    Assert-Contains (Get-UiaName 'VariantPositionText') 'Вариант 3 / 12' 'the variant moved one place later'
+    Assert-Contains (Get-UiaName 'StatusDetailText') 'Порядок изменён' 'the reorder is reported'
+
+    Invoke-Uia 'SetCoverButton'
+    Wait-State { (Get-UiaName 'VariantPositionText') -like '*обложка*' } 'the current variant becomes the cover'
+    Assert-Contains (Get-UiaName 'VariantPositionText') 'обложка' 'the cover distinction follows the current variant'
+    $coverButtonName = Get-UiaName 'SetCoverButton'
+    Assert-Contains $coverButtonName 'уже обложка' 'the cover button says the state it reached'
+    Save-Shot 'set-management' | Out-Null
+
+    # The serializer escapes Cyrillic as \uXXXX, so the file is unescaped before it is searched.
+    $renamed = [Text.RegularExpressions.Regex]::Unescape((Get-CatalogJson))
+    Assert-True ($renamed -like '*Проверочный набор*') 'the new name reached catalog.json'
+
+    # --------------------------------------------- 7. restart keeps the changes
+    Write-Host "`n[7] Restart: name, order and cover survive, and a real tag drives the filter"
+    Stop-TestApp
+
+    # This build has no UI for authoring tags, so the tag a real catalog would carry is written
+    # into the index directly, in the escaped form the serializer itself uses. What is under test
+    # afterwards is the tag filter and the tag grouping, not the editing of tags.
+    $indexBeforeTag = Join-Path $catalogRoot 'catalog.json'
+    $raw = [IO.File]::ReadAllText($indexBeforeTag)
+    $setsAt = $raw.IndexOf('"sets": [')
+    if ($setsAt -lt 0) { throw 'The index has no sets section.' }
+    $tagsAt = $raw.IndexOf('"tags": []', $setsAt)
+    if ($tagsAt -lt 0) { throw 'The first set has no tags array to fill.' }
+    $tagged = $raw.Substring(0, $tagsAt) +
+        '"tags": [ "рельеф" ]' +
+        $raw.Substring($tagsAt + '"tags": []'.Length)
+    [IO.File]::WriteAllText($indexBeforeTag, $tagged, (New-Object Text.UTF8Encoding($false)))
+
+    Start-TestApp -MapPath $savedMap
+    New-TestMap 'Stage 10B after restart'
+    Select-UiaTab 'Библиотека'
+    Start-Sleep -Milliseconds 600
+    $restored = Find-UiaCard 'Проверочный набор, набор, 12 вариантов'
+    if ($null -eq $restored) { throw 'The renamed set did not come back after the restart.' }
+    $restored.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+    Wait-State { (Get-UiaName 'VariantPositionText') -like '*/ 12*' } 'the restored set opens'
+    Assert-Contains (Get-UiaName 'SelectedSetNameText') 'Проверочный набор' 'the rename survived the restart'
+    Assert-Contains (Get-UiaName 'VariantPositionText') 'Вариант 3 / 12' 'the remembered current variant survived'
+    Assert-Contains (Get-UiaName 'VariantPositionText') 'обложка' 'the chosen cover survived the restart'
+    Save-Shot 'set-after-restart' | Out-Null
+
+    # Now that a tag exists, the exact-tag filter and the tag grouping can be driven for real.
+    Select-UiaChoice 'LibraryTagFilter' 'рельеф'
+    Wait-State { (Get-UiaName 'LibraryCountText') -like '*Карточек: 1*' } 'the tag filter narrows the grid'
+    Assert-Contains (Get-UiaName 'LibraryCountText') 'Карточек: 1' 'the exact tag filter keeps one card'
+    Assert-Contains (Get-UiaName 'LibraryFilterSummary') 'рельеф' 'the summary names the active tag'
+    Select-UiaChoice 'LibraryTagFilter' 'Любой тег'
+    Wait-State { (Get-UiaName 'LibraryCountText') -like '*Карточек: 2*' } 'clearing the tag restores both'
+
+    Invoke-Uia 'LibraryGroupTag'
+    Wait-State { $null -ne (Find-UiaNameLike 'Группа рельеф') } 'a real tag becomes a group header'
+    Assert-True ($null -ne (Find-UiaNameLike 'Группа рельеф')) 'the tag grouping shows the real tag'
+    Assert-True ($null -ne (Find-UiaNameLike 'Группа Без тегов')) 'untagged cards keep their own group'
+    Save-Shot 'grouping-real-tag' | Out-Null
+    Invoke-Uia 'LibraryGroupNone'
+    Wait-State { $null -eq (Find-UiaNameLike 'Группа ') } 'the flat list returns'
+
+    $restored = Find-UiaCard 'Проверочный набор, набор, 12 вариантов'
+    $restored.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+    Wait-State { (Get-UiaName 'VariantPositionText') -like '*/ 12*' } 'the set is current again'
+
+    # ------------------------------------------------------- 8. placement
+    Write-Host "`n[8] One placement, then an Area gesture over several variants"
+    Send-Chord @('O')
+    Wait-State { (Get-UiaName 'ContextPanelTitle') -like '*Штамп*' } 'the stamp tool is active'
     Invoke-Uia 'StampModeOne'
     Start-Sleep -Milliseconds 300
+    $oneVariant = Get-UiaName 'VariantPositionText'
     Invoke-Uia 'PlaceStampButton'
-    Start-Sleep -Milliseconds 700
+    Wait-State { (Get-UiaName 'StatusDetailText') -like '*Размещён вариант*' } 'the One placement reports back'
+    $onePlacedMessage = Get-UiaName 'StatusDetailText'
     Save-Shot 'one-placement' | Out-Null
+    Assert-Contains $onePlacedMessage 'Размещён вариант 3 / 12' 'One names the variant it actually placed'
     Assert-Contains (Get-UiaName 'SaveStateText') 'сохран' 'the document reports its save state after One'
 
     Invoke-Uia 'StampModeArea'
@@ -421,16 +738,18 @@ try {
     # The Area gesture itself is a canvas press, which this bounded smoke performs through the
     # keyboard-reachable command rather than synthesising a raw click on the drawing surface.
     Invoke-Uia 'PlaceStampButton'
-    Start-Sleep -Milliseconds 900
+    Wait-State { (Get-UiaName 'StatusDetailText') -like '*Размещено штампов*' } 'the Area gesture reports back'
+    $areaMessage = Get-UiaName 'StatusDetailText'
     Save-Shot 'area-placement' | Out-Null
+    Assert-Contains $areaMessage 'вариантов: 12' 'one Area gesture placed all twelve variants'
 
-    # -------------------------------------------------- 5. undo, redo, save
-    Write-Host "`n[5] Undo, redo, save, close and reopen without the local catalog"
+    # -------------------------------------------------- 9. undo, redo, save
+    Write-Host "`n[9] Undo, redo, save, close and reopen without the local catalog"
     Send-Chord @('Ctrl', 'Z')
-    Start-Sleep -Milliseconds 500
+    Start-Sleep -Milliseconds 600
     Save-Shot 'after-undo' | Out-Null
     Send-Chord @('Ctrl', 'Y')
-    Start-Sleep -Milliseconds 500
+    Start-Sleep -Milliseconds 600
     Save-Shot 'after-redo' | Out-Null
     Assert-True $true 'undo and redo ran on the placement history'
 
@@ -443,7 +762,18 @@ try {
     Write-Host ("      placed stamps: {0}, distinct hashes: {1}" -f $hashes.Count, $distinct.Count)
     $script:Checks['placed stamps'] = $hashes.Count
     $script:Checks['distinct variant hashes'] = $distinct.Count
-    Assert-True ($distinct.Count -ge 3) 'the saved map carries at least three distinct variant hashes'
+    Assert-True ($distinct.Count -eq 12) 'the saved map carries all twelve distinct variant hashes'
+
+    # A scatter multiplies the variant; it does not turn or mirror it. The proof is in the saved
+    # file, not in the status line: every placed object is upright and unmirrored.
+    $scene = Get-SceneJson $savedMap
+    $rotations = [regex]::Matches($scene, '"rotationDegrees"\s*:\s*(-?[0-9.eE+]+)') |
+        ForEach-Object { [double]$_.Groups[1].Value }
+    $turned = @($rotations | Where-Object { $_ -ne 0 })
+    $script:Checks['objects with a non-zero rotation'] = $turned.Count
+    Assert-True ($turned.Count -eq 0) 'every scattered stamp was saved upright'
+    Assert-True ($scene -notlike '*"flipHorizontal": true*') 'no scattered stamp was mirrored horizontally'
+    Assert-True ($scene -notlike '*"flipVertical": true*') 'no scattered stamp was mirrored vertically'
 
     Stop-TestApp
 
@@ -464,51 +794,130 @@ try {
     Remove-Item -LiteralPath $catalogRoot -Recurse -Force -ErrorAction SilentlyContinue
     Move-Item -LiteralPath $hiddenCatalog -Destination $catalogRoot
 
-    # ------------------------------------------- 6. missing, mismatch, damaged
-    Write-Host "`n[6] Missing original, hash mismatch and a damaged index"
+    # ------------------------------- 10. missing and changed content on the card
+    Write-Host "`n[10] Missing and hash-mismatch shown on the card and refusing a gesture"
+    # Which originals to break is chosen from the index rather than from the directory order, so
+    # the cover of the twelve-variant card is provably the changed one and a second variant of the
+    # same card is provably the missing one.
     $originals = Join-Path $catalogRoot 'originals'
-    $firstOriginal = (Get-ChildItem -LiteralPath $originals -Filter *.png | Sort-Object Name | Select-Object -First 1)
-    $mismatchBackup = Join-Path $OutDir 'mismatch-source.png'
-    Copy-Item -LiteralPath $firstOriginal.FullName -Destination $mismatchBackup
-    Copy-Item -LiteralPath $brushFixture -Destination $firstOriginal.FullName -Force
+    $catalogObject = (Get-Content -LiteralPath (Join-Path $catalogRoot 'catalog.json') -Raw -Encoding UTF8) |
+        ConvertFrom-Json
+    $bigSet = $catalogObject.sets | Where-Object { $_.variantIds.Count -eq 12 } | Select-Object -First 1
+    if ($null -eq $bigSet) { throw 'The twelve-variant set is not in the index.' }
+    $coverSha = ($catalogObject.variants | Where-Object { $_.id -eq $bigSet.coverVariantId }).sha256
 
-    $secondOriginal = (Get-ChildItem -LiteralPath $originals -Filter *.png | Sort-Object Name | Select-Object -Skip 1 | Select-Object -First 1)
+    # The card badge follows the cover, and the variant readout follows the variant the tool will
+    # open on. Breaking exactly those two makes both states deterministic rather than incidental.
+    $currentProperty = $catalogObject.currentVariantBySet.PSObject.Properties[$bigSet.id]
+    $otherVariantId = if ($null -ne $currentProperty -and $currentProperty.Value -ne $bigSet.coverVariantId) {
+        $currentProperty.Value
+    }
+    else {
+        ($bigSet.variantIds | Where-Object { $_ -ne $bigSet.coverVariantId })[0]
+    }
+    $otherSha = ($catalogObject.variants | Where-Object { $_.id -eq $otherVariantId }).sha256
+
+    $mismatchTarget = Join-Path $originals ($coverSha + '.png')
+    $missingTarget = Join-Path $originals ($otherSha + '.png')
+    if (-not (Test-Path -LiteralPath $mismatchTarget)) { throw "Cover original is missing: $mismatchTarget" }
+    if (-not (Test-Path -LiteralPath $missingTarget)) { throw "Variant original is missing: $missingTarget" }
+
+    $mismatchBackup = Join-Path $OutDir 'mismatch-source.png'
+    Copy-Item -LiteralPath $mismatchTarget -Destination $mismatchBackup
+    Copy-Item -LiteralPath $brushFixture -Destination $mismatchTarget -Force
+
     $missingBackup = Join-Path $OutDir 'missing-source.png'
-    Move-Item -LiteralPath $secondOriginal.FullName -Destination $missingBackup
+    Move-Item -LiteralPath $missingTarget -Destination $missingBackup
 
     Start-TestApp
     New-TestMap 'Stage 10B failure paths'
     Select-UiaTab 'Библиотека'
-    Start-Sleep -Milliseconds 500
+    Wait-State { (Get-UiaName 'LibraryCountText') -like '*Карточек: 2*' } 'both cards are still listed'
     Assert-Contains (Get-UiaName 'LibraryCountText') 'Карточек: 2' 'a damaged original does not hide the card'
+
+    $set = Find-UiaCard 'Проверочный набор, набор, 12 вариантов'
+    if ($null -eq $set) { throw 'The twelve-variant card was not found on the failure run.' }
+    $set.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
+    Wait-State { (Get-UiaName 'VariantStateText') -notlike '*не проверен*' } 'the file check finishes'
+
+    # The verdict has to be visible on the card itself, not only in the tool panel. The cover of
+    # this card is the changed file, so the card carries the mismatch; the missing file belongs to
+    # another variant of the same card, so the variant strip carries that one.
+    Wait-State { $null -ne (Find-UiaNameLike 'не совпадает с сохранённым SHA-256') } `
+        'the hash mismatch reaches the card'
+    Assert-True ($null -ne (Find-UiaNameLike 'не совпадает с сохранённым SHA-256')) `
+        'a changed original is named as a hash mismatch'
+    $mismatchCard = Find-UiaCard 'не совпадает с сохранённым SHA-256'
+    Assert-True ($null -ne $mismatchCard) 'the card itself, not only the panel, reports the mismatch'
+    Wait-State { $null -ne (Find-UiaNameLike 'файл отсутствует') } 'the missing state reaches the variant'
+    Assert-True ($null -ne (Find-UiaNameLike 'файл отсутствует')) 'a missing original is named as missing'
+    Assert-Contains (Get-UiaName 'VariantStateText') 'отсутствует' 'the selected variant states its own file'
     Save-Shot 'missing-and-mismatch' | Out-Null
+
+    # -------------------------------------------- 11. the gesture refuses as a whole
+    Write-Host "`n[11] An Area gesture that needs the broken variant places nothing"
+    Send-Chord @('O')
+    Wait-State { (Get-UiaName 'ContextPanelTitle') -like '*Штамп*' } 'the stamp tool is active'
+    Invoke-Uia 'StampModeArea'
+    Invoke-Uia 'RandomVariantToggle'
+    Start-Sleep -Milliseconds 300
+    $saveBefore = Get-UiaName 'SaveStateText'
+    $objectsBefore = Get-UiaName 'SelectionStatusText'
+    Invoke-Uia 'PlaceStampButton'
+    Wait-State { (Get-UiaName 'StatusDetailText') -like '*Ничего не размещено*' } 'the gesture refuses as a whole'
+    $refusal = Get-UiaName 'StatusDetailText'
+    Save-Shot 'atomic-refusal' | Out-Null
+    Assert-Contains $refusal 'Ничего не размещено' 'the refusal says nothing at all was placed'
+    Assert-True (($refusal -like '*отсутствует*') -or ($refusal -like '*не совпадает*')) `
+        'the refusal names why the variant could not be placed'
+    Assert-Equal (Get-UiaName 'SaveStateText') $saveBefore 'the refused gesture left the save state alone'
+    Assert-Equal (Get-UiaName 'SelectionStatusText') $objectsBefore 'the refused gesture left the selection alone'
     Stop-TestApp
 
-    Copy-Item -LiteralPath $mismatchBackup -Destination $firstOriginal.FullName -Force
-    Move-Item -LiteralPath $missingBackup -Destination $secondOriginal.FullName
+    Copy-Item -LiteralPath $mismatchBackup -Destination $mismatchTarget -Force
+    Move-Item -LiteralPath $missingBackup -Destination $missingTarget
 
+    # ------------------------------------- 12. a semantically damaged index
+    Write-Host "`n[12] An index with a collection cycle is refused, not repaired"
     $indexPath = Join-Path $catalogRoot 'catalog.json'
     $healthy = Join-Path $OutDir 'catalog-healthy.json'
     Copy-Item -LiteralPath $indexPath -Destination $healthy
-    $damagedBytes = [Text.Encoding]::UTF8.GetBytes('{ "schemaVersion": 2, "sets": [ {')
+
+    # Parses perfectly as JSON, contradicts itself as a library: three collections in a ring.
+    $cycleJson = @'
+{
+  "schemaVersion": 2,
+  "records": [],
+  "collections": [
+    { "id": "col-x", "name": "X", "parentId": "col-z", "order": 0 },
+    { "id": "col-y", "name": "Y", "parentId": "col-x", "order": 1 },
+    { "id": "col-z", "name": "Z", "parentId": "col-y", "order": 2 }
+  ],
+  "variants": [],
+  "sets": [],
+  "recent": [],
+  "currentVariantBySet": {}
+}
+'@
+    $damagedBytes = [Text.Encoding]::UTF8.GetBytes($cycleJson)
     [IO.File]::WriteAllBytes($indexPath, $damagedBytes)
 
     Start-TestApp
     New-TestMap 'Stage 10B damaged index'
     Select-UiaTab 'Библиотека'
-    Start-Sleep -Milliseconds 600
+    Wait-State { (Get-UiaName 'LibraryCountText') -like '*недоступна*' } 'the damaged library reports itself'
     Save-Shot 'damaged-index' | Out-Null
-    Assert-Contains (Get-UiaName 'LibraryDiagnosticText') 'поврежд' 'the damaged index is reported in the panel'
+    Assert-Contains (Get-UiaName 'LibraryDiagnosticText') 'цикл' 'the diagnostic names the collection cycle'
     Assert-Contains (Get-UiaName 'LibraryCountText') 'недоступна' 'a damaged library says it is unavailable'
+    Assert-True ($script:Proc.HasExited -eq $false) 'a semantically damaged index does not crash the app'
     Stop-TestApp
 
     $afterBytes = [IO.File]::ReadAllBytes($indexPath)
     Assert-True ([Linq.Enumerable]::SequenceEqual($damagedBytes, $afterBytes)) `
-        'the damaged index was never overwritten by an empty catalog'
+        'the damaged index was never overwritten or repaired'
     Copy-Item -LiteralPath $healthy -Destination $indexPath -Force
-
-    # ------------------------------------------------------------ 7. high DPI
-    Write-Host "`n[7] High DPI"
+    # ----------------------------------------------------------- 13. high DPI
+    Write-Host "`n[13] High DPI"
     if ($SkipDpi) {
         $script:Partial += 'DPI: skipped on request (-SkipDpi).'
         Write-Host '      PARTIAL: skipped on request'

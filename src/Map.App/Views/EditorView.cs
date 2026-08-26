@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using Avalonia;
@@ -8,6 +9,7 @@ using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Templates;
+using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
@@ -175,6 +177,22 @@ public sealed class EditorView : UserControl
     private readonly Dictionary<string, Button> _libraryFilterButtons = [];
     private readonly Dictionary<string, Button> _placementModeButtons = [];
     private ToggleButton _randomVariantToggle = null!;
+    private ComboBox _libraryTagFilter = null!;
+    private ComboBox _libraryMediaFilter = null!;
+    private TextBox _libraryImportedFrom = null!;
+    private TextBox _libraryImportedTo = null!;
+    private Button _clearFiltersButton = null!;
+    private TextBox _setRenameBox = null!;
+    private Button _setRenameButton = null!;
+    private Button _variantEarlierButton = null!;
+    private Button _variantLaterButton = null!;
+    private Button _setCoverButton = null!;
+    private readonly TextBlock _libraryDateHint = new() { Name = "LibraryDateHint" };
+    private readonly TextBlock _libraryFilterSummary = new() { Name = "LibraryFilterSummary" };
+    private readonly TextBlock _variantStateText = new() { Name = "VariantStateText" };
+    private readonly Dictionary<string, TileState> _tileStates = [];
+    private (int First, int Count) _reportedLibraryRange = (-1, -1);
+    private int _lastSelectedLibraryRow = -1;
     private ToggleButton _randomAngleToggle = null!;
     private ToggleButton _randomFlipToggle = null!;
     private TextBlock _stampToolCurrentText = null!;
@@ -635,7 +653,7 @@ public sealed class EditorView : UserControl
     /// The stamp tool's context panel. It states what is current and how to change it; the full
     /// library, the variant strip and the Area/Density controls live in the side panel.
     /// </summary>
-    private Control BuildStampToolPanel()
+    private StackPanel BuildStampToolPanel()
     {
         var current = new TextBlock { Name = "StampToolCurrentText", TextWrapping = TextWrapping.Wrap }
             .Classed("muted");
@@ -663,7 +681,7 @@ public sealed class EditorView : UserControl
     }
 
     /// <summary>One key-hint row. Each row holds one meaning so nothing overflows the panel.</summary>
-    private static Control ChipRow(IReadOnlyList<string> keys, string meaning)
+    private static WrapPanel ChipRow(IReadOnlyList<string> keys, string meaning)
     {
         var row = new WrapPanel { Orientation = Orientation.Horizontal };
         foreach (var key in keys)
@@ -1235,60 +1253,196 @@ public sealed class EditorView : UserControl
         _libraryDiagnosticText.Classes.Add("role-caption");
         _libraryDiagnostic.Classes.Add("group");
         _libraryDiagnostic.Padding = new Thickness(8, 6);
-        _libraryDiagnostic.Child = new StackPanel
+        // A horizontal stack gives its children infinite width, so the wrapped text ran straight
+        // off the panel and the reason a catalog was refused could not be read to the end.
+        _libraryDiagnostic.Child = new DockPanel
         {
-            Orientation = Orientation.Horizontal,
-            Spacing = 8,
-            Children = { MapIcons.Stroked(MapIcons.Warning, 16), _libraryDiagnosticText },
+            LastChildFill = true,
+            Children =
+            {
+                new Border
+                {
+                    Margin = new Thickness(0, 0, 8, 0),
+                    VerticalAlignment = VerticalAlignment.Top,
+                    Child = MapIcons.Stroked(MapIcons.Warning, 16),
+                }.Docked(Dock.Left),
+                _libraryDiagnosticText,
+            },
         };
         AutomationProperties.SetName(_libraryDiagnostic, "Состояние библиотеки");
     }
 
     /// <summary>
-    /// A real virtualized list: Avalonia realises only the containers it can show, and each
-    /// container asks the bounded cache for its own cover. Ten thousand cards therefore never
-    /// become ten thousand controls or ten thousand bitmaps.
+    /// One real virtualized list over a flat sequence of group headers and cards. Avalonia
+    /// realises only the containers it can show, so grouping ten thousand cards by tag still
+    /// costs the handful of rows on screen rather than a second control tree.
     /// </summary>
     private void BuildLibraryGrid()
     {
         AutomationProperties.SetName(_libraryGrid, "Карточки библиотеки");
-        _libraryGrid.ItemTemplate = new FuncDataTemplate<AssetSetSummary>(
-            summary => summary is not null,
-            (summary, _) => BuildLibraryTile(summary),
+        _libraryGrid.ItemTemplate = new FuncDataTemplate<AssetLibraryRow>(
+            row => row is not null,
+            (row, _) => row!.IsHeader ? BuildLibraryGroupHeader(row) : BuildLibraryTile(row.Card),
             supportsRecycling: true);
 
         _libraryGrid.SelectionChanged += (_, _) =>
         {
-            if (_syncingLibrary || _libraryGrid.SelectedItem is not AssetSetSummary summary)
+            if (_syncingLibrary)
             {
                 return;
             }
 
-            _editor.SelectAssetSet(summary.SetId);
+            var index = _libraryGrid.SelectedIndex;
+            if (index < 0)
+            {
+                return;
+            }
+
+            if (!_editor.SelectLibraryRow(index))
+            {
+                // A group header is a caption, not a card: it never becomes the selected set. The
+                // correction is posted rather than applied inline because changing the selection
+                // from inside the notification would abort the caller's own selection request -
+                // including a screen reader's.
+                var step = index >= _lastSelectedLibraryRow ? 1 : -1;
+                Dispatcher.UIThread.Post(() => MoveSelectionOffHeader(index, step), DispatcherPriority.Input);
+                return;
+            }
+
+            _lastSelectedLibraryRow = index;
             SyncAssetList();
             SyncStatus();
         };
 
         // A Border or panel inside the item template never reaches the accessibility tree, so the
         // realised container itself is what gets named.
-        _libraryGrid.ContainerPrepared += (_, e) =>
-        {
-            if (e.Container is ListBoxItem item && e.Index >= 0 && e.Index < _editor.LibrarySets.Count)
-            {
-                var summary = _editor.LibrarySets[e.Index];
-                var name = summary.IsSet
-                    ? $"{summary.Name}, набор, {summary.VariantCount} вариантов"
-                    : $"{summary.Name}, один вариант";
-                AutomationProperties.SetName(item, name);
-                ToolTip.SetTip(item, name);
-            }
-        };
+        _libraryGrid.ContainerPrepared += (_, e) => NameLibraryContainer(e.Container, e.Index);
+
+        // A recycled container is handed a new row without being "prepared" again. Without this
+        // the accessible name of a scrolled or re-filtered row keeps describing the card it used
+        // to hold, which is worse than having no name at all.
+        _libraryGrid.ContainerIndexChanged += (_, e) => NameLibraryContainer(e.Container, e.NewIndex);
 
         // The realised range is reported back so the view-model knows what is actually on screen.
         _libraryGrid.LayoutUpdated += (_, _) => ReportVisibleLibraryRange();
     }
 
-    private Control BuildLibraryTile(AssetSetSummary? summary)
+    /// <summary>
+    /// Moves the visual selection from a header onto the nearest card, continuing in the
+    /// direction the user was travelling so a header never blocks keyboard navigation.
+    /// </summary>
+    private void MoveSelectionOffHeader(int headerIndex, int step)
+    {
+        if (headerIndex >= _editor.LibraryRows.Count || !_editor.LibraryRows[headerIndex].IsHeader)
+        {
+            return;
+        }
+
+        var target = NextCardRow(headerIndex, step);
+        if (target < 0 || !_editor.SelectLibraryRow(target))
+        {
+            return;
+        }
+
+        _lastSelectedLibraryRow = target;
+        SyncAssetList();
+        SyncStatus();
+    }
+
+    /// <summary>The nearest row holding a card, searching in one direction and then the other.</summary>
+    private int NextCardRow(int from, int step)
+    {
+        var rows = _editor.LibraryRows;
+        for (var index = from + step; index >= 0 && index < rows.Count; index += step)
+        {
+            if (!rows[index].IsHeader)
+            {
+                return index;
+            }
+        }
+
+        for (var index = from - step; index >= 0 && index < rows.Count; index -= step)
+        {
+            if (!rows[index].IsHeader)
+            {
+                return index;
+            }
+        }
+
+        return -1;
+    }
+
+    private void NameLibraryContainer(Control? container, int index)
+    {
+        var rows = _editor.LibraryRows;
+        if (container is not ListBoxItem item || index < 0 || index >= rows.Count)
+        {
+            return;
+        }
+
+        var row = rows[index];
+        var name = row.IsHeader
+            ? $"Группа {row.Title}, карточек: {row.Count}"
+            : CardAccessibleName(row.Card!);
+        AutomationProperties.SetName(item, name);
+        ToolTip.SetTip(item, name);
+    }
+
+    private string CardAccessibleName(AssetSetSummary summary)
+    {
+        var name = summary.IsSet
+            ? $"{summary.Name}, набор, {summary.VariantCount} вариантов"
+            : $"{summary.Name}, один вариант";
+        var availability = _editor.AvailabilityOf(summary.CoverSha256);
+        return availability is AssetAvailability.Unknown or AssetAvailability.Available
+            ? name
+            : name + ", " + EditorViewModel.AvailabilityText(availability);
+    }
+
+    /// <summary>
+    /// The caption of one group. It is a row of the same list, so it virtualizes with the cards,
+    /// but it is never a selectable asset set.
+    /// </summary>
+    private static Border BuildLibraryGroupHeader(AssetLibraryRow row)
+    {
+        var title = new TextBlock
+        {
+            Text = row.Title,
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        }.Classed("role-panel");
+
+        var count = new TextBlock
+        {
+            Text = row.Count.ToString(CultureInfo.InvariantCulture),
+            VerticalAlignment = VerticalAlignment.Center,
+        }.Classed("faint", "role-caption");
+
+        var host = new Border
+        {
+            Padding = new Thickness(2, 8, 4, 2),
+            Child = new DockPanel { Children = { count.Docked(Dock.Right), title } },
+        }.Named("LibraryGroupHeader_" + Sanitize(row.Key));
+
+        var name = $"Группа {row.Title}, карточек: {row.Count}";
+        AutomationProperties.SetName(host, name);
+        ToolTip.SetTip(host, name);
+        return host;
+    }
+
+    /// <summary>Automation ids stay to letters, digits and underscores whatever the tag says.</summary>
+    private static string Sanitize(string value)
+    {
+        var builder = new System.Text.StringBuilder(value.Length);
+        foreach (var character in value)
+        {
+            builder.Append(char.IsLetterOrDigit(character) ? character : '_');
+        }
+
+        return builder.ToString();
+    }
+
+    private Border BuildLibraryTile(AssetSetSummary? summary)
     {
         if (summary is null)
         {
@@ -1330,7 +1484,7 @@ public sealed class EditorView : UserControl
             var badge = new Border
             {
                 Padding = new Thickness(6, 2),
-                Child = new TextBlock { Text = summary.VariantCount.ToString(), FontSize = 11 },
+                Child = new TextBlock { Text = summary.VariantCount.ToString(CultureInfo.InvariantCulture), FontSize = 11 },
             }.Classed("badge").Named("SetBadge_" + summary.SetId);
             var badgeName = $"{summary.VariantCount} вариантов";
             AutomationProperties.SetName(badge, badgeName);
@@ -1347,62 +1501,144 @@ public sealed class EditorView : UserControl
             badges.Children.Add(star);
         }
 
-        var row = new DockPanel
+        // A card whose file is gone or altered must not look like a healthy one. The badge is
+        // built for every tile and shown only when there is really something to say.
+        var stateLabel = new TextBlock { FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
+        var stateBadge = new Border
         {
-            LastChildFill = true,
-            Children =
+            Padding = new Thickness(5, 2),
+            IsVisible = false,
+            Child = new StackPanel
             {
-                badges.Docked(Dock.Right),
-                thumbnail.Docked(Dock.Left),
-                new StackPanel
+                Orientation = Orientation.Horizontal,
+                Spacing = 4,
+                Children = { MapIcons.Stroked(MapIcons.Warning, 12), stateLabel },
+            },
+        }.Classed("badge").Named("TileState_" + summary.SetId);
+        badges.Children.Add(stateBadge);
+
+        var host = new Border
+        {
+            Padding = new Thickness(4),
+            Child = new DockPanel
+            {
+                LastChildFill = true,
+                Children =
                 {
-                    Margin = new Thickness(8, 0, 6, 0),
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Children = { title, caption },
+                    badges.Docked(Dock.Right),
+                    thumbnail.Docked(Dock.Left),
+                    new StackPanel
+                    {
+                        Margin = new Thickness(8, 0, 6, 0),
+                        VerticalAlignment = VerticalAlignment.Center,
+                        Children = { title, caption },
+                    },
                 },
             },
-        };
+        }.Named("LibraryTile_" + summary.SetId);
 
-        var host = new Border { Padding = new Thickness(4), Child = row }
-            .Named("LibraryTile_" + summary.SetId);
-        var accessibleName = summary.IsSet
-            ? $"{summary.Name}, набор, {summary.VariantCount} вариантов"
-            : $"{summary.Name}, один вариант";
-        AutomationProperties.SetName(host, accessibleName);
-        ToolTip.SetTip(host, accessibleName);
+        _tileStates[summary.CoverSha256] = new TileState(stateBadge, stateLabel, host, summary);
+        ApplyTileState(_tileStates[summary.CoverSha256]);
         return host;
     }
 
+    /// <summary>Shows the current verdict on one realised tile, in colour, words and UIA name.</summary>
+    private void ApplyTileState(TileState tile)
+    {
+        var availability = _editor.AvailabilityOf(tile.Summary.CoverSha256);
+        var text = EditorViewModel.AvailabilityText(availability);
+        tile.Badge.IsVisible = availability is not (AssetAvailability.Unknown or AssetAvailability.Available);
+        tile.Label.Text = availability switch
+        {
+            AssetAvailability.Missing => "нет файла",
+            AssetAvailability.HashMismatch => "изменён",
+            AssetAvailability.Unsupported => "формат",
+            AssetAvailability.Checking => "проверка",
+            _ => "",
+        };
+
+        Ui.SetClass(tile.Badge, "danger", availability is AssetAvailability.Missing or AssetAvailability.HashMismatch);
+        Ui.SetClass(tile.Badge, "warn", availability is AssetAvailability.Unsupported or AssetAvailability.Checking);
+        AutomationProperties.SetName(tile.Badge, text);
+        ToolTip.SetTip(tile.Badge, text);
+
+        var name = CardAccessibleName(tile.Summary);
+        AutomationProperties.SetName(tile.Host, name);
+        ToolTip.SetTip(tile.Host, name);
+    }
+
+    /// <summary>One realised tile and the controls its availability verdict writes into.</summary>
+    private sealed record TileState(Border Badge, TextBlock Label, Border Host, AssetSetSummary Summary);
+
+    /// <summary>
+    /// Reports the containers the grid really realised. Asking the list for its realised
+    /// containers costs those containers; walking every index of the result would make each
+    /// layout pass proportional to the whole library instead.
+    /// </summary>
     private void ReportVisibleLibraryRange()
     {
-        var total = _editor.LibrarySets.Count;
-        if (total == 0)
+        var realized = new List<int>();
+        foreach (var container in _libraryGrid.GetRealizedContainers())
         {
-            _editor.SetLibraryVisibleRange(0, 0);
+            var index = _libraryGrid.IndexFromContainer(container);
+            if (index >= 0)
+            {
+                realized.Add(index);
+            }
+        }
+
+        _editor.ReportRealizedLibraryRows(realized);
+
+        var window = _editor.VisibleLibraryTileWindow;
+        var current = (window.FirstIndex, window.Count);
+        if (current == _reportedLibraryRange)
+        {
             return;
         }
 
-        var first = 0;
-        var realised = 0;
-        for (var index = 0; index < total; index++)
-        {
-            if (_libraryGrid.ContainerFromIndex(index) is null)
-            {
-                continue;
-            }
-
-            if (realised == 0)
-            {
-                first = index;
-            }
-
-            realised++;
-        }
-
-        _editor.SetLibraryVisibleRange(first, realised);
+        _reportedLibraryRange = current;
+        _ = CheckVisibleAvailabilityAsync();
     }
 
-    private Control BuildLibraryFilterControls()
+    /// <summary>
+    /// Verifies the files behind the rows now on screen. The hashing runs off the UI thread and a
+    /// verdict for a query the user has already left is dropped by the view model.
+    /// </summary>
+    private async System.Threading.Tasks.Task CheckVisibleAvailabilityAsync()
+    {
+        try
+        {
+            await _editor.RefreshVisibleAvailabilityAsync();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return;
+        }
+
+        foreach (var tile in _tileStates.Values)
+        {
+            ApplyTileState(tile);
+        }
+
+        // The container is what a screen reader reads, and its name was composed before the file
+        // was checked. Renaming the realised containers is what makes the verdict actually
+        // reachable through UI Automation rather than only visible as a coloured badge.
+        foreach (var container in _libraryGrid.GetRealizedContainers())
+        {
+            NameLibraryContainer(container, _libraryGrid.IndexFromContainer(container));
+        }
+
+        // The strip carries one mark per variant, so it has to be rebuilt when the verdicts land;
+        // it is bounded by the variants of the one set the tool is holding.
+        SyncVariantStrip();
+        SyncSelectedSetAvailability();
+    }
+    /// <summary>
+    /// The whole filter surface. Every control says in words what it does: a row of mute icons
+    /// would leave the user unable to tell why the library looks empty, so each toggle carries
+    /// its label, and the summary line underneath names everything that is switched on.
+    /// </summary>
+    private StackPanel BuildLibraryFilterControls()
     {
         var (sort, sortButtons) = Ui.Segmented("LibrarySort", [
             ("Newest", "Новые", null),
@@ -1438,16 +1674,16 @@ public sealed class EditorView : UserControl
         });
         Register(_libraryGroupButtons, ["None", "Collection", "Tag"], groupButtons);
 
-        var filters = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2 };
+        var filters = new WrapPanel { Orientation = Orientation.Horizontal, ItemSpacing = 4, LineSpacing = 4 };
         foreach (var (key, title, icon) in new[]
         {
-            ("Favorites", "Только избранное", MapIcons.Check),
-            ("Recent", "Только недавние", MapIcons.Undo),
-            ("Untagged", "Только без тегов", MapIcons.Close),
-            ("UsedInMap", "Только используемое на карте", MapIcons.Objects),
+            ("Favorites", "Избранное", MapIcons.Check),
+            ("Recent", "Недавние", MapIcons.Undo),
+            ("Untagged", "Без тегов", MapIcons.Close),
+            ("UsedInMap", "На карте", MapIcons.Objects),
         })
         {
-            var button = FilterToggle("LibraryFilter" + key, title, icon, () =>
+            var button = LabelledToggle("LibraryFilter" + key, title, FilterHint(key), icon, () =>
             {
                 switch (key)
                 {
@@ -1471,10 +1707,73 @@ public sealed class EditorView : UserControl
             filters.Children.Add(button);
         }
 
+        _libraryTagFilter = ChoiceBox("LibraryTagFilter", "Тег", "Любой тег", value =>
+        {
+            _editor.LibraryTag = value;
+            SyncAssetList();
+        });
+        _libraryMediaFilter = ChoiceBox("LibraryMediaFilter", "Тип файла", "Любой тип", value =>
+        {
+            _editor.LibraryMediaType = value;
+            SyncAssetList();
+        });
+
+        _libraryImportedFrom = DateBox("LibraryImportedFromBox", "Импортировано с", value =>
+        {
+            _editor.LibraryImportedFromText = value;
+            SyncAssetList();
+        });
+        _libraryImportedTo = DateBox("LibraryImportedToBox", "Импортировано по", value =>
+        {
+            _editor.LibraryImportedToText = value;
+            SyncAssetList();
+        });
+
+        _libraryDateHint.TextWrapping = TextWrapping.Wrap;
+        _libraryDateHint.Text = "Дата в формате ГГГГ-ММ-ДД.";
+        _libraryDateHint.Classes.Add("faint");
+        _libraryDateHint.Classes.Add("role-caption");
+
+        _libraryFilterSummary.TextWrapping = TextWrapping.Wrap;
+        _libraryFilterSummary.Classes.Add("faint");
+        _libraryFilterSummary.Classes.Add("role-caption");
+
+        _clearFiltersButton = Ui.TextButton("LibraryClearFiltersButton", "Сбросить фильтры", () =>
+        {
+            _editor.ClearLibraryFilters();
+            _assetSearch.Text = "";
+            _libraryImportedFrom.Text = "";
+            _libraryImportedTo.Text = "";
+            SyncAssetList();
+            SyncStatus();
+        }, "compact");
+        AutomationProperties.SetName(_clearFiltersButton, "Сбросить все фильтры библиотеки");
+        ToolTip.SetTip(_clearFiltersButton, "Снять поиск, коллекцию, теги, тип и даты");
+
         return new StackPanel
         {
             Spacing = 6,
-            Children = { sort, group, filters },
+            Children =
+            {
+                Ui.Section("Сортировка", sort),
+                Ui.Section("Группировка", group),
+                Ui.Section("Фильтры", filters),
+                Ui.PropertyRow("Тег", _libraryTagFilter),
+                Ui.PropertyRow("Тип файла", _libraryMediaFilter),
+                Ui.PropertyRow("Дата с", _libraryImportedFrom),
+                Ui.PropertyRow("Дата по", _libraryImportedTo),
+                _libraryDateHint,
+                _libraryFilterSummary,
+                _clearFiltersButton,
+            },
+        };
+
+        static string FilterHint(string key) => key switch
+        {
+            "Favorites" => "Только избранное",
+            "Recent" => "Только недавние",
+            "Untagged" => "Только без тегов",
+            _ => "Только используемое на карте",
         };
 
         static void Register(
@@ -1487,7 +1786,71 @@ public sealed class EditorView : UserControl
         }
     }
 
-    private Control BuildSelectedSetBlock()
+    /// <summary>
+    /// A filter toggle that says what it filters. The icon stays for recognition, but the label
+    /// is what makes the bar readable, and the accessible name repeats the full sentence.
+    /// </summary>
+    private static ToggleButton LabelledToggle(
+        string name, string title, string hint, string icon, Action action)
+    {
+        var button = new ToggleButton
+        {
+            Content = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 5,
+                Children =
+                {
+                    MapIcons.Stroked(icon, 14),
+                    new TextBlock { Text = title, VerticalAlignment = VerticalAlignment.Center },
+                },
+            },
+        }.Named(name).Classed("segment");
+        AutomationProperties.SetName(button, hint);
+        ToolTip.SetTip(button, hint);
+        button.Click += (_, _) => action();
+        return button;
+    }
+
+    /// <summary>A named drop-down whose first entry means "do not filter by this at all".</summary>
+    private ComboBox ChoiceBox(string name, string label, string anyLabel, Action<string?> chosen)
+    {
+        var box = new ComboBox { MinWidth = 150, HorizontalAlignment = HorizontalAlignment.Stretch }.Named(name);
+        AutomationProperties.SetName(box, label);
+        ToolTip.SetTip(box, label + ": " + anyLabel + " или одно значение из каталога");
+        box.SelectionChanged += (_, _) =>
+        {
+            if (_syncingLibrary)
+            {
+                return;
+            }
+
+            var value = box.SelectedItem as string;
+            chosen(string.Equals(value, anyLabel, StringComparison.Ordinal) ? null : value);
+        };
+        return box;
+    }
+
+    private TextBox DateBox(string name, string label, Action<string> changed)
+    {
+        var box = new TextBox { PlaceholderText = "ГГГГ-ММ-ДД", MinWidth = 120 }.Named(name);
+        AutomationProperties.SetName(box, label);
+        ToolTip.SetTip(box, label + " в формате ГГГГ-ММ-ДД, например 2026-08-26");
+        box.PropertyChanged += (_, e) =>
+        {
+            if (e.Property == TextBox.TextProperty && !_syncingLibrary)
+            {
+                changed((box.Text ?? "").Trim());
+            }
+        };
+        return box;
+    }
+    /// <summary>
+    /// The selected card: what it is called, which variant is current, whether that variant is
+    /// the cover, whether its file is really there, and the three things the user may change
+    /// about the card itself - its name, the order of its variants and its cover.
+    /// </summary>
+    private Border BuildSelectedSetBlock()
     {
         _setBadgeText = new TextBlock { Text = "", FontSize = 11 }.Named("SelectedSetBadge");
         _setBadge = new Border
@@ -1521,6 +1884,48 @@ public sealed class EditorView : UserControl
                 SyncStatus();
             });
 
+        _setRenameBox = new TextBox { PlaceholderText = "Имя набора", MinWidth = 120 }.Named("SetRenameBox");
+        AutomationProperties.SetName(_setRenameBox, "Имя выбранного набора");
+        ToolTip.SetTip(_setRenameBox, "Новое имя набора; пустое имя не принимается");
+        _setRenameBox.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter)
+            {
+                RenameSelectedSet();
+                e.Handled = true;
+            }
+        };
+
+        _setRenameButton = Ui.TextButton("SetRenameButton", "Переименовать", RenameSelectedSet, "compact");
+        AutomationProperties.SetName(_setRenameButton, "Переименовать выбранный набор");
+        ToolTip.SetTip(_setRenameButton, "Сохранить новое имя набора");
+
+        _variantEarlierButton = Ui.IconButton(
+            "VariantMoveEarlierButton", "Переместить вариант раньше", MapIcons.ArrowUp, () =>
+            {
+                _editor.MoveCurrentVariant(-1);
+                SyncAssetList();
+                SyncStatus();
+            });
+        _variantLaterButton = Ui.IconButton(
+            "VariantMoveLaterButton", "Переместить вариант позже", MapIcons.ArrowDown, () =>
+            {
+                _editor.MoveCurrentVariant(1);
+                SyncAssetList();
+                SyncStatus();
+            });
+        _setCoverButton = Ui.TextButton("SetCoverButton", "Сделать обложкой", () =>
+        {
+            _editor.MakeCurrentVariantCover();
+            SyncAssetList();
+            SyncStatus();
+        }, "compact");
+        AutomationProperties.SetName(_setCoverButton, "Сделать текущий вариант обложкой набора");
+        ToolTip.SetTip(_setCoverButton, "Обложка — вариант, который представляет набор в списке");
+
+        _variantStateText.TextWrapping = TextWrapping.Wrap;
+        _variantStateText.Classes.Add("role-caption");
+
         AutomationProperties.SetName(_variantStrip, "Варианты набора");
 
         return new Border
@@ -1545,6 +1950,7 @@ public sealed class EditorView : UserControl
                     },
                     _selectedSetNameText,
                     _assetSelectionText,
+                    _variantStateText,
                     new DockPanel
                     {
                         Children =
@@ -1565,12 +1971,62 @@ public sealed class EditorView : UserControl
                         MaxHeight = 64,
                         Content = _variantStrip,
                     },
+                    new DockPanel
+                    {
+                        Children =
+                        {
+                            _setRenameButton.Docked(Dock.Right),
+                            _setRenameBox,
+                        },
+                    },
+                    new DockPanel
+                    {
+                        Children =
+                        {
+                            new StackPanel
+                            {
+                                Orientation = Orientation.Horizontal,
+                                Spacing = 2,
+                                Children = { _variantEarlierButton, _variantLaterButton },
+                            }.Docked(Dock.Right),
+                            _setCoverButton,
+                        },
+                    },
                 },
             },
         }.Classed("group");
     }
 
-    private Control BuildStampGestureBlock()
+    private void RenameSelectedSet()
+    {
+        if (_editor.RenameSelectedSet(_setRenameBox.Text))
+        {
+            SyncAssetList();
+        }
+
+        SyncStatus();
+    }
+
+    /// <summary>Shows what is known about the file behind the variant the tool is holding.</summary>
+    private void SyncSelectedSetAvailability()
+    {
+        var availability = _editor.CurrentVariant is { } variant
+            ? _editor.AvailabilityOf(variant.Sha256)
+            : AssetAvailability.Unknown;
+        // Without a variant there is no file to report on, and the position line right below
+        // already says "Вариант не выбран" - printing it twice reads as a rendering fault.
+        _variantStateText.IsVisible = _editor.CurrentVariant is not null;
+        var text = "Файл варианта: " + EditorViewModel.AvailabilityText(availability);
+        _variantStateText.Text = text;
+        Ui.SetClass(_variantStateText, "danger",
+            availability is AssetAvailability.Missing or AssetAvailability.HashMismatch);
+        Ui.SetClass(_variantStateText, "warn", availability is AssetAvailability.Unsupported);
+        Ui.SetClass(_variantStateText, "faint",
+            availability is AssetAvailability.Unknown or AssetAvailability.Checking);
+        AutomationProperties.SetName(_variantStateText, text);
+        ToolTip.SetTip(_variantStateText, text);
+    }
+    private Border BuildStampGestureBlock()
     {
         var (mode, modeButtons) = Ui.Segmented("StampMode", [
             ("One", "Один", null),
@@ -1583,20 +2039,25 @@ public sealed class EditorView : UserControl
         _placementModeButtons["One"] = modeButtons[0];
         _placementModeButtons["Area"] = modeButtons[1];
 
-        _randomVariantToggle = FilterToggle(
-            "RandomVariantToggle", "Случайный вариант после размещения", MapIcons.Duplicate, () =>
+        // Labelled, not icon-only: these three decide whether a scatter multiplies the variant or
+        // turns and mirrors every copy, and a user must be able to see which without hovering.
+        _randomVariantToggle = LabelledToggle(
+            "RandomVariantToggle", "Случайный вариант", "Случайный вариант после размещения",
+            MapIcons.Duplicate, () =>
             {
                 _editor.RandomVariantAfterPlacement = !_editor.RandomVariantAfterPlacement;
                 SyncAssetList();
             });
-        _randomAngleToggle = FilterToggle(
-            "RandomAngleToggle", "Случайный угол", MapIcons.Redo, () =>
+        _randomAngleToggle = LabelledToggle(
+            "RandomAngleToggle", "Случайный угол", "Случайный угол поворота каждого штампа",
+            MapIcons.Redo, () =>
             {
                 _editor.StampRandomAngle = !_editor.StampRandomAngle;
                 SyncAssetList();
             });
-        _randomFlipToggle = FilterToggle(
-            "RandomFlipToggle", "Случайное отражение", MapIcons.Select, () =>
+        _randomFlipToggle = LabelledToggle(
+            "RandomFlipToggle", "Случайное отражение", "Случайное зеркальное отражение штампа",
+            MapIcons.Select, () =>
             {
                 _editor.StampRandomFlip = !_editor.StampRandomFlip;
                 SyncAssetList();
@@ -1624,10 +2085,11 @@ public sealed class EditorView : UserControl
                             SyncStampGestureReadout();
                         }),
                     _stampAreaSummaryText,
-                    new StackPanel
+                    new WrapPanel
                     {
                         Orientation = Orientation.Horizontal,
-                        Spacing = 2,
+                        ItemSpacing = 4,
+                        LineSpacing = 4,
                         Children = { _randomVariantToggle, _randomAngleToggle, _randomFlipToggle },
                     },
                     AssetCommand("PlaceStampButton", "Разместить в центре вида", () =>
@@ -2424,6 +2886,15 @@ public sealed class EditorView : UserControl
         {
             _syncingLibrary = false;
         }
+
+        // Choosing a card brings twelve more files into view that the visible-range report never
+        // saw, so the check is kicked here too. It is idempotent: the view model verifies only
+        // what it has no verdict for, and returns at once when there is nothing left to check.
+        if (_editor.CurrentVariant is { } current
+            && _editor.AvailabilityOf(current.Sha256) == AssetAvailability.Unknown)
+        {
+            _ = CheckVisibleAvailabilityAsync();
+        }
     }
 
     private void SyncLibraryDiagnostic()
@@ -2466,8 +2937,52 @@ public sealed class EditorView : UserControl
             _libraryFilterButtons["UsedInMap"], "Только используемое на карте", _editor.LibraryUsedInMapOnly);
         SetToggle(
             _randomVariantToggle, "Случайный вариант после размещения", _editor.RandomVariantAfterPlacement);
-        SetToggle(_randomAngleToggle, "Случайный угол", _editor.StampRandomAngle);
-        SetToggle(_randomFlipToggle, "Случайное отражение", _editor.StampRandomFlip);
+        SetToggle(
+            _randomAngleToggle, "Случайный угол поворота каждого штампа", _editor.StampRandomAngle);
+        SetToggle(
+            _randomFlipToggle, "Случайное зеркальное отражение штампа", _editor.StampRandomFlip);
+
+        FillChoices(_libraryTagFilter, "Любой тег", _editor.LibraryTagChoices, _editor.LibraryTag);
+        FillChoices(
+            _libraryMediaFilter, "Любой тип", _editor.LibraryMediaTypeChoices, _editor.LibraryMediaType);
+        if ((_libraryImportedFrom.Text ?? "") != _editor.LibraryImportedFromText)
+        {
+            _libraryImportedFrom.Text = _editor.LibraryImportedFromText;
+        }
+
+        if ((_libraryImportedTo.Text ?? "") != _editor.LibraryImportedToText)
+        {
+            _libraryImportedTo.Text = _editor.LibraryImportedToText;
+        }
+
+        var dateHint = _editor.HasLibraryDateError
+            ? "Дата не распознана. Ожидается ГГГГ-ММ-ДД, например 2026-08-26."
+            : "Дата в формате ГГГГ-ММ-ДД.";
+        _libraryDateHint.Text = dateHint;
+        Ui.SetClass(_libraryDateHint, "danger", _editor.HasLibraryDateError);
+        Ui.SetClass(_libraryDateHint, "faint", !_editor.HasLibraryDateError);
+        AutomationProperties.SetName(_libraryDateHint, dateHint);
+
+        var summary = "Фильтры: " + _editor.ActiveLibraryFilterSummary;
+        _libraryFilterSummary.Text = summary;
+        Ui.SetClass(_libraryFilterSummary, "accent", _editor.HasActiveLibraryFilters);
+        Ui.SetClass(_libraryFilterSummary, "faint", !_editor.HasActiveLibraryFilters);
+        AutomationProperties.SetName(_libraryFilterSummary, summary);
+        ToolTip.SetTip(_libraryFilterSummary, summary);
+        _clearFiltersButton.IsEnabled = _editor.HasActiveLibraryFilters;
+
+        static void FillChoices(
+            ComboBox box, string anyLabel, IReadOnlyList<string> choices, string? selected)
+        {
+            var wanted = new List<string> { anyLabel };
+            wanted.AddRange(choices);
+            if (box.ItemsSource is not IReadOnlyList<string> current || !current.SequenceEqual(wanted))
+            {
+                box.ItemsSource = wanted;
+            }
+
+            box.SelectedItem = selected is not null && wanted.Contains(selected) ? selected : anyLabel;
+        }
 
         static void SetSegment(Dictionary<string, Button> buttons, string activeKey)
         {
@@ -2604,23 +3119,33 @@ public sealed class EditorView : UserControl
 
     private void SyncLibraryGrid()
     {
-        var sets = _editor.LibrarySets;
-        _libraryGrid.ItemsSource = sets;
-        _libraryGrid.SelectedItem = sets.FirstOrDefault(item => item.SetId == _editor.SelectedSetId);
+        var rows = _editor.LibraryRows;
+        if (!ReferenceEquals(_libraryGrid.ItemsSource, rows))
+        {
+            // Rebuilding the source drops the realised containers, so the tiles they registered
+            // are stale: a recycled container would otherwise keep writing into a dead badge.
+            _tileStates.Clear();
+            _reportedLibraryRange = (-1, -1);
+            _libraryGrid.ItemsSource = rows;
+        }
+
+        _libraryGrid.SelectedIndex = _editor.SelectedLibraryRowIndex;
+        _lastSelectedLibraryRow = _editor.SelectedLibraryRowIndex;
+
         // The grid stays in the accessibility tree even when empty - a control that disappears
         // cannot be found, focused or reported by a screen reader.
-        _libraryGrid.MinHeight = sets.Count > 0 ? 220 : 0;
+        var cards = _editor.LibrarySets.Count;
+        _libraryGrid.MinHeight = rows.Count > 0 ? 220 : 0;
 
         _libraryCountText.Text = _editor.LibraryStatus == AssetLibraryStatus.Damaged
             ? "Библиотека недоступна"
-            : sets.Count == 0
-                ? ((_assetSearch.Text ?? "").Trim().Length == 0
-                    ? "Библиотека пуста. Импортируйте PNG, JPEG или WebP."
-                    : "Ничего не найдено. Измените запрос или снимите фильтры.")
-                : $"Карточек: {sets.Count}";
-        AutomationProperties.SetName(_libraryGrid, $"Карточки библиотеки, {sets.Count}");
+            : cards == 0
+                ? (_editor.HasActiveLibraryFilters
+                    ? "Ничего не найдено. Измените запрос или снимите фильтры."
+                    : "Библиотека пуста. Импортируйте PNG, JPEG или WebP.")
+                : $"Карточек: {cards}";
+        AutomationProperties.SetName(_libraryGrid, $"Карточки библиотеки, {cards}");
     }
-
     private void SyncSelectedSet()
     {
         var set = _editor.SelectedSet;
@@ -2630,6 +3155,10 @@ public sealed class EditorView : UserControl
             : null;
 
         _selectedSetNameText.Text = set?.Name ?? "Набор не выбран";
+        // Named explicitly: a bare TextBlock is not reliably reported, and the name of the card
+        // the tool is holding is exactly what a screen reader has to be able to read back.
+        AutomationProperties.SetName(_selectedSetNameText, _selectedSetNameText.Text);
+        ToolTip.SetTip(_selectedSetNameText, _selectedSetNameText.Text);
         _setBadge.IsVisible = set is { IsSet: true };
         if (set is { IsSet: true })
         {
@@ -2657,9 +3186,25 @@ public sealed class EditorView : UserControl
         _previousVariantButton.IsEnabled = many;
         _nextVariantButton.IsEnabled = many;
 
+        // A singleton card has nothing to reorder and nothing to choose a cover from, so those
+        // controls are visibly unavailable rather than silently doing nothing.
+        _setRenameBox.IsEnabled = _editor.CanRenameSelectedSet;
+        _setRenameButton.IsEnabled = _editor.CanRenameSelectedSet;
+        if (!_setRenameBox.IsFocused)
+        {
+            _setRenameBox.Text = set?.Name ?? "";
+        }
+
+        _variantEarlierButton.IsEnabled = _editor.CanMoveCurrentVariant(-1);
+        _variantLaterButton.IsEnabled = _editor.CanMoveCurrentVariant(1);
+        _setCoverButton.IsEnabled = _editor.CanMakeCurrentVariantCover;
+        SetCoverButtonLabel(set);
+        SyncSelectedSetAvailability();
+
         _assetSelectionText.Text = _selectedAsset is { } selected
             ? $"{selected.DisplayName} · {selected.Width}×{selected.Height}"
             : "Ассет не выбран. Выберите карточку в списке выше.";
+        AutomationProperties.SetName(_assetSelectionText, _assetSelectionText.Text);
 
         SyncVariantStrip();
 
@@ -2667,6 +3212,20 @@ public sealed class EditorView : UserControl
         {
             command.IsEnabled = _selectedAsset is not null;
         }
+    }
+
+    /// <summary>The cover button says which state it would move the card into, or why it cannot.</summary>
+    private void SetCoverButtonLabel(AssetSetSummary? set)
+    {
+        var title = set is null
+            ? "Сделать обложкой: набор не выбран"
+            : _editor.IsCurrentVariantTheCover
+                ? "Этот вариант уже обложка набора"
+                : set.IsSet
+                    ? $"Сделать вариант {_editor.CurrentVariantLabel} обложкой набора"
+                    : "У набора из одного варианта обложка одна";
+        AutomationProperties.SetName(_setCoverButton, title);
+        ToolTip.SetTip(_setCoverButton, title);
     }
 
     private void SyncVariantStrip()
@@ -2684,22 +3243,51 @@ public sealed class EditorView : UserControl
             var variant = variants[index];
             var position = index;
             var thumbnail = _thumbnails.Image(_editor.LibraryThumbnailPathForVariant(variant.Id));
-            var button = new ToggleButton
-            {
-                Content = new Border
-                {
-                    Width = 40,
-                    Height = 40,
-                    Child = thumbnail is null
-                        ? MapIcons.Stroked(MapIcons.Missing, 16)
-                        : new Image { Source = thumbnail, Stretch = Stretch.Uniform },
-                },
-            }.Named("Variant_" + variant.Id).Classed("segment");
-
             var isCover = variant.Id == cover;
+            var availability = _editor.AvailabilityOf(variant.Sha256);
+            var flagged = availability is not (AssetAvailability.Unknown or AssetAvailability.Available);
+
+            Control face = new Border
+            {
+                Width = 40,
+                Height = 40,
+                Child = thumbnail is null
+                    ? MapIcons.Stroked(MapIcons.Missing, 16)
+                    : new Image { Source = thumbnail, Stretch = Stretch.Uniform },
+            };
+
+            // The cover needs a mark of its own: "selected" already means "current variant", and
+            // the two are usually different thumbnails. The mark is composed before the content is
+            // handed to the button, because a control that already has a parent cannot be reparented.
+            if (isCover || flagged)
+            {
+                var mark = new Border
+                {
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                    VerticalAlignment = VerticalAlignment.Bottom,
+                    Padding = new Thickness(2, 0),
+                    Child = MapIcons.Stroked(flagged ? MapIcons.Warning : MapIcons.Check, 11),
+                }.Classed("badge");
+                if (availability is AssetAvailability.Missing or AssetAvailability.HashMismatch)
+                {
+                    mark.Classes.Add("danger");
+                }
+                else if (flagged)
+                {
+                    mark.Classes.Add("warn");
+                }
+
+                face = new Panel { Children = { face, mark } };
+            }
+
+            var button = new ToggleButton { Content = face }
+                .Named("Variant_" + variant.Id).Classed("segment");
+
             var name = $"Вариант {position + 1} из {variants.Count}"
                 + (isCover ? ", обложка" : "")
-                + (position == _editor.CurrentVariantIndex ? ", текущий" : "");
+                + (position == _editor.CurrentVariantIndex ? ", текущий" : "")
+                + (flagged ? ", " + EditorViewModel.AvailabilityText(availability) : "");
+
             AutomationProperties.SetName(button, name);
             ToolTip.SetTip(button, name);
             Ui.SetSelected(button, position == _editor.CurrentVariantIndex);

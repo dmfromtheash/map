@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Map.Assets;
@@ -214,7 +214,9 @@ public static class AssetLibraryStore
             VariantIds = [variantId],
             CoverVariantId = variantId,
             CollectionId = string.IsNullOrWhiteSpace(record.Pack) ? null : AssetIdentity.CollectionId(record.Pack),
-            Tags = [.. record.Tags],
+            // A hand-edited or truncated v1 file may carry "tags": null, and migration must not
+            // fall over on it: the record still has an identity worth keeping.
+            Tags = record.Tags is null ? [] : [.. record.Tags],
             Favorite = record.Favorite,
             ImportedUtc = record.ImportedUtc,
         });
@@ -242,48 +244,230 @@ public static class AssetLibraryStore
     }
 
     /// <summary>
-    /// Structural checks a healthy document must satisfy. They exist so a half-written or hand
-    /// edited file is reported as damaged instead of silently loading a broken library.
+    /// Every consistency rule a healthy schema v2 document must satisfy. The point is not to be
+    /// strict for its own sake: a file that parses but contradicts itself would otherwise reach
+    /// the collection tree walk and the placement path as if it were a real library. Each rule
+    /// costs one pass over one list, so the whole check stays linear in the size of the index.
     /// </summary>
     public static string? Validate(AssetLibraryDocument document)
     {
-        if (document.Records.Any(record => string.IsNullOrWhiteSpace(record.Sha256)))
+        ArgumentNullException.ThrowIfNull(document);
+
+        // JSON is free to write "records": null, and the deserializer will do exactly that, so the
+        // lists have to be proven present before anything is allowed to enumerate them.
+        List<AssetRecord>? records = document.Records;
+        List<AssetCollection>? collections = document.Collections;
+        List<AssetVariant>? variants = document.Variants;
+        List<AssetSet>? sets = document.Sets;
+        List<AssetRecentEntry>? recent = document.Recent;
+        Dictionary<string, string>? current = document.CurrentVariantBySet;
+        if (records is null || collections is null || variants is null || sets is null
+            || recent is null || current is null)
         {
-            return "запись без SHA-256";
+            return "в индексе отсутствует один из обязательных списков";
         }
 
-        if (document.Records.Select(record => record.Sha256.ToLowerInvariant()).Distinct().Count()
-            != document.Records.Count)
+        var contentHashes = new HashSet<string>(records.Count, StringComparer.OrdinalIgnoreCase);
+        foreach (var record in records)
         {
-            return "повторяющийся SHA-256";
+            if (string.IsNullOrWhiteSpace(record.Sha256))
+            {
+                return "запись без SHA-256";
+            }
+
+            if (!contentHashes.Add(record.Sha256))
+            {
+                return "повторяющийся SHA-256";
+            }
         }
 
-        if (document.Variants.Select(variant => variant.Id).Distinct().Count() != document.Variants.Count)
+        var variantIds = new HashSet<string>(variants.Count, StringComparer.Ordinal);
+        foreach (var variant in variants)
         {
-            return "повторяющийся идентификатор варианта";
+            if (string.IsNullOrWhiteSpace(variant.Id) || string.IsNullOrWhiteSpace(variant.Label))
+            {
+                return "вариант без идентификатора или названия";
+            }
+
+            if (!variantIds.Add(variant.Id))
+            {
+                return "повторяющийся идентификатор варианта";
+            }
+
+            if (string.IsNullOrWhiteSpace(variant.Sha256) || !contentHashes.Contains(variant.Sha256))
+            {
+                return $"вариант «{variant.Label}» ссылается на отсутствующее содержимое";
+            }
         }
 
-        if (document.Sets.Select(set => set.Id).Distinct().Count() != document.Sets.Count)
+        var collectionIds = new HashSet<string>(collections.Count, StringComparer.Ordinal);
+        foreach (var collection in collections)
         {
-            return "повторяющийся идентификатор набора";
+            if (string.IsNullOrWhiteSpace(collection.Id) || string.IsNullOrWhiteSpace(collection.Name))
+            {
+                return "коллекция без идентификатора или названия";
+            }
+
+            if (!collectionIds.Add(collection.Id))
+            {
+                return "повторяющийся идентификатор коллекции";
+            }
         }
 
-        var variantIds = document.Variants.Select(variant => variant.Id).ToHashSet(StringComparer.Ordinal);
-        foreach (var set in document.Sets)
+        foreach (var collection in collections)
         {
-            if (set.VariantIds.Count == 0)
+            if (collection.ParentId is { } parent && !collectionIds.Contains(parent))
+            {
+                return $"родительская коллекция «{collection.Name}» отсутствует";
+            }
+        }
+
+        if (FindCollectionCycle(collections) is { } cycle)
+        {
+            return $"цикл в дереве коллекций: «{cycle}»";
+        }
+
+        var setIds = new HashSet<string>(sets.Count, StringComparer.Ordinal);
+        var setOfVariant = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var set in sets)
+        {
+            if (string.IsNullOrWhiteSpace(set.Id) || string.IsNullOrWhiteSpace(set.Name))
+            {
+                return "набор без идентификатора или названия";
+            }
+
+            if (!setIds.Add(set.Id))
+            {
+                return "повторяющийся идентификатор набора";
+            }
+
+            if (set.VariantIds is not { Count: > 0 })
             {
                 return $"набор «{set.Name}» без вариантов";
             }
 
-            if (set.VariantIds.Any(id => !variantIds.Contains(id)))
+            var members = new HashSet<string>(set.VariantIds.Count, StringComparer.Ordinal);
+            foreach (var variantId in set.VariantIds)
             {
-                return $"набор «{set.Name}» ссылается на отсутствующий вариант";
+                if (variantId is null || !variantIds.Contains(variantId))
+                {
+                    return $"набор «{set.Name}» ссылается на отсутствующий вариант";
+                }
+
+                if (!members.Add(variantId))
+                {
+                    return $"набор «{set.Name}» содержит повторяющийся вариант";
+                }
+
+                // A variant belongs to one card. Two cards claiming it would make "which set did
+                // this stamp come from" ambiguous, and the whole set-aware tool rests on that.
+                if (!setOfVariant.TryAdd(variantId, set.Id))
+                {
+                    return $"вариант входит сразу в два набора, один из них — «{set.Name}»";
+                }
             }
 
-            if (!set.VariantIds.Contains(set.CoverVariantId))
+            if (string.IsNullOrWhiteSpace(set.CoverVariantId) || !members.Contains(set.CoverVariantId))
             {
                 return $"обложка набора «{set.Name}» не входит в него";
+            }
+
+            if (set.CollectionId is { } collectionId && !collectionIds.Contains(collectionId))
+            {
+                return $"набор «{set.Name}» ссылается на отсутствующую коллекцию";
+            }
+
+            if (set.Tags is null)
+            {
+                return $"у набора «{set.Name}» отсутствует список тегов";
+            }
+        }
+
+        foreach (var entry in recent)
+        {
+            if (string.IsNullOrWhiteSpace(entry.SetId) || !setIds.Contains(entry.SetId))
+            {
+                return "недавний элемент ссылается на отсутствующий набор";
+            }
+
+            if (!setOfVariant.TryGetValue(entry.VariantId ?? "", out var owner)
+                || !string.Equals(owner, entry.SetId, StringComparison.Ordinal))
+            {
+                return "недавний элемент ссылается на вариант вне своего набора";
+            }
+        }
+
+        foreach (var (setId, variantId) in current)
+        {
+            if (!setIds.Contains(setId))
+            {
+                return "текущий вариант записан для отсутствующего набора";
+            }
+
+            if (!setOfVariant.TryGetValue(variantId ?? "", out var owner)
+                || !string.Equals(owner, setId, StringComparison.Ordinal))
+            {
+                return "текущий вариант не входит в свой набор";
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Names one collection caught in a parent ring, or null when the graph is a forest. The walk
+    /// is iterative and settles every node once, so a ring cannot become unbounded recursion.
+    /// </summary>
+    private static string? FindCollectionCycle(List<AssetCollection> collections)
+    {
+        const int Visiting = 1;
+        const int Settled = 2;
+        var parents = new Dictionary<string, string?>(collections.Count, StringComparer.Ordinal);
+        var names = new Dictionary<string, string>(collections.Count, StringComparer.Ordinal);
+        foreach (var collection in collections)
+        {
+            parents[collection.Id] = collection.ParentId;
+            names[collection.Id] = collection.Name;
+        }
+
+        var state = new Dictionary<string, int>(collections.Count, StringComparer.Ordinal);
+        var path = new List<string>();
+        foreach (var collection in collections)
+        {
+            if (state.GetValueOrDefault(collection.Id) == Settled)
+            {
+                continue;
+            }
+
+            path.Clear();
+            var node = collection.Id;
+            while (true)
+            {
+                var seen = state.GetValueOrDefault(node);
+                if (seen == Settled)
+                {
+                    break;
+                }
+
+                if (seen == Visiting)
+                {
+                    return names.GetValueOrDefault(node, node);
+                }
+
+                state[node] = Visiting;
+                path.Add(node);
+                if (parents.TryGetValue(node, out var parent) && parent is not null)
+                {
+                    node = parent;
+                    continue;
+                }
+
+                break;
+            }
+
+            foreach (var settled in path)
+            {
+                state[settled] = Settled;
             }
         }
 
