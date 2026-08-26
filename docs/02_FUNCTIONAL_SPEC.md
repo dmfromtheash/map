@@ -104,7 +104,9 @@
 
 ## 6. Stamp / Asset (`P0` базовый, `P1` расширенный)
 
-- выбрать единичный ассет или набор;
+- выбрать единичный ассет или логический набор с одним/десятками упорядоченных вариантов;
+- раскрыть варианты, выбрать cover/current, перейти к предыдущему/следующему и включить
+  случайный следующий вариант после размещения;
 - place click/drag, auto-select после размещения;
 - scale, rotation, sublayer, flip, opacity, blend, blur;
 - hue/saturation/brightness/contrast для поддерживаемых ассетов;
@@ -116,6 +118,10 @@
 - replace asset у существующего объекта с сохранением трансформации;
 - recent/favorite;
 - предупреждение о missing/unlicensed asset без уничтожения объекта.
+
+Набор является сущностью локального каталога, но каждая размещённая копия сохраняет конкретный
+SHA-256 варианта. Случайность разрешается до создания команды: renderer, reopen и undo/redo не
+выбирают вариант заново. Один Many/Area gesture с разными variants остаётся одной транзакцией.
 
 Панель выделенного stamp обязана давать точные controls для каждого перечисленного свойства, а не
 фиксированные demo-кнопки. Основной блок: replace asset, пропорциональный scale плюс точные W/H,
@@ -229,15 +235,23 @@ inspector и меняются undoable-командами; одного цикл
 
 ## 15. Каталог и Asset Manager (`P1`)
 
-- просмотр packs и tags;
-- поиск, style/pack/type/license filters;
-- recent/favorite;
+- собственное дерево collections/packs с counts и breadcrumbs;
+- virtualized thumbnail grid, регулируемый размер карточек и bounded decode/cache;
+- поиск, name/date sort, grouping по collection/tag и составные pack/tag/type/license/date/
+  used-in-map filters;
+- recent и set-level favorite;
+- logical `AssetSet` с badge количества, inline/detail раскрытием и ordered `AssetVariant`;
+- single import → singleton set; multi-import → новый set с rename/reorder/cover без удаления
+  исходного content;
 - built-in own pack, user packs и document-embedded assets;
 - импорт PNG/JPEG/WebP/SVG только после безопасной валидации; SVG — ограниченный профиль;
 - прозрачность, thumbnail, default physical/grid scale, anchor, tags;
 - массовый импорт с одинаковой калибровкой масштаба;
 - содержание «My assets» — только локальные материалы пользователя;
 - missing asset resolver: найти файл, заменить, оставить placeholder, удалить осознанно.
+
+Полный clean-room контракт каталога и set placement:
+`research/ASSET_CATALOG_AND_VARIANT_SETS.md`.
 
 ## 16. Compositions (`P1`)
 

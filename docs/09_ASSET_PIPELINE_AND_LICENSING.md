@@ -36,6 +36,11 @@
 - default scale, anchor, tags;
 - compatibility/schema version.
 
+Pack manifest также может объявлять собственные логические `sets`: stable set ID, display name,
+ordered variant IDs, cover ID, collection/tags и default placement metadata. Каждый variant
+ссылается на файл из того же manifest по SHA-256 и не ослабляет его provenance/license. Set с
+вариантами разных лицензий получает наиболее строгие ограничения и явное предупреждение.
+
 ## Импорт пользователя
 
 Диалог не делает юридических заявлений за пользователя. Он спрашивает источник/лицензионный статус и даёт варианты:
@@ -56,9 +61,15 @@
 5. Записать provenance.
 6. Калибровать default scale по reference grid.
 7. Добавить tags/pack.
-8. Проверить roundtrip и прозрачность.
+8. Для multi-import создать/обновить logical set, порядок variants и cover без дублирования
+   content по SHA-256.
+9. Проверить roundtrip, прозрачность, set membership и migration singleton records.
 
 Оригинал не изменяется. Производные хранят ссылку на source hash.
+
+Favorite/recent/current variant являются локальным пользовательским состоянием и не меняют
+лицензию или content identity. Исключение variant из set не удаляет original; удаление content —
+отдельное подтверждаемое действие вне foundation-среза.
 
 ## AI-инструменты для будущих ассетов
 
@@ -76,4 +87,3 @@ Qwen-Image-Layered, TRELLIS.2, Blender/ComfyUI и облачные генера�
 - удалить всё `unknown` из starter/distribution packs;
 - проверить, что демо-карты не содержат импортированные личные материалы;
 - юридическая консультация нужна перед коммерческим релизом; этот документ не является юридическим заключением.
-

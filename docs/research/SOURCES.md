@@ -38,9 +38,10 @@
 `OBJECT_AND_GRID_PARITY.md`.
 
 Bounded account walkthrough тестовой карты владельца 26.08.2026 проверил через видимые controls
-keyboard profile, Text, Line/roads, Shape boolean/contours, Brush/Mask/Land, stamp Many/Area/Density
-и четыре Grid geometry. DevTools/network/storage и извлечение ассетов не использовались. Результат:
-`INKARNATE_ACCOUNT_WALKTHROUGH_20260826.md`.
+keyboard profile, Text, Line/roads/portals, Shape boolean/contours, Brush/Mask/Land, stamp
+Many/Area/Density/Auto, multi-selection/group, каталог и variant sets, а также четыре Grid
+geometry. DevTools/network/storage и извлечение ассетов не использовались. Результаты:
+`INKARNATE_ACCOUNT_WALKTHROUGH_20260826.md` и `ASSET_CATALOG_AND_VARIANT_SETS.md`.
 
 ## Публичные open-source ориентиры clean-room прохода
 
@@ -48,6 +49,8 @@ keyboard profile, Text, Line/roads, Shape boolean/contours, Brush/Mask/Land, sta
 |---|---|
 | [Clipper2](https://github.com/AngusJohnson/Clipper2) | Подтверждает публичную C# библиотеку clipping/offsetting/triangulation и BSL-1.0; пакет не добавлен, нужен отдельный dependency decision |
 | [Azgaar Fantasy Map Generator](https://github.com/Azgaar/Fantasy-Map-Generator) | Только публичный архитектурный ориентир separation state/editors/renderers; web stack, код, UI и assets не переносятся |
+| [Tiled — Editing Tilesets](https://github.com/mapeditor/tiled/blob/master/docs/manual/editing-tilesets.rst) | Публичное подтверждение image-collection sets, stable per-item metadata/alignment/probability; код, UI, formats и assets не переносятся |
+| [Tiled — Tileset implementation](https://github.com/mapeditor/tiled/blob/master/src/libtiled/tileset.cpp) | Публичное подтверждение разделения remove-from-set и delete-content; используется только как data-model cross-check, dependency не добавлена |
 
 ### Известная временная оговорка
 

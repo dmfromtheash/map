@@ -8,12 +8,12 @@
 
 | Область | Статус | Что это значит |
 |---|---|---|
-| Исследование Inkarnate | `FACT / PARTIAL` | Публичные источники изучены; в тестовой карте владельца пройдены text/line/shape/brush/stamp/grid/shortcuts, оставшиеся неоднозначности перечислены отдельно |
+| Исследование Inkarnate | `FACT / PARTIAL` | Публичные источники и test-map walkthrough покрывают text/line/shape/brush/stamp/group/grid/shortcuts и catalog variant sets; только явно перечисленные pressure/portal/font детали остались PARTIAL |
 | Правовые границы | `FACT` | Автоскрейпинг, обратная разработка и копирование материалов исключены |
 | Продуктовый объём | `ACCEPTED` | Офлайн-эквивалент редактора и локального dashboard; без облачного сообщества и Marketplace |
 | Технологический стек | `ACCEPTED` | .NET 10 + Avalonia 12.1 + Skia; SDK установлен |
-| Код приложения | `PARTIAL` | Stages 1–8 и Stage 9A реализованы; начат Stage 10 input parity, 9B–9E и остальные slices Stage 10 ещё впереди |
-| Дизайн и ассеты | `PARTIAL` | Есть собственная visual system и локальный asset pipeline; полный object/grid inspector и asset pilot относятся к Stage 10 |
+| Код приложения | `PARTIAL` | Stages 1–8, Stage 9A и первый Stage 10 input slice реализованы; 10B Library/variant sets подготовлен как следующий контракт, но код ещё не выполнен |
+| Дизайн и ассеты | `PARTIAL` | Есть собственная visual system и плоский локальный asset pipeline; Library v2/variant sets/diagnostic fixtures входят в 10B, полный inspector/grid идут позже |
 
 ## Карта документов
 
@@ -41,7 +41,9 @@
 | `reviews/STAGE_09A_AUTOSAVE_VERIFICATION.md` | проверка autosave и восстановления после аварийного завершения |
 | `research/OBJECT_AND_GRID_PARITY.md` | clean-room матрица object/grid функций и разрывов текущего UI |
 | `research/INKARNATE_ACCOUNT_WALKTHROUGH_20260826.md` | наблюдаемые text/road/shape/brush/stamp/grid/keyboard механики тестовой карты |
-| `research/TEST_ASSET_FIXTURES.md` | план двух собственных diagnostic PNG для проверки эффектов и кистей |
+| `research/TEST_ASSET_FIXTURES.md` | план двух собственных logical fixtures: 12-variant stamp set и brush tip |
+| `research/ASSET_CATALOG_AND_VARIANT_SETS.md` | clean-room слепок Library, «ассетов-матрёшек» и разрывов текущего кода |
+| `prompts/STAGE_10B_ASSET_LIBRARY_VARIANT_SETS.md` | готовый крупный контракт Opus: Library v2, variant sets, deterministic stamp placement и fixtures |
 
 ## Подтверждённая основа первой реализации
 
@@ -53,6 +55,7 @@
 
 ## Следующее действие
 
-Завершить следующий отдельный срез Stage 10 input parity: multi-selection/group shortcuts либо
-stamp area/density/set navigation — только один вертикальный срез после выбора приоритета. Не
-смешивать его с `IsometricSquares`, полным inspector или Stage 9B checkpoints.
+Передать Opus один готовый owner-approved Stage 10B из
+`prompts/STAGE_10B_ASSET_LIBRARY_VARIANT_SETS.md`: Library v2, variant sets, set-aware
+Area/Density и diagnostic fixtures. Не смешивать его с 10C multi-selection/groups,
+`IsometricSquares`, полным inspector или Stage 9B checkpoints.

@@ -408,9 +408,33 @@ package audits и повторного pre-commit/doctor.
   navigation; text font cycling; snap rotation; отдельная `IsometricSquares`; полные inspectors и
   сами два diagnostic PNG.
 
-Следующий безопасный шаг этого owner-requested направления: один из перечисленных отсутствующих
-вертикальных срезов, без смешивания с остальными. Stage 9B checkpoints остаётся параллельным
-запланированным срезом, но не входит в текущий commit.
+## FACT / PROPOSED — продолжение clean-room анализа и контракт Stage 10B, 26.08.2026
+
+- В test map через обычный UI подтверждены: Ctrl+A по stamp filter, создание именованной группы
+  из 8 объектов, Group Options/Enter Group; Brush pen dynamics/size+opacity jitter/spacing/scatter;
+  Stamp Auto/Auto Select; Line Portals instructions для Wall/Room; каталог search/sort/group/
+  filters/recent/favorite и logical set с badge, inline expansion, `N/total`, previous/next и
+  random-after-placement.
+- Не подтверждены additive Ctrl+click, физические pen pressure curves, точная portal width и
+  надёжное `]/[` font cycling; они остаются `PARTIAL`.
+- Во время разрешённого walkthrough тестовая cloud map изменена: создана группа `AnalysisGroup`,
+  добавлен один diagnostic brush stroke и один наблюдаемый set отмечен favorite. Ничего не
+  удалялось; чужие assets/screenshots не входят в Git.
+- Сопоставление кода: catalog уже имеет SHA/dedupe/provenance/atomic index/10K metadata search,
+  а document сохраняет конкретный variant SHA. Отсутствуют schema v2, collections/sets/variants,
+  migration, rich virtualized Library, recent/set favorite и multi-SHA placement command.
+- Владелец принял DEC-013 и DEC-014: полностью локальная Library и logical asset sets с десятками
+  variants; `.mapproj` первого foundation-среза остаётся на прежней schema и сохраняет конкретные
+  размещённые hashes.
+- Clean-room evidence/model: `docs/research/ASSET_CATALOG_AND_VARIANT_SETS.md`.
+- Готов один self-contained крупный prompt Opus:
+  `docs/prompts/STAGE_10B_ASSET_LIBRARY_VARIANT_SETS.md`.
+- Diagnostic scope уточнён до двух logical fixtures: 12-variant stamp set + singleton brush tip.
+- Это подготовка/контракт, не реализация: код Stage 10B, новые PNG и его gates ещё `PROPOSED`.
+
+Следующий owner-approved шаг: передать Opus только Stage 10B Library v2/variant sets/stamp scatter
+и после его одного commit остановить Opus для независимого Codex review `BASE..HEAD`. Не смешивать
+с 10C multi-selection/groups, 10D inspectors, 10E `IsometricSquares`, 10F fonts или Stage 9B.
 
 ## Проверка среды
 

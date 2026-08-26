@@ -129,3 +129,37 @@
   вместе с реальной доменной функцией и undo/save/reopen gate.
 - **Доказательство:** полный наблюдаемый список в
   `docs/research/INKARNATE_ACCOUNT_WALKTHROUGH_20260826.md`.
+
+## DEC-013 — Каталог развивается как локальная Library, а не Marketplace
+
+- **Статус:** `accepted`
+- **Принято владельцем:** 2026-08-26
+- **Дата:** 2026-08-26
+- **Решение:** Map получает фундамент локального каталога с собственными collections,
+  breadcrumbs, search, sort, group, filters, recent/favorite и virtualized thumbnail grid.
+  Каталог работает полностью офлайн с пользовательскими и будущими собственными ассетами.
+- **Граница:** аккаунты, магазин, публикация, cloud sync, чужие названия разделов, visual language
+  и материалы не переносятся. Private imports пользователя не становятся частью starter pack.
+- **Миграция:** существующий плоский каталог должен перейти на версионированную schema без потери
+  SHA-256, linked/embedded mode, provenance, tags, pack и favorite; запись остаётся атомарной.
+- **Gate:** 10 000 логических карточек открываются/фильтруются metadata-only, видимые thumbnails
+  загружаются bounded cache, а keyboard/UIA/high-DPI сценарий проходит в настоящем окне.
+- **Доказательство:** `docs/research/ASSET_CATALOG_AND_VARIANT_SETS.md`.
+
+## DEC-014 — Один логический ассет может содержать много вариантов
+
+- **Статус:** `accepted`
+- **Принято владельцем:** 2026-08-26
+- **Дата:** 2026-08-26
+- **Решение:** каталог разделяет immutable content по SHA-256, стабильный `AssetVariant` и
+  логический `AssetSet` с упорядоченными variants, cover и set-level metadata/favorite. Одиночный
+  импорт является singleton set; множественный импорт может создать set из десятков вариантов.
+- **Размещение:** tool state хранит выбранный variant, manual previous/next и toggle случайного
+  выбора после размещения. Массовый gesture сначала разрешает все SHA/positions/random values,
+  затем одной command добавляет готовые объекты; renderer никогда не reroll-ит вариант.
+- **Формат проекта:** первый foundation-срез не меняет schema `.mapproj`. Карта хранит конкретный
+  SHA каждого размещённого варианта и нужные `MapAssetReference`, поэтому reopen/undo/export не
+  зависят от локального set. При доступном каталоге set находится обратно по SHA.
+- **Gate:** миграция старого каталога, fixed/manual/random set placement, Area/Density scatter,
+  undo/redo и save/reopen доказаны тестами на собственном много-вариантном diagnostic set.
+- **Доказательство:** `docs/research/ASSET_CATALOG_AND_VARIANT_SETS.md`.

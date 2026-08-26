@@ -11,8 +11,9 @@
 network/storage, внутренние модели или исходный код страницы; не выгружались ассеты, названия
 наборов, стили интерфейса или графика. Все добавленные объекты остались только на тестовой карте.
 
-Снимки хранятся в игнорируемом `artifacts/inkarnate-mechanics-20260826/` как исследовательское
-доказательство и не являются ресурсами продукта.
+Снимки хранятся в игнорируемых `artifacts/inkarnate-mechanics-20260826/` и
+`artifacts/inkarnate-mechanics-20260826-continuation/` как исследовательское доказательство и не
+являются ресурсами продукта.
 
 ## FACT — клавиатура
 
@@ -96,6 +97,50 @@ triangulation под BSL-1.0, но зависимость не добавляе�
 - Color Tweaks: Hue, Saturation, Brightness, Contrast;
 - одинаковый sublayer сохраняет список независимых объектов; больший sublayer рисуется выше.
 
+### Уточнение Auto и Auto Select
+
+- Auto placement выбирает единичное или массовое размещение в зависимости от выбранного stamp;
+- Auto Select имеет три наблюдаемых режима: всегда выбирать размещённое, не выбирать, выбирать
+  только после единичного размещения;
+- для single/Auto были доступны random angle и random flip; Area/Density относятся к массовому
+  размещению.
+
+## FACT — multi-selection и group
+
+- фильтр выбора по типу объекта ограничивает `Ctrl+A` нужным классом;
+- `Ctrl+A` выбрал восемь stamp objects и открыл действие создания группы;
+- создание группы потребовало имя и явно сообщило количество включаемых объектов;
+- после создания доступен group inspector: scale, rotation, sublayer, H/V flip и opacity;
+- `Enter Group` открывает breadcrumb и редактирование children, `Ungroup` разрывает группу;
+- group остаётся одним top-level item в object tree, но содержит независимые child objects.
+
+`PARTIAL`: additive `Ctrl+click` не был надёжно воспроизведён из-за ограничения modifier input
+браузерного инструмента. Наблюдаемый Map domain уже имеет flat shared `GroupId`, но multi-selection
+UI, именованный group container/breadcrumb и полноценный group inspector ещё отсутствуют.
+
+## FACT — Brush spacing/scatter
+
+- preset dialog сохраняет имя и умеет закрепляться;
+- pen dynamics включает диапазон size min/max и jitter; при отключении остаётся один size;
+- opacity имеет отдельный jitter; Softness, Spacing и Scatter независимы;
+- при Spacing `100%` и Scatter `100%` один drag дал дискретные отпечатки, разнесённые и вдоль, и
+  поперёк центральной траектории. Это требование к видимому результату, не к чужому алгоритму.
+
+## FACT — каталог и наборы вариантов
+
+- дерево разделов/counts, breadcrumbs, thumbnail-size, search, sort, group и composite filters;
+- Recent/Favorites; favorite сразу появляется в отдельной вкладке;
+- одна карточка может представлять set с badge количества; наблюдались set из нескольких и десятков
+  variants;
+- badge раскрывает ordered variants, а выбранный variant показывается как `N / total` с
+  previous/next и миниатюрами;
+- `Alt+wheel`/`Alt+Right/Left` переключают variants; `Randomize Stamps` выбирает следующий variant
+  после placement случайно;
+- set mechanics совместимы с Many/Area/Density, random angle и random flip.
+
+Независимая модель, сопоставление с кодом Map и измеримый следующий срез описаны в
+`ASSET_CATALOG_AND_VARIANT_SETS.md`.
+
 ## FACT — Brush, Mask/Land и Grid
 
 - Brush: круглая кисть с size/opacity/softness, texture scale/rotation; edge brush меняет
@@ -111,11 +156,10 @@ snap и fixtures; это принято DEC-011.
 
 ## PARTIAL / не объявлено готовым
 
-- multi-selection, group/ungroup и Ctrl+click не проходились на достаточном наборе объектов;
-- наследование последних text settings и переключение licensed fonts не подтверждены в этом
-  проходе;
-- точная функция Auto placement, pen pressure curves и wall/room portal width требуют отдельного
-  bounded walkthrough;
+- additive Ctrl+click не подтверждён; multi-selection/group проверены через Ctrl+A и Enter Group;
+- часть text defaults сохраняется, но полный last-style inheritance не наблюдался; переключение
+  licensed fonts `]/[` осталось неоднозначным из-за focus/layout клавиатуры;
+- физические pen pressure curves и wall/room portal width не подтверждены;
 - закрытые алгоритмы sampling, smoothing, path boolean и scatter seed неизвестны и не нужны для
   clean-room паритета результата.
 
@@ -130,8 +174,8 @@ snap и fixtures; это принято DEC-011.
 
 ## Следующие проверяемые срезы
 
-1. Завершить input parity: multi-selection, group/ungroup, stamp set/area/density и font catalog.
-2. Реализовать отдельную `IsometricSquares` topology с render/snap/golden fixtures.
-3. Довести прямые inspectors Text/Line/Shape/Stamp/Brush по наблюдаемым значениям.
-4. Создать два собственных диагностических ассета из `TEST_ASSET_FIXTURES.md` и прогнать ими
-   transform, color tweaks, alpha, shadow, blur, blend, scatter и brush dynamics.
+1. Выполнить owner-approved Stage 10B: Library v2, variant sets, set-aware Area/Density и два
+   собственных logical diagnostic fixtures.
+2. Отдельно довести multi-selection/group UI и shortcuts поверх уже существующего domain GroupId.
+3. Реализовать отдельную `IsometricSquares` topology с render/snap/golden fixtures.
+4. Довести прямые inspectors Text/Line/Shape/Stamp/Brush и licensed font navigation.

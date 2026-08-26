@@ -64,6 +64,8 @@ Recovery journal и transient undo **не** хранятся внутри осн
 - `SceneObject`: stable ID, type, layerId, sublayer, local transform, bounds, visible, locked, style.
 - `Group`: children IDs и transform; отсутствие циклов — инвариант.
 - `AssetRef`: content hash, source pack, embed/link mode, license/provenance ID.
+- `AssetSet`/`AssetVariant` относятся к локальному каталогу, а не являются обязательной частью
+  scene: объект stamp хранит конкретный content hash размещённого варианта.
 - `GridDefinition`: geometry, cell size, offset, rotation, style, snap policy.
 - `Note`: anchor kind/id/position и безопасный rich-text document.
 
@@ -97,6 +99,26 @@ Blend, opacity, mask и filter вычисляются по документир�
 - brush command хранит до/после только затронутых tiles или reversible stroke delta в пределах бюджета.
 
 ## Ассеты
+
+### Локальный каталог
+
+Каталог имеет собственную версионированную schema и не является источником истины для открытой
+карты:
+
+- `AssetContent`: SHA-256 identity, media/dimensions/alpha, stored/linked path, thumbnail и
+  provenance;
+- `AssetVariant`: stable ID, content SHA, label, anchor/default scale;
+- `AssetSet`: stable ID, ordered variant IDs, cover variant, collection/tags/favorite;
+- `AssetCollection`: stable ID, optional parent, display name/order;
+- bounded local state: recent и last selected variant per set.
+
+Старый плоский record мигрирует в singleton set. Миграция индекса записывает новый temp,
+проверяет его и сохраняет backup; повреждённый единственный индекс не перезаписывается.
+
+При размещении set сначала разрешается в конкретные content hashes. `.mapproj` сохраняет каждый
+использованный `MapAssetReference` и каждый `StampStyle.AssetSha256`; renderer не зависит от
+локальной Library и не выполняет random selection. Обратная связь «этот stamp принадлежит set»
+может восстанавливаться по SHA, если каталог доступен, и не нужна для корректного render/export.
 
 ### Embedded
 

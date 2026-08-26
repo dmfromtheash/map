@@ -214,10 +214,18 @@ Inkarnate быстро меняется. Официальный обзор ре�
 - navigator можно свернуть;
 - packs или tags;
 - filters по style/pack и другим признакам;
+- одна логическая карточка может иметь badge количества и раскрывать от нескольких до десятков
+  ordered variants; выбранный variant показывается как `N/total` и переключается вручную;
+- toggle randomize выбирает следующий variant набора после placement, а Recent/Favorites работают
+  на уровне пользовательского выбора;
 - Inkarnate-wide catalog может загружаться медленнее;
 - `Me` содержит uploaded/private assets и exported composites;
 - Art Manager отделён от editor; из обзора переход editor→Art Manager не подтверждён;
 - custom asset/composite сохраняет grid-referenced scale, поэтому калибровка перед массовым экспортом критична.
+
+Подробный bounded walkthrough и независимая модель Map:
+`ASSET_CATALOG_AND_VARIANT_SETS.md`. Названия, hierarchy, tags, UI и assets конкурента не
+переносятся.
 
 ## Compositions и межкартовый перенос
 
@@ -273,4 +281,3 @@ Inkarnate быстро меняется. Официальный обзор ре�
 11. записать `FACT / OPEN / CHANGED`, не угадывать.
 
 Не открывать network inspector, storage, исходники, API payloads и не запускать automation по закрытым страницам.
-

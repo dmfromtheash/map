@@ -205,8 +205,9 @@ Fault-injection suite доказывает отсутствие потери п�
 ## Stage 10 — Собственный UX/UI и asset pilot
 
 Текущий статус: **PARTIAL**. Первый input-parity slice реализует работающие global/tool/selection
-и Brush/Mask/Text shortcuts. Полный object/grid inspector, `IsometricSquares`, multi-selection,
-stamp sets/scatter и asset fixtures ещё не реализованы.
+и Brush/Mask/Text shortcuts. Владелец принял следующим крупным срезом **10B Library v2 + variant
+sets + set-aware stamp placement + diagnostic fixtures**. Полный object/grid inspector,
+`IsometricSquares`, multi-selection UI/groups и font catalog остаются после 10B.
 
 Этот этап начинается после предоставления владельцем материалов, но отдельные UX-прототипы идут раньше каждого инструмента.
 
@@ -220,10 +221,26 @@ stamp sets/scatter и asset fixtures ещё не реализованы.
   line/color/opacity/offset/rotation/snap/export controls;
 - input parity отдельными slices: работающие global/tool/selection shortcuts, затем multi-select,
   groups, stamp-set/scatter controls и licensed-font navigation; пустые bindings запрещены;
-- два собственных diagnostic PNG fixtures по `research/TEST_ASSET_FIXTURES.md` для transform,
-  color/alpha/effects/scatter/brush проверок; они не являются release starter pack;
+- локальная Library v2 по DEC-013: collections/breadcrumbs/search/sort/group/filters,
+  recent/favorite, virtualized thumbnail grid и миграция плоского каталога;
+- logical variant sets по DEC-014: badge/expand/cover/current, previous/next, random-after-place,
+  Area/Density и multi-asset placement одной undoable command;
+- два собственных logical diagnostic fixtures по `research/TEST_ASSET_FIXTURES.md`: один stamp
+  set с 12 PNG variants и один brush-tip PNG; они не являются release starter pack;
 - usability sessions: новичок/опытный/keyboard/high-DPI;
 - никаких заимствованных Inkarnate assets или trade dress.
+
+### Порядок оставшихся срезов Stage 10
+
+1. **10B — Library v2 и variant-set stamp workflow:** единый owner-approved крупный срез;
+   контракт — `prompts/STAGE_10B_ASSET_LIBRARY_VARIANT_SETS.md`.
+2. **10C — Multi-selection/groups:** Ctrl+A/Ctrl+click, group/ungroup, group transform и UIA.
+3. **10D — Object inspectors:** Stamp/Text/Line/Shape/Brush controls и color/effects parity.
+4. **10E — Grid geometry:** отдельная `IsometricSquares`, property sheet, snap/golden fixtures.
+5. **10F — Licensed font catalog/navigation и редактируемые bindings.**
+
+Эти срезы не смешиваются с Stage 9B–9E. Выполнение 10B не позволяет объявить весь Stage 10
+готовым.
 
 ## Stage 11 — Performance, packaging, release candidate
 
