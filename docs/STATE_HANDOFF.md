@@ -2,10 +2,11 @@
 
 ## Последнее обновление
 
-2026-08-25. Реализация Stages 3–5 завершена тремя отдельными stage-коммитами. Последний срез
-проверен сокращённо по решению владельца: Release-сборка, целевые Core/Persistence/Rendering/
-Presentation тесты, benchmark и один настоящий UIA-smoke окна. Security-проверки не запускались
-по прямому правилу проекта. Следующий крупный блок — Stages 6–8, по одному коммиту на этап.
+2026-08-26. Stages 1–8 и Editor UX Rebuild находятся в истории. На branch
+`stage/09-reliability-cycle` выполнен и независимо проверен первый срез Stage 9: 9A autosave
+journal + startup recovery (`03372d7`). Полный Stage 9 остаётся `PARTIAL`: следующий отдельный
+срез — 9B named checkpoints. Stage 10 object/grid parity описан и принят в `DEC-010`, но ещё не
+реализован полностью.
 
 ## FACT — среда
 
@@ -359,12 +360,33 @@ package audits и повторного pre-commit/doctor.
 - **PARTIAL:** native smoke проверяет наличие Stage 4 controls, но повторно не проходит системный
   file-dialog импорта. Полный visual/coverage/mutation/package аудит пропущен по решению владельца.
 
+## FACT — Stages 6–8, Editor UX и Stage 9A
+
+- Stages 6–8 находятся в отдельных feature-коммитах: `b5cf81c` (Line/Shape), `2562645`
+  (Text/Notes/Grid), `d657dcf` (Filters/Compositions). Их функциональная основа и общий native
+  regression driver проверены; отдельного формального review-документа для каждого этапа нет.
+- Editor UX Rebuild и последующие fixes приняты коммитом `2e3315a`; отчёт:
+  `docs/reviews/EDITOR_UX_REBUILD_VERIFICATION.md`.
+- Clean-room контракт полного object inspector и grid property sheet принят как `DEC-010` и
+  записан в `docs/research/OBJECT_AND_GRID_PARITY.md`. Текущий движок уже поддерживает три grid
+  topology и большую часть stamp effects, но полный прямой UI относится к Stage 10.
+- Stage 9 разбит контрактом `f29bbfe` на 9A–9E. Код 9A зафиксирован коммитом `03372d7`: две
+  bounded autosave generations, atomic metadata pointer, fallback на предыдущую валидную копию,
+  startup offer/restore, отдельный autosave status и единый gate с manual save.
+- Свежая Release-сборка 9A: 0 warnings/0 errors; тесты **195/195**
+  (63 Core + 49 Persistence + 16 Rendering + 6 Assets + 61 Presentation); analyzers, NuGet
+  vulnerable/deprecated audits, pre-commit и doctor прошли.
+- Нативный аварийный smoke `scripts/drive-stage09-autosave.ps1` прошёл на изолированном recovery
+  root: dirty → autosave → kill owned process → новый процесс → dashboard offer → restore dirty;
+  0 TCP listeners, 3/3 PNG `2576×1408` просмотрены.
+- Полный отчёт 9A: `docs/reviews/STAGE_09A_AUTOSAVE_VERIFICATION.md`.
+
 ## Следующий безопасный шаг
 
-Один крупный блок для Opus объединяет Stages 6–8, но сохраняет три отдельных коммита и остановку
-после каждого stage self-check: editable Line/Shape geometry и boolean fixtures; Text/Notes/Grid;
-Filters/compositions/cross-document copy-paste/reference calibration. Codex после блока делает
-только сокращённую проверку критических gates. Stage 9 в этот блок не включать.
+Один отдельный issue-sized срез Stage 9B: именованные checkpoints и безопасный возврат к ним.
+Не смешивать с 9C resize/crop/new-from-region, 9D export/cancellation, 9E migrations/diagnostics
+или Stage 10 object/grid parity. Основание и точные gates 9A:
+`docs/reviews/STAGE_09A_AUTOSAVE_VERIFICATION.md`.
 
 ## Проверка среды
 

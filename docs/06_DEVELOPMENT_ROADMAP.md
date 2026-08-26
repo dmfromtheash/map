@@ -185,6 +185,9 @@ Preview и export визуально совпадают по golden tests. Ко�
 
 ## Stage 9 — Надёжность полного цикла
 
+Текущий статус на 26.08.2026: **PARTIAL**. Срез 9A (autosave journal + startup recovery) выполнен
+и проверен; 9B–9E остаются отдельными задачами. Отчёт: `reviews/STAGE_09A_AUTOSAVE_VERIFICATION.md`.
+
 ### Срезы
 
 - autosave journal;
@@ -200,6 +203,9 @@ Preview и export визуально совпадают по golden tests. Ко�
 Fault-injection suite доказывает отсутствие потери последней корректной версии. Все fixtures старых схем мигрируют на копии.
 
 ## Stage 10 — Собственный UX/UI и asset pilot
+
+Текущий статус: **PROPOSED**. Поведенческий контракт object inspector и grid property sheet принят
+в `DEC-010`, но полная панель и все presets ещё не реализованы.
 
 Этот этап начинается после предоставления владельцем материалов, но отдельные UX-прототипы идут раньше каждого инструмента.
 
