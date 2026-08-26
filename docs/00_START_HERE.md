@@ -4,7 +4,7 @@
 
 Это исходная система управления проектом нативного офлайн-конструктора карт для Windows. Она фиксирует продукт, функциональный слепок, UX, технические границы, формат данных, дорожную карту, качество, лицензирование и рабочий протокол для Claude Code Opus.
 
-## Состояние на 26.08.2026
+## Состояние на 27.08.2026
 
 | Область | Статус | Что это значит |
 |---|---|---|
@@ -12,8 +12,8 @@
 | Правовые границы | `FACT` | Автоскрейпинг, обратная разработка и копирование материалов исключены |
 | Продуктовый объём | `ACCEPTED` | Офлайн-эквивалент редактора и локального dashboard; без облачного сообщества и Marketplace |
 | Технологический стек | `ACCEPTED` | .NET 10 + Avalonia 12.1 + Skia; SDK установлен |
-| Код приложения | `PARTIAL` | Stages 1–8, Stage 9A и первый Stage 10 input slice реализованы; 10B Library/variant sets подготовлен как следующий контракт, но код ещё не выполнен |
-| Дизайн и ассеты | `PARTIAL` | Есть собственная visual system и плоский локальный asset pipeline; Library v2/variant sets/diagnostic fixtures входят в 10B, полный inspector/grid идут позже |
+| Код приложения | `PARTIAL` | Stages 1–8, Stage 9A, Stage 10 input slice и 10B Library/variant sets реализованы; Fix 02 закрывает ошибки виртуализированных карточек, но Stage 10 в целом и независимая приёмка текущего fix остаются незавершёнными |
+| Дизайн и ассеты | `PARTIAL` | Есть собственная visual system, Library v2, наборы вариантов и diagnostic fixtures; упрощение перегруженной Library-панели выполняется отдельным UX-срезом, полный inspector/grid идут позже |
 
 ## Карта документов
 
@@ -55,7 +55,7 @@
 
 ## Следующее действие
 
-Передать Opus один готовый owner-approved Stage 10B из
-`prompts/STAGE_10B_ASSET_LIBRARY_VARIANT_SETS.md`: Library v2, variant sets, set-aware
-Area/Density и diagnostic fixtures. Не смешивать его с 10C multi-selection/groups,
-`IsometricSquares`, полным inspector или Stage 9B checkpoints.
+Завершить отдельный UX-срез упрощения правой Library-панели, затем независимо проверить точный
+Fix 02/UX diff и только после его приёмки переходить к 10C multi-selection/groups. Исторический
+контракт 10B остаётся в `prompts/STAGE_10B_ASSET_LIBRARY_VARIANT_SETS.md`; не смешивать текущую
+работу с `IsometricSquares`, полным inspector или Stage 9B checkpoints.

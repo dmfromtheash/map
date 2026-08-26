@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Globalization;
@@ -190,7 +190,7 @@ public sealed class EditorView : UserControl
     private readonly TextBlock _libraryDateHint = new() { Name = "LibraryDateHint" };
     private readonly TextBlock _libraryFilterSummary = new() { Name = "LibraryFilterSummary" };
     private readonly TextBlock _variantStateText = new() { Name = "VariantStateText" };
-    private readonly Dictionary<string, TileState> _tileStates = [];
+    private readonly Dictionary<string, List<TileState>> _tileStates = [];
     private (int First, int Count) _reportedLibraryRange = (-1, -1);
     private int _lastSelectedLibraryRow = -1;
     private ToggleButton _randomAngleToggle = null!;
@@ -1283,7 +1283,10 @@ public sealed class EditorView : UserControl
         _libraryGrid.ItemTemplate = new FuncDataTemplate<AssetLibraryRow>(
             row => row is not null,
             (row, _) => row!.IsHeader ? BuildLibraryGroupHeader(row) : BuildLibraryTile(row.Card),
-            supportsRecycling: true);
+            // These controls intentionally capture the row while they are built. Reusing one for
+            // another row would leave its visible title, thumbnail and badges pointing at the old
+            // asset while the ListBox selection already points at the new one.
+            supportsRecycling: false);
 
         _libraryGrid.SelectionChanged += (_, _) =>
         {
@@ -1537,9 +1540,31 @@ public sealed class EditorView : UserControl
             },
         }.Named("LibraryTile_" + summary.SetId);
 
-        _tileStates[summary.CoverSha256] = new TileState(stateBadge, stateLabel, host, summary);
-        ApplyTileState(_tileStates[summary.CoverSha256]);
+        var tile = new TileState(stateBadge, stateLabel, host, summary);
+        if (!_tileStates.TryGetValue(summary.CoverSha256, out var states))
+        {
+            states = [];
+            _tileStates.Add(summary.CoverSha256, states);
+        }
+
+        states.Add(tile);
+        host.DetachedFromVisualTree += (_, _) => RemoveTileState(summary.CoverSha256, tile);
+        ApplyTileState(tile);
         return host;
+    }
+
+    private void RemoveTileState(string sha256, TileState tile)
+    {
+        if (!_tileStates.TryGetValue(sha256, out var states))
+        {
+            return;
+        }
+
+        states.Remove(tile);
+        if (states.Count == 0)
+        {
+            _tileStates.Remove(sha256);
+        }
     }
 
     /// <summary>Shows the current verdict on one realised tile, in colour, words and UIA name.</summary>
@@ -1615,7 +1640,7 @@ public sealed class EditorView : UserControl
             return;
         }
 
-        foreach (var tile in _tileStates.Values)
+        foreach (var tile in _tileStates.Values.SelectMany(states => states).ToArray())
         {
             ApplyTileState(tile);
         }

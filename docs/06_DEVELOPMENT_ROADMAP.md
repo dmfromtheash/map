@@ -1,4 +1,4 @@
-﻿# 06. Дорожная карта разработки
+# 06. Дорожная карта разработки
 
 ## Почему порядок именно такой
 
@@ -217,8 +217,15 @@ recent/favorite, виртуализированный каталог, `EditorToo
 атомарный One/Area gesture со стоимостью по числу уникальных SHA, стабильный между процессами
 seed, полный `used-in-current-map` и полная проверка схемы v2 с отказом на семантически
 повреждённом индексе. По решению владельца scatter теперь размножает вариант, не поворачивая и не
-отражая его. **Оба среза ожидают независимой проверки Codex**; до неё их результаты не являются
-`FACT`. High-DPI и нативный файловый диалог остались `PARTIAL`/`BLOCKED` — причины в
+отражая его.
+
+Отдельный **10B Fix 02** закрывает два дефекта проверки Fix 01: карточки с захваченными значениями
+больше не переиспользуются для другой строки после прокрутки/фильтра, а все видимые копии одного
+набора в tag-группах получают одинаковое асинхронное состояние файла. Нативный driver теперь
+доказывает каталог больше высоты окна, scroll/filter visual-to-row match, две tag-копии и реальный
+`used-in-current-map`; фоновый режим не выводит окно поверх работы владельца. Self-check Fix 02
+пройден, но независимая приёмка текущего авторского контекста ещё требуется. High-DPI и нативный
+файловый диалог остались `PARTIAL`/`BLOCKED` — причины в
 `docs/STATE_HANDOFF.md`. Полный object/grid inspector, `IsometricSquares`, multi-selection
 UI/groups и font catalog остаются после 10B.
 
@@ -247,7 +254,8 @@ UI/groups и font catalog остаются после 10B.
 
 1. **10B — Library v2 и variant-set stamp workflow:** единый owner-approved крупный срез;
    контракт — `prompts/STAGE_10B_ASSET_LIBRARY_VARIANT_SETS.md`. Реализован; поверх него выполнен
-   отдельный commit 10B Fix 01. Оба ожидают независимой проверки Codex.
+   отдельный commit 10B Fix 01 и подготовлен Fix 02. Следом идёт отдельное упрощение перегруженной
+   Library-панели; только после независимой приёмки этих исправлений 10B можно закрывать.
 2. **10C — Multi-selection/groups:** Ctrl+A/Ctrl+click, group/ungroup, group transform и UIA.
 3. **10D — Object inspectors:** Stamp/Text/Line/Shape/Brush controls и color/effects parity.
 4. **10E — Grid geometry:** отдельная `IsometricSquares`, property sheet, snap/golden fixtures.
