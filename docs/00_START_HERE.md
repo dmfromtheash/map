@@ -12,7 +12,7 @@
 | Правовые границы | `FACT` | Автоскрейпинг, обратная разработка и копирование материалов исключены |
 | Продуктовый объём | `ACCEPTED` | Офлайн-эквивалент редактора и локального dashboard; без облачного сообщества и Marketplace |
 | Технологический стек | `ACCEPTED` | .NET 10 + Avalonia 12.1 + Skia; SDK установлен |
-| Код приложения | `PARTIAL` | Stages 1–8, Stage 9A, Stage 10 input slice, 10B Library/variant sets и срез 10C multi-selection/groups (self-check `PROPOSED`) реализованы; keyboard/DPI/file-picker и clean-context UX-gate 10B остаются незавершёнными |
+| Код приложения | `PARTIAL` | Stages 1–8, Stage 9A, Stage 10 input slice, 10B Library/variant sets и production-логика 10C multi-selection/groups независимо проверены; нативные keyboard/DPI/file-picker и clean-context UX-gates остаются незавершёнными |
 | Дизайн и ассеты | `PARTIAL` | Есть собственная visual system, упрощённая Library v2, наборы вариантов и diagnostic fixtures; полный inspector/grid идут позже |
 
 ## Карта документов
@@ -40,6 +40,7 @@
 | `prompts/STAGE_09_RELIABILITY_CYCLE.md` | принятый контракт текущего цикла надёжности |
 | `reviews/STAGE_09A_AUTOSAVE_VERIFICATION.md` | проверка autosave и восстановления после аварийного завершения |
 | `reviews/STAGE_10B_ASSET_LIBRARY_VERIFICATION.md` | Codex-проверка Library v2, UX-среза и фоновых фильтров |
+| `reviews/STAGE_10C_MULTI_SELECTION_VERIFICATION.md` | Codex-проверка и отдельный fix multi-selection/groups |
 | `research/OBJECT_AND_GRID_PARITY.md` | clean-room матрица object/grid функций и разрывов текущего UI |
 | `research/INKARNATE_ACCOUNT_WALKTHROUGH_20260826.md` | наблюдаемые text/road/shape/brush/stamp/grid/keyboard механики тестовой карты |
 | `research/TEST_ASSET_FIXTURES.md` | план двух собственных logical fixtures: 12-variant stamp set и brush tip |
@@ -56,12 +57,11 @@
 
 ## Следующее действие
 
-На branch `stage/10c-multi-selection-groups` выполнен self-check срез 10C multi-selection/groups:
-множественное выделение с primary и restore, `Ctrl+A` по поиску и типовому фильтру, именованные
-группы (`GroupName` в `.mapproj` без повышения schemaVersion), вход в группу с breadcrumb,
-мультитрансформации одной undo-транзакцией, общая рамка через `CoSelectedObjectIds`,
-мульти-панель свойств с честным «Разные значения» и фоновый driver
-`scripts/drive-stage10c-multi-selection-groups.ps1` (16 PNG, 36 проверок). Статус —
-`PROPOSED / PARTIAL`: это self-check Opus, не независимая приёмка. Keyboard/DPI/file-picker и
-clean-context UX-gates 10B по-прежнему открыты. Следующий шаг — независимый Codex-review точного
-`BASE..HEAD`; 10D/10E/10F и Stage 9B–9E не начинать.
+На branch `stage/10c-multi-selection-groups` Codex независимо проверил Opus-коммит и отдельным
+fix-срезом закрыл два production-дефекта: `Ctrl+A` теперь следует видимым строкам дерева и не
+разрывает закрытые группы, а общая трансформация атомарно отклоняется для объекта на скрытом или
+заблокированном слое. Шесть новых regression-cases, полный suite `436/436` и фоновый Release-driver
+`scripts/drive-stage10c-multi-selection-groups.ps1` (`16` PNG, `39` checks) зелёные. Production-
+логика 10C — `FACT`; нативные keyboard/pointer и прежние keyboard/DPI/file-picker/clean-context
+UX-gates остаются `PARTIAL`/`BLOCKED`. Следующий отдельный функциональный срез — 10D Object
+inspectors; его нельзя смешивать с 10E grid geometry, 10F fonts или Stage 9B–9E.

@@ -527,6 +527,18 @@ try {
     Assert-Contains $groupRow.Current.Name '3 объекта' 'the group row states its child count'
     Assert-True ($null -eq (Find-RowLike 'Фигура Rectangle · Фигура')) `
         'grouped shapes are not duplicated as top-level rows'
+
+    Set-UiaValue 'ObjectSearchBox' 'Тестовая группа'
+    Start-Sleep -Milliseconds 300
+    Assert-True ($null -ne (Find-RowLike 'Группа «Тестовая группа»')) `
+        'the group name keeps the atomic row visible'
+    Invoke-Uia 'SelectAllButton'
+    Wait-State { (Get-UiaName 'SelectionCountText') -like '*3 объекта*' } `
+        'select all by group name selects every member atomically'
+    Assert-Contains (Get-UiaName 'SelectionStatusText') 'Группа «Тестовая группа»' `
+        'select all by group name keeps the group identity'
+    Set-UiaValue 'ObjectSearchBox' ''
+    Start-Sleep -Milliseconds 300
     Save-Shot 'group-row' | Out-Null
 
     # -------------------------------------------------- 7. undo/redo around group create
@@ -562,6 +574,14 @@ try {
     Select-RowChecked 'Фигура Rectangle · Фигура' 'Фигура Rectangle'
     Wait-State { (Get-UiaName 'SelectionCountText') -like '*1 объект*' } 'a child is selected alone'
     Assert-Contains (Get-UiaName 'SelectionStatusText') 'Фигура Rectangle' 'the child is named in the status'
+    Invoke-Uia 'SelectAllButton'
+    Wait-State { (Get-UiaName 'SelectionCountText') -like '*3 объекта*' } `
+        'select all inside the group is limited to its children'
+    Assert-Contains (Get-UiaName 'SelectionStatusText') 'Группа «Тестовая группа»' `
+        'select all inside the group does not include outsiders'
+    Select-RowChecked 'Фигура Rectangle · Фигура' 'Фигура Rectangle'
+    Wait-State { (Get-UiaName 'SelectionCountText') -like '*1 объект*' } `
+        'one child is restored for the breadcrumb scenario'
     Save-Shot 'inside-group' | Out-Null
 
     Invoke-Uia 'GroupBackButton'

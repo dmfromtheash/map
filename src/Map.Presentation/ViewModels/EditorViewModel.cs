@@ -3232,13 +3232,28 @@ public sealed class EditorViewModel : ViewModelBase
     /// </summary>
     public void SelectAllByFilter()
     {
-        var matching = Session.Document.Layers.OfType<ObjectLayer>()
-            .Where(layer => layer.Visible && !layer.Locked)
-            .SelectMany(layer => layer.Objects)
-            .Where(o => o.Visible && !o.Locked
-                && ObjectTreeRows.ObjectMatches(o, _objectSearchText, _objectTypeFilter))
-            .Select(o => o.Id)
-            .ToList();
+        var availableIds = AvailableObjectIds();
+        var matching = new List<ObjectId>();
+        foreach (var row in ObjectTree)
+        {
+            if (row.Kind == ObjectTreeRowKind.Group && row.GroupId is { } groupId)
+            {
+                var members = SceneGeometry.GroupMembers(Session.Document, groupId);
+                if (members.Count > 0 && members.All(member => availableIds.Contains(member.Id)))
+                {
+                    matching.AddRange(members.Select(member => member.Id));
+                }
+
+                continue;
+            }
+
+            if (row.Kind is ObjectTreeRowKind.Object or ObjectTreeRowKind.GroupChild
+                && row.Object is { } sceneObject
+                && availableIds.Contains(sceneObject.Id))
+            {
+                matching.Add(sceneObject.Id);
+            }
+        }
 
         Session.SetSelection(matching);
         StatusDetail = matching.Count == 0
@@ -3246,6 +3261,16 @@ public sealed class EditorViewModel : ViewModelBase
             : $"Выбрано: {EditorLabels.Objects(matching.Count)}.";
         AfterSelectionChange();
     }
+
+    private HashSet<ObjectId> AvailableObjectIds() =>
+    [
+        .. Session.Document.Layers
+            .OfType<ObjectLayer>()
+            .Where(layer => layer.Visible && !layer.Locked)
+            .SelectMany(layer => layer.Objects)
+            .Where(sceneObject => sceneObject.Visible && !sceneObject.Locked)
+            .Select(sceneObject => sceneObject.Id),
+    ];
 
     // ---------------------------------------------------------------- groups
 
@@ -3575,9 +3600,10 @@ public sealed class EditorViewModel : ViewModelBase
             return null;
         }
 
-        if (selected.Any(o => !o.Visible || o.Locked))
+        var availableIds = AvailableObjectIds();
+        if (selected.Any(sceneObject => !availableIds.Contains(sceneObject.Id)))
         {
-            StatusDetail = "В выделении есть скрытые или заблокированные объекты — изменение отклонено целиком.";
+            StatusDetail = "В выделении есть скрытые или заблокированные объекты либо слои — изменение отклонено целиком.";
             return null;
         }
 

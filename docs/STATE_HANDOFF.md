@@ -2,16 +2,14 @@
 
 ## Последнее обновление
 
-2026-08-27. Stages 1–8 и Editor UX Rebuild находятся в истории. На branch
-`stage/09-reliability-cycle` выполнен и независимо проверен первый срез Stage 9: 9A autosave
-journal + startup recovery (`03372d7`). Полный Stage 9 остаётся `PARTIAL`: следующий отдельный
-срез — 9B named checkpoints. Stage 10 object/grid parity описан и принят в `DEC-010`, но ещё не
-реализован полностью. Реализованы срезы Stage 10 input parity (`95d2fe8`) и Stage 10B Library v2 /
-variant sets / deterministic stamp placement на branch `stage/10-asset-library-sets`. Поверх него
-выполнены Fix 01, Fix 02 и UX-срез упрощения Library. Codex проверил точный Claude-диапазон и
-закрыл два пропуска background-driver; подробности в
-`docs/reviews/STAGE_10B_ASSET_LIBRARY_VERIFICATION.md`. Stage 10B остаётся `PARTIAL` по
-keyboard/DPI/file-picker и clean-context UX-gates; Stage 10C не начат.
+2026-08-27. Stages 1–8 и Editor UX Rebuild находятся в истории. Stage 9A autosave journal +
+startup recovery независимо проверен; Stage 9 в целом остаётся `PARTIAL`. В Stage 10 реализованы
+input parity, 10B Library v2 / variant sets и 10C multi-selection/groups. Codex проверил точный
+Opus-диапазон 10C, нашёл два production-дефекта и закрыл их отдельным fix-срезом с red/green
+тестами и фоновым Release-driver. Production-логика 10C — `FACT`; нативный keyboard/pointer gate
+10C и прежние keyboard/DPI/file-picker/clean-context UX-gates 10B остаются `PARTIAL`/`BLOCKED`.
+Подробности: `docs/reviews/STAGE_10C_MULTI_SELECTION_VERIFICATION.md`. Следующий отдельный
+функциональный срез — 10D Object inspectors; не смешивать с 10E/10F или Stage 9B–9E.
 
 ## FACT — среда
 
@@ -734,6 +732,34 @@ unit-тестами, pixel-тестом marquee-chrome и routing-review MainWin
 UX-критика. Соседний дефект статус-бара (текст вплотную к «Масштаб NN %») по-прежнему не
 исправлялся. Следующий шаг — независимый Codex-review точного `BASE..HEAD`; 10D/10E/10F и
 Stage 9B–9E не начинать.
+
+## FACT / PARTIAL — независимый Codex-review и Fix Stage 10C, 27.08.2026
+
+- Точный Opus-диапазон `58bef7a..5e87cf5` пересчитан: branch
+  `stage/10c-multi-selection-groups`, `A=11`, `M=19`, `D=0`, `R=0`, tracked `274`; перед
+  исправлением дерево было чистым.
+- Независимо найдены два production-дефекта. `SelectAllByFilter` обходил отдельные объекты всего
+  документа, поэтому поиск по имени закрытой группы выбирал `0`, типовой фильтр разрывал группу,
+  а внутри открытой группы Ctrl+A захватывал outsiders. Проверка геометрической доступности
+  учитывала флаги объекта, но не скрытие/блокировку его слоя.
+- Отдельный fix строит Ctrl+A из текущих `ObjectTree` rows: закрытая группа является атомарной,
+  открытая ограничивает выбор детьми, а группа с недоступным участником пропускается целиком.
+  Единый линейно построенный набор доступных ObjectId также запрещает move/scale/rotate/sublayer/
+  opacity для всей выборки, если хотя бы один объект или его слой скрыт/заблокирован.
+- Red/green: до production-правки пять адресных cases падали на исходных симптомах; после правки
+  проходят. Добавлен шестой guard-case для недоступного участника закрытой группы. Весь класс
+  Stage 10C — `33/33`, полный suite — `436/436`.
+- Background Release-driver расширен реальными UIA-проверками поиска по имени группы и Ctrl+A
+  внутри breadcrumb. Свежий прогон: `PASS`, `16` PNG `2500x1460`, `39` checks, `3` честных
+  `PARTIAL`; отчёт `artifacts/stage10c-fix-codex-commit-20260827/report.json`. Окно не активировалось,
+  клавиатура владельца не использовалась, процессов `Map.App` после прогона нет.
+- Свежие gates: doctor/locked restore/Release build/pre-commit — PASS; build `0` warnings /
+  `0` errors; vulnerable packages — нет; deprecated — только прежний `xunit 2.9.3` Legacy.
+  `dotnet format --severity info` сохраняет legacy exit `2`; в изменённых строках C# новых
+  diagnostics нет.
+- Статус: production-логика Stage 10C — `FACT`. Native keyboard/pointer gestures остаются
+  `PARTIAL` по безопасному background-режиму; clean-context UX-review этим исправлением не
+  подменяется. Следующий функциональный срез — отдельный 10D Object inspectors.
 
 ## Проверка среды
 

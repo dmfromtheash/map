@@ -270,16 +270,20 @@ UI/groups и font catalog остаются после 10B.
    проверил точный Claude-диапазон и закрыл два пропуска фонового драйвера; 10B остаётся `PARTIAL`
    по keyboard/DPI/file-picker и clean-context UX-gates.
 2. **10C — Multi-selection/groups:** Ctrl+A/Ctrl+click, group/ungroup, group transform и UIA.
-   Выполнен self-check срез на branch `stage/10c-multi-selection-groups` (`PROPOSED`):
+   Production-логика независимо проверена и исправлена на branch
+   `stage/10c-multi-selection-groups` (`FACT / PARTIAL`):
    упорядоченное множественное выделение с primary и restore, `Ctrl+A` по поиску и типовому
    фильтру панели объектов, именованные группы с nullable `GroupName` в `.mapproj` (schemaVersion
    не поднимался), вход в группу с breadcrumb, мультитрансформации/`sublayer`/`opacity`/
    lock/visibility/delete одной undo-транзакцией с атомарным отказом на locked/hidden члене,
    общая рамка selection chrome через прежний `RenderOptions.CoSelectedObjectIds`, мульти-панель
    свойств без ложных единых значений и фоновый driver
-   `scripts/drive-stage10c-multi-selection-groups.ps1`. Canvas marquee/Esc/Ctrl+click доказаны
-   адресными тестами и renderer-тестом, а не фоновым keyboard-гейтом. Независимая приёмка Codex
-   ещё требуется; 10B keyboard/DPI/file-picker и clean-context gates не закрыты этим срезом.
+   `scripts/drive-stage10c-multi-selection-groups.ps1`. Независимая проверка обнаружила и отдельным
+   fix-срезом закрыла два дефекта: частичное выделение закрытой группы через `Ctrl+A` и изменение
+   участника группы на скрытом/заблокированном слое. Canvas marquee/Esc/Ctrl+click и keyboard
+   transforms доказаны адресными тестами/routing-review, но не фоновым нативным вводом; поэтому
+   соответствующий runtime-gate остаётся `PARTIAL`. 10B keyboard/DPI/file-picker и clean-context
+   gates этим срезом также не закрыты.
 3. **10D — Object inspectors:** Stamp/Text/Line/Shape/Brush controls и color/effects parity.
 4. **10E — Grid geometry:** отдельная `IsometricSquares`, property sheet, snap/golden fixtures.
 5. **10F — Licensed font catalog/navigation и редактируемые bindings.**

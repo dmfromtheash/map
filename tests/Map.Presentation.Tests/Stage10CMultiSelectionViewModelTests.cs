@@ -19,7 +19,12 @@ public class Stage10CMultiSelectionViewModelTests
         "#FF3E5C76", "#FF1B263B", 0, visible, locked);
 
     private static (EditorViewModel Editor, LayerId Lower, LayerId Upper) NewEditor(
-        IReadOnlyList<SceneObject> lowerObjects, IReadOnlyList<SceneObject>? upperObjects = null)
+        IReadOnlyList<SceneObject> lowerObjects,
+        IReadOnlyList<SceneObject>? upperObjects = null,
+        bool lowerVisible = true,
+        bool lowerLocked = false,
+        bool upperVisible = true,
+        bool upperLocked = false)
     {
         var lower = LayerId.New();
         var upper = LayerId.New();
@@ -28,8 +33,8 @@ public class Stage10CMultiSelectionViewModelTests
             new CanvasDefinition(1920, 1080, "px", "#FF1E2430"),
             [
                 new BaseColorLayer(LayerId.New(), "Фон", true, false, 1.0, "#FF1E2430"),
-                new ObjectLayer(lower, "Нижний", true, false, 1.0, lowerObjects),
-                new ObjectLayer(upper, "Верхний", true, false, 1.0, upperObjects ?? []),
+                new ObjectLayer(lower, "Нижний", lowerVisible, lowerLocked, 1.0, lowerObjects),
+                new ObjectLayer(upper, "Верхний", upperVisible, upperLocked, 1.0, upperObjects ?? []),
             ]);
         var editor = new EditorViewModel(
             document, documentPath: null, startDirty: false,
@@ -134,6 +139,92 @@ public class Stage10CMultiSelectionViewModelTests
         editor.ObjectTypeFilter = ObjectTypeFilter.All;
         editor.SelectAllByFilter();
         Assert.Equal(3, editor.SelectionCount); // hidden and locked never enter Ctrl+A
+    }
+
+    [Fact]
+    public void Select_all_by_group_name_selects_the_closed_group_as_one_unit()
+    {
+        var groupId = Guid.NewGuid();
+        var a = Object("Дуб", SceneObjectKind.Stamp, 0, 0) with
+        {
+            GroupId = groupId,
+            GroupName = "Тёмный лес",
+        };
+        var b = Object("Ель", SceneObjectKind.Stamp, 300, 0) with
+        {
+            GroupId = groupId,
+            GroupName = "Тёмный лес",
+        };
+        var outsider = Object("Камень", SceneObjectKind.Rectangle, 600, 0);
+        var (editor, _, _) = NewEditor([a, b, outsider]);
+
+        editor.ObjectSearchText = "тёмный лес";
+        editor.SelectAllByFilter();
+
+        Assert.Equal([a.Id, b.Id], editor.Session.SelectedObjectIds);
+        Assert.Equal(groupId, editor.SelectedGroupId);
+    }
+
+    [Fact]
+    public void Select_all_keeps_a_closed_group_atomic_when_only_one_member_matches_the_filter()
+    {
+        var groupId = Guid.NewGuid();
+        var stamp = Object("Дуб", SceneObjectKind.Stamp, 0, 0) with
+        {
+            GroupId = groupId,
+            GroupName = "Лес",
+        };
+        var text = Object("Подпись", SceneObjectKind.Text, 300, 0) with
+        {
+            GroupId = groupId,
+            GroupName = "Лес",
+        };
+        var (editor, _, _) = NewEditor([stamp, text]);
+
+        editor.ObjectTypeFilter = ObjectTypeFilter.Stamps;
+        editor.SelectAllByFilter();
+
+        Assert.Equal([stamp.Id, text.Id], editor.Session.SelectedObjectIds);
+        Assert.Equal(groupId, editor.SelectedGroupId);
+    }
+
+    [Fact]
+    public void Select_all_skips_a_closed_group_when_any_member_is_unavailable()
+    {
+        var groupId = Guid.NewGuid();
+        var available = Object("Дуб", SceneObjectKind.Stamp, 0, 0) with
+        {
+            GroupId = groupId,
+            GroupName = "Лес",
+        };
+        var locked = Object("Ель", SceneObjectKind.Stamp, 300, 0, locked: true) with
+        {
+            GroupId = groupId,
+            GroupName = "Лес",
+        };
+        var (editor, _, _) = NewEditor([available, locked]);
+
+        editor.ObjectSearchText = "дуб";
+        editor.SelectAllByFilter();
+
+        Assert.Empty(editor.Session.SelectedObjectIds);
+    }
+
+    [Fact]
+    public void Select_all_inside_an_open_group_never_selects_outsiders()
+    {
+        var a = Object("A", SceneObjectKind.Rectangle, 0, 0);
+        var b = Object("B", SceneObjectKind.Rectangle, 300, 0);
+        var outsider = Object("C", SceneObjectKind.Rectangle, 600, 0);
+        var (editor, _, _) = NewEditor([a, b, outsider]);
+        editor.Session.SetSelection([a.Id, b.Id]);
+        Assert.True(editor.GroupSelection("Лес"));
+        editor.EnterSelectedGroup();
+        editor.Session.ClearSelection();
+
+        editor.SelectAllByFilter();
+
+        Assert.Equal([a.Id, b.Id], editor.Session.SelectedObjectIds);
     }
 
     // ---------------------------------------------------------------- groups
@@ -323,6 +414,35 @@ public class Stage10CMultiSelectionViewModelTests
         Assert.Equal(0, Find(editor, a.Id).RotationDegrees);
         Assert.Equal(0, editor.Session.UndoDepth);
         Assert.False(string.IsNullOrEmpty(editor.StatusDetail));
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    public void A_hidden_or_locked_layer_blocks_the_whole_geometric_change(
+        bool upperVisible, bool upperLocked)
+    {
+        var groupId = Guid.NewGuid();
+        var a = Object("A", SceneObjectKind.Rectangle, 0, 0) with
+        {
+            GroupId = groupId,
+            GroupName = "Межслойная группа",
+        };
+        var b = Object("B", SceneObjectKind.Rectangle, 300, 0) with
+        {
+            GroupId = groupId,
+            GroupName = "Межслойная группа",
+        };
+        var (editor, _, _) = NewEditor(
+            [a], [b], upperVisible: upperVisible, upperLocked: upperLocked);
+        editor.Session.SetSelection([a.Id, b.Id]);
+
+        editor.NudgeSelectedObject(10, 0);
+
+        Assert.Equal(0, Find(editor, a.Id).X);
+        Assert.Equal(300, Find(editor, b.Id).X);
+        Assert.Equal(0, editor.Session.UndoDepth);
+        Assert.Contains("сло", editor.StatusDetail, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
