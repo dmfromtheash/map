@@ -229,6 +229,14 @@ seed, полный `used-in-current-map` и полная проверка схе
 `docs/STATE_HANDOFF.md`. Полный object/grid inspector, `IsometricSquares`, multi-selection
 UI/groups и font catalog остаются после 10B.
 
+Поверх Fix 02 отдельным commit выполнен **UX-срез упрощения Library-панели**: default-путь
+показывает только breadcrumbs, текстовые кнопки импорта, поиск, быстрые фильтры, счётчик и
+карточки; сортировка/группировка/редкие фильтры, коллекции и управление набором свёрнуты в
+именованные Expander, блоки выбранного набора и размещения появляются только после выбора, а
+`Один штамп` скрывает scatter-контролы. Фоновый driver подтвердил срез (21 PNG, 96 проверок,
+323 штампа / 12 SHA); это self-check авторского контекста, независимая приёмка Codex ещё
+требуется. Горячие клавиши и High-DPI остаются `PARTIAL`, нативный файловый диалог — `BLOCKED`.
+
 Этот этап начинается после предоставления владельцем материалов, но отдельные UX-прототипы идут раньше каждого инструмента.
 
 - утвердить design tokens и собственную icon system;
@@ -253,9 +261,9 @@ UI/groups и font catalog остаются после 10B.
 ### Порядок оставшихся срезов Stage 10
 
 1. **10B — Library v2 и variant-set stamp workflow:** единый owner-approved крупный срез;
-   контракт — `prompts/STAGE_10B_ASSET_LIBRARY_VARIANT_SETS.md`. Реализован; поверх него выполнен
-   отдельный commit 10B Fix 01 и подготовлен Fix 02. Следом идёт отдельное упрощение перегруженной
-   Library-панели; только после независимой приёмки этих исправлений 10B можно закрывать.
+   контракт — `prompts/STAGE_10B_ASSET_LIBRARY_VARIANT_SETS.md`. Реализован; поверх него выполнены
+   отдельные commits 10B Fix 01, Fix 02 и UX-срез упрощения перегруженной Library-панели; только
+   после независимой приёмки этих исправлений 10B можно закрывать.
 2. **10C — Multi-selection/groups:** Ctrl+A/Ctrl+click, group/ungroup, group transform и UIA.
 3. **10D — Object inspectors:** Stamp/Text/Line/Shape/Brush controls и color/effects parity.
 4. **10E — Grid geometry:** отдельная `IsometricSquares`, property sheet, snap/golden fixtures.

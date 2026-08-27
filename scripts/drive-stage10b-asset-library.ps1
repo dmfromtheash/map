@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
 Stage 10B native smoke: import the project's own diagnostic fixtures into an isolated library,
 navigate collections, variants and filters, place One and Area gestures, prove undo/redo and
@@ -263,6 +263,25 @@ function Invoke-Uia([string]$automationId) {
     Start-Sleep -Milliseconds 260
 }
 
+function Get-UiaExpandState([string]$automationId) {
+    $element = Require-Uia $automationId
+    $pattern = $element.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+    return $pattern.Current.ExpandCollapseState.ToString()
+}
+
+function Set-UiaExpanded([string]$automationId, [bool]$expanded = $true) {
+    $element = Require-Uia $automationId
+    $pattern = $element.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+    $state = $pattern.Current.ExpandCollapseState
+    if ($expanded -and $state -ne [System.Windows.Automation.ExpandCollapseState]::Expanded) {
+        $pattern.Expand()
+    }
+    elseif (-not $expanded -and $state -ne [System.Windows.Automation.ExpandCollapseState]::Collapsed) {
+        $pattern.Collapse()
+    }
+    Start-Sleep -Milliseconds 300
+}
+
 function Set-UiaValue([string]$automationId, [string]$value) {
     $element = Require-Uia $automationId
     $pattern = $element.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
@@ -428,7 +447,7 @@ function Start-TestApp([string]$ImportGroups = '', [string]$MapPath = '') {
         # Keep the native layout and PrintWindow evidence without covering the owner's desktop.
         # SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW, positioned outside the visible desktop.
         [void][Stage10Native]::SetWindowPos(
-            $script:WindowHandle, [IntPtr]::Zero, -32000, 0, 1600, 1000, 0x54)
+            $script:WindowHandle, [IntPtr]::Zero, -32000, 0, 2000, 1250, 0x54)
     }
     else {
         [void][Stage10Native]::ShowWindow($script:WindowHandle, 3)
@@ -552,6 +571,8 @@ try {
     New-TestMap 'Stage 10B library'
     Select-UiaTab 'Библиотека'
     Save-Shot 'library-empty' | Out-Null
+    Assert-True (-not (Require-Uia 'EditorSideTabs').Current.IsOffscreen) `
+        'the library panel remains inside the background verification viewport'
     Assert-Contains (Get-UiaName 'LibraryGrid') 'Карточки библиотеки' 'library grid has an accessible name'
     Assert-Contains (Get-UiaName 'LibraryCountText') 'пуста' 'empty library states it is empty'
 
@@ -565,7 +586,11 @@ try {
     Start-Sleep -Milliseconds 1200
     Save-Shot 'library-imported' | Out-Null
 
-    Assert-Contains (Get-UiaName 'LibraryCountText') 'Карточек: 2' 'two logical cards after import'
+    Assert-Contains (Get-UiaName 'LibraryCountText') 'Ассеты · 2' 'two logical cards after import'
+    Assert-Equal (Get-UiaExpandState 'LibraryFilterDetails') 'Collapsed' `
+        'advanced filters are collapsed in the default workflow'
+    Assert-Equal (Get-UiaExpandState 'LibraryCollectionsDetails') 'Collapsed' `
+        'collections are collapsed in the default workflow'
     $catalog = Get-CatalogJson
     Assert-True ($null -ne $catalog) 'catalog.json was written into the sandbox'
     Assert-Contains $catalog '"schemaVersion": 2' 'catalog is schema v2'
@@ -573,6 +598,8 @@ try {
 
     # ---------------------------------------------------------- 2. navigation
     Write-Host "`n[2] Tree, breadcrumbs, search and the full filter bar"
+    Set-UiaExpanded 'LibraryCollectionsDetails'
+    Set-UiaExpanded 'LibraryFilterDetails'
     Assert-Contains (Get-UiaName 'BreadcrumbRoot') 'Библиотека' 'the breadcrumb root is a real control'
     # The singleton import selects its own card, so the trail must name that card, not the root.
     Assert-Contains (Get-UiaName 'BreadcrumbCurrent') 'diagnostic-brush-tip' 'the breadcrumb leaf names the selection'
@@ -582,12 +609,12 @@ try {
     Assert-True ($null -ne (Find-Uia 'Collection_All')) 'collection tree lists all collections'
 
     Set-UiaValue 'AssetSearchBox' 'Диагностический'
-    Wait-State { (Get-UiaName 'LibraryCountText') -like '*Карточек: 1*' } 'search narrows the grid'
-    Assert-Contains (Get-UiaName 'LibraryCountText') 'Карточек: 1' 'search narrows to one card'
+    Wait-State { (Get-UiaName 'LibraryCountText') -like '*Ассеты · 1*' } 'search narrows the grid'
+    Assert-Contains (Get-UiaName 'LibraryCountText') 'Ассеты · 1' 'search narrows to one card'
     Assert-Contains (Get-UiaName 'LibraryFilterSummary') 'поиск' 'the summary names the active search'
     Set-UiaValue 'AssetSearchBox' ''
-    Wait-State { (Get-UiaName 'LibraryCountText') -like '*Карточек: 2*' } 'clearing the search restores both'
-    Assert-Contains (Get-UiaName 'LibraryCountText') 'Карточек: 2' 'clearing the search restores both'
+    Wait-State { (Get-UiaName 'LibraryCountText') -like '*Ассеты · 2*' } 'clearing the search restores both'
+    Assert-Contains (Get-UiaName 'LibraryCountText') 'Ассеты · 2' 'clearing the search restores both'
 
     # ------------------------------------------------------- 3. real grouping
     Write-Host "`n[3] Без групп -> По коллекции -> По тегу with visible group headers"
@@ -633,7 +660,7 @@ try {
 
     if (-not $Background) {
         Select-UiaChoice 'LibraryMediaFilter' 'image/png'
-        Wait-State { (Get-UiaName 'LibraryCountText') -like '*Карточек: 2*' } 'both diagnostic fixtures are PNG'
+        Wait-State { (Get-UiaName 'LibraryCountText') -like '*Ассеты · 2*' } 'both diagnostic fixtures are PNG'
         Assert-Contains (Get-UiaName 'LibraryFilterSummary') 'image/png' 'the summary names the media type'
     }
 
@@ -650,9 +677,12 @@ try {
     Save-Shot 'filters-active' | Out-Null
 
     Invoke-Uia 'LibraryClearFiltersButton'
-    Wait-State { (Get-UiaName 'LibraryCountText') -like '*Карточек: 2*' } 'the reset restores the library'
-    Assert-Contains (Get-UiaName 'LibraryFilterSummary') 'не заданы' 'the reset clears every filter'
-    Assert-Contains (Get-UiaName 'LibraryCountText') 'Карточек: 2' 'the reset brings both cards back'
+    Wait-State { (Get-UiaName 'LibraryCountText') -like '*Ассеты · 2*' } 'the reset restores the library'
+    Assert-True ($null -eq (Find-Uia 'LibraryFilterSummary')) `
+        'the inactive filter summary leaves the visible workflow'
+    Assert-Contains (Get-UiaName 'LibraryCountText') 'Ассеты · 2' 'the reset brings both cards back'
+    Set-UiaExpanded 'LibraryFilterDetails' $false
+    Set-UiaExpanded 'LibraryCollectionsDetails' $false
 
     # ---------------------------------------------------- 5. set and variants
     Write-Host "`n[5] Select the set, walk its variants, exercise the keyboard"
@@ -676,7 +706,11 @@ try {
     Assert-Contains (Get-UiaName 'SelectedSetBadge') '12 вариантов' 'selected set badge is accessible'
     Assert-Contains (Get-UiaName 'VariantPositionText') 'Вариант 1 / 12' 'set starts on its cover'
     Assert-Contains (Get-UiaName 'VariantPositionText') 'обложка' 'the cover is named as the cover'
-    Assert-Contains (Get-UiaName 'VariantStateText') 'файл на месте' 'a healthy variant says its file is there'
+    Assert-Contains (Get-UiaName 'VariantStateText') 'Готов к размещению' 'a healthy variant says it is ready'
+    Assert-Equal (Get-UiaExpandState 'SetManagementDetails') 'Collapsed' `
+        'set-management commands are collapsed until requested'
+    Assert-True ($null -eq (Find-Uia 'StampAreaSlider')) `
+        'single-stamp mode does not show scatter-only controls'
     Save-Shot 'set-selected' | Out-Null
 
     Invoke-Uia 'NextVariantButton'
@@ -718,6 +752,8 @@ try {
     # Density only appears in the Area readout, because in One mode it places nothing.
     Invoke-Uia 'StampModeArea'
     Start-Sleep -Milliseconds 400
+    Assert-True ($null -ne (Find-Uia 'StampAreaSlider')) `
+        'scatter controls appear when the Area mode is selected'
     $areaBefore = Get-UiaName 'StampAreaSummaryText'
     if (-not $Background) {
         Send-Chord @('Q')
@@ -739,18 +775,19 @@ try {
     Invoke-Uia 'SetFavoriteButton'
     Assert-Contains (Get-UiaName 'SetFavoriteButton') 'Убрать из избранного' 'favourite is set-level and reflected'
     Invoke-Uia 'LibraryFilterFavorites'
-    Wait-State { (Get-UiaName 'LibraryCountText') -like '*Карточек: 1*' } 'the favourites filter narrows'
-    Assert-Contains (Get-UiaName 'LibraryCountText') 'Карточек: 1' 'the favourites filter keeps only the set'
+    Wait-State { (Get-UiaName 'LibraryCountText') -like '*Ассеты · 1*' } 'the favourites filter narrows'
+    Assert-Contains (Get-UiaName 'LibraryCountText') 'Ассеты · 1' 'the favourites filter keeps only the set'
     Invoke-Uia 'LibraryFilterFavorites'
     Start-Sleep -Milliseconds 500
     Invoke-Uia 'LibraryFilterRecent'
-    Wait-State { (Get-UiaName 'LibraryCountText') -like '*Карточек: 1*' } 'the recent filter narrows'
-    Assert-Contains (Get-UiaName 'LibraryCountText') 'Карточек: 1' 'the recent filter shows the touched set'
+    Wait-State { (Get-UiaName 'LibraryCountText') -like '*Ассеты · 1*' } 'the recent filter narrows'
+    Assert-Contains (Get-UiaName 'LibraryCountText') 'Ассеты · 1' 'the recent filter shows the touched set'
     Invoke-Uia 'LibraryFilterRecent'
     Start-Sleep -Milliseconds 500
 
     # ------------------------------------------------- 6. managing the set
     Write-Host "`n[6] Rename the set, reorder a variant, choose a cover"
+    Set-UiaExpanded 'SetManagementDetails'
     Set-UiaValue 'SetRenameBox' '   '
     Invoke-Uia 'SetRenameButton'
     Start-Sleep -Milliseconds 400
@@ -802,6 +839,7 @@ try {
     New-TestMap 'Stage 10B after restart'
     Select-UiaTab 'Библиотека'
     Start-Sleep -Milliseconds 600
+    Set-UiaExpanded 'LibraryFilterDetails'
     $restored = Find-UiaCard 'Проверочный набор, набор, 12 вариантов'
     if ($null -eq $restored) { throw 'The renamed set did not come back after the restart.' }
     $restored.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
@@ -814,11 +852,11 @@ try {
     # Now that a tag exists, the exact-tag filter and the tag grouping can be driven for real.
     if (-not $Background) {
         Select-UiaChoice 'LibraryTagFilter' 'рельеф'
-        Wait-State { (Get-UiaName 'LibraryCountText') -like '*Карточек: 1*' } 'the tag filter narrows the grid'
-        Assert-Contains (Get-UiaName 'LibraryCountText') 'Карточек: 1' 'the exact tag filter keeps one card'
+        Wait-State { (Get-UiaName 'LibraryCountText') -like '*Ассеты · 1*' } 'the tag filter narrows the grid'
+        Assert-Contains (Get-UiaName 'LibraryCountText') 'Ассеты · 1' 'the exact tag filter keeps one card'
         Assert-Contains (Get-UiaName 'LibraryFilterSummary') 'рельеф' 'the summary names the active tag'
         Invoke-Uia 'LibraryClearFiltersButton'
-        Wait-State { (Get-UiaName 'LibraryCountText') -like '*Карточек: 2*' } 'clearing the tag restores both'
+        Wait-State { (Get-UiaName 'LibraryCountText') -like '*Ассеты · 2*' } 'clearing the tag restores both'
     }
 
     Invoke-Uia 'LibraryGroupTag'
@@ -877,7 +915,8 @@ try {
     Start-TestApp -MapPath $savedMap
     New-TestMap 'Stage 10B large library'
     Select-UiaTab 'Библиотека'
-    Wait-State { (Get-UiaName 'LibraryCountText') -like '*Карточек: 62*' } 'the large catalog is loaded'
+    Wait-State { (Get-UiaName 'LibraryCountText') -like '*Ассеты · 62*' } 'the large catalog is loaded'
+    Set-UiaExpanded 'LibraryFilterDetails'
     Invoke-Uia 'LibrarySortNameAsc'
     $grid = Require-Uia 'LibraryGrid'
     $scrollType = New-Object System.Windows.Automation.PropertyCondition(
@@ -910,7 +949,7 @@ try {
         'the scrolled visual text matches the row that selection and UIA expose'
 
     Set-UiaValue 'AssetSearchBox' 'Прокрутка 42'
-    Wait-State { (Get-UiaName 'LibraryCountText') -like '*Карточек: 1*' } 'the large list filters to one row'
+    Wait-State { (Get-UiaName 'LibraryCountText') -like '*Ассеты · 1*' } 'the large list filters to one row'
     $filteredCard = Find-UiaCard 'Прокрутка 42'
     if ($null -eq $filteredCard) { throw 'The filtered large-list card was not realised.' }
     Assert-CardVisualText $filteredCard 'Прокрутка 42' `
@@ -922,7 +961,7 @@ try {
     Start-TestApp -MapPath $savedMap
     New-TestMap 'Stage 10B placement after large list'
     Select-UiaTab 'Библиотека'
-    Wait-State { (Get-UiaName 'LibraryCountText') -like '*Карточек: 2*' } 'the small catalog is restored'
+    Wait-State { (Get-UiaName 'LibraryCountText') -like '*Ассеты · 2*' } 'the small catalog is restored'
     $restored = Find-UiaCard 'Проверочный набор, набор, 12 вариантов'
     $restored.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
     Wait-State { (Get-UiaName 'VariantPositionText') -like '*/ 12*' } 'the restored set is current after the large-list check'
@@ -941,14 +980,14 @@ try {
     Assert-Contains (Get-UiaName 'SaveStateText') 'сохран' 'the document reports its save state after One'
 
     Invoke-Uia 'LibraryFilterUsedInMap'
-    Wait-State { (Get-UiaName 'LibraryCountText') -like '*Карточек: 1*' } `
+    Wait-State { (Get-UiaName 'LibraryCountText') -like '*Ассеты · 1*' } `
         'the used-in-map filter narrows after a real placement'
     Assert-True ($null -ne (Find-UiaCard 'Проверочный набор')) `
         'the used-in-map filter keeps the set whose SHA is on the map'
     Assert-Contains (Get-UiaName 'LibraryFilterSummary') 'на карте' `
         'the used-in-map filter is named in the active summary'
     Invoke-Uia 'LibraryFilterUsedInMap'
-    Wait-State { (Get-UiaName 'LibraryCountText') -like '*Карточек: 2*' } `
+    Wait-State { (Get-UiaName 'LibraryCountText') -like '*Ассеты · 2*' } `
         'clearing used-in-map restores the catalog'
 
     Invoke-Uia 'StampModeArea'
@@ -1054,8 +1093,9 @@ try {
     Start-TestApp
     New-TestMap 'Stage 10B failure paths'
     Select-UiaTab 'Библиотека'
-    Wait-State { (Get-UiaName 'LibraryCountText') -like '*Карточек: 2*' } 'both cards are still listed'
-    Assert-Contains (Get-UiaName 'LibraryCountText') 'Карточек: 2' 'a damaged original does not hide the card'
+    Wait-State { (Get-UiaName 'LibraryCountText') -like '*Ассеты · 2*' } 'both cards are still listed'
+    Set-UiaExpanded 'LibraryFilterDetails'
+    Assert-Contains (Get-UiaName 'LibraryCountText') 'Ассеты · 2' 'a damaged original does not hide the card'
 
     $set = Find-UiaCard 'Проверочный набор, набор, 12 вариантов'
     if ($null -eq $set) { throw 'The twelve-variant card was not found on the failure run.' }
@@ -1073,7 +1113,7 @@ try {
     Assert-True ($null -ne $mismatchCard) 'the card itself, not only the panel, reports the mismatch'
     Wait-State { $null -ne (Find-UiaNameLike 'файл отсутствует') } 'the missing state reaches the variant'
     Assert-True ($null -ne (Find-UiaNameLike 'файл отсутствует')) 'a missing original is named as missing'
-    Assert-Contains (Get-UiaName 'VariantStateText') 'отсутствует' 'the selected variant states its own file'
+    Assert-Contains (Get-UiaName 'VariantStateText') 'не найден' 'the selected variant states its own file'
 
     Invoke-Uia 'LibraryGroupTag'
     Wait-State {

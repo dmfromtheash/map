@@ -55,7 +55,9 @@
 
 ## Следующее действие
 
-Завершить отдельный UX-срез упрощения правой Library-панели, затем независимо проверить точный
-Fix 02/UX diff и только после его приёмки переходить к 10C multi-selection/groups. Исторический
-контракт 10B остаётся в `prompts/STAGE_10B_ASSET_LIBRARY_VARIANT_SETS.md`; не смешивать текущую
-работу с `IsometricSquares`, полным inspector или Stage 9B checkpoints.
+UX-срез упрощения правой Library-панели реализован отдельным коммитом поверх Fix 02 и прошёл
+авторский self-check (фоновый driver: 21 PNG, 96 проверок, 323 штампа / 12 SHA). Теперь нужна
+независимая проверка Codex точного диапазона `dfc2d1d..HEAD`; только после её приёмки переходить
+к 10C multi-selection/groups. Исторический контракт 10B остаётся в
+`prompts/STAGE_10B_ASSET_LIBRARY_VARIANT_SETS.md`; не смешивать текущую работу с
+`IsometricSquares`, полным inspector или Stage 9B checkpoints.

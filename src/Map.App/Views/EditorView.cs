@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Globalization;
@@ -191,6 +191,12 @@ public sealed class EditorView : UserControl
     private readonly TextBlock _libraryFilterSummary = new() { Name = "LibraryFilterSummary" };
     private readonly TextBlock _variantStateText = new() { Name = "VariantStateText" };
     private readonly Dictionary<string, List<TileState>> _tileStates = [];
+    private Expander _libraryFilterDetails = null!;
+    private Expander _libraryCollections = null!;
+    private Expander _setManagementDetails = null!;
+    private Control _selectedSetBlock = null!;
+    private Control _stampGestureBlock = null!;
+    private StackPanel _stampAreaControls = null!;
     private (int First, int Count) _reportedLibraryRange = (-1, -1);
     private int _lastSelectedLibraryRow = -1;
     private ToggleButton _randomAngleToggle = null!;
@@ -1197,6 +1203,24 @@ public sealed class EditorView : UserControl
         BuildLibraryDiagnosticBanner();
         BuildLibraryGrid();
 
+        var importOne = Ui.TextButton(
+            "ImportAssetButton", "Добавить файл", () => _ = ImportAssetAsync(linked: false), "compact");
+        AutomationProperties.SetName(importOne, "Добавить один ассет в библиотеку");
+        ToolTip.SetTip(importOne, "Скопировать PNG, JPEG или WebP в локальную библиотеку");
+        var importSet = Ui.TextButton(
+            "ImportAssetSetButton", "Добавить набор", () => _ = ImportAssetSetAsync(), "compact");
+        AutomationProperties.SetName(importSet, "Добавить набор вариантов в библиотеку");
+        ToolTip.SetTip(importSet, "Объединить несколько изображений в один ассет с вариантами");
+        var linkFile = Ui.TextButton(
+            "LinkAssetButton", "Связать файл", () => _ = ImportAssetAsync(linked: true), "compact");
+        AutomationProperties.SetName(linkFile, "Связать ассет с файлом на диске");
+        ToolTip.SetTip(linkFile, "Не копировать файл; проверять его по исходному пути");
+
+        _libraryCollections = Disclosure(
+            "LibraryCollectionsDetails", "Коллекции", _collectionTree, expanded: false);
+        _selectedSetBlock = BuildSelectedSetBlock();
+        _stampGestureBlock = BuildStampGestureBlock();
+
         var body = new StackPanel
         {
             Margin = new Thickness(12, 10, 12, 18),
@@ -1205,38 +1229,23 @@ public sealed class EditorView : UserControl
             {
                 new DockPanel
                 {
-                    Children =
-                    {
-                        new StackPanel
-                        {
-                            Orientation = Orientation.Horizontal,
-                            Spacing = 2,
-                            Children =
-                            {
-                                Ui.IconButton("ImportAssetButton", "Импортировать одно изображение",
-                                    MapIcons.Plus, () => _ = ImportAssetAsync(linked: false)),
-                                Ui.IconButton("ImportAssetSetButton", "Импортировать набор вариантов",
-                                    MapIcons.Duplicate, () => _ = ImportAssetSetAsync()),
-                                Ui.IconButton("LinkAssetButton", "Связать с файлом на диске",
-                                    MapIcons.Open, () => _ = ImportAssetAsync(linked: true)),
-                            },
-                        }.Docked(Dock.Right),
-                        _breadcrumbs,
-                    },
+                    Children = { _breadcrumbs },
+                },
+                new WrapPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    ItemSpacing = 4,
+                    LineSpacing = 4,
+                    Children = { importOne, importSet, linkFile },
                 },
                 _libraryDiagnostic,
                 _assetSearch,
                 BuildLibraryFilterControls(),
-                Ui.Section("Коллекции", _collectionTree),
+                _libraryCollections,
                 new DockPanel { Children = { _libraryCountText } },
                 _libraryGrid,
-                BuildSelectedSetBlock(),
-                BuildStampGestureBlock(),
-                new TextBlock
-                {
-                    Text = "Связанный файл сверяется по контрольной сумме: подмена или пропажа видна на карте.",
-                    TextWrapping = TextWrapping.Wrap,
-                }.Classed("faint", "role-caption"),
+                _selectedSetBlock,
+                _stampGestureBlock,
             },
         };
 
@@ -1245,6 +1254,18 @@ public sealed class EditorView : UserControl
             HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
             Content = body,
         };
+    }
+
+    private static Expander Disclosure(string name, string title, Control content, bool expanded)
+    {
+        var expander = new Expander
+        {
+            Header = new TextBlock { Text = title }.Classed("role-panel"),
+            Content = content,
+            IsExpanded = expanded,
+        }.Named(name);
+        AutomationProperties.SetName(expander, title);
+        return expander;
     }
 
     private void BuildLibraryDiagnosticBanner()
@@ -1699,7 +1720,18 @@ public sealed class EditorView : UserControl
         });
         Register(_libraryGroupButtons, ["None", "Collection", "Tag"], groupButtons);
 
-        var filters = new WrapPanel { Orientation = Orientation.Horizontal, ItemSpacing = 4, LineSpacing = 4 };
+        var quickFilters = new WrapPanel
+        {
+            Orientation = Orientation.Horizontal,
+            ItemSpacing = 4,
+            LineSpacing = 4,
+        };
+        var advancedFilters = new WrapPanel
+        {
+            Orientation = Orientation.Horizontal,
+            ItemSpacing = 4,
+            LineSpacing = 4,
+        };
         foreach (var (key, title, icon) in new[]
         {
             ("Favorites", "Избранное", MapIcons.Check),
@@ -1729,7 +1761,14 @@ public sealed class EditorView : UserControl
                 SyncAssetList();
             });
             _libraryFilterButtons[key] = button;
-            filters.Children.Add(button);
+            if (key == "Untagged")
+            {
+                advancedFilters.Children.Add(button);
+            }
+            else
+            {
+                quickFilters.Children.Add(button);
+            }
         }
 
         _libraryTagFilter = ChoiceBox("LibraryTagFilter", "Тег", "Любой тег", value =>
@@ -1763,7 +1802,7 @@ public sealed class EditorView : UserControl
         _libraryFilterSummary.Classes.Add("faint");
         _libraryFilterSummary.Classes.Add("role-caption");
 
-        _clearFiltersButton = Ui.TextButton("LibraryClearFiltersButton", "Сбросить фильтры", () =>
+        _clearFiltersButton = Ui.TextButton("LibraryClearFiltersButton", "Сбросить", () =>
         {
             _editor.ClearLibraryFilters();
             _assetSearch.Text = "";
@@ -1775,21 +1814,35 @@ public sealed class EditorView : UserControl
         AutomationProperties.SetName(_clearFiltersButton, "Сбросить все фильтры библиотеки");
         ToolTip.SetTip(_clearFiltersButton, "Снять поиск, коллекцию, теги, тип и даты");
 
+        _libraryFilterDetails = Disclosure(
+            "LibraryFilterDetails",
+            "Фильтры и порядок",
+            new StackPanel
+            {
+                Spacing = 7,
+                Children =
+                {
+                    Ui.Section("Сначала", sort),
+                    Ui.Section("Показывать", group),
+                    Ui.Section("Дополнительный фильтр", advancedFilters),
+                    Ui.PropertyRow("Тег", _libraryTagFilter),
+                    Ui.PropertyRow("Формат", _libraryMediaFilter),
+                    Ui.PropertyRow("Добавлено с", _libraryImportedFrom),
+                    Ui.PropertyRow("Добавлено по", _libraryImportedTo),
+                    _libraryDateHint,
+                },
+            },
+            expanded: false);
+
         return new StackPanel
         {
             Spacing = 6,
             Children =
             {
-                Ui.Section("Сортировка", sort),
-                Ui.Section("Группировка", group),
-                Ui.Section("Фильтры", filters),
-                Ui.PropertyRow("Тег", _libraryTagFilter),
-                Ui.PropertyRow("Тип файла", _libraryMediaFilter),
-                Ui.PropertyRow("Дата с", _libraryImportedFrom),
-                Ui.PropertyRow("Дата по", _libraryImportedTo),
-                _libraryDateHint,
+                quickFilters,
                 _libraryFilterSummary,
                 _clearFiltersButton,
+                _libraryFilterDetails,
             },
         };
 
@@ -1953,6 +2006,39 @@ public sealed class EditorView : UserControl
 
         AutomationProperties.SetName(_variantStrip, "Варианты набора");
 
+        _setManagementDetails = Disclosure(
+            "SetManagementDetails",
+            "Настроить набор",
+            new StackPanel
+            {
+                Spacing = 6,
+                Children =
+                {
+                    new DockPanel
+                    {
+                        Children =
+                        {
+                            _setRenameButton.Docked(Dock.Right),
+                            _setRenameBox,
+                        },
+                    },
+                    new DockPanel
+                    {
+                        Children =
+                        {
+                            new StackPanel
+                            {
+                                Orientation = Orientation.Horizontal,
+                                Spacing = 2,
+                                Children = { _variantEarlierButton, _variantLaterButton },
+                            }.Docked(Dock.Right),
+                            _setCoverButton,
+                        },
+                    },
+                },
+            },
+            expanded: false);
+
         return new Border
         {
             Child = new StackPanel
@@ -1970,7 +2056,7 @@ public sealed class EditorView : UserControl
                                 Spacing = 4,
                                 Children = { _setBadge, _favoriteButton },
                             }.Docked(Dock.Right),
-                            new TextBlock { Text = "Выбранный набор" }.Classed("role-panel"),
+                            new TextBlock { Text = "Выбранный ассет" }.Classed("role-panel"),
                         },
                     },
                     _selectedSetNameText,
@@ -1996,27 +2082,7 @@ public sealed class EditorView : UserControl
                         MaxHeight = 64,
                         Content = _variantStrip,
                     },
-                    new DockPanel
-                    {
-                        Children =
-                        {
-                            _setRenameButton.Docked(Dock.Right),
-                            _setRenameBox,
-                        },
-                    },
-                    new DockPanel
-                    {
-                        Children =
-                        {
-                            new StackPanel
-                            {
-                                Orientation = Orientation.Horizontal,
-                                Spacing = 2,
-                                Children = { _variantEarlierButton, _variantLaterButton },
-                            }.Docked(Dock.Right),
-                            _setCoverButton,
-                        },
-                    },
+                    _setManagementDetails,
                 },
             },
         }.Classed("group");
@@ -2041,21 +2107,33 @@ public sealed class EditorView : UserControl
         // Without a variant there is no file to report on, and the position line right below
         // already says "Вариант не выбран" - printing it twice reads as a rendering fault.
         _variantStateText.IsVisible = _editor.CurrentVariant is not null;
-        var text = "Файл варианта: " + EditorViewModel.AvailabilityText(availability);
-        _variantStateText.Text = text;
+        var visibleText = availability switch
+        {
+            AssetAvailability.Available => "Готов к размещению",
+            AssetAvailability.Checking => "Проверяем файл…",
+            AssetAvailability.Missing => "Файл варианта не найден",
+            AssetAvailability.HashMismatch => "Файл изменён после импорта",
+            AssetAvailability.Unsupported => "Формат варианта не поддерживается",
+            _ => "Файл ещё не проверен",
+        };
+        // The UIA name starts with the words a sighted user sees and keeps the precise
+        // diagnostic in the same breath, so a screen reader and a tooltip lose nothing.
+        var accessibleText =
+            $"{visibleText} ({EditorViewModel.AvailabilityText(availability)})";
+        _variantStateText.Text = visibleText;
         Ui.SetClass(_variantStateText, "danger",
             availability is AssetAvailability.Missing or AssetAvailability.HashMismatch);
         Ui.SetClass(_variantStateText, "warn", availability is AssetAvailability.Unsupported);
         Ui.SetClass(_variantStateText, "faint",
             availability is AssetAvailability.Unknown or AssetAvailability.Checking);
-        AutomationProperties.SetName(_variantStateText, text);
-        ToolTip.SetTip(_variantStateText, text);
+        AutomationProperties.SetName(_variantStateText, accessibleText);
+        ToolTip.SetTip(_variantStateText, accessibleText);
     }
     private Border BuildStampGestureBlock()
     {
         var (mode, modeButtons) = Ui.Segmented("StampMode", [
-            ("One", "Один", null),
-            ("Area", "Область", null),
+            ("One", "Один штамп", null),
+            ("Area", "Россыпь", null),
         ], key =>
         {
             _editor.StampPlacementMode = key == "Area" ? StampPlacementMode.Area : StampPlacementMode.One;
@@ -2067,26 +2145,58 @@ public sealed class EditorView : UserControl
         // Labelled, not icon-only: these three decide whether a scatter multiplies the variant or
         // turns and mirrors every copy, and a user must be able to see which without hovering.
         _randomVariantToggle = LabelledToggle(
-            "RandomVariantToggle", "Случайный вариант", "Случайный вариант после размещения",
+            "RandomVariantToggle", "Смешивать варианты", "Случайный вариант после размещения",
             MapIcons.Duplicate, () =>
             {
                 _editor.RandomVariantAfterPlacement = !_editor.RandomVariantAfterPlacement;
                 SyncAssetList();
             });
         _randomAngleToggle = LabelledToggle(
-            "RandomAngleToggle", "Случайный угол", "Случайный угол поворота каждого штампа",
+            "RandomAngleToggle", "Поворачивать", "Случайный угол поворота каждого штампа",
             MapIcons.Redo, () =>
             {
                 _editor.StampRandomAngle = !_editor.StampRandomAngle;
                 SyncAssetList();
             });
         _randomFlipToggle = LabelledToggle(
-            "RandomFlipToggle", "Случайное отражение", "Случайное зеркальное отражение штампа",
+            "RandomFlipToggle", "Отражать", "Случайное зеркальное отражение штампа",
             MapIcons.Select, () =>
             {
                 _editor.StampRandomFlip = !_editor.StampRandomFlip;
                 SyncAssetList();
             });
+
+        _stampAreaControls = new StackPanel
+        {
+            Spacing = 6,
+            Children =
+            {
+                Ui.SliderRow("StampAreaSlider", "Радиус", 1, 1024, _editor.StampAreaRadius, "ед.",
+                    value =>
+                    {
+                        _editor.StampAreaRadius = value;
+                        SyncStampGestureReadout();
+                    }),
+                Ui.SliderRow("StampDensitySlider", "Плотность", 0, 400, _editor.StampDensity, "",
+                    value =>
+                    {
+                        _editor.StampDensity = value;
+                        SyncStampGestureReadout();
+                    }),
+                _stampAreaSummaryText,
+                Disclosure(
+                    "StampScatterDetails",
+                    "Разброс и поворот",
+                    new WrapPanel
+                    {
+                        Orientation = Orientation.Horizontal,
+                        ItemSpacing = 4,
+                        LineSpacing = 4,
+                        Children = { _randomAngleToggle, _randomFlipToggle },
+                    },
+                    expanded: false),
+            },
+        };
 
         return new Border
         {
@@ -2095,34 +2205,16 @@ public sealed class EditorView : UserControl
                 Spacing = 6,
                 Children =
                 {
-                    new TextBlock { Text = "Размещение" }.Classed("role-panel"),
+                    new TextBlock { Text = "Как разместить" }.Classed("role-panel"),
                     mode,
-                    Ui.SliderRow("StampAreaSlider", "Область", 1, 1024, _editor.StampAreaRadius, "ед.",
-                        value =>
-                        {
-                            _editor.StampAreaRadius = value;
-                            SyncStampGestureReadout();
-                        }),
-                    Ui.SliderRow("StampDensitySlider", "Плотность", 0, 400, _editor.StampDensity, "",
-                        value =>
-                        {
-                            _editor.StampDensity = value;
-                            SyncStampGestureReadout();
-                        }),
-                    _stampAreaSummaryText,
-                    new WrapPanel
-                    {
-                        Orientation = Orientation.Horizontal,
-                        ItemSpacing = 4,
-                        LineSpacing = 4,
-                        Children = { _randomVariantToggle, _randomAngleToggle, _randomFlipToggle },
-                    },
-                    AssetCommand("PlaceStampButton", "Разместить в центре вида", () =>
+                    _stampAreaControls,
+                    _randomVariantToggle,
+                    AssetCommand("PlaceStampButton", "Разместить в центре карты", () =>
                     {
                         _editor.PlaceCurrentVariantAtViewCentre();
                         RefreshLibraryPanel();
                     }, "compact"),
-                    AssetCommand("ReplaceStampVariantButton", "Заменить вариант у выделенного штампа", () =>
+                    AssetCommand("ReplaceStampVariantButton", "Заменить ассет выделенного штампа", () =>
                     {
                         _editor.ReplaceSelectedStampWithCurrentVariant();
                         SyncAssetList();
@@ -2184,6 +2276,7 @@ public sealed class EditorView : UserControl
 
     private void SyncStampGestureReadout()
     {
+        _stampAreaControls.IsVisible = _editor.StampPlacementMode == StampPlacementMode.Area;
         _stampAreaSummaryText.Text = _editor.StampAreaSummary;
         AutomationProperties.SetName(_stampAreaSummaryText, _editor.StampAreaSummary);
         SyncStampToolPanel();
@@ -2987,6 +3080,11 @@ public sealed class EditorView : UserControl
         Ui.SetClass(_libraryDateHint, "danger", _editor.HasLibraryDateError);
         Ui.SetClass(_libraryDateHint, "faint", !_editor.HasLibraryDateError);
         AutomationProperties.SetName(_libraryDateHint, dateHint);
+        _libraryDateHint.IsVisible = _editor.HasLibraryDateError;
+        if (_editor.HasLibraryDateError)
+        {
+            _libraryFilterDetails.IsExpanded = true;
+        }
 
         var summary = "Фильтры: " + _editor.ActiveLibraryFilterSummary;
         _libraryFilterSummary.Text = summary;
@@ -2995,6 +3093,8 @@ public sealed class EditorView : UserControl
         AutomationProperties.SetName(_libraryFilterSummary, summary);
         ToolTip.SetTip(_libraryFilterSummary, summary);
         _clearFiltersButton.IsEnabled = _editor.HasActiveLibraryFilters;
+        _libraryFilterSummary.IsVisible = _editor.HasActiveLibraryFilters;
+        _clearFiltersButton.IsVisible = _editor.HasActiveLibraryFilters;
 
         static void FillChoices(
             ComboBox box, string anyLabel, IReadOnlyList<string> choices, string? selected)
@@ -3162,18 +3262,31 @@ public sealed class EditorView : UserControl
         var cards = _editor.LibrarySets.Count;
         _libraryGrid.MinHeight = rows.Count > 0 ? 220 : 0;
 
-        _libraryCountText.Text = _editor.LibraryStatus == AssetLibraryStatus.Damaged
+        // The UIA name opens with the exact words on screen; the empty states then add the fix
+        // a screen-reader user would otherwise only get from the surrounding visuals.
+        var accessibleCount = _editor.LibraryStatus == AssetLibraryStatus.Damaged
             ? "Библиотека недоступна"
             : cards == 0
                 ? (_editor.HasActiveLibraryFilters
                     ? "Ничего не найдено. Измените запрос или снимите фильтры."
                     : "Библиотека пуста. Импортируйте PNG, JPEG или WebP.")
-                : $"Карточек: {cards}";
+                : $"Ассеты · {cards}";
+        _libraryCountText.Text = _editor.LibraryStatus == AssetLibraryStatus.Damaged
+            ? "Библиотека недоступна"
+            : cards == 0
+                ? (_editor.HasActiveLibraryFilters ? "Ничего не найдено" : "Библиотека пуста")
+                : $"Ассеты · {cards}";
+        AutomationProperties.SetName(_libraryCountText, accessibleCount);
+        ToolTip.SetTip(_libraryCountText, accessibleCount);
         AutomationProperties.SetName(_libraryGrid, $"Карточки библиотеки, {cards}");
     }
     private void SyncSelectedSet()
     {
         var set = _editor.SelectedSet;
+        var hasSet = set is not null;
+        _selectedSetBlock.IsVisible = hasSet;
+        _stampGestureBlock.IsVisible = hasSet;
+        _setManagementDetails.IsVisible = hasSet;
         _selectedAsset = _editor.CurrentVariant is { } current
             ? _editor.Assets.FirstOrDefault(record =>
                 string.Equals(record.Sha256, current.Sha256, StringComparison.OrdinalIgnoreCase))
