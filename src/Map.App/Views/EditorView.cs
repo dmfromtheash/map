@@ -63,7 +63,7 @@ public sealed class EditorView : UserControl
 
     // ------------------------------------------------------------- side lists
     private readonly StackPanel _layerList = new() { Spacing = 2 };
-    private readonly StackPanel _objectList = new() { Spacing = 2 };
+    private readonly MultiSelectListControl _objectList = new() { Spacing = 2 };
     private readonly StackPanel _assetList = new() { Spacing = 2 };
     private readonly StackPanel _noteList = new() { Spacing = 2 };
     private readonly TextBox _layerName = new() { Name = "LayerNameBox", PlaceholderText = "Имя слоя" };
@@ -102,6 +102,26 @@ public sealed class EditorView : UserControl
     // which Avalonia rejects outright - so the containers are built once and only swapped.
     private Control _inspectorPanel = null!;
     private Control _selectionEmpty = null!;
+
+    // -------------------------------------------------- multi-selection controls
+    private readonly TextBlock _selectionCountText = new() { Name = "SelectionCountText" };
+    private readonly TextBox _groupNameBox = new()
+    {
+        Name = "GroupNameBox",
+        PlaceholderText = "Имя группы",
+        MaxLength = 80,
+    };
+
+    private Button _groupCreateButton = null!;
+    private Button _groupRenameButton = null!;
+    private Button _ungroupButton = null!;
+    private Button _enterGroupButton = null!;
+    private Button _multiVisibilityValue = null!;
+    private Button _multiLockValue = null!;
+    private Control _multiSelectionRoot = null!;
+    private Control _groupNameSection = null!;
+    private readonly Dictionary<string, Button> _objectFilterButtons = [];
+    private bool _objectRowCtrl;
     private Control _stampSection = null!;
     private Control _vectorSection = null!;
     private Control _textSection = null!;
@@ -252,7 +272,17 @@ public sealed class EditorView : UserControl
             SyncContextArea();
         });
 
-        _objectSearch.TextChanged += (_, _) => SyncObjectList();
+        _objectSearch.TextChanged += (_, _) =>
+        {
+            _editor.ObjectSearchText = _objectSearch.Text ?? "";
+            SyncObjectList();
+        };
+
+        // Rows read the modifier from the press that is about to click them, so Ctrl+click on a
+        // row toggles membership exactly like Ctrl+click on the canvas.
+        _objectList.AddHandler(PointerPressedEvent,
+            (_, e) => _objectRowCtrl = e.KeyModifiers.HasFlag(Avalonia.Input.KeyModifiers.Control),
+            Avalonia.Interactivity.RoutingStrategies.Tunnel);
         _assetSearch.TextChanged += (_, _) => SyncAssetList();
         _noteSearch.TextChanged += (_, _) => SyncNoteList();
 
@@ -1152,6 +1182,42 @@ public sealed class EditorView : UserControl
 
     private Control BuildObjectsTab()
     {
+        _selectionCountText.Classes.Add("faint");
+        _selectionCountText.Classes.Add("role-caption");
+        _selectionCountText.TextWrapping = TextWrapping.Wrap;
+
+        // The compact type filter Ctrl+A honours together with the search box above it.
+        var filterStrip = new WrapPanel { };
+        foreach (var filter in new[]
+                 {
+                     ObjectTypeFilter.All, ObjectTypeFilter.Stamps, ObjectTypeFilter.Text,
+                     ObjectTypeFilter.Lines, ObjectTypeFilter.Shapes, ObjectTypeFilter.Other,
+                 })
+        {
+            var captured = filter;
+            var title = ObjectTreeRows.FilterTitle(filter);
+            var button = new ToggleButton { Content = title, Margin = new Thickness(0, 0, 2, 2) }
+                .Named("ObjectTypeFilter" + filter)
+                .Classed("segment");
+            AutomationProperties.SetName(button, "Фильтр типа: " + title);
+            ToolTip.SetTip(button, $"Показывать только: {title}. Ctrl+A выбирает по этому фильтру.");
+            button.Click += (_, _) =>
+            {
+                _editor.ObjectTypeFilter = captured;
+                SyncObjectList();
+            };
+            _objectFilterButtons[filter.ToString()] = button;
+            filterStrip.Children.Add(button);
+        }
+
+        var selectAll = Ui.TextButton("SelectAllButton", "Выбрать всё (Ctrl+A)", () =>
+        {
+            _editor.SelectAllByFilter();
+            RefreshAfterSelectionCommand();
+        }, "compact");
+        ToolTip.SetTip(selectAll,
+            "Выбрать видимые незаблокированные объекты по текущему поиску и фильтру типа.");
+
         var body = new StackPanel
         {
             Margin = new Thickness(12, 10, 12, 18),
@@ -1159,6 +1225,9 @@ public sealed class EditorView : UserControl
             Children =
             {
                 _objectSearch,
+                filterStrip,
+                selectAll,
+                _selectionCountText,
                 _objectList,
                 new Border
                 {
@@ -2587,6 +2656,8 @@ public sealed class EditorView : UserControl
 
             if (e.PropertyName is nameof(EditorViewModel.ActiveTool)
                 or nameof(EditorViewModel.SelectionKind)
+                or nameof(EditorViewModel.SelectionCount)
+                or nameof(EditorViewModel.SelectedGroupId)
                 or nameof(EditorViewModel.ActiveLayer))
             {
                 SyncContextArea();
@@ -2658,6 +2729,14 @@ public sealed class EditorView : UserControl
 
         // Selection properties belong to the Select tool. While a drawing tool is active the panel
         // keeps showing that tool, so switching tools always has a predictable, visible effect.
+        if (_editor.ActiveTool == EditorTool.Select && _editor.SelectionCount > 1)
+        {
+            _contextTitle.Text = "Свойства: выделение";
+            SyncMultiSelectionPanel();
+            _contextHost.Content = _multiSelectionRoot;
+            return;
+        }
+
         if (_editor.ActiveTool == EditorTool.Select && _editor.SelectionKind is { } kind)
         {
             _contextTitle.Text = "Свойства: " + EditorLabels.ObjectKind(kind);
@@ -2680,6 +2759,37 @@ public sealed class EditorView : UserControl
         _contextHost.Content = _editor.ActiveTool == EditorTool.Select
             ? _selectIdleRoot
             : _toolPanels[_editor.ActiveTool];
+    }
+
+    /// <summary>
+    /// Keeps the multi-selection panel honest: the count, the group identity when there is one,
+    /// which group actions currently apply, and mixed values reported as mixed.
+    /// </summary>
+    private void SyncMultiSelectionPanel()
+    {
+        _multiCountText.Text = _editor.SelectedGroupId is not null
+            ? $"Группа «{_editor.SelectedGroupName ?? "Группа"}» · {EditorLabels.Objects(_editor.SelectionCount)}"
+            : $"Выбрано: {EditorLabels.Objects(_editor.SelectionCount)}";
+        AutomationProperties.SetName(_multiCountText, _multiCountText.Text);
+
+        var hasGroup = _editor.SelectedGroupId is not null;
+        var canGroup = _editor.CanGroupSelection;
+
+        // When neither creating nor managing a group applies, the whole section disappears -
+        // a leftover "Группа" heading over nothing would read as a broken panel.
+        _groupActionsSection.IsVisible = hasGroup || canGroup;
+        _groupNameSection.IsVisible = hasGroup || canGroup;
+        _groupNameBox.IsVisible = hasGroup || canGroup;
+        _groupCreateButton.IsVisible = canGroup;
+        _groupRenameButton.IsVisible = hasGroup;
+        _enterGroupButton.IsVisible = hasGroup;
+        _ungroupButton.IsVisible = hasGroup;
+        _groupNameBox.PlaceholderText = hasGroup
+            ? _editor.SelectedGroupName ?? "Имя группы"
+            : "Имя группы";
+
+        Ui.SetValue(_multiVisibilityValue, "Видимость", _editor.SelectionVisibilitySummary);
+        Ui.SetValue(_multiLockValue, "Блокировка", _editor.SelectionLockSummary);
     }
 
     /// <summary>
@@ -2710,6 +2820,202 @@ public sealed class EditorView : UserControl
             Spacing = 12,
             Children = { _selectionEmpty, _toolPanels[EditorTool.Select] },
         };
+
+        _multiSelectionRoot = BuildMultiSelectionPanel();
+    }
+
+    /// <summary>
+    /// What N selected objects show instead of the single inspector: an honest count, the group
+    /// actions when they apply, and the common visibility/lock/delete over the whole set. One
+    /// member's numbers are never presented as if they were shared.
+    /// </summary>
+    private StackPanel BuildMultiSelectionPanel()
+    {
+        var multiCount = new TextBlock { Name = "MultiSelectionCountText", TextWrapping = TextWrapping.Wrap }
+            .Classed("role-panel");
+        _multiCountText = multiCount;
+
+        AutomationProperties.SetName(_groupNameBox, "Имя группы");
+        _groupNameBox.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter)
+            {
+                _ = GroupSelectionInteractiveAsync();
+                e.Handled = true;
+            }
+        };
+
+        _groupCreateButton = Ui.TextButton("GroupCreateButton", "Сгруппировать (Ctrl+G)",
+            () => _ = GroupSelectionInteractiveAsync(), "primary", "compact");
+        _groupRenameButton = Ui.TextButton("GroupRenameButton", "Переименовать группу", () =>
+        {
+            if (_editor.RenameSelectedGroup(_groupNameBox.Text ?? ""))
+            {
+                _groupNameBox.Text = "";
+            }
+
+            RefreshAfterSelectionCommand();
+        }, "compact");
+        _ungroupButton = Ui.TextButton("UngroupButton", "Разгруппировать (Ctrl+Shift+G)", () =>
+        {
+            _editor.UngroupSelection();
+            RefreshAfterSelectionCommand();
+        }, "compact");
+        _enterGroupButton = Ui.TextButton("EnterGroupButton", "Открыть группу", () =>
+        {
+            _editor.EnterSelectedGroup();
+            RefreshAfterSelectionCommand();
+        }, "compact");
+
+        _groupNameSection = new StackPanel
+        {
+            Spacing = 5,
+            Children =
+            {
+                _groupNameBox,
+                _groupCreateButton,
+                _groupRenameButton,
+                _enterGroupButton,
+                _ungroupButton,
+            },
+        };
+
+        var (visibilityRow, visibilityButton) = Ui.ValueRow(
+            "MultiVisibilityButton", "Видимость", "-", _editor.ToggleSelectedObjectVisibility);
+        _multiVisibilityValue = visibilityButton;
+        var (lockRow, lockButton) = Ui.ValueRow(
+            "MultiLockButton", "Блокировка", "-", _editor.ToggleSelectedObjectLock);
+        _multiLockValue = lockButton;
+
+        var delete = Ui.CommandButton("MultiDeleteButton", "Удалить выделение", MapIcons.Trash,
+            _editor.DeleteSelectedObject, "destructive", "compact", "centred");
+        delete.Margin = new Thickness(0, 6, 0, 0);
+        ToolTip.SetTip(delete, "Удалить все выбранные объекты. Действие можно отменить (Ctrl+Z).");
+
+        _groupActionsSection = Ui.Section("Группа", _groupNameSection).Named("GroupActionsSection");
+        return new StackPanel
+        {
+            Spacing = 12,
+            Children =
+            {
+                multiCount,
+                _groupActionsSection,
+                Ui.Section("Общие действия", new StackPanel
+                {
+                    Spacing = 2,
+                    Children = { visibilityRow, lockRow, delete },
+                }).Named("MultiCommonActions"),
+            },
+        };
+    }
+
+    private Control _groupActionsSection = null!;
+
+    private TextBlock _multiCountText = null!;
+
+    private void RefreshAfterSelectionCommand()
+    {
+        SyncStatus();
+        SyncSidePanels();
+        SyncContextArea();
+    }
+
+    /// <summary>
+    /// The interactive Ctrl+G flow: the panel's name box wins when filled; otherwise a small
+    /// dialog asks for the name and states exactly how many objects the group will hold.
+    /// </summary>
+    public async System.Threading.Tasks.Task GroupSelectionInteractiveAsync()
+    {
+        if (!_editor.CanGroupSelection)
+        {
+            // Produces the honest refusal message (too few objects / already grouped members).
+            _editor.GroupSelection("группа");
+            RefreshAfterSelectionCommand();
+            return;
+        }
+
+        var name = (_groupNameBox.Text ?? "").Trim();
+        if (name.Length == 0)
+        {
+            name = await AskGroupNameAsync(VisualRoot as Window, _editor.SelectionCount) ?? "";
+            if (name.Length == 0)
+            {
+                return; // cancelled: nothing changes
+            }
+        }
+
+        if (_editor.GroupSelection(name))
+        {
+            _groupNameBox.Text = "";
+        }
+
+        RefreshAfterSelectionCommand();
+    }
+
+    private static async System.Threading.Tasks.Task<string?> AskGroupNameAsync(
+        Window? owner, int objectCount)
+    {
+        var input = new TextBox { Name = "GroupNameInput", MinWidth = 320, MaxLength = 80 };
+        AutomationProperties.SetName(input, "Имя группы");
+
+        var completion = new System.Threading.Tasks.TaskCompletionSource<string?>();
+        var window = new Window
+        {
+            Title = "Имя группы",
+            Name = "GroupNameWindow",
+            SizeToContent = SizeToContent.WidthAndHeight,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            CanResize = false,
+        };
+
+        var confirm = Ui.TextButton("ConfirmGroupNameButton", "Создать группу", () =>
+        {
+            completion.TrySetResult((input.Text ?? "").Trim());
+            window.Close();
+        });
+        var cancel = Ui.TextButton("CancelGroupNameButton", "Отмена", () =>
+        {
+            completion.TrySetResult(null);
+            window.Close();
+        });
+
+        window.Content = new Border
+        {
+            Padding = new Thickness(18),
+            Child = new StackPanel
+            {
+                Spacing = 12,
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text = $"В группу войдут: {EditorLabels.Objects(objectCount)}. Как её назвать?",
+                    }.Classed("role-panel"),
+                    input,
+                    new StackPanel
+                    {
+                        Orientation = Orientation.Horizontal,
+                        Spacing = 8,
+                        HorizontalAlignment = HorizontalAlignment.Right,
+                        Children = { cancel, confirm },
+                    },
+                },
+            },
+        };
+
+        window.Closed += (_, _) => completion.TrySetResult(null);
+        window.Opened += (_, _) => input.Focus();
+
+        if (owner is not null)
+        {
+            await window.ShowDialog(owner);
+        }
+        else
+        {
+            window.Show();
+        }
+
+        return await completion.Task;
     }
 
     private void SyncHint()
@@ -2914,62 +3220,175 @@ public sealed class EditorView : UserControl
 
     private void SyncObjectList()
     {
-        var query = (_objectSearch.Text ?? "").Trim();
         _objectList.Children.Clear();
+        SyncObjectFilterButtons();
+        _selectionCountText.Text = _editor.SelectionCount == 0
+            ? "Ничего не выбрано"
+            : $"Выбрано: {EditorLabels.Objects(_editor.SelectionCount)}";
 
-        var objects = _editor.Layers.OfType<ObjectLayer>()
-            .SelectMany(layer => layer.Objects)
-            .Where(item => query.Length == 0
-                || item.Name.Contains(query, StringComparison.OrdinalIgnoreCase))
-            .ToList();
-
-        if (objects.Count == 0)
+        var rows = _editor.ObjectTree;
+        if (rows.Count == 0)
         {
+            var hasAnyObject = _editor.Layers.OfType<ObjectLayer>().Any(layer => layer.Objects.Count > 0);
             _objectList.Children.Add(Ui.EmptyState(
                 "NoObjectsText",
                 MapIcons.Objects,
-                query.Length == 0 ? "На карте пока нет объектов" : "Ничего не найдено",
-                query.Length == 0
-                    ? "Добавьте объект инструментом «Линия», «Фигура», «Текст» или из каталога ассетов."
-                    : "Измените запрос или очистите поле поиска."));
+                hasAnyObject ? "Ничего не найдено" : "На карте пока нет объектов",
+                hasAnyObject
+                    ? "Измените запрос или фильтр типа."
+                    : "Добавьте объект инструментом «Линия», «Фигура», «Текст» или из каталога ассетов."));
             return;
         }
 
-        foreach (var sceneObject in objects)
+        foreach (var row in rows)
         {
-            var states = new List<(string, string)>();
-            if (!sceneObject.Visible)
+            _objectList.Children.Add(row.Kind switch
             {
-                states.Add((MapIcons.EyeOff, "Объект скрыт"));
-            }
+                ObjectTreeRowKind.Breadcrumb => BuildGroupBreadcrumbRow(row),
+                ObjectTreeRowKind.Group => BuildGroupRow(row),
+                _ => BuildObjectRow(row),
+            });
+        }
+    }
 
-            if (sceneObject.Locked)
+    /// <summary>The breadcrumb of an open group: the way back plus the group's own name.</summary>
+    private Border BuildGroupBreadcrumbRow(ObjectTreeRow row)
+    {
+        var back = Ui.TextButton("GroupBackButton", "← Все объекты", () =>
+        {
+            _editor.ExitGroup();
+            SyncObjectList();
+            SyncContextArea();
+        }, "compact");
+
+        // The identity sits on the TextBlock: a bare Border has no automation peer, so naming
+        // the host would leave the breadcrumb invisible to UI Automation.
+        var title = Ui.Trimmed($"{row.Title} · {row.Subtitle}", "muted").Named(row.AutomationId);
+        AutomationProperties.SetName(title, $"Открыта группа «{row.Title}», {row.Subtitle}");
+        return new Border
+        {
+            Child = new DockPanel
             {
-                states.Add((MapIcons.Lock, "Объект заблокирован"));
-            }
+                Children = { back.Docked(Dock.Left), title },
+            },
+            Padding = new Thickness(0, 2),
+        };
+    }
 
-            if (sceneObject.Kind == SceneObjectKind.Placeholder)
+    private Border BuildGroupRow(ObjectTreeRow row)
+    {
+        var groupId = row.GroupId!.Value;
+        var enter = Ui.RowAction(
+            $"GroupRowEnter_{groupId:D}", "Открыть группу", MapIcons.ChevronDown,
+            () =>
             {
-                states.Add((MapIcons.Missing, "Файл ассета не найден"));
+                _editor.EnterGroup(groupId);
+                SyncObjectList();
+                SyncContextArea();
+            });
+
+        var host = Ui.StructureRow(
+            row.AutomationId,
+            MapIcons.Objects,
+            row.Title,
+            row.Subtitle,
+            () =>
+            {
+                _editor.SelectGroup(groupId);
+                SyncObjectList();
+                SyncContextArea();
+            },
+            $"Группа «{row.Title}» · {row.Subtitle}",
+            enter);
+
+        Ui.SetStructureSelected(host, row.Selected);
+        return host;
+    }
+
+    private Button BuildObjectRow(ObjectTreeRow row)
+    {
+        var sceneObject = row.Object!;
+        var states = new List<(string, string)>();
+        if (!sceneObject.Visible)
+        {
+            states.Add((MapIcons.EyeOff, "Объект скрыт"));
+        }
+
+        if (sceneObject.Locked)
+        {
+            states.Add((MapIcons.Lock, "Объект заблокирован"));
+        }
+
+        if (sceneObject.Kind == SceneObjectKind.Placeholder)
+        {
+            states.Add((MapIcons.Missing, "Файл ассета не найден"));
+        }
+
+        var captured = sceneObject;
+        var listRow = Ui.ListRow(
+            row.AutomationId,
+            ObjectIcon(sceneObject.Kind),
+            sceneObject.Name,
+            row.Subtitle,
+            states,
+            () =>
+            {
+                _editor.SelectObject(captured.Id, additive: _objectRowCtrl);
+                SyncObjectList();
+                SyncContextArea();
+            },
+            $"{sceneObject.Name} · {EditorLabels.ObjectKind(sceneObject.Kind)}");
+
+        Ui.SetSelected(listRow, row.Selected);
+        return listRow;
+    }
+
+    private void SyncObjectFilterButtons()
+    {
+        foreach (var pair in _objectFilterButtons)
+        {
+            var active = string.Equals(pair.Key, _editor.ObjectTypeFilter.ToString(), StringComparison.Ordinal);
+            Ui.SetClass(pair.Value, "active", active);
+            if (pair.Value is ToggleButton toggle)
+            {
+                toggle.IsChecked = active;
             }
+        }
+    }
 
-            var captured = sceneObject;
-            var row = Ui.ListRow(
-                "Object_" + sceneObject.Id,
-                ObjectIcon(sceneObject.Kind),
-                sceneObject.Name,
-                EditorLabels.ObjectSubtitle(sceneObject),
-                states,
-                () =>
-                {
-                    _editor.SelectObject(captured.Id);
-                    SyncObjectList();
-                    SyncContextArea();
-                },
-                $"{sceneObject.Name} · {EditorLabels.ObjectKind(sceneObject.Kind)}");
+    /// <summary>
+    /// The objects list container. Its automation peer reports a List that supports multiple
+    /// selection, so UI Automation sees the multi-selection the rows visually carry.
+    /// </summary>
+    private sealed class MultiSelectListControl : StackPanel
+    {
+        public MultiSelectListControl()
+        {
+            Name = "ObjectList";
+            AutomationProperties.SetName(this, "Список объектов");
+        }
 
-            Ui.SetSelected(row, sceneObject.Id == _editor.Session.SelectedObjectId);
-            _objectList.Children.Add(row);
+        protected override Avalonia.Automation.Peers.AutomationPeer OnCreateAutomationPeer() =>
+            new MultiSelectListPeer(this);
+
+        private sealed class MultiSelectListPeer(MultiSelectListControl owner)
+            : Avalonia.Automation.Peers.ControlAutomationPeer(owner),
+              Avalonia.Automation.Provider.ISelectionProvider
+        {
+            public bool CanSelectMultiple => true;
+
+            public bool IsSelectionRequired => false;
+
+            public IReadOnlyList<Avalonia.Automation.Peers.AutomationPeer> GetSelection() =>
+                [.. owner.Children
+                    .SelectMany(child => child is Border host && host.Child is DockPanel panel
+                        ? panel.Children.OfType<ToggleButton>()
+                        : child is ToggleButton toggle ? [toggle] : [])
+                    .Where(toggle => toggle.IsChecked == true)
+                    .Select(Avalonia.Automation.Peers.ControlAutomationPeer.CreatePeerForElement)];
+
+            protected override Avalonia.Automation.Peers.AutomationControlType GetAutomationControlTypeCore() =>
+                Avalonia.Automation.Peers.AutomationControlType.List;
         }
     }
 

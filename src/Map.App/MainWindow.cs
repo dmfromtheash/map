@@ -275,7 +275,8 @@ public sealed class MainWindow : Window
                     e.Handled = true;
                     return;
                 case Key.Escape:
-                    editor.DeselectObject();
+                    // First press leaves an open group and selects it whole; the next clears.
+                    editor.HandleEscape();
                     e.Handled = true;
                     return;
                 case Key.Delete:
@@ -469,6 +470,17 @@ public sealed class MainWindow : Window
                 _editorView.Editor.ToggleSelectedObjectLock();
                 break;
 
+            case Key.A when _editorView is not null && !typing:
+                _editorView.Editor.SelectAllByFilter();
+                break;
+
+            case Key.G when _editorView is not null && !typing:
+                if (e.KeyModifiers.HasFlag(KeyModifiers.Shift))
+                    _editorView.Editor.UngroupSelection();
+                else
+                    _ = _editorView.GroupSelectionInteractiveAsync();
+                break;
+
             case Key.Up when _editorView is not null && !typing:
                 if (e.KeyModifiers.HasFlag(KeyModifiers.Shift))
                     _editorView.Editor.ReorderActiveLayer(up: true);
@@ -527,19 +539,22 @@ public sealed class MainWindow : Window
                     V Выбор · M Маска · B Кисть · O Ассеты/штампы · R Фигура · L Линия · T Текст · N Заметки
 
                     ВЫБОР
-                    Esc — снять выбор · ` / ~ — вернуть последний выбор
-                    Delete / Backspace — удалить · стрелки — сдвинуть · Shift+стрелки — крупный шаг
+                    Ctrl+A — выбрать всё по поиску и фильтру · Ctrl+клик — добавить/убрать объект
+                    Рамка мышью по пустому месту — выделить область · Ctrl+рамка — добавить к выбору
+                    Esc — выйти из группы / снять выбор · ` / ~ — вернуть предыдущий выбор
+                    Delete / Backspace — удалить всё выделение · стрелки — сдвинуть · Shift+стрелки — крупный шаг
                     W/S — размер · Shift+W/S — крупный шаг · </> — поворот
                     Ctrl+колесо — поворот · Ctrl+Alt+колесо — точный поворот · Shift+колесо — размер
-                    Ctrl+C / Ctrl+V — копировать / вставить · Ctrl+L — блокировка
+                    Ctrl+C / Ctrl+V — копировать / вставить · Ctrl+L — блокировка выделения
+                    Ctrl+G — сгруппировать · Ctrl+Shift+G — разгруппировать
                     Ctrl+↑/↓ — подслой · Ctrl+Shift+↑/↓ — слой
 
                     КИСТЬ / МАСКА / ТЕКСТ
                     W/S — размер · E/D — непрозрачность · Q/A — мягкость кисти или кривизна текста
                     X — режим маски · F — каталог ассетов · E в заметках — редактирование
 
-                    Shift увеличивает шаг. Сочетания, которым нужна множественная модель выбора,
-                    наборы штампов или каталог шрифтов, будут добавлены отдельным проверяемым срезом.
+                    Shift увеличивает шаг. Сочетания для каталога шрифтов будут добавлены
+                    отдельным проверяемым срезом.
                     """,
                 },
             },

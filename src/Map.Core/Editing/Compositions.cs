@@ -124,9 +124,15 @@ public static class SceneObjectClone
         new(source.Id, kind, source.Name, x, y, width, height, source.RotationDegrees,
             source.FillColor, source.StrokeColor, source.StrokeWidth, source.Visible, source.Locked)
         {
-            Sublayer = source.Sublayer, GroupId = source.GroupId, Stamp = source.Stamp,
-            Line = source.Line, Shape = source.Shape, Text = source.Text,
-            Composition = source.Composition, PlaceholderReason = reason,
+            Sublayer = source.Sublayer,
+            GroupId = source.GroupId,
+            GroupName = source.GroupName,
+            Stamp = source.Stamp,
+            Line = source.Line,
+            Shape = source.Shape,
+            Text = source.Text,
+            Composition = source.Composition,
+            PlaceholderReason = reason,
             ObjectOpacity = source.ObjectOpacity,
         };
 }

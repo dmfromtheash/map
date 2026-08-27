@@ -132,9 +132,15 @@ public static class SelectionHandles
             before.FillColor, before.StrokeColor, before.StrokeWidth,
             before.Visible, before.Locked)
         {
-            Sublayer = before.Sublayer, GroupId = before.GroupId, Stamp = before.Stamp,
-            Line = before.Line, Shape = before.Shape, Text = before.Text,
-            Composition = before.Composition, PlaceholderReason = before.PlaceholderReason,
+            Sublayer = before.Sublayer,
+            GroupId = before.GroupId,
+            GroupName = before.GroupName,
+            Stamp = before.Stamp,
+            Line = before.Line,
+            Shape = before.Shape,
+            Text = before.Text,
+            Composition = before.Composition,
+            PlaceholderReason = before.PlaceholderReason,
             ObjectOpacity = before.ObjectOpacity,
         };
     }
@@ -170,9 +176,15 @@ public static class SelectionHandles
             before.FillColor, before.StrokeColor, before.StrokeWidth,
             before.Visible, before.Locked)
         {
-            Sublayer = before.Sublayer, GroupId = before.GroupId, Stamp = before.Stamp,
-            Line = before.Line, Shape = before.Shape, Text = before.Text,
-            Composition = before.Composition, PlaceholderReason = before.PlaceholderReason,
+            Sublayer = before.Sublayer,
+            GroupId = before.GroupId,
+            GroupName = before.GroupName,
+            Stamp = before.Stamp,
+            Line = before.Line,
+            Shape = before.Shape,
+            Text = before.Text,
+            Composition = before.Composition,
+            PlaceholderReason = before.PlaceholderReason,
             ObjectOpacity = before.ObjectOpacity,
         };
     }

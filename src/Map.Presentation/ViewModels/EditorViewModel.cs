@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using Map.Assets;
 using Map.Core.Documents;
 using Map.Core.Editing;
@@ -123,14 +123,26 @@ public enum StampPlacementMode
     Area,
 }
 
-/// <summary>Live drag preview: never part of the document and never part of history.</summary>
+/// <summary>
+/// Live drag preview over the whole selection: never part of the document and never part of
+/// history. Before/Proposed are parallel lists; a single-object drag is simply a list of one.
+/// </summary>
 public sealed record DragPreview(
-    SceneObject Before,
-    SceneObject Proposed,
+    IReadOnlyList<SceneObject> Before,
+    IReadOnlyList<SceneObject> Proposed,
     DragMode Mode,
     HandleKind? Handle,
     double StartWorldX,
-    double StartWorldY);
+    double StartWorldY,
+    WorldBounds? StartFrame);
+
+/// <summary>What one canvas press started, so the control routes the following drag correctly.</summary>
+public enum CanvasGesture
+{
+    None,
+    Drag,
+    Marquee,
+}
 
 /// <summary>
 /// The editor around one <see cref="EditingSession"/>. The session's snapshot is the single
@@ -163,9 +175,15 @@ public sealed class EditorViewModel : ViewModelBase
     private LayerId? _activeLayerId;
     private EditorTool _activeTool;
     private EditorTool _previousTool = EditorTool.Select;
-    private ObjectId? _lastSelectedObjectId;
     private RasterStrokeSession? _stroke;
     private List<VectorPoint>? _vectorPoints;
+
+    // ------------------------------------------------------- multi-selection state
+    private string _objectSearchText = "";
+    private ObjectTypeFilter _objectTypeFilter = ObjectTypeFilter.All;
+    private Guid? _openGroupId;
+    private (double X, double Y, bool Additive)? _marqueeStart;
+    private WorldBounds? _marqueeWorld;
 
     // ---------------------------------------------------------------- library state
     private const double MinStampAreaRadius = 1;
@@ -340,13 +358,97 @@ public sealed class EditorViewModel : ViewModelBase
     public string ViewportStatus => $"Масштаб {Math.Round(Session.Viewport.Scale * 100)}%";
 
     /// <summary>
-    /// Selection shown the way a person reads it: the object's own name and its kind in Russian.
-    /// The stable id stays available to code and to the driver, but never reaches the status bar.
+    /// Selection shown the way a person reads it: one object by name and kind, a whole group by
+    /// its name and member count, any other multi-selection by an honest count.
     /// </summary>
-    public string SelectionStatus =>
-        Session.SelectedObject is { } selected
-            ? EditorLabels.DescribeObject(selected)
-            : "Ничего не выбрано";
+    public string SelectionStatus
+    {
+        get
+        {
+            if (SelectionCount > 1)
+            {
+                return SelectedGroupId is not null
+                    ? $"Группа «{SelectedGroupName ?? "Группа"}» · {EditorLabels.Objects(SelectionCount)}"
+                    : $"Выбрано: {EditorLabels.Objects(SelectionCount)}";
+            }
+
+            return Session.SelectedObject is { } selected
+                ? EditorLabels.DescribeObject(selected)
+                : "Ничего не выбрано";
+        }
+    }
+
+    /// <summary>How many objects the selection holds right now.</summary>
+    public int SelectionCount => Session.SelectedObjectIds.Count;
+
+    /// <summary>
+    /// The numeric single-object inspector may only exist for exactly one selected object;
+    /// showing one member's numbers as if they were shared would simply be wrong.
+    /// </summary>
+    public bool ShowSingleInspector => SelectionCount == 1;
+
+    /// <summary>
+    /// The group id when the selection is exactly one whole group - every selected object shares
+    /// it and no member is left out. Null for anything else.
+    /// </summary>
+    public Guid? SelectedGroupId
+    {
+        get
+        {
+            var selected = Session.SelectedObjects;
+            if (selected.Count == 0)
+            {
+                return null;
+            }
+
+            var groupId = selected[0].GroupId;
+            if (groupId is null || selected.Any(o => o.GroupId != groupId))
+            {
+                return null;
+            }
+
+            var members = SceneGeometry.GroupMembers(Session.Document, groupId.Value);
+            return members.Count == selected.Count ? groupId : null;
+        }
+    }
+
+    public string? SelectedGroupName
+    {
+        get
+        {
+            if (SelectedGroupId is not { } groupId)
+            {
+                return null;
+            }
+
+            var members = SceneGeometry.GroupMembers(Session.Document, groupId);
+            return members.Count > 0 ? members[0].GroupName : null;
+        }
+    }
+
+    /// <summary>The group whose children are being edited directly, or null. Session state.</summary>
+    public Guid? OpenGroupId => _openGroupId;
+
+    /// <summary>Visibility of the whole selection as one honest value, never a fake single one.</summary>
+    public string SelectionVisibilitySummary => SummarizeSelection(o => o.Visible,
+        EditorLabels.ObjectVisibilityValue(true), EditorLabels.ObjectVisibilityValue(false));
+
+    public string SelectionLockSummary => SummarizeSelection(o => o.Locked,
+        EditorLabels.ObjectLockValue(true), EditorLabels.ObjectLockValue(false));
+
+    private string SummarizeSelection(Func<SceneObject, bool> flag, string whenTrue, string whenFalse)
+    {
+        var selected = Session.SelectedObjects;
+        if (selected.Count == 0)
+        {
+            return "";
+        }
+
+        var first = flag(selected[0]);
+        return selected.All(o => flag(o) == first)
+            ? first ? whenTrue : whenFalse
+            : "Разные значения";
+    }
 
     /// <summary>Kind of the current selection, or null - the only switch the inspector may use.</summary>
     public SceneObjectKind? SelectionKind => Session.SelectedObject?.Kind;
@@ -2142,10 +2244,24 @@ public sealed class EditorViewModel : ViewModelBase
     }
 
     /// <summary>What the canvas should draw: the snapshot, with the live drag substituted in.</summary>
-    public MapDocument RenderDocument =>
-        DragPreview is { } preview
-            ? DocumentEditor.ReplaceObject(Session.Document, preview.Proposed)
-            : Session.Document;
+    public MapDocument RenderDocument
+    {
+        get
+        {
+            if (DragPreview is not { } preview)
+            {
+                return Session.Document;
+            }
+
+            var document = Session.Document;
+            foreach (var proposed in preview.Proposed)
+            {
+                document = DocumentEditor.ReplaceObject(document, proposed);
+            }
+
+            return document;
+        }
+    }
 
     public void AddObject(SceneObjectKind kind)
     {
@@ -2987,22 +3103,58 @@ public sealed class EditorViewModel : ViewModelBase
         SceneChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    public void SelectAt(double worldX, double worldY)
+    /// <summary>
+    /// One canvas click. Outside an open group a grouped object stands for its whole group;
+    /// inside the open group the click picks the child itself. Additive (Ctrl) toggles the unit.
+    /// </summary>
+    public void SelectAt(double worldX, double worldY, bool additive = false)
     {
-        var hit = SceneGeometry.HitTest(Session.Document, worldX, worldY)?.Id;
-        if (hit is null && Session.SelectedObjectId is { } selected)
+        var hit = SceneGeometry.HitTest(Session.Document, worldX, worldY);
+        if (hit is null)
         {
-            _lastSelectedObjectId = selected;
+            if (!additive)
+            {
+                Session.ClearSelection();
+            }
+
+            AfterSelectionChange();
+            return;
         }
 
-        Session.SelectedObjectId = hit;
-        RefreshInspector();
-        Raise(nameof(SelectionStatus));
-        Raise(nameof(SelectionKind));
-        SceneChanged?.Invoke(this, EventArgs.Empty);
+        var unit = SelectionUnit(hit);
+        if (additive)
+        {
+            if (unit.All(id => Session.SelectedObjectIds.Contains(id)))
+            {
+                Session.SetSelection(Session.SelectedObjectIds.Where(id => !unit.Contains(id)));
+            }
+            else
+            {
+                Session.SetSelection([.. Session.SelectedObjectIds, .. unit], hit.Id);
+            }
+        }
+        else if (unit.All(id => Session.SelectedObjectIds.Contains(id))
+            && (_openGroupId is null || hit.GroupId != _openGroupId))
+        {
+            // Clicking inside the current selection keeps it, so a drag can move the whole set.
+            // Inside an open group the click means "this child", never "keep the group".
+            Session.SetSelection(Session.SelectedObjectIds, hit.Id);
+        }
+        else
+        {
+            Session.SetSelection(unit, hit.Id);
+        }
+
+        AfterSelectionChange();
     }
 
-    public void SelectObject(ObjectId id)
+    /// <summary>The ids one clicked object stands for: its whole group, unless that group is open.</summary>
+    private IReadOnlyList<ObjectId> SelectionUnit(SceneObject hit) =>
+        hit.GroupId is { } groupId && _openGroupId != groupId
+            ? [.. SceneGeometry.GroupMembers(Session.Document, groupId).Select(o => o.Id)]
+            : [hit.Id];
+
+    public void SelectObject(ObjectId id, bool additive = false)
     {
         var layer = DocumentEditor.FindLayerOf(Session.Document, id);
         if (layer is null)
@@ -3010,88 +3162,426 @@ public sealed class EditorViewModel : ViewModelBase
             return;
         }
 
-        if (Session.SelectedObjectId is { } selected && selected != id)
+        if (additive)
         {
-            _lastSelectedObjectId = selected;
+            Session.ToggleSelection(id);
+        }
+        else
+        {
+            Session.SetSelection([id], id);
         }
 
-        Session.SelectedObjectId = id;
         _activeLayerId = layer.Id;
-        RefreshInspector();
-        Raise(nameof(SelectionStatus));
-        Raise(nameof(SelectionKind));
+        AfterSelectionChange();
         Raise(nameof(ActiveLayer));
         Raise(nameof(ActiveLayerId));
         Raise(nameof(ActiveLayerSummary));
-        SceneChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    public void DeselectObject()
+    /// <summary>Selects one existing group whole, in one action.</summary>
+    public void SelectGroup(Guid groupId)
     {
-        if (Session.SelectedObjectId is { } selected)
-        {
-            _lastSelectedObjectId = selected;
-        }
-
-        Session.SelectedObjectId = null;
-        RefreshInspector();
-        Raise(nameof(SelectionStatus));
-        Raise(nameof(SelectionKind));
-        SceneChanged?.Invoke(this, EventArgs.Empty);
-    }
-
-    public void RestoreLastSelection()
-    {
-        if (_lastSelectedObjectId is not { } id || DocumentEditor.FindLayerOf(Session.Document, id) is null)
+        var members = SceneGeometry.GroupMembers(Session.Document, groupId);
+        if (members.Count == 0)
         {
             return;
         }
 
-        SelectObject(id);
+        Session.SetSelection(members.Select(o => o.Id));
+        AfterSelectionChange();
+    }
+
+    public void DeselectObject()
+    {
+        Session.ClearSelection();
+        AfterSelectionChange();
+    }
+
+    /// <summary>The ` / ~ shortcut: the whole previous set comes back, not one object.</summary>
+    public void RestoreLastSelection()
+    {
+        if (Session.RestorePreviousSelection())
+        {
+            AfterSelectionChange();
+        }
+    }
+
+    // ---------------------------------------------------------------- select all
+
+    /// <summary>Live search text of the objects panel; Ctrl+A honours it.</summary>
+    public string ObjectSearchText
+    {
+        get => _objectSearchText;
+        set => SetField(ref _objectSearchText, value ?? "");
+    }
+
+    public ObjectTypeFilter ObjectTypeFilter
+    {
+        get => _objectTypeFilter;
+        set => SetField(ref _objectTypeFilter, value);
+    }
+
+    /// <summary>The rows the objects panel shows for the current search, filter and open group.</summary>
+    public IReadOnlyList<ObjectTreeRow> ObjectTree => ObjectTreeRows.Build(
+        Session.Document, _objectSearchText, _objectTypeFilter, _openGroupId,
+        [.. Session.SelectedObjectIds]);
+
+    /// <summary>
+    /// Ctrl+A: selects the visible, unlocked objects that match BOTH the panel search and the
+    /// type filter. Hidden and locked objects never enter; the tree stays their only door.
+    /// </summary>
+    public void SelectAllByFilter()
+    {
+        var matching = Session.Document.Layers.OfType<ObjectLayer>()
+            .Where(layer => layer.Visible && !layer.Locked)
+            .SelectMany(layer => layer.Objects)
+            .Where(o => o.Visible && !o.Locked
+                && ObjectTreeRows.ObjectMatches(o, _objectSearchText, _objectTypeFilter))
+            .Select(o => o.Id)
+            .ToList();
+
+        Session.SetSelection(matching);
+        StatusDetail = matching.Count == 0
+            ? "Под текущий поиск и фильтр не попал ни один видимый объект."
+            : $"Выбрано: {EditorLabels.Objects(matching.Count)}.";
+        AfterSelectionChange();
+    }
+
+    // ---------------------------------------------------------------- groups
+
+    /// <summary>At least two existing, ungrouped objects are selected.</summary>
+    public bool CanGroupSelection
+    {
+        get
+        {
+            var selected = Session.SelectedObjects;
+            return selected.Count >= 2 && selected.All(o => o.GroupId is null);
+        }
+    }
+
+    /// <summary>
+    /// Creates a named group from the whole selection as one undoable command and selects the
+    /// new group. Refusals (too few objects, empty name, partial regrouping) change nothing and
+    /// explain themselves in the status line.
+    /// </summary>
+    public bool GroupSelection(string? name)
+    {
+        var selected = Session.SelectedObjects;
+        if (selected.Count < 2)
+        {
+            StatusDetail = "Для группы выберите минимум два объекта.";
+            return false;
+        }
+
+        SetGroupCommand command;
+        try
+        {
+            command = SetGroupCommand.Group(
+                Session.Document, [.. selected.Select(o => o.Id)], name ?? "");
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            StatusDetail = ex.Message;
+            return false;
+        }
+
+        Session.Execute(command);
+        Session.SetSelection(selected.Select(o => o.Id));
+        AfterEdit();
+        StatusDetail = $"Создана группа «{SelectedGroupName}»: {EditorLabels.Objects(selected.Count)}.";
+        return true;
+    }
+
+    /// <summary>Dissolves the one fully selected group. Anything else is refused untouched.</summary>
+    public bool UngroupSelection()
+    {
+        if (SelectedGroupId is not { } groupId)
+        {
+            StatusDetail = "Разгруппировать можно одну полностью выбранную группу.";
+            return false;
+        }
+
+        var members = SceneGeometry.GroupMembers(Session.Document, groupId);
+        var memberIds = members.Select(o => o.Id).ToList();
+        var name = members[0].GroupName;
+        if (_openGroupId == groupId)
+        {
+            _openGroupId = null;
+        }
+
+        Session.Execute(SetGroupCommand.Ungroup(Session.Document, memberIds));
+        Session.SetSelection(memberIds);
+        AfterEdit();
+        StatusDetail = $"Группа «{name ?? "Группа"}» разгруппирована.";
+        return true;
+    }
+
+    /// <summary>Renames the currently selected group as one undoable command.</summary>
+    public bool RenameSelectedGroup(string? name)
+    {
+        if (SelectedGroupId is not { } groupId)
+        {
+            StatusDetail = "Сначала выберите группу целиком.";
+            return false;
+        }
+
+        var memberIds = SceneGeometry.GroupMembers(Session.Document, groupId)
+            .Select(o => o.Id).ToList();
+        try
+        {
+            Session.Execute(SetGroupCommand.Rename(Session.Document, groupId, name ?? ""));
+        }
+        catch (ArgumentException ex)
+        {
+            StatusDetail = ex.Message;
+            return false;
+        }
+
+        Session.SetSelection(memberIds);
+        AfterEdit();
+        StatusDetail = $"Группа переименована: «{SelectedGroupName}».";
+        return true;
+    }
+
+    /// <summary>Opens the selected group so its children become directly selectable.</summary>
+    public void EnterSelectedGroup()
+    {
+        var selected = Session.SelectedObjects;
+        var groupId = SelectedGroupId ?? (selected.Count > 0 ? selected[0].GroupId : null);
+        if (groupId is null)
+        {
+            StatusDetail = "Сначала выберите группу.";
+            return;
+        }
+
+        EnterGroup(groupId.Value);
+    }
+
+    public void EnterGroup(Guid groupId)
+    {
+        if (SceneGeometry.GroupMembers(Session.Document, groupId).Count == 0)
+        {
+            return;
+        }
+
+        _openGroupId = groupId;
+        AfterSelectionChange();
+    }
+
+    /// <summary>The breadcrumb: closes the open group and selects it whole again.</summary>
+    public void ExitGroup()
+    {
+        if (_openGroupId is not { } groupId)
+        {
+            return;
+        }
+
+        _openGroupId = null;
+        SelectGroup(groupId);
+    }
+
+    /// <summary>
+    /// Esc ladder: an open group closes first (selecting the group whole); a second press clears
+    /// the selection. Returns false when there was nothing to do.
+    /// </summary>
+    public bool HandleEscape()
+    {
+        if (_openGroupId is not null)
+        {
+            ExitGroup();
+            return true;
+        }
+
+        if (SelectionCount > 0)
+        {
+            DeselectObject();
+            return true;
+        }
+
+        return false;
+    }
+
+    // ---------------------------------------------------------------- marquee
+
+    /// <summary>Live rubber-band rectangle for the renderer, or null when no marquee drag runs.</summary>
+    public WorldBounds? MarqueeWorld => _marqueeWorld;
+
+    /// <summary>Starts a marquee drag on empty canvas. Additive keeps the current selection.</summary>
+    public bool BeginMarquee(double worldX, double worldY, bool additive)
+    {
+        _marqueeStart = (worldX, worldY, additive);
+        _marqueeWorld = null;
+        return true;
+    }
+
+    public void UpdateMarquee(double worldX, double worldY)
+    {
+        if (_marqueeStart is not { } start)
+        {
+            return;
+        }
+
+        _marqueeWorld = MultiSelectionGeometry.MarqueeBounds(start.X, start.Y, worldX, worldY);
+        SceneChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>
+    /// Completes the marquee: visible unlocked objects intersecting the rectangle, each grouped
+    /// object standing for its whole group, replace or extend the selection.
+    /// </summary>
+    public void EndMarquee()
+    {
+        var start = _marqueeStart;
+        var rect = _marqueeWorld;
+        _marqueeStart = null;
+        _marqueeWorld = null;
+        if (start is not { } begun || rect is not { } marquee)
+        {
+            SceneChanged?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+
+        var found = new List<ObjectId>();
+        foreach (var hit in MultiSelectionGeometry.ObjectsInMarquee(Session.Document, marquee))
+        {
+            found.AddRange(SelectionUnit(hit));
+        }
+
+        if (begun.Additive)
+        {
+            Session.AddToSelection(found);
+        }
+        else
+        {
+            Session.SetSelection(found);
+        }
+
+        AfterSelectionChange();
+    }
+
+    public void CancelMarquee()
+    {
+        _marqueeStart = null;
+        _marqueeWorld = null;
+        SceneChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>Shared frame of the current multi-selection (live drag included), or null.</summary>
+    public WorldBounds? SelectionFrame
+    {
+        get
+        {
+            if (DragPreview is { } preview && preview.Proposed.Count > 1)
+            {
+                return MultiSelectionGeometry.CombinedBounds(preview.Proposed);
+            }
+
+            return SelectionCount > 1
+                ? MultiSelectionGeometry.CombinedBounds(Session.SelectedObjects)
+                : null;
+        }
+    }
+
+    /// <summary>One notification bundle for every way the selection can change.</summary>
+    private void AfterSelectionChange()
+    {
+        RefreshInspector();
+        Raise(nameof(SelectionStatus));
+        Raise(nameof(SelectionKind));
+        Raise(nameof(SelectionCount));
+        Raise(nameof(ShowSingleInspector));
+        Raise(nameof(SelectedGroupId));
+        Raise(nameof(SelectedGroupName));
+        Raise(nameof(OpenGroupId));
+        Raise(nameof(SelectionVisibilitySummary));
+        Raise(nameof(SelectionLockSummary));
+        SceneChanged?.Invoke(this, EventArgs.Empty);
     }
 
     public void NudgeSelectedObject(double deltaX, double deltaY)
     {
-        if (EditableSelection() is not { } before) return;
-        ReplaceSelected(before, WithGeometry(before, before.X + deltaX, before.Y + deltaY,
-            before.Width, before.Height, before.RotationDegrees), "Nudge object");
+        if (EditableSelectionList() is not { } before) return;
+        ExecuteWholeSelection(before,
+            MultiSelectionGeometry.Translate(before, deltaX, deltaY), "Nudge selection");
     }
 
     public void ResizeSelectedObject(int direction, bool largerStep = false)
     {
-        if (EditableSelection() is not { } before || direction == 0) return;
-        var factor = 1 + Math.Sign(direction) * (largerStep ? 0.1 : 0.01);
-        var width = Math.Max(1, before.Width * factor);
-        var height = Math.Max(1, before.Height * factor);
-        ReplaceSelected(before, WithGeometry(before,
-            before.X + (before.Width - width) / 2,
-            before.Y + (before.Height - height) / 2,
-            width, height, before.RotationDegrees), "Resize object from shortcut");
+        if (EditableSelectionList() is not { } before || direction == 0) return;
+        var factor = MultiSelectionGeometry.ClampScaleFactor(
+            before, 1 + Math.Sign(direction) * (largerStep ? 0.1 : 0.01));
+        var frame = MultiSelectionGeometry.CombinedBounds(before)!.Value;
+        ExecuteWholeSelection(before, MultiSelectionGeometry.ScaleAroundCentre(
+            before, factor, (frame.Left + frame.Right) / 2, (frame.Top + frame.Bottom) / 2),
+            "Resize selection from shortcut");
     }
 
     public void RotateSelectedObject(int direction, bool largerStep = false, bool fineStep = false)
     {
-        if (EditableSelection() is not { } before || direction == 0) return;
+        if (EditableSelectionList() is not { } before || direction == 0) return;
         var step = fineStep ? 0.25 : largerStep ? 15 : 1;
-        ReplaceSelected(before, WithGeometry(before, before.X, before.Y, before.Width, before.Height,
-            NormalizeAngle(before.RotationDegrees + Math.Sign(direction) * step)), "Rotate object from shortcut");
+        var frame = MultiSelectionGeometry.CombinedBounds(before)!.Value;
+        ExecuteWholeSelection(before, MultiSelectionGeometry.RotateAroundCentre(
+            before, Math.Sign(direction) * step,
+            (frame.Left + frame.Right) / 2, (frame.Top + frame.Bottom) / 2),
+            "Rotate selection from shortcut");
     }
 
     public void AdjustSelectedSublayer(int direction)
     {
-        if (EditableSelection() is not { } before || direction == 0) return;
-        var value = Math.Clamp(before.Sublayer + Math.Sign(direction), -10, 10);
-        if (value == before.Sublayer) return;
-        ReplaceSelected(before, CopyObject(before) with { Sublayer = value }, "Change object sublayer");
+        if (EditableSelectionList() is not { } before || direction == 0) return;
+        ExecuteWholeSelection(before,
+            [.. before.Select(o => CopyObject(o) with
+            {
+                Sublayer = Math.Clamp(o.Sublayer + Math.Sign(direction), -10, 10),
+            })],
+            "Change selection sublayer");
     }
 
     public void AdjustSelectedOpacity(int direction, bool largerStep = false)
     {
-        if (EditableSelection() is not { } before || direction == 0) return;
+        if (EditableSelectionList() is not { } before || direction == 0) return;
         var step = largerStep ? 0.1 : 0.05;
-        var value = Math.Clamp(before.ObjectOpacity + Math.Sign(direction) * step, 0, 1);
-        if (value == before.ObjectOpacity) return;
-        ReplaceSelected(before, CopyObject(before) with { ObjectOpacity = value }, "Change object opacity");
+        ExecuteWholeSelection(before,
+            [.. before.Select(o => CopyObject(o) with
+            {
+                ObjectOpacity = Math.Clamp(o.ObjectOpacity + Math.Sign(direction) * step, 0, 1),
+            })],
+            "Change selection opacity");
+    }
+
+    /// <summary>One whole-selection edit = one history entry; an unchanged result = none.</summary>
+    private void ExecuteWholeSelection(
+        IReadOnlyList<SceneObject> before, IReadOnlyList<SceneObject> after, string name)
+    {
+        if (before.SequenceEqual(after))
+        {
+            return;
+        }
+
+        Session.Execute(new ReplaceObjectsCommand(before, after, name));
+        AfterEdit();
+    }
+
+    /// <summary>
+    /// The whole selection, editable or nothing: a hidden or locked member refuses the entire
+    /// geometric change so no partial result can ever land (Stage 10C contract).
+    /// </summary>
+    private IReadOnlyList<SceneObject>? EditableSelectionList()
+    {
+        var selected = Session.SelectedObjects;
+        if (selected.Count == 0)
+        {
+            return null;
+        }
+
+        if (selected.Any(o => !o.Visible || o.Locked))
+        {
+            StatusDetail = "В выделении есть скрытые или заблокированные объекты — изменение отклонено целиком.";
+            return null;
+        }
+
+        return selected;
     }
 
     public void AdjustBrushSize(int direction, bool largerStep = false)
@@ -3148,40 +3638,48 @@ public sealed class EditorViewModel : ViewModelBase
         ReplaceSelected(before, before with { Text = text with { Curve = value } }, "Change text curve");
     }
 
+    /// <summary>
+    /// Visibility over the whole selection. A mixed state resolves towards showing everything
+    /// first - hiding objects the user cannot see being toggled would read as loss.
+    /// </summary>
     public void ToggleSelectedObjectVisibility()
     {
-        if (Session.SelectedObject is not { } before)
+        var before = Session.SelectedObjects;
+        if (before.Count == 0)
         {
             return;
         }
 
-        var after = CopyObject(before, visible: !before.Visible);
-        Session.Execute(new ReplaceObjectsCommand([before], [after], "Object visibility"));
-        AfterEdit();
+        var target = !before.All(o => o.Visible);
+        ExecuteWholeSelection(before,
+            [.. before.Select(o => CopyObject(o, visible: target))], "Selection visibility");
     }
 
+    /// <summary>Lock over the whole selection: any unlocked member means "lock all" first.</summary>
     public void ToggleSelectedObjectLock()
     {
-        if (Session.SelectedObject is not { } before)
+        var before = Session.SelectedObjects;
+        if (before.Count == 0)
         {
             return;
         }
 
-        var after = CopyObject(before, locked: !before.Locked);
-        Session.Execute(new ReplaceObjectsCommand([before], [after], "Object lock"));
-        AfterEdit();
+        var target = !before.All(o => o.Locked);
+        ExecuteWholeSelection(before,
+            [.. before.Select(o => CopyObject(o, locked: target))], "Selection lock");
     }
 
+    /// <summary>Deletes the whole selection, across layers, as one history entry.</summary>
     public void DeleteSelectedObject()
     {
-        if (Session.SelectedObject is not { } selected
-            || DocumentEditor.FindLayerOf(Session.Document, selected.Id) is not { } layer)
+        var ids = Session.SelectedObjectIds;
+        if (ids.Count == 0)
         {
             return;
         }
 
-        Session.Execute(new RemoveObjectsCommand(Session.Document, layer.Id, [selected.Id]));
-        Session.SelectedObjectId = null;
+        Session.Execute(new DeleteObjectsCommand(Session.Document, [.. ids]));
+        Session.ClearSelection();
         AfterEdit();
     }
 
@@ -3197,55 +3695,86 @@ public sealed class EditorViewModel : ViewModelBase
 
     public static double RotationHandleOffset(double viewScale) => 28.0 / Math.Max(viewScale, 0.01);
 
-    /// <summary>The gizmo handle under the cursor, for pointer feedback. Null when none.</summary>
+    /// <summary>
+    /// The gizmo handle under the cursor, for pointer feedback. One object hit-tests its own
+    /// rotated gizmo; a multi-selection hit-tests the shared axis-aligned frame. Null when the
+    /// selection is empty or holds a hidden/locked member.
+    /// </summary>
     public HandleKind? HitHandle(double worldX, double worldY, double viewScale)
     {
-        var selected = EditableSelection();
-        if (selected is null)
+        var selected = Session.SelectedObjects;
+        if (selected.Count == 0 || selected.Any(o => !o.Visible || o.Locked))
         {
             return null;
         }
 
-        return SelectionHandles.HitTest(
-            selected, worldX, worldY, HandleHitRadius(viewScale), RotationHandleOffset(viewScale));
+        if (selected.Count == 1)
+        {
+            return SelectionHandles.HitTest(
+                selected[0], worldX, worldY, HandleHitRadius(viewScale), RotationHandleOffset(viewScale));
+        }
+
+        var frame = MultiSelectionGeometry.CombinedBounds(selected)!.Value;
+        return MultiSelectionGeometry.HitTestFrame(
+            frame, worldX, worldY, HandleHitRadius(viewScale), RotationHandleOffset(viewScale));
     }
 
     /// <summary>
-    /// One canvas press: a grab of a gizmo handle starts a resize/rotate of the current selection;
-    /// otherwise the press selects, and an editable object starts a move. Returns true when a
-    /// drag began. Whatever the mode, the whole gesture ends as one history entry.
+    /// One canvas press: a handle grab starts resize/rotate of the whole selection; a press on an
+    /// object selects (Ctrl toggles) and starts a move; a press on empty canvas starts a marquee.
+    /// Whatever the gesture, the completed edit lands as exactly one history entry.
     /// </summary>
-    public bool BeginCanvasInteraction(double worldX, double worldY, double viewScale)
+    public CanvasGesture BeginCanvasInteraction(
+        double worldX, double worldY, double viewScale, bool additive = false)
     {
-        var handle = HitHandle(worldX, worldY, viewScale);
-        if (handle is { } grabbed)
+        if (!additive && HitHandle(worldX, worldY, viewScale) is { } grabbed)
         {
-            var selected = EditableSelection()!;
+            var selected = Session.SelectedObjects;
             DragPreview = new DragPreview(
                 selected, selected,
                 grabbed == HandleKind.Rotate ? DragMode.Rotate : DragMode.Resize,
-                grabbed, worldX, worldY);
-            return true;
+                grabbed, worldX, worldY,
+                selected.Count > 1 ? MultiSelectionGeometry.CombinedBounds(selected) : null);
+            return CanvasGesture.Drag;
         }
 
-        SelectAt(worldX, worldY);
+        if (SceneGeometry.HitTest(Session.Document, worldX, worldY) is null)
+        {
+            if (!additive && SelectionCount > 0)
+            {
+                Session.ClearSelection();
+                AfterSelectionChange();
+            }
+
+            BeginMarquee(worldX, worldY, additive);
+            return CanvasGesture.Marquee;
+        }
+
+        SelectAt(worldX, worldY, additive);
         RefreshInspector();
-        return BeginDrag(worldX, worldY);
+        if (additive)
+        {
+            return CanvasGesture.None;
+        }
+
+        return BeginDrag(worldX, worldY) ? CanvasGesture.Drag : CanvasGesture.None;
     }
 
     public bool BeginDrag(double startWorldX = 0, double startWorldY = 0)
     {
-        var selected = EditableSelection();
-        if (selected is null)
+        var selected = Session.SelectedObjects;
+        if (selected.Count == 0 || selected.Any(o => !o.Visible || o.Locked))
         {
             return false;
         }
 
-        DragPreview = new DragPreview(selected, selected, DragMode.Move, null, startWorldX, startWorldY);
+        DragPreview = new DragPreview(
+            selected, selected, DragMode.Move, null, startWorldX, startWorldY,
+            selected.Count > 1 ? MultiSelectionGeometry.CombinedBounds(selected) : null);
         return true;
     }
 
-    /// <summary>Absolute-cursor drag update covering move, resize and rotate.</summary>
+    /// <summary>Absolute-cursor drag update covering move, resize and rotate of the whole set.</summary>
     public void UpdateDragTo(double worldX, double worldY)
     {
         if (DragPreview is not { } preview)
@@ -3254,17 +3783,39 @@ public sealed class EditorViewModel : ViewModelBase
         }
 
         var before = preview.Before;
-        var proposed = preview.Mode switch
+        IReadOnlyList<SceneObject> proposed;
+        if (preview.Mode == DragMode.Resize && before.Count == 1)
         {
-            DragMode.Resize => SelectionHandles.Resize(before, preview.Handle!.Value, worldX, worldY),
-            DragMode.Rotate => SelectionHandles.Rotate(
-                before, preview.StartWorldX, preview.StartWorldY, worldX, worldY),
-            _ => WithGeometry(
-                before,
-                before.X + (worldX - preview.StartWorldX),
-                before.Y + (worldY - preview.StartWorldY),
-                before.Width, before.Height, before.RotationDegrees),
-        };
+            proposed = [SelectionHandles.Resize(before[0], preview.Handle!.Value, worldX, worldY)];
+        }
+        else if (preview.Mode == DragMode.Resize)
+        {
+            var frame = preview.StartFrame!.Value;
+            var factor = MultiSelectionGeometry.ClampScaleFactor(
+                before, MultiSelectionGeometry.ResizeFactor(frame, preview.Handle!.Value, worldX, worldY));
+            proposed = MultiSelectionGeometry.ScaleAroundCentre(
+                before, factor, (frame.Left + frame.Right) / 2, (frame.Top + frame.Bottom) / 2);
+        }
+        else if (preview.Mode == DragMode.Rotate && before.Count == 1)
+        {
+            proposed = [SelectionHandles.Rotate(
+                before[0], preview.StartWorldX, preview.StartWorldY, worldX, worldY)];
+        }
+        else if (preview.Mode == DragMode.Rotate)
+        {
+            var frame = preview.StartFrame!.Value;
+            var centreX = (frame.Left + frame.Right) / 2;
+            var centreY = (frame.Top + frame.Bottom) / 2;
+            var delta = (Math.Atan2(worldY - centreY, worldX - centreX)
+                - Math.Atan2(preview.StartWorldY - centreY, preview.StartWorldX - centreX))
+                * 180.0 / Math.PI;
+            proposed = MultiSelectionGeometry.RotateAroundCentre(before, delta, centreX, centreY);
+        }
+        else
+        {
+            proposed = MultiSelectionGeometry.Translate(
+                before, worldX - preview.StartWorldX, worldY - preview.StartWorldY);
+        }
 
         DragPreview = preview with { Proposed = proposed };
         SceneChanged?.Invoke(this, EventArgs.Empty);
@@ -3288,10 +3839,15 @@ public sealed class EditorViewModel : ViewModelBase
 
         DragPreview = null;
 
-        if (preview.Proposed != preview.Before)
+        if (!preview.Proposed.SequenceEqual(preview.Before))
         {
-            Session.Execute(new TransformObjectCommand(preview.Before, preview.Proposed));
+            Session.Execute(new ReplaceObjectsCommand(
+                preview.Before, preview.Proposed, "Transform selection"));
             AfterEdit();
+        }
+        else
+        {
+            SceneChanged?.Invoke(this, EventArgs.Empty);
         }
     }
 
@@ -3331,9 +3887,24 @@ public sealed class EditorViewModel : ViewModelBase
     {
         SaveState = Session.IsDirty ? SaveState.Unsaved : SaveState.Saved;
         StatusDetail = "";
+
+        // An edit (or an undo/redo) may have emptied the open group; an empty open group would
+        // strand the tree behind a breadcrumb with nothing under it.
+        if (_openGroupId is { } openGroup
+            && SceneGeometry.GroupMembers(Session.Document, openGroup).Count == 0)
+        {
+            _openGroupId = null;
+        }
         RefreshInspector();
         Raise(nameof(SelectionStatus));
         Raise(nameof(SelectionKind));
+        Raise(nameof(SelectionCount));
+        Raise(nameof(ShowSingleInspector));
+        Raise(nameof(SelectedGroupId));
+        Raise(nameof(SelectedGroupName));
+        Raise(nameof(OpenGroupId));
+        Raise(nameof(SelectionVisibilitySummary));
+        Raise(nameof(SelectionLockSummary));
         Raise(nameof(Layers));
         Raise(nameof(ActiveLayer));
         Raise(nameof(ActiveLayerId));
@@ -3429,6 +4000,7 @@ public sealed class EditorViewModel : ViewModelBase
         {
             Sublayer = source.Sublayer,
             GroupId = source.GroupId,
+            GroupName = source.GroupName,
             Stamp = source.Stamp,
             Line = source.Line,
             Shape = source.Shape,
@@ -3448,6 +4020,7 @@ public sealed class EditorViewModel : ViewModelBase
         {
             Sublayer = source.Sublayer,
             GroupId = source.GroupId,
+            GroupName = source.GroupName,
             Stamp = source.Stamp,
             Line = source.Line,
             Shape = source.Shape,

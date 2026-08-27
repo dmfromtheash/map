@@ -27,6 +27,8 @@ public sealed class MapCanvasControl : Control
     private bool _isPanning;
     private bool _isStroking;
     private bool _isVectorDrawing;
+    private bool _isMarquee;
+    private Point _marqueePressScreen;
     private readonly TileImageCache _tileCache = new(512);
 
     public bool IsSpacePanHeld { get; set; }
@@ -117,6 +119,11 @@ public sealed class MapCanvasControl : Control
             SceneRenderer.Render(canvas, editor.RenderDocument, new Map.Rendering.RenderOptions
             {
                 SelectedObjectId = editor.Session.SelectedObjectId,
+                CoSelectedObjectIds = editor.Session.SelectedObjectIds.Count > 1
+                    ? editor.Session.SelectedObjectIds
+                    : null,
+                SelectionFrame = editor.SelectionFrame,
+                Marquee = editor.MarqueeWorld,
                 ViewScale = viewport.Scale,
                 VisibleWorld = new Map.Core.Documents.WorldBounds(
                     X, Y, bottomRight.X, bottomRight.Y),
@@ -198,11 +205,18 @@ public sealed class MapCanvasControl : Control
             return;
         }
 
-        // One entry point: a gizmo handle grab resizes/rotates the current selection; otherwise
-        // the press selects and, on an editable object, starts a move.
-        if (_editor.BeginCanvasInteraction(world.X, world.Y, _editor.Session.Viewport.Scale))
+        // One entry point: a gizmo/frame handle grab resizes/rotates the whole selection; a press
+        // on an object selects (Ctrl toggles) and starts a move; empty canvas starts a marquee.
+        var additive = e.KeyModifiers.HasFlag(KeyModifiers.Control);
+        switch (_editor.BeginCanvasInteraction(world.X, world.Y, _editor.Session.Viewport.Scale, additive))
         {
-            _dragStartWorld = world;
+            case CanvasGesture.Drag:
+                _dragStartWorld = world;
+                break;
+            case CanvasGesture.Marquee:
+                _isMarquee = true;
+                _marqueePressScreen = position;
+                break;
         }
 
         e.Pointer.Capture(this);
@@ -254,6 +268,13 @@ public sealed class MapCanvasControl : Control
             e.Handled = true;
         }
 
+        if (_isMarquee)
+        {
+            _editor.UpdateMarquee(X, Y);
+            e.Handled = true;
+            InvalidateVisual();
+        }
+
 
         if (!_isStroking)
         {
@@ -288,6 +309,23 @@ public sealed class MapCanvasControl : Control
         {
             _dragStartWorld = null;
             _editor.EndDrag();
+        }
+
+        if (_isMarquee)
+        {
+            _isMarquee = false;
+
+            // A press-and-release without real movement is a click, not a frame: the press
+            // already applied its selection effect, so the empty marquee is simply dropped.
+            var moved = e.GetPosition(this) - _marqueePressScreen;
+            if (Math.Abs(moved.X) < 3 && Math.Abs(moved.Y) < 3)
+            {
+                _editor.CancelMarquee();
+            }
+            else
+            {
+                _editor.EndMarquee();
+            }
         }
 
         if (_isStroking)

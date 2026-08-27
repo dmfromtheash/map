@@ -102,6 +102,13 @@ public sealed record SceneObject
     /// <summary>Objects sharing a group id select and move together. Null = ungrouped.</summary>
     public Guid? GroupId { get; init; }
 
+    /// <summary>
+    /// User-visible name of the group. Carried by every member: same GroupId - same GroupName
+    /// (the document constructor enforces it), and a name never exists without a group. Null on
+    /// every object of a pre-10C file, so old documents load unchanged.
+    /// </summary>
+    public string? GroupName { get; init; }
+
     /// <summary>Set only for kind == Stamp: how the referenced asset is drawn.</summary>
     public StampStyle? Stamp { get; init; }
 

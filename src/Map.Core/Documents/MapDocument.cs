@@ -102,6 +102,30 @@ public sealed record MapDocument
             }
         }
 
+        // Group naming invariants: a name only exists together with a group id, and every member
+        // of one group carries exactly the same name (null included, so old files stay valid).
+        var groupNames = new Dictionary<Guid, string?>();
+        foreach (var sceneObject in layers.OfType<ObjectLayer>().SelectMany(l => l.Objects))
+        {
+            if (sceneObject.GroupId is not { } groupKey)
+            {
+                if (sceneObject.GroupName is not null)
+                {
+                    throw new ArgumentException(
+                        $"Object {sceneObject.Id} carries a group name without a group id.", nameof(layers));
+                }
+
+                continue;
+            }
+
+            if (!groupNames.TryAdd(groupKey, sceneObject.GroupName)
+                && !string.Equals(groupNames[groupKey], sceneObject.GroupName, StringComparison.Ordinal))
+            {
+                throw new ArgumentException(
+                    $"Members of group {groupKey} disagree on the group name.", nameof(layers));
+            }
+        }
+
         Id = id;
         Title = title;
         CreatedUtc = createdUtc;

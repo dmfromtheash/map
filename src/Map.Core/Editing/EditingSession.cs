@@ -28,7 +28,121 @@ public sealed class EditingSession
 
     public Viewport Viewport { get; } = new();
 
-    public ObjectId? SelectedObjectId { get; set; }
+    private readonly List<ObjectId> _selection = [];
+    private List<ObjectId> _previousSelection = [];
+    private ObjectId? _primarySelection;
+
+    /// <summary>Ordered multi-selection without duplicates. Session state, never persisted.</summary>
+    public IReadOnlyList<ObjectId> SelectedObjectIds => _selection;
+
+    /// <summary>
+    /// The primary selected object. Setting it keeps the old single-selection contract: the value
+    /// REPLACES the whole selection, so every pre-10C caller still behaves exactly as before.
+    /// </summary>
+    public ObjectId? SelectedObjectId
+    {
+        get => _primarySelection;
+        set => SetSelection(value is { } id ? [id] : [], value);
+    }
+
+    /// <summary>Every selected object that still exists, in selection order.</summary>
+    public IReadOnlyList<SceneObject> SelectedObjects =>
+        [.. _selection.Select(id => DocumentEditor.FindObject(Document, id)).OfType<SceneObject>()];
+
+    /// <summary>
+    /// Replaces the selection with the given ids: duplicates collapse to the first occurrence,
+    /// ids that are not part of the document are dropped, and the primary defaults to the last
+    /// remaining id when the requested one is absent.
+    /// </summary>
+    public void SetSelection(IEnumerable<ObjectId> ids, ObjectId? primary = null)
+    {
+        ArgumentNullException.ThrowIfNull(ids);
+        var next = new List<ObjectId>();
+        var seen = new HashSet<ObjectId>();
+        foreach (var id in ids)
+        {
+            if (seen.Add(id) && DocumentEditor.FindObject(Document, id) is not null)
+            {
+                next.Add(id);
+            }
+        }
+
+        RememberBeforeChange(next);
+        _selection.Clear();
+        _selection.AddRange(next);
+        _primarySelection = primary is { } wanted && seen.Contains(wanted) && next.Contains(wanted)
+            ? wanted
+            : next.Count > 0 ? next[^1] : null;
+    }
+
+    /// <summary>Ctrl+click contract: adds an absent id (it becomes primary) or removes a present one.</summary>
+    public void ToggleSelection(ObjectId id)
+    {
+        if (_selection.Contains(id))
+        {
+            var next = _selection.Where(existing => existing != id);
+            SetSelection(next, _primarySelection == id ? null : _primarySelection);
+        }
+        else
+        {
+            SetSelection([.. _selection, id], id);
+        }
+    }
+
+    /// <summary>Ctrl+marquee contract: appends only the ids the selection does not hold yet.</summary>
+    public void AddToSelection(IEnumerable<ObjectId> ids)
+    {
+        ArgumentNullException.ThrowIfNull(ids);
+        SetSelection([.. _selection, .. ids]);
+    }
+
+    public void ClearSelection() => SetSelection([]);
+
+    /// <summary>
+    /// Restores the previous whole selection (the ` / ~ shortcut). Ids that left the document in
+    /// the meantime are skipped. Returns false when there is nothing to restore.
+    /// </summary>
+    public bool RestorePreviousSelection()
+    {
+        if (_previousSelection.Count == 0)
+        {
+            return false;
+        }
+
+        SetSelection(_previousSelection);
+        return _selection.Count > 0;
+    }
+
+    /// <summary>Keeps the last different non-empty set so the user can always come back to it.</summary>
+    private void RememberBeforeChange(List<ObjectId> next)
+    {
+        if (_selection.Count > 0 && !_selection.SequenceEqual(next))
+        {
+            _previousSelection = [.. _selection];
+        }
+    }
+
+    /// <summary>Drops selected ids the current snapshot no longer contains.</summary>
+    private void PruneSelection()
+    {
+        if (_selection.Count == 0)
+        {
+            return;
+        }
+
+        var alive = _selection.Where(id => DocumentEditor.FindObject(Document, id) is not null).ToList();
+        if (alive.Count == _selection.Count)
+        {
+            return;
+        }
+
+        _selection.Clear();
+        _selection.AddRange(alive);
+        if (_primarySelection is { } primary && !alive.Contains(primary))
+        {
+            _primarySelection = alive.Count > 0 ? alive[^1] : null;
+        }
+    }
 
     /// <summary>Monotonic edit counter. Bumped once per executed/undone/redone command.</summary>
     public long Revision { get; private set; }
@@ -66,6 +180,7 @@ public sealed class EditingSession
         _undo.Add(new HistoryEntry(command, _currentState, afterState));
         _currentState = afterState;
         _redo.Clear();
+        PruneSelection();
     }
 
     public bool Undo()
@@ -81,6 +196,7 @@ public sealed class EditingSession
         Revision++;
         _currentState = entry.BeforeState;
         _redo.Add(entry);
+        PruneSelection();
         return true;
     }
 
@@ -97,6 +213,7 @@ public sealed class EditingSession
         Revision++;
         _currentState = entry.AfterState;
         _undo.Add(entry);
+        PruneSelection();
         return true;
     }
 

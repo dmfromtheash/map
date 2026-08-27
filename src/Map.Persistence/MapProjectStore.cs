@@ -686,6 +686,7 @@ public static class MapProjectStore
         Locked = sceneObject.Locked,
         Sublayer = sceneObject.Sublayer,
         GroupId = sceneObject.GroupId?.ToString("D"),
+        GroupName = sceneObject.GroupName,
         ObjectOpacity = sceneObject.ObjectOpacity,
         Stamp = sceneObject.Stamp is { } stamp
             ? new StampStyleDto
@@ -879,6 +880,7 @@ public static class MapProjectStore
     {
         Sublayer = dto.Sublayer,
         GroupId = dto.GroupId is null ? null : Guid.ParseExact(dto.GroupId, "D"),
+        GroupName = dto.GroupName,
         ObjectOpacity = dto.ObjectOpacity,
         Stamp = dto.Stamp is { } stamp
             ? new StampStyle(RequireString(stamp.AssetSha256, "stamp asset hash"))

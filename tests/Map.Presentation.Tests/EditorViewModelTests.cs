@@ -397,7 +397,7 @@ public class EditorViewModelTests
             .Compute(before, EditorViewModel.RotationHandleOffset(1.0))
             .Single(h => h.Kind == Map.Core.Editing.HandleKind.BottomRight);
 
-        Assert.True(editor.BeginCanvasInteraction(X, Y, 1.0));
+        Assert.Equal(CanvasGesture.Drag, editor.BeginCanvasInteraction(X, Y, 1.0));
         editor.UpdateDragTo(X + 50, Y + 30);
         editor.UpdateDragTo(X + 100, Y + 60); // many previews...
         editor.EndDrag();                                    // ...one command
@@ -425,7 +425,7 @@ public class EditorViewModelTests
             .Compute(before, EditorViewModel.RotationHandleOffset(1.0))
             .Single(h => h.Kind == Map.Core.Editing.HandleKind.Rotate);
 
-        Assert.True(editor.BeginCanvasInteraction(X, Y, 1.0));
+        Assert.Equal(CanvasGesture.Drag, editor.BeginCanvasInteraction(X, Y, 1.0));
 
         // Drag the handle from above the centre to the right of the centre: +90 degrees.
         var centreX = before.X + (before.Width / 2);
@@ -450,7 +450,7 @@ public class EditorViewModelTests
         var centreX = before.X + (before.Width / 2);
         var centreY = before.Y + (before.Height / 2);
 
-        Assert.True(editor.BeginCanvasInteraction(centreX, centreY, 1.0));
+        Assert.Equal(CanvasGesture.Drag, editor.BeginCanvasInteraction(centreX, centreY, 1.0));
         editor.UpdateDragTo(centreX + 70, centreY + 20);
         editor.EndDrag();
 

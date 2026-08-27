@@ -661,6 +661,80 @@ Codex выполнена и описана следующим разделом. 
 - Следующий функциональный срез дорожной карты — 10C multi-selection/groups. Не смешивать его с
   10D inspectors, 10E grid geometry, 10F fonts или Stage 9B–9E.
 
+## PROPOSED / PARTIAL — Stage 10C multi-selection/groups выполнен, 27.08.2026
+
+Branch `stage/10c-multi-selection-groups`, BASE `58bef7a`, один commit Opus. Это self-check
+авторского контекста, не независимая приёмка; до clean-context review Codex ничего из
+перечисленного не является `FACT`. Stage 10 в целом остаётся `PARTIAL`.
+
+- `EditingSession` держит упорядоченное множественное выделение без дублей с primary,
+  restore предыдущего набора (`` ` ``/`~`) и автоочисткой удалённых ID в execute/undo/redo;
+  прежний `SelectedObjectId` сохраняет контракт «заменить всё выделение».
+- Именованные группы поверх существующего `GroupId`: nullable `GroupName` у членов, инвариант
+  модели «один GroupId — одно имя, имя только с GroupId», `SetGroupCommand.Group(ids, имя)`
+  (минимум два несгруппированных, имя обрезается, ≤80), `Ungroup`, `Rename`; redo возвращает
+  тот же GroupId/GroupName. `DeleteObjectsCommand` удаляет через несколько Object layers одной
+  записью истории и в той же транзакции распускает singleton-остаток группы.
+- `.mapproj`: `groupName` пишется только когда задан (старые файлы байт-в-байт); файл с разными
+  именами одного GroupId или именем без GroupId открывается как corruption. schemaVersion не
+  поднимался.
+- Новый Core-файл `MultiSelectionGeometry`: объединённые bounds, translate/scale-от-центра/
+  rotate-вокруг-центра c нормализацией углов, ручки общей рамки, marquee-подбор по видимым
+  незаблокированным объектам видимых незаблокированных слоёв.
+- `RenderOptions.CoSelectedObjectIds` реально подключён; добавлены `SelectionFrame` (общая
+  рамка с ручками постоянного экранного размера) и `Marquee`; export/thumbnail-путь их не
+  получает — проверено pixel-тестом.
+- `EditorViewModel`: клик по члену группы выбирает всю группу, внутри открытой группы — ребёнка;
+  Ctrl+click/Ctrl+marquee — additive; Esc-каскад (выход из группы → снятие выделения); `Ctrl+A`
+  по поиску и типовому фильтру панели объектов (скрытые/заблокированные не входят); мульти
+  move/resize/rotate/sublayer/opacity/lock/visibility/delete одной командой; геометрия
+  отклоняется целиком при locked/hidden члене; no-op не пишет историю; `ObjectTreeRows` —
+  тестируемая модель строк дерева (group row / breadcrumb / дети с разными стабильными UIA-id).
+- UI: фильтр типов и кнопка «Выбрать всё (Ctrl+A)» в панели «Объекты», group row одной строкой
+  с количеством детей, breadcrumb «← Все объекты», мульти-панель свойств
+  («Выбрано N…»/«Группа «Имя» · N…», имя группы, group/ungroup/enter, честное «Разные
+  значения»), список объектов сообщает UIA multi-select через собственный automation peer.
+  MainWindow: Ctrl+A/Ctrl+G/Ctrl+Shift+G/Esc/Delete/`` ` `` подключены с прежним guard
+  «не срабатывать при вводе текста».
+- Найденный и исправленный внутри среза дефект: `WithGeometry`/`CopyObject` view-model теряли
+  `GroupName` при живом `GroupId` — любое редактирование члена группы падало на инварианте
+  модели. Пойман фоновым драйвером, доказан red/green тестом
+  `Edits_over_grouped_members_keep_the_group_name`.
+- Проверки свежими прогонами: Release build 0 warnings/0 errors; полный suite **430/430**
+  (Core 137, Persistence 57, Rendering 20, Assets 65, Presentation 151); doctor, restore,
+  pre-commit — PASS; vulnerable нет; deprecated — прежний `xunit 2.9.3` Legacy;
+  `dotnet format --verify-no-changes --severity info` — прежний legacy exit 2, **ни одного
+  прироста диагностик** относительно зафиксированного baseline (256 → 241 по file:line).
+- Targeted coverage (Core-тесты): `MultiSelectionGeometry` 96%/82.5%, `SetGroupCommand`
+  92.7%/83.3%, `DeleteObjectsCommand` 92.3%/94.4%, `EditingSession` 91.3%/81.5%.
+- Targeted Stryker (три итерации + финальный прогон): `MultiSelectionGeometry` 104 killed /
+  14 survived (85.25%); валидация групп `MapDocument` — 0 survivors. Каждый оставшийся
+  survivor разобран: guard-clauses `ThrowIfNull`, недостижимая защита вырожденных размеров,
+  эквивалентные мутанты (`First→FirstOrDefault`, primary-fallback), message-строки и прежний
+  долг Revision/PendingChanges вне среза. Ручные мутанты убиты red/green: пропуск записи
+  `groupName` в persistence и частичное изменение при locked-члене.
+- Рискованные group-transform тесты прогнаны 5 раз подряд — стабильно зелёные.
+- Фоновый driver `scripts/drive-stage10c-multi-selection-groups.ps1` (по умолчанию
+  `-Background`): изолированные `artifacts/stage10c-*`, окно вне рабочего стола, PrintWindow,
+  свежий прогон **PASS: 16 PNG 2500×1460, 36 проверок**; сценарий: 8 объектов 4 видов на двух
+  слоях, одиночный выбор в дереве, фильтры, «ровно три» по поиску+фильтру, группа
+  «Тестовая группа», undo/redo с тем же именем, вход/выход по breadcrumb, save→reopen с
+  проверкой одного GroupId и одного GroupName прямо в scene.json, ungroup+undo/redo,
+  «Разные значения» при locked-ребёнке, доступность заблокированного через дерево, распуск
+  singleton, delete через оба слоя одной записью. Все 16 PNG открыты в vision и разобраны.
+  Важно для будущих драйверов: свежезапущенное окно и каждый модальный диалог забирают
+  foreground, и клавиши владельца утекали в скрытое окно — драйвер теперь минимизирует окно
+  (возврат активации), восстанавливает без активации и запрещает нативный ввод
+  (`EnableWindow(false)`); UIA-паттерны продолжают работать.
+
+`PARTIAL` этого среза: canvas marquee, Ctrl+click, Esc и клавиатурные move/scale/rotate группы
+не выполняются фоновым драйвером (не перехватываем клавиатуру владельца) — доказаны адресными
+unit-тестами, pixel-тестом marquee-chrome и routing-review MainWindow. Прежние `PARTIAL`/
+`BLOCKED` 10B сохраняются: keyboard-only gate, High-DPI, нативный file picker, clean-context
+UX-критика. Соседний дефект статус-бара (текст вплотную к «Масштаб NN %») по-прежнему не
+исправлялся. Следующий шаг — независимый Codex-review точного `BASE..HEAD`; 10D/10E/10F и
+Stage 9B–9E не начинать.
+
 ## Проверка среды
 
 Из PowerShell в корне проекта:

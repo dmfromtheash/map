@@ -59,6 +59,16 @@ public sealed class RenderOptions
     public IReadOnlyCollection<ObjectId>? CoSelectedObjectIds { get; init; }
 
     /// <summary>
+    /// Shared frame of a multi-selection. When set, the handles belong to this frame: every
+    /// selected object (the primary included) gets only a thin ring and no per-object gizmo.
+    /// Editor chrome - never set on export or thumbnail passes.
+    /// </summary>
+    public WorldBounds? SelectionFrame { get; init; }
+
+    /// <summary>Live rubber-band rectangle of an in-progress marquee drag. Editor chrome only.</summary>
+    public WorldBounds? Marquee { get; init; }
+
+    /// <summary>
     /// Current view scale, used to keep the gizmo's ring, handles and rotation stem a constant
     /// on-screen size regardless of zoom. Irrelevant when no selection is drawn.
     /// </summary>
@@ -1373,20 +1383,28 @@ public static class SceneRenderer
 
     private static void DrawSelectionChrome(SKCanvas canvas, MapDocument document, RenderOptions options)
     {
+        var viewScale = Math.Max(options.ViewScale, 0.01);
+        var frameOwnsHandles = options.SelectionFrame is not null;
+
         if (options.CoSelectedObjectIds is { Count: > 0 } coSelected)
         {
             foreach (var id in coSelected)
             {
-                if (id != options.SelectedObjectId
+                // With a shared frame the primary is just another member and gets a ring too.
+                if ((frameOwnsHandles || id != options.SelectedObjectId)
                     && document.Layers.OfType<ObjectLayer>().SelectMany(l => l.Objects)
                         .FirstOrDefault(o => o.Id == id) is { } member)
                 {
-                    DrawRing(canvas, member, Math.Max(options.ViewScale, 0.01));
+                    DrawRing(canvas, member, viewScale);
                 }
             }
         }
 
-        if (options.SelectedObjectId is { } selectedId)
+        if (options.SelectionFrame is { } frame)
+        {
+            DrawSelectionFrame(canvas, frame, viewScale);
+        }
+        else if (options.SelectedObjectId is { } selectedId)
         {
             var selected = document.Layers.OfType<ObjectLayer>()
                 .SelectMany(l => l.Objects)
@@ -1394,9 +1412,93 @@ public static class SceneRenderer
 
             if (selected is not null)
             {
-                DrawSelection(canvas, selected, Math.Max(options.ViewScale, 0.01));
+                DrawSelection(canvas, selected, viewScale);
             }
         }
+
+        if (options.Marquee is { } marquee)
+        {
+            DrawMarquee(canvas, marquee, viewScale);
+        }
+    }
+
+    /// <summary>
+    /// The shared frame of a multi-selection: an axis-aligned ring, eight resize handles and the
+    /// rotation handle on a stem, all at constant on-screen size. Geometry must match
+    /// <c>MultiSelectionGeometry.ComputeFrameHandles</c>, which the input side hit-tests.
+    /// </summary>
+    private static void DrawSelectionFrame(SKCanvas canvas, WorldBounds frame, double viewScale)
+    {
+        var px = (float)(1.0 / viewScale);
+        var left = (float)frame.Left;
+        var top = (float)frame.Top;
+        var right = (float)frame.Right;
+        var bottom = (float)frame.Bottom;
+        var centreX = (left + right) / 2;
+        var centreY = (top + bottom) / 2;
+
+        using (var ring = new SKPaint
+        {
+            Color = SelectionColor,
+            IsAntialias = true,
+            Style = SKPaintStyle.Stroke,
+            StrokeWidth = 2 * px,
+        })
+        {
+            canvas.DrawRect(left, top, right - left, bottom - top, ring);
+            canvas.DrawLine(centreX, top, centreX, top - (28 * px), ring);
+        }
+
+        using var handleFill = new SKPaint { Color = SKColors.White, IsAntialias = true, Style = SKPaintStyle.Fill };
+        using var handleEdge = new SKPaint
+        {
+            Color = SelectionColor,
+            IsAntialias = true,
+            Style = SKPaintStyle.Stroke,
+            StrokeWidth = 1.5f * px,
+        };
+
+        var half = 4 * px;
+        foreach (var (x, y) in new (float X, float Y)[]
+                 {
+                     (left, top), (centreX, top), (right, top), (right, centreY),
+                     (right, bottom), (centreX, bottom), (left, bottom), (left, centreY),
+                 })
+        {
+            var rect = new SKRect(x - half, y - half, x + half, y + half);
+            canvas.DrawRect(rect, handleFill);
+            canvas.DrawRect(rect, handleEdge);
+        }
+
+        canvas.DrawCircle(centreX, top - (28 * px), 5 * px, handleFill);
+        canvas.DrawCircle(centreX, top - (28 * px), 5 * px, handleEdge);
+    }
+
+    /// <summary>The live rubber band: a translucent fill and a dashed constant-width border.</summary>
+    private static void DrawMarquee(SKCanvas canvas, WorldBounds marquee, double viewScale)
+    {
+        var px = (float)(1.0 / viewScale);
+        var rect = new SKRect(
+            (float)marquee.Left, (float)marquee.Top, (float)marquee.Right, (float)marquee.Bottom);
+
+        using var fill = new SKPaint
+        {
+            Color = SelectionColor.WithAlpha(28),
+            IsAntialias = true,
+            Style = SKPaintStyle.Fill,
+        };
+        canvas.DrawRect(rect, fill);
+
+        using var dash = SKPathEffect.CreateDash([6 * px, 4 * px], 0);
+        using var border = new SKPaint
+        {
+            Color = SelectionColor,
+            IsAntialias = true,
+            Style = SKPaintStyle.Stroke,
+            StrokeWidth = 1.5f * px,
+            PathEffect = dash,
+        };
+        canvas.DrawRect(rect, border);
     }
 
     private static void DrawRing(SKCanvas canvas, SceneObject sceneObject, double viewScale)

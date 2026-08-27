@@ -158,6 +158,9 @@ internal sealed class SceneObjectDto
     [JsonPropertyName("groupId")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? GroupId { get; set; }
+    [JsonPropertyName("groupName")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? GroupName { get; set; }
     [JsonPropertyName("objectOpacity")] public double ObjectOpacity { get; set; } = 1.0;
     [JsonPropertyName("stamp")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

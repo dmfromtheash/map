@@ -133,8 +133,9 @@ public static class GridSnapService
         source.Id, source.Kind, source.Name, x, y, source.Width, source.Height, source.RotationDegrees,
         source.FillColor, source.StrokeColor, source.StrokeWidth, source.Visible, source.Locked)
     {
-        Sublayer = source.Sublayer, GroupId = source.GroupId, Stamp = source.Stamp,
-        Line = source.Line, Shape = source.Shape, Text = source.Text, ObjectOpacity = source.ObjectOpacity,
+        Sublayer = source.Sublayer, GroupId = source.GroupId, GroupName = source.GroupName,
+        Stamp = source.Stamp, Line = source.Line, Shape = source.Shape, Text = source.Text,
+        ObjectOpacity = source.ObjectOpacity,
         Composition = source.Composition, PlaceholderReason = source.PlaceholderReason,
     };
 }

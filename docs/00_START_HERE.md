@@ -12,7 +12,7 @@
 | Правовые границы | `FACT` | Автоскрейпинг, обратная разработка и копирование материалов исключены |
 | Продуктовый объём | `ACCEPTED` | Офлайн-эквивалент редактора и локального dashboard; без облачного сообщества и Marketplace |
 | Технологический стек | `ACCEPTED` | .NET 10 + Avalonia 12.1 + Skia; SDK установлен |
-| Код приложения | `PARTIAL` | Stages 1–8, Stage 9A, Stage 10 input slice и 10B Library/variant sets реализованы; Codex проверил Claude-диапазон и закрыл два пропуска background-driver, но keyboard/DPI/file-picker и clean-context UX-gate остаются незавершёнными |
+| Код приложения | `PARTIAL` | Stages 1–8, Stage 9A, Stage 10 input slice, 10B Library/variant sets и срез 10C multi-selection/groups (self-check `PROPOSED`) реализованы; keyboard/DPI/file-picker и clean-context UX-gate 10B остаются незавершёнными |
 | Дизайн и ассеты | `PARTIAL` | Есть собственная visual system, упрощённая Library v2, наборы вариантов и diagnostic fixtures; полный inspector/grid идут позже |
 
 ## Карта документов
@@ -56,9 +56,12 @@
 
 ## Следующее действие
 
-Codex проверил точный Claude-диапазон `dfc2d1d..172f1b4` и исправил два пропуска фонового
-драйвера: media type и exact tag теперь реально выбираются без активации окна. Свежий прогон:
-22 PNG, 99 проверок, 323 штампа / 12 SHA. Подробности —
-`reviews/STAGE_10B_ASSET_LIBRARY_VERIFICATION.md`. Stage 10B остаётся `PARTIAL` только по явно
-перечисленным keyboard/DPI/file-picker и clean-context UX-gates. Следующий функциональный срез —
-10C multi-selection/groups; не смешивать его с `IsometricSquares`, полным inspector или Stage 9B.
+На branch `stage/10c-multi-selection-groups` выполнен self-check срез 10C multi-selection/groups:
+множественное выделение с primary и restore, `Ctrl+A` по поиску и типовому фильтру, именованные
+группы (`GroupName` в `.mapproj` без повышения schemaVersion), вход в группу с breadcrumb,
+мультитрансформации одной undo-транзакцией, общая рамка через `CoSelectedObjectIds`,
+мульти-панель свойств с честным «Разные значения» и фоновый driver
+`scripts/drive-stage10c-multi-selection-groups.ps1` (16 PNG, 36 проверок). Статус —
+`PROPOSED / PARTIAL`: это self-check Opus, не независимая приёмка. Keyboard/DPI/file-picker и
+clean-context UX-gates 10B по-прежнему открыты. Следующий шаг — независимый Codex-review точного
+`BASE..HEAD`; 10D/10E/10F и Stage 9B–9E не начинать.

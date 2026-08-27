@@ -426,26 +426,89 @@ public sealed class MoveObjectsToLayerCommand : IEditCommand
     }
 }
 
-/// <summary>Assigns (group) or clears (ungroup) a shared group id on the captured objects.</summary>
+/// <summary>
+/// Assigns (group), renames or clears (ungroup) the shared group identity of the captured
+/// objects. The group id and the sanitized name are fixed when the command is created, so redo
+/// restores exactly the same group instead of minting a new one.
+/// </summary>
 public sealed class SetGroupCommand : IEditCommand
 {
+    /// <summary>Longest group name the editor accepts, in characters after trimming.</summary>
+    public const int MaxNameLength = 80;
+
     private readonly ReplaceObjectsCommand _inner;
 
-    private SetGroupCommand(ReplaceObjectsCommand inner) => _inner = inner;
-
-    public static SetGroupCommand Group(MapDocument document, IReadOnlyCollection<ObjectId> ids)
+    private SetGroupCommand(ReplaceObjectsCommand inner, Guid? groupId)
     {
-        var groupId = Guid.NewGuid();
+        _inner = inner;
+        GroupId = groupId;
+    }
+
+    /// <summary>The identity this command creates, for selection follow-up. Null for ungroup.</summary>
+    public Guid? GroupId { get; }
+
+    public static SetGroupCommand Group(MapDocument document, IReadOnlyCollection<ObjectId> ids, string name)
+    {
+        var groupName = SanitizeName(name);
         var before = Resolve(document, ids);
+        if (before.Count < 2)
+        {
+            throw new ArgumentException("Для группы нужно минимум два объекта.", nameof(ids));
+        }
+
+        if (before.FirstOrDefault(o => o.GroupId is not null) is { } member)
+        {
+            throw new InvalidOperationException(
+                $"Объект «{member.Name}» уже входит в группу. Сначала разгруппируйте его.");
+        }
+
+        var groupId = Guid.NewGuid();
         return new SetGroupCommand(new ReplaceObjectsCommand(
-            before, [.. before.Select(o => o with { GroupId = groupId })], "Group objects"));
+            before,
+            [.. before.Select(o => o with { GroupId = groupId, GroupName = groupName })],
+            $"Group {before.Count} objects"), groupId);
     }
 
     public static SetGroupCommand Ungroup(MapDocument document, IReadOnlyCollection<ObjectId> ids)
     {
         var before = Resolve(document, ids);
         return new SetGroupCommand(new ReplaceObjectsCommand(
-            before, [.. before.Select(o => o with { GroupId = null })], "Ungroup objects"));
+            before,
+            [.. before.Select(o => o with { GroupId = null, GroupName = null })],
+            "Ungroup objects"), groupId: null);
+    }
+
+    public static SetGroupCommand Rename(MapDocument document, Guid groupId, string name)
+    {
+        var groupName = SanitizeName(name);
+        var before = SceneGeometry.GroupMembers(document, groupId);
+        if (before.Count == 0)
+        {
+            throw new InvalidOperationException($"Group {groupId} is not part of this document.");
+        }
+
+        return new SetGroupCommand(new ReplaceObjectsCommand(
+            before,
+            [.. before.Select(o => o with { GroupName = groupName })],
+            "Rename group"), groupId);
+    }
+
+    /// <summary>Trims the edges, rejects empty and caps the length - the one naming rule.</summary>
+    public static string SanitizeName(string name)
+    {
+        var trimmed = (name ?? "").Trim();
+        if (trimmed.Length == 0)
+        {
+            throw new ArgumentException("Имя группы не может быть пустым.", nameof(name));
+        }
+
+        if (trimmed.Length > MaxNameLength)
+        {
+            throw new ArgumentException(
+                $"Имя группы не длиннее {MaxNameLength} символов.", nameof(name));
+        }
+
+        return trimmed;
     }
 
     private static IReadOnlyList<SceneObject> Resolve(MapDocument document, IReadOnlyCollection<ObjectId> ids)
@@ -468,6 +531,99 @@ public sealed class SetGroupCommand : IEditCommand
     public MapDocument Apply(MapDocument document) => _inner.Apply(document);
 
     public MapDocument Revert(MapDocument document) => _inner.Revert(document);
+}
+
+/// <summary>
+/// Deletes objects that may live on several object layers as ONE history entry. When the
+/// deletion leaves a group with exactly one member, that remainder loses its group identity
+/// inside the same transaction - a one-object "group" is not a thing the user can see or use.
+/// </summary>
+public sealed class DeleteObjectsCommand : IEditCommand
+{
+    private readonly List<RemoveObjectsCommand> _removals;
+    private readonly ReplaceObjectsCommand? _dissolveSingletons;
+    private readonly int _count;
+
+    public DeleteObjectsCommand(MapDocument document, IReadOnlyCollection<ObjectId> ids)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(ids);
+        if (ids.Count == 0)
+        {
+            throw new ArgumentException("Deletion needs at least one object.", nameof(ids));
+        }
+
+        var deleting = ids.ToHashSet();
+        var byLayer = new List<RemoveObjectsCommand>();
+        foreach (var layer in document.Layers.OfType<ObjectLayer>())
+        {
+            var onLayer = layer.Objects.Where(o => deleting.Contains(o.Id)).Select(o => o.Id).ToList();
+            if (onLayer.Count > 0)
+            {
+                byLayer.Add(new RemoveObjectsCommand(document, layer.Id, onLayer));
+            }
+        }
+
+        var located = document.Layers.OfType<ObjectLayer>()
+            .SelectMany(l => l.Objects).Count(o => deleting.Contains(o.Id));
+        if (located != deleting.Count)
+        {
+            throw new InvalidOperationException("Some objects to delete are not part of this document.");
+        }
+
+        // Survivors of touched groups: exactly one left means its group dissolves with the delete.
+        var touchedGroups = document.Layers.OfType<ObjectLayer>().SelectMany(l => l.Objects)
+            .Where(o => deleting.Contains(o.Id) && o.GroupId is not null)
+            .Select(o => o.GroupId!.Value)
+            .Distinct();
+        var singletons = new List<SceneObject>();
+        foreach (var groupId in touchedGroups)
+        {
+            var remaining = SceneGeometry.GroupMembers(document, groupId)
+                .Where(o => !deleting.Contains(o.Id))
+                .ToList();
+            if (remaining.Count == 1)
+            {
+                singletons.Add(remaining[0]);
+            }
+        }
+
+        _removals = byLayer;
+        _dissolveSingletons = singletons.Count == 0
+            ? null
+            : new ReplaceObjectsCommand(
+                singletons,
+                [.. singletons.Select(o => o with { GroupId = null, GroupName = null })],
+                "Dissolve singleton group");
+        _count = deleting.Count;
+    }
+
+    public string Name => $"Delete {_count} object(s)";
+
+    public MapDocument Apply(MapDocument document)
+    {
+        foreach (var removal in _removals)
+        {
+            document = removal.Apply(document);
+        }
+
+        return _dissolveSingletons is null ? document : _dissolveSingletons.Apply(document);
+    }
+
+    public MapDocument Revert(MapDocument document)
+    {
+        if (_dissolveSingletons is not null)
+        {
+            document = _dissolveSingletons.Revert(document);
+        }
+
+        for (var i = _removals.Count - 1; i >= 0; i--)
+        {
+            document = _removals[i].Revert(document);
+        }
+
+        return document;
+    }
 }
 
 // ---------------------------------------------------------------- layer commands
