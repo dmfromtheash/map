@@ -2,15 +2,16 @@
 
 ## Последнее обновление
 
-2026-08-26. Stages 1–8 и Editor UX Rebuild находятся в истории. На branch
+2026-08-27. Stages 1–8 и Editor UX Rebuild находятся в истории. На branch
 `stage/09-reliability-cycle` выполнен и независимо проверен первый срез Stage 9: 9A autosave
 journal + startup recovery (`03372d7`). Полный Stage 9 остаётся `PARTIAL`: следующий отдельный
 срез — 9B named checkpoints. Stage 10 object/grid parity описан и принят в `DEC-010`, но ещё не
 реализован полностью. Реализованы срезы Stage 10 input parity (`95d2fe8`) и Stage 10B Library v2 /
 variant sets / deterministic stamp placement на branch `stage/10-asset-library-sets`. Поверх него
-одним отдельным commit выполнен Stage 10B Fix 01 по findings независимого Codex-review; он тоже
-ожидает независимой проверки Codex, и до неё его результаты не являются `FACT`. Stage 10 в целом
-остаётся `PARTIAL`, Stage 10C не начат.
+выполнены Fix 01, Fix 02 и UX-срез упрощения Library. Codex проверил точный Claude-диапазон и
+закрыл два пропуска background-driver; подробности в
+`docs/reviews/STAGE_10B_ASSET_LIBRARY_VERIFICATION.md`. Stage 10B остаётся `PARTIAL` по
+keyboard/DPI/file-picker и clean-context UX-gates; Stage 10C не начат.
 
 ## FACT — среда
 
@@ -637,8 +638,28 @@ BASE `dfc2d1d`, branch `stage/10-asset-library-sets`, один отдельны�
 
 `PARTIAL` / `BLOCKED` этого среза: горячие клавиши и High-DPI не доказаны фоновым режимом и
 остаются `PARTIAL`; нативный файловый диалог Windows остаётся `BLOCKED`; независимая проверка
-Codex ещё не выполнялась. Stage 10 и 10B остаются `PARTIAL`. Следующий шаг — независимый
-Codex-review диапазона `dfc2d1d..HEAD`; Stage 10C не начат.
+Codex выполнена и описана следующим разделом. Stage 10 и 10B остаются `PARTIAL`; Stage 10C не
+начат.
+
+## FACT / PARTIAL — Codex-review Stage 10B и фоновые ComboBox-фильтры, 27.08.2026
+
+- Точный Claude-диапазон `dfc2d1d..172f1b4` пересчитан: `A=0`, `M=5`, `D=0`, `R=0`, tracked
+  files `262`; solution и project references валидны, блокирующих production-findings нет.
+- Два найденных пробела относились к доказательствам, а не к production-логике: background-driver
+  пропускал выбор media type и exact tag. Условия сняты; оба ComboBox выбираются через UI
+  Automation без активации окна, exact-tag состояние сохраняется отдельным PNG.
+- Свежий background Release-driver: PASS, `22` PNG `2500x1460`, `99` checks, сохранённый
+  `.mapproj` содержит `323` stamps / `12` distinct SHA. Повторно прошли undo/redo, reopen без
+  каталога, missing/mismatch, atomic refusal и damaged index.
+- Свежие gates: doctor PASS; restore PASS; Release build `0` warnings / `0` errors; tests
+  `333/333`; vulnerable packages — нет; deprecated — только прежний `xunit 2.9.3` Legacy.
+  `dotnet format` сохраняет legacy failure и не затрагивает изменённый PowerShell-driver.
+- Подробный артефакт: `docs/reviews/STAGE_10B_ASSET_LIBRARY_VERIFICATION.md`; runtime-артефакты:
+  `artifacts/stage10b-codex-filter-fix-final/` (игнорируются Git).
+- `PARTIAL`: keyboard-only и реальный Windows scale 100/150/200% намеренно не проверялись в
+  фоне. `BLOCKED`: native file picker под automation host и независимая clean-context UX-критика.
+- Следующий функциональный срез дорожной карты — 10C multi-selection/groups. Не смешивать его с
+  10D inspectors, 10E grid geometry, 10F fonts или Stage 9B–9E.
 
 ## Проверка среды
 

@@ -12,8 +12,8 @@
 | Правовые границы | `FACT` | Автоскрейпинг, обратная разработка и копирование материалов исключены |
 | Продуктовый объём | `ACCEPTED` | Офлайн-эквивалент редактора и локального dashboard; без облачного сообщества и Marketplace |
 | Технологический стек | `ACCEPTED` | .NET 10 + Avalonia 12.1 + Skia; SDK установлен |
-| Код приложения | `PARTIAL` | Stages 1–8, Stage 9A, Stage 10 input slice и 10B Library/variant sets реализованы; Fix 02 закрывает ошибки виртуализированных карточек, но Stage 10 в целом и независимая приёмка текущего fix остаются незавершёнными |
-| Дизайн и ассеты | `PARTIAL` | Есть собственная visual system, Library v2, наборы вариантов и diagnostic fixtures; упрощение перегруженной Library-панели выполняется отдельным UX-срезом, полный inspector/grid идут позже |
+| Код приложения | `PARTIAL` | Stages 1–8, Stage 9A, Stage 10 input slice и 10B Library/variant sets реализованы; Codex проверил Claude-диапазон и закрыл два пропуска background-driver, но keyboard/DPI/file-picker и clean-context UX-gate остаются незавершёнными |
+| Дизайн и ассеты | `PARTIAL` | Есть собственная visual system, упрощённая Library v2, наборы вариантов и diagnostic fixtures; полный inspector/grid идут позже |
 
 ## Карта документов
 
@@ -39,6 +39,7 @@
 | `prompts/STAGE_01_TECHNICAL_SPIKE.md` | готовое следующее задание для Opus после утверждения решений |
 | `prompts/STAGE_09_RELIABILITY_CYCLE.md` | принятый контракт текущего цикла надёжности |
 | `reviews/STAGE_09A_AUTOSAVE_VERIFICATION.md` | проверка autosave и восстановления после аварийного завершения |
+| `reviews/STAGE_10B_ASSET_LIBRARY_VERIFICATION.md` | Codex-проверка Library v2, UX-среза и фоновых фильтров |
 | `research/OBJECT_AND_GRID_PARITY.md` | clean-room матрица object/grid функций и разрывов текущего UI |
 | `research/INKARNATE_ACCOUNT_WALKTHROUGH_20260826.md` | наблюдаемые text/road/shape/brush/stamp/grid/keyboard механики тестовой карты |
 | `research/TEST_ASSET_FIXTURES.md` | план двух собственных logical fixtures: 12-variant stamp set и brush tip |
@@ -55,9 +56,9 @@
 
 ## Следующее действие
 
-UX-срез упрощения правой Library-панели реализован отдельным коммитом поверх Fix 02 и прошёл
-авторский self-check (фоновый driver: 21 PNG, 96 проверок, 323 штампа / 12 SHA). Теперь нужна
-независимая проверка Codex точного диапазона `dfc2d1d..HEAD`; только после её приёмки переходить
-к 10C multi-selection/groups. Исторический контракт 10B остаётся в
-`prompts/STAGE_10B_ASSET_LIBRARY_VARIANT_SETS.md`; не смешивать текущую работу с
-`IsometricSquares`, полным inspector или Stage 9B checkpoints.
+Codex проверил точный Claude-диапазон `dfc2d1d..172f1b4` и исправил два пропуска фонового
+драйвера: media type и exact tag теперь реально выбираются без активации окна. Свежий прогон:
+22 PNG, 99 проверок, 323 штампа / 12 SHA. Подробности —
+`reviews/STAGE_10B_ASSET_LIBRARY_VERIFICATION.md`. Stage 10B остаётся `PARTIAL` только по явно
+перечисленным keyboard/DPI/file-picker и clean-context UX-gates. Следующий функциональный срез —
+10C multi-selection/groups; не смешивать его с `IsometricSquares`, полным inspector или Stage 9B.

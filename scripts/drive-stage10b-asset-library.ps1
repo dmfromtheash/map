@@ -658,11 +658,11 @@ try {
     Assert-True ($null -ne (Find-Uia 'LibraryTagFilter')) 'the exact tag filter is a real control'
     Assert-Equal (Get-UiaName 'LibraryTagFilter') 'Тег' 'the tag filter is named'
 
-    if (-not $Background) {
-        Select-UiaChoice 'LibraryMediaFilter' 'image/png'
-        Wait-State { (Get-UiaName 'LibraryCountText') -like '*Ассеты · 2*' } 'both diagnostic fixtures are PNG'
-        Assert-Contains (Get-UiaName 'LibraryFilterSummary') 'image/png' 'the summary names the media type'
-    }
+    # Combo choices use UI Automation selection rather than keyboard input, so they remain
+    # testable while the window is off-screen in -Background mode.
+    Select-UiaChoice 'LibraryMediaFilter' 'image/png'
+    Wait-State { (Get-UiaName 'LibraryCountText') -like '*Ассеты · 2*' } 'both diagnostic fixtures are PNG'
+    Assert-Contains (Get-UiaName 'LibraryFilterSummary') 'image/png' 'the summary names the media type'
 
     Set-UiaValue 'LibraryImportedFromBox' '2099-01-01'
     Wait-State { (Get-UiaName 'LibraryCountText') -like '*Ничего не найдено*' } 'a future lower bound empties the grid'
@@ -850,14 +850,13 @@ try {
     Save-Shot 'set-after-restart' | Out-Null
 
     # Now that a tag exists, the exact-tag filter and the tag grouping can be driven for real.
-    if (-not $Background) {
-        Select-UiaChoice 'LibraryTagFilter' 'рельеф'
-        Wait-State { (Get-UiaName 'LibraryCountText') -like '*Ассеты · 1*' } 'the tag filter narrows the grid'
-        Assert-Contains (Get-UiaName 'LibraryCountText') 'Ассеты · 1' 'the exact tag filter keeps one card'
-        Assert-Contains (Get-UiaName 'LibraryFilterSummary') 'рельеф' 'the summary names the active tag'
-        Invoke-Uia 'LibraryClearFiltersButton'
-        Wait-State { (Get-UiaName 'LibraryCountText') -like '*Ассеты · 2*' } 'clearing the tag restores both'
-    }
+    Select-UiaChoice 'LibraryTagFilter' 'рельеф'
+    Wait-State { (Get-UiaName 'LibraryCountText') -like '*Ассеты · 1*' } 'the tag filter narrows the grid'
+    Assert-Contains (Get-UiaName 'LibraryCountText') 'Ассеты · 1' 'the exact tag filter keeps one card'
+    Assert-Contains (Get-UiaName 'LibraryFilterSummary') 'рельеф' 'the summary names the active tag'
+    Save-Shot 'exact-tag-filter' | Out-Null
+    Invoke-Uia 'LibraryClearFiltersButton'
+    Wait-State { (Get-UiaName 'LibraryCountText') -like '*Ассеты · 2*' } 'clearing the tag restores both'
 
     Invoke-Uia 'LibraryGroupTag'
     Wait-State { $null -ne (Find-UiaNameLike 'Группа рельеф') } 'a real tag becomes a group header'

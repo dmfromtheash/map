@@ -235,7 +235,11 @@ UI/groups и font catalog остаются после 10B.
 именованные Expander, блоки выбранного набора и размещения появляются только после выбора, а
 `Один штамп` скрывает scatter-контролы. Фоновый driver подтвердил срез (21 PNG, 96 проверок,
 323 штампа / 12 SHA); это self-check авторского контекста, независимая приёмка Codex ещё
-требуется. Горячие клавиши и High-DPI остаются `PARTIAL`, нативный файловый диалог — `BLOCKED`.
+требуется. Последующая проверка Codex точного диапазона не нашла блокирующего production-дефекта;
+два пропуска background-driver (media type и exact tag) исправлены и подтверждены свежим прогоном
+на 22 PNG / 99 checks. Горячие клавиши и High-DPI остаются `PARTIAL`, нативный файловый диалог и
+независимая clean-context UX-критика — `BLOCKED`. Подробности:
+`reviews/STAGE_10B_ASSET_LIBRARY_VERIFICATION.md`.
 
 Этот этап начинается после предоставления владельцем материалов, но отдельные UX-прототипы идут раньше каждого инструмента.
 
@@ -262,8 +266,9 @@ UI/groups и font catalog остаются после 10B.
 
 1. **10B — Library v2 и variant-set stamp workflow:** единый owner-approved крупный срез;
    контракт — `prompts/STAGE_10B_ASSET_LIBRARY_VARIANT_SETS.md`. Реализован; поверх него выполнены
-   отдельные commits 10B Fix 01, Fix 02 и UX-срез упрощения перегруженной Library-панели; только
-   после независимой приёмки этих исправлений 10B можно закрывать.
+   отдельные commits 10B Fix 01, Fix 02 и UX-срез упрощения перегруженной Library-панели. Codex
+   проверил точный Claude-диапазон и закрыл два пропуска фонового драйвера; 10B остаётся `PARTIAL`
+   по keyboard/DPI/file-picker и clean-context UX-gates.
 2. **10C — Multi-selection/groups:** Ctrl+A/Ctrl+click, group/ungroup, group transform и UIA.
 3. **10D — Object inspectors:** Stamp/Text/Line/Shape/Brush controls и color/effects parity.
 4. **10E — Grid geometry:** отдельная `IsometricSquares`, property sheet, snap/golden fixtures.
