@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Security.Cryptography;
 using Map.Assets;
 using SkiaSharp;
 
@@ -79,6 +80,26 @@ public sealed class AssetCatalogTests : IDisposable
         Assert.Equal(AssetResolutionStatus.HashMismatch, catalog.Resolve(record).Status);
         File.Delete(source);
         Assert.Equal(AssetResolutionStatus.Missing, catalog.Resolve(record).Status);
+    }
+
+    [Fact]
+    public void Verified_payload_is_the_exact_bounded_content_whose_hash_was_accepted()
+    {
+        Directory.CreateDirectory(_root);
+        var source = Path.Combine(_root, "stable-read.png");
+        var original = Image(SKEncodedImageFormat.Png, SKColors.Green);
+        File.WriteAllBytes(source, original);
+        var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        var record = catalog.Import(
+            source, new AssetImportOptions { Linked = true }, DateTimeOffset.UnixEpoch);
+
+        var resolution = catalog.ReadVerified(record);
+        File.WriteAllBytes(source, Image(SKEncodedImageFormat.Png, SKColors.Yellow));
+
+        Assert.Equal(AssetResolutionStatus.Available, resolution.Status);
+        Assert.Equal(record.Sha256, Convert.ToHexStringLower(SHA256.HashData(resolution.Content!)));
+        Assert.Equal(original, resolution.Content);
+        Assert.Equal(AssetResolutionStatus.HashMismatch, catalog.ReadVerified(record).Status);
     }
 
     [Fact]

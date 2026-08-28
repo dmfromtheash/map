@@ -11,8 +11,8 @@ namespace Map.Assets;
 /// </summary>
 public sealed class AssetCatalog
 {
-    public const int MaxImageDimension = 32_768;
-    public const long MaxEncodedBytes = 512L * 1024 * 1024;
+    public const int MaxImageDimension = AssetImagePolicy.MaxDimension;
+    public const long MaxEncodedBytes = AssetImagePolicy.MaxEncodedBytes;
 
     private readonly string _root;
     private readonly string _indexPath;
@@ -215,7 +215,7 @@ public sealed class AssetCatalog
             throw new InvalidDataException($"Asset size {file.Length} is outside the supported range.");
         }
 
-        byte[] bytes = File.ReadAllBytes(fullSource);
+        byte[] bytes = AssetImagePolicy.ReadEncodedFile(fullSource);
         var sha256 = Convert.ToHexStringLower(SHA256.HashData(bytes));
         if (_bySha.TryGetValue(sha256, out var existing))
         {
@@ -225,13 +225,8 @@ public sealed class AssetCatalog
         using var data = SKData.CreateCopy(bytes);
         using var codec = SKCodec.Create(data)
             ?? throw new InvalidDataException("The file is not a supported PNG, JPEG or WebP image.");
+        var metadata = AssetImagePolicy.Inspect(codec, bytes.LongLength);
         var (extension, mediaType) = Format(codec.EncodedFormat);
-        if (codec.Info.Width is <= 0 or > MaxImageDimension
-            || codec.Info.Height is <= 0 or > MaxImageDimension)
-        {
-            throw new InvalidDataException(
-                $"Image dimensions {codec.Info.Width}x{codec.Info.Height} are outside the supported range.");
-        }
 
         Directory.CreateDirectory(_root);
         Directory.CreateDirectory(Path.Combine(_root, "originals"));
@@ -241,7 +236,7 @@ public sealed class AssetCatalog
         if (!options.Linked)
         {
             storedRelative = $"originals/{sha256}.{extension}";
-            var storedPath = ResolveCatalogRelative(storedRelative);
+            var storedPath = ResolveCatalogRelative(storedRelative, "originals");
             if (!File.Exists(storedPath))
             {
                 File.WriteAllBytes(storedPath, bytes);
@@ -249,7 +244,7 @@ public sealed class AssetCatalog
         }
 
         var thumbnailRelative = $"thumbnails/{sha256}.png";
-        var thumbnailPath = ResolveCatalogRelative(thumbnailRelative);
+        var thumbnailPath = ResolveCatalogRelative(thumbnailRelative, "thumbnails");
         if (!File.Exists(thumbnailPath))
         {
             File.WriteAllBytes(thumbnailPath, BuildThumbnail(bytes));
@@ -262,8 +257,8 @@ public sealed class AssetCatalog
             OriginalFileName = Path.GetFileName(fullSource),
             MediaType = mediaType,
             Extension = extension,
-            Width = codec.Info.Width,
-            Height = codec.Info.Height,
+            Width = metadata.Width,
+            Height = metadata.Height,
             HasAlpha = codec.Info.AlphaType != SKAlphaType.Opaque,
             ByteLength = bytes.LongLength,
             ImportedUtc = importedUtc,
@@ -554,8 +549,8 @@ public sealed class AssetCatalog
             .ToDictionary(group => group.Key, group => group.OrderBy(item => item.Order).ToList(),
                 StringComparer.Ordinal);
 
-        // Validation already refuses a document whose parents form a ring, so this set is belt
-        // and braces: the tree walk must be incapable of unbounded recursion on any input.
+        // Validation refuses both parent rings and trees deeper than MaxCollectionDepth. This set
+        // remains a final guard against accidental repeated nodes in a transient in-memory model.
         var walking = new HashSet<string>(StringComparer.Ordinal);
         return Build("");
 
@@ -772,26 +767,60 @@ public sealed class AssetCatalog
 
     public AssetResolution Resolve(AssetRecord record)
     {
-        ArgumentNullException.ThrowIfNull(record);
-        var path = record.StoredRelativePath is { } stored
-            ? ResolveCatalogRelative(stored)
-            : record.LinkedPath;
-        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
-        {
-            return new AssetResolution(AssetResolutionStatus.Missing, path);
-        }
-
-        using var stream = File.OpenRead(path);
-        var actual = Convert.ToHexStringLower(SHA256.HashData(stream));
-        return string.Equals(actual, record.Sha256, StringComparison.OrdinalIgnoreCase)
-            ? new AssetResolution(AssetResolutionStatus.Available, path)
-            : new AssetResolution(AssetResolutionStatus.HashMismatch, path);
+        var payload = ReadVerified(record);
+        return new AssetResolution(payload.Status, payload.Path);
     }
 
-    public string ThumbnailPath(AssetRecord record) => ResolveCatalogRelative(record.ThumbnailRelativePath);
+    /// <summary>
+    /// Reads one bounded original and verifies the SHA-256 of those exact bytes. Callers that
+    /// embed or decode content must use the returned payload instead of reopening its mutable path.
+    /// </summary>
+    public AssetPayloadResolution ReadVerified(AssetRecord record)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        var path = record.StoredRelativePath is { } stored
+            ? ResolveCatalogRelative(stored, "originals")
+            : record.LinkedPath;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return new AssetPayloadResolution(AssetResolutionStatus.Missing, path, null);
+        }
+
+        try
+        {
+            var content = AssetImagePolicy.ReadEncodedFile(path);
+            var metadata = AssetImagePolicy.Inspect(content, record.MediaType, record.Extension);
+            var actual = Convert.ToHexStringLower(SHA256.HashData(content));
+            return string.Equals(actual, record.Sha256, StringComparison.OrdinalIgnoreCase)
+                && metadata.Width == record.Width
+                && metadata.Height == record.Height
+                && content.LongLength == record.ByteLength
+                ? new AssetPayloadResolution(AssetResolutionStatus.Available, path, content)
+                : new AssetPayloadResolution(AssetResolutionStatus.HashMismatch, path, null);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return new AssetPayloadResolution(AssetResolutionStatus.Missing, path, null);
+        }
+    }
+
+    public string ThumbnailPath(AssetRecord record) =>
+        ResolveCatalogRelative(record.ThumbnailRelativePath, "thumbnails");
+
+    /// <summary>
+    /// Resolves an optional preview without letting malformed catalog metadata block a verified
+    /// original. A damaged index is rejected during load; this also protects transient records
+    /// supplied directly by tests or callers.
+    /// </summary>
+    public bool TryThumbnailPath(AssetRecord record, out string? path)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        return CatalogRelativePath.TryResolve(
+            _root, record.ThumbnailRelativePath, "thumbnails", out path);
+    }
 
     public string? ThumbnailPathForVariant(string variantId) =>
-        RecordForVariant(variantId) is { } record ? ResolveCatalogRelative(record.ThumbnailRelativePath) : null;
+        RecordForVariant(variantId) is { } record && TryThumbnailPath(record, out var path) ? path : null;
 
     // ---------------------------------------------------------------- internals
 
@@ -831,15 +860,15 @@ public sealed class AssetCatalog
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
     }
 
-    private string ResolveCatalogRelative(string relative)
+    private string ResolveCatalogRelative(string relative, string requiredTopLevel)
     {
-        var path = Path.GetFullPath(Path.Combine(_root, relative.Replace('/', Path.DirectorySeparatorChar)));
-        if (!path.StartsWith(_root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+        if (!CatalogRelativePath.TryResolve(_root, relative, requiredTopLevel, out var path))
         {
-            throw new InvalidDataException("Catalog entry points outside the catalog root.");
+            throw new InvalidDataException(
+                $"Catalog entry is not a safe {requiredTopLevel} path inside the catalog root.");
         }
 
-        return path;
+        return path!;
     }
 
     private static (string Extension, string MediaType) Format(SKEncodedImageFormat format) => format switch
@@ -852,8 +881,7 @@ public sealed class AssetCatalog
 
     private static byte[] BuildThumbnail(byte[] encoded)
     {
-        using var bitmap = SKBitmap.Decode(encoded)
-            ?? throw new InvalidDataException("Image pixels cannot be decoded.");
+        using var bitmap = AssetImagePolicy.DecodeThumbnailSource(encoded, 128);
         var info = new SKImageInfo(128, 128, SKColorType.Rgba8888, SKAlphaType.Premul);
         using var surface = SKSurface.Create(info)
             ?? throw new InvalidOperationException("Cannot create thumbnail surface.");

@@ -1,5 +1,7 @@
 # Stage 1 — технический spike нативного ядра
 
+> Status: HISTORICAL CONTRACT — completed; do not execute again. New work uses `PROMPT_TEMPLATE_CODEX.md`.
+
 > Разрешено владельцем к запуску 25.08.2026. DEC-001—DEC-008 приняты.
 
 ## Контекст
@@ -9,7 +11,7 @@
 Перед работой полностью прочитай:
 
 1. `AGENTS.md`
-2. `CLAUDE.md`
+2. `CODEX.md`
 3. `docs/00_START_HERE.md`
 4. DEC-001—DEC-008 в `docs/DECISIONS.md`
 5. `docs/04_TECH_ARCHITECTURE.md`
@@ -85,7 +87,7 @@
 
 ## Required report
 
-Используй точный формат из `docs/07_OPUS_RUNBOOK.md`. Отдельно ответь:
+Используй точный формат из `docs/07_CODEX_RUNBOOK.md`. Отдельно ответь:
 
 - прошёл ли каждый из 12 критериев;
 - какой renderer реально использован и был ли CPU fallback;

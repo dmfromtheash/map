@@ -123,12 +123,20 @@ public sealed class EditorView : UserControl
     private readonly Dictionary<string, Button> _objectFilterButtons = [];
     private bool _objectRowCtrl;
     private Control _stampSection = null!;
-    private Control _vectorSection = null!;
+    private Control _lineSection = null!;
+    private Control _shapeSection = null!;
     private Control _textSection = null!;
     private Control _compositionSection = null!;
     private ContentControl _kindSlot = null!;
     private Control _selectionRoot = null!;
     private Control _selectIdleRoot = null!;
+
+    // -------------------------------------------------- appearance inspector plumbing
+    // Each control registers one sync action that re-reads its current value from the selection.
+    // The guard keeps a programmatic sync from being mistaken for user input.
+    private readonly List<Action> _appearanceSyncs = [];
+    private bool _syncingAppearance;
+    private TextBlock _brushTipNameText = null!;
 
     // ------------------------------------------------------- layer type blocks
     private Control _layerCommonBlock = null!;
@@ -528,6 +536,12 @@ public sealed class EditorView : UserControl
 
     private Control BuildBrushPanel()
     {
+        void UpdateSettings(Func<BrushSettings, BrushSettings> change)
+        {
+            _editor.BrushSettings = change(_editor.BrushSettings);
+            SyncAppearanceSections();
+        }
+
         _eraserButton = new ToggleButton
         {
             Content = new StackPanel
@@ -553,28 +567,108 @@ public sealed class EditorView : UserControl
         };
         _eraserButton.HorizontalAlignment = HorizontalAlignment.Left;
 
+        _brushTipNameText = new TextBlock
+        {
+            Name = "BrushTipNameText",
+            TextWrapping = TextWrapping.Wrap,
+        }.Classed("muted");
+        var clearTip = Ui.TextButton("ClearBrushTipButton", "Сбросить отпечаток", () =>
+        {
+            _editor.ClearBrushTip();
+            SyncAppearanceSections();
+        }, "compact");
+
+        _appearanceSyncs.Add(() =>
+        {
+            var eraser = _editor.BrushSettings.Eraser;
+            _eraserButton.IsChecked = eraser;
+            Ui.SetClass(_eraserButton, "active", eraser);
+            _brushTipNameText.Text = _editor.BrushTipName is { Length: > 0 } tipName
+                ? $"Отпечаток: {tipName}"
+                : "Отпечаток: круглая кисть";
+            AutomationProperties.SetName(_brushTipNameText, _brushTipNameText.Text);
+            clearTip.IsEnabled = _editor.BrushSettings.Tip is not null;
+        });
+
         return new StackPanel
         {
             Spacing = 8,
             Children =
             {
                 Explanation("Рисуйте по холсту. Штрих ложится на активный слой."),
-                Ui.SliderRow("BrushSizeSlider", "Размер кисти", 1, 256, _editor.BrushSettings.Radius, "px",
-                    value => _editor.BrushSettings = _editor.BrushSettings with { Radius = value }),
-                Ui.SliderRow("BrushOpacitySlider", "Непрозрачность", 5, 100, _editor.BrushSettings.Opacity * 100, "%",
-                    value => _editor.BrushSettings = _editor.BrushSettings with { Opacity = value / 100.0 }, 5),
+                AppearanceColorBox("BrushColorBox", "Цвет",
+                    () => _editor.BrushSettings.Color, _editor.SetBrushColor),
+                AppearanceSlider("BrushSizeSlider", "Размер кисти", 1, 256, "px",
+                    () => _editor.BrushSettings.Radius,
+                    (value, _) => UpdateSettings(settings => settings with { Radius = value })),
+                AppearanceSlider("BrushOpacitySlider", "Непрозрачность", 5, 100, "%",
+                    () => _editor.BrushSettings.Opacity * 100,
+                    (value, _) => UpdateSettings(settings => settings with { Opacity = value / 100.0 }), 5),
                 _eraserButton,
                 Ui.Advanced("BrushAdvanced", new StackPanel
                 {
                     Spacing = 8,
                     Children =
                     {
-                        Ui.SliderRow("BrushSoftnessSlider", "Мягкость края", 0, 100,
-                            _editor.BrushSettings.Softness * 100, "%",
-                            value => _editor.BrushSettings = _editor.BrushSettings with { Softness = value / 100.0 }, 5),
-                        Ui.SliderRow("BrushSpacingSlider", "Шаг отпечатков", 5, 100,
-                            _editor.BrushSettings.Spacing * 100, "%",
-                            value => _editor.BrushSettings = _editor.BrushSettings with { Spacing = value / 100.0 }, 5),
+                        AppearanceSlider("BrushSoftnessSlider", "Мягкость края", 0, 100, "%",
+                            () => _editor.BrushSettings.Softness * 100,
+                            (value, _) => UpdateSettings(settings => settings with
+                            {
+                                Softness = value / 100.0,
+                            }), 5),
+                        AppearanceSlider("BrushSpacingSlider", "Шаг отпечатков", 5, 100, "%",
+                            () => _editor.BrushSettings.Spacing * 100,
+                            (value, _) => UpdateSettings(settings => settings with
+                            {
+                                Spacing = value / 100.0,
+                            }), 5),
+                        AppearanceSlider("BrushScatterSlider", "Разброс", 0, 100, "%",
+                            () => _editor.BrushSettings.Scatter * 100,
+                            (value, _) => UpdateSettings(settings => settings with
+                            {
+                                Scatter = value / 100.0,
+                            }), 5),
+                        AppearanceSlider("BrushAngleSlider", "Угол отпечатка", -180, 180, "°",
+                            () => _editor.BrushSettings.AngleDegrees,
+                            (value, _) => UpdateSettings(settings => settings with
+                            {
+                                AngleDegrees = value,
+                            }), 5),
+                        new WrapPanel
+                        {
+                            Orientation = Orientation.Horizontal,
+                            ItemSpacing = 4,
+                            LineSpacing = 4,
+                            Children =
+                            {
+                                AppearanceToggle("BrushRandomFlipHorizontal", "Случайно отражать X",
+                                    () => _editor.BrushSettings.RandomFlipHorizontal,
+                                    value => UpdateSettings(settings => settings with
+                                    {
+                                        RandomFlipHorizontal = value,
+                                    })),
+                                AppearanceToggle("BrushRandomFlipVertical", "Случайно отражать Y",
+                                    () => _editor.BrushSettings.RandomFlipVertical,
+                                    value => UpdateSettings(settings => settings with
+                                    {
+                                        RandomFlipVertical = value,
+                                    })),
+                            },
+                        },
+                        AppearanceSlider("BrushSizeJitterSlider", "Разброс размера", 0, 100, "%",
+                            () => _editor.BrushSettings.SizeJitter * 100,
+                            (value, _) => UpdateSettings(settings => settings with
+                            {
+                                SizeJitter = value / 100.0,
+                            }), 5),
+                        AppearanceSlider("BrushOpacityJitterSlider", "Разброс непрозрачности", 0, 100, "%",
+                            () => _editor.BrushSettings.OpacityJitter * 100,
+                            (value, _) => UpdateSettings(settings => settings with
+                            {
+                                OpacityJitter = value / 100.0,
+                            }), 5),
+                        _brushTipNameText,
+                        clearTip,
                     },
                 }),
             },
@@ -742,6 +836,366 @@ public sealed class EditorView : UserControl
         TextWrapping = TextWrapping.Wrap,
     }.Classed("faint", "role-caption");
 
+    // ========================================== appearance inspector building blocks
+
+    /// <summary>
+    /// A slider that previews while dragging and lands the whole gesture as ONE undo entry when
+    /// the pointer or the keyboard lets go. The registered sync re-reads the actual value, so the
+    /// control can never display a number the document does not hold.
+    /// </summary>
+    private StackPanel AppearanceSlider(
+        string name, string label, double minimum, double maximum, string unit,
+        Func<double?> read, Action<double, bool> apply, double step = 1, Control? trailing = null)
+    {
+        var readout = new TextBlock
+        {
+            VerticalAlignment = VerticalAlignment.Center,
+            MinWidth = 52,
+            TextAlignment = Avalonia.Media.TextAlignment.Right,
+        }.Classed("muted").Named(name + "Value");
+
+        var slider = new Slider
+        {
+            Minimum = minimum,
+            Maximum = maximum,
+            Value = Math.Clamp(read() ?? minimum, minimum, maximum),
+            SmallChange = step,
+            LargeChange = step * 5,
+        }.Named(name);
+        AutomationProperties.SetName(slider, $"{label}, {unit}");
+        ToolTip.SetTip(slider, $"{label}. Стрелками — шаг {step:0.##} {unit}");
+
+        var dragging = false;
+        string Format(double value) => unit.Length == 0
+            ? value.ToString("0.##", CultureInfo.InvariantCulture)
+            : $"{value.ToString("0.#", CultureInfo.InvariantCulture)} {unit}";
+        readout.Text = Format(slider.Value);
+
+        slider.PropertyChanged += (_, e) =>
+        {
+            if (e.Property != RangeBase.ValueProperty)
+            {
+                return;
+            }
+
+            readout.Text = Format(slider.Value);
+            if (!_syncingAppearance)
+            {
+                apply(slider.Value, false);
+            }
+        };
+        slider.AddHandler(PointerPressedEvent,
+            (_, _) => dragging = true, Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        slider.PointerCaptureLost += (_, _) =>
+        {
+            dragging = false;
+            if (!_syncingAppearance)
+            {
+                apply(slider.Value, true);
+            }
+        };
+        slider.KeyUp += (_, e) =>
+        {
+            if (!_syncingAppearance && e.Key is Key.Left or Key.Right or Key.Up or Key.Down
+                or Key.PageUp or Key.PageDown or Key.Home or Key.End)
+            {
+                apply(slider.Value, true);
+            }
+        };
+        slider.LostFocus += (_, _) =>
+        {
+            if (!_syncingAppearance && !dragging)
+            {
+                apply(slider.Value, true);
+            }
+        };
+
+        _appearanceSyncs.Add(() =>
+        {
+            if (dragging)
+            {
+                return;
+            }
+
+            var current = read();
+            if (current is { } value && Math.Abs(slider.Value - value) > 0.0001)
+            {
+                slider.Value = Math.Clamp(value, minimum, maximum);
+            }
+
+            readout.Text = Format(slider.Value);
+        });
+
+        var header = new DockPanel();
+        if (trailing is not null)
+        {
+            header.Children.Add(trailing.Docked(Dock.Right));
+        }
+
+        header.Children.Add(readout.Docked(Dock.Right));
+        header.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center });
+
+        return new StackPanel
+        {
+            Margin = new Thickness(0, 2),
+            Children = { header, slider },
+        };
+    }
+
+    /// <summary>A small per-parameter reset that simply commits the neutral value.</summary>
+    private static Button ResetGlyph(string name, string title, Action reset)
+    {
+        var button = new Button
+        {
+            Content = MapIcons.Stroked(MapIcons.Undo, 12),
+            Padding = new Thickness(4, 1),
+            Margin = new Thickness(4, 0),
+        }.Named(name).Classed("icon");
+        AutomationProperties.SetName(button, title);
+        ToolTip.SetTip(button, title);
+        button.Click += (_, _) => reset();
+        return button;
+    }
+
+    /// <summary>A numeric field committing on Enter or focus loss; bad input is an error, not a command.</summary>
+    private Control AppearanceNumberBox(
+        string name, string label, string? unit, Func<double?> read, Action<double> apply)
+    {
+        var box = NumberBox(name);
+        void Commit()
+        {
+            if (_syncingAppearance)
+            {
+                return;
+            }
+
+            var text = box.Text ?? "";
+            if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value)
+                || !double.IsFinite(value))
+            {
+                _editor.ReportInspectorError($"«{label}» должно быть числом.");
+                SyncStatus();
+                return;
+            }
+
+            apply(value);
+        }
+
+        box.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter)
+            {
+                Commit();
+                e.Handled = true;
+            }
+        };
+        box.LostFocus += (_, _) => Commit();
+
+        _appearanceSyncs.Add(() =>
+        {
+            if (!box.IsFocused)
+            {
+                box.Text = read()?.ToString("0.##", CultureInfo.InvariantCulture) ?? "";
+            }
+        });
+
+        return Ui.PropertyRow(label, box, unit);
+    }
+
+    /// <summary>A colour field: #RRGGBB / #AARRGGBB, committing on Enter or focus loss.</summary>
+    private Control AppearanceColorBox(
+        string name, string label, Func<string?> read, Action<string> apply)
+    {
+        var box = new TextBox { Name = name, PlaceholderText = "#AARRGGBB" };
+        void Commit()
+        {
+            if (!_syncingAppearance && (box.Text ?? "") != (read() ?? ""))
+            {
+                apply(box.Text ?? "");
+            }
+        }
+
+        box.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter)
+            {
+                Commit();
+                e.Handled = true;
+            }
+        };
+        box.LostFocus += (_, _) => Commit();
+
+        _appearanceSyncs.Add(() =>
+        {
+            if (!box.IsFocused)
+            {
+                box.Text = read() ?? "";
+            }
+        });
+
+        return Ui.PropertyRow(label, box);
+    }
+
+    /// <summary>A named on/off property whose checked state always mirrors the document.</summary>
+    private ToggleButton AppearanceToggle(string name, string label, Func<bool?> read, Action<bool> apply)
+    {
+        var toggle = new ToggleButton { Content = label }.Named(name).Classed("segment");
+        AutomationProperties.SetName(toggle, label);
+        ToolTip.SetTip(toggle, label);
+        toggle.Click += (_, _) =>
+        {
+            if (!_syncingAppearance)
+            {
+                apply(toggle.IsChecked == true);
+            }
+        };
+
+        _appearanceSyncs.Add(() =>
+        {
+            var value = read() == true;
+            toggle.IsChecked = value;
+            Ui.SetClass(toggle, "active", value);
+        });
+
+        return toggle;
+    }
+
+    /// <summary>One dropdown over a fixed set of stored keys, shown with Russian labels.</summary>
+    private Control AppearanceChoice(
+        string name, string label, IReadOnlyList<(string Key, string Text)> options,
+        Func<string?> read, Action<string> apply)
+    {
+        var combo = new ComboBox
+        {
+            Name = name,
+            ItemsSource = options.Select(option => option.Text).ToList(),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+        };
+        AutomationProperties.SetName(combo, label);
+        ToolTip.SetTip(combo, label);
+        combo.SelectionChanged += (_, _) =>
+        {
+            if (!_syncingAppearance && combo.SelectedIndex >= 0
+                && options[combo.SelectedIndex].Key != read())
+            {
+                apply(options[combo.SelectedIndex].Key);
+            }
+        };
+
+        _appearanceSyncs.Add(() =>
+        {
+            var current = read();
+            var index = 0;
+            for (var i = 0; i < options.Count; i++)
+            {
+                if (options[i].Key == current)
+                {
+                    index = i;
+                    break;
+                }
+            }
+
+            combo.SelectedIndex = index;
+        });
+
+        return Ui.PropertyRow(label, combo);
+    }
+
+    private Control BlendChoice(string name, Func<string?> read, Action<string> apply) =>
+        AppearanceChoice(
+            name, "Смешивание",
+            [.. BlendModes.Supported.Select(key => (key, EditorLabels.Blend(key)))],
+            read, apply);
+
+    /// <summary>
+    /// The shared drop-shadow block: named state, three presets as real commands and the custom
+    /// sliders, disclosed only because a shadow is a rare setting.
+    /// </summary>
+    private StackPanel ShadowBlock(
+        string prefix,
+        Func<(double OffsetX, double OffsetY, double Blur, double Opacity)?> read,
+        Action none, Action standard,
+        Action<double?, double?, double?, double?, bool> custom)
+    {
+        var state = new TextBlock { VerticalAlignment = VerticalAlignment.Center }
+            .Classed("muted").Named(prefix + "ShadowStateText");
+
+        var noneButton = Ui.TextButton(prefix + "ShadowNoneButton", "Нет", () =>
+        {
+            none();
+            SyncAppearanceSections();
+        }, "segment");
+        var standardButton = Ui.TextButton(prefix + "ShadowStandardButton", "Стандартная", () =>
+        {
+            standard();
+            SyncAppearanceSections();
+        }, "segment");
+
+        var sliders = new StackPanel
+        {
+            Spacing = 2,
+            Children =
+            {
+                AppearanceSlider(prefix + "ShadowOffsetXSlider", "Сдвиг по X", -64, 64, "px",
+                    () => read()?.OffsetX, (v, c) => custom(v, null, null, null, c)),
+                AppearanceSlider(prefix + "ShadowOffsetYSlider", "Сдвиг по Y", -64, 64, "px",
+                    () => read()?.OffsetY, (v, c) => custom(null, v, null, null, c)),
+                AppearanceSlider(prefix + "ShadowBlurSlider", "Размытие тени", 0, 64, "px",
+                    () => read()?.Blur, (v, c) => custom(null, null, v, null, c)),
+                AppearanceSlider(prefix + "ShadowOpacitySlider", "Плотность тени", 0, 100, "%",
+                    () => read()?.Opacity * 100, (v, c) => custom(null, null, null, v, c), 5),
+            },
+        };
+
+        _appearanceSyncs.Add(() =>
+        {
+            var shadow = read();
+            state.Text = shadow is { } value
+                ? EditorLabels.ShadowState(value.OffsetX, value.OffsetY, value.Blur, value.Opacity)
+                : "";
+        });
+
+        return new StackPanel
+        {
+            Spacing = 4,
+            Children =
+            {
+                new DockPanel
+                {
+                    Children =
+                    {
+                        state.Docked(Dock.Right),
+                        new TextBlock { Text = "Тень", VerticalAlignment = VerticalAlignment.Center },
+                    },
+                },
+                new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 2,
+                    Children = { noneButton, standardButton },
+                },
+                sliders,
+            },
+        };
+    }
+
+    /// <summary>Runs every registered value sync with user-input handlers muted.</summary>
+    private void SyncAppearanceSections()
+    {
+        _syncingAppearance = true;
+        try
+        {
+            foreach (var sync in _appearanceSyncs)
+            {
+                sync();
+            }
+        }
+        finally
+        {
+            _syncingAppearance = false;
+        }
+    }
+
     // ========================================================= selection panels
 
     private void BuildSelectionSections()
@@ -754,72 +1208,10 @@ public sealed class EditorView : UserControl
 
         _inspectorPanel = BuildInspector();
 
-        _stampSection = Ui.Section("Штамп", new StackPanel
-        {
-            Spacing = 5,
-            Children =
-            {
-                Ui.TextButton("StampFlipButton", "Отразить по горизонтали",
-                    () => _editor.UpdateSelectedStamp(toggleFlip: true), "compact"),
-                Ui.TextButton("StampShadowButton", "Тень включить/выключить",
-                    () => _editor.UpdateSelectedStamp(toggleShadow: true), "compact"),
-                Ui.TextButton("StampHueButton", "Подкрасить",
-                    () => _editor.UpdateSelectedStamp(hue: 35, saturation: 0.2), "compact"),
-            },
-        }).Named("StampObjectActions");
-
-        _vectorSection = Ui.Section("Геометрия", new StackPanel
-        {
-            Spacing = 5,
-            Children =
-            {
-                Ui.TextButton("AddLineNodeButton", "Добавить узел", _editor.AddNodeToSelectedLine, "compact"),
-                Ui.TextButton("MoveVectorNodeButton", "Сдвинуть узел", _editor.MoveSelectedVectorNode, "compact"),
-                Ui.TextButton("CurveNodeButton", "Узел: прямая или кривая",
-                    _editor.ToggleSelectedNodeCurve, "compact"),
-                Ui.TextButton("CutLineButton", "Разрезать линию", _editor.CutSelectedLine, "compact"),
-                Ui.TextButton("VectorStrokeButton", "Сменить стиль обводки",
-                    _editor.CycleSelectedVectorStroke, "compact"),
-                Ui.Advanced("VectorAdvanced", new StackPanel
-                {
-                    Spacing = 5,
-                    Children =
-                    {
-                        Ui.TextButton("AddPortalButton", "Добавить проход", _editor.AddPortalToSelected, "compact"),
-                        Ui.TextButton("MovePortalButton", "Сдвинуть проход", _editor.MoveSelectedPortal, "compact"),
-                        Ui.TextButton("DeletePortalButton", "Удалить проход",
-                            _editor.DeleteSelectedPortal, "compact"),
-                        Ui.TextButton("BooleanAddButton", "Объединить с предыдущей",
-                            () => _editor.ApplyShapeBoolean(ShapeBooleanOperation.Add), "compact"),
-                        Ui.TextButton("BooleanSubtractButton", "Вычесть из предыдущей",
-                            () => _editor.ApplyShapeBoolean(ShapeBooleanOperation.Subtract), "compact"),
-                        Ui.TextButton("BooleanMergeButton", "Слить контуры",
-                            () => _editor.ApplyShapeBoolean(ShapeBooleanOperation.Merge), "compact"),
-                        Ui.TextButton("GridSnapNodeButton", "Привязать узел к сетке",
-                            _editor.SnapSelectedNodeToGrid, "compact"),
-                        Ui.TextButton("GridSnapPortalButton", "Привязать проход к сетке",
-                            _editor.SnapSelectedPortalToGrid, "compact"),
-                    },
-                }),
-            },
-        }).Named("VectorObjectActions");
-
-        var textChildren = new StackPanel
-        {
-            Spacing = 5,
-            Children = { Ui.TextButton("TextStyleButton", "Сменить начертание", _editor.CycleSelectedTextStyle, "compact") },
-        };
-
-        // A font-substitution probe is a test fixture, not a user command: it appears only when the
-        // process is started in explicit test mode by the UIA driver.
-        if (TestMode.Enabled)
-        {
-            textChildren.Children.Add(Ui.TextButton(
-                "TextMissingFontButton", "Проверить замену шрифта (тест)",
-                _editor.UseMissingFontOnSelectedText, "compact"));
-        }
-
-        _textSection = Ui.Section("Подпись", textChildren).Named("TextObjectActions");
+        _stampSection = BuildStampSection();
+        _lineSection = BuildLineSection();
+        _shapeSection = BuildShapeSection();
+        _textSection = BuildTextSection();
 
         _compositionSection = Ui.Section("Композиция", new StackPanel
         {
@@ -832,6 +1224,442 @@ public sealed class EditorView : UserControl
                     _editor.FlattenSelectedComposition, "compact"),
             },
         }).Named("CompositionObjectActions");
+    }
+
+    /// <summary>The stamp's own block: replace, proportional scale, both flips, appearance.</summary>
+    private Control BuildStampSection()
+    {
+        var replace = Ui.TextButton("StampReplaceAssetButton", "Заменить ассет…", () =>
+        {
+            OpenAssetCatalog(focusSearch: true);
+        }, "compact");
+        ToolTip.SetTip(replace,
+            "Открывает библиотеку. Выберите набор и нажмите «Заменить ассет выделенного штампа» — " +
+            "положение, размер, поворот и эффекты сохранятся.");
+
+        var scale = AppearanceSlider("StampScaleSlider", "Масштаб", 10, 400, "%",
+            () => _editor.StampScalePercent,
+            (value, commit) => _editor.SetStampScalePercent(value, commit), 5,
+            ResetGlyph("StampScaleResetButton", "Сбросить масштаб к 100 %",
+                () => _editor.SetStampScalePercent(100)));
+
+        var aspect = new ToggleButton { Content = "Сохранять пропорции" }
+            .Named("StampAspectLockToggle").Classed("segment");
+        AutomationProperties.SetName(aspect, "Сохранять пропорции");
+        ToolTip.SetTip(aspect, "Точные Ширина/Высота меняются согласованно, пока включено.");
+        aspect.Click += (_, _) => _editor.StampAspectLocked = aspect.IsChecked == true;
+        _appearanceSyncs.Add(() =>
+        {
+            aspect.IsChecked = _editor.StampAspectLocked;
+            Ui.SetClass(aspect, "active", _editor.StampAspectLocked);
+        });
+
+        var flips = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 2,
+            Children =
+            {
+                AppearanceToggle("StampFlipHorizontalToggle", "Отразить по горизонтали",
+                    () => _editor.Session.SelectedObject?.Stamp?.FlipHorizontal,
+                    value => _editor.SetStampFlip(horizontal: value)),
+                AppearanceToggle("StampFlipVerticalToggle", "Отразить по вертикали",
+                    () => _editor.Session.SelectedObject?.Stamp?.FlipVertical,
+                    value => _editor.SetStampFlip(vertical: value)),
+            },
+        };
+
+        StampStyle? Style() => _editor.Session.SelectedObject?.Stamp;
+
+        var appearance = new Expander
+        {
+            Header = new TextBlock { Text = "Внешний вид" }.Classed("role-panel"),
+            IsExpanded = false,
+            Content = new StackPanel
+            {
+                Spacing = 4,
+                Children =
+                {
+                    BlendChoice("StampBlendChoice", () => Style()?.Blend, _editor.SetStampBlend),
+                    AppearanceSlider("StampBlurSlider", "Размытие", 0, 32, "px",
+                        () => Style()?.Blur, (v, c) => _editor.SetStampBlur(v, c)),
+                    AppearanceSlider("StampHueSlider", "Оттенок", -180, 180, "°",
+                        () => Style()?.Hue, (v, c) => _editor.SetStampHueDegrees(v, c), 5,
+                        ResetGlyph("StampHueResetButton", "Сбросить оттенок",
+                            () => _editor.SetStampHueDegrees(0))),
+                    AppearanceSlider("StampSaturationSlider", "Насыщенность", 0, 200, "%",
+                        () => Style() is { } s ? ColorAdjustment.OffsetToPercent(s.Saturation) : null,
+                        (v, c) => _editor.SetStampSaturationPercent(v, c), 5,
+                        ResetGlyph("StampSaturationResetButton", "Сбросить насыщенность",
+                            () => _editor.SetStampSaturationPercent(100))),
+                    AppearanceSlider("StampBrightnessSlider", "Яркость", 0, 200, "%",
+                        () => Style() is { } s ? ColorAdjustment.OffsetToPercent(s.Brightness) : null,
+                        (v, c) => _editor.SetStampBrightnessPercent(v, c), 5,
+                        ResetGlyph("StampBrightnessResetButton", "Сбросить яркость",
+                            () => _editor.SetStampBrightnessPercent(100))),
+                    AppearanceSlider("StampContrastSlider", "Контраст", 0, 200, "%",
+                        () => Style() is { } s ? ColorAdjustment.OffsetToPercent(s.Contrast) : null,
+                        (v, c) => _editor.SetStampContrastPercent(v, c), 5,
+                        ResetGlyph("StampContrastResetButton", "Сбросить контраст",
+                            () => _editor.SetStampContrastPercent(100))),
+                    Ui.TextButton("StampResetColorsButton", "Сбросить цветокоррекцию",
+                        _editor.ResetStampColorAdjustments, "compact"),
+                    ShadowBlock("Stamp",
+                        () => Style() is { } s
+                            ? (s.ShadowOffsetX, s.ShadowOffsetY, s.ShadowBlur, s.ShadowOpacity)
+                            : null,
+                        _editor.SetStampShadowNone, _editor.SetStampShadowStandard,
+                        (x, y, b, o, c) => _editor.SetStampShadow(x, y, b, o, c)),
+                    Ui.TextButton("StampResetAppearanceButton", "Сбросить весь внешний вид",
+                        _editor.ResetStampAppearance, "compact"),
+                },
+            },
+        }.Named("StampAppearance");
+        AutomationProperties.SetName(appearance, "Внешний вид");
+
+        return Ui.Section("Штамп", new StackPanel
+        {
+            Spacing = 5,
+            Children = { replace, scale, aspect, flips, appearance },
+        }).Named("StampObjectActions");
+    }
+
+    /// <summary>Stroke controls shared verbatim by the line and the shape inspectors.</summary>
+    private StackPanel BuildStrokeControls(string prefix)
+    {
+        VectorStrokeStyle? Stroke() =>
+            _editor.Session.SelectedObject?.Line?.Stroke ?? _editor.Session.SelectedObject?.Shape?.Stroke;
+
+        var assetOnly = new StackPanel
+        {
+            Spacing = 2,
+            Children =
+            {
+                AppearanceSlider(prefix + "StrokeHueSlider", "Оттенок ассета", -180, 180, "°",
+                    () => Stroke()?.Hue, (v, c) => _editor.SetStrokeHueDegrees(v, c), 5),
+                AppearanceSlider(prefix + "StrokeSaturationSlider", "Насыщенность ассета", 0, 200, "%",
+                    () => Stroke() is { } s ? ColorAdjustment.OffsetToPercent(s.Saturation) : null,
+                    (v, c) => _editor.SetStrokeSaturationPercent(v, c), 5),
+            },
+        };
+        _appearanceSyncs.Add(() => assetOnly.IsVisible = _editor.SelectedStrokeHasAsset);
+
+        return new StackPanel
+        {
+            Spacing = 4,
+            Children =
+            {
+                AppearanceColorBox(prefix + "StrokeColorBox", "Цвет обводки",
+                    () => Stroke()?.Color, _editor.SetStrokeColor),
+                AppearanceSlider(prefix + "StrokeWidthSlider", "Толщина", 1, 64, "px",
+                    () => Stroke()?.Width, (v, c) => _editor.SetStrokeWidth(v, c)),
+                AppearanceSlider(prefix + "StrokeOpacitySlider", "Плотность обводки", 0, 100, "%",
+                    () => Stroke()?.Opacity * 100, (v, c) => _editor.SetStrokeOpacityPercent(v, c), 5),
+                AppearanceChoice(prefix + "StrokePatternChoice", "Линия",
+                    [("Solid", EditorLabels.Pattern(StrokePattern.Solid)),
+                     ("Dotted", EditorLabels.Pattern(StrokePattern.Dotted)),
+                     ("Dashed", EditorLabels.Pattern(StrokePattern.Dashed))],
+                    () => Stroke()?.Pattern.ToString(),
+                    key => _editor.SetStrokePattern(Enum.Parse<StrokePattern>(key))),
+                assetOnly,
+            },
+        };
+    }
+
+    /// <summary>Rare stroke effects, one collapsed block for both vector kinds.</summary>
+    private Expander BuildStrokeAppearanceExpander(string prefix)
+    {
+        VectorStrokeStyle? Stroke() =>
+            _editor.Session.SelectedObject?.Line?.Stroke ?? _editor.Session.SelectedObject?.Shape?.Stroke;
+
+        var expander = new Expander
+        {
+            Header = new TextBlock { Text = "Внешний вид" }.Classed("role-panel"),
+            IsExpanded = false,
+            Content = new StackPanel
+            {
+                Spacing = 4,
+                Children =
+                {
+                    BlendChoice(prefix + "StrokeBlendChoice", () => Stroke()?.Blend, _editor.SetStrokeBlend),
+                    AppearanceSlider(prefix + "StrokeBlurSlider", "Размытие", 0, 32, "px",
+                        () => Stroke()?.Blur, (v, c) => _editor.SetStrokeBlur(v, c)),
+                    AppearanceSlider(prefix + "StrokeOffsetSlider", "Смещение", -64, 64, "px",
+                        () => Stroke()?.Offset, (v, c) => _editor.SetStrokeOffset(v, c)),
+                    AppearanceChoice(prefix + "StrokeEndCapChoice", "Концы",
+                        [("Butt", EditorLabels.Cap(VectorCap.Butt)),
+                         ("Round", EditorLabels.Cap(VectorCap.Round)),
+                         ("Square", EditorLabels.Cap(VectorCap.Square))],
+                        () => Stroke()?.EndCap.ToString(),
+                        key => _editor.SetStrokeEndCap(Enum.Parse<VectorCap>(key))),
+                    AppearanceChoice(prefix + "StrokeNodeCapChoice", "Узлы",
+                        [("Butt", EditorLabels.Cap(VectorCap.Butt)),
+                         ("Round", EditorLabels.Cap(VectorCap.Round)),
+                         ("Square", EditorLabels.Cap(VectorCap.Square))],
+                        () => Stroke()?.NodeCap.ToString(),
+                        key => _editor.SetStrokeNodeCap(Enum.Parse<VectorCap>(key))),
+                    ShadowBlock(prefix + "Stroke",
+                        () => Stroke() is { } s
+                            ? (s.ShadowOffsetX, s.ShadowOffsetY, s.ShadowBlur, s.ShadowOpacity)
+                            : null,
+                        _editor.SetStrokeShadowNone, _editor.SetStrokeShadowStandard,
+                        (x, y, b, o, c) => _editor.SetStrokeShadow(x, y, b, o, c)),
+                    Ui.TextButton(prefix + "StrokeResetButton", "Сбросить оформление обводки",
+                        _editor.ResetStrokeAppearance, "compact"),
+                },
+            },
+        }.Named(prefix + "StrokeAppearance");
+        AutomationProperties.SetName(expander, "Внешний вид");
+        return expander;
+    }
+
+    private Control BuildLineSection()
+    {
+        var geometry = new Expander
+        {
+            Header = new TextBlock { Text = "Геометрия" }.Classed("role-panel"),
+            IsExpanded = false,
+            Content = new StackPanel
+            {
+                Spacing = 5,
+                Children =
+                {
+                    Ui.TextButton("AddLineNodeButton", "Добавить узел", _editor.AddNodeToSelectedLine, "compact"),
+                    Ui.TextButton("MoveVectorNodeButton", "Сдвинуть узел", _editor.MoveSelectedVectorNode, "compact"),
+                    Ui.TextButton("CurveNodeButton", "Узел: прямая или кривая",
+                        _editor.ToggleSelectedNodeCurve, "compact"),
+                    Ui.TextButton("CutLineButton", "Разрезать линию", _editor.CutSelectedLine, "compact"),
+                    Ui.TextButton("AddPortalButton", "Добавить проход", _editor.AddPortalToSelected, "compact"),
+                    Ui.TextButton("MovePortalButton", "Сдвинуть проход", _editor.MoveSelectedPortal, "compact"),
+                    Ui.TextButton("DeletePortalButton", "Удалить проход", _editor.DeleteSelectedPortal, "compact"),
+                    Ui.TextButton("GridSnapNodeButton", "Привязать узел к сетке",
+                        _editor.SnapSelectedNodeToGrid, "compact"),
+                    Ui.TextButton("GridSnapPortalButton", "Привязать проход к сетке",
+                        _editor.SnapSelectedPortalToGrid, "compact"),
+                },
+            },
+        }.Named("LineGeometry");
+        AutomationProperties.SetName(geometry, "Геометрия");
+
+        return Ui.Section("Линия", new StackPanel
+        {
+            Spacing = 5,
+            Children =
+            {
+                BuildStrokeControls("Line"),
+                BuildStrokeAppearanceExpander("Line"),
+                geometry,
+            },
+        }).Named("VectorObjectActions");
+    }
+
+    private Control BuildShapeSection()
+    {
+        ShapeFillStyle? Fill() => _editor.Session.SelectedObject?.Shape?.Fill;
+
+        var geometry = new Expander
+        {
+            Header = new TextBlock { Text = "Геометрия" }.Classed("role-panel"),
+            IsExpanded = false,
+            Content = new StackPanel
+            {
+                Spacing = 5,
+                Children =
+                {
+                    Ui.TextButton("ShapeMoveNodeButton", "Сдвинуть узел",
+                        _editor.MoveSelectedVectorNode, "compact"),
+                    Ui.TextButton("BooleanAddButton", "Объединить с предыдущей",
+                        () => _editor.ApplyShapeBoolean(ShapeBooleanOperation.Add), "compact"),
+                    Ui.TextButton("BooleanSubtractButton", "Вычесть из предыдущей",
+                        () => _editor.ApplyShapeBoolean(ShapeBooleanOperation.Subtract), "compact"),
+                    Ui.TextButton("BooleanMergeButton", "Слить контуры",
+                        () => _editor.ApplyShapeBoolean(ShapeBooleanOperation.Merge), "compact"),
+                    Ui.TextButton("ShapeAddPortalButton", "Добавить проход",
+                        _editor.AddPortalToSelected, "compact"),
+                    Ui.TextButton("ShapeMovePortalButton", "Сдвинуть проход",
+                        _editor.MoveSelectedPortal, "compact"),
+                    Ui.TextButton("ShapeDeletePortalButton", "Удалить проход",
+                        _editor.DeleteSelectedPortal, "compact"),
+                    Ui.TextButton("ShapeGridSnapNodeButton", "Привязать узел к сетке",
+                        _editor.SnapSelectedNodeToGrid, "compact"),
+                },
+            },
+        }.Named("ShapeGeometry");
+        AutomationProperties.SetName(geometry, "Геометрия");
+
+        var appearance = new Expander
+        {
+            Header = new TextBlock { Text = "Внешний вид" }.Classed("role-panel"),
+            IsExpanded = false,
+            Content = new StackPanel
+            {
+                Spacing = 4,
+                Children =
+                {
+                    BlendChoice("ShapeBlendChoice",
+                        () => _editor.Session.SelectedObject?.Shape?.Stroke.Blend, _editor.SetStrokeBlend),
+                    AppearanceSlider("ShapeBlurSlider", "Размытие", 0, 32, "px",
+                        () => _editor.Session.SelectedObject?.Shape?.Stroke.Blur,
+                        (v, c) => _editor.SetStrokeBlur(v, c)),
+                    ShadowBlock("ShapeStroke",
+                        () => _editor.Session.SelectedObject?.Shape?.Stroke is { } s
+                            ? (s.ShadowOffsetX, s.ShadowOffsetY, s.ShadowBlur, s.ShadowOpacity)
+                            : null,
+                        _editor.SetStrokeShadowNone, _editor.SetStrokeShadowStandard,
+                        (x, y, b, o, c) => _editor.SetStrokeShadow(x, y, b, o, c)),
+                    Ui.TextButton("ShapeResetFillButton", "Сбросить заливку",
+                        _editor.ResetShapeFill, "compact"),
+                    Ui.TextButton("ShapeResetStrokeButton", "Сбросить оформление обводки",
+                        _editor.ResetStrokeAppearance, "compact"),
+                    Ui.TextButton("ShapeResetEffectsButton", "Сбросить общие эффекты",
+                        _editor.ResetShapeEffects, "compact"),
+                },
+            },
+        }.Named("ShapeAppearance");
+        AutomationProperties.SetName(appearance, "Внешний вид");
+
+        return Ui.Section("Фигура", new StackPanel
+        {
+            Spacing = 5,
+            Children =
+            {
+                AppearanceColorBox("ShapeFillColorBox", "Цвет заливки",
+                    () => Fill()?.Color, _editor.SetShapeFillColor),
+                AppearanceSlider("ShapeFillOpacitySlider", "Плотность заливки", 0, 100, "%",
+                    () => Fill()?.Opacity * 100, (v, c) => _editor.SetShapeFillOpacityPercent(v, c), 5),
+                AppearanceColorBox("ShapeStrokeColorBox", "Цвет обводки",
+                    () => _editor.Session.SelectedObject?.Shape?.Stroke.Color, _editor.SetStrokeColor),
+                AppearanceSlider("ShapeStrokeWidthSlider", "Толщина обводки", 0, 64, "px",
+                    () => _editor.Session.SelectedObject?.Shape?.Stroke.Width,
+                    (v, c) => _editor.SetStrokeWidth(v, c)),
+                appearance,
+                geometry,
+            },
+        }).Named("ShapeObjectActions");
+    }
+
+    private Control BuildTextSection()
+    {
+        TextStyle? Style() => _editor.Session.SelectedObject?.Text;
+
+        var content = new TextBox
+        {
+            Name = "TextContentBox",
+            AcceptsReturn = true,
+            MinHeight = 64,
+            TextWrapping = TextWrapping.Wrap,
+        };
+        AutomationProperties.SetName(content, "Текст подписи");
+        ToolTip.SetTip(content, "Многострочный текст. Применяется при выходе из поля.");
+        content.LostFocus += (_, _) =>
+        {
+            if (!_syncingAppearance && (content.Text ?? "") != (Style()?.Content ?? ""))
+            {
+                _editor.SetTextContent(content.Text ?? "");
+            }
+        };
+        _appearanceSyncs.Add(() =>
+        {
+            if (!content.IsFocused)
+            {
+                content.Text = Style()?.Content ?? "";
+            }
+        });
+
+        var font = new TextBlock { TextWrapping = TextWrapping.Wrap }
+            .Classed("faint", "role-caption").Named("TextFontStateText");
+        _appearanceSyncs.Add(() =>
+        {
+            var resolution = _editor.SelectedTextFontResolution;
+            font.Text = resolution is null
+                ? ""
+                : resolution.UsedFallback
+                    ? $"Шрифт: {resolution.RequestedFamily} недоступен, используется {resolution.ResolvedFamily}."
+                    : $"Шрифт: {resolution.ResolvedFamily}. Каталог шрифтов появится в следующем срезе.";
+        });
+
+        var appearance = new Expander
+        {
+            Header = new TextBlock { Text = "Внешний вид" }.Classed("role-panel"),
+            IsExpanded = false,
+            Content = new StackPanel
+            {
+                Spacing = 4,
+                Children =
+                {
+                    AppearanceColorBox("TextOutlineColorBox", "Цвет контура",
+                        () => Style()?.OutlineColor, _editor.SetTextOutlineColor),
+                    AppearanceSlider("TextOutlineWidthSlider", "Толщина контура", 0, 32, "px",
+                        () => Style()?.OutlineWidth, (v, c) => _editor.SetTextOutlineWidth(v, c)),
+                    AppearanceSlider("TextCurveSlider", "Изгиб", -100, 100, "",
+                        () => Style()?.Curve, (v, c) => _editor.SetTextCurve(v, c), 5,
+                        ResetGlyph("TextCurveResetButton", "Убрать изгиб", () => _editor.SetTextCurve(0))),
+                    AppearanceSlider("TextLetterSpacingSlider", "Межбуквенный интервал", 0, 40, "px",
+                        () => Style()?.LetterSpacing, (v, c) => _editor.SetTextLetterSpacing(v, c)),
+                    AppearanceSlider("TextLineHeightSlider", "Межстрочный интервал", 50, 300, "%",
+                        () => Style()?.LineHeight * 100,
+                        (v, c) => _editor.SetTextLineHeight(v / 100.0, c), 10),
+                    new StackPanel
+                    {
+                        Orientation = Orientation.Horizontal,
+                        Spacing = 2,
+                        Children =
+                        {
+                            AppearanceToggle("TextFlipHorizontalToggle", "Отразить по горизонтали",
+                                () => Style()?.FlipHorizontal,
+                                value => _editor.SetTextFlip(horizontal: value)),
+                            AppearanceToggle("TextFlipVerticalToggle", "Отразить по вертикали",
+                                () => Style()?.FlipVertical,
+                                value => _editor.SetTextFlip(vertical: value)),
+                        },
+                    },
+                    ShadowBlock("Text",
+                        () => Style() is { } s
+                            ? (s.ShadowOffsetX, s.ShadowOffsetY, s.ShadowBlur, s.ShadowOpacity)
+                            : null,
+                        _editor.SetTextShadowNone, _editor.SetTextShadowStandard,
+                        (x, y, b, o, c) => _editor.SetTextShadow(x, y, b, o, c)),
+                    BlendChoice("TextBlendChoice", () => Style()?.Blend, _editor.SetTextBlend),
+                    AppearanceSlider("TextBlurSlider", "Размытие", 0, 32, "px",
+                        () => Style()?.Blur, (v, c) => _editor.SetTextBlur(v, c)),
+                },
+            },
+        }.Named("TextAppearance");
+        AutomationProperties.SetName(appearance, "Внешний вид");
+
+        var children = new StackPanel
+        {
+            Spacing = 5,
+            Children =
+            {
+                content,
+                AppearanceToggle("TextBoldToggle", "Полужирный",
+                    () => Style()?.FontWeight >= 600, _editor.SetTextBold),
+                AppearanceSlider("TextFontSizeSlider", "Размер шрифта", 6, 200, "px",
+                    () => Style()?.FontSize, (v, c) => _editor.SetTextFontSize(v, c)),
+                AppearanceColorBox("TextFillColorBox", "Цвет текста",
+                    () => Style()?.FillColor, _editor.SetTextFillColor),
+                AppearanceChoice("TextAlignmentChoice", "Выравнивание",
+                    [("Left", EditorLabels.Alignment(Core.Documents.TextAlignment.Left)),
+                     ("Center", EditorLabels.Alignment(Core.Documents.TextAlignment.Center)),
+                     ("Right", EditorLabels.Alignment(Core.Documents.TextAlignment.Right))],
+                    () => Style()?.Alignment.ToString(),
+                    key => _editor.SetTextAlignment(Enum.Parse<Core.Documents.TextAlignment>(key))),
+                font,
+                appearance,
+            },
+        };
+
+        // A font-substitution probe is a test fixture, not a user command: it appears only when the
+        // process is started in explicit test mode by the UIA driver.
+        if (TestMode.Enabled)
+        {
+            children.Children.Add(Ui.TextButton(
+                "TextMissingFontButton", "Проверить замену шрифта (тест)",
+                _editor.UseMissingFontOnSelectedText, "compact"));
+        }
+
+        return Ui.Section("Подпись", children).Named("TextObjectActions");
     }
 
     private Control BuildInspector()
@@ -866,6 +1694,12 @@ public sealed class EditorView : UserControl
                 Ui.PropertyRow("Высота", _heightBox, "px"),
                 Ui.PropertyRow("Поворот", _rotationBox, "°"),
                 apply,
+                AppearanceNumberBox("SublayerBox", "Подслой", null,
+                    () => _editor.Session.SelectedObject?.Sublayer,
+                    value => _editor.SetSelectedSublayer((int)Math.Round(value))),
+                AppearanceSlider("ObjectOpacitySlider", "Непрозрачность", 0, 100, "%",
+                    () => _editor.Session.SelectedObject?.ObjectOpacity * 100,
+                    (value, commit) => _editor.SetSelectedOpacityPercent(value, commit), 5),
                 _inspectorError,
             },
         };
@@ -2309,6 +3143,24 @@ public sealed class EditorView : UserControl
                             {
                                 if (_selectedAsset is not null)
                                     _editor.UseAssetAsSelectedVectorStroke(_selectedAsset);
+                                SyncAssetList();
+                                SyncStatus();
+                            }, "compact"),
+                            AssetCommand("UseAssetShapeFillButton", "Использовать для заливки фигуры", () =>
+                            {
+                                if (_selectedAsset is not null)
+                                    _editor.UseAssetAsSelectedShapeFill(_selectedAsset);
+                                SyncAssetList();
+                                SyncStatus();
+                            }, "compact"),
+                            AssetCommand("UseAssetBrushTipButton", "Использовать как отпечаток кисти", () =>
+                            {
+                                if (_selectedAsset is not null && _editor.UseAssetAsBrushTip(_selectedAsset))
+                                {
+                                    _editor.ActiveTool = EditorTool.Brush;
+                                    SyncContextArea();
+                                    SyncStatus();
+                                }
                             }, "compact"),
                             AssetCommand("UseAssetFilterButton", "Использовать в фильтре", () =>
                             {
@@ -2440,8 +3292,12 @@ public sealed class EditorView : UserControl
     /// </summary>
     private sealed class ThumbnailCache(int capacity)
     {
-        private readonly Dictionary<string, (Bitmap Image, long Used)> _entries = new(StringComparer.OrdinalIgnoreCase);
+        private const int MaxThumbnailDimension = 512;
+        private const long MaxDecodedBytes = 64L * 1024 * 1024;
+        private readonly Dictionary<string, (Bitmap Image, long Used, long Bytes)> _entries =
+            new(StringComparer.OrdinalIgnoreCase);
         private long _clock;
+        private long _decodedBytes;
 
         public Bitmap? Image(string? path)
         {
@@ -2452,33 +3308,41 @@ public sealed class EditorView : UserControl
 
             if (_entries.TryGetValue(path, out var hit))
             {
-                _entries[path] = (hit.Image, ++_clock);
+                _entries[path] = (hit.Image, ++_clock, hit.Bytes);
                 return hit.Image;
             }
 
-            if (!File.Exists(path))
-            {
-                return null;
-            }
-
             Bitmap bitmap;
+            AssetImageMetadata metadata;
             try
             {
-                bitmap = new Bitmap(path);
+                var encoded = AssetImagePolicy.ReadEncodedFile(path);
+                metadata = AssetImagePolicy.Inspect(encoded);
+                if (metadata.Width > MaxThumbnailDimension || metadata.Height > MaxThumbnailDimension)
+                {
+                    return null;
+                }
+
+                while (_entries.Count >= capacity
+                    || _decodedBytes > MaxDecodedBytes - metadata.DecodedBytes)
+                {
+                    var oldest = _entries.OrderBy(pair => pair.Value.Used).First();
+                    _decodedBytes -= oldest.Value.Bytes;
+                    oldest.Value.Image.Dispose();
+                    _entries.Remove(oldest.Key);
+                }
+
+                using var stream = new MemoryStream(encoded, writable: false);
+                bitmap = new Bitmap(stream);
             }
-            catch (Exception exception) when (exception is IOException or ArgumentException)
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+                or InvalidDataException or ArgumentException)
             {
                 return null;
             }
 
-            _entries[path] = (bitmap, ++_clock);
-            while (_entries.Count > capacity)
-            {
-                var oldest = _entries.OrderBy(pair => pair.Value.Used).First();
-                oldest.Value.Image.Dispose();
-                _entries.Remove(oldest.Key);
-            }
-
+            _entries[path] = (bitmap, ++_clock, metadata.DecodedBytes);
+            _decodedBytes += metadata.DecodedBytes;
             return bitmap;
         }
     }
@@ -2726,6 +3590,7 @@ public sealed class EditorView : UserControl
         SyncMaskModeButtons();
         SyncLayerBlocks();
         SyncHint();
+        SyncAppearanceSections();
 
         // Selection properties belong to the Select tool. While a drawing tool is active the panel
         // keeps showing that tool, so switching tools always has a predictable, visible effect.
@@ -2799,7 +3664,8 @@ public sealed class EditorView : UserControl
     private Control? KindSection(SceneObjectKind kind) => kind switch
     {
         SceneObjectKind.Stamp or SceneObjectKind.Placeholder => _stampSection,
-        SceneObjectKind.Line or SceneObjectKind.Shape => _vectorSection,
+        SceneObjectKind.Line => _lineSection,
+        SceneObjectKind.Shape => _shapeSection,
         SceneObjectKind.Text => _textSection,
         SceneObjectKind.Composition => _compositionSection,
         _ => null,

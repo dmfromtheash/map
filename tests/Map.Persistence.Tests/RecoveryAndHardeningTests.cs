@@ -317,8 +317,8 @@ public class ContainerHardeningTests
             }
         }
 
-        var corruption = Assert.Throws<MapProjectCorruptedException>(() => MapProjectStore.Open(path));
-        Assert.Contains("entries", corruption.Message);
+        var limit = Assert.Throws<MapProjectResourceLimitException>(() => MapProjectStore.Open(path));
+        Assert.Contains("entries", limit.Message);
     }
 
     [Theory]
@@ -334,6 +334,45 @@ public class ContainerHardeningTests
 
         var corruption = Assert.Throws<MapProjectCorruptedException>(() => MapProjectStore.Open(path));
         Assert.Contains(expectedFragment, corruption.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("{\"documentId\":\"11111111-2222-3333-4444-555555555555\",\"layers\":[{\"id\":\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\",\"objects\":[],\"tiles\":[null]}],\"notes\":[]}")]
+    [InlineData("{\"documentId\":\"11111111-2222-3333-4444-555555555555\",\"layers\":[],\"notes\":[null]}")]
+    [InlineData("{\"documentId\":\"11111111-2222-3333-4444-555555555555\",\"layers\":[{\"id\":\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\",\"objects\":[{\"line\":{\"nodes\":[null],\"stroke\":{},\"portals\":[]}}]}],\"notes\":[]}")]
+    [InlineData("{\"documentId\":\"11111111-2222-3333-4444-555555555555\",\"layers\":[{\"id\":\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\",\"objects\":[{\"shape\":{\"regions\":[{\"nodes\":[null]}],\"fill\":{},\"stroke\":{},\"portals\":[null]}}]}],\"notes\":[]}")]
+    [InlineData("{\"documentId\":\"11111111-2222-3333-4444-555555555555\",\"layers\":[{\"id\":\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\",\"objects\":[{\"composition\":{\"items\":[],\"assets\":[null],\"grids\":[null],\"filters\":[null]}}]}],\"notes\":[]}")]
+    public void Null_elements_inside_scene_collections_are_reported_as_corruption(string sceneJson)
+    {
+        using var workspace = new TempWorkspace();
+        var path = SavedProject(workspace);
+        ReplaceSceneJson(path, sceneJson);
+        var bytesBeforeOpen = File.ReadAllBytes(path);
+
+        var corruption = Assert.Throws<MapProjectCorruptedException>(() => MapProjectStore.Open(path));
+
+        Assert.Contains("null", corruption.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(bytesBeforeOpen, File.ReadAllBytes(path));
+    }
+
+    [Fact]
+    public void Excessive_scene_object_cardinality_is_rejected_before_dto_materialization()
+    {
+        using var workspace = new TempWorkspace();
+        var path = SavedProject(workspace);
+        var objects = string.Join(
+            ',', Enumerable.Repeat("{}", MapProjectJsonBudget.MaxMaterializedObjects + 1));
+        var sceneJson =
+            "{\"documentId\":\"11111111-2222-3333-4444-555555555555\",\"layers\":[" +
+            "{\"id\":\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\",\"name\":\"l\"," +
+            "\"visible\":true,\"locked\":false,\"opacity\":1,\"objects\":[" + objects + "]}]}";
+        ReplaceSceneJson(path, sceneJson);
+        var bytesBeforeOpen = File.ReadAllBytes(path);
+
+        var limit = Assert.Throws<MapProjectResourceLimitException>(() => MapProjectStore.Open(path));
+
+        Assert.Contains("semantic JSON budget", limit.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(bytesBeforeOpen, File.ReadAllBytes(path));
     }
 
     [Theory]
@@ -399,8 +438,50 @@ public class ContainerHardeningTests
             stream.Write(huge);
         }
 
+        var limit = Assert.Throws<MapProjectResourceLimitException>(() => MapProjectStore.Open(path));
+        Assert.Contains("supported preview size", limit.Message);
+    }
+
+    [Fact]
+    public void A_preview_with_individually_valid_axes_but_excessive_pixel_area_is_rejected()
+    {
+        using var workspace = new TempWorkspace();
+        var path = SavedProject(workspace);
+        var huge = ProjectFixtures.PreviewPng();
+        // 5000 x 5000 is below the per-axis limit but above the 16-megapixel decode budget.
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(huge.AsSpan(16, 4), 5_000);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(huge.AsSpan(20, 4), 5_000);
+
+        using (var archive = ZipFile.Open(path, ZipArchiveMode.Update))
+        {
+            var entry = archive.GetEntry(MapProjectFormat.PreviewEntry)!;
+            using var stream = entry.Open();
+            stream.SetLength(0);
+            stream.Write(huge);
+        }
+
+        var limit = Assert.Throws<MapProjectResourceLimitException>(() => MapProjectStore.Open(path));
+        Assert.Contains("supported preview size", limit.Message);
+    }
+
+    [Fact]
+    public void A_preview_without_an_ihdr_first_chunk_is_rejected_before_dimension_parsing()
+    {
+        using var workspace = new TempWorkspace();
+        var path = SavedProject(workspace);
+        var malformed = ProjectFixtures.PreviewPng();
+        "IDAT"u8.CopyTo(malformed.AsSpan(12, 4));
+
+        using (var archive = ZipFile.Open(path, ZipArchiveMode.Update))
+        {
+            var entry = archive.GetEntry(MapProjectFormat.PreviewEntry)!;
+            using var stream = entry.Open();
+            stream.SetLength(0);
+            stream.Write(malformed);
+        }
+
         var corruption = Assert.Throws<MapProjectCorruptedException>(() => MapProjectStore.Open(path));
-        Assert.Contains("outside the supported preview size", corruption.Message);
+        Assert.Contains("not a PNG", corruption.Message);
     }
 
     /// <summary>Swaps scene.json content and fixes the recorded checksum, isolating the shape check.</summary>

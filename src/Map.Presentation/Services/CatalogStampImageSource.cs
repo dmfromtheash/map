@@ -18,27 +18,26 @@ public sealed class CatalogStampImageSource(
         var reference = document().Assets.FirstOrDefault(asset => asset.Sha256 == sha256);
         if (reference?.EmbeddedContent is { } embedded)
         {
-            return _cache.GetEncoded(sha256, embedded);
+            return _cache.GetEncoded(
+                sha256, embedded, reference.MediaType, reference.Extension);
         }
 
         var record = catalog.Find(sha256);
         if (record is not null)
         {
             var resolution = ResolveCatalog(record);
-            return resolution is null ? null : _cache.Get(sha256, resolution);
+            return resolution is null ? null : _cache.GetVerified(
+                sha256, resolution, sha256, record.MediaType, record.Extension);
         }
 
         if (reference is { Storage: ProjectAssetStorage.Linked, RelativePath: { } relative }
             && projectPath() is { } mapPath)
         {
-            var directory = Path.GetDirectoryName(mapPath);
-            if (directory is not null)
+            if (ProjectLinkedAssetPath.TryResolve(mapPath, relative, out var candidate)
+                && ProjectLinkedAssetPath.IsExistingFileWithoutReparsePoints(mapPath, candidate))
             {
-                var candidate = Path.GetFullPath(Path.Combine(directory, relative));
-                if (File.Exists(candidate) && Hash(candidate) == sha256)
-                {
-                    return _cache.Get(sha256, candidate);
-                }
+                return _cache.GetVerified(
+                    sha256, candidate, sha256, reference.MediaType, reference.Extension);
             }
         }
 
@@ -59,7 +58,15 @@ public sealed class CatalogStampImageSource(
             _resolved.Remove(record.Sha256);
         }
 
-        var resolution = catalog.Resolve(record);
+        AssetResolution resolution;
+        try
+        {
+            resolution = catalog.Resolve(record);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            return null;
+        }
         if (resolution.Status != AssetResolutionStatus.Available || resolution.Path is null)
         {
             return null;
@@ -69,12 +76,6 @@ public sealed class CatalogStampImageSource(
         _resolved[record.Sha256] =
             (resolution.Path, resolvedInfo.Length, resolvedInfo.LastWriteTimeUtc);
         return resolution.Path;
-    }
-
-    private static string Hash(string path)
-    {
-        using var stream = File.OpenRead(path);
-        return Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(stream));
     }
 
     public void Dispose() => _cache.Dispose();

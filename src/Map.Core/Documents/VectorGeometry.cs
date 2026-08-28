@@ -60,6 +60,13 @@ public sealed record VectorStrokeStyle
     public double Width { get; init; } = 8;
     public double Opacity { get; init; } = 1;
     public string Blend { get; init; } = "Normal";
+
+    /// <summary>Gaussian blur sigma in canvas units applied to the whole stroke; 0 = none.</summary>
+    public double Blur { get; init; }
+
+    /// <summary>Solid, dotted or dashed rendering of a colour stroke.</summary>
+    public StrokePattern Pattern { get; init; } = StrokePattern.Solid;
+
     public double Offset { get; init; }
     public VectorCap EndCap { get; init; } = VectorCap.Round;
     public VectorCap NodeCap { get; init; } = VectorCap.Round;

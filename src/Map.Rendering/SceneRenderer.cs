@@ -690,7 +690,8 @@ public static class SceneRenderer
             (float)(owner.X + owner.Width), (float)(owner.Y + owner.Height));
         using var ownerPaint = new SKPaint
         {
-            Color = SKColors.White.WithAlpha(objectAlpha), BlendMode = SKBlendMode.SrcOver,
+            Color = SKColors.White.WithAlpha(objectAlpha),
+            BlendMode = SKBlendMode.SrcOver,
         };
         canvas.SaveLayer(ownerRect, ownerPaint);
         canvas.ClipRect(ownerRect);
@@ -701,7 +702,8 @@ public static class SceneRenderer
         {
             using var paint = new SKPaint
             {
-                Color = ParseColor(background).WithScaledAlpha(objectAlpha), Style = SKPaintStyle.Fill,
+                Color = ParseColor(background).WithScaledAlpha(objectAlpha),
+                Style = SKPaintStyle.Fill,
             };
             canvas.DrawRect(0, 0, (float)composition.SourceWidth, (float)composition.SourceHeight, paint);
         }
@@ -725,12 +727,15 @@ public static class SceneRenderer
     {
         using var fill = new SKPaint
         {
-            Color = new SKColor(255, 0, 255, (byte)Math.Min(180, (int)objectAlpha)), Style = SKPaintStyle.Fill,
+            Color = new SKColor(255, 0, 255, (byte)Math.Min(180, (int)objectAlpha)),
+            Style = SKPaintStyle.Fill,
         };
         using var stroke = new SKPaint
         {
-            Color = new SKColor(60, 0, 60, objectAlpha), StrokeWidth = 3,
-            Style = SKPaintStyle.Stroke, IsAntialias = true,
+            Color = new SKColor(60, 0, 60, objectAlpha),
+            StrokeWidth = 3,
+            Style = SKPaintStyle.Stroke,
+            IsAntialias = true,
         };
         canvas.DrawRect(rect, fill); canvas.DrawRect(rect, stroke);
         canvas.DrawLine(rect.Left, rect.Top, rect.Right, rect.Bottom, stroke);
@@ -782,7 +787,9 @@ public static class SceneRenderer
         using var texturePaint = new SKPaint
         {
             Color = SKColors.White.WithAlpha((byte)Math.Clamp(Math.Round(filter.TextureOpacity * 255), 0, 255)),
-            BlendMode = SKBlendMode.SoftLight, IsAntialias = false, Shader = shader,
+            BlendMode = SKBlendMode.SoftLight,
+            IsAntialias = false,
+            Shader = shader,
         };
         canvas.DrawRect(rect, texturePaint);
     }
@@ -806,7 +813,8 @@ public static class SceneRenderer
         using var paint = new SKPaint
         {
             Color = ParseColor(grid.Color).WithScaledAlpha((byte)Math.Clamp(Math.Round(grid.Opacity * 255), 0, 255)),
-            StrokeWidth = (float)Math.Max(0.1, grid.LineWidth), IsAntialias = true,
+            StrokeWidth = (float)Math.Max(0.1, grid.LineWidth),
+            IsAntialias = true,
             Style = SKPaintStyle.Stroke,
         };
         canvas.Save();
@@ -845,19 +853,19 @@ public static class SceneRenderer
         var startRow = (int)Math.Floor(minY / dy) - 2;
         using var path = new SKPath();
         for (var column = startColumn; column <= startColumn + columns; column += lod)
-        for (var row = startRow; row <= startRow + rows; row += lod)
-        {
-            var cx = pointy ? column * dx + (row % 2 == 0 ? 0 : dx / 2) : column * dx;
-            var cy = pointy ? row * dy : row * dy + (column % 2 == 0 ? 0 : dy / 2);
-            for (var vertex = 0; vertex < 6; vertex++)
+            for (var row = startRow; row <= startRow + rows; row += lod)
             {
-                var angle = (pointy ? -90 : 0) + vertex * 60;
-                var vx = cx + Math.Cos(angle * Math.PI / 180) * size;
-                var vy = cy + Math.Sin(angle * Math.PI / 180) * size;
-                if (vertex == 0) path.MoveTo((float)vx, (float)vy); else path.LineTo((float)vx, (float)vy);
+                var cx = pointy ? column * dx + (row % 2 == 0 ? 0 : dx / 2) : column * dx;
+                var cy = pointy ? row * dy : row * dy + (column % 2 == 0 ? 0 : dy / 2);
+                for (var vertex = 0; vertex < 6; vertex++)
+                {
+                    var angle = (pointy ? -90 : 0) + vertex * 60;
+                    var vx = cx + Math.Cos(angle * Math.PI / 180) * size;
+                    var vy = cy + Math.Sin(angle * Math.PI / 180) * size;
+                    if (vertex == 0) path.MoveTo((float)vx, (float)vy); else path.LineTo((float)vx, (float)vy);
+                }
+                path.Close();
             }
-            path.Close();
-        }
         canvas.DrawPath(path, paint);
     }
 
@@ -871,7 +879,8 @@ public static class SceneRenderer
         {
             IsAntialias = true,
             Color = ParseColor(style.FillColor).WithScaledAlpha(objectAlpha),
-            BlendMode = ParseBlend(style.Blend), Style = SKPaintStyle.Fill,
+            BlendMode = ParseBlend(style.Blend),
+            Style = SKPaintStyle.Fill,
             ImageFilter = style.Blur > 0 ? SKImageFilter.CreateBlur((float)style.Blur, (float)style.Blur) : null,
         };
         var centreX = rect.MidX; var centreY = rect.MidY;
@@ -897,7 +906,9 @@ public static class SceneRenderer
                 {
                     Color = SKColors.Black.WithAlpha((byte)Math.Clamp(Math.Round(style.ShadowOpacity * objectAlpha), 0, 255)),
                     ImageFilter = SKImageFilter.CreateBlur((float)style.ShadowBlur, (float)style.ShadowBlur),
-                    IsAntialias = true, BlendMode = ParseBlend(style.Blend), Style = SKPaintStyle.Fill,
+                    IsAntialias = true,
+                    BlendMode = ParseBlend(style.Blend),
+                    Style = SKPaintStyle.Fill,
                 };
                 DrawTextRun(canvas, line, x + (float)style.ShadowOffsetX, y + (float)style.ShadowOffsetY,
                     lineIndex, style, font, shadow);
@@ -906,9 +917,11 @@ public static class SceneRenderer
             {
                 using var outline = new SKPaint
                 {
-                    Style = SKPaintStyle.Stroke, StrokeWidth = (float)style.OutlineWidth,
+                    Style = SKPaintStyle.Stroke,
+                    StrokeWidth = (float)style.OutlineWidth,
                     Color = ParseColor(style.OutlineColor).WithScaledAlpha(objectAlpha),
-                    IsAntialias = true, BlendMode = ParseBlend(style.Blend),
+                    IsAntialias = true,
+                    BlendMode = ParseBlend(style.Blend),
                 };
                 DrawTextRun(canvas, line, x, y, lineIndex, style, font, outline);
             }
@@ -938,6 +951,26 @@ public static class SceneRenderer
     private static void DrawVectorShape(
         SKCanvas canvas, SceneObject owner, ShapeStyle shape, byte objectAlpha, RenderOptions options)
     {
+        // The stroke's blend/blur act as the shape's whole-object blend and blur (docs/02 §8):
+        // fill and stroke composite against the backdrop as one image, so a Multiply shape does
+        // not multiply its own fill under its stroke twice.
+        var overallBlend = ParseBlend(shape.Stroke.Blend);
+        var wrapped = overallBlend != SKBlendMode.SrcOver || shape.Stroke.Blur > 0;
+        var strokeStyle = shape.Stroke;
+        if (wrapped)
+        {
+            using var overallPaint = new SKPaint
+            {
+                BlendMode = overallBlend,
+                ImageFilter = shape.Stroke.Blur > 0
+                    ? SKImageFilter.CreateBlur((float)shape.Stroke.Blur, (float)shape.Stroke.Blur)
+                    : null,
+            };
+            canvas.SaveLayer(ToRect(SceneGeometry.BoundsOf(owner)), overallPaint);
+            overallPaint.ImageFilter?.Dispose();
+            strokeStyle = strokeStyle with { Blend = "Normal", Blur = 0 };
+        }
+
         canvas.SaveLayer(ToRect(SceneGeometry.BoundsOf(owner)), null);
         foreach (var region in shape.Regions)
         {
@@ -984,7 +1017,12 @@ public static class SceneRenderer
         foreach (var region in shape.Regions)
         {
             var points = RegionPoints(owner, region);
-            DrawVectorStroke(canvas, owner, points, closed: true, shape.Portals, shape.Stroke, objectAlpha, options);
+            DrawVectorStroke(canvas, owner, points, closed: true, shape.Portals, strokeStyle, objectAlpha, options);
+        }
+
+        if (wrapped)
+        {
+            canvas.Restore();
         }
     }
 
@@ -1057,14 +1095,9 @@ public static class SceneRenderer
                 StrokeCap = ToStrokeCap(style.EndCap),
                 StrokeJoin = SKStrokeJoin.Round,
                 BlendMode = ParseBlend(style.Blend),
+                ImageFilter = BuildStrokeFilter(style),
+                PathEffect = BuildStrokeDash(style),
             };
-            if (style.ShadowOpacity > 0)
-            {
-                paint.ImageFilter = SKImageFilter.CreateDropShadow(
-                    (float)style.ShadowOffsetX, (float)style.ShadowOffsetY,
-                    (float)style.ShadowBlur, (float)style.ShadowBlur,
-                    SKColors.Black.WithAlpha(Alpha(style.ShadowOpacity)));
-            }
 
             using var path = new SKPath();
             foreach (var piece in pieces)
@@ -1075,6 +1108,7 @@ public static class SceneRenderer
             }
             canvas.DrawPath(path, paint);
             paint.ImageFilter?.Dispose();
+            paint.PathEffect?.Dispose();
         }
 
         if (style.NodeCap != VectorCap.Butt)
@@ -1146,16 +1180,11 @@ public static class SceneRenderer
             BlendMode = ParseBlend(style.Blend),
             ColorFilter = BuildColorFilter(new StampStyle(style.AssetSha256!)
             {
-                Hue = style.Hue, Saturation = style.Saturation,
+                Hue = style.Hue,
+                Saturation = style.Saturation,
             }),
+            ImageFilter = BuildStrokeFilter(style),
         };
-        if (style.ShadowOpacity > 0)
-        {
-            paint.ImageFilter = SKImageFilter.CreateDropShadow(
-                (float)style.ShadowOffsetX, (float)style.ShadowOffsetY,
-                (float)style.ShadowBlur, (float)style.ShadowBlur,
-                SKColors.Black.WithAlpha(Alpha(style.ShadowOpacity)));
-        }
         var spacing = Math.Max(1, style.Width * Math.Max(0.1, style.AssetSpacing));
         var drawn = 0;
         foreach (var piece in pieces)
@@ -1177,6 +1206,38 @@ public static class SceneRenderer
         }
         paint.ImageFilter?.Dispose();
         paint.ColorFilter?.Dispose();
+    }
+
+    /// <summary>Blur first, drop shadow around it - the same chain the stamp path uses.</summary>
+    private static SKImageFilter? BuildStrokeFilter(VectorStrokeStyle style)
+    {
+        SKImageFilter? filter = null;
+        if (style.Blur > 0)
+        {
+            filter = SKImageFilter.CreateBlur((float)style.Blur, (float)style.Blur);
+        }
+
+        if (style.ShadowOpacity > 0)
+        {
+            filter = SKImageFilter.CreateDropShadow(
+                (float)style.ShadowOffsetX, (float)style.ShadowOffsetY,
+                (float)style.ShadowBlur, (float)style.ShadowBlur,
+                SKColors.Black.WithAlpha(Alpha(style.ShadowOpacity)), filter);
+        }
+
+        return filter;
+    }
+
+    /// <summary>Dash intervals scale with the stroke width so the rhythm survives any zoom.</summary>
+    private static SKPathEffect? BuildStrokeDash(VectorStrokeStyle style)
+    {
+        var width = (float)Math.Max(1, style.Width);
+        return style.Pattern switch
+        {
+            StrokePattern.Dotted => SKPathEffect.CreateDash([width * 0.5f, width * 1.5f], 0),
+            StrokePattern.Dashed => SKPathEffect.CreateDash([width * 3f, width * 2f], 0),
+            _ => null,
+        };
     }
 
     private static (VectorPoint A, VectorPoint B) Offset(VectorPoint a, VectorPoint b, double amount)

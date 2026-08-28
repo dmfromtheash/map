@@ -38,10 +38,11 @@ public sealed class ReplaceObjectWithManyCommand : IEditCommand
 
 /// <summary>Attaches a content-addressed asset to a vector style in the same undo transaction.</summary>
 public sealed class VectorAssetStyleCommand(
-    SceneObject before, SceneObject after, MapAssetReference asset) : IEditCommand
+    SceneObject before, SceneObject after, MapAssetReference asset,
+    string name = "Use asset stroke") : IEditCommand
 {
     private bool _introduced;
-    public string Name => "Use asset stroke";
+    public string Name => name;
 
     public MapDocument Apply(MapDocument document)
     {

@@ -1,6 +1,6 @@
 # Источники и проверка
 
-Дата актуальной проверки: **26.08.2026**.
+Дата актуальной проверки: **28.08.2026**.
 
 При конфликте источников приоритет: более свежая официальная документация/updates → официальный tutorial → наблюдаемое ручное поведение → вторичный обзор. Субтитры — вспомогательный источник и не доказывают неясную деталь сами по себе.
 
@@ -80,6 +80,33 @@ geometry. DevTools/network/storage и извлечение ассетов не �
 - [Godot Windows/project export](https://docs.godotengine.org/en/stable/tutorials/export/exporting_projects.html)
 
 ## AI/process candidates — официальные или исходные страницы
+
+### Активный Codex workflow
+
+- [GPT-5.6 Sol model](https://developers.openai.com/api/docs/models/gpt-5.6-sol) — активный coding model, контекст, reasoning и поддерживаемые tools
+- [GPT-5.6 prompting guide](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-5.6) — outcome-first структура, tool guidance и autonomy boundary
+- [AGENTS.md](https://learn.chatgpt.com/docs/agent-configuration/agents-md) — репозиторные инструкции Codex
+- [Subagents](https://learn.chatgpt.com/docs/agent-configuration/subagents) — независимые параллельные подзадачи, только когда они действительно разделимы
+- [Long-running work](https://learn.chatgpt.com/docs/long-running-work) — checkpoints и устойчивое состояние длинного этапа
+- [Sandboxing](https://learn.chatgpt.com/docs/sandboxing) и [approvals/security](https://learn.chatgpt.com/docs/agent-approvals-security) — одна явная граница полномочий вместо повторяющихся запретов
+- [OpenAI: Codex just got better for developers](https://www.youtube.com/watch?v=eiQgljOrkWU) — официальный video overview с главой GPT-5.6 Sol; transcript через Browser не был доступен, поэтому скрытые детали из видео не приписывались
+- [Практический 6-project Codex vs Claude experiment](https://github.com/AdrielRod/codex-vs-claude-code) — неофициальный воспроизводимый источник для сравнения поведения, не benchmark продукта
+- [Hacker News discussion](https://news.ycombinator.com/item?id=46391391) — смешанные пользовательские оценки; только secondary/anecdotal evidence
+
+### Проверочные инструменты
+
+- [pre-commit](https://pre-commit.com/)
+- [Lychee](https://github.com/lycheeverse/lychee)
+- [NuGet Audit](https://learn.microsoft.com/en-us/nuget/concepts/auditing-packages)
+- [dotnet format](https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-format)
+- [dotnet-coverage](https://learn.microsoft.com/en-us/dotnet/core/additional-tools/dotnet-coverage)
+- [dotnet-counters](https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-counters)
+- [dotnet-gcdump](https://learn.microsoft.com/en-us/dotnet/core/diagnostics/dotnet-gcdump)
+- [Stryker.NET](https://stryker-mutator.io/docs/stryker-net/introduction/)
+- [Avalonia Headless testing](https://docs.avaloniaui.net/docs/testing/setting-up-the-headless-platform)
+- [WinAppDriver](https://github.com/microsoft/WinAppDriver)
+- [FsCheck](https://fscheck.github.io/FsCheck/)
+- [ArchUnitNET](https://github.com/TNG/ArchUnitNET)
 
 - [Claude Code common workflows — Work with images](https://code.claude.com/docs/en/common-workflows#work-with-images)
 - [Claude Code computer use](https://code.claude.com/docs/en/computer-use) — CLI preview только macOS; Windows Desktop не равен запрошенной консольной версии

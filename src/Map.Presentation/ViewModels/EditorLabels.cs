@@ -119,8 +119,42 @@ public static class EditorLabels
         "Normal" => "Обычное",
         "Multiply" => "Умножение",
         "Screen" => "Осветление",
+        "Overlay" => "Перекрытие",
+        "Darken" => "Затемнение",
+        "Lighten" => "Замена светлым",
+        "SoftLight" => "Мягкий свет",
+        "HardLight" => "Жёсткий свет",
+        "Difference" => "Разница",
+        "Add" => "Сложение",
         _ => blend,
     };
+
+    public static string Pattern(StrokePattern pattern) => pattern switch
+    {
+        Core.Documents.StrokePattern.Dotted => "Точками",
+        Core.Documents.StrokePattern.Dashed => "Штрихами",
+        _ => "Сплошная",
+    };
+
+    public static string Cap(VectorCap cap) => cap switch
+    {
+        VectorCap.Round => "Скруглённый",
+        VectorCap.Square => "Квадратный",
+        _ => "Срез",
+    };
+
+    public static string Alignment(TextAlignment alignment) => alignment switch
+    {
+        TextAlignment.Center => "По центру",
+        TextAlignment.Right => "Справа",
+        _ => "Слева",
+    };
+
+    /// <summary>The named state of a drop shadow: off, the standard preset, or custom values.</summary>
+    public static string ShadowState(double offsetX, double offsetY, double blur, double opacity) =>
+        opacity <= 0
+            ? "Нет"
+            : ShadowPreset.IsStandard(offsetX, offsetY, blur, opacity) ? "Стандартная" : "Настроенная";
 
     public static string MaskMode(MaskPaintMode mode) =>
         mode == MaskPaintMode.Hide ? "Скрывать" : "Возвращать";

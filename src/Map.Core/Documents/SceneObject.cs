@@ -27,6 +27,15 @@ public sealed record StampStyle
 
     public string AssetSha256 { get; init; }
 
+    /// <summary>
+    /// World size the asset had at 100 % scale, captured at placement. Null on files written
+    /// before Stage 10D; the inspector then adopts the current size as the 100 % baseline on the
+    /// first scale edit, which is stable across reopen because nothing else moves it.
+    /// </summary>
+    public double? ReferenceWidth { get; init; }
+
+    public double? ReferenceHeight { get; init; }
+
     public bool FlipHorizontal { get; init; }
     public bool FlipVertical { get; init; }
 

@@ -1,21 +1,22 @@
 minimum_pre_commit_version: "4.6.2"
 default_install_hook_types: [pre-commit]
 
-# Область хуков: структура репозитория и локальные ссылки.
-#
-# Сканера секретов здесь намеренно нет. Map — локальная офлайн-программа для
-# личного использования: нет сервера, аккаунтов, API-ключей и внешних
-# получателей данных, поэтому искать такому сканеру нечего. Практическая цена
-# была высокой: hook `gitleaks` объявлен как `language: golang`, то есть
-# pre-commit скачивает Go-тулчейн и собирает gitleaks из исходников, а
-# `gitleaks git` дополнительно проходит по истории. Это надолго вешало коммит.
-#
-# Возврат такой проверки — отдельное решение владельца, и только если в проекте
-# реально появятся секреты (интеграция, ключ, аккаунт).
+# Быстрый commit-gate: структура, локальные ссылки и контракт активного prompt.
+# Exact commits закрепляют исполняемый hook code; комментарий сохраняет release tag.
+# Security-проверки выбираются по trust boundary в docs/11_CODEX_VERIFICATION_PROTOCOL.md.
 
 repos:
+  - repo: local
+    hooks:
+      - id: stage-prompt-contract
+        name: active Codex stage prompt contract
+        entry: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-stage-prompts.ps1
+        language: system
+        pass_filenames: false
+        files: ^docs/prompts/.*\.md$
+
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v6.0.0
+    rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c  # v6.0.0
     hooks:
       - id: check-added-large-files
         args: ["--maxkb=5120"]
@@ -32,7 +33,7 @@ repos:
         args: ["--branch", "main"]
 
   - repo: https://github.com/lycheeverse/lychee
-    rev: lychee-v0.24.2
+    rev: 2bba271688c1abb1503097a064e6c3bc1d1b6a9b  # lychee-v0.24.2
     hooks:
       - id: lychee-system
         args: ["--offline", "--include-fragments", "--no-progress"]

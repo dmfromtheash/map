@@ -66,6 +66,27 @@ public sealed class AssetLibraryValidationTests : IDisposable
     }
 
     [Fact]
+    public void An_acyclic_collection_chain_cannot_exceed_the_ui_tree_depth_budget()
+    {
+        var document = Healthy();
+        var parentId = document.Collections[0].Id;
+        for (var depth = 1; depth <= AssetLibraryDocument.MaxCollectionDepth; depth++)
+        {
+            var id = $"col-depth-{depth}";
+            document.Collections.Add(new AssetCollection
+            {
+                Id = id,
+                Name = $"Уровень {depth}",
+                ParentId = parentId,
+                Order = depth,
+            });
+            parentId = id;
+        }
+
+        AssertDamaged(document, "глубже");
+    }
+
+    [Fact]
     public void A_variant_that_names_a_content_record_nobody_stores_is_a_damaged_index()
     {
         var document = Healthy();
@@ -231,6 +252,247 @@ public sealed class AssetLibraryValidationTests : IDisposable
         Assert.Equal(bytes, File.ReadAllBytes(path));
         Assert.Empty(catalog.Sets);
         Assert.Empty(catalog.CollectionTree());
+    }
+
+    [Fact]
+    public void An_oversized_catalog_is_refused_from_file_length_before_reading_it_all()
+    {
+        var path = Index();
+        using (var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+        {
+            stream.SetLength(AssetLibraryJsonBudget.MaxEncodedBytes + 1);
+        }
+
+        var catalog = new AssetCatalog(_root);
+
+        Assert.Equal(AssetLibraryStatus.Damaged, catalog.Status);
+        Assert.Contains("budget", catalog.Diagnostic, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(AssetLibraryJsonBudget.MaxEncodedBytes + 1, new FileInfo(path).Length);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void V1_and_v2_record_cardinality_is_bounded_before_deserialization(bool legacy)
+    {
+        var path = Index();
+        var records = string.Join(',', Enumerable.Repeat("{}", AssetLibraryJsonBudget.MaxRecords + 1));
+        var json = legacy ? $"[{records}]" : $"{{\"records\":[{records}]}}";
+        var bytes = Encoding.UTF8.GetBytes(json);
+        File.WriteAllBytes(path, bytes);
+
+        var catalog = new AssetCatalog(_root);
+
+        Assert.Equal(AssetLibraryStatus.Damaged, catalog.Status);
+        Assert.Contains("startup budget", catalog.Diagnostic, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(bytes, File.ReadAllBytes(path));
+    }
+
+    [Theory]
+    [InlineData("Recent")]
+    [InlineData("RECENT")]
+    public void Case_insensitive_serializer_aliases_cannot_bypass_array_budgets(string property)
+    {
+        var path = Index();
+        var entries = string.Join(',', Enumerable.Repeat("{}", AssetLibraryDocument.MaxRecent + 1));
+        var bytes = Encoding.UTF8.GetBytes($"{{\"{property}\":[{entries}]}}");
+        File.WriteAllBytes(path, bytes);
+
+        var catalog = new AssetCatalog(_root);
+
+        Assert.Equal(AssetLibraryStatus.Damaged, catalog.Status);
+        Assert.Contains("startup budget", catalog.Diagnostic, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(bytes, File.ReadAllBytes(path));
+    }
+
+    [Fact]
+    public void Duplicate_case_alias_arrays_share_one_aggregate_budget()
+    {
+        var path = Index();
+        var entries = string.Join(',', Enumerable.Repeat("{}", (AssetLibraryDocument.MaxRecent / 2) + 1));
+        var bytes = Encoding.UTF8.GetBytes($"{{\"recent\":[{entries}],\"Recent\":[{entries}]}}");
+        File.WriteAllBytes(path, bytes);
+
+        var catalog = new AssetCatalog(_root);
+
+        Assert.Equal(AssetLibraryStatus.Damaged, catalog.Status);
+        Assert.Contains("startup budget", catalog.Diagnostic, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(bytes, File.ReadAllBytes(path));
+    }
+
+    [Fact]
+    public void Case_aliased_current_variant_map_is_bounded_before_dictionary_materialization()
+    {
+        var pairs = string.Join(',', Enumerable.Range(0, AssetLibraryJsonBudget.MaxCurrentVariants + 1)
+            .Select(index => $"\"set-{index}\":\"variant-{index}\""));
+        var bytes = Encoding.UTF8.GetBytes($"{{\"CurrentVariantBySet\":{{{pairs}}}}}");
+
+        var failure = Assert.Throws<InvalidDataException>(() => AssetLibraryJsonBudget.Validate(bytes));
+
+        Assert.Contains("current-variant", failure.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void An_index_with_a_null_record_is_damaged_instead_of_throwing_during_reindex()
+    {
+        var document = Healthy();
+        document.Records.Add(null!);
+
+        AssertDamaged(document, "пустой элемент");
+    }
+
+    [Theory]
+    [InlineData("../outside.png")]
+    [InlineData("thumbnails/../../outside.png")]
+    [InlineData(@"thumbnails\outside.png")]
+    [InlineData("C:/outside.png")]
+    [InlineData("thumbnails/CON.png")]
+    [InlineData("thumbnails/COM1.jpg")]
+    [InlineData("thumbnails/lpt\u00b3.webp")]
+    [InlineData("thumbnails/bad\0name.png")]
+    public void An_unsafe_thumbnail_path_is_a_damaged_index(string relativePath)
+    {
+        var document = Healthy();
+        document.Records[0] = document.Records[0] with { ThumbnailRelativePath = relativePath };
+
+        AssertDamaged(document, "путь миниатюры");
+    }
+
+    [Theory]
+    [InlineData("../outside.png")]
+    [InlineData("originals/../../outside.png")]
+    [InlineData(@"originals\outside.png")]
+    [InlineData("C:/outside.png")]
+    [InlineData("originals/NUL.png")]
+    [InlineData("originals/com\u00b9.jpg")]
+    [InlineData("originals/bad\0name.png")]
+    public void An_unsafe_stored_original_path_is_a_damaged_index(string relativePath)
+    {
+        var document = Healthy();
+        document.Records[0] = document.Records[0] with { StoredRelativePath = relativePath };
+
+        AssertDamaged(document, "путь оригинала");
+    }
+
+    [Theory]
+    [InlineData("displayName")]
+    [InlineData("originalFileName")]
+    [InlineData("mediaType")]
+    [InlineData("extension")]
+    [InlineData("pack")]
+    public void A_null_required_record_string_is_a_damaged_index(string field)
+    {
+        var document = Healthy();
+        document.Records[0] = field switch
+        {
+            "displayName" => document.Records[0] with { DisplayName = null! },
+            "originalFileName" => document.Records[0] with { OriginalFileName = null! },
+            "mediaType" => document.Records[0] with { MediaType = null! },
+            "extension" => document.Records[0] with { Extension = null! },
+            "pack" => document.Records[0] with { Pack = null! },
+            _ => throw new ArgumentOutOfRangeException(nameof(field)),
+        };
+
+        AssertDamaged(document, "обязательных текстовых полей");
+    }
+
+    [Fact]
+    public void A_null_record_tag_is_a_damaged_index_before_search()
+    {
+        var document = Healthy();
+        document.Records[0] = document.Records[0] with { Tags = [null!] };
+
+        AssertDamaged(document, "тег");
+    }
+
+    [Fact]
+    public void A_null_set_tag_is_a_damaged_index_before_grouping()
+    {
+        var document = Healthy();
+        document.Sets[0] = document.Sets[0] with { Tags = [null!] };
+
+        AssertDamaged(document, "тег");
+    }
+
+    [Theory]
+    [InlineData("width")]
+    [InlineData("height")]
+    [InlineData("byteLength")]
+    [InlineData("pixelArea")]
+    public void Invalid_image_metadata_is_a_damaged_index_before_placement(string field)
+    {
+        var document = Healthy();
+        document.Records[0] = field switch
+        {
+            "width" => document.Records[0] with { Width = 0 },
+            "height" => document.Records[0] with { Height = 0 },
+            "byteLength" => document.Records[0] with { ByteLength = 0 },
+            "pixelArea" => document.Records[0] with
+            {
+                Width = AssetImagePolicy.MaxDimension,
+                Height = AssetImagePolicy.MaxDimension,
+            },
+            _ => throw new ArgumentOutOfRangeException(nameof(field)),
+        };
+
+        AssertDamaged(document, "параметры изображения");
+    }
+
+    [Theory]
+    [InlineData("image/png", "exe")]
+    [InlineData("image/jpeg", "png")]
+    [InlineData("image/webp", "jpg")]
+    [InlineData("application/octet-stream", "png")]
+    public void A_mismatched_or_unsupported_image_format_is_damaged_before_placement(
+        string mediaType,
+        string extension)
+    {
+        var document = Healthy();
+        document.Records[0] = document.Records[0] with
+        {
+            MediaType = mediaType,
+            Extension = extension,
+        };
+
+        AssertDamaged(document, "формат изображения");
+    }
+
+    [Fact]
+    public void A_malformed_content_hash_is_a_damaged_index()
+    {
+        var document = Healthy();
+        document.Records[0] = document.Records[0] with { Sha256 = "not-a-sha" };
+
+        AssertDamaged(document, "SHA-256");
+    }
+
+    [Theory]
+    [InlineData(@"\\server\share\asset.png")]
+    [InlineData(@"\\.\NUL")]
+    [InlineData(@"\\?\C:\assets\asset.png")]
+    [InlineData(@"C:\assets\asset.png:payload")]
+    [InlineData(@"C:assets\asset.png")]
+    [InlineData(@"\assets\asset.png")]
+    public void A_catalog_linked_path_cannot_name_network_device_or_ads_content(string path)
+    {
+        var document = Healthy();
+        document.Records[0] = document.Records[0] with { LinkedPath = path };
+
+        AssertDamaged(document, "linked path");
+    }
+
+    [Fact]
+    public void A_normal_local_absolute_catalog_linked_path_remains_valid()
+    {
+        var path = Index();
+        var document = Healthy();
+        document.Records[0] = document.Records[0] with
+        {
+            LinkedPath = Path.Combine(_root, "external", "asset.png"),
+        };
+        File.WriteAllBytes(path, JsonSerializer.SerializeToUtf8Bytes(document, Options));
+
+        Assert.Equal(AssetLibraryStatus.Ready, new AssetCatalog(_root).Status);
     }
 
     [Fact]

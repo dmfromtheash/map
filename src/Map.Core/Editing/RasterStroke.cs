@@ -25,6 +25,33 @@ public sealed record BrushTexture
     public byte[] Pixels { get; }
 }
 
+/// <summary>
+/// An alpha-only brush tip: the dab takes this silhouette instead of the procedural circle.
+/// Colour still comes from the brush; the tip only shapes coverage, which keeps the whole
+/// tile/undo pipeline single-channel and unchanged.
+/// </summary>
+public sealed record BrushTipShape
+{
+    public BrushTipShape(int width, int height, byte[] alpha)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
+        ArgumentNullException.ThrowIfNull(alpha);
+        if (alpha.Length != width * height)
+        {
+            throw new ArgumentException("Tip alpha buffer size does not match its dimensions.");
+        }
+
+        Width = width;
+        Height = height;
+        Alpha = alpha;
+    }
+
+    public int Width { get; }
+    public int Height { get; }
+    public byte[] Alpha { get; }
+}
+
 /// <summary>What the brush paints with. Shared by the brush tool, the mask tool and the land tool.</summary>
 public sealed record BrushSettings
 {
@@ -48,6 +75,38 @@ public sealed record BrushSettings
 
     /// <summary>Distance between dabs as a fraction of the radius.</summary>
     public double Spacing { get; init; } = 0.25;
+
+    /// <summary>Optional dab silhouette; null keeps the procedural soft circle.</summary>
+    public BrushTipShape? Tip { get; init; }
+
+    /// <summary>0..1: each dab may land up to 2×radius×Scatter away from the path.</summary>
+    public double Scatter { get; init; }
+
+    /// <summary>Base rotation of the tip silhouette, clockwise degrees.</summary>
+    public double AngleDegrees { get; init; }
+
+    /// <summary>Randomly mirror the tip per dab.</summary>
+    public bool RandomFlipHorizontal { get; init; }
+
+    public bool RandomFlipVertical { get; init; }
+
+    /// <summary>0..1: per-dab size varies by ±SizeJitter of the radius.</summary>
+    public double SizeJitter { get; init; }
+
+    /// <summary>0..1: per-dab coverage may drop by up to this fraction.</summary>
+    public double OpacityJitter { get; init; }
+
+    /// <summary>
+    /// Seed of the per-stroke randomness. It is fixed BEFORE the stroke command exists, so the
+    /// committed tiles never depend on replay: undo/redo restore bytes, they never re-roll.
+    /// </summary>
+    public int Seed { get; init; }
+
+    /// <summary>Core-only pen dynamics: stylus pressure scales the dab size.</summary>
+    public bool PressureAffectsSize { get; init; }
+
+    /// <summary>Core-only pen dynamics: stylus pressure scales the dab coverage.</summary>
+    public bool PressureAffectsOpacity { get; init; }
 }
 
 /// <summary>Direction of a mask stroke: hide the layer under the brush, or bring it back.</summary>
@@ -69,6 +128,8 @@ public sealed class RasterStrokeSession
 {
     private readonly Dictionary<TileKey, byte[]> _coverage = [];
     private readonly TileMap _baseTiles;
+    private readonly bool _randomized;
+    private DeterministicRandom _random;
     private double _lastX;
     private double _lastY;
     private bool _started;
@@ -81,6 +142,9 @@ public sealed class RasterStrokeSession
 
         _baseTiles = baseTiles;
         Settings = settings;
+        _random = new DeterministicRandom(settings.Seed);
+        _randomized = settings.Scatter > 0 || settings.SizeJitter > 0 || settings.OpacityJitter > 0
+            || settings.RandomFlipHorizontal || settings.RandomFlipVertical;
     }
 
     public BrushSettings Settings { get; }
@@ -93,12 +157,19 @@ public sealed class RasterStrokeSession
     public bool IsEmpty => _coverage.Count == 0;
 
     /// <summary>Adds a dab at the world point, filling in the gap since the previous point.</summary>
-    public void AddPoint(double worldX, double worldY)
+    public void AddPoint(double worldX, double worldY) => AddPoint(worldX, worldY, pressure: 1.0);
+
+    /// <summary>
+    /// Same, with stylus pressure 0..1. Pressure only matters when the settings opted into pen
+    /// dynamics; fill-in dabs between two reported points take the newer point's pressure.
+    /// </summary>
+    public void AddPoint(double worldX, double worldY, double pressure)
     {
+        pressure = double.IsFinite(pressure) ? Math.Clamp(pressure, 0, 1) : 1.0;
         if (!_started)
         {
             _started = true;
-            Dab(worldX, worldY);
+            Dab(worldX, worldY, pressure);
         }
         else
         {
@@ -110,20 +181,61 @@ public sealed class RasterStrokeSession
             for (var travelled = step; travelled <= distance; travelled += step)
             {
                 var t = travelled / distance;
-                Dab(_lastX + (dx * t), _lastY + (dy * t));
+                Dab(_lastX + (dx * t), _lastY + (dy * t), pressure);
             }
 
-            Dab(worldX, worldY);
+            Dab(worldX, worldY, pressure);
         }
 
         _lastX = worldX;
         _lastY = worldY;
     }
 
-    private void Dab(double centerX, double centerY)
+    private void Dab(double centerX, double centerY, double pressure)
     {
         var radius = Settings.Radius;
+        var opacityFactor = 1.0;
+        var flipHorizontal = false;
+        var flipVertical = false;
+
+        // The draw order and count are fixed per dab, so one seed always replays one stroke.
+        if (_randomized)
+        {
+            var scatterAngle = _random.NextDouble() * Math.PI * 2;
+            var scatterDistance = _random.NextDouble() * Math.Clamp(Settings.Scatter, 0, 1) * radius * 2;
+            var sizeDraw = _random.NextDouble();
+            var opacityDraw = _random.NextDouble();
+            var flipHorizontalDraw = _random.NextDouble();
+            var flipVerticalDraw = _random.NextDouble();
+
+            centerX += Math.Cos(scatterAngle) * scatterDistance;
+            centerY += Math.Sin(scatterAngle) * scatterDistance;
+            radius *= 1.0 + (Math.Clamp(Settings.SizeJitter, 0, 1) * ((sizeDraw * 2) - 1));
+            opacityFactor = 1.0 - (Math.Clamp(Settings.OpacityJitter, 0, 1) * opacityDraw);
+            flipHorizontal = Settings.RandomFlipHorizontal && flipHorizontalDraw < 0.5;
+            flipVertical = Settings.RandomFlipVertical && flipVerticalDraw < 0.5;
+        }
+
+        if (Settings.PressureAffectsSize)
+        {
+            radius *= pressure;
+        }
+
+        if (Settings.PressureAffectsOpacity)
+        {
+            opacityFactor *= pressure;
+        }
+
+        if (radius < 0.25 || opacityFactor <= 0)
+        {
+            return; // a zero-pressure or fully jittered-out dab paints nothing
+        }
+
         var inner = radius * (1.0 - Math.Clamp(Settings.Softness, 0, 1));
+        var tip = Settings.Tip;
+        var angleRadians = -Settings.AngleDegrees * Math.PI / 180.0;
+        var angleCos = Math.Cos(angleRadians);
+        var angleSin = Math.Sin(angleRadians);
 
         var minTile = TileMap.KeyAt(centerX - radius, centerY - radius);
         var maxTile = TileMap.KeyAt(centerX + radius, centerY + radius);
@@ -155,17 +267,46 @@ public sealed class RasterStrokeSession
                     for (var x = x0; x <= x1; x++)
                     {
                         var dx = originX + x + 0.5 - centerX;
-                        var distance = Math.Sqrt((dx * dx) + (dy * dy));
-                        if (distance > radius)
+
+                        double alpha;
+                        if (tip is null)
                         {
-                            continue;
+                            var distance = Math.Sqrt((dx * dx) + (dy * dy));
+                            if (distance > radius)
+                            {
+                                continue;
+                            }
+
+                            alpha = distance <= inner
+                                ? 1.0
+                                : radius - inner <= 0 ? 1.0 : 1.0 - ((distance - inner) / (radius - inner));
+                        }
+                        else
+                        {
+                            // Rotate into the tip's frame, mirror per dab, then sample nearest.
+                            var localX = (dx * angleCos) - (dy * angleSin);
+                            var localY = (dx * angleSin) + (dy * angleCos);
+                            if (flipHorizontal)
+                            {
+                                localX = -localX;
+                            }
+
+                            if (flipVertical)
+                            {
+                                localY = -localY;
+                            }
+
+                            var u = ((localX / radius) + 1) * 0.5 * tip.Width;
+                            var v = ((localY / radius) + 1) * 0.5 * tip.Height;
+                            if (u < 0 || u >= tip.Width || v < 0 || v >= tip.Height)
+                            {
+                                continue;
+                            }
+
+                            alpha = tip.Alpha[((int)v * tip.Width) + (int)u] / 255.0;
                         }
 
-                        var falloff = distance <= inner
-                            ? 1.0
-                            : radius - inner <= 0 ? 1.0 : 1.0 - ((distance - inner) / (radius - inner));
-
-                        var value = (byte)Math.Clamp(Math.Round(falloff * 255), 0, 255);
+                        var value = (byte)Math.Clamp(Math.Round(alpha * opacityFactor * 255), 0, 255);
                         var index = rowStart + x;
 
                         // Max, not sum: overlapping dabs of one stroke must not darken the seam.

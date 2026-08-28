@@ -517,7 +517,7 @@ public sealed class Stage10LibraryStampTests : IDisposable
     }
 
     [Fact]
-    public void A_variant_whose_format_is_not_supported_refuses_the_gesture_by_name()
+    public void A_variant_whose_format_is_not_supported_is_refused_at_catalog_admission_by_name()
     {
         var editor = Editor(out var catalog);
         var record = catalog.Import(Source("gif-like", SKColors.Teal), new AssetImportOptions(), Stamp(0));
@@ -527,17 +527,13 @@ public sealed class Stage10LibraryStampTests : IDisposable
         var document = new AssetLibraryDocument();
         document.Records.Add(record with { MediaType = "image/gif", DisplayName = "Чужой формат" });
         AssetLibraryStore.AddSingleton(document, document.Records[0]);
-        catalog.ReplaceLibrary(document);
-
-        editor.RefreshLibrary();
-        editor.SelectAssetSet(catalog.FindSetForContent(record.Sha256)!.Id);
         var before = new Untouched(editor);
 
-        Assert.False(editor.PlaceCurrentVariantAt(100, 100));
+        var failure = Assert.Throws<ArgumentException>(() => catalog.ReplaceLibrary(document));
 
         before.AssertUnchanged(editor);
-        Assert.Contains("Формат", editor.StatusDetail, StringComparison.Ordinal);
-        Assert.Contains("Чужой формат", editor.StatusDetail, StringComparison.Ordinal);
+        Assert.Contains("формат", failure.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Чужой формат", failure.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -581,6 +577,80 @@ public sealed class Stage10LibraryStampTests : IDisposable
         var placed = Assert.Single(editor.Session.Document.Assets);
         Assert.Equal(record.Sha256, placed.Sha256);
         Assert.Null(placed.FallbackThumbnailPng);
+    }
+
+    [Fact]
+    public void Repeating_an_embedded_asset_reuses_document_bytes_even_after_catalog_source_is_deleted()
+    {
+        var editor = AreaEditor("reuse-owned-payload", out var catalog, out var resolver);
+        editor.StampPlacementMode = StampPlacementMode.One;
+        editor.RandomVariantAfterPlacement = false;
+
+        Assert.True(editor.PlaceCurrentVariantAt(100, 100));
+        var owned = Assert.Single(editor.Session.Document.Assets);
+        var record = catalog.Find(owned.Sha256)!;
+        var resolveCount = resolver.Resolved.Count;
+        File.Delete(Original(catalog, record.Sha256));
+
+        Assert.True(editor.PlaceCurrentVariantAt(200, 200));
+
+        Assert.Equal(resolveCount, resolver.Resolved.Count);
+        Assert.Same(owned, Assert.Single(editor.Session.Document.Assets));
+        Assert.Equal(2, Stamps(editor).Count);
+    }
+
+    [Fact]
+    public void Area_plan_over_the_project_asset_budget_is_refused_before_resolving_any_original()
+    {
+        var catalog = new AssetCatalog(Path.Combine(_root, "aggregate-preflight"));
+        var document = new AssetLibraryDocument();
+        var variantIds = new List<string>();
+        for (var index = 0; index < 5; index++)
+        {
+            var record = Synthetic(index) with
+            {
+                ByteLength = 60L * 1024 * 1024,
+                DisplayName = $"heavy-{index}",
+                OriginalFileName = $"heavy-{index}.png",
+            };
+            var variantId = $"var-heavy-{index}";
+            document.Records.Add(record);
+            document.Variants.Add(new AssetVariant
+            {
+                Id = variantId,
+                Sha256 = record.Sha256,
+                Label = record.DisplayName,
+            });
+            variantIds.Add(variantId);
+        }
+
+        document.Sets.Add(new AssetSet
+        {
+            Id = "set-heavy",
+            Name = "Тяжёлый набор",
+            VariantIds = variantIds,
+            CoverVariantId = variantIds[0],
+            ImportedUtc = DateTimeOffset.UnixEpoch,
+        });
+        catalog.ReplaceLibrary(document);
+        var resolver = new CountingResolver(new CatalogAssetContentResolver(catalog));
+        var editor = new EditorViewModel(
+            TestData.Document(), documentPath: null, startDirty: false,
+            new FakeProjectStore(), new FakeRecentMaps(), new FakeFilePicker(),
+            new FakePrompts(), new FakeLog(), clock: () => Stamp(0), assetCatalog: catalog,
+            assetResolver: resolver);
+        editor.SelectAssetSet("set-heavy");
+        editor.StampPlacementMode = StampPlacementMode.Area;
+        editor.RandomVariantAfterPlacement = true;
+        editor.StampAreaRadius = 200;
+        editor.StampDensity = 100;
+        var before = new Untouched(editor);
+
+        Assert.False(editor.PlaceCurrentVariantAt(300, 300));
+
+        before.AssertUnchanged(editor);
+        Assert.Empty(resolver.Resolved);
+        Assert.Contains("лимит", editor.StatusDetail, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -1311,6 +1381,162 @@ public sealed class Stage10LibraryStampTests : IDisposable
 
     private static SceneObject Shell(SceneObjectKind kind) => new(
         ObjectId.New(), kind, kind.ToString(), 0, 0, 10, 10, 0, "#FFFFFFFF", "#00000000", 1, true, false);
+
+    // ---------------------------------------------------------------- Stage 10D additions
+
+    [Fact]
+    public void A_placed_stamp_carries_its_reference_size_for_an_honest_100_percent()
+    {
+        var editor = Editor(out var catalog);
+        editor.RefreshLibrary();
+        editor.SelectAssetSet(ImportTwelve(catalog).Id);
+        editor.StampPlacementMode = StampPlacementMode.One;
+
+        Assert.True(editor.PlaceCurrentVariantAt(700, 400));
+
+        var stamp = Assert.Single(
+            editor.Session.Document.Layers.OfType<ObjectLayer>().SelectMany(l => l.Objects));
+        Assert.Equal(stamp.Width, stamp.Stamp!.ReferenceWidth);
+        Assert.Equal(stamp.Height, stamp.Stamp!.ReferenceHeight);
+    }
+
+    [Fact]
+    public void Replacing_the_asset_keeps_transform_effects_and_group_identity()
+    {
+        var editor = Editor(out var catalog);
+        editor.RefreshLibrary();
+        editor.SelectAssetSet(ImportTwelve(catalog).Id);
+        editor.StampPlacementMode = StampPlacementMode.One;
+        Assert.True(editor.PlaceCurrentVariantAt(300, 300));
+        Assert.True(editor.PlaceCurrentVariantAt(800, 300));
+
+        var placed = editor.Session.Document.Layers.OfType<ObjectLayer>()
+            .SelectMany(l => l.Objects).ToList();
+        editor.Session.SetSelection([placed[0].Id, placed[1].Id]);
+        Assert.True(editor.GroupSelection("Замена"));
+
+        editor.Session.SetSelection([placed[0].Id]);
+        editor.SetStampHueDegrees(25);
+        editor.SetStampFlip(vertical: true);
+        editor.SetSelectedOpacityPercent(60);
+        var styled = DocumentEditor.FindObject(editor.Session.Document, placed[0].Id)!;
+
+        var replacement = catalog.Import(
+            Source("replacement", SKColors.Crimson), new AssetImportOptions(), Stamp(9));
+        editor.ReplaceSelectedStampAsset(replacement);
+
+        var replaced = DocumentEditor.FindObject(editor.Session.Document, placed[0].Id)!;
+        Assert.Equal(replacement.Sha256, replaced.Stamp!.AssetSha256);
+        Assert.Equal(styled.X, replaced.X);
+        Assert.Equal(styled.Width, replaced.Width);
+        Assert.Equal(styled.Height, replaced.Height);
+        Assert.Equal(styled.RotationDegrees, replaced.RotationDegrees);
+        Assert.Equal(25, replaced.Stamp!.Hue);
+        Assert.True(replaced.Stamp!.FlipVertical);
+        Assert.Equal(0.6, replaced.ObjectOpacity, precision: 12);
+        Assert.Equal(styled.GroupId, replaced.GroupId);
+        Assert.Equal("Замена", replaced.GroupName);
+        Assert.Equal(styled.Stamp!.ReferenceWidth, replaced.Stamp!.ReferenceWidth);
+    }
+
+    [Fact]
+    public void A_library_asset_becomes_one_undoable_shape_fill_with_its_reference()
+    {
+        var editor = Editor(out var catalog);
+        editor.AddShape(ShapePrimitiveKind.Rectangle);
+        var shape = Assert.Single(
+            editor.Session.Document.Layers.OfType<ObjectLayer>().SelectMany(layer => layer.Objects));
+        editor.SelectObject(shape.Id);
+        var record = catalog.Import(
+            Source("shape-fill", SKColors.Goldenrod), new AssetImportOptions(), Stamp(10));
+        var depthBefore = editor.Session.UndoDepth;
+
+        editor.UseAssetAsSelectedShapeFill(record);
+
+        Assert.Equal(depthBefore + 1, editor.Session.UndoDepth);
+        Assert.Equal(record.Sha256,
+            DocumentEditor.FindObject(editor.Session.Document, shape.Id)!.Shape!.Fill.TextureAssetSha256);
+        Assert.Contains(editor.Session.Document.Assets, asset => asset.Sha256 == record.Sha256);
+
+        Assert.True(editor.Session.Undo());
+        Assert.Null(DocumentEditor.FindObject(editor.Session.Document, shape.Id)!.Shape!.Fill.TextureAssetSha256);
+        Assert.DoesNotContain(editor.Session.Document.Assets, asset => asset.Sha256 == record.Sha256);
+        Assert.True(editor.Session.Redo());
+        Assert.Equal(record.Sha256,
+            DocumentEditor.FindObject(editor.Session.Document, shape.Id)!.Shape!.Fill.TextureAssetSha256);
+    }
+
+    [Fact]
+    public void A_library_asset_can_become_the_named_brush_tip_without_document_history()
+    {
+        var editor = Editor(out var catalog);
+        var record = catalog.Import(
+            Source("brush-tip", SKColors.White), new AssetImportOptions(), Stamp(11));
+        var depthBefore = editor.Session.UndoDepth;
+
+        Assert.True(editor.UseAssetAsBrushTip(record));
+
+        Assert.Equal(depthBefore, editor.Session.UndoDepth);
+        Assert.Equal(record.DisplayName, editor.BrushTipName);
+        Assert.Equal(record.Width, editor.BrushSettings.Tip!.Width);
+        Assert.Equal(record.Height, editor.BrushSettings.Tip.Height);
+    }
+
+    [Fact]
+    public void Damaged_optional_thumbnail_does_not_block_a_verified_original()
+    {
+        _ = Editor(out var catalog);
+        var record = catalog.Import(
+            Source("valid-original", SKColors.ForestGreen), new AssetImportOptions(), Stamp(12));
+        File.WriteAllBytes(catalog.ThumbnailPath(record), []);
+
+        var resolution = new CatalogAssetContentResolver(catalog).Resolve(record);
+
+        Assert.True(resolution.IsAvailable);
+        Assert.NotNull(resolution.Reference!.EmbeddedContent);
+        Assert.Null(resolution.Reference.FallbackThumbnailPng);
+    }
+
+    [Fact]
+    public void Legacy_single_stamp_placement_also_ignores_a_damaged_optional_thumbnail()
+    {
+        var editor = Editor(out var catalog);
+        var record = catalog.Import(
+            Source("legacy-valid-original", SKColors.DarkSeaGreen),
+            new AssetImportOptions(), Stamp(13));
+        File.WriteAllBytes(catalog.ThumbnailPath(record), [1, 2, 3, 4]);
+
+        editor.PlaceStamp(record);
+
+        var placed = Assert.Single(editor.Session.Document.Assets);
+        Assert.Equal(record.Sha256, placed.Sha256);
+        Assert.NotNull(placed.EmbeddedContent);
+        Assert.Null(placed.FallbackThumbnailPng);
+    }
+
+    [Theory]
+    [InlineData("../../outside.png")]
+    [InlineData("thumbnails/bad\0name.png")]
+    public void A_malformed_optional_thumbnail_path_does_not_block_a_verified_original(
+        string thumbnailRelativePath)
+    {
+        var editor = Editor(out var catalog);
+        var imported = catalog.Import(
+            Source("valid-original-unsafe-thumb", SKColors.MediumSeaGreen),
+            new AssetImportOptions(), Stamp(14));
+        var malformed = imported with { ThumbnailRelativePath = thumbnailRelativePath };
+
+        var resolution = new CatalogAssetContentResolver(catalog).Resolve(malformed);
+        editor.PlaceStamp(malformed);
+
+        Assert.True(resolution.IsAvailable);
+        Assert.NotNull(resolution.Reference!.EmbeddedContent);
+        Assert.Null(resolution.Reference.FallbackThumbnailPng);
+        var placed = Assert.Single(editor.Session.Document.Assets);
+        Assert.Equal(imported.Sha256, placed.Sha256);
+        Assert.NotNull(placed.EmbeddedContent);
+        Assert.Null(placed.FallbackThumbnailPng);
+    }
 
     private EditorViewModel Editor(out AssetCatalog catalog)
     {

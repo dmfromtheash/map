@@ -67,6 +67,24 @@ ordered variant IDs, cover ID, collection/tags и default placement metadata. К
 
 Оригинал не изменяется. Производные хранят ссылку на source hash.
 
+### Текущий decode/cache envelope
+
+- original читается одним bounded handle: максимум 64 MiB encoded;
+- metadata принимается до pixel allocation: максимум 32 768 по оси, 32 MiPixels и 128 MiB
+  расчётного RGBA;
+- SHA-256 считается по тем же байтам, которые затем встраиваются или декодируются;
+- brush tip дополнительно ограничен 1024×1024;
+- Skia image cache ограничен одновременно числом элементов (64) и 256 MiB conservative resident
+  weight: расчётные RGBA pixels плюс encoded payload, который может удерживать lazy native image;
+- Library thumbnail — максимум 512×512, cache 96 элементов / 64 MiB;
+- место в обоих cache освобождается до нативного decode, чтобы limit был также peak gate;
+- optional fallback thumbnail дополнительно ограничена 8 MiB encoded, 2048 по оси и 4 MiPixels,
+  полностью декодируется для проверки и при любой ошибке отбрасывается, не делая исправный
+  original недоступным.
+
+Эти числа являются принятым интерактивным envelope DEC-015, а не обещанием полного учёта
+native/GPU overhead. Реальный peak дополнительно профилируется в Stage 11.
+
 Favorite/recent/current variant являются локальным пользовательским состоянием и не меняют
 лицензию или content identity. Исключение variant из set не удаляет original; удаление content —
 отдельное подтверждаемое действие вне foundation-среза.

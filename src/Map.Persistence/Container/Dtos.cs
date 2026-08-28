@@ -239,6 +239,12 @@ internal sealed class TextStyleDto
 internal sealed class StampStyleDto
 {
     [JsonPropertyName("assetSha256")] public string AssetSha256 { get; set; } = "";
+    [JsonPropertyName("referenceWidth")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? ReferenceWidth { get; set; }
+    [JsonPropertyName("referenceHeight")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? ReferenceHeight { get; set; }
     [JsonPropertyName("flipHorizontal")] public bool FlipHorizontal { get; set; }
     [JsonPropertyName("flipVertical")] public bool FlipVertical { get; set; }
     [JsonPropertyName("blend")] public string Blend { get; set; } = "Normal";
@@ -278,6 +284,8 @@ internal sealed class VectorStrokeDto
     [JsonPropertyName("width")] public double Width { get; set; }
     [JsonPropertyName("opacity")] public double Opacity { get; set; }
     [JsonPropertyName("blend")] public string Blend { get; set; } = "Normal";
+    [JsonPropertyName("blur")] public double Blur { get; set; }
+    [JsonPropertyName("pattern")] public string Pattern { get; set; } = "Solid";
     [JsonPropertyName("offset")] public double Offset { get; set; }
     [JsonPropertyName("endCap")] public string EndCap { get; set; } = "Round";
     [JsonPropertyName("nodeCap")] public string NodeCap { get; set; } = "Round";

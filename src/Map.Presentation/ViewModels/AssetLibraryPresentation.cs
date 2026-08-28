@@ -60,23 +60,25 @@ public sealed class CatalogAssetContentResolver(AssetCatalog catalog) : IAssetCo
     public AssetContentResolution Resolve(AssetRecord record)
     {
         ArgumentNullException.ThrowIfNull(record);
-        var (availability, path) = Verify(record);
-        if (availability != AssetAvailability.Available || path is null)
+        var payload = Read(record);
+        if (payload.Availability != AssetAvailability.Available || payload.Content is null)
         {
-            return AssetContentResolution.Failed(availability);
+            return AssetContentResolution.Failed(payload.Availability);
         }
 
         try
         {
-            var thumbnailPath = catalog.ThumbnailPath(record);
+            var thumbnail = catalog.TryThumbnailPath(record, out var thumbnailPath)
+                ? AssetImagePolicy.TryReadOptionalThumbnail(thumbnailPath!)
+                : null;
             return new AssetContentResolution(
                 AssetAvailability.Available,
                 new MapAssetReference(
                     record.Sha256, record.DisplayName, record.MediaType, record.Extension,
                     ProjectAssetStorage.Embedded, record.ImportedUtc,
                     record.Provenance.Source, record.Provenance.LicenseId,
-                    embeddedContent: File.ReadAllBytes(path),
-                    fallbackThumbnailPng: File.Exists(thumbnailPath) ? File.ReadAllBytes(thumbnailPath) : null));
+                    embeddedContent: payload.Content,
+                    fallbackThumbnailPng: thumbnail));
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -87,31 +89,40 @@ public sealed class CatalogAssetContentResolver(AssetCatalog catalog) : IAssetCo
 
     private (AssetAvailability Availability, string? Path) Verify(AssetRecord record)
     {
+        var payload = Read(record);
+        return (payload.Availability, payload.Path);
+    }
+
+    private (AssetAvailability Availability, string? Path, byte[]? Content) Read(AssetRecord record)
+    {
         ArgumentNullException.ThrowIfNull(record);
         if (!Supported.Contains(record.MediaType, StringComparer.OrdinalIgnoreCase))
         {
-            return (AssetAvailability.Unsupported, null);
+            return (AssetAvailability.Unsupported, null, null);
         }
 
         try
         {
-            var resolution = catalog.Resolve(record);
+            var resolution = catalog.ReadVerified(record);
             return resolution.Status switch
             {
-                AssetResolutionStatus.Available => (AssetAvailability.Available, resolution.Path),
-                AssetResolutionStatus.HashMismatch => (AssetAvailability.HashMismatch, resolution.Path),
-                _ => (AssetAvailability.Missing, resolution.Path),
+                AssetResolutionStatus.Available =>
+                    (AssetAvailability.Available, resolution.Path, resolution.Content),
+                AssetResolutionStatus.HashMismatch =>
+                    (AssetAvailability.HashMismatch, resolution.Path, null),
+                _ => (AssetAvailability.Missing, resolution.Path, null),
             };
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            return (AssetAvailability.Missing, null);
+            return (AssetAvailability.Missing, null, null);
         }
         catch (InvalidDataException)
         {
-            return (AssetAvailability.Unsupported, null);
+            return (AssetAvailability.Unsupported, null, null);
         }
     }
+
 }
 
 public enum AssetLibraryRowKind

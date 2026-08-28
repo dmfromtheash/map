@@ -2,14 +2,29 @@
 
 ## Последнее обновление
 
-2026-08-27. Stages 1–8 и Editor UX Rebuild находятся в истории. Stage 9A autosave journal +
-startup recovery независимо проверен; Stage 9 в целом остаётся `PARTIAL`. В Stage 10 реализованы
-input parity, 10B Library v2 / variant sets и 10C multi-selection/groups. Codex проверил точный
-Opus-диапазон 10C, нашёл два production-дефекта и закрыл их отдельным fix-срезом с red/green
-тестами и фоновым Release-driver. Production-логика 10C — `FACT`; нативный keyboard/pointer gate
-10C и прежние keyboard/DPI/file-picker/clean-context UX-gates 10B остаются `PARTIAL`/`BLOCKED`.
-Подробности: `docs/reviews/STAGE_10C_MULTI_SELECTION_VERIFICATION.md`. Следующий отдельный
-функциональный срез — 10D Object inspectors; не смешивать с 10E/10F или Stage 9B–9E.
+2026-08-28. Stages 1–8 и Editor UX Rebuild находятся в истории; Stage 9A проверен, Stage 9 в
+целом `PARTIAL`. В Stage 10 независимо принята production-логика 10C. Текущий branch
+`stage/10d-object-inspectors`; локальный checkpoint `HEAD` поверх base
+`4b50ba0a707b45ace00da607650ee4d5c1a952bb` содержит миграцию рабочего AI-стека на Codex 5.6
+Sol, завершённый 10D Object inspectors и связанные security fixes.
+
+`FACT` checkpoint snapshot: Release build 0 warnings/errors; 683/683 tests; Stage10D coverage
+artifact; Stryker appearance/path/archive reports; финальный native driver 13/13, 7 screenshots,
+30 checks, RMSE 0,0711899; save/reopen и clean shutdown, evidence
+`artifacts/stage10d-object-inspectors/ui-smoke-20260828-234008/report.json`. Security: exact-byte
+SHA/decode, cache resident weight `encoded + decoded`, строгая optional thumbnail, safe linked
+fallback, metadata-first ZIP и pre-deserialize semantic JSON budgets, IHDR/pixel gate, ownership
+transfer и честный resource-limit verdict зафиксированы DEC-015. Финальный Codex Security scan
+дополнительно закрыл UNC/device/ADS в catalog `linkedPath`, reparse probe recent maps и bounded
+blur до Skia. `pre-commit --all-files`, active Stage10D prompt contract, offline links, NuGet
+vulnerable audit и environment doctor прошли.
+
+`PARTIAL`: независимый post-commit Codex gate ещё не выполнен. Keyboard/DPI/file-picker и
+clean-context UX gaps 10B/10C также не закрыты. Подробности:
+`docs/reviews/STAGE_10D_OBJECT_INSPECTORS_VERIFICATION.md`.
+
+Следующее действие: свежая задача Codex проверяет exact range checkpoint. Следующий функциональный
+срез после успешной независимой приёмки — 10E Grid geometry; не смешивать его с 10F или Stage 9B–9E.
 
 ## FACT — среда
 

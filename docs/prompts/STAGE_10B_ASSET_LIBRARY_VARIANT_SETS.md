@@ -1,11 +1,13 @@
 # Stage 10B — локальная Library v2, наборы вариантов и stamp scatter
 
+> Status: HISTORICAL CONTRACT — completed and reviewed; do not execute again. New work uses `PROMPT_TEMPLATE_CODEX.md`.
+
 ## Контекст
 
 Работа выполняется в `C:\Projects\Map` как следующий owner-approved крупный срез после
 проверенного Stage 10 input parity (`95d2fe8`). Перед любым кодом полностью прочитай:
 
-1. `AGENTS.md` и `CLAUDE.md`;
+1. `AGENTS.md` и `CODEX.md`;
 2. `docs/00_START_HERE.md` и `docs/STATE_HANDOFF.md`;
 3. этот файл;
 4. `docs/DECISIONS.md`, особенно DEC-003, DEC-008, DEC-009, DEC-010, DEC-012, DEC-013, DEC-014;
@@ -15,7 +17,7 @@
 8. `docs/09_ASSET_PIPELINE_AND_LICENSING.md`;
 9. `docs/research/ASSET_CATALOG_AND_VARIANT_SETS.md` и
    `docs/research/TEST_ASSET_FIXTURES.md`;
-10. `docs/11_CLAUDE_VERIFICATION_PROTOCOL.md`.
+10. `docs/11_CODEX_VERIFICATION_PROTOCOL.md`.
 
 Затем верни короткий план с границами и gates. Не начинай изменения, пока не проверишь, что
 worktree чистый. Запиши `BASE = git rev-parse HEAD`, затем создай/переключись на

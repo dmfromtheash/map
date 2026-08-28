@@ -60,3 +60,10 @@ public enum AssetResolutionStatus
 }
 
 public sealed record AssetResolution(AssetResolutionStatus Status, string? Path);
+
+/// <summary>
+/// One catalog read whose status, hash verdict and payload all describe the same opened bytes.
+/// Content is present only for an available, SHA-verified image.
+/// </summary>
+public sealed record AssetPayloadResolution(
+    AssetResolutionStatus Status, string? Path, byte[]? Content);

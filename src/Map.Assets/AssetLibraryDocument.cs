@@ -18,6 +18,11 @@ public sealed class AssetLibraryDocument
     /// <summary>How many superseded index copies we are willing to keep next to the live one.</summary>
     public const int MaxBackups = 5;
 
+    public const int MaxCollections = 10_000;
+
+    /// <summary>Bounds the recursive UI tree builder even for a valid acyclic catalog.</summary>
+    public const int MaxCollectionDepth = 128;
+
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
 
     public List<AssetRecord> Records { get; set; } = [];
@@ -66,9 +71,23 @@ public static class AssetLibraryStore
         byte[] bytes;
         try
         {
-            bytes = File.ReadAllBytes(indexPath);
+            using var stream = new FileStream(
+                indexPath, FileMode.Open, FileAccess.Read, FileShare.Read, 64 * 1024,
+                FileOptions.SequentialScan);
+            if (stream.Length <= 0 || stream.Length > AssetLibraryJsonBudget.MaxEncodedBytes)
+            {
+                return Damaged(
+                    $"Индекс каталога превышает startup budget {AssetLibraryJsonBudget.MaxEncodedBytes} байт.");
+            }
+
+            bytes = GC.AllocateUninitializedArray<byte>((int)stream.Length);
+            stream.ReadExactly(bytes);
+            if (stream.ReadByte() != -1)
+            {
+                return Damaged("Индекс каталога вырос во время чтения и не прошёл bounded read.");
+            }
         }
-        catch (IOException ex)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return Damaged("Индекс каталога не читается: " + ex.Message);
         }
@@ -81,12 +100,15 @@ public static class AssetLibraryStore
         JsonValueKind kind;
         try
         {
-            using var probe = JsonDocument.Parse(bytes);
-            kind = probe.RootElement.ValueKind;
+            kind = AssetLibraryJsonBudget.Validate(bytes);
         }
         catch (JsonException ex)
         {
             return Damaged("Индекс каталога повреждён: " + ex.Message);
+        }
+        catch (InvalidDataException ex)
+        {
+            return Damaged("Индекс каталога превышает допустимый бюджет: " + ex.Message);
         }
 
         return kind switch
@@ -144,17 +166,70 @@ public static class AssetLibraryStore
             return Damaged("Старый индекс каталога пуст.");
         }
 
+        if (legacy.Any(static record => record is null))
+        {
+            return Damaged("Старый индекс каталога содержит пустую запись.");
+        }
+
         var document = new AssetLibraryDocument { Status = AssetLibraryStatus.Migrated };
+        var hashes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var collectionIds = new HashSet<string>(StringComparer.Ordinal);
+        var variantIds = new HashSet<string>(StringComparer.Ordinal);
+        var setIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var record in legacy)
         {
-            if (document.Records.Any(existing =>
-                string.Equals(existing.Sha256, record.Sha256, StringComparison.OrdinalIgnoreCase)))
+            if (!IsSha256(record.Sha256))
+            {
+                return Damaged("Старый индекс каталога содержит некорректный SHA-256.");
+            }
+
+            if (!hashes.Add(record.Sha256))
             {
                 continue;
             }
 
             document.Records.Add(record);
-            AddSingleton(document, record);
+            var variantId = AssetIdentity.VariantIdForContent(record.Sha256);
+            if (variantIds.Add(variantId))
+            {
+                document.Variants.Add(new AssetVariant
+                {
+                    Id = variantId,
+                    Sha256 = record.Sha256,
+                    Label = record.DisplayName,
+                });
+            }
+
+            string? collectionId = null;
+            if (!string.IsNullOrWhiteSpace(record.Pack))
+            {
+                collectionId = AssetIdentity.CollectionId(record.Pack);
+                if (collectionIds.Add(collectionId))
+                {
+                    document.Collections.Add(new AssetCollection
+                    {
+                        Id = collectionId,
+                        Name = record.Pack.Trim(),
+                        Order = document.Collections.Count,
+                    });
+                }
+            }
+
+            var setId = AssetIdentity.SetIdForContent(record.Sha256);
+            if (setIds.Add(setId))
+            {
+                document.Sets.Add(new AssetSet
+                {
+                    Id = setId,
+                    Name = record.DisplayName,
+                    VariantIds = [variantId],
+                    CoverVariantId = variantId,
+                    CollectionId = collectionId,
+                    Tags = record.Tags is null ? [] : [.. record.Tags],
+                    Favorite = record.Favorite,
+                    ImportedUtc = record.ImportedUtc,
+                });
+            }
         }
 
         if (Validate(document) is { } reason)
@@ -267,17 +342,89 @@ public static class AssetLibraryStore
             return "в индексе отсутствует один из обязательных списков";
         }
 
+        if (collections.Count > AssetLibraryDocument.MaxCollections)
+        {
+            return $"в индексе больше {AssetLibraryDocument.MaxCollections} коллекций";
+        }
+
+
+        if (records.Any(static record => record is null)
+            || collections.Any(static collection => collection is null)
+            || variants.Any(static variant => variant is null)
+            || sets.Any(static set => set is null)
+            || recent.Any(static entry => entry is null))
+        {
+            return "один из обязательных списков содержит пустой элемент";
+        }
+
         var contentHashes = new HashSet<string>(records.Count, StringComparer.OrdinalIgnoreCase);
         foreach (var record in records)
         {
-            if (string.IsNullOrWhiteSpace(record.Sha256))
+            if (!IsSha256(record.Sha256))
             {
-                return "запись без SHA-256";
+                return "запись с некорректным SHA-256";
             }
 
             if (!contentHashes.Add(record.Sha256))
             {
                 return "повторяющийся SHA-256";
+            }
+
+            if (string.IsNullOrWhiteSpace(record.DisplayName)
+                || string.IsNullOrWhiteSpace(record.OriginalFileName)
+                || string.IsNullOrWhiteSpace(record.MediaType)
+                || string.IsNullOrWhiteSpace(record.Extension)
+                || record.Pack is null)
+            {
+                return "запись ассета без одного из обязательных текстовых полей";
+            }
+
+            if (!HasSupportedFormat(record.MediaType, record.Extension))
+            {
+                return $"ассет «{record.DisplayName}» содержит несогласованный формат изображения";
+            }
+
+            try
+            {
+                _ = AssetImagePolicy.Validate(record.Width, record.Height, record.ByteLength);
+            }
+            catch (InvalidDataException)
+            {
+                return $"ассет «{record.DisplayName}» содержит недопустимые параметры изображения";
+            }
+
+            if (record.Provenance is null)
+            {
+                return $"у ассета «{record.DisplayName}» отсутствуют сведения о происхождении";
+            }
+
+            if (record.Provenance.Source is null
+                || record.Provenance.Author is null
+                || record.Provenance.LicenseId is null
+                || record.Provenance.LicenseUrl is null)
+            {
+                return $"у ассета «{record.DisplayName}» повреждены сведения о происхождении";
+            }
+
+            if (record.Tags is null || record.Tags.Any(static tag => tag is null))
+            {
+                return $"у ассета «{record.DisplayName}» отсутствует тег или список тегов";
+            }
+
+            if (record.StoredRelativePath is { } stored
+                && !CatalogRelativePath.IsValid(stored, "originals"))
+            {
+                return $"ассет «{record.DisplayName}» содержит небезопасный путь оригинала";
+            }
+
+            if (!CatalogRelativePath.IsValid(record.ThumbnailRelativePath, "thumbnails"))
+            {
+                return $"ассет «{record.DisplayName}» содержит небезопасный путь миниатюры";
+            }
+
+            if (record.LinkedPath is { } linked && !IsUsableLinkedPath(linked))
+            {
+                return $"ассет «{record.DisplayName}» содержит некорректный linked path";
             }
         }
 
@@ -325,6 +472,11 @@ public static class AssetLibraryStore
         if (FindCollectionCycle(collections) is { } cycle)
         {
             return $"цикл в дереве коллекций: «{cycle}»";
+        }
+
+        if (FindExcessiveCollectionDepth(collections) is { } tooDeep)
+        {
+            return $"дерево коллекций глубже {AssetLibraryDocument.MaxCollectionDepth} уровней: «{tooDeep}»";
         }
 
         var setIds = new HashSet<string>(sets.Count, StringComparer.Ordinal);
@@ -377,9 +529,9 @@ public static class AssetLibraryStore
                 return $"набор «{set.Name}» ссылается на отсутствующую коллекцию";
             }
 
-            if (set.Tags is null)
+            if (set.Tags is null || set.Tags.Any(static tag => tag is null))
             {
-                return $"у набора «{set.Name}» отсутствует список тегов";
+                return $"у набора «{set.Name}» отсутствует тег или список тегов";
             }
         }
 
@@ -413,6 +565,48 @@ public static class AssetLibraryStore
 
         return null;
     }
+
+    private static bool IsUsableLinkedPath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)
+            || path.Any(char.IsControl)
+            || !Path.IsPathFullyQualified(path)
+            || path.StartsWith(@"\\", StringComparison.Ordinal)
+            || path.StartsWith(@"\\?\", StringComparison.Ordinal)
+            || path.StartsWith(@"\\.\", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        try
+        {
+            var fullPath = Path.GetFullPath(path);
+            var root = Path.GetPathRoot(fullPath);
+            return root is { Length: 3 }
+                && root[1] == ':'
+                && fullPath[root.Length..].Split(
+                    [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                    StringSplitOptions.RemoveEmptyEntries)
+                .All(Map.Core.Documents.PortablePathSegment.IsSafe);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsSha256(string? value) => value is { Length: 64 }
+        && value.All(Uri.IsHexDigit);
+
+    private static bool HasSupportedFormat(string mediaType, string extension) =>
+        mediaType.ToLowerInvariant() switch
+        {
+            "image/png" => string.Equals(extension, "png", StringComparison.OrdinalIgnoreCase),
+            "image/jpeg" => extension.Equals("jpg", StringComparison.OrdinalIgnoreCase)
+                || extension.Equals("jpeg", StringComparison.OrdinalIgnoreCase),
+            "image/webp" => string.Equals(extension, "webp", StringComparison.OrdinalIgnoreCase),
+            _ => false,
+        };
 
     /// <summary>
     /// Names one collection caught in a parent ring, or null when the graph is a forest. The walk
@@ -468,6 +662,27 @@ public static class AssetLibraryStore
             foreach (var settled in path)
             {
                 state[settled] = Settled;
+            }
+        }
+
+        return null;
+    }
+
+    private static string? FindExcessiveCollectionDepth(List<AssetCollection> collections)
+    {
+        var byId = collections.ToDictionary(collection => collection.Id, StringComparer.Ordinal);
+        foreach (var collection in collections)
+        {
+            var depth = 1;
+            var current = collection;
+            while (current.ParentId is { } parentId && byId.TryGetValue(parentId, out var parent))
+            {
+                current = parent;
+                depth++;
+                if (depth > AssetLibraryDocument.MaxCollectionDepth)
+                {
+                    return collection.Name;
+                }
             }
         }
 

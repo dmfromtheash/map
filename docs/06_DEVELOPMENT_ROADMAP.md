@@ -285,6 +285,11 @@ UI/groups и font catalog остаются после 10B.
    соответствующий runtime-gate остаётся `PARTIAL`. 10B keyboard/DPI/file-picker и clean-context
    gates этим срезом также не закрыты.
 3. **10D — Object inspectors:** Stamp/Text/Line/Shape/Brush controls и color/effects parity.
+   Функциональная реализация и security hardening закреплены локальным checkpoint
+   `stage/10d-object-inspectors`: 683/683 tests, native driver 13/13, 7 PNG/30 checks, save/reopen
+   и mutation/coverage evidence (`FACT` self-acceptance). Независимый exact-range gate остаётся
+   `PARTIAL`; отчёт:
+   `reviews/STAGE_10D_OBJECT_INSPECTORS_VERIFICATION.md`.
 4. **10E — Grid geometry:** отдельная `IsometricSquares`, property sheet, snap/golden fixtures.
 5. **10F — Licensed font catalog/navigation и редактируемые bindings.**
 
@@ -308,7 +313,9 @@ UI/groups и font catalog остаются после 10B.
 
 ## Не планировать датами до Stage 1
 
-Сроки без измеренного spike будут выдумкой. После Stage 1 Opus/тимлид оценивают каждый issue-sized срез по фактической скорости и рискам. Дорожная карта определяет порядок и критерии, а не обещает календарь.
+Сроки без измеренного spike будут выдумкой. После Stage 1 Codex/тимлид оценивают каждый крупный
+вертикальный срез по фактической скорости и рискам. Дорожная карта определяет порядок и критерии,
+а не обещает календарь.
 
 ## Definition of MVP
 

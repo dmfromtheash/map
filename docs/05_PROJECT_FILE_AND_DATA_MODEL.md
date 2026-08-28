@@ -128,7 +128,14 @@ Blend, opacity, mask и filter вычисляются по документир�
 
 Плюсы: маленький проект и общий каталог. Минусы: перенос пути. Хранятся content hash, относительный/catalog ID и fallback thumbnail; абсолютный путь не является единственной ссылкой.
 
-При открытии: hash match → catalog resolve → relative path → user resolver → placeholder. Никакой тихой подмены несовпадающим файлом.
+При открытии: embedded bytes → catalog resolve → безопасный project-relative fallback →
+placeholder. Catalog и fallback принимаются только после SHA-256 точных прочитанных байтов;
+никакой тихой подмены несовпадающим файлом.
+
+Rooted, drive-relative, root-relative, UNC, extended/device и ADS-представления не допускаются.
+Старые синтаксически относительные пути с `.`/`..` сохраняются в модели, но автоматический
+fallback не открывает результат за пределами папки проекта. Внешний linked import остаётся
+доступен по catalog/content identity; отсутствие локального каталога даёт placeholder.
 
 ## Asset provenance
 
@@ -182,6 +189,42 @@ serialize immutable snapshot
 
 ## Лимиты чтения контейнера
 
-Защита не от злоумышленника, а от повреждённого или неподходящего файла: программа офлайн и открывает только файлы владельца, но они бывают обрезанными, склеенными или вовсе не тем, чем кажутся.
+Локальный/offline файл является внешней границей данных: он может быть повреждён, ошибочно
+назван или специально сформирован. До полной распаковки reader проверяет metadata всех ZIP
+entries, canonical archive names, регистронезависимые дубликаты, per-entry/category/total budget
+и compression ratio. Archive entry никогда не извлекается; для ZIP-имён `..`, абсолютные пути,
+backslash, `:` и пустые сегменты всегда являются corruption. Это отдельное правило от linked
+filesystem fallback выше.
 
-До чтения содержимого проверять количество ZIP entries, суммарный/распакованный размер, compression ratio, image dimensions, канонические пути (`..` и абсолютные пути считаются повреждением) и дубликаты canonical names. Конкретные лимиты задаются после performance tests и показываются понятной ошибкой, а не исключением.
+Текущий принятый envelope (DEC-015):
+
+| Ресурс | Лимит |
+|---|---:|
+| ZIP entries | 16 384 |
+| один JSON entry | 32 MiB |
+| один raw tile | 256 KiB |
+| один asset entry | 64 MiB |
+| preview entry | 8 MiB |
+| assets aggregate | 256 MiB |
+| tiles aggregate | 256 MiB |
+| JSON aggregate | 64 MiB |
+| total uncompressed | 512 MiB |
+| compression ratio | 1000 + 1 MiB additive slack на entry |
+| preview | ≤8192 по оси и ≤16 MiPixels |
+| semantic layers | 4 096 |
+| scene + composition objects | 100 000 aggregate |
+| notes | 10 000 |
+| asset DTOs | 16 384 aggregate |
+| vector nodes | 500 000 aggregate |
+| одна JSON string | 1 MiB UTF-8 |
+| JSON tokens | 8 000 000 на entry |
+
+`ReadEntry` выделяет ровно заявленный размер, использует exact read и проверяет отсутствие
+лишних decompressed bytes. Уже проверенные asset-массивы передаются документу по внутреннему
+ownership-transfer пути без второй полной копии; публичный конструктор остаётся defensive.
+До materialization DTO streaming `Utf8JsonReader` считает все известные массивы (`layers`,
+`objects`/`items`, `notes`, `assets`, `nodes`, `regions`, `portals`, `tiles`, `grids`, `filters`),
+строки и tokens. Поэтому миллионы коротких `{}` не превращаются в многократно больший managed
+object graph внутри формально допустимого byte budget.
+Превышение envelope — `MapProjectResourceLimitException` с гарантией «файл не изменён», а не
+ложное заявление о повреждении v1-проекта.

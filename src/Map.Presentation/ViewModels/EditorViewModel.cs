@@ -1802,6 +1802,9 @@ public sealed class EditorViewModel : ViewModelBase
             {
                 Stamp = new StampStyle(item.Sha256)
                 {
+                    // The placed size IS the honest 100 % baseline for later scaling.
+                    ReferenceWidth = item.Width,
+                    ReferenceHeight = item.Height,
                     FlipHorizontal = item.FlipHorizontal,
                     FlipVertical = item.FlipVertical,
                 },
@@ -1853,10 +1856,57 @@ public sealed class EditorViewModel : ViewModelBase
         var byHash = new Dictionary<string, MapAssetReference>(StringComparer.OrdinalIgnoreCase);
         references = [];
         refusal = "";
+
+        var existing = Session.Document.Assets.ToDictionary(
+            asset => asset.Sha256, StringComparer.OrdinalIgnoreCase);
+        var neededHashes = plan.Select(item => item.Sha256)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var newRecords = new List<AssetRecord>();
+        long advertisedBytes = 0;
+        try
+        {
+            foreach (var sha256 in neededHashes)
+            {
+                if (existing.ContainsKey(sha256))
+                {
+                    continue;
+                }
+
+                if (!records.TryGetValue(sha256, out var record))
+                {
+                    refusal = "Содержимое выбранного набора отсутствует в каталоге. Ничего не размещено.";
+                    return null;
+                }
+
+                newRecords.Add(record);
+                advertisedBytes = checked(advertisedBytes + record.ByteLength);
+            }
+        }
+        catch (OverflowException)
+        {
+            refusal = "Размер выбранного набора переполняет допустимый бюджет проекта. Ничего не размещено.";
+            return null;
+        }
+
+        if (!MapProjectStore.CanAdmitEmbeddedBytes(
+                Session.Document, advertisedBytes, newRecords.Count, out refusal))
+        {
+            refusal += " Ничего не размещено.";
+            return null;
+        }
+
         foreach (var item in plan)
         {
             if (byHash.ContainsKey(item.Sha256))
             {
+                continue;
+            }
+
+            if (existing.TryGetValue(item.Sha256, out var existingReference))
+            {
+                byHash[item.Sha256] = existingReference;
+                references.Add(existingReference);
                 continue;
             }
 
@@ -1875,9 +1925,60 @@ public sealed class EditorViewModel : ViewModelBase
 
             byHash[item.Sha256] = resolution.Reference!;
             references.Add(resolution.Reference!);
+            if (!MapProjectStore.CanAdmitAdditionalAssets(Session.Document, references, out refusal))
+            {
+                refusal += " Ничего не размещено.";
+                return null;
+            }
         }
 
         return byHash;
+    }
+
+    /// <summary>
+    /// Reuses the immutable payload already owned by the document. This keeps repeated actions
+    /// independent of a deleted catalog original and prevents undo entries from retaining a fresh
+    /// 64 MiB clone for the same SHA on every click.
+    /// </summary>
+    private MapAssetReference? ResolveAssetForDocument(
+        AssetRecord record,
+        out AssetAvailability availability,
+        out string? refusal)
+    {
+        if (Session.Document.Assets.FirstOrDefault(asset =>
+                string.Equals(asset.Sha256, record.Sha256, StringComparison.OrdinalIgnoreCase))
+            is { } existing)
+        {
+            availability = AssetAvailability.Available;
+            refusal = null;
+            return existing;
+        }
+
+        if (!MapProjectStore.CanAdmitEmbeddedBytes(
+                Session.Document, record.ByteLength, additionalAssets: 1, out var preflight))
+        {
+            availability = AssetAvailability.Missing;
+            refusal = preflight;
+            return null;
+        }
+
+        var resolution = _assetResolver!.Resolve(record);
+        availability = resolution.Availability;
+        if (!resolution.IsAvailable || resolution.Reference is null)
+        {
+            refusal = null;
+            return null;
+        }
+
+        if (!MapProjectStore.CanAdmitAdditionalAssets(
+                Session.Document, [resolution.Reference], out var exactFailure))
+        {
+            refusal = exactFailure;
+            return null;
+        }
+
+        refusal = null;
+        return resolution.Reference;
     }
 
     /// <summary>Names the variant and the exact reason it stopped the whole gesture.</summary>
@@ -2028,43 +2129,74 @@ public sealed class EditorViewModel : ViewModelBase
 
     public void PlaceStamp(AssetRecord record, bool embedded = true, double? x = null, double? y = null)
     {
-        if (_assetCatalog is null)
+        if (_assetCatalog is null || _assetResolver is null)
         {
             return;
         }
 
         var layer = ActiveLayer as ObjectLayer
             ?? Session.Document.Layers.OfType<ObjectLayer>().LastOrDefault(item => item.Visible && !item.Locked);
-        var resolution = _assetCatalog.Resolve(record);
-        if (layer is null || layer.Locked || !layer.Visible
-            || resolution.Status != AssetResolutionStatus.Available || resolution.Path is null)
+        var knownReference = Session.Document.Assets.FirstOrDefault(asset =>
+            string.Equals(asset.Sha256, record.Sha256, StringComparison.OrdinalIgnoreCase));
+        if (knownReference is null
+            && !MapProjectStore.CanAdmitEmbeddedBytes(
+                Session.Document,
+                embedded ? record.ByteLength : 0,
+                additionalAssets: 1,
+                out var preflightFailure))
         {
-            StatusDetail = resolution.Status == AssetResolutionStatus.HashMismatch
-                ? "Файл ассета изменился и не совпадает с сохранённым hash. Выберите замену явно."
-                : "Выберите доступный ассет и разблокированный слой объектов.";
+            StatusDetail = preflightFailure;
             return;
         }
 
-        var thumbnail = File.Exists(_assetCatalog.ThumbnailPath(record))
-            ? File.ReadAllBytes(_assetCatalog.ThumbnailPath(record))
-            : null;
-        var projectDirectory = DocumentPath is null ? null : Path.GetDirectoryName(DocumentPath);
-        var relative = projectDirectory is null
-            ? record.OriginalFileName
-            : Path.GetRelativePath(projectDirectory, resolution.Path);
-        var reference = new MapAssetReference(
-            record.Sha256,
-            record.DisplayName,
-            record.MediaType,
-            record.Extension,
-            embedded ? ProjectAssetStorage.Embedded : ProjectAssetStorage.Linked,
-            record.ImportedUtc,
-            record.Provenance.Source,
-            record.Provenance.LicenseId,
-            embeddedContent: embedded ? File.ReadAllBytes(resolution.Path) : null,
-            catalogId: embedded ? null : record.Sha256,
-            relativePath: embedded ? null : relative,
-            fallbackThumbnailPng: thumbnail);
+        if (layer is null || layer.Locked || !layer.Visible)
+        {
+            StatusDetail = "Выберите доступный ассет и разблокированный слой объектов.";
+            return;
+        }
+
+        MapAssetReference? reference = knownReference;
+        if (reference is null)
+        {
+            var resolution = _assetCatalog.ReadVerified(record);
+            if (resolution.Status != AssetResolutionStatus.Available
+                || resolution.Path is null || resolution.Content is null)
+            {
+                StatusDetail = resolution.Status == AssetResolutionStatus.HashMismatch
+                    ? "Файл ассета изменился и не совпадает с сохранённым hash. Выберите замену явно."
+                    : "Выберите доступный ассет и разблокированный слой объектов.";
+                return;
+            }
+
+            var thumbnail = _assetCatalog.TryThumbnailPath(record, out var thumbnailPath)
+                ? AssetImagePolicy.TryReadOptionalThumbnail(thumbnailPath!)
+                : null;
+            string? relative = null;
+            if (!embedded && DocumentPath is { } documentPath
+                && ProjectLinkedAssetPath.TryMakeRelative(documentPath, resolution.Path!, out var projectRelative))
+            {
+                relative = projectRelative;
+            }
+            reference = new MapAssetReference(
+                record.Sha256,
+                record.DisplayName,
+                record.MediaType,
+                record.Extension,
+                embedded ? ProjectAssetStorage.Embedded : ProjectAssetStorage.Linked,
+                record.ImportedUtc,
+                record.Provenance.Source,
+                record.Provenance.LicenseId,
+                embeddedContent: embedded ? resolution.Content : null,
+                catalogId: embedded ? null : record.Sha256,
+                relativePath: embedded ? null : relative,
+                fallbackThumbnailPng: thumbnail);
+            if (!MapProjectStore.CanAdmitAdditionalAssets(
+                    Session.Document, [reference], out var exactFailure))
+            {
+                StatusDetail = exactFailure;
+                return;
+            }
+        }
         var width = Math.Min(256.0, Session.Document.Canvas.Width / 4.0);
         var height = width * record.Height / record.Width;
         var stamp = new SceneObject(
@@ -2073,7 +2205,11 @@ public sealed class EditorViewModel : ViewModelBase
             y ?? ((Session.Document.Canvas.Height - height) / 2),
             width, height, 0, "#FFFFFFFF", "#00000000", 0, true, false)
         {
-            Stamp = new StampStyle(record.Sha256),
+            Stamp = new StampStyle(record.Sha256)
+            {
+                ReferenceWidth = width,
+                ReferenceHeight = height,
+            },
         };
 
         Session.Execute(new PlaceAssetObjectsCommand(layer.Id, reference, [stamp]));
@@ -2084,26 +2220,21 @@ public sealed class EditorViewModel : ViewModelBase
 
     public void ScatterStamp(AssetRecord record, int count, int seed = 12345)
     {
-        if (_assetCatalog is null || count is < 1 or > 5_000)
+        if (_assetResolver is null || count is < 1 or > 5_000)
         {
             return;
         }
 
         var layer = ActiveLayer as ObjectLayer
             ?? Session.Document.Layers.OfType<ObjectLayer>().LastOrDefault(item => item.Visible && !item.Locked);
-        var resolution = _assetCatalog.Resolve(record);
-        if (layer is null || resolution.Status != AssetResolutionStatus.Available || resolution.Path is null)
+        var reference = ResolveAssetForDocument(
+            record, out _, out var assetRefusal);
+        if (layer is null || reference is null)
         {
-            StatusDetail = "Ассет недоступен для размещения.";
+            StatusDetail = assetRefusal ?? "Ассет недоступен для размещения.";
             return;
         }
 
-        var reference = new MapAssetReference(
-            record.Sha256, record.DisplayName, record.MediaType, record.Extension,
-            ProjectAssetStorage.Embedded, record.ImportedUtc,
-            record.Provenance.Source, record.Provenance.LicenseId,
-            embeddedContent: File.ReadAllBytes(resolution.Path),
-            fallbackThumbnailPng: File.ReadAllBytes(_assetCatalog.ThumbnailPath(record)));
         var random = new Random(seed);
         var objects = new List<SceneObject>(count);
         for (var i = 0; i < count; i++)
@@ -2118,6 +2249,8 @@ public sealed class EditorViewModel : ViewModelBase
             {
                 Stamp = new StampStyle(record.Sha256)
                 {
+                    ReferenceWidth = size,
+                    ReferenceHeight = size * record.Height / record.Width,
                     FlipHorizontal = random.Next(2) == 0,
                 },
             });
@@ -2130,25 +2263,20 @@ public sealed class EditorViewModel : ViewModelBase
 
     public void ReplaceSelectedStampAsset(AssetRecord record)
     {
-        if (_assetCatalog is null || Session.SelectedObject is not { Stamp: not null } selected)
+        if (_assetResolver is null || Session.SelectedObject is not { Stamp: not null } selected)
         {
             StatusDetail = "Выберите stamp и новый ассет.";
             return;
         }
 
-        var resolution = _assetCatalog.Resolve(record);
-        if (resolution.Status != AssetResolutionStatus.Available || resolution.Path is null)
+        var reference = ResolveAssetForDocument(
+            record, out _, out var assetRefusal);
+        if (reference is null)
         {
-            StatusDetail = "Новый ассет отсутствует или не совпадает с его SHA-256.";
+            StatusDetail = assetRefusal ?? "Новый ассет отсутствует или не совпадает с его SHA-256.";
             return;
         }
 
-        var reference = new MapAssetReference(
-            record.Sha256, record.DisplayName, record.MediaType, record.Extension,
-            ProjectAssetStorage.Embedded, record.ImportedUtc,
-            record.Provenance.Source, record.Provenance.LicenseId,
-            embeddedContent: File.ReadAllBytes(resolution.Path),
-            fallbackThumbnailPng: File.ReadAllBytes(_assetCatalog.ThumbnailPath(record)));
         Session.Execute(new ReplaceStampAssetCommand(selected, reference));
         AfterEdit();
     }
@@ -2464,16 +2592,17 @@ public sealed class EditorViewModel : ViewModelBase
 
     public void UseAssetAsSelectedVectorStroke(AssetRecord record)
     {
-        if (_assetCatalog is null || EditableSelection() is not { } before)
+        if (_assetResolver is null || EditableAppearanceSelection() is not { } before)
         {
             return;
         }
 
         var stroke = before.Line?.Stroke ?? before.Shape?.Stroke;
-        var resolution = _assetCatalog.Resolve(record);
-        if (stroke is null || resolution.Status != AssetResolutionStatus.Available || resolution.Path is null)
+        var reference = ResolveAssetForDocument(
+            record, out _, out var assetRefusal);
+        if (stroke is null || reference is null)
         {
-            StatusDetail = "Выберите Line/Shape и доступный локальный ассет.";
+            StatusDetail = assetRefusal ?? "Выберите Line/Shape и доступный локальный ассет.";
             return;
         }
 
@@ -2484,14 +2613,41 @@ public sealed class EditorViewModel : ViewModelBase
             {
                 Shape = new ShapeStyle(before.Shape!.Regions, before.Shape.Fill, changed, before.Shape.Portals),
             };
-        var reference = new MapAssetReference(
-            record.Sha256, record.DisplayName, record.MediaType, record.Extension,
-            ProjectAssetStorage.Embedded, record.ImportedUtc,
-            record.Provenance.Source, record.Provenance.LicenseId,
-            embeddedContent: File.ReadAllBytes(resolution.Path),
-            fallbackThumbnailPng: File.ReadAllBytes(_assetCatalog.ThumbnailPath(record)));
         Session.Execute(new VectorAssetStyleCommand(before, after, reference));
         AfterEdit();
+        StatusDetail = $"Ассет «{record.DisplayName}» используется для обводки.";
+    }
+
+    /// <summary>Embeds one available library asset as the selected shape's repeating fill.</summary>
+    public void UseAssetAsSelectedShapeFill(AssetRecord record)
+    {
+        if (_assetResolver is null || EditableAppearanceSelection() is not { Shape: { } shape } before)
+        {
+            StatusDetail = "Выберите доступную фигуру и локальный ассет.";
+            return;
+        }
+
+        var reference = ResolveAssetForDocument(
+            record, out _, out var assetRefusal);
+        if (reference is null)
+        {
+            StatusDetail = assetRefusal ?? "Файл заливки отсутствует или не совпадает с его SHA-256.";
+            return;
+        }
+
+        var changedFill = shape.Fill with { TextureAssetSha256 = record.Sha256 };
+        if (changedFill.Equals(shape.Fill))
+        {
+            return;
+        }
+
+        var after = before with
+        {
+            Shape = new ShapeStyle(shape.Regions, changedFill, shape.Stroke, shape.Portals),
+        };
+        Session.Execute(new VectorAssetStyleCommand(before, after, reference, "Use asset fill"));
+        AfterEdit();
+        StatusDetail = $"Ассет «{record.DisplayName}» используется для заливки фигуры.";
     }
 
     public void ApplyShapeBoolean(ShapeBooleanOperation operation)
@@ -2605,22 +2761,18 @@ public sealed class EditorViewModel : ViewModelBase
 
     public void UseAssetAsActiveFilterTexture(AssetRecord record)
     {
-        if (_assetCatalog is null || ActiveLayer is not FilterLayer { Locked: false } before) return;
-        var resolution = _assetCatalog.Resolve(record);
-        if (resolution.Status != AssetResolutionStatus.Available || resolution.Path is null)
-        { StatusDetail = "Текстура фильтра недоступна или изменила SHA-256."; return; }
-        var reference = new MapAssetReference(
-            record.Sha256, record.DisplayName, record.MediaType, record.Extension,
-            ProjectAssetStorage.Embedded, record.ImportedUtc,
-            record.Provenance.Source, record.Provenance.LicenseId,
-            embeddedContent: File.ReadAllBytes(resolution.Path),
-            fallbackThumbnailPng: File.ReadAllBytes(_assetCatalog.ThumbnailPath(record)));
+        if (_assetResolver is null || ActiveLayer is not FilterLayer { Locked: false } before) return;
+        var reference = ResolveAssetForDocument(
+            record, out _, out var assetRefusal);
+        if (reference is null)
+        { StatusDetail = assetRefusal ?? "Текстура фильтра недоступна или изменила SHA-256."; return; }
         var after = before with
         {
             Settings = before.Settings with
             { TextureAssetSha256 = record.Sha256, TextureOpacity = 0.28, TextureScale = 1 },
         };
-        Session.Execute(new UpdateFilterWithAssetCommand(before, after, reference)); AfterEdit();
+        Session.Execute(new UpdateFilterWithAssetCommand(
+            before, after, reference)); AfterEdit();
     }
 
     public void CreateEditableComposition(
@@ -2951,6 +3103,13 @@ public sealed class EditorViewModel : ViewModelBase
             };
             return false;
         }
+
+        // The stroke's randomness is decided here, BEFORE any command exists: the committed
+        // tiles never depend on replay, so undo/redo restore bytes instead of re-rolling.
+        BrushSettings = BrushSettings with
+        {
+            Seed = GestureSeed.From(Session.Revision, "brush-stroke", 0, ++_brushSeedCounter),
+        };
 
         _stroke = new RasterStrokeSession(target, BrushSettings);
         _stroke.AddPoint(worldX, worldY);
@@ -3957,6 +4116,9 @@ public sealed class EditorViewModel : ViewModelBase
 
     public bool HasEditableSelection => EditableSelection() is not null;
 
+    /// <summary>The view funnels its local input-parse failures into the one visible error line.</summary>
+    public void ReportInspectorError(string message) => InspectorError = message ?? "";
+
     public void RefreshInspector()
     {
         var selected = Session.SelectedObject;
@@ -3989,6 +4151,20 @@ public sealed class EditorViewModel : ViewModelBase
         {
             InspectorError = "Числовые поля должны содержать корректные значения; размеры больше нуля.";
             return false;
+        }
+
+        // A locked stamp aspect fills in the untouched dimension from the touched one, so the
+        // numeric fields and the proportional scale can never disagree about the shape.
+        if (before.Stamp is not null && StampAspectLocked && before.Width > 0 && before.Height > 0)
+        {
+            if (width != before.Width && height == before.Height)
+            {
+                height = width * before.Height / before.Width;
+            }
+            else if (height != before.Height && width == before.Width)
+            {
+                width = height * before.Width / before.Height;
+            }
         }
 
         var after = WithGeometry(before, x, y, width, height, rotation);
@@ -4055,6 +4231,723 @@ public sealed class EditorViewModel : ViewModelBase
             PlaceholderReason = source.PlaceholderReason,
             ObjectOpacity = source.ObjectOpacity,
         };
+
+    // ------------------------------------------------- Stage 10D appearance inspector
+
+    private SceneObject? _appearanceGestureBefore;
+    private bool _stampAspectLocked = true;
+    private string? _brushTipName;
+    private int _brushSeedCounter;
+
+    /// <summary>
+    /// The one editable single selection for a style edit. Unlike the pure object-flag check,
+    /// this honours the layer too: an object on a hidden or locked layer refuses entirely.
+    /// </summary>
+    private SceneObject? EditableAppearanceSelection()
+    {
+        if (Session.SelectedObjectIds.Count != 1 || Session.SelectedObject is not { } selected)
+        {
+            return null;
+        }
+
+        if (!AvailableObjectIds().Contains(selected.Id))
+        {
+            StatusDetail = "Объект или его слой скрыт либо заблокирован — изменение отклонено.";
+            return null;
+        }
+
+        return selected;
+    }
+
+    /// <summary>
+    /// One appearance edit. commit=false previews live from the gesture's captured "before";
+    /// commit=true lands the whole gesture (or a direct edit) as exactly ONE history entry.
+    /// A change that returns the same value writes no history at all.
+    /// </summary>
+    private void EditAppearance(string name, bool commit, Func<SceneObject, SceneObject> change)
+    {
+        var before = _appearanceGestureBefore ?? EditableAppearanceSelection();
+        if (before is null)
+        {
+            return;
+        }
+
+        if (!commit)
+        {
+            _appearanceGestureBefore = before;
+            DragPreview = new DragPreview([before], [change(before)], DragMode.Move, null, 0, 0, null);
+            SceneChanged?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+
+        _appearanceGestureBefore = null;
+        DragPreview = null;
+        var after = change(before);
+        if (ReferenceEquals(after, before) || after.Equals(before))
+        {
+            SceneChanged?.Invoke(this, EventArgs.Empty);
+            return; // no-op: no history entry
+        }
+
+        Session.Execute(new ReplaceObjectsCommand([before], [after], name));
+        AfterEdit();
+    }
+
+    /// <summary>Abandons a live slider gesture without touching the document or the history.</summary>
+    public void CancelAppearanceGesture()
+    {
+        _appearanceGestureBefore = null;
+        DragPreview = null;
+        SceneChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>"#RRGGBB" or "#AARRGGBB" → canonical "#AARRGGBB"; anything else is null.</summary>
+    private static string? NormalizeColor(string? text)
+    {
+        var value = (text ?? "").Trim().TrimStart('#');
+        if (value.Length is not (6 or 8) || !value.All(Uri.IsHexDigit))
+        {
+            return null;
+        }
+
+        return "#" + (value.Length == 6 ? "FF" + value : value).ToUpperInvariant();
+    }
+
+    private string? RequireColorInput(string? text)
+    {
+        var color = NormalizeColor(text);
+        if (color is null)
+        {
+            InspectorError = "Цвет задаётся как #RRGGBB или #AARRGGBB.";
+        }
+
+        return color;
+    }
+
+    private bool RequireSupportedBlend(string blend)
+    {
+        if (BlendModes.IsSupported(blend))
+        {
+            return true;
+        }
+
+        InspectorError = $"Режим смешивания «{blend}» не поддерживается.";
+        return false;
+    }
+
+    // ------------------------------------------------------------- common object properties
+
+    public void SetSelectedSublayer(int value) => EditAppearance("Object sublayer", commit: true,
+        before => before.Sublayer == Math.Clamp(value, -10, 10)
+            ? before
+            : CopyObject(before) with { Sublayer = Math.Clamp(value, -10, 10) });
+
+    public void SetSelectedOpacityPercent(double percent, bool commit = true)
+    {
+        if (!double.IsFinite(percent))
+        {
+            InspectorError = "Непрозрачность задаётся числом 0..100.";
+            return;
+        }
+
+        var opacity = Math.Clamp(percent, 0, 100) / 100.0;
+        EditAppearance("Object opacity", commit, before => before.ObjectOpacity == opacity
+            ? before
+            : CopyObject(before) with { ObjectOpacity = opacity });
+    }
+
+    // ----------------------------------------------------------------------- stamp: scale
+
+    /// <summary>
+    /// Scale against the stamp's 100 % reference. An old file without a reference reports its
+    /// current size as the baseline, and the first scale edit adopts it permanently.
+    /// </summary>
+    public double? StampScalePercent
+    {
+        get
+        {
+            if (Session.SelectedObject is not { Stamp: { } stamp } selected)
+            {
+                return null;
+            }
+
+            var reference = stamp.ReferenceWidth ?? selected.Width;
+            return reference <= 0 ? null : Math.Round(selected.Width / reference * 100, 1);
+        }
+    }
+
+    /// <summary>Editor-only preference: exact W/H edits keep the stamp's proportions.</summary>
+    public bool StampAspectLocked
+    {
+        get => _stampAspectLocked;
+        set => SetField(ref _stampAspectLocked, value);
+    }
+
+    public void SetStampScalePercent(double percent, bool commit = true)
+    {
+        if (!double.IsFinite(percent))
+        {
+            InspectorError = "Масштаб задаётся числом в процентах.";
+            return;
+        }
+
+        var factor = Math.Clamp(percent, 1, 1000) / 100.0;
+        EditAppearance("Stamp scale", commit, before =>
+        {
+            if (before.Stamp is not { } stamp)
+            {
+                return before;
+            }
+
+            var referenceWidth = stamp.ReferenceWidth ?? before.Width;
+            var referenceHeight = stamp.ReferenceHeight ?? before.Height;
+            var width = Math.Max(0.5, referenceWidth * factor);
+            var height = Math.Max(0.5, referenceHeight * factor);
+            if (width == before.Width && height == before.Height && stamp.ReferenceWidth is not null)
+            {
+                return before;
+            }
+
+            var centreX = before.X + (before.Width / 2);
+            var centreY = before.Y + (before.Height / 2);
+            return WithGeometry(
+                before, centreX - (width / 2), centreY - (height / 2), width, height,
+                before.RotationDegrees) with
+            {
+                Stamp = stamp with { ReferenceWidth = referenceWidth, ReferenceHeight = referenceHeight },
+            };
+        });
+    }
+
+    /// <summary>Exact width/height; the locked aspect fills in the other dimension.</summary>
+    public void SetStampExactSize(double? width = null, double? height = null)
+    {
+        if (width is { } w && (!double.IsFinite(w) || w <= 0)
+            || height is { } h && (!double.IsFinite(h) || h <= 0))
+        {
+            InspectorError = "Размер должен быть положительным числом.";
+            return;
+        }
+
+        EditAppearance("Stamp size", commit: true, before =>
+        {
+            if (before.Stamp is null)
+            {
+                return before;
+            }
+
+            var aspect = before.Width <= 0 ? 1 : before.Height / before.Width;
+            var newWidth = width ?? (StampAspectLocked && height is { } setH
+                ? Math.Max(0.5, setH / Math.Max(0.0001, aspect))
+                : before.Width);
+            var newHeight = height ?? (StampAspectLocked && width is { } setW
+                ? Math.Max(0.5, setW * aspect)
+                : before.Height);
+            if (newWidth == before.Width && newHeight == before.Height)
+            {
+                return before;
+            }
+
+            var centreX = before.X + (before.Width / 2);
+            var centreY = before.Y + (before.Height / 2);
+            return WithGeometry(
+                before, centreX - (newWidth / 2), centreY - (newHeight / 2),
+                newWidth, newHeight, before.RotationDegrees);
+        });
+    }
+
+    // ------------------------------------------------------------- stamp: flips and effects
+
+    private void EditStamp(string name, bool commit, Func<StampStyle, StampStyle> change) =>
+        EditAppearance(name, commit, before =>
+        {
+            if (before.Stamp is not { } stamp)
+            {
+                return before;
+            }
+
+            var changed = change(stamp);
+            return changed.Equals(stamp) ? before : CopyObject(before) with { Stamp = changed };
+        });
+
+    public void SetStampFlip(bool? horizontal = null, bool? vertical = null) =>
+        EditStamp("Stamp flip", commit: true, stamp => stamp with
+        {
+            FlipHorizontal = horizontal ?? stamp.FlipHorizontal,
+            FlipVertical = vertical ?? stamp.FlipVertical,
+        });
+
+    public void SetStampShadowNone() =>
+        EditStamp("Stamp shadow", commit: true, stamp => stamp with { ShadowOpacity = 0 });
+
+    public void SetStampShadowStandard() =>
+        EditStamp("Stamp shadow", commit: true, stamp => stamp with
+        {
+            ShadowOffsetX = ShadowPreset.StandardOffsetX,
+            ShadowOffsetY = ShadowPreset.StandardOffsetY,
+            ShadowBlur = ShadowPreset.StandardBlur,
+            ShadowOpacity = ShadowPreset.StandardOpacity,
+        });
+
+    public void SetStampShadow(
+        double? offsetX = null, double? offsetY = null, double? blur = null,
+        double? opacityPercent = null, bool commit = true) =>
+        EditStamp("Stamp shadow", commit, stamp => stamp with
+        {
+            ShadowOffsetX = Finite(offsetX, stamp.ShadowOffsetX, -64, 64),
+            ShadowOffsetY = Finite(offsetY, stamp.ShadowOffsetY, -64, 64),
+            ShadowBlur = Finite(blur, stamp.ShadowBlur, 0, 64),
+            ShadowOpacity = Finite(opacityPercent, stamp.ShadowOpacity * 100, 0, 100) / 100.0,
+        });
+
+    public void SetStampBlend(string blend)
+    {
+        if (RequireSupportedBlend(blend))
+        {
+            EditStamp("Stamp blend", commit: true, stamp => stamp with { Blend = blend });
+        }
+    }
+
+    public void SetStampBlur(double sigma, bool commit = true) =>
+        EditStamp("Stamp blur", commit, stamp => stamp with { Blur = Finite(sigma, stamp.Blur, 0, 32) });
+
+    public void SetStampHueDegrees(double degrees, bool commit = true) =>
+        EditStamp("Stamp hue", commit, stamp => stamp with { Hue = Finite(degrees, stamp.Hue, -180, 180) });
+
+    public void SetStampSaturationPercent(double percent, bool commit = true) =>
+        EditStamp("Stamp saturation", commit, stamp => stamp with
+        {
+            Saturation = PercentOffset(percent, stamp.Saturation),
+        });
+
+    public void SetStampBrightnessPercent(double percent, bool commit = true) =>
+        EditStamp("Stamp brightness", commit, stamp => stamp with
+        {
+            Brightness = PercentOffset(percent, stamp.Brightness),
+        });
+
+    public void SetStampContrastPercent(double percent, bool commit = true) =>
+        EditStamp("Stamp contrast", commit, stamp => stamp with
+        {
+            Contrast = PercentOffset(percent, stamp.Contrast),
+        });
+
+    /// <summary>Hue/Saturation/Brightness/Contrast back to neutral, one entry, nothing else.</summary>
+    public void ResetStampColorAdjustments() =>
+        EditStamp("Reset stamp colors", commit: true, stamp => stamp with
+        {
+            Hue = 0,
+            Saturation = 0,
+            Brightness = 0,
+            Contrast = 0,
+        });
+
+    /// <summary>The whole appearance back to neutral in one entry; transform stays untouched.</summary>
+    public void ResetStampAppearance() =>
+        EditAppearance("Reset stamp appearance", commit: true, before =>
+        {
+            if (before.Stamp is not { } stamp)
+            {
+                return before;
+            }
+
+            var neutral = new StampStyle(stamp.AssetSha256)
+            {
+                ReferenceWidth = stamp.ReferenceWidth,
+                ReferenceHeight = stamp.ReferenceHeight,
+            };
+            return neutral.Equals(stamp) && before.ObjectOpacity == 1.0
+                ? before
+                : CopyObject(before) with { Stamp = neutral, ObjectOpacity = 1.0 };
+        });
+
+    private double PercentOffset(double percent, double fallback)
+    {
+        if (!double.IsFinite(percent))
+        {
+            InspectorError = "Значение задаётся в процентах 0..200.";
+            return fallback;
+        }
+
+        return ColorAdjustment.PercentToOffset(percent);
+    }
+
+    private static double Finite(double? value, double fallback, double min, double max) =>
+        value is { } v && double.IsFinite(v) ? Math.Clamp(v, min, max) : fallback;
+
+    // ----------------------------------------------------------------------------- text
+
+    private void EditText(string name, bool commit, Func<TextStyle, TextStyle> change) =>
+        EditAppearance(name, commit, before =>
+        {
+            if (before.Text is not { } text)
+            {
+                return before;
+            }
+
+            var changed = change(text);
+            return changed.Equals(text) ? before : CopyObject(before) with { Text = changed };
+        });
+
+    public void SetTextContent(string content) =>
+        EditText("Text content", commit: true, text => text with { Content = content ?? "" });
+
+    public void SetTextBold(bool bold) =>
+        EditText("Text weight", commit: true, text => text with { FontWeight = bold ? 700 : 400 });
+
+    public void SetTextFontSize(double size, bool commit = true) =>
+        EditText("Text size", commit, text => text with { FontSize = Finite(size, text.FontSize, 1, 512) });
+
+    public void SetTextFillColor(string? colorText)
+    {
+        if (RequireColorInput(colorText) is { } color)
+        {
+            EditText("Text fill", commit: true, text => text with { FillColor = color });
+        }
+    }
+
+    public void SetTextOutlineColor(string? colorText)
+    {
+        if (RequireColorInput(colorText) is { } color)
+        {
+            EditText("Text outline", commit: true, text => text with { OutlineColor = color });
+        }
+    }
+
+    public void SetTextOutlineWidth(double width, bool commit = true) =>
+        EditText("Text outline", commit, text => text with
+        {
+            OutlineWidth = Finite(width, text.OutlineWidth, 0, 32),
+        });
+
+    public void SetTextShadowNone() =>
+        EditText("Text shadow", commit: true, text => text with { ShadowOpacity = 0 });
+
+    public void SetTextShadowStandard() =>
+        EditText("Text shadow", commit: true, text => text with
+        {
+            ShadowOffsetX = ShadowPreset.StandardOffsetX,
+            ShadowOffsetY = ShadowPreset.StandardOffsetY,
+            ShadowBlur = ShadowPreset.StandardBlur,
+            ShadowOpacity = ShadowPreset.StandardOpacity,
+        });
+
+    public void SetTextShadow(
+        double? offsetX = null, double? offsetY = null, double? blur = null,
+        double? opacityPercent = null, bool commit = true) =>
+        EditText("Text shadow", commit, text => text with
+        {
+            ShadowOffsetX = Finite(offsetX, text.ShadowOffsetX, -64, 64),
+            ShadowOffsetY = Finite(offsetY, text.ShadowOffsetY, -64, 64),
+            ShadowBlur = Finite(blur, text.ShadowBlur, 0, 64),
+            ShadowOpacity = Finite(opacityPercent, text.ShadowOpacity * 100, 0, 100) / 100.0,
+        });
+
+    public void SetTextCurve(double value, bool commit = true) =>
+        EditText("Text curve", commit, text => text with { Curve = Finite(value, text.Curve, -100, 100) });
+
+    public void SetTextLetterSpacing(double value, bool commit = true) =>
+        EditText("Text letter spacing", commit, text => text with
+        {
+            LetterSpacing = Finite(value, text.LetterSpacing, 0, 40),
+        });
+
+    public void SetTextLineHeight(double value, bool commit = true) =>
+        EditText("Text line height", commit, text => text with
+        {
+            LineHeight = Finite(value, text.LineHeight, 0.5, 3),
+        });
+
+    public void SetTextAlignment(TextAlignment alignment) =>
+        EditText("Text alignment", commit: true, text => text with { Alignment = alignment });
+
+    public void SetTextFlip(bool? horizontal = null, bool? vertical = null) =>
+        EditText("Text flip", commit: true, text => text with
+        {
+            FlipHorizontal = horizontal ?? text.FlipHorizontal,
+            FlipVertical = vertical ?? text.FlipVertical,
+        });
+
+    public void SetTextBlend(string blend)
+    {
+        if (RequireSupportedBlend(blend))
+        {
+            EditText("Text blend", commit: true, text => text with { Blend = blend });
+        }
+    }
+
+    public void SetTextBlur(double sigma, bool commit = true) =>
+        EditText("Text blur", commit, text => text with { Blur = Finite(sigma, text.Blur, 0, 32) });
+
+    // -------------------------------------------------------- vector stroke (line or shape)
+
+    /// <summary>True when the selected Line/Shape strokes with a repeating asset.</summary>
+    public bool SelectedStrokeHasAsset =>
+        (Session.SelectedObject?.Line?.Stroke ?? Session.SelectedObject?.Shape?.Stroke)
+            ?.AssetSha256 is not null;
+
+    private static SceneObject WithStroke(SceneObject before, VectorStrokeStyle stroke) =>
+        before.Line is { } line
+            ? before with { Line = new LineStyle(line.Nodes, stroke, line.Portals, line.Closed) }
+            : before.Shape is { } shape
+                ? before with { Shape = new ShapeStyle(shape.Regions, shape.Fill, stroke, shape.Portals) }
+                : before;
+
+    private void EditStroke(string name, bool commit, Func<VectorStrokeStyle, VectorStrokeStyle> change) =>
+        EditAppearance(name, commit, before =>
+        {
+            var stroke = before.Line?.Stroke ?? before.Shape?.Stroke;
+            if (stroke is null)
+            {
+                return before;
+            }
+
+            var changed = change(stroke);
+            return changed.Equals(stroke) ? before : WithStroke(before, changed);
+        });
+
+    public void SetStrokeColor(string? colorText)
+    {
+        if (RequireColorInput(colorText) is { } color)
+        {
+            EditStroke("Stroke color", commit: true, stroke => stroke with { Color = color });
+        }
+    }
+
+    public void SetStrokeWidth(double width, bool commit = true) =>
+        EditStroke("Stroke width", commit, stroke => stroke with
+        {
+            Width = Finite(width, stroke.Width, 0.1, 256),
+        });
+
+    public void SetStrokeOpacityPercent(double percent, bool commit = true) =>
+        EditStroke("Stroke opacity", commit, stroke => stroke with
+        {
+            Opacity = Finite(percent, stroke.Opacity * 100, 0, 100) / 100.0,
+        });
+
+    public void SetStrokeBlend(string blend)
+    {
+        if (RequireSupportedBlend(blend))
+        {
+            EditStroke("Stroke blend", commit: true, stroke => stroke with { Blend = blend });
+        }
+    }
+
+    public void SetStrokeBlur(double sigma, bool commit = true) =>
+        EditStroke("Stroke blur", commit, stroke => stroke with { Blur = Finite(sigma, stroke.Blur, 0, 32) });
+
+    public void SetStrokeOffset(double offset, bool commit = true) =>
+        EditStroke("Stroke offset", commit, stroke => stroke with
+        {
+            Offset = Finite(offset, stroke.Offset, -128, 128),
+        });
+
+    public void SetStrokeEndCap(VectorCap cap) =>
+        EditStroke("Stroke end cap", commit: true, stroke => stroke with { EndCap = cap });
+
+    public void SetStrokeNodeCap(VectorCap cap) =>
+        EditStroke("Stroke node cap", commit: true, stroke => stroke with { NodeCap = cap });
+
+    public void SetStrokePattern(StrokePattern pattern) =>
+        EditStroke("Stroke pattern", commit: true, stroke => stroke with { Pattern = pattern });
+
+    public void SetStrokeShadowNone() =>
+        EditStroke("Stroke shadow", commit: true, stroke => stroke with { ShadowOpacity = 0 });
+
+    public void SetStrokeShadowStandard() =>
+        EditStroke("Stroke shadow", commit: true, stroke => stroke with
+        {
+            ShadowOffsetX = ShadowPreset.StandardOffsetX,
+            ShadowOffsetY = ShadowPreset.StandardOffsetY,
+            ShadowBlur = ShadowPreset.StandardBlur,
+            ShadowOpacity = ShadowPreset.StandardOpacity,
+        });
+
+    public void SetStrokeShadow(
+        double? offsetX = null, double? offsetY = null, double? blur = null,
+        double? opacityPercent = null, bool commit = true) =>
+        EditStroke("Stroke shadow", commit, stroke => stroke with
+        {
+            ShadowOffsetX = Finite(offsetX, stroke.ShadowOffsetX, -64, 64),
+            ShadowOffsetY = Finite(offsetY, stroke.ShadowOffsetY, -64, 64),
+            ShadowBlur = Finite(blur, stroke.ShadowBlur, 0, 64),
+            ShadowOpacity = Finite(opacityPercent, stroke.ShadowOpacity * 100, 0, 100) / 100.0,
+        });
+
+    public void SetStrokeHueDegrees(double degrees, bool commit = true)
+    {
+        if (!SelectedStrokeHasAsset)
+        {
+            StatusDetail = "Оттенок доступен только для обводки из ассета.";
+            return;
+        }
+
+        EditStroke("Stroke hue", commit, stroke => stroke with
+        {
+            Hue = Finite(degrees, stroke.Hue, -180, 180),
+        });
+    }
+
+    public void SetStrokeSaturationPercent(double percent, bool commit = true)
+    {
+        if (!SelectedStrokeHasAsset)
+        {
+            StatusDetail = "Насыщенность доступна только для обводки из ассета.";
+            return;
+        }
+
+        EditStroke("Stroke saturation", commit, stroke => stroke with
+        {
+            Saturation = PercentOffset(percent, stroke.Saturation),
+        });
+    }
+
+    /// <summary>Stroke appearance back to defaults; width, offset, caps and asset survive.</summary>
+    public void ResetStrokeAppearance() =>
+        EditStroke("Reset stroke", commit: true, stroke => new VectorStrokeStyle
+        {
+            Width = stroke.Width,
+            Offset = stroke.Offset,
+            EndCap = stroke.EndCap,
+            NodeCap = stroke.NodeCap,
+            AssetSha256 = stroke.AssetSha256,
+            AssetSpacing = stroke.AssetSpacing,
+        });
+
+    // -------------------------------------------------------------------------- shape fill
+
+    private void EditShapeFill(string name, bool commit, Func<ShapeFillStyle, ShapeFillStyle> change) =>
+        EditAppearance(name, commit, before =>
+        {
+            if (before.Shape is not { } shape)
+            {
+                return before;
+            }
+
+            var changed = change(shape.Fill);
+            return changed.Equals(shape.Fill)
+                ? before
+                : before with { Shape = new ShapeStyle(shape.Regions, changed, shape.Stroke, shape.Portals) };
+        });
+
+    public void SetShapeFillColor(string? colorText)
+    {
+        if (RequireColorInput(colorText) is { } color)
+        {
+            EditShapeFill("Shape fill", commit: true, fill => fill with { Color = color });
+        }
+    }
+
+    public void SetShapeFillOpacityPercent(double percent, bool commit = true) =>
+        EditShapeFill("Shape fill opacity", commit, fill => fill with
+        {
+            Opacity = Finite(percent, fill.Opacity * 100, 0, 100) / 100.0,
+        });
+
+    /// <summary>Fill back to its defaults; the texture reference is dropped with the rest.</summary>
+    public void ResetShapeFill() =>
+        EditShapeFill("Reset shape fill", commit: true, _ => new ShapeFillStyle());
+
+    /// <summary>Whole-object effects back to neutral: opacity, blend, blur.</summary>
+    public void ResetShapeEffects() =>
+        EditAppearance("Reset shape effects", commit: true, before =>
+        {
+            if (before.Shape is not { } shape)
+            {
+                return before;
+            }
+
+            var stroke = shape.Stroke with { Blend = "Normal", Blur = 0 };
+            var unchanged = stroke.Equals(shape.Stroke) && before.ObjectOpacity == 1.0;
+            return unchanged
+                ? before
+                : CopyObject(before) with
+                {
+                    ObjectOpacity = 1.0,
+                    Shape = new ShapeStyle(shape.Regions, shape.Fill, stroke, shape.Portals),
+                };
+        });
+
+    // ------------------------------------------------------------------- brush tip state
+
+    public void SetBrushColor(string colorText)
+    {
+        if (RequireColorInput(colorText) is not { } color)
+        {
+            return;
+        }
+
+        InspectorError = "";
+        BrushSettings = BrushSettings with { Color = color };
+        StatusDetail = $"Цвет кисти: {color}.";
+        SceneChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>Display name of the active tip, or null for the procedural round brush.</summary>
+    public string? BrushTipName => _brushTipName;
+
+    /// <summary>Sets the alpha tip the brush stamps with. Tool state, not a document edit.</summary>
+    public void SetBrushTip(BrushTipShape tip, string name)
+    {
+        ArgumentNullException.ThrowIfNull(tip);
+        BrushSettings = BrushSettings with { Tip = tip };
+        _brushTipName = name;
+        Raise(nameof(BrushTipName));
+        StatusDetail = $"Отпечаток кисти: {name}.";
+        SceneChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void ClearBrushTip()
+    {
+        BrushSettings = BrushSettings with { Tip = null };
+        _brushTipName = null;
+        Raise(nameof(BrushTipName));
+        SceneChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>Loads a library asset as the brush tip: its alpha channel becomes the dab shape.</summary>
+    public bool UseAssetAsBrushTip(AssetRecord record)
+    {
+        if (_assetCatalog is null)
+        {
+            StatusDetail = "Локальный каталог ассетов недоступен.";
+            return false;
+        }
+
+        var resolution = _assetCatalog.ReadVerified(record);
+        if (resolution.Status != AssetResolutionStatus.Available || resolution.Content is null)
+        {
+            StatusDetail = "Файл отпечатка отсутствует или не совпадает с его SHA-256.";
+            return false;
+        }
+
+        SkiaSharp.SKBitmap bitmap;
+        try
+        {
+            bitmap = AssetImagePolicy.DecodeBitmap(resolution.Content, 1024, 1024);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            StatusDetail = "Отпечаток кисти должен быть изображением не больше 1024×1024.";
+            return false;
+        }
+
+        using (bitmap)
+        {
+            var alpha = new byte[checked(bitmap.Width * bitmap.Height)];
+            for (var y = 0; y < bitmap.Height; y++)
+            {
+                for (var x = 0; x < bitmap.Width; x++)
+                {
+                    alpha[(y * bitmap.Width) + x] = bitmap.GetPixel(x, y).Alpha;
+                }
+            }
+
+            SetBrushTip(new BrushTipShape(bitmap.Width, bitmap.Height, alpha), record.DisplayName);
+        }
+        return true;
+    }
 
     // ---------------------------------------------------------------- autosave
 

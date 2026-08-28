@@ -1,0 +1,17 @@
+# Stage prompts
+
+Новые исполняемые задания создаются из `PROMPT_TEMPLATE_CODEX.md` и помечаются строкой:
+
+```markdown
+> Status: ACTIVE
+```
+
+Один active prompt закрывает один полный вертикальный roadmap-этап или крупный однородный блок этапа. Мелкий prompt допустим только для review-fix с конкретным red/green дефектом. Соседние этапы с разными acceptance-gates не объединяются.
+
+Файлы выполненных этапов сохраняются как исторические контракты с `Status: HISTORICAL CONTRACT`. Они не являются текущей инструкцией и не переписывают фактическую историю модели/исполнителя. Перед запуском нового prompt выполнить:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\check-stage-prompts.ps1 -RequireActive
+```
+
+Проверка требует Codex `gpt-5.6-sol`, полный набор разделов, матрицу риска/инструментов и отсутствие активных ссылок на Claude/Opus.

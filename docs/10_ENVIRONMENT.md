@@ -1,80 +1,92 @@
 # 10. Среда и инструменты
 
-## Установлено и проверено 25.08.2026
+## Проверено 28.08.2026
 
-| Инструмент | Версия | Назначение |
-|---|---:|---|
-| Windows | 10.0.26200, x64 | целевая рабочая система |
-| .NET SDK | 10.0.400 | сборка, тесты, publish |
-| Avalonia Templates | 12.1.1 | официальный стартовый шаблон; приложение ещё не создано |
-| Claude Code | 2.1.245 | исполнитель Opus в консоли |
-| Git | 2.54.0 | локальный контроль версий |
-| ripgrep | 15.2.0 | быстрый поиск по проекту |
-| Python | 3.13.13 | только исследовательские/служебные скрипты, не runtime приложения |
-| Node/npm | 22.22.3 / 10.9.8 | не нужны приложению; остаются системными инструментами |
-| winget | 1.29.290 | официальная установка Windows SDK/tools |
-| Claude project plugins | Superpowers 6.3.0 / Interfaces 1.6.2 | TDD/debugging/verification и отдельный UI/accessibility review |
-| pre-commit | 4.6.2 | менеджер быстрых Git-гейтов |
-| Lychee | 0.24.2 | проверка Markdown-ссылок и anchors |
-| dotnet-coverage | 18.10.0 local tool | фактическое покрытие .NET-кода |
-| dotnet-stryker | 4.16.0 local tool | мутационная проверка силы тестов |
-| dotnet-counters / trace / gcdump | 9.0.661903 local tools | runtime metrics, performance trace и GC heap evidence |
-| ImageMagick Q16-HDRI | 7.1.2-30 | локальные dimensions/alpha/metadata, математический RMSE и diff PNG для визуальных состояний |
-| Accessibility Insights for Windows | 1.1.2924.1, подписано Microsoft | Live Inspect UIA tree, FastPass, Tab stops, automated accessibility checks и contrast inspection настоящего окна |
+| Инструмент | Фактическая версия / источник | Назначение в Map | Статус |
+|---|---:|---|---|
+| Windows | `10.0.26200`, x64 | рабочая и целевая native-среда | active |
+| Codex desktop/CLI | OpenAI-signed `codex-cli 0.142.4` | основной coding agent и локальная оркестрация | active |
+| Codex model | `gpt-5.6-sol` | implementation `high`; review/security/architecture `xhigh` | required by prompt |
+| Codex Browser | bundled `26.820.80927` | публичные источники, DOM/screenshots, current research | on demand |
+| Codex Computer Use | bundled `26.820.80927` | ручной smoke выбранного настоящего Windows-окна | UI stages |
+| GitHub connector | OpenAI curated | read-only проверка remote/repo, issues/PR по прямому запросу | connector; у Map remote не настроен |
+| Codex Security | OpenAI curated | explicit/boundary-triggered standard/diff security review | on demand |
+| OpenAI Docs skill | system skill | актуальные инструкции по Codex/model/prompting | workflow research |
+| .NET SDK | `10.0.400`, Microsoft-signed | restore/build/test/publish/analyzers/NuGet Audit | active |
+| Git | `2.54.0.windows.1`, signed | локальный version-control и review boundary | active |
+| ripgrep | `15.2.0` via WinGet | быстрый read-only поиск | active; binary unsigned |
+| Python | `3.13.13`, PSF-signed | pre-commit и служебные scripts, не app runtime | active |
+| Node/npm | `22.22.3 / 10.9.8` | системные/on-demand tools; не app runtime | avoid unless justified |
+| pre-commit | `4.6.2` | быстрые Git-gates | active |
+| pre-commit-hooks | exact commit `3e8a870...` (`v6.0.0`) | repository file hygiene | active, immutable pin |
+| Lychee | exact hook commit `2bba271...`; binary `0.24.2` via WinGet | offline Markdown links/anchors | active; PATH binary unsigned |
+| dotnet-coverage | local tool `18.10.0` | targeted execution coverage | on demand |
+| Stryker.NET | local tool `4.16.0` | mutation strength critical tests | on demand |
+| dotnet-counters/trace/gcdump | local tools `9.0.661903` | CPU/GC/allocation/trace evidence | performance/memory stages |
+| ImageMagick | `7.1.2-30 Q16-HDRI` | dimensions/alpha/RMSE/diff PNG | visual stages |
+| Accessibility Insights | `1.1.2924.1`, Microsoft-signed | UIA tree, FastPass, Tab/focus/contrast | accessibility gates |
+| project-owned UIA drivers | repository scripts | reproducible native Release scenarios | UI stages |
 
-Исследовательские Python-пакеты: PyMuPDF 1.28.0, pypdf 6.16.2, pdfplumber 0.11.10, pypdfium2 5.13.0, openpyxl 3.1.5, yt-dlp 2026.7.4. Они использовались для чтения источников и не входят в продукт.
+Локальные `.NET tools` закреплены в `dotnet-tools.json` с `rollForward: false`. Release tags внешних pre-commit repositories дополнительно заменены на exact Git commits. Unsigned `rg`/`lychee` не признаны вредоносными по одному этому признаку, но их происхождение, hash/version и канал обновления нужно повторно проверять при upgrade.
 
-## Намеренно не установлено
+Исследовательские Python-пакеты (PDF/YouTube/Office) не входят в runtime или обычный build Map. Они не перечисляются в этапном prompt, пока этап не требует работы с соответствующим источником.
 
-- Qt/CMake/C++ toolchain — резерв только при провале Avalonia spike;
-- Godot — резерв, не текущая архитектура;
-- Rust/Tauri, Electron — не соответствуют выбранному нативному контуру;
-- FFmpeg — пока не нужен продукту;
-- Ollama/local LLM — карта не требует встроенного ИИ;
-- дизайнерские клонеры/экстракторы — риск прав и не нужны собственному дизайну;
-- Cloudflare/Vercel/серверы — офлайн-программа.
-- OmniParser — официальный исследовательский screen parser Microsoft, но требует отдельного Python/Conda-окружения и весов моделей; текущие локальные screenshots уже понимаются Claude/Codex без него;
-- сторонние Windows control MCP (`Windows-MCP`, `UIAutomationMCP`) — дают агенту доступ ко всему рабочему столу владельца и этапу не нужны. Консольный Claude на Windows получает контролируемые PNG и проектные test drivers.
-
-## Проверка
+## Базовая проверка среды
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\doctor.ps1
-dotnet tool restore
-dotnet tool list
+codex --version
+dotnet --version
+git --version
+rg --version
+python --version
 python -m pre_commit --version
 lychee --version
 magick -version
-Get-Item "$env:LOCALAPPDATA\Programs\AccessibilityInsights\1.1\AccessibilityInsights.exe"
+dotnet tool list
+powershell -ExecutionPolicy Bypass -File .\scripts\doctor.ps1
 ```
 
-Успех doctor означает только готовность среды, не готовность приложения.
+Успешный doctor доказывает только наличие среды, не готовность этапа.
 
-После первой установки Lychee через WinGet нужно открыть новую консоль, чтобы обновлённый `PATH` применился. До этого он вызывается по фактическому пути WinGet package. Git-hook устанавливается один раз на checkout: `python -m pre_commit install`.
+## Что удалено из активного workflow
 
-Gitleaks и любые другие сканеры секретов из набора удалены: у офлайн-программы без сервера, аккаунтов и ключей им нечего искать, а hook `gitleaks` (`language: golang`) тянул Go-тулчейн и вешал коммит. Подробности и условия возврата — в `docs/11_CLAUDE_VERIFICATION_PROTOCOL.md`.
+- Claude Code/Opus как исполнитель;
+- project-only Claude plugins Superpowers и Interfaces;
+- `CLAUDE.md`, `.claude/settings.json`, Claude-specific runbook/protocol links;
+- Repomix как обычный источник контекста — Codex читает repository напрямую;
+- автоматически собираемый Gitleaks hook, который скачивал Go toolchain и обходил историю на commit;
+- любые broad Windows-control MCP.
 
-ImageMagick установлен как Windows app execution alias. Если текущая консоль ещё не видит `magick`, открыть новую или вызвать `%LOCALAPPDATA%\Microsoft\WindowsApps\magick.exe`. Accessibility Insights установлен per-user из официального MSI; подпись установщика и EXE должна иметь статус `Valid`, signer `Microsoft Corporation`.
+Исторические review/handoff записи могут называть прежнего исполнителя: это evidence прошлого, а не активная инструкция. Пользовательские глобальные Claude plugins не удаляются этой repository-миграцией и не влияют на Codex.
 
-## Добавление нового инструмента
+## Намеренно не установлено в Map
 
-Перед установкой записать:
+- web/Electron/Tauri stack, cloud deployment, servers и auth;
+- Qt/CMake/C++ и Godot — только резерв после нового решения;
+- local LLM/встроенный AI — продукту не требуется;
+- OmniParser/model weights — нет доказанной пользы поверх vision + project driver;
+- Appium/WinAppDriver — project UIA drivers уже покрывают текущие сценарии; добавить только при конкретном недостающем E2E;
+- FsCheck/ArchUnitNET — полезны для property/architecture tests, но новая dependency требует stage-specific acceptance;
+- сторонние desktop MCP — непропорциональный доступ к рабочему столу;
+- scraper/cloner/asset extractor — clean-room и licensing risk.
 
-1. какая конкретная задача текущего этапа без него не решается;
-2. официальный источник и актуальная версия;
-3. лицензия и влияние на распространение `.exe`;
+## Security и secrets
+
+Map не требует secret scanner на каждом commit, пока в нём нет accounts/keys/integrations. Это не означает «security не применяется»: import/archive/image parsing, external tools, dependencies, installers/updaters/plugins и network capability являются trust boundaries. Триггеры security review находятся в `docs/11_CODEX_VERIFICATION_PROTOCOL.md`.
+
+NuGet Audit остаётся включённым. Если появляется secret-bearing integration, оформить новый DEC и выбрать scanner/config без тяжёлой автоматической загрузки toolchain на каждый commit.
+
+## Добавление/обновление инструмента
+
+До установки зафиксировать:
+
+1. stage risk/claim, который нельзя доказать существующим средством;
+2. официальный source, exact version/commit и hash/signature где доступно;
+3. license и влияние на distribution;
 4. runtime/build/dev-only;
-5. размер, telemetry и сетевые последствия — офлайн-контур не нарушается;
-6. как удалить/откатить;
-7. как проверить, что он действительно использован.
+5. hooks, commands, network, filesystem/desktop authority и telemetry;
+6. install size/time и offline impact;
+7. rollback/uninstall;
+8. конкретный evidence output и условие удаления, если пользы нет.
 
-## Первый scaffold после принятия DEC
-
-Создаёт Opus только в Stage 1. Не выполнять заранее:
-
-```powershell
-dotnet new sln -n Map
-dotnet new avalonia.mvvm -n Map.App -o src/Map.App -f net10.0
-```
-
-Точная структура и пакеты из технического задания важнее примера команды.
+Наличие плагина/connector в marketplace не является разрешением установить или вызвать его. Внешняя запись, push/PR/release/upload/message требуют отдельного прямого запроса владельца.

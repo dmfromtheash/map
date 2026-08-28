@@ -28,6 +28,46 @@ public sealed record MapAssetReference
         string? catalogId = null,
         string? relativePath = null,
         byte[]? fallbackThumbnailPng = null)
+        : this(
+            sha256, displayName, mediaType, extension, storage, importedUtc, provenance, license,
+            embeddedContent, catalogId, relativePath, fallbackThumbnailPng, clonePayloads: true)
+    {
+    }
+
+    /// <summary>
+    /// Persistence has already allocated, bounded and verified these arrays. Transferring them
+    /// avoids a second full archive-payload copy while the public constructor remains defensive.
+    /// </summary>
+    internal static MapAssetReference FromValidatedPayloads(
+        string sha256,
+        string displayName,
+        string mediaType,
+        string extension,
+        ProjectAssetStorage storage,
+        DateTimeOffset importedUtc,
+        string provenance,
+        string license,
+        byte[]? embeddedContent,
+        string? catalogId,
+        string? relativePath,
+        byte[]? fallbackThumbnailPng) => new(
+            sha256, displayName, mediaType, extension, storage, importedUtc, provenance, license,
+            embeddedContent, catalogId, relativePath, fallbackThumbnailPng, clonePayloads: false);
+
+    private MapAssetReference(
+        string sha256,
+        string displayName,
+        string mediaType,
+        string extension,
+        ProjectAssetStorage storage,
+        DateTimeOffset importedUtc,
+        string provenance,
+        string license,
+        byte[]? embeddedContent,
+        string? catalogId,
+        string? relativePath,
+        byte[]? fallbackThumbnailPng,
+        bool clonePayloads)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sha256);
         ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
@@ -36,6 +76,12 @@ public sealed record MapAssetReference
         if (sha256.Length != 64 || sha256.Any(c => !Uri.IsHexDigit(c)))
         {
             throw new ArgumentException("Asset identity must be a SHA-256 hex string.", nameof(sha256));
+        }
+
+        if (!ProjectAssetFormatPolicy.TryGetDeclaredFormat(mediaType, extension, out _))
+        {
+            throw new ArgumentException(
+                "Asset media type and extension must name the same PNG, JPEG or WebP format.");
         }
 
         if (storage == ProjectAssetStorage.Embedded && embeddedContent is null)
@@ -50,6 +96,12 @@ public sealed record MapAssetReference
             throw new ArgumentException("A linked asset needs a catalog id or relative path.");
         }
 
+        if (relativePath is not null && !ProjectLinkedAssetPath.IsSafeRelative(relativePath))
+        {
+            throw new ArgumentException(
+                "A project linked-asset path must be local and relative.", nameof(relativePath));
+        }
+
         Sha256 = sha256.ToLowerInvariant();
         DisplayName = displayName;
         MediaType = mediaType;
@@ -58,10 +110,14 @@ public sealed record MapAssetReference
         ImportedUtc = importedUtc;
         Provenance = provenance;
         License = license;
-        EmbeddedContent = embeddedContent is null ? null : (byte[])embeddedContent.Clone();
+        EmbeddedContent = embeddedContent is null || !clonePayloads
+            ? embeddedContent
+            : (byte[])embeddedContent.Clone();
         CatalogId = catalogId;
         RelativePath = relativePath;
-        FallbackThumbnailPng = fallbackThumbnailPng is null ? null : (byte[])fallbackThumbnailPng.Clone();
+        FallbackThumbnailPng = fallbackThumbnailPng is null || !clonePayloads
+            ? fallbackThumbnailPng
+            : (byte[])fallbackThumbnailPng.Clone();
     }
 
     public string Sha256 { get; init; }

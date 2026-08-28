@@ -1,5 +1,7 @@
 # Stage 9 — надёжность полного цикла
 
+> Status: HISTORICAL CONTRACT — completed/partitioned; do not execute again. New work uses `PROMPT_TEMPLATE_CODEX.md`.
+
 > Разрешено владельцем к запуску 26.08.2026. Первый срез выполняется в
 > `stage/09-reliability-cycle` после принятого Editor UX Rebuild.
 

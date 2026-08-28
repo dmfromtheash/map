@@ -30,12 +30,21 @@ public static class MapProjectFormat
 
     // ---------------------------------------------------------------- read limits
     //
-    // Not a defence against attackers - the program is offline and opens the owner's own files.
-    // These bound what a truncated, mis-copied or mislabeled file can cost before the reader
-    // commits memory to it, so a damaged container fails with a clear error instead of a hang.
+    // These limits are part of the untrusted-input boundary. A local .mapproj can still be
+    // malformed or attacker-controlled, so the reader rejects excessive work before allocating
+    // or inflating payloads and fails with a specific resource-limit error.
 
     /// <summary>Bounds sparse tiles/assets without tying the limit to the four Stage 2 entries.</summary>
     public const int MaxEntries = 16_384;
+
+    /// <summary>Bounds compressed bytes before ZipArchive materializes central-directory state.</summary>
+    public const long MaxContainerFileBytes = 544L * 1024 * 1024;
+
+    public const long MaxCentralDirectoryBytes = 16L * 1024 * 1024;
+
+    public const int MaxEntryNameBytes = 512;
+
+    public const long MaxEntryNamePayloadBytes = 2L * 1024 * 1024;
 
     /// <summary>Upper bound of any single JSON entry once decompressed.</summary>
     public const long MaxJsonEntryBytes = 32L * 1024 * 1024;
@@ -43,14 +52,31 @@ public static class MapProjectFormat
     /// <summary>One raw tile is fixed-size and bounded (256x256 RGBA at most).</summary>
     public const long MaxTileEntryBytes = 256L * 256 * 4;
 
-    public const long MaxAssetEntryBytes = 512L * 1024 * 1024;
+    public const long MaxAssetEntryBytes = 64L * 1024 * 1024;
 
     /// <summary>Upper bound of the stored preview image bytes.</summary>
     public const long MaxPreviewBytes = 8L * 1024 * 1024;
 
     /// <summary>Upper bound of the whole container once decompressed.</summary>
-    public const long MaxTotalUncompressedBytes = 2L * 1024 * 1024 * 1024;
+    public const long MaxAssetPayloadBytes = 256L * 1024 * 1024;
+
+    public const long MaxTilePayloadBytes = 256L * 1024 * 1024;
+
+    public const long MaxJsonPayloadBytes = 64L * 1024 * 1024;
+
+    public const long MaxTotalUncompressedBytes = 512L * 1024 * 1024;
+
+    public const double MaxCompressionRatio = 1_000;
+
+    /// <summary>
+    /// Small highly-compressible entries (notably empty raw tiles) are legitimate. Above this
+    /// additive allowance, the ratio budget applies to every entry instead of having a bypassing
+    /// size threshold.
+    /// </summary>
+    public const long CompressionRatioSlackBytes = 1L * 1024 * 1024;
 
     /// <summary>Largest preview dimension the reader accepts, read from the PNG IHDR.</summary>
     public const int MaxPreviewDimension = 8192;
+
+    public const long MaxPreviewPixels = 16L * 1024 * 1024;
 }

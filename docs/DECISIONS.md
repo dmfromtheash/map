@@ -163,3 +163,39 @@
 - **Gate:** миграция старого каталога, fixed/manual/random set placement, Area/Density scatter,
   undo/redo и save/reopen доказаны тестами на собственном много-вариантном diagnostic set.
 - **Доказательство:** `docs/research/ASSET_CATALOG_AND_VARIANT_SETS.md`.
+
+## DEC-015 — Бюджеты чтения локального контента и безопасные linked fallback
+
+- **Статус:** `accepted`
+- **Принято владельцем:** 2026-08-28, владелец прямо делегировал Codex завершение Stage 10D,
+  исправления и оставшиеся технические решения в пределах текущего среза.
+- **Дата:** 2026-08-28
+- **Решение по linked paths:** `.mapproj` сохраняет только синтаксически относительный путь без
+  NUL, `:`, drive/root/UNC/device namespace и пустых сегментов. Сегменты `.`/`..` сохраняются для
+  совместимости старых относительных ссылок, но fallback автоматически открывается только когда
+  канонический результат остаётся внутри папки проекта и цепочка не содержит reparse points.
+  Внешний linked import сохраняет catalog/content identity без небезопасного файлового fallback;
+  при недоступном каталоге результат — явный placeholder, а не произвольный local-file probe.
+- **Решение по изображениям:** максимум 64 MiB encoded, 32 768 по каждой оси, 32 MiPixels и
+  128 MiB расчётного RGBA на одно изображение. Production Skia cache — 64 элемента / 256 MiB
+  conservative resident weight (`encoded + decoded`), Library cover cache — 96 элементов /
+  64 MiB; место освобождается до нативного decode. Optional fallback thumbnail имеет отдельный
+  предел 8 MiB encoded, 2048 по оси и 4 MiPixels и принимается только после полного decode. SHA,
+  metadata и decode/embedding относятся к одним прочитанным байтам.
+- **Решение по `.mapproj`:** 16 384 entries; JSON entry 32 MiB, tile 256 KiB, asset 64 MiB,
+  preview 8 MiB; aggregate assets 256 MiB, tiles 256 MiB, JSON 64 MiB, всего 512 MiB. Compression
+  ratio 1000 применяется ко всем entries с additive slack 1 MiB. Preview ограничен 8192 по оси
+  и 16 MiPixels до UI decode. До `JsonSerializer` streaming semantic pass ограничивает известные
+  materialized collections: 4096 layers, 100 000 scene/composition objects, 10 000 notes,
+  16 384 assets, 500 000 vector nodes и 1 MiB UTF-8 на одну строку; остальные DTO-коллекции и
+  общий token count также bounded. Это предотвращает object amplification внутри допустимого
+  32 MiB JSON entry.
+- **Совместимость v1:** номер схемы не меняется, потому что структура данных не изменилась.
+  Более крупный старый v1-файл может не войти в текущий интерактивный memory envelope; это
+  возвращается как `MapProjectResourceLimitException` («файл не изменён»), а не объявляется
+  повреждением. Скрыто ослаблять лимиты или выдавать resource-limit за corruption запрещено.
+- **Причина:** локальный/offline файл всё равно является внешней границей данных. Предыдущие
+  пределы 512 MiB на один asset и 2 GiB на container допускали несколько полных копий payload и
+  нативные декодеры вне измеримого рабочего бюджета.
+- **Доказательство:** `docs/reviews/STAGE_10D_OBJECT_INSPECTORS_VERIFICATION.md`, targeted security
+  tests и Stryker-отчёты в `artifacts/stage10d-stryker-*`.

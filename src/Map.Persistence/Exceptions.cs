@@ -14,6 +14,14 @@ public sealed class MapProjectCorruptedException(string message, Exception? inne
 {
 }
 
+/// <summary>
+/// The container may be structurally valid, but exceeds this build's bounded interactive read
+/// envelope. It is never rewritten and must not be reported to the user as damaged data.
+/// </summary>
+public sealed class MapProjectResourceLimitException(string message) : MapProjectException(message)
+{
+}
+
 /// <summary>A materialized raster or mask tile is missing, malformed or fails its checksum.</summary>
 public sealed class MapProjectTileCorruptedException(string entryName, string layerId, int tileX, int tileY, string reason) : MapProjectException($"Tile {tileX}_{tileY} of layer {layerId} ({entryName}) {reason}.")
 {

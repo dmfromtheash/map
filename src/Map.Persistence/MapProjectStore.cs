@@ -20,6 +20,108 @@ public static class MapProjectStore
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
+    private readonly record struct PreparedContainer(
+        byte[] ManifestBytes,
+        byte[] SceneBytes,
+        byte[] AssetManifestBytes);
+
+    /// <summary>
+    /// Checks whether new document assets fit the same payload and ZIP-entry envelope enforced by
+    /// the reader. The editor calls this before committing an undoable command, so it cannot create
+    /// a state the next save is guaranteed to reject.
+    /// </summary>
+    public static bool CanAdmitAdditionalAssets(
+        MapDocument document,
+        IEnumerable<MapAssetReference> candidates,
+        out string reason)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(candidates);
+
+        var projected = document.Assets.ToDictionary(
+            asset => asset.Sha256, StringComparer.OrdinalIgnoreCase);
+        foreach (var candidate in candidates)
+        {
+            ArgumentNullException.ThrowIfNull(candidate);
+            projected.TryAdd(candidate.Sha256, candidate);
+        }
+
+        return TryValidateAssetEnvelope(
+            document,
+            projected.Values,
+            MapProjectFormat.MaxJsonPayloadBytes + MapProjectFormat.MaxPreviewBytes,
+            out reason);
+    }
+
+    /// <summary>
+    /// Cheap admission before reading/cloning catalog payloads. Exact thumbnail bytes and entry
+    /// count are checked again by <see cref="CanAdmitAdditionalAssets"/> after resolution.
+    /// </summary>
+    public static bool CanAdmitEmbeddedBytes(
+        MapDocument document,
+        long additionalBytes,
+        int additionalAssets,
+        out string reason)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentOutOfRangeException.ThrowIfNegative(additionalBytes);
+        ArgumentOutOfRangeException.ThrowIfNegative(additionalAssets);
+
+        try
+        {
+            var existingBytes = document.Assets.Aggregate(
+                0L,
+                static (total, asset) => checked(
+                    total
+                    + (asset.EmbeddedContent?.LongLength ?? 0)
+                    + (asset.FallbackThumbnailPng?.LongLength ?? 0)));
+            var projectedAssetBytes = checked(existingBytes + additionalBytes);
+            if (projectedAssetBytes > MapProjectFormat.MaxAssetPayloadBytes)
+            {
+                reason = $"Ассеты превысят лимит проекта {MapProjectFormat.MaxAssetPayloadBytes} байт.";
+                return false;
+            }
+
+            var tileBytes = EnumerateTileEntries(document).Aggregate(
+                0L,
+                static (total, entry) => checked(total + entry.Bytes.LongLength));
+            if (checked(
+                    tileBytes
+                    + projectedAssetBytes
+                    + MapProjectFormat.MaxJsonPayloadBytes
+                    + MapProjectFormat.MaxPreviewBytes)
+                > MapProjectFormat.MaxTotalUncompressedBytes)
+            {
+                reason = $"Проект превысит общий лимит {MapProjectFormat.MaxTotalUncompressedBytes} байт.";
+                return false;
+            }
+
+            if (checked(document.Assets.Count + additionalAssets) > MapProjectJsonBudget.MaxAssets)
+            {
+                reason = $"В проекте будет больше {MapProjectJsonBudget.MaxAssets} ассетов.";
+                return false;
+            }
+
+            var entries = checked(
+                BaseContainerEntryCount(document)
+                + AssetEntryCount(document.Assets)
+                + additionalAssets);
+            if (entries > MapProjectFormat.MaxEntries)
+            {
+                reason = $"Проект превысит лимит {MapProjectFormat.MaxEntries} файлов контейнера.";
+                return false;
+            }
+
+            reason = "";
+            return true;
+        }
+        catch (OverflowException)
+        {
+            reason = "Размер или число ассетов переполняет допустимый бюджет проекта.";
+            return false;
+        }
+    }
+
     public static void Save(
         MapDocument document,
         string targetPath,
@@ -39,6 +141,14 @@ public static class MapProjectStore
                 "A preview image is required; persistence stores the caller's bytes verbatim.",
                 nameof(previewPng));
         }
+
+        if (previewPng.LongLength > MapProjectFormat.MaxPreviewBytes)
+        {
+            throw new MapProjectResourceLimitException(
+                $"Preview exceeds the {MapProjectFormat.MaxPreviewBytes}-byte project budget.");
+        }
+
+        var prepared = PrepareContainer(document, metadata, previewPng);
 
         var fullTarget = Path.GetFullPath(targetPath);
         var directory = Path.GetDirectoryName(fullTarget)
@@ -64,7 +174,7 @@ public static class MapProjectStore
             using (var stream = new FileStream(
                        tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1 << 16, FileOptions.None))
             {
-                WriteContainer(stream, document, metadata, previewPng);
+                WriteContainer(stream, document, previewPng, prepared);
                 stream.Flush(flushToDisk: true);
             }
 
@@ -127,6 +237,87 @@ public static class MapProjectStore
         }
     }
 
+    private static bool TryValidateAssetEnvelope(
+        MapDocument document,
+        IEnumerable<MapAssetReference> assets,
+        long reservedOtherPayloadBytes,
+        out string reason)
+    {
+        try
+        {
+            var assetList = assets.ToList();
+            if (assetList.Count > MapProjectJsonBudget.MaxAssets)
+            {
+                reason = $"В проекте больше {MapProjectJsonBudget.MaxAssets} ассетов.";
+                return false;
+            }
+
+            long payloadBytes = 0;
+            foreach (var asset in assetList)
+            {
+                foreach (var payload in new[] { asset.EmbeddedContent, asset.FallbackThumbnailPng })
+                {
+                    if (payload is null)
+                    {
+                        continue;
+                    }
+
+                    if (payload.LongLength > MapProjectFormat.MaxAssetEntryBytes)
+                    {
+                        reason = $"Ассет {asset.Sha256} превышает лимит одного файла проекта.";
+                        return false;
+                    }
+
+                    payloadBytes = checked(payloadBytes + payload.LongLength);
+                }
+            }
+
+            if (payloadBytes > MapProjectFormat.MaxAssetPayloadBytes)
+            {
+                reason = $"Ассеты превышают лимит проекта {MapProjectFormat.MaxAssetPayloadBytes} байт.";
+                return false;
+            }
+
+            var tileBytes = EnumerateTileEntries(document).Aggregate(
+                0L,
+                static (total, entry) => checked(total + entry.Bytes.LongLength));
+            if (tileBytes > MapProjectFormat.MaxTilePayloadBytes)
+            {
+                reason = $"Тайлы превышают лимит проекта {MapProjectFormat.MaxTilePayloadBytes} байт.";
+                return false;
+            }
+
+            if (checked(payloadBytes + tileBytes + reservedOtherPayloadBytes)
+                > MapProjectFormat.MaxTotalUncompressedBytes)
+            {
+                reason = $"Проект превысит общий лимит {MapProjectFormat.MaxTotalUncompressedBytes} байт.";
+                return false;
+            }
+
+            var entries = checked(BaseContainerEntryCount(document) + AssetEntryCount(assetList));
+            if (entries > MapProjectFormat.MaxEntries)
+            {
+                reason = $"Проект содержит больше {MapProjectFormat.MaxEntries} файлов контейнера.";
+                return false;
+            }
+
+            reason = "";
+            return true;
+        }
+        catch (OverflowException)
+        {
+            reason = "Размер или число ассетов переполняет допустимый бюджет проекта.";
+            return false;
+        }
+    }
+
+    private static long BaseContainerEntryCount(MapDocument document) => checked(
+        MapProjectFormat.RequiredEntries.Count + EnumerateTileEntries(document).LongCount());
+
+    private static long AssetEntryCount(IEnumerable<MapAssetReference> assets) => assets.Sum(
+        static asset => (asset.EmbeddedContent is null ? 0L : 1L)
+            + (asset.FallbackThumbnailPng is null ? 0L : 1L));
+
     public static OpenedProject Open(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
@@ -145,8 +336,10 @@ public static class MapProjectStore
 
     // ---------------------------------------------------------------- write path
 
-    private static void WriteContainer(
-        Stream destination, MapDocument document, SaveMetadata metadata, byte[] previewPng)
+    private static PreparedContainer PrepareContainer(
+        MapDocument document,
+        SaveMetadata metadata,
+        byte[] previewPng)
     {
         var sceneBytes = JsonSerializer.SerializeToUtf8Bytes(ToSceneDto(document), JsonOptions);
         var assetManifestBytes = JsonSerializer.SerializeToUtf8Bytes(ToAssetManifestDto(document), JsonOptions);
@@ -169,10 +362,54 @@ public static class MapProjectStore
             AssetManifestSha256 = Sha256Hex(assetManifestBytes),
         };
 
+        var manifestBytes = JsonSerializer.SerializeToUtf8Bytes(manifest, JsonOptions);
+        foreach (var (name, bytes) in new[]
+        {
+            (MapProjectFormat.ManifestEntry, manifestBytes),
+            (MapProjectFormat.SceneEntry, sceneBytes),
+            (MapProjectFormat.AssetManifestEntry, assetManifestBytes),
+        })
+        {
+            if (bytes.LongLength > MapProjectFormat.MaxJsonEntryBytes)
+            {
+                throw new MapProjectResourceLimitException(
+                    $"{name} exceeds the {MapProjectFormat.MaxJsonEntryBytes}-byte JSON budget.");
+            }
+
+            MapProjectJsonBudget.Validate(bytes, name);
+        }
+
+        var jsonBytes = checked(
+            manifestBytes.LongLength + sceneBytes.LongLength + assetManifestBytes.LongLength);
+        if (jsonBytes > MapProjectFormat.MaxJsonPayloadBytes)
+        {
+            throw new MapProjectResourceLimitException(
+                $"Project JSON exceeds the {MapProjectFormat.MaxJsonPayloadBytes}-byte budget.");
+        }
+
+        if (!TryValidateAssetEnvelope(
+                document,
+                document.Assets,
+                checked(jsonBytes + previewPng.LongLength),
+                out var admissionFailure))
+        {
+            throw new MapProjectResourceLimitException(admissionFailure);
+        }
+
+        return new PreparedContainer(manifestBytes, sceneBytes, assetManifestBytes);
+    }
+
+    private static void WriteContainer(
+        Stream destination,
+        MapDocument document,
+        byte[] previewPng,
+        PreparedContainer prepared)
+    {
+
         using var archive = new ZipArchive(destination, ZipArchiveMode.Create, leaveOpen: true);
-        WriteEntry(archive, MapProjectFormat.ManifestEntry, JsonSerializer.SerializeToUtf8Bytes(manifest, JsonOptions));
-        WriteEntry(archive, MapProjectFormat.SceneEntry, sceneBytes);
-        WriteEntry(archive, MapProjectFormat.AssetManifestEntry, assetManifestBytes);
+        WriteEntry(archive, MapProjectFormat.ManifestEntry, prepared.ManifestBytes);
+        WriteEntry(archive, MapProjectFormat.SceneEntry, prepared.SceneBytes);
+        WriteEntry(archive, MapProjectFormat.AssetManifestEntry, prepared.AssetManifestBytes);
         WriteEntry(archive, MapProjectFormat.PreviewEntry, previewPng);
         foreach (var (name, bytes) in EnumerateTileEntries(document).OrderBy(p => p.Name, StringComparer.Ordinal))
         {
@@ -230,6 +467,7 @@ public static class MapProjectStore
         IReadOnlyDictionary<string, byte[]> Assets) ReadAndValidate(string fullPath)
     {
         using var stream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        MapProjectZipAdmission.Validate(stream);
 
         ZipArchive archive;
         try
@@ -316,13 +554,13 @@ public static class MapProjectStore
     {
         if (archive.Entries.Count > MapProjectFormat.MaxEntries)
         {
-            throw new MapProjectCorruptedException(
+            throw new MapProjectResourceLimitException(
                 $"The container holds {archive.Entries.Count} entries; " +
                 $"a map project has at most {MapProjectFormat.MaxEntries}.");
         }
 
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        long totalUncompressed = 0;
+        var budget = new MapProjectReadBudget();
 
         foreach (var entry in archive.Entries)
         {
@@ -342,29 +580,7 @@ public static class MapProjectStore
                 throw new MapProjectCorruptedException($"Entry {name} occurs more than once.");
             }
 
-            totalUncompressed += entry.Length;
-
-            var perEntryLimit = name == MapProjectFormat.PreviewEntry
-                ? MapProjectFormat.MaxPreviewBytes
-                : name.StartsWith(MapProjectFormat.RasterPrefix, StringComparison.Ordinal)
-                    || name.StartsWith(MapProjectFormat.MaskPrefix, StringComparison.Ordinal)
-                    ? MapProjectFormat.MaxTileEntryBytes
-                    : name.StartsWith(MapProjectFormat.AssetPrefix, StringComparison.Ordinal)
-                        ? MapProjectFormat.MaxAssetEntryBytes
-                    : MapProjectFormat.MaxJsonEntryBytes;
-
-            if (entry.Length > perEntryLimit)
-            {
-                throw new MapProjectCorruptedException(
-                    $"Entry {name} declares {entry.Length} uncompressed bytes, above the {perEntryLimit} limit.");
-            }
-        }
-
-        if (totalUncompressed > MapProjectFormat.MaxTotalUncompressedBytes)
-        {
-            throw new MapProjectCorruptedException(
-                $"The container declares {totalUncompressed} uncompressed bytes in total, " +
-                $"above the {MapProjectFormat.MaxTotalUncompressedBytes} limit.");
+            budget.Add(name, entry.Length, entry.CompressedLength);
         }
     }
 
@@ -374,10 +590,23 @@ public static class MapProjectStore
     /// </summary>
     private static void ValidatePreviewHeader(ZipArchive archive)
     {
-        var preview = ReadEntry(archive, MapProjectFormat.PreviewEntry);
+        var preview = new byte[24];
+        try
+        {
+            using var stream = archive.GetEntry(MapProjectFormat.PreviewEntry)!.Open();
+            stream.ReadExactly(preview);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or EndOfStreamException)
+        {
+            throw new MapProjectCorruptedException(
+                $"{MapProjectFormat.PreviewEntry} is not a PNG or has a truncated header.", ex);
+        }
 
         ReadOnlySpan<byte> pngSignature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
-        if (preview.Length < 24 || !preview.AsSpan(0, 8).SequenceEqual(pngSignature))
+        ReadOnlySpan<byte> ihdr = "IHDR"u8;
+        if (preview.Length < 24
+            || !preview.AsSpan(0, 8).SequenceEqual(pngSignature)
+            || !preview.AsSpan(12, 4).SequenceEqual(ihdr))
         {
             throw new MapProjectCorruptedException(
                 $"{MapProjectFormat.PreviewEntry} is not a PNG image.");
@@ -387,11 +616,14 @@ public static class MapProjectStore
         var width = BinaryPrimitives.ReadUInt32BigEndian(preview.AsSpan(16, 4));
         var height = BinaryPrimitives.ReadUInt32BigEndian(preview.AsSpan(20, 4));
 
+        var pixels = (long)width * height;
         if (width is 0 or > MapProjectFormat.MaxPreviewDimension
-            || height is 0 or > MapProjectFormat.MaxPreviewDimension)
+            || height is 0 or > MapProjectFormat.MaxPreviewDimension
+            || pixels > MapProjectFormat.MaxPreviewPixels)
         {
-            throw new MapProjectCorruptedException(
-                $"{MapProjectFormat.PreviewEntry} declares {width}x{height}, outside the supported preview size.");
+            throw new MapProjectResourceLimitException(
+                $"{MapProjectFormat.PreviewEntry} declares {width}x{height}, outside this build's " +
+                "supported preview size. The file was not modified.");
         }
     }
 
@@ -399,12 +631,25 @@ public static class MapProjectStore
     {
         try
         {
-            using var stream = archive.GetEntry(name)!.Open();
-            using var buffer = new MemoryStream();
-            stream.CopyTo(buffer);
-            return buffer.ToArray();
+            var entry = archive.GetEntry(name)!;
+            if (entry.Length > int.MaxValue)
+            {
+                throw new MapProjectCorruptedException(
+                    $"Entry {name} is too large for one in-memory payload.");
+            }
+
+            var bytes = GC.AllocateUninitializedArray<byte>((int)entry.Length);
+            using var stream = entry.Open();
+            stream.ReadExactly(bytes);
+            if (stream.ReadByte() != -1)
+            {
+                throw new MapProjectCorruptedException(
+                    $"Entry {name} decompressed beyond its declared length.");
+            }
+
+            return bytes;
         }
-        catch (InvalidDataException ex)
+        catch (Exception ex) when (ex is InvalidDataException or EndOfStreamException)
         {
             throw new MapProjectCorruptedException($"Entry {name} cannot be decompressed.", ex);
         }
@@ -414,6 +659,7 @@ public static class MapProjectStore
     {
         try
         {
+            MapProjectJsonBudget.Validate(bytes, entryName);
             return JsonSerializer.Deserialize<T>(bytes, JsonOptions)
                 ?? throw new MapProjectCorruptedException($"{entryName} is empty.");
         }
@@ -426,11 +672,10 @@ public static class MapProjectStore
     private static IReadOnlyDictionary<string, byte[]> ReadAndValidateTiles(
         ZipArchive archive, SceneDto scene)
     {
-        if (scene.Layers is null
-            || scene.Layers.Any(layer => layer is null || layer.Objects is null || layer.Mask is { Tiles: null }))
+        if (scene.Layers is null || scene.Layers.Any(HasInvalidLayerDto))
         {
             throw new MapProjectCorruptedException(
-                "scene.json has null layers, layer, objects array or mask tiles array.");
+                "scene.json has null layers, a null layer, or a null element in a required collection.");
         }
 
         var result = new Dictionary<string, byte[]>(StringComparer.Ordinal);
@@ -471,6 +716,12 @@ public static class MapProjectStore
             var keys = new HashSet<(int X, int Y)>();
             foreach (var tile in tiles)
             {
+                if (tile is null)
+                {
+                    throw new MapProjectCorruptedException(
+                        $"scene.json has a null tile in layer {layerId}.");
+                }
+
                 if (!keys.Add((tile.X, tile.Y)))
                 {
                     throw new MapProjectTileCorruptedException(
@@ -521,6 +772,13 @@ public static class MapProjectStore
         foreach (var asset in manifest.Assets)
         {
             var hash = RequireSha256(asset.Sha256, "asset sha256");
+            if (!ProjectAssetFormatPolicy.TryGetDeclaredFormat(
+                    asset.MediaType, asset.Extension, out var declaredFormat))
+            {
+                throw new MapProjectCorruptedException(
+                    $"Asset {hash} has inconsistent or unsupported media type and extension.");
+            }
+
             if (!hashes.Add(hash))
             {
                 throw new MapProjectCorruptedException($"Asset {hash} occurs more than once.");
@@ -541,11 +799,31 @@ public static class MapProjectStore
                     throw new MapProjectCorruptedException(
                         $"Embedded asset {hash} does not match its content hash.");
                 }
+
+                if (!ProjectAssetFormatPolicy.HasExpectedHeader(result[expected], declaredFormat))
+                {
+                    throw new MapProjectCorruptedException(
+                        $"Embedded asset {hash} payload does not match its declared image format.");
+                }
             }
-            else if (asset.Storage != nameof(ProjectAssetStorage.Linked))
+            else if (asset.Storage == nameof(ProjectAssetStorage.Linked))
+            {
+                if (asset.ContentEntry is not null)
+                {
+                    throw new MapProjectCorruptedException(
+                        $"Linked asset {hash} must not declare an embedded content entry.");
+                }
+            }
+            else
             {
                 throw new MapProjectCorruptedException(
                     $"Asset {hash} has unsupported storage mode \"{asset.Storage}\".");
+            }
+
+            if ((asset.ThumbnailEntry is null) != (asset.ThumbnailSha256 is null))
+            {
+                throw new MapProjectCorruptedException(
+                    $"Asset {hash} must declare its thumbnail entry and checksum together.");
             }
 
             if (asset.ThumbnailEntry is { } thumbnailEntry)
@@ -558,11 +836,19 @@ public static class MapProjectStore
                 }
 
                 ReadAssetEntry(expected, hash);
+                var thumbnailHash = RequireSha256(asset.ThumbnailSha256, "thumbnail sha256");
                 if (!string.Equals(
-                        Sha256Hex(result[expected]), asset.ThumbnailSha256, StringComparison.OrdinalIgnoreCase))
+                        Sha256Hex(result[expected]), thumbnailHash, StringComparison.OrdinalIgnoreCase))
                 {
                     throw new MapProjectCorruptedException(
                         $"Asset {hash} fallback thumbnail does not match its checksum.");
+                }
+
+                if (!ProjectAssetFormatPolicy.HasExpectedHeader(
+                        result[expected], ProjectAssetImageFormat.Png))
+                {
+                    throw new MapProjectCorruptedException(
+                        $"Asset {hash} fallback thumbnail is not a PNG payload.");
                 }
             }
         }
@@ -692,6 +978,8 @@ public static class MapProjectStore
             ? new StampStyleDto
             {
                 AssetSha256 = stamp.AssetSha256,
+                ReferenceWidth = stamp.ReferenceWidth,
+                ReferenceHeight = stamp.ReferenceHeight,
                 FlipHorizontal = stamp.FlipHorizontal,
                 FlipVertical = stamp.FlipVertical,
                 Blend = stamp.Blend,
@@ -715,46 +1003,77 @@ public static class MapProjectStore
 
     private static NoteDto ToNoteDto(MapNote note) => new()
     {
-        Id = note.Id.ToString(), Title = note.Title, Markdown = note.Markdown,
-        AnchorKind = note.AnchorKind.ToString(), WorldX = note.WorldX, WorldY = note.WorldY,
+        Id = note.Id.ToString(),
+        Title = note.Title,
+        Markdown = note.Markdown,
+        AnchorKind = note.AnchorKind.ToString(),
+        WorldX = note.WorldX,
+        WorldY = note.WorldY,
         ObjectId = note.ObjectId?.ToString(),
     };
 
     private static GridDefinitionDto ToGridDto(GridDefinition grid) => new()
     {
-        Id = grid.Id.ToString(), Geometry = grid.Geometry.ToString(), CellSize = grid.CellSize,
-        Subdivisions = grid.Subdivisions, LineWidth = grid.LineWidth, Color = grid.Color,
-        Opacity = grid.Opacity, OffsetX = grid.OffsetX, OffsetY = grid.OffsetY,
-        RotationDegrees = grid.RotationDegrees, SnapEnabled = grid.SnapEnabled,
+        Id = grid.Id.ToString(),
+        Geometry = grid.Geometry.ToString(),
+        CellSize = grid.CellSize,
+        Subdivisions = grid.Subdivisions,
+        LineWidth = grid.LineWidth,
+        Color = grid.Color,
+        Opacity = grid.Opacity,
+        OffsetX = grid.OffsetX,
+        OffsetY = grid.OffsetY,
+        RotationDegrees = grid.RotationDegrees,
+        SnapEnabled = grid.SnapEnabled,
         IncludeInExport = grid.IncludeInExport,
     };
 
     private static TextStyleDto ToTextDto(TextStyle text) => new()
     {
-        Content = text.Content, RequestedFontFamily = text.RequestedFontFamily,
-        FallbackFontFamily = text.FallbackFontFamily, FontWeight = text.FontWeight,
-        FontSize = text.FontSize, FillColor = text.FillColor, OutlineColor = text.OutlineColor,
-        OutlineWidth = text.OutlineWidth, ShadowOffsetX = text.ShadowOffsetX,
-        ShadowOffsetY = text.ShadowOffsetY, ShadowBlur = text.ShadowBlur,
-        ShadowOpacity = text.ShadowOpacity, Curve = text.Curve,
-        LetterSpacing = text.LetterSpacing, LineHeight = text.LineHeight,
-        Alignment = text.Alignment.ToString(), FlipHorizontal = text.FlipHorizontal,
-        FlipVertical = text.FlipVertical, Blur = text.Blur, Blend = text.Blend,
+        Content = text.Content,
+        RequestedFontFamily = text.RequestedFontFamily,
+        FallbackFontFamily = text.FallbackFontFamily,
+        FontWeight = text.FontWeight,
+        FontSize = text.FontSize,
+        FillColor = text.FillColor,
+        OutlineColor = text.OutlineColor,
+        OutlineWidth = text.OutlineWidth,
+        ShadowOffsetX = text.ShadowOffsetX,
+        ShadowOffsetY = text.ShadowOffsetY,
+        ShadowBlur = text.ShadowBlur,
+        ShadowOpacity = text.ShadowOpacity,
+        Curve = text.Curve,
+        LetterSpacing = text.LetterSpacing,
+        LineHeight = text.LineHeight,
+        Alignment = text.Alignment.ToString(),
+        FlipHorizontal = text.FlipHorizontal,
+        FlipVertical = text.FlipVertical,
+        Blur = text.Blur,
+        Blend = text.Blend,
     };
 
     private static FilterSettingsDto ToFilterDto(FilterSettings filter) => new()
     {
-        Brightness = filter.Brightness, Contrast = filter.Contrast,
-        Saturation = filter.Saturation, HueDegrees = filter.HueDegrees,
-        Temperature = filter.Temperature, TextureAssetSha256 = filter.TextureAssetSha256,
-        TextureOpacity = filter.TextureOpacity, TextureScale = filter.TextureScale,
+        Brightness = filter.Brightness,
+        Contrast = filter.Contrast,
+        Saturation = filter.Saturation,
+        HueDegrees = filter.HueDegrees,
+        Temperature = filter.Temperature,
+        TextureAssetSha256 = RequireOptionalSha256(
+            filter.TextureAssetSha256, "filter texture asset hash"),
+        TextureOpacity = filter.TextureOpacity,
+        TextureScale = filter.TextureScale,
     };
 
     private static EditableCompositionDto ToCompositionDto(EditableComposition composition) => new()
     {
-        Id = composition.Id.ToString(), SourceDocumentId = composition.SourceDocumentId.ToString(),
-        Name = composition.Name, SourceWidth = composition.SourceWidth, SourceHeight = composition.SourceHeight,
-        AnchorX = composition.AnchorX, AnchorY = composition.AnchorY,
+        Id = composition.Id.ToString(),
+        SourceDocumentId = composition.SourceDocumentId.ToString(),
+        Name = composition.Name,
+        SourceWidth = composition.SourceWidth,
+        SourceHeight = composition.SourceHeight,
+        AnchorX = composition.AnchorX,
+        AnchorY = composition.AnchorY,
         ReferenceGridScale = composition.ReferenceGridScale,
         Items = [.. composition.Items.Select(ToObjectDto)],
         Assets = [.. composition.Assets.Select(asset => new CompositionAssetDto
@@ -762,9 +1081,12 @@ public static class MapProjectStore
             Sha256 = asset.Sha256, DisplayName = asset.DisplayName,
             Provenance = asset.Provenance, License = asset.License,
         })],
-        IncludeBackground = composition.IncludeBackground, BackgroundColor = composition.BackgroundColor,
-        IncludeGrids = composition.IncludeGrids, Grids = [.. composition.Grids.Select(ToGridDto)],
-        IncludeFilters = composition.IncludeFilters, Filters = [.. composition.Filters.Select(ToFilterDto)],
+        IncludeBackground = composition.IncludeBackground,
+        BackgroundColor = composition.BackgroundColor,
+        IncludeGrids = composition.IncludeGrids,
+        Grids = [.. composition.Grids.Select(ToGridDto)],
+        IncludeFilters = composition.IncludeFilters,
+        Filters = [.. composition.Filters.Select(ToFilterDto)],
     };
 
     private static MapDocument ToDomain(
@@ -782,13 +1104,11 @@ public static class MapProjectStore
         }
 
         if (scene.Layers is null || scene.Notes is null
-            || scene.Layers.Any(l => l is null || l.Objects is null || l.Mask is { Tiles: null }
-                || l.Grids is null && l.Type == "Grid"
-                || l.Filter is null && l.Type == "Filter"
-                || l.Objects.Any(HasInvalidVectorDto)))
+            || scene.Notes.Any(static note => note is null)
+            || scene.Layers.Any(HasInvalidLayerDto))
         {
             throw new MapProjectCorruptedException(
-                "scene.json has a null layers array, layer, objects array or mask tiles array.");
+                "scene.json has a null object or a null element in a required collection.");
         }
 
         try
@@ -885,10 +1205,13 @@ public static class MapProjectStore
         Stamp = dto.Stamp is { } stamp
             ? new StampStyle(RequireString(stamp.AssetSha256, "stamp asset hash"))
             {
+                ReferenceWidth = RequirePositiveOrNull(stamp.ReferenceWidth, "stamp reference width"),
+                ReferenceHeight = RequirePositiveOrNull(stamp.ReferenceHeight, "stamp reference height"),
                 FlipHorizontal = stamp.FlipHorizontal,
                 FlipVertical = stamp.FlipVertical,
-                Blend = stamp.Blend,
-                Blur = stamp.Blur,
+                Blend = RequireBlend(stamp.Blend, "stamp blend"),
+                Blur = RequireFinite(
+                    stamp.Blur, "stamp blur", min: 0, max: AppearanceLimits.MaxBlur),
                 ShadowOffsetX = stamp.ShadowOffsetX,
                 ShadowOffsetY = stamp.ShadowOffsetY,
                 ShadowBlur = stamp.ShadowBlur,
@@ -917,35 +1240,53 @@ public static class MapProjectStore
         GridId.Parse(RequireString(grid.Id, "grid id")),
         ParseDefined<GridGeometry>(grid.Geometry, "grid geometry"), grid.CellSize)
     {
-        Subdivisions = grid.Subdivisions, LineWidth = grid.LineWidth,
-        Color = RequireString(grid.Color, "grid color"), Opacity = grid.Opacity,
-        OffsetX = grid.OffsetX, OffsetY = grid.OffsetY,
-        RotationDegrees = grid.RotationDegrees, SnapEnabled = grid.SnapEnabled,
+        Subdivisions = grid.Subdivisions,
+        LineWidth = grid.LineWidth,
+        Color = RequireString(grid.Color, "grid color"),
+        Opacity = grid.Opacity,
+        OffsetX = grid.OffsetX,
+        OffsetY = grid.OffsetY,
+        RotationDegrees = grid.RotationDegrees,
+        SnapEnabled = grid.SnapEnabled,
         IncludeInExport = grid.IncludeInExport,
     };
 
     private static TextStyle ToText(TextStyleDto text) => new()
     {
-        Content = text.Content ?? "", RequestedFontFamily = RequireString(text.RequestedFontFamily, "requested font family"),
+        Content = text.Content ?? "",
+        RequestedFontFamily = RequireString(text.RequestedFontFamily, "requested font family"),
         FallbackFontFamily = RequireString(text.FallbackFontFamily, "fallback font family"),
-        FontWeight = text.FontWeight, FontSize = text.FontSize,
+        FontWeight = text.FontWeight,
+        FontSize = text.FontSize,
         FillColor = RequireString(text.FillColor, "text fill color"),
         OutlineColor = RequireString(text.OutlineColor, "text outline color"),
-        OutlineWidth = text.OutlineWidth, ShadowOffsetX = text.ShadowOffsetX,
-        ShadowOffsetY = text.ShadowOffsetY, ShadowBlur = text.ShadowBlur,
-        ShadowOpacity = text.ShadowOpacity, Curve = text.Curve,
-        LetterSpacing = text.LetterSpacing, LineHeight = text.LineHeight,
+        OutlineWidth = text.OutlineWidth,
+        ShadowOffsetX = text.ShadowOffsetX,
+        ShadowOffsetY = text.ShadowOffsetY,
+        ShadowBlur = text.ShadowBlur,
+        ShadowOpacity = text.ShadowOpacity,
+        Curve = text.Curve,
+        LetterSpacing = text.LetterSpacing,
+        LineHeight = text.LineHeight,
         Alignment = ParseDefined<TextAlignment>(text.Alignment, "text alignment"),
-        FlipHorizontal = text.FlipHorizontal, FlipVertical = text.FlipVertical,
-        Blur = text.Blur, Blend = RequireString(text.Blend, "text blend"),
+        FlipHorizontal = text.FlipHorizontal,
+        FlipVertical = text.FlipVertical,
+        Blur = RequireFinite(
+            text.Blur, "text blur", min: 0, max: AppearanceLimits.MaxBlur),
+        Blend = RequireBlend(text.Blend, "text blend"),
     };
 
     private static FilterSettings ToFilter(FilterSettingsDto filter) => new()
     {
-        Brightness = filter.Brightness, Contrast = filter.Contrast,
-        Saturation = filter.Saturation, HueDegrees = filter.HueDegrees,
-        Temperature = filter.Temperature, TextureAssetSha256 = filter.TextureAssetSha256,
-        TextureOpacity = filter.TextureOpacity, TextureScale = filter.TextureScale,
+        Brightness = filter.Brightness,
+        Contrast = filter.Contrast,
+        Saturation = filter.Saturation,
+        HueDegrees = filter.HueDegrees,
+        Temperature = filter.Temperature,
+        TextureAssetSha256 = RequireOptionalSha256(
+            filter.TextureAssetSha256, "filter texture asset hash"),
+        TextureOpacity = filter.TextureOpacity,
+        TextureScale = filter.TextureScale,
     };
 
     private static EditableComposition ToComposition(EditableCompositionDto composition) => new(
@@ -955,7 +1296,8 @@ public static class MapProjectStore
         composition.SourceWidth, composition.SourceHeight,
         [.. composition.Items.Select(ToObject)])
     {
-        AnchorX = composition.AnchorX, AnchorY = composition.AnchorY,
+        AnchorX = composition.AnchorX,
+        AnchorY = composition.AnchorY,
         ReferenceGridScale = composition.ReferenceGridScale,
         Assets = [.. composition.Assets.Select(asset => new CompositionAssetProvenance(
             RequireSha256(asset.Sha256, "composition asset hash"),
@@ -989,7 +1331,8 @@ public static class MapProjectStore
         Fill = new ShapeFillDto
         {
             Color = shape.Fill.Color,
-            TextureAssetSha256 = shape.Fill.TextureAssetSha256,
+            TextureAssetSha256 = RequireOptionalSha256(
+                shape.Fill.TextureAssetSha256, "shape fill texture asset hash"),
             TextureScale = shape.Fill.TextureScale,
             TextureRotation = shape.Fill.TextureRotation,
             TextureOffsetX = shape.Fill.TextureOffsetX,
@@ -1002,24 +1345,42 @@ public static class MapProjectStore
 
     private static VectorNodeDto ToNodeDto(VectorNode node) => new()
     {
-        Id = node.Id.ToString(), X = node.X, Y = node.Y, Kind = node.Kind.ToString(),
-        ControlInX = node.ControlInX, ControlInY = node.ControlInY,
-        ControlOutX = node.ControlOutX, ControlOutY = node.ControlOutY,
+        Id = node.Id.ToString(),
+        X = node.X,
+        Y = node.Y,
+        Kind = node.Kind.ToString(),
+        ControlInX = node.ControlInX,
+        ControlInY = node.ControlInY,
+        ControlOutX = node.ControlOutX,
+        ControlOutY = node.ControlOutY,
     };
 
     private static LinePortalDto ToPortalDto(LinePortal portal) => new()
     {
-        Id = portal.Id.ToString(), Position = portal.Position, Width = portal.Width,
+        Id = portal.Id.ToString(),
+        Position = portal.Position,
+        Width = portal.Width,
     };
 
     private static VectorStrokeDto ToStrokeDto(VectorStrokeStyle stroke) => new()
     {
-        Color = stroke.Color, Width = stroke.Width, Opacity = stroke.Opacity, Blend = stroke.Blend,
-        Offset = stroke.Offset, EndCap = stroke.EndCap.ToString(), NodeCap = stroke.NodeCap.ToString(),
-        ShadowOffsetX = stroke.ShadowOffsetX, ShadowOffsetY = stroke.ShadowOffsetY,
-        ShadowBlur = stroke.ShadowBlur, ShadowOpacity = stroke.ShadowOpacity,
-        AssetSha256 = stroke.AssetSha256, AssetSpacing = stroke.AssetSpacing,
-        Hue = stroke.Hue, Saturation = stroke.Saturation,
+        Color = stroke.Color,
+        Width = stroke.Width,
+        Opacity = stroke.Opacity,
+        Blend = stroke.Blend,
+        Blur = stroke.Blur,
+        Pattern = stroke.Pattern.ToString(),
+        Offset = stroke.Offset,
+        EndCap = stroke.EndCap.ToString(),
+        NodeCap = stroke.NodeCap.ToString(),
+        ShadowOffsetX = stroke.ShadowOffsetX,
+        ShadowOffsetY = stroke.ShadowOffsetY,
+        ShadowBlur = stroke.ShadowBlur,
+        ShadowOpacity = stroke.ShadowOpacity,
+        AssetSha256 = RequireOptionalSha256(stroke.AssetSha256, "vector stroke asset hash"),
+        AssetSpacing = stroke.AssetSpacing,
+        Hue = stroke.Hue,
+        Saturation = stroke.Saturation,
     };
 
     private static LineStyle ToLine(LineStyleDto line) => new(
@@ -1035,7 +1396,8 @@ public static class MapProjectStore
         new ShapeFillStyle
         {
             Color = RequireString(shape.Fill.Color, "shape fill color"),
-            TextureAssetSha256 = shape.Fill.TextureAssetSha256,
+            TextureAssetSha256 = RequireOptionalSha256(
+                shape.Fill.TextureAssetSha256, "shape fill texture asset hash"),
             TextureScale = shape.Fill.TextureScale,
             TextureRotation = shape.Fill.TextureRotation,
             TextureOffsetX = shape.Fill.TextureOffsetX,
@@ -1055,22 +1417,76 @@ public static class MapProjectStore
     private static VectorStrokeStyle ToStroke(VectorStrokeDto stroke) => new()
     {
         Color = RequireString(stroke.Color, "vector stroke color"),
-        Width = stroke.Width, Opacity = stroke.Opacity, Blend = RequireString(stroke.Blend, "vector stroke blend"),
+        Width = stroke.Width,
+        Opacity = stroke.Opacity,
+        Blend = RequireBlend(stroke.Blend, "vector stroke blend"),
+        Blur = RequireFinite(
+            stroke.Blur, "vector stroke blur", min: 0, max: AppearanceLimits.MaxBlur),
+        Pattern = ParseDefined<StrokePattern>(stroke.Pattern, "stroke pattern"),
         Offset = stroke.Offset,
         EndCap = ParseDefined<VectorCap>(stroke.EndCap, "line end cap"),
         NodeCap = ParseDefined<VectorCap>(stroke.NodeCap, "line node cap"),
-        ShadowOffsetX = stroke.ShadowOffsetX, ShadowOffsetY = stroke.ShadowOffsetY,
-        ShadowBlur = stroke.ShadowBlur, ShadowOpacity = stroke.ShadowOpacity,
-        AssetSha256 = stroke.AssetSha256, AssetSpacing = stroke.AssetSpacing,
-        Hue = stroke.Hue, Saturation = stroke.Saturation,
+        ShadowOffsetX = stroke.ShadowOffsetX,
+        ShadowOffsetY = stroke.ShadowOffsetY,
+        ShadowBlur = stroke.ShadowBlur,
+        ShadowOpacity = stroke.ShadowOpacity,
+        AssetSha256 = RequireOptionalSha256(stroke.AssetSha256, "vector stroke asset hash"),
+        AssetSpacing = stroke.AssetSpacing,
+        Hue = stroke.Hue,
+        Saturation = stroke.Saturation,
     };
 
-    private static bool HasInvalidVectorDto(SceneObjectDto? item) => item is null
-        || item.Line is { Nodes: null } or { Stroke: null } or { Portals: null }
-        || item.Shape is { Regions: null } or { Fill: null } or { Stroke: null } or { Portals: null }
-        || item.Shape?.Regions.Any(region => region is null || region.Nodes is null) == true
-        || item.Composition is { Items: null } or { Assets: null } or { Grids: null } or { Filters: null }
-        || item.Composition?.Items.Any(HasInvalidVectorDto) == true;
+    private static bool HasInvalidLayerDto(LayerDto? layer) => layer is null
+        || layer.Objects is null
+        || layer.Tiles?.Any(static tile => tile is null) == true
+        || layer.Mask is { Tiles: null }
+        || layer.Mask?.Tiles.Any(static tile => tile is null) == true
+        || layer.Grids is null && layer.Type == "Grid"
+        || layer.Grids?.Any(static grid => grid is null) == true
+        || layer.Filter is null && layer.Type == "Filter"
+        || layer.Objects.Any(HasInvalidVectorDto);
+
+    private static bool HasInvalidVectorDto(SceneObjectDto? item)
+    {
+        if (item is null)
+        {
+            return true;
+        }
+
+        if (item.Line is { } line
+            && (line.Nodes is null
+                || line.Stroke is null
+                || line.Portals is null
+                || line.Nodes.Any(static node => node is null)
+                || line.Portals.Any(static portal => portal is null)))
+        {
+            return true;
+        }
+
+        if (item.Shape is { } shape
+            && (shape.Regions is null
+                || shape.Fill is null
+                || shape.Stroke is null
+                || shape.Portals is null
+                || shape.Regions.Any(region =>
+                    region is null
+                    || region.Nodes is null
+                    || region.Nodes.Any(static node => node is null))
+                || shape.Portals.Any(static portal => portal is null)))
+        {
+            return true;
+        }
+
+        return item.Composition is { } composition
+            && (composition.Items is null
+                || composition.Assets is null
+                || composition.Grids is null
+                || composition.Filters is null
+                || composition.Items.Any(HasInvalidVectorDto)
+                || composition.Assets.Any(static asset => asset is null)
+                || composition.Grids.Any(static grid => grid is null)
+                || composition.Filters.Any(static filter => filter is null));
+    }
 
     private static List<TileDto> ToTileDtos(TileMap tiles) =>
         [.. tiles.Keys.OrderBy(k => k.Y).ThenBy(k => k.X).Select(key => new TileDto
@@ -1172,7 +1588,37 @@ public static class MapProjectStore
                 $"Asset {hash} has unsupported storage mode \"{asset.Storage}\".");
         }
 
-        return new MapAssetReference(
+        if (asset.RelativePath is not null
+            && !ProjectLinkedAssetPath.IsSafeRelative(asset.RelativePath))
+        {
+            throw new MapProjectCorruptedException(
+                $"Asset {hash} has a linked path that is not a safe project-relative path.");
+        }
+
+        byte[]? embeddedContent = null;
+        if (storage == ProjectAssetStorage.Embedded)
+        {
+            if (asset.ContentEntry is not { } content || !entries.TryGetValue(content, out embeddedContent))
+            {
+                throw new MapProjectCorruptedException(
+                    $"Embedded asset {hash} has no validated content payload.");
+            }
+        }
+        else if (asset.ContentEntry is not null)
+        {
+            throw new MapProjectCorruptedException(
+                $"Linked asset {hash} must not carry embedded content.");
+        }
+
+        byte[]? fallbackThumbnail = null;
+        if (asset.ThumbnailEntry is { } thumbnail
+            && !entries.TryGetValue(thumbnail, out fallbackThumbnail))
+        {
+            throw new MapProjectCorruptedException(
+                $"Asset {hash} has no validated fallback thumbnail payload.");
+        }
+
+        return MapAssetReference.FromValidatedPayloads(
             hash,
             RequireString(asset.DisplayName, "asset display name"),
             RequireString(asset.MediaType, "asset media type"),
@@ -1181,10 +1627,10 @@ public static class MapProjectStore
             ParseTimestamp(asset.ImportedUtc, "asset importedUtc"),
             RequireString(asset.Provenance, "asset provenance"),
             RequireString(asset.License, "asset license"),
-            embeddedContent: asset.ContentEntry is { } content ? entries[content] : null,
+            embeddedContent: embeddedContent,
             catalogId: asset.CatalogId,
             relativePath: asset.RelativePath,
-            fallbackThumbnailPng: asset.ThumbnailEntry is { } thumbnail ? entries[thumbnail] : null);
+            fallbackThumbnailPng: fallbackThumbnail);
     }
 
     private static TileMap ToTileMap(
@@ -1228,6 +1674,9 @@ public static class MapProjectStore
         return hash;
     }
 
+    private static string? RequireOptionalSha256(string? value, string what) =>
+        value is null ? null : RequireSha256(value, what);
+
     private static string RequireCanonicalLayerId(string? value)
     {
         try
@@ -1254,6 +1703,31 @@ public static class MapProjectStore
 
     private static string RequireString(string? value, string what) =>
         value ?? throw new MapProjectCorruptedException($"The container has a null {what}.");
+
+    /// <summary>Object-style blend keys come from the one supported list, exactly.</summary>
+    private static string RequireBlend(string? value, string what) =>
+        BlendModes.IsSupported(value)
+            ? value!
+            : throw new MapProjectCorruptedException(
+                $"scene.json holds {what} \"{value}\" this version does not define.");
+
+    private static double RequireFinite(
+        double value, string what, double min = double.MinValue, double max = double.MaxValue)
+    {
+        if (!double.IsFinite(value) || value < min || value > max)
+        {
+            throw new MapProjectCorruptedException(
+                $"scene.json holds an out-of-range {what} value \"{value}\".");
+        }
+
+        return value;
+    }
+
+    /// <summary>An optional positive size: absent stays absent; present must be a real size.</summary>
+    private static double? RequirePositiveOrNull(double? value, string what) =>
+        value is null
+            ? null
+            : RequireFinite(value.Value, what, min: double.Epsilon);
 
     /// <summary>
     /// Strict kind parse: only names this version defines. TryParse alone would accept numeric

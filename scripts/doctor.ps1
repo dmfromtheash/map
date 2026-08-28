@@ -34,7 +34,7 @@ if ($dotnetExists) {
     Write-Check 'Avalonia templates' $hasAvalonia 'avalonia.app and avalonia.mvvm expected'
 }
 
-foreach ($commandName in @('git', 'rg', 'claude', 'magick')) {
+foreach ($commandName in @('git', 'rg', 'codex', 'magick')) {
     $command = Get-Command $commandName -ErrorAction SilentlyContinue
     Write-Check $commandName ([bool]$command) $(if ($command) { $command.Source } else { 'not found in PATH' })
 }
@@ -54,12 +54,14 @@ if ($accessibilityInsightsExists) {
 
 $requiredDocs = @(
     'AGENTS.md',
-    'CLAUDE.md',
+    'CODEX.md',
     'docs\00_START_HERE.md',
     'docs\06_DEVELOPMENT_ROADMAP.md',
-    'docs\07_OPUS_RUNBOOK.md',
+    'docs\07_CODEX_RUNBOOK.md',
     'docs\STATE_HANDOFF.md',
-    'docs\11_CLAUDE_VERIFICATION_PROTOCOL.md',
+    'docs\11_CODEX_VERIFICATION_PROTOCOL.md',
+    'docs\prompts\PROMPT_TEMPLATE_CODEX.md',
+    'scripts\check-stage-prompts.ps1',
     'scripts\compare-ui-screenshots.ps1'
 )
 
@@ -74,5 +76,5 @@ if ($failed) {
     exit 1
 }
 
-Write-Host 'Environment is ready for an approved technical spike.' -ForegroundColor Green
+Write-Host 'Environment is ready for the next approved Codex stage.' -ForegroundColor Green
 exit 0

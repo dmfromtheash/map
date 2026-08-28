@@ -66,7 +66,7 @@ public static class SceneGeometry
         }
         else if (sceneObject.Line?.Stroke is { } lineStroke)
         {
-            pad += (lineStroke.Width / 2) + Math.Abs(lineStroke.Offset);
+            pad += (lineStroke.Width / 2) + Math.Abs(lineStroke.Offset) + (lineStroke.Blur * 3);
             if (lineStroke.ShadowOpacity > 0)
             {
                 shadowX = Math.Abs(lineStroke.ShadowOffsetX) + (lineStroke.ShadowBlur * 3);
@@ -75,11 +75,20 @@ public static class SceneGeometry
         }
         else if (sceneObject.Shape?.Stroke is { } shapeStroke)
         {
-            pad += (shapeStroke.Width / 2) + Math.Abs(shapeStroke.Offset);
+            pad += (shapeStroke.Width / 2) + Math.Abs(shapeStroke.Offset) + (shapeStroke.Blur * 3);
             if (shapeStroke.ShadowOpacity > 0)
             {
                 shadowX = Math.Abs(shapeStroke.ShadowOffsetX) + (shapeStroke.ShadowBlur * 3);
                 shadowY = Math.Abs(shapeStroke.ShadowOffsetY) + (shapeStroke.ShadowBlur * 3);
+            }
+        }
+        else if (sceneObject.Text is { } text)
+        {
+            pad += text.Blur * 3;
+            if (text.ShadowOpacity > 0)
+            {
+                shadowX = Math.Abs(text.ShadowOffsetX) + (text.ShadowBlur * 3);
+                shadowY = Math.Abs(text.ShadowOffsetY) + (text.ShadowBlur * 3);
             }
         }
 
