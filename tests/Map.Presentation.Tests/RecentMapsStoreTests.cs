@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using Map.Platform.Windows;
@@ -77,35 +78,46 @@ public sealed class RecentMapsStoreTests : IDisposable
     [Fact]
     public void A_recent_path_beneath_a_reparse_point_is_never_probed_as_available()
     {
+        Assert.True(OperatingSystem.IsWindows(), "Directory junction fixtures require Windows.");
+
         var path = Index();
-        var target = Path.Combine(_root, "target");
-        var link = Path.Combine(_root, "linked");
+        var target = Path.Combine(_root, Guid.NewGuid().ToString("N"));
+        var link = Path.Combine(_root, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(target);
         var mapPath = Path.Combine(target, "map.mapproj");
         File.WriteAllBytes(mapPath, [1]);
 
         try
         {
-            Directory.CreateSymbolicLink(link, target);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return; // host policy cannot create the fixture; production still rejects real links
-        }
+            CreateDirectoryJunction(link, target);
 
-        var entry = new[]
-        {
-            new
+            Assert.True(Directory.Exists(link));
+            Assert.True(
+                new DirectoryInfo(link).Attributes.HasFlag(FileAttributes.ReparsePoint));
+            Assert.True(File.Exists(Path.Combine(link, "map.mapproj")));
+
+            var entry = new[]
             {
-                path = Path.Combine(link, "map.mapproj"),
-                documentId = Guid.NewGuid().ToString("D"),
-                title = "Map",
-                modifiedUtc = DateTimeOffset.UnixEpoch.ToString("O"),
-            },
-        };
-        File.WriteAllBytes(path, JsonSerializer.SerializeToUtf8Bytes(entry));
+                new
+                {
+                    path = Path.Combine(link, "map.mapproj"),
+                    documentId = Guid.NewGuid().ToString("D"),
+                    title = "Map",
+                    modifiedUtc = DateTimeOffset.UnixEpoch.ToString("O"),
+                },
+            };
+            File.WriteAllBytes(path, JsonSerializer.SerializeToUtf8Bytes(entry));
 
-        Assert.False(Assert.Single(new RecentMapsStore(path).Load()).IsAvailable);
+            var loaded = Assert.Single(new RecentMapsStore(path).Load());
+            Assert.False(loaded.IsAvailable);
+        }
+        finally
+        {
+            if (Directory.Exists(link))
+            {
+                Directory.Delete(link);
+            }
+        }
     }
 
     [Fact]
@@ -151,6 +163,70 @@ public sealed class RecentMapsStoreTests : IDisposable
     {
         Directory.CreateDirectory(_root);
         return Path.Combine(_root, "recent-maps.json");
+    }
+
+    private static void CreateDirectoryJunction(string link, string target)
+    {
+        var commandPath = Path.Combine(Environment.SystemDirectory, "cmd.exe");
+        Assert.True(
+            File.Exists(commandPath),
+            $"The system command processor was not found: {commandPath}");
+
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = commandPath,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        startInfo.ArgumentList.Add("/d");
+        startInfo.ArgumentList.Add("/s");
+        startInfo.ArgumentList.Add("/c");
+        startInfo.ArgumentList.Add("mklink");
+        startInfo.ArgumentList.Add("/J");
+        startInfo.ArgumentList.Add(link);
+        startInfo.ArgumentList.Add(target);
+
+        using var process = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Could not start the system command processor.");
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
+
+        if (!process.WaitForExit(10_000))
+        {
+            Exception? terminationError = null;
+            try
+            {
+                process.Kill();
+            }
+            catch (Exception ex) when (
+                ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+            {
+                terminationError = ex;
+            }
+
+            var exited = process.WaitForExit(5_000);
+            var exitCode = exited ? process.ExitCode.ToString() : "unavailable";
+            var timeoutStdout = stdoutTask.IsCompletedSuccessfully
+                ? stdoutTask.GetAwaiter().GetResult()
+                : "unavailable";
+            var timeoutStderr = stderrTask.IsCompletedSuccessfully
+                ? stderrTask.GetAwaiter().GetResult()
+                : "unavailable";
+
+            Assert.Fail(
+                $"Directory junction creation timed out. Exit code: {exitCode}. "
+                + $"Stdout: {timeoutStdout} Stderr: {timeoutStderr} "
+                + $"Termination error: {terminationError}");
+        }
+
+        var stdout = stdoutTask.GetAwaiter().GetResult();
+        var stderr = stderrTask.GetAwaiter().GetResult();
+        Assert.True(
+            process.ExitCode == 0,
+            $"Directory junction creation failed with exit code {process.ExitCode}. "
+            + $"Stdout: {stdout} Stderr: {stderr}");
     }
 
     public void Dispose()
