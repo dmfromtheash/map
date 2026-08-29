@@ -4,7 +4,7 @@
 
 Это система управления проектом нативного офлайн-конструктора карт для Windows. Она фиксирует продукт, функциональный слепок, UX, технические границы, формат данных, дорожную карту, качество, лицензирование и рабочий протокол для Codex GPT-5.6 Sol.
 
-## Состояние на 29.08.2026
+## Состояние на 30.08.2026
 
 | Область | Статус | Что это значит |
 |---|---|---|
@@ -12,9 +12,9 @@
 | Правовые границы | `FACT` | Автоскрейпинг, обратная разработка и копирование материалов исключены |
 | Продуктовый объём | `ACCEPTED` | Офлайн-эквивалент редактора и локального dashboard; без облачного сообщества и Marketplace |
 | Технологический стек | `ACCEPTED` | .NET 10 + Avalonia 12.1 + Skia; SDK установлен |
-| Код приложения | `PARTIAL` | Stages 1–8, Stage 9A, Stage 10 input slice, 10B Library/variant sets и production-логика 10C независимо проверены; bounded Gate D test-only range `2af5bd3..8de17de` принят отдельно (`1/1` exact regression и `209/209` Map.Presentation.Tests); keyboard/DPI/file-picker и clean-context UX-gaps не закрыты |
+| Код приложения | `PARTIAL` | Stages 1–8, Stage 9A, Stage 10 input slice, 10B Library/variant sets и production-логика 10C независимо проверены; bounded Gate D test-only range `2af5bd3..8de17de` принят отдельно; Stage 10E Grid geometry имеет локальный author checkpoint и ждёт fresh independent review; keyboard/DPI/file-picker и clean-context UX-gaps не закрыты |
 | AI workflow | `FACT` | Codex `gpt-5.6-sol`; AGENTS/runbook/protocol/template и все stage prompt'ы содержат конечный verification budget, запрещающий повтор зелёных gates без changed-risk trigger |
-| Дизайн и ассеты | `PARTIAL` | Есть собственная visual system, упрощённая Library v2, наборы вариантов и diagnostic fixtures; полный inspector/grid идут позже |
+| Дизайн и ассеты | `PARTIAL` | Есть собственная visual system, упрощённая Library v2, наборы вариантов, diagnostic fixtures и полный Grid property sheet; Stage 10E golden PNG остаются `PROPOSED` до независимой приёмки |
 | Публичное повторное использование | `FACT / PROPOSED` | 15 upstream-репозиториев закреплены в отдельной ResearchLab; production dependencies не добавлены, Stage 10E остаётся dependency-free, Velopack отложен до Stage 11 |
 | Версии и откат | `FACT / PARTIAL` | central version `0.2.0`, manifest/checksum local bundle и side-by-side rollback foundation добавлены; реальный clean-VM bundle/update/downgrade gate остаётся Stage 11 |
 
@@ -51,6 +51,8 @@
 | `reviews/STAGE_10B_ASSET_LIBRARY_VERIFICATION.md` | Codex-проверка Library v2, UX-среза и фоновых фильтров |
 | `reviews/STAGE_10C_MULTI_SELECTION_VERIFICATION.md` | Codex-проверка и отдельный fix multi-selection/groups |
 | `reviews/STAGE_10D_OBJECT_INSPECTORS_VERIFICATION.md` | self-acceptance Object inspectors, native evidence, security fixes и честные остаточные риски |
+| `prompts/STAGE_10E_GRID_GEOMETRY.md` | активный контракт отдельной изометрии, полного Grid sheet, snap и golden fixtures |
+| `reviews/STAGE_10E_GRID_GEOMETRY_VERIFICATION.md` | author self-check Stage 10E и точная граница будущей независимой приёмки |
 | `research/OBJECT_AND_GRID_PARITY.md` | clean-room матрица object/grid функций и разрывов текущего UI |
 | `research/INKARNATE_ACCOUNT_WALKTHROUGH_20260826.md` | наблюдаемые text/road/shape/brush/stamp/grid/keyboard механики тестовой карты |
 | `research/TEST_ASSET_FIXTURES.md` | план двух собственных logical fixtures: 12-variant stamp set и brush tip |
@@ -67,9 +69,7 @@
 
 ## Следующее действие
 
-Bounded Gate D exact test-only range
-`2af5bd3495851f032897435fc957f5705a692bbe..8de17de27546783bdd6247cb4df094d9df505711`
-уже принят отдельно: `1/1` exact regression и `209/209` Map.Presentation.Tests. Следующее действие —
-сохранить текущий research/release foundation candidate одним локальным checkpoint и передать точный
-`8de17de..checkpoint HEAD` свежей независимой review-задаче. **Stage 10E Grid geometry** не начинать до
-этой проверки и отдельного решения владельца.
+Stage 10E Grid geometry реализован как локальный author checkpoint от BASE
+`942fb07f015122c640174691d908717df1c17f76`. Следующее действие — только свежая независимая
+review-задача Codex `gpt-5.6-sol`, reasoning `xhigh`, по точному `BASE..checkpoint HEAD`.
+Author self-check не является приёмкой; Stage 10F до результата этого review не выполнять.

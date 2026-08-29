@@ -153,8 +153,6 @@ public sealed class EditorView : UserControl
     private Button _visibilityValue = null!;
     private Button _lockValue = null!;
     private Button _landEdgeValue = null!;
-    private Button _gridCellsValue = null!;
-    private Button _gridExportValue = null!;
     private Button _filterPresetValue = null!;
 
     private NoteId? _selectedNoteId;
@@ -959,7 +957,8 @@ public sealed class EditorView : UserControl
 
     /// <summary>A numeric field committing on Enter or focus loss; bad input is an error, not a command.</summary>
     private Control AppearanceNumberBox(
-        string name, string label, string? unit, Func<double?> read, Action<double> apply)
+        string name, string label, string? unit, Func<double?> read, Action<double> apply,
+        string format = "0.##", double captionWidth = 92)
     {
         var box = NumberBox(name);
         void Commit()
@@ -995,16 +994,16 @@ public sealed class EditorView : UserControl
         {
             if (!box.IsFocused)
             {
-                box.Text = read()?.ToString("0.##", CultureInfo.InvariantCulture) ?? "";
+                box.Text = read()?.ToString(format, CultureInfo.InvariantCulture) ?? "";
             }
         });
 
-        return Ui.PropertyRow(label, box, unit);
+        return Ui.PropertyRow(label, box, unit, captionWidth);
     }
 
     /// <summary>A colour field: #RRGGBB / #AARRGGBB, committing on Enter or focus loss.</summary>
     private Control AppearanceColorBox(
-        string name, string label, Func<string?> read, Action<string> apply)
+        string name, string label, Func<string?> read, Action<string> apply, double captionWidth = 92)
     {
         var box = new TextBox { Name = name, PlaceholderText = "#AARRGGBB" };
         void Commit()
@@ -1033,7 +1032,7 @@ public sealed class EditorView : UserControl
             }
         });
 
-        return Ui.PropertyRow(label, box);
+        return Ui.PropertyRow(label, box, captionWidth: captionWidth);
     }
 
     /// <summary>A named on/off property whose checked state always mirrors the document.</summary>
@@ -1990,18 +1989,97 @@ public sealed class EditorView : UserControl
 
     private Control BuildGridLayerBlock()
     {
-        var (cellsRow, cellsButton) = Ui.ValueRow(
-            "GridGeometryButton", "Ячейка", "Квадратная", _editor.CycleActiveGridGeometry);
-        _gridCellsValue = cellsButton;
+        GridDefinition? Grid() => _editor.ActiveLayer is GridLayer { Grids.Count: > 0 } layer
+            ? layer.Grids[0]
+            : null;
 
-        var (exportRow, exportButton) = Ui.ValueRow(
-            "GridExportButton", "В экспорт", "Нет", _editor.ToggleActiveGridExport);
-        _gridExportValue = exportButton;
+        var geometryButtons = new Dictionary<GridGeometry, RadioButton>();
+        var geometryChoices = new StackPanel { Spacing = 2 };
+        foreach (var geometry in Enum.GetValues<GridGeometry>())
+        {
+            var captured = geometry;
+            var label = EditorLabels.GridGeometry(geometry);
+            var button = new RadioButton
+            {
+                GroupName = "GridGeometry",
+                Content = new TextBlock { Text = label, TextWrapping = TextWrapping.Wrap },
+                HorizontalContentAlignment = HorizontalAlignment.Left,
+            }.Named("GridGeometry" + geometry + "Radio").Classed("segment");
+            AutomationProperties.SetName(button, label);
+            ToolTip.SetTip(button, label);
+            button.IsCheckedChanged += (_, _) =>
+            {
+                if (!_syncingAppearance && button.IsChecked == true)
+                    _editor.SetActiveGridGeometry(captured);
+            };
+            geometryButtons.Add(geometry, button);
+            geometryChoices.Children.Add(button);
+        }
+        _appearanceSyncs.Add(() =>
+        {
+            var selected = Grid()?.Geometry;
+            foreach (var pair in geometryButtons)
+                pair.Value.IsChecked = pair.Key == selected;
+        });
+
+        var exactProperties = new StackPanel
+        {
+            Spacing = 2,
+            Children =
+            {
+                AppearanceNumberBox("GridCellSizeBox", "Размер ячейки", "px",
+                    () => Grid()?.CellSize, value => _editor.SetActiveGridCellSize(value), "0.######", 116),
+                AppearanceNumberBox("GridSubdivisionsBox", "Деления", null,
+                    () => Grid()?.Subdivisions, value => _editor.SetActiveGridSubdivisions(value), "0", 116),
+                AppearanceNumberBox("GridLineWidthBox", "Толщина линии", "px",
+                    () => Grid()?.LineWidth, value => _editor.SetActiveGridLineWidth(value), "0.######", 116),
+                AppearanceColorBox("GridColorBox", "Цвет линии",
+                    () => Grid()?.Color, value => _editor.SetActiveGridColor(value), 116),
+                AppearanceNumberBox("GridOpacityBox", "Непрозрачность", "%",
+                    () => Grid() is { } grid ? grid.Opacity * 100 : null,
+                    value => _editor.SetActiveGridOpacityPercent(value), "0.######", 116),
+                AppearanceNumberBox("GridOffsetXBox", "Смещение X", "px",
+                    () => Grid()?.OffsetX, value => _editor.SetActiveGridOffsetX(value), "0.######", 116),
+                AppearanceNumberBox("GridOffsetYBox", "Смещение Y", "px",
+                    () => Grid()?.OffsetY, value => _editor.SetActiveGridOffsetY(value), "0.######", 116),
+                AppearanceNumberBox("GridRotationBox", "Поворот", "°",
+                    () => Grid()?.RotationDegrees, value => _editor.SetActiveGridRotation(value), "0.######", 116),
+            },
+        };
+
+        var snap = new CheckBox
+        {
+            Content = new TextBlock { Text = "Привязка к сетке", TextWrapping = TextWrapping.Wrap },
+        }.Named("GridSnapToggle");
+        AutomationProperties.SetName(snap, "Привязка к сетке");
+        snap.IsCheckedChanged += (_, _) =>
+        {
+            if (!_syncingAppearance) _editor.SetActiveGridSnapEnabled(snap.IsChecked == true);
+        };
+        var export = new CheckBox
+        {
+            Content = new TextBlock { Text = "Добавлять сетку в экспорт", TextWrapping = TextWrapping.Wrap },
+        }.Named("GridIncludeInExportToggle");
+        AutomationProperties.SetName(export, "Добавлять сетку в экспорт");
+        export.IsCheckedChanged += (_, _) =>
+        {
+            if (!_syncingAppearance) _editor.SetActiveGridIncludeInExport(export.IsChecked == true);
+        };
+        _appearanceSyncs.Add(() =>
+        {
+            snap.IsChecked = Grid()?.SnapEnabled == true;
+            export.IsChecked = Grid()?.IncludeInExport == true;
+        });
 
         return Ui.Section("Сетка", new StackPanel
         {
-            Spacing = 2,
-            Children = { cellsRow, exportRow },
+            Spacing = 10,
+            Children =
+            {
+                Ui.Section("Геометрия", geometryChoices),
+                Ui.Section("Точные параметры", exactProperties),
+                new StackPanel { Spacing = 4, Children = { snap, export } },
+            },
         }).Named("GridLayerBlock");
     }
 
@@ -3988,8 +4066,7 @@ public sealed class EditorView : UserControl
 
         if (layer is GridLayer grid)
         {
-            Ui.SetValue(_gridCellsValue, "Ячейка", EditorLabels.GridCells(grid));
-            Ui.SetValue(_gridExportValue, "В экспорт", EditorLabels.GridExport(grid));
+            _gridLayerBlock.IsEnabled = !grid.Locked;
         }
 
         if (layer is FilterLayer filter)

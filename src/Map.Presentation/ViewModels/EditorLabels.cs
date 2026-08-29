@@ -173,8 +173,9 @@ public static class EditorLabels
     public static string GridGeometry(GridGeometry geometry) => geometry switch
     {
         Core.Documents.GridGeometry.Square => "Квадратная",
-        Core.Documents.GridGeometry.HexFlat => "Шестиугольная, плоским верхом",
-        Core.Documents.GridGeometry.HexPointy => "Шестиугольная, острым верхом",
+        Core.Documents.GridGeometry.IsometricSquares => "Изометрическая",
+        Core.Documents.GridGeometry.HexFlat => "Шестиугольная, плоский верх",
+        Core.Documents.GridGeometry.HexPointy => "Шестиугольная, острый верх",
         _ => "Сетка",
     };
 

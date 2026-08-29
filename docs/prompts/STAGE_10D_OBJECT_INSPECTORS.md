@@ -1,10 +1,9 @@
 # Stage 10D — Полные inspectors объектов и Brush
 
-> Status: ACTIVE
+> Status: HISTORICAL CONTRACT — completed and independently accepted through the bounded Gate D range; do not execute again.
 
-Этот файл — единый исполняемый контракт полного вертикального среза для Codex
-`gpt-5.6-sol`. Он остаётся `ACTIVE`, пока срез не зафиксирован разрешённым checkpoint-коммитом и
-не прошёл независимую проверку неизменяемого `BASE..HEAD`.
+Этот файл сохранён как исторический контракт завершённого Stage 10D. Реализация и последующий
+test-only Gate D приняты; активным исполняемым контрактом является отдельный Stage 10E.
 
 ## Execution profile
 

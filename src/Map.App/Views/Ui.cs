@@ -233,12 +233,12 @@ public static class Ui
     }
 
     /// <summary>Label on the left, editor on the right - the single inspector row shape.</summary>
-    public static Control PropertyRow(string label, Control editor, string? unit = null)
+    public static Control PropertyRow(string label, Control editor, string? unit = null, double captionWidth = 92)
     {
         var caption = new TextBlock
         {
             Text = label,
-            Width = 92,
+            Width = captionWidth,
             VerticalAlignment = VerticalAlignment.Center,
             TextTrimming = TextTrimming.CharacterEllipsis,
         }.Classed("muted");

@@ -121,7 +121,10 @@ public static class SceneRenderer
 
         foreach (var layer in document.Layers)
         {
-            if (!layer.Visible || layer.Opacity <= 0)
+            // Grid export is an explicit per-grid policy. Editor visibility must not silently
+            // replace it: a hidden editor grid with IncludeInExport=true still belongs in export.
+            var hiddenOnlyInEditor = options.IsExport && layer is GridLayer;
+            if ((!layer.Visible && !hiddenOnlyInEditor) || layer.Opacity <= 0)
             {
                 continue;
             }
@@ -796,77 +799,19 @@ public static class SceneRenderer
 
     private static void DrawGrid(SKCanvas canvas, GridDefinition grid, WorldBounds view)
     {
-        var radians = -grid.RotationDegrees * Math.PI / 180;
-        var cos = Math.Cos(radians); var sin = Math.Sin(radians);
-        var corners = new[]
-        {
-            (view.Left, view.Top), (view.Right, view.Top),
-            (view.Right, view.Bottom), (view.Left, view.Bottom),
-        }.Select(point =>
-        {
-            var x = point.Item1 - grid.OffsetX; var y = point.Item2 - grid.OffsetY;
-            return (X: x * cos - y * sin, Y: x * sin + y * cos);
-        }).ToArray();
-        var minX = corners.Min(point => point.X); var maxX = corners.Max(point => point.X);
-        var minY = corners.Min(point => point.Y); var maxY = corners.Max(point => point.Y);
-
         using var paint = new SKPaint
         {
-            Color = ParseColor(grid.Color).WithScaledAlpha((byte)Math.Clamp(Math.Round(grid.Opacity * 255), 0, 255)),
-            StrokeWidth = (float)Math.Max(0.1, grid.LineWidth),
+            Color = ParseColor(grid.Color).WithScaledAlpha((byte)Math.Round(grid.Opacity * 255)),
+            StrokeWidth = (float)grid.LineWidth,
             IsAntialias = true,
             Style = SKPaintStyle.Stroke,
         };
-        canvas.Save();
-        canvas.Translate((float)grid.OffsetX, (float)grid.OffsetY);
-        canvas.RotateDegrees((float)grid.RotationDegrees);
-
-        var size = grid.CellSize / Math.Max(1, grid.Subdivisions);
-        if (grid.Geometry == GridGeometry.Square)
+        foreach (var segment in GridGeometryContract.VisibleSegments(grid, view))
         {
-            var stride = size;
-            var count = (maxX - minX + maxY - minY) / Math.Max(stride, 0.001);
-            if (count > 4000) stride *= Math.Ceiling(count / 4000);
-            for (var x = Math.Floor(minX / stride) * stride; x <= maxX; x += stride)
-                canvas.DrawLine((float)x, (float)minY, (float)x, (float)maxY, paint);
-            for (var y = Math.Floor(minY / stride) * stride; y <= maxY; y += stride)
-                canvas.DrawLine((float)minX, (float)y, (float)maxX, (float)y, paint);
+            canvas.DrawLine(
+                (float)segment.Start.X, (float)segment.Start.Y,
+                (float)segment.End.X, (float)segment.End.Y, paint);
         }
-        else
-        {
-            DrawHexGrid(canvas, paint, grid.Geometry, size, minX, minY, maxX, maxY);
-        }
-        canvas.Restore();
-    }
-
-    private static void DrawHexGrid(
-        SKCanvas canvas, SKPaint paint, GridGeometry geometry, double size,
-        double minX, double minY, double maxX, double maxY)
-    {
-        var pointy = geometry == GridGeometry.HexPointy;
-        var dx = pointy ? Math.Sqrt(3) * size : 1.5 * size;
-        var dy = pointy ? 1.5 * size : Math.Sqrt(3) * size;
-        var columns = Math.Max(1, (int)Math.Ceiling((maxX - minX) / Math.Max(dx, 0.001)) + 4);
-        var rows = Math.Max(1, (int)Math.Ceiling((maxY - minY) / Math.Max(dy, 0.001)) + 4);
-        var lod = Math.Max(1, (int)Math.Ceiling(Math.Sqrt(columns * (double)rows / 2000)));
-        var startColumn = (int)Math.Floor(minX / dx) - 2;
-        var startRow = (int)Math.Floor(minY / dy) - 2;
-        using var path = new SKPath();
-        for (var column = startColumn; column <= startColumn + columns; column += lod)
-            for (var row = startRow; row <= startRow + rows; row += lod)
-            {
-                var cx = pointy ? column * dx + (row % 2 == 0 ? 0 : dx / 2) : column * dx;
-                var cy = pointy ? row * dy : row * dy + (column % 2 == 0 ? 0 : dy / 2);
-                for (var vertex = 0; vertex < 6; vertex++)
-                {
-                    var angle = (pointy ? -90 : 0) + vertex * 60;
-                    var vx = cx + Math.Cos(angle * Math.PI / 180) * size;
-                    var vy = cy + Math.Sin(angle * Math.PI / 180) * size;
-                    if (vertex == 0) path.MoveTo((float)vx, (float)vy); else path.LineTo((float)vx, (float)vy);
-                }
-                path.Close();
-            }
-        canvas.DrawPath(path, paint);
     }
 
     private static void DrawText(

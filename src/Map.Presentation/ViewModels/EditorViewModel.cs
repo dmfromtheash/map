@@ -2846,26 +2846,90 @@ public sealed class EditorViewModel : ViewModelBase
         var current = before.Grids[0];
         var next = current.Geometry switch
         {
-            GridGeometry.Square => GridGeometry.HexFlat,
+            GridGeometry.Square => GridGeometry.IsometricSquares,
+            GridGeometry.IsometricSquares => GridGeometry.HexFlat,
             GridGeometry.HexFlat => GridGeometry.HexPointy,
             _ => GridGeometry.Square,
         };
-        Session.Execute(new ReplaceGridLayerCommand(before, before with
-        {
-            Grids = [current with { Geometry = next }, .. before.Grids.Skip(1)],
-        }));
-        AfterEdit();
+        SetActiveGridGeometry(next);
     }
 
     public void ToggleActiveGridExport()
     {
-        if (ActiveLayer is not GridLayer { Locked: false, Grids.Count: > 0 } before) return;
-        var current = before.Grids[0];
-        Session.Execute(new ReplaceGridLayerCommand(before, before with
+        if (ActiveLayer is GridLayer { Grids.Count: > 0 } layer)
+            SetActiveGridIncludeInExport(!layer.Grids[0].IncludeInExport);
+    }
+
+    public bool SetActiveGridGeometry(GridGeometry value) =>
+        EditActiveGrid(grid => grid with { Geometry = value }, "геометрию");
+
+    public bool SetActiveGridCellSize(double value) =>
+        EditActiveGrid(grid => grid with { CellSize = value }, "размер ячейки");
+
+    public bool SetActiveGridSubdivisions(double value)
+    {
+        if (!double.IsFinite(value) || value != Math.Truncate(value))
+            return RejectGridValue("«Деления» должно быть целым числом.");
+        return EditActiveGrid(grid => grid with { Subdivisions = checked((int)value) }, "деления");
+    }
+
+    public bool SetActiveGridLineWidth(double value) =>
+        EditActiveGrid(grid => grid with { LineWidth = value }, "толщину линии");
+
+    public bool SetActiveGridColor(string value) =>
+        EditActiveGrid(grid => grid with { Color = value }, "цвет");
+
+    public bool SetActiveGridOpacityPercent(double value) =>
+        EditActiveGrid(grid => grid with { Opacity = value / 100 }, "непрозрачность");
+
+    public bool SetActiveGridOffsetX(double value) =>
+        EditActiveGrid(grid => grid with { OffsetX = value }, "смещение по X");
+
+    public bool SetActiveGridOffsetY(double value) =>
+        EditActiveGrid(grid => grid with { OffsetY = value }, "смещение по Y");
+
+    public bool SetActiveGridRotation(double value) =>
+        EditActiveGrid(grid => grid with { RotationDegrees = value }, "поворот");
+
+    public bool SetActiveGridSnapEnabled(bool value) =>
+        EditActiveGrid(grid => grid with { SnapEnabled = value }, "привязку");
+
+    public bool SetActiveGridIncludeInExport(bool value) =>
+        EditActiveGrid(grid => grid with { IncludeInExport = value }, "экспорт");
+
+    private bool EditActiveGrid(Func<GridDefinition, GridDefinition> rewrite, string propertyName)
+    {
+        if (ActiveLayer is not GridLayer { Grids.Count: > 0 } before)
+            return RejectGridValue("Сначала выберите слой сетки.");
+        if (before.Locked)
         {
-            Grids = [current with { IncludeInExport = !current.IncludeInExport }, .. before.Grids.Skip(1)],
-        }));
-        AfterEdit();
+            StatusDetail = "Заблокированный слой сетки доступен только для чтения.";
+            return false;
+        }
+
+        try
+        {
+            var current = before.Grids[0];
+            var updated = rewrite(current);
+            if (updated == current) return false;
+            Session.Execute(new ReplaceGridLayerCommand(before, before with
+            {
+                Grids = [updated, .. before.Grids.Skip(1)],
+            }));
+            AfterEdit();
+            return true;
+        }
+        catch (Exception error) when (error is ArgumentException or OverflowException)
+        {
+            return RejectGridValue($"Не удалось изменить {propertyName}: значение вне допустимого диапазона.");
+        }
+    }
+
+    private bool RejectGridValue(string message)
+    {
+        ReportInspectorError(message);
+        StatusDetail = message;
+        return false;
     }
 
     /// <summary>Global snap switch used by the G shortcut. The topmost visible grid is authoritative.</summary>

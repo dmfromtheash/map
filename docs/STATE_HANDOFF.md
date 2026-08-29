@@ -2,40 +2,31 @@
 
 ## Последнее обновление
 
-2026-08-29. Stages 1–8 и Editor UX Rebuild находятся в истории; Stage 9A проверен, Stage 9 в
-целом `PARTIAL`. В Stage 10 независимо принята production-логика 10C. Stage 10D и security
-self-acceptance находятся в checkpoint `2af5bd3495851f032897435fc957f5705a692bbe`; отдельный
-test-only fix `8de17de27546783bdd6247cb4df094d9df505711` сделал reparse regression детерминированным без
-изменения production-кода. Bounded independent Gate D диапазона `2af5bd3..8de17de` принят отдельно:
-`1/1` exact regression и `209/209` Map.Presentation.Tests. Текущий research/policy worktree использует branch
-`stage/research-and-release-foundation` поверх этого fix.
+2026-08-30. Stage 10E реализован в отдельном worktree
+`C:\Users\Leshe\.codex\worktrees\stage10e-grid-geometry\Map`, branch
+`stage/10e-grid-geometry`, BASE `942fb07f015122c640174691d908717df1c17f76`.
 
-`FACT` checkpoint snapshot: Release build 0 warnings/errors; 683/683 tests; Stage10D coverage
-artifact; Stryker appearance/path/archive reports; финальный native driver 13/13, 7 screenshots,
-30 checks, RMSE 0,0711899; save/reopen и clean shutdown, evidence
-`artifacts/stage10d-object-inspectors/ui-smoke-20260828-234008/report.json`. Security: exact-byte
-SHA/decode, cache resident weight `encoded + decoded`, строгая optional thumbnail, safe linked
-fallback, metadata-first ZIP и pre-deserialize semantic JSON budgets, IHDR/pixel gate, ownership
-transfer и честный resource-limit verdict зафиксированы DEC-015. Финальный Codex Security scan
-дополнительно закрыл UNC/device/ADS в catalog `linkedPath`, reparse probe recent maps и bounded
-blur до Skia. `pre-commit --all-files`, active Stage10D prompt contract, offline links, NuGet
-vulnerable audit и environment doctor прошли.
+`FACT`: добавлены четыре самостоятельные geometry (`Square`, `IsometricSquares`, `HexFlat`,
+`HexPointy`), общий чистый topology/snap/render evaluator, полный Grid property sheet, одна
+undoable-команда на принятое свойство, strict persistence без смены `schemaVersion`, bounded
+rendering, save/reopen и export policy. Финальный Release build: `0` warnings/errors; полный suite
+`716/716`; Stage10E filters Core `12/12`, Persistence `13/13`, Rendering `4/4`, Presentation `4/4`.
 
-`FACT`: 15 публичных upstream-репозиториев скачаны вне Map в `C:\Projects\Map-ResearchLab` по
-точным commit; production dependency не добавлена. В repo добавлены конечный verification budget,
-central application version, immutable local bundle/checksum foundation и план side-by-side
-rollback. Dirty-source packaging probe создал 236 payload-файлов, assembly `0.2.0.0` и согласованные
-SHA/manifest с `cleanSource=false`; это не release. Private GPT/training database недоступна;
-исследование ограничено публичными и локальными источниками.
+`FACT` native self-check: точный Release EXE SHA-256
+`a909007ecd7f33315bc9bdfba06ab20dd7a631f5d5fdb4f60fa4329fe29e8cef`, настоящее Avalonia-окно
+`2500×1460` при `96 DPI / 100%`, `108` UIA checks, четыре geometry screenshots, exact values,
+однокомандный undo/redo, object/node/portal snap со стабильными ID, save/close/reopen, два
+экспорта `1600×1000` и clean process shutdown. Evidence:
+`artifacts/stage10e-grid-geometry/ui-smoke-20260830-021038/report.json`.
 
-`PARTIAL`: clean-VM bundle/update/downgrade относится к Stage 11. Keyboard/DPI/file-picker и clean-context UX
-gaps 10B/10C также не закрыты. Подробности:
-`docs/reviews/STAGE_10D_OBJECT_INSPECTORS_VERIFICATION.md`.
+`PARTIAL`: author self-check не является независимой приёмкой; четыре golden PNG имеют статус
+`PROPOSED`. Bounded Stryker оставил `195` survived и `6` timeout. Accessibility Insights FastPass,
+физический Tab traversal, реальные `150%/200%` DPI и конкретный runtime GPU/software backend не
+доказаны. Полный отчёт: `docs/reviews/STAGE_10E_GRID_GEOMETRY_VERIFICATION.md`.
 
-Следующее действие: текущий research/release foundation candidate сохраняется одним локальным
-checkpoint, после чего свежая задача Codex независимо проверяет точный `8de17de..checkpoint HEAD`.
-Эта author self-acceptance не заменяет независимую review. Следующий функциональный срез после неё —
-10E Grid geometry; не смешивать его с 10F, Stage 9B–9E или Stage 11 updater.
+Следующее и единственное действие: свежий Codex `gpt-5.6-sol`, reasoning `xhigh`, независимо
+проверяет точный `942fb07f015122c640174691d908717df1c17f76..checkpoint HEAD`. Stage 10F, Stage 9B–9E
+и Stage 11 updater в этот review не включать.
 
 ## FACT — среда
 

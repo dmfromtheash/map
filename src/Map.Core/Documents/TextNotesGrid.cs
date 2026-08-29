@@ -1,11 +1,12 @@
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.Text.RegularExpressions;
 
 namespace Map.Core.Documents;
 
 public enum TextAlignment { Left, Center, Right }
 public enum NoteAnchorKind { World, Object }
-public enum GridGeometry { Square, HexFlat, HexPointy }
+public enum GridGeometry { Square, IsometricSquares, HexFlat, HexPointy }
 
 public sealed record TextStyle
 {
@@ -89,24 +90,126 @@ public static partial class NoteMarkdown
 
 public sealed record GridDefinition
 {
+    public const int MaximumSubdivisions = 64;
+    public const double MaximumCellSize = 1_000_000_000;
+    public const double MaximumLineWidth = 4096;
+    public const double MaximumAbsoluteOffset = 1_000_000_000_000;
+
+    private GridGeometry _geometry;
+    private double _cellSize;
+    private int _subdivisions = 1;
+    private double _lineWidth = 1;
+    private string _color = "#668FA7C1";
+    private double _opacity = 0.7;
+    private double _offsetX;
+    private double _offsetY;
+    private double _rotationDegrees;
+
     public GridDefinition(GridId id, GridGeometry geometry, double cellSize)
     {
-        if (!double.IsFinite(cellSize) || cellSize <= 0) throw new ArgumentOutOfRangeException(nameof(cellSize));
         Id = id; Geometry = geometry; CellSize = cellSize;
     }
 
     public GridId Id { get; init; }
-    public GridGeometry Geometry { get; init; }
-    public double CellSize { get; init; }
-    public int Subdivisions { get; init; } = 1;
-    public double LineWidth { get; init; } = 1;
-    public string Color { get; init; } = "#668FA7C1";
-    public double Opacity { get; init; } = 0.7;
-    public double OffsetX { get; init; }
-    public double OffsetY { get; init; }
-    public double RotationDegrees { get; init; }
+    public GridGeometry Geometry
+    {
+        get => _geometry;
+        init
+        {
+            if (!Enum.IsDefined(value)) throw new ArgumentOutOfRangeException(nameof(value));
+            _geometry = value;
+        }
+    }
+
+    public double CellSize
+    {
+        get => _cellSize;
+        init
+        {
+            if (!double.IsFinite(value) || value <= 0 || value > MaximumCellSize)
+                throw new ArgumentOutOfRangeException(nameof(value));
+            _cellSize = value;
+        }
+    }
+
+    public int Subdivisions
+    {
+        get => _subdivisions;
+        init
+        {
+            if (value is < 1 or > MaximumSubdivisions)
+                throw new ArgumentOutOfRangeException(nameof(value));
+            _subdivisions = value;
+        }
+    }
+
+    public double LineWidth
+    {
+        get => _lineWidth;
+        init
+        {
+            if (!double.IsFinite(value) || value <= 0 || value > MaximumLineWidth)
+                throw new ArgumentOutOfRangeException(nameof(value));
+            _lineWidth = value;
+        }
+    }
+
+    public string Color
+    {
+        get => _color;
+        init
+        {
+            if (!IsColor(value)) throw new ArgumentException("A grid colour must be #RRGGBB or #AARRGGBB.", nameof(value));
+            _color = value.ToUpperInvariant();
+        }
+    }
+
+    public double Opacity
+    {
+        get => _opacity;
+        init
+        {
+            if (!double.IsFinite(value) || value is < 0 or > 1)
+                throw new ArgumentOutOfRangeException(nameof(value));
+            _opacity = value;
+        }
+    }
+
+    public double OffsetX
+    {
+        get => _offsetX;
+        init => _offsetX = ValidateOffset(value, nameof(value));
+    }
+
+    public double OffsetY
+    {
+        get => _offsetY;
+        init => _offsetY = ValidateOffset(value, nameof(value));
+    }
+
+    public double RotationDegrees
+    {
+        get => _rotationDegrees;
+        init
+        {
+            if (!double.IsFinite(value)) throw new ArgumentOutOfRangeException(nameof(value));
+            _rotationDegrees = value;
+        }
+    }
+
     public bool SnapEnabled { get; init; } = true;
     public bool IncludeInExport { get; init; }
+
+    private static bool IsColor(string? value) => value is { Length: 7 or 9 }
+        && value[0] == '#'
+        && uint.TryParse(value.AsSpan(1), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out _);
+
+    private static double ValidateOffset(double value, string parameterName)
+    {
+        if (!double.IsFinite(value) || Math.Abs(value) > MaximumAbsoluteOffset)
+            throw new ArgumentOutOfRangeException(parameterName);
+        return value;
+    }
 }
 
 public sealed record GridLayer : MapLayer
