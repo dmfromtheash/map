@@ -78,6 +78,13 @@ dashboard должен предложить последнюю валидную 
 9. Release build без warnings; все тесты; pre-commit; dependency audit; настоящий Release EXE без
    TCP listener и без WebView/Chromium.
 
+## Verification budget and stop rules
+
+При справочном использовании этого исторического контракта действуют текущие конечные лимиты
+`docs/11_CODEX_VERIFICATION_PROTOCOL.md`: один зелёный прогон на неизменившийся snapshot, повтор
+только после относящегося изменения, максимум три заранее объявленных flake-прогона и остановка с
+`PARTIAL`/`BLOCKED` вместо цикла. Исторические evidence и числа не переписываются.
+
 ## Отчёт после среза
 
 Использовать `FACT`, `PARTIAL`, `PROPOSED`, `BLOCKED`. Отдельно записать автоматические проверки,

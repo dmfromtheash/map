@@ -110,6 +110,16 @@ If a checkpoint exposes an out-of-scope product decision, stop only that branch,
 
 Do not delete rows. Set `Required?` and justify every skipped tool in the final report.
 
+## Verification budget and stop rules
+
+- Run each successful command/gate once per unchanged snapshot and role; never repeat it for reassurance.
+- Prove one targeted RED → GREEN, then run the containing test project once. Run the full solution only for production/shared-harness/project-graph changes or a named cross-project risk.
+- Choose coverage **or** Stryker for assertion risk. Require both only for two distinct claims stated before execution.
+- Repeat only a declared flake/timing/concurrency scenario, with at most three consecutive passes. Do not loop deterministic tests.
+- After the same failure twice despite targeted changes, change the diagnostic method or report `PARTIAL`/`BLOCKED`; do not perform a blind third retry.
+- UI/visual/accessibility/security/dependency/performance gates run only on their matrix trigger.
+- Stop when acceptance-specific evidence, one relevant regression boundary, triggered gates and Git/scope inventory pass. Report skipped gates with reasons.
+
 ## Required automatic verification
 
 ```powershell

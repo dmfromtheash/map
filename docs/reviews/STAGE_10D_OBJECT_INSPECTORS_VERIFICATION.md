@@ -173,7 +173,12 @@ review, не независимый clean-context UX gate.
 
 ## Точная следующая задача
 
-Новая отдельная задача Codex `gpt-5.6-sol`, reasoning `xhigh`, независимо проверяет неизменяемый
-диапазон `4b50ba0a707b45ace00da607650ee4d5c1a952bb..HEAD`, полный file inventory, Stage 10D
-acceptance, нативное окно и реальные артефакты. Только после успешной независимой приёмки
-создаётся крупный активный prompt Stage 10E Grid geometry.
+После review был создан отдельный test-only fix commit
+`8de17de27546783bdd6247cb4df094d9df505711`: silent-pass symbolic-link fixture заменена
+исполняемой Windows junction; production-код не менялся. Новая отдельная задача Codex
+`gpt-5.6-sol`, reasoning `xhigh`, независимо проверила неизменяемый диапазон
+`2af5bd3495851f032897435fc957f5705a692bbe..8de17de27546783bdd6247cb4df094d9df505711`
+по текущему verification budget: exact regression `1/1` и Map.Presentation.Tests `209/209` приняты
+как `FACT`. Full Stage 10D solution/native/security gates не повторяются без нового changed-risk
+trigger. Текущий research/release foundation candidate должен получить отдельный локальный checkpoint
+и свежую независимую проверку точного `8de17de..checkpoint HEAD`; Stage 10E до неё не начинать.

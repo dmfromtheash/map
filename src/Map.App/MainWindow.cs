@@ -37,7 +37,7 @@ public sealed class MainWindow : Window
         _log = log;
         _assets = assets;
 
-        Title = "Map";
+        Title = $"Map · {AppVersion.Current}";
         Name = "MainWindow";
         Width = 1400;
         Height = 900;
@@ -95,7 +95,10 @@ public sealed class MainWindow : Window
 
     private void OpenSecondWindow()
     {
-        var window = new MainWindow(_store, _recent, _log, _assets) { Title = "Map · второе окно" };
+        var window = new MainWindow(_store, _recent, _log, _assets)
+        {
+            Title = $"Map · {AppVersion.Current} · второе окно",
+        };
         window.Show();
     }
 
@@ -109,6 +112,7 @@ public sealed class MainWindow : Window
             new AvaloniaFilePicker(this),
             new DialogPrompts(this),
             _log,
+            appVersion: AppVersion.Current,
             assetCatalog: _assets);
 
     private async Task NewMapAsync()

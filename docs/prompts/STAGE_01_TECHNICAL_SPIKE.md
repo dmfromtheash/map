@@ -73,6 +73,13 @@
 11. Все тесты проходят; ручной smoke выполнен в настоящем окне.
 12. Нет out-of-scope production features.
 
+## Verification budget and stop rules
+
+Если этот исторический контракт используется как справочный источник для нового fix, применяются
+текущие конечные лимиты `docs/11_CODEX_VERIFICATION_PROTOCOL.md`: один зелёный прогон на snapshot,
+повтор только после относящегося изменения, максимум три заранее объявленных flake-прогона и
+остановка с `PARTIAL`/`BLOCKED` вместо цикла. Исторические evidence и числа не переписываются.
+
 ## Required verification
 
 - clean restore/build/test;

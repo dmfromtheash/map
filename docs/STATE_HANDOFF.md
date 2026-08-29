@@ -2,11 +2,13 @@
 
 ## Последнее обновление
 
-2026-08-28. Stages 1–8 и Editor UX Rebuild находятся в истории; Stage 9A проверен, Stage 9 в
-целом `PARTIAL`. В Stage 10 независимо принята production-логика 10C. Текущий branch
-`stage/10d-object-inspectors`; локальный checkpoint `HEAD` поверх base
-`4b50ba0a707b45ace00da607650ee4d5c1a952bb` содержит миграцию рабочего AI-стека на Codex 5.6
-Sol, завершённый 10D Object inspectors и связанные security fixes.
+2026-08-29. Stages 1–8 и Editor UX Rebuild находятся в истории; Stage 9A проверен, Stage 9 в
+целом `PARTIAL`. В Stage 10 независимо принята production-логика 10C. Stage 10D и security
+self-acceptance находятся в checkpoint `2af5bd3495851f032897435fc957f5705a692bbe`; отдельный
+test-only fix `8de17de27546783bdd6247cb4df094d9df505711` сделал reparse regression детерминированным без
+изменения production-кода. Bounded independent Gate D диапазона `2af5bd3..8de17de` принят отдельно:
+`1/1` exact regression и `209/209` Map.Presentation.Tests. Текущий research/policy worktree использует branch
+`stage/research-and-release-foundation` поверх этого fix.
 
 `FACT` checkpoint snapshot: Release build 0 warnings/errors; 683/683 tests; Stage10D coverage
 artifact; Stryker appearance/path/archive reports; финальный native driver 13/13, 7 screenshots,
@@ -19,12 +21,21 @@ transfer и честный resource-limit verdict зафиксированы DEC
 blur до Skia. `pre-commit --all-files`, active Stage10D prompt contract, offline links, NuGet
 vulnerable audit и environment doctor прошли.
 
-`PARTIAL`: независимый post-commit Codex gate ещё не выполнен. Keyboard/DPI/file-picker и
-clean-context UX gaps 10B/10C также не закрыты. Подробности:
+`FACT`: 15 публичных upstream-репозиториев скачаны вне Map в `C:\Projects\Map-ResearchLab` по
+точным commit; production dependency не добавлена. В repo добавлены конечный verification budget,
+central application version, immutable local bundle/checksum foundation и план side-by-side
+rollback. Dirty-source packaging probe создал 236 payload-файлов, assembly `0.2.0.0` и согласованные
+SHA/manifest с `cleanSource=false`; это не release. Private GPT/training database недоступна;
+исследование ограничено публичными и локальными источниками.
+
+`PARTIAL`: clean-VM bundle/update/downgrade относится к Stage 11. Keyboard/DPI/file-picker и clean-context UX
+gaps 10B/10C также не закрыты. Подробности:
 `docs/reviews/STAGE_10D_OBJECT_INSPECTORS_VERIFICATION.md`.
 
-Следующее действие: свежая задача Codex проверяет exact range checkpoint. Следующий функциональный
-срез после успешной независимой приёмки — 10E Grid geometry; не смешивать его с 10F или Stage 9B–9E.
+Следующее действие: текущий research/release foundation candidate сохраняется одним локальным
+checkpoint, после чего свежая задача Codex независимо проверяет точный `8de17de..checkpoint HEAD`.
+Эта author self-acceptance не заменяет независимую review. Следующий функциональный срез после неё —
+10E Grid geometry; не смешивать его с 10F, Stage 9B–9E или Stage 11 updater.
 
 ## FACT — среда
 

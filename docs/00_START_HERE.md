@@ -4,7 +4,7 @@
 
 Это система управления проектом нативного офлайн-конструктора карт для Windows. Она фиксирует продукт, функциональный слепок, UX, технические границы, формат данных, дорожную карту, качество, лицензирование и рабочий протокол для Codex GPT-5.6 Sol.
 
-## Состояние на 28.08.2026
+## Состояние на 29.08.2026
 
 | Область | Статус | Что это значит |
 |---|---|---|
@@ -12,9 +12,11 @@
 | Правовые границы | `FACT` | Автоскрейпинг, обратная разработка и копирование материалов исключены |
 | Продуктовый объём | `ACCEPTED` | Офлайн-эквивалент редактора и локального dashboard; без облачного сообщества и Marketplace |
 | Технологический стек | `ACCEPTED` | .NET 10 + Avalonia 12.1 + Skia; SDK установлен |
-| Код приложения | `PARTIAL` | Stages 1–8, Stage 9A, Stage 10 input slice, 10B Library/variant sets и production-логика 10C независимо проверены; Stage 10D функционально завершён, закреплён локальным checkpoint и прошёл свежую self-acceptance 683/683 + native 13/13, но остаётся без независимого exact-range gate; keyboard/DPI/file-picker и clean-context UX-gates не закрыты |
-| AI workflow | `FACT` | Активный стек использует Codex `gpt-5.6-sol`; общие правила, runbook, verification protocol и шаблон полного этапного prompt находятся в репозитории |
+| Код приложения | `PARTIAL` | Stages 1–8, Stage 9A, Stage 10 input slice, 10B Library/variant sets и production-логика 10C независимо проверены; bounded Gate D test-only range `2af5bd3..8de17de` принят отдельно (`1/1` exact regression и `209/209` Map.Presentation.Tests); keyboard/DPI/file-picker и clean-context UX-gaps не закрыты |
+| AI workflow | `FACT` | Codex `gpt-5.6-sol`; AGENTS/runbook/protocol/template и все stage prompt'ы содержат конечный verification budget, запрещающий повтор зелёных gates без changed-risk trigger |
 | Дизайн и ассеты | `PARTIAL` | Есть собственная visual system, упрощённая Library v2, наборы вариантов и diagnostic fixtures; полный inspector/grid идут позже |
+| Публичное повторное использование | `FACT / PROPOSED` | 15 upstream-репозиториев закреплены в отдельной ResearchLab; production dependencies не добавлены, Stage 10E остаётся dependency-free, Velopack отложен до Stage 11 |
+| Версии и откат | `FACT / PARTIAL` | central version `0.2.0`, manifest/checksum local bundle и side-by-side rollback foundation добавлены; реальный clean-VM bundle/update/downgrade gate остаётся Stage 11 |
 
 ## Карта документов
 
@@ -31,12 +33,15 @@
 | `09_ASSET_PIPELINE_AND_LICENSING.md` | собственные ассеты, импорт, происхождение и лицензии |
 | `10_ENVIRONMENT.md` | установленная среда и безопасное добавление инструментов |
 | `11_CODEX_VERIFICATION_PROTOCOL.md` | риск-ориентированные инструменты, Git-гейты и независимая практическая проверка Codex |
+| `12_RELEASE_VERSIONING_AND_ROLLBACK.md` | версия приложения, versioned local bundle, ручной rollback и граница будущего updater |
 | `DECISIONS.md` | append-only журнал архитектурных и продуктовых решений |
 | `STATE_HANDOFF.md` | точка возобновления между сессиями |
 | `research/INKARNATE_RESEARCH.md` | доказательная база функционального слепка |
 | `research/AI_PLAYBOOK_APPLICABILITY.md` | что взято и не взято из PDF |
 | `research/AI_TOOLS_REVIEW.md` | разбор всех позиций из таблицы инструментов |
 | `research/CODEX_5_6_SOL_WORKFLOW_AUDIT.md` | актуальный аудит инструментов, prompt-истории, Claude→Codex миграции и GitHub/security границ |
+| `research/PUBLIC_REUSE_RESEARCH_20260829.md` | exact-SHA аудит 15 публичных проектов, licenses, admission и план лабораторной интеграции |
+| `research/external-sources.json` | воспроизводимый manifest внешних research checkouts |
 | `research/SOURCES.md` | первичные источники и дата проверки |
 | `prompts/README.md` | правила active/historical prompt-файлов и проверка контракта |
 | `prompts/PROMPT_TEMPLATE_CODEX.md` | обязательный шаблон большого этапного prompt для Codex GPT-5.6 Sol |
@@ -62,8 +67,9 @@
 
 ## Следующее действие
 
-На branch `stage/10d-object-inspectors` функциональный срез 10D и связанные security fixes прошли
-свежую self-acceptance (`FACT` локального checkpoint): Release 0/0, 683/683 tests, native 13/13,
-7 PNG/30 checks. Независимый exact `BASE..HEAD` gate остаётся `PARTIAL`; следующее действие —
-свежая Codex-проверка неизменяемого снимка. Только затем начинать 10E Grid geometry одним крупным
-prompt из `prompts/PROMPT_TEMPLATE_CODEX.md`; не смешивать checkpoint с 10E/10F/Stage 9B–9E.
+Bounded Gate D exact test-only range
+`2af5bd3495851f032897435fc957f5705a692bbe..8de17de27546783bdd6247cb4df094d9df505711`
+уже принят отдельно: `1/1` exact regression и `209/209` Map.Presentation.Tests. Следующее действие —
+сохранить текущий research/release foundation candidate одним локальным checkpoint и передать точный
+`8de17de..checkpoint HEAD` свежей независимой review-задаче. **Stage 10E Grid geometry** не начинать до
+этой проверки и отдельного решения владельца.

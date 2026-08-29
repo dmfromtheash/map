@@ -55,6 +55,20 @@ UI/accessibility review — перенесены непосредственно 
 7. Security review требуется при новом trust boundary: импорт/архив/десериализация непроверенного файла, external process/tool, network/account/secret, installer/updater/plugin, новая dependency из неутверждённого источника — либо по прямому запросу владельца.
 8. Пропуск инструмента фиксируется с конкретной причиной. Фраза «не понадобилось» без привязки к риску недостаточна.
 
+## Verification budget и условия остановки
+
+Бюджет задаётся в prompt **до** изменения кода и первого проверочного запуска. Цель — получить минимально достаточное независимое доказательство, а не максимальное число зелёных логов.
+
+1. На одном и том же snapshot один успешно пройденный command/gate выполняется не более одного раза в каждой роли: author self-check и fresh review считаются разными ролями. Повтор «для уверенности» запрещён.
+2. После изменения повторяется только доказательство, которое это изменение могло сделать устаревшим. Targeted RED → GREEN выполняется один раз; затем один раз запускается содержащий тестовый проект. Полный solution suite добавляется, только если менялся production-код, общий test harness, solution/project graph или есть конкретный межпроектный риск.
+3. Для test-only review-fix без production/shared-boundary изменений достаточны: exact diff, доказанный RED → GREEN, один прогон содержащего test project, `git diff --check` и относящаяся repository-boundary проверка. Full solution build/test, native UI, dependency audit и unrelated gates не повторяются без отдельного risk trigger.
+4. Coverage **или** Stryker выбирается по assertion-риску. Оба обязательны только когда prompt заранее называет разные claims, которые один инструмент не доказывает. Для изменения только deterministic regression test они по умолчанию не нужны.
+5. Flake/timing/concurrency допускает максимум три последовательных успешных прогона, если риск и число прогонов записаны до запуска. Для детерминированного теста серия повторов запрещена.
+6. Неуспешный gate можно повторить после относящегося изменения или смены диагностического метода. Если два последовательных результата показывают одну и ту же причину, слепой третий retry запрещён: изменить подход либо зафиксировать `PARTIAL`/`BLOCKED`.
+7. Инструменты UI/visual/accessibility/security/dependency/performance включаются только соответствующим changed-risk trigger. Наличие инструмента в каталоге не является причиной запуска.
+8. Fresh review обязан прочитать весь exact diff и проверить самый опасный изменённый путь, но не обязан заново выполнять весь self-check автора. Gate D не расширяет fix до полного stage re-acceptance.
+9. Stop condition достигнут, когда выполнены acceptance-specific test, один соответствующий regression boundary, все risk-triggered gates и Git/scope inventory. После этого проверки прекращаются; в отчёте перечисляются сознательно пропущенные gates и причины.
+
 ## Security и supply-chain без лишних блокировок
 
 Map офлайн и не имеет серверных аккаунтов, но принимает локальные `.mapproj`, изображения, manifests/archives и запускает development tools. Поэтому утверждение «чужих входов нет и security нечего проверять» неверно.
@@ -122,19 +136,20 @@ dotnet package list --project Map.slnx --deprecated --include-transitive --no-re
 powershell -ExecutionPolicy Bypass -File .\scripts\doctor.ps1
 ```
 
-Команды уточняются под stage; prompt обязан добавить исходный failure path и stage-specific drivers/tests.
+Команды уточняются под stage и запускаются один раз после стабилизации среза; prompt обязан добавить исходный failure path и stage-specific drivers/tests. Полный базовый набор применим к production stage, но не переносится автоматически на docs-only или test-only fix.
 
 ### Gate C — свежая независимая приёмка
 
-Ревьюер заново устанавливает Git identity/range, читает полный diff и выполняет gates по risk matrix. Он не называет результаты исполнителя свежими фактами. По риску добавляются targeted coverage/Stryker, adversarial files, semantic roundtrip, Release EXE/UIA, screenshot/vision/diff, accessibility, benchmark и diagnostics.
+Ревьюер заново устанавливает Git identity/range, читает полный diff и выполняет high-risk path, один относящийся regression boundary и gates по risk matrix. Он не называет результаты исполнителя свежими фактами, но и не воспроизводит весь author self-check. По изменённому риску добавляются targeted coverage **или** Stryker, adversarial files, semantic roundtrip, Release EXE/UIA, screenshot/vision/diff, accessibility, benchmark и diagnostics.
 
 ### Gate D — после review-fix
 
 1. воспроизвести исходный дефект;
 2. показать red/green regression test;
-3. повторить Gate A и весь относящийся Gate B/C;
-4. пересчитать `BASE..HEAD` и scope;
-5. сохранить исправление отдельным commit.
+3. один раз выполнить targeted regression и один относящийся regression boundary;
+4. добавить только risk-triggered части Gate A/B/C; для test-only fix не повторять full solution/native/dependency/security gates без нового риска;
+5. пересчитать `BASE..HEAD` и scope;
+6. сохранить исправление отдельным commit и остановиться по verification budget.
 
 ## Практические проверки по типу изменения
 

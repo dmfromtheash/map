@@ -149,6 +149,15 @@ undoable действиями, сохраняет `.mapproj`, открывает
 
 Не удалять строки. Каждый skip объяснить в итоговом отчёте.
 
+## Verification budget and stop rules
+
+Текущие лимиты из `docs/11_CODEX_VERIFICATION_PROTOCOL.md` обязательны. Каждый зелёный gate — один
+раз на неизменившемся snapshot и в одной роли; повтор только после относящегося изменения. Coverage
+и Stryker вместе допускаются лишь для заранее разделённых claims. Для test-only review-fix нужны
+RED → GREEN, один containing test project и Git/scope gate; полный Stage 10D suite/native/security
+контур не повторяется без нового changed-risk trigger. После исчерпания бюджета —
+`PARTIAL`/`BLOCKED`, а не цикл одинаковых прогонов.
+
 ## Required automatic verification
 
 ```powershell

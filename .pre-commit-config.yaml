@@ -15,6 +15,13 @@ repos:
         pass_filenames: false
         files: ^docs/prompts/.*\.md$
 
+      - id: version-consistency
+        name: Map version consistency
+        entry: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-version-consistency.ps1
+        language: system
+        pass_filenames: false
+        files: ^(CHANGELOG\.md|Directory\.Build\.props|version\.json|docs/12_RELEASE_VERSIONING_AND_ROLLBACK\.md|src/Map\.App/AppVersion\.cs|src/Map\.App/MainWindow\.cs|src/Map\.Presentation/ViewModels/EditorViewModel\.cs|scripts/check-version-consistency\.ps1)$
+
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c  # v6.0.0
     hooks:

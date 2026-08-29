@@ -287,8 +287,12 @@ UI/groups и font catalog остаются после 10B.
 3. **10D — Object inspectors:** Stamp/Text/Line/Shape/Brush controls и color/effects parity.
    Функциональная реализация и security hardening закреплены локальным checkpoint
    `stage/10d-object-inspectors`: 683/683 tests, native driver 13/13, 7 PNG/30 checks, save/reopen
-   и mutation/coverage evidence (`FACT` self-acceptance). Независимый exact-range gate остаётся
-   `PARTIAL`; отчёт:
+   и mutation/coverage evidence (`FACT` self-acceptance). Узкий test-only fix
+   `8de17de27546783bdd6247cb4df094d9df505711` заменил silent-pass symbolic-link fixture на
+   исполняемую Windows junction. Bounded independent Gate D точного диапазона
+   `2af5bd3495851f032897435fc957f5705a692bbe..8de17de27546783bdd6247cb4df094d9df505711`
+   принят отдельно: `1/1` exact regression и `209/209` Map.Presentation.Tests; полный Stage 10D gate
+   без changed-risk trigger не повторяется. Отчёт:
    `reviews/STAGE_10D_OBJECT_INSPECTORS_VERIFICATION.md`.
 4. **10E — Grid geometry:** отдельная `IsometricSquares`, property sheet, snap/golden fixtures.
 5. **10F — Licensed font catalog/navigation и редактируемые bindings.**
@@ -309,6 +313,8 @@ UI/groups и font catalog остаются после 10B.
 - clean Windows VM smoke;
 - antivirus false-positive review, SBOM/licenses;
 - backup/upgrade/downgrade instructions;
+- основа версии и immutable local bundle уже подготовлена по DEC-016; installer/updater, clean-VM
+  и реальный rollback-smoke остаются gates Stage 11;
 - signed release только после решения владельца о сертификате.
 
 ## Не планировать датами до Stage 1

@@ -199,3 +199,23 @@
   нативные декодеры вне измеримого рабочего бюджета.
 - **Доказательство:** `docs/reviews/STAGE_10D_OBJECT_INSPECTORS_VERIFICATION.md`, targeted security
   tests и Stryker-отчёты в `artifacts/stage10d-stryker-*`.
+
+## DEC-016 — Версия приложения и откат отделены от версий данных
+
+- **Статус:** `accepted`
+- **Принято владельцем:** 2026-08-29, прямой запрос добавить профессиональные версии обновлений и
+  возможность отката, не разрушая уже существующий механизм.
+- **Дата:** 2026-08-29
+- **Решение:** единая development-версия приложения задаётся в `Directory.Build.props`, сверяется
+  с `version.json` и попадает в assembly и новый `.mapproj`. Версии `.mapproj` и Asset Catalog
+  остаются отдельными schema counters. Локальные release-кандидаты собираются как неизменяемые
+  self-contained `win-x64` bundle с exact commit и SHA-256; старые bundle сохраняются для
+  side-by-side rollback.
+- **Граница:** это не разрешение на Git tag/release, публикацию, installer, file association,
+  signing или сетевое автообновление. Provider обновлений выбирается отдельным решением Stage 11
+  после license/supply-chain/offline/downgrade/clean-VM проверки. Обновление приложения не
+  перезаписывает пользовательские карты и не заменяет migrations/checkpoints/autosave.
+- **Причина:** ранее `0.2.0` находился только в default-параметре presentation-кода, assembly мог
+  сообщать другую версию, а воспроизводимого release/rollback identity не было.
+- **Доказательство:** `docs/12_RELEASE_VERSIONING_AND_ROLLBACK.md`, `version.json`,
+  `scripts/check-version-consistency.ps1`, `scripts/build-local-release.ps1`.

@@ -126,6 +126,33 @@ geometry. DevTools/network/storage и извлечение ассетов не �
 
 Остальные URLs сохраняются в исходной книге и перечислены по названию/вердикту в `AI_TOOLS_REVIEW.md`; они не использованы как основания архитектуры.
 
+## Публичные editor/geometry/release references, проверено 29.08.2026
+
+Exact commits, лицензии и admission-решения закреплены в `external-sources.json`; подробный вывод —
+`PUBLIC_REUSE_RESEARCH_20260829.md`.
+
+- [Clipper2](https://github.com/AngusJohnson/Clipper2) и
+  [NetTopologySuite](https://github.com/NetTopologySuite/NetTopologySuite) — polygon/topology
+  candidates; не добавлены в production graph.
+- [Mapsui](https://github.com/Mapsui/Mapsui),
+  [Avalonia.Samples](https://github.com/AvaloniaUI/Avalonia.Samples) и
+  [SkiaSharp](https://github.com/mono/SkiaSharp) — официальные/публичные .NET/Avalonia/Skia
+  references для viewport, tests и будущего font-shaping probe.
+- [Tiled](https://github.com/mapeditor/tiled),
+  [MapTool](https://github.com/RPTools/maptool), [Pinta](https://github.com/PintaProject/Pinta),
+  [PixiEditor](https://github.com/PixiEditor/PixiEditor),
+  [LDtk](https://github.com/deepnight/ldtk) и
+  [Azgaar Fantasy Map Generator](https://github.com/Azgaar/Fantasy-Map-Generator) — editor/grid
+  reference only с разными license/architecture restrictions; direct code/assets не переносились.
+- [Velopack](https://github.com/velopack/velopack),
+  [official documentation](https://docs.velopack.io/) и
+  [self-hosting/local source](https://docs.velopack.io/distributing/self-hosting) — Stage 11
+  updater candidate; Flow/cloud не является обязательным.
+- [Nerdbank.GitVersioning](https://github.com/dotnet/Nerdbank.GitVersioning) и
+  [MinVer](https://github.com/adamralph/minver) — Git-derived versioning candidates, отложены до
+  принятого tag/release flow.
+- [SVG.NET](https://github.com/vvvv/SVG) — изучен и отклонён для текущего Skia pipeline.
+
 ## Что не является доказательством
 
 - рекламный текст без наблюдаемого сценария;

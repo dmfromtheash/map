@@ -22,6 +22,7 @@ $requiredMarkers = @(
     "## Acceptance criteria",
     "## Failure and adversarial scenarios",
     "## Risk and tool matrix",
+    "## Verification budget and stop rules",
     "## Required automatic verification",
     "## Required native UI verification",
     "## Git and stop condition",
@@ -39,6 +40,14 @@ if ($RequireActive -and $active.Count -eq 0) {
 }
 
 $errors = [System.Collections.Generic.List[string]]::new()
+$budgetFiles = @($promptFiles) + @(Get-Item -LiteralPath (Join-Path $PromptDirectory 'PROMPT_TEMPLATE_CODEX.md'))
+foreach ($file in $budgetFiles) {
+    $content = Get-Content -Raw -LiteralPath $file.FullName
+    if ($content.IndexOf('## Verification budget and stop rules', [System.StringComparison]::OrdinalIgnoreCase) -lt 0) {
+        $errors.Add("$($file.Name): missing '## Verification budget and stop rules'")
+    }
+}
+
 foreach ($file in $active) {
     $content = Get-Content -Raw -LiteralPath $file.FullName
     foreach ($marker in $requiredMarkers) {

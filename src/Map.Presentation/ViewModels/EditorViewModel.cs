@@ -248,7 +248,7 @@ public sealed class EditorViewModel : ViewModelBase
         IUserPrompts prompts,
         IAppLog log,
         Func<DateTimeOffset>? clock = null,
-        string appVersion = "0.2.0",
+        string? appVersion = null,
         AssetCatalog? assetCatalog = null,
         IAssetContentResolver? assetResolver = null)
     {
@@ -260,7 +260,9 @@ public sealed class EditorViewModel : ViewModelBase
         _prompts = prompts;
         _log = log;
         _clock = clock ?? (static () => DateTimeOffset.UtcNow);
-        _appVersion = appVersion;
+        _appVersion = appVersion
+            ?? typeof(EditorViewModel).Assembly.GetName().Version?.ToString(3)
+            ?? "0.0.0";
         _assetCatalog = assetCatalog;
         _assetResolver = assetResolver
             ?? (assetCatalog is null ? null : new CatalogAssetContentResolver(assetCatalog));
