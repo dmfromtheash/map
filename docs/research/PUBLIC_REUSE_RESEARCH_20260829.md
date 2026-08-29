@@ -131,6 +131,10 @@ C:\Projects\Map-ResearchLab\
 
 - папка находится рядом с Map, не внутри repo и не в `Map.slnx`;
 - upstream source считается untrusted/read-only; ничего не собирать и не запускать автоматически;
+- каждый `sparsePaths` и отдельный обязательный `licenseFile` проверяются case-sensitive по tree/blob
+  точного pinned commit до итогового `PASS`;
+- на Windows acquisition принимает только короткий `TargetRoot` (не более 80 символов), не
+  пересекающийся с Map repo; длинный путь отклоняется до создания файлов;
 - direct reuse допускается только после отдельной записи: exact files/API, license, purpose,
   alternative, security boundary и removal plan;
 - GPL/AGPL/LGPL reference не копируется в proprietary/неопределённый production-код;

@@ -9,6 +9,7 @@
       "url": "https://github.com/AngusJohnson/Clipper2.git",
       "commit": "f9c5eb6e14a59f6f5d65fbfb3564519a561cf4fd",
       "license": "BSL-1.0",
+      "licenseFile": "LICENSE",
       "admission": "defer-prototype",
       "sparsePaths": ["LICENSE", "README.md", "CSharp/Clipper2Lib", "CSharp/Tests"]
     },
@@ -17,38 +18,43 @@
       "url": "https://github.com/NetTopologySuite/NetTopologySuite.git",
       "commit": "e064b57bc4968544603a0f4a1143b0cdf2207912",
       "license": "BSD-3-Clause with JTS notices",
+      "licenseFile": "License.md",
       "admission": "not-now",
-      "sparsePaths": ["LICENSE.md", "README.md", "src/NetTopologySuite", "test/NetTopologySuite.Tests.NUnit"]
+      "sparsePaths": ["License.md", "README.md", "src/NetTopologySuite", "test/NetTopologySuite.Tests.NUnit"]
     },
     {
       "id": "mapsui",
       "url": "https://github.com/Mapsui/Mapsui.git",
       "commit": "7af71dbf2730322416b46b8fb58524a57f5356be",
       "license": "MIT",
+      "licenseFile": "LICENSE",
       "admission": "reference-probe",
-      "sparsePaths": ["LICENSE", "README.md", "Mapsui/Platforms/Avalonia", "Mapsui/Rendering/Skia", "Tests"]
+      "sparsePaths": ["LICENSE", "README.md", "Mapsui.UI.Avalonia12", "Mapsui.Rendering.Skia", "Tests"]
     },
     {
       "id": "avalonia-samples",
       "url": "https://github.com/AvaloniaUI/Avalonia.Samples.git",
       "commit": "27204ddbd36f7d99c3ba8f20a3b0cdb84ffe7775",
       "license": "MIT",
+      "licenseFile": "LICENSE",
       "admission": "test-patterns",
-      "sparsePaths": ["LICENSE", "README.md", "src/Avalonia.Samples", "src/Avalonia.Samples.Tests"]
+      "sparsePaths": ["LICENSE", "README.adoc", "src/Avalonia.Samples", "src/Avalonia.Samples/Testing"]
     },
     {
       "id": "skiasharp",
       "url": "https://github.com/mono/SkiaSharp.git",
       "commit": "f74bd9adb82a77fd4a423db03c1077ea9d3be7e7",
       "license": "MIT",
+      "licenseFile": "LICENSE.md",
       "admission": "existing-dependency-font-probe",
-      "sparsePaths": ["LICENSE", "README.md", "binding/SkiaSharp", "binding/HarfBuzzSharp", "tests"]
+      "sparsePaths": ["LICENSE.md", "README.md", "binding/SkiaSharp", "binding/HarfBuzzSharp", "tests"]
     },
     {
       "id": "tiled",
       "url": "https://github.com/mapeditor/tiled.git",
       "commit": "457ecbb4da480b5c6cd153bd87e8c758c9453e13",
       "license": "GPL-2.0 with mixed component notices",
+      "licenseFile": "COPYING",
       "admission": "reference-only",
       "sparsePaths": ["COPYING", "README.md", "src/tiled", "src/tiledquick", "tests"]
     },
@@ -57,14 +63,16 @@
       "url": "https://github.com/Azgaar/Fantasy-Map-Generator.git",
       "commit": "4eb71cfb89bebf987174623f9ccc0485bf328819",
       "license": "MIT",
+      "licenseFile": "LICENSE",
       "admission": "concept-only",
-      "sparsePaths": ["LICENSE", "README.md", "src", "modules", "test"]
+      "sparsePaths": ["LICENSE", "README.md", "src", "public/modules", "tests"]
     },
     {
       "id": "maptool",
       "url": "https://github.com/RPTools/maptool.git",
       "commit": "92370a3d359cce69cdadc8cb916cfcaa2952b618",
       "license": "AGPL-3.0",
+      "licenseFile": "LICENSE",
       "admission": "oracle-reference-only",
       "sparsePaths": ["LICENSE", "README.md", "src/main/java/net/rptools/maptool/model", "src/test"]
     },
@@ -73,22 +81,25 @@
       "url": "https://github.com/PintaProject/Pinta.git",
       "commit": "42aa68ac8d13e6190c575cabe19ba848ec043160",
       "license": "MIT source with mixed asset notices",
+      "licenseFile": "license-mit.txt",
       "admission": "reference-only",
-      "sparsePaths": ["license-mit.txt", "readme.md", "Pinta.Core", "Pinta.Tools", "Pinta.Gui.Widgets", "Pinta.Core.Tests"]
+      "sparsePaths": ["license-mit.txt", "readme.md", "Pinta.Core", "Pinta.Tools", "Pinta.Gui.Widgets", "tests/Pinta.Core.Tests"]
     },
     {
       "id": "pixieditor",
       "url": "https://github.com/PixiEditor/PixiEditor.git",
       "commit": "e6b2d3f6f8a4ab8740b000e61734f9d550ccc2bc",
       "license": "LGPL-3.0",
+      "licenseFile": "LICENSE",
       "admission": "reference-only",
-      "sparsePaths": ["LICENSE", "README.md", "src/PixiEditor.ChangeableDocument", "src/PixiEditor.Models", "tests"]
+      "sparsePaths": ["LICENSE", "README.md", "src/PixiEditor.ChangeableDocument", "src/PixiEditor/Models", "tests"]
     },
     {
       "id": "ldtk",
       "url": "https://github.com/deepnight/ldtk.git",
       "commit": "6d69bd1d6be92f01ac30778f6a934f0da8448b16",
       "license": "MIT",
+      "licenseFile": "LICENSE",
       "admission": "concept-only",
       "sparsePaths": ["LICENSE", "README.md", "src", "tests"]
     },
@@ -97,32 +108,36 @@
       "url": "https://github.com/velopack/velopack.git",
       "commit": "214f8be7384201826ba03d4bad8f0f646d727613",
       "license": "MIT",
+      "licenseFile": "LICENSE",
       "admission": "proposed-stage11",
-      "sparsePaths": ["LICENSE", "README.md", "samples/CSharpAvalonia", "src/lib-csharp", "docs"]
+      "sparsePaths": ["LICENSE", "README.md", "samples/CSharpAvalonia", "src/lib-csharp", "test"]
     },
     {
       "id": "nerdbank-gitversioning",
       "url": "https://github.com/dotnet/Nerdbank.GitVersioning.git",
       "commit": "5083947fec3a668267a7c851e2ccab7ee6f42af3",
       "license": "MIT",
+      "licenseFile": "LICENSE",
       "admission": "defer",
-      "sparsePaths": ["LICENSE", "README.md", "doc", "src"]
+      "sparsePaths": ["LICENSE", "README.md", "docfx", "src"]
     },
     {
       "id": "minver",
       "url": "https://github.com/adamralph/minver.git",
       "commit": "8bbc4fb0230bedfa6f7678749c7b5fe977d240eb",
       "license": "Apache-2.0",
+      "licenseFile": "LICENSE",
       "admission": "defer",
-      "sparsePaths": ["LICENSE", "README.md", "docs", "MinVer"]
+      "sparsePaths": ["LICENSE", "README.md", "MinVer.Lib", "MinVer"]
     },
     {
       "id": "svg-dotnet",
       "url": "https://github.com/vvvv/SVG.git",
       "commit": "e74a8b0c9a1c52e02a3fe1580bde52453fd96a94",
       "license": "MS-PL",
+      "licenseFile": "license.txt",
       "admission": "reject-now",
-      "sparsePaths": ["LICENSE", "README.md", "Source", "Tests"]
+      "sparsePaths": ["license.txt", "README.md", "Source", "Tests"]
     }
   ]
 }
