@@ -19,6 +19,9 @@ internal sealed class ManifestDto
     [JsonPropertyName("preset")] public string Preset { get; set; } = "blank";
     [JsonPropertyName("sceneSha256")] public string SceneSha256 { get; set; } = "";
     [JsonPropertyName("assetManifestSha256")] public string AssetManifestSha256 { get; set; } = "";
+    [JsonPropertyName("checkpointCatalogSha256")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? CheckpointCatalogSha256 { get; set; }
 }
 
 internal sealed class CanvasDto
@@ -370,4 +373,30 @@ internal sealed class AssetEntryDto
     [JsonPropertyName("thumbnailSha256")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ThumbnailSha256 { get; set; }
+}
+
+internal sealed class CheckpointCatalogDto
+{
+    [JsonPropertyName("checkpoints")]
+    public List<CheckpointEntryDto> Checkpoints { get; set; } = [];
+}
+
+internal sealed class CheckpointEntryDto
+{
+    [JsonPropertyName("id")] public string Id { get; set; } = "";
+    [JsonPropertyName("name")] public string Name { get; set; } = "";
+    [JsonPropertyName("createdUtc")] public string CreatedUtc { get; set; } = "";
+    [JsonPropertyName("snapshotManifestSha256")]
+    public string SnapshotManifestSha256 { get; set; } = "";
+}
+
+internal sealed class CheckpointSnapshotManifestDto
+{
+    [JsonPropertyName("documentId")] public string DocumentId { get; set; } = "";
+    [JsonPropertyName("title")] public string Title { get; set; } = "";
+    [JsonPropertyName("createdUtc")] public string CreatedUtc { get; set; } = "";
+    [JsonPropertyName("canvas")] public CanvasDto Canvas { get; set; } = new();
+    [JsonPropertyName("sceneSha256")] public string SceneSha256 { get; set; } = "";
+    [JsonPropertyName("assetManifestSha256")] public string AssetManifestSha256 { get; set; } = "";
+    [JsonPropertyName("previewSha256")] public string PreviewSha256 { get; set; } = "";
 }

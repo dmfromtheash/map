@@ -107,3 +107,84 @@ public sealed class ErrorWindow : Window
     public static Task ShowAsync(Window owner, string title, string message) =>
         new ErrorWindow(title, message).ShowDialog(owner);
 }
+
+/// <summary>One explicit dangerous choice with a safe Cancel default.</summary>
+public sealed class ConfirmationWindow : Window
+{
+    private bool _confirmed;
+
+    private ConfirmationWindow(
+        string title,
+        string message,
+        string confirmText,
+        string confirmButtonName,
+        bool destructive)
+    {
+        Title = title;
+        Width = 500;
+        SizeToContent = SizeToContent.Height;
+        WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        CanResize = false;
+
+        var confirm = new Button
+        {
+            Name = confirmButtonName,
+            Content = confirmText,
+            MinWidth = 120,
+        };
+        if (destructive)
+        {
+            confirm.Classes.Add("destructive");
+        }
+        confirm.Click += (_, _) =>
+        {
+            _confirmed = true;
+            Close();
+        };
+
+        var cancel = new Button
+        {
+            Name = "CheckpointCancelButton",
+            Content = "Отмена",
+            MinWidth = 120,
+            IsDefault = true,
+        };
+        cancel.Click += (_, _) => Close();
+
+        Content = new StackPanel
+        {
+            Margin = new Thickness(20),
+            Spacing = 16,
+            Children =
+            {
+                new TextBlock
+                {
+                    Name = "CheckpointConfirmationText",
+                    Text = message,
+                    TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+                },
+                new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 10,
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                    Children = { cancel, confirm },
+                },
+            },
+        };
+    }
+
+    public static async Task<bool> ShowAsync(
+        Window owner,
+        string title,
+        string message,
+        string confirmText,
+        string confirmButtonName,
+        bool destructive = false)
+    {
+        var window = new ConfirmationWindow(
+            title, message, confirmText, confirmButtonName, destructive);
+        await window.ShowDialog(owner);
+        return window._confirmed;
+    }
+}

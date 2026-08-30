@@ -23,7 +23,44 @@ public static class MapProjectStore
     private readonly record struct PreparedContainer(
         byte[] ManifestBytes,
         byte[] SceneBytes,
-        byte[] AssetManifestBytes);
+        byte[] AssetManifestBytes,
+        PreparedCheckpointPayload Checkpoints);
+
+    private readonly record struct PreparedCheckpointPayload(
+        IReadOnlyList<(string Name, byte[] Bytes)> Entries,
+        string? CatalogSha256,
+        long TotalBytes,
+        long AssetBytes,
+        long TileBytes,
+        long JsonBytes)
+    {
+        public static PreparedCheckpointPayload Empty { get; } = new(
+            [], null, 0, 0, 0, 0);
+    }
+
+    /// <summary>
+    /// Validates one proposed checkpoint against the exact bytes the persistence writer would
+    /// add. The document is not mutated and no file is touched on refusal.
+    /// </summary>
+    public static void ValidateCheckpointAddition(MapDocument document, MapCheckpoint checkpoint)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(checkpoint);
+
+        if (document.Checkpoints.Count >= MapCheckpointLimits.MaxCount)
+        {
+            throw new MapProjectResourceLimitException(
+                $"Достигнут лимит: не больше {MapCheckpointLimits.MaxCount} контрольных точек.");
+        }
+
+        if (document.Checkpoints.Any(item => item.Id == checkpoint.Id))
+        {
+            throw new ArgumentException("Контрольная точка с таким идентификатором уже существует.",
+                nameof(checkpoint));
+        }
+
+        PrepareCheckpointPayload(document.WithCheckpoints([.. document.Checkpoints, checkpoint]));
+    }
 
     /// <summary>
     /// Checks whether new document assets fit the same payload and ZIP-entry envelope enforced by
@@ -322,12 +359,12 @@ public static class MapProjectStore
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
-        var (manifest, scene, assetManifest, previewPng, tiles, assets) =
+        var (manifest, scene, assetManifest, previewPng, tiles, assets, checkpoints) =
             ReadAndValidate(Path.GetFullPath(path));
 
         return new OpenedProject
         {
-            Document = ToDomain(manifest, scene, assetManifest, tiles, assets),
+            Document = ToDomain(manifest, scene, assetManifest, tiles, assets, checkpoints),
             AppVersion = manifest.AppVersion,
             ModifiedUtc = ParseTimestamp(manifest.ModifiedUtc, "modifiedUtc"),
             PreviewPng = previewPng,
@@ -341,6 +378,7 @@ public static class MapProjectStore
         SaveMetadata metadata,
         byte[] previewPng)
     {
+        var checkpoints = PrepareCheckpointPayload(document);
         var sceneBytes = JsonSerializer.SerializeToUtf8Bytes(ToSceneDto(document), JsonOptions);
         var assetManifestBytes = JsonSerializer.SerializeToUtf8Bytes(ToAssetManifestDto(document), JsonOptions);
 
@@ -360,6 +398,7 @@ public static class MapProjectStore
             },
             SceneSha256 = Sha256Hex(sceneBytes),
             AssetManifestSha256 = Sha256Hex(assetManifestBytes),
+            CheckpointCatalogSha256 = checkpoints.CatalogSha256,
         };
 
         var manifestBytes = JsonSerializer.SerializeToUtf8Bytes(manifest, JsonOptions);
@@ -381,7 +420,7 @@ public static class MapProjectStore
 
         var jsonBytes = checked(
             manifestBytes.LongLength + sceneBytes.LongLength + assetManifestBytes.LongLength);
-        if (jsonBytes > MapProjectFormat.MaxJsonPayloadBytes)
+        if (checked(jsonBytes + checkpoints.JsonBytes) > MapProjectFormat.MaxJsonPayloadBytes)
         {
             throw new MapProjectResourceLimitException(
                 $"Project JSON exceeds the {MapProjectFormat.MaxJsonPayloadBytes}-byte budget.");
@@ -390,13 +429,165 @@ public static class MapProjectStore
         if (!TryValidateAssetEnvelope(
                 document,
                 document.Assets,
-                checked(jsonBytes + previewPng.LongLength),
+                checked(jsonBytes + previewPng.LongLength + checkpoints.TotalBytes),
                 out var admissionFailure))
         {
             throw new MapProjectResourceLimitException(admissionFailure);
         }
 
-        return new PreparedContainer(manifestBytes, sceneBytes, assetManifestBytes);
+        var mainAssetBytes = EnumerateAssetEntries(document).Aggregate(
+            0L, static (total, entry) => checked(total + entry.Bytes.LongLength));
+        if (checked(mainAssetBytes + checkpoints.AssetBytes) > MapProjectFormat.MaxAssetPayloadBytes)
+        {
+            throw new MapProjectResourceLimitException(
+                $"Ассеты карты и контрольных точек превышают общий лимит "
+                + $"{MapProjectFormat.MaxAssetPayloadBytes} байт.");
+        }
+
+        var mainTileBytes = EnumerateTileEntries(document).Aggregate(
+            0L, static (total, entry) => checked(total + entry.Bytes.LongLength));
+        if (checked(mainTileBytes + checkpoints.TileBytes) > MapProjectFormat.MaxTilePayloadBytes)
+        {
+            throw new MapProjectResourceLimitException(
+                $"Тайлы карты и контрольных точек превышают общий лимит "
+                + $"{MapProjectFormat.MaxTilePayloadBytes} байт.");
+        }
+
+        var entryCount = checked(
+            BaseContainerEntryCount(document) + AssetEntryCount(document.Assets) + checkpoints.Entries.Count);
+        if (entryCount > MapProjectFormat.MaxEntries)
+        {
+            throw new MapProjectResourceLimitException(
+                $"Проект содержит больше {MapProjectFormat.MaxEntries} файлов контейнера.");
+        }
+
+        return new PreparedContainer(manifestBytes, sceneBytes, assetManifestBytes, checkpoints);
+    }
+
+    private static PreparedCheckpointPayload PrepareCheckpointPayload(MapDocument document)
+    {
+        if (document.Checkpoints.Count == 0)
+        {
+            return PreparedCheckpointPayload.Empty;
+        }
+
+        if (document.Checkpoints.Count > MapCheckpointLimits.MaxCount)
+        {
+            throw new MapProjectResourceLimitException(
+                $"Достигнут лимит: не больше {MapCheckpointLimits.MaxCount} контрольных точек.");
+        }
+
+        var entries = new List<(string Name, byte[] Bytes)>();
+        var catalog = new CheckpointCatalogDto();
+        long assetBytes = 0;
+        long tileBytes = 0;
+        long jsonBytes = 0;
+
+        foreach (var checkpoint in document.Checkpoints)
+        {
+            var root = CheckpointRoot(checkpoint.Id);
+            var snapshot = checkpoint.Snapshot.Materialize(document.Id);
+            var sceneBytes = JsonSerializer.SerializeToUtf8Bytes(ToSceneDto(snapshot), JsonOptions);
+            var assetManifestBytes = JsonSerializer.SerializeToUtf8Bytes(
+                ToAssetManifestDto(snapshot, root), JsonOptions);
+            var previewBytes = checkpoint.PreviewPng.ToArray();
+
+            var snapshotManifest = new CheckpointSnapshotManifestDto
+            {
+                DocumentId = document.Id.ToString(),
+                Title = snapshot.Title,
+                CreatedUtc = FormatTimestamp(snapshot.CreatedUtc),
+                Canvas = new CanvasDto
+                {
+                    Width = snapshot.Canvas.Width,
+                    Height = snapshot.Canvas.Height,
+                    Unit = snapshot.Canvas.Unit,
+                    Background = snapshot.Canvas.Background,
+                },
+                SceneSha256 = Sha256Hex(sceneBytes),
+                AssetManifestSha256 = Sha256Hex(assetManifestBytes),
+                PreviewSha256 = Sha256Hex(previewBytes),
+            };
+            var snapshotManifestBytes = JsonSerializer.SerializeToUtf8Bytes(snapshotManifest, JsonOptions);
+
+            foreach (var (name, bytes) in new[]
+            {
+                (root + "manifest.json", snapshotManifestBytes),
+                (root + "scene.json", sceneBytes),
+                (root + "asset-manifest.json", assetManifestBytes),
+            })
+            {
+                ValidateJsonPayload(name, bytes);
+                jsonBytes = checked(jsonBytes + bytes.LongLength);
+                entries.Add((name, bytes));
+            }
+
+            if (previewBytes.LongLength > MapProjectFormat.MaxCheckpointPreviewBytes)
+            {
+                throw new MapProjectResourceLimitException(
+                    $"Preview контрольной точки «{checkpoint.Name}» превышает "
+                    + $"{MapProjectFormat.MaxCheckpointPreviewBytes} байт.");
+            }
+            ValidatePngHeader(
+                previewBytes,
+                root + "preview.png",
+                MapProjectFormat.MaxCheckpointPreviewWidth,
+                MapProjectFormat.MaxCheckpointPreviewHeight,
+                (long)MapProjectFormat.MaxCheckpointPreviewWidth * MapProjectFormat.MaxCheckpointPreviewHeight);
+            entries.Add((root + "preview.png", previewBytes));
+
+            foreach (var entry in EnumerateTileEntries(snapshot, root))
+            {
+                tileBytes = checked(tileBytes + entry.Bytes.LongLength);
+                entries.Add(entry);
+            }
+            foreach (var entry in EnumerateAssetEntries(snapshot, root))
+            {
+                assetBytes = checked(assetBytes + entry.Bytes.LongLength);
+                entries.Add(entry);
+            }
+
+            catalog.Checkpoints.Add(new CheckpointEntryDto
+            {
+                Id = checkpoint.Id.ToString(),
+                Name = checkpoint.Name,
+                CreatedUtc = FormatTimestamp(checkpoint.CreatedUtc),
+                SnapshotManifestSha256 = Sha256Hex(snapshotManifestBytes),
+            });
+        }
+
+        var catalogBytes = JsonSerializer.SerializeToUtf8Bytes(catalog, JsonOptions);
+        ValidateJsonPayload(MapProjectFormat.CheckpointCatalogEntry, catalogBytes);
+        jsonBytes = checked(jsonBytes + catalogBytes.LongLength);
+        entries.Add((MapProjectFormat.CheckpointCatalogEntry, catalogBytes));
+
+        var totalBytes = entries.Aggregate(
+            0L, static (total, entry) => checked(total + entry.Bytes.LongLength));
+        if (totalBytes > MapCheckpointLimits.MaxTotalStoredBytes)
+        {
+            throw new MapProjectResourceLimitException(
+                $"Контрольные точки занимают {totalBytes} байт — больше лимита "
+                + $"{MapCheckpointLimits.MaxTotalStoredBytes} байт. Старые точки не удалены.");
+        }
+
+        return new PreparedCheckpointPayload(
+            entries,
+            Sha256Hex(catalogBytes),
+            totalBytes,
+            assetBytes,
+            tileBytes,
+            jsonBytes);
+    }
+
+    private static void ValidateJsonPayload(string name, byte[] bytes)
+    {
+        if (bytes.LongLength > MapProjectFormat.MaxJsonEntryBytes)
+        {
+            throw new MapProjectResourceLimitException(
+                $"{name} exceeds the {MapProjectFormat.MaxJsonEntryBytes}-byte JSON budget.");
+        }
+
+        MapProjectJsonBudget.Validate(bytes, name);
     }
 
     private static void WriteContainer(
@@ -419,6 +610,10 @@ public static class MapProjectStore
         {
             WriteEntry(archive, name, bytes);
         }
+        foreach (var (name, bytes) in prepared.Checkpoints.Entries.OrderBy(p => p.Name, StringComparer.Ordinal))
+        {
+            WriteEntry(archive, name, bytes);
+        }
     }
 
     private static void WriteEntry(ZipArchive archive, string name, byte[] data)
@@ -436,8 +631,8 @@ public static class MapProjectStore
     /// </summary>
     private static void ValidateReadBack(string tempPath, MapDocument expected)
     {
-        var (manifest, scene, assetManifest, _, tiles, assets) = ReadAndValidate(tempPath);
-        var reloaded = ToDomain(manifest, scene, assetManifest, tiles, assets);
+        var (manifest, scene, assetManifest, _, tiles, assets, checkpoints) = ReadAndValidate(tempPath);
+        var reloaded = ToDomain(manifest, scene, assetManifest, tiles, assets, checkpoints);
 
         if (reloaded.Id != expected.Id)
         {
@@ -450,7 +645,13 @@ public static class MapProjectStore
                 || ObjectCount(p.First) != ObjectCount(p.Second)
                 || TileCount(p.First) != TileCount(p.Second)
                 || (p.First.Mask?.Tiles.TileCount ?? 0) != (p.Second.Mask?.Tiles.TileCount ?? 0))
-            || reloaded.Assets.Count != expected.Assets.Count)
+            || reloaded.Assets.Count != expected.Assets.Count
+            || reloaded.Checkpoints.Count != expected.Checkpoints.Count
+            || reloaded.Checkpoints.Zip(expected.Checkpoints).Any(pair =>
+                pair.First.Id != pair.Second.Id
+                || pair.First.Name != pair.Second.Name
+                || pair.First.CreatedUtc != pair.Second.CreatedUtc
+                || !pair.First.PreviewPng.Span.SequenceEqual(pair.Second.PreviewPng.Span)))
         {
             throw new MapProjectCorruptedException("Read-back layer/object shape does not match the saved snapshot.");
         }
@@ -464,7 +665,8 @@ public static class MapProjectStore
         AssetManifestDto AssetManifest,
         byte[] PreviewPng,
         IReadOnlyDictionary<string, byte[]> Tiles,
-        IReadOnlyDictionary<string, byte[]> Assets) ReadAndValidate(string fullPath)
+        IReadOnlyDictionary<string, byte[]> Assets,
+        IReadOnlyList<MapCheckpoint> Checkpoints) ReadAndValidate(string fullPath)
     {
         using var stream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read);
         MapProjectZipAdmission.Validate(stream);
@@ -535,13 +737,15 @@ public static class MapProjectStore
 
             var tiles = ReadAndValidateTiles(archive, scene);
             var assets = ReadAndValidateAssets(archive, assetManifest);
+            var checkpoints = ReadAndValidateCheckpoints(archive, manifest);
             return (
                 manifest,
                 scene,
                 assetManifest,
                 ReadEntry(archive, MapProjectFormat.PreviewEntry),
                 tiles,
-                assets);
+                assets,
+                checkpoints);
         }
     }
 
@@ -588,41 +792,63 @@ public static class MapProjectStore
     /// Checks the stored preview really is a PNG with sane dimensions - from the signature and
     /// IHDR header only, without decoding pixels (persistence has no imaging dependency).
     /// </summary>
-    private static void ValidatePreviewHeader(ZipArchive archive)
+    private static void ValidatePreviewHeader(ZipArchive archive) => ValidatePreviewHeader(
+        archive,
+        MapProjectFormat.PreviewEntry,
+        MapProjectFormat.MaxPreviewDimension,
+        MapProjectFormat.MaxPreviewDimension,
+        MapProjectFormat.MaxPreviewPixels);
+
+    private static void ValidatePreviewHeader(
+        ZipArchive archive,
+        string entryName,
+        int maxWidth,
+        int maxHeight,
+        long maxPixels)
     {
         var preview = new byte[24];
         try
         {
-            using var stream = archive.GetEntry(MapProjectFormat.PreviewEntry)!.Open();
+            using var stream = archive.GetEntry(entryName)!.Open();
             stream.ReadExactly(preview);
         }
         catch (Exception ex) when (ex is InvalidDataException or EndOfStreamException)
         {
             throw new MapProjectCorruptedException(
-                $"{MapProjectFormat.PreviewEntry} is not a PNG or has a truncated header.", ex);
+                $"{entryName} is not a PNG or has a truncated header.", ex);
         }
 
+        ValidatePngHeader(preview, entryName, maxWidth, maxHeight, maxPixels);
+    }
+
+    private static void ValidatePngHeader(
+        ReadOnlySpan<byte> preview,
+        string entryName,
+        int maxWidth,
+        int maxHeight,
+        long maxPixels)
+    {
         ReadOnlySpan<byte> pngSignature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
         ReadOnlySpan<byte> ihdr = "IHDR"u8;
         if (preview.Length < 24
-            || !preview.AsSpan(0, 8).SequenceEqual(pngSignature)
-            || !preview.AsSpan(12, 4).SequenceEqual(ihdr))
+            || !preview.Slice(0, 8).SequenceEqual(pngSignature)
+            || !preview.Slice(12, 4).SequenceEqual(ihdr))
         {
             throw new MapProjectCorruptedException(
-                $"{MapProjectFormat.PreviewEntry} is not a PNG image.");
+                $"{entryName} is not a PNG image.");
         }
 
         // Bytes 16..23 are the IHDR width and height, big-endian.
-        var width = BinaryPrimitives.ReadUInt32BigEndian(preview.AsSpan(16, 4));
-        var height = BinaryPrimitives.ReadUInt32BigEndian(preview.AsSpan(20, 4));
+        var width = BinaryPrimitives.ReadUInt32BigEndian(preview.Slice(16, 4));
+        var height = BinaryPrimitives.ReadUInt32BigEndian(preview.Slice(20, 4));
 
         var pixels = (long)width * height;
-        if (width is 0 or > MapProjectFormat.MaxPreviewDimension
-            || height is 0 or > MapProjectFormat.MaxPreviewDimension
-            || pixels > MapProjectFormat.MaxPreviewPixels)
+        if (width is 0 || width > maxWidth
+            || height is 0 || height > maxHeight
+            || pixels > maxPixels)
         {
             throw new MapProjectResourceLimitException(
-                $"{MapProjectFormat.PreviewEntry} declares {width}x{height}, outside this build's " +
+                $"{entryName} declares {width}x{height}, outside this build's " +
                 "supported preview size. The file was not modified.");
         }
     }
@@ -670,7 +896,7 @@ public static class MapProjectStore
     }
 
     private static IReadOnlyDictionary<string, byte[]> ReadAndValidateTiles(
-        ZipArchive archive, SceneDto scene)
+        ZipArchive archive, SceneDto scene, string entryRoot = "")
     {
         if (scene.Layers is null || scene.Layers.Any(HasInvalidLayerDto))
         {
@@ -680,22 +906,24 @@ public static class MapProjectStore
 
         var result = new Dictionary<string, byte[]>(StringComparer.Ordinal);
         var referenced = new HashSet<string>(StringComparer.Ordinal);
+        var rasterPrefix = entryRoot + MapProjectFormat.RasterPrefix;
+        var maskPrefix = entryRoot + MapProjectFormat.MaskPrefix;
 
         foreach (var layer in scene.Layers)
         {
             var layerId = RequireCanonicalLayerId(layer.Id);
             ReadTileList(
                 layer.Tiles,
-                MapProjectFormat.RasterPrefix,
+                rasterPrefix,
                 layerId,
                 bytesPerPixel: layer.Type == "Land" ? 1 : 4);
-            ReadTileList(layer.Mask?.Tiles, MapProjectFormat.MaskPrefix, layerId, bytesPerPixel: 1);
+            ReadTileList(layer.Mask?.Tiles, maskPrefix, layerId, bytesPerPixel: 1);
         }
 
         foreach (var entry in archive.Entries)
         {
-            if ((entry.FullName.StartsWith(MapProjectFormat.RasterPrefix, StringComparison.Ordinal)
-                    || entry.FullName.StartsWith(MapProjectFormat.MaskPrefix, StringComparison.Ordinal))
+            if ((entry.FullName.StartsWith(rasterPrefix, StringComparison.Ordinal)
+                    || entry.FullName.StartsWith(maskPrefix, StringComparison.Ordinal))
                 && !referenced.Contains(entry.FullName))
             {
                 throw new MapProjectCorruptedException(
@@ -758,7 +986,7 @@ public static class MapProjectStore
     }
 
     private static IReadOnlyDictionary<string, byte[]> ReadAndValidateAssets(
-        ZipArchive archive, AssetManifestDto manifest)
+        ZipArchive archive, AssetManifestDto manifest, string entryRoot = "")
     {
         if (manifest.Assets is null || manifest.Assets.Any(asset => asset is null))
         {
@@ -768,6 +996,7 @@ public static class MapProjectStore
         var result = new Dictionary<string, byte[]>(StringComparer.Ordinal);
         var referenced = new HashSet<string>(StringComparer.Ordinal);
         var hashes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var assetPrefix = entryRoot + MapProjectFormat.AssetPrefix;
 
         foreach (var asset in manifest.Assets)
         {
@@ -786,7 +1015,7 @@ public static class MapProjectStore
 
             if (asset.Storage == nameof(ProjectAssetStorage.Embedded))
             {
-                var expected = AssetContentEntry(hash, asset.Extension);
+                var expected = entryRoot + AssetContentEntry(hash, asset.Extension);
                 if (!string.Equals(asset.ContentEntry, expected, StringComparison.Ordinal))
                 {
                     throw new MapProjectCorruptedException(
@@ -828,7 +1057,7 @@ public static class MapProjectStore
 
             if (asset.ThumbnailEntry is { } thumbnailEntry)
             {
-                var expected = AssetThumbnailEntry(hash);
+                var expected = entryRoot + AssetThumbnailEntry(hash);
                 if (!string.Equals(thumbnailEntry, expected, StringComparison.Ordinal))
                 {
                     throw new MapProjectCorruptedException(
@@ -855,7 +1084,7 @@ public static class MapProjectStore
 
         foreach (var entry in archive.Entries)
         {
-            if (entry.FullName.StartsWith(MapProjectFormat.AssetPrefix, StringComparison.Ordinal)
+            if (entry.FullName.StartsWith(assetPrefix, StringComparison.Ordinal)
                 && !referenced.Contains(entry.FullName))
             {
                 throw new MapProjectCorruptedException(
@@ -881,9 +1110,228 @@ public static class MapProjectStore
         }
     }
 
+    private static IReadOnlyList<MapCheckpoint> ReadAndValidateCheckpoints(
+        ZipArchive archive, ManifestDto mainManifest)
+    {
+        var checkpointArchiveEntries = archive.Entries
+            .Where(entry => entry.FullName.StartsWith(
+                MapProjectFormat.CheckpointPrefix, StringComparison.Ordinal))
+            .ToList();
+
+        if (mainManifest.CheckpointCatalogSha256 is null)
+        {
+            if (checkpointArchiveEntries.Count > 0)
+            {
+                throw new MapProjectCorruptedException(
+                    "The container has checkpoint entries but manifest.json does not declare their catalog.");
+            }
+
+            return [];
+        }
+
+        var catalogEntry = archive.GetEntry(MapProjectFormat.CheckpointCatalogEntry)
+            ?? throw new MapProjectCorruptedException(
+                $"Declared entry {MapProjectFormat.CheckpointCatalogEntry} is missing.");
+        var catalogBytes = ReadEntry(archive, catalogEntry.FullName);
+        var expectedCatalogHash = RequireSha256(
+            mainManifest.CheckpointCatalogSha256, "checkpoint catalog sha256");
+        if (!string.Equals(Sha256Hex(catalogBytes), expectedCatalogHash,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new MapProjectCorruptedException(
+                $"{MapProjectFormat.CheckpointCatalogEntry} does not match its manifest checksum.");
+        }
+
+        var catalog = ParseJson<CheckpointCatalogDto>(
+            catalogBytes, MapProjectFormat.CheckpointCatalogEntry);
+        if (catalog.Checkpoints is null || catalog.Checkpoints.Any(item => item is null))
+        {
+            throw new MapProjectCorruptedException(
+                $"{MapProjectFormat.CheckpointCatalogEntry} has a null checkpoints array or entry.");
+        }
+        if (catalog.Checkpoints.Count > MapCheckpointLimits.MaxCount)
+        {
+            throw new MapProjectResourceLimitException(
+                $"The container has more than {MapCheckpointLimits.MaxCount} checkpoints. "
+                + "The file was not modified.");
+        }
+
+        var checkpoints = new List<MapCheckpoint>(catalog.Checkpoints.Count);
+        var seenIds = new HashSet<CheckpointId>();
+        var expectedMetadataEntries = new HashSet<string>(StringComparer.Ordinal)
+        {
+            MapProjectFormat.CheckpointCatalogEntry,
+        };
+        var roots = new List<string>(catalog.Checkpoints.Count);
+
+        foreach (var item in catalog.Checkpoints)
+        {
+            try
+            {
+                var idText = RequireString(item.Id, "checkpoint id");
+                var id = CheckpointId.Parse(idText);
+                if (!string.Equals(idText, id.ToString(), StringComparison.Ordinal)
+                    || !seenIds.Add(id))
+                {
+                    throw new MapProjectCorruptedException(
+                        $"Checkpoint id {idText} is non-canonical or occurs more than once.");
+                }
+
+                var name = RequireString(item.Name, "checkpoint name");
+                if (!string.Equals(name, name.Trim(), StringComparison.Ordinal)
+                    || name.Length > MapCheckpointLimits.MaxNameLength)
+                {
+                    throw new MapProjectCorruptedException(
+                        $"Checkpoint {id} has an invalid name.");
+                }
+
+                var root = CheckpointRoot(id);
+                roots.Add(root);
+                var snapshotManifestEntry = root + "manifest.json";
+                var sceneEntry = root + "scene.json";
+                var assetManifestEntry = root + "asset-manifest.json";
+                var previewEntry = root + "preview.png";
+                foreach (var entryName in new[]
+                {
+                    snapshotManifestEntry,
+                    sceneEntry,
+                    assetManifestEntry,
+                    previewEntry,
+                })
+                {
+                    if (!expectedMetadataEntries.Add(entryName))
+                    {
+                        throw new MapProjectCorruptedException(
+                            $"Checkpoint entry {entryName} is declared more than once.");
+                    }
+                    if (archive.GetEntry(entryName) is null)
+                    {
+                        throw new MapProjectCorruptedException(
+                            $"Checkpoint {id} entry {entryName} is missing.");
+                    }
+                }
+
+                var snapshotManifestBytes = ReadEntry(archive, snapshotManifestEntry);
+                var expectedSnapshotHash = RequireSha256(
+                    item.SnapshotManifestSha256, "checkpoint snapshot manifest sha256");
+                if (!string.Equals(Sha256Hex(snapshotManifestBytes), expectedSnapshotHash,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new MapProjectCorruptedException(
+                        $"Checkpoint {id} snapshot manifest does not match its checksum.");
+                }
+
+                var snapshotManifest = ParseJson<CheckpointSnapshotManifestDto>(
+                    snapshotManifestBytes, snapshotManifestEntry);
+                if (snapshotManifest.Canvas is null)
+                {
+                    throw new MapProjectCorruptedException(
+                        $"Checkpoint {id} snapshot manifest has no canvas object.");
+                }
+                if (!string.Equals(snapshotManifest.DocumentId, mainManifest.DocumentId,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new MapProjectCorruptedException(
+                        $"Checkpoint {id} belongs to a different document id.");
+                }
+
+                var sceneBytes = ReadEntry(archive, sceneEntry);
+                if (!string.Equals(Sha256Hex(sceneBytes),
+                        RequireSha256(snapshotManifest.SceneSha256, "checkpoint scene sha256"),
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new MapProjectCorruptedException(
+                        $"Checkpoint {id} scene does not match its checksum.");
+                }
+                var scene = ParseJson<SceneDto>(sceneBytes, sceneEntry);
+                if (!string.Equals(scene.DocumentId, snapshotManifest.DocumentId,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new MapProjectCorruptedException(
+                        $"Checkpoint {id} manifest and scene disagree about the document id.");
+                }
+
+                var assetManifestBytes = ReadEntry(archive, assetManifestEntry);
+                if (!string.Equals(Sha256Hex(assetManifestBytes),
+                        RequireSha256(snapshotManifest.AssetManifestSha256,
+                            "checkpoint asset manifest sha256"),
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new MapProjectCorruptedException(
+                        $"Checkpoint {id} asset manifest does not match its checksum.");
+                }
+                var assetManifest = ParseJson<AssetManifestDto>(
+                    assetManifestBytes, assetManifestEntry);
+
+                var previewBytes = ReadEntry(archive, previewEntry);
+                if (!string.Equals(Sha256Hex(previewBytes),
+                        RequireSha256(snapshotManifest.PreviewSha256, "checkpoint preview sha256"),
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new MapProjectCorruptedException(
+                        $"Checkpoint {id} preview does not match its checksum.");
+                }
+                ValidatePreviewHeader(
+                    archive,
+                    previewEntry,
+                    MapProjectFormat.MaxCheckpointPreviewWidth,
+                    MapProjectFormat.MaxCheckpointPreviewHeight,
+                    (long)MapProjectFormat.MaxCheckpointPreviewWidth
+                        * MapProjectFormat.MaxCheckpointPreviewHeight);
+
+                var tiles = ReadAndValidateTiles(archive, scene, root);
+                var assets = ReadAndValidateAssets(archive, assetManifest, root);
+                var domainManifest = new ManifestDto
+                {
+                    DocumentId = snapshotManifest.DocumentId,
+                    Title = snapshotManifest.Title,
+                    CreatedUtc = snapshotManifest.CreatedUtc,
+                    Canvas = snapshotManifest.Canvas,
+                };
+                var snapshotDocument = ToDomain(
+                    domainManifest, scene, assetManifest, tiles, assets,
+                    checkpoints: null, entryRoot: root);
+                checkpoints.Add(new MapCheckpoint(
+                    id,
+                    name,
+                    ParseTimestamp(item.CreatedUtc, "checkpoint createdUtc"),
+                    MapCheckpointSnapshot.Capture(snapshotDocument),
+                    previewBytes));
+            }
+            catch (Exception ex) when (ex is ArgumentException or FormatException
+                or InvalidOperationException)
+            {
+                throw new MapProjectCorruptedException(
+                    "The checkpoint catalog contains values the document model rejects: " + ex.Message,
+                    ex);
+            }
+        }
+
+        foreach (var entry in checkpointArchiveEntries)
+        {
+            if (expectedMetadataEntries.Contains(entry.FullName))
+            {
+                continue;
+            }
+
+            var isExpectedPayload = roots.Any(root =>
+                entry.FullName.StartsWith(root + MapProjectFormat.RasterPrefix, StringComparison.Ordinal)
+                || entry.FullName.StartsWith(root + MapProjectFormat.MaskPrefix, StringComparison.Ordinal)
+                || entry.FullName.StartsWith(root + MapProjectFormat.AssetPrefix, StringComparison.Ordinal));
+            if (!isExpectedPayload)
+            {
+                throw new MapProjectCorruptedException(
+                    $"Checkpoint entry {entry.FullName} is not declared by the catalog.");
+            }
+        }
+
+        return checkpoints;
+    }
+
     // ---------------------------------------------------------------- mapping
 
-    private static AssetManifestDto ToAssetManifestDto(MapDocument document) => new()
+    private static AssetManifestDto ToAssetManifestDto(
+        MapDocument document, string entryRoot = "") => new()
     {
         Assets = [.. document.Assets.OrderBy(asset => asset.Sha256).Select(asset => new AssetEntryDto
         {
@@ -898,11 +1346,11 @@ public static class MapProjectStore
             CatalogId = asset.CatalogId,
             RelativePath = asset.RelativePath,
             ContentEntry = asset.Storage == ProjectAssetStorage.Embedded
-                ? AssetContentEntry(asset.Sha256, asset.Extension)
+                ? entryRoot + AssetContentEntry(asset.Sha256, asset.Extension)
                 : null,
             ThumbnailEntry = asset.FallbackThumbnailPng is null
                 ? null
-                : AssetThumbnailEntry(asset.Sha256),
+                : entryRoot + AssetThumbnailEntry(asset.Sha256),
             ThumbnailSha256 = asset.FallbackThumbnailPng is null
                 ? null
                 : Sha256Hex(asset.FallbackThumbnailPng),
@@ -1094,7 +1542,9 @@ public static class MapProjectStore
         SceneDto scene,
         AssetManifestDto assetManifest,
         IReadOnlyDictionary<string, byte[]> tileEntries,
-        IReadOnlyDictionary<string, byte[]> assetEntries)
+        IReadOnlyDictionary<string, byte[]> assetEntries,
+        IReadOnlyList<MapCheckpoint>? checkpoints = null,
+        string entryRoot = "")
     {
         // Explicit JSON null can overwrite any DTO default, so every object/array the mapping
         // walks is checked up front - a damaged file must produce a clear error, never an NRE.
@@ -1114,7 +1564,7 @@ public static class MapProjectStore
         try
         {
             var legacyStage2 = scene.Layers.All(layer => layer.Type is null);
-            var layers = scene.Layers.Select(layer => ToLayer(layer, tileEntries)).ToList();
+            var layers = scene.Layers.Select(layer => ToLayer(layer, tileEntries, entryRoot)).ToList();
             if (legacyStage2)
             {
                 layers.Insert(0, new BaseColorLayer(
@@ -1134,7 +1584,8 @@ public static class MapProjectStore
                     RequireString(manifest.Canvas.Background, "canvas background")),
                 layers,
                 assetManifest.Assets.Select(asset => ToAsset(asset, assetEntries)).ToList(),
-                scene.Notes.Select(ToNote).ToList());
+                scene.Notes.Select(ToNote).ToList(),
+                checkpoints);
         }
         catch (Exception ex) when (ex is ArgumentException or FormatException or InvalidOperationException)
         {
@@ -1146,13 +1597,13 @@ public static class MapProjectStore
     }
 
     private static MapLayer ToLayer(
-        LayerDto layer, IReadOnlyDictionary<string, byte[]> tileEntries)
+        LayerDto layer, IReadOnlyDictionary<string, byte[]> tileEntries, string entryRoot)
     {
         var id = LayerId.Parse(RequireString(layer.Id, "layer id"));
         var name = RequireString(layer.Name, "layer name");
         var mask = layer.Mask is { } maskDto
             ? new LayerMask(
-                ToTileMap(maskDto.Tiles, MapProjectFormat.MaskPrefix, id, 1, tileEntries),
+                ToTileMap(maskDto.Tiles, entryRoot + MapProjectFormat.MaskPrefix, id, 1, tileEntries),
                 maskDto.Enabled)
             : null;
 
@@ -1166,10 +1617,10 @@ public static class MapProjectStore
                 RequireString(layer.Color, "base color")),
             "Brush" => new BrushLayer(
                 id, name, layer.Visible, layer.Locked, layer.Opacity,
-                ToTileMap(layer.Tiles ?? [], MapProjectFormat.RasterPrefix, id, 4, tileEntries), mask),
+                ToTileMap(layer.Tiles ?? [], entryRoot + MapProjectFormat.RasterPrefix, id, 4, tileEntries), mask),
             "Land" => new LandLayer(
                 id, name, layer.Visible, layer.Locked, layer.Opacity,
-                ToTileMap(layer.Tiles ?? [], MapProjectFormat.RasterPrefix, id, 1, tileEntries),
+                ToTileMap(layer.Tiles ?? [], entryRoot + MapProjectFormat.RasterPrefix, id, 1, tileEntries),
                 ToLandStyle(layer.LandStyle), mask),
             "Grid" => new GridLayer(
                 id, name, layer.Visible, layer.Locked, layer.Opacity,
@@ -1532,7 +1983,8 @@ public static class MapProjectStore
         };
     }
 
-    private static IEnumerable<(string Name, byte[] Bytes)> EnumerateTileEntries(MapDocument document)
+    private static IEnumerable<(string Name, byte[] Bytes)> EnumerateTileEntries(
+        MapDocument document, string entryRoot = "")
     {
         foreach (var layer in document.Layers)
         {
@@ -1541,7 +1993,7 @@ public static class MapProjectStore
                 foreach (var key in raster.ContentTiles.Keys)
                 {
                     yield return (
-                        TileEntryName(MapProjectFormat.RasterPrefix, layer.Id.ToString(), key.X, key.Y),
+                        TileEntryName(entryRoot + MapProjectFormat.RasterPrefix, layer.Id.ToString(), key.X, key.Y),
                         raster.ContentTiles.TryGet(key)!);
                 }
             }
@@ -1551,28 +2003,29 @@ public static class MapProjectStore
                 foreach (var key in mask.Tiles.Keys)
                 {
                     yield return (
-                        TileEntryName(MapProjectFormat.MaskPrefix, layer.Id.ToString(), key.X, key.Y),
+                        TileEntryName(entryRoot + MapProjectFormat.MaskPrefix, layer.Id.ToString(), key.X, key.Y),
                         mask.Tiles.TryGet(key)!);
                 }
             }
         }
     }
 
-    private static IEnumerable<(string Name, byte[] Bytes)> EnumerateAssetEntries(MapDocument document)
+    private static IEnumerable<(string Name, byte[] Bytes)> EnumerateAssetEntries(
+        MapDocument document, string entryRoot = "")
     {
         foreach (var asset in document.Assets)
         {
             if (asset.Storage == ProjectAssetStorage.Embedded)
             {
                 yield return (
-                    AssetContentEntry(asset.Sha256, asset.Extension),
+                    entryRoot + AssetContentEntry(asset.Sha256, asset.Extension),
                     asset.EmbeddedContent
                         ?? throw new InvalidOperationException($"Embedded asset {asset.Sha256} has no bytes."));
             }
 
             if (asset.FallbackThumbnailPng is { } thumbnail)
             {
-                yield return (AssetThumbnailEntry(asset.Sha256), thumbnail);
+                yield return (entryRoot + AssetThumbnailEntry(asset.Sha256), thumbnail);
             }
         }
     }
@@ -1648,6 +2101,9 @@ public static class MapProjectStore
 
     private static string TileEntryName(string prefix, string layerId, int x, int y) =>
         $"{prefix}{layerId}/{x}_{y}.bin";
+
+    private static string CheckpointRoot(CheckpointId id) =>
+        $"{MapProjectFormat.CheckpointPrefix}{id}/";
 
     private static string AssetContentEntry(string sha256, string extension) =>
         $"{MapProjectFormat.AssetPrefix}{sha256}.{RequireExtension(extension)}";

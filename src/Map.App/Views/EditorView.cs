@@ -66,6 +66,7 @@ public sealed class EditorView : UserControl
     private readonly MultiSelectListControl _objectList = new() { Spacing = 2 };
     private readonly StackPanel _assetList = new() { Spacing = 2 };
     private readonly StackPanel _noteList = new() { Spacing = 2 };
+    private readonly StackPanel _checkpointList = new() { Spacing = 8 };
     private readonly TextBox _layerName = new() { Name = "LayerNameBox", PlaceholderText = "Имя слоя" };
     private readonly TextBox _objectSearch = new() { Name = "ObjectSearchBox", PlaceholderText = "Найти объект" };
     private readonly TextBox _assetSearch = new()
@@ -75,6 +76,12 @@ public sealed class EditorView : UserControl
     };
     private readonly TextBox _noteSearch = new() { Name = "NoteSearchBox", PlaceholderText = "Найти заметку" };
     private readonly TextBox _noteTitle = new() { Name = "NoteTitleBox", PlaceholderText = "Заголовок заметки" };
+    private readonly TextBox _checkpointName = new()
+    {
+        Name = "CheckpointNameBox",
+        PlaceholderText = "Например: До эксперимента",
+        MaxLength = MapCheckpointLimits.MaxNameLength,
+    };
     private readonly TextBox _noteMarkdown = new()
     {
         Name = "NoteMarkdownBox",
@@ -233,6 +240,7 @@ public sealed class EditorView : UserControl
     private TextBlock _stampToolAreaText = null!;
     private bool _syncingLibrary;
     private readonly ThumbnailCache _thumbnails = new(96);
+    private readonly CheckpointPreviewCache _checkpointPreviews = new();
     private Button _objectVisibilityValue = null!;
     private Button _objectLockValue = null!;
     private ToggleButton _eraserButton = null!;
@@ -1818,6 +1826,7 @@ public sealed class EditorView : UserControl
                 new TabItem { Header = "Объекты", Content = BuildObjectsTab() },
                 new TabItem { Header = "Библиотека", Content = BuildAssetsTab() },
                 new TabItem { Header = "Заметки", Content = BuildNotesTab() },
+                new TabItem { Header = "Точки", Content = BuildCheckpointsTab() },
             },
         };
 
@@ -3497,6 +3506,50 @@ public sealed class EditorView : UserControl
         }
     }
 
+    private sealed class CheckpointPreviewCache : IDisposable
+    {
+        private readonly Dictionary<CheckpointId, Bitmap> _entries = [];
+
+        public Bitmap? Image(MapCheckpoint checkpoint)
+        {
+            if (_entries.TryGetValue(checkpoint.Id, out var cached))
+            {
+                return cached;
+            }
+
+            try
+            {
+                using var stream = new MemoryStream(checkpoint.PreviewPng.ToArray(), writable: false);
+                var bitmap = new Bitmap(stream);
+                _entries.Add(checkpoint.Id, bitmap);
+                return bitmap;
+            }
+            catch (Exception exception) when (exception is InvalidDataException or ArgumentException)
+            {
+                return null;
+            }
+        }
+
+        public void Prune(IReadOnlyCollection<CheckpointId> activeIds)
+        {
+            var active = new HashSet<CheckpointId>(activeIds);
+            foreach (var id in _entries.Keys.Where(id => !active.Contains(id)).ToList())
+            {
+                _entries[id].Dispose();
+                _entries.Remove(id);
+            }
+        }
+
+        public void Dispose()
+        {
+            foreach (var bitmap in _entries.Values)
+            {
+                bitmap.Dispose();
+            }
+            _entries.Clear();
+        }
+    }
+
     /// <summary>
     /// An asset command that is only enabled once an asset is actually selected. A control that
     /// silently does nothing when pressed is worse than one that says it is unavailable.
@@ -3581,6 +3634,50 @@ public sealed class EditorView : UserControl
         return new ScrollViewer
         {
             HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
+            Content = body,
+        };
+    }
+
+    private Control BuildCheckpointsTab()
+    {
+        var create = Ui.TextButton("CreateCheckpointButton", "Создать", () =>
+        {
+            if (_editor.CreateCheckpoint(_checkpointName.Text))
+            {
+                _checkpointName.Text = "";
+            }
+            SyncCheckpointList();
+            SyncStatus();
+        }, "accent", "compact");
+        AutomationProperties.SetName(create, "Создать контрольную точку");
+
+        var body = new StackPanel
+        {
+            Margin = new Thickness(12, 10, 12, 18),
+            Spacing = 10,
+            Children =
+            {
+                new TextBlock { Text = "Контрольные точки" }.Classed("role-panel"),
+                new TextBlock
+                {
+                    Text = "Сохраните состояние карты перед экспериментом. Точка попадёт в .mapproj после обычного сохранения.",
+                    TextWrapping = TextWrapping.Wrap,
+                }.Classed("faint", "role-caption"),
+                _checkpointName,
+                create,
+                new TextBlock
+                {
+                    Name = "CheckpointLimitsText",
+                    Text = $"До {MapCheckpointLimits.MaxCount} точек · всего до "
+                        + $"{MapCheckpointLimits.MaxTotalStoredBytes / (1024 * 1024)} MiB",
+                }.Classed("faint", "role-caption"),
+                _checkpointList,
+            },
+        };
+
+        return new ScrollViewer
+        {
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             Content = body,
         };
     }
@@ -4323,6 +4420,7 @@ public sealed class EditorView : UserControl
         SyncObjectList();
         SyncAssetList();
         SyncNoteList();
+        SyncCheckpointList();
     }
 
     private static string LayerIcon(MapLayer layer) => layer switch
@@ -5020,6 +5118,96 @@ public sealed class EditorView : UserControl
 
             Ui.SetSelected(row, note.Id == _selectedNoteId);
             _noteList.Children.Add(row);
+        }
+    }
+
+    private void SyncCheckpointList()
+    {
+        _checkpointList.Children.Clear();
+        _checkpointPreviews.Prune([.. _editor.Checkpoints.Select(item => item.Id)]);
+
+        if (_editor.Checkpoints.Count == 0)
+        {
+            _checkpointList.Children.Add(Ui.EmptyState(
+                "NoCheckpointsText",
+                MapIcons.Save,
+                "Контрольных точек пока нет",
+                "Введите название и сохраните состояние перед заметным экспериментом."));
+            return;
+        }
+
+        foreach (var checkpoint in _editor.Checkpoints.Reverse())
+        {
+            var captured = checkpoint;
+            var preview = _checkpointPreviews.Image(checkpoint);
+            Control previewControl = preview is null
+                ? MapIcons.Stroked(MapIcons.Warning, 22)
+                : new Image
+                {
+                    Source = preview,
+                    Stretch = Stretch.Uniform,
+                };
+            AutomationProperties.SetName(previewControl, $"Preview контрольной точки {checkpoint.Name}");
+
+            var restore = Ui.AsyncButton(
+                "RestoreCheckpoint_" + checkpoint.Id,
+                "Восстановить",
+                async () =>
+                {
+                    await _editor.RestoreCheckpointAsync(captured.Id);
+                    SyncCheckpointList();
+                    SyncStatus();
+                },
+                "compact");
+            var delete = Ui.AsyncButton(
+                "DeleteCheckpoint_" + checkpoint.Id,
+                "Удалить",
+                async () =>
+                {
+                    await _editor.DeleteCheckpointAsync(captured.Id);
+                    SyncCheckpointList();
+                    SyncStatus();
+                },
+                "destructive",
+                "compact");
+
+            var card = new Border
+            {
+                Padding = new Thickness(8),
+                Child = new StackPanel
+                {
+                    Spacing = 7,
+                    Children =
+                    {
+                        new Border
+                        {
+                            Height = 128,
+                            Background = Application.Current?.FindResource("MapFieldBrush") as IBrush,
+                            Child = previewControl,
+                        }.Classed("group"),
+                        new TextBlock
+                        {
+                            Text = checkpoint.Name,
+                            TextTrimming = TextTrimming.CharacterEllipsis,
+                        }.Classed("role-panel"),
+                        new TextBlock
+                        {
+                            Text = checkpoint.CreatedUtc.ToLocalTime().ToString("g", CultureInfo.CurrentCulture),
+                        }.Classed("faint", "role-caption"),
+                        new StackPanel
+                        {
+                            Orientation = Orientation.Horizontal,
+                            Spacing = 6,
+                            Children = { restore, delete },
+                        },
+                    },
+                },
+            }.Classed("group").Named("Checkpoint_" + checkpoint.Id);
+            AutomationProperties.SetName(
+                card,
+                $"Контрольная точка {checkpoint.Name}, создана "
+                    + checkpoint.CreatedUtc.ToLocalTime().ToString("g", CultureInfo.CurrentCulture));
+            _checkpointList.Children.Add(card);
         }
     }
 

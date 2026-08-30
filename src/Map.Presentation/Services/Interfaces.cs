@@ -25,6 +25,10 @@ public interface IUserPrompts
 {
     Task<CloseChoice> ConfirmCloseDirtyAsync(string documentTitle);
 
+    Task<bool> ConfirmRestoreCheckpointAsync(string checkpointName);
+
+    Task<bool> ConfirmDeleteCheckpointAsync(string checkpointName);
+
     Task ShowErrorAsync(string title, string message);
 }
 

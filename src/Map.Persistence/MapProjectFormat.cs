@@ -14,6 +14,8 @@ public static class MapProjectFormat
     public const string RasterPrefix = "rasters/";
     public const string MaskPrefix = "masks/";
     public const string AssetPrefix = "assets/";
+    public const string CheckpointPrefix = "checkpoints/";
+    public const string CheckpointCatalogEntry = "checkpoints/catalog.json";
 
     /// <summary>Every entry a v1 container must contain.</summary>
     public static readonly IReadOnlyList<string> RequiredEntries =
@@ -79,4 +81,9 @@ public static class MapProjectFormat
     public const int MaxPreviewDimension = 8192;
 
     public const long MaxPreviewPixels = 16L * 1024 * 1024;
+
+    public const long MaxCheckpointPayloadBytes = Map.Core.Documents.MapCheckpointLimits.MaxTotalStoredBytes;
+    public const long MaxCheckpointPreviewBytes = Map.Core.Documents.MapCheckpointLimits.MaxPreviewBytes;
+    public const int MaxCheckpointPreviewWidth = Map.Core.Documents.MapCheckpointLimits.PreviewWidth;
+    public const int MaxCheckpointPreviewHeight = Map.Core.Documents.MapCheckpointLimits.PreviewHeight;
 }

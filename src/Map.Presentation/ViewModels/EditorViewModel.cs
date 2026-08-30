@@ -509,6 +509,8 @@ public sealed class EditorViewModel : ViewModelBase
 
     public IReadOnlyList<MapNote> Notes => Session.Document.Notes;
 
+    public IReadOnlyList<MapCheckpoint> Checkpoints => Session.Document.Checkpoints;
+
     public IReadOnlyList<MapNote> SearchNotes(string? query) => string.IsNullOrWhiteSpace(query)
         ? Notes
         : [.. Notes.Where(note => note.Title.Contains(query, StringComparison.OrdinalIgnoreCase)
@@ -4211,6 +4213,117 @@ public sealed class EditorViewModel : ViewModelBase
         }
     }
 
+    public bool CreateCheckpoint(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            StatusDetail = "Введите непустое название контрольной точки.";
+            return false;
+        }
+
+        if (name.Trim().Length > MapCheckpointLimits.MaxNameLength)
+        {
+            StatusDetail = $"Название должно быть не длиннее {MapCheckpointLimits.MaxNameLength} символов.";
+            return false;
+        }
+
+        if (Session.Document.Checkpoints.Count >= MapCheckpointLimits.MaxCount)
+        {
+            StatusDetail = $"Достигнут лимит: не больше {MapCheckpointLimits.MaxCount} контрольных точек.";
+            return false;
+        }
+
+        try
+        {
+            var source = Session.Document;
+            var preview = ThumbnailRenderer.RenderPng(
+                source, MapCheckpointLimits.PreviewWidth, MapCheckpointLimits.PreviewHeight);
+            var checkpoint = new MapCheckpoint(
+                CheckpointId.New(),
+                name,
+                _clock(),
+                MapCheckpointSnapshot.Capture(source),
+                preview);
+
+            MapProjectStore.ValidateCheckpointAddition(source, checkpoint);
+            Session.Execute(new AddCheckpointCommand(checkpoint));
+            AfterEdit();
+            StatusDetail = $"Создана контрольная точка «{checkpoint.Name}». Сохраните проект, чтобы записать её в файл.";
+            return true;
+        }
+        catch (MapProjectResourceLimitException ex)
+        {
+            StatusDetail = ex.Message;
+            return false;
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            StatusDetail = "Не удалось создать контрольную точку: " + ex.Message;
+            _log.Error("Checkpoint creation failed", ex);
+            return false;
+        }
+    }
+
+    public async Task<bool> RestoreCheckpointAsync(CheckpointId id)
+    {
+        var checkpoint = Session.Document.Checkpoints.FirstOrDefault(item => item.Id == id);
+        if (checkpoint is null)
+        {
+            StatusDetail = "Контрольная точка не найдена. Текущая карта не изменена.";
+            return false;
+        }
+
+        if (!await _prompts.ConfirmRestoreCheckpointAsync(checkpoint.Name))
+        {
+            StatusDetail = $"Восстановление «{checkpoint.Name}» отменено. Карта не изменена.";
+            return false;
+        }
+
+        try
+        {
+            Session.Execute(RestoreCheckpointCommand.Create(Session.Document, id));
+            AfterEdit();
+            StatusDetail = $"Восстановлена контрольная точка «{checkpoint.Name}». Действие можно отменить одной командой Undo.";
+            return true;
+        }
+        catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException)
+        {
+            StatusDetail = "Не удалось восстановить контрольную точку. Текущая карта не изменена.";
+            _log.Error("Checkpoint restore failed", ex);
+            return false;
+        }
+    }
+
+    public async Task<bool> DeleteCheckpointAsync(CheckpointId id)
+    {
+        var checkpoint = Session.Document.Checkpoints.FirstOrDefault(item => item.Id == id);
+        if (checkpoint is null)
+        {
+            StatusDetail = "Контрольная точка не найдена. Ничего не удалено.";
+            return false;
+        }
+
+        if (!await _prompts.ConfirmDeleteCheckpointAsync(checkpoint.Name))
+        {
+            StatusDetail = $"Удаление «{checkpoint.Name}» отменено. Ничего не изменено.";
+            return false;
+        }
+
+        try
+        {
+            Session.Execute(DeleteCheckpointCommand.Create(Session.Document, id));
+            AfterEdit();
+            StatusDetail = $"Контрольная точка «{checkpoint.Name}» удалена. Сохраните проект, чтобы записать изменение в файл.";
+            return true;
+        }
+        catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException)
+        {
+            StatusDetail = "Не удалось удалить контрольную точку. Ничего не изменено.";
+            _log.Error("Checkpoint deletion failed", ex);
+            return false;
+        }
+    }
+
     /// <summary>Republishes the derived session state the status bar and the toolbar read.</summary>
     private void RaiseSessionState()
     {
@@ -4225,6 +4338,13 @@ public sealed class EditorViewModel : ViewModelBase
     {
         SaveState = Session.IsDirty ? SaveState.Unsaved : SaveState.Saved;
         StatusDetail = "";
+
+        if (_activeLayerId is null || Session.Document.FindLayer(_activeLayerId.Value) is null)
+        {
+            _activeLayerId = Session.Document.Layers
+                .LastOrDefault(layer => layer is not BaseColorLayer)?.Id
+                ?? Session.Document.BaseColor.Id;
+        }
 
         // An edit (or an undo/redo) may have emptied the open group; an empty open group would
         // strand the tree behind a breadcrumb with nothing under it.
@@ -4243,7 +4363,10 @@ public sealed class EditorViewModel : ViewModelBase
         Raise(nameof(OpenGroupId));
         Raise(nameof(SelectionVisibilitySummary));
         Raise(nameof(SelectionLockSummary));
+        Raise(nameof(Title));
         Raise(nameof(Layers));
+        Raise(nameof(Notes));
+        Raise(nameof(Checkpoints));
         Raise(nameof(ActiveLayer));
         Raise(nameof(ActiveLayerId));
         Raise(nameof(ActiveLayerSummary));

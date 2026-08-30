@@ -18,8 +18,12 @@ public sealed class FakeFilePicker : IFilePicker
 public sealed class FakePrompts : IUserPrompts
 {
     public CloseChoice NextCloseChoice { get; set; } = CloseChoice.Cancel;
+    public bool NextRestoreCheckpointConfirmation { get; set; }
+    public bool NextDeleteCheckpointConfirmation { get; set; }
     public List<string> Errors { get; } = [];
     public int CloseAsked { get; private set; }
+    public int RestoreCheckpointAsked { get; private set; }
+    public int DeleteCheckpointAsked { get; private set; }
 
     public Task<CloseChoice> ConfirmCloseDirtyAsync(string documentTitle)
     {
@@ -31,6 +35,18 @@ public sealed class FakePrompts : IUserPrompts
     {
         Errors.Add(message);
         return Task.CompletedTask;
+    }
+
+    public Task<bool> ConfirmRestoreCheckpointAsync(string checkpointName)
+    {
+        RestoreCheckpointAsked++;
+        return Task.FromResult(NextRestoreCheckpointConfirmation);
+    }
+
+    public Task<bool> ConfirmDeleteCheckpointAsync(string checkpointName)
+    {
+        DeleteCheckpointAsked++;
+        return Task.FromResult(NextDeleteCheckpointConfirmation);
     }
 }
 

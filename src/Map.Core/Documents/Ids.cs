@@ -68,3 +68,11 @@ public readonly record struct CompositionId(Guid Value)
     public override string ToString() => Value.ToString("D");
     public static CompositionId Parse(string s) => new(Guid.ParseExact(s, "D"));
 }
+
+/// <summary>Stable identity of one named document checkpoint.</summary>
+public readonly record struct CheckpointId(Guid Value)
+{
+    public static CheckpointId New() => new(Guid.NewGuid());
+    public override string ToString() => Value.ToString("D");
+    public static CheckpointId Parse(string s) => new(Guid.ParseExact(s, "D"));
+}

@@ -19,6 +19,7 @@ public static class MapProjectJsonBudget
     public const int MaxTiles = 65_536;
     public const int MaxGrids = 16_384;
     public const int MaxFilters = 16_384;
+    public const int MaxCheckpoints = Map.Core.Documents.MapCheckpointLimits.MaxCount;
     public const int MaxGenericArrayItems = 100_000;
     public const int MaxStringUtf8Bytes = 1 * 1024 * 1024;
     public const long MaxTokens = 8_000_000;
@@ -155,6 +156,7 @@ public static class MapProjectJsonBudget
             "tiles" => (propertyName, MaxTiles, AggregateKind.Tiles),
             "grids" => (propertyName, MaxGrids, AggregateKind.Grids),
             "filters" => (propertyName, MaxFilters, AggregateKind.Filters),
+            "checkpoints" => (propertyName, MaxCheckpoints, AggregateKind.None),
             _ => (propertyName ?? "anonymous", MaxGenericArrayItems, AggregateKind.None),
         };
 

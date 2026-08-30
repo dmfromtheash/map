@@ -19,13 +19,15 @@ public sealed record MapDocument
         CanvasDefinition canvas,
         IReadOnlyList<MapLayer> layers,
         IReadOnlyList<MapAssetReference>? assets = null,
-        IReadOnlyList<MapNote>? notes = null)
+        IReadOnlyList<MapNote>? notes = null,
+        IReadOnlyList<MapCheckpoint>? checkpoints = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
         ArgumentNullException.ThrowIfNull(canvas);
         ArgumentNullException.ThrowIfNull(layers);
         assets ??= [];
         notes ??= [];
+        checkpoints ??= [];
 
         if (layers.Count == 0 || layers[0] is not BaseColorLayer)
         {
@@ -133,6 +135,7 @@ public sealed record MapDocument
         Layers = new ReadOnlyCollection<MapLayer>([.. layers]);
         Assets = new ReadOnlyCollection<MapAssetReference>([.. assets]);
         Notes = new ReadOnlyCollection<MapNote>([.. notes]);
+        Checkpoints = new ReadOnlyCollection<MapCheckpoint>([.. checkpoints]);
 
         if (Assets.Select(asset => asset.Sha256).Distinct(StringComparer.OrdinalIgnoreCase).Count()
             != Assets.Count)
@@ -142,6 +145,17 @@ public sealed record MapDocument
         if (Notes.Select(note => note.Id).Distinct().Count() != Notes.Count)
         {
             throw new ArgumentException("Note ids are unique within a document.", nameof(notes));
+        }
+        if (Checkpoints.Count > MapCheckpointLimits.MaxCount)
+        {
+            throw new ArgumentException(
+                $"A document can contain at most {MapCheckpointLimits.MaxCount} checkpoints.",
+                nameof(checkpoints));
+        }
+        if (Checkpoints.Select(checkpoint => checkpoint.Id).Distinct().Count() != Checkpoints.Count)
+        {
+            throw new ArgumentException(
+                "Checkpoint ids are unique within a document.", nameof(checkpoints));
         }
     }
 
@@ -158,6 +172,7 @@ public sealed record MapDocument
 
     public IReadOnlyList<MapAssetReference> Assets { get; init; }
     public IReadOnlyList<MapNote> Notes { get; init; }
+    public IReadOnlyList<MapCheckpoint> Checkpoints { get; init; }
 
     /// <summary>The mandatory background layer.</summary>
     public BaseColorLayer BaseColor => (BaseColorLayer)Layers[0];
@@ -165,13 +180,16 @@ public sealed record MapDocument
     public MapLayer? FindLayer(LayerId id) => Layers.FirstOrDefault(l => l.Id == id);
 
     public MapDocument WithLayers(IReadOnlyList<MapLayer> layers) =>
-        new(Id, Title, CreatedUtc, Canvas, layers, Assets, Notes);
+        new(Id, Title, CreatedUtc, Canvas, layers, Assets, Notes, Checkpoints);
 
     public MapDocument WithAssets(IReadOnlyList<MapAssetReference> assets) =>
-        new(Id, Title, CreatedUtc, Canvas, Layers, assets, Notes);
+        new(Id, Title, CreatedUtc, Canvas, Layers, assets, Notes, Checkpoints);
 
     public MapDocument WithNotes(IReadOnlyList<MapNote> notes) =>
-        new(Id, Title, CreatedUtc, Canvas, Layers, Assets, notes);
+        new(Id, Title, CreatedUtc, Canvas, Layers, Assets, notes, Checkpoints);
+
+    public MapDocument WithCheckpoints(IReadOnlyList<MapCheckpoint> checkpoints) =>
+        new(Id, Title, CreatedUtc, Canvas, Layers, Assets, Notes, checkpoints);
 
     /// <summary>New snapshot with one layer replaced in place.</summary>
     public MapDocument WithLayer(LayerId id, Func<MapLayer, MapLayer> rewrite)

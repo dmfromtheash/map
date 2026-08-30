@@ -10,6 +10,7 @@ public sealed class MapProjectReadBudget
     public long AssetPayloadBytes { get; private set; }
     public long TilePayloadBytes { get; private set; }
     public long JsonPayloadBytes { get; private set; }
+    public long CheckpointPayloadBytes { get; private set; }
 
     public void Add(string name, long uncompressedBytes, long compressedBytes)
     {
@@ -19,10 +20,20 @@ public sealed class MapProjectReadBudget
             throw new MapProjectCorruptedException($"Entry {name} declares a negative size.");
         }
 
+        var isCheckpoint = name.StartsWith(MapProjectFormat.CheckpointPrefix, StringComparison.Ordinal);
+        var isCheckpointTile = isCheckpoint
+            && (name.Contains("/rasters/", StringComparison.Ordinal)
+                || name.Contains("/masks/", StringComparison.Ordinal));
+        var isCheckpointAsset = isCheckpoint && name.Contains("/assets/", StringComparison.Ordinal);
+        var isCheckpointPreview = isCheckpoint && name.EndsWith("/preview.png", StringComparison.Ordinal);
         var isTile = name.StartsWith(MapProjectFormat.RasterPrefix, StringComparison.Ordinal)
-            || name.StartsWith(MapProjectFormat.MaskPrefix, StringComparison.Ordinal);
-        var isAsset = name.StartsWith(MapProjectFormat.AssetPrefix, StringComparison.Ordinal);
-        var perEntryLimit = name == MapProjectFormat.PreviewEntry
+            || name.StartsWith(MapProjectFormat.MaskPrefix, StringComparison.Ordinal)
+            || isCheckpointTile;
+        var isAsset = name.StartsWith(MapProjectFormat.AssetPrefix, StringComparison.Ordinal)
+            || isCheckpointAsset;
+        var perEntryLimit = isCheckpointPreview
+            ? MapProjectFormat.MaxCheckpointPreviewBytes
+            : name == MapProjectFormat.PreviewEntry
             ? MapProjectFormat.MaxPreviewBytes
             : isTile
                 ? MapProjectFormat.MaxTileEntryBytes
@@ -49,6 +60,10 @@ public sealed class MapProjectReadBudget
         try
         {
             TotalUncompressedBytes = checked(TotalUncompressedBytes + uncompressedBytes);
+            if (isCheckpoint)
+            {
+                CheckpointPayloadBytes = checked(CheckpointPayloadBytes + uncompressedBytes);
+            }
             if (isAsset)
             {
                 AssetPayloadBytes = checked(AssetPayloadBytes + uncompressedBytes);
@@ -90,6 +105,12 @@ public sealed class MapProjectReadBudget
             throw new MapProjectResourceLimitException(
                 $"The container declares {TotalUncompressedBytes} uncompressed bytes in total, " +
                 $"above the {MapProjectFormat.MaxTotalUncompressedBytes} limit.");
+        }
+
+        if (CheckpointPayloadBytes > MapProjectFormat.MaxCheckpointPayloadBytes)
+        {
+            throw new MapProjectResourceLimitException(
+                $"The container's checkpoints exceed the {MapProjectFormat.MaxCheckpointPayloadBytes}-byte budget.");
         }
     }
 }

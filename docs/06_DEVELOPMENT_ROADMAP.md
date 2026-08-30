@@ -60,8 +60,9 @@ Stage 10E и 10F не являются оставшимися задачами. 
 ## Консолидированный checkpoint
 
 Уборка перенесена поверх позднего Stage 11 product HEAD без потери Stage 10E, Stage 10F, app icon и
-test-profile isolation. Текущая product/code база —
-`825d9df9a5fec345c30da009b8b00bb594dd20f1` на ветке `stage/12a-named-checkpoints`.
+test-profile isolation. Stage 12A начат от
+`e0010db268b4a2fd4cb9867e1737271be204183a`; его результат — текущий `HEAD` ветки
+`stage/12a-named-checkpoints`.
 
 Старый checkout `C:\Projects\Map` не является базой новой функции. Повторная консолидация не нужна.
 
@@ -69,7 +70,7 @@ test-profile isolation. Текущая product/code база —
 
 Срезы выполняются последовательно и не смешиваются.
 
-### Stage 12A — именованные checkpoints
+### Stage 12A — именованные checkpoints — реализовано
 
 Пользователь создаёт checkpoint с названием, временем и preview, продолжает эксперимент, сохраняет
 и повторно открывает `.mapproj`, а затем безопасно восстанавливает checkpoint. Restore является
@@ -78,7 +79,11 @@ checkpoint. Данные bounded, сохраняются атомарно и н�
 
 Активный контракт: `docs/STAGE_12A_NAMED_CHECKPOINTS.md`.
 
-### Stage 12B — resize, crop и новая карта из региона
+Принятые границы: до 20 точек и 64 MiB общего сохранённого payload, preview 320 × 180 до 1 MiB,
+без auto-eviction. Проверены адресные тесты (6/6), Release build (0 warnings, 0 errors) и один
+фоновый нативный UI-smoke в настоящем off-screen Avalonia/Win32 окне без системного ввода.
+
+### Stage 12B — resize, crop и новая карта из региона — следующий этап
 
 - увеличить/уменьшить canvas с anchor;
 - crop/expand с preview;
