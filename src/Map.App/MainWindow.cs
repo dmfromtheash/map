@@ -52,7 +52,8 @@ public sealed class MainWindow : Window
         _log = log;
         _assets = assets;
         _shortcutStore = shortcutStore
-            ?? new ShortcutSettingsStore(TestMode.ShortcutSettingsPathOverride);
+            ?? new ShortcutSettingsStore(AppPaths.ResolveShortcutSettingsPath(
+                TestMode.Enabled, TestMode.ShortcutSettingsPathOverride));
         _shortcuts = shortcuts ?? LoadShortcuts(_shortcutStore, out _shortcutLoadWarning);
         if (shortcuts is not null)
         {
@@ -592,8 +593,9 @@ public sealed class MainWindow : Window
         _ = dialog.ShowDialog(this);
     }
 
-    private void OpenShortcutSettings()
+    private async void OpenShortcutSettings()
     {
+        var returnFocus = FocusManager?.GetFocusedElement();
         var dialog = new ShortcutSettingsWindow(
             _shortcuts,
             draft =>
@@ -606,7 +608,8 @@ public sealed class MainWindow : Window
                 return null;
             },
             _shortcutLoadWarning);
-        _ = dialog.ShowDialog(this);
+        await dialog.ShowDialog(this);
+        returnFocus?.Focus();
     }
 
     private static EditorShortcutSettings LoadShortcuts(

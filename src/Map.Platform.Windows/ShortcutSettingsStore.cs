@@ -27,8 +27,16 @@ public sealed class ShortcutSettingsStore
     };
     private readonly string _path;
 
-    public ShortcutSettingsStore(string? path = null) =>
-        _path = System.IO.Path.GetFullPath(path ?? AppPaths.ShortcutSettingsPath);
+    public ShortcutSettingsStore(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        if (!System.IO.Path.IsPathFullyQualified(path))
+        {
+            throw new ArgumentException("Shortcut settings path must be absolute.", nameof(path));
+        }
+
+        _path = System.IO.Path.GetFullPath(path);
+    }
 
     public string Path => _path;
 

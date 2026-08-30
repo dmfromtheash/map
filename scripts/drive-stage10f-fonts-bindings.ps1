@@ -5,7 +5,7 @@ Stage 10F native smoke for the local font catalog and editable keyboard bindings
 .DESCRIPTION
 Starts the exact Release executable with isolated map, recovery and shortcut-settings paths. The
 script uses UI Automation for controls and real keyboard input only where actual routing must be
-proved. It executes the sixteen acceptance steps, inspects .mapproj/settings data, exports through
+proved. It executes the acceptance steps, inspects .mapproj/settings data, exports through
 the production resolver and terminates only processes it started.
 #>
 [CmdletBinding()]
@@ -233,7 +233,7 @@ function Find-AutomationIdLike([string]$prefix) {
     return $null
 }
 
-function Wait-Window([string]$title, [int]$timeoutMs = 15000) {
+function Find-ProcessWindow([string]$title) {
     $desktop = [System.Windows.Automation.AutomationElement]::RootElement
     $nameCondition = New-Object System.Windows.Automation.PropertyCondition(
         [System.Windows.Automation.AutomationElement]::NameProperty, $title)
@@ -244,9 +244,13 @@ function Wait-Window([string]$title, [int]$timeoutMs = 15000) {
         [System.Windows.Automation.AutomationElement]::ProcessIdProperty, $script:Proc.Id)
     $condition = New-Object System.Windows.Automation.AndCondition(
         $nameCondition, $typeCondition, $processCondition)
+    return $desktop.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+}
+
+function Wait-Window([string]$title, [int]$timeoutMs = 15000) {
     $deadline = (Get-Date).AddMilliseconds($timeoutMs)
     while ((Get-Date) -lt $deadline) {
-        $window = $desktop.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
+        $window = Find-ProcessWindow $title
         if ($null -ne $window) { return $window }
         Start-Sleep -Milliseconds 180
     }
@@ -273,13 +277,25 @@ function Start-TestApp {
     $env:MAP_UI_TEST_MAP_PATH = $savedMap
     $env:MAP_UI_TEST_SHORTCUT_SETTINGS_PATH = $settingsPath
     $script:Proc = Start-Process -FilePath $Exe -PassThru
+    $windowRect = New-Object Stage10FNative+RECT
+    $windowWidth = 0
+    $windowHeight = 0
     foreach ($attempt in 1..80) {
         Start-Sleep -Milliseconds 250
         $script:Proc.Refresh()
-        if ($script:Proc.MainWindowHandle -ne [IntPtr]::Zero) { break }
+        $candidateHandle = $script:Proc.MainWindowHandle
+        if ($candidateHandle -eq [IntPtr]::Zero) { continue }
+        if (-not [Stage10FNative]::GetWindowRect($candidateHandle, [ref]$windowRect)) { continue }
+        $windowWidth = $windowRect.Right - $windowRect.Left
+        $windowHeight = $windowRect.Bottom - $windowRect.Top
+        if ($windowWidth -ge 960 -and $windowHeight -ge 640) { break }
     }
-    if ($script:Proc.MainWindowHandle -eq [IntPtr]::Zero) { throw 'Map window did not appear.' }
+    if ($script:Proc.MainWindowHandle -eq [IntPtr]::Zero -or
+        $windowWidth -lt 960 -or $windowHeight -lt 640) {
+        throw "Full Map window did not appear; last bounds were ${windowWidth}x${windowHeight}."
+    }
     $script:WindowHandle = $script:Proc.MainWindowHandle
+    $dpi = [Stage10FNative]::GetDpiForWindow($script:WindowHandle)
     Protect-AppWindow
     $script:Root = [System.Windows.Automation.AutomationElement]::FromHandle($script:WindowHandle)
     $cim = Get-CimInstance Win32_Process -Filter "ProcessId = $($script:Proc.Id)"
@@ -287,6 +303,9 @@ function Start-TestApp {
         pid = $script:Proc.Id
         path = $script:Proc.Path
         commandLine = $cim.CommandLine
+        dpi = $dpi
+        scalePercent = [Math]::Round(($dpi / 96.0) * 100)
+        initialWindowBounds = "${windowWidth}x${windowHeight}"
     })
 }
 
@@ -313,6 +332,19 @@ function Send-PhysicalKey(
     [void][Stage10FNative]::SetForegroundWindow($handle)
     (Require-Uia $focusAutomationId $root).SetFocus()
     Start-Sleep -Milliseconds 150
+    Send-PhysicalKeyToFocused $virtualKey $root $modifiers
+}
+
+function Send-PhysicalKeyToFocused(
+    [byte]$virtualKey,
+    [System.Windows.Automation.AutomationElement]$window = $null,
+    [byte[]]$modifiers = @(),
+    [int]$settleMilliseconds = 500) {
+    if ($null -eq $window) { $window = $script:Root }
+    $handle = [IntPtr]$window.Current.NativeWindowHandle
+    if ($handle -eq [IntPtr]::Zero) { $handle = $script:WindowHandle }
+    [void][Stage10FNative]::ShowWindow($handle, 4)
+    [void][Stage10FNative]::SetForegroundWindow($handle)
     foreach ($modifier in $modifiers) {
         [Stage10FNative]::keybd_event($modifier, 0, 0, [UIntPtr]::Zero)
     }
@@ -321,6 +353,46 @@ function Send-PhysicalKey(
     for ($index = $modifiers.Count - 1; $index -ge 0; $index--) {
         [Stage10FNative]::keybd_event($modifiers[$index], 0, 2, [UIntPtr]::Zero)
     }
+    Start-Sleep -Milliseconds $settleMilliseconds
+}
+
+function Get-FocusedAutomationId {
+    $focused = [System.Windows.Automation.AutomationElement]::FocusedElement
+    if ($null -eq $focused) { return '' }
+    return $focused.Current.AutomationId
+}
+
+function Focus-WithPhysicalTab(
+    [string]$targetAutomationId,
+    [System.Windows.Automation.AutomationElement]$window,
+    [string]$startAutomationId = 'ShortcutSearchBox',
+    [int]$maximumTabs = 160) {
+    (Require-Uia $startAutomationId $window).SetFocus()
+    Start-Sleep -Milliseconds 250
+    $trace = New-Object Collections.Generic.List[string]
+    foreach ($attempt in 0..$maximumTabs) {
+        $focusedId = Get-FocusedAutomationId
+        if ($focusedId -and ($trace.Count -eq 0 -or $trace[$trace.Count - 1] -ne $focusedId)) {
+            $trace.Add($focusedId)
+        }
+        if ($focusedId -eq $targetAutomationId) {
+            Assert-True (Require-Uia $targetAutomationId $window).Current.HasKeyboardFocus `
+                "physical Tab reached $targetAutomationId with keyboard focus"
+            return @($trace)
+        }
+        Send-PhysicalKeyToFocused 0x09 $window @() 100 # VK_TAB
+    }
+    throw "Physical Tab did not reach '$targetAutomationId'. Trace: $($trace -join ' -> ')"
+}
+
+function Invoke-FocusedButtonByKeyboard(
+    [string]$automationId,
+    [System.Windows.Automation.AutomationElement]$window) {
+    Assert-Equal (Get-FocusedAutomationId) $automationId "keyboard target is $automationId"
+    $handle = [IntPtr]$window.Current.NativeWindowHandle
+    [void][Stage10FNative]::ShowWindow($handle, 4)
+    [void][Stage10FNative]::SetForegroundWindow($handle)
+    [System.Windows.Forms.SendKeys]::SendWait(' ')
     Start-Sleep -Milliseconds 500
 }
 
@@ -549,6 +621,9 @@ try {
     $settingsDialog = Open-ShortcutSettings
     Select-TextShortcut $settingsDialog
     Assert-Equal (Get-UiaValue 'ShortcutGestureInput' $settingsDialog) 'T' 'Text default shown in editor'
+    $tabTrace = @(Focus-WithPhysicalTab 'SaveShortcutSettingsButton' $settingsDialog)
+    Save-Shot '03-keyboard-tab-focus.png' $settingsDialog
+    $script:ShortcutEvidence['physicalTabTrace'] = $tabTrace
     Add-Action 'opened searchable/grouped shortcut editor and selected Text command'
 
     Write-Host "`n[10] Create a conflict and prove save is blocked"
@@ -557,14 +632,28 @@ try {
     Wait-State { (Get-UiaName 'ShortcutConflictText' $settingsDialog) -like '*Конфликт V*' } 'visible conflict message'
     $saveSettings = Require-Uia 'SaveShortcutSettingsButton' $settingsDialog
     Assert-True (-not $saveSettings.Current.IsEnabled) 'conflicting settings cannot be saved'
-    Save-Shot '03-shortcut-conflict.png' $settingsDialog
+    Save-Shot '04-shortcut-conflict.png' $settingsDialog
     Add-Action 'created overlapping V conflict and observed disabled Save'
+
+    Write-Host "`n[10A] Cancel the conflicting draft from the keyboard and prove focus return"
+    [void](Focus-WithPhysicalTab 'CancelShortcutSettingsButton' $settingsDialog 'ShortcutGestureInput')
+    Invoke-FocusedButtonByKeyboard 'CancelShortcutSettingsButton' $settingsDialog
+    Wait-State { $null -eq (Find-ProcessWindow 'Сочетания клавиш') } `
+        'shortcut dialog closes through keyboard-only Cancel'
+    Wait-State { (Get-FocusedAutomationId) -eq 'ShortcutSettingsButton' } `
+        'focus returns to the shortcut settings trigger'
+    $settingsDialog = Open-ShortcutSettings
+    Select-TextShortcut $settingsDialog
+    Assert-Equal (Get-UiaValue 'ShortcutGestureInput' $settingsDialog) 'T' `
+        'keyboard Cancel leaves the live Text binding unchanged'
+    Add-Action 'traversed with physical Tab, cancelled from the keyboard and restored trigger focus'
 
     Write-Host "`n[11] Rebind Text to free Alt+T and save isolated settings"
     Send-PhysicalKey 0x54 'ShortcutGestureInput' $settingsDialog @([byte]0x12) # Alt+T
     Wait-State { (Get-UiaValue 'ShortcutGestureInput' $settingsDialog) -eq 'Alt+T' } 'Alt+T captured'
     Assert-True (Require-Uia 'SaveShortcutSettingsButton' $settingsDialog).Current.IsEnabled 'conflict-free save is enabled'
-    Invoke-Uia 'SaveShortcutSettingsButton' $settingsDialog
+    [void](Focus-WithPhysicalTab 'SaveShortcutSettingsButton' $settingsDialog 'ShortcutGestureInput')
+    Invoke-FocusedButtonByKeyboard 'SaveShortcutSettingsButton' $settingsDialog
     Wait-State { Test-Path -LiteralPath $settingsPath } 'isolated settings file exists'
     $settingsJson = Get-Content -LiteralPath $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
     Assert-Equal ([string]$settingsJson.bindings.text) 'Alt+T' 'settings JSON stores Text override'
@@ -594,7 +683,7 @@ try {
     $help = Wait-Window 'Горячие клавиши Map'
     $helpText = Get-WindowText $help
     Assert-True ($helpText -like '*Alt+T*Инструмент «Текст»*') 'shortcut help contains Text Alt+T'
-    Save-Shot '04-rebound-help.png' $help
+    Save-Shot '05-rebound-help.png' $help
     Close-UiaWindow $help
     $script:ShortcutEvidence['tooltip'] = $textTool.Current.HelpText
     Add-Action 'verified updated Alt+T in both UIA HelpText and generated help dialog'
@@ -608,19 +697,22 @@ try {
     Assert-True (Test-ActiveTool 'Щёлкните объект') 'old T remains inactive after restart'
     Send-PhysicalKey 0x54 'MapCanvas' $script:Root @([byte]0x12) # Alt+T
     Assert-True (Test-ActiveTool 'Добавьте подпись') 'Alt+T remains active after restart'
-    Save-Shot '05-persisted-restart.png'
+    Save-Shot '06-persisted-restart.png'
     Add-Action 'restarted exact executable and proved persisted routing'
 
     Write-Host "`n[16] Reset one command, reset all and confirm compatible defaults"
     $settingsDialog = Open-ShortcutSettings
     Select-TextShortcut $settingsDialog
-    Invoke-Uia 'ResetShortcutButton' $settingsDialog
+    [void](Focus-WithPhysicalTab 'ResetShortcutButton' $settingsDialog 'ShortcutGestureInput')
+    Invoke-FocusedButtonByKeyboard 'ResetShortcutButton' $settingsDialog
     Assert-Equal (Get-UiaValue 'ShortcutGestureInput' $settingsDialog) 'T' 'single-command reset restores T'
     Send-PhysicalKey 0x54 'ShortcutGestureInput' $settingsDialog @([byte]0x12) # Alt+T
     Assert-Equal (Get-UiaValue 'ShortcutGestureInput' $settingsDialog) 'Alt+T' 'temporary rebind before reset-all'
-    Invoke-Uia 'ResetAllShortcutsButton' $settingsDialog
+    [void](Focus-WithPhysicalTab 'ResetAllShortcutsButton' $settingsDialog 'ShortcutGestureInput')
+    Invoke-FocusedButtonByKeyboard 'ResetAllShortcutsButton' $settingsDialog
     Assert-Equal (Get-UiaValue 'ShortcutGestureInput' $settingsDialog) 'T' 'reset-all restores T'
-    Invoke-Uia 'SaveShortcutSettingsButton' $settingsDialog
+    [void](Focus-WithPhysicalTab 'SaveShortcutSettingsButton' $settingsDialog 'ResetAllShortcutsButton')
+    Invoke-FocusedButtonByKeyboard 'SaveShortcutSettingsButton' $settingsDialog
     $resetJson = Get-Content -LiteralPath $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
     Assert-True ($null -eq $resetJson.bindings.text) 'default Text binding is absent from overrides'
     Invoke-Uia 'SelectToolButton'

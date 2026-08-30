@@ -177,6 +177,15 @@ public sealed class ShortcutSettingsWindow : Window
 
     private void CaptureGesture(object? sender, KeyEventArgs args)
     {
+        // Bare Tab and Shift+Tab remain standard focus navigation. Modified Tab combinations can
+        // still be captured, while the dialog itself never traps a keyboard-only user here.
+        if (args.Key == Key.Tab
+            && !args.KeyModifiers.HasFlag(KeyModifiers.Control)
+            && !args.KeyModifiers.HasFlag(KeyModifiers.Alt))
+        {
+            return;
+        }
+
         if (_selected is null || !ShortcutKeyAdapter.TryCreate(args, out var input))
         {
             return;

@@ -54,6 +54,17 @@ public sealed class Stage10FFontsAndSettingsTests
     }
 
     [Fact]
+    public void Local_font_catalog_has_a_hard_deterministic_family_limit()
+    {
+        var normalized = SystemFontCatalog.Normalize(
+            Enumerable.Range(0, 5_000).Reverse().Select(index => $"Family {index:D4}"));
+
+        Assert.Equal(4_096, normalized.Count);
+        Assert.Equal("Family 0000", normalized[0]);
+        Assert.Equal("Family 4095", normalized[^1]);
+    }
+
+    [Fact]
     public void Requested_font_stays_visible_and_one_selection_is_exactly_undoable()
     {
         var editor = NewEditor(["Zulu", "Arial", "Beta"]);
@@ -119,6 +130,32 @@ public sealed class Stage10FFontsAndSettingsTests
     }
 
     [Fact]
+    public void Shortcut_settings_store_requires_an_explicit_path()
+    {
+        Assert.Throws<ArgumentNullException>(() => new ShortcutSettingsStore(null!));
+        Assert.Throws<ArgumentException>(() => new ShortcutSettingsStore("relative-shortcuts.json"));
+    }
+
+    [Fact]
+    public void Test_mode_settings_path_is_absolute_isolated_and_fail_closed()
+    {
+        var production = AppPaths.ShortcutSettingsPath;
+        var isolated = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(), "map-stage10f-isolated", "shortcuts.json");
+
+        Assert.Equal(System.IO.Path.GetFullPath(production),
+            AppPaths.ResolveShortcutSettingsPath(testMode: false, testOverride: null));
+        Assert.Equal(System.IO.Path.GetFullPath(isolated),
+            AppPaths.ResolveShortcutSettingsPath(testMode: true, isolated));
+        Assert.Throws<InvalidOperationException>(() =>
+            AppPaths.ResolveShortcutSettingsPath(testMode: true, testOverride: null));
+        Assert.Throws<InvalidOperationException>(() =>
+            AppPaths.ResolveShortcutSettingsPath(testMode: true, "relative-shortcuts.json"));
+        Assert.Throws<InvalidOperationException>(() =>
+            AppPaths.ResolveShortcutSettingsPath(testMode: true, production));
+    }
+
+    [Fact]
     public void Unknown_malformed_entry_is_ignored_without_losing_a_known_binding()
     {
         WithTempDirectory(directory =>
@@ -132,6 +169,62 @@ public sealed class Stage10FFontsAndSettingsTests
 
             Assert.Null(result.Warning);
             Assert.Equal("Alt+T", Assert.Single(result.Bindings).Value);
+        });
+    }
+
+    [Fact]
+    public void Oversized_nested_duplicate_and_overlong_profiles_fail_safely()
+    {
+        WithTempDirectory(directory =>
+        {
+            var path = System.IO.Path.Combine(directory, "shortcuts.json");
+            var store = new ShortcutSettingsStore(path);
+
+            var oversized = new byte[ShortcutSettingsStore.MaxEncodedBytes + 1];
+            File.WriteAllBytes(path, oversized);
+            var oversizedResult = store.Load(EditorShortcutSettings.KnownCommandIds);
+            Assert.NotNull(oversizedResult.Warning);
+            Assert.Empty(oversizedResult.Bindings);
+            Assert.Equal(oversized.Length, new FileInfo(path).Length);
+
+            File.WriteAllText(path,
+                "{\"version\":1,\"bindings\":{\"text\":[[[[[[[[[\"T\"]]]]]]]]]}}",
+                Encoding.UTF8);
+            var nestedResult = store.Load(EditorShortcutSettings.KnownCommandIds);
+            Assert.NotNull(nestedResult.Warning);
+            Assert.Empty(nestedResult.Bindings);
+
+            var duplicates = string.Join(",",
+                Enumerable.Repeat("\"text\":\"T\"", ShortcutSettingsStore.MaxBindings + 1));
+            File.WriteAllText(path, $"{{\"version\":1,\"bindings\":{{{duplicates}}}}}", Encoding.UTF8);
+            var duplicateResult = store.Load(EditorShortcutSettings.KnownCommandIds);
+            Assert.NotNull(duplicateResult.Warning);
+            Assert.Empty(duplicateResult.Bindings);
+
+            File.WriteAllText(path,
+                $"{{\"version\":1,\"bindings\":{{\"text\":\"{new string('Ж', 129)}\"}}}}",
+                Encoding.UTF8);
+            var overlongResult = store.Load(EditorShortcutSettings.KnownCommandIds);
+            Assert.NotNull(overlongResult.Warning);
+            Assert.Empty(overlongResult.Bindings);
+        });
+    }
+
+    [Fact]
+    public void Write_failure_is_reported_and_cannot_be_mistaken_for_success()
+    {
+        WithTempDirectory(directory =>
+        {
+            var blockedPath = System.IO.Path.Combine(directory, "blocked-shortcuts.json");
+            Directory.CreateDirectory(blockedPath);
+            var result = new ShortcutSettingsStore(blockedPath).Save(
+                new Dictionary<string, string> { [EditorShortcutSettings.Commands.Text] = "Alt+T" },
+                EditorShortcutSettings.KnownCommandIds);
+
+            Assert.False(result.Succeeded);
+            Assert.Contains("Не удалось сохранить", result.Error);
+            Assert.True(Directory.Exists(blockedPath));
+            Assert.Empty(Directory.EnumerateFiles(directory, "blocked-shortcuts.json.tmp-*"));
         });
     }
 
