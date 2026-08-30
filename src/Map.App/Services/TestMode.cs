@@ -11,6 +11,7 @@ namespace Map.App.Services;
 public static class TestMode
 {
     public const string Variable = "MAP_UI_TEST_MODE";
+    public const string ProfileRootVariable = "MAP_UI_TEST_PROFILE_ROOT";
     public const string RecoveryRootVariable = "MAP_UI_TEST_RECOVERY_ROOT";
     public const string ShortcutSettingsPathVariable = "MAP_UI_TEST_SHORTCUT_SETTINGS_PATH";
 
@@ -29,6 +30,10 @@ public static class TestMode
     /// isolated root.
     /// </summary>
     public static bool AutosaveEnabled => !Enabled || RecoveryRootOverride is not null;
+
+    public static string? ProfileRootOverride => Enabled
+        ? Environment.GetEnvironmentVariable(ProfileRootVariable)
+        : null;
 
     public static string? RecoveryRootOverride
     {

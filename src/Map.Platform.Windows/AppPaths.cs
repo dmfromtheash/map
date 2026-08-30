@@ -15,6 +15,41 @@ public static class AppPaths
     public static string ShortcutSettingsPath => Path.Combine(Root, "shortcuts.json");
 
     /// <summary>
+    /// Validates an explicit, disposable user-state root used by native UI drivers. The real
+    /// profile, its descendants, and its ancestors are rejected so a test cannot silently write
+    /// into the user's production Map state or an overly broad parent directory.
+    /// </summary>
+    public static string ResolveTestProfileRoot(string? testOverride)
+    {
+        if (string.IsNullOrWhiteSpace(testOverride) || !Path.IsPathFullyQualified(testOverride))
+        {
+            throw new InvalidOperationException(
+                "Test mode requires an absolute isolated profile root.");
+        }
+
+        var resolved = Path.GetFullPath(testOverride).TrimEnd(Path.DirectorySeparatorChar);
+        var pathRoot = Path.GetPathRoot(resolved)?.TrimEnd(Path.DirectorySeparatorChar);
+        if (string.IsNullOrWhiteSpace(resolved) ||
+            string.Equals(resolved, pathRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Test mode profile root cannot be a drive root.");
+        }
+
+        var production = Path.GetFullPath(Root).TrimEnd(Path.DirectorySeparatorChar);
+        if (string.Equals(resolved, production, StringComparison.OrdinalIgnoreCase) ||
+            resolved.StartsWith(production + Path.DirectorySeparatorChar,
+                StringComparison.OrdinalIgnoreCase) ||
+            production.StartsWith(resolved + Path.DirectorySeparatorChar,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                "Test mode profile root must be separate from the real user profile.");
+        }
+
+        return resolved;
+    }
+
+    /// <summary>
     /// Resolves the settings file for the current process. Test mode is deliberately fail-closed:
     /// a driver must provide a distinct absolute path and can never fall back to the real profile.
     /// </summary>

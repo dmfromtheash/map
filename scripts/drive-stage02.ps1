@@ -343,9 +343,14 @@ function Start-App {
 # ============================================================================ run
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+$resolvedOutDir = (Resolve-Path -LiteralPath $OutDir).Path
+$profileRoot = Join-Path $resolvedOutDir 'profile'
+New-Item -ItemType Directory -Force -Path $profileRoot | Out-Null
+$env:MAP_UI_TEST_MODE = '1'
+$env:MAP_UI_TEST_PROFILE_ROOT = $profileRoot
 Get-ChildItem $OutDir -Filter *.png -ErrorAction SilentlyContinue | Remove-Item -Force
-$savePath = Join-Path (Resolve-Path (Join-Path $scriptRoot '..')).Path `
-    ("artifacts\stage02b\ui-smoke\smoke-{0:yyyyMMdd-HHmmss}.mapproj" -f (Get-Date))
+$savePath = Join-Path $resolvedOutDir ("smoke-{0:yyyyMMdd-HHmmss}.mapproj" -f (Get-Date))
+Write-Evidence 'isolated-profile' $profileRoot
 
 # ---- step 1: dashboard launch
 Start-App

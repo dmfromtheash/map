@@ -1,5 +1,7 @@
 using System;
+using System.IO;
 using Avalonia;
+using Map.App.Services;
 using Map.Platform.Windows;
 
 namespace Map.App;
@@ -9,7 +11,10 @@ internal static class Program
     [STAThread]
     public static void Main(string[] args)
     {
-        var log = new DiagnosticsLog();
+        var profileRoot = TestMode.ProfileRootOverride is { } testProfileRoot
+            ? AppPaths.ResolveTestProfileRoot(testProfileRoot)
+            : AppPaths.Root;
+        var log = new DiagnosticsLog(Path.Combine(profileRoot, "Diagnostics"));
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
             log.Error("Unhandled exception", e.ExceptionObject as Exception);
 
