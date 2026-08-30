@@ -26,9 +26,10 @@
   находится в commit `8de17de27546783bdd6247cb4df094d9df505711`. Bounded independent Gate D
   диапазона `2af5bd3495851f032897435fc957f5705a692bbe..8de17de27546783bdd6247cb4df094d9df505711`
   принят отдельно: `1/1` exact regression и `209/209` Map.Presentation.Tests.
-- Stage 10E: отдельная `IsometricSquares`, property sheet, snap и golden fixtures — следующий
-  функциональный срез.
-- Stage 10F: licensed font catalog/navigation и редактируемые bindings.
+- Stage 10E: `FACT / OWNER ACCEPTED` для перехода на точном HEAD
+  `78a5b98665ed57c2a00a64335371e7f0c6132dd9`; это прямое решение владельца без нового Gate D,
+  а не переименование исторических `PARTIAL`/`PROPOSED` evidence в независимую проверку.
+- Stage 10F: активная реализация licensed font catalog/navigation и редактируемых bindings.
 - Stage 11: performance, packaging, clean-VM, installer/update/rollback и release candidate.
 
 ## Решения по публичным репозиториям
@@ -44,7 +45,7 @@
 | [SkiaSharp](https://github.com/mono/SkiaSharp) | `f74bd9adb82a77fd4a423db03c1077ea9d3be7e7` | MIT | уже используемый renderer; HarfBuzzSharp и text shaping | `ADMIT EXISTING` для Skia; HarfBuzz — только отдельный Stage 10F probe при доказанном shaping gap |
 | [Tiled](https://github.com/mapeditor/tiled) | `457ecbb4da480b5c6cd153bd87e8c758c9453e13` | GPL-2.0 и mixed notices | grid/layer/undo/editor semantics | `REFERENCE ONLY`: лицензия и Qt/C++ architecture исключают перенос кода в Map |
 | [Azgaar Fantasy Map Generator](https://github.com/Azgaar/Fantasy-Map-Generator) | `4eb71cfb89bebf987174623f9ccc0485bf328819` | MIT | генеративный pipeline, layers/export UX | `CONCEPT ONLY`: web/TypeScript architecture не переносится в native Map; допустимы только публично наблюдаемые общие идеи |
-| [MapTool](https://github.com/RPTools/maptool) | `92370a3d359cce69cdadc8cb916cfcaa2952b618` | AGPL-3.0 | mature square/hex/isometric grid and snap cases | `ORACLE/REFERENCE ONLY`: для Stage 10E выписать свойства и контрпримеры своими словами; Java-код не копировать |
+| [MapTool](https://github.com/RPTools/maptool) | `92370a3d359cce69cdadc8cb916cfcaa2952b618` | AGPL-3.0 | mature square/hex/isometric grid and snap cases | `ORACLE/REFERENCE ONLY`: читать относящиеся Java-методы и тесты, понимать formulas/rounding/boundaries и строить собственный oracle; не переносить реализацию или fixtures и не делать механический Java→C# перевод |
 | [Pinta](https://github.com/PintaProject/Pinta) | `42aa68ac8d13e6190c575cabe19ba848ec043160` | исходный код MIT, assets/notices mixed | history items, canvas grid, brush UI | `REFERENCE ONLY`: GTK/mutable bitmap mismatch; отдельно проверять лицензию каждого asset, ничего не переносить автоматически |
 | [PixiEditor](https://github.com/PixiEditor/PixiEditor) | `e6b2d3f6f8a4ab8740b000e61734f9d550ccc2bc` | LGPL-3.0 | action boundaries, updateable undo operations | `REFERENCE ONLY`: Map уже имеет `IEditCommand`; direct code reuse не оправдан |
 | [LDtk](https://github.com/deepnight/ldtk) | `6d69bd1d6be92f01ac30778f6a934f0da8448b16` | MIT | level/layer/tileset data UX | `CONCEPT ONLY`: Electron/Haxe и tile-level editor отличаются от Map architecture |
@@ -55,7 +56,9 @@
 
 ## Конкретные файлы/API для будущих probes
 
-Это указатели для чтения внутри ResearchLab, не разрешение копировать реализацию:
+Это указатели для предметного чтения реализации внутри ResearchLab. Разрешено изучать отдельные
+фрагменты методов и тестов, чтобы понять решение; это не разрешение переносить целую реализацию,
+делать построчный перевод или копировать fixtures без отдельного admission:
 
 | Задача | Public reference files | Что извлечь своими словами |
 |---|---|---|
@@ -64,7 +67,7 @@
 | Avalonia viewport | `mapsui/Mapsui/Extensions/ViewportExtensions.cs`, `Mapsui/Limiting/ViewportLimiter.cs`, `Tests/Mapsui.Tests/Layers/GridLayerTests.cs` | boundary tests и performance comparisons с уже существующим viewport Map |
 | Avalonia testing | `avalonia-samples/src/Avalonia.Samples/Testing/TestableApp.Headless.XUnit/TestAppBuilder.cs` и `CalculatorTests.cs` | официальный headless bootstrap и input/control assertions |
 | text shaping | `skiasharp/tests/Tests/SkiaSharp/SKShaperTest.cs`, `SKShaperGlyphExtractionTests.cs`, `binding/HarfBuzzSharp/` | failing fixtures для русского/multiscript/curved text и glyph extraction |
-| isometric/grid oracle | `maptool/src/main/java/net/rptools/maptool/model/IsometricGrid.java`, `SquareGrid.java`, `HexGrid*.java` и CSV facing fixtures | только свойства roundtrip/boundary/facing; AGPL-код/fixtures не переносить |
+| isometric/grid oracle | `maptool/src/main/java/net/rptools/maptool/model/IsometricGrid.java`, `SquareGrid.java`, `HexGrid*.java` и CSV facing fixtures | разобрать formulas, rounding, roundtrip/boundary/facing и тестовые контрпримеры; AGPL-код/fixtures не переносить |
 | brush/history UX | `pinta/Pinta.Tools/Tools/BaseBrushTool.cs`, `PaintBrushTool.cs`, `Pinta.Core/HistoryItems/` | gesture/history boundary ideas; не переносить GTK/mutable-bitmap implementation |
 | document changes | `pixieditor/src/PixiEditor.ChangeableDocument/DocumentChangeTracker.cs` и `Changes/` | сравнить transaction/updateable-change semantics с `IEditCommand`; LGPL implementation не копировать |
 | updater | `velopack/samples/CSharpAvalonia/`, `src/lib-csharp/VelopackApp.cs`, `UpdateManager.cs`, `Sources/SimpleFileSource.cs` | disposable Stage 11 install/update/offline/rollback harness |
@@ -81,9 +84,9 @@ API surface, publish-size, offline и removal-plan проверки. Для Stag
 
 Новая package dependency не нужна. Правильный probe:
 
-1. Из публичных Tiled/MapTool материалов выписать только математические свойства square,
-   hex-flat, hex-pointy и isometric diamond: world↔cell roundtrip, tie-breaking на границе,
-   negative coordinates, offset/rotation и snap stability.
+1. Прочитать относящиеся функции и тесты публичных Tiled/MapTool на закреплённых commit; разобрать
+   математические свойства и инженерные решения square, hex-flat, hex-pointy и isometric diamond:
+   world↔cell roundtrip, tie-breaking на границе, negative coordinates, offset/rotation и snap stability.
 2. Реализовать `IsometricSquares` в собственной domain geometry, независимо от UI и Skia.
 3. Сравнивать с собственным brute-force oracle/golden fixtures; чужие тесты и Java/C++ код не
    переносить.
@@ -131,6 +134,8 @@ C:\Projects\Map-ResearchLab\
 
 - папка находится рядом с Map, не внутри repo и не в `Map.slnx`;
 - upstream source считается untrusted/read-only; ничего не собирать и не запускать автоматически;
+- чтение отдельных implementation fragments и tests разрешено для понимания алгоритма; результатом
+  должны быть собственная реализация Map и собственный oracle, а не механический перевод;
 - каждый `sparsePaths` и отдельный обязательный `licenseFile` проверяются case-sensitive по tree/blob
   точного pinned commit до итогового `PASS`;
 - на Windows acquisition принимает только короткий `TargetRoot` (не более 80 символов), не
@@ -145,7 +150,8 @@ C:\Projects\Map-ResearchLab\
 ## Рекомендуемый admission-порядок
 
 1. Сейчас: ни одной новой production dependency.
-2. Stage 10E: reference-only grid oracle, собственная реализация.
+2. Stage 10E review: read-only inspection MapTool/Tiled/Mapsui/Avalonia/Skia relevant code,
+   независимый grid oracle и проверка собственного checkpoint без новой dependency.
 3. Stage 10F: HarfBuzz probe только после failing shaping fixture.
 4. Future geometry stage: Clipper2 comparison только после accepted requirement; NTS — baseline
    для сравнения, не default dependency.
@@ -153,8 +159,8 @@ C:\Projects\Map-ResearchLab\
 
 ## Точный следующий шаг
 
-Сначала текущий research/release foundation candidate сохраняется отдельным локальным checkpoint и
-передаётся свежей независимой review-задаче как точный `8de17de..checkpoint HEAD`. Следующий
-функциональный prompt — **Stage 10E Grid geometry** — не начинать до этой проверки и отдельного
-решения владельца. Исследовательскую лабораторию не подключать к production до конкретного Stage 10E
-dependency-free oracle plan.
+Stage 10F выполняется по активному контракту `docs/prompts/STAGE_10F_FONTS_BINDINGS.md` от
+документального checkpoint, фиксирующего owner acceptance Stage 10E. Сначала используются
+существующие Skia/Windows font APIs и текущие команды Map. HarfBuzz/shaping probe остаётся
+условным: запускать его можно только после отдельного failing multiscript/curved-text fixture и
+нового решения владельца; текущий Stage 10F не добавляет dependency.

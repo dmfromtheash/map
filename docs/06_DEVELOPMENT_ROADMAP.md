@@ -294,11 +294,13 @@ UI/groups и font catalog остаются после 10B.
    принят отдельно: `1/1` exact regression и `209/209` Map.Presentation.Tests; полный Stage 10D gate
    без changed-risk trigger не повторяется. Отчёт:
    `reviews/STAGE_10D_OBJECT_INSPECTORS_VERIFICATION.md`.
-4. **10E — Grid geometry:** отдельная `IsometricSquares`, полный property sheet, общий
-   topology/snap/render evaluator и `PROPOSED` golden fixtures реализованы в локальном author
-   checkpoint от `942fb07f`; Release build, 716/716 tests и native 108-check smoke прошли.
-   Статус остаётся `PARTIAL` до fresh independent review точного `BASE..HEAD`.
-5. **10F — Licensed font catalog/navigation и редактируемые bindings.**
+4. **10E — Grid geometry: `FACT / OWNER ACCEPTED`.** Отдельная `IsometricSquares`, полный
+   property sheet, общий topology/snap/render evaluator и `PROPOSED` golden fixtures приняты
+   владельцем для перехода на точном HEAD `78a5b98665ed57c2a00a64335371e7f0c6132dd9` без нового
+   Gate D. Это прямое продуктовое решение, не новая независимая проверка; исторические `PARTIAL`,
+   ограничения и недостающие доказательства сохраняются в author-report.
+5. **10F — Licensed font catalog/navigation и редактируемые bindings: `ACTIVE`.** Контракт:
+   `prompts/STAGE_10F_FONTS_BINDINGS.md`.
 
 Эти срезы не смешиваются с Stage 9B–9E. Выполнение 10B не позволяет объявить весь Stage 10
 готовым.

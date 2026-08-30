@@ -23,6 +23,30 @@
 - не превращать цель в «весь Inkarnate»;
 - отдельный review-fix остаётся узким: один подтверждённый дефект, red/green и новый commit.
 
+## Работа с публичным исходным кодом
+
+Публичный код разрешено и, для зрелого аналога рискованной функции, ожидается читать глубже
+документации. Цель — использовать накопленный инженерный опыт, не переносить чужую подсистему.
+
+Ограниченный reference-проход:
+
+1. Сформулировать один вопрос реализации: например, rounding hex boundary, viewport culling или
+   update rollback.
+2. Выбрать минимальный набор относящихся upstream-файлов/тестов и зафиксировать repository, exact
+   commit, license и admission из `docs/research/external-sources.json`.
+3. Прочитать реализацию; выписать формулы, структуры данных, порядок операций, failure cases и
+   контрпримеры. Допустимо сопоставить два upstream, если они дают независимую проверку.
+4. Спроектировать собственное решение в инвариантах Map. Не делать механический перевод и не
+   сохранять уникальные имена, комментарии, fixtures или структуру метода без direct-reuse admission.
+5. Написать собственный oracle/fixture и проверить наблюдаемое свойство, а не сходство строк кода.
+6. В отчёте указать прочитанные файлы, использованное понимание, собственную реализацию и причину
+   отказа от package/direct reuse.
+
+Reference-проход входит в scope функции и verification budget. Он не разрешает автоматически
+собирать/исполнять upstream, сканировать все 15 checkouts или добавлять dependency. Для docs-only
+правки достаточно document/link/prompt и Git checks; build/test/Stryker/native UI пропускаются как
+не относящиеся к изменённому риску.
+
 ## Один рабочий цикл
 
 1. Установить факты: branch, `HEAD`, worktree, handoff, current roadmap stage, accepted decisions и существующие пользовательские изменения.
@@ -49,10 +73,11 @@
 7. **Internal checkpoints** — 3–7 логических контрольных точек до общего результата.
 8. **Acceptance criteria** — нумерованные проверяемые критерии, включая failure paths.
 9. **Risk and tool matrix** — для каждого риска инструмент, evidence и условие обоснованного пропуска.
-10. **Verification budget and stop rules** — по одному необходимому прогону, условия единственного повтора, flake-limit и точка остановки.
-11. **Manual/native UI scenario** — если меняется UI/canvas; иначе явное `N/A` с причиной.
-12. **Git boundary** — branch/base, разрешение или запрет commit/push/PR/release.
-13. **Required report** — факты, числа, файлы, evidence, gaps, риски и следующая задача.
+10. **Public source reference plan** — exact upstream/files и один вопрос, либо явное `N/A`.
+11. **Verification budget and stop rules** — по одному необходимому прогону, условия единственного повтора, flake-limit и точка остановки.
+12. **Manual/native UI scenario** — если меняется UI/canvas; иначе явное `N/A` с причиной.
+13. **Git boundary** — branch/base, разрешение или запрет commit/push/PR/release.
+14. **Required report** — факты, числа, файлы, evidence, gaps, риски и следующая задача.
 
 Prompt не должен многократно повторять общие запреты из `AGENTS.md`. Ссылка на источник плюс одно этапное уточнение лучше длинной цепочки одинаковых предостережений.
 
@@ -72,6 +97,7 @@ Prompt не должен многократно повторять общие з
 | accessibility | UIA + Accessibility Insights | labels/focus/tab/contrast | нет новых/изменённых controls |
 | dependency/supply chain | NuGet audit + source/license review | package graph/advisories/license | нет зависимостей; NuGet audit всё равно остаётся базовой гигиеной |
 | security boundary | Codex Security / targeted review | source-to-sink и controls | нет нового boundary и нет явного запроса владельца |
+| внешний алгоритмический reference | read-only exact-commit source review | файлы, понятые решения, собственный oracle | нет зрелого аналога или алгоритмической неопределённости |
 
 ## Конечный verification budget
 

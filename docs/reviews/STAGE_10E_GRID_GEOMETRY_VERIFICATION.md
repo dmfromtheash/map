@@ -1,5 +1,14 @@
 # Stage 10E — Grid geometry — author verification
 
+## OWNER DECISION
+
+`Stage 10E: FACT / OWNER ACCEPTED` на точном HEAD
+`78a5b98665ed57c2a00a64335371e7f0c6132dd9`.
+
+Это прямое решение владельца о завершении этапа для перехода к Stage 10F без дополнительного
+Gate D. Оно не является утверждением о новом независимом acceptance-проходе и не меняет
+исторические `PARTIAL`, `PROPOSED`, известные ограничения или отсутствующие доказательства ниже.
+
 ## RESULT
 
 `PARTIAL — implementation checkpoint создан и готов к независимой проверке точного BASE..HEAD.`

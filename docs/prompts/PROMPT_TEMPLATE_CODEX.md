@@ -28,6 +28,16 @@ Expected branch: `<stage/NN-name>`
 Accepted BASE: `<full hash or discovery instruction>`
 Before edits report actual branch, HEAD, worktree, existing user changes and discrepancies. Never clean/reset owner changes.
 
+## Public source reference plan
+
+- Question to answer: `<one algorithm/architecture/failure-risk question or N/A>`.
+- Pinned upstream: `<repository, exact commit, license, exact files/tests>`.
+- Allowed use: read implementation fragments, derive algorithms/data structures/edge cases and
+  design an independent Map implementation plus own oracle/fixture.
+- Forbidden without separate direct-reuse admission: whole subsystem transfer, mechanical
+  translation, recognizable comments/names/fixtures, package addition, building/running upstream.
+- Research stop: `<minimum files/evidence that answer the question; do not audit every checkout>`.
+
 ## Outcome
 
 <One observable user result that is true only when the whole block is complete.>
@@ -100,13 +110,14 @@ If a checkpoint exposes an out-of-scope product decision, stop only that branch,
 | compile and regression | `dotnet build/test/format` | exit codes, counts, 0 warnings/errors | yes | none for code stage |
 | repository boundary | Git inventory + `pre-commit` | BASE..HEAD, A/M/D/R, hook PASS | yes before commit | commit not authorized; still report worktree diff |
 | dependency graph | NuGet audit | vulnerable/deprecated output and package changes | `<yes/no>` | no dependency change and not final full gate |
-| critical branch assertions | coverage + Stryker | branch/file coverage; survivors disposition | `<yes/no>` | no new critical branching/command/persistence logic |
+| critical branch assertions | coverage **or** Stryker | branch/file coverage or survivors disposition | `<yes/no>` | no new critical branching/command/persistence logic |
 | file/import/archive boundary | targeted adversarial tests | corruption/limits/path/roundtrip evidence | `<yes/no>` | no file/parser boundary |
 | performance budget | benchmark + counters/trace/gcdump | methodology, median/P95, allocations/trace | `<yes/no>` | no performance claim/budget |
 | native behavior | Release EXE + project UIA driver | process identity, actions/checks, evidence JSON | `<yes/no>` | no UI/input change |
 | visual fidelity | screenshots + vision + ImageMagick | numbered PNG review, fixed-state RMSE/diff | `<yes/no>` | no visual change or no accepted comparable reference |
 | accessibility | UIA + Accessibility Insights | labels/roles/focus/tab/contrast | `<yes/no>` | no changed standard controls |
 | security/supply chain | Codex Security or targeted review | trust boundary/source-to-sink/tool authority | `<yes/no>` | no new boundary/tool/dependency and no owner request |
+| public algorithm/reference | exact-commit read-only source review | files/license, extracted decisions, own oracle | `<yes/no>` | no mature analogue or algorithmic uncertainty |
 
 Do not delete rows. Set `Required?` and justify every skipped tool in the final report.
 
@@ -118,6 +129,8 @@ Do not delete rows. Set `Required?` and justify every skipped tool in the final 
 - Repeat only a declared flake/timing/concurrency scenario, with at most three consecutive passes. Do not loop deterministic tests.
 - After the same failure twice despite targeted changes, change the diagnostic method or report `PARTIAL`/`BLOCKED`; do not perform a blind third retry.
 - UI/visual/accessibility/security/dependency/performance gates run only on their matrix trigger.
+- Docs-only changes run document/link/prompt and Git-scope checks only; do not add solution
+  build/test/format, coverage, Stryker, package audit or native gates without a named changed risk.
 - Stop when acceptance-specific evidence, one relevant regression boundary, triggered gates and Git/scope inventory pass. Report skipped gates with reasons.
 
 ## Required automatic verification

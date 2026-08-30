@@ -54,6 +54,10 @@ UI/accessibility review — перенесены непосредственно 
 6. Native UI evidence требуется для любого видимого UI/canvas или ввода. Headless-only не принимается.
 7. Security review требуется при новом trust boundary: импорт/архив/десериализация непроверенного файла, external process/tool, network/account/secret, installer/updater/plugin, новая dependency из неутверждённого источника — либо по прямому запросу владельца.
 8. Пропуск инструмента фиксируется с конкретной причиной. Фраза «не понадобилось» без привязки к риску недостаточна.
+9. Для алгоритма с зрелым публичным аналогом source review по exact commit является инженерным
+   инструментом: читаются только относящиеся методы/тесты, фиксируются license/files/выводы и
+   строится собственный oracle. Само чтение upstream не является trigger для его сборки, запуска,
+   полного security scan или добавления dependency.
 
 ## Verification budget и условия остановки
 
@@ -68,6 +72,10 @@ UI/accessibility review — перенесены непосредственно 
 7. Инструменты UI/visual/accessibility/security/dependency/performance включаются только соответствующим changed-risk trigger. Наличие инструмента в каталоге не является причиной запуска.
 8. Fresh review обязан прочитать весь exact diff и проверить самый опасный изменённый путь, но не обязан заново выполнять весь self-check автора. Gate D не расширяет fix до полного stage re-acceptance.
 9. Stop condition достигнут, когда выполнены acceptance-specific test, один соответствующий regression boundary, все risk-triggered gates и Git/scope inventory. После этого проверки прекращаются; в отчёте перечисляются сознательно пропущенные gates и причины.
+10. Для docs-only policy change выполняются только проверка изменённых документов/ссылок или prompt
+    contract и `git diff --check`/scope inventory. Restore/build/test/format solution, coverage,
+    Stryker, package audit, native UI и visual gates запрещено добавлять без отдельного changed-risk
+    trigger.
 
 ## Security и supply-chain без лишних блокировок
 
@@ -164,6 +172,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\doctor.ps1
 | native UI | AutomationId, keyboard-only, focus, long Russian text, 100/150/200% DPI, Release window and screenshot |
 | performance | Release without debugger, warmup, fixed fixture/seed, median/P95, allocations/GC, trace for regression |
 | dependency/tool | exact source/version/license, install/execute hooks, network/filesystem authority, rollback and audit |
+| внешний алгоритм/reference | exact commit/files/license, сравнение edge cases, собственный oracle; upstream не исполнять без trigger |
 
 ## Visual gate
 

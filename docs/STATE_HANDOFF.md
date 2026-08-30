@@ -2,9 +2,10 @@
 
 ## Последнее обновление
 
-2026-08-30. Stage 10E реализован в отдельном worktree
+2026-08-30. `Stage 10E: FACT / OWNER ACCEPTED` на точном HEAD
+`78a5b98665ed57c2a00a64335371e7f0c6132dd9` в worktree
 `C:\Users\Leshe\.codex\worktrees\stage10e-grid-geometry\Map`, branch
-`stage/10e-grid-geometry`, BASE `942fb07f015122c640174691d908717df1c17f76`.
+`stage/10e-grid-geometry`. Владелец прямо разрешил переход без дополнительного Gate D.
 
 `FACT`: добавлены четыре самостоятельные geometry (`Square`, `IsometricSquares`, `HexFlat`,
 `HexPointy`), общий чистый topology/snap/render evaluator, полный Grid property sheet, одна
@@ -19,14 +20,22 @@ rendering, save/reopen и export policy. Финальный Release build: `0` w
 экспорта `1600×1000` и clean process shutdown. Evidence:
 `artifacts/stage10e-grid-geometry/ui-smoke-20260830-021038/report.json`.
 
-`PARTIAL`: author self-check не является независимой приёмкой; четыре golden PNG имеют статус
+`PARTIAL` сохранён исторически: author self-check не является независимой приёмкой; четыре golden PNG имеют статус
 `PROPOSED`. Bounded Stryker оставил `195` survived и `6` timeout. Accessibility Insights FastPass,
 физический Tab traversal, реальные `150%/200%` DPI и конкретный runtime GPU/software backend не
 доказаны. Полный отчёт: `docs/reviews/STAGE_10E_GRID_GEOMETRY_VERIFICATION.md`.
 
-Следующее и единственное действие: свежий Codex `gpt-5.6-sol`, reasoning `xhigh`, независимо
-проверяет точный `942fb07f015122c640174691d908717df1c17f76..checkpoint HEAD`. Stage 10F, Stage 9B–9E
-и Stage 11 updater в этот review не включать.
+Это прямое решение владельца о достаточности текущего результата для перехода, а не утверждение о
+проведённом новом независимом acceptance-проходе. Все этапы дорожной карты до Stage 10E
+включительно закрыты для перехода; исторические `PARTIAL`, ограничения и отсутствующие
+доказательства выше не стираются.
+
+Следующее и единственное действие: Stage 10F — локальный каталог системных шрифтов и реально
+редактируемые сочетания по активному контракту
+`docs/prompts/STAGE_10F_FONTS_BINDINGS.md`. Реализация ведётся в branch
+`stage/10f-fonts-bindings` и отдельном worktree
+`C:\Users\Leshe\.codex\worktrees\stage10f-fonts-bindings\Map` от документального checkpoint,
+который содержит это решение владельца.
 
 ## FACT — среда
 
