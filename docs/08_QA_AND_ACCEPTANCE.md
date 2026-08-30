@@ -1,114 +1,34 @@
-# 08. QA и приёмка
+# 08. Минимальная проверка качества
 
-## Принцип
+Map используется одним владельцем на одном ПК, поэтому проверка ориентирована на его реальный
+сценарий, а не на универсальную release-матрицу.
 
-Качество редактора доказывается на четырёх уровнях: модель, файл, изображение и настоящее пользовательское окно. Ни один уровень не заменяет остальные.
+## По умолчанию
 
-## Пирамида проверок
+- Production-код компилируется одной Release-сборкой.
+- Изменённая рискованная логика получает один адресный regression test.
+- Видимое изменение один раз проверяется в настоящем окне Map на текущем ПК.
+- Сохранение проверяется реальным save/reopen, если оно затронуто.
+- Зелёная проверка не повторяется без нового изменения.
 
-### 1. Unit
+## Не является обязательным
 
-- geometry, transforms, bounds и spatial queries;
-- command do/undo/redo и coalescing;
-- layer ordering/sublayers/groups;
-- schema validation/migrations;
-- asset hash/provenance/path rules;
-- brush tile deltas;
-- numeric properties и units.
+- весь набор тестов;
+- чистый checkout и отдельная независимая сессия;
+- VM/Sandbox/другая Windows;
+- self-contained/portable package, installer, update/uninstall;
+- coverage, mutation, benchmarks и fault-матрицы;
+- DPI/accessibility/device matrix;
+- SBOM, antivirus и release-аудит;
+- постоянные screenshots, traces и отчёты в `artifacts/`.
 
-### 2. Integration
+Эти проверки выполняются только если владелец отдельно просит конкретную из них или если задача
+непосредственно исправляет соответствующий риск.
 
-- document → save → reopen → semantic equality;
-- embedded/linked/missing assets;
-- autosave/recovery/checkpoint;
-- import limits и fixtures повреждённых/неподходящих ZIP и SVG;
-- offscreen rendering pipeline;
-- cancellation и error propagation.
+## Отчёт
 
-### 3. Rendering golden tests
+Достаточно трёх пунктов: что изменено; что проверено сейчас; что сознательно не проверялось.
 
-Маленькие детерминированные сцены для blend, mask, shadow, text, line caps/portals, shape boolean, grid и filters. Сравнение включает pixel tolerance, metadata renderer и утверждённое обновление golden image. Нельзя автоматически перезаписывать expected.
-
-Для screen/golden comparison фиксировать reference и actual раздельно, предварительно выровнять dimensions/DPI/renderer/seed/state, затем сохранить normalized RMSE и отдельный diff PNG через ImageMagick. Нулевой или допустимый RMSE подтверждает только пиксельную близость; правильность состояния проверяется vision-review и сценарием ввода.
-
-### 4. Desktop UI tests и ручные smoke
-
-Automation пригодна для dashboard/dialog/inspectors, но canvas жесты и визуальная композиция дополнительно проверяются вручную. В отчёте фиксируются Windows scale, renderer и ввод.
-
-Стандартные controls проверяются по UI Automation tree: доступное имя, role/control type, AutomationId, enabled/selected state, keyboard focus и Tab order. Canvas проверяется двумя каналами: реальный ввод/результат и screenshot/diff; отсутствие canvas-объектов в accessibility tree само по себе не считается визуальной проверкой.
-
-## Обязательные сценарии P0
-
-1. New → draw/place → save → close → reopen.
-2. Undo/redo после transform и brush stroke.
-3. Save failure: read-only/locked/full-disk simulation → данные остаются доступны.
-4. Kill during temp write → предыдущий файл открывается; recovery предлагается.
-5. Missing asset → placeholder, resolve, save/reopen.
-6. Corrupted tile/manifest → конкретная диагностика, не crash.
-7. 10 000 объектов → pan/zoom/select budget.
-8. 4K transparent PNG → реальный файл, dimensions/alpha проверены.
-9. Keyboard-only panel flow и visible focus.
-10. 125/150/200% Windows scaling без обрезанных критичных controls.
-
-## Fault injection
-
-Тестовые адаптеры должны уметь оборвать запись:
-
-- до temp create;
-- в середине ZIP;
-- после flush temp, до replace;
-- во время replace;
-- после replace, до cleanup;
-- при нехватке места/доступа;
-- при stale recovery/lock.
-
-Для каждого случая определяется, какой файл считается последним корректным и что видит пользователь.
-
-## Performance suite
-
-Фиксированные synthetic fixtures:
-
-- `objects-1k`, `objects-10k`, `objects-50k`;
-- `brush-4k-100-strokes`;
-- `masks-20-layers`;
-- `assets-mixed-2gb-catalog` (после MVP);
-- `export-4k`, `export-8k`;
-- `open-save-large`.
-
-Собирать median/P95 frame time, hit-test latency, managed/native memory, cache hit rate, save/export time. Число без модели ПК и renderer не считается доказательством.
-
-## File-format fixtures
-
-- минимальный валидный проект;
-- каждый тип слоя/объекта;
-- unknown fields/type;
-- каждая поддерживаемая schemaVersion;
-- Unicode/кириллица в названии и заметках;
-- linked/embedded/missing asset;
-- неканонические пути в ZIP и метаданные с нереальным разжатым размером;
-- partially corrupted project.
-
-## Приёмка визуала
-
-Не использовать расплывчатое «похоже красиво». Для каждого экрана проверять hierarchy, плотность, контраст, focus, empty/loading/error states, long Russian text, high DPI и alignment. Для canvas — selection visibility на светлом/тёмном контенте.
-
-## Release gate
-
-- clean build и все обязательные тесты;
-- dependency/license/SBOM review;
-- self-contained запуск в чистой VM;
-- install/update/uninstall и file association;
-- отсутствие сетевых запросов в offline smoke;
-- recovery/fault suite;
-- performance budgets на эталонном ПК;
-- минимум один реальный проект создан, закрыт, восстановлен и экспортирован;
-- известные ограничения опубликованы, а не скрыты.
-
-## Матрица отчёта
-
-| Метка | Значение |
-|---|---|
-| `FACT` | проверено сейчас указанным способом |
-| `PARTIAL` | часть критериев пройдена; перечислить остальные |
-| `PROPOSED` | идея/план, не результат |
-| `BLOCKED` | объективно нужен выбор/доступ/среда; указать точный блокер |
+Отдельно убедиться, что новый stage не начат от более старого product HEAD и не потерял функции
+предыдущих stages. Это проверка Git-границы и списка production-файлов, а не повод повторять весь
+test suite.

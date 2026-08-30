@@ -172,10 +172,14 @@ snap и fixtures; это принято DEC-011.
   как публичный пример разделения world state, interactive editing и renderer. Его web-архитектура,
   код, UI и assets не переносятся в нативный Map.
 
-## Следующие проверяемые срезы
+## Исторические следующие срезы на 2026-08-26
 
 1. Выполнить owner-approved Stage 10B: Library v2, variant sets, set-aware Area/Density и два
    собственных logical diagnostic fixtures.
 2. Отдельно довести multi-selection/group UI и shortcuts поверх уже существующего domain GroupId.
 3. Реализовать отдельную `IsometricSquares` topology с render/snap/golden fixtures.
 4. Довести прямые inspectors Text/Line/Shape/Stamp/Brush и licensed font navigation.
+
+Все четыре пункта позднее реализованы в Stage 10B–10F. Этот список сохраняется как датированный
+research context и не является текущей дорожной картой. Актуальный следующий этап — Stage 12A по
+`docs/06_DEVELOPMENT_ROADMAP.md`.

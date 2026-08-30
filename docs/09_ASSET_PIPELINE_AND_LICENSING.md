@@ -83,7 +83,7 @@ ordered variant IDs, cover ID, collection/tags и default placement metadata. К
   original недоступным.
 
 Эти числа являются принятым интерактивным envelope DEC-015, а не обещанием полного учёта
-native/GPU overhead. Реальный peak дополнительно профилируется в Stage 11.
+native/GPU overhead. Реальный peak исследуется только при наблюдаемой проблеме на ПК владельца.
 
 Favorite/recent/current variant являются локальным пользовательским состоянием и не меняют
 лицензию или content identity. Исключение variant из set не удаляет original; удаление content —

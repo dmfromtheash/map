@@ -1,0 +1,12 @@
+<Project>
+  <!-- Нативные PDB из пакетов Skia/HarfBuzz занимают около 100 MiB в каждом output,
+       но не нужны для запуска Map. Управляемые PDB проекта сохраняются для отладки. -->
+  <Target Name="RemoveUnusedNativePackageSymbols" AfterTargets="CopyFilesToOutputDirectory">
+    <ItemGroup>
+      <UnusedNativePackageSymbol Include="$(TargetDir)runtimes\**\native\*.pdb" />
+      <UnusedNativePackageSymbol Include="$(TargetDir)libSkiaSharp.pdb" />
+      <UnusedNativePackageSymbol Include="$(TargetDir)libHarfBuzzSharp.pdb" />
+    </ItemGroup>
+    <Delete Files="@(UnusedNativePackageSymbol)" />
+  </Target>
+</Project>

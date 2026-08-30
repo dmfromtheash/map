@@ -132,8 +132,9 @@ Avalonia UI и `.mapproj`; внешняя dependency не добавлена.
 - удаление content не входит в foundation; исключение variant из set не удаляет оригинал;
 - private user imports не попадают в screenshots, fixtures или распространяемый pack.
 
-## Проверяемый foundation-срез
+## Исторический foundation-срез
 
-Следующий крупный, но единый этап: локальная Library v2 + variant sets + set-aware stamp placement +
-два diagnostic fixtures. Multi-selection/groups, полный object inspector, `IsometricSquares`,
-font catalog и Stage 9B остаются отдельными следующими срезами.
+На момент написания следующим крупным срезом были Library v2 + variant sets + set-aware stamp
+placement и diagnostic fixtures. В текущей линейной истории они, multi-selection/groups, object
+inspectors, `IsometricSquares` и font catalog уже реализованы. Бывший Stage 9B перенумерован в
+Stage 12A; актуальный порядок находится только в `docs/06_DEVELOPMENT_ROADMAP.md`.

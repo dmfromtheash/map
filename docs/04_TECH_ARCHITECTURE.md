@@ -4,13 +4,13 @@
 
 | Слой | Выбор | Причина |
 |---|---|---|
-| Runtime | .NET 10 LTS / C# 14 | официальный Windows SDK, self-contained publish, сильная диагностика и тестирование |
+| Runtime | .NET 10 LTS / C# 14 | установлен на рабочем ПК владельца, быстрый локальный build/run |
 | Desktop UI | Avalonia 12.1 | нативное окно без Chromium, MIT, Windows backend и доступность |
 | Canvas | Skia через Avalonia custom rendering | аппаратный Direct3D-путь с программным fallback, offscreen render/export |
 | UI state | CommunityToolkit.Mvvm | небольшой MIT toolkit; не смешивать с доменной моделью |
 | Tests | xUnit + FluentAssertions только если лицензия/политика подтверждены; иначе xUnit assertions | быстрые unit/integration tests |
 | Benchmarks | BenchmarkDotNet + встроенные scenario counters | измерять scene traversal, hit test, save/export |
-| Packaging | self-contained `win-x64`; installer выбрать отдельным решением | пользователь получает обычную Windows-программу |
+| Запуск | framework-dependent `win-x64` | минимальный локальный output для текущего ПК |
 
 Версии пакетов фиксируются после spike. Никакой runtime-зависимости от Python, Node, браузера или сети у приложения нет.
 
@@ -36,9 +36,8 @@ Map.Rendering        scene traversal, caches, hit-test, Skia adapters
 Map.Persistence      .mapproj, migrations, atomic save, recovery journal
 Map.Assets           import, validation, catalog, thumbnails, provenance
 Map.Export           offscreen tiled export and color pipeline
-Map.Platform.Windows Windows paths, file association, installer hooks, diagnostics
-Map.Tests.*          unit, integration, rendering golden tests, fault injection
-Map.Benchmarks       reproducible performance scenarios
+Map.Platform.Windows Windows paths, file dialogs, diagnostics
+Map.Tests.*          адресные regression tests, запускаемые только при необходимости
 ```
 
 Зависимости направлены внутрь:
@@ -128,7 +127,6 @@ Spike должен доказать:
 5. layer mask preview;
 6. offscreen export минимум 4K;
 7. atomic save + recovery после принудительного завершения;
-8. self-contained `win-x64` запуск на машине без отдельно установленного runtime (позже на чистой VM).
+8. framework-dependent `win-x64` запуск в настоящем окне на текущем ПК владельца.
 
 Если два прохода оптимизации не дают бюджетов, сравнить Qt spike на том же сценарии и вынести DEC-002 владельцу заново.
-
