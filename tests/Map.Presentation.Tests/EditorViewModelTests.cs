@@ -218,6 +218,29 @@ public class EditorViewModelTests
     }
 
     [Fact]
+    public async Task Autosave_returns_control_before_blocking_persistence_and_stays_under_100_ms()
+    {
+        var (editor, store, _, _, _) = NewEditor();
+        editor.AddObject(SceneObjectKind.Rectangle);
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        store.AutosaveEntered = entered;
+        store.AutosaveRelease = release;
+
+        var timer = System.Diagnostics.Stopwatch.StartNew();
+        var autosave = editor.TryAutosaveAsync();
+        timer.Stop();
+
+        Assert.True(timer.Elapsed < TimeSpan.FromMilliseconds(100),
+            $"TryAutosaveAsync blocked the caller for {timer.Elapsed.TotalMilliseconds:F3} ms.");
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+        Assert.False(autosave.IsCompleted);
+
+        release.Set();
+        Assert.True(await autosave);
+    }
+
+    [Fact]
     public async Task Save_failure_keeps_the_document_dirty_and_shows_the_recovery_path()
     {
         var (editor, store, _, picker, _) = NewEditor();

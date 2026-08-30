@@ -68,6 +68,8 @@ public sealed class FakeProjectStore : IProjectStore
     public List<Guid> ClearedRecovery { get; } = [];
     public ManualResetEventSlim? ManualSaveEntered { get; set; }
     public ManualResetEventSlim? ManualSaveRelease { get; set; }
+    public ManualResetEventSlim? AutosaveEntered { get; set; }
+    public ManualResetEventSlim? AutosaveRelease { get; set; }
     public List<RecoveryCandidate> Candidates { get; } = [];
     public Func<string, OpenedProject>? OnOpen { get; set; }
     public int SaveCalls { get; private set; }
@@ -113,6 +115,12 @@ public sealed class FakeProjectStore : IProjectStore
     public void SaveAutosave(
         MapDocument document, string? targetPath, SaveMetadata metadata, byte[] previewPng)
     {
+        AutosaveEntered?.Set();
+        if (AutosaveRelease is not null && !AutosaveRelease.Wait(TimeSpan.FromSeconds(10)))
+        {
+            throw new IOException("Timed out waiting for the scripted autosave release.");
+        }
+
         if (NextAutosaveFailures.Count > 0)
         {
             throw NextAutosaveFailures.Dequeue();
