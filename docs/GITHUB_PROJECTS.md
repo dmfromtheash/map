@@ -5,7 +5,7 @@
 - Локальный репозиторий: `C:\Projects\Map`.
 - `origin` настроен на `https://github.com/dmfromtheash/map.git`.
 - Репозиторий `dmfromtheash/map` существует и переведён в **private** до первого push.
-- На момент подключения repository был пустым, без remote branches и tags.
+- `main` и `stage/12a-named-checkpoints` опубликованы; default branch — `main`.
 - `.github/` отсутствует.
 - GitHub CLI авторизован как `dmfromtheash` по HTTPS.
 - Для новых commits Map используется repo-local адрес
@@ -14,8 +14,9 @@
 - Существующие `3-puti`, `ensi-bot`, `nri-archive` и другие репозитории принадлежат другим
   продуктам и не должны использоваться как remote для Map.
 - Текущий token пока не имеет `project`, поэтому список GitHub Projects недоступен.
-- GitHub Project и issues Map ещё не созданы; расширение scope запрошено и ждёт подтверждения
-  device-code на официальной странице GitHub.
+- Созданы issues `#1`–`#4` для Stage 12A–12D.
+- GitHub Project `Map` ещё не создан; расширение scope запрошено и ждёт подтверждения device-code
+  на официальной странице GitHub.
 
 ## PROPOSED — правильная связь
 
@@ -72,21 +73,18 @@ Views:
 Владелец 2026-08-31 прямо разрешил необходимые commits и push в `dmfromtheash/map`. Осталось:
 
 - расширить scope авторизации: `gh auth refresh -s project`;
-- создать user Project `Map`, его поля/views и issues;
+- создать user Project `Map`, его поля/views и добавить уже существующие issues `#1`–`#4`;
 - связать Project с repository.
 
 Setup уже разрешён владельцем. Текущая последовательность:
 
 ```powershell
 gh auth refresh -s project
-git push -u origin main
-git push -u origin stage/12a-named-checkpoints
 gh project create --owner dmfromtheash --title Map
 gh project link <project-number> --owner dmfromtheash --repo Map
 ```
 
-Первым `main` должен стать cleanup checkpoint поверх product HEAD, а не исторически старый local
-`main` и не грязный checkout. Это разрешение не распространяется на публикацию мусорных веток.
+Правильные `main` и stage-ветка уже опубликованы. Старые и мусорные ветки на remote не отправлялись.
 
 ## Справка
 

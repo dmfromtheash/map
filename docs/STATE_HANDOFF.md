@@ -71,7 +71,12 @@ Worktree `fix/app-icon` остаётся owner-dirty и не изменялся.
 - владелец прямо разрешил необходимые commits и push;
 - repo-local Git author использует официальный GitHub noreply-адрес владельца; глобальный приватный
   email и защита аккаунта не меняются;
-- первым `main` должен стать консолидированный checkpoint, а не старый local `main`;
+- `main` и `stage/12a-named-checkpoints` опубликованы от консолидированной истории;
+- default branch — `main`;
+- созданы issues [#1](https://github.com/dmfromtheash/map/issues/1),
+  [#2](https://github.com/dmfromtheash/map/issues/2),
+  [#3](https://github.com/dmfromtheash/map/issues/3) и
+  [#4](https://github.com/dmfromtheash/map/issues/4) для Stages 12A–12D;
 - GitHub Project `Map` и issues 12A–12D настраиваются по `docs/GITHUB_PROJECTS.md`;
 - дополнительный scope `project` запрошен и ждёт обязательного подтверждения device-code на
   официальной странице GitHub.
@@ -80,6 +85,6 @@ Worktree `fix/app-icon` остаётся owner-dirty и не изменялся.
 
 ## Следующее единственное действие
 
-После публикации правильных `main` и `stage/12a-named-checkpoints` выполнить Stage 12A по
-`docs/STAGE_12A_NAMED_CHECKPOINTS.md`. Cleanup завершён; повторно переносить или чистить Stage 10–11
-не нужно.
+Завершить создание user Project `Map` после подтверждения device-code, затем выполнить Stage 12A
+по `docs/STAGE_12A_NAMED_CHECKPOINTS.md`. Cleanup и публикация веток завершены; повторно переносить
+или чистить Stage 10–11 не нужно.
