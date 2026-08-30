@@ -2,46 +2,39 @@
 
 ## Последнее обновление
 
-2026-08-30. `Stage 10F: FACT / PARTIAL — implementation checkpoint author-verified` от точного
-`STAGE10F_BASE=766b81617874b4b8dbed2f4e781c94350305796a` в worktree
-`C:\Users\Leshe\.codex\worktrees\stage10f-fonts-bindings\Map`, branch
-`stage/10f-fonts-bindings`.
+2026-08-30. `Stage 10F: FACT / OWNER ACCEPTED FOR TRANSITION`.
 
-`FACT`: добавлен ленивый Skia-backed каталог локальных семейств Windows с case-insensitive
-dedupe/search/stable sort; один выбранный текст меняет requested family одной существующей
-undoable-командой, missing request не теряется и отдельно показывает фактический fallback.
-`.mapproj`, resolver, renderer и schemaVersion не менялись. Previous/next работают через единый
-редактируемый shortcut registry в нормальном Select-mode выбранного текста.
-
-`FACT`: один профиль сочетаний теперь маршрутизирует реальные действия, формирует help/tooltips и
-редактируется transactional-окном с capture, search/grouping, unassign, reset-one/reset-all и
-блокировкой пересекающихся конфликтов. Настройки сохраняются отдельно от карты в bounded known-ID
-JSON атомарным replace; повреждённый единственный файл не меняется при load и получает `.bak`
-только при явном save.
+Точный immutable review range:
+`REVIEW_BASE=766b81617874b4b8dbed2f4e781c94350305796a`,
+`FEATURE_HEAD=77dd7afa3881542894f5d959f6a52fbb09e2491f`. Fresh review проверил все `22` feature files и
+нашёл четыре in-scope finding: test mode мог читать production shortcut profile, font catalog не
+имел family-count cap, gesture capture создавал bare-Tab focus trap, а author driver не доказывал
+physical Tab/keyboard-only actions/DPI. Все четыре исправлены отдельным commit
+`ACCEPTED_CODE_HEAD=2e30e78b0b86a4ab070158b7c773200611c62d58`.
 
 `FACT` automatic: restore PASS; Release build `0` warnings/errors; Stage10F filters Presentation
-`10/10`, Rendering `2/2`, Persistence `1/1`; полный suite `732/732` (Core `215`, Persistence `129`,
-Rendering `32`, Presentation `223`, Assets `133`); vulnerable packages не найдены, deprecated —
-только прежний xUnit 2.9.3 Legacy. Formatter один раз сохранил legacy baseline и потому честно
-`PARTIAL`, без повторного прогона.
+`15/15`, Rendering `2/2`, Persistence `1/1`; полный suite `738/738` (Core `215`,
+Persistence `129`, Rendering `32`, Presentation `229`, Assets `133`). Vulnerable packages не
+найдены; deprecated — только прежний xUnit 2.9.3 Legacy. Adversarial settings/path/write tests
+PASS. Scoped Codex Security scan проверил `12` production source items, reportable findings `0`.
 
-`FACT` native self-check: точный Release EXE SHA-256
-`c0e777580e6d1441158578bd02e44d00cc1b5d4c202ac434c2bfca81f4e06f65`, настоящий Avalonia Win32
-сценарий прошёл `31/31`: каталог/поиск/Bahnschrift, `]`→Book Antiqua, exact undo/redo,
-save/reopen, missing request + Arial fallback в UI/scene/export, rejected V-conflict, Text→Alt+T,
-old/new routing, text-input suppression, help/tooltip, restart persistence и reset defaults. Все
-три owned process завершены; evidence:
-`artifacts/stage10f-fonts-bindings/ui-smoke-20260830-170950/report.json`.
+`FACT` native: exact Release EXE SHA-256
+`05993fe7fc6259533fa7ca14eb25b9f53570a17ad9bbbed35a209803583b65db`, три exact-path PID,
+`96 DPI / 100%`, bounds `1416×939`, running count после сценария `0`. Driver прошёл `40/40`:
+font select/cycle/undo/redo, requested/fallback/save/reopen/export, conflict/rebind/old-new route,
+text suppression/help/restart/reset, physical Tab через все изменённые standard controls,
+keyboard-only Save/Cancel/Reset и focus return. Evidence:
+`artifacts/stage10f-fonts-bindings/ui-smoke-20260830-190008/report.json`.
 
-`PARTIAL`: это self-check автора, а не fresh independent review. Не выполнены реальные Windows
-scale `150%/200%`, физическая Tab-последовательность и отдельный clean-context UX-review;
-legacy formatter baseline остаётся. Подробный отчёт:
+`PARTIAL`: global formatter сохраняет известный unrelated legacy baseline; настоящий Windows
+scale `150%/200%` не менялся; локальный font list зависит от ПК. Accessibility Insights FastPass
+на стартовом окне нашёл четыре существующие baseline-проблемы вне Stage 10F. Эти ограничения не
+переименованы в `FACT` и по прямому решению владельца не блокируют переход. Полный отчёт:
 `docs/reviews/STAGE_10F_FONTS_BINDINGS_VERIFICATION.md`.
 
-Следующее и единственное действие: свежий Codex `gpt-5.6-sol`, reasoning `xhigh`, независимо
-проверяет точный диапазон
-`766b81617874b4b8dbed2f4e781c94350305796a..HEAD`. Stage 11, push, PR, release и merge в этой
-задаче не начинать.
+Следующее и единственное действие: выполнить активный
+`docs/prompts/STAGE_11_PERFORMANCE_PACKAGING_RC.md`. Дополнительная Stage 10F review/test/fix
+задача не нужна. Push, PR, release, tag и merge не выполнялись.
 
 ## FACT — среда
 

@@ -1,6 +1,14 @@
 # Stage 10F — локальный каталог шрифтов и реально редактируемые сочетания
 
-> Status: ACTIVE
+> Status: HISTORICAL CONTRACT
+
+> Owner decision, 2026-08-30: Stage 10F принят как
+> `FACT / OWNER ACCEPTED FOR TRANSITION` после fresh review feature snapshot и отдельного
+> remediation commit
+> `ACCEPTED_CODE_HEAD=2e30e78b0b86a4ab070158b7c773200611c62d58`. Same-context проверка
+> remediation не называется отдельным независимым Gate D. Контракт исполнен и повторно не
+> запускается; активный следующий контракт —
+> `STAGE_11_PERFORMANCE_PACKAGING_RC.md`.
 
 ## Execution profile
 

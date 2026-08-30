@@ -299,14 +299,17 @@ UI/groups и font catalog остаются после 10B.
    владельцем для перехода на точном HEAD `78a5b98665ed57c2a00a64335371e7f0c6132dd9` без нового
    Gate D. Это прямое продуктовое решение, не новая независимая проверка; исторические `PARTIAL`,
    ограничения и недостающие доказательства сохраняются в author-report.
-5. **10F — Licensed font catalog/navigation и редактируемые bindings: `FACT / PARTIAL`, author
-   checkpoint.** Реализованы локальный Skia-backed каталог системных семейств Windows, поиск,
-   выбор и keyboard previous/next одной undoable-командой с сохранением requested/fallback без
-   смены `.mapproj`; единый registry всех сочетаний, transactional editor, conflict rejection,
-   атомарный bounded JSON вне проекта, restart/reset и живые help/tooltips. Release native driver
-   прошёл `31/31`; полный suite — `732/732`. `PARTIAL`: это авторский self-check, formatter
-   сохраняет legacy baseline, fresh independent review и alternate-DPI/physical-Tab gates не
-   выполнены. Контракт остаётся `ACTIVE` до review:
+5. **10F — Licensed font catalog/navigation и редактируемые bindings:
+   `FACT / OWNER ACCEPTED FOR TRANSITION`.** Реализованы локальный Skia-backed каталог системных
+   семейств Windows, requested/fallback без смены `.mapproj`, единый registry сочетаний,
+   transactional editor и bounded atomic JSON. Fresh review точного feature snapshot нашёл четыре
+   finding: real-profile fallback в test mode, неограниченное число font families, bare-Tab focus
+   trap и неполный native driver. Они исправлены отдельным commit
+   `2e30e78b0b86a4ab070158b7c773200611c62d58`; финальный full suite — `738/738`, native driver —
+   `40/40`, scoped security findings — `0`. Physical Tab, keyboard-only save/cancel/reset,
+   focus return, DPI и isolated data доказаны. Legacy formatter baseline, реальный alternate OS
+   DPI и machine-local font differences остаются `PARTIAL`, но прямое решение владельца
+   разрешает переход. Контракт исторический:
    `prompts/STAGE_10F_FONTS_BINDINGS.md`; отчёт:
    `reviews/STAGE_10F_FONTS_BINDINGS_VERIFICATION.md`.
 
@@ -314,6 +317,10 @@ UI/groups и font catalog остаются после 10B.
 готовым.
 
 ## Stage 11 — Performance, packaging, release candidate
+
+Активный исполняемый контракт:
+`prompts/STAGE_11_PERFORMANCE_PACKAGING_RC.md`. Stage 10F не требует дополнительной review или
+fix-задачи.
 
 - 1K/10K/50K object profiles;
 - large-map profile: 65 536×65 536 units, deep zoom 0,5–6400%, 20+ layers/masks;
