@@ -10,8 +10,9 @@
 - GitHub CLI авторизован как `dmfromtheash` по HTTPS.
 - Существующие `3-puti`, `ensi-bot`, `nri-archive` и другие репозитории принадлежат другим
   продуктам и не должны использоваться как remote для Map.
-- Текущий token не имеет `read:project`, поэтому список GitHub Projects недоступен.
-- GitHub Project и issues Map ещё не созданы; token scope ещё не менялся.
+- Текущий token пока не имеет `project`, поэтому список GitHub Projects недоступен.
+- GitHub Project и issues Map ещё не созданы; расширение scope запрошено и ждёт подтверждения
+  device-code на официальной странице GitHub.
 
 ## PROPOSED — правильная связь
 
@@ -71,11 +72,12 @@ Views:
 - создать user Project `Map`, его поля/views и issues;
 - связать Project с repository.
 
-Когда владелец разрешит setup, ожидаемая последовательность команд будет такой:
+Setup уже разрешён владельцем. Текущая последовательность:
 
 ```powershell
 gh auth refresh -s project
-git push -u origin <явно выбранная владельцем ветка>
+git push -u origin main
+git push -u origin stage/12a-named-checkpoints
 gh project create --owner dmfromtheash --title Map
 gh project link <project-number> --owner dmfromtheash --repo Map
 ```

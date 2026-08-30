@@ -2,96 +2,82 @@
 
 ## Актуально на 2026-08-31
 
-Map — личное нативное offline-приложение владельца для его текущего Windows x64 ПК. Stage 11 как
-release/VM/packaging-программа отменён, но это не откатывает полезный production-код Stage 10 или
-Stage 11.
+Map — личное нативное offline-приложение владельца для его текущего Windows x64 ПК. Полезный
+production-код Stages 1–11 сохранён. Отменена только лишняя Stage 11 программа для VM, универсальной
+чистой Windows, installer/updater, release candidate и многократной независимой приёмки.
 
-Следующий этап называется **Stage 12A — именованные checkpoints**. Историческое название 9B больше
-не используется для новой ветки.
+Следующий этап — **Stage 12A: именованные checkpoints**. Историческое имя 9B больше не используется.
 
-## Последний продуктовый снимок
+## Актуальная продуктовая база
 
-- Последний HEAD линейной продуктовой истории:
+- Рабочий worktree:
+  `C:\Users\Leshe\.codex\worktrees\stage10f-fonts-bindings\Map`.
+- Ветка: `stage/12a-named-checkpoints`.
+- Консолидированный product/code checkpoint:
+  `825d9df9a5fec345c30da009b8b00bb594dd20f1`.
+- Основной cleanup commit:
+  `889e44897acc8de25cb5f3d3690abe5a60e35fb3`.
+- База до уборки:
   `2c0a698e15573badb22a54de7ff1687ab784a9b2`.
-- Ветка-указатель: `fix/stage11-native-acceptance`.
-- Этот HEAD является потомком Stage 10E, Stage 10F и Stage 11.
-- Новая продуктовая ветка создаётся от него либо от более нового явно принятого checkpoint,
-  записанного в этом файле.
-- Начинать от `1387b1b` Stage 10F, `2af5bd3` Stage 10D или другого старого checkout запрещено:
-  это отбросит уже существующие функции.
 
-Полезное, которое обязательно сохраняется:
+Checkpoint `825d9df` является потомком Stage 10E, Stage 10F и полезного Stage 11. Новую функцию
+нельзя начинать от `1387b1b`, `2af5bd3` или другого старого checkout.
 
-- четыре geometry сетки, включая отдельную `IsometricSquares`, общий snap/render и property sheet;
+Сохранено:
+
+- четыре geometry-сетки, включая отдельную `IsometricSquares`, общий snap/render и property sheet;
 - локальный системный font catalog и редактируемые keyboard bindings;
 - иконка приложения;
-- изоляция тестового профиля от настоящих пользовательских Diagnostics/Recovery/Assets/recent;
-- весь более ранний editor, Library, persistence, rendering и UI.
+- изоляция тестового профиля от пользовательских Diagnostics/Recovery/Assets/recent;
+- весь более ранний editor, Library, persistence, rendering и UI;
+- test sources вне обычного solution для точечных проверок рискованной логики.
 
-## Текущий checkout с уборкой
+## Что убрано
 
-- Корень: `C:\Projects\Map`.
-- Ветка: `stage/10d-object-inspectors`.
-- Исходный HEAD: `2af5bd3495851f032897435fc957f5705a692bbe`.
-- Здесь находится незакоммиченная уборка process/release-мусора и упрощение правил под DEC-016.
-- Этот checkout нужен как источник смысла уборки, но не как функциональная база Stage 12A.
-- Нельзя делать reset/restore/stash или переключать эту грязную папку на поздний commit.
+- исторический spike, benchmarks, диагностические генераторы и UI drivers;
+- старые этапные prompts/reviews и generated evidence;
+- VM/ISO/QEMU, packaging/release scripts, installer/update заготовки;
+- pre-commit, coverage, mutation и лишние tool manifests;
+- поздние Stage 10E/10F/11 process-файлы, появившиеся после исходной уборки.
 
-До уборки Git показывал изменения владельца в пяти путях:
+`Map.slnx` содержит только семь production-проектов из `src`. Общие build-настройки сохраняют
+версию `0.2.0`, ограничивают восстановление текущим `win-x64` и не создают self-contained bundle.
+Ненужные нативные PDB Skia/HarfBuzz удаляются из output, управляемые PDB Map остаются.
 
-- `src/Map.Assets/CatalogRelativePath.cs`;
-- `src/Map.Core/Documents/AppearanceContract.cs`;
-- `src/Map.Core/Documents/ProjectLinkedAssetPath.cs`;
-- `tests/Map.Persistence.Tests/Stage10DInspectorRoundTripTests.cs`;
-- `tests/Map.Presentation.Tests/RecentMapsStoreTests.cs`.
+Свежая проверка checkpoint `825d9df`:
 
-Сейчас нормализованное содержимое этих файлов совпадает с их old-HEAD blobs, но их всё равно не
-нужно сбрасывать или присваивать новой работе: текущий checkout сохраняется как есть до
-консолидации.
+```text
+dotnet build .\Map.slnx -c Release
+PASS — 0 warnings, 0 errors, 13 seconds
+Map.App Release output — 31.1 MiB
+весь рабочий worktree после сборки — 45 MiB
+```
 
-Отдельный worktree `fix/app-icon` также грязный и принадлежит владельцу. Его файлы не удалять и не
-переносить автоматически. Иконка, уже вошедшая в product HEAD `2c0a698`, сохраняется независимо.
+Full test suite, VM, packaging, benchmark, coverage и повтор зелёной сборки не запускались: они не
+нужны для этой уборки и прямо исключены текущими правилами владельца.
 
-## Что сделано уборкой
+## Другие checkout
 
-- удалены Stage 11 VM/ISO/QEMU и три чистых лишних worktree; Git-ветки/commits сохранены;
-- очищены `bin/obj/artifacts/tmp`, в том числе игнорируемые outputs других worktree;
-- удалены исторические spike, benchmarks, diagnostic generator, UI drivers и тяжёлые process docs;
-- удалены pre-commit/tool/coverage/Stryker manifests;
-- `Map.slnx` сокращён до семи production-проектов из `src`;
-- framework-dependent build ограничен `win-x64`;
-- нативные PDB Skia/HarfBuzz удаляются из output, управляемые PDB Map сохраняются;
-- Release build прошёл с 0 warnings/errors; output Map.App — 29,9 MiB, весь текущий checkout после
-  сборки — 37,7 MiB.
+`C:\Projects\Map` теперь содержит чистый локальный commit `9729764` — источник исходной уборки, но
+не актуальную продуктовую базу. Ветка Stage 12A находится в worktree, указанном выше.
 
-При переносе уборки поверх последнего product HEAD нужно объединить, а не заменить
-`Directory.Build.props`: сохранить version `0.2.0` из поздней линии и добавить `win-x64` /
-`SelfContained=false` из уборки.
+Worktree `fix/app-icon` остаётся owner-dirty и не изменялся. Утверждённая иконка уже находится в
+консолидированной продуктовой истории.
 
-## GitHub — текущее состояние
+## GitHub
 
-- `origin`: `https://github.com/dmfromtheash/map.git`.
-- `dmfromtheash/map` существует как private repository; до первого push он был пустым.
-- `.github/` отсутствует.
-- `gh` авторизован как `dmfromtheash` через HTTPS.
-- Существующие репозитории других проектов к Map не относятся.
-- Токен не имеет `read:project`, поэтому GitHub Projects сейчас нельзя даже перечислить.
-- Владелец прямо разрешил необходимые локальные commits и push в этот repository.
+- `origin`: `https://github.com/dmfromtheash/map.git`;
+- repository `dmfromtheash/map` — private;
+- владелец прямо разрешил необходимые commits и push;
+- первым `main` должен стать консолидированный checkpoint, а не старый local `main`;
+- GitHub Project `Map` и issues 12A–12D настраиваются по `docs/GITHUB_PROJECTS.md`;
+- дополнительный scope `project` запрошен и ждёт обязательного подтверждения device-code на
+  официальной странице GitHub.
 
-Текущая/целевая связь:
-
-`C:\Projects\Map` → private `dmfromtheash/Map` (`origin`) → user Project `Map` → issues по одному
-на Stage 12A–12D.
-
-Не привязывать Map к `nri-archive`, `ensi-bot`, `3-puti` или другому существующему репозиторию.
-Подробности: `docs/GITHUB_PROJECTS.md`.
+Не привязывать Map к `nri-archive`, `ensi-bot`, `3-puti` или другому существующему продукту.
 
 ## Следующее единственное действие
 
-В чистом подходящем worktree создать `stage/12a-named-checkpoints` **от**
-`2c0a698e15573badb22a54de7ff1687ab784a9b2`, перенести поверх него смысл текущей уборки без потери
-production-кода, сделать один локальный cleanup checkpoint и затем выполнить Stage 12A по
-`docs/STAGE_12A_NAMED_CHECKPOINTS.md`.
-
-Remote и push разрешены. GitHub Project настраивается после получения `project` scope; отсутствие
-Project не должно приводить к отправке неправильной ветки или откату product HEAD.
+После публикации правильных `main` и `stage/12a-named-checkpoints` выполнить Stage 12A по
+`docs/STAGE_12A_NAMED_CHECKPOINTS.md`. Cleanup завершён; повторно переносить или чистить Stage 10–11
+не нужно.

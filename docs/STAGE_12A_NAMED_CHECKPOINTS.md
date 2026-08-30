@@ -2,20 +2,18 @@
 
 ## Статус
 
-`READY AFTER CONSOLIDATION`.
+`READY`.
 
 Stage 12A закрывает функцию, исторически называвшуюся 9B, но не откатывает продукт к Stage 9.
 Новая ветка называется `stage/12a-named-checkpoints` и начинается от последнего product HEAD.
 
-Исходный product HEAD на момент утверждения:
+Консолидированная product/code база:
 
-`2c0a698e15573badb22a54de7ff1687ab784a9b2`
+`825d9df9a5fec345c30da009b8b00bb594dd20f1`
 
-## Подготовительный checkpoint
+## Подготовительный checkpoint — выполнен
 
-Текущая уборка находится в `C:\Projects\Map` на старом Stage 10D и не может быть базой функции.
-Перед Stage 12A нужно в чистом worktree создать новую ветку от `2c0a698...` и перенести поверх неё
-смысл уборки:
+Ветка `stage/12a-named-checkpoints` создана от позднего Stage 11 product HEAD. Поверх него:
 
 - сохранить весь production-код Stage 10E, 10F и полезный Stage 11;
 - сохранить app icon и test-profile isolation;
@@ -26,8 +24,8 @@ Stage 12A закрывает функцию, исторически называ
 - сохранить адресные test sources вне обычного solution;
 - перенести актуальные правила, roadmap, handoff, DEC-016 и DEC-017.
 
-После одной Release-сборки это фиксируется отдельным локальным cleanup commit. Только затем в той
-же ветке начинается код Stage 12A.
+Уборка зафиксирована отдельными commits `889e448` и `825d9df`. Release-сборка прошла с 0 warnings и
+0 errors. Повторять подготовку или начинать от старого checkout не нужно.
 
 ## Пользовательский результат
 
@@ -85,7 +83,7 @@ Stage 12A закрывает функцию, исторически называ
 
 ## Проверка
 
-- один `dotnet build .\Map.slnx -c Release` после cleanup checkpoint;
+- cleanup Release build уже выполнен один раз и не повторяется;
 - один `dotnet build .\Map.slnx -c Release` после законченного Stage 12A;
 - один небольшой интеграционный `FullyQualifiedName~Stage12A` filter в
   `Map.Persistence.Tests`, без full suite;
@@ -95,8 +93,9 @@ Stage 12A закрывает функцию, исторически называ
 ## Git и GitHub
 
 - разрешённая ветка: `stage/12a-named-checkpoints`;
-- cleanup и feature являются двумя разными локальными commits;
-- push/PR/tag/release запрещены без нового прямого разрешения;
+- cleanup уже отделён от будущего feature commit;
+- push `main` и этой stage-ветки прямо разрешён владельцем в подготовительной задаче;
+- PR/tag/release требуют отдельного прямого разрешения;
 - GitHub status синхронизируется только с уже существующей точной карточкой и доступным scope;
 - отсутствие remote/Project не блокирует локальный stage;
 - схема: `docs/GITHUB_PROJECTS.md`.
