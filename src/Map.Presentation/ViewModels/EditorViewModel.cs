@@ -2976,7 +2976,21 @@ public sealed class EditorViewModel : ViewModelBase
         if (EditableSelection() is not { Line: { } line } before || ActiveSnapGrid() is not { } grid) return;
         var portal = line.Portals.FirstOrDefault();
         if (portal is null) return;
-        ReplaceSelected(before, GridSnapService.SnapPortal(before, portal.Id, grid), "Snap portal to grid");
+        var after = GridSnapService.SnapPortal(before, portal.Id, grid, out var outcome);
+        if (outcome == PortalSnapOutcome.AlreadySnapped)
+        {
+            StatusDetail = "Проход уже привязан к сетке.";
+            return;
+        }
+
+        if (outcome == PortalSnapOutcome.NotRepresentable)
+        {
+            StatusDetail = "Точная привязка прохода невозможна без перемещения линии.";
+            return;
+        }
+
+        ReplaceSelected(before, after, "Snap portal to grid");
+        StatusDetail = "Проход привязан к сетке.";
     }
 
     public void AddNoteAtViewCentre()

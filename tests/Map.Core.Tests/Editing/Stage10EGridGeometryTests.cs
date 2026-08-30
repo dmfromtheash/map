@@ -155,7 +155,7 @@ public sealed class Stage10EGridGeometryTests
     }
 
     [Fact]
-    public void Object_node_and_portal_snap_to_nodes_and_preserve_every_id_for_all_geometries()
+    public void Object_and_node_snap_to_nodes_and_preserve_every_id_for_all_geometries()
     {
         foreach (var geometry in Enum.GetValues<GridGeometry>())
         {
@@ -174,24 +174,112 @@ public sealed class Stage10EGridGeometryTests
             var expectedObjectCentre = GridSnapService.Snap(grid,
                 new VectorPoint(line.X + line.Width / 2, line.Y + line.Height / 2));
             var expectedNode = GridSnapService.Snap(grid, NodePoint(line, line.Line.Nodes[0]));
-            var expectedPortal = GridSnapService.Snap(grid, PortalPoint(line, portalId));
 
             var objectSnap = GridSnapService.SnapObject(line, grid);
             var nodeSnap = GridSnapService.SnapNode(line, nodeId, grid);
-            var portalSnap = GridSnapService.SnapPortal(line, portalId, grid);
 
             Assert.Equal(line.Id, objectSnap.Id);
             Assert.Equal(line.Id, nodeSnap.Id);
-            Assert.Equal(line.Id, portalSnap.Id);
             Assert.Equal(line.Line.Nodes.Select(node => node.Id), nodeSnap.Line!.Nodes.Select(node => node.Id));
-            Assert.Equal(line.Line.Portals.Select(portal => portal.Id), portalSnap.Line!.Portals.Select(portal => portal.Id));
+            Assert.Equal(line.Line.Portals.Select(portal => portal.Id), nodeSnap.Line.Portals.Select(portal => portal.Id));
             AssertPoint(expectedObjectCentre, new VectorPoint(
                 objectSnap.X + objectSnap.Width / 2,
                 objectSnap.Y + objectSnap.Height / 2));
             var movedNode = nodeSnap.Line.Nodes.Single(node => node.Id == nodeId);
             AssertPoint(expectedNode, NodePoint(nodeSnap, movedNode));
-            AssertPoint(expectedPortal, PortalPoint(portalSnap, portalId));
         }
+    }
+
+    [Fact]
+    public void Stage10EPortalSnapReviewFix_nonrepresentable_grid_node_preserves_entire_line_snapshot()
+    {
+        var grid = Grid(GridGeometry.IsometricSquares);
+        var unrotated = VectorGeometry.CreateLine(ObjectId.New(), "road",
+            [new VectorPoint(21, 19), new VectorPoint(74, 181), new VectorPoint(184, 91)]);
+        var line = new SceneObject(
+            unrotated.Id, unrotated.Kind, unrotated.Name,
+            unrotated.X, unrotated.Y, unrotated.Width, unrotated.Height, 23,
+            unrotated.FillColor, unrotated.StrokeColor, unrotated.StrokeWidth,
+            unrotated.Visible, unrotated.Locked)
+        { Line = unrotated.Line };
+        line = VectorObjectEditor.AddPortal(line, 0.43, 12);
+        var portalId = line.Line!.Portals[0].Id;
+        var portalBefore = PortalPoint(line, portalId);
+        var nearestNode = GridSnapService.Snap(grid, portalBefore);
+        var nodeWorldPositionsBefore = line.Line.Nodes.Select(node => NodePoint(line, node)).ToArray();
+
+        var snapped = GridSnapService.SnapPortal(line, portalId, grid, out var outcome);
+
+        AssertPoint(new VectorPoint(47.684899107559616, 127.51423788697392), portalBefore);
+        AssertPoint(new VectorPoint(86.60254037844386, 150), nearestNode);
+        Assert.Equal(nodeWorldPositionsBefore.Length, snapped.Line!.Nodes.Count);
+        for (var index = 0; index < nodeWorldPositionsBefore.Length; index++)
+        {
+            AssertPoint(nodeWorldPositionsBefore[index], NodePoint(snapped, snapped.Line.Nodes[index]));
+        }
+        Assert.Equal(PortalSnapOutcome.NotRepresentable, outcome);
+        Assert.Same(line, snapped);
+    }
+
+    [Fact]
+    public void Stage10EPortalSnapReviewFix_updates_only_target_portal_position_for_every_geometry()
+    {
+        foreach (var geometry in Enum.GetValues<GridGeometry>())
+        {
+            var grid = Grid(geometry);
+            var target = geometry switch
+            {
+                GridGeometry.HexFlat => new VectorPoint(100, 0),
+                GridGeometry.HexPointy => new VectorPoint(0, -100),
+                _ => new VectorPoint(0, 0),
+            };
+            var line = VectorGeometry.CreateLine(ObjectId.New(), "road",
+                [new VectorPoint(target.X - 10, target.Y), new VectorPoint(target.X + 10, target.Y)]);
+            line = VectorObjectEditor.AddPortal(line, 0.35, 12);
+            line = VectorObjectEditor.AddPortal(line, 0.8, 18);
+            var portalId = line.Line!.Portals[0].Id;
+
+            var snapped = GridSnapService.SnapPortal(line, portalId, grid, out var outcome);
+
+            Assert.Equal(PortalSnapOutcome.Snapped, outcome);
+            AssertPoint(target, PortalPoint(snapped, portalId));
+            AssertOnlyTargetPortalPositionChanged(line, snapped, portalId);
+            Assert.Equal(0.5, snapped.Line!.Portals[0].Position, 12);
+        }
+    }
+
+    [Fact]
+    public void Stage10EPortalSnapReviewFix_handles_rotated_negative_multisegment_and_endpoint_boundaries()
+    {
+        var grid = Grid(GridGeometry.Square);
+        var target = new VectorPoint(-100, -100);
+        var unrotated = VectorGeometry.CreateLine(ObjectId.New(), "road",
+            [new VectorPoint(-120, -110), target, new VectorPoint(-80, -90)]);
+        var rotated = WithRotation(unrotated, 23);
+        rotated = VectorObjectEditor.AddPortal(rotated, 0.43, 12);
+        var portalId = rotated.Line!.Portals[0].Id;
+
+        var first = GridSnapService.SnapPortal(rotated, portalId, grid, out var firstOutcome);
+        var second = GridSnapService.SnapPortal(rotated, portalId, grid, out var secondOutcome);
+
+        Assert.Equal(PortalSnapOutcome.Snapped, firstOutcome);
+        Assert.Equal(PortalSnapOutcome.Snapped, secondOutcome);
+        Assert.Equal(first.Line!.Portals[0].Position, second.Line!.Portals[0].Position, 12);
+        AssertPoint(target, PortalPoint(first, portalId));
+        AssertOnlyTargetPortalPositionChanged(rotated, first, portalId);
+
+        var endpoint = VectorGeometry.CreateLine(ObjectId.New(), "endpoint",
+            [new VectorPoint(0, 0), new VectorPoint(50, 0)]);
+        endpoint = VectorObjectEditor.AddPortal(endpoint, 0.1, 7);
+        var endpointPortalId = endpoint.Line!.Portals[0].Id;
+
+        var atEndpoint = GridSnapService.SnapPortal(endpoint, endpointPortalId, grid, out var endpointOutcome);
+        var alreadySnapped = GridSnapService.SnapPortal(atEndpoint, endpointPortalId, grid, out var alreadyOutcome);
+
+        Assert.Equal(PortalSnapOutcome.Snapped, endpointOutcome);
+        Assert.Equal(0, atEndpoint.Line!.Portals[0].Position);
+        Assert.Equal(PortalSnapOutcome.AlreadySnapped, alreadyOutcome);
+        Assert.Same(atEndpoint, alreadySnapped);
     }
 
     [Fact]
@@ -287,6 +375,52 @@ public sealed class Stage10EGridGeometryTests
     private static double Length(VectorPoint point) => Math.Sqrt(point.X * point.X + point.Y * point.Y);
     private static double DistanceSquared(VectorPoint left, VectorPoint right) =>
         Math.Pow(left.X - right.X, 2) + Math.Pow(left.Y - right.Y, 2);
+
+    private static SceneObject WithRotation(SceneObject source, double rotationDegrees) => new(
+        source.Id, source.Kind, source.Name,
+        source.X, source.Y, source.Width, source.Height, rotationDegrees,
+        source.FillColor, source.StrokeColor, source.StrokeWidth,
+        source.Visible, source.Locked)
+    {
+        Sublayer = source.Sublayer,
+        GroupId = source.GroupId,
+        GroupName = source.GroupName,
+        Stamp = source.Stamp,
+        Line = source.Line,
+        Shape = source.Shape,
+        Text = source.Text,
+        ObjectOpacity = source.ObjectOpacity,
+        Composition = source.Composition,
+        PlaceholderReason = source.PlaceholderReason,
+    };
+
+    private static void AssertOnlyTargetPortalPositionChanged(
+        SceneObject before, SceneObject after, PortalId targetPortalId)
+    {
+        Assert.Equal(before.Id, after.Id);
+        Assert.Equal(before.Kind, after.Kind);
+        Assert.Equal(before.Name, after.Name);
+        Assert.Equal(before.X, after.X);
+        Assert.Equal(before.Y, after.Y);
+        Assert.Equal(before.Width, after.Width);
+        Assert.Equal(before.Height, after.Height);
+        Assert.Equal(before.RotationDegrees, after.RotationDegrees);
+        Assert.Equal(before.Line!.Nodes, after.Line!.Nodes);
+        Assert.Equal(before.Line.Stroke, after.Line.Stroke);
+        Assert.Equal(before.Line.Closed, after.Line.Closed);
+        Assert.Equal(before.Line.Portals.Count, after.Line.Portals.Count);
+        for (var index = 0; index < before.Line.Portals.Count; index++)
+        {
+            var beforePortal = before.Line.Portals[index];
+            var afterPortal = after.Line.Portals[index];
+            Assert.Equal(beforePortal.Id, afterPortal.Id);
+            Assert.Equal(beforePortal.Width, afterPortal.Width);
+            if (beforePortal.Id != targetPortalId)
+            {
+                Assert.Equal(beforePortal.Position, afterPortal.Position);
+            }
+        }
+    }
 
     private static void AssertPoint(VectorPoint expected, VectorPoint actual)
     {

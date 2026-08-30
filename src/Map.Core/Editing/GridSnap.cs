@@ -2,6 +2,13 @@ using Map.Core.Documents;
 
 namespace Map.Core.Editing;
 
+public enum PortalSnapOutcome
+{
+    Snapped,
+    AlreadySnapped,
+    NotRepresentable,
+}
+
 public static class GridSnapService
 {
     public static VectorPoint Snap(GridDefinition grid, VectorPoint world)
@@ -29,6 +36,12 @@ public static class GridSnapService
 
     public static SceneObject SnapPortal(SceneObject source, PortalId portalId, GridDefinition grid)
     {
+        return SnapPortal(source, portalId, grid, out _);
+    }
+
+    public static SceneObject SnapPortal(
+        SceneObject source, PortalId portalId, GridDefinition grid, out PortalSnapOutcome outcome)
+    {
         var line = source.Line ?? throw new ArgumentException("Portal snapping currently requires a line.", nameof(source));
         var portal = line.Portals.FirstOrDefault(item => item.Id == portalId)
             ?? throw new InvalidOperationException($"Portal {portalId} is absent.");
@@ -37,11 +50,23 @@ public static class GridSnapService
         var total = lengths.Sum();
         var point = RotateOwner(source, PointAt(points, lengths, portal.Position * total));
         var snapped = Snap(grid, point);
+        var unrotatedSnapped = UnrotateOwner(source, snapped);
+        var tolerance = ScaleAwareTolerance(points, point, snapped, unrotatedSnapped);
 
-        // A portal is constrained to its line. Moving only its scalar position generally cannot
-        // land on a two-dimensional grid node, so the whole line is translated by the exact snap
-        // delta while the portal and every vector id remain stable.
-        return Copy(source, source.X + snapped.X - point.X, source.Y + snapped.Y - point.Y);
+        if (Distance(point, snapped) <= tolerance)
+        {
+            outcome = PortalSnapOutcome.AlreadySnapped;
+            return source;
+        }
+
+        if (!TryPositionAtPoint(points, lengths, total, unrotatedSnapped, tolerance, out var position))
+        {
+            outcome = PortalSnapOutcome.NotRepresentable;
+            return source;
+        }
+
+        outcome = PortalSnapOutcome.Snapped;
+        return VectorObjectEditor.MovePortal(source, portalId, position);
     }
 
     private static VectorPoint Rotate(double x, double y, double degrees)
@@ -65,7 +90,7 @@ public static class GridSnapService
         return new VectorPoint(cx + rotated.X, cy + rotated.Y);
     }
 
-    private static VectorPoint PointAt(IReadOnlyList<VectorPoint> points, IReadOnlyList<double> lengths, double distance)
+    private static VectorPoint PointAt(IReadOnlyList<VectorPoint> points, List<double> lengths, double distance)
     {
         var cursor = 0.0;
         for (var i = 0; i < lengths.Count; i++)
@@ -79,6 +104,77 @@ public static class GridSnapService
             cursor += lengths[i];
         }
         return points[^1];
+    }
+
+    private static bool TryPositionAtPoint(
+        IReadOnlyList<VectorPoint> points,
+        List<double> lengths,
+        double total,
+        VectorPoint target,
+        double tolerance,
+        out double position)
+    {
+        position = 0;
+        if (total <= tolerance)
+        {
+            return false;
+        }
+
+        var cursor = 0.0;
+        var bestDistance = double.PositiveInfinity;
+        var bestArcDistance = 0.0;
+        for (var index = 0; index < lengths.Count; index++)
+        {
+            var length = lengths[index];
+            if (length <= tolerance)
+            {
+                cursor += length;
+                continue;
+            }
+
+            var start = points[index];
+            var end = points[index + 1];
+            var dx = end.X - start.X;
+            var dy = end.Y - start.Y;
+            var amount = Math.Clamp(
+                ((target.X - start.X) * dx + (target.Y - start.Y) * dy) / (length * length),
+                0,
+                1);
+            var projected = new VectorPoint(start.X + dx * amount, start.Y + dy * amount);
+            var distance = Distance(projected, target);
+            var arcDistance = cursor + length * amount;
+            if (distance + tolerance < bestDistance
+                || Math.Abs(distance - bestDistance) <= tolerance && arcDistance < bestArcDistance)
+            {
+                bestDistance = distance;
+                bestArcDistance = arcDistance;
+            }
+
+            cursor += length;
+        }
+
+        if (bestDistance > tolerance)
+        {
+            return false;
+        }
+
+        position = Math.Clamp(bestArcDistance / total, 0, 1);
+        return true;
+    }
+
+    private static double ScaleAwareTolerance(
+        IReadOnlyList<VectorPoint> points,
+        params VectorPoint[] additionalPoints)
+    {
+        var scale = points.Concat(additionalPoints)
+            .SelectMany(point => new[] { Math.Abs(point.X), Math.Abs(point.Y) })
+            .Append(1)
+            .Max();
+        var next = Math.BitIncrement(scale);
+        var ulp = double.IsFinite(next) ? next - scale : scale - Math.BitDecrement(scale);
+        return ulp <= double.MaxValue / 128
+            ? Math.Max(1e-9, ulp * 128)
+            : double.MaxValue;
     }
 
     private static double Distance(VectorPoint a, VectorPoint b) =>

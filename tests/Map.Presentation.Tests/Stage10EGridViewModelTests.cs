@@ -1,4 +1,5 @@
 using Map.Core.Documents;
+using Map.Core.Editing;
 using Map.Presentation.Tests.Support;
 using Map.Presentation.ViewModels;
 
@@ -107,17 +108,62 @@ public sealed class Stage10EGridViewModelTests
         Assert.Contains("только для чтения", locked.StatusDetail, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Stage10EPortalSnapReviewFix_success_no_op_and_refusal_have_exact_history_and_status()
+    {
+        var representable = VectorGeometry.CreateLine(ObjectId.New(), "road",
+            [new VectorPoint(-10, 0), new VectorPoint(10, 0)]);
+        representable = VectorObjectEditor.AddPortal(representable, 0.35, 12);
+        var representablePortalId = representable.Line!.Portals[0].Id;
+        var successEditor = NewPortalEditor(representable, Grid());
+
+        successEditor.SnapSelectedPortalToGrid();
+
+        Assert.Equal(1, successEditor.Session.UndoDepth);
+        Assert.Equal("Проход привязан к сетке.", successEditor.StatusDetail);
+        Assert.Equal(0.5, SelectedLine(successEditor).Line!.Portals[0].Position, 12);
+        var snappedDocument = successEditor.Session.Document;
+
+        successEditor.SnapSelectedPortalToGrid();
+
+        Assert.Same(snappedDocument, successEditor.Session.Document);
+        Assert.Equal(1, successEditor.Session.UndoDepth);
+        Assert.Equal("Проход уже привязан к сетке.", successEditor.StatusDetail);
+        successEditor.Undo();
+        Assert.Equal(0.35, SelectedLine(successEditor).Line!.Portals.Single(
+            portal => portal.Id == representablePortalId).Position, 12);
+        successEditor.Redo();
+        Assert.Equal(0.5, SelectedLine(successEditor).Line!.Portals.Single(
+            portal => portal.Id == representablePortalId).Position, 12);
+
+        var unrotated = VectorGeometry.CreateLine(ObjectId.New(), "refusal",
+            [new VectorPoint(21, 19), new VectorPoint(74, 181), new VectorPoint(184, 91)]);
+        var impossible = WithRotation(unrotated, 23);
+        impossible = VectorObjectEditor.AddPortal(impossible, 0.43, 12);
+        var refusalEditor = NewPortalEditor(impossible, Grid(GridGeometry.IsometricSquares));
+        var originalDocument = refusalEditor.Session.Document;
+
+        refusalEditor.SnapSelectedPortalToGrid();
+
+        Assert.Same(originalDocument, refusalEditor.Session.Document);
+        Assert.Equal(0, refusalEditor.Session.UndoDepth);
+        Assert.Equal(0, refusalEditor.Session.RedoDepth);
+        Assert.Equal("Точная привязка прохода невозможна без перемещения линии.", refusalEditor.StatusDetail);
+        Assert.Same(impossible, SelectedLine(refusalEditor));
+    }
+
     private static GridDefinition ActiveGrid(EditorViewModel editor) =>
         Assert.Single(Assert.IsType<GridLayer>(editor.ActiveLayer).Grids);
 
-    private static GridDefinition Grid() => new(GridId.New(), GridGeometry.Square, 128)
-    {
-        Subdivisions = 1,
-        LineWidth = 1,
-        Color = "#FF405060",
-        Opacity = 0.7,
-        SnapEnabled = true,
-    };
+    private static GridDefinition Grid(GridGeometry geometry = GridGeometry.Square) =>
+        new(GridId.New(), geometry, 128)
+        {
+            Subdivisions = 1,
+            LineWidth = 1,
+            Color = "#FF405060",
+            Opacity = 0.7,
+            SnapEnabled = true,
+        };
 
     private static (EditorViewModel Editor, LayerId LayerId, GridId GridId) NewEditor(
         bool locked = false, GridDefinition? grid = null)
@@ -138,4 +184,43 @@ public sealed class Stage10EGridViewModelTests
         editor.SelectLayer(layer.Id);
         return (editor, layer.Id, grid.Id);
     }
+
+    private static EditorViewModel NewPortalEditor(SceneObject line, GridDefinition grid)
+    {
+        var document = new MapDocument(
+            DocumentId.New(), "portal snap", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(1024, 768, "px", "#FFFFFFFF"),
+            [
+                new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFFFFFFF"),
+                new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, [line]),
+                new GridLayer(LayerId.New(), "Сетка", true, false, 1, [grid]),
+            ]);
+        var editor = new EditorViewModel(
+            document, null, false,
+            new FakeProjectStore(), new FakeRecentMaps(), new FakeFilePicker(),
+            new FakePrompts(), new FakeLog());
+        editor.SelectObject(line.Id);
+        return editor;
+    }
+
+    private static SceneObject SelectedLine(EditorViewModel editor) =>
+        Assert.IsType<SceneObject>(editor.Session.SelectedObject);
+
+    private static SceneObject WithRotation(SceneObject source, double rotationDegrees) => new(
+        source.Id, source.Kind, source.Name,
+        source.X, source.Y, source.Width, source.Height, rotationDegrees,
+        source.FillColor, source.StrokeColor, source.StrokeWidth,
+        source.Visible, source.Locked)
+    {
+        Sublayer = source.Sublayer,
+        GroupId = source.GroupId,
+        GroupName = source.GroupName,
+        Stamp = source.Stamp,
+        Line = source.Line,
+        Shape = source.Shape,
+        Text = source.Text,
+        ObjectOpacity = source.ObjectOpacity,
+        Composition = source.Composition,
+        PlaceholderReason = source.PlaceholderReason,
+    };
 }
