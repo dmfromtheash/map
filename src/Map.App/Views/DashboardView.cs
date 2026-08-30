@@ -27,6 +27,7 @@ public sealed class DashboardView : UserControl
     private readonly Func<Task> _openFileRequested;
     private readonly Func<RecentCard, Task> _openRecentRequested;
     private readonly Func<RecoveryCard, Task> _restoreRequested;
+    private readonly EditorShortcutSettings _shortcuts;
 
     private readonly StackPanel _errorPanel = new();
     private readonly StackPanel _recoveryPanel = new() { Spacing = 10 };
@@ -38,13 +39,15 @@ public sealed class DashboardView : UserControl
         Func<Task> newMapRequested,
         Func<Task> openFileRequested,
         Func<RecentCard, Task> openRecentRequested,
-        Func<RecoveryCard, Task> restoreRequested)
+        Func<RecoveryCard, Task> restoreRequested,
+        EditorShortcutSettings? shortcuts = null)
     {
         _dashboard = dashboard;
         _newMapRequested = newMapRequested;
         _openFileRequested = openFileRequested;
         _openRecentRequested = openRecentRequested;
         _restoreRequested = restoreRequested;
+        _shortcuts = shortcuts ?? new EditorShortcutSettings();
         Name = "DashboardView";
 
         Content = new DockPanel
@@ -144,7 +147,8 @@ public sealed class DashboardView : UserControl
                 },
             },
         };
-        ToolTip.SetTip(newButton, "Создать новую карту  (Ctrl+N)");
+        ToolTip.SetTip(newButton,
+            $"Создать новую карту  ({_shortcuts.Get(EditorShortcutSettings.Commands.NewMap)})");
 
         var openButton = Ui.AsyncButton("OpenFileButton", "Открыть проект", _openFileRequested);
         openButton.Content = new StackPanel
@@ -159,7 +163,8 @@ public sealed class DashboardView : UserControl
         };
         openButton.MinHeight = 36;
         openButton.Padding = new Thickness(16, 6);
-        ToolTip.SetTip(openButton, "Открыть файл проекта .mapproj  (Ctrl+O)");
+        ToolTip.SetTip(openButton,
+            $"Открыть файл проекта .mapproj  ({_shortcuts.Get(EditorShortcutSettings.Commands.OpenMap)})");
 
         return new Border
         {

@@ -1,4 +1,7 @@
 ﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -8,6 +11,7 @@ using Map.App.Services;
 using Map.App.Views;
 using Map.Assets;
 using Map.Persistence;
+using Map.Platform.Windows;
 using Map.Presentation.Services;
 using Map.Presentation.ViewModels;
 
@@ -23,19 +27,37 @@ public sealed class MainWindow : Window
     private readonly IRecentMaps _recent;
     private readonly IAppLog _log;
     private readonly AssetCatalog _assets;
+    private readonly ShortcutSettingsStore _shortcutStore;
+    private readonly EditorShortcutSettings _shortcuts;
     private readonly ContentControl _host = new() { Name = "ViewHost" };
     private readonly DashboardViewModel _dashboard;
     private readonly DispatcherTimer _autosaveTimer;
 
     private EditorView? _editorView;
     private bool _autosaveTickRunning;
+    private Key? _heldPanKey;
+    private string? _shortcutLoadWarning;
 
-    public MainWindow(IProjectStore store, IRecentMaps recent, IAppLog log, AssetCatalog assets)
+    public MainWindow(
+        IProjectStore store,
+        IRecentMaps recent,
+        IAppLog log,
+        AssetCatalog assets,
+        ShortcutSettingsStore? shortcutStore = null,
+        EditorShortcutSettings? shortcuts = null,
+        string? shortcutLoadWarning = null)
     {
         _store = store;
         _recent = recent;
         _log = log;
         _assets = assets;
+        _shortcutStore = shortcutStore
+            ?? new ShortcutSettingsStore(TestMode.ShortcutSettingsPathOverride);
+        _shortcuts = shortcuts ?? LoadShortcuts(_shortcutStore, out _shortcutLoadWarning);
+        if (shortcuts is not null)
+        {
+            _shortcutLoadWarning = shortcutLoadWarning;
+        }
 
         Title = $"Map · {AppVersion.Current}";
         Name = "MainWindow";
@@ -70,7 +92,8 @@ public sealed class MainWindow : Window
             newMapRequested: NewMapAsync,
             openFileRequested: OpenFileAsync,
             openRecentRequested: card => OpenPathAsync(card.Path),
-            restoreRequested: RestoreAsync);
+            restoreRequested: RestoreAsync,
+            shortcuts: _shortcuts);
 
         _host.Content = view;
         view.Refresh();
@@ -79,7 +102,11 @@ public sealed class MainWindow : Window
     private void ShowEditor(EditorViewModel editor)
     {
         _autosaveTimer.Stop();
-        _editorView = new EditorView(editor, requestBack: LeaveEditorAsync, requestSecondWindow: OpenSecondWindow);
+        _editorView = new EditorView(
+            editor,
+            requestBack: LeaveEditorAsync,
+            requestSecondWindow: OpenSecondWindow,
+            requestShortcutSettings: OpenShortcutSettings);
         _host.Content = _editorView;
         if (TestMode.AutosaveEnabled)
         {
@@ -95,7 +122,8 @@ public sealed class MainWindow : Window
 
     private void OpenSecondWindow()
     {
-        var window = new MainWindow(_store, _recent, _log, _assets)
+        var window = new MainWindow(
+            _store, _recent, _log, _assets, _shortcutStore, _shortcuts, _shortcutLoadWarning)
         {
             Title = $"Map · {AppVersion.Current} · второе окно",
         };
@@ -113,7 +141,8 @@ public sealed class MainWindow : Window
             new DialogPrompts(this),
             _log,
             appVersion: AppVersion.Current,
-            assetCatalog: _assets);
+            assetCatalog: _assets,
+            shortcuts: _shortcuts);
 
     private async Task NewMapAsync()
     {
@@ -213,315 +242,336 @@ public sealed class MainWindow : Window
 
     private void OnWindowKeyDown(object? sender, KeyEventArgs e)
     {
-        if (_editorView is not { } editorView || IsTypingInText())
+        // Application shortcuts never steal editing keys from any text field. The settings dialog
+        // is a separate window and captures its own gesture input explicitly.
+        if (IsTypingInText() || !ShortcutKeyAdapter.TryCreate(e, out var input))
         {
             return;
         }
 
-        var editor = editorView.Editor;
-        var shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
-        var control = e.KeyModifiers.HasFlag(KeyModifiers.Control);
-        var alt = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
-
-        if (e.Key == Key.Space && e.KeyModifiers == KeyModifiers.None)
+        var activeContexts = ActiveShortcutContexts();
+        var command = _shortcuts.Resolve(input, activeContexts);
+        if (command is not null && ExecuteShortcut(command, e.Key))
         {
-            editorView.Canvas.IsSpacePanHeld = true;
             e.Handled = true;
-            return;
         }
-
-        if (e.KeyModifiers == KeyModifiers.None && e.Key is Key.K)
-        {
-            ShowShortcutHelp();
-            e.Handled = true;
-            return;
-        }
-
-        if (e.PhysicalKey == PhysicalKey.Slash && shift && !control && !alt)
-        {
-            ShowShortcutHelp();
-            e.Handled = true;
-            return;
-        }
-
-        if (e.PhysicalKey == PhysicalKey.Slash && e.KeyModifiers == KeyModifiers.None)
-        {
-            editorView.ToggleSidePanel();
-            e.Handled = true;
-            return;
-        }
-
-        if (e.KeyModifiers == KeyModifiers.None)
-        {
-            switch (e.Key)
-            {
-                case Key.O:
-                    // The stamp tool and its library are one thought: the key selects the tool
-                    // and opens the panel the tool needs, exactly as it did before it had a tool.
-                    editor.ActiveTool = EditorTool.Stamp;
-                    editorView.OpenAssetCatalog();
-                    e.Handled = true;
-                    return;
-                case Key.N:
-                    editorView.OpenNotes();
-                    e.Handled = true;
-                    return;
-                case Key.F:
-                    editorView.OpenAssetCatalog(focusSearch: true);
-                    e.Handled = true;
-                    return;
-                case Key.Tab when editorView.Canvas.IsFocused:
-                    editor.SelectPreviousTool();
-                    e.Handled = true;
-                    return;
-                case Key.G:
-                    editor.ToggleGridSnap();
-                    e.Handled = true;
-                    return;
-                case Key.Escape:
-                    // First press leaves an open group and selects it whole; the next clears.
-                    editor.HandleEscape();
-                    e.Handled = true;
-                    return;
-                case Key.Delete:
-                case Key.Back:
-                    editor.DeleteSelectedObject();
-                    e.Handled = true;
-                    return;
-                case Key.Left:
-                    editor.NudgeSelectedObject(-1, 0);
-                    e.Handled = true;
-                    return;
-                case Key.Right:
-                    editor.NudgeSelectedObject(1, 0);
-                    e.Handled = true;
-                    return;
-                case Key.Up:
-                    editor.NudgeSelectedObject(0, -1);
-                    e.Handled = true;
-                    return;
-                case Key.Down:
-                    editor.NudgeSelectedObject(0, 1);
-                    e.Handled = true;
-                    return;
-                case Key.X when editor.ActiveTool == EditorTool.Mask:
-                    editor.ToggleMaskPaintMode();
-                    e.Handled = true;
-                    return;
-            }
-        }
-
-        if (shift && !control && !alt && e.Key is Key.Left or Key.Right or Key.Up or Key.Down)
-        {
-            var step = 10.0;
-            editor.NudgeSelectedObject(
-                e.Key == Key.Left ? -step : e.Key == Key.Right ? step : 0,
-                e.Key == Key.Up ? -step : e.Key == Key.Down ? step : 0);
-            e.Handled = true;
-            return;
-        }
-
-        if (!control && !alt && e.Key is Key.W or Key.S)
-        {
-            var direction = e.Key == Key.W ? 1 : -1;
-            if (editor.ActiveTool is EditorTool.Brush or EditorTool.Mask or EditorTool.Land)
-                editor.AdjustBrushSize(direction, shift);
-            else if (editor.ActiveTool == EditorTool.Text)
-                editor.AdjustSelectedTextFontSize(direction, shift);
-            else if (editor.ActiveTool == EditorTool.Select)
-                editor.ResizeSelectedObject(direction, shift);
-            e.Handled = true;
-            return;
-        }
-
-        if (!control && !alt && e.Key is Key.E or Key.D)
-        {
-            var direction = e.Key == Key.E ? 1 : -1;
-            if (e.Key == Key.E && editorView.IsNotesOpen)
-                editorView.OpenNotes(focusEditor: true);
-            else if (editor.ActiveTool is EditorTool.Brush or EditorTool.Mask or EditorTool.Land)
-                editor.AdjustBrushOpacity(direction, shift);
-            else if (editor.ActiveTool == EditorTool.Select)
-                editor.AdjustSelectedOpacity(direction, shift);
-            e.Handled = true;
-            return;
-        }
-
-        if (!control && !alt && e.Key is Key.Q or Key.A)
-        {
-            var direction = e.Key == Key.Q ? 1 : -1;
-            if (editor.ActiveTool == EditorTool.Stamp)
-            {
-                editor.AdjustStampArea(direction, shift);
-                editorView.RefreshLibraryPanel();
-            }
-            else if (editor.ActiveTool == EditorTool.Brush)
-                editor.AdjustBrushSoftness(direction, shift);
-            else if (editor.ActiveTool == EditorTool.Text)
-                editor.AdjustSelectedTextCurve(direction, shift);
-            e.Handled = true;
-            return;
-        }
-
-        // ------------------------------------------------------------ stamp context
-
-        if (alt && !control && e.Key is Key.Q or Key.A)
-        {
-            if (editor.ActiveTool == EditorTool.Stamp)
-            {
-                editor.AdjustStampDensity(e.Key == Key.Q ? 1 : -1, shift);
-                editorView.RefreshLibraryPanel();
-                e.Handled = true;
-            }
-
-            return;
-        }
-
-        if (alt && !control && e.Key is Key.Left or Key.Right)
-        {
-            if (editor.ActiveTool == EditorTool.Stamp)
-            {
-                if (e.Key == Key.Right)
-                    editor.NextVariant();
-                else
-                    editor.PreviousVariant();
-                editorView.RefreshLibraryPanel();
-                e.Handled = true;
-            }
-
-            return;
-        }
-
-        if (shift && !control && !alt && e.PhysicalKey is PhysicalKey.Period or PhysicalKey.Comma)
-        {
-            editor.RotateSelectedObject(e.PhysicalKey == PhysicalKey.Period ? 1 : -1);
-            e.Handled = true;
-            return;
-        }
-
-        if (!control && !alt && e.PhysicalKey == PhysicalKey.Backquote)
-        {
-            editor.RestoreLastSelection();
-            e.Handled = true;
-            return;
-        }
-
-        // One key per tool, matching the tooltips on the rail. Text entry is excluded above so
-        // typing a Russian or Latin letter into a name field can never switch the tool.
-        if (e.KeyModifiers == KeyModifiers.None && ToolForKey(e.Key) is { } tool)
-        {
-            editorView.Editor.ActiveTool = tool;
-            e.Handled = true;
-            return;
-        }
-
     }
 
     private void OnWindowKeyUp(object? sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Space && _editorView is { } editorView)
+        if (_heldPanKey == e.Key && _editorView is { } editorView)
         {
             editorView.Canvas.IsSpacePanHeld = false;
+            _heldPanKey = null;
         }
     }
 
-    protected override void OnKeyDown(KeyEventArgs e)
+    private IReadOnlySet<ShortcutContext> ActiveShortcutContexts()
     {
-        base.OnKeyDown(e);
-
-        var control = e.KeyModifiers.HasFlag(KeyModifiers.Control);
-        if (!control)
+        var contexts = new HashSet<ShortcutContext>();
+        if (_editorView is not { } editorView)
         {
-            return;
+            contexts.Add(ShortcutContext.Dashboard);
+            return contexts;
         }
 
-        var typing = IsTypingInText();
-
-        switch (e.Key)
+        contexts.Add(ShortcutContext.Editor);
+        if (editorView.Canvas.IsFocused) contexts.Add(ShortcutContext.Canvas);
+        if (editorView.Editor.SelectionCount > 0) contexts.Add(ShortcutContext.Selection);
+        if (editorView.IsNotesOpen) contexts.Add(ShortcutContext.Notes);
+        contexts.Add(editorView.Editor.ActiveTool switch
         {
-            case Key.N:
-                _ = HandleNewShortcutAsync();
-                break;
+            EditorTool.Brush => ShortcutContext.Brush,
+            EditorTool.Mask => ShortcutContext.Mask,
+            EditorTool.Land => ShortcutContext.Land,
+            EditorTool.Text => ShortcutContext.Text,
+            EditorTool.Stamp => ShortcutContext.Stamp,
+            _ => ShortcutContext.Editor,
+        });
+        return contexts;
+    }
 
-            case Key.O:
-                _ = HandleOpenShortcutAsync();
-                break;
+    private bool ExecuteShortcut(string command, Key sourceKey)
+    {
+        if (command == EditorShortcutSettings.Commands.NewMap)
+        {
+            _ = HandleNewShortcutAsync();
+            return true;
+        }
 
-            case Key.S when _editorView is not null:
-                _ = _editorView.Editor.SaveAsync();
-                break;
+        if (command == EditorShortcutSettings.Commands.OpenMap)
+        {
+            _ = HandleOpenShortcutAsync();
+            return true;
+        }
 
-            case Key.Z when _editorView is not null && !typing:
-                if (e.KeyModifiers.HasFlag(KeyModifiers.Shift))
-                    _editorView.Editor.Redo();
-                else
-                    _editorView.Editor.Undo();
-                break;
+        if (_editorView is not { } view)
+        {
+            return false;
+        }
 
-            case Key.Y when _editorView is not null && !typing:
-                _editorView.Editor.Redo();
+        var editor = view.Editor;
+        switch (command)
+        {
+            case EditorShortcutSettings.Commands.Save:
+                _ = editor.SaveAsync();
                 break;
-
-            case Key.C when _editorView is not null && !typing:
-                _editorView.Editor.CopySelectedComposition();
+            case EditorShortcutSettings.Commands.Undo:
+                editor.Undo();
                 break;
-
-            case Key.V when _editorView is not null && !typing:
-                _editorView.Editor.PasteComposition();
+            case EditorShortcutSettings.Commands.Redo:
+            case EditorShortcutSettings.Commands.RedoAlternate:
+                editor.Redo();
                 break;
-
-            case Key.L when _editorView is not null && !typing:
-                _editorView.Editor.ToggleSelectedObjectLock();
+            case EditorShortcutSettings.Commands.ShortcutHelp:
+            case EditorShortcutSettings.Commands.ShortcutHelpAlternate:
+                ShowShortcutHelp();
                 break;
-
-            case Key.A when _editorView is not null && !typing:
-                _editorView.Editor.SelectAllByFilter();
+            case EditorShortcutSettings.Commands.ShortcutSettings:
+                OpenShortcutSettings();
                 break;
-
-            case Key.G when _editorView is not null && !typing:
-                if (e.KeyModifiers.HasFlag(KeyModifiers.Shift))
-                    _editorView.Editor.UngroupSelection();
-                else
-                    _ = _editorView.GroupSelectionInteractiveAsync();
+            case EditorShortcutSettings.Commands.SidePanel:
+                view.ToggleSidePanel();
                 break;
-
-            case Key.Up when _editorView is not null && !typing:
-                if (e.KeyModifiers.HasFlag(KeyModifiers.Shift))
-                    _editorView.Editor.ReorderActiveLayer(up: true);
-                else
-                    _editorView.Editor.AdjustSelectedSublayer(1);
+            case EditorShortcutSettings.Commands.GridSnap:
+                editor.ToggleGridSnap();
                 break;
-
-            case Key.Down when _editorView is not null && !typing:
-                if (e.KeyModifiers.HasFlag(KeyModifiers.Shift))
-                    _editorView.Editor.ReorderActiveLayer(up: false);
-                else
-                    _editorView.Editor.AdjustSelectedSublayer(-1);
+            case EditorShortcutSettings.Commands.PreviousTool:
+                editor.SelectPreviousTool();
                 break;
-
+            case EditorShortcutSettings.Commands.Pan:
+                view.Canvas.IsSpacePanHeld = true;
+                _heldPanKey = sourceKey;
+                break;
+            case EditorShortcutSettings.Commands.Select:
+                editor.ActiveTool = EditorTool.Select;
+                break;
+            case EditorShortcutSettings.Commands.Line:
+                editor.ActiveTool = EditorTool.Line;
+                break;
+            case EditorShortcutSettings.Commands.Shape:
+                editor.ActiveTool = EditorTool.Shape;
+                break;
+            case EditorShortcutSettings.Commands.Text:
+                editor.ActiveTool = EditorTool.Text;
+                break;
+            case EditorShortcutSettings.Commands.Stamp:
+                editor.ActiveTool = EditorTool.Stamp;
+                view.OpenAssetCatalog();
+                break;
+            case EditorShortcutSettings.Commands.Brush:
+                editor.ActiveTool = EditorTool.Brush;
+                break;
+            case EditorShortcutSettings.Commands.Mask:
+                editor.ActiveTool = EditorTool.Mask;
+                break;
+            case EditorShortcutSettings.Commands.Land:
+                editor.ActiveTool = EditorTool.Land;
+                break;
+            case EditorShortcutSettings.Commands.Notes:
+                view.OpenNotes();
+                break;
+            case EditorShortcutSettings.Commands.Escape:
+                editor.HandleEscape();
+                break;
+            case EditorShortcutSettings.Commands.Delete:
+            case EditorShortcutSettings.Commands.DeleteAlternate:
+                editor.DeleteSelectedObject();
+                break;
+            case EditorShortcutSettings.Commands.NudgeLeft:
+                editor.NudgeSelectedObject(-1, 0);
+                break;
+            case EditorShortcutSettings.Commands.NudgeRight:
+                editor.NudgeSelectedObject(1, 0);
+                break;
+            case EditorShortcutSettings.Commands.NudgeUp:
+                editor.NudgeSelectedObject(0, -1);
+                break;
+            case EditorShortcutSettings.Commands.NudgeDown:
+                editor.NudgeSelectedObject(0, 1);
+                break;
+            case EditorShortcutSettings.Commands.NudgeLargeLeft:
+                editor.NudgeSelectedObject(-10, 0);
+                break;
+            case EditorShortcutSettings.Commands.NudgeLargeRight:
+                editor.NudgeSelectedObject(10, 0);
+                break;
+            case EditorShortcutSettings.Commands.NudgeLargeUp:
+                editor.NudgeSelectedObject(0, -10);
+                break;
+            case EditorShortcutSettings.Commands.NudgeLargeDown:
+                editor.NudgeSelectedObject(0, 10);
+                break;
+            case EditorShortcutSettings.Commands.PrimaryUp:
+                AdjustPrimary(editor, 1, false);
+                break;
+            case EditorShortcutSettings.Commands.PrimaryDown:
+                AdjustPrimary(editor, -1, false);
+                break;
+            case EditorShortcutSettings.Commands.PrimaryLargeUp:
+                AdjustPrimary(editor, 1, true);
+                break;
+            case EditorShortcutSettings.Commands.PrimaryLargeDown:
+                AdjustPrimary(editor, -1, true);
+                break;
+            case EditorShortcutSettings.Commands.SecondaryUp:
+                AdjustSecondary(view, 1, false);
+                break;
+            case EditorShortcutSettings.Commands.SecondaryDown:
+                AdjustSecondary(view, -1, false);
+                break;
+            case EditorShortcutSettings.Commands.SecondaryLargeUp:
+                AdjustSecondary(view, 1, true);
+                break;
+            case EditorShortcutSettings.Commands.SecondaryLargeDown:
+                AdjustSecondary(view, -1, true);
+                break;
+            case EditorShortcutSettings.Commands.TertiaryUp:
+                AdjustTertiary(view, 1, false);
+                break;
+            case EditorShortcutSettings.Commands.TertiaryDown:
+                AdjustTertiary(view, -1, false);
+                break;
+            case EditorShortcutSettings.Commands.TertiaryLargeUp:
+                AdjustTertiary(view, 1, true);
+                break;
+            case EditorShortcutSettings.Commands.TertiaryLargeDown:
+                AdjustTertiary(view, -1, true);
+                break;
+            case EditorShortcutSettings.Commands.RotateLeft:
+                editor.RotateSelectedObject(-1);
+                break;
+            case EditorShortcutSettings.Commands.RotateRight:
+                editor.RotateSelectedObject(1);
+                break;
+            case EditorShortcutSettings.Commands.PreviousSelection:
+                editor.RestoreLastSelection();
+                break;
+            case EditorShortcutSettings.Commands.MaskMode:
+                editor.ToggleMaskPaintMode();
+                break;
+            case EditorShortcutSettings.Commands.Copy:
+                editor.CopySelectedComposition();
+                break;
+            case EditorShortcutSettings.Commands.Paste:
+                editor.PasteComposition();
+                break;
+            case EditorShortcutSettings.Commands.Lock:
+                editor.ToggleSelectedObjectLock();
+                break;
+            case EditorShortcutSettings.Commands.SelectAll:
+                editor.SelectAllByFilter();
+                break;
+            case EditorShortcutSettings.Commands.Group:
+                _ = view.GroupSelectionInteractiveAsync();
+                break;
+            case EditorShortcutSettings.Commands.Ungroup:
+                editor.UngroupSelection();
+                break;
+            case EditorShortcutSettings.Commands.SublayerUp:
+                editor.AdjustSelectedSublayer(1);
+                break;
+            case EditorShortcutSettings.Commands.SublayerDown:
+                editor.AdjustSelectedSublayer(-1);
+                break;
+            case EditorShortcutSettings.Commands.LayerUp:
+                editor.ReorderActiveLayer(up: true);
+                break;
+            case EditorShortcutSettings.Commands.LayerDown:
+                editor.ReorderActiveLayer(up: false);
+                break;
+            case EditorShortcutSettings.Commands.StampFocusLibrary:
+                view.OpenAssetCatalog(focusSearch: true);
+                break;
+            case EditorShortcutSettings.Commands.StampNextVariant:
+                editor.NextVariant();
+                view.RefreshLibraryPanel();
+                break;
+            case EditorShortcutSettings.Commands.StampPreviousVariant:
+                editor.PreviousVariant();
+                view.RefreshLibraryPanel();
+                break;
+            case EditorShortcutSettings.Commands.StampDensityUp:
+                editor.AdjustStampDensity(1, false);
+                view.RefreshLibraryPanel();
+                break;
+            case EditorShortcutSettings.Commands.StampDensityDown:
+                editor.AdjustStampDensity(-1, false);
+                view.RefreshLibraryPanel();
+                break;
+            case EditorShortcutSettings.Commands.FontPrevious:
+                editor.SelectAdjacentTextFont(-1);
+                break;
+            case EditorShortcutSettings.Commands.FontNext:
+                editor.SelectAdjacentTextFont(1);
+                break;
             default:
-                return;
+                return false;
         }
 
-        e.Handled = true;
+        return true;
     }
 
-    /// <summary>The rail's single-key bindings; null for any key that is not a tool.</summary>
-    private static EditorTool? ToolForKey(Key key) => key switch
+    private static void AdjustPrimary(EditorViewModel editor, int direction, bool large)
     {
-        Key.V => EditorTool.Select,
-        Key.L => EditorTool.Line,
-        Key.R => EditorTool.Shape,
-        Key.T => EditorTool.Text,
-        Key.B => EditorTool.Brush,
-        Key.M => EditorTool.Mask,
-        _ => null,
-    };
+        if (editor.ActiveTool is EditorTool.Brush or EditorTool.Mask or EditorTool.Land)
+            editor.AdjustBrushSize(direction, large);
+        else if (editor.ActiveTool == EditorTool.Text)
+            editor.AdjustSelectedTextFontSize(direction, large);
+        else if (editor.ActiveTool == EditorTool.Select)
+            editor.ResizeSelectedObject(direction, large);
+    }
+
+    private static void AdjustSecondary(EditorView view, int direction, bool large)
+    {
+        var editor = view.Editor;
+        if (direction > 0 && view.IsNotesOpen)
+            view.OpenNotes(focusEditor: true);
+        else if (editor.ActiveTool is EditorTool.Brush or EditorTool.Mask or EditorTool.Land)
+            editor.AdjustBrushOpacity(direction, large);
+        else if (editor.ActiveTool == EditorTool.Select)
+            editor.AdjustSelectedOpacity(direction, large);
+    }
+
+    private static void AdjustTertiary(EditorView view, int direction, bool large)
+    {
+        var editor = view.Editor;
+        if (editor.ActiveTool == EditorTool.Stamp)
+        {
+            editor.AdjustStampArea(direction, large);
+            view.RefreshLibraryPanel();
+        }
+        else if (editor.ActiveTool == EditorTool.Brush)
+            editor.AdjustBrushSoftness(direction, large);
+        else if (editor.ActiveTool == EditorTool.Text)
+            editor.AdjustSelectedTextCurve(direction, large);
+    }
 
     private bool IsTypingInText() => FocusManager?.GetFocusedElement() is TextBox;
 
     private void ShowShortcutHelp()
     {
+        var text = new StringBuilder();
+        foreach (var group in EditorShortcutSettings.Definitions
+                     .Where(definition => definition.IsEditable && _shortcuts.Get(definition.Id).Length > 0)
+                     .GroupBy(definition => definition.Group))
+        {
+            if (text.Length > 0) text.AppendLine();
+            text.AppendLine(group.Key.ToUpperInvariant());
+            foreach (var definition in group)
+            {
+                text.Append(_shortcuts.Get(definition.Id))
+                    .Append(" — ")
+                    .Append(definition.Name)
+                    .Append(" · ")
+                    .AppendLine(EditorShortcutSettings.ContextName(definition.Context));
+            }
+        }
+        text.AppendLine()
+            .AppendLine("МЫШЬ")
+            .AppendLine("Колесо — масштаб · средняя кнопка или удержание команды панорамы + drag — панорама")
+            .AppendLine($"{_shortcuts.Get(EditorShortcutSettings.Commands.StampCycleVariant)} — вариант штампа над холстом");
+
         var dialog = new Window
         {
             Title = "Горячие клавиши Map",
@@ -535,35 +585,50 @@ public sealed class MainWindow : Window
                 {
                     Margin = new Avalonia.Thickness(24),
                     TextWrapping = Avalonia.Media.TextWrapping.Wrap,
-                    Text = """
-                    ГЛОБАЛЬНО
-                    Колесо — масштаб · средняя кнопка или Пробел+drag — панорама
-                    K или ? — эта справка · / — правая панель · G — привязка к сетке
-                    Ctrl+Z / Ctrl+Shift+Z — отмена / повтор · Tab — предыдущий инструмент
-                    V Выбор · M Маска · B Кисть · O Ассеты/штампы · R Фигура · L Линия · T Текст · N Заметки
-
-                    ВЫБОР
-                    Ctrl+A — выбрать всё по поиску и фильтру · Ctrl+клик — добавить/убрать объект
-                    Рамка мышью по пустому месту — выделить область · Ctrl+рамка — добавить к выбору
-                    Esc — выйти из группы / снять выбор · ` / ~ — вернуть предыдущий выбор
-                    Delete / Backspace — удалить всё выделение · стрелки — сдвинуть · Shift+стрелки — крупный шаг
-                    W/S — размер · Shift+W/S — крупный шаг · </> — поворот
-                    Ctrl+колесо — поворот · Ctrl+Alt+колесо — точный поворот · Shift+колесо — размер
-                    Ctrl+C / Ctrl+V — копировать / вставить · Ctrl+L — блокировка выделения
-                    Ctrl+G — сгруппировать · Ctrl+Shift+G — разгруппировать
-                    Ctrl+↑/↓ — подслой · Ctrl+Shift+↑/↓ — слой
-
-                    КИСТЬ / МАСКА / ТЕКСТ
-                    W/S — размер · E/D — непрозрачность · Q/A — мягкость кисти или кривизна текста
-                    X — режим маски · F — каталог ассетов · E в заметках — редактирование
-
-                    Shift увеличивает шаг. Сочетания для каталога шрифтов будут добавлены
-                    отдельным проверяемым срезом.
-                    """,
+                    Text = text.ToString(),
                 },
             },
         };
         _ = dialog.ShowDialog(this);
+    }
+
+    private void OpenShortcutSettings()
+    {
+        var dialog = new ShortcutSettingsWindow(
+            _shortcuts,
+            draft =>
+            {
+                var result = _shortcutStore.Save(
+                    draft.GetOverrides(), EditorShortcutSettings.KnownCommandIds);
+                if (!result.Succeeded) return result.Error ?? "Не удалось сохранить сочетания.";
+                _shortcuts.ReplaceWith(draft);
+                _shortcutLoadWarning = null;
+                return null;
+            },
+            _shortcutLoadWarning);
+        _ = dialog.ShowDialog(this);
+    }
+
+    private static EditorShortcutSettings LoadShortcuts(
+        ShortcutSettingsStore store,
+        out string? warning)
+    {
+        var loaded = store.Load(EditorShortcutSettings.KnownCommandIds);
+        var candidate = new EditorShortcutSettings();
+        var applied = candidate.ApplyPersisted(loaded.Bindings);
+        warning = loaded.Warning;
+        if (applied != loaded.Bindings.Count)
+        {
+            warning = "Часть локальных сочетаний не распознана и заменена стандартными.";
+        }
+
+        if (candidate.GetConflicts().Count > 0)
+        {
+            warning = "В локальных сочетаниях найден конфликт. Используются стандартные; исходный файл не изменён.";
+            return new EditorShortcutSettings();
+        }
+
+        return candidate;
     }
 
     private async Task HandleNewShortcutAsync()

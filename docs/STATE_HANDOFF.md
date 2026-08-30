@@ -2,40 +2,46 @@
 
 ## Последнее обновление
 
-2026-08-30. `Stage 10E: FACT / OWNER ACCEPTED` на точном HEAD
-`78a5b98665ed57c2a00a64335371e7f0c6132dd9` в worktree
-`C:\Users\Leshe\.codex\worktrees\stage10e-grid-geometry\Map`, branch
-`stage/10e-grid-geometry`. Владелец прямо разрешил переход без дополнительного Gate D.
+2026-08-30. `Stage 10F: FACT / PARTIAL — implementation checkpoint author-verified` от точного
+`STAGE10F_BASE=766b81617874b4b8dbed2f4e781c94350305796a` в worktree
+`C:\Users\Leshe\.codex\worktrees\stage10f-fonts-bindings\Map`, branch
+`stage/10f-fonts-bindings`.
 
-`FACT`: добавлены четыре самостоятельные geometry (`Square`, `IsometricSquares`, `HexFlat`,
-`HexPointy`), общий чистый topology/snap/render evaluator, полный Grid property sheet, одна
-undoable-команда на принятое свойство, strict persistence без смены `schemaVersion`, bounded
-rendering, save/reopen и export policy. Финальный Release build: `0` warnings/errors; полный suite
-`716/716`; Stage10E filters Core `12/12`, Persistence `13/13`, Rendering `4/4`, Presentation `4/4`.
+`FACT`: добавлен ленивый Skia-backed каталог локальных семейств Windows с case-insensitive
+dedupe/search/stable sort; один выбранный текст меняет requested family одной существующей
+undoable-командой, missing request не теряется и отдельно показывает фактический fallback.
+`.mapproj`, resolver, renderer и schemaVersion не менялись. Previous/next работают через единый
+редактируемый shortcut registry в нормальном Select-mode выбранного текста.
+
+`FACT`: один профиль сочетаний теперь маршрутизирует реальные действия, формирует help/tooltips и
+редактируется transactional-окном с capture, search/grouping, unassign, reset-one/reset-all и
+блокировкой пересекающихся конфликтов. Настройки сохраняются отдельно от карты в bounded known-ID
+JSON атомарным replace; повреждённый единственный файл не меняется при load и получает `.bak`
+только при явном save.
+
+`FACT` automatic: restore PASS; Release build `0` warnings/errors; Stage10F filters Presentation
+`10/10`, Rendering `2/2`, Persistence `1/1`; полный suite `732/732` (Core `215`, Persistence `129`,
+Rendering `32`, Presentation `223`, Assets `133`); vulnerable packages не найдены, deprecated —
+только прежний xUnit 2.9.3 Legacy. Formatter один раз сохранил legacy baseline и потому честно
+`PARTIAL`, без повторного прогона.
 
 `FACT` native self-check: точный Release EXE SHA-256
-`a909007ecd7f33315bc9bdfba06ab20dd7a631f5d5fdb4f60fa4329fe29e8cef`, настоящее Avalonia-окно
-`2500×1460` при `96 DPI / 100%`, `108` UIA checks, четыре geometry screenshots, exact values,
-однокомандный undo/redo, object/node/portal snap со стабильными ID, save/close/reopen, два
-экспорта `1600×1000` и clean process shutdown. Evidence:
-`artifacts/stage10e-grid-geometry/ui-smoke-20260830-021038/report.json`.
+`c0e777580e6d1441158578bd02e44d00cc1b5d4c202ac434c2bfca81f4e06f65`, настоящий Avalonia Win32
+сценарий прошёл `31/31`: каталог/поиск/Bahnschrift, `]`→Book Antiqua, exact undo/redo,
+save/reopen, missing request + Arial fallback в UI/scene/export, rejected V-conflict, Text→Alt+T,
+old/new routing, text-input suppression, help/tooltip, restart persistence и reset defaults. Все
+три owned process завершены; evidence:
+`artifacts/stage10f-fonts-bindings/ui-smoke-20260830-170950/report.json`.
 
-`PARTIAL` сохранён исторически: author self-check не является независимой приёмкой; четыре golden PNG имеют статус
-`PROPOSED`. Bounded Stryker оставил `195` survived и `6` timeout. Accessibility Insights FastPass,
-физический Tab traversal, реальные `150%/200%` DPI и конкретный runtime GPU/software backend не
-доказаны. Полный отчёт: `docs/reviews/STAGE_10E_GRID_GEOMETRY_VERIFICATION.md`.
+`PARTIAL`: это self-check автора, а не fresh independent review. Не выполнены реальные Windows
+scale `150%/200%`, физическая Tab-последовательность и отдельный clean-context UX-review;
+legacy formatter baseline остаётся. Подробный отчёт:
+`docs/reviews/STAGE_10F_FONTS_BINDINGS_VERIFICATION.md`.
 
-Это прямое решение владельца о достаточности текущего результата для перехода, а не утверждение о
-проведённом новом независимом acceptance-проходе. Все этапы дорожной карты до Stage 10E
-включительно закрыты для перехода; исторические `PARTIAL`, ограничения и отсутствующие
-доказательства выше не стираются.
-
-Следующее и единственное действие: Stage 10F — локальный каталог системных шрифтов и реально
-редактируемые сочетания по активному контракту
-`docs/prompts/STAGE_10F_FONTS_BINDINGS.md`. Реализация ведётся в branch
-`stage/10f-fonts-bindings` и отдельном worktree
-`C:\Users\Leshe\.codex\worktrees\stage10f-fonts-bindings\Map` от документального checkpoint,
-который содержит это решение владельца.
+Следующее и единственное действие: свежий Codex `gpt-5.6-sol`, reasoning `xhigh`, независимо
+проверяет точный диапазон
+`766b81617874b4b8dbed2f4e781c94350305796a..HEAD`. Stage 11, push, PR, release и merge в этой
+задаче не начинать.
 
 ## FACT — среда
 

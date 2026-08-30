@@ -299,8 +299,16 @@ UI/groups и font catalog остаются после 10B.
    владельцем для перехода на точном HEAD `78a5b98665ed57c2a00a64335371e7f0c6132dd9` без нового
    Gate D. Это прямое продуктовое решение, не новая независимая проверка; исторические `PARTIAL`,
    ограничения и недостающие доказательства сохраняются в author-report.
-5. **10F — Licensed font catalog/navigation и редактируемые bindings: `ACTIVE`.** Контракт:
-   `prompts/STAGE_10F_FONTS_BINDINGS.md`.
+5. **10F — Licensed font catalog/navigation и редактируемые bindings: `FACT / PARTIAL`, author
+   checkpoint.** Реализованы локальный Skia-backed каталог системных семейств Windows, поиск,
+   выбор и keyboard previous/next одной undoable-командой с сохранением requested/fallback без
+   смены `.mapproj`; единый registry всех сочетаний, transactional editor, conflict rejection,
+   атомарный bounded JSON вне проекта, restart/reset и живые help/tooltips. Release native driver
+   прошёл `31/31`; полный suite — `732/732`. `PARTIAL`: это авторский self-check, formatter
+   сохраняет legacy baseline, fresh independent review и alternate-DPI/physical-Tab gates не
+   выполнены. Контракт остаётся `ACTIVE` до review:
+   `prompts/STAGE_10F_FONTS_BINDINGS.md`; отчёт:
+   `reviews/STAGE_10F_FONTS_BINDINGS_VERIFICATION.md`.
 
 Эти срезы не смешиваются с Stage 9B–9E. Выполнение 10B не позволяет объявить весь Stage 10
 готовым.

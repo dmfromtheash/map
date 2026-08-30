@@ -25,21 +25,6 @@ public static class EditorLabels
         _ => "Инструмент",
     };
 
-    /// <summary>The single-key shortcut of a tool, shown in its tooltip and in the hint bar.</summary>
-    public static string ToolShortcut(EditorTool tool) => tool switch
-    {
-        EditorTool.Select => "V",
-        EditorTool.Line => "L",
-        EditorTool.Shape => "R",
-        EditorTool.Text => "T",
-        EditorTool.Brush => "B",
-        EditorTool.Mask => "M",
-        // Inkarnate has no separate Land key; assigning E here conflicts with its property/edit key.
-        EditorTool.Land => "",
-        EditorTool.Stamp => "O",
-        _ => "",
-    };
-
     /// <summary>One sentence telling a first-time user what this tool expects them to do.</summary>
     public static string ToolHint(EditorTool tool) => tool switch
     {
@@ -50,7 +35,7 @@ public static class EditorLabels
         EditorTool.Brush => "Рисуйте по холсту. Размер и непрозрачность — слева.",
         EditorTool.Mask => "Рисуйте по маске активного слоя: скрывайте или возвращайте участки.",
         EditorTool.Land => "Протяните по холсту, чтобы добавить сушу. Режим «Убрать» стирает её.",
-        EditorTool.Stamp => "Выберите набор в библиотеке и щёлкните по холсту. Q/A — область, Alt+Q/Alt+A — плотность.",
+        EditorTool.Stamp => "Выберите набор в библиотеке и щёлкните по холсту. Область и плотность настраиваются слева.",
         _ => "",
     };
 

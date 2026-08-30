@@ -136,7 +136,7 @@ public class EditorPresentationStateTests
         foreach (var tool in Enum.GetValues<EditorTool>())
         {
             var name = EditorLabels.Tool(tool);
-            var shortcut = EditorLabels.ToolShortcut(tool);
+            var shortcut = new EditorShortcutSettings().Get(EditorShortcutSettings.ToolCommand(tool));
             var hint = EditorLabels.ToolHint(tool);
 
             Assert.False(string.IsNullOrWhiteSpace(name));

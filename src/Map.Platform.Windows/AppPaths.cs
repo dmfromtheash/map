@@ -12,5 +12,7 @@ public static class AppPaths
 
     public static string RecentIndexPath => Path.Combine(Root, "recent.json");
 
+    public static string ShortcutSettingsPath => Path.Combine(Root, "shortcuts.json");
+
     public static string AssetCatalogRoot => Path.Combine(Root, "Assets");
 }

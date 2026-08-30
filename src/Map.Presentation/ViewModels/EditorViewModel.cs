@@ -159,6 +159,7 @@ public sealed class EditorViewModel : ViewModelBase
     private readonly string _appVersion;
     private readonly SemaphoreSlim _saveGate = new(1, 1);
     private readonly AssetCatalog? _assetCatalog;
+    private readonly IReadOnlyList<string> _localFontFamilies;
 
     private SaveState _saveState;
     private AutosaveState _autosaveState;
@@ -250,7 +251,9 @@ public sealed class EditorViewModel : ViewModelBase
         Func<DateTimeOffset>? clock = null,
         string? appVersion = null,
         AssetCatalog? assetCatalog = null,
-        IAssetContentResolver? assetResolver = null)
+        IAssetContentResolver? assetResolver = null,
+        EditorShortcutSettings? shortcuts = null,
+        IReadOnlyList<string>? availableFontFamilies = null)
     {
         Session = new EditingSession(document);
         DocumentPath = documentPath;
@@ -264,6 +267,9 @@ public sealed class EditorViewModel : ViewModelBase
             ?? typeof(EditorViewModel).Assembly.GetName().Version?.ToString(3)
             ?? "0.0.0";
         _assetCatalog = assetCatalog;
+        Shortcuts = shortcuts ?? new EditorShortcutSettings();
+        _localFontFamilies = SystemFontCatalog.Normalize(
+            availableFontFamilies ?? SystemFontCatalog.Families);
         _assetResolver = assetResolver
             ?? (assetCatalog is null ? null : new CatalogAssetContentResolver(assetCatalog));
         StampImages = assetCatalog is null
@@ -288,7 +294,7 @@ public sealed class EditorViewModel : ViewModelBase
 
     public EditingSession Session { get; }
 
-    public EditorShortcutSettings Shortcuts { get; } = new();
+    public EditorShortcutSettings Shortcuts { get; }
 
     public IStampImageSource? StampImages { get; }
 
@@ -2494,6 +2500,73 @@ public sealed class EditorViewModel : ViewModelBase
             ? TextFontResolver.Resolve(text.RequestedFontFamily, text.FallbackFontFamily)
             : null;
 
+    public IReadOnlyList<string> LocalFontFamilies => _localFontFamilies;
+
+    /// <summary>
+    /// Case-insensitive local search. A missing requested family remains visible so fallback is
+    /// never mistaken for a silent document rewrite.
+    /// </summary>
+    public IReadOnlyList<string> FontFamiliesForSearch(string? search)
+    {
+        var query = search?.Trim() ?? "";
+        var requested = Session.SelectedObject?.Text?.RequestedFontFamily;
+        var result = new List<string>();
+        if (!string.IsNullOrWhiteSpace(requested))
+        {
+            result.Add(requested);
+        }
+
+        result.AddRange(_localFontFamilies.Where(family =>
+            !string.Equals(family, requested, StringComparison.OrdinalIgnoreCase)
+            && (query.Length == 0 || family.Contains(query, StringComparison.OrdinalIgnoreCase))));
+        return result;
+    }
+
+    public bool IsLocalFontAvailable(string family) =>
+        _localFontFamilies.Contains(family, StringComparer.OrdinalIgnoreCase);
+
+    public void SetSelectedTextFontFamily(string? family)
+    {
+        var requested = family?.Trim();
+        if (Session.SelectedObjectIds.Count != 1
+            || string.IsNullOrWhiteSpace(requested)
+            || requested.Length > 256)
+        {
+            return;
+        }
+
+        EditText("Text font family", commit: true,
+            text => text with { RequestedFontFamily = requested });
+        Raise(nameof(SelectedTextFontResolution));
+    }
+
+    public void SelectAdjacentTextFont(int direction)
+    {
+        if (direction == 0
+            || Session.SelectedObjectIds.Count != 1
+            || _localFontFamilies.Count == 0
+            || EditableSelection() is not { Text: { } text })
+        {
+            return;
+        }
+
+        var current = -1;
+        for (var index = 0; index < _localFontFamilies.Count; index++)
+        {
+            if (string.Equals(_localFontFamilies[index], text.RequestedFontFamily,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                current = index;
+                break;
+            }
+        }
+
+        var next = current < 0
+            ? direction > 0 ? 0 : _localFontFamilies.Count - 1
+            : (current + Math.Sign(direction) + _localFontFamilies.Count) % _localFontFamilies.Count;
+        SetSelectedTextFontFamily(_localFontFamilies[next]);
+    }
+
     public void UseMissingFontOnSelectedText()
     {
         if (EditableSelection() is not { Text: { } style } before) return;
@@ -4176,6 +4249,7 @@ public sealed class EditorViewModel : ViewModelBase
         Raise(nameof(ActiveLayerSummary));
         Raise(nameof(GridSummary));
         Raise(nameof(MaskEditLayerId));
+        Raise(nameof(SelectedTextFontResolution));
         RaiseSessionState();
         SceneChanged?.Invoke(this, EventArgs.Empty);
     }

@@ -90,6 +90,8 @@ public sealed class EditorView : UserControl
     private readonly ContentControl _contextHost = new() { Name = "ContextPanelHost" };
     private readonly Dictionary<EditorTool, Control> _toolPanels = [];
     private readonly Dictionary<EditorTool, Button> _toolButtons = [];
+    private readonly List<(Button Button, string Label, string Command)> _commandButtons = [];
+    private readonly List<Action> _shortcutSurfaceSyncs = [];
     private readonly Dictionary<string, Button> _landShapeButtons = [];
     private readonly List<Button> _landActionButtons = [];
     private readonly List<Button> _maskModeButtons = [];
@@ -236,19 +238,25 @@ public sealed class EditorView : UserControl
     private ToggleButton _eraserButton = null!;
     private Button _undoButton = null!;
     private Button _redoButton = null!;
+    private Button _saveButton = null!;
+    private Button _shortcutSettingsButton = null!;
 
     public EditorView(
-        EditorViewModel editor, Func<System.Threading.Tasks.Task> requestBack, Action requestSecondWindow)
+        EditorViewModel editor,
+        Func<System.Threading.Tasks.Task> requestBack,
+        Action requestSecondWindow,
+        Action requestShortcutSettings)
     {
         _editor = editor;
         Name = "EditorView";
 
-        var topBar = BuildTopBar(requestBack, requestSecondWindow);
+        var topBar = BuildTopBar(requestBack, requestSecondWindow, requestShortcutSettings);
         var rail = BuildToolRail();
         var contextPanel = BuildContextPanel();
         var sidePanel = BuildSidePanel();
         var hintBar = BuildHintBar();
         var statusBar = BuildStatusBar();
+        SyncShortcutSurfaces();
 
         Content = new DockPanel
         {
@@ -271,6 +279,7 @@ public sealed class EditorView : UserControl
         _canvas.StampPlaced += (_, _) => RefreshLibraryPanel();
         _canvas.VariantCycled += (_, _) => RefreshLibraryPanel();
         _editor.PropertyChanged += OnEditorChanged;
+        _editor.Shortcuts.Changed += OnShortcutsChanged;
         _editor.SceneChanged += (_, _) => Dispatcher.UIThread.Post(() =>
         {
             SyncStatus();
@@ -339,7 +348,10 @@ public sealed class EditorView : UserControl
 
     // ======================================================================= top
 
-    private Control BuildTopBar(Func<System.Threading.Tasks.Task> requestBack, Action requestSecondWindow)
+    private Control BuildTopBar(
+        Func<System.Threading.Tasks.Task> requestBack,
+        Action requestSecondWindow,
+        Action requestShortcutSettings)
     {
         var back = Ui.AsyncButton("BackButton", "Библиотека", requestBack, "ghost");
         back.Content = new StackPanel
@@ -358,14 +370,15 @@ public sealed class EditorView : UserControl
         title.MaxWidth = 340;
         title.Margin = new Thickness(14, 0, 8, 0);
 
-        _undoButton = Ui.IconButton("UndoButton", "Отменить  (Ctrl+Z)", MapIcons.Undo, _editor.Undo);
-        _redoButton = Ui.IconButton("RedoButton", "Повторить  (Ctrl+Y)", MapIcons.Redo, _editor.Redo);
+        _undoButton = Ui.IconButton("UndoButton", "Отменить", MapIcons.Undo, _editor.Undo);
+        _redoButton = Ui.IconButton("RedoButton", "Повторить", MapIcons.Redo, _editor.Redo);
         var fit = Ui.IconButton("FitButton", "Вписать карту в окно", MapIcons.FitCanvas, _canvas.FitToCanvas);
         var second = Ui.IconButton("SecondWindowButton", "Открыть второе окно", MapIcons.Window, requestSecondWindow);
+        _shortcutSettingsButton = Ui.TextButton(
+            "ShortcutSettingsButton", "Сочетания…", requestShortcutSettings, "compact");
 
         var saveAs = Ui.AsyncButton("SaveAsButton", "Сохранить как…", () => _editor.SaveAsync(saveAs: true));
-        var save = Ui.AsyncButton("SaveButton", "Сохранить", () => _editor.SaveAsync(), "primary");
-        ToolTip.SetTip(save, "Сохранить проект  (Ctrl+S)");
+        _saveButton = Ui.AsyncButton("SaveButton", "Сохранить", () => _editor.SaveAsync(), "primary");
 
         var bar = new DockPanel
         {
@@ -376,7 +389,7 @@ public sealed class EditorView : UserControl
                 {
                     Orientation = Orientation.Horizontal,
                     Spacing = 6,
-                    Children = { second, saveAs, save },
+                    Children = { _shortcutSettingsButton, second, saveAs, _saveButton },
                 }.Docked(Dock.Right),
                 new StackPanel
                 {
@@ -389,6 +402,8 @@ public sealed class EditorView : UserControl
                 title,
             },
         };
+
+        SyncShortcutSurfaces();
 
         return new Border { Child = bar }.Classed("app-bar");
     }
@@ -410,7 +425,7 @@ public sealed class EditorView : UserControl
                 name,
                 EditorLabels.Tool(tool),
                 icon,
-                EditorLabels.ToolShortcut(tool),
+                ToolShortcut(tool),
                 () => _editor.ActiveTool = tool);
             _toolButtons[tool] = button;
             return button;
@@ -799,33 +814,20 @@ public sealed class EditorView : UserControl
                 Explanation(EditorLabels.ToolHint(EditorTool.Stamp)),
                 current,
                 area,
-                Ui.TextButton("OpenLibraryButton", "Открыть библиотеку (F)",
+                ShortcutTextButton("OpenLibraryButton", "Открыть библиотеку",
+                    EditorShortcutSettings.Commands.StampFocusLibrary,
                     () => OpenAssetCatalog(focusSearch: true), "compact"),
-                ChipRow(["Alt+←", "Alt+→"], "вариант"),
-                ChipRow(["Q", "A"], "область"),
-                ChipRow(["Alt+Q", "Alt+A"], "плотность"),
+                ShortcutChipRow(
+                    [EditorShortcutSettings.Commands.StampPreviousVariant,
+                     EditorShortcutSettings.Commands.StampNextVariant], "вариант"),
+                ShortcutChipRow(
+                    [EditorShortcutSettings.Commands.TertiaryUp,
+                     EditorShortcutSettings.Commands.TertiaryDown], "область"),
+                ShortcutChipRow(
+                    [EditorShortcutSettings.Commands.StampDensityUp,
+                     EditorShortcutSettings.Commands.StampDensityDown], "плотность"),
             },
         };
-    }
-
-    /// <summary>One key-hint row. Each row holds one meaning so nothing overflows the panel.</summary>
-    private static WrapPanel ChipRow(IReadOnlyList<string> keys, string meaning)
-    {
-        var row = new WrapPanel { Orientation = Orientation.Horizontal };
-        foreach (var key in keys)
-        {
-            var chip = Ui.KeyChip(key);
-            chip.Margin = new Thickness(0, 2, 4, 2);
-            row.Children.Add(chip);
-        }
-
-        row.Children.Add(new TextBlock
-        {
-            Text = meaning,
-            Margin = new Thickness(0, 2, 0, 2),
-            VerticalAlignment = VerticalAlignment.Center,
-        }.Classed("faint", "role-caption"));
-        return row;
     }
 
     private static Control Explanation(string text) => new TextBlock
@@ -1565,6 +1567,55 @@ public sealed class EditorView : UserControl
             }
         });
 
+        var fontSearch = new TextBox
+        {
+            Name = "TextFontSearchBox",
+            PlaceholderText = "Найти локальный шрифт",
+        };
+        AutomationProperties.SetName(fontSearch, "Поиск локального шрифта");
+        var fontList = new ListBox
+        {
+            Name = "TextFontList",
+            MinHeight = 96,
+            MaxHeight = 180,
+            SelectionMode = SelectionMode.Single,
+        };
+        AutomationProperties.SetName(fontList, "Локальные шрифты Windows");
+        var syncingFont = false;
+        void RefreshFontChoices()
+        {
+            syncingFont = true;
+            try
+            {
+                var requested = Style()?.RequestedFontFamily;
+                fontList.ItemsSource = _editor.FontFamiliesForSearch(fontSearch.Text);
+                fontList.SelectedItem = requested;
+                if (requested is not null)
+                {
+                    fontList.ScrollIntoView(requested);
+                }
+            }
+            finally
+            {
+                syncingFont = false;
+            }
+        }
+        fontSearch.TextChanged += (_, _) => RefreshFontChoices();
+        fontList.SelectionChanged += (_, _) =>
+        {
+            if (!syncingFont && fontList.SelectedItem is string selected)
+            {
+                _editor.SetSelectedTextFontFamily(selected);
+            }
+        };
+
+        var previousFont = Ui.TextButton(
+            "TextPreviousFontButton", "Предыдущий", () => _editor.SelectAdjacentTextFont(-1), "compact");
+        var nextFont = Ui.TextButton(
+            "TextNextFontButton", "Следующий", () => _editor.SelectAdjacentTextFont(1), "compact");
+        _commandButtons.Add((previousFont, "Предыдущий шрифт", EditorShortcutSettings.Commands.FontPrevious));
+        _commandButtons.Add((nextFont, "Следующий шрифт", EditorShortcutSettings.Commands.FontNext));
+
         var font = new TextBlock { TextWrapping = TextWrapping.Wrap }
             .Classed("faint", "role-caption").Named("TextFontStateText");
         _appearanceSyncs.Add(() =>
@@ -1573,8 +1624,11 @@ public sealed class EditorView : UserControl
             font.Text = resolution is null
                 ? ""
                 : resolution.UsedFallback
-                    ? $"Шрифт: {resolution.RequestedFamily} недоступен, используется {resolution.ResolvedFamily}."
-                    : $"Шрифт: {resolution.ResolvedFamily}. Каталог шрифтов появится в следующем срезе.";
+                    ? $"Запрошено в документе: {resolution.RequestedFamily}.\n" +
+                      $"Фактически показано: {resolution.ResolvedFamily} — локальная замена; запрос сохранён."
+                    : $"Запрошено в документе: {resolution.RequestedFamily}.\n" +
+                      $"Доступно в Windows и показано: {resolution.ResolvedFamily}.";
+            RefreshFontChoices();
         });
 
         var appearance = new Expander
@@ -1638,6 +1692,19 @@ public sealed class EditorView : UserControl
                     () => Style()?.FontSize, (v, c) => _editor.SetTextFontSize(v, c)),
                 AppearanceColorBox("TextFillColorBox", "Цвет текста",
                     () => Style()?.FillColor, _editor.SetTextFillColor),
+                new TextBlock
+                {
+                    Text = "Локальные шрифты Windows. Map не встраивает и не распространяет файлы шрифтов.",
+                    TextWrapping = TextWrapping.Wrap,
+                }.Classed("faint", "role-caption"),
+                fontSearch,
+                fontList,
+                new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 5,
+                    Children = { previousFont, nextFont },
+                },
                 AppearanceChoice("TextAlignmentChoice", "Выравнивание",
                     [("Left", EditorLabels.Alignment(Core.Documents.TextAlignment.Left)),
                      ("Center", EditorLabels.Alignment(Core.Documents.TextAlignment.Center)),
@@ -1721,7 +1788,8 @@ public sealed class EditorView : UserControl
         var delete = Ui.CommandButton("DeleteObjectButton", "Удалить объект", MapIcons.Trash,
             _editor.DeleteSelectedObject, "destructive", "compact", "centred");
         delete.Margin = new Thickness(0, 6, 0, 0);
-        ToolTip.SetTip(delete, "Удалить выделенный объект. Действие можно отменить (Ctrl+Z).");
+        DynamicTip(delete, () =>
+            $"Удалить выделенный объект. Действие можно отменить ({_editor.Shortcuts.Get(EditorShortcutSettings.Commands.Undo)}).");
 
         return Ui.Section("Объект", new StackPanel
         {
@@ -1970,7 +2038,8 @@ public sealed class EditorView : UserControl
         delete.HorizontalAlignment = HorizontalAlignment.Stretch;
         delete.HorizontalContentAlignment = HorizontalAlignment.Center;
         delete.Margin = new Thickness(0, 6, 0, 0);
-        ToolTip.SetTip(delete, "Удалить слой вместе с содержимым. Действие можно отменить (Ctrl+Z).");
+        DynamicTip(delete, () =>
+            $"Удалить слой вместе с содержимым. Действие можно отменить ({_editor.Shortcuts.Get(EditorShortcutSettings.Commands.Undo)}).");
 
         return new StackPanel
         {
@@ -2112,7 +2181,8 @@ public sealed class EditorView : UserControl
                 .Named("ObjectTypeFilter" + filter)
                 .Classed("segment");
             AutomationProperties.SetName(button, "Фильтр типа: " + title);
-            ToolTip.SetTip(button, $"Показывать только: {title}. Ctrl+A выбирает по этому фильтру.");
+            DynamicTip(button, () =>
+                $"Показывать только: {title}. {_editor.Shortcuts.Get(EditorShortcutSettings.Commands.SelectAll)} выбирает по этому фильтру.");
             button.Click += (_, _) =>
             {
                 _editor.ObjectTypeFilter = captured;
@@ -2122,13 +2192,15 @@ public sealed class EditorView : UserControl
             filterStrip.Children.Add(button);
         }
 
-        var selectAll = Ui.TextButton("SelectAllButton", "Выбрать всё (Ctrl+A)", () =>
+        var selectAll = ShortcutTextButton(
+            "SelectAllButton", "Выбрать всё", EditorShortcutSettings.Commands.SelectAll, () =>
         {
             _editor.SelectAllByFilter();
             RefreshAfterSelectionCommand();
         }, "compact");
-        ToolTip.SetTip(selectAll,
-            "Выбрать видимые незаблокированные объекты по текущему поиску и фильтру типа.");
+        DynamicTip(selectAll, () =>
+            $"Выбрать видимые незаблокированные объекты по текущему поиску и фильтру типа " +
+            $"({_editor.Shortcuts.Get(EditorShortcutSettings.Commands.SelectAll)}).");
 
         var body = new StackPanel
         {
@@ -2928,7 +3000,7 @@ public sealed class EditorView : UserControl
             });
 
         _previousVariantButton = Ui.IconButton(
-            "PreviousVariantButton", "Предыдущий вариант (Alt+Влево)", MapIcons.Back, () =>
+            "PreviousVariantButton", "Предыдущий вариант", MapIcons.Back, () =>
             {
                 _editor.PreviousVariant();
                 SyncAssetList();
@@ -2936,7 +3008,7 @@ public sealed class EditorView : UserControl
             });
 
         _nextVariantButton = Ui.IconButton(
-            "NextVariantButton", "Следующий вариант (Alt+Вправо)", MapIcons.ChevronRight, () =>
+            "NextVariantButton", "Следующий вариант", MapIcons.ChevronRight, () =>
             {
                 _editor.NextVariant();
                 SyncAssetList();
@@ -3584,6 +3656,106 @@ public sealed class EditorView : UserControl
 
     // ==================================================================== sync
 
+    private void OnShortcutsChanged(object? sender, EventArgs e) =>
+        Dispatcher.UIThread.Post(SyncShortcutSurfaces);
+
+    private void SyncShortcutSurfaces()
+    {
+        SetCommandTip(_undoButton, "Отменить", EditorShortcutSettings.Commands.Undo);
+        SetCommandTip(_redoButton, "Повторить", EditorShortcutSettings.Commands.Redo);
+        SetCommandTip(_saveButton, "Сохранить проект", EditorShortcutSettings.Commands.Save);
+        SetCommandTip(_shortcutSettingsButton, "Настроить сочетания", EditorShortcutSettings.Commands.ShortcutSettings);
+
+        foreach (var (tool, button) in _toolButtons)
+        {
+            var title = EditorLabels.Tool(tool);
+            var shortcut = ToolShortcut(tool);
+            var text = shortcut.Length > 0 ? $"{title}  ({shortcut})" : title;
+            AutomationProperties.SetName(button, title);
+            AutomationProperties.SetHelpText(button, text);
+            ToolTip.SetTip(button, text);
+        }
+
+        if (_previousVariantButton is not null)
+            SetCommandTip(_previousVariantButton, "Предыдущий вариант", EditorShortcutSettings.Commands.StampPreviousVariant);
+        if (_nextVariantButton is not null)
+            SetCommandTip(_nextVariantButton, "Следующий вариант", EditorShortcutSettings.Commands.StampNextVariant);
+        foreach (var item in _commandButtons)
+            SetCommandTip(item.Button, item.Label, item.Command);
+        foreach (var sync in _shortcutSurfaceSyncs)
+            sync();
+
+        SyncHint();
+    }
+
+    private void SetCommandTip(Button button, string label, string command)
+    {
+        if (button is null) return;
+        var shortcut = _editor.Shortcuts.Get(command);
+        var text = shortcut.Length > 0 ? $"{label}  ({shortcut})" : label;
+        AutomationProperties.SetName(button, text);
+        AutomationProperties.SetHelpText(button, text);
+        ToolTip.SetTip(button, text);
+    }
+
+    private string ToolShortcut(EditorTool tool) =>
+        _editor.Shortcuts.Get(EditorShortcutSettings.ToolCommand(tool));
+
+    private Button ShortcutTextButton(
+        string name,
+        string label,
+        string command,
+        Action action,
+        params string[] classes)
+    {
+        var button = Ui.TextButton(name, label, action, classes);
+        _shortcutSurfaceSyncs.Add(() =>
+        {
+            var gesture = _editor.Shortcuts.Get(command);
+            var text = gesture.Length > 0 ? $"{label} ({gesture})" : label;
+            button.Content = text;
+            AutomationProperties.SetName(button, text);
+            AutomationProperties.SetHelpText(button, text);
+            ToolTip.SetTip(button, text);
+        });
+        return button;
+    }
+
+    private void DynamicTip(Control control, Func<string> text)
+    {
+        _shortcutSurfaceSyncs.Add(() =>
+        {
+            var value = text();
+            AutomationProperties.SetHelpText(control, value);
+            ToolTip.SetTip(control, value);
+        });
+    }
+
+    private WrapPanel ShortcutChipRow(IReadOnlyList<string> commands, string meaning)
+    {
+        var row = new WrapPanel { Orientation = Orientation.Horizontal };
+        _shortcutSurfaceSyncs.Add(() =>
+        {
+            row.Children.Clear();
+            foreach (var command in commands)
+            {
+                var gesture = _editor.Shortcuts.Get(command);
+                if (gesture.Length == 0) continue;
+                var chip = Ui.KeyChip(gesture);
+                chip.Margin = new Thickness(0, 2, 4, 2);
+                row.Children.Add(chip);
+            }
+
+            row.Children.Add(new TextBlock
+            {
+                Text = meaning,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(2, 0, 0, 0),
+            }.Classed("faint", "role-caption"));
+        });
+        return row;
+    }
+
     private void OnEditorChanged(object? sender, PropertyChangedEventArgs e) =>
         Dispatcher.UIThread.Post(() =>
         {
@@ -3789,7 +3961,8 @@ public sealed class EditorView : UserControl
             }
         };
 
-        _groupCreateButton = Ui.TextButton("GroupCreateButton", "Сгруппировать (Ctrl+G)",
+        _groupCreateButton = ShortcutTextButton(
+            "GroupCreateButton", "Сгруппировать", EditorShortcutSettings.Commands.Group,
             () => _ = GroupSelectionInteractiveAsync(), "primary", "compact");
         _groupRenameButton = Ui.TextButton("GroupRenameButton", "Переименовать группу", () =>
         {
@@ -3800,7 +3973,8 @@ public sealed class EditorView : UserControl
 
             RefreshAfterSelectionCommand();
         }, "compact");
-        _ungroupButton = Ui.TextButton("UngroupButton", "Разгруппировать (Ctrl+Shift+G)", () =>
+        _ungroupButton = ShortcutTextButton(
+            "UngroupButton", "Разгруппировать", EditorShortcutSettings.Commands.Ungroup, () =>
         {
             _editor.UngroupSelection();
             RefreshAfterSelectionCommand();
@@ -3834,7 +4008,8 @@ public sealed class EditorView : UserControl
         var delete = Ui.CommandButton("MultiDeleteButton", "Удалить выделение", MapIcons.Trash,
             _editor.DeleteSelectedObject, "destructive", "compact", "centred");
         delete.Margin = new Thickness(0, 6, 0, 0);
-        ToolTip.SetTip(delete, "Удалить все выбранные объекты. Действие можно отменить (Ctrl+Z).");
+        DynamicTip(delete, () =>
+            $"Удалить все выбранные объекты. Действие можно отменить ({_editor.Shortcuts.Get(EditorShortcutSettings.Commands.Undo)}).");
 
         _groupActionsSection = Ui.Section("Группа", _groupNameSection).Named("GroupActionsSection");
         return new StackPanel
@@ -3970,9 +4145,9 @@ public sealed class EditorView : UserControl
         _hintKeys.Children.Clear();
         foreach (var pair in new (string Label, string Key)[]
                  {
-                     ("Отменить", "Ctrl+Z"),
-                     ("Сохранить", "Ctrl+S"),
-                     (EditorLabels.Tool(_editor.ActiveTool), EditorLabels.ToolShortcut(_editor.ActiveTool)),
+                     ("Отменить", _editor.Shortcuts.Get(EditorShortcutSettings.Commands.Undo)),
+                     ("Сохранить", _editor.Shortcuts.Get(EditorShortcutSettings.Commands.Save)),
+                     (EditorLabels.Tool(_editor.ActiveTool), ToolShortcut(_editor.ActiveTool)),
                  })
         {
             if (pair.Key.Length == 0)

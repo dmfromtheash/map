@@ -12,7 +12,7 @@
 | Правовые границы | `FACT` | Автоскрейпинг, обратная разработка и копирование материалов исключены |
 | Продуктовый объём | `ACCEPTED` | Офлайн-эквивалент редактора и локального dashboard; без облачного сообщества и Marketplace |
 | Технологический стек | `ACCEPTED` | .NET 10 + Avalonia 12.1 + Skia; SDK установлен |
-| Код приложения | `PARTIAL / OWNER ACCEPTED` | Все этапы дорожной карты до Stage 10E включительно закрыты владельцем для перехода; Stage 10E принят на точном HEAD `78a5b98665ed57c2a00a64335371e7f0c6132dd9` прямым решением владельца без нового Gate D. Исторические `PARTIAL`, недостающие независимые доказательства и keyboard/DPI/file-picker/clean-context UX-gaps сохраняются. Активная реализация — Stage 10F fonts/bindings |
+| Код приложения | `PARTIAL / AUTHOR VERIFIED` | Все этапы дорожной карты до Stage 10E включительно закрыты владельцем для перехода. Stage 10F fonts/bindings реализован от `766b81617874b4b8dbed2f4e781c94350305796a`: build/tests и нативный сценарий `31/31` зелёные, но fresh independent review точного `BASE..HEAD` ещё не выполнен. Исторические `PARTIAL` и keyboard/DPI/file-picker/clean-context UX-gaps сохраняются |
 | AI workflow | `FACT` | Codex `gpt-5.6-sol`; AGENTS/runbook/protocol/template и все stage prompt'ы содержат конечный verification budget, запрещающий повтор зелёных gates без changed-risk trigger |
 | Дизайн и ассеты | `PARTIAL` | Есть собственная visual system, упрощённая Library v2, наборы вариантов, diagnostic fixtures и полный Grid property sheet; прямое принятие Stage 10E для перехода не переименовывает его исторические `PROPOSED` golden PNG в независимо проверенные |
 | Публичное повторное использование | `FACT / PROPOSED` | 15 upstream-репозиториев закреплены в отдельной ResearchLab; production dependencies не добавлены, Stage 10E остаётся dependency-free, Velopack отложен до Stage 11 |
@@ -54,6 +54,7 @@
 | `prompts/STAGE_10E_GRID_GEOMETRY.md` | исторический контракт отдельной изометрии, полного Grid sheet, snap и golden fixtures |
 | `reviews/STAGE_10E_GRID_GEOMETRY_VERIFICATION.md` | author self-check Stage 10E с отдельным прямым решением владельца о переходе |
 | `prompts/STAGE_10F_FONTS_BINDINGS.md` | активный контракт локального каталога системных шрифтов и реально редактируемых сочетаний |
+| `reviews/STAGE_10F_FONTS_BINDINGS_VERIFICATION.md` | author self-check Stage 10F, native evidence и остаточные риски перед независимой проверкой |
 | `research/OBJECT_AND_GRID_PARITY.md` | clean-room матрица object/grid функций и разрывов текущего UI |
 | `research/INKARNATE_ACCOUNT_WALKTHROUGH_20260826.md` | наблюдаемые text/road/shape/brush/stamp/grid/keyboard механики тестовой карты |
 | `research/TEST_ASSET_FIXTURES.md` | план двух собственных logical fixtures: 12-variant stamp set и brush tip |
@@ -70,8 +71,8 @@
 
 ## Следующее действие
 
-`Stage 10E: FACT / OWNER ACCEPTED` на точном HEAD
-`78a5b98665ed57c2a00a64335371e7f0c6132dd9`. Это прямое решение владельца о переходе, а не
-утверждение о новом независимом acceptance-проходе; исторические ограничения Stage 10E сохранены.
-Следующее действие — реализация активного Stage 10F по
-`docs/prompts/STAGE_10F_FONTS_BINDINGS.md`.
+`Stage 10F: FACT / PARTIAL — implementation checkpoint author-verified` от точного BASE
+`766b81617874b4b8dbed2f4e781c94350305796a`. Локальный каталог шрифтов, честный fallback и
+единый редактируемый профиль сочетаний реализованы; нативный Release-сценарий прошёл `31/31`.
+Это self-check исполнителя, не независимая приёмка. Следующее и единственное действие — fresh
+Codex-review точного `766b81617874b4b8dbed2f4e781c94350305796a..HEAD`; Stage 11 не начинать.

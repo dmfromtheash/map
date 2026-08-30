@@ -12,6 +12,7 @@ public static class TestMode
 {
     public const string Variable = "MAP_UI_TEST_MODE";
     public const string RecoveryRootVariable = "MAP_UI_TEST_RECOVERY_ROOT";
+    public const string ShortcutSettingsPathVariable = "MAP_UI_TEST_SHORTCUT_SETTINGS_PATH";
 
     private static readonly bool Value =
         string.Equals(Environment.GetEnvironmentVariable(Variable), "1", StringComparison.Ordinal);
@@ -39,6 +40,22 @@ public static class TestMode
             }
 
             var value = Environment.GetEnvironmentVariable(RecoveryRootVariable);
+            return string.IsNullOrWhiteSpace(value) || !Path.IsPathFullyQualified(value)
+                ? null
+                : Path.GetFullPath(value);
+        }
+    }
+
+    public static string? ShortcutSettingsPathOverride
+    {
+        get
+        {
+            if (!Enabled)
+            {
+                return null;
+            }
+
+            var value = Environment.GetEnvironmentVariable(ShortcutSettingsPathVariable);
             return string.IsNullOrWhiteSpace(value) || !Path.IsPathFullyQualified(value)
                 ? null
                 : Path.GetFullPath(value);
