@@ -26,7 +26,6 @@ Source identity at intake:
 - Avalonia includes the application icon as the window icon through
   `AvaloniaIncludeApplicationIconAsWindowIcon=true`.
 
-`scripts/check-stage11-icon.ps1` rejects a changed hash, missing required frame, wrong PNG
-dimensions or missing project settings. With a published EXE it also extracts the associated
-Windows icon and records a hash in ignored evidence. Embedded resource inspection and a fresh
-shortcut are required because the Windows icon cache alone is not trustworthy evidence.
+The hashes above are the compact source-of-truth for checking that the two owner-approved icon
+files were not replaced accidentally. No separate Stage 11 verification script is required for
+normal local development.
