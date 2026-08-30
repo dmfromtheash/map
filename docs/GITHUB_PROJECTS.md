@@ -8,6 +8,9 @@
 - На момент подключения repository был пустым, без remote branches и tags.
 - `.github/` отсутствует.
 - GitHub CLI авторизован как `dmfromtheash` по HTTPS.
+- Для новых commits Map используется repo-local адрес
+  `222780331+dmfromtheash@users.noreply.github.com`, чтобы сохранить включённую GitHub-защиту
+  приватного email без переписывания истории.
 - Существующие `3-puti`, `ensi-bot`, `nri-archive` и другие репозитории принадлежат другим
   продуктам и не должны использоваться как remote для Map.
 - Текущий token пока не имеет `project`, поэтому список GitHub Projects недоступен.

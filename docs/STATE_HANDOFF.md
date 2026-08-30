@@ -69,6 +69,8 @@ Worktree `fix/app-icon` остаётся owner-dirty и не изменялся.
 - `origin`: `https://github.com/dmfromtheash/map.git`;
 - repository `dmfromtheash/map` — private;
 - владелец прямо разрешил необходимые commits и push;
+- repo-local Git author использует официальный GitHub noreply-адрес владельца; глобальный приватный
+  email и защита аккаунта не меняются;
 - первым `main` должен стать консолидированный checkpoint, а не старый local `main`;
 - GitHub Project `Map` и issues 12A–12D настраиваются по `docs/GITHUB_PROJECTS.md`;
 - дополнительный scope `project` запрошен и ждёт обязательного подтверждения device-code на
