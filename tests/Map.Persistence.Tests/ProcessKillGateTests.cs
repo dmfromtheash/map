@@ -114,14 +114,19 @@ public class ProcessKillGateTests
 
     private static string ResolveKillHostAssembly()
     {
-        // tests/<project>/bin/<cfg>/<tfm> -> repo root -> sibling test project output.
         var current = new DirectoryInfo(AppContext.BaseDirectory);
-        var tfm = current.Name;
-        var configuration = current.Parent!.Name;
+        while (current is not null && !File.Exists(Path.Combine(current.FullName, "Map.slnx")))
+        {
+            current = current.Parent;
+        }
 
-        var repoRoot = current.Parent!.Parent!.Parent!.Parent!.Parent!;
+        Assert.NotNull(current);
+        var testBin = Path.Combine(
+            current.FullName, "tests", "Map.Persistence.Tests", "bin");
+        var outputSuffix = Path.GetRelativePath(testBin, AppContext.BaseDirectory);
+        Assert.DoesNotContain("..", outputSuffix, StringComparison.Ordinal);
         var helper = Path.Combine(
-            repoRoot.FullName, "tests", "Map.Persistence.KillHost", "bin", configuration, tfm,
+            current.FullName, "tests", "Map.Persistence.KillHost", "bin", outputSuffix,
             "Map.Persistence.KillHost.dll");
 
         Assert.True(

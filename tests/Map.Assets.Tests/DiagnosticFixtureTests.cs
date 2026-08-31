@@ -1,17 +1,23 @@
 ﻿using System.Security.Cryptography;
 using System.Text.Json;
-using Map.DiagnosticAssets;
 
 namespace Map.Assets.Tests;
 
 /// <summary>
-/// The two logical diagnostic fixtures. They are deliberately technical control images produced
-/// by our own generator: no downloaded material, nothing resembling anyone else's artwork, and
-/// nothing that may leak into a shipped starter pack.
+/// The two logical diagnostic fixtures. They are deliberately technical control images tracked
+/// in the repository: no downloaded material, nothing resembling anyone else's artwork, and
+/// nothing that may leak into a shipped starter pack. Their historical generator is intentionally
+/// not a build or test dependency.
 /// </summary>
 public sealed class DiagnosticFixtureTests
 {
+    private const string StampSetId = "diagnostic-stamp-set";
+    private const string BrushSetId = "diagnostic-brush-tip-set";
     private static readonly byte[] PngSignature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+    private static readonly JsonSerializerOptions ManifestJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+    };
 
     /// <summary>Radii sampled outward from the brush-tip centre, along the marker-free axis.</summary>
     private static readonly int[] BrushRampOffsets = [20, 40, 60, 80, 100, 120];
@@ -20,35 +26,36 @@ public sealed class DiagnosticFixtureTests
     private static readonly string FixtureRoot = Path.Combine(RepositoryRoot, "tests", "fixtures", "assets");
 
     [Fact]
-    public void The_generator_reproduces_byte_identical_outputs_on_the_same_skiasharp_version()
+    public void The_tracked_fixture_set_matches_the_manifest_exactly()
     {
-        var first = DiagnosticAssetGenerator.Generate();
-        var second = DiagnosticAssetGenerator.Generate();
+        var declared = ReadManifest().Assets
+            .Select(asset => asset.FileName)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        var tracked = Directory.GetFiles(FixtureRoot, "*.png", SearchOption.TopDirectoryOnly)
+            .Select(Path.GetFileName)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
 
-        Assert.Equal(13, first.Count);
-        Assert.Equal(first.Count, second.Count);
-        for (var index = 0; index < first.Count; index++)
-        {
-            Assert.Equal(first[index].FileName, second[index].FileName);
-            Assert.Equal(first[index].Bytes, second[index].Bytes);
-        }
+        Assert.Equal(declared, tracked);
     }
 
     [Fact]
-    public void The_tracked_outputs_match_what_the_generator_produces_today()
+    public void The_manifest_has_the_stable_fixture_order_and_schema()
     {
-        foreach (var asset in DiagnosticAssetGenerator.Generate())
-        {
-            var path = Path.Combine(FixtureRoot, asset.FileName);
-            Assert.True(File.Exists(path), $"Tracked fixture is missing: {path}");
-            Assert.Equal(asset.Bytes, File.ReadAllBytes(path));
-        }
+        var manifest = ReadManifest();
+        var expected = Enumerable.Range(1, 12)
+            .Select(index => $"diagnostic-stamp-{index:D2}.png")
+            .Append("diagnostic-brush-tip.png");
+
+        Assert.Equal(1, manifest.SchemaVersion);
+        Assert.Equal(expected, manifest.Assets.Select(asset => asset.FileName));
     }
 
     [Fact]
     public void Every_fixture_is_a_real_rgba_png_of_the_declared_size()
     {
-        foreach (var asset in DiagnosticAssetGenerator.Generate())
+        foreach (var asset in ReadManifest().Assets)
         {
             var bytes = File.ReadAllBytes(Path.Combine(FixtureRoot, asset.FileName));
             Assert.Equal(PngSignature, bytes[..8]);
@@ -57,9 +64,8 @@ public sealed class DiagnosticFixtureTests
             Assert.Equal("IHDR", System.Text.Encoding.ASCII.GetString(bytes, 12, 4));
             var width = ReadBigEndian(bytes, 16);
             var height = ReadBigEndian(bytes, 20);
-            var expected = asset.FileName.StartsWith("diagnostic-brush-tip", StringComparison.Ordinal) ? 256 : 512;
-            Assert.Equal(expected, width);
-            Assert.Equal(expected, height);
+            Assert.Equal(asset.Width, width);
+            Assert.Equal(asset.Height, height);
             Assert.Equal(8, bytes[24]);
             Assert.Equal(6, bytes[25]);
         }
@@ -68,7 +74,7 @@ public sealed class DiagnosticFixtureTests
     [Fact]
     public void Every_fixture_really_carries_transparent_and_opaque_pixels()
     {
-        foreach (var asset in DiagnosticAssetGenerator.Generate())
+        foreach (var asset in ReadManifest().Assets)
         {
             using var bitmap = SkiaSharp.SKBitmap.Decode(Path.Combine(FixtureRoot, asset.FileName));
             Assert.NotNull(bitmap);
@@ -135,14 +141,14 @@ public sealed class DiagnosticFixtureTests
         Assert.Equal(13, manifest.Assets.Select(item => item.Sha256).Distinct(StringComparer.Ordinal).Count());
         Assert.All(manifest.Assets, item => Assert.Equal(64, item.Sha256.Length));
 
-        var stampSet = manifest.Sets.Single(set => set.Id == DiagnosticAssetGenerator.StampSetId);
+        var stampSet = manifest.Sets.Single(set => set.Id == StampSetId);
         Assert.Equal(12, stampSet.VariantIds.Count);
         Assert.Equal(stampSet.VariantIds[0], stampSet.CoverVariantId);
         Assert.Equal(
             [.. Enumerable.Range(1, 12).Select(index => $"diagnostic-stamp-{index:D2}")],
             stampSet.VariantIds);
 
-        var brush = manifest.Sets.Single(set => set.Id == DiagnosticAssetGenerator.BrushSetId);
+        var brush = manifest.Sets.Single(set => set.Id == BrushSetId);
         Assert.Equal(["diagnostic-brush-tip"], brush.VariantIds);
     }
 
@@ -173,7 +179,7 @@ public sealed class DiagnosticFixtureTests
     [Fact]
     public void The_diagnostic_fixtures_are_not_carried_into_the_application_publish_output()
     {
-        var fixtureNames = DiagnosticAssetGenerator.Generate()
+        var fixtureNames = ReadManifest().Assets
             .Select(asset => asset.FileName)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
@@ -237,7 +243,7 @@ public sealed class DiagnosticFixtureTests
         var path = Path.Combine(FixtureRoot, "manifest.json");
         Assert.True(File.Exists(path), $"Fixture manifest is missing: {path}");
         return JsonSerializer.Deserialize<DiagnosticAssetManifest>(
-            File.ReadAllBytes(path), DiagnosticAssetGenerator.JsonOptions)!;
+            File.ReadAllBytes(path), ManifestJsonOptions)!;
     }
 
     private static int ReadBigEndian(byte[] bytes, int offset) =>
@@ -253,5 +259,32 @@ public sealed class DiagnosticFixtureTests
 
         return directory?.FullName
             ?? throw new InvalidOperationException("Map.slnx was not found above the test output directory.");
+    }
+
+    private sealed class DiagnosticAssetManifest
+    {
+        public int SchemaVersion { get; init; }
+        public List<DiagnosticAssetEntry> Assets { get; init; } = [];
+        public List<DiagnosticAssetSet> Sets { get; init; } = [];
+    }
+
+    private sealed class DiagnosticAssetEntry
+    {
+        public string Id { get; init; } = string.Empty;
+        public string FileName { get; init; } = string.Empty;
+        public string Sha256 { get; init; } = string.Empty;
+        public int Width { get; init; }
+        public int Height { get; init; }
+        public bool HasAlpha { get; init; }
+        public string Author { get; init; } = string.Empty;
+        public string License { get; init; } = string.Empty;
+        public string Generator { get; init; } = string.Empty;
+    }
+
+    private sealed class DiagnosticAssetSet
+    {
+        public string Id { get; init; } = string.Empty;
+        public List<string> VariantIds { get; init; } = [];
+        public string CoverVariantId { get; init; } = string.Empty;
     }
 }

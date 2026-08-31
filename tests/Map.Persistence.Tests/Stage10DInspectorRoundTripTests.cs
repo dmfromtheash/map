@@ -13,7 +13,7 @@ namespace Map.Persistence.Tests;
 /// </summary>
 public partial class Stage10DInspectorRoundTripTests
 {
-    [System.Text.RegularExpressions.GeneratedRegex("\"sceneSha256\": \"[0-9a-f]+\"")]
+    [System.Text.RegularExpressions.GeneratedRegex("\"sceneSha256\"\\s*:\\s*\"[0-9a-f]+\"")]
     private static partial System.Text.RegularExpressions.Regex SceneShaRegex();
 
     private const string StampSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -132,10 +132,10 @@ public partial class Stage10DInspectorRoundTripTests
 
         RewriteScene(path, sceneJson =>
         {
-            var index = sceneJson.IndexOf(needle, StringComparison.Ordinal);
-            Assert.True(index >= 0, $"scene.json does not contain «{needle}»");
-            return string.Concat(
-                sceneJson.AsSpan(0, index), poison, sceneJson.AsSpan(index + needle.Length));
+            Assert.True(
+                JsonTestMutations.ContainsFragment(sceneJson, needle),
+                $"scene.json does not contain «{needle}»");
+            return JsonTestMutations.ReplaceFirst(sceneJson, needle, poison);
         });
 
         Assert.Throws<MapProjectCorruptedException>(() => MapProjectStore.Open(path));
@@ -188,8 +188,8 @@ public partial class Stage10DInspectorRoundTripTests
         MapProjectStore.Save(
             AppearanceDocument(), path, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
 
-        RewriteScene(path, sceneJson => sceneJson.Replace(
-            needle, "\"blur\": 32.0001", StringComparison.Ordinal));
+        RewriteScene(path, sceneJson => JsonTestMutations.ReplaceAll(
+            sceneJson, needle, "\"blur\": 32.0001"));
 
         var corruption = Assert.Throws<MapProjectCorruptedException>(() => MapProjectStore.Open(path));
         Assert.Contains("scene.json", corruption.Message, StringComparison.Ordinal);

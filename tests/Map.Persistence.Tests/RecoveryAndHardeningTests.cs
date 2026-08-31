@@ -507,7 +507,7 @@ public class ContainerHardeningTests
         var newHash = MapProjectRoundTripTests.Sha256Hex(sceneBytes);
         manifestText = System.Text.RegularExpressions.Regex.Replace(
             manifestText,
-            "\"sceneSha256\": \"[0-9a-f]+\"",
+            "\"sceneSha256\"\\s*:\\s*\"[0-9a-f]+\"",
             $"\"sceneSha256\": \"{newHash}\"");
 
         using var writer = new StreamWriter(manifestEntry.Open());

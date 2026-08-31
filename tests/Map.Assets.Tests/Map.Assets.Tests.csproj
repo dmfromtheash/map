@@ -21,7 +21,6 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Map.Core\Map.Core.csproj" />
     <ProjectReference Include="..\..\src\Map.Assets\Map.Assets.csproj" />
-    <ProjectReference Include="..\..\tools\Map.DiagnosticAssets\Map.DiagnosticAssets.csproj" />
   </ItemGroup>
 
 </Project>

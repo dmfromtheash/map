@@ -16,7 +16,7 @@ public partial class Stage10CGroupRoundTripTests
     [System.Text.RegularExpressions.GeneratedRegex("\"groupName\":\\s*\"(?:[^\"\\\\]|\\\\.)*\"")]
     private static partial System.Text.RegularExpressions.Regex GroupNameFieldRegex();
 
-    [System.Text.RegularExpressions.GeneratedRegex("\"sceneSha256\": \"[0-9a-f]+\"")]
+    [System.Text.RegularExpressions.GeneratedRegex("\"sceneSha256\"\\s*:\\s*\"[0-9a-f]+\"")]
     private static partial System.Text.RegularExpressions.Regex SceneShaRegex();
 
     private static readonly Guid FixedGroupId = Guid.Parse("99999999-8888-7777-6666-555555555555");
@@ -128,10 +128,8 @@ public partial class Stage10CGroupRoundTripTests
 
         RewriteScene(path, sceneJson =>
         {
-            var marker = "\"name\": \"keep\",";
-            var index = sceneJson.IndexOf(marker, StringComparison.Ordinal);
-            Assert.True(index >= 0);
-            return sceneJson.Insert(index + marker.Length, " \"groupName\": \"Сирота\",");
+            return JsonTestMutations.InsertAfter(
+                sceneJson, "\"name\": \"keep\",", " \"groupName\": \"Сирота\",");
         });
 
         Assert.Throws<MapProjectCorruptedException>(() => MapProjectStore.Open(path));

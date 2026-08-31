@@ -12,10 +12,10 @@ public sealed partial class AssetRoundTripTests
 {
     private static readonly JsonSerializerOptions IndentedJsonOptions = new() { WriteIndented = true };
 
-    [GeneratedRegex("\"relativePath\": \"[^\"]+\"")]
+    [GeneratedRegex("\"relativePath\"\\s*:\\s*\"[^\"]+\"")]
     private static partial Regex RelativePathPattern();
 
-    [GeneratedRegex("\"assetManifestSha256\": \"[0-9a-f]+\"")]
+    [GeneratedRegex("\"assetManifestSha256\"\\s*:\\s*\"[0-9a-f]+\"")]
     private static partial Regex AssetManifestHashPattern();
 
     [Fact]

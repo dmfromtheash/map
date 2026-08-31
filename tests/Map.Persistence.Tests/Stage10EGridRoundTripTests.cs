@@ -8,7 +8,7 @@ namespace Map.Persistence.Tests;
 
 public partial class Stage10EGridRoundTripTests
 {
-    [System.Text.RegularExpressions.GeneratedRegex("\"sceneSha256\": \"[0-9a-f]+\"")]
+    [System.Text.RegularExpressions.GeneratedRegex("\"sceneSha256\"\\s*:\\s*\"[0-9a-f]+\"")]
     private static partial System.Text.RegularExpressions.Regex SceneShaRegex();
 
     [Fact]
@@ -40,7 +40,7 @@ public partial class Stage10EGridRoundTripTests
             reopened.Layers.OfType<GridLayer>().Single().Grids.Select(grid => grid.Geometry));
         using var archive = ZipFile.OpenRead(path);
         using var reader = new StreamReader(archive.GetEntry(MapProjectFormat.ManifestEntry)!.Open());
-        Assert.Contains("\"schemaVersion\": 1", reader.ReadToEnd(), StringComparison.Ordinal);
+        Assert.True(JsonTestMutations.ContainsFragment(reader.ReadToEnd(), "\"schemaVersion\": 1"));
     }
 
     [Fact]
@@ -67,9 +67,10 @@ public partial class Stage10EGridRoundTripTests
         MapProjectStore.Save(
             Document(Grid(GridGeometry.IsometricSquares)), path,
             ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
-        RewriteScene(path, scene => scene.Replace(
+        RewriteScene(path, scene => JsonTestMutations.ReplaceFirst(
+            scene,
             "\"geometry\": \"IsometricSquares\"",
-            "\"geometry\": \"FutureGrid\"", StringComparison.Ordinal));
+            "\"geometry\": \"FutureGrid\""));
         var poisoned = File.ReadAllBytes(path);
 
         var error = Assert.Throws<MapProjectCorruptedException>(() => MapProjectStore.Open(path));
@@ -106,8 +107,10 @@ public partial class Stage10EGridRoundTripTests
             }), path, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
         RewriteScene(path, scene =>
         {
-            Assert.Contains(needle, scene, StringComparison.Ordinal);
-            return scene.Replace(needle, poison, StringComparison.Ordinal);
+            Assert.True(
+                JsonTestMutations.ContainsFragment(scene, needle),
+                $"scene.json does not contain «{needle}»");
+            return JsonTestMutations.ReplaceFirst(scene, needle, poison);
         });
         var poisoned = File.ReadAllBytes(path);
 

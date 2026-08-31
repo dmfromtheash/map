@@ -142,7 +142,8 @@ public class MapProjectFailureTests
             text = reader.ReadToEnd();
         }
 
-        text = text.Replace("\"schemaVersion\": 1", $"\"schemaVersion\": {version}");
+        text = JsonTestMutations.ReplaceFirst(
+            text, "\"schemaVersion\": 1", $"\"schemaVersion\": {version}");
 
         using var writer = new StreamWriter(entry.Open());
         writer.BaseStream.SetLength(0);
