@@ -114,6 +114,7 @@ public static class UiTestFilePaths
                 : Path.GetFullPath(value);
         }
     }
+
 }
 
 /// <summary>What one stamp gesture produces: a single stamp, or a whole Area/Density scatter.</summary>
@@ -148,7 +149,7 @@ public enum CanvasGesture
 /// The editor around one <see cref="EditingSession"/>. The session's snapshot is the single
 /// source of truth; this class only orchestrates commands, selection, saving and status.
 /// </summary>
-public sealed class EditorViewModel : ViewModelBase
+public sealed partial class EditorViewModel : ViewModelBase
 {
     private readonly IProjectStore _store;
     private readonly IRecentMaps _recent;
@@ -2386,6 +2387,13 @@ public sealed class EditorViewModel : ViewModelBase
     {
         get
         {
+            if (CanvasWorkflowOpen
+                && CanvasWorkflowMode == ResizeRegionMode.Resize
+                && CanvasResizePreviewDocument is { } resizePreview)
+            {
+                return resizePreview;
+            }
+
             if (DragPreview is not { } preview)
             {
                 return Session.Document;
@@ -4338,6 +4346,7 @@ public sealed class EditorViewModel : ViewModelBase
     {
         SaveState = Session.IsDirty ? SaveState.Unsaved : SaveState.Saved;
         StatusDetail = "";
+        RefreshCanvasWorkflowAfterDocumentChange();
 
         if (_activeLayerId is null || Session.Document.FindLayer(_activeLayerId.Value) is null)
         {

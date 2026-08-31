@@ -28,6 +28,7 @@ public sealed class MapCanvasControl : Control
     private bool _isStroking;
     private bool _isVectorDrawing;
     private bool _isMarquee;
+    private bool _isRegionSelecting;
     private Point _marqueePressScreen;
     private readonly TileImageCache _tileCache = new(512);
 
@@ -82,7 +83,8 @@ public sealed class MapCanvasControl : Control
         _editor.Session.Viewport.Resize(Bounds.Width, Bounds.Height);
         context.Custom(new SceneDrawOperation(
             new Rect(0, 0, Bounds.Width, Bounds.Height), _editor, _tileCache,
-            _isPanning || _isStroking || _isVectorDrawing || _dragStartWorld is not null));
+            _isPanning || _isStroking || _isVectorDrawing || _isRegionSelecting
+            || _dragStartWorld is not null));
     }
 
     private sealed class SceneDrawOperation(
@@ -118,12 +120,12 @@ public sealed class MapCanvasControl : Control
 
             SceneRenderer.Render(canvas, editor.RenderDocument, new Map.Rendering.RenderOptions
             {
-                SelectedObjectId = editor.Session.SelectedObjectId,
-                CoSelectedObjectIds = editor.Session.SelectedObjectIds.Count > 1
+                SelectedObjectId = editor.CanvasWorkflowOpen ? null : editor.Session.SelectedObjectId,
+                CoSelectedObjectIds = !editor.CanvasWorkflowOpen && editor.Session.SelectedObjectIds.Count > 1
                     ? editor.Session.SelectedObjectIds
                     : null,
-                SelectionFrame = editor.SelectionFrame,
-                Marquee = editor.MarqueeWorld,
+                SelectionFrame = editor.CanvasWorkflowOpen ? null : editor.SelectionFrame,
+                Marquee = editor.CanvasWorkflowOpen ? null : editor.MarqueeWorld,
                 ViewScale = viewport.Scale,
                 VisibleWorld = new Map.Core.Documents.WorldBounds(
                     X, Y, bottomRight.X, bottomRight.Y),
@@ -132,6 +134,7 @@ public sealed class MapCanvasControl : Control
                 MaskEditLayerId = editor.MaskEditLayerId,
                 Stamps = editor.StampImages,
                 FastPreview = fastPreview || editor.StrokePreview is not null,
+                BoundaryOverlay = editor.CanvasBoundaryOverlay,
             });
 
             canvas.Restore();
@@ -172,6 +175,22 @@ public sealed class MapCanvasControl : Control
         }
 
         var world = _editor.Session.Viewport.ScreenToWorld(position.X, position.Y);
+
+        if (_editor.CanvasWorkflowOpen)
+        {
+            if (_editor.CanvasWorkflowMode == ResizeRegionMode.Region)
+            {
+                _isRegionSelecting = _editor.BeginRegionSelection(world.X, world.Y);
+                if (_isRegionSelecting)
+                {
+                    e.Pointer.Capture(this);
+                }
+            }
+
+            e.Handled = true;
+            InvalidateVisual();
+            return;
+        }
 
         if (_editor.ActiveTool is EditorTool.Brush or EditorTool.Mask or EditorTool.Land)
         {
@@ -246,6 +265,15 @@ public sealed class MapCanvasControl : Control
 
         var (X, Y) = _editor.Session.Viewport.ScreenToWorld(position.X, position.Y);
 
+        if (_isRegionSelecting)
+        {
+            _editor.UpdateRegionSelection(X, Y);
+            Cursor = new Cursor(StandardCursorType.Cross);
+            e.Handled = true;
+            InvalidateVisual();
+            return;
+        }
+
         if (_isStroking)
         {
             _editor.ContinueStroke(X, Y);
@@ -276,7 +304,7 @@ public sealed class MapCanvasControl : Control
         }
 
 
-        if (!_isStroking)
+        if (!_isStroking && !_editor.CanvasWorkflowOpen)
         {
             // Pointer feedback over the gizmo: resize arrows on the handles, a hand on rotate.
             Cursor = _editor.HitHandle(X, Y, _editor.Session.Viewport.Scale) switch
@@ -328,6 +356,13 @@ public sealed class MapCanvasControl : Control
             }
         }
 
+        if (_isRegionSelecting)
+        {
+            _isRegionSelecting = false;
+            _editor.EndRegionSelection();
+            Cursor = Cursor.Default;
+        }
+
         if (_isStroking)
         {
             _isStroking = false;
@@ -357,6 +392,15 @@ public sealed class MapCanvasControl : Control
 
         var position = e.GetPosition(this);
         var direction = Math.Sign(e.Delta.Y);
+
+        if (_editor.CanvasWorkflowOpen)
+        {
+            _editor.Session.Viewport.ZoomAt(position.X, position.Y, Math.Pow(1.15, e.Delta.Y));
+            ViewportChanged?.Invoke(this, EventArgs.Empty);
+            InvalidateVisual();
+            e.Handled = true;
+            return;
+        }
 
         // Alt+wheel cycles the current variant, but only inside the stamp tool and only when a
         // set is actually selected; everywhere else the wheel keeps its existing meaning.
@@ -409,8 +453,8 @@ public sealed class MapCanvasControl : Control
 
         _editor.Session.Viewport.Resize(Bounds.Width, Bounds.Height);
         _editor.Session.Viewport.FitTo(
-            _editor.Session.Document.Canvas.Width,
-            _editor.Session.Document.Canvas.Height);
+            _editor.RenderDocument.Canvas.Width,
+            _editor.RenderDocument.Canvas.Height);
         ViewportChanged?.Invoke(this, EventArgs.Empty);
         InvalidateVisual();
     }

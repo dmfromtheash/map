@@ -9,8 +9,8 @@ namespace Map.Presentation.ViewModels;
 /// </summary>
 public sealed class NewMapWizardViewModel : ViewModelBase
 {
-    public const int MinDimension = 16;
-    public const int MaxDimension = 65_536;
+    public const int MinDimension = CanvasDimensionPolicy.Minimum;
+    public const int MaxDimension = CanvasDimensionPolicy.Maximum;
 
     private string _title = "Новая карта";
     private string _widthText = "1920";
@@ -100,5 +100,5 @@ public sealed class NewMapWizardViewModel : ViewModelBase
 
     private static bool TryParseDimension(string text, out int value) =>
         int.TryParse(text, NumberStyles.None, CultureInfo.InvariantCulture, out value)
-        && value is >= MinDimension and <= MaxDimension;
+        && CanvasDimensionPolicy.IsValid(value);
 }

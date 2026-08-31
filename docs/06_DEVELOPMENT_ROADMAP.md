@@ -61,8 +61,9 @@ Stage 10E и 10F не являются оставшимися задачами. 
 
 Уборка перенесена поверх позднего Stage 11 product HEAD без потери Stage 10E, Stage 10F, app icon и
 test-profile isolation. Stage 12A начат от
-`e0010db268b4a2fd4cb9867e1737271be204183a`; его результат — текущий `HEAD` ветки
-`stage/12a-named-checkpoints`.
+`e0010db268b4a2fd4cb9867e1737271be204183a` и завершён в
+`750326f967b650b402c67146ab195c2e49c7c4bc`. Stage 12B начат строго от этого commit; его
+результат — текущий `HEAD` ветки `stage/12b-resize-crop-region`.
 
 Старый checkout `C:\Projects\Map` не является базой новой функции. Повторная консолидация не нужна.
 
@@ -77,20 +78,33 @@ test-profile isolation. Stage 12A начат от
 одной undoable-операцией: Undo возвращает состояние до восстановления, Redo снова применяет
 checkpoint. Данные bounded, сохраняются атомарно и не содержат рекурсивных копий каталога.
 
-Активный контракт: `docs/STAGE_12A_NAMED_CHECKPOINTS.md`.
+Исторический контракт: `docs/STAGE_12A_NAMED_CHECKPOINTS.md`.
 
 Принятые границы: до 20 точек и 64 MiB общего сохранённого payload, preview 320 × 180 до 1 MiB,
 без auto-eviction. Проверены адресные тесты (6/6), Release build (0 warnings, 0 errors) и один
 фоновый нативный UI-smoke в настоящем off-screen Avalonia/Win32 окне без системного ввода.
 
-### Stage 12B — resize, crop и новая карта из региона — следующий этап
+### Stage 12B — resize, crop и новая карта из региона — реализовано
 
-- увеличить/уменьшить canvas с anchor;
-- crop/expand с preview;
-- snap границ к grid;
-- создать независимую карту из выбранного региона без скрытой потери объектов.
+- единый целочисленный Core-контракт для девяти anchor, crop/expand и настоящего snap через
+  геометрию активной square/isometric/hex grid;
+- производный preview старой/новой границы, object counts и одна команда Undo/Redo без изменения
+  документа, history, dirty state или файла до Apply;
+- безопасный crop: внешние vector/raster/mask данные остаются в исходном документе, а viewport,
+  preview и thumbnail ограничены фактической границей canvas;
+- sparse перенос RGBA, coverage, land и masks только по материализованным tiles, включая переход
+  через tile boundaries без full-canvas allocation;
+- отдельная `.mapproj` из региона текущего in-memory snapshot: новый `documentId`, переведённые
+  объекты/группы/compositions/notes/grid и достаточное asset closure, без checkpoints источника;
+- исходная карта, её path/history/dirty/checkpoints и прежний корректный destination сохраняются
+  при cancel или ошибке записи.
 
-### Stage 12C — полноценный export и отмена
+Проверены адресный `Stage12B` filter (16/16), Release build (0 warnings, 0 errors) и один фоновый
+нативный UI smoke в настоящих скрытых Avalonia/Win32 окнах без системного ввода: preview/cancel,
+crop, clip, Undo/Redo, save/reopen и повторное открытие независимой региональной карты с raster и
+mask.
+
+### Stage 12C — полноценный export и отмена — следующий этап
 
 - пользовательский PNG/JPEG/WebP export;
 - вся карта или регион, прозрачность, background/grid и размер;

@@ -67,6 +67,28 @@ public sealed class EditorView : UserControl
     private readonly StackPanel _assetList = new() { Spacing = 2 };
     private readonly StackPanel _noteList = new() { Spacing = 2 };
     private readonly StackPanel _checkpointList = new() { Spacing = 8 };
+    private readonly TextBox _canvasWidthBox = NumberBox("CanvasWidthBox");
+    private readonly TextBox _canvasHeightBox = NumberBox("CanvasHeightBox");
+    private readonly TextBox _regionXBox = NumberBox("RegionXBox");
+    private readonly TextBox _regionYBox = NumberBox("RegionYBox");
+    private readonly TextBox _regionWidthBox = NumberBox("RegionWidthBox");
+    private readonly TextBox _regionHeightBox = NumberBox("RegionHeightBox");
+    private readonly TextBox _regionTitleBox = new()
+    {
+        Name = "RegionTitleBox",
+        PlaceholderText = "Название новой карты",
+        MaxLength = 160,
+    };
+    private readonly TextBlock _canvasWorkflowSummary = Status("CanvasWorkflowSummaryText");
+    private readonly TextBlock _canvasObjectSummary = Status("CanvasObjectSummaryText");
+    private readonly TextBlock _canvasWorkflowError = Status("CanvasWorkflowErrorText");
+    private readonly Dictionary<CanvasAnchor, Button> _anchorButtons = [];
+    private Button _resizeModeButton = null!;
+    private Button _regionModeButton = null!;
+    private ToggleButton _boundarySnapToggle = null!;
+    private Control _resizeWorkflowPanel = null!;
+    private Control _regionWorkflowPanel = null!;
+    private bool _syncingCanvasWorkflow;
     private readonly TextBox _layerName = new() { Name = "LayerNameBox", PlaceholderText = "Имя слоя" };
     private readonly TextBox _objectSearch = new() { Name = "ObjectSearchBox", PlaceholderText = "Найти объект" };
     private readonly TextBox _assetSearch = new()
@@ -347,6 +369,15 @@ public sealed class EditorView : UserControl
 
     public void ToggleSidePanel() => _sidePanel.IsVisible = !_sidePanel.IsVisible;
 
+    public void OpenCanvasWorkflow()
+    {
+        _sidePanel.IsVisible = true;
+        _sideTabs.SelectedIndex = 5;
+        _editor.BeginCanvasWorkflow();
+        SyncCanvasWorkflow();
+        Dispatcher.UIThread.Post(_canvas.FitToCanvas, DispatcherPriority.Loaded);
+    }
+
     /// <summary>Re-reads the library panel after a shortcut or a canvas gesture changed it.</summary>
     public void RefreshLibraryPanel()
     {
@@ -384,6 +415,8 @@ public sealed class EditorView : UserControl
         var second = Ui.IconButton("SecondWindowButton", "Открыть второе окно", MapIcons.Window, requestSecondWindow);
         _shortcutSettingsButton = Ui.TextButton(
             "ShortcutSettingsButton", "Сочетания…", requestShortcutSettings, "compact");
+        var resizeRegion = Ui.TextButton(
+            "ResizeRegionButton", "Размер и регион…", OpenCanvasWorkflow, "compact");
 
         var saveAs = Ui.AsyncButton("SaveAsButton", "Сохранить как…", () => _editor.SaveAsync(saveAs: true));
         _saveButton = Ui.AsyncButton("SaveButton", "Сохранить", () => _editor.SaveAsync(), "primary");
@@ -397,7 +430,7 @@ public sealed class EditorView : UserControl
                 {
                     Orientation = Orientation.Horizontal,
                     Spacing = 6,
-                    Children = { _shortcutSettingsButton, second, saveAs, _saveButton },
+                    Children = { resizeRegion, _shortcutSettingsButton, second, saveAs, _saveButton },
                 }.Docked(Dock.Right),
                 new StackPanel
                 {
@@ -1827,6 +1860,7 @@ public sealed class EditorView : UserControl
                 new TabItem { Header = "Библиотека", Content = BuildAssetsTab() },
                 new TabItem { Header = "Заметки", Content = BuildNotesTab() },
                 new TabItem { Header = "Точки", Content = BuildCheckpointsTab() },
+                new TabItem { Header = "Размер", Content = BuildCanvasWorkflowTab() },
             },
         };
 
@@ -3682,6 +3716,225 @@ public sealed class EditorView : UserControl
         };
     }
 
+    private Control BuildCanvasWorkflowTab()
+    {
+        _resizeModeButton = Ui.TextButton(
+            "ResizeModeButton", "Изменить размер карты",
+            () =>
+            {
+                _editor.SetCanvasWorkflowMode(ResizeRegionMode.Resize);
+                SyncCanvasWorkflow();
+                _canvas.FitToCanvas();
+            }, "segment");
+        _regionModeButton = Ui.TextButton(
+            "RegionModeButton", "Создать карту из региона",
+            () =>
+            {
+                _editor.SetCanvasWorkflowMode(ResizeRegionMode.Region);
+                SyncCanvasWorkflow();
+                _canvas.FitToCanvas();
+            }, "segment");
+
+        var modeRow = new UniformGrid
+        {
+            Columns = 1,
+            Rows = 2,
+            Children = { _resizeModeButton, _regionModeButton },
+        };
+
+        var sizeFields = new UniformGrid
+        {
+            Columns = 2,
+            Children =
+            {
+                Field("Ширина, px", _canvasWidthBox),
+                Field("Высота, px", _canvasHeightBox),
+            },
+        };
+
+        var anchorGrid = new UniformGrid { Columns = 3, Rows = 3 };
+        foreach (var (anchor, glyph, name) in new[]
+                 {
+                     (CanvasAnchor.TopLeft, "↖", "Верхний левый"),
+                     (CanvasAnchor.TopCenter, "↑", "Верхний центр"),
+                     (CanvasAnchor.TopRight, "↗", "Верхний правый"),
+                     (CanvasAnchor.CenterLeft, "←", "Центр слева"),
+                     (CanvasAnchor.Center, "●", "Центр"),
+                     (CanvasAnchor.CenterRight, "→", "Центр справа"),
+                     (CanvasAnchor.BottomLeft, "↙", "Нижний левый"),
+                     (CanvasAnchor.BottomCenter, "↓", "Нижний центр"),
+                     (CanvasAnchor.BottomRight, "↘", "Нижний правый"),
+                 })
+        {
+            var captured = anchor;
+            var button = Ui.TextButton(
+                "CanvasAnchor_" + anchor, glyph,
+                () =>
+                {
+                    _editor.SetCanvasAnchor(captured);
+                    SyncCanvasWorkflow();
+                }, "segment");
+            AutomationProperties.SetName(button, "Anchor: " + name);
+            ToolTip.SetTip(button, "Сохранить на месте: " + name.ToLowerInvariant());
+            _anchorButtons.Add(anchor, button);
+            anchorGrid.Children.Add(button);
+        }
+
+        var applyResize = Ui.TextButton(
+            "ApplyCanvasResizeButton", "Применить размер",
+            () =>
+            {
+                if (_editor.ApplyCanvasResize())
+                {
+                    _sideTabs.SelectedIndex = 0;
+                    _canvas.FitToCanvas();
+                }
+                SyncCanvasWorkflow();
+            }, "primary");
+
+        _resizeWorkflowPanel = new StackPanel
+        {
+            Name = "ResizeWorkflowPanel",
+            Spacing = 10,
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = "Новый размер не масштабирует содержимое. Красная область станет скрытой, зелёная — новой.",
+                    TextWrapping = TextWrapping.Wrap,
+                }.Classed("faint", "role-caption"),
+                sizeFields,
+                new TextBlock { Text = "Какая точка старого содержимого остаётся на месте" }
+                    .Classed("role-caption"),
+                anchorGrid,
+                applyResize,
+            },
+        };
+
+        var regionFields = new UniformGrid
+        {
+            Columns = 2,
+            Children =
+            {
+                Field("X, px", _regionXBox),
+                Field("Y, px", _regionYBox),
+                Field("Ширина, px", _regionWidthBox),
+                Field("Высота, px", _regionHeightBox),
+            },
+        };
+        var createRegion = Ui.AsyncButton(
+            "CreateRegionMapButton", "Создать отдельный .mapproj",
+            async () =>
+            {
+                if (await _editor.CreateMapFromRegionAsync())
+                {
+                    _sideTabs.SelectedIndex = 0;
+                }
+                SyncCanvasWorkflow();
+            }, "primary");
+
+        _regionWorkflowPanel = new StackPanel
+        {
+            Name = "RegionWorkflowPanel",
+            Spacing = 10,
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = "Растяните прямоугольник на карте в любом направлении или задайте точные поля. Исходная карта останется открытой и не изменится.",
+                    TextWrapping = TextWrapping.Wrap,
+                }.Classed("faint", "role-caption"),
+                regionFields,
+                Field("Название новой карты", _regionTitleBox),
+                createRegion,
+            },
+        };
+
+        _boundarySnapToggle = new ToggleButton
+        {
+            Name = "BoundarySnapToggle",
+            Content = "Привязать границы к активной сетке",
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Left,
+        }.Classed("segment");
+        AutomationProperties.SetName(_boundarySnapToggle, "Привязать границы к активной сетке");
+        _boundarySnapToggle.IsCheckedChanged += (_, _) =>
+        {
+            if (!_syncingCanvasWorkflow)
+            {
+                _editor.SetCanvasBoundarySnap(_boundarySnapToggle.IsChecked == true);
+                SyncCanvasWorkflow();
+            }
+        };
+
+        WireText(_canvasWidthBox, value => _editor.CanvasWidthText = value);
+        WireText(_canvasHeightBox, value => _editor.CanvasHeightText = value);
+        WireText(_regionXBox, value => _editor.RegionXText = value);
+        WireText(_regionYBox, value => _editor.RegionYText = value);
+        WireText(_regionWidthBox, value => _editor.RegionWidthText = value);
+        WireText(_regionHeightBox, value => _editor.RegionHeightText = value);
+        WireText(_regionTitleBox, value => _editor.RegionTitleText = value);
+
+        var cancel = Ui.TextButton(
+            "CancelCanvasWorkflowButton", "Отмена",
+            () =>
+            {
+                _editor.CancelCanvasWorkflow();
+                _sideTabs.SelectedIndex = 0;
+                _canvas.FitToCanvas();
+            }, "ghost");
+
+        _canvasWorkflowSummary.TextWrapping = TextWrapping.Wrap;
+        _canvasObjectSummary.TextWrapping = TextWrapping.Wrap;
+        _canvasWorkflowError.TextWrapping = TextWrapping.Wrap;
+        _canvasWorkflowError.Classed("danger", "role-caption");
+
+        var body = new StackPanel
+        {
+            Margin = new Thickness(12, 10, 12, 18),
+            Spacing = 10,
+            Children =
+            {
+                new TextBlock { Text = "Размер и регион" }.Classed("role-panel"),
+                modeRow,
+                _boundarySnapToggle,
+                _resizeWorkflowPanel,
+                _regionWorkflowPanel,
+                _canvasWorkflowSummary,
+                _canvasObjectSummary,
+                _canvasWorkflowError,
+                cancel,
+            },
+        };
+
+        SyncCanvasWorkflow();
+        return new ScrollViewer
+        {
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            Content = body,
+        };
+
+        static Control Field(string label, Control control) => new StackPanel
+        {
+            Margin = new Thickness(3),
+            Spacing = 4,
+            Children =
+            {
+                new TextBlock { Text = label }.Classed("faint", "role-caption"),
+                control,
+            },
+        };
+
+        void WireText(TextBox box, Action<string> write) => box.TextChanged += (_, _) =>
+        {
+            if (!_syncingCanvasWorkflow)
+            {
+                write(box.Text ?? "");
+                SyncCanvasWorkflow();
+            }
+        };
+    }
+
     // ================================================================ hint + status
 
     private Control BuildHintBar()
@@ -3873,7 +4126,76 @@ public sealed class EditorView : UserControl
             {
                 SyncContextArea();
             }
+
+            if (e.PropertyName is nameof(EditorViewModel.CanvasWorkflowOpen)
+                or nameof(EditorViewModel.CanvasWorkflowMode)
+                or nameof(EditorViewModel.CanvasAnchor)
+                or nameof(EditorViewModel.CanvasBoundarySnap)
+                or nameof(EditorViewModel.CanvasWidthText)
+                or nameof(EditorViewModel.CanvasHeightText)
+                or nameof(EditorViewModel.RegionXText)
+                or nameof(EditorViewModel.RegionYText)
+                or nameof(EditorViewModel.RegionWidthText)
+                or nameof(EditorViewModel.RegionHeightText)
+                or nameof(EditorViewModel.RegionTitleText)
+                or nameof(EditorViewModel.CanvasWorkflowSummary)
+                or nameof(EditorViewModel.CanvasObjectSummary)
+                or nameof(EditorViewModel.CanvasWorkflowError))
+            {
+                SyncCanvasWorkflow();
+            }
         });
+
+    private void SyncCanvasWorkflow()
+    {
+        if (_resizeModeButton is null || _regionModeButton is null
+            || _resizeWorkflowPanel is null || _regionWorkflowPanel is null
+            || _boundarySnapToggle is null)
+        {
+            return;
+        }
+
+        _syncingCanvasWorkflow = true;
+        try
+        {
+            SetText(_canvasWidthBox, _editor.CanvasWidthText);
+            SetText(_canvasHeightBox, _editor.CanvasHeightText);
+            SetText(_regionXBox, _editor.RegionXText);
+            SetText(_regionYBox, _editor.RegionYText);
+            SetText(_regionWidthBox, _editor.RegionWidthText);
+            SetText(_regionHeightBox, _editor.RegionHeightText);
+            SetText(_regionTitleBox, _editor.RegionTitleText);
+
+            Ui.SetSelected(_resizeModeButton, _editor.CanvasWorkflowMode == ResizeRegionMode.Resize);
+            Ui.SetSelected(_regionModeButton, _editor.CanvasWorkflowMode == ResizeRegionMode.Region);
+            _resizeWorkflowPanel.IsVisible = _editor.CanvasWorkflowMode == ResizeRegionMode.Resize;
+            _regionWorkflowPanel.IsVisible = _editor.CanvasWorkflowMode == ResizeRegionMode.Region;
+            _boundarySnapToggle.IsChecked = _editor.CanvasBoundarySnap;
+            Ui.SetClass(_boundarySnapToggle, "active", _editor.CanvasBoundarySnap);
+
+            foreach (var (anchor, button) in _anchorButtons)
+            {
+                Ui.SetSelected(button, anchor == _editor.CanvasAnchor);
+            }
+
+            _canvasWorkflowSummary.Text = _editor.CanvasWorkflowSummary;
+            _canvasObjectSummary.Text = _editor.CanvasObjectSummary;
+            _canvasWorkflowError.Text = _editor.CanvasWorkflowError;
+            _canvasWorkflowError.IsVisible = _editor.CanvasWorkflowError.Length > 0;
+        }
+        finally
+        {
+            _syncingCanvasWorkflow = false;
+        }
+
+        static void SetText(TextBox box, string value)
+        {
+            if (!string.Equals(box.Text, value, StringComparison.Ordinal))
+            {
+                box.Text = value;
+            }
+        }
+    }
 
     private void SyncStatus()
     {
@@ -4421,6 +4743,7 @@ public sealed class EditorView : UserControl
         SyncAssetList();
         SyncNoteList();
         SyncCheckpointList();
+        SyncCanvasWorkflow();
     }
 
     private static string LayerIcon(MapLayer layer) => layer switch

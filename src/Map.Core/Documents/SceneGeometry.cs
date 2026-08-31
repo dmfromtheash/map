@@ -120,6 +120,14 @@ public static class SceneGeometry
     {
         ArgumentNullException.ThrowIfNull(document);
 
+        // The canvas surround is not document space. Content intentionally retained by a crop
+        // may live there, but it must not be selectable until a later expand makes it visible.
+        if (worldX < 0 || worldY < 0
+            || worldX >= document.Canvas.Width || worldY >= document.Canvas.Height)
+        {
+            return null;
+        }
+
         for (var l = document.Layers.Count - 1; l >= 0; l--)
         {
             if (document.Layers[l] is not ObjectLayer layer || !layer.Visible)

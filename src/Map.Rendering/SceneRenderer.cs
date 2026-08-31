@@ -97,7 +97,18 @@ public sealed class RenderOptions
 
     /// <summary>Export paths opt in so editor-only grids can be omitted independently.</summary>
     public bool IsExport { get; init; }
+
+    /// <summary>
+    /// Derived editor chrome for Stage 12B. It is drawn after the document clip and never enters
+    /// persistence, thumbnails or export unless a caller explicitly supplies it.
+    /// </summary>
+    public CanvasBoundaryOverlay? BoundaryOverlay { get; init; }
 }
+
+public sealed record CanvasBoundaryOverlay(
+    WorldBounds? OldCanvas,
+    WorldBounds? NewCanvas,
+    WorldBounds? Region);
 
 /// <summary>
 /// The single scene evaluator: the editor canvas and the thumbnail exporter both go through it,
@@ -116,8 +127,18 @@ public static class SceneRenderer
 
         options.Stats?.Reset();
 
-        var view = options.VisibleWorld ?? new WorldBounds(
-            0, 0, document.Canvas.Width, document.Canvas.Height);
+        var canvasBounds = new WorldBounds(0, 0, document.Canvas.Width, document.Canvas.Height);
+        var requestedView = options.VisibleWorld ?? canvasBounds;
+        if (!TryIntersect(requestedView, canvasBounds, out var view))
+        {
+            DrawBoundaryOverlay(canvas, options.BoundaryOverlay, options.ViewScale);
+            return;
+        }
+
+        // One factual document boundary for viewport, live preview, thumbnail and export. Layer
+        // implementations may retain and cull hidden data, but no content can paint through it.
+        canvas.Save();
+        canvas.ClipRect(ToRect(canvasBounds));
 
         foreach (var layer in document.Layers)
         {
@@ -138,6 +159,106 @@ public static class SceneRenderer
         }
 
         DrawSelectionChrome(canvas, document, options);
+        canvas.Restore();
+        DrawBoundaryOverlay(canvas, options.BoundaryOverlay, options.ViewScale);
+    }
+
+    private static bool TryIntersect(WorldBounds first, WorldBounds second, out WorldBounds result)
+    {
+        var left = Math.Max(first.Left, second.Left);
+        var top = Math.Max(first.Top, second.Top);
+        var right = Math.Min(first.Right, second.Right);
+        var bottom = Math.Min(first.Bottom, second.Bottom);
+        result = new WorldBounds(left, top, right, bottom);
+        return right > left && bottom > top;
+    }
+
+    private static void DrawBoundaryOverlay(
+        SKCanvas canvas, CanvasBoundaryOverlay? overlay, double viewScale)
+    {
+        if (overlay is null)
+        {
+            return;
+        }
+
+        var px = (float)(1 / Math.Max(0.001, viewScale));
+        if (overlay.OldCanvas is { } oldBounds && overlay.NewCanvas is { } newBounds)
+        {
+            using var crop = new SKPaint
+            {
+                Color = new SKColor(224, 82, 82, 72),
+                Style = SKPaintStyle.Fill,
+                IsAntialias = false,
+            };
+            using var expand = new SKPaint
+            {
+                Color = new SKColor(70, 190, 126, 64),
+                Style = SKPaintStyle.Fill,
+                IsAntialias = false,
+            };
+            DrawDifference(canvas, oldBounds, newBounds, crop);
+            DrawDifference(canvas, newBounds, oldBounds, expand);
+
+            using var oldLine = new SKPaint
+            {
+                Color = new SKColor(255, 183, 77, 235),
+                Style = SKPaintStyle.Stroke,
+                StrokeWidth = 2 * px,
+                PathEffect = SKPathEffect.CreateDash([7 * px, 5 * px], 0),
+                IsAntialias = true,
+            };
+            using var newLine = new SKPaint
+            {
+                Color = new SKColor(74, 198, 255, 255),
+                Style = SKPaintStyle.Stroke,
+                StrokeWidth = 2 * px,
+                IsAntialias = true,
+            };
+            canvas.DrawRect(ToRect(oldBounds), oldLine);
+            canvas.DrawRect(ToRect(newBounds), newLine);
+        }
+
+        if (overlay.Region is { } region)
+        {
+            using var fill = new SKPaint
+            {
+                Color = new SKColor(74, 198, 255, 42),
+                Style = SKPaintStyle.Fill,
+                IsAntialias = false,
+            };
+            using var line = new SKPaint
+            {
+                Color = new SKColor(74, 198, 255, 255),
+                Style = SKPaintStyle.Stroke,
+                StrokeWidth = 2 * px,
+                IsAntialias = true,
+            };
+            canvas.DrawRect(ToRect(region), fill);
+            canvas.DrawRect(ToRect(region), line);
+        }
+    }
+
+    private static void DrawDifference(
+        SKCanvas canvas, WorldBounds outer, WorldBounds inner, SKPaint paint)
+    {
+        if (!TryIntersect(outer, inner, out var overlap))
+        {
+            canvas.DrawRect(ToRect(outer), paint);
+            return;
+        }
+
+        Draw(outer.Left, outer.Top, outer.Right, overlap.Top);
+        Draw(outer.Left, overlap.Bottom, outer.Right, outer.Bottom);
+        Draw(outer.Left, overlap.Top, overlap.Left, overlap.Bottom);
+        Draw(overlap.Right, overlap.Top, outer.Right, overlap.Bottom);
+
+        void Draw(double left, double top, double right, double bottom)
+        {
+            if (right > left && bottom > top)
+            {
+                canvas.DrawRect(ToRect(new WorldBounds(left, top, right, bottom)), paint);
+            }
+        }
     }
 
     private static void DrawLayer(

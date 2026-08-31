@@ -79,7 +79,15 @@ public static class CompositionTransfer
             if (item.Shape?.Stroke.AssetSha256 is { } shape) result.Add(shape);
             if (item.Shape?.Fill.TextureAssetSha256 is { } texture) result.Add(texture);
             if (item.Composition is { } composition)
+            {
                 foreach (var child in composition.Items) Visit(child);
+                foreach (var filterTexture in composition.Filters
+                             .Select(filter => filter.TextureAssetSha256)
+                             .Where(candidate => !string.IsNullOrWhiteSpace(candidate)))
+                {
+                    result.Add(filterTexture!);
+                }
+            }
         }
         foreach (var item in objects) Visit(item);
         return result;
