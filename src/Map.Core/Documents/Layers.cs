@@ -108,26 +108,33 @@ public sealed record BaseColorLayer : MapLayer
 /// <summary>Vector objects (stamps, shapes) in draw order, with optional grouping and sublayers.</summary>
 public sealed record ObjectLayer : MapLayer
 {
+    private SceneObjectList _objects = SceneObjectList.Empty;
+
     public ObjectLayer(
         LayerId id, string name, bool visible, bool locked, double opacity,
         IReadOnlyList<SceneObject> objects, LayerMask? mask = null)
         : base(id, name, visible, locked, opacity)
     {
         ArgumentNullException.ThrowIfNull(objects);
-        Objects = new ReadOnlyCollection<SceneObject>([.. objects]);
+        Objects = objects;
         Mask = mask;
     }
 
     /// <summary>Draw order within each sublayer; sublayer is the coarse order (see renderer).</summary>
-    public IReadOnlyList<SceneObject> Objects { get; init; }
+    public IReadOnlyList<SceneObject> Objects
+    {
+        get => _objects;
+        init => _objects = SceneObjectList.From(value);
+    }
+
+    internal SceneObjectList ObjectStorage => _objects;
 
     public override LayerMask? Mask { get; init; }
 
     public override MapLayer WithNewIds() => this with
     {
         Id = LayerId.New(),
-        Objects = new ReadOnlyCollection<SceneObject>(
-            [.. Objects.Select(VectorGeometry.WithNewIds)]),
+        Objects = [.. Objects.Select(VectorGeometry.WithNewIds)],
     };
 
     public override MapLayer WithMask(LayerMask? mask) => this with { Mask = mask };

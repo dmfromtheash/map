@@ -12,6 +12,18 @@ namespace Map.Core.Documents;
 /// </summary>
 public sealed record MapDocument
 {
+    private MapDocument(MapDocument source, IReadOnlyList<MapLayer> revisionLayers)
+    {
+        Id = source.Id;
+        Title = source.Title;
+        CreatedUtc = source.CreatedUtc;
+        Canvas = source.Canvas;
+        Layers = new ReadOnlyCollection<MapLayer>([.. revisionLayers]);
+        Assets = source.Assets;
+        Notes = source.Notes;
+        Checkpoints = source.Checkpoints;
+    }
+
     public MapDocument(
         DocumentId id,
         string title,
@@ -215,5 +227,31 @@ public sealed record MapDocument
         }
 
         return WithLayers(layers);
+    }
+
+    /// <summary>
+    /// Fast replacement-only revision boundary for Core edit commands. Layer count, identity and
+    /// order cannot change here; load/public construction retains the full invariant validation.
+    /// </summary>
+    internal MapDocument WithRevisedLayers(IReadOnlyList<MapLayer> layers)
+    {
+        ArgumentNullException.ThrowIfNull(layers);
+        if (layers.Count != Layers.Count)
+        {
+            throw new ArgumentException("A replacement revision cannot add or remove layers.", nameof(layers));
+        }
+
+        for (var index = 0; index < layers.Count; index++)
+        {
+            if (layers[index].Id != Layers[index].Id
+                || layers[index].GetType() != Layers[index].GetType())
+            {
+                throw new ArgumentException(
+                    "A replacement revision must preserve layer identity, kind and order.",
+                    nameof(layers));
+            }
+        }
+
+        return new MapDocument(this, layers);
     }
 }

@@ -81,6 +81,12 @@ public sealed class RenderOptions
     /// </summary>
     public WorldBounds? VisibleWorld { get; init; }
 
+    /// <summary>
+    /// Bounded live object substitutions for an editor gesture. They are evaluated over the
+    /// immutable source revision without constructing a 50K-sized preview document.
+    /// </summary>
+    public IReadOnlyList<SceneObject>? ObjectOverrides { get; init; }
+
     public TileImageCache? TileCache { get; init; }
 
     public IStampImageSource? Stamps { get; init; }
@@ -316,7 +322,7 @@ public static class SceneRenderer
                 break;
 
             case ObjectLayer objectLayer:
-                DrawObjects(canvas, objectLayer, view, options);
+                DrawObjects(canvas, document, objectLayer, view, options);
                 break;
 
             case LandLayer landLayer:
@@ -496,20 +502,79 @@ public static class SceneRenderer
         (byte)Math.Clamp(Math.Round(opacity * 255), 0, 255);
 
     private static void DrawObjects(
-        SKCanvas canvas, ObjectLayer layer, WorldBounds view, RenderOptions options)
+        SKCanvas canvas,
+        MapDocument document,
+        ObjectLayer layer,
+        WorldBounds view,
+        RenderOptions options)
     {
         IReadOnlyList<SceneObject> candidates = options.VisibleWorld is null
             ? layer.Objects
             : ObjectSpatialIndex.For(layer).Query(view);
 
-        if (options.Stats is { } stats)
+        IReadOnlyList<SceneObject> ordered;
+        if (options.ObjectOverrides is not { Count: > 0 } overrideList)
         {
-            stats.ObjectCandidates += candidates.Count;
+            ordered = candidates.Count > 1 && candidates.Any(o => o.Sublayer != 0)
+                ? [.. candidates.OrderBy(o => o.Sublayer)]
+                : candidates;
+        }
+        else
+        {
+            var overrides = overrideList.ToDictionary(sceneObject => sceneObject.Id);
+            var applied = new HashSet<ObjectId>();
+            var index = DocumentRevisionIndex.For(document);
+            var resolved = new List<(SceneObject Object, int Position)>(
+                candidates.Count + overrides.Count);
+            foreach (var candidate in candidates)
+            {
+                if (!index.TryFind(candidate.Id, out var location))
+                {
+                    continue;
+                }
+
+                SceneObject current;
+                if (overrides.TryGetValue(candidate.Id, out var replacement))
+                {
+                    current = replacement;
+                    applied.Add(candidate.Id);
+                }
+                else
+                {
+                    current = candidate;
+                }
+
+                if (options.VisibleWorld is null || SceneGeometry.BoundsOf(current).Intersects(view))
+                {
+                    resolved.Add((current, location.ObjectIndex));
+                }
+            }
+
+            // A moved object whose old bounds were outside the viewport was not a base candidate.
+            foreach (var replacement in overrideList)
+            {
+                if (!applied.Contains(replacement.Id)
+                    && index.TryFind(replacement.Id, out var location)
+                    && location.LayerId == layer.Id
+                    && (options.VisibleWorld is null
+                        || SceneGeometry.BoundsOf(replacement).Intersects(view)))
+                {
+                    resolved.Add((replacement, location.ObjectIndex));
+                }
+            }
+
+            resolved.Sort(static (left, right) =>
+            {
+                var sublayer = left.Object.Sublayer.CompareTo(right.Object.Sublayer);
+                return sublayer != 0 ? sublayer : left.Position.CompareTo(right.Position);
+            });
+            ordered = [.. resolved.Select(entry => entry.Object)];
         }
 
-        var ordered = candidates.Count > 1 && candidates.Any(o => o.Sublayer != 0)
-            ? [.. candidates.OrderBy(o => o.Sublayer)]
-            : candidates;
+        if (options.Stats is { } stats)
+        {
+            stats.ObjectCandidates += ordered.Count;
+        }
 
         foreach (var sceneObject in ordered)
         {
@@ -1547,8 +1612,7 @@ public static class SceneRenderer
             {
                 // With a shared frame the primary is just another member and gets a ring too.
                 if ((frameOwnsHandles || id != options.SelectedObjectId)
-                    && document.Layers.OfType<ObjectLayer>().SelectMany(l => l.Objects)
-                        .FirstOrDefault(o => o.Id == id) is { } member)
+                    && FindRenderObject(document, options, id) is { } member)
                 {
                     DrawRing(canvas, member, viewScale);
                 }
@@ -1561,9 +1625,7 @@ public static class SceneRenderer
         }
         else if (options.SelectedObjectId is { } selectedId)
         {
-            var selected = document.Layers.OfType<ObjectLayer>()
-                .SelectMany(l => l.Objects)
-                .FirstOrDefault(o => o.Id == selectedId);
+            var selected = FindRenderObject(document, options, selectedId);
 
             if (selected is not null)
             {
@@ -1576,6 +1638,11 @@ public static class SceneRenderer
             DrawMarquee(canvas, marquee, viewScale);
         }
     }
+
+    private static SceneObject? FindRenderObject(
+        MapDocument document, RenderOptions options, ObjectId id) =>
+        options.ObjectOverrides?.FirstOrDefault(sceneObject => sceneObject.Id == id)
+        ?? DocumentRevisionIndex.For(document).FindObject(id);
 
     /// <summary>
     /// The shared frame of a multi-selection: an axis-aligned ring, eight resize handles and the

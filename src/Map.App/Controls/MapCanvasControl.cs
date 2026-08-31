@@ -153,7 +153,12 @@ public sealed class MapCanvasControl : Control
             canvas.Scale((float)viewport.Scale);
             canvas.Translate((float)-viewport.OffsetX, (float)-viewport.OffsetY);
 
-            SceneRenderer.Render(canvas, editor.RenderDocument, new Map.Rendering.RenderOptions
+            // A drag stays a bounded render overlay over the immutable session revision. Canvas
+            // resize preview is a different workflow and still supplies its explicit document.
+            var renderDocument = editor.DragPreview is null
+                ? editor.RenderDocument
+                : editor.Session.Document;
+            SceneRenderer.Render(canvas, renderDocument, new Map.Rendering.RenderOptions
             {
                 SelectedObjectId = editor.CanvasWorkflowOpen ? null : editor.Session.SelectedObjectId,
                 CoSelectedObjectIds = !editor.CanvasWorkflowOpen && editor.Session.SelectedObjectIds.Count > 1
@@ -164,6 +169,7 @@ public sealed class MapCanvasControl : Control
                 ViewScale = viewport.Scale,
                 VisibleWorld = new Map.Core.Documents.WorldBounds(
                     X, Y, bottomRight.X, bottomRight.Y),
+                ObjectOverrides = editor.DragPreview?.Proposed,
                 TileCache = tileCache,
                 Preview = editor.StrokePreview,
                 MaskEditLayerId = editor.MaskEditLayerId,
@@ -489,8 +495,8 @@ public sealed class MapCanvasControl : Control
 
         _editor.Session.Viewport.Resize(Bounds.Width, Bounds.Height);
         _editor.Session.Viewport.FitTo(
-            _editor.RenderDocument.Canvas.Width,
-            _editor.RenderDocument.Canvas.Height);
+            _editor.Session.Document.Canvas.Width,
+            _editor.Session.Document.Canvas.Height);
         ViewportChanged?.Invoke(this, EventArgs.Empty);
         QueueVisualInvalidation();
     }

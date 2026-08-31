@@ -276,31 +276,8 @@ public sealed class ReplaceObjectsCommand : IEditCommand
 
     public MapDocument Revert(MapDocument document) => Replace(document, _before);
 
-    private static MapDocument Replace(MapDocument document, IReadOnlyList<SceneObject> replacements)
-    {
-        var byId = replacements.ToDictionary(o => o.Id);
-        var layers = document.Layers.Select(layer =>
-        {
-            if (layer is not ObjectLayer objectLayer
-                || !objectLayer.Objects.Any(o => byId.ContainsKey(o.Id)))
-            {
-                return layer;
-            }
-
-            return (MapLayer)(objectLayer with
-            {
-                Objects = [.. objectLayer.Objects.Select(o => byId.GetValueOrDefault(o.Id, o))],
-            });
-        }).ToList();
-
-        var replaced = document.WithLayers(layers);
-        if (replacements.Any(r => DocumentEditor.FindObject(replaced, r.Id) is null))
-        {
-            throw new InvalidOperationException("A replaced object is not part of this document.");
-        }
-
-        return replaced;
-    }
+    private static MapDocument Replace(MapDocument document, IReadOnlyList<SceneObject> replacements) =>
+        DocumentEditor.ReplaceObjects(document, replacements);
 }
 
 /// <summary>Legacy single-object transform wrapper kept for the editor's drag/inspector path.</summary>
@@ -1039,24 +1016,87 @@ public sealed class UpdateLandStyleCommand : IEditCommand
 public static class DocumentEditor
 {
     public static SceneObject? FindObject(MapDocument document, ObjectId id) =>
-        document.Layers.OfType<ObjectLayer>().SelectMany(l => l.Objects).FirstOrDefault(o => o.Id == id);
+        DocumentRevisionIndex.For(document).FindObject(id);
 
     public static ObjectLayer? FindLayerOf(MapDocument document, ObjectId id) =>
-        document.Layers.OfType<ObjectLayer>().FirstOrDefault(l => l.Objects.Any(o => o.Id == id));
+        DocumentRevisionIndex.For(document).FindLayerOf(id);
+
+    /// <summary>
+    /// Bounded replacement-only revision: positions come from the current revision index, changed
+    /// chunks are copied once, and document/spatial derived indexes share their warm roots.
+    /// </summary>
+    internal static MapDocument ReplaceObjects(
+        MapDocument document, IReadOnlyList<SceneObject> replacements)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(replacements);
+        if (replacements.Count == 0)
+        {
+            throw new ArgumentException("At least one object replacement is required.", nameof(replacements));
+        }
+
+        var index = DocumentRevisionIndex.For(document);
+        index.ValidateReplacements(replacements);
+        var byLayer = new Dictionary<LayerId, List<(DocumentObjectLocation Location, SceneObject After)>>();
+        var ids = new HashSet<ObjectId>();
+        foreach (var replacement in replacements)
+        {
+            ArgumentNullException.ThrowIfNull(replacement);
+            if (!ids.Add(replacement.Id)
+                || !index.TryFind(replacement.Id, out var location))
+            {
+                throw new InvalidOperationException(
+                    $"Object {replacement.Id} is absent or repeated in the replacement delta.");
+            }
+
+            if (!byLayer.TryGetValue(location.LayerId, out var layerReplacements))
+            {
+                layerReplacements = [];
+                byLayer.Add(location.LayerId, layerReplacements);
+            }
+
+            layerReplacements.Add((location, replacement));
+        }
+
+        var layers = document.Layers.ToArray();
+        var revisedLocations = new List<DocumentObjectLocation>(replacements.Count);
+        foreach (var layerReplacements in byLayer.Values)
+        {
+            var first = layerReplacements[0].Location;
+            var sourceLayer = layers[first.LayerIndex] as ObjectLayer
+                ?? throw new InvalidOperationException($"Layer {first.LayerId} no longer holds objects.");
+            if (sourceLayer.Id != first.LayerId)
+            {
+                throw new InvalidOperationException("The document revision index no longer matches layer order.");
+            }
+
+            var positions = layerReplacements.ToDictionary(
+                pair => pair.Location.ObjectIndex,
+                pair => pair.After);
+            foreach (var (position, replacement) in positions)
+            {
+                if (sourceLayer.Objects[position].Id != replacement.Id)
+                {
+                    throw new InvalidOperationException("The object revision index no longer matches object order.");
+                }
+            }
+
+            var targetLayer = sourceLayer with
+            {
+                Objects = sourceLayer.ObjectStorage.ReplaceMany(positions),
+            };
+            layers[first.LayerIndex] = targetLayer;
+            ObjectSpatialIndex.RegisterReplacements(sourceLayer, targetLayer, positions);
+            revisedLocations.AddRange(layerReplacements.Select(pair =>
+                pair.Location with { Object = pair.After }));
+        }
+
+        var target = document.WithRevisedLayers(layers);
+        DocumentRevisionIndex.RegisterReplacements(document, target, revisedLocations);
+        return target;
+    }
 
     /// <summary>Replaces one object wherever it lives - preview substitution for the canvas.</summary>
     public static MapDocument ReplaceObject(MapDocument document, SceneObject replacement)
-    {
-        var layer = FindLayerOf(document, replacement.Id)
-            ?? throw new InvalidOperationException($"Object {replacement.Id} is not part of this document.");
-
-        return document.WithLayer(layer.Id, l =>
-        {
-            var objectLayer = (ObjectLayer)l;
-            return objectLayer with
-            {
-                Objects = [.. objectLayer.Objects.Select(o => o.Id == replacement.Id ? replacement : o)],
-            };
-        });
-    }
+        => ReplaceObjects(document, [replacement]);
 }

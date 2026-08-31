@@ -162,7 +162,7 @@ public static class SceneGeometry
 
     /// <summary>Every object of the document that shares the group id, across layers.</summary>
     public static IReadOnlyList<SceneObject> GroupMembers(MapDocument document, Guid groupId) =>
-        [.. document.Layers.OfType<ObjectLayer>().SelectMany(l => l.Objects).Where(o => o.GroupId == groupId)];
+        DocumentRevisionIndex.For(document).GroupMembers(groupId);
 }
 
 /// <summary>Axis-aligned world rectangle used by culling and the spatial index.</summary>

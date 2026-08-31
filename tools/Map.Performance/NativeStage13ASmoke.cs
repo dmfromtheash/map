@@ -32,6 +32,9 @@ internal sealed record NativeDragResult(
     double InputToRenderP95,
     double InputToRenderMax,
     int PointerMoveTreeRebuilds,
+    bool PreviewKeptSourceRevision,
+    int PreviewProposedObjectCount,
+    int IncrementalSpatialOverridesAfterCommit,
     int UndoDepthAfterCommit,
     bool SelectionWasExact,
     bool CommitWasExact,
@@ -204,6 +207,7 @@ public sealed class NativeSmokeApplication : Application
         var startX = target.X + (target.Width / 2);
         var startY = target.Y + (target.Height / 2);
         editor.Session.Viewport.Set(target.X - 100, target.Y - 100, 1);
+        var sourceRevision = editor.Session.Document;
         var gesture = editor.BeginCanvasInteraction(startX, startY, viewScale: 1);
         var selectedExactly = gesture == CanvasGesture.Drag
             && editor.Session.SelectedObjectId == target.Id
@@ -228,11 +232,15 @@ public sealed class NativeSmokeApplication : Application
         }
 
         var pointerMoveRebuilds = view.ObjectListRebuildCount - rebuildsBeforeMoves;
+        var previewKeptSourceRevision = ReferenceEquals(sourceRevision, editor.Session.Document);
+        var previewProposedCount = editor.DragPreview?.Proposed.Count ?? 0;
         var finalDeltaX = 4 + options.MeasuredIterations - 1;
         var finalDeltaY = 3 + options.MeasuredIterations - 1;
         editor.EndDrag();
         await SettleAsync();
         var afterCommit = DocumentEditor.FindObject(editor.Session.Document, target.Id)!;
+        var committedLayer = editor.Session.Document.Layers.OfType<ObjectLayer>().Single();
+        var incrementalSpatialOverrides = ObjectSpatialIndex.For(committedLayer).IncrementalOverrideCount;
         var commitExact = editor.Session.UndoDepth == 1
             && NearlyEqual(afterCommit.X, target.X + finalDeltaX)
             && NearlyEqual(afterCommit.Y, target.Y + finalDeltaY);
@@ -257,6 +265,7 @@ public sealed class NativeSmokeApplication : Application
         var p50 = Percentile(ordered, 0.50);
         var p95 = Percentile(ordered, 0.95);
         var maximum = ordered[^1];
+        var responsivenessLimit = options.Profile == "native-stage13b" ? 33.3 : 150.0;
         var maxRealized = realized.Max();
         var objectTree = new NativeObjectTreeResult(
             logicalRows,
@@ -267,12 +276,15 @@ public sealed class NativeSmokeApplication : Application
             searchRows,
             maxRealized is > 0 and < 500);
         var drag = new NativeDragResult(
-            "off-screen native interaction-start to Skia-pass P95 <= 150 ms",
+            $"off-screen native interaction-start to Skia-pass P95 <= {responsivenessLimit:F1} ms",
             samples,
             p50,
             p95,
             maximum,
             pointerMoveRebuilds,
+            previewKeptSourceRevision,
+            previewProposedCount,
+            incrementalSpatialOverrides,
             editor.Session.UndoDepth,
             selectedExactly,
             commitExact,
@@ -285,7 +297,10 @@ public sealed class NativeSmokeApplication : Application
             && objectTree.ScrollStayedVirtualized
             && searchRows == 1
             && pointerMoveRebuilds == 0
-            && p95 <= 150
+            && previewKeptSourceRevision
+            && previewProposedCount == 1
+            && incrementalSpatialOverrides == 1
+            && p95 <= responsivenessLimit
             && selectedExactly
             && commitExact
             && undoExact

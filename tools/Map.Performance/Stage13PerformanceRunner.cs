@@ -32,6 +32,26 @@ internal sealed class Stage13PerformanceRunner
                 MeasureObjectTree(),
                 MeasureWarmSpatialQuery(),
             ],
+            "stage13b-baseline" =>
+            [
+                MeasureOneObjectEdit(enforceGate: false),
+                MeasureLastObjectSelection(enforceGate: false),
+                MeasureWarmSpatialQuery(enforceGate: false),
+                MeasureColdDocumentIndexBuild(enforceGate: false),
+                MeasureColdIndexBuild(enforceGate: false),
+                .. MeasureCollectionStrategies(),
+                MeasureStressEdit(enforceGate: false),
+            ],
+            "stage13b" =>
+            [
+                MeasureOneObjectEdit(enforceGate: true),
+                MeasureLastObjectSelection(enforceGate: true),
+                MeasureWarmSpatialQuery(enforceGate: true),
+                MeasureColdDocumentIndexBuild(enforceGate: true),
+                MeasureColdIndexBuild(enforceGate: true),
+                .. MeasureCollectionStrategies(),
+                MeasureStressEdit(enforceGate: true),
+            ],
             "small-render" => [MeasureSmallViewportRender()],
             "hit-test" => [MeasurePointHitTest()],
             "marquee" => [MeasureMarquee()],
@@ -172,15 +192,15 @@ internal sealed class Stage13PerformanceRunner
             });
     }
 
-    private ProfileResult MeasureWarmSpatialQuery()
+    private ProfileResult MeasureWarmSpatialQuery(bool enforceGate = false)
     {
         var index = ObjectSpatialIndex.For(_fixture.ObjectLayer);
         IReadOnlyList<SceneObject> candidates = [];
         var timing = Measure(() => candidates = index.Query(SmallViewport));
         return new ProfileResult(
             "warm-spatial-query",
-            "record-only in Stage 13A; Stage 13B target P95 <= 1 ms",
-            Passed: true,
+            enforceGate ? "warm P95 <= 1 ms" : "record-only in Stage 13A; Stage 13B target P95 <= 1 ms",
+            Passed: !enforceGate || timing.P95 <= 1,
             timing,
             new Dictionary<string, object?>
             {
@@ -189,6 +209,216 @@ internal sealed class Stage13PerformanceRunner
                 ["cellCount"] = index.CellCount,
                 ["oversizedCount"] = index.OversizedCount,
             });
+    }
+
+    private ProfileResult MeasureOneObjectEdit(bool enforceGate)
+    {
+        var before = _fixture.PointTarget;
+        var after = MultiSelectionGeometry.Translate([before], 1, 1)[0];
+        _ = ObjectSpatialIndex.For(_fixture.ObjectLayer);
+        MapDocument? edited = null;
+        var timing = Measure(() =>
+            edited = new ReplaceObjectsCommand([before], [after], "Stage 13B probe")
+                .Apply(_fixture.Document));
+        var actual = DocumentEditor.FindObject(edited!, before.Id);
+        if (actual != after)
+        {
+            throw new InvalidOperationException("The deterministic one-object edit was not exact.");
+        }
+
+        const string gate = "P95 <= 8 ms and allocation P95 <= 512 KiB";
+        var editedLayer = edited!.Layers.OfType<ObjectLayer>().Single();
+        var editedSpatial = ObjectSpatialIndex.For(editedLayer);
+        return new ProfileResult(
+            "one-object-edit-50k",
+            enforceGate ? gate : "record-only baseline; final gate: " + gate,
+            !enforceGate || timing.P95 <= 8 && timing.AllocationP95 <= 512 * 1024,
+            timing,
+            new Dictionary<string, object?>
+            {
+                ["totalObjects"] = _fixture.Manifest.ObjectCount,
+                ["targetObjectId"] = before.Id.ToString(),
+                ["resultObjectCount"] = edited!.Layers.OfType<ObjectLayer>().Sum(layer => layer.Objects.Count),
+                ["incrementalSpatialOverrides"] = editedSpatial.IncrementalOverrideCount,
+            });
+    }
+
+    private ProfileResult MeasureLastObjectSelection(bool enforceGate)
+    {
+        SceneObject? selected = null;
+        var timing = Measure(() =>
+            selected = DocumentEditor.FindObject(_fixture.Document, _fixture.PointTarget.Id));
+        if (selected?.Id != _fixture.PointTarget.Id)
+        {
+            throw new InvalidOperationException("The last deterministic object was not found.");
+        }
+
+        const string gate = "warm P95 <= 2 ms";
+        return new ProfileResult(
+            "last-object-selection-50k",
+            enforceGate ? gate : "record-only baseline; final gate: " + gate,
+            !enforceGate || timing.P95 <= 2,
+            timing,
+            new Dictionary<string, object?>
+            {
+                ["totalObjects"] = _fixture.Manifest.ObjectCount,
+                ["targetObjectId"] = selected.Id.ToString(),
+            });
+    }
+
+    private ProfileResult MeasureColdIndexBuild(bool enforceGate)
+    {
+        var stress = Stage13Fixtures.Simple(100_000, _options.Seed);
+        var layers = Enumerable.Range(0, _options.WarmupIterations + _options.MeasuredIterations)
+            .Select(_ => new ObjectLayer(
+                stress.ObjectLayer.Id,
+                stress.ObjectLayer.Name,
+                stress.ObjectLayer.Visible,
+                stress.ObjectLayer.Locked,
+                stress.ObjectLayer.Opacity,
+                stress.ObjectLayer.Objects,
+                stress.ObjectLayer.Mask))
+            .ToArray();
+        var cursor = 0;
+        var timing = Measure(() =>
+        {
+            var index = ObjectSpatialIndex.For(layers[cursor++]);
+            if (index.ObjectCount != 100_000)
+            {
+                throw new InvalidOperationException("The cold index lost deterministic objects.");
+            }
+        });
+
+        const string gate = "cold 100K <= 50 ms";
+        return new ProfileResult(
+            "cold-spatial-index-100k",
+            enforceGate ? gate : "record-only baseline; final gate: " + gate,
+            !enforceGate || timing.Max <= 50,
+            timing,
+            new Dictionary<string, object?>
+            {
+                ["totalObjects"] = 100_000,
+                ["distinctLayerSnapshots"] = layers.Length,
+            });
+    }
+
+    private ProfileResult MeasureColdDocumentIndexBuild(bool enforceGate)
+    {
+        var stress = Stage13Fixtures.Simple(100_000, _options.Seed);
+        var documents = Enumerable.Range(0, _options.WarmupIterations + _options.MeasuredIterations)
+            .Select(_ => new MapDocument(
+                stress.Document.Id,
+                stress.Document.Title,
+                stress.Document.CreatedUtc,
+                stress.Document.Canvas,
+                stress.Document.Layers,
+                stress.Document.Assets,
+                stress.Document.Notes,
+                stress.Document.Checkpoints))
+            .ToArray();
+        var cursor = 0;
+        var timing = Measure(() =>
+        {
+            var index = DocumentRevisionIndex.For(documents[cursor++]);
+            if (index.ObjectCount != 100_000)
+            {
+                throw new InvalidOperationException("The cold document index lost deterministic objects.");
+            }
+        });
+
+        const string gate = "cold revision index 100K <= 50 ms";
+        return new ProfileResult(
+            "cold-document-index-100k",
+            enforceGate ? gate : "record-only baseline; final gate: " + gate,
+            !enforceGate || timing.Max <= 50,
+            timing,
+            new Dictionary<string, object?>
+            {
+                ["totalObjects"] = 100_000,
+                ["distinctDocumentSnapshots"] = documents.Length,
+            });
+    }
+
+    private IReadOnlyList<ProfileResult> MeasureCollectionStrategies()
+    {
+        var source = _fixture.ObjectLayer.Objects;
+        var replacement = MultiSelectionGeometry.Translate([source[^1]], 1, 0)[0];
+
+        IReadOnlyList<SceneObject>? current = null;
+        var currentEdit = Measure(() =>
+            current = [.. source.Take(source.Count - 1), replacement]);
+        var currentIteration = Measure(() => Consume(current!));
+
+        var chunkedSource = new ProbeChunkedList(source);
+        IReadOnlyList<SceneObject>? chunked = null;
+        var chunkedEdit = Measure(() => chunked = chunkedSource.Replace(source.Count - 1, replacement));
+        var chunkedIteration = Measure(() => Consume(chunked!));
+
+        var segmentedSource = new ProbeSegmentList(source, replacementIndex: -1, replacement: null);
+        IReadOnlyList<SceneObject>? segmented = null;
+        var segmentedEdit = Measure(() =>
+            segmented = segmentedSource.Replace(source.Count - 1, replacement));
+        var segmentedIteration = Measure(() => Consume(segmented!));
+
+        return
+        [
+            CollectionResult("collection-current-flat-copy", currentEdit, currentIteration,
+                "full reference-array copy"),
+            CollectionResult("collection-chunked-256", chunkedEdit, chunkedIteration,
+                "copy one 256-reference chunk plus bounded directory"),
+            CollectionResult("collection-shared-segment", segmentedEdit, segmentedIteration,
+                "share source and overlay one replacement"),
+        ];
+    }
+
+    private static ProfileResult CollectionResult(
+        string name, MetricSummary edit, MetricSummary iteration, string structure) =>
+        new(
+            name,
+            "comparison probe; not an acceptance gate",
+            Passed: true,
+            edit,
+            new Dictionary<string, object?>
+            {
+                ["structure"] = structure,
+                ["iterationP50Ms"] = iteration.P50,
+                ["iterationP95Ms"] = iteration.P95,
+                ["iterationAllocationP95"] = iteration.AllocationP95,
+            });
+
+    private ProfileResult MeasureStressEdit(bool enforceGate)
+    {
+        var stress = Stage13Fixtures.Simple(100_000, _options.Seed);
+        var before = stress.PointTarget;
+        var after = MultiSelectionGeometry.Translate([before], 1, 0)[0];
+        MapDocument? edited = null;
+        var timing = Measure(() =>
+            edited = new ReplaceObjectsCommand([before], [after], "Stage 13B 100K stress")
+                .Apply(stress.Document));
+        var exact = DocumentEditor.FindObject(edited!, before.Id) == after;
+        return new ProfileResult(
+            "one-object-edit-100k-stress",
+            "no crash/resource-limit; exact result; time record-only",
+            !enforceGate || exact,
+            timing,
+            new Dictionary<string, object?>
+            {
+                ["totalObjects"] = 100_000,
+                ["exactResult"] = exact,
+            });
+    }
+
+    private static double _consume;
+
+    private static void Consume(IReadOnlyList<SceneObject> objects)
+    {
+        var sum = 0.0;
+        for (var index = 0; index < objects.Count; index++)
+        {
+            sum += objects[index].X;
+        }
+
+        _consume = sum;
     }
 
     private MetricSummary Measure(Action action)
@@ -264,4 +494,74 @@ internal sealed class Stage13PerformanceRunner
     private static SKSurface CreateSurface(int width, int height) =>
         SKSurface.Create(new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Premul))
         ?? throw new InvalidOperationException($"Cannot create a {width}x{height} Skia surface.");
+
+    private sealed class ProbeChunkedList : IReadOnlyList<SceneObject>
+    {
+        private const int ChunkSize = 256;
+        private readonly SceneObject[][] _chunks;
+
+        public ProbeChunkedList(IReadOnlyList<SceneObject> source)
+        {
+            Count = source.Count;
+            _chunks = new SceneObject[(source.Count + ChunkSize - 1) / ChunkSize][];
+            for (var chunkIndex = 0; chunkIndex < _chunks.Length; chunkIndex++)
+            {
+                var length = Math.Min(ChunkSize, source.Count - (chunkIndex * ChunkSize));
+                var chunk = new SceneObject[length];
+                for (var offset = 0; offset < length; offset++)
+                {
+                    chunk[offset] = source[(chunkIndex * ChunkSize) + offset];
+                }
+
+                _chunks[chunkIndex] = chunk;
+            }
+        }
+
+        private ProbeChunkedList(SceneObject[][] chunks, int count)
+        {
+            _chunks = chunks;
+            Count = count;
+        }
+
+        public int Count { get; }
+
+        public SceneObject this[int index] => _chunks[index / ChunkSize][index % ChunkSize];
+
+        public ProbeChunkedList Replace(int index, SceneObject replacement)
+        {
+            var chunks = (SceneObject[][])_chunks.Clone();
+            var chunkIndex = index / ChunkSize;
+            var chunk = (SceneObject[])chunks[chunkIndex].Clone();
+            chunk[index % ChunkSize] = replacement;
+            chunks[chunkIndex] = chunk;
+            return new ProbeChunkedList(chunks, Count);
+        }
+
+        public IEnumerator<SceneObject> GetEnumerator() =>
+            _chunks.SelectMany(static chunk => chunk).GetEnumerator();
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    private sealed class ProbeSegmentList(
+        IReadOnlyList<SceneObject> source,
+        int replacementIndex,
+        SceneObject? replacement) : IReadOnlyList<SceneObject>
+    {
+        public int Count => source.Count;
+
+        public SceneObject this[int index] =>
+            index == replacementIndex ? replacement! : source[index];
+
+        public ProbeSegmentList Replace(int index, SceneObject value) => new(source, index, value);
+
+        public IEnumerator<SceneObject> GetEnumerator()
+        {
+            for (var index = 0; index < Count; index++)
+            {
+                yield return this[index];
+            }
+        }
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
 }
