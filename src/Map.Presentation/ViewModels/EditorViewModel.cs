@@ -2,6 +2,7 @@ using System.Globalization;
 using Map.Assets;
 using Map.Core.Documents;
 using Map.Core.Editing;
+using Map.Export;
 using Map.Persistence;
 using Map.Presentation.Services;
 using Map.Rendering;
@@ -254,7 +255,10 @@ public sealed partial class EditorViewModel : ViewModelBase
         AssetCatalog? assetCatalog = null,
         IAssetContentResolver? assetResolver = null,
         EditorShortcutSettings? shortcuts = null,
-        IReadOnlyList<string>? availableFontFamilies = null)
+        IReadOnlyList<string>? availableFontFamilies = null,
+        IImageExporter? imageExporter = null,
+        IExportDestinationPicker? exportDestinationPicker = null,
+        IFolderLauncher? folderLauncher = null)
     {
         Session = new EditingSession(document);
         DocumentPath = documentPath;
@@ -268,6 +272,9 @@ public sealed partial class EditorViewModel : ViewModelBase
             ?? typeof(EditorViewModel).Assembly.GetName().Version?.ToString(3)
             ?? "0.0.0";
         _assetCatalog = assetCatalog;
+        _imageExporter = imageExporter ?? new ImageExportEngine();
+        _exportDestinationPicker = exportDestinationPicker;
+        _folderLauncher = folderLauncher;
         Shortcuts = shortcuts ?? new EditorShortcutSettings();
         _localFontFamilies = SystemFontCatalog.Normalize(
             availableFontFamilies ?? SystemFontCatalog.Families);
@@ -291,6 +298,8 @@ public sealed partial class EditorViewModel : ViewModelBase
         {
             RefreshLibrary();
         }
+
+        SceneChanged += (_, _) => RefreshOpenExportAfterSceneChange();
     }
 
     public EditingSession Session { get; }

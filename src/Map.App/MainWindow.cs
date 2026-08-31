@@ -143,7 +143,9 @@ public sealed class MainWindow : Window
             _log,
             appVersion: AppVersion.Current,
             assetCatalog: _assets,
-            shortcuts: _shortcuts);
+            shortcuts: _shortcuts,
+            exportDestinationPicker: new AvaloniaExportDestinationPicker(this),
+            folderLauncher: new WindowsFolderLauncher());
 
     private async Task NewMapAsync()
     {

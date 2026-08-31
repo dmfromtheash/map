@@ -104,15 +104,21 @@ checkpoint. Данные bounded, сохраняются атомарно и н�
 crop, clip, Undo/Redo, save/reopen и повторное открытие независимой региональной карты с raster и
 mask.
 
-### Stage 12C — полноценный export и отмена — контракт готов, код не начат
+### Stage 12C — полноценный export и отмена — реализовано
 
-- пользовательский PNG/JPEG/WebP export;
-- вся карта или регион, прозрачность, background/grid и размер;
-- понятная оценка результата, progress и cancel;
-- 16K и tiled/region path без скрытого full-canvas allocation;
-- ошибка не меняет документ и не оставляет ложный успешный файл.
+- заметная панель PNG/JPEG/WebP export для всей карты или точного региона;
+- output size со связью/разрывом aspect ratio, прозрачный/фактический фон, grid master switch и
+  `IncludeInExport` независимо от editor visibility;
+- bounded preview до 960×540, checked raw-memory estimate, snapshot-safe background progress и
+  фактическая отмена;
+- single image до 16 384 px с sibling temp, flush, decode/read-back и атомарной заменой;
+- 16K+ package path до 65 536 px: tiles 2048 px с effect bleed, manifest v1 и atomic folder rename
+  без full-canvas allocation;
+- ошибка/cancel сохраняет карту и существующий destination; успех не меняет session/history/path.
 
-Исполняемый контракт: `docs/STAGE_12C_FULL_EXPORT.md`.
+Исторический исполняемый контракт: `docs/STAGE_12C_FULL_EXPORT.md`. Проверены адресный `Stage12C`
+filter (8/8), Release build (0 warnings, 0 errors) и один скрытый native UI smoke: bounded preview,
+PNG региона 320×240, responsive multi-tile cancel, cleanup и неизменность source document/session.
 
 ### Stage 12D — migrations и диагностика файла
 

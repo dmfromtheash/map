@@ -99,6 +99,18 @@ public sealed class RenderOptions
     public bool IsExport { get; init; }
 
     /// <summary>
+    /// The mandatory document base is normally drawn. Transparent PNG/WebP export explicitly
+    /// opts out without changing the document or inventing a second background colour.
+    /// </summary>
+    public bool IncludeBaseColor { get; init; } = true;
+
+    /// <summary>
+    /// Export-level grid master switch. Per-grid <c>IncludeInExport</c> is still evaluated when
+    /// this is true; editor visibility remains independent.
+    /// </summary>
+    public bool IncludeExportGrids { get; init; } = true;
+
+    /// <summary>
     /// Derived editor chrome for Stage 12B. It is drawn after the document clip and never enters
     /// persistence, thumbnails or export unless a caller explicitly supplies it.
     /// </summary>
@@ -142,6 +154,16 @@ public static class SceneRenderer
 
         foreach (var layer in document.Layers)
         {
+            if (options.IsExport && layer is BaseColorLayer && !options.IncludeBaseColor)
+            {
+                continue;
+            }
+
+            if (options.IsExport && layer is GridLayer && !options.IncludeExportGrids)
+            {
+                continue;
+            }
+
             // Grid export is an explicit per-grid policy. Editor visibility must not silently
             // replace it: a hidden editor grid with IncludeInExport=true still belongs in export.
             var hiddenOnlyInEditor = options.IsExport && layer is GridLayer;
@@ -834,10 +856,16 @@ public static class SceneRenderer
         foreach (var item in composition.Items.Where(item => item.Visible)
                      .OrderBy(item => item.Sublayer))
             DrawObject(canvas, item, options);
-        if (composition.IncludeGrids)
+        if (composition.IncludeGrids && (!options.IsExport || options.IncludeExportGrids))
         {
             var localView = new WorldBounds(0, 0, composition.SourceWidth, composition.SourceHeight);
-            foreach (var grid in composition.Grids) DrawGrid(canvas, grid, localView);
+            foreach (var grid in composition.Grids)
+            {
+                if (!options.IsExport || grid.IncludeInExport)
+                {
+                    DrawGrid(canvas, grid, localView);
+                }
+            }
         }
         if (composition.IncludeFilters)
         {

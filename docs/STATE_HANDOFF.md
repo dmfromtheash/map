@@ -3,19 +3,25 @@
 ## Актуально на 2026-08-31
 
 Map — личное нативное offline-приложение владельца для его текущего Windows x64 ПК. Полезный
-production-код Stages 1–11 сохранён. Stage 12A — именованные контрольные точки — и Stage 12B —
-resize/crop и новая карта из региона — реализованы, проверены и приняты владельцем. Отменена только лишняя Stage 11
+production-код Stages 1–11 сохранён. Stages 12A–12C реализованы и проверены: именованные
+контрольные точки, resize/crop/новая карта из региона и полноценный локальный export с отменой.
+Отменена только лишняя Stage 11
 программа для VM, универсальной чистой Windows, installer/updater, release candidate и
 многократной независимой приёмки.
 
-Следующий этап — **Stage 12C: полноценный export и отмена**. Его исполняемый контракт подготовлен в
-`docs/STAGE_12C_FULL_EXPORT.md`, но реализация не начата.
+Следующий возможный этап — **Stage 12D: migrations и диагностика файла**. Он не начат и требует
+отдельного прямого запроса владельца.
 
 ## Актуальная продуктовая база
 
 - Рабочий worktree:
   `C:\Users\Leshe\.codex\worktrees\stage10f-fonts-bindings\Map`.
-- Ветка: `stage/12b-resize-crop-region`.
+- Ветка: `stage/12c-full-export-cancel`.
+- Принятая стартовая база Stage 12C: `45252b944af8a059cc1a51c2dfb562a12385de22` — локальное
+  принятие Stage 12B и исполняемый контракт Stage 12C поверх production commit `5863099`.
+- Результат Stage 12C записан одним локальным commit
+  `feat(stage-12c): add bounded image export and cancellation`; точный hash — текущий `HEAD` этой
+  ветки после завершения задачи.
 - База Stage 12B до изменения: `750326f967b650b402c67146ab195c2e49c7c4bc` — принятый
   результат `stage/12a-named-checkpoints`.
 - Production-результат Stage 12B: `5863099ce7716812b231deb8dcfe496655a9bd56`, один commit
@@ -43,6 +49,16 @@ Checkpoint `825d9df` является потомком Stage 10E, Stage 10F и �
 - точный sparse перенос RGBA, coverage, land и layer masks по материализованным tiles;
 - независимая `.mapproj` из прямоугольного региона текущего in-memory snapshot с новым id,
   объектами/группами/compositions/notes/assets и без checkpoint catalog источника;
+- заметная панель «Экспорт…» с PNG/JPEG/WebP, whole-map/region, точным output size, связью
+  пропорций, transparent/background/grid policy, bounded preview и честной raw-memory estimate;
+- фоновый snapshot-safe export с monotonic progress и фактической отменой; операция не меняет
+  document/revision/dirty/history/selection/viewport/path/checkpoints/autosave;
+- атомарный single-file publish через sibling temp, flush и decode/read-back; cancel/error сохраняет
+  прежний destination byte-for-byte;
+- package export до 65 536 px: последовательные tiles 2048 px с вычисленным effect bleed,
+  deterministic filenames, manifest v1, read-back каждого tile и публикация папки одним rename;
+- отдельный production-проект `Map.Export`, использующий общий `SceneRenderer` и собственные
+  bounded caches/resolver без UI-owned Skia state;
 - обратная совместимость старых `.mapproj`, атомарное хранение snapshot без рекурсивного каталога,
   checksum-цепочка и лимиты 20 точек / 64 MiB;
 - иконка приложения;
@@ -58,35 +74,35 @@ Checkpoint `825d9df` является потомком Stage 10E, Stage 10F и �
 - pre-commit, coverage, mutation и лишние tool manifests;
 - поздние Stage 10E/10F/11 process-файлы, появившиеся после исходной уборки.
 
-`Map.slnx` содержит только семь production-проектов из `src`. Общие build-настройки сохраняют
+`Map.slnx` содержит только восемь production-проектов из `src`, включая `Map.Export`. Общие build-настройки сохраняют
 версию `0.2.0`, ограничивают восстановление текущим `win-x64` и не создают self-contained bundle.
 Ненужные нативные PDB Skia/HarfBuzz удаляются из output, управляемые PDB Map остаются.
 
-Свежая проверка Stage 12B:
+Свежая проверка Stage 12C:
 
 ```text
 dotnet test .\tests\Map.Presentation.Tests\Map.Presentation.Tests.csproj -c Release
-  --filter "FullyQualifiedName~Stage12B"
-PASS — 16 passed, 0 failed, 0 skipped
+  --filter "FullyQualifiedName~Stage12C"
+PASS — 8 passed, 0 failed, 0 skipped
 
 dotnet build .\Map.slnx -c Release
 PASS — 0 warnings, 0 errors
 
 background native UI smoke на текущем Windows ПК
-PASS — настоящие скрытые Avalonia/Win32 MainWindow (`ShowActivated=false`,
-`ShowInTaskbar=false`) без системного ввода: открыть отдельную карту с object/raster/mask/grid и
-checkpoint; preview и grid snap; Cancel без изменений; crop, canvas clip, Undo/Redo; save/reopen;
-создать и повторно открыть независимую региональную `.mapproj`; проверить новый id, canvas,
-координаты, raster/mask, отсутствие checkpoints и неизменность источника
+PASS — настоящее скрытое Avalonia/Win32 окно (`ShowActivated=false`, `ShowInTaskbar=false`) без
+системного ввода: открыть «Экспорт…» на отдельной vector/raster/mask/asset/grid карте; получить
+bounded preview; создать и decode/read-back проверить PNG региона 320×240; запустить multi-tile
+операцию, подтвердить отзывчивость UI, отменить, проверить отсутствие опубликованной папки/temp и
+неизменность source document/session
 ```
 
 Полный suite, VM, packaging, benchmark, coverage и повтор зелёных адресных проверок не запускались:
-они не нужны для Stage 12B и прямо исключены текущими правилами владельца.
+они не нужны для Stage 12C и прямо исключены текущими правилами владельца.
 
 ## Другие checkout
 
 `C:\Projects\Map` теперь содержит чистый локальный commit `9729764` — источник исходной уборки, но
-не актуальную продуктовую базу. Ветка Stage 12B находится в worktree, указанном выше.
+не актуальную продуктовую базу. Ветка Stage 12C находится в worktree, указанном выше.
 
 Worktree `fix/app-icon` остаётся owner-dirty и не изменялся. Утверждённая иконка уже находится в
 консолидированной продуктовой истории.
@@ -104,5 +120,6 @@ Worktree `fix/app-icon` остаётся owner-dirty и не изменялся.
 
 ## Следующее единственное действие
 
-По отдельному прямому запросу выполнить `docs/STAGE_12C_FULL_EXPORT.md` от принятой локальной базы.
-Не начинать Stage 12C автоматически, не повторять зелёные проверки Stage 12B и не трогать GitHub.
+Сначала использовать реализованный Stage 12C в реальной работе владельца. Stage 12D не начинать
+без отдельного прямого запроса; зелёные проверки Stage 12C не повторять без изменения входов.
+GitHub не трогать.

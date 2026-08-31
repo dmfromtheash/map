@@ -1,11 +1,14 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Map.Platform.Windows;
+using Map.Export;
 using Map.Presentation.Services;
 
 namespace Map.App.Services;
@@ -105,4 +108,61 @@ public sealed class DialogPrompts(Window owner) : IUserPrompts
             "Удалить",
             "DeleteCheckpointConfirmButton",
             destructive: true));
+}
+
+/// <summary>Native export destination dialogs. The tile-package picker chooses a new folder name.</summary>
+public sealed class AvaloniaExportDestinationPicker(Window owner) : IExportDestinationPicker
+{
+    public Task<string?> PickImageAsync(string suggestedFileName, ExportImageFormat format) =>
+        Dispatcher.UIThread.InvokeAsync(async () =>
+        {
+            var extension = ImageExportEngine.Extension(format);
+            var type = new FilePickerFileType(ImageExportEngine.FormatName(format))
+            {
+                Patterns = format == ExportImageFormat.Jpeg
+                    ? ["*.jpg", "*.jpeg"]
+                    : [$"*.{extension}"],
+            };
+            var file = await owner.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+            {
+                Title = "Экспорт изображения",
+                SuggestedFileName = suggestedFileName,
+                DefaultExtension = extension,
+                FileTypeChoices = [type],
+            });
+            return file?.TryGetLocalPath();
+        });
+
+    public Task<string?> PickTilePackageAsync(string suggestedFolderName) =>
+        Dispatcher.UIThread.InvokeAsync(async () =>
+        {
+            // A save-name dialog can name a folder that does not exist yet; a folder picker cannot.
+            var folder = await owner.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+            {
+                Title = "Новая папка пакета тайлов",
+                SuggestedFileName = suggestedFolderName,
+            });
+            return folder?.TryGetLocalPath();
+        });
+}
+
+public sealed class WindowsFolderLauncher : IFolderLauncher
+{
+    public void OpenContainingFolder(string resultPath, ExportOutputMode outputMode)
+    {
+        var target = outputMode == ExportOutputMode.TilePackage
+            ? resultPath
+            : Path.GetDirectoryName(resultPath);
+        if (string.IsNullOrWhiteSpace(target) || !Directory.Exists(target))
+        {
+            throw new DirectoryNotFoundException("Папка экспортированного результата не найдена.");
+        }
+
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = "explorer.exe",
+            Arguments = $"\"{target}\"",
+            UseShellExecute = true,
+        });
+    }
 }

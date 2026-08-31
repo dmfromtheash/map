@@ -1,0 +1,627 @@
+using System.Globalization;
+using Map.Core.Documents;
+using Map.Core.Editing;
+using Map.Export;
+using Map.Presentation.Services;
+
+namespace Map.Presentation.ViewModels;
+
+public sealed partial class EditorViewModel
+{
+    private readonly IImageExporter _imageExporter;
+    private readonly IExportDestinationPicker? _exportDestinationPicker;
+    private readonly IFolderLauncher? _folderLauncher;
+    private CancellationTokenSource? _exportPreviewCancellation;
+    private CancellationTokenSource? _exportRunCancellation;
+    private Task _exportPreviewTask = Task.CompletedTask;
+    private long _exportPreviewGeneration;
+    private ExportPlan? _exportPlan;
+    private bool _exportOpen;
+    private ExportImageFormat _exportFormat = ExportImageFormat.Png;
+    private ExportAreaMode _exportAreaMode = ExportAreaMode.WholeCanvas;
+    private ExportOutputMode _exportOutputMode = ExportOutputMode.SingleImage;
+    private string _exportRegionXText = "0";
+    private string _exportRegionYText = "0";
+    private string _exportRegionWidthText = "1";
+    private string _exportRegionHeightText = "1";
+    private string _exportOutputWidthText = "1";
+    private string _exportOutputHeightText = "1";
+    private bool _exportAspectLocked = true;
+    private bool _exportTransparentBackground;
+    private bool _exportIncludeGrid = true;
+    private int _exportQuality = 90;
+    private string _exportValidationError = "";
+    private string _exportEstimateText = "";
+    private byte[]? _exportPreviewPng;
+    private bool _exportPreviewBusy;
+    private bool _exportRunning;
+    private double _exportProgress;
+    private string _exportProgressText = "";
+    private string _exportResultText = "";
+    private string? _exportResultPath;
+    private ExportOutputMode _exportResultMode;
+    private bool _syncingExportFields;
+
+    public bool ExportOpen => _exportOpen;
+    public ExportImageFormat ExportFormat => _exportFormat;
+    public ExportAreaMode ExportAreaMode => _exportAreaMode;
+    public ExportOutputMode ExportOutputMode => _exportOutputMode;
+    public bool ExportAspectLocked => _exportAspectLocked;
+    public bool ExportTransparentBackground => _exportTransparentBackground;
+    public bool ExportIncludeGrid => _exportIncludeGrid;
+    public int ExportQuality => _exportQuality;
+    public bool ExportQualityVisible => _exportFormat is ExportImageFormat.Jpeg or ExportImageFormat.Webp;
+    public bool ExportTransparencyAvailable => _exportFormat is not ExportImageFormat.Jpeg;
+    public string ExportFormatExplanation => _exportFormat == ExportImageFormat.Jpeg
+        ? "JPEG не хранит прозрачность: фон карты включён обязательно."
+        : "PNG и WebP могут сохранить прозрачный фон.";
+    public string ExportValidationError => _exportValidationError;
+    public string ExportEstimateText => _exportEstimateText;
+    public byte[]? ExportPreviewPng => _exportPreviewPng;
+    public bool ExportPreviewBusy => _exportPreviewBusy;
+    public bool ExportRunning => _exportRunning;
+    public double ExportProgress => _exportProgress;
+    public string ExportProgressText => _exportProgressText;
+    public string ExportResultText => _exportResultText;
+    public string? ExportResultPath => _exportResultPath;
+    public ExportPlan? CurrentExportPlan => _exportPlan;
+    public bool CanStartExport => _exportPlan is not null && !_exportPreviewBusy
+        && _exportPreviewPng is not null && !_exportRunning && _exportDestinationPicker is not null;
+    public bool CanCancelExport => _exportRunning && _exportRunCancellation is { IsCancellationRequested: false };
+    public bool CanOpenExportFolder => !_exportRunning && _exportResultPath is not null && _folderLauncher is not null;
+
+    public string ExportRegionXText
+    {
+        get => _exportRegionXText;
+        set => SetExportText(ref _exportRegionXText, value, nameof(ExportRegionXText), sourceGeometry: true);
+    }
+
+    public string ExportRegionYText
+    {
+        get => _exportRegionYText;
+        set => SetExportText(ref _exportRegionYText, value, nameof(ExportRegionYText), sourceGeometry: true);
+    }
+
+    public string ExportRegionWidthText
+    {
+        get => _exportRegionWidthText;
+        set => SetExportText(ref _exportRegionWidthText, value, nameof(ExportRegionWidthText), sourceGeometry: true);
+    }
+
+    public string ExportRegionHeightText
+    {
+        get => _exportRegionHeightText;
+        set => SetExportText(ref _exportRegionHeightText, value, nameof(ExportRegionHeightText), sourceGeometry: true);
+    }
+
+    public string ExportOutputWidthText
+    {
+        get => _exportOutputWidthText;
+        set
+        {
+            if (!SetField(ref _exportOutputWidthText, value) || _syncingExportFields) return;
+            if (_exportAspectLocked) SyncExportHeightFromWidth();
+            RebuildExportPlanAndPreview();
+        }
+    }
+
+    public string ExportOutputHeightText
+    {
+        get => _exportOutputHeightText;
+        set
+        {
+            if (!SetField(ref _exportOutputHeightText, value) || _syncingExportFields) return;
+            if (_exportAspectLocked) SyncExportWidthFromHeight();
+            RebuildExportPlanAndPreview();
+        }
+    }
+
+    public void BeginExport()
+    {
+        var canvas = Session.Document.Canvas;
+        _exportOpen = true;
+        _exportFormat = ExportImageFormat.Png;
+        _exportAreaMode = ExportAreaMode.WholeCanvas;
+        _exportOutputMode = canvas.Width > ExportEngineSettings.DefaultMaxSingleEdge
+            || canvas.Height > ExportEngineSettings.DefaultMaxSingleEdge
+            ? ExportOutputMode.TilePackage
+            : ExportOutputMode.SingleImage;
+        _exportRegionXText = "0";
+        _exportRegionYText = "0";
+        _exportRegionWidthText = canvas.Width.ToString(CultureInfo.InvariantCulture);
+        _exportRegionHeightText = canvas.Height.ToString(CultureInfo.InvariantCulture);
+        _exportOutputWidthText = canvas.Width.ToString(CultureInfo.InvariantCulture);
+        _exportOutputHeightText = canvas.Height.ToString(CultureInfo.InvariantCulture);
+        _exportAspectLocked = true;
+        _exportTransparentBackground = false;
+        _exportIncludeGrid = true;
+        _exportQuality = 90;
+        _exportProgress = 0;
+        _exportProgressText = "";
+        _exportResultText = "";
+        _exportResultPath = null;
+        RaiseExportState();
+        RebuildExportPlanAndPreview();
+    }
+
+    public void CloseExport()
+    {
+        if (_exportRunning) return;
+        _exportOpen = false;
+        CancelExportPreview();
+        _exportPlan = null;
+        _exportPreviewPng = null;
+        RaiseExportState();
+    }
+
+    public void SetExportFormat(ExportImageFormat format)
+    {
+        if (_exportFormat == format) return;
+        _exportFormat = format;
+        if (format == ExportImageFormat.Jpeg)
+        {
+            _exportTransparentBackground = false;
+        }
+        Raise(nameof(ExportFormat));
+        Raise(nameof(ExportQualityVisible));
+        Raise(nameof(ExportTransparencyAvailable));
+        Raise(nameof(ExportTransparentBackground));
+        Raise(nameof(ExportFormatExplanation));
+        RebuildExportPlanAndPreview();
+    }
+
+    public void SetExportAreaMode(ExportAreaMode mode)
+    {
+        if (_exportAreaMode == mode) return;
+        _exportAreaMode = mode;
+        Raise(nameof(ExportAreaMode));
+        if (_exportAspectLocked) SyncExportHeightFromWidth();
+        RebuildExportPlanAndPreview();
+    }
+
+    public void SetExportOutputMode(ExportOutputMode mode)
+    {
+        if (_exportOutputMode == mode) return;
+        _exportOutputMode = mode;
+        Raise(nameof(ExportOutputMode));
+        RebuildExportPlanAndPreview();
+    }
+
+    public void SetExportAspectLocked(bool value)
+    {
+        if (_exportAspectLocked == value) return;
+        _exportAspectLocked = value;
+        Raise(nameof(ExportAspectLocked));
+        if (value) SyncExportHeightFromWidth();
+        RebuildExportPlanAndPreview();
+    }
+
+    public void SetExportTransparentBackground(bool value)
+    {
+        var effective = _exportFormat == ExportImageFormat.Jpeg ? false : value;
+        if (_exportTransparentBackground == effective) return;
+        _exportTransparentBackground = effective;
+        Raise(nameof(ExportTransparentBackground));
+        RebuildExportPlanAndPreview();
+    }
+
+    public void SetExportIncludeGrid(bool value)
+    {
+        if (_exportIncludeGrid == value) return;
+        _exportIncludeGrid = value;
+        Raise(nameof(ExportIncludeGrid));
+        RebuildExportPlanAndPreview();
+    }
+
+    public void SetExportQuality(int value)
+    {
+        value = Math.Clamp(value, 1, 100);
+        if (_exportQuality == value) return;
+        _exportQuality = value;
+        Raise(nameof(ExportQuality));
+        RebuildExportPlanAndPreview();
+    }
+
+    public async Task<bool> StartExportAsync()
+    {
+        if (_exportRunning || _exportDestinationPicker is null)
+        {
+            return false;
+        }
+
+        var snapshot = Session.Document;
+        ExportPlan plan;
+        try
+        {
+            plan = _imageExporter.Plan(snapshot, BuildExportRequest());
+        }
+        catch (Exception ex) when (ex is ArgumentException or OverflowException
+            or ExportValidationException)
+        {
+            SetExportValidationError(ex.Message);
+            return false;
+        }
+
+        var suggestedBase = SafeExportName(snapshot.Title);
+        var destination = plan.OutputMode == ExportOutputMode.SingleImage
+            ? await _exportDestinationPicker.PickImageAsync(
+                $"{suggestedBase}.{ImageExportEngine.Extension(plan.Format)}", plan.Format)
+                .ConfigureAwait(true)
+            : await _exportDestinationPicker.PickTilePackageAsync($"{suggestedBase}-tiles")
+                .ConfigureAwait(true);
+        if (string.IsNullOrWhiteSpace(destination))
+        {
+            return false;
+        }
+
+        CancelExportPreview();
+        _exportRunCancellation?.Dispose();
+        _exportRunCancellation = new CancellationTokenSource();
+        _exportRunning = true;
+        _exportProgress = 0;
+        _exportProgressText = "Подготовка экспорта…";
+        _exportResultText = "";
+        _exportResultPath = null;
+        SetExportValidationError("");
+        RaiseRunState();
+
+        var sourcePath = DocumentPath;
+        var progress = new Progress<ExportProgress>(update =>
+        {
+            if (update.Fraction >= _exportProgress)
+            {
+                _exportProgress = update.Fraction;
+                Raise(nameof(ExportProgress));
+            }
+            _exportProgressText = update.Message;
+            Raise(nameof(ExportProgressText));
+        });
+
+        try
+        {
+            using var stamps = new ExportStampImageSource(snapshot, sourcePath, _assetCatalog);
+            var result = await _imageExporter.ExportAsync(
+                snapshot,
+                plan,
+                destination,
+                stamps,
+                progress,
+                _exportRunCancellation.Token).ConfigureAwait(true);
+            _exportResultPath = result.DestinationPath;
+            _exportResultMode = result.OutputMode;
+            _exportResultText = result.OutputMode == ExportOutputMode.SingleImage
+                ? $"Готово: {result.DestinationPath}"
+                : $"Готов пакет ({result.FileCount - 1} тайлов): {result.DestinationPath}";
+            _log.Info($"Exported {result.OutputMode} to {result.DestinationPath}.");
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            _exportResultText = "Экспорт отменён. Карта и прежний результат сохранены.";
+            _exportProgressText = "Отменено после безопасной очистки временных данных.";
+            return false;
+        }
+        catch (Exception ex) when (ex is ExportOperationException or ExportValidationException
+            or IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            _exportValidationError = ex.Message;
+            _exportResultText = "Экспорт не завершён. Карта и прежний результат сохранены.";
+            _exportProgressText = "Ошибка экспорта.";
+            _log.Error("Export failed", ex);
+            return false;
+        }
+        finally
+        {
+            _exportRunning = false;
+            RaiseRunState();
+        }
+    }
+
+    public void CancelExport()
+    {
+        if (!CanCancelExport) return;
+        _exportRunCancellation!.Cancel();
+        _exportProgressText = "Отмена… ждём безопасной остановки и очистки.";
+        Raise(nameof(ExportProgressText));
+        Raise(nameof(CanCancelExport));
+    }
+
+    public void OpenExportFolder()
+    {
+        if (!CanOpenExportFolder) return;
+        try
+        {
+            _folderLauncher!.OpenContainingFolder(_exportResultPath!, _exportResultMode);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+            or System.ComponentModel.Win32Exception)
+        {
+            SetExportValidationError("Не удалось открыть папку результата: " + ex.Message);
+        }
+    }
+
+    public Task WaitForExportPreviewAsync() => _exportPreviewTask;
+
+    private void RefreshOpenExportAfterSceneChange()
+    {
+        if (_exportOpen && !_exportRunning)
+        {
+            RebuildExportPlanAndPreview();
+        }
+    }
+
+    private void RebuildExportPlanAndPreview()
+    {
+        if (!_exportOpen || _exportRunning) return;
+        CancelExportPreview();
+        _exportPlan = null;
+        _exportPreviewPng = null;
+        _exportEstimateText = "";
+        Raise(nameof(CurrentExportPlan));
+        Raise(nameof(ExportPreviewPng));
+        Raise(nameof(ExportEstimateText));
+
+        try
+        {
+            var snapshot = Session.Document;
+            var plan = _imageExporter.Plan(snapshot, BuildExportRequest());
+            _exportPlan = plan;
+            _exportValidationError = "";
+            _exportEstimateText = DescribePlan(plan);
+            _exportPreviewBusy = true;
+            var generation = ++_exportPreviewGeneration;
+            var cancellation = new CancellationTokenSource();
+            _exportPreviewCancellation = cancellation;
+            _exportPreviewTask = RenderExportPreviewAsync(
+                generation, snapshot, DocumentPath, plan, cancellation.Token);
+        }
+        catch (Exception ex) when (ex is ArgumentException or OverflowException
+            or ExportValidationException)
+        {
+            _exportValidationError = ex.Message;
+            _exportPreviewBusy = false;
+            _exportPreviewTask = Task.CompletedTask;
+        }
+
+        Raise(nameof(CurrentExportPlan));
+        Raise(nameof(ExportValidationError));
+        Raise(nameof(ExportEstimateText));
+        Raise(nameof(ExportPreviewBusy));
+        Raise(nameof(CanStartExport));
+    }
+
+    private async Task RenderExportPreviewAsync(
+        long generation,
+        MapDocument snapshot,
+        string? sourcePath,
+        ExportPlan plan,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var stamps = new ExportStampImageSource(snapshot, sourcePath, _assetCatalog);
+            var preview = await _imageExporter.RenderPreviewAsync(
+                snapshot, plan, stamps, cancellationToken).ConfigureAwait(true);
+            if (generation != _exportPreviewGeneration || cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
+            _exportPreviewPng = preview.PngBytes;
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        catch (Exception ex) when (ex is ExportOperationException or IOException
+            or InvalidDataException or OutOfMemoryException)
+        {
+            if (generation == _exportPreviewGeneration)
+            {
+                _exportValidationError = "Preview не создан: " + ex.Message;
+            }
+        }
+        finally
+        {
+            if (generation == _exportPreviewGeneration)
+            {
+                _exportPreviewBusy = false;
+                Raise(nameof(ExportPreviewPng));
+                Raise(nameof(ExportValidationError));
+                Raise(nameof(ExportPreviewBusy));
+                Raise(nameof(CanStartExport));
+            }
+        }
+    }
+
+    private ExportRequest BuildExportRequest()
+    {
+        if (!TryInt(_exportOutputWidthText, out var outputWidth)
+            || !TryInt(_exportOutputHeightText, out var outputHeight))
+        {
+            throw new ExportValidationException("Итоговые ширина и высота должны быть целыми числами.");
+        }
+
+        CanvasRegion? region = null;
+        if (_exportAreaMode == ExportAreaMode.Region)
+        {
+            if (!TryInt(_exportRegionXText, out var x)
+                || !TryInt(_exportRegionYText, out var y)
+                || !TryInt(_exportRegionWidthText, out var width)
+                || !TryInt(_exportRegionHeightText, out var height))
+            {
+                throw new ExportValidationException("X, Y, ширина и высота региона должны быть целыми числами.");
+            }
+
+            try
+            {
+                region = new CanvasRegion(x, y, width, height);
+            }
+            catch (Exception ex) when (ex is ArgumentOutOfRangeException or OverflowException)
+            {
+                throw new ExportValidationException(
+                    "Регион должен иметь положительный размер и не выходить за числовой диапазон.", ex);
+            }
+        }
+
+        return new ExportRequest(
+            _exportFormat,
+            _exportAreaMode,
+            region,
+            outputWidth,
+            outputHeight,
+            _exportOutputMode,
+            _exportTransparentBackground,
+            _exportIncludeGrid,
+            _exportQuality);
+    }
+
+    private void SetExportText(ref string field, string value, string propertyName, bool sourceGeometry)
+    {
+        if (!SetField(ref field, value, propertyName) || _syncingExportFields) return;
+        if (sourceGeometry && _exportAspectLocked) SyncExportHeightFromWidth();
+        RebuildExportPlanAndPreview();
+    }
+
+    private void SyncExportHeightFromWidth()
+    {
+        if (!TryInt(_exportOutputWidthText, out var width) || width <= 0
+            || !TryExportSourceSize(out var sourceWidth, out var sourceHeight))
+        {
+            return;
+        }
+
+        var height = Math.Max(1, (int)Math.Round(
+            width * (sourceHeight / (double)sourceWidth), MidpointRounding.AwayFromZero));
+        SetExportDimension(ref _exportOutputHeightText, height, nameof(ExportOutputHeightText));
+    }
+
+    private void SyncExportWidthFromHeight()
+    {
+        if (!TryInt(_exportOutputHeightText, out var height) || height <= 0
+            || !TryExportSourceSize(out var sourceWidth, out var sourceHeight))
+        {
+            return;
+        }
+
+        var width = Math.Max(1, (int)Math.Round(
+            height * (sourceWidth / (double)sourceHeight), MidpointRounding.AwayFromZero));
+        SetExportDimension(ref _exportOutputWidthText, width, nameof(ExportOutputWidthText));
+    }
+
+    private void SetExportDimension(ref string field, int value, string propertyName)
+    {
+        _syncingExportFields = true;
+        try
+        {
+            var text = value.ToString(CultureInfo.InvariantCulture);
+            if (!string.Equals(field, text, StringComparison.Ordinal))
+            {
+                field = text;
+                Raise(propertyName);
+            }
+        }
+        finally
+        {
+            _syncingExportFields = false;
+        }
+    }
+
+    private bool TryExportSourceSize(out int width, out int height)
+    {
+        if (_exportAreaMode == ExportAreaMode.WholeCanvas)
+        {
+            width = Session.Document.Canvas.Width;
+            height = Session.Document.Canvas.Height;
+            return true;
+        }
+
+        width = 0;
+        height = 0;
+        return TryInt(_exportRegionWidthText, out width) && width > 0
+            && TryInt(_exportRegionHeightText, out height) && height > 0;
+    }
+
+    private void CancelExportPreview()
+    {
+        _exportPreviewGeneration++;
+        _exportPreviewCancellation?.Cancel();
+        _exportPreviewCancellation?.Dispose();
+        _exportPreviewCancellation = null;
+        _exportPreviewBusy = false;
+    }
+
+    private void SetExportValidationError(string message)
+    {
+        _exportValidationError = message;
+        Raise(nameof(ExportValidationError));
+        Raise(nameof(CanStartExport));
+    }
+
+    private void RaiseRunState()
+    {
+        Raise(nameof(ExportRunning));
+        Raise(nameof(ExportProgress));
+        Raise(nameof(ExportProgressText));
+        Raise(nameof(ExportResultText));
+        Raise(nameof(ExportResultPath));
+        Raise(nameof(CanStartExport));
+        Raise(nameof(CanCancelExport));
+        Raise(nameof(CanOpenExportFolder));
+    }
+
+    private void RaiseExportState()
+    {
+        Raise(nameof(ExportOpen));
+        Raise(nameof(ExportFormat));
+        Raise(nameof(ExportAreaMode));
+        Raise(nameof(ExportOutputMode));
+        Raise(nameof(ExportRegionXText));
+        Raise(nameof(ExportRegionYText));
+        Raise(nameof(ExportRegionWidthText));
+        Raise(nameof(ExportRegionHeightText));
+        Raise(nameof(ExportOutputWidthText));
+        Raise(nameof(ExportOutputHeightText));
+        Raise(nameof(ExportAspectLocked));
+        Raise(nameof(ExportTransparentBackground));
+        Raise(nameof(ExportIncludeGrid));
+        Raise(nameof(ExportQuality));
+        Raise(nameof(ExportQualityVisible));
+        Raise(nameof(ExportTransparencyAvailable));
+        Raise(nameof(ExportFormatExplanation));
+        Raise(nameof(ExportValidationError));
+        Raise(nameof(ExportEstimateText));
+        Raise(nameof(ExportPreviewPng));
+        Raise(nameof(ExportPreviewBusy));
+        RaiseRunState();
+    }
+
+    private static string DescribePlan(ExportPlan plan)
+    {
+        var memory = plan.EstimatedRawWorkingBytes >= 1024L * 1024 * 1024
+            ? $"{plan.EstimatedRawWorkingBytes / (1024d * 1024 * 1024):0.00} GiB"
+            : $"{plan.EstimatedRawWorkingBytes / (1024d * 1024):0} MiB";
+        var mode = plan.OutputMode == ExportOutputMode.SingleImage
+            ? "один файл"
+            : $"пакет {plan.Columns} × {plan.Rows} ({plan.TileCount} тайлов)";
+        var stretch = Math.Abs(
+            plan.OutputWidth / (double)plan.OutputHeight
+            - plan.SourceRegion.Width / (double)plan.SourceRegion.Height) > 0.0001
+            ? " · пропорции разорваны, изображение будет растянуто"
+            : "";
+        return $"{plan.OutputWidth:N0} × {plan.OutputHeight:N0} px · "
+            + $"{ImageExportEngine.FormatName(plan.Format)} · {mode} · "
+            + $"верхняя оценка raw working memory: {memory}{stretch}. "
+            + "Это не прогноз сжатого размера файла.";
+    }
+
+    private static string SafeExportName(string title)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var value = new string(title.Trim().Select(ch => invalid.Contains(ch) ? '_' : ch).ToArray());
+        return string.IsNullOrWhiteSpace(value) ? "map" : value;
+    }
+
+    private static bool TryInt(string text, out int value) =>
+        int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out value);
+}

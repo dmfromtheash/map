@@ -3,6 +3,7 @@
     <Project Path="src/Map.App/Map.App.csproj" />
     <Project Path="src/Map.Assets/Map.Assets.csproj" />
     <Project Path="src/Map.Core/Map.Core.csproj" />
+    <Project Path="src/Map.Export/Map.Export.csproj" />
     <Project Path="src/Map.Persistence/Map.Persistence.csproj" />
     <Project Path="src/Map.Platform.Windows/Map.Platform.Windows.csproj" />
     <Project Path="src/Map.Presentation/Map.Presentation.csproj" />

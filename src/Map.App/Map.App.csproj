@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Map.Core\Map.Core.csproj" />
+    <ProjectReference Include="..\Map.Export\Map.Export.csproj" />
     <ProjectReference Include="..\Map.Persistence\Map.Persistence.csproj" />
     <ProjectReference Include="..\Map.Rendering\Map.Rendering.csproj" />
     <ProjectReference Include="..\Map.Presentation\Map.Presentation.csproj" />

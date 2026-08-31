@@ -1,4 +1,5 @@
 using Map.Core.Documents;
+using Map.Export;
 using Map.Persistence;
 using Map.Persistence.Recovery;
 
@@ -30,6 +31,20 @@ public interface IUserPrompts
     Task<bool> ConfirmDeleteCheckpointAsync(string checkpointName);
 
     Task ShowErrorAsync(string title, string message);
+}
+
+/// <summary>Export destinations are separate from .mapproj save/open dialogs.</summary>
+public interface IExportDestinationPicker
+{
+    Task<string?> PickImageAsync(string suggestedFileName, ExportImageFormat format);
+
+    Task<string?> PickTilePackageAsync(string suggestedFolderName);
+}
+
+/// <summary>Opens the local result folder after a successful export.</summary>
+public interface IFolderLauncher
+{
+    void OpenContainingFolder(string resultPath, ExportOutputMode outputMode);
 }
 
 /// <summary>Local diagnostics sink (docs/04: no telemetry, no document content).</summary>

@@ -20,6 +20,7 @@ using Map.App.Services;
 using Map.Assets;
 using Map.Core.Documents;
 using Map.Core.Editing;
+using Map.Export;
 using Map.Presentation.ViewModels;
 
 namespace Map.App.Views;
@@ -89,6 +90,46 @@ public sealed class EditorView : UserControl
     private Control _resizeWorkflowPanel = null!;
     private Control _regionWorkflowPanel = null!;
     private bool _syncingCanvasWorkflow;
+    private readonly TextBox _exportRegionXBox = NumberBox("ExportRegionXBox");
+    private readonly TextBox _exportRegionYBox = NumberBox("ExportRegionYBox");
+    private readonly TextBox _exportRegionWidthBox = NumberBox("ExportRegionWidthBox");
+    private readonly TextBox _exportRegionHeightBox = NumberBox("ExportRegionHeightBox");
+    private readonly TextBox _exportOutputWidthBox = NumberBox("ExportOutputWidthBox");
+    private readonly TextBox _exportOutputHeightBox = NumberBox("ExportOutputHeightBox");
+    private readonly TextBlock _exportFormatExplanation = Status("ExportFormatExplanationText");
+    private readonly TextBlock _exportEstimate = Status("ExportEstimateText");
+    private readonly TextBlock _exportError = Status("ExportValidationErrorText");
+    private readonly TextBlock _exportProgressText = Status("ExportProgressText");
+    private readonly TextBlock _exportResult = Status("ExportResultText");
+    private readonly Image _exportPreview = new()
+    {
+        Name = "ExportPreviewImage",
+        Height = 180,
+        Stretch = Stretch.Uniform,
+    };
+    private readonly ProgressBar _exportProgress = new()
+    {
+        Name = "ExportProgressBar",
+        Minimum = 0,
+        Maximum = 100,
+        Height = 8,
+    };
+    private readonly Dictionary<ExportImageFormat, Button> _exportFormatButtons = [];
+    private readonly Dictionary<ExportAreaMode, Button> _exportAreaButtons = [];
+    private readonly Dictionary<ExportOutputMode, Button> _exportModeButtons = [];
+    private ToggleButton _exportAspectToggle = null!;
+    private ToggleButton _exportTransparencyToggle = null!;
+    private ToggleButton _exportGridToggle = null!;
+    private Slider _exportQualitySlider = null!;
+    private TextBlock _exportQualityText = null!;
+    private Control _exportRegionPanel = null!;
+    private Control _exportQualityPanel = null!;
+    private Button _startExportButton = null!;
+    private Button _cancelExportButton = null!;
+    private Button _openExportFolderButton = null!;
+    private bool _syncingExport;
+    private Bitmap? _exportPreviewBitmap;
+    private byte[]? _shownExportPreviewPng;
     private readonly TextBox _layerName = new() { Name = "LayerNameBox", PlaceholderText = "Имя слоя" };
     private readonly TextBox _objectSearch = new() { Name = "ObjectSearchBox", PlaceholderText = "Найти объект" };
     private readonly TextBox _assetSearch = new()
@@ -316,6 +357,11 @@ public sealed class EditorView : UserControl
             SyncSidePanels();
             SyncContextArea();
         });
+        DetachedFromVisualTree += (_, _) =>
+        {
+            _exportPreviewBitmap?.Dispose();
+            _exportPreviewBitmap = null;
+        };
 
         _objectSearch.TextChanged += (_, _) =>
         {
@@ -378,6 +424,14 @@ public sealed class EditorView : UserControl
         Dispatcher.UIThread.Post(_canvas.FitToCanvas, DispatcherPriority.Loaded);
     }
 
+    public void OpenExport()
+    {
+        _sidePanel.IsVisible = true;
+        _sideTabs.SelectedIndex = 6;
+        _editor.BeginExport();
+        SyncExport();
+    }
+
     /// <summary>Re-reads the library panel after a shortcut or a canvas gesture changed it.</summary>
     public void RefreshLibraryPanel()
     {
@@ -417,6 +471,8 @@ public sealed class EditorView : UserControl
             "ShortcutSettingsButton", "Сочетания…", requestShortcutSettings, "compact");
         var resizeRegion = Ui.TextButton(
             "ResizeRegionButton", "Размер и регион…", OpenCanvasWorkflow, "compact");
+        var export = Ui.TextButton("ExportButton", "Экспорт…", OpenExport, "accent", "compact");
+        AutomationProperties.SetName(export, "Экспорт изображения");
 
         var saveAs = Ui.AsyncButton("SaveAsButton", "Сохранить как…", () => _editor.SaveAsync(saveAs: true));
         _saveButton = Ui.AsyncButton("SaveButton", "Сохранить", () => _editor.SaveAsync(), "primary");
@@ -430,7 +486,7 @@ public sealed class EditorView : UserControl
                 {
                     Orientation = Orientation.Horizontal,
                     Spacing = 6,
-                    Children = { resizeRegion, _shortcutSettingsButton, second, saveAs, _saveButton },
+                    Children = { export, resizeRegion, _shortcutSettingsButton, second, saveAs, _saveButton },
                 }.Docked(Dock.Right),
                 new StackPanel
                 {
@@ -1861,6 +1917,7 @@ public sealed class EditorView : UserControl
                 new TabItem { Header = "Заметки", Content = BuildNotesTab() },
                 new TabItem { Header = "Точки", Content = BuildCheckpointsTab() },
                 new TabItem { Header = "Размер", Content = BuildCanvasWorkflowTab() },
+                new TabItem { Header = "Экспорт", Content = BuildExportTab() },
             },
         };
 
@@ -3935,6 +3992,246 @@ public sealed class EditorView : UserControl
         };
     }
 
+    private Control BuildExportTab()
+    {
+        Button Choice<T>(
+            string name,
+            string label,
+            T value,
+            IDictionary<T, Button> registry,
+            Action<T> select) where T : notnull
+        {
+            var button = Ui.TextButton(name, label, () =>
+            {
+                select(value);
+                SyncExport();
+            }, "segment");
+            registry.Add(value, button);
+            AutomationProperties.SetName(button, label);
+            return button;
+        }
+
+        var formats = new UniformGrid
+        {
+            Columns = 3,
+            Children =
+            {
+                Choice("ExportPngButton", "PNG", ExportImageFormat.Png,
+                    _exportFormatButtons, _editor.SetExportFormat),
+                Choice("ExportJpegButton", "JPEG", ExportImageFormat.Jpeg,
+                    _exportFormatButtons, _editor.SetExportFormat),
+                Choice("ExportWebpButton", "WebP", ExportImageFormat.Webp,
+                    _exportFormatButtons, _editor.SetExportFormat),
+            },
+        };
+
+        var areas = new UniformGrid
+        {
+            Columns = 2,
+            Children =
+            {
+                Choice("ExportWholeCanvasButton", "Вся карта", ExportAreaMode.WholeCanvas,
+                    _exportAreaButtons, _editor.SetExportAreaMode),
+                Choice("ExportRegionButton", "Прямоугольный регион", ExportAreaMode.Region,
+                    _exportAreaButtons, _editor.SetExportAreaMode),
+            },
+        };
+
+        var regionFields = new UniformGrid
+        {
+            Columns = 2,
+            Children =
+            {
+                Field("X, px", _exportRegionXBox),
+                Field("Y, px", _exportRegionYBox),
+                Field("Ширина, px", _exportRegionWidthBox),
+                Field("Высота, px", _exportRegionHeightBox),
+            },
+        };
+        _exportRegionPanel = new StackPanel
+        {
+            Name = "ExportRegionFields",
+            Spacing = 4,
+            Children = { regionFields },
+        };
+
+        var outputSize = new UniformGrid
+        {
+            Columns = 2,
+            Children =
+            {
+                Field("Итоговая ширина, px", _exportOutputWidthBox),
+                Field("Итоговая высота, px", _exportOutputHeightBox),
+            },
+        };
+        _exportAspectToggle = Toggle(
+            "ExportAspectToggle", "Связать пропорции", _editor.SetExportAspectLocked);
+
+        var modes = new UniformGrid
+        {
+            Columns = 2,
+            Children =
+            {
+                Choice("ExportSingleButton", "Один файл", ExportOutputMode.SingleImage,
+                    _exportModeButtons, _editor.SetExportOutputMode),
+                Choice("ExportTilesButton", "Пакет тайлов", ExportOutputMode.TilePackage,
+                    _exportModeButtons, _editor.SetExportOutputMode),
+            },
+        };
+
+        _exportTransparencyToggle = Toggle(
+            "ExportTransparencyToggle", "Прозрачный фон", _editor.SetExportTransparentBackground);
+        _exportGridToggle = Toggle(
+            "ExportGridToggle", "Экспортировать разрешённые сетки", _editor.SetExportIncludeGrid);
+
+        _exportQualityText = new TextBlock { Name = "ExportQualityText" }.Classed("role-caption");
+        _exportQualitySlider = new Slider
+        {
+            Name = "ExportQualitySlider",
+            Minimum = 1,
+            Maximum = 100,
+            TickFrequency = 1,
+            IsSnapToTickEnabled = true,
+        };
+        AutomationProperties.SetName(_exportQualitySlider, "Качество JPEG/WebP от 1 до 100");
+        _exportQualitySlider.PropertyChanged += (_, e) =>
+        {
+            if (!_syncingExport && e.Property == RangeBase.ValueProperty)
+            {
+                _editor.SetExportQuality((int)Math.Round(_exportQualitySlider.Value));
+                SyncExport();
+            }
+        };
+        _exportQualityPanel = new StackPanel
+        {
+            Name = "ExportQualityPanel",
+            Spacing = 4,
+            Children = { _exportQualityText, _exportQualitySlider },
+        };
+
+        Wire(_exportRegionXBox, value => _editor.ExportRegionXText = value);
+        Wire(_exportRegionYBox, value => _editor.ExportRegionYText = value);
+        Wire(_exportRegionWidthBox, value => _editor.ExportRegionWidthText = value);
+        Wire(_exportRegionHeightBox, value => _editor.ExportRegionHeightText = value);
+        Wire(_exportOutputWidthBox, value => _editor.ExportOutputWidthText = value);
+        Wire(_exportOutputHeightBox, value => _editor.ExportOutputHeightText = value);
+
+        _startExportButton = Ui.AsyncButton(
+            "StartExportButton", "Начать экспорт", async () =>
+            {
+                await _editor.StartExportAsync();
+                SyncExport();
+            }, "primary");
+        _cancelExportButton = Ui.TextButton(
+            "CancelExportButton", "Отменить экспорт", _editor.CancelExport, "destructive");
+        _openExportFolderButton = Ui.TextButton(
+            "OpenExportFolderButton", "Открыть папку", _editor.OpenExportFolder, "accent");
+        var close = Ui.TextButton("CloseExportButton", "Закрыть", () =>
+        {
+            _editor.CloseExport();
+            _sideTabs.SelectedIndex = 0;
+            SyncExport();
+        }, "ghost");
+
+        _exportFormatExplanation.TextWrapping = TextWrapping.Wrap;
+        _exportEstimate.TextWrapping = TextWrapping.Wrap;
+        _exportError.TextWrapping = TextWrapping.Wrap;
+        _exportError.Classed("danger", "role-caption");
+        _exportProgressText.TextWrapping = TextWrapping.Wrap;
+        _exportResult.TextWrapping = TextWrapping.Wrap;
+
+        var previewHost = new Border
+        {
+            Name = "ExportPreviewHost",
+            MinHeight = 184,
+            Child = _exportPreview,
+        }.Classed("surface-raised");
+        AutomationProperties.SetName(previewHost, "Предпросмотр экспорта");
+
+        var body = new StackPanel
+        {
+            Margin = new Thickness(12, 10, 12, 18),
+            Spacing = 10,
+            Children =
+            {
+                new TextBlock { Text = "Экспорт изображения" }.Classed("role-panel"),
+                new TextBlock
+                {
+                    Text = "Preview и итог используют один снимок карты и один scene renderer. Заметки и элементы редактора в изображение не попадают.",
+                    TextWrapping = TextWrapping.Wrap,
+                }.Classed("faint", "role-caption"),
+                formats,
+                _exportFormatExplanation,
+                areas,
+                _exportRegionPanel,
+                outputSize,
+                _exportAspectToggle,
+                modes,
+                _exportTransparencyToggle,
+                _exportGridToggle,
+                _exportQualityPanel,
+                previewHost,
+                _exportEstimate,
+                _exportError,
+                _exportProgress,
+                _exportProgressText,
+                _exportResult,
+                _startExportButton,
+                _cancelExportButton,
+                _openExportFolderButton,
+                close,
+            },
+        };
+
+        SyncExport();
+        return new ScrollViewer
+        {
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            Content = body,
+        };
+
+        ToggleButton Toggle(string name, string label, Action<bool> write)
+        {
+            var toggle = new ToggleButton
+            {
+                Name = name,
+                Content = label,
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                HorizontalContentAlignment = HorizontalAlignment.Left,
+            }.Classed("segment");
+            AutomationProperties.SetName(toggle, label);
+            toggle.IsCheckedChanged += (_, _) =>
+            {
+                if (!_syncingExport)
+                {
+                    write(toggle.IsChecked == true);
+                    SyncExport();
+                }
+            };
+            return toggle;
+        }
+
+        static Control Field(string label, Control control) => new StackPanel
+        {
+            Margin = new Thickness(3),
+            Spacing = 4,
+            Children =
+            {
+                new TextBlock { Text = label }.Classed("faint", "role-caption"),
+                control,
+            },
+        };
+
+        void Wire(TextBox box, Action<string> write) => box.TextChanged += (_, _) =>
+        {
+            if (!_syncingExport)
+            {
+                write(box.Text ?? "");
+                SyncExport();
+            }
+        };
+    }
+
     // ================================================================ hint + status
 
     private Control BuildHintBar()
@@ -4144,6 +4441,15 @@ public sealed class EditorView : UserControl
             {
                 SyncCanvasWorkflow();
             }
+
+            if (e.PropertyName?.StartsWith("Export", StringComparison.Ordinal) == true
+                || e.PropertyName is nameof(EditorViewModel.CurrentExportPlan)
+                    or nameof(EditorViewModel.CanStartExport)
+                    or nameof(EditorViewModel.CanCancelExport)
+                    or nameof(EditorViewModel.CanOpenExportFolder))
+            {
+                SyncExport();
+            }
         });
 
     private void SyncCanvasWorkflow()
@@ -4186,6 +4492,110 @@ public sealed class EditorView : UserControl
         finally
         {
             _syncingCanvasWorkflow = false;
+        }
+
+        static void SetText(TextBox box, string value)
+        {
+            if (!string.Equals(box.Text, value, StringComparison.Ordinal))
+            {
+                box.Text = value;
+            }
+        }
+    }
+
+    private void SyncExport()
+    {
+        if (_startExportButton is null || _cancelExportButton is null
+            || _openExportFolderButton is null || _exportAspectToggle is null
+            || _exportTransparencyToggle is null || _exportGridToggle is null
+            || _exportQualitySlider is null || _exportRegionPanel is null
+            || _exportQualityPanel is null)
+        {
+            return;
+        }
+
+        _syncingExport = true;
+        try
+        {
+            SetText(_exportRegionXBox, _editor.ExportRegionXText);
+            SetText(_exportRegionYBox, _editor.ExportRegionYText);
+            SetText(_exportRegionWidthBox, _editor.ExportRegionWidthText);
+            SetText(_exportRegionHeightBox, _editor.ExportRegionHeightText);
+            SetText(_exportOutputWidthBox, _editor.ExportOutputWidthText);
+            SetText(_exportOutputHeightBox, _editor.ExportOutputHeightText);
+
+            foreach (var (format, button) in _exportFormatButtons)
+                Ui.SetSelected(button, format == _editor.ExportFormat);
+            foreach (var (area, button) in _exportAreaButtons)
+                Ui.SetSelected(button, area == _editor.ExportAreaMode);
+            foreach (var (mode, button) in _exportModeButtons)
+                Ui.SetSelected(button, mode == _editor.ExportOutputMode);
+
+            _exportRegionPanel.IsVisible = _editor.ExportAreaMode == ExportAreaMode.Region;
+            _exportQualityPanel.IsVisible = _editor.ExportQualityVisible;
+            _exportAspectToggle.IsChecked = _editor.ExportAspectLocked;
+            _exportTransparencyToggle.IsChecked = _editor.ExportTransparentBackground;
+            _exportTransparencyToggle.IsEnabled = _editor.ExportTransparencyAvailable
+                && !_editor.ExportRunning;
+            _exportGridToggle.IsChecked = _editor.ExportIncludeGrid;
+            _exportQualitySlider.Value = _editor.ExportQuality;
+            _exportQualityText.Text = $"Качество: {_editor.ExportQuality}";
+            _exportFormatExplanation.Text = _editor.ExportFormatExplanation;
+            _exportEstimate.Text = _editor.ExportEstimateText;
+            _exportError.Text = _editor.ExportValidationError;
+            _exportError.IsVisible = _editor.ExportValidationError.Length > 0;
+            _exportProgress.Value = _editor.ExportProgress * 100;
+            _exportProgress.IsVisible = _editor.ExportRunning || _editor.ExportProgress > 0;
+            _exportProgressText.Text = _editor.ExportPreviewBusy
+                ? "Обновление bounded preview…"
+                : _editor.ExportProgressText;
+            _exportProgressText.IsVisible = _exportProgressText.Text?.Length > 0;
+            _exportResult.Text = _editor.ExportResultText;
+            _exportResult.IsVisible = _editor.ExportResultText.Length > 0;
+
+            if (!ReferenceEquals(_shownExportPreviewPng, _editor.ExportPreviewPng))
+            {
+                _shownExportPreviewPng = _editor.ExportPreviewPng;
+                _exportPreviewBitmap?.Dispose();
+                _exportPreviewBitmap = null;
+                _exportPreview.Source = null;
+                if (_shownExportPreviewPng is { Length: > 0 } bytes)
+                {
+                    try
+                    {
+                        using var stream = new MemoryStream(bytes, writable: false);
+                        _exportPreviewBitmap = new Bitmap(stream);
+                        _exportPreview.Source = _exportPreviewBitmap;
+                    }
+                    catch (Exception ex) when (ex is ArgumentException or IOException)
+                    {
+                        _exportPreview.Source = null;
+                    }
+                }
+            }
+
+            var settingsEnabled = !_editor.ExportRunning;
+            foreach (var button in _exportFormatButtons.Values) button.IsEnabled = settingsEnabled;
+            foreach (var button in _exportAreaButtons.Values) button.IsEnabled = settingsEnabled;
+            foreach (var button in _exportModeButtons.Values) button.IsEnabled = settingsEnabled;
+            _exportRegionXBox.IsEnabled = settingsEnabled;
+            _exportRegionYBox.IsEnabled = settingsEnabled;
+            _exportRegionWidthBox.IsEnabled = settingsEnabled;
+            _exportRegionHeightBox.IsEnabled = settingsEnabled;
+            _exportOutputWidthBox.IsEnabled = settingsEnabled;
+            _exportOutputHeightBox.IsEnabled = settingsEnabled;
+            _exportAspectToggle.IsEnabled = settingsEnabled;
+            _exportGridToggle.IsEnabled = settingsEnabled;
+            _exportQualitySlider.IsEnabled = settingsEnabled;
+            _startExportButton.IsEnabled = _editor.CanStartExport;
+            _cancelExportButton.IsEnabled = _editor.CanCancelExport;
+            _cancelExportButton.IsVisible = _editor.ExportRunning;
+            _openExportFolderButton.IsEnabled = _editor.CanOpenExportFolder;
+            _openExportFolderButton.IsVisible = _editor.ExportResultPath is not null;
+        }
+        finally
+        {
+            _syncingExport = false;
         }
 
         static void SetText(TextBox box, string value)
