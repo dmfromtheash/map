@@ -34,7 +34,7 @@ public sealed class MapCanvasControl : Control
     private bool _visualInvalidationQueued;
     private Point _marqueePressScreen;
     private readonly TileImageCache _tileCache = new(512);
-    private readonly ObjectOverviewCache _objectCache = new(512, 64L * 1024 * 1024);
+    private readonly ObjectOverviewCache _objectCache = new(1_024, 64L * 1024 * 1024);
     private readonly RenderStats _renderStats = new();
 
     public bool IsSpacePanHeld { get; set; }

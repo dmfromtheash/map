@@ -28,7 +28,7 @@ public sealed class WizardWindow : Window
         new("Standard", "Обычная", "1920 × 1080", 1920, 1080),
         new("Large", "Крупная", "4096 × 4096", 4096, 4096),
         new("Huge", "Очень крупная", "16384 × 16384", 16384, 16384),
-        new("Max", "Максимальная", "65536 × 65536", 65536, 65536),
+        new("Max", "Максимальная", "131072 × 131072", 131072, 131072),
     ];
 
     private static readonly IReadOnlyList<(string Key, string Title)> Backgrounds =

@@ -9,6 +9,7 @@ public sealed class Viewport
 {
     public const double MinScale = 0.005;
     public const double MaxScale = 64.0;
+    private double _effectiveMinScale = MinScale;
 
     public double Scale { get; private set; } = 1.0;
     public double OffsetX { get; private set; }
@@ -39,7 +40,7 @@ public sealed class Viewport
     public void ZoomAt(double anchorScreenX, double anchorScreenY, double factor)
     {
         var (anchorWorldX, anchorWorldY) = ScreenToWorld(anchorScreenX, anchorScreenY);
-        var newScale = Math.Clamp(Scale * factor, MinScale, MaxScale);
+        var newScale = Math.Clamp(Scale * factor, _effectiveMinScale, MaxScale);
         if (Math.Abs(newScale - Scale) < double.Epsilon)
         {
             return;
@@ -54,7 +55,7 @@ public sealed class Viewport
     {
         OffsetX = offsetX;
         OffsetY = offsetY;
-        Scale = Math.Clamp(scale, MinScale, MaxScale);
+        Scale = Math.Clamp(scale, _effectiveMinScale, MaxScale);
     }
 
     /// <summary>Fit the given world rectangle into the view with a small margin.</summary>
@@ -65,10 +66,9 @@ public sealed class Viewport
             return;
         }
 
-        var scale = Math.Clamp(
-            Math.Min(ViewWidth / worldWidth, ViewHeight / worldHeight) * 0.96,
-            MinScale,
-            MaxScale);
+        var fitScale = Math.Min(ViewWidth / worldWidth, ViewHeight / worldHeight) * 0.96;
+        _effectiveMinScale = Math.Min(MinScale, fitScale);
+        var scale = Math.Clamp(fitScale, _effectiveMinScale, MaxScale);
 
         Scale = scale;
         OffsetX = (worldWidth - (ViewWidth / scale)) / 2;

@@ -106,7 +106,7 @@ public sealed class ExportEngineSettings
 {
     public const int DefaultTileEdge = 2_048;
     public const int DefaultMaxSingleEdge = 16_384;
-    public const int DefaultMaxOutputEdge = 65_536;
+    public const int DefaultMaxOutputEdge = CanvasDimensionPolicy.Maximum;
 
     public int TileEdge { get; init; } = DefaultTileEdge;
     public int TileCacheCapacity { get; init; } = 128;

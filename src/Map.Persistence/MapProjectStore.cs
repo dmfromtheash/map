@@ -18,7 +18,9 @@ namespace Map.Persistence;
 /// </summary>
 public static class MapProjectStore
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    // Large sparse scenes must spend the fixed JSON budget on data, not presentation whitespace.
+    // The container is machine-owned and the reader accepts either representation.
+    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = false };
 
     private readonly record struct PreparedContainer(
         byte[] ManifestBytes,

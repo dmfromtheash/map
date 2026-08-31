@@ -149,7 +149,7 @@ public sealed class RenderOptions
 
     /// <summary>
     /// World rectangle actually on screen. When set, objects come from the layer's spatial index
-    /// and raster layers upload only the intersecting tiles - the reason a 65 536-unit map draws
+    /// and raster layers upload only the intersecting tiles - the reason a 131 072-unit map draws
     /// in constant time regardless of how much content lives outside the viewport.
     /// </summary>
     public WorldBounds? VisibleWorld { get; init; }
@@ -213,7 +213,7 @@ public sealed record CanvasBoundaryOverlay(
 public static class SceneRenderer
 {
     private static readonly SKColor SelectionColor = new(255, 214, 10, 255);
-    private const double OverviewChunkSize = 4_096;
+    private const double OverviewChunkSize = 8_192;
     private const double OverviewExactScreenSize = 4;
     private static readonly ConditionalWeakTable<ObjectLayer, ObjectOverviewPlan> OverviewPlans = [];
     private static readonly ConditionalWeakTable<byte[], MaskCoverageState> MaskCoverageStates = [];
@@ -460,6 +460,10 @@ public static class SceneRenderer
         var keys = layer.GeometryTiles
             .KeysIntersecting(view.Left, view.Top, view.Right, view.Bottom)
             .ToList();
+        if (keys.Count == 0)
+        {
+            return;
+        }
 
         if (!options.FastPreview)
         {
@@ -761,7 +765,7 @@ public static class SceneRenderer
         foreach (var key in mask.Tiles.KeysIntersecting(view.Left, view.Top, view.Right, view.Bottom))
         {
             var coverage = mask.Tiles.TryGet(key);
-            if (coverage is null)
+            if (coverage is null || !MaskHasHiddenPixels(coverage))
             {
                 continue;
             }
@@ -1766,11 +1770,7 @@ public static class SceneRenderer
         foreach (var key in mask.Tiles.KeysIntersecting(view.Left, view.Top, view.Right, view.Bottom))
         {
             var coverage = mask.Tiles.TryGet(key);
-            if (coverage is not null
-                && MaskCoverageStates.GetValue(
-                    coverage,
-                    static pixels => new MaskCoverageState(pixels.Any(value => value != 255)))
-                    .HasHiddenPixels)
+            if (coverage is not null && MaskHasHiddenPixels(coverage))
             {
                 return true;
             }
@@ -1778,6 +1778,12 @@ public static class SceneRenderer
 
         return false;
     }
+
+    private static bool MaskHasHiddenPixels(byte[] coverage) =>
+        MaskCoverageStates.GetValue(
+            coverage,
+            static pixels => new MaskCoverageState(pixels.Any(value => value != 255)))
+        .HasHiddenPixels;
 
     private sealed record MaskCoverageState(bool HasHiddenPixels);
 
@@ -1882,7 +1888,8 @@ public static class SceneRenderer
     }
 
     private static int OverviewZoomBucket(double scale) =>
-        (int)Math.Floor(Math.Log2(Math.Max(scale, 1.0 / 65_536)) * 4);
+        (int)Math.Floor(Math.Log2(
+            Math.Max(scale, 1.0 / CanvasDimensionPolicy.Maximum)) * 4);
 
     private sealed class ObjectOverviewPlan
     {

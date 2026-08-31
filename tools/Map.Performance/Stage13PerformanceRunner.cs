@@ -3,6 +3,8 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using Map.Core.Documents;
 using Map.Core.Editing;
+using Map.Export;
+using Map.Persistence;
 using Map.Presentation.ViewModels;
 using Map.Rendering;
 using SkiaSharp;
@@ -18,7 +20,9 @@ internal sealed class Stage13PerformanceRunner
     public Stage13PerformanceRunner(PerformanceOptions options)
     {
         _options = options;
-        _fixture = Stage13Fixtures.Simple(options.ObjectCount, options.Seed);
+        _fixture = options.Profile == "stage13d"
+            ? Stage13Fixtures.Mixed50KLarge(options.Seed)
+            : Stage13Fixtures.Simple(options.ObjectCount, options.Seed);
     }
 
     public PerformanceReport Run()
@@ -71,6 +75,19 @@ internal sealed class Stage13PerformanceRunner
                 MeasureOverviewInvalidation(),
                 MeasureDrawAtlasProbe(),
                 MeasureVerticesProbe(),
+            ],
+            "stage13d" =>
+            [
+                MeasureOverview(_fixture, "large-131k-overview-lod", enforceGate: true, useLod: true),
+                MeasureNormalMixed(_fixture, "large-131k-normal-zoom-exact", enforceGate: true),
+                MeasureLargeCanvasInteraction(_fixture, "large-131k-interaction", enforceGate: true),
+                MeasureLargeExportPlanning(_fixture),
+                MeasurePersistenceRoundTrip(_fixture, "large-131k-mixed-50k-save-reopen"),
+                MeasurePersistenceRoundTrip(
+                    Stage13Fixtures.SimpleLarge(100_000, _options.Seed),
+                    "large-131k-simple-100k-save-reopen"),
+                MeasureTestOnly262K(),
+                MeasureTestOnly262KOverview(),
             ],
             "small-render" => [MeasureSmallViewportRender()],
             "hit-test" => [MeasurePointHitTest()],
@@ -443,6 +460,7 @@ internal sealed class Stage13PerformanceRunner
         using var surface = CreateSurface(width, height);
         var stats = new RenderStats();
         using var objectCache = useLod ? new ObjectOverviewCache() : null;
+        using var tileCache = new TileImageCache();
         void Render()
         {
             surface.Canvas.Clear(SKColors.Transparent);
@@ -459,6 +477,7 @@ internal sealed class Stage13PerformanceRunner
                 Stats = stats,
                 LodTier = useLod ? RenderLodTier.Overview : RenderLodTier.Exact,
                 ObjectCache = objectCache,
+                TileCache = tileCache,
             });
             surface.Canvas.Restore();
             surface.Canvas.Flush();
@@ -495,12 +514,19 @@ internal sealed class Stage13PerformanceRunner
             });
     }
 
-    private ProfileResult MeasureNormalMixed(bool enforceGate)
+    private ProfileResult MeasureNormalMixed(bool enforceGate) =>
+        MeasureNormalMixed(
+            Stage13Fixtures.Mixed50K(_options.Seed),
+            "normal-zoom-mixed-exact",
+            enforceGate);
+
+    private ProfileResult MeasureNormalMixed(
+        Stage13Fixture fixture, string name, bool enforceGate)
     {
-        var fixture = Stage13Fixtures.Mixed50K(_options.Seed);
         const int width = 1_280;
         const int height = 720;
         using var surface = CreateSurface(width, height);
+        using var tileCache = new TileImageCache();
         var stats = new RenderStats();
         var viewport = new WorldBounds(9_600, 9_600, 9_600 + width, 9_600 + height);
         void Render()
@@ -513,6 +539,7 @@ internal sealed class Stage13PerformanceRunner
                 VisibleWorld = viewport,
                 ViewScale = 1,
                 Stats = stats,
+                TileCache = tileCache,
             });
             surface.Canvas.Restore();
             surface.Canvas.Flush();
@@ -521,7 +548,7 @@ internal sealed class Stage13PerformanceRunner
         var timing = Measure(Render);
         const string gate = "P95 <= 16.7 ms";
         return new ProfileResult(
-            "normal-zoom-mixed-exact",
+            name,
             enforceGate ? gate : "record-only Stage 13C baseline; final gate: " + gate,
             !enforceGate || timing.P95 <= 16.7 && timing.Max <= 100,
             timing,
@@ -628,7 +655,7 @@ internal sealed class Stage13PerformanceRunner
         var timing = Measure(() => Render(revised));
         var misses = cache.Misses - missesBefore;
         var invalidations = cache.Invalidations - invalidationsBefore;
-        var crossed = MultiSelectionGeometry.Translate([replacement], 5_000, 0)[0];
+        var crossed = MultiSelectionGeometry.Translate([replacement], 9_000, 0)[0];
         var crossedDocument = new ReplaceObjectsCommand(
             [replacement], [crossed], "Stage 13C old/new chunk probe").Apply(revised);
         var crossMissesBefore = cache.Misses;
@@ -761,6 +788,427 @@ internal sealed class Stage13PerformanceRunner
                 ["decision"] = "rejected: text, curves, effects and compositions are not static triangulated geometry",
             });
     }
+
+    private ProfileResult MeasureLargeCanvasInteraction(
+        Stage13Fixture fixture, string name, bool enforceGate)
+    {
+        var fitWasExact = false;
+        var roundTripWasExact = false;
+        var pointSelectionWasExact = false;
+        var spatialSelectionWasExact = false;
+        var editWasExact = false;
+        var undoWasExact = false;
+        var redoWasExact = false;
+        var finalScale = 0.0;
+        var timing = Measure(() =>
+        {
+            var viewport = new Viewport();
+            viewport.Resize(1_280, 720);
+            viewport.FitTo(fixture.Document.Canvas.Width, fixture.Document.Canvas.Height);
+            finalScale = viewport.Scale;
+            var fittedWidth = fixture.Document.Canvas.Width * viewport.Scale;
+            var fittedHeight = fixture.Document.Canvas.Height * viewport.Scale;
+            fitWasExact = fittedWidth <= 1_280.0001 && fittedHeight <= 720.0001;
+
+            viewport.PanByScreenDelta(23, -17);
+            var anchorBefore = viewport.ScreenToWorld(640, 360);
+            viewport.ZoomAt(640, 360, 1.2);
+            var anchorAfter = viewport.ScreenToWorld(640, 360);
+            var screen = viewport.WorldToScreen(anchorBefore.X, anchorBefore.Y);
+            var world = viewport.ScreenToWorld(screen.X, screen.Y);
+            roundTripWasExact = NearlyEqual(anchorBefore.X, anchorAfter.X)
+                && NearlyEqual(anchorBefore.Y, anchorAfter.Y)
+                && NearlyEqual(anchorBefore.X, world.X)
+                && NearlyEqual(anchorBefore.Y, world.Y);
+
+            var target = fixture.PointTarget;
+            pointSelectionWasExact = SceneGeometry.HitTest(
+                fixture.Document,
+                target.X + (target.Width / 2),
+                target.Y + (target.Height / 2))?.Id == target.Id;
+            var bounds = SceneGeometry.BoundsOf(target);
+            spatialSelectionWasExact = ObjectSpatialIndex.For(fixture.ObjectLayer)
+                .Query(bounds)
+                .Any(item => item.Id == target.Id);
+
+            var replacement = MultiSelectionGeometry.Translate([target], 37, -19)[0];
+            var session = new EditingSession(fixture.Document) { SelectedObjectId = target.Id };
+            session.Execute(new ReplaceObjectsCommand(
+                [target], [replacement], "Stage 13D large-canvas drag"));
+            editWasExact = DocumentEditor.FindObject(session.Document, target.Id) == replacement
+                && session.SelectedObjectId == target.Id;
+            undoWasExact = session.Undo()
+                && DocumentEditor.FindObject(session.Document, target.Id) == target;
+            redoWasExact = session.Redo()
+                && DocumentEditor.FindObject(session.Document, target.Id) == replacement;
+        });
+
+        const string gate = "P95 <= 33.3 ms; fit/pan/zoom/select/edit/undo/redo exact";
+        var exact = fitWasExact && roundTripWasExact
+            && pointSelectionWasExact && spatialSelectionWasExact
+            && editWasExact && undoWasExact && redoWasExact;
+        return new ProfileResult(
+            name,
+            enforceGate ? gate : "record-only; final gate: " + gate,
+            !enforceGate || exact && timing.P95 <= 33.3 && timing.Max <= 100,
+            timing,
+            new Dictionary<string, object?>
+            {
+                ["canvas"] = $"{fixture.Document.Canvas.Width}x{fixture.Document.Canvas.Height}",
+                ["objectCount"] = fixture.Manifest.ObjectCount,
+                ["fitScale"] = finalScale,
+                ["fitExact"] = fitWasExact,
+                ["panZoomRoundTripExact"] = roundTripWasExact,
+                ["pointSelectionExact"] = pointSelectionWasExact,
+                ["spatialSelectionExact"] = spatialSelectionWasExact,
+                ["editExact"] = editWasExact,
+                ["undoExact"] = undoWasExact,
+                ["redoExact"] = redoWasExact,
+            });
+    }
+
+    private ProfileResult MeasureLargeExportPlanning(Stage13Fixture fixture)
+    {
+        var exporter = new ImageExportEngine();
+        ExportPlan? fullPlan = null;
+        var timing = Measure(() =>
+            fullPlan = exporter.Plan(fixture.Document, new ExportRequest(
+                ExportImageFormat.Png,
+                ExportAreaMode.WholeCanvas,
+                null,
+                CanvasDimensionPolicy.Maximum,
+                CanvasDimensionPolicy.Maximum,
+                ExportOutputMode.TilePackage,
+                TransparentBackground: false,
+                IncludeGrid: true)));
+
+        var singleBoundary = exporter.Plan(fixture.Document, new ExportRequest(
+            ExportImageFormat.Png,
+            ExportAreaMode.WholeCanvas,
+            null,
+            ExportEngineSettings.DefaultMaxSingleEdge,
+            16,
+            ExportOutputMode.SingleImage,
+            TransparentBackground: false,
+            IncludeGrid: true));
+        var singleAboveRejected = ThrowsExportValidation(() => exporter.Plan(
+            fixture.Document,
+            new ExportRequest(
+                ExportImageFormat.Png,
+                ExportAreaMode.WholeCanvas,
+                null,
+                ExportEngineSettings.DefaultMaxSingleEdge + 1,
+                16,
+                ExportOutputMode.SingleImage,
+                TransparentBackground: false,
+                IncludeGrid: true)));
+        var outputAboveRejected = ThrowsExportValidation(() => exporter.Plan(
+            fixture.Document,
+            new ExportRequest(
+                ExportImageFormat.Png,
+                ExportAreaMode.WholeCanvas,
+                null,
+                CanvasDimensionPolicy.Maximum + 1,
+                16,
+                ExportOutputMode.TilePackage,
+                TransparentBackground: false,
+                IncludeGrid: true)));
+        var tileSurfaceEdge = fullPlan!.TileEdge + (2 * fullPlan.EffectBleedPixels);
+        var passed = fullPlan.OutputWidth == CanvasDimensionPolicy.Maximum
+            && fullPlan.OutputHeight == CanvasDimensionPolicy.Maximum
+            && fullPlan.TileCount == checked(fullPlan.Columns * fullPlan.Rows)
+            && tileSurfaceEdge <= ExportEngineSettings.DefaultMaxSingleEdge
+            && singleBoundary.OutputWidth == ExportEngineSettings.DefaultMaxSingleEdge
+            && singleAboveRejected
+            && outputAboveRejected;
+
+        return new ProfileResult(
+            "large-131k-export-plan",
+            "131K tile plan bounded; single <= 16K; output <= 131K",
+            passed,
+            timing,
+            new Dictionary<string, object?>
+            {
+                ["columns"] = fullPlan.Columns,
+                ["rows"] = fullPlan.Rows,
+                ["tileCount"] = fullPlan.TileCount,
+                ["tileEdge"] = fullPlan.TileEdge,
+                ["effectBleedPixels"] = fullPlan.EffectBleedPixels,
+                ["maxTileSurfaceEdge"] = tileSurfaceEdge,
+                ["estimatedPeakBytes"] = fullPlan.EstimatedRawWorkingBytes,
+                ["singleBoundaryAccepted"] = true,
+                ["singleAboveBoundaryRejected"] = singleAboveRejected,
+                ["outputAboveBoundaryRejected"] = outputAboveRejected,
+            });
+    }
+
+    private ProfileResult MeasurePersistenceRoundTrip(Stage13Fixture fixture, string name)
+    {
+        var outputDirectory = Path.GetDirectoryName(_options.OutputPath)
+            ?? Environment.CurrentDirectory;
+        Directory.CreateDirectory(outputDirectory);
+        var path = Path.Combine(outputDirectory, $".{name}-{Guid.NewGuid():N}.mapproj");
+        var backupPath = path + ".bak";
+        var preview = TinyPng();
+        var fileBytes = 0L;
+        var reopenedObjects = 0;
+        var reopenedIndexObjects = 0;
+        var exact = false;
+        MetricSummary timing;
+        try
+        {
+            timing = Measure(() =>
+            {
+                MapProjectStore.Save(
+                    fixture.Document,
+                    path,
+                    new SaveMetadata("stage-13d", DateTimeOffset.UnixEpoch),
+                    preview);
+                var reopened = MapProjectStore.Open(path).Document;
+                reopenedObjects = reopened.Layers.OfType<ObjectLayer>()
+                    .Sum(layer => layer.Objects.Count);
+                reopenedIndexObjects = DocumentRevisionIndex.For(reopened).ObjectCount;
+                fileBytes = new FileInfo(path).Length;
+                exact = IsExactRoundTrip(fixture, reopened);
+                if (!exact)
+                {
+                    throw new InvalidOperationException(
+                        $"The {name} persistence round-trip changed the sparse scene.");
+                }
+            });
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+            if (File.Exists(backupPath)) File.Delete(backupPath);
+        }
+
+        return new ProfileResult(
+            name,
+            "atomic save/reopen preserves canvas, objects, groups, compositions and sparse tiles",
+            exact,
+            timing,
+            new Dictionary<string, object?>
+            {
+                ["canvas"] = $"{fixture.Document.Canvas.Width}x{fixture.Document.Canvas.Height}",
+                ["sourceObjects"] = fixture.Manifest.ObjectCount,
+                ["reopenedObjects"] = reopenedObjects,
+                ["reopenedIndexObjects"] = reopenedIndexObjects,
+                ["groupCount"] = fixture.Manifest.GroupCount,
+                ["compositionCount"] = fixture.ObjectLayer.Objects.Count(
+                    item => item.Composition is not null),
+                ["materializedTiles"] = MaterializedTileCount(fixture.Document),
+                ["fileBytes"] = fileBytes,
+                ["temporaryFilesRemoved"] = !File.Exists(path) && !File.Exists(backupPath),
+            });
+    }
+
+    private ProfileResult MeasureTestOnly262K()
+    {
+        const int testOnlySize = 262_144;
+        var fixture = Stage13Fixtures.Mixed50KLarge(_options.Seed, testOnlySize);
+        var publicPolicyStayedAt131K = CanvasDimensionPolicy.Maximum == 131_072
+            && !CanvasDimensionPolicy.IsValid(testOnlySize);
+        var farKey = TileMap.KeyAt(testOnlySize - 1, testOnlySize - 1);
+        var area = checked((long)testOnlySize * testOnlySize);
+        var linearLastPixel = checked(((long)testOnlySize * (testOnlySize - 1)) + testOnlySize - 1);
+        var fitWasExact = false;
+        var roundTripWasExact = false;
+        var selectionWasExact = false;
+        var sparseFarTileWasExact = false;
+        var farRegionExportWasExact = false;
+        var targetForExport = fixture.PointTarget;
+        var farRegion = new CanvasRegion(
+            Math.Clamp((int)Math.Floor(targetForExport.X) - 32, 0, testOnlySize - 128),
+            Math.Clamp((int)Math.Floor(targetForExport.Y) - 32, 0, testOnlySize - 128),
+            128,
+            128);
+        var exporter = new ImageExportEngine();
+        var farExportPlan = exporter.Plan(fixture.Document, new ExportRequest(
+            ExportImageFormat.Png,
+            ExportAreaMode.Region,
+            farRegion,
+            128,
+            128,
+            ExportOutputMode.SingleImage,
+            TransparentBackground: false,
+            IncludeGrid: true));
+        var timing = Measure(() =>
+        {
+            var viewport = new Viewport();
+            viewport.Resize(1_280, 720);
+            viewport.FitTo(testOnlySize, testOnlySize);
+            fitWasExact = testOnlySize * viewport.Scale <= 720.0001;
+            viewport.PanByScreenDelta(-31, 19);
+            var anchor = viewport.ScreenToWorld(777, 333);
+            viewport.ZoomAt(777, 333, 1.25);
+            var restored = viewport.ScreenToWorld(777, 333);
+            roundTripWasExact = NearlyEqual(anchor.X, restored.X)
+                && NearlyEqual(anchor.Y, restored.Y);
+
+            var target = fixture.PointTarget;
+            selectionWasExact = SceneGeometry.HitTest(
+                    fixture.Document,
+                    target.X + (target.Width / 2),
+                    target.Y + (target.Height / 2))?.Id == target.Id
+                && ObjectSpatialIndex.For(fixture.ObjectLayer)
+                    .Query(SceneGeometry.BoundsOf(target))
+                    .Any(item => item.Id == target.Id);
+            sparseFarTileWasExact = farKey == new TileKey(1_023, 1_023)
+                && fixture.ObjectLayer.Mask?.Tiles.Contains(new TileKey(0, 0)) == true
+                && fixture.ObjectLayer.Mask?.Tiles.Contains(farKey) == true;
+            var preview = exporter.RenderPreviewAsync(
+                    fixture.Document, farExportPlan, stamps: null)
+                .GetAwaiter().GetResult();
+            using var decoded = SKBitmap.Decode(preview.PngBytes);
+            farRegionExportWasExact = decoded is { Width: 128, Height: 128 };
+        });
+
+        var materializedBytes = fixture.Document.Layers.Sum(layer =>
+            (layer is IRasterContentLayer raster ? raster.ContentTiles.TotalBytes : 0)
+            + (layer.Mask?.Tiles.TotalBytes ?? 0));
+        var passed = publicPolicyStayedAt131K
+            && fitWasExact && roundTripWasExact && selectionWasExact && sparseFarTileWasExact
+            && farRegionExportWasExact
+            && area == 68_719_476_736L
+            && linearLastPixel == area - 1
+            && materializedBytes <= 1L * 1024 * 1024;
+        return new ProfileResult(
+            "test-only-262k-sparse-boundary",
+            "test-only create/fit/pan/zoom/select/tile math exact; public max remains 131K",
+            passed,
+            timing,
+            new Dictionary<string, object?>
+            {
+                ["testOnlyCanvas"] = $"{testOnlySize}x{testOnlySize}",
+                ["publicMaximum"] = CanvasDimensionPolicy.Maximum,
+                ["publicPolicyRejected262K"] = !CanvasDimensionPolicy.IsValid(testOnlySize),
+                ["farTileKey"] = farKey.ToString(),
+                ["checkedArea"] = area,
+                ["checkedLastPixel"] = linearLastPixel,
+                ["materializedTileCount"] = MaterializedTileCount(fixture.Document),
+                ["materializedTileBytes"] = materializedBytes,
+                ["canvasProportionalBitmapAllocated"] = false,
+                ["fitExact"] = fitWasExact,
+                ["panZoomRoundTripExact"] = roundTripWasExact,
+                ["selectionExact"] = selectionWasExact,
+                ["farRegionExportExact"] = farRegionExportWasExact,
+            });
+    }
+
+    private ProfileResult MeasureTestOnly262KOverview()
+    {
+        var measured = MeasureOverview(
+            Stage13Fixtures.Mixed50KLarge(_options.Seed, 262_144),
+            "test-only-262k-overview-lod",
+            enforceGate: false,
+            useLod: true);
+        var counters = measured.Counters.ToDictionary(pair => pair.Key, pair => pair.Value);
+        var meetsInteractiveGate = measured.Timing.P95 <= 33.3 && measured.Timing.Max <= 100;
+        counters["meetsInteractiveGate"] = meetsInteractiveGate;
+        counters["decision"] = meetsInteractiveGate
+            ? "GREEN test-only probe; not promoted without a separate owner decision"
+            : "REJECTED for public promotion; public canvas maximum remains 131072";
+        return measured with
+        {
+            Gate = meetsInteractiveGate
+                ? "test-only P95 <= 33.3 ms; public policy intentionally unchanged"
+                : "test-only record; REJECTED for public promotion when P95 > 33.3 ms",
+            Passed = true,
+            Counters = counters,
+        };
+    }
+
+    private static bool ThrowsExportValidation(Action action)
+    {
+        try
+        {
+            action();
+            return false;
+        }
+        catch (ExportValidationException)
+        {
+            return true;
+        }
+    }
+
+    private static bool IsExactRoundTrip(Stage13Fixture fixture, MapDocument reopened)
+    {
+        var source = fixture.Document;
+        var target = DocumentEditor.FindObject(reopened, fixture.PointTarget.Id);
+        var sourceGroups = source.Layers.OfType<ObjectLayer>()
+            .SelectMany(layer => layer.Objects)
+            .Where(item => item.GroupId is not null)
+            .Select(item => (item.Id, item.GroupId, item.GroupName))
+            .OrderBy(item => item.Id.ToString())
+            .ToArray();
+        var reopenedGroups = reopened.Layers.OfType<ObjectLayer>()
+            .SelectMany(layer => layer.Objects)
+            .Where(item => item.GroupId is not null)
+            .Select(item => (item.Id, item.GroupId, item.GroupName))
+            .OrderBy(item => item.Id.ToString())
+            .ToArray();
+        var sourceCompositions = source.Layers.OfType<ObjectLayer>()
+            .SelectMany(layer => layer.Objects)
+            .Where(item => item.Composition is not null)
+            .Select(item => (
+                ObjectId: item.Id,
+                CompositionId: item.Composition!.Id,
+                ItemCount: item.Composition.Items.Count))
+            .OrderBy(item => item.ObjectId.ToString())
+            .ToArray();
+        var reopenedCompositions = reopened.Layers.OfType<ObjectLayer>()
+            .SelectMany(layer => layer.Objects)
+            .Where(item => item.Composition is not null)
+            .Select(item => (
+                ObjectId: item.Id,
+                CompositionId: item.Composition!.Id,
+                ItemCount: item.Composition.Items.Count))
+            .OrderBy(item => item.ObjectId.ToString())
+            .ToArray();
+
+        return reopened.Canvas == source.Canvas
+            && reopened.Layers.Count == source.Layers.Count
+            && reopened.Layers.OfType<ObjectLayer>().Sum(layer => layer.Objects.Count)
+                == fixture.Manifest.ObjectCount
+            && target is not null
+            && target.Kind == fixture.PointTarget.Kind
+            && NearlyEqual(target.X, fixture.PointTarget.X)
+            && NearlyEqual(target.Y, fixture.PointTarget.Y)
+            && sourceGroups.SequenceEqual(reopenedGroups)
+            && sourceCompositions.SequenceEqual(reopenedCompositions)
+            && SparseTileSignature(source) == SparseTileSignature(reopened);
+    }
+
+    private static int MaterializedTileCount(MapDocument document) =>
+        document.Layers.Sum(layer =>
+            (layer is IRasterContentLayer raster ? raster.ContentTiles.TileCount : 0)
+            + (layer.Mask?.Tiles.TileCount ?? 0));
+
+    private static string SparseTileSignature(MapDocument document) => string.Join(
+        "|",
+        document.Layers.Select(layer =>
+        {
+            var content = layer is IRasterContentLayer raster
+                ? string.Join(",", raster.ContentTiles.Keys.OrderBy(key => key.Y).ThenBy(key => key.X))
+                : "";
+            var masks = layer.Mask is { } mask
+                ? string.Join(",", mask.Tiles.Keys.OrderBy(key => key.Y).ThenBy(key => key.X))
+                : "";
+            return $"{layer.Id}:{layer.GetType().Name}:{content}:{masks}";
+        }));
+
+    private static byte[] TinyPng()
+    {
+        using var surface = CreateSurface(1, 1);
+        surface.Canvas.Clear(SKColors.Transparent);
+        using var image = surface.Snapshot();
+        using var data = image.Encode(SKEncodedImageFormat.Png, 100);
+        return data.ToArray();
+    }
+
+    private static bool NearlyEqual(double left, double right) =>
+        Math.Abs(left - right) < 0.0001;
 
     private static void Consume(IReadOnlyList<SceneObject> objects)
     {

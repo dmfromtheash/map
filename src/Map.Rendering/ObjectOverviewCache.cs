@@ -37,7 +37,7 @@ public sealed class ObjectOverviewCache : IDisposable
     private long _clock;
     private int? _ownerThread;
 
-    public ObjectOverviewCache(int itemBudget = 512, long byteBudget = 64L * 1024 * 1024)
+    public ObjectOverviewCache(int itemBudget = 1_024, long byteBudget = 64L * 1024 * 1024)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(itemBudget);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(byteBudget);

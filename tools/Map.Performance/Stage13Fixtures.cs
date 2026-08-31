@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Map.Core.Documents;
+using Map.Core.Editing;
 
 namespace Map.Performance;
 
@@ -308,6 +309,146 @@ internal static class Stage13Fixtures
             manifest,
             objects[^1],
             new WorldBounds(0, 0, 1_100, 1_100));
+    }
+
+    public static Stage13Fixture Mixed50KLarge(int seed, int canvasSize = 131_072)
+    {
+        var source = Mixed50K(seed);
+        var scale = canvasSize / (double)CanvasSize;
+        var objects = source.ObjectLayer.Objects
+            .Select(item => SceneObjectClone.At(item, item.X * scale, item.Y * scale))
+            .ToArray();
+        var farKey = TileMap.KeyAt(canvasSize - 128, canvasSize - 128);
+        var maskPixels = Enumerable.Repeat(
+            (byte)255, TileMap.TileSize * TileMap.TileSize).ToArray();
+        maskPixels[0] = 0;
+        var nearMaskPixels = Enumerable.Repeat(
+            (byte)255, TileMap.TileSize * TileMap.TileSize).ToArray();
+        var mask = new LayerMask(
+            TileMap.Empty(1)
+                .With(new TileKey(0, 0), nearMaskPixels)
+                .With(farKey, maskPixels),
+            enabled: true);
+        var objectLayer = new ObjectLayer(
+            source.ObjectLayer.Id,
+            source.ObjectLayer.Name,
+            true,
+            false,
+            1,
+            objects,
+            mask);
+
+        var brushPixels = new byte[TileMap.TileSize * TileMap.TileSize * 4];
+        brushPixels[0] = 40;
+        brushPixels[1] = 120;
+        brushPixels[2] = 200;
+        brushPixels[3] = 255;
+        var brushKey = new TileKey(farKey.X - 2, 3);
+        var brush = new BrushLayer(
+            new LayerId(DeterministicGuid(seed, "large-layer", 2)),
+            "sparse-brush",
+            true,
+            false,
+            1,
+            TileMap.Empty(4).With(brushKey, brushPixels));
+
+        var landPixels = new byte[TileMap.TileSize * TileMap.TileSize];
+        landPixels[^1] = 255;
+        var landKey = new TileKey(4, farKey.Y - 2);
+        var land = new LandLayer(
+            new LayerId(DeterministicGuid(seed, "large-layer", 3)),
+            "sparse-land",
+            true,
+            false,
+            1,
+            TileMap.Empty(1).With(landKey, landPixels),
+            new LandEdgeStyle());
+
+        var sourceFilter = source.Document.Layers.OfType<FilterLayer>().Single();
+        var document = new MapDocument(
+            new DocumentId(DeterministicGuid(seed, "large-document", canvasSize)),
+            $"mixed-50k-{canvasSize}",
+            DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(canvasSize, canvasSize, "px", "#FFEEF1F5"),
+            [
+                new BaseColorLayer(
+                    new LayerId(DeterministicGuid(seed, "large-layer", 0)),
+                    "background", true, false, 1, "#FFEEF1F5"),
+                objectLayer,
+                brush,
+                land,
+                sourceFilter,
+            ]);
+        var manifestWithoutHash = new
+        {
+            name = $"mixed-50k-{canvasSize}",
+            seed,
+            objectCount = objects.Length,
+            sourceFixtureHash = source.Manifest.Hash,
+            canvasWidth = canvasSize,
+            canvasHeight = canvasSize,
+            scale,
+            kindCounts = source.Manifest.KindCounts,
+            groupCount = source.Manifest.GroupCount,
+            groupedObjectCount = source.Manifest.GroupedObjectCount,
+            sparseTileKeys = new[] { farKey.ToString(), brushKey.ToString(), landKey.ToString() },
+        };
+        var fixtureHash = Convert.ToHexString(SHA256.HashData(
+            Encoding.UTF8.GetBytes(JsonSerializer.Serialize(manifestWithoutHash)))).ToLowerInvariant();
+        var manifest = source.Manifest with
+        {
+            Name = manifestWithoutHash.name,
+            CanvasWidth = canvasSize,
+            CanvasHeight = canvasSize,
+            Hash = fixtureHash,
+            MaterializedMaskTileCount = 2,
+        };
+
+        return new Stage13Fixture(
+            document,
+            objectLayer,
+            manifest,
+            objects[^1],
+            new WorldBounds(0, 0, 2_200, 2_200));
+    }
+
+    public static Stage13Fixture SimpleLarge(int count, int seed, int canvasSize = 131_072)
+    {
+        var source = Simple(count, seed);
+        var document = new MapDocument(
+            new DocumentId(DeterministicGuid(seed, "large-simple-document", count)),
+            $"simple-{count}-{canvasSize}",
+            DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(canvasSize, canvasSize, "px", source.Document.Canvas.Background),
+            source.Document.Layers,
+            source.Document.Assets,
+            source.Document.Notes,
+            source.Document.Checkpoints);
+        var manifestWithoutHash = new
+        {
+            name = $"simple-{count / 1_000}k-{canvasSize}",
+            seed,
+            objectCount = count,
+            sourceFixtureHash = source.Manifest.Hash,
+            canvasWidth = canvasSize,
+            canvasHeight = canvasSize,
+        };
+        var fixtureHash = Convert.ToHexString(SHA256.HashData(
+            Encoding.UTF8.GetBytes(JsonSerializer.Serialize(manifestWithoutHash)))).ToLowerInvariant();
+        var manifest = source.Manifest with
+        {
+            Name = manifestWithoutHash.name,
+            CanvasWidth = canvasSize,
+            CanvasHeight = canvasSize,
+            Hash = fixtureHash,
+        };
+
+        return new Stage13Fixture(
+            document,
+            source.ObjectLayer,
+            manifest,
+            source.PointTarget,
+            source.Marquee);
     }
 
     private static Guid DeterministicGuid(int seed, string category, int discriminator)

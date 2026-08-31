@@ -146,10 +146,12 @@ public sealed class NativeSmokeApplication : Application
         }
 
         desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
-        var stageC = _options.Profile is "native-stage13c" or "native-stage13d";
-        var fixture = stageC
-            ? Stage13Fixtures.Mixed50K(_options.Seed)
-            : Stage13Fixtures.Simple(_options.ObjectCount, _options.Seed);
+        var fixture = _options.Profile switch
+        {
+            "native-stage13d" => Stage13Fixtures.Mixed50KLarge(_options.Seed),
+            "native-stage13c" => Stage13Fixtures.Mixed50K(_options.Seed),
+            _ => Stage13Fixtures.Simple(_options.ObjectCount, _options.Seed),
+        };
         var editor = new EditorViewModel(
             fixture.Document,
             documentPath: null,
@@ -363,7 +365,7 @@ public sealed class NativeSmokeApplication : Application
             cacheItemsAfterDispose = view.Canvas.ObjectCacheCount;
             cacheBytesAfterDispose = view.Canvas.ObjectCacheBytes;
             cacheDisposals = view.Canvas.ObjectCacheDisposals;
-            resourcesDisposed = cacheItemsAtPlateau is > 0 and <= 512
+            resourcesDisposed = cacheItemsAtPlateau is > 0 and <= 1_024
                 && cacheBytesAtPlateau is > 0 and <= 64L * 1024 * 1024
                 && cacheItemsAfterDispose == 0
                 && cacheBytesAfterDispose == 0

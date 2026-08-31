@@ -36,13 +36,10 @@ public sealed class Stage13CLodRenderingTests
     [Fact]
     public void Exact_and_export_ignore_overview_cache_and_match_the_reference_pixels()
     {
-        var rectangle = Rectangle("exact", 40, 40) with
-        {
-            RotationDegrees = 17,
-            FillColor = "#CC557799",
-            StrokeColor = "#FF112233",
-            StrokeWidth = 3,
-        };
+        var rectangle = new SceneObject(
+            ObjectId.New(), SceneObjectKind.Rectangle, "exact",
+            40, 40, 32, 32, 17,
+            "#CC557799", "#FF112233", 3, true, false);
         var document = Document(200, [rectangle], includeFilter: true);
         using var cache = new ObjectOverviewCache();
         using var reference = Render(document, new RenderOptions());

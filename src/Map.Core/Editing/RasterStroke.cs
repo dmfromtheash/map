@@ -119,7 +119,7 @@ public enum MaskPaintMode
 /// <summary>
 /// One in-progress raster gesture over one layer. It accumulates per-tile coverage for the dabs
 /// added so far - and nothing else. Only tiles the brush actually touched are ever materialized,
-/// so painting a 65 536-unit map costs the brush footprint, not the canvas area (DEC-009).
+/// so painting a 131 072-unit map costs the brush footprint, not the canvas area (DEC-009).
 ///
 /// The live coverage is what the canvas draws as the stroke preview; <see cref="Commit"/> turns it
 /// into the before/after tile pairs of a single reversible command.

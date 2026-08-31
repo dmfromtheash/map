@@ -8,7 +8,7 @@ namespace Map.Core.Documents;
 public static class CanvasDimensionPolicy
 {
     public const int Minimum = 16;
-    public const int Maximum = 65_536;
+    public const int Maximum = 131_072;
 
     public static bool IsValid(int value) => value is >= Minimum and <= Maximum;
 }

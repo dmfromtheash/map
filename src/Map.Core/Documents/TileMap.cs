@@ -23,7 +23,7 @@ public readonly record struct TileKey(int X, int Y)
 /// Immutable tiled raster: the persistent-map backbone of every raster surface in the document
 /// (DEC-009). Only materialized, non-empty tiles exist; a snapshot edit shares every untouched
 /// tile with its predecessor by reference, so undo and history cost only the touched tiles and a
-/// 65 536-unit canvas never allocates anything proportional to its area.
+/// 131 072-unit canvas never allocates anything proportional to its area.
 /// </summary>
 public sealed class TileMap
 {

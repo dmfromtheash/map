@@ -7,7 +7,7 @@ namespace Map.Core.Documents;
 /// the immutable layer instance, so an edit that produces a new layer snapshot gets a new index
 /// while untouched layers keep theirs (docs/05 derived-cache rule).
 ///
-/// It exists so a 65 536-unit map holding tens of thousands of objects renders from the handful
+/// It exists so a 131 072-unit map holding tens of thousands of objects renders from the handful
 /// that intersect the viewport instead of walking the whole list every frame.
 /// </summary>
 public sealed class ObjectSpatialIndex
