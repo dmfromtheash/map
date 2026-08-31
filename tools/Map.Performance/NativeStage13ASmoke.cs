@@ -9,10 +9,12 @@ using Avalonia.Threading;
 using Map.App.Views;
 using Map.Core.Documents;
 using Map.Core.Editing;
+using Map.Export;
 using Map.Persistence;
 using Map.Persistence.Recovery;
 using Map.Presentation.Services;
 using Map.Presentation.ViewModels;
+using SkiaSharp;
 
 namespace Map.Performance;
 
@@ -41,6 +43,27 @@ internal sealed record NativeDragResult(
     bool UndoWasExact,
     bool RedoWasExact);
 
+internal sealed record NativeLodResult(
+    IReadOnlyList<double> OverviewInputToRenderSamples,
+    IReadOnlyList<double> OverviewSceneRenderSamples,
+    double OverviewP50,
+    double OverviewP95,
+    double OverviewMax,
+    double OverviewSceneRenderP95,
+    string OverviewTier,
+    string DragTier,
+    string NormalIdleTier,
+    int OverviewObjects,
+    int OverviewChunks,
+    int CacheItemsAtPlateau,
+    long CacheBytesAtPlateau,
+    bool SmallMarqueeWasExact,
+    bool ExactRegionExportDecoded,
+    int CacheItemsAfterDispose,
+    long CacheBytesAfterDispose,
+    long CacheDisposals,
+    bool ResourcesWereBoundedAndDisposed);
+
 internal sealed record NativeStage13AReport(
     int SchemaVersion,
     DateTimeOffset RecordedUtc,
@@ -50,6 +73,7 @@ internal sealed record NativeStage13AReport(
     string RendererBackend,
     NativeObjectTreeResult ObjectTree,
     NativeDragResult Drag,
+    NativeLodResult? Lod,
     bool GatePassed,
     IReadOnlyList<string> Limitations);
 
@@ -88,7 +112,7 @@ internal static class NativeStage13ASmoke
 
         try
         {
-            return completion.Task.WaitAsync(TimeSpan.FromSeconds(45)).GetAwaiter().GetResult();
+            return completion.Task.WaitAsync(TimeSpan.FromSeconds(60)).GetAwaiter().GetResult();
         }
         finally
         {
@@ -122,7 +146,10 @@ public sealed class NativeSmokeApplication : Application
         }
 
         desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
-        var fixture = Stage13Fixtures.Simple(_options.ObjectCount, _options.Seed);
+        var stageC = _options.Profile is "native-stage13c" or "native-stage13d";
+        var fixture = stageC
+            ? Stage13Fixtures.Mixed50K(_options.Seed)
+            : Stage13Fixtures.Simple(_options.ObjectCount, _options.Seed);
         var editor = new EditorViewModel(
             fixture.Document,
             documentPath: null,
@@ -192,13 +219,45 @@ public sealed class NativeSmokeApplication : Application
         realized.Add(view.ObjectListRealizedCount);
         var endRealized = realized[^1];
 
-        view.SetObjectSearchText("object-049999");
+        view.SetObjectSearchText(fixture.PointTarget.Name);
         await SettleAsync();
         var searchRows = view.ObjectListLogicalCount;
 
         view.SetObjectSearchText("");
         await SettleAsync();
         realized.Add(view.ObjectListRealizedCount);
+
+        NativeLodResult? lod = null;
+        var isStageC = options.Profile is "native-stage13c" or "native-stage13d";
+        var overviewSamples = new List<double>();
+        var overviewRenderSamples = new List<double>();
+        string overviewTier = "not-run";
+        var overviewObjects = 0;
+        var overviewChunks = 0;
+        var cacheItemsAtPlateau = 0;
+        var cacheBytesAtPlateau = 0L;
+        if (isStageC)
+        {
+            _ = await MeasureNextFrameAsync(view, view.Canvas.FitToCanvas);
+            for (var index = 0; index < options.WarmupIterations; index++)
+            {
+                _ = await MeasureNextFrameAsync(
+                    view,
+                    () => view.Canvas.PanByScreenDeltaForSmoke(index % 2 == 0 ? 1 : -1, 0));
+            }
+            for (var index = 0; index < options.MeasuredIterations; index++)
+            {
+                overviewSamples.Add(await MeasureNextFrameAsync(
+                    view,
+                    () => view.Canvas.PanByScreenDeltaForSmoke(index % 2 == 0 ? 1 : -1, 0)));
+                overviewRenderSamples.Add(view.Canvas.LastSceneRenderMilliseconds);
+            }
+            overviewTier = view.Canvas.LastLodTier.ToString();
+            overviewObjects = view.Canvas.LastRenderStats.OverviewObjects;
+            overviewChunks = view.Canvas.LastRenderStats.OverviewChunks;
+            cacheItemsAtPlateau = view.Canvas.ObjectCacheCount;
+            cacheBytesAtPlateau = view.Canvas.ObjectCacheBytes;
+        }
 
         // Use an ungrouped object so one pointer press has the exact single-object semantics the
         // drag assertion checks. Position the viewport around it; the earlier attached-view fit
@@ -230,6 +289,7 @@ public sealed class NativeSmokeApplication : Application
                 view,
                 () => editor.UpdateDragTo(nextX, nextY)));
         }
+        var dragTier = view.Canvas.LastLodTier.ToString();
 
         var pointerMoveRebuilds = view.ObjectListRebuildCount - rebuildsBeforeMoves;
         var previewKeptSourceRevision = ReferenceEquals(sourceRevision, editor.Session.Document);
@@ -261,11 +321,83 @@ public sealed class NativeSmokeApplication : Application
             && NearlyEqual(afterRedo.X, target.X + finalDeltaX)
             && NearlyEqual(afterRedo.Y, target.Y + finalDeltaY);
 
+        var normalIdleTier = view.Canvas.LastLodTier.ToString();
+        var marqueeExact = true;
+        var exactRegionExportDecoded = true;
+        var cacheItemsAfterDispose = view.Canvas.ObjectCacheCount;
+        var cacheBytesAfterDispose = view.Canvas.ObjectCacheBytes;
+        var cacheDisposals = view.Canvas.ObjectCacheDisposals;
+        var resourcesDisposed = true;
+        if (isStageC)
+        {
+            editor.BeginMarquee(startX - 20, startY - 20, additive: false);
+            _ = await MeasureNextFrameAsync(
+                view,
+                () => editor.UpdateMarquee(startX + 20, startY + 20));
+            editor.EndMarquee();
+            await SettleAsync();
+            marqueeExact = editor.SelectionCount == 1
+                && editor.Session.SelectedObjectId == target.Id;
+
+            var exporter = new ImageExportEngine();
+            var region = new CanvasRegion(
+                Math.Max(0, (int)Math.Floor(target.X) - 32),
+                Math.Max(0, (int)Math.Floor(target.Y) - 32),
+                128,
+                128);
+            var plan = exporter.Plan(editor.Session.Document, new ExportRequest(
+                ExportImageFormat.Png,
+                ExportAreaMode.Region,
+                region,
+                128,
+                128,
+                ExportOutputMode.SingleImage,
+                TransparentBackground: false,
+                IncludeGrid: true));
+            var preview = await exporter.RenderPreviewAsync(
+                editor.Session.Document, plan, stamps: null);
+            using var decoded = SKBitmap.Decode(preview.PngBytes);
+            exactRegionExportDecoded = decoded is { Width: 128, Height: 128 };
+
+            view.Canvas.DisposeRenderCaches();
+            cacheItemsAfterDispose = view.Canvas.ObjectCacheCount;
+            cacheBytesAfterDispose = view.Canvas.ObjectCacheBytes;
+            cacheDisposals = view.Canvas.ObjectCacheDisposals;
+            resourcesDisposed = cacheItemsAtPlateau is > 0 and <= 512
+                && cacheBytesAtPlateau is > 0 and <= 64L * 1024 * 1024
+                && cacheItemsAfterDispose == 0
+                && cacheBytesAfterDispose == 0
+                && cacheDisposals >= cacheItemsAtPlateau;
+
+            var overviewOrdered = overviewSamples.Order().ToArray();
+            var overviewRenderOrdered = overviewRenderSamples.Order().ToArray();
+            lod = new NativeLodResult(
+                overviewSamples,
+                overviewRenderSamples,
+                Percentile(overviewOrdered, 0.50),
+                Percentile(overviewOrdered, 0.95),
+                overviewOrdered[^1],
+                Percentile(overviewRenderOrdered, 0.95),
+                overviewTier,
+                dragTier,
+                normalIdleTier,
+                overviewObjects,
+                overviewChunks,
+                cacheItemsAtPlateau,
+                cacheBytesAtPlateau,
+                marqueeExact,
+                exactRegionExportDecoded,
+                cacheItemsAfterDispose,
+                cacheBytesAfterDispose,
+                cacheDisposals,
+                resourcesDisposed);
+        }
+
         var ordered = samples.Order().ToArray();
         var p50 = Percentile(ordered, 0.50);
         var p95 = Percentile(ordered, 0.95);
         var maximum = ordered[^1];
-        var responsivenessLimit = options.Profile == "native-stage13b" ? 33.3 : 150.0;
+        var responsivenessLimit = options.Profile == "native-stage13a" ? 150.0 : 33.3;
         var maxRealized = realized.Max();
         var objectTree = new NativeObjectTreeResult(
             logicalRows,
@@ -304,7 +436,17 @@ public sealed class NativeSmokeApplication : Application
             && selectedExactly
             && commitExact
             && undoExact
-            && redoExact;
+            && redoExact
+            && (!isStageC || lod is not null
+                && lod.OverviewTier == nameof(Map.Rendering.RenderLodTier.Overview)
+                && lod.DragTier == nameof(Map.Rendering.RenderLodTier.Interactive)
+                && lod.NormalIdleTier == nameof(Map.Rendering.RenderLodTier.Exact)
+                && lod.OverviewObjects == fixture.Manifest.ObjectCount
+                && lod.OverviewP95 <= 33.3
+                && lod.OverviewMax <= 100
+                && lod.SmallMarqueeWasExact
+                && lod.ExactRegionExportDecoded
+                && lod.ResourcesWereBoundedAndDisposed);
 
         return new NativeStage13AReport(
             SchemaVersion: 1,
@@ -315,6 +457,7 @@ public sealed class NativeSmokeApplication : Application
             RendererBackend: "Avalonia native desktop / Skia",
             ObjectTree: objectTree,
             Drag: drag,
+            Lod: lod,
             GatePassed: passed,
             Limitations:
             [

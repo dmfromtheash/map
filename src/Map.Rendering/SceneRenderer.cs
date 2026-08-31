@@ -1,5 +1,6 @@
 using Map.Core.Documents;
 using SkiaSharp;
+using System.Runtime.CompilerServices;
 
 namespace Map.Rendering;
 
@@ -36,6 +37,21 @@ public sealed class RenderStats
     public int MaskTilesDrawn { get; set; }
     public int MipmappedTiles { get; set; }
     public int MissingAssets { get; set; }
+    public int ExactObjects { get; set; }
+    public int OverviewObjects { get; set; }
+    public int OverviewChunks { get; set; }
+    public int OverviewBatches { get; set; }
+    public int DrawCalls { get; set; }
+    public long ObjectCacheHits { get; set; }
+    public long ObjectCacheMisses { get; set; }
+    public long ObjectCacheInvalidations { get; set; }
+    public int StampInstances { get; set; }
+    public int RepeatedAssetInstances { get; set; }
+    public int TextObjects { get; set; }
+    public int VectorObjects { get; set; }
+    public int CompositionObjects { get; set; }
+    public int EffectObjects { get; set; }
+    private readonly HashSet<string> _seenAssets = new(StringComparer.Ordinal);
 
     public void Reset()
     {
@@ -46,7 +62,64 @@ public sealed class RenderStats
         MaskTilesDrawn = 0;
         MipmappedTiles = 0;
         MissingAssets = 0;
+        ExactObjects = 0;
+        OverviewObjects = 0;
+        OverviewChunks = 0;
+        OverviewBatches = 0;
+        DrawCalls = 0;
+        ObjectCacheHits = 0;
+        ObjectCacheMisses = 0;
+        ObjectCacheInvalidations = 0;
+        StampInstances = 0;
+        RepeatedAssetInstances = 0;
+        TextObjects = 0;
+        VectorObjects = 0;
+        CompositionObjects = 0;
+        EffectObjects = 0;
+        _seenAssets.Clear();
     }
+
+    internal void RecordExactObject(SceneObject sceneObject)
+    {
+        switch (sceneObject.Kind)
+        {
+            case SceneObjectKind.Stamp:
+                StampInstances++;
+                if (sceneObject.Stamp is { } stamp && !_seenAssets.Add(stamp.AssetSha256))
+                {
+                    RepeatedAssetInstances++;
+                }
+                break;
+            case SceneObjectKind.Text:
+                TextObjects++;
+                break;
+            case SceneObjectKind.Line or SceneObjectKind.Shape:
+                VectorObjects++;
+                break;
+            case SceneObjectKind.Composition:
+                CompositionObjects++;
+                break;
+        }
+
+        if (sceneObject.Stamp is { Blur: > 0 } or { ShadowOpacity: > 0 }
+            || sceneObject.Text is { Blur: > 0 } or { ShadowOpacity: > 0 } or { OutlineWidth: > 0 }
+            || sceneObject.Line?.Stroke is { Blur: > 0 } or { ShadowOpacity: > 0 }
+            || sceneObject.Shape?.Stroke is { Blur: > 0 } or { ShadowOpacity: > 0 })
+        {
+            EffectObjects++;
+        }
+    }
+}
+
+/// <summary>
+/// Editor-only rendering fidelity. Export always evaluates the exact document regardless of this
+/// value; overview is a bounded screen-space representation for far zoom only.
+/// </summary>
+public enum RenderLodTier
+{
+    Exact,
+    Interactive,
+    Overview,
 }
 
 /// <summary>Options of one scene pass. Selection overlay is editor chrome and is opt-in only.</summary>
@@ -88,6 +161,11 @@ public sealed class RenderOptions
     public IReadOnlyList<SceneObject>? ObjectOverrides { get; init; }
 
     public TileImageCache? TileCache { get; init; }
+
+    /// <summary>Render-context-local cache used only by the editor overview tier.</summary>
+    public ObjectOverviewCache? ObjectCache { get; init; }
+
+    public RenderLodTier LodTier { get; init; } = RenderLodTier.Exact;
 
     public IStampImageSource? Stamps { get; init; }
 
@@ -135,6 +213,10 @@ public sealed record CanvasBoundaryOverlay(
 public static class SceneRenderer
 {
     private static readonly SKColor SelectionColor = new(255, 214, 10, 255);
+    private const double OverviewChunkSize = 4_096;
+    private const double OverviewExactScreenSize = 4;
+    private static readonly ConditionalWeakTable<ObjectLayer, ObjectOverviewPlan> OverviewPlans = [];
+    private static readonly ConditionalWeakTable<byte[], MaskCoverageState> MaskCoverageStates = [];
 
     /// <summary>Draws the document in world coordinates. The caller sets the world transform.</summary>
     public static void Render(SKCanvas canvas, MapDocument document, RenderOptions options)
@@ -292,7 +374,10 @@ public static class SceneRenderer
     private static void DrawLayer(
         SKCanvas canvas, MapDocument document, MapLayer layer, WorldBounds view, RenderOptions options)
     {
-        var mask = layer.Mask is { Enabled: true } m && m.Tiles.TileCount > 0 ? m : null;
+        var mask = layer.Mask is { Enabled: true } m
+            && HasEffectiveMask(m, view)
+                ? m
+                : null;
         var maskEdit = options.MaskEditLayerId == layer.Id && layer.Mask is not null;
         var needsGroup = mask is not null || layer.Opacity < 1.0 || layer.Blend != "Normal";
 
@@ -508,6 +593,15 @@ public static class SceneRenderer
         WorldBounds view,
         RenderOptions options)
     {
+        if (!options.IsExport
+            && options.LodTier == RenderLodTier.Overview
+            && options.ObjectCache is not null
+            && options.VisibleWorld is not null)
+        {
+            DrawOverviewObjects(canvas, layer, view, options);
+            return;
+        }
+
         IReadOnlyList<SceneObject> candidates = options.VisibleWorld is null
             ? layer.Objects
             : ObjectSpatialIndex.For(layer).Query(view);
@@ -587,6 +681,9 @@ public static class SceneRenderer
             if (options.Stats is { } s)
             {
                 s.ObjectsDrawn++;
+                s.ExactObjects++;
+                s.DrawCalls++;
+                s.RecordExactObject(sceneObject);
             }
         }
     }
@@ -838,7 +935,7 @@ public static class SceneRenderer
 
         if (sceneObject.Kind == SceneObjectKind.Text && sceneObject.Text is { } text)
         {
-            DrawText(canvas, sceneObject, text, rect, objectAlpha);
+            DrawText(canvas, sceneObject, text, rect, objectAlpha, options);
             canvas.Restore();
             return;
         }
@@ -972,6 +1069,27 @@ public static class SceneRenderer
             canvas.DrawRect(rect, paint);
         }
 
+        if (!options.IsExport
+            && options.LodTier is RenderLodTier.Interactive or RenderLodTier.Overview)
+        {
+            // One bounded screen-space wash keeps the direction of the filter legible while the
+            // viewport is moving/far away. Exact idle and every export retain the full sequence.
+            var strength = Math.Clamp(
+                Math.Abs(filter.Brightness) + Math.Abs(filter.Contrast)
+                + Math.Abs(filter.Saturation) + Math.Abs(filter.HueDegrees / 180)
+                + Math.Abs(filter.Temperature),
+                0,
+                1);
+            var red = (byte)Math.Clamp(Math.Round(
+                128 + (filter.Temperature * 100) + (filter.Saturation * 45)), 0, 255);
+            var green = (byte)Math.Clamp(Math.Round(
+                128 + (filter.Brightness * 80)), 0, 255);
+            var blue = (byte)Math.Clamp(Math.Round(
+                128 - (filter.Temperature * 100) - (filter.Saturation * 20)), 0, 255);
+            Overlay(new SKColor(red, green, blue, Alpha(strength, 0.25)), SKBlendMode.SoftLight);
+            return;
+        }
+
         Overlay(filter.Brightness >= 0
             ? SKColors.White.WithAlpha(Alpha(filter.Brightness))
             : SKColors.Black.WithAlpha(Alpha(filter.Brightness)), SKBlendMode.SrcOver);
@@ -1029,7 +1147,8 @@ public static class SceneRenderer
     }
 
     private static void DrawText(
-        SKCanvas canvas, SceneObject owner, TextStyle style, SKRect rect, byte objectAlpha)
+        SKCanvas canvas, SceneObject owner, TextStyle style, SKRect rect, byte objectAlpha,
+        RenderOptions options)
     {
         var resolution = TextFontResolver.Resolve(style.RequestedFontFamily, style.FallbackFontFamily);
         var typeface = TextFontResolver.GetTypeface(resolution, style.FontWeight);
@@ -1040,7 +1159,9 @@ public static class SceneRenderer
             Color = ParseColor(style.FillColor).WithScaledAlpha(objectAlpha),
             BlendMode = ParseBlend(style.Blend),
             Style = SKPaintStyle.Fill,
-            ImageFilter = style.Blur > 0 ? SKImageFilter.CreateBlur((float)style.Blur, (float)style.Blur) : null,
+            ImageFilter = !options.FastPreview && style.Blur > 0
+                ? SKImageFilter.CreateBlur((float)style.Blur, (float)style.Blur)
+                : null,
         };
         var centreX = rect.MidX; var centreY = rect.MidY;
         canvas.Save();
@@ -1059,7 +1180,7 @@ public static class SceneRenderer
                 TextAlignment.Right => rect.Right - width,
                 _ => rect.Left,
             };
-            if (style.ShadowOpacity > 0)
+            if (!options.FastPreview && style.ShadowOpacity > 0)
             {
                 using var shadow = new SKPaint
                 {
@@ -1072,7 +1193,7 @@ public static class SceneRenderer
                 DrawTextRun(canvas, line, x + (float)style.ShadowOffsetX, y + (float)style.ShadowOffsetY,
                     lineIndex, style, font, shadow);
             }
-            if (style.OutlineWidth > 0)
+            if (!options.FastPreview && style.OutlineWidth > 0)
             {
                 using var outline = new SKPaint
                 {
@@ -1114,14 +1235,15 @@ public static class SceneRenderer
         // fill and stroke composite against the backdrop as one image, so a Multiply shape does
         // not multiply its own fill under its stroke twice.
         var overallBlend = ParseBlend(shape.Stroke.Blend);
-        var wrapped = overallBlend != SKBlendMode.SrcOver || shape.Stroke.Blur > 0;
+        var wrapped = overallBlend != SKBlendMode.SrcOver
+            || !options.FastPreview && shape.Stroke.Blur > 0;
         var strokeStyle = shape.Stroke;
         if (wrapped)
         {
             using var overallPaint = new SKPaint
             {
                 BlendMode = overallBlend,
-                ImageFilter = shape.Stroke.Blur > 0
+                ImageFilter = !options.FastPreview && shape.Stroke.Blur > 0
                     ? SKImageFilter.CreateBlur((float)shape.Stroke.Blur, (float)shape.Stroke.Blur)
                     : null,
             };
@@ -1240,7 +1362,7 @@ public static class SceneRenderer
         if (style.AssetSha256 is { } hash && options.Stamps?.TryGetImage(hash) is { } image)
         {
             DrawAssetStroke(canvas, [.. pieces.Select(piece => Offset(piece.A, piece.B, style.Offset))],
-                image, style, objectAlpha);
+                image, style, objectAlpha, options);
         }
         else
         {
@@ -1254,7 +1376,7 @@ public static class SceneRenderer
                 StrokeCap = ToStrokeCap(style.EndCap),
                 StrokeJoin = SKStrokeJoin.Round,
                 BlendMode = ParseBlend(style.Blend),
-                ImageFilter = BuildStrokeFilter(style),
+                ImageFilter = options.FastPreview ? null : BuildStrokeFilter(style),
                 PathEffect = BuildStrokeDash(style),
             };
 
@@ -1330,7 +1452,7 @@ public static class SceneRenderer
 
     private static void DrawAssetStroke(
         SKCanvas canvas, IReadOnlyList<(VectorPoint A, VectorPoint B)> pieces,
-        SKImage image, VectorStrokeStyle style, byte objectAlpha)
+        SKImage image, VectorStrokeStyle style, byte objectAlpha, RenderOptions options)
     {
         using var paint = new SKPaint
         {
@@ -1342,7 +1464,7 @@ public static class SceneRenderer
                 Hue = style.Hue,
                 Saturation = style.Saturation,
             }),
-            ImageFilter = BuildStrokeFilter(style),
+            ImageFilter = options.FastPreview ? null : BuildStrokeFilter(style),
         };
         var spacing = Math.Max(1, style.Width * Math.Max(0.1, style.AssetSpacing));
         var drawn = 0;
@@ -1463,12 +1585,12 @@ public static class SceneRenderer
         };
 
         SKImageFilter? filter = null;
-        if (stamp.Blur > 0)
+        if (!options.FastPreview && stamp.Blur > 0)
         {
             filter = SKImageFilter.CreateBlur((float)stamp.Blur, (float)stamp.Blur);
         }
 
-        if (stamp.ShadowOpacity > 0)
+        if (!options.FastPreview && stamp.ShadowOpacity > 0)
         {
             var shadow = SKColors.Black.WithAlpha(
                 (byte)Math.Clamp(Math.Round(stamp.ShadowOpacity * 255), 0, 255));
@@ -1637,6 +1759,316 @@ public static class SceneRenderer
         {
             DrawMarquee(canvas, marquee, viewScale);
         }
+    }
+
+    private static bool HasEffectiveMask(LayerMask mask, WorldBounds view)
+    {
+        foreach (var key in mask.Tiles.KeysIntersecting(view.Left, view.Top, view.Right, view.Bottom))
+        {
+            var coverage = mask.Tiles.TryGet(key);
+            if (coverage is not null
+                && MaskCoverageStates.GetValue(
+                    coverage,
+                    static pixels => new MaskCoverageState(pixels.Any(value => value != 255)))
+                    .HasHiddenPixels)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private sealed record MaskCoverageState(bool HasHiddenPixels);
+
+    private static void DrawOverviewObjects(
+        SKCanvas canvas,
+        ObjectLayer layer,
+        WorldBounds view,
+        RenderOptions options)
+    {
+        var cache = options.ObjectCache!;
+        var plan = OverviewPlans.GetValue(layer, static current => new ObjectOverviewPlan(current));
+        var zoomBucket = OverviewZoomBucket(options.ViewScale);
+        var bucketScale = Math.Pow(2, zoomBucket / 4.0);
+        var minX = (int)Math.Floor(view.Left / OverviewChunkSize);
+        var maxX = (int)Math.Floor(view.Right / OverviewChunkSize);
+        var minY = (int)Math.Floor(view.Top / OverviewChunkSize);
+        var maxY = (int)Math.Floor(view.Bottom / OverviewChunkSize);
+        var cacheHitsBefore = cache.Hits;
+        var cacheMissesBefore = cache.Misses;
+        var cacheInvalidationsBefore = cache.Invalidations;
+        var exact = new Dictionary<ObjectId, SceneObject>();
+        var overviewObjects = 0;
+        var overviewChunks = 0;
+        var overviewBatches = 0;
+
+        for (var chunkY = minY; chunkY <= maxY; chunkY++)
+        {
+            for (var chunkX = minX; chunkX <= maxX; chunkX++)
+            {
+                if (!plan.TryGetVariant(chunkX, chunkY, zoomBucket, bucketScale, out var variant))
+                {
+                    continue;
+                }
+
+                overviewChunks++;
+                overviewObjects += variant.OverviewObjectCount;
+                overviewBatches += variant.BatchCount;
+                var cached = cache.GetOrCreate(
+                    layer.Id,
+                    chunkX,
+                    chunkY,
+                    zoomBucket,
+                    variant.ContentHash,
+                    variant.BuildImage);
+                canvas.DrawImage(
+                    cached.Image,
+                    variant.Bounds,
+                    new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None));
+                foreach (var sceneObject in variant.ExactObjects)
+                {
+                    exact.TryAdd(sceneObject.Id, sceneObject);
+                }
+            }
+        }
+
+        // Far zoom keeps spatial density cheap, but anything the user is manipulating remains an
+        // exact object over the aggregate representation. The immutable base picture stays hot.
+        if (options.SelectedObjectId is { } selected && plan.TryFind(selected, out var primary))
+        {
+            exact[primary.Id] = primary;
+        }
+        if (options.CoSelectedObjectIds is { Count: > 0 } selectedObjects)
+        {
+            foreach (var id in selectedObjects)
+            {
+                if (plan.TryFind(id, out var selectedObject))
+                {
+                    exact[selectedObject.Id] = selectedObject;
+                }
+            }
+        }
+        if (options.ObjectOverrides is { Count: > 0 } overrides)
+        {
+            foreach (var replacement in overrides)
+            {
+                if (SceneGeometry.BoundsOf(replacement).Intersects(view))
+                {
+                    exact[replacement.Id] = replacement;
+                }
+            }
+        }
+
+        foreach (var sceneObject in exact.Values.OrderBy(item => item.Sublayer))
+        {
+            DrawObject(canvas, sceneObject, options);
+            options.Stats?.RecordExactObject(sceneObject);
+        }
+
+        if (options.Stats is { } stats)
+        {
+            stats.ObjectCandidates += overviewObjects + exact.Count;
+            stats.ObjectsDrawn += overviewObjects + exact.Count;
+            stats.OverviewObjects += overviewObjects;
+            stats.OverviewChunks += overviewChunks;
+            stats.OverviewBatches += overviewBatches;
+            stats.ExactObjects += exact.Count;
+            stats.DrawCalls += overviewChunks + exact.Count;
+            stats.ObjectCacheHits += cache.Hits - cacheHitsBefore;
+            stats.ObjectCacheMisses += cache.Misses - cacheMissesBefore;
+            stats.ObjectCacheInvalidations += cache.Invalidations - cacheInvalidationsBefore;
+        }
+    }
+
+    private static int OverviewZoomBucket(double scale) =>
+        (int)Math.Floor(Math.Log2(Math.Max(scale, 1.0 / 65_536)) * 4);
+
+    private sealed class ObjectOverviewPlan
+    {
+        private readonly Dictionary<(int X, int Y), OverviewChunk> _chunks = [];
+        private readonly Dictionary<ObjectId, SceneObject> _objects = [];
+
+        public ObjectOverviewPlan(ObjectLayer layer)
+        {
+            foreach (var sceneObject in layer.Objects)
+            {
+                if (!sceneObject.Visible)
+                {
+                    continue;
+                }
+
+                _objects[sceneObject.Id] = sceneObject;
+                var centreX = sceneObject.X + (sceneObject.Width / 2);
+                var centreY = sceneObject.Y + (sceneObject.Height / 2);
+                var key = (
+                    (int)Math.Floor(centreX / OverviewChunkSize),
+                    (int)Math.Floor(centreY / OverviewChunkSize));
+                if (!_chunks.TryGetValue(key, out var chunk))
+                {
+                    chunk = new OverviewChunk(key.Item1, key.Item2);
+                    _chunks.Add(key, chunk);
+                }
+                chunk.Objects.Add(sceneObject);
+            }
+        }
+
+        public bool TryFind(ObjectId id, out SceneObject sceneObject) =>
+            _objects.TryGetValue(id, out sceneObject!);
+
+        public bool TryGetVariant(
+            int chunkX,
+            int chunkY,
+            int zoomBucket,
+            double bucketScale,
+            out OverviewVariant variant)
+        {
+            if (!_chunks.TryGetValue((chunkX, chunkY), out var chunk))
+            {
+                variant = null!;
+                return false;
+            }
+
+            variant = chunk.GetVariant(zoomBucket, bucketScale);
+            return true;
+        }
+    }
+
+    private sealed class OverviewChunk(int x, int y)
+    {
+        private readonly Dictionary<int, OverviewVariant> _variants = [];
+
+        public List<SceneObject> Objects { get; } = [];
+
+        public OverviewVariant GetVariant(int zoomBucket, double bucketScale)
+        {
+            if (_variants.TryGetValue(zoomBucket, out var existing))
+            {
+                return existing;
+            }
+
+            var batches = new Dictionary<(int Sublayer, SKColor Color), List<SKPoint>>();
+            var exact = new List<SceneObject>();
+            var hash = 14_695_981_039_346_656_037UL;
+            var overviewCount = 0;
+            foreach (var sceneObject in Objects)
+            {
+                hash = HashObject(hash, sceneObject);
+                if (Math.Max(sceneObject.Width, sceneObject.Height) * bucketScale
+                    >= OverviewExactScreenSize)
+                {
+                    exact.Add(sceneObject);
+                    continue;
+                }
+
+                overviewCount++;
+                var key = (sceneObject.Sublayer, OverviewColor(sceneObject));
+                if (!batches.TryGetValue(key, out var points))
+                {
+                    points = [];
+                    batches.Add(key, points);
+                }
+                points.Add(new SKPoint(
+                    (float)(sceneObject.X + (sceneObject.Width / 2)),
+                    (float)(sceneObject.Y + (sceneObject.Height / 2))));
+            }
+
+            var immutableBatches = batches
+                .OrderBy(pair => pair.Key.Sublayer)
+                .Select(pair => new OverviewBatch(
+                    pair.Key.Color, [.. pair.Value]))
+                .ToArray();
+            var bounds = new SKRect(
+                (float)(x * OverviewChunkSize),
+                (float)(y * OverviewChunkSize),
+                (float)((x + 1) * OverviewChunkSize),
+                (float)((y + 1) * OverviewChunkSize));
+            var variant = new OverviewVariant(
+                hash,
+                bounds,
+                bucketScale,
+                immutableBatches,
+                exact,
+                overviewCount);
+            _variants.Add(zoomBucket, variant);
+            return variant;
+        }
+    }
+
+    private sealed class OverviewVariant(
+        ulong contentHash,
+        SKRect bounds,
+        double bucketScale,
+        IReadOnlyList<OverviewBatch> batches,
+        IReadOnlyList<SceneObject> exactObjects,
+        int overviewObjectCount)
+    {
+        public ulong ContentHash { get; } = contentHash;
+        public IReadOnlyList<SceneObject> ExactObjects { get; } = exactObjects;
+        public int OverviewObjectCount { get; } = overviewObjectCount;
+        public int BatchCount => batches.Count;
+        public SKRect Bounds => bounds;
+
+        public SKImage BuildImage()
+        {
+            var width = Math.Max(1, (int)Math.Ceiling(bounds.Width * bucketScale));
+            var height = Math.Max(1, (int)Math.Ceiling(bounds.Height * bucketScale));
+            using var surface = SKSurface.Create(new SKImageInfo(
+                width, height, SKColorType.Rgba8888, SKAlphaType.Premul))
+                ?? throw new InvalidOperationException("Could not allocate an overview chunk surface.");
+            var recording = surface.Canvas;
+            recording.Clear(SKColors.Transparent);
+            recording.Scale((float)bucketScale);
+            recording.Translate(-bounds.Left, -bounds.Top);
+            foreach (var batch in batches)
+            {
+                using var paint = new SKPaint
+                {
+                    Color = batch.Color,
+                    IsAntialias = false,
+                    StrokeWidth = (float)(1.25 / bucketScale),
+                    StrokeCap = SKStrokeCap.Square,
+                };
+                recording.DrawPoints(SKPointMode.Points, batch.Points, paint);
+            }
+            recording.Flush();
+            return surface.Snapshot();
+        }
+    }
+
+    private sealed record OverviewBatch(SKColor Color, SKPoint[] Points);
+
+    private static ulong HashObject(ulong hash, SceneObject sceneObject)
+    {
+        static ulong Add(ulong current, ulong value) => (current ^ value) * 1_099_511_628_211UL;
+
+        var bytes = sceneObject.Id.Value.ToByteArray();
+        hash = Add(hash, BitConverter.ToUInt64(bytes, 0));
+        hash = Add(hash, BitConverter.ToUInt64(bytes, 8));
+        hash = Add(hash, unchecked((ulong)BitConverter.DoubleToInt64Bits(sceneObject.X)));
+        hash = Add(hash, unchecked((ulong)BitConverter.DoubleToInt64Bits(sceneObject.Y)));
+        hash = Add(hash, unchecked((ulong)BitConverter.DoubleToInt64Bits(sceneObject.Width)));
+        hash = Add(hash, unchecked((ulong)BitConverter.DoubleToInt64Bits(sceneObject.Height)));
+        hash = Add(hash, unchecked((ulong)sceneObject.Sublayer));
+        hash = Add(hash, (ulong)sceneObject.Kind);
+        hash = Add(hash, unchecked((ulong)sceneObject.GetHashCode()));
+        hash = Add(hash, unchecked((ulong)OverviewColor(sceneObject).GetHashCode()));
+        hash = Add(hash, unchecked((ulong)BitConverter.DoubleToInt64Bits(sceneObject.ObjectOpacity)));
+        return hash;
+    }
+
+    private static SKColor OverviewColor(SceneObject sceneObject)
+    {
+        var color = ParseColor(sceneObject.Kind switch
+        {
+            SceneObjectKind.Stamp => "#D9FF5A5A",
+            SceneObjectKind.Text => sceneObject.Text?.FillColor ?? sceneObject.FillColor,
+            SceneObjectKind.Line => sceneObject.Line?.Stroke.Color ?? sceneObject.StrokeColor,
+            SceneObjectKind.Shape => sceneObject.Shape?.Fill.Color ?? sceneObject.FillColor,
+            SceneObjectKind.Composition => "#D979638E",
+            _ => sceneObject.FillColor,
+        });
+        return color.WithScaledAlpha(Alpha(sceneObject.ObjectOpacity));
     }
 
     private static SceneObject? FindRenderObject(

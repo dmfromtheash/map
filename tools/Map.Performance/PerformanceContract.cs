@@ -112,7 +112,15 @@ internal sealed record FixtureManifest(
     int GroupedObjectCount,
     int CanvasWidth,
     int CanvasHeight,
-    string Hash);
+    string Hash)
+{
+    public IReadOnlyDictionary<string, int> KindCounts { get; init; } =
+        new Dictionary<string, int>();
+
+    public int ExpensiveEffectCount { get; init; }
+
+    public int MaterializedMaskTileCount { get; init; }
+}
 
 internal sealed record MachineFingerprint(
     string Root,

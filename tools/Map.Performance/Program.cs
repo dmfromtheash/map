@@ -4,7 +4,7 @@ using Map.Performance;
 var options = PerformanceOptions.Parse(args);
 object report;
 bool gatePassed;
-if (options.Profile is "native-stage13a" or "native-stage13b")
+if (options.Profile is "native-stage13a" or "native-stage13b" or "native-stage13c" or "native-stage13d")
 {
     var nativeReport = NativeStage13ASmoke.Run(options);
     report = nativeReport;
@@ -47,6 +47,7 @@ else if (report is NativeStage13AReport native)
     Console.WriteLine(
         $"{options.Profile}: realized max={native.ObjectTree.MaxRealizedRows}, " +
         $"drag P95={native.Drag.InputToRenderP95:F3} ms, " +
+        $"overview P95={(native.Lod?.OverviewP95.ToString("F3") ?? "n/a")} ms, " +
         $"tree rebuilds during pointer updates={native.Drag.PointerMoveTreeRebuilds}, " +
         $"gate={(native.GatePassed ? "PASS" : "FAIL")}");
 }

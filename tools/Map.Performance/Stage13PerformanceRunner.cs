@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using Map.Core.Documents;
 using Map.Core.Editing;
 using Map.Presentation.ViewModels;
@@ -52,6 +53,25 @@ internal sealed class Stage13PerformanceRunner
                 .. MeasureCollectionStrategies(),
                 MeasureStressEdit(enforceGate: true),
             ],
+            "stage13c-baseline" =>
+            [
+                MeasureOverview(_fixture, "full-overview-simple-exact", enforceGate: false),
+                MeasureOverview(Stage13Fixtures.Mixed50K(_options.Seed),
+                    "full-overview-mixed-exact", enforceGate: false),
+                MeasureNormalMixed(enforceGate: false),
+                MeasurePictureReplay(_fixture, "picture-replay-simple"),
+                MeasurePictureReplay(Stage13Fixtures.Mixed50K(_options.Seed), "picture-replay-mixed"),
+            ],
+            "stage13c" =>
+            [
+                MeasureOverview(_fixture, "full-overview-simple-lod", enforceGate: true, useLod: true),
+                MeasureOverview(Stage13Fixtures.Mixed50K(_options.Seed),
+                    "full-overview-mixed-lod", enforceGate: true, useLod: true),
+                MeasureNormalMixed(enforceGate: true),
+                MeasureOverviewInvalidation(),
+                MeasureDrawAtlasProbe(),
+                MeasureVerticesProbe(),
+            ],
             "small-render" => [MeasureSmallViewportRender()],
             "hit-test" => [MeasurePointHitTest()],
             "marquee" => [MeasureMarquee()],
@@ -71,8 +91,10 @@ internal sealed class Stage13PerformanceRunner
             Limitations:
             [
                 "Stage 13A CPU render timing uses a fixed Skia raster surface; native input-to-present is a separate hidden-window smoke.",
-                "The baseline renderer exposes candidate and drawn-object counts but not exact Skia draw-call counts or a chunk-cache state yet.",
+                "Draw-call counters are semantic renderer operations; native Skia may fuse or expand them internally.",
                 "100K is a record-only stress boundary; thresholds in this report apply to the requested object count only.",
+                "DrawAtlas is measured only for compatible repeated bitmaps; the assets-free mixed fixture has no decoded stamp atlas input.",
+                "SKVertices is measured only as static triangles and is rejected for editable text/curves that first require tessellation.",
             ]);
     }
 
@@ -409,6 +431,336 @@ internal sealed class Stage13PerformanceRunner
     }
 
     private static double _consume;
+
+    private ProfileResult MeasureOverview(
+        Stage13Fixture fixture, string name, bool enforceGate, bool useLod = false)
+    {
+        const int width = 1_280;
+        const int height = 720;
+        var scale = Math.Min(
+            width / (double)fixture.Manifest.CanvasWidth,
+            height / (double)fixture.Manifest.CanvasHeight);
+        using var surface = CreateSurface(width, height);
+        var stats = new RenderStats();
+        using var objectCache = useLod ? new ObjectOverviewCache() : null;
+        void Render()
+        {
+            surface.Canvas.Clear(SKColors.Transparent);
+            surface.Canvas.Save();
+            surface.Canvas.Translate(
+                (float)((width - (fixture.Manifest.CanvasWidth * scale)) / 2),
+                (float)((height - (fixture.Manifest.CanvasHeight * scale)) / 2));
+            surface.Canvas.Scale((float)scale);
+            SceneRenderer.Render(surface.Canvas, fixture.Document, new RenderOptions
+            {
+                VisibleWorld = new WorldBounds(
+                    0, 0, fixture.Manifest.CanvasWidth, fixture.Manifest.CanvasHeight),
+                ViewScale = scale,
+                Stats = stats,
+                LodTier = useLod ? RenderLodTier.Overview : RenderLodTier.Exact,
+                ObjectCache = objectCache,
+            });
+            surface.Canvas.Restore();
+            surface.Canvas.Flush();
+        }
+
+        var timing = Measure(Render);
+        const string gate = "P95 <= 33.3 ms";
+        return new ProfileResult(
+            name,
+            enforceGate ? gate : "record-only Stage 13C baseline; final gate: " + gate,
+            !enforceGate || timing.P95 <= 33.3 && timing.Max <= 100,
+            timing,
+            new Dictionary<string, object?>
+            {
+                ["fixtureHash"] = fixture.Manifest.Hash,
+                ["totalObjects"] = fixture.Manifest.ObjectCount,
+                ["kindCounts"] = fixture.Manifest.KindCounts,
+                ["expensiveEffects"] = fixture.Manifest.ExpensiveEffectCount,
+                ["visibleCandidates"] = stats.ObjectCandidates,
+                ["objectsDrawn"] = stats.ObjectsDrawn,
+                ["missingAssets"] = stats.MissingAssets,
+                ["viewScale"] = scale,
+                ["exactObjects"] = stats.ExactObjects,
+                ["overviewObjects"] = stats.OverviewObjects,
+                ["overviewChunks"] = stats.OverviewChunks,
+                ["overviewBatches"] = stats.OverviewBatches,
+                ["drawCalls"] = stats.DrawCalls,
+                ["cacheHits"] = objectCache?.Hits ?? 0,
+                ["cacheMisses"] = objectCache?.Misses ?? 0,
+                ["cacheInvalidations"] = objectCache?.Invalidations ?? 0,
+                ["cacheItems"] = objectCache?.Count ?? 0,
+                ["cacheBytes"] = objectCache?.Bytes ?? 0,
+                ["lod"] = useLod ? "Overview" : "Exact",
+            });
+    }
+
+    private ProfileResult MeasureNormalMixed(bool enforceGate)
+    {
+        var fixture = Stage13Fixtures.Mixed50K(_options.Seed);
+        const int width = 1_280;
+        const int height = 720;
+        using var surface = CreateSurface(width, height);
+        var stats = new RenderStats();
+        var viewport = new WorldBounds(9_600, 9_600, 9_600 + width, 9_600 + height);
+        void Render()
+        {
+            surface.Canvas.Clear(SKColors.Transparent);
+            surface.Canvas.Save();
+            surface.Canvas.Translate((float)-viewport.Left, (float)-viewport.Top);
+            SceneRenderer.Render(surface.Canvas, fixture.Document, new RenderOptions
+            {
+                VisibleWorld = viewport,
+                ViewScale = 1,
+                Stats = stats,
+            });
+            surface.Canvas.Restore();
+            surface.Canvas.Flush();
+        }
+
+        var timing = Measure(Render);
+        const string gate = "P95 <= 16.7 ms";
+        return new ProfileResult(
+            "normal-zoom-mixed-exact",
+            enforceGate ? gate : "record-only Stage 13C baseline; final gate: " + gate,
+            !enforceGate || timing.P95 <= 16.7 && timing.Max <= 100,
+            timing,
+            new Dictionary<string, object?>
+            {
+                ["fixtureHash"] = fixture.Manifest.Hash,
+                ["totalObjects"] = fixture.Manifest.ObjectCount,
+                ["visibleCandidates"] = stats.ObjectCandidates,
+                ["objectsDrawn"] = stats.ObjectsDrawn,
+                ["missingAssets"] = stats.MissingAssets,
+                ["exactObjects"] = stats.ExactObjects,
+                ["drawCalls"] = stats.ObjectsDrawn,
+                ["stampInstances"] = stats.StampInstances,
+                ["repeatedAssetInstances"] = stats.RepeatedAssetInstances,
+                ["textObjects"] = stats.TextObjects,
+                ["vectorObjects"] = stats.VectorObjects,
+                ["compositionObjects"] = stats.CompositionObjects,
+                ["effectObjects"] = stats.EffectObjects,
+                ["visibleWorld"] = viewport.ToString(),
+                ["surface"] = $"{width}x{height}",
+                ["lod"] = "Exact",
+            });
+    }
+
+    private ProfileResult MeasurePictureReplay(Stage13Fixture fixture, string name)
+    {
+        const int width = 1_280;
+        const int height = 720;
+        var scale = Math.Min(
+            width / (double)fixture.Manifest.CanvasWidth,
+            height / (double)fixture.Manifest.CanvasHeight);
+        using var recorder = new SKPictureRecorder();
+        var recording = recorder.BeginRecording(new SKRect(0, 0, width, height), useRTree: true);
+        recording.Translate(
+            (float)((width - (fixture.Manifest.CanvasWidth * scale)) / 2),
+            (float)((height - (fixture.Manifest.CanvasHeight * scale)) / 2));
+        recording.Scale((float)scale);
+        SceneRenderer.Render(recording, fixture.Document, new RenderOptions
+        {
+            VisibleWorld = new WorldBounds(
+                0, 0, fixture.Manifest.CanvasWidth, fixture.Manifest.CanvasHeight),
+            ViewScale = scale,
+        });
+        using var picture = recorder.EndRecording();
+        using var surface = CreateSurface(width, height);
+        var timing = Measure(() =>
+        {
+            surface.Canvas.Clear(SKColors.Transparent);
+            surface.Canvas.DrawPicture(picture);
+            surface.Canvas.Flush();
+        });
+        return new ProfileResult(
+            name,
+            "isolated replay probe; not an acceptance gate",
+            Passed: true,
+            timing,
+            new Dictionary<string, object?>
+            {
+                ["fixtureHash"] = fixture.Manifest.Hash,
+                ["approximateOperations"] = picture.ApproximateOperationCount,
+                ["approximateBytes"] = picture.ApproximateBytesUsed,
+                ["rtreeRecording"] = true,
+            });
+    }
+
+    private ProfileResult MeasureOverviewInvalidation()
+    {
+        const int width = 1_280;
+        const int height = 720;
+        var fixture = Stage13Fixtures.Simple(50_000, _options.Seed);
+        var scale = Math.Min(
+            width / (double)fixture.Manifest.CanvasWidth,
+            height / (double)fixture.Manifest.CanvasHeight);
+        using var surface = CreateSurface(width, height);
+        var cache = new ObjectOverviewCache(itemBudget: 512, byteBudget: 64L * 1024 * 1024);
+        var stats = new RenderStats();
+
+        void Render(MapDocument document)
+        {
+            surface.Canvas.Clear(SKColors.Transparent);
+            surface.Canvas.Save();
+            surface.Canvas.Scale((float)scale);
+            SceneRenderer.Render(surface.Canvas, document, new RenderOptions
+            {
+                VisibleWorld = new WorldBounds(0, 0,
+                    fixture.Manifest.CanvasWidth, fixture.Manifest.CanvasHeight),
+                ViewScale = scale,
+                LodTier = RenderLodTier.Overview,
+                ObjectCache = cache,
+                Stats = stats,
+            });
+            surface.Canvas.Restore();
+            surface.Canvas.Flush();
+        }
+
+        Render(fixture.Document);
+        Render(fixture.Document);
+        var target = fixture.PointTarget;
+        var replacement = MultiSelectionGeometry.Translate([target], 1, 1)[0];
+        var revised = new ReplaceObjectsCommand([target], [replacement], "Stage 13C cache probe")
+            .Apply(fixture.Document);
+        var missesBefore = cache.Misses;
+        var invalidationsBefore = cache.Invalidations;
+        var timing = Measure(() => Render(revised));
+        var misses = cache.Misses - missesBefore;
+        var invalidations = cache.Invalidations - invalidationsBefore;
+        var crossed = MultiSelectionGeometry.Translate([replacement], 5_000, 0)[0];
+        var crossedDocument = new ReplaceObjectsCommand(
+            [replacement], [crossed], "Stage 13C old/new chunk probe").Apply(revised);
+        var crossMissesBefore = cache.Misses;
+        var crossInvalidationsBefore = cache.Invalidations;
+        var crossTiming = Measure(() => Render(crossedDocument));
+        var crossMisses = cache.Misses - crossMissesBefore;
+        var crossInvalidations = cache.Invalidations - crossInvalidationsBefore;
+        var peakItems = cache.Count;
+        var peakBytes = cache.Bytes;
+        cache.Dispose();
+        var disposedItems = cache.Count;
+        var disposedBytes = cache.Bytes;
+
+        return new ProfileResult(
+            "overview-one-object-invalidation",
+            "same-chunk edit invalidates <= 1; cross-chunk edit invalidates <= 2; dispose is empty",
+            invalidations <= 1 && misses <= 1
+                && crossInvalidations <= 2 && crossMisses <= 2
+                && disposedItems == 0 && disposedBytes == 0,
+            crossTiming,
+            new Dictionary<string, object?>
+            {
+                ["cacheMissesAfterRevision"] = misses,
+                ["cacheInvalidationsAfterRevision"] = invalidations,
+                ["cacheMissesAfterCrossChunkMove"] = crossMisses,
+                ["cacheInvalidationsAfterCrossChunkMove"] = crossInvalidations,
+                ["peakItems"] = peakItems,
+                ["peakBytes"] = peakBytes,
+                ["itemsAfterDispose"] = disposedItems,
+                ["bytesAfterDispose"] = disposedBytes,
+                ["disposals"] = cache.Disposals,
+            });
+    }
+
+    private ProfileResult MeasureDrawAtlasProbe()
+    {
+        const int instanceCount = 8_000;
+        using var sourceSurface = CreateSurface(8, 8);
+        sourceSurface.Canvas.Clear(new SKColor(210, 80, 60, 255));
+        using var source = sourceSurface.Snapshot();
+        var sourceRects = Enumerable.Repeat(new SKRect(0, 0, 8, 8), instanceCount).ToArray();
+        var transforms = Enumerable.Range(0, instanceCount)
+            .Select(index => SKRotationScaleMatrix.CreateTranslation(
+                (index % 160) * 8,
+                (index / 160) * 8))
+            .ToArray();
+        using var atlasSurface = CreateSurface(1_280, 400);
+        using var paint = new SKPaint { IsAntialias = false };
+        var sampling = new SKSamplingOptions(SKFilterMode.Nearest, SKMipmapMode.None);
+        void DrawAtlas()
+        {
+            atlasSurface.Canvas.Clear(SKColors.Transparent);
+            atlasSurface.Canvas.DrawAtlas(source, sourceRects, transforms, sampling, paint);
+            atlasSurface.Canvas.Flush();
+        }
+
+        var atlasTiming = Measure(DrawAtlas);
+        using var loopSurface = CreateSurface(1_280, 400);
+        var loopTiming = Measure(() =>
+        {
+            loopSurface.Canvas.Clear(SKColors.Transparent);
+            for (var index = 0; index < instanceCount; index++)
+            {
+                var left = (index % 160) * 8;
+                var top = (index / 160) * 8;
+                loopSurface.Canvas.DrawImage(source, sourceRects[index],
+                    new SKRect(left, top, left + 8, top + 8), sampling, paint);
+            }
+            loopSurface.Canvas.Flush();
+        });
+        DrawAtlas();
+        using var atlasImage = atlasSurface.Snapshot();
+        using var loopImage = loopSurface.Snapshot();
+        using var atlasData = atlasImage.Encode(SKEncodedImageFormat.Png, 100);
+        using var loopData = loopImage.Encode(SKEncodedImageFormat.Png, 100);
+        var equalOutput = SHA256.HashData(atlasData.ToArray())
+            .SequenceEqual(SHA256.HashData(loopData.ToArray()));
+
+        return new ProfileResult(
+            "draw-atlas-compatible-stamps-probe",
+            "isolated candidate probe; selected only for decoded same-image compatible effects",
+            Passed: true,
+            atlasTiming,
+            new Dictionary<string, object?>
+            {
+                ["instances"] = instanceCount,
+                ["loopP95Ms"] = loopTiming.P95,
+                ["samePixelOutput"] = equalOutput,
+                ["decision"] = "not used by assets-free mixed fixture; retain as compatible stamp path candidate",
+            });
+    }
+
+    private ProfileResult MeasureVerticesProbe()
+    {
+        const int quadCount = 10_000;
+        var vertices = new SKPoint[quadCount * 6];
+        var colors = new SKColor[vertices.Length];
+        for (var index = 0; index < quadCount; index++)
+        {
+            var left = (index % 200) * 6f;
+            var top = (index / 200) * 6f;
+            var offset = index * 6;
+            vertices[offset] = new SKPoint(left, top);
+            vertices[offset + 1] = new SKPoint(left + 4, top);
+            vertices[offset + 2] = new SKPoint(left + 4, top + 4);
+            vertices[offset + 3] = new SKPoint(left, top);
+            vertices[offset + 4] = new SKPoint(left + 4, top + 4);
+            vertices[offset + 5] = new SKPoint(left, top + 4);
+            Array.Fill(colors, new SKColor(85, 119, 153, 255), offset, 6);
+        }
+
+        using var surface = CreateSurface(1_200, 300);
+        using var paint = new SKPaint { IsAntialias = false };
+        var timing = Measure(() =>
+        {
+            surface.Canvas.Clear(SKColors.Transparent);
+            surface.Canvas.DrawVertices(SKVertexMode.Triangles, vertices, colors, paint);
+            surface.Canvas.Flush();
+        });
+        return new ProfileResult(
+            "vertices-static-triangles-probe",
+            "isolated candidate probe; rejected for heterogeneous editable scene primitives",
+            Passed: true,
+            timing,
+            new Dictionary<string, object?>
+            {
+                ["quads"] = quadCount,
+                ["vertices"] = vertices.Length,
+                ["managedGeometryBytes"] = (long)vertices.Length * 8 + (long)colors.Length * 4,
+                ["decision"] = "rejected: text, curves, effects and compositions are not static triangulated geometry",
+            });
+    }
 
     private static void Consume(IReadOnlyList<SceneObject> objects)
     {

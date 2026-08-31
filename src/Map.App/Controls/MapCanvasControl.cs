@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Automation.Peers;
@@ -7,6 +8,7 @@ using Avalonia.Input;
 using Avalonia.Media;
 using Avalonia.Rendering.SceneGraph;
 using Avalonia.Skia;
+using Avalonia.VisualTree;
 using Map.Core.Editing;
 using Map.Presentation.ViewModels;
 using Map.Rendering;
@@ -32,6 +34,8 @@ public sealed class MapCanvasControl : Control
     private bool _visualInvalidationQueued;
     private Point _marqueePressScreen;
     private readonly TileImageCache _tileCache = new(512);
+    private readonly ObjectOverviewCache _objectCache = new(512, 64L * 1024 * 1024);
+    private readonly RenderStats _renderStats = new();
 
     public bool IsSpacePanHeld { get; set; }
 
@@ -42,6 +46,7 @@ public sealed class MapCanvasControl : Control
         Name = "CanvasControl";
         AutomationProperties.SetAutomationId(this, "MapCanvas");
         AutomationProperties.SetName(this, "Холст карты");
+        DetachedFromVisualTree += (_, _) => DisposeRenderCaches();
     }
 
     protected override AutomationPeer OnCreateAutomationPeer() => new MapCanvasAutomationPeer(this);
@@ -65,6 +70,34 @@ public sealed class MapCanvasControl : Control
     /// frame. It is used by the hidden Stage 13 native profile, never persisted or telemetered.
     /// </summary>
     public event EventHandler? FrameRendered;
+
+    public RenderLodTier LastLodTier { get; private set; } = RenderLodTier.Exact;
+    public double LastSceneRenderMilliseconds { get; private set; }
+    public int ObjectCacheCount => _objectCache.Count;
+    public long ObjectCacheBytes => _objectCache.Bytes;
+    public long ObjectCacheDisposals => _objectCache.Disposals;
+    public int TileCacheCount => _tileCache.Count;
+    public RenderStats LastRenderStats => _renderStats;
+
+    /// <summary>Own-process native-smoke hook; normal lifetime calls the same path on detach.</summary>
+    public void DisposeRenderCaches()
+    {
+        _tileCache.Dispose();
+        _objectCache.Dispose();
+    }
+
+    /// <summary>Own-process native-smoke pan through the same viewport/event/invalidation path.</summary>
+    public void PanByScreenDeltaForSmoke(double dx, double dy)
+    {
+        if (_editor is null)
+        {
+            return;
+        }
+
+        _editor.Session.Viewport.PanByScreenDelta(dx, dy);
+        ViewportChanged?.Invoke(this, EventArgs.Empty);
+        QueueVisualInvalidation();
+    }
 
     public void Attach(EditorViewModel editor)
     {
@@ -97,10 +130,10 @@ public sealed class MapCanvasControl : Control
         }
 
         _visualInvalidationQueued = true;
+        InvalidateVisual();
         Avalonia.Threading.Dispatcher.UIThread.Post(() =>
         {
             _visualInvalidationQueued = false;
-            InvalidateVisual();
         }, Avalonia.Threading.DispatcherPriority.Render);
     }
 
@@ -115,15 +148,22 @@ public sealed class MapCanvasControl : Control
 
         _editor.Session.Viewport.Resize(Bounds.Width, Bounds.Height);
         context.Custom(new SceneDrawOperation(
-            new Rect(0, 0, Bounds.Width, Bounds.Height), _editor, _tileCache,
+            new Rect(0, 0, Bounds.Width, Bounds.Height), _editor, _tileCache, _objectCache,
+            _renderStats,
             _isPanning || _isStroking || _isVectorDrawing || _isRegionSelecting
             || _dragStartWorld is not null,
-            () => FrameRendered?.Invoke(this, EventArgs.Empty)));
+            (tier, elapsedMilliseconds) =>
+            {
+                LastLodTier = tier;
+                LastSceneRenderMilliseconds = elapsedMilliseconds;
+                FrameRendered?.Invoke(this, EventArgs.Empty);
+            }));
     }
 
     private sealed class SceneDrawOperation(
-        Rect bounds, EditorViewModel editor, TileImageCache tileCache, bool fastPreview,
-        Action frameRendered) : ICustomDrawOperation
+        Rect bounds, EditorViewModel editor, TileImageCache tileCache,
+        ObjectOverviewCache objectCache, RenderStats renderStats, bool fastPreview,
+        Action<RenderLodTier, double> frameRendered) : ICustomDrawOperation
     {
         public Rect Bounds { get; } = bounds;
 
@@ -158,6 +198,13 @@ public sealed class MapCanvasControl : Control
             var renderDocument = editor.DragPreview is null
                 ? editor.RenderDocument
                 : editor.Session.Document;
+            var hasLiveObjectPreview = editor.DragPreview is not null;
+            var tier = viewport.Scale < 0.125
+                ? RenderLodTier.Overview
+                : fastPreview || hasLiveObjectPreview || editor.StrokePreview is not null
+                    ? RenderLodTier.Interactive
+                    : RenderLodTier.Exact;
+            var sceneStopwatch = Stopwatch.StartNew();
             SceneRenderer.Render(canvas, renderDocument, new Map.Rendering.RenderOptions
             {
                 SelectedObjectId = editor.CanvasWorkflowOpen ? null : editor.Session.SelectedObjectId,
@@ -171,15 +218,19 @@ public sealed class MapCanvasControl : Control
                     X, Y, bottomRight.X, bottomRight.Y),
                 ObjectOverrides = editor.DragPreview?.Proposed,
                 TileCache = tileCache,
+                ObjectCache = objectCache,
+                LodTier = tier,
                 Preview = editor.StrokePreview,
                 MaskEditLayerId = editor.MaskEditLayerId,
                 Stamps = editor.StampImages,
-                FastPreview = fastPreview || editor.StrokePreview is not null,
+                FastPreview = fastPreview || hasLiveObjectPreview || editor.StrokePreview is not null,
+                Stats = renderStats,
                 BoundaryOverlay = editor.CanvasBoundaryOverlay,
             });
+            sceneStopwatch.Stop();
 
             canvas.Restore();
-            frameRendered();
+            frameRendered(tier, sceneStopwatch.Elapsed.TotalMilliseconds);
         }
 
         public void Dispose()
