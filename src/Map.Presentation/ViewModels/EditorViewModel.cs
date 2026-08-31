@@ -4543,6 +4543,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             Text = source.Text,
             Composition = source.Composition,
             PlaceholderReason = source.PlaceholderReason,
+            OpaquePayload = source.OpaquePayload,
             ObjectOpacity = source.ObjectOpacity,
         };
 
@@ -4563,6 +4564,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             Text = source.Text,
             Composition = source.Composition,
             PlaceholderReason = source.PlaceholderReason,
+            OpaquePayload = source.OpaquePayload,
             ObjectOpacity = source.ObjectOpacity,
         };
 
@@ -5322,7 +5324,7 @@ public sealed partial class EditorViewModel : ViewModelBase
                 _lastAutosavedDocument = snapshot;
                 _lastAutosaveUtc = timestamp;
                 AutosaveState = AutosaveState.Saved;
-                _log.Info($"Autosaved document {snapshot.Id} revision {checkpoint.Revision}.");
+                _log.Info($"AUTOSAVE_SUCCEEDED revision={checkpoint.Revision}");
                 return true;
             }
             catch (Exception ex)
@@ -5330,7 +5332,7 @@ public sealed partial class EditorViewModel : ViewModelBase
                 // Autosave is a safety net, never a reason to close the editor. The exception is
                 // retained in the local diagnostic log and the next timer tick may retry.
                 AutosaveState = AutosaveState.Failed;
-                _log.Error($"Autosave of document {snapshot.Id} failed", ex);
+                _log.Error("AUTOSAVE_FAILED", ex);
                 return false;
             }
         }
@@ -5356,7 +5358,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             AutosaveState = AutosaveState.Failed;
-            _log.Error($"Autosave cleanup for document {Session.Document.Id} failed", ex);
+            _log.Error("AUTOSAVE_CLEANUP_FAILED", ex);
             return false;
         }
         finally
@@ -5418,7 +5420,7 @@ public sealed partial class EditorViewModel : ViewModelBase
                 RaiseSessionState();
 
                 _recent.Touch(path!, Session.Document.Id.Value, snapshot.Title, metadata.ModifiedUtc);
-                _log.Info($"Saved {path} (revision {checkpoint.Revision}).");
+                _log.Info($"SAVE_SUCCEEDED revision={checkpoint.Revision}");
                 return true;
             }
             catch (MapProjectSaveException ex)
@@ -5427,7 +5429,7 @@ public sealed partial class EditorViewModel : ViewModelBase
                 StatusDetail = ex.TempPath is null
                     ? "Не удалось сохранить файл. Документ остаётся открытым, данные не потеряны."
                     : $"Не удалось заменить основной файл. Документ остаётся открыт, recovery сохранён здесь: {ex.TempPath}";
-                _log.Error($"Save of {path} failed", ex);
+                _log.Error("SAVE_FAILED", ex);
                 return false;
             }
         }
@@ -5466,7 +5468,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             StatusDetail = "Не удалось удалить локальную recovery-копию. Документ остаётся открытым.";
-            _log.Error($"Recovery discard for document {Session.Document.Id} failed", ex);
+            _log.Error("RECOVERY_DISCARD_FAILED", ex);
             return false;
         }
         finally

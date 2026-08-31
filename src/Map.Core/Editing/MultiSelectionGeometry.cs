@@ -237,6 +237,7 @@ public static class MultiSelectionGeometry
             Text = source.Text,
             Composition = source.Composition,
             PlaceholderReason = source.PlaceholderReason,
+            OpaquePayload = source.OpaquePayload,
             ObjectOpacity = source.ObjectOpacity,
         };
 }

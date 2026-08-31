@@ -10,7 +10,7 @@ namespace Map.Persistence.Tests;
 public sealed class TiledLayerRoundTripTests
 {
     [Fact]
-    public void Stage2_scene_without_layer_types_opens_with_stable_base_and_object_layers()
+    public void Stage2_scene_without_layer_types_requires_copy_migration_with_stable_base()
     {
         using var workspace = new TempWorkspace();
         var path = workspace.File("stage2.mapproj");
@@ -74,8 +74,12 @@ public sealed class TiledLayerRoundTripTests
             }
         }
 
-        var first = MapProjectStore.Open(path).Document;
-        var second = MapProjectStore.Open(path).Document;
+        var inspection = MapProjectStore.Inspect(path);
+        Assert.Equal(ProjectFileStatus.MigrationRequired, inspection.Status);
+
+        var migratedPath = workspace.File("stage2-v2.mapproj");
+        var first = MapProjectStore.MigrateCopy(path, migratedPath).Project.Document;
+        var second = MapProjectStore.Open(migratedPath).Document;
 
         Assert.Equal(2, first.Layers.Count);
         Assert.IsType<BaseColorLayer>(first.Layers[0]);

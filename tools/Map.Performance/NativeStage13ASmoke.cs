@@ -510,6 +510,7 @@ public sealed class NativeSmokeApplication : Application
 
     private sealed class SmokePrompts : IUserPrompts
     {
+        public Task<bool> ConfirmMigrationCopyAsync() => Task.FromResult(false);
         public Task<CloseChoice> ConfirmCloseDirtyAsync(string documentTitle) =>
             Task.FromResult(CloseChoice.Cancel);
         public Task<bool> ConfirmRestoreCheckpointAsync(string checkpointName) => Task.FromResult(false);
@@ -532,6 +533,11 @@ public sealed class NativeSmokeApplication : Application
 
     private sealed class SmokeProjectStore : IProjectStore
     {
+        public ProjectFileInspection Inspect(string path) => MapProjectStore.Inspect(path);
+
+        public ProjectMigrationResult MigrateCopy(string sourcePath, string destinationPath) =>
+            MapProjectStore.MigrateCopy(sourcePath, destinationPath);
+
         public OpenedProject Open(string path) => throw new NotSupportedException();
         public void Save(MapDocument document, string path, SaveMetadata metadata, byte[] previewPng) =>
             throw new NotSupportedException();

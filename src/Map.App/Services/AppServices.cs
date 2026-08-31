@@ -81,6 +81,9 @@ public sealed class AvaloniaFilePicker(Window owner) : IFilePicker
 /// <summary>Modal user decisions as plain windows; no work is ever lost silently.</summary>
 public sealed class DialogPrompts(Window owner) : IUserPrompts
 {
+    public Task<bool> ConfirmMigrationCopyAsync() =>
+        Dispatcher.UIThread.InvokeAsync(() => MigrationPromptWindow.ShowAsync(owner));
+
     public Task<CloseChoice> ConfirmCloseDirtyAsync(string documentTitle) =>
         Dispatcher.UIThread.InvokeAsync(async () =>
         {

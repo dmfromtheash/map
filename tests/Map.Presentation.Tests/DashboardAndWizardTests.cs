@@ -132,8 +132,8 @@ public class DashboardViewModelTests
         store.OnOpen = _ => throw new MapProjectCorruptedException("scene.json does not match the checksum.");
 
         Assert.Null(dashboard.TryOpen(@"C:\maps\bad.mapproj"));
-        Assert.Contains("Не удалось открыть файл", dashboard.LastError);
-        Assert.Contains("не изменены", dashboard.LastError);
+        Assert.Contains("повреждён", dashboard.LastError);
+        Assert.Contains("проверку", dashboard.LastError);
     }
 
     [Fact]
@@ -143,8 +143,8 @@ public class DashboardViewModelTests
         store.OnOpen = _ => throw new UnsupportedSchemaVersionException(7);
 
         Assert.Null(dashboard.TryOpen(@"C:\maps\future.mapproj"));
-        Assert.Contains("схема 7", dashboard.LastError);
-        Assert.Contains("не изменён", dashboard.LastError);
+        Assert.Contains("более новой версией", dashboard.LastError);
+        Assert.Contains("не поддерживает", dashboard.LastError);
     }
 
     [Fact]

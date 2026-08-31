@@ -1,22 +1,35 @@
 # STATE HANDOFF
 
-## Актуально на 2026-08-31
+## Актуально на 2026-09-01
 
 Map — личное нативное offline-приложение владельца для его текущего Windows x64 ПК. Полезный
-production-код Stages 1–11 сохранён. Stages 12A–12C реализованы и проверены: именованные
+production-код Stages 1–11 сохранён. Stages 12A–12D реализованы и проверены: именованные
 контрольные точки, resize/crop/новая карта из региона и полноценный локальный export с отменой.
 Отменена только лишняя Stage 11
 программа для VM, универсальной чистой Windows, installer/updater, release candidate и
 многократной независимой приёмки.
 
-Следующий возможный этап — **Stage 12D: migrations и диагностика файла**. Он не начат и требует
-отдельного прямого запроса владельца.
+**Stage 12D: migrations и диагностика файла** выполнен по прямому запросу владельца в ветке
+`stage/12d-migrations-file-diagnostics`: canonical schema v2, явная copy-only миграция v1→v2,
+typed file diagnostics, unknown-object payload, async Dashboard flow и privacy-safe local log.
+Исходный v1 никогда не становится save/autosave target и не меняет bytes/timestamp.
+
+Свежая проверка Stage 12D на текущем worktree:
+
+```text
+Map.Persistence.Tests --filter FullyQualifiedName~Stage12D: PASS 8/8
+Map.Presentation.Tests --filter FullyQualifiedName~Stage12D: PASS 6/6
+dotnet build .\Map.slnx -c Release: PASS, 0 warnings, 0 errors
+native-stage12d: PASS — real hidden Avalonia/Win32 dashboard + migration prompt; safe Cancel;
+validated v2 copy opened clean; source unchanged; corruption/resource/future states distinct;
+UI responsive; window closed; unique temporary profile removed
+```
 
 ## Актуальная продуктовая база
 
 - Рабочий worktree:
   `C:\Users\Leshe\.codex\worktrees\stage10f-fonts-bindings\Map`.
-- Ветка: `stage/12c-full-export-cancel`.
+- Ветка: `stage/12d-migrations-file-diagnostics`.
 - Принятая стартовая база Stage 12C: `45252b944af8a059cc1a51c2dfb562a12385de22` — локальное
   принятие Stage 12B и исполняемый контракт Stage 12C поверх production commit `5863099`.
 - Результат Stage 12C записан одним локальным commit

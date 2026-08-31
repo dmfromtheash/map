@@ -68,7 +68,12 @@ public sealed class MainWindow : Window
         MinHeight = 640;
         Content = _host;
 
-        _dashboard = new DashboardViewModel(_store, _recent, _log);
+        _dashboard = new DashboardViewModel(
+            _store,
+            _recent,
+            _log,
+            new AvaloniaFilePicker(this),
+            new DialogPrompts(this));
         _autosaveTimer = new DispatcherTimer { Interval = TestMode.AutosaveInterval };
         _autosaveTimer.Tick += OnAutosaveTick;
 
@@ -152,7 +157,7 @@ public sealed class MainWindow : Window
         var document = await WizardWindow.ShowAsync(this);
         if (document is not null)
         {
-            _log.Info($"New map \"{document.Title}\" {document.Canvas.Width}x{document.Canvas.Height}.");
+            _log.Info("NEW_MAP_CREATED");
             ShowEditor(CreateEditor(document, path: null, startDirty: true));
         }
     }
@@ -166,15 +171,13 @@ public sealed class MainWindow : Window
         }
     }
 
-    private Task OpenPathAsync(string path)
+    private async Task OpenPathAsync(string path)
     {
-        var opened = _dashboard.TryOpen(path);
+        var opened = await _dashboard.TryOpenAsync(path);
         if (opened is not null)
         {
-            ShowEditor(CreateEditor(opened.Document, path, startDirty: false));
+            ShowEditor(CreateEditor(opened.Project.Document, opened.Path, startDirty: false));
         }
-
-        return Task.CompletedTask;
     }
 
     private Task RestoreAsync(RecoveryCard card)

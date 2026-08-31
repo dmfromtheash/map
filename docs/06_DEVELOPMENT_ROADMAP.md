@@ -10,6 +10,19 @@ Map развивается по пользовательским возможн�
 перенумерованы в Stage 12A–12D. Исторические commit, отчёты и названия 9B–9E остаются в Git, но
 новые ветки и задачи используют только номера Stage 12.
 
+## Stage 12D — migrations и диагностика файла — `FACT`, реализован
+
+- writer и строгий reader используют canonical `.mapproj` schema v2;
+- исторический v1 классифицируется до materialization и мигрируется только в новую проверенную
+  копию через registry `vN → vN+1`; source остаётся byte/timestamp-identical;
+- ранний untyped Stage 2 v1 получает deterministic BaseColor и явные Object layers;
+- unknown fields сохраняются в migration-copy, unknown object остаётся bounded Placeholder и
+  переживает обычный save/reopen;
+- Dashboard различает migration/future/not-map/corruption/resource/not-found/access/I/O,
+  не блокирует UI и добавляет в Recent только destination;
+- локальный diagnostics log bounded, без telemetry, абсолютных путей, raw exception/content;
+- адресные persistence/presentation tests и один hidden own-process Avalonia/Win32 smoke зелёные.
+
 ## Уже реализовано
 
 ### Stages 1–8 — основа редактора

@@ -20,10 +20,18 @@ public sealed class FakePrompts : IUserPrompts
     public CloseChoice NextCloseChoice { get; set; } = CloseChoice.Cancel;
     public bool NextRestoreCheckpointConfirmation { get; set; }
     public bool NextDeleteCheckpointConfirmation { get; set; }
+    public bool NextMigrationConfirmation { get; set; }
     public List<string> Errors { get; } = [];
     public int CloseAsked { get; private set; }
     public int RestoreCheckpointAsked { get; private set; }
     public int DeleteCheckpointAsked { get; private set; }
+    public int MigrationAsked { get; private set; }
+
+    public Task<bool> ConfirmMigrationCopyAsync()
+    {
+        MigrationAsked++;
+        return Task.FromResult(NextMigrationConfirmation);
+    }
 
     public Task<CloseChoice> ConfirmCloseDirtyAsync(string documentTitle)
     {
@@ -88,7 +96,82 @@ public sealed class FakeProjectStore : IProjectStore
     public ManualResetEventSlim? AutosaveRelease { get; set; }
     public List<RecoveryCandidate> Candidates { get; } = [];
     public Func<string, OpenedProject>? OnOpen { get; set; }
+    public Func<string, ProjectFileInspection>? OnInspect { get; set; }
+    public Func<string, string, ProjectMigrationResult>? OnMigrate { get; set; }
     public int SaveCalls { get; private set; }
+
+    public ProjectFileInspection Inspect(string path)
+    {
+        if (OnInspect is not null) return OnInspect(path);
+        try
+        {
+            return new ProjectFileInspection
+            {
+                Status = ProjectFileStatus.Ready,
+                Code = "FILE_READY",
+                Title = "Проект готов к открытию",
+                Message = "Проверка файла завершена.",
+                SourceSchema = MapProjectFormat.SchemaVersion,
+                Project = Open(path),
+            };
+        }
+        catch (FileNotFoundException)
+        {
+            return new ProjectFileInspection
+            {
+                Status = ProjectFileStatus.NotFound,
+                Code = "FILE_NOT_FOUND",
+                Title = "Файл не найден",
+                Message = "Выбранный файл больше недоступен.",
+            };
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return new ProjectFileInspection
+            {
+                Status = ProjectFileStatus.AccessDenied,
+                Code = "FILE_ACCESS_DENIED",
+                Title = "Нет доступа к файлу",
+                Message = "Проверьте права доступа к файлу.",
+            };
+        }
+        catch (UnsupportedSchemaVersionException ex)
+        {
+            return new ProjectFileInspection
+            {
+                Status = ProjectFileStatus.UnsupportedVersion,
+                Code = "FILE_UNSUPPORTED_VERSION",
+                Title = "Проект создан более новой версией Map",
+                Message = "Эта версия приложения не поддерживает схему проекта.",
+                SourceSchema = ex.SchemaVersion,
+                MaxSupportedSchema = MapProjectFormat.SchemaVersion,
+            };
+        }
+        catch (MapProjectException)
+        {
+            return new ProjectFileInspection
+            {
+                Status = ProjectFileStatus.Corrupted,
+                Code = "FILE_CORRUPTED",
+                Title = "Проект повреждён",
+                Message = "Структура проекта не прошла проверку.",
+            };
+        }
+        catch (IOException)
+        {
+            return new ProjectFileInspection
+            {
+                Status = ProjectFileStatus.IoFailure,
+                Code = "FILE_IO_FAILURE",
+                Title = "Не удалось прочитать файл",
+                Message = "Проверьте доступность файла.",
+            };
+        }
+    }
+
+    public ProjectMigrationResult MigrateCopy(string sourcePath, string destinationPath) =>
+        OnMigrate?.Invoke(sourcePath, destinationPath)
+        ?? throw new InvalidOperationException("No fake migration was configured.");
 
     public OpenedProject Open(string path)
     {

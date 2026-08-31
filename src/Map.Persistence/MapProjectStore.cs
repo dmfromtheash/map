@@ -16,7 +16,7 @@ namespace Map.Persistence;
 /// flush, and only then replace the target atomically. A failure before the replace leaves the
 /// last correct version untouched and is reported as an exception, never as success.
 /// </summary>
-public static class MapProjectStore
+public static partial class MapProjectStore
 {
     // Large sparse scenes must spend the fixed JSON budget on data, not presentation whitespace.
     // The container is machine-owned and the reader accepts either representation.
@@ -668,7 +668,10 @@ public static class MapProjectStore
         byte[] PreviewPng,
         IReadOnlyDictionary<string, byte[]> Tiles,
         IReadOnlyDictionary<string, byte[]> Assets,
-        IReadOnlyList<MapCheckpoint> Checkpoints) ReadAndValidate(string fullPath)
+        IReadOnlyList<MapCheckpoint> Checkpoints) ReadAndValidate(
+            string fullPath,
+            int expectedSchemaVersion = MapProjectFormat.SchemaVersion,
+            bool allowUnknownObjectKinds = false)
     {
         using var stream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read);
         MapProjectZipAdmission.Validate(stream);
@@ -707,7 +710,7 @@ public static class MapProjectStore
                     $"The container declares format \"{manifest.Format}\"; this is not a map project.");
             }
 
-            if (manifest.SchemaVersion != MapProjectFormat.SchemaVersion)
+            if (manifest.SchemaVersion != expectedSchemaVersion)
             {
                 throw new UnsupportedSchemaVersionException(manifest.SchemaVersion);
             }
@@ -728,6 +731,10 @@ public static class MapProjectStore
             }
 
             var scene = ParseJson<SceneDto>(sceneBytes, MapProjectFormat.SceneEntry);
+            if (expectedSchemaVersion == MapProjectFormat.SchemaVersion)
+            {
+                ValidateV2SceneShape(sceneBytes, MapProjectFormat.SceneEntry);
+            }
             if (!string.Equals(scene.DocumentId, manifest.DocumentId, StringComparison.OrdinalIgnoreCase))
             {
                 throw new MapProjectCorruptedException(
@@ -736,10 +743,19 @@ public static class MapProjectStore
 
             var assetManifest = ParseJson<AssetManifestDto>(
                 assetManifestBytes, MapProjectFormat.AssetManifestEntry);
+            if (expectedSchemaVersion == MapProjectFormat.SchemaVersion)
+            {
+                ValidateRequiredArray(
+                    assetManifestBytes, MapProjectFormat.AssetManifestEntry, "assets");
+            }
 
             var tiles = ReadAndValidateTiles(archive, scene);
             var assets = ReadAndValidateAssets(archive, assetManifest);
-            var checkpoints = ReadAndValidateCheckpoints(archive, manifest);
+            var checkpoints = ReadAndValidateCheckpoints(
+                archive,
+                manifest,
+                allowLegacyLayerTypes: expectedSchemaVersion == MapProjectFormat.LegacySchemaVersion,
+                allowUnknownObjectKinds);
             return (
                 manifest,
                 scene,
@@ -1113,7 +1129,10 @@ public static class MapProjectStore
     }
 
     private static IReadOnlyList<MapCheckpoint> ReadAndValidateCheckpoints(
-        ZipArchive archive, ManifestDto mainManifest)
+        ZipArchive archive,
+        ManifestDto mainManifest,
+        bool allowLegacyLayerTypes,
+        bool allowUnknownObjectKinds)
     {
         var checkpointArchiveEntries = archive.Entries
             .Where(entry => entry.FullName.StartsWith(
@@ -1146,6 +1165,11 @@ public static class MapProjectStore
 
         var catalog = ParseJson<CheckpointCatalogDto>(
             catalogBytes, MapProjectFormat.CheckpointCatalogEntry);
+        if (!allowLegacyLayerTypes)
+        {
+            ValidateRequiredArray(
+                catalogBytes, MapProjectFormat.CheckpointCatalogEntry, "checkpoints");
+        }
         if (catalog.Checkpoints is null || catalog.Checkpoints.Any(item => item is null))
         {
             throw new MapProjectCorruptedException(
@@ -1246,6 +1270,10 @@ public static class MapProjectStore
                         $"Checkpoint {id} scene does not match its checksum.");
                 }
                 var scene = ParseJson<SceneDto>(sceneBytes, sceneEntry);
+                if (!allowLegacyLayerTypes)
+                {
+                    ValidateV2SceneShape(sceneBytes, sceneEntry);
+                }
                 if (!string.Equals(scene.DocumentId, snapshotManifest.DocumentId,
                         StringComparison.OrdinalIgnoreCase))
                 {
@@ -1264,6 +1292,10 @@ public static class MapProjectStore
                 }
                 var assetManifest = ParseJson<AssetManifestDto>(
                     assetManifestBytes, assetManifestEntry);
+                if (!allowLegacyLayerTypes)
+                {
+                    ValidateRequiredArray(assetManifestBytes, assetManifestEntry, "assets");
+                }
 
                 var previewBytes = ReadEntry(archive, previewEntry);
                 if (!string.Equals(Sha256Hex(previewBytes),
@@ -1292,7 +1324,10 @@ public static class MapProjectStore
                 };
                 var snapshotDocument = ToDomain(
                     domainManifest, scene, assetManifest, tiles, assets,
-                    checkpoints: null, entryRoot: root);
+                    checkpoints: null,
+                    entryRoot: root,
+                    allowLegacyLayerTypes,
+                    allowUnknownObjectKinds);
                 checkpoints.Add(new MapCheckpoint(
                     id,
                     name,
@@ -1331,6 +1366,116 @@ public static class MapProjectStore
     }
 
     // ---------------------------------------------------------------- mapping
+
+    private static void ValidateRequiredArray(byte[] bytes, string entryName, string propertyName)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(bytes);
+            if (document.RootElement.ValueKind != JsonValueKind.Object
+                || !document.RootElement.TryGetProperty(propertyName, out var value)
+                || value.ValueKind != JsonValueKind.Array)
+            {
+                throw new MapProjectCorruptedException(
+                    $"schema v2 {entryName} requires an explicit {propertyName} array.");
+            }
+        }
+        catch (JsonException ex)
+        {
+            throw new MapProjectCorruptedException($"{entryName} is not valid JSON.", ex);
+        }
+    }
+
+    private static void ValidateV2SceneShape(byte[] bytes, string entryName)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(bytes);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("layers", out var layers)
+                || layers.ValueKind != JsonValueKind.Array
+                || !root.TryGetProperty("notes", out var notes)
+                || notes.ValueKind != JsonValueKind.Array)
+            {
+                throw new MapProjectCorruptedException(
+                    $"schema v2 {entryName} requires explicit layers and notes arrays.");
+            }
+
+            foreach (var layer in layers.EnumerateArray())
+            {
+                if (layer.ValueKind != JsonValueKind.Object
+                    || !layer.TryGetProperty("type", out var type)
+                    || type.ValueKind != JsonValueKind.String
+                    || !layer.TryGetProperty("objects", out var objects)
+                    || objects.ValueKind != JsonValueKind.Array)
+                {
+                    throw new MapProjectCorruptedException(
+                        $"schema v2 {entryName} requires every layer type and objects collection.");
+                }
+
+                var typeName = type.GetString();
+                var required = typeName switch
+                {
+                    "Brush" or "Land" => "tiles",
+                    "Grid" => "grids",
+                    _ => null,
+                };
+                if (required is not null
+                    && (!layer.TryGetProperty(required, out var collection)
+                        || collection.ValueKind != JsonValueKind.Array))
+                {
+                    throw new MapProjectCorruptedException(
+                        $"schema v2 {entryName} requires an explicit {required} array on {typeName} layers.");
+                }
+
+                if (layer.TryGetProperty("mask", out var mask)
+                    && mask.ValueKind != JsonValueKind.Null
+                    && (mask.ValueKind != JsonValueKind.Object
+                        || !mask.TryGetProperty("tiles", out var maskTiles)
+                        || maskTiles.ValueKind != JsonValueKind.Array))
+                {
+                    throw new MapProjectCorruptedException(
+                        $"schema v2 {entryName} requires an explicit mask tiles array.");
+                }
+
+                ValidateCompositionCollections(objects, entryName);
+            }
+        }
+        catch (JsonException ex)
+        {
+            throw new MapProjectCorruptedException($"{entryName} is not valid JSON.", ex);
+        }
+    }
+
+    private static void ValidateCompositionCollections(JsonElement objects, string entryName)
+    {
+        foreach (var item in objects.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object
+                || !item.TryGetProperty("composition", out var composition)
+                || composition.ValueKind == JsonValueKind.Null)
+            {
+                continue;
+            }
+
+            if (composition.ValueKind != JsonValueKind.Object)
+            {
+                throw new MapProjectCorruptedException(
+                    $"schema v2 {entryName} has a malformed composition.");
+            }
+            foreach (var collectionName in new[] { "items", "assets", "grids", "filters" })
+            {
+                if (!composition.TryGetProperty(collectionName, out var collection)
+                    || collection.ValueKind != JsonValueKind.Array)
+                {
+                    throw new MapProjectCorruptedException(
+                        $"schema v2 {entryName} requires composition {collectionName} arrays.");
+                }
+            }
+            ValidateCompositionCollections(composition.GetProperty("items"), entryName);
+        }
+    }
 
     private static AssetManifestDto ToAssetManifestDto(
         MapDocument document, string entryRoot = "") => new()
@@ -1449,6 +1594,13 @@ public static class MapProjectStore
         Text = sceneObject.Text is { } text ? ToTextDto(text) : null,
         Composition = sceneObject.Composition is { } composition ? ToCompositionDto(composition) : null,
         PlaceholderReason = sceneObject.PlaceholderReason,
+        OpaquePayload = sceneObject.OpaquePayload is { } opaque
+            ? new OpaqueSceneObjectPayloadDto
+            {
+                OriginalKind = opaque.OriginalKind,
+                RawJson = opaque.RawJson,
+            }
+            : null,
     };
 
     private static NoteDto ToNoteDto(MapNote note) => new()
@@ -1546,7 +1698,9 @@ public static class MapProjectStore
         IReadOnlyDictionary<string, byte[]> tileEntries,
         IReadOnlyDictionary<string, byte[]> assetEntries,
         IReadOnlyList<MapCheckpoint>? checkpoints = null,
-        string entryRoot = "")
+        string entryRoot = "",
+        bool allowLegacyLayerTypes = false,
+        bool allowUnknownObjectKinds = false)
     {
         // Explicit JSON null can overwrite any DTO default, so every object/array the mapping
         // walks is checked up front - a damaged file must produce a clear error, never an NRE.
@@ -1565,8 +1719,22 @@ public static class MapProjectStore
 
         try
         {
-            var legacyStage2 = scene.Layers.All(layer => layer.Type is null);
-            var layers = scene.Layers.Select(layer => ToLayer(layer, tileEntries, entryRoot)).ToList();
+            var legacyStage2 = allowLegacyLayerTypes && scene.Layers.All(layer => layer.Type is null);
+            if (allowLegacyLayerTypes
+                && !legacyStage2
+                && scene.Layers.Any(layer => layer.Type is null))
+            {
+                throw new MapProjectCorruptedException(
+                    "schema v1 mixes historical untyped and explicit layer shapes.");
+            }
+            if (!allowLegacyLayerTypes && scene.Layers.Any(layer => layer.Type is null))
+            {
+                throw new MapProjectCorruptedException(
+                    "schema v2 requires an explicit type on every layer.");
+            }
+
+            var layers = scene.Layers.Select(layer => ToLayer(
+                layer, tileEntries, entryRoot, allowUnknownObjectKinds)).ToList();
             if (legacyStage2)
             {
                 layers.Insert(0, new BaseColorLayer(
@@ -1599,7 +1767,10 @@ public static class MapProjectStore
     }
 
     private static MapLayer ToLayer(
-        LayerDto layer, IReadOnlyDictionary<string, byte[]> tileEntries, string entryRoot)
+        LayerDto layer,
+        IReadOnlyDictionary<string, byte[]> tileEntries,
+        string entryRoot,
+        bool allowUnknownObjectKinds)
     {
         var id = LayerId.Parse(RequireString(layer.Id, "layer id"));
         var name = RequireString(layer.Name, "layer name");
@@ -1613,7 +1784,7 @@ public static class MapProjectStore
         {
             null or "Object" => new ObjectLayer(
                 id, name, layer.Visible, layer.Locked, layer.Opacity,
-                [.. layer.Objects.Select(ToObject)], mask),
+                [.. layer.Objects.Select(item => ToObject(item, allowUnknownObjectKinds))], mask),
             "BaseColor" => new BaseColorLayer(
                 id, name, layer.Visible, layer.Locked, layer.Opacity,
                 RequireString(layer.Color, "base color")),
@@ -1636,9 +1807,9 @@ public static class MapProjectStore
         return result with { Blend = RequireString(layer.Blend, "layer blend") };
     }
 
-    private static SceneObject ToObject(SceneObjectDto dto) => new(
+    private static SceneObject ToObject(SceneObjectDto dto, bool allowUnknownObjectKinds = false) => new(
         ObjectId.Parse(RequireString(dto.Id, "object id")),
-        ParseKind(dto.Kind),
+        ParseKind(dto.Kind, allowUnknownObjectKinds),
         RequireString(dto.Name, "object name"),
         dto.X,
         dto.Y,
@@ -1678,9 +1849,45 @@ public static class MapProjectStore
         Line = dto.Line is { } line ? ToLine(line) : null,
         Shape = dto.Shape is { } shape ? ToShape(shape) : null,
         Text = dto.Text is { } text ? ToText(text) : null,
-        Composition = dto.Composition is { } composition ? ToComposition(composition) : null,
-        PlaceholderReason = dto.PlaceholderReason,
+        Composition = dto.Composition is { } composition
+            ? ToComposition(composition, allowUnknownObjectKinds)
+            : null,
+        PlaceholderReason = allowUnknownObjectKinds && !IsDefinedKind(dto.Kind)
+            ? "Неизвестный тип объекта сохранён как заполнитель."
+            : dto.PlaceholderReason,
+        OpaquePayload = ToOpaquePayload(dto, allowUnknownObjectKinds),
     };
+
+    private static OpaqueSceneObjectPayload? ToOpaquePayload(
+        SceneObjectDto dto,
+        bool allowUnknownObjectKinds)
+    {
+        string? originalKind = null;
+        string? rawJson = null;
+        if (allowUnknownObjectKinds && !IsDefinedKind(dto.Kind))
+        {
+            originalKind = RequireString(dto.Kind, "unknown object kind");
+            rawJson = JsonSerializer.Serialize(dto, JsonOptions);
+        }
+        else if (dto.OpaquePayload is { } opaque)
+        {
+            if (!string.Equals(dto.Kind, nameof(SceneObjectKind.Placeholder), StringComparison.Ordinal))
+            {
+                throw new MapProjectCorruptedException(
+                    "Only a Placeholder object may carry an opaque payload.");
+            }
+            originalKind = RequireString(opaque.OriginalKind, "opaque object original kind");
+            rawJson = RequireString(opaque.RawJson, "opaque object raw JSON");
+        }
+
+        if (rawJson is null) return null;
+        if (Encoding.UTF8.GetByteCount(rawJson) > OpaqueSceneObjectPayload.MaxUtf8Bytes)
+        {
+            throw new MapProjectResourceLimitException(
+                "Opaque object payload exceeds the bounded migration envelope.");
+        }
+        return new OpaqueSceneObjectPayload(originalKind!, rawJson);
+    }
 
     private static MapNote ToNote(NoteDto note) => new(
         NoteId.Parse(RequireString(note.Id, "note id")),
@@ -1742,12 +1949,14 @@ public static class MapProjectStore
         TextureScale = filter.TextureScale,
     };
 
-    private static EditableComposition ToComposition(EditableCompositionDto composition) => new(
+    private static EditableComposition ToComposition(
+        EditableCompositionDto composition,
+        bool allowUnknownObjectKinds = false) => new(
         CompositionId.Parse(RequireString(composition.Id, "composition id")),
         DocumentId.Parse(RequireString(composition.SourceDocumentId, "composition source document id")),
         RequireString(composition.Name, "composition name"),
         composition.SourceWidth, composition.SourceHeight,
-        [.. composition.Items.Select(ToObject)])
+        [.. composition.Items.Select(item => ToObject(item, allowUnknownObjectKinds))])
     {
         AnchorX = composition.AnchorX,
         AnchorY = composition.AnchorY,
@@ -2191,13 +2400,21 @@ public static class MapProjectStore
     /// Strict kind parse: only names this version defines. TryParse alone would accept numeric
     /// strings outside the enum (the Stage 1 Fix 02 lesson applied to scene content).
     /// </summary>
-    private static SceneObjectKind ParseKind(string? kind)
+    private static bool IsDefinedKind(string? kind) =>
+        kind is not null
+        && Enum.TryParse<SceneObjectKind>(kind, ignoreCase: false, out var parsed)
+        && Enum.IsDefined(parsed);
+
+    private static SceneObjectKind ParseKind(string? kind, bool allowUnknownObjectKinds = false)
     {
-        if (kind is not null
-            && Enum.TryParse<SceneObjectKind>(kind, ignoreCase: false, out var parsed)
-            && Enum.IsDefined(parsed))
+        if (IsDefinedKind(kind))
         {
-            return parsed;
+            return Enum.Parse<SceneObjectKind>(kind!, ignoreCase: false);
+        }
+
+        if (allowUnknownObjectKinds && !string.IsNullOrWhiteSpace(kind))
+        {
+            return SceneObjectKind.Placeholder;
         }
 
         throw new MapProjectCorruptedException(

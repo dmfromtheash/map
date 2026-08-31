@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace Map.Persistence.Container;
@@ -183,6 +184,16 @@ internal sealed class SceneObjectDto
     [JsonPropertyName("placeholderReason")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? PlaceholderReason { get; set; }
+    [JsonPropertyName("opaquePayload")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public OpaqueSceneObjectPayloadDto? OpaquePayload { get; set; }
+    [JsonExtensionData] public Dictionary<string, JsonElement>? ExtensionData { get; set; }
+}
+
+internal sealed class OpaqueSceneObjectPayloadDto
+{
+    [JsonPropertyName("originalKind")] public string OriginalKind { get; set; } = "";
+    [JsonPropertyName("rawJson")] public string RawJson { get; set; } = "";
 }
 
 internal sealed class EditableCompositionDto

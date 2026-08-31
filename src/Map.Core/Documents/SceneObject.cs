@@ -14,6 +14,34 @@ public enum SceneObjectKind
 }
 
 /// <summary>
+/// Bounded, persistence-agnostic envelope for a scene object whose original kind is not known by
+/// this build. The JSON is retained verbatim so saving, autosaving and checkpointing a migrated
+/// project cannot silently discard future or third-party object data.
+/// </summary>
+public sealed record OpaqueSceneObjectPayload
+{
+    public const int MaxUtf8Bytes = 256 * 1024;
+
+    public OpaqueSceneObjectPayload(string originalKind, string rawJson)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(originalKind);
+        ArgumentException.ThrowIfNullOrWhiteSpace(rawJson);
+
+        if (System.Text.Encoding.UTF8.GetByteCount(rawJson) > MaxUtf8Bytes)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(rawJson), $"Opaque object JSON exceeds {MaxUtf8Bytes} UTF-8 bytes.");
+        }
+
+        OriginalKind = originalKind;
+        RawJson = rawJson;
+    }
+
+    public string OriginalKind { get; }
+    public string RawJson { get; }
+}
+
+/// <summary>
 /// Appearance of a placed asset (kind == Stamp). The asset itself lives in the catalog or the
 /// container, addressed by content hash - the object never embeds pixels.
 /// </summary>
@@ -135,6 +163,9 @@ public sealed record SceneObject
 
     /// <summary>User-facing reason retained for a missing/incompatible pasted item.</summary>
     public string? PlaceholderReason { get; init; }
+
+    /// <summary>Original bounded payload retained only for a migrated unknown object.</summary>
+    public OpaqueSceneObjectPayload? OpaquePayload { get; init; }
 
     /// <summary>Whole-object opacity 0..1 (stamps expose it in the editor).</summary>
     public double ObjectOpacity { get; init; } = 1.0;

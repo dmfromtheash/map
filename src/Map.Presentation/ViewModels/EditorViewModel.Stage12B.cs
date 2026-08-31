@@ -307,7 +307,7 @@ public sealed partial class EditorViewModel
             _recent.Touch(path, extracted.Id.Value, extracted.Title, modifiedUtc);
             CloseCanvasWorkflow();
             StatusDetail = $"Создана независимая карта из региона: {path}. Исходная карта осталась открыта и не изменена.";
-            _log.Info($"Created region map {extracted.Id} at {path}.");
+            _log.Info("REGION_MAP_CREATED");
             return true;
         }
         catch (Exception ex) when (ex is MapProjectSaveException or IOException
@@ -315,7 +315,7 @@ public sealed partial class EditorViewModel
         {
             CanvasWorkflowError = "Не удалось создать файл региона. Исходная карта и прежний файл назначения не изменены.";
             StatusDetail = CanvasWorkflowError;
-            _log.Error($"Region map save to {path} failed", ex);
+            _log.Error("REGION_MAP_SAVE_FAILED", ex);
             return false;
         }
         finally

@@ -141,6 +141,7 @@ public static class SelectionHandles
             Text = before.Text,
             Composition = before.Composition,
             PlaceholderReason = before.PlaceholderReason,
+            OpaquePayload = before.OpaquePayload,
             ObjectOpacity = before.ObjectOpacity,
         };
     }
@@ -185,6 +186,7 @@ public static class SelectionHandles
             Text = before.Text,
             Composition = before.Composition,
             PlaceholderReason = before.PlaceholderReason,
+            OpaquePayload = before.OpaquePayload,
             ObjectOpacity = before.ObjectOpacity,
         };
     }

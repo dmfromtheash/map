@@ -33,6 +33,8 @@ public sealed class DashboardView : UserControl
     private readonly StackPanel _recoveryPanel = new() { Spacing = 10 };
     private readonly WrapPanel _recentPanel = new() { Orientation = Orientation.Horizontal };
     private readonly TextBlock _recentCount = new() { Name = "RecentCountText" };
+    private Button? _openButton;
+    private Button? _newButton;
 
     public DashboardView(
         DashboardViewModel dashboard,
@@ -132,6 +134,7 @@ public sealed class DashboardView : UserControl
     private Control BuildActionBar()
     {
         var newButton = Ui.AsyncButton("NewMapButton", "Новая карта", _newMapRequested, "primary");
+        _newButton = newButton;
         newButton.Content = new StackPanel
         {
             Orientation = Orientation.Horizontal,
@@ -151,6 +154,7 @@ public sealed class DashboardView : UserControl
             $"Создать новую карту  ({_shortcuts.Get(EditorShortcutSettings.Commands.NewMap)})");
 
         var openButton = Ui.AsyncButton("OpenFileButton", "Открыть проект", _openFileRequested);
+        _openButton = openButton;
         openButton.Content = new StackPanel
         {
             Orientation = Orientation.Horizontal,
@@ -213,6 +217,8 @@ public sealed class DashboardView : UserControl
 
     private void Rebuild()
     {
+        if (_openButton is not null) _openButton.IsEnabled = !_dashboard.IsBusy;
+        if (_newButton is not null) _newButton.IsEnabled = !_dashboard.IsBusy;
         BuildError();
         BuildRecovery();
         BuildRecent();
@@ -262,6 +268,7 @@ public sealed class DashboardView : UserControl
                 "Восстановить",
                 () => _restoreRequested(captured),
                 "primary");
+            restore.IsEnabled = !_dashboard.IsBusy;
 
             var discard = Ui.TextButton(
                 index == 0 ? "DiscardButton" : $"DiscardButton{index}",
@@ -269,6 +276,7 @@ public sealed class DashboardView : UserControl
                 () => _dashboard.Discard(captured),
                 "destructive");
             discard.Margin = new Thickness(16, 0, 0, 0);
+            discard.IsEnabled = !_dashboard.IsBusy;
             ToolTip.SetTip(discard, "Удалить несохранённую копию. Исходный файл не изменится.");
 
             _recoveryPanel.Children.Add(new Border
@@ -356,6 +364,7 @@ public sealed class DashboardView : UserControl
             Width = CardWidth,
             Height = ThumbnailHeight + 66,
             Margin = new Thickness(0, 0, 16, 16),
+            IsEnabled = !_dashboard.IsBusy,
             Content = new StackPanel
             {
                 Spacing = 10,
@@ -408,7 +417,7 @@ public sealed class DashboardView : UserControl
             Name = $"RecentCard{index}",
             Width = CardWidth,
             Margin = new Thickness(0, 0, 16, 16),
-            IsEnabled = card.IsAvailable,
+            IsEnabled = card.IsAvailable && !_dashboard.IsBusy,
             Content = new StackPanel { Children = { thumbnail, footer } },
         }.Classed("map-card");
 

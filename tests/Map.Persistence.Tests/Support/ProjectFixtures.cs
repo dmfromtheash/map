@@ -135,6 +135,7 @@ public static class ProjectFixtures
                     Assert.Equivalent(expectedObject.Text, actualObject.Text, strict: true);
                     Assert.Equivalent(expectedObject.Composition, actualObject.Composition, strict: true);
                     Assert.Equal(expectedObject.PlaceholderReason, actualObject.PlaceholderReason);
+                    Assert.Equal(expectedObject.OpaquePayload, actualObject.OpaquePayload);
                 }
             }
 

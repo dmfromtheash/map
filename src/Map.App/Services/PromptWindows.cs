@@ -6,6 +6,69 @@ using Map.Presentation.Services;
 
 namespace Map.App.Services;
 
+/// <summary>Explicit v1 migration choice; cancelling is the safe default.</summary>
+public sealed class MigrationPromptWindow : Window
+{
+    private bool _confirmed;
+
+    public MigrationPromptWindow()
+    {
+        Title = "Нужно обновить копию проекта";
+        Name = "MigrationPromptWindow";
+        Width = 520;
+        SizeToContent = SizeToContent.Height;
+        WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        CanResize = false;
+
+        var create = new Button
+        {
+            Name = "CreateMigratedCopyButton",
+            Content = "Создать копию и открыть",
+            MinWidth = 190,
+        };
+        create.Click += (_, _) => { _confirmed = true; Close(); };
+        var cancel = new Button
+        {
+            Name = "CancelMigrationButton",
+            Content = "Отмена",
+            IsDefault = true,
+            IsCancel = true,
+            MinWidth = 110,
+        };
+        cancel.Click += (_, _) => Close();
+        Opened += (_, _) => cancel.Focus();
+
+        Content = new StackPanel
+        {
+            Margin = new Thickness(20),
+            Spacing = 16,
+            Children =
+            {
+                new TextBlock
+                {
+                    Name = "MigrationPromptText",
+                    Text = "Исходный файл останется без изменений. Map создаст новую копию формата v2.",
+                    TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+                },
+                new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                    Spacing = 10,
+                    Children = { cancel, create },
+                },
+            },
+        };
+    }
+
+    public static async Task<bool> ShowAsync(Window owner)
+    {
+        var window = new MigrationPromptWindow();
+        await window.ShowDialog(owner);
+        return window._confirmed;
+    }
+}
+
 /// <summary>Save / Don't save / Cancel for a dirty document.</summary>
 public sealed class ClosePromptWindow : Window
 {

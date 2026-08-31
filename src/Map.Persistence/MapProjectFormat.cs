@@ -1,10 +1,11 @@
 namespace Map.Persistence;
 
-/// <summary>Constants of the .mapproj v1 container (docs/05, DEC-005).</summary>
+/// <summary>Constants of the current .mapproj container (docs/05, DEC-005).</summary>
 public static class MapProjectFormat
 {
     public const string FormatId = "map-project";
-    public const int SchemaVersion = 1;
+    public const int LegacySchemaVersion = 1;
+    public const int SchemaVersion = 2;
     public const string Extension = ".mapproj";
 
     public const string ManifestEntry = "manifest.json";
@@ -17,7 +18,7 @@ public static class MapProjectFormat
     public const string CheckpointPrefix = "checkpoints/";
     public const string CheckpointCatalogEntry = "checkpoints/catalog.json";
 
-    /// <summary>Every entry a v1 container must contain.</summary>
+    /// <summary>Every supported container must contain these canonical entries.</summary>
     public static readonly IReadOnlyList<string> RequiredEntries =
     [
         ManifestEntry,

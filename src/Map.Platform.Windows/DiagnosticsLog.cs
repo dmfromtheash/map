@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace Map.Platform.Windows;
 
@@ -7,7 +8,7 @@ namespace Map.Platform.Windows;
 /// exceptions. It never records document content and never sends anything anywhere (docs/04
 /// "diagnostics without telemetry").
 /// </summary>
-public sealed class DiagnosticsLog
+public sealed partial class DiagnosticsLog
 {
     private const long MaxBytes = 256 * 1024;
 
@@ -26,7 +27,7 @@ public sealed class DiagnosticsLog
     public void Info(string message) => Write("INFO", message);
 
     public void Error(string message, Exception? exception = null) =>
-        Write("ERROR", exception is null ? message : $"{message}: {exception}");
+        Write("ERROR", exception is null ? message : $"exception={exception.GetType().Name} {message}");
 
     private void Write(string level, string message)
     {
@@ -37,7 +38,7 @@ public sealed class DiagnosticsLog
                 RotateIfNeeded();
                 File.AppendAllText(
                     _path,
-                    $"{DateTimeOffset.UtcNow:O} [{level}] {message}{Environment.NewLine}",
+                    $"{DateTimeOffset.UtcNow:O} [{level}] {Sanitize(message)}{Environment.NewLine}",
                     Encoding.UTF8);
             }
         }
@@ -49,6 +50,16 @@ public sealed class DiagnosticsLog
         {
         }
     }
+
+    private static string Sanitize(string message)
+    {
+        var oneLine = message.Replace('\r', ' ').Replace('\n', ' ');
+        oneLine = WindowsAbsolutePath().Replace(oneLine, "[path-redacted]");
+        return oneLine.Length <= 1024 ? oneLine : oneLine[..1024];
+    }
+
+    [GeneratedRegex(@"(?i)(?:[a-z]:\\|\\\\)[^\r\n]*")]
+    private static partial Regex WindowsAbsolutePath();
 
     /// <summary>Keeps the log bounded: when the cap is hit, the current file becomes the single .old.</summary>
     private void RotateIfNeeded()

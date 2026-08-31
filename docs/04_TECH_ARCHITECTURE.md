@@ -51,6 +51,16 @@ Export ───────┘
 App связывает адаптеры, но Core не знает о них.
 ```
 
+### Stage 12D: граница открытия и миграции файла
+
+`Map.Persistence` сначала классифицирует контейнер через общий bounded ZIP/JSON admission. V2
+открывается полностью, v1 только предлагает последовательную `v1 → v2` migration-copy, future
+schema не понижается. Миграция пишет уникальный sibling temp, выполняет полный v2 read-back и
+публикует только в отсутствующий destination; source никогда не открывается на запись. Unknown
+object хранится в `Map.Core` как `Placeholder` с bounded immutable raw JSON без зависимости Core
+от persistence DTO. Dashboard выполняет inspection/migration асинхронно, а локальный diagnostics
+log получает только стабильные codes и тип исключения без абсолютных путей и содержимого карты.
+
 ## Модель редактирования
 
 - `MapDocument` — единственный источник истины.

@@ -4,7 +4,13 @@ using Map.Performance;
 var options = PerformanceOptions.Parse(args);
 object report;
 bool gatePassed;
-if (options.Profile is "native-stage13a" or "native-stage13b" or "native-stage13c" or "native-stage13d")
+if (options.Profile == "native-stage12d")
+{
+    var nativeReport = NativeStage12DSmoke.Run(options);
+    report = nativeReport;
+    gatePassed = nativeReport.GatePassed;
+}
+else if (options.Profile is "native-stage13a" or "native-stage13b" or "native-stage13c" or "native-stage13d")
 {
     var nativeReport = NativeStage13ASmoke.Run(options);
     report = nativeReport;

@@ -11,6 +11,15 @@ Map используется одним владельцем на одном П�
 - Сохранение проверяется реальным save/reopen, если оно затронуто.
 - Зелёная проверка не повторяется без нового изменения.
 
+### Stage 12D
+
+Файловый этап проверяется двумя адресными фильтрами `FullyQualifiedName~Stage12D`, одной Release-
+сборкой решения и одним профилем `native-stage12d`. Native smoke использует настоящее скрытое
+own-process окно (`ShowActivated=false`, `ShowInTaskbar=false`), только собственный visual tree и
+уникальный temporary profile; системный ввод, foreground activation и реальные данные владельца
+не используются. Обязательные утверждения включают неизменность source bytes/timestamp,
+create-new publication, полный v2 read-back, разные UI-состояния и отсутствие путей/content в логе.
+
 ## Не является обязательным
 
 - весь набор тестов;

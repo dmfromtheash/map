@@ -45,7 +45,7 @@ public class MapProjectRoundTripTests
         var root = manifest.RootElement;
 
         Assert.Equal(MapProjectFormat.FormatId, root.GetProperty("format").GetString());
-        Assert.Equal(1, root.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(MapProjectFormat.SchemaVersion, root.GetProperty("schemaVersion").GetInt32());
 
         // Both recorded checksums must match the actual stored bytes.
         var sceneBytes = ReadEntry(archive, MapProjectFormat.SceneEntry);

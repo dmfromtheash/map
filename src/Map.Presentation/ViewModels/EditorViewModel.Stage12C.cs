@@ -292,7 +292,7 @@ public sealed partial class EditorViewModel
             _exportResultText = result.OutputMode == ExportOutputMode.SingleImage
                 ? $"Готово: {result.DestinationPath}"
                 : $"Готов пакет ({result.FileCount - 1} тайлов): {result.DestinationPath}";
-            _log.Info($"Exported {result.OutputMode} to {result.DestinationPath}.");
+            _log.Info($"EXPORT_SUCCEEDED mode={result.OutputMode}");
             return true;
         }
         catch (OperationCanceledException)

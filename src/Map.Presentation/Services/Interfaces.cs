@@ -30,6 +30,8 @@ public interface IUserPrompts
 
     Task<bool> ConfirmDeleteCheckpointAsync(string checkpointName);
 
+    Task<bool> ConfirmMigrationCopyAsync();
+
     Task ShowErrorAsync(string title, string message);
 }
 
@@ -72,6 +74,10 @@ public interface IRecentMaps
 /// <summary>Persistence facade so view-models can be tested without touching the file system.</summary>
 public interface IProjectStore
 {
+    ProjectFileInspection Inspect(string path);
+
+    ProjectMigrationResult MigrateCopy(string sourcePath, string destinationPath);
+
     OpenedProject Open(string path);
 
     void Save(MapDocument document, string path, SaveMetadata metadata, byte[] previewPng);
@@ -91,6 +97,11 @@ public interface IProjectStore
 /// <summary>Production store: the real .mapproj pipeline with the production recovery journal.</summary>
 public sealed class ProjectStore(RecoveryJournal journal) : IProjectStore
 {
+    public ProjectFileInspection Inspect(string path) => MapProjectStore.Inspect(path);
+
+    public ProjectMigrationResult MigrateCopy(string sourcePath, string destinationPath) =>
+        MapProjectStore.MigrateCopy(sourcePath, destinationPath);
+
     public OpenedProject Open(string path) => MapProjectStore.Open(path);
 
     public void Save(MapDocument document, string path, SaveMetadata metadata, byte[] previewPng) =>
