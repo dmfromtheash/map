@@ -1,11 +1,28 @@
-# GitHub для Map
+# GitHub для Map — заморожено
+
+## Решение владельца от 2026-08-31
+
+**GitHub не трогать.** Это решение отменяет все более ранние операционные разрешения на setup,
+push и обновление issues/Project. До нового отдельного прямого запроса запрещены:
+
+- push/fetch/pull и создание или удаление remote-веток;
+- PR, issue, comments, close/reopen, labels и milestones;
+- GitHub Project, его поля, views и cards;
+- `gh auth refresh`, изменение token scopes и повторная device-code авторизация;
+- tag, release, publication и любые другие remote-записи.
+
+Локальная разработка, локальные ветки и прямо запрошенные локальные commits продолжаются. Наличие
+`origin` не является разрешением обращаться к нему.
 
 ## FACT — что есть сейчас
 
-- Локальный репозиторий: `C:\Projects\Map`.
+- Актуальный product-worktree:
+  `C:\Users\Leshe\.codex\worktrees\stage10f-fonts-bindings\Map`.
+- `C:\Projects\Map` — старый cleanup-checkout, не база новой функции.
 - `origin` настроен на `https://github.com/dmfromtheash/map.git`.
 - Репозиторий `dmfromtheash/map` существует и переведён в **private** до первого push.
-- `main` и `stage/12a-named-checkpoints` опубликованы; default branch — `main`.
+- `main`, `stage/12a-named-checkpoints` и `stage/12b-resize-crop-region` уже были опубликованы до
+  текущего запрета; default branch — `main`.
 - `.github/` отсутствует.
 - GitHub CLI авторизован как `dmfromtheash` по HTTPS.
 - Для новых commits Map используется repo-local адрес
@@ -13,12 +30,12 @@
   приватного email без переписывания истории.
 - Существующие `3-puti`, `ensi-bot`, `nri-archive` и другие репозитории принадлежат другим
   продуктам и не должны использоваться как remote для Map.
-- Текущий token пока не имеет `project`, поэтому список GitHub Projects недоступен.
+- Последнее известное состояние token не давало доступ к GitHub Projects; перепроверять или
+  расширять scope сейчас запрещено.
 - Созданы issues `#1`–`#4` для Stage 12A–12D.
-- GitHub Project `Map` ещё не создан; расширение scope запрошено и ждёт подтверждения device-code
-  на официальной странице GitHub.
+- GitHub Project `Map` не был подтверждён как созданный; setup остановлен.
 
-## PROPOSED — правильная связь
+## Исторически предложенная связь — не выполнять
 
 Используется одна простая цепочка:
 
@@ -59,7 +76,7 @@ Views:
 Одна карточка соответствует пользовательскому результату, а не каждому файлу, тесту или
 промежуточной проверке. Для текущего цикла достаточно четырёх основных issues: Stage 12A–12D.
 
-## Как использовать в stage
+## Как использовать после возможного будущего разрешения
 
 1. До начала кода найти существующую issue текущего stage и перевести её в `In progress`.
 2. В issue держать outcome, scope и короткие acceptance-критерии; не копировать туда весь prompt.
@@ -68,23 +85,11 @@ Views:
 5. `Done` ставится только после рабочего пользовательского сценария и локального commit.
 6. `PARTIAL` или `BLOCKED` отражается в issue и Project без ложного закрытия.
 
-## Оставшийся GitHub setup
+## Остаток
 
-Владелец 2026-08-31 прямо разрешил необходимые commits и push в `dmfromtheash/map`. Осталось:
-
-- расширить scope авторизации: `gh auth refresh -s project`;
-- создать user Project `Map`, его поля/views и добавить уже существующие issues `#1`–`#4`;
-- связать Project с repository.
-
-Setup уже разрешён владельцем. Текущая последовательность:
-
-```powershell
-gh auth refresh -s project
-gh project create --owner dmfromtheash --title Map
-gh project link <project-number> --owner dmfromtheash --repo Map
-```
-
-Правильные `main` и stage-ветка уже опубликованы. Старые и мусорные ветки на remote не отправлялись.
+Ничего не настраивать и не проверять. Если владелец когда-нибудь отдельно вернёт GitHub в scope,
+сначала заново прочитать это решение, уточнить точное разрешённое действие и проверить фактическое
+состояние read-only. Старые команды setup не являются действующим планом.
 
 ## Справка
 

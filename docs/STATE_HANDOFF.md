@@ -4,11 +4,12 @@
 
 Map — личное нативное offline-приложение владельца для его текущего Windows x64 ПК. Полезный
 production-код Stages 1–11 сохранён. Stage 12A — именованные контрольные точки — и Stage 12B —
-resize/crop и новая карта из региона — реализованы и проверены. Отменена только лишняя Stage 11
+resize/crop и новая карта из региона — реализованы, проверены и приняты владельцем. Отменена только лишняя Stage 11
 программа для VM, универсальной чистой Windows, installer/updater, release candidate и
 многократной независимой приёмки.
 
-Следующий этап — **Stage 12C: полноценный export и отмена**. Он не начат.
+Следующий этап — **Stage 12C: полноценный export и отмена**. Его исполняемый контракт подготовлен в
+`docs/STAGE_12C_FULL_EXPORT.md`, но реализация не начата.
 
 ## Актуальная продуктовая база
 
@@ -17,8 +18,8 @@ resize/crop и новая карта из региона — реализова�
 - Ветка: `stage/12b-resize-crop-region`.
 - База Stage 12B до изменения: `750326f967b650b402c67146ab195c2e49c7c4bc` — принятый
   результат `stage/12a-named-checkpoints`.
-- Результат Stage 12B: текущий `HEAD` этой ветки, один commit
-  `feat(stage-12b): add canvas resize and region extraction`.
+- Production-результат Stage 12B: `5863099ce7716812b231deb8dcfe496655a9bd56`, один commit
+  `feat(stage-12b): add canvas resize and region extraction`; принят владельцем 2026-08-31.
 - Консолидированный product/code checkpoint:
   `825d9df9a5fec345c30da009b8b00bb594dd20f1`.
 - Основной cleanup commit:
@@ -92,26 +93,16 @@ Worktree `fix/app-icon` остаётся owner-dirty и не изменялся.
 
 ## GitHub
 
-- `origin`: `https://github.com/dmfromtheash/map.git`;
-- repository `dmfromtheash/map` — private;
-- владелец прямо разрешил необходимые commits и push;
-- repo-local Git author использует официальный GitHub noreply-адрес владельца; глобальный приватный
-  email и защита аккаунта не меняются;
-- `main` остаётся на базе `e0010db`; результат Stage 12B публикуется только в
-  `stage/12b-resize-crop-region`;
-- default branch — `main`;
-- созданы issues [#1](https://github.com/dmfromtheash/map/issues/1),
-  [#2](https://github.com/dmfromtheash/map/issues/2),
-  [#3](https://github.com/dmfromtheash/map/issues/3) и
-  [#4](https://github.com/dmfromtheash/map/issues/4) для Stages 12A–12D;
-- issue #2 остаётся открытым для решения владельца после итогового комментария Stage 12B;
-- GitHub Project `Map` и issues 12A–12D настраиваются по `docs/GITHUB_PROJECTS.md`;
-- статус Project нельзя изменить текущим токеном без `read:project`; интерактивная авторизация не
-  запускалась.
+- Существующее состояние remote сохранено без изменений.
+- Владелец 2026-08-31 прямо решил: **GitHub не трогать**.
+- До нового отдельного разрешения запрещены push/fetch, PR, issue/comment/close, GitHub Project,
+  auth/scope, tag/release и любые другие сетевые действия с repository.
+- Локальные ветки и commits допустимы только в рамках прямо запрошенной локальной работы.
+- Подробная замороженная граница записана в `docs/GITHUB_PROJECTS.md`.
 
 Не привязывать Map к `nri-archive`, `ensi-bot`, `3-puti` или другому существующему продукту.
 
 ## Следующее единственное действие
 
-После решения владельца по Stage 12B начать **Stage 12C** только отдельным прямым запросом. Не
-переходить к export автоматически и не повторять уже зелёные проверки Stage 12B.
+По отдельному прямому запросу выполнить `docs/STAGE_12C_FULL_EXPORT.md` от принятой локальной базы.
+Не начинать Stage 12C автоматически, не повторять зелёные проверки Stage 12B и не трогать GitHub.
