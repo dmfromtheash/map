@@ -15,6 +15,7 @@ using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Map.App.Controls;
 using Map.App.Services;
 using Map.Assets;
@@ -64,7 +65,12 @@ public sealed class EditorView : UserControl
 
     // ------------------------------------------------------------- side lists
     private readonly StackPanel _layerList = new() { Spacing = 2 };
-    private readonly MultiSelectListControl _objectList = new() { Spacing = 2 };
+    private readonly ListBox _objectList = new()
+    {
+        Name = "ObjectList",
+        SelectionMode = SelectionMode.Multiple,
+    };
+    private readonly ContentControl _objectEmptyStateHost = new();
     private readonly StackPanel _assetList = new() { Spacing = 2 };
     private readonly StackPanel _noteList = new() { Spacing = 2 };
     private readonly StackPanel _checkpointList = new() { Spacing = 8 };
@@ -311,6 +317,8 @@ public sealed class EditorView : UserControl
     private Button _redoButton = null!;
     private Button _saveButton = null!;
     private Button _shortcutSettingsButton = null!;
+    private int _objectListRebuildCount;
+    private readonly HashSet<ObjectId> _objectSelectionSet = [];
 
     public EditorView(
         EditorViewModel editor,
@@ -357,6 +365,16 @@ public sealed class EditorView : UserControl
             SyncSidePanels();
             SyncContextArea();
         });
+        _editor.SceneInvalidated += (_, e) => Dispatcher.UIThread.Post(() =>
+        {
+            if (e.Has(EditorChangeReason.Selection))
+            {
+                SyncStatus();
+                SyncInspector();
+                SyncObjectListSelection();
+                SyncContextArea();
+            }
+        });
         DetachedFromVisualTree += (_, _) =>
         {
             _exportPreviewBitmap?.Dispose();
@@ -389,7 +407,30 @@ public sealed class EditorView : UserControl
 
     public MapCanvasControl Canvas => _canvas;
 
+    /// <summary>Stage 13 diagnostics: structure rebuilds, never pointer-render invalidations.</summary>
+    public int ObjectListRebuildCount => _objectListRebuildCount;
+
+    /// <summary>Actual Avalonia containers alive for the virtual Objects list.</summary>
+    public int ObjectListRealizedCount => _objectList.GetRealizedContainers().Count();
+
+    public int ObjectListLogicalCount =>
+        _objectList.ItemsSource is IReadOnlyCollection<ObjectTreeRow> rows ? rows.Count : 0;
+
     public bool IsNotesOpen => _sidePanel.IsVisible && _sideTabs.SelectedIndex == 3;
+
+    public void OpenObjects(bool focusSearch = false)
+    {
+        _sidePanel.IsVisible = true;
+        _sideTabs.SelectedIndex = 1;
+        if (focusSearch)
+        {
+            Dispatcher.UIThread.Post(() => _objectSearch.Focus(), DispatcherPriority.Input);
+        }
+    }
+
+    public void ScrollObjectsTo(int index) => _objectList.ScrollIntoView(index);
+
+    public void SetObjectSearchText(string query) => _objectSearch.Text = query ?? "";
 
     public void OpenAssetCatalog(bool focusSearch = false)
     {
@@ -2267,6 +2308,14 @@ public sealed class EditorView : UserControl
         _selectionCountText.Classes.Add("role-caption");
         _selectionCountText.TextWrapping = TextWrapping.Wrap;
 
+        AutomationProperties.SetName(_objectList, "Список объектов");
+        _objectList.ItemTemplate = new FuncDataTemplate<ObjectTreeRow>(
+            row => row is not null,
+            (_, _) => new RecyclingObjectTreeRow(this),
+            supportsRecycling: true);
+        _objectList.ContainerPrepared += (_, e) => NameObjectContainer(e.Container, e.Index);
+        _objectList.ContainerIndexChanged += (_, e) => NameObjectContainer(e.Container, e.NewIndex);
+
         // The compact type filter Ctrl+A honours together with the search box above it.
         var filterStrip = new WrapPanel { };
         foreach (var filter in new[]
@@ -2302,9 +2351,8 @@ public sealed class EditorView : UserControl
             $"Выбрать видимые незаблокированные объекты по текущему поиску и фильтру типа " +
             $"({_editor.Shortcuts.Get(EditorShortcutSettings.Commands.SelectAll)}).");
 
-        var body = new StackPanel
+        var header = new StackPanel
         {
-            Margin = new Thickness(12, 10, 12, 18),
             Spacing = 10,
             Children =
             {
@@ -2312,30 +2360,40 @@ public sealed class EditorView : UserControl
                 filterStrip,
                 selectAll,
                 _selectionCountText,
-                _objectList,
-                new Border
-                {
-                    Child = new StackPanel
-                    {
-                        Spacing = 6,
-                        Children =
-                        {
-                            new TextBlock { Text = "Композиции" }.Classed("role-panel"),
-                            Ui.TextButton("MakeCompositionButton", "Собрать из выделенного",
-                                () => _editor.CreateEditableComposition(), "compact"),
-                            Ui.TextButton("PasteCompositionButton", "Вставить композицию",
-                                _editor.PasteComposition, "compact"),
-                        },
-                    },
-                }.Classed("group"),
             },
         };
 
-        return new ScrollViewer
+        var compositionActions = new Border
         {
-            HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
-            Content = body,
+            Child = new StackPanel
+            {
+                Spacing = 6,
+                Children =
+                {
+                    new TextBlock { Text = "Композиции" }.Classed("role-panel"),
+                    Ui.TextButton("MakeCompositionButton", "Собрать из выделенного",
+                        () => _editor.CreateEditableComposition(), "compact"),
+                    Ui.TextButton("PasteCompositionButton", "Вставить композицию",
+                        _editor.PasteComposition, "compact"),
+                },
+            },
+        }.Classed("group");
+
+        var listHost = new Grid
+        {
+            Children = { _objectList, _objectEmptyStateHost },
         };
+
+        var body = new Grid
+        {
+            Margin = new Thickness(12, 10, 12, 18),
+            RowDefinitions = new RowDefinitions("Auto,*,Auto"),
+            RowSpacing = 10,
+            Children = { header, listHost, compositionActions },
+        };
+        Grid.SetRow(listHost, 1);
+        Grid.SetRow(compositionActions, 2);
+        return body;
     }
 
     private Control BuildAssetsTab()
@@ -5169,7 +5227,8 @@ public sealed class EditorView : UserControl
 
     private void SyncObjectList()
     {
-        _objectList.Children.Clear();
+        _objectListRebuildCount++;
+        RefreshObjectSelectionSet();
         SyncObjectFilterButtons();
         _selectionCountText.Text = _editor.SelectionCount == 0
             ? "Ничего не выбрано"
@@ -5179,25 +5238,23 @@ public sealed class EditorView : UserControl
         if (rows.Count == 0)
         {
             var hasAnyObject = _editor.Layers.OfType<ObjectLayer>().Any(layer => layer.Objects.Count > 0);
-            _objectList.Children.Add(Ui.EmptyState(
+            _objectEmptyStateHost.Content = Ui.EmptyState(
                 "NoObjectsText",
                 MapIcons.Objects,
                 hasAnyObject ? "Ничего не найдено" : "На карте пока нет объектов",
                 hasAnyObject
                     ? "Измените запрос или фильтр типа."
-                    : "Добавьте объект инструментом «Линия», «Фигура», «Текст» или из каталога ассетов."));
+                    : "Добавьте объект инструментом «Линия», «Фигура», «Текст» или из каталога ассетов.");
+            _objectEmptyStateHost.IsVisible = true;
+            _objectList.IsVisible = false;
+            _objectList.ItemsSource = Array.Empty<ObjectTreeRow>();
             return;
         }
 
-        foreach (var row in rows)
-        {
-            _objectList.Children.Add(row.Kind switch
-            {
-                ObjectTreeRowKind.Breadcrumb => BuildGroupBreadcrumbRow(row),
-                ObjectTreeRowKind.Group => BuildGroupRow(row),
-                _ => BuildObjectRow(row),
-            });
-        }
+        _objectEmptyStateHost.IsVisible = false;
+        _objectList.IsVisible = true;
+        _objectList.ItemsSource = rows;
+        Dispatcher.UIThread.Post(SyncObjectListSelection, DispatcherPriority.Loaded);
     }
 
     /// <summary>The breadcrumb of an open group: the way back plus the group's own name.</summary>
@@ -5244,7 +5301,7 @@ public sealed class EditorView : UserControl
             () =>
             {
                 _editor.SelectGroup(groupId);
-                SyncObjectList();
+                SyncObjectListSelection();
                 SyncContextArea();
             },
             $"Группа «{row.Title}» · {row.Subtitle}",
@@ -5283,7 +5340,7 @@ public sealed class EditorView : UserControl
             () =>
             {
                 _editor.SelectObject(captured.Id, additive: _objectRowCtrl);
-                SyncObjectList();
+                SyncObjectListSelection();
                 SyncContextArea();
             },
             $"{sceneObject.Name} · {EditorLabels.ObjectKind(sceneObject.Kind)}");
@@ -5305,39 +5362,124 @@ public sealed class EditorView : UserControl
         }
     }
 
-    /// <summary>
-    /// The objects list container. Its automation peer reports a List that supports multiple
-    /// selection, so UI Automation sees the multi-selection the rows visually carry.
-    /// </summary>
-    private sealed class MultiSelectListControl : StackPanel
+    private void RefreshObjectSelectionSet()
     {
-        public MultiSelectListControl()
+        _objectSelectionSet.Clear();
+        _objectSelectionSet.UnionWith(_editor.Session.SelectedObjectIds);
+    }
+
+    private bool IsObjectTreeRowSelected(ObjectTreeRow row) => row.Kind switch
+    {
+        ObjectTreeRowKind.Object or ObjectTreeRowKind.GroupChild =>
+            row.Object is { } sceneObject && _objectSelectionSet.Contains(sceneObject.Id),
+        ObjectTreeRowKind.Group =>
+            row.MemberIds is { Count: > 0 } members
+            && members.All(_objectSelectionSet.Contains),
+        _ => false,
+    };
+
+    /// <summary>
+    /// Selection-only notifications touch only realized containers. The ItemsSource and its
+    /// tens of thousands of logical rows stay intact.
+    /// </summary>
+    private void SyncObjectListSelection()
+    {
+        RefreshObjectSelectionSet();
+        if (_objectList.ItemsSource is not IReadOnlyList<ObjectTreeRow> rows)
         {
-            Name = "ObjectList";
-            AutomationProperties.SetName(this, "Список объектов");
+            return;
         }
 
-        protected override Avalonia.Automation.Peers.AutomationPeer OnCreateAutomationPeer() =>
-            new MultiSelectListPeer(this);
-
-        private sealed class MultiSelectListPeer(MultiSelectListControl owner)
-            : Avalonia.Automation.Peers.ControlAutomationPeer(owner),
-              Avalonia.Automation.Provider.ISelectionProvider
+        foreach (var container in _objectList.GetRealizedContainers())
         {
-            public bool CanSelectMultiple => true;
+            var index = _objectList.IndexFromContainer(container);
+            if (index < 0 || index >= rows.Count)
+            {
+                continue;
+            }
 
-            public bool IsSelectionRequired => false;
+            var selected = IsObjectTreeRowSelected(rows[index]);
+            if (container is ListBoxItem item)
+            {
+                item.IsSelected = selected;
+            }
 
-            public IReadOnlyList<Avalonia.Automation.Peers.AutomationPeer> GetSelection() =>
-                [.. owner.Children
-                    .SelectMany(child => child is Border host && host.Child is DockPanel panel
-                        ? panel.Children.OfType<ToggleButton>()
-                        : child is ToggleButton toggle ? [toggle] : [])
-                    .Where(toggle => toggle.IsChecked == true)
-                    .Select(Avalonia.Automation.Peers.ControlAutomationPeer.CreatePeerForElement)];
+            container.GetVisualDescendants()
+                .OfType<RecyclingObjectTreeRow>()
+                .FirstOrDefault()
+                ?.RefreshSelection();
+        }
+    }
 
-            protected override Avalonia.Automation.Peers.AutomationControlType GetAutomationControlTypeCore() =>
-                Avalonia.Automation.Peers.AutomationControlType.List;
+    private void NameObjectContainer(Control? container, int index)
+    {
+        if (container is not ListBoxItem item
+            || _objectList.ItemsSource is not IReadOnlyList<ObjectTreeRow> rows
+            || index < 0
+            || index >= rows.Count)
+        {
+            return;
+        }
+
+        var row = rows[index];
+        var name = row.Kind switch
+        {
+            ObjectTreeRowKind.Breadcrumb => $"Открыта группа «{row.Title}», {row.Subtitle}",
+            ObjectTreeRowKind.Group => $"Группа «{row.Title}», {row.Subtitle}",
+            _ => $"{row.Title} · {row.Subtitle}",
+        };
+        AutomationProperties.SetName(item, name);
+        item.IsSelected = IsObjectTreeRowSelected(row);
+    }
+
+    /// <summary>
+    /// A recycled data-template host. Avalonia reuses the host/container while the bounded row
+    /// content is rebuilt from the current DataContext, so no click handler can retain a scrolled-
+    /// away object.
+    /// </summary>
+    private sealed class RecyclingObjectTreeRow : ContentControl
+    {
+        private readonly EditorView _owner;
+
+        public RecyclingObjectTreeRow(EditorView owner)
+        {
+            _owner = owner;
+            DataContextChanged += (_, _) => RefreshRow();
+        }
+
+        public void RefreshSelection()
+        {
+            if (DataContext is not ObjectTreeRow row || Content is not Control content)
+            {
+                return;
+            }
+
+            var selected = _owner.IsObjectTreeRowSelected(row);
+            if (content is Button button)
+            {
+                Ui.SetSelected(button, selected);
+            }
+            else if (content is Border border)
+            {
+                Ui.SetStructureSelected(border, selected);
+            }
+        }
+
+        private void RefreshRow()
+        {
+            if (DataContext is not ObjectTreeRow row)
+            {
+                Content = null;
+                return;
+            }
+
+            Content = row.Kind switch
+            {
+                ObjectTreeRowKind.Breadcrumb => _owner.BuildGroupBreadcrumbRow(row),
+                ObjectTreeRowKind.Group => _owner.BuildGroupRow(row),
+                _ => _owner.BuildObjectRow(row),
+            };
+            RefreshSelection();
         }
     }
 

@@ -135,14 +135,25 @@ public static class SceneGeometry
                 continue;
             }
 
-            var ordered = InDrawOrder(layer);
-            for (var o = ordered.Count - 1; o >= 0; o--)
+            // Broad phase returns source-list order. The topmost exact hit is the greatest
+            // sublayer, with the latest source position winning ties: exactly InDrawOrder(...)
+            // followed by reverse traversal, without sorting or scanning the whole layer.
+            SceneObject? best = null;
+            var bestSublayer = int.MinValue;
+            foreach (var candidate in ObjectSpatialIndex.For(layer).QueryPoint(worldX, worldY))
             {
-                var candidate = ordered[o];
-                if (candidate.Visible && Contains(candidate, worldX, worldY))
+                if (candidate.Visible
+                    && candidate.Sublayer >= bestSublayer
+                    && Contains(candidate, worldX, worldY))
                 {
-                    return candidate;
+                    best = candidate;
+                    bestSublayer = candidate.Sublayer;
                 }
+            }
+
+            if (best is not null)
+            {
+                return best;
             }
         }
 

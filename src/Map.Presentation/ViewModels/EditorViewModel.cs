@@ -147,6 +147,29 @@ public enum CanvasGesture
 }
 
 /// <summary>
+/// Fine-grained derived-state notifications. A canvas-only preview must not masquerade as a
+/// document or side-panel change and make the Objects list rebuild on every pointer event.
+/// </summary>
+[Flags]
+public enum EditorChangeReason
+{
+    None = 0,
+    DocumentStructure = 1 << 0,
+    ObjectProperties = 1 << 1,
+    Selection = 1 << 2,
+    Viewport = 1 << 3,
+    CanvasInvalidation = 1 << 4,
+    SidePanelData = 1 << 5,
+}
+
+public sealed class EditorSceneInvalidatedEventArgs(EditorChangeReason reasons) : EventArgs
+{
+    public EditorChangeReason Reasons { get; } = reasons;
+
+    public bool Has(EditorChangeReason reason) => (Reasons & reason) != 0;
+}
+
+/// <summary>
 /// The editor around one <see cref="EditingSession"/>. The session's snapshot is the single
 /// source of truth; this class only orchestrates commands, selection, saving and status.
 /// </summary>
@@ -311,6 +334,16 @@ public sealed partial class EditorViewModel : ViewModelBase
     public string? DocumentPath { get; private set; }
 
     public event EventHandler? SceneChanged;
+
+    /// <summary>
+    /// Narrow notification for session-only interaction. Legacy <see cref="SceneChanged"/>
+    /// remains the document/whole-editor signal while existing edit paths are migrated in bounded
+    /// slices.
+    /// </summary>
+    public event EventHandler<EditorSceneInvalidatedEventArgs>? SceneInvalidated;
+
+    private void InvalidateScene(EditorChangeReason reasons) =>
+        SceneInvalidated?.Invoke(this, new EditorSceneInvalidatedEventArgs(reasons));
 
     // ---------------------------------------------------------------- status
 
@@ -3285,7 +3318,7 @@ public sealed partial class EditorViewModel : ViewModelBase
 
         _stroke = new RasterStrokeSession(target, BrushSettings);
         _stroke.AddPoint(worldX, worldY);
-        SceneChanged?.Invoke(this, EventArgs.Empty);
+        InvalidateScene(EditorChangeReason.CanvasInvalidation);
         return true;
     }
 
@@ -3297,7 +3330,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
 
         _stroke.AddPoint(worldX, worldY);
-        SceneChanged?.Invoke(this, EventArgs.Empty);
+        InvalidateScene(EditorChangeReason.CanvasInvalidation);
     }
 
     public void EndStroke()
@@ -3311,7 +3344,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         _stroke = null;
         if (stroke.IsEmpty)
         {
-            SceneChanged?.Invoke(this, EventArgs.Empty);
+            InvalidateScene(EditorChangeReason.CanvasInvalidation);
             return;
         }
 
@@ -3431,7 +3464,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
 
         _stroke = null;
-        SceneChanged?.Invoke(this, EventArgs.Empty);
+        InvalidateScene(EditorChangeReason.CanvasInvalidation);
     }
 
     /// <summary>
@@ -3441,6 +3474,11 @@ public sealed partial class EditorViewModel : ViewModelBase
     public void SelectAt(double worldX, double worldY, bool additive = false)
     {
         var hit = SceneGeometry.HitTest(Session.Document, worldX, worldY);
+        SelectHit(hit, additive);
+    }
+
+    private void SelectHit(SceneObject? hit, bool additive)
+    {
         if (hit is null)
         {
             if (!additive)
@@ -3778,7 +3816,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
 
         _marqueeWorld = MultiSelectionGeometry.MarqueeBounds(start.X, start.Y, worldX, worldY);
-        SceneChanged?.Invoke(this, EventArgs.Empty);
+        InvalidateScene(EditorChangeReason.CanvasInvalidation);
     }
 
     /// <summary>
@@ -3793,7 +3831,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         _marqueeWorld = null;
         if (start is not { } begun || rect is not { } marquee)
         {
-            SceneChanged?.Invoke(this, EventArgs.Empty);
+            InvalidateScene(EditorChangeReason.CanvasInvalidation);
             return;
         }
 
@@ -3819,7 +3857,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     {
         _marqueeStart = null;
         _marqueeWorld = null;
-        SceneChanged?.Invoke(this, EventArgs.Empty);
+        InvalidateScene(EditorChangeReason.CanvasInvalidation);
     }
 
     /// <summary>Shared frame of the current multi-selection (live drag included), or null.</summary>
@@ -3851,7 +3889,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         Raise(nameof(OpenGroupId));
         Raise(nameof(SelectionVisibilitySummary));
         Raise(nameof(SelectionLockSummary));
-        SceneChanged?.Invoke(this, EventArgs.Empty);
+        InvalidateScene(EditorChangeReason.Selection | EditorChangeReason.CanvasInvalidation);
     }
 
     public void NudgeSelectedObject(double deltaX, double deltaY)
@@ -4095,7 +4133,8 @@ public sealed partial class EditorViewModel : ViewModelBase
             return CanvasGesture.Drag;
         }
 
-        if (SceneGeometry.HitTest(Session.Document, worldX, worldY) is null)
+        var hit = SceneGeometry.HitTest(Session.Document, worldX, worldY);
+        if (hit is null)
         {
             if (!additive && SelectionCount > 0)
             {
@@ -4107,7 +4146,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             return CanvasGesture.Marquee;
         }
 
-        SelectAt(worldX, worldY, additive);
+        SelectHit(hit, additive);
         RefreshInspector();
         if (additive)
         {
@@ -4175,7 +4214,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
 
         DragPreview = preview with { Proposed = proposed };
-        SceneChanged?.Invoke(this, EventArgs.Empty);
+        InvalidateScene(EditorChangeReason.CanvasInvalidation);
     }
 
     public void UpdateDrag(double worldDx, double worldDy)
@@ -4204,14 +4243,14 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
         else
         {
-            SceneChanged?.Invoke(this, EventArgs.Empty);
+            InvalidateScene(EditorChangeReason.CanvasInvalidation);
         }
     }
 
     public void CancelDrag()
     {
         DragPreview = null;
-        SceneChanged?.Invoke(this, EventArgs.Empty);
+        InvalidateScene(EditorChangeReason.CanvasInvalidation);
     }
 
     public void Undo()

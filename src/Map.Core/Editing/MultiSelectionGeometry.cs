@@ -189,7 +189,7 @@ public static class MultiSelectionGeometry
                 continue;
             }
 
-            foreach (var sceneObject in layer.Objects)
+            foreach (var sceneObject in ObjectSpatialIndex.For(layer).Query(marquee))
             {
                 if (sceneObject.Visible && !sceneObject.Locked
                     && SceneGeometry.BoundsOf(sceneObject).Intersects(marquee))

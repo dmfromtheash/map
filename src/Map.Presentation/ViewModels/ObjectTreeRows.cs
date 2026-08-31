@@ -41,7 +41,11 @@ public sealed record ObjectTreeRow(
     SceneObject? Object,
     Guid? GroupId,
     int ChildCount,
-    bool Selected);
+    bool Selected)
+{
+    /// <summary>Ordered group membership for selection state without another document scan.</summary>
+    public IReadOnlyList<ObjectId>? MemberIds { get; init; }
+}
 
 /// <summary>
 /// Builds the row sequence of the objects panel. A group collapses into exactly one top-level
@@ -61,21 +65,31 @@ public static class ObjectTreeRows
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(selectedIds);
         var query = (searchText ?? "").Trim();
+        var objects = AllObjects(document).ToList();
+        var groups = BuildGroupIndex(objects);
+
+        // The ordinary panel view is a virtual row source: it stores compact references and
+        // creates ObjectTreeRow models only when the ItemsControl asks for a realized index.
+        // Filtered views are expected user operations and keep the explicit materialized path.
+        if (query.Length == 0 && filter == ObjectTypeFilter.All)
+        {
+            return BuildVirtualRows(objects, groups, openGroupId, selectedIds);
+        }
 
         if (openGroupId is { } openGroup)
         {
-            return BuildOpenGroup(document, query, filter, openGroup, selectedIds);
+            return BuildOpenGroup(groups, query, filter, openGroup, selectedIds);
         }
 
         var rows = new List<ObjectTreeRow>();
         var emittedGroups = new HashSet<Guid>();
-        foreach (var sceneObject in AllObjects(document))
+        foreach (var sceneObject in objects)
         {
             if (sceneObject.GroupId is { } groupId)
             {
                 if (emittedGroups.Add(groupId))
                 {
-                    var members = SceneGeometry.GroupMembers(document, groupId);
+                    var members = groups[groupId];
                     if (GroupMatches(members, query, filter))
                     {
                         rows.Add(GroupRow(groupId, members, selectedIds));
@@ -127,24 +141,30 @@ public static class ObjectTreeRows
         members.Count > 0 && members[0].GroupName is { Length: > 0 } name ? name : "Группа";
 
     private static ObjectTreeRow GroupRow(
-        Guid groupId, IReadOnlyList<SceneObject> members, IReadOnlyCollection<ObjectId> selectedIds) => new(
-        ObjectTreeRowKind.Group,
-        $"GroupRow_{groupId:D}",
-        GroupTitle(members),
-        EditorLabels.Objects(members.Count),
-        Object: null,
-        GroupId: groupId,
-        ChildCount: members.Count,
-        Selected: members.Count > 0 && members.All(member => selectedIds.Contains(member.Id)));
+        Guid groupId, IReadOnlyList<SceneObject> members, IReadOnlyCollection<ObjectId> selectedIds) =>
+        new(
+            ObjectTreeRowKind.Group,
+            $"GroupRow_{groupId:D}",
+            GroupTitle(members),
+            EditorLabels.Objects(members.Count),
+            Object: null,
+            GroupId: groupId,
+            ChildCount: members.Count,
+            Selected: members.Count > 0 && members.All(member => selectedIds.Contains(member.Id)))
+        {
+            MemberIds = [.. members.Select(member => member.Id)],
+        };
 
     private static List<ObjectTreeRow> BuildOpenGroup(
-        MapDocument document,
+        IReadOnlyDictionary<Guid, List<SceneObject>> groups,
         string query,
         ObjectTypeFilter filter,
         Guid openGroup,
         IReadOnlyCollection<ObjectId> selectedIds)
     {
-        var members = SceneGeometry.GroupMembers(document, openGroup);
+        var members = groups.TryGetValue(openGroup, out var indexedMembers)
+            ? indexedMembers
+            : [];
         var rows = new List<ObjectTreeRow>
         {
             new(
@@ -207,4 +227,141 @@ public static class ObjectTreeRows
 
     private static IEnumerable<SceneObject> AllObjects(MapDocument document) =>
         document.Layers.OfType<ObjectLayer>().SelectMany(layer => layer.Objects);
+
+    private static Dictionary<Guid, List<SceneObject>> BuildGroupIndex(
+        IReadOnlyList<SceneObject> objects)
+    {
+        var groups = new Dictionary<Guid, List<SceneObject>>();
+        foreach (var sceneObject in objects)
+        {
+            if (sceneObject.GroupId is not { } groupId)
+            {
+                continue;
+            }
+
+            if (!groups.TryGetValue(groupId, out var members))
+            {
+                members = [];
+                groups.Add(groupId, members);
+            }
+
+            members.Add(sceneObject);
+        }
+
+        return groups;
+    }
+
+    private static IReadOnlyList<ObjectTreeRow> BuildVirtualRows(
+        IReadOnlyList<SceneObject> objects,
+        IReadOnlyDictionary<Guid, List<SceneObject>> groups,
+        Guid? openGroupId,
+        IReadOnlyCollection<ObjectId> selectedIds)
+    {
+        var entries = new List<VirtualRowEntry>();
+        if (openGroupId is { } openGroup)
+        {
+            groups.TryGetValue(openGroup, out var members);
+            members ??= [];
+            entries.EnsureCapacity(members.Count + 1);
+            entries.Add(VirtualRowEntry.ForBreadcrumb(openGroup, members));
+            entries.AddRange(members.Select(member => VirtualRowEntry.ForChild(openGroup, member)));
+            return new VirtualRowList(entries, selectedIds);
+        }
+
+        entries.EnsureCapacity(objects.Count);
+        var emittedGroups = new HashSet<Guid>();
+        foreach (var sceneObject in objects)
+        {
+            if (sceneObject.GroupId is { } groupId)
+            {
+                if (emittedGroups.Add(groupId))
+                {
+                    entries.Add(VirtualRowEntry.ForGroup(groupId, groups[groupId]));
+                }
+
+                continue;
+            }
+
+            entries.Add(VirtualRowEntry.ForObject(sceneObject));
+        }
+
+        return new VirtualRowList(entries, selectedIds);
+    }
+
+    private readonly record struct VirtualRowEntry(
+        ObjectTreeRowKind Kind,
+        SceneObject? Object,
+        Guid? GroupId,
+        IReadOnlyList<SceneObject>? Members)
+    {
+        public static VirtualRowEntry ForObject(SceneObject sceneObject) =>
+            new(ObjectTreeRowKind.Object, sceneObject, null, null);
+
+        public static VirtualRowEntry ForChild(Guid groupId, SceneObject sceneObject) =>
+            new(ObjectTreeRowKind.GroupChild, sceneObject, groupId, null);
+
+        public static VirtualRowEntry ForGroup(Guid groupId, IReadOnlyList<SceneObject> members) =>
+            new(ObjectTreeRowKind.Group, null, groupId, members);
+
+        public static VirtualRowEntry ForBreadcrumb(Guid groupId, IReadOnlyList<SceneObject> members) =>
+            new(ObjectTreeRowKind.Breadcrumb, null, groupId, members);
+    }
+
+    private sealed class VirtualRowList(
+        IReadOnlyList<VirtualRowEntry> entries,
+        IReadOnlyCollection<ObjectId> selectedIds) : IReadOnlyList<ObjectTreeRow>
+    {
+        private readonly HashSet<ObjectId> _selected = [.. selectedIds];
+
+        public int Count => entries.Count;
+
+        public ObjectTreeRow this[int index] => Create(entries[index]);
+
+        public IEnumerator<ObjectTreeRow> GetEnumerator()
+        {
+            for (var index = 0; index < entries.Count; index++)
+            {
+                yield return Create(entries[index]);
+            }
+        }
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+
+        private ObjectTreeRow Create(VirtualRowEntry entry)
+        {
+            if (entry.Object is { } sceneObject)
+            {
+                return new ObjectTreeRow(
+                    entry.Kind,
+                    entry.Kind == ObjectTreeRowKind.GroupChild
+                        ? $"GroupChildRow_{sceneObject.Id}"
+                        : $"ObjectRow_{sceneObject.Id}",
+                    sceneObject.Name,
+                    EditorLabels.ObjectSubtitle(sceneObject),
+                    sceneObject,
+                    entry.GroupId,
+                    ChildCount: 0,
+                    Selected: _selected.Contains(sceneObject.Id));
+            }
+
+            var members = entry.Members ?? [];
+            var title = GroupTitle(members);
+            var row = new ObjectTreeRow(
+                entry.Kind,
+                entry.Kind == ObjectTreeRowKind.Breadcrumb
+                    ? "GroupBreadcrumb"
+                    : $"GroupRow_{entry.GroupId:D}",
+                title,
+                EditorLabels.Objects(members.Count),
+                Object: null,
+                entry.GroupId,
+                ChildCount: members.Count,
+                Selected: entry.Kind == ObjectTreeRowKind.Group
+                    && members.Count > 0
+                    && members.All(member => _selected.Contains(member.Id)));
+            return entry.Kind == ObjectTreeRowKind.Group
+                ? row with { MemberIds = [.. members.Select(member => member.Id)] }
+                : row;
+        }
+    }
 }

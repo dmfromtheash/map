@@ -29,6 +29,7 @@ public sealed class MapCanvasControl : Control
     private bool _isVectorDrawing;
     private bool _isMarquee;
     private bool _isRegionSelecting;
+    private bool _visualInvalidationQueued;
     private Point _marqueePressScreen;
     private readonly TileImageCache _tileCache = new(512);
 
@@ -59,17 +60,49 @@ public sealed class MapCanvasControl : Control
     /// <summary>Raised when Alt+wheel moved the current variant of the selected set.</summary>
     public event EventHandler? VariantCycled;
 
+    /// <summary>
+    /// Own-process instrumentation hook raised after the Skia scene pass finishes for an Avalonia
+    /// frame. It is used by the hidden Stage 13 native profile, never persisted or telemetered.
+    /// </summary>
+    public event EventHandler? FrameRendered;
+
     public void Attach(EditorViewModel editor)
     {
         _editor?.SceneChanged -= OnSceneChanged;
+        _editor?.SceneInvalidated -= OnSceneInvalidated;
 
         _editor = editor;
         _editor.SceneChanged += OnSceneChanged;
-        InvalidateVisual();
+        _editor.SceneInvalidated += OnSceneInvalidated;
+        QueueVisualInvalidation();
     }
 
     private void OnSceneChanged(object? sender, EventArgs e) =>
-        Avalonia.Threading.Dispatcher.UIThread.Post(InvalidateVisual);
+        QueueVisualInvalidation();
+
+    private void OnSceneInvalidated(object? sender, EditorSceneInvalidatedEventArgs e)
+    {
+        if (e.Has(EditorChangeReason.CanvasInvalidation))
+        {
+            QueueVisualInvalidation();
+        }
+    }
+
+    /// <summary>At most one Avalonia invalidation is queued for the next render tick.</summary>
+    private void QueueVisualInvalidation()
+    {
+        if (_visualInvalidationQueued)
+        {
+            return;
+        }
+
+        _visualInvalidationQueued = true;
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            _visualInvalidationQueued = false;
+            InvalidateVisual();
+        }, Avalonia.Threading.DispatcherPriority.Render);
+    }
 
     // ---------------------------------------------------------------- rendering
 
@@ -84,11 +117,13 @@ public sealed class MapCanvasControl : Control
         context.Custom(new SceneDrawOperation(
             new Rect(0, 0, Bounds.Width, Bounds.Height), _editor, _tileCache,
             _isPanning || _isStroking || _isVectorDrawing || _isRegionSelecting
-            || _dragStartWorld is not null));
+            || _dragStartWorld is not null,
+            () => FrameRendered?.Invoke(this, EventArgs.Empty)));
     }
 
     private sealed class SceneDrawOperation(
-        Rect bounds, EditorViewModel editor, TileImageCache tileCache, bool fastPreview) : ICustomDrawOperation
+        Rect bounds, EditorViewModel editor, TileImageCache tileCache, bool fastPreview,
+        Action frameRendered) : ICustomDrawOperation
     {
         public Rect Bounds { get; } = bounds;
 
@@ -138,6 +173,7 @@ public sealed class MapCanvasControl : Control
             });
 
             canvas.Restore();
+            frameRendered();
         }
 
         public void Dispose()
@@ -188,7 +224,7 @@ public sealed class MapCanvasControl : Control
             }
 
             e.Handled = true;
-            InvalidateVisual();
+            QueueVisualInvalidation();
             return;
         }
 
@@ -201,7 +237,7 @@ public sealed class MapCanvasControl : Control
             }
 
             e.Handled = true;
-            InvalidateVisual();
+            QueueVisualInvalidation();
             return;
         }
 
@@ -220,7 +256,7 @@ public sealed class MapCanvasControl : Control
             _editor.PlaceCurrentVariantAt(world.X, world.Y);
             StampPlaced?.Invoke(this, EventArgs.Empty);
             e.Handled = true;
-            InvalidateVisual();
+            QueueVisualInvalidation();
             return;
         }
 
@@ -240,7 +276,7 @@ public sealed class MapCanvasControl : Control
 
         e.Pointer.Capture(this);
         e.Handled = true;
-        InvalidateVisual();
+        QueueVisualInvalidation();
     }
 
     protected override void OnPointerMoved(PointerEventArgs e)
@@ -258,7 +294,7 @@ public sealed class MapCanvasControl : Control
             _editor.Session.Viewport.PanByScreenDelta(position.X - previous.X, position.Y - previous.Y);
             _lastPointer = position;
             ViewportChanged?.Invoke(this, EventArgs.Empty);
-            InvalidateVisual();
+            QueueVisualInvalidation();
             e.Handled = true;
             return;
         }
@@ -270,7 +306,7 @@ public sealed class MapCanvasControl : Control
             _editor.UpdateRegionSelection(X, Y);
             Cursor = new Cursor(StandardCursorType.Cross);
             e.Handled = true;
-            InvalidateVisual();
+            QueueVisualInvalidation();
             return;
         }
 
@@ -300,7 +336,7 @@ public sealed class MapCanvasControl : Control
         {
             _editor.UpdateMarquee(X, Y);
             e.Handled = true;
-            InvalidateVisual();
+            QueueVisualInvalidation();
         }
 
 
@@ -379,7 +415,7 @@ public sealed class MapCanvasControl : Control
 
         _isPanning = false;
         e.Pointer.Capture(null);
-        InvalidateVisual();
+        QueueVisualInvalidation();
     }
 
     protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
@@ -397,7 +433,7 @@ public sealed class MapCanvasControl : Control
         {
             _editor.Session.Viewport.ZoomAt(position.X, position.Y, Math.Pow(1.15, e.Delta.Y));
             ViewportChanged?.Invoke(this, EventArgs.Empty);
-            InvalidateVisual();
+            QueueVisualInvalidation();
             e.Handled = true;
             return;
         }
@@ -420,7 +456,7 @@ public sealed class MapCanvasControl : Control
             }
 
             VariantCycled?.Invoke(this, EventArgs.Empty);
-            InvalidateVisual();
+            QueueVisualInvalidation();
             e.Handled = true;
             return;
         }
@@ -440,7 +476,7 @@ public sealed class MapCanvasControl : Control
             ViewportChanged?.Invoke(this, EventArgs.Empty);
         }
 
-        InvalidateVisual();
+        QueueVisualInvalidation();
         e.Handled = true;
     }
 
@@ -456,6 +492,6 @@ public sealed class MapCanvasControl : Control
             _editor.RenderDocument.Canvas.Width,
             _editor.RenderDocument.Canvas.Height);
         ViewportChanged?.Invoke(this, EventArgs.Empty);
-        InvalidateVisual();
+        QueueVisualInvalidation();
     }
 }
