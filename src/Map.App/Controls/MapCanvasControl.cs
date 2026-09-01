@@ -345,7 +345,8 @@ public sealed class MapCanvasControl : Control
 
         if (_editor.ActiveTool is EditorTool.Brush or EditorTool.Mask or EditorTool.Land)
         {
-            _isStroking = _editor.BeginStroke(world.X, world.Y);
+            LastPressureSample = Math.Clamp(point.Properties.Pressure, 0, 1);
+            _isStroking = _editor.BeginStroke(world.X, world.Y, LastPressureSample);
             if (_isStroking)
             {
                 e.Pointer.Capture(this);
@@ -442,7 +443,8 @@ public sealed class MapCanvasControl : Control
 
         if (_isStroking)
         {
-            _editor.ContinueStroke(X, Y);
+            LastPressureSample = Math.Clamp(e.GetCurrentPoint(this).Properties.Pressure, 0, 1);
+            _editor.ContinueStroke(X, Y, LastPressureSample);
             Cursor = new Cursor(StandardCursorType.Cross);
             e.Handled = true;
             return;

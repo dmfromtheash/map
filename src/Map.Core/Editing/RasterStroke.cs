@@ -70,6 +70,16 @@ public sealed record BrushSettings
     /// <summary>Optional pattern; sampled in world coordinates so it stays put while painting.</summary>
     public BrushTexture? Texture { get; init; }
 
+    public double TextureScale { get; init; } = 1;
+    public double TextureRotationDegrees { get; init; }
+    public double TextureOffsetX { get; init; }
+    public double TextureOffsetY { get; init; }
+    public double TextureOpacity { get; init; } = 1;
+    public double HueDegrees { get; init; }
+    public double Saturation { get; init; }
+    public double Brightness { get; init; }
+    public double Contrast { get; init; }
+
     /// <summary>Erase instead of paint: the dab removes coverage from the layer.</summary>
     public bool Eraser { get; init; }
 
@@ -107,6 +117,8 @@ public sealed record BrushSettings
 
     /// <summary>Core-only pen dynamics: stylus pressure scales the dab coverage.</summary>
     public bool PressureAffectsOpacity { get; init; }
+
+    public bool PressureAffectsSoftness { get; init; }
 }
 
 /// <summary>Direction of a mask stroke: hide the layer under the brush, or bring it back.</summary>
@@ -231,7 +243,9 @@ public sealed class RasterStrokeSession
             return; // a zero-pressure or fully jittered-out dab paints nothing
         }
 
-        var inner = radius * (1.0 - Math.Clamp(Settings.Softness, 0, 1));
+        var effectiveSoftness = Math.Clamp(Settings.Softness, 0, 1);
+        if (Settings.PressureAffectsSoftness) effectiveSoftness *= pressure;
+        var inner = radius * (1.0 - effectiveSoftness);
         var tip = Settings.Tip;
         var angleRadians = -Settings.AngleDegrees * Math.PI / 180.0;
         var angleCos = Math.Cos(angleRadians);
@@ -333,9 +347,7 @@ public sealed class RasterStrokeSession
 
         var before = new Dictionary<TileKey, byte[]?>(_coverage.Count);
         var after = new Dictionary<TileKey, byte[]?>(_coverage.Count);
-        var (br, bg, bb, ba) = ParseColor(Settings.Color);
-        var strokeAlpha = Math.Clamp(Settings.Opacity, 0, 1) * (ba / 255.0);
-
+        var paintSettings = Settings.Eraser ? Settings with { Texture = null } : Settings;
         foreach (var (key, coverage) in _coverage)
         {
             var original = _baseTiles.TryGet(key);
@@ -355,7 +367,10 @@ public sealed class RasterStrokeSession
                     continue;
                 }
 
-                var alpha = coverage[i] / 255.0 * strokeAlpha;
+                var worldX = originX + (i % TileMap.TileSize);
+                var worldY = originY + (i / TileMap.TileSize);
+                var (sr, sg, sb, sourceAlpha) = SamplePaint(paintSettings, worldX, worldY);
+                var alpha = coverage[i] / 255.0 * sourceAlpha;
                 var offset = i * 4;
 
                 if (Settings.Eraser)
@@ -369,24 +384,7 @@ public sealed class RasterStrokeSession
                     continue;
                 }
 
-                double sr = br, sg = bg, sb = bb;
-                if (Settings.Texture is { } texture)
-                {
-                    var tx = Mod(originX + (i % TileMap.TileSize), texture.Width);
-                    var ty = Mod(originY + (i / TileMap.TileSize), texture.Height);
-                    var to = ((ty * texture.Width) + tx) * 4;
-                    var textureAlpha = texture.Pixels[to + 3] / 255.0;
-                    if (textureAlpha <= 0)
-                    {
-                        continue;
-                    }
-
-                    // The texture is premultiplied; recover straight colour for the blend below.
-                    sr = texture.Pixels[to] / textureAlpha;
-                    sg = texture.Pixels[to + 1] / textureAlpha;
-                    sb = texture.Pixels[to + 2] / textureAlpha;
-                    alpha *= textureAlpha;
-                }
+                if (alpha <= 0) continue;
 
                 var inverse = 1.0 - alpha;
                 pixels[offset] = (byte)Math.Clamp(Math.Round((sr * alpha) + (pixels[offset] * inverse)), 0, 255);
@@ -399,6 +397,58 @@ public sealed class RasterStrokeSession
         }
 
         return (before, after);
+    }
+
+    /// <summary>Premultiplied preview source evaluated by the exact same sampler as Commit.</summary>
+    public static byte[] RenderPreviewTile(BrushSettings settings, TileKey key, byte[] coverage)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        ArgumentNullException.ThrowIfNull(coverage);
+        if (coverage.Length != TileMap.TileSize * TileMap.TileSize)
+            throw new ArgumentException("Coverage tile has an invalid size.", nameof(coverage));
+        var pixels = new byte[TileMap.TileSize * TileMap.TileSize * 4];
+        var originX = key.X * TileMap.TileSize; var originY = key.Y * TileMap.TileSize;
+        for (var i = 0; i < coverage.Length; i++)
+        {
+            if (coverage[i] == 0) continue;
+            var (r, g, b, sourceAlpha) = SamplePaint(settings,
+                originX + (i % TileMap.TileSize), originY + (i / TileMap.TileSize));
+            var alpha = coverage[i] / 255.0 * sourceAlpha;
+            var offset = i * 4;
+            pixels[offset] = (byte)Math.Clamp(Math.Round(r * alpha), 0, 255);
+            pixels[offset + 1] = (byte)Math.Clamp(Math.Round(g * alpha), 0, 255);
+            pixels[offset + 2] = (byte)Math.Clamp(Math.Round(b * alpha), 0, 255);
+            pixels[offset + 3] = (byte)Math.Clamp(Math.Round(255 * alpha), 0, 255);
+        }
+        return pixels;
+    }
+
+    private static (double R, double G, double B, double Alpha) SamplePaint(
+        BrushSettings settings, double worldX, double worldY)
+    {
+        var (r, g, b, a) = ParseColor(settings.Color);
+        var alpha = Math.Clamp(settings.Opacity, 0, 1) * (a / 255.0);
+        double sr = r, sg = g, sb = b;
+        if (settings.Texture is { } texture)
+        {
+            worldX -= settings.TextureOffsetX; worldY -= settings.TextureOffsetY;
+            var scale = Math.Clamp(settings.TextureScale, 0.05, 64);
+            var radians = -settings.TextureRotationDegrees * Math.PI / 180;
+            var cos = Math.Cos(radians); var sin = Math.Sin(radians);
+            var textureX = ((worldX * cos) - (worldY * sin)) / scale;
+            var textureY = ((worldX * sin) + (worldY * cos)) / scale;
+            var tx = Mod((int)Math.Floor(textureX), texture.Width);
+            var ty = Mod((int)Math.Floor(textureY), texture.Height);
+            var to = ((ty * texture.Width) + tx) * 4;
+            var textureAlpha = texture.Pixels[to + 3] / 255.0;
+            if (textureAlpha <= 0) return (0, 0, 0, 0);
+            sr = texture.Pixels[to] / textureAlpha;
+            sg = texture.Pixels[to + 1] / textureAlpha;
+            sb = texture.Pixels[to + 2] / textureAlpha;
+            alpha *= textureAlpha * Math.Clamp(settings.TextureOpacity, 0, 1);
+        }
+        (sr, sg, sb) = AdjustColor(sr, sg, sb, settings);
+        return (sr, sg, sb, alpha);
     }
 
     /// <summary>Same, for a single-channel mask or land coverage surface.</summary>
@@ -470,6 +520,34 @@ public sealed class RasterStrokeSession
     {
         var result = value % modulus;
         return result < 0 ? result + modulus : result;
+    }
+
+    private static (double R, double G, double B) AdjustColor(
+        double red, double green, double blue, BrushSettings settings)
+    {
+        var r = red / 255.0; var g = green / 255.0; var b = blue / 255.0;
+        var luminance = (0.2126 * r) + (0.7152 * g) + (0.0722 * b);
+        var saturation = Math.Clamp(1 + settings.Saturation, 0, 2);
+        r = luminance + ((r - luminance) * saturation);
+        g = luminance + ((g - luminance) * saturation);
+        b = luminance + ((b - luminance) * saturation);
+        var angle = Math.Clamp(settings.HueDegrees, -180, 180) * Math.PI / 180;
+        var cos = Math.Cos(angle); var sin = Math.Sin(angle);
+        var nr = (.213 + cos * .787 - sin * .213) * r
+                 + (.715 - cos * .715 - sin * .715) * g
+                 + (.072 - cos * .072 + sin * .928) * b;
+        var ng = (.213 - cos * .213 + sin * .143) * r
+                 + (.715 + cos * .285 + sin * .140) * g
+                 + (.072 - cos * .072 - sin * .283) * b;
+        var nb = (.213 - cos * .213 - sin * .787) * r
+                 + (.715 - cos * .715 + sin * .715) * g
+                 + (.072 + cos * .928 + sin * .072) * b;
+        var contrast = Math.Clamp(1 + settings.Contrast, 0, 2);
+        var brightness = Math.Clamp(settings.Brightness, -1, 1);
+        return (
+            Math.Clamp(((nr - .5) * contrast + .5 + brightness) * 255, 0, 255),
+            Math.Clamp(((ng - .5) * contrast + .5 + brightness) * 255, 0, 255),
+            Math.Clamp(((nb - .5) * contrast + .5 + brightness) * 255, 0, 255));
     }
 
     internal static (byte R, byte G, byte B, byte A) ParseColor(string color)

@@ -1559,6 +1559,22 @@ public static partial class MapProjectStore
                 ? [.. gridLayer.Grids.Select(ToGridDto)]
                 : null,
             Filter = layer is FilterLayer filterLayer ? ToFilterDto(filterLayer.Settings) : null,
+            Effects = layer is ObjectLayer effectsLayer ? new LayerEffectsDto
+            {
+                ClippingEnabled = effectsLayer.Effects.ClippingEnabled,
+                ShadowColor = effectsLayer.Effects.ShadowColor,
+                OuterShadowOpacity = effectsLayer.Effects.OuterShadowOpacity,
+                InnerShadowOpacity = effectsLayer.Effects.InnerShadowOpacity,
+                ShadowOffsetX = effectsLayer.Effects.ShadowOffsetX,
+                ShadowOffsetY = effectsLayer.Effects.ShadowOffsetY,
+                ShadowBlur = effectsLayer.Effects.ShadowBlur,
+            } : null,
+            Sublayers = layer is ObjectLayer sublayerLayer
+                ? [.. sublayerLayer.SublayerStates.Select(state => new ObjectSublayerStateDto
+                {
+                    Sublayer = state.Sublayer, Visible = state.Visible, Locked = state.Locked,
+                })]
+                : null,
         };
         return dto;
     }
@@ -1809,7 +1825,11 @@ public static partial class MapProjectStore
         {
             null or "Object" => new ObjectLayer(
                 id, name, layer.Visible, layer.Locked, layer.Opacity,
-                [.. layer.Objects.Select(item => ToObject(item, allowUnknownObjectKinds))], mask),
+                [.. layer.Objects.Select(item => ToObject(item, allowUnknownObjectKinds))], mask)
+            {
+                Effects = ToLayerEffects(layer.Effects),
+                SublayerStates = ToSublayerStates(layer.Sublayers),
+            },
             "BaseColor" => new BaseColorLayer(
                 id, name, layer.Visible, layer.Locked, layer.Opacity,
                 RequireString(layer.Color, "base color")),
@@ -1830,6 +1850,30 @@ public static partial class MapProjectStore
                 $"scene.json holds layer type \"{layer.Type}\" this version does not define."),
         };
         return result with { Blend = RequireString(layer.Blend, "layer blend") };
+    }
+
+    private static LayerEffects ToLayerEffects(LayerEffectsDto? dto) => dto is null
+        ? new LayerEffects()
+        : new LayerEffects
+        {
+            ClippingEnabled = dto.ClippingEnabled,
+            ShadowColor = RequireAppearanceColor(dto.ShadowColor, "layer shadow color"),
+            OuterShadowOpacity = RequireFinite(dto.OuterShadowOpacity, "layer outer shadow opacity", 0, 1),
+            InnerShadowOpacity = RequireFinite(dto.InnerShadowOpacity, "layer inner shadow opacity", 0, 1),
+            ShadowOffsetX = RequireFinite(dto.ShadowOffsetX, "layer shadow offset X", -512, 512),
+            ShadowOffsetY = RequireFinite(dto.ShadowOffsetY, "layer shadow offset Y", -512, 512),
+            ShadowBlur = RequireFinite(dto.ShadowBlur, "layer shadow blur", 0, 256),
+        };
+
+    private static IReadOnlyList<ObjectSublayerState> ToSublayerStates(
+        IReadOnlyList<ObjectSublayerStateDto>? values)
+    {
+        if (values is null) return [];
+        if (values.Count > 21 || values.Select(item => item.Sublayer).Distinct().Count() != values.Count
+            || values.Any(item => item.Sublayer is < -10 or > 10))
+            throw new MapProjectCorruptedException("Object sublayer state is outside the supported range.");
+        return [.. values.Where(item => !item.Visible || item.Locked)
+            .Select(item => new ObjectSublayerState(item.Sublayer, item.Visible, item.Locked))];
     }
 
     private static SceneObject ToObject(SceneObjectDto dto, bool allowUnknownObjectKinds = false) => new(
@@ -2207,6 +2251,8 @@ public static partial class MapProjectStore
         OutlineWidth = style.OutlineWidth,
         InnerShadowOpacity = style.InnerShadowOpacity,
         OuterShadowOpacity = style.OuterShadowOpacity,
+        ShadowOffsetX = style.ShadowOffsetX,
+        ShadowOffsetY = style.ShadowOffsetY,
         ShadowBlur = style.ShadowBlur,
         RippleColor = style.RippleColor,
         RippleWidth = style.RippleWidth,
@@ -2228,6 +2274,8 @@ public static partial class MapProjectStore
             OutlineWidth = style.OutlineWidth,
             InnerShadowOpacity = style.InnerShadowOpacity,
             OuterShadowOpacity = style.OuterShadowOpacity,
+            ShadowOffsetX = RequireFinite(style.ShadowOffsetX, "land shadow offset X", -512, 512),
+            ShadowOffsetY = RequireFinite(style.ShadowOffsetY, "land shadow offset Y", -512, 512),
             ShadowBlur = style.ShadowBlur,
             RippleColor = RequireString(style.RippleColor, "land ripple color"),
             RippleWidth = style.RippleWidth,

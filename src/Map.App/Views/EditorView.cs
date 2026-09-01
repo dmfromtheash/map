@@ -959,11 +959,87 @@ public sealed class EditorView : UserControl
             _eraserButton.IsChecked = eraser;
             Ui.SetClass(_eraserButton, "active", eraser);
             _brushTipNameText.Text = _editor.BrushTipName is { Length: > 0 } tipName
-                ? $"Отпечаток: {tipName}"
-                : "Отпечаток: круглая кисть";
+                ? $"Отпечаток: {tipName}\nМатериал: {_editor.BrushTextureName ?? "сплошной цвет"}"
+                : $"Отпечаток: круглая кисть\nМатериал: {_editor.BrushTextureName ?? "сплошной цвет"}";
             AutomationProperties.SetName(_brushTipNameText, _brushTipNameText.Text);
             clearTip.IsEnabled = _editor.BrushSettings.Tip is not null;
         });
+
+        var presetName = new TextBox
+        {
+            Name = "BrushPresetNameBox",
+            PlaceholderText = "Название локального пресета",
+            MaxLength = 80,
+        };
+        var presetChoice = new ComboBox
+        {
+            Name = "BrushPresetChoice",
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            PlaceholderText = "Выберите сохранённый пресет",
+        };
+        void RefreshPresets()
+        {
+            var selectedId = presetChoice.SelectedIndex >= 0
+                && presetChoice.SelectedIndex < _editor.BrushPresets.Count
+                ? _editor.BrushPresets[presetChoice.SelectedIndex].Id
+                : null;
+            presetChoice.ItemsSource = _editor.BrushPresets.Select(item => item.Name).ToList();
+            presetChoice.SelectedIndex = selectedId is null
+                ? (_editor.BrushPresets.Count > 0 ? 0 : -1)
+                : _editor.BrushPresets.ToList().FindIndex(item => item.Id == selectedId);
+        }
+        RefreshPresets();
+
+        bool TrySelectedPreset(out LocalBrushPreset preset)
+        {
+            preset = null!;
+            if (presetChoice.SelectedIndex < 0 || presetChoice.SelectedIndex >= _editor.BrushPresets.Count)
+                return false;
+            preset = _editor.BrushPresets[presetChoice.SelectedIndex];
+            return true;
+        }
+
+        var presetCommands = new WrapPanel
+        {
+            Orientation = Orientation.Horizontal,
+            ItemSpacing = 4,
+            LineSpacing = 4,
+            Children =
+            {
+                Ui.TextButton("SaveBrushPresetButton", "Сохранить текущий", () =>
+                {
+                    if (_editor.SaveBrushPreset(presetName.Text ?? ""))
+                    {
+                        presetName.Text = "";
+                        RefreshPresets();
+                    }
+                }, "segment"),
+                Ui.TextButton("ApplyBrushPresetButton", "Применить", () =>
+                {
+                    if (TrySelectedPreset(out var preset) && _editor.ApplyLocalBrushPreset(preset.Id))
+                        SyncAppearanceSections();
+                }, "segment"),
+                Ui.TextButton("RenameBrushPresetButton", "Переименовать", () =>
+                {
+                    if (TrySelectedPreset(out var preset)
+                        && _editor.RenameBrushPreset(preset.Id, presetName.Text ?? ""))
+                    {
+                        presetName.Text = "";
+                        RefreshPresets();
+                    }
+                }, "segment"),
+                Ui.TextButton("DeleteBrushPresetButton", "Удалить", async () =>
+                {
+                    if (!TrySelectedPreset(out var preset) || TopLevel.GetTopLevel(this) is not Window owner)
+                        return;
+                    if (await ConfirmationWindow.ShowAsync(owner, "Удалить пресет кисти?",
+                            $"Локальный пресет «{preset.Name}» будет удалён. Ассет материала останется в библиотеке.",
+                            "Удалить пресет", "DeleteBrushPresetConfirmButton", destructive: true)
+                        && _editor.DeleteBrushPreset(preset.Id))
+                        RefreshPresets();
+                }, "segment"),
+            },
+        };
 
         return new StackPanel
         {
@@ -971,6 +1047,24 @@ public sealed class EditorView : UserControl
             Children =
             {
                 Explanation("Рисуйте по холсту. Штрих ложится на активный слой."),
+                Ui.Section("Материал", new WrapPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    ItemSpacing = 4,
+                    LineSpacing = 4,
+                    Children =
+                    {
+                        Ui.TextButton("BrushSolidMaterialButton", "Цвет", () =>
+                        {
+                            _editor.ClearBrushTexture();
+                            _editor.BrushSettings = _editor.BrushSettings with { Eraser = false };
+                            SyncAppearanceSections();
+                        }, "segment"),
+                        Ui.TextButton("BrushTextureMaterialButton", "Текстура из библиотеки", () =>
+                            OpenAssetCatalog(focusSearch: true), "segment"),
+                        _eraserButton,
+                    },
+                }),
                 AppearanceColorBox("BrushColorBox", "Цвет",
                     () => _editor.BrushSettings.Color, _editor.SetBrushColor),
                 AppearanceSlider("BrushSizeSlider", "Размер кисти", 1, 256, "px",
@@ -979,7 +1073,27 @@ public sealed class EditorView : UserControl
                 AppearanceSlider("BrushOpacitySlider", "Непрозрачность", 5, 100, "%",
                     () => _editor.BrushSettings.Opacity * 100,
                     (value, _) => UpdateSettings(settings => settings with { Opacity = value / 100.0 }), 5),
-                _eraserButton,
+                Ui.Section("Форма отпечатка", new WrapPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    ItemSpacing = 4,
+                    LineSpacing = 4,
+                    Children =
+                    {
+                        Ui.TextButton("BrushRoundHardPreset", "Круг · жёсткий", () => _editor.ApplyBrushPreset(BrushPresetKind.RoundHard), "segment"),
+                        Ui.TextButton("BrushRoundSoftPreset", "Круг · мягкий", () => _editor.ApplyBrushPreset(BrushPresetKind.RoundSoft), "segment"),
+                        Ui.TextButton("BrushEdgeBlockPreset", "Краевой блок", () => _editor.ApplyBrushPreset(BrushPresetKind.EdgeBlock), "segment"),
+                        Ui.TextButton("BrushGridBlockPreset", "Блок", () => _editor.ApplyBrushPreset(BrushPresetKind.GridBlock), "segment"),
+                        Ui.TextButton("BrushRectanglePreset", "Прямоугольник", () => _editor.ApplyBrushPreset(BrushPresetKind.Rectangle), "segment"),
+                        Ui.TextButton("BrushEllipsePreset", "Эллипс", () => _editor.ApplyBrushPreset(BrushPresetKind.Ellipse), "segment"),
+                        Ui.TextButton("BrushPolygonPreset", "Многоугольник", () => _editor.ApplyBrushPreset(BrushPresetKind.Polygon), "segment"),
+                    },
+                }),
+                Ui.Section("Локальные пресеты", new StackPanel
+                {
+                    Spacing = 6,
+                    Children = { presetName, presetChoice, presetCommands },
+                }),
                 Ui.Advanced("BrushAdvanced", new StackPanel
                 {
                     Spacing = 8,
@@ -1042,6 +1156,57 @@ public sealed class EditorView : UserControl
                             {
                                 OpacityJitter = value / 100.0,
                             }), 5),
+                        new TextBlock
+                        {
+                            Text = "Параметры текстуры применяются тем же evaluator, что и commit.",
+                            TextWrapping = TextWrapping.Wrap,
+                        }.Classed("faint", "role-caption"),
+                        AppearanceSlider("BrushTextureScaleSlider", "Масштаб текстуры", 5, 6400, "%",
+                            () => _editor.BrushSettings.TextureScale * 100,
+                            (v, _) => UpdateSettings(s => s with { TextureScale = v / 100 }), 5),
+                        AppearanceSlider("BrushTextureRotationSlider", "Поворот текстуры", -180, 180, "°",
+                            () => _editor.BrushSettings.TextureRotationDegrees,
+                            (v, _) => UpdateSettings(s => s with { TextureRotationDegrees = v }), 5),
+                        AppearanceSlider("BrushTextureOffsetXSlider", "Смещение текстуры X", -512, 512, "px",
+                            () => _editor.BrushSettings.TextureOffsetX,
+                            (v, _) => UpdateSettings(s => s with { TextureOffsetX = v }), 5),
+                        AppearanceSlider("BrushTextureOffsetYSlider", "Смещение текстуры Y", -512, 512, "px",
+                            () => _editor.BrushSettings.TextureOffsetY,
+                            (v, _) => UpdateSettings(s => s with { TextureOffsetY = v }), 5),
+                        AppearanceSlider("BrushTextureOpacitySlider", "Непрозрачность текстуры", 0, 100, "%",
+                            () => _editor.BrushSettings.TextureOpacity * 100,
+                            (v, _) => UpdateSettings(s => s with { TextureOpacity = v / 100 }), 5),
+                        AppearanceSlider("BrushHueSlider", "Оттенок", -180, 180, "°",
+                            () => _editor.BrushSettings.HueDegrees,
+                            (v, _) => UpdateSettings(s => s with { HueDegrees = v }), 5),
+                        AppearanceSlider("BrushSaturationSlider", "Насыщенность", -100, 100, "%",
+                            () => _editor.BrushSettings.Saturation * 100,
+                            (v, _) => UpdateSettings(s => s with { Saturation = v / 100 }), 5),
+                        AppearanceSlider("BrushBrightnessSlider", "Яркость", -100, 100, "%",
+                            () => _editor.BrushSettings.Brightness * 100,
+                            (v, _) => UpdateSettings(s => s with { Brightness = v / 100 }), 5),
+                        AppearanceSlider("BrushContrastSlider", "Контраст", -100, 100, "%",
+                            () => _editor.BrushSettings.Contrast * 100,
+                            (v, _) => UpdateSettings(s => s with { Contrast = v / 100 }), 5),
+                        AppearanceToggle("BrushPenDynamics", "Pen dynamics",
+                            () => _editor.BrushSettings.PressureAffectsSize
+                                && _editor.BrushSettings.PressureAffectsOpacity
+                                && _editor.BrushSettings.PressureAffectsSoftness,
+                            value => UpdateSettings(s => s with
+                            {
+                                PressureAffectsSize = value,
+                                PressureAffectsOpacity = value,
+                                PressureAffectsSoftness = value,
+                            })),
+                        AppearanceToggle("BrushPressureSize", "Давление → размер",
+                            () => _editor.BrushSettings.PressureAffectsSize,
+                            value => UpdateSettings(s => s with { PressureAffectsSize = value })),
+                        AppearanceToggle("BrushPressureOpacity", "Давление → непрозрачность",
+                            () => _editor.BrushSettings.PressureAffectsOpacity,
+                            value => UpdateSettings(s => s with { PressureAffectsOpacity = value })),
+                        AppearanceToggle("BrushPressureSoftness", "Давление → мягкость",
+                            () => _editor.BrushSettings.PressureAffectsSoftness,
+                            value => UpdateSettings(s => s with { PressureAffectsSoftness = value })),
                         _brushTipNameText,
                         clearTip,
                     },
@@ -1074,12 +1239,34 @@ public sealed class EditorView : UserControl
                     value => _editor.BrushSettings = _editor.BrushSettings with { Radius = value }),
                 Ui.SliderRow("MaskOpacitySlider", "Непрозрачность", 5, 100, _editor.BrushSettings.Opacity * 100, "%",
                     value => _editor.BrushSettings = _editor.BrushSettings with { Opacity = value / 100.0 }, 5),
+                Ui.SliderRow("MaskSoftnessSlider", "Мягкость", 0, 100, _editor.BrushSettings.Softness * 100, "%",
+                    value => _editor.BrushSettings = _editor.BrushSettings with { Softness = value / 100.0 }, 5),
+                Ui.Section("Форма", new WrapPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    ItemSpacing = 4,
+                    LineSpacing = 4,
+                    Children =
+                    {
+                        Ui.TextButton("MaskRoundButton", "Круг", () => _editor.ApplyBrushPreset(BrushPresetKind.RoundSoft), "segment"),
+                        Ui.TextButton("MaskRectangleButton", "Прямоугольник", () => _editor.ApplyBrushPreset(BrushPresetKind.Rectangle), "segment"),
+                        Ui.TextButton("MaskEllipseButton", "Эллипс", () => _editor.ApplyBrushPreset(BrushPresetKind.Ellipse), "segment"),
+                        Ui.TextButton("MaskPolygonButton", "Многоугольник", () => _editor.ApplyBrushPreset(BrushPresetKind.Polygon), "segment"),
+                    },
+                }),
+                AppearanceToggle("MaskPressureSize", "Давление → размер",
+                    () => _editor.BrushSettings.PressureAffectsSize,
+                    value => _editor.BrushSettings = _editor.BrushSettings with { PressureAffectsSize = value }),
+                AppearanceToggle("MaskPressureOpacity", "Давление → непрозрачность",
+                    () => _editor.BrushSettings.PressureAffectsOpacity,
+                    value => _editor.BrushSettings = _editor.BrushSettings with { PressureAffectsOpacity = value }),
             },
         };
     }
 
     private Control BuildLandPanel()
     {
+        var selectedShape = LandShapeKind.Circle;
         var (actions, actionButtons) = Ui.Segmented(
             "LandAction", [("Add", "Добавить", null), ("Subtract", "Убрать", null)],
             key =>
@@ -1096,11 +1283,34 @@ public sealed class EditorView : UserControl
             ("PolygonButton", "Многоугольник", MapIcons.ShapePolygon),
             ("GridButton", "Блок по сетке", MapIcons.ShapeGridBlock),
             ("FillButton", "Заливка области", MapIcons.ShapeFill),
-        ], ApplyLandShapeByKey);
+        ], key => selectedShape = LandShapeByKey(key));
 
         for (var index = 0; index < shapeButtons.Count; index++)
         {
             _landShapeButtons[shapeButtons[index].Name!] = shapeButtons[index];
+        }
+
+        var x = NumberBox("LandRegionXBox"); x.Text = "0";
+        var y = NumberBox("LandRegionYBox"); y.Text = "0";
+        var width = NumberBox("LandRegionWidthBox"); width.Text = "512";
+        var height = NumberBox("LandRegionHeightBox"); height.Text = "512";
+        var dx = NumberBox("LandMoveDeltaXBox"); dx.Text = "0";
+        var dy = NumberBox("LandMoveDeltaYBox"); dy.Text = "0";
+        var snap = new CheckBox
+        {
+            Name = "LandMoveSnapToggle",
+            Content = "Привязать delta к сетке",
+            IsChecked = true,
+        };
+
+        bool ReadBounds(out WorldBounds bounds)
+        {
+            bounds = default;
+            if (!TryNumber(x.Text, out var left) || !TryNumber(y.Text, out var top)
+                || !TryNumber(width.Text, out var w) || !TryNumber(height.Text, out var h)
+                || w <= 0 || h <= 0) return false;
+            bounds = new WorldBounds(left, top, left + w, top + h);
+            return true;
         }
 
         return new StackPanel
@@ -1113,16 +1323,36 @@ public sealed class EditorView : UserControl
                 Ui.Section("Форма", shapes),
                 Ui.SliderRow("LandSizeSlider", "Размер кисти", 1, 256, _editor.BrushSettings.Radius, "px",
                     value => _editor.BrushSettings = _editor.BrushSettings with { Radius = value }),
+                Ui.SliderRow("LandRoughnessSlider", "Неровность края", 0, 100,
+                    _editor.BrushSettings.Scatter * 100, "%",
+                    value => _editor.BrushSettings = _editor.BrushSettings with { Scatter = value / 100 }, 5),
+                Ui.SliderRow("LandSmoothingSlider", "Сглаживание", 0, 100,
+                    _editor.BrushSettings.Softness * 100, "%",
+                    value => _editor.BrushSettings = _editor.BrushSettings with { Softness = value / 100 }, 5),
                 Ui.Advanced("LandAdvanced", new StackPanel
                 {
                     Spacing = 6,
                     Children =
                     {
-                        // The edge style belongs to the land layer, so it lives once, on the
-                        // layer's property sheet. Duplicating it here would create two controls
-                        // for one setting - exactly the pattern the UX rules forbid.
-                        Ui.TextButton("LandMoveButton", "Сдвинуть область вправо",
-                            () => _editor.MoveActiveLandArea(128, 0), "compact"),
+                        new TextBlock { Text = "Точная область" }.Classed("role-panel"),
+                        Ui.PropertyRow("X", x), Ui.PropertyRow("Y", y),
+                        Ui.PropertyRow("Ширина", width), Ui.PropertyRow("Высота", height),
+                        Ui.TextButton("LandApplyShapeButton", "Применить выбранную форму", () =>
+                        {
+                            if (ReadBounds(out var region)) _editor.ApplyLandShape(selectedShape, region);
+                        }, "compact"),
+                        new TextBlock { Text = "Перемещение" }.Classed("role-panel"),
+                        Ui.PropertyRow("Delta X", dx), Ui.PropertyRow("Delta Y", dy), snap,
+                        Ui.TextButton("LandMoveButton", "Сдвинуть выбранную область", () =>
+                        {
+                            if (ReadBounds(out var region) && TryNumber(dx.Text, out var moveX)
+                                && TryNumber(dy.Text, out var moveY))
+                                _editor.MoveActiveLandArea(
+                                    region, (int)Math.Round(moveX), (int)Math.Round(moveY),
+                                    snap.IsChecked == true);
+                        }, "compact"),
+                        Ui.AsyncButton("LandClearButton", "Очистить слой…", ClearActiveLandAsync,
+                            "destructive", "compact"),
                     },
                 }),
             },
@@ -1144,7 +1374,7 @@ public sealed class EditorView : UserControl
         SyncContextArea();
     }
 
-    private void ApplyLandShapeByKey(string key) => _editor.ApplyLandShape(key switch
+    private static LandShapeKind LandShapeByKey(string key) => key switch
     {
         "CircleButton" => LandShapeKind.Circle,
         "RectangleButton" => LandShapeKind.Rectangle,
@@ -1152,7 +1382,21 @@ public sealed class EditorView : UserControl
         "PolygonButton" => LandShapeKind.Polygon,
         "GridButton" => LandShapeKind.GridBlock,
         _ => LandShapeKind.BoundedFill,
-    });
+    };
+
+    private async System.Threading.Tasks.Task ClearActiveLandAsync()
+    {
+        if (TopLevel.GetTopLevel(this) is not Window owner) return;
+        if (await ConfirmationWindow.ShowAsync(
+                owner, "Очистить слой земли?",
+                "Вся геометрия активного Land layer будет очищена одной командой. Undo восстановит её.",
+                "Очистить", "ClearLandConfirmButton", destructive: true))
+            _editor.ClearActiveLand();
+    }
+
+    private static bool TryNumber(string? text, out double value) =>
+        double.TryParse(text, NumberStyles.Float, CultureInfo.CurrentCulture, out value)
+        || double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value);
 
     /// <summary>
     /// The stamp tool's context panel. It states what is current and how to change it; the full
@@ -2582,10 +2826,80 @@ public sealed class EditorView : UserControl
         var (blendRow, blendButton) = Ui.ValueRow(
             "LayerBlendButton", "Наложение", "Обычное", _editor.CycleActiveLayerBlend);
         _blendValue = blendButton;
+        blendRow.IsVisible = false;
+
+        var exactBlend = BlendChoice(
+            "LayerBlendChoice", () => _editor.ActiveLayer?.Blend,
+            value => _editor.SetActiveLayerBlend(value));
+        var exactOpacity = AppearanceSlider(
+            "LayerOpacitySlider", "Непрозрачность слоя", 0, 100, "%",
+            () => _editor.ActiveLayer?.Opacity * 100,
+            (value, _) => _editor.SetActiveLayerOpacity(value), 5);
 
         var (maskRow, maskButton) = Ui.ValueRow(
             "LayerMaskButton", "Маска", "Нет", _editor.ToggleActiveMask);
         _maskValue = maskButton;
+        var maskCommands = new WrapPanel
+        {
+            Orientation = Orientation.Horizontal,
+            ItemSpacing = 4,
+            LineSpacing = 4,
+            Children =
+            {
+                Ui.TextButton("CopyLayerMaskButton", "Копировать маску", _editor.CopyActiveMask, "compact"),
+                Ui.TextButton("PasteLayerMaskButton", "Вставить копию", () => _editor.PasteCopiedMask(), "compact"),
+                Ui.AsyncButton("RemoveLayerMaskButton", "Удалить маску…", RemoveActiveMaskAsync,
+                    "destructive", "compact"),
+            },
+        };
+
+        var selectedSublayer = 0;
+        LayerEffects? Effects() => _editor.ActiveObjectLayerEffects;
+        void ChangeEffects(Func<LayerEffects, LayerEffects> change) =>
+            _editor.SetActiveObjectLayerEffects(change(Effects() ?? new LayerEffects()));
+        var objectEffects = Ui.Section("Object layer · эффекты и подслой", new StackPanel
+        {
+            Spacing = 4,
+            Children =
+            {
+                AppearanceToggle("ObjectLayerClippingToggle", "Clipping к слою ниже",
+                    () => Effects()?.ClippingEnabled,
+                    value => ChangeEffects(current => current with { ClippingEnabled = value })),
+                AppearanceColorBox("ObjectLayerShadowColor", "Цвет тени",
+                    () => Effects()?.ShadowColor,
+                    value => ChangeEffects(current => current with { ShadowColor = value })),
+                AppearanceSlider("ObjectLayerOuterShadow", "Внешняя тень", 0, 100, "%",
+                    () => Effects()?.OuterShadowOpacity * 100,
+                    (value, commit) => { if (commit) ChangeEffects(current => current with { OuterShadowOpacity = value / 100 }); }, 5),
+                AppearanceSlider("ObjectLayerInnerShadow", "Внутренняя тень", 0, 100, "%",
+                    () => Effects()?.InnerShadowOpacity * 100,
+                    (value, commit) => { if (commit) ChangeEffects(current => current with { InnerShadowOpacity = value / 100 }); }, 5),
+                AppearanceNumberBox("ObjectLayerShadowOffsetX", "Тень X", "px",
+                    () => Effects()?.ShadowOffsetX,
+                    value => ChangeEffects(current => current with { ShadowOffsetX = value })),
+                AppearanceNumberBox("ObjectLayerShadowOffsetY", "Тень Y", "px",
+                    () => Effects()?.ShadowOffsetY,
+                    value => ChangeEffects(current => current with { ShadowOffsetY = value })),
+                AppearanceSlider("ObjectLayerShadowBlur", "Размытие тени", 0, 256, "px",
+                    () => Effects()?.ShadowBlur,
+                    (value, commit) => { if (commit) ChangeEffects(current => current with { ShadowBlur = value }); }),
+                AppearanceSlider("ObjectLayerSublayerBand", "Текущий подслой", -10, 10, "",
+                    () => selectedSublayer,
+                    (value, commit) =>
+                    {
+                        if (!commit) return;
+                        selectedSublayer = (int)Math.Round(value);
+                        SyncAppearanceSections();
+                    }),
+                AppearanceToggle("ObjectSublayerVisibleToggle", "Подслой видим",
+                    () => _editor.ActiveObjectSublayerState(selectedSublayer)?.Visible,
+                    value => _editor.SetActiveObjectSublayerState(selectedSublayer, visible: value)),
+                AppearanceToggle("ObjectSublayerLockedToggle", "Подслой заблокирован",
+                    () => _editor.ActiveObjectSublayerState(selectedSublayer)?.Locked,
+                    value => _editor.SetActiveObjectSublayerState(selectedSublayer, locked: value)),
+            },
+        });
+        _appearanceSyncs.Add(() => objectEffects.IsVisible = _editor.ActiveLayer is ObjectLayer);
 
         var orderRow = new DockPanel
         {
@@ -2626,8 +2940,25 @@ public sealed class EditorView : UserControl
         return new StackPanel
         {
             Spacing = 2,
-            Children = { nameRow, visibilityRow, lockRow, blendRow, maskRow, orderRow, delete },
+            Children =
+            {
+                nameRow, visibilityRow, lockRow, blendRow, exactOpacity, exactBlend,
+                maskRow, maskCommands, objectEffects, orderRow, delete,
+            },
         };
+    }
+
+    private async System.Threading.Tasks.Task RemoveActiveMaskAsync()
+    {
+        if (_editor.ActiveLayer?.Mask is null || TopLevel.GetTopLevel(this) is not Window owner) return;
+        if (await ConfirmationWindow.ShowAsync(
+                owner, "Удалить маску слоя?",
+                "Маска будет удалена одной отменяемой командой. Содержимое слоя не изменится.",
+                "Удалить маску", "RemoveLayerMaskConfirmButton", destructive: true))
+        {
+            _editor.RemoveActiveMask();
+            SyncSidePanels();
+        }
     }
 
     private async System.Threading.Tasks.Task FlattenSelectedCompositionAsync()
@@ -2646,10 +2977,63 @@ public sealed class EditorView : UserControl
 
     private Control BuildLandLayerBlock()
     {
+        LandEdgeStyle? Style() => (_editor.ActiveLayer as LandLayer)?.EdgeStyle;
         var (row, button) = Ui.ValueRow(
             "LandStyleButton", "Берег", "Обрыв", _editor.CycleActiveLandStyle);
         _landEdgeValue = button;
-        return Ui.Section("Земля", row).Named("LandLayerBlock");
+        return Ui.Section("Земля", new StackPanel
+        {
+            Spacing = 4,
+            Children =
+            {
+                row,
+                AppearanceColorBox("LandFillColorBox", "Цвет суши", () => Style()?.FillColor,
+                    value =>
+                    {
+                        if (AppearanceColor.Normalize(value) is { } color)
+                            _editor.SetActiveLandStyle(style => style with { FillColor = color });
+                    }),
+                AppearanceColorBox("LandOutlineColorBox", "Цвет контура", () => Style()?.OutlineColor,
+                    value =>
+                    {
+                        if (AppearanceColor.Normalize(value) is { } color)
+                            _editor.SetActiveLandStyle(style => style with { OutlineColor = color });
+                    }),
+                AppearanceSlider("LandOutlineWidthSlider", "Толщина контура", 0, 64, "px",
+                    () => Style()?.OutlineWidth,
+                    (v, _) => _editor.SetActiveLandStyle(style => style with { OutlineWidth = v })),
+                AppearanceSlider("LandInnerShadowOpacitySlider", "Внутренняя тень", 0, 100, "%",
+                    () => Style()?.InnerShadowOpacity * 100,
+                    (v, _) => _editor.SetActiveLandStyle(style => style with { InnerShadowOpacity = v / 100 }), 5),
+                AppearanceSlider("LandOuterShadowOpacitySlider", "Внешняя тень", 0, 100, "%",
+                    () => Style()?.OuterShadowOpacity * 100,
+                    (v, _) => _editor.SetActiveLandStyle(style => style with { OuterShadowOpacity = v / 100 }), 5),
+                AppearanceSlider("LandShadowBlurSlider", "Размытие теней", 0, 64, "px",
+                    () => Style()?.ShadowBlur,
+                    (v, _) => _editor.SetActiveLandStyle(style => style with { ShadowBlur = v })),
+                AppearanceNumberBox("LandShadowOffsetXBox", "Тень X", "px",
+                    () => Style()?.ShadowOffsetX,
+                    v => _editor.SetActiveLandStyle(style => style with { ShadowOffsetX = v })),
+                AppearanceNumberBox("LandShadowOffsetYBox", "Тень Y", "px",
+                    () => Style()?.ShadowOffsetY,
+                    v => _editor.SetActiveLandStyle(style => style with { ShadowOffsetY = v })),
+                AppearanceColorBox("LandRippleColorBox", "Цвет ряби", () => Style()?.RippleColor,
+                    value =>
+                    {
+                        if (AppearanceColor.Normalize(value) is { } color)
+                            _editor.SetActiveLandStyle(style => style with { RippleColor = color });
+                    }),
+                AppearanceSlider("LandRippleWidthSlider", "Толщина ряби", 0, 32, "px",
+                    () => Style()?.RippleWidth,
+                    (v, _) => _editor.SetActiveLandStyle(style => style with { RippleWidth = v })),
+                AppearanceSlider("LandRippleSpacingSlider", "Шаг ряби", 1, 128, "px",
+                    () => Style()?.RippleSpacing,
+                    (v, _) => _editor.SetActiveLandStyle(style => style with { RippleSpacing = v })),
+                AppearanceSlider("LandRippleCountSlider", "Число линий ряби", 0, 12, "",
+                    () => Style()?.RippleCount,
+                    (v, _) => _editor.SetActiveLandStyle(style => style with { RippleCount = (int)Math.Round(v) })),
+            },
+        }).Named("LandLayerBlock");
     }
 
     private Control BuildGridLayerBlock()
@@ -2750,10 +3134,41 @@ public sealed class EditorView : UserControl
 
     private Control BuildFilterLayerBlock()
     {
+        FilterSettings? Filter() => (_editor.ActiveLayer as FilterLayer)?.Settings;
         var (row, button) = Ui.ValueRow(
             "FilterStyleButton", "Пресет", "Тёплый", _editor.CycleActiveFilter);
         _filterPresetValue = button;
-        return Ui.Section("Фильтр", row).Named("FilterLayerBlock");
+        return Ui.Section("Фильтр", new StackPanel
+        {
+            Spacing = 4,
+            Children =
+            {
+                row,
+                AppearanceSlider("FilterBrightnessSlider", "Яркость", -100, 100, "%",
+                    () => Filter()?.Brightness * 100,
+                    (v, _) => _editor.SetActiveFilter(brightness: v / 100), 5),
+                AppearanceSlider("FilterContrastSlider", "Контраст", -100, 100, "%",
+                    () => Filter()?.Contrast * 100,
+                    (v, _) => _editor.SetActiveFilter(contrast: v / 100), 5),
+                AppearanceSlider("FilterSaturationSlider", "Насыщенность", -100, 100, "%",
+                    () => Filter()?.Saturation * 100,
+                    (v, _) => _editor.SetActiveFilter(saturation: v / 100), 5),
+                AppearanceSlider("FilterHueSlider", "Оттенок", -180, 180, "°",
+                    () => Filter()?.HueDegrees,
+                    (v, _) => _editor.SetActiveFilter(hueDegrees: v), 5),
+                AppearanceSlider("FilterTemperatureSlider", "Температура", -100, 100, "%",
+                    () => Filter()?.Temperature * 100,
+                    (v, _) => _editor.SetActiveFilter(temperature: v / 100), 5),
+                AppearanceSlider("FilterTextureOpacitySlider", "Текстура · непрозрачность", 0, 100, "%",
+                    () => Filter()?.TextureOpacity * 100,
+                    (v, _) => _editor.SetActiveFilter(textureOpacity: v / 100), 5),
+                AppearanceSlider("FilterTextureScaleSlider", "Текстура · масштаб", 5, 6400, "%",
+                    () => Filter()?.TextureScale * 100,
+                    (v, _) => _editor.SetActiveFilter(textureScale: v / 100), 5),
+                Ui.TextButton("ResetFilterTextureButton", "Сбросить текстуру",
+                    () => _editor.SetActiveFilter(resetTexture: true), "compact"),
+            },
+        }).Named("FilterLayerBlock");
     }
 
 
@@ -3952,6 +4367,15 @@ public sealed class EditorView : UserControl
                             AssetCommand("UseAssetBrushTipButton", "Использовать как отпечаток кисти", () =>
                             {
                                 if (_selectedAsset is not null && _editor.UseAssetAsBrushTip(_selectedAsset))
+                                {
+                                    _editor.ActiveTool = EditorTool.Brush;
+                                    SyncContextArea();
+                                    SyncStatus();
+                                }
+                            }, "compact"),
+                            AssetCommand("UseAssetBrushTextureButton", "Использовать как материал кисти", () =>
+                            {
+                                if (_selectedAsset is not null && _editor.UseAssetAsBrushTexture(_selectedAsset))
                                 {
                                     _editor.ActiveTool = EditorTool.Brush;
                                     SyncContextArea();

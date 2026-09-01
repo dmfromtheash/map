@@ -119,6 +119,11 @@ public static class UiTestFilePaths
 
 }
 
+public enum BrushPresetKind { RoundHard, RoundSoft, EdgeBlock, GridBlock, Rectangle, Ellipse, Polygon }
+
+public enum LineDrawMode { FreeDraw, Pen }
+public enum ShapeDrawMode { FreeDraw, Pen, Brush, Rectangle, Ellipse, Polygon }
+
 /// <summary>What one stamp gesture produces: a single stamp, or a whole Area/Density scatter.</summary>
 public enum StampPlacementMode
 {
@@ -186,6 +191,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     private readonly string _appVersion;
     private readonly SemaphoreSlim _saveGate = new(1, 1);
     private readonly AssetCatalog? _assetCatalog;
+    private readonly BrushPresetStore? _brushPresetStore;
     private readonly IReadOnlyList<string> _localFontFamilies;
     private readonly Action<EditorLocalPreferences>? _saveLocalPreferences;
 
@@ -211,8 +217,23 @@ public sealed partial class EditorViewModel : ViewModelBase
     private EditorTool _activeTool;
     private EditorTool _previousTool = EditorTool.Select;
     private RasterStrokeSession? _stroke;
+    private LayerId? _copiedMaskLayerId;
     private bool _editingStampForeground;
     private List<VectorPoint>? _vectorPoints;
+    private SceneObject? _vectorPreviewObject;
+    private LayerId? _vectorPreviewLayerId;
+    private ObjectId? _vectorPreviewObjectId;
+    private VectorNodeId? _selectedVectorNodeId;
+    private PortalId? _selectedPortalId;
+    private (SceneObject Before, VectorNodeId? NodeId, PortalId? PortalId)? _vectorElementDrag;
+    private (LayerId LayerId, ObjectId First, ObjectId Second, ShapeBooleanOperation Operation)? _pendingShapeBoolean;
+    private SceneObject? _shapeBooleanPreviewObject;
+    private SceneObject? _textPreviewObject;
+    private LayerId? _textPreviewLayerId;
+    private VectorPoint? _textPlacementStart;
+    private TextStyle? _textPlacementStyle;
+    private SceneObject? _textPlacementTemplate;
+    private bool _textInheritFromSelection;
     private PlacementSession? _pendingPlacement;
 
     // ------------------------------------------------------- multi-selection state
@@ -300,6 +321,8 @@ public sealed partial class EditorViewModel : ViewModelBase
             ?? typeof(EditorViewModel).Assembly.GetName().Version?.ToString(3)
             ?? "0.0.0";
         _assetCatalog = assetCatalog;
+        _brushPresetStore = assetCatalog is null ? null : new BrushPresetStore(assetCatalog.Root);
+        _brushPresets = _brushPresetStore?.Load() ?? [];
         _imageExporter = imageExporter ?? new ImageExportEngine();
         _exportDestinationPicker = exportDestinationPicker;
         _folderLauncher = folderLauncher;
@@ -661,6 +684,10 @@ public sealed partial class EditorViewModel : ViewModelBase
                 : _stroke.Settings.Color,
             Opacity = _stroke.Settings.Opacity,
             Eraser = _stroke.Settings.Eraser,
+            PaintSettings = ActiveTool == EditorTool.Mask ? null
+                : ActiveTool == EditorTool.Land && ActiveLayer is LandLayer previewLand
+                    ? _stroke.Settings with { Texture = null, Color = previewLand.EdgeStyle.FillColor }
+                    : _stroke.Settings,
             IsMask = ActiveTool == EditorTool.Mask,
             IsStampForeground = _editingStampForeground,
         };
@@ -4021,6 +4048,31 @@ public sealed partial class EditorViewModel : ViewModelBase
         Session.Execute(new UpdateFilterCommand(before, after)); AfterEdit();
     }
 
+    public bool SetActiveFilter(
+        double? brightness = null, double? contrast = null, double? saturation = null,
+        double? hueDegrees = null, double? temperature = null,
+        double? textureOpacity = null, double? textureScale = null,
+        bool resetTexture = false)
+    {
+        if (ActiveLayer is not FilterLayer { Locked: false } before) return false;
+        var current = before.Settings;
+        var updated = current with
+        {
+            Brightness = Math.Clamp(brightness ?? current.Brightness, -1, 1),
+            Contrast = Math.Clamp(contrast ?? current.Contrast, -1, 1),
+            Saturation = Math.Clamp(saturation ?? current.Saturation, -1, 1),
+            HueDegrees = Math.Clamp(hueDegrees ?? current.HueDegrees, -180, 180),
+            Temperature = Math.Clamp(temperature ?? current.Temperature, -1, 1),
+            TextureOpacity = Math.Clamp(textureOpacity ?? current.TextureOpacity, 0, 1),
+            TextureScale = Math.Clamp(textureScale ?? current.TextureScale, 0.05, 64),
+            TextureAssetSha256 = resetTexture ? null : current.TextureAssetSha256,
+        };
+        if (updated == current) return false;
+        Session.Execute(new UpdateFilterCommand(before, before with { Settings = updated }));
+        AfterEdit();
+        return true;
+    }
+
     public void UseAssetAsActiveFilterTexture(AssetRecord record)
     {
         if (_assetResolver is null || ActiveLayer is not FilterLayer { Locked: false } before) return;
@@ -4461,6 +4513,60 @@ public sealed partial class EditorViewModel : ViewModelBase
         AfterEdit();
     }
 
+    public bool SetActiveLayerOpacity(double percent)
+    {
+        if (ActiveLayer is not { Locked: false } layer || !double.IsFinite(percent)) return false;
+        var value = Math.Clamp(percent / 100, 0, 1);
+        if (Math.Abs(value - layer.Opacity) < 0.000001) return false;
+        Session.Execute(UpdateLayerCommand.SetOpacity(layer, value)); AfterEdit(); return true;
+    }
+
+    public bool SetActiveLayerBlend(string blend)
+    {
+        if (ActiveLayer is not { Locked: false } layer || !BlendModes.IsSupported(blend)) return false;
+        if (layer.Blend == blend) return false;
+        Session.Execute(UpdateLayerCommand.SetBlend(layer, blend)); AfterEdit(); return true;
+    }
+
+    public LayerEffects? ActiveObjectLayerEffects => (ActiveLayer as ObjectLayer)?.Effects;
+
+    public ObjectSublayerState? ActiveObjectSublayerState(int sublayer) =>
+        ActiveLayer is ObjectLayer layer ? layer.StateFor(Math.Clamp(sublayer, -10, 10)) : null;
+
+    public bool SetActiveObjectLayerEffects(LayerEffects value)
+    {
+        if (ActiveLayer is not ObjectLayer { Locked: false } before || value is null) return false;
+        var color = AppearanceColor.Normalize(value.ShadowColor);
+        if (color is null) return false;
+        var safe = value with
+        {
+            ShadowColor = color,
+            OuterShadowOpacity = Math.Clamp(value.OuterShadowOpacity, 0, 1),
+            InnerShadowOpacity = Math.Clamp(value.InnerShadowOpacity, 0, 1),
+            ShadowOffsetX = Math.Clamp(value.ShadowOffsetX, -512, 512),
+            ShadowOffsetY = Math.Clamp(value.ShadowOffsetY, -512, 512),
+            ShadowBlur = Math.Clamp(value.ShadowBlur, 0, 256),
+        };
+        if (safe == before.Effects) return false;
+        Session.Execute(UpdateLayerCommand.Replace(before, before with { Effects = safe }, "Object layer effects"));
+        AfterEdit(); return true;
+    }
+
+    public bool SetActiveObjectSublayerState(int sublayer, bool? visible = null, bool? locked = null)
+    {
+        if (ActiveLayer is not ObjectLayer { Locked: false } before) return false;
+        sublayer = Math.Clamp(sublayer, -10, 10);
+        var old = before.StateFor(sublayer);
+        var next = old with { Visible = visible ?? old.Visible, Locked = locked ?? old.Locked };
+        if (next == old) return false;
+        var states = before.SublayerStates.Where(item => item.Sublayer != sublayer).ToList();
+        if (!next.Visible || next.Locked) states.Add(next);
+        states.Sort((left, right) => left.Sublayer.CompareTo(right.Sublayer));
+        Session.Execute(UpdateLayerCommand.Replace(before,
+            before with { SublayerStates = states }, "Object sublayer state"));
+        AfterEdit(); return true;
+    }
+
     public void ReorderActiveLayer(bool up)
     {
         if (ActiveLayer is null)
@@ -4514,7 +4620,32 @@ public sealed partial class EditorViewModel : ViewModelBase
         Raise(nameof(SelectedTextFontResolution));
     }
 
-    public bool BeginStroke(double worldX, double worldY)
+    public void RemoveActiveMask()
+    {
+        if (ActiveLayer is not { Mask: not null } layer || layer is BaseColorLayer) return;
+        Session.Execute(UpdateMaskCommand.RemoveMask(layer)); AfterEdit();
+    }
+
+    public void CopyActiveMask()
+    {
+        if (ActiveLayer is not { Mask: not null } layer) return;
+        _copiedMaskLayerId = layer.Id;
+        StatusDetail = "Маска скопирована; исходный слой не изменён.";
+    }
+
+    public bool PasteCopiedMask()
+    {
+        if (_copiedMaskLayerId is not { } sourceId
+            || Session.Document.FindLayer(sourceId) is not { Mask: not null } source
+            || ActiveLayer is not { } target || target is BaseColorLayer || source.Id == target.Id)
+        {
+            StatusDetail = "Выберите другой совместимый слой для копии маски.";
+            return false;
+        }
+        Session.Execute(UpdateMaskCommand.CopyMask(source, target)); AfterEdit(); return true;
+    }
+
+    public bool BeginStroke(double worldX, double worldY, double pressure = 1)
     {
         if (_editingStampForeground)
         {
@@ -4528,7 +4659,7 @@ public sealed partial class EditorViewModel : ViewModelBase
                 Seed = GestureSeed.From(Session.Revision, "stamp-foreground-stroke", 0, ++_brushSeedCounter),
             };
             _stroke = new RasterStrokeSession(foreground.Tiles, BrushSettings);
-            _stroke.AddPoint(worldX, worldY);
+            _stroke.AddPoint(worldX, worldY, pressure);
             InvalidateScene(EditorChangeReason.CanvasInvalidation);
             return true;
         }
@@ -4571,19 +4702,19 @@ public sealed partial class EditorViewModel : ViewModelBase
         };
 
         _stroke = new RasterStrokeSession(target, BrushSettings);
-        _stroke.AddPoint(worldX, worldY);
+        _stroke.AddPoint(worldX, worldY, pressure);
         InvalidateScene(EditorChangeReason.CanvasInvalidation);
         return true;
     }
 
-    public void ContinueStroke(double worldX, double worldY)
+    public void ContinueStroke(double worldX, double worldY, double pressure = 1)
     {
         if (_stroke is null)
         {
             return;
         }
 
-        _stroke.AddPoint(worldX, worldY);
+        _stroke.AddPoint(worldX, worldY, pressure);
         InvalidateScene(EditorChangeReason.CanvasInvalidation);
     }
 
@@ -4636,23 +4767,29 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public void ApplyLandShape(LandShapeKind kind)
     {
-        if (ActiveLayer is not LandLayer land || land.Locked || !land.Visible)
-        {
-            StatusDetail = "Выберите видимый разблокированный Land layer.";
-            return;
-        }
-
         var centre = Session.Viewport.ScreenToWorld(
             Session.Viewport.ViewWidth / 2, Session.Viewport.ViewHeight / 2);
         const double size = 512;
         var bounds = new WorldBounds(
             centre.X - (size / 2), centre.Y - (size / 2),
             centre.X + (size / 2), centre.Y + (size / 2));
+        ApplyLandShape(kind, bounds);
+    }
+
+    public bool ApplyLandShape(
+        LandShapeKind kind, WorldBounds bounds, IReadOnlyList<LandPoint>? points = null)
+    {
+        if (ActiveLayer is not LandLayer land || land.Locked || !land.Visible)
+        {
+            StatusDetail = "Выберите видимый разблокированный Land layer.";
+            return false;
+        }
+        var centre = ((bounds.Left + bounds.Right) / 2, (bounds.Top + bounds.Bottom) / 2);
         IReadOnlyList<LandPoint> polygon = kind == LandShapeKind.Polygon
-            ?
+            ? points is { Count: >= 3 } ? points :
             [
                 new LandPoint(bounds.Left, bounds.Bottom),
-                new LandPoint(centre.X, bounds.Top),
+                new LandPoint(centre.Item1, bounds.Top),
                 new LandPoint(bounds.Right, bounds.Bottom),
             ]
             : [];
@@ -4665,13 +4802,14 @@ public sealed partial class EditorViewModel : ViewModelBase
         }, LandSubtract);
         if (Before.Count == 0)
         {
-            return;
+            return false;
         }
 
         Session.Execute(new BrushStrokeCommand(
             land.Id, Before, After,
             LandSubtract ? $"Subtract land {kind}" : $"Add land {kind}"));
         AfterEdit();
+        return true;
     }
 
     public void CycleActiveLandStyle()
@@ -4715,6 +4853,53 @@ public sealed partial class EditorViewModel : ViewModelBase
 
         Session.Execute(new BrushStrokeCommand(land.Id, Before, After, "Move land area"));
         AfterEdit();
+    }
+
+    public bool MoveActiveLandArea(WorldBounds region, int deltaX, int deltaY, bool snapToGrid)
+    {
+        if (ActiveLayer is not LandLayer land || land.Locked) return false;
+        if (snapToGrid && ActiveSnapGrid() is { } grid)
+        {
+            var size = grid.CellSize / Math.Max(1, grid.Subdivisions);
+            deltaX = (int)Math.Round(deltaX / size) * (int)Math.Max(1, Math.Round(size));
+            deltaY = (int)Math.Round(deltaY / size) * (int)Math.Max(1, Math.Round(size));
+        }
+        var (before, after) = LandRasterizer.MoveRegion(land.GeometryTiles, region, deltaX, deltaY);
+        if (before.Count == 0) return false;
+        Session.Execute(new BrushStrokeCommand(land.Id, before, after, "Move selected land area"));
+        AfterEdit(); return true;
+    }
+
+    public bool ClearActiveLand()
+    {
+        if (ActiveLayer is not LandLayer { Locked: false } land || !land.GeometryTiles.Keys.Any()) return false;
+        var before = land.GeometryTiles.Keys.ToDictionary(key => key, key => land.GeometryTiles.TryGet(key));
+        var after = before.Keys.ToDictionary(key => key, _ => (byte[]?)null);
+        Session.Execute(new BrushStrokeCommand(land.Id, before, after, "Clear land"));
+        AfterEdit(); return true;
+    }
+
+    public bool SetActiveLandStyle(Func<LandEdgeStyle, LandEdgeStyle> change)
+    {
+        if (ActiveLayer is not LandLayer { Locked: false } land) return false;
+        var proposed = change(land.EdgeStyle);
+        var updated = proposed with
+        {
+            FillColor = AppearanceColor.Normalize(proposed.FillColor) ?? land.EdgeStyle.FillColor,
+            OutlineColor = AppearanceColor.Normalize(proposed.OutlineColor) ?? land.EdgeStyle.OutlineColor,
+            OutlineWidth = Math.Clamp(proposed.OutlineWidth, 0, 64),
+            InnerShadowOpacity = Math.Clamp(proposed.InnerShadowOpacity, 0, 1),
+            OuterShadowOpacity = Math.Clamp(proposed.OuterShadowOpacity, 0, 1),
+            ShadowOffsetX = Math.Clamp(proposed.ShadowOffsetX, -512, 512),
+            ShadowOffsetY = Math.Clamp(proposed.ShadowOffsetY, -512, 512),
+            ShadowBlur = Math.Clamp(proposed.ShadowBlur, 0, 64),
+            RippleColor = AppearanceColor.Normalize(proposed.RippleColor) ?? land.EdgeStyle.RippleColor,
+            RippleWidth = Math.Clamp(proposed.RippleWidth, 0, 32),
+            RippleSpacing = Math.Clamp(proposed.RippleSpacing, 1, 128),
+            RippleCount = Math.Clamp(proposed.RippleCount, 0, 12),
+        };
+        if (updated == land.EdgeStyle) return false;
+        Session.Execute(new UpdateLandStyleCommand(land, updated)); AfterEdit(); return true;
     }
 
     public void CancelStroke()
@@ -4897,7 +5082,8 @@ public sealed partial class EditorViewModel : ViewModelBase
         .. Session.Document.Layers
             .OfType<ObjectLayer>()
             .Where(layer => layer.Visible && !layer.Locked)
-            .SelectMany(layer => layer.Objects)
+            .SelectMany(layer => layer.Objects.Where(sceneObject =>
+                layer.StateFor(sceneObject.Sublayer) is { Visible: true, Locked: false }))
             .Where(sceneObject => sceneObject.Visible && !sceneObject.Locked)
             .Select(sceneObject => sceneObject.Id),
     ];
@@ -5906,6 +6092,10 @@ public sealed partial class EditorViewModel : ViewModelBase
     private SceneObject? _appearanceGestureBefore;
     private bool _stampAspectLocked = true;
     private string? _brushTipName;
+    private string? _brushTextureName;
+    private string? _brushTextureSha256;
+    private BrushPresetKind _brushPresetKind = BrushPresetKind.RoundSoft;
+    private IReadOnlyList<LocalBrushPreset> _brushPresets = [];
     private int _brushSeedCounter;
 
     /// <summary>
@@ -6703,6 +6893,173 @@ public sealed partial class EditorViewModel : ViewModelBase
         _brushTipName = null;
         Raise(nameof(BrushTipName));
         SceneChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public string? BrushTextureName => _brushTextureName;
+
+    public void ClearBrushTexture()
+    {
+        BrushSettings = BrushSettings with { Texture = null };
+        _brushTextureName = null;
+        _brushTextureSha256 = null;
+        Raise(nameof(BrushTextureName));
+        SceneChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public bool UseAssetAsBrushTexture(AssetRecord record)
+    {
+        if (_assetCatalog is null) return false;
+        var resolution = _assetCatalog.ReadVerified(record);
+        if (resolution.Status != AssetResolutionStatus.Available || resolution.Content is null)
+        {
+            StatusDetail = "Файл материала отсутствует или не совпадает с SHA-256.";
+            return false;
+        }
+        try
+        {
+            using var bitmap = AssetImagePolicy.DecodeBitmap(resolution.Content, 1024, 1024);
+            var pixels = new byte[checked(bitmap.Width * bitmap.Height * 4)];
+            for (var y = 0; y < bitmap.Height; y++)
+            for (var x = 0; x < bitmap.Width; x++)
+            {
+                var color = bitmap.GetPixel(x, y);
+                var alpha = color.Alpha / 255.0;
+                var offset = ((y * bitmap.Width) + x) * 4;
+                pixels[offset] = (byte)Math.Round(color.Red * alpha);
+                pixels[offset + 1] = (byte)Math.Round(color.Green * alpha);
+                pixels[offset + 2] = (byte)Math.Round(color.Blue * alpha);
+                pixels[offset + 3] = color.Alpha;
+            }
+            BrushSettings = BrushSettings with { Texture = new BrushTexture(bitmap.Width, bitmap.Height, pixels), Eraser = false };
+            _brushTextureName = record.DisplayName;
+            _brushTextureSha256 = record.Sha256;
+            if (CurrentVariant is { } variant && variant.Sha256 == record.Sha256)
+                RememberCurrentVariant();
+            Raise(nameof(BrushTextureName));
+            StatusDetail = $"Материал кисти: {record.DisplayName}.";
+            SceneChanged?.Invoke(this, EventArgs.Empty);
+            return true;
+        }
+        catch (Exception error) when (error is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            StatusDetail = "Материал кисти отклонён: " + error.Message;
+            return false;
+        }
+    }
+
+    public void ApplyBrushPreset(BrushPresetKind preset)
+    {
+        _brushPresetKind = preset;
+        BrushSettings = preset switch
+        {
+            BrushPresetKind.RoundHard => BrushSettings with { Tip = null, Softness = 0 },
+            BrushPresetKind.RoundSoft => BrushSettings with { Tip = null, Softness = 0.75 },
+            _ => BrushSettings with { Tip = PresetTip(preset), Softness = 0 },
+        };
+        _brushTipName = preset switch
+        {
+            BrushPresetKind.RoundHard => "Круглая жёсткая",
+            BrushPresetKind.RoundSoft => "Круглая мягкая",
+            _ => preset.ToString(),
+        };
+        Raise(nameof(BrushTipName));
+        SceneChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private static BrushTipShape PresetTip(BrushPresetKind preset)
+    {
+        const int size = 64;
+        var alpha = new byte[size * size];
+        for (var y = 0; y < size; y++)
+        for (var x = 0; x < size; x++)
+        {
+            var nx = ((x + .5) / size * 2) - 1;
+            var ny = ((y + .5) / size * 2) - 1;
+            var inside = preset switch
+            {
+                BrushPresetKind.Ellipse => (nx * nx / 1.0) + (ny * ny / .36) <= 1,
+                BrushPresetKind.Polygon => ny >= -1 && ny <= .85 && Math.Abs(nx) <= 1 - ((ny + 1) * .18),
+                BrushPresetKind.EdgeBlock => Math.Abs(nx) >= .55 || Math.Abs(ny) >= .55,
+                _ => true,
+            };
+            if (inside) alpha[(y * size) + x] = 255;
+        }
+        return new BrushTipShape(size, size, alpha);
+    }
+
+    public IReadOnlyList<LocalBrushPreset> BrushPresets => _brushPresets;
+
+    public bool SaveBrushPreset(string name)
+    {
+        if (_brushPresetStore is null || string.IsNullOrWhiteSpace(name)) return false;
+        var settings = BrushSettings;
+        var preset = new LocalBrushPreset
+        {
+            Id = Guid.NewGuid().ToString("N"), Name = name.Trim(), TextureSha256 = _brushTextureSha256,
+            TipKind = _brushPresetKind.ToString(), Radius = settings.Radius, Softness = settings.Softness,
+            Opacity = settings.Opacity, Color = settings.Color, Spacing = settings.Spacing,
+            Scatter = settings.Scatter, AngleDegrees = settings.AngleDegrees,
+            RandomFlipHorizontal = settings.RandomFlipHorizontal,
+            RandomFlipVertical = settings.RandomFlipVertical,
+            SizeJitter = settings.SizeJitter, OpacityJitter = settings.OpacityJitter,
+            TextureScale = settings.TextureScale,
+            TextureRotationDegrees = settings.TextureRotationDegrees,
+            TextureOffsetX = settings.TextureOffsetX, TextureOffsetY = settings.TextureOffsetY,
+            TextureOpacity = settings.TextureOpacity, HueDegrees = settings.HueDegrees,
+            Saturation = settings.Saturation, Brightness = settings.Brightness, Contrast = settings.Contrast,
+            PressureAffectsSize = settings.PressureAffectsSize,
+            PressureAffectsOpacity = settings.PressureAffectsOpacity,
+            PressureAffectsSoftness = settings.PressureAffectsSoftness,
+        };
+        _brushPresets = _brushPresetStore.Save([.. _brushPresets, preset]);
+        Raise(nameof(BrushPresets)); StatusDetail = $"Пресет «{preset.Name}» сохранён локально."; return true;
+    }
+
+    public bool ApplyLocalBrushPreset(string id)
+    {
+        if (_brushPresets.FirstOrDefault(item => item.Id == id) is not { } preset) return false;
+        if (!Enum.TryParse<BrushPresetKind>(preset.TipKind, out var kind)) kind = BrushPresetKind.RoundSoft;
+        ApplyBrushPreset(kind);
+        BrushSettings = BrushSettings with
+        {
+            Radius = preset.Radius, Softness = preset.Softness, Opacity = preset.Opacity,
+            Color = preset.Color, Spacing = preset.Spacing, Scatter = preset.Scatter,
+            AngleDegrees = preset.AngleDegrees,
+            RandomFlipHorizontal = preset.RandomFlipHorizontal,
+            RandomFlipVertical = preset.RandomFlipVertical,
+            SizeJitter = preset.SizeJitter, OpacityJitter = preset.OpacityJitter,
+            TextureScale = preset.TextureScale, TextureRotationDegrees = preset.TextureRotationDegrees,
+            TextureOffsetX = preset.TextureOffsetX, TextureOffsetY = preset.TextureOffsetY,
+            TextureOpacity = preset.TextureOpacity, HueDegrees = preset.HueDegrees,
+            Saturation = preset.Saturation, Brightness = preset.Brightness, Contrast = preset.Contrast,
+            PressureAffectsSize = preset.PressureAffectsSize,
+            PressureAffectsOpacity = preset.PressureAffectsOpacity,
+            PressureAffectsSoftness = preset.PressureAffectsSoftness,
+        };
+        if (preset.TextureSha256 is { } sha && _assetCatalog?.Find(sha) is { } record)
+            UseAssetAsBrushTexture(record);
+        else
+            ClearBrushTexture();
+        SceneChanged?.Invoke(this, EventArgs.Empty); return true;
+    }
+
+    public bool RenameBrushPreset(string id, string name)
+    {
+        if (_brushPresetStore is null || string.IsNullOrWhiteSpace(name)) return false;
+        var changed = false;
+        _brushPresets = _brushPresetStore.Save([.. _brushPresets.Select(item =>
+        {
+            if (item.Id != id) return item;
+            changed = true; return item with { Name = name.Trim() };
+        })]);
+        if (changed) Raise(nameof(BrushPresets)); return changed;
+    }
+
+    public bool DeleteBrushPreset(string id)
+    {
+        if (_brushPresetStore is null || _brushPresets.All(item => item.Id != id)) return false;
+        _brushPresets = _brushPresetStore.Save([.. _brushPresets.Where(item => item.Id != id)]);
+        Raise(nameof(BrushPresets)); return true;
     }
 
     /// <summary>Loads a library asset as the brush tip: its alpha channel becomes the dab shape.</summary>

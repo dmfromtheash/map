@@ -883,6 +883,19 @@ public sealed class UpdateLayerCommand : IEditCommand
             l => ((BaseColorLayer)l) with { Color = oldColor });
     }
 
+    public static UpdateLayerCommand Replace(MapLayer before, MapLayer after, string name)
+    {
+        ArgumentNullException.ThrowIfNull(before);
+        ArgumentNullException.ThrowIfNull(after);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        if (before.Id != after.Id || before.GetType() != after.GetType())
+        {
+            throw new ArgumentException("A layer replacement must preserve identity and kind.", nameof(after));
+        }
+
+        return new UpdateLayerCommand(name, before.Id, _ => after, _ => before);
+    }
+
     private static MapLayer Mutate(
         MapLayer layer,
         string? name = null,
@@ -1076,7 +1089,10 @@ public sealed class UpdateMaskCommand : IEditCommand
     public static UpdateMaskCommand CopyMask(MapLayer source, MapLayer target)
     {
         var mask = source.Mask ?? throw new InvalidOperationException("The source layer has no mask.");
-        return new UpdateMaskCommand("Copy mask", target.Id, target.Mask, mask);
+        var independentTiles = TileMap.Empty(1).WithMany(mask.Tiles.Keys.Select(key =>
+            new KeyValuePair<TileKey, byte[]?>(key, (byte[])mask.Tiles.TryGet(key)!.Clone())));
+        return new UpdateMaskCommand("Copy mask", target.Id, target.Mask,
+            new LayerMask(independentTiles, mask.Enabled));
     }
 
     public MapDocument Apply(MapDocument document) =>

@@ -143,6 +143,7 @@ public static class SceneGeometry
             foreach (var candidate in ObjectSpatialIndex.For(layer).QueryPoint(worldX, worldY))
             {
                 if (candidate.Visible
+                    && layer.StateFor(candidate.Sublayer).Visible
                     && candidate.Sublayer >= bestSublayer
                     && Contains(candidate, worldX, worldY))
                 {

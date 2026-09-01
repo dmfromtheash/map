@@ -168,7 +168,7 @@ public static partial class MapProjectStore
     private sealed record ProjectHeader(string Format, int SchemaVersion);
 
     private static readonly ProjectMigrationRegistry MigrationRegistry = new(
-        [new V1ToV2MigrationStep()]);
+        [new V1ToV2MigrationStep(), new V2ToV3MigrationStep()]);
 
     /// <summary>Classifies a path without opening it for write or materializing its document graph.</summary>
     public static ProjectFileInspection Inspect(string path)
@@ -188,13 +188,13 @@ public static partial class MapProjectStore
                     "Файл не содержит поддерживаемый заголовок проекта Map.");
             }
 
-            if (header.SchemaVersion == MapProjectFormat.LegacySchemaVersion)
+            if (header.SchemaVersion < MapProjectFormat.SchemaVersion)
             {
                 return Inspection(
                     ProjectFileStatus.MigrationRequired,
                     "FILE_MIGRATION_REQUIRED",
                     "Нужно обновить копию проекта",
-                    "Исходный файл останется без изменений. Создайте новую копию формата v2.",
+                    $"Исходный файл останется без изменений. Создайте новую копию формата v{MapProjectFormat.SchemaVersion}.",
                     sourceSchema: header.SchemaVersion,
                     targetSchema: MapProjectFormat.SchemaVersion);
             }
@@ -740,6 +740,78 @@ public static partial class MapProjectStore
         private static JsonObject RequiredObject(JsonObject owner, string name, string entryName) =>
             owner[name] as JsonObject
             ?? throw new MapProjectCorruptedException($"{entryName} has no {name} object.");
+
+        private static string RequiredString(JsonObject owner, string name, string entryName) =>
+            owner[name]?.GetValue<string>()
+            ?? throw new MapProjectCorruptedException($"{entryName} has no {name} string.");
+
+        private static byte[] SerializeJson(JsonObject value, string entryName)
+        {
+            var bytes = JsonSerializer.SerializeToUtf8Bytes(value, JsonOptions);
+            ValidateJsonPayload(entryName, bytes);
+            return bytes;
+        }
+    }
+
+    /// <summary>
+    /// v3 adds optional Object-layer effects and sublayer states. Existing scenes already express
+    /// the exact default state by omission, so migration only advances canonical manifests and
+    /// their checkpoint checksums; it never rewrites the source file or invents document values.
+    /// </summary>
+    private sealed class V2ToV3MigrationStep : IProjectMigrationStep
+    {
+        public int SourceVersion => 2;
+        public int TargetVersion => 3;
+
+        public void Migrate(ProjectMigrationPayload payload)
+        {
+            if (payload.SchemaVersion != SourceVersion)
+                throw new InvalidOperationException("The v2 to v3 migration received a non-v2 payload.");
+
+            var manifest = ParseObject(payload.GetEntry(MapProjectFormat.ManifestEntry), MapProjectFormat.ManifestEntry);
+            manifest["schemaVersion"] = TargetVersion;
+
+            if (payload.Entries.TryGetValue(MapProjectFormat.CheckpointCatalogEntry, out var catalogBytes))
+            {
+                var catalog = ParseObject(catalogBytes, MapProjectFormat.CheckpointCatalogEntry);
+                var checkpoints = catalog["checkpoints"] as JsonArray
+                    ?? throw new MapProjectCorruptedException("Checkpoint catalog has no checkpoints array.");
+                foreach (var node in checkpoints)
+                {
+                    var item = node as JsonObject
+                        ?? throw new MapProjectCorruptedException("Checkpoint catalog has an invalid item.");
+                    var id = RequiredString(item, "id", MapProjectFormat.CheckpointCatalogEntry);
+                    var snapshotName = MapProjectFormat.CheckpointPrefix + id + "/manifest.json";
+                    var snapshot = ParseObject(payload.GetEntry(snapshotName), snapshotName);
+                    snapshot["schemaVersion"] = TargetVersion;
+                    var snapshotBytes = SerializeJson(snapshot, snapshotName);
+                    payload.SetEntry(snapshotName, snapshotBytes);
+                    item["snapshotManifestSha256"] = Sha256Hex(snapshotBytes);
+                }
+
+                var migratedCatalog = SerializeJson(catalog, MapProjectFormat.CheckpointCatalogEntry);
+                payload.SetEntry(MapProjectFormat.CheckpointCatalogEntry, migratedCatalog);
+                manifest["checkpointCatalogSha256"] = Sha256Hex(migratedCatalog);
+            }
+
+            payload.SetEntry(MapProjectFormat.ManifestEntry,
+                SerializeJson(manifest, MapProjectFormat.ManifestEntry));
+            payload.SchemaVersion = TargetVersion;
+        }
+
+        private static JsonObject ParseObject(byte[] bytes, string entryName)
+        {
+            MapProjectJsonBudget.Validate(bytes, entryName);
+            try
+            {
+                return JsonNode.Parse(bytes) as JsonObject
+                    ?? throw new MapProjectCorruptedException($"{entryName} is not a JSON object.");
+            }
+            catch (JsonException ex)
+            {
+                throw new MapProjectCorruptedException($"{entryName} is not valid JSON.", ex);
+            }
+        }
 
         private static string RequiredString(JsonObject owner, string name, string entryName) =>
             owner[name]?.GetValue<string>()

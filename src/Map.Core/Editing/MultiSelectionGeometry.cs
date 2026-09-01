@@ -192,6 +192,7 @@ public static class MultiSelectionGeometry
             foreach (var sceneObject in ObjectSpatialIndex.For(layer).Query(marquee))
             {
                 if (sceneObject.Visible && !sceneObject.Locked
+                    && layer.StateFor(sceneObject.Sublayer) is { Visible: true, Locked: false }
                     && SceneGeometry.BoundsOf(sceneObject).Intersects(marquee))
                 {
                     result.Add(sceneObject);

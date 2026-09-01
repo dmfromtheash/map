@@ -79,6 +79,30 @@ internal sealed class LayerDto
     [JsonPropertyName("filter")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public FilterSettingsDto? Filter { get; set; }
+    [JsonPropertyName("effects")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public LayerEffectsDto? Effects { get; set; }
+    [JsonPropertyName("sublayers")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<ObjectSublayerStateDto>? Sublayers { get; set; }
+}
+
+internal sealed class LayerEffectsDto
+{
+    [JsonPropertyName("clippingEnabled")] public bool ClippingEnabled { get; set; }
+    [JsonPropertyName("shadowColor")] public string ShadowColor { get; set; } = "#FF000000";
+    [JsonPropertyName("outerShadowOpacity")] public double OuterShadowOpacity { get; set; }
+    [JsonPropertyName("innerShadowOpacity")] public double InnerShadowOpacity { get; set; }
+    [JsonPropertyName("shadowOffsetX")] public double ShadowOffsetX { get; set; }
+    [JsonPropertyName("shadowOffsetY")] public double ShadowOffsetY { get; set; }
+    [JsonPropertyName("shadowBlur")] public double ShadowBlur { get; set; }
+}
+
+internal sealed class ObjectSublayerStateDto
+{
+    [JsonPropertyName("sublayer")] public int Sublayer { get; set; }
+    [JsonPropertyName("visible")] public bool Visible { get; set; } = true;
+    [JsonPropertyName("locked")] public bool Locked { get; set; }
 }
 
 internal sealed class FilterSettingsDto
@@ -131,6 +155,8 @@ internal sealed class LandStyleDto
     [JsonPropertyName("outlineWidth")] public double OutlineWidth { get; set; }
     [JsonPropertyName("innerShadowOpacity")] public double InnerShadowOpacity { get; set; }
     [JsonPropertyName("outerShadowOpacity")] public double OuterShadowOpacity { get; set; }
+    [JsonPropertyName("shadowOffsetX")] public double ShadowOffsetX { get; set; }
+    [JsonPropertyName("shadowOffsetY")] public double ShadowOffsetY { get; set; }
     [JsonPropertyName("shadowBlur")] public double ShadowBlur { get; set; }
     [JsonPropertyName("rippleColor")] public string RippleColor { get; set; } = "";
     [JsonPropertyName("rippleWidth")] public double RippleWidth { get; set; }

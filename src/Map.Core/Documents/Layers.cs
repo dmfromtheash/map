@@ -26,6 +26,21 @@ public sealed record LayerMask
     public bool Enabled { get; init; }
 }
 
+/// <summary>Document-backed Object-layer effects; defaults are a factual no-effect state.</summary>
+public sealed record LayerEffects
+{
+    public bool ClippingEnabled { get; init; }
+    public string ShadowColor { get; init; } = "#FF000000";
+    public double OuterShadowOpacity { get; init; }
+    public double InnerShadowOpacity { get; init; }
+    public double ShadowOffsetX { get; init; }
+    public double ShadowOffsetY { get; init; }
+    public double ShadowBlur { get; init; }
+}
+
+/// <summary>Visibility and edit lock for one integer Object-layer sublayer band.</summary>
+public sealed record ObjectSublayerState(int Sublayer, bool Visible = true, bool Locked = false);
+
 /// <summary>
 /// Base of every layer kind. Immutable, like the whole document snapshot; every subtype carries
 /// the shared add/rename/reorder/duplicate/hide/lock surface through these properties.
@@ -129,6 +144,15 @@ public sealed record ObjectLayer : MapLayer
 
     internal SceneObjectList ObjectStorage => _objects;
 
+    public LayerEffects Effects { get; init; } = new();
+
+    /// <summary>Only non-default states need to be stored; an absent band is visible and unlocked.</summary>
+    public IReadOnlyList<ObjectSublayerState> SublayerStates { get; init; } = [];
+
+    public ObjectSublayerState StateFor(int sublayer) =>
+        SublayerStates.FirstOrDefault(state => state.Sublayer == sublayer)
+        ?? new ObjectSublayerState(sublayer);
+
     public override LayerMask? Mask { get; init; }
 
     public override MapLayer WithNewIds() => this with
@@ -182,6 +206,8 @@ public sealed record LandEdgeStyle
     public double OutlineWidth { get; init; } = 3;
     public double InnerShadowOpacity { get; init; } = 0.18;
     public double OuterShadowOpacity { get; init; } = 0.25;
+    public double ShadowOffsetX { get; init; }
+    public double ShadowOffsetY { get; init; }
     public double ShadowBlur { get; init; } = 8;
     public string RippleColor { get; init; } = "#665A83A1";
     public double RippleWidth { get; init; } = 2;

@@ -5,7 +5,7 @@ public static class MapProjectFormat
 {
     public const string FormatId = "map-project";
     public const int LegacySchemaVersion = 1;
-    public const int SchemaVersion = 2;
+    public const int SchemaVersion = 3;
     public const string Extension = ".mapproj";
 
     public const string ManifestEntry = "manifest.json";

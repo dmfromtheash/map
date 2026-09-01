@@ -1,4 +1,5 @@
 using Map.Core.Documents;
+using Map.Core.Editing;
 using SkiaSharp;
 using System.Runtime.CompilerServices;
 
@@ -22,6 +23,7 @@ public sealed class StrokePreview
     public string Color { get; init; } = "#FF000000";
     public double Opacity { get; init; } = 1.0;
     public bool Eraser { get; init; }
+    public BrushSettings? PaintSettings { get; init; }
 
     /// <summary>Mask strokes preview as the red mask overlay, not as paint.</summary>
     public bool IsMask { get; init; }
@@ -259,8 +261,9 @@ public static class SceneRenderer
         canvas.Save();
         canvas.ClipRect(ToRect(canvasBounds));
 
-        foreach (var layer in document.Layers)
+        for (var layerIndex = 0; layerIndex < document.Layers.Count; layerIndex++)
         {
+            var layer = document.Layers[layerIndex];
             if (options.IsExport && layer is BaseColorLayer && !options.IncludeBaseColor)
             {
                 continue;
@@ -284,7 +287,8 @@ public static class SceneRenderer
                 stats.LayersDrawn++;
             }
 
-            DrawLayer(canvas, document, layer, view, options);
+            var clippingSource = layerIndex > 0 ? document.Layers[layerIndex - 1] : null;
+            DrawLayer(canvas, document, layer, clippingSource, view, options);
         }
 
         DrawPlacementPreview(canvas, document, options);
@@ -392,14 +396,18 @@ public static class SceneRenderer
     }
 
     private static void DrawLayer(
-        SKCanvas canvas, MapDocument document, MapLayer layer, WorldBounds view, RenderOptions options)
+        SKCanvas canvas, MapDocument document, MapLayer layer, MapLayer? clippingSource,
+        WorldBounds view, RenderOptions options)
     {
         var mask = layer.Mask is { Enabled: true } m
             && HasEffectiveMask(m, view)
                 ? m
                 : null;
         var maskEdit = options.MaskEditLayerId == layer.Id && layer.Mask is not null;
-        var needsGroup = mask is not null || layer.Opacity < 1.0 || layer.Blend != "Normal";
+        var effects = (layer as ObjectLayer)?.Effects;
+        var clipsToLower = effects?.ClippingEnabled == true
+            && clippingSource is { Visible: true, Opacity: > 0 };
+        var needsGroup = mask is not null || clipsToLower || layer.Opacity < 1.0 || layer.Blend != "Normal";
 
         if (needsGroup)
         {
@@ -416,6 +424,73 @@ public static class SceneRenderer
             canvas.Save();
         }
 
+        if (effects is { OuterShadowOpacity: > 0 } && options.LodTier != RenderLodTier.Overview)
+        {
+            using var shadowPaint = new SKPaint
+            {
+                ImageFilter = SKImageFilter.CreateDropShadowOnly(
+                    (float)effects.ShadowOffsetX, (float)effects.ShadowOffsetY,
+                    (float)effects.ShadowBlur, (float)effects.ShadowBlur,
+                    ParseColor(effects.ShadowColor).WithAlpha(Alpha(effects.OuterShadowOpacity))),
+            };
+            canvas.SaveLayer(ToRect(view), shadowPaint);
+            DrawLayerContent(canvas, document, layer, view, options, includePreview: false);
+            canvas.Restore();
+        }
+
+        DrawLayerContent(canvas, document, layer, view, options, includePreview: true);
+
+        if (effects is { InnerShadowOpacity: > 0 } && options.LodTier != RenderLodTier.Overview)
+        {
+            canvas.SaveLayer(ToRect(view), null);
+            using (var shadowPaint = new SKPaint
+            {
+                ImageFilter = SKImageFilter.CreateDropShadowOnly(
+                    (float)effects.ShadowOffsetX, (float)effects.ShadowOffsetY,
+                    (float)effects.ShadowBlur, (float)effects.ShadowBlur,
+                    ParseColor(effects.ShadowColor).WithAlpha(Alpha(effects.InnerShadowOpacity))),
+            })
+            {
+                canvas.SaveLayer(ToRect(view), shadowPaint);
+                DrawLayerContent(canvas, document, layer, view, options, includePreview: false);
+                canvas.Restore();
+            }
+            using (var inside = new SKPaint { BlendMode = SKBlendMode.DstIn })
+            {
+                canvas.SaveLayer(ToRect(view), inside);
+                DrawLayerContent(canvas, document, layer, view, options, includePreview: false);
+                canvas.Restore();
+            }
+            canvas.Restore();
+        }
+
+        if (mask is not null)
+        {
+            ApplyMask(canvas, layer.Id, mask, view, options);
+        }
+
+        if (clipsToLower && clippingSource is not null)
+        {
+            using var clipPaint = new SKPaint { BlendMode = SKBlendMode.DstIn };
+            canvas.SaveLayer(ToRect(view), clipPaint);
+            DrawLayerContent(canvas, document, clippingSource, view, options, includePreview: false);
+            if (clippingSource.Mask is { Enabled: true } lowerMask && HasEffectiveMask(lowerMask, view))
+                ApplyMask(canvas, clippingSource.Id, lowerMask, view, options);
+            canvas.Restore();
+        }
+
+        if (maskEdit)
+        {
+            DrawMaskOverlay(canvas, layer, view, options);
+        }
+
+        canvas.Restore();
+    }
+
+    private static void DrawLayerContent(
+        SKCanvas canvas, MapDocument document, MapLayer layer, WorldBounds view,
+        RenderOptions options, bool includePreview)
+    {
         switch (layer)
         {
             case BaseColorLayer baseColor:
@@ -456,22 +531,10 @@ public static class SceneRenderer
                 break;
         }
 
-        if (options.Preview is { } preview && preview.LayerId == layer.Id && !preview.IsMask)
+        if (includePreview && options.Preview is { } preview && preview.LayerId == layer.Id && !preview.IsMask)
         {
             DrawStrokePreview(canvas, preview, view, options);
         }
-
-        if (mask is not null)
-        {
-            ApplyMask(canvas, layer.Id, mask, view, options);
-        }
-
-        if (maskEdit)
-        {
-            DrawMaskOverlay(canvas, layer, view, options);
-        }
-
-        canvas.Restore();
     }
 
     private static void DrawLand(
@@ -499,7 +562,8 @@ public static class SceneRenderer
             if (style.OuterShadowOpacity > 0 && style.ShadowBlur > 0)
             {
                 using var filter = SKImageFilter.CreateDropShadowOnly(
-                    0, 0, (float)style.ShadowBlur, (float)style.ShadowBlur,
+                    (float)style.ShadowOffsetX, (float)style.ShadowOffsetY,
+                    (float)style.ShadowBlur, (float)style.ShadowBlur,
                     SKColors.Black.WithAlpha(Alpha(style.OuterShadowOpacity)));
                 DrawFilteredCoverage(filter, color: null, SKBlendMode.SrcOver);
             }
@@ -528,7 +592,8 @@ public static class SceneRenderer
         if (!options.FastPreview && style.InnerShadowOpacity > 0 && style.ShadowBlur > 0)
         {
             using var filter = SKImageFilter.CreateDropShadowOnly(
-                0, 0, (float)style.ShadowBlur, (float)style.ShadowBlur,
+                (float)style.ShadowOffsetX, (float)style.ShadowOffsetY,
+                (float)style.ShadowBlur, (float)style.ShadowBlur,
                 SKColors.Black.WithAlpha(Alpha(style.InnerShadowOpacity)));
             DrawFilteredCoverage(filter, color: null, SKBlendMode.SrcATop);
         }
@@ -628,6 +693,7 @@ public static class SceneRenderer
     {
         if (!options.IsExport
             && options.LodTier == RenderLodTier.Overview
+            && layer.SublayerStates.All(state => state.Visible)
             && options.ObjectCache is not null
             && options.VisibleWorld is not null)
         {
@@ -642,6 +708,8 @@ public static class SceneRenderer
         IReadOnlyList<SceneObject> candidates = options.VisibleWorld is null
             ? layer.Objects
             : ObjectSpatialIndex.For(layer).Query(queryView);
+        if (layer.SublayerStates.Any(state => !state.Visible))
+            candidates = [.. candidates.Where(item => layer.StateFor(item.Sublayer).Visible)];
 
         IReadOnlyList<SceneObject> ordered;
         if (options.ObjectOverrides is not { Count: > 0 } overrideList)
@@ -892,20 +960,22 @@ public static class SceneRenderer
             }
 
             // Preview tiles change every mouse move, so they are built fresh, never cached.
-            var pixels = new byte[TileMap.TileSize * TileMap.TileSize * 4];
-            for (var i = 0; i < coverage.Length; i++)
+            var pixels = !preview.IsMask && !preview.Eraser && preview.PaintSettings is { } settings
+                ? RasterStrokeSession.RenderPreviewTile(settings, key, coverage)
+                : new byte[TileMap.TileSize * TileMap.TileSize * 4];
+            if (preview.IsMask || preview.Eraser || preview.PaintSettings is null)
             {
-                if (coverage[i] == 0)
+                for (var i = 0; i < coverage.Length; i++)
                 {
-                    continue;
-                }
+                    if (coverage[i] == 0) continue;
 
-                var value = coverage[i] / 255.0 * alpha;
-                var offset = i * 4;
-                pixels[offset] = (byte)Math.Round(r * value);
-                pixels[offset + 1] = (byte)Math.Round(g * value);
-                pixels[offset + 2] = (byte)Math.Round(b * value);
-                pixels[offset + 3] = (byte)Math.Round(255 * value);
+                    var value = coverage[i] / 255.0 * alpha;
+                    var offset = i * 4;
+                    pixels[offset] = (byte)Math.Round(r * value);
+                    pixels[offset + 1] = (byte)Math.Round(g * value);
+                    pixels[offset + 2] = (byte)Math.Round(b * value);
+                    pixels[offset + 3] = (byte)Math.Round(255 * value);
+                }
             }
 
             using var image = SKImage.FromPixelCopy(
