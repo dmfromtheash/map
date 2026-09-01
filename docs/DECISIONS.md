@@ -261,3 +261,21 @@
   app-local preferences-файле, не в `.mapproj`.
 - **Supersedes:** только узкую operational-часть DEC-008 о том, что autosave никогда не обновляет
   основной файл. Atomic save, recovery, dirty-state и запрет тихой потери данных сохраняются.
+
+## DEC-019 — Schema v3 только для object-layer parity и copy-only migration
+
+- **Статус:** `accepted`
+- **Принято владельцем:** 2026-09-01, прямым поручением выполнить Stage 16 полностью.
+- **Дата:** 2026-09-01
+- **Решение:** canonical `.mapproj` writer использует schema v3 только для сохраняемых
+  `LayerEffects` и состояний object sublayers. Transient tool/preview/session state в scene не
+  сериализуется; renderer не меняет document.
+- **Миграция:** v2→v3 является отдельным adjacent copy-only шагом registry. Исходный v2 не
+  изменяется и не становится save/autosave target; v1 проходит последовательность v1→v2→v3 в
+  новую проверенную копию. Resource/admission/ZIP/JSON budgets не ослабляются.
+- **Зависимости:** новый geometry/SVG/package dependency не добавляется. Safe SVG поддерживает
+  только bounded статический собственный subset и rasterizes его при import; active/external
+  content отклоняется. `svg-dotnet` и перенос чужого code/assets/style не допускаются.
+- **Граница продукта:** schema v3 закрывает только принятый нативный offline P0/P1. Online,
+  Marketplace, Community, accounts/cloud, release/distribution и другой ПК требуют нового
+  отдельного решения владельца.
