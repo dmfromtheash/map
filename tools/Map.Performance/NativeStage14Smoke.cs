@@ -25,6 +25,7 @@ internal sealed record NativeStage14Report(
     bool PrimitiveCommitWasExact,
     bool PrimitiveNameWasAutomatic,
     bool PrimitiveWasOneCommandAndSelected,
+    bool SecondaryPointerCancelledWithoutMutation,
     bool SeriesPlacedExactlyTwoAndEscAddedNothing,
     int PointerMoveObjectTreeRebuilds,
     bool VersionCreatedThroughUi,
@@ -232,6 +233,17 @@ public sealed class NativeStage14Application : Application
         var primitiveHistory = editor.Session.UndoDepth == undoBeforeArm + 1
             && editor.Session.SelectedObjectId == committed.Id;
 
+        var beforeSecondaryCancel = editor.Session.Document;
+        var revisionBeforeSecondaryCancel = editor.Session.Revision;
+        var undoBeforeSecondaryCancel = editor.Session.UndoDepth;
+        editor.ArmPrimitivePlacement(SceneObjectKind.Rectangle);
+        view.Canvas.MovePlacementPointerForSmoke(640, 360);
+        var secondaryCancelled = view.Canvas.CancelPlacementWithSecondaryPointerForSmoke()
+            && editor.PendingPlacement is null
+            && ReferenceEquals(beforeSecondaryCancel, editor.Session.Document)
+            && revisionBeforeSecondaryCancel == editor.Session.Revision
+            && undoBeforeSecondaryCancel == editor.Session.UndoDepth;
+
         var set = editor.LibrarySets.Single();
         editor.SelectAssetSet(set.SetId);
         editor.StampPlacementMode = StampPlacementMode.Series;
@@ -290,6 +302,7 @@ public sealed class NativeStage14Application : Application
             && primitiveExact
             && primitiveNamed
             && primitiveHistory
+            && secondaryCancelled
             && seriesExact
             && pointerRebuilds == 0
             && versionThroughUi
@@ -311,6 +324,7 @@ public sealed class NativeStage14Application : Application
             primitiveExact,
             primitiveNamed,
             primitiveHistory,
+            secondaryCancelled,
             seriesExact,
             pointerRebuilds,
             versionThroughUi,

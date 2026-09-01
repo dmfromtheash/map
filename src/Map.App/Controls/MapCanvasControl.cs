@@ -124,6 +124,9 @@ public sealed class MapCanvasControl : Control
         return committed;
     }
 
+    /// <summary>Own-process smoke hook through the same secondary-pointer cancel path as input.</summary>
+    public bool CancelPlacementWithSecondaryPointerForSmoke() => CancelPlacementFromSecondaryPointer();
+
     public void Attach(EditorViewModel editor)
     {
         _editor?.SceneChanged -= OnSceneChanged;
@@ -301,9 +304,8 @@ public sealed class MapCanvasControl : Control
 
         if (point.Properties.IsRightButtonPressed)
         {
-            _editor.CancelPlacement();
+            CancelPlacementFromSecondaryPointer();
             e.Handled = true;
-            QueueVisualInvalidation();
             return;
         }
 
@@ -476,6 +478,18 @@ public sealed class MapCanvasControl : Control
         }
 
         _lastPointer = position;
+    }
+
+    private bool CancelPlacementFromSecondaryPointer()
+    {
+        if (_editor is null)
+        {
+            return false;
+        }
+
+        var cancelled = _editor.CancelPlacement();
+        QueueVisualInvalidation();
+        return cancelled;
     }
 
     protected override void OnPointerExited(PointerEventArgs e)
