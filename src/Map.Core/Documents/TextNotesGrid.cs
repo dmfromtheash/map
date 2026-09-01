@@ -86,6 +86,29 @@ public static partial class NoteMarkdown
             }
         }
     }
+
+    /// <summary>
+    /// Renders the allowed local subset to deterministic plain text for the native preview.
+    /// It never resolves a link, loads a resource, interprets HTML, or executes script.
+    /// </summary>
+    public static string RenderPlain(string markdown)
+    {
+        Validate(markdown);
+        var text = markdown.Replace("\r\n", "\n", StringComparison.Ordinal);
+        text = Regex.Replace(text, @"(?m)^\s{0,3}#{1,6}\s+", "");
+        text = Regex.Replace(text, @"(?m)^\s*[-*+]\s+", "• ");
+        text = Regex.Replace(text, @"(?m)^\s*\d+[.)]\s+", "• ");
+        text = LinkRegex().Replace(text, match =>
+        {
+            var label = match.Value[1..match.Value.IndexOf(']')];
+            var target = match.Groups[1].Value.Trim();
+            return string.IsNullOrWhiteSpace(label) ? target : $"{label} ({target})";
+        });
+        text = Regex.Replace(text, @"(?<!\\)(\*\*|__)(.+?)\1", "$2");
+        text = Regex.Replace(text, @"(?<!\\)(\*|_)(.+?)\1", "$2");
+        return text.Replace("\\*", "*", StringComparison.Ordinal)
+            .Replace("\\_", "_", StringComparison.Ordinal);
+    }
 }
 
 public sealed record GridDefinition

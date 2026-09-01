@@ -109,12 +109,45 @@ public static class VectorObjectEditor
         };
     }
 
+    public static SceneObject AddShapeNode(SceneObject source, ShapeRegionId regionId, double localX, double localY)
+    {
+        var shape = source.Shape ?? throw new ArgumentException("The object is not a shape.", nameof(source));
+        var found = false;
+        var regions = shape.Regions.Select(region =>
+        {
+            if (region.Id != regionId) return region;
+            found = true;
+            return new ShapeRegion(region.Id, region.Mode, ShapePrimitiveKind.FreeDraw,
+                [.. region.Nodes, new VectorNode(VectorNodeId.New(), localX, localY)]);
+        }).ToList();
+        if (!found) throw new InvalidOperationException($"Shape region {regionId} is absent.");
+        return source with { Shape = new ShapeStyle(regions, shape.Fill, shape.Stroke, shape.Portals) };
+    }
+
     public static SceneObject DeleteLineNode(SceneObject source, VectorNodeId id)
     {
         var line = source.Line ?? throw new ArgumentException("The object is not a line.", nameof(source));
         var nodes = line.Nodes.Where(node => node.Id != id).ToList();
         if (nodes.Count == line.Nodes.Count) throw new InvalidOperationException($"Node {id} is absent.");
         return source with { Line = new LineStyle(nodes, line.Stroke, line.Portals, line.Closed) };
+    }
+
+    public static SceneObject DeleteShapeNode(SceneObject source, VectorNodeId id)
+    {
+        var shape = source.Shape ?? throw new ArgumentException("The object is not a shape.", nameof(source));
+        var found = false;
+        var regions = shape.Regions.Select(region =>
+        {
+            if (region.Nodes.All(node => node.Id != id)) return region;
+            found = true;
+            var nodes = region.Nodes.Where(node => node.Id != id).ToList();
+            var minimum = region.Primitive == ShapePrimitiveKind.Ellipse ? 2 : 3;
+            if (nodes.Count < minimum)
+                throw new InvalidOperationException("A shape region cannot have fewer nodes.");
+            return new ShapeRegion(region.Id, region.Mode, ShapePrimitiveKind.FreeDraw, nodes);
+        }).ToList();
+        if (!found) throw new InvalidOperationException($"Node {id} is absent.");
+        return source with { Shape = new ShapeStyle(regions, shape.Fill, shape.Stroke, shape.Portals) };
     }
 
     public static SceneObject SetNodeCurve(SceneObject source, VectorNodeId id, bool curved)
@@ -127,14 +160,58 @@ public static class VectorObjectEditor
                 ControlOutX = curved ? 0.08 : 0,
             }
             : node;
-        var line = source.Line ?? throw new ArgumentException("The object is not a line.", nameof(source));
-        if (line.Nodes.All(node => node.Id != id)) throw new InvalidOperationException($"Node {id} is absent.");
-        return source with { Line = new LineStyle([.. line.Nodes.Select(Rewrite)], line.Stroke, line.Portals, line.Closed) };
+        if (source.Line is { } line)
+        {
+            if (line.Nodes.All(node => node.Id != id)) throw new InvalidOperationException($"Node {id} is absent.");
+            return source with { Line = new LineStyle([.. line.Nodes.Select(Rewrite)], line.Stroke, line.Portals, line.Closed) };
+        }
+        if (source.Shape is { } shape)
+        {
+            if (shape.Regions.SelectMany(region => region.Nodes).All(node => node.Id != id))
+                throw new InvalidOperationException($"Node {id} is absent.");
+            return source with
+            {
+                Shape = new ShapeStyle(
+                    [.. shape.Regions.Select(region => new ShapeRegion(region.Id, region.Mode,
+                        region.Primitive, [.. region.Nodes.Select(Rewrite)]))],
+                    shape.Fill, shape.Stroke, shape.Portals),
+            };
+        }
+        throw new ArgumentException("The object is not editable vector geometry.", nameof(source));
+    }
+
+    public static SceneObject SetNode(
+        SceneObject source, VectorNodeId id, double localX, double localY, VectorNodeKind kind,
+        double controlInX, double controlInY, double controlOutX, double controlOutY)
+    {
+        var moved = MoveNode(source, id, localX, localY);
+        VectorNode Rewrite(VectorNode node) => node.Id == id
+            ? node with
+            {
+                Kind = kind,
+                ControlInX = controlInX, ControlInY = controlInY,
+                ControlOutX = controlOutX, ControlOutY = controlOutY,
+            }
+            : node;
+        if (moved.Line is { } line)
+            return moved with { Line = new LineStyle([.. line.Nodes.Select(Rewrite)], line.Stroke, line.Portals, line.Closed) };
+        var shape = moved.Shape!;
+        return moved with
+        {
+            Shape = new ShapeStyle(
+                [.. shape.Regions.Select(region => new ShapeRegion(region.Id, region.Mode,
+                    region.Primitive, [.. region.Nodes.Select(Rewrite)]))],
+                shape.Fill, shape.Stroke, shape.Portals),
+        };
     }
 
     public static SceneObject AddPortal(SceneObject source, double position, double width)
     {
-        var portal = new LinePortal(PortalId.New(), position, width);
+        return AddPortal(source, new LinePortal(PortalId.New(), position, width));
+    }
+
+    public static SceneObject AddPortal(SceneObject source, LinePortal portal)
+    {
         return source.Line is { } line
             ? source with { Line = new LineStyle(line.Nodes, line.Stroke, [.. line.Portals, portal], line.Closed) }
             : source.Shape is { } shape
@@ -159,6 +236,22 @@ public static class VectorObjectEditor
                 ? source with { Shape = new ShapeStyle(shape.Regions, shape.Fill, shape.Stroke, [.. shape.Portals.Select(Rewrite)]) }
                 : throw new ArgumentException("Only line and shape strokes have portals.", nameof(source));
         return found ? result : throw new InvalidOperationException($"Portal {id} is absent.");
+    }
+
+    public static SceneObject SetPortal(SceneObject source, PortalId id, double position, double width)
+    {
+        if (position is < 0 or > 1 || !double.IsFinite(position)
+            || width < 0 || !double.IsFinite(width))
+            throw new ArgumentOutOfRangeException(nameof(position));
+        var moved = MovePortal(source, id, position);
+        LinePortal Rewrite(LinePortal portal) => portal.Id == id ? portal with { Width = width } : portal;
+        return moved.Line is { } line
+            ? moved with { Line = new LineStyle(line.Nodes, line.Stroke, [.. line.Portals.Select(Rewrite)], line.Closed) }
+            : moved with
+            {
+                Shape = new ShapeStyle(moved.Shape!.Regions, moved.Shape.Fill, moved.Shape.Stroke,
+                    [.. moved.Shape.Portals.Select(Rewrite)]),
+            };
     }
 
     public static SceneObject DeletePortal(SceneObject source, PortalId id)
@@ -213,6 +306,7 @@ public sealed class ShapeBooleanCommand : IEditCommand
 
     public string Name => "Shape boolean";
     public ObjectId ResultId => _result.Id;
+    public SceneObject Result => _result;
 
     public MapDocument Apply(MapDocument document) => document.WithLayer(_layerId, layer =>
     {

@@ -646,6 +646,8 @@ public sealed partial class EditorViewModel : ViewModelBase
 
             CancelStroke();
             CancelVectorDraw();
+            CancelTextPlacement();
+            CancelShapeBooleanPreview();
             CancelPlacement();
             if (value != EditorTool.Brush)
             {
@@ -667,6 +669,16 @@ public sealed partial class EditorViewModel : ViewModelBase
     }
 
     public BrushSettings BrushSettings { get; set; } = new();
+
+    public LineDrawMode ActiveLineDrawMode { get; set; } = LineDrawMode.FreeDraw;
+
+    public ShapeDrawMode ActiveShapeDrawMode { get; set; } = ShapeDrawMode.FreeDraw;
+
+    public bool TextInheritFromSelection
+    {
+        get => _textInheritFromSelection;
+        set => SetField(ref _textInheritFromSelection, value);
+    }
 
     public MaskPaintMode MaskMode { get; set; } = MaskPaintMode.Hide;
 
@@ -2311,8 +2323,15 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public bool HasPendingPlacement => _pendingPlacement is not null;
 
-    public IReadOnlyList<SceneObject> PlacementPreviewObjects =>
-        _pendingPlacement is { PointerVisible: true } pending ? pending.PreviewObjects : [];
+    public IReadOnlyList<SceneObject> PlacementPreviewObjects => _pendingPlacement is { PointerVisible: true } pending
+        ? pending.PreviewObjects
+        : _vectorPreviewObject is { } vector ? [vector]
+        : _textPreviewObject is { } text ? [text]
+        : _shapeBooleanPreviewObject is { } boolean ? [boolean]
+        : [];
+
+    public LayerId? PlacementPreviewLayerId => _pendingPlacement?.LayerId
+        ?? _vectorPreviewLayerId ?? _textPreviewLayerId ?? _pendingShapeBoolean?.LayerId;
 
     public string PlacementRefusal => _pendingPlacement?.InvalidReason ?? "";
 
@@ -3516,7 +3535,12 @@ public sealed partial class EditorViewModel : ViewModelBase
             return false;
         }
 
-        _vectorPoints = [new VectorPoint(worldX, worldY)];
+        var point = SnapVectorGesturePoint(new VectorPoint(worldX, worldY));
+        _vectorPoints = [point];
+        _vectorPreviewObjectId = ObjectId.New();
+        _vectorPreviewLayerId = ActiveObjectLayer()!.Id;
+        _vectorPreviewObject = null;
+        Raise(nameof(PlacementPreviewObjects));
         return true;
     }
 
@@ -3527,11 +3551,24 @@ public sealed partial class EditorViewModel : ViewModelBase
             return;
         }
 
-        var last = points[^1];
-        if (Math.Pow(worldX - last.X, 2) + Math.Pow(worldY - last.Y, 2) >= 4)
+        var next = SnapVectorGesturePoint(new VectorPoint(worldX, worldY));
+        var continuous = ActiveTool == EditorTool.Line
+            ? ActiveLineDrawMode == LineDrawMode.FreeDraw
+            : ActiveShapeDrawMode is ShapeDrawMode.FreeDraw or ShapeDrawMode.Brush;
+        if (continuous)
         {
-            points.Add(new VectorPoint(worldX, worldY));
+            var last = points[^1];
+            if (Math.Pow(next.X - last.X, 2) + Math.Pow(next.Y - last.Y, 2) >= 4)
+                points.Add(next);
         }
+        else if (points.Count == 1)
+            points.Add(next);
+        else
+            points[^1] = next;
+
+        _vectorPreviewObject = BuildVectorGestureObject(points, preview: true);
+        Raise(nameof(PlacementPreviewObjects));
+        InvalidateScene(EditorChangeReason.CanvasInvalidation);
     }
 
     public void EndVectorDraw()
@@ -3541,26 +3578,95 @@ public sealed partial class EditorViewModel : ViewModelBase
             return;
         }
 
+        var layerId = _vectorPreviewLayerId;
+        var added = BuildVectorGestureObject(points, preview: false);
         _vectorPoints = null;
-        var layer = ActiveObjectLayer();
-        var required = ActiveTool == EditorTool.Shape ? 3 : 2;
-        if (layer is null || points.Count < required)
+        _vectorPreviewObject = null;
+        _vectorPreviewLayerId = null;
+        _vectorPreviewObjectId = null;
+        Raise(nameof(PlacementPreviewObjects));
+        if (layerId is null || Session.Document.FindLayer(layerId.Value) is not ObjectLayer layer || added is null)
         {
             return;
         }
-
-        var added = ActiveTool == EditorTool.Shape
-            ? VectorGeometry.CreateFreeShape(
-                ObjectId.New(), EntityNameGenerator.Object(Session.Document, SceneObjectKind.Shape), points)
-            : VectorGeometry.CreateLine(
-                ObjectId.New(), EntityNameGenerator.Object(Session.Document, SceneObjectKind.Line), points);
         Session.Execute(new AddObjectCommand(layer.Id, added));
         Session.SelectedObjectId = added.Id;
         _activeLayerId = layer.Id;
         AfterEdit();
     }
 
-    public void CancelVectorDraw() => _vectorPoints = null;
+    public void CancelVectorDraw()
+    {
+        _vectorPoints = null;
+        _vectorPreviewObject = null;
+        _vectorPreviewLayerId = null;
+        _vectorPreviewObjectId = null;
+        Raise(nameof(PlacementPreviewObjects));
+        InvalidateScene(EditorChangeReason.CanvasInvalidation);
+    }
+
+    private VectorPoint SnapVectorGesturePoint(VectorPoint point) =>
+        ActiveSnapGrid() is { SnapEnabled: true } grid ? GridSnapService.Snap(grid, point) : point;
+
+    private SceneObject? BuildVectorGestureObject(IReadOnlyList<VectorPoint> source, bool preview)
+    {
+        if (_vectorPreviewObjectId is not { } objectId || source.Count < 2) return null;
+        var points = source;
+        SceneObject? result = null;
+        try
+        {
+            if (ActiveTool == EditorTool.Line)
+            {
+                var linePoints = ActiveLineDrawMode == LineDrawMode.Pen ? [source[0], source[^1]] : source;
+                if (DistanceSquared(linePoints[0], linePoints[^1]) < 1) return null;
+                result = VectorGeometry.CreateLine(objectId,
+                    EntityNameGenerator.Object(Session.Document, SceneObjectKind.Line), linePoints);
+            }
+            else if (ActiveTool == EditorTool.Shape)
+            {
+                var start = source[0]; var end = source[^1];
+                if (DistanceSquared(start, end) < 1) return null;
+                result = ActiveShapeDrawMode switch
+                {
+                    ShapeDrawMode.Rectangle => VectorGeometry.CreateShape(objectId,
+                        EntityNameGenerator.Object(Session.Document, SceneObjectKind.Shape),
+                        ShapePrimitiveKind.Rectangle, Bounds(start, end)),
+                    ShapeDrawMode.Ellipse => VectorGeometry.CreateShape(objectId,
+                        EntityNameGenerator.Object(Session.Document, SceneObjectKind.Shape),
+                        ShapePrimitiveKind.Ellipse, Bounds(start, end)),
+                    ShapeDrawMode.Polygon => VectorGeometry.CreateFreeShape(objectId,
+                        EntityNameGenerator.Object(Session.Document, SceneObjectKind.Shape),
+                        RegularPolygon(Bounds(start, end), 6)),
+                    ShapeDrawMode.Pen => VectorGeometry.CreateFreeShape(objectId,
+                        EntityNameGenerator.Object(Session.Document, SceneObjectKind.Shape),
+                        [start, end, new VectorPoint(start.X, end.Y)]),
+                    _ when source.Count >= 3 => VectorGeometry.CreateFreeShape(objectId,
+                        EntityNameGenerator.Object(Session.Document, SceneObjectKind.Shape), source),
+                    _ => null,
+                };
+            }
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+        return result is null ? null : result with { ObjectOpacity = preview ? .55 : 1 };
+
+        static WorldBounds Bounds(VectorPoint a, VectorPoint b) => new(
+            Math.Min(a.X, b.X), Math.Min(a.Y, b.Y), Math.Max(a.X, b.X), Math.Max(a.Y, b.Y));
+        static IReadOnlyList<VectorPoint> RegularPolygon(WorldBounds bounds, int sides)
+        {
+            var cx = (bounds.Left + bounds.Right) / 2; var cy = (bounds.Top + bounds.Bottom) / 2;
+            var rx = (bounds.Right - bounds.Left) / 2; var ry = (bounds.Bottom - bounds.Top) / 2;
+            return [.. Enumerable.Range(0, sides).Select(index =>
+            {
+                var angle = (-Math.PI / 2) + index * Math.PI * 2 / sides;
+                return new VectorPoint(cx + Math.Cos(angle) * rx, cy + Math.Sin(angle) * ry);
+            })];
+        }
+        static double DistanceSquared(VectorPoint a, VectorPoint b) =>
+            Math.Pow(a.X - b.X, 2) + Math.Pow(a.Y - b.Y, 2);
+    }
 
     public DragPreview? DragPreview
     {
@@ -3777,56 +3883,267 @@ public sealed partial class EditorViewModel : ViewModelBase
         Raise(nameof(SelectedTextFontResolution));
     }
 
-    public void AddNodeToSelectedLine()
+    public IReadOnlyList<VectorNode> SelectedVectorNodes => Session.SelectedObject is { } selected
+        ? selected.Line?.Nodes ?? selected.Shape?.Regions.SelectMany(region => region.Nodes).ToList() ?? []
+        : [];
+
+    public IReadOnlyList<LinePortal> SelectedVectorPortals => Session.SelectedObject is { } selected
+        ? selected.Line?.Portals ?? selected.Shape?.Portals ?? []
+        : [];
+
+    public VectorNode? SelectedVectorNode => _selectedVectorNodeId is { } id
+        ? SelectedVectorNodes.FirstOrDefault(node => node.Id == id)
+        : null;
+
+    public LinePortal? SelectedVectorPortal => _selectedPortalId is { } id
+        ? SelectedVectorPortals.FirstOrDefault(portal => portal.Id == id)
+        : null;
+
+    public bool SelectVectorNode(VectorNodeId id)
     {
-        if (EditableSelection() is not { Line: not null } before) return;
-        ReplaceSelected(before, VectorObjectEditor.AddLineNode(before, 1, 0.5), "Add line node");
+        if (SelectedVectorNodes.All(node => node.Id != id)) return false;
+        _selectedVectorNodeId = id; _selectedPortalId = null;
+        Raise(nameof(SelectedVectorNode)); Raise(nameof(SelectedVectorPortal)); return true;
+    }
+
+    public bool SelectVectorPortal(PortalId id)
+    {
+        if (SelectedVectorPortals.All(portal => portal.Id != id)) return false;
+        _selectedPortalId = id; _selectedVectorNodeId = null;
+        Raise(nameof(SelectedVectorNode)); Raise(nameof(SelectedVectorPortal)); return true;
+    }
+
+    public void AddNodeToSelectedLine(double localX = .5, double localY = .5)
+    {
+        if (EditableSelection() is not { Line: not null } before || !double.IsFinite(localX) || !double.IsFinite(localY)) return;
+        var after = VectorObjectEditor.AddLineNode(before, localX, localY);
+        _selectedVectorNodeId = after.Line!.Nodes[^1].Id;
+        ReplaceSelected(before, after, "Add line node");
+    }
+
+    public void AddNodeToSelectedShape(double localX, double localY)
+    {
+        if (EditableSelection() is not { Shape: { Regions.Count: > 0 } shape } before
+            || !double.IsFinite(localX) || !double.IsFinite(localY)) return;
+        var after = VectorObjectEditor.AddShapeNode(before, shape.Regions[0].Id, localX, localY);
+        _selectedVectorNodeId = after.Shape!.Regions[0].Nodes[^1].Id;
+        ReplaceSelected(before, after, "Add shape node");
+    }
+
+    public bool SetSelectedVectorNode(
+        double localX, double localY, VectorNodeKind kind,
+        double controlInX, double controlInY, double controlOutX, double controlOutY)
+    {
+        if (EditableSelection() is not { } before || _selectedVectorNodeId is not { } id
+            || new[] { localX, localY, controlInX, controlInY, controlOutX, controlOutY }.Any(value => !double.IsFinite(value)))
+            return false;
+        ReplaceSelected(before, VectorObjectEditor.SetNode(before, id, localX, localY, kind,
+            controlInX, controlInY, controlOutX, controlOutY), "Edit selected vector node");
+        return true;
     }
 
     public void MoveSelectedVectorNode()
     {
-        if (EditableSelection() is not { } before) return;
-        var node = before.Line?.Nodes.FirstOrDefault() ?? before.Shape?.Regions[0].Nodes.FirstOrDefault();
-        if (node is null) return;
-        ReplaceSelected(before,
-            VectorObjectEditor.MoveNode(before, node.Id, Math.Clamp(node.X + 0.08, -1, 2), Math.Clamp(node.Y + 0.05, -1, 2)),
-            "Move vector node");
+        if (SelectedVectorNode is { } node)
+            SetSelectedVectorNode(node.X, node.Y, node.Kind, node.ControlInX, node.ControlInY,
+                node.ControlOutX, node.ControlOutY);
     }
 
     public void ToggleSelectedNodeCurve()
     {
-        if (EditableSelection() is not { Line: { } line } before) return;
-        var node = line.Nodes[Math.Min(1, line.Nodes.Count - 1)];
+        if (EditableSelection() is not { } before || SelectedVectorNode is not { } node) return;
         ReplaceSelected(before, VectorObjectEditor.SetNodeCurve(before, node.Id, node.Kind != VectorNodeKind.Curve),
-            "Toggle line curve");
+            "Toggle selected node curve");
     }
 
-    public void AddPortalToSelected()
+    public void DeleteSelectedVectorNode()
     {
-        if (EditableSelection() is not { } before || before.Line is null && before.Shape is null) return;
-        ReplaceSelected(before, VectorObjectEditor.AddPortal(before, 0.5, 48), "Add portal");
+        if (EditableSelection() is not { } before || _selectedVectorNodeId is not { } id) return;
+        var after = before.Line is not null
+            ? VectorObjectEditor.DeleteLineNode(before, id)
+            : VectorObjectEditor.DeleteShapeNode(before, id);
+        _selectedVectorNodeId = null;
+        ReplaceSelected(before, after, "Delete selected vector node");
+    }
+
+    public void AddPortalToSelected(double position = .5, double width = 48)
+    {
+        if (EditableSelection() is not { } before || before.Line is null && before.Shape is null
+            || !double.IsFinite(position) || !double.IsFinite(width)) return;
+        var portal = new LinePortal(PortalId.New(), Math.Clamp(position, 0, 1), Math.Max(0, width));
+        _selectedPortalId = portal.Id;
+        ReplaceSelected(before, VectorObjectEditor.AddPortal(before, portal), "Add portal");
+    }
+
+    public bool SetSelectedPortal(double position, double width)
+    {
+        if (EditableSelection() is not { } before || _selectedPortalId is not { } id
+            || !double.IsFinite(position) || !double.IsFinite(width)) return false;
+        ReplaceSelected(before, VectorObjectEditor.SetPortal(before, id, Math.Clamp(position, 0, 1), Math.Max(0, width)),
+            "Edit selected portal");
+        return true;
     }
 
     public void MoveSelectedPortal()
     {
-        if (EditableSelection() is not { } before) return;
-        var portal = before.Line?.Portals.FirstOrDefault() ?? before.Shape?.Portals.FirstOrDefault();
-        if (portal is null) return;
-        ReplaceSelected(before, VectorObjectEditor.MovePortal(before, portal.Id, Math.Min(0.9, portal.Position + 0.1)),
-            "Move portal");
+        if (SelectedVectorPortal is { } portal) SetSelectedPortal(portal.Position, portal.Width);
     }
 
     public void DeleteSelectedPortal()
     {
-        if (EditableSelection() is not { } before) return;
-        var portal = before.Line?.Portals.FirstOrDefault() ?? before.Shape?.Portals.FirstOrDefault();
-        if (portal is null) return;
-        ReplaceSelected(before, VectorObjectEditor.DeletePortal(before, portal.Id), "Delete portal");
+        if (EditableSelection() is not { } before || _selectedPortalId is not { } id) return;
+        ReplaceSelected(before, VectorObjectEditor.DeletePortal(before, id), "Delete selected portal");
+        _selectedPortalId = null;
+    }
+
+    public bool SelectVectorElementAt(double worldX, double worldY, double tolerance)
+    {
+        if (Session.SelectedObject is not { } selected || selected.Line is null && selected.Shape is null)
+            return false;
+        tolerance = Math.Max(.001, tolerance);
+        var best = double.PositiveInfinity;
+        VectorNodeId? nodeId = null; PortalId? portalId = null;
+        foreach (var node in selected.Line?.Nodes ?? selected.Shape!.Regions.SelectMany(region => region.Nodes))
+        {
+            var point = VectorNodeWorld(selected, node);
+            var distance = Math.Sqrt(Math.Pow(point.X - worldX, 2) + Math.Pow(point.Y - worldY, 2));
+            if (distance <= tolerance && distance < best)
+            {
+                best = distance; nodeId = node.Id; portalId = null;
+            }
+        }
+        var path = SelectedVectorPath(selected);
+        foreach (var portal in selected.Line?.Portals ?? selected.Shape!.Portals)
+        {
+            var point = PointAtPosition(path, portal.Position);
+            var distance = Math.Sqrt(Math.Pow(point.X - worldX, 2) + Math.Pow(point.Y - worldY, 2));
+            if (distance <= tolerance && distance < best)
+            {
+                best = distance; portalId = portal.Id; nodeId = null;
+            }
+        }
+        if (nodeId is { } selectedNodeId) return SelectVectorNode(selectedNodeId);
+        if (portalId is { } selectedPortalId) return SelectVectorPortal(selectedPortalId);
+        return false;
+    }
+
+    public bool BeginVectorElementDrag(double worldX, double worldY, double viewScale)
+    {
+        if (EditableSelection() is not { } before || before.Line is null && before.Shape is null
+            || !SelectVectorElementAt(worldX, worldY, 10 / Math.Max(.001, viewScale))) return false;
+        _vectorElementDrag = (before, _selectedVectorNodeId, _selectedPortalId);
+        DragPreview = new DragPreview([before], [before], DragMode.Move, null, worldX, worldY, null);
+        return true;
+    }
+
+    public void UpdateVectorElementDrag(double worldX, double worldY)
+    {
+        if (_vectorElementDrag is not { } drag) return;
+        SceneObject proposed;
+        if (drag.NodeId is { } nodeId)
+        {
+            var world = SnapVectorGesturePoint(new VectorPoint(worldX, worldY));
+            var local = ObjectLocalPoint(drag.Before, world);
+            proposed = VectorObjectEditor.MoveNode(drag.Before, nodeId, local.X, local.Y);
+        }
+        else if (drag.PortalId is { } portalId)
+        {
+            var position = NearestPosition(SelectedVectorPath(drag.Before), new VectorPoint(worldX, worldY));
+            proposed = VectorObjectEditor.MovePortal(drag.Before, portalId, position);
+        }
+        else return;
+        DragPreview = new DragPreview([drag.Before], [proposed], DragMode.Move, null, worldX, worldY, null);
+        InvalidateScene(EditorChangeReason.CanvasInvalidation);
+    }
+
+    public void EndVectorElementDrag()
+    {
+        if (_vectorElementDrag is not { } drag) return;
+        var proposed = DragPreview?.Proposed.FirstOrDefault();
+        _vectorElementDrag = null; DragPreview = null;
+        if (proposed is not null && proposed != drag.Before)
+        {
+            Session.Execute(new ReplaceObjectsCommand([drag.Before], [proposed], "Drag vector node or portal"));
+            AfterEdit();
+        }
+        else InvalidateScene(EditorChangeReason.CanvasInvalidation);
+    }
+
+    public void CancelVectorElementDrag()
+    {
+        if (_vectorElementDrag is null) return;
+        _vectorElementDrag = null; DragPreview = null;
+        InvalidateScene(EditorChangeReason.CanvasInvalidation);
+    }
+
+    private static VectorPoint VectorNodeWorld(SceneObject owner, VectorNode node) =>
+        RotateObjectPoint(owner, new VectorPoint(owner.X + node.X * owner.Width, owner.Y + node.Y * owner.Height));
+
+    private static VectorPoint ObjectLocalPoint(SceneObject owner, VectorPoint world)
+    {
+        var unrotated = RotateObjectPoint(owner, world, inverse: true);
+        return new VectorPoint((unrotated.X - owner.X) / owner.Width, (unrotated.Y - owner.Y) / owner.Height);
+    }
+
+    private static VectorPoint RotateObjectPoint(SceneObject owner, VectorPoint point, bool inverse = false)
+    {
+        var radians = owner.RotationDegrees * (inverse ? -1 : 1) * Math.PI / 180;
+        var cos = Math.Cos(radians); var sin = Math.Sin(radians);
+        var cx = owner.X + owner.Width / 2; var cy = owner.Y + owner.Height / 2;
+        var dx = point.X - cx; var dy = point.Y - cy;
+        return new VectorPoint(cx + dx * cos - dy * sin, cy + dx * sin + dy * cos);
+    }
+
+    private static IReadOnlyList<VectorPoint> SelectedVectorPath(SceneObject owner)
+    {
+        var raw = owner.Line is { } line
+            ? VectorGeometry.Flatten(owner, line.Nodes, line.Closed)
+            : VectorGeometry.Flatten(owner, owner.Shape!.Regions[0].Nodes, closed: true);
+        return [.. raw.Select(point => RotateObjectPoint(owner, point))];
+    }
+
+    private static VectorPoint PointAtPosition(IReadOnlyList<VectorPoint> path, double position)
+    {
+        if (path.Count == 0) return default;
+        var lengths = path.Zip(path.Skip(1)).Select(pair => Math.Sqrt(
+            Math.Pow(pair.Second.X - pair.First.X, 2) + Math.Pow(pair.Second.Y - pair.First.Y, 2))).ToList();
+        var target = lengths.Sum() * Math.Clamp(position, 0, 1); var cursor = 0.0;
+        for (var i = 0; i < lengths.Count; i++)
+        {
+            if (target <= cursor + lengths[i])
+            {
+                var t = (target - cursor) / Math.Max(.001, lengths[i]);
+                return new VectorPoint(path[i].X + (path[i + 1].X - path[i].X) * t,
+                    path[i].Y + (path[i + 1].Y - path[i].Y) * t);
+            }
+            cursor += lengths[i];
+        }
+        return path[^1];
+    }
+
+    private static double NearestPosition(IReadOnlyList<VectorPoint> path, VectorPoint target)
+    {
+        if (path.Count < 2) return 0;
+        var lengths = path.Zip(path.Skip(1)).Select(pair => Math.Sqrt(
+            Math.Pow(pair.Second.X - pair.First.X, 2) + Math.Pow(pair.Second.Y - pair.First.Y, 2))).ToList();
+        var total = Math.Max(.001, lengths.Sum()); var cursor = 0.0; var best = double.PositiveInfinity; var result = 0.0;
+        for (var i = 0; i < lengths.Count; i++)
+        {
+            var a = path[i]; var b = path[i + 1]; var dx = b.X - a.X; var dy = b.Y - a.Y;
+            var t = Math.Clamp(((target.X - a.X) * dx + (target.Y - a.Y) * dy)
+                / Math.Max(.000001, dx * dx + dy * dy), 0, 1);
+            var px = a.X + dx * t; var py = a.Y + dy * t;
+            var distance = Math.Pow(target.X - px, 2) + Math.Pow(target.Y - py, 2);
+            if (distance < best) { best = distance; result = (cursor + lengths[i] * t) / total; }
+            cursor += lengths[i];
+        }
+        return Math.Clamp(result, 0, 1);
     }
 
     public void CutSelectedLine()
     {
         if (EditableSelection() is not { Line: { Nodes.Count: >= 3 } line } before
+            || _selectedVectorNodeId is not { } selectedNode
             || DocumentEditor.FindLayerOf(Session.Document, before.Id) is not { } layer)
         {
             return;
@@ -3834,7 +4151,12 @@ public sealed partial class EditorViewModel : ViewModelBase
 
         var points = line.Nodes.Select(node => new VectorPoint(
             before.X + node.X * before.Width, before.Y + node.Y * before.Height)).ToList();
-        var cut = points.Count / 2;
+        var cut = line.Nodes.ToList().FindIndex(node => node.Id == selectedNode);
+        if (cut <= 0 || cut >= points.Count - 1)
+        {
+            StatusDetail = "Для разреза выберите внутренний узел линии.";
+            return;
+        }
         var pieces = new[]
         {
             VectorGeometry.CreateLine(ObjectId.New(), before.Name + " A", points.Take(cut + 1).ToList(), line.Stroke),
@@ -3927,18 +4249,64 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public void ApplyShapeBoolean(ShapeBooleanOperation operation)
     {
-        var layer = ActiveObjectLayer();
-        var shapes = layer?.Objects.Where(item => item.Shape is not null).TakeLast(2).ToList();
-        if (layer is null || shapes?.Count != 2)
+        if (ResolveShapeBooleanSelection() is not { } operands)
         {
-            StatusDetail = "Для boolean нужны две последние фигуры на активном Object layer.";
+            StatusDetail = "Для boolean явно выделите две совместимые фигуры на одном доступном Object layer.";
             return;
         }
 
-        var command = new ShapeBooleanCommand(Session.Document, layer.Id, shapes[0].Id, shapes[1].Id, operation);
+        var command = new ShapeBooleanCommand(Session.Document, operands.Layer.Id,
+            operands.First.Id, operands.Second.Id, operation);
         Session.Execute(command);
         Session.SelectedObjectId = command.ResultId;
+        CancelShapeBooleanPreview();
         AfterEdit();
+    }
+
+    public bool PreviewShapeBoolean(ShapeBooleanOperation operation)
+    {
+        if (ResolveShapeBooleanSelection() is not { } operands)
+        {
+            StatusDetail = "Для preview явно выделите две фигуры на одном доступном Object layer.";
+            return false;
+        }
+        var command = new ShapeBooleanCommand(Session.Document, operands.Layer.Id,
+            operands.First.Id, operands.Second.Id, operation);
+        _pendingShapeBoolean = (operands.Layer.Id, operands.First.Id, operands.Second.Id, operation);
+        _shapeBooleanPreviewObject = command.Result with { ObjectOpacity = .55 };
+        Raise(nameof(PlacementPreviewObjects));
+        InvalidateScene(EditorChangeReason.CanvasInvalidation);
+        return true;
+    }
+
+    public bool CommitShapeBooleanPreview()
+    {
+        if (_pendingShapeBoolean is not { } pending
+            || Session.Document.FindLayer(pending.LayerId) is not ObjectLayer layer
+            || layer.Objects.All(item => item.Id != pending.First)
+            || layer.Objects.All(item => item.Id != pending.Second)) return false;
+        var command = new ShapeBooleanCommand(Session.Document, pending.LayerId,
+            pending.First, pending.Second, pending.Operation);
+        CancelShapeBooleanPreview();
+        Session.Execute(command); Session.SelectedObjectId = command.ResultId; AfterEdit(); return true;
+    }
+
+    public void CancelShapeBooleanPreview()
+    {
+        _pendingShapeBoolean = null; _shapeBooleanPreviewObject = null;
+        Raise(nameof(PlacementPreviewObjects));
+        InvalidateScene(EditorChangeReason.CanvasInvalidation);
+    }
+
+    private (ObjectLayer Layer, SceneObject First, SceneObject Second)? ResolveShapeBooleanSelection()
+    {
+        var shapes = Session.SelectedObjectIds.Select(id => DocumentEditor.FindObject(Session.Document, id))
+            .Where(item => item?.Shape is not null).Select(item => item!).ToList();
+        if (shapes.Count != 2
+            || DocumentEditor.FindLayerOf(Session.Document, shapes[0].Id) is not { } layer
+            || DocumentEditor.FindLayerOf(Session.Document, shapes[1].Id)?.Id != layer.Id
+            || layer.Locked || !layer.Visible) return null;
+        return (layer, shapes[0], shapes[1]);
     }
 
     private ObjectLayer? ActiveObjectLayer() => ActiveLayer is ObjectLayer { Visible: true, Locked: false } active
@@ -4378,19 +4746,16 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public void SnapSelectedNodeToGrid()
     {
-        if (EditableSelection() is not { } before || ActiveSnapGrid() is not { } grid) return;
-        var node = before.Line?.Nodes.FirstOrDefault()
-            ?? before.Shape?.Regions.SelectMany(region => region.Nodes).FirstOrDefault();
-        if (node is null) return;
-        ReplaceSelected(before, GridSnapService.SnapNode(before, node.Id, grid), "Snap node to grid");
+        if (EditableSelection() is not { } before || ActiveSnapGrid() is not { } grid
+            || _selectedVectorNodeId is not { } nodeId) return;
+        ReplaceSelected(before, GridSnapService.SnapNode(before, nodeId, grid), "Snap selected node to grid");
     }
 
     public void SnapSelectedPortalToGrid()
     {
-        if (EditableSelection() is not { Line: { } line } before || ActiveSnapGrid() is not { } grid) return;
-        var portal = line.Portals.FirstOrDefault();
-        if (portal is null) return;
-        var after = GridSnapService.SnapPortal(before, portal.Id, grid, out var outcome);
+        if (EditableSelection() is not { Line: not null } before || ActiveSnapGrid() is not { } grid
+            || _selectedPortalId is not { } portalId) return;
+        var after = GridSnapService.SnapPortal(before, portalId, grid, out var outcome);
         if (outcome == PortalSnapOutcome.AlreadySnapped)
         {
             StatusDetail = "Проход уже привязан к сетке.";
@@ -4511,6 +4876,82 @@ public sealed partial class EditorViewModel : ViewModelBase
         };
         Session.Execute(UpdateLayerCommand.SetBlend(layer, next));
         AfterEdit();
+    }
+
+    public bool BeginTextPlacement(double worldX, double worldY)
+    {
+        if (ActiveTool != EditorTool.Text || ActiveObjectLayer() is not { } layer) return false;
+        _textPlacementStart = SnapVectorGesturePoint(new VectorPoint(worldX, worldY));
+        _textPreviewLayerId = layer.Id;
+        _textPlacementTemplate = TextInheritFromSelection && Session.SelectedObject?.Text is not null
+            ? Session.SelectedObject
+            : null;
+        _textPlacementStyle = (_textPlacementTemplate?.Text ?? new TextStyle()) with
+        {
+            Content = "Новый текст\nна карте",
+        };
+        _textPreviewObject = BuildTextPlacement(_textPlacementStart.Value, _textPlacementStart.Value, preview: true);
+        Raise(nameof(PlacementPreviewObjects));
+        InvalidateScene(EditorChangeReason.CanvasInvalidation);
+        return true;
+    }
+
+    public void ContinueTextPlacement(double worldX, double worldY)
+    {
+        if (_textPlacementStart is not { } start) return;
+        var end = SnapVectorGesturePoint(new VectorPoint(worldX, worldY));
+        _textPreviewObject = BuildTextPlacement(start, end, preview: true);
+        Raise(nameof(PlacementPreviewObjects));
+        InvalidateScene(EditorChangeReason.CanvasInvalidation);
+    }
+
+    public void EndTextPlacement()
+    {
+        if (_textPlacementStart is null || _textPreviewLayerId is not { } layerId
+            || _textPreviewObject is not { } preview
+            || Session.Document.FindLayer(layerId) is not ObjectLayer)
+        {
+            CancelTextPlacement(); return;
+        }
+        var added = preview with { ObjectOpacity = _textPlacementTemplate?.ObjectOpacity ?? 1 };
+        Session.Execute(new AddObjectCommand(layerId, added));
+        Session.SelectedObjectId = added.Id;
+        _activeLayerId = layerId;
+        CancelTextPlacement(clearOnly: true);
+        AfterEdit();
+    }
+
+    public void CancelTextPlacement() => CancelTextPlacement(clearOnly: false);
+
+    private void CancelTextPlacement(bool clearOnly)
+    {
+        _textPlacementStart = null;
+        _textPlacementStyle = null;
+        _textPlacementTemplate = null;
+        _textPreviewObject = null;
+        _textPreviewLayerId = null;
+        Raise(nameof(PlacementPreviewObjects));
+        if (!clearOnly) InvalidateScene(EditorChangeReason.CanvasInvalidation);
+    }
+
+    private SceneObject BuildTextPlacement(VectorPoint start, VectorPoint end, bool preview)
+    {
+        var dragged = Math.Abs(end.X - start.X) >= 8 || Math.Abs(end.Y - start.Y) >= 8;
+        var left = dragged ? Math.Min(start.X, end.X) : start.X - 180;
+        var top = dragged ? Math.Min(start.Y, end.Y) : start.Y - 70;
+        var width = dragged ? Math.Max(32, Math.Abs(end.X - start.X)) : 360;
+        var height = dragged ? Math.Max(24, Math.Abs(end.Y - start.Y)) : 140;
+        var template = _textPlacementTemplate;
+        return new SceneObject(
+            _textPreviewObject?.Id ?? ObjectId.New(), SceneObjectKind.Text,
+            EntityNameGenerator.Text(Session.Document, _textPlacementStyle!.Content),
+            left, top, width, height, template?.RotationDegrees ?? 0,
+            "#FF20242B", "#FFFFFFFF", 0, true, false)
+        {
+            Text = _textPlacementStyle,
+            Sublayer = template?.Sublayer ?? 0,
+            ObjectOpacity = preview ? .55 : template?.ObjectOpacity ?? 1,
+        };
     }
 
     public bool SetActiveLayerOpacity(double percent)
@@ -5230,6 +5671,31 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// </summary>
     public bool HandleEscape()
     {
+        if (_pendingShapeBoolean is not null)
+        {
+            CancelShapeBooleanPreview();
+            return true;
+        }
+        if (_vectorElementDrag is not null)
+        {
+            CancelVectorElementDrag();
+            return true;
+        }
+        if (_vectorPoints is not null)
+        {
+            CancelVectorDraw();
+            return true;
+        }
+        if (_textPlacementStart is not null)
+        {
+            CancelTextPlacement();
+            return true;
+        }
+        if (_stroke is not null)
+        {
+            CancelStroke();
+            return true;
+        }
         if (CancelPlacement())
         {
             return true;
@@ -5334,6 +5800,16 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// <summary>One notification bundle for every way the selection can change.</summary>
     private void AfterSelectionChange()
     {
+        if (_selectedVectorNodeId is { } nodeId && SelectedVectorNodes.All(node => node.Id != nodeId))
+            _selectedVectorNodeId = null;
+        if (_selectedPortalId is { } portalId && SelectedVectorPortals.All(portal => portal.Id != portalId))
+            _selectedPortalId = null;
+        if (_pendingShapeBoolean is { } pending
+            && !Session.SelectedObjectIds.SequenceEqual(new[] { pending.First, pending.Second }))
+        {
+            _pendingShapeBoolean = null; _shapeBooleanPreviewObject = null;
+            Raise(nameof(PlacementPreviewObjects));
+        }
         RefreshInspector();
         Raise(nameof(SelectionStatus));
         Raise(nameof(SelectionKind));
@@ -6834,6 +7310,29 @@ public sealed partial class EditorViewModel : ViewModelBase
             Opacity = Finite(percent, fill.Opacity * 100, 0, 100) / 100.0,
         });
 
+    public void SetShapeFillTextureScale(double value, bool commit = true) =>
+        EditShapeFill("Shape texture scale", commit, fill => fill with
+        { TextureScale = Finite(value, fill.TextureScale, .05, 64) });
+
+    public void SetShapeFillTextureRotation(double value, bool commit = true) =>
+        EditShapeFill("Shape texture rotation", commit, fill => fill with
+        { TextureRotation = Finite(value, fill.TextureRotation, -180, 180) });
+
+    public void SetShapeFillTextureOffsetX(double value, bool commit = true) =>
+        EditShapeFill("Shape texture offset X", commit, fill => fill with
+        { TextureOffsetX = Finite(value, fill.TextureOffsetX, -4096, 4096) });
+
+    public void SetShapeFillTextureOffsetY(double value, bool commit = true) =>
+        EditShapeFill("Shape texture offset Y", commit, fill => fill with
+        { TextureOffsetY = Finite(value, fill.TextureOffsetY, -4096, 4096) });
+
+    public void ResetShapeFillTexture() =>
+        EditShapeFill("Reset shape texture", commit: true, fill => fill with
+        {
+            TextureAssetSha256 = null, TextureScale = 1, TextureRotation = 0,
+            TextureOffsetX = 0, TextureOffsetY = 0,
+        });
+
     /// <summary>Fill back to its defaults; the texture reference is dropped with the rest.</summary>
     public void ResetShapeFill() =>
         EditShapeFill("Reset shape fill", commit: true, _ => new ShapeFillStyle());
@@ -7113,6 +7612,8 @@ public sealed partial class EditorViewModel : ViewModelBase
         || DragPreview is not null
         || _stroke is not null
         || _vectorPoints is not null
+        || _textPlacementStart is not null
+        || _pendingShapeBoolean is not null
         || CanvasWorkflowOpen;
 
     /// <summary>

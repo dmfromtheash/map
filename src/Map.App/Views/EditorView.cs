@@ -874,38 +874,69 @@ public sealed class EditorView : UserControl
         };
     }
 
-    private Control BuildLinePanel() => new StackPanel
+    private Control BuildLinePanel()
     {
-        Spacing = 10,
-        Children =
+        var (modes, buttons) = Ui.Segmented("LineDrawMode",
+            [("FreeDraw", "Free Draw", null), ("Pen", "Pen / Nodes", null)],
+            key => _editor.ActiveLineDrawMode = key == "Pen" ? LineDrawMode.Pen : LineDrawMode.FreeDraw);
+        _appearanceSyncs.Add(() =>
         {
-            Explanation("Протяните по холсту, чтобы нарисовать линию, или добавьте прямую кнопкой ниже. " +
-                        "Узлы и порталы редактируются после выделения линии."),
-            Ui.CommandButton("AddLineButton", "Добавить линию", MapIcons.Line, () => Create(_editor.AddLine)),
-        },
-    };
+            for (var i = 0; i < buttons.Count; i++)
+            {
+                var active = i == (_editor.ActiveLineDrawMode == LineDrawMode.FreeDraw ? 0 : 1);
+                ((ToggleButton)buttons[i]).IsChecked = active; Ui.SetClass(buttons[i], "active", active);
+            }
+        });
+        return new StackPanel
+        {
+            Spacing = 10,
+            Children =
+            {
+                Explanation("Выберите режим и проведите по холсту. До отпускания кнопки виден ghost из той же геометрии; Esc отменяет без изменения карты."),
+                modes,
+            },
+        };
+    }
 
-    private Control BuildShapePanel() => new StackPanel
+    private Control BuildShapePanel()
     {
-        Spacing = 10,
-        Children =
+        var options = new[]
         {
-            Explanation("Добавьте фигуру, затем правьте её контур в свойствах выделения. " +
-                        "Две фигуры можно объединить или вычесть."),
-            Ui.CommandButton("AddVectorRectangleButton", "Фигура: прямоугольник", MapIcons.ShapeRectangle,
-                () => Create(() => _editor.AddShape(ShapePrimitiveKind.Rectangle))),
-            Ui.CommandButton("AddShapeEllipseButton", "Фигура: эллипс", MapIcons.ShapeEllipse,
-                () => Create(() => _editor.AddShape(ShapePrimitiveKind.Ellipse))),
-        },
-    };
+            ("FreeDraw", "Free Draw", ShapeDrawMode.FreeDraw), ("Pen", "Pen", ShapeDrawMode.Pen),
+            ("Brush", "Brush", ShapeDrawMode.Brush), ("Rectangle", "Прямоугольник", ShapeDrawMode.Rectangle),
+            ("Ellipse", "Эллипс", ShapeDrawMode.Ellipse), ("Polygon", "Многоугольник", ShapeDrawMode.Polygon),
+        };
+        var (modes, buttons) = Ui.Segmented("ShapeDrawMode",
+            [.. options.Select(item => (item.Item1, item.Item2, (string?)null))],
+            key => _editor.ActiveShapeDrawMode = options.First(item => item.Item1 == key).Item3);
+        _appearanceSyncs.Add(() =>
+        {
+            for (var i = 0; i < buttons.Count; i++)
+            {
+                var active = options[i].Item3 == _editor.ActiveShapeDrawMode;
+                ((ToggleButton)buttons[i]).IsChecked = active; Ui.SetClass(buttons[i], "active", active);
+            }
+        });
+        return new StackPanel
+        {
+            Spacing = 10,
+            Children =
+            {
+                Explanation("Выберите способ и задайте фигуру жестом на холсте. Boolean выполняется только над двумя явно выделенными фигурами."),
+                modes,
+            },
+        };
+    }
 
     private Control BuildTextPanel() => new StackPanel
     {
         Spacing = 10,
         Children =
         {
-            Explanation("Добавьте подпись на карту. Начертание меняется в свойствах выделенной подписи."),
-            Ui.CommandButton("AddTextButton", "Добавить подпись", MapIcons.Text, () => Create(_editor.AddText)),
+            Explanation("Щёлкните для стандартного блока или протяните его размер. До отпускания виден ghost; оформление наследуется только переключателем ниже."),
+            AppearanceToggle("TextInheritToggle", "Синхронизировать с выделенным Text",
+                () => _editor.TextInheritFromSelection,
+                value => _editor.TextInheritFromSelection = value),
         },
     };
 
@@ -2221,6 +2252,132 @@ public sealed class EditorView : UserControl
         return expander;
     }
 
+    private Control BuildVectorGeometryEditor(bool shape)
+    {
+        var nodeChoice = new ComboBox
+        {
+            Name = shape ? "ShapeNodeChoice" : "LineNodeChoice",
+            PlaceholderText = "Выберите узел",
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+        };
+        var portalChoice = new ComboBox
+        {
+            Name = shape ? "ShapePortalChoice" : "LinePortalChoice",
+            PlaceholderText = "Выберите проход",
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+        };
+        nodeChoice.SelectionChanged += (_, _) =>
+        {
+            if (!_syncingAppearance && nodeChoice.SelectedIndex >= 0
+                && nodeChoice.SelectedIndex < _editor.SelectedVectorNodes.Count)
+                _editor.SelectVectorNode(_editor.SelectedVectorNodes[nodeChoice.SelectedIndex].Id);
+        };
+        portalChoice.SelectionChanged += (_, _) =>
+        {
+            if (!_syncingAppearance && portalChoice.SelectedIndex >= 0
+                && portalChoice.SelectedIndex < _editor.SelectedVectorPortals.Count)
+                _editor.SelectVectorPortal(_editor.SelectedVectorPortals[portalChoice.SelectedIndex].Id);
+        };
+        _appearanceSyncs.Add(() =>
+        {
+            var nodes = _editor.SelectedVectorNodes;
+            nodeChoice.ItemsSource = nodes.Select((node, index) =>
+                $"{index + 1} · {node.Kind} · {node.X:0.###}, {node.Y:0.###}").ToList();
+            nodeChoice.SelectedIndex = _editor.SelectedVectorNode is { } selected
+                ? nodes.ToList().FindIndex(node => node.Id == selected.Id) : -1;
+            var portals = _editor.SelectedVectorPortals;
+            portalChoice.ItemsSource = portals.Select((portal, index) =>
+                $"{index + 1} · {portal.Position:P1} · {portal.Width:0.##} px").ToList();
+            portalChoice.SelectedIndex = _editor.SelectedVectorPortal is { } selectedPortal
+                ? portals.ToList().FindIndex(portal => portal.Id == selectedPortal.Id) : -1;
+        });
+
+        void EditNode(Func<VectorNode, VectorNode> change)
+        {
+            if (_editor.SelectedVectorNode is not { } current) return;
+            var node = change(current);
+            _editor.SetSelectedVectorNode(node.X, node.Y, node.Kind,
+                node.ControlInX, node.ControlInY, node.ControlOutX, node.ControlOutY);
+        }
+        var addX = NumberBox(shape ? "ShapeAddNodeXBox" : "LineAddNodeXBox"); addX.Text = "0.5";
+        var addY = NumberBox(shape ? "ShapeAddNodeYBox" : "LineAddNodeYBox"); addY.Text = "0.5";
+        var addNode = Ui.TextButton(shape ? "ShapeAddNodeButton" : "AddLineNodeButton", "Добавить узел по X/Y", () =>
+        {
+            if (!TryNumber(addX.Text, out var x) || !TryNumber(addY.Text, out var y)) return;
+            if (shape) _editor.AddNodeToSelectedShape(x, y); else _editor.AddNodeToSelectedLine(x, y);
+            SyncAppearanceSections();
+        }, "compact");
+        var position = NumberBox(shape ? "ShapePortalPositionBox" : "LinePortalPositionBox"); position.Text = "50";
+        var width = NumberBox(shape ? "ShapePortalWidthBox" : "LinePortalWidthBox"); width.Text = "48";
+        var addPortal = Ui.TextButton(shape ? "ShapeAddPortalButton" : "AddPortalButton", "Добавить проход по position/width", () =>
+        {
+            if (TryNumber(position.Text, out var p) && TryNumber(width.Text, out var w))
+                _editor.AddPortalToSelected(p / 100, w);
+            SyncAppearanceSections();
+        }, "compact");
+
+        var controls = new StackPanel
+        {
+            Spacing = 5,
+            Children =
+            {
+                new TextBlock { Text = "Узлы", TextWrapping = TextWrapping.Wrap }.Classed("role-panel"),
+                nodeChoice,
+                Ui.PropertyRow("Новый X", addX), Ui.PropertyRow("Новый Y", addY), addNode,
+                AppearanceNumberBox((shape ? "Shape" : "Line") + "NodeXBox", "X узла", null,
+                    () => _editor.SelectedVectorNode?.X, value => EditNode(node => node with { X = value })),
+                AppearanceNumberBox((shape ? "Shape" : "Line") + "NodeYBox", "Y узла", null,
+                    () => _editor.SelectedVectorNode?.Y, value => EditNode(node => node with { Y = value })),
+                AppearanceChoice((shape ? "Shape" : "Line") + "NodeKindChoice", "Тип узла",
+                    [("Corner", "Прямой"), ("Curve", "Кривой")],
+                    () => _editor.SelectedVectorNode?.Kind.ToString(),
+                    key => EditNode(node => node with { Kind = Enum.Parse<VectorNodeKind>(key) })),
+                AppearanceNumberBox((shape ? "Shape" : "Line") + "ControlInXBox", "Handle in X", null,
+                    () => _editor.SelectedVectorNode?.ControlInX, value => EditNode(node => node with { ControlInX = value })),
+                AppearanceNumberBox((shape ? "Shape" : "Line") + "ControlInYBox", "Handle in Y", null,
+                    () => _editor.SelectedVectorNode?.ControlInY, value => EditNode(node => node with { ControlInY = value })),
+                AppearanceNumberBox((shape ? "Shape" : "Line") + "ControlOutXBox", "Handle out X", null,
+                    () => _editor.SelectedVectorNode?.ControlOutX, value => EditNode(node => node with { ControlOutX = value })),
+                AppearanceNumberBox((shape ? "Shape" : "Line") + "ControlOutYBox", "Handle out Y", null,
+                    () => _editor.SelectedVectorNode?.ControlOutY, value => EditNode(node => node with { ControlOutY = value })),
+                new WrapPanel
+                {
+                    ItemSpacing = 4, LineSpacing = 4,
+                    Children =
+                    {
+                        Ui.TextButton((shape ? "Shape" : "Line") + "DeleteNodeButton", "Удалить выбранный узел",
+                            _editor.DeleteSelectedVectorNode, "compact"),
+                        Ui.TextButton((shape ? "Shape" : "Line") + "SnapNodeButton", "Привязать выбранный узел",
+                            _editor.SnapSelectedNodeToGrid, "compact"),
+                        Ui.TextButton((shape ? "Shape" : "Line") + "CutNodeButton", "Разрезать в выбранном узле",
+                            _editor.CutSelectedLine, "compact"),
+                    },
+                },
+                new TextBlock { Text = "Проходы", TextWrapping = TextWrapping.Wrap }.Classed("role-panel"),
+                portalChoice,
+                Ui.PropertyRow("Position, %", position), Ui.PropertyRow("Width", width), addPortal,
+                AppearanceNumberBox((shape ? "Shape" : "Line") + "SelectedPortalPosition", "Position", "%",
+                    () => _editor.SelectedVectorPortal?.Position * 100,
+                    value => _editor.SetSelectedPortal(value / 100, _editor.SelectedVectorPortal?.Width ?? 0)),
+                AppearanceNumberBox((shape ? "Shape" : "Line") + "SelectedPortalWidth", "Width", "px",
+                    () => _editor.SelectedVectorPortal?.Width,
+                    value => _editor.SetSelectedPortal(_editor.SelectedVectorPortal?.Position ?? 0, value)),
+                new WrapPanel
+                {
+                    ItemSpacing = 4, LineSpacing = 4,
+                    Children =
+                    {
+                        Ui.TextButton((shape ? "Shape" : "Line") + "DeletePortalButton", "Удалить выбранный проход",
+                            _editor.DeleteSelectedPortal, "compact"),
+                        Ui.TextButton((shape ? "Shape" : "Line") + "SnapPortalButton", "Привязать выбранный проход",
+                            _editor.SnapSelectedPortalToGrid, "compact"),
+                    },
+                },
+            },
+        };
+        return controls;
+    }
+
     private Control BuildLineSection()
     {
         var geometry = new Expander
@@ -2232,18 +2389,7 @@ public sealed class EditorView : UserControl
                 Spacing = 5,
                 Children =
                 {
-                    Ui.TextButton("AddLineNodeButton", "Добавить узел", _editor.AddNodeToSelectedLine, "compact"),
-                    Ui.TextButton("MoveVectorNodeButton", "Сдвинуть узел", _editor.MoveSelectedVectorNode, "compact"),
-                    Ui.TextButton("CurveNodeButton", "Узел: прямая или кривая",
-                        _editor.ToggleSelectedNodeCurve, "compact"),
-                    Ui.TextButton("CutLineButton", "Разрезать линию", _editor.CutSelectedLine, "compact"),
-                    Ui.TextButton("AddPortalButton", "Добавить проход", _editor.AddPortalToSelected, "compact"),
-                    Ui.TextButton("MovePortalButton", "Сдвинуть проход", _editor.MoveSelectedPortal, "compact"),
-                    Ui.TextButton("DeletePortalButton", "Удалить проход", _editor.DeleteSelectedPortal, "compact"),
-                    Ui.TextButton("GridSnapNodeButton", "Привязать узел к сетке",
-                        _editor.SnapSelectedNodeToGrid, "compact"),
-                    Ui.TextButton("GridSnapPortalButton", "Привязать проход к сетке",
-                        _editor.SnapSelectedPortalToGrid, "compact"),
+                    BuildVectorGeometryEditor(shape: false),
                 },
             },
         }.Named("LineGeometry");
@@ -2274,22 +2420,17 @@ public sealed class EditorView : UserControl
                 Spacing = 5,
                 Children =
                 {
-                    Ui.TextButton("ShapeMoveNodeButton", "Сдвинуть узел",
-                        _editor.MoveSelectedVectorNode, "compact"),
-                    Ui.TextButton("BooleanAddButton", "Объединить с предыдущей",
-                        () => _editor.ApplyShapeBoolean(ShapeBooleanOperation.Add), "compact"),
-                    Ui.TextButton("BooleanSubtractButton", "Вычесть из предыдущей",
-                        () => _editor.ApplyShapeBoolean(ShapeBooleanOperation.Subtract), "compact"),
-                    Ui.TextButton("BooleanMergeButton", "Слить контуры",
-                        () => _editor.ApplyShapeBoolean(ShapeBooleanOperation.Merge), "compact"),
-                    Ui.TextButton("ShapeAddPortalButton", "Добавить проход",
-                        _editor.AddPortalToSelected, "compact"),
-                    Ui.TextButton("ShapeMovePortalButton", "Сдвинуть проход",
-                        _editor.MoveSelectedPortal, "compact"),
-                    Ui.TextButton("ShapeDeletePortalButton", "Удалить проход",
-                        _editor.DeleteSelectedPortal, "compact"),
-                    Ui.TextButton("ShapeGridSnapNodeButton", "Привязать узел к сетке",
-                        _editor.SnapSelectedNodeToGrid, "compact"),
+                    BuildVectorGeometryEditor(shape: true),
+                    Ui.TextButton("BooleanAddButton", "Add · две выделенные фигуры",
+                        () => _editor.PreviewShapeBoolean(ShapeBooleanOperation.Add), "compact"),
+                    Ui.TextButton("BooleanSubtractButton", "Subtract · две выделенные фигуры",
+                        () => _editor.PreviewShapeBoolean(ShapeBooleanOperation.Subtract), "compact"),
+                    Ui.TextButton("BooleanMergeButton", "Merge · две выделенные фигуры",
+                        () => _editor.PreviewShapeBoolean(ShapeBooleanOperation.Merge), "compact"),
+                    Ui.TextButton("BooleanApplyButton", "Применить показанный результат",
+                        () => _editor.CommitShapeBooleanPreview(), "accent", "compact"),
+                    Ui.TextButton("BooleanCancelButton", "Отменить preview",
+                        _editor.CancelShapeBooleanPreview, "compact"),
                 },
             },
         }.Named("ShapeGeometry");
@@ -2335,6 +2476,25 @@ public sealed class EditorView : UserControl
                     () => Fill()?.Color, _editor.SetShapeFillColor),
                 AppearanceSlider("ShapeFillOpacitySlider", "Плотность заливки", 0, 100, "%",
                     () => Fill()?.Opacity * 100, (v, c) => _editor.SetShapeFillOpacityPercent(v, c), 5),
+                new TextBlock
+                {
+                    Text = "Texture fill выбирается в библиотеке; эти значения хранятся в Shape.",
+                    TextWrapping = TextWrapping.Wrap,
+                }.Classed("faint", "role-caption"),
+                AppearanceSlider("ShapeTextureScaleSlider", "Масштаб texture", 5, 6400, "%",
+                    () => Fill()?.TextureScale * 100,
+                    (v, c) => _editor.SetShapeFillTextureScale(v / 100, c), 5),
+                AppearanceSlider("ShapeTextureRotationSlider", "Поворот texture", -180, 180, "°",
+                    () => Fill()?.TextureRotation,
+                    (v, c) => _editor.SetShapeFillTextureRotation(v, c), 5),
+                AppearanceSlider("ShapeTextureOffsetXSlider", "Texture X", -512, 512, "px",
+                    () => Fill()?.TextureOffsetX,
+                    (v, c) => _editor.SetShapeFillTextureOffsetX(v, c), 5),
+                AppearanceSlider("ShapeTextureOffsetYSlider", "Texture Y", -512, 512, "px",
+                    () => Fill()?.TextureOffsetY,
+                    (v, c) => _editor.SetShapeFillTextureOffsetY(v, c), 5),
+                Ui.TextButton("ShapeResetTextureButton", "Сбросить texture fill",
+                    _editor.ResetShapeFillTexture, "compact"),
                 AppearanceColorBox("ShapeStrokeColorBox", "Цвет обводки",
                     () => _editor.Session.SelectedObject?.Shape?.Stroke.Color, _editor.SetStrokeColor),
                 AppearanceSlider("ShapeStrokeWidthSlider", "Толщина обводки", 0, 64, "px",
@@ -4742,6 +4902,59 @@ public sealed class EditorView : UserControl
 
     private Control BuildNotesTab()
     {
+        var preview = new TextBlock
+        {
+            Name = "NoteRenderedPreview",
+            TextWrapping = TextWrapping.Wrap,
+            MinHeight = 72,
+        };
+        var linkTarget = new TextBox
+        {
+            Name = "NoteLinkTargetBox",
+            PlaceholderText = "Относительная ссылка, https://… или mailto:…",
+        };
+        void ReplaceSelection(string before, string after, string placeholder)
+        {
+            var text = _noteMarkdown.Text ?? "";
+            var start = Math.Clamp(_noteMarkdown.SelectionStart, 0, text.Length);
+            var end = Math.Clamp(_noteMarkdown.SelectionEnd, start, text.Length);
+            var selected = end > start ? text[start..end] : placeholder;
+            _noteMarkdown.Text = text[..start] + before + selected + after + text[end..];
+            _noteMarkdown.SelectionStart = start + before.Length;
+            _noteMarkdown.SelectionEnd = start + before.Length + selected.Length;
+            _noteMarkdown.Focus();
+        }
+        void PrefixSelection(string prefix)
+        {
+            var text = _noteMarkdown.Text ?? "";
+            var start = Math.Clamp(_noteMarkdown.SelectionStart, 0, text.Length);
+            var end = Math.Clamp(_noteMarkdown.SelectionEnd, start, text.Length);
+            var lineStart = text.LastIndexOf('\n', Math.Max(0, start - 1)) + 1;
+            var lineEnd = text.IndexOf('\n', end);
+            if (lineEnd < 0) lineEnd = text.Length;
+            var block = text[lineStart..lineEnd];
+            var changed = string.Join("\n", block.Split('\n').Select(line => prefix + line));
+            _noteMarkdown.Text = text[..lineStart] + changed + text[lineEnd..];
+            _noteMarkdown.SelectionStart = lineStart;
+            _noteMarkdown.SelectionEnd = lineStart + changed.Length;
+            _noteMarkdown.Focus();
+        }
+        void RefreshPreview()
+        {
+            try
+            {
+                preview.Text = NoteMarkdown.RenderPlain(_noteMarkdown.Text ?? "");
+                Ui.SetClass(preview, "error", false);
+            }
+            catch (ArgumentException error)
+            {
+                preview.Text = "Preview недоступен: " + error.Message;
+                Ui.SetClass(preview, "error", true);
+            }
+        }
+        _noteMarkdown.TextChanged += (_, _) => RefreshPreview();
+        RefreshPreview();
+
         var body = new StackPanel
         {
             Margin = new Thickness(12, 10, 12, 18),
@@ -4776,7 +4989,24 @@ public sealed class EditorView : UserControl
                         {
                             new TextBlock { Text = "Выбранная заметка" }.Classed("role-panel"),
                             _noteTitle,
+                            new WrapPanel
+                            {
+                                ItemSpacing = 4, LineSpacing = 4,
+                                Children =
+                                {
+                                    Ui.TextButton("NoteHeadingButton", "Heading", () => PrefixSelection("## "), "compact"),
+                                    Ui.TextButton("NoteListButton", "List", () => PrefixSelection("- "), "compact"),
+                                    Ui.TextButton("NoteBoldButton", "Bold", () => ReplaceSelection("**", "**", "текст"), "compact"),
+                                    Ui.TextButton("NoteItalicButton", "Italic", () => ReplaceSelection("*", "*", "текст"), "compact"),
+                                },
+                            },
+                            linkTarget,
+                            Ui.TextButton("NoteLinkButton", "Link для выделения", () =>
+                                ReplaceSelection("[", $"]({(linkTarget.Text ?? "").Trim()})", "текст ссылки"), "compact"),
+                            new TextBlock { Text = "Raw Markdown" }.Classed("role-panel"),
                             _noteMarkdown,
+                            new TextBlock { Text = "Rendered preview · локальный безопасный subset" }.Classed("role-panel"),
+                            new Border { Padding = new Thickness(8), Child = preview }.Classed("group"),
                             new StackPanel
                             {
                                 Orientation = Orientation.Horizontal,

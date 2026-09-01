@@ -4,7 +4,13 @@ using Map.Performance;
 var options = PerformanceOptions.Parse(args);
 object report;
 bool gatePassed;
-if (options.Profile == "native-stage15")
+if (options.Profile == "native-stage16")
+{
+    var nativeReport = NativeStage16Smoke.Run(options);
+    report = nativeReport;
+    gatePassed = nativeReport.GatePassed;
+}
+else if (options.Profile == "native-stage15")
 {
     var nativeReport = NativeStage15Smoke.Run(options);
     report = nativeReport;
@@ -84,6 +90,16 @@ else if (report is NativeStage15Report stage15)
         + $"ghost={stage15.GhostVisibleAndTransient}, "
         + $"save/export={stage15.SaveReopenAndExactExportMatched}, "
         + $"gate={(stage15.GatePassed ? "PASS" : "FAIL")}");
+}
+else if (report is NativeStage16Report stage16)
+{
+    Console.WriteLine(
+        $"native-stage16: dashboard={stage16.DashboardProjectFlowWorked}, "
+        + $"assets={stage16.RasterAndSafeSvgImported}, "
+        + $"edit={stage16.ConnectedEditingFlowWorked}, "
+        + $"save/export={stage16.SaveReopenAndExportWorked}, "
+        + $"responsive={stage16.ResponsiveEditorSurfacesWorked}, "
+        + $"gate={(stage16.GatePassed ? "PASS" : "FAIL")}");
 }
 
 return gatePassed ? 0 : 2;

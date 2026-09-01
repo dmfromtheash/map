@@ -256,7 +256,7 @@ public sealed class MapCanvasControl : Control
                     X, Y, bottomRight.X, bottomRight.Y),
                 ObjectOverrides = editor.DragPreview?.Proposed,
                 PlacementPreviewObjects = editor.PlacementPreviewObjects,
-                PlacementPreviewLayerId = editor.PendingPlacement?.LayerId,
+                PlacementPreviewLayerId = editor.PlacementPreviewLayerId,
                 PlacementArea = editor.PendingPlacement is
                     { PointerVisible: true, Target: PlacementTargetKind.Stamp,
                       Mode: StampPlacementMode.Area } placement
@@ -365,6 +365,15 @@ public sealed class MapCanvasControl : Control
             return;
         }
 
+        if (_editor.ActiveTool == EditorTool.Text)
+        {
+            _isTextPlacing = _editor.BeginTextPlacement(world.X, world.Y);
+            if (_isTextPlacing) e.Pointer.Capture(this);
+            e.Handled = true;
+            QueueVisualInvalidation();
+            return;
+        }
+
         if (_editor.HasPendingPlacement)
         {
             _editor.UpdatePlacementPreview(world.X, world.Y);
@@ -374,6 +383,16 @@ public sealed class MapCanvasControl : Control
             {
                 StampPlaced?.Invoke(this, EventArgs.Empty);
             }
+            e.Handled = true;
+            QueueVisualInvalidation();
+            return;
+        }
+
+        if (_editor.ActiveTool == EditorTool.Select
+            && _editor.BeginVectorElementDrag(world.X, world.Y, _editor.Session.Viewport.Scale))
+        {
+            _isVectorElementDragging = true;
+            e.Pointer.Capture(this);
             e.Handled = true;
             QueueVisualInvalidation();
             return;
@@ -421,7 +440,7 @@ public sealed class MapCanvasControl : Control
         var (X, Y) = _editor.Session.Viewport.ScreenToWorld(position.X, position.Y);
 
         if (_editor.HasPendingPlacement
-            && !_isPanning && !_isStroking && !_isVectorDrawing
+            && !_isPanning && !_isStroking && !_isVectorDrawing && !_isTextPlacing
             && _dragStartWorld is null && !_isMarquee && !_isRegionSelecting)
         {
             _editor.UpdatePlacementPreview(X, Y);
@@ -454,6 +473,22 @@ public sealed class MapCanvasControl : Control
         {
             _editor.ContinueVectorDraw(X, Y);
             Cursor = new Cursor(StandardCursorType.Cross);
+            e.Handled = true;
+            return;
+        }
+
+        if (_isTextPlacing)
+        {
+            _editor.ContinueTextPlacement(X, Y);
+            Cursor = new Cursor(StandardCursorType.Cross);
+            e.Handled = true;
+            return;
+        }
+
+        if (_isVectorElementDragging)
+        {
+            _editor.UpdateVectorElementDrag(X, Y);
+            Cursor = new Cursor(StandardCursorType.Hand);
             e.Handled = true;
             return;
         }
@@ -561,6 +596,20 @@ public sealed class MapCanvasControl : Control
         {
             _isVectorDrawing = false;
             _editor.EndVectorDraw();
+            Cursor = Cursor.Default;
+        }
+
+        if (_isTextPlacing)
+        {
+            _isTextPlacing = false;
+            _editor.EndTextPlacement();
+            Cursor = Cursor.Default;
+        }
+
+        if (_isVectorElementDragging)
+        {
+            _isVectorElementDragging = false;
+            _editor.EndVectorElementDrag();
             Cursor = Cursor.Default;
         }
 
