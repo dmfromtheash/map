@@ -295,6 +295,7 @@ public sealed class NativeStage12DApplication : Application
     private sealed class SmokePrompts : IUserPrompts
     {
         public Task<bool> ConfirmMigrationCopyAsync() => Task.FromResult(true);
+        public Task<bool> ConfirmDeleteProjectAsync(string projectTitle) => Task.FromResult(false);
         public Task<CloseChoice> ConfirmCloseDirtyAsync(string documentTitle) => Task.FromResult(CloseChoice.Cancel);
         public Task<bool> ConfirmRestoreCheckpointAsync(string checkpointName) => Task.FromResult(false);
         public Task<bool> ConfirmDeleteCheckpointAsync(string checkpointName) => Task.FromResult(false);
@@ -311,7 +312,8 @@ public sealed class NativeStage12DApplication : Application
     {
         private readonly List<RecentMapItem> _items = [];
         public IReadOnlyList<RecentMapItem> Load() => [.. _items];
-        public void Touch(string path, Guid documentId, string title, DateTimeOffset modifiedUtc)
+        public void Touch(string path, Guid documentId, string title, DateTimeOffset modifiedUtc,
+            byte[]? thumbnailPng = null, string mapType = "Локальная карта")
         {
             _items.RemoveAll(item => string.Equals(item.Path, path, StringComparison.OrdinalIgnoreCase));
             _items.Insert(0, new(path, title, modifiedUtc, true));

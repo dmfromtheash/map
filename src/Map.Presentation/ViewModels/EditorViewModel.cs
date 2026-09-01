@@ -4072,6 +4072,108 @@ public sealed partial class EditorViewModel : ViewModelBase
         CompositionClipboard.Set(package); StatusDetail = "Композиция скопирована для другого окна карты.";
     }
 
+    public AssetRecord? RepairAssetSource(AssetRecord record, string replacementPath)
+    {
+        if (_assetCatalog is null) return null;
+        try
+        {
+            var repaired = _assetCatalog.RepairSource(record, replacementPath);
+            RefreshLibrary();
+            StatusDetail = "Исходник ассета восстановлен и проверен по SHA-256 и формату.";
+            return repaired;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException
+            or InvalidDataException or InvalidOperationException or ArgumentException)
+        {
+            StatusDetail = "Ассет не заменён: " + error.Message;
+            _log.Error("ASSET_REPAIR_REJECTED", error);
+            return null;
+        }
+    }
+
+    public bool RemoveAssetFromCatalog(AssetRecord record)
+    {
+        if (_assetCatalog is null) return false;
+        try
+        {
+            _assetCatalog.RemoveRecord(record.Sha256);
+            RefreshLibrary();
+            StatusDetail = "Ассет удалён из каталога; сохранённые исходные bytes не уничтожены.";
+            return true;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException
+            or InvalidOperationException or ArgumentException)
+        {
+            StatusDetail = "Ассет не удалён из каталога: " + error.Message;
+            _log.Error("ASSET_CATALOG_REMOVE_FAILED", error);
+            return false;
+        }
+    }
+
+    public bool ExportSelectedCompositionPackage(string path)
+    {
+        if (Session.SelectedObjectIds.Count == 0)
+        {
+            StatusDetail = "Для package сначала выделите хотя бы один объект.";
+            return false;
+        }
+        try
+        {
+            var package = CompositionTransfer.Copy(
+                Session.Document, Session.SelectedObjectIds,
+                new CompositionCaptureOptions { ReferenceGridScale = ActiveSnapGrid()?.CellSize ?? 1 },
+                Session.SelectedObject?.Name + " package" ?? "Composition package");
+            var now = _clock();
+            CompositionPackageStore.Export(
+                package, path, new SaveMetadata(_appVersion, now),
+                ThumbnailRenderer.RenderPng(Session.Document));
+            StatusDetail = "Composition package сохранён локально с hashes и provenance.";
+            return true;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException
+            or MapProjectException or ArgumentException)
+        {
+            StatusDetail = "Composition package не сохранён; карта не изменена.";
+            _log.Error("COMPOSITION_PACKAGE_EXPORT_FAILED", error);
+            return false;
+        }
+    }
+
+    public bool ImportCompositionPackage(string path)
+    {
+        var layer = ActiveObjectLayer();
+        if (layer is null)
+        {
+            StatusDetail = "Для импорта package выберите разблокированный слой объектов.";
+            return false;
+        }
+        try
+        {
+            var package = CompositionPackageStore.Import(path);
+            if (!MapProjectStore.CanAdmitAdditionalAssets(Session.Document, package.Assets, out var reason))
+            {
+                StatusDetail = "Package не помещается в бюджет проекта: " + reason;
+                return false;
+            }
+            var centre = ViewCentre();
+            var instance = CompositionTransfer.CreateInstance(
+                package, centre.X, centre.Y, ActiveSnapGrid()?.CellSize);
+            Session.Execute(new PasteCompositionCommand(layer.Id, instance, package.Assets));
+            Session.SelectedObjectId = instance.Id;
+            _activeLayerId = layer.Id;
+            AfterEdit();
+            StatusDetail = "Composition package импортирован как редактируемая композиция.";
+            return true;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException
+            or MapProjectException or ArgumentException)
+        {
+            StatusDetail = "Composition package отклонён; карта не изменена.";
+            _log.Error("COMPOSITION_PACKAGE_IMPORT_FAILED", error);
+            return false;
+        }
+    }
+
     public void PasteComposition()
     {
         var layer = ActiveObjectLayer(); var package = CompositionClipboard.Get();
@@ -6718,7 +6820,9 @@ public sealed partial class EditorViewModel : ViewModelBase
                 _lastPrimaryAutosavedDocument = snapshot;
                 _lastPrimarySaveUtc = now;
                 SaveState = Session.IsDirty ? SaveState.Unsaved : SaveState.Saved;
-                _recent.Touch(path, snapshot.Id.Value, snapshot.Title, metadata.ModifiedUtc);
+                _recent.Touch(
+                    path, snapshot.Id.Value, snapshot.Title, metadata.ModifiedUtc,
+                    ThumbnailRenderer.RenderPng(snapshot));
                 if (!Session.IsDirty)
                 {
                     ClearRecoveryAfterProvenSave();
@@ -6897,7 +7001,9 @@ public sealed partial class EditorViewModel : ViewModelBase
                 RaiseSessionState();
                 Raise(nameof(PrimaryAutosaveSummary));
 
-                _recent.Touch(path!, Session.Document.Id.Value, snapshot.Title, metadata.ModifiedUtc);
+                _recent.Touch(
+                    path!, Session.Document.Id.Value, snapshot.Title, metadata.ModifiedUtc,
+                    ThumbnailRenderer.RenderPng(snapshot));
                 _log.Info($"SAVE_SUCCEEDED revision={checkpoint.Revision}");
                 return true;
             }

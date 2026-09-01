@@ -21,16 +21,24 @@ public sealed class FakePrompts : IUserPrompts
     public bool NextRestoreCheckpointConfirmation { get; set; }
     public bool NextDeleteCheckpointConfirmation { get; set; }
     public bool NextMigrationConfirmation { get; set; }
+    public bool NextDeleteProjectConfirmation { get; set; }
     public List<string> Errors { get; } = [];
     public int CloseAsked { get; private set; }
     public int RestoreCheckpointAsked { get; private set; }
     public int DeleteCheckpointAsked { get; private set; }
     public int MigrationAsked { get; private set; }
+    public int DeleteProjectAsked { get; private set; }
 
     public Task<bool> ConfirmMigrationCopyAsync()
     {
         MigrationAsked++;
         return Task.FromResult(NextMigrationConfirmation);
+    }
+
+    public Task<bool> ConfirmDeleteProjectAsync(string projectTitle)
+    {
+        DeleteProjectAsked++;
+        return Task.FromResult(NextDeleteProjectConfirmation);
     }
 
     public Task<CloseChoice> ConfirmCloseDirtyAsync(string documentTitle)
@@ -58,6 +66,12 @@ public sealed class FakePrompts : IUserPrompts
     }
 }
 
+public sealed class FakeProjectTrash : IProjectTrash
+{
+    public List<string> Paths { get; } = [];
+    public void MoveToTrash(string path) => Paths.Add(path);
+}
+
 public sealed class FakeLog : IAppLog
 {
     public List<string> Lines { get; } = [];
@@ -73,10 +87,17 @@ public sealed class FakeRecentMaps : IRecentMaps
 
     public IReadOnlyList<RecentMapItem> Load() => [.. Items];
 
-    public void Touch(string path, Guid documentId, string title, DateTimeOffset modifiedUtc)
+    public void Touch(
+        string path,
+        Guid documentId,
+        string title,
+        DateTimeOffset modifiedUtc,
+        byte[]? thumbnailPng = null,
+        string mapType = "Локальная карта")
     {
         Items.RemoveAll(i => i.Path == path);
-        Items.Insert(0, new RecentMapItem(path, title, modifiedUtc, IsAvailable: true));
+        Items.Insert(0, new RecentMapItem(
+            path, title, modifiedUtc, IsAvailable: true, mapType, 0, thumbnailPng));
     }
 
     public void Remove(string path) => Items.RemoveAll(i => i.Path == path);

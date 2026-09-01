@@ -57,11 +57,18 @@ public sealed class RecoveryRecord
 /// Crash journal kept OUTSIDE the document directory (docs/04) so a read-only or removable
 /// document location cannot make recovery impossible. One directory per document id.
 /// </summary>
-public sealed class RecoveryJournal(string? rootDirectory = null)
+public sealed class RecoveryJournal
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
-    private readonly string _rootDirectory = rootDirectory ?? DefaultRoot();
+    private readonly string _rootDirectory;
+    private readonly int _candidateBudget;
+
+    public RecoveryJournal(string? rootDirectory = null, int candidateBudget = 12)
+    {
+        _rootDirectory = rootDirectory ?? DefaultRoot();
+        _candidateBudget = Math.Clamp(candidateBudget, 1, 50);
+    }
 
     public static string DefaultRoot() => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -131,7 +138,9 @@ public sealed class RecoveryJournal(string? rootDirectory = null)
         }
 
         var ids = new List<Guid>();
-        foreach (var directory in Directory.GetDirectories(_rootDirectory))
+        foreach (var directory in Directory.GetDirectories(_rootDirectory)
+                     .OrderByDescending(Directory.GetLastWriteTimeUtc)
+                     .Take(_candidateBudget))
         {
             if (Guid.TryParseExact(Path.GetFileName(directory), "D", out var id))
             {

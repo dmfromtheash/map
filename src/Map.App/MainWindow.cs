@@ -4,9 +4,11 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Styling;
 using Avalonia.Threading;
 using Map.App.Services;
 using Map.App.Views;
@@ -32,6 +34,8 @@ public sealed class MainWindow : Window
     private readonly EditorShortcutSettings _shortcuts;
     private readonly EditorPreferencesStore _editorPreferencesStore;
     private EditorLocalPreferences _editorPreferences;
+    private readonly AppSettingsStore _appSettingsStore;
+    private AppSettings _appSettings;
     private readonly ContentControl _host = new() { Name = "ViewHost" };
     private readonly DashboardViewModel _dashboard;
     private readonly DispatcherTimer _autosaveTimer;
@@ -48,12 +52,19 @@ public sealed class MainWindow : Window
         AssetCatalog assets,
         ShortcutSettingsStore? shortcutStore = null,
         EditorShortcutSettings? shortcuts = null,
-        string? shortcutLoadWarning = null)
+        string? shortcutLoadWarning = null,
+        AppSettingsStore? appSettingsStore = null,
+        AppSettings? appSettings = null)
     {
         _store = store;
         _recent = recent;
         _log = log;
         _assets = assets;
+        var appSettingsPath = TestMode.Enabled
+            ? Path.Combine(AppPaths.ResolveTestProfileRoot(TestMode.ProfileRootOverride), "settings.json")
+            : AppPaths.AppSettingsPath;
+        _appSettingsStore = appSettingsStore ?? new AppSettingsStore(appSettingsPath);
+        _appSettings = AppSettings.Sanitize(appSettings ?? _appSettingsStore.Load());
         _shortcutStore = shortcutStore
             ?? new ShortcutSettingsStore(AppPaths.ResolveShortcutSettingsPath(
                 TestMode.Enabled, TestMode.ShortcutSettingsPathOverride));
@@ -83,9 +94,18 @@ public sealed class MainWindow : Window
             _recent,
             _log,
             new AvaloniaFilePicker(this),
-            new DialogPrompts(this));
-        _autosaveTimer = new DispatcherTimer { Interval = TestMode.AutosaveInterval };
+            new DialogPrompts(this),
+            new WindowsProjectTrash(),
+            appVersion: AppVersion.Current);
+        _autosaveTimer = new DispatcherTimer
+        {
+            Interval = TestMode.Enabled
+                ? TestMode.AutosaveInterval
+                : TimeSpan.FromSeconds(_appSettings.AutosaveIntervalSeconds),
+        };
         _autosaveTimer.Tick += OnAutosaveTick;
+
+        ApplySettings(_appSettings);
 
         ShowDashboard();
         Closing += OnClosing;
@@ -109,7 +129,13 @@ public sealed class MainWindow : Window
             openFileRequested: OpenFileAsync,
             openRecentRequested: card => OpenPathAsync(card.Path),
             restoreRequested: RestoreAsync,
-            shortcuts: _shortcuts);
+            shortcuts: _shortcuts,
+            cloneRequested: CloneProjectAsync,
+            deleteRequested: card => _dashboard.DeleteAsync(card),
+            templateRequested: CreateFromUserTemplateAsync,
+            backupRequested: ImportBackupAsync,
+            settingsRequested: OpenAppSettings,
+            helpRequested: ShowLocalHelp);
 
         _host.Content = view;
         view.Refresh();
@@ -123,6 +149,7 @@ public sealed class MainWindow : Window
             requestBack: LeaveEditorAsync,
             requestSecondWindow: OpenSecondWindow,
             requestShortcutSettings: OpenShortcutSettings);
+        _editorView.Canvas.PerformanceMode = _appSettings.PerformanceMode;
         _host.Content = _editorView;
         if (TestMode.AutosaveEnabled)
         {
@@ -139,15 +166,17 @@ public sealed class MainWindow : Window
     private void OpenSecondWindow()
     {
         var window = new MainWindow(
-            _store, _recent, _log, _assets, _shortcutStore, _shortcuts, _shortcutLoadWarning)
+            _store, _recent, _log, _assets, _shortcutStore, _shortcuts, _shortcutLoadWarning,
+            _appSettingsStore, _appSettings)
         {
             Title = $"Map · {AppVersion.Current} · второе окно",
         };
         window.Show();
     }
 
-    private EditorViewModel CreateEditor(Map.Core.Documents.MapDocument document, string? path, bool startDirty) =>
-        new(
+    private EditorViewModel CreateEditor(Map.Core.Documents.MapDocument document, string? path, bool startDirty)
+    {
+        var editor = new EditorViewModel(
             document,
             path,
             startDirty,
@@ -167,6 +196,9 @@ public sealed class MainWindow : Window
                 _editorPreferences = preferences;
                 _editorPreferencesStore.Save(preferences);
             });
+        ConfigureExportDefaults(editor);
+        return editor;
+    }
 
     private async Task NewMapAsync()
     {
@@ -194,6 +226,108 @@ public sealed class MainWindow : Window
         {
             ShowEditor(CreateEditor(opened.Project.Document, opened.Path, startDirty: false));
         }
+    }
+
+    private Task CloneProjectAsync(RecentCard card) => _dashboard.CloneAsync(card);
+
+    private async Task CreateFromUserTemplateAsync()
+    {
+        var path = await new AvaloniaFilePicker(this).PickOpenAsync();
+        if (path is null) return;
+        await _dashboard.CloneAsync(new RecentCard(
+            path, Path.GetFileNameWithoutExtension(path), DateTimeOffset.MinValue, true, null),
+            asTemplate: true);
+    }
+
+    private Task ImportBackupAsync() => OpenFileAsync();
+
+    private async void OpenAppSettings()
+    {
+        var dialog = new AppSettingsWindow(
+            _appSettingsStore, _appSettings, ApplySettings, BuildLocalDiagnostics);
+        await dialog.ShowDialog(this);
+    }
+
+    private void ApplySettings(AppSettings settings)
+    {
+        _appSettings = AppSettings.Sanitize(settings);
+        if (Application.Current is { } application)
+        {
+            application.RequestedThemeVariant = _appSettings.Theme switch
+            {
+                LocalThemeMode.Dark => ThemeVariant.Dark,
+                LocalThemeMode.Light => ThemeVariant.Light,
+                _ => ThemeVariant.Default,
+            };
+        }
+        FontSize = 13 * _appSettings.UiScale;
+        if (!TestMode.Enabled)
+            _autosaveTimer.Interval = TimeSpan.FromSeconds(_appSettings.AutosaveIntervalSeconds);
+        if (_editorView is { } editorView)
+        {
+            editorView.Canvas.PerformanceMode = _appSettings.PerformanceMode;
+            ConfigureExportDefaults(editorView.Editor);
+        }
+    }
+
+    private void ConfigureExportDefaults(EditorViewModel editor) => editor.ConfigureExportDefaults(
+        _appSettings.DefaultExportFormat switch
+        {
+            "Jpeg" => Map.Export.ExportImageFormat.Jpeg,
+            "Webp" => Map.Export.ExportImageFormat.Webp,
+            _ => Map.Export.ExportImageFormat.Png,
+        },
+        _appSettings.DefaultExportScalePercent,
+        _appSettings.DefaultExportIncludeGrid);
+
+    private string BuildLocalDiagnostics()
+    {
+        if (_editorView is not { } view)
+            return "Рендерер: Avalonia + Skia, CPU fallback доступен. Карта не открыта. " +
+                   $"Режим: {_appSettings.PerformanceMode}.";
+        var document = view.Editor.Session.Document;
+        var objectCount = document.Layers.OfType<Map.Core.Documents.ObjectLayer>()
+            .Sum(layer => layer.Objects.Count);
+        return $"Рендерер: Avalonia + Skia, CPU fallback доступен. " +
+               $"Режим: {_appSettings.PerformanceMode}; LOD: {view.Canvas.LastLodTier}; " +
+               $"кэш тайлов: {view.Canvas.TileCacheCount}; кэш объектов: {view.Canvas.ObjectCacheCount}; " +
+               $"Undo: {(view.Editor.CanUndo ? "есть" : "пусто")}; Redo: {(view.Editor.CanRedo ? "есть" : "пусто")}; " +
+               $"слоёв: {document.Layers.Count}; объектов: {objectCount}; " +
+               $"последнее давление пера: {view.Canvas.LastPressureSample:0.00} (мышь: 1.00).";
+    }
+
+    private void ShowLocalHelp()
+    {
+        var help = new Window
+        {
+            Title = "Справка Map — работает без интернета",
+            Width = 720,
+            Height = 650,
+            MinWidth = 520,
+            MinHeight = 400,
+            Content = new ScrollViewer
+            {
+                Content = new TextBlock
+                {
+                    Name = "LocalHelpText",
+                    Margin = new Avalonia.Thickness(24),
+                    TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+                    Text = "ПЕРВАЯ КАРТА\n\n" +
+                           "Нажмите «Новая карта», выберите размер и создайте проект. Сохраните его как .mapproj.\n\n" +
+                           "ИНСТРУМЕНТЫ\n\n" +
+                           "Слева выбираются объекты, кисть, земля, линии, фигуры, текст, маски и заметки. " +
+                           "Текущее действие и его точные значения находятся в контекстной панели.\n\n" +
+                           "RECOVERY\n\n" +
+                           "Автосохранённые копии появляются на стартовом экране. Восстановление открывает копию " +
+                           "и не перезаписывает исходный файл без явного сохранения.\n\n" +
+                           "КЛАВИАТУРА\n\n" +
+                           "Ctrl+S — сохранить, Ctrl+Z — отменить, Ctrl+Shift+Z — повторить, G — привязка к сетке, " +
+                           "Esc — отменить незавершённое действие. Полный список: кнопка сочетаний в редакторе.\n\n" +
+                           "Map не требует сети, аккаунта или телеметрии.",
+                },
+            },
+        };
+        _ = help.ShowDialog(this);
     }
 
     private Task RestoreAsync(RecoveryCard card)

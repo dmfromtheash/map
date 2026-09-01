@@ -41,6 +41,9 @@ public sealed partial class EditorViewModel
     private string? _exportResultPath;
     private ExportOutputMode _exportResultMode;
     private bool _syncingExportFields;
+    private ExportImageFormat _defaultExportFormat = ExportImageFormat.Png;
+    private int _defaultExportScalePercent = 100;
+    private bool _defaultExportIncludeGrid;
 
     public bool ExportOpen => _exportOpen;
     public ExportImageFormat ExportFormat => _exportFormat;
@@ -116,11 +119,19 @@ public sealed partial class EditorViewModel
         }
     }
 
+    public void ConfigureExportDefaults(
+        ExportImageFormat format, int scalePercent, bool includeGrid)
+    {
+        _defaultExportFormat = format;
+        _defaultExportScalePercent = Math.Clamp(scalePercent, 10, 800);
+        _defaultExportIncludeGrid = includeGrid;
+    }
+
     public void BeginExport()
     {
         var canvas = Session.Document.Canvas;
         _exportOpen = true;
-        _exportFormat = ExportImageFormat.Png;
+        _exportFormat = _defaultExportFormat;
         _exportAreaMode = ExportAreaMode.WholeCanvas;
         _exportOutputMode = canvas.Width > ExportEngineSettings.DefaultMaxSingleEdge
             || canvas.Height > ExportEngineSettings.DefaultMaxSingleEdge
@@ -130,11 +141,13 @@ public sealed partial class EditorViewModel
         _exportRegionYText = "0";
         _exportRegionWidthText = canvas.Width.ToString(CultureInfo.InvariantCulture);
         _exportRegionHeightText = canvas.Height.ToString(CultureInfo.InvariantCulture);
-        _exportOutputWidthText = canvas.Width.ToString(CultureInfo.InvariantCulture);
-        _exportOutputHeightText = canvas.Height.ToString(CultureInfo.InvariantCulture);
+        _exportOutputWidthText = Math.Max(1, (int)Math.Round(
+            canvas.Width * _defaultExportScalePercent / 100d)).ToString(CultureInfo.InvariantCulture);
+        _exportOutputHeightText = Math.Max(1, (int)Math.Round(
+            canvas.Height * _defaultExportScalePercent / 100d)).ToString(CultureInfo.InvariantCulture);
         _exportAspectLocked = true;
         _exportTransparentBackground = false;
-        _exportIncludeGrid = true;
+        _exportIncludeGrid = _defaultExportIncludeGrid;
         _exportQuality = 90;
         _exportProgress = 0;
         _exportProgressText = "";

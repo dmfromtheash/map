@@ -10,6 +10,7 @@ using Avalonia.Rendering.SceneGraph;
 using Avalonia.Skia;
 using Avalonia.VisualTree;
 using Map.Core.Editing;
+using Map.Platform.Windows;
 using Map.Presentation.ViewModels;
 using Map.Rendering;
 using SkiaSharp;
@@ -29,6 +30,8 @@ public sealed class MapCanvasControl : Control
     private bool _isPanning;
     private bool _isStroking;
     private bool _isVectorDrawing;
+    private bool _isTextPlacing;
+    private bool _isVectorElementDragging;
     private bool _isMarquee;
     private bool _isRegionSelecting;
     private bool _visualInvalidationQueued;
@@ -38,6 +41,8 @@ public sealed class MapCanvasControl : Control
     private readonly RenderStats _renderStats = new();
 
     public bool IsSpacePanHeld { get; set; }
+    public CanvasPerformanceMode PerformanceMode { get; set; } = CanvasPerformanceMode.Balanced;
+    public double LastPressureSample { get; private set; } = 1;
 
     public MapCanvasControl()
     {
@@ -177,8 +182,9 @@ public sealed class MapCanvasControl : Control
         _editor.Session.Viewport.Resize(Bounds.Width, Bounds.Height);
         context.Custom(new SceneDrawOperation(
             new Rect(0, 0, Bounds.Width, Bounds.Height), _editor, _tileCache, _objectCache,
-            _renderStats,
-            _isPanning || _isStroking || _isVectorDrawing || _isRegionSelecting
+            _renderStats, PerformanceMode,
+            _isPanning || _isStroking || _isVectorDrawing || _isTextPlacing
+            || _isVectorElementDragging || _isRegionSelecting
             || _dragStartWorld is not null,
             (tier, elapsedMilliseconds) =>
             {
@@ -190,7 +196,8 @@ public sealed class MapCanvasControl : Control
 
     private sealed class SceneDrawOperation(
         Rect bounds, EditorViewModel editor, TileImageCache tileCache,
-        ObjectOverviewCache objectCache, RenderStats renderStats, bool fastPreview,
+        ObjectOverviewCache objectCache, RenderStats renderStats,
+        CanvasPerformanceMode performanceMode, bool fastPreview,
         Action<RenderLodTier, double> frameRendered) : ICustomDrawOperation
     {
         public Rect Bounds { get; } = bounds;
@@ -227,9 +234,12 @@ public sealed class MapCanvasControl : Control
                 ? editor.RenderDocument
                 : editor.Session.Document;
             var hasLiveObjectPreview = editor.DragPreview is not null || editor.HasPendingPlacement;
-            var tier = viewport.Scale < 0.125
+            var tier = performanceMode == CanvasPerformanceMode.Performance && viewport.Scale < 0.25
                 ? RenderLodTier.Overview
-                : fastPreview || hasLiveObjectPreview || editor.StrokePreview is not null
+                : viewport.Scale < 0.125
+                ? RenderLodTier.Overview
+                : performanceMode != CanvasPerformanceMode.Quality
+                    && (fastPreview || hasLiveObjectPreview || editor.StrokePreview is not null)
                     ? RenderLodTier.Interactive
                     : RenderLodTier.Exact;
             var sceneStopwatch = Stopwatch.StartNew();

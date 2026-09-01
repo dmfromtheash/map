@@ -12,6 +12,11 @@ public sealed class RecentMapEntry
     [JsonPropertyName("documentId")] public string DocumentId { get; set; } = "";
     [JsonPropertyName("title")] public string Title { get; set; } = "";
     [JsonPropertyName("modifiedUtc")] public string ModifiedUtc { get; set; } = "";
+    [JsonPropertyName("mapType")] public string MapType { get; set; } = "Локальная карта";
+    [JsonPropertyName("sizeBytes")] public long SizeBytes { get; set; }
+    [JsonPropertyName("thumbnailBase64")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ThumbnailBase64 { get; set; }
 
     [JsonIgnore] public bool IsAvailable { get; set; }
 }
@@ -100,7 +105,11 @@ public sealed class RecentMapsStore
                     entry.ModifiedUtc,
                     System.Globalization.CultureInfo.InvariantCulture,
                     System.Globalization.DateTimeStyles.RoundtripKind,
-                    out _))
+                    out _)
+                || entry.SizeBytes < 0
+                || entry.MapType is null
+                || entry.MapType.EnumerateRunes().Count() > 128
+                || entry.ThumbnailBase64 is { Length: > 768 * 1024 })
             {
                 return [];
             }
@@ -236,7 +245,13 @@ public sealed class RecentMapsStore
     }
 
     /// <summary>Puts the entry first, dedupes by path, trims to capacity, writes atomically enough.</summary>
-    public void Touch(string path, Guid documentId, string title, DateTimeOffset modifiedUtc)
+    public void Touch(
+        string path,
+        Guid documentId,
+        string title,
+        DateTimeOffset modifiedUtc,
+        byte[]? thumbnailPng = null,
+        string mapType = "Локальная карта")
     {
         var fullPath = System.IO.Path.GetFullPath(path);
         if (fullPath.Any(char.IsControl)
@@ -256,6 +271,10 @@ public sealed class RecentMapsStore
             DocumentId = documentId.ToString("D"),
             Title = TruncateTitle(title ?? ""),
             ModifiedUtc = modifiedUtc.ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+            MapType = string.IsNullOrWhiteSpace(mapType) ? "Локальная карта" : mapType.Trim(),
+            SizeBytes = File.Exists(fullPath) ? new FileInfo(fullPath).Length : 0,
+            ThumbnailBase64 = thumbnailPng is { Length: > 0 and <= 512 * 1024 }
+                ? Convert.ToBase64String(thumbnailPng) : null,
         });
 
         Save(entries.Take(Capacity).ToList());

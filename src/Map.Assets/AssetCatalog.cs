@@ -218,7 +218,16 @@ public sealed class AssetCatalog
             throw new InvalidDataException($"Asset size {file.Length} is outside the supported range.");
         }
 
-        byte[] bytes = AssetImagePolicy.ReadEncodedFile(fullSource);
+        var isSvg = string.Equals(file.Extension, ".svg", StringComparison.OrdinalIgnoreCase);
+        if (isSvg && options.Linked)
+        {
+            throw new InvalidDataException(
+                "SVG импортируется только как локально растрированный PNG, linked-режим недоступен.");
+        }
+
+        byte[] bytes = isSvg
+            ? SafeSvgRasterizer.RasterizeFile(fullSource)
+            : AssetImagePolicy.ReadEncodedFile(fullSource);
         var sha256 = Convert.ToHexStringLower(SHA256.HashData(bytes));
         if (_bySha.TryGetValue(sha256, out var existing))
         {
@@ -880,6 +889,98 @@ public sealed class AssetCatalog
         }
     }
 
+    /// <summary>
+    /// Repairs a missing/mismatched catalog source only when the chosen bytes reproduce the
+    /// record's exact SHA, dimensions and format. A refusal changes neither bytes nor metadata.
+    /// </summary>
+    public AssetRecord RepairSource(AssetRecord record, string replacementPath)
+    {
+        RequireWritable();
+        ArgumentNullException.ThrowIfNull(record);
+        ArgumentException.ThrowIfNullOrWhiteSpace(replacementPath);
+        if (!_bySha.ContainsKey(record.Sha256))
+            throw new KeyNotFoundException("Ассет отсутствует в текущем каталоге.");
+
+        var fullReplacement = Path.GetFullPath(replacementPath);
+        var bytes = string.Equals(Path.GetExtension(fullReplacement), ".svg", StringComparison.OrdinalIgnoreCase)
+            ? SafeSvgRasterizer.RasterizeFile(fullReplacement)
+            : AssetImagePolicy.ReadEncodedFile(fullReplacement);
+        var hash = Convert.ToHexStringLower(SHA256.HashData(bytes));
+        using var data = SKData.CreateCopy(bytes);
+        using var codec = SKCodec.Create(data)
+            ?? throw new InvalidDataException("Выбранный исходник не является поддержанным изображением.");
+        var metadata = AssetImagePolicy.Inspect(codec, bytes.LongLength);
+        var (extension, mediaType) = Format(codec.EncodedFormat);
+        if (!string.Equals(hash, record.Sha256, StringComparison.OrdinalIgnoreCase)
+            || metadata.Width != record.Width || metadata.Height != record.Height
+            || bytes.LongLength != record.ByteLength
+            || !string.Equals(extension, record.Extension, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(mediaType, record.MediaType, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException(
+                "Выбранный файл не совпадает с ожидаемыми SHA-256, форматом и размерами ассета.");
+        }
+
+        AssetRecord repaired;
+        if (record.StoredRelativePath is { } stored)
+        {
+            var destination = ResolveCatalogRelative(stored, "originals");
+            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            AtomicWrite(destination, bytes);
+            repaired = record;
+        }
+        else
+        {
+            repaired = record with { LinkedPath = fullReplacement };
+            var index = _document.Records.FindIndex(item =>
+                string.Equals(item.Sha256, record.Sha256, StringComparison.OrdinalIgnoreCase));
+            _document.Records[index] = repaired;
+        }
+
+        var thumbnail = ResolveCatalogRelative(record.ThumbnailRelativePath, "thumbnails");
+        Directory.CreateDirectory(Path.GetDirectoryName(thumbnail)!);
+        AtomicWrite(thumbnail, BuildThumbnail(bytes));
+        SaveIndex();
+        return repaired;
+    }
+
+    /// <summary>
+    /// Removes one catalog identity and its cards after a UI confirmation. Stored original bytes
+    /// are deliberately retained, so catalog removal is recoverable by a later re-import.
+    /// </summary>
+    public void RemoveRecord(string sha256)
+    {
+        RequireWritable();
+        ArgumentException.ThrowIfNullOrWhiteSpace(sha256);
+        var variantIds = _document.Variants
+            .Where(item => string.Equals(item.Sha256, sha256, StringComparison.OrdinalIgnoreCase))
+            .Select(item => item.Id).ToHashSet(StringComparer.Ordinal);
+        _document.Records.RemoveAll(item =>
+            string.Equals(item.Sha256, sha256, StringComparison.OrdinalIgnoreCase));
+        _document.Variants.RemoveAll(item => variantIds.Contains(item.Id));
+        for (var index = _document.Sets.Count - 1; index >= 0; index--)
+        {
+            var set = _document.Sets[index];
+            var remaining = set.VariantIds.Where(id => !variantIds.Contains(id)).ToList();
+            if (remaining.Count == 0)
+            {
+                _document.Recent.RemoveAll(item => item.SetId == set.Id);
+                _document.CurrentVariantBySet.Remove(set.Id);
+                _document.Sets.RemoveAt(index);
+            }
+            else if (remaining.Count != set.VariantIds.Count)
+            {
+                _document.Sets[index] = set with
+                {
+                    VariantIds = remaining,
+                    CoverVariantId = remaining.Contains(set.CoverVariantId, StringComparer.Ordinal)
+                        ? set.CoverVariantId : remaining[0],
+                };
+            }
+        }
+        SaveIndex();
+    }
+
     public string ThumbnailPath(AssetRecord record) =>
         ResolveCatalogRelative(record.ThumbnailRelativePath, "thumbnails");
 
@@ -904,6 +1005,27 @@ public sealed class AssetCatalog
     {
         var index = _document.Sets.FindIndex(set => string.Equals(set.Id, setId, StringComparison.Ordinal));
         return index >= 0 ? index : throw new KeyNotFoundException($"Набор {setId} отсутствует в каталоге.");
+    }
+
+    private static void AtomicWrite(string destination, byte[] bytes)
+    {
+        var temp = destination + ".tmp-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            using (var stream = new FileStream(
+                       temp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 16 * 1024,
+                       FileOptions.WriteThrough))
+            {
+                stream.Write(bytes);
+                stream.Flush(flushToDisk: true);
+            }
+            File.Move(temp, destination, overwrite: true);
+        }
+        finally
+        {
+            try { File.Delete(temp); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+        }
     }
 
     /// <summary>A damaged index is read-only: the user's only copy is never overwritten.</summary>

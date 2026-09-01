@@ -28,6 +28,12 @@ public sealed class DashboardView : UserControl
     private readonly Func<RecentCard, Task> _openRecentRequested;
     private readonly Func<RecoveryCard, Task> _restoreRequested;
     private readonly EditorShortcutSettings _shortcuts;
+    private readonly Func<RecentCard, Task>? _cloneRequested;
+    private readonly Func<RecentCard, Task>? _deleteRequested;
+    private readonly Func<Task>? _templateRequested;
+    private readonly Func<Task>? _backupRequested;
+    private readonly Action? _settingsRequested;
+    private readonly Action? _helpRequested;
 
     private readonly StackPanel _errorPanel = new();
     private readonly StackPanel _recoveryPanel = new() { Spacing = 10 };
@@ -42,7 +48,13 @@ public sealed class DashboardView : UserControl
         Func<Task> openFileRequested,
         Func<RecentCard, Task> openRecentRequested,
         Func<RecoveryCard, Task> restoreRequested,
-        EditorShortcutSettings? shortcuts = null)
+        EditorShortcutSettings? shortcuts = null,
+        Func<RecentCard, Task>? cloneRequested = null,
+        Func<RecentCard, Task>? deleteRequested = null,
+        Func<Task>? templateRequested = null,
+        Func<Task>? backupRequested = null,
+        Action? settingsRequested = null,
+        Action? helpRequested = null)
     {
         _dashboard = dashboard;
         _newMapRequested = newMapRequested;
@@ -50,6 +62,12 @@ public sealed class DashboardView : UserControl
         _openRecentRequested = openRecentRequested;
         _restoreRequested = restoreRequested;
         _shortcuts = shortcuts ?? new EditorShortcutSettings();
+        _cloneRequested = cloneRequested;
+        _deleteRequested = deleteRequested;
+        _templateRequested = templateRequested;
+        _backupRequested = backupRequested;
+        _settingsRequested = settingsRequested;
+        _helpRequested = helpRequested;
         Name = "DashboardView";
 
         Content = new DockPanel
@@ -121,12 +139,24 @@ public sealed class DashboardView : UserControl
             Child = new TextBlock { Text = "Работает без интернета", FontSize = 11 }.Classed("muted"),
         }.Classed("badge");
 
+        var chromeActions = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 6,
+            VerticalAlignment = VerticalAlignment.Center,
+            Children = { offline },
+        };
+        if (_helpRequested is not null)
+            chromeActions.Children.Add(Ui.TextButton("LocalHelpButton", "Справка", _helpRequested, "compact"));
+        if (_settingsRequested is not null)
+            chromeActions.Children.Add(Ui.TextButton("AppSettingsButton", "Настройки", _settingsRequested, "compact"));
+
         return new Border
         {
             Child = new DockPanel
             {
                 Margin = new Thickness(28, 12),
-                Children = { offline.Docked(Dock.Right), brand },
+                Children = { chromeActions.Docked(Dock.Right), brand },
             },
         }.Classed("app-bar");
     }
@@ -170,6 +200,21 @@ public sealed class DashboardView : UserControl
         ToolTip.SetTip(openButton,
             $"Открыть файл проекта .mapproj  ({_shortcuts.Get(EditorShortcutSettings.Commands.OpenMap)})");
 
+        var actionButtons = new WrapPanel
+        {
+            Orientation = Orientation.Horizontal,
+            ItemSpacing = 8,
+            LineSpacing = 8,
+            VerticalAlignment = VerticalAlignment.Center,
+            Children = { openButton, newButton },
+        };
+        if (_templateRequested is not null)
+            actionButtons.Children.Add(Ui.AsyncButton(
+                "CreateFromTemplateButton", "Из шаблона", _templateRequested));
+        if (_backupRequested is not null)
+            actionButtons.Children.Add(Ui.AsyncButton(
+                "ImportBackupButton", "Импорт backup", _backupRequested));
+
         return new Border
         {
             Padding = new Thickness(22, 20),
@@ -177,13 +222,7 @@ public sealed class DashboardView : UserControl
             {
                 Children =
                 {
-                    new StackPanel
-                    {
-                        Orientation = Orientation.Horizontal,
-                        Spacing = 10,
-                        VerticalAlignment = VerticalAlignment.Center,
-                        Children = { openButton, newButton },
-                    }.Docked(Dock.Right),
+                    actionButtons.Docked(Dock.Right),
                     new StackPanel
                     {
                         Spacing = 5,
@@ -203,15 +242,46 @@ public sealed class DashboardView : UserControl
         }.Classed("elevated");
     }
 
-    private Control BuildRecentHeader() => new DockPanel
+    private Control BuildRecentHeader()
     {
-        Margin = new Thickness(2, 6, 2, 0),
-        Children =
+        var search = new TextBox
         {
-            _recentCount.Classed("muted", "role-caption").Docked(Dock.Right),
-            new TextBlock { Name = "RecentHeader", Text = "Недавние карты" }.Classed("role-section"),
-        },
-    };
+            Name = "DashboardSearchBox",
+            Width = 220,
+            PlaceholderText = "Поиск по имени или типу",
+            Text = _dashboard.SearchText,
+        };
+        search.TextChanged += (_, _) => _dashboard.SearchText = search.Text ?? "";
+
+        var sort = new ComboBox
+        {
+            Name = "DashboardSortChoice",
+            Width = 190,
+            SelectedIndex = (int)_dashboard.SortOrder,
+            ItemsSource = new[] { "Сначала новые", "По имени", "По типу", "По размеру" },
+        };
+        sort.SelectionChanged += (_, _) =>
+        {
+            if (sort.SelectedIndex >= 0)
+                _dashboard.SortOrder = (DashboardSortOrder)sort.SelectedIndex;
+        };
+
+        return new DockPanel
+        {
+            Margin = new Thickness(2, 6, 2, 0),
+            Children =
+            {
+                new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 8,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Children = { search, sort, _recentCount.Classed("muted", "role-caption") },
+                }.Docked(Dock.Right),
+                new TextBlock { Name = "RecentHeader", Text = "Недавние карты" }.Classed("role-section"),
+            },
+        };
+    }
 
     // ================================================================== content
 
@@ -429,7 +499,26 @@ public sealed class DashboardView : UserControl
 
         var captured = card;
         button.Click += async (_, _) => await _openRecentRequested(captured);
-        return button;
+
+        if (_cloneRequested is null && _deleteRequested is null) return button;
+        var actions = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 6,
+            Margin = new Thickness(8, 0, 8, 8),
+        };
+        if (_cloneRequested is not null)
+            actions.Children.Add(Ui.AsyncButton(
+                $"CloneRecentButton{index}", "Копировать", () => _cloneRequested(captured), "compact"));
+        if (_deleteRequested is not null)
+            actions.Children.Add(Ui.AsyncButton(
+                $"DeleteRecentButton{index}", "В Корзину", () => _deleteRequested(captured), "destructive", "compact"));
+        return new StackPanel
+        {
+            Width = CardWidth,
+            Margin = new Thickness(0, 0, 16, 16),
+            Children = { button, actions },
+        };
     }
 
     private static Control BuildThumbnail(RecentCard card)

@@ -1598,8 +1598,10 @@ public sealed class EditorView : UserControl
             {
                 Ui.TextButton("CopyCompositionButton", "Копировать композицию",
                     _editor.CopySelectedComposition, "compact"),
-                Ui.TextButton("FlattenCompositionButton", "Растеризовать композицию",
-                    _editor.FlattenSelectedComposition, "compact"),
+                Ui.AsyncButton("ExportCompositionPackageButton", "Экспорт package…",
+                    ExportCompositionPackageAsync, "compact"),
+                Ui.AsyncButton("FlattenCompositionButton", "Растеризовать композицию…",
+                    FlattenSelectedCompositionAsync, "compact"),
             },
         }).Named("CompositionObjectActions");
     }
@@ -2628,6 +2630,20 @@ public sealed class EditorView : UserControl
         };
     }
 
+    private async System.Threading.Tasks.Task FlattenSelectedCompositionAsync()
+    {
+        if (_editor.Session.SelectedObject?.Composition is null
+            || TopLevel.GetTopLevel(this) is not Window owner) return;
+        if (await ConfirmationWindow.ShowAsync(
+                owner, "Растеризовать композицию?",
+                "Композиция станет одним raster stamp. Исходная vector-композиция останется редактируемой до подтверждения; после операции её можно вернуть через Undo.",
+                "Растеризовать", "FlattenCompositionConfirmButton", destructive: true))
+        {
+            _editor.FlattenSelectedComposition();
+            SyncSidePanels();
+        }
+    }
+
     private Control BuildLandLayerBlock()
     {
         var (row, button) = Ui.ValueRow(
@@ -2814,6 +2830,8 @@ public sealed class EditorView : UserControl
                         () => _editor.CreateEditableComposition(), "compact"),
                     Ui.TextButton("PasteCompositionButton", "Вставить композицию",
                         _editor.PasteComposition, "compact"),
+                    Ui.AsyncButton("ImportCompositionPackageButton", "Импорт package…",
+                        ImportCompositionPackageAsync, "compact"),
                 },
             },
         }.Classed("group");
@@ -3913,6 +3931,10 @@ public sealed class EditorView : UserControl
                             }, "compact"),
                             Ui.TextButton("KeepStampPlaceholderButton", "Оставить заменитель",
                                 _editor.KeepSelectedStampPlaceholder, "compact"),
+                            AssetCommand("RepairAssetSourceButton", "Найти исходник…",
+                                () => _ = RepairSelectedAssetAsync(), "compact"),
+                            AssetCommand("RemoveAssetRecordButton", "Удалить из каталога…",
+                                () => _ = RemoveSelectedAssetAsync(), "destructive", "compact"),
                             AssetCommand("UseAssetStrokeButton", "Использовать для обводки", () =>
                             {
                                 if (_selectedAsset is not null)
@@ -6789,7 +6811,7 @@ public sealed class EditorView : UserControl
                 AllowMultiple = false,
                 FileTypeFilter =
                 [
-                    new FilePickerFileType("Изображения") { Patterns = ["*.png", "*.jpg", "*.jpeg", "*.webp"] },
+                    new FilePickerFileType("Изображения") { Patterns = ["*.png", "*.jpg", "*.jpeg", "*.webp", "*.svg"] },
                 ],
             });
 
@@ -6817,6 +6839,88 @@ public sealed class EditorView : UserControl
         SyncStatus();
     }
 
+    private async System.Threading.Tasks.Task ExportCompositionPackageAsync()
+    {
+        var topLevel = TopLevel.GetTopLevel(this);
+        if (topLevel is null) return;
+        var file = await topLevel.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = "Экспорт composition package",
+            SuggestedFileName = (_editor.Session.SelectedObject?.Name ?? "composition") + ".mapcomp",
+            DefaultExtension = "mapcomp",
+            FileTypeChoices = [new FilePickerFileType("Map composition") { Patterns = ["*.mapcomp"] }],
+        });
+        if (file?.TryGetLocalPath() is { } path)
+        {
+            _editor.ExportSelectedCompositionPackage(path);
+            SyncStatus();
+        }
+    }
+
+    private async System.Threading.Tasks.Task RepairSelectedAssetAsync()
+    {
+        if (_selectedAsset is not { } selected) return;
+        var topLevel = TopLevel.GetTopLevel(this);
+        if (topLevel is null) return;
+        var files = await topLevel.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Найти исходник ассета",
+            AllowMultiple = false,
+            FileTypeFilter =
+            [
+                new FilePickerFileType("Изображения")
+                {
+                    Patterns = ["*.png", "*.jpg", "*.jpeg", "*.webp", "*.svg"],
+                },
+            ],
+        });
+        if (files.Count == 1 && files[0].TryGetLocalPath() is { } path
+            && _editor.RepairAssetSource(selected, path) is { } repaired)
+        {
+            _selectedAsset = repaired;
+            SyncAssetList();
+            SyncStatus();
+        }
+    }
+
+    private async System.Threading.Tasks.Task RemoveSelectedAssetAsync()
+    {
+        if (_selectedAsset is not { } selected || TopLevel.GetTopLevel(this) is not Window owner) return;
+        var confirmed = await ConfirmationWindow.ShowAsync(
+            owner,
+            "Удалить ассет из каталога?",
+            $"«{selected.DisplayName}» исчезнет из библиотеки. Карты и сохранённые исходные bytes не удаляются.",
+            "Удалить из каталога",
+            "RemoveAssetRecordConfirmButton",
+            destructive: true);
+        if (!confirmed) return;
+        if (_editor.RemoveAssetFromCatalog(selected))
+        {
+            _selectedAsset = null;
+            SyncAssetList();
+            SyncStatus();
+        }
+    }
+
+    private async System.Threading.Tasks.Task ImportCompositionPackageAsync()
+    {
+        var topLevel = TopLevel.GetTopLevel(this);
+        if (topLevel is null) return;
+        var files = await topLevel.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Импорт composition package",
+            AllowMultiple = false,
+            FileTypeFilter = [new FilePickerFileType("Map composition") { Patterns = ["*.mapcomp"] }],
+        });
+        if (files.Count == 1 && files[0].TryGetLocalPath() is { } path)
+        {
+            _editor.ImportCompositionPackage(path);
+            SyncContextArea();
+            SyncSidePanels();
+            SyncStatus();
+        }
+    }
+
     /// <summary>One import of many files becomes one named logical card with ordered variants.</summary>
     private async System.Threading.Tasks.Task ImportAssetSetAsync()
     {
@@ -6839,7 +6943,7 @@ public sealed class EditorView : UserControl
                 AllowMultiple = true,
                 FileTypeFilter =
                 [
-                    new FilePickerFileType("Изображения") { Patterns = ["*.png", "*.jpg", "*.jpeg", "*.webp"] },
+                    new FilePickerFileType("Изображения") { Patterns = ["*.png", "*.jpg", "*.jpeg", "*.webp", "*.svg"] },
                 ],
             });
 

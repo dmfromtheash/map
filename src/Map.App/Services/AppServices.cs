@@ -22,13 +22,29 @@ public sealed class PlatformRecentMaps(RecentMapsStore store) : IRecentMaps
                 e.Path,
                 e.Title,
                 DateTimeOffset.TryParse(e.ModifiedUtc, out var modified) ? modified : DateTimeOffset.MinValue,
-                e.IsAvailable))
+                e.IsAvailable,
+                e.MapType,
+                e.SizeBytes,
+                DecodeThumbnail(e.ThumbnailBase64)))
             .ToList();
 
-    public void Touch(string path, Guid documentId, string title, DateTimeOffset modifiedUtc) =>
-        store.Touch(path, documentId, title, modifiedUtc);
+    public void Touch(
+        string path,
+        Guid documentId,
+        string title,
+        DateTimeOffset modifiedUtc,
+        byte[]? thumbnailPng = null,
+        string mapType = "Локальная карта") =>
+        store.Touch(path, documentId, title, modifiedUtc, thumbnailPng, mapType);
 
     public void Remove(string path) => store.Remove(path);
+
+    private static byte[]? DecodeThumbnail(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        try { return Convert.FromBase64String(value); }
+        catch (FormatException) { return null; }
+    }
 }
 
 public sealed class DiagnosticsLogAdapter(DiagnosticsLog log) : IAppLog
@@ -84,6 +100,16 @@ public sealed class DialogPrompts(Window owner) : IUserPrompts
     public Task<bool> ConfirmMigrationCopyAsync() =>
         Dispatcher.UIThread.InvokeAsync(() => MigrationPromptWindow.ShowAsync(owner));
 
+    public Task<bool> ConfirmDeleteProjectAsync(string projectTitle) =>
+        Dispatcher.UIThread.InvokeAsync(() => ConfirmationWindow.ShowAsync(
+            owner,
+            "Переместить карту в Корзину?",
+            $"Файл карты «{projectTitle}» будет перемещён в Корзину Windows. " +
+                "Остальные карты и данные восстановления не изменятся.",
+            "В Корзину",
+            "DeleteProjectConfirmButton",
+            destructive: true));
+
     public Task<CloseChoice> ConfirmCloseDirtyAsync(string documentTitle) =>
         Dispatcher.UIThread.InvokeAsync(async () =>
         {
@@ -111,6 +137,20 @@ public sealed class DialogPrompts(Window owner) : IUserPrompts
             "Удалить",
             "DeleteCheckpointConfirmButton",
             destructive: true));
+}
+
+/// <summary>Windows Recycle Bin adapter. It accepts one already-resolved project file only.</summary>
+public sealed class WindowsProjectTrash : IProjectTrash
+{
+    public void MoveToTrash(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        if (!File.Exists(fullPath)) throw new FileNotFoundException("Файл карты не найден.", fullPath);
+        Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(
+            fullPath,
+            Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
+            Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+    }
 }
 
 /// <summary>Native export destination dialogs. The tile-package picker chooses a new folder name.</summary>

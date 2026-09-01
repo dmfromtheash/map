@@ -32,7 +32,15 @@ public interface IUserPrompts
 
     Task<bool> ConfirmMigrationCopyAsync();
 
+    Task<bool> ConfirmDeleteProjectAsync(string projectTitle);
+
     Task ShowErrorAsync(string title, string message);
+}
+
+/// <summary>Recoverable deletion of one explicit local project path.</summary>
+public interface IProjectTrash
+{
+    void MoveToTrash(string path);
 }
 
 /// <summary>Export destinations are separate from .mapproj save/open dialogs.</summary>
@@ -59,14 +67,26 @@ public interface IAppLog
 
 /// <summary>One dashboard card of the local recent index.</summary>
 public sealed record RecentMapItem(
-    string Path, string Title, DateTimeOffset ModifiedUtc, bool IsAvailable);
+    string Path,
+    string Title,
+    DateTimeOffset ModifiedUtc,
+    bool IsAvailable,
+    string MapType = "Локальная карта",
+    long SizeBytes = 0,
+    byte[]? ThumbnailPng = null);
 
 /// <summary>Local bounded recent index. Implemented in Map.Platform.Windows; faked in tests.</summary>
 public interface IRecentMaps
 {
     IReadOnlyList<RecentMapItem> Load();
 
-    void Touch(string path, Guid documentId, string title, DateTimeOffset modifiedUtc);
+    void Touch(
+        string path,
+        Guid documentId,
+        string title,
+        DateTimeOffset modifiedUtc,
+        byte[]? thumbnailPng = null,
+        string mapType = "Локальная карта");
 
     void Remove(string path);
 }

@@ -513,6 +513,7 @@ public sealed class NativeStage15Application : Application
     private sealed class SmokePrompts : IUserPrompts
     {
         public Task<bool> ConfirmMigrationCopyAsync() => Task.FromResult(false);
+        public Task<bool> ConfirmDeleteProjectAsync(string projectTitle) => Task.FromResult(false);
         public Task<CloseChoice> ConfirmCloseDirtyAsync(string documentTitle) => Task.FromResult(CloseChoice.Cancel);
         public Task<bool> ConfirmRestoreCheckpointAsync(string checkpointName) => Task.FromResult(false);
         public Task<bool> ConfirmDeleteCheckpointAsync(string checkpointName) => Task.FromResult(false);
@@ -528,7 +529,8 @@ public sealed class NativeStage15Application : Application
     private sealed class SmokeRecentMaps : IRecentMaps
     {
         public IReadOnlyList<RecentMapItem> Load() => [];
-        public void Touch(string path, Guid documentId, string title, DateTimeOffset modifiedUtc) { }
+        public void Touch(string path, Guid documentId, string title, DateTimeOffset modifiedUtc,
+            byte[]? thumbnailPng = null, string mapType = "Локальная карта") { }
         public void Remove(string path) { }
     }
 

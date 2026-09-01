@@ -304,7 +304,9 @@ public sealed partial class EditorViewModel
                 _store.Save(extracted, path, metadata, preview);
             }).ConfigureAwait(false);
 
-            _recent.Touch(path, extracted.Id.Value, extracted.Title, modifiedUtc);
+            _recent.Touch(
+                path, extracted.Id.Value, extracted.Title, modifiedUtc,
+                ThumbnailRenderer.RenderPng(extracted));
             CloseCanvasWorkflow();
             StatusDetail = $"Создана независимая карта из региона: {path}. Исходная карта осталась открыта и не изменена.";
             _log.Info("REGION_MAP_CREATED");
