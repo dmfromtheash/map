@@ -207,6 +207,10 @@ public sealed class NativeStage14Application : Application
             && selectionBeforeArm.SequenceEqual(editor.Session.SelectedObjectIds);
 
         view.Canvas.MovePlacementPointerForSmoke(700, 420);
+        if (!editor.RotatePendingPlacement(1, largerStep: true))
+        {
+            throw new InvalidOperationException("Pending primitive rotation was not handled.");
+        }
         await NextFrameAsync(view);
         var pending = editor.PendingPlacement!;
         var preview = AssertSingle(pending.PreviewObjects);
@@ -228,6 +232,8 @@ public sealed class NativeStage14Application : Application
             && NearlyEqual(committed.Y, preview.Y)
             && NearlyEqual(committed.Width, preview.Width)
             && NearlyEqual(committed.Height, preview.Height)
+            && NearlyEqual(preview.RotationDegrees, 15)
+            && NearlyEqual(committed.RotationDegrees, preview.RotationDegrees)
             && editor.PendingPlacement is null;
         var primitiveNamed = committed.Name == "Эллипс 1";
         var primitiveHistory = editor.Session.UndoDepth == undoBeforeArm + 1

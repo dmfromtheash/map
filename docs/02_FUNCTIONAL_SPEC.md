@@ -279,7 +279,8 @@ inspector и меняются undoable-командами; одного цикл
 ### Placement workspace (`P0`)
 
 - Add Ellipse/Rectangle и выбор stamp сначала вооружают transient placement с реальным ghost;
-- preview и commit используют одну snapped geometry; preview не входит в document/history/export;
+- preview и commit используют одну snapped geometry; `W`/`S` меняют transient-поворот до клика,
+  а preview не входит в document/history/export;
 - режимы `Один`, `Серия`, `Россыпь`, а также `Автовыбор: Авто/Всегда/Выкл.`;
 - Esc/right-click/tool switch отменяют pending placement до изменения selection;
 - справа постоянно остаются только `Слои` и `Объекты`; Library, Versions, size/region и export

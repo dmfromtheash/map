@@ -536,6 +536,8 @@ public sealed class MainWindow : Window
 
     private static void AdjustPrimary(EditorViewModel editor, int direction, bool large)
     {
+        if (editor.RotatePendingPlacement(direction, large))
+            return;
         if (editor.ActiveTool is EditorTool.Brush or EditorTool.Mask or EditorTool.Land)
             editor.AdjustBrushSize(direction, large);
         else if (editor.ActiveTool == EditorTool.Text)

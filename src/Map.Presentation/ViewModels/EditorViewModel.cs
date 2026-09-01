@@ -1850,6 +1850,8 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     private const double PlacementPreviewOpacity = 0.55;
     private const int MaximumScatterPreviewObjects = 64;
+    private const double PlacementRotationStep = 1;
+    private const double PlacementRotationLargeStep = 15;
 
     public PlacementSession? PendingPlacement
     {
@@ -1917,10 +1919,13 @@ public sealed partial class EditorViewModel : ViewModelBase
         PendingPlacement = pending.Target switch
         {
             PlacementTargetKind.Rectangle => BuildPrimitivePlacement(
-                SceneObjectKind.Rectangle, snapped.X, snapped.Y, pending.Mode, pointerVisible: true),
+                SceneObjectKind.Rectangle, snapped.X, snapped.Y, pending.Mode, pointerVisible: true,
+                pending.RotationDegrees),
             PlacementTargetKind.Ellipse => BuildPrimitivePlacement(
-                SceneObjectKind.Ellipse, snapped.X, snapped.Y, pending.Mode, pointerVisible: true),
-            _ => BuildStampPlacement(snapped.X, snapped.Y, pointerVisible: true),
+                SceneObjectKind.Ellipse, snapped.X, snapped.Y, pending.Mode, pointerVisible: true,
+                pending.RotationDegrees),
+            _ => BuildStampPlacement(
+                snapped.X, snapped.Y, pointerVisible: true, pending.RotationDegrees),
         };
     }
 
@@ -1930,6 +1935,33 @@ public sealed partial class EditorViewModel : ViewModelBase
         {
             PendingPlacement = pending with { PointerVisible = visible };
         }
+    }
+
+    /// <summary>
+    /// Turns the transient object around its own centre before placement. The document, selection
+    /// and history stay untouched; pointer moves rebuild the same angle and commit consumes the
+    /// exact previewed rotation.
+    /// </summary>
+    public bool RotatePendingPlacement(int direction, bool largerStep = false)
+    {
+        if (PendingPlacement is not { } pending || direction == 0)
+        {
+            return false;
+        }
+
+        var delta = Math.Sign(direction)
+            * (largerStep ? PlacementRotationLargeStep : PlacementRotationStep);
+        var rotation = NormalizeAngle(pending.RotationDegrees + delta);
+        var preview = pending.PreviewObjects.Select(item => WithGeometry(
+            item, item.X, item.Y, item.Width, item.Height,
+            NormalizeAngle(item.RotationDegrees + delta))).ToArray();
+        PendingPlacement = pending with
+        {
+            RotationDegrees = rotation,
+            PreviewObjects = preview,
+        };
+        StatusDetail = $"Поворот перед установкой: {rotation:0.##}° · W/S.";
+        return true;
     }
 
     public bool CancelPlacement()
@@ -2019,6 +2051,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         var plan = pending.Mode == StampPlacementMode.Area
             ? StampPlacement.PlanArea(request, sources)
             : StampPlacement.PlanOne(request, sources[0]);
+        plan = ApplyPlacementRotation(plan, pending.RotationDegrees);
         if (ResolvePlan(plan, records, out var references, out refusal) is not { } byHash)
         {
             StatusDetail = refusal;
@@ -2090,7 +2123,8 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
 
         PendingPlacement = committed.Target == PlacementTargetKind.Stamp
-            ? BuildStampPlacement(committed.WorldX, committed.WorldY, pointerVisible: true)
+            ? BuildStampPlacement(
+                committed.WorldX, committed.WorldY, pointerVisible: true, committed.RotationDegrees)
             : BuildPrimitivePlacement(
                 committed.Target == PlacementTargetKind.Ellipse
                     ? SceneObjectKind.Ellipse
@@ -2098,7 +2132,8 @@ public sealed partial class EditorViewModel : ViewModelBase
                 committed.WorldX,
                 committed.WorldY,
                 committed.Mode,
-                pointerVisible: true);
+                pointerVisible: true,
+                committed.RotationDegrees);
         StatusDetail = $"Создан «{name}». Режим серии остаётся активным.";
     }
 
@@ -2107,8 +2142,10 @@ public sealed partial class EditorViewModel : ViewModelBase
         double centerX,
         double centerY,
         StampPlacementMode mode,
-        bool pointerVisible)
+        bool pointerVisible,
+        double rotationDegrees = 0)
     {
+        rotationDegrees = NormalizeAngle(rotationDegrees);
         var layer = ActiveObjectLayer();
         var viewportWorldWidth = Session.Viewport.ViewWidth > 0
             ? Session.Viewport.ViewWidth / Math.Max(Session.Viewport.Scale, 0.01)
@@ -2125,7 +2162,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             centerY - height / 2,
             width,
             height,
-            0,
+            rotationDegrees,
             kind == SceneObjectKind.Ellipse ? "#FF5B8266" : "#FF3E5C76",
             "#FF10131A",
             2,
@@ -2146,7 +2183,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             WorldY = centerY,
             Width = width,
             Height = height,
-            RotationDegrees = 0,
+            RotationDegrees = rotationDegrees,
             FillColor = preview.FillColor,
             StrokeColor = preview.StrokeColor,
             StrokeWidth = preview.StrokeWidth,
@@ -2161,12 +2198,18 @@ public sealed partial class EditorViewModel : ViewModelBase
         };
     }
 
-    private PlacementSession BuildStampPlacement(double centerX, double centerY, bool pointerVisible)
+    private PlacementSession BuildStampPlacement(
+        double centerX,
+        double centerY,
+        bool pointerVisible,
+        double rotationDegrees = 0)
     {
+        rotationDegrees = NormalizeAngle(rotationDegrees);
         var layer = ActiveObjectLayer();
         if (!TryStampInputs(out var requestTemplate, out var sources, out var records, out var refusal))
         {
-            return EmptyStampPlacement(centerX, centerY, layer?.Id, pointerVisible, refusal);
+            return EmptyStampPlacement(
+                centerX, centerY, layer?.Id, pointerVisible, refusal, rotationDegrees);
         }
 
         var request = requestTemplate with
@@ -2178,6 +2221,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         var plan = _stampPlacementMode == StampPlacementMode.Area
             ? StampPlacement.PlanAreaPreview(request, sources, MaximumScatterPreviewObjects)
             : StampPlacement.PlanOne(request, sources[0]);
+        plan = ApplyPlacementRotation(plan, rotationDegrees);
         var preview = plan.Select((item, index) => StampObject(
             item,
             index == 0 ? "Будущий штамп" : $"Будущий штамп {index + 1}",
@@ -2192,7 +2236,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             WorldY = centerY,
             Width = preview[0].Width,
             Height = preview[0].Height,
-            RotationDegrees = preview[0].RotationDegrees,
+            RotationDegrees = rotationDegrees,
             FillColor = "#FFFFFFFF",
             StrokeColor = "#00000000",
             StrokeWidth = 0,
@@ -2217,7 +2261,8 @@ public sealed partial class EditorViewModel : ViewModelBase
         double centerY,
         LayerId? layerId,
         bool pointerVisible,
-        string refusal) => new()
+        string refusal,
+        double rotationDegrees) => new()
     {
         Target = PlacementTargetKind.Stamp,
         Mode = _stampPlacementMode,
@@ -2227,7 +2272,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         WorldY = centerY,
         Width = 0,
         Height = 0,
-        RotationDegrees = 0,
+        RotationDegrees = rotationDegrees,
         FillColor = "#FFFFFFFF",
         StrokeColor = "#00000000",
         StrokeWidth = 0,
@@ -2320,6 +2365,21 @@ public sealed partial class EditorViewModel : ViewModelBase
         },
     };
 
+    private static IReadOnlyList<StampPlacementItem> ApplyPlacementRotation(
+        IReadOnlyList<StampPlacementItem> plan,
+        double rotationDegrees)
+    {
+        if (rotationDegrees == 0)
+        {
+            return plan;
+        }
+
+        return [.. plan.Select(item => item with
+        {
+            RotationDegrees = NormalizeAngle(item.RotationDegrees + rotationDegrees),
+        })];
+    }
+
     private VectorPoint SnapPlacementPoint(double worldX, double worldY) =>
         ActiveSnapGrid() is { } grid
             ? GridSnapService.Snap(grid, new VectorPoint(worldX, worldY))
@@ -2333,7 +2393,8 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
 
         PendingPlacement = pending.Target == PlacementTargetKind.Stamp
-            ? BuildStampPlacement(pending.WorldX, pending.WorldY, pending.PointerVisible)
+            ? BuildStampPlacement(
+                pending.WorldX, pending.WorldY, pending.PointerVisible, pending.RotationDegrees)
             : BuildPrimitivePlacement(
                 pending.Target == PlacementTargetKind.Ellipse
                     ? SceneObjectKind.Ellipse
@@ -2343,7 +2404,8 @@ public sealed partial class EditorViewModel : ViewModelBase
                 _stampPlacementMode == StampPlacementMode.Area
                     ? StampPlacementMode.One
                     : _stampPlacementMode,
-                pending.PointerVisible);
+                pending.PointerVisible,
+                pending.RotationDegrees);
     }
 
     private void PersistLocalPreferences() => _saveLocalPreferences?.Invoke(

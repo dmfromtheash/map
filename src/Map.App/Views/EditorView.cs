@@ -841,7 +841,7 @@ public sealed class EditorView : UserControl
             Spacing = 8,
             Children =
             {
-                Explanation("Выберите объект и укажите его место на холсте. До клика карта не меняется."),
+                Explanation("Выберите объект и укажите его место на холсте. До клика карта не меняется; W/S — поворот."),
                 _addRectangleButton,
                 _addEllipseButton,
                 Ui.TextButton(
@@ -1175,6 +1175,9 @@ public sealed class EditorView : UserControl
                 ShortcutChipRow(
                     [EditorShortcutSettings.Commands.StampPreviousVariant,
                      EditorShortcutSettings.Commands.StampNextVariant], "вариант"),
+                ShortcutChipRow(
+                    [EditorShortcutSettings.Commands.PrimaryUp,
+                     EditorShortcutSettings.Commands.PrimaryDown], "поворот до установки"),
                 ShortcutChipRow(
                     [EditorShortcutSettings.Commands.TertiaryUp,
                      EditorShortcutSettings.Commands.TertiaryDown], "область"),

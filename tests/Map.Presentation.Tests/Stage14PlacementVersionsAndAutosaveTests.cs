@@ -55,6 +55,48 @@ public sealed class Stage14PlacementVersionsAndAutosaveTests : IDisposable
         }
     }
 
+    [Fact]
+    public void Stage14_W_and_S_rotate_primitive_and_stamp_previews_without_mutating_the_document()
+    {
+        var editor = Editor(Document(), out _, out _, startDirty: false);
+        editor.Session.Viewport.Resize(1_000, 700);
+        var source = editor.Session.Document;
+        var revision = editor.Session.Revision;
+        var undo = editor.Session.UndoDepth;
+
+        Assert.Equal("W", editor.Shortcuts.Get(EditorShortcutSettings.Commands.PrimaryUp));
+        Assert.Equal("S", editor.Shortcuts.Get(EditorShortcutSettings.Commands.PrimaryDown));
+
+        editor.ArmPrimitivePlacement(SceneObjectKind.Rectangle);
+        editor.UpdatePlacementPreview(240, 180);
+        Assert.True(editor.RotatePendingPlacement(1));
+        Assert.True(editor.RotatePendingPlacement(1, largerStep: true));
+        editor.UpdatePlacementPreview(320, 260);
+        Assert.True(editor.RotatePendingPlacement(-1));
+        var primitivePreview = Assert.Single(editor.PlacementPreviewObjects);
+        Assert.Equal(15, primitivePreview.RotationDegrees);
+        Assert.Same(source, editor.Session.Document);
+        Assert.Equal(revision, editor.Session.Revision);
+        Assert.Equal(undo, editor.Session.UndoDepth);
+
+        Assert.True(editor.CommitPendingPlacement());
+        Assert.Equal(primitivePreview.RotationDegrees, editor.Session.SelectedObject!.RotationDegrees);
+
+        var stampEditor = AssetEditor(out var catalog);
+        var set = catalog.FindSetForContent(catalog.Records[0].Sha256)!;
+        stampEditor.SelectAssetSet(set.Id);
+        stampEditor.UpdatePlacementPreview(260, 220);
+        var stampSource = stampEditor.Session.Document;
+        Assert.True(stampEditor.RotatePendingPlacement(-1, largerStep: true));
+        stampEditor.UpdatePlacementPreview(420, 300);
+        var stampPreview = Assert.Single(stampEditor.PlacementPreviewObjects);
+        Assert.Equal(-15, stampPreview.RotationDegrees);
+        Assert.Same(stampSource, stampEditor.Session.Document);
+
+        Assert.True(stampEditor.CommitPendingPlacement());
+        Assert.Equal(stampPreview.RotationDegrees, stampEditor.Session.SelectedObject!.RotationDegrees);
+    }
+
     [Theory]
     [InlineData(PlacementAutoSelectPolicy.Auto, StampPlacementMode.One, true)]
     [InlineData(PlacementAutoSelectPolicy.Auto, StampPlacementMode.Series, false)]
