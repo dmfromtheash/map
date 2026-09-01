@@ -42,7 +42,7 @@ if (!string.IsNullOrWhiteSpace(outputDirectory))
 }
 File.WriteAllText(options.OutputPath, json + Environment.NewLine);
 
-Console.WriteLine($"Stage 13 report: {options.OutputPath}");
+Console.WriteLine($"Performance report: {options.OutputPath}");
 if (report is PerformanceReport performance)
 {
     foreach (var profile in performance.Profiles)
