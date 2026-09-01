@@ -3,7 +3,6 @@ using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Fonts.Inter;
 using Avalonia.Media.Imaging;
-using Avalonia.Themes.Fluent;
 using Avalonia.Threading;
 using Map.App.Views;
 using Map.Assets;
@@ -94,7 +93,21 @@ public sealed class NativeStage14Application : Application
         _completion = completion;
     }
 
-    public override void Initialize() => Styles.Add(new FluentTheme());
+    public override void Initialize()
+    {
+        // Reuse the production application resources and styles so the AI-vision frame reviews
+        // the real Map palette and control hierarchy instead of an unstyled Fluent test surface.
+        var production = new global::Map.App.App();
+        production.Initialize();
+        RequestedThemeVariant = production.RequestedThemeVariant;
+        foreach (var resource in production.Resources)
+        {
+            Resources[resource.Key] = resource.Value;
+        }
+        var styles = production.Styles.ToArray();
+        production.Styles.Clear();
+        Styles.AddRange(styles);
+    }
 
     public override void OnFrameworkInitializationCompleted()
     {
@@ -203,7 +216,7 @@ public sealed class NativeStage14Application : Application
         {
             bitmap.Render(view);
             using var stream = File.Create(screenshotPath);
-            bitmap.Save(stream);
+            bitmap.Save(stream, PngBitmapEncoderOptions.Default);
         }
 
         var commit = view.Canvas.CommitPlacementForSmoke();
