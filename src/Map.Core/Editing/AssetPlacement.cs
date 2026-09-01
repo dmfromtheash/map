@@ -101,6 +101,31 @@ public static class StampPlacement
     /// </summary>
     public static IReadOnlyList<StampPlacementItem> PlanArea(
         StampPlacementRequest request, IReadOnlyList<StampVariantSource> variants)
+        => PlanArea(request, variants, MaxStampsPerGesture);
+
+    /// <summary>
+    /// A deterministic prefix of the full scatter plan for transient editor rendering. The same
+    /// random draws are consumed in the same order, so every visible sample is byte-for-byte the
+    /// item that a later successful commit will materialise. The bounded prefix prevents a dense
+    /// gesture from creating thousands of preview objects on every pointer move.
+    /// </summary>
+    public static IReadOnlyList<StampPlacementItem> PlanAreaPreview(
+        StampPlacementRequest request,
+        IReadOnlyList<StampVariantSource> variants,
+        int maximumItems = 64)
+    {
+        if (maximumItems is < 1 or > MaxStampsPerGesture)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maximumItems));
+        }
+
+        return PlanArea(request, variants, maximumItems);
+    }
+
+    private static IReadOnlyList<StampPlacementItem> PlanArea(
+        StampPlacementRequest request,
+        IReadOnlyList<StampVariantSource> variants,
+        int maximumItems)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(variants);
@@ -109,7 +134,7 @@ public static class StampPlacement
             throw new ArgumentException("Размещение требует хотя бы один вариант.", nameof(variants));
         }
 
-        var count = CountFor(request.Density, request.AreaRadius);
+        var count = Math.Min(CountFor(request.Density, request.AreaRadius), maximumItems);
         var random = new DeterministicRandom(request.Seed);
         var items = new List<StampPlacementItem>(count);
         for (var index = 0; index < count; index++)

@@ -14,6 +14,8 @@ public static class AppPaths
 
     public static string ShortcutSettingsPath => Path.Combine(Root, "shortcuts.json");
 
+    public static string EditorPreferencesPath => Path.Combine(Root, "editor-preferences.json");
+
     /// <summary>
     /// Validates an explicit, disposable user-state root used by native UI drivers. The real
     /// profile, its descendants, and its ancestors are rejected so a test cannot silently write

@@ -22,6 +22,7 @@ public static class EditorLabels
         EditorTool.Mask => "Маска",
         EditorTool.Land => "Земля",
         EditorTool.Stamp => "Штамп",
+        EditorTool.Notes => "Заметки",
         _ => "Инструмент",
     };
 
@@ -36,6 +37,7 @@ public static class EditorLabels
         EditorTool.Mask => "Рисуйте по маске активного слоя: скрывайте или возвращайте участки.",
         EditorTool.Land => "Протяните по холсту, чтобы добавить сушу. Режим «Убрать» стирает её.",
         EditorTool.Stamp => "Выберите набор в библиотеке и щёлкните по холсту. Область и плотность настраиваются слева.",
+        EditorTool.Notes => "Создавайте заметки карты или привязывайте их к выделенному объекту.",
         _ => "",
     };
 

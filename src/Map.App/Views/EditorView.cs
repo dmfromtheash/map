@@ -173,6 +173,20 @@ public sealed class EditorView : UserControl
     private readonly List<Button> _maskModeButtons = [];
     private TabControl _sideTabs = null!;
     private Border _sidePanel = null!;
+    private Control _sideBody = null!;
+    private Border _contextPanel = null!;
+    private Control _contextBody = null!;
+    private bool _contextCollapsed;
+    private bool _sideCollapsed;
+    private Window? _assetCatalogWindow;
+    private Window? _versionsWindow;
+    private Window? _canvasWorkflowWindow;
+    private Window? _exportWindow;
+    private Control _assetCatalogContent = null!;
+    private Control _versionsContent = null!;
+    private Control _canvasWorkflowContent = null!;
+    private Control _exportContent = null!;
+    private bool _closingAuxiliaryWindows;
 
     // ------------------------------------------------------ selection sections
     // Every reusable block below lives in exactly one container for the lifetime of the view.
@@ -280,6 +294,9 @@ public sealed class EditorView : UserControl
     private readonly Dictionary<string, Button> _libraryGroupButtons = [];
     private readonly Dictionary<string, Button> _libraryFilterButtons = [];
     private readonly Dictionary<string, Button> _placementModeButtons = [];
+    private readonly Dictionary<PlacementAutoSelectPolicy, Button> _autoSelectButtons = [];
+    private Button _addRectangleButton = null!;
+    private Button _addEllipseButton = null!;
     private ToggleButton _randomVariantToggle = null!;
     private ComboBox _libraryTagFilter = null!;
     private ComboBox _libraryMediaFilter = null!;
@@ -377,6 +394,12 @@ public sealed class EditorView : UserControl
         });
         DetachedFromVisualTree += (_, _) =>
         {
+            _closingAuxiliaryWindows = true;
+            foreach (var window in new[]
+                     { _assetCatalogWindow, _versionsWindow, _canvasWorkflowWindow, _exportWindow })
+            {
+                window?.Close();
+            }
             _exportPreviewBitmap?.Dispose();
             _exportPreviewBitmap = null;
         };
@@ -416,7 +439,33 @@ public sealed class EditorView : UserControl
     public int ObjectListLogicalCount =>
         _objectList.ItemsSource is IReadOnlyCollection<ObjectTreeRow> rows ? rows.Count : 0;
 
-    public bool IsNotesOpen => _sidePanel.IsVisible && _sideTabs.SelectedIndex == 3;
+    public int WorkspaceTabCount => (_sideTabs.ItemsSource as IEnumerable<object>)?.Count() ?? 0;
+    public bool ContextPanelCollapsed => _contextCollapsed;
+    public bool RightPanelCollapsed => _sideCollapsed;
+    public bool AssetCatalogVisible => _assetCatalogWindow?.IsVisible == true;
+
+    public bool CreateVersionThroughUiForSmoke()
+    {
+        OpenVersions();
+        var before = _editor.Checkpoints.Count;
+        var button = _versionsContent.GetVisualDescendants()
+            .OfType<Button>()
+            .FirstOrDefault(control => control.Name == "CreateVersionButton");
+        button?.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+        return button is not null && _editor.Checkpoints.Count == before + 1;
+    }
+
+    public void CloseAuxiliaryWindowsForSmoke()
+    {
+        _closingAuxiliaryWindows = true;
+        foreach (var window in new[]
+                 { _assetCatalogWindow, _versionsWindow, _canvasWorkflowWindow, _exportWindow })
+        {
+            window?.Close();
+        }
+    }
+
+    public bool IsNotesOpen => _editor.ActiveTool == EditorTool.Notes;
 
     public void OpenObjects(bool focusSearch = false)
     {
@@ -434,8 +483,13 @@ public sealed class EditorView : UserControl
 
     public void OpenAssetCatalog(bool focusSearch = false)
     {
-        _sidePanel.IsVisible = true;
-        _sideTabs.SelectedIndex = 2;
+        _assetCatalogWindow = ShowAuxiliaryWindow(
+            _assetCatalogWindow,
+            "Локальная библиотека ассетов",
+            _assetCatalogContent,
+            1080,
+            760,
+            "AssetCatalogWindow");
         if (focusSearch)
         {
             Dispatcher.UIThread.Post(() => _assetSearch.Focus(), DispatcherPriority.Input);
@@ -444,8 +498,8 @@ public sealed class EditorView : UserControl
 
     public void OpenNotes(bool focusEditor = false)
     {
-        _sidePanel.IsVisible = true;
-        _sideTabs.SelectedIndex = 3;
+        _editor.ActiveTool = EditorTool.Notes;
+        SyncContextArea();
         if (focusEditor)
         {
             Dispatcher.UIThread.Post(
@@ -456,21 +510,111 @@ public sealed class EditorView : UserControl
 
     public void ToggleSidePanel() => _sidePanel.IsVisible = !_sidePanel.IsVisible;
 
+    public void ToggleContextPanel()
+    {
+        _contextCollapsed = !_contextCollapsed;
+        _contextBody.IsVisible = !_contextCollapsed;
+        _contextTitle.IsVisible = !_contextCollapsed;
+        _contextPanel.Width = _contextCollapsed ? 42 : Ui.ContextPanelWidth;
+    }
+
+    public void ToggleRightPanel()
+    {
+        _sideCollapsed = !_sideCollapsed;
+        _sideBody.IsVisible = !_sideCollapsed;
+        _sidePanel.Width = _sideCollapsed ? 42 : Ui.SidePanelWidth;
+    }
+
+    public void OpenVersions()
+    {
+        SyncCheckpointList();
+        _versionsWindow = ShowAuxiliaryWindow(
+            _versionsWindow,
+            "Версии карты",
+            _versionsContent,
+            780,
+            700,
+            "VersionsWindow");
+    }
+
     public void OpenCanvasWorkflow()
     {
-        _sidePanel.IsVisible = true;
-        _sideTabs.SelectedIndex = 5;
         _editor.BeginCanvasWorkflow();
         SyncCanvasWorkflow();
-        Dispatcher.UIThread.Post(_canvas.FitToCanvas, DispatcherPriority.Loaded);
+        _canvasWorkflowWindow = ShowAuxiliaryWindow(
+            _canvasWorkflowWindow,
+            "Размер и область карты",
+            _canvasWorkflowContent,
+            820,
+            760,
+            "CanvasWorkflowWindow");
     }
 
     public void OpenExport()
     {
-        _sidePanel.IsVisible = true;
-        _sideTabs.SelectedIndex = 6;
         _editor.BeginExport();
         SyncExport();
+        _exportWindow = ShowAuxiliaryWindow(
+            _exportWindow,
+            "Экспорт изображения",
+            _exportContent,
+            860,
+            800,
+            "ExportWorkflowWindow");
+    }
+
+    private Window ShowAuxiliaryWindow(
+        Window? existing,
+        string title,
+        Control content,
+        double width,
+        double height,
+        string name)
+    {
+        if (existing is not null)
+        {
+            existing.Show();
+            if (!TestMode.Enabled) existing.Activate();
+            return existing;
+        }
+
+        var window = new Window
+        {
+            Name = name,
+            Title = title,
+            Width = width,
+            Height = height,
+            MinWidth = 620,
+            MinHeight = 480,
+            ShowActivated = !TestMode.Enabled,
+            ShowInTaskbar = !TestMode.Enabled,
+            Content = content,
+        };
+        window.Closing += (_, e) =>
+        {
+            if (!_closingAuxiliaryWindows)
+            {
+                e.Cancel = true;
+                window.Hide();
+            }
+        };
+        if (TopLevel.GetTopLevel(this) is Window owner)
+        {
+            window.Show(owner);
+        }
+        else
+        {
+            window.Show();
+        }
+        return window;
+    }
+
+    public void CloseAssetCatalogAndArmPlacement()
+    {
+        _editor.ArmStampPlacement();
+        _assetCatalogWindow?.Hide();
+        SyncContextArea();
+        _canvas.Focus();
     }
 
     /// <summary>Re-reads the library panel after a shortcut or a canvas gesture changed it.</summary>
@@ -507,16 +651,49 @@ public sealed class EditorView : UserControl
         _undoButton = Ui.IconButton("UndoButton", "Отменить", MapIcons.Undo, _editor.Undo);
         _redoButton = Ui.IconButton("RedoButton", "Повторить", MapIcons.Redo, _editor.Redo);
         var fit = Ui.IconButton("FitButton", "Вписать карту в окно", MapIcons.FitCanvas, _canvas.FitToCanvas);
-        var second = Ui.IconButton("SecondWindowButton", "Открыть второе окно", MapIcons.Window, requestSecondWindow);
-        _shortcutSettingsButton = Ui.TextButton(
-            "ShortcutSettingsButton", "Сочетания…", requestShortcutSettings, "compact");
-        var resizeRegion = Ui.TextButton(
-            "ResizeRegionButton", "Размер и регион…", OpenCanvasWorkflow, "compact");
         var export = Ui.TextButton("ExportButton", "Экспорт…", OpenExport, "accent", "compact");
         AutomationProperties.SetName(export, "Экспорт изображения");
 
-        var saveAs = Ui.AsyncButton("SaveAsButton", "Сохранить как…", () => _editor.SaveAsync(saveAs: true));
         _saveButton = Ui.AsyncButton("SaveButton", "Сохранить", () => _editor.SaveAsync(), "primary");
+        _shortcutSettingsButton = Ui.TextButton(
+            "ShortcutSettingsButton", "Сочетания…", requestShortcutSettings, "compact");
+
+        MenuItem Item(string header, Action action)
+        {
+            var item = new MenuItem { Header = header };
+            item.Click += (_, _) => action();
+            return item;
+        }
+
+        var autosaveItem = new MenuItem();
+        void SyncAutosaveMenu() => autosaveItem.Header = _editor.PrimaryAutosaveEnabled
+            ? "Автосохранение: включено"
+            : "Автосохранение: выключено";
+        SyncAutosaveMenu();
+        autosaveItem.Click += (_, _) =>
+        {
+            _editor.PrimaryAutosaveEnabled = !_editor.PrimaryAutosaveEnabled;
+            SyncAutosaveMenu();
+            SyncStatus();
+        };
+
+        var fileMenu = new MenuFlyout
+        {
+            Items =
+            {
+                Item("Версии…", OpenVersions),
+                Item("Сохранить как…", () => _ = _editor.SaveAsync(saveAs: true)),
+                autosaveItem,
+                new Separator(),
+                Item("Размер и область…", OpenCanvasWorkflow),
+                Item("Экспорт…", OpenExport),
+                new Separator(),
+                Item("Сочетания клавиш…", requestShortcutSettings),
+                Item("Открыть второе окно", requestSecondWindow),
+            },
+        };
+        var file = Ui.TextButton("FileMenuButton", "Файл", () => { }, "compact");
+        file.Flyout = fileMenu;
 
         var bar = new DockPanel
         {
@@ -527,7 +704,7 @@ public sealed class EditorView : UserControl
                 {
                     Orientation = Orientation.Horizontal,
                     Spacing = 6,
-                    Children = { export, resizeRegion, _shortcutSettingsButton, second, saveAs, _saveButton },
+                    Children = { file, export, _saveButton },
                 }.Docked(Dock.Right),
                 new StackPanel
                 {
@@ -581,6 +758,7 @@ public sealed class EditorView : UserControl
                 Tool("ShapeToolButton", EditorTool.Shape, MapIcons.Shape),
                 Tool("TextToolButton", EditorTool.Text, MapIcons.Text),
                 Tool("StampToolButton", EditorTool.Stamp, MapIcons.ObjectStamp),
+                Tool("NotesToolButton", EditorTool.Notes, MapIcons.Notes),
                 RailDivider(),
                 Tool("BrushToolButton", EditorTool.Brush, MapIcons.Brush),
                 Tool("MaskToolButton", EditorTool.Mask, MapIcons.Mask),
@@ -606,22 +784,25 @@ public sealed class EditorView : UserControl
         BuildSelectionSections();
         BuildContextRoots();
 
+        var collapse = Ui.TextButton("CollapseContextPanelButton", "‹", ToggleContextPanel, "compact");
+        AutomationProperties.SetName(collapse, "Свернуть или развернуть панель инструмента");
         var header = new Border
         {
-            Child = new DockPanel { Children = { _contextTitle } },
+            Child = new DockPanel { Children = { collapse.Docked(Dock.Right), _contextTitle } },
         }.Classed("panel-header");
 
-        var body = new ScrollViewer
+        _contextBody = new ScrollViewer
         {
             HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
             Content = new Border { Padding = new Thickness(12, 10, 12, 16), Child = _contextHost },
         };
 
-        return new Border
+        _contextPanel = new Border
         {
             Width = Ui.ContextPanelWidth,
-            Child = new DockPanel { Children = { header.Docked(Dock.Top), body } },
+            Child = new DockPanel { Children = { header.Docked(Dock.Top), _contextBody } },
         }.Classed("context-panel").Named("ContextPanel");
+        return _contextPanel;
     }
 
     private void BuildToolPanels()
@@ -634,21 +815,47 @@ public sealed class EditorView : UserControl
         _toolPanels[EditorTool.Mask] = BuildMaskPanel();
         _toolPanels[EditorTool.Land] = BuildLandPanel();
         _toolPanels[EditorTool.Stamp] = BuildStampToolPanel();
+        _toolPanels[EditorTool.Notes] = BuildNotesTab();
     }
 
     // No explanation here: this panel is only ever shown beneath the "Ничего не выбрано" state,
     // which already says how to make a selection. Saying it twice is noise, not guidance.
-    private Control BuildSelectPanel() => new StackPanel
+    private Control BuildSelectPanel()
     {
-        Spacing = 8,
-        Children =
+        _addRectangleButton = Ui.CommandButton(
+            "AddRectangleButton", "Объект: прямоугольник", MapIcons.ObjectRectangle,
+            () =>
+            {
+                _editor.ArmPrimitivePlacement(SceneObjectKind.Rectangle);
+                SyncContextArea();
+            });
+        _addEllipseButton = Ui.CommandButton(
+            "AddEllipseButton", "Объект: эллипс", MapIcons.ObjectEllipse,
+            () =>
+            {
+                _editor.ArmPrimitivePlacement(SceneObjectKind.Ellipse);
+                SyncContextArea();
+            });
+        return new StackPanel
         {
-            Ui.CommandButton("AddRectangleButton", "Добавить прямоугольник", MapIcons.ObjectRectangle,
-                () => Create(() => _editor.AddObject(SceneObjectKind.Rectangle))),
-            Ui.CommandButton("AddEllipseButton", "Добавить эллипс", MapIcons.ObjectEllipse,
-                () => Create(() => _editor.AddObject(SceneObjectKind.Ellipse))),
-        },
-    };
+            Spacing = 8,
+            Children =
+            {
+                Explanation("Выберите объект и укажите его место на холсте. До клика карта не меняется."),
+                _addRectangleButton,
+                _addEllipseButton,
+                Ui.TextButton(
+                    "CreatePlacementLayerButton",
+                    "Создать слой объектов и продолжить",
+                    () =>
+                    {
+                        _editor.CreateObjectLayerAndContinuePlacement();
+                        SyncSidePanels();
+                    },
+                    "compact"),
+            },
+        };
+    }
 
     private Control BuildLinePanel() => new StackPanel
     {
@@ -668,9 +875,9 @@ public sealed class EditorView : UserControl
         {
             Explanation("Добавьте фигуру, затем правьте её контур в свойствах выделения. " +
                         "Две фигуры можно объединить или вычесть."),
-            Ui.CommandButton("AddVectorRectangleButton", "Добавить прямоугольник", MapIcons.ShapeRectangle,
+            Ui.CommandButton("AddVectorRectangleButton", "Фигура: прямоугольник", MapIcons.ShapeRectangle,
                 () => Create(() => _editor.AddShape(ShapePrimitiveKind.Rectangle))),
-            Ui.CommandButton("AddShapeEllipseButton", "Добавить эллипс", MapIcons.ShapeEllipse,
+            Ui.CommandButton("AddShapeEllipseButton", "Фигура: эллипс", MapIcons.ShapeEllipse,
                 () => Create(() => _editor.AddShape(ShapePrimitiveKind.Ellipse))),
         },
     };
@@ -943,6 +1150,7 @@ public sealed class EditorView : UserControl
 
         _stampToolCurrentText = current;
         _stampToolAreaText = area;
+        _stampGestureBlock = BuildStampGestureBlock();
 
         return new StackPanel
         {
@@ -955,6 +1163,15 @@ public sealed class EditorView : UserControl
                 ShortcutTextButton("OpenLibraryButton", "Открыть библиотеку",
                     EditorShortcutSettings.Commands.StampFocusLibrary,
                     () => OpenAssetCatalog(focusSearch: true), "compact"),
+                _stampGestureBlock,
+                Ui.TextButton(
+                    "CreateStampPlacementLayerButton",
+                    "Создать слой объектов и продолжить",
+                    () =>
+                    {
+                        _editor.CreateObjectLayerAndContinuePlacement();
+                        SyncSidePanels();
+                    }, "compact"),
                 ShortcutChipRow(
                     [EditorShortcutSettings.Commands.StampPreviousVariant,
                      EditorShortcutSettings.Commands.StampNextVariant], "вариант"),
@@ -1947,6 +2164,10 @@ public sealed class EditorView : UserControl
 
     private Control BuildSidePanel()
     {
+        _assetCatalogContent = BuildAssetsTab();
+        _versionsContent = BuildCheckpointsTab();
+        _canvasWorkflowContent = BuildCanvasWorkflowTab();
+        _exportContent = BuildExportTab();
         _sideTabs = new TabControl
         {
             Name = "EditorSideTabs",
@@ -1954,43 +2175,60 @@ public sealed class EditorView : UserControl
             {
                 new TabItem { Header = "Слои", Content = BuildLayersTab() },
                 new TabItem { Header = "Объекты", Content = BuildObjectsTab() },
-                new TabItem { Header = "Библиотека", Content = BuildAssetsTab() },
-                new TabItem { Header = "Заметки", Content = BuildNotesTab() },
-                new TabItem { Header = "Точки", Content = BuildCheckpointsTab() },
-                new TabItem { Header = "Размер", Content = BuildCanvasWorkflowTab() },
-                new TabItem { Header = "Экспорт", Content = BuildExportTab() },
             },
         };
 
-        _sidePanel = new Border { Width = Ui.SidePanelWidth, Child = _sideTabs }.Classed("panel");
+        var collapse = Ui.TextButton("CollapseRightPanelButton", "›", ToggleRightPanel, "compact");
+        AutomationProperties.SetName(collapse, "Свернуть или развернуть правую рабочую панель");
+        _sideBody = _sideTabs;
+        _sidePanel = new Border
+        {
+            Width = Ui.SidePanelWidth,
+            Child = new DockPanel
+            {
+                Children =
+                {
+                    new Border
+                    {
+                        Child = new DockPanel
+                        {
+                            Children =
+                            {
+                                collapse.Docked(Dock.Right),
+                                new TextBlock { Text = "Рабочая панель" }.Classed("role-panel"),
+                            },
+                        },
+                    }.Classed("panel-header").Docked(Dock.Top),
+                    _sideBody,
+                },
+            },
+        }.Classed("panel");
         _sidePanel.Name = "EditorSidePanel";
         return _sidePanel;
     }
 
     private Control BuildLayersTab()
     {
-        Button AddLayer(string name, string title, string icon, Action action)
+        MenuItem AddLayer(string name, string title, Action action)
         {
-            var button = new Button { Content = MapIcons.Stroked(icon, 16) }.Named(name).Classed("segment");
-            AutomationProperties.SetName(button, "Добавить слой: " + title);
-            ToolTip.SetTip(button, "Добавить слой: " + title);
-            button.Height = 32;
-            button.Click += (_, _) => action();
-            return button;
+            var item = new MenuItem { Name = name, Header = title };
+            item.Click += (_, _) => action();
+            return item;
         }
 
-        var addGrid = new UniformGrid
+        var addMenu = new MenuFlyout
         {
-            Columns = 5,
-            Children =
+            Items =
             {
-                AddLayer("AddObjectLayerButton", "объекты", MapIcons.LayerObjects, _editor.AddObjectLayer),
-                AddLayer("AddBrushLayerButton", "кисть", MapIcons.LayerBrush, _editor.AddBrushLayer),
-                AddLayer("AddLandLayerButton", "земля", MapIcons.LayerLand, _editor.AddLandLayer),
-                AddLayer("AddGridLayerButton", "сетка", MapIcons.LayerGrid, _editor.AddGridLayer),
-                AddLayer("AddFilterLayerButton", "фильтр", MapIcons.LayerFilter, _editor.AddFilterLayer),
+                AddLayer("AddObjectLayerButton", "Слой объектов", _editor.AddObjectLayer),
+                AddLayer("AddBrushLayerButton", "Слой кисти", _editor.AddBrushLayer),
+                AddLayer("AddLandLayerButton", "Слой земли", _editor.AddLandLayer),
+                AddLayer("AddGridLayerButton", "Слой сетки", _editor.AddGridLayer),
+                AddLayer("AddFilterLayerButton", "Слой фильтра", _editor.AddFilterLayer),
             },
         };
+        var addLayerButton = Ui.TextButton("AddLayerButton", "Добавить слой", () => { }, "accent");
+        addLayerButton.Flyout = addMenu;
 
         var body = new StackPanel
         {
@@ -2008,16 +2246,7 @@ public sealed class EditorView : UserControl
                         Spacing = 6,
                         Children =
                         {
-                            new TextBlock { Text = "Добавить слой" }.Classed("role-panel"),
-                            new Border
-                            {
-                                Background = Application.Current?.FindResource("MapFieldBrush") as IBrush,
-                                BorderBrush = Application.Current?.FindResource("MapBorderBrush") as IBrush,
-                                BorderThickness = new Thickness(1),
-                                CornerRadius = new CornerRadius(7),
-                                Padding = new Thickness(2),
-                                Child = addGrid,
-                            },
+                            addLayerButton,
                         },
                     },
                 }.Classed("group"),
@@ -2430,7 +2659,6 @@ public sealed class EditorView : UserControl
         _libraryCollections = Disclosure(
             "LibraryCollectionsDetails", "Коллекции", _collectionTree, expanded: false);
         _selectedSetBlock = BuildSelectedSetBlock();
-        _stampGestureBlock = BuildStampGestureBlock();
 
         var body = new StackPanel
         {
@@ -2456,7 +2684,11 @@ public sealed class EditorView : UserControl
                 new DockPanel { Children = { _libraryCountText } },
                 _libraryGrid,
                 _selectedSetBlock,
-                _stampGestureBlock,
+                Ui.TextButton(
+                    "UseSelectedStampButton",
+                    "Выбрать и разместить на холсте",
+                    CloseAssetCatalogAndArmPlacement,
+                    "accent"),
             },
         };
 
@@ -3343,15 +3575,40 @@ public sealed class EditorView : UserControl
     private Border BuildStampGestureBlock()
     {
         var (mode, modeButtons) = Ui.Segmented("StampMode", [
-            ("One", "Один штамп", null),
+            ("One", "Один", null),
+            ("Series", "Серия", null),
             ("Area", "Россыпь", null),
         ], key =>
         {
-            _editor.StampPlacementMode = key == "Area" ? StampPlacementMode.Area : StampPlacementMode.One;
+            _editor.StampPlacementMode = key switch
+            {
+                "Series" => StampPlacementMode.Series,
+                "Area" => StampPlacementMode.Area,
+                _ => StampPlacementMode.One,
+            };
             SyncAssetList();
         });
         _placementModeButtons["One"] = modeButtons[0];
-        _placementModeButtons["Area"] = modeButtons[1];
+        _placementModeButtons["Series"] = modeButtons[1];
+        _placementModeButtons["Area"] = modeButtons[2];
+
+        var (autoSelect, autoSelectButtons) = Ui.Segmented("PlacementAutoSelect", [
+            ("Auto", "Авто", null),
+            ("Always", "Всегда", null),
+            ("Off", "Выкл.", null),
+        ], key =>
+        {
+            _editor.PlacementAutoSelect = key switch
+            {
+                "Always" => PlacementAutoSelectPolicy.Always,
+                "Off" => PlacementAutoSelectPolicy.Off,
+                _ => PlacementAutoSelectPolicy.Auto,
+            };
+            SyncStampGestureReadout();
+        });
+        _autoSelectButtons[PlacementAutoSelectPolicy.Auto] = autoSelectButtons[0];
+        _autoSelectButtons[PlacementAutoSelectPolicy.Always] = autoSelectButtons[1];
+        _autoSelectButtons[PlacementAutoSelectPolicy.Off] = autoSelectButtons[2];
 
         // Labelled, not icon-only: these three decide whether a scatter multiplies the variant or
         // turns and mirrors every copy, and a user must be able to see which without hovering.
@@ -3418,13 +3675,10 @@ public sealed class EditorView : UserControl
                 {
                     new TextBlock { Text = "Как разместить" }.Classed("role-panel"),
                     mode,
+                    new TextBlock { Text = "Автовыбор" }.Classed("role-panel"),
+                    autoSelect,
                     _stampAreaControls,
                     _randomVariantToggle,
-                    AssetCommand("PlaceStampButton", "Разместить в центре карты", () =>
-                    {
-                        _editor.PlaceCurrentVariantAtViewCentre();
-                        RefreshLibraryPanel();
-                    }, "compact"),
                     AssetCommand("ReplaceStampVariantButton", "Заменить ассет выделенного штампа", () =>
                     {
                         _editor.ReplaceSelectedStampWithCurrentVariant();
@@ -3436,6 +3690,11 @@ public sealed class EditorView : UserControl
                         Spacing = 5,
                         Children =
                         {
+                            AssetCommand("PlaceStampButton", "Разместить в центре вида", () =>
+                            {
+                                _editor.PlaceCurrentVariantAtViewCentre();
+                                RefreshLibraryPanel();
+                            }, "compact"),
                             AssetCommand("PlaceLinkedStampButton", "Разместить как связанный", () =>
                             {
                                 if (_selectedAsset is not null) _editor.PlaceStamp(_selectedAsset, embedded: false);
@@ -3508,6 +3767,16 @@ public sealed class EditorView : UserControl
         _stampAreaControls.IsVisible = _editor.StampPlacementMode == StampPlacementMode.Area;
         _stampAreaSummaryText.Text = _editor.StampAreaSummary;
         AutomationProperties.SetName(_stampAreaSummaryText, _editor.StampAreaSummary);
+        SetSegment(_placementModeButtons, _editor.StampPlacementMode switch
+        {
+            StampPlacementMode.Series => "Series",
+            StampPlacementMode.Area => "Area",
+            _ => "One",
+        });
+        foreach (var pair in _autoSelectButtons)
+        {
+            Ui.SetSelected(pair.Value, pair.Key == _editor.PlacementAutoSelect);
+        }
         SyncStampToolPanel();
     }
 
@@ -3789,16 +4058,13 @@ public sealed class EditorView : UserControl
 
     private Control BuildCheckpointsTab()
     {
-        var create = Ui.TextButton("CreateCheckpointButton", "Создать", () =>
+        var create = Ui.TextButton("CreateVersionButton", "Создать версию", () =>
         {
-            if (_editor.CreateCheckpoint(_checkpointName.Text))
-            {
-                _checkpointName.Text = "";
-            }
+            _editor.CreateVersion();
             SyncCheckpointList();
             SyncStatus();
         }, "accent", "compact");
-        AutomationProperties.SetName(create, "Создать контрольную точку");
+        AutomationProperties.SetName(create, "Создать версию текущей карты");
 
         var body = new StackPanel
         {
@@ -3806,18 +4072,17 @@ public sealed class EditorView : UserControl
             Spacing = 10,
             Children =
             {
-                new TextBlock { Text = "Контрольные точки" }.Classed("role-panel"),
+                new TextBlock { Text = "Версии" }.Classed("role-panel"),
                 new TextBlock
                 {
-                    Text = "Сохраните состояние карты перед экспериментом. Точка попадёт в .mapproj после обычного сохранения.",
+                    Text = "Одна кнопка сохраняет состояние, время и preview. Название можно изменить позже.",
                     TextWrapping = TextWrapping.Wrap,
                 }.Classed("faint", "role-caption"),
-                _checkpointName,
                 create,
                 new TextBlock
                 {
                     Name = "CheckpointLimitsText",
-                    Text = $"До {MapCheckpointLimits.MaxCount} точек · всего до "
+                    Text = $"До {MapCheckpointLimits.MaxCount} версий · всего до "
                         + $"{MapCheckpointLimits.MaxTotalStoredBytes / (1024 * 1024)} MiB",
                 }.Classed("faint", "role-caption"),
                 _checkpointList,
@@ -3901,7 +4166,7 @@ public sealed class EditorView : UserControl
             {
                 if (_editor.ApplyCanvasResize())
                 {
-                    _sideTabs.SelectedIndex = 0;
+                    _canvasWorkflowWindow?.Hide();
                     _canvas.FitToCanvas();
                 }
                 SyncCanvasWorkflow();
@@ -3943,7 +4208,7 @@ public sealed class EditorView : UserControl
             {
                 if (await _editor.CreateMapFromRegionAsync())
                 {
-                    _sideTabs.SelectedIndex = 0;
+                    _canvasWorkflowWindow?.Hide();
                 }
                 SyncCanvasWorkflow();
             }, "primary");
@@ -3995,7 +4260,7 @@ public sealed class EditorView : UserControl
             () =>
             {
                 _editor.CancelCanvasWorkflow();
-                _sideTabs.SelectedIndex = 0;
+                _canvasWorkflowWindow?.Hide();
                 _canvas.FitToCanvas();
             }, "ghost");
 
@@ -4187,7 +4452,7 @@ public sealed class EditorView : UserControl
         var close = Ui.TextButton("CloseExportButton", "Закрыть", () =>
         {
             _editor.CloseExport();
-            _sideTabs.SelectedIndex = 0;
+            _exportWindow?.Hide();
             SyncExport();
         }, "ghost");
 
@@ -4477,9 +4742,13 @@ public sealed class EditorView : UserControl
                 or nameof(EditorViewModel.SelectionKind)
                 or nameof(EditorViewModel.SelectionCount)
                 or nameof(EditorViewModel.SelectedGroupId)
-                or nameof(EditorViewModel.ActiveLayer))
+                or nameof(EditorViewModel.ActiveLayer)
+                or nameof(EditorViewModel.PendingPlacement)
+                or nameof(EditorViewModel.PlacementAutoSelect)
+                or nameof(EditorViewModel.StampPlacementMode))
             {
                 SyncContextArea();
+                SyncStampGestureReadout();
             }
 
             if (e.PropertyName is nameof(EditorViewModel.CanvasWorkflowOpen)
@@ -4667,7 +4936,10 @@ public sealed class EditorView : UserControl
 
     private void SyncStatus()
     {
-        _saveState.Text = _editor.SaveSummary;
+        _saveState.Text = _editor.PrimaryAutosaveEnabled
+            ? _editor.SaveSummary
+            : _editor.SaveSummary + " · автосохранение выключено";
+        ToolTip.SetTip(_saveState, _editor.PrimaryAutosaveSummary);
         Ui.SetClass(_saveState, "danger", _editor.SaveState == SaveState.SaveFailed);
         Ui.SetClass(_saveState, "success", _editor.SaveState == SaveState.Saved);
         Ui.SetClass(_saveState, "warn", _editor.SaveState == SaveState.Unsaved);
@@ -4728,6 +5000,10 @@ public sealed class EditorView : UserControl
         SyncLayerBlocks();
         SyncHint();
         SyncAppearanceSections();
+        Ui.SetSelected(_addRectangleButton,
+            _editor.PendingPlacement?.Target == PlacementTargetKind.Rectangle);
+        Ui.SetSelected(_addEllipseButton,
+            _editor.PendingPlacement?.Target == PlacementTargetKind.Ellipse);
 
         // Selection properties belong to the Select tool. While a drawing tool is active the panel
         // keeps showing that tool, so switching tools always has a predictable, visible effect.
@@ -4930,32 +5206,24 @@ public sealed class EditorView : UserControl
     /// The interactive Ctrl+G flow: the panel's name box wins when filled; otherwise a small
     /// dialog asks for the name and states exactly how many objects the group will hold.
     /// </summary>
-    public async System.Threading.Tasks.Task GroupSelectionInteractiveAsync()
+    public System.Threading.Tasks.Task GroupSelectionInteractiveAsync()
     {
         if (!_editor.CanGroupSelection)
         {
             // Produces the honest refusal message (too few objects / already grouped members).
             _editor.GroupSelection("группа");
             RefreshAfterSelectionCommand();
-            return;
+            return System.Threading.Tasks.Task.CompletedTask;
         }
 
         var name = (_groupNameBox.Text ?? "").Trim();
-        if (name.Length == 0)
-        {
-            name = await AskGroupNameAsync(VisualRoot as Window, _editor.SelectionCount) ?? "";
-            if (name.Length == 0)
-            {
-                return; // cancelled: nothing changes
-            }
-        }
-
         if (_editor.GroupSelection(name))
         {
             _groupNameBox.Text = "";
         }
 
         RefreshAfterSelectionCommand();
+        return System.Threading.Tasks.Task.CompletedTask;
     }
 
     private static async System.Threading.Tasks.Task<string?> AskGroupNameAsync(
@@ -5555,8 +5823,12 @@ public sealed class EditorView : UserControl
             AssetGrouping.Tag => "Tag",
             _ => "None",
         });
-        SetSegment(_placementModeButtons,
-            _editor.StampPlacementMode == StampPlacementMode.Area ? "Area" : "One");
+        SetSegment(_placementModeButtons, _editor.StampPlacementMode switch
+        {
+            StampPlacementMode.Series => "Series",
+            StampPlacementMode.Area => "Area",
+            _ => "One",
+        });
 
         SetToggle(_libraryFilterButtons["Favorites"], "Только избранное", _editor.LibraryFavoritesOnly);
         SetToggle(_libraryFilterButtons["Recent"], "Только недавние", _editor.LibraryRecentOnly);
@@ -5619,12 +5891,13 @@ public sealed class EditorView : UserControl
             box.SelectedItem = selected is not null && wanted.Contains(selected) ? selected : anyLabel;
         }
 
-        static void SetSegment(Dictionary<string, Button> buttons, string activeKey)
+    }
+
+    private static void SetSegment(Dictionary<string, Button> buttons, string activeKey)
+    {
+        foreach (var (key, button) in buttons)
         {
-            foreach (var (key, button) in buttons)
-            {
-                Ui.SetSelected(button, key == activeKey);
-            }
+            Ui.SetSelected(button, key == activeKey);
         }
     }
 
@@ -6006,8 +6279,8 @@ public sealed class EditorView : UserControl
             _checkpointList.Children.Add(Ui.EmptyState(
                 "NoCheckpointsText",
                 MapIcons.Save,
-                "Контрольных точек пока нет",
-                "Введите название и сохраните состояние перед заметным экспериментом."));
+                "Версий пока нет",
+                "Нажмите «Создать версию», чтобы сохранить текущее состояние и preview."));
             return;
         }
 
@@ -6022,7 +6295,25 @@ public sealed class EditorView : UserControl
                     Source = preview,
                     Stretch = Stretch.Uniform,
                 };
-            AutomationProperties.SetName(previewControl, $"Preview контрольной точки {checkpoint.Name}");
+            AutomationProperties.SetName(previewControl, $"Preview версии {checkpoint.Name}");
+
+            var renameBox = new TextBox
+            {
+                Name = "VersionName_" + checkpoint.Id,
+                Text = checkpoint.Name,
+                MaxLength = MapCheckpointLimits.MaxNameLength,
+            };
+            AutomationProperties.SetName(renameBox, "Новое название версии");
+            var rename = Ui.TextButton(
+                "RenameVersion_" + checkpoint.Id,
+                "Переименовать",
+                () =>
+                {
+                    _editor.RenameVersion(captured.Id, renameBox.Text);
+                    SyncCheckpointList();
+                    SyncStatus();
+                },
+                "compact");
 
             var restore = Ui.AsyncButton(
                 "RestoreCheckpoint_" + checkpoint.Id,
@@ -6069,6 +6360,17 @@ public sealed class EditorView : UserControl
                         {
                             Text = checkpoint.CreatedUtc.ToLocalTime().ToString("g", CultureInfo.CurrentCulture),
                         }.Classed("faint", "role-caption"),
+                        new TextBlock
+                        {
+                            Text = $"Preview: {Math.Max(1, checkpoint.PreviewPng.Length / 1024)} KiB · "
+                                + $"объектов: {checkpoint.Snapshot.Layers.OfType<ObjectLayer>().Sum(layer => layer.Objects.Count)}",
+                        }.Classed("faint", "role-caption"),
+                        new StackPanel
+                        {
+                            Orientation = Orientation.Horizontal,
+                            Spacing = 6,
+                            Children = { renameBox, rename },
+                        },
                         new StackPanel
                         {
                             Orientation = Orientation.Horizontal,
@@ -6080,7 +6382,7 @@ public sealed class EditorView : UserControl
             }.Classed("group").Named("Checkpoint_" + checkpoint.Id);
             AutomationProperties.SetName(
                 card,
-                $"Контрольная точка {checkpoint.Name}, создана "
+                $"Версия {checkpoint.Name}, создана "
                     + checkpoint.CreatedUtc.ToLocalTime().ToString("g", CultureInfo.CurrentCulture));
             _checkpointList.Children.Add(card);
         }

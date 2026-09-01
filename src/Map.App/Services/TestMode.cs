@@ -20,9 +20,7 @@ public static class TestMode
 
     public static bool Enabled => Value;
 
-    public static TimeSpan AutosaveInterval => Enabled
-        ? TimeSpan.FromSeconds(1)
-        : TimeSpan.FromSeconds(30);
+    public static TimeSpan AutosaveInterval => TimeSpan.FromSeconds(1);
 
     /// <summary>
     /// Existing UI drivers use test mode without a recovery sandbox. They must never write test

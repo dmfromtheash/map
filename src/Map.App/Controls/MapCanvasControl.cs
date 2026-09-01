@@ -46,7 +46,11 @@ public sealed class MapCanvasControl : Control
         Name = "CanvasControl";
         AutomationProperties.SetAutomationId(this, "MapCanvas");
         AutomationProperties.SetName(this, "Холст карты");
-        DetachedFromVisualTree += (_, _) => DisposeRenderCaches();
+        DetachedFromVisualTree += (_, _) =>
+        {
+            _editor?.CancelPlacement();
+            DisposeRenderCaches();
+        };
     }
 
     protected override AutomationPeer OnCreateAutomationPeer() => new MapCanvasAutomationPeer(this);
@@ -97,6 +101,27 @@ public sealed class MapCanvasControl : Control
         _editor.Session.Viewport.PanByScreenDelta(dx, dy);
         ViewportChanged?.Invoke(this, EventArgs.Empty);
         QueueVisualInvalidation();
+    }
+
+    /// <summary>Own-process smoke hook through the same snapped preview state as pointer move.</summary>
+    public void MovePlacementPointerForSmoke(double screenX, double screenY)
+    {
+        if (_editor is null)
+        {
+            return;
+        }
+
+        var world = _editor.Session.Viewport.ScreenToWorld(screenX, screenY);
+        _editor.UpdatePlacementPreview(world.X, world.Y);
+        QueueVisualInvalidation();
+    }
+
+    /// <summary>Own-process smoke hook through the same commit path as a left canvas press.</summary>
+    public bool CommitPlacementForSmoke()
+    {
+        var committed = _editor?.CommitPendingPlacement() == true;
+        QueueVisualInvalidation();
+        return committed;
     }
 
     public void Attach(EditorViewModel editor)
@@ -198,7 +223,7 @@ public sealed class MapCanvasControl : Control
             var renderDocument = editor.DragPreview is null
                 ? editor.RenderDocument
                 : editor.Session.Document;
-            var hasLiveObjectPreview = editor.DragPreview is not null;
+            var hasLiveObjectPreview = editor.DragPreview is not null || editor.HasPendingPlacement;
             var tier = viewport.Scale < 0.125
                 ? RenderLodTier.Overview
                 : fastPreview || hasLiveObjectPreview || editor.StrokePreview is not null
@@ -217,13 +242,25 @@ public sealed class MapCanvasControl : Control
                 VisibleWorld = new Map.Core.Documents.WorldBounds(
                     X, Y, bottomRight.X, bottomRight.Y),
                 ObjectOverrides = editor.DragPreview?.Proposed,
+                PlacementPreviewObjects = editor.PlacementPreviewObjects,
+                PlacementArea = editor.PendingPlacement is
+                    { PointerVisible: true, Target: PlacementTargetKind.Stamp,
+                      Mode: StampPlacementMode.Area } placement
+                    ? new Map.Core.Documents.WorldBounds(
+                        placement.WorldX - editor.StampAreaRadius,
+                        placement.WorldY - editor.StampAreaRadius,
+                        placement.WorldX + editor.StampAreaRadius,
+                        placement.WorldY + editor.StampAreaRadius)
+                    : null,
+                PlacementInvalid = editor.PendingPlacement?.InvalidReason is not null,
                 TileCache = tileCache,
                 ObjectCache = objectCache,
                 LodTier = tier,
                 Preview = editor.StrokePreview,
                 MaskEditLayerId = editor.MaskEditLayerId,
                 Stamps = editor.StampImages,
-                FastPreview = fastPreview || hasLiveObjectPreview || editor.StrokePreview is not null,
+                FastPreview = fastPreview || hasLiveObjectPreview || editor.StrokePreview is not null
+                    || editor.HasPendingPlacement,
                 Stats = renderStats,
                 BoundaryOverlay = editor.CanvasBoundaryOverlay,
             });
@@ -259,6 +296,14 @@ public sealed class MapCanvasControl : Control
             _isPanning = true;
             e.Pointer.Capture(this);
             e.Handled = true;
+            return;
+        }
+
+        if (point.Properties.IsRightButtonPressed)
+        {
+            _editor.CancelPlacement();
+            e.Handled = true;
+            QueueVisualInvalidation();
             return;
         }
 
@@ -306,12 +351,15 @@ public sealed class MapCanvasControl : Control
             return;
         }
 
-        // One press is the whole stamp gesture: the plan is resolved and committed as exactly one
-        // undoable command, whether it places a single stamp or a full Area scatter.
-        if (_editor.ActiveTool == EditorTool.Stamp)
+        if (_editor.HasPendingPlacement)
         {
-            _editor.PlaceCurrentVariantAt(world.X, world.Y);
-            StampPlaced?.Invoke(this, EventArgs.Empty);
+            _editor.UpdatePlacementPreview(world.X, world.Y);
+            var stamp = _editor.PendingPlacement?.Target == PlacementTargetKind.Stamp;
+            _editor.CommitPendingPlacement();
+            if (stamp)
+            {
+                StampPlaced?.Invoke(this, EventArgs.Empty);
+            }
             e.Handled = true;
             QueueVisualInvalidation();
             return;
@@ -357,6 +405,18 @@ public sealed class MapCanvasControl : Control
         }
 
         var (X, Y) = _editor.Session.Viewport.ScreenToWorld(position.X, position.Y);
+
+        if (_editor.HasPendingPlacement
+            && !_isPanning && !_isStroking && !_isVectorDrawing
+            && _dragStartWorld is null && !_isMarquee && !_isRegionSelecting)
+        {
+            _editor.UpdatePlacementPreview(X, Y);
+            Cursor = new Cursor(StandardCursorType.Cross);
+            _lastPointer = position;
+            e.Handled = true;
+            QueueVisualInvalidation();
+            return;
+        }
 
         if (_isRegionSelecting)
         {
@@ -416,6 +476,13 @@ public sealed class MapCanvasControl : Control
         }
 
         _lastPointer = position;
+    }
+
+    protected override void OnPointerExited(PointerEventArgs e)
+    {
+        base.OnPointerExited(e);
+        _editor?.SetPlacementPointerVisible(false);
+        QueueVisualInvalidation();
     }
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)

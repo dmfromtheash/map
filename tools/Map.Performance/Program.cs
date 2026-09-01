@@ -4,7 +4,13 @@ using Map.Performance;
 var options = PerformanceOptions.Parse(args);
 object report;
 bool gatePassed;
-if (options.Profile == "native-stage12d")
+if (options.Profile == "native-stage14")
+{
+    var nativeReport = NativeStage14Smoke.Run(options);
+    report = nativeReport;
+    gatePassed = nativeReport.GatePassed;
+}
+else if (options.Profile == "native-stage12d")
 {
     var nativeReport = NativeStage12DSmoke.Run(options);
     report = nativeReport;
@@ -56,6 +62,14 @@ else if (report is NativeStage13AReport native)
         $"overview P95={(native.Lod?.OverviewP95.ToString("F3") ?? "n/a")} ms, " +
         $"tree rebuilds during pointer updates={native.Drag.PointerMoveTreeRebuilds}, " +
         $"gate={(native.GatePassed ? "PASS" : "FAIL")}");
+}
+else if (report is NativeStage14Report stage14)
+{
+    Console.WriteLine(
+        $"native-stage14: ghost={stage14.GhostWasVisible}, "
+        + $"pointer tree rebuilds={stage14.PointerMoveObjectTreeRebuilds}, "
+        + $"primary reopen={stage14.PrimaryAutosaveReopenedLatestRevision}, "
+        + $"gate={(stage14.GatePassed ? "PASS" : "FAIL")}");
 }
 
 return gatePassed ? 0 : 2;

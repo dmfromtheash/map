@@ -88,6 +88,47 @@ public sealed class DeleteCheckpointCommand : IEditCommand
     }
 }
 
+/// <summary>Renames one checkpoint/version without touching its snapshot, preview or position.</summary>
+public sealed class RenameCheckpointCommand : IEditCommand
+{
+    private readonly MapCheckpoint _before;
+    private readonly MapCheckpoint _after;
+
+    private RenameCheckpointCommand(MapCheckpoint before, MapCheckpoint after)
+    {
+        _before = before;
+        _after = after;
+    }
+
+    public string Name => "Rename checkpoint";
+
+    public static RenameCheckpointCommand Create(
+        MapDocument document, CheckpointId id, string newName)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        var before = document.Checkpoints.FirstOrDefault(item => item.Id == id)
+            ?? throw new KeyNotFoundException($"Checkpoint {id} does not exist.");
+        var after = before.WithName(newName);
+        return new RenameCheckpointCommand(before, after);
+    }
+
+    public MapDocument Apply(MapDocument document) => Replace(document, _before.Id, _after);
+
+    public MapDocument Revert(MapDocument document) => Replace(document, _after.Id, _before);
+
+    private static MapDocument Replace(
+        MapDocument document, CheckpointId id, MapCheckpoint replacement)
+    {
+        if (!document.Checkpoints.Any(item => item.Id == id))
+        {
+            throw new InvalidOperationException($"Checkpoint {id} is missing.");
+        }
+
+        return document.WithCheckpoints(
+            [.. document.Checkpoints.Select(item => item.Id == id ? replacement : item)]);
+    }
+}
+
 /// <summary>
 /// Replaces all map state in one reversible command while preserving the live document id and
 /// checkpoint catalog. The open file path is session/UI state and is never touched here.

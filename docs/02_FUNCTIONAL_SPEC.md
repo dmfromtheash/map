@@ -266,13 +266,24 @@ inspector и меняются undoable-командами; одного цикл
 
 - undo/redo по пользовательским транзакциям;
 - панель истории текущей сессии;
-- именованный checkpoint перед крупным экспериментом;
-- autosave on/off с явным статусом и безопасным интервалом;
+- пользовательская функция «Версии»: one-click snapshot с автоматическим именем, временем и
+  preview; optional rename, restore и delete развивают bounded checkpoints без нового schema;
+- primary autosave on/off: только после первого явного Save, coalesced idle debounce 4 секунды и
+  atomic публикация в текущий `.mapproj`;
 - manual save (`Ctrl+S`);
-- recovery journal вне основного `.mapproj`;
+- recovery journal вне основного `.mapproj` как отдельная страховка и отдельный статус;
 - backup copy before migration/replace;
 - при старте после сбоя: сравнить основной файл, temp и recovery, показать понятный выбор;
 - ошибки сохранения не должны закрывать документ и не должны ложно показывать `Saved`.
+
+### Placement workspace (`P0`)
+
+- Add Ellipse/Rectangle и выбор stamp сначала вооружают transient placement с реальным ghost;
+- preview и commit используют одну snapped geometry; preview не входит в document/history/export;
+- режимы `Один`, `Серия`, `Россыпь`, а также `Автовыбор: Авто/Всегда/Выкл.`;
+- Esc/right-click/tool switch отменяют pending placement до изменения selection;
+- справа постоянно остаются только `Слои` и `Объекты`; Library, Versions, size/region и export
+  открываются отдельными командами, Notes является инструментом слева.
 
 ## 18. Изменение размера и извлечение региона (`P1`)
 

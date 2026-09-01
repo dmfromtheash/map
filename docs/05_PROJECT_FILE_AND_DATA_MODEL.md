@@ -167,6 +167,11 @@ serialize immutable snapshot
 
 ## Autosave и recovery
 
+Primary autosave после первого явного Save использует тот же atomic `MapProjectStore.Save`, тот же
+immutable revision checkpoint и общий save gate. Idle debounce равен 4 секундам; изменение во
+время I/O остаётся dirty и сохраняется следующим проходом. Эта операция обновляет текущий
+`.mapproj`, но не создаёт новый DTO и не меняет schema.
+
 - журнал находится в `%LOCALAPPDATA%\Map\Recovery\<documentId>`;
 - содержит base file fingerprint, base saved revision и последовательность durable deltas/snapshots;
 - запись throttled и выполняется в фоне;
@@ -176,7 +181,10 @@ serialize immutable snapshot
 
 ## Checkpoints
 
-Именованный checkpoint — не просто запись undo, а durable snapshot/delta baseline с названием, временем и preview. Восстановление checkpoint создаёт undoable транзакцию или новую копию документа; история не уничтожается тихо.
+В UI checkpoints называются «Версии». One-click создание даёт автоматическое имя, local time и
+preview; старые пользовательские имена открываются без миграции. Optional rename является
+отдельной undoable command. Сам checkpoint остаётся durable snapshot/delta baseline; порядок,
+лимиты, preview и restore/delete совместимы с существующим контейнером.
 
 ## Миграции
 

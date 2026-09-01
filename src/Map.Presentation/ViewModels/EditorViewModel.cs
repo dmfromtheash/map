@@ -43,6 +43,7 @@ public enum EditorTool
     Shape,
     Text,
     Stamp,
+    Notes,
 }
 
 /// <summary>
@@ -122,6 +123,7 @@ public static class UiTestFilePaths
 public enum StampPlacementMode
 {
     One,
+    Series,
     Area,
 }
 
@@ -185,11 +187,18 @@ public sealed partial class EditorViewModel : ViewModelBase
     private readonly SemaphoreSlim _saveGate = new(1, 1);
     private readonly AssetCatalog? _assetCatalog;
     private readonly IReadOnlyList<string> _localFontFamilies;
+    private readonly Action<EditorLocalPreferences>? _saveLocalPreferences;
 
     private SaveState _saveState;
     private AutosaveState _autosaveState;
     private DateTimeOffset? _lastAutosaveUtc;
     private MapDocument? _lastAutosavedDocument;
+    private MapDocument? _lastPrimaryAutosavedDocument;
+    private DateTimeOffset? _lastPrimarySaveUtc;
+    private DateTimeOffset? _lastCommittedEditUtc;
+    private bool _primaryAutosaveArmed;
+    private bool _primaryAutosaveEnabled;
+    private bool _recoveryAvailable;
     private string _statusDetail = "";
     private string _inspectorError = "";
     private DragPreview? _dragPreview;
@@ -203,6 +212,8 @@ public sealed partial class EditorViewModel : ViewModelBase
     private EditorTool _previousTool = EditorTool.Select;
     private RasterStrokeSession? _stroke;
     private List<VectorPoint>? _vectorPoints;
+    private PlacementSession? _pendingPlacement;
+    private PlacementAutoSelectPolicy _placementAutoSelect;
 
     // ------------------------------------------------------- multi-selection state
     private string _objectSearchText = "";
@@ -281,7 +292,9 @@ public sealed partial class EditorViewModel : ViewModelBase
         IReadOnlyList<string>? availableFontFamilies = null,
         IImageExporter? imageExporter = null,
         IExportDestinationPicker? exportDestinationPicker = null,
-        IFolderLauncher? folderLauncher = null)
+        IFolderLauncher? folderLauncher = null,
+        EditorLocalPreferences? localPreferences = null,
+        Action<EditorLocalPreferences>? saveLocalPreferences = null)
     {
         Session = new EditingSession(document);
         DocumentPath = documentPath;
@@ -298,6 +311,10 @@ public sealed partial class EditorViewModel : ViewModelBase
         _imageExporter = imageExporter ?? new ImageExportEngine();
         _exportDestinationPicker = exportDestinationPicker;
         _folderLauncher = folderLauncher;
+        var preferences = localPreferences ?? new EditorLocalPreferences();
+        _placementAutoSelect = preferences.AutoSelect;
+        _primaryAutosaveEnabled = preferences.PrimaryAutosaveEnabled;
+        _saveLocalPreferences = saveLocalPreferences;
         Shortcuts = shortcuts ?? new EditorShortcutSettings();
         _localFontFamilies = SystemFontCatalog.Normalize(
             availableFontFamilies ?? SystemFontCatalog.Families);
@@ -314,6 +331,8 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
 
         _saveState = Session.IsDirty ? SaveState.Unsaved : SaveState.Saved;
+        _primaryAutosaveArmed = !string.IsNullOrWhiteSpace(documentPath) && !startDirty;
+        _lastPrimarySaveUtc = _primaryAutosaveArmed ? _clock() : null;
         _activeLayerId = document.Layers.LastOrDefault(layer => layer is not BaseColorLayer)?.Id
             ?? document.BaseColor.Id;
 
@@ -386,16 +405,46 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// </summary>
     public string AutosaveSummary => _autosaveState switch
     {
-        AutosaveState.Saving => "Автокопия создаётся…",
-        AutosaveState.Failed => "Автокопия: ошибка",
+        AutosaveState.Saving => "Создаётся восстановление…",
+        AutosaveState.Failed => "Восстановление: ошибка",
         AutosaveState.Saved when _lastAutosaveUtc is { } time
             && ReferenceEquals(_lastAutosavedDocument, Session.Document) =>
-            $"Автокопия: {time.ToLocalTime():t}",
+            $"Есть восстановление · {time.ToLocalTime():t}",
         AutosaveState.Saved when _lastAutosaveUtc is { } time =>
-            $"Автокопия до {time.ToLocalTime():t}",
-        _ when Session.IsDirty => "Автокопия ожидает",
-        _ => "Автокопия не требуется",
+            $"Есть восстановление до {time.ToLocalTime():t}",
+        _ when _recoveryAvailable => "Есть восстановление",
+        _ when Session.IsDirty => "Восстановление ожидает",
+        _ => "Восстановление не требуется",
     };
+
+    public bool PrimaryAutosaveEnabled
+    {
+        get => _primaryAutosaveEnabled;
+        set
+        {
+            if (SetField(ref _primaryAutosaveEnabled, value))
+            {
+                PersistLocalPreferences();
+                Raise(nameof(PrimaryAutosaveSummary));
+                Raise(nameof(SaveSummary));
+            }
+        }
+    }
+
+    public string PrimaryAutosaveSummary => !_primaryAutosaveEnabled
+        ? "Автосохранение выключено"
+        : !_primaryAutosaveArmed || string.IsNullOrWhiteSpace(DocumentPath)
+            ? "Автосохранение после первого Save"
+            : SaveState switch
+            {
+                SaveState.Saving => "Сохраняется…",
+                SaveState.SaveFailed => "Ошибка сохранения · Повторить или Сохранить как…",
+                SaveState.Saved when _lastPrimarySaveUtc is { } time =>
+                    $"Сохранено {time.ToLocalTime():HH:mm}",
+                _ => "Не сохранено · автосохранение ожидает",
+            };
+
+    public bool RecoveryAvailable => _recoveryAvailable;
 
     /// <summary>Short human explanation of the last failure, with the recovery path when one exists.</summary>
     public string StatusDetail
@@ -513,6 +562,8 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// </summary>
     public string SaveSummary => _saveState switch
     {
+        SaveState.Saved when _lastPrimarySaveUtc is { } time =>
+            $"Сохранено {time.ToLocalTime():HH:mm}",
         SaveState.Saved => "Сохранено",
         SaveState.Saving => "Сохранение…",
         SaveState.SaveFailed => "Ошибка сохранения",
@@ -576,6 +627,7 @@ public sealed partial class EditorViewModel : ViewModelBase
 
             CancelStroke();
             CancelVectorDraw();
+            CancelPlacement();
             _previousTool = _activeTool;
             _activeTool = value;
             Raise();
@@ -1559,6 +1611,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         _currentVariantIndex = index >= 0 ? index : 0;
         SyncSelectedLibraryRow();
         RaiseVariantState();
+        ArmStampPlacement();
     }
 
     public void NextVariant() => MoveVariant(1);
@@ -1575,6 +1628,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         _currentVariantIndex = Math.Clamp(index, 0, _selectedSetVariants.Count - 1);
         RememberCurrentVariant();
         RaiseVariantState();
+        ArmStampPlacement();
     }
 
     private void MoveVariant(int direction)
@@ -1592,6 +1646,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         RememberCurrentVariant();
         StatusDetail = $"Вариант {CurrentVariantLabel}.";
         RaiseVariantState();
+        RefreshArmedPlacement();
     }
 
     private void RememberCurrentVariant()
@@ -1650,6 +1705,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         {
             _currentVariantIndex = index;
             RaiseVariantState();
+            RefreshArmedPlacement();
         }
     }
 
@@ -1663,6 +1719,24 @@ public sealed partial class EditorViewModel : ViewModelBase
             if (SetField(ref _stampPlacementMode, value))
             {
                 Raise(nameof(PlannedStampCount));
+                Raise(nameof(StampAreaSummary));
+                RefreshArmedPlacement();
+            }
+        }
+    }
+
+    public PlacementAutoSelectPolicy PlacementAutoSelect
+    {
+        get => _placementAutoSelect;
+        set
+        {
+            if (SetField(ref _placementAutoSelect, value))
+            {
+                PersistLocalPreferences();
+                if (_pendingPlacement is { } pending)
+                {
+                    PendingPlacement = pending with { AutoSelect = value };
+                }
             }
         }
     }
@@ -1678,6 +1752,7 @@ public sealed partial class EditorViewModel : ViewModelBase
                 Raise(nameof(PlannedStampCount));
                 Raise(nameof(StampAreaInCells));
                 Raise(nameof(StampAreaSummary));
+                RefreshArmedPlacement();
             }
         }
     }
@@ -1692,6 +1767,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             {
                 Raise(nameof(PlannedStampCount));
                 Raise(nameof(StampAreaSummary));
+                RefreshArmedPlacement();
             }
         }
     }
@@ -1699,23 +1775,32 @@ public sealed partial class EditorViewModel : ViewModelBase
     public bool RandomVariantAfterPlacement
     {
         get => _randomVariantAfterPlacement;
-        set => SetField(ref _randomVariantAfterPlacement, value);
+        set
+        {
+            if (SetField(ref _randomVariantAfterPlacement, value)) RefreshArmedPlacement();
+        }
     }
 
     public bool StampRandomAngle
     {
         get => _stampRandomAngle;
-        set => SetField(ref _stampRandomAngle, value);
+        set
+        {
+            if (SetField(ref _stampRandomAngle, value)) RefreshArmedPlacement();
+        }
     }
 
     public bool StampRandomFlip
     {
         get => _stampRandomFlip;
-        set => SetField(ref _stampRandomFlip, value);
+        set
+        {
+            if (SetField(ref _stampRandomFlip, value)) RefreshArmedPlacement();
+        }
     }
 
     /// <summary>How many stamps the current Area and Density would place.</summary>
-    public int PlannedStampCount => _stampPlacementMode == StampPlacementMode.One
+    public int PlannedStampCount => _stampPlacementMode is StampPlacementMode.One or StampPlacementMode.Series
         ? 1
         : StampPlacement.CountFor(_stampDensity, _stampAreaRadius);
 
@@ -1730,9 +1815,12 @@ public sealed partial class EditorViewModel : ViewModelBase
             var area = StampAreaInCells is { } cells
                 ? $"Область {_stampAreaRadius:0} ед. ({cells:0.##} кл.)"
                 : $"Область {_stampAreaRadius:0} ед.";
-            return _stampPlacementMode == StampPlacementMode.One
-                ? area + " · один штамп"
-                : $"{area} · плотность {_stampDensity:0} на 10 000 ед² · {PlannedStampCount} шт.";
+            return _stampPlacementMode switch
+            {
+                StampPlacementMode.One => area + " · один штамп",
+                StampPlacementMode.Series => area + " · серия по одному штампу",
+                _ => $"{area} · плотность {_stampDensity:0} на 10 000 ед² · {PlannedStampCount} шт.",
+            };
         }
     }
 
@@ -1760,124 +1848,206 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     // ---------------------------------------------------------------- placement
 
-    /// <summary>
-    /// One pointer gesture, all or nothing. The plan is resolved first, then every distinct hash
-    /// it needs is verified and read exactly once, and only a fully resolved plan is committed as
-    /// a single undoable command. If one variant is missing or changed, nothing is placed at all:
-    /// a shortened plan committed as a success is the one outcome the user cannot detect.
-    /// </summary>
-    public bool PlaceCurrentVariantAt(double worldX, double worldY)
+    private const double PlacementPreviewOpacity = 0.55;
+    private const int MaximumScatterPreviewObjects = 64;
+
+    public PlacementSession? PendingPlacement
     {
-        if (_assetCatalog is null || _assetResolver is null)
+        get => _pendingPlacement;
+        private set
         {
-            StatusDetail = "Локальный каталог ассетов недоступен.";
-            return false;
-        }
-
-        if (_assetCatalog.Status == AssetLibraryStatus.Damaged)
-        {
-            StatusDetail = "Индекс библиотеки повреждён. " + _assetCatalog.Diagnostic;
-            return false;
-        }
-
-        if (SelectedSet is null || CurrentVariant is null)
-        {
-            StatusDetail = "Сначала выберите набор и вариант в библиотеке.";
-            return false;
-        }
-
-        var layer = ActiveObjectLayer();
-        if (layer is null || layer.Locked || !layer.Visible)
-        {
-            StatusDetail = "Выберите видимый и разблокированный слой объектов.";
-            return false;
-        }
-
-        var randomize = _randomVariantAfterPlacement && _stampPlacementMode == StampPlacementMode.Area;
-        var candidates = randomize
-            ? _selectedSetVariants
-            : [_selectedSetVariants[_currentVariantIndex]];
-
-        var sources = new List<StampVariantSource>(candidates.Count);
-        var records = new Dictionary<string, AssetRecord>(StringComparer.OrdinalIgnoreCase);
-        foreach (var variant in candidates)
-        {
-            if (_assetCatalog.Find(variant.Sha256) is not { } record)
+            if (SetField(ref _pendingPlacement, value))
             {
-                continue;
-            }
-
-            if (records.TryAdd(record.Sha256, record))
-            {
-                sources.Add(new StampVariantSource(record.Sha256, record.Width, record.Height));
+                Raise(nameof(HasPendingPlacement));
+                Raise(nameof(PlacementPreviewObjects));
+                Raise(nameof(PlacementRefusal));
+                InvalidateScene(EditorChangeReason.CanvasInvalidation);
             }
         }
+    }
 
-        if (sources.Count == 0)
+    public bool HasPendingPlacement => _pendingPlacement is not null;
+
+    public IReadOnlyList<SceneObject> PlacementPreviewObjects =>
+        _pendingPlacement is { PointerVisible: true } pending ? pending.PreviewObjects : [];
+
+    public string PlacementRefusal => _pendingPlacement?.InvalidReason ?? "";
+
+    public void ArmPrimitivePlacement(SceneObjectKind kind)
+    {
+        if (kind is not (SceneObjectKind.Rectangle or SceneObjectKind.Ellipse))
         {
-            StatusDetail = "Содержимое выбранного набора отсутствует в каталоге.";
-            return false;
+            throw new ArgumentOutOfRangeException(nameof(kind));
         }
 
-        // The seed is derived from the counter this gesture WOULD take, and the counter only moves
-        // once the command is committed. A refused gesture therefore leaves no trace at all, and
-        // retrying it after the file is restored replays the very same plan.
-        var request = new StampPlacementRequest
-        {
-            CenterX = worldX,
-            CenterY = worldY,
-            AreaRadius = _stampAreaRadius,
-            Density = _stampDensity,
-            Seed = NextGestureSeed(),
-            RandomizeVariant = randomize && sources.Count > 1,
-            RandomAngle = _stampRandomAngle && _stampPlacementMode == StampPlacementMode.Area,
-            RandomFlip = _stampRandomFlip && _stampPlacementMode == StampPlacementMode.Area,
-            BaseWidth = DefaultStampWidth(),
-        };
-        var plan = _stampPlacementMode == StampPlacementMode.One
-            ? StampPlacement.PlanOne(request, sources[0])
-            : StampPlacement.PlanArea(request, sources);
+        ActiveTool = EditorTool.Select;
+        var centre = ViewCentre();
+        var mode = _stampPlacementMode == StampPlacementMode.Area
+            ? StampPlacementMode.One
+            : _stampPlacementMode;
+        PendingPlacement = BuildPrimitivePlacement(kind, centre.X, centre.Y, mode, pointerVisible: false);
+        StatusDetail = kind == SceneObjectKind.Ellipse
+            ? "Объект: эллипс · укажите место на холсте."
+            : "Объект: прямоугольник · укажите место на холсте.";
+    }
 
-        if (ResolvePlan(plan, records, out var references, out var refusal) is not { } byHash)
+    public bool ArmStampPlacement()
+    {
+        ActiveTool = EditorTool.Stamp;
+        var centre = ViewCentre();
+        PendingPlacement = BuildStampPlacement(centre.X, centre.Y, pointerVisible: false);
+        if (PendingPlacement.InvalidReason is { Length: > 0 } refusal)
         {
             StatusDetail = refusal;
             return false;
         }
 
-        var objects = new List<SceneObject>(plan.Count);
-        foreach (var item in plan)
+        StatusDetail = "Штамп вооружён · укажите место на холсте.";
+        return true;
+    }
+
+    public void UpdatePlacementPreview(double worldX, double worldY)
+    {
+        if (PendingPlacement is not { } pending)
         {
-            var record = records[item.Sha256];
-            objects.Add(new SceneObject(
-                ObjectId.New(), SceneObjectKind.Stamp, record.DisplayName,
-                item.X, item.Y, item.Width, item.Height, item.RotationDegrees,
-                "#FFFFFFFF", "#00000000", 0, true, false)
-            {
-                Stamp = new StampStyle(item.Sha256)
-                {
-                    // The placed size IS the honest 100 % baseline for later scaling.
-                    ReferenceWidth = item.Width,
-                    ReferenceHeight = item.Height,
-                    FlipHorizontal = item.FlipHorizontal,
-                    FlipVertical = item.FlipVertical,
-                },
-            });
+            return;
         }
 
-        // Captured before the random toggle is allowed to move on, so the confirmation names the
-        // variant that was actually placed rather than the one that will be placed next.
+        var snapped = SnapPlacementPoint(worldX, worldY);
+        PendingPlacement = pending.Target switch
+        {
+            PlacementTargetKind.Rectangle => BuildPrimitivePlacement(
+                SceneObjectKind.Rectangle, snapped.X, snapped.Y, pending.Mode, pointerVisible: true),
+            PlacementTargetKind.Ellipse => BuildPrimitivePlacement(
+                SceneObjectKind.Ellipse, snapped.X, snapped.Y, pending.Mode, pointerVisible: true),
+            _ => BuildStampPlacement(snapped.X, snapped.Y, pointerVisible: true),
+        };
+    }
+
+    public void SetPlacementPointerVisible(bool visible)
+    {
+        if (PendingPlacement is { } pending && pending.PointerVisible != visible)
+        {
+            PendingPlacement = pending with { PointerVisible = visible };
+        }
+    }
+
+    public bool CancelPlacement()
+    {
+        if (PendingPlacement is null)
+        {
+            return false;
+        }
+
+        PendingPlacement = null;
+        StatusDetail = "Размещение отменено.";
+        return true;
+    }
+
+    public bool CreateObjectLayerAndContinuePlacement()
+    {
+        if (PendingPlacement is null)
+        {
+            return false;
+        }
+
+        AddObjectLayer();
+        RefreshArmedPlacement();
+        StatusDetail = "Создан слой объектов. Размещение можно продолжить.";
+        return true;
+    }
+
+    public bool CommitPendingPlacement()
+    {
+        if (PendingPlacement is not { } pending)
+        {
+            return false;
+        }
+
+        var layer = pending.LayerId is { } layerId
+            ? Session.Document.FindLayer(layerId) as ObjectLayer
+            : null;
+        if (layer is not { Visible: true, Locked: false })
+        {
+            PendingPlacement = pending with
+            {
+                LayerId = null,
+                InvalidReason = "Нет видимого разблокированного слоя объектов. Создайте слой объектов и продолжите.",
+            };
+            StatusDetail = PendingPlacement.InvalidReason;
+            return false;
+        }
+
+        return pending.Target == PlacementTargetKind.Stamp
+            ? CommitStampPlacement(pending, layer)
+            : CommitPrimitivePlacement(pending, layer);
+    }
+
+    private bool CommitPrimitivePlacement(PlacementSession pending, ObjectLayer layer)
+    {
+        var preview = pending.PreviewObjects.Single();
+        var kind = pending.Target == PlacementTargetKind.Ellipse
+            ? SceneObjectKind.Ellipse
+            : SceneObjectKind.Rectangle;
+        var added = new SceneObject(
+            ObjectId.New(), kind, EntityNameGenerator.Object(Session.Document, kind),
+            preview.X, preview.Y, preview.Width, preview.Height, preview.RotationDegrees,
+            preview.FillColor, preview.StrokeColor, preview.StrokeWidth, true, false);
+        var previousSelection = Session.SelectedObjectIds.ToArray();
+        Session.Execute(new AddObjectCommand(layer.Id, added));
+        ApplyPlacementSelection(previousSelection, added.Id, pending);
+        _activeLayerId = layer.Id;
+        AfterEdit();
+        FinishOrContinuePlacement(pending, added.Name);
+        return true;
+    }
+
+    private bool CommitStampPlacement(PlacementSession pending, ObjectLayer layer)
+    {
+        if (!TryStampInputs(out var requestTemplate, out var sources, out var records, out var refusal))
+        {
+            StatusDetail = refusal;
+            return false;
+        }
+
+        var request = requestTemplate with
+        {
+            CenterX = pending.WorldX,
+            CenterY = pending.WorldY,
+            Seed = pending.Seed,
+        };
+        var plan = pending.Mode == StampPlacementMode.Area
+            ? StampPlacement.PlanArea(request, sources)
+            : StampPlacement.PlanOne(request, sources[0]);
+        if (ResolvePlan(plan, records, out var references, out refusal) is not { } byHash)
+        {
+            StatusDetail = refusal;
+            return false;
+        }
+
+        var preferredName = SelectedSet?.Name
+            ?? records[plan[0].Sha256].DisplayName;
+        var names = EntityNameGenerator.Objects(
+            Session.Document, SceneObjectKind.Stamp, plan.Count, preferredName);
+        var objects = new List<SceneObject>(plan.Count);
+        for (var index = 0; index < plan.Count; index++)
+        {
+            var item = plan[index];
+            objects.Add(StampObject(item, names[index], PlacementPreviewOpacity: null));
+        }
+
         var placedLabel = CurrentVariantLabel;
+        var previousSelection = Session.SelectedObjectIds.ToArray();
         _gestureCounter++;
         Session.Execute(new PlaceAssetObjectsCommand(layer.Id, references, objects));
-        Session.SelectedObjectId = objects[^1].Id;
+        ApplyPlacementSelection(previousSelection, objects[^1].Id, pending);
         _activeLayerId = layer.Id;
         AfterEdit();
         if (_selectedSetId is not null && CurrentVariant is { } placedVariant)
         {
-            _assetCatalog.TouchRecent(_selectedSetId, placedVariant.Id, _clock());
+            _assetCatalog!.TouchRecent(_selectedSetId, placedVariant.Id, _clock());
         }
 
-        // Only a command that actually succeeded is allowed to move the current variant on.
         if (_randomVariantAfterPlacement && _selectedSetVariants.Count > 1)
         {
             _currentVariantIndex = StampPlacement.NextVariantIndex(
@@ -1886,13 +2056,313 @@ public sealed partial class EditorViewModel : ViewModelBase
             RaiseVariantState();
         }
 
-        // Phrased as "noun: number" so the Russian numeral never has to agree with the noun -
-        // "Размещено 322 штампов" is simply wrong, and 1/2/5 would each need a different form.
         StatusDetail = objects.Count == 1
             ? $"Размещён вариант {placedLabel}."
             : $"Размещено штампов: {objects.Count}, вариантов: {byHash.Count}.";
         RefreshLibrary();
+        FinishOrContinuePlacement(pending, objects[^1].Name);
         return true;
+    }
+
+    private void ApplyPlacementSelection(
+        IReadOnlyList<ObjectId> previousSelection, ObjectId addedId, PlacementSession placement)
+    {
+        var select = placement.AutoSelect == PlacementAutoSelectPolicy.Always
+            || placement.AutoSelect == PlacementAutoSelectPolicy.Auto
+                && placement.Mode == StampPlacementMode.One;
+        if (select)
+        {
+            Session.SelectedObjectId = addedId;
+        }
+        else
+        {
+            Session.SetSelection(previousSelection);
+        }
+    }
+
+    private void FinishOrContinuePlacement(PlacementSession committed, string name)
+    {
+        if (committed.Mode == StampPlacementMode.One)
+        {
+            PendingPlacement = null;
+            StatusDetail = $"Создан «{name}».";
+            return;
+        }
+
+        PendingPlacement = committed.Target == PlacementTargetKind.Stamp
+            ? BuildStampPlacement(committed.WorldX, committed.WorldY, pointerVisible: true)
+            : BuildPrimitivePlacement(
+                committed.Target == PlacementTargetKind.Ellipse
+                    ? SceneObjectKind.Ellipse
+                    : SceneObjectKind.Rectangle,
+                committed.WorldX,
+                committed.WorldY,
+                committed.Mode,
+                pointerVisible: true);
+        StatusDetail = $"Создан «{name}». Режим серии остаётся активным.";
+    }
+
+    private PlacementSession BuildPrimitivePlacement(
+        SceneObjectKind kind,
+        double centerX,
+        double centerY,
+        StampPlacementMode mode,
+        bool pointerVisible)
+    {
+        var layer = ActiveObjectLayer();
+        var viewportWorldWidth = Session.Viewport.ViewWidth > 0
+            ? Session.Viewport.ViewWidth / Math.Max(Session.Viewport.Scale, 0.01)
+            : 1_000;
+        var width = Math.Clamp(viewportWorldWidth * 0.18, 96, 240);
+        width = Math.Min(width, Session.Document.Canvas.Width);
+        var height = Math.Min(kind == SceneObjectKind.Ellipse ? width * 0.68 : width * 0.62,
+            Session.Document.Canvas.Height);
+        var preview = new SceneObject(
+            PendingPlacement?.PreviewObjects.FirstOrDefault()?.Id ?? ObjectId.New(),
+            kind,
+            kind == SceneObjectKind.Ellipse ? "Будущий эллипс" : "Будущий прямоугольник",
+            centerX - width / 2,
+            centerY - height / 2,
+            width,
+            height,
+            0,
+            kind == SceneObjectKind.Ellipse ? "#FF5B8266" : "#FF3E5C76",
+            "#FF10131A",
+            2,
+            true,
+            false)
+        {
+            ObjectOpacity = PlacementPreviewOpacity,
+        };
+        return new PlacementSession
+        {
+            Target = kind == SceneObjectKind.Ellipse
+                ? PlacementTargetKind.Ellipse
+                : PlacementTargetKind.Rectangle,
+            Mode = mode,
+            AutoSelect = _placementAutoSelect,
+            LayerId = layer?.Id,
+            WorldX = centerX,
+            WorldY = centerY,
+            Width = width,
+            Height = height,
+            RotationDegrees = 0,
+            FillColor = preview.FillColor,
+            StrokeColor = preview.StrokeColor,
+            StrokeWidth = preview.StrokeWidth,
+            PreviewOpacity = PlacementPreviewOpacity,
+            PointerVisible = pointerVisible,
+            InvalidReason = layer is null
+                ? "Нет видимого разблокированного слоя объектов. Создайте слой объектов и продолжите."
+                : null,
+            Seed = 0,
+            PlannedCount = 1,
+            PreviewObjects = [preview],
+        };
+    }
+
+    private PlacementSession BuildStampPlacement(double centerX, double centerY, bool pointerVisible)
+    {
+        var layer = ActiveObjectLayer();
+        if (!TryStampInputs(out var requestTemplate, out var sources, out var records, out var refusal))
+        {
+            return EmptyStampPlacement(centerX, centerY, layer?.Id, pointerVisible, refusal);
+        }
+
+        var request = requestTemplate with
+        {
+            CenterX = centerX,
+            CenterY = centerY,
+            Seed = NextGestureSeed(),
+        };
+        var plan = _stampPlacementMode == StampPlacementMode.Area
+            ? StampPlacement.PlanAreaPreview(request, sources, MaximumScatterPreviewObjects)
+            : StampPlacement.PlanOne(request, sources[0]);
+        var preview = plan.Select((item, index) => StampObject(
+            item,
+            index == 0 ? "Будущий штамп" : $"Будущий штамп {index + 1}",
+            PlacementPreviewOpacity)).ToList();
+        return new PlacementSession
+        {
+            Target = PlacementTargetKind.Stamp,
+            Mode = _stampPlacementMode,
+            AutoSelect = _placementAutoSelect,
+            LayerId = layer?.Id,
+            WorldX = centerX,
+            WorldY = centerY,
+            Width = preview[0].Width,
+            Height = preview[0].Height,
+            RotationDegrees = preview[0].RotationDegrees,
+            FillColor = "#FFFFFFFF",
+            StrokeColor = "#00000000",
+            StrokeWidth = 0,
+            PreviewOpacity = PlacementPreviewOpacity,
+            PointerVisible = pointerVisible,
+            InvalidReason = layer is null
+                ? "Нет видимого разблокированного слоя объектов. Создайте слой объектов и продолжите."
+                : null,
+            Seed = request.Seed,
+            PlannedCount = _stampPlacementMode == StampPlacementMode.Area
+                ? StampPlacement.CountFor(request.Density, request.AreaRadius)
+                : 1,
+            PreviewObjects = preview,
+            AssetSetId = _selectedSetId,
+            VariantId = CurrentVariant?.Id,
+            VariantSha256 = CurrentVariant?.Sha256,
+        };
+    }
+
+    private PlacementSession EmptyStampPlacement(
+        double centerX,
+        double centerY,
+        LayerId? layerId,
+        bool pointerVisible,
+        string refusal) => new()
+    {
+        Target = PlacementTargetKind.Stamp,
+        Mode = _stampPlacementMode,
+        AutoSelect = _placementAutoSelect,
+        LayerId = layerId,
+        WorldX = centerX,
+        WorldY = centerY,
+        Width = 0,
+        Height = 0,
+        RotationDegrees = 0,
+        FillColor = "#FFFFFFFF",
+        StrokeColor = "#00000000",
+        StrokeWidth = 0,
+        PreviewOpacity = PlacementPreviewOpacity,
+        PointerVisible = pointerVisible,
+        InvalidReason = refusal,
+        Seed = NextGestureSeed(),
+        PlannedCount = 0,
+        PreviewObjects = [],
+        AssetSetId = _selectedSetId,
+        VariantId = CurrentVariant?.Id,
+        VariantSha256 = CurrentVariant?.Sha256,
+    };
+
+    private bool TryStampInputs(
+        out StampPlacementRequest request,
+        out IReadOnlyList<StampVariantSource> sources,
+        out Dictionary<string, AssetRecord> records,
+        out string refusal)
+    {
+        request = new StampPlacementRequest();
+        sources = [];
+        records = new Dictionary<string, AssetRecord>(StringComparer.OrdinalIgnoreCase);
+        refusal = "";
+        if (_assetCatalog is null || _assetResolver is null)
+        {
+            refusal = "Локальный каталог ассетов недоступен.";
+            return false;
+        }
+        if (_assetCatalog.Status == AssetLibraryStatus.Damaged)
+        {
+            refusal = "Индекс библиотеки повреждён. " + _assetCatalog.Diagnostic;
+            return false;
+        }
+        if (SelectedSet is null || CurrentVariant is null)
+        {
+            refusal = "Сначала выберите набор и вариант в библиотеке.";
+            return false;
+        }
+
+        var scatter = _stampPlacementMode == StampPlacementMode.Area;
+        var randomize = _randomVariantAfterPlacement && scatter;
+        var candidates = randomize
+            ? _selectedSetVariants
+            : [_selectedSetVariants[_currentVariantIndex]];
+        var resolvedSources = new List<StampVariantSource>(candidates.Count);
+        foreach (var variant in candidates)
+        {
+            if (_assetCatalog.Find(variant.Sha256) is not { } record)
+            {
+                continue;
+            }
+            if (records.TryAdd(record.Sha256, record))
+            {
+                resolvedSources.Add(new StampVariantSource(record.Sha256, record.Width, record.Height));
+            }
+        }
+        if (resolvedSources.Count == 0)
+        {
+            refusal = "Содержимое выбранного набора отсутствует в каталоге.";
+            return false;
+        }
+
+        sources = resolvedSources;
+        request = new StampPlacementRequest
+        {
+            AreaRadius = _stampAreaRadius,
+            Density = _stampDensity,
+            RandomizeVariant = randomize && sources.Count > 1,
+            RandomAngle = _stampRandomAngle && scatter,
+            RandomFlip = _stampRandomFlip && scatter,
+            BaseWidth = DefaultStampWidth(),
+        };
+        return true;
+    }
+
+    private static SceneObject StampObject(
+        StampPlacementItem item, string name, double? PlacementPreviewOpacity) => new(
+        ObjectId.New(), SceneObjectKind.Stamp, name,
+        item.X, item.Y, item.Width, item.Height, item.RotationDegrees,
+        "#FFFFFFFF", "#00000000", 0, true, false)
+    {
+        ObjectOpacity = PlacementPreviewOpacity ?? 1,
+        Stamp = new StampStyle(item.Sha256)
+        {
+            ReferenceWidth = item.Width,
+            ReferenceHeight = item.Height,
+            FlipHorizontal = item.FlipHorizontal,
+            FlipVertical = item.FlipVertical,
+        },
+    };
+
+    private VectorPoint SnapPlacementPoint(double worldX, double worldY) =>
+        ActiveSnapGrid() is { } grid
+            ? GridSnapService.Snap(grid, new VectorPoint(worldX, worldY))
+            : new VectorPoint(worldX, worldY);
+
+    private void RefreshArmedPlacement()
+    {
+        if (PendingPlacement is not { } pending)
+        {
+            return;
+        }
+
+        PendingPlacement = pending.Target == PlacementTargetKind.Stamp
+            ? BuildStampPlacement(pending.WorldX, pending.WorldY, pending.PointerVisible)
+            : BuildPrimitivePlacement(
+                pending.Target == PlacementTargetKind.Ellipse
+                    ? SceneObjectKind.Ellipse
+                    : SceneObjectKind.Rectangle,
+                pending.WorldX,
+                pending.WorldY,
+                _stampPlacementMode == StampPlacementMode.Area
+                    ? StampPlacementMode.One
+                    : _stampPlacementMode,
+                pending.PointerVisible);
+    }
+
+    private void PersistLocalPreferences() => _saveLocalPreferences?.Invoke(
+        new EditorLocalPreferences(_placementAutoSelect, _primaryAutosaveEnabled));
+
+    /// <summary>
+    /// One pointer gesture, all or nothing. The plan is resolved first, then every distinct hash
+    /// it needs is verified and read exactly once, and only a fully resolved plan is committed as
+    /// a single undoable command. If one variant is missing or changed, nothing is placed at all:
+    /// a shortened plan committed as a success is the one outcome the user cannot detect.
+    /// </summary>
+    public bool PlaceCurrentVariantAt(double worldX, double worldY)
+    {
+        if (PendingPlacement is not { Target: PlacementTargetKind.Stamp })
+        {
+            ArmStampPlacement();
+        }
+        UpdatePlacementPreview(worldX, worldY);
+        return CommitPendingPlacement();
     }
 
     /// <summary>
@@ -2107,7 +2577,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
     }
 
-    private double DefaultStampWidth() => _stampPlacementMode == StampPlacementMode.One
+    private double DefaultStampWidth() => _stampPlacementMode is StampPlacementMode.One or StampPlacementMode.Series
         ? Math.Min(256.0, Session.Document.Canvas.Width / 4.0)
         : Math.Clamp(_stampAreaRadius / 3.0, 8, 256);
 
@@ -2408,8 +2878,10 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
 
         var added = ActiveTool == EditorTool.Shape
-            ? VectorGeometry.CreateFreeShape(ObjectId.New(), "Свободная фигура", points)
-            : VectorGeometry.CreateLine(ObjectId.New(), "Свободная линия", points);
+            ? VectorGeometry.CreateFreeShape(
+                ObjectId.New(), EntityNameGenerator.Object(Session.Document, SceneObjectKind.Shape), points)
+            : VectorGeometry.CreateLine(
+                ObjectId.New(), EntityNameGenerator.Object(Session.Document, SceneObjectKind.Line), points);
         Session.Execute(new AddObjectCommand(layer.Id, added));
         Session.SelectedObjectId = added.Id;
         _activeLayerId = layer.Id;
@@ -2470,7 +2942,7 @@ public sealed partial class EditorViewModel : ViewModelBase
 
         var added = new SceneObject(
             ObjectId.New(), kind,
-            kind == SceneObjectKind.Ellipse ? "Эллипс" : "Прямоугольник",
+            EntityNameGenerator.Object(Session.Document, kind),
             ((canvas.Width - width) / 2) + offset,
             ((canvas.Height - height) / 2) + offset,
             width, height, 0,
@@ -2488,7 +2960,8 @@ public sealed partial class EditorViewModel : ViewModelBase
         var layer = ActiveObjectLayer();
         if (layer is null) return;
         var centre = ViewCentre();
-        var line = VectorGeometry.CreateLine(ObjectId.New(), "Линия",
+        var line = VectorGeometry.CreateLine(
+            ObjectId.New(), EntityNameGenerator.Object(Session.Document, SceneObjectKind.Line),
         [
             new VectorPoint(centre.X - 240, centre.Y + 80),
             new VectorPoint(centre.X, centre.Y - 100),
@@ -2505,7 +2978,8 @@ public sealed partial class EditorViewModel : ViewModelBase
         var layer = ActiveObjectLayer();
         if (layer is null) return;
         var centre = ViewCentre();
-        var shape = VectorGeometry.CreateShape(ObjectId.New(), $"Фигура {kind}", kind,
+        var shape = VectorGeometry.CreateShape(
+            ObjectId.New(), EntityNameGenerator.Object(Session.Document, SceneObjectKind.Shape), kind,
             new WorldBounds(centre.X - 180, centre.Y - 130, centre.X + 180, centre.Y + 130));
         Session.Execute(new AddObjectCommand(layer.Id, shape));
         Session.SelectedObjectId = shape.Id;
@@ -2518,12 +2992,14 @@ public sealed partial class EditorViewModel : ViewModelBase
         var layer = ActiveObjectLayer();
         if (layer is null) return;
         var centre = ViewCentre();
+        const string defaultContent = "Новый текст\nна карте";
         var text = new SceneObject(
-            ObjectId.New(), SceneObjectKind.Text, "Текст",
+            ObjectId.New(), SceneObjectKind.Text,
+            EntityNameGenerator.Text(Session.Document, defaultContent),
             centre.X - 180, centre.Y - 70, 360, 140, 0,
             "#FF20242B", "#FFFFFFFF", 0, true, false)
         {
-            Text = new TextStyle { Content = "Новый текст\nна карте" },
+            Text = new TextStyle { Content = defaultContent },
         };
         Session.Execute(new AddObjectCommand(layer.Id, text));
         Session.SelectedObjectId = text.Id;
@@ -2793,8 +3269,10 @@ public sealed partial class EditorViewModel : ViewModelBase
         AfterEdit();
     }
 
-    private ObjectLayer? ActiveObjectLayer() => ActiveLayer as ObjectLayer
-        ?? Session.Document.Layers.OfType<ObjectLayer>().LastOrDefault(layer => layer.Visible && !layer.Locked);
+    private ObjectLayer? ActiveObjectLayer() => ActiveLayer is ObjectLayer { Visible: true, Locked: false } active
+        ? active
+        : Session.Document.Layers.OfType<ObjectLayer>()
+            .LastOrDefault(layer => layer.Visible && !layer.Locked);
 
     private (double X, double Y) ViewCentre() => Session.Viewport.ScreenToWorld(
         Session.Viewport.ViewWidth / 2, Session.Viewport.ViewHeight / 2);
@@ -2822,7 +3300,9 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public void AddObjectLayer()
     {
-        var layer = new ObjectLayer(LayerId.New(), "Объекты", true, false, 1.0, []);
+        var layer = new ObjectLayer(
+            LayerId.New(), EntityNameGenerator.Layer(Session.Document, typeof(ObjectLayer)),
+            true, false, 1.0, []);
         Session.Execute(new AddLayerCommand(layer, _activeLayerId));
         _activeLayerId = layer.Id;
         AfterEdit();
@@ -2830,7 +3310,8 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public void AddBrushLayer()
     {
-        var layer = BrushLayer.CreateEmpty(LayerId.New(), "Кисть");
+        var layer = BrushLayer.CreateEmpty(
+            LayerId.New(), EntityNameGenerator.Layer(Session.Document, typeof(BrushLayer)));
         Session.Execute(new AddLayerCommand(layer, _activeLayerId));
         _activeLayerId = layer.Id;
         AfterEdit();
@@ -2838,7 +3319,8 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public void AddLandLayer()
     {
-        var layer = LandLayer.CreateEmpty(LayerId.New(), "Земля");
+        var layer = LandLayer.CreateEmpty(
+            LayerId.New(), EntityNameGenerator.Layer(Session.Document, typeof(LandLayer)));
         Session.Execute(new AddLayerCommand(layer, _activeLayerId));
         _activeLayerId = layer.Id;
         ActiveTool = EditorTool.Land;
@@ -2847,7 +3329,9 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public void AddGridLayer()
     {
-        var grid = new GridLayer(LayerId.New(), "Сетка", true, false, 1,
+        var grid = new GridLayer(
+            LayerId.New(), EntityNameGenerator.Layer(Session.Document, typeof(GridLayer)),
+            true, false, 1,
         [
             new GridDefinition(GridId.New(), GridGeometry.Square, 128)
             {
@@ -2861,7 +3345,9 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public void AddFilterLayer()
     {
-        var layer = new FilterLayer(LayerId.New(), "Фильтр", true, false, 1,
+        var layer = new FilterLayer(
+            LayerId.New(), EntityNameGenerator.Layer(Session.Document, typeof(FilterLayer)),
+            true, false, 1,
             new FilterSettings { Brightness = 0.08, Contrast = 0.12, Saturation = 0.1 });
         Session.Execute(new AddLayerCommand(layer, _activeLayerId));
         _activeLayerId = layer.Id;
@@ -3670,8 +4156,11 @@ public sealed partial class EditorViewModel : ViewModelBase
         SetGroupCommand command;
         try
         {
+            var groupName = string.IsNullOrWhiteSpace(name)
+                ? EntityNameGenerator.Group(selected.Count)
+                : name;
             command = SetGroupCommand.Group(
-                Session.Document, [.. selected.Select(o => o.Id)], name ?? "");
+                Session.Document, [.. selected.Select(o => o.Id)], groupName);
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
         {
@@ -3780,6 +4269,11 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// </summary>
     public bool HandleEscape()
     {
+        if (CancelPlacement())
+        {
+            return true;
+        }
+
         if (_openGroupId is not null)
         {
             ExitGroup();
@@ -4269,11 +4763,35 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
     }
 
-    public bool CreateCheckpoint(string? name)
+    public bool CreateVersion()
+    {
+        var timestamp = _clock();
+        var used = new HashSet<int>();
+        foreach (var checkpoint in Session.Document.Checkpoints)
+        {
+            const string prefix = "Версия ";
+            if (checkpoint.Name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                && checkpoint.Name.Length >= prefix.Length + 2
+                && int.TryParse(checkpoint.Name.AsSpan(prefix.Length, 2), out var number))
+            {
+                used.Add(number);
+            }
+        }
+
+        var next = Enumerable.Range(1, MapCheckpointLimits.MaxCount + 1)
+            .First(number => !used.Contains(number));
+        var name = $"Версия {next:00} · {timestamp.ToLocalTime():dd.MM.yyyy HH:mm}";
+        return CreateCheckpoint(name, timestamp, userTerm: "версия");
+    }
+
+    public bool CreateCheckpoint(string? name) =>
+        CreateCheckpoint(name, _clock(), userTerm: "версия");
+
+    private bool CreateCheckpoint(string? name, DateTimeOffset timestamp, string userTerm)
     {
         if (string.IsNullOrWhiteSpace(name))
         {
-            StatusDetail = "Введите непустое название контрольной точки.";
+            StatusDetail = "Введите непустое название версии.";
             return false;
         }
 
@@ -4285,7 +4803,7 @@ public sealed partial class EditorViewModel : ViewModelBase
 
         if (Session.Document.Checkpoints.Count >= MapCheckpointLimits.MaxCount)
         {
-            StatusDetail = $"Достигнут лимит: не больше {MapCheckpointLimits.MaxCount} контрольных точек.";
+            StatusDetail = $"Достигнут лимит: не больше {MapCheckpointLimits.MaxCount} версий.";
             return false;
         }
 
@@ -4297,14 +4815,16 @@ public sealed partial class EditorViewModel : ViewModelBase
             var checkpoint = new MapCheckpoint(
                 CheckpointId.New(),
                 name,
-                _clock(),
+                timestamp,
                 MapCheckpointSnapshot.Capture(source),
                 preview);
 
             MapProjectStore.ValidateCheckpointAddition(source, checkpoint);
             Session.Execute(new AddCheckpointCommand(checkpoint));
             AfterEdit();
-            StatusDetail = $"Создана контрольная точка «{checkpoint.Name}». Сохраните проект, чтобы записать её в файл.";
+            StatusDetail = string.IsNullOrWhiteSpace(DocumentPath)
+                ? $"Создана {userTerm} «{checkpoint.Name}» в памяти. Первый путь задаст явный Save."
+                : $"Создана {userTerm} «{checkpoint.Name}». Она будет сохранена автоматически.";
             return true;
         }
         catch (MapProjectResourceLimitException ex)
@@ -4314,8 +4834,35 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
         {
-            StatusDetail = "Не удалось создать контрольную точку: " + ex.Message;
+            StatusDetail = "Не удалось создать версию: " + ex.Message;
             _log.Error("Checkpoint creation failed", ex);
+            return false;
+        }
+    }
+
+    public bool RenameVersion(CheckpointId id, string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            StatusDetail = "Название версии не может быть пустым.";
+            return false;
+        }
+        if (name.Trim().Length > MapCheckpointLimits.MaxNameLength)
+        {
+            StatusDetail = $"Название должно быть не длиннее {MapCheckpointLimits.MaxNameLength} символов.";
+            return false;
+        }
+
+        try
+        {
+            Session.Execute(RenameCheckpointCommand.Create(Session.Document, id, name));
+            AfterEdit();
+            StatusDetail = $"Версия переименована в «{name.Trim()}».";
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException or KeyNotFoundException or InvalidOperationException)
+        {
+            StatusDetail = "Не удалось переименовать версию: " + ex.Message;
             return false;
         }
     }
@@ -4325,7 +4872,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         var checkpoint = Session.Document.Checkpoints.FirstOrDefault(item => item.Id == id);
         if (checkpoint is null)
         {
-            StatusDetail = "Контрольная точка не найдена. Текущая карта не изменена.";
+            StatusDetail = "Версия не найдена. Текущая карта не изменена.";
             return false;
         }
 
@@ -4339,12 +4886,12 @@ public sealed partial class EditorViewModel : ViewModelBase
         {
             Session.Execute(RestoreCheckpointCommand.Create(Session.Document, id));
             AfterEdit();
-            StatusDetail = $"Восстановлена контрольная точка «{checkpoint.Name}». Действие можно отменить одной командой Undo.";
+            StatusDetail = $"Восстановлена версия «{checkpoint.Name}». Действие можно отменить одной командой Undo.";
             return true;
         }
         catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException)
         {
-            StatusDetail = "Не удалось восстановить контрольную точку. Текущая карта не изменена.";
+            StatusDetail = "Не удалось восстановить версию. Текущая карта не изменена.";
             _log.Error("Checkpoint restore failed", ex);
             return false;
         }
@@ -4355,7 +4902,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         var checkpoint = Session.Document.Checkpoints.FirstOrDefault(item => item.Id == id);
         if (checkpoint is null)
         {
-            StatusDetail = "Контрольная точка не найдена. Ничего не удалено.";
+            StatusDetail = "Версия не найдена. Ничего не удалено.";
             return false;
         }
 
@@ -4369,12 +4916,12 @@ public sealed partial class EditorViewModel : ViewModelBase
         {
             Session.Execute(DeleteCheckpointCommand.Create(Session.Document, id));
             AfterEdit();
-            StatusDetail = $"Контрольная точка «{checkpoint.Name}» удалена. Сохраните проект, чтобы записать изменение в файл.";
+            StatusDetail = $"Версия «{checkpoint.Name}» удалена. Изменение будет сохранено автоматически.";
             return true;
         }
         catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException)
         {
-            StatusDetail = "Не удалось удалить контрольную точку. Ничего не изменено.";
+            StatusDetail = "Не удалось удалить версию. Ничего не изменено.";
             _log.Error("Checkpoint deletion failed", ex);
             return false;
         }
@@ -4386,12 +4933,15 @@ public sealed partial class EditorViewModel : ViewModelBase
         Raise(nameof(PendingChanges));
         Raise(nameof(SaveSummary));
         Raise(nameof(AutosaveSummary));
+        Raise(nameof(PrimaryAutosaveSummary));
+        Raise(nameof(RecoveryAvailable));
         Raise(nameof(CanUndo));
         Raise(nameof(CanRedo));
     }
 
     private void AfterEdit()
     {
+        _lastCommittedEditUtc = _clock();
         SaveState = Session.IsDirty ? SaveState.Unsaved : SaveState.Saved;
         StatusDetail = "";
         RefreshCanvasWorkflowAfterDocumentChange();
@@ -4424,6 +4974,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         Raise(nameof(Layers));
         Raise(nameof(Notes));
         Raise(nameof(Checkpoints));
+        Raise(nameof(PrimaryAutosaveSummary));
         Raise(nameof(ActiveLayer));
         Raise(nameof(ActiveLayerId));
         Raise(nameof(ActiveLayerSummary));
@@ -5287,6 +5838,14 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     // ---------------------------------------------------------------- autosave
 
+    public static TimeSpan PrimaryAutosaveDebounce { get; } = TimeSpan.FromSeconds(4);
+
+    public bool HasTransientEditorAction => PendingPlacement is not null
+        || DragPreview is not null
+        || _stroke is not null
+        || _vectorPoints is not null
+        || CanvasWorkflowOpen;
+
     /// <summary>
     /// Writes one recovery snapshot if the current dirty state is not already covered. The call
     /// never queues behind a manual save: a timer tick may be skipped, while Ctrl+S must win.
@@ -5298,6 +5857,84 @@ public sealed partial class EditorViewModel : ViewModelBase
             await ClearAutosaveIfCleanAsync().ConfigureAwait(false);
             return false;
         }
+
+        var primarySaved = await TryPrimaryAutosaveAsync().ConfigureAwait(false);
+        if (!Session.IsDirty)
+        {
+            return primarySaved;
+        }
+
+        var recoverySaved = await TryRecoveryAutosaveAsync().ConfigureAwait(false);
+        return primarySaved || recoverySaved;
+    }
+
+    /// <summary>
+    /// Coalesced atomic publication to the current .mapproj after the user has established that
+    /// destination with an explicit Save. This is intentionally distinct from recovery.
+    /// </summary>
+    public async Task<bool> TryPrimaryAutosaveAsync(bool ignoreDebounce = false)
+    {
+        var now = _clock();
+        if (!_primaryAutosaveEnabled
+            || !_primaryAutosaveArmed
+            || string.IsNullOrWhiteSpace(DocumentPath)
+            || !Session.IsDirty
+            || HasTransientEditorAction
+            || ReferenceEquals(_lastPrimaryAutosavedDocument, Session.Document)
+            || !ignoreDebounce && (_lastCommittedEditUtc is null
+                || now - _lastCommittedEditUtc < PrimaryAutosaveDebounce)
+            || !await _saveGate.WaitAsync(0).ConfigureAwait(false))
+        {
+            return false;
+        }
+
+        try
+        {
+            var checkpoint = Session.CaptureSaveCheckpoint();
+            var snapshot = checkpoint.Document;
+            var metadata = new SaveMetadata(_appVersion, now, checkpoint.Revision);
+            var path = DocumentPath!;
+            SaveState = SaveState.Saving;
+            Raise(nameof(PrimaryAutosaveSummary));
+            try
+            {
+                await Task.Run(() =>
+                {
+                    var thumbnail = ThumbnailRenderer.RenderPng(snapshot);
+                    _store.Save(snapshot, path, metadata, thumbnail);
+                }).ConfigureAwait(false);
+
+                Session.MarkSaved(checkpoint);
+                _lastPrimaryAutosavedDocument = snapshot;
+                _lastPrimarySaveUtc = now;
+                SaveState = Session.IsDirty ? SaveState.Unsaved : SaveState.Saved;
+                _recent.Touch(path, snapshot.Id.Value, snapshot.Title, metadata.ModifiedUtc);
+                if (!Session.IsDirty)
+                {
+                    ClearRecoveryAfterProvenSave();
+                }
+                RaiseSessionState();
+                Raise(nameof(PrimaryAutosaveSummary));
+                _log.Info($"PRIMARY_AUTOSAVE_SUCCEEDED revision={checkpoint.Revision}");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                SaveState = SaveState.SaveFailed;
+                StatusDetail = "Автосохранение не удалось. Повторите Save или выберите «Сохранить как…».";
+                Raise(nameof(PrimaryAutosaveSummary));
+                _log.Error("PRIMARY_AUTOSAVE_FAILED", ex);
+                return false;
+            }
+        }
+        finally
+        {
+            _saveGate.Release();
+        }
+    }
+
+    private async Task<bool> TryRecoveryAutosaveAsync()
+    {
 
         if (ReferenceEquals(_lastAutosavedDocument, Session.Document)
             || !await _saveGate.WaitAsync(0).ConfigureAwait(false))
@@ -5323,6 +5960,7 @@ public sealed partial class EditorViewModel : ViewModelBase
 
                 _lastAutosavedDocument = snapshot;
                 _lastAutosaveUtc = timestamp;
+                _recoveryAvailable = true;
                 AutosaveState = AutosaveState.Saved;
                 _log.Info($"AUTOSAVE_SUCCEEDED revision={checkpoint.Revision}");
                 return true;
@@ -5344,7 +5982,12 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     private async Task<bool> ClearAutosaveIfCleanAsync()
     {
-        if (_lastAutosavedDocument is null || !await _saveGate.WaitAsync(0).ConfigureAwait(false))
+        if (!_recoveryAvailable && _lastAutosavedDocument is null)
+        {
+            return false;
+        }
+
+        if (!await _saveGate.WaitAsync(0).ConfigureAwait(false))
         {
             return false;
         }
@@ -5371,8 +6014,26 @@ public sealed partial class EditorViewModel : ViewModelBase
     {
         _lastAutosavedDocument = null;
         _lastAutosaveUtc = null;
+        _recoveryAvailable = false;
         AutosaveState = AutosaveState.Idle;
         Raise(nameof(AutosaveSummary));
+        Raise(nameof(RecoveryAvailable));
+    }
+
+    private void ClearRecoveryAfterProvenSave()
+    {
+        try
+        {
+            _store.ClearRecovery(Session.Document.Id.Value);
+            ForgetAutosave();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _recoveryAvailable = true;
+            Raise(nameof(RecoveryAvailable));
+            Raise(nameof(AutosaveSummary));
+            _log.Error("RECOVERY_CLEANUP_AFTER_SAVE_FAILED", ex);
+        }
     }
 
     // ---------------------------------------------------------------- saving
@@ -5414,10 +6075,17 @@ public sealed partial class EditorViewModel : ViewModelBase
 
                 DocumentPath = path;
                 Session.MarkSaved(checkpoint);
-                ForgetAutosave();
+                _primaryAutosaveArmed = true;
+                _lastPrimaryAutosavedDocument = snapshot;
+                _lastPrimarySaveUtc = metadata.ModifiedUtc;
                 SaveState = Session.IsDirty ? SaveState.Unsaved : SaveState.Saved;
+                if (!Session.IsDirty)
+                {
+                    ClearRecoveryAfterProvenSave();
+                }
                 Raise(nameof(DocumentPath));
                 RaiseSessionState();
+                Raise(nameof(PrimaryAutosaveSummary));
 
                 _recent.Touch(path!, Session.Document.Id.Value, snapshot.Title, metadata.ModifiedUtc);
                 _log.Info($"SAVE_SUCCEEDED revision={checkpoint.Revision}");
@@ -5442,18 +6110,27 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// <summary>True when it is safe to leave the editor. Never loses work silently.</summary>
     public async Task<bool> ConfirmCloseAsync()
     {
+        bool allowClose;
         if (!Session.IsDirty)
         {
-            return _lastAutosavedDocument is null
+            allowClose = _lastAutosavedDocument is null
                 || await DiscardRecoveryAsync().ConfigureAwait(false);
         }
-
-        return await _prompts.ConfirmCloseDirtyAsync(Session.Document.Title).ConfigureAwait(false) switch
+        else
         {
-            CloseChoice.Save => await SaveAsync().ConfigureAwait(false) && !Session.IsDirty,
-            CloseChoice.DontSave => await DiscardRecoveryAsync().ConfigureAwait(false),
-            _ => false,
-        };
+            allowClose = await _prompts.ConfirmCloseDirtyAsync(Session.Document.Title).ConfigureAwait(false) switch
+            {
+                CloseChoice.Save => await SaveAsync().ConfigureAwait(false) && !Session.IsDirty,
+                CloseChoice.DontSave => await DiscardRecoveryAsync().ConfigureAwait(false),
+                _ => false,
+            };
+        }
+
+        if (allowClose)
+        {
+            CancelPlacement();
+        }
+        return allowClose;
     }
 
     private async Task<bool> DiscardRecoveryAsync()

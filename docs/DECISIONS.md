@@ -240,3 +240,24 @@
 - **GitHub:** будущий remote/repository/Project не определяет product HEAD и не является источником
   истины. Внешняя связка создаётся только по прямому разрешению владельца; до этого локальная
   разработка продолжается без блокировки.
+
+## DEC-018 — Primary autosave после первого явного Save и отдельное recovery
+
+- **Статус:** `accepted`
+- **Принято владельцем:** 2026-09-01, прямым поручением выполнить Stage 14 полностью.
+- **Дата:** 2026-09-01
+- **Решение:** новый документ не выбирает путь автоматически. Первый явный `Save` атомарно
+  публикует `.mapproj` через существующий `MapProjectStore.Save`; после него committed-изменения
+  coalesce-ятся с idle debounce 4 секунды и сохраняются в тот же текущий path. `Ctrl+S` остаётся
+  немедленным и имеет приоритет через общий save gate.
+- **Согласованность:** primary autosave захватывает immutable revision checkpoint. Изменение во
+  время I/O остаётся dirty и попадает в следующий coalesced save; transient placement, drag,
+  stroke, vector и canvas workflow блокируют старт фоновой публикации до commit/cancel.
+- **Recovery:** crash-recovery snapshot остаётся отдельным механизмом и отдельным честным
+  статусом. Primary и recovery используют общий gate, не interleave; recovery удаляется только
+  после доказанного clean primary save. Ошибка primary не выдаётся за recovery-success и не
+  изменяет прежний destination.
+- **Локальная настройка:** включение autosave и placement auto-select хранятся в атомарном
+  app-local preferences-файле, не в `.mapproj`.
+- **Supersedes:** только узкую operational-часть DEC-008 о том, что autosave никогда не обновляет
+  основной файл. Atomic save, recovery, dirty-state и запрет тихой потери данных сохраняются.

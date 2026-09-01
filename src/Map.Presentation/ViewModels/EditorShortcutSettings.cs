@@ -493,6 +493,7 @@ public sealed class EditorShortcutSettings
         EditorTool.Brush => Commands.Brush,
         EditorTool.Mask => Commands.Mask,
         EditorTool.Land => Commands.Land,
+        EditorTool.Notes => Commands.Notes,
         _ => "",
     };
 

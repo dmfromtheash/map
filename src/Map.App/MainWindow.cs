@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -29,6 +30,8 @@ public sealed class MainWindow : Window
     private readonly AssetCatalog _assets;
     private readonly ShortcutSettingsStore _shortcutStore;
     private readonly EditorShortcutSettings _shortcuts;
+    private readonly EditorPreferencesStore _editorPreferencesStore;
+    private EditorLocalPreferences _editorPreferences;
     private readonly ContentControl _host = new() { Name = "ViewHost" };
     private readonly DashboardViewModel _dashboard;
     private readonly DispatcherTimer _autosaveTimer;
@@ -59,6 +62,13 @@ public sealed class MainWindow : Window
         {
             _shortcutLoadWarning = shortcutLoadWarning;
         }
+        var preferencesPath = TestMode.Enabled
+            ? Path.Combine(
+                AppPaths.ResolveTestProfileRoot(TestMode.ProfileRootOverride),
+                "editor-preferences.json")
+            : AppPaths.EditorPreferencesPath;
+        _editorPreferencesStore = new EditorPreferencesStore(preferencesPath);
+        _editorPreferences = _editorPreferencesStore.Load();
 
         Title = $"Map · {AppVersion.Current}";
         Name = "MainWindow";
@@ -150,7 +160,13 @@ public sealed class MainWindow : Window
             assetCatalog: _assets,
             shortcuts: _shortcuts,
             exportDestinationPicker: new AvaloniaExportDestinationPicker(this),
-            folderLauncher: new WindowsFolderLauncher());
+            folderLauncher: new WindowsFolderLauncher(),
+            localPreferences: _editorPreferences,
+            saveLocalPreferences: preferences =>
+            {
+                _editorPreferences = preferences;
+                _editorPreferencesStore.Save(preferences);
+            });
 
     private async Task NewMapAsync()
     {

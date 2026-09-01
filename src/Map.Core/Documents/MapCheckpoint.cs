@@ -106,4 +106,7 @@ public sealed class MapCheckpoint
     public DateTimeOffset CreatedUtc { get; }
     public MapCheckpointSnapshot Snapshot { get; }
     public ReadOnlyMemory<byte> PreviewPng => _previewPng;
+
+    public MapCheckpoint WithName(string name) => new(
+        Id, name, CreatedUtc, Snapshot, _previewPng);
 }

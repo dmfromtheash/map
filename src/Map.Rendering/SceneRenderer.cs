@@ -160,6 +160,16 @@ public sealed class RenderOptions
     /// </summary>
     public IReadOnlyList<SceneObject>? ObjectOverrides { get; init; }
 
+    /// <summary>
+    /// Bounded transient objects for an armed placement. They are drawn only by editor callers,
+    /// after all document layers, and never participate in indexes, exports or thumbnails.
+    /// </summary>
+    public IReadOnlyList<SceneObject>? PlacementPreviewObjects { get; init; }
+
+    public WorldBounds? PlacementArea { get; init; }
+
+    public bool PlacementInvalid { get; init; }
+
     public TileImageCache? TileCache { get; init; }
 
     /// <summary>Render-context-local cache used only by the editor overview tier.</summary>
@@ -268,6 +278,7 @@ public static class SceneRenderer
             DrawLayer(canvas, document, layer, view, options);
         }
 
+        DrawPlacementPreview(canvas, options);
         DrawSelectionChrome(canvas, document, options);
         canvas.Restore();
         DrawBoundaryOverlay(canvas, options.BoundaryOverlay, options.ViewScale);
@@ -1762,6 +1773,44 @@ public static class SceneRenderer
         if (options.Marquee is { } marquee)
         {
             DrawMarquee(canvas, marquee, viewScale);
+        }
+    }
+
+    private static void DrawPlacementPreview(SKCanvas canvas, RenderOptions options)
+    {
+        if (options.PlacementPreviewObjects is not { Count: > 0 } preview)
+        {
+            return;
+        }
+
+        foreach (var sceneObject in preview)
+        {
+            DrawObject(canvas, sceneObject, options);
+        }
+
+        var scale = Math.Max(options.ViewScale, 0.01);
+        var accent = options.PlacementInvalid
+            ? new SKColor(239, 83, 80, 235)
+            : new SKColor(98, 196, 255, 235);
+        using var outline = new SKPaint
+        {
+            Style = SKPaintStyle.Stroke,
+            StrokeWidth = (float)(1.5 / scale),
+            Color = accent,
+            IsAntialias = true,
+            PathEffect = SKPathEffect.CreateDash(
+                [(float)(7 / scale), (float)(5 / scale)], 0),
+        };
+
+        if (options.PlacementArea is { } area)
+        {
+            canvas.DrawOval(ToRect(area), outline);
+        }
+        else
+        {
+            // One clear outline is enough for a primitive/stamp; a scatter already has its area
+            // ring and outlining sixty-four samples would turn the ghost into visual noise.
+            canvas.DrawRect(ToRect(SceneGeometry.BoundsOf(preview[0])), outline);
         }
     }
 

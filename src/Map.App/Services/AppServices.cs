@@ -97,7 +97,7 @@ public sealed class DialogPrompts(Window owner) : IUserPrompts
     public Task<bool> ConfirmRestoreCheckpointAsync(string checkpointName) =>
         Dispatcher.UIThread.InvokeAsync(() => ConfirmationWindow.ShowAsync(
             owner,
-            "Восстановить контрольную точку?",
+            "Восстановить версию?",
             $"Текущее состояние карты будет заменено состоянием «{checkpointName}». "
                 + "Это действие можно отменить одной командой Undo.",
             "Восстановить",
@@ -106,8 +106,8 @@ public sealed class DialogPrompts(Window owner) : IUserPrompts
     public Task<bool> ConfirmDeleteCheckpointAsync(string checkpointName) =>
         Dispatcher.UIThread.InvokeAsync(() => ConfirmationWindow.ShowAsync(
             owner,
-            "Удалить контрольную точку?",
-            $"Контрольная точка «{checkpointName}» будет удалена. Текущая карта не изменится.",
+            "Удалить версию?",
+            $"Версия «{checkpointName}» будет удалена. Текущая карта не изменится.",
             "Удалить",
             "DeleteCheckpointConfirmButton",
             destructive: true));
