@@ -113,6 +113,13 @@ public static class EditorLabels
         "HardLight" => "Жёсткий свет",
         "Difference" => "Разница",
         "Add" => "Сложение",
+        "ColorBurn" => "Затемнение основы",
+        "ColorDodge" => "Осветление основы",
+        "Exclusion" => "Исключение",
+        "Hue" => "Оттенок",
+        "Saturation" => "Насыщенность",
+        "Color" => "Цвет",
+        "Luminosity" => "Светимость",
         _ => blend,
     };
 

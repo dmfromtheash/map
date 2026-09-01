@@ -445,6 +445,27 @@ public static class AssetLibraryStore
             {
                 return $"вариант «{variant.Label}» ссылается на отсутствующее содержимое";
             }
+
+            if (variant.MaskSha256 is { } maskSha)
+            {
+                if (string.Equals(maskSha, variant.Sha256, StringComparison.OrdinalIgnoreCase))
+                {
+                    return $"вариант «{variant.Label}» использует изображение как собственную маску";
+                }
+                if (!IsSha256(maskSha) || !contentHashes.Contains(maskSha))
+                {
+                    return $"вариант «{variant.Label}» ссылается на отсутствующую маску";
+                }
+
+                var visual = records.First(record =>
+                    string.Equals(record.Sha256, variant.Sha256, StringComparison.OrdinalIgnoreCase));
+                var mask = records.First(record =>
+                    string.Equals(record.Sha256, maskSha, StringComparison.OrdinalIgnoreCase));
+                if (visual.Width != mask.Width || visual.Height != mask.Height)
+                {
+                    return $"маска варианта «{variant.Label}» имеет другой размер";
+                }
+            }
         }
 
         var collectionIds = new HashSet<string>(collections.Count, StringComparer.Ordinal);

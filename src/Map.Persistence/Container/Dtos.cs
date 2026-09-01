@@ -39,6 +39,14 @@ internal sealed class SceneDto
     [JsonPropertyName("documentId")] public string DocumentId { get; set; } = "";
     [JsonPropertyName("layers")] public List<LayerDto> Layers { get; set; } = [];
     [JsonPropertyName("notes")] public List<NoteDto> Notes { get; set; } = [];
+    [JsonPropertyName("stampForeground")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public StampForegroundDto? StampForeground { get; set; }
+}
+
+internal sealed class StampForegroundDto
+{
+    [JsonPropertyName("tiles")] public List<TileDto> Tiles { get; set; } = [];
 }
 
 internal sealed class LayerDto
@@ -261,12 +269,24 @@ internal sealed class StampStyleDto
     public double? ReferenceHeight { get; set; }
     [JsonPropertyName("flipHorizontal")] public bool FlipHorizontal { get; set; }
     [JsonPropertyName("flipVertical")] public bool FlipVertical { get; set; }
+    [JsonPropertyName("maskAssetSha256")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? MaskAssetSha256 { get; set; }
+    [JsonPropertyName("clipMaskEnabled")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? ClipMaskEnabled { get; set; }
     [JsonPropertyName("blend")] public string Blend { get; set; } = "Normal";
     [JsonPropertyName("blur")] public double Blur { get; set; }
     [JsonPropertyName("shadowOffsetX")] public double ShadowOffsetX { get; set; } = 4;
     [JsonPropertyName("shadowOffsetY")] public double ShadowOffsetY { get; set; } = 4;
     [JsonPropertyName("shadowBlur")] public double ShadowBlur { get; set; } = 6;
     [JsonPropertyName("shadowOpacity")] public double ShadowOpacity { get; set; }
+    [JsonPropertyName("shadowPlacement")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ShadowPlacement { get; set; }
+    [JsonPropertyName("shadowColor")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ShadowColor { get; set; }
     [JsonPropertyName("hue")] public double Hue { get; set; }
     [JsonPropertyName("saturation")] public double Saturation { get; set; }
     [JsonPropertyName("brightness")] public double Brightness { get; set; }

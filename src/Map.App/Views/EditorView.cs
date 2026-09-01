@@ -62,6 +62,9 @@ public sealed class EditorView : UserControl
     private readonly TextBox _widthBox = NumberBox("WidthBox");
     private readonly TextBox _heightBox = NumberBox("HeightBox");
     private readonly TextBox _rotationBox = NumberBox("RotationBox");
+    private Control _rotationInspectorRow = null!;
+    private Control _sublayerInspectorRow = null!;
+    private Control _opacityInspectorRow = null!;
 
     // ------------------------------------------------------------- side lists
     private readonly StackPanel _layerList = new() { Spacing = 2 };
@@ -320,10 +323,12 @@ public sealed class EditorView : UserControl
     private StackPanel _stampAreaControls = null!;
     private (int First, int Count) _reportedLibraryRange = (-1, -1);
     private int _lastSelectedLibraryRow = -1;
-    private ToggleButton _randomAngleToggle = null!;
     private ToggleButton _randomFlipToggle = null!;
     private TextBlock _stampToolCurrentText = null!;
     private TextBlock _stampToolAreaText = null!;
+    private Image _stampToolThumbnail = null!;
+    private StackPanel _stampRecentStrip = null!;
+    private StackPanel _stampFavoriteStrip = null!;
     private bool _syncingLibrary;
     private readonly ThumbnailCache _thumbnails = new(96);
     private readonly CheckpointPreviewCache _checkpointPreviews = new();
@@ -443,6 +448,18 @@ public sealed class EditorView : UserControl
     public bool ContextPanelCollapsed => _contextCollapsed;
     public bool RightPanelCollapsed => _sideCollapsed;
     public bool AssetCatalogVisible => _assetCatalogWindow?.IsVisible == true;
+    public bool StampCompactCurrentThumbnailVisibleForSmoke =>
+        _stampToolThumbnail is { Bounds.Width: > 0, Bounds.Height: > 0, Source: not null };
+    public int StampCompactRecentCountForSmoke => _stampRecentStrip?.Children.Count ?? 0;
+    public int StampCompactFavoriteCountForSmoke => _stampFavoriteStrip?.Children.Count ?? 0;
+
+    public bool ShowFutureClipMaskForSmoke()
+    {
+        var group = this.GetVisualDescendants().OfType<Control>()
+            .FirstOrDefault(control => control.Name == "FutureStampClipMaskGroup");
+        group?.BringIntoView();
+        return group is not null;
+    }
 
     public bool CreateVersionThroughUiForSmoke()
     {
@@ -1160,9 +1177,11 @@ public sealed class EditorView : UserControl
                 Explanation(EditorLabels.ToolHint(EditorTool.Stamp)),
                 current,
                 area,
+                BuildCompactStampCatalog(),
                 ShortcutTextButton("OpenLibraryButton", "Открыть библиотеку",
                     EditorShortcutSettings.Commands.StampFocusLibrary,
                     () => OpenAssetCatalog(focusSearch: true), "compact"),
+                BuildStampEditor("FutureStamp"),
                 _stampGestureBlock,
                 Ui.TextButton(
                     "CreateStampPlacementLayerButton",
@@ -1585,7 +1604,7 @@ public sealed class EditorView : UserControl
         }).Named("CompositionObjectActions");
     }
 
-    /// <summary>The stamp's own block: replace, proportional scale, both flips, appearance.</summary>
+    /// <summary>The selected stamp adds only selection-specific commands around the shared editor.</summary>
     private Control BuildStampSection()
     {
         var replace = Ui.TextButton("StampReplaceAssetButton", "Заменить ассет…", () =>
@@ -1595,12 +1614,6 @@ public sealed class EditorView : UserControl
         ToolTip.SetTip(replace,
             "Открывает библиотеку. Выберите набор и нажмите «Заменить ассет выделенного штампа» — " +
             "положение, размер, поворот и эффекты сохранятся.");
-
-        var scale = AppearanceSlider("StampScaleSlider", "Масштаб", 10, 400, "%",
-            () => _editor.StampScalePercent,
-            (value, commit) => _editor.SetStampScalePercent(value, commit), 5,
-            ResetGlyph("StampScaleResetButton", "Сбросить масштаб к 100 %",
-                () => _editor.SetStampScalePercent(100)));
 
         var aspect = new ToggleButton { Content = "Сохранять пропорции" }
             .Named("StampAspectLockToggle").Classed("segment");
@@ -1613,22 +1626,76 @@ public sealed class EditorView : UserControl
             Ui.SetClass(aspect, "active", _editor.StampAspectLocked);
         });
 
-        var flips = new StackPanel
+        return Ui.Section("Штамп", new StackPanel
+        {
+            Spacing = 5,
+            Children = { replace, aspect, BuildStampEditor("SelectedStamp") },
+        }).Named("StampObjectActions");
+    }
+
+    /// <summary>
+    /// One binding surface for both a future stamp and a selected stamp. The read side follows
+    /// <see cref="EditorViewModel.StampPanelStyle"/>; every write uses the same view-model API.
+    /// </summary>
+    private Control BuildStampEditor(string prefix)
+    {
+        StampStyle? Style() => _editor.StampPanelStyle;
+        var heading = new TextBlock { Name = prefix + "Heading", TextWrapping = TextWrapping.Wrap }
+            .Classed("role-panel");
+        _appearanceSyncs.Add(() =>
+        {
+            heading.Text = _editor.StampPanelHeading;
+            AutomationProperties.SetName(heading, heading.Text);
+        });
+
+        var flips = new WrapPanel
         {
             Orientation = Orientation.Horizontal,
-            Spacing = 2,
+            ItemSpacing = 2,
+            LineSpacing = 2,
             Children =
             {
-                AppearanceToggle("StampFlipHorizontalToggle", "Отразить по горизонтали",
-                    () => _editor.Session.SelectedObject?.Stamp?.FlipHorizontal,
-                    value => _editor.SetStampFlip(horizontal: value)),
-                AppearanceToggle("StampFlipVerticalToggle", "Отразить по вертикали",
-                    () => _editor.Session.SelectedObject?.Stamp?.FlipVertical,
-                    value => _editor.SetStampFlip(vertical: value)),
+                AppearanceToggle(prefix + "FlipHorizontalToggle", "Отразить по горизонтали",
+                    () => Style()?.FlipHorizontal, value => _editor.SetStampFlip(horizontal: value)),
+                AppearanceToggle(prefix + "FlipVerticalToggle", "Отразить по вертикали",
+                    () => Style()?.FlipVertical, value => _editor.SetStampFlip(vertical: value)),
             },
         };
 
-        StampStyle? Style() => _editor.Session.SelectedObject?.Stamp;
+        var shadowColor = new TextBox
+        {
+            Name = prefix + "ShadowColorBox",
+            MaxLength = 9,
+            PlaceholderText = "#AARRGGBB",
+        };
+        void CommitShadowColor() => _editor.SetStampShadowColor(shadowColor.Text);
+        shadowColor.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter) { CommitShadowColor(); e.Handled = true; }
+        };
+        shadowColor.LostFocus += (_, _) => CommitShadowColor();
+        _appearanceSyncs.Add(() => shadowColor.Text = Style()?.ShadowColor ?? AppearanceColor.OpaqueBlack);
+
+        var shadowState = AppearanceChoice(
+            prefix + "ShadowPlacementChoice", "Тень",
+            [
+                ("None", "Нет"),
+                ("Standard", "Стандартная"),
+                ("Custom", "Своя"),
+                ("Layer", "За слоем"),
+            ],
+            () => Style() is not { ShadowOpacity: > 0 } ? "None"
+                : Style()!.ShadowPlacement == StampShadowPlacement.Layer ? "Layer"
+                : IsStandardStampShadow(Style()!) ? "Standard" : "Custom",
+            value =>
+            {
+                if (value == "None") _editor.SetStampShadowNone();
+                else if (value == "Standard") _editor.SetStampShadowStandard();
+                else _editor.SetStampShadowPlacement(value == "Layer"
+                    ? StampShadowPlacement.Layer : StampShadowPlacement.Object);
+            });
+
+        var clipMask = BuildStampClipMaskGroup(prefix);
 
         var appearance = new Expander
         {
@@ -1639,49 +1706,185 @@ public sealed class EditorView : UserControl
                 Spacing = 4,
                 Children =
                 {
-                    BlendChoice("StampBlendChoice", () => Style()?.Blend, _editor.SetStampBlend),
-                    AppearanceSlider("StampBlurSlider", "Размытие", 0, 32, "px",
+                    BlendChoice(prefix + "BlendChoice", () => Style()?.Blend, _editor.SetStampBlend),
+                    AppearanceSlider(prefix + "BlurSlider", "Размытие", 0, 32, "px",
                         () => Style()?.Blur, (v, c) => _editor.SetStampBlur(v, c)),
-                    AppearanceSlider("StampHueSlider", "Оттенок", -180, 180, "°",
+                    AppearanceSlider(prefix + "HueSlider", "Оттенок", -180, 180, "°",
                         () => Style()?.Hue, (v, c) => _editor.SetStampHueDegrees(v, c), 5,
-                        ResetGlyph("StampHueResetButton", "Сбросить оттенок",
+                        ResetGlyph(prefix + "HueResetButton", "Сбросить оттенок",
                             () => _editor.SetStampHueDegrees(0))),
-                    AppearanceSlider("StampSaturationSlider", "Насыщенность", 0, 200, "%",
+                    AppearanceSlider(prefix + "SaturationSlider", "Насыщенность", 0, 200, "%",
                         () => Style() is { } s ? ColorAdjustment.OffsetToPercent(s.Saturation) : null,
                         (v, c) => _editor.SetStampSaturationPercent(v, c), 5,
-                        ResetGlyph("StampSaturationResetButton", "Сбросить насыщенность",
+                        ResetGlyph(prefix + "SaturationResetButton", "Сбросить насыщенность",
                             () => _editor.SetStampSaturationPercent(100))),
-                    AppearanceSlider("StampBrightnessSlider", "Яркость", 0, 200, "%",
+                    AppearanceSlider(prefix + "BrightnessSlider", "Яркость", 0, 200, "%",
                         () => Style() is { } s ? ColorAdjustment.OffsetToPercent(s.Brightness) : null,
                         (v, c) => _editor.SetStampBrightnessPercent(v, c), 5,
-                        ResetGlyph("StampBrightnessResetButton", "Сбросить яркость",
+                        ResetGlyph(prefix + "BrightnessResetButton", "Сбросить яркость",
                             () => _editor.SetStampBrightnessPercent(100))),
-                    AppearanceSlider("StampContrastSlider", "Контраст", 0, 200, "%",
+                    AppearanceSlider(prefix + "ContrastSlider", "Контраст", 0, 200, "%",
                         () => Style() is { } s ? ColorAdjustment.OffsetToPercent(s.Contrast) : null,
                         (v, c) => _editor.SetStampContrastPercent(v, c), 5,
-                        ResetGlyph("StampContrastResetButton", "Сбросить контраст",
+                        ResetGlyph(prefix + "ContrastResetButton", "Сбросить контраст",
                             () => _editor.SetStampContrastPercent(100))),
-                    Ui.TextButton("StampResetColorsButton", "Сбросить цветокоррекцию",
+                    Ui.TextButton(prefix + "ResetColorsButton", "Сбросить цветокоррекцию",
                         _editor.ResetStampColorAdjustments, "compact"),
-                    ShadowBlock("Stamp",
+                    shadowState,
+                    Ui.PropertyRow("Цвет тени", shadowColor),
+                    ShadowBlock(prefix,
                         () => Style() is { } s
                             ? (s.ShadowOffsetX, s.ShadowOffsetY, s.ShadowBlur, s.ShadowOpacity)
                             : null,
                         _editor.SetStampShadowNone, _editor.SetStampShadowStandard,
                         (x, y, b, o, c) => _editor.SetStampShadow(x, y, b, o, c)),
-                    Ui.TextButton("StampResetAppearanceButton", "Сбросить весь внешний вид",
+                    Ui.TextButton(prefix + "ResetAppearanceButton", "Сбросить весь внешний вид",
                         _editor.ResetStampAppearance, "compact"),
                 },
             },
-        }.Named("StampAppearance");
+        }.Named(prefix + "Appearance");
         AutomationProperties.SetName(appearance, "Внешний вид");
 
-        return Ui.Section("Штамп", new StackPanel
+        return new StackPanel
         {
             Spacing = 5,
-            Children = { replace, scale, aspect, flips, appearance },
-        }).Named("StampObjectActions");
+            Children =
+            {
+                heading,
+                AppearanceSlider(prefix + "ScaleSlider", "Масштаб", 10, 400, "%",
+                    () => _editor.StampScalePercent,
+                    (value, commit) => _editor.SetStampScalePercent(value, commit), 5,
+                    ResetGlyph(prefix + "ScaleResetButton", "Сбросить масштаб к 100 %",
+                        () => _editor.SetStampScalePercent(100))),
+                AppearanceSlider(prefix + "RotationSlider", "Поворот", 0, 359, "°",
+                    () => _editor.StampRotationDegrees,
+                    (value, commit) => _editor.SetStampRotationDegrees(value, commit), 1,
+                    ResetGlyph(prefix + "RotationResetButton", "Сбросить поворот",
+                        () => _editor.SetStampRotationDegrees(0))),
+                AppearanceSlider(prefix + "SublayerSlider", "Подслой", -10, 10, "",
+                    () => _editor.StampSublayer,
+                    (value, commit) => _editor.SetStampSublayer((int)Math.Round(value), commit)),
+                flips,
+                AppearanceSlider(prefix + "OpacitySlider", "Непрозрачность", 0, 100, "%",
+                    () => _editor.StampOpacityPercent,
+                    (value, commit) => _editor.SetStampOpacityPercent(value, commit), 5),
+                clipMask,
+                appearance,
+            },
+        };
     }
+
+    private Control BuildStampClipMaskGroup(string prefix)
+    {
+        var thumbnail = new Image
+        {
+            Name = prefix + "ClipMaskThumbnail",
+            Width = 72,
+            Height = 72,
+            Stretch = Stretch.Uniform,
+            HorizontalAlignment = HorizontalAlignment.Left,
+        };
+        AutomationProperties.SetName(thumbnail, "Миниатюра Clip Mask");
+
+        var state = new TextBlock
+        {
+            Name = prefix + "ClipMaskState",
+            TextWrapping = TextWrapping.Wrap,
+        }.Classed("role-caption").Classed("faint");
+        var foregroundState = new TextBlock
+        {
+            Name = prefix + "StampForegroundState",
+            TextWrapping = TextWrapping.Wrap,
+        }.Classed("role-caption").Classed("faint");
+
+        var toggle = new ToggleButton { Content = "Clip Mask" }
+            .Named(prefix + "ClipMaskToggle").Classed("segment");
+        AutomationProperties.SetName(toggle, "Включить Clip Mask");
+        toggle.Click += (_, _) => _editor.SetStampClipMaskEnabled(toggle.IsChecked == true);
+
+        var assign = Ui.TextButton(
+            prefix + "AssignClipMaskButton",
+            "Назначить маску…",
+            () => _ = AssignClipMaskAsync(),
+            "compact");
+        var remove = Ui.TextButton(
+            prefix + "RemoveClipMaskButton",
+            "Удалить маску",
+            () =>
+            {
+                _editor.RemoveCurrentVariantMask();
+                SyncAssetList();
+                SyncInspector();
+                SyncStatus();
+            },
+            "compact");
+        var createForeground = Ui.TextButton(
+            prefix + "CreateStampForegroundButton",
+            "Создать foreground",
+            _editor.CreateStampForegroundSurface,
+            "compact");
+        var editForeground = Ui.TextButton(
+            prefix + "EditStampForegroundButton",
+            "Редактировать foreground",
+            _editor.EditStampForegroundSurface,
+            "compact");
+
+        _appearanceSyncs.Add(() =>
+        {
+            thumbnail.Source = _thumbnails.Image(_editor.StampClipMaskThumbnailPath);
+            thumbnail.IsVisible = thumbnail.Source is not null;
+            state.Text = _editor.StampClipMaskStatus;
+            foregroundState.Text = _editor.StampForegroundStatus;
+            toggle.IsChecked = _editor.StampPanelStyle?.ClipMaskEnabled == true;
+            toggle.IsEnabled = _editor.StampClipMaskCanToggle;
+            Ui.SetClass(toggle, "active", toggle.IsChecked == true);
+            assign.IsEnabled = _editor.StampPanelCanEditLibraryMask;
+            assign.Content = _editor.StampPanelVariantHasLibraryMask
+                ? "Заменить маску…"
+                : "Назначить маску…";
+            remove.IsEnabled = _editor.StampPanelVariantHasLibraryMask;
+            createForeground.IsEnabled = _editor.Session.Document.StampForeground is null;
+            editForeground.IsEnabled = _editor.Session.Document.StampForeground is not null;
+        });
+
+        return new Border
+        {
+            Child = new StackPanel
+            {
+                Spacing = 5,
+                Children =
+                {
+                    new TextBlock { Text = "Clip Mask" }.Classed("role-panel"),
+                    thumbnail,
+                    toggle,
+                    state,
+                    new WrapPanel
+                    {
+                        Orientation = Orientation.Horizontal,
+                        ItemSpacing = 4,
+                        LineSpacing = 4,
+                        Children = { assign, remove },
+                    },
+                    foregroundState,
+                    new WrapPanel
+                    {
+                        Orientation = Orientation.Horizontal,
+                        ItemSpacing = 4,
+                        LineSpacing = 4,
+                        Children = { createForeground, editForeground },
+                    },
+                },
+            },
+        }.Classed("group").Named(prefix + "ClipMaskGroup");
+    }
+
+    private static bool IsStandardStampShadow(StampStyle style) =>
+        style.ShadowPlacement == StampShadowPlacement.Object
+        && Math.Abs(style.ShadowOffsetX - ShadowPreset.StandardOffsetX) < 0.001
+        && Math.Abs(style.ShadowOffsetY - ShadowPreset.StandardOffsetY) < 0.001
+        && Math.Abs(style.ShadowBlur - ShadowPreset.StandardBlur) < 0.001
+        && Math.Abs(style.ShadowOpacity - ShadowPreset.StandardOpacity) < 0.001
+        && style.ShadowColor == AppearanceColor.OpaqueBlack;
 
     /// <summary>Stroke controls shared verbatim by the line and the shape inspectors.</summary>
     private StackPanel BuildStrokeControls(string prefix)
@@ -2107,6 +2310,14 @@ public sealed class EditorView : UserControl
         _inspectorError.TextWrapping = TextWrapping.Wrap;
         _inspectorError.Classes.Add("danger");
 
+        _rotationInspectorRow = Ui.PropertyRow("Поворот", _rotationBox, "°");
+        _sublayerInspectorRow = AppearanceNumberBox("SublayerBox", "Подслой", null,
+            () => _editor.Session.SelectedObject?.Sublayer,
+            value => _editor.SetSelectedSublayer((int)Math.Round(value)));
+        _opacityInspectorRow = AppearanceSlider("ObjectOpacitySlider", "Непрозрачность", 0, 100, "%",
+            () => _editor.Session.SelectedObject?.ObjectOpacity * 100,
+            (value, commit) => _editor.SetSelectedOpacityPercent(value, commit), 5);
+
         return new StackPanel
         {
             Spacing = 2,
@@ -2116,14 +2327,10 @@ public sealed class EditorView : UserControl
                 Ui.PropertyRow("Y", _yBox, "px"),
                 Ui.PropertyRow("Ширина", _widthBox, "px"),
                 Ui.PropertyRow("Высота", _heightBox, "px"),
-                Ui.PropertyRow("Поворот", _rotationBox, "°"),
+                _rotationInspectorRow,
                 apply,
-                AppearanceNumberBox("SublayerBox", "Подслой", null,
-                    () => _editor.Session.SelectedObject?.Sublayer,
-                    value => _editor.SetSelectedSublayer((int)Math.Round(value))),
-                AppearanceSlider("ObjectOpacitySlider", "Непрозрачность", 0, 100, "%",
-                    () => _editor.Session.SelectedObject?.ObjectOpacity * 100,
-                    (value, commit) => _editor.SetSelectedOpacityPercent(value, commit), 5),
+                _sublayerInspectorRow,
+                _opacityInspectorRow,
                 _inspectorError,
             },
         };
@@ -3622,13 +3829,19 @@ public sealed class EditorView : UserControl
                 _editor.RandomVariantAfterPlacement = !_editor.RandomVariantAfterPlacement;
                 SyncAssetList();
             });
-        _randomAngleToggle = LabelledToggle(
-            "RandomAngleToggle", "Поворачивать", "Случайный угол поворота каждого штампа",
-            MapIcons.Redo, () =>
-            {
-                _editor.StampRandomAngle = !_editor.StampRandomAngle;
-                SyncAssetList();
-            });
+        var randomAngleChoice = AppearanceChoice(
+            "RandomAngleStepChoice", "Случайный угол",
+            [
+                (nameof(StampRandomAngleStep.Off), "Выкл."),
+                (nameof(StampRandomAngleStep.Degrees15), "15°"),
+                (nameof(StampRandomAngleStep.Degrees30), "30°"),
+                (nameof(StampRandomAngleStep.Degrees45), "45°"),
+                (nameof(StampRandomAngleStep.Degrees60), "60°"),
+                (nameof(StampRandomAngleStep.Degrees90), "90°"),
+                (nameof(StampRandomAngleStep.Degrees180), "180°"),
+            ],
+            () => _editor.StampRandomAngleStep.ToString(),
+            value => _editor.StampRandomAngleStep = Enum.Parse<StampRandomAngleStep>(value));
         _randomFlipToggle = LabelledToggle(
             "RandomFlipToggle", "Отражать", "Случайное зеркальное отражение штампа",
             MapIcons.Select, () =>
@@ -3642,28 +3855,20 @@ public sealed class EditorView : UserControl
             Spacing = 6,
             Children =
             {
-                Ui.SliderRow("StampAreaSlider", "Радиус", 1, 1024, _editor.StampAreaRadius, "ед.",
-                    value =>
-                    {
-                        _editor.StampAreaRadius = value;
-                        SyncStampGestureReadout();
-                    }),
-                Ui.SliderRow("StampDensitySlider", "Плотность", 0, 400, _editor.StampDensity, "",
-                    value =>
-                    {
-                        _editor.StampDensity = value;
-                        SyncStampGestureReadout();
-                    }),
+                AppearanceSlider("StampAreaSlider", "Радиус", 1, 1024, "ед.",
+                    () => _editor.StampAreaRadius,
+                    (value, commit) => _editor.SetStampAreaRadius(value, commit)),
+                AppearanceSlider("StampDensitySlider", "Плотность", 0, 400, "",
+                    () => _editor.StampDensity,
+                    (value, commit) => _editor.SetStampDensity(value, commit)),
                 _stampAreaSummaryText,
                 Disclosure(
                     "StampScatterDetails",
-                    "Разброс и поворот",
-                    new WrapPanel
+                    "Больше параметров",
+                    new StackPanel
                     {
-                        Orientation = Orientation.Horizontal,
-                        ItemSpacing = 4,
-                        LineSpacing = 4,
-                        Children = { _randomAngleToggle, _randomFlipToggle },
+                        Spacing = 4,
+                        Children = { _randomVariantToggle, randomAngleChoice, _randomFlipToggle },
                     },
                     expanded: false),
             },
@@ -3681,7 +3886,6 @@ public sealed class EditorView : UserControl
                     new TextBlock { Text = "Автовыбор" }.Classed("role-panel"),
                     autoSelect,
                     _stampAreaControls,
-                    _randomVariantToggle,
                     AssetCommand("ReplaceStampVariantButton", "Заменить ассет выделенного штампа", () =>
                     {
                         _editor.ReplaceSelectedStampWithCurrentVariant();
@@ -3783,6 +3987,96 @@ public sealed class EditorView : UserControl
         SyncStampToolPanel();
     }
 
+    private Control BuildCompactStampCatalog()
+    {
+        _stampToolThumbnail = new Image
+        {
+            Width = 72,
+            Height = 72,
+            Stretch = Stretch.Uniform,
+        };
+        _stampRecentStrip = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+        _stampFavoriteStrip = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+        var variantButtons = new StackPanel
+        {
+            Margin = new Thickness(8, 0, 0, 0),
+            Spacing = 4,
+            Children =
+            {
+                Ui.TextButton("StampPreviousVariantButton", "Предыдущий", () =>
+                {
+                    _editor.PreviousVariant();
+                    SyncStampToolPanel();
+                }, "compact"),
+                Ui.TextButton("StampNextVariantButton", "Следующий", () =>
+                {
+                    _editor.NextVariant();
+                    SyncStampToolPanel();
+                }, "compact"),
+            },
+        };
+        Grid.SetColumn(variantButtons, 1);
+        var currentVariant = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("72,*"),
+            Children = { _stampToolThumbnail, variantButtons },
+        };
+
+        return new StackPanel
+        {
+            Spacing = 4,
+            Children =
+            {
+                currentVariant,
+                new TextBlock { Text = "Недавние" }.Classed("faint", "role-caption"),
+                _stampRecentStrip,
+                new TextBlock { Text = "Избранное" }.Classed("faint", "role-caption"),
+                _stampFavoriteStrip,
+            },
+        };
+    }
+
+    private Button CompactStampSetButton(AssetSetSummary summary, string prefix)
+    {
+        var image = _thumbnails.Image(_editor.LibraryThumbnailPath(summary));
+        var button = new Button
+        {
+            Name = prefix + "_" + Sanitize(summary.SetId),
+            Width = 72,
+            Padding = new Thickness(3),
+            Content = new StackPanel
+            {
+                Spacing = 2,
+                Children =
+                {
+                    new Border
+                    {
+                        Width = 40,
+                        Height = 40,
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        Child = image is null
+                            ? MapIcons.Stroked(MapIcons.Missing, 18)
+                            : new Image { Source = image, Stretch = Stretch.Uniform },
+                    },
+                    new TextBlock
+                    {
+                        Text = summary.Name,
+                        TextTrimming = TextTrimming.CharacterEllipsis,
+                        TextAlignment = Avalonia.Media.TextAlignment.Center,
+                        FontSize = 10,
+                    },
+                },
+            },
+        }.Classed("compact");
+        AutomationProperties.SetName(button, $"Выбрать набор {summary.Name}");
+        button.Click += (_, _) =>
+        {
+            _editor.SelectAssetSet(summary.SetId);
+            SyncStampToolPanel();
+        };
+        return button;
+    }
+
     private void SyncStampToolPanel()
     {
         if (_stampToolCurrentText is null || _stampToolAreaText is null)
@@ -3795,6 +4089,22 @@ public sealed class EditorView : UserControl
             ? "Набор не выбран. Откройте библиотеку и выберите карточку."
             : $"{set.Name} · вариант {_editor.CurrentVariantLabel}";
         _stampToolAreaText.Text = _editor.StampAreaSummary;
+        _stampToolThumbnail.Source = _thumbnails.Image(
+            _editor.CurrentVariant is { } variant
+                ? _editor.LibraryThumbnailPathForVariant(variant.Id)
+                : null);
+        _stampRecentStrip.Children.Clear();
+        foreach (var recent in _editor.CompactRecentSets)
+        {
+            _stampRecentStrip.Children.Add(CompactStampSetButton(recent, "StampRecentSet"));
+        }
+        _stampFavoriteStrip.Children.Clear();
+        foreach (var favorite in _editor.CompactFavoriteSets)
+        {
+            _stampFavoriteStrip.Children.Add(CompactStampSetButton(favorite, "StampFavoriteSet"));
+        }
+        _stampRecentStrip.IsVisible = _stampRecentStrip.Children.Count > 0;
+        _stampFavoriteStrip.IsVisible = _stampFavoriteStrip.Children.Count > 0;
         AutomationProperties.SetName(_stampToolCurrentText, _stampToolCurrentText.Text);
         AutomationProperties.SetName(_stampToolAreaText, _stampToolAreaText.Text);
     }
@@ -4754,6 +5064,15 @@ public sealed class EditorView : UserControl
                 SyncStampGestureReadout();
             }
 
+            if (e.PropertyName is nameof(EditorViewModel.StampToolSettings)
+                or nameof(EditorViewModel.CurrentVariant)
+                or nameof(EditorViewModel.CompactRecentSets)
+                or nameof(EditorViewModel.CompactFavoriteSets))
+            {
+                SyncAppearanceSections();
+                SyncStampToolPanel();
+            }
+
             if (e.PropertyName is nameof(EditorViewModel.CanvasWorkflowOpen)
                 or nameof(EditorViewModel.CanvasWorkflowMode)
                 or nameof(EditorViewModel.CanvasAnchor)
@@ -4984,6 +5303,11 @@ public sealed class EditorView : UserControl
         {
             box.IsEnabled = editable;
         }
+
+        var stampOwnsCommonProperties = _editor.Session.SelectedObject?.Stamp is not null;
+        _rotationInspectorRow.IsVisible = !stampOwnsCommonProperties;
+        _sublayerInspectorRow.IsVisible = !stampOwnsCommonProperties;
+        _opacityInspectorRow.IsVisible = !stampOwnsCommonProperties;
     }
 
     /// <summary>
@@ -5841,8 +6165,6 @@ public sealed class EditorView : UserControl
         SetToggle(
             _randomVariantToggle, "Случайный вариант после размещения", _editor.RandomVariantAfterPlacement);
         SetToggle(
-            _randomAngleToggle, "Случайный угол поворота каждого штампа", _editor.StampRandomAngle);
-        SetToggle(
             _randomFlipToggle, "Случайное зеркальное отражение штампа", _editor.StampRandomFlip);
 
         FillChoices(_libraryTagFilter, "Любой тег", _editor.LibraryTagChoices, _editor.LibraryTag);
@@ -6392,6 +6714,49 @@ public sealed class EditorView : UserControl
     }
 
     // ================================================================== actions
+
+    private async System.Threading.Tasks.Task AssignClipMaskAsync()
+    {
+        var topLevel = TopLevel.GetTopLevel(this);
+        if (topLevel is null)
+        {
+            return;
+        }
+
+        string? path;
+        if (UiTestFilePaths.NextImportGroup() is { } supplied)
+        {
+            path = supplied[0];
+        }
+        else
+        {
+            var files = await topLevel.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title = _editor.StampPanelVariantHasLibraryMask
+                    ? "Заменить Clip Mask"
+                    : "Назначить Clip Mask",
+                AllowMultiple = false,
+                FileTypeFilter =
+                [
+                    new FilePickerFileType("Изображения")
+                    {
+                        Patterns = ["*.png", "*.jpg", "*.jpeg", "*.webp"],
+                    },
+                ],
+            });
+            path = files.Count == 1 ? files[0].TryGetLocalPath() : null;
+        }
+
+        if (path is null)
+        {
+            return;
+        }
+
+        _editor.AssignCurrentVariantMask(path);
+        SyncAssetList();
+        SyncInspector();
+        SyncStatus();
+    }
 
     private void CommitInspector()
     {

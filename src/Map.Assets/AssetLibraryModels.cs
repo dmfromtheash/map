@@ -36,6 +36,11 @@ public sealed record AssetVariant
 {
     public required string Id { get; init; }
     public required string Sha256 { get; init; }
+    /// <summary>
+    /// Optional asset-owned clipping coverage. It is a separate content-addressed image, never
+    /// bytes duplicated into each variant or placed stamp.
+    /// </summary>
+    public string? MaskSha256 { get; init; }
     public required string Label { get; init; }
     public double AnchorX { get; init; } = 0.5;
     public double AnchorY { get; init; } = 0.5;

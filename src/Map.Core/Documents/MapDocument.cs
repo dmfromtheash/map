@@ -22,6 +22,7 @@ public sealed record MapDocument
         Assets = source.Assets;
         Notes = source.Notes;
         Checkpoints = source.Checkpoints;
+        StampForeground = source.StampForeground;
     }
 
     public MapDocument(
@@ -32,7 +33,8 @@ public sealed record MapDocument
         IReadOnlyList<MapLayer> layers,
         IReadOnlyList<MapAssetReference>? assets = null,
         IReadOnlyList<MapNote>? notes = null,
-        IReadOnlyList<MapCheckpoint>? checkpoints = null)
+        IReadOnlyList<MapCheckpoint>? checkpoints = null,
+        StampForegroundSurface? stampForeground = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
         ArgumentNullException.ThrowIfNull(canvas);
@@ -148,6 +150,7 @@ public sealed record MapDocument
         Assets = new ReadOnlyCollection<MapAssetReference>([.. assets]);
         Notes = new ReadOnlyCollection<MapNote>([.. notes]);
         Checkpoints = new ReadOnlyCollection<MapCheckpoint>([.. checkpoints]);
+        StampForeground = stampForeground;
 
         if (Assets.Select(asset => asset.Sha256).Distinct(StringComparer.OrdinalIgnoreCase).Count()
             != Assets.Count)
@@ -186,22 +189,28 @@ public sealed record MapDocument
     public IReadOnlyList<MapNote> Notes { get; init; }
     public IReadOnlyList<MapCheckpoint> Checkpoints { get; init; }
 
+    /// <summary>Optional map-wide paint revealed only through enabled per-stamp clip masks.</summary>
+    public StampForegroundSurface? StampForeground { get; init; }
+
     /// <summary>The mandatory background layer.</summary>
     public BaseColorLayer BaseColor => (BaseColorLayer)Layers[0];
 
     public MapLayer? FindLayer(LayerId id) => Layers.FirstOrDefault(l => l.Id == id);
 
     public MapDocument WithLayers(IReadOnlyList<MapLayer> layers) =>
-        new(Id, Title, CreatedUtc, Canvas, layers, Assets, Notes, Checkpoints);
+        new(Id, Title, CreatedUtc, Canvas, layers, Assets, Notes, Checkpoints, StampForeground);
 
     public MapDocument WithAssets(IReadOnlyList<MapAssetReference> assets) =>
-        new(Id, Title, CreatedUtc, Canvas, Layers, assets, Notes, Checkpoints);
+        new(Id, Title, CreatedUtc, Canvas, Layers, assets, Notes, Checkpoints, StampForeground);
 
     public MapDocument WithNotes(IReadOnlyList<MapNote> notes) =>
-        new(Id, Title, CreatedUtc, Canvas, Layers, Assets, notes, Checkpoints);
+        new(Id, Title, CreatedUtc, Canvas, Layers, Assets, notes, Checkpoints, StampForeground);
 
     public MapDocument WithCheckpoints(IReadOnlyList<MapCheckpoint> checkpoints) =>
-        new(Id, Title, CreatedUtc, Canvas, Layers, Assets, Notes, checkpoints);
+        new(Id, Title, CreatedUtc, Canvas, Layers, Assets, Notes, checkpoints, StampForeground);
+
+    public MapDocument WithStampForeground(StampForegroundSurface? surface) =>
+        new(Id, Title, CreatedUtc, Canvas, Layers, Assets, Notes, Checkpoints, surface);
 
     /// <summary>New snapshot with one layer replaced in place.</summary>
     public MapDocument WithLayer(LayerId id, Func<MapLayer, MapLayer> rewrite)

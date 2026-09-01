@@ -211,9 +211,9 @@ public sealed partial class EditorViewModel : ViewModelBase
     private EditorTool _activeTool;
     private EditorTool _previousTool = EditorTool.Select;
     private RasterStrokeSession? _stroke;
+    private bool _editingStampForeground;
     private List<VectorPoint>? _vectorPoints;
     private PlacementSession? _pendingPlacement;
-    private PlacementAutoSelectPolicy _placementAutoSelect;
 
     // ------------------------------------------------------- multi-selection state
     private string _objectSearchText = "";
@@ -263,15 +263,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     private string? _selectedSetId;
     private IReadOnlyList<AssetVariant> _selectedSetVariants = [];
     private int _currentVariantIndex;
-    private StampPlacementMode _stampPlacementMode = StampPlacementMode.One;
-    private double _stampAreaRadius = 160;
-    private double _stampDensity = 40;
-    private bool _randomVariantAfterPlacement;
-    // A scatter multiplies the chosen variant; it does not turn or mirror it. Both randomisations
-    // remain available as explicit toggles, because a forest wants them and a row of houses does
-    // not - but neither is something the user has to notice and switch off first.
-    private bool _stampRandomAngle;
-    private bool _stampRandomFlip;
+    private StampToolSettings _stampToolSettings = new();
     private int _gestureCounter;
     private readonly IAssetContentResolver? _assetResolver;
 
@@ -312,7 +304,10 @@ public sealed partial class EditorViewModel : ViewModelBase
         _exportDestinationPicker = exportDestinationPicker;
         _folderLauncher = folderLauncher;
         var preferences = localPreferences ?? new EditorLocalPreferences();
-        _placementAutoSelect = preferences.AutoSelect;
+        _stampToolSettings = NormalizeStampToolSettings(preferences.Stamp ?? new StampToolSettings
+        {
+            AutoSelect = preferences.AutoSelect,
+        });
         _primaryAutosaveEnabled = preferences.PrimaryAutosaveEnabled;
         _saveLocalPreferences = saveLocalPreferences;
         Shortcuts = shortcuts ?? new EditorShortcutSettings();
@@ -339,6 +334,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         if (assetCatalog is not null)
         {
             RefreshLibrary();
+            RestoreStampCatalogIdentity();
         }
 
         SceneChanged += (_, _) => RefreshOpenExportAfterSceneChange();
@@ -628,6 +624,10 @@ public sealed partial class EditorViewModel : ViewModelBase
             CancelStroke();
             CancelVectorDraw();
             CancelPlacement();
+            if (value != EditorTool.Brush)
+            {
+                _editingStampForeground = false;
+            }
             _previousTool = _activeTool;
             _activeTool = value;
             Raise();
@@ -649,11 +649,12 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public bool LandSubtract { get; set; }
 
-    public StrokePreview? StrokePreview => _stroke is null || _activeLayerId is null
+    public StrokePreview? StrokePreview => _stroke is null
+        || (!_editingStampForeground && _activeLayerId is null)
         ? null
         : new StrokePreview
         {
-            LayerId = _activeLayerId.Value,
+            LayerId = _activeLayerId ?? default,
             Coverage = _stroke.Coverage,
             Color = ActiveTool == EditorTool.Land && ActiveLayer is LandLayer land
                 ? land.EdgeStyle.FillColor
@@ -661,7 +662,10 @@ public sealed partial class EditorViewModel : ViewModelBase
             Opacity = _stroke.Settings.Opacity,
             Eraser = _stroke.Settings.Eraser,
             IsMask = ActiveTool == EditorTool.Mask,
+            IsStampForeground = _editingStampForeground,
         };
+
+    public bool IsEditingStampForeground => _editingStampForeground;
 
     public LayerId? MaskEditLayerId =>
         ActiveTool == EditorTool.Mask && ActiveLayer?.Mask is not null ? _activeLayerId : null;
@@ -1560,6 +1564,14 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// <summary>How many entries the bounded recent list currently holds.</summary>
     public int RecentCount => _assetCatalog?.Recent.Count ?? 0;
 
+    public IReadOnlyList<AssetSetSummary> CompactRecentSets => _assetCatalog is null
+        ? []
+        : [.. _assetCatalog.Query(new AssetQuery { RecentOnly = true }).Sets.Take(4)];
+
+    public IReadOnlyList<AssetSetSummary> CompactFavoriteSets => _assetCatalog is null
+        ? []
+        : [.. _assetCatalog.Query(new AssetQuery { FavoritesOnly = true }).Sets.Take(4)];
+
     // ---------------------------------------------------------------- set and variant
 
     public string? SelectedSetId => _selectedSetId;
@@ -1584,6 +1596,69 @@ public sealed partial class EditorViewModel : ViewModelBase
     public bool IsCurrentVariantTheCover =>
         SelectedSet is { } set && CurrentVariant is { } variant && set.CoverVariantId == variant.Id;
 
+    public StampToolSettings StampToolSettings => _stampToolSettings;
+
+    public bool IsEditingFutureStamp =>
+        ActiveTool == EditorTool.Stamp && PendingPlacement?.Target == PlacementTargetKind.Stamp;
+
+    public string StampPanelHeading => IsEditingFutureStamp ? "Будущий штамп" : "Выбранный штамп";
+
+    public StampStyle? StampPanelStyle => IsEditingFutureStamp
+        ? _stampToolSettings.Style
+        : Session.SelectedObject?.Stamp;
+
+    private AssetVariant? StampPanelVariant
+    {
+        get
+        {
+            if (IsEditingFutureStamp) return CurrentVariant;
+            if (_assetCatalog is null || Session.SelectedObject?.Stamp is not { } stamp) return null;
+            return _assetCatalog.Variants.FirstOrDefault(variant =>
+                       string.Equals(variant.Sha256, stamp.AssetSha256, StringComparison.OrdinalIgnoreCase)
+                       && string.Equals(variant.MaskSha256, stamp.MaskAssetSha256,
+                           StringComparison.OrdinalIgnoreCase))
+                   ?? _assetCatalog.Variants.FirstOrDefault(variant =>
+                       string.Equals(variant.Sha256, stamp.AssetSha256, StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    public string? StampPanelMaskSha256 =>
+        StampPanelStyle?.MaskAssetSha256 ?? StampPanelVariant?.MaskSha256;
+
+    public string? StampClipMaskThumbnailPath
+    {
+        get
+        {
+            if (_assetCatalog?.Find(StampPanelMaskSha256 ?? "") is not { } record) return null;
+            return _assetCatalog.TryThumbnailPath(record, out var path) ? path : null;
+        }
+    }
+
+    public string StampClipMaskStatus
+    {
+        get
+        {
+            if (StampPanelStyle is not { } style) return "Недоступно — штамп не выбран";
+            var maskSha = StampPanelMaskSha256;
+            if (maskSha is null) return "Недоступно — у варианта нет маски";
+            if (!IsMaskAvailable(maskSha)) return "Маска отсутствует или повреждена";
+            return style.ClipMaskEnabled ? "Включено" : "Выключено";
+        }
+    }
+
+    public bool StampClipMaskCanToggle => StampPanelMaskSha256 is { } sha && IsMaskAvailable(sha);
+
+    public bool StampPanelCanEditLibraryMask => StampPanelVariant is not null;
+
+    public bool StampPanelVariantHasLibraryMask => StampPanelVariant?.MaskSha256 is not null;
+
+    public string StampForegroundStatus => Session.Document.StampForeground switch
+    {
+        null => "Foreground-поверхность не создана",
+        { IsEmpty: true } => "Foreground-поверхность пуста",
+        _ => "Foreground-поверхность готова",
+    };
+
     /// <summary>Makes one logical card current and restores the variant last used inside it.</summary>
     public void SelectAssetSet(string? setId)
     {
@@ -1592,8 +1667,15 @@ public sealed partial class EditorViewModel : ViewModelBase
             _selectedSetId = null;
             _selectedSetVariants = [];
             _currentVariantIndex = 0;
+            _stampToolSettings = _stampToolSettings with
+            {
+                AssetSetId = null,
+                VariantId = null,
+                Style = null,
+            };
             SyncSelectedLibraryRow();
             RaiseVariantState();
+            RaiseStampToolState();
             return;
         }
 
@@ -1609,8 +1691,11 @@ public sealed partial class EditorViewModel : ViewModelBase
             ? -1
             : _selectedSetVariants.ToList().FindIndex(variant => variant.Id == remembered);
         _currentVariantIndex = index >= 0 ? index : 0;
+        BindStampToolToCurrentVariant();
         SyncSelectedLibraryRow();
         RaiseVariantState();
+        RaiseStampToolState();
+        PersistLocalPreferences();
         ArmStampPlacement();
     }
 
@@ -1627,7 +1712,10 @@ public sealed partial class EditorViewModel : ViewModelBase
 
         _currentVariantIndex = Math.Clamp(index, 0, _selectedSetVariants.Count - 1);
         RememberCurrentVariant();
+        BindStampToolToCurrentVariant();
         RaiseVariantState();
+        RaiseStampToolState();
+        PersistLocalPreferences();
         ArmStampPlacement();
     }
 
@@ -1644,8 +1732,11 @@ public sealed partial class EditorViewModel : ViewModelBase
         var count = _selectedSetVariants.Count;
         _currentVariantIndex = ((_currentVariantIndex + direction) % count + count) % count;
         RememberCurrentVariant();
+        BindStampToolToCurrentVariant();
         StatusDetail = $"Вариант {CurrentVariantLabel}.";
         RaiseVariantState();
+        RaiseStampToolState();
+        PersistLocalPreferences();
         RefreshArmedPlacement();
     }
 
@@ -1658,6 +1749,274 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
 
         _assetCatalog.TouchRecent(_selectedSetId, variant.Id, _clock());
+    }
+
+    private void RestoreStampCatalogIdentity()
+    {
+        if (_assetCatalog is null || _stampToolSettings.AssetSetId is not { } setId
+            || _assetCatalog.FindSet(setId) is not { } set)
+        {
+            return;
+        }
+
+        _selectedSetId = set.Id;
+        _selectedSetVariants =
+        [
+            .. set.VariantIds.Select(_assetCatalog.FindVariant).Where(item => item is not null)
+                .Select(item => item!),
+        ];
+        var wanted = _stampToolSettings.VariantId;
+        var index = wanted is null ? -1 : _selectedSetVariants.ToList().FindIndex(item => item.Id == wanted);
+        _currentVariantIndex = index >= 0 ? index : 0;
+        BindStampToolToCurrentVariant();
+        SyncSelectedLibraryRow();
+        RaiseVariantState();
+        RaiseStampToolState();
+    }
+
+    private void BindStampToolToCurrentVariant()
+    {
+        if (CurrentVariant is not { } variant || _assetCatalog?.Find(variant.Sha256) is not { } record)
+        {
+            return;
+        }
+
+        var referenceWidth = DefaultStampReferenceWidth();
+        var referenceHeight = referenceWidth * record.Height / Math.Max(1.0, record.Width);
+        var before = _stampToolSettings.Style;
+        var resolvedMask = variant.MaskSha256;
+        _stampToolSettings = _stampToolSettings with
+        {
+            AssetSetId = _selectedSetId,
+            VariantId = variant.Id,
+            Style = new StampStyle(variant.Sha256)
+            {
+                ReferenceWidth = referenceWidth,
+                ReferenceHeight = referenceHeight,
+                FlipHorizontal = before?.FlipHorizontal ?? false,
+                FlipVertical = before?.FlipVertical ?? false,
+                MaskAssetSha256 = resolvedMask,
+                ClipMaskEnabled = resolvedMask is not null && (before?.ClipMaskEnabled ?? false),
+                Blend = before?.Blend ?? BlendModes.Normal,
+                Blur = before?.Blur ?? 0,
+                ShadowOffsetX = before?.ShadowOffsetX ?? ShadowPreset.StandardOffsetX,
+                ShadowOffsetY = before?.ShadowOffsetY ?? ShadowPreset.StandardOffsetY,
+                ShadowBlur = before?.ShadowBlur ?? ShadowPreset.StandardBlur,
+                ShadowOpacity = before?.ShadowOpacity ?? 0,
+                ShadowPlacement = before?.ShadowPlacement ?? StampShadowPlacement.Object,
+                ShadowColor = before?.ShadowColor ?? AppearanceColor.OpaqueBlack,
+                Hue = before?.Hue ?? 0,
+                Saturation = before?.Saturation ?? 0,
+                Brightness = before?.Brightness ?? 0,
+                Contrast = before?.Contrast ?? 0,
+            },
+        };
+    }
+
+    private void RefreshSelectedVariantsFromCatalog()
+    {
+        if (_assetCatalog is null || _selectedSetId is not { } setId
+            || _assetCatalog.FindSet(setId) is not { } set)
+        {
+            return;
+        }
+
+        var currentId = CurrentVariant?.Id;
+        _selectedSetVariants = [.. set.VariantIds.Select(_assetCatalog.FindVariant)
+            .Where(variant => variant is not null).Select(variant => variant!)];
+        var index = currentId is null ? -1 : _selectedSetVariants.ToList()
+            .FindIndex(variant => variant.Id == currentId);
+        _currentVariantIndex = index >= 0 ? index : Math.Clamp(_currentVariantIndex, 0,
+            Math.Max(0, _selectedSetVariants.Count - 1));
+    }
+
+    public bool AssignCurrentVariantMask(string path)
+    {
+        if (_assetCatalog is null || StampPanelVariant is not { } variant)
+        {
+            StatusDetail = "Сначала выберите вариант штампа.";
+            return false;
+        }
+
+        try
+        {
+            _assetCatalog.AssignVariantMask(variant.Id, path, _clock());
+            RefreshSelectedVariantsFromCatalog();
+            if (IsEditingFutureStamp && CurrentVariant?.Id == variant.Id)
+            {
+                BindStampToolToCurrentVariant();
+                PersistLocalPreferences();
+                RefreshArmedPlacement();
+            }
+            RaiseVariantState();
+            RaiseStampToolState();
+            StatusDetail = variant.MaskSha256 is null ? "Маска назначена." : "Маска заменена.";
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException
+            or UnauthorizedAccessException or InvalidOperationException or ArgumentException)
+        {
+            StatusDetail = "Не удалось назначить маску: " + ex.Message;
+            _log.Error("Variant clip mask assignment failed", ex);
+            return false;
+        }
+    }
+
+    public bool RemoveCurrentVariantMask()
+    {
+        if (_assetCatalog is null || StampPanelVariant is not { } variant)
+        {
+            StatusDetail = "Сначала выберите вариант штампа.";
+            return false;
+        }
+
+        try
+        {
+            _assetCatalog.RemoveVariantMask(variant.Id);
+            RefreshSelectedVariantsFromCatalog();
+            if (IsEditingFutureStamp && CurrentVariant?.Id == variant.Id)
+            {
+                BindStampToolToCurrentVariant();
+                PersistLocalPreferences();
+                RefreshArmedPlacement();
+            }
+            RaiseVariantState();
+            RaiseStampToolState();
+            StatusDetail = "Маска удалена из варианта. Уже поставленные штампы не изменены.";
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+            or InvalidOperationException or ArgumentException)
+        {
+            StatusDetail = "Не удалось удалить маску: " + ex.Message;
+            _log.Error("Variant clip mask removal failed", ex);
+            return false;
+        }
+    }
+
+    public void SetStampClipMaskEnabled(bool enabled)
+    {
+        if (StampPanelStyle is not { } style)
+        {
+            return;
+        }
+
+        if (IsEditingFutureStamp)
+        {
+            var maskSha = CurrentVariant?.MaskSha256;
+            if (enabled && (maskSha is null || !IsMaskAvailable(maskSha)))
+            {
+                StatusDetail = maskSha is null
+                    ? "Недоступно — у варианта нет маски."
+                    : "Маска отсутствует или повреждена.";
+                return;
+            }
+            UpdateStampToolSettings(settings => settings with
+            {
+                Style = style with
+                {
+                    MaskAssetSha256 = maskSha,
+                    ClipMaskEnabled = enabled,
+                },
+            }, persist: true);
+            return;
+        }
+
+        if (Session.SelectedObject is not { Stamp: { } selectedStyle } selected)
+        {
+            return;
+        }
+        if (!enabled)
+        {
+            EditStamp("Disable stamp clip mask", commit: true,
+                stamp => stamp with { ClipMaskEnabled = false });
+            return;
+        }
+
+        var resolvedMask = selectedStyle.MaskAssetSha256 ?? StampPanelVariant?.MaskSha256;
+        if (resolvedMask is null)
+        {
+            StatusDetail = "Недоступно — у варианта нет маски.";
+            return;
+        }
+        var maskReference = ResolveMaskForDocument(resolvedMask, out var refusal);
+        if (maskReference is null)
+        {
+            StatusDetail = refusal ?? "Маска отсутствует или повреждена.";
+            return;
+        }
+
+        Session.Execute(new UpdateStampStyleWithAssetCommand(
+            selected,
+            selectedStyle with { MaskAssetSha256 = resolvedMask, ClipMaskEnabled = true },
+            maskReference));
+        AfterEdit();
+    }
+
+    public void CreateStampForegroundSurface()
+    {
+        if (Session.Document.StampForeground is not null)
+        {
+            StatusDetail = StampForegroundStatus;
+            return;
+        }
+        Session.Execute(new UpdateStampForegroundCommand(
+            null, StampForegroundSurface.CreateEmpty(), "Create stamp foreground"));
+        AfterEdit();
+        RaiseStampToolState();
+        StatusDetail = "Foreground-поверхность создана. Выберите её редактирование и рисуйте кистью.";
+    }
+
+    public void EditStampForegroundSurface()
+    {
+        if (Session.Document.StampForeground is null)
+        {
+            StatusDetail = "Сначала создайте foreground-поверхность.";
+            return;
+        }
+        ActiveTool = EditorTool.Brush;
+        _editingStampForeground = true;
+        Raise(nameof(IsEditingStampForeground));
+        StatusDetail = "Редактируется foreground-поверхность: рисуйте обычной кистью на холсте.";
+        InvalidateScene(EditorChangeReason.CanvasInvalidation);
+    }
+
+    private bool IsMaskAvailable(string sha256)
+    {
+        if (Session.Document.Assets.Any(asset =>
+                string.Equals(asset.Sha256, sha256, StringComparison.OrdinalIgnoreCase)))
+        {
+            return StampImages?.TryGetImage(sha256) is not null;
+        }
+        if (_assetCatalog?.Find(sha256) is not { } record) return false;
+        try
+        {
+            return _assetCatalog.Resolve(record).Status == AssetResolutionStatus.Available;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            return false;
+        }
+    }
+
+    private MapAssetReference? ResolveMaskForDocument(string sha256, out string? refusal)
+    {
+        var existing = Session.Document.Assets.FirstOrDefault(asset =>
+            string.Equals(asset.Sha256, sha256, StringComparison.OrdinalIgnoreCase));
+        if (existing is not null)
+        {
+            refusal = StampImages?.TryGetImage(sha256) is null
+                ? "Маска отсутствует или повреждена."
+                : null;
+            return refusal is null ? existing : null;
+        }
+        if (_assetCatalog?.Find(sha256) is not { } record)
+        {
+            refusal = "Маска отсутствует в Library.";
+            return null;
+        }
+        var result = ResolveAssetForDocument(record, out _, out refusal);
+        return result;
     }
 
     /// <summary>Favorite belongs to the logical card, not to one variant's bytes.</summary>
@@ -1713,25 +2072,30 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public StampPlacementMode StampPlacementMode
     {
-        get => _stampPlacementMode;
+        get => _stampToolSettings.Mode;
         set
         {
-            if (SetField(ref _stampPlacementMode, value))
+            if (_stampToolSettings.Mode != value && Enum.IsDefined(value))
             {
+                _stampToolSettings = _stampToolSettings with { Mode = value };
+                Raise();
                 Raise(nameof(PlannedStampCount));
                 Raise(nameof(StampAreaSummary));
                 RefreshArmedPlacement();
+                PersistLocalPreferences();
             }
         }
     }
 
     public PlacementAutoSelectPolicy PlacementAutoSelect
     {
-        get => _placementAutoSelect;
+        get => _stampToolSettings.AutoSelect;
         set
         {
-            if (SetField(ref _placementAutoSelect, value))
+            if (_stampToolSettings.AutoSelect != value && Enum.IsDefined(value))
             {
+                _stampToolSettings = _stampToolSettings with { AutoSelect = value };
+                Raise();
                 PersistLocalPreferences();
                 if (_pendingPlacement is { } pending)
                 {
@@ -1744,11 +2108,16 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// <summary>Gesture radius in world units.</summary>
     public double StampAreaRadius
     {
-        get => _stampAreaRadius;
+        get => _stampToolSettings.AreaRadius;
         set
         {
-            if (SetField(ref _stampAreaRadius, Math.Clamp(value, MinStampAreaRadius, MaxStampAreaRadius)))
+            var bounded = double.IsFinite(value)
+                ? Math.Clamp(value, MinStampAreaRadius, MaxStampAreaRadius)
+                : _stampToolSettings.AreaRadius;
+            if (_stampToolSettings.AreaRadius != bounded)
             {
+                _stampToolSettings = _stampToolSettings with { AreaRadius = bounded };
+                Raise();
                 Raise(nameof(PlannedStampCount));
                 Raise(nameof(StampAreaInCells));
                 Raise(nameof(StampAreaSummary));
@@ -1757,14 +2126,25 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
     }
 
+    public void SetStampAreaRadius(double value, bool persist)
+    {
+        StampAreaRadius = value;
+        if (persist) PersistLocalPreferences();
+    }
+
     /// <summary>Stamps per 10 000 square world units.</summary>
     public double StampDensity
     {
-        get => _stampDensity;
+        get => _stampToolSettings.Density;
         set
         {
-            if (SetField(ref _stampDensity, Math.Clamp(value, MinStampDensity, MaxStampDensity)))
+            var bounded = double.IsFinite(value)
+                ? Math.Clamp(value, MinStampDensity, MaxStampDensity)
+                : _stampToolSettings.Density;
+            if (_stampToolSettings.Density != bounded)
             {
+                _stampToolSettings = _stampToolSettings with { Density = bounded };
+                Raise();
                 Raise(nameof(PlannedStampCount));
                 Raise(nameof(StampAreaSummary));
                 RefreshArmedPlacement();
@@ -1772,54 +2152,87 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
     }
 
+    public void SetStampDensity(double value, bool persist)
+    {
+        StampDensity = value;
+        if (persist) PersistLocalPreferences();
+    }
+
     public bool RandomVariantAfterPlacement
     {
-        get => _randomVariantAfterPlacement;
+        get => _stampToolSettings.RandomizeVariant;
         set
         {
-            if (SetField(ref _randomVariantAfterPlacement, value)) RefreshArmedPlacement();
+            if (_stampToolSettings.RandomizeVariant != value)
+            {
+                _stampToolSettings = _stampToolSettings with { RandomizeVariant = value };
+                Raise();
+                RefreshArmedPlacement();
+                PersistLocalPreferences();
+            }
+        }
+    }
+
+    public StampRandomAngleStep StampRandomAngleStep
+    {
+        get => _stampToolSettings.RandomAngleStep;
+        set
+        {
+            if (_stampToolSettings.RandomAngleStep != value && IsSupportedRandomAngleStep(value))
+            {
+                _stampToolSettings = _stampToolSettings with { RandomAngleStep = value };
+                Raise();
+                Raise(nameof(StampRandomAngle));
+                RefreshArmedPlacement();
+                PersistLocalPreferences();
+            }
         }
     }
 
     public bool StampRandomAngle
     {
-        get => _stampRandomAngle;
-        set
-        {
-            if (SetField(ref _stampRandomAngle, value)) RefreshArmedPlacement();
-        }
+        get => StampRandomAngleStep != Map.Core.Editing.StampRandomAngleStep.Off;
+        set => StampRandomAngleStep = value
+            ? Map.Core.Editing.StampRandomAngleStep.Degrees15
+            : Map.Core.Editing.StampRandomAngleStep.Off;
     }
 
     public bool StampRandomFlip
     {
-        get => _stampRandomFlip;
+        get => _stampToolSettings.RandomFlip;
         set
         {
-            if (SetField(ref _stampRandomFlip, value)) RefreshArmedPlacement();
+            if (_stampToolSettings.RandomFlip != value)
+            {
+                _stampToolSettings = _stampToolSettings with { RandomFlip = value };
+                Raise();
+                RefreshArmedPlacement();
+                PersistLocalPreferences();
+            }
         }
     }
 
     /// <summary>How many stamps the current Area and Density would place.</summary>
-    public int PlannedStampCount => _stampPlacementMode is StampPlacementMode.One or StampPlacementMode.Series
+    public int PlannedStampCount => StampPlacementMode is StampPlacementMode.One or StampPlacementMode.Series
         ? 1
-        : StampPlacement.CountFor(_stampDensity, _stampAreaRadius);
+        : StampPlacement.CountFor(StampDensity, StampAreaRadius);
 
     /// <summary>The same radius in cells of the active snap grid, or null without one.</summary>
     public double? StampAreaInCells =>
-        ActiveSnapGrid() is { } grid ? StampPlacement.RadiusInCells(_stampAreaRadius, grid.CellSize) : null;
+        ActiveSnapGrid() is { } grid ? StampPlacement.RadiusInCells(StampAreaRadius, grid.CellSize) : null;
 
     public string StampAreaSummary
     {
         get
         {
             var area = StampAreaInCells is { } cells
-                ? $"Область {_stampAreaRadius:0} ед. ({cells:0.##} кл.)"
-                : $"Область {_stampAreaRadius:0} ед.";
-            return _stampPlacementMode switch
+                ? $"Область {StampAreaRadius:0} ед. ({cells:0.##} кл.)"
+                : $"Область {StampAreaRadius:0} ед.";
+            return StampPlacementMode switch
             {
                 StampPlacementMode.One => area + " · один штамп",
                 StampPlacementMode.Series => area + " · серия по одному штампу",
-                _ => $"{area} · плотность {_stampDensity:0} на 10 000 ед² · {PlannedStampCount} шт.",
+                _ => $"{area} · плотность {StampDensity:0} на 10 000 ед² · {PlannedStampCount} шт.",
             };
         }
     }
@@ -1863,6 +2276,7 @@ public sealed partial class EditorViewModel : ViewModelBase
                 Raise(nameof(HasPendingPlacement));
                 Raise(nameof(PlacementPreviewObjects));
                 Raise(nameof(PlacementRefusal));
+                RaiseStampToolState();
                 InvalidateScene(EditorChangeReason.CanvasInvalidation);
             }
         }
@@ -1884,9 +2298,9 @@ public sealed partial class EditorViewModel : ViewModelBase
 
         ActiveTool = EditorTool.Select;
         var centre = ViewCentre();
-        var mode = _stampPlacementMode == StampPlacementMode.Area
+        var mode = StampPlacementMode == StampPlacementMode.Area
             ? StampPlacementMode.One
-            : _stampPlacementMode;
+            : StampPlacementMode;
         PendingPlacement = BuildPrimitivePlacement(kind, centre.X, centre.Y, mode, pointerVisible: false);
         StatusDetail = kind == SceneObjectKind.Ellipse
             ? "Объект: эллипс · укажите место на холсте."
@@ -1925,7 +2339,7 @@ public sealed partial class EditorViewModel : ViewModelBase
                 SceneObjectKind.Ellipse, snapped.X, snapped.Y, pending.Mode, pointerVisible: true,
                 pending.RotationDegrees),
             _ => BuildStampPlacement(
-                snapped.X, snapped.Y, pointerVisible: true, pending.RotationDegrees),
+                snapped.X, snapped.Y, pointerVisible: true),
         };
     }
 
@@ -1951,6 +2365,13 @@ public sealed partial class EditorViewModel : ViewModelBase
 
         var delta = Math.Sign(direction)
             * (largerStep ? PlacementRotationLargeStep : PlacementRotationStep);
+        if (pending.Target == PlacementTargetKind.Stamp)
+        {
+            SetStampRotationDegrees(_stampToolSettings.RotationDegrees + delta, commit: true);
+            StatusDetail = $"Поворот перед установкой: {_stampToolSettings.RotationDegrees:0.##}° · W/S.";
+            return true;
+        }
+
         var rotation = NormalizeAngle(pending.RotationDegrees + delta);
         var preview = pending.PreviewObjects.Select(item => WithGeometry(
             item, item.X, item.Y, item.Width, item.Height,
@@ -2036,7 +2457,8 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     private bool CommitStampPlacement(PlacementSession pending, ObjectLayer layer)
     {
-        if (!TryStampInputs(out var requestTemplate, out var sources, out var records, out var refusal))
+        var settings = pending.StampSettingsSnapshot ?? _stampToolSettings;
+        if (!TryStampInputs(settings, out var requestTemplate, out var sources, out var records, out var refusal))
         {
             StatusDetail = refusal;
             return false;
@@ -2051,7 +2473,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         var plan = pending.Mode == StampPlacementMode.Area
             ? StampPlacement.PlanArea(request, sources)
             : StampPlacement.PlanOne(request, sources[0]);
-        plan = ApplyPlacementRotation(plan, pending.RotationDegrees);
+        plan = ApplyPlacementRotation(plan, settings.RotationDegrees);
         if (ResolvePlan(plan, records, out var references, out refusal) is not { } byHash)
         {
             StatusDetail = refusal;
@@ -2066,7 +2488,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         for (var index = 0; index < plan.Count; index++)
         {
             var item = plan[index];
-            objects.Add(StampObject(item, names[index], PlacementPreviewOpacity: null));
+            objects.Add(StampObject(item, names[index], settings, previewOpacityMultiplier: null));
         }
 
         var placedLabel = CurrentVariantLabel;
@@ -2081,7 +2503,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             _assetCatalog!.TouchRecent(_selectedSetId, placedVariant.Id, _clock());
         }
 
-        if (_randomVariantAfterPlacement && _selectedSetVariants.Count > 1)
+        if (RandomVariantAfterPlacement && _selectedSetVariants.Count > 1)
         {
             _currentVariantIndex = StampPlacement.NextVariantIndex(
                 request.Seed, _currentVariantIndex, _selectedSetVariants.Count);
@@ -2091,7 +2513,7 @@ public sealed partial class EditorViewModel : ViewModelBase
 
         StatusDetail = objects.Count == 1
             ? $"Размещён вариант {placedLabel}."
-            : $"Размещено штампов: {objects.Count}, вариантов: {byHash.Count}.";
+            : $"Размещено штампов: {objects.Count}, вариантов: {plan.Select(item => item.Sha256).Distinct(StringComparer.OrdinalIgnoreCase).Count()}.";
         RefreshLibrary();
         FinishOrContinuePlacement(pending, objects[^1].Name);
         return true;
@@ -2124,7 +2546,7 @@ public sealed partial class EditorViewModel : ViewModelBase
 
         PendingPlacement = committed.Target == PlacementTargetKind.Stamp
             ? BuildStampPlacement(
-                committed.WorldX, committed.WorldY, pointerVisible: true, committed.RotationDegrees)
+                committed.WorldX, committed.WorldY, pointerVisible: true)
             : BuildPrimitivePlacement(
                 committed.Target == PlacementTargetKind.Ellipse
                     ? SceneObjectKind.Ellipse
@@ -2177,7 +2599,7 @@ public sealed partial class EditorViewModel : ViewModelBase
                 ? PlacementTargetKind.Ellipse
                 : PlacementTargetKind.Rectangle,
             Mode = mode,
-            AutoSelect = _placementAutoSelect,
+            AutoSelect = PlacementAutoSelect,
             LayerId = layer?.Id,
             WorldX = centerX,
             WorldY = centerY,
@@ -2201,12 +2623,12 @@ public sealed partial class EditorViewModel : ViewModelBase
     private PlacementSession BuildStampPlacement(
         double centerX,
         double centerY,
-        bool pointerVisible,
-        double rotationDegrees = 0)
+        bool pointerVisible)
     {
-        rotationDegrees = NormalizeAngle(rotationDegrees);
+        var settings = _stampToolSettings;
+        var rotationDegrees = NormalizeAngle(settings.RotationDegrees);
         var layer = ActiveObjectLayer();
-        if (!TryStampInputs(out var requestTemplate, out var sources, out var records, out var refusal))
+        if (!TryStampInputs(settings, out var requestTemplate, out var sources, out var records, out var refusal))
         {
             return EmptyStampPlacement(
                 centerX, centerY, layer?.Id, pointerVisible, refusal, rotationDegrees);
@@ -2218,19 +2640,20 @@ public sealed partial class EditorViewModel : ViewModelBase
             CenterY = centerY,
             Seed = NextGestureSeed(),
         };
-        var plan = _stampPlacementMode == StampPlacementMode.Area
+        var plan = StampPlacementMode == StampPlacementMode.Area
             ? StampPlacement.PlanAreaPreview(request, sources, MaximumScatterPreviewObjects)
             : StampPlacement.PlanOne(request, sources[0]);
         plan = ApplyPlacementRotation(plan, rotationDegrees);
         var preview = plan.Select((item, index) => StampObject(
             item,
             index == 0 ? "Будущий штамп" : $"Будущий штамп {index + 1}",
+            settings,
             PlacementPreviewOpacity)).ToList();
         return new PlacementSession
         {
             Target = PlacementTargetKind.Stamp,
-            Mode = _stampPlacementMode,
-            AutoSelect = _placementAutoSelect,
+            Mode = StampPlacementMode,
+            AutoSelect = PlacementAutoSelect,
             LayerId = layer?.Id,
             WorldX = centerX,
             WorldY = centerY,
@@ -2246,13 +2669,14 @@ public sealed partial class EditorViewModel : ViewModelBase
                 ? "Нет видимого разблокированного слоя объектов. Создайте слой объектов и продолжите."
                 : null,
             Seed = request.Seed,
-            PlannedCount = _stampPlacementMode == StampPlacementMode.Area
+            PlannedCount = StampPlacementMode == StampPlacementMode.Area
                 ? StampPlacement.CountFor(request.Density, request.AreaRadius)
                 : 1,
             PreviewObjects = preview,
             AssetSetId = _selectedSetId,
             VariantId = CurrentVariant?.Id,
             VariantSha256 = CurrentVariant?.Sha256,
+            StampSettingsSnapshot = settings,
         };
     }
 
@@ -2265,8 +2689,8 @@ public sealed partial class EditorViewModel : ViewModelBase
         double rotationDegrees) => new()
     {
         Target = PlacementTargetKind.Stamp,
-        Mode = _stampPlacementMode,
-        AutoSelect = _placementAutoSelect,
+        Mode = StampPlacementMode,
+        AutoSelect = PlacementAutoSelect,
         LayerId = layerId,
         WorldX = centerX,
         WorldY = centerY,
@@ -2285,9 +2709,11 @@ public sealed partial class EditorViewModel : ViewModelBase
         AssetSetId = _selectedSetId,
         VariantId = CurrentVariant?.Id,
         VariantSha256 = CurrentVariant?.Sha256,
+        StampSettingsSnapshot = _stampToolSettings,
     };
 
     private bool TryStampInputs(
+        StampToolSettings settings,
         out StampPlacementRequest request,
         out IReadOnlyList<StampVariantSource> sources,
         out Dictionary<string, AssetRecord> records,
@@ -2313,8 +2739,8 @@ public sealed partial class EditorViewModel : ViewModelBase
             return false;
         }
 
-        var scatter = _stampPlacementMode == StampPlacementMode.Area;
-        var randomize = _randomVariantAfterPlacement && scatter;
+        var scatter = settings.Mode == StampPlacementMode.Area;
+        var randomize = settings.RandomizeVariant && scatter;
         var candidates = randomize
             ? _selectedSetVariants
             : [_selectedSetVariants[_currentVariantIndex]];
@@ -2325,10 +2751,14 @@ public sealed partial class EditorViewModel : ViewModelBase
             {
                 continue;
             }
-            if (records.TryAdd(record.Sha256, record))
+            records.TryAdd(record.Sha256, record);
+            if (variant.MaskSha256 is { } maskSha
+                && _assetCatalog.Find(maskSha) is { } maskRecord)
             {
-                resolvedSources.Add(new StampVariantSource(record.Sha256, record.Width, record.Height));
+                records.TryAdd(maskRecord.Sha256, maskRecord);
             }
+            resolvedSources.Add(new StampVariantSource(
+                record.Sha256, record.Width, record.Height, variant.MaskSha256));
         }
         if (resolvedSources.Count == 0)
         {
@@ -2339,29 +2769,48 @@ public sealed partial class EditorViewModel : ViewModelBase
         sources = resolvedSources;
         request = new StampPlacementRequest
         {
-            AreaRadius = _stampAreaRadius,
-            Density = _stampDensity,
+            AreaRadius = settings.AreaRadius,
+            Density = settings.Density,
             RandomizeVariant = randomize && sources.Count > 1,
-            RandomAngle = _stampRandomAngle && scatter,
-            RandomFlip = _stampRandomFlip && scatter,
-            BaseWidth = DefaultStampWidth(),
+            RandomAngleStep = scatter ? settings.RandomAngleStep : Map.Core.Editing.StampRandomAngleStep.Off,
+            RandomFlip = settings.RandomFlip && scatter,
+            BaseWidth = DefaultStampReferenceWidth() * settings.ScalePercent / 100.0,
         };
         return true;
     }
 
     private static SceneObject StampObject(
-        StampPlacementItem item, string name, double? PlacementPreviewOpacity) => new(
+        StampPlacementItem item,
+        string name,
+        StampToolSettings settings,
+        double? previewOpacityMultiplier) => new(
         ObjectId.New(), SceneObjectKind.Stamp, name,
         item.X, item.Y, item.Width, item.Height, item.RotationDegrees,
         "#FFFFFFFF", "#00000000", 0, true, false)
     {
-        ObjectOpacity = PlacementPreviewOpacity ?? 1,
+        Sublayer = settings.Sublayer,
+        ObjectOpacity = settings.ObjectOpacity * (previewOpacityMultiplier ?? 1),
         Stamp = new StampStyle(item.Sha256)
         {
-            ReferenceWidth = item.Width,
-            ReferenceHeight = item.Height,
-            FlipHorizontal = item.FlipHorizontal,
-            FlipVertical = item.FlipVertical,
+            ReferenceWidth = item.Width / Math.Max(0.1, settings.ScalePercent / 100.0),
+            ReferenceHeight = item.Height / Math.Max(0.1, settings.ScalePercent / 100.0),
+            FlipHorizontal = (settings.Style?.FlipHorizontal ?? false) ^ item.FlipHorizontal,
+            FlipVertical = (settings.Style?.FlipVertical ?? false) ^ item.FlipVertical,
+            MaskAssetSha256 = item.MaskSha256,
+            ClipMaskEnabled = item.MaskSha256 is not null
+                && (settings.Style?.ClipMaskEnabled ?? false),
+            Blend = settings.Style?.Blend ?? BlendModes.Normal,
+            Blur = settings.Style?.Blur ?? 0,
+            ShadowOffsetX = settings.Style?.ShadowOffsetX ?? ShadowPreset.StandardOffsetX,
+            ShadowOffsetY = settings.Style?.ShadowOffsetY ?? ShadowPreset.StandardOffsetY,
+            ShadowBlur = settings.Style?.ShadowBlur ?? ShadowPreset.StandardBlur,
+            ShadowOpacity = settings.Style?.ShadowOpacity ?? 0,
+            ShadowPlacement = settings.Style?.ShadowPlacement ?? StampShadowPlacement.Object,
+            ShadowColor = settings.Style?.ShadowColor ?? AppearanceColor.OpaqueBlack,
+            Hue = settings.Style?.Hue ?? 0,
+            Saturation = settings.Style?.Saturation ?? 0,
+            Brightness = settings.Style?.Brightness ?? 0,
+            Contrast = settings.Style?.Contrast ?? 0,
         },
     };
 
@@ -2376,7 +2825,7 @@ public sealed partial class EditorViewModel : ViewModelBase
 
         return [.. plan.Select(item => item with
         {
-            RotationDegrees = NormalizeAngle(item.RotationDegrees + rotationDegrees),
+            RotationDegrees = NormalizeUnsignedAngle(item.RotationDegrees + rotationDegrees),
         })];
     }
 
@@ -2394,22 +2843,132 @@ public sealed partial class EditorViewModel : ViewModelBase
 
         PendingPlacement = pending.Target == PlacementTargetKind.Stamp
             ? BuildStampPlacement(
-                pending.WorldX, pending.WorldY, pending.PointerVisible, pending.RotationDegrees)
+                pending.WorldX, pending.WorldY, pending.PointerVisible)
             : BuildPrimitivePlacement(
                 pending.Target == PlacementTargetKind.Ellipse
                     ? SceneObjectKind.Ellipse
                     : SceneObjectKind.Rectangle,
                 pending.WorldX,
                 pending.WorldY,
-                _stampPlacementMode == StampPlacementMode.Area
+                StampPlacementMode == StampPlacementMode.Area
                     ? StampPlacementMode.One
-                    : _stampPlacementMode,
+                    : StampPlacementMode,
                 pending.PointerVisible,
                 pending.RotationDegrees);
     }
 
+    private void UpdateStampToolSettings(
+        Func<StampToolSettings, StampToolSettings> change,
+        bool persist)
+    {
+        var changed = NormalizeStampToolSettings(change(_stampToolSettings));
+        if (changed == _stampToolSettings)
+        {
+            if (persist) PersistLocalPreferences();
+            return;
+        }
+
+        _stampToolSettings = changed;
+        RaiseStampToolState();
+        RefreshArmedPlacement();
+        if (persist)
+        {
+            PersistLocalPreferences();
+        }
+    }
+
+    private void RaiseStampToolState()
+    {
+        Raise(nameof(StampToolSettings));
+        Raise(nameof(IsEditingFutureStamp));
+        Raise(nameof(StampPanelHeading));
+        Raise(nameof(StampPanelStyle));
+        Raise(nameof(StampPanelMaskSha256));
+        Raise(nameof(StampClipMaskThumbnailPath));
+        Raise(nameof(StampClipMaskStatus));
+        Raise(nameof(StampClipMaskCanToggle));
+        Raise(nameof(StampPanelCanEditLibraryMask));
+        Raise(nameof(StampPanelVariantHasLibraryMask));
+        Raise(nameof(StampForegroundStatus));
+        Raise(nameof(StampScalePercent));
+        Raise(nameof(StampRotationDegrees));
+        Raise(nameof(StampSublayer));
+        Raise(nameof(StampOpacityPercent));
+        Raise(nameof(StampPlacementMode));
+        Raise(nameof(PlacementAutoSelect));
+        Raise(nameof(StampAreaRadius));
+        Raise(nameof(StampDensity));
+        Raise(nameof(RandomVariantAfterPlacement));
+        Raise(nameof(StampRandomAngleStep));
+        Raise(nameof(StampRandomAngle));
+        Raise(nameof(StampRandomFlip));
+        Raise(nameof(PlannedStampCount));
+        Raise(nameof(StampAreaSummary));
+    }
+
+    private static StampToolSettings NormalizeStampToolSettings(StampToolSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        var style = settings.Style;
+        if (style is not null)
+        {
+            var color = AppearanceColor.Normalize(style.ShadowColor) ?? AppearanceColor.OpaqueBlack;
+            var blend = BlendModes.IsSupported(style.Blend) ? style.Blend : BlendModes.Normal;
+            var maskSha256 = NormalizeSha256(style.MaskAssetSha256);
+            style = style with
+            {
+                MaskAssetSha256 = maskSha256,
+                ClipMaskEnabled = maskSha256 is not null && style.ClipMaskEnabled,
+                Blend = blend,
+                Blur = Finite(style.Blur, 0, 0, AppearanceLimits.MaxBlur),
+                ShadowOffsetX = Finite(style.ShadowOffsetX, ShadowPreset.StandardOffsetX,
+                    -AppearanceLimits.MaxShadowOffset, AppearanceLimits.MaxShadowOffset),
+                ShadowOffsetY = Finite(style.ShadowOffsetY, ShadowPreset.StandardOffsetY,
+                    -AppearanceLimits.MaxShadowOffset, AppearanceLimits.MaxShadowOffset),
+                ShadowBlur = Finite(style.ShadowBlur, ShadowPreset.StandardBlur, 0,
+                    AppearanceLimits.MaxShadowBlur),
+                ShadowOpacity = Finite(style.ShadowOpacity, 0, 0, 1),
+                ShadowPlacement = Enum.IsDefined(style.ShadowPlacement)
+                    ? style.ShadowPlacement
+                    : StampShadowPlacement.Object,
+                ShadowColor = color,
+                Hue = Finite(style.Hue, 0, -180, 180),
+                Saturation = Finite(style.Saturation, 0, -1, 1),
+                Brightness = Finite(style.Brightness, 0, -1, 1),
+                Contrast = Finite(style.Contrast, 0, -1, 1),
+            };
+        }
+
+        return settings with
+        {
+            ScalePercent = Finite(settings.ScalePercent, 100, 10, 400),
+            RotationDegrees = NormalizeUnsignedAngle(Finite(settings.RotationDegrees, 0, -360_000, 360_000)),
+            Sublayer = Math.Clamp(settings.Sublayer, -10, 10),
+            ObjectOpacity = Finite(settings.ObjectOpacity, 1, 0, 1),
+            Style = style,
+            Mode = Enum.IsDefined(settings.Mode) ? settings.Mode : StampPlacementMode.One,
+            AutoSelect = Enum.IsDefined(settings.AutoSelect)
+                ? settings.AutoSelect
+                : PlacementAutoSelectPolicy.Auto,
+            AreaRadius = Finite(settings.AreaRadius, 160, MinStampAreaRadius, MaxStampAreaRadius),
+            Density = Finite(settings.Density, 40, MinStampDensity, MaxStampDensity),
+            RandomAngleStep = IsSupportedRandomAngleStep(settings.RandomAngleStep)
+                ? settings.RandomAngleStep
+                : Map.Core.Editing.StampRandomAngleStep.Off,
+        };
+    }
+
+    private static bool IsSupportedRandomAngleStep(Map.Core.Editing.StampRandomAngleStep value) =>
+        value is Map.Core.Editing.StampRandomAngleStep.Off
+            or Map.Core.Editing.StampRandomAngleStep.Degrees15
+            or Map.Core.Editing.StampRandomAngleStep.Degrees30
+            or Map.Core.Editing.StampRandomAngleStep.Degrees45
+            or Map.Core.Editing.StampRandomAngleStep.Degrees60
+            or Map.Core.Editing.StampRandomAngleStep.Degrees90
+            or Map.Core.Editing.StampRandomAngleStep.Degrees180;
+
     private void PersistLocalPreferences() => _saveLocalPreferences?.Invoke(
-        new EditorLocalPreferences(_placementAutoSelect, _primaryAutosaveEnabled));
+        new EditorLocalPreferences(PlacementAutoSelect, _primaryAutosaveEnabled, _stampToolSettings));
 
     /// <summary>
     /// One pointer gesture, all or nothing. The plan is resolved first, then every distinct hash
@@ -2444,7 +3003,9 @@ public sealed partial class EditorViewModel : ViewModelBase
 
         var existing = Session.Document.Assets.ToDictionary(
             asset => asset.Sha256, StringComparer.OrdinalIgnoreCase);
-        var neededHashes = plan.Select(item => item.Sha256)
+        var neededHashes = plan.SelectMany(item => item.MaskSha256 is { } mask
+                ? new[] { item.Sha256, mask }
+                : new[] { item.Sha256 })
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
         var newRecords = new List<AssetRecord>();
@@ -2481,23 +3042,23 @@ public sealed partial class EditorViewModel : ViewModelBase
             return null;
         }
 
-        foreach (var item in plan)
+        foreach (var sha256 in neededHashes)
         {
-            if (byHash.ContainsKey(item.Sha256))
+            if (byHash.ContainsKey(sha256))
             {
                 continue;
             }
 
-            if (existing.TryGetValue(item.Sha256, out var existingReference))
+            if (existing.TryGetValue(sha256, out var existingReference))
             {
-                byHash[item.Sha256] = existingReference;
+                byHash[sha256] = existingReference;
                 references.Add(existingReference);
                 continue;
             }
 
-            if (!records.TryGetValue(item.Sha256, out var record))
+            if (!records.TryGetValue(sha256, out var record))
             {
-                refusal = "Содержимое выбранного набора отсутствует в каталоге. Ничего не размещено.";
+                refusal = "Содержимое варианта или его маски отсутствует в каталоге. Ничего не размещено.";
                 return null;
             }
 
@@ -2508,7 +3069,7 @@ public sealed partial class EditorViewModel : ViewModelBase
                 return null;
             }
 
-            byHash[item.Sha256] = resolution.Reference!;
+            byHash[sha256] = resolution.Reference!;
             references.Add(resolution.Reference!);
             if (!MapProjectStore.CanAdmitAdditionalAssets(Session.Document, references, out refusal))
             {
@@ -2600,7 +3161,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             return;
         }
 
-        ReplaceSelectedStampAsset(record);
+        ReplaceSelectedStampAsset(record, variant);
     }
 
     /// <summary>One import of many files becomes one named card the tool can immediately use.</summary>
@@ -2639,9 +3200,11 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
     }
 
-    private double DefaultStampWidth() => _stampPlacementMode is StampPlacementMode.One or StampPlacementMode.Series
-        ? Math.Min(256.0, Session.Document.Canvas.Width / 4.0)
-        : Math.Clamp(_stampAreaRadius / 3.0, 8, 256);
+    private double DefaultStampReferenceWidth() =>
+        Math.Max(1, Math.Min(256.0, Session.Document.Canvas.Width / 4.0));
+
+    private double DefaultStampWidth() =>
+        DefaultStampReferenceWidth() * _stampToolSettings.ScalePercent / 100.0;
 
     /// <summary>
     /// The seed of the gesture that is about to be planned. It is a fixed mix rather than a
@@ -2666,6 +3229,8 @@ public sealed partial class EditorViewModel : ViewModelBase
         Raise(nameof(SelectedLibraryRowIndex));
         Raise(nameof(HasActiveLibraryFilters));
         Raise(nameof(ActiveLibraryFilterSummary));
+        Raise(nameof(CompactRecentSets));
+        Raise(nameof(CompactFavoriteSets));
     }
 
     private void RaiseVariantState()
@@ -2846,7 +3411,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         AfterEdit();
     }
 
-    public void ReplaceSelectedStampAsset(AssetRecord record)
+    public void ReplaceSelectedStampAsset(AssetRecord record, AssetVariant? variant = null)
     {
         if (_assetResolver is null || Session.SelectedObject is not { Stamp: not null } selected)
         {
@@ -2862,7 +3427,25 @@ public sealed partial class EditorViewModel : ViewModelBase
             return;
         }
 
-        Session.Execute(new ReplaceStampAssetCommand(selected, reference));
+        variant ??= _assetCatalog?.Variants.FirstOrDefault(item =>
+            string.Equals(item.Sha256, record.Sha256, StringComparison.OrdinalIgnoreCase));
+        MapAssetReference? maskReference = null;
+        if (variant?.MaskSha256 is { } maskSha)
+        {
+            maskReference = ResolveMaskForDocument(maskSha, out var maskRefusal);
+            if (maskReference is null)
+            {
+                StatusDetail = maskRefusal ?? "Маска нового варианта отсутствует или повреждена.";
+                return;
+            }
+        }
+
+        Session.Execute(new ReplaceStampAssetCommand(
+            selected,
+            reference,
+            record.Height / Math.Max(1.0, record.Width),
+            variant?.MaskSha256,
+            maskReference));
         AfterEdit();
     }
 
@@ -3357,6 +3940,10 @@ public sealed partial class EditorViewModel : ViewModelBase
         Raise(nameof(ActiveLayer));
         Raise(nameof(ActiveLayerSummary));
         Raise(nameof(MaskEditLayerId));
+        Raise(nameof(IsEditingStampForeground));
+        Raise(nameof(StampClipMaskStatus));
+        Raise(nameof(StampClipMaskCanToggle));
+        Raise(nameof(StampForegroundStatus));
         SceneChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -3827,6 +4414,23 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public bool BeginStroke(double worldX, double worldY)
     {
+        if (_editingStampForeground)
+        {
+            if (ActiveTool != EditorTool.Brush || Session.Document.StampForeground is not { } foreground)
+            {
+                StatusDetail = "Foreground-поверхность недоступна для рисования.";
+                return false;
+            }
+            BrushSettings = BrushSettings with
+            {
+                Seed = GestureSeed.From(Session.Revision, "stamp-foreground-stroke", 0, ++_brushSeedCounter),
+            };
+            _stroke = new RasterStrokeSession(foreground.Tiles, BrushSettings);
+            _stroke.AddPoint(worldX, worldY);
+            InvalidateScene(EditorChangeReason.CanvasInvalidation);
+            return true;
+        }
+
         if (ActiveLayer is not { Visible: true, Locked: false } layer)
         {
             StatusDetail = "Активный слой скрыт или заблокирован.";
@@ -3883,7 +4487,8 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public void EndStroke()
     {
-        if (_stroke is null || _activeLayerId is null)
+        var activeLayerId = _activeLayerId;
+        if (_stroke is null || (!_editingStampForeground && activeLayerId is null))
         {
             return;
         }
@@ -3896,25 +4501,31 @@ public sealed partial class EditorViewModel : ViewModelBase
             return;
         }
 
-        if (ActiveTool == EditorTool.Mask)
+        if (_editingStampForeground)
+        {
+            var (Before, After) = stroke.Commit();
+            Session.Execute(new StampForegroundStrokeCommand(
+                Before, After, BrushSettings.Eraser ? "Erase stamp foreground" : "Paint stamp foreground"));
+        }
+        else if (ActiveTool == EditorTool.Mask)
         {
             var (Before, After) = stroke.CommitCoverage(
                 missingTileValue: 255,
                 subtract: MaskMode == MaskPaintMode.Hide);
-            Session.Execute(new MaskStrokeCommand(_activeLayerId.Value, Before, After));
+            Session.Execute(new MaskStrokeCommand(activeLayerId.GetValueOrDefault(), Before, After));
         }
         else if (ActiveTool == EditorTool.Land)
         {
             var (Before, After) = stroke.CommitCoverage(missingTileValue: 0, subtract: LandSubtract);
             Session.Execute(new BrushStrokeCommand(
-                _activeLayerId.Value, Before, After,
+                activeLayerId.GetValueOrDefault(), Before, After,
                 LandSubtract ? "Subtract land" : "Add land"));
         }
         else
         {
             var (Before, After) = stroke.Commit();
             Session.Execute(new BrushStrokeCommand(
-                _activeLayerId.Value, Before, After,
+                activeLayerId.GetValueOrDefault(), Before, After,
                 BrushSettings.Eraser ? "Erase stroke" : "Brush stroke"));
         }
 
@@ -5139,6 +5750,13 @@ public sealed partial class EditorViewModel : ViewModelBase
         return normalized;
     }
 
+    private static double NormalizeUnsignedAngle(double angle)
+    {
+        var normalized = angle % 360;
+        if (normalized < 0) normalized += 360;
+        return normalized;
+    }
+
     private static SceneObject WithGeometry(
         SceneObject source, double x, double y, double width, double height, double rotation) =>
         new(
@@ -5251,15 +5869,12 @@ public sealed partial class EditorViewModel : ViewModelBase
     }
 
     /// <summary>"#RRGGBB" or "#AARRGGBB" → canonical "#AARRGGBB"; anything else is null.</summary>
-    private static string? NormalizeColor(string? text)
-    {
-        var value = (text ?? "").Trim().TrimStart('#');
-        if (value.Length is not (6 or 8) || !value.All(Uri.IsHexDigit))
-        {
-            return null;
-        }
+    private static string? NormalizeColor(string? text) => AppearanceColor.Normalize(text);
 
-        return "#" + (value.Length == 6 ? "FF" + value : value).ToUpperInvariant();
+    private static string? NormalizeSha256(string? text)
+    {
+        var value = (text ?? "").Trim().ToLowerInvariant();
+        return value.Length == 64 && value.All(Uri.IsHexDigit) ? value : null;
     }
 
     private string? RequireColorInput(string? text)
@@ -5307,6 +5922,70 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     // ----------------------------------------------------------------------- stamp: scale
 
+    public double? StampRotationDegrees => IsEditingFutureStamp
+        ? _stampToolSettings.RotationDegrees
+        : Session.SelectedObject is { Stamp: not null } selected
+            ? NormalizeUnsignedAngle(selected.RotationDegrees) : null;
+
+    public int? StampSublayer => IsEditingFutureStamp
+        ? _stampToolSettings.Sublayer
+        : Session.SelectedObject is { Stamp: not null } selected ? selected.Sublayer : null;
+
+    public double? StampOpacityPercent => IsEditingFutureStamp
+        ? _stampToolSettings.ObjectOpacity * 100
+        : Session.SelectedObject is { Stamp: not null } selected ? selected.ObjectOpacity * 100 : null;
+
+    public void SetStampRotationDegrees(double degrees, bool commit = true)
+    {
+        if (!double.IsFinite(degrees))
+        {
+            InspectorError = "Поворот задаётся числом 0..359 градусов.";
+            return;
+        }
+
+        var normalized = NormalizeUnsignedAngle(degrees);
+        if (IsEditingFutureStamp)
+        {
+            UpdateStampToolSettings(settings => settings with { RotationDegrees = normalized }, commit);
+            return;
+        }
+
+        EditAppearance("Stamp rotation", commit, before => before.Stamp is null
+            ? before
+            : WithGeometry(before, before.X, before.Y, before.Width, before.Height, normalized));
+    }
+
+    public void SetStampSublayer(int value, bool commit = true)
+    {
+        var bounded = Math.Clamp(value, -10, 10);
+        if (IsEditingFutureStamp)
+        {
+            UpdateStampToolSettings(settings => settings with { Sublayer = bounded }, persist: commit);
+            return;
+        }
+
+        EditAppearance("Object sublayer", commit,
+            before => before.Sublayer == bounded ? before : CopyObject(before) with { Sublayer = bounded });
+    }
+
+    public void SetStampOpacityPercent(double percent, bool commit = true)
+    {
+        if (!double.IsFinite(percent))
+        {
+            InspectorError = "Непрозрачность задаётся числом 0..100.";
+            return;
+        }
+
+        if (IsEditingFutureStamp)
+        {
+            UpdateStampToolSettings(
+                settings => settings with { ObjectOpacity = Math.Clamp(percent, 0, 100) / 100.0 }, commit);
+            return;
+        }
+
+        SetSelectedOpacityPercent(percent, commit);
+    }
+
     /// <summary>
     /// Scale against the stamp's 100 % reference. An old file without a reference reports its
     /// current size as the baseline, and the first scale edit adopts it permanently.
@@ -5315,6 +5994,11 @@ public sealed partial class EditorViewModel : ViewModelBase
     {
         get
         {
+            if (IsEditingFutureStamp)
+            {
+                return _stampToolSettings.ScalePercent;
+            }
+
             if (Session.SelectedObject is not { Stamp: { } stamp } selected)
             {
                 return null;
@@ -5340,7 +6024,14 @@ public sealed partial class EditorViewModel : ViewModelBase
             return;
         }
 
-        var factor = Math.Clamp(percent, 1, 1000) / 100.0;
+        var bounded = Math.Clamp(percent, 10, 400);
+        if (IsEditingFutureStamp)
+        {
+            UpdateStampToolSettings(settings => settings with { ScalePercent = bounded }, commit);
+            return;
+        }
+
+        var factor = bounded / 100.0;
         EditAppearance("Stamp scale", commit, before =>
         {
             if (before.Stamp is not { } stamp)
@@ -5407,7 +6098,19 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     // ------------------------------------------------------------- stamp: flips and effects
 
-    private void EditStamp(string name, bool commit, Func<StampStyle, StampStyle> change) =>
+    private void EditStamp(string name, bool commit, Func<StampStyle, StampStyle> change)
+    {
+        if (IsEditingFutureStamp)
+        {
+            if (_stampToolSettings.Style is not { } style)
+            {
+                return;
+            }
+
+            UpdateStampToolSettings(settings => settings with { Style = change(style) }, commit);
+            return;
+        }
+
         EditAppearance(name, commit, before =>
         {
             if (before.Stamp is not { } stamp)
@@ -5418,6 +6121,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             var changed = change(stamp);
             return changed.Equals(stamp) ? before : CopyObject(before) with { Stamp = changed };
         });
+    }
 
     public void SetStampFlip(bool? horizontal = null, bool? vertical = null) =>
         EditStamp("Stamp flip", commit: true, stamp => stamp with
@@ -5436,7 +6140,24 @@ public sealed partial class EditorViewModel : ViewModelBase
             ShadowOffsetY = ShadowPreset.StandardOffsetY,
             ShadowBlur = ShadowPreset.StandardBlur,
             ShadowOpacity = ShadowPreset.StandardOpacity,
+            ShadowPlacement = StampShadowPlacement.Object,
+            ShadowColor = AppearanceColor.OpaqueBlack,
         });
+
+    public void SetStampShadowPlacement(StampShadowPlacement placement) =>
+        EditStamp("Stamp shadow placement", commit: true, stamp => stamp with
+        {
+            ShadowPlacement = Enum.IsDefined(placement) ? placement : StampShadowPlacement.Object,
+            ShadowOpacity = stamp.ShadowOpacity > 0 ? stamp.ShadowOpacity : ShadowPreset.StandardOpacity,
+        });
+
+    public void SetStampShadowColor(string? colorText)
+    {
+        if (RequireColorInput(colorText) is { } color)
+        {
+            EditStamp("Stamp shadow colour", commit: true, stamp => stamp with { ShadowColor = color });
+        }
+    }
 
     public void SetStampShadow(
         double? offsetX = null, double? offsetY = null, double? blur = null,
@@ -5493,6 +6214,28 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     /// <summary>The whole appearance back to neutral in one entry; transform stays untouched.</summary>
     public void ResetStampAppearance() =>
+        ResetStampAppearanceCore();
+
+    private void ResetStampAppearanceCore()
+    {
+        if (IsEditingFutureStamp && _stampToolSettings.Style is { } toolStyle)
+        {
+            UpdateStampToolSettings(settings => settings with
+            {
+                ObjectOpacity = 1,
+                Style = new StampStyle(toolStyle.AssetSha256)
+                {
+                    ReferenceWidth = toolStyle.ReferenceWidth,
+                    ReferenceHeight = toolStyle.ReferenceHeight,
+                    FlipHorizontal = toolStyle.FlipHorizontal,
+                    FlipVertical = toolStyle.FlipVertical,
+                    MaskAssetSha256 = toolStyle.MaskAssetSha256,
+                    ClipMaskEnabled = toolStyle.ClipMaskEnabled,
+                },
+            }, persist: true);
+            return;
+        }
+
         EditAppearance("Reset stamp appearance", commit: true, before =>
         {
             if (before.Stamp is not { } stamp)
@@ -5504,11 +6247,16 @@ public sealed partial class EditorViewModel : ViewModelBase
             {
                 ReferenceWidth = stamp.ReferenceWidth,
                 ReferenceHeight = stamp.ReferenceHeight,
+                FlipHorizontal = stamp.FlipHorizontal,
+                FlipVertical = stamp.FlipVertical,
+                MaskAssetSha256 = stamp.MaskAssetSha256,
+                ClipMaskEnabled = stamp.ClipMaskEnabled,
             };
             return neutral.Equals(stamp) && before.ObjectOpacity == 1.0
                 ? before
                 : CopyObject(before) with { Stamp = neutral, ObjectOpacity = 1.0 };
         });
+    }
 
     private double PercentOffset(double percent, double fallback)
     {

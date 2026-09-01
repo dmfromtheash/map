@@ -87,6 +87,9 @@ public sealed class AssetCatalog
     public AssetRecord? RecordForVariant(string variantId) =>
         FindVariant(variantId) is { } variant ? Find(variant.Sha256) : null;
 
+    public AssetRecord? MaskRecordForVariant(string variantId) =>
+        FindVariant(variantId)?.MaskSha256 is { } maskSha ? Find(maskSha) : null;
+
     // ---------------------------------------------------------------- import
 
     public AssetRecord Import(string sourcePath, AssetImportOptions options, DateTimeOffset importedUtc)
@@ -580,6 +583,79 @@ public sealed class AssetCatalog
     }
 
     // ---------------------------------------------------------------- mutation
+
+    /// <summary>
+    /// Validates a local image completely before changing the library, then publishes the mask
+    /// identity and any new content record through the catalog's one atomic index replacement.
+    /// </summary>
+    public AssetVariant AssignVariantMask(
+        string variantId, string sourcePath, DateTimeOffset importedUtc)
+    {
+        RequireWritable();
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
+        if (!_byVariantId.TryGetValue(variantId, out var variant)
+            || Find(variant.Sha256) is not { } visual)
+        {
+            throw new KeyNotFoundException($"Вариант {variantId} отсутствует в каталоге.");
+        }
+
+        var fullSource = Path.GetFullPath(sourcePath);
+        var bytes = AssetImagePolicy.ReadEncodedFile(fullSource);
+        var maskSha256 = Convert.ToHexStringLower(SHA256.HashData(bytes));
+        if (string.Equals(maskSha256, variant.Sha256, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException(
+                "Маска должна быть отдельным content asset, а не теми же байтами, что и изображение варианта.");
+        }
+        using (var data = SKData.CreateCopy(bytes))
+        using (var codec = SKCodec.Create(data)
+            ?? throw new InvalidDataException("Маска не является поддерживаемым PNG, JPEG или WebP."))
+        {
+            var metadata = AssetImagePolicy.Inspect(codec, bytes.LongLength);
+            if (metadata.Width != visual.Width || metadata.Height != visual.Height)
+            {
+                throw new InvalidDataException(
+                    $"Размер маски {metadata.Width}×{metadata.Height} не совпадает с вариантом "
+                    + $"{visual.Width}×{visual.Height}.");
+            }
+        }
+
+        var mask = ImportContent(fullSource, new AssetImportOptions
+        {
+            Pack = visual.Pack,
+            Tags = [.. visual.Tags, "clip-mask"],
+            Provenance = new AssetProvenance
+            {
+                Source = "user-imported-mask",
+                LicenseStatus = AssetLicenseStatus.Unknown,
+            },
+        }, importedUtc);
+        var index = _document.Variants.FindIndex(item =>
+            string.Equals(item.Id, variantId, StringComparison.Ordinal));
+        _document.Variants[index] = variant with { MaskSha256 = mask.Sha256 };
+        SaveIndex();
+        return _byVariantId[variantId];
+    }
+
+    public AssetVariant RemoveVariantMask(string variantId)
+    {
+        RequireWritable();
+        if (!_byVariantId.TryGetValue(variantId, out var variant))
+        {
+            throw new KeyNotFoundException($"Вариант {variantId} отсутствует в каталоге.");
+        }
+
+        if (variant.MaskSha256 is null)
+        {
+            return variant;
+        }
+
+        var index = _document.Variants.FindIndex(item =>
+            string.Equals(item.Id, variantId, StringComparison.Ordinal));
+        _document.Variants[index] = variant with { MaskSha256 = null };
+        SaveIndex();
+        return _byVariantId[variantId];
+    }
 
     public void SetFavorite(string sha256, bool favorite)
     {

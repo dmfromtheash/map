@@ -648,11 +648,15 @@ public static partial class MapProjectStore
                 || TileCount(p.First) != TileCount(p.Second)
                 || (p.First.Mask?.Tiles.TileCount ?? 0) != (p.Second.Mask?.Tiles.TileCount ?? 0))
             || reloaded.Assets.Count != expected.Assets.Count
+            || (reloaded.StampForeground?.Tiles.TileCount ?? -1)
+                != (expected.StampForeground?.Tiles.TileCount ?? -1)
             || reloaded.Checkpoints.Count != expected.Checkpoints.Count
             || reloaded.Checkpoints.Zip(expected.Checkpoints).Any(pair =>
                 pair.First.Id != pair.Second.Id
                 || pair.First.Name != pair.Second.Name
                 || pair.First.CreatedUtc != pair.Second.CreatedUtc
+                || (pair.First.Snapshot.StampForeground?.Tiles.TileCount ?? -1)
+                    != (pair.Second.Snapshot.StampForeground?.Tiles.TileCount ?? -1)
                 || !pair.First.PreviewPng.Span.SequenceEqual(pair.Second.PreviewPng.Span)))
         {
             throw new MapProjectCorruptedException("Read-back layer/object shape does not match the saved snapshot.");
@@ -937,6 +941,12 @@ public static partial class MapProjectStore
                 bytesPerPixel: layer.Type == "Land" ? 1 : 4);
             ReadTileList(layer.Mask?.Tiles, maskPrefix, layerId, bytesPerPixel: 1);
         }
+        if (scene.StampForeground is not null && scene.StampForeground.Tiles is null)
+        {
+            throw new MapProjectCorruptedException(
+                "scene.json has a null tile collection for the stamp foreground surface.");
+        }
+        ReadTileList(scene.StampForeground?.Tiles, rasterPrefix, "foreground", bytesPerPixel: 4);
 
         foreach (var entry in archive.Entries)
         {
@@ -1509,6 +1519,9 @@ public static partial class MapProjectStore
         DocumentId = document.Id.ToString(),
         Layers = [.. document.Layers.Select(ToLayerDto)],
         Notes = [.. document.Notes.Select(ToNoteDto)],
+        StampForeground = document.StampForeground is { } foreground
+            ? new StampForegroundDto { Tiles = ToTileDtos(foreground.Tiles) }
+            : null,
     };
 
     private static LayerDto ToLayerDto(MapLayer layer)
@@ -1577,12 +1590,16 @@ public static partial class MapProjectStore
                 ReferenceHeight = stamp.ReferenceHeight,
                 FlipHorizontal = stamp.FlipHorizontal,
                 FlipVertical = stamp.FlipVertical,
+                MaskAssetSha256 = stamp.MaskAssetSha256,
+                ClipMaskEnabled = stamp.ClipMaskEnabled ? true : null,
                 Blend = stamp.Blend,
                 Blur = stamp.Blur,
                 ShadowOffsetX = stamp.ShadowOffsetX,
                 ShadowOffsetY = stamp.ShadowOffsetY,
                 ShadowBlur = stamp.ShadowBlur,
                 ShadowOpacity = stamp.ShadowOpacity,
+                ShadowPlacement = stamp.ShadowPlacement.ToString(),
+                ShadowColor = stamp.ShadowColor,
                 Hue = stamp.Hue,
                 Saturation = stamp.Saturation,
                 Brightness = stamp.Brightness,
@@ -1755,7 +1772,15 @@ public static partial class MapProjectStore
                 layers,
                 assetManifest.Assets.Select(asset => ToAsset(asset, assetEntries)).ToList(),
                 scene.Notes.Select(ToNote).ToList(),
-                checkpoints);
+                checkpoints,
+                scene.StampForeground is { } foreground
+                    ? new StampForegroundSurface(ToTileMap(
+                        foreground.Tiles,
+                        entryRoot + MapProjectFormat.RasterPrefix,
+                        "foreground",
+                        4,
+                        tileEntries))
+                    : null);
         }
         catch (Exception ex) when (ex is ArgumentException or FormatException or InvalidOperationException)
         {
@@ -1822,10 +1847,13 @@ public static partial class MapProjectStore
         dto.Visible,
         dto.Locked)
     {
-        Sublayer = dto.Sublayer,
+        Sublayer = dto.Sublayer is >= -10 and <= 10
+            ? dto.Sublayer
+            : throw new MapProjectCorruptedException(
+                $"scene.json holds an out-of-range object sublayer value \"{dto.Sublayer}\"."),
         GroupId = dto.GroupId is null ? null : Guid.ParseExact(dto.GroupId, "D"),
         GroupName = dto.GroupName,
-        ObjectOpacity = dto.ObjectOpacity,
+        ObjectOpacity = RequireFinite(dto.ObjectOpacity, "object opacity", min: 0, max: 1),
         Stamp = dto.Stamp is { } stamp
             ? new StampStyle(RequireString(stamp.AssetSha256, "stamp asset hash"))
             {
@@ -1833,17 +1861,31 @@ public static partial class MapProjectStore
                 ReferenceHeight = RequirePositiveOrNull(stamp.ReferenceHeight, "stamp reference height"),
                 FlipHorizontal = stamp.FlipHorizontal,
                 FlipVertical = stamp.FlipVertical,
+                MaskAssetSha256 = RequireOptionalSha256(
+                    stamp.MaskAssetSha256, "stamp mask asset hash"),
+                ClipMaskEnabled = RequireClipMaskEnabled(
+                    stamp.ClipMaskEnabled, stamp.MaskAssetSha256, stamp.AssetSha256),
                 Blend = RequireBlend(stamp.Blend, "stamp blend"),
                 Blur = RequireFinite(
                     stamp.Blur, "stamp blur", min: 0, max: AppearanceLimits.MaxBlur),
-                ShadowOffsetX = stamp.ShadowOffsetX,
-                ShadowOffsetY = stamp.ShadowOffsetY,
-                ShadowBlur = stamp.ShadowBlur,
-                ShadowOpacity = stamp.ShadowOpacity,
-                Hue = stamp.Hue,
-                Saturation = stamp.Saturation,
-                Brightness = stamp.Brightness,
-                Contrast = stamp.Contrast,
+                ShadowOffsetX = RequireFinite(
+                    stamp.ShadowOffsetX, "stamp shadow offset X",
+                    -AppearanceLimits.MaxShadowOffset, AppearanceLimits.MaxShadowOffset),
+                ShadowOffsetY = RequireFinite(
+                    stamp.ShadowOffsetY, "stamp shadow offset Y",
+                    -AppearanceLimits.MaxShadowOffset, AppearanceLimits.MaxShadowOffset),
+                ShadowBlur = RequireFinite(
+                    stamp.ShadowBlur, "stamp shadow blur", min: 0, max: AppearanceLimits.MaxShadowBlur),
+                ShadowOpacity = RequireFinite(stamp.ShadowOpacity, "stamp shadow opacity", min: 0, max: 1),
+                ShadowPlacement = stamp.ShadowPlacement is null
+                    ? StampShadowPlacement.Object
+                    : ParseDefined<StampShadowPlacement>(stamp.ShadowPlacement, "stamp shadow placement"),
+                ShadowColor = RequireAppearanceColor(
+                    stamp.ShadowColor ?? AppearanceColor.OpaqueBlack, "stamp shadow color"),
+                Hue = RequireFinite(stamp.Hue, "stamp hue", min: -180, max: 180),
+                Saturation = RequireFinite(stamp.Saturation, "stamp saturation", min: -1, max: 1),
+                Brightness = RequireFinite(stamp.Brightness, "stamp brightness", min: -1, max: 1),
+                Contrast = RequireFinite(stamp.Contrast, "stamp contrast", min: -1, max: 1),
             }
             : null,
         Line = dto.Line is { } line ? ToLine(line) : null,
@@ -2219,6 +2261,20 @@ public static partial class MapProjectStore
                 }
             }
         }
+
+        if (document.StampForeground is { } foreground)
+        {
+            foreach (var key in foreground.Tiles.Keys)
+            {
+                yield return (
+                    TileEntryName(
+                        entryRoot + MapProjectFormat.RasterPrefix,
+                        "foreground",
+                        key.X,
+                        key.Y),
+                    foreground.Tiles.TryGet(key)!);
+            }
+        }
     }
 
     private static IEnumerable<(string Name, byte[] Bytes)> EnumerateAssetEntries(
@@ -2302,12 +2358,20 @@ public static partial class MapProjectStore
         string prefix,
         LayerId layerId,
         int bytesPerPixel,
+        IReadOnlyDictionary<string, byte[]> entries) =>
+        ToTileMap(tiles, prefix, layerId.ToString(), bytesPerPixel, entries);
+
+    private static TileMap ToTileMap(
+        IEnumerable<TileDto> tiles,
+        string prefix,
+        string ownerId,
+        int bytesPerPixel,
         IReadOnlyDictionary<string, byte[]> entries)
     {
         var map = TileMap.Empty(bytesPerPixel);
         return map.WithMany(tiles.Select(tile => new KeyValuePair<TileKey, byte[]?>(
             new TileKey(tile.X, tile.Y),
-            entries[TileEntryName(prefix, layerId.ToString(), tile.X, tile.Y)])));
+            entries[TileEntryName(prefix, ownerId, tile.X, tile.Y)])));
     }
 
     private static string TileEntryName(string prefix, string layerId, int x, int y) =>
@@ -2343,6 +2407,22 @@ public static partial class MapProjectStore
 
     private static string? RequireOptionalSha256(string? value, string what) =>
         value is null ? null : RequireSha256(value, what);
+
+    private static bool RequireClipMaskEnabled(bool? enabled, string? maskSha256, string? visualSha256)
+    {
+        if (maskSha256 is not null
+            && string.Equals(maskSha256, visualSha256, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new MapProjectCorruptedException(
+                "scene.json uses the stamp visual content as its own clip mask.");
+        }
+        if (enabled is true && maskSha256 is null)
+        {
+            throw new MapProjectCorruptedException(
+                "scene.json enables a stamp clip mask without a mask asset identity.");
+        }
+        return enabled ?? false;
+    }
 
     private static string RequireCanonicalLayerId(string? value)
     {
@@ -2388,6 +2468,18 @@ public static partial class MapProjectStore
         }
 
         return value;
+    }
+
+    private static string RequireAppearanceColor(string? value, string what)
+    {
+        var normalized = AppearanceColor.Normalize(value);
+        if (normalized is null)
+        {
+            throw new MapProjectCorruptedException(
+                $"scene.json holds invalid {what} \"{value}\".");
+        }
+
+        return normalized;
     }
 
     /// <summary>An optional positive size: absent stays absent; present must be a real size.</summary>

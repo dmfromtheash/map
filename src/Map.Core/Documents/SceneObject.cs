@@ -67,6 +67,15 @@ public sealed record StampStyle
     public bool FlipHorizontal { get; init; }
     public bool FlipVertical { get; init; }
 
+    /// <summary>
+    /// Resolved mask identity captured from the concrete asset variant. The placed object keeps
+    /// this identity independently of later Library changes.
+    /// </summary>
+    public string? MaskAssetSha256 { get; init; }
+
+    /// <summary>Whether this stamp reveals the document foreground through its resolved mask.</summary>
+    public bool ClipMaskEnabled { get; init; }
+
     /// <summary>Blend mode name from a fixed supported set; "Normal" is source-over.</summary>
     public string Blend { get; init; } = "Normal";
 
@@ -78,6 +87,8 @@ public sealed record StampStyle
     public double ShadowOffsetY { get; init; } = 4;
     public double ShadowBlur { get; init; } = 6;
     public double ShadowOpacity { get; init; }
+    public StampShadowPlacement ShadowPlacement { get; init; } = StampShadowPlacement.Object;
+    public string ShadowColor { get; init; } = AppearanceColor.OpaqueBlack;
 
     /// <summary>Colour adjustments: hue in degrees, the rest as -1..1 offsets.</summary>
     public double Hue { get; init; }

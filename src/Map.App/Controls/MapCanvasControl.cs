@@ -246,6 +246,7 @@ public sealed class MapCanvasControl : Control
                     X, Y, bottomRight.X, bottomRight.Y),
                 ObjectOverrides = editor.DragPreview?.Proposed,
                 PlacementPreviewObjects = editor.PlacementPreviewObjects,
+                PlacementPreviewLayerId = editor.PendingPlacement?.LayerId,
                 PlacementArea = editor.PendingPlacement is
                     { PointerVisible: true, Target: PlacementTargetKind.Stamp,
                       Mode: StampPlacementMode.Area } placement

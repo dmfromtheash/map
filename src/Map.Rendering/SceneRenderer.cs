@@ -25,6 +25,9 @@ public sealed class StrokePreview
 
     /// <summary>Mask strokes preview as the red mask overlay, not as paint.</summary>
     public bool IsMask { get; init; }
+
+    /// <summary>The preview belongs to the document-owned, map-aligned stamp foreground.</summary>
+    public bool IsStampForeground { get; init; }
 }
 
 /// <summary>Per-frame counters. Optional: the editor sets it only when the HUD or a test needs it.</summary>
@@ -166,6 +169,9 @@ public sealed class RenderOptions
     /// </summary>
     public IReadOnlyList<SceneObject>? PlacementPreviewObjects { get; init; }
 
+    /// <summary>Owning object layer for a preview shadow whose placement is "behind layer".</summary>
+    public LayerId? PlacementPreviewLayerId { get; init; }
+
     public WorldBounds? PlacementArea { get; init; }
 
     public bool PlacementInvalid { get; init; }
@@ -222,6 +228,9 @@ public sealed record CanvasBoundaryOverlay(
 /// </summary>
 public static class SceneRenderer
 {
+    private static readonly LayerId StampForegroundLayerId =
+        new(new Guid("2e304ada-4a3e-4f2e-896c-c92977b52150"));
+
     private static readonly SKColor SelectionColor = new(255, 214, 10, 255);
     private const double OverviewChunkSize = 8_192;
     private const double OverviewExactScreenSize = 4;
@@ -278,7 +287,7 @@ public static class SceneRenderer
             DrawLayer(canvas, document, layer, view, options);
         }
 
-        DrawPlacementPreview(canvas, options);
+        DrawPlacementPreview(canvas, document, options);
         DrawSelectionChrome(canvas, document, options);
         canvas.Restore();
         DrawBoundaryOverlay(canvas, options.BoundaryOverlay, options.ViewScale);
@@ -418,6 +427,15 @@ public static class SceneRenderer
                 break;
 
             case ObjectLayer objectLayer:
+                if (options.PlacementPreviewLayerId == objectLayer.Id
+                    && options.PlacementPreviewObjects is { Count: > 0 } placementPreview)
+                {
+                    foreach (var previewObject in placementPreview)
+                    {
+                        DrawLayerStampShadow(
+                            canvas, previewObject, document.StampForeground, options);
+                    }
+                }
                 DrawObjects(canvas, document, objectLayer, view, options);
                 break;
 
@@ -613,13 +631,17 @@ public static class SceneRenderer
             && options.ObjectCache is not null
             && options.VisibleWorld is not null)
         {
-            DrawOverviewObjects(canvas, layer, view, options);
+            DrawOverviewObjects(canvas, document, layer, view, options);
             return;
         }
 
+        // A layer shadow may originate just outside the viewport. The expansion is the strict
+        // maximum offset plus a conservative three-sigma blur reach; it remains a local query.
+        var queryView = Expand(view,
+            AppearanceLimits.MaxShadowOffset + (AppearanceLimits.MaxShadowBlur * 3));
         IReadOnlyList<SceneObject> candidates = options.VisibleWorld is null
             ? layer.Objects
-            : ObjectSpatialIndex.For(layer).Query(view);
+            : ObjectSpatialIndex.For(layer).Query(queryView);
 
         IReadOnlyList<SceneObject> ordered;
         if (options.ObjectOverrides is not { Count: > 0 } overrideList)
@@ -653,7 +675,7 @@ public static class SceneRenderer
                     current = candidate;
                 }
 
-                if (options.VisibleWorld is null || SceneGeometry.BoundsOf(current).Intersects(view))
+                if (options.VisibleWorld is null || SceneGeometry.BoundsOf(current).Intersects(queryView))
                 {
                     resolved.Add((current, location.ObjectIndex));
                 }
@@ -666,7 +688,7 @@ public static class SceneRenderer
                     && index.TryFind(replacement.Id, out var location)
                     && location.LayerId == layer.Id
                     && (options.VisibleWorld is null
-                        || SceneGeometry.BoundsOf(replacement).Intersects(view)))
+                        || SceneGeometry.BoundsOf(replacement).Intersects(queryView)))
                 {
                     resolved.Add((replacement, location.ObjectIndex));
                 }
@@ -685,6 +707,16 @@ public static class SceneRenderer
             stats.ObjectCandidates += ordered.Count;
         }
 
+        // Exact/interactive rendering evaluates "behind layer" as one bounded prepass. Overview
+        // intentionally keeps its existing point representation and omits expensive effects.
+        if (options.LodTier != RenderLodTier.Overview)
+        {
+            foreach (var sceneObject in ordered)
+            {
+                DrawLayerStampShadow(canvas, sceneObject, document.StampForeground, options);
+            }
+        }
+
         foreach (var sceneObject in ordered)
         {
             if (!sceneObject.Visible)
@@ -692,7 +724,7 @@ public static class SceneRenderer
                 continue;
             }
 
-            DrawObject(canvas, sceneObject, options);
+            DrawObject(canvas, sceneObject, document.StampForeground, options);
             if (options.Stats is { } s)
             {
                 s.ObjectsDrawn++;
@@ -911,7 +943,11 @@ public static class SceneRenderer
             pixels);
     }
 
-    private static void DrawObject(SKCanvas canvas, SceneObject sceneObject, RenderOptions options)
+    private static void DrawObject(
+        SKCanvas canvas,
+        SceneObject sceneObject,
+        StampForegroundSurface? stampForeground,
+        RenderOptions options)
     {
         canvas.Save();
         ApplyRotation(canvas, sceneObject);
@@ -926,7 +962,7 @@ public static class SceneRenderer
 
         if (sceneObject.Kind == SceneObjectKind.Stamp && sceneObject.Stamp is { } stamp)
         {
-            DrawStamp(canvas, sceneObject, stamp, rect, objectAlpha, options);
+            DrawStamp(canvas, sceneObject, stamp, rect, objectAlpha, stampForeground, options);
             canvas.Restore();
             return;
         }
@@ -1032,7 +1068,7 @@ public static class SceneRenderer
         }
         foreach (var item in composition.Items.Where(item => item.Visible)
                      .OrderBy(item => item.Sublayer))
-            DrawObject(canvas, item, options);
+            DrawObject(canvas, item, stampForeground: null, options);
         if (composition.IncludeGrids && (!options.IsExport || options.IncludeExportGrids))
         {
             var localView = new WorldBounds(0, 0, composition.SourceWidth, composition.SourceHeight);
@@ -1559,7 +1595,7 @@ public static class SceneRenderer
 
     private static void DrawStamp(
         SKCanvas canvas, SceneObject sceneObject, StampStyle stamp, SKRect rect,
-        byte objectAlpha, RenderOptions options)
+        byte objectAlpha, StampForegroundSurface? stampForeground, RenderOptions options)
     {
         var image = options.Stamps?.TryGetImage(stamp.AssetSha256);
         if (image is null)
@@ -1591,6 +1627,20 @@ public static class SceneRenderer
             return;
         }
 
+        var mask = ResolveClipMask(stamp, stampForeground, options, countMissing: true);
+        if (stamp.ShadowOpacity > 0 && stamp.ShadowPlacement == StampShadowPlacement.Object)
+        {
+            if (mask is null)
+            {
+                DrawStampShadow(canvas, sceneObject, stamp, rect, objectAlpha, image);
+            }
+            else
+            {
+                DrawClippedStampShadow(
+                    canvas, sceneObject, stamp, rect, objectAlpha, image, mask, stampForeground!, options);
+            }
+        }
+
         using var paint = new SKPaint
         {
             Color = SKColors.White.WithAlpha(objectAlpha),
@@ -1600,21 +1650,233 @@ public static class SceneRenderer
         };
 
         SKImageFilter? filter = null;
-        if (!options.FastPreview && stamp.Blur > 0)
+        if (stamp.Blur > 0)
         {
             filter = SKImageFilter.CreateBlur((float)stamp.Blur, (float)stamp.Blur);
         }
 
-        if (!options.FastPreview && stamp.ShadowOpacity > 0)
+        paint.ImageFilter = filter;
+
+        if (mask is null)
         {
-            var shadow = SKColors.Black.WithAlpha(
-                (byte)Math.Clamp(Math.Round(stamp.ShadowOpacity * 255), 0, 255));
-            filter = SKImageFilter.CreateDropShadow(
-                (float)stamp.ShadowOffsetX, (float)stamp.ShadowOffsetY,
-                (float)stamp.ShadowBlur, (float)stamp.ShadowBlur, shadow, filter);
+            // Clip Mask off (and unresolved legacy/missing mask) keeps the exact pre-Stage-15 path.
+            DrawStampImage(canvas, image, rect, stamp, paint);
+        }
+        else
+        {
+            DrawClippedStampComposition(
+                canvas, sceneObject, stamp, rect, image, mask, stampForeground!, options, paint);
         }
 
-        paint.ImageFilter = filter;
+        filter?.Dispose();
+        paint.ColorFilter?.Dispose();
+    }
+
+    private static SKImage? ResolveClipMask(
+        StampStyle stamp,
+        StampForegroundSurface? foreground,
+        RenderOptions options,
+        bool countMissing)
+    {
+        if (!stamp.ClipMaskEnabled || stamp.MaskAssetSha256 is not { } maskSha256)
+        {
+            return null;
+        }
+
+        var hasForeground = foreground is { IsEmpty: false }
+            || options.Preview is { IsStampForeground: true, Coverage.Count: > 0 };
+        if (!hasForeground)
+        {
+            return null;
+        }
+
+        var mask = options.Stamps?.TryGetImage(maskSha256);
+        if (mask is null && countMissing && options.Stats is { } stats)
+        {
+            stats.MissingAssets++;
+        }
+        return mask;
+    }
+
+    private static void DrawClippedStampShadow(
+        SKCanvas canvas,
+        SceneObject sceneObject,
+        StampStyle stamp,
+        SKRect rect,
+        byte objectAlpha,
+        SKImage visual,
+        SKImage mask,
+        StampForegroundSurface foreground,
+        RenderOptions options)
+    {
+        var color = ParseColor(stamp.ShadowColor);
+        var combinedAlpha = (byte)Math.Clamp(Math.Round(
+            color.Alpha * stamp.ShadowOpacity * (objectAlpha / 255.0)), 0, 255);
+        if (combinedAlpha == 0) return;
+
+        using var filter = SKImageFilter.CreateDropShadowOnly(
+            (float)stamp.ShadowOffsetX, (float)stamp.ShadowOffsetY,
+            (float)stamp.ShadowBlur, (float)stamp.ShadowBlur,
+            color.WithAlpha(combinedAlpha));
+        using var paint = new SKPaint
+        {
+            Color = SKColors.White,
+            IsAntialias = true,
+            BlendMode = ParseBlend(stamp.Blend),
+            ImageFilter = filter,
+        };
+        DrawClippedStampComposition(
+            canvas, sceneObject, stamp, rect, visual, mask, foreground, options, paint);
+    }
+
+    private static void DrawClippedStampComposition(
+        SKCanvas canvas,
+        SceneObject sceneObject,
+        StampStyle stamp,
+        SKRect rect,
+        SKImage visual,
+        SKImage mask,
+        StampForegroundSurface foreground,
+        RenderOptions options,
+        SKPaint finalPaint)
+    {
+        // The bounded outer layer is the composed stamp. Object opacity, colour adjustment, blur
+        // and blend are applied exactly once when this layer is restored.
+        var reach = (float)Math.Max(
+            stamp.Blur * 3,
+            Math.Max(Math.Abs(stamp.ShadowOffsetX), Math.Abs(stamp.ShadowOffsetY))
+                + (stamp.ShadowBlur * 3));
+        var bounds = rect;
+        bounds.Inflate(reach, reach);
+        canvas.SaveLayer(bounds, finalPaint);
+
+        using (var basePaint = new SKPaint { Color = SKColors.White, IsAntialias = true })
+        {
+            DrawStampImage(canvas, visual, rect, stamp, basePaint);
+        }
+
+        // Overlay = Foreground(map coordinates) × Mask(stamp coordinates) × original visual alpha.
+        canvas.SaveLayer(rect, null);
+        canvas.Save();
+        if (sceneObject.RotationDegrees != 0)
+        {
+            canvas.RotateDegrees(
+                (float)-sceneObject.RotationDegrees, rect.MidX, rect.MidY);
+        }
+        var boundsInMap = SceneGeometry.BoundsOf(sceneObject);
+        DrawTiles(
+            canvas,
+            StampForegroundLayerId,
+            foreground.Tiles,
+            boundsInMap,
+            options,
+            TileImageKind.Content);
+        if (options.Preview is { IsStampForeground: true } foregroundPreview)
+        {
+            DrawStrokePreview(canvas, foregroundPreview, boundsInMap, options);
+        }
+        canvas.Restore();
+
+        using (var maskFilter = SKColorFilter.CreateColorMatrix(
+        [
+            1, 0, 0, 0, 0,
+            0, 1, 0, 0, 0,
+            0, 0, 1, 0, 0,
+            0.2126f, 0.7152f, 0.0722f, 0, 0,
+        ]))
+        using (var maskPaint = new SKPaint
+        {
+            Color = SKColors.White,
+            IsAntialias = true,
+            BlendMode = SKBlendMode.DstIn,
+            ColorFilter = maskFilter,
+        })
+        {
+            DrawStampImage(canvas, mask, rect, stamp, maskPaint);
+        }
+        using (var alphaPaint = new SKPaint
+        {
+            Color = SKColors.White,
+            IsAntialias = true,
+            BlendMode = SKBlendMode.DstIn,
+        })
+        {
+            DrawStampImage(canvas, visual, rect, stamp, alphaPaint);
+        }
+        canvas.Restore();
+        canvas.Restore();
+    }
+
+    private static void DrawStampImage(
+        SKCanvas canvas, SKImage image, SKRect rect, StampStyle stamp, SKPaint paint)
+    {
+        canvas.Save();
+        if (stamp.FlipHorizontal || stamp.FlipVertical)
+        {
+            canvas.Translate(rect.MidX, rect.MidY);
+            canvas.Scale(stamp.FlipHorizontal ? -1 : 1, stamp.FlipVertical ? -1 : 1);
+            canvas.Translate(-rect.MidX, -rect.MidY);
+        }
+        canvas.DrawImage(
+            image,
+            rect,
+            new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear),
+            paint);
+        canvas.Restore();
+    }
+
+    private static void DrawLayerStampShadow(
+        SKCanvas canvas,
+        SceneObject sceneObject,
+        StampForegroundSurface? stampForeground,
+        RenderOptions options)
+    {
+        if (!sceneObject.Visible || sceneObject.ObjectOpacity <= 0
+            || sceneObject.Stamp is not { ShadowPlacement: StampShadowPlacement.Layer, ShadowOpacity: > 0 } stamp
+            || options.Stamps?.TryGetImage(stamp.AssetSha256) is not { } image)
+        {
+            return;
+        }
+
+        canvas.Save();
+        ApplyRotation(canvas, sceneObject);
+        var rect = new SKRect(
+            (float)sceneObject.X, (float)sceneObject.Y,
+            (float)(sceneObject.X + sceneObject.Width), (float)(sceneObject.Y + sceneObject.Height));
+        var objectAlpha = Alpha(sceneObject.ObjectOpacity);
+        var mask = ResolveClipMask(stamp, stampForeground, options, countMissing: false);
+        if (mask is null)
+        {
+            DrawStampShadow(canvas, sceneObject, stamp, rect, objectAlpha, image);
+        }
+        else
+        {
+            DrawClippedStampShadow(
+                canvas, sceneObject, stamp, rect, objectAlpha, image, mask, stampForeground!, options);
+        }
+        canvas.Restore();
+    }
+
+    private static void DrawStampShadow(
+        SKCanvas canvas, SceneObject sceneObject, StampStyle stamp, SKRect rect,
+        byte objectAlpha, SKImage image)
+    {
+        var color = ParseColor(stamp.ShadowColor);
+        var combinedAlpha = (byte)Math.Clamp(Math.Round(
+            color.Alpha * stamp.ShadowOpacity * (objectAlpha / 255.0)), 0, 255);
+        if (combinedAlpha == 0) return;
+
+        using var filter = SKImageFilter.CreateDropShadowOnly(
+            (float)stamp.ShadowOffsetX, (float)stamp.ShadowOffsetY,
+            (float)stamp.ShadowBlur, (float)stamp.ShadowBlur,
+            color.WithAlpha(combinedAlpha));
+        using var paint = new SKPaint
+        {
+            Color = SKColors.White,
+            IsAntialias = true,
+            BlendMode = ParseBlend(stamp.Blend),
+            ImageFilter = filter,
+        };
 
         canvas.Save();
         if (stamp.FlipHorizontal || stamp.FlipVertical)
@@ -1623,12 +1885,8 @@ public static class SceneRenderer
             canvas.Scale(stamp.FlipHorizontal ? -1 : 1, stamp.FlipVertical ? -1 : 1);
             canvas.Translate(-rect.MidX, -rect.MidY);
         }
-
         canvas.DrawImage(image, rect, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear), paint);
         canvas.Restore();
-
-        filter?.Dispose();
-        paint.ColorFilter?.Dispose();
     }
 
     /// <summary>Hue / saturation / brightness / contrast as one colour matrix, or null when neutral.</summary>
@@ -1721,6 +1979,7 @@ public static class SceneRenderer
 
     private static SKBlendMode ParseBlend(string blend) => blend switch
     {
+        "Normal" => SKBlendMode.SrcOver,
         "Multiply" => SKBlendMode.Multiply,
         "Screen" => SKBlendMode.Screen,
         "Overlay" => SKBlendMode.Overlay,
@@ -1730,13 +1989,18 @@ public static class SceneRenderer
         "HardLight" => SKBlendMode.HardLight,
         "Difference" => SKBlendMode.Difference,
         "Add" => SKBlendMode.Plus,
-        _ => SKBlendMode.SrcOver,
+        "ColorBurn" => SKBlendMode.ColorBurn,
+        "ColorDodge" => SKBlendMode.ColorDodge,
+        "Exclusion" => SKBlendMode.Exclusion,
+        "Hue" => SKBlendMode.Hue,
+        "Saturation" => SKBlendMode.Saturation,
+        "Color" => SKBlendMode.Color,
+        "Luminosity" => SKBlendMode.Luminosity,
+        _ => throw new InvalidOperationException($"Unsupported persisted blend mode: {blend}."),
     };
 
-    /// <summary>Blend modes offered in the stamp editor, in menu order.</summary>
-    public static IReadOnlyList<string> BlendModes { get; } =
-        ["Normal", "Multiply", "Screen", "Overlay", "Darken", "Lighten", "SoftLight", "HardLight",
-         "Difference", "Add"];
+    /// <summary>Compatibility view over the domain's sole persisted-key contract.</summary>
+    public static IReadOnlyList<string> BlendModes => Map.Core.Documents.BlendModes.Supported;
 
     private static void DrawSelectionChrome(SKCanvas canvas, MapDocument document, RenderOptions options)
     {
@@ -1776,7 +2040,8 @@ public static class SceneRenderer
         }
     }
 
-    private static void DrawPlacementPreview(SKCanvas canvas, RenderOptions options)
+    private static void DrawPlacementPreview(
+        SKCanvas canvas, MapDocument document, RenderOptions options)
     {
         if (options.PlacementPreviewObjects is not { Count: > 0 } preview)
         {
@@ -1785,7 +2050,7 @@ public static class SceneRenderer
 
         foreach (var sceneObject in preview)
         {
-            DrawObject(canvas, sceneObject, options);
+            DrawObject(canvas, sceneObject, document.StampForeground, options);
         }
 
         var scale = Math.Max(options.ViewScale, 0.01);
@@ -1838,6 +2103,7 @@ public static class SceneRenderer
 
     private static void DrawOverviewObjects(
         SKCanvas canvas,
+        MapDocument document,
         ObjectLayer layer,
         WorldBounds view,
         RenderOptions options)
@@ -1917,7 +2183,7 @@ public static class SceneRenderer
 
         foreach (var sceneObject in exact.Values.OrderBy(item => item.Sublayer))
         {
-            DrawObject(canvas, sceneObject, options);
+            DrawObject(canvas, sceneObject, document.StampForeground, options);
             options.Stats?.RecordExactObject(sceneObject);
         }
 
@@ -2323,6 +2589,10 @@ public static class SceneRenderer
 
     private static SKRect ToRect(WorldBounds bounds) => new(
         (float)bounds.Left, (float)bounds.Top, (float)bounds.Right, (float)bounds.Bottom);
+
+    private static WorldBounds Expand(WorldBounds bounds, double padding) => new(
+        bounds.Left - padding, bounds.Top - padding,
+        bounds.Right + padding, bounds.Bottom + padding);
 
     private static SKColor WithScaledAlpha(this SKColor color, byte layerAlpha) =>
         layerAlpha == 255 ? color : color.WithAlpha((byte)(color.Alpha * layerAlpha / 255));

@@ -56,6 +56,7 @@ public sealed class VectorAssetStyleCommand(
         var reverted = DocumentEditor.ReplaceObject(document, before);
         var used = reverted.Layers.OfType<ObjectLayer>().SelectMany(layer => layer.Objects).Any(item =>
             item.Stamp?.AssetSha256 == asset.Sha256
+            || item.Stamp?.MaskAssetSha256 == asset.Sha256
             || item.Line?.Stroke.AssetSha256 == asset.Sha256
             || item.Shape?.Stroke.AssetSha256 == asset.Sha256
             || item.Shape?.Fill.TextureAssetSha256 == asset.Sha256);

@@ -4,7 +4,20 @@ namespace Map.Core.Editing;
 /// One concrete image a stamp gesture may place, addressed by content hash. The pixel size is
 /// carried so each variant of a set keeps its own aspect ratio at a shared base width.
 /// </summary>
-public sealed record StampVariantSource(string Sha256, int PixelWidth, int PixelHeight);
+public sealed record StampVariantSource(
+    string Sha256, int PixelWidth, int PixelHeight, string? MaskSha256 = null);
+
+/// <summary>Discrete, deterministic random rotation increments for a scatter gesture.</summary>
+public enum StampRandomAngleStep
+{
+    Off = 0,
+    Degrees15 = 15,
+    Degrees30 = 30,
+    Degrees45 = 45,
+    Degrees60 = 60,
+    Degrees90 = 90,
+    Degrees180 = 180,
+}
 
 /// <summary>
 /// Everything one stamp gesture needs, resolved before any command exists. Area is a radius in
@@ -27,7 +40,14 @@ public sealed record StampPlacementRequest
 
     public bool RandomizeVariant { get; init; }
 
-    public bool RandomAngle { get; init; }
+    public StampRandomAngleStep RandomAngleStep { get; init; }
+
+    /// <summary>Compatibility adapter for pre-Stage-15 callers; true maps to the smallest 15° step.</summary>
+    public bool RandomAngle
+    {
+        get => RandomAngleStep != StampRandomAngleStep.Off;
+        init => RandomAngleStep = value ? StampRandomAngleStep.Degrees15 : StampRandomAngleStep.Off;
+    }
 
     public bool RandomFlip { get; init; }
 
@@ -47,7 +67,8 @@ public sealed record StampPlacementItem(
     double Height,
     double RotationDegrees,
     bool FlipHorizontal,
-    bool FlipVertical);
+    bool FlipVertical,
+    string? MaskSha256 = null);
 
 /// <summary>
 /// Turns a gesture into an immutable placement plan. The renderer never sees this type: it knows
@@ -155,8 +176,9 @@ public static class StampPlacement
             var variant = request.RandomizeVariant
                 ? variants[Math.Min(variants.Count - 1, (int)(variantDraw * variants.Count))]
                 : variants[0];
-            var rotation = request.RandomAngle
-                ? Math.Round((rotationDraw * 360) - 180, 3)
+            var step = (int)request.RandomAngleStep;
+            var rotation = step > 0 && 360 % step == 0
+                ? Math.Min((int)(rotationDraw * (360 / step)), (360 / step) - 1) * step
                 : 0;
             items.Add(Item(
                 request,
@@ -210,7 +232,8 @@ public static class StampPlacement
             height,
             rotation,
             flipHorizontal,
-            flipVertical);
+            flipVertical,
+            variant.MaskSha256);
     }
 }
 

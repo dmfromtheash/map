@@ -175,7 +175,13 @@ public static class CanvasTransformService
             layers,
             document.Assets,
             notes,
-            document.Checkpoints);
+            document.Checkpoints,
+            document.StampForeground is { } foreground
+                ? foreground with
+                {
+                    Tiles = TranslateTiles(foreground.Tiles, plan.OffsetX, plan.OffsetY),
+                }
+                : null);
     }
 
     public static MapDocument ExtractRegion(
@@ -230,7 +236,10 @@ public static class CanvasTransformService
             layers,
             assets,
             notes,
-            checkpoints: []);
+            checkpoints: [],
+            stampForeground: source.StampForeground is { } foreground
+                ? foreground with { Tiles = ExtractTiles(foreground.Tiles, region) }
+                : null);
     }
 
     public static TileMap TranslateTiles(TileMap source, int offsetX, int offsetY) =>

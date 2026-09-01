@@ -127,7 +127,8 @@ public sealed class PlaceAssetObjectsCommand : IEditCommand
         if (objects.Count == 0
             || objects.Any(item => item.Kind != SceneObjectKind.Stamp
                 || item.Stamp is null
-                || !hashes.Contains(item.Stamp.AssetSha256)))
+                || !hashes.Contains(item.Stamp.AssetSha256)
+                || item.Stamp.MaskAssetSha256 is { } mask && !hashes.Contains(mask)))
         {
             throw new ArgumentException("Every placed object must reference one of the supplied stamp assets.");
         }
@@ -145,7 +146,8 @@ public sealed class PlaceAssetObjectsCommand : IEditCommand
     public int Count => _objects.Count;
 
     /// <summary>How many distinct contents this one gesture introduced into the document.</summary>
-    public int VariantCount => _assets.Count;
+    public int VariantCount => _objects.Select(item => item.Stamp!.AssetSha256)
+        .Distinct(StringComparer.OrdinalIgnoreCase).Count();
 
     public MapDocument Apply(MapDocument document)
     {
@@ -186,11 +188,8 @@ public sealed class PlaceAssetObjectsCommand : IEditCommand
 
         // Only references this command actually introduced, and only those no surviving stamp
         // still points at, are withdrawn. Anything else would break another object's content.
-        var stillUsed = withoutObjects.Layers.OfType<ObjectLayer>()
-            .SelectMany(layer => layer.Objects)
-            .Select(item => item.Stamp?.AssetSha256)
-            .Where(sha => sha is not null)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase)!;
+        var stillUsed = CompositionTransfer.UsedAssetHashes(
+            withoutObjects.Layers.OfType<ObjectLayer>().SelectMany(layer => layer.Objects));
         var withdraw = _introduced.Where(sha => !stillUsed.Contains(sha))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         return withdraw.Count == 0
@@ -205,10 +204,15 @@ public sealed class ReplaceStampAssetCommand : IEditCommand
 {
     private readonly SceneObject _before;
     private readonly SceneObject _after;
-    private readonly MapAssetReference _asset;
-    private bool _introducedAsset;
+    private readonly IReadOnlyList<MapAssetReference> _assets;
+    private readonly HashSet<string> _introduced = new(StringComparer.OrdinalIgnoreCase);
 
-    public ReplaceStampAssetCommand(SceneObject before, MapAssetReference replacement)
+    public ReplaceStampAssetCommand(
+        SceneObject before,
+        MapAssetReference replacement,
+        double? replacementAspectRatio = null,
+        string? replacementMaskSha256 = null,
+        MapAssetReference? replacementMask = null)
     {
         if (before.Stamp is null)
         {
@@ -216,11 +220,53 @@ public sealed class ReplaceStampAssetCommand : IEditCommand
         }
 
         _before = before;
-        _asset = replacement;
-        _after = before with
+        if (replacementMaskSha256 is not null
+            && (replacementMask is null
+                || !string.Equals(replacementMask.Sha256, replacementMaskSha256, StringComparison.OrdinalIgnoreCase)))
         {
-            Stamp = before.Stamp with { AssetSha256 = replacement.Sha256 },
-            Name = replacement.DisplayName,
+            throw new ArgumentException("The replacement mask reference does not match its identity.", nameof(replacementMask));
+        }
+        _assets = replacementMask is null ? [replacement] : [replacement, replacementMask];
+        var stamp = before.Stamp with
+        {
+            AssetSha256 = replacement.Sha256,
+            MaskAssetSha256 = replacementMaskSha256,
+            ClipMaskEnabled = before.Stamp.ClipMaskEnabled && replacementMaskSha256 is not null,
+        };
+        if (replacementAspectRatio is not { } aspect || !double.IsFinite(aspect) || aspect <= 0)
+        {
+            _after = before with { Stamp = stamp, Name = replacement.DisplayName };
+            return;
+        }
+
+        var referenceWidth = before.Stamp.ReferenceWidth is > 0
+            ? before.Stamp.ReferenceWidth.Value
+            : before.Width;
+        var scale = before.Width / Math.Max(referenceWidth, 0.000001);
+        var referenceHeight = referenceWidth * aspect;
+        var height = referenceHeight * scale;
+        _after = new SceneObject(
+            before.Id, before.Kind, replacement.DisplayName,
+            before.X, before.Y + ((before.Height - height) / 2),
+            before.Width, height, before.RotationDegrees,
+            before.FillColor, before.StrokeColor, before.StrokeWidth,
+            before.Visible, before.Locked)
+        {
+            Sublayer = before.Sublayer,
+            GroupId = before.GroupId,
+            GroupName = before.GroupName,
+            ObjectOpacity = before.ObjectOpacity,
+            Stamp = stamp with
+            {
+                ReferenceWidth = referenceWidth,
+                ReferenceHeight = referenceHeight,
+            },
+            Line = before.Line,
+            Shape = before.Shape,
+            Text = before.Text,
+            Composition = before.Composition,
+            PlaceholderReason = before.PlaceholderReason,
+            OpaquePayload = before.OpaquePayload,
         };
     }
 
@@ -228,8 +274,61 @@ public sealed class ReplaceStampAssetCommand : IEditCommand
 
     public MapDocument Apply(MapDocument document)
     {
-        _introducedAsset = document.Assets.All(asset => asset.Sha256 != _asset.Sha256);
-        var withAsset = _introducedAsset
+        _introduced.Clear();
+        var known = document.Assets.Select(asset => asset.Sha256)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var added = _assets.Where(asset => known.Add(asset.Sha256)).ToList();
+        foreach (var asset in added) _introduced.Add(asset.Sha256);
+        var withAssets = added.Count == 0
+            ? document
+            : document.WithAssets([.. document.Assets, .. added]);
+        return DocumentEditor.ReplaceObject(withAssets, _after);
+    }
+
+    public MapDocument Revert(MapDocument document)
+    {
+        var reverted = DocumentEditor.ReplaceObject(document, _before);
+        if (_introduced.Count == 0) return reverted;
+        var stillUsed = CompositionTransfer.UsedAssetHashes(
+            reverted.Layers.OfType<ObjectLayer>().SelectMany(layer => layer.Objects));
+        var withdraw = _introduced.Where(hash => !stillUsed.Contains(hash))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return withdraw.Count == 0 ? reverted : reverted.WithAssets(
+            [.. reverted.Assets.Where(asset => !withdraw.Contains(asset.Sha256))]);
+    }
+}
+
+/// <summary>
+/// Changes one placed stamp style and, when needed, introduces its resolved mask payload in the
+/// same undoable command. Undo removes only an asset this command introduced and nobody still uses.
+/// </summary>
+public sealed class UpdateStampStyleWithAssetCommand : IEditCommand
+{
+    private readonly SceneObject _before;
+    private readonly SceneObject _after;
+    private readonly MapAssetReference _asset;
+    private bool _introduced;
+
+    public UpdateStampStyleWithAssetCommand(
+        SceneObject before, StampStyle afterStyle, MapAssetReference asset)
+    {
+        if (before.Stamp is null)
+            throw new ArgumentException("The selected object is not a stamp.", nameof(before));
+        if (afterStyle.MaskAssetSha256 is not { } mask
+            || !string.Equals(mask, asset.Sha256, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("The supplied asset is not the style's resolved mask.", nameof(asset));
+        _before = before;
+        _after = before with { Stamp = afterStyle };
+        _asset = asset;
+    }
+
+    public string Name => "Edit stamp clip mask";
+
+    public MapDocument Apply(MapDocument document)
+    {
+        _introduced = document.Assets.All(item =>
+            !string.Equals(item.Sha256, _asset.Sha256, StringComparison.OrdinalIgnoreCase));
+        var withAsset = _introduced
             ? document.WithAssets([.. document.Assets, _asset])
             : document;
         return DocumentEditor.ReplaceObject(withAsset, _after);
@@ -238,11 +337,13 @@ public sealed class ReplaceStampAssetCommand : IEditCommand
     public MapDocument Revert(MapDocument document)
     {
         var reverted = DocumentEditor.ReplaceObject(document, _before);
-        var stillUsed = reverted.Layers.OfType<ObjectLayer>().SelectMany(layer => layer.Objects)
-            .Any(item => item.Stamp?.AssetSha256 == _asset.Sha256);
-        return _introducedAsset && !stillUsed
-            ? reverted.WithAssets([.. reverted.Assets.Where(asset => asset.Sha256 != _asset.Sha256)])
-            : reverted;
+        if (!_introduced) return reverted;
+        var used = CompositionTransfer.UsedAssetHashes(
+            reverted.Layers.OfType<ObjectLayer>().SelectMany(layer => layer.Objects));
+        return used.Contains(_asset.Sha256)
+            ? reverted
+            : reverted.WithAssets([.. reverted.Assets.Where(item =>
+                !string.Equals(item.Sha256, _asset.Sha256, StringComparison.OrdinalIgnoreCase))]);
     }
 }
 
@@ -1099,4 +1200,36 @@ public static class DocumentEditor
     /// <summary>Replaces one object wherever it lives - preview substitution for the canvas.</summary>
     public static MapDocument ReplaceObject(MapDocument document, SceneObject replacement)
         => ReplaceObjects(document, [replacement]);
+}
+
+/// <summary>Creates or removes the document-owned stamp foreground as one history entry.</summary>
+public sealed class UpdateStampForegroundCommand(
+    StampForegroundSurface? before, StampForegroundSurface? after, string name) : IEditCommand
+{
+    public string Name { get; } = name;
+    public MapDocument Apply(MapDocument document) => document.WithStampForeground(after);
+    public MapDocument Revert(MapDocument document) => document.WithStampForeground(before);
+}
+
+/// <summary>One foreground paint gesture stores only the touched sparse RGBA tiles.</summary>
+public sealed class StampForegroundStrokeCommand(
+    IReadOnlyDictionary<TileKey, byte[]?> before,
+    IReadOnlyDictionary<TileKey, byte[]?> after,
+    string name) : IEditCommand
+{
+    public string Name { get; } = name;
+    public int TouchedTileCount => before.Count;
+    public MapDocument Apply(MapDocument document) => Write(document, after);
+    public MapDocument Revert(MapDocument document) => Write(document, before);
+
+    private static MapDocument Write(
+        MapDocument document, IReadOnlyDictionary<TileKey, byte[]?> changes)
+    {
+        var foreground = document.StampForeground
+            ?? throw new InvalidOperationException("The document has no stamp foreground surface.");
+        return document.WithStampForeground(foreground with
+        {
+            Tiles = foreground.Tiles.WithMany(changes),
+        });
+    }
 }

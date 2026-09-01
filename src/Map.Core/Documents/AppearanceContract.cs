@@ -15,6 +15,18 @@ public enum StrokePattern
 public static class AppearanceLimits
 {
     public const double MaxBlur = 32;
+    public const double MaxShadowOffset = 64;
+    public const double MaxShadowBlur = 64;
+}
+
+/// <summary>Where a stamp shadow is composited inside its owning object layer.</summary>
+public enum StampShadowPlacement
+{
+    /// <summary>The shadow is drawn immediately before its own stamp.</summary>
+    Object = 0,
+
+    /// <summary>The shadow is drawn in the bounded shadow prepass below that layer's content.</summary>
+    Layer = 1,
 }
 
 /// <summary>
@@ -27,11 +39,33 @@ public static class BlendModes
 
     public static IReadOnlyList<string> Supported { get; } =
         ["Normal", "Multiply", "Screen", "Overlay", "Darken", "Lighten", "SoftLight", "HardLight",
-         "Difference", "Add"];
+         "Difference", "Add", "ColorBurn", "ColorDodge", "Exclusion", "Hue", "Saturation",
+         "Color", "Luminosity"];
 
     /// <summary>Exact, case-sensitive membership - the stored key is a contract, not free text.</summary>
     public static bool IsSupported(string? blend) =>
         blend is not null && Supported.Contains(blend, StringComparer.Ordinal);
+}
+
+/// <summary>Canonical colour syntax shared by editor input and project materialisation.</summary>
+public static class AppearanceColor
+{
+    public const string OpaqueBlack = "#FF000000";
+
+    public static string? Normalize(string? text)
+    {
+        var value = (text ?? "").Trim().TrimStart('#');
+        if (value.Length is not (6 or 8) || !value.All(Uri.IsHexDigit))
+        {
+            return null;
+        }
+
+        return "#" + (value.Length == 6 ? "FF" + value : value).ToUpperInvariant();
+    }
+
+    public static bool IsCanonical(string? text) =>
+        text is { Length: 9 } && text[0] == '#'
+        && text.Skip(1).All(character => character is >= '0' and <= '9' or >= 'A' and <= 'F');
 }
 
 /// <summary>

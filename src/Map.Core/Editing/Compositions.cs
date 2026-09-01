@@ -75,6 +75,7 @@ public static class CompositionTransfer
         void Visit(SceneObject item)
         {
             if (item.Stamp?.AssetSha256 is { } stamp) result.Add(stamp);
+            if (item.Stamp?.MaskAssetSha256 is { } mask) result.Add(mask);
             if (item.Line?.Stroke.AssetSha256 is { } line) result.Add(line);
             if (item.Shape?.Stroke.AssetSha256 is { } shape) result.Add(shape);
             if (item.Shape?.Fill.TextureAssetSha256 is { } texture) result.Add(texture);
@@ -104,7 +105,9 @@ public static class CompositionTransfer
             {
                 copy = copy with { Composition = nested with { Items = [.. nested.Items.Select(Rewrite)] } };
             }
-            if (copy.Stamp is { } stamp && !available.Contains(stamp.AssetSha256))
+            if (copy.Stamp is { } stamp
+                && (!available.Contains(stamp.AssetSha256)
+                    || stamp.MaskAssetSha256 is { } mask && !available.Contains(mask)))
             {
                 copy = SceneObjectClone.Kind(copy, SceneObjectKind.Placeholder,
                     $"Missing pasted asset {stamp.AssetSha256}");
