@@ -672,6 +672,9 @@ public sealed partial class EditorViewModel : ViewModelBase
             _activeTool = value;
             Raise();
             Raise(nameof(MaskEditLayerId));
+            Raise(nameof(RasterToolReady));
+            Raise(nameof(RasterToolHint));
+            Raise(nameof(RasterToolFixLabel));
             SceneChanged?.Invoke(this, EventArgs.Empty);
         }
     }
@@ -5454,6 +5457,145 @@ public sealed partial class EditorViewModel : ViewModelBase
         Session.Execute(UpdateMaskCommand.CopyMask(source, target)); AfterEdit(); return true;
     }
 
+    // ------------------------------------------------------------- raster tool targets
+
+    /// <summary>Whether one layer is the kind of surface a given raster tool paints on.</summary>
+    private static bool FitsRasterTool(MapLayer layer, EditorTool tool) => tool switch
+    {
+        EditorTool.Brush => layer is BrushLayer,
+        EditorTool.Land => layer is LandLayer,
+        EditorTool.Mask => layer is not BaseColorLayer && layer.Mask is not null,
+        _ => false,
+    };
+
+    /// <summary>
+    /// The layer a raster tool would paint on: the active one when it fits, otherwise the topmost
+    /// visible unlocked layer of the kind the tool needs.
+    /// <para>
+    /// The vector tools have always resolved their layer like this - see
+    /// <see cref="ActiveObjectLayer"/> - which is why Stamp, Line and Shape "just work". Brush,
+    /// Land and Mask instead demanded that the right kind of layer was already active, and a new
+    /// map starts on its object layer, so all three refused every stroke and looked broken.
+    /// </para>
+    /// <para>
+    /// A layer that fits but is hidden or locked is deliberately NOT replaced by another: the user
+    /// locked it on purpose, and quietly painting somewhere else would be worse than refusing.
+    /// </para>
+    /// </summary>
+    private MapLayer? RasterTargetLayer(EditorTool tool)
+    {
+        if (ActiveLayer is { } active && FitsRasterTool(active, tool))
+        {
+            return active is { Visible: true, Locked: false } ? active : null;
+        }
+
+        return Session.Document.Layers.LastOrDefault(
+            layer => layer is { Visible: true, Locked: false } && FitsRasterTool(layer, tool));
+    }
+
+    /// <summary>True when the active tool has somewhere to paint right now.</summary>
+    public bool RasterToolReady =>
+        ActiveTool is not (EditorTool.Brush or EditorTool.Land or EditorTool.Mask)
+        || RasterTargetLayer(ActiveTool) is not null;
+
+    /// <summary>
+    /// What the panel tells the user about the active raster tool: either which layer it will
+    /// paint on, or what is missing. Empty for the tools this does not apply to.
+    /// </summary>
+    public string RasterToolHint
+    {
+        get
+        {
+            if (ActiveTool is not (EditorTool.Brush or EditorTool.Land or EditorTool.Mask))
+            {
+                return "";
+            }
+
+            return RasterTargetLayer(ActiveTool) is { } target
+                ? $"Рисует по слою «{target.Name}»."
+                : RasterToolRefusal(ActiveTool);
+        }
+    }
+
+    /// <summary>The label of the panel action that makes the active raster tool usable.</summary>
+    public string RasterToolFixLabel => ActiveTool switch
+    {
+        EditorTool.Brush => "Создать слой кисти и продолжить",
+        EditorTool.Land => "Создать слой земли и продолжить",
+        EditorTool.Mask => "Добавить маску активному слою",
+        _ => "",
+    };
+
+    private string RasterToolRefusal(EditorTool tool)
+    {
+        var blocked = ActiveLayer is { } active && FitsRasterTool(active, tool)
+            && (!active.Visible || active.Locked);
+        if (blocked)
+        {
+            return $"Слой «{ActiveLayer!.Name}» скрыт или заблокирован — штрих не применён.";
+        }
+
+        return tool switch
+        {
+            EditorTool.Mask => "Ни у одного слоя нет маски. Добавьте маску слою — кнопкой ниже или на вкладке «Слои».",
+            EditorTool.Land => "В карте нет слоя земли. Создайте его кнопкой ниже.",
+            _ => "В карте нет слоя кисти. Создайте его кнопкой ниже.",
+        };
+    }
+
+    /// <summary>
+    /// Creates whatever the active raster tool is missing and leaves it ready to paint. One
+    /// command, so a wrong click is one undo.
+    /// </summary>
+    public bool CreateLayerForActiveTool()
+    {
+        switch (ActiveTool)
+        {
+            case EditorTool.Brush:
+                AddBrushLayer();
+                StatusDetail = "Создан слой кисти. Можно рисовать.";
+                return true;
+            case EditorTool.Land:
+                AddLandLayer();
+                StatusDetail = "Создан слой земли. Можно рисовать.";
+                return true;
+            case EditorTool.Mask:
+                // A mask belongs to an existing layer, so pick one that can hold it first.
+                if (ActiveLayer is null or BaseColorLayer)
+                {
+                    if (Session.Document.Layers.LastOrDefault(
+                        layer => layer is not BaseColorLayer) is not { } host)
+                    {
+                        StatusDetail = "Нет слоя, которому можно добавить маску.";
+                        return false;
+                    }
+
+                    SelectLayer(host.Id);
+                }
+
+                if (ActiveLayer?.Mask is not null)
+                {
+                    StatusDetail = $"У слоя «{ActiveLayer.Name}» уже есть маска.";
+                    return false;
+                }
+
+                ToggleActiveMask();
+                StatusDetail = $"Маска добавлена слою «{ActiveLayer?.Name}». Можно рисовать.";
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>Makes one layer active, with the same notifications a click in the panel sends.</summary>
+    private void UseAsActiveLayer(MapLayer layer)
+    {
+        if (_activeLayerId != layer.Id)
+        {
+            SelectLayer(layer.Id);
+        }
+    }
+
     public bool BeginStroke(double worldX, double worldY, double pressure = 1)
     {
         if (_editingStampForeground)
@@ -5473,35 +5615,22 @@ public sealed partial class EditorViewModel : ViewModelBase
             return true;
         }
 
-        if (ActiveLayer is not { Visible: true, Locked: false } layer)
+        if (RasterTargetLayer(ActiveTool) is not { } layer)
         {
-            StatusDetail = "Активный слой скрыт или заблокирован.";
+            StatusDetail = RasterToolRefusal(ActiveTool);
             return false;
         }
 
-        TileMap target;
-        if (ActiveTool == EditorTool.Brush && layer is BrushLayer brush)
+        // Painting and the layers panel have to agree: the stroke is committed against
+        // _activeLayerId, so the layer the tool fell back to becomes the active one.
+        UseAsActiveLayer(layer);
+
+        TileMap target = ActiveTool switch
         {
-            target = brush.Tiles;
-        }
-        else if (ActiveTool == EditorTool.Mask && layer.Mask is { } mask && layer is not BaseColorLayer)
-        {
-            target = mask.Tiles;
-        }
-        else if (ActiveTool == EditorTool.Land && layer is LandLayer land)
-        {
-            target = land.GeometryTiles;
-        }
-        else
-        {
-            StatusDetail = ActiveTool switch
-            {
-                EditorTool.Mask => "Сначала добавьте маску к выбранному слою.",
-                EditorTool.Land => "Для земли выберите Land layer.",
-                _ => "Для рисования выберите слой кисти.",
-            };
-            return false;
-        }
+            EditorTool.Brush => ((BrushLayer)layer).Tiles,
+            EditorTool.Mask => layer.Mask!.Tiles,
+            _ => ((LandLayer)layer).GeometryTiles,
+        };
 
         // The stroke's randomness is decided here, BEFORE any command exists: the committed
         // tiles never depend on replay, so undo/redo restore bytes instead of re-rolling.
@@ -5588,11 +5717,13 @@ public sealed partial class EditorViewModel : ViewModelBase
     public bool ApplyLandShape(
         LandShapeKind kind, WorldBounds bounds, IReadOnlyList<LandPoint>? points = null)
     {
-        if (ActiveLayer is not LandLayer land || land.Locked || !land.Visible)
+        if (RasterTargetLayer(EditorTool.Land) is not LandLayer land)
         {
-            StatusDetail = "Выберите видимый разблокированный Land layer.";
+            StatusDetail = RasterToolRefusal(EditorTool.Land);
             return false;
         }
+
+        UseAsActiveLayer(land);
         var centre = ((bounds.Left + bounds.Right) / 2, (bounds.Top + bounds.Bottom) / 2);
         IReadOnlyList<LandPoint> polygon = kind == LandShapeKind.Polygon
             ? points is { Count: >= 3 } ? points :

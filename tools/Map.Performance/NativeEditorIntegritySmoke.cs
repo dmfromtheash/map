@@ -452,8 +452,10 @@ public sealed class NativeEditorIntegrityApplication : Application
             + $"picked topmost {expected?.Name}={pickedTopmost}");
 
         // ----------------------------------------------------------------- brush
+        // Deliberately NOT selecting the brush layer first: the object layer stays active, which
+        // is where every real session starts. The tool has to find its own surface.
         var brushLayer = editor.Session.Document.Layers.OfType<BrushLayer>().Single();
-        editor.SelectLayer(brushLayer.Id);
+        editor.SelectLayer(objectLayer.Id);
         editor.ActiveTool = EditorTool.Brush;
         await SettleAsync();
         var (brushFromX, brushFromY) = Screen(editor, 700, 620);
@@ -461,7 +463,9 @@ public sealed class NativeEditorIntegrityApplication : Application
         view.Canvas.PressMoveReleaseForSmoke(brushFromX, brushFromY, brushToX, brushToY);
         await SettleAsync();
         scenarios["brush_paints_through_the_pointer"] =
-            ((BrushLayer)editor.Session.Document.FindLayer(brushLayer.Id)!).Tiles.TileCount > 0;
+            ((BrushLayer)editor.Session.Document.FindLayer(brushLayer.Id)!).Tiles.TileCount > 0
+            && editor.RasterToolReady
+            && editor.ActiveLayerId == brushLayer.Id;
 
         // ------------------------------------------------------------------ mask
         editor.ToggleActiveMask();
@@ -481,7 +485,7 @@ public sealed class NativeEditorIntegrityApplication : Application
 
         // ------------------------------------------------------------------ land
         var landLayer = editor.Session.Document.Layers.OfType<LandLayer>().Single();
-        editor.SelectLayer(landLayer.Id);
+        editor.SelectLayer(objectLayer.Id);
         editor.ActiveTool = EditorTool.Land;
         await SettleAsync();
         var otherLandCoverage = editor.Session.Document.Layers.OfType<LandLayer>()
@@ -492,6 +496,7 @@ public sealed class NativeEditorIntegrityApplication : Application
         await SettleAsync();
         var landAfter = (LandLayer)editor.Session.Document.FindLayer(landLayer.Id)!;
         scenarios["land_changes_only_its_own_layer"] = landAfter.GeometryTiles.TileCount > 0
+            && editor.ActiveLayerId == landLayer.Id
             && editor.Session.Document.Layers.OfType<LandLayer>()
                 .Where(layer => layer.Id != landLayer.Id).Sum(layer => layer.GeometryTiles.TileCount)
                 == otherLandCoverage;

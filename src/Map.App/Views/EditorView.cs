@@ -1198,7 +1198,8 @@ public sealed class EditorView : UserControl
             Spacing = 8,
             Children =
             {
-                Explanation("Рисуйте по холсту. Штрих ложится на активный слой."),
+                Explanation("Рисуйте по холсту. Штрих ложится на слой кисти."),
+                BuildRasterToolReadiness("Brush"),
                 Ui.Section("Материал", new WrapPanel
                 {
                     Orientation = Orientation.Horizontal,
@@ -1384,8 +1385,8 @@ public sealed class EditorView : UserControl
             Spacing = 8,
             Children =
             {
-                Explanation("Маска прячет участки активного слоя, не удаляя их. " +
-                            "Маску слоя можно включить на вкладке «Слои»."),
+                Explanation("Маска прячет участки слоя, не удаляя их."),
+                BuildRasterToolReadiness("Mask"),
                 Ui.Section("Режим штриха", modes),
                 Ui.SliderRow("MaskSizeSlider", "Размер кисти", 1, 256, _editor.BrushSettings.Radius, "px",
                     value => _editor.BrushSettings = _editor.BrushSettings with { Radius = value }),
@@ -1471,6 +1472,7 @@ public sealed class EditorView : UserControl
             Children =
             {
                 Explanation("Протяните по холсту, чтобы нарисовать сушу, или примените готовую форму."),
+                BuildRasterToolReadiness("Land"),
                 Ui.Section("Действие", actions),
                 Ui.Section("Форма", shapes),
                 Ui.SliderRow("LandSizeSlider", "Размер кисти", 1, 256, _editor.BrushSettings.Radius, "px",
@@ -1601,6 +1603,39 @@ public sealed class EditorView : UserControl
                      EditorShortcutSettings.Commands.StampDensityDown], "плотность"),
             },
         };
+    }
+
+    /// <summary>
+    /// The readiness line of a raster tool plus the one action that fixes it.
+    /// <para>
+    /// Brush, Land and Mask need a surface of their own kind, and a new map has none. That
+    /// refusal used to live only in the status bar, so the tool simply looked broken: the pointer
+    /// moved and nothing happened. The panel now states which layer the strokes go to, or what is
+    /// missing, and offers to create it without leaving the tool.
+    /// </para>
+    /// </summary>
+    private Control BuildRasterToolReadiness(string prefix)
+    {
+        var hint = new TextBlock { TextWrapping = TextWrapping.Wrap }
+            .Classed("faint", "role-caption").Named(prefix + "TargetHintText");
+
+        var fix = Ui.TextButton(prefix + "CreateTargetButton", "", () =>
+        {
+            _editor.CreateLayerForActiveTool();
+            SyncSidePanels();
+            SyncAppearanceSections();
+        }, "compact");
+
+        _appearanceSyncs.Add(() =>
+        {
+            hint.Text = _editor.RasterToolHint;
+            Ui.SetClass(hint, "danger", !_editor.RasterToolReady);
+            fix.Content = _editor.RasterToolFixLabel;
+            fix.IsVisible = !_editor.RasterToolReady && _editor.RasterToolFixLabel.Length > 0;
+            AutomationProperties.SetName(fix, _editor.RasterToolFixLabel);
+        });
+
+        return new StackPanel { Spacing = 4, Children = { hint, fix } };
     }
 
     private static Control Explanation(string text) => new TextBlock
