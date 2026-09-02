@@ -176,6 +176,29 @@ public sealed class MapCanvasControl : Control
     public void ClickForSmoke(double screenX, double screenY, bool additive = false) =>
         PressMoveReleaseForSmoke(screenX, screenY, screenX, screenY, additive);
 
+    /// <summary>
+    /// The three halves of a gesture, separately, so an own-process check can look at the screen
+    /// while the pointer is still down. The composite helper above cannot see a live preview at
+    /// all - it presses and releases before anything is ever painted.
+    /// </summary>
+    public void PressForSmoke(double screenX, double screenY, bool additive = false)
+    {
+        if (_input is null) return;
+        Apply(_input.Press(CanvasPointerButton.Left, screenX, screenY, additive));
+    }
+
+    public void MoveForSmoke(double screenX, double screenY)
+    {
+        if (_input is null) return;
+        Apply(_input.Move(screenX, screenY));
+    }
+
+    public void ReleaseForSmoke(double screenX, double screenY)
+    {
+        if (_input is null) return;
+        Apply(_input.Release(screenX, screenY));
+    }
+
     /// <summary>Applies one routed result to the Avalonia-facing parts of the control.</summary>
     private void Apply(CanvasInputResult result, PointerEventArgs? source = null)
     {

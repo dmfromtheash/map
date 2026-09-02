@@ -467,6 +467,40 @@ public sealed class NativeEditorIntegrityApplication : Application
             && editor.RasterToolReady
             && editor.ActiveLayerId == brushLayer.Id;
 
+        // ------------------------------------------------------- brush tip chooser
+        // The tip used to be seven identical buttons with no selected state; the list has to show
+        // which tip is live, switch it, and fit the panel it sits in.
+        var tipList = Find<ListBox>(view, "BrushTipList");
+        await StabiliseLayoutAsync(view);
+        var tipRows = tipList.GetVisualDescendants().OfType<ListBoxItem>().ToList();
+        var tipPanel = Find<Control>(view, "ContextPanelHost");
+        var tipListFits = tipRows.Count > 0 && tipRows.All(row => HorizontallyInside(row, tipPanel));
+        var tipShowsActive = tipList.SelectedItem is ListBoxItem { Tag: BrushPresetKind selected }
+            && selected == editor.ActiveBrushPreset;
+
+        var edgeBlockRow = tipRows.FirstOrDefault(
+            row => row.Tag is BrushPresetKind kind && kind == BrushPresetKind.EdgeBlock);
+        tipList.SelectedItem = edgeBlockRow;
+        await SettleAsync();
+        var tipSwitched = editor.ActiveBrushPreset == BrushPresetKind.EdgeBlock
+            && editor.BrushSettings.Tip is not null;
+
+        scenarios["brush_tip_list_shows_and_switches_the_active_tip"] =
+            tipList.ItemCount == 7 && tipRows.Count == 7
+            && tipListFits && tipShowsActive && tipSwitched;
+        notes.Add($"tips: items={tipList.ItemCount} realized={tipRows.Count} fits={tipListFits} "
+            + $"showsActive={tipShowsActive} switched={tipSwitched}");
+
+        editor.ApplyBrushPreset(BrushPresetKind.RoundSoft);
+        await SettleAsync();
+
+        // A picture of the panel next to the report, so the chooser can be judged by eye.
+        SaveVisual(
+            tipPanel,
+            Path.Combine(Path.GetDirectoryName(options.OutputPath) ?? ".", "brush-panel.png"),
+            (int)Math.Round(tipPanel.Bounds.Width),
+            (int)Math.Round(tipPanel.Bounds.Height));
+
         // ------------------------------------------------------------------ mask
         editor.ToggleActiveMask();
         var maskAdded = editor.Session.Document.FindLayer(brushLayer.Id)?.Mask is not null;

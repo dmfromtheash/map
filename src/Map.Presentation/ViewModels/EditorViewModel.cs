@@ -8199,7 +8199,11 @@ public sealed partial class EditorViewModel : ViewModelBase
     {
         BrushSettings = BrushSettings with { Tip = null };
         _brushTipName = null;
+        _brushPresetKind = BrushSettings.Softness > 0
+            ? BrushPresetKind.RoundSoft
+            : BrushPresetKind.RoundHard;
         Raise(nameof(BrushTipName));
+        Raise(nameof(ActiveBrushPreset));
         SceneChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -8255,6 +8259,23 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
     }
 
+    /// <summary>
+    /// Which tip shape is chosen right now. The panel used to offer seven identical buttons with
+    /// no indication of which one was in effect; a list needs to know what to select.
+    /// </summary>
+    public BrushPresetKind ActiveBrushPreset => _brushPresetKind;
+
+    /// <summary>
+    /// The actual stamp of a tip, so the panel can show what the engine will print rather than a
+    /// decorative icon. Null means the plain circle, whose edge comes from Softness instead.
+    /// </summary>
+    public static BrushTipShape? PreviewTip(BrushPresetKind preset) =>
+        preset is BrushPresetKind.RoundHard or BrushPresetKind.RoundSoft ? null : PresetTip(preset);
+
+    /// <summary>The edge softness a tip is applied with, for the same preview.</summary>
+    public static double PreviewSoftness(BrushPresetKind preset) =>
+        preset == BrushPresetKind.RoundSoft ? 0.75 : 0;
+
     public void ApplyBrushPreset(BrushPresetKind preset)
     {
         _brushPresetKind = preset;
@@ -8271,6 +8292,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             _ => preset.ToString(),
         };
         Raise(nameof(BrushTipName));
+        Raise(nameof(ActiveBrushPreset));
         SceneChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -8288,6 +8310,10 @@ public sealed partial class EditorViewModel : ViewModelBase
                 BrushPresetKind.Ellipse => (nx * nx / 1.0) + (ny * ny / .36) <= 1,
                 BrushPresetKind.Polygon => ny >= -1 && ny <= .85 && Math.Abs(nx) <= 1 - ((ny + 1) * .18),
                 BrushPresetKind.EdgeBlock => Math.Abs(nx) >= .55 || Math.Abs(ny) >= .55,
+
+                // Rectangle used to fall into the same "whole square" branch as GridBlock, so the
+                // two tips stamped identical marks and one of them was a duplicate entry.
+                BrushPresetKind.Rectangle => Math.Abs(ny) <= .5,
                 _ => true,
             };
             if (inside) alpha[(y * size) + x] = 255;

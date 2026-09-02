@@ -1226,22 +1226,7 @@ public sealed class EditorView : UserControl
                 AppearanceSlider("BrushOpacitySlider", "Непрозрачность", 5, 100, "%",
                     () => _editor.BrushSettings.Opacity * 100,
                     (value, _) => UpdateSettings(settings => settings with { Opacity = value / 100.0 }), 5),
-                Ui.Section("Форма отпечатка", new WrapPanel
-                {
-                    Orientation = Orientation.Horizontal,
-                    ItemSpacing = 4,
-                    LineSpacing = 4,
-                    Children =
-                    {
-                        Ui.TextButton("BrushRoundHardPreset", "Круг · жёсткий", () => _editor.ApplyBrushPreset(BrushPresetKind.RoundHard), "segment"),
-                        Ui.TextButton("BrushRoundSoftPreset", "Круг · мягкий", () => _editor.ApplyBrushPreset(BrushPresetKind.RoundSoft), "segment"),
-                        Ui.TextButton("BrushEdgeBlockPreset", "Краевой блок", () => _editor.ApplyBrushPreset(BrushPresetKind.EdgeBlock), "segment"),
-                        Ui.TextButton("BrushGridBlockPreset", "Блок", () => _editor.ApplyBrushPreset(BrushPresetKind.GridBlock), "segment"),
-                        Ui.TextButton("BrushRectanglePreset", "Прямоугольник", () => _editor.ApplyBrushPreset(BrushPresetKind.Rectangle), "segment"),
-                        Ui.TextButton("BrushEllipsePreset", "Эллипс", () => _editor.ApplyBrushPreset(BrushPresetKind.Ellipse), "segment"),
-                        Ui.TextButton("BrushPolygonPreset", "Многоугольник", () => _editor.ApplyBrushPreset(BrushPresetKind.Polygon), "segment"),
-                    },
-                }),
+                Ui.Section("Форма отпечатка", BuildBrushTipList()),
                 Ui.Section("Локальные пресеты", new StackPanel
                 {
                     Spacing = 6,
@@ -1366,6 +1351,101 @@ public sealed class EditorView : UserControl
                 }),
             },
         };
+    }
+
+    /// <summary>
+    /// The tip chooser as a list: one row per shape, each showing the stamp the engine actually
+    /// prints, its name and what it is for, with the current one selected.
+    /// <para>
+    /// It used to be seven identical text buttons in a wrap panel. Nothing showed which tip was in
+    /// effect, the names alone did not say what a shape looked like, and at a narrow panel width
+    /// the row wrapped into an unreadable block.
+    /// </para>
+    /// </summary>
+    private Control BuildBrushTipList()
+    {
+        var tips = new (BrushPresetKind Kind, string Name, string Purpose)[]
+        {
+            (BrushPresetKind.RoundHard, "Круг · жёсткий", "Ровный край без растушёвки"),
+            (BrushPresetKind.RoundSoft, "Круг · мягкий", "Плавное затухание к краю"),
+            (BrushPresetKind.EdgeBlock, "Краевой блок", "Рамка: печатает только края квадрата"),
+            (BrushPresetKind.GridBlock, "Блок", "Сплошной квадрат под сетку"),
+            (BrushPresetKind.Rectangle, "Прямоугольник", "Широкий мазок с прямыми углами"),
+            (BrushPresetKind.Ellipse, "Эллипс", "Приплюснутый овал"),
+            (BrushPresetKind.Polygon, "Многоугольник", "Скошенный к низу силуэт"),
+        };
+
+        // No height cap and no scroller of its own: seven tips are meant to be compared at a
+        // glance, and the context panel around them already scrolls.
+        var list = new ListBox
+        {
+            Name = "BrushTipList",
+            SelectionMode = SelectionMode.Single,
+        };
+        ScrollViewer.SetVerticalScrollBarVisibility(list, ScrollBarVisibility.Disabled);
+        AutomationProperties.SetName(list, "Форма отпечатка кисти");
+
+        var rows = new List<ListBoxItem>(tips.Length);
+        foreach (var tip in tips)
+        {
+            var row = new ListBoxItem
+            {
+                Padding = new Thickness(6, 5, 6, 5),
+                Content = new DockPanel
+                {
+                    LastChildFill = true,
+                    Children =
+                    {
+                        new Border
+                        {
+                            Margin = new Thickness(0, 0, 9, 0),
+                            VerticalAlignment = VerticalAlignment.Center,
+                            Child = new BrushTipPreview(
+                                EditorViewModel.PreviewTip(tip.Kind),
+                                EditorViewModel.PreviewSoftness(tip.Kind)),
+                        }.Docked(Dock.Left),
+                        new StackPanel
+                        {
+                            VerticalAlignment = VerticalAlignment.Center,
+                            Children =
+                            {
+                                new TextBlock { Text = tip.Name, TextWrapping = TextWrapping.Wrap },
+                                new TextBlock { Text = tip.Purpose, TextWrapping = TextWrapping.Wrap }
+                                    .Classed("faint", "role-caption"),
+                            },
+                        },
+                    },
+                },
+                Tag = tip.Kind,
+            }.Named("BrushTip" + tip.Kind);
+            AutomationProperties.SetName(row, tip.Name + ". " + tip.Purpose);
+            ToolTip.SetTip(row, tip.Purpose);
+            rows.Add(row);
+        }
+
+        list.ItemsSource = rows;
+        list.SelectionChanged += (_, _) =>
+        {
+            if (_syncingAppearance || list.SelectedItem is not ListBoxItem { Tag: BrushPresetKind kind })
+            {
+                return;
+            }
+
+            _editor.ApplyBrushPreset(kind);
+            SyncAppearanceSections();
+        };
+
+        _appearanceSyncs.Add(() =>
+        {
+            var active = _editor.ActiveBrushPreset;
+            var wanted = rows.FirstOrDefault(row => row.Tag is BrushPresetKind kind && kind == active);
+            if (!ReferenceEquals(list.SelectedItem, wanted))
+            {
+                list.SelectedItem = wanted;
+            }
+        });
+
+        return list;
     }
 
     private Control BuildMaskPanel()

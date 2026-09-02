@@ -138,6 +138,42 @@ public sealed class RasterToolTargetTests
         Assert.True(editor.Session.Document.FindLayer(chosen.Id) is BrushLayer { Tiles.TileCount: > 0 });
     }
 
+    // ------------------------------------------------------------------- brush tips
+
+    [Fact]
+    public void Every_offered_tip_stamps_a_different_shape()
+    {
+        // The chooser lists seven tips. Rectangle and Block used to share the "whole square"
+        // branch, so two of the seven printed exactly the same mark.
+        var stamps = new List<(BrushPresetKind Kind, string Signature)>();
+        foreach (var kind in Enum.GetValues<BrushPresetKind>())
+        {
+            var tip = EditorViewModel.PreviewTip(kind);
+            stamps.Add((kind, tip is null
+                ? "round:" + EditorViewModel.PreviewSoftness(kind)
+                : Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(tip.Alpha))));
+        }
+
+        Assert.Equal(stamps.Count, stamps.Select(item => item.Signature).Distinct().Count());
+    }
+
+    [Fact]
+    public void The_panel_can_tell_which_tip_is_live()
+    {
+        var editor = EditorForNewMap();
+
+        editor.ApplyBrushPreset(BrushPresetKind.EdgeBlock);
+        Assert.Equal(BrushPresetKind.EdgeBlock, editor.ActiveBrushPreset);
+        Assert.NotNull(editor.BrushSettings.Tip);
+
+        // Dropping the tip returns to the plain circle, and the list has to follow it there.
+        editor.ClearBrushTip();
+        Assert.Null(editor.BrushSettings.Tip);
+        Assert.Contains(
+            editor.ActiveBrushPreset,
+            new[] { BrushPresetKind.RoundHard, BrushPresetKind.RoundSoft });
+    }
+
     // ------------------------------------------------------------------------ setup
 
     private static EditorViewModel EditorForNewMap()

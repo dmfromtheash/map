@@ -407,7 +407,14 @@ public static class SceneRenderer
         var effects = (layer as ObjectLayer)?.Effects;
         var clipsToLower = effects?.ClippingEnabled == true
             && clippingSource is { Visible: true, Opacity: > 0 };
-        var needsGroup = mask is not null || clipsToLower || layer.Opacity < 1.0 || layer.Blend != "Normal";
+
+        // The live eraser preview subtracts alpha (DstOut). Without a group of its own it does
+        // that to the frame itself, not to this layer: the window loses its own pixels and the
+        // desktop shows through the hole for as long as the button is held.
+        var erasesInPreview = options.Preview is { Eraser: true } erasing
+            && erasing.LayerId == layer.Id;
+        var needsGroup = mask is not null || clipsToLower || erasesInPreview
+            || layer.Opacity < 1.0 || layer.Blend != "Normal";
 
         if (needsGroup)
         {

@@ -4,7 +4,13 @@ using Map.Performance;
 var options = PerformanceOptions.Parse(args);
 object report;
 bool gatePassed;
-if (options.Profile == "native-editor-integrity")
+if (options.Profile == "native-brush-stress")
+{
+    var stressReport = NativeBrushStressSmoke.Run(options);
+    report = stressReport;
+    gatePassed = stressReport.GatePassed;
+}
+else if (options.Profile == "native-editor-integrity")
 {
     var nativeReport = NativeEditorIntegritySmoke.Run(options);
     report = nativeReport;
