@@ -387,7 +387,11 @@ public sealed class MapCanvasControl : Control
                     ? editor.Session.SelectedObjectIds
                     : null,
                 SelectionFrame = editor.CanvasWorkflowOpen ? null : editor.SelectionFrame,
-                Marquee = editor.CanvasWorkflowOpen ? null : editor.MarqueeWorld,
+                // The land region drag borrows the marquee outline: it is the same idea on
+                // screen - "this is the area the next action covers".
+                Marquee = editor.CanvasWorkflowOpen
+                    ? null
+                    : editor.MarqueeWorld ?? editor.LandShapePreview,
                 ViewScale = viewport.Scale,
                 VisibleWorld = new Map.Core.Documents.WorldBounds(
                     X, Y, bottomRight.X, bottomRight.Y),

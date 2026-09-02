@@ -657,6 +657,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             CancelStroke();
             CancelVectorDraw();
             CancelPenPath();
+            CancelLandShapeGesture();
             CancelTextPlacement();
             CancelShapeBooleanPreview();
             CancelPlacement();
@@ -777,6 +778,115 @@ public sealed partial class EditorViewModel : ViewModelBase
     public MaskPaintMode MaskMode { get; set; } = MaskPaintMode.Hide;
 
     public bool LandSubtract { get; set; }
+
+    // ------------------------------------------------------------------ land shapes
+
+    private LandShapeKind _activeLandShape = LandShapeKind.Circle;
+    private VectorPoint? _landShapeStart;
+    private VectorPoint? _landShapeCurrent;
+
+    /// <summary>
+    /// Which shape a Land drag makes. Circle keeps the freehand round brush; every other choice
+    /// turns the drag into a region gesture.
+    /// <para>
+    /// The six shape buttons used to write a local variable in the panel that nothing else read.
+    /// Choosing a shape changed nothing on the canvas and the button did not even look picked, so
+    /// the whole row read as broken.
+    /// </para>
+    /// </summary>
+    public LandShapeKind ActiveLandShape
+    {
+        get => _activeLandShape;
+        set
+        {
+            if (_activeLandShape == value)
+            {
+                return;
+            }
+
+            _activeLandShape = value;
+            CancelLandShapeGesture();
+            Raise(nameof(ActiveLandShape));
+            Raise(nameof(RasterToolHint));
+            SceneChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    /// <summary>True while a Land drag describes a region instead of painting freehand.</summary>
+    public bool LandDrawsRegion =>
+        ActiveTool == EditorTool.Land && ActiveLandShape != LandShapeKind.Circle;
+
+    /// <summary>The region the current Land drag would fill; the canvas outlines it.</summary>
+    public WorldBounds? LandShapePreview =>
+        _landShapeStart is { } start && _landShapeCurrent is { } current
+            ? new WorldBounds(
+                Math.Min(start.X, current.X), Math.Min(start.Y, current.Y),
+                Math.Max(start.X, current.X), Math.Max(start.Y, current.Y))
+            : null;
+
+    public bool BeginLandShapeGesture(double worldX, double worldY)
+    {
+        if (!LandDrawsRegion)
+        {
+            return false;
+        }
+
+        if (RasterTargetLayer(EditorTool.Land) is not LandLayer land)
+        {
+            StatusDetail = RasterToolRefusal(EditorTool.Land);
+            return false;
+        }
+
+        UseAsActiveLayer(land);
+        _landShapeStart = new VectorPoint(worldX, worldY);
+        _landShapeCurrent = _landShapeStart;
+        InvalidateScene(EditorChangeReason.CanvasInvalidation);
+        return true;
+    }
+
+    public void UpdateLandShapeGesture(double worldX, double worldY)
+    {
+        if (_landShapeStart is null)
+        {
+            return;
+        }
+
+        _landShapeCurrent = new VectorPoint(worldX, worldY);
+        InvalidateScene(EditorChangeReason.CanvasInvalidation);
+    }
+
+    /// <summary>Fills the dragged region with the chosen shape as one undoable command.</summary>
+    public bool EndLandShapeGesture()
+    {
+        var bounds = LandShapePreview;
+        var shape = ActiveLandShape;
+        CancelLandShapeGesture();
+        if (bounds is not { } region)
+        {
+            return false;
+        }
+
+        if (region.Right - region.Left < 1 || region.Bottom - region.Top < 1)
+        {
+            StatusDetail = "Область слишком мала — форма не применена.";
+            return false;
+        }
+
+        return ApplyLandShape(shape, region);
+    }
+
+    public bool CancelLandShapeGesture()
+    {
+        if (_landShapeStart is null)
+        {
+            return false;
+        }
+
+        _landShapeStart = null;
+        _landShapeCurrent = null;
+        InvalidateScene(EditorChangeReason.CanvasInvalidation);
+        return true;
+    }
 
     public StrokePreview? StrokePreview => _stroke is null
         || (!_editingStampForeground && _activeLayerId is null)
@@ -6208,13 +6318,14 @@ public sealed partial class EditorViewModel : ViewModelBase
         // A drag, marquee or node grab is as much "an action in progress" as a half-drawn shape,
         // and the canvas host has to forget its own matching state in the same breath.
         if (_vectorElementDrag is not null || _vectorPoints is not null
-            || _penPoints is not null
+            || _penPoints is not null || _landShapeStart is not null
             || _textPlacementStart is not null || _stroke is not null
             || DragPreview is not null || _marqueeStart is not null)
         {
             CancelVectorElementDrag();
             CancelVectorDraw();
             CancelPenPath();
+            CancelLandShapeGesture();
             CancelTextPlacement();
             CancelStroke();
             CancelDrag();

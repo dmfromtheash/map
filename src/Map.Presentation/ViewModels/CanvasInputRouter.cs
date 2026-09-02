@@ -20,6 +20,7 @@ public enum CanvasInputGesture
     RegionSelect,
     Stroke,
     VectorDraw,
+    LandShape,
     TextPlacement,
     VectorElementDrag,
     ObjectDrag,
@@ -169,6 +170,20 @@ public sealed class CanvasInputRouter
 
         if (_editor.ActiveTool is EditorTool.Brush or EditorTool.Mask or EditorTool.Land)
         {
+            // A chosen land shape turns the drag into a region: press and release describe the
+            // rectangle it fills, exactly like the shape tools do.
+            if (_editor.LandDrawsRegion)
+            {
+                var region = _editor.BeginLandShapeGesture(worldX, worldY);
+                _gesture = region ? CanvasInputGesture.LandShape : CanvasInputGesture.None;
+                return new CanvasInputResult
+                {
+                    Handled = true,
+                    CapturePointer = region,
+                    Invalidate = true,
+                };
+            }
+
             LastPressureSample = Math.Clamp(pressure, 0, 1);
             var stroking = _editor.BeginStroke(worldX, worldY, LastPressureSample);
             _gesture = stroking ? CanvasInputGesture.Stroke : CanvasInputGesture.None;
@@ -319,6 +334,9 @@ public sealed class CanvasInputRouter
 
                 _editor.ContinueVectorDraw(worldX, worldY);
                 return new CanvasInputResult { Handled = true, Invalidate = true };
+            case CanvasInputGesture.LandShape:
+                _editor.UpdateLandShapeGesture(worldX, worldY);
+                return new CanvasInputResult { Handled = true, Invalidate = true };
             case CanvasInputGesture.TextPlacement:
                 _editor.ContinueTextPlacement(worldX, worldY);
                 return new CanvasInputResult { Handled = true, Invalidate = true };
@@ -389,6 +407,9 @@ public sealed class CanvasInputRouter
                     _editor.EndVectorDraw();
                 }
 
+                break;
+            case CanvasInputGesture.LandShape:
+                _editor.EndLandShapeGesture();
                 break;
             case CanvasInputGesture.TextPlacement:
                 _editor.EndTextPlacement();
@@ -466,6 +487,9 @@ public sealed class CanvasInputRouter
                 return true;
             case CanvasInputGesture.VectorDraw:
                 _editor.CancelVectorDraw();
+                return true;
+            case CanvasInputGesture.LandShape:
+                _editor.CancelLandShapeGesture();
                 return true;
             case CanvasInputGesture.TextPlacement:
                 _editor.CancelTextPlacement();

@@ -1499,7 +1499,6 @@ public sealed class EditorView : UserControl
 
     private Control BuildLandPanel()
     {
-        var selectedShape = LandShapeKind.Circle;
         var (actions, actionButtons) = Ui.Segmented(
             "LandAction", [("Add", "Добавить", null), ("Subtract", "Убрать", null)],
             key =>
@@ -1516,7 +1515,11 @@ public sealed class EditorView : UserControl
             ("PolygonButton", "Многоугольник", MapIcons.ShapePolygon),
             ("GridButton", "Блок по сетке", MapIcons.ShapeGridBlock),
             ("FillButton", "Заливка области", MapIcons.ShapeFill),
-        ], key => selectedShape = LandShapeByKey(key));
+        ], key =>
+        {
+            _editor.ActiveLandShape = LandShapeByKey(key);
+            SyncLandButtons();
+        });
 
         for (var index = 0; index < shapeButtons.Count; index++)
         {
@@ -1551,7 +1554,8 @@ public sealed class EditorView : UserControl
             Spacing = 8,
             Children =
             {
-                Explanation("Протяните по холсту, чтобы нарисовать сушу, или примените готовую форму."),
+                Explanation("Круг рисует сушу от руки. Любая другая форма превращает протягивание "
+                            + "по холсту в область: рамка показывает, что будет залито."),
                 BuildRasterToolReadiness("Land"),
                 Ui.Section("Действие", actions),
                 Ui.Section("Форма", shapes),
@@ -1573,7 +1577,8 @@ public sealed class EditorView : UserControl
                         Ui.PropertyRow("Ширина", width), Ui.PropertyRow("Высота", height),
                         Ui.TextButton("LandApplyShapeButton", "Применить выбранную форму", () =>
                         {
-                            if (ReadBounds(out var region)) _editor.ApplyLandShape(selectedShape, region);
+                            if (ReadBounds(out var region))
+                                _editor.ApplyLandShape(_editor.ActiveLandShape, region);
                         }, "compact"),
                         new TextBlock { Text = "Перемещение" }.Classed("role-panel"),
                         Ui.PropertyRow("Delta X", dx), Ui.PropertyRow("Delta Y", dy), snap,
@@ -6832,6 +6837,14 @@ public sealed class EditorView : UserControl
             var active = (index == 1) == _editor.LandSubtract;
             Ui.SetClass(_landActionButtons[index], "active", active);
             if (_landActionButtons[index] is ToggleButton toggle) toggle.IsChecked = active;
+        }
+
+        // The shape row never showed a selection at all, so the user could not tell which of the
+        // six was in effect - or that clicking one had done anything.
+        foreach (var (name, button) in _landShapeButtons)
+        {
+            var key = name.StartsWith("Land", StringComparison.Ordinal) ? name[4..] : name;
+            Ui.SetClass(button, "active", LandShapeByKey(key) == _editor.ActiveLandShape);
         }
     }
 

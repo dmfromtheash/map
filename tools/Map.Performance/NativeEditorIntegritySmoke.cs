@@ -535,6 +535,44 @@ public sealed class NativeEditorIntegrityApplication : Application
                 .Where(layer => layer.Id != landLayer.Id).Sum(layer => layer.GeometryTiles.TileCount)
                 == otherLandCoverage;
 
+        // ------------------------------------------------------------ land shapes
+        // Clicking a shape in the Land panel has to change what the tool then makes. The six icons
+        // used to write a local variable nothing else read, so the choice had no effect anywhere.
+        editor.SelectLayer(landLayer.Id);
+        editor.ActiveTool = EditorTool.Land;
+        await SettleAsync();
+
+        Find<Button>(view, "LandRectangleButton").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        await SettleAsync();
+        var shapeChoiceVisible =
+            Find<Button>(view, "LandRectangleButton").Classes.Contains("active");
+
+        var coverageBeforeShape = ((LandLayer)editor.Session.Document.FindLayer(landLayer.Id)!)
+            .GeometryTiles.TileCount;
+        var undoBeforeShape = editor.Session.UndoDepth;
+        var (shapeFromX, shapeFromY) = Screen(editor, 640, 120);
+        var (shapeToX, shapeToY) = Screen(editor, 900, 300);
+        view.Canvas.PressForSmoke(shapeFromX, shapeFromY);
+        view.Canvas.MoveForSmoke(shapeToX, shapeToY);
+        await SettleAsync();
+        var shapePreviewShown = editor.LandShapePreview is not null;
+        view.Canvas.ReleaseForSmoke(shapeToX, shapeToY);
+        await SettleAsync();
+
+        var landAfterShape = (LandLayer)editor.Session.Document.FindLayer(landLayer.Id)!;
+        var shapeDrawn = landAfterShape.GeometryTiles.TileCount > coverageBeforeShape
+            && editor.Session.UndoDepth == undoBeforeShape + 1;
+
+        // The round tip keeps its freehand behaviour; it is not a region gesture.
+        Find<Button>(view, "LandCircleButton").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        await SettleAsync();
+        var backToFreehand = editor.ActiveLandShape == LandShapeKind.Circle;
+
+        scenarios["land_shape_choice_changes_what_the_drag_makes"] =
+            shapeChoiceVisible && shapePreviewShown && shapeDrawn && backToFreehand;
+        notes.Add($"land shapes: selected={shapeChoiceVisible} preview={shapePreviewShown} "
+            + $"drawn={shapeDrawn} freehand={backToFreehand}");
+
         // ----------------------------------------------------------------- notes
         editor.ActiveTool = EditorTool.Notes;
         await SettleAsync();

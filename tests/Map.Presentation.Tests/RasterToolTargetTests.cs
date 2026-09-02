@@ -138,6 +138,85 @@ public sealed class RasterToolTargetTests
         Assert.True(editor.Session.Document.FindLayer(chosen.Id) is BrushLayer { Tiles.TileCount: > 0 });
     }
 
+    // ------------------------------------------------------------------ land shapes
+
+    [Fact]
+    public void Choosing_a_land_shape_turns_the_drag_into_that_shape()
+    {
+        // The six shape buttons wrote a local variable in the panel that nothing else read, so
+        // picking one changed neither the canvas nor the button.
+        var editor = EditorForNewMap();
+        editor.AddLandLayer();
+        editor.ActiveTool = EditorTool.Land;
+        editor.ActiveLandShape = LandShapeKind.Rectangle;
+
+        Assert.True(editor.LandDrawsRegion);
+        var undoBefore = editor.Session.UndoDepth;
+
+        Assert.True(editor.BeginLandShapeGesture(100, 100));
+        editor.UpdateLandShapeGesture(400, 300);
+        Assert.NotNull(editor.LandShapePreview);
+        Assert.Equal(0, editor.Session.UndoDepth - undoBefore);
+
+        Assert.True(editor.EndLandShapeGesture());
+
+        Assert.Null(editor.LandShapePreview);
+        Assert.Equal(undoBefore + 1, editor.Session.UndoDepth);
+        Assert.True(
+            editor.Session.Document.Layers.OfType<LandLayer>().Single().GeometryTiles.TileCount > 0);
+    }
+
+    [Fact]
+    public void The_round_land_tip_still_paints_freehand()
+    {
+        var editor = EditorForNewMap();
+        editor.AddLandLayer();
+        editor.ActiveTool = EditorTool.Land;
+        editor.ActiveLandShape = LandShapeKind.Circle;
+
+        Assert.False(editor.LandDrawsRegion);
+        Assert.False(editor.BeginLandShapeGesture(100, 100));
+
+        Assert.True(editor.BeginStroke(100, 100));
+        editor.ContinueStroke(160, 160);
+        editor.EndStroke();
+        Assert.True(
+            editor.Session.Document.Layers.OfType<LandLayer>().Single().GeometryTiles.TileCount > 0);
+    }
+
+    [Fact]
+    public void An_abandoned_land_region_writes_nothing()
+    {
+        var editor = EditorForNewMap();
+        editor.AddLandLayer();
+        editor.ActiveTool = EditorTool.Land;
+        editor.ActiveLandShape = LandShapeKind.Ellipse;
+        var undoBefore = editor.Session.UndoDepth;
+
+        editor.BeginLandShapeGesture(100, 100);
+        editor.UpdateLandShapeGesture(300, 300);
+        editor.ActiveTool = EditorTool.Select;
+
+        Assert.Null(editor.LandShapePreview);
+        Assert.Equal(undoBefore, editor.Session.UndoDepth);
+    }
+
+    [Fact]
+    public void A_land_region_with_no_area_is_refused_rather_than_committed()
+    {
+        var editor = EditorForNewMap();
+        editor.AddLandLayer();
+        editor.ActiveTool = EditorTool.Land;
+        editor.ActiveLandShape = LandShapeKind.GridBlock;
+        var undoBefore = editor.Session.UndoDepth;
+
+        editor.BeginLandShapeGesture(200, 200);
+        Assert.False(editor.EndLandShapeGesture());
+
+        Assert.Equal(undoBefore, editor.Session.UndoDepth);
+        Assert.Contains("мала", editor.StatusDetail);
+    }
+
     // ------------------------------------------------------------------- brush tips
 
     [Fact]
