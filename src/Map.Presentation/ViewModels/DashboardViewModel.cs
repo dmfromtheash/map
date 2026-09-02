@@ -56,6 +56,7 @@ public sealed class DashboardViewModel : ViewModelBase
     private readonly string _appVersion;
     private readonly SemaphoreSlim _openGate = new(1, 1);
 
+    private string _lastNotice = "";
     private IReadOnlyList<RecentCard> _recentCards = [];
     private IReadOnlyList<RecentCard> _allRecentCards = [];
     private IReadOnlyList<RecoveryCard> _recoveryCards = [];
@@ -101,6 +102,17 @@ public sealed class DashboardViewModel : ViewModelBase
     {
         get => _lastError;
         set => SetField(ref _lastError, value);
+    }
+
+    /// <summary>
+    /// Last successful outcome worth stating out loud. It exists because "moved to the Recycle
+    /// Bin" and "the file was already gone, so only the entry was removed" are different truths
+    /// and neither of them is an error.
+    /// </summary>
+    public string LastNotice
+    {
+        get => _lastNotice;
+        set => SetField(ref _lastNotice, value);
     }
 
     public bool IsBusy
@@ -353,11 +365,20 @@ public sealed class DashboardViewModel : ViewModelBase
         }
     }
 
-    /// <summary>Moves exactly one confirmed project to the platform trash.</summary>
+    /// <summary>
+    /// Removes exactly one confirmed card. An existing file goes to the platform trash and then
+    /// loses its recent entry. A card whose file is already gone loses only its entry - and says
+    /// so, instead of claiming a Recycle Bin move that never happened. A real I/O failure still
+    /// keeps both the file and the entry, and reports itself as a failure.
+    /// </summary>
     public async Task<bool> DeleteAsync(RecentCard source)
     {
         if (_prompts is null || _trash is null || IsBusy) return false;
-        if (!await _prompts.ConfirmDeleteProjectAsync(source.Title))
+
+        // The file can also vanish between this check and the trash call; that case is handled by
+        // the outcome below. Checking here is only about asking the honest question up front.
+        var missingBeforePrompt = !source.IsAvailable;
+        if (!await _prompts.ConfirmDeleteProjectAsync(source.Title, missingBeforePrompt))
         {
             _log.Info("PROJECT_DELETE_CANCELLED");
             return false;
@@ -366,16 +387,28 @@ public sealed class DashboardViewModel : ViewModelBase
         IsBusy = true;
         try
         {
-            await Task.Run(() => _trash.MoveToTrash(source.Path));
+            var outcome = await Task.Run(() => _trash.MoveToTrash(source.Path));
             _recent.Remove(source.Path);
             LastError = "";
-            _log.Info("PROJECT_MOVED_TO_TRASH");
+            if (outcome == ProjectTrashOutcome.FileAlreadyMissing)
+            {
+                LastNotice = $"Файла «{source.Title}» уже нет на диске. Удалена только запись о карте.";
+                _log.Info("PROJECT_STALE_ENTRY_REMOVED");
+            }
+            else
+            {
+                LastNotice = $"Карта «{source.Title}» перемещена в Корзину.";
+                _log.Info("PROJECT_MOVED_TO_TRASH");
+            }
+
             Refresh();
             return true;
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException
+            or ArgumentException or NotSupportedException)
         {
-            LastError = "Не удалось переместить карту в Корзину. Файл не изменён.";
+            LastNotice = "";
+            LastError = "Не удалось переместить карту в Корзину. Файл и запись не изменены.";
             _log.Error("PROJECT_DELETE_FAILED", error);
             return false;
         }

@@ -190,6 +190,7 @@ public static class GridSnapService
         Stamp = source.Stamp,
         Line = source.Line,
         Shape = source.Shape,
+        FillGradient = source.FillGradient,
         Text = source.Text,
         ObjectOpacity = source.ObjectOpacity,
         Composition = source.Composition,

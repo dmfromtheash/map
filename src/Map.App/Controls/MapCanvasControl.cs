@@ -25,24 +25,35 @@ namespace Map.App.Controls;
 public sealed class MapCanvasControl : Control
 {
     private EditorViewModel? _editor;
+    private CanvasInputRouter? _input;
     private Point? _lastPointer;
-    private (double X, double Y)? _dragStartWorld;
-    private bool _isPanning;
-    private bool _isStroking;
-    private bool _isVectorDrawing;
-    private bool _isTextPlacing;
-    private bool _isVectorElementDragging;
-    private bool _isMarquee;
-    private bool _isRegionSelecting;
     private bool _visualInvalidationQueued;
-    private Point _marqueePressScreen;
     private readonly TileImageCache _tileCache = new(512);
     private readonly ObjectOverviewCache _objectCache = new(1_024, 64L * 1024 * 1024);
     private readonly RenderStats _renderStats = new();
 
-    public bool IsSpacePanHeld { get; set; }
+    public bool IsSpacePanHeld
+    {
+        get => _input?.SpacePanHeld == true;
+        set
+        {
+            if (_input is not null)
+            {
+                _input.SpacePanHeld = value;
+            }
+        }
+    }
+
     public CanvasPerformanceMode PerformanceMode { get; set; } = CanvasPerformanceMode.Balanced;
-    public double LastPressureSample { get; private set; } = 1;
+
+    public double LastPressureSample => _input?.LastPressureSample ?? 1;
+
+    /// <summary>The routing state machine shared by input, rendering and the native smokes.</summary>
+    internal CanvasInputRouter? Input => _input;
+
+    /// <summary>Own-process smoke hook: the very router a real pointer event goes through.</summary>
+    public CanvasInputRouter InputForSmoke => _input
+        ?? throw new InvalidOperationException("The canvas has no editor attached yet.");
 
     public MapCanvasControl()
     {
@@ -53,6 +64,7 @@ public sealed class MapCanvasControl : Control
         AutomationProperties.SetName(this, "Холст карты");
         DetachedFromVisualTree += (_, _) =>
         {
+            _input?.Cancel();
             _editor?.CancelPlacement();
             DisposeRenderCaches();
         };
@@ -111,14 +123,12 @@ public sealed class MapCanvasControl : Control
     /// <summary>Own-process smoke hook through the same snapped preview state as pointer move.</summary>
     public void MovePlacementPointerForSmoke(double screenX, double screenY)
     {
-        if (_editor is null)
+        if (_input is null)
         {
             return;
         }
 
-        var world = _editor.Session.Viewport.ScreenToWorld(screenX, screenY);
-        _editor.UpdatePlacementPreview(world.X, world.Y);
-        QueueVisualInvalidation();
+        Apply(_input.Move(screenX, screenY));
     }
 
     /// <summary>Own-process smoke hook through the same commit path as a left canvas press.</summary>
@@ -130,16 +140,102 @@ public sealed class MapCanvasControl : Control
     }
 
     /// <summary>Own-process smoke hook through the same secondary-pointer cancel path as input.</summary>
-    public bool CancelPlacementWithSecondaryPointerForSmoke() => CancelPlacementFromSecondaryPointer();
+    public bool CancelPlacementWithSecondaryPointerForSmoke()
+    {
+        if (_input is null)
+        {
+            return false;
+        }
+
+        var result = _input.Press(CanvasPointerButton.Right, _lastPointer?.X ?? 0, _lastPointer?.Y ?? 0);
+        Apply(result);
+        return result.Handled;
+    }
+
+    /// <summary>
+    /// Own-process smoke hook: one complete left press-move-release through the production router,
+    /// so a smoke proves the same routing order a real pointer would take.
+    /// </summary>
+    public void PressMoveReleaseForSmoke(
+        double pressScreenX, double pressScreenY,
+        double releaseScreenX, double releaseScreenY,
+        bool additive = false)
+    {
+        if (_input is null)
+        {
+            return;
+        }
+
+        Apply(_input.Press(CanvasPointerButton.Left, pressScreenX, pressScreenY, additive));
+        Apply(_input.Move(releaseScreenX, releaseScreenY));
+        Apply(_input.Release(releaseScreenX, releaseScreenY));
+        _lastPointer = new Point(releaseScreenX, releaseScreenY);
+    }
+
+    /// <summary>Own-process smoke hook: a click that never moves, i.e. the selection gesture.</summary>
+    public void ClickForSmoke(double screenX, double screenY, bool additive = false) =>
+        PressMoveReleaseForSmoke(screenX, screenY, screenX, screenY, additive);
+
+    /// <summary>Applies one routed result to the Avalonia-facing parts of the control.</summary>
+    private void Apply(CanvasInputResult result, PointerEventArgs? source = null)
+    {
+        if (result.CapturePointer)
+        {
+            source?.Pointer.Capture(this);
+        }
+
+        if (result.ReleasePointer)
+        {
+            source?.Pointer.Capture(null);
+        }
+
+        if (result.ViewportChanged)
+        {
+            ViewportChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        if (result.StampPlaced)
+        {
+            StampPlaced?.Invoke(this, EventArgs.Empty);
+        }
+
+        if (result.Invalidate)
+        {
+            QueueVisualInvalidation();
+        }
+
+        if (source is not null && result.Handled)
+        {
+            source.Handled = true;
+        }
+    }
 
     public void Attach(EditorViewModel editor)
     {
-        _editor?.SceneChanged -= OnSceneChanged;
-        _editor?.SceneInvalidated -= OnSceneInvalidated;
+        var panHeld = IsSpacePanHeld;
+        if (_editor is not null)
+        {
+            _editor.SceneChanged -= OnSceneChanged;
+            _editor.SceneInvalidated -= OnSceneInvalidated;
+            _editor.CanvasGestureCancelled -= OnCanvasGestureCancelled;
+        }
 
         _editor = editor;
+        _input = new CanvasInputRouter(editor) { SpacePanHeld = panHeld };
         _editor.SceneChanged += OnSceneChanged;
         _editor.SceneInvalidated += OnSceneInvalidated;
+        _editor.CanvasGestureCancelled += OnCanvasGestureCancelled;
+        QueueVisualInvalidation();
+    }
+
+    /// <summary>
+    /// The editor dropped an unfinished gesture (a tool switch today). The control drops its own
+    /// pointer state in the same step, so no stale flag can commit on a later release.
+    /// </summary>
+    private void OnCanvasGestureCancelled(object? sender, EventArgs e)
+    {
+        _input?.Cancel();
+        Cursor = Cursor.Default;
         QueueVisualInvalidation();
     }
 
@@ -172,6 +268,27 @@ public sealed class MapCanvasControl : Control
 
     // ---------------------------------------------------------------- rendering
 
+    /// <summary>
+    /// The viewport learns its size during layout, not during rendering. It used to be resized
+    /// inside <see cref="Render"/>, so a resize could publish editor state from the middle of a
+    /// render pass and make the side panel rebuild its rows mid-frame - which showed up as a
+    /// briefly empty layer list right after the window changed size.
+    /// </summary>
+    protected override Size ArrangeOverride(Size finalSize)
+    {
+        var arranged = base.ArrangeOverride(finalSize);
+        if (_editor is not null
+            && (Math.Abs(_editor.Session.Viewport.ViewWidth - arranged.Width) > 0.01
+                || Math.Abs(_editor.Session.Viewport.ViewHeight - arranged.Height) > 0.01))
+        {
+            _editor.Session.Viewport.Resize(arranged.Width, arranged.Height);
+            ViewportChanged?.Invoke(this, EventArgs.Empty);
+            QueueVisualInvalidation();
+        }
+
+        return arranged;
+    }
+
     public override void Render(DrawingContext context)
     {
         if (_editor is null || Bounds.Width <= 0 || Bounds.Height <= 0)
@@ -179,13 +296,10 @@ public sealed class MapCanvasControl : Control
             return;
         }
 
-        _editor.Session.Viewport.Resize(Bounds.Width, Bounds.Height);
         context.Custom(new SceneDrawOperation(
             new Rect(0, 0, Bounds.Width, Bounds.Height), _editor, _tileCache, _objectCache,
             _renderStats, PerformanceMode,
-            _isPanning || _isStroking || _isVectorDrawing || _isTextPlacing
-            || _isVectorElementDragging || _isRegionSelecting
-            || _dragStartWorld is not null,
+            _input is { ActiveGesture: not CanvasInputGesture.None and not CanvasInputGesture.Marquee },
             (tier, elapsedMilliseconds) =>
             {
                 LastLodTier = tier;
@@ -291,10 +405,21 @@ public sealed class MapCanvasControl : Control
 
     // ---------------------------------------------------------------- input
 
+    // The control no longer decides what a press means. It translates Avalonia input into router
+    // calls and applies the routed result: capture, cursor, invalidation and events. The routing
+    // order itself lives in CanvasInputRouter so it can be regression-tested without a window.
+
+    private static CanvasPointerButton ButtonOf(PointerPoint point)
+    {
+        if (point.Properties.IsMiddleButtonPressed) return CanvasPointerButton.Middle;
+        if (point.Properties.IsRightButtonPressed) return CanvasPointerButton.Right;
+        return point.Properties.IsLeftButtonPressed ? CanvasPointerButton.Left : CanvasPointerButton.None;
+    }
+
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
         base.OnPointerPressed(e);
-        if (_editor is null)
+        if (_input is null)
         {
             return;
         }
@@ -303,319 +428,131 @@ public sealed class MapCanvasControl : Control
         var position = e.GetPosition(this);
         var point = e.GetCurrentPoint(this);
         _lastPointer = position;
+        ApplyDrawModifiers(e.KeyModifiers);
 
-        if (point.Properties.IsMiddleButtonPressed
-            || point.Properties.IsLeftButtonPressed && IsSpacePanHeld)
-        {
-            _isPanning = true;
-            e.Pointer.Capture(this);
-            e.Handled = true;
-            return;
-        }
-
-        if (point.Properties.IsRightButtonPressed)
-        {
-            CancelPlacementFromSecondaryPointer();
-            e.Handled = true;
-            return;
-        }
-
-        if (!point.Properties.IsLeftButtonPressed)
-        {
-            return;
-        }
-
-        var world = _editor.Session.Viewport.ScreenToWorld(position.X, position.Y);
-
-        if (_editor.CanvasWorkflowOpen)
-        {
-            if (_editor.CanvasWorkflowMode == ResizeRegionMode.Region)
-            {
-                _isRegionSelecting = _editor.BeginRegionSelection(world.X, world.Y);
-                if (_isRegionSelecting)
-                {
-                    e.Pointer.Capture(this);
-                }
-            }
-
-            e.Handled = true;
-            QueueVisualInvalidation();
-            return;
-        }
-
-        if (_editor.ActiveTool is EditorTool.Brush or EditorTool.Mask or EditorTool.Land)
-        {
-            LastPressureSample = Math.Clamp(point.Properties.Pressure, 0, 1);
-            _isStroking = _editor.BeginStroke(world.X, world.Y, LastPressureSample);
-            if (_isStroking)
-            {
-                e.Pointer.Capture(this);
-            }
-
-            e.Handled = true;
-            QueueVisualInvalidation();
-            return;
-        }
-
-        if (_editor.ActiveTool is EditorTool.Line or EditorTool.Shape)
-        {
-            _isVectorDrawing = _editor.BeginVectorDraw(world.X, world.Y);
-            if (_isVectorDrawing) e.Pointer.Capture(this);
-            e.Handled = true;
-            return;
-        }
-
-        if (_editor.ActiveTool == EditorTool.Text)
-        {
-            _isTextPlacing = _editor.BeginTextPlacement(world.X, world.Y);
-            if (_isTextPlacing) e.Pointer.Capture(this);
-            e.Handled = true;
-            QueueVisualInvalidation();
-            return;
-        }
-
-        if (_editor.HasPendingPlacement)
-        {
-            _editor.UpdatePlacementPreview(world.X, world.Y);
-            var stamp = _editor.PendingPlacement?.Target == PlacementTargetKind.Stamp;
-            _editor.CommitPendingPlacement();
-            if (stamp)
-            {
-                StampPlaced?.Invoke(this, EventArgs.Empty);
-            }
-            e.Handled = true;
-            QueueVisualInvalidation();
-            return;
-        }
-
-        if (_editor.ActiveTool == EditorTool.Select
-            && _editor.BeginVectorElementDrag(world.X, world.Y, _editor.Session.Viewport.Scale))
-        {
-            _isVectorElementDragging = true;
-            e.Pointer.Capture(this);
-            e.Handled = true;
-            QueueVisualInvalidation();
-            return;
-        }
-
-        // One entry point: a gizmo/frame handle grab resizes/rotates the whole selection; a press
-        // on an object selects (Ctrl toggles) and starts a move; empty canvas starts a marquee.
-        var additive = e.KeyModifiers.HasFlag(KeyModifiers.Control);
-        switch (_editor.BeginCanvasInteraction(world.X, world.Y, _editor.Session.Viewport.Scale, additive))
-        {
-            case CanvasGesture.Drag:
-                _dragStartWorld = world;
-                break;
-            case CanvasGesture.Marquee:
-                _isMarquee = true;
-                _marqueePressScreen = position;
-                break;
-        }
-
-        e.Pointer.Capture(this);
-        e.Handled = true;
-        QueueVisualInvalidation();
+        Apply(
+            _input.Press(
+                ButtonOf(point),
+                position.X,
+                position.Y,
+                e.KeyModifiers.HasFlag(KeyModifiers.Control),
+                point.Properties.Pressure),
+            e);
     }
 
     protected override void OnPointerMoved(PointerEventArgs e)
     {
         base.OnPointerMoved(e);
-        if (_editor is null)
+        if (_editor is null || _input is null)
         {
             return;
         }
 
         var position = e.GetPosition(this);
-
-        if (_isPanning && _lastPointer is { } previous)
-        {
-            _editor.Session.Viewport.PanByScreenDelta(position.X - previous.X, position.Y - previous.Y);
-            _lastPointer = position;
-            ViewportChanged?.Invoke(this, EventArgs.Empty);
-            QueueVisualInvalidation();
-            e.Handled = true;
-            return;
-        }
-
-        var (X, Y) = _editor.Session.Viewport.ScreenToWorld(position.X, position.Y);
-
-        if (_editor.HasPendingPlacement
-            && !_isPanning && !_isStroking && !_isVectorDrawing && !_isTextPlacing
-            && _dragStartWorld is null && !_isMarquee && !_isRegionSelecting)
-        {
-            _editor.UpdatePlacementPreview(X, Y);
-            Cursor = new Cursor(StandardCursorType.Cross);
-            _lastPointer = position;
-            e.Handled = true;
-            QueueVisualInvalidation();
-            return;
-        }
-
-        if (_isRegionSelecting)
-        {
-            _editor.UpdateRegionSelection(X, Y);
-            Cursor = new Cursor(StandardCursorType.Cross);
-            e.Handled = true;
-            QueueVisualInvalidation();
-            return;
-        }
-
-        if (_isStroking)
-        {
-            LastPressureSample = Math.Clamp(e.GetCurrentPoint(this).Properties.Pressure, 0, 1);
-            _editor.ContinueStroke(X, Y, LastPressureSample);
-            Cursor = new Cursor(StandardCursorType.Cross);
-            e.Handled = true;
-            return;
-        }
-
-        if (_isVectorDrawing)
-        {
-            _editor.ContinueVectorDraw(X, Y);
-            Cursor = new Cursor(StandardCursorType.Cross);
-            e.Handled = true;
-            return;
-        }
-
-        if (_isTextPlacing)
-        {
-            _editor.ContinueTextPlacement(X, Y);
-            Cursor = new Cursor(StandardCursorType.Cross);
-            e.Handled = true;
-            return;
-        }
-
-        if (_isVectorElementDragging)
-        {
-            _editor.UpdateVectorElementDrag(X, Y);
-            Cursor = new Cursor(StandardCursorType.Hand);
-            e.Handled = true;
-            return;
-        }
-
-        if (_dragStartWorld is not null)
-        {
-            _editor.UpdateDragTo(X, Y);
-            e.Handled = true;
-        }
-
-        if (_isMarquee)
-        {
-            _editor.UpdateMarquee(X, Y);
-            e.Handled = true;
-            QueueVisualInvalidation();
-        }
-
-
-        if (!_isStroking && !_editor.CanvasWorkflowOpen)
-        {
-            // Pointer feedback over the gizmo: resize arrows on the handles, a hand on rotate.
-            Cursor = _editor.HitHandle(X, Y, _editor.Session.Viewport.Scale) switch
-            {
-                HandleKind.Rotate => new Cursor(StandardCursorType.Hand),
-                HandleKind.TopLeft => new Cursor(StandardCursorType.TopLeftCorner),
-                HandleKind.TopRight => new Cursor(StandardCursorType.TopRightCorner),
-                HandleKind.BottomLeft => new Cursor(StandardCursorType.BottomLeftCorner),
-                HandleKind.BottomRight => new Cursor(StandardCursorType.BottomRightCorner),
-                HandleKind.Top => new Cursor(StandardCursorType.TopSide),
-                HandleKind.Bottom => new Cursor(StandardCursorType.BottomSide),
-                HandleKind.Left => new Cursor(StandardCursorType.LeftSide),
-                HandleKind.Right => new Cursor(StandardCursorType.RightSide),
-                _ => Cursor.Default,
-            };
-        }
-
+        ApplyDrawModifiers(e.KeyModifiers);
+        Apply(_input.Move(position.X, position.Y, e.GetCurrentPoint(this).Properties.Pressure), e);
         _lastPointer = position;
+        SyncCursor(position);
     }
 
-    private bool CancelPlacementFromSecondaryPointer()
+    /// <summary>
+    /// The two drawing modifiers, read on every pointer event rather than tracked as key state:
+    /// what matters is what is held at the moment the shape is being sized, and a missed KeyUp
+    /// must never leave the tool stuck constraining every later gesture.
+    /// </summary>
+    private void ApplyDrawModifiers(KeyModifiers modifiers)
     {
         if (_editor is null)
         {
-            return false;
+            return;
         }
 
-        var cancelled = _editor.CancelPlacement();
-        QueueVisualInvalidation();
-        return cancelled;
+        _editor.VectorConstrainProportions = modifiers.HasFlag(KeyModifiers.Shift);
+        _editor.VectorDrawFromCenter = modifiers.HasFlag(KeyModifiers.Alt);
+    }
+
+    /// <summary>Pointer feedback: the gizmo cursors win, then the gesture cursor, then default.</summary>
+    private void SyncCursor(Point position)
+    {
+        if (_editor is null || _input is null)
+        {
+            return;
+        }
+
+        if (_input.IsStroking || _editor.CanvasWorkflowOpen)
+        {
+            return;
+        }
+
+        switch (_input.ActiveGesture)
+        {
+            case CanvasInputGesture.VectorDraw:
+            case CanvasInputGesture.TextPlacement:
+                Cursor = new Cursor(StandardCursorType.Cross);
+                return;
+            case CanvasInputGesture.VectorElementDrag:
+                Cursor = new Cursor(StandardCursorType.Hand);
+                return;
+        }
+
+        if (_editor.HasPendingPlacement && _input.ActiveGesture == CanvasInputGesture.None)
+        {
+            Cursor = new Cursor(StandardCursorType.Cross);
+            return;
+        }
+
+        var (worldX, worldY) = _editor.Session.Viewport.ScreenToWorld(position.X, position.Y);
+        Cursor = _editor.HitHandle(worldX, worldY, _editor.Session.Viewport.Scale) switch
+        {
+            HandleKind.Rotate => new Cursor(StandardCursorType.Hand),
+            HandleKind.TopLeft => new Cursor(StandardCursorType.TopLeftCorner),
+            HandleKind.TopRight => new Cursor(StandardCursorType.TopRightCorner),
+            HandleKind.BottomLeft => new Cursor(StandardCursorType.BottomLeftCorner),
+            HandleKind.BottomRight => new Cursor(StandardCursorType.BottomRightCorner),
+            HandleKind.Top => new Cursor(StandardCursorType.TopSide),
+            HandleKind.Bottom => new Cursor(StandardCursorType.BottomSide),
+            HandleKind.Left => new Cursor(StandardCursorType.LeftSide),
+            HandleKind.Right => new Cursor(StandardCursorType.RightSide),
+            _ => Cursor.Default,
+        };
     }
 
     protected override void OnPointerExited(PointerEventArgs e)
     {
         base.OnPointerExited(e);
-        _editor?.SetPlacementPointerVisible(false);
-        QueueVisualInvalidation();
+        if (_input is not null)
+        {
+            Apply(_input.PointerLeft());
+        }
     }
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
         base.OnPointerReleased(e);
-        if (_editor is null)
+        if (_input is null)
         {
             return;
         }
 
-        if (_dragStartWorld is not null)
-        {
-            _dragStartWorld = null;
-            _editor.EndDrag();
-        }
-
-        if (_isMarquee)
-        {
-            _isMarquee = false;
-
-            // A press-and-release without real movement is a click, not a frame: the press
-            // already applied its selection effect, so the empty marquee is simply dropped.
-            var moved = e.GetPosition(this) - _marqueePressScreen;
-            if (Math.Abs(moved.X) < 3 && Math.Abs(moved.Y) < 3)
-            {
-                _editor.CancelMarquee();
-            }
-            else
-            {
-                _editor.EndMarquee();
-            }
-        }
-
-        if (_isRegionSelecting)
-        {
-            _isRegionSelecting = false;
-            _editor.EndRegionSelection();
-            Cursor = Cursor.Default;
-        }
-
-        if (_isStroking)
-        {
-            _isStroking = false;
-            _editor.EndStroke();
-            Cursor = Cursor.Default;
-        }
-
-        if (_isVectorDrawing)
-        {
-            _isVectorDrawing = false;
-            _editor.EndVectorDraw();
-            Cursor = Cursor.Default;
-        }
-
-        if (_isTextPlacing)
-        {
-            _isTextPlacing = false;
-            _editor.EndTextPlacement();
-            Cursor = Cursor.Default;
-        }
-
-        if (_isVectorElementDragging)
-        {
-            _isVectorElementDragging = false;
-            _editor.EndVectorElementDrag();
-            Cursor = Cursor.Default;
-        }
-
-        _isPanning = false;
+        var position = e.GetPosition(this);
+        Apply(_input.Release(position.X, position.Y), e);
         e.Pointer.Capture(null);
-        QueueVisualInvalidation();
+        Cursor = Cursor.Default;
+        _lastPointer = position;
+    }
+
+    /// <summary>
+    /// Capture can be revoked without a release - a modal dialog, an Alt+Tab, a device change.
+    /// Without this the control kept believing a drag was running and committed it later.
+    /// </summary>
+    protected override void OnPointerCaptureLost(PointerCaptureLostEventArgs e)
+    {
+        base.OnPointerCaptureLost(e);
+        if (_input?.Cancel() == true)
+        {
+            Cursor = Cursor.Default;
+            QueueVisualInvalidation();
+        }
     }
 
     protected override void OnPointerWheelChanged(PointerWheelEventArgs e)

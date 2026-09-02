@@ -213,6 +213,7 @@ public sealed class EditorShortcutSettings
         public const string StampFocusLibrary = "stamp-focus-library";
         public const string StampDensityUp = "stamp-density-up";
         public const string StampDensityDown = "stamp-density-down";
+        public const string FinishPath = "finish-path";
         public const string FontPrevious = "font-previous";
         public const string FontNext = "font-next";
     }
@@ -248,6 +249,7 @@ public sealed class EditorShortcutSettings
         D(Commands.Land, "Инструмент «Земля»", "Инструменты", ShortcutContext.Editor, "", "Активировать землю"),
         D(Commands.Notes, "Заметки", "Инструменты", ShortcutContext.Editor, "N", "Открыть панель заметок"),
         D(Commands.Escape, "Выйти из группы / снять выбор", "Выделение", ShortcutContext.Editor, "Escape", "Закрыть текущий уровень выделения"),
+        D(Commands.FinishPath, "Завершить контур", "Инструменты", ShortcutContext.Canvas, "Enter", "Замкнуть контур режима Pen"),
         D(Commands.Delete, "Удалить выделение", "Выделение", ShortcutContext.Selection, "Delete", "Удалить выбранные объекты"),
         D(Commands.DeleteAlternate, "Удалить выделение (доп.)", "Выделение", ShortcutContext.Selection, "Backspace", "Второе сочетание удаления"),
         D(Commands.NudgeLeft, "Сдвинуть влево", "Выделение", ShortcutContext.Selection, "Left", "Сдвинуть на один шаг"),

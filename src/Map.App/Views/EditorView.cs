@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Globalization;
@@ -167,6 +167,13 @@ public sealed class EditorView : UserControl
     private readonly TextBlock _contextTitle =
         new TextBlock { Name = "ContextPanelTitle" }.Classed("role-panel");
     private readonly ContentControl _contextHost = new() { Name = "ContextPanelHost" };
+    private Control _contextSwitch = null!;
+    private ContentControl _toolSlot = null!;
+    private readonly List<ColorField> _colorFields = [];
+    private readonly List<Button> _contextSwitchButtons = [];
+    private bool _contextPrefersToolPanel;
+    private EditorTool? _lastContextTool;
+    private string? _lastContextSelection;
     private readonly Dictionary<EditorTool, Control> _toolPanels = [];
     private readonly Dictionary<EditorTool, Button> _toolButtons = [];
     private readonly List<(Button Button, string Label, string Command)> _commandButtons = [];
@@ -220,6 +227,11 @@ public sealed class EditorView : UserControl
     private Control _stampSection = null!;
     private Control _lineSection = null!;
     private Control _shapeSection = null!;
+    private Control _primitiveSection = null!;
+
+    // Which gradient stop the ramp, the colour picker and the position slider are all working on.
+    // It lives here rather than in the ramp so the shape block and the primitive block agree.
+    private int _gradientStop;
     private Control _textSection = null!;
     private Control _compositionSection = null!;
     private ContentControl _kindSlot = null!;
@@ -235,6 +247,7 @@ public sealed class EditorView : UserControl
 
     // ------------------------------------------------------- layer type blocks
     private Control _layerCommonBlock = null!;
+    private Control _baseColorLayerBlock = null!;
     private Control _landLayerBlock = null!;
     private Control _gridLayerBlock = null!;
     private Control _filterLayerBlock = null!;
@@ -803,6 +816,7 @@ public sealed class EditorView : UserControl
 
         var collapse = Ui.TextButton("CollapseContextPanelButton", "‹", ToggleContextPanel, "compact");
         AutomationProperties.SetName(collapse, "Свернуть или развернуть панель инструмента");
+        BuildContextSwitch();
         var header = new Border
         {
             Child = new DockPanel { Children = { collapse.Docked(Dock.Right), _contextTitle } },
@@ -811,7 +825,11 @@ public sealed class EditorView : UserControl
         _contextBody = new ScrollViewer
         {
             HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
-            Content = new Border { Padding = new Thickness(12, 10, 12, 16), Child = _contextHost },
+            Content = new Border
+            {
+                Padding = new Thickness(12, 10, 12, 16),
+                Child = new StackPanel { Spacing = 10, Children = { _contextSwitch, _contextHost } },
+            },
         };
 
         _contextPanel = new Border
@@ -878,7 +896,12 @@ public sealed class EditorView : UserControl
     {
         var (modes, buttons) = Ui.Segmented("LineDrawMode",
             [("FreeDraw", "Free Draw", null), ("Pen", "Pen / Nodes", null)],
-            key => _editor.ActiveLineDrawMode = key == "Pen" ? LineDrawMode.Pen : LineDrawMode.FreeDraw);
+            key =>
+            {
+                _editor.ActiveLineDrawMode = key == "Pen" ? LineDrawMode.Pen : LineDrawMode.FreeDraw;
+                _editor.CancelPenPath();
+                SyncAppearanceSections();
+            });
         _appearanceSyncs.Add(() =>
         {
             for (var i = 0; i < buttons.Count; i++)
@@ -892,10 +915,70 @@ public sealed class EditorView : UserControl
             Spacing = 10,
             Children =
             {
-                Explanation("Выберите режим и проведите по холсту. До отпускания кнопки виден ghost из той же геометрии; Esc отменяет без изменения карты."),
+                Explanation("Free Draw — провести по холсту. Pen — ставить узлы кликами, Enter завершает, Esc отменяет."),
                 modes,
+                BuildPenPathControls("Line"),
+                Ui.Section("Новая линия", new StackPanel
+                {
+                    Spacing = 4,
+                    Children =
+                    {
+                        AppearanceColorBox("NewLineStrokeColorBox", "Цвет линии",
+                            () => _editor.NewLineStrokeColor,
+                            value => _editor.NewLineStrokeColor = value),
+                        AppearanceSlider("NewLineStrokeWidthSlider", "Толщина", 1, 64, "px",
+                            () => _editor.NewLineStrokeWidth,
+                            (value, _) => _editor.NewLineStrokeWidth = value),
+                    },
+                }),
             },
         };
+    }
+
+    /// <summary>
+    /// The state and the two exits of an unfinished pen path. Without them the mode had no visible
+    /// state at all: nodes went down and the only way to learn whether anything was being built
+    /// was to guess.
+    /// </summary>
+    private Control BuildPenPathControls(string prefix)
+    {
+        var state = new TextBlock { TextWrapping = TextWrapping.Wrap }
+            .Classed("faint", "role-caption").Named(prefix + "PenPathStateText");
+
+        var finish = Ui.TextButton(prefix + "FinishPathButton", "Завершить контур", () =>
+        {
+            _editor.FinishPenPath();
+            SyncAppearanceSections();
+        }, "compact");
+
+        var cancel = Ui.TextButton(prefix + "CancelPathButton", "Отменить контур", () =>
+        {
+            _editor.CancelPenPath();
+            SyncAppearanceSections();
+        }, "compact");
+
+        var panel = new StackPanel
+        {
+            Spacing = 4,
+            Children =
+            {
+                state,
+                new WrapPanel { ItemSpacing = 4, LineSpacing = 4, Children = { finish, cancel } },
+            },
+        };
+
+        _appearanceSyncs.Add(() =>
+        {
+            panel.IsVisible = _editor.IsPenMode;
+            var nodes = _editor.PenNodeCount;
+            state.Text = nodes == 0
+                ? "Контур не начат: щёлкайте по холсту, чтобы ставить узлы."
+                : $"Узлов в контуре: {nodes}.";
+            finish.IsEnabled = _editor.PenPathActive;
+            cancel.IsEnabled = _editor.PenPathActive;
+        });
+
+        return panel;
     }
 
     private Control BuildShapePanel()
@@ -908,7 +991,12 @@ public sealed class EditorView : UserControl
         };
         var (modes, buttons) = Ui.Segmented("ShapeDrawMode",
             [.. options.Select(item => (item.Item1, item.Item2, (string?)null))],
-            key => _editor.ActiveShapeDrawMode = options.First(item => item.Item1 == key).Item3);
+            key =>
+            {
+                _editor.ActiveShapeDrawMode = options.First(item => item.Item1 == key).Item3;
+                _editor.CancelPenPath();
+                SyncAppearanceSections();
+            });
         _appearanceSyncs.Add(() =>
         {
             for (var i = 0; i < buttons.Count; i++)
@@ -917,13 +1005,46 @@ public sealed class EditorView : UserControl
                 ((ToggleButton)buttons[i]).IsChecked = active; Ui.SetClass(buttons[i], "active", active);
             }
         });
+        var sides = AppearanceSlider("ShapePolygonSidesSlider", "Сторон", 3, 24, "",
+            () => _editor.ShapePolygonSides,
+            (value, _) => _editor.ShapePolygonSides = (int)Math.Round(value));
+
+        var brushWidth = AppearanceSlider("ShapeBrushWidthSlider", "Ширина полосы", 1, 256, "px",
+            () => _editor.ShapeBrushWidth,
+            (value, _) => _editor.ShapeBrushWidth = value);
+
+        _appearanceSyncs.Add(() =>
+        {
+            sides.IsVisible = _editor.ActiveShapeDrawMode == ShapeDrawMode.Polygon;
+            brushWidth.IsVisible = _editor.ActiveShapeDrawMode == ShapeDrawMode.Brush;
+        });
+
         return new StackPanel
         {
             Spacing = 10,
             Children =
             {
-                Explanation("Выберите способ и задайте фигуру жестом на холсте. Boolean выполняется только над двумя явно выделенными фигурами."),
+                Explanation("Перетаскивание задаёт фигуру: Shift — правильная, Alt — от центра. Pen ставит узлы кликами. Boolean работает над двумя выделенными фигурами."),
                 modes,
+                sides,
+                brushWidth,
+                BuildPenPathControls("Shape"),
+                Ui.Section("Новая фигура", new StackPanel
+                {
+                    Spacing = 4,
+                    Children =
+                    {
+                        AppearanceColorBox("NewShapeFillColorBox", "Цвет заливки",
+                            () => _editor.NewShapeFillColor,
+                            value => _editor.NewShapeFillColor = value),
+                        AppearanceColorBox("NewShapeStrokeColorBox", "Цвет обводки",
+                            () => _editor.NewShapeStrokeColor,
+                            value => _editor.NewShapeStrokeColor = value),
+                        AppearanceSlider("NewShapeStrokeWidthSlider", "Толщина обводки", 0, 64, "px",
+                            () => _editor.NewShapeStrokeWidth,
+                            (value, _) => _editor.NewShapeStrokeWidth = value),
+                    },
+                }),
             },
         };
     }
@@ -1655,39 +1776,39 @@ public sealed class EditorView : UserControl
         return Ui.PropertyRow(label, box, unit, captionWidth);
     }
 
-    /// <summary>A colour field: #RRGGBB / #AARRGGBB, committing on Enter or focus loss.</summary>
+    /// <summary>
+    /// The one colour row of the editor: a swatch showing the current value that opens the shared
+    /// picker. Every colour property goes through here, so there is a single behaviour to learn
+    /// and a single place where hex parsing, preview and undo granularity are decided.
+    /// </summary>
     private Control AppearanceColorBox(
         string name, string label, Func<string?> read, Action<string> apply, double captionWidth = 92)
+        => AppearanceColorBox(name, label, read, (value, _) => apply(value), captionWidth,
+            supportsAlpha: true, cancelPreview: null);
+
+    /// <summary>
+    /// The preview-capable overload. <paramref name="apply"/> receives <c>commit: false</c> while
+    /// the user is still dragging inside the picker - that path previews on the canvas and writes
+    /// no history - and <c>commit: true</c> exactly once when the choice is applied.
+    /// </summary>
+    private Control AppearanceColorBox(
+        string name, string label, Func<string?> read, Action<string, bool> apply,
+        double captionWidth = 92, bool supportsAlpha = true, Action? cancelPreview = null)
     {
-        var box = new TextBox { Name = name, PlaceholderText = "#AARRGGBB" };
-        void Commit()
-        {
-            if (!_syncingAppearance && (box.Text ?? "") != (read() ?? ""))
-            {
-                apply(box.Text ?? "");
-            }
-        }
-
-        box.KeyDown += (_, e) =>
-        {
-            if (e.Key == Key.Enter)
-            {
-                Commit();
-                e.Handled = true;
-            }
-        };
-        box.LostFocus += (_, _) => Commit();
-
-        _appearanceSyncs.Add(() =>
-        {
-            if (!box.IsFocused)
-            {
-                box.Text = read() ?? "";
-            }
-        });
-
-        return Ui.PropertyRow(label, box, captionWidth: captionWidth);
+        var field = new ColorField(
+            name, label, read, apply, cancelPreview,
+            supportsAlpha: supportsAlpha,
+            supportsPreview: cancelPreview is not null,
+            captionWidth: captionWidth);
+        _appearanceSyncs.Add(field.Sync);
+        _colorFields.Add(field);
+        return field.Row;
     }
+
+    /// <summary>Own-process smoke hook: one named colour property of the real editor.</summary>
+    public ColorField ColorFieldForSmoke(string name) =>
+        _colorFields.FirstOrDefault(field => field.Name == name)
+        ?? throw new InvalidOperationException($"No colour field named {name}.");
 
     /// <summary>A named on/off property whose checked state always mirrors the document.</summary>
     private ToggleButton AppearanceToggle(string name, string label, Func<bool?> read, Action<bool> apply)
@@ -1864,6 +1985,7 @@ public sealed class EditorView : UserControl
         _stampSection = BuildStampSection();
         _lineSection = BuildLineSection();
         _shapeSection = BuildShapeSection();
+        _primitiveSection = BuildPrimitiveSection();
         _textSection = BuildTextSection();
 
         _compositionSection = Ui.Section("Композиция", new StackPanel
@@ -1939,19 +2061,13 @@ public sealed class EditorView : UserControl
             },
         };
 
-        var shadowColor = new TextBox
-        {
-            Name = prefix + "ShadowColorBox",
-            MaxLength = 9,
-            PlaceholderText = "#AARRGGBB",
-        };
-        void CommitShadowColor() => _editor.SetStampShadowColor(shadowColor.Text);
-        shadowColor.KeyDown += (_, e) =>
-        {
-            if (e.Key == Key.Enter) { CommitShadowColor(); e.Handled = true; }
-        };
-        shadowColor.LostFocus += (_, _) => CommitShadowColor();
-        _appearanceSyncs.Add(() => shadowColor.Text = Style()?.ShadowColor ?? AppearanceColor.OpaqueBlack);
+        // This one used to be its own hand-wired TextBox whose sync had no focus guard, so any
+        // scene change overwrote what the user was typing. It now uses the shared colour row.
+        var shadowColor = AppearanceColorBox(
+            prefix + "ShadowColorBox", "Цвет тени",
+            () => Style()?.ShadowColor ?? AppearanceColor.OpaqueBlack,
+            (value, commit) => _editor.SetStampShadowColor(value, commit),
+            cancelPreview: _editor.CancelAppearanceGesture);
 
         var shadowState = AppearanceChoice(
             prefix + "ShadowPlacementChoice", "Тень",
@@ -2008,7 +2124,7 @@ public sealed class EditorView : UserControl
                     Ui.TextButton(prefix + "ResetColorsButton", "Сбросить цветокоррекцию",
                         _editor.ResetStampColorAdjustments, "compact"),
                     shadowState,
-                    Ui.PropertyRow("Цвет тени", shadowColor),
+                    shadowColor,
                     ShadowBlock(prefix,
                         () => Style() is { } s
                             ? (s.ShadowOffsetX, s.ShadowOffsetY, s.ShadowBlur, s.ShadowOpacity)
@@ -2189,7 +2305,9 @@ public sealed class EditorView : UserControl
             Children =
             {
                 AppearanceColorBox(prefix + "StrokeColorBox", "Цвет обводки",
-                    () => Stroke()?.Color, _editor.SetStrokeColor),
+                    () => Stroke()?.Color,
+                    (value, commit) => _editor.SetStrokeColor(value, commit),
+                    cancelPreview: _editor.CancelAppearanceGesture),
                 AppearanceSlider(prefix + "StrokeWidthSlider", "Толщина", 1, 64, "px",
                     () => Stroke()?.Width, (v, c) => _editor.SetStrokeWidth(v, c)),
                 AppearanceSlider(prefix + "StrokeOpacitySlider", "Плотность обводки", 0, 100, "%",
@@ -2473,9 +2591,12 @@ public sealed class EditorView : UserControl
             Children =
             {
                 AppearanceColorBox("ShapeFillColorBox", "Цвет заливки",
-                    () => Fill()?.Color, _editor.SetShapeFillColor),
+                    () => Fill()?.Color,
+                    (value, commit) => _editor.SetShapeFillColor(value, commit),
+                    cancelPreview: _editor.CancelAppearanceGesture),
                 AppearanceSlider("ShapeFillOpacitySlider", "Плотность заливки", 0, 100, "%",
                     () => Fill()?.Opacity * 100, (v, c) => _editor.SetShapeFillOpacityPercent(v, c), 5),
+                BuildGradientBlock("Shape"),
                 new TextBlock
                 {
                     Text = "Texture fill выбирается в библиотеке; эти значения хранятся в Shape.",
@@ -2496,7 +2617,9 @@ public sealed class EditorView : UserControl
                 Ui.TextButton("ShapeResetTextureButton", "Сбросить texture fill",
                     _editor.ResetShapeFillTexture, "compact"),
                 AppearanceColorBox("ShapeStrokeColorBox", "Цвет обводки",
-                    () => _editor.Session.SelectedObject?.Shape?.Stroke.Color, _editor.SetStrokeColor),
+                    () => _editor.Session.SelectedObject?.Shape?.Stroke.Color,
+                    (value, commit) => _editor.SetStrokeColor(value, commit),
+                    cancelPreview: _editor.CancelAppearanceGesture),
                 AppearanceSlider("ShapeStrokeWidthSlider", "Толщина обводки", 0, 64, "px",
                     () => _editor.Session.SelectedObject?.Shape?.Stroke.Width,
                     (v, c) => _editor.SetStrokeWidth(v, c)),
@@ -2505,6 +2628,185 @@ public sealed class EditorView : UserControl
             },
         }).Named("ShapeObjectActions");
     }
+
+    /// <summary>
+    /// The gradient block, built once per inspector section that can host one.
+    /// <para>
+    /// A gradient is judged by eye, so the ramp comes first and everything else edits the stop the
+    /// user picked on it. Turning the gradient off leaves the flat colour untouched, which makes
+    /// the toggle safe to try.
+    /// </para>
+    /// </summary>
+    private Control BuildGradientBlock(string prefix)
+    {
+        GradientFill? Gradient() => _editor.SelectedGradient;
+        int StopIndex() => Gradient() is { } gradient
+            ? Math.Clamp(_gradientStop, 0, gradient.Stops.Count - 1)
+            : 0;
+
+        var ramp = new GradientRamp().Named(prefix + "GradientRamp");
+        ramp.StopSelected += (_, index) =>
+        {
+            _gradientStop = index;
+            SyncAppearanceSections();
+        };
+        ramp.StopMoved += (_, moved) =>
+        {
+            _gradientStop = moved.Index;
+            _editor.SetGradientStopOffset(moved.Index, moved.Offset, moved.Commit);
+            SyncAppearanceSections();
+        };
+
+        var (modes, modeButtons) = Ui.Segmented(prefix + "GradientMode",
+            [("Off", "Нет", null), ("Linear", "Линейный", null),
+             ("Radial", "Радиальный", null)],
+            key =>
+            {
+                _editor.SetGradientMode(key switch
+                {
+                    "Linear" => GradientKind.Linear,
+                    "Radial" => GradientKind.Radial,
+                    _ => null,
+                });
+                SyncAppearanceSections();
+            });
+
+        var stopColor = AppearanceColorBox(prefix + "GradientStopColorBox", "Цвет точки",
+            () => Gradient() is { } gradient ? gradient.Stops[StopIndex()].Color : null,
+            (value, commit) => _editor.SetGradientStopColor(StopIndex(), value, commit),
+            cancelPreview: _editor.CancelAppearanceGesture);
+
+        var stopPosition = AppearanceSlider(prefix + "GradientStopPositionSlider", "Позиция точки", 0, 100, "%",
+            () => Gradient() is { } gradient ? gradient.Stops[StopIndex()].Offset * 100 : null,
+            (value, commit) => _editor.SetGradientStopOffset(StopIndex(), value / 100, commit), 1);
+
+        var angle = AppearanceSlider(prefix + "GradientAngleSlider", "Угол", 0, 360, "°",
+            () => Gradient() is { Kind: GradientKind.Linear } gradient ? gradient.AngleDegrees : null,
+            (value, commit) => _editor.SetGradientAngle(value, commit), 5);
+
+        var centreX = AppearanceSlider(prefix + "GradientCenterXSlider", "Центр X", 0, 100, "%",
+            () => Gradient() is { Kind: GradientKind.Radial } gradient ? gradient.CenterX * 100 : null,
+            (value, commit) => _editor.SetGradientCenterX(value / 100, commit), 1);
+
+        var centreY = AppearanceSlider(prefix + "GradientCenterYSlider", "Центр Y", 0, 100, "%",
+            () => Gradient() is { Kind: GradientKind.Radial } gradient ? gradient.CenterY * 100 : null,
+            (value, commit) => _editor.SetGradientCenterY(value / 100, commit), 1);
+
+        var radius = AppearanceSlider(prefix + "GradientRadiusSlider", "Радиус", 5, 200, "%",
+            () => Gradient() is { Kind: GradientKind.Radial } gradient ? gradient.Radius * 100 : null,
+            (value, commit) => _editor.SetGradientRadius(value / 100, commit), 5);
+
+        var addStop = Ui.TextButton(prefix + "GradientAddStopButton", "Добавить точку", () =>
+        {
+            _editor.AddGradientStop();
+            SyncAppearanceSections();
+        }, "compact");
+
+        var removeStop = Ui.TextButton(prefix + "GradientRemoveStopButton", "Удалить точку", () =>
+        {
+            _editor.RemoveGradientStop(StopIndex());
+            _gradientStop = Math.Max(0, _gradientStop - 1);
+            SyncAppearanceSections();
+        }, "compact");
+
+        var editors = new StackPanel
+        {
+            Spacing = 4,
+            Children =
+            {
+                ramp,
+                new WrapPanel { ItemSpacing = 4, LineSpacing = 4, Children = { addStop, removeStop } },
+                stopColor,
+                stopPosition,
+                angle,
+                centreX,
+                centreY,
+                radius,
+            },
+        };
+
+        _appearanceSyncs.Add(() =>
+        {
+            var gradient = Gradient();
+            var key = gradient is null ? "Off" : gradient.Kind == GradientKind.Radial ? "Radial" : "Linear";
+            var keys = new[] { "Off", "Linear", "Radial" };
+            for (var index = 0; index < modeButtons.Count; index++)
+            {
+                var active = keys[index] == key;
+                ((ToggleButton)modeButtons[index]).IsChecked = active;
+                Ui.SetClass(modeButtons[index], "active", active);
+            }
+
+            editors.IsVisible = gradient is not null;
+            if (gradient is null)
+            {
+                return;
+            }
+
+            _gradientStop = StopIndex();
+            ramp.Stops = [.. gradient.Stops.Select(stop => new GradientRampStop(
+                stop.Offset, ParseSwatchColor(stop.Color)))];
+            ramp.SelectedIndex = _gradientStop;
+            removeStop.IsEnabled = gradient.Stops.Count > GradientFill.MinStops;
+            addStop.IsEnabled = gradient.Stops.Count < GradientFill.MaxStops;
+
+            var linear = gradient.Kind == GradientKind.Linear;
+            angle.IsVisible = linear;
+            centreX.IsVisible = !linear;
+            centreY.IsVisible = !linear;
+            radius.IsVisible = !linear;
+        });
+
+        var expander = new Expander
+        {
+            Header = new TextBlock { Text = "Градиент" }.Classed("role-panel"),
+            IsExpanded = false,
+            Content = new StackPanel { Spacing = 6, Children = { modes, editors } },
+        }.Named(prefix + "Gradient");
+        AutomationProperties.SetName(expander, "Градиент заливки");
+        return expander;
+    }
+
+    /// <summary>A stored colour as a brush colour; an unreadable one falls back to black.</summary>
+    private static Color ParseSwatchColor(string canonical)
+    {
+        try
+        {
+            return Color.Parse(canonical);
+        }
+        catch (Exception exception) when (exception is FormatException or ArgumentException)
+        {
+            return Colors.Black;
+        }
+    }
+
+    /// <summary>
+    /// The inspector of a plain Rectangle/Ellipse object.
+    /// <para>
+    /// These objects had no block at all: the panel fell through to null, so a placed rectangle
+    /// kept its creation colour for ever and read as a decoration rather than an object. They own
+    /// their fill and stroke directly, so this is the block that makes those three values real.
+    /// </para>
+    /// </summary>
+    private Control BuildPrimitiveSection() => Ui.Section("Фигура объекта", new StackPanel
+    {
+        Spacing = 5,
+        Children =
+        {
+            AppearanceColorBox("PrimitiveFillColorBox", "Цвет заливки",
+                () => _editor.Session.SelectedObject?.FillColor,
+                (value, commit) => _editor.SetPrimitiveFillColor(value, commit),
+                cancelPreview: _editor.CancelAppearanceGesture),
+            BuildGradientBlock("Primitive"),
+            AppearanceColorBox("PrimitiveStrokeColorBox", "Цвет обводки",
+                () => _editor.Session.SelectedObject?.StrokeColor,
+                (value, commit) => _editor.SetPrimitiveStrokeColor(value, commit),
+                cancelPreview: _editor.CancelAppearanceGesture),
+            AppearanceSlider("PrimitiveStrokeWidthSlider", "Толщина обводки", 0, 64, "px",
+                () => _editor.Session.SelectedObject?.StrokeWidth,
+                (value, commit) => _editor.SetPrimitiveStrokeWidth(value, commit)),
+        },
+    }).Named("PrimitiveObjectActions");
 
     private Control BuildTextSection()
     {
@@ -2608,7 +2910,9 @@ public sealed class EditorView : UserControl
                 Children =
                 {
                     AppearanceColorBox("TextOutlineColorBox", "Цвет контура",
-                        () => Style()?.OutlineColor, _editor.SetTextOutlineColor),
+                        () => Style()?.OutlineColor,
+                        (value, commit) => _editor.SetTextOutlineColor(value, commit),
+                        cancelPreview: _editor.CancelAppearanceGesture),
                     AppearanceSlider("TextOutlineWidthSlider", "Толщина контура", 0, 32, "px",
                         () => Style()?.OutlineWidth, (v, c) => _editor.SetTextOutlineWidth(v, c)),
                     AppearanceSlider("TextCurveSlider", "Изгиб", -100, 100, "",
@@ -2658,7 +2962,9 @@ public sealed class EditorView : UserControl
                 AppearanceSlider("TextFontSizeSlider", "Размер шрифта", 6, 200, "px",
                     () => Style()?.FontSize, (v, c) => _editor.SetTextFontSize(v, c)),
                 AppearanceColorBox("TextFillColorBox", "Цвет текста",
-                    () => Style()?.FillColor, _editor.SetTextFillColor),
+                    () => Style()?.FillColor,
+                    (value, commit) => _editor.SetTextFillColor(value, commit),
+                    cancelPreview: _editor.CancelAppearanceGesture),
                 new TextBlock
                 {
                     Text = "Локальные шрифты Windows. Map не встраивает и не распространяет файлы шрифтов.",
@@ -2923,6 +3229,7 @@ public sealed class EditorView : UserControl
             "Выберите слой в списке выше, чтобы изменить его свойства.");
 
         _layerCommonBlock = BuildLayerCommonBlock();
+        _baseColorLayerBlock = BuildBaseColorLayerBlock();
         _landLayerBlock = BuildLandLayerBlock();
         _gridLayerBlock = BuildGridLayerBlock();
         _filterLayerBlock = BuildFilterLayerBlock();
@@ -2938,6 +3245,7 @@ public sealed class EditorView : UserControl
                     _noLayerState,
                     _layerIdentity,
                     _layerCommonBlock,
+                    _baseColorLayerBlock,
                     _landLayerBlock,
                     _gridLayerBlock,
                     _filterLayerBlock,
@@ -2945,6 +3253,24 @@ public sealed class EditorView : UserControl
             },
         }.Classed("group");
     }
+
+    /// <summary>The mandatory background layer: nothing to reorder or delete, but a real colour.</summary>
+    private Control BuildBaseColorLayerBlock() => new StackPanel
+    {
+        Spacing = 4,
+        Children =
+        {
+            new TextBlock
+            {
+                Text = "Фон карты нельзя удалить или скрыть; можно изменить его цвет.",
+                TextWrapping = TextWrapping.Wrap,
+            }.Classed("faint", "role-caption"),
+            AppearanceColorBox(
+                "BaseColorBox", "Цвет фона",
+                () => _editor.Session.Document.BaseColor.Color,
+                value => _editor.SetBaseColor(value)),
+        },
+    }.Named("BaseColorLayerBlock");
 
     private Control BuildLayerCommonBlock()
     {
@@ -5734,6 +6060,7 @@ public sealed class EditorView : UserControl
                 or nameof(EditorViewModel.ActiveLayer)
                 or nameof(EditorViewModel.PendingPlacement)
                 or nameof(EditorViewModel.PlacementAutoSelect)
+                or nameof(EditorViewModel.PlacementPreviewObjects)
                 or nameof(EditorViewModel.StampPlacementMode))
             {
                 SyncContextArea();
@@ -5987,9 +6314,31 @@ public sealed class EditorView : UserControl
     }
 
     /// <summary>
+    /// The two halves of the context area, named so the user can move between them. A selection
+    /// opens its inspector, but the tool it was drawn with stays one click away - hiding the tool
+    /// would be as wrong as hiding the object, which is what the panel used to do.
+    /// </summary>
+    private void BuildContextSwitch()
+    {
+        var (control, buttons) = Ui.Segmented(
+            "ContextScope",
+            [("Object", "Объект", null), ("Tool", "Инструмент", null)],
+            key =>
+            {
+                _contextPrefersToolPanel = key == "Tool";
+                SyncContextArea();
+            });
+
+        _contextSwitchButtons.AddRange(buttons);
+        _contextSwitch = control;
+    }
+
+    /// <summary>
     /// Decides what the single context area shows. Exactly one of two things: the settings of the
     /// active tool, or the properties of the current selection - never both, and never the
-    /// properties of a kind that is not selected.
+    /// properties of a kind that is not selected. Which one is the user's own choice through the
+    /// scope switch, defaulting to the object right after a selection and to the tool right after
+    /// a tool switch, so both actions always have a visible effect.
     /// </summary>
     private void SyncContextArea()
     {
@@ -6008,9 +6357,38 @@ public sealed class EditorView : UserControl
         Ui.SetSelected(_addEllipseButton,
             _editor.PendingPlacement?.Target == PlacementTargetKind.Ellipse);
 
-        // Selection properties belong to the Select tool. While a drawing tool is active the panel
-        // keeps showing that tool, so switching tools always has a predictable, visible effect.
-        if (_editor.ActiveTool == EditorTool.Select && _editor.SelectionCount > 1)
+        // A new selection points the panel at the object; a new tool points it at the tool. Both
+        // remain reachable afterwards, which is the part the old ActiveTool == Select gate broke.
+        var selectionSignature = _editor.SelectionCount == 0
+            ? null
+            : $"{_editor.SelectionCount}:{_editor.Session.SelectedObjectId}";
+        if (_lastContextTool != _editor.ActiveTool)
+        {
+            _lastContextTool = _editor.ActiveTool;
+            _contextPrefersToolPanel = true;
+        }
+
+        if (_lastContextSelection != selectionSignature)
+        {
+            _lastContextSelection = selectionSignature;
+            if (selectionSignature is not null)
+            {
+                _contextPrefersToolPanel = false;
+            }
+        }
+
+        var scope = EditorContextPanel.Resolve(
+            _editor.ActiveTool,
+            _editor.SelectionCount,
+            _editor.SelectionKind is not null,
+            _contextPrefersToolPanel);
+
+        _contextSwitch.IsVisible = EditorContextPanel.ToggleApplies(_editor.SelectionCount);
+        Ui.SetSelected(_contextSwitchButtons[0], scope is not EditorContextPanelKind.ToolPanel);
+        Ui.SetSelected(_contextSwitchButtons[1], scope is EditorContextPanelKind.ToolPanel);
+        ToolTip.SetTip(_contextSwitchButtons[1], "Настройки: " + EditorLabels.Tool(_editor.ActiveTool));
+
+        if (scope == EditorContextPanelKind.MultiSelectionInspector)
         {
             _contextTitle.Text = "Свойства: выделение";
             SyncMultiSelectionPanel();
@@ -6018,7 +6396,7 @@ public sealed class EditorView : UserControl
             return;
         }
 
-        if (_editor.ActiveTool == EditorTool.Select && _editor.SelectionKind is { } kind)
+        if (scope == EditorContextPanelKind.ObjectInspector && _editor.SelectionKind is { } kind)
         {
             _contextTitle.Text = "Свойства: " + EditorLabels.ObjectKind(kind);
 
@@ -6037,9 +6415,9 @@ public sealed class EditorView : UserControl
 
         _contextTitle.Text = "Инструмент: " + EditorLabels.Tool(_editor.ActiveTool);
         _kindSlot.Content = null;
-        _contextHost.Content = _editor.ActiveTool == EditorTool.Select
-            ? _selectIdleRoot
-            : _toolPanels[_editor.ActiveTool];
+        _selectionEmpty.IsVisible = scope == EditorContextPanelKind.SelectIdle;
+        _toolSlot.Content = _toolPanels[_editor.ActiveTool];
+        _contextHost.Content = _selectIdleRoot;
     }
 
     /// <summary>
@@ -6082,6 +6460,7 @@ public sealed class EditorView : UserControl
         SceneObjectKind.Stamp or SceneObjectKind.Placeholder => _stampSection,
         SceneObjectKind.Line => _lineSection,
         SceneObjectKind.Shape => _shapeSection,
+        SceneObjectKind.Rectangle or SceneObjectKind.Ellipse => _primitiveSection,
         SceneObjectKind.Text => _textSection,
         SceneObjectKind.Composition => _compositionSection,
         _ => null,
@@ -6097,10 +6476,14 @@ public sealed class EditorView : UserControl
             Children = { _inspectorPanel, BuildSelectionCommon(), _kindSlot },
         };
 
+        // The tool panels live in a slot, never as fixed children: a control can have only one
+        // visual parent, and the context area now shows a tool panel in more situations than the
+        // old "Select tool only" rule allowed.
+        _toolSlot = new ContentControl { Name = "ToolPanelSlot" };
         _selectIdleRoot = new StackPanel
         {
             Spacing = 12,
-            Children = { _selectionEmpty, _toolPanels[EditorTool.Select] },
+            Children = { _selectionEmpty, _toolSlot },
         };
 
         _multiSelectionRoot = BuildMultiSelectionPanel();
@@ -6359,6 +6742,7 @@ public sealed class EditorView : UserControl
         _noLayerState.IsVisible = layer is null;
         _layerIdentity.IsVisible = layer is not null;
         _layerCommonBlock.IsVisible = editable;
+        _baseColorLayerBlock.IsVisible = layer is BaseColorLayer;
         _landLayerBlock.IsVisible = layer is LandLayer;
         _gridLayerBlock.IsVisible = layer is GridLayer;
         _filterLayerBlock.IsVisible = layer is FilterLayer;
@@ -6425,22 +6809,14 @@ public sealed class EditorView : UserControl
                     "LayerRowVisibility_" + layer.Id,
                     EditorLabels.VisibilityCommand(layer.Visible),
                     layer.Visible ? MapIcons.Eye : MapIcons.EyeOff,
-                    () =>
-                    {
-                        _editor.SelectLayer(captured.Id);
-                        _editor.ToggleActiveLayerVisibility();
-                    });
+                    () => _editor.ToggleLayerVisibility(captured.Id));
                 Ui.SetRowAction(visibility, EditorLabels.VisibilityCommand(layer.Visible), !layer.Visible);
 
                 var locking = Ui.RowAction(
                     "LayerRowLock_" + layer.Id,
                     EditorLabels.LockCommand(layer.Locked),
                     layer.Locked ? MapIcons.Lock : MapIcons.Unlock,
-                    () =>
-                    {
-                        _editor.SelectLayer(captured.Id);
-                        _editor.ToggleActiveLayerLock();
-                    });
+                    () => _editor.ToggleLayerLock(captured.Id));
                 Ui.SetRowAction(locking, EditorLabels.LockCommand(layer.Locked), layer.Locked);
 
                 actions.Add(visibility);

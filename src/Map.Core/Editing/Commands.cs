@@ -263,6 +263,7 @@ public sealed class ReplaceStampAssetCommand : IEditCommand
             },
             Line = before.Line,
             Shape = before.Shape,
+            FillGradient = before.FillGradient,
             Text = before.Text,
             Composition = before.Composition,
             PlaceholderReason = before.PlaceholderReason,

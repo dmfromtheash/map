@@ -295,7 +295,7 @@ public sealed class NativeStage12DApplication : Application
     private sealed class SmokePrompts : IUserPrompts
     {
         public Task<bool> ConfirmMigrationCopyAsync() => Task.FromResult(true);
-        public Task<bool> ConfirmDeleteProjectAsync(string projectTitle) => Task.FromResult(false);
+        public Task<bool> ConfirmDeleteProjectAsync(string projectTitle, bool fileAlreadyMissing = false) => Task.FromResult(false);
         public Task<CloseChoice> ConfirmCloseDirtyAsync(string documentTitle) => Task.FromResult(CloseChoice.Cancel);
         public Task<bool> ConfirmRestoreCheckpointAsync(string checkpointName) => Task.FromResult(false);
         public Task<bool> ConfirmDeleteCheckpointAsync(string checkpointName) => Task.FromResult(false);

@@ -35,9 +35,13 @@ public sealed class FakePrompts : IUserPrompts
         return Task.FromResult(NextMigrationConfirmation);
     }
 
-    public Task<bool> ConfirmDeleteProjectAsync(string projectTitle)
+    /// <summary>Records the wording branch too: a stale card must not be asked about as a file.</summary>
+    public bool LastDeletePromptSaidFileMissing { get; private set; }
+
+    public Task<bool> ConfirmDeleteProjectAsync(string projectTitle, bool fileAlreadyMissing = false)
     {
         DeleteProjectAsked++;
+        LastDeletePromptSaidFileMissing = fileAlreadyMissing;
         return Task.FromResult(NextDeleteProjectConfirmation);
     }
 
@@ -66,10 +70,36 @@ public sealed class FakePrompts : IUserPrompts
     }
 }
 
+/// <summary>
+/// A trash that can behave like the real one: it reports a missing file as an outcome, can be told
+/// a path vanishes exactly at the moment of the call, and can raise a genuine I/O failure.
+/// </summary>
 public sealed class FakeProjectTrash : IProjectTrash
 {
     public List<string> Paths { get; } = [];
-    public void MoveToTrash(string path) => Paths.Add(path);
+
+    /// <summary>Paths the fake pretends are already gone.</summary>
+    public HashSet<string> MissingPaths { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Raised instead of any outcome, to model a real permission or device failure.</summary>
+    public Exception? NextFailure { get; set; }
+
+    /// <summary>Runs just before the outcome is decided, so a test can make a file vanish late.</summary>
+    public Action<string>? BeforeMove { get; set; }
+
+    public ProjectTrashOutcome MoveToTrash(string path)
+    {
+        Paths.Add(path);
+        BeforeMove?.Invoke(path);
+        if (NextFailure is { } failure)
+        {
+            throw failure;
+        }
+
+        return MissingPaths.Contains(path)
+            ? ProjectTrashOutcome.FileAlreadyMissing
+            : ProjectTrashOutcome.MovedToTrash;
+    }
 }
 
 public sealed class FakeLog : IAppLog

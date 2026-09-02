@@ -4,7 +4,13 @@ using Map.Performance;
 var options = PerformanceOptions.Parse(args);
 object report;
 bool gatePassed;
-if (options.Profile == "native-stage16")
+if (options.Profile == "native-editor-integrity")
+{
+    var nativeReport = NativeEditorIntegritySmoke.Run(options);
+    report = nativeReport;
+    gatePassed = nativeReport.GatePassed;
+}
+else if (options.Profile == "native-stage16")
 {
     var nativeReport = NativeStage16Smoke.Run(options);
     report = nativeReport;
@@ -90,6 +96,15 @@ else if (report is NativeStage15Report stage15)
         + $"ghost={stage15.GhostVisibleAndTransient}, "
         + $"save/export={stage15.SaveReopenAndExactExportMatched}, "
         + $"gate={(stage15.GatePassed ? "PASS" : "FAIL")}");
+}
+else if (report is NativeEditorIntegrityReport integrity)
+{
+    foreach (var pair in integrity.Scenarios)
+    {
+        Console.WriteLine($"  {(pair.Value ? "PASS" : "FAIL")}  {pair.Key}");
+    }
+
+    Console.WriteLine($"native-editor-integrity: gate={(integrity.GatePassed ? "PASS" : "FAIL")}");
 }
 else if (report is NativeStage16Report stage16)
 {

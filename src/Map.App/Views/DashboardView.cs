@@ -297,6 +297,22 @@ public sealed class DashboardView : UserControl
     private void BuildError()
     {
         _errorPanel.Children.Clear();
+
+        // A successful outcome that is not what the button literally said - "the file was already
+        // gone, so only the entry was removed" - has to be visible, and it is not an error.
+        if (!string.IsNullOrWhiteSpace(_dashboard.LastNotice))
+        {
+            _errorPanel.Children.Add(new Border
+            {
+                Child = new TextBlock
+                {
+                    Name = "DashboardNoticeText",
+                    Text = _dashboard.LastNotice,
+                    TextWrapping = TextWrapping.Wrap,
+                },
+            }.Classed("state-card"));
+        }
+
         if (string.IsNullOrWhiteSpace(_dashboard.LastError))
         {
             return;
@@ -508,11 +524,30 @@ public sealed class DashboardView : UserControl
             Margin = new Thickness(8, 0, 8, 8),
         };
         if (_cloneRequested is not null)
-            actions.Children.Add(Ui.AsyncButton(
-                $"CloneRecentButton{index}", "Копировать", () => _cloneRequested(captured), "compact"));
+        {
+            var clone = Ui.AsyncButton(
+                $"CloneRecentButton{index}", "Копировать", () => _cloneRequested(captured), "compact");
+            // A vanished file cannot be copied; only its entry can still be removed.
+            clone.IsEnabled = card.IsAvailable && !_dashboard.IsBusy;
+            actions.Children.Add(clone);
+        }
+
         if (_deleteRequested is not null)
-            actions.Children.Add(Ui.AsyncButton(
-                $"DeleteRecentButton{index}", "В Корзину", () => _deleteRequested(captured), "destructive", "compact"));
+        {
+            // The label states what the button will actually do, so a stale card never promises a
+            // Recycle Bin move for a file that is no longer there.
+            var delete = Ui.AsyncButton(
+                $"DeleteRecentButton{index}",
+                card.IsAvailable ? "В Корзину" : "Убрать запись",
+                () => _deleteRequested(captured),
+                "destructive",
+                "compact");
+            delete.IsEnabled = !_dashboard.IsBusy;
+            AutomationProperties.SetName(delete, card.IsAvailable
+                ? $"Переместить карту «{card.Title}» в Корзину"
+                : $"Убрать запись о недоступной карте «{card.Title}»");
+            actions.Children.Add(delete);
+        }
         return new StackPanel
         {
             Width = CardWidth,

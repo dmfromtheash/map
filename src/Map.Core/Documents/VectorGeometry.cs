@@ -114,6 +114,14 @@ public sealed record LineStyle
 public sealed record ShapeFillStyle
 {
     public string Color { get; init; } = "#AA507A5B";
+
+    /// <summary>
+    /// Optional gradient. When present it replaces the flat <see cref="Color"/>; a texture still
+    /// composites on top, so the three fills stay one ordered stack instead of three exclusive
+    /// modes the user has to reason about.
+    /// </summary>
+    public GradientFill? Gradient { get; init; }
+
     public string? TextureAssetSha256 { get; init; }
     public double TextureScale { get; init; } = 1;
     public double TextureRotation { get; init; }

@@ -374,6 +374,13 @@ public sealed partial class EditorViewModel : ViewModelBase
     public event EventHandler? SceneChanged;
 
     /// <summary>
+    /// Raised when the editor abandoned an unfinished canvas gesture on its own - today only when
+    /// the active tool changes. The canvas host listens so its own pointer state is dropped in the
+    /// same step; without it the control would still believe a gesture is running.
+    /// </summary>
+    public event EventHandler? CanvasGestureCancelled;
+
+    /// <summary>
     /// Narrow notification for session-only interaction. Legacy <see cref="SceneChanged"/>
     /// remains the document/whole-editor signal while existing edit paths are migrated in bounded
     /// slices.
@@ -644,11 +651,19 @@ public sealed partial class EditorViewModel : ViewModelBase
                 return;
             }
 
+            // Switching tools abandons every kind of unfinished gesture, not only the drawing
+            // ones. A surviving drag, marquee or node grab used to commit itself on the next
+            // release under the new tool - history the user never asked for.
             CancelStroke();
             CancelVectorDraw();
+            CancelPenPath();
             CancelTextPlacement();
             CancelShapeBooleanPreview();
             CancelPlacement();
+            CancelDrag();
+            CancelMarquee();
+            CancelVectorElementDrag();
+            CanvasGestureCancelled?.Invoke(this, EventArgs.Empty);
             if (value != EditorTool.Brush)
             {
                 _editingStampForeground = false;
@@ -673,6 +688,82 @@ public sealed partial class EditorViewModel : ViewModelBase
     public LineDrawMode ActiveLineDrawMode { get; set; } = LineDrawMode.FreeDraw;
 
     public ShapeDrawMode ActiveShapeDrawMode { get; set; } = ShapeDrawMode.FreeDraw;
+
+    /// <summary>
+    /// Corner count of the Polygon draw mode. It used to be a literal 6 inside the gesture, so the
+    /// mode could only ever make hexagons and the name promised something it did not do.
+    /// </summary>
+    public int ShapePolygonSides
+    {
+        get => _shapePolygonSides;
+        set => _shapePolygonSides = Math.Clamp(value, 3, 24);
+    }
+
+    /// <summary>
+    /// Width of the Brush draw mode in canvas units. Brush used to be an alias of Free Draw - the
+    /// same thin outline - which is why it read as broken. It now sweeps a band of this width.
+    /// </summary>
+    public double ShapeBrushWidth
+    {
+        get => _shapeBrushWidth;
+        set => _shapeBrushWidth = double.IsFinite(value) ? Math.Clamp(value, 1, 512) : _shapeBrushWidth;
+    }
+
+    /// <summary>Shift: rectangles become squares, ellipses circles, polygons regular.</summary>
+    public bool VectorConstrainProportions { get; set; }
+
+    /// <summary>Alt: the press point is the centre of the new shape instead of a corner.</summary>
+    public bool VectorDrawFromCenter { get; set; }
+
+    /// <summary>
+    /// What the next drawn shape and line look like. Without these the tool could only ever make
+    /// the one built-in green, and every shape had to be recoloured after the fact.
+    /// </summary>
+    public string NewShapeFillColor
+    {
+        get => _newShapeFillColor;
+        set => _newShapeFillColor = AppearanceColor.Normalize(value) ?? _newShapeFillColor;
+    }
+
+    public string NewShapeStrokeColor
+    {
+        get => _newShapeStrokeColor;
+        set => _newShapeStrokeColor = AppearanceColor.Normalize(value) ?? _newShapeStrokeColor;
+    }
+
+    public double NewShapeStrokeWidth
+    {
+        get => _newShapeStrokeWidth;
+        set => _newShapeStrokeWidth = double.IsFinite(value) ? Math.Clamp(value, 0, 64) : _newShapeStrokeWidth;
+    }
+
+    public string NewLineStrokeColor
+    {
+        get => _newLineStrokeColor;
+        set => _newLineStrokeColor = AppearanceColor.Normalize(value) ?? _newLineStrokeColor;
+    }
+
+    public double NewLineStrokeWidth
+    {
+        get => _newLineStrokeWidth;
+        set => _newLineStrokeWidth = double.IsFinite(value) ? Math.Clamp(value, 1, 64) : _newLineStrokeWidth;
+    }
+
+    private int _shapePolygonSides = 6;
+    private double _shapeBrushWidth = 24;
+    private string _newShapeFillColor = new ShapeFillStyle().Color;
+    private string _newShapeStrokeColor = new VectorStrokeStyle().Color;
+    private double _newShapeStrokeWidth = 3;
+    private string _newLineStrokeColor = new VectorStrokeStyle().Color;
+    private double _newLineStrokeWidth = new VectorStrokeStyle().Width;
+
+    private ShapeFillStyle NewShapeFill() => new() { Color = NewShapeFillColor };
+
+    private VectorStrokeStyle NewShapeStroke() =>
+        new() { Color = NewShapeStrokeColor, Width = NewShapeStrokeWidth };
+
+    private VectorStrokeStyle NewLineStroke() =>
+        new() { Color = NewLineStrokeColor, Width = NewLineStrokeWidth };
 
     public bool TextInheritFromSelection
     {
@@ -3529,9 +3620,16 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public bool BeginVectorDraw(double worldX, double worldY)
     {
-        if (ActiveTool is not (EditorTool.Line or EditorTool.Shape)
-            || ActiveObjectLayer() is not { Visible: true, Locked: false })
+        if (ActiveTool is not (EditorTool.Line or EditorTool.Shape))
         {
+            return false;
+        }
+
+        if (ActiveObjectLayer() is not { Visible: true, Locked: false })
+        {
+            // Refusing silently used to swallow the press whole. Naming the reason lets the user
+            // fix it, and the caller falls back to plain selection so the scene stays reachable.
+            StatusDetail = "Нет видимого разблокированного слоя объектов — фигура не создана.";
             return false;
         }
 
@@ -3552,6 +3650,9 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
 
         var next = SnapVectorGesturePoint(new VectorPoint(worldX, worldY));
+
+        // Free Draw follows the pointer; Brush does too, because the band it sweeps is built from
+        // the same path. The primitives keep only the press point and the current one.
         var continuous = ActiveTool == EditorTool.Line
             ? ActiveLineDrawMode == LineDrawMode.FreeDraw
             : ActiveShapeDrawMode is ShapeDrawMode.FreeDraw or ShapeDrawMode.Brush;
@@ -3620,28 +3721,28 @@ public sealed partial class EditorViewModel : ViewModelBase
                 var linePoints = ActiveLineDrawMode == LineDrawMode.Pen ? [source[0], source[^1]] : source;
                 if (DistanceSquared(linePoints[0], linePoints[^1]) < 1) return null;
                 result = VectorGeometry.CreateLine(objectId,
-                    EntityNameGenerator.Object(Session.Document, SceneObjectKind.Line), linePoints);
+                    EntityNameGenerator.Object(Session.Document, SceneObjectKind.Line),
+                    linePoints, NewLineStroke());
             }
             else if (ActiveTool == EditorTool.Shape)
             {
                 var start = source[0]; var end = source[^1];
                 if (DistanceSquared(start, end) < 1) return null;
+                var name = EntityNameGenerator.Object(Session.Document, SceneObjectKind.Shape);
+                var fill = NewShapeFill();
+                var stroke = NewShapeStroke();
                 result = ActiveShapeDrawMode switch
                 {
-                    ShapeDrawMode.Rectangle => VectorGeometry.CreateShape(objectId,
-                        EntityNameGenerator.Object(Session.Document, SceneObjectKind.Shape),
-                        ShapePrimitiveKind.Rectangle, Bounds(start, end)),
-                    ShapeDrawMode.Ellipse => VectorGeometry.CreateShape(objectId,
-                        EntityNameGenerator.Object(Session.Document, SceneObjectKind.Shape),
-                        ShapePrimitiveKind.Ellipse, Bounds(start, end)),
-                    ShapeDrawMode.Polygon => VectorGeometry.CreateFreeShape(objectId,
-                        EntityNameGenerator.Object(Session.Document, SceneObjectKind.Shape),
-                        RegularPolygon(Bounds(start, end), 6)),
-                    ShapeDrawMode.Pen => VectorGeometry.CreateFreeShape(objectId,
-                        EntityNameGenerator.Object(Session.Document, SceneObjectKind.Shape),
-                        [start, end, new VectorPoint(start.X, end.Y)]),
-                    _ when source.Count >= 3 => VectorGeometry.CreateFreeShape(objectId,
-                        EntityNameGenerator.Object(Session.Document, SceneObjectKind.Shape), source),
+                    ShapeDrawMode.Rectangle => VectorGeometry.CreateShape(objectId, name,
+                        ShapePrimitiveKind.Rectangle, GestureBounds(start, end), fill, stroke),
+                    ShapeDrawMode.Ellipse => VectorGeometry.CreateShape(objectId, name,
+                        ShapePrimitiveKind.Ellipse, GestureBounds(start, end), fill, stroke),
+                    ShapeDrawMode.Polygon => VectorGeometry.CreateFreeShape(objectId, name,
+                        RegularPolygon(GestureBounds(start, end), ShapePolygonSides), fill, stroke),
+                    ShapeDrawMode.Brush => VectorGeometry.CreateFreeShape(objectId, name,
+                        StrokeOutline(source, ShapeBrushWidth), fill, stroke),
+                    _ when source.Count >= 3 => VectorGeometry.CreateFreeShape(
+                        objectId, name, source, fill, stroke),
                     _ => null,
                 };
             }
@@ -3652,8 +3753,6 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
         return result is null ? null : result with { ObjectOpacity = preview ? .55 : 1 };
 
-        static WorldBounds Bounds(VectorPoint a, VectorPoint b) => new(
-            Math.Min(a.X, b.X), Math.Min(a.Y, b.Y), Math.Max(a.X, b.X), Math.Max(a.Y, b.Y));
         static IReadOnlyList<VectorPoint> RegularPolygon(WorldBounds bounds, int sides)
         {
             var cx = (bounds.Left + bounds.Right) / 2; var cy = (bounds.Top + bounds.Bottom) / 2;
@@ -3664,9 +3763,251 @@ public sealed partial class EditorViewModel : ViewModelBase
                 return new VectorPoint(cx + Math.Cos(angle) * rx, cy + Math.Sin(angle) * ry);
             })];
         }
-        static double DistanceSquared(VectorPoint a, VectorPoint b) =>
-            Math.Pow(a.X - b.X, 2) + Math.Pow(a.Y - b.Y, 2);
     }
+
+    /// <summary>
+    /// The rectangle a press-drag describes, with the two modifier rules applied: Shift makes the
+    /// two sides equal, Alt treats the press point as the centre. Both are what every drawing
+    /// program does, and without them a square or a circle was a matter of luck.
+    /// </summary>
+    private WorldBounds GestureBounds(VectorPoint start, VectorPoint end)
+    {
+        var dx = end.X - start.X;
+        var dy = end.Y - start.Y;
+        if (VectorConstrainProportions)
+        {
+            var size = Math.Max(Math.Abs(dx), Math.Abs(dy));
+            dx = dx < 0 ? -size : size;
+            dy = dy < 0 ? -size : size;
+        }
+
+        if (VectorDrawFromCenter)
+        {
+            return new WorldBounds(
+                start.X - Math.Abs(dx), start.Y - Math.Abs(dy),
+                start.X + Math.Abs(dx), start.Y + Math.Abs(dy));
+        }
+
+        return new WorldBounds(
+            Math.Min(start.X, start.X + dx), Math.Min(start.Y, start.Y + dy),
+            Math.Max(start.X, start.X + dx), Math.Max(start.Y, start.Y + dy));
+    }
+
+    /// <summary>
+    /// The closed outline of a stroked path: one offset side forward, the other back. It is what
+    /// turns the Brush mode into an actual band instead of a hairline copy of Free Draw.
+    /// </summary>
+    private static IReadOnlyList<VectorPoint> StrokeOutline(IReadOnlyList<VectorPoint> path, double width)
+    {
+        var half = Math.Max(0.5, width / 2);
+        var forward = new List<VectorPoint>(path.Count);
+        var back = new List<VectorPoint>(path.Count);
+        for (var index = 0; index < path.Count; index++)
+        {
+            var previous = path[Math.Max(0, index - 1)];
+            var next = path[Math.Min(path.Count - 1, index + 1)];
+            var dx = next.X - previous.X;
+            var dy = next.Y - previous.Y;
+            var length = Math.Sqrt((dx * dx) + (dy * dy));
+            if (length < 1e-6)
+            {
+                dx = 1; dy = 0; length = 1;
+            }
+
+            var normalX = -dy / length * half;
+            var normalY = dx / length * half;
+            forward.Add(new VectorPoint(path[index].X + normalX, path[index].Y + normalY));
+            back.Add(new VectorPoint(path[index].X - normalX, path[index].Y - normalY));
+        }
+
+        back.Reverse();
+        forward.AddRange(back);
+        return forward;
+    }
+
+    // --------------------------------------------------------------------- pen paths
+
+    private List<VectorPoint>? _penPoints;
+    private VectorPoint? _penCursor;
+
+    /// <summary>True when the active tool draws by placing nodes rather than by dragging.</summary>
+    public bool IsPenMode => ActiveTool switch
+    {
+        EditorTool.Shape => ActiveShapeDrawMode == ShapeDrawMode.Pen,
+        EditorTool.Line => ActiveLineDrawMode == LineDrawMode.Pen,
+        _ => false,
+    };
+
+    /// <summary>True while a pen path is being built, so the canvas keeps previewing it.</summary>
+    public bool PenPathActive => _penPoints is { Count: > 0 };
+
+    /// <summary>How many nodes the pen path already has; the panel shows it.</summary>
+    public int PenNodeCount => _penPoints?.Count ?? 0;
+
+    /// <summary>
+    /// Places one pen node. Pen used to be a drag gesture that always produced the same right
+    /// triangle whatever the user did, which is the single worst defect of the Shape tool: the
+    /// mode existed, was selectable, and could not draw what it named.
+    /// </summary>
+    public bool AddPenNode(double worldX, double worldY)
+    {
+        if (!IsPenMode)
+        {
+            return false;
+        }
+
+        if (ActiveObjectLayer() is not { Visible: true, Locked: false } layer)
+        {
+            StatusDetail = "Нет видимого разблокированного слоя объектов — узел не поставлен.";
+            return false;
+        }
+
+        var point = SnapVectorGesturePoint(new VectorPoint(worldX, worldY));
+        if (_penPoints is null)
+        {
+            _penPoints = [point];
+            _vectorPreviewObjectId = ObjectId.New();
+            _vectorPreviewLayerId = layer.Id;
+            StatusDetail = ActiveTool == EditorTool.Shape
+                ? "Ставьте узлы фигуры. Клик по первому узлу или Enter — замкнуть, Esc — отмена."
+                : "Ставьте узлы линии. Enter — завершить, Esc — отмена.";
+        }
+        else
+        {
+            // Clicking the first node closes the path, the way a pen tool is expected to work.
+            var closing = _penPoints.Count >= 2
+                && DistanceSquared(point, _penPoints[0]) <= CloseToleranceSquared();
+            if (closing)
+            {
+                return FinishPenPath();
+            }
+
+            _penPoints.Add(point);
+        }
+
+        _penCursor = point;
+        RefreshPenPreview();
+        return true;
+    }
+
+    /// <summary>Rubber-bands the segment between the last node and the pointer.</summary>
+    public void UpdatePenPreview(double worldX, double worldY)
+    {
+        if (_penPoints is null)
+        {
+            return;
+        }
+
+        _penCursor = SnapVectorGesturePoint(new VectorPoint(worldX, worldY));
+        RefreshPenPreview();
+    }
+
+    /// <summary>Commits the pen path as one object, or reports why it could not be one.</summary>
+    public bool FinishPenPath()
+    {
+        if (_penPoints is null)
+        {
+            return false;
+        }
+
+        var layerId = _vectorPreviewLayerId;
+        var added = BuildPenObject(preview: false);
+        CancelPenPath();
+        if (added is null || layerId is null
+            || Session.Document.FindLayer(layerId.Value) is not ObjectLayer layer)
+        {
+            StatusDetail = "Контур не создан: фигуре нужно не меньше трёх узлов, линии — двух.";
+            return false;
+        }
+
+        Session.Execute(new AddObjectCommand(layer.Id, added));
+        Session.SelectedObjectId = added.Id;
+        _activeLayerId = layer.Id;
+        AfterEdit();
+        return true;
+    }
+
+    /// <summary>Drops the unfinished pen path; nothing reaches the document or the history.</summary>
+    public void CancelPenPath()
+    {
+        if (_penPoints is null)
+        {
+            return;
+        }
+
+        _penPoints = null;
+        _penCursor = null;
+        _vectorPreviewObject = null;
+        _vectorPreviewLayerId = null;
+        _vectorPreviewObjectId = null;
+        Raise(nameof(PlacementPreviewObjects));
+        InvalidateScene(EditorChangeReason.CanvasInvalidation);
+    }
+
+    /// <summary>Cancels a pen path if there is one, and says whether it did.</summary>
+    public bool CancelPenPathIfActive()
+    {
+        if (!PenPathActive)
+        {
+            return false;
+        }
+
+        CancelPenPath();
+        StatusDetail = "Контур отменён.";
+        return true;
+    }
+
+    private double CloseToleranceSquared()
+    {
+        var world = 8 / Math.Max(0.0001, Session.Viewport.Scale);
+        return world * world;
+    }
+
+    private void RefreshPenPreview()
+    {
+        _vectorPreviewObject = BuildPenObject(preview: true);
+        Raise(nameof(PlacementPreviewObjects));
+        InvalidateScene(EditorChangeReason.CanvasInvalidation);
+    }
+
+    private SceneObject? BuildPenObject(bool preview)
+    {
+        if (_penPoints is not { Count: > 0 } placed || _vectorPreviewObjectId is not { } objectId)
+        {
+            return null;
+        }
+
+        var points = new List<VectorPoint>(placed);
+        if (preview && _penCursor is { } cursor
+            && DistanceSquared(points[^1], cursor) > 0)
+        {
+            points.Add(cursor);
+        }
+
+        try
+        {
+            SceneObject? result = ActiveTool == EditorTool.Line
+                ? points.Count < 2
+                    ? null
+                    : VectorGeometry.CreateLine(objectId,
+                        EntityNameGenerator.Object(Session.Document, SceneObjectKind.Line),
+                        points, NewLineStroke())
+                : points.Count < 3
+                    ? null
+                    : VectorGeometry.CreateFreeShape(objectId,
+                        EntityNameGenerator.Object(Session.Document, SceneObjectKind.Shape),
+                        points, NewShapeFill(), NewShapeStroke());
+
+            return result is null ? null : result with { ObjectOpacity = preview ? .55 : 1 };
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    private static double DistanceSquared(VectorPoint a, VectorPoint b) =>
+        ((a.X - b.X) * (a.X - b.X)) + ((a.Y - b.Y) * (a.Y - b.Y));
 
     public DragPreview? DragPreview
     {
@@ -4775,10 +5116,22 @@ public sealed partial class EditorViewModel : ViewModelBase
     public void AddNoteAtViewCentre()
     {
         var centre = ViewCentre();
+        AddNoteAt(centre.X, centre.Y);
+    }
+
+    /// <summary>
+    /// Creates one world-anchored note where the user pointed. The Notes tool had no canvas
+    /// behaviour at all, so it looked active while the only way to make a note was a panel button
+    /// that always dropped it in the middle of the view.
+    /// </summary>
+    public NoteId AddNoteAt(double worldX, double worldY)
+    {
         var note = new MapNote(NoteId.New(), $"Заметка {Notes.Count + 1}", "Локальная заметка",
-            NoteAnchorKind.World, centre.X, centre.Y);
+            NoteAnchorKind.World, worldX, worldY);
         Session.Execute(new AddNoteCommand(note));
         AfterEdit();
+        StatusDetail = $"Создана заметка «{note.Title}».";
+        return note.Id;
     }
 
     public void AddNoteForSelection()
@@ -4839,9 +5192,17 @@ public sealed partial class EditorViewModel : ViewModelBase
         AfterEdit();
     }
 
-    public void ToggleActiveLayerVisibility()
+    public void ToggleActiveLayerVisibility() => ToggleLayerVisibility(_activeLayerId);
+
+    public void ToggleActiveLayerLock() => ToggleLayerLock(_activeLayerId);
+
+    /// <summary>
+    /// Hides or shows one named layer without making it active. The list rows used to select the
+    /// layer first, so clicking an eye quietly moved the target of the next new object.
+    /// </summary>
+    public void ToggleLayerVisibility(LayerId? layerId)
     {
-        if (ActiveLayer is not { } layer)
+        if (layerId is not { } id || Session.Document.FindLayer(id) is not { } layer)
         {
             return;
         }
@@ -4850,9 +5211,10 @@ public sealed partial class EditorViewModel : ViewModelBase
         AfterEdit();
     }
 
-    public void ToggleActiveLayerLock()
+    /// <summary>Locks or unlocks one named layer without making it active.</summary>
+    public void ToggleLayerLock(LayerId? layerId)
     {
-        if (ActiveLayer is not { } layer)
+        if (layerId is not { } id || Session.Document.FindLayer(id) is not { } layer)
         {
             return;
         }
@@ -4880,7 +5242,13 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public bool BeginTextPlacement(double worldX, double worldY)
     {
-        if (ActiveTool != EditorTool.Text || ActiveObjectLayer() is not { } layer) return false;
+        if (ActiveTool != EditorTool.Text) return false;
+        if (ActiveObjectLayer() is not { } layer)
+        {
+            StatusDetail = "Нет видимого разблокированного слоя объектов — текст не создан.";
+            return false;
+        }
+
         _textPlacementStart = SnapVectorGesturePoint(new VectorPoint(worldX, worldY));
         _textPreviewLayerId = layer.Id;
         _textPlacementTemplate = TextInheritFromSelection && Session.SelectedObject?.Text is not null
@@ -5343,6 +5711,28 @@ public sealed partial class EditorViewModel : ViewModelBase
         Session.Execute(new UpdateLandStyleCommand(land, updated)); AfterEdit(); return true;
     }
 
+    /// <summary>
+    /// The map background colour. The command existed and the layer is mandatory, but nothing in
+    /// the editor could reach it: the layer property sheet hid itself for the base colour layer,
+    /// so the background could only ever be chosen once, in the new-map wizard.
+    /// </summary>
+    public void SetBaseColor(string? colorText)
+    {
+        if (RequireColorInput(colorText) is not { } color)
+        {
+            return;
+        }
+
+        var layer = Session.Document.BaseColor;
+        if (string.Equals(layer.Color, color, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        Session.Execute(UpdateLayerCommand.SetBaseColor(layer, color));
+        AfterEdit();
+    }
+
     public void CancelStroke()
     {
         if (_stroke is null)
@@ -5669,6 +6059,13 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// Esc ladder: an open group closes first (selecting the group whole); a second press clears
     /// the selection. Returns false when there was nothing to do.
     /// </summary>
+    /// <summary>
+    /// One Escape undoes one layer of "I am in the middle of something", from the most transient
+    /// to the least: a live gesture, an armed placement, an open group, the selection, and finally
+    /// the drawing tool itself. The last step matters as much as the first - after Escape the
+    /// pointer is always back to plain selecting, so nothing can leave the user stuck inside a
+    /// tool with no obvious way out.
+    /// </summary>
     public bool HandleEscape()
     {
         if (_pendingShapeBoolean is not null)
@@ -5676,28 +6073,31 @@ public sealed partial class EditorViewModel : ViewModelBase
             CancelShapeBooleanPreview();
             return true;
         }
-        if (_vectorElementDrag is not null)
+
+        // A drag, marquee or node grab is as much "an action in progress" as a half-drawn shape,
+        // and the canvas host has to forget its own matching state in the same breath.
+        if (_vectorElementDrag is not null || _vectorPoints is not null
+            || _penPoints is not null
+            || _textPlacementStart is not null || _stroke is not null
+            || DragPreview is not null || _marqueeStart is not null)
         {
             CancelVectorElementDrag();
-            return true;
-        }
-        if (_vectorPoints is not null)
-        {
             CancelVectorDraw();
-            return true;
-        }
-        if (_textPlacementStart is not null)
-        {
+            CancelPenPath();
             CancelTextPlacement();
-            return true;
-        }
-        if (_stroke is not null)
-        {
             CancelStroke();
+            CancelDrag();
+            CancelMarquee();
+            CancelAppearanceGesture();
+            CanvasGestureCancelled?.Invoke(this, EventArgs.Empty);
+            StatusDetail = "Действие отменено.";
             return true;
         }
+
         if (CancelPlacement())
         {
+            CanvasGestureCancelled?.Invoke(this, EventArgs.Empty);
+            StatusDetail = "Размещение отменено.";
             return true;
         }
 
@@ -5710,6 +6110,13 @@ public sealed partial class EditorViewModel : ViewModelBase
         if (SelectionCount > 0)
         {
             DeselectObject();
+            return true;
+        }
+
+        if (ActiveTool != EditorTool.Select)
+        {
+            ActiveTool = EditorTool.Select;
+            StatusDetail = "Обычное управление: выбор и перемещение объектов.";
             return true;
         }
 
@@ -5776,6 +6183,11 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public void CancelMarquee()
     {
+        if (_marqueeStart is null && _marqueeWorld is null)
+        {
+            return;
+        }
+
         _marqueeStart = null;
         _marqueeWorld = null;
         InvalidateScene(EditorChangeReason.CanvasInvalidation);
@@ -6084,7 +6496,21 @@ public sealed partial class EditorViewModel : ViewModelBase
             return CanvasGesture.None;
         }
 
-        return BeginDrag(worldX, worldY) ? CanvasGesture.Drag : CanvasGesture.None;
+        if (BeginDrag(worldX, worldY))
+        {
+            return CanvasGesture.Drag;
+        }
+
+        // The object is selected and its properties stay readable, but it cannot be moved. Saying
+        // why beats a frame that silently refuses to follow the pointer.
+        if (Session.SelectedObjects is { Count: > 0 } blocked)
+        {
+            StatusDetail = blocked.Any(item => item.Locked)
+                ? "Объект заблокирован: снимите блокировку, чтобы перемещать его."
+                : "Объект скрыт: включите видимость, чтобы перемещать его.";
+        }
+
+        return CanvasGesture.None;
     }
 
     public bool BeginDrag(double startWorldX = 0, double startWorldY = 0)
@@ -6180,6 +6606,11 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public void CancelDrag()
     {
+        if (DragPreview is null)
+        {
+            return;
+        }
+
         DragPreview = null;
         InvalidateScene(EditorChangeReason.CanvasInvalidation);
     }
@@ -6535,6 +6966,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             Stamp = source.Stamp,
             Line = source.Line,
             Shape = source.Shape,
+            FillGradient = source.FillGradient,
             Text = source.Text,
             Composition = source.Composition,
             PlaceholderReason = source.PlaceholderReason,
@@ -6543,11 +6975,13 @@ public sealed partial class EditorViewModel : ViewModelBase
         };
 
     private static SceneObject CopyObject(
-        SceneObject source, bool? visible = null, bool? locked = null) =>
+        SceneObject source, bool? visible = null, bool? locked = null,
+        string? fillColor = null, string? strokeColor = null, double? strokeWidth = null) =>
         new(
             source.Id, source.Kind, source.Name,
             source.X, source.Y, source.Width, source.Height, source.RotationDegrees,
-            source.FillColor, source.StrokeColor, source.StrokeWidth,
+            fillColor ?? source.FillColor, strokeColor ?? source.StrokeColor,
+            strokeWidth ?? source.StrokeWidth,
             visible ?? source.Visible, locked ?? source.Locked)
         {
             Sublayer = source.Sublayer,
@@ -6556,6 +6990,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             Stamp = source.Stamp,
             Line = source.Line,
             Shape = source.Shape,
+            FillGradient = source.FillGradient,
             Text = source.Text,
             Composition = source.Composition,
             PlaceholderReason = source.PlaceholderReason,
@@ -6601,7 +7036,17 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// </summary>
     private void EditAppearance(string name, bool commit, Func<SceneObject, SceneObject> change)
     {
-        var before = _appearanceGestureBefore ?? EditableAppearanceSelection();
+        // A live gesture belongs to the object it started on. If the selection has moved on
+        // since - or the gesture was never closed - the stale "before" would send this edit to the
+        // previous object, which is exactly how a colour landed on the wrong shape.
+        var selected = EditableAppearanceSelection();
+        if (_appearanceGestureBefore is { } pending && pending.Id != selected?.Id)
+        {
+            _appearanceGestureBefore = null;
+            DragPreview = null;
+        }
+
+        var before = _appearanceGestureBefore ?? selected;
         if (before is null)
         {
             return;
@@ -6919,11 +7364,11 @@ public sealed partial class EditorViewModel : ViewModelBase
             ShadowOpacity = stamp.ShadowOpacity > 0 ? stamp.ShadowOpacity : ShadowPreset.StandardOpacity,
         });
 
-    public void SetStampShadowColor(string? colorText)
+    public void SetStampShadowColor(string? colorText, bool commit = true)
     {
         if (RequireColorInput(colorText) is { } color)
         {
-            EditStamp("Stamp shadow colour", commit: true, stamp => stamp with { ShadowColor = color });
+            EditStamp("Stamp shadow colour", commit, stamp => stamp with { ShadowColor = color });
         }
     }
 
@@ -7063,19 +7508,19 @@ public sealed partial class EditorViewModel : ViewModelBase
     public void SetTextFontSize(double size, bool commit = true) =>
         EditText("Text size", commit, text => text with { FontSize = Finite(size, text.FontSize, 1, 512) });
 
-    public void SetTextFillColor(string? colorText)
+    public void SetTextFillColor(string? colorText, bool commit = true)
     {
         if (RequireColorInput(colorText) is { } color)
         {
-            EditText("Text fill", commit: true, text => text with { FillColor = color });
+            EditText("Text fill", commit, text => text with { FillColor = color });
         }
     }
 
-    public void SetTextOutlineColor(string? colorText)
+    public void SetTextOutlineColor(string? colorText, bool commit = true)
     {
         if (RequireColorInput(colorText) is { } color)
         {
-            EditText("Text outline", commit: true, text => text with { OutlineColor = color });
+            EditText("Text outline", commit, text => text with { OutlineColor = color });
         }
     }
 
@@ -7171,11 +7616,11 @@ public sealed partial class EditorViewModel : ViewModelBase
             return changed.Equals(stroke) ? before : WithStroke(before, changed);
         });
 
-    public void SetStrokeColor(string? colorText)
+    public void SetStrokeColor(string? colorText, bool commit = true)
     {
         if (RequireColorInput(colorText) is { } color)
         {
-            EditStroke("Stroke color", commit: true, stroke => stroke with { Color = color });
+            EditStroke("Stroke color", commit, stroke => stroke with { Color = color });
         }
     }
 
@@ -7296,11 +7741,11 @@ public sealed partial class EditorViewModel : ViewModelBase
                 : before with { Shape = new ShapeStyle(shape.Regions, changed, shape.Stroke, shape.Portals) };
         });
 
-    public void SetShapeFillColor(string? colorText)
+    public void SetShapeFillColor(string? colorText, bool commit = true)
     {
         if (RequireColorInput(colorText) is { } color)
         {
-            EditShapeFill("Shape fill", commit: true, fill => fill with { Color = color });
+            EditShapeFill("Shape fill", commit, fill => fill with { Color = color });
         }
     }
 
@@ -7336,6 +7781,239 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// <summary>Fill back to its defaults; the texture reference is dropped with the rest.</summary>
     public void ResetShapeFill() =>
         EditShapeFill("Reset shape fill", commit: true, _ => new ShapeFillStyle());
+
+    // ------------------------------------------------------- plain primitives (rectangle, ellipse)
+
+    /// <summary>
+    /// True for the objects whose colour lives on the object itself rather than in a Shape/Line
+    /// style. They had no inspector block at all, so a placed rectangle kept its creation colour
+    /// for ever - these three setters are what makes it editable.
+    /// </summary>
+    public bool SelectionIsPrimitive =>
+        Session.SelectedObject is { Kind: SceneObjectKind.Rectangle or SceneObjectKind.Ellipse };
+
+    public void SetPrimitiveFillColor(string? colorText, bool commit = true)
+    {
+        if (RequireColorInput(colorText) is { } color)
+        {
+            EditAppearance("Object fill", commit, before =>
+                before.FillColor == color ? before : CopyObject(before, fillColor: color));
+        }
+    }
+
+    public void SetPrimitiveStrokeColor(string? colorText, bool commit = true)
+    {
+        if (RequireColorInput(colorText) is { } color)
+        {
+            EditAppearance("Object stroke", commit, before =>
+                before.StrokeColor == color ? before : CopyObject(before, strokeColor: color));
+        }
+    }
+
+    public void SetPrimitiveStrokeWidth(double value, bool commit = true) =>
+        EditAppearance("Object stroke width", commit, before =>
+        {
+            var width = Finite(value, before.StrokeWidth, 0, 64);
+            return Math.Abs(before.StrokeWidth - width) < 0.0001
+                ? before
+                : CopyObject(before, strokeWidth: width);
+        });
+
+    // ------------------------------------------------------------------------ gradient fill
+
+    /// <summary>
+    /// The gradient of the single selected object, whichever kind it is: a Shape keeps it in its
+    /// fill, a plain Rectangle/Ellipse keeps it on the object. The inspector reads one property so
+    /// there is one gradient control instead of two that drift apart.
+    /// </summary>
+    public GradientFill? SelectedGradient =>
+        Session.SelectedObject is { } selected
+            ? selected.Shape?.Fill.Gradient ?? selected.FillGradient
+            : null;
+
+    /// <summary>True for the object kinds that actually have a fill a gradient can replace.</summary>
+    public bool SelectionSupportsGradient =>
+        Session.SelectedObject is { Kind: SceneObjectKind.Shape or SceneObjectKind.Rectangle
+            or SceneObjectKind.Ellipse };
+
+    /// <summary>The flat colour a new gradient starts from, so turning one on is not a jump.</summary>
+    private string SelectedFlatFillColor() =>
+        Session.SelectedObject is { } selected
+            ? selected.Shape?.Fill.Color ?? selected.FillColor
+            : AppearanceColor.OpaqueBlack;
+
+    private void EditGradient(string name, bool commit, Func<GradientFill?, GradientFill?> change) =>
+        EditAppearance(name, commit, before =>
+        {
+            if (before.Shape is { } shape)
+            {
+                var changed = change(shape.Fill.Gradient);
+                return Equals(changed, shape.Fill.Gradient)
+                    ? before
+                    : before with
+                    {
+                        Shape = new ShapeStyle(
+                            shape.Regions, shape.Fill with { Gradient = changed },
+                            shape.Stroke, shape.Portals),
+                    };
+            }
+
+            if (before.Kind is SceneObjectKind.Rectangle or SceneObjectKind.Ellipse)
+            {
+                var changed = change(before.FillGradient);
+                return Equals(changed, before.FillGradient)
+                    ? before
+                    : before with { FillGradient = changed };
+            }
+
+            return before;
+        });
+
+    /// <summary>
+    /// One edit of a gradient that must already exist. A control that fires while the object has
+    /// no gradient is a no-op rather than a silent creation the user did not ask for.
+    /// </summary>
+    private void EditExistingGradient(string name, bool commit, Func<GradientFill, GradientFill> change) =>
+        EditGradient(name, commit, current => current is null ? null : change(current));
+
+    /// <summary>
+    /// The one entry point of the gradient toggle: null turns the gradient off, a kind turns it on
+    /// (seeded from the current flat colour) or switches an existing one. Creating and choosing the
+    /// kind in a single command means picking "radial" on a flat object is one undo, not two.
+    /// </summary>
+    public void SetGradientMode(GradientKind? kind)
+    {
+        if (!SelectionSupportsGradient)
+        {
+            StatusDetail = "Градиент доступен фигурам, прямоугольникам и эллипсам.";
+            return;
+        }
+
+        var seed = SelectedFlatFillColor();
+        EditGradient(kind is null ? "Disable gradient" : "Gradient mode", commit: true, current =>
+            kind is not { } wanted
+                ? null
+                : current is null
+                    ? GradientFill.Default(seed, wanted)
+                    : current with { Kind = wanted });
+    }
+
+    public void SetGradientAngle(double degrees, bool commit = true) =>
+        EditExistingGradient("Gradient angle", commit, current => new GradientFill(
+            current.Kind, current.Stops,
+            Finite(degrees, current.AngleDegrees, 0, 360),
+            current.CenterX, current.CenterY, current.Radius));
+
+    public void SetGradientCenterX(double value, bool commit = true) =>
+        EditExistingGradient("Gradient centre X", commit, current => new GradientFill(
+            current.Kind, current.Stops, current.AngleDegrees,
+            Finite(value, current.CenterX, 0, 1), current.CenterY, current.Radius));
+
+    public void SetGradientCenterY(double value, bool commit = true) =>
+        EditExistingGradient("Gradient centre Y", commit, current => new GradientFill(
+            current.Kind, current.Stops, current.AngleDegrees,
+            current.CenterX, Finite(value, current.CenterY, 0, 1), current.Radius));
+
+    public void SetGradientRadius(double value, bool commit = true) =>
+        EditExistingGradient("Gradient radius", commit, current => new GradientFill(
+            current.Kind, current.Stops, current.AngleDegrees,
+            current.CenterX, current.CenterY, Finite(value, current.Radius, 0.05, 4)));
+
+    public void SetGradientStopColor(int index, string? colorText, bool commit = true)
+    {
+        if (RequireColorInput(colorText) is not { } color)
+        {
+            return;
+        }
+
+        EditExistingGradient("Gradient stop colour", commit, current =>
+            index < 0 || index >= current.Stops.Count
+                ? current
+                : new GradientFill(
+                    current.Kind,
+                    [.. current.Stops.Select((stop, at) =>
+                        at == index ? new GradientStopStyle(stop.Offset, color) : stop)],
+                    current.AngleDegrees, current.CenterX, current.CenterY, current.Radius));
+    }
+
+    public void SetGradientStopOffset(int index, double offset, bool commit = true) =>
+        EditExistingGradient("Gradient stop position", commit, current =>
+            index < 0 || index >= current.Stops.Count
+                ? current
+                : new GradientFill(
+                    current.Kind,
+                    [.. current.Stops.Select((stop, at) => at == index
+                        ? new GradientStopStyle(Finite(offset, stop.Offset, 0, 1), stop.Color)
+                        : stop)],
+                    current.AngleDegrees, current.CenterX, current.CenterY, current.Radius));
+
+    /// <summary>
+    /// Adds a stop in the widest gap, with the colour the ramp already shows there, so the new
+    /// stop changes nothing until the user moves or recolours it.
+    /// </summary>
+    public void AddGradientStop()
+    {
+        if (SelectedGradient is { } current && current.Stops.Count >= GradientFill.MaxStops)
+        {
+            StatusDetail = $"У градиента не больше {GradientFill.MaxStops} точек цвета.";
+            return;
+        }
+
+        EditExistingGradient("Add gradient stop", commit: true, gradient =>
+        {
+            var widest = 0;
+            var widestGap = double.MinValue;
+            for (var index = 0; index < gradient.Stops.Count - 1; index++)
+            {
+                var gap = gradient.Stops[index + 1].Offset - gradient.Stops[index].Offset;
+                if (gap > widestGap)
+                {
+                    widestGap = gap;
+                    widest = index;
+                }
+            }
+
+            var left = gradient.Stops[widest];
+            var right = gradient.Stops[widest + 1];
+            var stops = gradient.Stops.ToList();
+            stops.Insert(widest + 1, new GradientStopStyle(
+                (left.Offset + right.Offset) / 2, MixColors(left.Color, right.Color)));
+            return new GradientFill(gradient.Kind, stops, gradient.AngleDegrees,
+                gradient.CenterX, gradient.CenterY, gradient.Radius);
+        });
+    }
+
+    public void RemoveGradientStop(int index)
+    {
+        if (SelectedGradient is { } current && current.Stops.Count <= GradientFill.MinStops)
+        {
+            StatusDetail = "У градиента не меньше двух точек цвета.";
+            return;
+        }
+
+        EditExistingGradient("Remove gradient stop", commit: true, gradient =>
+            index < 0 || index >= gradient.Stops.Count
+                ? gradient
+                : new GradientFill(
+                    gradient.Kind,
+                    [.. gradient.Stops.Where((_, at) => at != index)],
+                    gradient.AngleDegrees, gradient.CenterX, gradient.CenterY, gradient.Radius));
+    }
+
+    /// <summary>The midpoint of two canonical colours, channel by channel including alpha.</summary>
+    private static string MixColors(string left, string right)
+    {
+        var a = uint.Parse(left.AsSpan(1), NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+        var b = uint.Parse(right.AsSpan(1), NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+        var mixed = 0u;
+        for (var shift = 0; shift < 32; shift += 8)
+        {
+            var channel = (byte)Math.Round(((((a >> shift) & 0xFF) + ((b >> shift) & 0xFF)) / 2.0));
+            mixed |= (uint)channel << shift;
+        }
+
+        return "#" + mixed.ToString("X8", CultureInfo.InvariantCulture);
+    }
 
     /// <summary>Whole-object effects back to neutral: opacity, blend, blur.</summary>
     public void ResetShapeEffects() =>

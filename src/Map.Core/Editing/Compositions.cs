@@ -141,6 +141,7 @@ public static class SceneObjectClone
             Stamp = source.Stamp,
             Line = source.Line,
             Shape = source.Shape,
+            FillGradient = source.FillGradient,
             Text = source.Text,
             Composition = source.Composition,
             PlaceholderReason = reason,

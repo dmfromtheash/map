@@ -1590,6 +1590,7 @@ public static partial class MapProjectStore
         Height = sceneObject.Height,
         RotationDegrees = sceneObject.RotationDegrees,
         FillColor = sceneObject.FillColor,
+        FillGradient = ToGradientDto(sceneObject.FillGradient),
         StrokeColor = sceneObject.StrokeColor,
         StrokeWidth = sceneObject.StrokeWidth,
         Visible = sceneObject.Visible,
@@ -1898,6 +1899,7 @@ public static partial class MapProjectStore
         GroupId = dto.GroupId is null ? null : Guid.ParseExact(dto.GroupId, "D"),
         GroupName = dto.GroupName,
         ObjectOpacity = RequireFinite(dto.ObjectOpacity, "object opacity", min: 0, max: 1),
+        FillGradient = ToGradient(dto.FillGradient, "object fill gradient"),
         Stamp = dto.Stamp is { } stamp
             ? new StampStyle(RequireString(stamp.AssetSha256, "stamp asset hash"))
             {
@@ -2079,6 +2081,7 @@ public static partial class MapProjectStore
         Fill = new ShapeFillDto
         {
             Color = shape.Fill.Color,
+            Gradient = ToGradientDto(shape.Fill.Gradient),
             TextureAssetSha256 = RequireOptionalSha256(
                 shape.Fill.TextureAssetSha256, "shape fill texture asset hash"),
             TextureScale = shape.Fill.TextureScale,
@@ -2144,6 +2147,7 @@ public static partial class MapProjectStore
         new ShapeFillStyle
         {
             Color = RequireString(shape.Fill.Color, "shape fill color"),
+            Gradient = ToGradient(shape.Fill.Gradient, "shape fill gradient"),
             TextureAssetSha256 = RequireOptionalSha256(
                 shape.Fill.TextureAssetSha256, "shape fill texture asset hash"),
             TextureScale = shape.Fill.TextureScale,
@@ -2516,6 +2520,54 @@ public static partial class MapProjectStore
         }
 
         return value;
+    }
+
+    /// <summary>
+    /// A gradient is written only when the object has one, so every project without gradients
+    /// keeps byte-identical scene content.
+    /// </summary>
+    private static GradientDto? ToGradientDto(GradientFill? gradient) => gradient is null ? null : new GradientDto
+    {
+        Kind = gradient.Kind.ToString(),
+        Stops = [.. gradient.Stops.Select(stop => new GradientStopDto
+        {
+            Offset = stop.Offset,
+            Color = stop.Color,
+        })],
+        AngleDegrees = gradient.AngleDegrees,
+        CenterX = gradient.CenterX,
+        CenterY = gradient.CenterY,
+        Radius = gradient.Radius,
+    };
+
+    /// <summary>
+    /// Every stored gradient value is checked here rather than trusted: an absent gradient is a
+    /// valid document, but a present one with a bad stop count, offset or colour is corruption and
+    /// is reported as such instead of reaching the renderer.
+    /// </summary>
+    private static GradientFill? ToGradient(GradientDto? dto, string what)
+    {
+        if (dto is null)
+        {
+            return null;
+        }
+
+        if (dto.Stops is not { } stops
+            || stops.Count is < GradientFill.MinStops or > GradientFill.MaxStops)
+        {
+            throw new MapProjectCorruptedException(
+                $"scene.json holds a {what} with {dto.Stops?.Count ?? 0} colour stops.");
+        }
+
+        return new GradientFill(
+            ParseDefined<GradientKind>(dto.Kind, what + " kind"),
+            [.. stops.Select(stop => new GradientStopStyle(
+                RequireFinite(stop.Offset, what + " stop offset", min: 0, max: 1),
+                RequireAppearanceColor(stop.Color, what + " stop colour")))],
+            RequireFinite(dto.AngleDegrees, what + " angle", min: -360, max: 360),
+            RequireFinite(dto.CenterX, what + " centre x", min: 0, max: 1),
+            RequireFinite(dto.CenterY, what + " centre y", min: 0, max: 1),
+            RequireFinite(dto.Radius, what + " radius", min: double.Epsilon, max: 4));
     }
 
     private static string RequireAppearanceColor(string? value, string what)

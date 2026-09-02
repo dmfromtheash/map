@@ -32,15 +32,38 @@ public interface IUserPrompts
 
     Task<bool> ConfirmMigrationCopyAsync();
 
-    Task<bool> ConfirmDeleteProjectAsync(string projectTitle);
+    /// <summary>
+    /// Confirms removing one project. <paramref name="fileAlreadyMissing"/> switches the wording
+    /// from "move the file to the Recycle Bin" to "forget the entry", because promising to bin a
+    /// file that no longer exists would be a lie.
+    /// </summary>
+    Task<bool> ConfirmDeleteProjectAsync(string projectTitle, bool fileAlreadyMissing = false);
 
     Task ShowErrorAsync(string title, string message);
 }
 
-/// <summary>Recoverable deletion of one explicit local project path.</summary>
+/// <summary>What actually happened to the one explicit path the caller named.</summary>
+public enum ProjectTrashOutcome
+{
+    /// <summary>The file existed and now sits in the platform trash.</summary>
+    MovedToTrash,
+
+    /// <summary>There was nothing to move: the file was already gone before or during the call.</summary>
+    FileAlreadyMissing,
+}
+
+/// <summary>
+/// Recoverable deletion of one explicit local project path.
+/// <para>
+/// A missing file is a normal outcome, not a failure: the recent list can outlive a map the user
+/// deleted elsewhere. It used to surface as a <see cref="System.IO.FileNotFoundException"/> that
+/// the dashboard could not tell apart from a real I/O error, which left the stale card permanently
+/// undeletable. Reporting it as an outcome keeps a genuine failure loud and a stale entry quiet.
+/// </para>
+/// </summary>
 public interface IProjectTrash
 {
-    void MoveToTrash(string path);
+    ProjectTrashOutcome MoveToTrash(string path);
 }
 
 /// <summary>Export destinations are separate from .mapproj save/open dialogs.</summary>

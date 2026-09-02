@@ -100,15 +100,25 @@ public sealed class DialogPrompts(Window owner) : IUserPrompts
     public Task<bool> ConfirmMigrationCopyAsync() =>
         Dispatcher.UIThread.InvokeAsync(() => MigrationPromptWindow.ShowAsync(owner));
 
-    public Task<bool> ConfirmDeleteProjectAsync(string projectTitle) =>
-        Dispatcher.UIThread.InvokeAsync(() => ConfirmationWindow.ShowAsync(
-            owner,
-            "Переместить карту в Корзину?",
-            $"Файл карты «{projectTitle}» будет перемещён в Корзину Windows. " +
-                "Остальные карты и данные восстановления не изменятся.",
-            "В Корзину",
-            "DeleteProjectConfirmButton",
-            destructive: true));
+    public Task<bool> ConfirmDeleteProjectAsync(string projectTitle, bool fileAlreadyMissing = false) =>
+        Dispatcher.UIThread.InvokeAsync(() => fileAlreadyMissing
+            ? ConfirmationWindow.ShowAsync(
+                owner,
+                "Убрать запись о недоступной карте?",
+                $"Файла карты «{projectTitle}» уже нет на диске, поэтому удалять нечего. " +
+                    "Будет убрана только запись о ней из списка недавних. " +
+                    "Остальные карты и данные восстановления не изменятся.",
+                "Убрать запись",
+                "DeleteProjectConfirmButton",
+                destructive: true)
+            : ConfirmationWindow.ShowAsync(
+                owner,
+                "Переместить карту в Корзину?",
+                $"Файл карты «{projectTitle}» будет перемещён в Корзину Windows. " +
+                    "Остальные карты и данные восстановления не изменятся.",
+                "В Корзину",
+                "DeleteProjectConfirmButton",
+                destructive: true));
 
     public Task<CloseChoice> ConfirmCloseDirtyAsync(string documentTitle) =>
         Dispatcher.UIThread.InvokeAsync(async () =>
@@ -142,14 +152,33 @@ public sealed class DialogPrompts(Window owner) : IUserPrompts
 /// <summary>Windows Recycle Bin adapter. It accepts one already-resolved project file only.</summary>
 public sealed class WindowsProjectTrash : IProjectTrash
 {
-    public void MoveToTrash(string path)
+    public ProjectTrashOutcome MoveToTrash(string path)
     {
         var fullPath = Path.GetFullPath(path);
-        if (!File.Exists(fullPath)) throw new FileNotFoundException("Файл карты не найден.", fullPath);
-        Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(
-            fullPath,
-            Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
-            Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+        if (!File.Exists(fullPath))
+        {
+            return ProjectTrashOutcome.FileAlreadyMissing;
+        }
+
+        try
+        {
+            Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(
+                fullPath,
+                Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
+                Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+        }
+        catch (FileNotFoundException)
+        {
+            // The file disappeared between the probe and the call. Nothing was deleted here, and
+            // nothing is wrong: the caller still gets to clean up its stale entry.
+            return ProjectTrashOutcome.FileAlreadyMissing;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return ProjectTrashOutcome.FileAlreadyMissing;
+        }
+
+        return ProjectTrashOutcome.MovedToTrash;
     }
 }
 

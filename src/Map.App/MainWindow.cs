@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -529,6 +529,9 @@ public sealed class MainWindow : Window
                 break;
             case EditorShortcutSettings.Commands.Escape:
                 editor.HandleEscape();
+                break;
+            case EditorShortcutSettings.Commands.FinishPath:
+                editor.FinishPenPath();
                 break;
             case EditorShortcutSettings.Commands.Delete:
             case EditorShortcutSettings.Commands.DeleteAlternate:

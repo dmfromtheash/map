@@ -318,12 +318,20 @@ public static class Ui
                 : $"{Math.Round(raw):0} {suffix}";
     }
 
-    /// <summary>One row of mutually exclusive choices. Returns the buttons for state syncing.</summary>
+    /// <summary>
+    /// One row of mutually exclusive choices. Returns the buttons for state syncing.
+    /// <para>
+    /// The strip wraps. It used to be a horizontal <see cref="StackPanel"/> inside a fixed-width
+    /// panel with horizontal scrolling switched off, so a set with long Russian labels - the six
+    /// Shape modes - simply ran off the edge and its last options could not be clicked at all.
+    /// A mode the user cannot reach is a missing feature, not a cosmetic overflow.
+    /// </para>
+    /// </summary>
     public static (Control Control, IReadOnlyList<Button> Buttons) Segmented(
         string namePrefix, IReadOnlyList<(string Key, string Text, string? Icon)> options, Action<string> chosen)
     {
         var buttons = new List<Button>(options.Count);
-        var strip = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2 };
+        var strip = new WrapPanel { Orientation = Orientation.Horizontal };
 
         foreach (var option in options)
         {
@@ -340,7 +348,7 @@ public static class Ui
                     },
                 };
 
-            var button = new ToggleButton { Content = content }
+            var button = new ToggleButton { Content = content, Margin = new Thickness(0, 0, 2, 2) }
                 .Named(namePrefix + option.Key)
                 .Classed("segment");
             AutomationProperties.SetName(button, option.Text);
@@ -358,7 +366,7 @@ public static class Ui
             BorderBrush = Application.Current?.FindResource("MapBorderBrush") as IBrush,
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(7),
-            Padding = new Thickness(2),
+            Padding = new Thickness(2, 2, 0, 0),
             Child = strip,
             HorizontalAlignment = HorizontalAlignment.Left,
         };

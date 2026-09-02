@@ -188,6 +188,9 @@ internal sealed class SceneObjectDto
     [JsonPropertyName("height")] public double Height { get; set; }
     [JsonPropertyName("rotationDegrees")] public double RotationDegrees { get; set; }
     [JsonPropertyName("fillColor")] public string FillColor { get; set; } = "";
+    [JsonPropertyName("fillGradient")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public GradientDto? FillGradient { get; set; }
     [JsonPropertyName("strokeColor")] public string StrokeColor { get; set; } = "";
     [JsonPropertyName("strokeWidth")] public double StrokeWidth { get; set; }
     [JsonPropertyName("visible")] public bool Visible { get; set; }
@@ -369,9 +372,34 @@ internal sealed class LineStyleDto
     [JsonPropertyName("closed")] public bool Closed { get; set; }
 }
 
+/// <summary>One colour stop of a stored gradient.</summary>
+internal sealed class GradientStopDto
+{
+    [JsonPropertyName("offset")] public double Offset { get; set; }
+    [JsonPropertyName("color")] public string Color { get; set; } = "";
+}
+
+/// <summary>
+/// A stored gradient. It is written only when an object actually has one, so a project made
+/// before gradients existed - and any project that still uses flat colour - keeps exactly the
+/// bytes it had.
+/// </summary>
+internal sealed class GradientDto
+{
+    [JsonPropertyName("kind")] public string Kind { get; set; } = "Linear";
+    [JsonPropertyName("stops")] public List<GradientStopDto> Stops { get; set; } = [];
+    [JsonPropertyName("angleDegrees")] public double AngleDegrees { get; set; }
+    [JsonPropertyName("centerX")] public double CenterX { get; set; }
+    [JsonPropertyName("centerY")] public double CenterY { get; set; }
+    [JsonPropertyName("radius")] public double Radius { get; set; }
+}
+
 internal sealed class ShapeFillDto
 {
     [JsonPropertyName("color")] public string Color { get; set; } = "";
+    [JsonPropertyName("gradient")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public GradientDto? Gradient { get; set; }
     [JsonPropertyName("textureAssetSha256")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? TextureAssetSha256 { get; set; }

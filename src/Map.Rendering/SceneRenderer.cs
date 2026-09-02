@@ -1075,9 +1075,11 @@ public static class SceneRenderer
             return;
         }
 
+        using (var fillGradient = CreateGradientShader(sceneObject.FillGradient, rect, objectAlpha))
         using (var fill = new SKPaint
         {
             Color = ParseColor(sceneObject.FillColor).WithScaledAlpha(objectAlpha),
+            Shader = fillGradient,
             IsAntialias = true,
             Style = SKPaintStyle.Fill,
         })
@@ -1374,15 +1376,23 @@ public static class SceneRenderer
         }
 
         canvas.SaveLayer(ToRect(SceneGeometry.BoundsOf(owner)), null);
+        var fillAlpha = (byte)Math.Clamp(Math.Round(objectAlpha * shape.Fill.Opacity), 0, 255);
         foreach (var region in shape.Regions)
         {
             using var path = BuildRegionPath(owner, region);
+
+            // A subtract region punches a hole, so it is always flat black through DstOut - a
+            // gradient there would describe the hole, not the fill, and nothing would read it.
+            using var gradient = region.Mode == ShapeCombineMode.Subtract
+                ? null
+                : CreateGradientShader(
+                    shape.Fill.Gradient, ToRect(SceneGeometry.BoundsOf(owner)), fillAlpha);
             using var fill = new SKPaint
             {
                 Color = region.Mode == ShapeCombineMode.Subtract
                     ? SKColors.Black
-                    : ParseColor(shape.Fill.Color).WithScaledAlpha((byte)Math.Clamp(
-                        Math.Round(objectAlpha * shape.Fill.Opacity), 0, 255)),
+                    : ParseColor(shape.Fill.Color).WithScaledAlpha(fillAlpha),
+                Shader = gradient,
                 IsAntialias = true,
                 Style = SKPaintStyle.Fill,
                 BlendMode = region.Mode == ShapeCombineMode.Subtract ? SKBlendMode.DstOut : SKBlendMode.SrcOver,
@@ -2674,6 +2684,53 @@ public static class SceneRenderer
     }
 
     /// <summary>Parses "#AARRGGBB" (or "#RRGGBB" as opaque). The domain stores colours as strings.</summary>
+    /// <summary>
+    /// Builds the Skia shader for a document gradient inside one object's bounds, or null when the
+    /// object has no gradient - in which case the paint keeps its flat colour and nothing changes.
+    /// <para>
+    /// The object's own alpha is folded into every stop rather than left on the paint, because a
+    /// paint colour is ignored once a shader is set; doing it here keeps a gradient object fading
+    /// exactly like a flat one under layer opacity and preview.
+    /// </para>
+    /// </summary>
+    internal static SKShader? CreateGradientShader(GradientFill? gradient, SKRect rect, byte alpha)
+    {
+        if (gradient is null || rect.Width <= 0 || rect.Height <= 0)
+        {
+            return null;
+        }
+
+        var colors = new SKColor[gradient.Stops.Count];
+        var positions = new float[gradient.Stops.Count];
+        for (var index = 0; index < gradient.Stops.Count; index++)
+        {
+            colors[index] = ParseColor(gradient.Stops[index].Color).WithScaledAlpha(alpha);
+            positions[index] = (float)gradient.Stops[index].Offset;
+        }
+
+        if (gradient.Kind == GradientKind.Radial)
+        {
+            return SKShader.CreateRadialGradient(
+                new SKPoint(
+                    rect.Left + (float)(gradient.CenterX * rect.Width),
+                    rect.Top + (float)(gradient.CenterY * rect.Height)),
+                (float)Math.Max(0.001, gradient.Radius * Math.Max(rect.Width, rect.Height)),
+                colors, positions, SKShaderTileMode.Clamp);
+        }
+
+        // The ramp runs through the centre and is long enough to cover the whole rect at any
+        // angle, so 0..1 always spans the object instead of clipping at a diagonal.
+        var angle = gradient.AngleDegrees * Math.PI / 180;
+        var half = ((Math.Abs(Math.Cos(angle)) * rect.Width)
+            + (Math.Abs(Math.Sin(angle)) * rect.Height)) / 2;
+        var dx = (float)(Math.Cos(angle) * half);
+        var dy = (float)(Math.Sin(angle) * half);
+        return SKShader.CreateLinearGradient(
+            new SKPoint(rect.MidX - dx, rect.MidY - dy),
+            new SKPoint(rect.MidX + dx, rect.MidY + dy),
+            colors, positions, SKShaderTileMode.Clamp);
+    }
+
     internal static SKColor ParseColor(string color)
     {
         var span = color.AsSpan().TrimStart('#');

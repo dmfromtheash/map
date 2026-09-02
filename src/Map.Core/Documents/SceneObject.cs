@@ -166,6 +166,13 @@ public sealed record SceneObject
     /// <summary>Nondestructive vector expression when <see cref="Kind"/> is Shape.</summary>
     public ShapeStyle? Shape { get; init; }
 
+    /// <summary>
+    /// Optional gradient for the plain primitives (Rectangle, Ellipse), which otherwise only have
+    /// the flat <see cref="FillColor"/>. Null means the flat colour is used, so every existing
+    /// object keeps rendering exactly as before.
+    /// </summary>
+    public GradientFill? FillGradient { get; init; }
+
     /// <summary>Editable text request and appearance; resolved fonts are machine-local derived state.</summary>
     public TextStyle? Text { get; init; }
 
