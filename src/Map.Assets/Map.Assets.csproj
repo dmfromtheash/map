@@ -8,6 +8,13 @@
     <PackageReference Include="SkiaSharp" Version="3.119.4" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="StarterAssets\sample-mountains.png"
+                      LogicalName="Map.Assets.StarterAssets.sample-mountains.png" />
+    <EmbeddedResource Include="StarterAssets\sample-tree.png"
+                      LogicalName="Map.Assets.StarterAssets.sample-tree.png" />
+  </ItemGroup>
+
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>

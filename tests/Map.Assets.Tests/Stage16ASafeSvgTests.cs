@@ -75,14 +75,18 @@ public sealed class Stage16ASafeSvgTests : IDisposable
         var catalog = new AssetCatalog(Path.Combine(_root, "starter"));
         StarterPackInstaller.EnsureInstalled(catalog, DateTimeOffset.UnixEpoch);
 
-        Assert.Equal(3, catalog.Records.Count);
+        Assert.Equal(5, catalog.Records.Count);
         Assert.All(catalog.Records, record =>
         {
             Assert.Equal("map-original-generated-starter", record.Provenance.Source);
             Assert.Equal(AssetLicenseStatus.UserOwned, record.Provenance.LicenseStatus);
-            Assert.True(record.Width <= 256 && record.Height <= 256);
+            Assert.True(record.Width <= 2048 && record.Height <= 2048);
         });
-        Assert.Single(catalog.Sets);
+        Assert.Contains(catalog.Records, record => record.DisplayName == "Горы");
+        Assert.Contains(catalog.Records, record => record.DisplayName == "Дерево");
+        Assert.Equal(3, catalog.Sets.Count);
+        Assert.Contains(catalog.Sets, set => set.Name == "Горы");
+        Assert.Contains(catalog.Sets, set => set.Name == "Дерево");
     }
 
     private static byte[] Image(SKColor color)

@@ -6,39 +6,86 @@ namespace Map.Assets;
 public static class StarterPackInstaller
 {
     public const string PackName = "Map · базовые формы";
+    public const string NaturePackName = "Map · тестовая природа";
     public const string ProvenanceSource = "map-original-generated-starter";
 
     public static AssetSet? EnsureInstalled(AssetCatalog catalog, DateTimeOffset installedUtc)
     {
         ArgumentNullException.ThrowIfNull(catalog);
-        var existing = catalog.Sets.FirstOrDefault(set =>
-            string.Equals(set.Name, PackName, StringComparison.Ordinal));
-        if (existing is not null || catalog.Status == AssetLibraryStatus.Damaged)
+        if (catalog.Status == AssetLibraryStatus.Damaged)
         {
-            return existing;
+            return null;
         }
 
+        var existing = catalog.Sets.FirstOrDefault(set =>
+            string.Equals(set.Name, PackName, StringComparison.Ordinal));
+        if (existing is null)
+        {
+            var sourceRoot = Path.Combine(catalog.Root, "starter-pack-source");
+            Directory.CreateDirectory(sourceRoot);
+            var sources = new[]
+            {
+                Create(sourceRoot, "map-starter-circle.png", DrawCircle),
+                Create(sourceRoot, "map-starter-diamond.png", DrawDiamond),
+                Create(sourceRoot, "map-starter-brush-tip.png", DrawBrushTip),
+            };
+            existing = catalog.ImportSet(sources, PackName, new AssetImportOptions
+            {
+                Pack = PackName,
+                Tags = ["map-original", "starter", "geometric"],
+                Provenance = StarterProvenance(),
+            }, installedUtc);
+        }
+
+        EnsureNatureSamplesInstalled(catalog, installedUtc);
+        return existing;
+    }
+
+    private static void EnsureNatureSamplesInstalled(AssetCatalog catalog, DateTimeOffset installedUtc)
+    {
         var sourceRoot = Path.Combine(catalog.Root, "starter-pack-source");
         Directory.CreateDirectory(sourceRoot);
-        var sources = new[]
+        var samples = new[]
         {
-            Create(sourceRoot, "map-starter-circle.png", DrawCircle),
-            Create(sourceRoot, "map-starter-diamond.png", DrawDiamond),
-            Create(sourceRoot, "map-starter-brush-tip.png", DrawBrushTip),
+            (Resource: "Map.Assets.StarterAssets.sample-mountains.png", File: "Горы.png", Tag: "mountain"),
+            (Resource: "Map.Assets.StarterAssets.sample-tree.png", File: "Дерево.png", Tag: "tree"),
         };
-        return catalog.ImportSet(sources, PackName, new AssetImportOptions
+
+        foreach (var sample in samples)
         {
-            Pack = PackName,
-            Tags = ["map-original", "starter", "geometric"],
-            Provenance = new AssetProvenance
+            var path = MaterializeEmbedded(sourceRoot, sample.Resource, sample.File);
+            catalog.Import(path, new AssetImportOptions
             {
-                Source = ProvenanceSource,
-                Author = "Map",
-                LicenseId = "Map original local starter",
-                LicenseStatus = AssetLicenseStatus.UserOwned,
-                CommercialUseAllowed = true,
-            },
-        }, installedUtc);
+                Pack = NaturePackName,
+                Tags = ["map-original", "starter", "nature", sample.Tag],
+                Provenance = StarterProvenance(),
+            }, installedUtc);
+        }
+    }
+
+    private static AssetProvenance StarterProvenance() => new()
+    {
+        Source = ProvenanceSource,
+        Author = "Map",
+        LicenseId = "Map original local starter",
+        LicenseStatus = AssetLicenseStatus.UserOwned,
+        CommercialUseAllowed = true,
+    };
+
+    private static string MaterializeEmbedded(string root, string resourceName, string fileName)
+    {
+        var path = Path.Combine(root, fileName);
+        using var source = typeof(StarterPackInstaller).Assembly.GetManifestResourceStream(resourceName)
+            ?? throw new InvalidOperationException($"Starter asset resource is missing: {resourceName}");
+        using var memory = new MemoryStream();
+        source.CopyTo(memory);
+        var bytes = memory.ToArray();
+        if (!File.Exists(path) || !File.ReadAllBytes(path).AsSpan().SequenceEqual(bytes))
+        {
+            File.WriteAllBytes(path, bytes);
+        }
+
+        return path;
     }
 
     private static string Create(string root, string name, Action<SKCanvas> draw)
