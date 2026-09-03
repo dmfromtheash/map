@@ -360,7 +360,8 @@ public sealed class MapCanvasControl : Control
 
             canvas.Save();
             canvas.ClipRect(new SKRect(0, 0, (float)Bounds.Width, (float)Bounds.Height));
-            canvas.Clear(new SKColor(16, 18, 22, 255)); // canvas surround
+            // The parent paints the approved watercolor surround. Clearing this leased surface
+            // would cover that real bitmap with the editor's former near-black background.
 
             canvas.Scale((float)viewport.Scale);
             canvas.Translate((float)-viewport.OffsetX, (float)-viewport.OffsetY);

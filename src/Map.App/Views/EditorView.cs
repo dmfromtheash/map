@@ -255,7 +255,7 @@ public sealed class EditorView : UserControl
     private Control _noLayerState = null!;
     private readonly TextBlock _layerNameHeading = new() { Name = "ActiveLayerNameText" };
     private readonly TextBlock _layerKindText = new() { Name = "ActiveLayerKindText" };
-    private Avalonia.Controls.Shapes.Path _layerKindIcon = null!;
+    private ContentControl _layerKindIcon = null!;
     private Button _blendValue = null!;
     private Button _maskValue = null!;
     private Button _visibilityValue = null!;
@@ -311,8 +311,6 @@ public sealed class EditorView : UserControl
     private readonly Dictionary<string, Button> _libraryFilterButtons = [];
     private readonly Dictionary<string, Button> _placementModeButtons = [];
     private readonly Dictionary<PlacementAutoSelectPolicy, Button> _autoSelectButtons = [];
-    private Button _addRectangleButton = null!;
-    private Button _addEllipseButton = null!;
     private ToggleButton _randomVariantToggle = null!;
     private ComboBox _libraryTagFilter = null!;
     private ComboBox _libraryMediaFilter = null!;
@@ -384,7 +382,7 @@ public sealed class EditorView : UserControl
                 sidePanel.Docked(Dock.Right),
 
                 // The canvas is the fill child: panels resize it, never cover it.
-                new Border { Child = _canvas }.Classed("canvas-surround"),
+                Ui.WatercolorBackdrop(_canvas).Classed("canvas-surround"),
             },
         };
 
@@ -618,7 +616,7 @@ public sealed class EditorView : UserControl
             MinHeight = 480,
             ShowActivated = !TestMode.Enabled,
             ShowInTaskbar = !TestMode.Enabled,
-            Content = content,
+            Content = Ui.WatercolorBackdrop(content),
         };
         window.Closing += (_, e) =>
         {
@@ -681,16 +679,31 @@ public sealed class EditorView : UserControl
         _undoButton = Ui.IconButton("UndoButton", "Отменить", MapIcons.Undo, _editor.Undo);
         _redoButton = Ui.IconButton("RedoButton", "Повторить", MapIcons.Redo, _editor.Redo);
         var fit = Ui.IconButton("FitButton", "Вписать карту в окно", MapIcons.FitCanvas, _canvas.FitToCanvas);
-        var export = Ui.TextButton("ExportButton", "Экспорт…", OpenExport, "accent", "compact");
+        var export = Ui.CommandButton(
+            "ExportButton", "Экспорт…", MapIcons.Export, OpenExport, "accent", "compact");
         AutomationProperties.SetName(export, "Экспорт изображения");
 
-        _saveButton = Ui.AsyncButton("SaveButton", "Сохранить", () => _editor.SaveAsync(), "primary");
+        _saveButton = Ui.AsyncCommandButton(
+            "SaveButton", "Сохранить", MapIcons.Save, () => _editor.SaveAsync(), "primary");
         _shortcutSettingsButton = Ui.TextButton(
             "ShortcutSettingsButton", "Сочетания…", requestShortcutSettings, "compact");
 
-        MenuItem Item(string header, Action action)
+        MenuItem Item(string header, string icon, Action action)
         {
-            var item = new MenuItem { Header = header };
+            var item = new MenuItem
+            {
+                Header = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 8,
+                    Children =
+                    {
+                        MapIcons.Stroked(icon, 15),
+                        new TextBlock { Text = header, VerticalAlignment = VerticalAlignment.Center },
+                    },
+                },
+            };
+            AutomationProperties.SetName(item, header);
             item.Click += (_, _) => action();
             return item;
         }
@@ -711,19 +724,24 @@ public sealed class EditorView : UserControl
         {
             Items =
             {
-                Item("Версии…", OpenVersions),
-                Item("Сохранить как…", () => _ = _editor.SaveAsync(saveAs: true)),
+                Item("Версии…", MapIcons.Versions, OpenVersions),
+                Item("Сохранить как…", MapIcons.Save, () => _ = _editor.SaveAsync(saveAs: true)),
                 autosaveItem,
                 new Separator(),
-                Item("Размер и область…", OpenCanvasWorkflow),
-                Item("Экспорт…", OpenExport),
+                Item("Размер и область…", MapIcons.ResizeRegion, OpenCanvasWorkflow),
+                Item("Экспорт…", MapIcons.Export, OpenExport),
                 new Separator(),
-                Item("Сочетания клавиш…", requestShortcutSettings),
-                Item("Открыть второе окно", requestSecondWindow),
+                Item("Сочетания клавиш…", MapIcons.Gear, requestShortcutSettings),
+                Item("Открыть второе окно", MapIcons.Window, requestSecondWindow),
             },
         };
-        var file = Ui.TextButton("FileMenuButton", "Файл", () => { }, "compact");
+        var file = Ui.CommandButton("FileMenuButton", "Файл", MapIcons.File, () => { }, "compact");
         file.Flyout = fileMenu;
+
+        var historyActions = ToolbarGroup(_undoButton, _redoButton);
+        historyActions.Margin = new Thickness(18, 0, 0, 0);
+        var viewActions = ToolbarGroup(fit);
+        viewActions.Margin = new Thickness(12, 0, 0, 0);
 
         var bar = new DockPanel
         {
@@ -733,16 +751,11 @@ public sealed class EditorView : UserControl
                 new StackPanel
                 {
                     Orientation = Orientation.Horizontal,
-                    Spacing = 6,
+                    Spacing = 10,
                     Children = { file, export, _saveButton },
                 }.Docked(Dock.Right),
-                new StackPanel
-                {
-                    Orientation = Orientation.Horizontal,
-                    Spacing = 4,
-                    Margin = new Thickness(16, 0, 0, 0),
-                    Children = { _undoButton, _redoButton, Divider(), fit },
-                }.Docked(Dock.Right),
+                viewActions.Docked(Dock.Right),
+                historyActions.Docked(Dock.Right),
                 back.Docked(Dock.Left),
                 title,
             },
@@ -753,12 +766,25 @@ public sealed class EditorView : UserControl
         return new Border { Child = bar }.Classed("app-bar");
     }
 
-    private static Control Divider() => new Border
+    private static Border ToolbarGroup(params Control[] controls)
     {
-        Width = 1,
-        Margin = new Thickness(5, 6),
-        Background = Application.Current?.FindResource("MapBorderBrush") as IBrush,
-    };
+        var stack = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+        };
+        stack.Children.AddRange(controls);
+
+        return new Border
+        {
+            Padding = new Thickness(4, 2),
+            CornerRadius = new CornerRadius(7),
+            Background = Application.Current?.FindResource("MapChromeElevatedBrush") as IBrush,
+            BorderBrush = Application.Current?.FindResource("MapChromeBorderBrush") as IBrush,
+            BorderThickness = new Thickness(1),
+            Child = stack,
+        };
+    }
 
     // ====================================================================== rail
 
@@ -778,7 +804,7 @@ public sealed class EditorView : UserControl
 
         var stack = new StackPanel
         {
-            Spacing = 4,
+            Spacing = 7,
             Margin = new Thickness(6, 8),
             Children =
             {
@@ -803,7 +829,7 @@ public sealed class EditorView : UserControl
     {
         Height = 1,
         Margin = new Thickness(8, 5),
-        Background = Application.Current?.FindResource("MapBorderBrush") as IBrush,
+        Background = Application.Current?.FindResource("MapChromeBorderBrush") as IBrush,
     };
 
     // ============================================================ context panel
@@ -853,41 +879,26 @@ public sealed class EditorView : UserControl
         _toolPanels[EditorTool.Notes] = BuildNotesTab();
     }
 
-    // No explanation here: this panel is only ever shown beneath the "Ничего не выбрано" state,
-    // which already says how to make a selection. Saying it twice is noise, not guidance.
+    // Select does not create primitives. Its only adjacent action opens the visual object library;
+    // creation remains owned by Shape and Stamp, so the tool never changes meaning under the user.
     private Control BuildSelectPanel()
     {
-        _addRectangleButton = Ui.CommandButton(
-            "AddRectangleButton", "Объект: прямоугольник", MapIcons.ObjectRectangle,
-            () =>
-            {
-                _editor.ArmPrimitivePlacement(SceneObjectKind.Rectangle);
-                SyncContextArea();
-            });
-        _addEllipseButton = Ui.CommandButton(
-            "AddEllipseButton", "Объект: эллипс", MapIcons.ObjectEllipse,
-            () =>
-            {
-                _editor.ArmPrimitivePlacement(SceneObjectKind.Ellipse);
-                SyncContextArea();
-            });
+        var assets = Ui.CommandButton(
+            "SelectAssetsButton", "Ассеты", MapIcons.Assets,
+            () => OpenAssetCatalog(focusSearch: true), "asset-entry");
+        ToolTip.SetTip(assets, "Открыть галерею объектов: горы, деревья и другие ассеты");
+
         return new StackPanel
         {
             Spacing = 8,
             Children =
             {
-                Explanation("Выберите объект и укажите его место на холсте. До клика карта не меняется; W/S — поворот."),
-                _addRectangleButton,
-                _addEllipseButton,
-                Ui.TextButton(
-                    "CreatePlacementLayerButton",
-                    "Создать слой объектов и продолжить",
-                    () =>
-                    {
-                        _editor.CreateObjectLayerAndContinuePlacement();
-                        SyncSidePanels();
-                    },
-                    "compact"),
+                assets,
+                new TextBlock
+                {
+                    Text = "Горы, деревья и другие объекты для карты",
+                    TextWrapping = TextWrapping.Wrap,
+                }.Classed("faint", "role-caption"),
             },
         };
     }
@@ -1213,8 +1224,9 @@ public sealed class EditorView : UserControl
                             _editor.BrushSettings = _editor.BrushSettings with { Eraser = false };
                             SyncAppearanceSections();
                         }, "segment"),
-                        Ui.TextButton("BrushTextureMaterialButton", "Текстура из библиотеки", () =>
-                            OpenAssetCatalog(focusSearch: true), "segment"),
+                        Ui.CommandButton(
+                            "BrushTextureMaterialButton", "Текстура из библиотеки", MapIcons.Assets,
+                            () => OpenAssetCatalog(focusSearch: true), "segment"),
                         _eraserButton,
                     },
                 }),
@@ -1651,6 +1663,20 @@ public sealed class EditorView : UserControl
         _stampToolCurrentText = current;
         _stampToolAreaText = area;
         _stampGestureBlock = BuildStampGestureBlock();
+        var openLibrary = ShortcutTextButton(
+            "OpenLibraryButton", "Открыть библиотеку",
+            EditorShortcutSettings.Commands.StampFocusLibrary,
+            () => OpenAssetCatalog(focusSearch: true), "compact");
+        openLibrary.Content = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 8,
+            Children =
+            {
+                MapIcons.Stroked(MapIcons.Assets, 17),
+                new TextBlock { Text = "Открыть библиотеку", VerticalAlignment = VerticalAlignment.Center },
+            },
+        };
 
         return new StackPanel
         {
@@ -1661,9 +1687,7 @@ public sealed class EditorView : UserControl
                 current,
                 area,
                 BuildCompactStampCatalog(),
-                ShortcutTextButton("OpenLibraryButton", "Открыть библиотеку",
-                    EditorShortcutSettings.Commands.StampFocusLibrary,
-                    () => OpenAssetCatalog(focusSearch: true), "compact"),
+                openLibrary,
                 BuildStampEditor("FutureStamp"),
                 _stampGestureBlock,
                 Ui.TextButton(
@@ -1826,7 +1850,7 @@ public sealed class EditorView : UserControl
         }
 
         header.Children.Add(readout.Docked(Dock.Right));
-        header.Children.Add(new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center });
+        header.Children.Add(Ui.ParameterLabel(label));
 
         return new StackPanel
         {
@@ -3206,6 +3230,17 @@ public sealed class EditorView : UserControl
 
     private Control BuildSidePanel()
     {
+        static Control TabHeader(string text, string icon) => new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 7,
+            Children =
+            {
+                MapIcons.Stroked(icon, 15),
+                new TextBlock { Text = text, VerticalAlignment = VerticalAlignment.Center },
+            },
+        };
+
         _assetCatalogContent = BuildAssetsTab();
         _versionsContent = BuildCheckpointsTab();
         _canvasWorkflowContent = BuildCanvasWorkflowTab();
@@ -3215,8 +3250,8 @@ public sealed class EditorView : UserControl
             Name = "EditorSideTabs",
             ItemsSource = new[]
             {
-                new TabItem { Header = "Слои", Content = BuildLayersTab() },
-                new TabItem { Header = "Объекты", Content = BuildObjectsTab() },
+                new TabItem { Header = TabHeader("Слои", MapIcons.Layers), Content = BuildLayersTab() },
+                new TabItem { Header = TabHeader("Объекты", MapIcons.Objects), Content = BuildObjectsTab() },
             },
         };
 
@@ -3310,8 +3345,13 @@ public sealed class EditorView : UserControl
     /// </summary>
     private Control BuildLayerProperties()
     {
-        _layerKindIcon = MapIcons.Stroked(
-            MapIcons.Layers, 18, Application.Current?.FindResource("MapAccentBrush") as IBrush);
+        _layerKindIcon = new ContentControl
+        {
+            Content = MapIcons.Stroked(
+                MapIcons.Layers, 16, Application.Current?.FindResource("MapAccentBrush") as IBrush),
+            HorizontalContentAlignment = HorizontalAlignment.Center,
+            VerticalContentAlignment = VerticalAlignment.Center,
+        };
 
         _layerNameHeading.Classes.Add("role-section");
         _layerNameHeading.TextTrimming = TextTrimming.CharacterEllipsis;
@@ -3329,8 +3369,9 @@ public sealed class EditorView : UserControl
                 {
                     new Border
                     {
-                        Width = 24,
+                        Width = 40,
                         VerticalAlignment = VerticalAlignment.Center,
+                        Margin = new Thickness(0, 0, 10, 0),
                         Child = _layerKindIcon,
                     }.Docked(Dock.Left),
                     new StackPanel
@@ -3512,12 +3553,7 @@ public sealed class EditorView : UserControl
             Margin = new Thickness(0, 2),
             Children =
             {
-                new TextBlock
-                {
-                    Text = "Порядок",
-                    Width = 92,
-                    VerticalAlignment = VerticalAlignment.Center,
-                }.Classed("muted").Docked(Dock.Left),
+                Ui.ParameterLabel("Порядок", 92).Docked(Dock.Left),
                 new StackPanel
                 {
                     Orientation = Orientation.Horizontal,
@@ -6472,11 +6508,6 @@ public sealed class EditorView : UserControl
         SyncLayerBlocks();
         SyncHint();
         SyncAppearanceSections();
-        Ui.SetSelected(_addRectangleButton,
-            _editor.PendingPlacement?.Target == PlacementTargetKind.Rectangle);
-        Ui.SetSelected(_addEllipseButton,
-            _editor.PendingPlacement?.Target == PlacementTargetKind.Ellipse);
-
         // A new selection points the panel at the object; a new tool points it at the tool. Both
         // remain reachable afterwards, which is the part the old ActiveTool == Select gate broke.
         var selectionSignature = _editor.SelectionCount == 0
@@ -6882,7 +6913,8 @@ public sealed class EditorView : UserControl
 
         _layerNameHeading.Text = layer.Name;
         ToolTip.SetTip(_layerNameHeading, layer.Name);
-        _layerKindIcon.Data = Geometry.Parse(LayerIcon(layer));
+        _layerKindIcon.Content = MapIcons.Stroked(
+            LayerIcon(layer), 16, Application.Current?.FindResource("MapAccentBrush") as IBrush);
 
         // Say something the heading does not already say. A layer named "Объекты" of kind
         // "Объекты" gains nothing from a second line repeating the word.

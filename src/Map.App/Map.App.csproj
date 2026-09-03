@@ -17,6 +17,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <AvaloniaResource Include="Assets\BlueWatercolorBackdrop.png" />
+    <AvaloniaResource Include="Assets\Approved\*.png" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Map.Core\Map.Core.csproj" />
     <ProjectReference Include="..\Map.Export\Map.Export.csproj" />
     <ProjectReference Include="..\Map.Persistence\Map.Persistence.csproj" />

@@ -6,6 +6,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Map.App.Controls;
 using Map.App.Services;
 using Map.Presentation.ViewModels;
 
@@ -35,13 +36,11 @@ public sealed class ShortcutSettingsWindow : Window
     {
         Name = "ShortcutConflictText",
         TextWrapping = TextWrapping.Wrap,
-        Foreground = Brushes.OrangeRed,
     };
     private readonly TextBlock _warning = new()
     {
         Name = "ShortcutSettingsWarningText",
         TextWrapping = TextWrapping.Wrap,
-        Foreground = Brushes.Orange,
     };
     private readonly Button _save = new() { Name = "SaveShortcutSettingsButton", Content = "Сохранить" };
     private ShortcutCommandDefinition? _selected;
@@ -56,14 +55,17 @@ public sealed class ShortcutSettingsWindow : Window
 
         Title = "Сочетания клавиш";
         Name = "ShortcutSettingsWindow";
-        Width = 900;
-        Height = 720;
-        MinWidth = 720;
+        Width = 1040;
+        Height = 760;
+        MinWidth = 820;
         MinHeight = 520;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
 
         AutomationProperties.SetName(_search, "Поиск команд");
         AutomationProperties.SetName(_capture, "Новое сочетание");
+        _conflict.Classes.Add("danger");
+        _warning.Classes.Add("warn");
+        _save.Classes.Add("primary");
         _warning.Text = loadWarning ?? "";
         _warning.IsVisible = !string.IsNullOrWhiteSpace(loadWarning);
 
@@ -91,33 +93,50 @@ public sealed class ShortcutSettingsWindow : Window
         _capture.KeyDown += CaptureGesture;
         _search.TextChanged += (_, _) => RebuildRows();
 
-        Content = new Grid
+        var shortcutSurface = new Grid
         {
             RowDefinitions = new RowDefinitions("Auto,*,Auto"),
             ColumnDefinitions = new ColumnDefinitions("3*,2*"),
             Children =
             {
-                new StackPanel
+                new Border
                 {
-                    Margin = new Thickness(18, 16, 18, 10),
-                    Spacing = 8,
-                    Children =
+                    Padding = new Thickness(22, 14),
+                    Child = new StackPanel
                     {
-                        new TextBlock { Text = "Сочетания клавиш", FontSize = 22, FontWeight = FontWeight.SemiBold },
-                        new TextBlock
+                        Spacing = 6,
+                        Children =
                         {
-                            Text = "Выберите команду, затем нажмите новое сочетание. Изменения вступят в силу только после сохранения.",
-                            TextWrapping = TextWrapping.Wrap,
+                            new StackPanel
+                            {
+                                Orientation = Orientation.Horizontal,
+                                Spacing = 10,
+                                Children =
+                                {
+                                    MapIcons.Stroked(
+                                        MapIcons.Select, 21,
+                                        Application.Current?.FindResource("MapAccentBrush") as Avalonia.Media.IBrush),
+                                    new TextBlock
+                                    {
+                                        Text = "Сочетания клавиш",
+                                        FontFamily = "Georgia",
+                                        FontSize = 27,
+                                    },
+                                },
+                            },
+                            new TextBlock
+                            {
+                                Text = "Выберите команду, затем нажмите новое сочетание. Изменения вступят в силу только после сохранения.",
+                                TextWrapping = TextWrapping.Wrap,
+                            }.Classed("muted"),
+                            _warning,
                         },
-                        _warning,
                     },
-                }.GridColumnSpan(2),
+                }.Classed("app-bar").GridColumnSpan(2),
                 new Border
                 {
                     Margin = new Thickness(18, 0, 8, 12),
                     Padding = new Thickness(12),
-                    BorderBrush = Brushes.Gray,
-                    BorderThickness = new Thickness(1),
                     Child = new DockPanel
                     {
                         Children =
@@ -126,13 +145,11 @@ public sealed class ShortcutSettingsWindow : Window
                             new ScrollViewer { Margin = new Thickness(0, 10, 0, 0), Content = _rows },
                         },
                     },
-                }.GridRow(1),
+                }.Classed("elevated").GridRow(1),
                 new Border
                 {
                     Margin = new Thickness(8, 0, 18, 12),
                     Padding = new Thickness(16),
-                    BorderBrush = Brushes.Gray,
-                    BorderThickness = new Thickness(1),
                     Child = new StackPanel
                     {
                         Spacing = 10,
@@ -151,24 +168,36 @@ public sealed class ShortcutSettingsWindow : Window
                             },
                         },
                     },
-                }.GridRow(1).GridColumn(1),
-                new DockPanel
+                }.Classed("elevated").GridRow(1).GridColumn(1),
+                new Border
                 {
-                    Margin = new Thickness(18, 0, 18, 16),
-                    Children =
+                    Padding = new Thickness(18, 10),
+                    Child = new DockPanel
                     {
-                        resetAll.Docked(Dock.Left),
-                        new StackPanel
+                        Children =
                         {
-                            Orientation = Orientation.Horizontal,
-                            Spacing = 8,
-                            HorizontalAlignment = HorizontalAlignment.Right,
-                            Children = { cancel, _save },
-                        }.Docked(Dock.Right),
+                            resetAll.Docked(Dock.Left),
+                            new StackPanel
+                            {
+                                Orientation = Orientation.Horizontal,
+                                Spacing = 8,
+                                HorizontalAlignment = HorizontalAlignment.Right,
+                                Children = { cancel, _save },
+                            }.Docked(Dock.Right),
+                        },
                     },
-                }.GridRow(2).GridColumnSpan(2),
+                }.Classed("app-bar").GridRow(2).GridColumnSpan(2),
             },
         };
+
+        Content = Ui.WatercolorBackdrop(new DockPanel
+        {
+            Children =
+            {
+                DecorativeRail().Docked(Dock.Left),
+                shortcutSurface,
+            },
+        });
 
         _selected = EditorShortcutSettings.Definitions.First(definition => definition.IsEditable);
         RefreshAll();
@@ -238,6 +267,33 @@ public sealed class ShortcutSettingsWindow : Window
         || definition.Id.Contains(query, StringComparison.OrdinalIgnoreCase)
         || EditorShortcutSettings.ContextName(definition.Context)
             .Contains(query, StringComparison.OrdinalIgnoreCase);
+
+    private static Control DecorativeRail()
+    {
+        var icons = new[]
+        {
+            MapIcons.Select, MapIcons.Line, MapIcons.Assets, MapIcons.Shape,
+            MapIcons.Text, MapIcons.Layers, MapIcons.Notes, MapIcons.Undo,
+            MapIcons.Redo, MapIcons.Duplicate, MapIcons.Import, MapIcons.Objects,
+            MapIcons.FitCanvas, MapIcons.Rotate,
+        };
+        var panel = new StackPanel
+        {
+            Margin = new Thickness(9, 16),
+            Spacing = 9,
+            HorizontalAlignment = HorizontalAlignment.Center,
+        };
+        foreach (var icon in icons)
+        {
+            panel.Children.Add(MapIcons.Stroked(icon, 19));
+        }
+
+        return new Border
+        {
+            Width = 76,
+            Child = panel,
+        }.Classed("rail");
+    }
 
     private void RefreshAll()
     {

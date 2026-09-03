@@ -6,6 +6,8 @@ using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
+using Avalonia.Platform;
 using Map.App.Controls;
 
 namespace Map.App.Views;
@@ -20,8 +22,27 @@ public static class Ui
     public const double RailWidth = 56;
     public const double ContextPanelWidth = 264;
     public const double SidePanelWidth = 300;
+    private static readonly Lazy<Bitmap> WatercolorBitmap = new(() =>
+    {
+        using var stream = AssetLoader.Open(
+            new Uri("avares://Map.App/Assets/BlueWatercolorBackdrop.png"));
+        return new Bitmap(stream);
+    });
 
     // ------------------------------------------------------------------ basics
+
+    /// <summary>
+    /// Real approved watercolor bitmap beneath an arbitrary surface. Loading the embedded asset
+    /// synchronously avoids a first-frame flash in the native off-screen and desktop windows.
+    /// </summary>
+    public static Grid WatercolorBackdrop(Control content) => new()
+    {
+        Background = new ImageBrush(WatercolorBitmap.Value)
+        {
+            Stretch = Stretch.UniformToFill,
+        },
+        Children = { content },
+    };
 
     public static T Named<T>(this T control, string name) where T : Control
     {
@@ -90,6 +111,30 @@ public static class Ui
         string name, string text, Func<System.Threading.Tasks.Task> action, params string[] classes)
     {
         var button = new Button { Content = text }.Named(name).Classed(classes);
+        AutomationProperties.SetName(button, text);
+        button.Click += async (_, _) => await action();
+        return button;
+    }
+
+    /// <summary>Asynchronous label-and-icon command with the same semantics as CommandButton.</summary>
+    public static Button AsyncCommandButton(
+        string name, string text, string icon, Func<System.Threading.Tasks.Task> action, params string[] classes)
+    {
+        var button = new Button
+        {
+            Content = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 8,
+                Children =
+                {
+                    MapIcons.Stroked(icon, 16),
+                    new TextBlock { Text = text, VerticalAlignment = VerticalAlignment.Center },
+                },
+            },
+            HorizontalContentAlignment = HorizontalAlignment.Left,
+        }.Named(name).Classed(classes);
+
         AutomationProperties.SetName(button, text);
         button.Click += async (_, _) => await action();
         return button;
@@ -235,13 +280,7 @@ public static class Ui
     /// <summary>Label on the left, editor on the right - the single inspector row shape.</summary>
     public static Control PropertyRow(string label, Control editor, string? unit = null, double captionWidth = 92)
     {
-        var caption = new TextBlock
-        {
-            Text = label,
-            Width = captionWidth,
-            VerticalAlignment = VerticalAlignment.Center,
-            TextTrimming = TextTrimming.CharacterEllipsis,
-        }.Classed("muted");
+        var caption = ParameterLabel(label, captionWidth);
         ToolTip.SetTip(caption, label);
         AutomationProperties.SetName(editor, unit is null ? label : $"{label}, {unit}");
 
@@ -305,7 +344,7 @@ public static class Ui
                     Children =
                     {
                         readout.Docked(Dock.Right),
-                        new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center },
+                        ParameterLabel(label),
                     },
                 },
                 slider,
@@ -510,13 +549,7 @@ public static class Ui
         ToolTip.SetTip(button, $"{label}: {value}. Нажмите, чтобы сменить.");
         button.Click += (_, _) => action();
 
-        var caption = new TextBlock
-        {
-            Text = label,
-            Width = 92,
-            VerticalAlignment = VerticalAlignment.Center,
-            TextTrimming = TextTrimming.CharacterEllipsis,
-        }.Classed("muted");
+        var caption = ParameterLabel(label, 92);
         ToolTip.SetTip(caption, label);
 
         var row = new DockPanel
@@ -526,6 +559,46 @@ public static class Ui
         };
 
         return (row, button);
+    }
+
+    /// <summary>
+    /// Inspector caption with the approved semantic glyph when the label describes a known
+    /// parameter. The text remains present: icons aid scanning but never replace meaning.
+    /// </summary>
+    public static Control ParameterLabel(string label, double? width = null)
+    {
+        var text = new TextBlock
+        {
+            Text = label,
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        }.Classed("muted");
+
+        var icon = MapIcons.ForProperty(label);
+        if (icon is null)
+        {
+            if (width is { } plainWidth) text.Width = plainWidth;
+            return text;
+        }
+
+        var caption = new DockPanel
+        {
+            VerticalAlignment = VerticalAlignment.Center,
+            Children =
+            {
+                new Border
+                {
+                    Width = 20,
+                    Margin = new Thickness(0, 0, 5, 0),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Child = MapIcons.Stroked(
+                        icon, 14, Application.Current?.FindResource("MapMutedBrush") as IBrush),
+                }.Docked(Dock.Left),
+                text,
+            },
+        };
+        if (width is { } captionWidth) caption.Width = captionWidth;
+        return caption;
     }
 
     /// <summary>Updates a value button in place, keeping its accessible name truthful.</summary>

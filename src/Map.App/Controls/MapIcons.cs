@@ -8,38 +8,48 @@ using Avalonia.Media;
 namespace Map.App.Controls;
 
 /// <summary>
-/// Map's own icon set. Every glyph is a hand-authored path on a 24x24 grid; nothing is imported
-/// from a third-party library and no emoji is ever used as a working control. Icons inherit the
-/// foreground of the button that hosts them, so active/disabled states need no second definition.
+/// Semantic icon tokens for Map. Approved primary commands resolve to the owner's supplied
+/// blue-watercolour PNG illustrations; compact secondary actions fall back to the existing native
+/// path glyphs. No emoji or font symbols are used as working controls.
 /// </summary>
 public static class MapIcons
 {
     // ------------------------------------------------------------------ tools
     public const string Select = "M6 3 L6 19.5 L10.4 15.4 L13 20.8 L15.6 19.5 L13 14.3 L18.6 14 Z";
     public const string Line = "M4 17.5 C 8 17.5, 8 8, 12 8 S 16 15, 20 15";
-    public const string Shape = "M4.5 4.5 H14 V14 H4.5 Z M14 19.5 A5.5 5.5 0 1 0 14 8.5 A5.5 5.5 0 1 0 14 19.5";
+    public const string Shape = "M7 3.5 L11 10 H3 Z M4 13 H10 V19 H4 Z M16.5 13 A3.5 3.5 0 1 0 16.5 20 A3.5 3.5 0 1 0 16.5 13";
     public const string Text = "M5 6 H19 M12 6 V19";
     public const string Brush = "M17 3.5 L20.5 7 L12 15.5 L7.5 17 L9 12.5 Z M4 20.5 C 6.5 20.5, 7.5 19, 7.5 16.5";
-    public const string Mask = "M4 4 H20 V20 H4 Z M12 8.2 A3.8 3.8 0 1 0 12 15.8 A3.8 3.8 0 1 0 12 8.2";
-    public const string Land = "M3 14.5 C 6 11.5, 8.5 16, 11.5 13 S 17.5 9.5, 21 13 L21 20.5 L3 20.5 Z";
+    // A trailing no-op space keeps the tool token distinct from the layer-visibility token. The
+    // approved boards intentionally use different eye illustrations for those two meanings.
+    public const string Mask = Eye + " ";
+    public const string Land = "M16.5 3.5 L20.5 7.5 L13 15 L8.5 16.5 L10 12 Z " +
+                               "M2.5 18 C5.5 16.2 8.5 16.8 11.5 18.2 C14.5 19.6 17.5 19.6 21.5 17.5 " +
+                               "M2.5 21 C6 19.5 9 20.2 12 21";
 
     // ----------------------------------------------------------------- panels
     public const string Layers = "M12 3.5 L21 8.5 L12 13.5 L3 8.5 Z M3.5 13 L12 17.8 L20.5 13";
-    public const string Objects = "M5 4.5 H10.5 V10 H5 Z M13.5 4.5 H19 V10 H13.5 Z " +
-                                  "M5 14 H10.5 V19.5 H5 Z M13.5 14 H19 V19.5 H13.5 Z";
-    public const string Assets = "M3.5 5 H20.5 V19 H3.5 Z M3.5 15.5 L8.5 10.5 L12.5 14.5 L15.5 11.5 L20.5 16.5";
-    public const string Notes = "M6 3.5 H14.5 L18.5 7.5 V20.5 H6 Z M14.5 3.5 V7.5 H18.5 M9 12 H15.5 M9 16 H15.5";
+    public const string Objects = "M9.5 4 A5.5 5.5 0 1 0 9.5 15 A5.5 5.5 0 1 0 9.5 4 " +
+                                  "M13.5 13.5 L20 20 M5.8 9.5 C7.7 7.2 11.3 7.2 13.2 9.5 C11.3 11.8 7.7 11.8 5.8 9.5 Z " +
+                                  "M9.5 8.2 A1.3 1.3 0 1 0 9.5 10.8 A1.3 1.3 0 1 0 9.5 8.2";
+    public const string Assets = "M3 5.5 C6.2 4.3 9.2 4.8 12 6.7 C14.8 4.8 17.8 4.3 21 5.5 V19 " +
+                                 "C17.8 17.8 14.8 18.2 12 20 C9.2 18.2 6.2 17.8 3 19 Z M12 6.7 V20 " +
+                                 "M5.2 8.2 C7.3 7.6 9 7.9 10.5 8.8 M5.2 11.5 C7.2 10.8 8.9 11.1 10.5 12 " +
+                                 "M13.5 8.8 L15.2 7.4 L16.4 9.2 L18.8 7.8 M13.5 12.2 L15.5 10.5 L17.4 12.5 L19.1 11.2";
+    public const string LibraryMaps = "M5 5 H19 V17 H5 Z M3 8 H5 V20 H17 V17 M8 8 C10.5 6.7 13.5 9.3 16 8 M8 12 C10.5 10.7 13.5 13.3 16 12";
+    public const string Notes = "M6 3.5 H18 V20.5 H6 Z M9 9 H15 M9 13 H15 M9 17 H13";
 
     // ------------------------------------------------------------ layer kinds
     public const string LayerObjects = Objects;
     public const string LayerBrush = Brush;
     public const string LayerLand = Land;
     public const string LayerGrid = "M4 4 H20 V20 H4 Z M4 9.33 H20 M4 14.67 H20 M9.33 4 V20 M14.67 4 V20";
-    public const string LayerFilter = "M4 4.5 H20 L14 11.5 V19.5 L10 17.5 V11.5 Z";
+    public const string LayerFilter = "M4 6 H20 M4 12 H20 M4 18 H20 M8 4 V8 M16 10 V14 M10 16 V20";
     public const string LayerBase = "M12 3.5 A8.5 8.5 0 1 0 12 20.5 C 13.6 20.5 14 19.4 14 18.6 " +
                                     "C 14 17.2 13 16.8 14 15.8 C 15 14.8 18.5 15.8 19.6 13.2 " +
                                     "A8.5 8.5 0 0 0 12 3.5 Z";
-    public const string LayerMask = Mask;
+    public const string LayerMask = "M3.5 5 H14.5 V19 H3.5 Z M9.5 8.5 H20.5 V20.5 H9.5 Z " +
+                                    "M15 11.5 A3 3 0 1 0 15 17.5 A3 3 0 1 0 15 11.5";
 
     // ------------------------------------------------------------ object kinds
     public const string ObjectStamp = "M7 20.5 V9 H9 V6 H11 V9 H13 V6 H15 V9 H17 V20.5 Z";
@@ -56,7 +66,17 @@ public static class MapIcons
     public const string Back = "M14.5 4.5 L7 12 L14.5 19.5";
     public const string Window = "M3.5 5 H20.5 V19 H3.5 Z M3.5 8.5 H20.5";
     public const string Plus = "M12 5 V19 M5 12 H19";
-    public const string Open = "M3.5 18.5 V6 H9.5 L11.5 8.5 H20.5 V18.5 Z";
+    public const string Open = "M3.5 18.5 V7 H9 L11 9 H20.5 L18 18.5 Z M8 6 H17.5 V9";
+    public const string File = "M5 3.5 H15 L19 7.5 V20.5 H5 Z M15 3.5 V7.5 H19 M8 11 H16 M8 15 H16";
+    public const string Export = "M5 11 V20 H19 V11 M12 16 V3.5 M7.5 8 L12 3.5 L16.5 8";
+    public const string Import = "M5 13 V20 H19 V13 M12 3.5 V16 M7.5 11.5 L12 16 L16.5 11.5";
+    public const string NewMap = "M3.5 6 H15.5 V20 H3.5 Z M6 8.5 C8.5 7 10.5 10 13 8.5 " +
+                                 "M18.5 3.5 V11.5 M14.5 7.5 H22.5";
+    public const string Sort = "M4 6 H14 M4 11 H14 M4 16 H14 M19 5 V19 M16 16 L19 19 L22 16";
+    public const string Versions = "M12 6 A7 7 0 1 1 5 13 M5 13 H2.5 M5 13 V10.5 M12 9 V13 L15 15";
+    public const string ResizeRegion = "M5 7 H16 V17 H5 Z M3 4.5 H18 M3 4.5 L5 3 M3 4.5 L5 6 " +
+                                       "M19 5 V19 M19 5 L17.5 7 M19 5 L20.5 7";
+    public const string Help = "M3.5 5.5 C6.5 4.5 9.5 5 12 7 C14.5 5 17.5 4.5 20.5 5.5 V19 C17.5 18 14.5 18.5 12 20 C9.5 18.5 6.5 18 3.5 19 Z M12 7 V20";
 
     // ------------------------------------------------------------------ states
     public const string Eye = "M2.5 12 C 5.5 7.5, 9 5.5, 12 5.5 S 18.5 7.5, 21.5 12 " +
@@ -84,6 +104,45 @@ public static class MapIcons
     public const string ChevronDown = "M6 9 L12 15 L18 9";
     public const string ChevronRight = "M9 5.5 L15.5 12 L9 18.5";
 
+    // -------------------------------------------------- approved parameter glyphs
+    public const string BrushSize = "M15.5 3.5 L20.5 8.5 L13 16 L8.5 17.5 L10 13 Z M3 8 H8 M5.5 5.5 V10.5 M16.5 19 H21.5";
+    public const string Opacity = "M12 3 C9 7.2 6.5 10.3 6.5 14 A5.5 5.5 0 0 0 17.5 14 C17.5 10.3 15 7.2 12 3 Z M12 3 V19.5";
+    public const string SoftEdge = "M12 4 A8 8 0 1 0 12 20 A8 8 0 1 0 12 4 M12 7 A5 5 0 1 0 12 17 A5 5 0 1 0 12 7";
+    public const string RoughEdge = "M12 3.5 L14 5 L16.5 4.5 L17.5 7 L20 8 L19 10.5 L20.5 12.5 L18.8 14.5 " +
+                                    "L19 17 L16.5 17.5 L15 20 L12.5 18.7 L10 20 L8.5 17.8 L6 17.5 L6.2 15 L3.5 13.5 L5 11.2 L4 8.8 L6.5 7.5 L7.5 5 L10 5.5 Z";
+    public const string Smoothing = "M3 16 C6 9 9 20 13 12 C15 8 17 7 21 7 M15.5 5.5 L21 7 L17.5 11.5";
+    public const string ScaleObject = "M5 9 V5 H9 M15 5 H19 V9 M19 15 V19 H15 M9 19 H5 V15 M4 4 L8 8 M20 4 L16 8 M20 20 L16 16 M4 20 L8 16";
+    public const string Rotate = "M19.5 8.5 V3.5 M19.5 3.5 H14.5 M19 4 A8 8 0 1 1 7 4.5";
+    public const string StampSpacing = "M4 9 H8 V15 H4 Z M10 9 H14 V15 H10 Z M16 9 H20 V15 H16 Z M6 18 H18 M6 18 L8 16.5 M6 18 L8 19.5 M18 18 L16 16.5 M18 18 L16 19.5";
+    public const string Color = "M8.5 6 A5 5 0 1 0 8.5 16 A5 5 0 1 0 8.5 6 M15.5 6 A5 5 0 1 0 15.5 16 A5 5 0 1 0 15.5 6 M12 11 A5 5 0 1 0 12 21 A5 5 0 1 0 12 11";
+    public const string Texture = "M4 4 H20 V20 H4 Z M12 4 V20 M4 12 H20 M5.5 10 L10.5 5 M13.5 5 C15.5 7 17.5 7 19 5.5 M5.5 18.5 L10.5 13.5 M14 14 L18.5 18.5 M14 18.5 L18.5 14";
+    public const string LayerOpacity = "M3.5 6 H20.5 V18 H3.5 Z M12 6 V18 M14 8 H16 M18 8 H20 M14 12 H16 M18 12 H20 M14 16 H16 M18 16 H20";
+    public const string Blend = "M9.5 5 A6 6 0 1 0 9.5 17 A6 6 0 1 0 9.5 5 M14.5 7 A6 6 0 1 0 14.5 19 A6 6 0 1 0 14.5 7";
+    public const string LayerOrder = "M4 5.5 L12 2.5 L20 5.5 L12 8.5 Z M4 11 L12 8 L20 11 L12 14 Z M4 16.5 L12 13.5 L20 16.5 L12 19.5 Z";
+
+    /// <summary>Returns the approved compact glyph for a known inspector parameter.</summary>
+    public static string? ForProperty(string label)
+    {
+        var normalized = label.Trim().ToLowerInvariant();
+        if (normalized.Contains("размер кисти")) return BrushSize;
+        if (normalized.Contains("мягк")) return SoftEdge;
+        if (normalized.Contains("неровн")) return RoughEdge;
+        if (normalized.Contains("сглаж")) return Smoothing;
+        if (normalized.Contains("интервал штампа") || normalized.Contains("шаг отпечат")) return StampSpacing;
+        if (normalized.Contains("непрозрачность слоя")) return LayerOpacity;
+        if (normalized.Contains("непрозрач") || normalized.Contains("плотност")) return Opacity;
+        if (normalized.Contains("масштаб")) return ScaleObject;
+        if (normalized.Contains("поворот") || normalized == "угол") return Rotate;
+        if (normalized.Contains("текстур")) return Texture;
+        if (normalized.Contains("цвет") || normalized.Contains("оттенок") || normalized.Contains("насыщен")) return Color;
+        if (normalized.Contains("видим")) return Eye;
+        if (normalized.Contains("блокиров")) return Lock;
+        if (normalized.Contains("смешив") || normalized.Contains("наложен")) return Blend;
+        if (normalized.Contains("маск")) return LayerMask;
+        if (normalized.Contains("порядок")) return LayerOrder;
+        return null;
+    }
+
     // ------------------------------------------------------------- land shapes
     public const string ShapeCircle = "M12 4.5 A7.5 7.5 0 1 0 12 19.5 A7.5 7.5 0 1 0 12 4.5";
     public const string ShapeRectangle = "M4.5 6 H19.5 V18 H4.5 Z";
@@ -96,9 +155,17 @@ public static class MapIcons
     public const string Move = "M12 3.5 V20.5 M3.5 12 H20.5 M9 6.5 L12 3.5 L15 6.5 " +
                                "M9 17.5 L12 20.5 L15 17.5 M6.5 9 L3.5 12 L6.5 15 M17.5 9 L20.5 12 L17.5 15";
 
-    /// <summary>An outlined glyph that follows the foreground of the button hosting it.</summary>
-    public static Path Stroked(string data, double size = 18, IBrush? brush = null)
+    /// <summary>
+    /// Uses the owner's approved blue-theme illustration when one exists; otherwise falls back to
+    /// the compact path glyph for secondary controls which were not part of the approved boards.
+    /// </summary>
+    public static Control Stroked(string data, double size = 18, IBrush? brush = null)
     {
+        if (ApprovedArtwork.TryCreateIcon(data, size, out var approved))
+        {
+            return approved;
+        }
+
         var path = new Path
         {
             Data = Geometry.Parse(data),

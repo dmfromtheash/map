@@ -5,7 +5,9 @@ using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Layout;
+using Avalonia.Media;
 using Avalonia.Platform.Storage;
+using Map.App.Controls;
 using Map.Platform.Windows;
 
 namespace Map.App.Views;
@@ -39,14 +41,14 @@ public sealed class AppSettingsWindow : Window
         _diagnostics = diagnostics;
         Title = "Настройки Map";
         Name = "AppSettingsWindow";
-        Width = 720;
-        Height = 760;
-        MinWidth = 560;
-        MinHeight = 480;
+        Width = 960;
+        Height = 820;
+        MinWidth = 760;
+        MinHeight = 560;
 
-        var save = Ui.TextButton("SaveAppSettingsButton", "Сохранить", Save, "primary");
-        var reset = Ui.TextButton("ResetAppSettingsButton", "Сбросить", Reset);
-        var close = Ui.TextButton("CloseAppSettingsButton", "Закрыть", Close);
+        var save = Ui.CommandButton("SaveAppSettingsButton", "Сохранить", MapIcons.Save, Save, "primary");
+        var reset = Ui.CommandButton("ResetAppSettingsButton", "Сбросить", MapIcons.Undo, Reset);
+        var close = Ui.CommandButton("CloseAppSettingsButton", "Закрыть", MapIcons.Close, Close);
         var libraryPick = Ui.AsyncButton("PickLibraryRootButton", "Выбрать…", () => PickRootAsync(_libraryRoot));
         var cachePick = Ui.AsyncButton("PickCacheRootButton", "Выбрать…", () => PickRootAsync(_cacheRoot));
         var shortcuts = new TextBlock
@@ -55,10 +57,32 @@ public sealed class AppSettingsWindow : Window
             TextWrapping = Avalonia.Media.TextWrapping.Wrap,
         }.Classed("muted", "role-caption");
 
-        Content = new DockPanel
+        var settingsSurface = new DockPanel
         {
             Children =
             {
+                new Border
+                {
+                    Padding = new Thickness(22, 14),
+                    Child = new StackPanel
+                    {
+                        Orientation = Orientation.Horizontal,
+                        Spacing = 10,
+                        Children =
+                        {
+                            MapIcons.Stroked(
+                                MapIcons.Gear, 22,
+                                Application.Current?.FindResource("MapAccentBrush") as IBrush),
+                            new TextBlock
+                            {
+                                Text = "Настройки Map",
+                                FontFamily = "Georgia",
+                                FontSize = 27,
+                                VerticalAlignment = VerticalAlignment.Center,
+                            },
+                        },
+                    },
+                }.Classed("app-bar").Docked(Dock.Top),
                 new Border
                 {
                     Padding = new Thickness(18, 12),
@@ -70,48 +94,62 @@ public sealed class AppSettingsWindow : Window
                         Children = { reset, close, save },
                     },
                 }.Classed("app-bar").Docked(Dock.Bottom),
-                new ScrollViewer
+                new Border
                 {
-                    Content = new StackPanel
+                    Margin = new Thickness(20),
+                    Padding = new Thickness(4),
+                    Child = new ScrollViewer
                     {
-                        Margin = new Thickness(24),
-                        Spacing = 16,
-                        Children =
+                        Content = new StackPanel
                         {
-                            Heading("Интерфейс"),
-                            Ui.PropertyRow("Тема", _theme),
-                            Ui.PropertyRow("Масштаб интерфейса", PercentRow(_scale)),
-                            new TextBlock { Text = "Язык интерфейса: русский", TextWrapping = Avalonia.Media.TextWrapping.Wrap },
-                            Heading("Сохранение и recovery"),
-                            Ui.PropertyRow("Автосохранение, секунд", _autosave),
-                            Ui.PropertyRow("Кандидатов recovery", _recovery),
-                            Heading("Холст"),
-                            Ui.PropertyRow("Режим производительности", _performance),
-                            shortcuts,
-                            Heading("Локальные папки"),
-                            RootRow(_libraryRoot, libraryPick),
-                            RootRow(_cacheRoot, cachePick),
-                            new TextBlock
+                            Margin = new Thickness(20),
+                            Spacing = 16,
+                            Children =
                             {
-                                Text = "Новые папки применяются после перезапуска. Старые данные не удаляются.",
-                                TextWrapping = Avalonia.Media.TextWrapping.Wrap,
-                            }.Classed("muted", "role-caption"),
-                            Heading("Экспорт по умолчанию"),
-                            Ui.PropertyRow("Формат", _exportFormat),
-                            Ui.PropertyRow("Масштаб", PercentRow(_exportScale)),
-                            _exportGrid,
-                            Heading("Локальная диагностика"),
-                            _diagnosticsText.Classed("muted", "role-caption"),
-                            new TextBlock
-                            {
-                                Text = "Диагностика не отправляется наружу и не показывает содержимое карты или полные пути.",
-                                TextWrapping = Avalonia.Media.TextWrapping.Wrap,
-                            }.Classed("muted", "role-caption"),
+                                Heading("Интерфейс"),
+                                Ui.PropertyRow("Тема", _theme),
+                                Ui.PropertyRow("Масштаб интерфейса", PercentRow(_scale)),
+                                new TextBlock { Text = "Язык интерфейса: русский", TextWrapping = Avalonia.Media.TextWrapping.Wrap },
+                                Heading("Сохранение и recovery"),
+                                Ui.PropertyRow("Автосохранение, секунд", _autosave),
+                                Ui.PropertyRow("Кандидатов recovery", _recovery),
+                                Heading("Холст"),
+                                Ui.PropertyRow("Режим производительности", _performance),
+                                shortcuts,
+                                Heading("Локальные папки"),
+                                RootRow(_libraryRoot, libraryPick),
+                                RootRow(_cacheRoot, cachePick),
+                                new TextBlock
+                                {
+                                    Text = "Новые папки применяются после перезапуска. Старые данные не удаляются.",
+                                    TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+                                }.Classed("muted", "role-caption"),
+                                Heading("Экспорт по умолчанию"),
+                                Ui.PropertyRow("Формат", _exportFormat),
+                                Ui.PropertyRow("Масштаб", PercentRow(_exportScale)),
+                                _exportGrid,
+                                Heading("Локальная диагностика"),
+                                _diagnosticsText.Classed("muted", "role-caption"),
+                                new TextBlock
+                                {
+                                    Text = "Диагностика не отправляется наружу и не показывает содержимое карты или полные пути.",
+                                    TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+                                }.Classed("muted", "role-caption"),
+                            },
                         },
                     },
-                },
+                }.Classed("elevated"),
             },
         };
+
+        Content = Ui.WatercolorBackdrop(new DockPanel
+        {
+            Children =
+            {
+                DecorativeRail().Docked(Dock.Left),
+                settingsSurface,
+            },
+        });
 
         Load(current);
         RefreshDiagnostics();
@@ -200,4 +238,30 @@ public sealed class AppSettingsWindow : Window
         Increment = increment,
         MinWidth = 120,
     };
+
+    private static Control DecorativeRail()
+    {
+        var icons = new[]
+        {
+            MapIcons.Gear, MapIcons.Color, MapIcons.ScaleObject, MapIcons.Text,
+            MapIcons.Versions, MapIcons.Rotate, MapIcons.LayerOrder, MapIcons.Search,
+            MapIcons.Blend, MapIcons.Open, MapIcons.Land,
+        };
+        var panel = new StackPanel
+        {
+            Margin = new Thickness(10, 18),
+            Spacing = 13,
+            HorizontalAlignment = HorizontalAlignment.Center,
+        };
+        foreach (var icon in icons)
+        {
+            panel.Children.Add(MapIcons.Stroked(icon, 22));
+        }
+
+        return new Border
+        {
+            Width = 76,
+            Child = panel,
+        }.Classed("rail");
+    }
 }

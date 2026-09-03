@@ -1,59 +1,107 @@
 <Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="Map.App.App"
-             RequestedThemeVariant="Dark">
+             RequestedThemeVariant="Light">
     <!--
         Map's own semantic design system. Nothing here is copied from another product: the roles,
         the scale and the calm verdigris cartography accent are chosen for this editor. Views must
         reference the semantic keys below, never a literal colour.
     -->
     <Application.Resources>
-        <!-- surfaces -->
-        <SolidColorBrush x:Key="MapCanvasSurroundBrush" Color="#0A0C0F" />
-        <SolidColorBrush x:Key="MapSurfaceBrush" Color="#101317" />
-        <SolidColorBrush x:Key="MapPanelBrush" Color="#161A20" />
-        <SolidColorBrush x:Key="MapElevatedBrush" Color="#1D222A" />
-        <SolidColorBrush x:Key="MapControlBrush" Color="#262D37" />
-        <SolidColorBrush x:Key="MapControlHoverBrush" Color="#2F3742" />
-        <SolidColorBrush x:Key="MapControlPressedBrush" Color="#20262F" />
-        <SolidColorBrush x:Key="MapBorderBrush" Color="#333B47" />
-        <SolidColorBrush x:Key="MapBorderStrongBrush" Color="#46505E" />
-        <SolidColorBrush x:Key="MapFieldBrush" Color="#0D1014" />
+        <!-- warm working surfaces + the approved restrained watercolor edge wash -->
+        <ImageBrush x:Key="MapWatercolorBrush"
+                    Source="/Assets/BlueWatercolorBackdrop.png"
+                    Stretch="UniformToFill" />
+        <ImageBrush x:Key="MapCanvasSurroundBrush"
+                    Source="/Assets/BlueWatercolorBackdrop.png"
+                    Stretch="UniformToFill" />
+        <SolidColorBrush x:Key="MapSurfaceBrush" Color="#F6F1EA" />
+        <SolidColorBrush x:Key="MapPanelBrush" Color="#FBF8F3" />
+        <SolidColorBrush x:Key="MapElevatedBrush" Color="#FFFCF8" />
+        <SolidColorBrush x:Key="MapControlBrush" Color="#F1EDE7" />
+        <SolidColorBrush x:Key="MapControlHoverBrush" Color="#E3EEF1" />
+        <SolidColorBrush x:Key="MapControlPressedBrush" Color="#D2E5E8" />
+        <SolidColorBrush x:Key="MapBorderBrush" Color="#D7D1CA" />
+        <SolidColorBrush x:Key="MapBorderStrongBrush" Color="#9FB4C0" />
+        <SolidColorBrush x:Key="MapFieldBrush" Color="#FFFCF8" />
+
+        <!-- dark cyber-fantasy shell kept separate from the light work area -->
+        <SolidColorBrush x:Key="MapChromeBrush" Color="#0D1B34" />
+        <SolidColorBrush x:Key="MapChromeElevatedBrush" Color="#152845" />
+        <SolidColorBrush x:Key="MapChromeHoverBrush" Color="#1C3659" />
+        <SolidColorBrush x:Key="MapChromePressedBrush" Color="#122844" />
+        <SolidColorBrush x:Key="MapChromeBorderBrush" Color="#2C4C6C" />
+        <SolidColorBrush x:Key="MapChromeTextBrush" Color="#F8F3EB" />
+        <SolidColorBrush x:Key="MapChromeMutedBrush" Color="#B9C7D8" />
+        <SolidColorBrush x:Key="MapRailTileBrush" Color="#E7DFD4" />
+        <SolidColorBrush x:Key="MapRailTileHoverBrush" Color="#FFF8ED" />
+        <SolidColorBrush x:Key="MapRailTileSelectedBrush" Color="#D5EEF0" />
+        <SolidColorBrush x:Key="MapRailTileBorderBrush" Color="#7892A7" />
 
         <!-- text -->
-        <SolidColorBrush x:Key="MapTextBrush" Color="#EEF1F4" />
-        <SolidColorBrush x:Key="MapMutedBrush" Color="#97A2B0" />
-        <SolidColorBrush x:Key="MapFaintBrush" Color="#7A8695" />
+        <SolidColorBrush x:Key="MapTextBrush" Color="#10264A" />
+        <SolidColorBrush x:Key="MapMutedBrush" Color="#4F617A" />
+        <SolidColorBrush x:Key="MapFaintBrush" Color="#78869B" />
 
         <!-- meaning -->
-        <SolidColorBrush x:Key="MapAccentBrush" Color="#6FB3A8" />
-        <SolidColorBrush x:Key="MapAccentHoverBrush" Color="#86C7BC" />
-        <SolidColorBrush x:Key="MapAccentDimBrush" Color="#1E3B37" />
-        <SolidColorBrush x:Key="MapAccentBorderBrush" Color="#3E7A72" />
-        <SolidColorBrush x:Key="MapOnAccentBrush" Color="#0E1512" />
-        <SolidColorBrush x:Key="MapDangerBrush" Color="#E0757A" />
-        <SolidColorBrush x:Key="MapDangerDimBrush" Color="#3A2326" />
-        <SolidColorBrush x:Key="MapDangerBorderBrush" Color="#7E4045" />
-        <SolidColorBrush x:Key="MapSuccessBrush" Color="#7FBE86" />
-        <SolidColorBrush x:Key="MapWarnBrush" Color="#D9A85C" />
-        <SolidColorBrush x:Key="MapWarnDimBrush" Color="#33291A" />
-        <SolidColorBrush x:Key="MapWarnBorderBrush" Color="#6E5730" />
-        <SolidColorBrush x:Key="MapFocusBrush" Color="#9CC8FF" />
-        <SolidColorBrush x:Key="MapSelectionBrush" Color="#22333F" />
-        <SolidColorBrush x:Key="MapSelectionBorderBrush" Color="#40616F" />
+        <SolidColorBrush x:Key="MapAccentBrush" Color="#55C8C9" />
+        <SolidColorBrush x:Key="MapAccentHoverBrush" Color="#78DADC" />
+        <SolidColorBrush x:Key="MapAccentDimBrush" Color="#D9F1F1" />
+        <SolidColorBrush x:Key="MapAccentBorderBrush" Color="#55AEB4" />
+        <SolidColorBrush x:Key="MapOnAccentBrush" Color="#0B2A42" />
+        <SolidColorBrush x:Key="MapDangerBrush" Color="#C6515A" />
+        <SolidColorBrush x:Key="MapDangerDimBrush" Color="#F7E5E4" />
+        <SolidColorBrush x:Key="MapDangerBorderBrush" Color="#D08A8F" />
+        <SolidColorBrush x:Key="MapSuccessBrush" Color="#3D8A69" />
+        <SolidColorBrush x:Key="MapWarnBrush" Color="#9B6A24" />
+        <SolidColorBrush x:Key="MapWarnDimBrush" Color="#F6EAD3" />
+        <SolidColorBrush x:Key="MapWarnBorderBrush" Color="#D0AB6D" />
+        <SolidColorBrush x:Key="MapFocusBrush" Color="#1A8DA4" />
+        <SolidColorBrush x:Key="MapSelectionBrush" Color="#DCEFF1" />
+        <SolidColorBrush x:Key="MapSelectionBorderBrush" Color="#79BFC4" />
+        <SolidColorBrush x:Key="MapNewMapActionBrush" Color="#83C9C7" />
+        <SolidColorBrush x:Key="MapNewMapActionHoverBrush" Color="#A9DDDA" />
+        <SolidColorBrush x:Key="MapNewMapActionPressedBrush" Color="#6FB9B8" />
+        <SolidColorBrush x:Key="MapNewMapActionBorderBrush" Color="#4EA6AA" />
+        <SolidColorBrush x:Key="MapNewCardBrush" Color="#CBB99B" />
+        <SolidColorBrush x:Key="MapNewCardHoverBrush" Color="#E2D0B2" />
+        <SolidColorBrush x:Key="MapNewCardPressedBrush" Color="#BDAA89" />
+
+        <!--
+            Avalonia Fluent paints the slider track's pressed state from these theme resources.
+            Keep both halves stable while the thumb is being dragged: cyan before it, navy after it.
+        -->
+        <SolidColorBrush x:Key="SliderTrackFill" Color="#10264A" />
+        <SolidColorBrush x:Key="SliderTrackFillPointerOver" Color="#10264A" />
+        <SolidColorBrush x:Key="SliderTrackFillPressed" Color="#10264A" />
+        <SolidColorBrush x:Key="SliderTrackValueFill" Color="#55C8C9" />
+        <SolidColorBrush x:Key="SliderTrackValueFillPointerOver" Color="#55C8C9" />
+        <SolidColorBrush x:Key="SliderTrackValueFillPressed" Color="#55C8C9" />
+
+        <!--
+            Fluent's Button and ToggleButton themes address their internal ContentPresenter with
+            these resources. Overriding them here keeps every ordinary clickable surface visible
+            even before a more specialised Map class supplies its own colours.
+        -->
+        <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="#E3EEF1" />
+        <SolidColorBrush x:Key="ButtonBorderBrushPointerOver" Color="#9FB4C0" />
+        <SolidColorBrush x:Key="ButtonForegroundPointerOver" Color="#10264A" />
+        <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="#D2E5E8" />
+        <SolidColorBrush x:Key="ButtonBorderBrushPressed" Color="#7892A7" />
+        <SolidColorBrush x:Key="ButtonForegroundPressed" Color="#10264A" />
 
         <!--
             Fluent derives slider tracks, checkboxes and selection highlights from the system
             accent. Redefining it here is what keeps a stock control from painting itself in a
             colour that belongs to no part of Map's palette.
         -->
-        <Color x:Key="SystemAccentColor">#6FB3A8</Color>
-        <Color x:Key="SystemAccentColorLight1">#86C7BC</Color>
-        <Color x:Key="SystemAccentColorLight2">#9BD5CB</Color>
-        <Color x:Key="SystemAccentColorLight3">#B3E0D8</Color>
-        <Color x:Key="SystemAccentColorDark1">#57998F</Color>
-        <Color x:Key="SystemAccentColorDark2">#3E7A72</Color>
-        <Color x:Key="SystemAccentColorDark3">#2A5B55</Color>
+        <Color x:Key="SystemAccentColor">#55C8C9</Color>
+        <Color x:Key="SystemAccentColorLight1">#78DADC</Color>
+        <Color x:Key="SystemAccentColorLight2">#9AE4E5</Color>
+        <Color x:Key="SystemAccentColorLight3">#BDEDEE</Color>
+        <Color x:Key="SystemAccentColorDark1">#3EAFB4</Color>
+        <Color x:Key="SystemAccentColorDark2">#247F8C</Color>
+        <Color x:Key="SystemAccentColorDark3">#14586A</Color>
     </Application.Resources>
 
     <Application.Styles>
@@ -62,13 +110,13 @@
         <!-- ============================================================ shell -->
 
         <Style Selector="Window">
-            <Setter Property="Background" Value="{DynamicResource MapSurfaceBrush}" />
+            <Setter Property="Background" Value="{DynamicResource MapWatercolorBrush}" />
             <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
             <Setter Property="FontFamily" Value="Segoe UI" />
             <Setter Property="FontSize" Value="13" />
         </Style>
         <Style Selector="UserControl">
-            <Setter Property="Background" Value="{DynamicResource MapSurfaceBrush}" />
+            <Setter Property="Background" Value="{DynamicResource MapWatercolorBrush}" />
             <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
         </Style>
 
@@ -132,9 +180,34 @@
         <Style Selector="Button:pointerover">
             <Setter Property="Background" Value="{DynamicResource MapControlHoverBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource MapBorderStrongBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <!--
+            Fluent applies hover/pressed colours to its internal presenter, not to Button itself.
+            Styling only Button therefore made the background and label turn white at runtime.
+        -->
+        <Style Selector="Button:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapControlHoverBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapBorderStrongBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
         </Style>
         <Style Selector="Button:pressed">
             <Setter Property="Background" Value="{DynamicResource MapControlPressedBrush}" />
+        </Style>
+        <Style Selector="Button:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapControlPressedBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapBorderStrongBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="ToggleButton:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapControlHoverBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapBorderStrongBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="ToggleButton:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapControlPressedBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapBorderStrongBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
         </Style>
         <Style Selector="Button:disabled">
             <Setter Property="Opacity" Value="0.45" />
@@ -158,8 +231,54 @@
             <Setter Property="Background" Value="{DynamicResource MapAccentHoverBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource MapAccentHoverBrush}" />
         </Style>
+        <Style Selector="Button.primary:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapAccentHoverBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentHoverBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapOnAccentBrush}" />
+        </Style>
         <Style Selector="Button.primary:pressed">
             <Setter Property="Background" Value="{DynamicResource MapAccentBorderBrush}" />
+        </Style>
+        <Style Selector="Button.primary:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapAccentBorderBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapOnAccentBrush}" />
+        </Style>
+
+        <Style Selector="Button.asset-entry">
+            <Setter Property="MinHeight" Value="58" />
+            <Setter Property="Padding" Value="12,8" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
+            <Setter Property="Background" Value="{DynamicResource MapAccentDimBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="Button.asset-entry:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapSelectionBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="Button.asset-entry:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapControlPressedBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+
+        <!-- The dashboard's main action is deliberately softer than the editor accent. -->
+        <Style Selector="Button.dashboard-new-map">
+            <Setter Property="Background" Value="{DynamicResource MapNewMapActionBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapNewMapActionBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapOnAccentBrush}" />
+        </Style>
+        <Style Selector="Button.dashboard-new-map:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapNewMapActionHoverBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapNewMapActionBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapOnAccentBrush}" />
+        </Style>
+        <Style Selector="Button.dashboard-new-map:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapNewMapActionPressedBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapNewMapActionBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapOnAccentBrush}" />
         </Style>
 
         <Style Selector="Button.ghost">
@@ -195,8 +314,13 @@
             <Setter Property="FontWeight" Value="SemiBold" />
         </Style>
         <Style Selector="Button.destructive:pointerover">
-            <Setter Property="Background" Value="#4A2B2F" />
+            <Setter Property="Background" Value="#F2D5D4" />
             <Setter Property="BorderBrush" Value="{DynamicResource MapDangerBrush}" />
+        </Style>
+        <Style Selector="Button.destructive:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#F2D5D4" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapDangerBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapDangerBrush}" />
         </Style>
 
         <!-- Icon-only square control. Always carries a tooltip and an automation name. -->
@@ -223,25 +347,30 @@
             <Setter Property="MinHeight" Value="44" />
             <Setter Property="Padding" Value="0" />
             <Setter Property="CornerRadius" Value="7" />
-            <Setter Property="Background" Value="Transparent" />
-            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Background" Value="{DynamicResource MapRailTileBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapRailTileBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
         </Style>
         <Style Selector=":is(Button).tool-button:pointerover">
-            <Setter Property="Background" Value="{DynamicResource MapControlHoverBrush}" />
+            <Setter Property="Background" Value="{DynamicResource MapRailTileHoverBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBrush}" />
         </Style>
         <Style Selector=":is(Button).tool-button.active">
-            <Setter Property="Background" Value="{DynamicResource MapAccentDimBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Background" Value="{DynamicResource MapRailTileSelectedBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBrush}" />
+            <Setter Property="BorderThickness" Value="2" />
         </Style>
         <Style Selector="ToggleButton.tool-button:checked /template/ ContentPresenter#PART_ContentPresenter">
-            <Setter Property="Background" Value="{DynamicResource MapAccentDimBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
-            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Background" Value="{DynamicResource MapRailTileSelectedBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBrush}" />
+            <Setter Property="BorderThickness" Value="2" />
         </Style>
         <Style Selector="ToggleButton.tool-button:checked:pointerover /template/ ContentPresenter#PART_ContentPresenter">
-            <Setter Property="Background" Value="{DynamicResource MapAccentDimBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
+            <Setter Property="Background" Value="{DynamicResource MapRailTileHoverBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBrush}" />
         </Style>
 
         <!-- Segmented control: one row of mutually exclusive choices. -->
@@ -261,19 +390,19 @@
         <Style Selector=":is(Button).segment.active">
             <Setter Property="Background" Value="{DynamicResource MapAccentDimBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
-            <Setter Property="Foreground" Value="{DynamicResource MapAccentHoverBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapOnAccentBrush}" />
             <Setter Property="FontWeight" Value="SemiBold" />
         </Style>
         <Style Selector="ToggleButton.segment:checked /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="{DynamicResource MapAccentDimBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
-            <Setter Property="Foreground" Value="{DynamicResource MapAccentHoverBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapOnAccentBrush}" />
             <Setter Property="FontWeight" Value="SemiBold" />
         </Style>
         <Style Selector="ToggleButton.segment:checked:pointerover /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="{DynamicResource MapAccentDimBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
-            <Setter Property="Foreground" Value="{DynamicResource MapAccentHoverBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapOnAccentBrush}" />
         </Style>
 
         <!-- Panel tab: right-hand panel mode switch. -->
@@ -306,6 +435,7 @@
             <Setter Property="BorderBrush" Value="Transparent" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="FontWeight" Value="Normal" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
         </Style>
         <Style Selector=":is(Button).list-row:pointerover">
@@ -314,14 +444,23 @@
         <Style Selector=":is(Button).list-row.selected">
             <Setter Property="Background" Value="{DynamicResource MapSelectionBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource MapSelectionBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
         </Style>
         <Style Selector="ToggleButton.list-row:checked /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="{DynamicResource MapSelectionBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource MapSelectionBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
         </Style>
         <Style Selector="ToggleButton.list-row:checked:pointerover /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="{DynamicResource MapSelectionBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource MapSelectionBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="ToggleButton.list-row TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="ToggleButton.list-row TextBlock.muted">
+            <Setter Property="Foreground" Value="{DynamicResource MapMutedBrush}" />
         </Style>
 
         <!--
@@ -408,19 +547,152 @@
             <Setter Property="BorderThickness" Value="2" />
         </Style>
 
+        <Style Selector="Border.map-card-shell">
+            <Setter Property="CornerRadius" Value="10" />
+            <Setter Property="ClipToBounds" Value="True" />
+            <Setter Property="Background" Value="{DynamicResource MapElevatedBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+        </Style>
+        <Style Selector="Button.map-card-main">
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="CornerRadius" Value="0" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="VerticalContentAlignment" Value="Stretch" />
+        </Style>
+        <Style Selector="Button.map-card-main:pointerover">
+            <Setter Property="Background" Value="{DynamicResource MapControlHoverBrush}" />
+        </Style>
+        <Style Selector="Button.map-card-action">
+            <Setter Property="MinHeight" Value="34" />
+            <Setter Property="Padding" Value="8,4" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+        </Style>
+
+        <Style Selector="Border.ornate-frame">
+            <Setter Property="BorderBrush" Value="{DynamicResource MapChromeBorderBrush}" />
+            <Setter Property="BorderThickness" Value="2" />
+            <Setter Property="CornerRadius" Value="8" />
+        </Style>
+        <Style Selector="Border.ornate-field">
+            <Setter Property="BorderBrush" Value="{DynamicResource MapBorderStrongBrush}" />
+            <Setter Property="BorderThickness" Value="2" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Background" Value="{DynamicResource MapFieldBrush}" />
+        </Style>
+        <Style Selector="Border.ornate-field TextBox">
+            <Setter Property="MinHeight" Value="48" />
+            <Setter Property="FontFamily" Value="Georgia" />
+            <Setter Property="FontSize" Value="20" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Background" Value="Transparent" />
+        </Style>
+        <Style Selector="ToggleButton.preset-card">
+            <Setter Property="Padding" Value="8" />
+            <Setter Property="CornerRadius" Value="9" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="2" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="ToggleButton.preset-card:pointerover">
+            <Setter Property="Background" Value="{DynamicResource MapControlHoverBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapBorderStrongBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="ToggleButton.preset-card:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapControlHoverBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapBorderStrongBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="ToggleButton.preset-card.active">
+            <Setter Property="Background" Value="{DynamicResource MapSelectionBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="ToggleButton.preset-card:checked /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapSelectionBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
+            <Setter Property="BorderThickness" Value="2" />
+            <Setter Property="TextElement.Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="ToggleButton.background-card">
+            <Setter Property="Padding" Value="10,7" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Background" Value="{DynamicResource MapElevatedBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="ToggleButton.background-card:pointerover">
+            <Setter Property="Background" Value="{DynamicResource MapControlHoverBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="ToggleButton.background-card:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapControlHoverBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="ToggleButton.background-card.active">
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
+            <Setter Property="BorderThickness" Value="2" />
+            <Setter Property="Background" Value="{DynamicResource MapSelectionBrush}" />
+        </Style>
+        <Style Selector="ToggleButton.background-card:checked /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
+            <Setter Property="BorderThickness" Value="2" />
+            <Setter Property="Background" Value="{DynamicResource MapSelectionBrush}" />
+            <Setter Property="TextElement.Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="Button.wizard-action">
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="BorderThickness" Value="2" />
+            <Setter Property="Padding" Value="14,8" />
+        </Style>
+        <Style Selector="Button.dark-action">
+            <Setter Property="Background" Value="{DynamicResource MapChromeBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapChromeTextBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapChromeBorderBrush}" />
+        </Style>
+        <Style Selector="Button.dark-action:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapChromeHoverBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapChromeTextBrush}" />
+        </Style>
+        <Style Selector="Button.dark-action:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapChromePressedBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapChromeTextBrush}" />
+        </Style>
+
         <!-- Dashed "create" tile that closes the recent grid. -->
         <Style Selector="Button.new-card">
             <Setter Property="Padding" Value="0" />
             <Setter Property="CornerRadius" Value="10" />
-            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Background" Value="{DynamicResource MapNewCardBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource MapBorderStrongBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
             <Setter Property="VerticalContentAlignment" Value="Stretch" />
         </Style>
         <Style Selector="Button.new-card:pointerover">
-            <Setter Property="Background" Value="{DynamicResource MapAccentDimBrush}" />
+            <Setter Property="Background" Value="{DynamicResource MapNewCardHoverBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBrush}" />
+        </Style>
+        <Style Selector="Button.new-card:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapNewCardHoverBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="Button.new-card:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapNewCardPressedBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
         </Style>
 
         <!-- ========================================================== inputs -->
@@ -444,7 +716,15 @@
             <Setter Property="MinHeight" Value="32" />
             <Setter Property="CornerRadius" Value="6" />
             <Setter Property="Background" Value="{DynamicResource MapControlBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource MapBorderBrush}" />
+        </Style>
+        <Style Selector="ComboBox:disabled">
+            <Setter Property="Foreground" Value="{DynamicResource MapMutedBrush}" />
+            <Setter Property="Opacity" Value="0.82" />
+        </Style>
+        <Style Selector="ComboBox:disabled /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Foreground" Value="{DynamicResource MapMutedBrush}" />
         </Style>
         <Style Selector="ComboBox:focus-visible">
             <Setter Property="BorderBrush" Value="{DynamicResource MapFocusBrush}" />
@@ -453,7 +733,20 @@
 
         <Style Selector="Slider">
             <Setter Property="Foreground" Value="{DynamicResource MapAccentBrush}" />
+            <Setter Property="Background" Value="{DynamicResource MapTextBrush}" />
             <Setter Property="MinHeight" Value="26" />
+        </Style>
+        <Style Selector="Slider:pointerover /template/ RepeatButton#PART_DecreaseButton">
+            <Setter Property="Background" Value="{DynamicResource MapAccentBrush}" />
+        </Style>
+        <Style Selector="Slider:pointerover /template/ RepeatButton#PART_IncreaseButton">
+            <Setter Property="Background" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="Slider:pressed /template/ RepeatButton#PART_DecreaseButton">
+            <Setter Property="Background" Value="{DynamicResource MapAccentBrush}" />
+        </Style>
+        <Style Selector="Slider:pressed /template/ RepeatButton#PART_IncreaseButton">
+            <Setter Property="Background" Value="{DynamicResource MapTextBrush}" />
         </Style>
 
         <Style Selector="CheckBox">
@@ -468,13 +761,13 @@
         <!-- =========================================================== chrome -->
 
         <Style Selector="Border.app-bar">
-            <Setter Property="Background" Value="{DynamicResource MapPanelBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource MapBorderBrush}" />
+            <Setter Property="Background" Value="{DynamicResource MapChromeBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
             <Setter Property="BorderThickness" Value="0,0,0,1" />
         </Style>
         <Style Selector="Border.rail">
-            <Setter Property="Background" Value="{DynamicResource MapPanelBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource MapBorderBrush}" />
+            <Setter Property="Background" Value="{DynamicResource MapChromeBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapChromeBorderBrush}" />
             <Setter Property="BorderThickness" Value="0,0,1,0" />
         </Style>
         <Style Selector="Border.panel">
@@ -488,18 +781,129 @@
             <Setter Property="BorderThickness" Value="0,0,1,0" />
         </Style>
         <Style Selector="Border.panel-header">
-            <Setter Property="Background" Value="{DynamicResource MapElevatedBrush}" />
+            <Setter Property="Background" Value="#F3EEE7" />
             <Setter Property="BorderBrush" Value="{DynamicResource MapBorderBrush}" />
             <Setter Property="BorderThickness" Value="0,0,0,1" />
             <Setter Property="Padding" Value="10,7" />
         </Style>
         <Style Selector="Border.status-bar">
-            <Setter Property="Background" Value="{DynamicResource MapPanelBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource MapBorderBrush}" />
+            <Setter Property="Background" Value="{DynamicResource MapChromeBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapChromeBorderBrush}" />
             <Setter Property="BorderThickness" Value="0,1,0,0" />
         </Style>
         <Style Selector="Border.canvas-surround">
             <Setter Property="Background" Value="{DynamicResource MapCanvasSurroundBrush}" />
+        </Style>
+
+        <!-- Text and controls inside the dark shell use their own high-contrast palette. -->
+        <Style Selector="Border.app-bar TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource MapChromeTextBrush}" />
+        </Style>
+        <Style Selector="Border.rail TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource MapChromeTextBrush}" />
+        </Style>
+        <Style Selector="Border.status-bar TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource MapChromeTextBrush}" />
+        </Style>
+        <Style Selector="Border.app-bar TextBlock.muted">
+            <Setter Property="Foreground" Value="{DynamicResource MapChromeMutedBrush}" />
+        </Style>
+        <Style Selector="Border.rail TextBlock.muted">
+            <Setter Property="Foreground" Value="{DynamicResource MapChromeMutedBrush}" />
+        </Style>
+        <Style Selector="Border.status-bar TextBlock.muted">
+            <Setter Property="Foreground" Value="{DynamicResource MapChromeMutedBrush}" />
+        </Style>
+        <Style Selector="Border.status-bar TextBlock.faint">
+            <Setter Property="Foreground" Value="{DynamicResource MapChromeMutedBrush}" />
+        </Style>
+        <Style Selector="Border.app-bar Button">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource MapChromeTextBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapChromeBorderBrush}" />
+        </Style>
+        <Style Selector="Border.rail Button">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource MapChromeTextBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapChromeBorderBrush}" />
+        </Style>
+        <Style Selector="Border.rail ToggleButton">
+            <Setter Property="Background" Value="{DynamicResource MapRailTileBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapRailTileBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+        </Style>
+        <Style Selector="Border.app-bar Button:pointerover">
+            <Setter Property="Background" Value="{DynamicResource MapChromeHoverBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
+        </Style>
+        <Style Selector="Border.app-bar Button:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapChromeHoverBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapChromeTextBrush}" />
+        </Style>
+        <Style Selector="Border.rail Button:pointerover">
+            <Setter Property="Background" Value="{DynamicResource MapChromeHoverBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
+        </Style>
+        <Style Selector="Border.rail ToggleButton:pointerover">
+            <Setter Property="Background" Value="{DynamicResource MapRailTileHoverBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBrush}" />
+        </Style>
+        <Style Selector="Border.rail Button:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapChromeHoverBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapChromeTextBrush}" />
+        </Style>
+        <Style Selector="Border.rail ToggleButton:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapRailTileHoverBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="Border.app-bar Button:pressed">
+            <Setter Property="Background" Value="{DynamicResource MapChromePressedBrush}" />
+        </Style>
+        <Style Selector="Border.app-bar Button:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapChromePressedBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapChromeTextBrush}" />
+        </Style>
+        <Style Selector="Border.rail Button:pressed">
+            <Setter Property="Background" Value="{DynamicResource MapChromePressedBrush}" />
+        </Style>
+        <Style Selector="Border.rail ToggleButton:checked">
+            <Setter Property="Background" Value="{DynamicResource MapRailTileSelectedBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBrush}" />
+            <Setter Property="BorderThickness" Value="2" />
+        </Style>
+        <Style Selector="Border.app-bar Button.primary">
+            <Setter Property="Background" Value="{DynamicResource MapAccentBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapOnAccentBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBrush}" />
+        </Style>
+        <Style Selector="Border.app-bar Button.primary:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapAccentHoverBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentHoverBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapOnAccentBrush}" />
+        </Style>
+        <Style Selector="Border.app-bar Button.primary:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapAccentBorderBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapOnAccentBrush}" />
+        </Style>
+        <Style Selector="Border.rail :is(Button).tool-button.active">
+            <Setter Property="Background" Value="{DynamicResource MapRailTileSelectedBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBrush}" />
+            <Setter Property="BorderThickness" Value="2" />
+        </Style>
+        <Style Selector="Border.rail ToggleButton.tool-button:checked /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapRailTileSelectedBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBrush}" />
+            <Setter Property="BorderThickness" Value="2" />
         </Style>
         <Style Selector="Border.elevated">
             <Setter Property="Background" Value="{DynamicResource MapElevatedBrush}" />
