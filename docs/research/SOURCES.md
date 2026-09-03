@@ -1,6 +1,6 @@
 # Источники и проверка
 
-Дата актуальной проверки: **28.08.2026**.
+Дата актуальной проверки: **31.08.2026**.
 
 При конфликте источников приоритет: более свежая официальная документация/updates → официальный tutorial → наблюдаемое ручное поведение → вторичный обзор. Субтитры — вспомогательный источник и не доказывают неясную деталь сами по себе.
 
@@ -43,6 +43,13 @@ Many/Area/Density/Auto, multi-selection/group, каталог и variant sets, �
 geometry. DevTools/network/storage и извлечение ассетов не использовались. Результаты:
 `INKARNATE_ACCOUNT_WALKTHROUGH_20260826.md` и `ASSET_CATALOG_AND_VARIANT_SETS.md`.
 
+Владелец 31.08.2026 отдельно разрешил bounded performance/size walkthrough своей тестовой карты.
+Через обычный create/editor/export UI подтверждены editor choices 1K/2K/3K/4K, custom grid
+`2..256` по каждой стороне и export choices до 16K; export не запускался, карта не изменялась.
+Официальный [FAQ](https://inkarnate.com/faq) независимо подтверждает 4K editor для Creator/Studio,
+до 8K export для Creator и до 16K export для Studio. Результат и границы утверждений:
+`INKARNATE_CANVAS_PERFORMANCE_20260831.md`.
+
 ## Публичные open-source ориентиры clean-room прохода
 
 | Источник | Что использовано / не использовано |
@@ -51,6 +58,23 @@ geometry. DevTools/network/storage и извлечение ассетов не �
 | [Azgaar Fantasy Map Generator](https://github.com/Azgaar/Fantasy-Map-Generator) | Только публичный архитектурный ориентир separation state/editors/renderers; web stack, код, UI и assets не переносятся |
 | [Tiled — Editing Tilesets](https://github.com/mapeditor/tiled/blob/master/docs/manual/editing-tilesets.rst) | Публичное подтверждение image-collection sets, stable per-item metadata/alignment/probability; код, UI, formats и assets не переносятся |
 | [Tiled — Tileset implementation](https://github.com/mapeditor/tiled/blob/master/src/libtiled/tileset.cpp) | Публичное подтверждение разделения remove-from-set и delete-content; используется только как data-model cross-check, dependency не добавлена |
+
+### Performance/canvas ориентиры Stage 13
+
+| Источник | Лицензия и допустимое использование |
+|---|---|
+| [Avalonia `VirtualizingStackPanel`](https://github.com/AvaloniaUI/Avalonia/blob/main/src/Avalonia.Controls/VirtualizingStackPanel.cs) и [tests](https://github.com/AvaloniaUI/Avalonia/blob/main/tests/Avalonia.Controls.UnitTests/VirtualizingStackPanelTests.cs) | MIT; встроенная в текущий UI stack виртуализация списка, сначала использовать её без новой production dependency |
+| [SkiaSharp](https://github.com/mono/SkiaSharp) и [`SKPictureRecorder`](https://learn.microsoft.com/en-us/dotnet/api/skiasharp.skpicturerecorder) | MIT; существующая dependency, изучить bounded display-list/chunk cache и R-tree recording, не менять renderer без benchmark |
+| [`SKCanvas.DrawAtlas`](https://learn.microsoft.com/en-us/dotnet/api/skiasharp.skcanvas.drawatlas) | API существующей SkiaSharp dependency; кандидат для одного batched draw повторяющихся stamps |
+| [Mapsui](https://github.com/Mapsui/Mapsui) | MIT; reference probe для Avalonia/Skia viewport culling, vector/raster cache и benchmark patterns, не переносить библиотеку целиком |
+| [NetTopologySuite](https://github.com/NetTopologySuite/NetTopologySuite) | BSD-3-Clause с JTS notices; isolated STRtree/quadtree comparison против собственного uniform grid, dependency только после отдельного измеренного решения |
+| [BenchmarkDotNet](https://github.com/dotnet/BenchmarkDotNet) | MIT; dev-only runner с warmup, process isolation, memory diagnoser и JSON, не входит в production solution |
+| [Godot MultiMesh](https://github.com/godotengine/godot-docs/blob/master/classes/class_multimesh.rst) и [2D batching architecture](https://github.com/godotengine/godot-docs/blob/master/engine_details/architecture/internal_rendering_architecture.rst) | MIT; concept-only cross-check batching/LOD для тысяч одинаковых объектов, Godot не становится dependency Map |
+
+Pinned commits и sparse paths для изолированного research lab записаны в `external-sources.json`.
+Код из внешнего проекта нельзя переносить только потому, что он найден LLM или поиском: сначала
+проверяются upstream URL, точный commit, license/notice, применимость к текущей версии и собственный
+адресный benchmark. Необнаруженный первичный источник означает `REJECTED` для копирования.
 
 ### Известная временная оговорка
 

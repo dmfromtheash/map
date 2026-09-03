@@ -6,7 +6,7 @@ Map развивается по пользовательским возможн�
 работы, а не возраст подсистемы. Завершённый код предыдущих этапов не откатывается ради старого
 названия незакрытой задачи.
 
-Текущая линейная история продукта дошла до Stage 11. Поэтому бывшие отложенные пункты 9B–9E
+Текущая линейная история продукта дошла до Stage 16. Поэтому бывшие отложенные пункты 9B–9E
 перенумерованы в Stage 12A–12D. Исторические commit, отчёты и названия 9B–9E остаются в Git, но
 новые ветки и задачи используют только номера Stage 12.
 
@@ -133,15 +133,118 @@ mask.
 filter (8/8), Release build (0 warnings, 0 errors) и один скрытый native UI smoke: bounded preview,
 PNG региона 320×240, responsive multi-tile cancel, cleanup и неизменность source document/session.
 
-### Stage 12D — migrations и диагностика файла
+### Stage 12D — migrations и диагностика файла — `FACT`, реализован
 
 - последовательные миграции копии поддерживаемых старых схем;
 - исходный файл не перезаписывается до проверки результата;
 - corrupted/resource-limit/unsupported-version различаются в понятной локальной диагностике;
 - пользователь получает безопасные варианты действия без потери единственной копии.
 
-После 12D новые UX-функции добавляются только по реальным неудобствам владельца, замеченным в его
-работе на текущем ПК.
+Stage 12D завершён commit `68a8982`: canonical schema v2, copy-only v1→v2 migration, typed file
+diagnostics и bounded privacy-safe local log. Source старой схемы не изменяется.
+
+## Stage 13 — очень большой холст и 50 000 объектов — `FACT`, реализован
+
+Владелец 31.08.2026 прямо запросил отдельную программу оптимизации холста и объектов со
+стресс-проверками. Stage 13A–13D выполнены четырьмя последовательными локальными commits от
+принятого Stage 12C HEAD. В commit-графе Stage 13 предшествует отдельно завершённому Stage 12D;
+актуальная линейная история содержит оба результата.
+
+Наблюдаемая граница платного Inkarnate на дату исследования: editor 1K–4K, export до 16K и
+custom grid 2..256 по каждой стороне. Map не копирует его реализацию, код, ассеты или visual
+language. Независимая цель Map — нативный offline sparse canvas, размер которого не равен размеру
+единого bitmap, и измеримо отзывчивое редактирование 50 000 логических объектов.
+
+Плановые продуктовые границы имеют разные статусы:
+
+| Граница | Статус до Stage 13 | Условие принятия |
+|---|---|---|
+| 65 536 × 65 536 и 50 000 объектов | `FACT` | покрывается более высокой принятой границей 131K |
+| 100 000 объектов | `FACT` только stress/save-open | открывается, индексируется и save/reopen проходит; обещания равной UI-плавности нет |
+| 131 072 × 131 072 и 50 000 объектов | `FACT` public supported | functional, CPU и native gates зелёные на текущем ПК |
+| 262 144 × 262 144 | `FACT` test-only, не public | sparse math/selection/export/overview зелёные; UI/validator остаются 131K до отдельного решения |
+
+### Stage 13A — `FACT`: измеримость, виртуальный список и интерактивный поиск
+
+- один компактный performance runner с deterministic fixtures, warmup, P50/P95/max, allocations,
+  machine/branch/HEAD fingerprint и JSON вне production solution;
+- отдельные профили 10K/50K/100K, small viewport/full overview, simple/mixed scene, object list,
+  hit-test, marquee, selection/drag и cold/warm spatial index;
+- виртуализированный Objects list: количество Avalonia controls зависит от видимых строк и
+  overscan, а не от полного числа объектов;
+- события document structure, selection, viewport и canvas invalidation разделены; pointer move
+  не перестраивает боковые панели, invalidation объединяется до одного запроса на кадр;
+- hit-test и marquee используют spatial broad phase с точной проверкой только кандидатов.
+
+### Stage 13B — `FACT`: дешёвое изменение одного объекта
+
+- производные индексы `ObjectId -> object/layer/index` и `GroupId -> members` привязаны к immutable
+  revision и не попадают в `.mapproj`;
+- изменение одного объекта не копирует и не валидирует скрытно все 50 000 объектов;
+- object storage получает измеренную chunked/persistent форму со structural sharing либо другой
+  доказанно более дешёвый эквивалент без нарушения immutable source of truth и Undo/Redo;
+- spatial index обновляет только затронутые cells/chunks, сохраняя стабильный draw order.
+
+### Stage 13C — `FACT`: LOD, batching и chunk render cache
+
+- viewport получает screen-space LOD; export и близкий zoom сохраняют полный quality;
+- неизменившиеся spatial chunks могут хранить bounded `SKPicture`, atlas batch или иной измеренно
+  лучший Skia primitive; движущийся объект рисуется отдельным dynamic overlay;
+- повторяющиеся stamps объединяются через существующий SkiaSharp `DrawAtlas`/совместимый batch
+  только после сравнительного benchmark;
+- субпиксельные детали, текст, тени и дорогие эффекты получают честный overview policy;
+- compositions и сложные paths получают собственный culling/cache, а изменение одного chunk не
+  сбрасывает весь scene cache.
+
+### Stage 13D — `FACT`: расширение логического размера после зелёных ворот
+
+- сначала поднять поддерживаемый предел до 131 072 × 131 072 и согласовать dynamic fit/min zoom;
+- сохранить sparse raster, checked coordinate arithmetic и отсутствие full-canvas allocation;
+- расширить tile-package export до нового поддерживаемого размера, не повышая single-image 16K;
+- 262 144 × 262 144 проверить только как разреженный test fixture; не показывать в обычном UI как
+  поддерживаемый максимум без отдельного принятия владельцем;
+- dense raster полного огромного холста не является поддерживаемым сценарием: бюджеты относятся к
+  материализованным tiles, assets, objects и caches, а не к теоретической площади.
+
+### Обязательный результат Stage 13
+
+- 50 000 объектов — основной поддерживаемый профиль, включая настоящий native UI;
+- 100 000 — stress/read/save-open профиль, пока без обещания одинаковой плавности;
+- normal zoom стремится к 60 FPS, full overview 50K обязан удерживать не хуже 30 FPS на текущем ПК;
+- pointer/drag не выполняют работу, пропорциональную всем объектам, и не создают 50 000 UI controls;
+- caches имеют явные byte/item budgets, cancel/dispose и revision-local invalidation;
+- регрессия результата render/export, Undo/Redo, save/reopen и selection недопустима.
+
+Полный исполняемый контракт находится в `docs/STAGE_13_LARGE_CANVAS_PERFORMANCE.md`. Фактический
+результат зафиксирован commits `1dfb3fb`, `62cd841`, `c2c09aa`, `3668c49`; численные текущие gates
+и ограничения записаны в `docs/STATE_HANDOFF.md`.
+
+## Stages 14–15 — размещение, workspace и stamp parity — `FACT`, реализованы
+
+- Stage 14: canvas-first placement с transient ghost и одной commit-командой, primary autosave
+  после первого явного Save, версии и упрощённый workspace «Слои / Объекты»;
+- Stage 15: компактный stamp-каталог, точные appearance controls, clip-mask, foreground surface,
+  series/area placement, Undo/Redo и save/reopen/export parity;
+- принятые commits: Stage 14 заканчивается `fa8efde`, Stage 15 — `835c944`.
+
+## Stage 16 — финальная полнота нативного offline P0/P1 — `FACT`, локально реализован
+
+- 16A: dashboard search/sort, независимые clone/template, безопасный raster/SVG import, missing
+  asset repair/remove, starter pack, локальные settings/help и composition packages;
+- 16B: Brush material/presets и preview=commit, точный Land, layer opacity/blend/effects,
+  независимые masks, sublayers и Filters; `.mapproj` schema v3 и copy-only v2→v3 migration;
+- 16C: пользовательские Line/Shape gestures, явный node/portal/boolean selection, texture fill,
+  Text placement с inheritance gate и безопасный Markdown Notes preview;
+- 16D: связный synthetic temporary-profile сценарий, save/reopen/export, settings restart и
+  hidden own-process UI на 1416×939 и 960×640 без системного ввода;
+- адресные Stage16A/16B/16C tests, Release build и combined native smoke зелёные;
+- Stage 16, последующие исправления редактора, утверждённый визуальный пакет и оригинальные
+  тестовые nature assets зафиксированы в `codex/stage-16-final-offline-parity`; последний
+  product-code checkpoint — `e931c42`.
+
+Stage 16 завершает принятый нативный offline P0/P1 scope. Marketplace, Community, account/cloud,
+совместное редактирование и другие online/P2 возможности не являются дефектами этой версии и не
+начинаются без нового прямого решения владельца.
 
 ## Проверка каждого среза
 
@@ -150,6 +253,7 @@ PNG региона 320×240, responsive multi-tile cancel, cleanup и неизм
 - один короткий smoke в настоящем окне только для видимого сценария;
 - без повторения зелёных прогонов, полного suite и больших evidence-папок.
 
-GitHub не участвует в текущем цикле: владелец 2026-08-31 запретил любые remote-действия до нового
-отдельного разрешения. Актуальное состояние определяют локальный Git, спецификация и
+Владелец 2026-09-03 дал отдельное разовое разрешение зафиксировать и отправить накопленный
+результат текущей продуктовой ветки. После исполнения этой синхронизации для новых remote-действий
+снова требуется прямое разрешение. Актуальное состояние определяют Git, спецификация и
 `STATE_HANDOFF`.

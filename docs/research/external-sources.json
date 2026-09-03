@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "capturedDate": "2026-08-29",
+  "capturedDate": "2026-08-31",
   "defaultLabRoot": "C:\\Projects\\Map-ResearchLab",
   "policy": "Pinned public source for isolated research only; no automatic production integration.",
   "repositories": [
@@ -19,7 +19,7 @@
       "commit": "e064b57bc4968544603a0f4a1143b0cdf2207912",
       "license": "BSD-3-Clause with JTS notices",
       "licenseFile": "License.md",
-      "admission": "not-now",
+      "admission": "stage13-isolated-spatial-comparison-only",
       "sparsePaths": ["License.md", "README.md", "src/NetTopologySuite", "test/NetTopologySuite.Tests.NUnit"]
     },
     {
@@ -28,7 +28,7 @@
       "commit": "7af71dbf2730322416b46b8fb58524a57f5356be",
       "license": "MIT",
       "licenseFile": "LICENSE",
-      "admission": "reference-probe",
+      "admission": "stage13-performance-reference-probe",
       "sparsePaths": ["LICENSE", "README.md", "Mapsui.UI.Avalonia12", "Mapsui.Rendering.Skia", "Tests"]
     },
     {
@@ -41,13 +41,40 @@
       "sparsePaths": ["LICENSE", "README.adoc", "src/Avalonia.Samples", "src/Avalonia.Samples/Testing"]
     },
     {
+      "id": "avalonia-core",
+      "url": "https://github.com/AvaloniaUI/Avalonia.git",
+      "commit": "6896f08f3783cc5bf4e14b5a92be65c3555aa523",
+      "license": "MIT",
+      "licenseFile": "licence.md",
+      "admission": "stage13-virtualization-reference",
+      "sparsePaths": ["licence.md", "NOTICE.md", "src/Avalonia.Controls/VirtualizingStackPanel.cs", "src/Avalonia.Controls/ItemsControl.cs", "tests/Avalonia.Controls.UnitTests/VirtualizingStackPanelTests.cs"]
+    },
+    {
       "id": "skiasharp",
       "url": "https://github.com/mono/SkiaSharp.git",
       "commit": "f74bd9adb82a77fd4a423db03c1077ea9d3be7e7",
       "license": "MIT",
       "licenseFile": "LICENSE.md",
-      "admission": "existing-dependency-font-probe",
+      "admission": "existing-dependency-font-and-stage13-performance-probe",
       "sparsePaths": ["LICENSE.md", "README.md", "binding/SkiaSharp", "binding/HarfBuzzSharp", "tests"]
+    },
+    {
+      "id": "benchmarkdotnet",
+      "url": "https://github.com/dotnet/BenchmarkDotNet.git",
+      "commit": "5995bf68f9ae7864ec12916c7b426b02759d1ad5",
+      "license": "MIT",
+      "licenseFile": "LICENSE.md",
+      "admission": "stage13-dev-only-runner-candidate",
+      "sparsePaths": ["LICENSE.md", "README.md", "src/BenchmarkDotNet", "docs/articles/guides", "tests/BenchmarkDotNet.IntegrationTests"]
+    },
+    {
+      "id": "godot",
+      "url": "https://github.com/godotengine/godot.git",
+      "commit": "5ec4857b340b6284a18b49b2eda462bd250f219a",
+      "license": "MIT with third-party notices",
+      "licenseFile": "LICENSE.txt",
+      "admission": "stage13-batching-concept-only",
+      "sparsePaths": ["LICENSE.txt", "COPYRIGHT.txt", "servers/rendering/rendering_server.h", "servers/rendering/renderer_canvas_render.h", "scene/resources/multimesh.cpp"]
     },
     {
       "id": "tiled",

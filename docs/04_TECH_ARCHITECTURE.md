@@ -97,6 +97,45 @@ log получает только стабильные codes и тип искл�
 - background decoding/thumbnails с ограниченным parallelism;
 - память undo/cache имеет бюджеты и telemetry только локально в diagnostics.
 
+### Stage 13: стоимость зависит от видимого и изменённого
+
+Эта форма реализована Stage 13A–13D. Операции `O(all objects)` убраны из pointer/drag/UI-list
+hot path; повышение canvas limit выполнено только после зелёных 50K render/native gates.
+
+- `DocumentRevisionIndex` хранит object/layer/group lookup и
+  spatial entries для конкретной immutable revision; он не сериализуется и не становится вторым
+  источником истины.
+- `SceneObjectList` хранит object layer persistent chunks со structural sharing: изменение одного
+  объекта создаёт новый небольшой chunk и новый корень, а не полный список на 50 000 элементов.
+- Spatial index возвращает стабильные draw-order indices. Hit-test, marquee и viewport используют
+  один broad phase, после которого точная geometry проверяется только у кандидатов.
+- События `DocumentStructureChanged`, `ObjectPropertiesChanged`, `SelectionChanged`,
+  `ViewportChanged` и `CanvasInvalidated` не подменяют друг друга. Selection/drag не перестраивают
+  Objects list; несколько invalidation до кадра coalesce-ятся.
+- Objects list использует `ItemsSource` и `VirtualizingStackPanel`/измеренный эквивалент. Число
+  созданных controls ограничено видимыми строками и overscan; поиск/группы не материализуют
+  отдельный control на каждый скрытый объект.
+- Scene chunks получают bounded raster `ObjectOverviewCache`. Близкий zoom и export используют
+  точную геометрию; overview хранит маленькое raster image на spatial chunk/zoom bucket и
+  агрегирует subpixel primitives по совместимым batch. `DrawAtlas` и `SKVertices` измерены, но не
+  выбраны для heterogeneous mixed scene.
+- Редактируемый/moving объект исключается из static chunk cache и рисуется dynamic overlay;
+  завершение команды инвалидирует только старые и новые spatial chunks.
+- Кэширование имеет 1024-item/64 MiB предел, LRU/eviction, render-thread guard и deterministic
+  dispose нативных Skia resources. Content hash инвалидирует только изменившиеся old/new chunks;
+  selected/moving object рисуется отдельным exact overlay.
+- Размер логического canvas не определяет размер единого render surface. Viewport, preview и
+  export продолжают работать tiles/regions; public canvas равен 131 072, single export остаётся
+  16 384, tile-package — 131 072, dense full-canvas bitmap запрещён.
+
+Сравнительные probes не обосновали новую production dependency: сохранены собственный uniform
+spatial index, встроенная виртуализация Avalonia и уже используемый SkiaSharp. `NetTopologySuite`,
+`Mapsui`, Godot и внешние reference repositories не добавлены в продукт.
+
+Профили и численные acceptance-критерии находятся в
+`docs/STAGE_13_LARGE_CANVAS_PERFORMANCE.md`; roadmap хранит пользовательские границы, а не детали
+конкретного контейнера данных.
+
 ## Потоки
 
 - UI thread: ввод, короткие изменения модели, композиция кадра;
