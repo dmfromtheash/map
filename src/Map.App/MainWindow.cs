@@ -251,14 +251,16 @@ public sealed class MainWindow : Window
     private void ApplySettings(AppSettings settings)
     {
         _appSettings = AppSettings.Sanitize(settings);
+
+        // Map has ONE approved palette and one approved icon set, both drawn for a light working
+        // surface over dark chrome. Handing Fluent a dark variant replaced the container colours
+        // underneath that palette while Map's own text and artwork stayed light-surface: the
+        // objects list ended up with #10264A text on a #2B2B2B ground (1.03:1) and the file menu
+        // showed navy artwork on near-black. The variant is therefore pinned, and the palette
+        // below is what decides every colour.
         if (Application.Current is { } application)
         {
-            application.RequestedThemeVariant = _appSettings.Theme switch
-            {
-                LocalThemeMode.Dark => ThemeVariant.Dark,
-                LocalThemeMode.Light => ThemeVariant.Light,
-                _ => ThemeVariant.Default,
-            };
+            application.RequestedThemeVariant = ThemeVariant.Light;
         }
         FontSize = 13 * _appSettings.UiScale;
         if (!TestMode.Enabled)
@@ -610,10 +612,10 @@ public sealed class MainWindow : Window
                 editor.ToggleMaskPaintMode();
                 break;
             case EditorShortcutSettings.Commands.Copy:
-                editor.CopySelectedComposition();
+                editor.CopySelectedObjects();
                 break;
             case EditorShortcutSettings.Commands.Paste:
-                editor.PasteComposition();
+                editor.PasteObjects();
                 break;
             case EditorShortcutSettings.Commands.Lock:
                 editor.ToggleSelectedObjectLock();
@@ -632,6 +634,18 @@ public sealed class MainWindow : Window
                 break;
             case EditorShortcutSettings.Commands.SublayerDown:
                 editor.AdjustSelectedSublayer(-1);
+                break;
+            case EditorShortcutSettings.Commands.ObjectUp:
+                editor.ReorderSelection(1);
+                break;
+            case EditorShortcutSettings.Commands.ObjectDown:
+                editor.ReorderSelection(-1);
+                break;
+            case EditorShortcutSettings.Commands.ObjectTop:
+                editor.ReorderSelection(1, toExtreme: true);
+                break;
+            case EditorShortcutSettings.Commands.ObjectBottom:
+                editor.ReorderSelection(-1, toExtreme: true);
                 break;
             case EditorShortcutSettings.Commands.LayerUp:
                 editor.ReorderActiveLayer(up: true);
@@ -731,7 +745,7 @@ public sealed class MainWindow : Window
         text.AppendLine()
             .AppendLine("МЫШЬ")
             .AppendLine("Колесо — масштаб · средняя кнопка или удержание команды панорамы + drag — панорама")
-            .AppendLine($"{_shortcuts.Get(EditorShortcutSettings.Commands.StampCycleVariant)} — вариант штампа над холстом");
+            .AppendLine($"{_shortcuts.Get(EditorShortcutSettings.Commands.StampCycleVariant)} — вариант ассета над холстом");
 
         var dialog = new Window
         {

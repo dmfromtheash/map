@@ -1328,6 +1328,23 @@ public sealed partial class EditorViewModel : ViewModelBase
     public string? LibraryThumbnailPathForVariant(string variantId) =>
         _assetCatalog?.ThumbnailPathForVariant(variantId);
 
+    /// <summary>
+    /// The catalog thumbnail of the exact asset a placed object draws, or null when the object is
+    /// not asset-backed or the catalog cannot show it. Lists use this so a placed tree looks like
+    /// that tree instead of like the tool that placed it.
+    /// </summary>
+    public string? ObjectThumbnailPath(SceneObject sceneObject)
+    {
+        if (_assetCatalog is null || sceneObject?.Stamp?.AssetSha256 is not { } sha)
+        {
+            return null;
+        }
+
+        return _assetCatalog.Find(sha) is { } record && _assetCatalog.TryThumbnailPath(record, out var path)
+            ? path
+            : null;
+    }
+
     // ---------------------------------------------------------------- filter controls
 
     /// <summary>Every tag the catalog knows, so choosing one never hides the others.</summary>
@@ -1844,7 +1861,8 @@ public sealed partial class EditorViewModel : ViewModelBase
     public bool IsEditingFutureStamp =>
         ActiveTool == EditorTool.Stamp && PendingPlacement?.Target == PlacementTargetKind.Stamp;
 
-    public string StampPanelHeading => IsEditingFutureStamp ? "Будущий штамп" : "Выбранный штамп";
+    public string StampPanelHeading =>
+        IsEditingFutureStamp ? "Ассет для размещения" : "Свойства ассета";
 
     public StampStyle? StampPanelStyle => IsEditingFutureStamp
         ? _stampToolSettings.Style
@@ -1881,7 +1899,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     {
         get
         {
-            if (StampPanelStyle is not { } style) return "Недоступно — штамп не выбран";
+            if (StampPanelStyle is not { } style) return "Недоступно — ассет не выбран";
             var maskSha = StampPanelMaskSha256;
             if (maskSha is null) return "Недоступно — у варианта нет маски";
             if (!IsMaskAvailable(maskSha)) return "Маска отсутствует или повреждена";
@@ -1901,6 +1919,9 @@ public sealed partial class EditorViewModel : ViewModelBase
         { IsEmpty: true } => "Foreground-поверхность пуста",
         _ => "Foreground-поверхность готова",
     };
+
+    /// <summary>True once the user has chosen an asset, so placement has something to place.</summary>
+    public bool HasChosenAsset => _selectedSetId is not null;
 
     /// <summary>Makes one logical card current and restores the variant last used inside it.</summary>
     public void SelectAssetSet(string? setId)
@@ -2077,7 +2098,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     {
         if (_assetCatalog is null || StampPanelVariant is not { } variant)
         {
-            StatusDetail = "Сначала выберите вариант штампа.";
+            StatusDetail = "Сначала выберите вариант ассета.";
             return false;
         }
 
@@ -2109,7 +2130,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     {
         if (_assetCatalog is null || StampPanelVariant is not { } variant)
         {
-            StatusDetail = "Сначала выберите вариант штампа.";
+            StatusDetail = "Сначала выберите вариант ассета.";
             return false;
         }
 
@@ -2125,7 +2146,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             }
             RaiseVariantState();
             RaiseStampToolState();
-            StatusDetail = "Маска удалена из варианта. Уже поставленные штампы не изменены.";
+            StatusDetail = "Маска удалена из варианта. Уже размещённые объекты не изменены.";
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
@@ -2296,7 +2317,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         if (_assetCatalog.FindSetForContent(sha256) is not { } set)
         {
             // The map is self-sufficient: a stamp whose set is gone still renders and exports.
-            StatusDetail = "Этот штамп не найден в локальной библиотеке; объект работает как раньше.";
+            StatusDetail = "Этот ассет не найден в локальном каталоге; объект работает как раньше.";
             return;
         }
 
@@ -2473,8 +2494,8 @@ public sealed partial class EditorViewModel : ViewModelBase
                 : $"Область {StampAreaRadius:0} ед.";
             return StampPlacementMode switch
             {
-                StampPlacementMode.One => area + " · один штамп",
-                StampPlacementMode.Series => area + " · серия по одному штампу",
+                StampPlacementMode.One => area + " · один ассет",
+                StampPlacementMode.Series => area + " · серия по одному ассету",
                 _ => $"{area} · плотность {StampDensity:0} на 10 000 ед² · {PlannedStampCount} шт.",
             };
         }
@@ -2568,7 +2589,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             return false;
         }
 
-        StatusDetail = "Штамп вооружён · укажите место на холсте.";
+        StatusDetail = "Ассет выбран · укажите место на холсте.";
         return true;
     }
 
@@ -2670,23 +2691,66 @@ public sealed partial class EditorViewModel : ViewModelBase
         var layer = pending.LayerId is { } layerId
             ? Session.Document.FindLayer(layerId) as ObjectLayer
             : null;
+        AddLayerCommand? createLayer = null;
         if (layer is not { Visible: true, Locked: false })
         {
-            PendingPlacement = pending with
+            // Putting a tree on the map must not begin with housekeeping. When the document has no
+            // usable object layer we make one here and hand it to the commit, which folds it into
+            // the same history entry, so one undo takes the object and the layer away together.
+            (layer, createLayer) = EnsureObjectLayer();
+            if (layer is null)
             {
-                LayerId = null,
-                InvalidReason = "Нет видимого разблокированного слоя объектов. Создайте слой объектов и продолжите.",
-            };
-            StatusDetail = PendingPlacement.InvalidReason;
-            return false;
+                PendingPlacement = pending with { LayerId = null, InvalidReason = NoUsableObjectLayer };
+                StatusDetail = NoUsableObjectLayer;
+                return false;
+            }
         }
 
         return pending.Target == PlacementTargetKind.Stamp
-            ? CommitStampPlacement(pending, layer)
-            : CommitPrimitivePlacement(pending, layer);
+            ? CommitStampPlacement(pending, layer, createLayer)
+            : CommitPrimitivePlacement(pending, layer, createLayer);
     }
 
-    private bool CommitPrimitivePlacement(PlacementSession pending, ObjectLayer layer)
+    /// <summary>
+    /// The object layer that receives new objects. Prefers the active layer, then the topmost
+    /// visible unlocked object layer, and only otherwise describes a new one. The returned command
+    /// is null when an existing layer was reused; when it is not null the caller MUST execute it as
+    /// part of its own edit, because the returned layer is not in the document yet.
+    /// </summary>
+    private (ObjectLayer? Layer, AddLayerCommand? Create) EnsureObjectLayer()
+    {
+        if (ActiveObjectLayer() is { } existing)
+        {
+            return (existing, null);
+        }
+
+        // Object layers exist but the user hid or locked every one of them. That is a deliberate
+        // decision about this map, and quietly adding a sibling layer would work around it, so the
+        // caller refuses instead. Only a document with no object layer at all gets one made for it.
+        if (!HasNoObjectLayer)
+        {
+            return (null, null);
+        }
+
+        var created = new ObjectLayer(
+            LayerId.New(), EntityNameGenerator.Layer(Session.Document, typeof(ObjectLayer)),
+            true, false, 1.0, []);
+        return (created, new AddLayerCommand(created, _activeLayerId));
+    }
+
+    /// <summary>The map has no object layer at all - an unprepared document, not a locked one.</summary>
+    private bool HasNoObjectLayer => !Session.Document.Layers.OfType<ObjectLayer>().Any();
+
+    /// <summary>What to tell the user when every existing object layer refuses new objects.</summary>
+    private const string NoUsableObjectLayer =
+        "Слой объектов скрыт или заблокирован. Снимите блокировку или создайте новый слой объектов.";
+
+    /// <summary>Runs an edit, together with the layer it needed, as exactly one history entry.</summary>
+    private void ExecuteWithOptionalLayer(IEditCommand edit, AddLayerCommand? createLayer, string name) =>
+        Session.Execute(createLayer is null ? edit : new CompositeCommand(name, [createLayer, edit]));
+
+    private bool CommitPrimitivePlacement(
+        PlacementSession pending, ObjectLayer layer, AddLayerCommand? createLayer)
     {
         var preview = pending.PreviewObjects.Single();
         var kind = pending.Target == PlacementTargetKind.Ellipse
@@ -2697,7 +2761,8 @@ public sealed partial class EditorViewModel : ViewModelBase
             preview.X, preview.Y, preview.Width, preview.Height, preview.RotationDegrees,
             preview.FillColor, preview.StrokeColor, preview.StrokeWidth, true, false);
         var previousSelection = Session.SelectedObjectIds.ToArray();
-        Session.Execute(new AddObjectCommand(layer.Id, added));
+        ExecuteWithOptionalLayer(
+            new AddObjectCommand(layer.Id, added), createLayer, "Place object on a new layer");
         ApplyPlacementSelection(previousSelection, added.Id, pending);
         _activeLayerId = layer.Id;
         AfterEdit();
@@ -2705,7 +2770,8 @@ public sealed partial class EditorViewModel : ViewModelBase
         return true;
     }
 
-    private bool CommitStampPlacement(PlacementSession pending, ObjectLayer layer)
+    private bool CommitStampPlacement(
+        PlacementSession pending, ObjectLayer layer, AddLayerCommand? createLayer)
     {
         var settings = pending.StampSettingsSnapshot ?? _stampToolSettings;
         if (!TryStampInputs(settings, out var requestTemplate, out var sources, out var records, out var refusal))
@@ -2744,7 +2810,9 @@ public sealed partial class EditorViewModel : ViewModelBase
         var placedLabel = CurrentVariantLabel;
         var previousSelection = Session.SelectedObjectIds.ToArray();
         _gestureCounter++;
-        Session.Execute(new PlaceAssetObjectsCommand(layer.Id, references, objects));
+        ExecuteWithOptionalLayer(
+            new PlaceAssetObjectsCommand(layer.Id, references, objects),
+            createLayer, "Place stamp on a new layer");
         ApplyPlacementSelection(previousSelection, objects[^1].Id, pending);
         _activeLayerId = layer.Id;
         AfterEdit();
@@ -2763,7 +2831,7 @@ public sealed partial class EditorViewModel : ViewModelBase
 
         StatusDetail = objects.Count == 1
             ? $"Размещён вариант {placedLabel}."
-            : $"Размещено штампов: {objects.Count}, вариантов: {plan.Select(item => item.Sha256).Distinct(StringComparer.OrdinalIgnoreCase).Count()}.";
+            : $"Размещено объектов: {objects.Count}, вариантов: {plan.Select(item => item.Sha256).Distinct(StringComparer.OrdinalIgnoreCase).Count()}.";
         RefreshLibrary();
         FinishOrContinuePlacement(pending, objects[^1].Name);
         return true;
@@ -2861,9 +2929,8 @@ public sealed partial class EditorViewModel : ViewModelBase
             StrokeWidth = preview.StrokeWidth,
             PreviewOpacity = PlacementPreviewOpacity,
             PointerVisible = pointerVisible,
-            InvalidReason = layer is null
-                ? "Нет видимого разблокированного слоя объектов. Создайте слой объектов и продолжите."
-                : null,
+            InvalidReason = layer is null && !HasNoObjectLayer ? NoUsableObjectLayer : null,
+            WillCreateLayer = layer is null && HasNoObjectLayer,
             Seed = 0,
             PlannedCount = 1,
             PreviewObjects = [preview],
@@ -2896,7 +2963,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         plan = ApplyPlacementRotation(plan, rotationDegrees);
         var preview = plan.Select((item, index) => StampObject(
             item,
-            index == 0 ? "Будущий штамп" : $"Будущий штамп {index + 1}",
+            index == 0 ? "Размещаемый ассет" : $"Размещаемый ассет {index + 1}",
             settings,
             PlacementPreviewOpacity)).ToList();
         return new PlacementSession
@@ -2915,9 +2982,8 @@ public sealed partial class EditorViewModel : ViewModelBase
             StrokeWidth = 0,
             PreviewOpacity = PlacementPreviewOpacity,
             PointerVisible = pointerVisible,
-            InvalidReason = layer is null
-                ? "Нет видимого разблокированного слоя объектов. Создайте слой объектов и продолжите."
-                : null,
+            InvalidReason = layer is null && !HasNoObjectLayer ? NoUsableObjectLayer : null,
+            WillCreateLayer = layer is null && HasNoObjectLayer,
             Seed = request.Seed,
             PlannedCount = StampPlacementMode == StampPlacementMode.Area
                 ? StampPlacement.CountFor(request.Density, request.AreaRadius)
@@ -3534,8 +3600,13 @@ public sealed partial class EditorViewModel : ViewModelBase
             return;
         }
 
-        var layer = ActiveLayer as ObjectLayer
-            ?? Session.Document.Layers.OfType<ObjectLayer>().LastOrDefault(item => item.Visible && !item.Locked);
+        var (layer, createLayer) = EnsureObjectLayer();
+        if (layer is null)
+        {
+            StatusDetail = NoUsableObjectLayer;
+            return;
+        }
+
         var knownReference = Session.Document.Assets.FirstOrDefault(asset =>
             string.Equals(asset.Sha256, record.Sha256, StringComparison.OrdinalIgnoreCase));
         if (knownReference is null
@@ -3546,12 +3617,6 @@ public sealed partial class EditorViewModel : ViewModelBase
                 out var preflightFailure))
         {
             StatusDetail = preflightFailure;
-            return;
-        }
-
-        if (layer is null || layer.Locked || !layer.Visible)
-        {
-            StatusDetail = "Выберите доступный ассет и разблокированный слой объектов.";
             return;
         }
 
@@ -3612,7 +3677,9 @@ public sealed partial class EditorViewModel : ViewModelBase
             },
         };
 
-        Session.Execute(new PlaceAssetObjectsCommand(layer.Id, reference, [stamp]));
+        ExecuteWithOptionalLayer(
+            new PlaceAssetObjectsCommand(layer.Id, reference, [stamp]),
+            createLayer, "Place stamp on a new layer");
         Session.SelectedObjectId = stamp.Id;
         _activeLayerId = layer.Id;
         AfterEdit();
@@ -3625,13 +3692,12 @@ public sealed partial class EditorViewModel : ViewModelBase
             return;
         }
 
-        var layer = ActiveLayer as ObjectLayer
-            ?? Session.Document.Layers.OfType<ObjectLayer>().LastOrDefault(item => item.Visible && !item.Locked);
+        var (layer, createLayer) = EnsureObjectLayer();
         var reference = ResolveAssetForDocument(
             record, out _, out var assetRefusal);
         if (layer is null || reference is null)
         {
-            StatusDetail = assetRefusal ?? "Ассет недоступен для размещения.";
+            StatusDetail = layer is null ? NoUsableObjectLayer : assetRefusal ?? "Ассет недоступен для размещения.";
             return;
         }
 
@@ -3656,8 +3722,11 @@ public sealed partial class EditorViewModel : ViewModelBase
             });
         }
 
-        Session.Execute(new PlaceAssetObjectsCommand(layer.Id, reference, objects));
+        ExecuteWithOptionalLayer(
+            new PlaceAssetObjectsCommand(layer.Id, reference, objects),
+            createLayer, "Scatter stamps on a new layer");
         Session.SelectedObjectId = objects[^1].Id;
+        _activeLayerId = layer.Id;
         AfterEdit();
     }
 
@@ -4157,11 +4226,10 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public void AddObject(SceneObjectKind kind)
     {
-        var layer = ActiveLayer as ObjectLayer
-            ?? Session.Document.Layers.OfType<ObjectLayer>().LastOrDefault();
-        if (layer is null || layer.Locked || !layer.Visible)
+        var (layer, createLayer) = EnsureObjectLayer();
+        if (layer is null)
         {
-            StatusDetail = "Выберите видимый разблокированный слой объектов.";
+            StatusDetail = NoUsableObjectLayer;
             return;
         }
 
@@ -4182,8 +4250,10 @@ public sealed partial class EditorViewModel : ViewModelBase
             "#FF10131A", 2,
             visible: true, locked: false);
 
-        Session.Execute(new AddObjectCommand(layer.Id, added));
+        ExecuteWithOptionalLayer(
+            new AddObjectCommand(layer.Id, added), createLayer, "Add object on a new layer");
         Session.SelectedObjectId = added.Id;
+        _activeLayerId = layer.Id;
         AfterEdit();
     }
 
@@ -4937,13 +5007,86 @@ public sealed partial class EditorViewModel : ViewModelBase
         Session.SelectedObjectId = instance.Id; CompositionClipboard.Set(package); AfterEdit();
     }
 
+    /// <summary>
+    /// The selection as one nested composition package, for the explicit "Копировать композицию"
+    /// command and for other map windows. This is a different product feature from Ctrl+C, which
+    /// copies the objects themselves - see <see cref="CopySelectedObjects"/>.
+    /// </summary>
     public void CopySelectedComposition()
     {
-        if (Session.SelectedObject is not { } selected) return;
-        var package = CompositionTransfer.Copy(Session.Document, [selected.Id],
+        var ids = SelectionWithWholeGroups();
+        if (ids.Count == 0 || Session.SelectedObject is not { } primary) return;
+        var package = CompositionTransfer.Copy(Session.Document, ids,
             new CompositionCaptureOptions { ReferenceGridScale = ActiveSnapGrid()?.CellSize ?? 1 },
-            selected.Name + " copy");
+            primary.Name + " copy");
         CompositionClipboard.Set(package); StatusDetail = "Композиция скопирована для другого окна карты.";
+    }
+
+    /// <summary>Pastes the composition buffer as one nested composition object.</summary>
+    public void PasteComposition()
+    {
+        var package = CompositionClipboard.Get();
+        if (package is null) { StatusDetail = "Сначала скопируйте композицию."; return; }
+        var (layer, createLayer) = EnsureObjectLayer();
+        if (layer is null) { StatusDetail = NoUsableObjectLayer; return; }
+        var centre = ViewCentre();
+        var instance = CompositionTransfer.CreateInstance(package, centre.X, centre.Y, ActiveSnapGrid()?.CellSize);
+        ExecuteWithOptionalLayer(
+            new PasteCompositionCommand(layer.Id, instance, package.Assets),
+            createLayer, "Paste composition on a new layer");
+        Session.SelectedObjectId = instance.Id; _activeLayerId = layer.Id; AfterEdit();
+    }
+
+    /// <summary>
+    /// Every selected object, whole groups included, into Map's own object buffer. Copying shows
+    /// no duplicate on the canvas and does not touch the document, so it is not an undoable edit.
+    /// </summary>
+    public void CopySelectedObjects()
+    {
+        var ids = SelectionWithWholeGroups();
+        if (ids.Count == 0)
+        {
+            StatusDetail = "Сначала выделите хотя бы один объект.";
+            return;
+        }
+
+        ObjectClipboard.Set(ObjectTransfer.Copy(Session.Document, ids));
+        StatusDetail = $"Скопировано: {EditorLabels.Objects(ids.Count)}.";
+        Raise(nameof(CanPasteObjects));
+    }
+
+    /// <summary>True when the object buffer holds something this window could paste.</summary>
+    public bool CanPasteObjects => ObjectClipboard.Count > 0;
+
+    /// <summary>
+    /// The selection widened to whole groups: copying one member of a group copies the group, the
+    /// same unit the user selects and moves on the canvas.
+    /// </summary>
+    private IReadOnlyList<ObjectId> SelectionWithWholeGroups()
+    {
+        var selected = Session.SelectedObjects;
+        if (selected.Count == 0)
+        {
+            return [];
+        }
+
+        var ids = new List<ObjectId>();
+        var seen = new HashSet<ObjectId>();
+        foreach (var sceneObject in selected)
+        {
+            var unit = sceneObject.GroupId is { } group
+                ? SceneGeometry.GroupMembers(Session.Document, group).Select(member => member.Id)
+                : [sceneObject.Id];
+            foreach (var id in unit)
+            {
+                if (seen.Add(id))
+                {
+                    ids.Add(id);
+                }
+            }
+        }
+
+        return ids;
     }
 
     public AssetRecord? RepairAssetSource(AssetRecord record, string replacementPath)
@@ -5048,14 +5191,48 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
     }
 
-    public void PasteComposition()
+    /// <summary>
+    /// Restores the whole copied buffer as real, separately editable objects: the same count, the
+    /// same mutual layout, sizes, rotations, flips, opacity, sublayers, styles and asset identity,
+    /// in the same draw order, but with fresh ids. It is ONE history entry, so a single undo takes
+    /// the entire pasted group away and a single redo brings all of it back, and the new group -
+    /// not one arbitrary member of it - becomes the selection. Repeating the paste cascades by a
+    /// steady step instead of stacking every copy on one spot.
+    /// </summary>
+    public void PasteObjects()
     {
-        var layer = ActiveObjectLayer(); var package = CompositionClipboard.Get();
-        if (layer is null || package is null) { StatusDetail = "Сначала скопируйте композицию."; return; }
-        var centre = ViewCentre();
-        var instance = CompositionTransfer.CreateInstance(package, centre.X, centre.Y, ActiveSnapGrid()?.CellSize);
-        Session.Execute(new PasteCompositionCommand(layer.Id, instance, package.Assets));
-        Session.SelectedObjectId = instance.Id; _activeLayerId = layer.Id; AfterEdit();
+        if (ObjectClipboard.Get() is not { } payload)
+        {
+            StatusDetail = "Сначала скопируйте объекты.";
+            return;
+        }
+
+        if (payload.Assets.Count > 0
+            && !MapProjectStore.CanAdmitAdditionalAssets(Session.Document, payload.Assets, out var budgetRefusal))
+        {
+            StatusDetail = "Вставка не помещается в бюджет проекта: " + budgetRefusal;
+            return;
+        }
+
+        var (layer, createLayer) = EnsureObjectLayer();
+        if (layer is null)
+        {
+            StatusDetail = NoUsableObjectLayer;
+            return;
+        }
+
+        var step = Math.Clamp(ActiveSnapGrid()?.CellSize ?? 24, 8, 128);
+        var shift = step * ObjectClipboard.TakePasteOrdinal();
+        var objects = ObjectTransfer.Instantiate(
+            payload, payload.SourceLeft + shift, payload.SourceTop + shift);
+
+        var paste = new PasteObjectsCommand(layer.Id, objects, payload.Assets);
+        ExecuteWithOptionalLayer(paste, createLayer, "Paste objects on a new layer");
+        _activeLayerId = layer.Id;
+        Session.SetSelection(paste.PastedObjectIds);
+        AfterEdit();
+        AfterSelectionChange();
+        StatusDetail = $"Вставлено: {EditorLabels.Objects(objects.Count)}.";
     }
 
     public void FlattenSelectedComposition()
@@ -6174,8 +6351,8 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     /// <summary>
     /// Creates a named group from the whole selection as one undoable command and selects the
-    /// new group. Refusals (too few objects, empty name, partial regrouping) change nothing and
-    /// explain themselves in the status line.
+    /// new group. A blank name receives the Stage 14 automatic group label. Refusals (too few
+    /// objects or partial regrouping) change nothing and explain themselves in the status line.
     /// </summary>
     public bool GroupSelection(string? name)
     {
@@ -6515,6 +6692,482 @@ public sealed partial class EditorViewModel : ViewModelBase
                 Sublayer = Math.Clamp(o.Sublayer + Math.Sign(direction), -10, 10),
             })],
             "Change selection sublayer");
+    }
+
+    // ------------------------------------- common properties of the whole selection
+
+    /// <summary>The lowest and highest level an object may hold. One integer band, no fractions.</summary>
+    public const int MinimumSublayer = -10;
+
+    public const int MaximumSublayer = 10;
+
+    /// <summary>An object level as the user reads it: a signed integer, never a bare "3".</summary>
+    public static string FormatSublayer(int value) =>
+        value > 0 ? "+" + value.ToString(CultureInfo.InvariantCulture)
+            : value.ToString(CultureInfo.InvariantCulture);
+
+    /// <summary>The level every selected object shares, or null when they disagree or none is selected.</summary>
+    public int? SelectionSublayer
+    {
+        get
+        {
+            var selected = Session.SelectedObjects;
+            if (selected.Count == 0)
+            {
+                return null;
+            }
+
+            var first = selected[0].Sublayer;
+            return selected.All(item => item.Sublayer == first) ? first : null;
+        }
+    }
+
+    /// <summary>True when the selection holds more than one level, so no single number is honest.</summary>
+    public bool SelectionSublayerIsMixed =>
+        Session.SelectedObjects.Count > 1 && SelectionSublayer is null;
+
+    /// <summary>Signed level, the word "разные" for a mixed selection, or a dash for none.</summary>
+    public string SelectionSublayerReadout => Session.SelectedObjects.Count == 0
+        ? "—"
+        : SelectionSublayer is { } value ? FormatSublayer(value) : "разные";
+
+    /// <summary>
+    /// Gives the whole selection one level. Used when the objects already agree, so the slider
+    /// shows a real shared number and dragging it means exactly what it says.
+    /// </summary>
+    public bool SetSelectionSublayer(int value, bool commit = true)
+    {
+        var bounded = Math.Clamp(value, MinimumSublayer, MaximumSublayer);
+        return EditSelection("Change selection level", commit,
+            before => before.Sublayer == bounded ? before : CopyObject(before) with { Sublayer = bounded });
+    }
+
+    /// <summary>
+    /// Moves every selected object by the same number of levels, keeping the differences between
+    /// them. This is what a mixed selection needs: nothing is flattened onto one value, and the
+    /// whole shift is one undoable command.
+    /// </summary>
+    public bool ShiftSelectionSublayer(int delta, bool commit = true)
+    {
+        if (delta == 0)
+        {
+            return false;
+        }
+
+        // A member already at the edge would silently swallow part of the shift and change the
+        // relative order, so the shift is trimmed to what every member can actually travel.
+        var selected = Session.SelectedObjects;
+        if (selected.Count == 0)
+        {
+            return false;
+        }
+
+        var room = delta > 0
+            ? selected.Min(item => MaximumSublayer - item.Sublayer)
+            : selected.Min(item => item.Sublayer - MinimumSublayer);
+        var applied = Math.Sign(delta) * Math.Min(Math.Abs(delta), Math.Max(0, room));
+        if (applied == 0)
+        {
+            StatusDetail = delta > 0
+                ? "Выделение уже на максимальном уровне."
+                : "Выделение уже на минимальном уровне.";
+            return false;
+        }
+
+        return EditSelection("Shift selection level", commit, before => CopyObject(before) with
+        {
+            Sublayer = Math.Clamp(before.Sublayer + applied, MinimumSublayer, MaximumSublayer),
+        });
+    }
+
+    /// <summary>Opacity shared by the whole selection, or null when the members disagree.</summary>
+    public double? SelectionOpacityPercent
+    {
+        get
+        {
+            var selected = Session.SelectedObjects;
+            if (selected.Count == 0)
+            {
+                return null;
+            }
+
+            var first = selected[0].ObjectOpacity;
+            return selected.All(item => Math.Abs(item.ObjectOpacity - first) < 0.0001)
+                ? Math.Round(first * 100, 1)
+                : null;
+        }
+    }
+
+    public bool SetSelectionOpacityPercent(double percent, bool commit = true)
+    {
+        if (!double.IsFinite(percent))
+        {
+            InspectorError = "Непрозрачность задаётся числом 0..100.";
+            return false;
+        }
+
+        var opacity = Math.Clamp(percent, 0, 100) / 100.0;
+        return EditSelection("Change selection opacity", commit,
+            before => before.ObjectOpacity == opacity
+                ? before
+                : CopyObject(before) with { ObjectOpacity = opacity });
+    }
+
+    /// <summary>Rotation shared by the whole selection, or null when the members disagree.</summary>
+    public double? SelectionRotationDegrees
+    {
+        get
+        {
+            var selected = Session.SelectedObjects;
+            if (selected.Count == 0)
+            {
+                return null;
+            }
+
+            var first = NormalizeUnsignedAngle(selected[0].RotationDegrees);
+            return selected.All(item =>
+                Math.Abs(NormalizeUnsignedAngle(item.RotationDegrees) - first) < 0.0001)
+                ? first
+                : null;
+        }
+    }
+
+    /// <summary>Turns every selected object to the same angle around its own centre.</summary>
+    public bool SetSelectionRotationDegrees(double degrees, bool commit = true)
+    {
+        if (!double.IsFinite(degrees))
+        {
+            InspectorError = "Поворот задаётся числом 0..359 градусов.";
+            return false;
+        }
+
+        var normalized = NormalizeUnsignedAngle(degrees);
+        return EditSelection("Change selection rotation", commit,
+            before => Math.Abs(before.RotationDegrees - normalized) < 0.0001
+                ? before
+                : WithGeometry(before, before.X, before.Y, before.Width, before.Height, normalized));
+    }
+
+    /// <summary>
+    /// True when every selected object is a placed asset, which is the only case where a single
+    /// "scale %" has a shared meaning: each stamp carries its own 100 % reference size.
+    /// </summary>
+    public bool SelectionIsAllStamps =>
+        Session.SelectedObjects.Count > 0 && Session.SelectedObjects.All(item => item.Stamp is not null);
+
+    /// <summary>Scale shared by an all-stamp selection, or null when the members disagree.</summary>
+    public double? SelectionScalePercent
+    {
+        get
+        {
+            if (!SelectionIsAllStamps)
+            {
+                return null;
+            }
+
+            var values = Session.SelectedObjects
+                .Select(item =>
+                {
+                    var reference = item.Stamp!.ReferenceWidth ?? item.Width;
+                    return reference <= 0 ? (double?)null : Math.Round(item.Width / reference * 100, 1);
+                })
+                .ToList();
+            return values.All(value => value is not null)
+                && values.Skip(1).All(value => Math.Abs(value!.Value - values[0]!.Value) < 0.05)
+                ? values[0]
+                : null;
+        }
+    }
+
+    public bool SetSelectionScalePercent(double percent, bool commit = true)
+    {
+        if (!double.IsFinite(percent))
+        {
+            InspectorError = "Масштаб задаётся числом в процентах.";
+            return false;
+        }
+
+        var factor = Math.Clamp(percent, 10, 400) / 100.0;
+        return EditSelection("Change selection scale", commit, before =>
+        {
+            if (before.Stamp is not { } stamp)
+            {
+                return before;
+            }
+
+            var referenceWidth = stamp.ReferenceWidth ?? before.Width;
+            var referenceHeight = stamp.ReferenceHeight ?? before.Height;
+            var width = Math.Max(0.5, referenceWidth * factor);
+            var height = Math.Max(0.5, referenceHeight * factor);
+            var adopted = stamp.ReferenceWidth is null
+                ? stamp with { ReferenceWidth = referenceWidth, ReferenceHeight = referenceHeight }
+                : stamp;
+            var moved = WithGeometry(
+                before,
+                before.X + ((before.Width - width) / 2),
+                before.Y + ((before.Height - height) / 2),
+                width, height, before.RotationDegrees);
+            return moved with { Stamp = adopted };
+        });
+    }
+
+    private IReadOnlyList<SceneObject>? _selectionGestureBefore;
+
+    /// <summary>
+    /// One property gesture over the WHOLE selection: previews while the pointer is down and lands
+    /// exactly one history entry when it is released. The "before" list belongs to the gesture, so
+    /// a preview that started on this selection can never commit onto a different one.
+    /// </summary>
+    private bool EditSelection(string name, bool commit, Func<SceneObject, SceneObject> change)
+    {
+        var current = EditableSelectionList();
+        if (_selectionGestureBefore is { } pending
+            && (current is null
+                || !pending.Select(item => item.Id).SequenceEqual(current.Select(item => item.Id))))
+        {
+            _selectionGestureBefore = null;
+            DragPreview = null;
+        }
+
+        var before = _selectionGestureBefore ?? current;
+        if (before is null || before.Count == 0)
+        {
+            return false;
+        }
+
+        var after = before.Select(change).ToList();
+        if (!commit)
+        {
+            _selectionGestureBefore = before;
+            DragPreview = new DragPreview(before, after, DragMode.Move, null, 0, 0, null);
+            SceneChanged?.Invoke(this, EventArgs.Empty);
+            return true;
+        }
+
+        _selectionGestureBefore = null;
+        DragPreview = null;
+        if (before.SequenceEqual(after))
+        {
+            SceneChanged?.Invoke(this, EventArgs.Empty);
+            return false; // no-op: no history entry
+        }
+
+        Session.Execute(new ReplaceObjectsCommand(before, after, name));
+        AfterEdit();
+        return true;
+    }
+
+    // ------------------------------------------------ owner layer and draw order
+
+    /// <summary>
+    /// The layer that owns the selection, by its user-visible name. Never a GUID or an internal
+    /// key: the user has to recognise the layer they are about to move an object out of.
+    /// </summary>
+    public string SelectedOwnerLayerName
+    {
+        get
+        {
+            var owners = SelectionOwnerLayerIds();
+            return owners.Count switch
+            {
+                0 => "—",
+                1 => Session.Document.FindLayer(owners[0])?.Name ?? "—",
+                _ => "Разные слои",
+            };
+        }
+    }
+
+    /// <summary>
+    /// Every object layer of the document, in document order, each with the name the layers panel
+    /// shows. Hidden and locked layers stay in the list and carry the reason they cannot be
+    /// chosen, so the selector never hides a layer the user is looking for.
+    /// </summary>
+    public IReadOnlyList<ObjectLayerTarget> ObjectLayerTargets
+    {
+        get
+        {
+            var owners = SelectionOwnerLayerIds();
+            var current = owners.Count == 1 ? owners[0] : (LayerId?)null;
+            return
+            [
+                .. Session.Document.Layers.OfType<ObjectLayer>()
+                    .Select(layer => new ObjectLayerTarget(
+                        layer.Id,
+                        layer.Name,
+                        layer.Id == current,
+                        layer.Visible && !layer.Locked,
+                        !layer.Visible ? "скрыт" : layer.Locked ? "заблокирован" : null)),
+            ];
+        }
+    }
+
+    /// <summary>Object layers that would actually accept the selection right now.</summary>
+    public IReadOnlyList<ObjectLayerTarget> AvailableObjectLayerTargets =>
+        [.. ObjectLayerTargets.Where(target => target.Available)];
+
+    private IReadOnlyList<LayerId> SelectionOwnerLayerIds() =>
+    [
+        .. Session.SelectedObjects
+            .Select(sceneObject => DocumentEditor.FindLayerOf(Session.Document, sceneObject.Id))
+            .OfType<MapLayer>()
+            .Select(layer => layer.Id)
+            .Distinct(),
+    ];
+
+    /// <summary>
+    /// The selection's own level inside its layer, as the user sees it: one number, or a plain
+    /// word when the selected objects disagree.
+    /// </summary>
+    public string SelectedSublayerSummary
+    {
+        get
+        {
+            var selected = Session.SelectedObjects;
+            if (selected.Count == 0)
+            {
+                return "—";
+            }
+
+            var levels = selected.Select(item => item.Sublayer).Distinct().ToList();
+            return levels.Count == 1 ? levels[0].ToString() : "разные";
+        }
+    }
+
+    /// <summary>
+    /// Moves the selection to the next compatible object layer, wrapping around. This is the one
+    /// click behind the "Слой" control: the user reads the current layer and steps to another one
+    /// without hunting for a separate dialog.
+    /// </summary>
+    public bool CycleSelectionLayer()
+    {
+        var targets = AvailableObjectLayerTargets;
+        if (targets.Count == 0)
+        {
+            StatusDetail = "Нет другого видимого разблокированного слоя объектов.";
+            return false;
+        }
+
+        if (targets.Count == 1 && targets[0].IsCurrent)
+        {
+            StatusDetail = "Это единственный доступный слой объектов.";
+            return false;
+        }
+
+        var currentIndex = targets.ToList().FindIndex(target => target.IsCurrent);
+        var next = targets[(currentIndex + 1 + targets.Count) % targets.Count];
+        return MoveSelectionToLayer(next.Id);
+    }
+
+    /// <summary>
+    /// Moves the whole selection to another object layer as one undoable step. Whole groups travel
+    /// together, and a selection that is not fully editable refuses outright rather than moving
+    /// part of itself. Each object keeps its own sublayer, so the level the user set survives.
+    /// </summary>
+    public bool MoveSelectionToLayer(LayerId targetId)
+    {
+        if (EditableSelectionList() is null)
+        {
+            return false;
+        }
+
+        if (Session.Document.FindLayer(targetId) is not ObjectLayer { Visible: true, Locked: false } target)
+        {
+            StatusDetail = "Слой недоступен: он скрыт, заблокирован или не хранит объекты.";
+            return false;
+        }
+
+        var ids = SelectionWithWholeGroups();
+        var bySource = ids
+            .Select(id => (Id: id, Layer: DocumentEditor.FindLayerOf(Session.Document, id)))
+            .Where(pair => pair.Layer is not null && pair.Layer.Id != targetId)
+            .GroupBy(pair => pair.Layer!.Id)
+            .ToList();
+        if (bySource.Count == 0)
+        {
+            StatusDetail = $"Объекты уже находятся на слое «{target.Name}».";
+            return false;
+        }
+
+        var steps = bySource
+            .Select(group => (IEditCommand)new MoveObjectsToLayerCommand(
+                Session.Document, group.Key, targetId, [.. group.Select(pair => pair.Id)]))
+            .ToList();
+        Session.Execute(steps.Count == 1
+            ? steps[0]
+            : new CompositeCommand("Move selection to another layer", steps));
+        _activeLayerId = targetId;
+        Session.SetSelection(ids);
+        AfterEdit();
+        AfterSelectionChange();
+        StatusDetail = $"Перенесено на слой «{target.Name}»: {EditorLabels.Objects(ids.Count)}.";
+        return true;
+    }
+
+    /// <summary>
+    /// Moves the selection above or below its neighbours inside its own layer. This is the fine
+    /// order that breaks ties inside a sublayer band; <see cref="AdjustSelectedSublayer"/> is the
+    /// coarse band itself. <paramref name="toExtreme"/> sends the selection all the way.
+    /// </summary>
+    public bool ReorderSelection(int direction, bool toExtreme = false)
+    {
+        if (direction == 0 || EditableSelectionList() is not { } selection)
+        {
+            return false;
+        }
+
+        var owners = SelectionOwnerLayerIds();
+        if (owners.Count != 1 || Session.Document.FindLayer(owners[0]) is not ObjectLayer layer)
+        {
+            StatusDetail = "Порядок меняется в пределах одного слоя: выделение лежит на разных слоях.";
+            return false;
+        }
+
+        var order = layer.Objects.ToList();
+        var selected = selection.Select(item => item.Id).ToHashSet();
+        var up = direction > 0;
+
+        if (toExtreme)
+        {
+            var moved = order.Where(item => selected.Contains(item.Id)).ToList();
+            var rest = order.Where(item => !selected.Contains(item.Id)).ToList();
+            order = up ? [.. rest, .. moved] : [.. moved, .. rest];
+        }
+        else if (up)
+        {
+            // Walk from the front so a run of selected objects keeps its own internal order.
+            for (var index = order.Count - 2; index >= 0; index--)
+            {
+                if (selected.Contains(order[index].Id) && !selected.Contains(order[index + 1].Id)
+                    && order[index].Sublayer == order[index + 1].Sublayer)
+                {
+                    (order[index], order[index + 1]) = (order[index + 1], order[index]);
+                }
+            }
+        }
+        else
+        {
+            for (var index = 1; index < order.Count; index++)
+            {
+                if (selected.Contains(order[index].Id) && !selected.Contains(order[index - 1].Id)
+                    && order[index].Sublayer == order[index - 1].Sublayer)
+                {
+                    (order[index], order[index - 1]) = (order[index - 1], order[index]);
+                }
+            }
+        }
+
+        if (order.Select(item => item.Id).SequenceEqual(layer.Objects.Select(item => item.Id)))
+        {
+            StatusDetail = up
+                ? "Выделение уже выше всех соседей своего подслоя."
+                : "Выделение уже ниже всех соседей своего подслоя.";
+            return false;
+        }
+
+        Session.Execute(new ReorderObjectsCommand(
+            layer.Id, layer.Objects, order, up ? "Move selection up" : "Move selection down"));
+        AfterEdit();
+        return true;
     }
 
     public void AdjustSelectedOpacity(int direction, bool largerStep = false)
@@ -7319,6 +7972,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     public void CancelAppearanceGesture()
     {
         _appearanceGestureBefore = null;
+        _selectionGestureBefore = null;
         DragPreview = null;
         SceneChanged?.Invoke(this, EventArgs.Empty);
     }

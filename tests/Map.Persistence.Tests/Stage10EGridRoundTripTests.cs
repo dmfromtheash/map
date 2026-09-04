@@ -40,7 +40,8 @@ public partial class Stage10EGridRoundTripTests
             reopened.Layers.OfType<GridLayer>().Single().Grids.Select(grid => grid.Geometry));
         using var archive = ZipFile.OpenRead(path);
         using var reader = new StreamReader(archive.GetEntry(MapProjectFormat.ManifestEntry)!.Open());
-        Assert.True(JsonTestMutations.ContainsFragment(reader.ReadToEnd(), "\"schemaVersion\": 1"));
+        Assert.True(JsonTestMutations.ContainsFragment(
+            reader.ReadToEnd(), $"\"schemaVersion\": {MapProjectFormat.SchemaVersion}"));
     }
 
     [Fact]

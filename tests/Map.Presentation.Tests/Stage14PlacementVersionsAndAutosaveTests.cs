@@ -1,4 +1,4 @@
-using Map.Assets;
+﻿using Map.Assets;
 using Map.Core.Documents;
 using Map.Presentation.Tests.Support;
 using Map.Presentation.ViewModels;
@@ -90,7 +90,7 @@ public sealed class Stage14PlacementVersionsAndAutosaveTests : IDisposable
         Assert.True(stampEditor.RotatePendingPlacement(-1, largerStep: true));
         stampEditor.UpdatePlacementPreview(420, 300);
         var stampPreview = Assert.Single(stampEditor.PlacementPreviewObjects);
-        Assert.Equal(-15, stampPreview.RotationDegrees);
+        Assert.Equal(345, stampPreview.RotationDegrees);
         Assert.Same(stampSource, stampEditor.Session.Document);
 
         Assert.True(stampEditor.CommitPendingPlacement());
@@ -214,9 +214,12 @@ public sealed class Stage14PlacementVersionsAndAutosaveTests : IDisposable
         editor.UpdatePlacementPreview(200, 200);
         var before = editor.Session.Document;
 
+        // A map with no object layer now gets one made for it, but a layer the user deliberately
+        // LOCKED still refuses - and the refusal has to say which of the two situations this is.
         Assert.False(editor.CommitPendingPlacement());
         Assert.Same(before, editor.Session.Document);
-        Assert.Contains("Создайте слой объектов", editor.PlacementRefusal);
+        Assert.Contains("заблокирован", editor.PlacementRefusal, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("слой объектов", editor.PlacementRefusal, StringComparison.OrdinalIgnoreCase);
         Assert.True(editor.CreateObjectLayerAndContinuePlacement());
         editor.UpdatePlacementPreview(200, 200);
         Assert.True(editor.CommitPendingPlacement());

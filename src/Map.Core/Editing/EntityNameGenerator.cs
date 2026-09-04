@@ -1,4 +1,4 @@
-using System.Text.RegularExpressions;
+﻿using System.Text.RegularExpressions;
 using Map.Core.Documents;
 
 namespace Map.Core.Editing;
@@ -19,7 +19,7 @@ public static partial class EntityNameGenerator
 
         if (!string.IsNullOrWhiteSpace(preferred))
         {
-            var basis = Normalize(preferred, "Штамп");
+            var basis = Normalize(preferred, "Ассет");
             return Unique(names, basis, suffixFirst: false);
         }
 
@@ -49,7 +49,7 @@ public static partial class EntityNameGenerator
             .Select(item => item.Name)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var label = !string.IsNullOrWhiteSpace(preferred)
-            ? Normalize(preferred, "Штамп")
+            ? Normalize(preferred, "Ассет")
             : kind switch
             {
                 SceneObjectKind.Ellipse => "Эллипс",

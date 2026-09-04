@@ -1,4 +1,4 @@
-using Map.Core.Documents;
+﻿using Map.Core.Documents;
 using Map.Core.Editing;
 
 namespace Map.Presentation.ViewModels;
@@ -75,5 +75,13 @@ public sealed record PlacementSession
     public string? VariantSha256 { get; init; }
     public StampToolSettings? StampSettingsSnapshot { get; init; }
 
-    public bool CanCommit => LayerId is not null && InvalidReason is null && PointerVisible;
+    /// <summary>
+    /// The document has no visible unlocked object layer, so committing this placement will create
+    /// one first. Placing a tree must not require the user to prepare the document by hand, and the
+    /// new layer belongs to the same undo step as the object (see CommitPendingPlacement).
+    /// </summary>
+    public bool WillCreateLayer { get; init; }
+
+    public bool CanCommit =>
+        (LayerId is not null || WillCreateLayer) && InvalidReason is null && PointerVisible;
 }

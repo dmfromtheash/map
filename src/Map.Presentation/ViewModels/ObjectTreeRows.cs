@@ -1,4 +1,4 @@
-using Map.Core.Documents;
+﻿using Map.Core.Documents;
 
 namespace Map.Presentation.ViewModels;
 
@@ -129,7 +129,7 @@ public static class ObjectTreeRows
     /// <summary>The user-facing name of a type filter choice.</summary>
     public static string FilterTitle(ObjectTypeFilter filter) => filter switch
     {
-        ObjectTypeFilter.Stamps => "Штампы",
+        ObjectTypeFilter.Stamps => "Ассеты",
         ObjectTypeFilter.Text => "Текст",
         ObjectTypeFilter.Lines => "Линии",
         ObjectTypeFilter.Shapes => "Фигуры",

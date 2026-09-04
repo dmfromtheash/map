@@ -63,8 +63,6 @@ public sealed class EditorView : UserControl
     private readonly TextBox _heightBox = NumberBox("HeightBox");
     private readonly TextBox _rotationBox = NumberBox("RotationBox");
     private Control _rotationInspectorRow = null!;
-    private Control _sublayerInspectorRow = null!;
-    private Control _opacityInspectorRow = null!;
 
     // ------------------------------------------------------------- side lists
     private readonly StackPanel _layerList = new() { Spacing = 2 };
@@ -343,6 +341,12 @@ public sealed class EditorView : UserControl
     private bool _syncingLibrary;
     private readonly ThumbnailCache _thumbnails = new(96);
     private readonly CheckpointPreviewCache _checkpointPreviews = new();
+    private readonly List<Action> _levelSyncs = [];
+    // The quick strip above the canvas shows the same handful of properties as the object panel.
+    // Both read and write one view model, and both refresh from this one list, so neither can
+    // show a number the other disagrees with.
+    private readonly List<Action> _quickSyncs = [];
+    private readonly Dictionary<string, ListBox> _layerLists = [];
     private Button _objectVisibilityValue = null!;
     private Button _objectLockValue = null!;
     private ToggleButton _eraserButton = null!;
@@ -363,6 +367,7 @@ public sealed class EditorView : UserControl
         Name = "EditorView";
 
         var topBar = BuildTopBar(requestBack, requestSecondWindow, requestShortcutSettings);
+        var quickBar = BuildQuickPropertyBar();
         var rail = BuildToolRail();
         var contextPanel = BuildContextPanel();
         var sidePanel = BuildSidePanel();
@@ -375,6 +380,10 @@ public sealed class EditorView : UserControl
             Children =
             {
                 topBar.Docked(Dock.Top),
+
+                // Docked, not floating: the strip takes its own band and the canvas fills what is
+                // left, so it can never cover the map.
+                quickBar.Docked(Dock.Top),
                 statusBar.Docked(Dock.Bottom),
                 hintBar.Docked(Dock.Bottom),
                 rail.Docked(Dock.Left),
@@ -688,18 +697,29 @@ public sealed class EditorView : UserControl
         _shortcutSettingsButton = Ui.TextButton(
             "ShortcutSettingsButton", "Сочетания…", requestShortcutSettings, "compact");
 
+        // A flyout is a logical child of the button that owns it, so the app bar's "every caption
+        // in here is light" rule reached inside the file menu and drew its words in #F8F3EB on
+        // white paper - 1.08:1. The menu states its own colour, which no style can outrank.
+        var menuInk = Application.Current?.FindResource("MapTextBrush") as IBrush;
+
         MenuItem Item(string header, string icon, Action action)
         {
             var item = new MenuItem
             {
+                Foreground = menuInk,
                 Header = new StackPanel
                 {
                     Orientation = Orientation.Horizontal,
                     Spacing = 8,
                     Children =
                     {
-                        MapIcons.Stroked(icon, 15),
-                        new TextBlock { Text = header, VerticalAlignment = VerticalAlignment.Center },
+                        MapIcons.Stroked(icon, 15, menuInk),
+                        new TextBlock
+                        {
+                            Text = header,
+                            Foreground = menuInk,
+                            VerticalAlignment = VerticalAlignment.Center,
+                        },
                     },
                 },
             };
@@ -708,8 +728,14 @@ public sealed class EditorView : UserControl
             return item;
         }
 
-        var autosaveItem = new MenuItem();
-        void SyncAutosaveMenu() => autosaveItem.Header = _editor.PrimaryAutosaveEnabled
+        var autosaveItem = new MenuItem { Foreground = menuInk };
+        var autosaveCaption = new TextBlock
+        {
+            Foreground = menuInk,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        autosaveItem.Header = autosaveCaption;
+        void SyncAutosaveMenu() => autosaveCaption.Text = _editor.PrimaryAutosaveEnabled
             ? "Автосохранение: включено"
             : "Автосохранение: выключено";
         SyncAutosaveMenu();
@@ -786,43 +812,460 @@ public sealed class EditorView : UserControl
         };
     }
 
+    // ========================================================== quick property strip
+
+    /// <summary>
+    /// The properties a selected object needs constantly, as a strip across the top of the editor
+    /// rather than as the first rows of a panel that has to be scrolled.
+    /// <para>
+    /// The owner's reference shows these next to each other above the map, and that is the point:
+    /// layer, level, scale, opacity and rotation are read and changed far more often than anything
+    /// else, so they must be where the eye already is. The detailed panel keeps all of them too -
+    /// both surfaces call the same view model and refresh from the same list, so there is one
+    /// source of truth and never two numbers that disagree.
+    /// </para>
+    /// The strip is always present at a fixed height, so the canvas never jumps when a selection
+    /// appears or goes away, and it scrolls sideways rather than clipping a caption when the
+    /// window is narrow.
+    /// </summary>
+    private Control BuildQuickPropertyBar()
+    {
+        var thumbnail = new Image
+        {
+            Width = 20,
+            Height = 20,
+            Stretch = Stretch.Uniform,
+            VerticalAlignment = VerticalAlignment.Center,
+        }.Named("QuickThumbnail");
+
+        var identity = new TextBlock
+        {
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            MaxWidth = 220,
+            FontWeight = FontWeight.SemiBold,
+        }.Named("QuickIdentity");
+
+        var layer = BuildOwnerLayerPicker("Quick");
+        layer.Width = 178;
+        layer.HorizontalAlignment = HorizontalAlignment.Left;
+
+        var (levelBlock, _) = BuildQuickLevel();
+
+        var scale = BuildQuickNumber(
+            "QuickScale", "Масштаб", "%", 10, 400,
+            () => _editor.SelectionScalePercent,
+            value => _editor.SetSelectionScalePercent(value, commit: true));
+        var opacity = BuildQuickNumber(
+            "QuickOpacity", "Непрозрачность", "%", 0, 100,
+            () => _editor.SelectionOpacityPercent,
+            value => _editor.SetSelectionOpacityPercent(value, commit: true));
+        var rotation = BuildQuickNumber(
+            "QuickRotation", "Поворот", "°", 0, 359,
+            () => _editor.SelectionRotationDegrees,
+            value => _editor.SetSelectionRotationDegrees(value, commit: true));
+
+        var strip = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 10,
+            VerticalAlignment = VerticalAlignment.Center,
+            Children =
+            {
+                thumbnail,
+                identity,
+                QuickDivider(),
+                QuickField("Слой", layer),
+                levelBlock,
+                QuickDivider(),
+                scale,
+                opacity,
+                rotation,
+            },
+        };
+
+        var empty = new TextBlock
+        {
+            Text = "Ничего не выбрано — щёлкните объект на холсте или в списке «Объекты»",
+            VerticalAlignment = VerticalAlignment.Center,
+        }.Classed("muted").Named("QuickEmptyState");
+
+        var host = new Panel { Children = { empty, strip } };
+
+        _quickSyncs.Add(() =>
+        {
+            var count = _editor.SelectionCount;
+            var selected = _editor.Session.SelectedObject;
+            strip.IsVisible = count > 0;
+            empty.IsVisible = count == 0;
+
+            thumbnail.Source = count == 1 && selected is not null
+                ? _thumbnails.Image(_editor.ObjectThumbnailPath(selected))
+                : null;
+            thumbnail.IsVisible = thumbnail.Source is not null;
+            identity.Text = count switch
+            {
+                0 => "",
+                1 => selected?.Name ?? "Объект",
+                _ => "Выбрано: " + EditorLabels.Objects(count),
+            };
+            ToolTip.SetTip(identity, identity.Text);
+            AutomationProperties.SetName(identity, identity.Text);
+
+            // A percentage of a bitmap's own reference size means nothing for a shape or a
+            // caption, so the field is absent rather than lying with a blank.
+            scale.IsVisible = _editor.SelectionIsAllStamps;
+        });
+
+        var scroller = new ScrollViewer
+        {
+            HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
+            VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
+            Content = host,
+        };
+
+        return new Border
+        {
+            Height = 44,
+            Padding = new Thickness(10, 0),
+            Child = scroller,
+        }.Classed("quick-bar").Named("QuickPropertyBar");
+    }
+
+    private static Control QuickDivider() => new Border
+    {
+        Width = 1,
+        Margin = new Thickness(2, 8),
+        Background = Application.Current?.FindResource("MapBorderBrush") as IBrush,
+    };
+
+    /// <summary>A caption and its editor side by side, the strip's single row shape.</summary>
+    private static Control QuickField(string caption, Control editor)
+    {
+        var label = new TextBlock
+        {
+            Text = caption,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 6, 0),
+        }.Classed("muted");
+        return new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center,
+            Children = { label, editor },
+        };
+    }
+
+    /// <summary>
+    /// The level in the strip: the exact number, typed or stepped, plus a reset. It writes through
+    /// the same view model the slider in the panel writes through, so the two always agree.
+    /// </summary>
+    private (Control Block, TextBox Box) BuildQuickLevel()
+    {
+        var box = new TextBox
+        {
+            Width = 62,
+            VerticalAlignment = VerticalAlignment.Center,
+            TextAlignment = Avalonia.Media.TextAlignment.Center,
+        }.Named("QuickLevelBox");
+        AutomationProperties.SetName(box, "Уровень объекта");
+
+        var syncing = false;
+
+        void Commit()
+        {
+            if (syncing)
+            {
+                return;
+            }
+
+            var text = (box.Text ?? "").Trim().Replace('−', '-').Replace('+', ' ').Trim();
+            if (text.Length == 0)
+            {
+                SyncQuickBar();
+                return;
+            }
+
+            if (!int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value))
+            {
+                _editor.ReportInspectorError(
+                    "Уровень — целое число от " + EditorViewModel.MinimumSublayer
+                        + " до +" + EditorViewModel.MaximumSublayer + ".");
+                SyncQuickBar();
+                return;
+            }
+
+            var bounded = Math.Clamp(
+                value, EditorViewModel.MinimumSublayer, EditorViewModel.MaximumSublayer);
+            if (bounded != value)
+            {
+                _editor.ReportInspectorError(
+                    "Уровень ограничен диапазоном " + EditorViewModel.MinimumSublayer
+                        + "…+" + EditorViewModel.MaximumSublayer + ".");
+            }
+
+            _editor.SetSelectionSublayer(bounded, commit: true);
+            RefreshAfterSelectionCommand();
+        }
+
+        box.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter)
+            {
+                Commit();
+                e.Handled = true;
+            }
+            else if (e.Key == Key.Escape)
+            {
+                SyncQuickBar();
+                e.Handled = true;
+            }
+        };
+        box.LostFocus += (_, _) => Commit();
+
+        Button Step(string name, string caption, int direction, string tip)
+        {
+            var button = Ui.TextButton(name, caption, () =>
+            {
+                _editor.ShiftSelectionSublayer(direction);
+                RefreshAfterSelectionCommand();
+            }, "compact");
+            ToolTip.SetTip(button, tip);
+            return button;
+        }
+
+        var reset = ResetGlyph("QuickLevelResetButton", "Сбросить уровень к нулю", () =>
+        {
+            _editor.SetSelectionSublayer(0, commit: true);
+            RefreshAfterSelectionCommand();
+        });
+
+        _quickSyncs.Add(() =>
+        {
+            syncing = true;
+            try
+            {
+                box.Text = _editor.SelectionSublayerReadout;
+                Ui.SetClass(box, "mixed", _editor.SelectionSublayerIsMixed);
+                box.IsEnabled = _editor.SelectionCount > 0;
+                reset.IsEnabled = _editor.SelectionCount > 0;
+                AutomationProperties.SetName(box, "Уровень объекта: " + box.Text);
+                ToolTip.SetTip(box,
+                    "Уровень выделения, целое число от " + EditorViewModel.MinimumSublayer
+                        + " до +" + EditorViewModel.MaximumSublayer
+                        + ". Введите значение и нажмите Enter.");
+            }
+            finally
+            {
+                syncing = false;
+            }
+        });
+
+        var block = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 3,
+            VerticalAlignment = VerticalAlignment.Center,
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = "Уровень",
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(0, 0, 6, 0),
+                }.Classed("muted"),
+                Step("QuickLevelDownButton", "−", -1, "Опустить выделение на один уровень."),
+                box,
+                Step("QuickLevelUpButton", "+", 1, "Поднять выделение на один уровень."),
+                reset,
+            },
+        };
+        return (block, box);
+    }
+
+    /// <summary>
+    /// One compact numeric field of the strip. Empty means "the selected objects disagree", which
+    /// is the honest answer; typing a number gives all of them that value as one undoable command.
+    /// </summary>
+    private Control BuildQuickNumber(
+        string name, string caption, string unit, double minimum, double maximum,
+        Func<double?> read, Action<double> apply)
+    {
+        var box = new TextBox
+        {
+            Width = 58,
+            VerticalAlignment = VerticalAlignment.Center,
+            TextAlignment = Avalonia.Media.TextAlignment.Center,
+        }.Named(name + "Box");
+
+        var syncing = false;
+
+        void Commit()
+        {
+            if (syncing)
+            {
+                return;
+            }
+
+            var text = (box.Text ?? "").Trim().Replace(',', '.').Replace('−', '-');
+            if (text.Length == 0 || string.Equals(text, "разные", StringComparison.Ordinal))
+            {
+                SyncQuickBar();
+                return;
+            }
+
+            if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var value))
+            {
+                _editor.ReportInspectorError($"{caption} — число от {minimum:0.##} до {maximum:0.##} {unit}.");
+                SyncQuickBar();
+                return;
+            }
+
+            var bounded = Math.Clamp(value, minimum, maximum);
+            if (Math.Abs(bounded - value) > 0.0001)
+            {
+                _editor.ReportInspectorError($"{caption} ограничен диапазоном {minimum:0.##}…{maximum:0.##} {unit}.");
+            }
+
+            apply(bounded);
+            RefreshAfterSelectionCommand();
+        }
+
+        box.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter)
+            {
+                Commit();
+                e.Handled = true;
+            }
+            else if (e.Key == Key.Escape)
+            {
+                SyncQuickBar();
+                e.Handled = true;
+            }
+        };
+        box.LostFocus += (_, _) => Commit();
+
+        _quickSyncs.Add(() =>
+        {
+            syncing = true;
+            try
+            {
+                var value = read();
+                box.Text = value is { } number
+                    ? number.ToString("0.##", CultureInfo.InvariantCulture)
+                    : _editor.SelectionCount > 1 ? "разные" : "";
+                Ui.SetClass(box, "mixed", value is null && _editor.SelectionCount > 1);
+                box.IsEnabled = _editor.SelectionCount > 0;
+                AutomationProperties.SetName(box, $"{caption}, {unit}: {box.Text}");
+                ToolTip.SetTip(box,
+                    $"{caption} выделения, {minimum:0.##}…{maximum:0.##} {unit}. Введите значение и нажмите Enter.");
+            }
+            finally
+            {
+                syncing = false;
+            }
+        });
+
+        return QuickField(caption, new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 3,
+            VerticalAlignment = VerticalAlignment.Center,
+            Children =
+            {
+                box,
+                new TextBlock
+                {
+                    Text = unit,
+                    VerticalAlignment = VerticalAlignment.Center,
+                }.Classed("muted"),
+            },
+        });
+    }
+
+    /// <summary>Refreshes the strip and the object panel together - they share one list.</summary>
+    private void SyncQuickBar()
+    {
+        foreach (var sync in _quickSyncs)
+        {
+            sync();
+        }
+    }
+
     // ====================================================================== rail
 
     private Control BuildToolRail()
     {
-        Button Tool(string name, EditorTool tool, string icon)
+        Button Tool(EditorRailEntry entry)
         {
             var button = Ui.ToolButton(
-                name,
-                EditorLabels.Tool(tool),
-                icon,
-                ToolShortcut(tool),
-                () => _editor.ActiveTool = tool);
-            _toolButtons[tool] = button;
+                entry.AutomationId,
+                EditorLabels.Tool(entry.Tool),
+                MapIcons.Tool(entry.Tool),
+                ToolShortcut(entry.Tool),
+                () => _editor.ActiveTool = entry.Tool);
+            _toolButtons[entry.Tool] = button;
             return button;
         }
 
-        var stack = new StackPanel
+        // Assets is the ONE way into placing a catalog object. The old rail also carried a
+        // separate "Штамп" tool, so the same job had two competing entries and the user had to
+        // know that one of them only worked after the other. Picking an asset arms placement by
+        // itself, which is why this button is registered as the Stamp tool's own rail button: the
+        // active marker then tells the truth without a second icon existing.
+        Button Library(EditorRailEntry entry)
         {
-            Spacing = 7,
-            Margin = new Thickness(6, 8),
-            Children =
-            {
-                Tool("SelectToolButton", EditorTool.Select, MapIcons.Select),
-                RailDivider(),
-                Tool("LineToolButton", EditorTool.Line, MapIcons.Line),
-                Tool("ShapeToolButton", EditorTool.Shape, MapIcons.Shape),
-                Tool("TextToolButton", EditorTool.Text, MapIcons.Text),
-                Tool("StampToolButton", EditorTool.Stamp, MapIcons.ObjectStamp),
-                Tool("NotesToolButton", EditorTool.Notes, MapIcons.Notes),
-                RailDivider(),
-                Tool("BrushToolButton", EditorTool.Brush, MapIcons.Brush),
-                Tool("MaskToolButton", EditorTool.Mask, MapIcons.Mask),
-                Tool("LandToolButton", EditorTool.Land, MapIcons.Land),
-            },
-        };
+            var button = Ui.ToolButton(
+                entry.AutomationId,
+                "Ассеты — каталог гор, деревьев и других объектов",
+                MapIcons.Assets,
+                ToolShortcut(entry.Tool),
+                () =>
+                {
+                    // Pressing Ассеты puts the editor into the placement context AND opens the
+                    // catalog. Without the first half the rail marker lied: the button looked
+                    // active while the editor was still on whatever tool came before it, and a
+                    // user who closed the catalog was left with no way back into placement.
+                    _editor.ActiveTool = EditorTool.Stamp;
+                    OpenAssetCatalog(focusSearch: true);
+                    if (_editor.HasChosenAsset)
+                    {
+                        _editor.ArmStampPlacement();
+                    }
+                });
+            _toolButtons[entry.Tool] = button;
+            return button;
+        }
 
-        return new Border { Width = Ui.RailWidth, Child = stack }.Classed("rail");
+        // The order is the decision, so it is read from the shared layout rather than written out
+        // again here: the rail and the test that guards it cannot drift apart.
+        var stack = new StackPanel { Spacing = 7, Margin = new Thickness(6, 8) };
+        foreach (var group in EditorSurfaceLayout.RailGroups)
+        {
+            if (stack.Children.Count > 0)
+            {
+                stack.Children.Add(RailDivider());
+            }
+
+            foreach (var entry in group)
+            {
+                stack.Children.Add(entry.Kind == EditorRailEntryKind.Library ? Library(entry) : Tool(entry));
+            }
+        }
+
+        // The rail scrolls rather than spilling over the hint bar: the quick strip took a band of
+        // its own, and at a short window the last tools used to be drawn on top of the hint text.
+        return new Border
+        {
+            Width = Ui.RailWidth,
+            Child = new ScrollViewer
+            {
+                HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
+                VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
+                Content = stack,
+            },
+        }.Classed("rail");
     }
 
     private static Control RailDivider() => new Border
@@ -879,29 +1322,9 @@ public sealed class EditorView : UserControl
         _toolPanels[EditorTool.Notes] = BuildNotesTab();
     }
 
-    // Select does not create primitives. Its only adjacent action opens the visual object library;
+    // Select only selects existing objects. Assets are a separate rail command, while object
     // creation remains owned by Shape and Stamp, so the tool never changes meaning under the user.
-    private Control BuildSelectPanel()
-    {
-        var assets = Ui.CommandButton(
-            "SelectAssetsButton", "Ассеты", MapIcons.Assets,
-            () => OpenAssetCatalog(focusSearch: true), "asset-entry");
-        ToolTip.SetTip(assets, "Открыть галерею объектов: горы, деревья и другие ассеты");
-
-        return new StackPanel
-        {
-            Spacing = 8,
-            Children =
-            {
-                assets,
-                new TextBlock
-                {
-                    Text = "Горы, деревья и другие объекты для карты",
-                    TextWrapping = TextWrapping.Wrap,
-                }.Classed("faint", "role-caption"),
-            },
-        };
-    }
+    private static Control BuildSelectPanel() => new Border();
 
     private Control BuildLinePanel()
     {
@@ -1664,7 +2087,7 @@ public sealed class EditorView : UserControl
         _stampToolAreaText = area;
         _stampGestureBlock = BuildStampGestureBlock();
         var openLibrary = ShortcutTextButton(
-            "OpenLibraryButton", "Открыть библиотеку",
+            "OpenLibraryButton", "Открыть каталог ассетов",
             EditorShortcutSettings.Commands.StampFocusLibrary,
             () => OpenAssetCatalog(focusSearch: true), "compact");
         openLibrary.Content = new StackPanel
@@ -1674,20 +2097,23 @@ public sealed class EditorView : UserControl
             Children =
             {
                 MapIcons.Stroked(MapIcons.Assets, 17),
-                new TextBlock { Text = "Открыть библиотеку", VerticalAlignment = VerticalAlignment.Center },
+                new TextBlock { Text = "Открыть каталог ассетов", VerticalAlignment = VerticalAlignment.Center },
             },
         };
 
+        // The asset itself opens the panel: its picture, its name and the one button that goes
+        // back to the catalog. Everything below is a property OF that asset and of the placement
+        // about to happen, which is what the old "Штамп" heading never said.
         return new StackPanel
         {
             Spacing = 8,
             Children =
             {
-                Explanation(EditorLabels.ToolHint(EditorTool.Stamp)),
                 current,
-                area,
                 BuildCompactStampCatalog(),
                 openLibrary,
+                Explanation(EditorLabels.ToolHint(EditorTool.Stamp)),
+                area,
                 BuildStampEditor("FutureStamp"),
                 _stampGestureBlock,
                 Ui.TextButton(
@@ -2155,7 +2581,7 @@ public sealed class EditorView : UserControl
             OpenAssetCatalog(focusSearch: true);
         }, "compact");
         ToolTip.SetTip(replace,
-            "Открывает библиотеку. Выберите набор и нажмите «Заменить ассет выделенного штампа» — " +
+            "Открывает библиотеку. Выберите набор и нажмите «Заменить ассет выделенного объекта» — " +
             "положение, размер, поворот и эффекты сохранятся.");
 
         var aspect = new ToggleButton { Content = "Сохранять пропорции" }
@@ -2169,10 +2595,10 @@ public sealed class EditorView : UserControl
             Ui.SetClass(aspect, "active", _editor.StampAspectLocked);
         });
 
-        return Ui.Section("Штамп", new StackPanel
+        return Ui.Section("Ассет", new StackPanel
         {
             Spacing = 5,
-            Children = { replace, aspect, BuildStampEditor("SelectedStamp") },
+            Children = { replace, aspect, BuildStampEditor("SelectedStamp", includeTransform: false) },
         }).Named("StampObjectActions");
     }
 
@@ -2180,7 +2606,7 @@ public sealed class EditorView : UserControl
     /// One binding surface for both a future stamp and a selected stamp. The read side follows
     /// <see cref="EditorViewModel.StampPanelStyle"/>; every write uses the same view-model API.
     /// </summary>
-    private Control BuildStampEditor(string prefix)
+    private Control BuildStampEditor(string prefix, bool includeTransform = true)
     {
         StampStyle? Style() => _editor.StampPanelStyle;
         var heading = new TextBlock { Name = prefix + "Heading", TextWrapping = TextWrapping.Wrap }
@@ -2282,33 +2708,41 @@ public sealed class EditorView : UserControl
         }.Named(prefix + "Appearance");
         AutomationProperties.SetName(appearance, "Внешний вид");
 
-        return new StackPanel
+        var panel = new StackPanel { Spacing = 5, Children = { heading } };
+
+        // A placed object gets scale, rotation, level and opacity ONCE, at the top of the object
+        // panel, where they also work on a multi-selection. Only the asset about to be placed
+        // carries its own copies, because there is no selection to read them from yet.
+        if (includeTransform)
         {
-            Spacing = 5,
-            Children =
-            {
-                heading,
-                AppearanceSlider(prefix + "ScaleSlider", "Масштаб", 10, 400, "%",
-                    () => _editor.StampScalePercent,
-                    (value, commit) => _editor.SetStampScalePercent(value, commit), 5,
-                    ResetGlyph(prefix + "ScaleResetButton", "Сбросить масштаб к 100 %",
-                        () => _editor.SetStampScalePercent(100))),
-                AppearanceSlider(prefix + "RotationSlider", "Поворот", 0, 359, "°",
-                    () => _editor.StampRotationDegrees,
-                    (value, commit) => _editor.SetStampRotationDegrees(value, commit), 1,
-                    ResetGlyph(prefix + "RotationResetButton", "Сбросить поворот",
-                        () => _editor.SetStampRotationDegrees(0))),
-                AppearanceSlider(prefix + "SublayerSlider", "Подслой", -10, 10, "",
-                    () => _editor.StampSublayer,
-                    (value, commit) => _editor.SetStampSublayer((int)Math.Round(value), commit)),
-                flips,
-                AppearanceSlider(prefix + "OpacitySlider", "Непрозрачность", 0, 100, "%",
-                    () => _editor.StampOpacityPercent,
-                    (value, commit) => _editor.SetStampOpacityPercent(value, commit), 5),
-                clipMask,
-                appearance,
-            },
-        };
+            panel.Children.Add(AppearanceSlider(prefix + "ScaleSlider", "Масштаб", 10, 400, "%",
+                () => _editor.StampScalePercent,
+                (value, commit) => _editor.SetStampScalePercent(value, commit), 5,
+                ResetGlyph(prefix + "ScaleResetButton", "Сбросить масштаб к 100 %",
+                    () => _editor.SetStampScalePercent(100))));
+            panel.Children.Add(AppearanceSlider(prefix + "RotationSlider", "Поворот", 0, 359, "°",
+                () => _editor.StampRotationDegrees,
+                (value, commit) => _editor.SetStampRotationDegrees(value, commit), 1,
+                ResetGlyph(prefix + "RotationResetButton", "Сбросить поворот",
+                    () => _editor.SetStampRotationDegrees(0))));
+            panel.Children.Add(AppearanceSlider(prefix + "SublayerSlider", "Уровень",
+                EditorViewModel.MinimumSublayer, EditorViewModel.MaximumSublayer, "",
+                () => _editor.StampSublayer,
+                (value, commit) => _editor.SetStampSublayer((int)Math.Round(value), commit)));
+        }
+
+        panel.Children.Add(flips);
+
+        if (includeTransform)
+        {
+            panel.Children.Add(AppearanceSlider(prefix + "OpacitySlider", "Непрозрачность", 0, 100, "%",
+                () => _editor.StampOpacityPercent,
+                (value, commit) => _editor.SetStampOpacityPercent(value, commit), 5));
+        }
+
+        panel.Children.Add(clipMask);
+        panel.Children.Add(appearance);
+        return panel;
     }
 
     private Control BuildStampClipMaskGroup(string prefix)
@@ -3166,13 +3600,11 @@ public sealed class EditorView : UserControl
         _inspectorError.TextWrapping = TextWrapping.Wrap;
         _inspectorError.Classes.Add("danger");
 
+        // Rotation, level and opacity are NOT repeated here. They live once, at the top of the
+        // object panel, where they apply to the whole selection; a second copy in this block used
+        // to edit only the primary object and so disagreed with the value above it.
         _rotationInspectorRow = Ui.PropertyRow("Поворот", _rotationBox, "°");
-        _sublayerInspectorRow = AppearanceNumberBox("SublayerBox", "Подслой", null,
-            () => _editor.Session.SelectedObject?.Sublayer,
-            value => _editor.SetSelectedSublayer((int)Math.Round(value)));
-        _opacityInspectorRow = AppearanceSlider("ObjectOpacitySlider", "Непрозрачность", 0, 100, "%",
-            () => _editor.Session.SelectedObject?.ObjectOpacity * 100,
-            (value, commit) => _editor.SetSelectedOpacityPercent(value, commit), 5);
+        _rotationInspectorRow.IsVisible = false;
 
         return new StackPanel
         {
@@ -3183,13 +3615,572 @@ public sealed class EditorView : UserControl
                 Ui.PropertyRow("Y", _yBox, "px"),
                 Ui.PropertyRow("Ширина", _widthBox, "px"),
                 Ui.PropertyRow("Высота", _heightBox, "px"),
-                _rotationInspectorRow,
                 apply,
-                _sublayerInspectorRow,
-                _opacityInspectorRow,
                 _inspectorError,
             },
         };
+    }
+
+    /// <summary>
+    /// The first thing a selected object shows: what it is, where it lives and the handful of
+    /// properties that are touched constantly. Layer and level come first because they decide what
+    /// covers what; scale, opacity and rotation follow; the rare geometry and appearance settings
+    /// stay below in their own blocks. One builder serves the single-object and the multi-selection
+    /// panel, so the two can never drift apart - each host gets its own instance because a control
+    /// has a single visual parent.
+    /// </summary>
+    private Control BuildObjectPrimarySection(string prefix)
+    {
+        var identityImage = new Image
+        {
+            Width = 28,
+            Height = 28,
+            Stretch = Stretch.Uniform,
+            VerticalAlignment = VerticalAlignment.Center,
+        }.Named(prefix + "PrimaryThumbnail");
+        var identityText = new TextBlock
+        {
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        }.Named(prefix + "PrimaryName");
+        var identity = new DockPanel
+        {
+            Margin = new Thickness(0, 0, 0, 2),
+            Children =
+            {
+                new Border
+                {
+                    Width = 28,
+                    Height = 28,
+                    Margin = new Thickness(0, 0, 8, 0),
+                    Child = identityImage,
+                }.Docked(Dock.Left),
+                identityText,
+            },
+        };
+
+        var (layerRow, _) = BuildOwnerLayerSelector(prefix);
+        var levelRow = BuildLevelSlider(prefix);
+
+        Button Order(string name, string caption, int direction, bool extreme, string tip)
+        {
+            var button = Ui.TextButton(prefix + name, caption, () =>
+            {
+                _editor.ReorderSelection(direction, extreme);
+                RefreshAfterSelectionCommand();
+            }, "compact");
+            ToolTip.SetTip(button, tip);
+            return button;
+        }
+
+        // Scale is offered only where a single percentage has one meaning: every selected object
+        // is a placed asset with its own 100 % reference. A shape or a caption sizes itself
+        // through its own geometry, and pretending otherwise would force a bitmap idea onto an
+        // object that has no use for it.
+        var scale = AppearanceSlider(prefix + "ScaleSlider", "Масштаб", 10, 400, "%",
+            () => _editor.SelectionScalePercent,
+            (value, commit) => _editor.SetSelectionScalePercent(value, commit), 5,
+            ResetGlyph(prefix + "ScaleResetButton", "Сбросить масштаб к 100 %",
+                () => _editor.SetSelectionScalePercent(100)));
+
+        var opacity = AppearanceSlider(prefix + "OpacitySlider", "Непрозрачность", 0, 100, "%",
+            () => _editor.SelectionOpacityPercent,
+            (value, commit) => _editor.SetSelectionOpacityPercent(value, commit), 5);
+
+        var rotation = AppearanceSlider(prefix + "RotationSlider", "Поворот", 0, 359, "°",
+            () => _editor.SelectionRotationDegrees,
+            (value, commit) => _editor.SetSelectionRotationDegrees(value, commit), 1,
+            ResetGlyph(prefix + "RotationResetButton", "Сбросить поворот",
+                () => _editor.SetSelectionRotationDegrees(0)));
+
+        _levelSyncs.Add(() =>
+        {
+            var selected = _editor.Session.SelectedObject;
+            var count = _editor.SelectionCount;
+            identityImage.Source = count == 1 && selected is not null
+                ? _thumbnails.Image(_editor.ObjectThumbnailPath(selected))
+                : null;
+            identityImage.IsVisible = identityImage.Source is not null;
+            identityText.Text = count switch
+            {
+                0 => "Ничего не выбрано",
+                1 => selected?.Name ?? "Объект",
+                _ => "Выбрано: " + EditorLabels.Objects(count),
+            };
+            ToolTip.SetTip(identityText, identityText.Text);
+            AutomationProperties.SetName(identityText, identityText.Text);
+            scale.IsVisible = _editor.SelectionIsAllStamps;
+        });
+
+        var ordering = new WrapPanel
+        {
+            Orientation = Orientation.Horizontal,
+            ItemSpacing = 4,
+            LineSpacing = 4,
+            Children =
+            {
+                Order("RaiseButton", "Выше", 1, false,
+                    "Поднять выделение над соседями того же уровня."),
+                Order("LowerButton", "Ниже", -1, false,
+                    "Опустить выделение под соседей того же уровня."),
+                Order("RaiseTopButton", "Наверх", 1, true,
+                    "Сделать выделение самым верхним в его слое."),
+                Order("LowerBottomButton", "Вниз", -1, true,
+                    "Сделать выделение самым нижним в его слое."),
+            },
+        };
+
+        // The order of this block is the owner's decision, so it is read from the shared layout
+        // instead of being spelled out again in a Children collection no test can see.
+        var body = new StackPanel { Spacing = 4 };
+        foreach (var property in EditorSurfaceLayout.ObjectPrimaryOrder)
+        {
+            body.Children.Add(property switch
+            {
+                ObjectPrimaryProperty.Identity => identity,
+                ObjectPrimaryProperty.Layer => layerRow,
+                ObjectPrimaryProperty.Level => levelRow,
+                ObjectPrimaryProperty.Scale => scale,
+                ObjectPrimaryProperty.Opacity => opacity,
+                ObjectPrimaryProperty.Rotation => rotation,
+                ObjectPrimaryProperty.Ordering => ordering,
+                _ => throw new InvalidOperationException("Unhandled primary property " + property),
+            });
+        }
+
+        return Ui.Section("Объект", body).Named(prefix + "PrimarySection");
+    }
+
+    /// <summary>The word a selection spread over several layers shows instead of an empty box.</summary>
+    private const string MixedLayerCaption = "Разные слои";
+
+    /// <summary>
+    /// The owning layer as an explicit list, not a button that steps to "the next one". Every
+    /// object layer of the document is offered by its own name; a hidden or locked layer stays in
+    /// the list with the reason written next to it and simply refuses to be chosen.
+    /// <para>
+    /// It is a button with a list in a flyout rather than a ComboBox: the stock combo arranged its
+    /// selection box to zero width here, so the control showed an empty field while holding the
+    /// right layer all along - exactly the "пустое поле" the owner reported. This shape paints the
+    /// current name itself, so it cannot happen again.
+    /// </para>
+    /// One builder serves the quick strip above the canvas and the object panel, so the two can
+    /// never disagree about which layer the selection is in - they are two views of one model.
+    /// </summary>
+    private Button BuildOwnerLayerPicker(string prefix)
+    {
+        var caption = new TextBlock
+        {
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+        }.Named(prefix + "OwnerLayerCaption");
+
+        var list = new ListBox
+        {
+            MaxHeight = 320,
+            SelectionMode = SelectionMode.Single,
+            ItemTemplate = new FuncDataTemplate<ObjectLayerTarget>(
+                target => target is not null,
+                (target, _) => new TextBlock
+                {
+                    Text = target!.Display,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Padding = new Thickness(8, 5),
+                }.Classed(target.Available ? "role-body" : "faint")),
+        }.Named(prefix + "OwnerLayerList");
+        AutomationProperties.SetName(list, "Список слоёв объектов");
+
+        var flyout = new Flyout
+        {
+            Placement = PlacementMode.BottomEdgeAlignedLeft,
+            Content = new Border { MinWidth = 220, Child = list },
+        };
+
+        var button = new Button
+        {
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            Content = new DockPanel
+            {
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text = "▾",
+                        VerticalAlignment = VerticalAlignment.Center,
+                        Margin = new Thickness(8, 0, 0, 0),
+                    }.Classed("muted").Docked(Dock.Right),
+                    caption,
+                },
+            },
+            Flyout = flyout,
+        }.Named(prefix + "OwnerLayerSelector");
+
+        var syncing = false;
+        list.SelectionChanged += (_, _) =>
+        {
+            if (syncing || list.SelectedItem is not ObjectLayerTarget target || target.IsCurrent)
+            {
+                return;
+            }
+
+            flyout.Hide();
+            if (!target.Available)
+            {
+                _editor.ReportInspectorError(
+                    "Слой «" + target.Name + "» недоступен: он " + target.Unavailable + ".");
+                RefreshAfterSelectionCommand();
+                return;
+            }
+
+            _editor.MoveSelectionToLayer(target.Id);
+            RefreshAfterSelectionCommand();
+        };
+
+        void Sync()
+        {
+            syncing = true;
+            try
+            {
+                var targets = _editor.ObjectLayerTargets;
+                list.ItemsSource = targets;
+                var current = targets.FirstOrDefault(target => target.IsCurrent);
+                list.SelectedItem = current;
+
+                // A selection spread over several layers must not show one of them as if it were
+                // the answer - and it must not look like an empty field either, which is exactly
+                // how the earlier "—" read. It says so in words.
+                var mixed = _editor.SelectionCount > 0 && current is null;
+                caption.Text = _editor.SelectionCount == 0
+                    ? "—"
+                    : mixed ? MixedLayerCaption : current!.Name;
+                Ui.SetClass(caption, "mixed", mixed);
+                Ui.SetClass(button, "mixed", mixed);
+                button.IsEnabled = _editor.SelectionCount > 0 && targets.Count > 0;
+
+                AutomationProperties.SetName(button, "Слой-владелец выделения: " + caption.Text);
+                ToolTip.SetTip(button, mixed
+                    ? "Выделение лежит в разных слоях. Выбор слоя перенесёт в него всё выделение "
+                        + "одной отменяемой командой; уровень каждого объекта сохранится."
+                    : "Слой, которому принадлежит выделение. Выбор переносит всё выделение одной "
+                        + "отменяемой командой; уровень каждого объекта сохраняется.");
+            }
+            finally
+            {
+                syncing = false;
+            }
+        }
+
+        _levelSyncs.Add(Sync);
+        _quickSyncs.Add(Sync);
+        _layerLists[prefix] = list;
+        return button;
+    }
+
+    /// <summary>
+    /// The layer list of one picker. It lives inside a flyout, so it joins the visual tree only
+    /// while the flyout is open; the native smoke needs a handle to it to prove the open state.
+    /// </summary>
+    public ListBox? LayerListForSmoke(string prefix) =>
+        _layerLists.TryGetValue(prefix, out var list) ? list : null;
+
+    private (Control Row, Button Selector) BuildOwnerLayerSelector(string prefix)
+    {
+        var selector = BuildOwnerLayerPicker(prefix);
+        var row = new DockPanel
+        {
+            Margin = new Thickness(0, 2),
+            Children = { Ui.ParameterLabel("Слой", 92).Docked(Dock.Left), selector },
+        };
+        return (row, selector);
+    }
+
+    /// <summary>
+    /// The object's own level: one integer band from -10 to +10, as a slider that can only stop on
+    /// whole numbers. Dragging previews and lands exactly one history entry. A selection whose
+    /// members disagree says "разные" instead of inventing a shared number, and moving the slider
+    /// then shifts every member by the same amount so their differences survive.
+    /// </summary>
+    private Control BuildLevelSlider(string prefix)
+    {
+        var readout = new TextBlock
+        {
+            VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            TextAlignment = Avalonia.Media.TextAlignment.Center,
+        }.Classed("muted").Named(prefix + "LevelValue");
+
+        var slider = new Slider
+        {
+            Minimum = EditorViewModel.MinimumSublayer,
+            Maximum = EditorViewModel.MaximumSublayer,
+            SmallChange = 1,
+            LargeChange = 5,
+            TickFrequency = 1,
+            IsSnapToTickEnabled = true,
+            // Twenty-one ticks under the track say "whole steps" without twenty-one numbers
+            // shouting it. The two ends are labelled separately, below.
+            TickPlacement = Avalonia.Controls.TickPlacement.BottomRight,
+            Value = 0,
+        }.Named(prefix + "LevelSlider");
+        ToolTip.SetTip(slider,
+            "Уровень объекта от -10 до +10 целыми шагами. Стрелки — на 1, PageUp/PageDown — на 5, " +
+            "Home и End — к краям.");
+
+        var gesture = false;
+        var anchor = 0;
+        var mixed = false;
+
+        void Describe()
+        {
+            readout.Text = _editor.SelectionSublayerReadout;
+            AutomationProperties.SetName(slider, "Уровень объекта: " + readout.Text);
+        }
+
+        void Apply(bool commit)
+        {
+            var value = (int)Math.Round(slider.Value);
+            if (mixed)
+            {
+                _editor.ShiftSelectionSublayer(value - anchor, commit);
+            }
+            else
+            {
+                _editor.SetSelectionSublayer(value, commit);
+            }
+
+            Describe();
+        }
+
+        slider.PropertyChanged += (_, e) =>
+        {
+            if (e.Property != RangeBase.ValueProperty || _syncingAppearance)
+            {
+                return;
+            }
+
+            // The document never sees a fraction: the control snaps to ticks and the value is
+            // rounded again before it is applied.
+            Apply(commit: false);
+        };
+        slider.AddHandler(PointerPressedEvent, (_, _) => gesture = true,
+            Avalonia.Interactivity.RoutingStrategies.Tunnel);
+        slider.PointerCaptureLost += (_, _) =>
+        {
+            gesture = false;
+            if (!_syncingAppearance)
+            {
+                Apply(commit: true);
+                RefreshAfterSelectionCommand();
+            }
+        };
+        slider.KeyDown += (_, e) =>
+        {
+            if (e.Key is Key.Home or Key.End)
+            {
+                gesture = true;
+                slider.Value = e.Key == Key.Home
+                    ? EditorViewModel.MinimumSublayer
+                    : EditorViewModel.MaximumSublayer;
+                e.Handled = true;
+                return;
+            }
+
+            if (e.Key is Key.Left or Key.Right or Key.Up or Key.Down or Key.PageUp or Key.PageDown)
+            {
+                gesture = true;
+            }
+        };
+        slider.KeyUp += (_, e) =>
+        {
+            if (_syncingAppearance
+                || e.Key is not (Key.Left or Key.Right or Key.Up or Key.Down
+                    or Key.PageUp or Key.PageDown or Key.Home or Key.End))
+            {
+                return;
+            }
+
+            gesture = false;
+            Apply(commit: true);
+            RefreshAfterSelectionCommand();
+        };
+        slider.LostFocus += (_, _) =>
+        {
+            if (!gesture && !_syncingAppearance)
+            {
+                Apply(commit: true);
+            }
+        };
+
+        _levelSyncs.Add(() =>
+        {
+            if (gesture)
+            {
+                return;
+            }
+
+            var previous = _syncingAppearance;
+            _syncingAppearance = true;
+            try
+            {
+                mixed = _editor.SelectionSublayerIsMixed;
+                var levels = _editor.Session.SelectedObjects.Select(item => item.Sublayer).ToList();
+                anchor = levels.Count == 0
+                    ? 0
+                    : mixed ? (int)Math.Round(levels.Average()) : levels[0];
+                slider.Value = Math.Clamp(
+                    anchor, EditorViewModel.MinimumSublayer, EditorViewModel.MaximumSublayer);
+                slider.IsEnabled = levels.Count > 0;
+                Ui.SetClass(readout, "warn", mixed);
+                Describe();
+            }
+            finally
+            {
+                _syncingAppearance = previous;
+            }
+        });
+
+        // The exact pair stays available for a single step without aiming at the handle; the
+        // slider remains the control that shows and sets the value.
+        Button Step(string name, string caption, int direction, string tip)
+        {
+            var button = Ui.TextButton(prefix + name, caption, () =>
+            {
+                _editor.ShiftSelectionSublayer(direction);
+                RefreshAfterSelectionCommand();
+            }, "compact");
+            ToolTip.SetTip(button, tip);
+            return button;
+        }
+
+        // The exact number, typed. The slider is the control that shows the value and the one the
+        // hand reaches for; this is how a user says "exactly -7" without aiming at a tick.
+        var entry = new TextBox
+        {
+            Width = 58,
+            VerticalAlignment = VerticalAlignment.Center,
+            TextAlignment = Avalonia.Media.TextAlignment.Center,
+        }.Named(prefix + "LevelBox");
+        AutomationProperties.SetName(entry, "Уровень объекта, точный ввод");
+        ToolTip.SetTip(entry,
+            "Целое число от " + EditorViewModel.MinimumSublayer + " до +" + EditorViewModel.MaximumSublayer
+                + ". Введите значение и нажмите Enter.");
+
+        var entrySyncing = false;
+
+        void CommitEntry()
+        {
+            if (entrySyncing)
+            {
+                return;
+            }
+
+            var text = (entry.Text ?? "").Trim().Replace('\u2212', '-').Replace("+", "").Trim();
+            if (text.Length == 0)
+            {
+                RefreshAfterSelectionCommand();
+                return;
+            }
+
+            if (!int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var typed))
+            {
+                _editor.ReportInspectorError(
+                    "Уровень — целое число от " + EditorViewModel.MinimumSublayer
+                        + " до +" + EditorViewModel.MaximumSublayer + ".");
+                RefreshAfterSelectionCommand();
+                return;
+            }
+
+            var bounded = Math.Clamp(
+                typed, EditorViewModel.MinimumSublayer, EditorViewModel.MaximumSublayer);
+            if (bounded != typed)
+            {
+                _editor.ReportInspectorError(
+                    "Уровень ограничен диапазоном " + EditorViewModel.MinimumSublayer
+                        + "…+" + EditorViewModel.MaximumSublayer + ".");
+            }
+
+            _editor.SetSelectionSublayer(bounded, commit: true);
+            RefreshAfterSelectionCommand();
+        }
+
+        entry.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter)
+            {
+                CommitEntry();
+                e.Handled = true;
+            }
+            else if (e.Key == Key.Escape)
+            {
+                RefreshAfterSelectionCommand();
+                e.Handled = true;
+            }
+        };
+        entry.LostFocus += (_, _) => CommitEntry();
+
+        var reset = ResetGlyph(prefix + "LevelResetButton", "Сбросить уровень к нулю", () =>
+        {
+            _editor.SetSelectionSublayer(0, commit: true);
+            RefreshAfterSelectionCommand();
+        });
+
+        _levelSyncs.Add(() =>
+        {
+            entrySyncing = true;
+            try
+            {
+                entry.Text = _editor.SelectionSublayerReadout;
+                Ui.SetClass(entry, "mixed", _editor.SelectionSublayerIsMixed);
+                entry.IsEnabled = _editor.SelectionCount > 0;
+                reset.IsEnabled = _editor.SelectionCount > 0;
+                AutomationProperties.SetName(entry, "Уровень объекта: " + entry.Text);
+            }
+            finally
+            {
+                entrySyncing = false;
+            }
+        });
+
+        var header = new DockPanel
+        {
+            Children =
+            {
+                new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 3,
+                    Children =
+                    {
+                        Step("SublayerDownButton", "−", -1, "Опустить выделение на один уровень ниже."),
+                        entry,
+                        Step("SublayerUpButton", "+", 1, "Поднять выделение на один уровень выше."),
+                        reset,
+                    },
+                }.Docked(Dock.Right),
+                Ui.ParameterLabel("Уровень"),
+            },
+        };
+
+        // The band has to be readable off the control itself, not guessed from a tooltip.
+        var ends = new DockPanel
+        {
+            Margin = new Thickness(0, 1, 0, 0),
+            Children =
+            {
+                new TextBlock { Text = "+" + EditorViewModel.MaximumSublayer.ToString(CultureInfo.InvariantCulture) }
+                    .Classed("faint").Named(prefix + "LevelMaximumCaption").Docked(Dock.Right),
+                new TextBlock { Text = EditorViewModel.MinimumSublayer.ToString(CultureInfo.InvariantCulture) }
+                    .Classed("faint").Named(prefix + "LevelMinimumCaption").Docked(Dock.Left),
+                readout,
+            },
+        };
+
+        return new StackPanel
+        {
+            Margin = new Thickness(0, 2),
+            Children = { header, slider, ends },
+        }.Named(prefix + "LevelRow");
     }
 
     /// <summary>
@@ -3212,18 +4203,26 @@ public sealed class EditorView : UserControl
         DynamicTip(delete, () =>
             $"Удалить выделенный объект. Действие можно отменить ({_editor.Shortcuts.Get(EditorShortcutSettings.Commands.Undo)}).");
 
-        return Ui.Section("Объект", new StackPanel
+        return new StackPanel
         {
-            Spacing = 2,
+            Spacing = 12,
             Children =
             {
-                visibilityRow,
-                lockRow,
-                Ui.TextButton("GridSnapObjectButton", "Привязать к сетке",
-                    _editor.SnapSelectedObjectToGrid, "compact"),
-                delete,
+                BuildObjectPrimarySection("Object"),
+                Ui.Section("Состояние и действия", new StackPanel
+                {
+                    Spacing = 2,
+                    Children =
+                    {
+                        visibilityRow,
+                        lockRow,
+                        Ui.TextButton("GridSnapObjectButton", "Привязать к сетке",
+                            _editor.SnapSelectedObjectToGrid, "compact"),
+                        delete,
+                    },
+                }).Named("CommonObjectActions"),
             },
-        }).Named("CommonObjectActions");
+        };
     }
 
     // ================================================================ side panel
@@ -3504,12 +4503,12 @@ public sealed class EditorView : UserControl
         LayerEffects? Effects() => _editor.ActiveObjectLayerEffects;
         void ChangeEffects(Func<LayerEffects, LayerEffects> change) =>
             _editor.SetActiveObjectLayerEffects(change(Effects() ?? new LayerEffects()));
-        var objectEffects = Ui.Section("Object layer · эффекты и подслой", new StackPanel
+        var objectEffects = Ui.Section("Слой объектов · эффекты и подслой", new StackPanel
         {
             Spacing = 4,
             Children =
             {
-                AppearanceToggle("ObjectLayerClippingToggle", "Clipping к слою ниже",
+                AppearanceToggle("ObjectLayerClippingToggle", "Обрезать по слою ниже",
                     () => Effects()?.ClippingEnabled,
                     value => ChangeEffects(current => current with { ClippingEnabled = value })),
                 AppearanceColorBox("ObjectLayerShadowColor", "Цвет тени",
@@ -4918,7 +5917,7 @@ public sealed class EditorView : UserControl
             () => _editor.StampRandomAngleStep.ToString(),
             value => _editor.StampRandomAngleStep = Enum.Parse<StampRandomAngleStep>(value));
         _randomFlipToggle = LabelledToggle(
-            "RandomFlipToggle", "Отражать", "Случайное зеркальное отражение штампа",
+            "RandomFlipToggle", "Отражать", "Случайное зеркальное отражение ассета",
             MapIcons.Select, () =>
             {
                 _editor.StampRandomFlip = !_editor.StampRandomFlip;
@@ -4961,7 +5960,7 @@ public sealed class EditorView : UserControl
                     new TextBlock { Text = "Автовыбор" }.Classed("role-panel"),
                     autoSelect,
                     _stampAreaControls,
-                    AssetCommand("ReplaceStampVariantButton", "Заменить ассет выделенного штампа", () =>
+                    AssetCommand("ReplaceStampVariantButton", "Заменить ассет выделенного объекта", () =>
                     {
                         _editor.ReplaceSelectedStampWithCurrentVariant();
                         SyncAssetList();
@@ -4981,7 +5980,7 @@ public sealed class EditorView : UserControl
                             {
                                 if (_selectedAsset is not null) _editor.PlaceStamp(_selectedAsset, embedded: false);
                             }, "compact"),
-                            AssetCommand("ReplaceStampAssetButton", "Заменить ассет у выделенного штампа", () =>
+                            AssetCommand("ReplaceStampAssetButton", "Заменить ассет у выделенного объекта", () =>
                             {
                                 if (_selectedAsset is not null)
                                     _editor.ReplaceSelectedStampAsset(_selectedAsset);
@@ -6063,6 +7062,10 @@ public sealed class EditorView : UserControl
         _statusDetail.TextTrimming = TextTrimming.CharacterEllipsis;
         _statusDetail.MaxWidth = 420;
 
+        // Both of these dock right, and without a gap the detail runs straight into the zoom
+        // readout ("Размещение отменено.Масштаб 47%"). The left group already spaces itself.
+        _statusDetail.Margin = new Thickness(0, 0, 14, 0);
+
         var left = new StackPanel
         {
             Orientation = Orientation.Horizontal,
@@ -6463,10 +7466,6 @@ public sealed class EditorView : UserControl
             box.IsEnabled = editable;
         }
 
-        var stampOwnsCommonProperties = _editor.Session.SelectedObject?.Stamp is not null;
-        _rotationInspectorRow.IsVisible = !stampOwnsCommonProperties;
-        _sublayerInspectorRow.IsVisible = !stampOwnsCommonProperties;
-        _opacityInspectorRow.IsVisible = !stampOwnsCommonProperties;
     }
 
     /// <summary>
@@ -6508,6 +7507,9 @@ public sealed class EditorView : UserControl
         SyncLayerBlocks();
         SyncHint();
         SyncAppearanceSections();
+        // The strip is refreshed on every context change, including "nothing is selected" - the
+        // panel's own refresh only runs while an inspector is mounted.
+        SyncQuickBar();
         // A new selection points the panel at the object; a new tool points it at the tool. Both
         // remain reachable afterwards, which is the part the old ActiveTool == Select gate broke.
         var selectionSignature = _editor.SelectionCount == 0
@@ -6559,6 +7561,8 @@ public sealed class EditorView : UserControl
                     EditorLabels.ObjectLockValue(selected.Locked));
             }
 
+            SyncLayerAndLevel();
+
             _kindSlot.Content = KindSection(kind);
             _contextHost.Content = _selectionRoot;
             return;
@@ -6600,31 +7604,50 @@ public sealed class EditorView : UserControl
 
         Ui.SetValue(_multiVisibilityValue, "Видимость", _editor.SelectionVisibilitySummary);
         Ui.SetValue(_multiLockValue, "Блокировка", _editor.SelectionLockSummary);
+        SyncLayerAndLevel();
+    }
+
+    /// <summary>Both inspector shapes show the same owner layer and level, so both refresh here.</summary>
+    private void SyncLayerAndLevel()
+    {
+        foreach (var sync in _levelSyncs)
+        {
+            sync();
+        }
     }
 
     /// <summary>
     /// The only place that decides which kind-specific block is shown. Exactly one block can be
     /// mounted at a time because they all share a single slot.
     /// </summary>
-    private Control? KindSection(SceneObjectKind kind) => kind switch
-    {
-        SceneObjectKind.Stamp or SceneObjectKind.Placeholder => _stampSection,
-        SceneObjectKind.Line => _lineSection,
-        SceneObjectKind.Shape => _shapeSection,
-        SceneObjectKind.Rectangle or SceneObjectKind.Ellipse => _primitiveSection,
-        SceneObjectKind.Text => _textSection,
-        SceneObjectKind.Composition => _compositionSection,
-        _ => null,
-    };
+    private Control? KindSection(SceneObjectKind kind) =>
+        EditorSurfaceLayout.SectionFor(kind) switch
+        {
+            ObjectKindSection.Asset => _stampSection,
+            ObjectKindSection.Line => _lineSection,
+            ObjectKindSection.Shape => _shapeSection,
+            ObjectKindSection.Primitive => _primitiveSection,
+            ObjectKindSection.Text => _textSection,
+            ObjectKindSection.Composition => _compositionSection,
+            _ => null,
+        };
 
     private void BuildContextRoots()
     {
         _kindSlot = new ContentControl { Name = "SelectionKindSlot" };
 
+        // Order is the message: what the object IS and the properties touched constantly come
+        // first, the kind-specific block next, and exact geometry last. The old panel opened with
+        // four coordinate boxes, so the level and the owning layer were below the fold.
         _selectionRoot = new StackPanel
         {
             Spacing = 12,
-            Children = { _inspectorPanel, BuildSelectionCommon(), _kindSlot },
+            Children =
+            {
+                BuildSelectionCommon(),
+                _kindSlot,
+                Ui.Section("Геометрия", _inspectorPanel).Named("ObjectGeometrySection"),
+            },
         };
 
         // The tool panels live in a slot, never as fixed children: a control can have only one
@@ -6718,6 +7741,7 @@ public sealed class EditorView : UserControl
             Children =
             {
                 multiCount,
+                BuildObjectPrimarySection("Multi"),
                 _groupActionsSection,
                 Ui.Section("Общие действия", new StackPanel
                 {
@@ -6921,7 +7945,7 @@ public sealed class EditorView : UserControl
         var kind = EditorLabels.LayerKind(layer);
         var subtitle = layer is BaseColorLayer
             ? "Фон карты · нельзя удалить"
-            : string.Equals(kind, layer.Name, StringComparison.OrdinalIgnoreCase)
+            : EditorLabels.SecondaryKind(layer.Name, kind) is null
                 ? $"Наложение: {EditorLabels.Blend(layer.Blend)}"
                 : kind;
         _layerKindText.Text = subtitle;
@@ -6985,7 +8009,7 @@ public sealed class EditorView : UserControl
 
             // The kind is a useful subtitle only when it adds something the name does not say.
             var kind = EditorLabels.LayerKind(layer);
-            var secondary = string.Equals(kind, layer.Name, StringComparison.OrdinalIgnoreCase) ? null : kind;
+            var secondary = EditorLabels.SecondaryKind(layer.Name, kind);
 
             var tooltip = $"{layer.Name} · {kind} · наложение: {EditorLabels.Blend(layer.Blend)}";
             if (layer.Mask is { } mask)
@@ -7138,11 +8162,30 @@ public sealed class EditorView : UserControl
         }
 
         var captured = sceneObject;
+
+        // A placed asset shows the asset itself. The generic kind glyph and the kind word next to
+        // the name only ever repeated what the picture already says ("Дерево  Штамп"), so they are
+        // kept for objects that have no picture of their own. The sublayer is what the row still
+        // needs to say, because it is the object's own level inside the layer.
+        var thumbnail = _thumbnails.Image(_editor.ObjectThumbnailPath(sceneObject));
+        var secondary = new List<string>();
+        if (thumbnail is null && row.Subtitle is { Length: > 0 } kindLabel)
+        {
+            secondary.Add(kindLabel);
+        }
+
+        // The level is the one number the row still has to carry, and it carries a sign so "+3"
+        // and "-3" can never be read as the same thing.
+        if (sceneObject.Sublayer != 0)
+        {
+            secondary.Add(EditorViewModel.FormatSublayer(sceneObject.Sublayer));
+        }
+
         var listRow = Ui.ListRow(
             row.AutomationId,
             ObjectIcon(sceneObject.Kind),
             sceneObject.Name,
-            row.Subtitle,
+            secondary.Count == 0 ? null : string.Join(" · ", secondary),
             states,
             () =>
             {
@@ -7150,7 +8193,9 @@ public sealed class EditorView : UserControl
                 SyncObjectListSelection();
                 SyncContextArea();
             },
-            $"{sceneObject.Name} · {EditorLabels.ObjectKind(sceneObject.Kind)}");
+            $"{sceneObject.Name} · {EditorLabels.ObjectKind(sceneObject.Kind)} · уровень "
+                + EditorViewModel.FormatSublayer(sceneObject.Sublayer),
+            thumbnail);
 
         Ui.SetSelected(listRow, row.Selected);
         return listRow;
@@ -7377,7 +8422,7 @@ public sealed class EditorView : UserControl
         SetToggle(
             _randomVariantToggle, "Случайный вариант после размещения", _editor.RandomVariantAfterPlacement);
         SetToggle(
-            _randomFlipToggle, "Случайное зеркальное отражение штампа", _editor.StampRandomFlip);
+            _randomFlipToggle, "Случайное зеркальное отражение ассета", _editor.StampRandomFlip);
 
         FillChoices(_libraryTagFilter, "Любой тег", _editor.LibraryTagChoices, _editor.LibraryTag);
         FillChoices(

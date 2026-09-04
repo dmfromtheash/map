@@ -230,7 +230,7 @@ public class Stage10CMultiSelectionViewModelTests
     // ---------------------------------------------------------------- groups
 
     [Fact]
-    public void Group_needs_two_objects_and_a_non_empty_name()
+    public void Group_needs_two_objects_and_uses_an_automatic_name_when_blank()
     {
         var a = Object("A", SceneObjectKind.Rectangle, 0, 0);
         var b = Object("B", SceneObjectKind.Rectangle, 300, 0);
@@ -242,8 +242,12 @@ public class Stage10CMultiSelectionViewModelTests
 
         editor.Session.SetSelection([a.Id, b.Id]);
         Assert.True(editor.CanGroupSelection);
-        Assert.False(editor.GroupSelection("   "));
-        Assert.Equal(0, editor.Session.UndoDepth);
+        Assert.True(editor.GroupSelection("   "));
+        Assert.Equal("Группа · 2 объектов", Find(editor, a.Id).GroupName);
+        Assert.Equal(1, editor.Session.UndoDepth);
+
+        editor.Undo();
+        editor.Session.SetSelection([a.Id, b.Id]);
 
         Assert.True(editor.GroupSelection("Лес"));
         Assert.NotNull(Find(editor, a.Id).GroupId);

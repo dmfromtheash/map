@@ -32,8 +32,7 @@ public class EditorPresentationStateTests
         Assert.DoesNotContain(selected.Id.ToString(), editor.SelectionStatus);
         Assert.DoesNotContain("Rectangle", editor.SelectionStatus);
 
-        // A default object is named after its kind, so the status must not say the word twice.
-        Assert.Equal("Прямоугольник", editor.SelectionStatus);
+        Assert.Equal("Прямоугольник 1", editor.SelectionStatus);
     }
 
     [Fact]
@@ -43,7 +42,7 @@ public class EditorPresentationStateTests
         editor.AddObject(SceneObjectKind.Ellipse);
         var selected = editor.Session.SelectedObject!;
 
-        Assert.Equal("Эллипс", EditorLabels.DescribeObject(selected));
+        Assert.Equal("Эллипс 1", EditorLabels.DescribeObject(selected));
         Assert.Null(EditorLabels.ObjectSubtitle(selected));
 
         var renamed = selected with { Name = "Озеро Тишины" };

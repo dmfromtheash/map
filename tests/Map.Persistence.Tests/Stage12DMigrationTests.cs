@@ -11,7 +11,7 @@ namespace Map.Persistence.Tests;
 public sealed class Stage12DMigrationTests
 {
     [Fact]
-    public void Stage12D_current_v2_is_ready_and_writer_json_is_deterministic()
+    public void Stage12D_current_v3_is_ready_and_writer_json_is_deterministic()
     {
         using var workspace = new TempWorkspace();
         var first = workspace.File("first.mapproj");
@@ -42,7 +42,7 @@ public sealed class Stage12DMigrationTests
     {
         using var workspace = new TempWorkspace();
         var source = workspace.File("early-v1.mapproj");
-        var destination = workspace.File("migrated-v2.mapproj");
+        var destination = workspace.File("migrated-v3.mapproj");
         WriteEarlyV1(source, unknownKind: null);
         var beforeBytes = File.ReadAllBytes(source);
         var beforeTimestamp = new DateTime(2026, 8, 25, 12, 0, 0, DateTimeKind.Utc);
@@ -51,7 +51,7 @@ public sealed class Stage12DMigrationTests
         var inspection = MapProjectStore.Inspect(source);
         Assert.Equal(ProjectFileStatus.MigrationRequired, inspection.Status);
         Assert.Equal(1, inspection.SourceSchema);
-        Assert.Equal(2, inspection.TargetSchema);
+        Assert.Equal(MapProjectFormat.SchemaVersion, inspection.TargetSchema);
 
         var migrated = MapProjectStore.MigrateCopy(source, destination);
         var document = migrated.Project.Document;
@@ -65,7 +65,7 @@ public sealed class Stage12DMigrationTests
         Assert.Equal(ProjectFixtures.FixedRectangleId, item.Id);
         Assert.Equal((10d, 20d, 30d, 40d), (item.X, item.Y, item.Width, item.Height));
 
-        var second = workspace.File("migrated-v2-second.mapproj");
+        var second = workspace.File("migrated-v3-second.mapproj");
         MapProjectStore.MigrateCopy(source, second);
         Assert.Equal(File.ReadAllBytes(destination), File.ReadAllBytes(second));
     }
@@ -75,7 +75,7 @@ public sealed class Stage12DMigrationTests
     {
         using var workspace = new TempWorkspace();
         var source = workspace.File("unknown-v1.mapproj");
-        var destination = workspace.File("unknown-v2.mapproj");
+        var destination = workspace.File("unknown-v3.mapproj");
         WriteEarlyV1(source, unknownKind: "FuturePortal");
         var sourceScene = Encoding.UTF8.GetString(ReadEntry(source, MapProjectFormat.SceneEntry));
         using var sourceJson = JsonDocument.Parse(sourceScene);
@@ -96,7 +96,7 @@ public sealed class Stage12DMigrationTests
             Assert.Equal(42, objectField);
         }
 
-        var saved = workspace.File("normal-save-v2.mapproj");
+        var saved = workspace.File("normal-save-v3.mapproj");
         MapProjectStore.Save(
             migrated.Project.Document,
             saved,
@@ -112,7 +112,7 @@ public sealed class Stage12DMigrationTests
     {
         using var workspace = new TempWorkspace();
         var source = workspace.File("full-v1.mapproj");
-        var destination = workspace.File("full-v2.mapproj");
+        var destination = workspace.File("full-v3.mapproj");
         var expected = RichDocument();
         MapProjectStore.Save(expected, source, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
         RewriteManifest(source, root => root["schemaVersion"] = 1);
@@ -163,7 +163,7 @@ public sealed class Stage12DMigrationTests
     {
         using var workspace = new TempWorkspace();
         var source = workspace.File("oversized-v1.mapproj");
-        var destination = workspace.File("oversized-v2.mapproj");
+        var destination = workspace.File("oversized-v3.mapproj");
         WriteEarlyV1(source, unknownKind: "FuturePortal");
         RewriteJsonEntry(source, MapProjectFormat.SceneEntry, root =>
         {
@@ -184,7 +184,9 @@ public sealed class Stage12DMigrationTests
         var future = workspace.File("future.mapproj");
         MapProjectStore.Save(
             ProjectFixtures.Document(), future, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
-        RewriteManifest(future, root => root["schemaVersion"] = 3);
+        RewriteManifest(
+            future,
+            root => root["schemaVersion"] = MapProjectFormat.SchemaVersion + 1);
         Assert.Equal(ProjectFileStatus.UnsupportedVersion, MapProjectStore.Inspect(future).Status);
 
         var malformed = workspace.File("malformed.mapproj");

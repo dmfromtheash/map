@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using Avalonia;
 using Avalonia.Automation;
@@ -443,6 +443,11 @@ public static class Ui
     /// The one row shape shared by layers, objects, assets and notes: a kind icon, a trimmed
     /// primary label, a muted secondary label, and state badges that stay visible without hover.
     /// </summary>
+    /// <param name="image">
+    /// A real picture of what the row is about - a catalog thumbnail of the asset a placed object
+    /// draws. When present it replaces the generic kind glyph, because a tree should look like a
+    /// tree and not like the tool that stamped it. Null falls back to <paramref name="icon"/>.
+    /// </param>
     public static Button ListRow(
         string name,
         string icon,
@@ -450,7 +455,8 @@ public static class Ui
         string? secondary,
         IReadOnlyList<(string Icon, string Title)> states,
         Action activate,
-        string? tooltip = null)
+        string? tooltip = null,
+        IImage? image = null)
     {
         var content = new DockPanel { LastChildFill = true };
 
@@ -488,7 +494,10 @@ public static class Ui
         content.Children.Add(new Border
         {
             Width = 20,
-            Child = MapIcons.Stroked(icon, 16),
+            Height = 20,
+            Child = image is null
+                ? MapIcons.Stroked(icon, 16)
+                : new Image { Source = image, Stretch = Stretch.Uniform },
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 0, 8, 0),
         }.Docked(Dock.Left));
@@ -561,6 +570,9 @@ public static class Ui
         return (row, button);
     }
 
+    /// <summary>Width a caption glyph and its gap occupy, kept out of the text's own budget.</summary>
+    private const double IconCaptionExtra = 25;
+
     /// <summary>
     /// Inspector caption with the approved semantic glyph when the label describes a known
     /// parameter. The text remains present: icons aid scanning but never replace meaning.
@@ -597,7 +609,10 @@ public static class Ui
                 text,
             },
         };
-        if (width is { } captionWidth) caption.Width = captionWidth;
+        // The requested width is the room the TEXT needs. A caption that also carries a glyph has
+        // to be wider by exactly the glyph's footprint, or labels like "Блокировка" and
+        // "Смешивание" arrive clipped to "Блокиро..." purely because they earned an icon.
+        if (width is { } captionWidth) caption.Width = captionWidth + IconCaptionExtra;
         return caption;
     }
 

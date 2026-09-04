@@ -205,6 +205,10 @@ public sealed class EditorShortcutSettings
         public const string Ungroup = "ungroup";
         public const string SublayerUp = "sublayer-up";
         public const string SublayerDown = "sublayer-down";
+        public const string ObjectUp = "object-up";
+        public const string ObjectDown = "object-down";
+        public const string ObjectTop = "object-top";
+        public const string ObjectBottom = "object-bottom";
         public const string LayerUp = "layer-up";
         public const string LayerDown = "layer-down";
         public const string StampNextVariant = "stamp-next-variant";
@@ -226,8 +230,8 @@ public sealed class EditorShortcutSettings
         D(Commands.Undo, "Отменить", "Правка", ShortcutContext.Editor, "Ctrl+Z", "Отменить последнее изменение"),
         D(Commands.Redo, "Повторить", "Правка", ShortcutContext.Editor, "Ctrl+Shift+Z", "Повторить отменённое изменение"),
         D(Commands.RedoAlternate, "Повторить (доп.)", "Правка", ShortcutContext.Editor, "Ctrl+Y", "Второе сочетание повтора"),
-        D(Commands.Copy, "Копировать выделение", "Правка", ShortcutContext.Selection, "Ctrl+C", "Копировать композицию"),
-        D(Commands.Paste, "Вставить", "Правка", ShortcutContext.Editor, "Ctrl+V", "Вставить композицию"),
+        D(Commands.Copy, "Копировать выделение", "Правка", ShortcutContext.Selection, "Ctrl+C", "Копировать все выделенные объекты"),
+        D(Commands.Paste, "Вставить", "Правка", ShortcutContext.Editor, "Ctrl+V", "Вставить скопированные объекты"),
         D(Commands.Lock, "Блокировка выделения", "Правка", ShortcutContext.Selection, "Ctrl+L", "Заблокировать или разблокировать выделение"),
         D(Commands.SelectAll, "Выбрать всё по фильтру", "Выделение", ShortcutContext.Editor, "Ctrl+A", "Выбрать доступные объекты по поиску и фильтру"),
         D(Commands.Group, "Сгруппировать", "Выделение", ShortcutContext.Selection, "Ctrl+G", "Создать группу из выделения"),
@@ -243,7 +247,7 @@ public sealed class EditorShortcutSettings
         D(Commands.Line, "Инструмент «Линия»", "Инструменты", ShortcutContext.Editor, "L", "Активировать линии"),
         D(Commands.Shape, "Инструмент «Фигура»", "Инструменты", ShortcutContext.Editor, "R", "Активировать фигуры"),
         D(Commands.Text, "Инструмент «Текст»", "Инструменты", ShortcutContext.Editor, "T", "Активировать текст"),
-        D(Commands.Stamp, "Инструмент «Штамп»", "Инструменты", ShortcutContext.Editor, "O", "Активировать штамп и открыть библиотеку"),
+        D(Commands.Stamp, "Ассеты — размещение", "Инструменты", ShortcutContext.Editor, "O", "Открыть каталог ассетов и перейти к размещению"),
         D(Commands.Brush, "Инструмент «Кисть»", "Инструменты", ShortcutContext.Editor, "B", "Активировать кисть"),
         D(Commands.Mask, "Инструмент «Маска»", "Инструменты", ShortcutContext.Editor, "M", "Активировать маску"),
         D(Commands.Land, "Инструмент «Земля»", "Инструменты", ShortcutContext.Editor, "", "Активировать землю"),
@@ -268,8 +272,8 @@ public sealed class EditorShortcutSettings
         D(Commands.SecondaryDown, "Вторичный параметр −", "Параметры", ShortcutContext.Editor, "D", "Уменьшить непрозрачность"),
         D(Commands.SecondaryLargeUp, "Вторичный параметр + крупно", "Параметры", ShortcutContext.Editor, "Shift+E", "Крупный шаг непрозрачности"),
         D(Commands.SecondaryLargeDown, "Вторичный параметр − крупно", "Параметры", ShortcutContext.Editor, "Shift+D", "Крупный шаг непрозрачности"),
-        D(Commands.TertiaryUp, "Контекстный параметр +", "Параметры", ShortcutContext.Editor, "Q", "Область штампа, мягкость или кривизна"),
-        D(Commands.TertiaryDown, "Контекстный параметр −", "Параметры", ShortcutContext.Editor, "A", "Область штампа, мягкость или кривизна"),
+        D(Commands.TertiaryUp, "Контекстный параметр +", "Параметры", ShortcutContext.Editor, "Q", "Область размещения, мягкость или кривизна"),
+        D(Commands.TertiaryDown, "Контекстный параметр −", "Параметры", ShortcutContext.Editor, "A", "Область размещения, мягкость или кривизна"),
         D(Commands.TertiaryLargeUp, "Контекстный параметр + крупно", "Параметры", ShortcutContext.Editor, "Shift+Q", "Крупный контекстный шаг"),
         D(Commands.TertiaryLargeDown, "Контекстный параметр − крупно", "Параметры", ShortcutContext.Editor, "Shift+A", "Крупный контекстный шаг"),
         D(Commands.RotateLeft, "Повернуть влево", "Выделение", ShortcutContext.Selection, "Shift+,", "Повернуть выбранные объекты"),
@@ -278,13 +282,17 @@ public sealed class EditorShortcutSettings
         D(Commands.MaskMode, "Режим маски", "Параметры", ShortcutContext.Mask, "X", "Переключить скрытие и возврат"),
         D(Commands.SublayerUp, "Подслой выше", "Слои", ShortcutContext.Selection, "Ctrl+Up", "Поднять выделение по подслою"),
         D(Commands.SublayerDown, "Подслой ниже", "Слои", ShortcutContext.Selection, "Ctrl+Down", "Опустить выделение по подслою"),
+        D(Commands.ObjectUp, "Объект выше", "Слои", ShortcutContext.Selection, "Alt+Up", "Поднять выделение над соседями подслоя"),
+        D(Commands.ObjectDown, "Объект ниже", "Слои", ShortcutContext.Selection, "Alt+Down", "Опустить выделение под соседей подслоя"),
+        D(Commands.ObjectTop, "Объект наверх", "Слои", ShortcutContext.Selection, "Shift+Alt+Up", "Сделать выделение самым верхним в слое"),
+        D(Commands.ObjectBottom, "Объект вниз", "Слои", ShortcutContext.Selection, "Shift+Alt+Down", "Сделать выделение самым нижним в слое"),
         D(Commands.LayerUp, "Слой выше", "Слои", ShortcutContext.Editor, "Ctrl+Shift+Up", "Поднять активный слой"),
         D(Commands.LayerDown, "Слой ниже", "Слои", ShortcutContext.Editor, "Ctrl+Shift+Down", "Опустить активный слой"),
-        D(Commands.StampFocusLibrary, "Поиск в библиотеке", "Штамп", ShortcutContext.Stamp, "F", "Открыть библиотеку и перейти к поиску"),
-        D(Commands.StampNextVariant, "Следующий вариант", "Штамп", ShortcutContext.Stamp, "Alt+Right", "Выбрать следующий вариант набора"),
-        D(Commands.StampPreviousVariant, "Предыдущий вариант", "Штамп", ShortcutContext.Stamp, "Alt+Left", "Выбрать предыдущий вариант набора"),
-        D(Commands.StampDensityUp, "Плотность штампа +", "Штамп", ShortcutContext.Stamp, "Alt+Q", "Увеличить плотность"),
-        D(Commands.StampDensityDown, "Плотность штампа −", "Штамп", ShortcutContext.Stamp, "Alt+A", "Уменьшить плотность"),
+        D(Commands.StampFocusLibrary, "Поиск в каталоге", "Размещение ассета", ShortcutContext.Stamp, "F", "Открыть каталог ассетов и перейти к поиску"),
+        D(Commands.StampNextVariant, "Следующий вариант", "Размещение ассета", ShortcutContext.Stamp, "Alt+Right", "Выбрать следующий вариант ассета"),
+        D(Commands.StampPreviousVariant, "Предыдущий вариант", "Размещение ассета", ShortcutContext.Stamp, "Alt+Left", "Выбрать предыдущий вариант ассета"),
+        D(Commands.StampDensityUp, "Плотность размещения +", "Размещение ассета", ShortcutContext.Stamp, "Alt+Q", "Увеличить плотность"),
+        D(Commands.StampDensityDown, "Плотность размещения −", "Размещение ассета", ShortcutContext.Stamp, "Alt+A", "Уменьшить плотность"),
         D(Commands.StampCycleVariant, "Вариант колёсиком", "Мышь", ShortcutContext.Mouse, "Alt+Wheel", "Прокрутить варианты над холстом", false),
         D(Commands.FontPrevious, "Предыдущий шрифт", "Текст", ShortcutContext.Selection, "[", "Выбрать предыдущий локальный шрифт"),
         D(Commands.FontNext, "Следующий шрифт", "Текст", ShortcutContext.Selection, "]", "Выбрать следующий локальный шрифт"),
@@ -480,7 +488,7 @@ public sealed class EditorShortcutSettings
         ShortcutContext.Mask => "Маска",
         ShortcutContext.Land => "Земля",
         ShortcutContext.Text => "Текст",
-        ShortcutContext.Stamp => "Штамп",
+        ShortcutContext.Stamp => "Размещение ассета",
         ShortcutContext.Notes => "Заметки",
         _ => "Мышь",
     };

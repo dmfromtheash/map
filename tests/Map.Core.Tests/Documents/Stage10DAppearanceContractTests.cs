@@ -61,11 +61,12 @@ public sealed class Stage10DAppearanceContractTests
     // ----------------------------------------------------------------- supported blend modes
 
     [Fact]
-    public void The_supported_blend_list_holds_exactly_the_ten_render_modes()
+    public void The_supported_blend_list_holds_exactly_the_seventeen_render_modes()
     {
         Assert.Equal(
             ["Normal", "Multiply", "Screen", "Overlay", "Darken", "Lighten",
-             "SoftLight", "HardLight", "Difference", "Add"],
+             "SoftLight", "HardLight", "Difference", "Add", "ColorBurn", "ColorDodge",
+             "Exclusion", "Hue", "Saturation", "Color", "Luminosity"],
             BlendModes.Supported);
         Assert.All(BlendModes.Supported, blend => Assert.True(BlendModes.IsSupported(blend)));
         Assert.False(BlendModes.IsSupported("Glow"));

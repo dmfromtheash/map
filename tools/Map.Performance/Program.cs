@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Map.Performance;
 
 var options = PerformanceOptions.Parse(args);
@@ -13,6 +13,12 @@ if (options.Profile == "native-brush-stress")
 else if (options.Profile == "native-editor-integrity")
 {
     var nativeReport = NativeEditorIntegritySmoke.Run(options);
+    report = nativeReport;
+    gatePassed = nativeReport.GatePassed;
+}
+else if (options.Profile == "native-object-workflow")
+{
+    var nativeReport = NativeObjectWorkflowSmoke.Run(options);
     report = nativeReport;
     gatePassed = nativeReport.GatePassed;
 }

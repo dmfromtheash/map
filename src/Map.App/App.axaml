@@ -23,6 +23,9 @@
         <SolidColorBrush x:Key="MapControlPressedBrush" Color="#D2E5E8" />
         <SolidColorBrush x:Key="MapBorderBrush" Color="#D7D1CA" />
         <SolidColorBrush x:Key="MapBorderStrongBrush" Color="#9FB4C0" />
+        <!-- The one border that has to clear 3:1 on its own: MapFieldBrush and MapPanelBrush are
+             a shade apart, so nothing else tells the user where the input begins. -->
+        <SolidColorBrush x:Key="MapFieldBorderBrush" Color="#788EA0" />
         <SolidColorBrush x:Key="MapFieldBrush" Color="#FFFCF8" />
 
         <!-- dark cyber-fantasy shell kept separate from the light work area -->
@@ -40,8 +43,12 @@
 
         <!-- text -->
         <SolidColorBrush x:Key="MapTextBrush" Color="#10264A" />
+        <SolidColorBrush x:Key="MapInputTextBrush" Color="#000000" />
         <SolidColorBrush x:Key="MapMutedBrush" Color="#4F617A" />
-        <SolidColorBrush x:Key="MapFaintBrush" Color="#78869B" />
+        <SolidColorBrush x:Key="MapFaintBrush" Color="#5B6A80" />
+        <!-- A control that is off right now must still be legible: "not now", never "not there".
+             Kept well clear of the faint brush so a greyed caption is not mistaken for a hint. -->
+        <SolidColorBrush x:Key="MapDisabledTextBrush" Color="#55637A" />
 
         <!-- meaning -->
         <SolidColorBrush x:Key="MapAccentBrush" Color="#55C8C9" />
@@ -49,16 +56,17 @@
         <SolidColorBrush x:Key="MapAccentDimBrush" Color="#D9F1F1" />
         <SolidColorBrush x:Key="MapAccentBorderBrush" Color="#55AEB4" />
         <SolidColorBrush x:Key="MapOnAccentBrush" Color="#0B2A42" />
-        <SolidColorBrush x:Key="MapDangerBrush" Color="#C6515A" />
+        <SolidColorBrush x:Key="MapDangerBrush" Color="#B33F49" />
         <SolidColorBrush x:Key="MapDangerDimBrush" Color="#F7E5E4" />
         <SolidColorBrush x:Key="MapDangerBorderBrush" Color="#D08A8F" />
-        <SolidColorBrush x:Key="MapSuccessBrush" Color="#3D8A69" />
-        <SolidColorBrush x:Key="MapWarnBrush" Color="#9B6A24" />
+        <SolidColorBrush x:Key="MapSuccessBrush" Color="#2F7256" />
+        <SolidColorBrush x:Key="MapWarnBrush" Color="#8A5C18" />
         <SolidColorBrush x:Key="MapWarnDimBrush" Color="#F6EAD3" />
         <SolidColorBrush x:Key="MapWarnBorderBrush" Color="#D0AB6D" />
         <SolidColorBrush x:Key="MapFocusBrush" Color="#1A8DA4" />
         <SolidColorBrush x:Key="MapSelectionBrush" Color="#DCEFF1" />
-        <SolidColorBrush x:Key="MapSelectionBorderBrush" Color="#79BFC4" />
+        <x:Double x:Key="TextControlPlaceholderOpacity">1</x:Double>
+        <SolidColorBrush x:Key="MapSelectionBorderBrush" Color="#43949C" />
         <SolidColorBrush x:Key="MapNewMapActionBrush" Color="#83C9C7" />
         <SolidColorBrush x:Key="MapNewMapActionHoverBrush" Color="#A9DDDA" />
         <SolidColorBrush x:Key="MapNewMapActionPressedBrush" Color="#6FB9B8" />
@@ -89,6 +97,34 @@
         <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="#D2E5E8" />
         <SolidColorBrush x:Key="ButtonBorderBrushPressed" Color="#7892A7" />
         <SolidColorBrush x:Key="ButtonForegroundPressed" Color="#10264A" />
+
+        <!--
+            The other half of the same problem: Fluent decides "off" and "elevated" colours from
+            its own resources, and a disabled caption drawn from them either vanished or shrank to
+            an unreadable grey. Naming Map's tokens here means a control that is off still reads
+            as off rather than as absent, and a popup surface is Map's paper rather than the
+            variant's card colour.
+        -->
+        <SolidColorBrush x:Key="ButtonForegroundDisabled" Color="#5E6E85" />
+        <SolidColorBrush x:Key="ToggleButtonForegroundDisabled" Color="#5E6E85" />
+        <SolidColorBrush x:Key="TextControlForegroundDisabled" Color="#5E6E85" />
+        <SolidColorBrush x:Key="TextControlPlaceholderForegroundDisabled" Color="#5E6E85" />
+        <SolidColorBrush x:Key="ComboBoxForegroundDisabled" Color="#5E6E85" />
+        <SolidColorBrush x:Key="MenuFlyoutItemForegroundDisabled" Color="#5E6E85" />
+        <!-- Fluent colours a menu caption from these, not from the MenuItem's own Foreground, so a
+             flyout came out with near-invisible words over crisp icons - the same defect the owner
+             photographed in the file menu. -->
+        <SolidColorBrush x:Key="MenuFlyoutItemForeground" Color="#10264A" />
+        <SolidColorBrush x:Key="MenuFlyoutItemForegroundPointerOver" Color="#10264A" />
+        <SolidColorBrush x:Key="MenuFlyoutItemForegroundPressed" Color="#10264A" />
+        <SolidColorBrush x:Key="MenuFlyoutSubItemForeground" Color="#10264A" />
+        <SolidColorBrush x:Key="MenuFlyoutSubItemForegroundPointerOver" Color="#10264A" />
+        <SolidColorBrush x:Key="ComboBoxDropDownBackground" Color="#FFFCF8" />
+        <SolidColorBrush x:Key="ComboBoxDropDownForeground" Color="#10264A" />
+        <SolidColorBrush x:Key="MenuFlyoutPresenterBackground" Color="#FFFCF8" />
+        <SolidColorBrush x:Key="FlyoutPresenterBackground" Color="#FFFCF8" />
+        <SolidColorBrush x:Key="ToolTipBackground" Color="#152845" />
+        <SolidColorBrush x:Key="ToolTipForeground" Color="#F8F3EB" />
 
         <!--
             Fluent derives slider tracks, checkboxes and selection highlights from the system
@@ -209,14 +245,33 @@
             <Setter Property="BorderBrush" Value="{DynamicResource MapBorderStrongBrush}" />
             <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
         </Style>
-        <Style Selector="Button:disabled">
-            <Setter Property="Opacity" Value="0.45" />
-        </Style>
 
         <!-- Focus is a ring that never depends on colour alone: it also thickens the border. -->
         <Style Selector="Button:focus-visible">
             <Setter Property="BorderBrush" Value="{DynamicResource MapFocusBrush}" />
             <Setter Property="BorderThickness" Value="2" />
+        </Style>
+
+        <!--
+            A button whose Content is a plain string does not get a TextBlock: Avalonia wraps the
+            caption in an AccessText, which a "TextBlock" type selector never matches. Every colour
+            rule written for TextBlock therefore had a hole in it, and "Добавить слой" came out
+            white on a light control - 1.17:1. AccessText is now named everywhere TextBlock is.
+        -->
+        <Style Selector=":is(Button) AccessText">
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector=":is(Button):disabled AccessText">
+            <Setter Property="Foreground" Value="{DynamicResource MapDisabledTextBrush}" />
+        </Style>
+        <Style Selector="Border.rail :is(Button) AccessText">
+            <Setter Property="Foreground" Value="{DynamicResource MapChromeTextBrush}" />
+        </Style>
+        <Style Selector="Border.app-bar :is(Button) AccessText">
+            <Setter Property="Foreground" Value="{DynamicResource MapChromeTextBrush}" />
+        </Style>
+        <Style Selector="Border.status-bar :is(Button) AccessText">
+            <Setter Property="Foreground" Value="{DynamicResource MapChromeTextBrush}" />
         </Style>
 
         <Style Selector="Button.primary">
@@ -227,6 +282,37 @@
             <Setter Property="Foreground" Value="{DynamicResource MapOnAccentBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBrush}" />
         </Style>
+        <!-- A view that builds its own caption row puts a TextBlock inside the button, and the
+             shell's "every TextBlock in the app bar is light" rule then won over the button's own
+             colour: Сохранить was drawn #F8F3EB on the cyan fill, 1.81:1. A filled button names
+             its caption colour itself, wherever it is hosted. -->
+        <Style Selector=":is(Button).primary TextBlock, :is(Button).primary AccessText">
+            <Setter Property="Foreground" Value="{DynamicResource MapOnAccentBrush}" />
+        </Style>
+
+        <!-- "accent" was a class no style ever defined, so a call-to-action button was an ordinary
+             one carrying an unstyled caption. It now means what its name says, and matches the
+             primary button apart from its size. -->
+        <Style Selector=":is(Button).accent">
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Background" Value="{DynamicResource MapAccentBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapOnAccentBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
+        </Style>
+        <Style Selector=":is(Button).accent TextBlock, :is(Button).accent AccessText">
+            <Setter Property="Foreground" Value="{DynamicResource MapOnAccentBrush}" />
+        </Style>
+        <Style Selector=":is(Button).accent:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapAccentHoverBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapOnAccentBrush}" />
+        </Style>
+        <Style Selector=":is(Button).accent:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapAccentBorderBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapOnAccentBrush}" />
+        </Style>
+
         <Style Selector="Button.primary:pointerover">
             <Setter Property="Background" Value="{DynamicResource MapAccentHoverBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource MapAccentHoverBrush}" />
@@ -702,12 +788,41 @@
             <Setter Property="Padding" Value="9,5" />
             <Setter Property="CornerRadius" Value="6" />
             <Setter Property="Background" Value="{DynamicResource MapFieldBrush}" />
-            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource MapBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapInputTextBrush}" />
+            <Setter Property="PlaceholderForeground" Value="{DynamicResource MapInputTextBrush}" />
+            <Setter Property="CaretBrush" Value="{DynamicResource MapInputTextBrush}" />
+            <Setter Property="SelectionForegroundBrush" Value="{DynamicResource MapInputTextBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapFieldBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="SelectionBrush" Value="{DynamicResource MapSelectionBrush}" />
         </Style>
+        <Style Selector="TextBox /template/ TextBlock#PART_Placeholder">
+            <Setter Property="Foreground" Value="{DynamicResource MapInputTextBrush}" />
+            <Setter Property="Opacity" Value="1" />
+        </Style>
+        <Style Selector="TextBox /template/ TextBlock#PART_FloatingPlaceholder">
+            <Setter Property="Foreground" Value="{DynamicResource MapInputTextBrush}" />
+            <Setter Property="Opacity" Value="1" />
+        </Style>
+        <Style Selector="TextBox /template/ TextPresenter#PART_TextPresenter">
+            <Setter Property="TextElement.Foreground" Value="{DynamicResource MapInputTextBrush}" />
+        </Style>
+        <Style Selector="TextBox:pointerover">
+            <Setter Property="Background" Value="{DynamicResource MapControlHoverBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapInputTextBrush}" />
+        </Style>
+        <Style Selector="TextBox:pointerover /template/ Border#PART_BorderElement">
+            <Setter Property="Background" Value="{DynamicResource MapControlHoverBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapBorderStrongBrush}" />
+        </Style>
         <Style Selector="TextBox:focus">
+            <Setter Property="Background" Value="{DynamicResource MapControlHoverBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapInputTextBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapFocusBrush}" />
+            <Setter Property="BorderThickness" Value="2" />
+        </Style>
+        <Style Selector="TextBox:focus /template/ Border#PART_BorderElement">
+            <Setter Property="Background" Value="{DynamicResource MapControlHoverBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource MapFocusBrush}" />
             <Setter Property="BorderThickness" Value="2" />
         </Style>
@@ -717,7 +832,23 @@
             <Setter Property="CornerRadius" Value="6" />
             <Setter Property="Background" Value="{DynamicResource MapControlBrush}" />
             <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource MapBorderBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapFieldBorderBrush}" />
+        </Style>
+        <Style Selector="ComboBox:pointerover">
+            <Setter Property="Background" Value="{DynamicResource MapControlHoverBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="ComboBox:pointerover /template/ Border#Background">
+            <Setter Property="Background" Value="{DynamicResource MapControlHoverBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapBorderStrongBrush}" />
+        </Style>
+        <Style Selector="ComboBox:pressed /template/ Border#Background">
+            <Setter Property="Background" Value="{DynamicResource MapControlHoverBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapFocusBrush}" />
+        </Style>
+        <Style Selector="ComboBox:dropdownopen /template/ Border#Background">
+            <Setter Property="Background" Value="{DynamicResource MapControlHoverBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapFocusBrush}" />
         </Style>
         <Style Selector="ComboBox:disabled">
             <Setter Property="Foreground" Value="{DynamicResource MapMutedBrush}" />
@@ -727,8 +858,21 @@
             <Setter Property="Foreground" Value="{DynamicResource MapMutedBrush}" />
         </Style>
         <Style Selector="ComboBox:focus-visible">
+            <Setter Property="Background" Value="{DynamicResource MapControlHoverBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource MapFocusBrush}" />
             <Setter Property="BorderThickness" Value="2" />
+        </Style>
+        <Style Selector="ComboBox:focus-visible /template/ Border#Background">
+            <Setter Property="Background" Value="{DynamicResource MapControlHoverBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapFocusBrush}" />
+        </Style>
+        <Style Selector="ComboBox:focus-visible /template/ Border#HighlightBackground">
+            <Setter Property="Background" Value="{DynamicResource MapControlHoverBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapFocusBrush}" />
+        </Style>
+        <Style Selector="ComboBox:focus-visible /template/ ContentControl#ContentPresenter">
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
         </Style>
 
         <Style Selector="Slider">
@@ -815,6 +959,12 @@
             <Setter Property="Foreground" Value="{DynamicResource MapChromeMutedBrush}" />
         </Style>
         <Style Selector="Border.status-bar TextBlock.faint">
+            <Setter Property="Foreground" Value="{DynamicResource MapChromeMutedBrush}" />
+        </Style>
+        <Style Selector="Border.rail TextBlock.faint">
+            <Setter Property="Foreground" Value="{DynamicResource MapChromeMutedBrush}" />
+        </Style>
+        <Style Selector="Border.app-bar TextBlock.faint">
             <Setter Property="Foreground" Value="{DynamicResource MapChromeMutedBrush}" />
         </Style>
         <Style Selector="Border.app-bar Button">
@@ -975,13 +1125,21 @@
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="Padding" Value="0" />
+            <Setter Property="Margin" Value="6,0" />
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
         </Style>
-        <Style Selector="Expander /template/ ToggleButton">
+        <Style Selector="Expander /template/ ToggleButton#ExpanderHeader">
             <Setter Property="Background" Value="Transparent" />
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="Foreground" Value="{DynamicResource MapMutedBrush}" />
             <Setter Property="MinHeight" Value="30" />
             <Setter Property="Padding" Value="0,2" />
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        </Style>
+        <Style Selector="Expander /template/ Border#ExpandCollapseChevronBorder">
+            <Setter Property="Margin" Value="8,0,4,0" />
         </Style>
 
         <!-- Right-hand panel modes. Kept as a TabControl so existing automation keeps working,
@@ -1016,6 +1174,215 @@
         <Style Selector="TabItem:focus-visible /template/ Border#PART_LayoutRoot">
             <Setter Property="BorderBrush" Value="{DynamicResource MapFocusBrush}" />
             <Setter Property="BorderThickness" Value="2" />
+        </Style>
+
+        <!--
+            Declaration order decides between two matching styles, and the shell rule above
+            ("every TextBlock in the app bar is light") is written after the button rules. A filled
+            button hosted BY the shell therefore lost its own caption colour: Сохранить came out
+            #F8F3EB on the cyan fill, 1.81:1. Restated here, last, so the fill always wins.
+        -->
+        <Style Selector=":is(Button).primary TextBlock, :is(Button).primary AccessText">
+            <Setter Property="Foreground" Value="{DynamicResource MapOnAccentBrush}" />
+        </Style>
+        <Style Selector=":is(Button).accent TextBlock, :is(Button).accent AccessText">
+            <Setter Property="Foreground" Value="{DynamicResource MapOnAccentBrush}" />
+        </Style>
+
+        <!-- Inside the dark shell the accent fill is deliberately dropped, so Экспорт stays an
+             outline button beside the filled Сохранить. Its caption follows the shell, not the
+             fill it no longer has. -->
+        <Style Selector="Border.app-bar :is(Button).accent TextBlock, Border.app-bar :is(Button).accent AccessText">
+            <Setter Property="Foreground" Value="{DynamicResource MapChromeTextBrush}" />
+        </Style>
+
+        <!--
+            The quick property strip: one band across the top of the editor carrying the handful of
+            properties a selected object needs constantly. It is a light working surface between the
+            dark shell and the canvas, and it keeps a fixed height so the map never jumps when a
+            selection comes or goes.
+        -->
+        <Style Selector="Border.quick-bar">
+            <Setter Property="Background" Value="{DynamicResource MapPanelBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapBorderBrush}" />
+            <Setter Property="BorderThickness" Value="0,0,0,1" />
+        </Style>
+        <Style Selector="Border.quick-bar TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="Border.quick-bar TextBlock.muted">
+            <Setter Property="Foreground" Value="{DynamicResource MapMutedBrush}" />
+        </Style>
+
+        <!--
+            "Разные" is a state, not a value, so it is never carried by colour alone: the field is
+            italic and its caption says the word. Colour only reinforces it.
+        -->
+        <Style Selector="TextBox.mixed">
+            <Setter Property="Foreground" Value="{DynamicResource MapWarnBrush}" />
+            <Setter Property="FontStyle" Value="Italic" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapWarnBorderBrush}" />
+        </Style>
+        <Style Selector="TextBox.mixed /template/ TextPresenter#PART_TextPresenter">
+            <Setter Property="TextElement.Foreground" Value="{DynamicResource MapWarnBrush}" />
+        </Style>
+        <Style Selector="ComboBox.mixed">
+            <Setter Property="FontStyle" Value="Italic" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapWarnBorderBrush}" />
+        </Style>
+        <Style Selector="ComboBox.mixed /template/ TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource MapWarnBrush}" />
+        </Style>
+
+        <!-- ============================ containers Fluent would otherwise colour itself -->
+        <!--
+            Everything above styles the controls Map creates. These styles cover the containers
+            Fluent supplies around them - a list's item wrapper, a flyout's presenter, a dropdown
+            row, a tooltip. Left alone they take their colours from the active Fluent variant, so
+            the palette and the surface underneath it could disagree; that is exactly how the
+            objects list ended up drawing #10264A text on a #2B2B2B ground. Each one is now pinned
+            to Map's own tokens, and every nested presenter is addressed explicitly because a
+            Fluent template does not inherit the host's Foreground.
+        -->
+
+        <Style Selector="ListBox">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+        </Style>
+        <!-- The row itself is a Map control that paints its own selection; the Fluent wrapper
+             around it must stay out of the way instead of adding a second highlight. -->
+        <Style Selector="ListBoxItem">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="MinHeight" Value="0" />
+        </Style>
+        <Style Selector="ListBoxItem /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="ListBoxItem:selected:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+
+        <Style Selector="FlyoutPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapElevatedBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="MenuFlyoutPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapElevatedBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="ContextMenu">
+            <Setter Property="Background" Value="{DynamicResource MapElevatedBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="MenuItem">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+            <Setter Property="MinHeight" Value="32" />
+        </Style>
+        <Style Selector="MenuItem AccessText">
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="MenuItem /template/ ContentPresenter#PART_HeaderPresenter">
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="MenuItem:pointerover /template/ ContentPresenter#PART_HeaderPresenter">
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="MenuItem TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="MenuItem:pointerover /template/ Border#PART_LayoutRoot">
+            <Setter Property="Background" Value="{DynamicResource MapControlHoverBrush}" />
+        </Style>
+        <Style Selector="MenuItem:selected /template/ Border#PART_LayoutRoot">
+            <Setter Property="Background" Value="{DynamicResource MapSelectionBrush}" />
+        </Style>
+        <Style Selector="MenuItem:disabled">
+            <Setter Property="Foreground" Value="{DynamicResource MapDisabledTextBrush}" />
+            <Setter Property="Opacity" Value="1" />
+        </Style>
+        <Style Selector="MenuItem:disabled TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource MapDisabledTextBrush}" />
+        </Style>
+
+        <Style Selector="ComboBoxItem">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+            <Setter Property="MinHeight" Value="30" />
+        </Style>
+        <Style Selector="ComboBoxItem /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="ComboBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapControlHoverBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <!-- Selection is a fill AND a border, so it survives greyscale and colour-blind viewing. -->
+        <Style Selector="ComboBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapSelectionBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapSelectionBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="ComboBoxItem:selected:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapSelectionBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+
+        <Style Selector="ToolTip">
+            <Setter Property="Background" Value="{DynamicResource MapChromeElevatedBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapChromeBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Foreground" Value="{DynamicResource MapChromeTextBrush}" />
+        </Style>
+        <Style Selector="ToolTip TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource MapChromeTextBrush}" />
+        </Style>
+
+        <!-- Disabled must read as "not now", never as "not there". The button itself is named as
+             well as its presenter: an icon binds to the nearest templated ancestor's Foreground,
+             so styling only the presenter left the glyph at full strength beside a greyed word. -->
+        <Style Selector=":is(Button):disabled">
+            <Setter Property="Foreground" Value="{DynamicResource MapDisabledTextBrush}" />
+            <Setter Property="Opacity" Value="1" />
+        </Style>
+        <Style Selector=":is(Button):disabled /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Foreground" Value="{DynamicResource MapDisabledTextBrush}" />
+        </Style>
+        <Style Selector=":is(Button):disabled TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource MapDisabledTextBrush}" />
+        </Style>
+        <Style Selector="TextBox:disabled">
+            <Setter Property="Opacity" Value="1" />
+            <Setter Property="Foreground" Value="{DynamicResource MapDisabledTextBrush}" />
+        </Style>
+        <Style Selector="TextBox:disabled /template/ TextPresenter#PART_TextPresenter">
+            <Setter Property="TextElement.Foreground" Value="{DynamicResource MapDisabledTextBrush}" />
+        </Style>
+        <Style Selector="ComboBox:disabled /template/ TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource MapDisabledTextBrush}" />
+        </Style>
+        <Style Selector="Slider:disabled">
+            <Setter Property="Opacity" Value="0.7" />
         </Style>
 
         <Style Selector="ScrollViewer">

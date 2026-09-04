@@ -120,12 +120,13 @@ public class MapProjectFailureTests
 
         // Rewrite the manifest to a future schema, keeping its checksum contract out of the way:
         // schema is checked before checksums, per the open order in the store.
-        RewriteManifestSchemaVersion(path, 2);
+        var futureSchema = MapProjectFormat.SchemaVersion + 1;
+        RewriteManifestSchemaVersion(path, futureSchema);
         var bytesBefore = File.ReadAllBytes(path);
 
         var refusal = Assert.Throws<UnsupportedSchemaVersionException>(() => MapProjectStore.Open(path));
-        Assert.Equal(2, refusal.SchemaVersion);
-        Assert.Contains("2", refusal.Message);
+        Assert.Equal(futureSchema, refusal.SchemaVersion);
+        Assert.Contains(futureSchema.ToString(), refusal.Message);
 
         // Open never migrates and never rewrites the source (docs/05).
         Assert.Equal(bytesBefore, File.ReadAllBytes(path));
@@ -143,7 +144,9 @@ public class MapProjectFailureTests
         }
 
         text = JsonTestMutations.ReplaceFirst(
-            text, "\"schemaVersion\": 1", $"\"schemaVersion\": {version}");
+            text,
+            $"\"schemaVersion\": {MapProjectFormat.SchemaVersion}",
+            $"\"schemaVersion\": {version}");
 
         using var writer = new StreamWriter(entry.Open());
         writer.BaseStream.SetLength(0);

@@ -322,9 +322,9 @@ public class ContainerHardeningTests
     }
 
     [Theory]
-    [InlineData("{\"documentId\":null,\"layers\":[]}", "document id")]
-    [InlineData("{\"documentId\":\"11111111-2222-3333-4444-555555555555\",\"layers\":null}", "null layers")]
-    [InlineData("{\"documentId\":\"11111111-2222-3333-4444-555555555555\",\"layers\":[null]}", "null layers")]
+    [InlineData("{\"documentId\":null,\"layers\":[],\"notes\":[]}", "document id")]
+    [InlineData("{\"documentId\":\"11111111-2222-3333-4444-555555555555\",\"layers\":null,\"notes\":[]}", "layers and notes arrays")]
+    [InlineData("{\"documentId\":\"11111111-2222-3333-4444-555555555555\",\"layers\":[null],\"notes\":[]}", "every layer type")]
     public void Null_required_json_shapes_are_reported_as_corruption_not_an_NRE(
         string sceneJson, string expectedFragment)
     {
@@ -337,11 +337,11 @@ public class ContainerHardeningTests
     }
 
     [Theory]
-    [InlineData("{\"documentId\":\"11111111-2222-3333-4444-555555555555\",\"layers\":[{\"id\":\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\",\"objects\":[],\"tiles\":[null]}],\"notes\":[]}")]
+    [InlineData("{\"documentId\":\"11111111-2222-3333-4444-555555555555\",\"layers\":[{\"id\":\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\",\"type\":\"Brush\",\"objects\":[],\"tiles\":[null]}],\"notes\":[]}")]
     [InlineData("{\"documentId\":\"11111111-2222-3333-4444-555555555555\",\"layers\":[],\"notes\":[null]}")]
-    [InlineData("{\"documentId\":\"11111111-2222-3333-4444-555555555555\",\"layers\":[{\"id\":\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\",\"objects\":[{\"line\":{\"nodes\":[null],\"stroke\":{},\"portals\":[]}}]}],\"notes\":[]}")]
-    [InlineData("{\"documentId\":\"11111111-2222-3333-4444-555555555555\",\"layers\":[{\"id\":\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\",\"objects\":[{\"shape\":{\"regions\":[{\"nodes\":[null]}],\"fill\":{},\"stroke\":{},\"portals\":[null]}}]}],\"notes\":[]}")]
-    [InlineData("{\"documentId\":\"11111111-2222-3333-4444-555555555555\",\"layers\":[{\"id\":\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\",\"objects\":[{\"composition\":{\"items\":[],\"assets\":[null],\"grids\":[null],\"filters\":[null]}}]}],\"notes\":[]}")]
+    [InlineData("{\"documentId\":\"11111111-2222-3333-4444-555555555555\",\"layers\":[{\"id\":\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\",\"type\":\"Object\",\"objects\":[{\"line\":{\"nodes\":[null],\"stroke\":{},\"portals\":[]}}]}],\"notes\":[]}")]
+    [InlineData("{\"documentId\":\"11111111-2222-3333-4444-555555555555\",\"layers\":[{\"id\":\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\",\"type\":\"Object\",\"objects\":[{\"shape\":{\"regions\":[{\"nodes\":[null]}],\"fill\":{},\"stroke\":{},\"portals\":[null]}}]}],\"notes\":[]}")]
+    [InlineData("{\"documentId\":\"11111111-2222-3333-4444-555555555555\",\"layers\":[{\"id\":\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\",\"type\":\"Object\",\"objects\":[{\"composition\":{\"items\":[],\"assets\":[null],\"grids\":[null],\"filters\":[null]}}]}],\"notes\":[]}")]
     public void Null_elements_inside_scene_collections_are_reported_as_corruption(string sceneJson)
     {
         using var workspace = new TempWorkspace();
@@ -386,12 +386,13 @@ public class ContainerHardeningTests
 
         var sceneJson =
             "{\"documentId\":\"11111111-2222-3333-4444-555555555555\",\"layers\":[" +
-            "{\"id\":\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\",\"name\":\"l\",\"visible\":true," +
+            "{\"id\":\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\",\"type\":\"Object\"," +
+            "\"name\":\"l\",\"visible\":true," +
             "\"locked\":false,\"opacity\":1,\"objects\":[" +
             "{\"id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"kind\":\"" + kind + "\"," +
             "\"name\":\"o\",\"x\":0,\"y\":0,\"width\":10,\"height\":10,\"rotationDegrees\":0," +
             "\"fillColor\":\"#FF000000\",\"strokeColor\":\"#FF000000\",\"strokeWidth\":0," +
-            "\"visible\":true,\"locked\":false}]}]}";
+            "\"visible\":true,\"locked\":false}]}],\"notes\":[]}";
 
         ReplaceSceneJson(path, sceneJson);
 

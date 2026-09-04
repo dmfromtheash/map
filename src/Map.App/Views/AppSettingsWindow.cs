@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Threading.Tasks;
 using Avalonia;
@@ -18,7 +18,15 @@ public sealed class AppSettingsWindow : Window
     private readonly AppSettingsStore _store;
     private readonly Action<AppSettings> _apply;
     private readonly Func<string> _diagnostics;
-    private readonly ComboBox _theme = Choice("SettingsTheme", ["Системная", "Тёмная", "Светлая"]);
+    // Kept as a stored value for compatibility, but no longer offered as a choice: Map ships one
+    // approved palette and one approved icon set, and the other two options only handed Fluent a
+    // different set of container colours underneath them.
+    private readonly TextBlock _theme = new()
+    {
+        Name = "SettingsTheme",
+        Text = "Утверждённая тема Map",
+        VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+    };
     private readonly NumericUpDown _scale = Number("SettingsUiScale", 80, 200, 5);
     private readonly NumericUpDown _autosave = Number("SettingsAutosave", 10, 3600, 10);
     private readonly NumericUpDown _recovery = Number("SettingsRecoveryBudget", 1, 50, 1);
@@ -108,6 +116,13 @@ public sealed class AppSettingsWindow : Window
                             {
                                 Heading("Интерфейс"),
                                 Ui.PropertyRow("Тема", _theme),
+                                new TextBlock
+                                {
+                                    Text = "Оформление Map не следует за тёмной темой Windows: "
+                                        + "утверждённые панели, текст и иллюстрации рассчитаны на "
+                                        + "одну светлую рабочую поверхность.",
+                                    TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+                                }.Classed("faint", "role-caption"),
                                 Ui.PropertyRow("Масштаб интерфейса", PercentRow(_scale)),
                                 new TextBlock { Text = "Язык интерфейса: русский", TextWrapping = Avalonia.Media.TextWrapping.Wrap },
                                 Heading("Сохранение и recovery"),
@@ -158,7 +173,6 @@ public sealed class AppSettingsWindow : Window
     private void Load(AppSettings settings)
     {
         settings = AppSettings.Sanitize(settings);
-        _theme.SelectedIndex = (int)settings.Theme;
         _scale.Value = (decimal)(settings.UiScale * 100);
         _autosave.Value = settings.AutosaveIntervalSeconds;
         _recovery.Value = settings.RecoveryItemBudget;
@@ -174,7 +188,7 @@ public sealed class AppSettingsWindow : Window
     {
         var saved = _store.Save(new AppSettings
         {
-            Theme = (LocalThemeMode)Math.Max(0, _theme.SelectedIndex),
+            Theme = LocalThemeMode.Light,
             UiScale = (double)(_scale.Value ?? 100) / 100,
             AutosaveIntervalSeconds = (int)(_autosave.Value ?? 60),
             RecoveryItemBudget = (int)(_recovery.Value ?? 12),

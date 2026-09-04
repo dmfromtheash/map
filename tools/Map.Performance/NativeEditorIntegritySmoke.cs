@@ -201,7 +201,7 @@ public sealed class NativeEditorIntegrityApplication : Application
             ("LineToolButton", EditorTool.Line),
             ("ShapeToolButton", EditorTool.Shape),
             ("TextToolButton", EditorTool.Text),
-            ("StampToolButton", EditorTool.Stamp),
+            ("AssetsLibraryButton", EditorTool.Stamp),
             ("NotesToolButton", EditorTool.Notes),
             ("BrushToolButton", EditorTool.Brush),
             ("MaskToolButton", EditorTool.Mask),
@@ -755,13 +755,13 @@ public sealed class NativeEditorIntegrityApplication : Application
         var compactScreenshot = Path.ChangeExtension(options.OutputPath, ".compact.png");
         window.Width = 1_416; window.Height = 939;
         await SettleAsync();
-        await StabiliseLayoutAsync(view);
+        var wideSettled = await StabiliseLayoutAsync(view);
         var wideModes = AllModesReachable(view, shapeModeNames);
         var wideLayers = LayerRowsReachable(view, out var wideRowDetail);
         var wideCanvas = view.Canvas.Bounds.Width;
         SaveVisual(view, wideScreenshot, 1_416, 939);
         window.Width = 960; window.Height = 640;
-        await StabiliseLayoutAsync(view);
+        var compactSettled = await StabiliseLayoutAsync(view);
         var compactModes = AllModesReachable(view, shapeModeNames);
         var compactLayers = LayerRowsReachable(view, out var compactRowDetail);
         var compactCanvas = view.Canvas.Bounds.Width;
@@ -769,6 +769,7 @@ public sealed class NativeEditorIntegrityApplication : Application
         scenarios["shape_modes_stay_reachable_at_both_sizes"] = wideModes && compactModes;
         scenarios["layer_rows_stay_reachable_at_both_sizes"] = wideLayers && compactLayers;
         notes.Add($"canvas width: wide={wideCanvas:0.#}, compact={compactCanvas:0.#}");
+        notes.Add($"layout settled: wide={wideSettled}, compact={compactSettled}");
         notes.Add($"layer rows wide: {wideRowDetail}");
         notes.Add($"layer rows compact: {compactRowDetail}");
 
@@ -853,10 +854,14 @@ public sealed class NativeEditorIntegrityApplication : Application
     /// measurement taken mid-pass reports zero-sized controls - which would make a layout gate
     /// flaky rather than meaningful.
     /// </summary>
-    private static async Task StabiliseLayoutAsync(EditorView view)
+    private static async Task<bool> StabiliseLayoutAsync(EditorView view)
     {
         var previous = "";
-        for (var round = 0; round < 12; round++)
+        // A resize settles over a number of passes that depends on how busy the machine is. Twelve
+        // was sometimes not enough, and giving up silently made the gate report a real-looking
+        // layout failure - a row measured at 0x0 mid-pass - roughly every other run. The budget is
+        // now generous, and running out of it is reported as what it is rather than as a defect.
+        for (var round = 0; round < 60; round++)
         {
             await SettleAsync();
             var signature = string.Join('|', view.GetVisualDescendants().OfType<Control>()
@@ -869,11 +874,13 @@ public sealed class NativeEditorIntegrityApplication : Application
                 && !signature.Contains("0x0", StringComparison.Ordinal);
             if (settled)
             {
-                return;
+                return true;
             }
 
             previous = signature;
         }
+
+        return false;
     }
 
     private static bool AllModesReachable(EditorView view, IReadOnlyList<string> names)

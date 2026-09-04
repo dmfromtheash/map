@@ -1,4 +1,4 @@
-using Map.Core.Documents;
+﻿using Map.Core.Documents;
 
 namespace Map.Core.Editing;
 
@@ -13,6 +13,54 @@ public interface IEditCommand
     MapDocument Apply(MapDocument document);
 
     MapDocument Revert(MapDocument document);
+}
+
+/// <summary>
+/// Several edits the user performed as one gesture, kept as ONE history entry. Apply runs the
+/// steps in order; Revert unwinds them in reverse, so a placement that had to create its own
+/// layer never leaves that layer behind after a single undo.
+/// </summary>
+public sealed class CompositeCommand : IEditCommand
+{
+    private readonly IReadOnlyList<IEditCommand> _steps;
+
+    public CompositeCommand(string name, IReadOnlyList<IEditCommand> steps)
+    {
+        ArgumentNullException.ThrowIfNull(steps);
+        if (steps.Count == 0)
+        {
+            throw new ArgumentException("A composite command needs at least one step.", nameof(steps));
+        }
+
+        Name = string.IsNullOrWhiteSpace(name) ? "Composite edit" : name;
+        _steps = [.. steps];
+    }
+
+    public string Name { get; }
+
+    public int StepCount => _steps.Count;
+
+    public MapDocument Apply(MapDocument document)
+    {
+        var current = document;
+        foreach (var step in _steps)
+        {
+            current = step.Apply(current);
+        }
+
+        return current;
+    }
+
+    public MapDocument Revert(MapDocument document)
+    {
+        var current = document;
+        for (var index = _steps.Count - 1; index >= 0; index--)
+        {
+            current = _steps[index].Revert(current);
+        }
+
+        return current;
+    }
 }
 
 // ---------------------------------------------------------------- object commands
@@ -188,6 +236,95 @@ public sealed class PlaceAssetObjectsCommand : IEditCommand
 
         // Only references this command actually introduced, and only those no surviving stamp
         // still points at, are withdrawn. Anything else would break another object's content.
+        var stillUsed = CompositionTransfer.UsedAssetHashes(
+            withoutObjects.Layers.OfType<ObjectLayer>().SelectMany(layer => layer.Objects));
+        var withdraw = _introduced.Where(sha => !stillUsed.Contains(sha))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return withdraw.Count == 0
+            ? withoutObjects
+            : withoutObjects.WithAssets(
+                [.. withoutObjects.Assets.Where(asset => !withdraw.Contains(asset.Sha256))]);
+    }
+}
+
+/// <summary>
+/// Pastes a whole copied selection back into one object layer as ONE history entry: every object
+/// of any kind, plus the asset references those objects need. Unlike
+/// <see cref="PlaceAssetObjectsCommand"/> the objects are not restricted to stamps, and unlike
+/// <see cref="AddObjectsCommand"/> the content the pasted objects point at travels with them, so
+/// a paste into a document that never saw those bytes still renders.
+/// The caller resolves new ids, offsets and order before the command exists; Apply chooses nothing.
+/// </summary>
+public sealed class PasteObjectsCommand : IEditCommand
+{
+    private readonly LayerId _layerId;
+    private readonly IReadOnlyList<MapAssetReference> _assets;
+    private readonly IReadOnlyList<SceneObject> _objects;
+    private readonly HashSet<string> _introduced = new(StringComparer.OrdinalIgnoreCase);
+
+    public PasteObjectsCommand(
+        LayerId layerId, IReadOnlyList<SceneObject> objects, IReadOnlyList<MapAssetReference>? assets = null)
+    {
+        ArgumentNullException.ThrowIfNull(objects);
+        if (objects.Count == 0)
+        {
+            throw new ArgumentException("A paste restores at least one object.", nameof(objects));
+        }
+
+        _layerId = layerId;
+        _objects = [.. objects];
+        _assets = assets is null
+            ? []
+            : [.. assets.GroupBy(asset => asset.Sha256, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.First())];
+    }
+
+    public string Name => _objects.Count == 1 ? "Paste object" : $"Paste {_objects.Count} objects";
+
+    public int Count => _objects.Count;
+
+    /// <summary>Ids of the pasted objects, so the caller can select exactly the new group.</summary>
+    public IReadOnlyList<ObjectId> PastedObjectIds => [.. _objects.Select(item => item.Id)];
+
+    public MapDocument Apply(MapDocument document)
+    {
+        _introduced.Clear();
+        var known = document.Assets.Select(asset => asset.Sha256).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var added = new List<MapAssetReference>();
+        foreach (var asset in _assets)
+        {
+            if (known.Add(asset.Sha256))
+            {
+                _introduced.Add(asset.Sha256);
+                added.Add(asset);
+            }
+        }
+
+        var withAssets = added.Count == 0 ? document : document.WithAssets([.. document.Assets, .. added]);
+        return withAssets.WithLayer(_layerId, layer =>
+        {
+            var objects = layer as ObjectLayer
+                ?? throw new InvalidOperationException($"Layer {_layerId} does not hold objects.");
+            return objects with { Objects = [.. objects.Objects, .. _objects] };
+        });
+    }
+
+    public MapDocument Revert(MapDocument document)
+    {
+        var ids = _objects.Select(item => item.Id).ToHashSet();
+        var withoutObjects = document.WithLayer(_layerId, layer =>
+        {
+            var objects = (ObjectLayer)layer;
+            return objects with { Objects = [.. objects.Objects.Where(item => !ids.Contains(item.Id))] };
+        });
+
+        if (_introduced.Count == 0)
+        {
+            return withoutObjects;
+        }
+
+        // Same rule as a placement: only references this paste introduced, and only those no
+        // surviving object still points at, are withdrawn.
         var stillUsed = CompositionTransfer.UsedAssetHashes(
             withoutObjects.Layers.OfType<ObjectLayer>().SelectMany(layer => layer.Objects));
         var withdraw = _introduced.Where(sha => !stillUsed.Contains(sha))
@@ -380,6 +517,64 @@ public sealed class ReplaceObjectsCommand : IEditCommand
 
     private static MapDocument Replace(MapDocument document, IReadOnlyList<SceneObject> replacements) =>
         DocumentEditor.ReplaceObjects(document, replacements);
+}
+
+/// <summary>
+/// Changes only the order of one object layer's list, which is what decides draw order inside a
+/// sublayer band (see SceneGeometry.InDrawOrder). The same objects come out; nothing about them
+/// changes except where they sit relative to their neighbours.
+/// </summary>
+public sealed class ReorderObjectsCommand : IEditCommand
+{
+    private readonly LayerId _layerId;
+    private readonly IReadOnlyList<SceneObject> _before;
+    private readonly IReadOnlyList<SceneObject> _after;
+
+    public ReorderObjectsCommand(
+        LayerId layerId, IReadOnlyList<SceneObject> before, IReadOnlyList<SceneObject> after, string name)
+    {
+        ArgumentNullException.ThrowIfNull(before);
+        ArgumentNullException.ThrowIfNull(after);
+        if (before.Count != after.Count
+            || before.Select(item => item.Id).ToHashSet().SetEquals(after.Select(item => item.Id)) is false)
+        {
+            throw new ArgumentException("A reorder keeps exactly the same objects.", nameof(after));
+        }
+
+        _layerId = layerId;
+        _before = [.. before];
+        _after = [.. after];
+        Name = string.IsNullOrWhiteSpace(name) ? "Reorder objects" : name;
+    }
+
+    public string Name { get; }
+
+    public MapDocument Apply(MapDocument document) => Order(document, _after);
+
+    public MapDocument Revert(MapDocument document) => Order(document, _before);
+
+    private MapDocument Order(MapDocument document, IReadOnlyList<SceneObject> order) =>
+        document.WithLayer(_layerId, layer =>
+        {
+            var objects = layer as ObjectLayer
+                ?? throw new InvalidOperationException($"Layer {_layerId} does not hold objects.");
+
+            // The stored snapshots only carry identity here; the live objects may have been edited
+            // since, so the current instances are reordered rather than written back wholesale.
+            var current = objects.Objects.ToDictionary(item => item.Id);
+            var reordered = new List<SceneObject>(objects.Objects.Count);
+            foreach (var item in order)
+            {
+                if (current.TryGetValue(item.Id, out var live))
+                {
+                    reordered.Add(live);
+                }
+            }
+
+            return reordered.Count == objects.Objects.Count
+                ? objects with { Objects = reordered }
+                : objects;
+        });
 }
 
 /// <summary>Legacy single-object transform wrapper kept for the editor's drag/inspector path.</summary>

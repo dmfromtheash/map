@@ -128,7 +128,7 @@ public static class MapIcons
         if (normalized.Contains("мягк")) return SoftEdge;
         if (normalized.Contains("неровн")) return RoughEdge;
         if (normalized.Contains("сглаж")) return Smoothing;
-        if (normalized.Contains("интервал штампа") || normalized.Contains("шаг отпечат")) return StampSpacing;
+        if (normalized.Contains("интервал ассета") || normalized.Contains("шаг отпечат")) return StampSpacing;
         if (normalized.Contains("непрозрачность слоя")) return LayerOpacity;
         if (normalized.Contains("непрозрач") || normalized.Contains("плотност")) return Opacity;
         if (normalized.Contains("масштаб")) return ScaleObject;
@@ -154,6 +154,21 @@ public static class MapIcons
                                     "S 19.5 13.3, 19.5 14.5 Z";
     public const string Move = "M12 3.5 V20.5 M3.5 12 H20.5 M9 6.5 L12 3.5 L15 6.5 " +
                                "M9 17.5 L12 20.5 L15 17.5 M6.5 9 L3.5 12 L6.5 15 M17.5 9 L20.5 12 L17.5 15";
+
+    /// <summary>The rail glyph of a tool, so the rail can be built from the shared layout list.</summary>
+    public static string Tool(Map.Presentation.ViewModels.EditorTool tool) => tool switch
+    {
+        Map.Presentation.ViewModels.EditorTool.Select => Select,
+        Map.Presentation.ViewModels.EditorTool.Land => Land,
+        Map.Presentation.ViewModels.EditorTool.Line => Line,
+        Map.Presentation.ViewModels.EditorTool.Shape => Shape,
+        Map.Presentation.ViewModels.EditorTool.Text => Text,
+        Map.Presentation.ViewModels.EditorTool.Notes => Notes,
+        Map.Presentation.ViewModels.EditorTool.Brush => Brush,
+        Map.Presentation.ViewModels.EditorTool.Mask => Mask,
+        Map.Presentation.ViewModels.EditorTool.Stamp => Assets,
+        _ => Select,
+    };
 
     /// <summary>
     /// Uses the owner's approved blue-theme illustration when one exists; otherwise falls back to

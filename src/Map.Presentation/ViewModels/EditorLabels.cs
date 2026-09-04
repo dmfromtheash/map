@@ -1,4 +1,4 @@
-using Map.Core.Documents;
+﻿using Map.Core.Documents;
 using Map.Core.Editing;
 
 namespace Map.Presentation.ViewModels;
@@ -21,7 +21,7 @@ public static class EditorLabels
         EditorTool.Brush => "Кисть",
         EditorTool.Mask => "Маска",
         EditorTool.Land => "Земля",
-        EditorTool.Stamp => "Штамп",
+        EditorTool.Stamp => "Размещение ассета",
         EditorTool.Notes => "Заметки",
         _ => "Инструмент",
     };
@@ -36,7 +36,7 @@ public static class EditorLabels
         EditorTool.Brush => "Рисуйте по холсту. Размер и непрозрачность — слева.",
         EditorTool.Mask => "Рисуйте по маске активного слоя: скрывайте или возвращайте участки.",
         EditorTool.Land => "Протяните по холсту, чтобы добавить сушу. Режим «Убрать» стирает её.",
-        EditorTool.Stamp => "Выберите набор в библиотеке и щёлкните по холсту. Область и плотность настраиваются слева.",
+        EditorTool.Stamp => "Выберите ассет в каталоге и щёлкните по холсту. Область и плотность настраиваются слева.",
         EditorTool.Notes => "Создавайте заметки карты или привязывайте их к выделенному объекту.",
         _ => "",
     };
@@ -69,16 +69,31 @@ public static class EditorLabels
     public static string DescribeObject(SceneObject sceneObject)
     {
         var kind = ObjectKind(sceneObject.Kind);
-        return string.Equals(kind, sceneObject.Name, StringComparison.OrdinalIgnoreCase)
-            ? sceneObject.Name
-            : $"{sceneObject.Name} · {kind}";
+        return SecondaryKind(sceneObject.Name, kind) is { } secondary
+            ? $"{sceneObject.Name} · {secondary}"
+            : sceneObject.Name;
     }
 
     /// <summary>The kind, or null when the name already says it. Used as a list row's subtitle.</summary>
-    public static string? ObjectSubtitle(SceneObject sceneObject)
+    public static string? ObjectSubtitle(SceneObject sceneObject) =>
+        SecondaryKind(sceneObject.Name, ObjectKind(sceneObject.Kind));
+
+    /// <summary>
+    /// The kind as a secondary label, or null when the name already carries it. A generated name
+    /// is the kind, optionally followed by a number ("Объекты 1"), so putting the word next to it
+    /// again only crowds the row - the same duplication that made a placed tree read "Дерево
+    /// Штамп". One rule, shared by object rows, layer rows and spoken descriptions.
+    /// </summary>
+    public static string? SecondaryKind(string name, string kind)
     {
-        var kind = ObjectKind(sceneObject.Kind);
-        return string.Equals(kind, sceneObject.Name, StringComparison.OrdinalIgnoreCase) ? null : kind;
+        var trimmed = (name ?? "").Trim();
+        if (!trimmed.StartsWith(kind, StringComparison.OrdinalIgnoreCase))
+        {
+            return kind;
+        }
+
+        var rest = trimmed[kind.Length..].Trim();
+        return rest.Length == 0 || rest.All(char.IsDigit) ? null : kind;
     }
 
     public static string ObjectVisibilityValue(bool visible) => visible ? "Показан" : "Скрыт";
@@ -89,7 +104,10 @@ public static class EditorLabels
     {
         SceneObjectKind.Rectangle => "Прямоугольник",
         SceneObjectKind.Ellipse => "Эллипс",
-        SceneObjectKind.Stamp => "Штамп",
+        // The catalog entry is an "ассет"; the thing on the map is an object made from it.
+        // "Штамп" named both the tool and the object and so read as a third, invented concept -
+        // it is gone from the user's vocabulary and survives only as an internal type name.
+        SceneObjectKind.Stamp => "Ассет",
         SceneObjectKind.Line => "Линия",
         SceneObjectKind.Shape => "Фигура",
         SceneObjectKind.Text => "Текст",
