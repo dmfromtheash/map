@@ -4,6 +4,13 @@
 
 ## Аудит текущего накопленного состояния — 2026-09-05
 
+**FACT — локальная фиксация:** `8e7f4784bd3396afecd59706adc1170542af6d24`
+(`feat(map): consolidate v4 storage, placement and Blue Atlas`) сохраняет все 154 исходных пути
+в одном согласованном снимке: Git учитывает их как 151 файл, включая три связанные пары
+переименований. После commit index, unstaged и untracked были пусты. Настоящая запись с ID —
+отдельное документальное дополнение; production output не изменяется. Commit локальный,
+performance gate остаётся PARTIAL; известные дефекты ниже не исправлены этим commit.
+
 **FACT.** Проверена продуктовая папка
 `C:\Users\Leshe\.codex\worktrees\stage10f-fonts-bindings\Map`, ветка
 `codex/stage-16-final-offline-parity`, исходный HEAD `343b622eeb7d2a865626d34d38f70b2a0af558a9`.
