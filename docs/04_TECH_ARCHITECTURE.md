@@ -144,6 +144,62 @@ spatial index, встроенная виртуализация Avalonia и уж�
 
 ## Потоки
 
+### Технические исправления 2026-09-06
+
+Это текущая реализация поверх `196062e`; прежние Stage 13 числа относятся к своим fixtures.
+Общий итог и измерения находятся в handoff и внешнем отчёте readiness.
+
+- Catalog разделяет SHA content и membership variant: новый logical set получает собственные
+  variant IDs, content bytes дедуплицируются. Sync mutation работает с private copy и
+  публикуется в памяти после durable index write. Ошибка возвращает прежний root; metadata
+  writer хранит последнюю успешно записанную копию для восстановления favorites/recent.
+- Save, primary autosave и recovery фиксируют одну immutable revision и один operation-owned
+  `ExportStampImageSource`. Thumbnail этой revision создаётся один раз и переиспользуется
+  файлом/recent; версия через UI создаётся async и отвергается, если исходный document сменился.
+  Worker completion возвращается в UI context. Ошибка recent-index после durable save не
+  превращает успешную запись карты в ложный отказ.
+- Thumbnail передаёт actual scale/visible bounds и stamp source общему renderer, исключая
+  selection/chrome. Декодированный source и ступени minification принадлежат одному
+  `AssetImageCache` и одному byte envelope; близкий масштаб использует original image.
+- Native detail tiles могут вычисляться существующим borrowed Skia GPU context. Готовый
+  результат читается обратно в raster-owned cache; время включает завершение GPU работы.
+  При отсутствии GPU действует CPU path. Cache ownership/thread pins не передаются UI worker.
+  Порядок, conservative culling и старые/новые bounds сохраняются. GPU/CPU rasterization не
+  объявляется побитово одинаковой: численные различия minified tiles отражаются в отчёте.
+- Save/version/autosave/preview/export одного EditorViewModel используют общий serial resource
+  slot. Отменённый preview, который ещё не освободил native buffers, не запускает рядом второй.
+  Export учитывает active tile/bleed, decoded cache, tile cache и encoder. Live Windows available
+  RAM проверяется с резервом 25%, диск — для полного sibling temp. Это admission операции,
+  не обещание глобального лимита памяти всех одновременно открытых документов.
+- Single image и tile package вычисляют одинаковую сетку active tiles с effect bleed.
+  Только явно выбранный single output собирает final bitmap для encoder; package пишет тайлы
+  последовательно. `SKData` остаётся native encoded buffer и передаётся file stream без
+  дополнительного полного managed `ToArray`. Маленький preview сохраняет byte[] API.
+- Detach освобождает gallery/version/export bitmaps и canvas caches; stamp images освобождаются
+  под тем же render gate после pinned frame. Undo не обрезается произвольной глубиной.
+
+### Небольшой контракт расширения инструмента
+
+Каждое расширение использует существующие границы, не второй источник истины:
+
+| Граница | Stamp | Brush |
+|---|---|---|
+| Данные / validation | SceneObject + StampStyle + SHA resource reference | BrushLayer + sparse immutable TileMap / byte checks |
+| Ввод / временный жест | CanvasInputRouter → placement preview | CanvasInputRouter → Begin/Continue/EndStroke, transient coverage |
+| Команда / Undo | PlaceAssetObjectsCommand / ReplaceObjectsCommand | BrushStrokeCommand: before/after только затронутых tiles |
+| Отбор / hit / affected region | SceneGeometry bounds, ObjectSpatialIndex, old+new bounds и эффекты | допустимый raster target, bounds мазка и изменённые TileKey |
+| Rendering / LOD | ordered evaluator, conservative culling, bounded detail/overview cache | TileImageCache, mask/material/alpha в порядке слоёв |
+| Persistence / migration | v4 bounded ordered object chunks, source bytes/references | только занятые raster entries; canonical keys и bytes |
+| Export | тот же evaluator с resource source, без UI chrome | тот же tile/filter evaluator с полями эффектов |
+
+Проверка контракта: native pointer placement/Brush/undo/save/reopen, targeted geometry/chunk
+tests и locality probe. При 20K/50K/200K объектов изменение одного объекта копирует один
+256-object chunk и обновляет одну index delta; при 50/512/8192 raster tiles малый stroke
+копирует один 256 KiB buffer, сохраняет untouched bytes и точно отменяется. Bounds эффектов,
+ошибки target и источников должны проверяться до публикации команды; renderer не меняет документ.
+Новая разновидность эффекта должна также явно определить локальный halo либо глобальную
+зависимость для export. Кэши, indexes и transient previews не сериализуются.
+
 - UI thread: ввод, короткие изменения модели, композиция кадра;
 - worker pool: decode, thumbnail, save serialization, export tiles, checksums;
 - snapshot не блокирует редактирование надолго;
@@ -151,7 +207,8 @@ spatial index, встроенная виртуализация Avalonia и уж�
 
 ## Надёжность
 
-- атомарный save: write temp → validate/read-back manifest → flush → replace → backup;
+- атомарный save: write sibling temp → flush/закрытие → полный semantic read-back → atomic replace;
+  предыдущий target становится одним bounded .bak при замене;
 - recovery journal в `%LOCALAPPDATA%\Map\Recovery`, а не рядом с read-only файлом;
 - startup lock только на конкретный открытый документ, с обработкой stale lock;
 - crash dump/diagnostic log не содержит содержимое карты или пути без согласия на экспорт отчёта;
@@ -170,6 +227,14 @@ spatial index, встроенная виртуализация Avalonia и уж�
 ## Диагностика без телеметрии
 
 Локальная страница Diagnostics показывает renderer, GPU/driver, CPU fallback, размеры cache/undo, open document stats, последние save/recovery события. Отправка наружу отсутствует по умолчанию.
+
+Нижняя цветная плашка editor (прямое дополнение владельца от 2026-09-06) показывает размеры,
+число top-level объектов, FPS и состояние сохранения; по нажатию — слои, заметки, версии,
+Undo/Redo, файл, autosave/recovery и последнее durable время. Счётчик объектов суммирует
+layer totals, не обходит все элементы при refresh. FPS считает завершённые разные map frames,
+исключая повтор compositor, и не является частотой монитора или 1000/render time. Наблюдатель
+обновляет UI раз в 500 мс, не инвалидирует холст ради себя, останавливается при detach и не
+меняет документ. Время сохранения при reopen берётся из metadata, а не из часов открытия.
 
 ## Технические ворота до принятия DEC-002
 

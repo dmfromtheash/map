@@ -352,3 +352,23 @@
 - **Гарантии:** atomic save/temp/read-back/replace, typed resource refusal «файл не изменён»,
   offline document-as-source-of-truth и запреты на произвольное увеличение защитных byte/depth
   limits сохраняются. DEC-022 закрывает остаток DEC-021; внешнее распространение не разрешает.
+
+### Уточнение DEC-022 — категории byte budgets, 2026-09-06
+
+Прямое поручение владельца `MAP_FIXES_AND_READINESS_PROMPT.md` от 2026-09-05 разрешило
+технически уточнить категории при сохранении защиты и принятой ёмкости v4. Это уточнение
+текущей реализации; исторические показатели DEC-021/022 выше не переоцениваются.
+
+- Canonical structural JSON: 32 MiB на entry и 64 MiB суммарно. Object chunks: прежние
+  8 MiB / 8 192 объектов на chunk, 960 MiB aggregate. Их общий JSON envelope остаётся
+  1 024 MiB; общий uncompressed — 2 048 MiB, ZIP file — 1 280 MiB.
+- Legacy scene при чтении/миграции: до 512 MiB на scene; исходный migration payload — до
+  768 MiB, проверяется по ZIP metadata до materialization. Такой legacy entry не разрешён
+  canonical writer. Остальные paths/depth/strings/images/SHA/count/order/bounds guards сохранены.
+- Разделение возвращает строгий structural budget и сохраняет потоковую ёмкость v4. Один
+  адресный прогон воспроизвёл 1 048 576 объектов / 8 192 Land tiles: save 26,05 с, reopen
+  8,81 с, 90 389 494 bytes, точный семантический digest до/после. Это ёмкость сохранения
+  на текущем ПК, не обещание отзывчивого подробного редактирования миллионной сцены.
+- ZIP v4 сохранён. Ordinary/0–3 checkpoints и большой fixture не подтвердили необходимость
+  нового формата. Полный read-back остаётся основной стоимостью большого save; journal,
+  append или транзакционная БД без доказанной необходимости не вводятся.

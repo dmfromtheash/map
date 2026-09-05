@@ -231,13 +231,22 @@ entries, canonical archive names, регистронезависимые дуб�
 backslash, `:` и пустые сегменты всегда являются corruption. Это отдельное правило от linked
 filesystem fallback выше.
 
-Текущий принятый envelope (DEC-015 с изменениями DEC-021):
+Текущий envelope: DEC-015/021/022, с разделением категорий по прямому техническому поручению
+владельца от 2026-09-05 (уточнение DEC-022 ниже). Все значения — несжатые bytes, кроме
+явно указанных ZIP file/central directory. Совокупные лимиты применяются одновременно.
 
 | Ресурс | Лимит |
 |---|---:|
 | ZIP entries | 16 384 |
-| один JSON entry | 512 MiB |
+| ZIP file | 1 280 MiB |
+| central directory / совокупные имена entries | 16 MiB / 2 MiB |
+| одно имя entry | 512 bytes |
+| один structural JSON entry | 32 MiB |
+| structural JSON aggregate, включая checkpoint metadata | 64 MiB |
 | один schema-v4 object chunk | ≤8 192 объектов и ≤8 MiB |
+| v4 object chunks aggregate, включая checkpoint roots | 960 MiB |
+| один legacy scene.json при чтении/миграции | 512 MiB |
+| исходный migration payload aggregate | 768 MiB |
 | один raw tile | 256 KiB |
 | один asset entry | 64 MiB |
 | preview entry | 8 MiB |
@@ -265,3 +274,23 @@ ownership-transfer пути без второй полной копии; пуб�
 object chunk, а документ накапливается через immutable chunked `SceneObjectList`.
 Превышение envelope — `MapProjectResourceLimitException` с гарантией «файл не изменён», а не
 ложное заявление о повреждении v1-проекта.
+
+Сумма structural/object envelopes не увеличивает прежний JSON aggregate 1 024 MiB. Большой
+legacy scene не становится разрешением записывать structural JSON такого размера в v4.
+Метаданные ZIP проверяются до чтения payload; header inspection допускает legacy entry только
+для определения schema, затем реальная категория и migration envelope проверяются отдельно.
+Лимиты checkpoints остаются 20 версий / 64 MiB совокупных snapshot data. Object chunks и tiles
+версий пока лежат под отдельными roots; общие source bytes в памяти разделяются, а контейнер
+может повторять одинаковые данные. Это ограниченный рост, не неограниченный журнал.
+
+Writer использует ZIP Create, полный семантический read-back и atomic publication. Это полная
+перезапись, не incremental save. JSON и raw tiles используют Optimal; PNG/JPEG/WebP и previews
+пишутся без повторного Deflate. Качество и source bytes не меняются. Уже сериализованный один
+object JSON не валидируется второй раз внутри Utf8JsonWriter; независимый read-back остаётся.
+
+Migration payload держит открытый source ZIP и читает неизменённые entries по требованию;
+изменённые entries принадлежат payload до Dispose. Main/checkpoint legacy scenes преобразуются
+по очереди. Legacy JSON DOM и итоговый документ всё ещё могут сосуществовать: это уменьшение
+повторного удержания, а не полностью потоковый legacy parser. Проверенная копия публикуется
+после полного v4 read-back; повторное открытие опубликованной копии для возврата того же
+результата убрано. Исходник не изменяется.

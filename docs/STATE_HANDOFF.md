@@ -1,8 +1,68 @@
 # STATE_HANDOFF — актуальное состояние Map
 
-Дата итоговой локальной проверки: 2026-09-05.
+Дата итоговой локальной проверки: 2026-09-06.
 
-## Аудит текущего накопленного состояния — 2026-09-05
+## Технические исправления и статистика карты — 2026-09-06
+
+**Последний продуктовый HEAD:** `4a2ee89eecba6ff777fb59bb51bfe2c6a6db1407`
+(`fix(map): harden storage and rendering, add live map statistics`).
+Это текущий код с измеренным остатком, **не объявление полной технической приёмки**.
+Ветка `codex/stage-16-final-offline-parity`, продуктовый root
+`C:/Users/Leshe/.codex/worktrees/stage10f-fonts-bindings/Map`.
+Исходный HEAD этого поручения — `196062e39114cfae8da65a233c24ad3b4d951f3b`;
+на старте рабочая копия и index были чисты. Старый `C:/Projects/Map` не менялся.
+
+Владелец поручил исполнить `MAP_FIXES_AND_READINESS_PROMPT.md` после архитектурного
+исследования; позже добавил цветную ненавязчивую плашку размера/объектов/FPS/сохранения
+и прямо разрешил локальные коммиты. Новые художественные ассеты отложены.
+
+**Сделано.** Транзакционный повторный импорт пересекающихся наборов с разделением SHA bytes
+и принадлежности variant; durable rollback metadata. Правильные previews из одного immutable
+snapshot, одно вычисление для Save/recent, корректный dirty при параллельных правках.
+Категорийные budgets v4 и ленивый migration payload. Убраны лишний JSON parse и managed
+encoded export copy; single/tiled используют согласованные границы/bleed и проходят pixel gate.
+Операции Save/version/preview/export ограничены одним тяжёлым слотом на editor, экспорт проверяет
+RAM/диск. Detail использует ограниченные mips и native GPU с raster readback/CPU fallback.
+Исправлены независимое округление inspector, русский Notes/Versions/Export, адресат свойств,
+доступность всех 7 brush tips. Плашка Blue Atlas показывает live размер/число объектов/FPS и
+сохранение; в покое не вызывает постоянную перерисовку, подробности открываются нажатием.
+
+**Проверено.** 303 уникальных адресных test cases имеют последний PASS; это не full suite.
+Финальная Release-сборка Map.slnx: 0 errors, 1 прежнее CS0618 warning в startup smoke.
+Native integrity 32/32, panels/shortcuts/focus/help 19/19, statistics 19/19; Stage16 flow PASS.
+Собственные неактивирующиеся окна, абсолютные изолированные profiles, без системного ввода.
+Просмотрены wide/960×640, Notes/Versions/Export/error/help/shortcuts и новая плашка.
+Один разрешённый 1 048 576 objects / 8192 Land tiles Save/reopen: 26,05 / 8,81 с,
+90 389 494 bytes, точное совпадение семантического digest. Другие stress-профили не запускались.
+
+**Оценка по неизменному реестру 38 результатов / 100 веса:** 55 → 88,5 балла,
+в тексте **55% → 85%** после округления вниз к 5. Полностью NOT CHECKED вес 0; PARTIAL
+без баллов 11,5. **NOT READY по строгим gates задания**. Функциональные создание/редактирование/
+Undo/Save/reopen/export прошли; потеря данных в проверенных случаях не наблюдалась.
+
+**Открытый технический остаток:**
+- На одинаковой mixed карте 20 004 objects / viewport 822×798 cold detail 4272,45→260,24 мс
+  (порог 250), dense edit P95 2331,56→114,56 мс (порог 100). Pan/zoom/select/place P95 ≤100,
+  но есть редкие select/place кадры >250; один queue+handler 255,93 мс.
+- Плотный GPU/CPU detail не полностью совпадает: max composited RGB48, RMS1,394 на сложном tile,
+  max alpha3. Визуально отсутствующие объекты не обнаружены; полная numerical quality не принята.
+  Экспорт single/tiled даёт нулевое расхождение и имеет независимый whole-pass reference.
+- История/кэши отпущены во всех трёх проверенных циклах; общий лимит нескольких окон/VRAM/
+  произвольной длинной истории не доказан. Не выдавать per-cache caps за общий бюджет.
+- Preview/реальный editor Save ускорились; отдельные store Save/Open/export wall time в
+  сопоставимой серии выросли. Полная перезапись, flush и semantic read-back остались,
+  обещание «всё стало быстрее» не соответствует измерениям.
+
+**Один следующий шаг:** закрыть оставшийся F04 на том же fixture: плотный detail/редактирование,
+хвосты задержек и numerical CPU/GPU correctness, сохранив прежние пороги. Нового номерного
+функционального этапа не назначено; художественный контент остаётся DEFERRED BY OWNER.
+
+Полный отчёт, неизменный взвешенный реестр и raw evidence:
+[MAP_READINESS_REPORT.md](C:/Users/Leshe/Documents/Codex/2026-09-05/map-full-audit/2026-09-05-readiness-result/MAP_READINESS_REPORT.md).
+Итоговый документационный commit, полный список изменённых путей и SHA DLL — в соседнем
+`FINAL_STATE.json`. Этот раздел имеет приоритет над историческими остатками ниже.
+
+## Исторический аудит накопленного состояния — 2026-09-05
 
 **FACT — локальная фиксация:** `8e7f4784bd3396afecd59706adc1170542af6d24`
 (`feat(map): consolidate v4 storage, placement and Blue Atlas`) сохраняет все 154 исходных пути
