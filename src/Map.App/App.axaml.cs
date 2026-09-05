@@ -35,7 +35,7 @@ public partial class App : Application
                 appSettings.LibraryRoot ?? Path.Combine(profileRoot, "Assets"));
             try
             {
-                StarterPackInstaller.EnsureInstalled(assetCatalog, DateTimeOffset.UtcNow);
+                StarterPackBootstrapper.EnsureInstalled(assetCatalog, DateTimeOffset.UtcNow);
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException
                 or InvalidDataException or InvalidOperationException)

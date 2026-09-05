@@ -1,8 +1,8 @@
 namespace Map.Core.Documents;
 
 /// <summary>
-/// The portable path stored in a project for a linked asset. Rooted, escaping,
-/// drive-relative, device, UNC and NTFS stream forms are not portable project paths and must
+/// The safe relative path stored in a project for a linked asset. Rooted, escaping,
+/// drive-relative, device, UNC and NTFS stream forms are not valid project paths and must
 /// never be probed while opening an untrusted project. The final path is contained beneath the
 /// project directory; external user links retain catalog identity instead of turning an opened
 /// project into a general local-file probe.
@@ -22,7 +22,7 @@ public static class ProjectLinkedAssetPath
         var segments = value.Replace('\\', '/').Split('/');
         return segments.All(segment =>
             segment.Length > 0
-            && (segment is "." or ".." || PortablePathSegment.IsSafe(segment)));
+            && (segment is "." or ".." || SafePathSegment.IsSafe(segment)));
     }
 
     public static bool TryResolve(string projectPath, string? relativePath, out string resolved)

@@ -120,8 +120,8 @@ git switch -c codex/stage-14-object-placement-workspace-ux
 - разрешены локальные commits Stage 14;
 - после зелёных обязательных ворот разрешён обычный push ветки
   `codex/stage-14-object-placement-workspace-ux` в существующий `origin`;
-- запрещены force-push, изменение `main`, PR, merge, issue/comment/Project, tag, release,
-  публикация, изменение GitHub auth/scopes и создание другого repository/remote;
+- запрещены force-push, изменение `main`, PR, merge, issue/comment/Project, tag,
+  изменение GitHub auth/scopes и создание другого repository/remote;
 - не использовать `3-puti`, `ensi-bot`, `nri-archive` или любой другой репозиторий;
 - не выполнять `fetch`/`pull`, если для этой локальной линейной работы они не нужны.
 
@@ -491,7 +491,7 @@ bar.
 - Выбери один разумный idle debounce в диапазоне примерно 3–5 секунд; не запускай save на каждом
   pointer event и не держи параллельные saves.
 - `Ctrl+S` остаётся немедленным и имеет приоритет.
-- `Save As` меняет current path только после успешной публикации.
+- `Save As` меняет current path только после успешной записи и проверки destination.
 - Autosave не стартует во время drag/stroke/vector gesture, pending placement, незавершённого
   property edit, export mutation gate или другого transient действия. После commit он догоняет
   последнюю revision.
@@ -607,7 +607,7 @@ Top bar оставь компактным: Back/название, Save/status, U
 - keyboard navigation и стабильные accessible names;
 - virtualized/bounded thumbnail loading для 10 000 logical cards.
 
-Не добавляй Marketplace, store, аккаунты, чужие pack names, публикацию или cloud. Каталог закрывается
+Не добавляй Marketplace, store, аккаунты, чужие pack names или cloud. Каталог закрывается
 с сохранением выбранного variant и возвращает пользователя в вооружённый Stamp placement с ghost.
 
 ---
@@ -626,8 +626,8 @@ Top bar оставь компактным: Back/название, Save/status, U
 - повышение 131K public canvas или обещание 100K UI-fluidity;
 - новый renderer, новый UI framework, web/Electron/Tauri/WebView;
 - новые dependencies без доказанной невозможности реализовать на текущем стеке;
-- full-suite, VM/чистая Windows, coverage, mutation, security scan, SBOM, pre-commit, release,
-  installer, updater, package, DPI/accessibility matrix и отдельная независимая приёмка;
+- full-suite, coverage, mutation, security scan, SBOM, pre-commit, DPI/accessibility matrix и
+  отдельная независимая приёмка;
 - постоянная папка screenshots/evidence.
 
 Если в ходе реализации найден отдельный дефект вне этого scope, не чинить его попутно. Записать
@@ -782,7 +782,7 @@ git push -u origin codex/stage-14-object-placement-workspace-ux
 
 Не отмечай Stage 14 `FACT`, пока обязательный пользовательский сценарий, tests, build, native smoke
 и обычный push не завершены. Если push один не удался, локальный результат остаётся `FACT`, а
-remote-публикация — `PARTIAL` с точной причиной; не расширяй auth/scopes сам.
+remote-синхронизация — `PARTIAL` с точной причиной; не расширяй auth/scopes сам.
 
 ---
 
@@ -821,8 +821,8 @@ Stage 14 готов только если одновременно истинн�
 - один Release build зелёный;
 - один own-process native smoke и AI-vision screenshot review зелёные;
 - owner files/data не изменены и не попали в commits;
-- ветка обычным push опубликована в существующий `origin`;
-- PR/issues/Project/tag/release не создавались.
+- ветка обычным push отправлена в существующий `origin`;
+- PR/issues/Project/tag не создавались.
 
 Если один пункт не доказан, используй `PARTIAL` или `BLOCKED`, а не заявляй весь этап готовым.
 
@@ -858,7 +858,7 @@ Stage 14 готов только если одновременно истинн�
 7. один следующий практический шаг.
 
 Не выдавай наличие кода или зелёный build за доказательство визуального placement-сценария. Не
-выдавай recovery snapshot за успешный primary save. Не называй локальный commit опубликованным,
+выдавай recovery snapshot за успешный primary save. Не называй локальный commit отправленным в remote,
 если push не подтверждён.
 
 Закончи строго обязательным разделом:

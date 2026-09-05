@@ -17,8 +17,8 @@ public class Stage10AssetPlacementTests
     [InlineData(0, 100, 1)]          // an empty density still places the one stamp the user asked for
     [InlineData(100, 100, 314)]      // round(100 * PI * 100^2 / 10000)
     [InlineData(25, 40, 13)]         // round(25 * PI * 1600 / 10000)
-    [InlineData(1_000_000, 500, 5_000)]
-    public void Count_follows_the_documented_density_formula_and_stays_inside_its_bounds(
+    [InlineData(1_000_000, 500, 78_539_816)]
+    public void Count_follows_the_documented_density_formula_without_a_product_ceiling(
         double density, double radius, int expected)
     {
         Assert.Equal(expected, StampPlacement.CountFor(density, radius));

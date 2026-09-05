@@ -28,9 +28,41 @@ public sealed class MapCanvasControl : Control
     private CanvasInputRouter? _input;
     private Point? _lastPointer;
     private bool _visualInvalidationQueued;
-    private readonly TileImageCache _tileCache = new(512);
-    private readonly ObjectOverviewCache _objectCache = new(1_024, 64L * 1024 * 1024);
+    private readonly CanvasRenderResources _renderResources = new();
     private readonly RenderStats _renderStats = new();
+
+    // Native composition and RenderTargetBitmap may use different render threads. Images and
+    // frame pins belong to that render context; a snapshot must not poison the window's cache.
+    private sealed class CanvasRenderResources
+    {
+        public object Gate { get; } = new();
+        private readonly System.Collections.Generic.Dictionary<int, (TileImageCache Tiles, ObjectOverviewCache Objects)> _contexts = [];
+        public (TileImageCache Tiles, ObjectOverviewCache Objects) Current()
+        {
+            var thread = Environment.CurrentManagedThreadId;
+            if (!_contexts.TryGetValue(thread, out var context))
+                _contexts[thread] = context = (new(4096, 256L * 1024 * 1024), new(1024, 64L * 1024 * 1024));
+            return context;
+        }
+        public (int Tiles, int Objects, long Bytes, long Disposals) Counts()
+        {
+            lock (Gate)
+            {
+                int tiles = 0, objects = 0; long bytes = 0, disposals = 0;
+                foreach (var context in _contexts.Values)
+                { tiles += context.Tiles.Count; objects += context.Objects.Count; bytes += context.Objects.Bytes; disposals += context.Objects.Disposals; }
+                return (tiles, objects, bytes, disposals);
+            }
+        }
+        public void Dispose()
+        {
+            lock (Gate)
+            {
+                foreach (var context in _contexts.Values) { context.Tiles.Dispose(); context.Objects.Dispose(); }
+                _contexts.Clear();
+            }
+        }
+    }
 
     public bool IsSpacePanHeld
     {
@@ -94,17 +126,18 @@ public sealed class MapCanvasControl : Control
 
     public RenderLodTier LastLodTier { get; private set; } = RenderLodTier.Exact;
     public double LastSceneRenderMilliseconds { get; private set; }
-    public int ObjectCacheCount => _objectCache.Count;
-    public long ObjectCacheBytes => _objectCache.Bytes;
-    public long ObjectCacheDisposals => _objectCache.Disposals;
-    public int TileCacheCount => _tileCache.Count;
+    public Map.Core.Documents.MapDocument? LastRenderedDocument { get; private set; }
+    public int LastFrameObjectsDrawn { get; private set; }
+    public int ObjectCacheCount => _renderResources.Counts().Objects;
+    public long ObjectCacheBytes => _renderResources.Counts().Bytes;
+    public long ObjectCacheDisposals => _renderResources.Counts().Disposals;
+    public int TileCacheCount => _renderResources.Counts().Tiles;
     public RenderStats LastRenderStats => _renderStats;
 
     /// <summary>Own-process native-smoke hook; normal lifetime calls the same path on detach.</summary>
     public void DisposeRenderCaches()
     {
-        _tileCache.Dispose();
-        _objectCache.Dispose();
+        _renderResources.Dispose();
     }
 
     /// <summary>Own-process native-smoke pan through the same viewport/event/invalidation path.</summary>
@@ -118,6 +151,12 @@ public sealed class MapCanvasControl : Control
         _editor.Session.Viewport.PanByScreenDelta(dx, dy);
         ViewportChanged?.Invoke(this, EventArgs.Empty);
         QueueVisualInvalidation();
+    }
+
+    /// <summary>Own-process smoke hook through the same snapped preview state as pointer move.</summary>
+    public void ShowPlacementPreviewAtCenter()
+    {
+        if (_input is not null) Apply(_input.Move(Bounds.Width / 2, Bounds.Height / 2));
     }
 
     /// <summary>Own-process smoke hook through the same snapped preview state as pointer move.</summary>
@@ -197,6 +236,17 @@ public sealed class MapCanvasControl : Control
     {
         if (_input is null) return;
         Apply(_input.Release(screenX, screenY));
+    }
+
+    public void CancelGestureForSmoke()
+    {
+        _input?.Cancel();
+        QueueVisualInvalidation();
+    }
+
+    public void PointerLeftForSmoke()
+    {
+        if (_input is not null) Apply(_input.PointerLeft());
     }
 
     /// <summary>Applies one routed result to the Avalonia-facing parts of the control.</summary>
@@ -293,7 +343,7 @@ public sealed class MapCanvasControl : Control
 
     /// <summary>
     /// The viewport learns its size during layout, not during rendering. It used to be resized
-    /// inside <see cref="Render"/>, so a resize could publish editor state from the middle of a
+    /// inside <see cref="Render"/>, so a resize could emit editor state from the middle of a
     /// render pass and make the side panel rebuild its rows mid-frame - which showed up as a
     /// briefly empty layer list right after the window changed size.
     /// </summary>
@@ -304,7 +354,12 @@ public sealed class MapCanvasControl : Control
             && (Math.Abs(_editor.Session.Viewport.ViewWidth - arranged.Width) > 0.01
                 || Math.Abs(_editor.Session.Viewport.ViewHeight - arranged.Height) > 0.01))
         {
-            _editor.Session.Viewport.Resize(arranged.Width, arranged.Height);
+            var viewport = _editor.Session.Viewport;
+            // Reflowing tool panels must keep the same world point at the centre of the view.
+            if (viewport.ViewWidth > 0 && viewport.ViewHeight > 0)
+                viewport.PanByScreenDelta((arranged.Width - viewport.ViewWidth) / 2,
+                    (arranged.Height - viewport.ViewHeight) / 2);
+            viewport.Resize(arranged.Width, arranged.Height);
             ViewportChanged?.Invoke(this, EventArgs.Empty);
             QueueVisualInvalidation();
         }
@@ -320,22 +375,23 @@ public sealed class MapCanvasControl : Control
         }
 
         context.Custom(new SceneDrawOperation(
-            new Rect(0, 0, Bounds.Width, Bounds.Height), _editor, _tileCache, _objectCache,
+            new Rect(0, 0, Bounds.Width, Bounds.Height), _editor, _renderResources,
             _renderStats, PerformanceMode,
             _input is { ActiveGesture: not CanvasInputGesture.None and not CanvasInputGesture.Marquee },
-            (tier, elapsedMilliseconds) =>
+            (tier, elapsedMilliseconds, document) =>
             {
                 LastLodTier = tier;
                 LastSceneRenderMilliseconds = elapsedMilliseconds;
+                LastFrameObjectsDrawn = _renderStats.ObjectsDrawn;
+                LastRenderedDocument = document;
                 FrameRendered?.Invoke(this, EventArgs.Empty);
             }));
     }
 
     private sealed class SceneDrawOperation(
-        Rect bounds, EditorViewModel editor, TileImageCache tileCache,
-        ObjectOverviewCache objectCache, RenderStats renderStats,
+        Rect bounds, EditorViewModel editor, CanvasRenderResources resources, RenderStats renderStats,
         CanvasPerformanceMode performanceMode, bool fastPreview,
-        Action<RenderLodTier, double> frameRendered) : ICustomDrawOperation
+        Action<RenderLodTier, double, Map.Core.Documents.MapDocument> frameRendered) : ICustomDrawOperation
     {
         public Rect Bounds { get; } = bounds;
 
@@ -352,11 +408,23 @@ public sealed class MapCanvasControl : Control
                 return;
             }
 
-            using var lease = feature.Lease();
-            var canvas = lease.SkCanvas;
-            var viewport = editor.Session.Viewport;
-            var (X, Y) = viewport.ScreenToWorld(0, 0);
-            var bottomRight = viewport.ScreenToWorld(Bounds.Width, Bounds.Height);
+            lock (resources.Gate) RenderFrame(feature);
+        }
+
+        private void RenderFrame(ISkiaSharpApiLeaseFeature feature)
+        {
+            var (tileCache, objectCache) = resources.Current();
+            tileCache.BeginFrame();
+            var overviewFrame = false;
+            try
+            {
+                objectCache.BeginFrame();
+                overviewFrame = true;
+                using var lease = feature.Lease();
+                var canvas = lease.SkCanvas;
+                var viewport = editor.Session.Viewport;
+                var (X, Y) = viewport.ScreenToWorld(0, 0);
+                var bottomRight = viewport.ScreenToWorld(Bounds.Width, Bounds.Height);
 
             canvas.Save();
             canvas.ClipRect(new SKRect(0, 0, (float)Bounds.Width, (float)Bounds.Height));
@@ -422,8 +490,14 @@ public sealed class MapCanvasControl : Control
             });
             sceneStopwatch.Stop();
 
-            canvas.Restore();
-            frameRendered(tier, sceneStopwatch.Elapsed.TotalMilliseconds);
+                canvas.Restore();
+                frameRendered(tier, sceneStopwatch.Elapsed.TotalMilliseconds, renderDocument);
+            }
+            finally
+            {
+                tileCache.EndFrame();
+                if (overviewFrame) objectCache.EndFrame();
+            }
         }
 
         public void Dispose()

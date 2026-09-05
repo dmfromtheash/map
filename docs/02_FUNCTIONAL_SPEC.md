@@ -269,7 +269,7 @@ inspector и меняются undoable-командами; одного цикл
 - пользовательская функция «Версии»: one-click snapshot с автоматическим именем, временем и
   preview; optional rename, restore и delete развивают bounded checkpoints без нового schema;
 - primary autosave on/off: только после первого явного Save, coalesced idle debounce 4 секунды и
-  atomic публикация в текущий `.mapproj`;
+  атомарная замена текущего `.mapproj`;
 - manual save (`Ctrl+S`);
 - recovery journal вне основного `.mapproj` как отдельная страховка и отдельный статус;
 - backup copy before migration/replace;

@@ -356,23 +356,17 @@ public class ContainerHardeningTests
     }
 
     [Fact]
-    public void Excessive_scene_object_cardinality_is_rejected_before_dto_materialization()
+    public void Former_scene_object_cardinality_ceiling_is_not_a_product_limit()
     {
-        using var workspace = new TempWorkspace();
-        var path = SavedProject(workspace);
         var objects = string.Join(
-            ',', Enumerable.Repeat("{}", MapProjectJsonBudget.MaxMaterializedObjects + 1));
+            ',', Enumerable.Repeat("{}", 100_001));
         var sceneJson =
             "{\"documentId\":\"11111111-2222-3333-4444-555555555555\",\"layers\":[" +
             "{\"id\":\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\",\"name\":\"l\"," +
             "\"visible\":true,\"locked\":false,\"opacity\":1,\"objects\":[" + objects + "]}]}";
-        ReplaceSceneJson(path, sceneJson);
-        var bytesBeforeOpen = File.ReadAllBytes(path);
 
-        var limit = Assert.Throws<MapProjectResourceLimitException>(() => MapProjectStore.Open(path));
-
-        Assert.Contains("semantic JSON budget", limit.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(bytesBeforeOpen, File.ReadAllBytes(path));
+        MapProjectJsonBudget.Validate(
+            System.Text.Encoding.UTF8.GetBytes(sceneJson), MapProjectFormat.SceneEntry);
     }
 
     [Theory]

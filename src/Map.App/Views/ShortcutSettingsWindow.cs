@@ -115,12 +115,13 @@ public sealed class ShortcutSettingsWindow : Window
                                 {
                                     MapIcons.Stroked(
                                         MapIcons.Select, 21,
-                                        Application.Current?.FindResource("MapAccentBrush") as Avalonia.Media.IBrush),
+                                        Application.Current?.FindResource("MapChromeTextBrush") as Avalonia.Media.IBrush),
                                     new TextBlock
                                     {
                                         Text = "Сочетания клавиш",
-                                        FontFamily = "Georgia",
-                                        FontSize = 27,
+
+                                        FontSize = 26,
+                                        FontWeight = FontWeight.Bold,
                                     },
                                 },
                             },
@@ -160,10 +161,9 @@ public sealed class ShortcutSettingsWindow : Window
                             new TextBlock { Text = "Новое сочетание" },
                             _capture,
                             _conflict,
-                            new StackPanel
+                            new Ui.ChoiceGrid
                             {
-                                Orientation = Orientation.Horizontal,
-                                Spacing = 8,
+                                MaxColumns = 2,
                                 Children = { unassign, resetOne },
                             },
                         },
@@ -190,14 +190,7 @@ public sealed class ShortcutSettingsWindow : Window
             },
         };
 
-        Content = Ui.WatercolorBackdrop(new DockPanel
-        {
-            Children =
-            {
-                DecorativeRail().Docked(Dock.Left),
-                shortcutSurface,
-            },
-        });
+        Content = Ui.WorkspaceBackdrop(shortcutSurface);
 
         _selected = EditorShortcutSettings.Definitions.First(definition => definition.IsEditable);
         RefreshAll();
@@ -236,7 +229,7 @@ public sealed class ShortcutSettingsWindow : Window
             _rows.Children.Add(new TextBlock
             {
                 Text = group.Key,
-                FontWeight = FontWeight.SemiBold,
+                FontWeight = FontWeight.Medium,
                 Margin = new Thickness(2, 10, 2, 2),
             });
             foreach (var definition in group)
@@ -251,7 +244,16 @@ public sealed class ShortcutSettingsWindow : Window
                         RefreshSelection();
                         _capture.Focus();
                     });
-                row.HorizontalContentAlignment = HorizontalAlignment.Left;
+                row.HorizontalAlignment = HorizontalAlignment.Stretch;
+                row.HorizontalContentAlignment = HorizontalAlignment.Stretch;
+                row.Content = new DockPanel { Children =
+                {
+                    new TextBlock { Text = gesture.Length == 0 ? "Не назначено" : gesture,
+                        Margin = new Thickness(12, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center,
+                        FontSize = 12 }.Classed("muted").Docked(Dock.Right),
+                    new TextBlock { Text = definition.Name, TextWrapping = TextWrapping.Wrap,
+                        VerticalAlignment = VerticalAlignment.Center, FontSize = 13 },
+                } };
                 AutomationProperties.SetName(row,
                     $"{definition.Name}. {EditorShortcutSettings.ContextName(definition.Context)}. " +
                     (gesture.Length == 0 ? "Не назначено" : gesture));
@@ -268,32 +270,6 @@ public sealed class ShortcutSettingsWindow : Window
         || EditorShortcutSettings.ContextName(definition.Context)
             .Contains(query, StringComparison.OrdinalIgnoreCase);
 
-    private static Control DecorativeRail()
-    {
-        var icons = new[]
-        {
-            MapIcons.Select, MapIcons.Line, MapIcons.Assets, MapIcons.Shape,
-            MapIcons.Text, MapIcons.Layers, MapIcons.Notes, MapIcons.Undo,
-            MapIcons.Redo, MapIcons.Duplicate, MapIcons.Import, MapIcons.Objects,
-            MapIcons.FitCanvas, MapIcons.Rotate,
-        };
-        var panel = new StackPanel
-        {
-            Margin = new Thickness(9, 16),
-            Spacing = 9,
-            HorizontalAlignment = HorizontalAlignment.Center,
-        };
-        foreach (var icon in icons)
-        {
-            panel.Children.Add(MapIcons.Stroked(icon, 19));
-        }
-
-        return new Border
-        {
-            Width = 76,
-            Child = panel,
-        }.Classed("rail");
-    }
 
     private void RefreshAll()
     {
@@ -342,7 +318,8 @@ public sealed class ShortcutSettingsWindow : Window
 
     private static Button Button(string name, string text, Action action)
     {
-        var button = new Button { Name = name, Content = text };
+        var button = new Button { Name = name, Content = new TextBlock
+            { Text = text, TextWrapping = Avalonia.Media.TextWrapping.Wrap } };
         button.Click += (_, _) => action();
         return button;
     }

@@ -111,30 +111,10 @@ public partial class Stage15StampAppearanceRoundTripTests
 
     private static void RewriteStamp(string path, Action<JsonObject> change)
     {
-        using var archive = ZipFile.Open(path, ZipArchiveMode.Update);
-        var sceneEntry = archive.GetEntry(MapProjectFormat.SceneEntry)!;
-        string sceneJson;
-        using (var reader = new StreamReader(sceneEntry.Open(), Encoding.UTF8))
-            sceneJson = reader.ReadToEnd();
-
-        var root = JsonNode.Parse(sceneJson)!.AsObject();
-        var stamp = root["layers"]!.AsArray()[1]!["objects"]!.AsArray()[0]!["stamp"]!.AsObject();
-        change(stamp);
-        var bytes = Encoding.UTF8.GetBytes(root.ToJsonString());
-        using (var stream = sceneEntry.Open())
+        ProjectJsonTestMutations.RewriteFirstObjectChunk(path, objects =>
         {
-            stream.SetLength(0);
-            stream.Write(bytes);
-        }
-
-        var manifestEntry = archive.GetEntry(MapProjectFormat.ManifestEntry)!;
-        string manifest;
-        using (var reader = new StreamReader(manifestEntry.Open(), Encoding.UTF8))
-            manifest = reader.ReadToEnd();
-        manifest = SceneShaRegex().Replace(
-            manifest, $"\"sceneSha256\": \"{MapProjectRoundTripTests.Sha256Hex(bytes)}\"");
-        using var writer = new StreamWriter(manifestEntry.Open());
-        writer.BaseStream.SetLength(0);
-        writer.Write(manifest);
+            var stamp = objects[0]!["stamp"]!.AsObject();
+            change(stamp);
+        });
     }
 }

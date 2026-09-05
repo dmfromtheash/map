@@ -69,13 +69,14 @@ public sealed class MapProjectReadBudgetTests
     public void Asset_payloads_have_a_retained_memory_budget_below_the_container_total()
     {
         var budget = new MapProjectReadBudget();
-        for (var index = 0; index < 4; index++)
+        var entries = MapProjectFormat.MaxAssetPayloadBytes / MapProjectFormat.MaxAssetEntryBytes;
+        for (var index = 0; index < entries; index++)
         {
             budget.Add($"assets/{index:D2}.png", 64L * 1024 * 1024, 60L * 1024 * 1024);
         }
 
         var failure = Assert.Throws<MapProjectResourceLimitException>(() =>
-            budget.Add("assets/04.png", 1, 1));
+            budget.Add("assets/overflow.png", 1, 1));
 
         Assert.Contains("asset payload", failure.Message, StringComparison.OrdinalIgnoreCase);
     }
@@ -163,7 +164,8 @@ public sealed class MapProjectReadBudgetTests
         Assert.Throws<MapProjectResourceLimitException>(() => json.Add("third.json", 1, 1));
 
         var total = new MapProjectReadBudget();
-        for (var index = 0; index < 16; index++)
+        var entries = MapProjectFormat.MaxTotalUncompressedBytes / MapProjectFormat.MaxJsonEntryBytes;
+        for (var index = 0; index < entries; index++)
         {
             total.Add($"other-{index}.bin", MapProjectFormat.MaxJsonEntryBytes,
                 MapProjectFormat.MaxJsonEntryBytes);
@@ -215,32 +217,27 @@ public sealed class MapProjectReadBudgetTests
     }
 
     [Fact]
-    public void Semantic_json_budget_rejects_tiny_token_object_amplification_before_deserialization()
+    public void Semantic_json_budget_has_no_fixed_object_cardinality_ceiling()
     {
         var json = Encoding.UTF8.GetBytes(
             "{\"objects\":[" +
-            string.Join(',', Enumerable.Repeat("{}", MapProjectJsonBudget.MaxMaterializedObjects + 1)) +
+            string.Join(',', Enumerable.Repeat("{}", 100_001)) +
             "]}");
 
-        var failure = Assert.Throws<MapProjectResourceLimitException>(() =>
-            MapProjectJsonBudget.Validate(json, MapProjectFormat.SceneEntry));
-
-        Assert.Contains("semantic JSON budget", failure.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("objects", failure.Message, StringComparison.OrdinalIgnoreCase);
+        MapProjectJsonBudget.Validate(json, MapProjectFormat.SceneEntry);
     }
 
     [Fact]
-    public void Semantic_json_budget_aggregates_composition_items_with_layer_objects()
+    public void Semantic_json_budget_has_no_fixed_aggregate_object_and_composition_ceiling()
     {
-        var first = MapProjectJsonBudget.MaxMaterializedObjects / 2;
+        const int first = 60_000;
         var json = Encoding.UTF8.GetBytes(
             "{\"objects\":[" + string.Join(',', Enumerable.Repeat("{}", first)) +
             "],\"items\":[" +
-            string.Join(',', Enumerable.Repeat("{}", MapProjectJsonBudget.MaxMaterializedObjects - first + 1)) +
+            string.Join(',', Enumerable.Repeat("{}", 60_001)) +
             "]}");
 
-        Assert.Throws<MapProjectResourceLimitException>(() =>
-            MapProjectJsonBudget.Validate(json, MapProjectFormat.SceneEntry));
+        MapProjectJsonBudget.Validate(json, MapProjectFormat.SceneEntry);
     }
 
     [Fact]

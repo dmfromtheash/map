@@ -12,15 +12,11 @@ public static partial class EntityNameGenerator
     public static string Object(MapDocument document, SceneObjectKind kind, string? preferred = null)
     {
         ArgumentNullException.ThrowIfNull(document);
-        var names = document.Layers.OfType<ObjectLayer>()
-            .SelectMany(layer => layer.Objects)
-            .Select(item => item.Name)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         if (!string.IsNullOrWhiteSpace(preferred))
         {
             var basis = Normalize(preferred, "Ассет");
-            return Unique(names, basis, suffixFirst: false);
+            return ObjectNameIndex.For(document).Allocate(basis, 1, suffixFirst: false)[0];
         }
 
         var label = kind switch
@@ -33,7 +29,7 @@ public static partial class EntityNameGenerator
             SceneObjectKind.Composition => "Композиция",
             _ => "Объект",
         };
-        return Unique(names, label, suffixFirst: true);
+        return ObjectNameIndex.For(document).Allocate(label, 1, suffixFirst: true)[0];
     }
 
     public static IReadOnlyList<string> Objects(
@@ -44,10 +40,6 @@ public static partial class EntityNameGenerator
             throw new ArgumentOutOfRangeException(nameof(count));
         }
 
-        var names = document.Layers.OfType<ObjectLayer>()
-            .SelectMany(layer => layer.Objects)
-            .Select(item => item.Name)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var label = !string.IsNullOrWhiteSpace(preferred)
             ? Normalize(preferred, "Ассет")
             : kind switch
@@ -59,15 +51,7 @@ public static partial class EntityNameGenerator
                 SceneObjectKind.Text => "Текст",
                 _ => "Объект",
             };
-        var result = new List<string>(count);
-        for (var index = 0; index < count; index++)
-        {
-            var name = Unique(names, label, suffixFirst: string.IsNullOrWhiteSpace(preferred));
-            names.Add(name);
-            result.Add(name);
-        }
-
-        return result;
+        return ObjectNameIndex.For(document).Allocate(label, count, string.IsNullOrWhiteSpace(preferred));
     }
 
     public static string Text(MapDocument document, string? content)

@@ -54,6 +54,31 @@ public class Stage10CObjectTreeRowTests
     }
 
     [Fact]
+    public void Unfiltered_rows_expose_the_non_generic_list_contract_used_by_Avalonia()
+    {
+        var document = Build(Object("A"), Object("B"));
+
+        var rows = ObjectTreeRows.Build(document, "", ObjectTypeFilter.All, null, []);
+
+        var indexed = Assert.IsAssignableFrom<System.Collections.IList>(rows);
+        Assert.True(indexed.IsReadOnly);
+        Assert.True(indexed.IsFixedSize);
+        Assert.Equal("B", Assert.IsType<ObjectTreeRow>(indexed[1]).Title);
+    }
+
+    [Fact]
+    public void Filtered_rows_keep_the_same_virtual_list_contract()
+    {
+        var document = Build(Object("Tree"), Object("Mountain"));
+
+        var rows = ObjectTreeRows.Build(document, "mount", ObjectTypeFilter.All, null, []);
+
+        var indexed = Assert.IsAssignableFrom<System.Collections.IList>(rows);
+        Assert.Single(indexed.Cast<object>());
+        Assert.Equal("Mountain", Assert.IsType<ObjectTreeRow>(indexed[0]).Title);
+    }
+
+    [Fact]
     public void An_open_group_shows_a_breadcrumb_and_child_rows_with_their_own_roles()
     {
         var a = Object("A", groupId: GroupId, groupName: "Тестовая группа");

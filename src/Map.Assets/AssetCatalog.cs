@@ -9,7 +9,7 @@ namespace Map.Assets;
 /// image. Content identity is the SHA-256; a logical <see cref="AssetSet"/> orders the variants
 /// that name it.
 /// </summary>
-public sealed class AssetCatalog
+public sealed class AssetCatalog : IAsyncDisposable
 {
     public const int MaxImageDimension = AssetImagePolicy.MaxDimension;
     public const long MaxEncodedBytes = AssetImagePolicy.MaxEncodedBytes;
@@ -18,6 +18,13 @@ public sealed class AssetCatalog
     private readonly string _indexPath;
     private readonly Func<DateTimeOffset> _clock;
     private AssetLibraryDocument _document;
+    private readonly AssetMetadataWriter _metadataWriter;
+    private AssetLibraryDocument _metadataBase = new();
+    public long MetadataRevision { get; private set; }
+    public long ContentRevision { get; private set; }
+    public string? MetadataSaveError => _metadataWriter.Error;
+    public Task FlushMetadataAsync() => _metadataWriter.FlushAsync();
+    public ValueTask DisposeAsync() => new(FlushMetadataAsync());
     private Dictionary<string, AssetRecord> _bySha = new(StringComparer.OrdinalIgnoreCase);
     private Dictionary<string, AssetVariant> _byVariantId = new(StringComparer.Ordinal);
     private Dictionary<string, AssetSet> _bySetId = new(StringComparer.Ordinal);
@@ -34,10 +41,28 @@ public sealed class AssetCatalog
         _indexPath = Path.Combine(_root, "catalog.json");
         _clock = clock ?? (static () => DateTimeOffset.UtcNow);
         _document = AssetLibraryStore.Load(_indexPath, _clock);
+        _metadataWriter = new AssetMetadataWriter(_indexPath);
         Reindex();
+        CaptureMetadataBase();
     }
 
     public string Root => _root;
+
+    private AssetCatalog(AssetCatalog source, AssetLibraryDocument snapshot)
+    {
+        _root = source._root;
+        _indexPath = source._indexPath;
+        _clock = source._clock;
+        _metadataWriter = source._metadataWriter;
+        _document = snapshot;
+        Reindex();
+    }
+
+    public Task<AssetQueryResult> QueryAsync(AssetQuery query, CancellationToken cancellationToken)
+    {
+        var snapshot = MetadataSnapshot();
+        return Task.Run(() => new AssetCatalog(this, snapshot).Query(query, cancellationToken), cancellationToken);
+    }
 
     public AssetLibraryStatus Status => _document.Status;
 
@@ -326,7 +351,7 @@ public sealed class AssetCatalog
     /// The library query the grid uses. Returns logical cards with badge count and cover metadata;
     /// no original is opened, so this stays metadata-only at ten thousand sets.
     /// </summary>
-    public AssetQueryResult Query(AssetQuery query)
+    public AssetQueryResult Query(AssetQuery query, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(query);
         var recentOrder = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
@@ -346,6 +371,7 @@ public sealed class AssetCatalog
         var matched = new List<AssetSetSummary>(_document.Sets.Count);
         foreach (var set in _document.Sets)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (query.FavoritesOnly && !set.Favorite)
             {
                 continue;
@@ -594,7 +620,7 @@ public sealed class AssetCatalog
     // ---------------------------------------------------------------- mutation
 
     /// <summary>
-    /// Validates a local image completely before changing the library, then publishes the mask
+    /// Validates a local image completely before changing the library, then commits the mask
     /// identity and any new content record through the catalog's one atomic index replacement.
     /// </summary>
     public AssetVariant AssignVariantMask(
@@ -806,11 +832,23 @@ public sealed class AssetCatalog
             UsedUtc = usedUtc,
         });
         _document.CurrentVariantBySet[setId] = variantId;
-        SaveIndex();
+        if (_document.Recent.Count > AssetLibraryDocument.MaxRecent)
+            _document.Recent.RemoveRange(AssetLibraryDocument.MaxRecent, _document.Recent.Count - AssetLibraryDocument.MaxRecent);
+        MetadataRevision++;
+        _metadataWriter.Enqueue(MetadataSnapshot());
     }
 
     public string? CurrentVariantOf(string setId) =>
         _document.CurrentVariantBySet.TryGetValue(setId, out var variantId) ? variantId : null;
+
+    public void RememberVariant(string setId, string variantId)
+    {
+        if (Status == AssetLibraryStatus.Damaged || FindSet(setId) is not { } set
+            || !set.VariantIds.Contains(variantId, StringComparer.Ordinal)
+            || CurrentVariantOf(setId) == variantId) return;
+        _document.CurrentVariantBySet[setId] = variantId;
+        _metadataWriter.Enqueue(MetadataSnapshot());
+    }
 
     /// <summary>Replaces the flat record list; used by fixtures and by profile generators.</summary>
     public void ReplaceIndex(IReadOnlyList<AssetRecord> records)
@@ -1041,9 +1079,29 @@ public sealed class AssetCatalog
     private void SaveIndex()
     {
         RequireWritable();
-        AssetLibraryStore.Save(_indexPath, _document);
         Reindex();
+        CaptureMetadataBase();
+        MetadataRevision++;
+        ContentRevision++;
+        _metadataWriter.Enqueue(MetadataSnapshot());
+        _metadataWriter.FlushAsync().GetAwaiter().GetResult();
     }
+
+    private void CaptureMetadataBase() => _metadataBase = new AssetLibraryDocument
+    {
+        Records = [.. _document.Records.Select(record => record with { Tags = record.Tags.ToArray() })],
+        Variants = [.. _document.Variants],
+        Collections = [.. _document.Collections],
+        Sets = [.. _document.Sets.Select(set => set with
+            { VariantIds = set.VariantIds.ToArray(), Tags = set.Tags.ToArray() })],
+    };
+
+    private AssetLibraryDocument MetadataSnapshot() => new()
+    {
+        Records = _metadataBase.Records, Variants = _metadataBase.Variants,
+        Collections = _metadataBase.Collections, Sets = _metadataBase.Sets,
+        Recent = [.. _document.Recent], CurrentVariantBySet = new(_document.CurrentVariantBySet),
+    };
 
     private void Reindex()
     {

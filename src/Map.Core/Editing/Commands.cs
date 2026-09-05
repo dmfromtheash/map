@@ -83,20 +83,10 @@ public sealed class AddObjectCommand : IEditCommand
     public ObjectId AddedObjectId => _added.Id;
 
     public MapDocument Apply(MapDocument document) =>
-        document.WithLayer(_layerId, layer => RequireObjects(layer) with
-        {
-            Objects = [.. RequireObjects(layer).Objects, _added],
-        });
+        DocumentEditor.AppendObjects(document, _layerId, [_added]);
 
     public MapDocument Revert(MapDocument document) =>
-        document.WithLayer(_layerId, layer => RequireObjects(layer) with
-        {
-            Objects = [.. RequireObjects(layer).Objects.Where(o => o.Id != _added.Id)],
-        });
-
-    private static ObjectLayer RequireObjects(MapLayer layer) =>
-        layer as ObjectLayer
-        ?? throw new InvalidOperationException($"Layer {layer.Id} does not hold objects.");
+        DocumentEditor.RemoveAppendedObjects(document, _layerId, [_added]);
 }
 
 /// <summary>Adds many objects as ONE entry - the scatter gesture.</summary>
@@ -122,21 +112,10 @@ public sealed class AddObjectsCommand : IEditCommand
     public int Count => _added.Count;
 
     public MapDocument Apply(MapDocument document) =>
-        document.WithLayer(_layerId, layer =>
-        {
-            var objectLayer = (ObjectLayer)layer;
-            return objectLayer with { Objects = [.. objectLayer.Objects, .. _added] };
-        });
+        DocumentEditor.AppendObjects(document, _layerId, _added);
 
-    public MapDocument Revert(MapDocument document)
-    {
-        var ids = _added.Select(o => o.Id).ToHashSet();
-        return document.WithLayer(_layerId, layer =>
-        {
-            var objectLayer = (ObjectLayer)layer;
-            return objectLayer with { Objects = [.. objectLayer.Objects.Where(o => !ids.Contains(o.Id))] };
-        });
-    }
+    public MapDocument Revert(MapDocument document) =>
+        DocumentEditor.RemoveAppendedObjects(document, _layerId, _added);
 }
 
 /// <summary>
@@ -212,22 +191,12 @@ public sealed class PlaceAssetObjectsCommand : IEditCommand
         }
 
         var withAssets = added.Count == 0 ? document : document.WithAssets([.. document.Assets, .. added]);
-        return withAssets.WithLayer(_layerId, layer =>
-        {
-            var objects = layer as ObjectLayer
-                ?? throw new InvalidOperationException($"Layer {_layerId} does not hold objects.");
-            return objects with { Objects = [.. objects.Objects, .. _objects] };
-        });
+        return DocumentEditor.AppendObjects(withAssets, _layerId, _objects);
     }
 
     public MapDocument Revert(MapDocument document)
     {
-        var ids = _objects.Select(item => item.Id).ToHashSet();
-        var withoutObjects = document.WithLayer(_layerId, layer =>
-        {
-            var objects = (ObjectLayer)layer;
-            return objects with { Objects = [.. objects.Objects.Where(item => !ids.Contains(item.Id))] };
-        });
+        var withoutObjects = DocumentEditor.RemoveAppendedObjects(document, _layerId, _objects);
 
         if (_introduced.Count == 0)
         {
@@ -301,12 +270,7 @@ public sealed class PasteObjectsCommand : IEditCommand
         }
 
         var withAssets = added.Count == 0 ? document : document.WithAssets([.. document.Assets, .. added]);
-        return withAssets.WithLayer(_layerId, layer =>
-        {
-            var objects = layer as ObjectLayer
-                ?? throw new InvalidOperationException($"Layer {_layerId} does not hold objects.");
-            return objects with { Objects = [.. objects.Objects, .. _objects] };
-        });
+        return DocumentEditor.AppendObjects(withAssets, _layerId, _objects);
     }
 
     public MapDocument Revert(MapDocument document)
@@ -680,21 +644,13 @@ public sealed class MoveObjectsToLayerCommand : IEditCommand
     public MapDocument Apply(MapDocument document)
     {
         var removed = _remove.Apply(document);
-        return removed.WithLayer(_targetLayerId, layer =>
-        {
-            var objectLayer = (ObjectLayer)layer;
-            return objectLayer with { Objects = [.. objectLayer.Objects, .. _moved] };
-        });
+        return DocumentEditor.AppendObjects(removed, _targetLayerId, _moved);
     }
 
     public MapDocument Revert(MapDocument document)
     {
-        var ids = _moved.Select(o => o.Id).ToHashSet();
-        var withoutTarget = document.WithLayer(_targetLayerId, layer =>
-        {
-            var objectLayer = (ObjectLayer)layer;
-            return objectLayer with { Objects = [.. objectLayer.Objects.Where(o => !ids.Contains(o.Id))] };
-        });
+        var withoutTarget = DocumentEditor.RemoveAppendedObjects(
+            document, _targetLayerId, _moved);
 
         return _remove.Revert(withoutTarget);
     }
@@ -985,12 +941,24 @@ public sealed class ReorderLayerCommand(LayerId layerId, bool up) : IEditCommand
 {
     private readonly LayerId _layerId = layerId;
     private readonly int _delta = up ? 1 : -1;
+    private readonly bool _up = up;
+    private bool _applied;
 
     public string Name => "Reorder layer";
 
-    public MapDocument Apply(MapDocument document) => Shift(document, _delta);
+    public MapDocument Apply(MapDocument document)
+    {
+        if (!LayerOrderPolicy.CanMove(document, _layerId, _up))
+        {
+            _applied = false;
+            return document;
+        }
 
-    public MapDocument Revert(MapDocument document) => Shift(document, -_delta);
+        _applied = true;
+        return Shift(document, _delta);
+    }
+
+    public MapDocument Revert(MapDocument document) => _applied ? Shift(document, -_delta) : document;
 
     private MapDocument Shift(MapDocument document, int delta)
     {
@@ -1007,10 +975,6 @@ public sealed class ReorderLayerCommand(LayerId layerId, bool up) : IEditCommand
         }
 
         var target = index + delta;
-        if (target < 1 || target >= layers.Count)
-        {
-            return document; // no-op at the edges; Revert of a no-op is a no-op
-        }
 
         (layers[index], layers[target]) = (layers[target], layers[index]);
         return document.WithLayers(layers);
@@ -1335,6 +1299,90 @@ public static class DocumentEditor
         DocumentRevisionIndex.For(document).FindLayerOf(id);
 
     /// <summary>
+    /// Shared append boundary for every editor command that adds top-level objects. It validates
+    /// only the new identities and carries the persistent storage/index delta into the revision.
+    /// </summary>
+    internal static MapDocument AppendObjects(
+        MapDocument document, LayerId layerId, IReadOnlyList<SceneObject> additions)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(additions);
+        if (additions.Count == 0)
+        {
+            throw new ArgumentException("At least one appended object is required.", nameof(additions));
+        }
+
+        var revisionIndex = DocumentRevisionIndex.For(document);
+        revisionIndex.ValidateAppends(additions);
+        var layers = document.Layers.ToArray();
+        var layerIndex = Array.FindIndex(layers, layer => layer.Id == layerId);
+        if (layerIndex < 0 || layers[layerIndex] is not ObjectLayer objectLayer)
+        {
+            throw new InvalidOperationException($"Layer {layerId} does not hold objects.");
+        }
+
+        var firstObjectIndex = objectLayer.Objects.Count;
+        layers[layerIndex] = objectLayer with
+        {
+            Objects = objectLayer.ObjectStorage.AppendRange(additions),
+        };
+        var target = document.WithRevisedLayers(layers);
+        var locations = additions.Select((sceneObject, offset) => new DocumentObjectLocation(
+            sceneObject, layerId, layerIndex, firstObjectIndex + offset)).ToArray();
+        DocumentRevisionIndex.RegisterAppends(document, target, locations);
+        ObjectNameIndex.Register(document, target, [], additions);
+        ObjectLayerChanges.Register(objectLayer, (ObjectLayer)layers[layerIndex], [],
+            locations.Select(l => l.ObjectIndex).ToArray());
+        return target;
+    }
+
+    /// <summary>
+    /// Undo fast path for append commands. The normal LIFO history removes one tail range without
+    /// flattening the prefix; an out-of-order direct Revert keeps the older id-based semantics.
+    /// </summary>
+    internal static MapDocument RemoveAppendedObjects(
+        MapDocument document, LayerId layerId, IReadOnlyList<SceneObject> additions)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(additions);
+        var layers = document.Layers.ToArray();
+        var layerIndex = Array.FindIndex(layers, layer => layer.Id == layerId);
+        if (layerIndex < 0 || layers[layerIndex] is not ObjectLayer objectLayer)
+        {
+            throw new InvalidOperationException($"Layer {layerId} does not hold objects.");
+        }
+
+        var start = objectLayer.Objects.Count - additions.Count;
+        var isTail = start >= 0;
+        for (var offset = 0; isTail && offset < additions.Count; offset++)
+        {
+            isTail = objectLayer.Objects[start + offset].Id == additions[offset].Id;
+        }
+
+        if (isTail)
+        {
+            layers[layerIndex] = objectLayer with
+            {
+                Objects = objectLayer.ObjectStorage.RemoveRange(start, additions.Count),
+            };
+            var target = document.WithRevisedLayers(layers);
+            DocumentRevisionIndex.RegisterTailRemoval(document, target, additions);
+            ObjectNameIndex.Register(document, target,
+                Enumerable.Range(start, additions.Count).Select(i => objectLayer.Objects[i]).ToArray(), []);
+            ObjectLayerChanges.Register(objectLayer, (ObjectLayer)layers[layerIndex],
+                Enumerable.Range(start, additions.Count).ToArray(), []);
+            return target;
+        }
+
+        var ids = additions.Select(sceneObject => sceneObject.Id).ToHashSet();
+        return document.WithLayer(layerId, layer =>
+        {
+            var current = (ObjectLayer)layer;
+            return current with { Objects = [.. current.Objects.Where(item => !ids.Contains(item.Id))] };
+        });
+    }
+
+    /// <summary>
     /// Bounded replacement-only revision: positions come from the current revision index, changed
     /// chunks are copied once, and document/spatial derived indexes share their warm roots.
     /// </summary>
@@ -1400,12 +1448,15 @@ public static class DocumentEditor
             };
             layers[first.LayerIndex] = targetLayer;
             ObjectSpatialIndex.RegisterReplacements(sourceLayer, targetLayer, positions);
+            ObjectLayerChanges.Register(sourceLayer, targetLayer, positions.Keys.ToArray(), positions.Keys.ToArray());
             revisedLocations.AddRange(layerReplacements.Select(pair =>
                 pair.Location with { Object = pair.After }));
         }
 
         var target = document.WithRevisedLayers(layers);
         DocumentRevisionIndex.RegisterReplacements(document, target, revisedLocations);
+        ObjectNameIndex.Register(document, target,
+            replacements.Select(item => index.FindObject(item.Id)!), replacements);
         return target;
     }
 

@@ -51,7 +51,7 @@ public enum EditorTool
 ///
 /// The native Windows file picker neither shows a window nor returns in this project's automation
 /// host, so a driven smoke can otherwise never reach import, save or reopen in a real window. This
-/// mirrors the sandbox switch the recovery driver already uses: it applies ONLY when the UI test
+/// mirrors the isolated-root switch the recovery driver already uses: it applies ONLY when the UI test
 /// mode is on AND an explicit fully-qualified path is supplied, so no user flow can reach it.
 /// </summary>
 public static class UiTestFilePaths
@@ -1088,6 +1088,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// <summary>Re-runs the current query. Metadata only: no original image is opened here.</summary>
     public void RefreshLibrary()
     {
+        _libraryQueryVersion++;
         if (_suppressLibraryRefresh)
         {
             return;
@@ -1109,21 +1110,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             return;
         }
 
-        var result = _assetCatalog.Query(new AssetQuery
-        {
-            Text = _librarySearchText,
-            CollectionId = _libraryCollectionId,
-            Tag = _libraryTag,
-            UntaggedOnly = _libraryUntaggedOnly,
-            FavoritesOnly = _libraryFavoritesOnly,
-            RecentOnly = _libraryRecentOnly,
-            UsedContentHashes = _libraryUsedInMapOnly ? UsedContentHashes() : null,
-            MediaType = _libraryMediaType,
-            ImportedFromUtc = _libraryImportedFromUtc,
-            ImportedToUtc = _libraryImportedToUtc,
-            Sort = _librarySort,
-            Group = _libraryGrouping,
-        });
+        var result = _assetCatalog.Query(CurrentLibraryQuery());
 
         _librarySets = result.Sets;
         _libraryGroups = result.Groups;
@@ -1144,6 +1131,43 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// every row is a card; with grouping each header is followed by the cards it covers, so the
     /// same single list control shows both without ever materialising the whole library.
     /// </summary>
+    private int _libraryQueryVersion;
+    private readonly SemaphoreSlim _libraryQueryGate = new(1, 1);
+    private AssetQuery CurrentLibraryQuery() => new AssetQuery
+        {
+            Text = _librarySearchText,
+            CollectionId = _libraryCollectionId,
+            Tag = _libraryTag,
+            UntaggedOnly = _libraryUntaggedOnly,
+            FavoritesOnly = _libraryFavoritesOnly,
+            RecentOnly = _libraryRecentOnly,
+            UsedContentHashes = _libraryUsedInMapOnly ? UsedContentHashes() : null,
+            MediaType = _libraryMediaType,
+            ImportedFromUtc = _libraryImportedFromUtc,
+            ImportedToUtc = _libraryImportedToUtc,
+            Sort = _librarySort,
+            Group = _libraryGrouping,
+        };
+
+    public async Task SearchLibraryAsync(string text, CancellationToken cancellationToken)
+    {
+        if (_assetCatalog is null) return;
+        SetField(ref _librarySearchText, text, nameof(LibrarySearchText));
+        var version = ++_libraryQueryVersion;
+        var query = CurrentLibraryQuery();
+        await _libraryQueryGate.WaitAsync(cancellationToken);
+        AssetQueryResult result;
+        try { result = await _assetCatalog.QueryAsync(query, cancellationToken); }
+        finally { _libraryQueryGate.Release(); }
+        if (version != _libraryQueryVersion || cancellationToken.IsCancellationRequested) return;
+        _librarySets = result.Sets;
+        _libraryGroups = result.Groups;
+        _libraryRows = BuildLibraryRows(result);
+        SyncSelectedLibraryRow();
+        _visibleTiles = SliceVisibleRows(_visibleRowFirst, _visibleRowCount);
+        RaiseLibrary();
+    }
+
     private List<AssetLibraryRow> BuildLibraryRows(AssetQueryResult result)
     {
         if (_libraryGrouping == AssetGrouping.None || result.Groups.Count == 0)
@@ -1731,10 +1755,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             Consider(tile.CoverSha256);
         }
 
-        foreach (var variant in _selectedSetVariants)
-        {
-            Consider(variant.Sha256);
-        }
+        if (CurrentVariant is { } variant) Consider(variant.Sha256);
 
         if (pending.Count == 0)
         {
@@ -1824,13 +1845,23 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// <summary>How many entries the bounded recent list currently holds.</summary>
     public int RecentCount => _assetCatalog?.Recent.Count ?? 0;
 
-    public IReadOnlyList<AssetSetSummary> CompactRecentSets => _assetCatalog is null
-        ? []
-        : [.. _assetCatalog.Query(new AssetQuery { RecentOnly = true }).Sets.Take(4)];
-
-    public IReadOnlyList<AssetSetSummary> CompactFavoriteSets => _assetCatalog is null
-        ? []
-        : [.. _assetCatalog.Query(new AssetQuery { FavoritesOnly = true }).Sets.Take(4)];
+    private long _compactMetadataRevision = -1;
+    private long _compactContentRevision = -1;
+    private IReadOnlyList<AssetSetSummary> _compactRecentSets = [];
+    private IReadOnlyList<AssetSetSummary> _compactFavoriteSets = [];
+    public IReadOnlyList<AssetSetSummary> CompactRecentSets { get { RefreshCompactSets(); return _compactRecentSets; } }
+    public IReadOnlyList<AssetSetSummary> CompactFavoriteSets { get { RefreshCompactSets(); return _compactFavoriteSets; } }
+    private void RefreshCompactSets()
+    {
+        if (_assetCatalog is null || _compactMetadataRevision == _assetCatalog.MetadataRevision) return;
+        _compactMetadataRevision = _assetCatalog.MetadataRevision;
+        _compactRecentSets = _assetCatalog.Recent.Select(e => _assetCatalog.SummarizeSet(e.SetId))
+            .OfType<AssetSetSummary>().ToArray();
+        if (_compactContentRevision == _assetCatalog.ContentRevision) return;
+        _compactContentRevision = _assetCatalog.ContentRevision;
+        _compactFavoriteSets = _assetCatalog.Sets.Where(s => s.Favorite)
+            .Select(s => _assetCatalog.SummarizeSet(s.Id)).OfType<AssetSetSummary>().ToArray();
+    }
 
     // ---------------------------------------------------------------- set and variant
 
@@ -1924,7 +1955,9 @@ public sealed partial class EditorViewModel : ViewModelBase
     public bool HasChosenAsset => _selectedSetId is not null;
 
     /// <summary>Makes one logical card current and restores the variant last used inside it.</summary>
-    public void SelectAssetSet(string? setId)
+    public void SelectAssetSet(string? setId) => SelectAssetSet(setId, armPlacement: true);
+
+    private void SelectAssetSet(string? setId, bool armPlacement)
     {
         if (setId is null || _assetCatalog is null || _assetCatalog.FindSet(setId) is not { } set)
         {
@@ -1954,20 +1987,49 @@ public sealed partial class EditorViewModel : ViewModelBase
         var index = remembered is null
             ? -1
             : _selectedSetVariants.ToList().FindIndex(variant => variant.Id == remembered);
-        _currentVariantIndex = index >= 0 ? index : 0;
+        var coverIndex = _selectedSetVariants.ToList().FindIndex(variant => variant.Id == set.CoverVariantId);
+        _currentVariantIndex = index >= 0 ? index : Math.Max(0, coverIndex);
+        RememberCurrentVariant();
         BindStampToolToCurrentVariant();
         SyncSelectedLibraryRow();
         RaiseVariantState();
         RaiseStampToolState();
         PersistLocalPreferences();
-        ArmStampPlacement();
+        if (armPlacement) ArmStampPlacement();
     }
 
     public void NextVariant() => MoveVariant(1);
 
+    public IReadOnlyList<AssetVariant> VariantsForSet(string setId) => _assetCatalog?.FindSet(setId) is { } set
+        ? set.VariantIds.Select(_assetCatalog.FindVariant).OfType<AssetVariant>().ToArray() : [];
+
     public void PreviousVariant() => MoveVariant(-1);
 
-    public void SelectVariantAt(int index)
+    /// <summary>Validate a gallery action before changing the tool it will replace.</summary>
+    public bool ChooseGalleryVariant(string setId, string? variantId, bool armPlacement = true)
+    {
+        if (_assetCatalog?.FindSet(setId) is not { } set || _assetResolver is null)
+        { StatusDetail = "Набор больше не доступен в каталоге."; return false; }
+        var candidates = variantId is not null ? new[] { variantId }
+            : new[] { _assetCatalog.CurrentVariantOf(setId), set.CoverVariantId }
+                .Concat(set.VariantIds).OfType<string>().Distinct().ToArray();
+        foreach (var id in candidates)
+        {
+            if (!set.VariantIds.Contains(id) || _assetCatalog.FindVariant(id) is not { } variant
+                || _assetCatalog.Find(variant.Sha256) is not { } record) continue;
+            var embedded = Session.Document.Assets.Any(a => a.Sha256.Equals(record.Sha256, StringComparison.OrdinalIgnoreCase));
+            if (!embedded && _assetResolver.Check(record) != AssetAvailability.Available) continue;
+            SelectAssetSet(setId, armPlacement: false);
+            SelectVariantAt(_selectedSetVariants.ToList().FindIndex(v => v.Id == id), armPlacement);
+            return true;
+        }
+        StatusDetail = "Вариант недоступен: проверьте исходный файл или выберите другой.";
+        return false;
+    }
+
+    public void SelectVariantAt(int index) => SelectVariantAt(index, armPlacement: true);
+
+    private void SelectVariantAt(int index, bool armPlacement)
     {
         if (_selectedSetVariants.Count == 0)
         {
@@ -1975,12 +2037,13 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
 
         _currentVariantIndex = Math.Clamp(index, 0, _selectedSetVariants.Count - 1);
+        _stampToolSettings = _stampToolSettings with { RandomizeVariant = false };
         RememberCurrentVariant();
         BindStampToolToCurrentVariant();
         RaiseVariantState();
         RaiseStampToolState();
         PersistLocalPreferences();
-        ArmStampPlacement();
+        if (armPlacement) ArmStampPlacement();
     }
 
     private void MoveVariant(int direction)
@@ -2012,7 +2075,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             return;
         }
 
-        _assetCatalog.TouchRecent(_selectedSetId, variant.Id, _clock());
+        _assetCatalog.RememberVariant(_selectedSetId, variant.Id);
     }
 
     private void RestoreStampCatalogIdentity()
@@ -2341,6 +2404,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         {
             if (_stampToolSettings.Mode != value && Enum.IsDefined(value))
             {
+                CancelStampSeries();
                 _stampToolSettings = _stampToolSettings with { Mode = value };
                 Raise();
                 Raise(nameof(PlannedStampCount));
@@ -2527,6 +2591,8 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     private const double PlacementPreviewOpacity = 0.55;
     private const int MaximumScatterPreviewObjects = 64;
+    private const double PlacementScaleStep = 0.01;
+    private const double PlacementScaleLargeStep = 0.1;
     private const double PlacementRotationStep = 1;
     private const double PlacementRotationLargeStep = 15;
 
@@ -2535,12 +2601,13 @@ public sealed partial class EditorViewModel : ViewModelBase
         get => _pendingPlacement;
         private set
         {
+            var before = _pendingPlacement;
             if (SetField(ref _pendingPlacement, value))
             {
-                Raise(nameof(HasPendingPlacement));
+                if ((before is null) != (value is null)) Raise(nameof(HasPendingPlacement));
                 Raise(nameof(PlacementPreviewObjects));
-                Raise(nameof(PlacementRefusal));
-                RaiseStampToolState();
+                if (before?.InvalidReason != value?.InvalidReason) Raise(nameof(PlacementRefusal));
+                if (before?.Target != value?.Target) RaiseStampToolState();
                 InvalidateScene(EditorChangeReason.CanvasInvalidation);
             }
         }
@@ -2580,6 +2647,7 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public bool ArmStampPlacement()
     {
+        CancelStampSeries();
         ActiveTool = EditorTool.Stamp;
         var centre = ViewCentre();
         PendingPlacement = BuildStampPlacement(centre.X, centre.Y, pointerVisible: false);
@@ -2593,6 +2661,106 @@ public sealed partial class EditorViewModel : ViewModelBase
         return true;
     }
 
+    private PlacementSession? _seriesOrigin;
+    private readonly List<StampPlacementItem> _seriesPlan = [];
+    private StampPlacementRequest? _seriesRequest;
+    private IReadOnlyList<StampVariantSource> _seriesSources = [];
+    private double _seriesLastX, _seriesLastY, _seriesRemaining, _seriesStep;
+    public bool IsStampSeriesActive => _seriesOrigin is not null;
+    public double SeriesSpacingPercent => _stampToolSettings.SeriesSpacingPercent;
+    public void SetSeriesSpacingPercent(double value, bool persist)
+    {
+        CancelStampSeries();
+        _stampToolSettings = _stampToolSettings with { SeriesSpacingPercent = Math.Clamp(value, 10, 400) };
+        Raise(nameof(SeriesSpacingPercent));
+        Raise(nameof(StampToolSettings));
+        if (persist) PersistLocalPreferences();
+    }
+
+    public bool BeginStampSeries(double worldX, double worldY)
+    {
+        CancelStampSeries();
+        if (PendingPlacement is not { Target: PlacementTargetKind.Stamp, Mode: StampPlacementMode.Series, CanCommit: true } pending)
+            return false;
+        var settings = pending.StampSettingsSnapshot ?? _stampToolSettings;
+        if (!TryStampInputs(settings, out var request, out var sources, out _, out var refusal))
+        { StatusDetail = refusal; return false; }
+        _seriesOrigin = pending;
+        _seriesRequest = request with { AreaRadius = 0, Density = 0, Seed = pending.Seed };
+        _seriesSources = sources;
+        _seriesStep = Math.Max(1, request.BaseWidth * settings.SeriesSpacingPercent / 100);
+        _seriesRemaining = _seriesStep;
+        _seriesLastX = worldX;
+        _seriesLastY = worldY;
+        AddSeriesPoint(worldX, worldY);
+        UpdateSeriesPreview();
+        return true;
+    }
+
+    public void ContinueStampSeries(double worldX, double worldY)
+    {
+        if (_seriesOrigin is null) return;
+        if (worldX < 0 || worldY < 0 || worldX > Session.Document.Canvas.Width || worldY > Session.Document.Canvas.Height)
+        { CancelStampSeries(); return; }
+        var dx = worldX - _seriesLastX;
+        var dy = worldY - _seriesLastY;
+        var length = Math.Sqrt(dx * dx + dy * dy);
+        if (length <= 0.000001) return;
+        var distance = _seriesRemaining;
+        while (distance <= length)
+        {
+            AddSeriesPoint(_seriesLastX + dx * distance / length, _seriesLastY + dy * distance / length);
+            distance += _seriesStep;
+        }
+        _seriesRemaining = distance - length;
+        _seriesLastX = worldX;
+        _seriesLastY = worldY;
+        UpdateSeriesPreview();
+    }
+
+    private void AddSeriesPoint(double x, double y)
+    {
+        var request = _seriesRequest! with { CenterX = x, CenterY = y,
+            Seed = unchecked(_seriesRequest!.Seed + _seriesPlan.Count * 104729) };
+        var item = StampPlacement.PlanArea(request, _seriesSources)[0];
+        _seriesPlan.Add(ApplyPlacementRotation([item], _seriesOrigin!.RotationDegrees)[0]);
+    }
+
+    private void UpdateSeriesPreview()
+    {
+        if (_seriesOrigin is not { } pending) return;
+        PendingPlacement = pending with
+        {
+            PlannedCount = _seriesPlan.Count,
+            PreviewObjects = _seriesPlan.TakeLast(MaximumScatterPreviewObjects)
+                .Select(item => StampObject(item, "Серия", pending.StampSettingsSnapshot!, PlacementPreviewOpacity)).ToArray(),
+            WorldX = _seriesLastX, WorldY = _seriesLastY,
+        };
+    }
+
+    public bool EndStampSeries()
+    {
+        if (_seriesOrigin is not { } origin) return false;
+        var plan = _seriesPlan.ToArray();
+        var pending = origin with { WorldX = _seriesLastX, WorldY = _seriesLastY };
+        _seriesOrigin = null;
+        _seriesPlan.Clear();
+        var (layer, createLayer) = EnsureObjectLayer();
+        if (layer is null || plan.Length == 0) { RefreshArmedPlacement(); return false; }
+        return CommitStampPlacement(pending, layer, createLayer, plan);
+    }
+
+    public bool CancelStampSeries()
+    {
+        if (_seriesOrigin is not { } origin) return false;
+        _seriesOrigin = null;
+        _seriesPlan.Clear();
+        _seriesSources = [];
+        _seriesRequest = null;
+        PendingPlacement = origin;
+        return true;
+    }
+
     public void UpdatePlacementPreview(double worldX, double worldY)
     {
         if (PendingPlacement is not { } pending)
@@ -2603,12 +2771,8 @@ public sealed partial class EditorViewModel : ViewModelBase
         var snapped = SnapPlacementPoint(worldX, worldY);
         PendingPlacement = pending.Target switch
         {
-            PlacementTargetKind.Rectangle => BuildPrimitivePlacement(
-                SceneObjectKind.Rectangle, snapped.X, snapped.Y, pending.Mode, pointerVisible: true,
-                pending.RotationDegrees),
-            PlacementTargetKind.Ellipse => BuildPrimitivePlacement(
-                SceneObjectKind.Ellipse, snapped.X, snapped.Y, pending.Mode, pointerVisible: true,
-                pending.RotationDegrees),
+            PlacementTargetKind.Rectangle or PlacementTargetKind.Ellipse =>
+                RepositionPrimitivePlacement(pending, snapped.X, snapped.Y, pointerVisible: true),
             _ => BuildStampPlacement(
                 snapped.X, snapped.Y, pointerVisible: true),
         };
@@ -2623,9 +2787,42 @@ public sealed partial class EditorViewModel : ViewModelBase
     }
 
     /// <summary>
+    /// Resizes the transient object around its own centre before placement. W/S therefore control
+    /// the same size before and after placement without touching the document or history.
+    /// </summary>
+    public bool ResizePendingPlacement(int direction, bool largerStep = false)
+    {
+        if (PendingPlacement is not { } pending || direction == 0)
+        {
+            return false;
+        }
+
+        var delta = Math.Sign(direction)
+            * (largerStep ? PlacementScaleLargeStep : PlacementScaleStep);
+        if (pending.Target == PlacementTargetKind.Stamp)
+        {
+            SetStampScalePercent(_stampToolSettings.ScalePercent + (delta * 100), commit: true);
+            StatusDetail = $"Размер перед установкой: {_stampToolSettings.ScalePercent:0.#}% · W/S.";
+            return true;
+        }
+
+        var factor = MultiSelectionGeometry.ClampScaleFactor(pending.PreviewObjects, 1 + delta);
+        var preview = MultiSelectionGeometry.ScaleAroundCentre(
+            pending.PreviewObjects, factor, pending.WorldX, pending.WorldY);
+        PendingPlacement = pending with
+        {
+            Width = preview[0].Width,
+            Height = preview[0].Height,
+            PreviewObjects = preview,
+        };
+        StatusDetail = $"Размер перед установкой: {preview[0].Width:0.#} × {preview[0].Height:0.#} · W/S.";
+        return true;
+    }
+
+    /// <summary>
     /// Turns the transient object around its own centre before placement. The document, selection
-    /// and history stay untouched; pointer moves rebuild the same angle and commit consumes the
-    /// exact previewed rotation.
+    /// and history stay untouched; pointer moves keep the same angle and commit consumes the exact
+    /// previewed rotation.
     /// </summary>
     public bool RotatePendingPlacement(int direction, bool largerStep = false)
     {
@@ -2639,7 +2836,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         if (pending.Target == PlacementTargetKind.Stamp)
         {
             SetStampRotationDegrees(_stampToolSettings.RotationDegrees + delta, commit: true);
-            StatusDetail = $"Поворот перед установкой: {_stampToolSettings.RotationDegrees:0.##}° · W/S.";
+            StatusDetail = $"Поворот перед установкой: {_stampToolSettings.RotationDegrees:0}° · A/D.";
             return true;
         }
 
@@ -2652,12 +2849,13 @@ public sealed partial class EditorViewModel : ViewModelBase
             RotationDegrees = rotation,
             PreviewObjects = preview,
         };
-        StatusDetail = $"Поворот перед установкой: {rotation:0.##}° · W/S.";
+        StatusDetail = $"Поворот перед установкой: {rotation:0}° · A/D.";
         return true;
     }
 
     public bool CancelPlacement()
     {
+        CancelStampSeries();
         if (PendingPlacement is null)
         {
             return false;
@@ -2770,9 +2968,13 @@ public sealed partial class EditorViewModel : ViewModelBase
         return true;
     }
 
+    public (double Prepare, double Names, double Commit, double Metadata) LastPlacementTiming { get; private set; }
+
     private bool CommitStampPlacement(
-        PlacementSession pending, ObjectLayer layer, AddLayerCommand? createLayer)
+        PlacementSession pending, ObjectLayer layer, AddLayerCommand? createLayer,
+        IReadOnlyList<StampPlacementItem>? gesturePlan = null)
     {
+        var timing = System.Diagnostics.Stopwatch.StartNew();
         var settings = pending.StampSettingsSnapshot ?? _stampToolSettings;
         if (!TryStampInputs(settings, out var requestTemplate, out var sources, out var records, out var refusal))
         {
@@ -2786,10 +2988,10 @@ public sealed partial class EditorViewModel : ViewModelBase
             CenterY = pending.WorldY,
             Seed = pending.Seed,
         };
-        var plan = pending.Mode == StampPlacementMode.Area
+        var plan = gesturePlan ?? (pending.Mode == StampPlacementMode.Area
             ? StampPlacement.PlanArea(request, sources)
-            : StampPlacement.PlanOne(request, sources[0]);
-        plan = ApplyPlacementRotation(plan, settings.RotationDegrees);
+            : StampPlacement.PlanOne(request, sources[0]));
+        if (gesturePlan is null) plan = ApplyPlacementRotation(plan, settings.RotationDegrees);
         if (ResolvePlan(plan, records, out var references, out refusal) is not { } byHash)
         {
             StatusDetail = refusal;
@@ -2798,8 +3000,10 @@ public sealed partial class EditorViewModel : ViewModelBase
 
         var preferredName = SelectedSet?.Name
             ?? records[plan[0].Sha256].DisplayName;
+        var prepareMs = timing.Elapsed.TotalMilliseconds;
         var names = EntityNameGenerator.Objects(
             Session.Document, SceneObjectKind.Stamp, plan.Count, preferredName);
+        var namesMs = timing.Elapsed.TotalMilliseconds - prepareMs;
         var objects = new List<SceneObject>(plan.Count);
         for (var index = 0; index < plan.Count; index++)
         {
@@ -2816,6 +3020,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         ApplyPlacementSelection(previousSelection, objects[^1].Id, pending);
         _activeLayerId = layer.Id;
         AfterEdit();
+        var commitMs = timing.Elapsed.TotalMilliseconds - prepareMs - namesMs;
         if (_selectedSetId is not null && CurrentVariant is { } placedVariant)
         {
             _assetCatalog!.TouchRecent(_selectedSetId, placedVariant.Id, _clock());
@@ -2832,8 +3037,13 @@ public sealed partial class EditorViewModel : ViewModelBase
         StatusDetail = objects.Count == 1
             ? $"Размещён вариант {placedLabel}."
             : $"Размещено объектов: {objects.Count}, вариантов: {plan.Select(item => item.Sha256).Distinct(StringComparer.OrdinalIgnoreCase).Count()}.";
-        RefreshLibrary();
+        Raise(nameof(CompactRecentSets));
+        Raise(nameof(RecentCount));
         FinishOrContinuePlacement(pending, objects[^1].Name);
+        if (_assetCatalog?.MetadataSaveError is not null)
+            StatusDetail += " Объекты размещены; недавние пока не удалось сохранить на диск.";
+        LastPlacementTiming = (prepareMs, namesMs, commitMs,
+            timing.Elapsed.TotalMilliseconds - prepareMs - namesMs - commitMs);
         return true;
     }
 
@@ -2842,6 +3052,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     {
         var select = placement.AutoSelect == PlacementAutoSelectPolicy.Always
             || placement.AutoSelect == PlacementAutoSelectPolicy.Auto
+                && placement.Target != PlacementTargetKind.Stamp
                 && placement.Mode == StampPlacementMode.One;
         if (select)
         {
@@ -2855,7 +3066,8 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     private void FinishOrContinuePlacement(PlacementSession committed, string name)
     {
-        if (committed.Mode == StampPlacementMode.One)
+        if (committed.Target != PlacementTargetKind.Stamp
+            && committed.Mode == StampPlacementMode.One)
         {
             PendingPlacement = null;
             StatusDetail = $"Создан «{name}».";
@@ -2865,16 +3077,35 @@ public sealed partial class EditorViewModel : ViewModelBase
         PendingPlacement = committed.Target == PlacementTargetKind.Stamp
             ? BuildStampPlacement(
                 committed.WorldX, committed.WorldY, pointerVisible: true)
-            : BuildPrimitivePlacement(
-                committed.Target == PlacementTargetKind.Ellipse
-                    ? SceneObjectKind.Ellipse
-                    : SceneObjectKind.Rectangle,
-                committed.WorldX,
-                committed.WorldY,
-                committed.Mode,
-                pointerVisible: true,
-                committed.RotationDegrees);
-        StatusDetail = $"Создан «{name}». Режим серии остаётся активным.";
+            : RepositionPrimitivePlacement(
+                committed, committed.WorldX, committed.WorldY, pointerVisible: true);
+        StatusDetail = committed.Target == PlacementTargetKind.Stamp
+            ? $"Размещён «{name}». Ассет остаётся активным · Esc завершить."
+            : $"Создан «{name}». Режим серии остаётся активным.";
+    }
+
+    private PlacementSession RepositionPrimitivePlacement(
+        PlacementSession pending,
+        double centerX,
+        double centerY,
+        bool pointerVisible)
+    {
+        var layer = ActiveObjectLayer();
+        return pending with
+        {
+            Mode = StampPlacementMode == StampPlacementMode.Area
+                ? StampPlacementMode.One
+                : StampPlacementMode,
+            AutoSelect = PlacementAutoSelect,
+            LayerId = layer?.Id,
+            WorldX = centerX,
+            WorldY = centerY,
+            PointerVisible = pointerVisible,
+            InvalidReason = layer is null && !HasNoObjectLayer ? NoUsableObjectLayer : null,
+            WillCreateLayer = layer is null && HasNoObjectLayer,
+            PreviewObjects = MultiSelectionGeometry.Translate(
+                pending.PreviewObjects, centerX - pending.WorldX, centerY - pending.WorldY),
+        };
     }
 
     private PlacementSession BuildPrimitivePlacement(
@@ -3055,7 +3286,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             return false;
         }
 
-        var scatter = settings.Mode == StampPlacementMode.Area;
+        var scatter = settings.Mode is StampPlacementMode.Area or StampPlacementMode.Series;
         var randomize = settings.RandomizeVariant && scatter;
         var candidates = randomize
             ? _selectedSetVariants
@@ -3148,7 +3379,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     private VectorPoint SnapPlacementPoint(double worldX, double worldY) =>
         ActiveSnapGrid() is { } grid
             ? GridSnapService.Snap(grid, new VectorPoint(worldX, worldY))
-            : new VectorPoint(worldX, worldY);
+            : new VectorPoint(WholeGeometryValue(worldX), WholeGeometryValue(worldY));
 
     private void RefreshArmedPlacement()
     {
@@ -3160,17 +3391,8 @@ public sealed partial class EditorViewModel : ViewModelBase
         PendingPlacement = pending.Target == PlacementTargetKind.Stamp
             ? BuildStampPlacement(
                 pending.WorldX, pending.WorldY, pending.PointerVisible)
-            : BuildPrimitivePlacement(
-                pending.Target == PlacementTargetKind.Ellipse
-                    ? SceneObjectKind.Ellipse
-                    : SceneObjectKind.Rectangle,
-                pending.WorldX,
-                pending.WorldY,
-                StampPlacementMode == StampPlacementMode.Area
-                    ? StampPlacementMode.One
-                    : StampPlacementMode,
-                pending.PointerVisible,
-                pending.RotationDegrees);
+            : RepositionPrimitivePlacement(
+                pending, pending.WorldX, pending.WorldY, pending.PointerVisible);
     }
 
     private void UpdateStampToolSettings(
@@ -3268,6 +3490,7 @@ public sealed partial class EditorViewModel : ViewModelBase
                 : PlacementAutoSelectPolicy.Auto,
             AreaRadius = Finite(settings.AreaRadius, 160, MinStampAreaRadius, MaxStampAreaRadius),
             Density = Finite(settings.Density, 40, MinStampDensity, MaxStampDensity),
+            SeriesSpacingPercent = Finite(settings.SeriesSpacingPercent, 75, 10, 400),
             RandomAngleStep = IsSupportedRandomAngleStep(settings.RandomAngleStep)
                 ? settings.RandomAngleStep
                 : Map.Core.Editing.StampRandomAngleStep.Off,
@@ -3687,7 +3910,7 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public void ScatterStamp(AssetRecord record, int count, int seed = 12345)
     {
-        if (_assetResolver is null || count is < 1 or > 5_000)
+        if (_assetResolver is null || count < 1)
         {
             return;
         }
@@ -3889,7 +4112,9 @@ public sealed partial class EditorViewModel : ViewModelBase
     }
 
     private VectorPoint SnapVectorGesturePoint(VectorPoint point) =>
-        ActiveSnapGrid() is { SnapEnabled: true } grid ? GridSnapService.Snap(grid, point) : point;
+        ActiveSnapGrid() is { SnapEnabled: true } grid
+            ? GridSnapService.Snap(grid, point)
+            : new VectorPoint(WholeGeometryValue(point.X), WholeGeometryValue(point.Y));
 
     private SceneObject? BuildVectorGestureObject(IReadOnlyList<VectorPoint> source, bool preview)
     {
@@ -5673,6 +5898,17 @@ public sealed partial class EditorViewModel : ViewModelBase
             return;
         }
 
+        if (!LayerOrderPolicy.CanMove(Session.Document, ActiveLayer.Id, up))
+        {
+            StatusDetail = ActiveLayer switch
+            {
+                LandLayer when up => "Слой земли остаётся ниже слоёв объектов.",
+                ObjectLayer when !up => "Слой объектов остаётся выше слоёв земли.",
+                _ => up ? "Слой уже находится сверху." : "Слой уже находится снизу.",
+            };
+            return;
+        }
+
         Session.Execute(new ReorderLayerCommand(ActiveLayer.Id, up));
         AfterEdit();
     }
@@ -6658,7 +6894,8 @@ public sealed partial class EditorViewModel : ViewModelBase
     {
         if (EditableSelectionList() is not { } before) return;
         ExecuteWholeSelection(before,
-            MultiSelectionGeometry.Translate(before, deltaX, deltaY), "Nudge selection");
+            RoundObjectGeometries(MultiSelectionGeometry.Translate(before, deltaX, deltaY)),
+            "Nudge selection");
     }
 
     public void ResizeSelectedObject(int direction, bool largerStep = false)
@@ -6667,19 +6904,21 @@ public sealed partial class EditorViewModel : ViewModelBase
         var factor = MultiSelectionGeometry.ClampScaleFactor(
             before, 1 + Math.Sign(direction) * (largerStep ? 0.1 : 0.01));
         var frame = MultiSelectionGeometry.CombinedBounds(before)!.Value;
-        ExecuteWholeSelection(before, MultiSelectionGeometry.ScaleAroundCentre(
-            before, factor, (frame.Left + frame.Right) / 2, (frame.Top + frame.Bottom) / 2),
+        ExecuteWholeSelection(before, RoundObjectGeometries(MultiSelectionGeometry.ScaleAroundCentre(
+            before, factor, (frame.Left + frame.Right) / 2, (frame.Top + frame.Bottom) / 2)),
             "Resize selection from shortcut");
     }
 
     public void RotateSelectedObject(int direction, bool largerStep = false, bool fineStep = false)
     {
         if (EditableSelectionList() is not { } before || direction == 0) return;
-        var step = fineStep ? 0.25 : largerStep ? 15 : 1;
+        // Geometry is intentionally integer-only. Alt therefore keeps the normal one-degree
+        // step instead of creating hidden quarter-degree values.
+        var step = largerStep ? 15 : 1;
         var frame = MultiSelectionGeometry.CombinedBounds(before)!.Value;
-        ExecuteWholeSelection(before, MultiSelectionGeometry.RotateAroundCentre(
+        ExecuteWholeSelection(before, RoundObjectGeometries(MultiSelectionGeometry.RotateAroundCentre(
             before, Math.Sign(direction) * step,
-            (frame.Left + frame.Right) / 2, (frame.Top + frame.Bottom) / 2),
+            (frame.Left + frame.Right) / 2, (frame.Top + frame.Bottom) / 2)),
             "Rotate selection from shortcut");
     }
 
@@ -6824,9 +7063,9 @@ public sealed partial class EditorViewModel : ViewModelBase
                 return null;
             }
 
-            var first = NormalizeUnsignedAngle(selected[0].RotationDegrees);
+            var first = NormalizeUnsignedAngle(WholeGeometryValue(selected[0].RotationDegrees));
             return selected.All(item =>
-                Math.Abs(NormalizeUnsignedAngle(item.RotationDegrees) - first) < 0.0001)
+                NormalizeUnsignedAngle(WholeGeometryValue(item.RotationDegrees)) == first)
                 ? first
                 : null;
         }
@@ -6841,7 +7080,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             return false;
         }
 
-        var normalized = NormalizeUnsignedAngle(degrees);
+        var normalized = NormalizeUnsignedAngle(WholeGeometryValue(degrees));
         return EditSelection("Change selection rotation", commit,
             before => Math.Abs(before.RotationDegrees - normalized) < 0.0001
                 ? before
@@ -6869,11 +7108,11 @@ public sealed partial class EditorViewModel : ViewModelBase
                 .Select(item =>
                 {
                     var reference = item.Stamp!.ReferenceWidth ?? item.Width;
-                    return reference <= 0 ? (double?)null : Math.Round(item.Width / reference * 100, 1);
+                    return reference <= 0 ? (double?)null : WholeGeometryValue(item.Width / reference * 100);
                 })
                 .ToList();
             return values.All(value => value is not null)
-                && values.Skip(1).All(value => Math.Abs(value!.Value - values[0]!.Value) < 0.05)
+                && values.Skip(1).All(value => value == values[0])
                 ? values[0]
                 : null;
         }
@@ -6887,7 +7126,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             return false;
         }
 
-        var factor = Math.Clamp(percent, 10, 400) / 100.0;
+        var factor = Math.Clamp(WholeGeometryValue(percent), 10, 400) / 100.0;
         return EditSelection("Change selection scale", commit, before =>
         {
             if (before.Stamp is not { } stamp)
@@ -7276,30 +7515,36 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// first - hiding objects the user cannot see being toggled would read as loss.
     /// </summary>
     public void ToggleSelectedObjectVisibility()
+        => SetSelectedObjectVisibility(!Session.SelectedObjects.All(o => o.Visible));
+
+    /// <summary>Applies the chosen value to the whole selection as one undoable edit.</summary>
+    public void SetSelectedObjectVisibility(bool visible)
     {
         var before = Session.SelectedObjects;
-        if (before.Count == 0)
+        if (before.Count == 0 || before.All(o => o.Visible == visible))
         {
             return;
         }
 
-        var target = !before.All(o => o.Visible);
         ExecuteWholeSelection(before,
-            [.. before.Select(o => CopyObject(o, visible: target))], "Selection visibility");
+            [.. before.Select(o => CopyObject(o, visible: visible))], "Selection visibility");
     }
 
     /// <summary>Lock over the whole selection: any unlocked member means "lock all" first.</summary>
     public void ToggleSelectedObjectLock()
+        => SetSelectedObjectLock(!Session.SelectedObjects.All(o => o.Locked));
+
+    /// <summary>Applies a named lock state; mixed values never force an intermediate state.</summary>
+    public void SetSelectedObjectLock(bool locked)
     {
         var before = Session.SelectedObjects;
-        if (before.Count == 0)
+        if (before.Count == 0 || before.All(o => o.Locked == locked))
         {
             return;
         }
 
-        var target = !before.All(o => o.Locked);
         ExecuteWholeSelection(before,
-            [.. before.Select(o => CopyObject(o, locked: target))], "Selection lock");
+            [.. before.Select(o => CopyObject(o, locked: locked))], "Selection lock");
     }
 
     /// <summary>Deletes the whole selection, across layers, as one history entry.</summary>
@@ -7487,10 +7732,11 @@ public sealed partial class EditorViewModel : ViewModelBase
 
         DragPreview = null;
 
-        if (!preview.Proposed.SequenceEqual(preview.Before))
+        var proposed = RoundObjectGeometries(preview.Proposed);
+        if (!proposed.SequenceEqual(preview.Before))
         {
             Session.Execute(new ReplaceObjectsCommand(
-                preview.Before, preview.Proposed, "Transform selection"));
+                preview.Before, proposed, "Transform selection"));
             AfterEdit();
         }
         else
@@ -7690,7 +7936,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
     }
 
-    /// <summary>Republishes the derived session state the status bar and the toolbar read.</summary>
+    /// <summary>Refreshes the derived session state the status bar and the toolbar read.</summary>
     private void RaiseSessionState()
     {
         Raise(nameof(PendingChanges));
@@ -7770,11 +8016,11 @@ public sealed partial class EditorViewModel : ViewModelBase
     public void RefreshInspector()
     {
         var selected = Session.SelectedObject;
-        XText = selected?.X.ToString("0.##", CultureInfo.InvariantCulture) ?? "";
-        YText = selected?.Y.ToString("0.##", CultureInfo.InvariantCulture) ?? "";
-        WidthText = selected?.Width.ToString("0.##", CultureInfo.InvariantCulture) ?? "";
-        HeightText = selected?.Height.ToString("0.##", CultureInfo.InvariantCulture) ?? "";
-        RotationText = selected?.RotationDegrees.ToString("0.##", CultureInfo.InvariantCulture) ?? "";
+        XText = selected is null ? "" : WholeGeometryValue(selected.X).ToString("0", CultureInfo.InvariantCulture);
+        YText = selected is null ? "" : WholeGeometryValue(selected.Y).ToString("0", CultureInfo.InvariantCulture);
+        WidthText = selected is null ? "" : WholeGeometryValue(selected.Width).ToString("0", CultureInfo.InvariantCulture);
+        HeightText = selected is null ? "" : WholeGeometryValue(selected.Height).ToString("0", CultureInfo.InvariantCulture);
+        RotationText = selected is null ? "" : WholeGeometryValue(selected.RotationDegrees).ToString("0", CultureInfo.InvariantCulture);
         InspectorError = "";
         Raise(nameof(HasEditableSelection));
     }
@@ -7792,12 +8038,12 @@ public sealed partial class EditorViewModel : ViewModelBase
             return false;
         }
 
-        if (!TryParse(XText, out var x) || !TryParse(YText, out var y)
-            || !TryParse(WidthText, out var width) || !TryParse(HeightText, out var height)
-            || !TryParse(RotationText, out var rotation)
+        if (!TryParseWhole(XText, out var x) || !TryParseWhole(YText, out var y)
+            || !TryParseWhole(WidthText, out var width) || !TryParseWhole(HeightText, out var height)
+            || !TryParseWhole(RotationText, out var rotation)
             || width <= 0 || height <= 0)
         {
-            InspectorError = "Числовые поля должны содержать корректные значения; размеры больше нуля.";
+            InspectorError = "Поля геометрии принимают только целые числа; ширина и высота должны быть больше нуля.";
             return false;
         }
 
@@ -7807,11 +8053,11 @@ public sealed partial class EditorViewModel : ViewModelBase
         {
             if (width != before.Width && height == before.Height)
             {
-                height = width * before.Height / before.Width;
+                height = WholeGeometryValue(width * before.Height / before.Width);
             }
             else if (height != before.Height && width == before.Width)
             {
-                width = height * before.Width / before.Height;
+                width = WholeGeometryValue(height * before.Width / before.Height);
             }
         }
 
@@ -7828,9 +8074,15 @@ public sealed partial class EditorViewModel : ViewModelBase
         return true;
     }
 
-    private static bool TryParse(string text, out double value) =>
-        double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value)
+    private static bool TryParseWhole(string text, out double value) =>
+        double.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out value)
         && double.IsFinite(value);
+
+    private static double WholeGeometryValue(double value)
+    {
+        var rounded = Math.Round(value, MidpointRounding.AwayFromZero);
+        return rounded == 0 ? 0 : rounded;
+    }
 
     private static double NormalizeAngle(double angle)
     {
@@ -7851,7 +8103,9 @@ public sealed partial class EditorViewModel : ViewModelBase
         SceneObject source, double x, double y, double width, double height, double rotation) =>
         new(
             source.Id, source.Kind, source.Name,
-            x, y, width, height, rotation,
+            WholeGeometryValue(x), WholeGeometryValue(y),
+            Math.Max(1, WholeGeometryValue(width)), Math.Max(1, WholeGeometryValue(height)),
+            WholeGeometryValue(rotation),
             source.FillColor, source.StrokeColor, source.StrokeWidth,
             source.Visible, source.Locked)
         {
@@ -7868,6 +8122,12 @@ public sealed partial class EditorViewModel : ViewModelBase
             OpaquePayload = source.OpaquePayload,
             ObjectOpacity = source.ObjectOpacity,
         };
+
+    private static SceneObject RoundObjectGeometry(SceneObject source) =>
+        WithGeometry(source, source.X, source.Y, source.Width, source.Height, source.RotationDegrees);
+
+    private static IReadOnlyList<SceneObject> RoundObjectGeometries(IEnumerable<SceneObject> source) =>
+        [.. source.Select(RoundObjectGeometry)];
 
     private static SceneObject CopyObject(
         SceneObject source, bool? visible = null, bool? locked = null,
@@ -8032,9 +8292,9 @@ public sealed partial class EditorViewModel : ViewModelBase
     // ----------------------------------------------------------------------- stamp: scale
 
     public double? StampRotationDegrees => IsEditingFutureStamp
-        ? _stampToolSettings.RotationDegrees
+        ? NormalizeUnsignedAngle(WholeGeometryValue(_stampToolSettings.RotationDegrees))
         : Session.SelectedObject is { Stamp: not null } selected
-            ? NormalizeUnsignedAngle(selected.RotationDegrees) : null;
+            ? NormalizeUnsignedAngle(WholeGeometryValue(selected.RotationDegrees)) : null;
 
     public int? StampSublayer => IsEditingFutureStamp
         ? _stampToolSettings.Sublayer
@@ -8052,7 +8312,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             return;
         }
 
-        var normalized = NormalizeUnsignedAngle(degrees);
+        var normalized = NormalizeUnsignedAngle(WholeGeometryValue(degrees));
         if (IsEditingFutureStamp)
         {
             UpdateStampToolSettings(settings => settings with { RotationDegrees = normalized }, commit);
@@ -8105,7 +8365,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         {
             if (IsEditingFutureStamp)
             {
-                return _stampToolSettings.ScalePercent;
+                return WholeGeometryValue(_stampToolSettings.ScalePercent);
             }
 
             if (Session.SelectedObject is not { Stamp: { } stamp } selected)
@@ -8114,7 +8374,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             }
 
             var reference = stamp.ReferenceWidth ?? selected.Width;
-            return reference <= 0 ? null : Math.Round(selected.Width / reference * 100, 1);
+            return reference <= 0 ? null : WholeGeometryValue(selected.Width / reference * 100);
         }
     }
 
@@ -8133,7 +8393,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             return;
         }
 
-        var bounded = Math.Clamp(percent, 10, 400);
+        var bounded = Math.Clamp(WholeGeometryValue(percent), 10, 400);
         if (IsEditingFutureStamp)
         {
             UpdateStampToolSettings(settings => settings with { ScalePercent = bounded }, commit);
@@ -8174,9 +8434,12 @@ public sealed partial class EditorViewModel : ViewModelBase
         if (width is { } w && (!double.IsFinite(w) || w <= 0)
             || height is { } h && (!double.IsFinite(h) || h <= 0))
         {
-            InspectorError = "Размер должен быть положительным числом.";
+            InspectorError = "Размер должен быть положительным целым числом.";
             return;
         }
+
+        width = width is { } wholeWidth ? WholeGeometryValue(wholeWidth) : null;
+        height = height is { } wholeHeight ? WholeGeometryValue(wholeHeight) : null;
 
         EditAppearance("Stamp size", commit: true, before =>
         {
@@ -9208,7 +9471,8 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public static TimeSpan PrimaryAutosaveDebounce { get; } = TimeSpan.FromSeconds(4);
 
-    public bool HasTransientEditorAction => PendingPlacement is not null
+    public bool HasTransientEditorAction => IsStampSeriesActive
+        || PendingPlacement is { Target: not PlacementTargetKind.Stamp }
         || DragPreview is not null
         || _stroke is not null
         || _vectorPoints is not null
@@ -9222,6 +9486,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// </summary>
     public async Task<bool> TryAutosaveAsync()
     {
+        if (HasTransientEditorAction) return false;
         if (!Session.IsDirty)
         {
             await ClearAutosaveIfCleanAsync().ConfigureAwait(false);

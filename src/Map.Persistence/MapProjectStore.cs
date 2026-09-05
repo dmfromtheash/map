@@ -11,7 +11,7 @@ using Map.Persistence.Recovery;
 namespace Map.Persistence;
 
 /// <summary>
-/// Reads and writes .mapproj v1. Save follows the docs/05 contract: serialize the immutable
+/// Reads and writes .mapproj. Save follows the docs/05 contract: serialize the immutable
 /// snapshot to a unique sibling temp, read the temp back and validate entries and checksums,
 /// flush, and only then replace the target atomically. A failure before the replace leaves the
 /// last correct version untouched and is reported as an exception, never as success.
@@ -21,24 +21,6 @@ public static partial class MapProjectStore
     // Large sparse scenes must spend the fixed JSON budget on data, not presentation whitespace.
     // The container is machine-owned and the reader accepts either representation.
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = false };
-
-    private readonly record struct PreparedContainer(
-        byte[] ManifestBytes,
-        byte[] SceneBytes,
-        byte[] AssetManifestBytes,
-        PreparedCheckpointPayload Checkpoints);
-
-    private readonly record struct PreparedCheckpointPayload(
-        IReadOnlyList<(string Name, byte[] Bytes)> Entries,
-        string? CatalogSha256,
-        long TotalBytes,
-        long AssetBytes,
-        long TileBytes,
-        long JsonBytes)
-    {
-        public static PreparedCheckpointPayload Empty { get; } = new(
-            [], null, 0, 0, 0, 0);
-    }
 
     /// <summary>
     /// Validates one proposed checkpoint against the exact bytes the persistence writer would
@@ -61,7 +43,9 @@ public static partial class MapProjectStore
                 nameof(checkpoint));
         }
 
-        PrepareCheckpointPayload(document.WithCheckpoints([.. document.Checkpoints, checkpoint]));
+        var candidate = document.WithCheckpoints([.. document.Checkpoints, checkpoint]);
+        var state = new ContainerWriteState();
+        _ = WriteCheckpoints(archive: null, candidate, state);
     }
 
     /// <summary>
@@ -187,8 +171,6 @@ public static partial class MapProjectStore
                 $"Preview exceeds the {MapProjectFormat.MaxPreviewBytes}-byte project budget.");
         }
 
-        var prepared = PrepareContainer(document, metadata, previewPng);
-
         var fullTarget = Path.GetFullPath(targetPath);
         var directory = Path.GetDirectoryName(fullTarget)
             ?? throw new ArgumentException("Target path has no directory.", nameof(targetPath));
@@ -213,7 +195,7 @@ public static partial class MapProjectStore
             using (var stream = new FileStream(
                        tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1 << 16, FileOptions.None))
             {
-                WriteContainer(stream, document, previewPng, prepared);
+                WriteContainer(stream, document, metadata, previewPng);
                 stream.Flush(flushToDisk: true);
             }
 
@@ -245,6 +227,10 @@ public static partial class MapProjectStore
                 journal.Advance(document.Id.Value, record, RecoveryState.Replaced);
                 journal.Clear(document.Id.Value);
             }
+        }
+        catch (MapProjectResourceLimitException)
+        {
+            throw;
         }
         catch (Exception ex) when (ex is not MapProjectSaveException)
         {
@@ -351,7 +337,10 @@ public static partial class MapProjectStore
     }
 
     private static long BaseContainerEntryCount(MapDocument document) => checked(
-        MapProjectFormat.RequiredEntries.Count + EnumerateTileEntries(document).LongCount());
+        MapProjectFormat.RequiredEntries.Count
+        + EnumerateTileEntries(document).LongCount()
+        + document.Layers.OfType<ObjectLayer>().Sum(layer =>
+            (long)Math.Ceiling(layer.Objects.Count / (double)MapProjectFormat.ObjectChunkTargetObjects)));
 
     private static long AssetEntryCount(IEnumerable<MapAssetReference> assets) => assets.Sum(
         static asset => (asset.EmbeddedContent is null ? 0L : 1L)
@@ -361,12 +350,13 @@ public static partial class MapProjectStore
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
-        var (manifest, scene, assetManifest, previewPng, tiles, assets, checkpoints) =
+        var (manifest, scene, objectStorages, assetManifest, previewPng, tiles, assets, checkpoints) =
             ReadAndValidate(Path.GetFullPath(path));
 
         return new OpenedProject
         {
-            Document = ToDomain(manifest, scene, assetManifest, tiles, assets, checkpoints),
+            Document = ToDomain(
+                manifest, scene, objectStorages, assetManifest, tiles, assets, checkpoints),
             AppVersion = manifest.AppVersion,
             ModifiedUtc = ParseTimestamp(manifest.ModifiedUtc, "modifiedUtc"),
             PreviewPng = previewPng,
@@ -375,14 +365,23 @@ public static partial class MapProjectStore
 
     // ---------------------------------------------------------------- write path
 
-    private static PreparedContainer PrepareContainer(
+    private static void WriteContainer(
+        Stream destination,
         MapDocument document,
         SaveMetadata metadata,
         byte[] previewPng)
     {
-        var checkpoints = PrepareCheckpointPayload(document);
-        var sceneBytes = JsonSerializer.SerializeToUtf8Bytes(ToSceneDto(document), JsonOptions);
-        var assetManifestBytes = JsonSerializer.SerializeToUtf8Bytes(ToAssetManifestDto(document), JsonOptions);
+        using var archive = new ZipArchive(destination, ZipArchiveMode.Create, leaveOpen: true);
+        var state = new ContainerWriteState();
+
+        // Object entries are written first. Their bounded descriptors make scene.json and the
+        // manifest possible without ever materializing a whole-scene DTO graph or UTF-8 buffer.
+        var objectChunks = WriteObjectChunks(archive, document, entryRoot: "", state);
+        var sceneBytes = SerializeJson(
+            ToSceneDto(document, objectChunks), MapProjectFormat.SceneEntry);
+        var assetManifestBytes = SerializeJson(
+            ToAssetManifestDto(document), MapProjectFormat.AssetManifestEntry);
+        var checkpointCatalogSha256 = WriteCheckpoints(archive, document, state);
 
         var manifest = new ManifestDto
         {
@@ -400,102 +399,69 @@ public static partial class MapProjectStore
             },
             SceneSha256 = Sha256Hex(sceneBytes),
             AssetManifestSha256 = Sha256Hex(assetManifestBytes),
-            CheckpointCatalogSha256 = checkpoints.CatalogSha256,
+            CheckpointCatalogSha256 = checkpointCatalogSha256,
         };
+        var manifestBytes = SerializeJson(manifest, MapProjectFormat.ManifestEntry);
 
-        var manifestBytes = JsonSerializer.SerializeToUtf8Bytes(manifest, JsonOptions);
-        foreach (var (name, bytes) in new[]
+        WriteBytesEntry(archive, MapProjectFormat.ManifestEntry, manifestBytes, state, json: true);
+        WriteBytesEntry(archive, MapProjectFormat.SceneEntry, sceneBytes, state, json: true);
+        WriteBytesEntry(archive, MapProjectFormat.AssetManifestEntry, assetManifestBytes, state, json: true);
+        WriteBytesEntry(archive, MapProjectFormat.PreviewEntry, previewPng, state);
+        foreach (var (name, bytes) in EnumerateTileEntries(document).OrderBy(p => p.Name, StringComparer.Ordinal))
         {
-            (MapProjectFormat.ManifestEntry, manifestBytes),
-            (MapProjectFormat.SceneEntry, sceneBytes),
-            (MapProjectFormat.AssetManifestEntry, assetManifestBytes),
-        })
-        {
-            if (bytes.LongLength > MapProjectFormat.MaxJsonEntryBytes)
-            {
-                throw new MapProjectResourceLimitException(
-                    $"{name} exceeds the {MapProjectFormat.MaxJsonEntryBytes}-byte JSON budget.");
-            }
-
-            MapProjectJsonBudget.Validate(bytes, name);
+            WriteBytesEntry(archive, name, bytes, state);
         }
-
-        var jsonBytes = checked(
-            manifestBytes.LongLength + sceneBytes.LongLength + assetManifestBytes.LongLength);
-        if (checked(jsonBytes + checkpoints.JsonBytes) > MapProjectFormat.MaxJsonPayloadBytes)
+        foreach (var (name, bytes) in EnumerateAssetEntries(document).OrderBy(p => p.Name, StringComparer.Ordinal))
         {
-            throw new MapProjectResourceLimitException(
-                $"Project JSON exceeds the {MapProjectFormat.MaxJsonPayloadBytes}-byte budget.");
+            WriteBytesEntry(archive, name, bytes, state);
         }
-
-        if (!TryValidateAssetEnvelope(
-                document,
-                document.Assets,
-                checked(jsonBytes + previewPng.LongLength + checkpoints.TotalBytes),
-                out var admissionFailure))
-        {
-            throw new MapProjectResourceLimitException(admissionFailure);
-        }
-
-        var mainAssetBytes = EnumerateAssetEntries(document).Aggregate(
-            0L, static (total, entry) => checked(total + entry.Bytes.LongLength));
-        if (checked(mainAssetBytes + checkpoints.AssetBytes) > MapProjectFormat.MaxAssetPayloadBytes)
-        {
-            throw new MapProjectResourceLimitException(
-                $"Ассеты карты и контрольных точек превышают общий лимит "
-                + $"{MapProjectFormat.MaxAssetPayloadBytes} байт.");
-        }
-
-        var mainTileBytes = EnumerateTileEntries(document).Aggregate(
-            0L, static (total, entry) => checked(total + entry.Bytes.LongLength));
-        if (checked(mainTileBytes + checkpoints.TileBytes) > MapProjectFormat.MaxTilePayloadBytes)
-        {
-            throw new MapProjectResourceLimitException(
-                $"Тайлы карты и контрольных точек превышают общий лимит "
-                + $"{MapProjectFormat.MaxTilePayloadBytes} байт.");
-        }
-
-        var entryCount = checked(
-            BaseContainerEntryCount(document) + AssetEntryCount(document.Assets) + checkpoints.Entries.Count);
-        if (entryCount > MapProjectFormat.MaxEntries)
-        {
-            throw new MapProjectResourceLimitException(
-                $"Проект содержит больше {MapProjectFormat.MaxEntries} файлов контейнера.");
-        }
-
-        return new PreparedContainer(manifestBytes, sceneBytes, assetManifestBytes, checkpoints);
     }
 
-    private static PreparedCheckpointPayload PrepareCheckpointPayload(MapDocument document)
+    private static string? WriteCheckpoints(
+        ZipArchive? archive,
+        MapDocument document,
+        ContainerWriteState state)
     {
         if (document.Checkpoints.Count == 0)
         {
-            return PreparedCheckpointPayload.Empty;
+            return null;
         }
-
         if (document.Checkpoints.Count > MapCheckpointLimits.MaxCount)
         {
             throw new MapProjectResourceLimitException(
                 $"Достигнут лимит: не больше {MapCheckpointLimits.MaxCount} контрольных точек.");
         }
 
-        var entries = new List<(string Name, byte[] Bytes)>();
         var catalog = new CheckpointCatalogDto();
-        long assetBytes = 0;
-        long tileBytes = 0;
-        long jsonBytes = 0;
-
         foreach (var checkpoint in document.Checkpoints)
         {
             var root = CheckpointRoot(checkpoint.Id);
             var snapshot = checkpoint.Snapshot.Materialize(document.Id);
-            var sceneBytes = JsonSerializer.SerializeToUtf8Bytes(ToSceneDto(snapshot), JsonOptions);
-            var assetManifestBytes = JsonSerializer.SerializeToUtf8Bytes(
-                ToAssetManifestDto(snapshot, root), JsonOptions);
+            var objectChunks = WriteObjectChunks(archive, snapshot, root, state);
+            var sceneEntry = root + "scene.json";
+            var assetManifestEntry = root + "asset-manifest.json";
+            var snapshotManifestEntry = root + "manifest.json";
+            var previewEntry = root + "preview.png";
+            var sceneBytes = SerializeJson(ToSceneDto(snapshot, objectChunks), sceneEntry);
+            var assetManifestBytes = SerializeJson(ToAssetManifestDto(snapshot, root), assetManifestEntry);
             var previewBytes = checkpoint.PreviewPng.ToArray();
+
+            if (previewBytes.LongLength > MapProjectFormat.MaxCheckpointPreviewBytes)
+            {
+                throw new MapProjectResourceLimitException(
+                    $"Preview контрольной точки «{checkpoint.Name}» превышает "
+                    + $"{MapProjectFormat.MaxCheckpointPreviewBytes} байт.");
+            }
+            ValidatePngHeader(
+                previewBytes,
+                previewEntry,
+                MapProjectFormat.MaxCheckpointPreviewWidth,
+                MapProjectFormat.MaxCheckpointPreviewHeight,
+                (long)MapProjectFormat.MaxCheckpointPreviewWidth * MapProjectFormat.MaxCheckpointPreviewHeight);
 
             var snapshotManifest = new CheckpointSnapshotManifestDto
             {
+                SchemaVersion = MapProjectFormat.SchemaVersion,
                 DocumentId = document.Id.ToString(),
                 Title = snapshot.Title,
                 CreatedUtc = FormatTimestamp(snapshot.CreatedUtc),
@@ -510,43 +476,19 @@ public static partial class MapProjectStore
                 AssetManifestSha256 = Sha256Hex(assetManifestBytes),
                 PreviewSha256 = Sha256Hex(previewBytes),
             };
-            var snapshotManifestBytes = JsonSerializer.SerializeToUtf8Bytes(snapshotManifest, JsonOptions);
+            var snapshotManifestBytes = SerializeJson(snapshotManifest, snapshotManifestEntry);
 
-            foreach (var (name, bytes) in new[]
+            WriteBytesEntry(archive, snapshotManifestEntry, snapshotManifestBytes, state, json: true);
+            WriteBytesEntry(archive, sceneEntry, sceneBytes, state, json: true);
+            WriteBytesEntry(archive, assetManifestEntry, assetManifestBytes, state, json: true);
+            WriteBytesEntry(archive, previewEntry, previewBytes, state);
+            foreach (var (name, bytes) in EnumerateTileEntries(snapshot, root).OrderBy(p => p.Name, StringComparer.Ordinal))
             {
-                (root + "manifest.json", snapshotManifestBytes),
-                (root + "scene.json", sceneBytes),
-                (root + "asset-manifest.json", assetManifestBytes),
-            })
-            {
-                ValidateJsonPayload(name, bytes);
-                jsonBytes = checked(jsonBytes + bytes.LongLength);
-                entries.Add((name, bytes));
+                WriteBytesEntry(archive, name, bytes, state);
             }
-
-            if (previewBytes.LongLength > MapProjectFormat.MaxCheckpointPreviewBytes)
+            foreach (var (name, bytes) in EnumerateAssetEntries(snapshot, root).OrderBy(p => p.Name, StringComparer.Ordinal))
             {
-                throw new MapProjectResourceLimitException(
-                    $"Preview контрольной точки «{checkpoint.Name}» превышает "
-                    + $"{MapProjectFormat.MaxCheckpointPreviewBytes} байт.");
-            }
-            ValidatePngHeader(
-                previewBytes,
-                root + "preview.png",
-                MapProjectFormat.MaxCheckpointPreviewWidth,
-                MapProjectFormat.MaxCheckpointPreviewHeight,
-                (long)MapProjectFormat.MaxCheckpointPreviewWidth * MapProjectFormat.MaxCheckpointPreviewHeight);
-            entries.Add((root + "preview.png", previewBytes));
-
-            foreach (var entry in EnumerateTileEntries(snapshot, root))
-            {
-                tileBytes = checked(tileBytes + entry.Bytes.LongLength);
-                entries.Add(entry);
-            }
-            foreach (var entry in EnumerateAssetEntries(snapshot, root))
-            {
-                assetBytes = checked(assetBytes + entry.Bytes.LongLength);
-                entries.Add(entry);
+                WriteBytesEntry(archive, name, bytes, state);
             }
 
             catalog.Checkpoints.Add(new CheckpointEntryDto
@@ -558,27 +500,15 @@ public static partial class MapProjectStore
             });
         }
 
-        var catalogBytes = JsonSerializer.SerializeToUtf8Bytes(catalog, JsonOptions);
-        ValidateJsonPayload(MapProjectFormat.CheckpointCatalogEntry, catalogBytes);
-        jsonBytes = checked(jsonBytes + catalogBytes.LongLength);
-        entries.Add((MapProjectFormat.CheckpointCatalogEntry, catalogBytes));
-
-        var totalBytes = entries.Aggregate(
-            0L, static (total, entry) => checked(total + entry.Bytes.LongLength));
-        if (totalBytes > MapCheckpointLimits.MaxTotalStoredBytes)
+        var catalogBytes = SerializeJson(catalog, MapProjectFormat.CheckpointCatalogEntry);
+        WriteBytesEntry(archive, MapProjectFormat.CheckpointCatalogEntry, catalogBytes, state, json: true);
+        if (state.CheckpointBytes > MapCheckpointLimits.MaxTotalStoredBytes)
         {
             throw new MapProjectResourceLimitException(
-                $"Контрольные точки занимают {totalBytes} байт — больше лимита "
+                $"Контрольные точки занимают {state.CheckpointBytes} байт — больше лимита "
                 + $"{MapCheckpointLimits.MaxTotalStoredBytes} байт. Старые точки не удалены.");
         }
-
-        return new PreparedCheckpointPayload(
-            entries,
-            Sha256Hex(catalogBytes),
-            totalBytes,
-            assetBytes,
-            tileBytes,
-            jsonBytes);
+        return Sha256Hex(catalogBytes);
     }
 
     private static void ValidateJsonPayload(string name, byte[] bytes)
@@ -586,36 +516,11 @@ public static partial class MapProjectStore
         if (bytes.LongLength > MapProjectFormat.MaxJsonEntryBytes)
         {
             throw new MapProjectResourceLimitException(
-                $"{name} exceeds the {MapProjectFormat.MaxJsonEntryBytes}-byte JSON budget.");
+                $"{name} is {bytes.LongLength} bytes and exceeds the "
+                + $"{MapProjectFormat.MaxJsonEntryBytes}-byte JSON budget.");
         }
 
         MapProjectJsonBudget.Validate(bytes, name);
-    }
-
-    private static void WriteContainer(
-        Stream destination,
-        MapDocument document,
-        byte[] previewPng,
-        PreparedContainer prepared)
-    {
-
-        using var archive = new ZipArchive(destination, ZipArchiveMode.Create, leaveOpen: true);
-        WriteEntry(archive, MapProjectFormat.ManifestEntry, prepared.ManifestBytes);
-        WriteEntry(archive, MapProjectFormat.SceneEntry, prepared.SceneBytes);
-        WriteEntry(archive, MapProjectFormat.AssetManifestEntry, prepared.AssetManifestBytes);
-        WriteEntry(archive, MapProjectFormat.PreviewEntry, previewPng);
-        foreach (var (name, bytes) in EnumerateTileEntries(document).OrderBy(p => p.Name, StringComparer.Ordinal))
-        {
-            WriteEntry(archive, name, bytes);
-        }
-        foreach (var (name, bytes) in EnumerateAssetEntries(document).OrderBy(p => p.Name, StringComparer.Ordinal))
-        {
-            WriteEntry(archive, name, bytes);
-        }
-        foreach (var (name, bytes) in prepared.Checkpoints.Entries.OrderBy(p => p.Name, StringComparer.Ordinal))
-        {
-            WriteEntry(archive, name, bytes);
-        }
     }
 
     private static void WriteEntry(ZipArchive archive, string name, byte[] data)
@@ -628,13 +533,15 @@ public static partial class MapProjectStore
 
     /// <summary>
     /// Runs the temp through the full read path and confirms it holds the snapshot that was asked
-    /// for. Identity and shape are enough here: content equality is already guaranteed by the
-    /// checksums the read path verifies.
+    /// for. Object payloads are compared in canonical persisted form so a count-only read-back can
+    /// never hide reordering, an id change, or a semantic conversion defect.
     /// </summary>
     private static void ValidateReadBack(string tempPath, MapDocument expected)
     {
-        var (manifest, scene, assetManifest, _, tiles, assets, checkpoints) = ReadAndValidate(tempPath);
-        var reloaded = ToDomain(manifest, scene, assetManifest, tiles, assets, checkpoints);
+        var (manifest, scene, objectStorages, assetManifest, _, tiles, assets, checkpoints) =
+            ReadAndValidate(tempPath);
+        var reloaded = ToDomain(
+            manifest, scene, objectStorages, assetManifest, tiles, assets, checkpoints);
 
         if (reloaded.Id != expected.Id)
         {
@@ -643,8 +550,10 @@ public static partial class MapProjectStore
 
         if (reloaded.Layers.Count != expected.Layers.Count
             || reloaded.Layers.Zip(expected.Layers).Any(p =>
-                p.First.GetType() != p.Second.GetType()
+                p.First.Id != p.Second.Id
+                || p.First.GetType() != p.Second.GetType()
                 || ObjectCount(p.First) != ObjectCount(p.Second)
+                || !ObjectSequencesMatch(p.First, p.Second)
                 || TileCount(p.First) != TileCount(p.Second)
                 || (p.First.Mask?.Tiles.TileCount ?? 0) != (p.Second.Mask?.Tiles.TileCount ?? 0))
             || reloaded.Assets.Count != expected.Assets.Count
@@ -657,6 +566,8 @@ public static partial class MapProjectStore
                 || pair.First.CreatedUtc != pair.Second.CreatedUtc
                 || (pair.First.Snapshot.StampForeground?.Tiles.TileCount ?? -1)
                     != (pair.Second.Snapshot.StampForeground?.Tiles.TileCount ?? -1)
+                || !ObjectSequencesMatch(
+                    pair.First.Snapshot.Layers, pair.Second.Snapshot.Layers)
                 || !pair.First.PreviewPng.Span.SequenceEqual(pair.Second.PreviewPng.Span)))
         {
             throw new MapProjectCorruptedException("Read-back layer/object shape does not match the saved snapshot.");
@@ -668,6 +579,7 @@ public static partial class MapProjectStore
     private static (
         ManifestDto Manifest,
         SceneDto Scene,
+        IReadOnlyDictionary<string, SceneObjectList> ObjectStorages,
         AssetManifestDto AssetManifest,
         byte[] PreviewPng,
         IReadOnlyDictionary<string, byte[]> Tiles,
@@ -735,9 +647,13 @@ public static partial class MapProjectStore
             }
 
             var scene = ParseJson<SceneDto>(sceneBytes, MapProjectFormat.SceneEntry);
-            if (expectedSchemaVersion == MapProjectFormat.SchemaVersion)
+            if (expectedSchemaVersion is >= 2 and <= 3)
             {
                 ValidateV2SceneShape(sceneBytes, MapProjectFormat.SceneEntry);
+            }
+            else if (expectedSchemaVersion == MapProjectFormat.SchemaVersion)
+            {
+                ValidateV4SceneShape(sceneBytes, MapProjectFormat.SceneEntry);
             }
             if (!string.Equals(scene.DocumentId, manifest.DocumentId, StringComparison.OrdinalIgnoreCase))
             {
@@ -747,22 +663,27 @@ public static partial class MapProjectStore
 
             var assetManifest = ParseJson<AssetManifestDto>(
                 assetManifestBytes, MapProjectFormat.AssetManifestEntry);
-            if (expectedSchemaVersion == MapProjectFormat.SchemaVersion)
+            if (expectedSchemaVersion >= 2)
             {
                 ValidateRequiredArray(
                     assetManifestBytes, MapProjectFormat.AssetManifestEntry, "assets");
             }
 
+            var objectStorages = expectedSchemaVersion == MapProjectFormat.SchemaVersion
+                ? ReadAndValidateObjectChunks(archive, scene, entryRoot: "", allowUnknownObjectKinds)
+                : new Dictionary<string, SceneObjectList>(StringComparer.Ordinal);
             var tiles = ReadAndValidateTiles(archive, scene);
             var assets = ReadAndValidateAssets(archive, assetManifest);
             var checkpoints = ReadAndValidateCheckpoints(
                 archive,
                 manifest,
                 allowLegacyLayerTypes: expectedSchemaVersion == MapProjectFormat.LegacySchemaVersion,
-                allowUnknownObjectKinds);
+                allowUnknownObjectKinds,
+                expectedSchemaVersion);
             return (
                 manifest,
                 scene,
+                objectStorages,
                 assetManifest,
                 ReadEntry(archive, MapProjectFormat.PreviewEntry),
                 tiles,
@@ -1142,7 +1063,8 @@ public static partial class MapProjectStore
         ZipArchive archive,
         ManifestDto mainManifest,
         bool allowLegacyLayerTypes,
-        bool allowUnknownObjectKinds)
+        bool allowUnknownObjectKinds,
+        int schemaVersion)
     {
         var checkpointArchiveEntries = archive.Entries
             .Where(entry => entry.FullName.StartsWith(
@@ -1259,6 +1181,12 @@ public static partial class MapProjectStore
 
                 var snapshotManifest = ParseJson<CheckpointSnapshotManifestDto>(
                     snapshotManifestBytes, snapshotManifestEntry);
+                if (schemaVersion == MapProjectFormat.SchemaVersion
+                    && snapshotManifest.SchemaVersion != MapProjectFormat.SchemaVersion)
+                {
+                    throw new MapProjectCorruptedException(
+                        $"Checkpoint {id} snapshot manifest does not declare schema v4.");
+                }
                 if (snapshotManifest.Canvas is null)
                 {
                     throw new MapProjectCorruptedException(
@@ -1280,9 +1208,13 @@ public static partial class MapProjectStore
                         $"Checkpoint {id} scene does not match its checksum.");
                 }
                 var scene = ParseJson<SceneDto>(sceneBytes, sceneEntry);
-                if (!allowLegacyLayerTypes)
+                if (schemaVersion is >= 2 and <= 3)
                 {
                     ValidateV2SceneShape(sceneBytes, sceneEntry);
+                }
+                else if (schemaVersion == MapProjectFormat.SchemaVersion)
+                {
+                    ValidateV4SceneShape(sceneBytes, sceneEntry);
                 }
                 if (!string.Equals(scene.DocumentId, snapshotManifest.DocumentId,
                         StringComparison.OrdinalIgnoreCase))
@@ -1323,6 +1255,9 @@ public static partial class MapProjectStore
                     (long)MapProjectFormat.MaxCheckpointPreviewWidth
                         * MapProjectFormat.MaxCheckpointPreviewHeight);
 
+                var objectStorages = schemaVersion == MapProjectFormat.SchemaVersion
+                    ? ReadAndValidateObjectChunks(archive, scene, root, allowUnknownObjectKinds)
+                    : new Dictionary<string, SceneObjectList>(StringComparer.Ordinal);
                 var tiles = ReadAndValidateTiles(archive, scene, root);
                 var assets = ReadAndValidateAssets(archive, assetManifest, root);
                 var domainManifest = new ManifestDto
@@ -1333,7 +1268,7 @@ public static partial class MapProjectStore
                     Canvas = snapshotManifest.Canvas,
                 };
                 var snapshotDocument = ToDomain(
-                    domainManifest, scene, assetManifest, tiles, assets,
+                    domainManifest, scene, objectStorages, assetManifest, tiles, assets,
                     checkpoints: null,
                     entryRoot: root,
                     allowLegacyLayerTypes,
@@ -1364,7 +1299,8 @@ public static partial class MapProjectStore
             var isExpectedPayload = roots.Any(root =>
                 entry.FullName.StartsWith(root + MapProjectFormat.RasterPrefix, StringComparison.Ordinal)
                 || entry.FullName.StartsWith(root + MapProjectFormat.MaskPrefix, StringComparison.Ordinal)
-                || entry.FullName.StartsWith(root + MapProjectFormat.AssetPrefix, StringComparison.Ordinal));
+                || entry.FullName.StartsWith(root + MapProjectFormat.AssetPrefix, StringComparison.Ordinal)
+                || entry.FullName.StartsWith(root + MapProjectFormat.ObjectPrefix, StringComparison.Ordinal));
             if (!isExpectedPayload)
             {
                 throw new MapProjectCorruptedException(
@@ -1458,6 +1394,120 @@ public static partial class MapProjectStore
         }
     }
 
+    private static void ValidateV4SceneShape(byte[] bytes, string entryName)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(bytes);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty("layers", out var layers)
+                || layers.ValueKind != JsonValueKind.Array
+                || !root.TryGetProperty("notes", out var notes)
+                || notes.ValueKind != JsonValueKind.Array)
+            {
+                throw new MapProjectCorruptedException(
+                    $"schema v4 {entryName} requires explicit layers and notes arrays.");
+            }
+
+            foreach (var layer in layers.EnumerateArray())
+            {
+                if (layer.ValueKind != JsonValueKind.Object
+                    || !layer.TryGetProperty("type", out var type)
+                    || type.ValueKind != JsonValueKind.String
+                    || layer.TryGetProperty("objects", out _))
+                {
+                    throw new MapProjectCorruptedException(
+                        $"schema v4 {entryName} requires every layer type and forbids object arrays.");
+                }
+
+                var typeName = type.GetString();
+                var hasChunks = layer.TryGetProperty("objectChunks", out var chunks);
+                if (typeName == "Object"
+                    ? !hasChunks || chunks.ValueKind != JsonValueKind.Array
+                    : hasChunks)
+                {
+                    throw new MapProjectCorruptedException(
+                        $"schema v4 {entryName} has invalid object-chunk metadata on {typeName} layer.");
+                }
+
+                var required = typeName switch
+                {
+                    "Brush" or "Land" => "tiles",
+                    "Grid" => "grids",
+                    _ => null,
+                };
+                if (required is not null
+                    && (!layer.TryGetProperty(required, out var collection)
+                        || collection.ValueKind != JsonValueKind.Array))
+                {
+                    throw new MapProjectCorruptedException(
+                        $"schema v4 {entryName} requires an explicit {required} array on {typeName} layers.");
+                }
+
+                if (layer.TryGetProperty("mask", out var mask)
+                    && mask.ValueKind != JsonValueKind.Null
+                    && (mask.ValueKind != JsonValueKind.Object
+                        || !mask.TryGetProperty("tiles", out var maskTiles)
+                        || maskTiles.ValueKind != JsonValueKind.Array))
+                {
+                    throw new MapProjectCorruptedException(
+                        $"schema v4 {entryName} requires an explicit mask tiles array.");
+                }
+            }
+        }
+        catch (JsonException ex)
+        {
+            throw new MapProjectCorruptedException($"{entryName} is not valid JSON.", ex);
+        }
+    }
+
+    private static bool ObjectSequencesMatch(
+        IReadOnlyList<MapLayer> first,
+        IReadOnlyList<MapLayer> second) =>
+        first.Count == second.Count
+        && first.Zip(second).All(pair =>
+            pair.First.Id == pair.Second.Id && ObjectSequencesMatch(pair.First, pair.Second));
+
+    private static bool ObjectSequencesMatch(MapLayer first, MapLayer second)
+    {
+        if (first is not ObjectLayer firstObjects || second is not ObjectLayer secondObjects)
+        {
+            return first is not ObjectLayer && second is not ObjectLayer;
+        }
+
+        if (firstObjects.Objects.Count != secondObjects.Objects.Count)
+        {
+            return false;
+        }
+
+        for (var index = 0; index < firstObjects.Objects.Count; index++)
+        {
+            var expected = firstObjects.Objects[index];
+            var actual = secondObjects.Objects[index];
+            if (expected.Id != actual.Id
+                || !JsonSerializer.SerializeToUtf8Bytes(ToObjectDto(expected), JsonOptions).AsSpan()
+                    .SequenceEqual(JsonSerializer.SerializeToUtf8Bytes(ToObjectDto(actual), JsonOptions)))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool ObjectIdentitySequencesMatch(MapLayer first, MapLayer second)
+    {
+        if (first is not ObjectLayer firstObjects || second is not ObjectLayer secondObjects)
+        {
+            return first is not ObjectLayer && second is not ObjectLayer;
+        }
+
+        return firstObjects.Objects.Count == secondObjects.Objects.Count
+            && firstObjects.Objects.Select(item => item.Id)
+                .SequenceEqual(secondObjects.Objects.Select(item => item.Id));
+    }
+
     private static void ValidateCompositionCollections(JsonElement objects, string entryName)
     {
         foreach (var item in objects.EnumerateArray())
@@ -1514,17 +1564,21 @@ public static partial class MapProjectStore
         })],
     };
 
-    private static SceneDto ToSceneDto(MapDocument document) => new()
+    private static SceneDto ToSceneDto(
+        MapDocument document,
+        IReadOnlyDictionary<string, IReadOnlyList<ObjectChunkDescriptorDto>> objectChunks) => new()
     {
         DocumentId = document.Id.ToString(),
-        Layers = [.. document.Layers.Select(ToLayerDto)],
+        Layers = [.. document.Layers.Select(layer => ToLayerDto(layer, objectChunks))],
         Notes = [.. document.Notes.Select(ToNoteDto)],
         StampForeground = document.StampForeground is { } foreground
             ? new StampForegroundDto { Tiles = ToTileDtos(foreground.Tiles) }
             : null,
     };
 
-    private static LayerDto ToLayerDto(MapLayer layer)
+    private static LayerDto ToLayerDto(
+        MapLayer layer,
+        IReadOnlyDictionary<string, IReadOnlyList<ObjectChunkDescriptorDto>> objectChunks)
     {
         var dto = new LayerDto
         {
@@ -1545,9 +1599,10 @@ public static partial class MapProjectStore
             Opacity = layer.Opacity,
             Blend = layer.Blend,
             Color = (layer as BaseColorLayer)?.Color,
-            Objects = layer is ObjectLayer objectLayer
-                ? [.. objectLayer.Objects.Select(ToObjectDto)]
-                : [],
+            Objects = null,
+            ObjectChunks = layer is ObjectLayer
+                ? [.. objectChunks[layer.Id.ToString()]]
+                : null,
             Tiles = layer is IRasterContentLayer raster
                 ? ToTileDtos(raster.ContentTiles)
                 : null,
@@ -1728,6 +1783,7 @@ public static partial class MapProjectStore
     private static MapDocument ToDomain(
         ManifestDto manifest,
         SceneDto scene,
+        IReadOnlyDictionary<string, SceneObjectList> objectStorages,
         AssetManifestDto assetManifest,
         IReadOnlyDictionary<string, byte[]> tileEntries,
         IReadOnlyDictionary<string, byte[]> assetEntries,
@@ -1768,7 +1824,7 @@ public static partial class MapProjectStore
             }
 
             var layers = scene.Layers.Select(layer => ToLayer(
-                layer, tileEntries, entryRoot, allowUnknownObjectKinds)).ToList();
+                layer, objectStorages, tileEntries, entryRoot, allowUnknownObjectKinds)).ToList();
             if (legacyStage2)
             {
                 layers.Insert(0, new BaseColorLayer(
@@ -1810,6 +1866,7 @@ public static partial class MapProjectStore
 
     private static MapLayer ToLayer(
         LayerDto layer,
+        IReadOnlyDictionary<string, SceneObjectList> objectStorages,
         IReadOnlyDictionary<string, byte[]> tileEntries,
         string entryRoot,
         bool allowUnknownObjectKinds)
@@ -1826,7 +1883,14 @@ public static partial class MapProjectStore
         {
             null or "Object" => new ObjectLayer(
                 id, name, layer.Visible, layer.Locked, layer.Opacity,
-                [.. layer.Objects.Select(item => ToObject(item, allowUnknownObjectKinds))], mask)
+                objectStorages.TryGetValue(id.ToString(), out var chunkedObjects)
+                    ? chunkedObjects
+                    : layer.Objects is not null
+                        ? SceneObjectList.From(
+                            [.. layer.Objects.Select(item => ToObject(item, allowUnknownObjectKinds))])
+                        : throw new MapProjectCorruptedException(
+                            $"Object layer {id} has neither legacy objects nor v4 chunks."),
+                mask)
             {
                 Effects = ToLayerEffects(layer.Effects),
                 SublayerStates = ToSublayerStates(layer.Sublayers),
@@ -2189,14 +2253,14 @@ public static partial class MapProjectStore
     };
 
     private static bool HasInvalidLayerDto(LayerDto? layer) => layer is null
-        || layer.Objects is null
         || layer.Tiles?.Any(static tile => tile is null) == true
         || layer.Mask is { Tiles: null }
         || layer.Mask?.Tiles.Any(static tile => tile is null) == true
         || layer.Grids is null && layer.Type == "Grid"
         || layer.Grids?.Any(static grid => grid is null) == true
         || layer.Filter is null && layer.Type == "Filter"
-        || layer.Objects.Any(HasInvalidVectorDto);
+        || layer.Objects?.Any(HasInvalidVectorDto) == true
+        || layer.ObjectChunks?.Any(static chunk => chunk is null) == true;
 
     private static bool HasInvalidVectorDto(SceneObjectDto? item)
     {

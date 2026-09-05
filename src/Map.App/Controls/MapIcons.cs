@@ -8,8 +8,8 @@ using Avalonia.Media;
 namespace Map.App.Controls;
 
 /// <summary>
-/// Semantic icon tokens for Map. Approved primary commands resolve to the owner's supplied
-/// blue-watercolour PNG illustrations; compact secondary actions fall back to the existing native
+/// Semantic icon tokens for Map. Large primary commands resolve to the generated Blue Atlas
+/// PNG artwork; compact secondary actions use the existing native
 /// path glyphs. No emoji or font symbols are used as working controls.
 /// </summary>
 public static class MapIcons
@@ -21,7 +21,7 @@ public static class MapIcons
     public const string Text = "M5 6 H19 M12 6 V19";
     public const string Brush = "M17 3.5 L20.5 7 L12 15.5 L7.5 17 L9 12.5 Z M4 20.5 C 6.5 20.5, 7.5 19, 7.5 16.5";
     // A trailing no-op space keeps the tool token distinct from the layer-visibility token. The
-    // approved boards intentionally use different eye illustrations for those two meanings.
+    // tool uses a shield illustration while visibility keeps the native eye glyph.
     public const string Mask = Eye + " ";
     public const string Land = "M16.5 3.5 L20.5 7.5 L13 15 L8.5 16.5 L10 12 Z " +
                                "M2.5 18 C5.5 16.2 8.5 16.8 11.5 18.2 C14.5 19.6 17.5 19.6 21.5 17.5 " +
@@ -171,12 +171,12 @@ public static class MapIcons
     };
 
     /// <summary>
-    /// Uses the owner's approved blue-theme illustration when one exists; otherwise falls back to
-    /// the compact path glyph for secondary controls which were not part of the approved boards.
+    /// Large tool icons use dimensional artwork; small controls and explicitly coloured glyphs
+    /// use a crisp path that follows the foreground of their current native state.
     /// </summary>
     public static Control Stroked(string data, double size = 18, IBrush? brush = null)
     {
-        if (ApprovedArtwork.TryCreateIcon(data, size, out var approved))
+        if (brush is null && ApprovedArtwork.TryCreateIcon(data, size, out var approved))
         {
             return approved;
         }

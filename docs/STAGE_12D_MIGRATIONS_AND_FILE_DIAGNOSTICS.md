@@ -33,7 +33,7 @@
 7. получить короткое объяснение: что произошло, изменён ли исходный файл и что безопасно сделать
    дальше;
 8. не потерять единственную существующую копию ни при cancel, ни при I/O failure, ни при сбое
-   между записью и публикацией migrated copy.
+   между записью и окончательной фиксацией migrated copy.
 
 Stage 12D считается завершённым только при рабочем пользовательском пути. Одних новых exception,
 DTO или unit tests без реального Dashboard/open/migrate UX недостаточно.
@@ -52,7 +52,8 @@ DTO или unit tests без реального Dashboard/open/migrate UX нед
 - HEAD: `d780efe2afd7b0123569f60bc85c3392de7d8370`;
 - последний принятый продуктовый ряд: Stage 12C → Stage 13A → 13B → 13C → 13D → узкий
   test-fix Stage 13;
-- следующий не начатый функциональный этап: Stage 12D.
+- на момент подготовки этого исторического контракта Stage 12D ещё не был начат; сейчас он
+  реализован, а актуальный статус находится в `docs/STATE_HANDOFF.md`.
 
 Перед любыми изменениями заново докажи:
 
@@ -106,7 +107,7 @@ production-код сохрани, конфликт точно опиши.
 - PR, issue, comment, close/reopen;
 - GitHub Projects;
 - auth/scope/token changes;
-- tag, release, публикация;
+- tag;
 - любые repository network actions.
 
 Наличие `origin` не является разрешением его трогать.
@@ -430,7 +431,7 @@ Migration должна:
 
 Раздели два разных контракта, не создавая второй источник истины рядом с `MapDocument`:
 
-1. **Произвольные unknown fields v1:** сохрани их в опубликованной migration-copy в том же JSON
+1. **Произвольные unknown fields v1:** сохрани их в созданной migration-copy в том же JSON
    object либо в документированной v2 extension envelope со stable owner ID. Это гарантия
    `source v1 → migrated v2`; она не требует тащить произвольный persistence-sidecar через каждую
    следующую пользовательскую правку. Известные v2 fields всегда имеют приоритет. Если поле нельзя
@@ -456,7 +457,7 @@ Migration должна:
 
 ---
 
-## 9. Безопасная публикация migrated copy
+## 9. Безопасная фиксация migrated copy
 
 Пользователь выбирает новый destination. Предложенное имя:
 
@@ -476,9 +477,9 @@ Migration должна:
 8. полный read-back через current-v2 reader;
 9. проверить document identity и полную семантическую сохранность, а не только counts;
 10. flush temp to disk;
-11. опубликовать только `File.Move(temp, destination, overwrite: false)` или эквивалентным
-    create-new атомарным шагом;
-12. ещё раз открыть опубликованный destination;
+11. зафиксировать только через `File.Move(temp, destination, overwrite: false)` или эквивалентный
+    create-new атомарный шаг;
+12. ещё раз открыть созданный destination;
 13. только после успеха открыть копию в Editor и добавить destination в Recent;
 14. source bytes, size, last-write timestamp и openability должны остаться прежними.
 
@@ -492,7 +493,7 @@ Migration должна:
 - owned temp удаляется bounded best effort только после проверки, что это exact созданный этим
   вызовом temp;
 - если temp нельзя удалить, UI/diagnostic сообщает безопасное имя temp без автоматической
-  публикации;
+  автоматического завершения;
 - результат не добавляется в Recent и не считается открытым/сохранённым.
 
 Cancel до или после выбора destination не создаёт ничего.
@@ -645,8 +646,8 @@ Stage 12D. Здесь нужна диагностика именно откры�
 7. destination same as source rejected before write;
 8. existing destination untouched;
 9. cancel/no destination creates no file/temp;
-10. injected failure before publish leaves source/destination intact and no false success;
-11. published copy passes full read-back and reopens;
+10. injected failure before final move leaves source/destination intact and no false success;
+11. created copy passes full read-back and reopens;
 12. registry rejects gaps/duplicates/reverse steps;
 13. absent/zero/negative/non-integer schema is malformed, not migration-required;
 14. future v3+ is unsupported and untouched;
@@ -654,7 +655,7 @@ Stage 12D. Здесь нужна диагностика именно откры�
 16. missing entry/checksum/malformed JSON/semantic mismatch classified corrupted;
 17. corrupt tile keeps typed layer/coordinate detail;
 18. each existing resource-limit family remains resource-limit and untouched;
-19. unknown fields сохраняются в опубликованной v2 migration-copy в documented safe form;
+19. unknown fields сохраняются в созданной v2 migration-copy в documented safe form;
 20. unknown object становится видимым placeholder, а exact bounded raw payload переживает
     migration → open → normal save/autosave/checkpoint → reopen;
 21. oversized unknown payload is rejected by resource budget, not allocated without bound;
@@ -670,7 +671,7 @@ Stage 12D. Здесь нужна диагностика именно откры�
 3. cancel leaves Dashboard usable and does not touch Recent;
 4. successful migrated copy opens Editor clean on destination and touches only destination Recent;
 5. same/existing destination produces actionable error without overwrite;
-6. duplicate click cannot publish twice;
+6. duplicate click cannot create the destination twice;
 7. corrupted/resource-limit/unsupported/not-found/access-denied/I/O messages differ;
 8. not-found removes Recent, access denied/locked does not;
 9. logs contain stable codes but no absolute path/title/raw exception text;
@@ -682,8 +683,8 @@ Stage 12D. Здесь нужна диагностика именно откры�
 точных boundaries:
 
 - after temp write, before read-back;
-- after read-back/flush, before publish;
-- destination appears between preflight and create-new publish.
+- after read-back/flush, before final move;
+- destination appears between preflight and create-new final move.
 
 Не создавай отдельный большой process-kill suite: source уже никогда не заменяется, а один
 адресный fault test достаточно доказывает Stage 12D boundary. Существующий Stage 2 kill gate не
@@ -762,8 +763,6 @@ dotnet run --project .\tools\Map.Performance\Map.Performance.csproj -c Release -
 Не запускай без отдельного нового запроса:
 
 - full suite;
-- VM/clean Windows/другой ПК;
-- packaging/installer/updater/portable/self-contained;
 - benchmark/performance matrix Stage 13;
 - coverage/mutation/security scan/SBOM;
 - DPI/accessibility matrix;
@@ -910,7 +909,7 @@ Stage 12D завершён только если одновременно:
 - branch и commit.
 
 ### Что не проверялось
-- полный suite, VM, packaging, DPI matrix и т. п. — не запускались по текущим правилам;
+- полный suite и DPI matrix — не запускались по текущим правилам;
 - оставшиеся PARTIAL/BLOCKED, если есть.
 
 ### Что дальше

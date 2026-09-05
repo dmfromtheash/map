@@ -181,5 +181,5 @@ snap и fixtures; это принято DEC-011.
 4. Довести прямые inspectors Text/Line/Shape/Stamp/Brush и licensed font navigation.
 
 Все четыре пункта позднее реализованы в Stage 10B–10F. Этот список сохраняется как датированный
-research context и не является текущей дорожной картой. Актуальный следующий этап — Stage 12A по
-`docs/06_DEVELOPMENT_ROADMAP.md`.
+research context и не является текущей дорожной картой. Этапы 12–16 тоже уже реализованы;
+актуальное следующее действие находится в `docs/STATE_HANDOFF.md`.

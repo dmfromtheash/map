@@ -150,40 +150,19 @@ public sealed partial class GradientRoundTripTests
     }
 
     /// <summary>
-    /// Rewrites the scene and repairs the manifest checksum, so the only thing left wrong with the
-    /// file is the gradient value under test. Without the repair every case would fail on the
-    /// checksum and prove nothing about gradient validation.
+    /// Rewrites the first schema-v4 object chunk and repairs both its descriptor and the manifest
+    /// checksum, so the only thing left wrong with the file is the gradient value under test.
     /// </summary>
-    private static void RewriteScene(string path, Func<string, string> rewrite)
-    {
-        using var archive = ZipFile.Open(path, ZipArchiveMode.Update);
-
-        var sceneEntry = archive.GetEntry(MapProjectFormat.SceneEntry)!;
-        string json;
-        using (var reader = new StreamReader(sceneEntry.Open(), Encoding.UTF8))
+    private static void RewriteScene(string path, Func<string, string> rewrite) =>
+        ProjectJsonTestMutations.RewriteFirstObjectChunk(path, objects =>
         {
-            json = reader.ReadToEnd();
-        }
-
-        var bytes = Encoding.UTF8.GetBytes(rewrite(json));
-        using (var stream = sceneEntry.Open())
-        {
-            stream.SetLength(0);
-            stream.Write(bytes);
-        }
-
-        var manifestEntry = archive.GetEntry(MapProjectFormat.ManifestEntry)!;
-        string manifest;
-        using (var reader = new StreamReader(manifestEntry.Open()))
-        {
-            manifest = reader.ReadToEnd();
-        }
-
-        manifest = SceneShaRegex().Replace(
-            manifest, $"\"sceneSha256\": \"{MapProjectRoundTripTests.Sha256Hex(bytes)}\"");
-
-        using var writer = new StreamWriter(manifestEntry.Open());
-        writer.BaseStream.SetLength(0);
-        writer.Write(manifest);
-    }
+            var json = objects.ToJsonString();
+            var rewritten = rewrite(json);
+            var replacement = System.Text.Json.Nodes.JsonNode.Parse(rewritten)!.AsArray();
+            objects.Clear();
+            foreach (var item in replacement)
+            {
+                objects.Add(item?.DeepClone());
+            }
+        });
 }

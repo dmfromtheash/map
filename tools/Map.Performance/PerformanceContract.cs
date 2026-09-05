@@ -56,10 +56,18 @@ internal sealed record PerformanceOptions(
             }
         }
 
-        if (objectCount is < 1 or > 100_000)
+        var normalizedProfile = profile.Trim().ToLowerInvariant();
+        var isLargestMapStress = normalizedProfile is
+            "native-largest-map-stress" or "native-largest-map-assets-only";
+        var minimumObjectCount = isLargestMapStress ? 4 : 1;
+        var maximumObjectCount = isLargestMapStress
+            ? int.MaxValue
+            : 100_000;
+        if (objectCount < minimumObjectCount || objectCount > maximumObjectCount)
         {
             throw new ArgumentOutOfRangeException(nameof(objectCount),
-                "The Stage 13 runner accepts 1..100,000 logical objects.");
+                $"The {normalizedProfile} profile accepts "
+                + $"{minimumObjectCount:N0}..{maximumObjectCount:N0} logical objects.");
         }
         if (warmup < 1)
         {
@@ -78,7 +86,7 @@ internal sealed record PerformanceOptions(
             $"stage13-{profile}-{objectCount}-{DateTime.UtcNow:yyyyMMdd-HHmmss}.json");
 
         return new PerformanceOptions(
-            profile.Trim().ToLowerInvariant(),
+            normalizedProfile,
             objectCount,
             seed,
             warmup,

@@ -237,7 +237,7 @@ public static class AssetLibraryStore
             return Damaged("Старый индекс каталога не прошёл проверку: " + reason);
         }
 
-        // The old copy is preserved under its own name BEFORE the new one is published, so an
+        // The old copy is preserved under its own name BEFORE the replacement is committed, so an
         // interrupted migration always leaves at least one readable index behind.
         var backup = BackupPath(indexPath, clock());
         if (!File.Exists(backup))
@@ -608,7 +608,7 @@ public static class AssetLibraryStore
                 && fullPath[root.Length..].Split(
                     [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
                     StringSplitOptions.RemoveEmptyEntries)
-                .All(Map.Core.Documents.PortablePathSegment.IsSafe);
+                .All(Map.Core.Documents.SafePathSegment.IsSafe);
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
         {

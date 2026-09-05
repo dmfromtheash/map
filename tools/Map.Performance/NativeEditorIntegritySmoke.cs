@@ -156,7 +156,7 @@ public sealed class NativeEditorIntegrityApplication : Application
     }
 
     private static async Task<NativeEditorIntegrityReport> ExecuteAsync(
-        PerformanceOptions options, string workspace, Window window, Action<EditorView> publish)
+        PerformanceOptions options, string workspace, Window window, Action<EditorView> showView)
     {
         var scenarios = new Dictionary<string, bool>();
         var notes = new List<string>();
@@ -186,7 +186,7 @@ public sealed class NativeEditorIntegrityApplication : Application
             availableFontFamilies: ["Arial"]);
         var view = new EditorView(
             editor, static () => Task.CompletedTask, static () => { }, static () => { });
-        publish(view);
+        showView(view);
         window.Content = view;
         await SettleAsync();
         view.Canvas.FitToCanvas();

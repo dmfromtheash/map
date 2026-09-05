@@ -154,7 +154,7 @@ public sealed class Stage12CExportTests
         {
             FaultInjector = point =>
             {
-                if (point == ExportFaultPoint.BeforePublish) throw new IOException("injected");
+                if (point == ExportFaultPoint.BeforeFinalize) throw new IOException("injected");
             },
         });
         var plan = injected.Plan(document, Request(32, 24));
@@ -242,7 +242,7 @@ public sealed class Stage12CExportTests
     }
 
     [Fact]
-    public async Task Stage12C_CancelBetweenTilesCleansTempAndPublishesNoFalseSuccess()
+    public async Task Stage12C_CancelBetweenTilesCleansTempAndReportsNoFalseSuccess()
     {
         using var temp = new TempDirectory();
         using var cancellation = new CancellationTokenSource();

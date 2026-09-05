@@ -10,7 +10,7 @@ public enum ProjectAssetStorage
 
 /// <summary>
 /// Stable document reference to user-owned image content. Identity is the content SHA-256, never
-/// the filename. Embedded bytes make a project portable; linked references retain both a catalog
+/// the filename. Embedded bytes keep a project self-sufficient; linked references retain both a catalog
 /// id and a relocatable path plus the expected hash, so a same-name replacement is never silent.
 /// </summary>
 public sealed record MapAssetReference

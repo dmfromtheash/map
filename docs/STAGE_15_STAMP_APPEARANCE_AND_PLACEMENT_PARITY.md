@@ -95,7 +95,7 @@ reset/restore/stash/clean/rebase/amend и не переписывать исто
 ### 2.3. Git/remote
 
 Текущий контракт разрешает production-изменения и локальную проверку, но сам по себе не даёт
-отдельного разрешения на commit, push, PR, issue, Project, tag или release. Если в сообщении,
+отдельного разрешения на commit, push, PR, issue, Project или tag. Если в сообщении,
 которым владелец запускает prompt, нет нового явного разрешения, оставь проверенный diff в рабочем
 дереве и отчитайся без remote-действий.
 
@@ -150,7 +150,7 @@ credentials/2FA, не перехватывай autosave открытой в др
 
 | Область | Что уже есть на `fa8efde...` | Что отсутствует |
 |---|---|---|
-| Pending placement | `PlacementSession`, точный ghost, One/Series/Area, AutoSelect, W/S rotation | Полный будущий style/opacity/sublayer/scale/flips/effects |
+| Pending placement | `PlacementSession`, точный ghost, One/Series/Area, AutoSelect, W/S size, A/D rotation | Полный будущий style/opacity/sublayer/scale/flips/effects |
 | Создание stamp | `BuildStampPlacement` и `StampObject` | Новые stamps получают почти нейтральный `StampStyle` вместо tool style |
 | Выделенный stamp | Scale, exact W/H, flips, opacity, blur, H/S/B/C, blend, custom shadow | Те же controls до клика; shadow color/type; все нужные blend modes |
 | Renderer | Общий viewport/export renderer, flip, object opacity, blur, black drop shadow, color matrix | Цвет тени, layer-shadow prepass, семь blend modes, доказанный clip behavior |
@@ -199,6 +199,8 @@ credentials/2FA, не перехватывай autosave открытой в др
     `Name`; raw enum/GUID/internal blend key пользователю не показывается.
 11. Реальные карты, Library, Recovery, Diagnostics и preferences владельца не используются в
     tests/smoke.
+12. После одиночной установки stamp выбранный set/variant и ghost остаются активными; обычный
+    `AutoSelect` не переводит фокус на созданный объект, а `Esc` завершает размещение.
 
 ---
 
@@ -246,7 +248,7 @@ preferences на каждый slider tick: сохранять после зав�
 1. current set/variant: thumbnail, имя, previous/next/current и команда открыть большой каталог;
 2. компактные `Недавние`/`Избранные`, использующие текущий Library backend и cache;
 3. `Масштаб` — slider `10..400%`, текущее число, reset `100%`;
-4. `Поворот` — slider/numeric `0..359°`, reset `0°`; W/S меняют то же значение и тот же ghost;
+4. `Поворот` — slider/numeric `0..359°`, reset `0°`; A/D меняют то же значение и тот же ghost;
 5. `Подслой` — slider/numeric `-10..10`;
 6. две явные кнопки отражения;
 7. `Прозрачность` — slider `0..100%`.
@@ -255,7 +257,7 @@ Exact W/H и aspect lock выбранного stamp остаются досту�
 scale используется сохранённая reference size; смена варианта до placement пересчитывает размер
 от native aspect нового варианта и текущего scale без растягивания.
 
-W/S не срабатывают, когда фокус находится в TextBox/NumberBox или пользователь вводит текст.
+W/S и A/D не срабатывают, когда фокус находится в TextBox/NumberBox или пользователь вводит текст.
 Используй существующие editable bindings, а не hard-coded физические клавиши.
 
 ### 6.4. Раскрываемый внешний вид
@@ -436,14 +438,14 @@ tooltip и accessible name. Selected/pending state различаются заг
 
 - новые Brush/Land algorithms и полный паритет их material/color panels;
 - изменение Line/Shape/Text/Filter, кроме переиспользования общего безопасного control helper;
-- Marketplace, store, чужие packs, account, collaboration, cloud sync и публикация;
+- Marketplace, store, чужие packs, account, collaboration и cloud sync;
 - новый постоянный foreground/background subsystem без решения Clip Mask gate;
 - копирование Inkarnate code/assets/icons/colors/text/layout/trade dress;
 - новый renderer/UI framework или внешняя dependency;
 - редактирование реальной карты/Library/preferences владельца;
 - повтор Stage 13 benchmark, повышение canvas/object limits;
-- VM, clean Windows, full suite, coverage, mutation, security scan, SBOM, installer, updater,
-  package, release, screenshot matrix и постоянная evidence-папка;
+- full suite, coverage, mutation, security scan, SBOM, screenshot matrix и постоянная
+  evidence-папка;
 - исправления несвязанных дефектов.
 
 Несвязанный дефект зафиксируй одной строкой `PROPOSED` в финальном отчёте и не расширяй diff.
@@ -460,7 +462,8 @@ Stage14 cases, если новый assertion можно добавить к су
 - neutral defaults и bounded load/save editor preferences;
 - pending scale/rotation/sublayer/flips/opacity/H/S/B/C/blur/blend/shadow меняют preview, но не
   document/revision/dirty/history/selection;
-- W/S и slider меняют одно base rotation; input field suppresses shortcut;
+- W/S меняют размер, A/D и slider меняют один base rotation; input field suppresses shortcut;
+- одиночная установка сохраняет активные set/variant и следующий ghost, не выбирая созданный stamp;
 - preview object и committed object совпадают по geometry/sublayer/opacity/style;
 - One/Series/Scatter сохраняют tool style; cancel не оставляет следа;
 - selected slider gesture — одна history entry; pending gesture — ноль;
@@ -518,7 +521,7 @@ activation и управление чужими окнами.
 1. Открыть synthetic карту с двумя Object layers, layer mask и несколькими фоновыми objects.
 2. Открыть Stamp, выбрать synthetic set/variant; проверить compact recent/favorite и current
    thumbnail.
-3. До клика изменить scale, W/S rotation, sublayer, flips, opacity, Hue/Saturation/Brightness/
+3. До клика изменить scale через W/S, rotation через A/D, sublayer, flips, opacity, Hue/Saturation/Brightness/
    Contrast, blur, blend и custom colored shadow. Доказать отсутствие document mutation.
 4. Сделать временный screenshot ghost и открыть его через `view_image`: объект/эффекты видимы,
    controls и числа читаемы, canvas не перекрыт.
@@ -565,7 +568,8 @@ Stage 15 можно назвать `FACT` только когда одновре
 - pending controls не мутируют документ, а ghost показывает resolved future result;
 - commit совпадает с ghost и создаёт одну command;
 - selected stamp показывает те же фактические свойства без расходящихся дублей;
-- W/S и rotation control синхронны;
+- W/S и scale control, A/D и rotation control синхронны;
+- после одиночной установки тот же stamp остаётся на указателе до `Esc` или смены инструмента;
 - One/Series/Scatter, AutoSelect, area/density, random variant/angle-step/flips предсказуемы;
 - цветокоррекция, blur, новые blend modes и цветные Object/Layer shadows работают в
   preview/viewport/export;
@@ -574,7 +578,7 @@ Stage 15 можно назвать `FACT` только когда одновре
 - Stage 13 culling/cache, old files, Undo/Redo, asset replacement и save/reopen не сломаны;
 - нужные Stage15 filters, Release build и один native smoke зелёные;
 - реальные данные и owner-dirty файлы не изменены;
-- не было неразрешённых commit/remote/release действий.
+- не было неразрешённых commit/remote действий.
 
 Если Clip Mask остаётся без решения или любой обязательный пользовательский путь не доказан,
 используй `PARTIAL`; не понижай критерий задним числом.

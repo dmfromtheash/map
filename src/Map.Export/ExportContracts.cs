@@ -28,7 +28,7 @@ public enum ExportPhase
     Preparing,
     Rendering,
     EncodingAndWriting,
-    Publishing,
+    Finalizing,
     Completed,
 }
 
@@ -44,7 +44,7 @@ public enum ExportFaultPoint
 {
     AfterRender,
     AfterTileWritten,
-    BeforePublish,
+    BeforeFinalize,
 }
 
 public sealed record ExportRequest(

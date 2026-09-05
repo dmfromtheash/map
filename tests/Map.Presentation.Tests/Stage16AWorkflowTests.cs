@@ -28,10 +28,20 @@ public sealed class Stage16AWorkflowTests : IDisposable
         var dashboard = new DashboardViewModel(store, recent, new FakeLog());
 
         dashboard.Refresh();
+        Assert.Equal(2, dashboard.TotalRecentCount);
         dashboard.SearchText = "world";
         dashboard.SortOrder = DashboardSortOrder.SizeDescending;
 
         Assert.Equal("Forest", Assert.Single(dashboard.RecentCards).Title);
+        dashboard.SearchText = "no matching map";
+        Assert.Empty(dashboard.RecentCards);
+        Assert.Equal(2, dashboard.TotalRecentCount);
+        dashboard.SearchText = "";
+        Assert.Equal(2, dashboard.RecentCards.Count);
+        recent.Items.Clear();
+        dashboard.Refresh();
+        Assert.Empty(dashboard.RecentCards);
+        Assert.Equal(0, dashboard.TotalRecentCount);
         Assert.Equal(0, inspected);
         Assert.Equal(0, store.SaveCalls);
     }
@@ -39,7 +49,7 @@ public sealed class Stage16AWorkflowTests : IDisposable
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Clone_and_template_publish_independent_document_ids(bool asTemplate)
+    public async Task Clone_and_template_create_independent_document_ids(bool asTemplate)
     {
         Directory.CreateDirectory(_root);
         var sourcePath = Path.Combine(_root, "source.mapproj");

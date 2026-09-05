@@ -120,7 +120,7 @@ public sealed class Stage13ALargeSceneInteractionTests
     }
 
     [Fact]
-    public void Stage13A_drag_preview_publishes_canvas_only_events()
+    public void Stage13A_drag_preview_reports_canvas_only_events()
     {
         var sceneObject = Rectangle("drag", 100, 100, 100, 60);
         var editor = EditorWith(sceneObject);

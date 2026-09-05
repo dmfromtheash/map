@@ -73,10 +73,9 @@ public partial class Stage10CGroupRoundTripTests
 
         using (var archive = ZipFile.OpenRead(path))
         {
-            using var reader = new StreamReader(archive.GetEntry(MapProjectFormat.SceneEntry)!.Open());
-            var sceneJson = reader.ReadToEnd();
-            Assert.DoesNotContain("groupName", sceneJson, StringComparison.Ordinal);
-            Assert.Contains("groupId", sceneJson, StringComparison.Ordinal);
+            var objectJson = ReadFirstObjectChunk(archive);
+            Assert.DoesNotContain("groupName", objectJson, StringComparison.Ordinal);
+            Assert.Contains("groupId", objectJson, StringComparison.Ordinal);
         }
 
         var reopened = MapProjectStore.Open(path).Document;
@@ -94,10 +93,9 @@ public partial class Stage10CGroupRoundTripTests
             ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
 
         using var archive = ZipFile.OpenRead(path);
-        using var reader = new StreamReader(archive.GetEntry(MapProjectFormat.SceneEntry)!.Open());
-        var sceneJson = reader.ReadToEnd();
-        Assert.DoesNotContain("groupName", sceneJson, StringComparison.Ordinal);
-        Assert.DoesNotContain("groupId", sceneJson, StringComparison.Ordinal);
+        var objectJson = ReadFirstObjectChunk(archive);
+        Assert.DoesNotContain("groupName", objectJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("groupId", objectJson, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -135,43 +133,16 @@ public partial class Stage10CGroupRoundTripTests
         Assert.Throws<MapProjectCorruptedException>(() => MapProjectStore.Open(path));
     }
 
-    /// <summary>Patches scene.json in place and fixes the recorded checksum, isolating the model check.</summary>
-    private static void RewriteScene(string path, Func<string, string> rewrite)
+    private static string ReadFirstObjectChunk(ZipArchive archive)
     {
-        using var archive = ZipFile.Open(path, ZipArchiveMode.Update);
-
-        string sceneJson;
-        var sceneEntry = archive.GetEntry(MapProjectFormat.SceneEntry)!;
-        using (var reader = new StreamReader(sceneEntry.Open(), Encoding.UTF8, leaveOpen: false))
-        {
-            sceneJson = reader.ReadToEnd();
-        }
-
-        var sceneBytes = Encoding.UTF8.GetBytes(rewrite(sceneJson));
-        using (var stream = sceneEntry.Open())
-        {
-            stream.SetLength(0);
-            stream.Write(sceneBytes);
-        }
-
-        // Sanity: the patched scene must still be valid JSON, or the test proves nothing.
-        using (var parsed = JsonDocument.Parse(sceneBytes))
-        {
-            _ = parsed.RootElement;
-        }
-
-        var manifestEntry = archive.GetEntry(MapProjectFormat.ManifestEntry)!;
-        string manifestText;
-        using (var reader = new StreamReader(manifestEntry.Open()))
-        {
-            manifestText = reader.ReadToEnd();
-        }
-
-        var newHash = MapProjectRoundTripTests.Sha256Hex(sceneBytes);
-        manifestText = SceneShaRegex().Replace(manifestText, $"\"sceneSha256\": \"{newHash}\"");
-
-        using var writer = new StreamWriter(manifestEntry.Open());
-        writer.BaseStream.SetLength(0);
-        writer.Write(manifestText);
+        using var scene = JsonDocument.Parse(
+            MapProjectRoundTripTests.ReadEntry(archive, MapProjectFormat.SceneEntry));
+        var name = scene.RootElement.GetProperty("layers")[1]
+            .GetProperty("objectChunks")[0].GetProperty("entry").GetString()!;
+        return Encoding.UTF8.GetString(MapProjectRoundTripTests.ReadEntry(archive, name));
     }
+
+    /// <summary>Patches a canonical v4 object chunk and repairs descriptor checksums.</summary>
+    private static void RewriteScene(string path, Func<string, string> rewrite)
+        => ProjectJsonTestMutations.RewriteFirstObjectChunk(path, rewrite);
 }

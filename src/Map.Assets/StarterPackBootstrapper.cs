@@ -3,7 +3,7 @@ using SkiaSharp;
 namespace Map.Assets;
 
 /// <summary>Creates the tiny original Map starter pack in the selected local catalog.</summary>
-public static class StarterPackInstaller
+public static class StarterPackBootstrapper
 {
     public const string PackName = "Map · базовые формы";
     public const string NaturePackName = "Map · тестовая природа";
@@ -75,7 +75,7 @@ public static class StarterPackInstaller
     private static string MaterializeEmbedded(string root, string resourceName, string fileName)
     {
         var path = Path.Combine(root, fileName);
-        using var source = typeof(StarterPackInstaller).Assembly.GetManifestResourceStream(resourceName)
+        using var source = typeof(StarterPackBootstrapper).Assembly.GetManifestResourceStream(resourceName)
             ?? throw new InvalidOperationException($"Starter asset resource is missing: {resourceName}");
         using var memory = new MemoryStream();
         source.CopyTo(memory);

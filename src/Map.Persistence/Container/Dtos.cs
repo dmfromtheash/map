@@ -33,7 +33,7 @@ internal sealed class CanvasDto
     [JsonPropertyName("background")] public string Background { get; set; } = "";
 }
 
-/// <summary>scene.json — layers and objects; document identity repeated for a cross-check.</summary>
+/// <summary>scene.json — layer metadata and v4 object-chunk descriptors.</summary>
 internal sealed class SceneDto
 {
     [JsonPropertyName("documentId")] public string DocumentId { get; set; } = "";
@@ -63,7 +63,12 @@ internal sealed class LayerDto
     [JsonPropertyName("color")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Color { get; set; }
-    [JsonPropertyName("objects")] public List<SceneObjectDto> Objects { get; set; } = [];
+    [JsonPropertyName("objects")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<SceneObjectDto>? Objects { get; set; }
+    [JsonPropertyName("objectChunks")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<ObjectChunkDescriptorDto>? ObjectChunks { get; set; }
     [JsonPropertyName("tiles")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<TileDto>? Tiles { get; set; }
@@ -186,16 +191,24 @@ internal sealed class SceneObjectDto
     [JsonPropertyName("y")] public double Y { get; set; }
     [JsonPropertyName("width")] public double Width { get; set; }
     [JsonPropertyName("height")] public double Height { get; set; }
-    [JsonPropertyName("rotationDegrees")] public double RotationDegrees { get; set; }
+    [JsonPropertyName("rotationDegrees")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public double RotationDegrees { get; set; }
     [JsonPropertyName("fillColor")] public string FillColor { get; set; } = "";
     [JsonPropertyName("fillGradient")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public GradientDto? FillGradient { get; set; }
     [JsonPropertyName("strokeColor")] public string StrokeColor { get; set; } = "";
-    [JsonPropertyName("strokeWidth")] public double StrokeWidth { get; set; }
+    [JsonPropertyName("strokeWidth")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public double StrokeWidth { get; set; }
     [JsonPropertyName("visible")] public bool Visible { get; set; }
-    [JsonPropertyName("locked")] public bool Locked { get; set; }
-    [JsonPropertyName("sublayer")] public int Sublayer { get; set; }
+    [JsonPropertyName("locked")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Locked { get; set; }
+    [JsonPropertyName("sublayer")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public int Sublayer { get; set; }
     [JsonPropertyName("groupId")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? GroupId { get; set; }
@@ -296,8 +309,12 @@ internal sealed class StampStyleDto
     [JsonPropertyName("referenceHeight")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public double? ReferenceHeight { get; set; }
-    [JsonPropertyName("flipHorizontal")] public bool FlipHorizontal { get; set; }
-    [JsonPropertyName("flipVertical")] public bool FlipVertical { get; set; }
+    [JsonPropertyName("flipHorizontal")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool FlipHorizontal { get; set; }
+    [JsonPropertyName("flipVertical")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool FlipVertical { get; set; }
     [JsonPropertyName("maskAssetSha256")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? MaskAssetSha256 { get; set; }
@@ -305,21 +322,52 @@ internal sealed class StampStyleDto
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? ClipMaskEnabled { get; set; }
     [JsonPropertyName("blend")] public string Blend { get; set; } = "Normal";
-    [JsonPropertyName("blur")] public double Blur { get; set; }
+    [JsonPropertyName("blur")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public double Blur { get; set; }
     [JsonPropertyName("shadowOffsetX")] public double ShadowOffsetX { get; set; } = 4;
     [JsonPropertyName("shadowOffsetY")] public double ShadowOffsetY { get; set; } = 4;
     [JsonPropertyName("shadowBlur")] public double ShadowBlur { get; set; } = 6;
-    [JsonPropertyName("shadowOpacity")] public double ShadowOpacity { get; set; }
+    [JsonPropertyName("shadowOpacity")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public double ShadowOpacity { get; set; }
     [JsonPropertyName("shadowPlacement")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ShadowPlacement { get; set; }
     [JsonPropertyName("shadowColor")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ShadowColor { get; set; }
-    [JsonPropertyName("hue")] public double Hue { get; set; }
-    [JsonPropertyName("saturation")] public double Saturation { get; set; }
-    [JsonPropertyName("brightness")] public double Brightness { get; set; }
-    [JsonPropertyName("contrast")] public double Contrast { get; set; }
+    [JsonPropertyName("hue")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public double Hue { get; set; }
+    [JsonPropertyName("saturation")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public double Saturation { get; set; }
+    [JsonPropertyName("brightness")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public double Brightness { get; set; }
+    [JsonPropertyName("contrast")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public double Contrast { get; set; }
+}
+
+internal sealed class ObjectChunkDescriptorDto
+{
+    [JsonPropertyName("ordinal")] public int Ordinal { get; set; }
+    [JsonPropertyName("count")] public int Count { get; set; }
+    [JsonPropertyName("byteLength")] public long ByteLength { get; set; }
+    [JsonPropertyName("sha256")] public string Sha256 { get; set; } = "";
+    [JsonPropertyName("bounds")] public ObjectChunkBoundsDto? Bounds { get; set; }
+    [JsonPropertyName("entry")] public string Entry { get; set; } = "";
+    [JsonPropertyName("representationVersion")] public int RepresentationVersion { get; set; }
+}
+
+internal sealed class ObjectChunkBoundsDto
+{
+    [JsonPropertyName("left")] public double Left { get; set; }
+    [JsonPropertyName("top")] public double Top { get; set; }
+    [JsonPropertyName("right")] public double Right { get; set; }
+    [JsonPropertyName("bottom")] public double Bottom { get; set; }
 }
 
 internal sealed class VectorNodeDto
@@ -477,6 +525,8 @@ internal sealed class CheckpointEntryDto
 
 internal sealed class CheckpointSnapshotManifestDto
 {
+    [JsonPropertyName("schemaVersion")]
+    public int SchemaVersion { get; set; }
     [JsonPropertyName("documentId")] public string DocumentId { get; set; } = "";
     [JsonPropertyName("title")] public string Title { get; set; } = "";
     [JsonPropertyName("createdUtc")] public string CreatedUtc { get; set; } = "";

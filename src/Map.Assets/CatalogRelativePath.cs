@@ -28,7 +28,7 @@ internal static class CatalogRelativePath
 
         return segments.All(segment =>
             segment is not "." and not ".."
-            && Map.Core.Documents.PortablePathSegment.IsSafe(segment));
+            && Map.Core.Documents.SafePathSegment.IsSafe(segment));
     }
 
     public static bool TryResolve(

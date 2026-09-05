@@ -14,6 +14,26 @@ public sealed class Stage16BLayerLandFilterTests : IDisposable
     private readonly string _root = Path.Combine(Path.GetTempPath(), "map-stage16b", Guid.NewGuid().ToString("N"));
 
     [Fact]
+    public void Land_cannot_cross_above_objects_and_blocked_move_does_not_dirty_the_session()
+    {
+        var objects = new ObjectLayer(LayerId.New(), "objects", true, false, 1, []);
+        var land = LandLayer.CreateEmpty(LayerId.New(), "land");
+        var document = new MapDocument(DocumentId.New(), "order", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(128, 128, "px", "#FFFFFFFF"),
+            [new BaseColorLayer(LayerId.New(), "bg", true, false, 1, "#FFFFFFFF"), objects, land]);
+        var editor = new EditorViewModel(document, null, false, new FakeProjectStore(), new FakeRecentMaps(),
+            new FakeFilePicker(), new FakePrompts(), new FakeLog());
+
+        Assert.Equal([land.Id, objects.Id], editor.Layers.Skip(1).Select(layer => layer.Id));
+        editor.SelectLayer(land.Id);
+        editor.ReorderActiveLayer(up: true);
+
+        Assert.Equal([land.Id, objects.Id], editor.Layers.Skip(1).Select(layer => layer.Id));
+        Assert.False(editor.Session.IsDirty);
+        Assert.Contains("ниже", editor.StatusDetail, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Mask_copy_is_independent_and_undoable()
     {
         var (editor, ids) = Editor();
@@ -99,26 +119,26 @@ public sealed class Stage16BLayerLandFilterTests : IDisposable
     }
 
     [Fact]
-    public void V2_migrates_copy_only_through_the_adjacent_v3_step()
+    public void V2_migrates_copy_only_to_the_current_schema()
     {
         Directory.CreateDirectory(_root);
         var source = Path.Combine(_root, "source-v2.mapproj");
-        var destination = Path.Combine(_root, "copy-v3.mapproj");
+        var destination = Path.Combine(_root, "copy-current.mapproj");
         var (editor, _) = Editor();
         MapProjectStore.Save(editor.Session.Document, source,
             new SaveMetadata("stage16", DateTimeOffset.UnixEpoch),
             ThumbnailRenderer.RenderPng(editor.Session.Document, 64, 48));
-        DowngradeRootManifest(source);
+        DowngradeEmptySceneToV2(source);
         var original = File.ReadAllBytes(source);
 
         var inspection = MapProjectStore.Inspect(source);
         Assert.Equal(ProjectFileStatus.MigrationRequired, inspection.Status);
         Assert.Equal(2, inspection.SourceSchema);
-        Assert.Equal(3, inspection.TargetSchema);
+        Assert.Equal(MapProjectFormat.SchemaVersion, inspection.TargetSchema);
         var migrated = MapProjectStore.MigrateCopy(source, destination);
 
         Assert.Equal(original, File.ReadAllBytes(source));
-        Assert.Equal(3, migrated.TargetSchema);
+        Assert.Equal(MapProjectFormat.SchemaVersion, migrated.TargetSchema);
         Assert.Equal(ProjectFileStatus.Ready, MapProjectStore.Inspect(destination).Status);
         Assert.Equal(editor.Session.Document.Id, migrated.Project.Document.Id);
     }
@@ -137,7 +157,7 @@ public sealed class Stage16BLayerLandFilterTests : IDisposable
         return (editor, (objects.Id, brush.Id, land.Id, filter.Id));
     }
 
-    private static void DowngradeRootManifest(string path)
+    private static void DowngradeEmptySceneToV2(string path)
     {
         var entries = new List<(string Name, byte[] Bytes, DateTimeOffset Time)>();
         using (var source = ZipFile.OpenRead(path))
@@ -146,14 +166,29 @@ public sealed class Stage16BLayerLandFilterTests : IDisposable
             {
                 using var stream = entry.Open(); using var memory = new MemoryStream(); stream.CopyTo(memory);
                 var bytes = memory.ToArray();
-                if (entry.FullName == MapProjectFormat.ManifestEntry)
-                {
-                    var json = JsonNode.Parse(bytes)!.AsObject(); json["schemaVersion"] = 2;
-                    bytes = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(json);
-                }
                 entries.Add((entry.FullName, bytes, entry.LastWriteTime));
             }
         }
+        // A v2 fixture needs inline object arrays; changing only a v4 manifest is corruption.
+        var sceneIndex = entries.FindIndex(item => item.Name == MapProjectFormat.SceneEntry);
+        var sceneEntry = entries[sceneIndex];
+        var scene = JsonNode.Parse(sceneEntry.Bytes)!.AsObject();
+        foreach (var layer in scene["layers"]!.AsArray())
+        {
+            Assert.True(layer!["objectChunks"] is not JsonArray chunks || chunks.Count == 0);
+            layer.AsObject().Remove("objectChunks");
+            layer["objects"] = new JsonArray();
+        }
+        var sceneBytes = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(scene);
+        entries[sceneIndex] = (sceneEntry.Name, sceneBytes, sceneEntry.Time);
+        var manifestIndex = entries.FindIndex(item => item.Name == MapProjectFormat.ManifestEntry);
+        var manifestEntry = entries[manifestIndex];
+        var manifest = JsonNode.Parse(manifestEntry.Bytes)!.AsObject();
+        manifest["schemaVersion"] = 2;
+        manifest["sceneSha256"] = Convert.ToHexString(
+            System.Security.Cryptography.SHA256.HashData(sceneBytes)).ToLowerInvariant();
+        entries[manifestIndex] = (manifestEntry.Name,
+            System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(manifest), manifestEntry.Time);
         var temp = path + ".downgrade";
         using (var archive = ZipFile.Open(temp, ZipArchiveMode.Create))
         {

@@ -28,7 +28,7 @@ Map. Продукт получает собственную терминолог
 
 Для Map это означает локальную `Library`, а не Marketplace: собственное дерево коллекций,
 breadcrumbs, поиск/сортировка/фильтры, recent/favorite и virtualized thumbnail grid. Аккаунт,
-публикация, облачные источники и названия чужих разделов не переносятся.
+облачные источники и названия чужих разделов не переносятся.
 
 ## FACT — «ассет-матрёшка»
 
@@ -130,7 +130,7 @@ Avalonia UI и `.mapproj`; внешняя dependency не добавлена.
 - tree и grid работают с клавиатуры; focus не теряется при фильтрации/virtualization;
 - пусто/loading/missing/hash-mismatch/unsupported/damaged-index показаны как разные состояния;
 - удаление content не входит в foundation; исключение variant из set не удаляет оригинал;
-- private user imports не попадают в screenshots, fixtures или распространяемый pack.
+- private user imports не попадают в screenshots, fixtures или стандартный pack.
 
 ## Исторический foundation-срез
 

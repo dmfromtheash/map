@@ -5,7 +5,7 @@ public static class MapProjectFormat
 {
     public const string FormatId = "map-project";
     public const int LegacySchemaVersion = 1;
-    public const int SchemaVersion = 3;
+    public const int SchemaVersion = 4;
     public const string Extension = ".mapproj";
 
     public const string ManifestEntry = "manifest.json";
@@ -15,6 +15,7 @@ public static class MapProjectFormat
     public const string RasterPrefix = "rasters/";
     public const string MaskPrefix = "masks/";
     public const string AssetPrefix = "assets/";
+    public const string ObjectPrefix = "objects/";
     public const string CheckpointPrefix = "checkpoints/";
     public const string CheckpointCatalogEntry = "checkpoints/catalog.json";
 
@@ -41,7 +42,7 @@ public static class MapProjectFormat
     public const int MaxEntries = 16_384;
 
     /// <summary>Bounds compressed bytes before ZipArchive materializes central-directory state.</summary>
-    public const long MaxContainerFileBytes = 544L * 1024 * 1024;
+    public const long MaxContainerFileBytes = 1_280L * 1024 * 1024;
 
     public const long MaxCentralDirectoryBytes = 16L * 1024 * 1024;
 
@@ -50,7 +51,14 @@ public static class MapProjectFormat
     public const long MaxEntryNamePayloadBytes = 2L * 1024 * 1024;
 
     /// <summary>Upper bound of any single JSON entry once decompressed.</summary>
-    public const long MaxJsonEntryBytes = 32L * 1024 * 1024;
+    public const long MaxJsonEntryBytes = 512L * 1024 * 1024;
+
+    /// <summary>Canonical v4 object chunks are bounded independently of legacy JSON entries.</summary>
+    public const int ObjectChunkTargetObjects = 8_192;
+
+    public const long ObjectChunkTargetBytes = 8L * 1024 * 1024;
+
+    public const int ObjectChunkRepresentationVersion = 1;
 
     /// <summary>One raw tile is fixed-size and bounded (256x256 RGBA at most).</summary>
     public const long MaxTileEntryBytes = 256L * 256 * 4;
@@ -61,13 +69,13 @@ public static class MapProjectFormat
     public const long MaxPreviewBytes = 8L * 1024 * 1024;
 
     /// <summary>Upper bound of the whole container once decompressed.</summary>
-    public const long MaxAssetPayloadBytes = 256L * 1024 * 1024;
+    public const long MaxAssetPayloadBytes = 512L * 1024 * 1024;
 
-    public const long MaxTilePayloadBytes = 256L * 1024 * 1024;
+    public const long MaxTilePayloadBytes = 1_024L * 1024 * 1024;
 
-    public const long MaxJsonPayloadBytes = 64L * 1024 * 1024;
+    public const long MaxJsonPayloadBytes = 1_024L * 1024 * 1024;
 
-    public const long MaxTotalUncompressedBytes = 512L * 1024 * 1024;
+    public const long MaxTotalUncompressedBytes = 2_048L * 1024 * 1024;
 
     public const double MaxCompressionRatio = 1_000;
 

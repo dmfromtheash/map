@@ -37,6 +37,32 @@ public sealed class LandRenderingTests
         Assert.NotEqual(exact.GetPixel(34, 128), preview.GetPixel(34, 128));
     }
 
+    [Fact]
+    public void Object_is_drawn_above_land_even_when_the_input_file_put_land_on_top()
+    {
+        var coverage = Enumerable.Repeat((byte)255, TileMap.TileSize * TileMap.TileSize).ToArray();
+        var land = new LandLayer(
+            LayerId.New(), "land", true, false, 1,
+            TileMap.Empty(1).With(new TileKey(0, 0), coverage),
+            new LandEdgeStyle { FillColor = "#FF25A84A", RippleCount = 0 });
+        var sceneObject = new SceneObject(
+            ObjectId.New(), SceneObjectKind.Rectangle, "object",
+            64, 64, 128, 128, 0,
+            "#FFE34B35", "#FFE34B35", 0, true, false);
+        var objects = new ObjectLayer(LayerId.New(), "objects", true, false, 1, [sceneObject]);
+        var document = new MapDocument(
+            DocumentId.New(), "land and object", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(256, 256, "px", "#FFFFFFFF"),
+            [new BaseColorLayer(LayerId.New(), "background", true, false, 1, "#FFFFFFFF"), objects, land]);
+
+        using var bitmap = Render(document, fast: false);
+        var centre = bitmap.GetPixel(128, 128);
+
+        Assert.IsType<LandLayer>(document.Layers[1]);
+        Assert.IsType<ObjectLayer>(document.Layers[2]);
+        Assert.True(centre.Red > centre.Green);
+    }
+
     private static SKBitmap Render(MapDocument document, bool fast)
     {
         var info = new SKImageInfo(256, 256);

@@ -185,8 +185,19 @@ public sealed class NativeStage15Application : Application
             && ObjectCount(editor) >= 3;
 
         var set = editor.LibrarySets.Single();
-        editor.SelectAssetSet(set.SetId);
+        editor.ActiveTool = EditorTool.Stamp;
+        view.OpenAssetCatalog(focusSearch: false);
         await SettleAsync();
+        var catalogTransition = view.AssetCatalogVisible && view.SelectFirstCatalogSetForSmoke();
+        await SettleAsync();
+        var catalogPanelScreenshotPath = Path.ChangeExtension(options.OutputPath, ".catalog-panel.png");
+        Directory.CreateDirectory(Path.GetDirectoryName(catalogPanelScreenshotPath)!);
+        using (var bitmap = new RenderTargetBitmap(new PixelSize(1_400, 900)))
+        {
+            bitmap.Render(view);
+            using var stream = File.Create(catalogPanelScreenshotPath);
+            bitmap.Save(stream, PngBitmapEncoderOptions.Default);
+        }
 
         var beforeForeground = editor.Session.UndoDepth;
         editor.CreateStampForegroundSurface();
@@ -215,7 +226,8 @@ public sealed class NativeStage15Application : Application
         var revisionBefore = editor.Session.Revision;
         var undoBefore = editor.Session.UndoDepth;
         editor.SetStampScalePercent(170);
-        editor.RotatePendingPlacement(1, largerStep: true); // same base rotation as the slider/W/S path
+        editor.ResizePendingPlacement(1, largerStep: true); // W/S path: 170% -> 180%.
+        editor.RotatePendingPlacement(1, largerStep: true); // A/D path: 0° -> 15°.
         editor.SetStampSublayer(5);
         editor.SetStampFlip(horizontal: true, vertical: false);
         editor.SetStampOpacityPercent(90);
@@ -231,7 +243,9 @@ public sealed class NativeStage15Application : Application
         editor.SetStampShadowPlacement(StampShadowPlacement.Object);
         view.Canvas.MovePlacementPointerForSmoke(350, 235);
         await NextFrameAsync(view);
-        var compact = view.StampCompactCurrentThumbnailVisibleForSmoke
+        var compact = catalogTransition
+            && view.StampCompactCurrentThumbnailVisibleForSmoke
+            && view.StampCompactVariantCountForSmoke == editor.SelectedSetVariants.Count
             && view.StampCompactRecentCountForSmoke > 0
             && view.StampCompactFavoriteCountForSmoke > 0;
         var pending = editor.PendingPlacement!;
@@ -256,9 +270,17 @@ public sealed class NativeStage15Application : Application
             bitmap.Save(stream, PngBitmapEncoderOptions.Default);
         }
 
+        var selectionBeforeCommit = editor.Session.SelectedObjectIds.ToArray();
+        var objectIdsBeforeCommit = Objects(editor).Select(item => item.Id).ToHashSet();
         var committedOk = view.Canvas.CommitPlacementForSmoke();
         await SettleAsync();
-        var committed = editor.Session.SelectedObject!;
+        var committed = Objects(editor).Single(item => !objectIdsBeforeCommit.Contains(item.Id));
+        var stampMemory = editor.ActiveTool == EditorTool.Stamp
+            && editor.PendingPlacement is { Target: PlacementTargetKind.Stamp }
+            && editor.SelectedSetId == set.SetId
+            && editor.Session.SelectedObjectIds.SequenceEqual(selectionBeforeCommit)
+            && editor.PlacementPreviewObjects.FirstOrDefault()?.Stamp?.AssetSha256
+                == editor.CurrentVariant?.Sha256;
         var exact = committedOk
             && NearlyEqual(committed.X, preview.X)
             && NearlyEqual(committed.Y, preview.Y)
@@ -268,7 +290,8 @@ public sealed class NativeStage15Application : Application
             && committed.Sublayer == preview.Sublayer
             && NearlyEqual(committed.ObjectOpacity, preview.ObjectOpacity / 0.55)
             && Equals(committed.Stamp, preview.Stamp)
-            && editor.Session.UndoDepth == undoBefore + 1;
+            && editor.Session.UndoDepth == undoBefore + 1
+            && stampMemory;
         var placedId = committed.Id;
         editor.Undo();
         var undoWorked = Objects(editor).All(item => item.Id != placedId);
@@ -327,7 +350,7 @@ public sealed class NativeStage15Application : Application
         var loadedPreferences = preferences.Load();
         var validPresetReopened = loadedPreferences.Stamp is
         {
-            ScalePercent: 170,
+            ScalePercent: 180,
             Sublayer: 5,
             RandomAngleStep: StampRandomAngleStep.Degrees45,
         } loaded
@@ -399,7 +422,7 @@ public sealed class NativeStage15Application : Application
         var resourcesDisposed = view.Canvas.ObjectCacheCount == 0 && view.Canvas.TileCacheCount == 0;
         var passed = topology && compact && transient && exact && undoRedo && oneSelectedCommand
             && seriesScatter && preferencesReady && bothShadowModes && clipMaskWorked && saveExport
-            && resourcesDisposed && File.Exists(screenshotPath);
+            && resourcesDisposed && File.Exists(screenshotPath) && File.Exists(catalogPanelScreenshotPath);
         return new NativeStage15Report(
             1, DateTimeOffset.UtcNow,
             "native off-screen own-process window; ShowActivated=false; ShowInTaskbar=false; no system input",
@@ -408,6 +431,7 @@ public sealed class NativeStage15Application : Application
             saveExport, resourcesDisposed, passed,
             [
                 "The screenshot comes from the real hidden Avalonia visual tree; the OS compositor is not inspected.",
+                $"The catalog-to-side-panel screenshot is {catalogPanelScreenshotPath}.",
                 "Clip masks and the shared foreground use synthetic local images created inside the smoke workspace.",
                 "All map, asset, preferences and export paths belong to one unique temporary workspace.",
             ]);

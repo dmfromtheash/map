@@ -4,9 +4,21 @@ using Map.Performance;
 var options = PerformanceOptions.Parse(args);
 object report;
 bool gatePassed;
-if (options.Profile == "native-brush-stress")
+if (options.Profile is "native-placement-workflow" or "native-placement-baseline" or "native-placement-ux")
+{
+    var placementReport = NativePlacementWorkflowSmoke.Run(options);
+    report = placementReport;
+    gatePassed = placementReport.GatePassed;
+}
+else if (options.Profile == "native-brush-stress")
 {
     var stressReport = NativeBrushStressSmoke.Run(options);
+    report = stressReport;
+    gatePassed = stressReport.GatePassed;
+}
+else if (options.Profile is "native-largest-map-stress" or "native-largest-map-assets-only")
+{
+    var stressReport = NativeLargestMapStressSmoke.Run(options);
     report = stressReport;
     gatePassed = stressReport.GatePassed;
 }
@@ -127,6 +139,16 @@ else if (report is NativeStage16Report stage16)
         + $"save/export={stage16.SaveReopenAndExportWorked}, "
         + $"responsive={stage16.ResponsiveEditorSurfacesWorked}, "
         + $"gate={(stage16.GatePassed ? "PASS" : "FAIL")}");
+}
+else if (report is NativeLargestMapStressReport largest)
+{
+    Console.WriteLine(
+        $"native-largest-map-stress: objects={largest.PlacedObjects:N0}/{largest.TargetObjects:N0}, "
+        + $"land tiles={largest.LandTiles:N0}, input-to-render P95={largest.OverviewP95:F3} ms, "
+        + $"scene P95={largest.SceneRenderP95:F3} ms, "
+        + $"private peak={largest.PeakPrivateBytes / 1024d / 1024d:F1} MiB, "
+        + $"save={(largest.SaveSucceeded ? "PASS" : "REFUSED")}, "
+        + $"gate={(largest.GatePassed ? "PASS" : "FAIL")}");
 }
 
 return gatePassed ? 0 : 2;

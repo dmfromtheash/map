@@ -14,7 +14,7 @@ namespace Map.Presentation.Tests;
 public sealed class Stage10LibraryStampTests : IDisposable
 {
     private readonly string _root = Path.Combine(
-        Path.GetTempPath(), "map-library-vm", Guid.NewGuid().ToString("N"));
+        Path.GetTempPath(), "map-library-tests", Guid.NewGuid().ToString("N"));
 
     // ---------------------------------------------------------------- library state
 
@@ -480,14 +480,15 @@ public sealed class Stage10LibraryStampTests : IDisposable
 
     /// <summary>
     /// The cost of a gesture must follow the number of distinct variants it needs, not the number
-    /// of stamps it places: five thousand stamps over twelve variants is twelve file resolutions.
+    /// of stamps it places: a formula-planned five thousand stamps over twelve variants is twelve
+    /// file resolutions, without relying on a product count ceiling.
     /// </summary>
     [Fact]
-    public void Five_thousand_planned_stamps_over_twelve_variants_resolve_twelve_originals()
+    public void Five_thousand_formula_planned_stamps_over_twelve_variants_resolve_twelve_originals()
     {
         var editor = AreaEditor("cost", out var catalog, out var counting);
-        editor.StampAreaRadius = 4_000;
-        editor.StampDensity = 10_000;
+        editor.StampAreaRadius = 400;
+        editor.StampDensity = 5_000 * StampPlacement.DensityReferenceArea / (Math.PI * 400 * 400);
         Assert.Equal(5_000, editor.PlannedStampCount);
 
         Assert.True(editor.PlaceCurrentVariantAt(0, 0));
@@ -1169,8 +1170,8 @@ public sealed class Stage10LibraryStampTests : IDisposable
         Assert.Equal("Alt+Left", shortcuts.Get("stamp-previous-variant"));
         Assert.Equal("Alt+Wheel", shortcuts.Get("stamp-cycle-variant"));
         Assert.Equal("F", shortcuts.Get("stamp-focus-library"));
-        Assert.Equal("Q", shortcuts.Get("stamp-area-up"));
-        Assert.Equal("A", shortcuts.Get("stamp-area-down"));
+        Assert.Equal("C", shortcuts.Get("stamp-area-up"));
+        Assert.Equal("Z", shortcuts.Get("stamp-area-down"));
         Assert.Equal("Alt+Q", shortcuts.Get("stamp-density-up"));
         Assert.Equal("Alt+A", shortcuts.Get("stamp-density-down"));
     }

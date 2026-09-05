@@ -91,6 +91,9 @@ public sealed class DashboardViewModel : ViewModelBase
         private set => SetField(ref _recentCards, value);
     }
 
+    /// <summary>The library size before search, so no matches is distinct from a first launch.</summary>
+    public int TotalRecentCount => _allRecentCards.Count;
+
     public IReadOnlyList<RecoveryCard> RecoveryCards
     {
         get => _recoveryCards;
@@ -178,6 +181,7 @@ public sealed class DashboardViewModel : ViewModelBase
 
         _allRecentCards = cards;
         ApplyQuery();
+        Raise(nameof(TotalRecentCount));
 
         try
         {
@@ -306,7 +310,7 @@ public sealed class DashboardViewModel : ViewModelBase
 
     /// <summary>
     /// Creates an atomic independent project copy. The immutable source snapshot is never edited;
-    /// the new document identity and title are assigned before the destination is published.
+    /// the new document identity and title are assigned before the destination is written.
     /// </summary>
     public async Task<string?> CloneAsync(RecentCard source, bool asTemplate = false)
     {

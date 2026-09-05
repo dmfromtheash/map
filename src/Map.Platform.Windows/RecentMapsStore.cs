@@ -153,7 +153,7 @@ public sealed class RecentMapsStore
 
         return fullPath[root.Length..].Split(
             [System.IO.Path.DirectorySeparatorChar, System.IO.Path.AltDirectorySeparatorChar],
-            StringSplitOptions.RemoveEmptyEntries).All(PortablePathSegment.IsSafe);
+            StringSplitOptions.RemoveEmptyEntries).All(SafePathSegment.IsSafe);
     }
 
     /// <summary>

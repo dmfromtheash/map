@@ -17,10 +17,10 @@ Stage 12A закрывает функцию, исторически называ
 
 - сохранить весь production-код Stage 10E, 10F и полезный Stage 11;
 - сохранить app icon и test-profile isolation;
-- удалить только benchmarks, VM/packaging/release scripts, drivers, старые prompts/reviews,
-  generated evidence и неиспользуемые dev-tools;
+- удалить только устаревшие process scripts, drivers, старые prompts/reviews, generated evidence
+  и неиспользуемые dev-tools;
 - оставить `Map.slnx` только с семью production-проектами;
-- объединить version `0.2.0` с `win-x64` и `SelfContained=false` в `Directory.Build.props`;
+- объединить version `0.2.0` с `win-x64` в `Directory.Build.props`;
 - сохранить адресные test sources вне обычного solution;
 - перенести актуальные правила, roadmap, handoff, DEC-016 и DEC-017.
 
@@ -62,11 +62,11 @@ Stage 12A закрывает функцию, исторически называ
 - Stage 12B resize/crop/new-from-region;
 - Stage 12C full export/progress/cancel;
 - Stage 12D migrations и общая diagnostics-страница;
-- cloud history, sync, аккаунт и публикация;
+- cloud history, sync и аккаунт;
 - сравнение checkpoints и document branching;
 - автоматические checkpoints;
 - новые dependencies;
-- VM, installer, packaging, full-suite и большие evidence-папки.
+- full-suite и большие evidence-папки.
 
 ## Acceptance
 
@@ -88,19 +88,20 @@ Stage 12A закрывает функцию, исторически называ
 - один небольшой интеграционный `FullyQualifiedName~Stage12A` filter в
   `Map.Persistence.Tests`, без full suite;
 - один короткий smoke в настоящем окне текущего ПК;
-- никаких VM, coverage, mutation, benchmark, packaging или повторов зелёного snapshot.
+- никаких coverage, mutation, benchmark или повторов зелёного snapshot.
 
 ## Git и GitHub
 
 - разрешённая ветка: `stage/12a-named-checkpoints`;
 - cleanup уже отделён от будущего feature commit;
 - push `main` и этой stage-ветки прямо разрешён владельцем в подготовительной задаче;
-- PR/tag/release требуют отдельного прямого разрешения;
+- PR и tag требуют отдельного прямого разрешения;
 - GitHub status синхронизируется только с уже существующей точной карточкой и доступным scope;
 - отсутствие remote/Project не блокирует локальный stage;
 - схема: `docs/GITHUB_PROJECTS.md`.
 
-## Следующий этап
+## Исторический следующий этап
 
-После фактического завершения 12A единственный следующий срез — Stage 12B: resize/crop и новая
-карта из региона.
+На момент этого исторического контракта после Stage 12A планировался Stage 12B: resize/crop и новая
+карта из региона. Stage 12B и последующие Stages 12C–16 уже реализованы; текущий статус находится
+в `docs/STATE_HANDOFF.md`.

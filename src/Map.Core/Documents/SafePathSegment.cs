@@ -1,11 +1,11 @@
 namespace Map.Core.Documents;
 
 /// <summary>
-/// Windows-portable filename rules shared by project and catalog relative paths. DOS device
+/// Safe Windows filename rules shared by project and catalog relative paths. DOS device
 /// aliases keep their special meaning even below a normal directory and even with an extension,
 /// so they must be rejected before any path is resolved or probed.
 /// </summary>
-public static class PortablePathSegment
+public static class SafePathSegment
 {
     private const string WindowsInvalidCharacters = "<>:\"/\\|?*";
 

@@ -79,12 +79,12 @@ public static class StampPlacement
     /// <summary>Density is expressed against this many square world units.</summary>
     public const double DensityReferenceArea = 10_000;
 
-    /// <summary>A single gesture is bounded so one drag can never allocate without limit.</summary>
-    public const int MaxStampsPerGesture = 5_000;
-
     public const int MinStampsPerGesture = 1;
 
-    /// <summary>count = clamp(round(density * PI * radius^2 / 10000), 1, 5000).</summary>
+    /// <summary>
+    /// count = round(density * PI * radius^2 / 10000). There is no product-level stamp ceiling;
+    /// <see cref="int.MaxValue"/> is only the CLR collection/addressing boundary.
+    /// </summary>
     public static int CountFor(double density, double radius)
     {
         if (double.IsNaN(density) || double.IsNaN(radius) || density <= 0 || radius <= 0)
@@ -94,12 +94,12 @@ public static class StampPlacement
 
         var area = Math.PI * radius * radius;
         var raw = Math.Round(density * area / DensityReferenceArea, MidpointRounding.AwayFromZero);
-        if (raw >= MaxStampsPerGesture)
+        if (raw >= int.MaxValue)
         {
-            return MaxStampsPerGesture;
+            return int.MaxValue;
         }
 
-        return (int)Math.Clamp(raw, MinStampsPerGesture, MaxStampsPerGesture);
+        return Math.Max(MinStampsPerGesture, (int)raw);
     }
 
     /// <summary>The same radius expressed in grid cells, or null when no grid is active.</summary>
@@ -122,7 +122,7 @@ public static class StampPlacement
     /// </summary>
     public static IReadOnlyList<StampPlacementItem> PlanArea(
         StampPlacementRequest request, IReadOnlyList<StampVariantSource> variants)
-        => PlanArea(request, variants, MaxStampsPerGesture);
+        => PlanArea(request, variants, int.MaxValue);
 
     /// <summary>
     /// A deterministic prefix of the full scatter plan for transient editor rendering. The same
@@ -135,7 +135,7 @@ public static class StampPlacement
         IReadOnlyList<StampVariantSource> variants,
         int maximumItems = 64)
     {
-        if (maximumItems is < 1 or > MaxStampsPerGesture)
+        if (maximumItems < 1)
         {
             throw new ArgumentOutOfRangeException(nameof(maximumItems));
         }

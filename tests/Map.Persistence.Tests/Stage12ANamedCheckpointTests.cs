@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json.Nodes;
 using Map.Core.Documents;
 using Map.Core.Editing;
 using Map.Persistence.Tests.Support;
@@ -50,7 +51,7 @@ public class Stage12ANamedCheckpointTests
         var root = $"{MapProjectFormat.CheckpointPrefix}{FirstCheckpointId}/";
         var snapshotScene = Encoding.UTF8.GetString(
             MapProjectRoundTripTests.ReadEntry(archive, root + "scene.json"));
-        Assert.DoesNotContain("checkpoint", snapshotScene, StringComparison.OrdinalIgnoreCase);
+        Assert.False(JsonNode.Parse(snapshotScene)!.AsObject().ContainsKey("checkpoints"));
         Assert.DoesNotContain(archive.Entries, entry => entry.FullName.StartsWith(
             root + MapProjectFormat.CheckpointPrefix, StringComparison.Ordinal));
     }

@@ -2,6 +2,7 @@ using Map.Core.Documents;
 using Map.Core.Editing;
 using SkiaSharp;
 using System.Runtime.CompilerServices;
+using System.Collections.Immutable;
 
 namespace Map.Rendering;
 
@@ -47,6 +48,9 @@ public sealed class RenderStats
     public int OverviewChunks { get; set; }
     public int OverviewBatches { get; set; }
     public int DrawCalls { get; set; }
+    public int StampAtlasBatches { get; set; }
+    public int StampOccludedObjects { get; set; }
+    public int ObjectTilesDrawn { get; set; }
     public long ObjectCacheHits { get; set; }
     public long ObjectCacheMisses { get; set; }
     public long ObjectCacheInvalidations { get; set; }
@@ -72,6 +76,9 @@ public sealed class RenderStats
         OverviewChunks = 0;
         OverviewBatches = 0;
         DrawCalls = 0;
+        StampAtlasBatches = 0;
+        StampOccludedObjects = 0;
+        ObjectTilesDrawn = 0;
         ObjectCacheHits = 0;
         ObjectCacheMisses = 0;
         ObjectCacheInvalidations = 0;
@@ -234,10 +241,14 @@ public static class SceneRenderer
         new(new Guid("2e304ada-4a3e-4f2e-896c-c92977b52150"));
 
     private static readonly SKColor SelectionColor = new(255, 214, 10, 255);
+    // Spatial revisions retain untouched tiles; each raster is capped at 512 screen pixels.
     private const double OverviewChunkSize = 8_192;
     private const double OverviewExactScreenSize = 4;
     private static readonly ConditionalWeakTable<ObjectLayer, ObjectOverviewPlan> OverviewPlans = [];
+    private static readonly ConditionalWeakTable<ObjectLayer, DetailTileRevisions> DetailRevisions = [];
+    private static long _detailRevision;
     private static readonly ConditionalWeakTable<byte[], MaskCoverageState> MaskCoverageStates = [];
+    private static readonly ConditionalWeakTable<byte[], LandCoverageState> LandCoverageStates = [];
 
     /// <summary>Draws the document in world coordinates. The caller sets the world transform.</summary>
     public static void Render(SKCanvas canvas, MapDocument document, RenderOptions options)
@@ -564,7 +575,22 @@ public static class SceneRenderer
             return;
         }
 
-        if (!options.FastPreview)
+        // At overview scale the edge effects are below a screen pixel, but each one replays the
+        // complete tile set (rings do it several times). Keep the exact style at edit/export zoom
+        // and use one tinted coverage pass for the far map overview.
+        var simplifiedOverview = !options.IsExport && options.LodTier == RenderLodTier.Overview;
+        if (simplifiedOverview)
+        {
+            DrawOverviewCoverage();
+            if (options.Stats is { } overviewStats)
+            {
+                overviewStats.TilesDrawn += keys.Count;
+                overviewStats.MipmappedTiles += keys.Count;
+            }
+            return;
+        }
+
+        if (!options.FastPreview && !simplifiedOverview)
         {
             if (style.OuterShadowOpacity > 0 && style.ShadowBlur > 0)
             {
@@ -596,7 +622,8 @@ public static class SceneRenderer
             DrawCoverageImages(fill);
         }
 
-        if (!options.FastPreview && style.InnerShadowOpacity > 0 && style.ShadowBlur > 0)
+        if (!options.FastPreview && !simplifiedOverview
+            && style.InnerShadowOpacity > 0 && style.ShadowBlur > 0)
         {
             using var filter = SKImageFilter.CreateDropShadowOnly(
                 (float)style.ShadowOffsetX, (float)style.ShadowOffsetY,
@@ -640,6 +667,54 @@ public static class SceneRenderer
                     ? options.TileCache.Get(layer.Id, key, TileImageKind.LandCoverage, coverage)
                     : BuildCoverageImage(coverage, TileImageKind.LandCoverage);
                 canvas.DrawImage(image, TileRect(key), sampling, paint);
+                if (options.TileCache is null)
+                {
+                    image.Dispose();
+                }
+            }
+        }
+
+        void DrawOverviewCoverage()
+        {
+            using var fullTilePath = new SKPath();
+            var partial = new List<(TileKey Key, byte[] Coverage)>();
+            foreach (var key in keys)
+            {
+                var coverage = layer.GeometryTiles.TryGet(key)!;
+                if (IsFullyCovered(coverage))
+                {
+                    fullTilePath.AddRect(TileRect(key));
+                }
+                else
+                {
+                    partial.Add((key, coverage));
+                }
+            }
+
+            using (var fullPaint = new SKPaint
+            {
+                Color = ParseColor(style.FillColor),
+                IsAntialias = false,
+                Style = SKPaintStyle.Fill,
+            })
+            {
+                canvas.DrawPath(fullTilePath, fullPaint);
+            }
+
+            if (partial.Count == 0)
+            {
+                return;
+            }
+
+            using var tint = SKColorFilter.CreateBlendMode(
+                ParseColor(style.FillColor), SKBlendMode.SrcIn);
+            using var partialPaint = new SKPaint { ColorFilter = tint, IsAntialias = false };
+            foreach (var (key, coverage) in partial)
+            {
+                var image = options.TileCache is not null
+                    ? options.TileCache.Get(layer.Id, key, TileImageKind.LandCoverage, coverage)
+                    : BuildCoverageImage(coverage, TileImageKind.LandCoverage);
+                canvas.DrawImage(image, TileRect(key), sampling, partialPaint);
                 if (options.TileCache is null)
                 {
                     image.Dispose();
@@ -698,6 +773,18 @@ public static class SceneRenderer
         WorldBounds view,
         RenderOptions options)
     {
+        // At a readable stamp size the overview's exact subset can itself be a dense forest.
+        // Cache that composited detail before entering the far-zoom aggregate path.
+        if (!options.IsExport && options.ViewScale >= .03
+            && options.ObjectCache is not null && options.VisibleWorld is not null
+            && options.ObjectOverrides is not { Count: > 0 } && layer.Objects.Count >= 2000
+            && DetailRevisions.GetValue(layer, static l => new(l)).CanCache
+            && document.Assets.All(asset => options.Stamps?.TryGetImage(asset.Sha256) is not null))
+        {
+            DrawDetailedStampTiles(canvas, document, layer, view, options);
+            return;
+        }
+
         if (!options.IsExport
             && options.LodTier == RenderLodTier.Overview
             && layer.SublayerStates.All(state => state.Visible)
@@ -792,13 +879,19 @@ public static class SceneRenderer
             }
         }
 
-        foreach (var sceneObject in ordered)
+        for (var objectIndex = 0; objectIndex < ordered.Count; objectIndex++)
         {
+            var sceneObject = ordered[objectIndex];
             if (!sceneObject.Visible)
             {
                 continue;
             }
 
+            if (!options.IsExport && TryDrawStampBatch(canvas, ordered, objectIndex, options) is > 0 and var batched)
+            {
+                objectIndex += batched - 1;
+                continue;
+            }
             DrawObject(canvas, sceneObject, document.StampForeground, options);
             if (options.Stats is { } s)
             {
@@ -808,6 +901,173 @@ public static class SceneRenderer
                 s.RecordExactObject(sceneObject);
             }
         }
+    }
+
+    // Dense neutral stamp layers are composited into screen-sized tiles. Pan reuses their exact
+    // source-over result; a document delta invalidates only intersecting tiles. Complex paints
+    // keep the direct evaluator, since their result can depend on the destination behind them.
+    private sealed class DetailTileRevisions
+    {
+        private readonly DetailTileRevisions? _parent;
+        private readonly WorldBounds[] _changed;
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<(int X, int Y, int Zoom), ulong> _versions = new();
+        private readonly int _unsupported;
+        private readonly int _nonzeroSublayers;
+        private readonly SceneObject[]? _appended;
+        public bool CanCache => _unsupported == 0;
+        public DetailTileRevisions(ObjectLayer layer)
+        {
+            if (ObjectLayerChanges.TryGet(layer, out var delta))
+            {
+                var previous = DetailRevisions.GetValue(delta.Source, static l => new(l));
+                _parent = previous;
+                _unsupported = previous._unsupported - delta.Removed.Count(i => !Neutral(delta.Source.Objects[i]))
+                    + delta.Added.Count(i => !Neutral(layer.Objects[i]));
+                _nonzeroSublayers = previous._nonzeroSublayers - delta.Removed.Count(i => delta.Source.Objects[i].Sublayer != 0)
+                    + delta.Added.Count(i => layer.Objects[i].Sublayer != 0);
+                if (delta.Removed.Count == 0 && _nonzeroSublayers == 0
+                    && delta.Added.All(i => i >= delta.Source.Objects.Count))
+                    _appended = delta.Added.Select(i => layer.Objects[i]).ToArray();
+                _changed = delta.Removed.Select(i => SceneGeometry.BoundsOf(delta.Source.Objects[i]))
+                    .Concat(delta.Added.Select(i => SceneGeometry.BoundsOf(layer.Objects[i]))).ToArray();
+            }
+            else
+            {
+                _unsupported = layer.Objects.Count(o => !Neutral(o));
+                _nonzeroSublayers = layer.Objects.Count(o => o.Sublayer != 0);
+                _changed = [];
+            }
+        }
+        public bool TryAppendBase(ObjectOverviewCache cache, LayerId layer, int x, int y, int zoom,
+            WorldBounds bounds, out ObjectOverviewCacheResult basis, out IReadOnlyList<SceneObject> tail)
+        {
+            var segments = new List<SceneObject[]>();
+            var current = this;
+            for (var depth = 0; depth < 64 && current._appended is { } appended && current._parent is { } parent; depth++)
+            {
+                segments.Add(appended);
+                if (cache.TryGet(layer, x, y, 10000 + zoom, parent.Version(x, y, zoom, bounds), out basis))
+                {
+                    segments.Reverse();
+                    tail = segments.SelectMany(s => s).Where(o => o.Visible && SceneGeometry.BoundsOf(o).Intersects(bounds)).ToArray();
+                    return true;
+                }
+                current = parent;
+            }
+            basis = default; tail = [];
+            return false;
+        }
+        public ulong Version(int x, int y, int zoom, WorldBounds bounds) => _versions.GetOrAdd((x, y, zoom), key =>
+        {
+            if (_parent is not null && !_changed.Any(b => b.Intersects(bounds))) return _parent.Version(x, y, zoom, bounds);
+            return unchecked((ulong)System.Threading.Interlocked.Increment(ref _detailRevision));
+        });
+        private static bool Neutral(SceneObject o) => o.Kind == SceneObjectKind.Stamp
+            && o.Stamp is { Blur: 0, ShadowOpacity: 0, ClipMaskEnabled: false, Blend: "Normal" };
+    }
+
+    private static void DrawDetailedStampTiles(SKCanvas canvas, MapDocument document, ObjectLayer layer, WorldBounds view, RenderOptions options)
+    {
+        var bucket = (int)Math.Ceiling(Math.Log2(options.ViewScale) * 4);
+        var scale = Math.Pow(2, bucket / 4d);
+        var worldSize = 512 / scale;
+        var revisions = DetailRevisions.GetValue(layer, static l => new(l));
+        var cache = options.ObjectCache!;
+        var hits = cache.Hits; var misses = cache.Misses;
+        for (var y = (int)Math.Floor(view.Top / worldSize); y <= (int)Math.Floor(view.Bottom / worldSize); y++)
+        for (var x = (int)Math.Floor(view.Left / worldSize); x <= (int)Math.Floor(view.Right / worldSize); x++)
+        {
+            var bounds = new WorldBounds(x * worldSize, y * worldSize, (x + 1) * worldSize, (y + 1) * worldSize);
+            var revision = revisions.Version(x, y, bucket, Expand(bounds, 1 / scale));
+            var objectCount = 0; var culledCount = 0;
+            var drawnBefore = options.Stats?.ObjectsDrawn ?? 0;
+            var cached = cache.GetOrCreate(layer.Id, x, y, 10000 + bucket, revision, () =>
+            {
+                using var surface = SKSurface.Create(new SKImageInfo(514, 514))!;
+                var target = surface.Canvas;
+                target.Clear(SKColors.Transparent);
+                var incremental = revisions.TryAppendBase(cache, layer.Id, x, y, bucket, Expand(bounds, 1 / scale),
+                    out var basis, out var appended);
+                if (incremental)
+                {
+                    using var copy = new SKPaint { BlendMode = SKBlendMode.Src };
+                    target.DrawImage(basis.Image, 0, 0, copy);
+                }
+                target.Translate(1, 1);
+                target.Scale((float)scale);
+                target.Translate((float)-bounds.Left, (float)-bounds.Top);
+                var candidates = incremental ? appended : ObjectSpatialIndex.For(layer).Query(Expand(bounds, 1 / scale));
+                if (layer.SublayerStates.Any(s => !s.Visible)) candidates = candidates.Where(o => layer.StateFor(o.Sublayer).Visible).ToArray();
+                var ordered = candidates.Any(o => o.Sublayer != 0) ? candidates.OrderBy(o => o.Sublayer).ToArray() : candidates;
+                ordered = StampOcclusion.Cull(ordered, Expand(bounds, 1 / scale), scale, options.Stamps);
+                objectCount = (incremental ? basis.ObjectCount : 0) + ordered.Count(o => o.Visible);
+                culledCount = (incremental ? basis.CulledCount : 0) + candidates.Count - ordered.Count;
+                for (var i = 0; i < ordered.Count; i++)
+                {
+                    if (!ordered[i].Visible) continue;
+                    var batch = TryDrawStampBatch(target, ordered, i, options);
+                    if (batch > 0) i += batch - 1;
+                    else DrawObject(target, ordered[i], document.StampForeground, options);
+                }
+                return surface.Snapshot();
+            }, () => (objectCount, culledCount));
+            // One pixel of bleed avoids seams from neighboring tiles under fractional pan/zoom.
+            canvas.DrawImage(cached.Image, new SKRect(1, 1, 513, 513),
+                new SKRect((float)bounds.Left, (float)bounds.Top, (float)bounds.Right, (float)bounds.Bottom),
+                new SKSamplingOptions(SKFilterMode.Linear));
+            if (options.Stats is { } stats)
+            {
+                stats.DrawCalls++; stats.ObjectTilesDrawn++;
+                stats.ObjectsDrawn = drawnBefore + cached.ObjectCount;
+                stats.StampOccludedObjects += cached.CulledCount;
+            }
+        }
+        if (options.Stats is { } finalStats)
+        { finalStats.ObjectCacheHits += cache.Hits - hits; finalStats.ObjectCacheMisses += cache.Misses - misses; }
+    }
+
+    /// <summary>Consecutive, compatible stamps share one submission without reordering the scene.</summary>
+    private static int TryDrawStampBatch(SKCanvas canvas, IReadOnlyList<SceneObject> objects, int start, RenderOptions options)
+    {
+        var first = objects[start];
+        if (!Compatible(first) || options.Stamps?.TryGetImage(first.Stamp!.AssetSha256) is not { } image) return 0;
+        var count = 0;
+        while (start + count < objects.Count && count < 8192)
+        {
+            var item = objects[start + count];
+            if (!Compatible(item) || item.Stamp!.AssetSha256 != first.Stamp!.AssetSha256
+                || Math.Abs(item.Width / image.Width - item.Height / image.Height) > 0.000001) break;
+            count++;
+        }
+        if (count < 2) return 0;
+        var transforms = new SKRotationScaleMatrix[count];
+        var sources = new SKRect[count];
+        var colors = new SKColor[count];
+        for (var i = 0; i < count; i++)
+        {
+            var item = objects[start + i];
+            var angle = item.RotationDegrees * Math.PI / 180;
+            var scale = item.Width / image.Width;
+            var cos = scale * Math.Cos(angle); var sin = scale * Math.Sin(angle);
+            transforms[i] = new((float)cos, (float)sin,
+                (float)(item.X + item.Width / 2 - cos * image.Width / 2 + sin * image.Height / 2),
+                (float)(item.Y + item.Height / 2 - sin * image.Width / 2 - cos * image.Height / 2));
+            sources[i] = new(0, 0, image.Width, image.Height);
+            colors[i] = SKColors.White.WithAlpha(Alpha(item.ObjectOpacity));
+        }
+        using var paint = new SKPaint { IsAntialias = true, BlendMode = SKBlendMode.SrcOver };
+        canvas.DrawAtlas(image, sources, transforms, colors, SKBlendMode.Modulate,
+            new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear), paint);
+        if (options.Stats is { } stats)
+        {
+            stats.DrawCalls++; stats.StampAtlasBatches++; stats.ObjectsDrawn += count; stats.ExactObjects += count;
+            for (var i = 0; i < count; i++) stats.RecordExactObject(objects[start + i]);
+        }
+        return count;
+
+        static bool Compatible(SceneObject item) => item.Visible && item.Kind == SceneObjectKind.Stamp
+            && item.Stamp is { FlipHorizontal: false, FlipVertical: false, ClipMaskEnabled: false,
+                ShadowOpacity: 0, Blur: 0, Hue: 0, Saturation: 0, Brightness: 0, Contrast: 0, Blend: "Normal" };
     }
 
     private static void DrawTiles(
@@ -2028,9 +2288,18 @@ public static class SceneRenderer
 
         if (stamp.Brightness != 0)
         {
-            var offset = (float)(Math.Clamp(stamp.Brightness, -1, 1) * 255);
+            var brightness = (float)Math.Clamp(stamp.Brightness, -1, 1);
+            // The UI expresses brightness as 0..200 % with 100 % neutral, so use the matching
+            // 0..2 channel multiplier. The previous translation was additionally multiplied by
+            // 255 even though Skia uses normalized colour space, clipping one slider step to
+            // solid black or white.
+            var scale = 1 + brightness;
             matrix = Multiply(
-                [1, 0, 0, 0, offset, 0, 1, 0, 0, offset, 0, 0, 1, 0, offset, 0, 0, 0, 1, 0], matrix);
+                [scale, 0, 0, 0, 0,
+                 0, scale, 0, 0, 0,
+                 0, 0, scale, 0, 0,
+                 0, 0, 0, 1, 0],
+                matrix);
         }
 
         return SKColorFilter.CreateColorMatrix(matrix);
@@ -2188,6 +2457,14 @@ public static class SceneRenderer
 
     private sealed record MaskCoverageState(bool HasHiddenPixels);
 
+    private static bool IsFullyCovered(byte[] coverage) =>
+        LandCoverageStates.GetValue(
+            coverage,
+            static pixels => new LandCoverageState(pixels.All(value => value == 255)))
+        .FullyCovered;
+
+    private sealed record LandCoverageState(bool FullyCovered);
+
     private static void DrawOverviewObjects(
         SKCanvas canvas,
         MapDocument document,
@@ -2197,6 +2474,16 @@ public static class SceneRenderer
     {
         var cache = options.ObjectCache!;
         var plan = OverviewPlans.GetValue(layer, static current => new ObjectOverviewPlan(current));
+        var colors = new Dictionary<string, SKColor>(StringComparer.Ordinal);
+        var colorSignature = new HashCode();
+        foreach (var asset in document.Assets)
+        {
+            if (options.Stamps?.TryGetImage(asset.Sha256) is not { } image) continue;
+            var color = StampOcclusion.Color(image);
+            colors[asset.Sha256] = color;
+            colorSignature.Add(asset.Sha256); colorSignature.Add(color);
+        }
+        var tintRevision = colorSignature.ToHashCode();
         var zoomBucket = OverviewZoomBucket(options.ViewScale);
         var bucketScale = Math.Pow(2, zoomBucket / 4.0);
         var minX = (int)Math.Floor(view.Left / OverviewChunkSize);
@@ -2215,7 +2502,7 @@ public static class SceneRenderer
         {
             for (var chunkX = minX; chunkX <= maxX; chunkX++)
             {
-                if (!plan.TryGetVariant(chunkX, chunkY, zoomBucket, bucketScale, out var variant))
+                if (!plan.TryGetVariant(chunkX, chunkY, zoomBucket, bucketScale, colors, tintRevision, out var variant))
                 {
                     continue;
                 }
@@ -2236,24 +2523,27 @@ public static class SceneRenderer
                     new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None));
                 foreach (var sceneObject in variant.ExactObjects)
                 {
-                    exact.TryAdd(sceneObject.Id, sceneObject);
+                    if (SceneGeometry.BoundsOf(sceneObject).Intersects(view)) exact.TryAdd(sceneObject.Id, sceneObject);
                 }
             }
         }
 
         // Far zoom keeps spatial density cheap, but anything the user is manipulating remains an
         // exact object over the aggregate representation. The immutable base picture stays hot.
-        if (options.SelectedObjectId is { } selected && plan.TryFind(selected, out var primary))
+        if (options.SelectedObjectId is { } selected
+            && DocumentRevisionIndex.For(document).TryFind(selected, out var primary)
+            && primary.LayerId == layer.Id)
         {
-            exact[primary.Id] = primary;
+            exact[primary.Object.Id] = primary.Object;
         }
         if (options.CoSelectedObjectIds is { Count: > 0 } selectedObjects)
         {
             foreach (var id in selectedObjects)
             {
-                if (plan.TryFind(id, out var selectedObject))
+                if (DocumentRevisionIndex.For(document).TryFind(id, out var selectedObject)
+                    && selectedObject.LayerId == layer.Id)
                 {
-                    exact[selectedObject.Id] = selectedObject;
+                    exact[selectedObject.Object.Id] = selectedObject.Object;
                 }
             }
         }
@@ -2295,97 +2585,113 @@ public static class SceneRenderer
 
     private sealed class ObjectOverviewPlan
     {
-        private readonly Dictionary<(int X, int Y), OverviewChunk> _chunks = [];
-        private readonly Dictionary<ObjectId, SceneObject> _objects = [];
+        private readonly ImmutableDictionary<(int X, int Y), OverviewChunk> _chunks;
 
         public ObjectOverviewPlan(ObjectLayer layer)
         {
-            foreach (var sceneObject in layer.Objects)
+            if (ObjectLayerChanges.TryGet(layer, out var delta))
             {
-                if (!sceneObject.Visible)
+                var previous = OverviewPlans.GetValue(delta.Source, static l => new(l));
+                var chunks = previous._chunks.ToBuilder();
+                var changes = new Dictionary<(int, int), (List<int> Remove, List<(int, SceneObject)> Add)>();
+                foreach (var index in delta.Removed) Collect(delta.Source.Objects[index], index, false);
+                foreach (var index in delta.Added) Collect(layer.Objects[index], index, true);
+                foreach (var (key, change) in changes)
                 {
-                    continue;
+                    var objects = chunks.TryGetValue(key, out var oldChunk)
+                        ? oldChunk.Objects.ToBuilder() : ImmutableSortedDictionary.CreateBuilder<int, SceneObject>();
+                    foreach (var index in change.Remove) objects.Remove(index);
+                    foreach (var (index, item) in change.Add) objects[index] = item;
+                    if (objects.Count == 0) chunks.Remove(key);
+                    else chunks[key] = new OverviewChunk(key.Item1, key.Item2, objects.ToImmutable());
                 }
+                _chunks = chunks.ToImmutable();
 
-                _objects[sceneObject.Id] = sceneObject;
-                var centreX = sceneObject.X + (sceneObject.Width / 2);
-                var centreY = sceneObject.Y + (sceneObject.Height / 2);
-                var key = (
-                    (int)Math.Floor(centreX / OverviewChunkSize),
-                    (int)Math.Floor(centreY / OverviewChunkSize));
-                if (!_chunks.TryGetValue(key, out var chunk))
+                void Collect(SceneObject item, int index, bool add)
                 {
-                    chunk = new OverviewChunk(key.Item1, key.Item2);
-                    _chunks.Add(key, chunk);
+                    if (!item.Visible) return;
+                    var key = KeyOf(item);
+                    if (!changes.TryGetValue(key, out var change)) changes[key] = change = ([], []);
+                    if (add) change.Add.Add((index, item)); else change.Remove.Add(index);
                 }
-                chunk.Objects.Add(sceneObject);
+            }
+            else
+            {
+                var chunks = new Dictionary<(int, int), ImmutableSortedDictionary<int, SceneObject>.Builder>();
+                for (var index = 0; index < layer.Objects.Count; index++)
+                {
+                    var item = layer.Objects[index];
+                    if (!item.Visible) continue;
+                    var key = KeyOf(item);
+                    if (!chunks.TryGetValue(key, out var objects)) chunks[key] = objects = ImmutableSortedDictionary.CreateBuilder<int, SceneObject>();
+                    objects.Add(index, item);
+                }
+                _chunks = chunks.ToImmutableDictionary(p => p.Key,
+                    p => new OverviewChunk(p.Key.Item1, p.Key.Item2, p.Value.ToImmutable()));
             }
         }
 
-        public bool TryFind(ObjectId id, out SceneObject sceneObject) =>
-            _objects.TryGetValue(id, out sceneObject!);
+        private static (int, int) KeyOf(SceneObject item) =>
+            ((int)Math.Floor((item.X + item.Width / 2) / OverviewChunkSize),
+             (int)Math.Floor((item.Y + item.Height / 2) / OverviewChunkSize));
 
-        public bool TryGetVariant(
-            int chunkX,
-            int chunkY,
-            int zoomBucket,
-            double bucketScale,
-            out OverviewVariant variant)
+        public bool TryGetVariant(int chunkX, int chunkY, int zoomBucket, double bucketScale,
+            IReadOnlyDictionary<string, SKColor> colors, int tintRevision, out OverviewVariant variant)
         {
-            if (!_chunks.TryGetValue((chunkX, chunkY), out var chunk))
-            {
-                variant = null!;
-                return false;
-            }
-
-            variant = chunk.GetVariant(zoomBucket, bucketScale);
+            if (!_chunks.TryGetValue((chunkX, chunkY), out var chunk)) { variant = null!; return false; }
+            variant = chunk.GetVariant(zoomBucket, bucketScale, colors, tintRevision);
             return true;
         }
     }
 
-    private sealed class OverviewChunk(int x, int y)
+    private sealed class OverviewChunk(int x, int y, ImmutableSortedDictionary<int, SceneObject> objects)
     {
-        private readonly Dictionary<int, OverviewVariant> _variants = [];
+        private readonly Dictionary<(int Zoom, int Tints), OverviewVariant> _variants = [];
 
-        public List<SceneObject> Objects { get; } = [];
+        public ImmutableSortedDictionary<int, SceneObject> Objects { get; } = objects;
 
-        public OverviewVariant GetVariant(int zoomBucket, double bucketScale)
+        public OverviewVariant GetVariant(int zoomBucket, double bucketScale,
+            IReadOnlyDictionary<string, SKColor> colors, int tintRevision)
         {
-            if (_variants.TryGetValue(zoomBucket, out var existing))
+            lock (_variants) return Build();
+
+            OverviewVariant Build()
+            {
+            if (_variants.TryGetValue((zoomBucket, tintRevision), out var existing))
             {
                 return existing;
             }
 
-            var batches = new Dictionary<(int Sublayer, SKColor Color), List<SKPoint>>();
+            var batches = new List<(SKColor Color, List<SKPoint> Points)>();
             var exact = new List<SceneObject>();
             var hash = 14_695_981_039_346_656_037UL;
             var overviewCount = 0;
-            foreach (var sceneObject in Objects)
+            foreach (var sceneObject in Objects.Values.OrderBy(o => o.Sublayer))
             {
                 hash = HashObject(hash, sceneObject);
-                if (Math.Max(sceneObject.Width, sceneObject.Height) * bucketScale
-                    >= OverviewExactScreenSize)
+                if (Math.Max(sceneObject.Width, sceneObject.Height) * bucketScale >= OverviewExactScreenSize
+                    || sceneObject.Stamp is { } detailStamp &&
+                    (!colors.ContainsKey(detailStamp.AssetSha256) || detailStamp is not
+                        { Blur: 0, ShadowOpacity: 0, ClipMaskEnabled: false, Blend: "Normal", Hue: 0,
+                          Saturation: 0, Brightness: 0, Contrast: 0 }))
                 {
                     exact.Add(sceneObject);
                     continue;
                 }
 
                 overviewCount++;
-                var key = (sceneObject.Sublayer, OverviewColor(sceneObject));
-                if (!batches.TryGetValue(key, out var points))
-                {
-                    points = [];
-                    batches.Add(key, points);
-                }
+                var color = sceneObject.Stamp is { } stamp && colors.TryGetValue(stamp.AssetSha256, out var tint)
+                    ? tint.WithScaledAlpha(Alpha(sceneObject.ObjectOpacity)) : OverviewColor(sceneObject);
+                hash = (hash ^ (uint)color.GetHashCode()) * 1_099_511_628_211UL;
+                if (batches.Count == 0 || batches[^1].Color != color) batches.Add((color, []));
+                var points = batches[^1].Points;
                 points.Add(new SKPoint(
                     (float)(sceneObject.X + (sceneObject.Width / 2)),
                     (float)(sceneObject.Y + (sceneObject.Height / 2))));
             }
 
             var immutableBatches = batches
-                .OrderBy(pair => pair.Key.Sublayer)
-                .Select(pair => new OverviewBatch(
-                    pair.Key.Color, [.. pair.Value]))
+                .Select(pair => new OverviewBatch(pair.Color, [.. pair.Points]))
                 .ToArray();
             var bounds = new SKRect(
                 (float)(x * OverviewChunkSize),
@@ -2399,8 +2705,10 @@ public static class SceneRenderer
                 immutableBatches,
                 exact,
                 overviewCount);
-            _variants.Add(zoomBucket, variant);
+            if (_variants.Count >= 4) _variants.Clear();
+            _variants.Add((zoomBucket, tintRevision), variant);
             return variant;
+            }
         }
     }
 
@@ -2420,14 +2728,15 @@ public static class SceneRenderer
 
         public SKImage BuildImage()
         {
-            var width = Math.Max(1, (int)Math.Ceiling(bounds.Width * bucketScale));
-            var height = Math.Max(1, (int)Math.Ceiling(bounds.Height * bucketScale));
+            var imageScale = Math.Min(bucketScale, 512.0 / Math.Max(bounds.Width, bounds.Height));
+            var width = Math.Max(1, (int)Math.Ceiling(bounds.Width * imageScale));
+            var height = Math.Max(1, (int)Math.Ceiling(bounds.Height * imageScale));
             using var surface = SKSurface.Create(new SKImageInfo(
                 width, height, SKColorType.Rgba8888, SKAlphaType.Premul))
                 ?? throw new InvalidOperationException("Could not allocate an overview chunk surface.");
             var recording = surface.Canvas;
             recording.Clear(SKColors.Transparent);
-            recording.Scale((float)bucketScale);
+            recording.Scale((float)imageScale);
             recording.Translate(-bounds.Left, -bounds.Top);
             foreach (var batch in batches)
             {
@@ -2613,7 +2922,7 @@ public static class SceneRenderer
         {
             canvas.DrawRect(left, top, right - left, bottom - top, ring);
 
-            // Stem to the rotation handle (28 screen px above the top edge, matching the VM).
+            // Stem to the rotation handle (28 screen px above the top edge, matching the view model).
             canvas.DrawLine(centreX, top, centreX, top - (28 * px), ring);
         }
 

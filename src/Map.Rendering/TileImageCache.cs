@@ -35,68 +35,192 @@ public sealed class TileImageCache : IDisposable
     {
         public required byte[] Source { get; init; }
         public required SKImage Image { get; init; }
+        public required long Bytes { get; init; }
         public long LastUsed { get; set; }
     }
 
+    private readonly object _gate = new();
     private readonly Dictionary<Key, Entry> _entries = [];
+    private readonly HashSet<Key> _framePins = [];
+    private readonly List<SKImage> _retired = [];
     private readonly int _capacity;
+    private readonly long _byteCapacity;
     private long _clock;
+    private bool _frameOpen;
+    private bool _disposeRequested;
 
-    public TileImageCache(int capacity = 512)
+    public TileImageCache(int capacity = 512, long byteCapacity = 256L * 1024 * 1024)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(capacity);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(byteCapacity);
         _capacity = capacity;
+        _byteCapacity = byteCapacity;
     }
 
     public int Count => _entries.Count;
+    public long Bytes { get; private set; }
     public long Hits { get; private set; }
     public long Misses { get; private set; }
     public long Evictions { get; private set; }
+    public long Disposals { get; private set; }
+
+    /// <summary>
+    /// Pins every image returned during one leased Skia render. Eviction is postponed until the
+    /// lease is released, so a large frame never disposes native images that the same frame used.
+    /// </summary>
+    public void BeginFrame()
+    {
+        lock (_gate)
+        {
+            if (_frameOpen)
+            {
+                throw new InvalidOperationException("A tile-cache frame is already open.");
+            }
+
+            _frameOpen = true;
+            _framePins.Clear();
+        }
+    }
+
+    /// <summary>Releases frame pins and performs deferred native disposal after the Skia lease.</summary>
+    public void EndFrame()
+    {
+        lock (_gate)
+        {
+            if (!_frameOpen)
+            {
+                return;
+            }
+
+            _frameOpen = false;
+            _framePins.Clear();
+            if (_disposeRequested)
+            {
+                DisposeEntries();
+                _disposeRequested = false;
+            }
+            else
+            {
+                Trim(protectedKey: null);
+                DisposeRetired();
+            }
+        }
+    }
 
     public void ResetCounters()
     {
-        Hits = 0;
-        Misses = 0;
-        Evictions = 0;
+        lock (_gate)
+        {
+            Hits = 0;
+            Misses = 0;
+            Evictions = 0;
+        }
     }
 
     /// <summary>The image for this tile, decoded on first use and reused while the tile is unchanged.</summary>
     public SKImage Get(LayerId layer, TileKey tile, TileImageKind kind, byte[] source)
     {
-        var key = new Key(layer, tile, kind);
-        if (_entries.TryGetValue(key, out var entry))
+        lock (_gate)
         {
-            if (ReferenceEquals(entry.Source, source))
+            var key = new Key(layer, tile, kind);
+            if (_entries.TryGetValue(key, out var entry))
             {
-                Hits++;
-                entry.LastUsed = ++_clock;
-                return entry.Image;
+                if (ReferenceEquals(entry.Source, source))
+                {
+                    Hits++;
+                    entry.LastUsed = ++_clock;
+                    if (_frameOpen)
+                    {
+                        _framePins.Add(key);
+                    }
+                    return entry.Image;
+                }
+
+                Remove(key, entry, eviction: false);
             }
 
-            entry.Image.Dispose();
-            _entries.Remove(key);
+            Misses++;
+            var image = Build(kind, source);
+            var bytes = ImageBytes(kind);
+            _entries[key] = new Entry
+            {
+                Source = source,
+                Image = image,
+                Bytes = bytes,
+                LastUsed = ++_clock,
+            };
+            Bytes += bytes;
+            if (_frameOpen)
+            {
+                _framePins.Add(key);
+            }
+            Trim(key);
+            return image;
         }
-
-        Misses++;
-        var image = Build(kind, source);
-        _entries[key] = new Entry { Source = source, Image = image, LastUsed = ++_clock };
-        Trim();
-        return image;
     }
 
-    private void Trim()
+    private void Trim(Key? protectedKey)
     {
-        while (_entries.Count > _capacity)
+        while (_entries.Count > _capacity || Bytes > _byteCapacity)
         {
-            var oldest = _entries.OrderBy(e => e.Value.LastUsed).First();
-            oldest.Value.Image.Dispose();
-            _entries.Remove(oldest.Key);
+            Key oldestKey = default;
+            Entry? oldestEntry = null;
+            foreach (var pair in _entries)
+            {
+                if ((protectedKey is not null && pair.Key == protectedKey.Value)
+                    || _framePins.Contains(pair.Key)
+                    || oldestEntry is not null && pair.Value.LastUsed >= oldestEntry.LastUsed)
+                {
+                    continue;
+                }
+
+                oldestKey = pair.Key;
+                oldestEntry = pair.Value;
+            }
+            if (oldestEntry is null)
+            {
+                // One oversized image, or a frame whose visible working set is larger than the
+                // steady-state cache. It stays alive until the frame lease is released.
+                break;
+            }
+
+            Remove(oldestKey, oldestEntry, eviction: true);
+        }
+    }
+
+    private void Remove(Key key, Entry entry, bool eviction)
+    {
+        _entries.Remove(key);
+        Bytes -= entry.Bytes;
+        if (_frameOpen)
+        {
+            _retired.Add(entry.Image);
+        }
+        else
+        {
+            entry.Image.Dispose();
+            Disposals++;
+        }
+        if (eviction)
+        {
             Evictions++;
         }
     }
 
+    private static long ImageBytes(TileImageKind kind) => kind is
+        TileImageKind.MaskAlpha or TileImageKind.LandCoverage
+            ? (long)TileMap.TileSize * TileMap.TileSize
+            : (long)TileMap.TileSize * TileMap.TileSize * 4;
+
     private static SKImage Build(TileImageKind kind, byte[] source)
     {
+        if (kind is TileImageKind.MaskAlpha or TileImageKind.LandCoverage)
+        {
+            var alphaInfo = new SKImageInfo(
+                TileMap.TileSize, TileMap.TileSize, SKColorType.Alpha8, SKAlphaType.Premul);
+            return SKImage.FromPixelCopy(alphaInfo, source);
+        }
+
         var info = new SKImageInfo(
             TileMap.TileSize, TileMap.TileSize, SKColorType.Rgba8888, SKAlphaType.Premul);
 
@@ -111,21 +235,10 @@ public sealed class TileImageCache : IDisposable
         for (var i = 0; i < source.Length; i++)
         {
             var offset = i * 4;
-            if (kind is TileImageKind.MaskAlpha or TileImageKind.LandCoverage)
-            {
-                var v = source[i];
-                pixels[offset] = v;
-                pixels[offset + 1] = v;
-                pixels[offset + 2] = v;
-                pixels[offset + 3] = v;
-            }
-            else
-            {
-                // Hidden area (mask 0) shows as red; visible area stays clear.
-                var hidden = (byte)(255 - source[i]);
-                pixels[offset] = hidden;
-                pixels[offset + 3] = hidden;
-            }
+            // Hidden area (mask 0) shows as red; visible area stays clear.
+            var hidden = (byte)(255 - source[i]);
+            pixels[offset] = hidden;
+            pixels[offset + 3] = hidden;
         }
 
         return SKImage.FromPixelCopy(info, pixels);
@@ -133,11 +246,37 @@ public sealed class TileImageCache : IDisposable
 
     public void Dispose()
     {
+        lock (_gate)
+        {
+            if (_frameOpen)
+            {
+                _disposeRequested = true;
+                return;
+            }
+
+            DisposeEntries();
+        }
+    }
+
+    private void DisposeEntries()
+    {
         foreach (var entry in _entries.Values)
         {
             entry.Image.Dispose();
+            Disposals++;
         }
-
         _entries.Clear();
+        Bytes = 0;
+        DisposeRetired();
+    }
+
+    private void DisposeRetired()
+    {
+        foreach (var image in _retired)
+        {
+            image.Dispose();
+            Disposals++;
+        }
+        _retired.Clear();
     }
 }

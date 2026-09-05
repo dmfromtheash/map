@@ -119,7 +119,7 @@ public sealed class AssetLibrarySetTests : IDisposable
     }
 
     [Fact]
-    public void Set_favorite_and_recent_survive_a_catalog_restart()
+    public async Task Set_favorite_and_recent_survive_a_catalog_restart()
     {
         var catalog = NewCatalog();
         var set = catalog.ImportSet(
@@ -127,6 +127,7 @@ public sealed class AssetLibrarySetTests : IDisposable
 
         catalog.SetSetFavorite(set.Id, true);
         catalog.TouchRecent(set.Id, set.VariantIds[1], Stamp(5));
+        await catalog.FlushMetadataAsync();
 
         var reopened = new AssetCatalog(RootPath());
         Assert.True(reopened.FindSet(set.Id)!.Favorite);

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Threading.Tasks;
 using Avalonia;
@@ -24,7 +24,7 @@ public sealed class AppSettingsWindow : Window
     private readonly TextBlock _theme = new()
     {
         Name = "SettingsTheme",
-        Text = "Утверждённая тема Map",
+        Text = "Map · Blue Atlas",
         VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
     };
     private readonly NumericUpDown _scale = Number("SettingsUiScale", 80, 200, 5);
@@ -80,12 +80,13 @@ public sealed class AppSettingsWindow : Window
                         {
                             MapIcons.Stroked(
                                 MapIcons.Gear, 22,
-                                Application.Current?.FindResource("MapAccentBrush") as IBrush),
+                                Application.Current?.FindResource("MapChromeTextBrush") as IBrush),
                             new TextBlock
                             {
                                 Text = "Настройки Map",
-                                FontFamily = "Georgia",
-                                FontSize = 27,
+
+                                FontSize = 26,
+                                FontWeight = FontWeight.Bold,
                                 VerticalAlignment = VerticalAlignment.Center,
                             },
                         },
@@ -101,21 +102,20 @@ public sealed class AppSettingsWindow : Window
                         HorizontalAlignment = HorizontalAlignment.Right,
                         Children = { reset, close, save },
                     },
-                }.Classed("app-bar").Docked(Dock.Bottom),
+                }.Classed("dialog-footer").Docked(Dock.Bottom),
                 new Border
                 {
-                    Margin = new Thickness(20),
-                    Padding = new Thickness(4),
+                    Margin = new Thickness(24),
                     Child = new ScrollViewer
                     {
                         Content = new StackPanel
                         {
-                            Margin = new Thickness(20),
+                            Margin = new Thickness(16),
                             Spacing = 16,
                             Children =
                             {
                                 Heading("Интерфейс"),
-                                Ui.PropertyRow("Тема", _theme),
+                                Ui.PropertyRow("Тема", _theme, captionWidth: 220),
                                 new TextBlock
                                 {
                                     Text = "Оформление Map не следует за тёмной темой Windows: "
@@ -123,13 +123,13 @@ public sealed class AppSettingsWindow : Window
                                         + "одну светлую рабочую поверхность.",
                                     TextWrapping = Avalonia.Media.TextWrapping.Wrap,
                                 }.Classed("faint", "role-caption"),
-                                Ui.PropertyRow("Масштаб интерфейса", PercentRow(_scale)),
+                                Ui.PropertyRow("Масштаб интерфейса", PercentRow(_scale), captionWidth: 220),
                                 new TextBlock { Text = "Язык интерфейса: русский", TextWrapping = Avalonia.Media.TextWrapping.Wrap },
                                 Heading("Сохранение и recovery"),
-                                Ui.PropertyRow("Автосохранение, секунд", _autosave),
-                                Ui.PropertyRow("Кандидатов recovery", _recovery),
+                                Ui.PropertyRow("Автосохранение, секунд", _autosave, captionWidth: 220),
+                                Ui.PropertyRow("Кандидатов recovery", _recovery, captionWidth: 220),
                                 Heading("Холст"),
-                                Ui.PropertyRow("Режим производительности", _performance),
+                                Ui.PropertyRow("Режим производительности", _performance, captionWidth: 220),
                                 shortcuts,
                                 Heading("Локальные папки"),
                                 RootRow(_libraryRoot, libraryPick),
@@ -140,8 +140,8 @@ public sealed class AppSettingsWindow : Window
                                     TextWrapping = Avalonia.Media.TextWrapping.Wrap,
                                 }.Classed("muted", "role-caption"),
                                 Heading("Экспорт по умолчанию"),
-                                Ui.PropertyRow("Формат", _exportFormat),
-                                Ui.PropertyRow("Масштаб", PercentRow(_exportScale)),
+                                Ui.PropertyRow("Формат", _exportFormat, captionWidth: 220),
+                                Ui.PropertyRow("Масштаб", PercentRow(_exportScale), captionWidth: 220),
                                 _exportGrid,
                                 Heading("Локальная диагностика"),
                                 _diagnosticsText.Classed("muted", "role-caption"),
@@ -157,14 +157,7 @@ public sealed class AppSettingsWindow : Window
             },
         };
 
-        Content = Ui.WatercolorBackdrop(new DockPanel
-        {
-            Children =
-            {
-                DecorativeRail().Docked(Dock.Left),
-                settingsSurface,
-            },
-        });
+        Content = Ui.WorkspaceBackdrop(settingsSurface);
 
         Load(current);
         RefreshDiagnostics();
@@ -253,29 +246,5 @@ public sealed class AppSettingsWindow : Window
         MinWidth = 120,
     };
 
-    private static Control DecorativeRail()
-    {
-        var icons = new[]
-        {
-            MapIcons.Gear, MapIcons.Color, MapIcons.ScaleObject, MapIcons.Text,
-            MapIcons.Versions, MapIcons.Rotate, MapIcons.LayerOrder, MapIcons.Search,
-            MapIcons.Blend, MapIcons.Open, MapIcons.Land,
-        };
-        var panel = new StackPanel
-        {
-            Margin = new Thickness(10, 18),
-            Spacing = 13,
-            HorizontalAlignment = HorizontalAlignment.Center,
-        };
-        foreach (var icon in icons)
-        {
-            panel.Children.Add(MapIcons.Stroked(icon, 22));
-        }
 
-        return new Border
-        {
-            Width = 76,
-            Child = panel,
-        }.Classed("rail");
-    }
 }

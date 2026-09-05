@@ -357,6 +357,63 @@ public class EditorViewModelTests
     }
 
     [Fact]
+    public void Geometry_fields_and_direct_transforms_land_on_whole_values()
+    {
+        var (editor, _, _, _, _) = NewEditor();
+        editor.AddObject(SceneObjectKind.Rectangle);
+        var original = editor.Session.SelectedObject!;
+        var fractional = new SceneObject(
+            original.Id, original.Kind, original.Name,
+            original.X + 0.4, original.Y + 0.6, original.Width + 0.4, original.Height + 0.6,
+            12.6, original.FillColor, original.StrokeColor, original.StrokeWidth,
+            original.Visible, original.Locked);
+        editor.Session.Execute(new TransformObjectCommand(original, fractional));
+        editor.RefreshInspector();
+
+        Assert.Equal(
+            Math.Round(fractional.X, MidpointRounding.AwayFromZero)
+                .ToString("0", System.Globalization.CultureInfo.InvariantCulture),
+            editor.XText);
+        Assert.DoesNotContain('.', editor.XText);
+        Assert.DoesNotContain('.', editor.YText);
+        Assert.DoesNotContain('.', editor.WidthText);
+        Assert.DoesNotContain('.', editor.HeightText);
+        Assert.DoesNotContain('.', editor.RotationText);
+
+        var depth = editor.Session.UndoDepth;
+        editor.XText = "123.5";
+        Assert.False(editor.CommitInspector());
+        Assert.Equal(depth, editor.Session.UndoDepth);
+        Assert.Contains("целые числа", editor.InspectorError, StringComparison.Ordinal);
+
+        editor.RefreshInspector();
+        Assert.True(editor.CommitInspector());
+        AssertWholeGeometry(editor.Session.SelectedObject!);
+
+        var beforeDrag = editor.Session.SelectedObject!;
+        Assert.True(editor.BeginDrag());
+        editor.UpdateDrag(10.4, 5.6);
+        editor.EndDrag();
+        var afterDrag = editor.Session.SelectedObject!;
+        Assert.Equal(beforeDrag.X + 10, afterDrag.X);
+        Assert.Equal(beforeDrag.Y + 6, afterDrag.Y);
+        AssertWholeGeometry(afterDrag);
+
+        editor.RotateSelectedObject(1, fineStep: true);
+        Assert.Equal(14, editor.Session.SelectedObject!.RotationDegrees);
+        AssertWholeGeometry(editor.Session.SelectedObject!);
+
+        static void AssertWholeGeometry(SceneObject value)
+        {
+            Assert.Equal(Math.Round(value.X), value.X);
+            Assert.Equal(Math.Round(value.Y), value.Y);
+            Assert.Equal(Math.Round(value.Width), value.Width);
+            Assert.Equal(Math.Round(value.Height), value.Height);
+            Assert.Equal(Math.Round(value.RotationDegrees), value.RotationDegrees);
+        }
+    }
+
+    [Fact]
     public void A_drag_is_one_history_entry_and_a_locked_object_cannot_be_dragged()
     {
         var (editor, _, _, _, _) = NewEditor();

@@ -194,8 +194,10 @@ public sealed class AssetImageCache : IDisposable
 
     private static SKImage? Decode(byte[] encoded)
     {
-        using var data = SKData.CreateCopy(encoded);
-        return SKImage.FromEncodedData(data);
+        // Own decoded pixels once. Encoded-backed images can repeatedly decode under native
+        // raster-cache pressure while thousands of stamps are composited into different tiles.
+        using var bitmap = SKBitmap.Decode(encoded);
+        return bitmap is null ? null : SKImage.FromBitmap(bitmap);
     }
 
     public void Dispose()

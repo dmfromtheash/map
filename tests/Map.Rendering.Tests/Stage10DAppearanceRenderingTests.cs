@@ -54,6 +54,48 @@ public sealed class Stage10DAppearanceRenderingTests
         Assert.True(IsRed(flippedV.GetPixel(70, 130)) && !IsRed(flippedV.GetPixel(70, 70)));
     }
 
+    // ------------------------------------------------------------------------- brightness
+
+    [Fact]
+    public void Brightness_keeps_midrange_colours_visible_instead_of_clipping_them()
+    {
+        using var source = new QuadrantImageSource(Hash, uniform: new SKColor(80, 120, 160));
+
+        var darker = Sample(50);
+        var oneStepDarker = Sample(99);
+        var neutral = Sample(100);
+        var oneStepLighter = Sample(101);
+        var lighter = Sample(150);
+
+        AssertChannel(darker.Red, 40);
+        AssertChannel(darker.Green, 60);
+        AssertChannel(darker.Blue, 80);
+        AssertChannel(oneStepDarker.Red, 79);
+        AssertChannel(oneStepDarker.Green, 119);
+        AssertChannel(oneStepDarker.Blue, 158);
+        Assert.Equal(new SKColor(80, 120, 160), neutral);
+        AssertChannel(oneStepLighter.Red, 81);
+        AssertChannel(oneStepLighter.Green, 121);
+        AssertChannel(oneStepLighter.Blue, 162);
+        AssertChannel(lighter.Red, 120);
+        AssertChannel(lighter.Green, 180);
+        AssertChannel(lighter.Blue, 240);
+
+        SKColor Sample(double percent)
+        {
+            using var bitmap = Render(
+                Document(Stamp(new StampStyle(Hash)
+                {
+                    Brightness = ColorAdjustment.PercentToOffset(percent),
+                })),
+                source);
+            return bitmap.GetPixel(100, 100);
+        }
+
+        static void AssertChannel(byte actual, int expected) =>
+            Assert.InRange((int)actual, expected - 1, expected + 1);
+    }
+
     // ----------------------------------------------------------------------- line patterns
 
     [Fact]

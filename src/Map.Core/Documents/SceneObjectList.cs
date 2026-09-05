@@ -122,6 +122,13 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
     public SceneObjectList InsertRange(int index, IReadOnlyList<SceneObject> inserted) =>
         Splice(index, removeCount: 0, inserted);
 
+    /// <summary>
+    /// Appends a placement/paste batch without flattening the already stored prefix. Only the
+    /// last partial chunk, the new chunks and the small chunk directory are copied.
+    /// </summary>
+    public SceneObjectList AppendRange(IReadOnlyList<SceneObject> appended) =>
+        Splice(Count, removeCount: 0, appended);
+
     public SceneObjectList RemoveRange(int index, int count) =>
         Splice(index, count, Array.Empty<SceneObject>());
 

@@ -1,7 +1,7 @@
 # 08. Минимальная проверка качества
 
 Map используется одним владельцем на одном ПК, поэтому проверка ориентирована на его реальный
-сценарий, а не на универсальную release-матрицу.
+сценарий, а не на универсальную матрицу.
 
 ## По умолчанию
 
@@ -11,25 +11,25 @@ Map используется одним владельцем на одном П�
 - Сохранение проверяется реальным save/reopen, если оно затронуто.
 - Зелёная проверка не повторяется без нового изменения.
 
-### Stage 12D
+### Историческая проверка Stage 12D
 
 Файловый этап проверяется двумя адресными фильтрами `FullyQualifiedName~Stage12D`, одной Release-
 сборкой решения и одним профилем `native-stage12d`. Native smoke использует настоящее скрытое
 own-process окно (`ShowActivated=false`, `ShowInTaskbar=false`), только собственный visual tree и
 уникальный temporary profile; системный ввод, foreground activation и реальные данные владельца
 не используются. Обязательные утверждения включают неизменность source bytes/timestamp,
-create-new publication, полный v2 read-back, разные UI-состояния и отсутствие путей/content в логе.
+create-new запись, полный v2 read-back, разные UI-состояния и отсутствие путей/content в логе.
 
 ## Не является обязательным
 
 - весь набор тестов;
 - чистый checkout и отдельная независимая сессия;
-- VM/Sandbox/другая Windows;
-- self-contained/portable package, installer, update/uninstall;
 - coverage, mutation, benchmarks и fault-матрицы;
 - DPI/accessibility/device matrix;
-- SBOM, antivirus и release-аудит;
+- SBOM и antivirus-аудит;
 - постоянные screenshots, traces и отчёты в `artifacts/`.
+- VM/Sandbox, чистая Windows и другой компьютер;
+- installer, updater, portable/release-пакет, подпись и публикация.
 
 Эти проверки выполняются только если владелец отдельно просит конкретную из них или если задача
 непосредственно исправляет соответствующий риск.
@@ -37,7 +37,7 @@ create-new publication, полный v2 read-back, разные UI-состоя�
 ## Явно запрошенный performance/stress stage
 
 Для подготовленного Stage 13 владелец отдельно разрешил performance и stress-проверки. Это узкое
-исключение не возвращает отменённую универсальную Stage 11 acceptance-программу.
+исключение не расширяет обычную acceptance-практику.
 
 - До изменений выполняется один baseline-run на текущем принятом HEAD; после законченного среза —
   один сопоставимый run на неизменной fixture и той же машине.
@@ -56,7 +56,7 @@ create-new publication, полный v2 read-back, разные UI-состоя�
 - Generated traces/JSON/скриншоты хранятся во временной или ignored папке и после вывода не
   превращаются в постоянное evidence-дерево. В репозитории остаётся только компактный повторяемый
   runner и необходимые regression fixtures/tests.
-- Полный suite, VM, clean Windows, coverage, mutation, packaging и повторение неизменных зелёных
+- Полный suite, coverage, mutation и повторение неизменных зелёных
   прогонов по-прежнему запрещены.
 
 Порог считается доказанным только когда нативный сценарий и функциональная корректность зелёные

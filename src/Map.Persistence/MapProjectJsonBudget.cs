@@ -10,19 +10,21 @@ namespace Map.Persistence;
 public static class MapProjectJsonBudget
 {
     public const int MaxLayers = 4_096;
-    public const int MaxMaterializedObjects = 100_000;
-    public const int MaxNotes = 10_000;
+    // Collection counts are not product limits. Encoded-byte admission below the serializer and
+    // the CLR's own indexable-collection boundary remain the safety envelope.
+    public const int MaxMaterializedObjects = int.MaxValue;
+    public const int MaxNotes = int.MaxValue;
     public const int MaxAssets = MapProjectFormat.MaxEntries;
-    public const int MaxVectorNodes = 500_000;
-    public const int MaxRegions = 100_000;
-    public const int MaxPortals = 100_000;
-    public const int MaxTiles = 65_536;
-    public const int MaxGrids = 16_384;
-    public const int MaxFilters = 16_384;
+    public const int MaxVectorNodes = int.MaxValue;
+    public const int MaxRegions = int.MaxValue;
+    public const int MaxPortals = int.MaxValue;
+    public const int MaxTiles = int.MaxValue;
+    public const int MaxGrids = int.MaxValue;
+    public const int MaxFilters = int.MaxValue;
     public const int MaxCheckpoints = Map.Core.Documents.MapCheckpointLimits.MaxCount;
-    public const int MaxGenericArrayItems = 100_000;
+    public const int MaxGenericArrayItems = int.MaxValue;
     public const int MaxStringUtf8Bytes = 1 * 1024 * 1024;
-    public const long MaxTokens = 8_000_000;
+    public const long MaxTokens = long.MaxValue;
 
     private enum AggregateKind
     {

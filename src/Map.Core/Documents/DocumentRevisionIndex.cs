@@ -17,6 +17,11 @@ public readonly record struct DocumentObjectLocation(
 public sealed class DocumentRevisionIndex
 {
     private const int MaxOverlayObjects = 1_024;
+    internal static void ShareUnchangedLayers(MapDocument source, MapDocument target)
+    {
+        if (Cache.TryGetValue(source, out var index)) Cache.Add(target, index);
+    }
+    private const int MaxAppendDepth = 256;
     private static readonly ConditionalWeakTable<MapDocument, DocumentRevisionIndex> Cache = [];
 
     private readonly MapDocument _document;
@@ -26,6 +31,10 @@ public sealed class DocumentRevisionIndex
     private readonly IReadOnlyDictionary<Guid, IReadOnlyList<ObjectId>> _rootGroups;
     private readonly IReadOnlyDictionary<IdentityKey, ObjectId> _rootIdentities;
     private readonly Dictionary<ObjectId, DocumentObjectLocation> _overrides;
+    private readonly IReadOnlyDictionary<IdentityKey, ObjectId> _overrideIdentities;
+    private readonly AppendSegment? _appendTail;
+    private readonly int _appendedCount;
+    private readonly int _appendDepth;
 
     private DocumentRevisionIndex(MapDocument document)
     {
@@ -77,12 +86,20 @@ public sealed class DocumentRevisionIndex
             pair => (IReadOnlyList<ObjectId>)pair.Value);
         _rootIdentities = identities;
         _overrides = [];
+        _overrideIdentities = new Dictionary<IdentityKey, ObjectId>();
+        _appendTail = null;
+        _appendedCount = 0;
+        _appendDepth = 0;
     }
 
     private DocumentRevisionIndex(
         MapDocument document,
         DocumentRevisionIndex root,
-        Dictionary<ObjectId, DocumentObjectLocation> overrides)
+        Dictionary<ObjectId, DocumentObjectLocation> overrides,
+        IReadOnlyDictionary<IdentityKey, ObjectId> overrideIdentities,
+        AppendSegment? appendTail,
+        int appendedCount,
+        int appendDepth)
     {
         _document = document;
         _root = root;
@@ -91,6 +108,10 @@ public sealed class DocumentRevisionIndex
         _rootGroups = root._rootGroups;
         _rootIdentities = root._rootIdentities;
         _overrides = overrides;
+        _overrideIdentities = overrideIdentities;
+        _appendTail = appendTail;
+        _appendedCount = appendedCount;
+        _appendDepth = appendDepth;
     }
 
     public static DocumentRevisionIndex For(MapDocument document)
@@ -99,7 +120,7 @@ public sealed class DocumentRevisionIndex
         return Cache.GetValue(document, static snapshot => new DocumentRevisionIndex(snapshot));
     }
 
-    public int ObjectCount => _rootPositions.Count;
+    public int ObjectCount => checked(_rootPositions.Count + _appendedCount);
 
     public int OverlayObjectCount => _overrides.Count;
 
@@ -108,6 +129,14 @@ public sealed class DocumentRevisionIndex
         if (_overrides.TryGetValue(id, out location))
         {
             return true;
+        }
+
+        for (var segment = _appendTail; segment is not null; segment = segment.Parent)
+        {
+            if (segment.LocationsById.TryGetValue(id, out location))
+            {
+                return true;
+            }
         }
 
         if (_rootPositions.TryGetValue(id, out var position))
@@ -161,6 +190,28 @@ public sealed class DocumentRevisionIndex
             if (current.Object.GroupId == groupId && ids.Add(current.Object.Id))
             {
                 members.Add(current);
+            }
+        }
+
+        if (_appendTail is not null)
+        {
+            var orderedSegments = new Stack<AppendSegment>();
+            for (var segment = _appendTail; segment is not null; segment = segment.Parent)
+            {
+                orderedSegments.Push(segment);
+            }
+
+            while (orderedSegments.TryPop(out var segment))
+            {
+                foreach (var appended in segment.LocationsInOrder)
+                {
+                    if (TryFind(appended.Object.Id, out var current)
+                        && current.Object.GroupId == groupId
+                        && ids.Add(current.Object.Id))
+                    {
+                        members.Add(current);
+                    }
+                }
             }
         }
 
@@ -294,7 +345,199 @@ public sealed class DocumentRevisionIndex
             return;
         }
 
-        Cache.Add(target, new DocumentRevisionIndex(target, sourceIndex._root, overrides));
+        Cache.Add(target, new DocumentRevisionIndex(
+            target,
+            sourceIndex._root,
+            overrides,
+            BuildIdentityIndex(overrides.Values),
+            sourceIndex._appendTail,
+            sourceIndex._appendedCount,
+            sourceIndex._appendDepth));
+    }
+
+    /// <summary>
+    /// Validates only objects appended by one command. Existing document identities were already
+    /// proven by the source revision; checking the delta avoids reconstructing every global set.
+    /// </summary>
+    internal void ValidateAppends(IReadOnlyList<SceneObject> additions)
+    {
+        ArgumentNullException.ThrowIfNull(additions);
+        var topLevelIds = new HashSet<ObjectId>();
+        var nestedIdentities = new Dictionary<IdentityKey, ObjectId>();
+        var groupNames = new Dictionary<Guid, string?>();
+
+        foreach (var sceneObject in additions)
+        {
+            if (!topLevelIds.Add(sceneObject.Id) || TryFind(sceneObject.Id, out _))
+            {
+                throw new ArgumentException($"Duplicate object id {sceneObject.Id}.", nameof(additions));
+            }
+
+            var topLevelIdentity = new IdentityKey(IdentityKind.Object, sceneObject.Id.Value);
+            if (TryFindIdentity(topLevelIdentity, out _)
+                || nestedIdentities.ContainsKey(topLevelIdentity))
+            {
+                throw new ArgumentException(
+                    "An appended object id collides with a composition child id.", nameof(additions));
+            }
+
+            if (sceneObject.GroupId is not { } groupId)
+            {
+                if (sceneObject.GroupName is not null)
+                {
+                    throw new ArgumentException(
+                        "A group name requires a group id.", nameof(additions));
+                }
+            }
+            else
+            {
+                if (!groupNames.TryGetValue(groupId, out var expectedName))
+                {
+                    var existingMembers = GroupMembers(groupId);
+                    expectedName = existingMembers.Count > 0
+                        ? existingMembers[0].GroupName
+                        : sceneObject.GroupName;
+                    groupNames.Add(groupId, expectedName);
+                }
+
+                if (!string.Equals(groupNames[groupId], sceneObject.GroupName, StringComparison.Ordinal))
+                {
+                    throw new ArgumentException(
+                        $"Members of group {groupId} disagree on the group name.", nameof(additions));
+                }
+            }
+
+            foreach (var identity in NestedIdentitiesOf(sceneObject))
+            {
+                var nestedObjectCollides = identity.Kind == IdentityKind.Object
+                    && (TryFind(new ObjectId(identity.Value), out _)
+                        || topLevelIds.Contains(new ObjectId(identity.Value)));
+                if (nestedObjectCollides
+                    || TryFindIdentity(identity, out _)
+                    || !nestedIdentities.TryAdd(identity, sceneObject.Id))
+                {
+                    throw new ArgumentException(
+                        "Appended vector/composition identities must stay unique.", nameof(additions));
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Carries a bounded append delta into the child revision. Once the chain becomes long it is
+    /// deliberately not registered; the next lookup rebuilds one compact root and starts over.
+    /// </summary>
+    internal static void RegisterAppends(
+        MapDocument source,
+        MapDocument target,
+        IReadOnlyList<DocumentObjectLocation> additions)
+    {
+        if (additions.Count == 0
+            || !Cache.TryGetValue(source, out var sourceIndex)
+            || sourceIndex._appendDepth >= MaxAppendDepth)
+        {
+            return;
+        }
+
+        var locations = additions.ToDictionary(location => location.Object.Id);
+        var identities = new Dictionary<IdentityKey, ObjectId>();
+        foreach (var addition in additions)
+        {
+            foreach (var identity in NestedIdentitiesOf(addition.Object))
+            {
+                identities.Add(identity, addition.Object.Id);
+            }
+        }
+
+        var segment = new AppendSegment(
+            sourceIndex._appendTail, locations, [.. additions], identities);
+        Cache.Add(target, new DocumentRevisionIndex(
+            target,
+            sourceIndex._root,
+            sourceIndex._overrides,
+            sourceIndex._overrideIdentities,
+            segment,
+            checked(sourceIndex._appendedCount + additions.Count),
+            sourceIndex._appendDepth + 1));
+    }
+
+    /// <summary>
+    /// Carries the previous append-chain state through a normal LIFO undo. If the caller is not
+    /// removing exactly the latest registered segment, the target safely falls back to a cold
+    /// compact index on first use.
+    /// </summary>
+    internal static void RegisterTailRemoval(
+        MapDocument source,
+        MapDocument target,
+        IReadOnlyList<SceneObject> removals)
+    {
+        if (removals.Count == 0
+            || !Cache.TryGetValue(source, out var sourceIndex)
+            || sourceIndex._appendTail is not { } tail
+            || tail.LocationsInOrder.Count != removals.Count)
+        {
+            return;
+        }
+
+        for (var index = 0; index < removals.Count; index++)
+        {
+            var id = removals[index].Id;
+            if (tail.LocationsInOrder[index].Object.Id != id
+                || sourceIndex._overrides.ContainsKey(id))
+            {
+                return;
+            }
+        }
+
+        Cache.Add(target, new DocumentRevisionIndex(
+            target,
+            sourceIndex._root,
+            sourceIndex._overrides,
+            sourceIndex._overrideIdentities,
+            tail.Parent,
+            sourceIndex._appendedCount - removals.Count,
+            sourceIndex._appendDepth - 1));
+    }
+
+    private bool TryFindIdentity(IdentityKey identity, out ObjectId owner)
+    {
+        if (_overrideIdentities.TryGetValue(identity, out owner))
+        {
+            return true;
+        }
+
+        for (var segment = _appendTail; segment is not null; segment = segment.Parent)
+        {
+            if (segment.Identities.TryGetValue(identity, out owner)
+                && !_overrides.ContainsKey(owner))
+            {
+                return true;
+            }
+        }
+
+        if (_rootIdentities.TryGetValue(identity, out owner)
+            && !_overrides.ContainsKey(owner))
+        {
+            return true;
+        }
+
+        owner = default;
+        return false;
+    }
+
+    private static IReadOnlyDictionary<IdentityKey, ObjectId> BuildIdentityIndex(
+        IEnumerable<DocumentObjectLocation> locations)
+    {
+        var identities = new Dictionary<IdentityKey, ObjectId>();
+        foreach (var location in locations)
+        {
+            foreach (var identity in NestedIdentitiesOf(location.Object))
+            {
+                identities.Add(identity, location.Object.Id);
+            }
+        }
+
+        return identities;
     }
 
     private static IEnumerable<IdentityKey> NestedIdentitiesOf(SceneObject owner)
@@ -336,6 +579,12 @@ public sealed class DocumentRevisionIndex
         Portal,
         ShapeRegion,
     }
+
+    private sealed record AppendSegment(
+        AppendSegment? Parent,
+        IReadOnlyDictionary<ObjectId, DocumentObjectLocation> LocationsById,
+        IReadOnlyList<DocumentObjectLocation> LocationsInOrder,
+        IReadOnlyDictionary<IdentityKey, ObjectId> Identities);
 
     private readonly record struct IdentityKey(IdentityKind Kind, Guid Value);
 }

@@ -19,9 +19,8 @@
 - выполнить прямо запрошенные benchmark/stress-профили на текущем ПК владельца;
 - создать до четырёх последовательных локальных commits после зелёных ворот каждого среза.
 
-Она не даёт право делать push/fetch/pull, читать или менять GitHub issue/Project/PR, создавать
-release/tag, работать с VM/другим ПК, добавлять installer/updater, запускать full suite, coverage,
-mutation, security scan или менять scope на универсальную поставку.
+Она не даёт право делать push/fetch/pull, читать или менять GitHub issue/Project/PR, создавать tag,
+запускать full suite, coverage, mutation, security scan или менять продуктовый scope.
 
 ## Практический результат
 
@@ -233,7 +232,7 @@ Fixture не использует пользовательские карты, �
   index.
 - Scrolling создаёт только visible+overscan containers и переиспользует их корректно.
 - Selection update меняет состояние реализованных строк, а не создаёт новый список 50K.
-- Search может использовать background/indexed filter с cancellation, но публикация результата
+- Search может использовать background/indexed filter с cancellation, но применение результата
   выполняется только для актуального query/revision.
 
 ### A4. Разделить события и coalesce invalidation
@@ -553,7 +552,7 @@ Performance thresholds не смешивай с pixel correctness в одном 
    конце Stage 13C/13D, если UI/render/canvas изменились после первого.
 
 Не повторяй зелёный build/test без изменения входов. Не запускай весь каталог `tests`, full suite,
-VM, coverage, mutation, security scan, SBOM, packaging или independent acceptance.
+coverage, mutation, security scan, SBOM или independent acceptance.
 
 ## Documentation и handoff
 

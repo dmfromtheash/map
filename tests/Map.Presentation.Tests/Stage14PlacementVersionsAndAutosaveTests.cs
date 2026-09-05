@@ -56,7 +56,7 @@ public sealed class Stage14PlacementVersionsAndAutosaveTests : IDisposable
     }
 
     [Fact]
-    public void Stage14_W_and_S_rotate_primitive_and_stamp_previews_without_mutating_the_document()
+    public void Stage14_W_S_resize_and_A_D_rotate_previews_without_mutating_the_document()
     {
         var editor = Editor(Document(), out _, out _, startDirty: false);
         editor.Session.Viewport.Resize(1_000, 700);
@@ -66,14 +66,21 @@ public sealed class Stage14PlacementVersionsAndAutosaveTests : IDisposable
 
         Assert.Equal("W", editor.Shortcuts.Get(EditorShortcutSettings.Commands.PrimaryUp));
         Assert.Equal("S", editor.Shortcuts.Get(EditorShortcutSettings.Commands.PrimaryDown));
+        Assert.Equal("A", editor.Shortcuts.Get(EditorShortcutSettings.Commands.RotateLeft));
+        Assert.Equal("D", editor.Shortcuts.Get(EditorShortcutSettings.Commands.RotateRight));
 
         editor.ArmPrimitivePlacement(SceneObjectKind.Rectangle);
         editor.UpdatePlacementPreview(240, 180);
+        var initialPrimitive = Assert.Single(editor.PlacementPreviewObjects);
+        Assert.True(editor.ResizePendingPlacement(1));
+        Assert.True(editor.ResizePendingPlacement(1, largerStep: true));
         Assert.True(editor.RotatePendingPlacement(1));
         Assert.True(editor.RotatePendingPlacement(1, largerStep: true));
         editor.UpdatePlacementPreview(320, 260);
         Assert.True(editor.RotatePendingPlacement(-1));
         var primitivePreview = Assert.Single(editor.PlacementPreviewObjects);
+        Assert.True(primitivePreview.Width > initialPrimitive.Width);
+        Assert.True(primitivePreview.Height > initialPrimitive.Height);
         Assert.Equal(15, primitivePreview.RotationDegrees);
         Assert.Same(source, editor.Session.Document);
         Assert.Equal(revision, editor.Session.Revision);
@@ -86,15 +93,50 @@ public sealed class Stage14PlacementVersionsAndAutosaveTests : IDisposable
         var set = catalog.FindSetForContent(catalog.Records[0].Sha256)!;
         stampEditor.SelectAssetSet(set.Id);
         stampEditor.UpdatePlacementPreview(260, 220);
+        var initialStamp = Assert.Single(stampEditor.PlacementPreviewObjects);
         var stampSource = stampEditor.Session.Document;
+        Assert.True(stampEditor.ResizePendingPlacement(-1, largerStep: true));
         Assert.True(stampEditor.RotatePendingPlacement(-1, largerStep: true));
         stampEditor.UpdatePlacementPreview(420, 300);
         var stampPreview = Assert.Single(stampEditor.PlacementPreviewObjects);
+        Assert.True(stampPreview.Width < initialStamp.Width);
+        Assert.True(stampPreview.Height < initialStamp.Height);
         Assert.Equal(345, stampPreview.RotationDegrees);
         Assert.Same(stampSource, stampEditor.Session.Document);
 
         Assert.True(stampEditor.CommitPendingPlacement());
-        Assert.Equal(stampPreview.RotationDegrees, stampEditor.Session.SelectedObject!.RotationDegrees);
+        Assert.Equal(stampPreview.RotationDegrees, Assert.Single(Objects(stampEditor)).RotationDegrees);
+        Assert.Empty(stampEditor.Session.SelectedObjectIds);
+        Assert.NotNull(stampEditor.PendingPlacement);
+    }
+
+    [Fact]
+    public void Stage14_single_stamp_keeps_the_same_asset_armed_after_each_click()
+    {
+        var editor = AssetEditor(out var catalog);
+        var set = catalog.FindSetForContent(catalog.Records[0].Sha256)!;
+        editor.SelectAssetSet(set.Id);
+        editor.StampPlacementMode = StampPlacementMode.One;
+        editor.PlacementAutoSelect = PlacementAutoSelectPolicy.Auto;
+        editor.RandomVariantAfterPlacement = false;
+        editor.UpdatePlacementPreview(220, 180);
+        var firstGhost = Assert.Single(editor.PlacementPreviewObjects);
+
+        Assert.True(editor.CommitPendingPlacement());
+
+        Assert.Equal(EditorTool.Stamp, editor.ActiveTool);
+        Assert.Empty(editor.Session.SelectedObjectIds);
+        Assert.NotNull(editor.PendingPlacement);
+        Assert.Equal(set.Id, editor.SelectedSet!.SetId);
+        Assert.Equal(firstGhost.Stamp!.AssetSha256,
+            Assert.Single(editor.PlacementPreviewObjects).Stamp!.AssetSha256);
+
+        editor.UpdatePlacementPreview(360, 260);
+        Assert.True(editor.CommitPendingPlacement());
+        Assert.Equal(2, Objects(editor).Count);
+        Assert.NotNull(editor.PendingPlacement);
+        Assert.True(editor.HandleEscape());
+        Assert.Null(editor.PendingPlacement);
     }
 
     [Theory]
@@ -177,9 +219,11 @@ public sealed class Stage14PlacementVersionsAndAutosaveTests : IDisposable
 
         Assert.NotEqual(initial.Stamp!.AssetSha256, cycled.Stamp!.AssetSha256);
         Assert.True(editor.CommitPendingPlacement());
-        Assert.Equal(cycled.Stamp.AssetSha256, editor.Session.SelectedObject!.Stamp!.AssetSha256);
-        Assert.Equal(cycled.X, editor.Session.SelectedObject.X);
-        Assert.Equal(cycled.Y, editor.Session.SelectedObject.Y);
+        var placed = Assert.Single(Objects(editor));
+        Assert.Equal(cycled.Stamp.AssetSha256, placed.Stamp!.AssetSha256);
+        Assert.Equal(cycled.X, placed.X);
+        Assert.Equal(cycled.Y, placed.Y);
+        Assert.NotNull(editor.PendingPlacement);
     }
 
     [Fact]

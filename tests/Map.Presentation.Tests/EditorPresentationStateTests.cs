@@ -76,7 +76,7 @@ public class EditorPresentationStateTests
     }
 
     [Fact]
-    public void Undo_and_redo_availability_is_published_for_the_toolbar()
+    public void Undo_and_redo_availability_is_reported_for_the_toolbar()
     {
         var editor = NewEditor();
         Assert.False(editor.CanUndo);

@@ -142,7 +142,7 @@ public sealed class RecentMapsStoreTests : IDisposable
     }
 
     [Fact]
-    public void Touch_bounds_card_title_and_publishes_a_reloadable_index()
+    public void Touch_bounds_card_title_and_writes_a_reloadable_index()
     {
         var path = Index();
         var store = new RecentMapsStore(path);

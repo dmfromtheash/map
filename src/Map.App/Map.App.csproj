@@ -17,8 +17,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <AvaloniaResource Include="Assets\BlueWatercolorBackdrop.png" />
-    <AvaloniaResource Include="Assets\Approved\*.png" />
+    <AvaloniaResource Include="Assets\Atlas\*.png" />
+    <AvaloniaResource Include="Assets\Fonts\Onest\*.ttf" />
+    <AvaloniaResource Include="Assets\Fonts\Onest\OFL.txt" />
   </ItemGroup>
 
   <ItemGroup>

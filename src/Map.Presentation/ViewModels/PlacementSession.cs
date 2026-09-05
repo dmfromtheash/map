@@ -33,6 +33,7 @@ public sealed record StampToolSettings
     public PlacementAutoSelectPolicy AutoSelect { get; init; } = PlacementAutoSelectPolicy.Auto;
     public double AreaRadius { get; init; } = 160;
     public double Density { get; init; } = 40;
+    public double SeriesSpacingPercent { get; init; } = 75;
     public bool RandomizeVariant { get; init; }
     public StampRandomAngleStep RandomAngleStep { get; init; } = StampRandomAngleStep.Off;
     public bool RandomFlip { get; init; }

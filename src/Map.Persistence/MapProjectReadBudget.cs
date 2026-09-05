@@ -26,6 +26,8 @@ public sealed class MapProjectReadBudget
                 || name.Contains("/masks/", StringComparison.Ordinal));
         var isCheckpointAsset = isCheckpoint && name.Contains("/assets/", StringComparison.Ordinal);
         var isCheckpointPreview = isCheckpoint && name.EndsWith("/preview.png", StringComparison.Ordinal);
+        var isObjectChunk = name.StartsWith(MapProjectFormat.ObjectPrefix, StringComparison.Ordinal)
+            || isCheckpoint && name.Contains("/" + MapProjectFormat.ObjectPrefix, StringComparison.Ordinal);
         var isTile = name.StartsWith(MapProjectFormat.RasterPrefix, StringComparison.Ordinal)
             || name.StartsWith(MapProjectFormat.MaskPrefix, StringComparison.Ordinal)
             || isCheckpointTile;
@@ -33,6 +35,8 @@ public sealed class MapProjectReadBudget
             || isCheckpointAsset;
         var perEntryLimit = isCheckpointPreview
             ? MapProjectFormat.MaxCheckpointPreviewBytes
+            : isObjectChunk
+                ? MapProjectFormat.ObjectChunkTargetBytes
             : name == MapProjectFormat.PreviewEntry
             ? MapProjectFormat.MaxPreviewBytes
             : isTile

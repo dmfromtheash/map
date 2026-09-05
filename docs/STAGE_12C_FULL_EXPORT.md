@@ -4,7 +4,7 @@
 
 Этот файл — исполняемый контракт следующей отдельной задачи. Он разрешает реализацию Stage 12C и
 один локальный commit только после прохождения указанных ниже ворот. Он не разрешает GitHub,
-Stage 12D или release/packaging-работу.
+Stage 12D или любую другую работу вне этого контракта.
 
 ## Роль и результат
 
@@ -59,7 +59,7 @@ message: feat(stage-12b): add canvas resize and region extraction
 - не делать fetch/pull/push;
 - не читать и не менять issues, comments, PR и GitHub Project;
 - не запускать `gh auth`, не менять scopes;
-- не создавать tag/release и не публиковать ветку.
+- не создавать tag и не отправлять ветку в remote.
 
 Допустим только один локальный stage-commit после зелёных ворот.
 
@@ -145,7 +145,7 @@ test-паттерны.
 ### 6. Одиночный файл и атомарность
 
 - Результат сначала пишется в уникальный sibling temp-файл.
-- Перед публикацией он flush-ится и декодируется/read-back проверкой: формат, width и height.
+- Перед окончательной заменой он flush-ится и декодируется/read-back проверкой: формат, width и height.
 - Только валидный завершённый temp атомарно заменяет выбранный destination.
 - Cancel, render/encode/write error или read-back failure удаляет только temp и сохраняет прежний
   корректный destination byte-for-byte.
@@ -209,7 +209,7 @@ pixel size, а не миграцию настроек.
 
 1. Зафиксируй короткий план и критерии; не создавай evidence/review-пакет.
 2. Добавь чистый request/plan/estimate контракт и адресные tests на validation/overflow.
-3. Добавь single-file CPU exporter через существующий `SceneRenderer`, форматы и atomic publish.
+3. Добавь single-file CPU exporter через существующий `SceneRenderer`, форматы и атомарную запись.
 4. Добавь tiled package, bounded memory, bleed, manifest, cancel/cleanup.
 5. Подключи snapshot-safe background operation и preview к Presentation/App.
 6. Добавь заметный пользовательский entry point, progress/cancel и понятные состояния.
@@ -250,17 +250,17 @@ factory/observer, чтобы доказать максимальный разм�
 Smoke должен пройти пользовательскую вертикаль: открыть отдельную тестовую карту с vector,
 raster/mask, asset и export-enabled grid; открыть «Экспорт…»; увидеть preview/estimate; сделать
 маленький PNG region-export; decode/read-back; начать multi-tile operation и отменить; подтвердить
-responsive UI, отсутствие опубликованного cancel-результата и неизменность карты.
+responsive UI, отсутствие итогового cancel-результата и неизменность карты.
 
-Не запускать full suite, VM, coverage, mutation, benchmark, security scan, DPI/accessibility matrix,
-packaging/release или повтор зелёных ворот. Не создавать постоянные screenshots/artifacts.
+Не запускать full suite, coverage, mutation, benchmark, security scan, DPI/accessibility matrix
+или повтор зелёных ворот. Не создавать постоянные screenshots/artifacts.
 
 ## Документы, commit и итог
 
 После зелёных ворот минимально обнови:
 
-- `docs/STATE_HANDOFF.md` — точный Stage 12C result, фактически выполненные gates и следующий
-  Stage 12D только как не начатый;
+- `docs/STATE_HANDOFF.md` — точный Stage 12C result, фактически выполненные gates и тогдашний
+  статус Stage 12D;
 - `docs/06_DEVELOPMENT_ROADMAP.md` — Stage 12C реализован, без расширения Stage 12D;
 - при необходимости `docs/00_START_HERE.md`/`CODEX.md` — только актуальный вход.
 
@@ -280,7 +280,7 @@ feat(stage-12c): add bounded image export and cancellation
 2. что реально проверено;
 3. что сознательно не проверялось;
 4. exact local commit и чист ли worktree;
-5. что Stage 12D не начат, GitHub не тронут.
+5. каков был тогдашний статус Stage 12D и что GitHub не тронут.
 
 ## Stop-gates
 

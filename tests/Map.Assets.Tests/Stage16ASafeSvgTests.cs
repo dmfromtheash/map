@@ -73,7 +73,7 @@ public sealed class Stage16ASafeSvgTests : IDisposable
     public void Starter_pack_is_original_bounded_and_carries_explicit_license()
     {
         var catalog = new AssetCatalog(Path.Combine(_root, "starter"));
-        StarterPackInstaller.EnsureInstalled(catalog, DateTimeOffset.UnixEpoch);
+        StarterPackBootstrapper.EnsureInstalled(catalog, DateTimeOffset.UnixEpoch);
 
         Assert.Equal(5, catalog.Records.Count);
         Assert.All(catalog.Records, record =>

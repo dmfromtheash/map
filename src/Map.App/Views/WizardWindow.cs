@@ -56,9 +56,9 @@ public sealed class WizardWindow : Window
         Title = "Новая карта";
         Name = "WizardWindow";
         Width = 1080;
-        Height = 900;
+        Height = 820;
         MinWidth = 860;
-        MinHeight = 720;
+        MinHeight = 560;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         CanResize = true;
 
@@ -79,80 +79,61 @@ public sealed class WizardWindow : Window
         _error.Classes.Add("danger");
         _error.IsVisible = false;
 
-        Content = Ui.WatercolorBackdrop(new Border
+        Content = Ui.WorkspaceBackdrop(new DockPanel
         {
-            Padding = new Thickness(3),
-            Child = new DockPanel
+            Children =
             {
-                Children =
+                new Border
                 {
-                    new Border
+                    MinHeight = 104,
+                    Padding = new Thickness(24, 16),
+                    Child = BuildIntro(),
+                }.Classed("app-bar", "wizard-header").Docked(Dock.Top),
+                new Border
+                {
+                    Padding = new Thickness(24, 16),
+                    Child = new StackPanel { Spacing = 8, Children = { _error, BuildFooter() } },
+                }.Classed("dialog-footer").Docked(Dock.Bottom),
+                new ScrollViewer
+                {
+                    HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                    Content = new Border
                     {
-                        MinHeight = 142,
-                        Padding = new Thickness(38, 22),
-                        Child = BuildIntro(),
-                    }.Classed("app-bar", "wizard-header").Docked(Dock.Top),
-                    new ScrollViewer
-                    {
-                        HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-                        Content = new Border
+                        Padding = new Thickness(24),
+                        Child = new StackPanel
                         {
-                            Margin = new Thickness(28, 24),
-                            Padding = new Thickness(28, 22),
-                            Child = new StackPanel
-                            {
-                                Spacing = 24,
-                                Children =
-                                {
-                                    BuildNameBlock(),
-                                    BuildSizeBlock(),
-                                    BuildBackgroundBlock(),
-                                    _backgroundCombo,
-                                    _error,
-                                    new Border
-                                    {
-                                        Height = 1,
-                                        Background = Application.Current?.FindResource("MapBorderStrongBrush") as IBrush,
-                                    },
-                                    BuildFooter(),
-                                },
-                            },
+                            Spacing = 20,
+                            Children = { BuildNameBlock(), BuildSizeBlock(), BuildBackgroundBlock(), _backgroundCombo },
                         },
                     },
                 },
             },
-        }.Classed("ornate-frame"));
+        });
 
         SyncPresetButtons();
         SyncBackgroundButtons();
     }
 
-    private static Control BuildIntro() => new StackPanel
+    private static Control BuildIntro() => new DockPanel
     {
-        Orientation = Orientation.Horizontal,
-        Spacing = 24,
-        VerticalAlignment = VerticalAlignment.Center,
         Children =
         {
-            ApprovedArtwork.Image("wizard-header-art", 112, 88),
+            new Border
+            {
+                Child = ApprovedArtwork.Image("map", 72, 72),
+                Margin = new Thickness(0, 0, 20, 0),
+            }.Docked(Dock.Left),
             new StackPanel
             {
-                Spacing = 7,
+                Spacing = 6,
                 VerticalAlignment = VerticalAlignment.Center,
                 Children =
                 {
+                    new TextBlock { Text = "Новая карта" }.Classed("role-screen"),
                     new TextBlock
                     {
-                        Text = "Новая карта",
-                        FontFamily = "Georgia",
-                        FontSize = 36,
-                    },
-                    new TextBlock
-                    {
-                        Text = "Размер можно выбрать пресетом; точные значения нужны только для своего размера.",
+                        Text = "Выберите размер и фон. Точные значения можно задать в своём размере.",
                         TextWrapping = TextWrapping.Wrap,
-                        FontFamily = "Georgia",
-                        FontSize = 17,
                     }.Classed("muted"),
                 },
             },
@@ -167,7 +148,7 @@ public sealed class WizardWindow : Window
             Spacing = 9,
             Children =
             {
-                new TextBlock { Text = "Название", FontFamily = "Georgia", FontSize = 21 },
+                new TextBlock { Text = "Название" }.Classed("role-section"),
                 new Border { Padding = new Thickness(3), Child = _titleBox }.Classed("ornate-field"),
             },
         };
@@ -237,10 +218,10 @@ public sealed class WizardWindow : Window
 
         return new StackPanel
         {
-            Spacing = 12,
+            Spacing = 8,
             Children =
             {
-                new TextBlock { Text = "Размер холста", FontFamily = "Georgia", FontSize = 21 },
+                new TextBlock { Text = "Размер холста" }.Classed("role-section"),
                 strip,
                 _customBlock,
             },
@@ -251,32 +232,28 @@ public sealed class WizardWindow : Window
     {
         var button = new ToggleButton
         {
-            Height = 206,
-            Margin = new Thickness(5),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            Height = 156,
+            Margin = new Thickness(4),
             Content = new StackPanel
             {
                 Spacing = 6,
                 VerticalAlignment = VerticalAlignment.Center,
                 Children =
                 {
-                    ApprovedArtwork.Image(
-                        key switch
-                        {
-                            "Standard" => "wizard-size-standard-v2",
-                            "Large" => "wizard-size-large-v2",
-                            "Huge" => "wizard-size-huge-v2",
-                            "Max" => "wizard-size-max-v2",
-                            _ => "wizard-size-custom-v2",
-                        },
-                        128,
-                        116),
+                    new Border
+                    {
+                        Height = 64,
+                        Child = ApprovedArtwork.Image("map",
+                            key switch { "Standard" => 48, "Large" => 54, "Huge" => 60, "Max" => 64, _ => 52 }, 64),
+                    },
                     new TextBlock
                     {
                         Text = title,
                         TextAlignment = Avalonia.Media.TextAlignment.Center,
                         TextWrapping = TextWrapping.Wrap,
-                        FontFamily = "Georgia",
-                        FontSize = 17,
+
+                        FontSize = 14,
                         Foreground = Application.Current?.FindResource("MapTextBrush") as IBrush,
                     },
                     new TextBlock
@@ -284,7 +261,7 @@ public sealed class WizardWindow : Window
                         Text = detail,
                         TextAlignment = Avalonia.Media.TextAlignment.Center,
                         TextWrapping = TextWrapping.Wrap,
-                        FontSize = 13,
+                        FontSize = 12,
                         Foreground = Application.Current?.FindResource("MapMutedBrush") as IBrush,
                     }.Classed("muted"),
                 },
@@ -319,22 +296,22 @@ public sealed class WizardWindow : Window
         {
             var swatch = new Border
             {
-                Width = 44,
-                Height = 44,
-                CornerRadius = new CornerRadius(22),
+                Width = 28,
+                Height = 28,
+                CornerRadius = new CornerRadius(6),
                 Background = new SolidColorBrush(Color.Parse(key)),
                 BorderBrush = Application.Current?.FindResource("MapBorderStrongBrush") as IBrush,
                 BorderThickness = new Thickness(1),
                 VerticalAlignment = VerticalAlignment.Center,
-                BoxShadow = BoxShadows.Parse("0 2 6 #330D1B34"),
             };
 
             var button = new ToggleButton
             {
+                HorizontalAlignment = HorizontalAlignment.Stretch,
                 Content = new StackPanel
                 {
                     Orientation = Orientation.Horizontal,
-                    Spacing = 12,
+                    Spacing = 8,
                     HorizontalAlignment = HorizontalAlignment.Center,
                     Children =
                     {
@@ -343,14 +320,14 @@ public sealed class WizardWindow : Window
                         {
                             Text = title,
                             VerticalAlignment = VerticalAlignment.Center,
-                            FontFamily = "Georgia",
-                            FontSize = 15,
+
+                            FontSize = 13,
                             Foreground = Application.Current?.FindResource("MapTextBrush") as IBrush,
                         },
                     },
                 },
-                Height = 68,
-                Margin = new Thickness(5),
+                Height = 56,
+                Margin = new Thickness(4),
             }.Named("WizardBackground" + key.TrimStart('#')).Classed("background-card");
 
             AutomationProperties.SetName(button, "Фон: " + title);
@@ -370,7 +347,7 @@ public sealed class WizardWindow : Window
         return new StackPanel
         {
             Spacing = 10,
-            Children = { new TextBlock { Text = "Фон", FontFamily = "Georgia", FontSize = 21 }, strip },
+            Children = { new TextBlock { Text = "Фон" }.Classed("role-section"), strip },
         };
     }
 
@@ -379,21 +356,21 @@ public sealed class WizardWindow : Window
         var create = new Button
         {
             Name = "CreateMapButton",
-            Width = 270,
-            MinHeight = 64,
+            Width = 200,
+            MinHeight = 40,
             Content = new StackPanel
             {
                 Orientation = Orientation.Horizontal,
-                Spacing = 13,
+                Spacing = 8,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 Children =
                 {
-                    ApprovedArtwork.Image("wizard-create", 46, 42),
+                    MapIcons.Stroked(MapIcons.NewMap, 18),
                     new TextBlock
                     {
                         Text = "Создать карту",
-                        FontFamily = "Georgia",
-                        FontSize = 19,
+
+                        FontSize = 14,
                         VerticalAlignment = VerticalAlignment.Center,
                     },
                 },
@@ -406,26 +383,25 @@ public sealed class WizardWindow : Window
         var cancel = new Button
         {
             Name = "CancelWizardButton",
-            Width = 210,
-            MinHeight = 64,
+            Width = 120,
+            MinHeight = 40,
             Content = new StackPanel
             {
                 Orientation = Orientation.Horizontal,
-                Spacing = 12,
+                Spacing = 8,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 Children =
                 {
-                    ApprovedArtwork.Image("wizard-cancel", 42, 38),
                     new TextBlock
                     {
                         Text = "Отмена",
-                        FontFamily = "Georgia",
-                        FontSize = 19,
+
+                        FontSize = 14,
                         VerticalAlignment = VerticalAlignment.Center,
                     },
                 },
             },
-        }.Classed("wizard-action", "dark-action");
+        }.Classed("wizard-action");
         cancel.Click += (_, _) => Close();
         AutomationProperties.SetName(cancel, "Отмена");
         cancel.IsCancel = true;

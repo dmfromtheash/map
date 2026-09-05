@@ -19,11 +19,13 @@ public static class TestMode
         string.Equals(Environment.GetEnvironmentVariable(Variable), "1", StringComparison.Ordinal);
 
     public static bool Enabled => Value;
+    public static bool StartupSmoke => Enabled && string.Equals(
+        Environment.GetEnvironmentVariable("MAP_UI_TEST_STARTUP_SMOKE"), "1", StringComparison.Ordinal);
 
     public static TimeSpan AutosaveInterval => TimeSpan.FromSeconds(1);
 
     /// <summary>
-    /// Existing UI drivers use test mode without a recovery sandbox. They must never write test
+    /// Existing UI drivers use test mode without a recovery root. They must never write test
     /// documents into the user's real recovery root; the Stage 9 driver opts in with an explicit
     /// isolated root.
     /// </summary>

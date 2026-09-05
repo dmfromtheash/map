@@ -359,42 +359,7 @@ public partial class Stage10DInspectorRoundTripTests
         }
     }
 
-    /// <summary>Patches scene.json in place and fixes the recorded checksum.</summary>
+    /// <summary>Patches the first canonical v4 object chunk and repairs descriptor checksums.</summary>
     private static void RewriteScene(string path, Func<string, string> rewrite)
-    {
-        using var archive = ZipFile.Open(path, ZipArchiveMode.Update);
-
-        string sceneJson;
-        var sceneEntry = archive.GetEntry(MapProjectFormat.SceneEntry)!;
-        using (var reader = new StreamReader(sceneEntry.Open(), Encoding.UTF8, leaveOpen: false))
-        {
-            sceneJson = reader.ReadToEnd();
-        }
-
-        var sceneBytes = Encoding.UTF8.GetBytes(rewrite(sceneJson));
-        using (var stream = sceneEntry.Open())
-        {
-            stream.SetLength(0);
-            stream.Write(sceneBytes);
-        }
-
-        using (var parsed = JsonDocument.Parse(sceneBytes))
-        {
-            _ = parsed.RootElement;
-        }
-
-        var manifestEntry = archive.GetEntry(MapProjectFormat.ManifestEntry)!;
-        string manifestText;
-        using (var reader = new StreamReader(manifestEntry.Open()))
-        {
-            manifestText = reader.ReadToEnd();
-        }
-
-        var newHash = MapProjectRoundTripTests.Sha256Hex(sceneBytes);
-        manifestText = SceneShaRegex().Replace(manifestText, $"\"sceneSha256\": \"{newHash}\"");
-
-        using var writer = new StreamWriter(manifestEntry.Open());
-        writer.BaseStream.SetLength(0);
-        writer.Write(manifestText);
-    }
+        => ProjectJsonTestMutations.RewriteFirstObjectChunk(path, rewrite);
 }

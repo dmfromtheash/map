@@ -9,6 +9,7 @@ namespace Map.Presentation.Tests;
 
 public sealed class Stage15StampToolParityTests : IDisposable
 {
+    private readonly List<AssetCatalog> _catalogs = [];
     private readonly string _root = Path.Combine(
         Path.GetTempPath(), "map-stage15-tests-" + Guid.NewGuid().ToString("N"));
 
@@ -107,6 +108,7 @@ public sealed class Stage15StampToolParityTests : IDisposable
     {
         var editor = AssetEditor(out var catalog);
         editor.SelectAssetSet(catalog.FindSetForContent(catalog.Records[0].Sha256)!.Id);
+        editor.PlacementAutoSelect = PlacementAutoSelectPolicy.Always;
         editor.UpdatePlacementPreview(300, 260);
         Assert.True(editor.CommitPendingPlacement());
         var placed = editor.Session.SelectedObject!;
@@ -148,6 +150,7 @@ public sealed class Stage15StampToolParityTests : IDisposable
         var set = catalog.Sets.Single();
         var masks = AssignStage15ClipMasks(catalog, set);
         editor.SelectAssetSet(set.Id);
+        editor.PlacementAutoSelect = PlacementAutoSelectPolicy.Always;
         var originalDocument = editor.Session.Document;
         var originalRevision = editor.Session.Revision;
 
@@ -240,6 +243,7 @@ public sealed class Stage15StampToolParityTests : IDisposable
         var set = catalog.Sets.Single();
         var mask = AssignStage15ClipMasks(catalog, set)[0];
         editor.SelectAssetSet(set.Id);
+        editor.PlacementAutoSelect = PlacementAutoSelectPolicy.Always;
         editor.SetStampClipMaskEnabled(true);
         editor.UpdatePlacementPreview(200, 160);
         Assert.True(editor.CommitPendingPlacement());
@@ -275,6 +279,7 @@ public sealed class Stage15StampToolParityTests : IDisposable
         out AssetCatalog catalog, Action<EditorLocalPreferences>? savePreferences = null)
     {
         catalog = new AssetCatalog(Path.Combine(_root, "catalog-" + Guid.NewGuid().ToString("N")));
+        _catalogs.Add(catalog);
         var first = Image("tree-a-" + Guid.NewGuid().ToString("N"), SKColors.ForestGreen, 32, 24);
         var second = Image("tree-b-" + Guid.NewGuid().ToString("N"), SKColors.DarkOliveGreen, 24, 32);
         catalog.ImportSet([first, second], "Дерево", new AssetImportOptions(), DateTimeOffset.UnixEpoch);
@@ -310,6 +315,7 @@ public sealed class Stage15StampToolParityTests : IDisposable
 
     public void Dispose()
     {
+        foreach (var catalog in _catalogs) catalog.FlushMetadataAsync().GetAwaiter().GetResult();
         if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);
     }
 }

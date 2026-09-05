@@ -2,7 +2,7 @@ using Map.Platform.Windows;
 
 namespace Map.Presentation.Tests;
 
-public sealed class Stage11ReleaseIsolationTests
+public sealed class NativeProfileIsolationTests
 {
     [Fact]
     public void Native_driver_profile_is_absolute_and_cannot_touch_production_state()

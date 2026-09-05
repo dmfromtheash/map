@@ -83,11 +83,39 @@ public sealed class MainWindow : Window
 
         Title = $"Map · {AppVersion.Current}";
         Name = "MainWindow";
-        Width = 1400;
-        Height = 900;
+        Width = 1024;
+        Height = 680;
         MinWidth = 960;
         MinHeight = 640;
         Content = _host;
+        if (TestMode.StartupSmoke)
+        {
+            ShowActivated = false;
+            ShowInTaskbar = false;
+            WindowStartupLocation = WindowStartupLocation.Manual;
+            Position = new PixelPoint(-32000, -32000);
+            Opened += async (_, _) =>
+            {
+                try
+                {
+                    await Task.Delay(1000);
+                    var root = AppPaths.ResolveTestProfileRoot(TestMode.ProfileRootOverride);
+                    Directory.CreateDirectory(root);
+                    UpdateLayout();
+                    using var image = new Avalonia.Media.Imaging.RenderTargetBitmap(
+                        new PixelSize((int)Math.Ceiling(Bounds.Width), (int)Math.Ceiling(Bounds.Height)));
+                    image.Render(this);
+                    image.Save(Path.Combine(root, "startup.png"));
+                    File.WriteAllText(Path.Combine(root, "startup.json"), System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        Window = Name, Title, Dashboard = _host.Content is DashboardView,
+                        Assembly = typeof(MainWindow).Assembly.Location, Width = Bounds.Width, Height = Bounds.Height,
+                    }));
+                }
+                catch (Exception error) { _log.Error("STARTUP_SMOKE_FAILED", error); }
+                finally { Close(); }
+            };
+        }
 
         _dashboard = new DashboardViewModel(
             _store,
@@ -382,14 +410,16 @@ public sealed class MainWindow : Window
 
     private async void OnClosing(object? sender, WindowClosingEventArgs e)
     {
-        if (_closeApproved || _editorView is null)
+        if (_closeApproved)
         {
             return;
         }
 
         e.Cancel = true;
-        if (await _editorView.Editor.ConfirmCloseAsync())
+        if (_editorView is null || await _editorView.Editor.ConfirmCloseAsync())
         {
+            try { await _assets.FlushMetadataAsync(); }
+            catch (IOException error) { _log.Error("CATALOG_METADATA_SAVE_FAILED", error); }
             _autosaveTimer.Stop();
             _closeApproved = true;
             Close();
@@ -600,10 +630,10 @@ public sealed class MainWindow : Window
                 AdjustTertiary(view, -1, true);
                 break;
             case EditorShortcutSettings.Commands.RotateLeft:
-                editor.RotateSelectedObject(-1);
+                AdjustRotation(editor, -1, false);
                 break;
             case EditorShortcutSettings.Commands.RotateRight:
-                editor.RotateSelectedObject(1);
+                AdjustRotation(editor, 1, false);
                 break;
             case EditorShortcutSettings.Commands.PreviousSelection:
                 editor.RestoreLastSelection();
@@ -687,7 +717,7 @@ public sealed class MainWindow : Window
 
     private static void AdjustPrimary(EditorViewModel editor, int direction, bool large)
     {
-        if (editor.RotatePendingPlacement(direction, large))
+        if (editor.ResizePendingPlacement(direction, large))
             return;
         if (editor.ActiveTool is EditorTool.Brush or EditorTool.Mask or EditorTool.Land)
             editor.AdjustBrushSize(direction, large);
@@ -695,6 +725,12 @@ public sealed class MainWindow : Window
             editor.AdjustSelectedTextFontSize(direction, large);
         else if (editor.ActiveTool == EditorTool.Select)
             editor.ResizeSelectedObject(direction, large);
+    }
+
+    private static void AdjustRotation(EditorViewModel editor, int direction, bool large)
+    {
+        if (!editor.RotatePendingPlacement(direction, large))
+            editor.RotateSelectedObject(direction, large);
     }
 
     private static void AdjustSecondary(EditorView view, int direction, bool large)

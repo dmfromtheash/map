@@ -19,6 +19,7 @@ public enum CanvasInputGesture
     Pan,
     RegionSelect,
     Stroke,
+    StampSeries,
     VectorDraw,
     LandShape,
     TextPlacement,
@@ -157,6 +158,12 @@ public sealed class CanvasInputRouter
         if (_editor.HasPendingPlacement)
         {
             _editor.UpdatePlacementPreview(worldX, worldY);
+            if (_editor.PendingPlacement is { Target: PlacementTargetKind.Stamp, Mode: StampPlacementMode.Series })
+            {
+                var began = _editor.BeginStampSeries(worldX, worldY);
+                _gesture = began ? CanvasInputGesture.StampSeries : CanvasInputGesture.None;
+                return new CanvasInputResult { Handled = true, Invalidate = true, CapturePointer = began };
+            }
             var stamp = _editor.PendingPlacement?.Target == PlacementTargetKind.Stamp;
             var committed = _editor.CommitPendingPlacement();
             _gesture = CanvasInputGesture.None;
@@ -319,6 +326,9 @@ public sealed class CanvasInputRouter
 
         switch (_gesture)
         {
+            case CanvasInputGesture.StampSeries:
+                _editor.ContinueStampSeries(worldX, worldY);
+                return new CanvasInputResult { Handled = true, Invalidate = true };
             case CanvasInputGesture.RegionSelect:
                 _editor.UpdateRegionSelection(worldX, worldY);
                 return new CanvasInputResult { Handled = true, Invalidate = true };
@@ -371,6 +381,11 @@ public sealed class CanvasInputRouter
         // so two flags left set by a mid-gesture tool switch produced two history entries at once.
         switch (gesture)
         {
+            case CanvasInputGesture.StampSeries:
+                var end = _editor.Session.Viewport.ScreenToWorld(screenX, screenY);
+                _editor.ContinueStampSeries(end.X, end.Y);
+                var placed = _editor.EndStampSeries();
+                return new CanvasInputResult { Handled = true, ReleasePointer = true, Invalidate = true, StampPlaced = placed };
             case CanvasInputGesture.ObjectDrag:
                 _editor.EndDrag();
                 break;
@@ -476,6 +491,8 @@ public sealed class CanvasInputRouter
 
         switch (gesture)
         {
+            case CanvasInputGesture.StampSeries:
+                return _editor.CancelStampSeries();
             case CanvasInputGesture.ObjectDrag:
                 _editor.CancelDrag();
                 return true;
@@ -508,6 +525,7 @@ public sealed class CanvasInputRouter
     /// <summary>The pointer left the canvas: hide the placement ghost but keep the tool armed.</summary>
     public CanvasInputResult PointerLeft()
     {
+        if (_gesture == CanvasInputGesture.StampSeries) CancelActiveGesture();
         _editor.SetPlacementPointerVisible(false);
         _hasLastScreen = false;
         return new CanvasInputResult { Invalidate = true };

@@ -55,6 +55,16 @@ public sealed record ObjectTreeRow(
 /// </summary>
 public static class ObjectTreeRows
 {
+    private sealed record GroupCount(int Value);
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<ObjectLayer, GroupCount> GroupCounts = [];
+    private static int GroupedCount(ObjectLayer layer) => GroupCounts.GetValue(layer, static current =>
+    {
+        if (ObjectLayerChanges.TryGet(current, out var delta))
+            return new(GroupedCount(delta.Source) - delta.Removed.Count(i => delta.Source.Objects[i].GroupId is not null)
+                + delta.Added.Count(i => current.Objects[i].GroupId is not null));
+        return new(current.Objects.Count(o => o.GroupId is not null));
+    }).Value;
+
     public static IReadOnlyList<ObjectTreeRow> Build(
         MapDocument document,
         string searchText,
@@ -65,55 +75,16 @@ public static class ObjectTreeRows
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(selectedIds);
         var query = (searchText ?? "").Trim();
+        var layers = document.Layers.OfType<ObjectLayer>().ToArray();
+        if (query.Length == 0 && filter == ObjectTypeFilter.All && openGroupId is null
+            && layers.All(layer => GroupedCount(layer) == 0))
+            return new VirtualRowList(new UngroupedEntries(layers), selectedIds);
         var objects = AllObjects(document).ToList();
         var groups = BuildGroupIndex(objects);
 
-        // The ordinary panel view is a virtual row source: it stores compact references and
-        // creates ObjectTreeRow models only when the ItemsControl asks for a realized index.
-        // Filtered views are expected user operations and keep the explicit materialized path.
-        if (query.Length == 0 && filter == ObjectTypeFilter.All)
-        {
-            return BuildVirtualRows(objects, groups, openGroupId, selectedIds);
-        }
-
-        if (openGroupId is { } openGroup)
-        {
-            return BuildOpenGroup(groups, query, filter, openGroup, selectedIds);
-        }
-
-        var rows = new List<ObjectTreeRow>();
-        var emittedGroups = new HashSet<Guid>();
-        foreach (var sceneObject in objects)
-        {
-            if (sceneObject.GroupId is { } groupId)
-            {
-                if (emittedGroups.Add(groupId))
-                {
-                    var members = groups[groupId];
-                    if (GroupMatches(members, query, filter))
-                    {
-                        rows.Add(GroupRow(groupId, members, selectedIds));
-                    }
-                }
-
-                continue;
-            }
-
-            if (ObjectMatches(sceneObject, query, filter))
-            {
-                rows.Add(new ObjectTreeRow(
-                    ObjectTreeRowKind.Object,
-                    $"ObjectRow_{sceneObject.Id}",
-                    sceneObject.Name,
-                    EditorLabels.ObjectSubtitle(sceneObject),
-                    sceneObject,
-                    GroupId: null,
-                    ChildCount: 0,
-                    Selected: selectedIds.Contains(sceneObject.Id)));
-            }
-        }
-
-        return rows;
+        // Every panel mode is a virtual row source. Search/filter still scan the document once,
+        // but only compact entries are retained; Avalonia creates a heavy row model on demand.
+        return BuildVirtualRows(objects, groups, openGroupId, selectedIds, query, filter);
     }
 
     /// <summary>True when the object passes both the search text and the type filter.</summary>
@@ -139,63 +110,6 @@ public static class ObjectTreeRows
 
     public static string GroupTitle(IReadOnlyList<SceneObject> members) =>
         members.Count > 0 && members[0].GroupName is { Length: > 0 } name ? name : "Группа";
-
-    private static ObjectTreeRow GroupRow(
-        Guid groupId, IReadOnlyList<SceneObject> members, IReadOnlyCollection<ObjectId> selectedIds) =>
-        new(
-            ObjectTreeRowKind.Group,
-            $"GroupRow_{groupId:D}",
-            GroupTitle(members),
-            EditorLabels.Objects(members.Count),
-            Object: null,
-            GroupId: groupId,
-            ChildCount: members.Count,
-            Selected: members.Count > 0 && members.All(member => selectedIds.Contains(member.Id)))
-        {
-            MemberIds = [.. members.Select(member => member.Id)],
-        };
-
-    private static List<ObjectTreeRow> BuildOpenGroup(
-        IReadOnlyDictionary<Guid, List<SceneObject>> groups,
-        string query,
-        ObjectTypeFilter filter,
-        Guid openGroup,
-        IReadOnlyCollection<ObjectId> selectedIds)
-    {
-        var members = groups.TryGetValue(openGroup, out var indexedMembers)
-            ? indexedMembers
-            : [];
-        var rows = new List<ObjectTreeRow>
-        {
-            new(
-                ObjectTreeRowKind.Breadcrumb,
-                "GroupBreadcrumb",
-                GroupTitle(members),
-                EditorLabels.Objects(members.Count),
-                Object: null,
-                GroupId: openGroup,
-                ChildCount: members.Count,
-                Selected: false),
-        };
-
-        foreach (var member in members)
-        {
-            if (ObjectMatches(member, query, filter))
-            {
-                rows.Add(new ObjectTreeRow(
-                    ObjectTreeRowKind.GroupChild,
-                    $"GroupChildRow_{member.Id}",
-                    member.Name,
-                    EditorLabels.ObjectSubtitle(member),
-                    member,
-                    GroupId: openGroup,
-                    ChildCount: 0,
-                    Selected: selectedIds.Contains(member.Id)));
-            }
-        }
-
-        return rows;
-    }
 
     private static bool GroupMatches(
         IReadOnlyList<SceneObject> members, string query, ObjectTypeFilter filter)
@@ -255,7 +169,9 @@ public static class ObjectTreeRows
         IReadOnlyList<SceneObject> objects,
         IReadOnlyDictionary<Guid, List<SceneObject>> groups,
         Guid? openGroupId,
-        IReadOnlyCollection<ObjectId> selectedIds)
+        IReadOnlyCollection<ObjectId> selectedIds,
+        string query,
+        ObjectTypeFilter filter)
     {
         var entries = new List<VirtualRowEntry>();
         if (openGroupId is { } openGroup)
@@ -264,7 +180,9 @@ public static class ObjectTreeRows
             members ??= [];
             entries.EnsureCapacity(members.Count + 1);
             entries.Add(VirtualRowEntry.ForBreadcrumb(openGroup, members));
-            entries.AddRange(members.Select(member => VirtualRowEntry.ForChild(openGroup, member)));
+            entries.AddRange(members
+                .Where(member => ObjectMatches(member, query, filter))
+                .Select(member => VirtualRowEntry.ForChild(openGroup, member)));
             return new VirtualRowList(entries, selectedIds);
         }
 
@@ -276,13 +194,20 @@ public static class ObjectTreeRows
             {
                 if (emittedGroups.Add(groupId))
                 {
-                    entries.Add(VirtualRowEntry.ForGroup(groupId, groups[groupId]));
+                    var members = groups[groupId];
+                    if (GroupMatches(members, query, filter))
+                    {
+                        entries.Add(VirtualRowEntry.ForGroup(groupId, members));
+                    }
                 }
 
                 continue;
             }
 
-            entries.Add(VirtualRowEntry.ForObject(sceneObject));
+            if (ObjectMatches(sceneObject, query, filter))
+            {
+                entries.Add(VirtualRowEntry.ForObject(sceneObject));
+            }
         }
 
         return new VirtualRowList(entries, selectedIds);
@@ -307,15 +232,51 @@ public static class ObjectTreeRows
             new(ObjectTreeRowKind.Breadcrumb, null, groupId, members);
     }
 
+    private sealed class UngroupedEntries(ObjectLayer[] layers) : IReadOnlyList<VirtualRowEntry>
+    {
+        public int Count { get; } = layers.Sum(l => l.Objects.Count);
+        public VirtualRowEntry this[int index]
+        {
+            get
+            {
+                foreach (var layer in layers)
+                {
+                    if (index < layer.Objects.Count) return VirtualRowEntry.ForObject(layer.Objects[index]);
+                    index -= layer.Objects.Count;
+                }
+                throw new ArgumentOutOfRangeException(nameof(index));
+            }
+        }
+        public IEnumerator<VirtualRowEntry> GetEnumerator()
+        {
+            foreach (var layer in layers) foreach (var item in layer.Objects) yield return VirtualRowEntry.ForObject(item);
+        }
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
     private sealed class VirtualRowList(
         IReadOnlyList<VirtualRowEntry> entries,
-        IReadOnlyCollection<ObjectId> selectedIds) : IReadOnlyList<ObjectTreeRow>
+        IReadOnlyCollection<ObjectId> selectedIds) : IReadOnlyList<ObjectTreeRow>, System.Collections.IList
     {
         private readonly HashSet<ObjectId> _selected = [.. selectedIds];
 
         public int Count => entries.Count;
 
         public ObjectTreeRow this[int index] => Create(entries[index]);
+
+        object? System.Collections.IList.this[int index]
+        {
+            get => this[index];
+            set => throw ReadOnly();
+        }
+
+        bool System.Collections.IList.IsFixedSize => true;
+
+        bool System.Collections.IList.IsReadOnly => true;
+
+        bool System.Collections.ICollection.IsSynchronized => false;
+
+        object System.Collections.ICollection.SyncRoot => this;
 
         public IEnumerator<ObjectTreeRow> GetEnumerator()
         {
@@ -326,6 +287,50 @@ public static class ObjectTreeRows
         }
 
         System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+
+        int System.Collections.IList.Add(object? value) => throw ReadOnly();
+
+        void System.Collections.IList.Clear() => throw ReadOnly();
+
+        bool System.Collections.IList.Contains(object? value) => IndexOf(value) >= 0;
+
+        int System.Collections.IList.IndexOf(object? value) => IndexOf(value);
+
+        void System.Collections.IList.Insert(int index, object? value) => throw ReadOnly();
+
+        void System.Collections.IList.Remove(object? value) => throw ReadOnly();
+
+        void System.Collections.IList.RemoveAt(int index) => throw ReadOnly();
+
+        void System.Collections.ICollection.CopyTo(Array array, int index)
+        {
+            ArgumentNullException.ThrowIfNull(array);
+            for (var sourceIndex = 0; sourceIndex < Count; sourceIndex++)
+            {
+                array.SetValue(this[sourceIndex], index + sourceIndex);
+            }
+        }
+
+        private int IndexOf(object? value)
+        {
+            if (value is not ObjectTreeRow wanted)
+            {
+                return -1;
+            }
+
+            for (var index = 0; index < Count; index++)
+            {
+                if (this[index] == wanted)
+                {
+                    return index;
+                }
+            }
+
+            return -1;
+        }
+
+        private static NotSupportedException ReadOnly() =>
+            new("The virtual object row source is read-only.");
 
         private ObjectTreeRow Create(VirtualRowEntry entry)
         {

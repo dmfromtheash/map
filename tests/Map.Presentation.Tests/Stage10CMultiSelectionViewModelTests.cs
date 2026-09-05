@@ -363,8 +363,17 @@ public class Stage10CMultiSelectionViewModelTests
         Assert.Equal(55, movedA.Height, 6);
         // A's centre (50,25) -> (200 + 1.1*(50-200), 75 + 1.1*(25-75)) = (35, 20).
         Assert.Equal(35, movedA.X + (movedA.Width / 2), 6);
-        Assert.Equal(20, movedA.Y + (movedA.Height / 2), 6);
+        // Integer top-left coordinates and an odd height put the centre on a half pixel.
+        Assert.InRange(Math.Abs(20 - (movedA.Y + (movedA.Height / 2))), 0, 0.5);
+        Assert.Equal(-20, movedA.X);
+        Assert.Equal(-8, movedA.Y);
+        var movedB = Find(editor, b.Id);
+        Assert.Equal(310, movedB.X);
+        Assert.Equal(103, movedB.Y);
         Assert.Equal(1, editor.Session.UndoDepth);
+        editor.Undo();
+        Assert.Equal(a, Find(editor, a.Id));
+        Assert.Equal(b, Find(editor, b.Id));
     }
 
     [Fact]
@@ -382,9 +391,20 @@ public class Stage10CMultiSelectionViewModelTests
         Assert.Equal(15, Find(editor, b.Id).RotationDegrees, 6);
         // Centres moved around (200,25): A's centre (50,25) is 150 left of the pivot.
         var movedA = Find(editor, a.Id);
-        Assert.Equal(200 - (150 * Math.Cos(15 * Math.PI / 180)), movedA.X + (movedA.Width / 2), 6);
-        Assert.Equal(25 - (150 * Math.Sin(15 * Math.PI / 180)), movedA.Y + (movedA.Height / 2), 6);
+        // The analytic rotation is quantized to the accepted one-pixel editor grid.
+        Assert.InRange(Math.Abs(200 - (150 * Math.Cos(15 * Math.PI / 180))
+            - (movedA.X + (movedA.Width / 2))), 0, 0.5);
+        Assert.InRange(Math.Abs(25 - (150 * Math.Sin(15 * Math.PI / 180))
+            - (movedA.Y + (movedA.Height / 2))), 0, 0.5);
+        Assert.Equal(5, movedA.X);
+        Assert.Equal(-39, movedA.Y);
+        var movedB = Find(editor, b.Id);
+        Assert.Equal(295, movedB.X);
+        Assert.Equal(39, movedB.Y);
         Assert.Equal(1, editor.Session.UndoDepth);
+        editor.Undo();
+        Assert.Equal(a, Find(editor, a.Id));
+        Assert.Equal(b, Find(editor, b.Id));
     }
 
     [Fact]
@@ -613,6 +633,44 @@ public class Stage10CMultiSelectionViewModelTests
         editor.ToggleSelectedObjectLock();
         Assert.False(Find(editor, a.Id).Locked);
         Assert.False(Find(editor, locked.Id).Locked);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void Explicit_state_choice_applies_to_mixed_selection_once(bool lockProperty, bool value)
+    {
+        var a = Object("A", SceneObjectKind.Rectangle, 0, 0);
+        var b = Object("B", SceneObjectKind.Rectangle, 300, 0, visible: false, locked: true);
+        var untouched = Object("C", SceneObjectKind.Rectangle, 600, 0);
+        var (editor, _, _) = NewEditor([a], [b, untouched]);
+        editor.Session.SetSelection([a.Id, b.Id]);
+        void Apply()
+        {
+            if (lockProperty) editor.SetSelectedObjectLock(value);
+            else editor.SetSelectedObjectVisibility(value);
+        }
+        bool Read(SceneObject item) => lockProperty ? item.Locked : item.Visible;
+
+        Apply();
+
+        Assert.Equal(value, Read(Find(editor, a.Id)));
+        Assert.Equal(value, Read(Find(editor, b.Id)));
+        Assert.Equal(untouched, Find(editor, untouched.Id));
+        Assert.Equal(1, editor.Session.UndoDepth);
+        Assert.Equal(2, editor.SelectionCount);
+        Apply();
+        Assert.Equal(1, editor.Session.UndoDepth);
+
+        editor.Undo();
+        Assert.Equal(Read(a), Read(Find(editor, a.Id)));
+        Assert.Equal(Read(b), Read(Find(editor, b.Id)));
+        Assert.Equal(0, editor.Session.UndoDepth);
+        editor.Redo();
+        Assert.Equal(value, Read(Find(editor, a.Id)));
+        Assert.Equal(value, Read(Find(editor, b.Id)));
     }
 
     [Fact]

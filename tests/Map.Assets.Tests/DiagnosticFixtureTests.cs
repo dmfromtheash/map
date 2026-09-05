@@ -177,7 +177,7 @@ public sealed class DiagnosticFixtureTests
     }
 
     [Fact]
-    public void The_diagnostic_fixtures_are_not_carried_into_the_application_publish_output()
+    public void The_diagnostic_fixtures_are_not_carried_into_the_application_output()
     {
         var fixtureNames = ReadManifest().Assets
             .Select(asset => asset.FileName)

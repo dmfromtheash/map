@@ -9,7 +9,7 @@ push и обновление issues/Project. До нового отдельно�
 - PR, issue, comments, close/reopen, labels и milestones;
 - GitHub Project, его поля, views и cards;
 - `gh auth refresh`, изменение token scopes и повторная device-code авторизация;
-- tag, release, publication и любые другие remote-записи.
+- tag и любые другие remote-записи.
 
 Локальная разработка, локальные ветки и прямо запрошенные локальные commits продолжаются. Наличие
 `origin` не является разрешением обращаться к нему.
@@ -21,7 +21,7 @@ push и обновление issues/Project. До нового отдельно�
 - `C:\Projects\Map` — старый cleanup-checkout, не база новой функции.
 - `origin` настроен на `https://github.com/dmfromtheash/map.git`.
 - Репозиторий `dmfromtheash/map` существует и переведён в **private** до первого push.
-- `main`, `stage/12a-named-checkpoints` и `stage/12b-resize-crop-region` уже были опубликованы до
+- `main`, `stage/12a-named-checkpoints` и `stage/12b-resize-crop-region` уже были отправлены до
   текущего запрета; default branch — `main`.
 - `.github/` отсутствует.
 - GitHub CLI авторизован как `dmfromtheash` по HTTPS.

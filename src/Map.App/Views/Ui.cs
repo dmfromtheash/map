@@ -1,13 +1,14 @@
-﻿using System;
+using System;
+using System.Linq;
 using System.Collections.Generic;
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
+using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
-using Avalonia.Media.Imaging;
-using Avalonia.Platform;
+using Avalonia.Threading;
 using Map.App.Controls;
 
 namespace Map.App.Views;
@@ -22,27 +23,12 @@ public static class Ui
     public const double RailWidth = 56;
     public const double ContextPanelWidth = 264;
     public const double SidePanelWidth = 300;
-    private static readonly Lazy<Bitmap> WatercolorBitmap = new(() =>
-    {
-        using var stream = AssetLoader.Open(
-            new Uri("avares://Map.App/Assets/BlueWatercolorBackdrop.png"));
-        return new Bitmap(stream);
-    });
 
-    // ------------------------------------------------------------------ basics
-
-    /// <summary>
-    /// Real approved watercolor bitmap beneath an arbitrary surface. Loading the embedded asset
-    /// synchronously avoids a first-frame flash in the native off-screen and desktop windows.
-    /// </summary>
-    public static Grid WatercolorBackdrop(Control content) => new()
+    /// <summary>A calm, opaque workspace surface shared by every native window.</summary>
+    public static Grid WorkspaceBackdrop(Control content) => new Grid
     {
-        Background = new ImageBrush(WatercolorBitmap.Value)
-        {
-            Stretch = Stretch.UniformToFill,
-        },
         Children = { content },
-    };
+    }.Classed("workspace");
 
     public static T Named<T>(this T control, string name) where T : Control
     {
@@ -101,7 +87,7 @@ public static class Ui
 
     public static Button TextButton(string name, string text, Action action, params string[] classes)
     {
-        var button = new Button { Content = text }.Named(name).Classed(classes);
+        var button = new Button { Content = CommandCaption(text) }.Named(name).Classed(classes);
         AutomationProperties.SetName(button, text);
         button.Click += (_, _) => action();
         return button;
@@ -110,7 +96,7 @@ public static class Ui
     public static Button AsyncButton(
         string name, string text, Func<System.Threading.Tasks.Task> action, params string[] classes)
     {
-        var button = new Button { Content = text }.Named(name).Classed(classes);
+        var button = new Button { Content = CommandCaption(text) }.Named(name).Classed(classes);
         AutomationProperties.SetName(button, text);
         button.Click += async (_, _) => await action();
         return button;
@@ -122,16 +108,7 @@ public static class Ui
     {
         var button = new Button
         {
-            Content = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                Spacing = 8,
-                Children =
-                {
-                    MapIcons.Stroked(icon, 16),
-                    new TextBlock { Text = text, VerticalAlignment = VerticalAlignment.Center },
-                },
-            },
+            Content = CommandContent(text, icon),
             HorizontalContentAlignment = HorizontalAlignment.Left,
         }.Named(name).Classed(classes);
 
@@ -159,18 +136,50 @@ public static class Ui
     {
         var button = new Button
         {
-            Content = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                Spacing = 8,
-                Children = { MapIcons.Stroked(icon, 16), new TextBlock { Text = text, VerticalAlignment = VerticalAlignment.Center } },
-            },
+            Content = CommandContent(text, icon),
             HorizontalContentAlignment = HorizontalAlignment.Left,
         }.Named(name).Classed(classes);
 
         AutomationProperties.SetName(button, text);
         button.Click += (_, _) => action();
         return button;
+    }
+
+    private static TextBlock CommandCaption(string text) => new()
+    {
+        Text = text, TextWrapping = TextWrapping.Wrap,
+        VerticalAlignment = VerticalAlignment.Center,
+    };
+
+    /// <summary>An independent setting, with a persistent checkbox rather than a mode face.</summary>
+    public static ToggleButton PropertyToggle(string name, string label)
+    {
+        var check = new TextBlock { Text = "✓", IsVisible = false,
+            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+        var caption = CommandCaption(label);
+        Grid.SetColumn(caption, 1);
+        var toggle = new ToggleButton { Content = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("20,*"), ColumnSpacing = 8,
+            Children = { new Border { Width = 18, Height = 18, BorderThickness = new Thickness(1),
+                BorderBrush = Application.Current?.FindResource("MapFieldBorderBrush") as IBrush,
+                CornerRadius = new CornerRadius(3), Child = check, VerticalAlignment = VerticalAlignment.Center }, caption },
+        } }.Named(name).Classed("property-toggle");
+        AutomationProperties.SetName(toggle, label);
+        ToolTip.SetTip(toggle, label);
+        toggle.IsCheckedChanged += (_, _) => check.IsVisible = toggle.IsChecked == true;
+        return toggle;
+    }
+
+    private static Control CommandContent(string text, string icon)
+    {
+        var caption = CommandCaption(text);
+        Grid.SetColumn(caption, 1);
+        return new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("Auto,*"), ColumnSpacing = 8,
+            Children = { MapIcons.Stroked(icon, 16), caption },
+        };
     }
 
     /// <summary>
@@ -194,7 +203,7 @@ public static class Ui
         {
             Content = new Panel
             {
-                Children = { marker, MapIcons.Stroked(icon, 21) },
+                Children = { marker, MapIcons.Stroked(icon, 32) },
             },
         }.Named(name).Classed("tool-button");
 
@@ -204,7 +213,7 @@ public static class Ui
         {
             action();
             // The active tool is a mode, not an on/off command. Clicking it again must not
-            // publish an unchecked state to UI Automation.
+            // expose an unchecked state to UI Automation.
             button.IsChecked = true;
         };
         return button;
@@ -249,15 +258,18 @@ public static class Ui
     /// <summary>A titled block inside a panel. Titles are sentence case and never shout.</summary>
     public static Control Section(string title, Control content, params string[] classes)
     {
-        return new StackPanel
+        return new Border
         {
-            Spacing = 6,
-            Children =
+            Child = new StackPanel
             {
-                new TextBlock { Text = title }.Classed("role-panel"),
-                content,
+                Spacing = 8,
+                Children =
+                {
+                    new TextBlock { Text = title, TextWrapping = TextWrapping.Wrap }.Classed("role-panel"),
+                    content,
+                },
             },
-        }.Classed(classes);
+        }.Classed("property-group").Classed(classes);
     }
 
     /// <summary>
@@ -280,14 +292,14 @@ public static class Ui
     /// <summary>Label on the left, editor on the right - the single inspector row shape.</summary>
     public static Control PropertyRow(string label, Control editor, string? unit = null, double captionWidth = 92)
     {
-        var caption = ParameterLabel(label, captionWidth);
+        var caption = ParameterLabel(label);
         ToolTip.SetTip(caption, label);
         AutomationProperties.SetName(editor, unit is null ? label : $"{label}, {unit}");
 
-        var row = new DockPanel { Margin = new Thickness(0, 2) };
+        var field = new DockPanel();
         if (unit is not null)
         {
-            row.Children.Add(new TextBlock
+            field.Children.Add(new TextBlock
             {
                 Text = unit,
                 Width = 22,
@@ -296,9 +308,66 @@ public static class Ui
             }.Classed("faint").Docked(Dock.Right));
         }
 
-        row.Children.Add(caption.Docked(Dock.Left));
-        row.Children.Add(editor);
-        return row;
+        field.Children.Add(editor);
+        var editorWidth = double.IsNaN(editor.Width) ? editor.MinWidth : Math.Max(editor.Width, editor.MinWidth);
+        if (editor is ComboBox or Button or InlineChoice) editorWidth = Math.Max(180, editorWidth);
+        return new PropertyRowPanel(caption, field, Math.Max(112, captionWidth),
+            Math.Max(112, editorWidth + (unit is null ? 0 : 28)))
+        { Margin = new Thickness(0, 2) }.Classed("property-row");
+    }
+
+    /// <summary>Choose the form layout while measuring, before children can be arranged outside it.</summary>
+    private sealed class PropertyRowPanel : Panel
+    {
+        private const double ColumnGap = 8;
+        private const double RowGap = 4;
+        private readonly Control _caption;
+        private readonly Control _field;
+        private readonly double _captionWidth;
+        private readonly double _minimumFieldWidth;
+
+        public PropertyRowPanel(Control caption, Control field, double captionWidth, double minimumFieldWidth)
+        {
+            _caption = caption;
+            _field = field;
+            _captionWidth = captionWidth;
+            _minimumFieldWidth = minimumFieldWidth;
+            Children.Add(caption);
+            Children.Add(field);
+        }
+
+        private bool Stacked(double width) => width < _captionWidth + ColumnGap + _minimumFieldWidth;
+
+        protected override Size MeasureOverride(Size availableSize)
+        {
+            var width = double.IsFinite(availableSize.Width)
+                ? availableSize.Width : _captionWidth + ColumnGap + _minimumFieldWidth;
+            var stacked = Stacked(width);
+            _caption.Measure(new Size(stacked ? width : _captionWidth, double.PositiveInfinity));
+            _field.Measure(new Size(stacked ? width : Math.Max(0, width - _captionWidth - ColumnGap),
+                double.PositiveInfinity));
+            return new Size(width, stacked
+                ? _caption.DesiredSize.Height + RowGap + _field.DesiredSize.Height
+                : Math.Max(_caption.DesiredSize.Height, _field.DesiredSize.Height));
+        }
+
+        protected override Size ArrangeOverride(Size finalSize)
+        {
+            if (Stacked(finalSize.Width))
+            {
+                var captionHeight = _caption.DesiredSize.Height;
+                _caption.Arrange(new Rect(0, 0, finalSize.Width, captionHeight));
+                _field.Arrange(new Rect(0, captionHeight + RowGap, finalSize.Width,
+                    Math.Max(0, finalSize.Height - captionHeight - RowGap)));
+            }
+            else
+            {
+                _caption.Arrange(new Rect(0, 0, _captionWidth, finalSize.Height));
+                _field.Arrange(new Rect(_captionWidth + ColumnGap, 0,
+                    Math.Max(0, finalSize.Width - _captionWidth - ColumnGap), finalSize.Height));
+            }
+            return finalSize;
+        }
     }
 
     /// <summary>A named slider with a live readout, used by every tool parameter.</summary>
@@ -358,38 +427,26 @@ public static class Ui
     }
 
     /// <summary>
-    /// One row of mutually exclusive choices. Returns the buttons for state syncing.
-    /// <para>
-    /// The strip wraps. It used to be a horizontal <see cref="StackPanel"/> inside a fixed-width
-    /// panel with horizontal scrolling switched off, so a set with long Russian labels - the six
-    /// Shape modes - simply ran off the edge and its last options could not be clicked at all.
-    /// A mode the user cannot reach is a missing feature, not a cosmetic overflow.
-    /// </para>
+    /// Mutually exclusive choices in equal cells; narrow panels get complete, evenly spaced rows.
     /// </summary>
     public static (Control Control, IReadOnlyList<Button> Buttons) Segmented(
         string namePrefix, IReadOnlyList<(string Key, string Text, string? Icon)> options, Action<string> chosen)
     {
         var buttons = new List<Button>(options.Count);
-        var strip = new WrapPanel { Orientation = Orientation.Horizontal };
+        var strip = new ChoiceGrid
+        {
+            MaxColumns = options.Count == 4 ? 4 : 3,
+            MinimumItemWidth = options.Count <= 3 ? 60 : 80,
+            Gap = 4,
+        };
 
         foreach (var option in options)
         {
-            object content = option.Icon is null
-                ? option.Text
-                : new StackPanel
-                {
-                    Orientation = Orientation.Horizontal,
-                    Spacing = 6,
-                    Children =
-                    {
-                        MapIcons.Stroked(option.Icon, 15),
-                        new TextBlock { Text = option.Text, VerticalAlignment = VerticalAlignment.Center },
-                    },
-                };
+            object content = option.Icon is null ? CommandCaption(option.Text) : CommandContent(option.Text, option.Icon);
 
-            var button = new ToggleButton { Content = content, Margin = new Thickness(0, 0, 2, 2) }
+            var button = new ToggleButton { Content = content, HorizontalAlignment = HorizontalAlignment.Stretch }
                 .Named(namePrefix + option.Key)
-                .Classed("segment");
+                .Classed("segment", "mode-choice");
             AutomationProperties.SetName(button, option.Text);
             ToolTip.SetTip(button, option.Text);
 
@@ -405,11 +462,12 @@ public static class Ui
             BorderBrush = Application.Current?.FindResource("MapBorderBrush") as IBrush,
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(7),
-            Padding = new Thickness(2, 2, 0, 0),
+            Padding = new Thickness(3),
             Child = strip,
-            HorizontalAlignment = HorizontalAlignment.Left,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
         };
 
+        host.Classes.Add("mode-group");
         return (host, buttons);
     }
 
@@ -418,13 +476,13 @@ public static class Ui
         string namePrefix, IReadOnlyList<(string Key, string Title, string Icon)> options, Action<string> chosen)
     {
         var buttons = new List<Button>(options.Count);
-        var strip = new WrapPanel { ItemWidth = 34, ItemHeight = 32 };
+        var strip = new ChoiceGrid { MaxColumns = 3, MinimumItemWidth = 34, Gap = 6 };
 
         foreach (var option in options)
         {
             var button = new Button { Content = MapIcons.Stroked(option.Icon, 17) }
                 .Named(namePrefix + option.Key)
-                .Classed("segment");
+                .Classed("segment", "mode-choice");
             AutomationProperties.SetName(button, option.Title);
             ToolTip.SetTip(button, option.Title);
 
@@ -435,6 +493,60 @@ public static class Ui
         }
 
         return (strip, buttons);
+    }
+
+    /// <summary>Equal-width choices and related actions, measured with a real width constraint.</summary>
+    public sealed class ChoiceGrid : Panel
+    {
+        public ChoiceGrid() => Classes.Add("choice-grid");
+
+        public int MaxColumns { get; init; } = 2;
+        public double MinimumItemWidth { get; init; } = 80;
+        public double Gap { get; init; } = 8;
+        private int _columns = 1;
+        private double[] _rowHeights = [];
+
+        protected override Size MeasureOverride(Size availableSize)
+        {
+            var visible = Children.Where(c => c.IsVisible).ToArray();
+            if (visible.Length == 0) { _rowHeights = []; return default; }
+            var width = double.IsFinite(availableSize.Width) ? availableSize.Width
+                : Math.Min(MaxColumns, visible.Length) * (MinimumItemWidth + Gap) - Gap;
+            foreach (var child in visible) child.Measure(Size.Infinity);
+            var minimumWidth = Math.Max(MinimumItemWidth, visible.Max(c => c.DesiredSize.Width));
+            _columns = Math.Min(visible.Length, Math.Min(MaxColumns,
+                Math.Max(1, (int)Math.Floor((width + Gap) / (minimumWidth + Gap)))));
+            _rowHeights = new double[(visible.Length + _columns - 1) / _columns];
+            var cellWidth = Math.Max(0, (width - Gap * (_columns - 1)) / _columns);
+            for (var i = 0; i < visible.Length; i++)
+            {
+                var lastAlone = i == visible.Length - 1 && i % _columns == 0;
+                visible[i].Measure(new Size(lastAlone ? width : cellWidth, double.PositiveInfinity));
+                _rowHeights[i / _columns] = Math.Max(_rowHeights[i / _columns], visible[i].DesiredSize.Height);
+            }
+            return new Size(width, _rowHeights.Sum() + Gap * (_rowHeights.Length - 1));
+        }
+
+        protected override Size ArrangeOverride(Size finalSize)
+        {
+            var visible = Children.Where(c => c.IsVisible).ToArray();
+            var cellWidth = Math.Max(0, (finalSize.Width - Gap * (_columns - 1)) / _columns);
+            var y = 0d;
+            for (var row = 0; row < _rowHeights.Length; row++)
+            {
+                for (var column = 0; column < _columns && row * _columns + column < visible.Length; column++)
+                {
+                    var index = row * _columns + column;
+                    var lastAlone = index == visible.Length - 1 && column == 0;
+                    var left = Math.Round(column * (cellWidth + Gap));
+                    var right = lastAlone || column == _columns - 1 ? finalSize.Width
+                        : Math.Round(column * (cellWidth + Gap) + cellWidth);
+                    visible[index].Arrange(new Rect(left, y, Math.Max(0, right - left), _rowHeights[row]));
+                }
+                y += _rowHeights[row] + Gap;
+            }
+            return finalSize;
+        }
     }
 
     // --------------------------------------------------------------- list rows
@@ -481,16 +593,6 @@ public static class Ui
             content.Children.Add(badges.Docked(Dock.Right));
         }
 
-        if (!string.IsNullOrWhiteSpace(secondary))
-        {
-            content.Children.Add(new TextBlock
-            {
-                Text = secondary,
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(8, 0, 0, 0),
-            }.Classed("faint", "role-caption").Docked(Dock.Right));
-        }
-
         content.Children.Add(new Border
         {
             Width = 20,
@@ -502,9 +604,13 @@ public static class Ui
             Margin = new Thickness(0, 0, 8, 0),
         }.Docked(Dock.Left));
 
-        content.Children.Add(Trimmed(primary));
+        var caption = new StackPanel { Spacing = 2, VerticalAlignment = VerticalAlignment.Center };
+        caption.Children.Add(Trimmed(primary));
+        if (!string.IsNullOrWhiteSpace(secondary))
+            caption.Children.Add(Trimmed(secondary, "faint", "role-caption"));
+        content.Children.Add(caption);
 
-        var row = new ToggleButton { Content = content }.Named(name).Classed("list-row");
+        var row = new ToggleButton { Content = content, MinHeight = 44 }.Named(name).Classed("list-row");
         AutomationProperties.SetName(row, tooltip ?? primary);
         ToolTip.SetTip(row, tooltip ?? primary);
         row.Click += (_, _) =>
@@ -525,53 +631,145 @@ public static class Ui
         }
     }
 
-    /// <summary>
-    /// A property whose editor is a button showing the setting's current value. Cycling controls
-    /// must never be a verb-only button: the user has to see what the value is now before deciding
-    /// whether to change it.
-    /// </summary>
-    public static (Control Row, Button Button) ValueRow(
-        string name, string label, string value, Action action)
+    /// <summary>A choice list in document flow: opening or navigating never applies a value.</summary>
+    public sealed class InlineChoice : StackPanel
     {
-        var text = new TextBlock
-        {
-            Text = value,
-            VerticalAlignment = VerticalAlignment.Center,
-            TextTrimming = TextTrimming.CharacterEllipsis,
-        }.Named(name + "Text");
+        private readonly string _label;
+        private readonly Func<IReadOnlyList<(string Text, Action Choose)>> _choices;
+        private readonly TextBlock _caption;
+        private readonly Control _chevron;
+        private readonly Border _options;
+        private readonly ScrollViewer _scroll;
+        private readonly StackPanel _items = new();
+        private readonly List<(Button Button, Control Mark, string Text)> _rows = [];
+        public Button Header { get; }
+        public bool IsExpanded => _options.IsVisible;
+        public event EventHandler? Opened;
 
-        // A trailing chevron is what separates "this is a control you can change" from "this is a
-        // read-only field", which matters because the value itself is the label.
-        var button = new Button
+        public InlineChoice(string name, string label, string value,
+            Func<IReadOnlyList<(string Text, Action Choose)>> choices)
         {
-            Content = new DockPanel
+            _label = label;
+            _choices = choices;
+            _caption = new TextBlock { TextWrapping = TextWrapping.Wrap,
+                VerticalAlignment = VerticalAlignment.Center }.Named(name + "Text");
+            _chevron = MapIcons.Stroked(MapIcons.ChevronDown, 13);
+            Header = new Button
             {
-                Children =
+                Content = new DockPanel
                 {
-                    MapIcons.Stroked(MapIcons.ChevronDown, 13).Docked(Dock.Right),
-                    text,
+                    Children =
+                    {
+                        new Border { Width = 18, Margin = new Thickness(8, 0, 0, 0),
+                            Child = _chevron, VerticalAlignment = VerticalAlignment.Center }.Docked(Dock.Right),
+                        _caption,
+                    },
                 },
-            },
-        }.Named(name).Classed("value");
+            }.Named(name).Classed("value");
+            _scroll = new ScrollViewer
+            {
+                Content = _items, MaxHeight = 192,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            }.Named(name + "Scroll");
+            _options = new Border
+            {
+                Child = _scroll, Padding = new Thickness(4), Margin = new Thickness(0, 4, 0, 0),
+                CornerRadius = new CornerRadius(6), BorderThickness = new Thickness(1),
+                BorderBrush = Application.Current?.FindResource("MapBorderStrongBrush") as IBrush,
+                Background = Application.Current?.FindResource("MapElevatedBrush") as IBrush,
+                IsVisible = false,
+            }.Named(name + "Options");
+            Children.Add(Header);
+            Children.Add(_options);
+            Header.Click += (_, _) => { if (IsExpanded) Close(); else Open(); };
+            KeyDown += (_, e) =>
+            {
+                if (e.Key == Key.Escape && IsExpanded)
+                {
+                    Close(); Header.Focus(); e.Handled = true;
+                }
+                else if (Header.IsFocused && e.Key == Key.Down)
+                {
+                    if (!IsExpanded) Open();
+                    _rows.FirstOrDefault(r => r.Text == _caption.Text).Button?.Focus();
+                    if (!_rows.Any(r => r.Button.IsFocused)) _rows.FirstOrDefault().Button?.Focus();
+                    e.Handled = true;
+                }
+            };
+            SetValue(value);
+        }
 
-        AutomationProperties.SetName(button, $"{label}: {value}");
-        ToolTip.SetTip(button, $"{label}: {value}. Нажмите, чтобы сменить.");
-        button.Click += (_, _) => action();
-
-        var caption = ParameterLabel(label, 92);
-        ToolTip.SetTip(caption, label);
-
-        var row = new DockPanel
+        public void SetValue(string value)
         {
-            Margin = new Thickness(0, 2),
-            Children = { caption.Docked(Dock.Left), button },
-        };
+            _caption.Text = value;
+            AutomationProperties.SetName(Header, $"{_label}: {value}");
+            ToolTip.SetTip(Header, $"{_label}: {value}. Открыть варианты.");
+            foreach (var row in _rows)
+            {
+                var selected = row.Text == value;
+                SetClass(row.Button, "selected", selected);
+                row.Mark.IsVisible = selected;
+            }
+        }
 
-        return (row, button);
+        public void Open()
+        {
+            if (IsExpanded) return;
+            Opened?.Invoke(this, EventArgs.Empty);
+            _items.Children.Clear();
+            _rows.Clear();
+            foreach (var choice in _choices())
+            {
+                var mark = MapIcons.Stroked(MapIcons.Check, 14);
+                var button = new Button
+                {
+                    Content = new DockPanel
+                    {
+                        Children =
+                        {
+                            new Border { Width = 18, Child = mark, Margin = new Thickness(6, 0, 0, 0),
+                                VerticalAlignment = VerticalAlignment.Center }.Docked(Dock.Right),
+                            new TextBlock { Text = choice.Text, TextWrapping = TextWrapping.Wrap,
+                                VerticalAlignment = VerticalAlignment.Center },
+                        },
+                    },
+                }.Named(Header.Name + "Option" + _rows.Count).Classed("inline-choice-option");
+                AutomationProperties.SetName(button, choice.Text);
+                button.Click += (_, _) => { Close(); Header.Focus(); choice.Choose(); };
+                button.KeyDown += (_, e) =>
+                {
+                    var index = _rows.FindIndex(r => r.Button == button);
+                    var next = e.Key switch { Key.Down => index + 1, Key.Up => index - 1,
+                        Key.Home => 0, Key.End => _rows.Count - 1, _ => -1 };
+                    if (e.Key is Key.Down or Key.Up or Key.Home or Key.End)
+                    {
+                        _rows[Math.Clamp(next, 0, _rows.Count - 1)].Button.Focus();
+                        e.Handled = true;
+                    }
+                };
+                _rows.Add((button, mark, choice.Text));
+                _items.Children.Add(button);
+            }
+            _options.IsVisible = true;
+            _chevron.RenderTransform = new RotateTransform(180);
+            SetValue(_caption.Text ?? "");
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (!IsExpanded) return;
+                this.BringIntoView();
+                var index = _rows.FindIndex(r => r.Text == _caption.Text);
+                _scroll.Offset = new Vector(0, _rows.Count == 0 ? 0 :
+                    _rows[Math.Max(0, index - 2)].Button.Bounds.Y);
+            }, DispatcherPriority.Loaded);
+        }
+
+        public void Close()
+        {
+            _options.IsVisible = false;
+            _chevron.RenderTransform = null;
+        }
     }
-
-    /// <summary>Width a caption glyph and its gap occupy, kept out of the text's own budget.</summary>
-    private const double IconCaptionExtra = 25;
 
     /// <summary>
     /// Inspector caption with the approved semantic glyph when the label describes a known
@@ -582,8 +780,9 @@ public static class Ui
         var text = new TextBlock
         {
             Text = label,
+            FontSize = 13,
             VerticalAlignment = VerticalAlignment.Center,
-            TextTrimming = TextTrimming.CharacterEllipsis,
+            TextWrapping = TextWrapping.Wrap,
         }.Classed("muted");
 
         var icon = MapIcons.ForProperty(label);
@@ -609,16 +808,19 @@ public static class Ui
                 text,
             },
         };
-        // The requested width is the room the TEXT needs. A caption that also carries a glyph has
-        // to be wider by exactly the glyph's footprint, or labels like "Блокировка" and
-        // "Смешивание" arrive clipped to "Блокиро..." purely because they earned an icon.
-        if (width is { } captionWidth) caption.Width = captionWidth + IconCaptionExtra;
+        // Width always includes the glyph and gap. Adding them again overflows the parent's column.
+        if (width is { } captionWidth) caption.Width = captionWidth;
         return caption;
     }
 
     /// <summary>Updates a value button in place, keeping its accessible name truthful.</summary>
     public static void SetValue(Button button, string label, string value)
     {
+        if (button.Parent is InlineChoice choice)
+        {
+            choice.SetValue(value);
+            return;
+        }
         if (button.Content is DockPanel panel)
         {
             foreach (var child in panel.Children)
@@ -665,16 +867,6 @@ public static class Ui
     {
         var label = new DockPanel { LastChildFill = true };
 
-        if (!string.IsNullOrWhiteSpace(secondary))
-        {
-            label.Children.Add(new TextBlock
-            {
-                Text = secondary,
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(8, 0, 4, 0),
-            }.Classed("faint", "role-caption").Docked(Dock.Right));
-        }
-
         label.Children.Add(new Border
         {
             Width = 20,
@@ -683,9 +875,13 @@ public static class Ui
             Margin = new Thickness(0, 0, 8, 0),
         }.Docked(Dock.Left));
 
-        label.Children.Add(Trimmed(primary));
+        var caption = new StackPanel { Spacing = 2, VerticalAlignment = VerticalAlignment.Center };
+        caption.Children.Add(Trimmed(primary));
+        if (!string.IsNullOrWhiteSpace(secondary))
+            caption.Children.Add(Trimmed(secondary, "faint", "role-caption"));
+        label.Children.Add(caption);
 
-        var select = new ToggleButton { Content = label }.Named(name).Classed("list-row");
+        var select = new ToggleButton { Content = label, MinHeight = 44 }.Named(name).Classed("list-row");
         AutomationProperties.SetName(select, tooltip);
         ToolTip.SetTip(select, tooltip);
         select.Click += (_, _) =>

@@ -7,7 +7,7 @@ namespace Map.Persistence.Tests;
 public sealed class Stage13DLargeCanvasRoundTripTests
 {
     [Fact]
-    public void Large_sparse_canvas_round_trip_preserves_groups_compositions_tiles_and_fixed_budgets()
+    public void Large_sparse_canvas_round_trip_preserves_groups_compositions_tiles_and_expanded_envelope()
     {
         using var temp = new TempWorkspace();
         var path = temp.File("large-131k.mapproj");
@@ -36,8 +36,8 @@ public sealed class Stage13DLargeCanvasRoundTripTests
         var sceneJson = reader.ReadToEnd();
         Assert.DoesNotContain('\n', sceneJson);
         Assert.DoesNotContain('\r', sceneJson);
-        Assert.Equal(32L * 1024 * 1024, MapProjectFormat.MaxJsonEntryBytes);
-        Assert.Equal(512L * 1024 * 1024, MapProjectFormat.MaxTotalUncompressedBytes);
+        Assert.Equal(512L * 1024 * 1024, MapProjectFormat.MaxJsonEntryBytes);
+        Assert.Equal(2_048L * 1024 * 1024, MapProjectFormat.MaxTotalUncompressedBytes);
     }
 
     private static MapDocument Document()

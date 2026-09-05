@@ -35,9 +35,9 @@ public class MapProjectRoundTripTests
 
         using var archive = ZipFile.OpenRead(path);
 
-        // Exactly the four required entries - no extras, nothing missing.
+        var objectEntry = $"{MapProjectFormat.ObjectPrefix}{ProjectFixtures.FixedLayerId}/00000000.json";
         Assert.Equal(
-            MapProjectFormat.RequiredEntries.Order().ToArray(),
+            MapProjectFormat.RequiredEntries.Append(objectEntry).Order().ToArray(),
             archive.Entries.Select(e => e.FullName).Order().ToArray());
 
         var manifestBytes = ReadEntry(archive, MapProjectFormat.ManifestEntry);
@@ -53,6 +53,19 @@ public class MapProjectRoundTripTests
 
         Assert.Equal(Sha256Hex(sceneBytes), root.GetProperty("sceneSha256").GetString());
         Assert.Equal(Sha256Hex(assetManifestBytes), root.GetProperty("assetManifestSha256").GetString());
+
+        using var scene = JsonDocument.Parse(sceneBytes);
+        var objectLayer = scene.RootElement.GetProperty("layers")[1];
+        Assert.False(objectLayer.TryGetProperty("objects", out _));
+        var descriptor = Assert.Single(objectLayer.GetProperty("objectChunks").EnumerateArray());
+        var objectBytes = ReadEntry(archive, objectEntry);
+        Assert.Equal(0, descriptor.GetProperty("ordinal").GetInt32());
+        Assert.Equal(2, descriptor.GetProperty("count").GetInt32());
+        Assert.Equal(objectBytes.LongLength, descriptor.GetProperty("byteLength").GetInt64());
+        Assert.Equal(Sha256Hex(objectBytes), descriptor.GetProperty("sha256").GetString());
+        Assert.Equal(objectEntry, descriptor.GetProperty("entry").GetString());
+        Assert.Equal(MapProjectFormat.ObjectChunkRepresentationVersion,
+            descriptor.GetProperty("representationVersion").GetInt32());
 
         // Canvas metadata follows the docs/05 manifest baseline.
         var canvas = root.GetProperty("canvas");
@@ -78,15 +91,12 @@ public class MapProjectRoundTripTests
         MapProjectStore.Save(document, first, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
         MapProjectStore.Save(document, second, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
 
-        foreach (var entry in new[]
-                 {
-                     MapProjectFormat.ManifestEntry,
-                     MapProjectFormat.SceneEntry,
-                     MapProjectFormat.AssetManifestEntry,
-                 })
+        using var archiveA = ZipFile.OpenRead(first);
+        using var archiveB = ZipFile.OpenRead(second);
+        var names = archiveA.Entries.Select(entry => entry.FullName).Order().ToArray();
+        Assert.Equal(names, archiveB.Entries.Select(entry => entry.FullName).Order().ToArray());
+        foreach (var entry in names.Where(name => name.EndsWith(".json", StringComparison.Ordinal)))
         {
-            using var archiveA = ZipFile.OpenRead(first);
-            using var archiveB = ZipFile.OpenRead(second);
             Assert.Equal(ReadEntry(archiveA, entry), ReadEntry(archiveB, entry));
         }
     }

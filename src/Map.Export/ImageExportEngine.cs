@@ -134,10 +134,10 @@ public sealed class ImageExportEngine : IImageExporter
                 tempPath, bytes, plan.Format, plan.OutputWidth, plan.OutputHeight, cancellationToken)
                 .ConfigureAwait(false);
             cancellationToken.ThrowIfCancellationRequested();
-            _settings.FaultInjector?.Invoke(ExportFaultPoint.BeforePublish);
+            _settings.FaultInjector?.Invoke(ExportFaultPoint.BeforeFinalize);
             cancellationToken.ThrowIfCancellationRequested();
-            Report(progress, ExportPhase.Publishing, 0.96, "Публикация готового файла…");
-            PublishFile(tempPath, fullPath);
+            Report(progress, ExportPhase.Finalizing, 0.96, "Завершение записи готового файла…");
+            FinalizeFile(tempPath, fullPath);
         }
         catch
         {
@@ -249,9 +249,9 @@ public sealed class ImageExportEngine : IImageExporter
             await WriteDurableAsync(manifestPath, manifestBytes, cancellationToken).ConfigureAwait(false);
             ValidateManifest(manifestPath, plan);
 
-            _settings.FaultInjector?.Invoke(ExportFaultPoint.BeforePublish);
+            _settings.FaultInjector?.Invoke(ExportFaultPoint.BeforeFinalize);
             cancellationToken.ThrowIfCancellationRequested();
-            Report(progress, ExportPhase.Publishing, 0.97, "Публикация пакета тайлов…");
+            Report(progress, ExportPhase.Finalizing, 0.97, "Завершение записи пакета тайлов…");
             Directory.Move(tempPath, fullPath);
         }
         catch
@@ -410,7 +410,7 @@ public sealed class ImageExportEngine : IImageExporter
             $".{Path.GetFileName(destination)}.{Guid.NewGuid():N}.tmp.{ExtensionFromPath(destination)}");
     }
 
-    private static void PublishFile(string tempPath, string destinationPath)
+    private static void FinalizeFile(string tempPath, string destinationPath)
     {
         if (File.Exists(destinationPath))
         {
@@ -476,7 +476,7 @@ public sealed class ImageExportEngine : IImageExporter
         }
         catch
         {
-            // UI progress is observational. It can never turn a valid published file into failure.
+            // UI progress is observational. It can never turn a valid completed file into failure.
         }
     }
 

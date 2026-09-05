@@ -8,64 +8,23 @@ using Avalonia.Platform;
 
 namespace Map.App.Controls;
 
-/// <summary>
-/// The approved blue-theme artwork supplied by the owner.  The source boards are converted into
-/// individual transparent PNG resources, so controls render the actual approved illustrations
-/// instead of substituting small line glyphs.
-/// </summary>
+/// <summary>Blue Atlas artwork with an explicit image size and a real transparent background.</summary>
 public static class ApprovedArtwork
 {
-    private const string ResourceRoot = "avares://Map.App/Assets/Approved/";
+    private const string ResourceRoot = "avares://Map.App/Assets/Atlas/";
 
     private static readonly Dictionary<string, string> IconByToken = new()
     {
-        [MapIcons.LibraryMaps] = "nav-library",
-        [MapIcons.Assets] = "nav-assets-gallery",
-        [MapIcons.Select] = "nav-select",
-        [MapIcons.Line] = "nav-line",
-        [MapIcons.Shape] = "nav-shape",
-        [MapIcons.Text] = "nav-text",
-        [MapIcons.ObjectStamp] = "nav-stamp",
-        [MapIcons.Notes] = "nav-notes",
-        [MapIcons.Brush] = "nav-brush",
-        [MapIcons.Mask] = "nav-mask",
-        [MapIcons.Land] = "nav-landscape",
-        [MapIcons.Layers] = "nav-layers",
-        [MapIcons.Objects] = "nav-objects",
-        [MapIcons.LayerFilter] = "nav-filter",
-        [MapIcons.LayerBase] = "nav-background",
-        [MapIcons.ObjectComposition] = "nav-composition",
-
-        [MapIcons.File] = "global-file",
-        [MapIcons.Export] = "global-export",
-        [MapIcons.Save] = "global-save",
-        [MapIcons.Search] = "global-search",
-        [MapIcons.Sort] = "global-sort",
-        [MapIcons.NewMap] = "global-new-map",
-        [MapIcons.Open] = "global-open-project",
-        [MapIcons.Import] = "global-import",
-        [MapIcons.Duplicate] = "global-copy",
-        [MapIcons.Trash] = "global-delete",
-        [MapIcons.Versions] = "global-versions",
-        [MapIcons.ResizeRegion] = "global-resize-region",
-        [MapIcons.Gear] = "global-settings",
-
-        [MapIcons.BrushSize] = "property-brush-size",
-        [MapIcons.Opacity] = "property-opacity",
-        [MapIcons.SoftEdge] = "property-soft-edge",
-        [MapIcons.RoughEdge] = "property-rough-edge",
-        [MapIcons.Smoothing] = "property-smoothing",
-        [MapIcons.ScaleObject] = "property-scale-object",
-        [MapIcons.Rotate] = "property-rotate",
-        [MapIcons.StampSpacing] = "property-stamp-spacing",
-        [MapIcons.Color] = "property-color",
-        [MapIcons.Texture] = "property-texture",
-        [MapIcons.Eye] = "property-layer-visible",
-        [MapIcons.Lock] = "property-layer-lock",
-        [MapIcons.LayerOpacity] = "property-layer-opacity",
-        [MapIcons.Blend] = "property-blend",
-        [MapIcons.LayerMask] = "property-layer-mask",
-        [MapIcons.LayerOrder] = "property-layer-order",
+        [MapIcons.LibraryMaps] = "map",
+        [MapIcons.Assets] = "map",
+        [MapIcons.Select] = "select",
+        [MapIcons.Line] = "line",
+        [MapIcons.Shape] = "shape",
+        [MapIcons.Text] = "text",
+        [MapIcons.Notes] = "notes",
+        [MapIcons.Brush] = "brush",
+        [MapIcons.Mask] = "mask",
+        [MapIcons.Land] = "land",
     };
 
     private static readonly Dictionary<string, Bitmap> Bitmaps = new(StringComparer.Ordinal);
@@ -73,22 +32,21 @@ public static class ApprovedArtwork
 
     public static bool TryCreateIcon(string token, double requestedSize, out Control control)
     {
-        if (!IconByToken.TryGetValue(token, out var assetName))
+        // Secondary glyphs use MapIcons paths. Raster icons never grow past the requested slot.
+        if (requestedSize < 24 || !IconByToken.TryGetValue(token, out var assetName))
         {
             control = null!;
             return false;
         }
 
-        // The approved illustrations contain watercolour shading and fine navy contours. They
-        // need a little more room than a monochrome path with the same nominal size.
-        var visualSize = requestedSize switch
+        var opticalSize = assetName == "map" ? requestedSize * 0.9 : requestedSize;
+        control = new Border
         {
-            <= 12 => requestedSize * 1.65,
-            <= 18 => requestedSize * 2.0,
-            <= 24 => requestedSize * 1.75,
-            _ => requestedSize,
+            Width = requestedSize,
+            Height = requestedSize,
+            Child = Image(assetName, opticalSize, opticalSize),
+            IsHitTestVisible = false,
         };
-        control = Image(assetName, visualSize, visualSize);
         return true;
     }
 
@@ -98,9 +56,9 @@ public static class ApprovedArtwork
         double height,
         Stretch stretch = Stretch.Uniform)
     {
-        return new Image
+        var image = new Image
         {
-            Source = Bitmap(assetName),
+            Source = LoadBitmap(assetName),
             Width = width,
             Height = height,
             Stretch = stretch,
@@ -108,9 +66,11 @@ public static class ApprovedArtwork
             VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
             IsHitTestVisible = false,
         };
+        RenderOptions.SetBitmapInterpolationMode(image, BitmapInterpolationMode.HighQuality);
+        return image;
     }
 
-    private static Bitmap Bitmap(string assetName)
+    private static Bitmap LoadBitmap(string assetName)
     {
         lock (Sync)
         {
@@ -120,7 +80,7 @@ public static class ApprovedArtwork
             }
 
             using var stream = AssetLoader.Open(new Uri(ResourceRoot + assetName + ".png"));
-            bitmap = new Bitmap(stream);
+            bitmap = Bitmap.DecodeToWidth(stream, 256, BitmapInterpolationMode.HighQuality);
             Bitmaps[assetName] = bitmap;
             return bitmap;
         }

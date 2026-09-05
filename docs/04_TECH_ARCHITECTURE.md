@@ -1,18 +1,20 @@
 # 04. Техническая архитектура
 
-## Предлагаемый стек
+## Фактический стек — сверка 2026-09-05
 
 | Слой | Выбор | Причина |
 |---|---|---|
 | Runtime | .NET 10 LTS / C# 14 | установлен на рабочем ПК владельца, быстрый локальный build/run |
-| Desktop UI | Avalonia 12.1 | нативное окно без Chromium, MIT, Windows backend и доступность |
+| Desktop UI | Avalonia 12.1.1 | нативное окно без Chromium, Windows backend |
 | Canvas | Skia через Avalonia custom rendering | аппаратный Direct3D-путь с программным fallback, offscreen render/export |
-| UI state | CommunityToolkit.Mvvm | небольшой MIT toolkit; не смешивать с доменной моделью |
-| Tests | xUnit + FluentAssertions только если лицензия/политика подтверждены; иначе xUnit assertions | быстрые unit/integration tests |
-| Benchmarks | BenchmarkDotNet + встроенные scenario counters | измерять scene traversal, hit test, save/export |
+| UI state | собственный `ViewModelBase` / `INotifyPropertyChanged` | Presentation не зависит от Avalonia; Core не зависит от UI |
+| Tests | xUnit с собственными assertions xUnit | адресные unit/integration tests вне `Map.slnx` |
+| Диагностика скорости | собственные scenario counters в `tools/Map.Performance` | отдельные адресные сценарии только при необходимости |
 | Запуск | framework-dependent `win-x64` | минимальный локальный output для текущего ПК |
 
-Версии пакетов фиксируются после spike. Никакой runtime-зависимости от Python, Node, браузера или сети у приложения нет.
+Версии пакетов заданы в `.csproj`; SkiaSharp — 3.119.4. Никакой runtime-зависимости от Python,
+Node, браузера или сети у приложения нет. Описание возможных альтернатив ниже является историей
+выбора стека, а не текущим поручением менять архитектуру.
 
 ## Почему не Electron/Tauri
 
@@ -20,7 +22,7 @@
 
 ## Почему не Qt 6/C++ сейчас
 
-Qt Graphics View зрелый и силён для множества 2D-объектов, но C++ увеличивает стоимость итерации с Opus, сложность memory-safety и поставки. LGPL/GPL-комбинации требуют более строгого контроля динамической линковки и модулей. Qt остаётся резервом, если Avalonia/Skia spike не проходит бюджеты.
+Qt Graphics View зрелый и силён для множества 2D-объектов, но C++ увеличивает стоимость итерации с Opus и сложность memory-safety. LGPL/GPL-комбинации требуют более строгого контроля динамической линковки и модулей. Qt остаётся резервом, если Avalonia/Skia spike не проходит бюджеты.
 
 ## Почему не Godot сейчас
 
@@ -29,29 +31,33 @@ Godot хорош как 2D-движок и умеет экспортироват
 ## Модули решения
 
 ```text
-Map.App              composition root, window lifecycle, DI
-Map.Presentation     Avalonia views/view-models, commands, dialogs
+Map.App              composition root, Avalonia views, window lifecycle, file dialogs
+Map.Presentation     view-models, UI contracts, canvas input router; без Avalonia
 Map.Core             document model, geometry, tools, commands, invariants
-Map.Rendering        scene traversal, caches, hit-test, Skia adapters
+Map.Rendering        scene traversal, caches, Skia adapters; геометрический hit-test в Core
 Map.Persistence      .mapproj, migrations, atomic save, recovery journal
 Map.Assets           import, validation, catalog, thumbnails, provenance
 Map.Export           offscreen tiled export and color pipeline
-Map.Platform.Windows Windows paths, file dialogs, diagnostics
+Map.Platform.Windows Windows paths, settings, recent maps, diagnostics
 Map.Tests.*          адресные regression tests, запускаемые только при необходимости
 ```
 
 Зависимости направлены внутрь:
 
 ```text
-Presentation ─┐
-Rendering ────┼──> Core
-Persistence ──┤
-Assets ───────┤
-Export ───────┘
-App связывает адаптеры, но Core не знает о них.
+App -> все семь production-библиотек
+Presentation -> Core, Assets, Rendering, Persistence, Export
+Export -> Core, Rendering
+Rendering, Persistence, Assets, Platform.Windows -> Core
+Core -> нет других проектов Map, UI или Skia
 ```
 
 ### Stage 12D: граница открытия и миграции файла
+
+Следующий абзац описывает исторический Stage 12D. Текущий canonical writer использует schema v4,
+а copy-only registry последовательно переносит v1/v2/v3 до v4 (DEC-022). Object payload хранится
+в независимых bounded chunks; текущие ограничения и расхождение общих byte budgets с DEC-021/022
+отмечены в `STATE_HANDOFF.md`. Исторический v2 не является текущей целевой схемой.
 
 `Map.Persistence` сначала классифицирует контейнер через общий bounded ZIP/JSON admission. V2
 открывается полностью, v1 только предлагает последовательную `v1 → v2` migration-copy, future

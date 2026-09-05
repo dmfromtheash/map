@@ -11,7 +11,7 @@ namespace Map.Persistence.Tests;
 public sealed class Stage12DMigrationTests
 {
     [Fact]
-    public void Stage12D_current_v3_is_ready_and_writer_json_is_deterministic()
+    public void Current_v4_is_ready_and_writer_json_is_deterministic()
     {
         using var workspace = new TempWorkspace();
         var first = workspace.File("first.mapproj");
@@ -42,7 +42,7 @@ public sealed class Stage12DMigrationTests
     {
         using var workspace = new TempWorkspace();
         var source = workspace.File("early-v1.mapproj");
-        var destination = workspace.File("migrated-v3.mapproj");
+        var destination = workspace.File("migrated-v4.mapproj");
         WriteEarlyV1(source, unknownKind: null);
         var beforeBytes = File.ReadAllBytes(source);
         var beforeTimestamp = new DateTime(2026, 8, 25, 12, 0, 0, DateTimeKind.Utc);
@@ -65,9 +65,34 @@ public sealed class Stage12DMigrationTests
         Assert.Equal(ProjectFixtures.FixedRectangleId, item.Id);
         Assert.Equal((10d, 20d, 30d, 40d), (item.X, item.Y, item.Width, item.Height));
 
-        var second = workspace.File("migrated-v3-second.mapproj");
+        var second = workspace.File("migrated-v4-second.mapproj");
         MapProjectStore.MigrateCopy(source, second);
         Assert.Equal(File.ReadAllBytes(destination), File.ReadAllBytes(second));
+    }
+
+    [Fact]
+    public void V3_to_v4_is_copy_only_and_preserves_exact_object_order_and_ids()
+    {
+        using var workspace = new TempWorkspace();
+        var source = workspace.File("source-v3.mapproj");
+        var destination = workspace.File("destination-v4.mapproj");
+        var expected = ProjectFixtures.Document();
+        MapProjectStore.Save(expected, source, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
+        RewriteV4AsLegacy(source, schemaVersion: 3);
+        var sourceBytes = File.ReadAllBytes(source);
+        var sourceTimestamp = new DateTime(2026, 9, 4, 10, 0, 0, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(source, sourceTimestamp);
+
+        var migrated = MapProjectStore.MigrateCopy(source, destination);
+
+        Assert.Equal(sourceBytes, File.ReadAllBytes(source));
+        Assert.Equal(sourceTimestamp, File.GetLastWriteTimeUtc(source));
+        Assert.Equal(3, migrated.SourceSchema);
+        Assert.Equal(4, migrated.TargetSchema);
+        ProjectFixtures.AssertSemanticallyEqual(expected, migrated.Project.Document);
+        var expectedIds = expected.Layers.OfType<ObjectLayer>().Single().Objects.Select(item => item.Id);
+        var actualIds = migrated.Project.Document.Layers.OfType<ObjectLayer>().Single().Objects.Select(item => item.Id);
+        Assert.Equal(expectedIds, actualIds);
     }
 
     [Fact]
@@ -75,7 +100,7 @@ public sealed class Stage12DMigrationTests
     {
         using var workspace = new TempWorkspace();
         var source = workspace.File("unknown-v1.mapproj");
-        var destination = workspace.File("unknown-v3.mapproj");
+        var destination = workspace.File("unknown-v4.mapproj");
         WriteEarlyV1(source, unknownKind: "FuturePortal");
         var sourceScene = Encoding.UTF8.GetString(ReadEntry(source, MapProjectFormat.SceneEntry));
         using var sourceJson = JsonDocument.Parse(sourceScene);
@@ -90,13 +115,16 @@ public sealed class Stage12DMigrationTests
         using (var migratedScene = JsonDocument.Parse(ReadEntry(destination, MapProjectFormat.SceneEntry)))
         {
             var rootObject = migratedScene.RootElement.GetProperty("futureRoot").GetString();
-            var objectField = migratedScene.RootElement.GetProperty("layers")[1]
-                .GetProperty("objects")[0].GetProperty("futureObject").GetInt32();
+            var descriptor = migratedScene.RootElement.GetProperty("layers")[1]
+                .GetProperty("objectChunks")[0];
+            using var chunk = JsonDocument.Parse(ReadEntry(
+                destination, descriptor.GetProperty("entry").GetString()!));
+            var objectField = chunk.RootElement[0].GetProperty("futureObject").GetInt32();
             Assert.Equal("kept", rootObject);
             Assert.Equal(42, objectField);
         }
 
-        var saved = workspace.File("normal-save-v3.mapproj");
+        var saved = workspace.File("normal-save-v4.mapproj");
         MapProjectStore.Save(
             migrated.Project.Document,
             saved,
@@ -112,10 +140,10 @@ public sealed class Stage12DMigrationTests
     {
         using var workspace = new TempWorkspace();
         var source = workspace.File("full-v1.mapproj");
-        var destination = workspace.File("full-v3.mapproj");
+        var destination = workspace.File("full-v4.mapproj");
         var expected = RichDocument();
         MapProjectStore.Save(expected, source, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
-        RewriteManifest(source, root => root["schemaVersion"] = 1);
+        RewriteV4AsLegacy(source, schemaVersion: 1);
 
         var actual = MapProjectStore.MigrateCopy(source, destination).Project.Document;
 
@@ -151,7 +179,7 @@ public sealed class Stage12DMigrationTests
             failedDestination,
             new MigrationFaultInjection
             {
-                AfterReadBackBeforePublish = () => throw new InvalidOperationException("injected"),
+                AfterReadBackBeforeFinalize = () => throw new InvalidOperationException("injected"),
             }));
         Assert.False(File.Exists(failedDestination));
         Assert.Equal(sourceBytes, File.ReadAllBytes(source));
@@ -163,7 +191,7 @@ public sealed class Stage12DMigrationTests
     {
         using var workspace = new TempWorkspace();
         var source = workspace.File("oversized-v1.mapproj");
-        var destination = workspace.File("oversized-v3.mapproj");
+        var destination = workspace.File("oversized-v4.mapproj");
         WriteEarlyV1(source, unknownKind: "FuturePortal");
         RewriteJsonEntry(source, MapProjectFormat.SceneEntry, root =>
         {
@@ -379,6 +407,83 @@ public sealed class Stage12DMigrationTests
 
     private static void RewriteManifest(string path, Action<JsonObject> mutate) =>
         RewriteJsonEntry(path, MapProjectFormat.ManifestEntry, mutate);
+
+    private static void RewriteV4AsLegacy(string path, int schemaVersion)
+    {
+        using var archive = ZipFile.Open(path, ZipArchiveMode.Update);
+        var manifest = ReadObject(archive, MapProjectFormat.ManifestEntry);
+        var sceneBytes = FlattenScene(archive, MapProjectFormat.SceneEntry);
+        manifest["schemaVersion"] = schemaVersion;
+        manifest["sceneSha256"] = Sha256(sceneBytes);
+
+        if (archive.GetEntry(MapProjectFormat.CheckpointCatalogEntry) is { } catalogEntry)
+        {
+            var catalog = ReadObject(archive, catalogEntry.FullName);
+            foreach (var node in catalog["checkpoints"]!.AsArray())
+            {
+                var item = node!.AsObject();
+                var root = MapProjectFormat.CheckpointPrefix + item["id"]!.GetValue<string>() + "/";
+                var checkpointSceneName = root + "scene.json";
+                var checkpointSceneBytes = FlattenScene(archive, checkpointSceneName);
+                var snapshotName = root + "manifest.json";
+                var snapshot = ReadObject(archive, snapshotName);
+                snapshot["schemaVersion"] = schemaVersion;
+                snapshot["sceneSha256"] = Sha256(checkpointSceneBytes);
+                var snapshotBytes = JsonSerializer.SerializeToUtf8Bytes(snapshot);
+                Replace(archive, snapshotName, snapshotBytes);
+                item["snapshotManifestSha256"] = Sha256(snapshotBytes);
+            }
+
+            var catalogBytes = JsonSerializer.SerializeToUtf8Bytes(catalog);
+            Replace(archive, MapProjectFormat.CheckpointCatalogEntry, catalogBytes);
+            manifest["checkpointCatalogSha256"] = Sha256(catalogBytes);
+        }
+
+        Replace(archive, MapProjectFormat.ManifestEntry, JsonSerializer.SerializeToUtf8Bytes(manifest));
+
+        static byte[] FlattenScene(ZipArchive archive, string sceneName)
+        {
+            var scene = ReadObject(archive, sceneName);
+            var chunkEntries = new List<string>();
+            foreach (var node in scene["layers"]!.AsArray())
+            {
+                var layer = node!.AsObject();
+                var objects = new JsonArray();
+                if (layer["objectChunks"] is JsonArray descriptors)
+                {
+                    foreach (var descriptorNode in descriptors)
+                    {
+                        var entryName = descriptorNode!["entry"]!.GetValue<string>();
+                        using var chunk = JsonDocument.Parse(ReadEntry(archive, entryName));
+                        foreach (var item in chunk.RootElement.EnumerateArray())
+                        {
+                            objects.Add(JsonNode.Parse(item.GetRawText()));
+                        }
+                        chunkEntries.Add(entryName);
+                    }
+                }
+                layer.Remove("objectChunks");
+                layer["objects"] = objects;
+            }
+
+            var bytes = JsonSerializer.SerializeToUtf8Bytes(scene);
+            Replace(archive, sceneName, bytes);
+            foreach (var entryName in chunkEntries)
+            {
+                archive.GetEntry(entryName)!.Delete();
+            }
+            return bytes;
+        }
+
+        static JsonObject ReadObject(ZipArchive archive, string name) =>
+            JsonNode.Parse(ReadEntry(archive, name))!.AsObject();
+
+        static void Replace(ZipArchive archive, string name, byte[] bytes)
+        {
+            archive.GetEntry(name)!.Delete();
+            Write(archive, name, bytes);
+        }
+    }
 
     private static void RewriteJsonEntry(string path, string name, Action<JsonObject> mutate)
     {

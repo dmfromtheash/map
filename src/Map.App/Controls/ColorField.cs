@@ -724,9 +724,12 @@ public sealed class ColorField
         var button = new Button
         {
             Width = 26,
-            Height = 20,
+            Height = 26,
+            MinHeight = 26,
             Margin = new Thickness(0, 0, 4, 4),
             Padding = new Thickness(0),
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            VerticalContentAlignment = VerticalAlignment.Stretch,
             Content = new Border
             {
                 CornerRadius = new CornerRadius(2),

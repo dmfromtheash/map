@@ -177,7 +177,7 @@ internal sealed class NativeBrushStressApplication : Application
     }
 
     private static async Task<NativeBrushStressReport> ExecuteAsync(
-        string workspace, Window window, Action<EditorView> publish)
+        string workspace, Window window, Action<EditorView> showView)
     {
         var notes = new List<string>();
         var cases = new List<BrushStressCase>();
@@ -195,7 +195,7 @@ internal sealed class NativeBrushStressApplication : Application
             appVersion: "brush-stress", availableFontFamilies: ["Arial"]);
         var view = new EditorView(
             editor, static () => Task.CompletedTask, static () => { }, static () => { });
-        publish(view);
+        showView(view);
         window.Content = view;
         await SettleAsync();
         view.Canvas.FitToCanvas();

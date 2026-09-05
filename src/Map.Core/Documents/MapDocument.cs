@@ -12,17 +12,32 @@ namespace Map.Core.Documents;
 /// </summary>
 public sealed record MapDocument
 {
-    private MapDocument(MapDocument source, IReadOnlyList<MapLayer> revisionLayers)
+    private MapDocument(
+        MapDocument source,
+        IReadOnlyList<MapLayer>? revisedLayers = null,
+        IReadOnlyList<MapAssetReference>? revisedAssets = null,
+        IReadOnlyList<MapNote>? revisedNotes = null,
+        IReadOnlyList<MapCheckpoint>? revisedCheckpoints = null,
+        StampForegroundSurface? revisedStampForeground = null,
+        bool replaceStampForeground = false)
     {
         Id = source.Id;
         Title = source.Title;
         CreatedUtc = source.CreatedUtc;
         Canvas = source.Canvas;
-        Layers = new ReadOnlyCollection<MapLayer>([.. revisionLayers]);
-        Assets = source.Assets;
-        Notes = source.Notes;
-        Checkpoints = source.Checkpoints;
-        StampForeground = source.StampForeground;
+        Layers = revisedLayers is null
+            ? source.Layers
+            : new ReadOnlyCollection<MapLayer>([.. LayerOrderPolicy.Normalize(revisedLayers)]);
+        Assets = revisedAssets is null
+            ? source.Assets
+            : new ReadOnlyCollection<MapAssetReference>([.. revisedAssets]);
+        Notes = revisedNotes is null
+            ? source.Notes
+            : new ReadOnlyCollection<MapNote>([.. revisedNotes]);
+        Checkpoints = revisedCheckpoints is null
+            ? source.Checkpoints
+            : new ReadOnlyCollection<MapCheckpoint>([.. revisedCheckpoints]);
+        StampForeground = replaceStampForeground ? revisedStampForeground : source.StampForeground;
     }
 
     public MapDocument(
@@ -54,6 +69,7 @@ public sealed record MapDocument
             throw new ArgumentException("Only one base colour layer may exist.", nameof(layers));
         }
 
+        var orderedLayers = LayerOrderPolicy.Normalize(layers);
         var layerIds = new HashSet<LayerId>();
         var objectIds = new HashSet<ObjectId>();
         var nodeIds = new HashSet<VectorNodeId>();
@@ -81,7 +97,7 @@ public sealed record MapDocument
                 ValidateComposition(child);
             }
         }
-        foreach (var layer in layers)
+        foreach (var layer in orderedLayers)
         {
             if (!layerIds.Add(layer.Id))
             {
@@ -121,7 +137,7 @@ public sealed record MapDocument
         // Group naming invariants: a name only exists together with a group id, and every member
         // of one group carries exactly the same name (null included, so old files stay valid).
         var groupNames = new Dictionary<Guid, string?>();
-        foreach (var sceneObject in layers.OfType<ObjectLayer>().SelectMany(l => l.Objects))
+        foreach (var sceneObject in orderedLayers.OfType<ObjectLayer>().SelectMany(l => l.Objects))
         {
             if (sceneObject.GroupId is not { } groupKey)
             {
@@ -146,7 +162,7 @@ public sealed record MapDocument
         Title = title;
         CreatedUtc = createdUtc;
         Canvas = canvas;
-        Layers = new ReadOnlyCollection<MapLayer>([.. layers]);
+        Layers = new ReadOnlyCollection<MapLayer>([.. orderedLayers]);
         Assets = new ReadOnlyCollection<MapAssetReference>([.. assets]);
         Notes = new ReadOnlyCollection<MapNote>([.. notes]);
         Checkpoints = new ReadOnlyCollection<MapCheckpoint>([.. checkpoints]);
@@ -182,7 +198,10 @@ public sealed record MapDocument
 
     public CanvasDefinition Canvas { get; init; }
 
-    /// <summary>Layers in composition order, base colour first. Never aliases a caller list.</summary>
+    /// <summary>
+    /// Layers in canonical composition order, base colour first and every Land layer below every
+    /// Object layer. Never aliases a caller list.
+    /// </summary>
     public IReadOnlyList<MapLayer> Layers { get; init; }
 
     public IReadOnlyList<MapAssetReference> Assets { get; init; }
@@ -200,17 +219,52 @@ public sealed record MapDocument
     public MapDocument WithLayers(IReadOnlyList<MapLayer> layers) =>
         new(Id, Title, CreatedUtc, Canvas, layers, Assets, Notes, Checkpoints, StampForeground);
 
-    public MapDocument WithAssets(IReadOnlyList<MapAssetReference> assets) =>
-        new(Id, Title, CreatedUtc, Canvas, Layers, assets, Notes, Checkpoints, StampForeground);
+    public MapDocument WithAssets(IReadOnlyList<MapAssetReference> assets)
+    {
+        ArgumentNullException.ThrowIfNull(assets);
+        if (assets.Select(asset => asset.Sha256).Distinct(StringComparer.OrdinalIgnoreCase).Count()
+            != assets.Count)
+        {
+            throw new ArgumentException("Asset hashes are unique within a document.", nameof(assets));
+        }
 
-    public MapDocument WithNotes(IReadOnlyList<MapNote> notes) =>
-        new(Id, Title, CreatedUtc, Canvas, Layers, Assets, notes, Checkpoints, StampForeground);
+        var target = new MapDocument(this, revisedAssets: assets);
+        ObjectNameIndex.Share(this, target);
+        DocumentRevisionIndex.ShareUnchangedLayers(this, target);
+        return target;
+    }
 
-    public MapDocument WithCheckpoints(IReadOnlyList<MapCheckpoint> checkpoints) =>
-        new(Id, Title, CreatedUtc, Canvas, Layers, Assets, Notes, checkpoints, StampForeground);
+    public MapDocument WithNotes(IReadOnlyList<MapNote> notes)
+    {
+        ArgumentNullException.ThrowIfNull(notes);
+        if (notes.Select(note => note.Id).Distinct().Count() != notes.Count)
+        {
+            throw new ArgumentException("Note ids are unique within a document.", nameof(notes));
+        }
+
+        return new MapDocument(this, revisedNotes: notes);
+    }
+
+    public MapDocument WithCheckpoints(IReadOnlyList<MapCheckpoint> checkpoints)
+    {
+        ArgumentNullException.ThrowIfNull(checkpoints);
+        if (checkpoints.Count > MapCheckpointLimits.MaxCount)
+        {
+            throw new ArgumentException(
+                $"A document can contain at most {MapCheckpointLimits.MaxCount} checkpoints.",
+                nameof(checkpoints));
+        }
+        if (checkpoints.Select(checkpoint => checkpoint.Id).Distinct().Count() != checkpoints.Count)
+        {
+            throw new ArgumentException(
+                "Checkpoint ids are unique within a document.", nameof(checkpoints));
+        }
+
+        return new MapDocument(this, revisedCheckpoints: checkpoints);
+    }
 
     public MapDocument WithStampForeground(StampForegroundSurface? surface) =>
-        new(Id, Title, CreatedUtc, Canvas, Layers, Assets, Notes, Checkpoints, surface);
+        new(this, revisedStampForeground: surface, replaceStampForeground: true);
 
     /// <summary>New snapshot with one layer replaced in place.</summary>
     public MapDocument WithLayer(LayerId id, Func<MapLayer, MapLayer> rewrite)
@@ -261,6 +315,6 @@ public sealed record MapDocument
             }
         }
 
-        return new MapDocument(this, layers);
+        return new MapDocument(this, revisedLayers: layers);
     }
 }

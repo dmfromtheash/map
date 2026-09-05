@@ -46,13 +46,16 @@ public sealed class Stage15ClipMaskRoundTripTests
         var path = workspace.File("stage15-clip-legacy.mapproj");
         MapProjectStore.Save(Document(enabled: true), path,
             ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
-        RewriteScene(path, root =>
+        ProjectJsonTestMutations.RewriteScene(path, root => root.Remove("stampForeground"));
+        RewriteStamp(path, stamp =>
         {
-            root.Remove("stampForeground");
-            var stamp = root["layers"]!.AsArray()[1]!["objects"]!.AsArray()[0]!["stamp"]!.AsObject();
             stamp.Remove("maskAssetSha256");
             stamp.Remove("clipMaskEnabled");
         });
+        using (var archive = ZipFile.Open(path, ZipArchiveMode.Update))
+        {
+            archive.GetEntry("rasters/foreground/0_0.bin")?.Delete();
+        }
 
         var reopened = MapProjectStore.Open(path).Document;
         var style = reopened.Layers.OfType<ObjectLayer>().Single().Objects.Single().Stamp!;
@@ -68,11 +71,7 @@ public sealed class Stage15ClipMaskRoundTripTests
         var path = workspace.File("stage15-clip-invalid.mapproj");
         MapProjectStore.Save(Document(enabled: true), path,
             ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
-        RewriteScene(path, root =>
-        {
-            var stamp = root["layers"]!.AsArray()[1]!["objects"]!.AsArray()[0]!["stamp"]!.AsObject();
-            stamp.Remove("maskAssetSha256");
-        });
+        RewriteStamp(path, stamp => stamp.Remove("maskAssetSha256"));
 
         Assert.Throws<MapProjectCorruptedException>(() => MapProjectStore.Open(path));
     }
@@ -125,34 +124,9 @@ public sealed class Stage15ClipMaskRoundTripTests
         return bytes;
     }
 
-    private static void RewriteScene(string path, Action<JsonObject> change)
-    {
-        using var archive = ZipFile.Open(path, ZipArchiveMode.Update);
-        var sceneEntry = archive.GetEntry(MapProjectFormat.SceneEntry)!;
-        string json;
-        using (var reader = new StreamReader(sceneEntry.Open(), Encoding.UTF8)) json = reader.ReadToEnd();
-        var root = JsonNode.Parse(json)!.AsObject();
-        change(root);
-        var bytes = Encoding.UTF8.GetBytes(root.ToJsonString());
-        using (var stream = sceneEntry.Open())
+    private static void RewriteStamp(string path, Action<JsonObject> change) =>
+        ProjectJsonTestMutations.RewriteFirstObjectChunk(path, objects =>
         {
-            stream.SetLength(0);
-            stream.Write(bytes);
-        }
-        if (root["stampForeground"] is null)
-        {
-            archive.GetEntry("rasters/foreground/0_0.bin")?.Delete();
-        }
-
-        var manifestEntry = archive.GetEntry(MapProjectFormat.ManifestEntry)!;
-        string manifest;
-        using (var reader = new StreamReader(manifestEntry.Open(), Encoding.UTF8)) manifest = reader.ReadToEnd();
-        manifest = Regex.Replace(
-            manifest,
-            "\\\"sceneSha256\\\"\\s*:\\s*\\\"[0-9a-f]+\\\"",
-            $"\"sceneSha256\": \"{MapProjectRoundTripTests.Sha256Hex(bytes)}\"");
-        using var writer = new StreamWriter(manifestEntry.Open());
-        writer.BaseStream.SetLength(0);
-        writer.Write(manifest);
-    }
+            change(objects[0]!["stamp"]!.AsObject());
+        });
 }

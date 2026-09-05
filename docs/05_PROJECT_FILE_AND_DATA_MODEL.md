@@ -17,6 +17,8 @@ ZIP-контейнер с canonical UTF-8 именами:
 manifest.json
 scene.json
 preview.png
+objects/
+  <object-layer-id>/<ordinal-8-digits>.json
 assets/
   <sha256>.<ext>
 asset-manifest.json
@@ -35,7 +37,7 @@ Recovery journal и transient undo **не** хранятся внутри осн
 ```json
 {
   "format": "map-project",
-  "schemaVersion": 1,
+  "schemaVersion": 4,
   "appVersion": "0.1.0",
   "documentId": "uuid",
   "title": "Untitled map",
@@ -56,6 +58,19 @@ Recovery journal и transient undo **не** хранятся внутри осн
 Точные JSON-схемы создаются на отдельном этапе и golden fixtures сохраняются в tests.
 
 ## Сцена
+
+В canonical schema v4 `scene.json` хранит только структуру документа и ordered descriptors
+объектных чанков. Массив `objects` внутри слоя больше не записывается. Каждый `ObjectLayer`
+ссылается на последовательность `objects/<layer-id>/<ordinal>.json`; порядок descriptors и
+порядок элементов внутри каждого чанка вместе являются точным порядком объектов слоя.
+
+Descriptor содержит `ordinal`, `count`, `byteLength`, `sha256`, conservative world `bounds`,
+canonical `entry` и `representationVersion`. Writer ограничивает чанк одновременно 8 192
+объектами и 8 MiB несжатого UTF-8 JSON, пишет его прямо в ZIP и считает размер/SHA-256 на потоке.
+Reader до materialization проверяет metadata всего ZIP, descriptor, размер entry, count, SHA-256,
+JSON depth/string budget и отсутствие незаявленных `objects/` entries. После преобразования
+объектов фактические bounds обязаны помещаться в объявленные. Основная сцена и snapshot каждой
+«Версии» используют один и тот же формат.
 
 ### Общие сущности
 
@@ -82,10 +97,15 @@ Recovery journal и transient undo **не** хранятся внутри осн
 
 Окончательный порядок задаётся:
 
-1. индекс слоя;
+1. канонический индекс слоя: слои `Land` всегда находятся ниже слоёв `Object`; внутри каждого
+   типа сохраняется пользовательский порядок, а старый файл с обратной парой безопасно
+   нормализуется при открытии;
 2. sublayer (`-10..10` в первой совместимой модели; расширение возможно миграцией);
 3. object order внутри sublayer;
 4. child order группы.
+
+На границе `Land`/`Object` объект всегда рисуется выше земли. Поднять `Land` над `Object` или
+опустить `Object` под `Land` через команды порядка нельзя.
 
 Blend, opacity, mask и filter вычисляются по документированному pipeline. Порядок не должен зависеть от порядка JSON-полей или обхода словаря.
 
@@ -149,7 +169,7 @@ fallback не открывает результат за пределами па
 - modifications/derived-from при наличии;
 - default scale/anchor/tags.
 
-Если происхождение неизвестно, `licenseStatus = unknown`, и такой ассет нельзя включить в распространяемый pack без решения владельца.
+Если происхождение неизвестно, `licenseStatus = unknown`, и такой ассет нельзя включить в стандартный pack без решения владельца.
 
 ## Сохранение
 
@@ -188,16 +208,19 @@ preview; старые пользовательские имена открыва
 
 ## Миграции
 
-- текущая каноническая schema — `v2`; реальный исторический `v1` открывается только через явную
-  новую migration-copy, schema `v0` в истории проекта нет;
-- обычный v2 open требует явные layer types, обязательные collections и единственный BaseColor;
+- текущая каноническая schema — `v4`; реальные исторические `v1`–`v3` открываются только через
+  явную новую migration-copy, schema `v0` в истории проекта нет;
+- обычный v4 open требует явные layer types, обязательные collections, единственный BaseColor и
+  canonical independently verified object chunks;
 - `schemaVersion` изменяется только при несовместимом формате;
 - миграции последовательные `vN → vN+1`;
-- неизвестные поля v1 сохраняются в опубликованной v2-копии на том же stable root/entity;
+- неизвестные поля v1 сохраняются в созданной v2-копии на том же stable root/entity;
 - неизвестный объект становится видимым placeholder с исходным kind и raw JSON до 256 KiB UTF-8;
 - migration test использует fixtures всех поддерживаемых версий;
 - source file всегда read-only и не меняет bytes/timestamp; destination обязан отличаться и не
-  существовать, а публикация выполняется только после полного v2 read-back.
+  существовать, а окончательная замена выполняется только после полного v4 read-back;
+- adjacent `v3→v4` переносит main scene и checkpoint snapshots в chunk storage, сохраняя точный
+  object order/ID и raw JSON неизвестных объектов. Source bytes/timestamp не меняются.
 
 ## Лимиты чтения контейнера
 
@@ -208,35 +231,37 @@ entries, canonical archive names, регистронезависимые дуб�
 backslash, `:` и пустые сегменты всегда являются corruption. Это отдельное правило от linked
 filesystem fallback выше.
 
-Текущий принятый envelope (DEC-015):
+Текущий принятый envelope (DEC-015 с изменениями DEC-021):
 
 | Ресурс | Лимит |
 |---|---:|
 | ZIP entries | 16 384 |
-| один JSON entry | 32 MiB |
+| один JSON entry | 512 MiB |
+| один schema-v4 object chunk | ≤8 192 объектов и ≤8 MiB |
 | один raw tile | 256 KiB |
 | один asset entry | 64 MiB |
 | preview entry | 8 MiB |
-| assets aggregate | 256 MiB |
-| tiles aggregate | 256 MiB |
-| JSON aggregate | 64 MiB |
-| total uncompressed | 512 MiB |
+| assets aggregate | 512 MiB |
+| tiles aggregate | 1 024 MiB |
+| JSON aggregate | 1 024 MiB |
+| total uncompressed | 2 048 MiB |
 | compression ratio | 1000 + 1 MiB additive slack на entry |
 | preview | ≤8192 по оси и ≤16 MiPixels |
 | semantic layers | 4 096 |
-| scene + composition objects | 100 000 aggregate |
-| notes | 10 000 |
+| scene + composition objects | нет фиксированного count-limit; действует byte/depth envelope |
+| notes | нет фиксированного count-limit; действует byte/depth envelope |
 | asset DTOs | 16 384 aggregate |
-| vector nodes | 500 000 aggregate |
+| vector nodes/regions/portals | нет фиксированного count-limit; действует byte/depth envelope |
 | одна JSON string | 1 MiB UTF-8 |
-| JSON tokens | 8 000 000 на entry |
+| JSON tokens | нет отдельного count-limit; действует byte/depth envelope |
 
 `ReadEntry` выделяет ровно заявленный размер, использует exact read и проверяет отсутствие
 лишних decompressed bytes. Уже проверенные asset-массивы передаются документу по внутреннему
 ownership-transfer пути без второй полной копии; публичный конструктор остаётся defensive.
-До materialization DTO streaming `Utf8JsonReader` считает все известные массивы (`layers`,
-`objects`/`items`, `notes`, `assets`, `nodes`, `regions`, `portals`, `tiles`, `grids`, `filters`),
-строки и tokens. Поэтому миллионы коротких `{}` не превращаются в многократно больший managed
-object graph внутри формально допустимого byte budget.
+До materialization DTO streaming `Utf8JsonReader` проверяет глубину, строки и сохраняемые
+структурные пределы. Cardinality пользовательского содержимого не ограничивается отдельной
+произвольной цифрой; память по-прежнему ограничена размером чанка/entry/container. Schema v4
+устраняет единый object DTO/UTF-8 graph: writer и reader удерживают не больше одного bounded
+object chunk, а документ накапливается через immutable chunked `SceneObjectList`.
 Превышение envelope — `MapProjectResourceLimitException` с гарантией «файл не изменён», а не
 ложное заявление о повреждении v1-проекта.

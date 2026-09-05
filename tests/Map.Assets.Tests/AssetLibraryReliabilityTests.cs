@@ -90,7 +90,7 @@ public sealed class AssetLibraryReliabilityTests : IDisposable
         catalog.Import(Source("keep", SKColors.Olive), new AssetImportOptions(), DateTimeOffset.UnixEpoch);
         var before = File.ReadAllBytes(indexPath);
 
-        // A document whose set points at a variant that does not exist must never be published.
+        // A document whose set points at a variant that does not exist must never replace the index.
         var broken = new AssetLibraryDocument
         {
             Sets =
@@ -113,7 +113,7 @@ public sealed class AssetLibraryReliabilityTests : IDisposable
     }
 
     [Fact]
-    public void A_migration_interrupted_before_the_new_index_was_published_still_migrates_on_reopen()
+    public void A_migration_interrupted_before_the_new_index_was_committed_still_migrates_on_reopen()
     {
         var catalogRoot = Path.Combine(_root, "catalog");
         Directory.CreateDirectory(catalogRoot);
@@ -173,26 +173,26 @@ public sealed class AssetLibraryReliabilityTests : IDisposable
     }
 
     [Fact]
-    public void The_catalog_root_is_only_redirected_when_the_sandbox_is_asked_for_unambiguously()
+    public void The_catalog_root_is_only_redirected_when_the_test_root_is_asked_for_unambiguously()
     {
         var requested = Path.Combine(_root, "real");
-        var sandbox = Path.Combine(_root, "sandbox");
+        var testRoot = Path.Combine(_root, "test-root");
 
         Assert.Equal(Path.GetFullPath(requested), AssetCatalogRoots.Resolve(requested));
 
-        using (new EnvironmentScope(AssetCatalogRoots.SandboxRootVariable, sandbox))
+        using (new EnvironmentScope(AssetCatalogRoots.TestRootVariable, testRoot))
         {
             // Without the test-mode switch a stray variable must change nothing.
             Assert.Equal(Path.GetFullPath(requested), AssetCatalogRoots.Resolve(requested));
 
             using (new EnvironmentScope(AssetCatalogRoots.TestModeVariable, "1"))
             {
-                Assert.Equal(Path.GetFullPath(sandbox), AssetCatalogRoots.Resolve(requested));
+                Assert.Equal(Path.GetFullPath(testRoot), AssetCatalogRoots.Resolve(requested));
             }
         }
 
         using (new EnvironmentScope(AssetCatalogRoots.TestModeVariable, "1"))
-        using (new EnvironmentScope(AssetCatalogRoots.SandboxRootVariable, "not-absolute"))
+        using (new EnvironmentScope(AssetCatalogRoots.TestRootVariable, "not-absolute"))
         {
             Assert.Equal(Path.GetFullPath(requested), AssetCatalogRoots.Resolve(requested));
         }

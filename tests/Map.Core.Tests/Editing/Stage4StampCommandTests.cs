@@ -32,6 +32,89 @@ public sealed class Stage4StampCommandTests
     }
 
     [Fact]
+    public void Consecutive_scatter_batches_extend_the_revision_index_without_losing_old_objects()
+    {
+        var layerId = LayerId.New();
+        var asset = Embedded(new string('a', 64), "tree");
+        var session = Session(layerId);
+        _ = DocumentRevisionIndex.For(session.Document);
+
+        var first = Stamps(asset, 256, "first");
+        var second = Stamps(asset, 384, "second");
+        session.Execute(new PlaceAssetObjectsCommand(layerId, asset, first));
+        session.Execute(new PlaceAssetObjectsCommand(layerId, asset, second));
+
+        var index = DocumentRevisionIndex.For(session.Document);
+        Assert.Equal(640, index.ObjectCount);
+        Assert.Same(first[0], index.FindObject(first[0].Id));
+        Assert.Same(second[^1], index.FindObject(second[^1].Id));
+
+        Assert.True(session.Undo());
+        var afterUndo = DocumentRevisionIndex.For(session.Document);
+        Assert.Equal(256, afterUndo.ObjectCount);
+        Assert.Null(afterUndo.FindObject(second[0].Id));
+        Assert.True(session.Redo());
+        Assert.Equal(640, DocumentRevisionIndex.For(session.Document).ObjectCount);
+    }
+
+    [Fact]
+    public void Append_delta_rejects_an_existing_object_id_and_a_conflicting_group_name()
+    {
+        var layerId = LayerId.New();
+        var asset = Embedded(new string('a', 64), "tree");
+        var groupId = Guid.NewGuid();
+        var first = Stamps(asset, 1, "first")[0] with
+        {
+            GroupId = groupId,
+            GroupName = "forest",
+        };
+        var session = Session(layerId);
+        session.Execute(new PlaceAssetObjectsCommand(layerId, asset, [first]));
+
+        Assert.Throws<ArgumentException>(() =>
+            session.Execute(new PlaceAssetObjectsCommand(layerId, asset, [first])));
+
+        var conflicting = Stamps(asset, 1, "second")[0] with
+        {
+            GroupId = groupId,
+            GroupName = "mountains",
+        };
+        Assert.Throws<ArgumentException>(() =>
+            session.Execute(new PlaceAssetObjectsCommand(layerId, asset, [conflicting])));
+    }
+
+    [Fact]
+    public void Append_after_a_replacement_uses_current_nested_identities_not_stale_root_data()
+    {
+        var layerId = LayerId.New();
+        var asset = Embedded(new string('a', 64), "tree");
+        var releasedChildId = ObjectId.New();
+        var currentChildId = ObjectId.New();
+        var holder = Composition(releasedChildId);
+        var document = Session(layerId).Document.WithLayer(layerId, layer =>
+            ((ObjectLayer)layer) with { Objects = [holder] });
+        var session = new EditingSession(document);
+        _ = DocumentRevisionIndex.For(session.Document);
+
+        var replacement = holder with
+        {
+            Composition = holder.Composition! with
+            {
+                Items = [Rectangle(currentChildId, "current child")],
+            },
+        };
+        session.Execute(new ReplaceObjectsCommand([holder], [replacement], "Replace composition child"));
+
+        var releasedIdStamp = Stamps(asset, 1, "released")[0] with { Id = releasedChildId };
+        session.Execute(new PlaceAssetObjectsCommand(layerId, asset, [releasedIdStamp]));
+        Assert.Equal(2, ((ObjectLayer)session.Document.FindLayer(layerId)!).Objects.Count);
+
+        var currentIdStamp = Stamps(asset, 1, "collision")[0] with { Id = currentChildId };
+        Assert.Throws<ArgumentException>(() =>
+            session.Execute(new PlaceAssetObjectsCommand(layerId, asset, [currentIdStamp])));
+    }
+
+    [Fact]
     public void Explicit_replacement_changes_hash_and_undo_restores_original_reference()
     {
         var layerId = LayerId.New();
@@ -70,4 +153,26 @@ public sealed class Stage4StampCommandTests
     private static MapAssetReference Embedded(string hash, string name) => new(
         hash, name, "image/png", "png", ProjectAssetStorage.Embedded,
         DateTimeOffset.UnixEpoch, "test", "test", [1, 2, 3]);
+
+    private static IReadOnlyList<SceneObject> Stamps(
+        MapAssetReference asset, int count, string prefix) =>
+        [.. Enumerable.Range(0, count).Select(index => new SceneObject(
+            ObjectId.New(), SceneObjectKind.Stamp, $"{prefix} {index}",
+            index, index, 48, 48, 0, "#FFFFFFFF", "#00000000", 0, true, false)
+        {
+            Stamp = new StampStyle(asset.Sha256),
+        })];
+
+    private static SceneObject Composition(ObjectId childId) => new(
+        ObjectId.New(), SceneObjectKind.Composition, "composition",
+        0, 0, 48, 48, 0, "#FFFFFFFF", "#00000000", 0, true, false)
+    {
+        Composition = new EditableComposition(
+            CompositionId.New(), DocumentId.New(), "parts", 48, 48,
+            [Rectangle(childId, "released child")]),
+    };
+
+    private static SceneObject Rectangle(ObjectId id, string name) => new(
+        id, SceneObjectKind.Rectangle, name,
+        0, 0, 12, 12, 0, "#FFFFFFFF", "#00000000", 0, true, false);
 }

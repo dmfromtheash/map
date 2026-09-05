@@ -44,6 +44,25 @@ public class MapDocumentTests
     }
 
     [Fact]
+    public void Land_is_canonical_below_objects_while_other_relative_order_is_preserved()
+    {
+        var firstObjects = new ObjectLayer(LayerId.New(), "objects one", true, false, 1, []);
+        var brush = BrushLayer.CreateEmpty(LayerId.New(), "brush");
+        var secondObjects = new ObjectLayer(LayerId.New(), "objects two", true, false, 1, []);
+        var firstLand = LandLayer.CreateEmpty(LayerId.New(), "land one");
+        var secondLand = LandLayer.CreateEmpty(LayerId.New(), "land two");
+
+        var document = new MapDocument(
+            DocumentId.New(), "map", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(64, 64, "px", "#FFFFFFFF"),
+            [Base(), firstObjects, brush, firstLand, secondObjects, secondLand]);
+
+        Assert.Equal(
+            ["background", "land one", "land two", "objects one", "brush", "objects two"],
+            document.Layers.Select(layer => layer.Name));
+    }
+
+    [Fact]
     public void The_stored_collections_do_not_alias_the_caller_lists()
     {
         var objects = new List<SceneObject> { Object() };
