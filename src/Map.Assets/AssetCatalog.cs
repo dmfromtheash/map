@@ -23,7 +23,19 @@ public sealed class AssetCatalog : IAsyncDisposable
     public long MetadataRevision { get; private set; }
     public long ContentRevision { get; private set; }
     public string? MetadataSaveError => _metadataWriter.Error;
-    public Task FlushMetadataAsync() => _metadataWriter.FlushAsync();
+    public async Task FlushMetadataAsync()
+    {
+        try { await _metadataWriter.FlushAsync(); }
+        catch
+        {
+            if (_metadataWriter.LastSaved is { } saved)
+            {
+                _document = CopyDocument(saved);
+                Reindex(); CaptureMetadataBase(); MetadataRevision++;
+            }
+            throw;
+        }
+    }
     public ValueTask DisposeAsync() => new(FlushMetadataAsync());
     private Dictionary<string, AssetRecord> _bySha = new(StringComparer.OrdinalIgnoreCase);
     private Dictionary<string, AssetVariant> _byVariantId = new(StringComparer.Ordinal);
@@ -41,7 +53,7 @@ public sealed class AssetCatalog : IAsyncDisposable
         _indexPath = Path.Combine(_root, "catalog.json");
         _clock = clock ?? (static () => DateTimeOffset.UtcNow);
         _document = AssetLibraryStore.Load(_indexPath, _clock);
-        _metadataWriter = new AssetMetadataWriter(_indexPath);
+        _metadataWriter = new AssetMetadataWriter(_indexPath, CopyDocument(_document));
         Reindex();
         CaptureMetadataBase();
     }
@@ -119,7 +131,7 @@ public sealed class AssetCatalog : IAsyncDisposable
 
     public AssetRecord Import(string sourcePath, AssetImportOptions options, DateTimeOffset importedUtc)
     {
-        RequireWritable();
+        using var mutation = BeginMutation();
         var record = ImportContent(sourcePath, options, importedUtc);
         AssetLibraryStore.AddSingleton(_document, record);
         SaveIndex();
@@ -136,7 +148,7 @@ public sealed class AssetCatalog : IAsyncDisposable
         AssetImportOptions options,
         DateTimeOffset importedUtc)
     {
-        RequireWritable();
+        using var mutation = BeginMutation();
         ArgumentNullException.ThrowIfNull(sourcePaths);
         ArgumentException.ThrowIfNullOrWhiteSpace(setName);
         if (sourcePaths.Count == 0)
@@ -144,88 +156,42 @@ public sealed class AssetCatalog : IAsyncDisposable
             throw new ArgumentException("Набор содержит хотя бы один файл.", nameof(sourcePaths));
         }
 
-        var variantIds = new List<string>(sourcePaths.Count);
-        var hashes = new List<string>(sourcePaths.Count);
-        foreach (var path in sourcePaths)
+        var records = sourcePaths.Select(path => ImportContent(path, options, importedUtc))
+            .DistinctBy(record => record.Sha256, StringComparer.OrdinalIgnoreCase).ToArray();
+        if (records.Length == 1)
         {
-            var record = ImportContent(path, options, importedUtc);
-            var variantId = AssetIdentity.VariantIdForContent(record.Sha256);
-            if (variantIds.Contains(variantId, StringComparer.Ordinal))
-            {
-                continue;
-            }
-
-            if (_document.Variants.All(item => item.Id != variantId))
-            {
-                _document.Variants.Add(new AssetVariant
-                {
-                    Id = variantId,
-                    Sha256 = record.Sha256,
-                    Label = record.DisplayName,
-                });
-            }
-
-            variantIds.Add(variantId);
-            hashes.Add(record.Sha256);
-        }
-
-        if (variantIds.Count == 1)
-        {
-            // A "set" of one file is exactly a singleton card; do not invent a second identity.
-            var single = Find(_document.Variants.Single(item => item.Id == variantIds[0]).Sha256)!;
-            AssetLibraryStore.AddSingleton(_document, single);
+            AssetLibraryStore.AddSingleton(_document, records[0]);
             SaveIndex();
-            Reindex();
-            return _bySetId[AssetIdentity.SetIdForContent(single.Sha256)];
+            return _bySetId[AssetIdentity.SetIdForContent(records[0].Sha256)];
         }
 
-        AssetLibraryStore.EnsureCollection(_document, options.Pack);
-        var id = UniqueSetId(AssetIdentity.SetIdForVariants(hashes), variantIds);
-        if (_bySetId.TryGetValue(id, out var existing)
-            && existing.VariantIds.SequenceEqual(variantIds, StringComparer.Ordinal))
+        var hashes = records.Select(record => record.Sha256).ToArray();
+        var collection = string.IsNullOrWhiteSpace(options.Pack) ? null : AssetIdentity.CollectionId(options.Pack);
+        var existing = _document.Sets.FirstOrDefault(set => set.Name == setName.Trim()
+            && set.CollectionId == collection
+            && set.VariantIds.Select(id => _byVariantId[id].Sha256).SequenceEqual(hashes, StringComparer.OrdinalIgnoreCase));
+        if (existing is not null)
         {
             SaveIndex();
             return existing;
         }
 
-        var set = new AssetSet
+        var candidate = AssetIdentity.SetIdForVariants(hashes);
+        var id = candidate;
+        for (var suffix = 2; _bySetId.ContainsKey(id); suffix++) id = $"{candidate}-{suffix}";
+        var variantIds = records.Select(record => AssetIdentity.VariantIdForSet(id, record.Sha256)).ToList();
+        for (var index = 0; index < records.Length; index++)
+            _document.Variants.Add(new AssetVariant { Id = variantIds[index], Sha256 = records[index].Sha256, Label = records[index].DisplayName });
+        AssetLibraryStore.EnsureCollection(_document, options.Pack);
+        var result = new AssetSet
         {
-            Id = id,
-            Name = setName.Trim(),
-            VariantIds = variantIds,
-            CoverVariantId = variantIds[0],
-            CollectionId = string.IsNullOrWhiteSpace(options.Pack)
-                ? null
-                : AssetIdentity.CollectionId(options.Pack),
-            Tags = [.. options.Tags.Distinct(StringComparer.OrdinalIgnoreCase)],
-            ImportedUtc = importedUtc,
+            Id = id, Name = setName.Trim(), VariantIds = variantIds, CoverVariantId = variantIds[0],
+            CollectionId = collection, Tags = [.. options.Tags.Distinct(StringComparer.OrdinalIgnoreCase)], ImportedUtc = importedUtc,
         };
-        _document.Sets.Add(set);
+        _document.Sets.Add(result);
         SaveIndex();
-        return set;
+        return result;
     }
-
-    private string UniqueSetId(string candidate, IReadOnlyList<string> variantIds)
-    {
-        if (!_bySetId.TryGetValue(candidate, out var clash)
-            || clash.VariantIds.SequenceEqual(variantIds, StringComparer.Ordinal))
-        {
-            return candidate;
-        }
-
-        for (var suffix = 2; suffix < 1000; suffix++)
-        {
-            var next = $"{candidate}-{suffix}";
-            if (!_bySetId.TryGetValue(next, out var other)
-                || other.VariantIds.SequenceEqual(variantIds, StringComparer.Ordinal))
-            {
-                return next;
-            }
-        }
-
-        throw new InvalidOperationException("Не удалось выделить идентификатор набора.");
-    }
-
     /// <summary>Validates, stores and thumbnails one file. Identical bytes reuse the record.</summary>
     private AssetRecord ImportContent(string sourcePath, AssetImportOptions options, DateTimeOffset importedUtc)
     {
@@ -626,7 +592,7 @@ public sealed class AssetCatalog : IAsyncDisposable
     public AssetVariant AssignVariantMask(
         string variantId, string sourcePath, DateTimeOffset importedUtc)
     {
-        RequireWritable();
+        using var mutation = BeginMutation();
         ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
         if (!_byVariantId.TryGetValue(variantId, out var variant)
             || Find(variant.Sha256) is not { } visual)
@@ -674,7 +640,7 @@ public sealed class AssetCatalog : IAsyncDisposable
 
     public AssetVariant RemoveVariantMask(string variantId)
     {
-        RequireWritable();
+        using var mutation = BeginMutation();
         if (!_byVariantId.TryGetValue(variantId, out var variant))
         {
             throw new KeyNotFoundException($"Вариант {variantId} отсутствует в каталоге.");
@@ -694,7 +660,7 @@ public sealed class AssetCatalog : IAsyncDisposable
 
     public void SetFavorite(string sha256, bool favorite)
     {
-        RequireWritable();
+        using var mutation = BeginMutation();
         var index = _document.Records.FindIndex(record =>
             string.Equals(record.Sha256, sha256, StringComparison.OrdinalIgnoreCase));
         if (index < 0)
@@ -716,7 +682,7 @@ public sealed class AssetCatalog : IAsyncDisposable
     /// <summary>Favorite belongs to the logical card, so the whole set is marked at once.</summary>
     public void SetSetFavorite(string setId, bool favorite)
     {
-        RequireWritable();
+        using var mutation = BeginMutation();
         var index = RequireSetIndex(setId);
         _document.Sets[index] = _document.Sets[index] with { Favorite = favorite };
         if (_document.Sets[index].VariantIds.Count == 1
@@ -735,7 +701,7 @@ public sealed class AssetCatalog : IAsyncDisposable
 
     public void RenameSet(string setId, string name)
     {
-        RequireWritable();
+        using var mutation = BeginMutation();
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         var index = RequireSetIndex(setId);
         _document.Sets[index] = _document.Sets[index] with { Name = name.Trim() };
@@ -744,7 +710,7 @@ public sealed class AssetCatalog : IAsyncDisposable
 
     public void ReorderSetVariants(string setId, IReadOnlyList<string> orderedVariantIds)
     {
-        RequireWritable();
+        using var mutation = BeginMutation();
         ArgumentNullException.ThrowIfNull(orderedVariantIds);
         var index = RequireSetIndex(setId);
         var set = _document.Sets[index];
@@ -761,7 +727,7 @@ public sealed class AssetCatalog : IAsyncDisposable
 
     public void SetCoverVariant(string setId, string variantId)
     {
-        RequireWritable();
+        using var mutation = BeginMutation();
         var index = RequireSetIndex(setId);
         var set = _document.Sets[index];
         if (!set.VariantIds.Contains(variantId, StringComparer.Ordinal))
@@ -779,7 +745,7 @@ public sealed class AssetCatalog : IAsyncDisposable
     /// </summary>
     public void RemoveVariantFromSet(string setId, string variantId)
     {
-        RequireWritable();
+        using var mutation = BeginMutation();
         var index = RequireSetIndex(setId);
         var set = _document.Sets[index];
         if (set.VariantIds.Count <= 1)
@@ -805,7 +771,7 @@ public sealed class AssetCatalog : IAsyncDisposable
 
     public void SetTags(string setId, IReadOnlyList<string> tags)
     {
-        RequireWritable();
+        using var mutation = BeginMutation();
         ArgumentNullException.ThrowIfNull(tags);
         var index = RequireSetIndex(setId);
         _document.Sets[index] = _document.Sets[index] with
@@ -819,7 +785,8 @@ public sealed class AssetCatalog : IAsyncDisposable
     /// <summary>Records one selection in the bounded recent list and remembers the variant.</summary>
     public void TouchRecent(string setId, string variantId, DateTimeOffset usedUtc)
     {
-        if (Status == AssetLibraryStatus.Damaged || !_bySetId.ContainsKey(setId))
+        if (Status == AssetLibraryStatus.Damaged || FindSet(setId) is not { } set
+            || !set.VariantIds.Contains(variantId, StringComparer.Ordinal))
         {
             return;
         }
@@ -853,7 +820,7 @@ public sealed class AssetCatalog : IAsyncDisposable
     /// <summary>Replaces the flat record list; used by fixtures and by profile generators.</summary>
     public void ReplaceIndex(IReadOnlyList<AssetRecord> records)
     {
-        RequireWritable();
+        using var mutation = BeginMutation();
         ArgumentNullException.ThrowIfNull(records);
         _document.Records = [.. records
             .GroupBy(record => record.Sha256, StringComparer.OrdinalIgnoreCase)
@@ -874,7 +841,7 @@ public sealed class AssetCatalog : IAsyncDisposable
     /// <summary>Replaces the whole library document; used by set-shaped profile generators.</summary>
     public void ReplaceLibrary(AssetLibraryDocument document)
     {
-        RequireWritable();
+        using var mutation = BeginMutation();
         ArgumentNullException.ThrowIfNull(document);
         if (AssetLibraryStore.Validate(document) is { } reason)
         {
@@ -933,7 +900,7 @@ public sealed class AssetCatalog : IAsyncDisposable
     /// </summary>
     public AssetRecord RepairSource(AssetRecord record, string replacementPath)
     {
-        RequireWritable();
+        using var mutation = BeginMutation();
         ArgumentNullException.ThrowIfNull(record);
         ArgumentException.ThrowIfNullOrWhiteSpace(replacementPath);
         if (!_bySha.ContainsKey(record.Sha256))
@@ -988,7 +955,7 @@ public sealed class AssetCatalog : IAsyncDisposable
     /// </summary>
     public void RemoveRecord(string sha256)
     {
-        RequireWritable();
+        using var mutation = BeginMutation();
         ArgumentException.ThrowIfNullOrWhiteSpace(sha256);
         var variantIds = _document.Variants
             .Where(item => string.Equals(item.Sha256, sha256, StringComparison.OrdinalIgnoreCase))
@@ -1076,17 +1043,56 @@ public sealed class AssetCatalog : IAsyncDisposable
         }
     }
 
+    private CatalogMutation? _activeMutation;
+
+    // Mutators own a private candidate. A failed validation, import or publication restores the
+    // last visible document and every lookup; source bytes are content-addressed and never deleted.
+    private CatalogMutation BeginMutation()
+    {
+        RequireWritable();
+        return new CatalogMutation(this);
+    }
+
+    private static AssetLibraryDocument CopyDocument(AssetLibraryDocument document) => new()
+    {
+        SchemaVersion = document.SchemaVersion, Status = document.Status, Diagnostic = document.Diagnostic,
+        Records = [.. document.Records], Variants = [.. document.Variants], Collections = [.. document.Collections],
+        Sets = [.. document.Sets], Recent = [.. document.Recent], CurrentVariantBySet = new(document.CurrentVariantBySet),
+    };
+
+    private sealed class CatalogMutation : IDisposable
+    {
+        private readonly AssetCatalog _owner;
+        private readonly AssetLibraryDocument _before;
+        private readonly CatalogMutation? _parent;
+        public bool Published { get; set; }
+        public CatalogMutation(AssetCatalog owner)
+        {
+            _owner = owner; _before = owner._document; _parent = owner._activeMutation;
+            owner._document = CopyDocument(_before); owner._activeMutation = this;
+            owner.Reindex();
+        }
+        public void Dispose()
+        {
+            if (!Published) { _owner._document = _before; _owner.Reindex(); }
+            _owner._activeMutation = _parent;
+        }
+    }
+
     private void SaveIndex()
     {
         RequireWritable();
+        // Do not publish candidate indexes/revisions or replace the shared metadata base until
+        // the serial writer has validated, read back and atomically published this candidate.
+        var candidate = CopyDocument(_document);
+        _metadataWriter.Enqueue(candidate);
+        _metadataWriter.FlushAsync().GetAwaiter().GetResult();
         Reindex();
         CaptureMetadataBase();
         MetadataRevision++;
         ContentRevision++;
-        _metadataWriter.Enqueue(MetadataSnapshot());
-        _metadataWriter.FlushAsync().GetAwaiter().GetResult();
+        if (_activeMutation is { } mutation) mutation.Published = true;
     }
-
     private void CaptureMetadataBase() => _metadataBase = new AssetLibraryDocument
     {
         Records = [.. _document.Records.Select(record => record with { Tags = record.Tags.ToArray() })],

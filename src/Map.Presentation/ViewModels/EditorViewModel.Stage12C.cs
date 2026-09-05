@@ -60,6 +60,10 @@ public sealed partial class EditorViewModel
         : "PNG и WebP могут сохранить прозрачный фон.";
     public string ExportValidationError => _exportValidationError;
     public string ExportEstimateText => _exportEstimateText;
+    public string ExportMemoryDetails => CurrentExportPlan is { } plan
+        ? $"Оценка памяти экспорта с кэшами изображений: {plan.EstimatedRawWorkingBytes / (1024d * 1024):N0} МиБ. "
+            + "Перед запуском проверяется свободная память с резервом и место для временного результата. Память открытой карты и истории не входит в эту оценку."
+        : "Выберите допустимые параметры экспорта. Причина отказа показана рядом с командой экспорта.";
     public byte[]? ExportPreviewPng => _exportPreviewPng;
     public bool ExportPreviewBusy => _exportPreviewBusy;
     public bool ExportRunning => _exportRunning;
@@ -293,13 +297,13 @@ public sealed partial class EditorViewModel
         try
         {
             using var stamps = new ExportStampImageSource(snapshot, sourcePath, _assetCatalog);
-            var result = await _imageExporter.ExportAsync(
+            var result = await RunResourceOperationAsync(() => _imageExporter.ExportAsync(
                 snapshot,
                 plan,
                 destination,
                 stamps,
                 progress,
-                _exportRunCancellation.Token).ConfigureAwait(true);
+                _exportRunCancellation.Token), _exportRunCancellation.Token).ConfigureAwait(true);
             _exportResultPath = result.DestinationPath;
             _exportResultMode = result.OutputMode;
             _exportResultText = result.OutputMode == ExportOutputMode.SingleImage
@@ -413,8 +417,8 @@ public sealed partial class EditorViewModel
         try
         {
             using var stamps = new ExportStampImageSource(snapshot, sourcePath, _assetCatalog);
-            var preview = await _imageExporter.RenderPreviewAsync(
-                snapshot, plan, stamps, cancellationToken).ConfigureAwait(true);
+            var preview = await RunResourceOperationAsync(() => _imageExporter.RenderPreviewAsync(
+                snapshot, plan, stamps, cancellationToken), cancellationToken).ConfigureAwait(true);
             if (generation != _exportPreviewGeneration || cancellationToken.IsCancellationRequested)
             {
                 return;
@@ -431,7 +435,7 @@ public sealed partial class EditorViewModel
         {
             if (generation == _exportPreviewGeneration)
             {
-                _exportValidationError = "Preview не создан: " + ex.Message;
+                _exportValidationError = "Не удалось создать предпросмотр: " + ex.Message;
             }
         }
         finally
@@ -611,9 +615,6 @@ public sealed partial class EditorViewModel
 
     private static string DescribePlan(ExportPlan plan)
     {
-        var memory = plan.EstimatedRawWorkingBytes >= 1024L * 1024 * 1024
-            ? $"{plan.EstimatedRawWorkingBytes / (1024d * 1024 * 1024):0.00} GiB"
-            : $"{plan.EstimatedRawWorkingBytes / (1024d * 1024):0} MiB";
         var mode = plan.OutputMode == ExportOutputMode.SingleImage
             ? "один файл"
             : $"пакет {plan.Columns} × {plan.Rows} ({plan.TileCount} тайлов)";
@@ -622,10 +623,8 @@ public sealed partial class EditorViewModel
             - plan.SourceRegion.Width / (double)plan.SourceRegion.Height) > 0.0001
             ? " · пропорции разорваны, изображение будет растянуто"
             : "";
-        return $"{plan.OutputWidth:N0} × {plan.OutputHeight:N0} px · "
-            + $"{ImageExportEngine.FormatName(plan.Format)} · {mode} · "
-            + $"верхняя оценка raw working memory: {memory}{stretch}. "
-            + "Это не прогноз сжатого размера файла.";
+        return $"{plan.OutputWidth:N0} × {plan.OutputHeight:N0} пикс. · "
+            + $"{ImageExportEngine.FormatName(plan.Format)} · {mode}{stretch}.";
     }
 
     private static string SafeExportName(string title)

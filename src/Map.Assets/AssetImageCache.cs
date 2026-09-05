@@ -12,6 +12,13 @@ public sealed class AssetImageCache : IDisposable
         public required long DecodedBytes { get; init; }
         public required long ResidentBytes { get; init; }
         public long LastUsed { get; set; }
+        public Dictionary<int, SKImage> Mips { get; } = [];
+        public long MipBytes { get; set; }
+        public void Dispose()
+        {
+            foreach (var image in Mips.Values) image.Dispose();
+            Image.Dispose();
+        }
     }
 
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.OrdinalIgnoreCase);
@@ -172,8 +179,8 @@ public sealed class AssetImageCache : IDisposable
         if (_entries.Remove(key, out var entry))
         {
             DecodedBytes -= entry.DecodedBytes;
-            ResidentBytes -= entry.ResidentBytes;
-            entry.Image.Dispose();
+            ResidentBytes -= entry.ResidentBytes + entry.MipBytes;
+            entry.Dispose();
         }
     }
 
@@ -185,11 +192,43 @@ public sealed class AssetImageCache : IDisposable
         {
             var oldest = _entries.MinBy(pair => pair.Value.LastUsed);
             DecodedBytes -= oldest.Value.DecodedBytes;
-            ResidentBytes -= oldest.Value.ResidentBytes;
-            oldest.Value.Image.Dispose();
+            ResidentBytes -= oldest.Value.ResidentBytes + oldest.Value.MipBytes;
+            oldest.Value.Dispose();
             _entries.Remove(oldest.Key);
             Evictions++;
         }
+    }
+
+    /// <summary>Power-of-two minification of an already verified source, charged to the same LRU
+    /// byte budget. Close zoom always receives the original. No source pixels are changed.</summary>
+    public SKImage? GetForPixelSize(string key, double pixelWidth, double pixelHeight)
+    {
+        if (!_entries.TryGetValue(key, out var entry)) return null;
+        var image = entry.Image;
+        var ratio = Math.Min(image.Width / Math.Max(1, pixelWidth), image.Height / Math.Max(1, pixelHeight));
+        var level = Math.Clamp((int)Math.Floor(Math.Log2(Math.Max(1, ratio))), 0, 15);
+        if (level == 0) return image;
+        if (entry.Mips.TryGetValue(level, out var cached)) return cached;
+        var width = Math.Max(1, image.Width >> level);
+        var height = Math.Max(1, image.Height >> level);
+        var bytes = checked((long)width * height * 4);
+        // The bitmap and immutable image may overlap during construction.
+        while (ResidentBytes + bytes * 2 > _decodedByteCapacity)
+        {
+            var candidates = _entries.Where(pair => !string.Equals(pair.Key, key, StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (candidates.Length == 0) return image;
+            var oldest = candidates.MinBy(pair => pair.Value.LastUsed);
+            Remove(oldest.Key); Evictions++;
+        }
+        using var bitmap = new SKBitmap(new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Premul));
+        using var pixels = bitmap.PeekPixels();
+        if (!image.ScalePixels(pixels, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear))) return image;
+        bitmap.SetImmutable();
+        var mip = SKImage.FromBitmap(bitmap);
+        entry.Mips.Add(level, mip);
+        entry.MipBytes += bytes;
+        ResidentBytes += bytes;
+        return mip;
     }
 
     private static SKImage? Decode(byte[] encoded)
@@ -204,7 +243,7 @@ public sealed class AssetImageCache : IDisposable
     {
         foreach (var entry in _entries.Values)
         {
-            entry.Image.Dispose();
+            entry.Dispose();
         }
 
         _entries.Clear();

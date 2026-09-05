@@ -151,7 +151,8 @@ public static partial class MapProjectStore
         SaveMetadata metadata,
         byte[] previewPng,
         RecoveryJournal? journal = null,
-        SaveFaultInjection? faults = null)
+        SaveFaultInjection? faults = null,
+        SaveTimings? timings = null)
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentException.ThrowIfNullOrWhiteSpace(targetPath);
@@ -171,6 +172,11 @@ public static partial class MapProjectStore
                 $"Preview exceeds the {MapProjectFormat.MaxPreviewBytes}-byte project budget.");
         }
 
+        // Reject known payload/count violations before opening a temp or serializing objects.
+        // Exact JSON and checkpoint totals are still admitted by ContainerWriteState.
+        if (!TryValidateAssetEnvelope(document, document.Assets, previewPng.LongLength, out var reason))
+            throw new MapProjectResourceLimitException(reason);
+
         var fullTarget = Path.GetFullPath(targetPath);
         var directory = Path.GetDirectoryName(fullTarget)
             ?? throw new ArgumentException("Target path has no directory.", nameof(targetPath));
@@ -187,7 +193,9 @@ public static partial class MapProjectStore
             RecoveryRecord? record = null;
             if (journal is not null)
             {
+                var fingerprintStarted = System.Diagnostics.Stopwatch.GetTimestamp();
                 var baseHash = File.Exists(fullTarget) ? TryFingerprint(fullTarget) : "";
+                if (timings is not null) timings.PreviousFingerprintMilliseconds = System.Diagnostics.Stopwatch.GetElapsedTime(fingerprintStarted).TotalMilliseconds;
                 record = journal.Begin(
                     document.Id.Value, fullTarget, tempPath, metadata.SavedRevision, baseHash);
             }
@@ -195,12 +203,18 @@ public static partial class MapProjectStore
             using (var stream = new FileStream(
                        tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1 << 16, FileOptions.None))
             {
+                var writeStarted = System.Diagnostics.Stopwatch.GetTimestamp();
                 WriteContainer(stream, document, metadata, previewPng);
+                if (timings is not null) timings.WriteContainerMilliseconds = System.Diagnostics.Stopwatch.GetElapsedTime(writeStarted).TotalMilliseconds;
+                var flushStarted = System.Diagnostics.Stopwatch.GetTimestamp();
                 stream.Flush(flushToDisk: true);
+                if (timings is not null) timings.FlushMilliseconds = System.Diagnostics.Stopwatch.GetElapsedTime(flushStarted).TotalMilliseconds;
             }
 
             // A save that cannot be read back by our own reader is a failed save, not a success.
+            var readBackStarted = System.Diagnostics.Stopwatch.GetTimestamp();
             ValidateReadBack(tempPath, document);
+            if (timings is not null) timings.ReadBackMilliseconds = System.Diagnostics.Stopwatch.GetElapsedTime(readBackStarted).TotalMilliseconds;
 
             // The temp is now durable and proven: from this point a crash leaves a recovery
             // candidate the next launch can find.
@@ -211,6 +225,7 @@ public static partial class MapProjectStore
 
             faults?.AfterDurableTempBeforeReplace?.Invoke();
 
+            var publishStarted = System.Diagnostics.Stopwatch.GetTimestamp();
             if (File.Exists(fullTarget))
             {
                 // Win32 ReplaceFile: on return the target is either wholly old or wholly new.
@@ -221,6 +236,7 @@ public static partial class MapProjectStore
             {
                 File.Move(tempPath, fullTarget);
             }
+            if (timings is not null) timings.PublishMilliseconds = System.Diagnostics.Stopwatch.GetElapsedTime(publishStarted).TotalMilliseconds;
 
             if (journal is not null && record is not null)
             {
@@ -525,7 +541,13 @@ public static partial class MapProjectStore
 
     private static void WriteEntry(ZipArchive archive, string name, byte[] data)
     {
-        var entry = archive.CreateEntry(name, CompressionLevel.Optimal);
+        // Encoded PNG/JPEG/WebP saved less than 1% under DEFLATE in the fixed mixed scene,
+        // while costing 90 ms versus 2 ms. Raw raster tiles and JSON still benefit from Optimal.
+        var encodedImage = name == MapProjectFormat.PreviewEntry
+            || name.StartsWith(MapProjectFormat.AssetPrefix, StringComparison.Ordinal)
+            || name.Contains("/assets/", StringComparison.Ordinal)
+            || name.EndsWith("/preview.png", StringComparison.Ordinal);
+        var entry = archive.CreateEntry(name, encodedImage ? CompressionLevel.NoCompression : CompressionLevel.Optimal);
         entry.LastWriteTime = MapProjectFormat.DeterministicEntryTime;
         using var stream = entry.Open();
         stream.Write(data, 0, data.Length);
@@ -605,7 +627,7 @@ public static partial class MapProjectStore
 
         using (archive)
         {
-            ValidateContainerShape(archive);
+            ValidateContainerShape(archive, legacyScenes: expectedSchemaVersion < 4);
 
             foreach (var required in MapProjectFormat.RequiredEntries)
             {
@@ -697,7 +719,7 @@ public static partial class MapProjectStore
     /// truncated, mis-copied or mislabeled file - the reader must fail with a clear error instead
     /// of hanging on decompression or writing outside the container (docs/05 read limits).
     /// </summary>
-    private static void ValidateContainerShape(ZipArchive archive)
+    private static void ValidateContainerShape(ZipArchive archive, bool legacyScenes = false, bool migrationEnvelope = true)
     {
         if (archive.Entries.Count > MapProjectFormat.MaxEntries)
         {
@@ -707,7 +729,7 @@ public static partial class MapProjectStore
         }
 
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var budget = new MapProjectReadBudget();
+        var budget = new MapProjectReadBudget(legacyScenes, migrationEnvelope);
 
         foreach (var entry in archive.Entries)
         {

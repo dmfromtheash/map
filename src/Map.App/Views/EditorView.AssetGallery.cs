@@ -141,7 +141,7 @@ public sealed partial class EditorView
             {
                 Spacing = 7, Children =
                 {
-                    new Border { Height = 118, Child = preview is null
+                    new Border { Height = 118, Background = new SolidColorBrush(Color.Parse("#FFB8BCC2")), Child = preview is null
                         ? new StackPanel { VerticalAlignment = VerticalAlignment.Center, Spacing = 8, Children =
                             { MapIcons.Stroked(MapIcons.Missing, 24), new TextBlock { Text = "Нет превью", HorizontalAlignment = HorizontalAlignment.Center }.Classed("role-caption") } }
                         : new Image { Source = preview, Stretch = Stretch.Uniform } },

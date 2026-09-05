@@ -55,9 +55,12 @@ public sealed class MigrationFaultInjection
 }
 
 /// <summary>In-memory bounded container passed between adjacent migration steps.</summary>
-public sealed class ProjectMigrationPayload
+public sealed class ProjectMigrationPayload : IDisposable
 {
     private readonly SortedDictionary<string, byte[]> _entries;
+    private readonly SortedSet<string> _sourceNames = new(StringComparer.Ordinal);
+    private readonly Func<string, byte[]>? _readSource;
+    private readonly Action? _closeSource;
 
     internal ProjectMigrationPayload(IEnumerable<KeyValuePair<string, byte[]>> entries) =>
         _entries = new(entries.ToDictionary(
@@ -65,11 +68,18 @@ public sealed class ProjectMigrationPayload
             pair => pair.Value,
             StringComparer.Ordinal), StringComparer.Ordinal);
 
+    internal ProjectMigrationPayload(IEnumerable<string> names, Func<string, byte[]> read, Action close)
+    {
+        _entries = new(StringComparer.Ordinal);
+        _sourceNames.UnionWith(names); _readSource = read; _closeSource = close;
+    }
+
     public int SchemaVersion { get; set; }
-    public IReadOnlyDictionary<string, byte[]> Entries => _entries;
+    public IReadOnlyDictionary<string, byte[]> Entries => new EntryView(this);
 
     public byte[] GetEntry(string name) => _entries.TryGetValue(name, out var bytes)
         ? bytes
+        : _sourceNames.Contains(name) ? _readSource!(name)
         : throw new MapProjectCorruptedException($"Required entry {name} is missing.");
 
     public void SetEntry(string name, byte[] bytes)
@@ -77,6 +87,27 @@ public sealed class ProjectMigrationPayload
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
         ArgumentNullException.ThrowIfNull(bytes);
         _entries[name] = bytes;
+    }
+
+    public void Dispose() => _closeSource?.Invoke();
+
+    // Original images/tiles stay in the read-locked source ZIP. Migration edits only JSON and
+    // emits one bounded source entry at a time, rather than retaining every binary twice.
+    private sealed class EntryView(ProjectMigrationPayload owner) : IReadOnlyDictionary<string, byte[]>
+    {
+        public IEnumerable<string> Keys => owner._sourceNames.Concat(owner._entries.Keys).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal);
+        public IEnumerable<byte[]> Values => Keys.Select(owner.GetEntry);
+        public int Count => Keys.Count();
+        public byte[] this[string key] => owner.GetEntry(key);
+        public bool ContainsKey(string key) => owner._entries.ContainsKey(key) || owner._sourceNames.Contains(key);
+        public bool TryGetValue(string key, out byte[] value)
+        {
+            if (ContainsKey(key)) { value = owner.GetEntry(key); return true; }
+            value = null!; return false;
+        }
+        public IEnumerator<KeyValuePair<string, byte[]>> GetEnumerator() =>
+            Keys.Select(key => new KeyValuePair<string, byte[]>(key, owner.GetEntry(key))).GetEnumerator();
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
 }
 
@@ -337,7 +368,7 @@ public static partial class MapProjectStore
             allowLegacyLayerTypes: true,
             allowUnknownObjectKinds: true);
 
-        var payload = ReadMigrationPayload(source, sourceSchema);
+        using var payload = ReadMigrationPayload(source, sourceSchema);
         MigrationRegistry.Migrate(payload, MapProjectFormat.SchemaVersion);
 
         var directory = Path.GetDirectoryName(destination)
@@ -367,7 +398,7 @@ public static partial class MapProjectStore
             File.Move(temp, destination, overwrite: false);
             return new ProjectMigrationResult
             {
-                Project = Open(destination),
+                Project = verified,
                 SourceSchema = sourceSchema,
                 TargetSchema = MapProjectFormat.SchemaVersion,
             };
@@ -409,7 +440,9 @@ public static partial class MapProjectStore
 
         using (archive)
         {
-            ValidateContainerShape(archive);
+            // Admit all metadata before inflation. Only legacy scene entries can use the legacy
+            // envelope; once the small header is read, enforce the actual schema's categories.
+            ValidateContainerShape(archive, legacyScenes: true, migrationEnvelope: false);
             if (archive.GetEntry(MapProjectFormat.ManifestEntry) is null)
             {
                 throw new MapProjectCorruptedException("Required entry manifest.json is missing.");
@@ -428,19 +461,27 @@ public static partial class MapProjectStore
                 return new ProjectHeader("", 0);
             }
 
+            ValidateContainerShape(archive, legacyScenes: schemaVersion < 4);
             return new ProjectHeader(formatElement.GetString() ?? "", schemaVersion);
         }
     }
 
     private static ProjectMigrationPayload ReadMigrationPayload(string fullPath, int schemaVersion)
     {
-        using var stream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read);
-        MapProjectZipAdmission.Validate(stream);
-        using var archive = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: true);
-        ValidateContainerShape(archive);
-        var entries = archive.Entries.Select(entry =>
-            new KeyValuePair<string, byte[]>(entry.FullName, ReadEntry(archive, entry.FullName)));
-        return new ProjectMigrationPayload(entries) { SchemaVersion = schemaVersion };
+        var stream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        ZipArchive? archive = null;
+        try
+        {
+            MapProjectZipAdmission.Validate(stream);
+            archive = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: true);
+            ValidateContainerShape(archive, legacyScenes: schemaVersion < 4);
+            if (archive.Entries.Sum(entry => entry.Length) > MapProjectFormat.MaxMigrationPayloadBytes)
+                throw new MapProjectResourceLimitException("Для обновления копии требуется больше безопасного бюджета памяти миграции. Исходный файл не изменён.");
+            return new ProjectMigrationPayload(archive.Entries.Select(entry => entry.FullName),
+                name => ReadEntry(archive, name), () => { archive.Dispose(); stream.Dispose(); })
+                { SchemaVersion = schemaVersion };
+        }
+        catch { archive?.Dispose(); stream.Dispose(); throw; }
     }
 
     private static void ValidateMigrationReadBack(MapDocument expected, MapDocument actual)

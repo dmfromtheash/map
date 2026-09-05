@@ -11,6 +11,7 @@ public interface IStampImageSource
 {
     /// <summary>The image for the content hash, or null when the asset is missing/not resolved.</summary>
     SKImage? TryGetImage(string sha256);
+    SKImage? TryGetImageForPixelSize(string sha256, double width, double height) => TryGetImage(sha256);
 }
 
 /// <summary>The live, uncommitted part of a raster gesture, drawn on top of its layer.</summary>
@@ -51,6 +52,9 @@ public sealed class RenderStats
     public int StampAtlasBatches { get; set; }
     public int StampOccludedObjects { get; set; }
     public int ObjectTilesDrawn { get; set; }
+    public double DetailPrepareMilliseconds { get; set; }
+    public double DetailRasterMilliseconds { get; set; }
+    public int GpuDetailTiles { get; set; }
     public long ObjectCacheHits { get; set; }
     public long ObjectCacheMisses { get; set; }
     public long ObjectCacheInvalidations { get; set; }
@@ -79,6 +83,9 @@ public sealed class RenderStats
         StampAtlasBatches = 0;
         StampOccludedObjects = 0;
         ObjectTilesDrawn = 0;
+        DetailPrepareMilliseconds = 0;
+        DetailRasterMilliseconds = 0;
+        GpuDetailTiles = 0;
         ObjectCacheHits = 0;
         ObjectCacheMisses = 0;
         ObjectCacheInvalidations = 0;
@@ -137,6 +144,8 @@ public enum RenderLodTier
 /// <summary>Options of one scene pass. Selection overlay is editor chrome and is opt-in only.</summary>
 public sealed class RenderOptions
 {
+    /// <summary>Borrowed only during a native frame. Cached detail images remain raster-owned.</summary>
+    public GRContext? GpuContext { get; init; }
     /// <summary>Object to draw the selection gizmo around, or null. Never set on export paths.</summary>
     public ObjectId? SelectedObjectId { get; init; }
 
@@ -983,7 +992,11 @@ public static class SceneRenderer
             var drawnBefore = options.Stats?.ObjectsDrawn ?? 0;
             var cached = cache.GetOrCreate(layer.Id, x, y, 10000 + bucket, revision, () =>
             {
-                using var surface = SKSurface.Create(new SKImageInfo(514, 514))!;
+                // Preserve the established platform pixel layout on both paths: changing it
+                // alters Skia's premultiplied rounding when translucent tiles are appended.
+                var tileInfo = new SKImageInfo(514, 514);
+                using var surface = (options.GpuContext is { } gpu
+                    ? SKSurface.Create(gpu, true, tileInfo) : null) ?? SKSurface.Create(tileInfo)!;
                 var target = surface.Canvas;
                 target.Clear(SKColors.Transparent);
                 var incremental = revisions.TryAppendBase(cache, layer.Id, x, y, bucket, Expand(bounds, 1 / scale),
@@ -996,12 +1009,16 @@ public static class SceneRenderer
                 target.Translate(1, 1);
                 target.Scale((float)scale);
                 target.Translate((float)-bounds.Left, (float)-bounds.Top);
+                var prepareStarted = System.Diagnostics.Stopwatch.GetTimestamp();
                 var candidates = incremental ? appended : ObjectSpatialIndex.For(layer).Query(Expand(bounds, 1 / scale));
                 if (layer.SublayerStates.Any(s => !s.Visible)) candidates = candidates.Where(o => layer.StateFor(o.Sublayer).Visible).ToArray();
                 var ordered = candidates.Any(o => o.Sublayer != 0) ? candidates.OrderBy(o => o.Sublayer).ToArray() : candidates;
                 ordered = StampOcclusion.Cull(ordered, Expand(bounds, 1 / scale), scale, options.Stamps);
                 objectCount = (incremental ? basis.ObjectCount : 0) + ordered.Count(o => o.Visible);
                 culledCount = (incremental ? basis.CulledCount : 0) + candidates.Count - ordered.Count;
+                if (options.Stats is { } preparation)
+                    preparation.DetailPrepareMilliseconds += System.Diagnostics.Stopwatch.GetElapsedTime(prepareStarted).TotalMilliseconds;
+                var rasterStarted = System.Diagnostics.Stopwatch.GetTimestamp();
                 for (var i = 0; i < ordered.Count; i++)
                 {
                     if (!ordered[i].Visible) continue;
@@ -1009,7 +1026,18 @@ public static class SceneRenderer
                     if (batch > 0) i += batch - 1;
                     else DrawObject(target, ordered[i], document.StampForeground, options);
                 }
-                return surface.Snapshot();
+                var snapshot = surface.Snapshot();
+                // A read-back completes GPU work and leaves the existing CPU-owned cache/close
+                // contract intact. Timing includes completion, not just queued GPU commands.
+                var result = snapshot;
+                if (snapshot.IsTextureBacked)
+                {
+                    if (options.Stats is { } gpuStats) gpuStats.GpuDetailTiles++;
+                    using (snapshot) result = snapshot.ToRasterImage();
+                }
+                if (options.Stats is { } raster)
+                    raster.DetailRasterMilliseconds += System.Diagnostics.Stopwatch.GetElapsedTime(rasterStarted).TotalMilliseconds;
+                return result;
             }, () => (objectCount, culledCount));
             // One pixel of bleed avoids seams from neighboring tiles under fractional pan/zoom.
             canvas.DrawImage(cached.Image, new SKRect(1, 1, 513, 513),
@@ -1039,7 +1067,18 @@ public static class SceneRenderer
                 || Math.Abs(item.Width / image.Width - item.Height / image.Height) > 0.000001) break;
             count++;
         }
-        if (count < 2) return 0;
+        // On the native GPU use the same sampling/transform evaluator for one stamp and a
+        // consecutive run. Otherwise an appended cache tile changes its pixels when the same
+        // stamps are later rebuilt as an atlas batch (notably at fractional detail scales).
+        if (count == 0 || (count == 1 && options.GpuContext is null)) return 0;
+        if (options.Stamps is { } stamps)
+        {
+            var matrix = canvas.TotalMatrix;
+            var viewScale = Math.Sqrt(matrix.ScaleX * matrix.ScaleX + matrix.SkewY * matrix.SkewY);
+            var maxWidth = 0d; var maxHeight = 0d;
+            for (var i = 0; i < count; i++) { maxWidth = Math.Max(maxWidth, objects[start + i].Width); maxHeight = Math.Max(maxHeight, objects[start + i].Height); }
+            image = stamps.TryGetImageForPixelSize(first.Stamp!.AssetSha256, maxWidth * viewScale, maxHeight * viewScale) ?? image;
+        }
         var transforms = new SKRotationScaleMatrix[count];
         var sources = new SKRect[count];
         var colors = new SKColor[count];
@@ -2007,6 +2046,9 @@ public static class SceneRenderer
         if (mask is null)
         {
             // Clip Mask off (and unresolved legacy/missing mask) keeps the exact pre-Stage-15 path.
+            var matrix = canvas.TotalMatrix;
+            var viewScale = Math.Sqrt(matrix.ScaleX * matrix.ScaleX + matrix.SkewY * matrix.SkewY);
+            image = options.Stamps?.TryGetImageForPixelSize(stamp.AssetSha256, rect.Width * viewScale, rect.Height * viewScale) ?? image;
             DrawStampImage(canvas, image, rect, stamp, paint);
         }
         else

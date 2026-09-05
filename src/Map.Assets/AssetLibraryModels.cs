@@ -85,6 +85,9 @@ public static class AssetIdentity
     public static string SetIdForVariants(IEnumerable<string> orderedSha256) =>
         SetPrefix + Digest("set:" + string.Join('/', orderedSha256.Select(Normalize)));
 
+    public static string VariantIdForSet(string setId, string sha256) =>
+        VariantPrefix + Digest("variant:" + setId + ":" + Normalize(sha256));
+
     public static string CollectionId(string name) => "col-" + Digest("collection:" + name.Trim().ToLowerInvariant());
 
     private static string Normalize(string sha256) => (sha256 ?? "").Trim().ToLowerInvariant();

@@ -374,13 +374,19 @@ public sealed class NativeEditorIntegrityApplication : Application
 
         view.Canvas.ClickForSmoke(stampSecondX, stampSecondY);
         await SettleAsync();
-        var placedStamp = editor.Session.SelectedObject;
+        // Stage 15 keeps Stamp armed and preserves the previous selection in Auto mode.
+        // Find the actual added document object instead of mistaking that selection for it.
+        var originalStampIds = beforeStampDocument.Layers.OfType<ObjectLayer>()
+            .SelectMany(layer => layer.Objects).Select(item => item.Id).ToHashSet();
+        var placedStamp = editor.Session.Document.Layers.OfType<ObjectLayer>()
+            .SelectMany(layer => layer.Objects).Single(item => !originalStampIds.Contains(item.Id));
         var ghostCommitsWhereItStood = placedStamp is { Stamp: not null }
             && ObjectCount(editor.Session.Document) == beforeStampCount + 1
             && Math.Abs(placedStamp.X - turnedGhost.X) < 0.5
             && Math.Abs(placedStamp.Y - turnedGhost.Y) < 0.5
             && Math.Abs(placedStamp.RotationDegrees - turnedGhost.RotationDegrees) < 0.5
-            && editor.PlacementPreviewObjects.Count == 0;
+            && editor.PendingPlacement is { Target: PlacementTargetKind.Stamp, Mode: StampPlacementMode.One }
+            && editor.Session.UndoDepth == undoBeforeStamp + 1;
 
         scenarios["stamp_ghost_follows_the_pointer_with_the_chosen_asset"] =
             stampArmed && ghostFollowsPointer && ghostShowsTheChosenAsset;

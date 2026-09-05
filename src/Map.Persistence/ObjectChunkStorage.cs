@@ -125,7 +125,9 @@ public static partial class MapProjectStore
                         break;
                     }
 
-                    writer.WriteRawValue(objectBytes, skipInputValidation: false);
+                    // These bytes just came from our own JsonSerializer. Avoid a second syntax
+                    // parse here; the completed container still receives full semantic read-back.
+                    writer.WriteRawValue(objectBytes, skipInputValidation: true);
                     projectedBytes = nextBytes;
                     chunkBounds = Union(chunkBounds, SceneGeometry.BoundsOf(sceneObject));
                     chunkCount++;

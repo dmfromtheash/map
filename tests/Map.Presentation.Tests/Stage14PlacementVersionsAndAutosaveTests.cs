@@ -8,6 +8,7 @@ namespace Map.Presentation.Tests;
 
 public sealed class Stage14PlacementVersionsAndAutosaveTests : IDisposable
 {
+    private readonly List<AssetCatalog> _catalogs = [];
     private readonly string _root = Path.Combine(
         Path.GetTempPath(), "map-stage14-tests-" + Guid.NewGuid().ToString("N"));
 
@@ -401,6 +402,7 @@ public sealed class Stage14PlacementVersionsAndAutosaveTests : IDisposable
     private EditorViewModel AssetEditor(out AssetCatalog catalog)
     {
         catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        _catalogs.Add(catalog);
         var first = Image("tree-a", SKColors.ForestGreen);
         var second = Image("tree-b", SKColors.DarkOliveGreen);
         var set = catalog.ImportSet(
@@ -463,6 +465,7 @@ public sealed class Stage14PlacementVersionsAndAutosaveTests : IDisposable
 
     public void Dispose()
     {
+        foreach (var catalog in _catalogs) catalog.FlushMetadataAsync().GetAwaiter().GetResult();
         if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);
     }
 }

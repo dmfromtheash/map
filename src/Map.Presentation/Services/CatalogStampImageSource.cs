@@ -44,6 +44,9 @@ public sealed class CatalogStampImageSource(
         return null;
     }
 
+    public SKImage? TryGetImageForPixelSize(string sha256, double width, double height) =>
+        _cache.GetForPixelSize(sha256, width, height) ?? TryGetImage(sha256);
+
     private string? ResolveCatalog(AssetRecord record)
     {
         if (_resolved.TryGetValue(record.Sha256, out var cached) && File.Exists(cached.Path))

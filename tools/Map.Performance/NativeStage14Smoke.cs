@@ -273,7 +273,7 @@ public sealed class NativeStage14Application : Application
             && ObjectCount(editor) == beforeEscape
             && editor.PendingPlacement is null;
 
-        var versionThroughUi = view.CreateVersionThroughUiForSmoke();
+        var versionThroughUi = await view.CreateVersionThroughUiForSmokeAsync();
         await SettleAsync();
         var versionName = editor.Checkpoints.Single().Name;
 

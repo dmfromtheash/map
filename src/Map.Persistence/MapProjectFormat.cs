@@ -50,8 +50,13 @@ public static class MapProjectFormat
 
     public const long MaxEntryNamePayloadBytes = 2L * 1024 * 1024;
 
-    /// <summary>Upper bound of any single JSON entry once decompressed.</summary>
-    public const long MaxJsonEntryBytes = 512L * 1024 * 1024;
+    /// <summary>Structural JSON only; object data has its own streaming envelope.</summary>
+    public const long MaxJsonEntryBytes = 32L * 1024 * 1024;
+    public const long MaxStructuralJsonPayloadBytes = 64L * 1024 * 1024;
+    public const long MaxObjectChunkPayloadBytes = 960L * 1024 * 1024;
+    /// <summary>Read-only legacy scene admission, never a canonical writer allowance.</summary>
+    public const long MaxLegacySceneEntryBytes = 512L * 1024 * 1024;
+    public const long MaxMigrationPayloadBytes = 768L * 1024 * 1024;
 
     /// <summary>Canonical v4 object chunks are bounded independently of legacy JSON entries.</summary>
     public const int ObjectChunkTargetObjects = 8_192;

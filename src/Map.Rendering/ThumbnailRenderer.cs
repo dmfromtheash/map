@@ -13,7 +13,8 @@ public static class ThumbnailRenderer
     public const int Width = 320;
     public const int Height = 180;
 
-    public static byte[] RenderPng(MapDocument document, int width = Width, int height = Height)
+    public static byte[] RenderPng(MapDocument document, int width = Width, int height = Height,
+        IStampImageSource? stamps = null)
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
@@ -37,7 +38,11 @@ public static class ThumbnailRenderer
         canvas.Translate((float)dx, (float)dy);
         canvas.Scale((float)scale);
 
-        SceneRenderer.Render(canvas, document, new RenderOptions { IsExport = true }); // no editor-only grid or chrome
+        SceneRenderer.Render(canvas, document, new RenderOptions
+        {
+            IsExport = true, Stamps = stamps, ViewScale = scale,
+            VisibleWorld = new WorldBounds(0, 0, document.Canvas.Width, document.Canvas.Height),
+        }); // no editor-only grid or chrome
 
         canvas.Restore();
         canvas.Flush();

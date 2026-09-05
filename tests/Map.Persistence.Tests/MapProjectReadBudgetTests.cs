@@ -9,6 +9,21 @@ namespace Map.Persistence.Tests;
 public sealed class MapProjectReadBudgetTests
 {
     [Fact]
+    public void Structural_json_cannot_consume_the_streaming_object_or_legacy_envelope()
+    {
+        var large = 33L * 1024 * 1024;
+        Assert.Throws<MapProjectResourceLimitException>(() => new MapProjectReadBudget().Add("scene.json", large, large));
+        new MapProjectReadBudget(legacyScenes: true).Add("scene.json", large, large);
+        Assert.Throws<MapProjectResourceLimitException>(() => new MapProjectReadBudget(legacyScenes: true).Add("asset-manifest.json", large, large));
+        var budget = new MapProjectReadBudget();
+        budget.Add("scene.json", 32L * 1024 * 1024, 32L * 1024 * 1024);
+        budget.Add("asset-manifest.json", 32L * 1024 * 1024, 32L * 1024 * 1024);
+        for (var i = 0; i < 100; i++) budget.Add($"objects/layer/{i:D8}.json", 8L * 1024 * 1024, 8L * 1024 * 1024);
+        Assert.Throws<MapProjectResourceLimitException>(() => budget.Add("extra.json", 1, 1));
+        Assert.Equal(800L * 1024 * 1024, budget.ObjectChunkPayloadBytes);
+    }
+
+    [Fact]
     public void Oversized_compressed_container_is_refused_before_ZipArchive_materialization()
     {
         using var workspace = new TempWorkspace();
@@ -160,7 +175,7 @@ public sealed class MapProjectReadBudgetTests
         var json = new MapProjectReadBudget();
         json.Add("first.json", MapProjectFormat.MaxJsonEntryBytes, MapProjectFormat.MaxJsonEntryBytes);
         json.Add("second.json", MapProjectFormat.MaxJsonEntryBytes, MapProjectFormat.MaxJsonEntryBytes);
-        Assert.Equal(MapProjectFormat.MaxJsonPayloadBytes, json.JsonPayloadBytes);
+        Assert.Equal(MapProjectFormat.MaxStructuralJsonPayloadBytes, json.JsonPayloadBytes);
         Assert.Throws<MapProjectResourceLimitException>(() => json.Add("third.json", 1, 1));
 
         var total = new MapProjectReadBudget();

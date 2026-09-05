@@ -75,15 +75,9 @@ public static class ExportPlanner
                 : 1;
             _ = checked(columns * rows);
 
-            var bleed = request.OutputMode == ExportOutputMode.TilePackage
-                ? EffectBleedPixels(document, region, request.OutputWidth, request.OutputHeight)
-                : 0;
-            var surfaceWidth = request.OutputMode == ExportOutputMode.TilePackage
-                ? checked(Math.Min(settings.TileEdge, request.OutputWidth) + (2 * bleed))
-                : request.OutputWidth;
-            var surfaceHeight = request.OutputMode == ExportOutputMode.TilePackage
-                ? checked(Math.Min(settings.TileEdge, request.OutputHeight) + (2 * bleed))
-                : request.OutputHeight;
+            var bleed = EffectBleedPixels(document, region, request.OutputWidth, request.OutputHeight);
+            var surfaceWidth = checked(Math.Min(settings.TileEdge, request.OutputWidth) + (2 * bleed));
+            var surfaceHeight = checked(Math.Min(settings.TileEdge, request.OutputHeight) + (2 * bleed));
 
             if (surfaceWidth > settings.MaxTileSurfaceEdge || surfaceHeight > settings.MaxTileSurfaceEdge)
             {
@@ -95,7 +89,9 @@ public static class ExportPlanner
             var surfaceBytes = checked((long)surfaceWidth * surfaceHeight * 4);
             var tileCacheBytes = checked((long)settings.TileCacheCapacity
                 * TileMap.TileSize * TileMap.TileSize * 4);
-            var estimate = checked(AssetCacheBudget + tileCacheBytes + (surfaceBytes * 3));
+            var singleOutputBytes = request.OutputMode == ExportOutputMode.SingleImage
+                ? checked((long)request.OutputWidth * request.OutputHeight * 8) : 0;
+            var estimate = checked(AssetCacheBudget + tileCacheBytes + (surfaceBytes * 3) + singleOutputBytes);
 
             return new ExportPlan(
                 request.Format,

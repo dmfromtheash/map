@@ -115,6 +115,9 @@ public sealed class ExportEngineSettings
     public int MaxTileSurfaceEdge { get; init; } = DefaultMaxSingleEdge;
     public Action<ExportSurfaceAllocation>? SurfaceAllocated { get; init; }
     public Action<ExportFaultPoint>? FaultInjector { get; init; }
+    public Func<long> AvailableMemoryBytes { get; init; } = ExportResourceAdmission.AvailableMemory;
+    public Func<string, long> AvailableDiskBytes { get; init; } = path =>
+        new DriveInfo(Path.GetPathRoot(Path.GetFullPath(path))!).AvailableFreeSpace;
 }
 
 public interface IImageExporter

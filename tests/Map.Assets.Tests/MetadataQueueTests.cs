@@ -32,6 +32,16 @@ public sealed class MetadataQueueTests
             Assert.Equal("My tree", reopened.FindSet(set.Id)!.Name);
             Assert.True(reopened.FindSet(set.Id)!.Favorite);
             Assert.Equal(DateTimeOffset.UnixEpoch.AddSeconds(50), Assert.Single(reopened.Recent).UsedUtc);
+            using (var held = new FileStream(Path.Combine(catalog.Root, "catalog.json"), FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                catalog.TouchRecent(set.Id, set.CoverVariantId, DateTimeOffset.UnixEpoch.AddSeconds(99));
+                await Assert.ThrowsAsync<IOException>(catalog.FlushMetadataAsync);
+            }
+            Assert.Equal(DateTimeOffset.UnixEpoch.AddSeconds(50), Assert.Single(catalog.Recent).UsedUtc);
+            Assert.True(catalog.FindSet(set.Id)!.Favorite);
+            catalog.TouchRecent(set.Id, set.CoverVariantId, DateTimeOffset.UnixEpoch.AddSeconds(60));
+            await catalog.FlushMetadataAsync();
+            Assert.Equal(DateTimeOffset.UnixEpoch.AddSeconds(60), Assert.Single(new AssetCatalog(catalog.Root).Recent).UsedUtc);
         }
         finally { Directory.Delete(root, true); }
     }

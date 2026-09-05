@@ -313,6 +313,8 @@ public sealed class Stage10LibraryStampTests : IDisposable
         Assert.True(editor.PlaceCurrentVariantAt(500, 500));
         var before = Assert.Single(Stamps(editor));
 
+        editor.CancelPlacement();
+        editor.SelectObject(before.Id);
         editor.NextVariant();
         var replacement = editor.CurrentVariant!.Sha256;
         editor.ReplaceSelectedStampWithCurrentVariant();
@@ -606,7 +608,8 @@ public sealed class Stage10LibraryStampTests : IDisposable
         var catalog = new AssetCatalog(Path.Combine(_root, "aggregate-preflight"));
         var document = new AssetLibraryDocument();
         var variantIds = new List<string>();
-        for (var index = 0; index < 5; index++)
+        // Nine distinct 60 MiB sources exceed the current 512 MiB project asset envelope.
+        for (var index = 0; index < 9; index++)
         {
             var record = Synthetic(index) with
             {
@@ -646,12 +649,14 @@ public sealed class Stage10LibraryStampTests : IDisposable
         editor.StampAreaRadius = 200;
         editor.StampDensity = 100;
         var before = new Untouched(editor);
+        resolver.Resolved.Clear(); // Arming a preview is a separate earlier operation.
 
         Assert.False(editor.PlaceCurrentVariantAt(300, 300));
 
         before.AssertUnchanged(editor);
         Assert.Empty(resolver.Resolved);
         Assert.Contains("лимит", editor.StatusDetail, StringComparison.OrdinalIgnoreCase);
+        catalog.FlushMetadataAsync().GetAwaiter().GetResult();
     }
 
     [Fact]
@@ -1416,6 +1421,8 @@ public sealed class Stage10LibraryStampTests : IDisposable
         editor.Session.SetSelection([placed[0].Id, placed[1].Id]);
         Assert.True(editor.GroupSelection("Замена"));
 
+        editor.CancelPlacement();
+        editor.ActiveTool = EditorTool.Select;
         editor.Session.SetSelection([placed[0].Id]);
         editor.SetStampHueDegrees(25);
         editor.SetStampFlip(vertical: true);

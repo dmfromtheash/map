@@ -60,6 +60,30 @@ public class Stage10DInspectorViewModelTests
     private static SceneObject Find(EditorViewModel editor, ObjectId id) =>
         DocumentEditor.FindObject(editor.Session.Document, id)!;
 
+    [Fact]
+    public void Fractional_legacy_geometry_survives_display_apply_and_unrelated_single_field_edits()
+    {
+        var id = ObjectId.New();
+        SceneObject Fractional(double angle) => new(id, SceneObjectKind.Stamp, "старый объект",
+            100.25, 101.75, 120.25, 90.75, angle, "#FFFFFFFF", "#00000000", 0, true, false)
+            { Stamp = new StampStyle(StampSha) };
+        var original = Fractional(12.5);
+        var (editor, _) = NewEditor([original]);
+        editor.SelectObject(original.Id);
+        Assert.True(editor.CommitInspector());
+        Assert.Equal(original, Find(editor, original.Id));
+        Assert.Equal(0, editor.Session.UndoDepth);
+        editor.RotationText = "45";
+        Assert.True(editor.CommitInspector());
+        Assert.Equal(Fractional(45), Find(editor, original.Id));
+        editor.Undo();
+        Assert.Equal(original, Find(editor, original.Id));
+        editor.SetStampRotationDegrees(90);
+        Assert.Equal(Fractional(90), Find(editor, original.Id));
+        editor.Undo();
+        Assert.Equal(original, Find(editor, original.Id));
+    }
+
     // ----------------------------------------------------------- percent <-> domain mapping
 
     [Theory]
@@ -412,7 +436,8 @@ public class Stage10DInspectorViewModelTests
         Assert.Equal(entriesBefore + 1, editor.Session.UndoDepth);
         var reset = Find(editor, stamp.Id);
         var style = reset.Stamp!;
-        Assert.False(style.FlipVertical);
+        // Stage 15 separates transform (including flips) from appearance reset.
+        Assert.True(style.FlipVertical);
         Assert.Equal("Normal", style.Blend);
         Assert.Equal(0, style.Blur);
         Assert.Equal(0, style.ShadowOpacity);

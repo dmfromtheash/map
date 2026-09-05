@@ -37,7 +37,7 @@ public sealed class ImageExportEngine : IImageExporter
         var width = Math.Max(1, (int)Math.Round(plan.OutputWidth * scale));
         var height = Math.Max(1, (int)Math.Round(plan.OutputHeight * scale));
         using var tileCache = new TileImageCache(_settings.TileCacheCapacity);
-        var bytes = RenderEncoded(
+        using var bytes = RenderEncoded(
             snapshot,
             plan,
             new PixelRect(0, 0, width, height),
@@ -51,7 +51,7 @@ public sealed class ImageExportEngine : IImageExporter
             ExportSurfacePurpose.Preview,
             tileIndex: null,
             cancellationToken);
-        return new ExportPreview(bytes, width, height);
+        return new ExportPreview(bytes.ToArray(), width, height);
     }, cancellationToken);
 
     public Task<ExportResult> ExportAsync(
@@ -66,6 +66,7 @@ public sealed class ImageExportEngine : IImageExporter
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentException.ThrowIfNullOrWhiteSpace(destinationPath);
         cancellationToken.ThrowIfCancellationRequested();
+        ExportResourceAdmission.Check(plan, destinationPath, _settings);
         Report(progress, ExportPhase.Preparing, 0.01, "Подготовка снимка карты…");
 
         try
@@ -109,20 +110,7 @@ public sealed class ImageExportEngine : IImageExporter
         var fullPath = Path.GetFullPath(destinationPath);
         ValidateFileExtension(fullPath, plan.Format);
         Report(progress, ExportPhase.Rendering, 0.08, "Рендеринг изображения…");
-        var bytes = RenderEncoded(
-            snapshot,
-            plan,
-            new PixelRect(0, 0, plan.OutputWidth, plan.OutputHeight),
-            plan.OutputWidth,
-            plan.OutputHeight,
-            bleed: 0,
-            plan.Format,
-            plan.Quality,
-            stamps,
-            tileCache,
-            ExportSurfacePurpose.SingleImage,
-            tileIndex: null,
-            cancellationToken);
+        using var bytes = RenderSingleEncoded(snapshot, plan, stamps, tileCache, cancellationToken);
         _settings.FaultInjector?.Invoke(ExportFaultPoint.AfterRender);
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -191,7 +179,7 @@ public sealed class ImageExportEngine : IImageExporter
                     var start = 0.05 + (0.86 * tileIndex / plan.TileCount);
                     Report(progress, ExportPhase.Rendering, start,
                         $"Рендеринг тайла {tileIndex + 1} из {plan.TileCount}…");
-                    var bytes = RenderEncoded(
+                    using var bytes = RenderEncoded(
                         snapshot,
                         plan,
                         tile,
@@ -264,15 +252,48 @@ public sealed class ImageExportEngine : IImageExporter
         return new ExportResult(fullPath, ExportOutputMode.TilePackage, plan.TileCount + 1);
     }
 
-    private byte[] RenderEncoded(
+    private SKData RenderSingleEncoded(MapDocument snapshot, ExportPlan plan,
+        IStampImageSource? stamps, TileImageCache tileCache, CancellationToken cancellationToken)
+    {
+        // Both outputs evaluate the same globally aligned tiles and effect margins. Only an
+        // explicitly requested single file owns this final-sized encoder surface; packages do not.
+        var info = new SKImageInfo(plan.OutputWidth, plan.OutputHeight, SKColorType.Rgba8888, SKAlphaType.Premul);
+        _settings.SurfaceAllocated?.Invoke(new(ExportSurfacePurpose.SingleImage, info.Width, info.Height, null));
+        using var output = SKSurface.Create(info) ?? throw new OutOfMemoryException("Не удалось создать поверхность итогового изображения.");
+        output.Canvas.Clear(SKColors.Transparent);
+        using var copy = new SKPaint { BlendMode = SKBlendMode.Src, IsAntialias = false };
+        var index = 0;
+        for (var y = 0; y < plan.OutputHeight; y += plan.TileEdge)
+        for (var x = 0; x < plan.OutputWidth; x += plan.TileEdge)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var tile = new PixelRect(x, y, Math.Min(plan.TileEdge, plan.OutputWidth - x), Math.Min(plan.TileEdge, plan.OutputHeight - y));
+            using var image = RenderImage(snapshot, plan, tile, plan.OutputWidth, plan.OutputHeight,
+                plan.EffectBleedPixels, stamps, tileCache, ExportSurfacePurpose.TileWithBleed, index++, cancellationToken);
+            output.Canvas.DrawImage(image, x, y, new SKSamplingOptions(SKFilterMode.Nearest), copy);
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+        using var result = output.Snapshot();
+        return Encode(result, plan.Format, plan.Quality);
+    }
+
+    private SKData RenderEncoded(MapDocument snapshot, ExportPlan plan, PixelRect pixelRect,
+        int globalOutputWidth, int globalOutputHeight, int bleed, ExportImageFormat format, int quality,
+        IStampImageSource? stamps, TileImageCache tileCache, ExportSurfacePurpose purpose,
+        int? tileIndex, CancellationToken cancellationToken)
+    {
+        using var image = RenderImage(snapshot, plan, pixelRect, globalOutputWidth, globalOutputHeight,
+            bleed, stamps, tileCache, purpose, tileIndex, cancellationToken);
+        return Encode(image, format, quality);
+    }
+
+    private SKImage RenderImage(
         MapDocument snapshot,
         ExportPlan plan,
         PixelRect pixelRect,
         int globalOutputWidth,
         int globalOutputHeight,
         int bleed,
-        ExportImageFormat format,
-        int quality,
         IStampImageSource? stamps,
         TileImageCache tileCache,
         ExportSurfacePurpose purpose,
@@ -319,8 +340,7 @@ public sealed class ImageExportEngine : IImageExporter
 
         if (bleed == 0)
         {
-            using var image = surface.Snapshot();
-            return Encode(image, format, quality);
+            return surface.Snapshot();
         }
 
         _settings.SurfaceAllocated?.Invoke(new ExportSurfaceAllocation(
@@ -333,20 +353,19 @@ public sealed class ImageExportEngine : IImageExporter
             throw new InvalidOperationException("Не удалось прочитать центральную область тайла.");
         }
 
-        using var croppedImage = SKImage.FromBitmap(crop);
-        return Encode(croppedImage, format, quality);
+        return SKImage.FromBitmap(crop);
     }
 
-    private static byte[] Encode(SKImage image, ExportImageFormat format, int quality)
+    private static SKData Encode(SKImage image, ExportImageFormat format, int quality)
     {
-        using var data = image.Encode(ToSkiaFormat(format), quality)
+        var data = image.Encode(ToSkiaFormat(format), quality)
             ?? throw new InvalidOperationException($"Кодировщик {FormatName(format)} недоступен.");
-        return data.ToArray();
+        return data;
     }
 
     private static async Task WriteAndValidateAsync(
         string path,
-        byte[] bytes,
+        SKData bytes,
         ExportImageFormat format,
         int width,
         int height,
@@ -364,6 +383,16 @@ public sealed class ImageExportEngine : IImageExporter
             throw new InvalidDataException(
                 "Read-back экспортированного файла не совпал с выбранным форматом или размером.");
         }
+    }
+
+    private static async Task WriteDurableAsync(string path, SKData bytes, CancellationToken cancellationToken)
+    {
+        await using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write,
+            FileShare.None, 64 * 1024, FileOptions.Asynchronous | FileOptions.WriteThrough);
+        using var source = bytes.AsStream();
+        await source.CopyToAsync(stream, 64 * 1024, cancellationToken).ConfigureAwait(false);
+        await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+        stream.Flush(flushToDisk: true);
     }
 
     private static async Task WriteDurableAsync(

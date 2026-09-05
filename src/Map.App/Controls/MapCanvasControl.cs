@@ -22,7 +22,7 @@ namespace Map.App.Controls;
 /// WebView, no intermediate bitmap. Input: left click selects, left drag moves the selected
 /// object (one history entry per drag), middle drag pans, wheel zooms around the cursor.
 /// </summary>
-public sealed class MapCanvasControl : Control
+public sealed partial class MapCanvasControl : Control
 {
     private EditorViewModel? _editor;
     private CanvasInputRouter? _input;
@@ -137,7 +137,12 @@ public sealed class MapCanvasControl : Control
     /// <summary>Own-process native-smoke hook; normal lifetime calls the same path on detach.</summary>
     public void DisposeRenderCaches()
     {
-        _renderResources.Dispose();
+        lock (_renderResources.Gate)
+        {
+            _renderResources.Dispose();
+            // Stamp images belong to this editor, and must outlive its last pinned frame.
+            (_editor?.StampImages as IDisposable)?.Dispose();
+        }
     }
 
     /// <summary>Own-process native-smoke pan through the same viewport/event/invalidation path.</summary>
@@ -332,6 +337,7 @@ public sealed class MapCanvasControl : Control
         }
 
         _visualInvalidationQueued = true;
+        System.Threading.Interlocked.Increment(ref _requestedFrame);
         InvalidateVisual();
         Avalonia.Threading.Dispatcher.UIThread.Post(() =>
         {
@@ -374,6 +380,7 @@ public sealed class MapCanvasControl : Control
             return;
         }
 
+        var requestedFrame = System.Threading.Interlocked.Read(ref _requestedFrame);
         context.Custom(new SceneDrawOperation(
             new Rect(0, 0, Bounds.Width, Bounds.Height), _editor, _renderResources,
             _renderStats, PerformanceMode,
@@ -384,6 +391,7 @@ public sealed class MapCanvasControl : Control
                 LastSceneRenderMilliseconds = elapsedMilliseconds;
                 LastFrameObjectsDrawn = _renderStats.ObjectsDrawn;
                 LastRenderedDocument = document;
+                RecordStatisticsFrame(requestedFrame, elapsedMilliseconds);
                 FrameRendered?.Invoke(this, EventArgs.Empty);
             }));
     }
@@ -451,6 +459,7 @@ public sealed class MapCanvasControl : Control
             var sceneStopwatch = Stopwatch.StartNew();
             SceneRenderer.Render(canvas, renderDocument, new Map.Rendering.RenderOptions
             {
+                GpuContext = lease.GrContext,
                 SelectedObjectId = editor.CanvasWorkflowOpen ? null : editor.Session.SelectedObjectId,
                 CoSelectedObjectIds = !editor.CanvasWorkflowOpen && editor.Session.SelectedObjectIds.Count > 1
                     ? editor.Session.SelectedObjectIds

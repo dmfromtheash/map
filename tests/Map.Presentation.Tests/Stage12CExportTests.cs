@@ -13,6 +13,29 @@ namespace Map.Presentation.Tests;
 
 public sealed class Stage12CExportTests
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Resource_admission_refuses_before_render_and_preserves_the_existing_result(bool memory)
+    {
+        using var temp = new TempDirectory();
+        var path = Path.Combine(temp.Path, "previous.png");
+        File.WriteAllBytes(path, [7, 4, 2]);
+        var allocations = new List<ExportSurfaceAllocation>();
+        var exporter = new ImageExportEngine(new ExportEngineSettings
+        {
+            AvailableMemoryBytes = () => memory ? 0 : long.MaxValue,
+            AvailableDiskBytes = _ => memory ? long.MaxValue : 0,
+            SurfaceAllocated = allocations.Add,
+        });
+        var document = Document(32, 24);
+        await Assert.ThrowsAsync<ExportValidationException>(() => exporter.ExportAsync(document,
+            exporter.Plan(document, Request(32, 24)), path, null));
+        Assert.Empty(allocations);
+        Assert.Equal(new byte[] { 7, 4, 2 }, File.ReadAllBytes(path));
+        Assert.Single(Directory.GetFiles(temp.Path));
+    }
+
     [Fact]
     public void Stage12C_PlannerRejectsInvalidGeometryAndRequiresTilesBeyond16K()
     {
@@ -239,6 +262,18 @@ public sealed class Stage12CExportTests
             canvas.Flush();
         }
         AssertBitmapsEqual(single, reassembled, tolerance: 0);
+
+        // Independent whole-surface scene evaluation catches a shared tiled-path mistake,
+        // including a missing effect halo that single/package equality alone cannot detect.
+        using var referenceSurface = SKSurface.Create(new SKImageInfo(96, 48))!;
+        referenceSurface.Canvas.Clear(SKColors.Transparent);
+        SceneRenderer.Render(referenceSurface.Canvas, document, new RenderOptions
+        {
+            IsExport = true, ViewScale = 1, VisibleWorld = new WorldBounds(0, 0, 96, 48),
+        });
+        using var referenceImage = referenceSurface.Snapshot();
+        using var reference = SKBitmap.FromImage(referenceImage);
+        AssertBitmapsEqual(reference, single, tolerance: 1);
     }
 
     [Fact]
@@ -313,13 +348,14 @@ public sealed class Stage12CExportTests
         editor.BeginExport();
         await exporter.WaitForCallsAsync(1);
         editor.SetExportFormat(ExportImageFormat.Webp);
+        // A cancelled native render may finish late, but a new one must wait for its buffers.
+        Assert.Equal(1, editor.ActiveResourceOperations);
+        exporter.Complete(0, [1]);
         await exporter.WaitForCallsAsync(2);
-
+        Assert.Null(editor.ExportPreviewPng);
         exporter.Complete(1, [2]);
         await editor.WaitForExportPreviewAsync();
-        exporter.Complete(0, [1]);
-        await Task.Delay(50);
-
+        Assert.Equal(0, editor.ActiveResourceOperations);
         Assert.Equal(new byte[] { 2 }, editor.ExportPreviewPng);
         Assert.Equal(ExportImageFormat.Webp, editor.CurrentExportPlan!.Format);
     }

@@ -224,11 +224,11 @@ public sealed class NativeStage16Application : Application
         var dashboardScreenshot = Path.ChangeExtension(options.OutputPath, ".dashboard.png");
         SaveVisual(dashboardView, dashboardScreenshot, 960, 640);
         var recentCard = Find<Button>(dashboardView, "RecentCard0");
-        var newCard = Find<Button>(dashboardView, "NewMapCardButton");
+        var newCard = Find<Button>(dashboardView, "NewMapButton");
         var dashboardNamed = Find<Button>(dashboardView, "NewMapButton").IsVisible
             && Find<Button>(dashboardView, "OpenFileButton").IsVisible
             && Find<TextBox>(dashboardView, "DashboardSearchBox").IsVisible
-            && Find<ComboBox>(dashboardView, "DashboardSortChoice").IsVisible
+            && Find<Control>(dashboardView, "DashboardSortChoice").IsVisible
             && VisibleInside(recentCard, dashboardView)
             && VisibleInside(newCard, dashboardView);
         var dashboardWorked = clone == clonePath && template == templatePath && opened is not null

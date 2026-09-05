@@ -4,13 +4,15 @@ namespace Map.Persistence;
 /// Metadata-only admission budget for a .mapproj. It runs before the first payload is inflated,
 /// so an archive that cannot fit the supported interactive memory envelope fails predictably.
 /// </summary>
-public sealed class MapProjectReadBudget
+public sealed class MapProjectReadBudget(bool legacyScenes = false, bool migrationEnvelope = true)
 {
     public long TotalUncompressedBytes { get; private set; }
     public long AssetPayloadBytes { get; private set; }
     public long TilePayloadBytes { get; private set; }
     public long JsonPayloadBytes { get; private set; }
     public long CheckpointPayloadBytes { get; private set; }
+    public long StructuralJsonPayloadBytes { get; private set; }
+    public long ObjectChunkPayloadBytes { get; private set; }
 
     public void Add(string name, long uncompressedBytes, long compressedBytes)
     {
@@ -43,7 +45,9 @@ public sealed class MapProjectReadBudget
                 ? MapProjectFormat.MaxTileEntryBytes
                 : isAsset
                     ? MapProjectFormat.MaxAssetEntryBytes
-                    : MapProjectFormat.MaxJsonEntryBytes;
+                    : legacyScenes && (name == "scene.json" || isCheckpoint && name.EndsWith("/scene.json", StringComparison.Ordinal))
+                        ? MapProjectFormat.MaxLegacySceneEntryBytes
+                        : MapProjectFormat.MaxJsonEntryBytes;
 
         if (uncompressedBytes > perEntryLimit)
         {
@@ -79,12 +83,19 @@ public sealed class MapProjectReadBudget
             else if (name.EndsWith(".json", StringComparison.Ordinal))
             {
                 JsonPayloadBytes = checked(JsonPayloadBytes + uncompressedBytes);
+                if (isObjectChunk) ObjectChunkPayloadBytes = checked(ObjectChunkPayloadBytes + uncompressedBytes);
+                else if (!legacyScenes || !(name == "scene.json" || isCheckpoint && name.EndsWith("/scene.json", StringComparison.Ordinal)))
+                    StructuralJsonPayloadBytes = checked(StructuralJsonPayloadBytes + uncompressedBytes);
             }
         }
         catch (OverflowException ex)
         {
             throw new MapProjectCorruptedException("Container entry sizes overflow the read budget.", ex);
         }
+
+        if (StructuralJsonPayloadBytes > MapProjectFormat.MaxStructuralJsonPayloadBytes
+            || ObjectChunkPayloadBytes > MapProjectFormat.MaxObjectChunkPayloadBytes)
+            throw new MapProjectResourceLimitException("Превышен отдельный бюджет структуры или объектных чанков. Файл не изменён.");
 
         if (AssetPayloadBytes > MapProjectFormat.MaxAssetPayloadBytes)
         {
@@ -110,6 +121,9 @@ public sealed class MapProjectReadBudget
                 $"The container declares {TotalUncompressedBytes} uncompressed bytes in total, " +
                 $"above the {MapProjectFormat.MaxTotalUncompressedBytes} limit.");
         }
+
+        if (legacyScenes && migrationEnvelope && TotalUncompressedBytes > MapProjectFormat.MaxMigrationPayloadBytes)
+            throw new MapProjectResourceLimitException("Превышен совокупный бюджет обновления старого формата. Исходный файл не изменён.");
 
         if (CheckpointPayloadBytes > MapProjectFormat.MaxCheckpointPayloadBytes)
         {

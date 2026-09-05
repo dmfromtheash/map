@@ -190,6 +190,18 @@ public sealed partial class EditorViewModel : ViewModelBase
     private readonly Func<DateTimeOffset> _clock;
     private readonly string _appVersion;
     private readonly SemaphoreSlim _saveGate = new(1, 1);
+    // Save/read-back, versions, export and preview share one expensive operation slot.
+    // Cancelling a preview cannot leave multiple native render/encode buffers running together.
+    private readonly SemaphoreSlim _resourceGate = new(1, 1);
+    public int ActiveResourceOperations { get; private set; }
+
+    private async Task<T> RunResourceOperationAsync<T>(Func<Task<T>> operation, CancellationToken token = default)
+    {
+        await _resourceGate.WaitAsync(token);
+        ActiveResourceOperations++;
+        try { token.ThrowIfCancellationRequested(); return await operation(); }
+        finally { ActiveResourceOperations--; _resourceGate.Release(); }
+    }
     private readonly AssetCatalog? _assetCatalog;
     private readonly BrushPresetStore? _brushPresetStore;
     private readonly IReadOnlyList<string> _localFontFamilies;
@@ -307,7 +319,8 @@ public sealed partial class EditorViewModel : ViewModelBase
         IExportDestinationPicker? exportDestinationPicker = null,
         IFolderLauncher? folderLauncher = null,
         EditorLocalPreferences? localPreferences = null,
-        Action<EditorLocalPreferences>? saveLocalPreferences = null)
+        Action<EditorLocalPreferences>? saveLocalPreferences = null,
+        DateTimeOffset? lastSavedUtc = null)
     {
         Session = new EditingSession(document);
         DocumentPath = documentPath;
@@ -350,7 +363,7 @@ public sealed partial class EditorViewModel : ViewModelBase
 
         _saveState = Session.IsDirty ? SaveState.Unsaved : SaveState.Saved;
         _primaryAutosaveArmed = !string.IsNullOrWhiteSpace(documentPath) && !startDirty;
-        _lastPrimarySaveUtc = _primaryAutosaveArmed ? _clock() : null;
+        _lastPrimarySaveUtc = _primaryAutosaveArmed ? lastSavedUtc : null;
         _activeLayerId = document.Layers.LastOrDefault(layer => layer is not BaseColorLayer)?.Id
             ?? document.BaseColor.Id;
 
@@ -460,7 +473,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     public string PrimaryAutosaveSummary => !_primaryAutosaveEnabled
         ? "Автосохранение выключено"
         : !_primaryAutosaveArmed || string.IsNullOrWhiteSpace(DocumentPath)
-            ? "Автосохранение после первого Save"
+            ? "Автосохранение после первого сохранения"
             : SaveState switch
             {
                 SaveState.Saving => "Сохраняется…",
@@ -471,6 +484,8 @@ public sealed partial class EditorViewModel : ViewModelBase
             };
 
     public bool RecoveryAvailable => _recoveryAvailable;
+
+    public DateTimeOffset? LastPrimarySaveUtc => _lastPrimarySaveUtc;
 
     /// <summary>Short human explanation of the last failure, with the recovery path when one exists.</summary>
     public string StatusDetail
@@ -3034,12 +3049,13 @@ public sealed partial class EditorViewModel : ViewModelBase
             RaiseVariantState();
         }
 
-        StatusDetail = objects.Count == 1
+        var placementMessage = objects.Count == 1
             ? $"Размещён вариант {placedLabel}."
             : $"Размещено объектов: {objects.Count}, вариантов: {plan.Select(item => item.Sha256).Distinct(StringComparer.OrdinalIgnoreCase).Count()}.";
         Raise(nameof(CompactRecentSets));
         Raise(nameof(RecentCount));
         FinishOrContinuePlacement(pending, objects[^1].Name);
+        StatusDetail = placementMessage + " Ассет остаётся активным · Esc завершить.";
         if (_assetCatalog?.MetadataSaveError is not null)
             StatusDetail += " Объекты размещены; недавние пока не удалось сохранить на диск.";
         LastPlacementTiming = (prepareMs, namesMs, commitMs,
@@ -5368,7 +5384,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             var now = _clock();
             CompositionPackageStore.Export(
                 package, path, new SaveMetadata(_appVersion, now),
-                ThumbnailRenderer.RenderPng(Session.Document));
+                RenderPreview(Session.Document));
             StatusDetail = "Composition package сохранён локально с hashes и provenance.";
             return true;
         }
@@ -6894,7 +6910,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     {
         if (EditableSelectionList() is not { } before) return;
         ExecuteWholeSelection(before,
-            RoundObjectGeometries(MultiSelectionGeometry.Translate(before, deltaX, deltaY)),
+            QuantizeTransformedGeometries(before, MultiSelectionGeometry.Translate(before, deltaX, deltaY)),
             "Nudge selection");
     }
 
@@ -6904,7 +6920,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         var factor = MultiSelectionGeometry.ClampScaleFactor(
             before, 1 + Math.Sign(direction) * (largerStep ? 0.1 : 0.01));
         var frame = MultiSelectionGeometry.CombinedBounds(before)!.Value;
-        ExecuteWholeSelection(before, RoundObjectGeometries(MultiSelectionGeometry.ScaleAroundCentre(
+        ExecuteWholeSelection(before, QuantizeTransformedGeometries(before, MultiSelectionGeometry.ScaleAroundCentre(
             before, factor, (frame.Left + frame.Right) / 2, (frame.Top + frame.Bottom) / 2)),
             "Resize selection from shortcut");
     }
@@ -6916,7 +6932,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         // step instead of creating hidden quarter-degree values.
         var step = largerStep ? 15 : 1;
         var frame = MultiSelectionGeometry.CombinedBounds(before)!.Value;
-        ExecuteWholeSelection(before, RoundObjectGeometries(MultiSelectionGeometry.RotateAroundCentre(
+        ExecuteWholeSelection(before, QuantizeTransformedGeometries(before, MultiSelectionGeometry.RotateAroundCentre(
             before, Math.Sign(direction) * step,
             (frame.Left + frame.Right) / 2, (frame.Top + frame.Bottom) / 2)),
             "Rotate selection from shortcut");
@@ -7732,7 +7748,7 @@ public sealed partial class EditorViewModel : ViewModelBase
 
         DragPreview = null;
 
-        var proposed = RoundObjectGeometries(preview.Proposed);
+        var proposed = QuantizeTransformedGeometries(preview.Before, preview.Proposed);
         if (!proposed.SequenceEqual(preview.Before))
         {
             Session.Execute(new ReplaceObjectsCommand(
@@ -7775,6 +7791,11 @@ public sealed partial class EditorViewModel : ViewModelBase
     public bool CreateVersion()
     {
         var timestamp = _clock();
+        return CreateCheckpoint(NextVersionName(timestamp), timestamp, userTerm: "версия");
+    }
+
+    private string NextVersionName(DateTimeOffset timestamp)
+    {
         var used = new HashSet<int>();
         foreach (var checkpoint in Session.Document.Checkpoints)
         {
@@ -7789,8 +7810,53 @@ public sealed partial class EditorViewModel : ViewModelBase
 
         var next = Enumerable.Range(1, MapCheckpointLimits.MaxCount + 1)
             .First(number => !used.Contains(number));
-        var name = $"Версия {next:00} · {timestamp.ToLocalTime():dd.MM.yyyy HH:mm}";
-        return CreateCheckpoint(name, timestamp, userTerm: "версия");
+        return $"Версия {next:00} · {timestamp.ToLocalTime():dd.MM.yyyy HH:mm}";
+    }
+
+    /// <summary>The native command prepares the immutable snapshot off the UI thread. The same
+    /// operation gate as Save/close prevents publication after the editor has closed.</summary>
+    public async Task<bool> CreateVersionAsync()
+    {
+        if (!await _saveGate.WaitAsync(0))
+        {
+            StatusDetail = "Дождитесь завершения текущего сохранения или создания версии.";
+            return false;
+        }
+        try
+        {
+            var source = Session.Document;
+            if (source.Checkpoints.Count >= MapCheckpointLimits.MaxCount)
+            {
+                StatusDetail = $"Достигнут лимит: не больше {MapCheckpointLimits.MaxCount} версий.";
+                return false;
+            }
+            var timestamp = _clock();
+            var name = NextVersionName(timestamp);
+            using var images = new ExportStampImageSource(source, DocumentPath, _assetCatalog);
+            var checkpoint = await RunResourceOperationAsync(() => Task.Run(() =>
+            {
+                var preview = ThumbnailRenderer.RenderPng(source,
+                    MapCheckpointLimits.PreviewWidth, MapCheckpointLimits.PreviewHeight, images);
+                var result = new MapCheckpoint(CheckpointId.New(), name, timestamp,
+                    MapCheckpointSnapshot.Capture(source), preview);
+                MapProjectStore.ValidateCheckpointAddition(source, result);
+                return result;
+            }));
+            if (!ReferenceEquals(Session.Document, source))
+            {
+                StatusDetail = "Карта изменилась во время подготовки версии. Повторите создание версии.";
+                return false;
+            }
+            PublishCheckpoint(checkpoint, "версия");
+            return true;
+        }
+        catch (Exception ex) when (ex is MapProjectResourceLimitException or ArgumentException or InvalidOperationException or IOException)
+        {
+            StatusDetail = "Не удалось создать версию: " + ex.Message;
+            _log.Error("Checkpoint creation failed", ex);
+            return false;
+        }
+        finally { _saveGate.Release(); }
     }
 
     public bool CreateCheckpoint(string? name) =>
@@ -7819,7 +7885,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         try
         {
             var source = Session.Document;
-            var preview = ThumbnailRenderer.RenderPng(
+            var preview = RenderPreview(
                 source, MapCheckpointLimits.PreviewWidth, MapCheckpointLimits.PreviewHeight);
             var checkpoint = new MapCheckpoint(
                 CheckpointId.New(),
@@ -7829,11 +7895,7 @@ public sealed partial class EditorViewModel : ViewModelBase
                 preview);
 
             MapProjectStore.ValidateCheckpointAddition(source, checkpoint);
-            Session.Execute(new AddCheckpointCommand(checkpoint));
-            AfterEdit();
-            StatusDetail = string.IsNullOrWhiteSpace(DocumentPath)
-                ? $"Создана {userTerm} «{checkpoint.Name}» в памяти. Первый путь задаст явный Save."
-                : $"Создана {userTerm} «{checkpoint.Name}». Она будет сохранена автоматически.";
+            PublishCheckpoint(checkpoint, userTerm);
             return true;
         }
         catch (MapProjectResourceLimitException ex)
@@ -7847,6 +7909,15 @@ public sealed partial class EditorViewModel : ViewModelBase
             _log.Error("Checkpoint creation failed", ex);
             return false;
         }
+    }
+
+    private void PublishCheckpoint(MapCheckpoint checkpoint, string userTerm)
+    {
+        Session.Execute(new AddCheckpointCommand(checkpoint));
+        AfterEdit();
+        StatusDetail = string.IsNullOrWhiteSpace(DocumentPath)
+            ? $"Создана {userTerm} «{checkpoint.Name}» в памяти. Укажите путь командой «Сохранить»."
+            : $"Создана {userTerm} «{checkpoint.Name}». Она будет сохранена автоматически.";
     }
 
     public bool RenameVersion(CheckpointId id, string? name)
@@ -8047,6 +8118,14 @@ public sealed partial class EditorViewModel : ViewModelBase
             return false;
         }
 
+        // Displaying legacy fractional data as integers is not an edit of the hidden precision.
+        // Only a field whose entered value differs from its displayed baseline is changed.
+        if (x == WholeGeometryValue(before.X)) x = before.X;
+        if (y == WholeGeometryValue(before.Y)) y = before.Y;
+        if (width == WholeGeometryValue(before.Width)) width = before.Width;
+        if (height == WholeGeometryValue(before.Height)) height = before.Height;
+        if (rotation == WholeGeometryValue(before.RotationDegrees)) rotation = before.RotationDegrees;
+
         // A locked stamp aspect fills in the untouched dimension from the touched one, so the
         // numeric fields and the proportional scale can never disagree about the shape.
         if (before.Stamp is not null && StampAspectLocked && before.Width > 0 && before.Height > 0)
@@ -8103,9 +8182,10 @@ public sealed partial class EditorViewModel : ViewModelBase
         SceneObject source, double x, double y, double width, double height, double rotation) =>
         new(
             source.Id, source.Kind, source.Name,
-            WholeGeometryValue(x), WholeGeometryValue(y),
-            Math.Max(1, WholeGeometryValue(width)), Math.Max(1, WholeGeometryValue(height)),
-            WholeGeometryValue(rotation),
+            QuantizeChanged(x, source.X), QuantizeChanged(y, source.Y),
+            QuantizeChanged(width, source.Width, size: true),
+            QuantizeChanged(height, source.Height, size: true),
+            QuantizeChanged(rotation, source.RotationDegrees),
             source.FillColor, source.StrokeColor, source.StrokeWidth,
             source.Visible, source.Locked)
         {
@@ -8123,11 +8203,24 @@ public sealed partial class EditorViewModel : ViewModelBase
             ObjectOpacity = source.ObjectOpacity,
         };
 
-    private static SceneObject RoundObjectGeometry(SceneObject source) =>
-        WithGeometry(source, source.X, source.Y, source.Width, source.Height, source.RotationDegrees);
+    private static double QuantizeChanged(double value, double original, bool size = false) =>
+        value == original ? original
+            : size ? Math.Max(1, WholeGeometryValue(value)) : WholeGeometryValue(value);
 
-    private static IReadOnlyList<SceneObject> RoundObjectGeometries(IEnumerable<SceneObject> source) =>
-        [.. source.Select(RoundObjectGeometry)];
+    private static IReadOnlyList<SceneObject> QuantizeTransformedGeometries(
+        IReadOnlyList<SceneObject> before, IEnumerable<SceneObject> proposed)
+    {
+        var originals = before.ToDictionary(item => item.Id);
+        return [.. proposed.Select(item =>
+        {
+            var original = originals[item.Id];
+            return WithGeometry(item,
+                QuantizeChanged(item.X, original.X), QuantizeChanged(item.Y, original.Y),
+                QuantizeChanged(item.Width, original.Width, size: true),
+                QuantizeChanged(item.Height, original.Height, size: true),
+                QuantizeChanged(item.RotationDegrees, original.RotationDegrees));
+        })];
+    }
 
     private static SceneObject CopyObject(
         SceneObject source, bool? visible = null, bool? locked = null,
@@ -9489,17 +9582,17 @@ public sealed partial class EditorViewModel : ViewModelBase
         if (HasTransientEditorAction) return false;
         if (!Session.IsDirty)
         {
-            await ClearAutosaveIfCleanAsync().ConfigureAwait(false);
+            await ClearAutosaveIfCleanAsync();
             return false;
         }
 
-        var primarySaved = await TryPrimaryAutosaveAsync().ConfigureAwait(false);
+        var primarySaved = await TryPrimaryAutosaveAsync();
         if (!Session.IsDirty)
         {
             return primarySaved;
         }
 
-        var recoverySaved = await TryRecoveryAutosaveAsync().ConfigureAwait(false);
+        var recoverySaved = await TryRecoveryAutosaveAsync();
         return primarySaved || recoverySaved;
     }
 
@@ -9518,7 +9611,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             || ReferenceEquals(_lastPrimaryAutosavedDocument, Session.Document)
             || !ignoreDebounce && (_lastCommittedEditUtc is null
                 || now - _lastCommittedEditUtc < PrimaryAutosaveDebounce)
-            || !await _saveGate.WaitAsync(0).ConfigureAwait(false))
+            || !await _saveGate.WaitAsync(0))
         {
             return false;
         }
@@ -9533,19 +9626,19 @@ public sealed partial class EditorViewModel : ViewModelBase
             Raise(nameof(PrimaryAutosaveSummary));
             try
             {
-                await Task.Run(() =>
+                using var imageSource = new ExportStampImageSource(snapshot, path, _assetCatalog);
+                var thumbnail = await RunResourceOperationAsync(() => Task.Run(() =>
                 {
-                    var thumbnail = ThumbnailRenderer.RenderPng(snapshot);
+                    var thumbnail = ThumbnailRenderer.RenderPng(snapshot, stamps: imageSource);
                     _store.Save(snapshot, path, metadata, thumbnail);
-                }).ConfigureAwait(false);
+                    return thumbnail;
+                }));
 
                 Session.MarkSaved(checkpoint);
                 _lastPrimaryAutosavedDocument = snapshot;
                 _lastPrimarySaveUtc = now;
                 SaveState = Session.IsDirty ? SaveState.Unsaved : SaveState.Saved;
-                _recent.Touch(
-                    path, snapshot.Id.Value, snapshot.Title, metadata.ModifiedUtc,
-                    ThumbnailRenderer.RenderPng(snapshot));
+                TouchRecentAfterSave(path, snapshot, metadata, thumbnail);
                 if (!Session.IsDirty)
                 {
                     ClearRecoveryAfterProvenSave();
@@ -9574,7 +9667,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     {
 
         if (ReferenceEquals(_lastAutosavedDocument, Session.Document)
-            || !await _saveGate.WaitAsync(0).ConfigureAwait(false))
+            || !await _saveGate.WaitAsync(0))
         {
             return false;
         }
@@ -9589,11 +9682,14 @@ public sealed partial class EditorViewModel : ViewModelBase
             AutosaveState = AutosaveState.Saving;
             try
             {
-                await Task.Run(() =>
+                var sourcePath = DocumentPath;
+                using var imageSource = new ExportStampImageSource(snapshot, sourcePath, _assetCatalog);
+                await RunResourceOperationAsync(() => Task.Run(() =>
                 {
-                    var thumbnail = ThumbnailRenderer.RenderPng(snapshot);
-                    _store.SaveAutosave(snapshot, DocumentPath, metadata, thumbnail);
-                }).ConfigureAwait(false);
+                    var thumbnail = ThumbnailRenderer.RenderPng(snapshot, stamps: imageSource);
+                    _store.SaveAutosave(snapshot, sourcePath, metadata, thumbnail);
+                    return true;
+                }));
 
                 _lastAutosavedDocument = snapshot;
                 _lastAutosaveUtc = timestamp;
@@ -9624,14 +9720,14 @@ public sealed partial class EditorViewModel : ViewModelBase
             return false;
         }
 
-        if (!await _saveGate.WaitAsync(0).ConfigureAwait(false))
+        if (!await _saveGate.WaitAsync(0))
         {
             return false;
         }
 
         try
         {
-            await Task.Run(() => _store.ClearRecovery(Session.Document.Id.Value)).ConfigureAwait(false);
+            await Task.Run(() => _store.ClearRecovery(Session.Document.Id.Value));
             ForgetAutosave();
             return true;
         }
@@ -9673,6 +9769,23 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
     }
 
+    private byte[] RenderPreview(MapDocument snapshot, int width = ThumbnailRenderer.Width,
+        int height = ThumbnailRenderer.Height)
+    {
+        using var source = new ExportStampImageSource(snapshot, DocumentPath, _assetCatalog);
+        return ThumbnailRenderer.RenderPng(snapshot, width, height, source);
+    }
+
+    private void TouchRecentAfterSave(string path, MapDocument snapshot, SaveMetadata metadata, byte[] preview)
+    {
+        try { _recent.Touch(path, snapshot.Id.Value, snapshot.Title, metadata.ModifiedUtc, preview); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            StatusDetail = "Карта сохранена. Не удалось обновить список недавних карт.";
+            _log.Error("RECENT_UPDATE_AFTER_SAVE_FAILED", ex);
+        }
+    }
+
     // ---------------------------------------------------------------- saving
 
     public async Task<bool> SaveAsync(bool saveAs = false)
@@ -9682,7 +9795,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         {
             path = UiTestFilePaths.MapPath
                 ?? await _filePicker.PickSaveAsync(Session.Document.Title + MapProjectFormat.Extension)
-                    .ConfigureAwait(false);
+                    ;
             if (string.IsNullOrEmpty(path))
             {
                 return false; // user cancelled; nothing changes
@@ -9690,7 +9803,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
 
         // Concurrent saves of one document must queue, not interleave.
-        await _saveGate.WaitAsync().ConfigureAwait(false);
+        await _saveGate.WaitAsync();
         try
         {
             var checkpoint = Session.CaptureSaveCheckpoint();
@@ -9702,13 +9815,15 @@ public sealed partial class EditorViewModel : ViewModelBase
 
             try
             {
-                await Task.Run(() =>
+                using var imageSource = new ExportStampImageSource(snapshot, DocumentPath, _assetCatalog);
+                var thumbnail = await RunResourceOperationAsync(() => Task.Run(() =>
                 {
                     // The thumbnail comes from the same scene evaluator as the canvas, without
                     // selection or any editor chrome.
-                    var thumbnail = ThumbnailRenderer.RenderPng(snapshot);
+                    var thumbnail = ThumbnailRenderer.RenderPng(snapshot, stamps: imageSource);
                     _store.Save(snapshot, path!, metadata, thumbnail);
-                }).ConfigureAwait(false);
+                    return thumbnail;
+                }));
 
                 DocumentPath = path;
                 Session.MarkSaved(checkpoint);
@@ -9724,9 +9839,7 @@ public sealed partial class EditorViewModel : ViewModelBase
                 RaiseSessionState();
                 Raise(nameof(PrimaryAutosaveSummary));
 
-                _recent.Touch(
-                    path!, Session.Document.Id.Value, snapshot.Title, metadata.ModifiedUtc,
-                    ThumbnailRenderer.RenderPng(snapshot));
+                TouchRecentAfterSave(path!, snapshot, metadata, thumbnail);
                 _log.Info($"SAVE_SUCCEEDED revision={checkpoint.Revision}");
                 return true;
             }
@@ -9749,18 +9862,20 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// <summary>True when it is safe to leave the editor. Never loses work silently.</summary>
     public async Task<bool> ConfirmCloseAsync()
     {
+        await _saveGate.WaitAsync();
+        _saveGate.Release();
         bool allowClose;
         if (!Session.IsDirty)
         {
             allowClose = _lastAutosavedDocument is null
-                || await DiscardRecoveryAsync().ConfigureAwait(false);
+                || await DiscardRecoveryAsync();
         }
         else
         {
-            allowClose = await _prompts.ConfirmCloseDirtyAsync(Session.Document.Title).ConfigureAwait(false) switch
+            allowClose = await _prompts.ConfirmCloseDirtyAsync(Session.Document.Title) switch
             {
-                CloseChoice.Save => await SaveAsync().ConfigureAwait(false) && !Session.IsDirty,
-                CloseChoice.DontSave => await DiscardRecoveryAsync().ConfigureAwait(false),
+                CloseChoice.Save => await SaveAsync() && !Session.IsDirty,
+                CloseChoice.DontSave => await DiscardRecoveryAsync(),
                 _ => false,
             };
         }
@@ -9774,10 +9889,11 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     private async Task<bool> DiscardRecoveryAsync()
     {
-        await _saveGate.WaitAsync().ConfigureAwait(false);
+        await _saveGate.WaitAsync();
         try
         {
-            await Task.Run(() => _store.ClearRecovery(Session.Document.Id.Value)).ConfigureAwait(false);
+            var documentId = Session.Document.Id.Value;
+            await Task.Run(() => _store.ClearRecovery(documentId));
             ForgetAutosave();
             return true;
         }

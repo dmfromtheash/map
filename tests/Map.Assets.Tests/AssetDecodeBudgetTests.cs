@@ -158,6 +158,30 @@ public sealed class AssetDecodeBudgetTests
     }
 
     [Fact]
+    public void Minified_images_share_the_budget_preserve_alpha_and_release_with_the_source()
+    {
+        using var cache = new AssetImageCache(64, 90_000);
+        var encoded = Image(100, 100, new SKColor(40, 160, 80, 128));
+        var original = cache.GetEncoded("source", encoded)!;
+        var mip = cache.GetForPixelSize("source", 20, 20)!;
+        Assert.Equal((25, 25), (mip.Width, mip.Height));
+        using (var bitmap = SKBitmap.FromImage(mip))
+        {
+            var pixel = bitmap.GetPixel(12, 12);
+            Assert.Equal(128, pixel.Alpha);
+            Assert.InRange(pixel.Green, 159, 161);
+        }
+        Assert.Same(mip, cache.GetForPixelSize("source", 20, 20));
+        Assert.Same(original, cache.GetForPixelSize("source", 100, 100));
+        Assert.InRange(cache.ResidentBytes, 42_500, 90_000);
+        Assert.NotNull(cache.GetEncoded("next", Image(100, 100, SKColors.Blue)));
+        Assert.InRange(cache.ResidentBytes, 0, 90_000);
+        cache.Dispose();
+        Assert.Equal(0, cache.Count);
+        Assert.Equal(0, cache.ResidentBytes);
+    }
+
+    [Fact]
     public void Cache_accounts_for_encoded_bytes_retained_by_lazy_native_images()
     {
         using var cache = new AssetImageCache(capacity: 64, decodedByteCapacity: 50_000);

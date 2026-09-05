@@ -128,7 +128,7 @@ public class EditorViewModelTests
         Assert.True(editor.Session.IsDirty);
         Assert.Equal(SaveState.Unsaved, editor.SaveState);
         Assert.Equal(AutosaveState.Saved, editor.AutosaveState);
-        Assert.StartsWith("Автокопия:", editor.AutosaveSummary, StringComparison.Ordinal);
+        Assert.StartsWith("Есть восстановление", editor.AutosaveSummary, StringComparison.Ordinal);
         Assert.Equal(@"C:\maps\source.mapproj", editor.DocumentPath);
 
         Assert.False(await editor.TryAutosaveAsync());
@@ -388,29 +388,28 @@ public class EditorViewModelTests
 
         editor.RefreshInspector();
         Assert.True(editor.CommitInspector());
-        AssertWholeGeometry(editor.Session.SelectedObject!);
+        Assert.Equal(fractional, editor.Session.SelectedObject);
+        Assert.Equal(depth, editor.Session.UndoDepth);
 
         var beforeDrag = editor.Session.SelectedObject!;
         Assert.True(editor.BeginDrag());
         editor.UpdateDrag(10.4, 5.6);
         editor.EndDrag();
         var afterDrag = editor.Session.SelectedObject!;
-        Assert.Equal(beforeDrag.X + 10, afterDrag.X);
-        Assert.Equal(beforeDrag.Y + 6, afterDrag.Y);
-        AssertWholeGeometry(afterDrag);
+        Assert.Equal(Math.Round(beforeDrag.X + 10.4, MidpointRounding.AwayFromZero), afterDrag.X);
+        Assert.Equal(Math.Round(beforeDrag.Y + 5.6, MidpointRounding.AwayFromZero), afterDrag.Y);
+        Assert.Equal(fractional.Width, afterDrag.Width);
+        Assert.Equal(fractional.Height, afterDrag.Height);
+        Assert.Equal(fractional.RotationDegrees, afterDrag.RotationDegrees);
 
         editor.RotateSelectedObject(1, fineStep: true);
         Assert.Equal(14, editor.Session.SelectedObject!.RotationDegrees);
-        AssertWholeGeometry(editor.Session.SelectedObject!);
-
-        static void AssertWholeGeometry(SceneObject value)
-        {
-            Assert.Equal(Math.Round(value.X), value.X);
-            Assert.Equal(Math.Round(value.Y), value.Y);
-            Assert.Equal(Math.Round(value.Width), value.Width);
-            Assert.Equal(Math.Round(value.Height), value.Height);
-            Assert.Equal(Math.Round(value.RotationDegrees), value.RotationDegrees);
-        }
+        Assert.Equal(fractional.Width, editor.Session.SelectedObject.Width);
+        Assert.Equal(fractional.Height, editor.Session.SelectedObject.Height);
+        editor.Undo();
+        Assert.Equal(afterDrag, editor.Session.SelectedObject);
+        editor.Undo();
+        Assert.Equal(fractional, editor.Session.SelectedObject);
     }
 
     [Fact]
@@ -568,7 +567,9 @@ public class EditorViewModelTests
         Assert.Equal(12, line.Line.Stroke.Offset);
 
         editor.AddShape(ShapePrimitiveKind.Rectangle);
+        var firstShape = editor.Session.SelectedObjectId!.Value;
         editor.AddShape(ShapePrimitiveKind.Ellipse);
+        editor.SelectObject(firstShape, additive: true);
         editor.ApplyShapeBoolean(ShapeBooleanOperation.Subtract);
         Assert.Single(editor.Session.Document.Layers.OfType<ObjectLayer>().Single().Objects, o => o.Shape is not null);
 

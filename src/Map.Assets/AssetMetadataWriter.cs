@@ -1,14 +1,16 @@
 namespace Map.Assets;
 
 /// <summary>One serial, coalescing writer. Only private owned snapshots cross the thread boundary.</summary>
-internal sealed class AssetMetadataWriter(string path)
+internal sealed class AssetMetadataWriter(string path, AssetLibraryDocument? initial = null)
 {
     private readonly object _gate = new();
     private AssetLibraryDocument? _pending;
     private Task _worker = Task.CompletedTask;
     private bool _running;
     private Exception? _error;
+    private AssetLibraryDocument? _lastSaved = initial;
     public string? Error { get { lock (_gate) return _error?.Message; } }
+    public AssetLibraryDocument? LastSaved { get { lock (_gate) return _lastSaved; } }
 
     public void Enqueue(AssetLibraryDocument snapshot)
     {
@@ -42,6 +44,7 @@ internal sealed class AssetMetadataWriter(string path)
             lock (_gate)
             {
                 _error = failure;
+                if (failure is null) _lastSaved = snapshot;
                 if (_pending is not null) continue;
                 _running = false;
                 return;

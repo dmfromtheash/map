@@ -202,7 +202,8 @@ public sealed class MainWindow : Window
         window.Show();
     }
 
-    private EditorViewModel CreateEditor(Map.Core.Documents.MapDocument document, string? path, bool startDirty)
+    private EditorViewModel CreateEditor(Map.Core.Documents.MapDocument document, string? path, bool startDirty,
+        DateTimeOffset? lastSavedUtc = null)
     {
         var editor = new EditorViewModel(
             document,
@@ -213,6 +214,7 @@ public sealed class MainWindow : Window
             new AvaloniaFilePicker(this),
             new DialogPrompts(this),
             _log,
+            lastSavedUtc: lastSavedUtc,
             appVersion: AppVersion.Current,
             assetCatalog: _assets,
             shortcuts: _shortcuts,
@@ -252,7 +254,8 @@ public sealed class MainWindow : Window
         var opened = await _dashboard.TryOpenAsync(path);
         if (opened is not null)
         {
-            ShowEditor(CreateEditor(opened.Project.Document, opened.Path, startDirty: false));
+            ShowEditor(CreateEditor(opened.Project.Document, opened.Path, startDirty: false,
+                lastSavedUtc: opened.Project.ModifiedUtc));
         }
     }
 
@@ -331,6 +334,8 @@ public sealed class MainWindow : Window
         var help = new Window
         {
             Title = "Справка Map — работает без интернета",
+            ShowActivated = !TestMode.Enabled,
+            ShowInTaskbar = !TestMode.Enabled,
             Width = 720,
             Height = 650,
             MinWidth = 520,
@@ -347,7 +352,7 @@ public sealed class MainWindow : Window
                            "ИНСТРУМЕНТЫ\n\n" +
                            "Слева выбираются объекты, кисть, земля, линии, фигуры, текст, маски и заметки. " +
                            "Текущее действие и его точные значения находятся в контекстной панели.\n\n" +
-                           "RECOVERY\n\n" +
+                           "ВОССТАНОВЛЕНИЕ\n\n" +
                            "Автосохранённые копии появляются на стартовом экране. Восстановление открывает копию " +
                            "и не перезаписывает исходный файл без явного сохранения.\n\n" +
                            "КЛАВИАТУРА\n\n" +
@@ -357,6 +362,7 @@ public sealed class MainWindow : Window
                 },
             },
         };
+        if (TestMode.Enabled) help.Position = new PixelPoint(-32000, -32000);
         _ = help.ShowDialog(this);
     }
 

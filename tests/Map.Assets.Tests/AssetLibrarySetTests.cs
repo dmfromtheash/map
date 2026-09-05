@@ -173,6 +173,58 @@ public sealed class AssetLibrarySetTests : IDisposable
         Assert.Null(catalog.FindSetForContent(new string('f', 64)));
     }
 
+    [Fact]
+    public void Reimport_overlapping_sets_keeps_independent_membership_and_shared_bytes()
+    {
+        var catalog = NewCatalog();
+        var a = Source("shared-a", SKColors.Red);
+        var b = Source("shared-b", SKColors.Green);
+        var c = Source("shared-c", SKColors.Blue);
+        var singleton = catalog.Import(a, new AssetImportOptions(), Stamp(0));
+        var first = catalog.ImportSet([a, b], "Первый", new AssetImportOptions(), Stamp(1));
+        var second = catalog.ImportSet([b, c], "Второй", new AssetImportOptions(), Stamp(2));
+        var repeated = catalog.ImportSet([a, b], "Первый", new AssetImportOptions(), Stamp(3));
+        Assert.Equal(first.Id, repeated.Id);
+        var otherLogicalSet = catalog.ImportSet([a, b], "Отдельный набор", new AssetImportOptions(), Stamp(4));
+        Assert.NotEqual(first.Id, otherLogicalSet.Id);
+        Assert.Empty(first.VariantIds.Intersect(otherLogicalSet.VariantIds));
+        Assert.Empty(first.VariantIds.Intersect(second.VariantIds));
+        Assert.Equal(3, catalog.Records.Count);
+        Assert.Equal(3, Directory.GetFiles(Path.Combine(catalog.Root, "originals")).Length);
+        catalog.RemoveVariantFromSet(first.Id, first.VariantIds[0]);
+        Assert.NotNull(catalog.Find(singleton.Sha256));
+        var reopened = NewCatalog();
+        Assert.Equal(4, reopened.Sets.Count);
+        Assert.Equal(second.VariantIds, reopened.FindSet(second.Id)!.VariantIds);
+    }
+
+    [Fact]
+    public async Task Failed_import_and_write_leave_the_last_catalog_usable_without_restart()
+    {
+        var catalog = NewCatalog();
+        var a = Source("existing", SKColors.Red);
+        catalog.Import(a, new AssetImportOptions(), Stamp(0));
+        var set = Assert.Single(catalog.Sets);
+        catalog.SetSetFavorite(set.Id, true);
+        catalog.TouchRecent(set.Id, set.CoverVariantId, Stamp(1));
+        await catalog.FlushMetadataAsync();
+        var index = Path.Combine(catalog.Root, "catalog.json");
+        var before = File.ReadAllBytes(index);
+        var b = Source("new", SKColors.Blue);
+        Assert.ThrowsAny<Exception>(() => catalog.ImportSet([b, Path.Combine(_root, "missing.png")], "Отказ", new AssetImportOptions(), Stamp(2)));
+        Assert.Single(catalog.Records);
+        Assert.Equal(before, File.ReadAllBytes(index));
+        using (var locked = new FileStream(index, FileMode.Open, FileAccess.Read, FileShare.None))
+            Assert.ThrowsAny<Exception>(() => catalog.Import(b, new AssetImportOptions(), Stamp(3)));
+        Assert.Single(catalog.Records);
+        Assert.True(catalog.FindSet(set.Id)!.Favorite);
+        Assert.Single(catalog.Recent);
+        Assert.Equal(before, File.ReadAllBytes(index));
+        catalog.Import(b, new AssetImportOptions(), Stamp(4));
+        Assert.Equal(2, NewCatalog().Records.Count);
+        Assert.Equal(2, catalog.Records.Count);
+    }
+
     // ---------------------------------------------------------------- helpers
 
     private AssetCatalog NewCatalog() => new(RootPath());

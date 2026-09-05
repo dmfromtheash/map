@@ -106,6 +106,7 @@ public sealed partial class EditorView : UserControl
     private readonly TextBox _exportOutputHeightBox = NumberBox("ExportOutputHeightBox");
     private readonly TextBlock _exportFormatExplanation = Status("ExportFormatExplanationText");
     private readonly TextBlock _exportEstimate = Status("ExportEstimateText");
+    private readonly TextBlock _exportMemoryDetails = new() { Name = "ExportMemoryDetails", TextWrapping = TextWrapping.Wrap };
     private readonly TextBlock _exportError = Status("ExportValidationErrorText");
     private readonly TextBlock _exportProgressText = Status("ExportProgressText");
     private readonly TextBlock _exportResult = Status("ExportResultText");
@@ -201,6 +202,7 @@ public sealed partial class EditorView : UserControl
     private Control _versionsContent = null!;
     private Control _canvasWorkflowContent = null!;
     private Control _exportContent = null!;
+    private Control? _noteSelectionEditor;
     private bool _closingAuxiliaryWindows;
 
     // ------------------------------------------------------ selection sections
@@ -446,6 +448,10 @@ public sealed partial class EditorView : UserControl
             }
             _exportPreviewBitmap?.Dispose();
             _exportPreviewBitmap = null;
+            _thumbnails.Dispose();
+            _checkpointPreviews.Dispose();
+            _editor.CancelExport();
+            _editor.CloseExport();
         };
 
         _objectSearch.TextChanged += (_, _) =>
@@ -466,6 +472,7 @@ public sealed partial class EditorView : UserControl
         SyncInspector();
         SyncSidePanels();
         SyncContextArea();
+        InitializeStatistics();
 
         AttachedToVisualTree += (_, _) => Dispatcher.UIThread.Post(_canvas.FitToCanvas, DispatcherPriority.Loaded);
     }
@@ -520,7 +527,7 @@ public sealed partial class EditorView : UserControl
         return group is not null;
     }
 
-    public bool CreateVersionThroughUiForSmoke()
+    public async System.Threading.Tasks.Task<bool> CreateVersionThroughUiForSmokeAsync()
     {
         OpenVersions();
         var before = _editor.Checkpoints.Count;
@@ -528,6 +535,8 @@ public sealed partial class EditorView : UserControl
             .OfType<Button>()
             .FirstOrDefault(control => control.Name == "CreateVersionButton");
         button?.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+        for (var attempt = 0; button is not null && _editor.Checkpoints.Count == before && attempt < 100; attempt++)
+            await System.Threading.Tasks.Task.Delay(50);
         return button is not null && _editor.Checkpoints.Count == before + 1;
     }
 
@@ -967,7 +976,7 @@ public sealed partial class EditorView : UserControl
             identity.Text = count switch
             {
                 0 => "",
-                1 => selected?.Name ?? "Объект",
+                1 => "Выделено: " + (selected?.Name ?? "Объект"),
                 _ => "Выбрано: " + EditorLabels.Objects(count),
             };
             ToolTip.SetTip(identity, identity.Text);
@@ -1868,6 +1877,9 @@ public sealed partial class EditorView : UserControl
         {
             Name = "BrushTipList",
             SelectionMode = SelectionMode.Single,
+            // This fixed seven-item chooser is already inside the context scroller. A virtual
+            // panel can leave its last rows unrealized when the nested scroller is disabled.
+            ItemsPanel = new FuncTemplate<Panel?>(() => new StackPanel()),
         };
         ScrollViewer.SetVerticalScrollBarVisibility(list, ScrollBarVisibility.Disabled);
         AutomationProperties.SetName(list, "Форма отпечатка кисти");
@@ -3785,7 +3797,11 @@ public sealed partial class EditorView : UserControl
             });
         }
 
-        return Ui.Section("Объект", body).Named(prefix + "PrimarySection");
+        return new Expander
+        {
+            Header = "Выделение: общие свойства и порядок", Content = body,
+            IsExpanded = false, HorizontalAlignment = HorizontalAlignment.Stretch,
+        }.Named(prefix + "PrimarySection");
     }
 
     /// <summary>The word a selection spread over several layers shows instead of an empty box.</summary>
@@ -6256,7 +6272,7 @@ public sealed partial class EditorView : UserControl
     /// A tiny bounded LRU of decoded covers. Without the bound, scrolling a large library would
     /// hold every thumbnail it ever showed.
     /// </summary>
-    private sealed class ThumbnailCache(int capacity)
+    private sealed class ThumbnailCache(int capacity) : IDisposable
     {
         private const int MaxThumbnailDimension = 512;
         private const long MaxDecodedBytes = 64L * 1024 * 1024;
@@ -6264,6 +6280,12 @@ public sealed partial class EditorView : UserControl
             new(StringComparer.OrdinalIgnoreCase);
         private long _clock;
         private long _decodedBytes;
+
+        public void Dispose()
+        {
+            foreach (var entry in _entries.Values) entry.Image.Dispose();
+            _entries.Clear(); _decodedBytes = 0;
+        }
 
         public Bitmap? Image(string? path)
         {
@@ -6418,7 +6440,7 @@ public sealed partial class EditorView : UserControl
             }
             catch (ArgumentException error)
             {
-                preview.Text = "Preview недоступен: " + error.Message;
+                preview.Text = "Предпросмотр недоступен: " + error.Message;
                 Ui.SetClass(preview, "error", true);
             }
         }
@@ -6449,7 +6471,7 @@ public sealed partial class EditorView : UserControl
                             _editor.AddNoteForSelection, "compact"),
                     },
                 },
-                new Border
+                (_noteSelectionEditor = new Border
                 {
                     Child = new StackPanel
                     {
@@ -6463,16 +6485,16 @@ public sealed partial class EditorView : UserControl
                                 MaxColumns = 2,
                                 Children =
                                 {
-                                    Ui.TextButton("NoteHeadingButton", "Heading", () => PrefixSelection("## "), "compact"),
-                                    Ui.TextButton("NoteListButton", "List", () => PrefixSelection("- "), "compact"),
-                                    Ui.TextButton("NoteBoldButton", "Bold", () => ReplaceSelection("**", "**", "текст"), "compact"),
-                                    Ui.TextButton("NoteItalicButton", "Italic", () => ReplaceSelection("*", "*", "текст"), "compact"),
+                                    Ui.TextButton("NoteHeadingButton", "Заголовок", () => PrefixSelection("## "), "compact"),
+                                    Ui.TextButton("NoteListButton", "Список", () => PrefixSelection("- "), "compact"),
+                                    Ui.TextButton("NoteBoldButton", "Полужирный", () => ReplaceSelection("**", "**", "текст"), "compact"),
+                                    Ui.TextButton("NoteItalicButton", "Курсив", () => ReplaceSelection("*", "*", "текст"), "compact"),
                                 },
                             },
                             linkTarget,
-                            Ui.TextButton("NoteLinkButton", "Link для выделения", () =>
+                            Ui.TextButton("NoteLinkButton", "Ссылка для выделенного текста", () =>
                                 ReplaceSelection("[", $"]({(linkTarget.Text ?? "").Trim()})", "текст ссылки"), "compact"),
-                            new TextBlock { Text = "Raw Markdown" }.Classed("role-panel"),
+                            new TextBlock { Text = "Текст заметки" }.Classed("role-panel"),
                             _noteMarkdown,
                             new TextBlock { Text = "Предпросмотр заметки", TextWrapping = TextWrapping.Wrap }.Classed("role-panel"),
                             new Border { Padding = new Thickness(8), Child = preview }.Classed("group"),
@@ -6502,7 +6524,7 @@ public sealed partial class EditorView : UserControl
                             },
                         },
                     },
-                }.Classed("group"),
+                }.Classed("group")),
             },
         };
 
@@ -6515,9 +6537,9 @@ public sealed partial class EditorView : UserControl
 
     private Control BuildCheckpointsTab()
     {
-        var create = Ui.TextButton("CreateVersionButton", "Создать версию", () =>
+        var create = Ui.AsyncButton("CreateVersionButton", "Создать версию", async () =>
         {
-            _editor.CreateVersion();
+            await _editor.CreateVersionAsync();
             SyncCheckpointList();
             SyncStatus();
         }, "accent", "compact");
@@ -6532,16 +6554,17 @@ public sealed partial class EditorView : UserControl
                 new TextBlock { Text = "Версии" }.Classed("role-panel"),
                 new TextBlock
                 {
-                    Text = "Одна кнопка сохраняет состояние, время и preview. Название можно изменить позже.",
+                    Text = "Сохраните состояние карты и миниатюру. Название версии можно изменить позже.",
                     TextWrapping = TextWrapping.Wrap,
                 }.Classed("faint", "role-caption"),
                 create,
-                new TextBlock
+                new Expander { Header = "Ограничения версий", Content = new TextBlock
                 {
                     Name = "CheckpointLimitsText",
                     Text = $"До {MapCheckpointLimits.MaxCount} версий · всего до "
-                        + $"{MapCheckpointLimits.MaxTotalStoredBytes / (1024 * 1024)} MiB",
-                }.Classed("faint", "role-caption"),
+                        + $"{MapCheckpointLimits.MaxTotalStoredBytes / (1024 * 1024)} МиБ данных",
+                    TextWrapping = TextWrapping.Wrap,
+                }.Classed("faint", "role-caption") },
                 _checkpointList,
             },
         };
@@ -6956,6 +6979,7 @@ public sealed partial class EditorView : UserControl
                 _exportQualityPanel,
                 previewHost,
                 _exportEstimate,
+                new Expander { Header = "Оценка памяти и ограничения", Content = _exportMemoryDetails },
             },
         };
 
@@ -7034,7 +7058,7 @@ public sealed partial class EditorView : UserControl
     {
         foreach (var block in new[]
                  {
-                     _saveState, _autosaveState, _selectionStatus, _activeLayerStatus, _gridStatus, _viewportStatus,
+                     _saveState, _autosaveState, _selectionStatus, _activeLayerStatus, _gridStatus, _viewportStatus, _frameRateStatus,
                  })
         {
             block.Classes.Add("role-caption");
@@ -7061,7 +7085,7 @@ public sealed partial class EditorView : UserControl
             VerticalAlignment = VerticalAlignment.Center,
             Children =
             {
-                _saveState, _autosaveState, _activeLayerStatus, _selectionStatus, _gridStatus,
+                BuildStatisticsButton(), _autosaveState, _activeLayerStatus, _selectionStatus, _gridStatus,
             },
         };
         foreach (var child in left.Children)
@@ -7330,6 +7354,7 @@ public sealed partial class EditorView : UserControl
             _exportQualityText.Text = $"Качество: {_editor.ExportQuality}";
             _exportFormatExplanation.Text = _editor.ExportFormatExplanation;
             _exportEstimate.Text = _editor.ExportEstimateText;
+            _exportMemoryDetails.Text = _editor.ExportMemoryDetails;
             _exportError.Text = _editor.ExportValidationError;
             _exportError.IsVisible = _editor.ExportValidationError.Length > 0;
             _exportProgress.Value = _editor.ExportProgress * 100;
@@ -7422,6 +7447,7 @@ public sealed partial class EditorView : UserControl
         ToolTip.SetTip(_activeLayerStatus, _editor.ActiveLayerSummary);
         _gridStatus.Text = _editor.GridSummary;
         _viewportStatus.Text = _editor.ViewportStatus;
+        SyncMapStatistics();
         _inspectorError.Text = _editor.InspectorError;
         _inspectorError.IsVisible = _editor.InspectorError.Length > 0;
 
@@ -8791,6 +8817,9 @@ public sealed partial class EditorView : UserControl
 
     private void SyncNoteList()
     {
+        if (_noteSelectionEditor is not null)
+            _noteSelectionEditor.IsEnabled = _selectedNoteId is { } selected
+                && _editor.Session.Document.Notes.Any(note => note.Id == selected);
         var query = (_noteSearch.Text ?? "").Trim();
         _noteList.Children.Clear();
 
@@ -8847,7 +8876,7 @@ public sealed partial class EditorView : UserControl
                 "NoCheckpointsText",
                 MapIcons.Save,
                 "Версий пока нет",
-                "Нажмите «Создать версию», чтобы сохранить текущее состояние и preview."));
+                "Нажмите «Создать версию», чтобы сохранить текущее состояние и миниатюру."));
             return;
         }
 
@@ -8862,7 +8891,7 @@ public sealed partial class EditorView : UserControl
                     Source = preview,
                     Stretch = Stretch.Uniform,
                 };
-            AutomationProperties.SetName(previewControl, $"Preview версии {checkpoint.Name}");
+            AutomationProperties.SetName(previewControl, $"Миниатюра версии {checkpoint.Name}");
 
             var renameBox = new TextBox
             {
@@ -8931,11 +8960,12 @@ public sealed partial class EditorView : UserControl
                         {
                             Text = checkpoint.CreatedUtc.ToLocalTime().ToString("g", CultureInfo.CurrentCulture),
                         }.Classed("faint", "role-caption"),
-                        new TextBlock
+                        new Expander { Header = "Детали версии", Content = new TextBlock
                         {
-                            Text = $"Preview: {Math.Max(1, checkpoint.PreviewPng.Length / 1024)} KiB · "
+                            Text = $"Миниатюра: {Math.Max(1, checkpoint.PreviewPng.Length / 1024)} КиБ · "
                                 + $"объектов: {checkpoint.Snapshot.Layers.OfType<ObjectLayer>().Sum(layer => layer.Objects.Count)}",
-                        }.Classed("faint", "role-caption"),
+                            TextWrapping = TextWrapping.Wrap,
+                        }.Classed("faint", "role-caption") },
                         renameRow,
                         new Ui.ChoiceGrid
                         {
