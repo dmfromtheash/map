@@ -349,6 +349,7 @@ public sealed partial class EditorView : UserControl
     private TextBlock _stampToolCurrentText = null!;
     private TextBlock _stampToolAreaText = null!;
     private Image _stampToolThumbnail = null!;
+    private Button _stampCurrentAssetButton = null!;
     private ListBox _stampVariantStrip = null!;
     private ListBox _stampRecentStrip = null!;
     private ListBox _stampFavoriteStrip = null!;
@@ -6098,15 +6099,34 @@ public sealed partial class EditorView : UserControl
         var details = new StackPanel
         {
             Margin = new Thickness(8, 0, 0, 0), Spacing = 2,
+            VerticalAlignment = VerticalAlignment.Center,
             Children =
             {
                 _stampToolCurrentText,
                 _stampVariantName,
-                new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4,
-                    Children = { previous, _stampVariantCounter, next } },
             },
         };
         Grid.SetColumn(details, 1);
+        _stampCurrentAssetButton = new Button
+        {
+            Name = "StampCurrentAssetButton",
+            Padding = new Thickness(4),
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            Cursor = new Cursor(StandardCursorType.Hand),
+            Content = new Grid
+            {
+                ColumnDefinitions = new ColumnDefinitions("56,*"),
+                Children = { _stampToolThumbnail, details },
+            },
+        }.Classed("compact", "asset-entry");
+        _stampCurrentAssetButton.Click += (_, _) =>
+        {
+            if (_editor.StampPlacementMode == StampPlacementMode.Path) _editor.StartEditablePath();
+            else _editor.ArmStampPlacement();
+            _canvas.ShowPlacementPreviewAtCenter();
+            SyncContextArea();
+            _canvas.Focus();
+        };
         _stampCatalogDetails = Disclosure("StampCatalogDetails", "Варианты и быстрый доступ", new StackPanel
         {
             Spacing = 4,
@@ -6121,9 +6141,16 @@ public sealed partial class EditorView : UserControl
                 } },
             },
         }, false);
-        return new Grid
+        return new StackPanel
         {
-            ColumnDefinitions = new ColumnDefinitions("56,*"), Children = { _stampToolThumbnail, details },
+            Spacing = 4,
+            Children =
+            {
+                _stampCurrentAssetButton,
+                new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    Children = { previous, _stampVariantCounter, next } },
+            },
         };
     }
     private Button CompactStampSetButton(AssetSetSummary summary, string prefix)
@@ -6184,6 +6211,13 @@ public sealed partial class EditorView : UserControl
         _stampVariantCounter.Text = _editor.CurrentVariantLabel;
         _stampVariantName.Text = _editor.CurrentVariant?.Label ?? "Выберите вариант";
         ToolTip.SetTip(_stampVariantName, _stampVariantName.Text);
+        _stampCurrentAssetButton.IsEnabled = _editor.CurrentVariant is not null;
+        var currentAction = _editor.StampPlacementMode == StampPlacementMode.Path
+            ? "Начать новый путь" : "Разместить ещё";
+        var currentHint = _editor.CurrentVariant is null ? "Сначала выберите ассет в каталоге."
+            : $"{currentAction}: {set?.Name} · {_editor.CurrentVariant.Label}";
+        AutomationProperties.SetName(_stampCurrentAssetButton, currentHint);
+        ToolTip.SetTip(_stampCurrentAssetButton, currentHint);
         _stampToolAreaText.Text = _editor.StampAreaSummary;
         _stampToolThumbnail.Source = _thumbnails.Image(
             _editor.CurrentVariant is { } variant

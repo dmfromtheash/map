@@ -126,6 +126,8 @@ public sealed class Stage17Application : Application
     private async Task Execute()
     {
         await Settle(); _editor.ChooseGalleryVariant(_catalog.Sets[0].Id, null); await Settle();
+        if (Environment.GetEnvironmentVariable("MAP_STAGE17_CURRENT_ASSET_SMOKE") == "1")
+        { await CheckCurrentAssetCard(); return; }
         if (Environment.GetEnvironmentVariable("MAP_STAGE17_PREVIEW_SMOKE") == "1")
         { await CheckLongPathPreview(); return; }
         await Click("StampModePath");
@@ -192,6 +194,67 @@ public sealed class Stage17Application : Application
         _report.Checks["switch-to-one-releases-path-nodes"] = _editor.SelectedEditablePath is null
             && _editor.Session.Document.Layers.OfType<ObjectLayer>().Sum(l => l.Objects.Count) == countBeforeModeSwitch + 1;
         if (Environment.GetEnvironmentVariable("MAP_STAGE17_UI_ONLY") != "1") await MeasureExistingMap();
+    }
+    private async Task CheckCurrentAssetCard()
+    {
+        _editor.PlacementAutoSelect = PlacementAutoSelectPolicy.Off;
+        var variant = _editor.CurrentVariant!;
+        foreach (var (name, value) in new[] { ("FutureStampScaleSlider", 185d), ("FutureStampRotationSlider", 359d) })
+        {
+            var slider = Find<Slider>(name); slider.BringIntoView(); await Settle();
+            slider.Value = value; await Settle();
+        }
+        var card = Find<Button>("StampCurrentAssetButton");
+        _report.Checks["card-contains-image-and-name"] = card.GetVisualDescendants().OfType<Image>().Any(i => i.Source is not null)
+            && card.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Name == "StampToolCurrentText");
+        foreach (var mode in new[] { StampPlacementMode.One, StampPlacementMode.Series, StampPlacementMode.Area, StampPlacementMode.Path })
+        {
+            await Click("StampMode" + mode);
+            _editor.CancelPlacement(); await Settle();
+            var before = _editor.Session.Document; var depth = _editor.Session.UndoDepth;
+            var settings = _editor.StampToolSettings;
+            await Click("StampCurrentAssetButton");
+            _report.Checks["rearm-after-cancel-" + mode] = _editor.PendingPlacement is { CanCommit: true } pending && pending.Mode == mode
+                && _editor.CurrentVariant?.Id == variant.Id && _editor.StampToolSettings == settings
+                && ReferenceEquals(before, _editor.Session.Document) && _editor.Session.UndoDepth == depth && !_view.AssetCatalogVisible;
+            if (mode == StampPlacementMode.One)
+            {
+                Point(150, 120); await Settle();
+                var stamp = _editor.Session.Document.Layers.OfType<ObjectLayer>().SelectMany(l => l.Objects).Single();
+                _report.Checks["rearmed-one-places-current-variant"] = stamp.Stamp?.AssetSha256 == variant.Sha256
+                    && stamp.RotationDegrees == 359 && _editor.Session.UndoDepth == depth + 1;
+            }
+        }
+        Point(200, 280); Point(700, 300); await Click("FinishEditablePathButton");
+        var first = _editor.SelectedEditablePath;
+        Require(first is not null, "Current card did not create a path: " + _editor.StatusDetail);
+        _report.Checks["rearmed-path-keeps-scale-and-rotation"] = first!.ScalePercent == 185 && first.RotationDegrees == 359
+            && first.VariantId == variant.Id;
+        var firstDocument = _editor.Session.Document; var firstDepth = _editor.Session.UndoDepth;
+        var firstSettings = _editor.StampToolSettings;
+        await Click("StampCurrentAssetButton");
+        _report.Checks["card-releases-finished-path-without-changing-map"] = _editor.SelectedEditablePath is null
+            && _editor.PendingPlacement is { CanCommit: true, Mode: StampPlacementMode.Path }
+            && ReferenceEquals(firstDocument, _editor.Session.Document) && _editor.Session.UndoDepth == firstDepth
+            && _editor.StampToolSettings == firstSettings;
+        // Start exactly at an old node: reselecting the card must create a new path, not drag that node.
+        Point(first.Nodes[0].X, first.Nodes[0].Y); Point(700, 580);
+        await Click("FinishEditablePathButton");
+        _report.Checks["second-path-from-card-preserves-first"] = _editor.EditablePaths.Count == 2
+            && _editor.EditablePaths.Any(p => ReferenceEquals(first, p))
+            && _editor.SelectedEditablePath?.Id != first.Id && _editor.Session.UndoDepth == firstDepth + 1;
+        var secondDocument = _editor.Session.Document;
+        _editor.Undo(); var undone = ReferenceEquals(firstDocument, _editor.Session.Document);
+        _editor.Redo(); await Settle();
+        _report.Checks["card-created-path-undo-redo-exact"] = undone && ReferenceEquals(secondDocument, _editor.Session.Document);
+        await Click("StampCurrentAssetButton"); Point(300, 600);
+        _editor.HandleEscape(); await Settle();
+        _report.Checks["cancel-rearmed-path-keeps-finished-paths"] = !_editor.IsCreatingEditablePath
+            && ReferenceEquals(secondDocument, _editor.Session.Document) && _editor.Session.UndoDepth == firstDepth + 1;
+        await Click("StampCurrentAssetButton");
+        _report.Checks["repeated-card-selection-never-opens-catalog"] = !_view.AssetCatalogVisible
+            && _editor.PendingPlacement is { CanCommit: true, Mode: StampPlacementMode.Path };
+        _report.Screenshot = Path.ChangeExtension(Options.OutputPath, ".editor.png"); SaveVisual(_report.Screenshot);
     }
     private async Task CheckLongPathPreview()
     {
