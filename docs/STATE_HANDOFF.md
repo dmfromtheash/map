@@ -1,50 +1,77 @@
 # STATE_HANDOFF — актуальное состояние Map
 
-## Чекпоинт: полноразмерный PNG и незавершённый просмотрщик — 2026-09-06
+## Полноразмерный PNG и нативный просмотр гигантских карт — 2026-09-06
 
-**Пауза по прямому запросу владельца:** продолжить завтра, не выполнять дальнейшую реализацию
-сейчас. Никакой автоматический повторный запуск не назначен.
+**Продолжено по прямому запросу владельца; пауза снята.** Нативный PNG viewer реализован
+и проверен на существующем 15,07-ГиБ файле. Photoshop/Photos compatibility не объявляется
+готовой: пользовательский отказ подтверждён ранее, новая попытка в этих программах не делалась.
 
-Ветка `codex/stage-16-final-offline-parity`, root
+Ветка `codex/stage-16-final-offline-parity`, продуктовый root
 `C:/Users/Leshe/.codex/worktrees/stage10f-fonts-bindings/Map`.
-Последний код: `6f4e3a99c2745360093d7c26ce35460cbff0f802` — **WIP backend просмотрщика**;
-предыдущий `ee5f335` — реализованный и проверенный полноразмерный PNG.
-Начало этого продолжения: чистый `4dd81d5ad513e8fdc76cc969ad1cfac8d07da5d7`.
+Последний production HEAD: `fa95f45b2265d1fd3f98c4d3a3473a6134a77cd6` — native tiled PNG viewer.
+Предыдущий `0f6ec00bf657acb0dd66b65261ab2f905a3383c7` — исправление missing-assets overview;
+полноразмерный PNG writer — `ee5f335de4c080b3b998bfbe0d2c8c5a657bc6c5`.
+Начало этого продолжения: чистый `a9a5e3001210de917b54c531c598b5b216d84f77`.
+Окончательный документационный HEAD и чистота — в внешнем CHECKPOINT_STATE.json ниже.
 
-**FACT:** один PNG 131072×131072 без уменьшения карты 1048576 objects успешно записан:
-23 мин 17 с, 16178815340 bytes (15,07 ГиБ), export peak private 1,72 ГиБ, средний CPU 4,90%
-от 16 потоков. Крупнейшая поверхность 2100×564; full-image bitmap не создавался.
-Независимо прочитаны все строки и проверены CRC/zlib. Фрагмент отличается от отдельного
-1:1 экспорта максимум на 1/255; битовая идентичность не заявляется. Source SHA неизменен.
-PNG по умолчанию минимум 1:1; 2×/4× рендерят исходную сцену; JPEG/WebP/tile package сохранены.
+**FACT:** исходный PNG 131072² / 17 179 869 184 pixels / 1 048 576 objects записан без
+уменьшения за 23 мин 17 с, 16 178 815 340 bytes, export peak private 1,72 ГиБ, CPU mean 4,90%.
+Независимо прочитаны все строки и проверены CRC/zlib. Полный bitmap при записи не создаётся.
+Исходный .mapproj сохранён; новый PNG writer не отменяет прежние JPEG/WebP/tile-package routes.
 
-20 уникальных адресных export cases имеют последний PASS (не full suite), native UI 8/8.
-Native миллионная карта → регион 32768²: 6/6, 63,488 с, peak private во время экспорта 1,97 ГиБ;
-UI heartbeat P95 65 мс, max 83 мс. **Но общий private peak всего native запуска 9,02 ГиБ**,
-его фаза не размечена. Найти источник скачка; память записи нельзя выдавать за весь сценарий.
-Финальная Release-сборка после WIP: 0 errors, прежний CS0618 warning в MainWindow.
+**FACT — viewer:** «Ещё» → «Просмотр PNG…» на главной; «Просмотреть в Map» после PNG-экспорта.
+Нативное окно Blue Atlas: pan/zoom, fit, 1:1, прогресс/отмена, загрузка видимых тайлов с
+одним decoder и 128 МиБ LRU декодированных пикселей. RGB/RGBA8 non-interlaced reader,
+streaming подготовка пирамиды, level zero сохраняет исходные пиксели; новый renderer/Core
+или изменение .mapproj для просмотра не требуются. Другие PNG variants явно ограничены.
 
-**WIP:** владелец показал отказ Windows Photos, сообщил о RAM error Photoshop и явно поручил
-добавить просмотр гигантского PNG в Map. `PngPixelReader` и `PngTilePyramid` собраны, но ещё
-не тестировались и не подключены к UI. Native viewer/pan/zoom/visible-tile LRU отсутствуют.
-Следующее: backend tests и фазовая память, затем нативный просмотр с ограниченной загрузкой,
-подготовка и проверка уже существующего 15-ГиБ PNG. Сам PNG валиден; 64-ГиБ распакованное
-изображение не открылось в указанных внешних программах. Не объявлять просмотр готовым.
+Подготовка всего 131072² PNG: 30 мин 57 с, private peak 182,52 МиБ, CPU mean 4,55%;
+8 уровней / 20,61 ГиБ на диске. Готовый кэш перенесён в штатный
+C:/Users/Leshe/AppData/Local/Map/ImageViewCache/c294eb31797f556ab5c95d5fb884e5ecfdc7a13ee9053cfd51efb013fc756135.
+Повторное открытие в настоящем окне: 8,55 с; whole-process private peak 284,31 МиБ,
+viewer checks 5/5, heartbeat P95 70,28 / max 251,91 мс. Независимо собранный из четырёх
+тайлов фрагмент 1024² точно совпал с тем же участком полного PNG.
 
-По поручению о трёх папках вспомогательные каталоги перемещены в
-`C:/Projects/Map/_local/ResearchLab` и `C:/Projects/Map/_local/Stage10E-Review-Oracle`.
-Содержимое и 15 upstream Git histories сохранены; `_local` локально исключён из Git.
-Manifest лаборатории и Stage16 spec обновлены. Продуктовый worktree и основной Git root
-не переносились; старый `C:/Projects/Map` всё ещё на 9729764.
+**FACT — память и стабильность:** старый native harness не передавал assetCatalog, поэтому
+рендерил миллион missing placeholders. Далёкий обзор ошибочно отправлял каждый в detailed
+dashed path. Исправлены ограниченное агрегированное предупреждение и освобождение эффекта.
+Приближение, selected outline и missing count сохранены. Фазовый degraded-case до изменения
+превысил 4 ГиБ; после preview готов при peak 2,07 ГиБ. Старый общий 9,02-ГиБ результат
+не является памятью PNG writer и не используется как строгий парный baseline.
 
-Все подробные цифры, точные пути, ограничения и следующий порядок работы:
-[EXPORT_CHECKPOINT.md](C:/Users/Leshe/Documents/Codex/2026-09-05/map-full-audit/2026-09-05-readiness-result/full-resolution-png-2026-09-06/EXPORT_CHECKPOINT.md).
-Финальный HEAD/коммиты/состояние — соседний `CHECKPOINT_STATE.json`.
-Этот checkpoint приоритетнее исторических разделов ниже. Старый общий аудит остаётся 85%
-(88,5 балла), строгие F04/CPU-GPU/shared-budget gates не объявляются закрытыми. Новые ассеты
-отложены владельцем. Push не разрешён и не выполнялся.
+Исправленный harness с реальными встроенными ассетами: native export 32768² из области
+16384² при 2×, 6/6 PASS, 68,97 с, **весь процесс peak private 2,04 ГиБ**; UI heartbeat
+P95 64,66 / max 109,12 мс, документ/SHA неизменны. Дополнительно устранена гонка обновления
+текстовых полей экспортного региона при refresh. Отдельный 16K-фрагмент 1:1:
+16,88 с / 253 107 838 bytes / 16 653 object bounds в области, full Skia decode PASS.
+Его открытие непосредственно в Photoshop не проверялось.
 
-Дата итоговой локальной проверки: 2026-09-06.
+Проверки этого продолжения: 5 PNG reader/pyramid cases + 4 rendering cases имеют последний
+PASS; финальная Release-сборка 0 errors, 1 прежнее CS0618 MainWindow warning.
+Один новый test сначала выбрал detail scale вместо overview; исправлен только тест и
+повторён только этот case. Full suite не запускался. QA-снимки отдельно исключены из
+heartbeat; собственные native окна не активировались, системный ввод не использовался.
+
+**Следующий возможный шаг для Photoshop — PROPOSED:** потоковый PSB adapter поверх текущего
+renderer, затем настоящие 16K→32K→64K→131072 open/save прогоны при достаточном scratch disk.
+PSB до 300000 px/сторону покрывает текущий giant. Один RGBA8 bitmap 131072² требует 64 ГиБ,
+RGB8 — 48 ГиБ; уменьшение PNG-файла не уменьшает эту потребность. При замере свободно
+56,58 ГиБ на C:, поэтому giant Photoshop acceptance сейчас не обещается. PSB не реализован.
+Для обычного открытия 8K–16K — расчётный ориентир, не проверенный универсальный лимит.
+
+По предыдущему поручению о папках вспомогательные каталоги уже находятся в
+C:/Projects/Map/_local/ResearchLab и C:/Projects/Map/_local/Stage10E-Review-Oracle.
+Продуктовый worktree и основной Git root не переносились.
+
+Подробный отчёт, расчёты, реальные снимки, точные файлы и этапы:
+[VIEWER_AND_COMPATIBILITY_REPORT.md](C:/Users/Leshe/Documents/Codex/2026-09-05/map-full-audit/2026-09-05-readiness-result/full-resolution-png-2026-09-06/VIEWER_AND_COMPATIBILITY_REPORT.md).
+Актуальный checkpoint: [EXPORT_CHECKPOINT.md](C:/Users/Leshe/Documents/Codex/2026-09-05/map-full-audit/2026-09-05-readiness-result/full-resolution-png-2026-09-06/EXPORT_CHECKPOINT.md);
+окончательный HEAD/коммиты — соседний CHECKPOINT_STATE.json.
+
+Этот раздел приоритетнее исторических записей ниже. Общий строгий аудит остаётся 85%
+(88,5 балла): F04 задержки, numerical CPU/GPU parity и общий shared-budget не закрыты
+работой над viewer/export. Новые ассеты отложены. Все новые commits локальные, push не делался.
+
 
 ## Технические исправления и статистика карты — 2026-09-06
 
