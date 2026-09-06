@@ -7,6 +7,30 @@ namespace Map.Rendering.Tests;
 public sealed class OverviewLifetimeTests
 {
     [Fact]
+    public void Dense_missing_stamps_keep_a_visible_overview_without_a_dashed_path_per_object()
+    {
+        var stamps = Enumerable.Range(0, 20000).Select(i => new SceneObject(ObjectId.New(), SceneObjectKind.Stamp,
+            "missing", (i % 200) * 32, (i / 200) * 32, 16, 16, 0, "#FFFFFFFF", "#00000000", 0, true, false)
+            { Stamp = new StampStyle(new string('a', 64)) }).ToArray();
+        var document = new MapDocument(DocumentId.New(), "missing", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(8192, 8192, "px", "#FFFFFFFF"),
+            [new BaseColorLayer(LayerId.New(), "base", true, false, 1, "#FFFFFFFF"),
+                new ObjectLayer(LayerId.New(), "missing", true, false, 1, stamps)]);
+        using var surface = SKSurface.Create(new SKImageInfo(256, 256))!;
+        using var cache = new ObjectOverviewCache();
+        surface.Canvas.Scale(1f / 64);
+        var options = new RenderOptions { ViewScale = 1d / 64, VisibleWorld = new(0, 0, 8192, 8192),
+            LodTier = RenderLodTier.Overview, ObjectCache = cache, Stats = new(), SelectedObjectId = stamps[0].Id };
+        SceneRenderer.Render(surface.Canvas, document, options);
+        Assert.Equal(20000, options.Stats.MissingAssets);
+        Assert.Equal(20000, options.Stats.OverviewObjects);
+        Assert.Equal(1, options.Stats.ExactObjects);
+        using var snapshot = surface.Snapshot();
+        using var rendered = SKBitmap.FromImage(snapshot);
+        Assert.NotEqual(SKColors.White, rendered.GetPixel(10, 10));
+    }
+
+    [Fact]
     public void Oversized_new_image_and_invalidated_frame_images_live_until_the_frame_finishes()
     {
         using var cache = new ObjectOverviewCache(1, 1024);

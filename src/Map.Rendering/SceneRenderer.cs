@@ -1997,13 +1997,14 @@ public static class SceneRenderer
                 Color = new SKColor(255, 90, 90, (byte)(objectAlpha / 4)),
                 IsAntialias = true,
             };
+            using var placeholderDash = SKPathEffect.CreateDash([8, 6], 0);
             using var placeholderEdge = new SKPaint
             {
                 Color = new SKColor(255, 90, 90, objectAlpha),
                 IsAntialias = true,
                 Style = SKPaintStyle.Stroke,
                 StrokeWidth = Math.Max(1f, rect.Width / 64),
-                PathEffect = SKPathEffect.CreateDash([8, 6], 0),
+                PathEffect = placeholderDash,
             };
 
             canvas.DrawRect(rect, placeholderFill);
@@ -2539,6 +2540,7 @@ public static class SceneRenderer
         var overviewObjects = 0;
         var overviewChunks = 0;
         var overviewBatches = 0;
+        var overviewMissing = 0;
 
         for (var chunkY = minY; chunkY <= maxY; chunkY++)
         {
@@ -2552,6 +2554,7 @@ public static class SceneRenderer
                 overviewChunks++;
                 overviewObjects += variant.OverviewObjectCount;
                 overviewBatches += variant.BatchCount;
+                overviewMissing += variant.MissingCount;
                 var cached = cache.GetOrCreate(
                     layer.Id,
                     chunkX,
@@ -2602,6 +2605,9 @@ public static class SceneRenderer
 
         foreach (var sceneObject in exact.Values.OrderBy(item => item.Sublayer))
         {
+            if (sceneObject.Stamp is { } missing && !colors.ContainsKey(missing.AssetSha256)
+                && Math.Max(sceneObject.Width, sceneObject.Height) * bucketScale < OverviewExactScreenSize)
+                overviewMissing--;
             DrawObject(canvas, sceneObject, document.StampForeground, options);
             options.Stats?.RecordExactObject(sceneObject);
         }
@@ -2611,6 +2617,7 @@ public static class SceneRenderer
             stats.ObjectCandidates += overviewObjects + exact.Count;
             stats.ObjectsDrawn += overviewObjects + exact.Count;
             stats.OverviewObjects += overviewObjects;
+            stats.MissingAssets += Math.Max(0, overviewMissing);
             stats.OverviewChunks += overviewChunks;
             stats.OverviewBatches += overviewBatches;
             stats.ExactObjects += exact.Count;
@@ -2708,12 +2715,13 @@ public static class SceneRenderer
             var exact = new List<SceneObject>();
             var hash = 14_695_981_039_346_656_037UL;
             var overviewCount = 0;
+            var missingCount = 0;
             foreach (var sceneObject in Objects.Values.OrderBy(o => o.Sublayer))
             {
                 hash = HashObject(hash, sceneObject);
                 if (Math.Max(sceneObject.Width, sceneObject.Height) * bucketScale >= OverviewExactScreenSize
                     || sceneObject.Stamp is { } detailStamp &&
-                    (!colors.ContainsKey(detailStamp.AssetSha256) || detailStamp is not
+                    (colors.ContainsKey(detailStamp.AssetSha256) && detailStamp is not
                         { Blur: 0, ShadowOpacity: 0, ClipMaskEnabled: false, Blend: "Normal", Hue: 0,
                           Saturation: 0, Brightness: 0, Contrast: 0 }))
                 {
@@ -2722,6 +2730,7 @@ public static class SceneRenderer
                 }
 
                 overviewCount++;
+                if (sceneObject.Stamp is { } absent && !colors.ContainsKey(absent.AssetSha256)) missingCount++;
                 var color = sceneObject.Stamp is { } stamp && colors.TryGetValue(stamp.AssetSha256, out var tint)
                     ? tint.WithScaledAlpha(Alpha(sceneObject.ObjectOpacity)) : OverviewColor(sceneObject);
                 hash = (hash ^ (uint)color.GetHashCode()) * 1_099_511_628_211UL;
@@ -2746,7 +2755,8 @@ public static class SceneRenderer
                 bucketScale,
                 immutableBatches,
                 exact,
-                overviewCount);
+                overviewCount,
+                missingCount);
             if (_variants.Count >= 4) _variants.Clear();
             _variants.Add((zoomBucket, tintRevision), variant);
             return variant;
@@ -2760,11 +2770,13 @@ public static class SceneRenderer
         double bucketScale,
         IReadOnlyList<OverviewBatch> batches,
         IReadOnlyList<SceneObject> exactObjects,
-        int overviewObjectCount)
+        int overviewObjectCount,
+        int missingCount)
     {
         public ulong ContentHash { get; } = contentHash;
         public IReadOnlyList<SceneObject> ExactObjects { get; } = exactObjects;
         public int OverviewObjectCount { get; } = overviewObjectCount;
+        public int MissingCount { get; } = missingCount;
         public int BatchCount => batches.Count;
         public SKRect Bounds => bounds;
 
