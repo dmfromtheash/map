@@ -36,6 +36,25 @@ public sealed partial class EditorViewModel
         }
     }
     public bool IsCreatingEditableArea => _areaCreating;
+    public bool CanPlaceEditableArea => _areaCreating && _areaDraft is { Nodes.Length: >= 3 } && _areaPreviewError is null;
+    public string EditableAreaPlacementHint
+    {
+        get
+        {
+            if (_areaCreating)
+                return _areaPreviewError ?? (_areaDraft is { Nodes.Length: >= 3 }
+                    ? "Граница готова. Нажмите «Разместить». Enter — разместить · Esc — отменить."
+                    : $"Вершин: {_areaDraft?.Nodes.Length ?? 0} из 3. Добавьте вершины кликами по холсту.");
+            if (!_areaStartRequested && PendingPlacement is not { Mode: StampPlacementMode.FillArea }
+                && SelectedEditableArea is { } area)
+                return area.MemberCount > 0
+                    ? $"Размещено объектов: {area.MemberCount}. Границу можно редактировать. Для ещё одной области нажмите «Новая редактируемая область»."
+                    : area.Density == 0
+                        ? "Область создана пустой: плотность равна 0. Увеличьте плотность, чтобы разместить объекты."
+                        : "Область создана, но объекты не поместились. Увеличьте область или плотность, уменьшите масштаб либо выберите свободное место.";
+            return "Обозначьте область кликами по холсту: нужны минимум 3 вершины. Затем нажмите «Разместить».";
+        }
+    }
     public PlacementArea? CurrentAreaSource => StampPlacementMode == StampPlacementMode.FillArea
         ? _areaDraft ?? SelectedEditableArea ?? _newAreaTemplate : null;
     public bool HasAreaGesture => _areaDraft is not null;
@@ -47,7 +66,7 @@ public sealed partial class EditorViewModel
         && PlacementAreaOwnership.Owner(Session.Document, id) is not null;
     public string EditableAreaSummary => DisplayedEditableArea is { } p
         ? _areaCreating
-            ? $"{p.Name} · вершин: {p.Nodes.Length} · предпросмотр: {_areaPreviewObjects.Count} шт. {_areaPreviewError ?? "Enter — заполнить всю область."}"
+            ? $"{p.Name} · вершин: {p.Nodes.Length} · предпросмотр: {_areaPreviewObjects.Count} шт."
             : $"{p.Name} · вершин: {p.Nodes.Length} · объектов: {p.MemberCount} · исключений: {p.Exclusions.Count}"
         : "Выберите изображение или набор, затем создайте область кликами по холсту.";
 
@@ -60,7 +79,7 @@ public sealed partial class EditorViewModel
         DeselectObject();
         ArmStampPlacement();
         _areaStartRequested = true;
-        StatusDetail = "Область: ставьте вершины кликами; «Завершить область» или Enter — сохранить, Esc — отменить.";
+        StatusDetail = "Область: ставьте вершины кликами; «Разместить» внизу панели или Enter — заполнить, Esc — отменить.";
         RaiseAreaState();
     }
 
@@ -118,6 +137,7 @@ public sealed partial class EditorViewModel
     {
         if (!_areaCreating || _areaDraft is not { Nodes.Length: >= 3 } draft)
         { StatusDetail = "Для области нужны хотя бы три разных вершины."; return false; }
+        if (_areaPreviewError is not null) { StatusDetail = _areaPreviewError; return false; }
         var (layer, create) = EnsureObjectLayer();
         if (layer is null) { StatusDetail = NoUsableObjectLayer; return false; }
         var command = new PlacementAreaCommand(layer.Id, draft.Id, draft, "Создать редактируемую область", _areaAssets);
@@ -129,7 +149,7 @@ public sealed partial class EditorViewModel
         LastAreaChangedObjects = command.ChangedObjects; LastAreaVisitedCells = command.VisitedCells;
         LastAreaChangedCells = command.ChangedCells;
         AfterEdit(); RaiseAreaState();
-        StatusDetail = "Область создана. Перетаскивайте вершины; плотность и seed доступны ниже. Для ручной правки отделите штамп.";
+        StatusDetail = EditableAreaPlacementHint;
         return true;
     }
 
@@ -348,6 +368,7 @@ public sealed partial class EditorViewModel
     {
         Raise(nameof(EditableAreas)); Raise(nameof(SelectedEditableArea)); Raise(nameof(EditableAreaSummary));
         Raise(nameof(IsCreatingEditableArea)); Raise(nameof(CanDetachAreaObject));
+        Raise(nameof(CanPlaceEditableArea)); Raise(nameof(EditableAreaPlacementHint));
         InvalidateScene(EditorChangeReason.CanvasInvalidation);
     }
     private string NextAreaName(string assetName)

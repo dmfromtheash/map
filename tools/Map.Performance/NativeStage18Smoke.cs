@@ -44,6 +44,7 @@ internal sealed class NativeStage18Report
     public double? MeasurementEditX { get; set; }
     public int? OverlappingPairs { get; set; }
     public string? Screenshot { get; set; }
+    public string? PlacementDraftScreenshot { get; set; }
     public string? SavedProject { get; set; }
     public string? SaveOutcome { get; set; }
     public string? Failure { get; set; }
@@ -252,11 +253,35 @@ public sealed class Stage18Application : Application
             && units.Text!.StartsWith("До указанного числа объектов", StringComparison.Ordinal);
         _report.Checks["density-changes-without-catalog"] = _editor.SelectedEditableArea!.Density == 5 && _catalog.Sets.Count == 0;
         var scale = Find<Slider>("FutureStampScaleSlider"); scale.BringIntoView(); await Settle(); scale.Value = 65;
-        await Click("StampCurrentAssetButton"); Point(120, 100); Point(330, 100); Point(330, 300);
+        await Click("StampCurrentAssetButton");
+        var place = Find<Button>("FinishEditableAreaButton");
+        var hint = Find<TextBlock>("EditableAreaPlacementHint");
+        var draftStart = _editor.Session.Document; var draftDepth = _editor.Session.UndoDepth;
+        _report.Checks["place-button-visible-before-outline"] = place.IsEffectivelyVisible && !place.IsEnabled
+            && Avalonia.Automation.AutomationProperties.GetName(place) == "Разместить" && hint.Text!.Contains("3 вершины");
+        Point(50, 50); Point(950, 50); await Settle();
+        _report.Checks["place-button-waits-for-three-vertices"] = !place.IsEnabled && hint.Text!.Contains("2 из 3");
+        Point(950, 720); Point(500, 520); Point(50, 720); await Settle();
+        var preview = _editor.PlacementPreviewObjects.ToArray();
+        _report.Checks["ready-outline-remains-preview-until-place"] = place.IsEnabled
+            && ReferenceEquals(draftStart, _editor.Session.Document) && draftDepth == _editor.Session.UndoDepth && preview.Length > 0;
+        var placePosition = place.TranslatePoint(default, _view);
+        scale.BringIntoView(); await Settle();
+        _report.Checks["place-button-stays-onscreen-when-settings-scroll"] = place.IsEffectivelyVisible
+            && placePosition is { Y: > 0 } position && position.Y + place.Bounds.Height <= _view.Bounds.Height
+            && place.TranslatePoint(default, _view) == placePosition && !place.GetVisualAncestors().OfType<ScrollViewer>().Any();
+        Find<Control>("EditableAreaSummary").BringIntoView(); await Settle();
+        _report.PlacementDraftScreenshot = Path.ChangeExtension(Options.OutputPath, ".draft.png"); SaveVisual(_report.PlacementDraftScreenshot);
         await Click("FinishEditableAreaButton");
         _report.Checks["new-area-uses-current-controls-and-frozen-images"] = _editor.EditableAreas.Count == 2
             && _editor.SelectedEditableArea!.ScalePercent == 65
             && _editor.EditableAreas.Single(a => a.Id == original.Id).ScalePercent == original.ScalePercent;
+        _report.Checks["place-click-creates-visible-objects-in-one-undo-step"] = _editor.SelectedEditableArea is { MemberCount: > 0 }
+            && _editor.Session.UndoDepth == draftDepth + 1 && !place.IsEnabled && hint.Text!.StartsWith("Размещено объектов:", StringComparison.Ordinal)
+            && preview.All(o => o == DocumentEditor.FindObject(_editor.Session.Document, o.Id));
+        var placed = _editor.Session.Document; _editor.Undo();
+        var restored = ReferenceEquals(draftStart, _editor.Session.Document); _editor.Redo();
+        _report.Checks["place-click-undo-redo-exact"] = restored && ReferenceEquals(placed, _editor.Session.Document);
         var saved = _editor.Session.Document; var depth = _editor.Session.UndoDepth;
         await Click("StampCurrentAssetButton"); Point(200, 200); _editor.HandleEscape(); await Settle();
         _report.Checks["current-card-cancel-preserves-history"] = ReferenceEquals(saved, _editor.Session.Document)

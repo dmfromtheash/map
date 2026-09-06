@@ -12,6 +12,8 @@ public sealed partial class EditorView
     private ComboBox? _fillAreaPicker;
     private TextBlock? _fillAreaSummary;
     private Control? _fillAreaPanel;
+    private Control? _fillAreaPlacementActions;
+    private TextBlock? _fillAreaPlacementHint;
     private Button? _fillAreaFinish, _fillAreaDetach;
     private Button? _fillAreaRemoveOverlaps;
     private bool _syncingAreas;
@@ -27,7 +29,6 @@ public sealed partial class EditorView
             if (!_syncingAreas && _fillAreaPicker.SelectedItem is AreaChoice item) _editor.SelectEditableArea(item.Id);
         };
         _fillAreaSummary = new TextBlock { Name = "EditableAreaSummary", TextWrapping = TextWrapping.Wrap };
-        _fillAreaFinish = Ui.TextButton("FinishEditableAreaButton", "Завершить область", () => _editor.FinishEditableArea(), "compact");
         _fillAreaDetach = Ui.TextButton("DetachAreaObjectButton", "Отделить выбранный объект", _editor.DetachSelectedAreaObject, "compact");
         _fillAreaRemoveOverlaps = Ui.TextButton("RemoveEditableAreaOverlapsButton", "Разместить без наложений", _editor.RemoveEditableAreaOverlaps, "compact");
         _fillAreaPanel = new StackPanel
@@ -37,8 +38,7 @@ public sealed partial class EditorView
                 _fillAreaPicker, _fillAreaSummary,
                 Ui.TextButton("StartEditableAreaButton", "Новая редактируемая область", _editor.StartEditableArea, "compact"),
                 _fillAreaRemoveOverlaps,
-                _fillAreaFinish,
-                new TextBlock { Text = "Клики — вершины · Enter — заполнить · Esc — отменить. Центр изображения внутри границы; края не обрезаются. Предпросмотр выборочный, до 64 штампов в изменяемой части.", TextWrapping = TextWrapping.Wrap }.Classed("faint", "role-caption"),
+                new TextBlock { Text = "Клики — вершины · кнопка «Разместить» внизу — заполнить · Esc — отменить. Центр изображения внутри границы; края не обрезаются. Предпросмотр выборочный, до 64 штампов в изменяемой части.", TextWrapping = TextWrapping.Wrap }.Classed("faint", "role-caption"),
                 AppearanceNumberBox("EditableAreaDensityBox", "Плотность", null, () => _editor.DisplayedEditableArea?.Density ?? _editor.StampDensity, _editor.SetEditableAreaDensity),
                 new TextBlock { Name = "EditableAreaDensityUnits", Text = "До указанного числа объектов на 10 000 квадратных единиц карты. Размер изображений и промежутки ограничивают заполнение.", TextWrapping = TextWrapping.Wrap }.Classed("faint", "role-caption"),
                 AppearanceNumberBox("EditableAreaSeedBox", "Seed", null, () => _editor.DisplayedEditableArea?.Seed, _editor.SetEditableAreaSeed),
@@ -54,6 +54,21 @@ public sealed partial class EditorView
         return _fillAreaPanel;
     }
 
+    private Control BuildEditableAreaPlacementActions()
+    {
+        _fillAreaFinish = Ui.TextButton("FinishEditableAreaButton", "Разместить", () => _editor.FinishEditableArea(), "primary");
+        _fillAreaFinish.HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch;
+        _fillAreaPlacementHint = new TextBlock { Name = "EditableAreaPlacementHint", TextWrapping = TextWrapping.Wrap }
+            .Classed("faint", "role-caption");
+        // The commit action stays outside the scrolling settings, including before the first vertex.
+        _fillAreaPlacementActions = new Border
+        {
+            Name = "EditableAreaPlacementActions", IsVisible = false, Padding = new Avalonia.Thickness(12, 8, 12, 12),
+            Child = new StackPanel { Spacing = 8, Children = { _fillAreaPlacementHint, _fillAreaFinish } },
+        };
+        return _fillAreaPlacementActions;
+    }
+
     private void SyncEditableAreaPanel()
     {
         if (_fillAreaPanel is null || _fillAreaPicker is null || _fillAreaSummary is null) return;
@@ -66,7 +81,13 @@ public sealed partial class EditorView
             _fillAreaPicker.SelectedItem = choices.FirstOrDefault(p => p.Id == _editor.SelectedEditableArea?.Id);
             _fillAreaSummary.Text = _editor.EditableAreaSummary;
             _stampGestureBlock.IsVisible = _editor.SelectedSet is not null || _editor.SelectedEditablePath is not null || _editor.CurrentAreaSource is not null;
-            _fillAreaFinish!.IsVisible = _editor.IsCreatingEditableArea;
+            if (_fillAreaPlacementActions is not null)
+            {
+                _fillAreaPlacementActions.IsVisible = _editor.ActiveTool == Map.Presentation.ViewModels.EditorTool.Stamp
+                    && _editor.StampPlacementMode == Map.Presentation.ViewModels.StampPlacementMode.FillArea;
+                _fillAreaFinish!.IsEnabled = _editor.CanPlaceEditableArea;
+                _fillAreaPlacementHint!.Text = _editor.EditableAreaPlacementHint;
+            }
             _fillAreaRemoveOverlaps!.IsVisible = _editor.SelectedEditableArea is { LayoutVersion: 0 };
             _fillAreaDetach!.IsEnabled = _editor.CanDetachAreaObject;
             _fillAreaPanel.IsVisible = _editor.StampPlacementMode == Map.Presentation.ViewModels.StampPlacementMode.FillArea

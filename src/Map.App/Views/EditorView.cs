@@ -1372,6 +1372,7 @@ public sealed partial class EditorView : UserControl
             {
                 header.Docked(Dock.Top),
                 new Border { Padding = new Thickness(8, 4), Child = _contextSwitch }.Docked(Dock.Top),
+                BuildEditableAreaPlacementActions().Docked(Dock.Bottom),
                 _contextBody,
             } },
         }.Classed("context-panel").Named("ContextPanel");

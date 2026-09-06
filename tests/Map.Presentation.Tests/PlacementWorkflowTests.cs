@@ -14,11 +14,17 @@ public sealed class PlacementWorkflowTests : IDisposable
         var editor = Editor(out _); var router = new CanvasInputRouter(editor);
         editor.StampDensity = 3; editor.SetStampScalePercent(35); editor.StartEditableArea();
         var original = editor.Session.Document;
+        Assert.False(editor.CanPlaceEditableArea);
         void Point(double x, double y) { router.Press(CanvasPointerButton.Left, x, y); router.Release(x, y); }
-        Point(100, 100); Point(800, 100); Point(800, 600); Point(450, 400); Point(100, 600);
+        Point(100, 100); Point(800, 100);
+        Assert.False(editor.CanPlaceEditableArea);
+        Assert.False(editor.FinishEditableArea()); Assert.Same(original, editor.Session.Document);
+        Point(800, 600); Point(450, 400); Point(100, 600);
+        Assert.True(editor.CanPlaceEditableArea);
         Assert.True(editor.HasTransientEditorAction); Assert.Same(original, editor.Session.Document);
         var preview = editor.PlacementPreviewObjects.ToArray(); Assert.NotEmpty(preview);
         Assert.True(editor.FinishEditableArea(), editor.StatusDetail);
+        Assert.False(editor.CanPlaceEditableArea); Assert.Contains("Размещено объектов:", editor.StatusDetail);
         Assert.Equal(1, editor.Session.UndoDepth);
         foreach (var item in preview) Assert.Equal(item, Map.Core.Editing.DocumentEditor.FindObject(editor.Session.Document, item.Id));
         var created = editor.Session.Document; var area = editor.SelectedEditableArea!;
@@ -46,6 +52,22 @@ public sealed class PlacementWorkflowTests : IDisposable
         Assert.Equal(70, editor.EditableAreas.Single(a => a.Id == area.Id).ScalePercent);
         var count = Objects(editor).Length; editor.StampPlacementMode = StampPlacementMode.One; Point(100, 100);
         Assert.Null(editor.SelectedEditableArea); Assert.Equal(count + 1, Objects(editor).Length);
+    }
+
+    [Fact]
+    public void Stage18_invalid_outline_cannot_place_and_empty_result_explains_density()
+    {
+        var editor = Editor(out _); editor.StartEditableArea();
+        var original = editor.Session.Document;
+        editor.AddEditableAreaNode(100, 100); editor.AddEditableAreaNode(400, 100); editor.AddEditableAreaNode(700, 100);
+        Assert.False(editor.CanPlaceEditableArea); Assert.False(editor.FinishEditableArea());
+        Assert.Same(original, editor.Session.Document); Assert.Equal(0, editor.Session.UndoDepth);
+        Assert.Equal(editor.StatusDetail, editor.EditableAreaPlacementHint);
+        editor.DeleteEditableAreaNode(); editor.AddEditableAreaNode(400, 500); editor.SetEditableAreaDensity(0);
+        Assert.True(editor.CanPlaceEditableArea); Assert.True(editor.FinishEditableArea(), editor.StatusDetail);
+        Assert.Equal(1, editor.Session.UndoDepth); Assert.Equal(0, editor.SelectedEditableArea!.MemberCount);
+        Assert.Contains("плотность равна 0", editor.EditableAreaPlacementHint);
+        editor.Undo(); Assert.Same(original, editor.Session.Document);
     }
 
     [Fact]
