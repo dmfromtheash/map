@@ -2434,9 +2434,11 @@ public sealed partial class EditorViewModel : ViewModelBase
         {
             if (_stampToolSettings.Mode != value && Enum.IsDefined(value))
             {
+                var leavingPath = _selectedPathId is not null && value != StampPlacementMode.Path;
                 CancelEditablePathGesture();
                 CancelStampSeries();
                 _stampToolSettings = _stampToolSettings with { Mode = value };
+                if (leavingPath) { _selectedPathId = null; ArmStampPlacement(); RaisePathState(); }
                 Raise();
                 Raise(nameof(PlannedStampCount));
                 Raise(nameof(StampAreaSummary));

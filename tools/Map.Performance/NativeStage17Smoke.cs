@@ -182,6 +182,13 @@ public sealed class Stage17Application : Application
         using (var bitmap = SKBitmap.Decode(Path.Combine(_workspace, "path-export.png")))
             _report.Checks["native-export-control-full-size"] = bitmap is { Width: 1024, Height: 768 };
         _view.CloseAuxiliaryWindowsForSmoke();
+        _editor.ChooseGalleryVariant(_catalog.Sets[0].Id, null, armPlacement: false);
+        var pathBeforeModeSwitch = _editor.SelectedEditablePath!;
+        var countBeforeModeSwitch = _editor.Session.Document.Layers.OfType<ObjectLayer>().Sum(l => l.Objects.Count);
+        await Click("StampModeOne");
+        Point(pathBeforeModeSwitch.Nodes[0].X, pathBeforeModeSwitch.Nodes[0].Y); await Settle();
+        _report.Checks["switch-to-one-releases-path-nodes"] = _editor.SelectedEditablePath is null
+            && _editor.Session.Document.Layers.OfType<ObjectLayer>().Sum(l => l.Objects.Count) == countBeforeModeSwitch + 1;
         if (Environment.GetEnvironmentVariable("MAP_STAGE17_UI_ONLY") != "1") await MeasureExistingMap();
     }
     private async Task MeasureExistingMap()

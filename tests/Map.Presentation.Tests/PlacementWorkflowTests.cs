@@ -43,6 +43,12 @@ public sealed class PlacementWorkflowTests : IDisposable
         Assert.Equal(25, editor.SelectedEditablePath.RotationDegrees);
         editor.Undo(); Assert.Equal(100, editor.StampScalePercent);
         editor.Redo(); Assert.Equal(130, editor.StampScalePercent);
+        var previousCount = Objects(editor).Length;
+        editor.StampPlacementMode = StampPlacementMode.One;
+        Assert.Null(editor.SelectedEditablePath);
+        router.Press(CanvasPointerButton.Left, 100, 100); router.Release(100, 100);
+        Assert.Equal(previousCount + 1, Objects(editor).Length);
+        Assert.False(editor.IsDraggingPathNode);
     }
 
     private readonly string _root = Path.Combine(Path.GetTempPath(), "map-placement-test-" + Guid.NewGuid().ToString("N"));
