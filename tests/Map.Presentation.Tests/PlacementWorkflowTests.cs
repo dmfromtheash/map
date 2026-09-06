@@ -9,6 +9,48 @@ namespace Map.Presentation.Tests;
 public sealed class PlacementWorkflowTests : IDisposable
 {
     [Fact]
+    public void Stage17_long_draft_keeps_preview_at_the_new_end_after_the_first_64_stamps()
+    {
+        var editor = Editor(out _); var router = new CanvasInputRouter(editor);
+        editor.SetStampScalePercent(25);
+        editor.StartEditablePath();
+        var before = editor.Session.Document;
+        for (var i = 0; i < 10; i++)
+        {
+            var x = i % 2 == 0 ? 100 : 900; var y = 100 + i * 60;
+            router.Press(CanvasPointerButton.Left, x, y); router.Release(x, y);
+        }
+        var draft = editor.DisplayedEditablePath!;
+        var lastSegment = draft.Nodes.Length - 2;
+        var lastOrdinal = Map.Core.Editing.PlacementPathPlanner.SegmentCount(draft, lastSegment) - 1;
+        var lastId = Map.Core.Editing.PlacementPathPlanner.ObjectIdFor(draft.Id,
+            new(draft.Nodes[lastSegment].Id, lastOrdinal));
+        Assert.Equal(64, editor.PlacementPreviewObjects.Count);
+        Assert.Contains(editor.PlacementPreviewObjects, o => o.Id == lastId);
+        Assert.Same(before, editor.Session.Document); Assert.Equal(0, editor.Session.UndoDepth);
+        var preview = editor.PlacementPreviewObjects.ToArray();
+        Assert.True(editor.FinishEditablePath(), editor.StatusDetail);
+        Assert.True(editor.SelectedEditablePath!.Members.Length > 64);
+        foreach (var sample in preview)
+            Assert.Equal(sample, Map.Core.Editing.DocumentEditor.FindObject(editor.Session.Document, sample.Id));
+    }
+
+    [Fact]
+    public void Stage17_eight_separate_paths_have_no_four_path_limit()
+    {
+        var editor = Editor(out _); var router = new CanvasInputRouter(editor);
+        for (var i = 0; i < 8; i++)
+        {
+            editor.StartEditablePath();
+            router.Press(CanvasPointerButton.Left, 100, 100 + i * 70); router.Release(100, 100 + i * 70);
+            router.Press(CanvasPointerButton.Left, 700, 100 + i * 70); router.Release(700, 100 + i * 70);
+            Assert.True(editor.FinishEditablePath(), editor.StatusDetail);
+            Assert.Equal(i + 1, editor.EditablePaths.Count);
+        }
+        Assert.Equal(8, editor.Session.UndoDepth);
+    }
+
+    [Fact]
     public void Stage17_router_creates_edits_cancels_and_detaches_a_saved_path_as_single_gestures()
     {
         var editor = Editor(out _); var router = new CanvasInputRouter(editor);

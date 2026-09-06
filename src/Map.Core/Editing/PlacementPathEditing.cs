@@ -56,14 +56,45 @@ public static class PlacementPathPlanner
 
     public static IReadOnlyList<SceneObject> Preview(PlacementPath path, int maximum = 64, IReadOnlySet<int>? segments = null)
     {
-        var result = new List<SceneObject>();
-        for (var s = 0; s < path.Nodes.Length - 1 && result.Count < maximum; s++)
+        ArgumentOutOfRangeException.ThrowIfLessThan(maximum, 1);
+        var exclusions = path.Exclusions.ToLookup(slot => slot.NodeId, slot => slot.Ordinal);
+        var spans = new List<(int Segment, int Available, int[] Excluded)>();
+        long total = 0;
+        for (var s = 0; s < path.Nodes.Length - 1; s++)
         {
             if (segments is not null && !segments.Contains(s)) continue;
-            for (var k = 0; k < SegmentCount(path, s) && result.Count < maximum; k++)
-                if (!path.Exclusions.Contains(new(path.Nodes[s].Id, k))) result.Add(Item(path, s, k));
+            var count = SegmentCount(path, s);
+            var excluded = exclusions[path.Nodes[s].Id].Where(k => k < count).Order().ToArray();
+            var available = count - excluded.Length;
+            if (available == 0) continue;
+            spans.Add((s, available, excluded)); total += available;
+        }
+        var take = (int)Math.Min(maximum, total);
+        var result = new List<SceneObject>(take);
+        var span = 0; long start = 0;
+        for (var i = 0; i < take; i++)
+        {
+            // Sample the entire requested row, including its newest end. A fixed prefix made
+            // drawing appear to stop after 64 stamps. Only these bounded samples are created.
+            var rank = take == 1 ? total - 1 : (long)((decimal)i * (total - 1) / (take - 1));
+            while (rank >= start + spans[span].Available) start += spans[span++].Available;
+            var ordinal = (int)(rank - start);
+            foreach (var excluded in spans[span].Excluded)
+            {
+                if (excluded > ordinal) break;
+                ordinal++;
+            }
+            result.Add(Item(path, spans[span].Segment, ordinal));
         }
         return result;
+    }
+
+    public static long Count(PlacementPath path)
+    {
+        var counts = path.Nodes.Take(Math.Max(0, path.Nodes.Length - 1))
+            .Select((node, index) => (node.Id, Count: SegmentCount(path, index))).ToDictionary(p => p.Id, p => p.Count);
+        return counts.Values.Sum(count => (long)count)
+            - path.Exclusions.LongCount(slot => counts.TryGetValue(slot.NodeId, out var count) && slot.Ordinal < count);
     }
 }
 

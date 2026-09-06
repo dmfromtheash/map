@@ -126,6 +126,8 @@ public sealed class Stage17Application : Application
     private async Task Execute()
     {
         await Settle(); _editor.ChooseGalleryVariant(_catalog.Sets[0].Id, null); await Settle();
+        if (Environment.GetEnvironmentVariable("MAP_STAGE17_PREVIEW_SMOKE") == "1")
+        { await CheckLongPathPreview(); return; }
         await Click("StampModePath");
         await Click("StartEditablePathButton");
         var before = _editor.Session.Document;
@@ -191,6 +193,42 @@ public sealed class Stage17Application : Application
             && _editor.Session.Document.Layers.OfType<ObjectLayer>().Sum(l => l.Objects.Count) == countBeforeModeSwitch + 1;
         if (Environment.GetEnvironmentVariable("MAP_STAGE17_UI_ONLY") != "1") await MeasureExistingMap();
     }
+    private async Task CheckLongPathPreview()
+    {
+        var scale = Find<Slider>("FutureStampScaleSlider");
+        scale.BringIntoView(); await Settle(); scale.Value = 25; await Settle();
+        await Click("StampModePath"); await Click("StartEditablePathButton");
+        var before = _editor.Session.Document;
+        for (var i = 0; i < 10; i++) { Point(i % 2 == 0 ? 100 : 900, 100 + i * 60); await Settle(); }
+        var draft = _editor.DisplayedEditablePath!;
+        var samples = _editor.PlacementPreviewObjects.ToArray();
+        var total = PlacementPathPlanner.Count(draft);
+        var segment = draft.Nodes.Length - 2;
+        var lastId = PlacementPathPlanner.ObjectIdFor(draft.Id,
+            new(draft.Nodes[segment].Id, PlacementPathPlanner.SegmentCount(draft, segment) - 1));
+        _report.Checks["long-draft-ten-nodes"] = draft.Nodes.Length == 10;
+        _report.Checks["preview-bounded"] = samples.Length == 64 && total > 64;
+        _report.Checks["preview-reaches-new-end"] = samples.Any(o => o.Id == lastId);
+        _report.Checks["draft-outside-document-history"] = ReferenceEquals(before, _editor.Session.Document) && _editor.Session.UndoDepth == 0;
+        _report.Checks["draft-summary-reports-full-count"] = _editor.EditablePathSummary.Contains($"64 из {total}");
+        Find<Control>("EditablePathSummary").BringIntoView(); await Settle();
+        SaveVisual(Path.ChangeExtension(Options.OutputPath, ".draft.png"));
+        await Click("FinishEditablePathButton");
+        _report.Checks["finish-materializes-entire-path"] = _editor.SelectedEditablePath?.Members.Length == total;
+        _report.Checks["preview-uses-concrete-stamps"] = samples.All(o => o == DocumentEditor.FindObject(_editor.Session.Document, o.Id));
+        var finished = _editor.Session.Document; _editor.Undo(); var undone = ReferenceEquals(before, _editor.Session.Document);
+        _editor.Redo(); _report.Checks["long-path-undo-redo-exact"] = undone && ReferenceEquals(finished, _editor.Session.Document);
+        for (var i = 0; i < 8; i++)
+        {
+            await Click("StartEditablePathButton"); Point(100, 80 + i * 75); Point(900, 80 + i * 75);
+            await Click("FinishEditablePathButton");
+        }
+        _report.Checks["eight-further-paths-created"] = _editor.EditablePaths.Count == 9 && _editor.Session.UndoDepth == 9;
+        _report.Checks["original-path-preserved"] = _editor.EditablePaths.Any(p => p.Id == draft.Id && p.Members.Length == total);
+        _report.Screenshot = Path.ChangeExtension(Options.OutputPath, ".editor.png");
+        SaveVisual(_report.Screenshot);
+    }
+
     private async Task MeasureExistingMap()
     {
         var fixture = Environment.GetEnvironmentVariable("MAP_STAGE17_FIXTURE")

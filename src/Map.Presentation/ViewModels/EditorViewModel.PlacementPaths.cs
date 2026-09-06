@@ -15,6 +15,7 @@ public sealed partial class EditorViewModel
     private bool _pathPickObject;
     private IReadOnlyList<SceneObject> _pathPreviewObjects = [];
     private IReadOnlyList<SceneObject> _pathOverrides = [];
+    private long _pathPreviewTotal;
     public IReadOnlyList<SceneObject>? EditablePathPreviewOverrides => _pathDragging ? _pathOverrides : null;
 
     public IReadOnlyList<PlacementPath> EditablePaths => Session.Document.Layers.OfType<ObjectLayer>()
@@ -40,7 +41,9 @@ public sealed partial class EditorViewModel
     public bool CanDetachPathObject => Session.SelectedObjectId is { } id
         && PlacementPathOwnership.Owner(Session.Document, id) is not null;
     public string EditablePathSummary => DisplayedEditablePath is { } p
-        ? $"{p.Name} · узлов: {p.Nodes.Length} · объектов: {p.Members.Length} · исключений: {p.Exclusions.Count}"
+        ? _pathCreating
+            ? $"{p.Name} · узлов: {p.Nodes.Length} · после завершения: {_pathPreviewTotal} объектов. Предпросмотр: {_pathPreviewObjects.Count} из {_pathPreviewTotal}."
+            : $"{p.Name} · узлов: {p.Nodes.Length} · объектов: {p.Members.Length} · исключений: {p.Exclusions.Count}"
         : "Выберите изображение или набор, затем создайте путь кликами по холсту.";
 
     public void StartEditablePath()
@@ -250,6 +253,7 @@ public sealed partial class EditorViewModel
     {
         var active = _pathDraft is not null || _pathInsert || _pathPickObject;
         _pathDraft = _pathOriginal = null; _pathAssets = []; _pathPreviewObjects = []; _pathOverrides = [];
+        _pathPreviewTotal = 0;
         _pathCreating = _pathDragging = _pathInsert = false; _pathLayer = null;
         _pathPickObject = false;
         if (active) { RaisePathState(); InvalidateScene(EditorChangeReason.CanvasInvalidation); }
@@ -257,7 +261,9 @@ public sealed partial class EditorViewModel
     }
     private void UpdatePathPreview()
     {
-        if (_pathDraft is not { Nodes.Length: >= 2 } path) { _pathPreviewObjects = []; _pathOverrides = []; return; }
+        if (_pathDraft is not { Nodes.Length: >= 2 } path)
+        { _pathPreviewObjects = []; _pathOverrides = []; _pathPreviewTotal = 0; return; }
+        _pathPreviewTotal = PlacementPathPlanner.Count(path);
         var samples = PlacementPathPlanner.Preview(path, segments: _pathDragging ? new HashSet<int> { _pathNode - 1, _pathNode } : null);
         if (!_pathDragging) { _pathPreviewObjects = samples; return; }
         var index = DocumentRevisionIndex.For(Session.Document);

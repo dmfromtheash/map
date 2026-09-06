@@ -103,6 +103,28 @@ public sealed class Stage17EditablePathTests
         Assert.Contains("заблокирован", lockedSession.LastResourceError);
     }
 
+    [Fact]
+    public void Long_preview_samples_both_ends_of_requested_segments_and_keeps_exclusions()
+    {
+        var path = Path() with { Spacing = 1 };
+        path = path with { Exclusions = path.Exclusions.Union([
+            new(path.Nodes[0].Id, 0), new(path.Nodes[2].Id, 198), new(path.Nodes[2].Id, 199)]) };
+        var samples = PlacementPathPlanner.Preview(path, segments: new HashSet<int> { 0, 2 });
+        Assert.Equal(597, PlacementPathPlanner.Count(path));
+        Assert.Equal(64, samples.Count); Assert.Equal(64, samples.Select(o => o.Id).Distinct().Count());
+        Assert.Equal(PlacementPathPlanner.Item(path, 0, 1), samples[0]);
+        Assert.Equal(PlacementPathPlanner.Item(path, 2, 197), samples[^1]);
+        Assert.DoesNotContain(samples, o => path.Exclusions.Any(slot => PlacementPathPlanner.ObjectIdFor(path.Id, slot) == o.Id));
+        Assert.All(samples, o =>
+        {
+            var centre = o.X + o.Width / 2;
+            Assert.Equal(100, o.Y + o.Height / 2);
+            Assert.True(centre is >= 100 and < 300 or >= 500 and < 700);
+        });
+        var empty = path with { Nodes = [path.Nodes[0], path.Nodes[0] with { Id = Guid.NewGuid() }] };
+        Assert.Empty(PlacementPathPlanner.Preview(empty));
+    }
+
     private static EditingSession Session(out ObjectLayer layer)
     {
         layer = new ObjectLayer(LayerId.New(), "Objects", true, false, 1, []);
