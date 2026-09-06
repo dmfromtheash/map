@@ -146,6 +146,8 @@ public sealed record ObjectLayer : MapLayer
 
     public LayerEffects Effects { get; init; } = new();
 
+    public System.Collections.Immutable.ImmutableArray<PlacementPath> PlacementPaths { get; init; } = [];
+
     /// <summary>Only non-default states need to be stored; an absent band is visible and unlocked.</summary>
     public IReadOnlyList<ObjectSublayerState> SublayerStates { get; init; } = [];
 
@@ -155,11 +157,12 @@ public sealed record ObjectLayer : MapLayer
 
     public override LayerMask? Mask { get; init; }
 
-    public override MapLayer WithNewIds() => this with
+    public override MapLayer WithNewIds()
     {
-        Id = LayerId.New(),
-        Objects = [.. Objects.Select(VectorGeometry.WithNewIds)],
-    };
+        if (!PlacementPaths.IsEmpty)
+            throw new InvalidOperationException("Перед дублированием слоя превратите его пути в обычные объекты.");
+        return this with { Id = LayerId.New(), Objects = [.. Objects.Select(VectorGeometry.WithNewIds)] };
+    }
 
     public override MapLayer WithMask(LayerMask? mask) => this with { Mask = mask };
 }

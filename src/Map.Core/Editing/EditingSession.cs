@@ -186,7 +186,15 @@ public sealed class EditingSession
         using var held = reservation;
         if (LastResourceError is not null)
         { LastResourceError = null; ResourceAdmissionChanged?.Invoke(this, EventArgs.Empty); }
-        Document = command.Apply(Document);
+        MapDocument candidate;
+        try { candidate = command.Apply(Document); }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException
+            && (command is PlacementPathCommand or CompositeCommand { ContainsPlacementPath: true }
+                || Document.Layers.OfType<ObjectLayer>().Any(l => !l.PlacementPaths.IsEmpty)))
+        { LastResourceError = ex.Message; ResourceAdmissionChanged?.Invoke(this, EventArgs.Empty); return; }
+        if (command is not PlacementPathCommand && !PlacementPathOwnership.Allows(Document, candidate, out var pathReason))
+        { LastResourceError = pathReason; ResourceAdmissionChanged?.Invoke(this, EventArgs.Empty); return; }
+        Document = candidate;
         Revision++;
         var afterState = new StateNode(_currentState);
         _undo.Add(new HistoryEntry(command, _currentState, afterState));

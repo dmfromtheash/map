@@ -43,6 +43,7 @@ public sealed record StampPlacementRequest
     public StampRandomAngleStep RandomAngleStep { get; init; }
 
     /// <summary>Compatibility adapter for pre-Stage-15 callers; true maps to the smallest 15° step.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
     public bool RandomAngle
     {
         get => RandomAngleStep != StampRandomAngleStep.Off;

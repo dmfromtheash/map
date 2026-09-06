@@ -8,6 +8,43 @@ namespace Map.Presentation.Tests;
 
 public sealed class PlacementWorkflowTests : IDisposable
 {
+    [Fact]
+    public void Stage17_router_creates_edits_cancels_and_detaches_a_saved_path_as_single_gestures()
+    {
+        var editor = Editor(out _); var router = new CanvasInputRouter(editor);
+        editor.StartEditablePath();
+        foreach (var point in new[] { (100, 100), (350, 160), (650, 100) })
+        { router.Press(CanvasPointerButton.Left, point.Item1, point.Item2); router.Release(point.Item1, point.Item2); }
+        Assert.True(editor.HasTransientEditorAction); Assert.Empty(Objects(editor));
+        Assert.True(editor.FinishEditablePath()); Assert.Equal(1, editor.Session.UndoDepth);
+        var created = editor.Session.Document; var path = editor.SelectedEditablePath!;
+        Assert.Equal(3, path.Nodes.Length);
+        router.Press(CanvasPointerButton.Left, 350, 160); router.Move(350, 250);
+        Assert.Same(created, editor.Session.Document); Assert.True(editor.HandleEscape());
+        router.Release(350, 250); Assert.Same(created, editor.Session.Document);
+        router.Press(CanvasPointerButton.Left, 350, 160); router.Move(350, 210); router.Release(350, 210);
+        Assert.Equal(2, editor.Session.UndoDepth); Assert.Equal(210, editor.SelectedEditablePath!.Nodes[1].Y);
+        editor.SetEditablePathSpacing(50);
+        var member = editor.SelectedEditablePath!.Members[1];
+        editor.Session.SelectedObjectId = member.ObjectId; editor.DetachSelectedPathObject();
+        var detached = editor.Session.Document;
+        editor.SetEditablePathSeed(888);
+        Assert.Equal(Map.Core.Editing.DocumentEditor.FindObject(detached, member.ObjectId),
+            Map.Core.Editing.DocumentEditor.FindObject(editor.Session.Document, member.ObjectId));
+        editor.Undo(); Assert.Same(detached, editor.Session.Document); editor.Redo();
+        editor.InsertEditablePathNode();
+        Assert.True(editor.PressEditablePath(225, 155));
+        Assert.Equal(4, editor.SelectedEditablePath!.Nodes.Length);
+        editor.DeleteEditablePathNode(); Assert.Equal(3, editor.SelectedEditablePath!.Nodes.Length);
+        editor.SelectEditablePath(path.Id);
+        editor.SetStampScalePercent(130); editor.SetStampRotationDegrees(25);
+        editor.ApplyStampSettingsToEditablePath();
+        Assert.Equal(130, editor.SelectedEditablePath!.ScalePercent);
+        Assert.Equal(25, editor.SelectedEditablePath.RotationDegrees);
+        editor.Undo(); Assert.Equal(100, editor.StampScalePercent);
+        editor.Redo(); Assert.Equal(130, editor.StampScalePercent);
+    }
+
     private readonly string _root = Path.Combine(Path.GetTempPath(), "map-placement-test-" + Guid.NewGuid().ToString("N"));
     private readonly List<AssetCatalog> _catalogs = [];
 

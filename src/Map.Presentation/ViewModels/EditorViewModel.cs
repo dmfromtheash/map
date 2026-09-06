@@ -130,6 +130,7 @@ public enum StampPlacementMode
     One,
     Series,
     Area,
+    Path,
 }
 
 /// <summary>
@@ -687,6 +688,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             CancelTextPlacement();
             CancelShapeBooleanPreview();
             CancelPlacement();
+            CancelEditablePathGesture();
             CancelDrag();
             CancelMarquee();
             CancelVectorElementDrag();
@@ -1916,10 +1918,12 @@ public sealed partial class EditorViewModel : ViewModelBase
     public StampToolSettings StampToolSettings => _stampToolSettings;
 
     public bool IsEditingFutureStamp =>
-        ActiveTool == EditorTool.Stamp && PendingPlacement?.Target == PlacementTargetKind.Stamp;
+        ActiveTool == EditorTool.Stamp && (PendingPlacement?.Target == PlacementTargetKind.Stamp
+            || SelectedEditablePath is not null || IsCreatingEditablePath);
 
     public string StampPanelHeading =>
-        IsEditingFutureStamp ? "Ассет для размещения" : "Свойства ассета";
+        ActiveTool == EditorTool.Stamp && SelectedEditablePath is not null ? "Параметры пути — примените кнопкой ниже"
+            : IsEditingFutureStamp ? "Ассет для размещения" : "Свойства ассета";
 
     public StampStyle? StampPanelStyle => IsEditingFutureStamp
         ? _stampToolSettings.Style
@@ -2430,6 +2434,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         {
             if (_stampToolSettings.Mode != value && Enum.IsDefined(value))
             {
+                CancelEditablePathGesture();
                 CancelStampSeries();
                 _stampToolSettings = _stampToolSettings with { Mode = value };
                 Raise();
@@ -2641,14 +2646,15 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public bool HasPendingPlacement => _pendingPlacement is not null;
 
-    public IReadOnlyList<SceneObject> PlacementPreviewObjects => _pendingPlacement is { PointerVisible: true } pending
+    public IReadOnlyList<SceneObject> PlacementPreviewObjects => HasPathGesture ? _pathPreviewObjects
+        : _pendingPlacement is { PointerVisible: true } pending
         ? pending.PreviewObjects
         : _vectorPreviewObject is { } vector ? [vector]
         : _textPreviewObject is { } text ? [text]
         : _shapeBooleanPreviewObject is { } boolean ? [boolean]
         : [];
 
-    public LayerId? PlacementPreviewLayerId => _pendingPlacement?.LayerId
+    public LayerId? PlacementPreviewLayerId => _pathLayer ?? _pendingPlacement?.LayerId
         ?? _vectorPreviewLayerId ?? _textPreviewLayerId ?? _pendingShapeBoolean?.LayerId;
 
     public string PlacementRefusal => _pendingPlacement?.InvalidReason ?? "";
@@ -2881,10 +2887,11 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public bool CancelPlacement()
     {
+        var cancelledPath = CancelEditablePathGesture();
         CancelStampSeries();
         if (PendingPlacement is null)
         {
-            return false;
+            return cancelledPath;
         }
 
         PendingPlacement = null;
@@ -3313,7 +3320,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             return false;
         }
 
-        var scatter = settings.Mode is StampPlacementMode.Area or StampPlacementMode.Series;
+        var scatter = settings.Mode is StampPlacementMode.Area or StampPlacementMode.Series or StampPlacementMode.Path;
         var randomize = settings.RandomizeVariant && scatter;
         var candidates = randomize
             ? _selectedSetVariants
@@ -5304,6 +5311,8 @@ public sealed partial class EditorViewModel : ViewModelBase
 
         ObjectClipboard.Set(ObjectTransfer.Copy(Session.Document, ids));
         StatusDetail = $"Скопировано: {EditorLabels.Objects(ids.Count)}.";
+        if (ids.Any(id => PlacementPathOwnership.Owner(Session.Document, id) is not null))
+            StatusDetail += " Копии будут обычными объектами; исходный путь сохранён.";
         Raise(nameof(CanPasteObjects));
     }
 
@@ -5942,6 +5951,8 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public void DuplicateActiveLayer()
     {
+        if (ActiveLayer is ObjectLayer { PlacementPaths.IsEmpty: false })
+        { StatusDetail = "Перед дублированием слоя превратите его пути в обычные объекты."; return; }
         if (ActiveLayer is null or BaseColorLayer)
         {
             return;
@@ -6758,6 +6769,8 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// </summary>
     public bool HandleEscape()
     {
+        if (CancelEditablePathGesture())
+        { CanvasGestureCancelled?.Invoke(this, EventArgs.Empty); StatusDetail = "Правка пути отменена."; return true; }
         if (_pendingShapeBoolean is not null)
         {
             CancelShapeBooleanPreview();
@@ -7485,6 +7498,8 @@ public sealed partial class EditorViewModel : ViewModelBase
         {
             return null;
         }
+        if (selected.Any(o => PlacementPathOwnership.Owner(Session.Document, o.Id) is not null))
+        { StatusDetail = PlacementPathOwnership.DetachFirst; return null; }
 
         if (selected.Any(sceneObject => !IsObjectAvailable(sceneObject)))
         {
@@ -7589,6 +7604,8 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// <summary>Deletes the whole selection, across layers, as one history entry.</summary>
     public void DeleteSelectedObject()
     {
+        if (Session.SelectedObjectIds.Any(id => PlacementPathOwnership.Owner(Session.Document, id) is not null))
+        { StatusDetail = PlacementPathOwnership.DetachFirst; return; }
         var ids = Session.SelectedObjectIds;
         if (ids.Count == 0)
         {
@@ -7604,6 +7621,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     private SceneObject? EditableSelection()
     {
         var selected = Session.SelectedObject;
+        if (selected is not null && PlacementPathOwnership.Owner(Session.Document, selected.Id) is not null) return null;
         return selected is { Locked: false, Visible: true } ? selected : null;
     }
 
@@ -7647,6 +7665,8 @@ public sealed partial class EditorViewModel : ViewModelBase
         if (!additive && HitHandle(worldX, worldY, viewScale) is { } grabbed)
         {
             var selected = Session.SelectedObjects;
+            if (selected.Any(o => PlacementPathOwnership.Owner(Session.Document, o.Id) is not null))
+            { StatusDetail = PlacementPathOwnership.DetachFirst; return CanvasGesture.None; }
             DragPreview = new DragPreview(
                 selected, selected,
                 grabbed == HandleKind.Rotate ? DragMode.Rotate : DragMode.Resize,
@@ -7670,6 +7690,8 @@ public sealed partial class EditorViewModel : ViewModelBase
 
         SelectHit(hit, additive);
         RefreshInspector();
+        if (Session.SelectedObjectIds.Any(id => PlacementPathOwnership.Owner(Session.Document, id) is not null))
+        { StatusDetail = PlacementPathOwnership.DetachFirst; return CanvasGesture.None; }
         if (additive)
         {
             return CanvasGesture.None;
@@ -7695,6 +7717,8 @@ public sealed partial class EditorViewModel : ViewModelBase
     public bool BeginDrag(double startWorldX = 0, double startWorldY = 0)
     {
         var selected = Session.SelectedObjects;
+        if (selected.Any(o => PlacementPathOwnership.Owner(Session.Document, o.Id) is not null))
+        { StatusDetail = PlacementPathOwnership.DetachFirst; return false; }
         if (selected.Count == 0 || selected.Any(o => !o.Visible || o.Locked))
         {
             return false;
@@ -7797,16 +7821,20 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public void Undo()
     {
+        CancelEditablePathGesture();
         if (Session.Undo())
         {
+            SyncEditablePathSettings();
             AfterEdit();
         }
     }
 
     public void Redo()
     {
+        CancelEditablePathGesture();
         if (Session.Redo())
         {
+            SyncEditablePathSettings();
             AfterEdit();
         }
     }
@@ -8044,6 +8072,7 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     private void AfterEdit(bool geometryOnly = false)
     {
+        RaisePathState();
         _lastCommittedEditUtc = _clock();
         SaveState = Session.IsDirty ? SaveState.Unsaved : SaveState.Saved;
         StatusDetail = "";
@@ -8299,6 +8328,8 @@ public sealed partial class EditorViewModel : ViewModelBase
         {
             return null;
         }
+        if (PlacementPathOwnership.Owner(Session.Document, selected.Id) is not null)
+        { StatusDetail = PlacementPathOwnership.DetachFirst; return null; }
 
         if (!IsObjectAvailable(selected))
         {
@@ -9596,7 +9627,7 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public static TimeSpan PrimaryAutosaveDebounce { get; } = TimeSpan.FromSeconds(4);
 
-    public bool HasTransientEditorAction => IsStampSeriesActive
+    public bool HasTransientEditorAction => HasPathGesture || IsStampSeriesActive
         || PendingPlacement is { Target: not PlacementTargetKind.Stamp }
         || DragPreview is not null
         || _stroke is not null

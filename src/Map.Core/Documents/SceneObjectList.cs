@@ -7,13 +7,15 @@ namespace Map.Core.Documents;
 /// </summary>
 public sealed class SceneObjectList : IReadOnlyList<SceneObject>
 {
+    private System.Collections.Immutable.ImmutableDictionary<ObjectId, (SceneObject[] Chunk, int Offset)>? _identitySlots;
+    private readonly Dictionary<SceneObject[], int> _chunkStarts = new(ReferenceEqualityComparer.Instance);
     public const int ChunkSize = 256;
 
     private static readonly SceneObjectList EmptyInstance = new([], 0);
     private readonly SceneObject[][] _chunks;
     private readonly int[] _starts;
 
-    private SceneObjectList(SceneObject[][] chunks, int count)
+    private SceneObjectList(SceneObject[][] chunks, int count, SceneObjectList? source = null)
     {
         _chunks = chunks;
         Count = count;
@@ -22,12 +24,22 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
         for (var index = 0; index < chunks.Length; index++)
         {
             _starts[index] = start;
+            _chunkStarts[chunks[index]] = start;
             start += chunks[index].Length;
         }
 
         if (start != count)
         {
             throw new ArgumentException("Scene object chunks do not match their declared count.", nameof(chunks));
+        }
+        if (source?._identitySlots is { } slots)
+        {
+            var builder = slots.ToBuilder();
+            foreach (var chunk in source._chunks.Where(c => !_chunkStarts.ContainsKey(c)))
+                foreach (var item in chunk) builder.Remove(item.Id);
+            foreach (var chunk in chunks.Where(c => !source._chunkStarts.ContainsKey(c)))
+                for (var i = 0; i < chunk.Length; i++) builder[chunk[i].Id] = (chunk, i);
+            _identitySlots = builder.ToImmutable();
         }
     }
 
@@ -66,6 +78,32 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
 
     public int Count { get; }
 
+    public int IndexOfId(ObjectId id)
+    {
+        if (_identitySlots is null)
+        {
+            var builder = System.Collections.Immutable.ImmutableDictionary.CreateBuilder<ObjectId, (SceneObject[], int)>();
+            foreach (var chunk in _chunks)
+                for (var i = 0; i < chunk.Length; i++) builder.Add(chunk[i].Id, (chunk, i));
+            System.Threading.Interlocked.CompareExchange(ref _identitySlots, builder.ToImmutable(), null);
+        }
+        return _identitySlots.TryGetValue(id, out var slot) ? _chunkStarts[slot.Chunk] + slot.Offset : -1;
+    }
+
+    internal SceneObjectList RemoveIds(IReadOnlySet<ObjectId> ids)
+    {
+        var positions = ids.Select(IndexOfId).Where(i => i >= 0).ToHashSet();
+        var touched = positions.Select(i => Locate(i).Chunk).ToHashSet();
+        var chunks = new List<SceneObject[]>();
+        for (var c = 0; c < _chunks.Length; c++)
+        {
+            if (!touched.Contains(c)) { chunks.Add(_chunks[c]); continue; }
+            var kept = _chunks[c].Where((_, i) => !positions.Contains(_starts[c] + i)).ToArray();
+            if (kept.Length > 0) chunks.Add(kept);
+        }
+        return new SceneObjectList([.. chunks], Count - positions.Count, this);
+    }
+
     public SceneObject this[int index]
     {
         get
@@ -88,7 +126,7 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
         var chunk = (SceneObject[])chunks[chunkIndex].Clone();
         chunk[offset] = replacement;
         chunks[chunkIndex] = chunk;
-        return new SceneObjectList(chunks, Count);
+        return new SceneObjectList(chunks, Count, this);
     }
 
     /// <summary>Copies every touched chunk once even when a group edit replaces many members.</summary>
@@ -116,7 +154,7 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
             chunk[offset] = replacement;
         }
 
-        return new SceneObjectList(chunks, Count);
+        return new SceneObjectList(chunks, Count, this);
     }
 
     public SceneObjectList InsertRange(int index, IReadOnlyList<SceneObject> inserted) =>
@@ -196,7 +234,7 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
         }
 
         var nextCount = checked(Count - removeCount + inserted.Count);
-        return nextCount == 0 ? Empty : new SceneObjectList([.. chunks], nextCount);
+        return nextCount == 0 ? Empty : new SceneObjectList([.. chunks], nextCount, this);
     }
 
     private (int Chunk, int Offset) Locate(int index)

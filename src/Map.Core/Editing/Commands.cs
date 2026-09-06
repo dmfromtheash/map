@@ -40,6 +40,9 @@ public sealed class CompositeCommand : IEditCommand
 
     public int StepCount => _steps.Count;
 
+    internal bool ContainsPlacementPath => _steps.Any(step => step is PlacementPathCommand
+        || step is CompositeCommand { ContainsPlacementPath: true });
+
     public MapDocument Apply(MapDocument document)
     {
         var current = document;
@@ -1292,6 +1295,21 @@ public sealed class UpdateLandStyleCommand : IEditCommand
 /// <summary>Snapshot lookups shared by commands and the editor.</summary>
 public static class DocumentEditor
 {
+    internal static MapDocument RemovePathObjects(MapDocument document, LayerId layerId, IReadOnlySet<ObjectId> ids)
+    {
+        var source = (ObjectLayer)document.FindLayer(layerId)!;
+        var removed = ids.Select(source.ObjectStorage.IndexOfId).Where(i => i >= 0).Order().ToArray();
+        var storage = source.ObjectStorage.RemoveIds(ids);
+        var targetLayer = source with { Objects = storage };
+        var layers = document.Layers.ToArray();
+        layers[Array.FindIndex(layers, l => l.Id == layerId)] = targetLayer;
+        var target = document.WithRevisedLayers(layers);
+        DocumentRevisionIndex.RegisterPathRemoval(document, target, targetLayer, removed.Length);
+        ObjectNameIndex.Register(document, target, removed.Select(i => source.Objects[i]), []);
+        ObjectLayerChanges.Register(source, targetLayer, removed, [], orderCompacted: true);
+        return target;
+    }
+
     public static SceneObject? FindObject(MapDocument document, ObjectId id) =>
         DocumentRevisionIndex.For(document).FindObject(id);
 

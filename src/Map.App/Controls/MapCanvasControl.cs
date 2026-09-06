@@ -451,7 +451,7 @@ public sealed partial class MapCanvasControl : Control
             var renderDocument = editor.DragPreview is null
                 ? editor.RenderDocument
                 : editor.Session.Document;
-            var hasLiveObjectPreview = editor.DragPreview is not null || editor.HasPendingPlacement;
+            var hasLiveObjectPreview = editor.DragPreview is not null || editor.HasPendingPlacement || editor.HasPathGesture;
             var tier = performanceMode == CanvasPerformanceMode.Performance && viewport.Scale < 0.25
                 ? RenderLodTier.Overview
                 : viewport.Scale < 0.125
@@ -477,7 +477,7 @@ public sealed partial class MapCanvasControl : Control
                 ViewScale = viewport.Scale,
                 VisibleWorld = new Map.Core.Documents.WorldBounds(
                     X, Y, bottomRight.X, bottomRight.Y),
-                ObjectOverrides = editor.DragPreview?.Proposed,
+                ObjectOverrides = editor.EditablePathPreviewOverrides ?? editor.DragPreview?.Proposed,
                 PlacementPreviewObjects = editor.PlacementPreviewObjects,
                 PlacementPreviewLayerId = editor.PlacementPreviewLayerId,
                 PlacementArea = editor.PendingPlacement is
@@ -502,6 +502,25 @@ public sealed partial class MapCanvasControl : Control
                 BoundaryOverlay = editor.CanvasBoundaryOverlay,
             });
             sceneStopwatch.Stop();
+            if (editor.ActiveTool == EditorTool.Stamp && editor.DisplayedEditablePath is { } editablePath)
+            {
+                var scale = (float)Math.Max(.001, viewport.Scale);
+                using var pathPen = new SKPaint { Color = new SKColor(90, 200, 255), IsAntialias = true,
+                    Style = SKPaintStyle.Stroke, StrokeWidth = 2 / scale };
+                using var nodePaint = new SKPaint { Color = new SKColor(22, 55, 78), IsAntialias = true };
+                for (var n = 0; n < editablePath.Nodes.Length; n++)
+                {
+                    var node = editablePath.Nodes[n];
+                    if (n > 0)
+                    {
+                        var previous = editablePath.Nodes[n - 1];
+                        canvas.DrawLine((float)previous.X, (float)previous.Y, (float)node.X, (float)node.Y, pathPen);
+                    }
+                    var radius = (n == editor.SelectedPathNodeIndex ? 7 : 5) / scale;
+                    canvas.DrawCircle((float)node.X, (float)node.Y, radius, nodePaint);
+                    canvas.DrawCircle((float)node.X, (float)node.Y, radius, pathPen);
+                }
+            }
 
                 canvas.Restore();
                 frameRendered(tier, sceneStopwatch.Elapsed.TotalMilliseconds, renderDocument);

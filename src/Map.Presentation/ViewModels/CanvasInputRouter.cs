@@ -20,6 +20,7 @@ public enum CanvasInputGesture
     RegionSelect,
     Stroke,
     StampSeries,
+    PlacementPathNode,
     VectorDraw,
     LandShape,
     TextPlacement,
@@ -155,6 +156,11 @@ public sealed class CanvasInputRouter
         }
 
         // An armed placement is a pending gesture: finishing it always wins over starting a new one.
+        if (_editor.PressEditablePath(worldX, worldY))
+        {
+            _gesture = _editor.IsDraggingPathNode ? CanvasInputGesture.PlacementPathNode : CanvasInputGesture.None;
+            return new CanvasInputResult { Handled = true, Invalidate = true, CapturePointer = _editor.IsDraggingPathNode };
+        }
         if (_editor.HasPendingPlacement)
         {
             _editor.UpdatePlacementPreview(worldX, worldY);
@@ -326,6 +332,9 @@ public sealed class CanvasInputRouter
 
         switch (_gesture)
         {
+            case CanvasInputGesture.PlacementPathNode:
+                _editor.MoveEditablePathNode(worldX, worldY);
+                return new CanvasInputResult { Handled = true, Invalidate = true };
             case CanvasInputGesture.StampSeries:
                 _editor.ContinueStampSeries(worldX, worldY);
                 return new CanvasInputResult { Handled = true, Invalidate = true };
@@ -381,6 +390,11 @@ public sealed class CanvasInputRouter
         // so two flags left set by a mid-gesture tool switch produced two history entries at once.
         switch (gesture)
         {
+            case CanvasInputGesture.PlacementPathNode:
+                var pathEnd = _editor.Session.Viewport.ScreenToWorld(screenX, screenY);
+                _editor.MoveEditablePathNode(pathEnd.X, pathEnd.Y);
+                _editor.EndEditablePathNodeDrag();
+                return new CanvasInputResult { Handled = true, Invalidate = true, ReleasePointer = true };
             case CanvasInputGesture.StampSeries:
                 var end = _editor.Session.Viewport.ScreenToWorld(screenX, screenY);
                 _editor.ContinueStampSeries(end.X, end.Y);
@@ -491,6 +505,8 @@ public sealed class CanvasInputRouter
 
         switch (gesture)
         {
+            case CanvasInputGesture.PlacementPathNode:
+                return _editor.CancelEditablePathGesture();
             case CanvasInputGesture.StampSeries:
                 return _editor.CancelStampSeries();
             case CanvasInputGesture.ObjectDrag:

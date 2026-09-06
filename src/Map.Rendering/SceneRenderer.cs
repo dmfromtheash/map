@@ -2813,22 +2813,27 @@ public static class SceneRenderer
     private sealed class ObjectOverviewPlan
     {
         private readonly ImmutableDictionary<(int X, int Y), OverviewChunk> _chunks;
+        private readonly bool _compacted;
 
         public ObjectOverviewPlan(ObjectLayer layer)
         {
             if (ObjectLayerChanges.TryGet(layer, out var delta))
             {
                 var previous = OverviewPlans.GetValue(delta.Source, static l => new(l));
+                _compacted = previous._compacted || delta.OrderCompacted;
                 var chunks = previous._chunks.ToBuilder();
-                var changes = new Dictionary<(int, int), (List<int> Remove, List<(int, SceneObject)> Add)>();
+                var changes = new Dictionary<(int, int), (List<ObjectId> Remove, List<(long, SceneObject)> Add)>();
                 foreach (var index in delta.Removed) Collect(delta.Source.Objects[index], index, false);
                 foreach (var index in delta.Added) Collect(layer.Objects[index], index, true);
                 foreach (var (key, change) in changes)
                 {
                     var objects = chunks.TryGetValue(key, out var oldChunk)
-                        ? oldChunk.Objects.ToBuilder() : ImmutableSortedDictionary.CreateBuilder<int, SceneObject>();
+                        ? oldChunk.Objects.ToBuilder() : ImmutableDictionary.CreateBuilder<ObjectId, (long Order, SceneObject Item)>();
                     foreach (var index in change.Remove) objects.Remove(index);
-                    foreach (var (index, item) in change.Add) objects[index] = item;
+                    foreach (var (order, item) in change.Add) objects[item.Id] = (order, item);
+                    if (_compacted)
+                        foreach (var id in objects.Keys.ToArray())
+                            objects[id] = (((SceneObjectList)layer.Objects).IndexOfId(id), objects[id].Item);
                     if (objects.Count == 0) chunks.Remove(key);
                     else chunks[key] = new OverviewChunk(key.Item1, key.Item2, objects.ToImmutable());
                 }
@@ -2839,19 +2844,20 @@ public static class SceneRenderer
                     if (!item.Visible) return;
                     var key = KeyOf(item);
                     if (!changes.TryGetValue(key, out var change)) changes[key] = change = ([], []);
-                    if (add) change.Add.Add((index, item)); else change.Remove.Add(index);
+                    if (add) change.Add.Add((index, item));
+                    else change.Remove.Add(item.Id);
                 }
             }
             else
             {
-                var chunks = new Dictionary<(int, int), ImmutableSortedDictionary<int, SceneObject>.Builder>();
+                var chunks = new Dictionary<(int, int), ImmutableDictionary<ObjectId, (long Order, SceneObject Item)>.Builder>();
                 for (var index = 0; index < layer.Objects.Count; index++)
                 {
                     var item = layer.Objects[index];
                     if (!item.Visible) continue;
                     var key = KeyOf(item);
-                    if (!chunks.TryGetValue(key, out var objects)) chunks[key] = objects = ImmutableSortedDictionary.CreateBuilder<int, SceneObject>();
-                    objects.Add(index, item);
+                    if (!chunks.TryGetValue(key, out var objects)) chunks[key] = objects = ImmutableDictionary.CreateBuilder<ObjectId, (long Order, SceneObject Item)>();
+                    objects.Add(item.Id, (index, item));
                 }
                 _chunks = chunks.ToImmutableDictionary(p => p.Key,
                     p => new OverviewChunk(p.Key.Item1, p.Key.Item2, p.Value.ToImmutable()));
@@ -2871,11 +2877,11 @@ public static class SceneRenderer
         }
     }
 
-    private sealed class OverviewChunk(int x, int y, ImmutableSortedDictionary<int, SceneObject> objects)
+    private sealed class OverviewChunk(int x, int y, ImmutableDictionary<ObjectId, (long Order, SceneObject Item)> objects)
     {
         private readonly Dictionary<(int Zoom, int Tints), OverviewVariant> _variants = [];
 
-        public ImmutableSortedDictionary<int, SceneObject> Objects { get; } = objects;
+        public ImmutableDictionary<ObjectId, (long Order, SceneObject Item)> Objects { get; } = objects;
 
         public OverviewVariant GetVariant(int zoomBucket, double bucketScale,
             IReadOnlyDictionary<string, SKColor> colors, int tintRevision)
@@ -2894,7 +2900,7 @@ public static class SceneRenderer
             var hash = 14_695_981_039_346_656_037UL;
             var overviewCount = 0;
             var missingCount = 0;
-            foreach (var sceneObject in Objects.Values.OrderBy(o => o.Sublayer))
+            foreach (var sceneObject in Objects.Values.OrderBy(o => o.Item.Sublayer).ThenBy(o => o.Order).Select(o => o.Item))
             {
                 hash = HashObject(hash, sceneObject);
                 if (Math.Max(sceneObject.Width, sceneObject.Height) * bucketScale >= OverviewExactScreenSize

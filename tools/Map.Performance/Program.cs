@@ -4,7 +4,11 @@ using Map.Performance;
 var options = PerformanceOptions.Parse(args);
 object report;
 bool gatePassed;
-if (options.Profile is "native-placement-workflow" or "native-placement-baseline" or "native-placement-ux")
+if (options.Profile == "native-stage17")
+{
+    var nativeReport = NativeStage17Smoke.Run(options); report = nativeReport; gatePassed = nativeReport.GatePassed;
+}
+else if (options.Profile is "native-placement-workflow" or "native-placement-baseline" or "native-placement-ux")
 {
     var placementReport = NativePlacementWorkflowSmoke.Run(options);
     report = placementReport;

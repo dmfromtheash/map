@@ -35,6 +35,8 @@ public sealed class DocumentRevisionIndex
     private readonly AppendSegment? _appendTail;
     private readonly int _appendedCount;
     private readonly int _appendDepth;
+    private IReadOnlyDictionary<LayerId, ObjectLayer> _structuralLayers = new Dictionary<LayerId, ObjectLayer>();
+    private int _removedCount;
 
     private DocumentRevisionIndex(MapDocument document)
     {
@@ -50,6 +52,10 @@ public sealed class DocumentRevisionIndex
             {
                 continue;
             }
+
+            // Warm stable storage locations with the cold document index, so later local
+            // removals never build an identity table for the whole layer during a gesture.
+            if (layer.Objects.Count > 0) _ = layer.ObjectStorage.IndexOfId(layer.Objects[0].Id);
 
             for (var objectIndex = 0; objectIndex < layer.Objects.Count; objectIndex++)
             {
@@ -120,11 +126,23 @@ public sealed class DocumentRevisionIndex
         return Cache.GetValue(document, static snapshot => new DocumentRevisionIndex(snapshot));
     }
 
-    public int ObjectCount => checked(_rootPositions.Count + _appendedCount);
+    public int ObjectCount => checked(_rootPositions.Count + _appendedCount - _removedCount);
 
     public int OverlayObjectCount => _overrides.Count;
 
     public bool TryFind(ObjectId id, out DocumentObjectLocation location)
+    {
+        if (!TryFindStored(id, out location)) return false;
+        if (!_structuralLayers.TryGetValue(location.LayerId, out var layer)) return true;
+        // The current layer may include subsequent point replacements/appends.
+        layer = (ObjectLayer)_document.Layers[location.LayerIndex];
+        var position = layer.ObjectStorage.IndexOfId(id);
+        if (position < 0) { location = default; return false; }
+        location = location with { Object = layer.Objects[position], ObjectIndex = position };
+        return true;
+    }
+
+    private bool TryFindStored(ObjectId id, out DocumentObjectLocation location)
     {
         if (_overrides.TryGetValue(id, out location))
         {
@@ -340,7 +358,8 @@ public sealed class DocumentRevisionIndex
             overrides[replacement.Object.Id] = replacement;
         }
 
-        if (overrides.Count > MaxOverlayObjects)
+        if (overrides.Count > MaxOverlayObjects
+            && !source.Layers.OfType<ObjectLayer>().Any(l => !l.PlacementPaths.IsEmpty))
         {
             return;
         }
@@ -352,7 +371,7 @@ public sealed class DocumentRevisionIndex
             BuildIdentityIndex(overrides.Values),
             sourceIndex._appendTail,
             sourceIndex._appendedCount,
-            sourceIndex._appendDepth));
+            sourceIndex._appendDepth) { _structuralLayers = sourceIndex._structuralLayers, _removedCount = sourceIndex._removedCount });
     }
 
     /// <summary>
@@ -458,7 +477,7 @@ public sealed class DocumentRevisionIndex
             sourceIndex._overrideIdentities,
             segment,
             checked(sourceIndex._appendedCount + additions.Count),
-            sourceIndex._appendDepth + 1));
+            sourceIndex._appendDepth + 1) { _structuralLayers = sourceIndex._structuralLayers, _removedCount = sourceIndex._removedCount });
     }
 
     /// <summary>
@@ -496,7 +515,17 @@ public sealed class DocumentRevisionIndex
             sourceIndex._overrideIdentities,
             tail.Parent,
             sourceIndex._appendedCount - removals.Count,
-            sourceIndex._appendDepth - 1));
+            sourceIndex._appendDepth - 1) { _structuralLayers = sourceIndex._structuralLayers, _removedCount = sourceIndex._removedCount });
+    }
+
+    internal static void RegisterPathRemoval(MapDocument source, MapDocument target, ObjectLayer layer, int removed)
+    {
+        var previous = For(source);
+        var structural = previous._structuralLayers.ToDictionary(p => p.Key, p => p.Value);
+        structural[layer.Id] = layer;
+        Cache.Add(target, new DocumentRevisionIndex(target, previous._root, previous._overrides,
+            previous._overrideIdentities, previous._appendTail, previous._appendedCount, previous._appendDepth)
+        { _structuralLayers = structural, _removedCount = previous._removedCount + removed });
     }
 
     private bool TryFindIdentity(IdentityKey identity, out ObjectId owner)

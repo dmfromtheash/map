@@ -230,7 +230,7 @@ public static partial class MapProjectStore
                     targetSchema: MapProjectFormat.SchemaVersion);
             }
 
-            if (header.SchemaVersion > MapProjectFormat.SchemaVersion)
+            if (header.SchemaVersion > MapProjectFormat.EditablePathsSchemaVersion)
             {
                 return Inspection(
                     ProjectFileStatus.UnsupportedVersion,
@@ -238,10 +238,11 @@ public static partial class MapProjectStore
                     "Проект создан более новой версией Map",
                     "Эта версия приложения не поддерживает схему проекта.",
                     sourceSchema: header.SchemaVersion,
-                    maxSupportedSchema: MapProjectFormat.SchemaVersion);
+                    maxSupportedSchema: MapProjectFormat.EditablePathsSchemaVersion);
             }
 
-            if (header.SchemaVersion != MapProjectFormat.SchemaVersion)
+            if (header.SchemaVersion != MapProjectFormat.SchemaVersion
+                && header.SchemaVersion != MapProjectFormat.EditablePathsSchemaVersion)
             {
                 return Inspection(
                     ProjectFileStatus.NotMapProject,
@@ -282,7 +283,7 @@ public static partial class MapProjectStore
         {
             return Inspection(ProjectFileStatus.UnsupportedVersion, "FILE_UNSUPPORTED_VERSION",
                 "Проект создан более новой версией Map", "Эта версия приложения не поддерживает схему проекта.",
-                sourceSchema: ex.SchemaVersion, maxSupportedSchema: MapProjectFormat.SchemaVersion,
+                sourceSchema: ex.SchemaVersion, maxSupportedSchema: MapProjectFormat.EditablePathsSchemaVersion,
                 exception: ex);
         }
         catch (MapProjectTileCorruptedException ex)

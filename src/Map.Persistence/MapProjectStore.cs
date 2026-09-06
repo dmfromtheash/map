@@ -22,6 +22,11 @@ public static partial class MapProjectStore
     // The container is machine-owned and the reader accepts either representation.
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = false };
 
+    private static int SchemaFor(MapDocument document) =>
+        document.Layers.OfType<ObjectLayer>().Any(l => !l.PlacementPaths.IsEmpty)
+        || document.Checkpoints.Any(c => c.Snapshot.Layers.OfType<ObjectLayer>().Any(l => !l.PlacementPaths.IsEmpty))
+            ? MapProjectFormat.EditablePathsSchemaVersion : MapProjectFormat.SchemaVersion;
+
     /// <summary>
     /// Validates one proposed checkpoint against the exact bytes the persistence writer would
     /// add. The document is not mutated and no file is touched on refusal.
@@ -401,6 +406,7 @@ public static partial class MapProjectStore
 
         var manifest = new ManifestDto
         {
+            SchemaVersion = SchemaFor(document),
             AppVersion = metadata.AppVersion,
             DocumentId = document.Id.ToString(),
             Title = document.Title,
@@ -477,7 +483,7 @@ public static partial class MapProjectStore
 
             var snapshotManifest = new CheckpointSnapshotManifestDto
             {
-                SchemaVersion = MapProjectFormat.SchemaVersion,
+                SchemaVersion = SchemaFor(snapshot),
                 DocumentId = document.Id.ToString(),
                 Title = snapshot.Title,
                 CreatedUtc = FormatTimestamp(snapshot.CreatedUtc),
@@ -648,7 +654,9 @@ public static partial class MapProjectStore
                     $"The container declares format \"{manifest.Format}\"; this is not a map project.");
             }
 
-            if (manifest.SchemaVersion != expectedSchemaVersion)
+            if (manifest.SchemaVersion != expectedSchemaVersion
+                && !(expectedSchemaVersion == MapProjectFormat.SchemaVersion
+                    && manifest.SchemaVersion == MapProjectFormat.EditablePathsSchemaVersion))
             {
                 throw new UnsupportedSchemaVersionException(manifest.SchemaVersion);
             }
@@ -669,6 +677,7 @@ public static partial class MapProjectStore
             }
 
             var scene = ParseJson<SceneDto>(sceneBytes, MapProjectFormat.SceneEntry);
+            ValidatePathSchema(scene, manifest.SchemaVersion);
             if (expectedSchemaVersion is >= 2 and <= 3)
             {
                 ValidateV2SceneShape(sceneBytes, MapProjectFormat.SceneEntry);
@@ -1203,11 +1212,15 @@ public static partial class MapProjectStore
 
                 var snapshotManifest = ParseJson<CheckpointSnapshotManifestDto>(
                     snapshotManifestBytes, snapshotManifestEntry);
+                if (snapshotManifest.SchemaVersion == MapProjectFormat.EditablePathsSchemaVersion
+                    && mainManifest.SchemaVersion != MapProjectFormat.EditablePathsSchemaVersion)
+                    throw new MapProjectCorruptedException("A path checkpoint requires a schema v5 container.");
                 if (schemaVersion == MapProjectFormat.SchemaVersion
-                    && snapshotManifest.SchemaVersion != MapProjectFormat.SchemaVersion)
+                    && snapshotManifest.SchemaVersion != MapProjectFormat.SchemaVersion
+                    && snapshotManifest.SchemaVersion != MapProjectFormat.EditablePathsSchemaVersion)
                 {
                     throw new MapProjectCorruptedException(
-                        $"Checkpoint {id} snapshot manifest does not declare schema v4.");
+                        $"Checkpoint {id} snapshot manifest does not declare a supported object-chunk schema.");
                 }
                 if (snapshotManifest.Canvas is null)
                 {
@@ -1230,6 +1243,7 @@ public static partial class MapProjectStore
                         $"Checkpoint {id} scene does not match its checksum.");
                 }
                 var scene = ParseJson<SceneDto>(sceneBytes, sceneEntry);
+                ValidatePathSchema(scene, snapshotManifest.SchemaVersion);
                 if (schemaVersion is >= 2 and <= 3)
                 {
                     ValidateV2SceneShape(sceneBytes, sceneEntry);
@@ -1604,6 +1618,8 @@ public static partial class MapProjectStore
     {
         var dto = new LayerDto
         {
+            PlacementPaths = layer is ObjectLayer pathLayer && !pathLayer.PlacementPaths.IsEmpty
+                ? [.. pathLayer.PlacementPaths] : null,
             Id = layer.Id.ToString(),
             Type = layer switch
             {
@@ -1916,6 +1932,7 @@ public static partial class MapProjectStore
             {
                 Effects = ToLayerEffects(layer.Effects),
                 SublayerStates = ToSublayerStates(layer.Sublayers),
+                PlacementPaths = layer.PlacementPaths is null ? [] : [.. layer.PlacementPaths],
             },
             "BaseColor" => new BaseColorLayer(
                 id, name, layer.Visible, layer.Locked, layer.Opacity,

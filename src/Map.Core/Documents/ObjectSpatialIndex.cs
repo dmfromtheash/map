@@ -11,6 +11,8 @@ public sealed class ObjectSpatialIndex
     private readonly IReadOnlyList<SceneObject> _objects;
     private readonly ImmutableDictionary<(int X, int Y), ImmutableHashSet<int>> _cells;
     private readonly ImmutableHashSet<int> _oversized;
+    private readonly ObjectSpatialIndex? _stableBasis;
+    private readonly ImmutableDictionary<ObjectId, SceneObject?> _structuralOverrides = ImmutableDictionary<ObjectId, SceneObject?>.Empty;
     public int IncrementalOverrideCount { get; }
 
     private ObjectSpatialIndex(ObjectLayer layer)
@@ -19,6 +21,17 @@ public sealed class ObjectSpatialIndex
         if (ObjectLayerChanges.TryGet(layer, out var delta))
         {
             var previous = For(delta.Source);
+            if (delta.OrderCompacted || previous._stableBasis is not null)
+            {
+                _stableBasis = previous._stableBasis ?? previous;
+                var overrides = previous._structuralOverrides.ToBuilder();
+                foreach (var i in delta.Removed) overrides[delta.Source.Objects[i].Id] = null;
+                foreach (var i in delta.Added) overrides[_objects[i].Id] = _objects[i];
+                _structuralOverrides = overrides.ToImmutable();
+                _cells = _stableBasis._cells; _oversized = _stableBasis._oversized;
+                IncrementalOverrideCount = delta.Added.Count + delta.Removed.Count;
+                return;
+            }
             var cells = previous._cells.ToBuilder();
             var oversized = previous._oversized.ToBuilder();
             foreach (var index in delta.Removed) Change(cells, oversized, delta.Source.Objects[index], index, false);
@@ -56,6 +69,7 @@ public sealed class ObjectSpatialIndex
 
     public IReadOnlyList<SceneObject> QueryPoint(double worldX, double worldY)
     {
+        if (_stableBasis is not null) return StructuralQuery(new(worldX, worldY, worldX, worldY), point: true);
         var hits = _oversized.ToHashSet();
         if (_cells.TryGetValue(((int)Math.Floor(worldX / CellSize), (int)Math.Floor(worldY / CellSize)), out var cell))
             hits.UnionWith(cell);
@@ -66,6 +80,7 @@ public sealed class ObjectSpatialIndex
 
     public IReadOnlyList<SceneObject> Query(WorldBounds view)
     {
+        if (_stableBasis is not null) return StructuralQuery(view, point: false);
         var minX = (int)Math.Floor(view.Left / CellSize);
         var maxX = (int)Math.Floor(view.Right / CellSize);
         var minY = (int)Math.Floor(view.Top / CellSize);
@@ -82,6 +97,20 @@ public sealed class ObjectSpatialIndex
                 if (cell.X >= minX && cell.X <= maxX && cell.Y >= minY && cell.Y <= maxY) hits.UnionWith(bucket);
         }
         return hits.Order().Select(i => _objects[i]).Where(o => SceneGeometry.BoundsOf(o).Intersects(view)).ToArray();
+    }
+
+    private IReadOnlyList<SceneObject> StructuralQuery(WorldBounds view, bool point)
+    {
+        var basis = point ? _stableBasis!.QueryPoint(view.Left, view.Top) : _stableBasis!.Query(view);
+        var result = basis.Where(o => !_structuralOverrides.ContainsKey(o.Id)).ToList();
+        foreach (var item in _structuralOverrides.Values.OfType<SceneObject>())
+        {
+            var b = SceneGeometry.BoundsOf(item);
+            if (point ? b.Left <= view.Left && b.Right >= view.Right && b.Top <= view.Top && b.Bottom >= view.Bottom
+                : b.Intersects(view)) result.Add(item);
+        }
+        var storage = (SceneObjectList)_objects;
+        return result.OrderBy(o => storage.IndexOfId(o.Id)).ToArray();
     }
 
     private static void Change(ImmutableDictionary<(int X, int Y), ImmutableHashSet<int>>.Builder cells,

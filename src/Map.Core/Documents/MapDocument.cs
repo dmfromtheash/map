@@ -177,6 +177,27 @@ public sealed record MapDocument
         {
             throw new ArgumentException("Note ids are unique within a document.", nameof(notes));
         }
+        var pathIds = new HashSet<Guid>();
+        var ownedIds = new HashSet<ObjectId>();
+        foreach (var layer in Layers.OfType<ObjectLayer>().Where(l => !l.PlacementPaths.IsEmpty))
+        {
+            var objectsById = layer.Objects.ToDictionary(o => o.Id);
+            foreach (var path in layer.PlacementPaths)
+            {
+                if (path is null) throw new ArgumentException("Null placement path.");
+                path.ValidateMembers();
+                if (!pathIds.Add(path.Id)) throw new ArgumentException("Duplicate placement path id.");
+                var nodeIdsForPath = path.Nodes.Take(path.Nodes.Length - 1).Select(n => n.Id).ToHashSet();
+                foreach (var member in path.Members)
+                    if (!ownedIds.Add(member.ObjectId) || !nodeIdsForPath.Contains(member.Slot.NodeId)
+                        || Editing.PlacementPathPlanner.ObjectIdFor(path.Id, member.Slot) != member.ObjectId
+                        || !objectsById.TryGetValue(member.ObjectId, out var item) || item.Kind != SceneObjectKind.Stamp)
+                        throw new ArgumentException("Invalid or multiply owned placement path member.");
+                if (path.Variants.Any(v => !Assets.Any(a => a.Sha256 == v.Sha256)
+                    || v.MaskSha256 is { } mask && !Assets.Any(a => a.Sha256 == mask)))
+                    throw new ArgumentException("A saved path must retain every resolved variant and mask.");
+            }
+        }
         if (Checkpoints.Count > MapCheckpointLimits.MaxCount)
         {
             throw new ArgumentException(

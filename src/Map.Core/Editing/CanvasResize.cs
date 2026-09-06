@@ -152,6 +152,7 @@ public static class CanvasTransformService
 
     public static MapDocument ApplyResize(MapDocument document, CanvasResizePlan plan)
     {
+        RejectEditablePaths(document);
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(plan);
         ValidateDimensions(plan.Width, plan.Height);
@@ -191,6 +192,7 @@ public static class CanvasTransformService
         DocumentId newDocumentId,
         DateTimeOffset createdUtc)
     {
+        RejectEditablePaths(source);
         ArgumentNullException.ThrowIfNull(source);
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
         ValidateDimensions(region.Width, region.Height);
@@ -244,6 +246,12 @@ public static class CanvasTransformService
 
     public static TileMap TranslateTiles(TileMap source, int offsetX, int offsetY) =>
         TransformTiles(source, offsetX, offsetY, clip: null);
+
+    private static void RejectEditablePaths(MapDocument document)
+    {
+        if (document.Layers.OfType<ObjectLayer>().Any(l => !l.PlacementPaths.IsEmpty))
+            throw new InvalidOperationException("Перед изменением размера или извлечением региона превратите пути в обычные объекты.");
+    }
 
     public static TileMap ExtractTiles(TileMap source, CanvasRegion sourceRegion) =>
         TransformTiles(
