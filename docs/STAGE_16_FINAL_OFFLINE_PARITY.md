@@ -364,7 +364,7 @@ save/reopen/export parity.
 1. текущие production Avalonia 12.1 и SkiaSharp 3.119.4;
 2. собственные Core/Persistence/Rendering contracts Map;
 3. exact-pinned read-only research checkouts из
-   `C:\Projects\Map-ResearchLab\sources` и `docs/research/external-sources.json` только как
+   `C:\Projects\Map\_local\ResearchLab\sources` и `docs/research/external-sources.json` только как
    clean-room cross-check.
 
 Допустимые роли:

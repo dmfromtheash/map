@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "capturedDate": "2026-08-31",
-  "defaultLabRoot": "C:\\Projects\\Map-ResearchLab",
+  "defaultLabRoot": "C:\\Projects\\Map\\_local\\ResearchLab",
   "policy": "Pinned public source for isolated research only; no automatic production integration.",
   "repositories": [
     {
