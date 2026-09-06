@@ -13,6 +13,7 @@ using Map.App.Views;
 using Map.Assets;
 using Map.Core.Documents;
 using Map.Core.Editing;
+using Map.Core.Resources;
 using Map.Export;
 using Map.Persistence;
 using Map.Persistence.Recovery;
@@ -47,6 +48,10 @@ internal sealed class NativeStage18Report
     public string? PlacementDraftScreenshot { get; set; }
     public string? SavedProject { get; set; }
     public string? SaveOutcome { get; set; }
+    public int? AvailableMemoryCeilingMiB { get; set; }
+    public long? PreviewManagedAllocationBytes { get; set; }
+    public long? PlacementManagedAllocationBytes { get; set; }
+    public long? PlacementRetainedManagedBytes { get; set; }
     public string? Failure { get; set; }
     public bool GatePassed => Failure is null && (!MeasurementRequired || MeasurementPerformed)
         && Checks.Count >= (MeasurementRequired ? 20 : 7) && Checks.Values.All(v => v);
@@ -138,11 +143,21 @@ public sealed class Stage18Application : Application
     }
     private void OpenEditor(MapDocument document, string? path = null)
     {
+        WorkingMemoryBudget? memory = null;
+        if (Environment.GetEnvironmentVariable("MAP_STAGE18_SMALL_MEMORY") == "1")
+        {
+            _report.AvailableMemoryCeilingMiB = 1024;
+            memory = new(() =>
+            {
+                var live = WorkingMemoryBudget.Shared.Snapshot;
+                return live with { AvailableBytes = Math.Min(live.AvailableBytes, 1024 * WorkingMemoryBudget.MiB) };
+            });
+        }
         _editor = new EditorViewModel(document, path, false, new ProjectStore(new RecoveryJournal(Path.Combine(_workspace, "recovery"))),
             new LocalRecent(), new LocalPicker(Path.Combine(_workspace, "editable-area.mapproj")), _prompts, new LocalLog(),
             assetCatalog: _catalog, exportDestinationPicker: new ExportPicker(Path.Combine(_workspace, "area-export.png")),
             imageExporter: new ImageExportEngine(new ExportEngineSettings { TileEdge = 256 }),
-            localPreferences: new EditorLocalPreferences(PrimaryAutosaveEnabled: false));
+            localPreferences: new EditorLocalPreferences(PrimaryAutosaveEnabled: false), memory: memory);
         _view = new EditorView(_editor, () => Task.CompletedTask, () => { }, () => { }); _window.Content = _view;
     }
     private async Task Execute()
@@ -317,8 +332,11 @@ public sealed class Stage18Application : Application
         await Click("StartEditableAreaButton");
         await Number("EditableAreaDensityBox", "20");
         var original = _editor.Session.Document;
+        var managedBefore = GC.GetTotalMemory(forceFullCollection: true);
+        var previewAllocatedBefore = GC.GetAllocatedBytesForCurrentThread();
         Point(100, 100); Point(900, 100); Point(500, 670); await Settle();
         await Number("EditableAreaSeedBox", "-184929685");
+        _report.PreviewManagedAllocationBytes = GC.GetAllocatedBytesForCurrentThread() - previewAllocatedBefore;
         var draft = _editor.DisplayedEditableArea!;
         _report.Checks["owner-mountain-asset-and-settings"] = draft.Variants.Single().Sha256 == Convert.ToHexString(sourceHash).ToLowerInvariant()
             && draft.ScalePercent == 129 && draft.RotationDegrees == 359 && draft.Sublayer == -1
@@ -333,7 +351,10 @@ public sealed class Stage18Application : Application
         await Number("EditableAreaDensityBox", "40");
         var preview = _editor.PlacementPreviewObjects.ToArray();
         _report.Checks["density40-large-mountains-preview-and-place-ready"] = place.IsEnabled && preview.Length > 0;
+        var placementAllocatedBefore = GC.GetAllocatedBytesForCurrentThread();
         await Click("FinishEditableAreaButton");
+        _report.PlacementManagedAllocationBytes = GC.GetAllocatedBytesForCurrentThread() - placementAllocatedBefore;
+        _report.PlacementRetainedManagedBytes = GC.GetTotalMemory(forceFullCollection: true) - managedBefore;
         _report.Checks["mountains-placed-in-one-undo-step"] = _editor.SelectedEditableArea is { MemberCount: > 0, Density: 40 }
             && _editor.Session.UndoDepth == 1 && preview.All(o => o == DocumentEditor.FindObject(_editor.Session.Document, o.Id));
         var placed = _editor.Session.Document; _editor.Undo();
@@ -352,6 +373,34 @@ public sealed class Stage18Application : Application
         Find<Control>("EditableAreaSummary").BringIntoView(); await Settle();
         _report.Screenshot = Path.ChangeExtension(Options.OutputPath, ".editor.png"); SaveVisual(_report.Screenshot);
         _report.Checks["owner-asset-read-only"] = sourceHash.SequenceEqual(SHA256.HashData(File.ReadAllBytes(assetPath)));
+        if (_report.AvailableMemoryCeilingMiB.HasValue) await CheckPngCacheLifetime();
+    }
+
+    private async Task CheckPngCacheLifetime()
+    {
+        var path = Path.Combine(_workspace, "small-view.png");
+        using (var bitmap = new SKBitmap(40, 30))
+        {
+            bitmap.Erase(SKColors.ForestGreen);
+            using var image = SKImage.FromBitmap(bitmap);
+            using var png = image.Encode(SKEncodedImageFormat.Png, 100);
+            File.WriteAllBytes(path, png.ToArray());
+        }
+        var original = SHA256.HashData(File.ReadAllBytes(path));
+        var cache = Path.Combine(_workspace, "png-cache");
+        var viewer = new PngMapWindow(cache) { ShowActivated = false, ShowInTaskbar = false, Position = _window.Position };
+        string tile;
+        try
+        {
+            viewer.Show(_window); await viewer.OpenImageAsync(path); await Settle();
+            Require(viewer.Pyramid is not null, viewer.StatusText);
+            await Until(() => viewer.ImageView.CachedPixelBytes > 0);
+            tile = viewer.Pyramid!.CheckTile(0, 0, 0);
+            _report.Checks["png-native-view-lease-protects-cache"] = PngViewCache.TrimUnused(cache, 0).InUse && File.Exists(tile);
+        }
+        finally { viewer.Close(); }
+        await Until(() => { PngViewCache.TrimUnused(cache, 0); return !File.Exists(tile); });
+        _report.Checks["png-native-close-releases-only-derived-cache"] = original.SequenceEqual(SHA256.HashData(File.ReadAllBytes(path)));
     }
     private int CountOverlaps()
     {

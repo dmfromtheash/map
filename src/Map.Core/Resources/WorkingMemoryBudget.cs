@@ -15,6 +15,10 @@ public sealed class WorkingMemoryBudget
     public const long MiB = 1024L * 1024;
     public const long EditReserveBytes = 16 * MiB;
     public const long HeavyReserveBytes = 128 * MiB;
+    // A small edit/save plus its nested validation must not require 2 GiB of idle RAM.
+    // The allowance is cumulative, so many small reservations cannot bypass the large-work gate.
+    public const long SmallOperationLimitBytes = 256 * MiB;
+    public const long SmallSystemReserveBytes = 512 * MiB;
     public static WorkingMemoryBudget Shared { get; } = new(ReadSystem);
     private readonly Func<WorkingMemorySnapshot> _read;
     private readonly object _gate = new();
@@ -36,18 +40,24 @@ public sealed class WorkingMemoryBudget
         lock (_gate)
         {
             var memory = _read();
-            var headroom = Math.Min(memory.AvailableBytes - SystemReserve(memory), PrivateLimit(memory) - memory.MapPrivateBytes);
+            var systemReserve = bytes <= SmallOperationLimitBytes - _reserved
+                ? Math.Min(SystemReserve(memory), SmallSystemReserveBytes) : SystemReserve(memory);
+            var headroom = Math.Min(memory.AvailableBytes - systemReserve, PrivateLimit(memory) - memory.MapPrivateBytes);
             if (bytes > headroom - _reserved)
             {
                 _pressure = true;
                 reservation = null;
                 reason = "Недостаточно свободной памяти с резервом для Windows и открытых карт. "
-                    + $"Доступно {Math.Max(0, headroom - _reserved) / MiB} МиБ, требуется {bytes / MiB + (bytes % MiB == 0 ? 0 : 1)} МиБ. "
+                    + $"Свободно в Windows: {Math.Max(0, memory.AvailableBytes) / MiB} МиБ. "
+                    + $"Для действия доступно {Math.Max(0, headroom - _reserved) / MiB} МиБ, требуется {bytes / MiB + (bytes % MiB == 0 ? 0 : 1)} МиБ. "
                     + "Действие не применено; карта и история сохранены. Дождитесь завершения текущей операции или освободите память.";
                 return false;
             }
             _reserved += bytes;
-            _pressure = headroom - _reserved < HeavyReserveBytes;
+            // Continue shedding unpinned render caches below the normal reserve even when
+            // a small operation is admitted. Document and history ownership are unaffected.
+            _pressure = Math.Min(memory.AvailableBytes - SystemReserve(memory),
+                PrivateLimit(memory) - memory.MapPrivateBytes) - _reserved < HeavyReserveBytes;
             reservation = new Reservation(this, bytes); reason = null;
             return true;
         }

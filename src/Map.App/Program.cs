@@ -1,7 +1,9 @@
 using System;
 using System.IO;
+using System.Threading.Tasks;
 using Avalonia;
 using Map.App.Services;
+using Map.Export;
 using Map.Platform.Windows;
 
 namespace Map.App;
@@ -21,6 +23,8 @@ internal static class Program
         try
         {
             log.Info("Startup.");
+            // Best effort recovery of disposable viewing data left by earlier runs or a crash.
+            _ = Task.Run(() => PngViewCache.TrimWhenIdle(Path.Combine(profileRoot, "ImageViewCache")));
             BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
             log.Info("Clean shutdown.");
         }

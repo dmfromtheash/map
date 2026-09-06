@@ -10,14 +10,48 @@ public sealed class WorkingMemoryBudgetTests
     private static WorkingMemorySnapshot Roomy => new(16 * GiB, 8 * GiB, GiB);
 
     [Theory]
-    [InlineData(2, 1)]
+    [InlineData(.5, 1)]
     [InlineData(8, 6)]
-    public void Both_live_OS_reserve_and_aggregate_Map_commitment_reject_before_admission(int available, int used)
+    public void Both_live_OS_reserve_and_aggregate_Map_commitment_reject_before_admission(double available, int used)
     {
-        var budget = new WorkingMemoryBudget(() => new(16 * GiB, available * GiB, used * GiB));
+        var budget = new WorkingMemoryBudget(() => new(16 * GiB, (long)(available * GiB), used * GiB));
         Assert.False(budget.TryReserve(WorkingMemoryBudget.EditReserveBytes, out var lease, out var reason));
         Assert.Null(lease);
         Assert.Contains("история сохранены", reason);
+        Assert.Equal(0, budget.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task Small_edit_preview_and_save_validation_work_below_the_normal_OS_reserve()
+    {
+        var budget = new WorkingMemoryBudget(() => Roomy with { AvailableBytes = GiB });
+        Assert.True(budget.TryReserve(WorkingMemoryBudget.EditReserveBytes, out var edit, out _));
+        using (edit)
+        {
+            Assert.True(budget.TryReserve(27 * WorkingMemoryBudget.MiB, out var preview, out _));
+            preview!.Dispose();
+        }
+        using (await budget.EnterHeavyAsync().WaitAsync(TimeSpan.FromSeconds(5)))
+        {
+            Assert.True(budget.TryReserve(27 * WorkingMemoryBudget.MiB, out var validation, out _));
+            validation!.Dispose();
+            Assert.True(budget.IsUnderPressure); // Caches can trim without refusing this save.
+        }
+        Assert.Equal(0, budget.ReservedBytes);
+    }
+
+    [Fact]
+    public void Small_allowance_cannot_be_accumulated_into_a_large_operation()
+    {
+        var budget = new WorkingMemoryBudget(() => Roomy with { AvailableBytes = GiB });
+        Assert.False(budget.TryReserve(WorkingMemoryBudget.SmallOperationLimitBytes + 1, out _, out _));
+        Assert.True(budget.TryReserve(WorkingMemoryBudget.SmallOperationLimitBytes, out var held, out _));
+        using (held)
+        {
+            Assert.False(budget.TryReserve(1, out _, out var reason));
+            Assert.Contains("Свободно в Windows: 1024 МиБ", reason);
+            Assert.Contains("Для действия доступно 0 МиБ", reason);
+        }
         Assert.Equal(0, budget.ReservedBytes);
     }
 
@@ -56,7 +90,7 @@ public sealed class WorkingMemoryBudgetTests
     [Fact]
     public async Task Rejected_heavy_operation_releases_the_cross_window_slot()
     {
-        var memory = Roomy with { AvailableBytes = 2 * GiB };
+        var memory = Roomy with { AvailableBytes = WorkingMemoryBudget.SmallSystemReserveBytes };
         var budget = new WorkingMemoryBudget(() => memory);
         await Assert.ThrowsAsync<InvalidOperationException>(() => budget.EnterHeavyAsync().WaitAsync(TimeSpan.FromSeconds(5)));
         memory = Roomy;
@@ -76,7 +110,7 @@ public sealed class WorkingMemoryBudgetTests
         var first = new Rename("One"); var second = new Rename("Two");
         session.Execute(first); session.Execute(second); session.Undo();
         var before = session.Document; var revision = session.Revision;
-        memory = memory with { AvailableBytes = 2 * GiB };
+        memory = memory with { AvailableBytes = WorkingMemoryBudget.SmallSystemReserveBytes };
         var refused = new Rename("Lost");
         session.Execute(refused);
         Assert.Same(before, session.Document);

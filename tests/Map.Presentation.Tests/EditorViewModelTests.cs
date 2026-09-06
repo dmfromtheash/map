@@ -273,7 +273,7 @@ public class EditorViewModelTests
         var snapshot = editor.Session.Document; var depth = editor.Session.UndoDepth;
         const string reason = "Недостаточно свободной памяти с резервом для Windows и открытых карт.";
         // Exercise the real admission before any thumbnail or store write, then restore headroom.
-        memory = memory with { AvailableBytes = 2L << 30 };
+        memory = memory with { AvailableBytes = 512L << 20 };
         Assert.False(await editor.SaveAsync());
         Assert.Same(snapshot, editor.Session.Document); Assert.Equal(depth, editor.Session.UndoDepth);
         Assert.True(editor.Session.IsDirty); Assert.Equal(SaveState.SaveFailed, editor.SaveState);
@@ -281,7 +281,7 @@ public class EditorViewModelTests
         Assert.Empty(store.Saved); Assert.Empty(recent.Items); Assert.Equal(0, editor.ActiveResourceOperations);
         prompts.NextCloseChoice = CloseChoice.Save;
         Assert.False(await editor.ConfirmCloseAsync()); Assert.Same(snapshot, editor.Session.Document);
-        memory = memory with { AvailableBytes = 8L << 30 };
+        memory = memory with { AvailableBytes = 1L << 30 };
         Assert.True(await editor.SaveAsync()); Assert.False(editor.Session.IsDirty);
     }
 

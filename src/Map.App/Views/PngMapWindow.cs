@@ -24,6 +24,7 @@ public sealed class PngMapWindow : Window
     private CancellationTokenSource? _cancellation;
     private bool _closed;
     private PngTilePyramid? _pyramid;
+    private IDisposable? _cacheUsage;
     public PngMapView ImageView { get; } = new();
     public bool IsPreparing { get; private set; }
     public string StatusText => _status.Text ?? "";
@@ -57,7 +58,13 @@ public sealed class PngMapWindow : Window
             ImageView,
         } });
         ImageView.ViewChanged += UpdateStatistics;
-        Closed += (_, _) => { _closed = true; _cancellation?.Cancel(); ImageView.Dispose(); };
+        Closed += async (_, _) =>
+        {
+            _closed = true; _cancellation?.Cancel(); ImageView.Dispose();
+            var usage = _cacheUsage; _cacheUsage = null;
+            try { await ImageView.LoadingTask; }
+            finally { usage?.Dispose(); TrimCache(); }
+        };
     }
 
     public static PngMapWindow ShowFor(Window? owner, string? sourcePath = null)
@@ -77,24 +84,31 @@ public sealed class PngMapWindow : Window
         _progress.IsVisible = true; _progress.Value = 0;
         _status.Text = "Первое открытие: готовим данные чёткого зума на диске. Это может занять время. Исходный PNG остаётся без изменений.";
         var progress = new Progress<ExportProgress>(p => { if (!_closed) { _progress.Value = p.Fraction; _status.Text = p.Message; } });
+        IDisposable? usage = null;
         try
         {
+            usage = await PngViewCache.AcquireAsync(_cacheRoot, _cancellation.Token);
             var pyramid = await PngTilePyramid.OpenAsync(path, _cacheRoot, progress, _cancellation.Token);
             if (_closed) return;
             _pyramid = pyramid; ImageView.SetPyramid(pyramid);
+            _cacheUsage?.Dispose(); _cacheUsage = usage; usage = null;
             Title = "Map · " + Path.GetFileName(path);
-            _status.Text = "Колесо — приближение · перетаскивание — перемещение · 1:1 — исходные пиксели. Повторное открытие использует готовые данные.";
+            _status.Text = "Колесо — приближение · перетаскивание — перемещение · 1:1 — исходные пиксели. Временные данные очищаются автоматически после закрытия просмотра.";
             UpdateStatistics();
         }
         catch (OperationCanceledException) { if (!_closed) _status.Text = "Подготовка отменена. Исходный PNG сохранён."; }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or ExportValidationException or OutOfMemoryException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or ExportValidationException or OutOfMemoryException or InvalidOperationException)
         { if (!_closed) _status.Text = "Не удалось подготовить просмотр: " + ex.Message; }
         finally
         {
+            usage?.Dispose();
             IsPreparing = false;
+            if (_closed) TrimCache();
             if (!_closed) { _open.IsEnabled = true; _cancel.IsVisible = false; _progress.IsVisible = false; }
         }
     }
+
+    private void TrimCache() => _ = Task.Run(() => PngViewCache.TrimWhenIdle(_cacheRoot));
 
     private async Task PickAsync()
     {

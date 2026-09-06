@@ -42,11 +42,15 @@ Stage 18 реализован по отдельному поручению вл�
 ## Локальные команды
 
 ```powershell
-dotnet build .\Map.slnx -c Release
-dotnet run --project .\src\Map.App\Map.App.csproj -c Release
+dotnet build .\Map.slnx -c Release -m:1 -nr:false -p:UseSharedCompilation=false
+& .\src\Map.App\bin\Release\net10.0\win-x64\Map.App.exe
 ```
 
 Адресный тест запускается напрямую по нужному `.csproj` и, когда возможно, с `--filter`.
+Для обычных исправлений переиспользовать стандартные `bin/obj`; не создавать новую полную копию
+сборки в датированной папке или `%LOCALAPPDATA%/Map/Builds` при каждом проходе. Короткий native smoke
+хранить в игнорируемом `artifacts/`, с отдельным профилем. Запущенную пользовательскую сборку не
+закрывать и не перезаписывать; если её файлы заняты, использовать один отдельный проверочный выход.
 
 VM, installer, portable/release-пакет, другой ПК и публикация не входят в обычный цикл и требуют
 нового прямого запроса владельца.

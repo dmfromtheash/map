@@ -108,6 +108,74 @@ public sealed class PngTilePyramidTests
         return path;
     }
 
+    [Fact]
+    public async Task Idle_cache_evicts_oldest_tiles_and_an_oversized_entry_without_touching_sources()
+    {
+        using var temp = new Temp();
+        var source = CreateSource(temp.Path);
+        var original = File.ReadAllBytes(source);
+        var cache = System.IO.Path.Combine(temp.Path, "cache");
+        var first = await PngTilePyramid.OpenAsync(source, cache);
+        var secondSource = System.IO.Path.Combine(temp.Path, "second.png");
+        File.Copy(source, secondSource);
+        var second = await PngTilePyramid.OpenAsync(secondSource, cache);
+        Directory.SetLastWriteTimeUtc(first.DirectoryPath, DateTime.UtcNow.AddDays(-2));
+        var bytes = Directory.EnumerateFiles(second.DirectoryPath, "*", SearchOption.AllDirectories).Sum(p => new FileInfo(p).Length);
+        var result = PngViewCache.TrimUnused(cache, bytes);
+        Assert.False(result.InUse); Assert.True(result.RemovedBytes > 0);
+        Assert.Equal(bytes, result.RetainedBytes);
+        Assert.False(Directory.Exists(first.DirectoryPath)); Assert.True(Directory.Exists(second.DirectoryPath));
+        Assert.True(PngViewCache.TrimUnused(cache, 0).RemovedBytes > 0);
+        Assert.False(Directory.Exists(second.DirectoryPath));
+        Assert.Equal(original, File.ReadAllBytes(source)); Assert.Equal(original, File.ReadAllBytes(secondSource));
+    }
+
+    [Fact]
+    public async Task Every_active_reader_pins_tiles_until_disposed_and_cleanup_preserves_unknown_content()
+    {
+        using var temp = new Temp();
+        var source = CreateSource(temp.Path);
+        var cache = System.IO.Path.Combine(temp.Path, "cache");
+        var pyramid = await PngTilePyramid.OpenAsync(source, cache);
+        using var first = await PngViewCache.AcquireAsync(cache);
+        using var second = await PngViewCache.AcquireAsync(cache);
+        Assert.True(PngViewCache.TrimUnused(cache, 0).InUse);
+        first.Dispose();
+        Assert.True(PngViewCache.TrimUnused(cache, 0).InUse);
+        Assert.True(File.Exists(pyramid.CheckTile(0, 0, 0)));
+        second.Dispose();
+        var unexpected = System.IO.Path.Combine(pyramid.DirectoryPath, "owner.mapproj");
+        File.WriteAllText(unexpected, "Keep this unknown file");
+        var unknownDirectory = System.IO.Path.Combine(cache, "user-images");
+        Directory.CreateDirectory(unknownDirectory);
+        var unknownImage = System.IO.Path.Combine(unknownDirectory, "image.png");
+        File.Copy(source, unknownImage);
+        Assert.Equal(0, PngViewCache.TrimUnused(cache, 0).RemovedBytes);
+        Assert.Equal("Keep this unknown file", File.ReadAllText(unexpected));
+        Assert.True(File.Exists(pyramid.CheckTile(0, 0, 0))); Assert.True(File.Exists(unknownImage));
+        File.Delete(unexpected);
+        Assert.True(PngViewCache.TrimUnused(cache, 0).RemovedBytes > 0);
+        Assert.True(File.Exists(unknownImage)); Assert.True(File.Exists(source));
+    }
+
+    [Fact]
+    public async Task Interrupted_eviction_is_cleaned_even_under_quota_and_reopen_builds_a_complete_cache()
+    {
+        using var temp = new Temp();
+        var source = CreateSource(temp.Path);
+        var cache = System.IO.Path.Combine(temp.Path, "cache");
+        var pyramid = await PngTilePyramid.OpenAsync(source, cache);
+        // Simulate an interruption after atomic retirement and one tile removal.
+        var retired = pyramid.DirectoryPath + ".evicting-" + Guid.NewGuid().ToString("N");
+        Directory.Move(pyramid.DirectoryPath, retired);
+        File.Delete(System.IO.Path.Combine(retired, "0", "0_0.png"));
+        var reopened = await PngTilePyramid.OpenAsync(source, cache);
+        Assert.True(File.Exists(reopened.CheckTile(0, 0, 0)));
+        var result = PngViewCache.TrimUnused(cache); // Both tiny entries fit, but retired work must finish.
+        Assert.True(result.RemovedBytes > 0); Assert.False(Directory.Exists(retired));
+        Assert.True(File.Exists(reopened.CheckTile(0, 0, 0))); Assert.True(File.Exists(source));
+    }
+
     private sealed class InlineProgress(Action<ExportProgress> report) : IProgress<ExportProgress>
     { public void Report(ExportProgress value) => report(value); }
     private sealed class Temp : IDisposable

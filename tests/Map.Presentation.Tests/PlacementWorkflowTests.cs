@@ -74,7 +74,7 @@ public sealed class PlacementWorkflowTests : IDisposable
     public void Stage18_temporary_preview_memory_refusal_keeps_place_retry_available_without_redrawing()
     {
         const long gib = 1024L * 1024 * 1024;
-        var available = 2 * gib;
+        var available = 512L * 1024 * 1024;
         var memory = new Map.Core.Resources.WorkingMemoryBudget(() => new(16 * gib, available, 100 * 1024 * 1024));
         var editor = Editor(out _, memory); editor.StampDensity = 20; editor.SetStampScalePercent(129); editor.StartEditableArea();
         var original = editor.Session.Document;
@@ -82,7 +82,7 @@ public sealed class PlacementWorkflowTests : IDisposable
         Assert.Empty(editor.PlacementPreviewObjects); Assert.True(editor.CanPlaceEditableArea);
         Assert.Contains("МиБ", editor.EditableAreaPlacementHint); Assert.Contains("повторить попытку", editor.EditableAreaPlacementHint);
         Assert.False(editor.FinishEditableArea()); Assert.Same(original, editor.Session.Document); Assert.Equal(0, editor.Session.UndoDepth);
-        available = 4 * gib;
+        available = gib;
         Assert.True(editor.FinishEditableArea(), editor.StatusDetail);
         Assert.True(editor.SelectedEditableArea!.MemberCount > 0); Assert.Equal(1, editor.Session.UndoDepth);
         Assert.Equal(0, memory.ReservedBytes);

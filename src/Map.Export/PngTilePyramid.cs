@@ -35,6 +35,7 @@ public sealed record PngTilePyramid(string DirectoryPath, int Width, int Height,
         await BuildGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            using var usage = await PngViewCache.AcquireAsync(cacheRoot, cancellationToken).ConfigureAwait(false);
             using var reservation = await Map.Core.Resources.WorkingMemoryBudget.Shared.EnterHeavyAsync(cancellationToken).ConfigureAwait(false);
             return await Task.Run(() => OpenCore(sourcePath, cacheRoot, progress, cancellationToken,
                 settings ?? new ExportEngineSettings()), cancellationToken).ConfigureAwait(false);
@@ -82,6 +83,7 @@ public sealed record PngTilePyramid(string DirectoryPath, int Width, int Height,
                     }
                 }
                 progress?.Report(new(ExportPhase.Completed, 1, "Данные просмотра готовы."));
+                PngViewCache.Touch(finalPath);
                 return result;
             }
             throw new InvalidDataException("Данные просмотра повреждены. Выберите другую папку кэша или удалите эти данные просмотра.");
@@ -120,6 +122,7 @@ public sealed record PngTilePyramid(string DirectoryPath, int Width, int Height,
             File.WriteAllText(Path.Combine(temporaryPath, "manifest.json"),
                 JsonSerializer.Serialize(new Manifest(Version, key, source.Width, source.Height, Edge, levels)));
             Directory.Move(temporaryPath, finalPath);
+            PngViewCache.Touch(finalPath);
             progress?.Report(new(ExportPhase.Completed, 1, "Карта готова к просмотру с приближением."));
             return result;
         }
