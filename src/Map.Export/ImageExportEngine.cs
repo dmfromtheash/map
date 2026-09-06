@@ -24,11 +24,12 @@ public sealed class ImageExportEngine : IImageExporter
         MapDocument snapshot,
         ExportPlan plan,
         IStampImageSource? stamps,
-        CancellationToken cancellationToken = default) => Task.Run(() =>
+        CancellationToken cancellationToken = default) => Task.Run(async () =>
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentNullException.ThrowIfNull(plan);
         cancellationToken.ThrowIfCancellationRequested();
+        using var operation = await Map.Core.Resources.WorkingMemoryBudget.Shared.EnterHeavyAsync(cancellationToken).ConfigureAwait(false);
 
         var scale = Math.Min(
             PreviewMaxWidth / (double)plan.OutputWidth,
@@ -67,6 +68,12 @@ public sealed class ImageExportEngine : IImageExporter
         ArgumentException.ThrowIfNullOrWhiteSpace(destinationPath);
         cancellationToken.ThrowIfCancellationRequested();
         ExportResourceAdmission.Check(plan, destinationPath, _settings);
+        using var operation = await Map.Core.Resources.WorkingMemoryBudget.Shared.EnterHeavyAsync(cancellationToken).ConfigureAwait(false);
+        if (!Map.Core.Resources.WorkingMemoryBudget.Shared.TryReserve(
+            Math.Max(0, plan.EstimatedRawWorkingBytes - Map.Core.Resources.WorkingMemoryBudget.HeavyReserveBytes),
+            out var memoryReservation, out var memoryReason))
+            throw new ExportValidationException(memoryReason!);
+        using var heldMemory = memoryReservation;
         Report(progress, ExportPhase.Preparing, 0.01, "Подготовка снимка карты…");
 
         try

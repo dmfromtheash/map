@@ -156,7 +156,8 @@ public sealed class ObjectOverviewCache : IDisposable
 
     private void Trim(Key? protectedKey)
     {
-        while (_entries.Count > _itemBudget || Bytes > _byteBudget)
+        var budget = Map.Core.Resources.WorkingMemoryBudget.Shared.IsUnderPressure ? 0 : _byteBudget;
+        while (_entries.Count > _itemBudget || Bytes > budget)
         {
             var eligible = _entries.Where(pair => pair.Key != protectedKey && !_framePins.Contains(pair.Key)).ToArray();
             if (eligible.Length == 0)

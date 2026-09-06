@@ -1,0 +1,105 @@
+using Map.Core.Documents;
+using Map.Core.Editing;
+using Map.Core.Resources;
+
+namespace Map.Core.Tests.Editing;
+
+public sealed class WorkingMemoryBudgetTests
+{
+    private const long GiB = 1024 * WorkingMemoryBudget.MiB;
+    private static WorkingMemorySnapshot Roomy => new(16 * GiB, 8 * GiB, GiB);
+
+    [Theory]
+    [InlineData(2, 1)]
+    [InlineData(8, 6)]
+    public void Both_live_OS_reserve_and_aggregate_Map_commitment_reject_before_admission(int available, int used)
+    {
+        var budget = new WorkingMemoryBudget(() => new(16 * GiB, available * GiB, used * GiB));
+        Assert.False(budget.TryReserve(WorkingMemoryBudget.EditReserveBytes, out var lease, out var reason));
+        Assert.Null(lease);
+        Assert.Contains("история сохранены", reason);
+        Assert.Equal(0, budget.ReservedBytes);
+    }
+
+    [Fact]
+    public void Concurrent_reservations_cannot_spend_the_same_headroom_and_disposal_is_idempotent()
+    {
+        var budget = new WorkingMemoryBudget(() => Roomy);
+        Assert.True(budget.TryReserve(4 * GiB, out var first, out _));
+        Assert.False(budget.TryReserve(2 * GiB, out _, out _));
+        first!.Dispose(); first.Dispose();
+        Assert.Equal(0, budget.ReservedBytes);
+        Assert.True(budget.TryReserve(2 * GiB, out var next, out _));
+        next!.Dispose();
+    }
+
+    [Fact]
+    public async Task Separate_window_budgets_share_the_heavy_slot_and_cancelled_waiters_do_not_strand_it()
+    {
+        var first = new WorkingMemoryBudget(() => Roomy);
+        var second = new WorkingMemoryBudget(() => Roomy);
+        using var held = await first.EnterHeavyAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        using var cancellation = new CancellationTokenSource();
+        var waiting = second.EnterHeavyAsync(cancellation.Token);
+        Assert.False(waiting.IsCompleted);
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiting.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(0, second.ReservedBytes);
+        held.Dispose();
+        using var next = await second.EnterHeavyAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(WorkingMemoryBudget.HeavyReserveBytes, second.ReservedBytes);
+        next.Dispose();
+        Assert.Equal(0, first.ReservedBytes);
+        Assert.Equal(0, second.ReservedBytes);
+    }
+
+    [Fact]
+    public async Task Rejected_heavy_operation_releases_the_cross_window_slot()
+    {
+        var memory = Roomy with { AvailableBytes = 2 * GiB };
+        var budget = new WorkingMemoryBudget(() => memory);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => budget.EnterHeavyAsync().WaitAsync(TimeSpan.FromSeconds(5)));
+        memory = Roomy;
+        using var lease = await budget.EnterHeavyAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public void Refused_edit_preserves_document_selection_revision_and_both_history_branches()
+    {
+        var memory = Roomy;
+        var budget = new WorkingMemoryBudget(() => memory);
+        var layer = new ObjectLayer(LayerId.New(), "Objects", true, false, 1, []);
+        var document = new MapDocument(DocumentId.New(), "Map", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(512, 512, "px", "#FFFFFFFF"),
+            [new BaseColorLayer(LayerId.New(), "Base", true, false, 1, "#FFFFFFFF"), layer]);
+        var session = new EditingSession(document, budget);
+        var first = new Rename("One"); var second = new Rename("Two");
+        session.Execute(first); session.Execute(second); session.Undo();
+        var before = session.Document; var revision = session.Revision;
+        memory = memory with { AvailableBytes = 2 * GiB };
+        var refused = new Rename("Lost");
+        session.Execute(refused);
+        Assert.Same(before, session.Document);
+        Assert.Equal(revision, session.Revision);
+        Assert.Equal(1, session.UndoDepth); Assert.Equal(1, session.RedoDepth);
+        Assert.Equal(0, refused.ApplyCalls);
+        Assert.NotNull(session.LastResourceError);
+        Assert.True(session.Undo()); Assert.Same(document, session.Document);
+        Assert.True(session.Redo()); Assert.Same(before, session.Document);
+        memory = Roomy;
+        session.Execute(new Rename("Recovered"));
+        Assert.Null(session.LastResourceError);
+        Assert.Equal("Recovered", session.Document.Title);
+        Assert.Equal(0, budget.ReservedBytes);
+    }
+
+    private sealed class Rename(string name) : IEditCommand
+    {
+        private MapDocument? _before, _after;
+        public int ApplyCalls { get; private set; }
+        public string Name => name;
+        public MapDocument Apply(MapDocument document)
+        { ApplyCalls++; _before ??= document; return _after ??= document with { Title = name }; }
+        public MapDocument Revert(MapDocument document) => _before!;
+    }
+}

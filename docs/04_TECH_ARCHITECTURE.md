@@ -164,15 +164,20 @@ spatial index, встроенная виртуализация Avalonia и уж�
 - Native detail tiles могут вычисляться существующим borrowed Skia GPU context. Готовый
   результат читается обратно в raster-owned cache; время включает завершение GPU работы.
   При отсутствии GPU действует CPU path. Cache ownership/thread pins не передаются UI worker.
-  Порядок, conservative culling и старые/новые bounds сохраняются. GPU/CPU rasterization не
-  объявляется побитово одинаковой: численные различия minified tiles отражаются в отчёте.
+  Порядок, conservative culling и старые/новые bounds сохраняются. После G1–G4 sampling учитывает
+  размер каждого stamp, явные CPU mip pixels и исходный порядок GPU meshes (DEC-025).
+  Incremental/fresh/reopen внутри backend совпадают точно; CPU/GPU округление подтверждается
+  отдельным пооперационным разбором, а не произвольной поблажкой общему RGB.
 - Save/version/autosave/preview/export одного EditorViewModel используют общий serial resource
   slot. Отменённый preview, который ещё не освободил native buffers, не запускает рядом второй.
   Export учитывает active tile/bleed, decoded cache, tile cache и encoder. Live Windows available
-  RAM проверяется с резервом 25%, диск — для полного sibling temp. Это admission операции,
-  не обещание глобального лимита памяти всех одновременно открытых документов.
+  RAM дополнительно проходит общий WorkingMemoryBudget (DEC-025): private всех Map, OS reserve,
+  возвращаемые резервы и один межоконный/межпроцессный heavy slot. Export engine владеет своим
+  резервом, per-editor gate сохраняет порядок. Диск проверяется для полного sibling temp.
+  Это согласованный admission; allocator Windows и фактический VRAM проверяются отдельно.
 - Single image и tile package вычисляют одинаковую сетку active tiles с effect bleed.
-  Только явно выбранный single output собирает final bitmap для encoder; package пишет тайлы
+  PNG single output потоково пишет строки через ограниченные bands (DEC-023). JPEG/WebP single
+  output собирают ограниченный final bitmap для encoder; package пишет тайлы
   последовательно. `SKData` остаётся native encoded buffer и передаётся file stream без
   дополнительного полного managed `ToArray`. Маленький preview сохраняет byte[] API.
 - Detach освобождает gallery/version/export bitmaps и canvas caches; stamp images освобождаются

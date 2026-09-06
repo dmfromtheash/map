@@ -35,6 +35,7 @@ public sealed record PngTilePyramid(string DirectoryPath, int Width, int Height,
         await BuildGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            using var reservation = await Map.Core.Resources.WorkingMemoryBudget.Shared.EnterHeavyAsync(cancellationToken).ConfigureAwait(false);
             return await Task.Run(() => OpenCore(sourcePath, cacheRoot, progress, cancellationToken,
                 settings ?? new ExportEngineSettings()), cancellationToken).ConfigureAwait(false);
         }

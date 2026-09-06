@@ -983,6 +983,7 @@ public static class SceneRenderer
         var revisions = DetailRevisions.GetValue(layer, static l => new(l));
         var cache = options.ObjectCache!;
         var hits = cache.Hits; var misses = cache.Misses;
+        using var batchScratch = new StampBatchScratch();
         for (var y = (int)Math.Floor(view.Top / worldSize); y <= (int)Math.Floor(view.Bottom / worldSize); y++)
         for (var x = (int)Math.Floor(view.Left / worldSize); x <= (int)Math.Floor(view.Right / worldSize); x++)
         {
@@ -1019,10 +1020,11 @@ public static class SceneRenderer
                 if (options.Stats is { } preparation)
                     preparation.DetailPrepareMilliseconds += System.Diagnostics.Stopwatch.GetElapsedTime(prepareStarted).TotalMilliseconds;
                 var rasterStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+                if (!TryDrawDenseAtlas(target, ordered, layer.Id, bucket, cache, options, batchScratch))
                 for (var i = 0; i < ordered.Count; i++)
                 {
                     if (!ordered[i].Visible) continue;
-                    var batch = TryDrawStampBatch(target, ordered, i, options);
+                    var batch = TryDrawStampBatch(target, ordered, i, options, batchScratch);
                     if (batch > 0) i += batch - 1;
                     else DrawObject(target, ordered[i], document.StampForeground, options);
                 }
@@ -1055,15 +1057,25 @@ public static class SceneRenderer
     }
 
     /// <summary>Consecutive, compatible stamps share one submission without reordering the scene.</summary>
-    private static int TryDrawStampBatch(SKCanvas canvas, IReadOnlyList<SceneObject> objects, int start, RenderOptions options)
+    private static int TryDrawStampBatch(SKCanvas canvas, IReadOnlyList<SceneObject> objects, int start,
+        RenderOptions options, StampBatchScratch? scratch = null)
     {
         var first = objects[start];
         if (!Compatible(first) || options.Stamps?.TryGetImage(first.Stamp!.AssetSha256) is not { } image) return 0;
+        var canvasMatrix = canvas.TotalMatrix;
+        var pixelScale = Math.Sqrt(canvasMatrix.ScaleX * canvasMatrix.ScaleX + canvasMatrix.SkewY * canvasMatrix.SkewY);
+        // Skia's raster atlas shader omits mipmap sampling. Keep the independent DrawImage
+        // evaluator for minified CPU stamps; the native GPU atlas honours the sampling contract.
+        if (options.GpuContext is null
+            && (first.Width * pixelScale < image.Width || first.Height * pixelScale < image.Height)) return 0;
         var count = 0;
         while (start + count < objects.Count && count < 8192)
         {
             var item = objects[start + count];
             if (!Compatible(item) || item.Stamp!.AssetSha256 != first.Stamp!.AssetSha256
+                // A batch has one sampled image. Mixing dimensions chooses the largest
+                // member's mip for earlier stamps, changing their pixels on an append/rebuild.
+                || item.Width != first.Width || item.Height != first.Height
                 || Math.Abs(item.Width / image.Width - item.Height / image.Height) > 0.000001) break;
             count++;
         }
@@ -1073,15 +1085,15 @@ public static class SceneRenderer
         if (count == 0 || (count == 1 && options.GpuContext is null)) return 0;
         if (options.Stamps is { } stamps)
         {
-            var matrix = canvas.TotalMatrix;
-            var viewScale = Math.Sqrt(matrix.ScaleX * matrix.ScaleX + matrix.SkewY * matrix.SkewY);
-            var maxWidth = 0d; var maxHeight = 0d;
-            for (var i = 0; i < count; i++) { maxWidth = Math.Max(maxWidth, objects[start + i].Width); maxHeight = Math.Max(maxHeight, objects[start + i].Height); }
-            image = stamps.TryGetImageForPixelSize(first.Stamp!.AssetSha256, maxWidth * viewScale, maxHeight * viewScale) ?? image;
+            image = stamps.TryGetImageForPixelSize(first.Stamp!.AssetSha256,
+                first.Width * pixelScale, first.Height * pixelScale) ?? image;
         }
-        var transforms = new SKRotationScaleMatrix[count];
-        var sources = new SKRect[count];
-        var colors = new SKColor[count];
+        // The individual GPU evaluator supplies explicit CPU mip pixels for a fractional level.
+        // Keep that same sampling when a small/non-cacheable scene would otherwise use DrawAtlas.
+        if (options.GpuContext is not null
+            && StampMipSampling.Weight(image, first.Width * pixelScale, first.Height * pixelScale) > 0) return 0;
+        var (transforms, sources, colors) = scratch?.Get(count)
+            ?? (new SKRotationScaleMatrix[count], new SKRect[count], new SKColor[count]);
         for (var i = 0; i < count; i++)
         {
             var item = objects[start + i];
@@ -1094,7 +1106,9 @@ public static class SceneRenderer
             sources[i] = new(0, 0, image.Width, image.Height);
             colors[i] = SKColors.White.WithAlpha(Alpha(item.ObjectOpacity));
         }
-        using var paint = new SKPaint { IsAntialias = true, BlendMode = SKBlendMode.SrcOver };
+        using var ownedPaint = scratch is null
+            ? new SKPaint { IsAntialias = true, BlendMode = SKBlendMode.SrcOver } : null;
+        var paint = scratch?.Paint ?? ownedPaint!;
         canvas.DrawAtlas(image, sources, transforms, colors, SKBlendMode.Modulate,
             new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear), paint);
         if (options.Stats is { } stats)
@@ -1323,8 +1337,13 @@ public static class SceneRenderer
         SKCanvas canvas,
         SceneObject sceneObject,
         StampForegroundSurface? stampForeground,
-        RenderOptions options)
+        RenderOptions options,
+        bool prepareGpuEffect = true)
     {
+        if (prepareGpuEffect && options.GpuContext is not null
+            && sceneObject.Stamp is { Blend: "Normal", ClipMaskEnabled: false } effect
+            && (effect.Blur > 0 || effect.ShadowOpacity > 0 && effect.ShadowBlur > 0)
+            && TryDrawRasterStampEffect(canvas, sceneObject, stampForeground, options)) return;
         canvas.Save();
         ApplyRotation(canvas, sceneObject);
 
@@ -1407,6 +1426,164 @@ public static class SceneRenderer
         }
 
         canvas.Restore();
+    }
+
+    private static bool TryDrawDenseAtlas(SKCanvas canvas, IReadOnlyList<SceneObject> objects,
+        LayerId layer, int bucket, ObjectOverviewCache cache, RenderOptions options, StampBatchScratch scratch)
+    {
+        if (options.GpuContext is null || options.Stamps is not { } stamps || objects.Count == 0) return false;
+        var matrix = canvas.TotalMatrix;
+        var scale = Math.Sqrt(matrix.ScaleX * matrix.ScaleX + matrix.SkewY * matrix.SkewY);
+        var sources = new Dictionary<(string Sha, double Width, double Height), SKImage>();
+        foreach (var item in objects)
+        {
+            if (!item.Visible) continue;
+            if (item.Stamp is not { FlipHorizontal: false, FlipVertical: false, ClipMaskEnabled: false,
+                ShadowOpacity: 0, Blur: 0, Hue: 0, Saturation: 0, Brightness: 0, Contrast: 0, Blend: "Normal" } stamp)
+                return false;
+            var key = (stamp.AssetSha256, item.Width, item.Height);
+            if (sources.ContainsKey(key)) continue;
+            if (sources.Count >= 8 || stamps.TryGetImage(stamp.AssetSha256) is not { } original) return false;
+            var image = stamps.TryGetImageForPixelSize(stamp.AssetSha256, item.Width * scale, item.Height * scale) ?? original;
+            // At most one lower mip is sampled. Four transparent border pixels isolate it from
+            // neighbouring atlas cells; close zoom still uses every original source pixel.
+            if (image.Width > 1024 || image.Height > 1024
+                || image.Width > item.Width * scale * 2.001 || image.Height > item.Height * scale * 2.001
+                || Math.Abs(item.Width / image.Width - item.Height / image.Height) > .000001) return false;
+            sources.Add(key, image);
+        }
+        if (sources.Count == 0) return true;
+        var keys = sources.Keys.OrderBy(key => sources[key].UniqueId).ThenBy(key => key.Width).ThenBy(key => key.Height).ToArray();
+        var cell = 16;
+        while (cell < sources.Values.Max(image => Math.Max(image.Width + Math.Max(1, image.Width / 2) + 12, image.Height + 8))) cell *= 2;
+        var columns = keys.Length <= 1 ? 1 : keys.Length <= 4 ? 2 : 4;
+        var rows = keys.Length <= columns ? 1 : 2;
+        if ((long)columns * rows * cell * cell > 4L * 1024 * 1024) return false;
+        var slots = new Dictionary<(string Sha, double Width, double Height), int>();
+        var upper = new SKRect[keys.Length]; var lower = new SKRect[keys.Length]; var weights = new float[keys.Length];
+        for (var index = 0; index < keys.Length; index++)
+        {
+            var key = keys[index]; var image = sources[key]; slots.Add(key, index);
+            var x = index % columns * cell + 4; var y = index / columns * cell + 4;
+            upper[index] = new(x, y, x + image.Width, y + image.Height);
+            lower[index] = new(x + image.Width + 4, y, x + image.Width + 4 + Math.Max(1, image.Width / 2), y + Math.Max(1, image.Height / 2));
+            weights[index] = StampMipSampling.Weight(image, key.Width * scale, key.Height * scale);
+        }
+        var hash = 14695981039346656037UL;
+        foreach (var key in keys)
+        {
+            hash = unchecked((hash ^ sources[key].UniqueId) * 1099511628211UL);
+            hash = unchecked((hash ^ (ulong)BitConverter.DoubleToInt64Bits(key.Width)) * 1099511628211UL);
+            hash = unchecked((hash ^ (ulong)BitConverter.DoubleToInt64Bits(key.Height)) * 1099511628211UL);
+        }
+        var atlas = cache.GetOrCreate(layer, 0, 0, 20000 + bucket, hash, () =>
+        {
+            using var surface = SKSurface.Create(new SKImageInfo(columns * cell, rows * cell))!;
+            surface.Canvas.Clear(SKColors.Transparent);
+            for (var index = 0; index < keys.Length; index++)
+            {
+                var image = sources[keys[index]];
+                StampMipSampling.CopyClamped(surface.Canvas, image, upper[index]);
+                using var half = StampMipSampling.Half(image);
+                StampMipSampling.CopyClamped(surface.Canvas, half, lower[index]);
+            }
+            return surface.Snapshot();
+        }).Image;
+        using var shader = weights.Any(weight => weight > 0) ? StampMipSampling.Shader(atlas, upper, lower, weights) : null;
+        using var directShader = atlas.ToShader(SKShaderTileMode.Clamp, SKShaderTileMode.Clamp, new SKSamplingOptions(SKFilterMode.Linear));
+        using var paint = new SKPaint { BlendMode = SKBlendMode.SrcOver };
+        // Keep the original order, including overlap and opacity. Only texture switches disappear.
+        bool NeedsMip(SceneObject item) => item.Visible && weights[slots[(item.Stamp!.AssetSha256, item.Width, item.Height)]] > 0;
+        for (var start = 0; start < objects.Count;)
+        {
+            var mip = NeedsMip(objects[start]);
+            var count = 1;
+            while (start + count < objects.Count && count < 8192 && NeedsMip(objects[start + count]) == mip) count++;
+            paint.Shader = mip ? shader : directShader;
+            var positions = new SKPoint[count * 4]; var texture = new SKPoint[count * 4];
+            var colors = new SKColor[count * 4]; var indices = new ushort[count * 6];
+            for (var index = 0; index < count; index++)
+            {
+                var item = objects[start + index];
+                if (!item.Visible) continue;
+                var image = sources[(item.Stamp!.AssetSha256, item.Width, item.Height)];
+                var angle = item.RotationDegrees * Math.PI / 180;
+                var ratio = item.Width / image.Width;
+                var cos = ratio * Math.Cos(angle); var sin = ratio * Math.Sin(angle);
+                var tx = item.X + item.Width / 2 - cos * image.Width / 2 + sin * image.Height / 2;
+                var ty = item.Y + item.Height / 2 - sin * image.Width / 2 - cos * image.Height / 2;
+                var vertex = index * 4;
+                positions[vertex] = new((float)tx, (float)ty);
+                positions[vertex + 1] = new((float)(tx + cos * image.Width), (float)(ty + sin * image.Width));
+                positions[vertex + 2] = new((float)(tx + cos * image.Width - sin * image.Height), (float)(ty + sin * image.Width + cos * image.Height));
+                positions[vertex + 3] = new((float)(tx - sin * image.Height), (float)(ty + cos * image.Height));
+                var rect = upper[slots[(item.Stamp.AssetSha256, item.Width, item.Height)]];
+                texture[vertex] = new(rect.Left, rect.Top); texture[vertex + 1] = new(rect.Right, rect.Top);
+                texture[vertex + 2] = new(rect.Right, rect.Bottom); texture[vertex + 3] = new(rect.Left, rect.Bottom);
+                for (var corner = 0; corner < 4; corner++) colors[vertex + corner] = SKColors.White.WithAlpha(Alpha(item.ObjectOpacity));
+                indices[index * 6] = (ushort)vertex; indices[index * 6 + 1] = (ushort)(vertex + 1); indices[index * 6 + 2] = (ushort)(vertex + 2);
+                indices[index * 6 + 3] = (ushort)vertex; indices[index * 6 + 4] = (ushort)(vertex + 2); indices[index * 6 + 5] = (ushort)(vertex + 3);
+                if (options.Stats is { } stats)
+                { stats.ObjectsDrawn++; stats.ExactObjects++; stats.RecordExactObject(item); }
+            }
+            using var mesh = SKVertices.CreateCopy(SKVertexMode.Triangles, positions, texture, colors, indices);
+            canvas.DrawVertices(mesh, SKBlendMode.Modulate, paint);
+            if (options.Stats is { } statsAfter) { statsAfter.DrawCalls++; statsAfter.StampAtlasBatches++; }
+            start += count;
+        }
+        return true;
+    }
+
+    private sealed class StampBatchScratch : IDisposable
+    {
+        private readonly Dictionary<int, (SKRotationScaleMatrix[], SKRect[], SKColor[])> _small = [];
+        public SKPaint Paint { get; } = new() { IsAntialias = true, BlendMode = SKBlendMode.SrcOver };
+        public (SKRotationScaleMatrix[], SKRect[], SKColor[]) Get(int count)
+        {
+            if (_small.TryGetValue(count, out var buffers)) return buffers;
+            buffers = (new SKRotationScaleMatrix[count], new SKRect[count], new SKColor[count]);
+            // A frame with thousands of alternating sources mostly submits one/two stamps.
+            // Reuse those exact-sized arrays; large runs remain bounded by the batch limit.
+            if (count <= 32) _small.Add(count, buffers);
+            return buffers;
+        }
+        public void Dispose() => Paint.Dispose();
+    }
+
+    private static bool TryDrawRasterStampEffect(SKCanvas canvas, SceneObject sceneObject,
+        StampForegroundSurface? stampForeground, RenderOptions options)
+    {
+        // Skia's GPU blur uses a different kernel approximation. Prepare only this bounded
+        // source-over stamp with the CPU evaluator, then composite its device pixels on the GPU.
+        // The dense neutral stamp layer and the independent export evaluator stay accelerated
+        // and unchanged respectively. No document or source image is modified.
+        var matrix = canvas.TotalMatrix;
+        var device = matrix.MapRect(ToRect(SceneGeometry.BoundsOf(sceneObject)));
+        var clip = canvas.DeviceClipBounds;
+        var left = (int)Math.Floor(Math.Max(device.Left - 2, clip.Left));
+        var top = (int)Math.Floor(Math.Max(device.Top - 2, clip.Top));
+        var right = (int)Math.Ceiling(Math.Min(device.Right + 2, clip.Right));
+        var bottom = (int)Math.Ceiling(Math.Min(device.Bottom + 2, clip.Bottom));
+        var width = right - left; var height = bottom - top;
+        if (width <= 0 || height <= 0) return true;
+        if ((long)width * height > 4L * 1024 * 1024) return false;
+        using var surface = SKSurface.Create(new SKImageInfo(width, height));
+        if (surface is null) return false;
+        var target = surface.Canvas;
+        target.Clear(SKColors.Transparent);
+        target.Translate(-left, -top);
+        target.Concat(matrix);
+        DrawObject(target, sceneObject, stampForeground, new RenderOptions
+        {
+            Stamps = options.Stamps, Stats = options.Stats, ViewScale = options.ViewScale,
+            VisibleWorld = options.VisibleWorld, LodTier = options.LodTier, IsExport = options.IsExport,
+        }, prepareGpuEffect: false);
+        using var image = surface.Snapshot();
+        canvas.Save();
+        canvas.ResetMatrix();
+        canvas.DrawImage(image, left, top, new SKSamplingOptions(SKFilterMode.Nearest));
+        canvas.Restore();
+        return true;
     }
 
     private static void DrawGridLayer(
@@ -2050,7 +2227,7 @@ public static class SceneRenderer
             var matrix = canvas.TotalMatrix;
             var viewScale = Math.Sqrt(matrix.ScaleX * matrix.ScaleX + matrix.SkewY * matrix.SkewY);
             image = options.Stamps?.TryGetImageForPixelSize(stamp.AssetSha256, rect.Width * viewScale, rect.Height * viewScale) ?? image;
-            DrawStampImage(canvas, image, rect, stamp, paint);
+            DrawStampImage(canvas, image, rect, stamp, paint, options);
         }
         else
         {
@@ -2142,7 +2319,7 @@ public static class SceneRenderer
 
         using (var basePaint = new SKPaint { Color = SKColors.White, IsAntialias = true })
         {
-            DrawStampImage(canvas, visual, rect, stamp, basePaint);
+            DrawStampImage(canvas, visual, rect, stamp, basePaint, options);
         }
 
         // Overlay = Foreground(map coordinates) × Mask(stamp coordinates) × original visual alpha.
@@ -2182,7 +2359,7 @@ public static class SceneRenderer
             ColorFilter = maskFilter,
         })
         {
-            DrawStampImage(canvas, mask, rect, stamp, maskPaint);
+            DrawStampImage(canvas, mask, rect, stamp, maskPaint, options);
         }
         using (var alphaPaint = new SKPaint
         {
@@ -2191,14 +2368,14 @@ public static class SceneRenderer
             BlendMode = SKBlendMode.DstIn,
         })
         {
-            DrawStampImage(canvas, visual, rect, stamp, alphaPaint);
+            DrawStampImage(canvas, visual, rect, stamp, alphaPaint, options);
         }
         canvas.Restore();
         canvas.Restore();
     }
 
     private static void DrawStampImage(
-        SKCanvas canvas, SKImage image, SKRect rect, StampStyle stamp, SKPaint paint)
+        SKCanvas canvas, SKImage image, SKRect rect, StampStyle stamp, SKPaint paint, RenderOptions options)
     {
         canvas.Save();
         if (stamp.FlipHorizontal || stamp.FlipVertical)
@@ -2207,6 +2384,7 @@ public static class SceneRenderer
             canvas.Scale(stamp.FlipHorizontal ? -1 : 1, stamp.FlipVertical ? -1 : 1);
             canvas.Translate(-rect.MidX, -rect.MidY);
         }
+        if (options.GpuContext is null || !StampMipSampling.DrawImage(canvas, image, rect, paint))
         canvas.DrawImage(
             image,
             rect,

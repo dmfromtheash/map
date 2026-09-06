@@ -26,6 +26,10 @@ internal static class StampOcclusion
         var visible = new List<SceneObject>();
         for (var index = ordered.Count - 1; index >= 0 && remaining > 0; index--)
         {
+            // A sparse-alpha forest can spend more time proving coverage than drawing it.
+            // If the first 128 frontmost stamps covered no complete cell, skip this optional
+            // optimization for the tile. Returning all candidates is always pixel preserving.
+            if (ordered.Count - 1 - index == 128 && remaining == covered.Length) return ordered;
             var item = ordered[index];
             if (!item.Visible || item.ObjectOpacity <= 0) continue;
             var bounds = SceneGeometry.BoundsOf(item);

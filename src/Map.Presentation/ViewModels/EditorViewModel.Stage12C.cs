@@ -334,7 +334,7 @@ public sealed partial class EditorViewModel
         try
         {
             using var stamps = new ExportStampImageSource(snapshot, sourcePath, _assetCatalog);
-            var result = await RunResourceOperationAsync(() => _imageExporter.ExportAsync(
+            var result = await RunLocalResourceOperationAsync(() => _imageExporter.ExportAsync(
                 snapshot,
                 plan,
                 destination,
@@ -355,7 +355,7 @@ public sealed partial class EditorViewModel
             _exportProgressText = "Отменено после безопасной очистки временных данных.";
             return false;
         }
-        catch (Exception ex) when (ex is ExportOperationException or ExportValidationException
+        catch (Exception ex) when (ex is InvalidOperationException or ExportOperationException or ExportValidationException
             or IOException or UnauthorizedAccessException or InvalidDataException)
         {
             _exportValidationError = ex.Message;
@@ -457,7 +457,7 @@ public sealed partial class EditorViewModel
         try
         {
             using var stamps = new ExportStampImageSource(snapshot, sourcePath, _assetCatalog);
-            var preview = await RunResourceOperationAsync(() => _imageExporter.RenderPreviewAsync(
+            var preview = await RunLocalResourceOperationAsync(() => _imageExporter.RenderPreviewAsync(
                 snapshot, plan, stamps, cancellationToken), cancellationToken).ConfigureAwait(true);
             if (generation != _exportPreviewGeneration || cancellationToken.IsCancellationRequested)
             {
@@ -470,7 +470,7 @@ public sealed partial class EditorViewModel
         {
             return;
         }
-        catch (Exception ex) when (ex is ExportOperationException or IOException
+        catch (Exception ex) when (ex is InvalidOperationException or ExportOperationException or IOException
             or InvalidDataException or OutOfMemoryException)
         {
             if (generation == _exportPreviewGeneration)

@@ -196,10 +196,20 @@ public sealed partial class EditorViewModel : ViewModelBase
     public int ActiveResourceOperations { get; private set; }
 
     private async Task<T> RunResourceOperationAsync<T>(Func<Task<T>> operation, CancellationToken token = default)
+        => await RunLocalResourceOperationAsync(async () =>
+        {
+            using var reservation = await Map.Core.Resources.WorkingMemoryBudget.Shared.EnterHeavyAsync(token);
+            return await operation();
+        }, token);
+
+    private async Task<T> RunLocalResourceOperationAsync<T>(Func<Task<T>> operation, CancellationToken token = default)
     {
         await _resourceGate.WaitAsync(token);
         ActiveResourceOperations++;
-        try { token.ThrowIfCancellationRequested(); return await operation(); }
+        try
+        {
+            token.ThrowIfCancellationRequested(); return await operation();
+        }
         finally { ActiveResourceOperations--; _resourceGate.Release(); }
     }
     private readonly AssetCatalog? _assetCatalog;
@@ -323,6 +333,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         DateTimeOffset? lastSavedUtc = null)
     {
         Session = new EditingSession(document);
+        Session.ResourceAdmissionChanged += (_, _) => Raise(nameof(StatusDetail));
         DocumentPath = documentPath;
         _store = store;
         _recent = recent;
@@ -490,7 +501,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// <summary>Short human explanation of the last failure, with the recovery path when one exists.</summary>
     public string StatusDetail
     {
-        get => _statusDetail;
+        get => Session.LastResourceError ?? _statusDetail;
         private set => SetField(ref _statusDetail, value);
     }
 
@@ -6589,6 +6600,15 @@ public sealed partial class EditorViewModel : ViewModelBase
             .Select(sceneObject => sceneObject.Id),
     ];
 
+    private bool IsObjectAvailable(SceneObject sceneObject)
+    {
+        if (!DocumentRevisionIndex.For(Session.Document).TryFind(sceneObject.Id, out var location)
+            || Session.Document.Layers[location.LayerIndex] is not ObjectLayer { Visible: true, Locked: false } layer)
+            return false;
+        return location.Object is { Visible: true, Locked: false }
+            && layer.StateFor(location.Object.Sublayer) is { Visible: true, Locked: false };
+    }
+
     // ---------------------------------------------------------------- groups
 
     /// <summary>At least two existing, ungrouped objects are selected.</summary>
@@ -6909,9 +6929,13 @@ public sealed partial class EditorViewModel : ViewModelBase
     public void NudgeSelectedObject(double deltaX, double deltaY)
     {
         if (EditableSelectionList() is not { } before) return;
-        ExecuteWholeSelection(before,
-            QuantizeTransformedGeometries(before, MultiSelectionGeometry.Translate(before, deltaX, deltaY)),
-            "Nudge selection");
+        var after = QuantizeTransformedGeometries(before, MultiSelectionGeometry.Translate(before, deltaX, deltaY));
+        // Other tools expose moved node coordinates; integer normalization can also alter an
+        // older stamp's size/angle. Those cases still need the complete context-panel refresh.
+        var positionOnly = before.Zip(after).All(pair => pair.First.Kind == SceneObjectKind.Stamp
+            && pair.First.Width == pair.Second.Width && pair.First.Height == pair.Second.Height
+            && pair.First.RotationDegrees == pair.Second.RotationDegrees);
+        ExecuteWholeSelection(before, after, "Nudge selection", geometryOnly: positionOnly);
     }
 
     public void ResizeSelectedObject(int direction, bool largerStep = false)
@@ -7439,7 +7463,7 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     /// <summary>One whole-selection edit = one history entry; an unchanged result = none.</summary>
     private void ExecuteWholeSelection(
-        IReadOnlyList<SceneObject> before, IReadOnlyList<SceneObject> after, string name)
+        IReadOnlyList<SceneObject> before, IReadOnlyList<SceneObject> after, string name, bool geometryOnly = false)
     {
         if (before.SequenceEqual(after))
         {
@@ -7447,7 +7471,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
 
         Session.Execute(new ReplaceObjectsCommand(before, after, name));
-        AfterEdit();
+        AfterEdit(geometryOnly);
     }
 
     /// <summary>
@@ -7462,8 +7486,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             return null;
         }
 
-        var availableIds = AvailableObjectIds();
-        if (selected.Any(sceneObject => !availableIds.Contains(sceneObject.Id)))
+        if (selected.Any(sceneObject => !IsObjectAvailable(sceneObject)))
         {
             StatusDetail = "В выделении есть скрытые или заблокированные объекты либо слои — изменение отклонено целиком.";
             return null;
@@ -8019,7 +8042,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         Raise(nameof(CanRedo));
     }
 
-    private void AfterEdit()
+    private void AfterEdit(bool geometryOnly = false)
     {
         _lastCommittedEditUtc = _clock();
         SaveState = Session.IsDirty ? SaveState.Unsaved : SaveState.Saved;
@@ -8041,6 +8064,15 @@ public sealed partial class EditorViewModel : ViewModelBase
             _openGroupId = null;
         }
         RefreshInspector();
+        if (geometryOnly)
+        {
+            // A nudge changes coordinates, not layer/library/note/version rows. Keep the
+            // inspector, dirty/save state and canvas current without rebuilding every panel.
+            Raise(nameof(Title));
+            RaiseSessionState();
+            InvalidateScene(EditorChangeReason.ObjectProperties | EditorChangeReason.CanvasInvalidation);
+            return;
+        }
         Raise(nameof(SelectionStatus));
         Raise(nameof(SelectionKind));
         Raise(nameof(SelectionCount));
@@ -8268,7 +8300,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             return null;
         }
 
-        if (!AvailableObjectIds().Contains(selected.Id))
+        if (!IsObjectAvailable(selected))
         {
             StatusDetail = "Объект или его слой скрыт либо заблокирован — изменение отклонено.";
             return null;

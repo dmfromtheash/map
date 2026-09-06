@@ -161,7 +161,8 @@ public sealed class TileImageCache : IDisposable
 
     private void Trim(Key? protectedKey)
     {
-        while (_entries.Count > _capacity || Bytes > _byteCapacity)
+        var budget = Map.Core.Resources.WorkingMemoryBudget.Shared.IsUnderPressure ? 0 : _byteCapacity;
+        while (_entries.Count > _capacity || Bytes > budget)
         {
             Key oldestKey = default;
             Entry? oldestEntry = null;

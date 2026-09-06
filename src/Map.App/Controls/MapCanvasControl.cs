@@ -429,6 +429,10 @@ public sealed partial class MapCanvasControl : Control
                 objectCache.BeginFrame();
                 overviewFrame = true;
                 using var lease = feature.Lease();
+                // One Avalonia GPU context is shared by the windows. Bound its reusable texture
+                // cache; active frame resources remain owned by the borrowed lease/driver.
+                if (lease.GrContext is { } gpu && gpu.GetResourceCacheLimit() > 64L * 1024 * 1024)
+                    gpu.SetResourceCacheLimit(64L * 1024 * 1024);
                 var canvas = lease.SkCanvas;
                 var viewport = editor.Session.Viewport;
                 var (X, Y) = viewport.ScreenToWorld(0, 0);

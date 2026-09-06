@@ -13,11 +13,13 @@ public sealed class EditingSession
     private readonly List<HistoryEntry> _redo = [];
     private StateNode _currentState;
     private StateNode? _savedState;
+    private readonly Map.Core.Resources.WorkingMemoryBudget _memory;
 
-    public EditingSession(MapDocument document)
+    public EditingSession(MapDocument document, Map.Core.Resources.WorkingMemoryBudget? memory = null)
     {
         ArgumentNullException.ThrowIfNull(document);
         Document = document;
+        _memory = memory ?? Map.Core.Resources.WorkingMemoryBudget.Shared;
         _currentState = new StateNode(parent: null);
         _savedState = _currentState;
         SavedRevision = 0;
@@ -174,6 +176,16 @@ public sealed class EditingSession
     public void Execute(IEditCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
+        if (!_memory.TryReserve(
+            Map.Core.Resources.WorkingMemoryBudget.EditReserveBytes, out var reservation, out var reason))
+        {
+            LastResourceError = reason;
+            ResourceAdmissionChanged?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+        using var held = reservation;
+        if (LastResourceError is not null)
+        { LastResourceError = null; ResourceAdmissionChanged?.Invoke(this, EventArgs.Empty); }
         Document = command.Apply(Document);
         Revision++;
         var afterState = new StateNode(_currentState);
@@ -183,6 +195,9 @@ public sealed class EditingSession
         PruneSelection();
     }
 
+    public string? LastResourceError { get; private set; }
+    public event EventHandler? ResourceAdmissionChanged;
+
     public bool Undo()
     {
         if (_undo.Count == 0)
@@ -191,8 +206,8 @@ public sealed class EditingSession
         }
 
         var entry = _undo[^1];
-        _undo.RemoveAt(_undo.Count - 1);
         Document = entry.Command.Revert(Document);
+        _undo.RemoveAt(_undo.Count - 1);
         Revision++;
         _currentState = entry.BeforeState;
         _redo.Add(entry);
@@ -208,8 +223,8 @@ public sealed class EditingSession
         }
 
         var entry = _redo[^1];
-        _redo.RemoveAt(_redo.Count - 1);
         Document = entry.Command.Apply(Document);
+        _redo.RemoveAt(_redo.Count - 1);
         Revision++;
         _currentState = entry.AfterState;
         _undo.Add(entry);
