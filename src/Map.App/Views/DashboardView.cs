@@ -225,6 +225,8 @@ public sealed class DashboardView : UserControl
         var open = EntryButton("OpenFileButton", "Открыть проект", _openFileRequested);
         ToolTip.SetTip(open, $"Открыть файл проекта .mapproj  ({_shortcuts.Get(EditorShortcutSettings.Commands.OpenMap)})");
         var extras = new WrapPanel { ItemSpacing = 12, LineSpacing = 10 };
+        extras.Children.Add(Ui.TextButton("OpenExportedPngButton", "Просмотр PNG…",
+            () => PngMapWindow.ShowFor(TopLevel.GetTopLevel(this) as Window), "ghost"));
         if (_templateRequested is not null)
             extras.Children.Add(EntryButton("CreateFromTemplateButton", "Из шаблона", _templateRequested));
         if (_backupRequested is not null)

@@ -138,6 +138,7 @@ public sealed partial class EditorView : UserControl
     private Button _startExportButton = null!;
     private Button _cancelExportButton = null!;
     private Button _openExportFolderButton = null!;
+    private Button _viewExportedPngButton = null!;
     private bool _syncingExport;
     private Bitmap? _exportPreviewBitmap;
     private byte[]? _shownExportPreviewPng;
@@ -6948,6 +6949,8 @@ public sealed partial class EditorView : UserControl
             "CancelExportButton", "Отменить экспорт", _editor.CancelExport, "destructive");
         _openExportFolderButton = Ui.TextButton(
             "OpenExportFolderButton", "Открыть папку", _editor.OpenExportFolder, "accent");
+        _viewExportedPngButton = Ui.TextButton("ViewExportedPngButton", "Просмотреть в Map",
+            () => PngMapWindow.ShowFor(_exportWindow, _editor.ExportResultPath), "accent");
         var close = Ui.TextButton("CloseExportButton", "Закрыть", () =>
         {
             _editor.CloseExport();
@@ -7010,7 +7013,7 @@ public sealed partial class EditorView : UserControl
             {
                 _exportError, _exportProgress, _exportProgressText, _exportResult,
                 new WrapPanel { ItemSpacing = 8, LineSpacing = 8, Children =
-                    { _startExportButton, _cancelExportButton, _openExportFolderButton, close } },
+                    { _startExportButton, _cancelExportButton, _viewExportedPngButton, _openExportFolderButton, close } },
             } },
         }.Classed("dialog-footer");
         return new DockPanel { Children = { footer.Docked(Dock.Bottom), new ScrollViewer
@@ -7044,9 +7047,11 @@ public sealed partial class EditorView : UserControl
             },
         };
 
-        void Wire(TextBox box, Action<string> write) => box.TextChanged += (_, _) =>
+        // TextChanged is queued by Avalonia. A preview/state refresh could overwrite a newly
+        // typed dimension before that event ran; commit the Text property change immediately.
+        void Wire(TextBox box, Action<string> write) => box.PropertyChanged += (_, change) =>
         {
-            if (!_syncingExport)
+            if (change.Property == TextBox.TextProperty && !_syncingExport)
             {
                 write(box.Text ?? "");
                 SyncExport();
@@ -7428,6 +7433,9 @@ public sealed partial class EditorView : UserControl
             _cancelExportButton.IsVisible = _editor.ExportRunning;
             _openExportFolderButton.IsEnabled = _editor.CanOpenExportFolder;
             _openExportFolderButton.IsVisible = _editor.ExportResultPath is not null;
+            _viewExportedPngButton.IsVisible = !_editor.ExportRunning
+                && string.Equals(Path.GetExtension(_editor.ExportResultPath), ".png", StringComparison.OrdinalIgnoreCase)
+                && File.Exists(_editor.ExportResultPath);
         }
         finally
         {

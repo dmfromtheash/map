@@ -9,6 +9,7 @@ internal sealed class PngPixelReader : IDisposable
 {
     internal delegate void RowConsumer(ReadOnlySpan<byte> rgba);
     private readonly FileStream _file;
+    private readonly int _channels;
     public int Width { get; }
     public int Height { get; }
 
@@ -26,8 +27,10 @@ internal sealed class PngPixelReader : IDisposable
             Width = BinaryPrimitives.ReadInt32BigEndian(header[16..]);
             Height = BinaryPrimitives.ReadInt32BigEndian(header[20..]);
             if (Width <= 0 || Height <= 0 || Width > ExportEngineSettings.DefaultMaxOutputEdge
-                || Height > ExportEngineSettings.DefaultMaxOutputEdge || !header[24..29].SequenceEqual(new byte[] { 8, 6, 0, 0, 0 }))
-                throw new InvalidDataException("Этот просмотр поддерживает PNG RGBA 8 bit без чересстрочной записи, создаваемый экспортом Map.");
+                || Height > ExportEngineSettings.DefaultMaxOutputEdge || header[24] != 8 || header[25] is not (2 or 6)
+                || !header[26..29].SequenceEqual(new byte[] { 0, 0, 0 }))
+                throw new InvalidDataException("Этот просмотр поддерживает PNG RGB/RGBA 8 bit без чересстрочной записи, создаваемый экспортом Map.");
+            _channels = header[25] == 6 ? 4 : 3;
         }
         catch { _file.Dispose(); throw; }
     }
@@ -36,15 +39,22 @@ internal sealed class PngPixelReader : IDisposable
     {
         using var chunks = new ImageDataStream(_file, token);
         using var zlib = new ZLibStream(chunks, CompressionMode.Decompress, leaveOpen: true);
-        var filtered = new byte[checked(Width * 4 + 1)];
-        var previous = new byte[Width * 4];
+        var filtered = new byte[checked(Width * _channels + 1)];
+        var previous = new byte[Width * _channels];
+        var expanded = _channels == 3 ? new byte[Width * 4] : [];
         for (var y = 0; y < Height; y++)
         {
             token.ThrowIfCancellationRequested();
             zlib.ReadExactly(filtered);
             var row = filtered.AsSpan(1);
-            Unfilter(filtered[0], row, previous);
-            consume(row);
+            Unfilter(filtered[0], row, previous, _channels);
+            if (_channels == 4) consume(row);
+            else
+            {
+                for (var x = 0; x < Width; x++)
+                { row.Slice(x * 3, 3).CopyTo(expanded.AsSpan(x * 4)); expanded[x * 4 + 3] = 255; }
+                consume(expanded);
+            }
             row.CopyTo(previous);
         }
         if (zlib.ReadByte() != -1) throw new InvalidDataException("PNG содержит лишние строки.");
@@ -52,10 +62,10 @@ internal sealed class PngPixelReader : IDisposable
         while (chunks.Read(remaining) != 0) { }
     }
 
-    private static void Unfilter(byte filter, Span<byte> row, ReadOnlySpan<byte> previous)
+    private static void Unfilter(byte filter, Span<byte> row, ReadOnlySpan<byte> previous, int channels)
     {
         if (filter == 0) return;
-        if (filter == 1 && BitConverter.IsLittleEndian)
+        if (filter == 1 && channels == 4 && BitConverter.IsLittleEndian)
         {
             var pixels = MemoryMarshal.Cast<byte, uint>(row);
             uint left = 0;
@@ -71,9 +81,9 @@ internal sealed class PngPixelReader : IDisposable
         if (filter > 4) throw new InvalidDataException("Неизвестный фильтр PNG.");
         for (var i = 0; i < row.Length; i++)
         {
-            var left = i >= 4 ? row[i - 4] : 0;
+            var left = i >= channels ? row[i - channels] : 0;
             var up = previous[i];
-            var corner = i >= 4 ? previous[i - 4] : 0;
+            var corner = i >= channels ? previous[i - channels] : 0;
             var predictor = filter switch
             {
                 1 => left,
@@ -99,6 +109,7 @@ internal sealed class PngPixelReader : IDisposable
         private int _remaining;
         private uint _crc;
         private bool _inChunk, _ended;
+        private readonly byte[] _skip = new byte[65536];
         public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
         public override int Read(Span<byte> buffer)
         {
@@ -113,6 +124,7 @@ internal sealed class PngPixelReader : IDisposable
                     source.ReadExactly(crc);
                     if (BinaryPrimitives.ReadUInt32BigEndian(crc) != ~_crc)
                         throw new InvalidDataException("Контрольная сумма PNG не совпала.");
+                    _inChunk = false;
                 }
                 source.ReadExactly(header);
                 var length = BinaryPrimitives.ReadInt32BigEndian(header);
@@ -125,6 +137,24 @@ internal sealed class PngPixelReader : IDisposable
                         throw new InvalidDataException("Окончание PNG повреждено.");
                     _ended = true;
                     return 0;
+                }
+                if ((header[4] & 32) != 0)
+                {
+                    if (header[4..].SequenceEqual("tRNS"u8) || header[4..].SequenceEqual("acTL"u8))
+                        throw new InvalidDataException("PNG с ключевой прозрачностью или анимацией пока не поддерживается просмотром Map.");
+                    // Ancillary metadata is not pixel data. Validate it without retaining it.
+                    for (var left = length; left > 0;)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        var skipCount = Math.Min(left, _skip.Length);
+                        source.ReadExactly(_skip.AsSpan(0, skipCount));
+                        _crc = StreamingPngWriter.UpdateCrc(_crc, _skip.AsSpan(0, skipCount));
+                        left -= skipCount;
+                    }
+                    source.ReadExactly(crc);
+                    if (BinaryPrimitives.ReadUInt32BigEndian(crc) != ~_crc)
+                        throw new InvalidDataException("Контрольная сумма метаданных PNG не совпала.");
+                    continue;
                 }
                 if (!header[4..].SequenceEqual("IDAT"u8))
                     throw new InvalidDataException("Неподдерживаемая последовательность блоков PNG Map.");

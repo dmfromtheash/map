@@ -8,7 +8,7 @@ namespace Map.Export;
 /// <summary>Derived, disposable PNG tiles for native viewing. Level zero preserves every source pixel.</summary>
 public sealed record PngTilePyramid(string DirectoryPath, int Width, int Height, int TileEdge, int Levels)
 {
-    private const int Version = 1;
+    private const int Version = 2;
     private const int Edge = 1024;
     private static readonly SemaphoreSlim BuildGate = new(1, 1);
 
@@ -64,9 +64,22 @@ public sealed record PngTilePyramid(string DirectoryPath, int Width, int Height,
         var manifestPath = Path.Combine(finalPath, "manifest.json");
         if (File.Exists(manifestPath) && new FileInfo(manifestPath).Length < 16384)
         {
-            var manifest = JsonSerializer.Deserialize<Manifest>(File.ReadAllText(manifestPath));
+            Manifest? manifest;
+            try { manifest = JsonSerializer.Deserialize<Manifest>(File.ReadAllText(manifestPath)); }
+            catch (JsonException ex) { throw new InvalidDataException("Данные просмотра повреждены: " + finalPath, ex); }
             if (manifest == new Manifest(Version, key, source.Width, source.Height, Edge, levels))
             {
+                // A manifest is published last, but the user or a disk failure can remove tiles later.
+                for (var level = 0; level < levels; level++)
+                {
+                    var size = result.LevelSize(level);
+                    for (var y = 0; y < size.Height; y += Edge)
+                    for (var x = 0; x < size.Width; x += Edge)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        result.CheckTile(level, x / Edge, y / Edge);
+                    }
+                }
                 progress?.Report(new(ExportPhase.Completed, 1, "Данные просмотра готовы."));
                 return result;
             }
@@ -112,8 +125,25 @@ public sealed record PngTilePyramid(string DirectoryPath, int Width, int Height,
         finally
         {
             // Only this invocation's generated GUID directory can be removed; never source/user files.
-            if (Directory.Exists(temporaryPath)) Directory.Delete(temporaryPath, recursive: true);
+            try { if (Directory.Exists(temporaryPath)) Directory.Delete(temporaryPath, recursive: true); }
+            catch (IOException) { /* An incomplete directory has no published manifest and is never used. */ }
+            catch (UnauthorizedAccessException) { }
         }
+    }
+
+    /// <summary>Validate dimensions before a UI codec is allowed to allocate any tile pixels.</summary>
+    public string CheckTile(int level, int column, int row)
+    {
+        var path = TilePath(level, column, row);
+        var size = LevelSize(level);
+        var info = new FileInfo(path);
+        if (!info.Exists || info.Length > 5L * 1024 * 1024)
+            throw new InvalidDataException("Не найден или повреждён участок просмотра: " + path);
+        using var header = new PngPixelReader(path);
+        if (header.Width != Math.Min(TileEdge, size.Width - column * TileEdge)
+            || header.Height != Math.Min(TileEdge, size.Height - row * TileEdge))
+            throw new InvalidDataException("Размер участка просмотра повреждён: " + path);
+        return path;
     }
 
     private sealed record Manifest(int Version, string SourceKey, int Width, int Height, int TileEdge, int Levels);
@@ -216,9 +246,14 @@ public sealed record PngTilePyramid(string DirectoryPath, int Width, int Height,
 
         private void CloseWriters()
         {
+            Exception? failure = null;
             foreach (var writer in _writers)
-                try { writer.Png.Dispose(); } finally { writer.File.Dispose(); }
+            {
+                try { writer.Png.Dispose(); } catch (Exception ex) when (ex is IOException or InvalidOperationException) { failure ??= ex; }
+                try { writer.File.Dispose(); } catch (IOException ex) { failure ??= ex; }
+            }
             _writers.Clear();
+            if (failure is not null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
         }
         public void Dispose() { try { CloseWriters(); } finally { _next?.Dispose(); } }
     }
