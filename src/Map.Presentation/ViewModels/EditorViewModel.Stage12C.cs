@@ -57,12 +57,37 @@ public sealed partial class EditorViewModel
     public bool ExportTransparencyAvailable => _exportFormat is not ExportImageFormat.Jpeg;
     public string ExportFormatExplanation => _exportFormat == ExportImageFormat.Jpeg
         ? "JPEG не хранит прозрачность: фон карты включён обязательно."
-        : "PNG и WebP могут сохранить прозрачный фон.";
+        : _exportFormat == ExportImageFormat.Png
+            ? "PNG сохраняет отрисованные детали без потерь, включая полный размер гигантской карты."
+            : "WebP может сохранить прозрачный фон.";
+    public int ExportScaleFactor => CurrentExportPlan is { } plan
+        && plan.OutputWidth % plan.SourceRegion.Width == 0
+        && plan.OutputHeight % plan.SourceRegion.Height == 0
+        && plan.OutputWidth / plan.SourceRegion.Width == plan.OutputHeight / plan.SourceRegion.Height
+            ? plan.OutputWidth / plan.SourceRegion.Width : 0;
+    public string ExportDetailSummary
+    {
+        get
+        {
+            if (CurrentExportPlan is not { } plan) return "";
+            var x = plan.OutputWidth / (double)plan.SourceRegion.Width;
+            var y = plan.OutputHeight / (double)plan.SourceRegion.Height;
+            var detail = x < 1 || y < 1
+                ? $"Выбрано уменьшение до {Math.Min(x, y):P0}: мелкие детали при приближении будут потеряны. «Полный размер» убирает уменьшение."
+                : x == 1 && y == 1
+                    ? "Полный размер 1:1 — карта сохраняется без уменьшения."
+                    : $"Повторная отрисовка в масштабе {x:N2} × {y:N2}. Детали берутся из исходных объектов; чёткость растров ограничена оригиналами ассетов.";
+            return detail + ((long)plan.OutputWidth * plan.OutputHeight > 268_435_456
+                ? " Для открытия такого большого PNG нужна программа просмотра, поддерживающая его размер. Можно также сохранить отдельный регион."
+                : "");
+        }
+    }
     public string ExportValidationError => _exportValidationError;
     public string ExportEstimateText => _exportEstimateText;
     public string ExportMemoryDetails => CurrentExportPlan is { } plan
         ? $"Оценка памяти экспорта с кэшами изображений: {plan.EstimatedRawWorkingBytes / (1024d * 1024):N0} МиБ. "
-            + "Перед запуском проверяется свободная память с резервом и место для временного результата. Память открытой карты и истории не входит в эту оценку."
+            + $"На диске нужно до {plan.RequiredFreeDiskBytes / (1024d * 1024 * 1024):N2} ГиБ с учётом временной записи; сжатый файл обычно меньше. "
+            + "Перед запуском проверяется свободная память с резервом. Память открытой карты и истории не входит в эту оценку."
         : "Выберите допустимые параметры экспорта. Причина отказа показана рядом с командой экспорта.";
     public byte[]? ExportPreviewPng => _exportPreviewPng;
     public bool ExportPreviewBusy => _exportPreviewBusy;
@@ -127,7 +152,7 @@ public sealed partial class EditorViewModel
         ExportImageFormat format, int scalePercent, bool includeGrid)
     {
         _defaultExportFormat = format;
-        _defaultExportScalePercent = Math.Clamp(scalePercent, 10, 800);
+        _defaultExportScalePercent = Math.Clamp(scalePercent, 100, 800);
         _defaultExportIncludeGrid = includeGrid;
     }
 
@@ -137,8 +162,9 @@ public sealed partial class EditorViewModel
         _exportOpen = true;
         _exportFormat = _defaultExportFormat;
         _exportAreaMode = ExportAreaMode.WholeCanvas;
-        _exportOutputMode = canvas.Width > ExportEngineSettings.DefaultMaxSingleEdge
-            || canvas.Height > ExportEngineSettings.DefaultMaxSingleEdge
+        _exportOutputMode = _exportFormat != ExportImageFormat.Png
+            && (canvas.Width * _defaultExportScalePercent / 100d > ExportEngineSettings.DefaultMaxSingleEdge
+                || canvas.Height * _defaultExportScalePercent / 100d > ExportEngineSettings.DefaultMaxSingleEdge)
             ? ExportOutputMode.TilePackage
             : ExportOutputMode.SingleImage;
         _exportRegionXText = "0";
@@ -158,6 +184,17 @@ public sealed partial class EditorViewModel
         _exportResultText = "";
         _exportResultPath = null;
         RaiseExportState();
+        RebuildExportPlanAndPreview();
+    }
+
+    public void SetExportScaleFactor(int factor)
+    {
+        if (_exportRunning || !TryExportSourceSize(out var width, out var height)) return;
+        if (factor is not (1 or 2 or 4 or 8)) throw new ArgumentOutOfRangeException(nameof(factor));
+        _exportAspectLocked = true;
+        SetExportDimension(ref _exportOutputWidthText, checked(width * factor), nameof(ExportOutputWidthText));
+        SetExportDimension(ref _exportOutputHeightText, checked(height * factor), nameof(ExportOutputHeightText));
+        Raise(nameof(ExportAspectLocked));
         RebuildExportPlanAndPreview();
     }
 
@@ -405,6 +442,9 @@ public sealed partial class EditorViewModel
         Raise(nameof(ExportEstimateText));
         Raise(nameof(ExportPreviewBusy));
         Raise(nameof(CanStartExport));
+        Raise(nameof(ExportScaleFactor));
+        Raise(nameof(ExportDetailSummary));
+        Raise(nameof(ExportMemoryDetails));
     }
 
     private async Task RenderExportPreviewAsync(

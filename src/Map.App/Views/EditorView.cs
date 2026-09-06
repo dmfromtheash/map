@@ -106,6 +106,7 @@ public sealed partial class EditorView : UserControl
     private readonly TextBox _exportOutputHeightBox = NumberBox("ExportOutputHeightBox");
     private readonly TextBlock _exportFormatExplanation = Status("ExportFormatExplanationText");
     private readonly TextBlock _exportEstimate = Status("ExportEstimateText");
+    private readonly TextBlock _exportDetailSummary = Status("ExportDetailSummaryText");
     private readonly TextBlock _exportMemoryDetails = new() { Name = "ExportMemoryDetails", TextWrapping = TextWrapping.Wrap };
     private readonly TextBlock _exportError = Status("ExportValidationErrorText");
     private readonly TextBlock _exportProgressText = Status("ExportProgressText");
@@ -126,6 +127,7 @@ public sealed partial class EditorView : UserControl
     private readonly Dictionary<ExportImageFormat, Button> _exportFormatButtons = [];
     private readonly Dictionary<ExportAreaMode, Button> _exportAreaButtons = [];
     private readonly Dictionary<ExportOutputMode, Button> _exportModeButtons = [];
+    private readonly Dictionary<int, Button> _exportScaleButtons = [];
     private ToggleButton _exportAspectToggle = null!;
     private ToggleButton _exportTransparencyToggle = null!;
     private ToggleButton _exportGridToggle = null!;
@@ -6871,6 +6873,19 @@ public sealed partial class EditorView : UserControl
                 Field("Итоговая высота, px", _exportOutputHeightBox),
             },
         };
+        var detailScale = new UniformGrid
+        {
+            Columns = 3,
+            Children =
+            {
+                Choice("ExportNativeSizeButton", "Полный размер", 1,
+                    _exportScaleButtons, _editor.SetExportScaleFactor),
+                Choice("ExportDoubleSizeButton", "Детализация 2×", 2,
+                    _exportScaleButtons, _editor.SetExportScaleFactor),
+                Choice("ExportQuadrupleSizeButton", "Детализация 4×", 4,
+                    _exportScaleButtons, _editor.SetExportScaleFactor),
+            },
+        };
         _exportAspectToggle = Toggle(
             "ExportAspectToggle", "Связать пропорции", _editor.SetExportAspectLocked);
 
@@ -6942,6 +6957,8 @@ public sealed partial class EditorView : UserControl
 
         _exportFormatExplanation.TextWrapping = TextWrapping.Wrap;
         _exportEstimate.TextWrapping = TextWrapping.Wrap;
+        _exportDetailSummary.TextWrapping = TextWrapping.Wrap;
+        _exportDetailSummary.Classed("role-caption");
         _exportError.TextWrapping = TextWrapping.Wrap;
         _exportError.Classed("danger", "role-caption");
         _exportProgressText.TextWrapping = TextWrapping.Wrap;
@@ -6964,14 +6981,16 @@ public sealed partial class EditorView : UserControl
                 new TextBlock { Text = "Экспорт изображения" }.Classed("role-panel"),
                 new TextBlock
                 {
-                    Text = "Предпросмотр показывает будущий результат. Заметки и панели редактора в изображение не попадают.",
+                    Text = "Предпросмотр уменьшен для этого окна. Размер готового файла задаётся ниже; заметки и панели редактора в него не попадают.",
                     TextWrapping = TextWrapping.Wrap,
                 }.Classed("faint", "role-caption"),
                 formats,
                 _exportFormatExplanation,
                 areas,
                 _exportRegionPanel,
+                detailScale,
                 outputSize,
+                _exportDetailSummary,
                 _exportAspectToggle,
                 modes,
                 _exportTransparencyToggle,
@@ -7342,6 +7361,8 @@ public sealed partial class EditorView : UserControl
                 Ui.SetSelected(button, area == _editor.ExportAreaMode);
             foreach (var (mode, button) in _exportModeButtons)
                 Ui.SetSelected(button, mode == _editor.ExportOutputMode);
+            foreach (var (scale, button) in _exportScaleButtons)
+                Ui.SetSelected(button, scale == _editor.ExportScaleFactor);
 
             _exportRegionPanel.IsVisible = _editor.ExportAreaMode == ExportAreaMode.Region;
             _exportQualityPanel.IsVisible = _editor.ExportQualityVisible;
@@ -7354,6 +7375,7 @@ public sealed partial class EditorView : UserControl
             _exportQualityText.Text = $"Качество: {_editor.ExportQuality}";
             _exportFormatExplanation.Text = _editor.ExportFormatExplanation;
             _exportEstimate.Text = _editor.ExportEstimateText;
+            _exportDetailSummary.Text = _editor.ExportDetailSummary;
             _exportMemoryDetails.Text = _editor.ExportMemoryDetails;
             _exportError.Text = _editor.ExportValidationError;
             _exportError.IsVisible = _editor.ExportValidationError.Length > 0;
@@ -7391,6 +7413,7 @@ public sealed partial class EditorView : UserControl
             foreach (var button in _exportFormatButtons.Values) button.IsEnabled = settingsEnabled;
             foreach (var button in _exportAreaButtons.Values) button.IsEnabled = settingsEnabled;
             foreach (var button in _exportModeButtons.Values) button.IsEnabled = settingsEnabled;
+            foreach (var button in _exportScaleButtons.Values) button.IsEnabled = settingsEnabled;
             _exportRegionXBox.IsEnabled = settingsEnabled;
             _exportRegionYBox.IsEnabled = settingsEnabled;
             _exportRegionWidthBox.IsEnabled = settingsEnabled;

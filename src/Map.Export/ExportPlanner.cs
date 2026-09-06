@@ -46,11 +46,12 @@ public static class ExportPlanner
         }
 
         if (request.OutputMode == ExportOutputMode.SingleImage
+            && request.Format != ExportImageFormat.Png
             && (request.OutputWidth > settings.MaxSingleEdge || request.OutputHeight > settings.MaxSingleEdge))
         {
             throw new ExportValidationException(
-                $"Одиночное изображение ограничено {settings.MaxSingleEdge:N0} px. "
-                + "Выберите «Пакет тайлов» или уменьшите размер.");
+                $"Один файл JPEG/WebP ограничен {settings.MaxSingleEdge:N0} px. "
+                + "Выберите PNG для полного размера или «Пакет тайлов».");
         }
 
         if (request.Format == ExportImageFormat.Jpeg && request.TransparentBackground)
@@ -67,17 +68,20 @@ public static class ExportPlanner
 
         try
         {
-            var columns = request.OutputMode == ExportOutputMode.TilePackage
+            var streamingPng = request.Format == ExportImageFormat.Png
+                && request.OutputMode == ExportOutputMode.SingleImage;
+            var tileHeight = streamingPng ? Math.Min(settings.TileEdge, 512) : settings.TileEdge;
+            var columns = request.OutputMode == ExportOutputMode.TilePackage || streamingPng
                 ? DivideRoundUp(request.OutputWidth, settings.TileEdge)
                 : 1;
-            var rows = request.OutputMode == ExportOutputMode.TilePackage
-                ? DivideRoundUp(request.OutputHeight, settings.TileEdge)
+            var rows = request.OutputMode == ExportOutputMode.TilePackage || streamingPng
+                ? DivideRoundUp(request.OutputHeight, tileHeight)
                 : 1;
             _ = checked(columns * rows);
 
             var bleed = EffectBleedPixels(document, region, request.OutputWidth, request.OutputHeight);
             var surfaceWidth = checked(Math.Min(settings.TileEdge, request.OutputWidth) + (2 * bleed));
-            var surfaceHeight = checked(Math.Min(settings.TileEdge, request.OutputHeight) + (2 * bleed));
+            var surfaceHeight = checked(Math.Min(tileHeight, request.OutputHeight) + (2 * bleed));
 
             if (surfaceWidth > settings.MaxTileSurfaceEdge || surfaceHeight > settings.MaxTileSurfaceEdge)
             {
@@ -89,9 +93,12 @@ public static class ExportPlanner
             var surfaceBytes = checked((long)surfaceWidth * surfaceHeight * 4);
             var tileCacheBytes = checked((long)settings.TileCacheCapacity
                 * TileMap.TileSize * TileMap.TileSize * 4);
-            var singleOutputBytes = request.OutputMode == ExportOutputMode.SingleImage
+            var singleOutputBytes = request.OutputMode == ExportOutputMode.SingleImage && !streamingPng
                 ? checked((long)request.OutputWidth * request.OutputHeight * 8) : 0;
-            var estimate = checked(AssetCacheBudget + tileCacheBytes + (surfaceBytes * 3) + singleOutputBytes);
+            var rowBuffers = streamingPng
+                ? checked((long)request.OutputWidth * 8 + columns * 65536L + 1024 * 1024) : 0;
+            var estimate = checked(AssetCacheBudget + tileCacheBytes + (surfaceBytes * 3)
+                + singleOutputBytes + rowBuffers);
 
             return new ExportPlan(
                 request.Format,

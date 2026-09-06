@@ -45,6 +45,7 @@ public enum ExportFaultPoint
     AfterRender,
     AfterTileWritten,
     BeforeFinalize,
+    AfterPngBand,
 }
 
 public sealed record ExportRequest(
@@ -75,6 +76,22 @@ public sealed record ExportPlan(
 {
     public int TileCount => checked(Columns * Rows);
     public bool IncludesBackground => !TransparentBackground;
+    public bool UsesStreamingPng => Format == ExportImageFormat.Png && OutputMode == ExportOutputMode.SingleImage;
+    public int RasterTileHeight => UsesStreamingPng ? Math.Min(TileEdge, 512) : TileEdge;
+
+    // A complete sibling result and one temporary row of raw tiles coexist until publication.
+    // This is a conservative incompressible-file bound, not a prediction of the compressed size.
+    public long RequiredFreeDiskBytes
+    {
+        get
+        {
+            var raw = checked((long)OutputWidth * OutputHeight * 4 + OutputHeight);
+            return UsesStreamingPng
+                ? checked(raw + raw / 1000 + (raw / 65536 + 1) * 12
+                    + (long)OutputWidth * Math.Min(RasterTileHeight, OutputHeight) * 4 + 16L * 1024 * 1024)
+                : checked((long)OutputWidth * OutputHeight * 8 + 16L * 1024 * 1024);
+        }
+    }
 }
 
 public sealed record ExportProgress(ExportPhase Phase, double Fraction, string Message);
@@ -106,7 +123,9 @@ public sealed class ExportEngineSettings
 {
     public const int DefaultTileEdge = 2_048;
     public const int DefaultMaxSingleEdge = 16_384;
-    public const int DefaultMaxOutputEdge = CanvasDimensionPolicy.Maximum;
+    // The largest document can be re-rendered at the existing maximum export scale of 800%.
+    // Resource admission still checks the actual output and scratch space before any rendering.
+    public const int DefaultMaxOutputEdge = CanvasDimensionPolicy.Maximum * 8;
 
     public int TileEdge { get; init; } = DefaultTileEdge;
     public int TileCacheCapacity { get; init; } = 128;

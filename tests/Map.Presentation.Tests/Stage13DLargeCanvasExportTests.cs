@@ -8,7 +8,7 @@ namespace Map.Presentation.Tests;
 public sealed class Stage13DLargeCanvasExportTests
 {
     [Fact]
-    public void Export_planner_keeps_single_at_16k_and_bounds_the_131k_tile_package()
+    public void Export_planner_allows_full_size_png_and_bounds_eight_times_the_largest_canvas()
     {
         var document = Document();
         var exporter = new ImageExportEngine();
@@ -19,14 +19,18 @@ public sealed class Stage13DLargeCanvasExportTests
             16_384, 16, ExportOutputMode.SingleImage));
 
         Assert.Equal((64, 64, 4_096), (package.Columns, package.Rows, package.TileCount));
-        Assert.Equal(131_072, ExportEngineSettings.DefaultMaxOutputEdge);
+        Assert.Equal(1_048_576, ExportEngineSettings.DefaultMaxOutputEdge);
         Assert.Equal(16_384, single.OutputWidth);
         Assert.True(package.TileEdge + (2 * package.EffectBleedPixels)
             <= new ExportEngineSettings().MaxTileSurfaceEdge);
+        var giga = exporter.Plan(document, Request(131_072, 131_072, ExportOutputMode.SingleImage));
+        Assert.True(giga.UsesStreamingPng);
+        Assert.True(giga.EstimatedRawWorkingBytes < 512L * 1024 * 1024);
+        var enlarged = exporter.Plan(document, Request(1_048_576, 1_048_576, ExportOutputMode.SingleImage));
+        Assert.True(enlarged.EstimatedRawWorkingBytes < 512L * 1024 * 1024);
+        Assert.True(enlarged.RequiredFreeDiskBytes > 4L * 1024 * 1024 * 1024 * 1024);
         Assert.Throws<ExportValidationException>(() => exporter.Plan(
-            document, Request(16_385, 16, ExportOutputMode.SingleImage)));
-        Assert.Throws<ExportValidationException>(() => exporter.Plan(
-            document, Request(131_073, 16, ExportOutputMode.TilePackage)));
+            document, Request(1_048_577, 16, ExportOutputMode.TilePackage)));
     }
 
     [Fact]

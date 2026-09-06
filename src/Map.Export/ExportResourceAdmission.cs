@@ -22,9 +22,11 @@ internal static class ExportResourceAdmission
         if (plan.EstimatedRawWorkingBytes > available - available / 4)
             throw new ExportValidationException("Недостаточно свободной памяти для выбранного экспорта с резервом. Уменьшите размер или выберите пакет тайлов.");
         // Destination bytes remain intact while this complete sibling result is built.
-        var diskRequired = checked((long)plan.OutputWidth * plan.OutputHeight * 8 + 16L * 1024 * 1024);
+        var diskRequired = plan.RequiredFreeDiskBytes;
         if (settings.AvailableDiskBytes(destination) < diskRequired)
-            throw new ExportValidationException("Недостаточно свободного места для временного результата экспорта. Выберите другую папку или уменьшите размер.");
+            throw new ExportValidationException(
+                $"Для этого размера требуется до {diskRequired / (1024d * 1024 * 1024):N1} ГиБ свободного места "
+                + "с учётом временной записи. Выберите другой диск или экспортируйте отдельный регион.");
     }
 
     [DllImport("kernel32.dll", SetLastError = true)]

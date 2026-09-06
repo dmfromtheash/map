@@ -109,6 +109,8 @@ public sealed class ImageExportEngine : IImageExporter
     {
         var fullPath = Path.GetFullPath(destinationPath);
         ValidateFileExtension(fullPath, plan.Format);
+        if (plan.UsesStreamingPng)
+            return ExportStreamingPng(snapshot, plan, fullPath, stamps, tileCache, progress, cancellationToken);
         Report(progress, ExportPhase.Rendering, 0.08, "Рендеринг изображения…");
         using var bytes = RenderSingleEncoded(snapshot, plan, stamps, tileCache, cancellationToken);
         _settings.FaultInjector?.Invoke(ExportFaultPoint.AfterRender);
@@ -134,6 +136,91 @@ public sealed class ImageExportEngine : IImageExporter
         }
 
         Report(progress, ExportPhase.Completed, 1, "Экспорт завершён.");
+        return new ExportResult(fullPath, ExportOutputMode.SingleImage, 1);
+    }
+
+    private ExportResult ExportStreamingPng(
+        MapDocument snapshot, ExportPlan plan, string fullPath, IStampImageSource? stamps,
+        TileImageCache tileCache, IProgress<ExportProgress>? progress, CancellationToken cancellationToken)
+    {
+        var tempPath = UniqueSiblingFile(fullPath);
+        try
+        {
+            using (var destination = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write,
+                FileShare.None, 65536, FileOptions.SequentialScan))
+            using (var png = new StreamingPngWriter(destination, plan.OutputWidth, plan.OutputHeight))
+            {
+                var row = new byte[checked(plan.OutputWidth * 4)];
+                var tileIndex = 0;
+                for (var y = 0; y < plan.OutputHeight; y += plan.RasterTileHeight)
+                {
+                    var height = Math.Min(plan.RasterTileHeight, plan.OutputHeight - y);
+                    var band = new List<(FileStream Stream, int RowBytes)>();
+                    try
+                    {
+                        for (var x = 0; x < plan.OutputWidth; x += plan.TileEdge)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            Report(progress, ExportPhase.Rendering,
+                                .02 + .88 * (y + height * .7 * x / plan.OutputWidth) / plan.OutputHeight,
+                                $"Отрисовка в полном разрешении: часть {tileIndex + 1:N0} из {plan.TileCount:N0}…");
+                            var tile = new PixelRect(x, y, Math.Min(plan.TileEdge, plan.OutputWidth - x), height);
+                            using var image = RenderImage(snapshot, plan, tile, plan.OutputWidth, plan.OutputHeight,
+                                plan.EffectBleedPixels, stamps, tileCache, ExportSurfacePurpose.TileWithBleed,
+                                tileIndex++, cancellationToken);
+                            var info = new SKImageInfo(tile.Width, height, SKColorType.Rgba8888, SKAlphaType.Unpremul);
+                            using var pixels = new SKBitmap(info);
+                            if (!image.ReadPixels(info, pixels.GetPixels(), pixels.RowBytes, 0, 0))
+                                throw new InvalidDataException("Не удалось прочитать пиксели PNG.");
+                            // One tile-column file per band. Buffered sequential reads assemble rows;
+                            // no full-width/full-height bitmap or memory-mapped full band is allocated.
+                            var scratch = new FileStream(tempPath + $".{band.Count:D4}.rgba",
+                                FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, 65536,
+                                FileOptions.DeleteOnClose | FileOptions.SequentialScan);
+                            band.Add((scratch, checked(tile.Width * 4)));
+                            scratch.Write(pixels.GetPixelSpan());
+                            scratch.Position = 0;
+                        }
+                        for (var line = 0; line < height; line++)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            var offset = 0;
+                            foreach (var tile in band)
+                            {
+                                tile.Stream.ReadExactly(row.AsSpan(offset, tile.RowBytes));
+                                offset += tile.RowBytes;
+                            }
+                            png.WriteRow(row);
+                            if (line % 64 == 0 || line == height - 1)
+                                Report(progress, ExportPhase.EncodingAndWriting,
+                                    .02 + .88 * (y + height * .7 + (line + 1) * .3) / plan.OutputHeight,
+                                    $"Запись PNG: {y + line + 1:N0} из {plan.OutputHeight:N0} строк…");
+                        }
+                        _settings.FaultInjector?.Invoke(ExportFaultPoint.AfterPngBand);
+                    }
+                    finally
+                    {
+                        foreach (var tile in band) tile.Stream.Dispose();
+                    }
+                }
+                cancellationToken.ThrowIfCancellationRequested();
+                _settings.FaultInjector?.Invoke(ExportFaultPoint.AfterRender);
+                cancellationToken.ThrowIfCancellationRequested();
+                png.Complete();
+                destination.Flush(flushToDisk: true);
+            }
+            Report(progress, ExportPhase.Finalizing, .92, "Проверка целостности записанного PNG…");
+            StreamingPngWriter.ValidateFile(tempPath, plan.OutputWidth, plan.OutputHeight, cancellationToken);
+            _settings.FaultInjector?.Invoke(ExportFaultPoint.BeforeFinalize);
+            cancellationToken.ThrowIfCancellationRequested();
+            FinalizeFile(tempPath, fullPath);
+        }
+        catch
+        {
+            TryDeleteFile(tempPath);
+            throw;
+        }
+        Report(progress, ExportPhase.Completed, 1, "PNG в выбранном разрешении сохранён.");
         return new ExportResult(fullPath, ExportOutputMode.SingleImage, 1);
     }
 

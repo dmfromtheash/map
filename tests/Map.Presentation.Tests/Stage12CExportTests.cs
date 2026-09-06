@@ -37,7 +37,7 @@ public sealed class Stage12CExportTests
     }
 
     [Fact]
-    public void Stage12C_PlannerRejectsInvalidGeometryAndRequiresTilesBeyond16K()
+    public void Stage12C_PlannerRejectsInvalidGeometryAndRequiresPngOrTilesForLargeJpeg()
     {
         var document = Document(64, 48);
         var exporter = new ImageExportEngine();
@@ -49,7 +49,7 @@ public sealed class Stage12CExportTests
             ExportImageFormat.Jpeg, ExportAreaMode.WholeCanvas, null,
             100, 100, ExportOutputMode.SingleImage, true, true)));
         Assert.Throws<ExportValidationException>(() => exporter.Plan(document, new ExportRequest(
-            ExportImageFormat.Png, ExportAreaMode.WholeCanvas, null,
+            ExportImageFormat.Jpeg, ExportAreaMode.WholeCanvas, null,
             16_385, 100, ExportOutputMode.SingleImage, false, true)));
 
         var tiled = exporter.Plan(document, new ExportRequest(
@@ -59,6 +59,29 @@ public sealed class Stage12CExportTests
         Assert.Equal(1, tiled.Rows);
         Assert.True(tiled.EstimatedRawWorkingBytes > 0);
         Assert.True(tiled.EffectBleedPixels > 0);
+    }
+
+    [Fact]
+    public async Task Full_size_is_the_default_even_for_the_largest_map_and_scale_buttons_rerender()
+    {
+        var editor = Editor(Document(131_072, 131_072), new ImageExportEngine(), new FakeExportPicker());
+        editor.ConfigureExportDefaults(ExportImageFormat.Png, 25, false);
+        var original = editor.Session.Document;
+        editor.BeginExport();
+        await editor.WaitForExportPreviewAsync();
+        Assert.Equal(ExportOutputMode.SingleImage, editor.ExportOutputMode);
+        Assert.Equal((131_072, 131_072), (editor.CurrentExportPlan!.OutputWidth, editor.CurrentExportPlan.OutputHeight));
+        Assert.Contains("без уменьшения", editor.ExportDetailSummary);
+        foreach (var factor in new[] { 2, 4, 8, 1 })
+        {
+            editor.SetExportScaleFactor(factor);
+            await editor.WaitForExportPreviewAsync();
+            Assert.Equal(131_072 * factor, editor.CurrentExportPlan!.OutputWidth);
+            Assert.Equal(factor, editor.ExportScaleFactor);
+        }
+        Assert.Same(original, editor.Session.Document);
+        Assert.False(editor.Session.IsDirty);
+        editor.CloseExport();
     }
 
     [Fact]
