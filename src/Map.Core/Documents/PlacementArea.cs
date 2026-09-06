@@ -22,6 +22,9 @@ public sealed record PlacementArea
     public ImmutableArray<StampVariantSource> Variants { get; init; } = [];
     public ImmutableDictionary<long, ImmutableArray<PlacementAreaMember>> Cells { get; init; } = ImmutableDictionary<long, ImmutableArray<PlacementAreaMember>>.Empty;
     public ImmutableHashSet<PlacementAreaSlot> Exclusions { get; init; } = [];
+    // Missing in early Stage 18 files: preserve their materialized scatter until explicit repack.
+    public int LayoutVersion { get; init; }
+    public ImmutableHashSet<PlacementAreaSlot> OccupiedSlots { get; init; } = [];
     public int MemberCount { get; init; }
     public double Density { get; init; } = 5;
     public int Seed { get; init; }
@@ -39,7 +42,8 @@ public sealed record PlacementArea
         new PlacementPath { Id = Id, Name = Name, Nodes = Nodes, Variants = Variants, Request = Request,
             RotationDegrees = RotationDegrees, ScalePercent = ScalePercent, Sublayer = Sublayer,
             Opacity = Opacity, Style = Style }.Validate();
-        if (Cells is null || Exclusions is null || MemberCount < 0 || !double.IsFinite(Density)
+        if (Cells is null || Exclusions is null || OccupiedSlots is null || LayoutVersion is < 0 or > 1
+            || OccupiedSlots.Any(s => s.Ordinal < 0) || MemberCount < 0 || !double.IsFinite(Density)
             || Density < 0 || Density >= int.MaxValue || Exclusions.Any(s => s.Ordinal < 0))
             throw new ArgumentException("Плотность области должна быть неотрицательной; связи и исключения — корректными.");
         PlacementAreaGeometry.Validate(Nodes);
@@ -61,15 +65,18 @@ public sealed record PlacementArea
         }
         if (count != MemberCount) throw new ArgumentException("Число объектов области не совпадает со связями.");
         var spans = PlacementAreaGeometry.Coverage(Nodes);
-        var estimated = (decimal)spans.Sum(s => (long)s.MaxX - s.MinX + 1) * (decimal)Math.Ceiling(Density) * 96;
+        var spacingEstimate = PlacementAreaSampler.EstimateBytes(this, spans);
+        if (spacingEstimate > long.MaxValue) throw new ArgumentException("Наполнение области превышает доступные ресурсы.");
+        var estimated = (decimal)spans.Sum(s => (long)s.MaxX - s.MinX + 1) * (decimal)Math.Ceiling(Density) * 96 + spacingEstimate;
         if (estimated > long.MaxValue) throw new ArgumentException("Наполнение области превышает доступные ресурсы.");
         if (!Map.Core.Resources.WorkingMemoryBudget.Shared.TryReserve((long)estimated, out var reservation, out var reason))
             throw new InvalidOperationException(reason);
         using var held = reservation;
+        var sampler = new PlacementAreaSampler(this);
         long expected = 0;
         foreach (var span in spans)
             for (var x = span.MinX; x <= span.MaxX; x++)
-                foreach (var slot in PlacementAreaPlanner.Slots(this, x, span.Y))
+                foreach (var slot in sampler.Slots(x, span.Y))
                 {
                     expected++;
                     if (!ids.Contains(PlacementAreaPlanner.ObjectIdFor(Id, slot)))

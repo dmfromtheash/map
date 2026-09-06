@@ -25,6 +25,7 @@ public static class PlacementAreaPlanner
     private static ulong Random(PlacementArea area, PlacementAreaSlot slot) =>
         Mix(unchecked((ulong)slot.Cell) ^ Mix((uint)slot.Ordinal) ^ Mix((uint)area.Seed));
     private static double Unit(ulong n) => (n >> 11) * (1d / (1UL << 53));
+    internal static ulong Priority(PlacementArea area, PlacementAreaSlot slot) => Mix(Random(area, slot) ^ 0x7ad614e2UL);
     public static VectorPoint Anchor(PlacementArea area, PlacementAreaSlot slot)
     {
         var bits = Random(area, slot);
@@ -34,17 +35,18 @@ public static class PlacementAreaPlanner
         return new(slot.X * PlacementAreaGeometry.CellSize + Offset(bits),
             slot.Y * PlacementAreaGeometry.CellSize + Offset(Mix(bits)));
     }
-    public static bool Includes(PlacementArea area, PlacementAreaSlot slot)
+    public static bool Includes(PlacementArea area, PlacementAreaSlot slot) => new PlacementAreaSampler(area).Includes(slot);
+    internal static bool IncludesGeometry(PlacementArea area, PlacementAreaSlot slot)
     {
-        if (slot.Ordinal < 0 || slot.Ordinal >= Math.Ceiling(area.Density) || area.Exclusions.Contains(slot)) return false;
+        if (slot.Ordinal < 0 || slot.Ordinal >= Math.Ceiling(area.Density) || area.Exclusions.Contains(slot)
+            || area.OccupiedSlots.Contains(slot)) return false;
         if (slot.Ordinal >= Math.Floor(area.Density) && Unit(Mix(Random(area, slot) ^ 0x74814UL)) >= area.Density % 1) return false;
         var point = Anchor(area, slot);
         return PlacementAreaGeometry.Contains(area.Nodes, point.X, point.Y);
     }
     public static IEnumerable<PlacementAreaSlot> Slots(PlacementArea area, int x, int y)
     {
-        for (var ordinal = 0; ordinal < (int)Math.Ceiling(area.Density); ordinal++)
-        { var slot = new PlacementAreaSlot(x, y, ordinal); if (Includes(area, slot)) yield return slot; }
+        return new PlacementAreaSampler(area).Slots(x, y);
     }
     public static SceneObject Item(PlacementArea area, PlacementAreaSlot slot)
     {
@@ -64,7 +66,7 @@ public static class PlacementAreaPlanner
     public static bool SameSettings(PlacementArea a, PlacementArea b) => a.Density == b.Density && a.Seed == b.Seed
         && a.Request == b.Request && a.Style == b.Style && a.RotationDegrees == b.RotationDegrees
         && a.ScalePercent == b.ScalePercent && a.Sublayer == b.Sublayer && a.Opacity == b.Opacity
-        && a.Name == b.Name && a.Variants.SequenceEqual(b.Variants);
+        && a.Name == b.Name && a.LayoutVersion == b.LayoutVersion && a.Variants.SequenceEqual(b.Variants);
 
     public static IReadOnlyList<PlacementAreaGeometry.CellSpan> Affected(PlacementArea? before, PlacementArea after) =>
         before is null ? PlacementAreaGeometry.Coverage(after.Nodes)
@@ -72,11 +74,17 @@ public static class PlacementAreaPlanner
         : PlacementAreaGeometry.Merge(PlacementAreaGeometry.Coverage(before.Nodes).Concat(PlacementAreaGeometry.Coverage(after.Nodes)));
 
     /// <summary>At most 64 concrete stamps, sampled across the changed cells, with bounded candidate work.</summary>
-    public static IReadOnlyList<SceneObject> Preview(PlacementArea area, PlacementArea? before = null, int maximum = 64)
+    public static IReadOnlyList<SceneObject> Preview(PlacementArea area, PlacementArea? before = null, int maximum = 64,
+        PlacementAreaObstacles? obstacles = null)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maximum, 1);
         area.Validate();
         var spans = Affected(before, area); var slots = (long)Math.Ceiling(area.Density);
+        var estimate = PlacementAreaSampler.EstimateBytes(area, spans);
+        if (estimate > long.MaxValue || !WorkingMemoryBudget.Shared.TryReserve((long)estimate, out var reservation, out _))
+            throw new ArgumentException("Для предпросмотра такой плотности и размеров недостаточно доступной памяти.");
+        using var held = reservation;
+        var sampler = new PlacementAreaSampler(area);
         var candidates = checked(spans.Sum(s => (long)s.MaxX - s.MinX + 1) * slots);
         if (candidates == 0) return [];
         var probes = (int)Math.Min(candidates, maximum * 64L);
@@ -89,10 +97,11 @@ public static class PlacementAreaPlanner
                 start += ((long)spans[spanIndex].MaxX - spans[spanIndex++].MinX + 1) * slots;
             var span = spans[spanIndex]; var local = rank - start;
             var slot = new PlacementAreaSlot(span.MinX + (int)(local / slots), span.Y, (int)(local % slots));
-            if (Includes(area, slot) && (before is null || !SameSettings(before, area) || !Includes(before, slot))) accepted.Add(slot);
+            if (sampler.Includes(slot) && (before is null || !SameSettings(before, area) || !IncludesGeometry(before, slot))
+                && (obstacles is null || !obstacles.Blocks(sampler.Item(slot)))) accepted.Add(slot);
         }
         var take = Math.Min(maximum, accepted.Count);
-        return Enumerable.Range(0, take).Select(i => Item(area,
+        return Enumerable.Range(0, take).Select(i => sampler.Item(
             accepted[take == 1 ? accepted.Count / 2 : (int)((long)i * (accepted.Count - 1) / (take - 1))])).ToArray();
     }
 }
@@ -155,11 +164,16 @@ public sealed class PlacementAreaCommand : IEditCommand
             next.Validate();
             var spans = PlacementAreaPlanner.Affected(old, next);
             var cellCount = spans.Sum(s => (long)s.MaxX - s.MinX + 1);
-            var estimatedBytes = (decimal)cellCount * (128 + (decimal)Math.Ceiling(Math.Max(next.Density, old?.Density ?? 0)) * 1664);
+            var spacingEstimate = PlacementAreaSampler.EstimateBytes(next, spans);
+            if (spacingEstimate > long.MaxValue) throw new InvalidOperationException("Область с такой плотностью не помещается в доступную память.");
+            var estimatedBytes = (decimal)cellCount * (128 + (decimal)Math.Ceiling(Math.Max(next.Density, old?.Density ?? 0)) * 1664) + spacingEstimate;
             if (estimatedBytes > long.MaxValue) throw new InvalidOperationException("Область с такой плотностью не помещается в доступную память.");
             var estimate = (long)estimatedBytes;
             if (!WorkingMemoryBudget.Shared.TryReserve(estimate, out var reservation, out var reason)) throw new InvalidOperationException(reason);
             using var held = reservation;
+            var sampler = new PlacementAreaSampler(next);
+            var obstacles = next.LayoutVersion == 0 ? null : new PlacementAreaObstacles(document, layer.Id, _id, next.Sublayer);
+            var occupied = next.OccupiedSlots.ToBuilder();
             var cells = (old?.Cells ?? ImmutableDictionary<long, ImmutableArray<PlacementAreaMember>>.Empty).ToBuilder();
             var memberCount = old?.MemberCount ?? 0;
             foreach (var span in spans)
@@ -171,9 +185,10 @@ public sealed class PlacementAreaCommand : IEditCommand
                     var previousIds = previous.Select(m => m.ObjectId).ToHashSet();
                     var members = ImmutableArray.CreateBuilder<PlacementAreaMember>(); var used = new HashSet<ObjectId>();
                     var replacedBefore = replacements.Count;
-                    foreach (var slot in PlacementAreaPlanner.Slots(next, x, span.Y))
+                    foreach (var slot in sampler.Slots(x, span.Y))
                     {
-                        var item = PlacementAreaPlanner.Item(next, slot); var existing = index.FindObject(item.Id);
+                        var item = sampler.Item(slot); var existing = index.FindObject(item.Id);
+                        if (obstacles?.Blocks(item) == true) { occupied.Add(slot); continue; }
                         members.Add(new(slot, item.Id)); used.Add(item.Id);
                         if (existing is null) additions.Add(item);
                         else if (!previousIds.Contains(item.Id)) throw new InvalidOperationException("Слот области занят посторонним объектом.");
@@ -189,7 +204,7 @@ public sealed class PlacementAreaCommand : IEditCommand
                     }
                     else if (replacements.Count != replacedBefore) ChangedCells++;
                 }
-            next = next with { Cells = cells.ToImmutable(), MemberCount = memberCount };
+            next = next with { Cells = cells.ToImmutable(), MemberCount = memberCount, OccupiedSlots = occupied.ToImmutable() };
         }
         var updated = document;
         var known = document.Assets.Select(a => a.Sha256).ToHashSet(StringComparer.OrdinalIgnoreCase);

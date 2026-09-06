@@ -22,6 +22,7 @@ public sealed class PlacementWorkflowTests : IDisposable
         Assert.Equal(1, editor.Session.UndoDepth);
         foreach (var item in preview) Assert.Equal(item, Map.Core.Editing.DocumentEditor.FindObject(editor.Session.Document, item.Id));
         var created = editor.Session.Document; var area = editor.SelectedEditableArea!;
+        Assert.Equal(1, area.LayoutVersion);
         router.Press(CanvasPointerButton.Left, 800, 100); router.Move(700, 150);
         Assert.Same(created, editor.Session.Document); editor.HandleEscape(); router.Release(700, 150);
         Assert.Same(created, editor.Session.Document);

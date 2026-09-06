@@ -75,7 +75,8 @@ public sealed partial class EditorViewModel
             {
                 _areaDraft = template with { Id = Guid.NewGuid(), Name = NextAreaName(template.Name.Split(" · ", 2).Last()),
                     Nodes = [], Cells = ImmutableDictionary<long, ImmutableArray<PlacementAreaMember>>.Empty,
-                    MemberCount = 0, Exclusions = [], Density = settings.Density, Seed = NextGestureSeed(),
+                    MemberCount = 0, Exclusions = [], OccupiedSlots = [], LayoutVersion = 1,
+                    Density = settings.Density, Seed = NextGestureSeed(),
                     ScalePercent = settings.ScalePercent, RotationDegrees = settings.RotationDegrees,
                     Sublayer = settings.Sublayer, Opacity = settings.ObjectOpacity, Style = settings.Style ?? template.Style,
                     Request = template.Request with { BaseWidth = template.Request.BaseWidth * settings.ScalePercent / template.ScalePercent,
@@ -96,7 +97,7 @@ public sealed partial class EditorViewModel
                 _areaAssets = references; _areaLayer = ActiveObjectLayer()?.Id;
                 _areaDraft = new PlacementArea
                 {
-                    Name = NextAreaName(SelectedSet?.Name ?? "штампы"), AssetSetId = _selectedSetId,
+                    Name = NextAreaName(SelectedSet?.Name ?? "штампы"), AssetSetId = _selectedSetId, LayoutVersion = 1,
                     VariantId = CurrentVariant?.Id, Variants = [.. sources], Request = request,
                     Seed = NextGestureSeed(), Density = settings.Density,
                     RotationDegrees = settings.RotationDegrees, ScalePercent = settings.ScalePercent,
@@ -247,6 +248,12 @@ public sealed partial class EditorViewModel
             Request = p.Request with { BaseWidth = width, RandomizeVariant = settings.RandomizeVariant,
                 RandomAngleStep = settings.RandomAngleStep, RandomFlip = settings.RandomFlip } }, "Изменить параметры области");
     }
+    public void RemoveEditableAreaOverlaps()
+    {
+        if (SelectedEditableArea is not { LayoutVersion: 0 } p) return;
+        if (CommitAreaChange(p with { LayoutVersion = 1, OccupiedSlots = [] }, "Разместить область без наложений"))
+            StatusDetail = "Наложения убраны с учётом размеров изображений. Сохранённые деревья остались на своих местах; действие можно отменить.";
+    }
     public void DetachSelectedAreaObject()
     {
         if (Session.SelectedObjectId is not { } id || PlacementAreaOwnership.Owner(Session.Document, id) is not { } path) return;
@@ -303,7 +310,13 @@ public sealed partial class EditorViewModel
         if (_areaDraft is not { Nodes.Length: >= 3 } path)
         { _areaPreviewObjects = []; _areaOverrides = []; _areaPreviewError = null; return; }
         IReadOnlyList<SceneObject> samples;
-        try { samples = PlacementAreaPlanner.Preview(path, _areaDragging ? _areaOriginal : null); _areaPreviewError = null; }
+        try
+        {
+            var obstacles = path.LayoutVersion == 1 && _areaLayer is { } layerId
+                ? new PlacementAreaObstacles(Session.Document, layerId, path.Id, path.Sublayer) : null;
+            samples = PlacementAreaPlanner.Preview(path, _areaDragging ? _areaOriginal : null, obstacles: obstacles);
+            _areaPreviewError = null;
+        }
         catch (ArgumentException ex)
         { _areaPreviewObjects = []; _areaOverrides = []; _areaPreviewError = ex.Message; StatusDetail = ex.Message; return; }
         if (!_areaDragging) { _areaPreviewObjects = samples; return; }

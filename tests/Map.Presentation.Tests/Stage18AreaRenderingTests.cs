@@ -118,7 +118,7 @@ public sealed class Stage18AreaRenderingTests
             new CanvasDefinition(512, 256, "px", "#00000000"),
             [new BaseColorLayer(LayerId.New(), "Transparent", true, false, 0, "#00000000"),
                 new ObjectLayer(layer, "Trees", true, false, 1, [])], [asset]);
-        var area = new PlacementArea { Nodes = [new(Guid.NewGuid(), 40, 20), new(Guid.NewGuid(), 480, 20),
+        var area = new PlacementArea { LayoutVersion = 1, Nodes = [new(Guid.NewGuid(), 40, 20), new(Guid.NewGuid(), 480, 20),
             new(Guid.NewGuid(), 480, 220), new(Guid.NewGuid(), 40, 220)], Variants = [new(sha, 32, 32)], Density = 5, Seed = 18,
             Request = new() { BaseWidth = 40 }, Style = new(sha) };
         areaId = area.Id; var session = new EditingSession(doc);

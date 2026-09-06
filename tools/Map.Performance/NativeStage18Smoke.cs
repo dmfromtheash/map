@@ -41,6 +41,8 @@ internal sealed class NativeStage18Report
     public long EditAllocatedBytes { get; set; }
     public long HistoryRetainedBytes { get; set; }
     public int HistoryDepth { get; set; }
+    public double? MeasurementEditX { get; set; }
+    public int? OverlappingPairs { get; set; }
     public string? Screenshot { get; set; }
     public string? SavedProject { get; set; }
     public string? SaveOutcome { get; set; }
@@ -147,6 +149,7 @@ public sealed class Stage18Application : Application
             && _editor.Session.UndoDepth == 0 && preview.Length is > 0 and <= 64;
         await Click("FinishEditableAreaButton");
         Require(_editor.SelectedEditableArea is { Nodes.Length: 5 }, "Area controls did not create a concave polygon: " + _editor.StatusDetail);
+        _report.Checks["new-area-has-spacing"] = _editor.SelectedEditableArea!.LayoutVersion == 1;
         _report.Checks["native-create-preview-equals-commit"] = preview.All(o => o == DocumentEditor.FindObject(_editor.Session.Document, o.Id));
         var created = _editor.Session.Document;
         Drag(750, 100, 820, 100); await Settle();
@@ -212,6 +215,8 @@ public sealed class Stage18Application : Application
         _report.Checks["delete-protects-other-area-and-detached"] = _editor.EditableAreas.Count == 1
             && DocumentEditor.FindObject(_editor.Session.Document, stamp.Id) == detached;
         _editor.SelectEditableArea(savedArea.Id); await Settle();
+        _report.OverlappingPairs = CountOverlaps();
+        _report.Checks["visible-trees-do-not-overlap-after-all-edits"] = _report.OverlappingPairs == 0;
         await Click("SaveButton"); await Until(() => !_editor.Session.IsDirty);
         _report.Screenshot = Path.ChangeExtension(Options.OutputPath, ".editor.png");
         Find<Control>("EditableAreaSummary").BringIntoView(); await Settle(); SaveVisual(_report.Screenshot);
@@ -230,11 +235,21 @@ public sealed class Stage18Application : Application
         var sourceHash = SHA256.HashData(File.ReadAllBytes(fixture));
         var original = _editor.EditableAreas.Single();
         _editor.SelectEditableArea(original.Id); await Settle();
+        if (original.LayoutVersion == 0)
+        {
+            var old = _editor.Session.Document;
+            await Click("RemoveEditableAreaOverlapsButton");
+            _report.Checks["legacy-area-upgrades-without-moving-survivors"] = _editor.SelectedEditableArea!.LayoutVersion == 1
+                && _editor.SelectedEditableArea.Members.All(m => ReferenceEquals(DocumentEditor.FindObject(old, m.ObjectId),
+                    DocumentEditor.FindObject(_editor.Session.Document, m.ObjectId)));
+            var packed = _editor.Session.Document; _editor.Undo(); _editor.Redo();
+            _report.Checks["spacing-upgrade-undo-redo"] = ReferenceEquals(packed, _editor.Session.Document);
+        }
         await Number("EditableAreaDensityBox", "5");
         var units = Find<TextBlock>("EditableAreaDensityUnits"); units.BringIntoView(); await Settle();
         _report.Checks["density-caption-wraps"] = units.IsEffectivelyVisible && units.Bounds.Width > 0
             && units.TextWrapping == Avalonia.Media.TextWrapping.Wrap
-            && units.Text == "Объектов на 10 000 квадратных единиц карты";
+            && units.Text!.StartsWith("До указанного числа объектов", StringComparison.Ordinal);
         _report.Checks["density-changes-without-catalog"] = _editor.SelectedEditableArea!.Density == 5 && _catalog.Sets.Count == 0;
         var scale = Find<Slider>("FutureStampScaleSlider"); scale.BringIntoView(); await Settle(); scale.Value = 65;
         await Click("StampCurrentAssetButton"); Point(120, 100); Point(330, 100); Point(330, 300);
@@ -249,6 +264,8 @@ public sealed class Stage18Application : Application
         var picker = Find<ComboBox>("EditableAreaPicker"); picker.SelectedIndex = 0; await Settle();
         _report.Checks["area-picker-after-card-cancel"] = _editor.SelectedEditableArea!.Id == original.Id;
         Find<Control>("EditableAreaSummary").BringIntoView(); await Settle();
+        _report.OverlappingPairs = CountOverlaps();
+        _report.Checks["visible-trees-do-not-overlap"] = _report.OverlappingPairs == 0;
         _report.Screenshot = Path.ChangeExtension(Options.OutputPath, ".editor.png"); SaveVisual(_report.Screenshot);
         await Click("SaveButton"); await Until(() => _editor.SaveState != SaveState.Saving);
         _report.SaveOutcome = _editor.SaveState.ToString();
@@ -257,6 +274,19 @@ public sealed class Stage18Application : Application
                 && ReferenceEquals(saved, _editor.Session.Document) && _editor.Session.IsDirty && depth == _editor.Session.UndoDepth;
         else _report.Checks["save-ui-completes"] = _editor.SaveState == SaveState.Saved && !_editor.Session.IsDirty;
         _report.Checks["fixture-read-only"] = sourceHash.SequenceEqual(SHA256.HashData(File.ReadAllBytes(fixture)));
+    }
+    private int CountOverlaps()
+    {
+        var pairs = 0;
+        foreach (var layer in _editor.Session.Document.Layers.OfType<ObjectLayer>().Where(l => l.Visible))
+        {
+            var objects = layer.Objects.Where(o => o.Kind == SceneObjectKind.Stamp && o.Visible).ToArray();
+            for (var i = 0; i < objects.Length; i++)
+                for (var j = i + 1; j < objects.Length; j++)
+                    if (objects[i].Sublayer == objects[j].Sublayer && PlacementAreaSampler.Overlaps(
+                        SceneGeometry.BoundsOf(objects[i]), SceneGeometry.BoundsOf(objects[j]))) pairs++;
+        }
+        return pairs;
     }
     private async Task MeasureExistingMap()
     {
@@ -270,16 +300,26 @@ public sealed class Stage18Application : Application
         Require(_report.FixtureObjects is >= 19000 and <= 21000, "Fixture is not the requested ordinary map");
         _view.Canvas.DisposeRenderCaches();
         _catalog.ImportSet([Path.Combine(Environment.CurrentDirectory, "src/Map.Assets/StarterAssets/sample-tree.png")], "Деревья", new(), DateTimeOffset.UnixEpoch);
-        OpenEditor(document); _editor.ChooseGalleryVariant(_catalog.Sets[0].Id, null);
+        OpenEditor(document); _editor.AddObjectLayer();
+        _report.Checks["measurement-new-layer-only-in-copy"] = document.FindLayer(_editor.ActiveLayer!.Id) is null;
+        _editor.ChooseGalleryVariant(_catalog.Sets[0].Id, null);
         _editor.StampDensity = 3; _editor.SetStampScalePercent(55); _editor.Session.Viewport.Set(0, 0, .35); await Settle();
         await Click("StampModeFillArea"); await Click("StartEditableAreaButton");
         Point(300, 300); Point(1800, 300); Point(1800, 1600); Point(300, 1600);
         await Click("FinishEditableAreaButton"); await Frame();
         var before = _editor.Session.Document; var beforeArea = _editor.SelectedEditableArea!;
         var beforeIndex = DocumentRevisionIndex.For(before);
+        // Choose one nonempty local edge edit before timing; no trial edits or repeated timing.
+        var editX = new[] { 1750d, 1700, 1650, 1600, 1500 }.First(x =>
+        {
+            var nodes = beforeArea.Nodes.SetItem(1, beforeArea.Nodes[1] with { X = x });
+            return beforeArea.Members.Any(m =>
+            { var p = PlacementAreaPlanner.Anchor(beforeArea, m.Slot); return !PlacementAreaGeometry.Contains(nodes, p.X, p.Y); });
+        });
+        _report.MeasurementEditX = editX;
         using var process = Process.GetCurrentProcess(); process.Refresh(); _report.PrivateBeforeBytes = process.PrivateMemorySize64;
         var allocated = GC.GetAllocatedBytesForCurrentThread(); var heap = GC.GetTotalMemory(forceFullCollection: true);
-        var watch = Stopwatch.StartNew(); Drag(1800, 300, 1750, 300); _report.EditHandlerMs = watch.Elapsed.TotalMilliseconds;
+        var watch = Stopwatch.StartNew(); Drag(1800, 300, editX, 300); _report.EditHandlerMs = watch.Elapsed.TotalMilliseconds;
         _report.EditAllocatedBytes = GC.GetAllocatedBytesForCurrentThread() - allocated;
         await Frame(); _report.EditToFrameMs = watch.Elapsed.TotalMilliseconds;
         process.Refresh(); _report.PrivateAfterFrameBytes = process.PrivateMemorySize64;

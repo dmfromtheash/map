@@ -73,8 +73,9 @@ public sealed class Stage18EditableAreaTests
             var old = Get(session.Document); var next = old with { Nodes = old.Nodes.SetItem(3, old.Nodes[3] with { X = 200 + i * 25, Y = 500 - i * 20 }) };
             session.Execute(new PlacementAreaCommand(layer.Id, area.Id, next, "move")); Assert.Null(session.LastResourceError);
             Get(session.Document).ValidateMembers();
+            var sampler = new PlacementAreaSampler(next);
             var expected = PlacementAreaGeometry.Coverage(next.Nodes).SelectMany(s => Enumerable.Range(s.MinX, s.MaxX - s.MinX + 1)
-                .SelectMany(x => PlacementAreaPlanner.Slots(next, x, s.Y))).ToHashSet();
+                .SelectMany(x => sampler.Slots(x, s.Y))).ToHashSet();
             Assert.True(expected.SetEquals(Get(session.Document).Members.Select(m => m.Slot)));
         }
         area = Get(session.Document);
@@ -109,13 +110,53 @@ public sealed class Stage18EditableAreaTests
     [Fact]
     public void Preview_is_bounded_samples_changed_far_edge_and_does_not_mutate_saved_document()
     {
-        var area = Area() with { Density = 400 };
+        var area = Area() with { Density = 8 };
         var preview = PlacementAreaPlanner.Preview(area); Assert.Equal(64, preview.Count);
         Assert.True(preview.Max(o => o.X) > 1500); Assert.True(preview.Min(o => o.X) < 300);
         var next = area with { Nodes = area.Nodes.SetItem(1, area.Nodes[1] with { X = 1950 }) };
         var changed = PlacementAreaPlanner.Preview(next, area);
         Assert.NotEmpty(changed); Assert.True(changed.All(o => o.X + o.Width / 2 > 1600));
         Assert.Empty(area.Cells);
+    }
+    [Fact]
+    public void Repack_removes_overlaps_without_moving_survivors_and_respects_other_stamps_after_seed_scale_density()
+    {
+        var session = Session(out var layer);
+        var area = Area() with { LayoutVersion = 0, Density = 6,
+            Nodes = [new(Guid.NewGuid(), 10, 10), new(Guid.NewGuid(), 650, 10),
+                new(Guid.NewGuid(), 650, 650), new(Guid.NewGuid(), 10, 650)],
+            Request = Area().Request with { BaseWidth = 65 } };
+        var obstacle = PlacementAreaPlanner.Item(area, new(2, 2, 0)) with { Id = ObjectId.New(), Name = "Manual tree" };
+        session.Execute(new AddObjectCommand(layer.Id, obstacle));
+        session.Execute(new PlacementAreaCommand(layer.Id, area.Id, area, "legacy"));
+        var legacy = session.Document; area = Get(legacy);
+        Assert.True(HasOverlap(((ObjectLayer)legacy.FindLayer(layer.Id)!).Objects));
+        session.Execute(new PlacementAreaCommand(layer.Id, area.Id, area with { LayoutVersion = 1 }, "repack"));
+        Assert.Null(session.LastResourceError); var spaced = session.Document; var packed = Get(spaced);
+        Assert.InRange(packed.MemberCount, 10, area.MemberCount - 1); packed.ValidateMembers();
+        Assert.False(HasOverlap(((ObjectLayer)spaced.FindLayer(layer.Id)!).Objects));
+        Assert.All(packed.Members, m => Assert.Same(DocumentEditor.FindObject(legacy, m.ObjectId), DocumentEditor.FindObject(spaced, m.ObjectId)));
+        session.Undo(); Assert.Same(legacy, session.Document); session.Redo(); Assert.Same(spaced, session.Document);
+        foreach (var density in new[] { 8, 2, 6 })
+        {
+            var previous = session.Document; var old = Get(previous);
+            session.Execute(new PlacementAreaCommand(layer.Id, area.Id, old with { Density = density }, "density"));
+            Assert.Null(session.LastResourceError);
+            if (density >= old.Density) Assert.All(old.Members, m => Assert.Same(DocumentEditor.FindObject(previous, m.ObjectId), DocumentEditor.FindObject(session.Document, m.ObjectId)));
+            Assert.False(HasOverlap(((ObjectLayer)session.Document.FindLayer(layer.Id)!).Objects));
+        }
+        area = Get(session.Document);
+        session.Execute(new PlacementAreaCommand(layer.Id, area.Id, area with { Seed = 17, Request = area.Request with { BaseWidth = 90 } }, "larger seed"));
+        Assert.Null(session.LastResourceError); Get(session.Document).ValidateMembers();
+        Assert.False(HasOverlap(((ObjectLayer)session.Document.FindLayer(layer.Id)!).Objects));
+        Assert.Same(obstacle, DocumentEditor.FindObject(session.Document, obstacle.Id));
+    }
+    private static bool HasOverlap(IReadOnlyList<SceneObject> objects)
+    {
+        for (var i = 0; i < objects.Count; i++)
+            for (var j = i + 1; j < objects.Count; j++)
+                if (PlacementAreaSampler.Overlaps(SceneGeometry.BoundsOf(objects[i]), SceneGeometry.BoundsOf(objects[j]))) return true;
+        return false;
     }
     private static EditingSession Session(out ObjectLayer layer)
     {
@@ -125,7 +166,7 @@ public sealed class Stage18EditableAreaTests
         return new(new MapDocument(DocumentId.New(), "Areas", DateTimeOffset.UnixEpoch, new CanvasDefinition(2048, 2048, "px", "#FFFFFFFF"),
             [new BaseColorLayer(LayerId.New(), "Background", true, false, 1, "#FFFFFFFF"), layer], assets));
     }
-    private static PlacementArea Area() => new() { Name = "Trees", Nodes = [new(Guid.NewGuid(), 10, 10), new(Guid.NewGuid(), 1900, 10),
+    private static PlacementArea Area() => new() { Name = "Trees", LayoutVersion = 1, Nodes = [new(Guid.NewGuid(), 10, 10), new(Guid.NewGuid(), 1900, 10),
         new(Guid.NewGuid(), 1900, 1900), new(Guid.NewGuid(), 10, 1900)], Density = 4, Seed = 18,
         Variants = [new(Sha, 32, 32), new(Other, 64, 32)], Style = new(Sha),
         Request = new() { BaseWidth = 24, RandomizeVariant = true, RandomFlip = true, RandomAngleStep = StampRandomAngleStep.Degrees30 } };

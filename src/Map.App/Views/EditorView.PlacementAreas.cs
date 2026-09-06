@@ -13,6 +13,7 @@ public sealed partial class EditorView
     private TextBlock? _fillAreaSummary;
     private Control? _fillAreaPanel;
     private Button? _fillAreaFinish, _fillAreaDetach;
+    private Button? _fillAreaRemoveOverlaps;
     private bool _syncingAreas;
     private Avalonia.Media.Imaging.Bitmap? _fillAreaThumbnail;
     private string? _fillAreaThumbnailHash;
@@ -28,16 +29,18 @@ public sealed partial class EditorView
         _fillAreaSummary = new TextBlock { Name = "EditableAreaSummary", TextWrapping = TextWrapping.Wrap };
         _fillAreaFinish = Ui.TextButton("FinishEditableAreaButton", "Завершить область", () => _editor.FinishEditableArea(), "compact");
         _fillAreaDetach = Ui.TextButton("DetachAreaObjectButton", "Отделить выбранный объект", _editor.DetachSelectedAreaObject, "compact");
+        _fillAreaRemoveOverlaps = Ui.TextButton("RemoveEditableAreaOverlapsButton", "Разместить без наложений", _editor.RemoveEditableAreaOverlaps, "compact");
         _fillAreaPanel = new StackPanel
         {
             Spacing = 6, Children =
             {
                 _fillAreaPicker, _fillAreaSummary,
                 Ui.TextButton("StartEditableAreaButton", "Новая редактируемая область", _editor.StartEditableArea, "compact"),
+                _fillAreaRemoveOverlaps,
                 _fillAreaFinish,
                 new TextBlock { Text = "Клики — вершины · Enter — заполнить · Esc — отменить. Центр изображения внутри границы; края не обрезаются. Предпросмотр выборочный, до 64 штампов в изменяемой части.", TextWrapping = TextWrapping.Wrap }.Classed("faint", "role-caption"),
                 AppearanceNumberBox("EditableAreaDensityBox", "Плотность", null, () => _editor.DisplayedEditableArea?.Density ?? _editor.StampDensity, _editor.SetEditableAreaDensity),
-                new TextBlock { Name = "EditableAreaDensityUnits", Text = "Объектов на 10 000 квадратных единиц карты", TextWrapping = TextWrapping.Wrap }.Classed("faint", "role-caption"),
+                new TextBlock { Name = "EditableAreaDensityUnits", Text = "До указанного числа объектов на 10 000 квадратных единиц карты. Размер изображений и промежутки ограничивают заполнение.", TextWrapping = TextWrapping.Wrap }.Classed("faint", "role-caption"),
                 AppearanceNumberBox("EditableAreaSeedBox", "Seed", null, () => _editor.DisplayedEditableArea?.Seed, _editor.SetEditableAreaSeed),
                 Ui.TextButton("InsertEditableAreaNodeButton", "Добавить вершину на ребре", _editor.InsertEditableAreaNode, "compact"),
                 Ui.TextButton("DeleteEditableAreaNodeButton", "Удалить вершину (в черновике — последнюю)", _editor.DeleteEditableAreaNode, "compact"),
@@ -64,6 +67,7 @@ public sealed partial class EditorView
             _fillAreaSummary.Text = _editor.EditableAreaSummary;
             _stampGestureBlock.IsVisible = _editor.SelectedSet is not null || _editor.SelectedEditablePath is not null || _editor.CurrentAreaSource is not null;
             _fillAreaFinish!.IsVisible = _editor.IsCreatingEditableArea;
+            _fillAreaRemoveOverlaps!.IsVisible = _editor.SelectedEditableArea is { LayoutVersion: 0 };
             _fillAreaDetach!.IsEnabled = _editor.CanDetachAreaObject;
             _fillAreaPanel.IsVisible = _editor.StampPlacementMode == Map.Presentation.ViewModels.StampPlacementMode.FillArea
                 || choices.Length > 0 || _editor.IsCreatingEditableArea;

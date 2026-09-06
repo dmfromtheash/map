@@ -28,12 +28,15 @@ public sealed class Stage18EditableAreaRoundTripTests
         var loaded = MapProjectStore.Open(source).Document;
         var oldVersion = new MapCheckpoint(CheckpointId.New(), "Path version", DateTimeOffset.UnixEpoch, MapCheckpointSnapshot.Capture(loaded), bytes);
         session = new EditingSession(loaded.WithCheckpoints([oldVersion]));
-        var area = new PlacementArea { AssetSetId = "frozen", VariantId = "tree", Density = 5, Seed = 18,
+        var area = new PlacementArea { AssetSetId = "frozen", VariantId = "tree", Density = 5, Seed = 18, LayoutVersion = 1,
             Nodes = [new(Guid.NewGuid(), 50, 50), new(Guid.NewGuid(), 600, 50), new(Guid.NewGuid(), 600, 400), new(Guid.NewGuid(), 50, 400)],
             Variants = [new(sha, 32, 32)], Style = new(sha) { Blur = 1, ShadowOpacity = .2 },
             Request = new() { BaseWidth = 32, RandomFlip = true, RandomAngleStep = StampRandomAngleStep.Degrees60 } };
+        var obstacle = PlacementAreaPlanner.Preview(area).First() with { Id = ObjectId.New(), Name = "Manual obstacle" };
+        session.Execute(new AddObjectCommand(layer.Id, obstacle));
         session.Execute(new PlacementAreaCommand(layer.Id, area.Id, area, "area")); Assert.Null(session.LastResourceError);
         area = ((ObjectLayer)session.Document.FindLayer(layer.Id)!).PlacementAreas.Single();
+        Assert.NotEmpty(area.OccupiedSlots);
         var member = area.Members.First();
         session.Execute(new PlacementAreaCommand(layer.Id, area.Id, area, "detach", detach: member.ObjectId));
         var expected = session.Document.WithCheckpoints([oldVersion, new MapCheckpoint(CheckpointId.New(), "Area version",
@@ -48,6 +51,7 @@ public sealed class Stage18EditableAreaRoundTripTests
         Assert.Equal(area.Nodes.ToArray(), actual.Nodes.ToArray()); Assert.Equal(area.Variants.ToArray(), actual.Variants.ToArray());
         Assert.Equal(area.Request, actual.Request); Assert.Equal(area.Style, actual.Style);
         Assert.Equal(area.AssetSetId, actual.AssetSetId); Assert.Equal(area.VariantId, actual.VariantId);
+        Assert.Equal(1, actual.LayoutVersion); Assert.True(area.OccupiedSlots.SetEquals(actual.OccupiedSlots));
         Assert.Contains(member.Slot, actual.Exclusions); Assert.Equal(2, reopened.Checkpoints.Count);
         Assert.Empty(reopened.Checkpoints[0].Snapshot.Layers.OfType<ObjectLayer>().First().PlacementAreas);
         Assert.Single(reopened.Checkpoints[1].Snapshot.Layers.OfType<ObjectLayer>().First().PlacementAreas);
