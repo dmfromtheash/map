@@ -9,10 +9,20 @@ namespace Map.Core.Editing;
 /// </summary>
 public sealed class PlacementAreaSampler(PlacementArea area)
 {
-    private readonly record struct Candidate(SceneObject Item, WorldBounds Bounds, ulong Priority);
+    public const int MaximumCachedCandidates = 16_384;
+    private sealed class Candidate(SceneObject item, WorldBounds bounds, ulong priority, LinkedListNode<PlacementAreaSlot> node)
+    {
+        public SceneObject Item { get; } = item;
+        public WorldBounds Bounds { get; } = bounds;
+        public ulong Priority { get; } = priority;
+        public LinkedListNode<PlacementAreaSlot> Node { get; } = node;
+        public bool? ClearEarlier { get; set; }
+        public bool? Accepted { get; set; }
+    }
     private readonly Dictionary<PlacementAreaSlot, Candidate> _candidates = [];
-    private readonly Dictionary<PlacementAreaSlot, bool> _clearEarlier = [], _accepted = [];
+    private readonly LinkedList<PlacementAreaSlot> _recent = new();
     private readonly double _reach = MaximumReach(area);
+    public int CachedCandidateCount => _candidates.Count;
 
     public static WorldBounds Footprint(SceneObject item)
     {
@@ -34,22 +44,24 @@ public sealed class PlacementAreaSampler(PlacementArea area)
     public static decimal EstimateBytes(PlacementArea p, IReadOnlyList<PlacementAreaGeometry.CellSpan> spans)
     {
         if (p.LayoutVersion == 0 || spans.Count == 0 || p.Density == 0) return 0;
-        try
-        {
-            var density = (decimal)Math.Ceiling(p.Density);
-            // Earlier-pass dependencies travel at most two neighbour ranges per ordinal.
-            var halo = 2 * ((decimal)Math.Ceiling(2 * MaximumReach(p) / PlacementAreaGeometry.CellSize) + 1) * density;
-            return (spans.Max(s => s.MaxX) - (decimal)spans.Min(s => s.MinX) + 1 + 2 * halo)
-                * (spans.Max(s => s.Y) - (decimal)spans.Min(s => s.Y) + 1 + 2 * halo) * density * 1664;
-        }
-        catch (OverflowException) { return decimal.MaxValue; }
+        // Reserve the bounded working cache, live dependency frames and the <=64 preview results.
+        // The old whole dependency halo grew cubically with density (gigabytes for a few mountains).
+        // Eviction only recomputes pure slot decisions; it never changes the stored layout rule.
+        return (MaximumCachedCandidates + 2 * (decimal)Math.Ceiling(p.Density) + 256) * 1664;
     }
-    public SceneObject Item(PlacementAreaSlot slot) => CandidateAt(slot).Item;
+    public SceneObject Item(PlacementAreaSlot slot) => area.LayoutVersion == 0
+        ? PlacementAreaPlanner.Item(area, slot) : CandidateAt(slot).Item;
     private Candidate CandidateAt(PlacementAreaSlot slot)
     {
-        if (_candidates.TryGetValue(slot, out var cached)) return cached;
+        if (_candidates.TryGetValue(slot, out var cached))
+        {
+            if (_recent.Last != cached.Node) { _recent.Remove(cached.Node); _recent.AddLast(cached.Node); }
+            return cached;
+        }
+        if (_candidates.Count == MaximumCachedCandidates)
+        { _candidates.Remove(_recent.First!.Value); _recent.RemoveFirst(); }
         var item = PlacementAreaPlanner.Item(area, slot);
-        return _candidates[slot] = new(item, Footprint(item), PlacementAreaPlanner.Priority(area, slot));
+        return _candidates[slot] = new(item, Footprint(item), PlacementAreaPlanner.Priority(area, slot), _recent.AddLast(slot));
     }
     public bool Includes(PlacementAreaSlot slot)
     {
@@ -70,19 +82,19 @@ public sealed class PlacementAreaSampler(PlacementArea area)
     }
     private bool ClearEarlier(PlacementAreaSlot slot)
     {
-        if (_clearEarlier.TryGetValue(slot, out var clear)) return clear;
         var candidate = CandidateAt(slot);
+        if (candidate.ClearEarlier is { } clear) return clear;
         for (var ordinal = 0; ordinal < slot.Ordinal; ordinal++)
             foreach (var other in Neighbours(candidate.Bounds, ordinal))
                 if (Overlaps(candidate.Bounds, CandidateAt(other).Bounds) && Accepted(other))
-                    return _clearEarlier[slot] = false;
-        return _clearEarlier[slot] = true;
+                { candidate.ClearEarlier = false; return false; }
+        candidate.ClearEarlier = true; return true;
     }
     private bool Accepted(PlacementAreaSlot slot)
     {
-        if (_accepted.TryGetValue(slot, out var accepted)) return accepted;
-        if (!ClearEarlier(slot)) return _accepted[slot] = false;
         var candidate = CandidateAt(slot);
+        if (candidate.Accepted is { } accepted) return accepted;
+        if (!ClearEarlier(slot)) { candidate.Accepted = false; return false; }
         foreach (var other in Neighbours(candidate.Bounds, slot.Ordinal))
         {
             if (other == slot) continue;
@@ -90,9 +102,9 @@ public sealed class PlacementAreaSampler(PlacementArea area)
             var earlier = neighbour.Priority < candidate.Priority || neighbour.Priority == candidate.Priority
                 && (other.X < slot.X || other.X == slot.X && other.Y < slot.Y);
             if (earlier && Overlaps(candidate.Bounds, neighbour.Bounds) && ClearEarlier(other))
-                return _accepted[slot] = false;
+            { candidate.Accepted = false; return false; }
         }
-        return _accepted[slot] = true;
+        candidate.Accepted = true; return true;
     }
 }
 

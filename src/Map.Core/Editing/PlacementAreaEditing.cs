@@ -75,14 +75,15 @@ public static class PlacementAreaPlanner
 
     /// <summary>At most 64 concrete stamps, sampled across the changed cells, with bounded candidate work.</summary>
     public static IReadOnlyList<SceneObject> Preview(PlacementArea area, PlacementArea? before = null, int maximum = 64,
-        PlacementAreaObstacles? obstacles = null)
+        PlacementAreaObstacles? obstacles = null, WorkingMemoryBudget? memory = null)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maximum, 1);
         area.Validate();
         var spans = Affected(before, area); var slots = (long)Math.Ceiling(area.Density);
         var estimate = PlacementAreaSampler.EstimateBytes(area, spans);
-        if (estimate > long.MaxValue || !WorkingMemoryBudget.Shared.TryReserve((long)estimate, out var reservation, out _))
-            throw new ArgumentException("Для предпросмотра такой плотности и размеров недостаточно доступной памяти.");
+        if (estimate > long.MaxValue) throw new InvalidOperationException("Для предпросмотра такой плотности недостаточно доступной памяти.");
+        if (!(memory ?? WorkingMemoryBudget.Shared).TryReserve((long)estimate, out var reservation, out var reason))
+            throw new InvalidOperationException(reason);
         using var held = reservation;
         var sampler = new PlacementAreaSampler(area);
         var candidates = checked(spans.Sum(s => (long)s.MaxX - s.MinX + 1) * slots);

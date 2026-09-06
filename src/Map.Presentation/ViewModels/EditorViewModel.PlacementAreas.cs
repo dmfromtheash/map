@@ -16,6 +16,7 @@ public sealed partial class EditorViewModel
     private IReadOnlyList<SceneObject> _areaPreviewObjects = [];
     private IReadOnlyList<SceneObject> _areaOverrides = [];
     private string? _areaPreviewError;
+    private bool _areaPreviewInvalid;
     private PlacementArea? _newAreaTemplate;
     private bool _areaStartRequested;
     public IReadOnlyList<SceneObject>? EditableAreaPreviewOverrides => _areaDragging ? _areaOverrides : null;
@@ -36,7 +37,7 @@ public sealed partial class EditorViewModel
         }
     }
     public bool IsCreatingEditableArea => _areaCreating;
-    public bool CanPlaceEditableArea => _areaCreating && _areaDraft is { Nodes.Length: >= 3 } && _areaPreviewError is null;
+    public bool CanPlaceEditableArea => _areaCreating && _areaDraft is { Nodes.Length: >= 3 } && !_areaPreviewInvalid;
     public string EditableAreaPlacementHint
     {
         get
@@ -137,7 +138,7 @@ public sealed partial class EditorViewModel
     {
         if (!_areaCreating || _areaDraft is not { Nodes.Length: >= 3 } draft)
         { StatusDetail = "Для области нужны хотя бы три разных вершины."; return false; }
-        if (_areaPreviewError is not null) { StatusDetail = _areaPreviewError; return false; }
+        if (_areaPreviewInvalid) { StatusDetail = _areaPreviewError!; return false; }
         var (layer, create) = EnsureObjectLayer();
         if (layer is null) { StatusDetail = NoUsableObjectLayer; return false; }
         var command = new PlacementAreaCommand(layer.Id, draft.Id, draft, "Создать редактируемую область", _areaAssets);
@@ -319,7 +320,7 @@ public sealed partial class EditorViewModel
     {
         var active = _areaDraft is not null || _areaInsert || _areaPickObject || _areaStartRequested;
         _areaDraft = _areaOriginal = null; _areaAssets = []; _areaPreviewObjects = []; _areaOverrides = [];
-        _areaPreviewError = null; _areaStartRequested = false;
+        _areaPreviewError = null; _areaPreviewInvalid = false; _areaStartRequested = false;
         _areaCreating = _areaDragging = _areaInsert = false; _areaLayer = null;
         _areaPickObject = false;
         if (active) { RaiseAreaState(); InvalidateScene(EditorChangeReason.CanvasInvalidation); }
@@ -328,28 +329,33 @@ public sealed partial class EditorViewModel
     private void UpdateAreaPreview()
     {
         if (_areaDraft is not { Nodes.Length: >= 3 } path)
-        { _areaPreviewObjects = []; _areaOverrides = []; _areaPreviewError = null; return; }
-        IReadOnlyList<SceneObject> samples;
+        { _areaPreviewObjects = []; _areaOverrides = []; _areaPreviewError = null; _areaPreviewInvalid = false; return; }
         try
         {
             var obstacles = path.LayoutVersion == 1 && _areaLayer is { } layerId
                 ? new PlacementAreaObstacles(Session.Document, layerId, path.Id, path.Sublayer) : null;
-            samples = PlacementAreaPlanner.Preview(path, _areaDragging ? _areaOriginal : null, obstacles: obstacles);
-            _areaPreviewError = null;
+            var samples = PlacementAreaPlanner.Preview(path, _areaDragging ? _areaOriginal : null, obstacles: obstacles, memory: _workingMemory);
+            _areaPreviewError = null; _areaPreviewInvalid = false;
+            if (!_areaDragging) { _areaPreviewObjects = samples; return; }
+            var index = DocumentRevisionIndex.For(Session.Document);
+            _areaOverrides = samples.Where(o => index.FindObject(o.Id) is not null).ToArray();
+            _areaPreviewObjects = samples.Where(o => index.FindObject(o.Id) is null).ToArray();
+            // Bounded deletion samples show the changed edge even while the polygon is shrinking.
+            if (_areaOriginal is { } original)
+            {
+                var removed = PlacementAreaPlanner.Preview(original, path, memory: _workingMemory).Where(o =>
+                    !PlacementAreaGeometry.Contains(path.Nodes, o.X + o.Width / 2, o.Y + o.Height / 2))
+                    .Select(o => o with { ObjectOpacity = 0 });
+                _areaOverrides = _areaOverrides.Concat(removed).Take(128).ToArray();
+            }
         }
         catch (ArgumentException ex)
-        { _areaPreviewObjects = []; _areaOverrides = []; _areaPreviewError = ex.Message; StatusDetail = ex.Message; return; }
-        if (!_areaDragging) { _areaPreviewObjects = samples; return; }
-        var index = DocumentRevisionIndex.For(Session.Document);
-        _areaOverrides = samples.Where(o => index.FindObject(o.Id) is not null).ToArray();
-        _areaPreviewObjects = samples.Where(o => index.FindObject(o.Id) is null).ToArray();
-        // Bounded deletion samples show the changed edge even while the polygon is shrinking.
-        if (_areaOriginal is { } original)
+        { _areaPreviewObjects = []; _areaOverrides = []; _areaPreviewInvalid = true; _areaPreviewError = ex.Message; StatusDetail = ex.Message; return; }
+        catch (InvalidOperationException ex)
         {
-            var removed = PlacementAreaPlanner.Preview(original, path).Where(o =>
-                !PlacementAreaGeometry.Contains(path.Nodes, o.X + o.Width / 2, o.Y + o.Height / 2))
-                .Select(o => o with { ObjectOpacity = 0 });
-            _areaOverrides = _areaOverrides.Concat(removed).Take(128).ToArray();
+            _areaPreviewObjects = []; _areaOverrides = []; _areaPreviewInvalid = false;
+            _areaPreviewError = ex.Message + (_areaCreating ? " Нажмите «Разместить», чтобы повторить попытку." : "");
+            StatusDetail = _areaPreviewError; return;
         }
     }
 

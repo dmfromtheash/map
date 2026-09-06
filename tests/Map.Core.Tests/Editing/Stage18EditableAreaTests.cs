@@ -7,6 +7,40 @@ public sealed class Stage18EditableAreaTests
 {
     private static readonly string Sha = new('a', 64);
     private static readonly string Other = new('b', 64);
+    [Theory]
+    [InlineData(20)]
+    [InlineData(40)]
+    public void Large_mountains_preview_place_and_validate_without_reserving_the_dependency_halo(int density)
+    {
+        var session = Session(out var layer);
+        var area = Area() with { Name = "Mountains", Density = density, Seed = -184929685,
+            Nodes = [new(Guid.NewGuid(), 100, 100), new(Guid.NewGuid(), 900, 100), new(Guid.NewGuid(), 500, 670)],
+            Variants = [new(Sha, 1254, 1254)], ScalePercent = 129, RotationDegrees = 359,
+            Request = new() { BaseWidth = 256 * 1.29 }, Style = new(Sha) { FlipHorizontal = true } };
+        var estimate = PlacementAreaSampler.EstimateBytes(area, PlacementAreaGeometry.Coverage(area.Nodes));
+        Assert.InRange(estimate, 1, 32 * 1024 * 1024);
+        var original = session.Document; var preview = PlacementAreaPlanner.Preview(area);
+        Assert.NotEmpty(preview); Assert.InRange(preview.Count, 1, 64); Assert.Same(original, session.Document);
+        session.Execute(new PlacementAreaCommand(layer.Id, area.Id, area, "mountains"));
+        Assert.Null(session.LastResourceError); Assert.Equal(1, session.UndoDepth);
+        Assert.All(preview, o => Assert.Equal(o, DocumentEditor.FindObject(session.Document, o.Id)));
+        Get(session.Document).ValidateMembers(); Assert.False(HasOverlap(((ObjectLayer)session.Document.FindLayer(layer.Id)!).Objects));
+        var placed = session.Document; session.Undo(); Assert.Same(original, session.Document);
+        session.Redo(); Assert.Same(placed, session.Document);
+    }
+    [Fact]
+    public void Evicting_candidate_cache_keeps_seeded_slot_decisions_and_items_exact()
+    {
+        var area = Area() with { Density = 20 };
+        var sampler = new PlacementAreaSampler(area);
+        var slots = Enumerable.Range(0, 20).SelectMany(n => Enumerable.Range(0, 12).Select(x => new PlacementAreaSlot(x, 2, n))).ToArray();
+        var included = slots.Select(sampler.Includes).ToArray(); var items = slots.Select(sampler.Item).ToArray();
+        for (var x = 0; x <= PlacementAreaSampler.MaximumCachedCandidates; x++) sampler.Item(new(x + 10000, 0, 0));
+        Assert.Equal(PlacementAreaSampler.MaximumCachedCandidates, sampler.CachedCandidateCount);
+        Assert.Equal(included, slots.Select(sampler.Includes)); Assert.Equal(items, slots.Select(sampler.Item));
+        Assert.InRange(sampler.CachedCandidateCount, 1, PlacementAreaSampler.MaximumCachedCandidates);
+    }
+
     [Fact]
     public void Boundary_delta_matches_full_fill_preserves_unchanged_cells_objects_order_and_exact_history()
     {

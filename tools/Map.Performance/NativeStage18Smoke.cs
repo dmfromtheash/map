@@ -93,27 +93,34 @@ public sealed class Stage18Application : Application
     {
         var desktop = (IClassicDesktopStyleApplicationLifetime)ApplicationLifetime!;
         _workspace = Path.Combine(Path.GetDirectoryName(Options.OutputPath)!, "stage18-native");
-        _report.MeasurementRequired = Environment.GetEnvironmentVariable("MAP_STAGE18_UI_ONLY") != "1";
+        var densityAsset = Environment.GetEnvironmentVariable("MAP_STAGE18_DENSITY_ASSET");
+        _report.MeasurementRequired = Environment.GetEnvironmentVariable("MAP_STAGE18_UI_ONLY") != "1" && densityAsset is null;
         Directory.CreateDirectory(_workspace);
         Environment.SetEnvironmentVariable("MAP_UI_TEST_MODE", "1");
         Environment.SetEnvironmentVariable("MAP_UI_TEST_PROFILE_ROOT", Path.Combine(_workspace, "profile"));
         _catalog = new AssetCatalog(Path.Combine(_workspace, "catalog"));
-        if (_report.MeasurementRequired)
+        if (densityAsset is not null)
+            _catalog.ImportSet([densityAsset], "Горы", new(), DateTimeOffset.UnixEpoch);
+        else if (_report.MeasurementRequired)
             _catalog.ImportSet([Path.Combine(Environment.CurrentDirectory, "src/Map.Assets/StarterAssets/sample-tree.png")],
                 "Деревья", new(), DateTimeOffset.UnixEpoch);
         _window = new Window { Width = 1440, Height = 900, Title = "Map — Stage 18", ShowActivated = false,
             ShowInTaskbar = false, WindowStartupLocation = WindowStartupLocation.Manual, Position = new PixelPoint(-32000, -32000) };
-        var document = new MapDocument(DocumentId.New(), "Редактируемая область леса", DateTimeOffset.UnixEpoch,
+        var document = new MapDocument(DocumentId.New(), densityAsset is null ? "Редактируемая область леса" : "Редактируемая область гор", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(1024, 768, "px", "#FFF2EAD5"),
             [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFF2EAD5"),
-                new ObjectLayer(LayerId.New(), "Деревья", true, false, 1, [])]);
-        if (!_report.MeasurementRequired)
+                new ObjectLayer(LayerId.New(), densityAsset is null ? "Деревья" : "Горы", true, false, 1, [])]);
+        if (!_report.MeasurementRequired && densityAsset is null)
             document = MapProjectStore.Open(Environment.GetEnvironmentVariable("MAP_STAGE18_UI_FIXTURE")
                 ?? throw new InvalidOperationException("MAP_STAGE18_UI_FIXTURE must name a previously verified area map.")).Document;
         OpenEditor(document);
         _window.Opened += async (_, _) =>
         {
-            try { if (_report.MeasurementRequired) await Execute(); else await ExecuteUiCorrection(); }
+            try
+            {
+                if (densityAsset is not null) await ExecuteDensityCorrection(densityAsset);
+                else if (_report.MeasurementRequired) await Execute(); else await ExecuteUiCorrection();
+            }
             catch (Exception ex)
             {
                 _report.Failure = ex.ToString();
@@ -299,6 +306,52 @@ public sealed class Stage18Application : Application
                 && ReferenceEquals(saved, _editor.Session.Document) && _editor.Session.IsDirty && depth == _editor.Session.UndoDepth;
         else _report.Checks["save-ui-completes"] = _editor.SaveState == SaveState.Saved && !_editor.Session.IsDirty;
         _report.Checks["fixture-read-only"] = sourceHash.SequenceEqual(SHA256.HashData(File.ReadAllBytes(fixture)));
+    }
+    private async Task ExecuteDensityCorrection(string assetPath)
+    {
+        var sourceHash = SHA256.HashData(File.ReadAllBytes(assetPath));
+        await Settle(); _editor.ChooseGalleryVariant(_catalog.Sets[0].Id, null); await Settle();
+        await Click("StampModeFillArea");
+        var scale = Find<Slider>("FutureStampScaleSlider"); scale.BringIntoView(); await Settle(); scale.Value = 129;
+        _editor.SetStampRotationDegrees(359); _editor.SetStampSublayer(-1); _editor.SetStampFlip(horizontal: true);
+        await Click("StartEditableAreaButton");
+        await Number("EditableAreaDensityBox", "20");
+        var original = _editor.Session.Document;
+        Point(100, 100); Point(900, 100); Point(500, 670); await Settle();
+        await Number("EditableAreaSeedBox", "-184929685");
+        var draft = _editor.DisplayedEditableArea!;
+        _report.Checks["owner-mountain-asset-and-settings"] = draft.Variants.Single().Sha256 == Convert.ToHexString(sourceHash).ToLowerInvariant()
+            && draft.ScalePercent == 129 && draft.RotationDegrees == 359 && draft.Sublayer == -1
+            && draft.Style.FlipHorizontal && draft.Density == 20 && draft.Seed == -184929685;
+        var place = Find<Button>("FinishEditableAreaButton");
+        _report.Checks["density20-large-mountains-preview-and-place-ready"] = place.IsEnabled && _editor.PlacementPreviewObjects.Count > 0;
+        _report.Checks["preview-memory-reservation-is-bounded"] = PlacementAreaSampler.EstimateBytes(draft,
+            PlacementAreaGeometry.Coverage(draft.Nodes)) < 32 * 1024 * 1024;
+        _report.Checks["preview-does-not-change-map-or-history"] = ReferenceEquals(original, _editor.Session.Document) && _editor.Session.UndoDepth == 0;
+        Find<Control>("EditableAreaSummary").BringIntoView(); await Settle();
+        _report.PlacementDraftScreenshot = Path.ChangeExtension(Options.OutputPath, ".draft.png"); SaveVisual(_report.PlacementDraftScreenshot);
+        await Number("EditableAreaDensityBox", "40");
+        var preview = _editor.PlacementPreviewObjects.ToArray();
+        _report.Checks["density40-large-mountains-preview-and-place-ready"] = place.IsEnabled && preview.Length > 0;
+        await Click("FinishEditableAreaButton");
+        _report.Checks["mountains-placed-in-one-undo-step"] = _editor.SelectedEditableArea is { MemberCount: > 0, Density: 40 }
+            && _editor.Session.UndoDepth == 1 && preview.All(o => o == DocumentEditor.FindObject(_editor.Session.Document, o.Id));
+        var placed = _editor.Session.Document; _editor.Undo();
+        var undone = ReferenceEquals(original, _editor.Session.Document); _editor.Redo();
+        _report.Checks["mountains-undo-redo-exact"] = undone && ReferenceEquals(placed, _editor.Session.Document);
+        _report.OverlappingPairs = CountOverlaps();
+        _report.Checks["mountains-do-not-overlap"] = _report.OverlappingPairs == 0;
+        await Click("SaveButton"); await Until(() => _editor.SaveState != SaveState.Saving);
+        _report.SaveOutcome = _editor.SaveState.ToString();
+        _report.Checks["mountains-save-succeeds"] = _editor.SaveState == SaveState.Saved && !_editor.Session.IsDirty;
+        _report.SavedProject = Path.Combine(_workspace, "editable-area.mapproj");
+        var opened = MapProjectStore.Open(_report.SavedProject).Document;
+        var saved = opened.Layers.OfType<ObjectLayer>().SelectMany(l => l.PlacementAreas).Single();
+        _report.Checks["mountains-reopen-validates-same-layout"] = saved.Density == 40 && saved.MemberCount == _editor.SelectedEditableArea!.MemberCount
+            && saved.Members.All(m => DocumentEditor.FindObject(opened, m.ObjectId) == DocumentEditor.FindObject(placed, m.ObjectId));
+        Find<Control>("EditableAreaSummary").BringIntoView(); await Settle();
+        _report.Screenshot = Path.ChangeExtension(Options.OutputPath, ".editor.png"); SaveVisual(_report.Screenshot);
+        _report.Checks["owner-asset-read-only"] = sourceHash.SequenceEqual(SHA256.HashData(File.ReadAllBytes(assetPath)));
     }
     private int CountOverlaps()
     {

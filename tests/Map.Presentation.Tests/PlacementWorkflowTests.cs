@@ -71,6 +71,24 @@ public sealed class PlacementWorkflowTests : IDisposable
     }
 
     [Fact]
+    public void Stage18_temporary_preview_memory_refusal_keeps_place_retry_available_without_redrawing()
+    {
+        const long gib = 1024L * 1024 * 1024;
+        var available = 2 * gib;
+        var memory = new Map.Core.Resources.WorkingMemoryBudget(() => new(16 * gib, available, 100 * 1024 * 1024));
+        var editor = Editor(out _, memory); editor.StampDensity = 20; editor.SetStampScalePercent(129); editor.StartEditableArea();
+        var original = editor.Session.Document;
+        editor.AddEditableAreaNode(100, 100); editor.AddEditableAreaNode(900, 100); editor.AddEditableAreaNode(500, 670);
+        Assert.Empty(editor.PlacementPreviewObjects); Assert.True(editor.CanPlaceEditableArea);
+        Assert.Contains("МиБ", editor.EditableAreaPlacementHint); Assert.Contains("повторить попытку", editor.EditableAreaPlacementHint);
+        Assert.False(editor.FinishEditableArea()); Assert.Same(original, editor.Session.Document); Assert.Equal(0, editor.Session.UndoDepth);
+        available = 4 * gib;
+        Assert.True(editor.FinishEditableArea(), editor.StatusDetail);
+        Assert.True(editor.SelectedEditableArea!.MemberCount > 0); Assert.Equal(1, editor.Session.UndoDepth);
+        Assert.Equal(0, memory.ReservedBytes);
+    }
+
+    [Fact]
     public void Stage17_long_draft_keeps_preview_at_the_new_end_after_the_first_64_stamps()
     {
         var editor = Editor(out _); var router = new CanvasInputRouter(editor);
@@ -266,7 +284,7 @@ public sealed class PlacementWorkflowTests : IDisposable
         return Objects(editor);
     }
 
-    private EditorViewModel Editor(out AssetCatalog catalog)
+    private EditorViewModel Editor(out AssetCatalog catalog, Map.Core.Resources.WorkingMemoryBudget? memory = null)
     {
         Directory.CreateDirectory(_root);
         var path = Path.Combine(_root, "own.png");
@@ -285,7 +303,7 @@ public sealed class PlacementWorkflowTests : IDisposable
             [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFFFFFFF"),
              new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, [])]);
         var editor = new EditorViewModel(document, null, false, new FakeProjectStore(), new FakeRecentMaps(),
-            new FakeFilePicker(), new FakePrompts(), new FakeLog(), assetCatalog: catalog);
+            new FakeFilePicker(), new FakePrompts(), new FakeLog(), assetCatalog: catalog, memory: memory);
         editor.SelectAssetSet(catalog.Sets[0].Id);
         editor.PlacementAutoSelect = PlacementAutoSelectPolicy.Off;
         editor.StampPlacementMode = StampPlacementMode.One;
