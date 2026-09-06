@@ -48,6 +48,7 @@ public sealed partial class EditorViewModel
 
     public void StartEditablePath()
     {
+        CancelEditableAreaGesture(); _selectedAreaId = null;
         CancelEditablePathGesture(); _selectedPathId = null; _pathNode = -1;
         ActiveTool = EditorTool.Stamp; StampPlacementMode = StampPlacementMode.Path;
         ArmStampPlacement();
@@ -109,6 +110,7 @@ public sealed partial class EditorViewModel
 
     public void SelectEditablePath(Guid id)
     {
+        CancelEditableAreaGesture(); _selectedAreaId = null;
         CancelPlacement(); CancelEditablePathGesture();
         var layer = Session.Document.Layers.OfType<ObjectLayer>().FirstOrDefault(l => l.PlacementPaths.Any(p => p.Id == id));
         if (layer is null) return;

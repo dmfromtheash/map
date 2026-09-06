@@ -189,11 +189,13 @@ public sealed class EditingSession
         MapDocument candidate;
         try { candidate = command.Apply(Document); }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException
-            && (command is PlacementPathCommand or CompositeCommand { ContainsPlacementPath: true }
-                || Document.Layers.OfType<ObjectLayer>().Any(l => !l.PlacementPaths.IsEmpty)))
+            && (command is PlacementPathCommand or PlacementAreaCommand or CompositeCommand { ContainsPlacementPath: true }
+                || Document.Layers.OfType<ObjectLayer>().Any(l => !l.PlacementPaths.IsEmpty || !l.PlacementAreas.IsEmpty)))
         { LastResourceError = ex.Message; ResourceAdmissionChanged?.Invoke(this, EventArgs.Empty); return; }
         if (command is not PlacementPathCommand && !PlacementPathOwnership.Allows(Document, candidate, out var pathReason))
         { LastResourceError = pathReason; ResourceAdmissionChanged?.Invoke(this, EventArgs.Empty); return; }
+        if (command is not PlacementAreaCommand && !PlacementAreaOwnership.Allows(Document, candidate, out var areaReason))
+        { LastResourceError = areaReason; ResourceAdmissionChanged?.Invoke(this, EventArgs.Empty); return; }
         Document = candidate;
         Revision++;
         var afterState = new StateNode(_currentState);

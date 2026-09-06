@@ -7,6 +7,7 @@ public static class MapProjectFormat
     public const int LegacySchemaVersion = 1;
     public const int SchemaVersion = 4;
     public const int EditablePathsSchemaVersion = 5;
+    public const int EditableAreasSchemaVersion = 6;
     public const string Extension = ".mapproj";
 
     public const string ManifestEntry = "manifest.json";

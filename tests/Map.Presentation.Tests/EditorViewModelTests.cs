@@ -10,7 +10,8 @@ namespace Map.Presentation.Tests;
 public class EditorViewModelTests
 {
     private static (EditorViewModel Editor, FakeProjectStore Store, FakeRecentMaps Recent,
-        FakeFilePicker Picker, FakePrompts Prompts) NewEditor(string? path = null, bool startDirty = true)
+        FakeFilePicker Picker, FakePrompts Prompts) NewEditor(string? path = null, bool startDirty = true,
+            Map.Core.Resources.WorkingMemoryBudget? memory = null)
     {
         var store = new FakeProjectStore();
         var recent = new FakeRecentMaps();
@@ -20,7 +21,7 @@ public class EditorViewModelTests
         var editor = new EditorViewModel(
             TestData.Document(), path, startDirty,
             store, recent, picker, prompts, new FakeLog(),
-            clock: () => new DateTimeOffset(2026, 8, 25, 15, 0, 0, TimeSpan.Zero));
+            clock: () => new DateTimeOffset(2026, 8, 25, 15, 0, 0, TimeSpan.Zero), memory: memory);
 
         return (editor, store, recent, picker, prompts);
     }
@@ -243,7 +244,7 @@ public class EditorViewModelTests
     [Fact]
     public async Task Save_failure_keeps_the_document_dirty_and_shows_the_recovery_path()
     {
-        var (editor, store, _, picker, _) = NewEditor();
+        var (editor, store, _, picker, _) = NewEditor(memory: new(() => new(16L << 30, 8L << 30, 0)));
         picker.NextSavePath = @"C:\maps\fail.mapproj";
         editor.AddObject(SceneObjectKind.Rectangle);
 
@@ -260,6 +261,28 @@ public class EditorViewModelTests
         // A later retry can still succeed.
         Assert.True(await editor.SaveAsync());
         Assert.Equal(SaveState.Saved, editor.SaveState);
+    }
+
+    [Fact]
+    public async Task Save_resource_refusal_preserves_document_history_and_refuses_close_until_retry()
+    {
+        var memory = new Map.Core.Resources.WorkingMemorySnapshot(16L << 30, 8L << 30, 0);
+        var (editor, store, recent, picker, prompts) = NewEditor(memory: new(() => memory));
+        picker.NextSavePath = @"C:\maps\resource-refused.mapproj";
+        editor.AddObject(SceneObjectKind.Rectangle);
+        var snapshot = editor.Session.Document; var depth = editor.Session.UndoDepth;
+        const string reason = "Недостаточно свободной памяти с резервом для Windows и открытых карт.";
+        // Exercise the real admission before any thumbnail or store write, then restore headroom.
+        memory = memory with { AvailableBytes = 2L << 30 };
+        Assert.False(await editor.SaveAsync());
+        Assert.Same(snapshot, editor.Session.Document); Assert.Equal(depth, editor.Session.UndoDepth);
+        Assert.True(editor.Session.IsDirty); Assert.Equal(SaveState.SaveFailed, editor.SaveState);
+        Assert.Contains(reason, editor.StatusDetail); Assert.Null(editor.DocumentPath);
+        Assert.Empty(store.Saved); Assert.Empty(recent.Items); Assert.Equal(0, editor.ActiveResourceOperations);
+        prompts.NextCloseChoice = CloseChoice.Save;
+        Assert.False(await editor.ConfirmCloseAsync()); Assert.Same(snapshot, editor.Session.Document);
+        memory = memory with { AvailableBytes = 8L << 30 };
+        Assert.True(await editor.SaveAsync()); Assert.False(editor.Session.IsDirty);
     }
 
     [Fact]

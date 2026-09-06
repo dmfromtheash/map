@@ -59,7 +59,7 @@ public sealed partial class EditorView
                 _pathPicker.ItemsSource = choices;
             _pathPicker.SelectedItem = choices.FirstOrDefault(p => p.Id == _editor.SelectedEditablePath?.Id);
             _pathSummary.Text = _editor.EditablePathSummary;
-            _stampGestureBlock.IsVisible = _editor.SelectedSet is not null || _editor.SelectedEditablePath is not null;
+            _stampGestureBlock.IsVisible = _editor.SelectedSet is not null || _editor.SelectedEditablePath is not null || _editor.CurrentAreaSource is not null;
             _pathFinish!.IsVisible = _editor.IsCreatingEditablePath;
             _pathDetach!.IsEnabled = _editor.CanDetachPathObject;
             _pathPanel.IsVisible = _editor.StampPlacementMode == Map.Presentation.ViewModels.StampPlacementMode.Path

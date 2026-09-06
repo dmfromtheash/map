@@ -249,8 +249,8 @@ public static class CanvasTransformService
 
     private static void RejectEditablePaths(MapDocument document)
     {
-        if (document.Layers.OfType<ObjectLayer>().Any(l => !l.PlacementPaths.IsEmpty))
-            throw new InvalidOperationException("Перед изменением размера или извлечением региона превратите пути в обычные объекты.");
+        if (document.Layers.OfType<ObjectLayer>().Any(l => !l.PlacementPaths.IsEmpty || !l.PlacementAreas.IsEmpty))
+            throw new InvalidOperationException("Перед изменением размера или извлечением региона превратите пути и области в обычные объекты.");
     }
 
     public static TileMap ExtractTiles(TileMap source, CanvasRegion sourceRegion) =>

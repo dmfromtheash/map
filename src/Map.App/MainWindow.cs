@@ -569,7 +569,8 @@ public sealed class MainWindow : Window
                 editor.HandleEscape();
                 break;
             case EditorShortcutSettings.Commands.FinishPath:
-                if (editor.IsCreatingEditablePath) editor.FinishEditablePath(); else editor.FinishPenPath();
+                if (editor.IsCreatingEditableArea) editor.FinishEditableArea();
+                else if (editor.IsCreatingEditablePath) editor.FinishEditablePath(); else editor.FinishPenPath();
                 break;
             case EditorShortcutSettings.Commands.Delete:
             case EditorShortcutSettings.Commands.DeleteAlternate:

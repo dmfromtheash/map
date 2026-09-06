@@ -40,7 +40,7 @@ public sealed class CompositeCommand : IEditCommand
 
     public int StepCount => _steps.Count;
 
-    internal bool ContainsPlacementPath => _steps.Any(step => step is PlacementPathCommand
+    internal bool ContainsPlacementPath => _steps.Any(step => step is PlacementPathCommand or PlacementAreaCommand
         || step is CompositeCommand { ContainsPlacementPath: true });
 
     public MapDocument Apply(MapDocument document)

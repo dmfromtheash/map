@@ -1,10 +1,14 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using Map.Performance;
 
 var options = PerformanceOptions.Parse(args);
 object report;
 bool gatePassed;
-if (options.Profile == "native-stage17")
+if (options.Profile == "native-stage18")
+{
+    var nativeReport = NativeStage18Smoke.Run(options); report = nativeReport; gatePassed = nativeReport.GatePassed;
+}
+else if (options.Profile == "native-stage17")
 {
     var nativeReport = NativeStage17Smoke.Run(options); report = nativeReport; gatePassed = nativeReport.GatePassed;
 }

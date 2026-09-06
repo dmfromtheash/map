@@ -359,7 +359,7 @@ public sealed class DocumentRevisionIndex
         }
 
         if (overrides.Count > MaxOverlayObjects
-            && !source.Layers.OfType<ObjectLayer>().Any(l => !l.PlacementPaths.IsEmpty))
+            && !source.Layers.OfType<ObjectLayer>().Any(l => !l.PlacementPaths.IsEmpty || !l.PlacementAreas.IsEmpty))
         {
             return;
         }

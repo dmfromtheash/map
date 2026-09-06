@@ -54,6 +54,9 @@ internal sealed class LayerDto
     [JsonPropertyName("placementPaths")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<Map.Core.Documents.PlacementPath>? PlacementPaths { get; set; }
+    [JsonPropertyName("placementAreas")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<Map.Core.Documents.PlacementArea>? PlacementAreas { get; set; }
     [JsonPropertyName("id")] public string Id { get; set; } = "";
     [JsonPropertyName("type")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

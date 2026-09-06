@@ -453,6 +453,7 @@ public sealed partial class EditorView : UserControl
             _exportPreviewBitmap?.Dispose();
             _exportPreviewBitmap = null;
             _thumbnails.Dispose();
+            _fillAreaThumbnail?.Dispose(); _fillAreaThumbnail = null;
             _checkpointPreviews.Dispose();
             _editor.CancelExport();
             _editor.CloseExport();
@@ -2175,6 +2176,7 @@ public sealed partial class EditorView : UserControl
                 BuildCompactStampCatalog(),
                 openLibrary,
                 _stampGestureBlock,
+                BuildEditableAreaPanel(),
                 BuildEditablePathPanel(),
                 BuildStampEditor("FutureStamp"),
                 _stampCatalogDetails,
@@ -5864,6 +5866,7 @@ public sealed partial class EditorView : UserControl
             ("Series", "Серия", null),
             ("Area", "Россыпь", null),
             ("Path", "Путь", null),
+            ("FillArea", "Область", null),
         ], key =>
         {
             _editor.StampPlacementMode = key switch
@@ -5871,6 +5874,7 @@ public sealed partial class EditorView : UserControl
                 "Series" => StampPlacementMode.Series,
                 "Area" => StampPlacementMode.Area,
                 "Path" => StampPlacementMode.Path,
+                "FillArea" => StampPlacementMode.FillArea,
                 _ => StampPlacementMode.One,
             };
             SyncAssetList();
@@ -5879,6 +5883,7 @@ public sealed partial class EditorView : UserControl
         _placementModeButtons["Series"] = modeButtons[1];
         _placementModeButtons["Area"] = modeButtons[2];
         _placementModeButtons["Path"] = modeButtons[3];
+        _placementModeButtons["FillArea"] = modeButtons[4];
 
         var (autoSelect, autoSelectButtons) = Ui.Segmented("PlacementAutoSelect", [
             ("Auto", "Авто", null),
@@ -6064,6 +6069,7 @@ public sealed partial class EditorView : UserControl
             StampPlacementMode.Series => "Series",
             StampPlacementMode.Area => "Area",
             StampPlacementMode.Path => "Path",
+            StampPlacementMode.FillArea => "FillArea",
             _ => "One",
         });
         foreach (var pair in _autoSelectButtons)
@@ -6121,7 +6127,8 @@ public sealed partial class EditorView : UserControl
         }.Classed("compact", "asset-entry");
         _stampCurrentAssetButton.Click += (_, _) =>
         {
-            if (_editor.StampPlacementMode == StampPlacementMode.Path) _editor.StartEditablePath();
+            if (_editor.StampPlacementMode == StampPlacementMode.FillArea) _editor.StartEditableArea();
+            else if (_editor.StampPlacementMode == StampPlacementMode.Path) _editor.StartEditablePath();
             else _editor.ArmStampPlacement();
             _canvas.ShowPlacementPreviewAtCenter();
             SyncContextArea();
@@ -6223,6 +6230,7 @@ public sealed partial class EditorView : UserControl
             _editor.CurrentVariant is { } variant
                 ? _editor.LibraryThumbnailPathForVariant(variant.Id)
                 : null);
+        SyncAreaAssetCard();
         SyncCompactVariantStrip();
         SyncCompactSetList(_stampRecentStrip, _editor.CompactRecentSets);
         SyncCompactSetList(_stampFavoriteStrip, _editor.CompactFavoriteSets);
@@ -7303,6 +7311,7 @@ public sealed partial class EditorView : UserControl
         }
         SyncStatus();
         SyncEditablePathPanel();
+        SyncEditableAreaPanel();
         if (scene) SyncSidePanels();
         if (changed.Overlaps([nameof(EditorViewModel.XText), nameof(EditorViewModel.YText),
             nameof(EditorViewModel.WidthText), nameof(EditorViewModel.HeightText),
@@ -7609,7 +7618,7 @@ public sealed partial class EditorView : UserControl
             _editor.SelectionCount,
             _editor.SelectionKind is not null,
             _contextPrefersToolPanel);
-        if (_editor.ActiveTool == EditorTool.Stamp && _editor.SelectedEditablePath is not null)
+        if (_editor.ActiveTool == EditorTool.Stamp && (_editor.SelectedEditablePath is not null || _editor.StampPlacementMode == StampPlacementMode.FillArea))
             scope = EditorContextPanelKind.ToolPanel;
 
         _contextSwitch.IsVisible = !_contextCollapsed && EditorContextPanel.ToggleApplies(_editor.SelectionCount);
@@ -8490,6 +8499,7 @@ public sealed partial class EditorView : UserControl
             StampPlacementMode.Series => "Series",
             StampPlacementMode.Area => "Area",
             StampPlacementMode.Path => "Path",
+            StampPlacementMode.FillArea => "FillArea",
             _ => "One",
         });
 
@@ -8732,7 +8742,7 @@ public sealed partial class EditorView : UserControl
         var set = _editor.SelectedSet;
         var hasSet = set is not null;
         _selectedSetBlock.IsVisible = hasSet;
-        _stampGestureBlock.IsVisible = hasSet || _editor.SelectedEditablePath is not null;
+        _stampGestureBlock.IsVisible = hasSet || _editor.SelectedEditablePath is not null || _editor.CurrentAreaSource is not null;
         _setManagementDetails.IsVisible = hasSet;
         _selectedAsset = _editor.CurrentVariant is { } current
             ? _editor.Assets.FirstOrDefault(record =>

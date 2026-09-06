@@ -477,7 +477,7 @@ public sealed partial class MapCanvasControl : Control
                 ViewScale = viewport.Scale,
                 VisibleWorld = new Map.Core.Documents.WorldBounds(
                     X, Y, bottomRight.X, bottomRight.Y),
-                ObjectOverrides = editor.EditablePathPreviewOverrides ?? editor.DragPreview?.Proposed,
+                ObjectOverrides = editor.EditableAreaPreviewOverrides ?? editor.EditablePathPreviewOverrides ?? editor.DragPreview?.Proposed,
                 PlacementPreviewObjects = editor.PlacementPreviewObjects,
                 PlacementPreviewLayerId = editor.PlacementPreviewLayerId,
                 PlacementArea = editor.PendingPlacement is
@@ -502,6 +502,25 @@ public sealed partial class MapCanvasControl : Control
                 BoundaryOverlay = editor.CanvasBoundaryOverlay,
             });
             sceneStopwatch.Stop();
+            if (editor.ActiveTool == EditorTool.Stamp && editor.DisplayedEditableArea is { } editableArea)
+            {
+                var scale = (float)Math.Max(.001, viewport.Scale);
+                using var pen = new SKPaint { Color = new SKColor(80, 216, 167), IsAntialias = true,
+                    Style = SKPaintStyle.Stroke, StrokeWidth = 2 / scale };
+                using var fill = new SKPaint { Color = new SKColor(16, 55, 47), IsAntialias = true };
+                for (var n = 0; n < editableArea.Nodes.Length; n++)
+                {
+                    var node = editableArea.Nodes[n];
+                    if (n > 0 || editableArea.Nodes.Length >= 3)
+                    {
+                        var previous = editableArea.Nodes[(n + editableArea.Nodes.Length - 1) % editableArea.Nodes.Length];
+                        canvas.DrawLine((float)previous.X, (float)previous.Y, (float)node.X, (float)node.Y, pen);
+                    }
+                    var radius = (n == editor.SelectedAreaNodeIndex ? 7 : 5) / scale;
+                    canvas.DrawCircle((float)node.X, (float)node.Y, radius, fill);
+                    canvas.DrawCircle((float)node.X, (float)node.Y, radius, pen);
+                }
+            }
             if (editor.ActiveTool == EditorTool.Stamp && editor.DisplayedEditablePath is { } editablePath)
             {
                 var scale = (float)Math.Max(.001, viewport.Scale);

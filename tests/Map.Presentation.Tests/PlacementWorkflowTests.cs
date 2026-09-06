@@ -9,6 +9,45 @@ namespace Map.Presentation.Tests;
 public sealed class PlacementWorkflowTests : IDisposable
 {
     [Fact]
+    public void Stage18_router_creation_preview_cancel_edit_parameters_detach_and_repeat_preserve_history()
+    {
+        var editor = Editor(out _); var router = new CanvasInputRouter(editor);
+        editor.StampDensity = 3; editor.SetStampScalePercent(35); editor.StartEditableArea();
+        var original = editor.Session.Document;
+        void Point(double x, double y) { router.Press(CanvasPointerButton.Left, x, y); router.Release(x, y); }
+        Point(100, 100); Point(800, 100); Point(800, 600); Point(450, 400); Point(100, 600);
+        Assert.True(editor.HasTransientEditorAction); Assert.Same(original, editor.Session.Document);
+        var preview = editor.PlacementPreviewObjects.ToArray(); Assert.NotEmpty(preview);
+        Assert.True(editor.FinishEditableArea(), editor.StatusDetail);
+        Assert.Equal(1, editor.Session.UndoDepth);
+        foreach (var item in preview) Assert.Equal(item, Map.Core.Editing.DocumentEditor.FindObject(editor.Session.Document, item.Id));
+        var created = editor.Session.Document; var area = editor.SelectedEditableArea!;
+        router.Press(CanvasPointerButton.Left, 800, 100); router.Move(700, 150);
+        Assert.Same(created, editor.Session.Document); editor.HandleEscape(); router.Release(700, 150);
+        Assert.Same(created, editor.Session.Document);
+        router.Press(CanvasPointerButton.Left, 800, 100); router.Move(700, 150); router.Release(700, 150);
+        Assert.Equal(2, editor.Session.UndoDepth); Assert.Equal(700, editor.SelectedEditableArea!.Nodes[1].X);
+        editor.SetEditableAreaDensity(5); Assert.Equal(5, editor.SelectedEditableArea.Density);
+        var member = editor.SelectedEditableArea.Members.First();
+        editor.Session.SelectedObjectId = member.ObjectId; editor.DetachSelectedAreaObject();
+        var detached = Map.Core.Editing.DocumentEditor.FindObject(editor.Session.Document, member.ObjectId);
+        editor.SetEditableAreaSeed(1800); Assert.Same(detached, Map.Core.Editing.DocumentEditor.FindObject(editor.Session.Document, member.ObjectId));
+        editor.InsertEditableAreaNode(); Point(100, 350); Assert.Equal(6, editor.SelectedEditableArea.Nodes.Length);
+        editor.DeleteEditableAreaNode(); Assert.Equal(5, editor.SelectedEditableArea.Nodes.Length);
+        editor.SetStampScalePercent(70); editor.SetStampRotationDegrees(345); editor.ApplyStampSettingsToEditableArea();
+        Assert.Equal(70, editor.SelectedEditableArea.ScalePercent); Assert.Equal(345, editor.SelectedEditableArea.RotationDegrees);
+        var edited = editor.Session.Document; editor.Undo(); editor.Redo(); Assert.Same(edited, editor.Session.Document);
+        editor.StartEditableArea(); Point(150, 150); editor.HandleEscape(); Assert.Same(edited, editor.Session.Document);
+        editor.SelectEditableArea(area.Id); editor.SetStampScalePercent(80); editor.SetStampRotationDegrees(90);
+        editor.StartEditableArea(); Point(100, 100); Point(300, 100); Point(300, 300);
+        Assert.True(editor.FinishEditableArea(), editor.StatusDetail); Assert.Equal(2, editor.EditableAreas.Count);
+        Assert.Equal(80, editor.SelectedEditableArea!.ScalePercent); Assert.Equal(90, editor.SelectedEditableArea.RotationDegrees);
+        Assert.Equal(70, editor.EditableAreas.Single(a => a.Id == area.Id).ScalePercent);
+        var count = Objects(editor).Length; editor.StampPlacementMode = StampPlacementMode.One; Point(100, 100);
+        Assert.Null(editor.SelectedEditableArea); Assert.Equal(count + 1, Objects(editor).Length);
+    }
+
+    [Fact]
     public void Stage17_long_draft_keeps_preview_at_the_new_end_after_the_first_64_stamps()
     {
         var editor = Editor(out _); var router = new CanvasInputRouter(editor);

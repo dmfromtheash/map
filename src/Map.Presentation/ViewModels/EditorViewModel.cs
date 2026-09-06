@@ -131,6 +131,7 @@ public enum StampPlacementMode
     Series,
     Area,
     Path,
+    FillArea,
 }
 
 /// <summary>
@@ -194,12 +195,13 @@ public sealed partial class EditorViewModel : ViewModelBase
     // Save/read-back, versions, export and preview share one expensive operation slot.
     // Cancelling a preview cannot leave multiple native render/encode buffers running together.
     private readonly SemaphoreSlim _resourceGate = new(1, 1);
+    private readonly Map.Core.Resources.WorkingMemoryBudget _workingMemory;
     public int ActiveResourceOperations { get; private set; }
 
     private async Task<T> RunResourceOperationAsync<T>(Func<Task<T>> operation, CancellationToken token = default)
         => await RunLocalResourceOperationAsync(async () =>
         {
-            using var reservation = await Map.Core.Resources.WorkingMemoryBudget.Shared.EnterHeavyAsync(token);
+            using var reservation = await _workingMemory.EnterHeavyAsync(token);
             return await operation();
         }, token);
 
@@ -331,9 +333,11 @@ public sealed partial class EditorViewModel : ViewModelBase
         IFolderLauncher? folderLauncher = null,
         EditorLocalPreferences? localPreferences = null,
         Action<EditorLocalPreferences>? saveLocalPreferences = null,
-        DateTimeOffset? lastSavedUtc = null)
+        DateTimeOffset? lastSavedUtc = null,
+        Map.Core.Resources.WorkingMemoryBudget? memory = null)
     {
-        Session = new EditingSession(document);
+        _workingMemory = memory ?? Map.Core.Resources.WorkingMemoryBudget.Shared;
+        Session = new EditingSession(document, _workingMemory);
         Session.ResourceAdmissionChanged += (_, _) => Raise(nameof(StatusDetail));
         DocumentPath = documentPath;
         _store = store;
@@ -688,7 +692,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             CancelTextPlacement();
             CancelShapeBooleanPreview();
             CancelPlacement();
-            CancelEditablePathGesture();
+            CancelEditablePathGesture(); CancelEditableAreaGesture();
             CancelDrag();
             CancelMarquee();
             CancelVectorElementDrag();
@@ -1919,10 +1923,12 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public bool IsEditingFutureStamp =>
         ActiveTool == EditorTool.Stamp && (PendingPlacement?.Target == PlacementTargetKind.Stamp
-            || SelectedEditablePath is not null || IsCreatingEditablePath);
+            || SelectedEditablePath is not null || IsCreatingEditablePath
+            || SelectedEditableArea is not null || IsCreatingEditableArea);
 
     public string StampPanelHeading =>
-        ActiveTool == EditorTool.Stamp && SelectedEditablePath is not null ? "Параметры пути — примените кнопкой ниже"
+        ActiveTool == EditorTool.Stamp && SelectedEditableArea is not null ? "Параметры области — примените кнопкой ниже"
+            : ActiveTool == EditorTool.Stamp && SelectedEditablePath is not null ? "Параметры пути — примените кнопкой ниже"
             : IsEditingFutureStamp ? "Ассет для размещения" : "Свойства ассета";
 
     public StampStyle? StampPanelStyle => IsEditingFutureStamp
@@ -2066,6 +2072,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             return;
         }
 
+        _newAreaTemplate = null; _selectedAreaId = null; CancelEditableAreaGesture();
         _currentVariantIndex = Math.Clamp(index, 0, _selectedSetVariants.Count - 1);
         _stampToolSettings = _stampToolSettings with { RandomizeVariant = false };
         RememberCurrentVariant();
@@ -2435,10 +2442,12 @@ public sealed partial class EditorViewModel : ViewModelBase
             if (_stampToolSettings.Mode != value && Enum.IsDefined(value))
             {
                 var leavingPath = _selectedPathId is not null && value != StampPlacementMode.Path;
-                CancelEditablePathGesture();
+                var leavingArea = _selectedAreaId is not null && value != StampPlacementMode.FillArea;
+                CancelEditablePathGesture(); CancelEditableAreaGesture();
                 CancelStampSeries();
                 _stampToolSettings = _stampToolSettings with { Mode = value };
                 if (leavingPath) { _selectedPathId = null; ArmStampPlacement(); RaisePathState(); }
+                if (leavingArea) { _selectedAreaId = null; _newAreaTemplate = null; ArmStampPlacement(); RaiseAreaState(); }
                 Raise();
                 Raise(nameof(PlannedStampCount));
                 Raise(nameof(StampAreaSummary));
@@ -2648,7 +2657,7 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public bool HasPendingPlacement => _pendingPlacement is not null;
 
-    public IReadOnlyList<SceneObject> PlacementPreviewObjects => HasPathGesture ? _pathPreviewObjects
+    public IReadOnlyList<SceneObject> PlacementPreviewObjects => HasAreaGesture ? _areaPreviewObjects : HasPathGesture ? _pathPreviewObjects
         : _pendingPlacement is { PointerVisible: true } pending
         ? pending.PreviewObjects
         : _vectorPreviewObject is { } vector ? [vector]
@@ -2656,7 +2665,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         : _shapeBooleanPreviewObject is { } boolean ? [boolean]
         : [];
 
-    public LayerId? PlacementPreviewLayerId => _pathLayer ?? _pendingPlacement?.LayerId
+    public LayerId? PlacementPreviewLayerId => _areaLayer ?? _pathLayer ?? _pendingPlacement?.LayerId
         ?? _vectorPreviewLayerId ?? _textPreviewLayerId ?? _pendingShapeBoolean?.LayerId;
 
     public string PlacementRefusal => _pendingPlacement?.InvalidReason ?? "";
@@ -2889,7 +2898,7 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public bool CancelPlacement()
     {
-        var cancelledPath = CancelEditablePathGesture();
+        var cancelledPath = CancelEditablePathGesture() | CancelEditableAreaGesture();
         CancelStampSeries();
         if (PendingPlacement is null)
         {
@@ -3322,7 +3331,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             return false;
         }
 
-        var scatter = settings.Mode is StampPlacementMode.Area or StampPlacementMode.Series or StampPlacementMode.Path;
+        var scatter = settings.Mode is StampPlacementMode.Area or StampPlacementMode.Series or StampPlacementMode.Path or StampPlacementMode.FillArea;
         var randomize = settings.RandomizeVariant && scatter;
         var candidates = randomize
             ? _selectedSetVariants
@@ -3419,6 +3428,7 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     private void RefreshArmedPlacement()
     {
+        RefreshAreaDraftSettings();
         if (PendingPlacement is not { } pending)
         {
             return;
@@ -5313,8 +5323,8 @@ public sealed partial class EditorViewModel : ViewModelBase
 
         ObjectClipboard.Set(ObjectTransfer.Copy(Session.Document, ids));
         StatusDetail = $"Скопировано: {EditorLabels.Objects(ids.Count)}.";
-        if (ids.Any(id => PlacementPathOwnership.Owner(Session.Document, id) is not null))
-            StatusDetail += " Копии будут обычными объектами; исходный путь сохранён.";
+        if (ids.Any(id => PlacementOwnership.Owner(Session.Document, id) is not null))
+            StatusDetail += " Копии будут обычными объектами; исходная конструкция сохранена.";
         Raise(nameof(CanPasteObjects));
     }
 
@@ -5953,8 +5963,8 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public void DuplicateActiveLayer()
     {
-        if (ActiveLayer is ObjectLayer { PlacementPaths.IsEmpty: false })
-        { StatusDetail = "Перед дублированием слоя превратите его пути в обычные объекты."; return; }
+        if (ActiveLayer is ObjectLayer owned && (!owned.PlacementPaths.IsEmpty || !owned.PlacementAreas.IsEmpty))
+        { StatusDetail = "Перед дублированием слоя превратите его пути и области в обычные объекты."; return; }
         if (ActiveLayer is null or BaseColorLayer)
         {
             return;
@@ -6771,6 +6781,8 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// </summary>
     public bool HandleEscape()
     {
+        if (CancelEditableAreaGesture())
+        { CanvasGestureCancelled?.Invoke(this, EventArgs.Empty); PendingPlacement = null; StatusDetail = "Правка области отменена."; return true; }
         if (CancelEditablePathGesture())
         { CanvasGestureCancelled?.Invoke(this, EventArgs.Empty); StatusDetail = "Правка пути отменена."; return true; }
         if (_pendingShapeBoolean is not null)
@@ -7500,8 +7512,8 @@ public sealed partial class EditorViewModel : ViewModelBase
         {
             return null;
         }
-        if (selected.Any(o => PlacementPathOwnership.Owner(Session.Document, o.Id) is not null))
-        { StatusDetail = PlacementPathOwnership.DetachFirst; return null; }
+        if (selected.Any(o => PlacementOwnership.Owner(Session.Document, o.Id) is not null))
+        { StatusDetail = PlacementOwnership.DetachFirst; return null; }
 
         if (selected.Any(sceneObject => !IsObjectAvailable(sceneObject)))
         {
@@ -7606,8 +7618,8 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// <summary>Deletes the whole selection, across layers, as one history entry.</summary>
     public void DeleteSelectedObject()
     {
-        if (Session.SelectedObjectIds.Any(id => PlacementPathOwnership.Owner(Session.Document, id) is not null))
-        { StatusDetail = PlacementPathOwnership.DetachFirst; return; }
+        if (Session.SelectedObjectIds.Any(id => PlacementOwnership.Owner(Session.Document, id) is not null))
+        { StatusDetail = PlacementOwnership.DetachFirst; return; }
         var ids = Session.SelectedObjectIds;
         if (ids.Count == 0)
         {
@@ -7623,7 +7635,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     private SceneObject? EditableSelection()
     {
         var selected = Session.SelectedObject;
-        if (selected is not null && PlacementPathOwnership.Owner(Session.Document, selected.Id) is not null) return null;
+        if (selected is not null && PlacementOwnership.Owner(Session.Document, selected.Id) is not null) return null;
         return selected is { Locked: false, Visible: true } ? selected : null;
     }
 
@@ -7667,8 +7679,8 @@ public sealed partial class EditorViewModel : ViewModelBase
         if (!additive && HitHandle(worldX, worldY, viewScale) is { } grabbed)
         {
             var selected = Session.SelectedObjects;
-            if (selected.Any(o => PlacementPathOwnership.Owner(Session.Document, o.Id) is not null))
-            { StatusDetail = PlacementPathOwnership.DetachFirst; return CanvasGesture.None; }
+            if (selected.Any(o => PlacementOwnership.Owner(Session.Document, o.Id) is not null))
+            { StatusDetail = PlacementOwnership.DetachFirst; return CanvasGesture.None; }
             DragPreview = new DragPreview(
                 selected, selected,
                 grabbed == HandleKind.Rotate ? DragMode.Rotate : DragMode.Resize,
@@ -7692,8 +7704,8 @@ public sealed partial class EditorViewModel : ViewModelBase
 
         SelectHit(hit, additive);
         RefreshInspector();
-        if (Session.SelectedObjectIds.Any(id => PlacementPathOwnership.Owner(Session.Document, id) is not null))
-        { StatusDetail = PlacementPathOwnership.DetachFirst; return CanvasGesture.None; }
+        if (Session.SelectedObjectIds.Any(id => PlacementOwnership.Owner(Session.Document, id) is not null))
+        { StatusDetail = PlacementOwnership.DetachFirst; return CanvasGesture.None; }
         if (additive)
         {
             return CanvasGesture.None;
@@ -7719,8 +7731,8 @@ public sealed partial class EditorViewModel : ViewModelBase
     public bool BeginDrag(double startWorldX = 0, double startWorldY = 0)
     {
         var selected = Session.SelectedObjects;
-        if (selected.Any(o => PlacementPathOwnership.Owner(Session.Document, o.Id) is not null))
-        { StatusDetail = PlacementPathOwnership.DetachFirst; return false; }
+        if (selected.Any(o => PlacementOwnership.Owner(Session.Document, o.Id) is not null))
+        { StatusDetail = PlacementOwnership.DetachFirst; return false; }
         if (selected.Count == 0 || selected.Any(o => !o.Visible || o.Locked))
         {
             return false;
@@ -7823,20 +7835,20 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public void Undo()
     {
-        CancelEditablePathGesture();
+        CancelEditablePathGesture(); CancelEditableAreaGesture();
         if (Session.Undo())
         {
-            SyncEditablePathSettings();
+            SyncEditablePathSettings(); SyncEditableAreaSettings();
             AfterEdit();
         }
     }
 
     public void Redo()
     {
-        CancelEditablePathGesture();
+        CancelEditablePathGesture(); CancelEditableAreaGesture();
         if (Session.Redo())
         {
-            SyncEditablePathSettings();
+            SyncEditablePathSettings(); SyncEditableAreaSettings();
             AfterEdit();
         }
     }
@@ -8075,6 +8087,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     private void AfterEdit(bool geometryOnly = false)
     {
         RaisePathState();
+        RaiseAreaState();
         _lastCommittedEditUtc = _clock();
         SaveState = Session.IsDirty ? SaveState.Unsaved : SaveState.Saved;
         StatusDetail = "";
@@ -8330,8 +8343,8 @@ public sealed partial class EditorViewModel : ViewModelBase
         {
             return null;
         }
-        if (PlacementPathOwnership.Owner(Session.Document, selected.Id) is not null)
-        { StatusDetail = PlacementPathOwnership.DetachFirst; return null; }
+        if (PlacementOwnership.Owner(Session.Document, selected.Id) is not null)
+        { StatusDetail = PlacementOwnership.DetachFirst; return null; }
 
         if (!IsObjectAvailable(selected))
         {
@@ -9629,7 +9642,7 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public static TimeSpan PrimaryAutosaveDebounce { get; } = TimeSpan.FromSeconds(4);
 
-    public bool HasTransientEditorAction => HasPathGesture || IsStampSeriesActive
+    public bool HasTransientEditorAction => HasAreaGesture || HasPathGesture || IsStampSeriesActive
         || PendingPlacement is { Target: not PlacementTargetKind.Stamp }
         || DragPreview is not null
         || _stroke is not null
@@ -9915,6 +9928,15 @@ public sealed partial class EditorViewModel : ViewModelBase
                     ? "Не удалось сохранить файл. Документ остаётся открытым, данные не потеряны."
                     : $"Не удалось заменить основной файл. Документ остаётся открыт, recovery сохранён здесь: {ex.TempPath}";
                 _log.Error("SAVE_FAILED", ex);
+                return false;
+            }
+            catch (InvalidOperationException ex)
+            {
+                // Resource admission happens before the store's save exception boundary.
+                // Keep a refused save inside the editor, including when closing with Save.
+                SaveState = SaveState.SaveFailed;
+                StatusDetail = "Сохранение не выполнено. Карта остаётся открытой. " + ex.Message;
+                _log.Error("SAVE_REFUSED", ex);
                 return false;
             }
         }

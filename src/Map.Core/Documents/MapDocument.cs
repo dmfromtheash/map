@@ -179,7 +179,7 @@ public sealed record MapDocument
         }
         var pathIds = new HashSet<Guid>();
         var ownedIds = new HashSet<ObjectId>();
-        foreach (var layer in Layers.OfType<ObjectLayer>().Where(l => !l.PlacementPaths.IsEmpty))
+        foreach (var layer in Layers.OfType<ObjectLayer>().Where(l => !l.PlacementPaths.IsEmpty || !l.PlacementAreas.IsEmpty))
         {
             var objectsById = layer.Objects.ToDictionary(o => o.Id);
             foreach (var path in layer.PlacementPaths)
@@ -196,6 +196,26 @@ public sealed record MapDocument
                 if (path.Variants.Any(v => !Assets.Any(a => a.Sha256 == v.Sha256)
                     || v.MaskSha256 is { } mask && !Assets.Any(a => a.Sha256 == mask)))
                     throw new ArgumentException("A saved path must retain every resolved variant and mask.");
+            }
+            foreach (var area in layer.PlacementAreas)
+            {
+                if (area is null || !pathIds.Add(area.Id)) throw new ArgumentException("Null or duplicate placement area id.");
+                area.ValidateMembers();
+                foreach (var member in area.Members)
+                {
+                    if (!ownedIds.Add(member.ObjectId) || !objectsById.TryGetValue(member.ObjectId, out var item)
+                        || item.Kind != SceneObjectKind.Stamp || item.Stamp is null
+                        || !area.Variants.Any(v => v.Sha256 == item.Stamp.AssetSha256)
+                        || item.Stamp.MaskAssetSha256 is { } mask && !Assets.Any(a => a.Sha256 == mask))
+                        throw new ArgumentException("Invalid or multiply owned placement area member.");
+                    var anchor = Editing.PlacementAreaPlanner.Anchor(area, member.Slot);
+                    if (Math.Abs(item.X + item.Width / 2 - anchor.X) > .000001
+                        || Math.Abs(item.Y + item.Height / 2 - anchor.Y) > .000001 || item.Sublayer != area.Sublayer)
+                        throw new ArgumentException("A placement area member is outside its saved slot or sublayer.");
+                }
+                if (area.Variants.Any(v => !Assets.Any(a => a.Sha256 == v.Sha256)
+                    || v.MaskSha256 is { } mask && !Assets.Any(a => a.Sha256 == mask)))
+                    throw new ArgumentException("A saved area must retain every resolved variant and mask.");
             }
         }
         if (Checkpoints.Count > MapCheckpointLimits.MaxCount)
