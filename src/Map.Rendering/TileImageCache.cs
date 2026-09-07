@@ -48,6 +48,8 @@ public sealed class TileImageCache : IDisposable
     private long _clock;
     private bool _frameOpen;
     private bool _disposeRequested;
+    private bool _releaseRequested;
+    private readonly Action _release;
 
     public TileImageCache(int capacity = 512, long byteCapacity = 256L * 1024 * 1024)
     {
@@ -55,6 +57,29 @@ public sealed class TileImageCache : IDisposable
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(byteCapacity);
         _capacity = capacity;
         _byteCapacity = byteCapacity;
+        _release = ReleaseUnpinned;
+        Map.Core.Resources.WorkingMemoryBudget.ReleaseDerivedCaches += _release;
+    }
+
+    /// <summary>
+    /// Drops every image the current frame is not using. Called when an edit would otherwise be
+    /// refused for lack of memory: these tiles are rebuilt from the document on the next frame,
+    /// so nothing the user made is at stake. Images a frame in flight still holds are retired at
+    /// its end instead of being disposed under the renderer.
+    /// </summary>
+    public void ReleaseUnpinned()
+    {
+        lock (_gate)
+        {
+            if (_disposeRequested) return;
+            _releaseRequested = true;
+            foreach (var pair in _entries.ToArray())
+            {
+                if (_framePins.Contains(pair.Key)) continue;
+                Remove(pair.Key, pair.Value, eviction: true);
+            }
+            if (!_frameOpen) { DisposeRetired(); _releaseRequested = false; }
+        }
     }
 
     public int Count => _entries.Count;
@@ -101,6 +126,7 @@ public sealed class TileImageCache : IDisposable
             }
             else
             {
+                if (_releaseRequested) { ReleaseUnpinned(); _releaseRequested = false; }
                 Trim(protectedKey: null);
                 DisposeRetired();
             }
@@ -247,6 +273,7 @@ public sealed class TileImageCache : IDisposable
 
     public void Dispose()
     {
+        Map.Core.Resources.WorkingMemoryBudget.ReleaseDerivedCaches -= _release;
         lock (_gate)
         {
             if (_frameOpen)

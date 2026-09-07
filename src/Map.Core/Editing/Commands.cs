@@ -1,4 +1,4 @@
-﻿using Map.Core.Documents;
+using Map.Core.Documents;
 
 namespace Map.Core.Editing;
 
@@ -13,6 +13,14 @@ public interface IEditCommand
     MapDocument Apply(MapDocument document);
 
     MapDocument Revert(MapDocument document);
+
+    /// <summary>
+    /// Working bytes this command really needs while it runs: the rebuilt snapshot plus whatever
+    /// it derives on the way. The default is the shared edit reserve, which suits a command whose
+    /// cost is not known in advance. A command that rewrites a bounded amount of vector data
+    /// reports its own figure, so a four-node river is not admitted like a raster operation.
+    /// </summary>
+    long EstimatedWorkingBytes => Map.Core.Resources.WorkingMemoryBudget.EditReserveBytes;
 }
 
 /// <summary>
@@ -43,6 +51,17 @@ public sealed class CompositeCommand : IEditCommand
     internal bool ContainsPlacementPath => _steps.Any(step => step is PlacementPathCommand or PlacementAreaCommand
         || step is CompositeCommand { ContainsPlacementPath: true });
 
+    /// <summary>The gesture runs its steps one after another, so its cost is their sum.</summary>
+    public long EstimatedWorkingBytes
+    {
+        get
+        {
+            var total = 0L;
+            foreach (var step in _steps) total = checked(total + step.EstimatedWorkingBytes);
+            return total;
+        }
+    }
+
     public MapDocument Apply(MapDocument document)
     {
         var current = document;
@@ -66,6 +85,21 @@ public sealed class CompositeCommand : IEditCommand
     }
 }
 
+/// <summary>
+/// Working bytes for an edit whose cost is a known number of scene objects. One object is a small
+/// immutable record plus the slot it occupies in the rebuilt layer list; 4 KiB per object is a
+/// generous round figure, and the base covers the document and layer arrays that are rebuilt even
+/// when nothing else is. It exists so admission weighs what an edit really does instead of giving
+/// a stamp move and a whole-map raster operation the same reserve.
+/// </summary>
+public static class EditCost
+{
+    public const long BaseBytes = 128 * 1024;
+    public const long PerObjectBytes = 4 * 1024;
+
+    public static long ForObjects(int count) => BaseBytes + (long)Math.Max(0, count) * PerObjectBytes;
+}
+
 // ---------------------------------------------------------------- object commands
 
 /// <summary>Adds one object to the end of one object layer. Revert removes it by id.</summary>
@@ -82,6 +116,8 @@ public sealed class AddObjectCommand : IEditCommand
     }
 
     public string Name => $"Add {_added.Kind}";
+
+    public long EstimatedWorkingBytes => EditCost.ForObjects(1);
 
     public ObjectId AddedObjectId => _added.Id;
 
@@ -111,6 +147,8 @@ public sealed class AddObjectsCommand : IEditCommand
     }
 
     public string Name => $"Scatter {_added.Count} objects";
+
+    public long EstimatedWorkingBytes => EditCost.ForObjects(_added.Count);
 
     public int Count => _added.Count;
 
@@ -172,6 +210,8 @@ public sealed class PlaceAssetObjectsCommand : IEditCommand
     public string Name => _objects.Count == 1
         ? "Place stamp"
         : $"Scatter {_objects.Count} stamps ({VariantCount} variants)";
+
+    public long EstimatedWorkingBytes => EditCost.ForObjects(_objects.Count);
 
     public int Count => _objects.Count;
 
@@ -252,6 +292,8 @@ public sealed class PasteObjectsCommand : IEditCommand
     }
 
     public string Name => _objects.Count == 1 ? "Paste object" : $"Paste {_objects.Count} objects";
+
+    public long EstimatedWorkingBytes => EditCost.ForObjects(_objects.Count);
 
     public int Count => _objects.Count;
 
@@ -478,6 +520,8 @@ public sealed class ReplaceObjectsCommand : IEditCommand
 
     public string Name { get; }
 
+    public long EstimatedWorkingBytes => EditCost.ForObjects(_before.Count + _after.Count);
+
     public MapDocument Apply(MapDocument document) => Replace(document, _after);
 
     public MapDocument Revert(MapDocument document) => Replace(document, _before);
@@ -515,6 +559,8 @@ public sealed class ReorderObjectsCommand : IEditCommand
     }
 
     public string Name { get; }
+
+    public long EstimatedWorkingBytes => EditCost.ForObjects(_after.Count);
 
     public MapDocument Apply(MapDocument document) => Order(document, _after);
 
@@ -559,6 +605,8 @@ public sealed class TransformObjectCommand : IEditCommand
 
     public string Name => _inner.Name;
 
+    public long EstimatedWorkingBytes => _inner.EstimatedWorkingBytes;
+
     public ObjectId ObjectId { get; }
 
     public MapDocument Apply(MapDocument document) => _inner.Apply(document);
@@ -591,6 +639,8 @@ public sealed class RemoveObjectsCommand : IEditCommand
     }
 
     public string Name => $"Delete {_removed.Count} object(s)";
+
+    public long EstimatedWorkingBytes => EditCost.ForObjects(_removed.Count);
 
     public MapDocument Apply(MapDocument document)
     {
@@ -643,6 +693,8 @@ public sealed class MoveObjectsToLayerCommand : IEditCommand
     }
 
     public string Name => $"Move {_moved.Count} object(s) to another layer";
+
+    public long EstimatedWorkingBytes => EditCost.ForObjects(_moved.Count * 2);
 
     public MapDocument Apply(MapDocument document)
     {
@@ -761,6 +813,8 @@ public sealed class SetGroupCommand : IEditCommand
 
     public string Name => _inner.Name;
 
+    public long EstimatedWorkingBytes => _inner.EstimatedWorkingBytes;
+
     public MapDocument Apply(MapDocument document) => _inner.Apply(document);
 
     public MapDocument Revert(MapDocument document) => _inner.Revert(document);
@@ -832,6 +886,8 @@ public sealed class DeleteObjectsCommand : IEditCommand
     }
 
     public string Name => $"Delete {_count} object(s)";
+
+    public long EstimatedWorkingBytes => EditCost.ForObjects(_count);
 
     public MapDocument Apply(MapDocument document)
     {
@@ -949,6 +1005,8 @@ public sealed class ReorderLayerCommand(LayerId layerId, bool up) : IEditCommand
 
     public string Name => "Reorder layer";
 
+    public long EstimatedWorkingBytes => EditCost.BaseBytes;
+
     public MapDocument Apply(MapDocument document)
     {
         if (!LayerOrderPolicy.CanMove(document, _layerId, _up))
@@ -1001,6 +1059,8 @@ public sealed class UpdateLayerCommand : IEditCommand
     }
 
     public string Name { get; }
+
+    public long EstimatedWorkingBytes => EditCost.BaseBytes;
 
     public static UpdateLayerCommand Rename(MapLayer layer, string newName)
     {
@@ -1280,6 +1340,8 @@ public sealed class UpdateLandStyleCommand : IEditCommand
     }
 
     public string Name => "Land edge style";
+
+    public long EstimatedWorkingBytes => EditCost.BaseBytes;
 
     public MapDocument Apply(MapDocument document) => Write(document, _after);
     public MapDocument Revert(MapDocument document) => Write(document, _before);

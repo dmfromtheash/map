@@ -19,6 +19,12 @@ public sealed class WorkingMemoryBudget
     // The allowance is cumulative, so many small reservations cannot bypass the large-work gate.
     public const long SmallOperationLimitBytes = 256 * MiB;
     public const long SmallSystemReserveBytes = 512 * MiB;
+    // A vector edit that only rewrites a handful of nodes commits kilobytes, not megabytes. Such
+    // an operation must not inherit the reserve of a raster edit: on a busy desktop the machine
+    // can be down to a few hundred MiB free and still owe the user a moved river node. The floor
+    // stays well above zero so the OS keeps a working set even while Map admits the edit.
+    public const long TinyOperationLimitBytes = 4 * MiB;
+    public const long TinySystemReserveBytes = 64 * MiB;
     public static WorkingMemoryBudget Shared { get; } = new(ReadSystem);
     private readonly Func<WorkingMemorySnapshot> _read;
     private readonly object _gate = new();
@@ -34,15 +40,33 @@ public sealed class WorkingMemoryBudget
     public static long PrivateLimit(WorkingMemorySnapshot memory) => Math.Min(6 * 1024 * MiB, memory.PhysicalBytes * 2 / 5);
     public static long SystemReserve(WorkingMemorySnapshot memory) => Math.Max(2 * 1024 * MiB, memory.PhysicalBytes / 8);
 
+    /// <summary>
+    /// Derived caches (render tiles, overview images, carved land coverage) drop what they hold.
+    /// Raised before an admission is refused, so a real edit is not rejected while megabytes of
+    /// recomputable pixels are still resident. Handlers must not reserve memory themselves.
+    /// </summary>
+    public static event Action? ReleaseDerivedCaches;
+
+    private bool _shedding;
+
     public bool TryReserve(long bytes, out IDisposable? reservation, out string? reason)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(bytes);
         lock (_gate)
         {
             var memory = _read();
-            var systemReserve = bytes <= SmallOperationLimitBytes - _reserved
-                ? Math.Min(SystemReserve(memory), SmallSystemReserveBytes) : SystemReserve(memory);
-            var headroom = Math.Min(memory.AvailableBytes - systemReserve, PrivateLimit(memory) - memory.MapPrivateBytes);
+            var headroom = Headroom(memory, bytes);
+            if (bytes > headroom - _reserved && !_shedding)
+            {
+                // Under pressure the caches are asked to let go once, and the decision is retaken
+                // on freshly measured memory. Nothing owned by the document or history is touched.
+                _pressure = true;
+                _shedding = true;
+                try { ReleaseDerivedCaches?.Invoke(); }
+                finally { _shedding = false; }
+                memory = _read();
+                headroom = Headroom(memory, bytes);
+            }
             if (bytes > headroom - _reserved)
             {
                 _pressure = true;
@@ -63,8 +87,32 @@ public sealed class WorkingMemoryBudget
         }
     }
 
-    public Task<IDisposable> EnterHeavyAsync(CancellationToken token = default)
+    /// <summary>
+    /// Memory this budget may hand out for one operation of the given size. The OS reserve is
+    /// tiered by the real cost of the work: a node edit, a small edit and a raster operation do
+    /// not owe the same idle RAM. The tier is chosen with the already reserved bytes included,
+    /// so repeated tiny reservations cannot add up into an unguarded large one.
+    /// </summary>
+    private long Headroom(WorkingMemorySnapshot memory, long bytes)
     {
+        var systemReserve = bytes <= TinyOperationLimitBytes - _reserved
+            ? Math.Min(SystemReserve(memory), TinySystemReserveBytes)
+            : bytes <= SmallOperationLimitBytes - _reserved
+                ? Math.Min(SystemReserve(memory), SmallSystemReserveBytes)
+                : SystemReserve(memory);
+        return Math.Min(memory.AvailableBytes - systemReserve, PrivateLimit(memory) - memory.MapPrivateBytes);
+    }
+
+    /// <summary>
+    /// Takes the cross-window slot for one heavy operation and reserves what it will actually
+    /// use. <paramref name="reserveBytes"/> is the caller's own estimate, clamped to the shared
+    /// heavy reserve: a 1024x768 export is not the same amount of work as a whole-map raster, and
+    /// only the second one owes the machine the full figure. Anything above the clamp is reserved
+    /// by the caller on top of this lease, so the total still matches the real estimate.
+    /// </summary>
+    public Task<IDisposable> EnterHeavyAsync(CancellationToken token = default, long? reserveBytes = null)
+    {
+        var reserve = Math.Clamp(reserveBytes ?? HeavyReserveBytes, MiB, HeavyReserveBytes);
         // The mutex owner stays on one worker until disposal. OS abandonment recovery releases
         // the slot after a crashed process; a named semaphore would strand other open windows.
         var completion = new TaskCompletionSource<IDisposable>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -78,7 +126,7 @@ public sealed class WorkingMemoryBudget
                 catch (AbandonedMutexException) { owned = true; }
                 if (!owned) throw new OperationCanceledException(token);
                 token.ThrowIfCancellationRequested();
-                if (!TryReserve(HeavyReserveBytes, out var reservation, out var reason))
+                if (!TryReserve(reserve, out var reservation, out var reason))
                     throw new InvalidOperationException(reason);
                 completion.TrySetResult(new HeavyReservation(reservation!, released));
                 released.Wait();

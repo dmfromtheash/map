@@ -78,9 +78,19 @@ public sealed class PlacementWorkflowTests : IDisposable
         var (editor, _, selected) = AreaSelection(memory);
         var ids = selected.Select(o => o.Id).ToArray(); editor.Session.SetSelection(ids);
         var before = editor.Session.Document; var depth = editor.Session.UndoDepth;
-        available = 256 * 1024 * 1024; editor.DeleteSelectedObject();
+        // Stage 19 correction: a bounded delete of a handful of objects is admitted at 256 MiB of
+        // free RAM - it costs kilobytes, and refusing it was the shared reserve talking, not the
+        // work. The refusal contract is proven where the machine really has nothing left.
+        available = 24 * 1024 * 1024; editor.DeleteSelectedObject();
         Assert.Same(before, editor.Session.Document); Assert.Equal(depth, editor.Session.UndoDepth);
         Assert.Equal(ids, editor.Session.SelectedObjectIds); Assert.NotNull(editor.Session.LastResourceError);
+        available = 256 * 1024 * 1024;
+        editor.DeleteSelectedObject();
+        Assert.Equal(depth + 1, editor.Session.UndoDepth);
+        Assert.Null(editor.Session.LastResourceError);
+        editor.Undo();
+        Assert.Same(before, editor.Session.Document);
+        editor.Session.SetSelection(ids);
         available = gib;
         var ordinary = selected[^1]; editor.Session.SetSelection([ordinary.Id]); editor.SetSelectedObjectLock(true);
         editor.Session.SetSelection(ids);

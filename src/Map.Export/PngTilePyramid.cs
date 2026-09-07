@@ -36,7 +36,17 @@ public sealed record PngTilePyramid(string DirectoryPath, int Width, int Height,
         try
         {
             using var usage = await PngViewCache.AcquireAsync(cacheRoot, cancellationToken).ConfigureAwait(false);
-            using var reservation = await Map.Core.Resources.WorkingMemoryBudget.Shared.EnterHeavyAsync(cancellationToken).ConfigureAwait(false);
+            // The tiling works a few rows of the source at a time, so its cost follows the file
+            // rather than the largest picture imaginable. A small PNG used to be refused on a busy
+            // machine because opening it asked for the whole shared heavy reserve.
+            var sourceBytes = 0L;
+            try { sourceBytes = new FileInfo(Path.GetFullPath(sourcePath)).Length; }
+            catch (IOException) { /* An unreadable size falls back to the full reserve below. */ }
+            var estimate = sourceBytes > 0
+                ? Math.Max(4 * Map.Core.Resources.WorkingMemoryBudget.MiB, sourceBytes * 6)
+                : Map.Core.Resources.WorkingMemoryBudget.HeavyReserveBytes;
+            using var reservation = await Map.Core.Resources.WorkingMemoryBudget.Shared
+                .EnterHeavyAsync(cancellationToken, estimate).ConfigureAwait(false);
             return await Task.Run(() => OpenCore(sourcePath, cacheRoot, progress, cancellationToken,
                 settings ?? new ExportEngineSettings()), cancellationToken).ConfigureAwait(false);
         }

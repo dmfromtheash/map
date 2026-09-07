@@ -68,10 +68,15 @@ public sealed class ImageExportEngine : IImageExporter
         ArgumentException.ThrowIfNullOrWhiteSpace(destinationPath);
         cancellationToken.ThrowIfCancellationRequested();
         ExportResourceAdmission.Check(plan, destinationPath, _settings);
-        using var operation = await Map.Core.Resources.WorkingMemoryBudget.Shared.EnterHeavyAsync(cancellationToken).ConfigureAwait(false);
+        // The slot is still exclusive across windows, but the reservation is the size of THIS
+        // export. A small map used to be refused because the gate always asked for the working set
+        // of the largest one.
+        var required = Math.Max(Map.Core.Resources.WorkingMemoryBudget.MiB, plan.EstimatedRawWorkingBytes);
+        var leased = Math.Min(required, Map.Core.Resources.WorkingMemoryBudget.HeavyReserveBytes);
+        using var operation = await Map.Core.Resources.WorkingMemoryBudget.Shared
+            .EnterHeavyAsync(cancellationToken, leased).ConfigureAwait(false);
         if (!Map.Core.Resources.WorkingMemoryBudget.Shared.TryReserve(
-            Math.Max(0, plan.EstimatedRawWorkingBytes - Map.Core.Resources.WorkingMemoryBudget.HeavyReserveBytes),
-            out var memoryReservation, out var memoryReason))
+            Math.Max(0, required - leased), out var memoryReservation, out var memoryReason))
             throw new ExportValidationException(memoryReason!);
         using var heldMemory = memoryReservation;
         Report(progress, ExportPhase.Preparing, 0.01, "Подготовка снимка карты…");

@@ -13,6 +13,8 @@ public sealed class ManualAreaSelectionCommand(IEditCommand edit, IReadOnlyColle
     private readonly ObjectId[] _ids = ids.Distinct().ToArray();
     private MapDocument? _before, _after;
     public string Name => edit.Name;
+
+    public long EstimatedWorkingBytes => edit.EstimatedWorkingBytes;
     public int DetachedCount { get; private set; }
 
     public MapDocument Apply(MapDocument document)
