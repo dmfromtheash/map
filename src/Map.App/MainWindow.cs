@@ -438,6 +438,14 @@ public sealed class MainWindow : Window
     {
         // Application shortcuts never steal editing keys from any text field. The settings dialog
         // is a separate window and captures its own gesture input explicitly.
+        // The editor-only commands run through the same routing a smoke run drives with a real
+        // key event, so the key path itself is production code and testable outside this window.
+        if (_editorView is { } editorForKey && EditorKeyRouting.TryHandleKey(this, editorForKey, _shortcuts, e))
+        {
+            e.Handled = true;
+            return;
+        }
+
         if (IsTypingInText() || !ShortcutKeyAdapter.TryCreate(e, out var input))
         {
             return;
@@ -460,30 +468,7 @@ public sealed class MainWindow : Window
         }
     }
 
-    private IReadOnlySet<ShortcutContext> ActiveShortcutContexts()
-    {
-        var contexts = new HashSet<ShortcutContext>();
-        if (_editorView is not { } editorView)
-        {
-            contexts.Add(ShortcutContext.Dashboard);
-            return contexts;
-        }
-
-        contexts.Add(ShortcutContext.Editor);
-        if (editorView.Canvas.IsFocused) contexts.Add(ShortcutContext.Canvas);
-        if (editorView.Editor.SelectionCount > 0) contexts.Add(ShortcutContext.Selection);
-        if (editorView.IsNotesOpen) contexts.Add(ShortcutContext.Notes);
-        contexts.Add(editorView.Editor.ActiveTool switch
-        {
-            EditorTool.Brush => ShortcutContext.Brush,
-            EditorTool.Mask => ShortcutContext.Mask,
-            EditorTool.Land => ShortcutContext.Land,
-            EditorTool.Text => ShortcutContext.Text,
-            EditorTool.Stamp => ShortcutContext.Stamp,
-            _ => ShortcutContext.Editor,
-        });
-        return contexts;
-    }
+    private IReadOnlySet<ShortcutContext> ActiveShortcutContexts() => EditorKeyRouting.Contexts(_editorView);
 
     private bool ExecuteShortcut(string command, Key sourceKey)
     {
@@ -568,19 +553,7 @@ public sealed class MainWindow : Window
             case EditorShortcutSettings.Commands.River:
                 editor.ActiveTool = EditorTool.River;
                 break;
-            case EditorShortcutSettings.Commands.Escape:
-                editor.HandleEscape();
-                break;
-            case EditorShortcutSettings.Commands.FinishPath:
-                if (editor.IsCreatingRiver) editor.FinishRiver();
-                else if (editor.IsCreatingEditableArea) editor.FinishEditableArea();
-                else if (editor.IsCreatingEditablePath) editor.FinishEditablePath(); else editor.FinishPenPath();
-                break;
-            case EditorShortcutSettings.Commands.Delete:
-            case EditorShortcutSettings.Commands.DeleteAlternate:
-                if (editor.ActiveTool == EditorTool.River && editor.SelectedRiver is not null) { editor.DeleteSelectedRiverNode(); break; }
-                editor.DeleteSelectedObject();
-                break;
+            // Escape, Enter and Delete are handled by EditorKeyRouting before this switch runs.
             case EditorShortcutSettings.Commands.NudgeLeft:
                 editor.NudgeSelectedObject(-1, 0);
                 break;
@@ -770,7 +743,7 @@ public sealed class MainWindow : Window
             editor.AdjustSelectedTextCurve(direction, large);
     }
 
-    private bool IsTypingInText() => FocusManager?.GetFocusedElement() is TextBox;
+    private bool IsTypingInText() => EditorKeyRouting.IsTypingInText(this);
 
     private void ShowShortcutHelp()
     {

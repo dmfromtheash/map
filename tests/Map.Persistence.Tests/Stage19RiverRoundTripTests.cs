@@ -21,7 +21,12 @@ public sealed class Stage19RiverRoundTripTests
         var main = new RiverChannel
         {
             Name = "Главное русло",
-            Nodes = [new(Guid.NewGuid(), 40, 60, 5, Sharp: true), new(Guid.NewGuid(), 200, 120, 14), new(Guid.NewGuid(), 420, 90, 26)],
+            Nodes =
+            [
+                new(Guid.NewGuid(), 40, 60, 5, Sharp: true),
+                new(Guid.NewGuid(), 200, 120, 14, Tension: 1.75),
+                new(Guid.NewGuid(), 420, 90, 26, Tension: 0.4),
+            ],
         };
         var tributary = new RiverChannel
         {
@@ -35,6 +40,7 @@ public sealed class Stage19RiverRoundTripTests
         var river = new River
         {
             Name = "Серебрянка", Channels = [main, tributary, lake, branch], WidthScale = 1.25,
+            Visible = true, Locked = true,
             Style = new RiverStyle { WaterColor = "#FF3B7A99", BankWidth = 2, HighlightOpacity = 0.4, MouthFade = 30, TaperSource = false, EdgeRoughness = 0.35, CutsLand = false, ClipToLand = true },
         };
         var session = new EditingSession(reopenedOld);
@@ -59,12 +65,20 @@ public sealed class Stage19RiverRoundTripTests
         var edited = new RiverCommand(layer.Id, actual.Id, moved, "move").Apply(opened);
         var set = RiverGeometry.Evaluate(((ObjectLayer)edited.FindLayer(layer.Id)!).Rivers.Single());
         Assert.True(set.Channels[tributary.Id].JoinsParent);
+
+        // The curvature handles and the per-river switches survive save and reopen unchanged.
+        Assert.Equal(1.75, actual.FindChannel(main.Id)!.Nodes[1].Tension);
+        Assert.Equal(0.4, actual.FindChannel(main.Id)!.Nodes[2].Tension);
+        Assert.True(actual.Locked);
+        Assert.True(actual.Visible);
+        Assert.Equal(1, actual.FindChannel(tributary.Id)!.Nodes[0].Tension);
     }
 
     /// <summary>Record equality of ImmutableArray members is by reference; compare the content.</summary>
     private static void AssertRiverEqual(River expected, River actual)
     {
-        Assert.Equal((expected.Id, expected.Name, expected.Style, expected.WidthScale), (actual.Id, actual.Name, actual.Style, actual.WidthScale));
+        Assert.Equal((expected.Id, expected.Name, expected.Style, expected.WidthScale, expected.Visible, expected.Locked),
+            (actual.Id, actual.Name, actual.Style, actual.WidthScale, actual.Visible, actual.Locked));
         Assert.Equal(expected.Channels.Length, actual.Channels.Length);
         for (var i = 0; i < expected.Channels.Length; i++)
         {

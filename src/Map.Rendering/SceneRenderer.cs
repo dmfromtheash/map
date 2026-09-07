@@ -204,6 +204,12 @@ public sealed class RenderOptions
 
     public TileImageCache? TileCache { get; init; }
 
+    /// <summary>
+    /// Reuse of the land coverage rivers were already carved out of. Absent (export, tests) the
+    /// image is simply built for the frame, exactly as before.
+    /// </summary>
+    public CarvedLandCache? CarvedLand { get; init; }
+
     /// <summary>Render-context-local cache used only by the editor overview tier.</summary>
     public ObjectOverviewCache? ObjectCache { get; init; }
 
@@ -606,7 +612,7 @@ public static class SceneRenderer
         var result = new List<River>();
         foreach (var layer in document.Layers.OfType<ObjectLayer>().Where(l => l.Visible && l.Opacity > 0))
             foreach (var river in RiverRenderer.Resolve(layer, options))
-                if (river.Style.CutsLand && RiverGeometry.Evaluate(river).Bounds.Intersects(view)) result.Add(river);
+                if (river.Visible && river.Style.CutsLand && RiverGeometry.Evaluate(river).Bounds.Intersects(view)) result.Add(river);
         return result;
     }
 
@@ -631,19 +637,20 @@ public static class SceneRenderer
         }
 
         // Stage 19: rivers carve the coverage before any edge styling, so the coast wraps their
-        // banks and the sea enters their mouths. The carved coverage is rasterized once per frame
-        // at device resolution and then feeds every pass exactly like the tile images would.
+        // banks and the sea enters their mouths. The carved coverage is rasterized at device
+        // resolution and then feeds every pass exactly like the tile images would. It is kept in
+        // the carved-land cache, so an unchanged coast is not rebuilt on the next frame.
         SKImage? carved = null;
+        var carvedOwned = false;
         var cutters = options.LodTier == RenderLodTier.Overview && !options.IsExport ? [] : LandCuttingRivers(document, view, options);
         if (cutters.Count > 0)
         {
             var matrix = canvas.TotalMatrix;
             var scale = Math.Max(1e-4, Math.Sqrt(matrix.ScaleX * matrix.ScaleX + matrix.SkewY * matrix.SkewY));
-            var width = (int)Math.Clamp(Math.Ceiling((view.Right - view.Left) * scale) + 2, 1, 16384);
-            var height = (int)Math.Clamp(Math.Ceiling((view.Bottom - view.Top) * scale) + 2, 1, 16384);
-            using var surface = SKSurface.Create(new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Premul));
-            if (surface is not null)
+            SKImage? Build(int width, int height)
             {
+                using var surface = SKSurface.Create(new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Premul));
+                if (surface is null) return null;
                 var target = surface.Canvas;
                 target.Clear(SKColors.Transparent);
                 target.Scale((float)scale);
@@ -658,10 +665,18 @@ public static class SceneRenderer
                     if (options.TileCache is null) image.Dispose();
                 }
                 foreach (var river in cutters) RiverRenderer.CutBody(target, river, options.ViewScale);
-                carved = surface.Snapshot();
+                return surface.Snapshot();
             }
+
+            // Nothing about the coast changed between two frames that share this key, so the
+            // carved raster is reused instead of being rebuilt. The cache owns what it hands back.
+            if (options.CarvedLand is { } reuse)
+                carved = reuse.Get(layer.Id, layer.GeometryTiles, view, scale, cutters, Build, out _, out _);
+            else { carved = Build(
+                (int)Math.Clamp(Math.Ceiling((view.Right - view.Left) * scale) + 2, 1, 16384),
+                (int)Math.Clamp(Math.Ceiling((view.Bottom - view.Top) * scale) + 2, 1, 16384)); carvedOwned = true; }
         }
-        using var carvedImage = carved;
+        using var carvedImage = carvedOwned ? carved : null;
         var carvedRect = new SKRect((float)view.Left, (float)view.Top,
             (float)(view.Left + (carved?.Width ?? 0) / Math.Max(1e-4, Math.Sqrt(canvas.TotalMatrix.ScaleX * canvas.TotalMatrix.ScaleX + canvas.TotalMatrix.SkewY * canvas.TotalMatrix.SkewY))),
             (float)(view.Top + (carved?.Height ?? 0) / Math.Max(1e-4, Math.Sqrt(canvas.TotalMatrix.ScaleX * canvas.TotalMatrix.ScaleX + canvas.TotalMatrix.SkewY * canvas.TotalMatrix.SkewY))));
@@ -751,9 +766,9 @@ public static class SceneRenderer
 
         void DrawCoverageImages(SKPaint? paint)
         {
-            if (carvedImage is not null)
+            if (carved is not null)
             {
-                canvas.DrawImage(carvedImage, carvedRect, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None), paint);
+                canvas.DrawImage(carved, carvedRect, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None), paint);
                 return;
             }
             foreach (var key in keys)

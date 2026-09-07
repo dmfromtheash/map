@@ -234,9 +234,12 @@ public sealed class Stage19RiverTests
         var meandered = RiverEditor.Meander(system, main.Id, 0.2, 7);
         meandered.Validate();
         Assert.True(meandered.FindChannel(main.Id)!.Nodes.Length > main.Nodes.Length);
+        // Smoothing relaxes the course in place; it must never subdivide it (Stage 19 correction).
         var smoothed = RiverEditor.Smooth(system, lake.Id);
         smoothed.Validate();
-        Assert.Equal(lake.Nodes.Length * 2, smoothed.FindChannel(lake.Id)!.Nodes.Length);
+        Assert.Equal(lake.Nodes.Length, smoothed.FindChannel(lake.Id)!.Nodes.Length);
+        var twice = RiverEditor.Smooth(smoothed, lake.Id);
+        Assert.Equal(lake.Nodes.Length, twice.FindChannel(lake.Id)!.Nodes.Length);
         var copy = system.WithNewIds(); copy.Validate();
         Assert.Equal(2, RiverGeometry.Simplify([new(0, 0), new(10, 0.1), new(20, -0.1), new(30, 0)], 1).Count);
         Assert.Equal(3, RiverGeometry.Simplify([new(0, 0), new(15, 20), new(30, 0)], 1).Count);

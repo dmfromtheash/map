@@ -30,6 +30,53 @@ public static class RiverEditor
         return ReplaceChannel(river, channel with { Nodes = channel.Nodes.SetItem(index, channel.Nodes[index] with { Sharp = sharp }) });
     }
 
+    /// <summary>Curvature handle of one node: the tangent scale the spline uses there.</summary>
+    public static River SetNodeTension(River river, Guid channelId, int index, double tension)
+    {
+        var channel = Require(river, channelId);
+        var clamped = Math.Clamp(tension, RiverNode.MinimumTension, RiverNode.MaximumTension);
+        return ReplaceChannel(river, channel with
+        { Nodes = channel.Nodes.SetItem(index, channel.Nodes[index] with { Tension = clamped, Sharp = clamped <= 0 && channel.Nodes[index].Sharp }) });
+    }
+
+    /// <summary>Curvature handle of every node of one channel, for a whole-course smoothness dial.</summary>
+    public static River SetChannelTension(River river, Guid channelId, double tension)
+    {
+        var channel = Require(river, channelId);
+        var clamped = Math.Clamp(tension, RiverNode.MinimumTension, RiverNode.MaximumTension);
+        return ReplaceChannel(river, channel with { Nodes = [.. channel.Nodes.Select(n => n with { Tension = clamped })] });
+    }
+
+    /// <summary>
+    /// Moves every node of the river by the same world offset. Junctions address parent segments
+    /// by node id and fraction, so a whole system keeps every connection while it travels.
+    /// </summary>
+    public static River Translate(River river, double dx, double dy) => river with
+    {
+        Channels = [.. river.Channels.Select(c => c with { Nodes = [.. c.Nodes.Select(n => n with { X = n.X + dx, Y = n.Y + dy })] })],
+    };
+
+    /// <summary>
+    /// Drops nodes a straight-enough course does not need, within an explicit world tolerance:
+    /// the visible course stays inside <paramref name="tolerance"/> of the previous one. Sharp
+    /// nodes and both ends are kept, and junctions are re-addressed to the new geometry.
+    /// </summary>
+    public static River SimplifyChannel(River river, Guid channelId, double tolerance)
+    {
+        var channel = Require(river, channelId);
+        var minimum = channel.Closed ? 3 : 2;
+        if (channel.Nodes.Length <= minimum || tolerance <= 0) return river;
+        var points = channel.Nodes.Select(n => new VectorPoint(n.X, n.Y)).ToList();
+        var kept = new HashSet<int>();
+        var simplified = RiverGeometry.SimplifyIndices(points, tolerance);
+        foreach (var index in simplified) kept.Add(index);
+        for (var i = 0; i < channel.Nodes.Length; i++) if (channel.Nodes[i].Sharp) kept.Add(i);
+        if (kept.Count < minimum) return river;
+        if (kept.Count == channel.Nodes.Length) return river;
+        var nodes = channel.Nodes.Where((_, i) => kept.Contains(i)).ToImmutableArray();
+        return RemapJunctions(river, ReplaceChannel(river, channel with { Nodes = nodes }), channelId);
+    }
+
     /// <summary>Inserts a node on a segment with the interpolated width; junctions on that segment keep their place.</summary>
     public static River InsertNode(River river, Guid channelId, int segment, double fraction, VectorPoint point)
     {
@@ -213,39 +260,46 @@ public static class RiverEditor
         return RemapJunctions(river, ReplaceChannel(river, reversed), channelId);
     }
 
-    /// <summary>Subdivides every segment and relaxes the nodes, so a hand-placed course flows smoothly.</summary>
+    /// <summary>
+    /// Relaxes the course towards its own average without adding a single node: each interior node
+    /// moves a quarter of the way towards the midpoint of its neighbours. Applying it again keeps
+    /// the same node count, so repeated use can never inflate the model - shape is controlled by
+    /// <see cref="SetNodeTension"/> and by these positions, not by subdivision.
+    /// </summary>
     public static River Smooth(River river, Guid channelId)
     {
         var channel = Require(river, channelId);
         var nodes = channel.Nodes;
         var count = nodes.Length;
-        var result = new List<RiverNode>();
+        if (count < 3) return river;
+        var result = new RiverNode[count];
         for (var i = 0; i < count; i++)
         {
             var current = nodes[i];
-            var hasNext = i + 1 < count || channel.Closed;
-            var next = nodes[(i + 1) % count];
             if (channel.Closed || (i > 0 && i < count - 1))
             {
                 var previous = nodes[(i - 1 + count) % count];
+                var next = nodes[(i + 1) % count];
                 current = current with { X = (previous.X + 2 * current.X + next.X) / 4, Y = (previous.Y + 2 * current.Y + next.Y) / 4 };
             }
-            result.Add(current);
-            if (hasNext)
-                result.Add(new RiverNode(Guid.NewGuid(), (current.X + next.X) / 2, (current.Y + next.Y) / 2, (current.Width + next.Width) / 2));
+            result[i] = current;
         }
-        return RemapJunctions(river, ReplaceChannel(river, channel with { Nodes = [.. result] }), channelId);
+        return ReplaceChannel(river, channel with { Nodes = [.. result] });
     }
 
     /// <summary>
     /// Adds meanders: each segment is subdivided and the new nodes swing alternately left and
     /// right by <paramref name="amplitude"/> of the segment length, deterministically per seed.
     /// </summary>
+    public const int MeanderNodeCeiling = 512;
+
     public static River Meander(River river, Guid channelId, double amplitude, int seed)
     {
         var channel = Require(river, channelId);
         if (channel.Closed) return river;
         var nodes = channel.Nodes;
+        if (nodes.Length >= MeanderNodeCeiling)
+            throw new InvalidOperationException($"В русле уже {nodes.Length} узлов: сначала упростите его, иначе извилины только множат точки.");
         var result = new List<RiverNode> { nodes[0] };
         var flip = seed % 2 == 0 ? 1 : -1;
         for (var i = 0; i < nodes.Length - 1; i++)
@@ -359,6 +413,29 @@ public sealed class RiverCommand : IEditCommand
     { _layerId = layerId; _riverId = riverId; _requested = requested; Name = name; _absorbed = absorbedRiverId; _additional = additionalRiver; }
 
     public string Name { get; }
+
+    /// <summary>
+    /// A river command rewrites one river of one layer: the immutable snapshot shares every other
+    /// layer, so the real cost is the rewritten nodes plus the centreline this edit will make the
+    /// renderer and the hit test evaluate. One node costs its record (~80 B) and up to 64 samples
+    /// of ~48 B on the segment that follows it, which <see cref="NodeWorkingBytes"/> rounds up to
+    /// 4 KiB. A deletion still rebuilds the layer, hence the fixed base.
+    /// </summary>
+    public const long NodeWorkingBytes = 4 * 1024;
+    public const long RiverCommandBaseBytes = 256 * 1024;
+
+    public long EstimatedWorkingBytes
+    {
+        get
+        {
+            var nodes = 0L;
+            foreach (var river in new[] { _requested, _additional })
+                if (river is not null)
+                    foreach (var channel in river.Channels)
+                        nodes += channel.Nodes.Length;
+            return RiverCommandBaseBytes + nodes * NodeWorkingBytes;
+        }
+    }
 
     public MapDocument Apply(MapDocument document)
     {

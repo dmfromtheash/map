@@ -6,8 +6,21 @@ namespace Map.Core.Documents;
 /// One control point of a channel centreline in world units. <see cref="Width"/> is the full
 /// channel width at this node; between nodes it is interpolated along the channel length.
 /// <see cref="Sharp"/> makes the centreline pass through the node as a corner, not a curve.
+/// <para>
+/// <see cref="Tension"/> is the curvature handle of this node: it scales the tangent the spline
+/// leaves and enters the node with. 1 is the plain Catmull-Rom curve, 0 is a corner (what
+/// <see cref="Sharp"/> forces), and above 1 the bend swings wider. It is what makes a smooth
+/// course editable without adding control points: shape is changed here, never by subdividing.
+/// </para>
 /// </summary>
-public sealed record RiverNode(Guid Id, double X, double Y, double Width, bool Sharp = false);
+public sealed record RiverNode(Guid Id, double X, double Y, double Width, bool Sharp = false, double Tension = 1)
+{
+    public const double MinimumTension = 0;
+    public const double MaximumTension = 2.5;
+
+    /// <summary>The tangent scale actually used by the geometry: a sharp node always reads 0.</summary>
+    public double EffectiveTension => Sharp ? 0 : Math.Clamp(Tension, MinimumTension, MaximumTension);
+}
 
 /// <summary>
 /// A point on another channel of the same river: the segment that starts at
@@ -86,6 +99,15 @@ public sealed record River
     public ImmutableArray<RiverChannel> Channels { get; init; } = [];
     public RiverStyle Style { get; init; } = new();
 
+    /// <summary>
+    /// Per-river visibility and lock, the same two switches every other object of the map has.
+    /// They belong to the river and not to its layer, so one water system can be hidden or
+    /// protected without hiding the layer it shares with objects. Absent in older files, where
+    /// the defaults restore exactly the previous behaviour.
+    /// </summary>
+    public bool Visible { get; init; } = true;
+    public bool Locked { get; init; }
+
     /// <summary>Multiplies every node width, so a whole river can be made wider without retouching nodes.</summary>
     public double WidthScale { get; init; } = 1;
 
@@ -157,7 +179,9 @@ public sealed record River
             {
                 if (node is null || node.Id == Guid.Empty || !nodeIds.Add(node.Id)
                     || !double.IsFinite(node.X) || !double.IsFinite(node.Y)
-                    || !double.IsFinite(node.Width) || node.Width is < MinimumWidth or > MaximumWidth)
+                    || !double.IsFinite(node.Width) || node.Width is < MinimumWidth or > MaximumWidth
+                    || !double.IsFinite(node.Tension)
+                    || node.Tension < RiverNode.MinimumTension || node.Tension > RiverNode.MaximumTension)
                     throw new ArgumentException("Некорректный узел русла.");
             }
             if (channel.Closed && (channel.Mouth is not null || channel.Source is not null))

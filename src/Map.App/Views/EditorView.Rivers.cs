@@ -14,10 +14,14 @@ public sealed partial class EditorView
     private ComboBox? _riverPicker, _riverChannelPicker;
     private TextBlock? _riverSummary;
     private Button? _riverFinish, _riverDetach, _riverDetachSource, _riverDeleteChannel, _riverSplit, _riverSplitOff, _riverTrimBefore, _riverTrimAfter, _riverReverse, _riverMeander;
+    private Button? _riverApplyPreview, _riverHide, _riverLock, _riverDeleteSelection;
     private Control? _riverNodeBlock, _riverChannelBlock, _riverStyleBlock, _riverNodeWidth, _riverProfileBlock, _riverFlowBlock;
+    private Control? _riverSelectionBlock, _riverNodeTension;
+    private ComboBox? _riverLayerPicker;
     private ToggleButton? _riverSharp, _riverTaper, _riverCutsLand, _riverClipToLand;
     private TextBox? _riverName;
-    private System.Collections.Generic.IReadOnlyList<Button>? _riverModeButtons;
+    private TextBlock? _riverSelectionSummary;
+    private System.Collections.Generic.IReadOnlyList<Button>? _riverModeButtons, _riverLevelButtons;
     private bool _syncingRivers;
 
     private Control BuildRiverPanel()
@@ -43,17 +47,53 @@ public sealed partial class EditorView
             key => _editor.RiverDrawMode = key == "Freehand" ? RiverDrawMode.Freehand : RiverDrawMode.Nodes);
         _riverModeButtons = modeButtons;
 
+        var (levels, levelButtons) = Ui.Segmented("WaterSelectionLevel",
+            [("System", "Вся система", null), ("Channel", "Русло / озеро", null), ("Node", "Узлы", null)],
+            key => _editor.WaterLevel = key switch
+            {
+                "Node" => WaterSelectionLevel.Node,
+                "Channel" => WaterSelectionLevel.Channel,
+                _ => WaterSelectionLevel.System,
+            });
+        _riverLevelButtons = levelButtons;
+        _riverSelectionSummary = new TextBlock { Name = "WaterSelectionSummary", TextWrapping = TextWrapping.Wrap };
+        _riverHide = Ui.TextButton("ToggleWaterVisibleButton", "Скрыть воду", _editor.ToggleSelectedWaterVisible, "compact");
+        _riverLock = Ui.TextButton("ToggleWaterLockButton", "Заблокировать воду", _editor.ToggleSelectedWaterLock, "compact");
+        _riverDeleteSelection = Ui.TextButton("DeleteWaterSelectionButton", "Удалить выбранное (Delete)",
+            () => _editor.DeleteSelection(), "compact", "destructive");
+        _riverLayerPicker = new ComboBox { Name = "WaterLayerPicker", HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch,
+            PlaceholderText = "Перенести воду на слой" };
+        _riverLayerPicker.SelectionChanged += (_, _) =>
+        {
+            if (!_syncingRivers && _riverLayerPicker.SelectedItem is LayerChoice choice) _editor.MoveSelectedWaterToLayer(choice.Id);
+        };
+        _riverSelectionBlock = Ui.Section("Выбор", new StackPanel
+        {
+            Spacing = 4, Children =
+            {
+                new TextBlock { Text = "Уровень решает, к чему относятся перетаскивание и Delete: ко всей системе, к одному руслу или озеру, либо к узлу.", TextWrapping = TextWrapping.Wrap }.Classed("faint", "role-caption"),
+                levels,
+                _riverSelectionSummary,
+                _riverHide, _riverLock, _riverDeleteSelection,
+                _riverLayerPicker,
+            },
+        });
+
         _riverSharp = AppearanceToggle("RiverNodeSharpToggle", "Острый узел", () => _editor.SelectedRiverNodeSharp, _editor.SetSelectedRiverNodeSharp);
         _riverSplit = Ui.TextButton("SplitRiverChannelButton", "Разделить русло в узле", _editor.SplitSelectedChannel, "compact");
         _riverSplitOff = Ui.TextButton("DetachDownstreamRiverButton", "Отделить нижнее течение в отдельную реку", _editor.DetachDownstreamAsRiver, "compact");
         _riverTrimBefore = Ui.TextButton("TrimRiverBeforeButton", "Обрезать всё выше узла", _editor.TrimSelectedChannelBeforeNode, "compact");
         _riverTrimAfter = Ui.TextButton("TrimRiverAfterButton", "Обрезать всё ниже узла", _editor.TrimSelectedChannelAfterNode, "compact");
         _riverNodeWidth = AppearanceNumberBox("RiverNodeWidthBox", "Ширина в узле", "ед.", () => _editor.SelectedRiverNodeWidth, _editor.SetSelectedRiverNodeWidth);
+        _riverNodeTension = AppearanceNumberBox("RiverNodeTensionBox", "Кривизна узла", "%",
+            () => _editor.SelectedRiverNodeTensionPercent, _editor.SetSelectedRiverNodeTensionPercent);
         _riverNodeBlock = Ui.Section("Узел", new StackPanel
         {
             Spacing = 4, Children =
             {
                 _riverNodeWidth,
+                _riverNodeTension,
+                new TextBlock { Text = "0 % — угол, 100 % — обычная плавная кривая, больше — шире размах. Форма меняется здесь, а не добавлением узлов.", TextWrapping = TextWrapping.Wrap }.Classed("faint", "role-caption"),
                 _riverSharp,
                 Ui.TextButton("InsertRiverNodeButton", "Добавить узел на русле", _editor.InsertRiverNode, "compact"),
                 Ui.TextButton("DeleteRiverNodeButton", "Удалить выбранный узел (Delete)", () => _editor.DeleteSelectedRiverNode(), "compact"),
@@ -64,7 +104,8 @@ public sealed partial class EditorView
         _riverDetach = Ui.TextButton("DetachRiverChannelButton", "Отделить устье (свободный конец)", _editor.DetachSelectedChannel, "compact");
         _riverDetachSource = Ui.TextButton("DetachRiverSourceButton", "Отделить исток (свободный исток)", _editor.DetachSelectedChannelSource, "compact");
         _riverReverse = Ui.TextButton("ReverseRiverChannelButton", "Развернуть течение", _editor.ReverseSelectedChannel, "compact");
-        _riverMeander = Ui.TextButton("MeanderRiverChannelButton", "Добавить извилины", _editor.MeanderSelectedChannel, "compact");
+        _riverMeander = Ui.TextButton("MeanderRiverChannelButton", "Показать извилины", _editor.PreviewMeanderOnSelectedChannel, "compact");
+        _riverApplyPreview = Ui.TextButton("ApplyRiverPreviewButton", "Применить извилины", () => _editor.ApplyRiverPreview(), "compact");
         _riverDeleteChannel = Ui.TextButton("DeleteRiverChannelButton", "Удалить русло", _editor.DeleteSelectedChannel, "compact", "destructive");
         _riverProfileBlock = new StackPanel
         {
@@ -80,9 +121,13 @@ public sealed partial class EditorView
             Spacing = 4, Children =
             {
                 _riverProfileBlock,
-                Ui.TextButton("SmoothRiverChannelButton", "Сгладить русло", _editor.SmoothSelectedChannel, "compact"),
+                AppearanceNumberBox("RiverChannelTensionBox", "Плавность русла", "%", () => _editor.SelectedChannelTensionPercent, _editor.SetSelectedChannelTensionPercent),
+                Ui.TextButton("SmoothRiverChannelButton", "Сгладить русло (без новых узлов)", _editor.SmoothSelectedChannel, "compact"),
+                AppearanceNumberBox("RiverSimplifyToleranceBox", "Точность упрощения", "ед.", () => _editor.RiverSimplifyTolerance, value => _editor.RiverSimplifyTolerance = value),
+                Ui.TextButton("SimplifyRiverChannelButton", "Упростить русло", _editor.SimplifySelectedChannel, "compact"),
                 AppearanceNumberBox("RiverMeanderBox", "Извилины", "%", () => _editor.RiverMeanderPercent, value => _editor.RiverMeanderPercent = value),
                 _riverMeander,
+                _riverApplyPreview,
                 _riverReverse,
                 _riverDetach,
                 _riverDetachSource,
@@ -140,6 +185,7 @@ public sealed partial class EditorView
                 _riverPicker,
                 _riverChannelPicker,
                 _riverSummary,
+                _riverSelectionBlock,
                 _riverNodeBlock,
                 _riverChannelBlock,
                 _riverFlowBlock,
@@ -165,6 +211,33 @@ public sealed partial class EditorView
             _riverChannelPicker.IsVisible = channels.Length > 1;
             _riverSummary.Text = _editor.RiverSummary;
             _riverFinish!.IsVisible = _editor.IsCreatingRiver;
+            _riverFinish.Content = _editor.IsCreatingLake ? "Замкнуть озеро (Enter)" : "Завершить (Enter)";
+            if (_riverLevelButtons is not null)
+            {
+                var level = _editor.WaterLevel switch
+                {
+                    WaterSelectionLevel.Node => 2, WaterSelectionLevel.Channel => 1, _ => 0,
+                };
+                for (var i = 0; i < _riverLevelButtons.Count; i++)
+                {
+                    var active = i == level;
+                    ((ToggleButton)_riverLevelButtons[i]).IsChecked = active; Ui.SetClass(_riverLevelButtons[i], "active", active);
+                }
+            }
+            _riverSelectionSummary!.Text = _editor.WaterSelectionSummary;
+            var hasWater = _editor.WaterSelectionCount > 0;
+            _riverSelectionBlock!.IsVisible = true;
+            _riverHide!.IsEnabled = hasWater;
+            _riverHide.Content = _editor.SelectedWaterVisible ? "Скрыть воду" : "Показать воду";
+            _riverLock!.IsEnabled = hasWater;
+            _riverLock.Content = _editor.SelectedWaterLocked ? "Разблокировать воду" : "Заблокировать воду";
+            _riverDeleteSelection!.IsEnabled = hasWater;
+            _riverApplyPreview!.IsVisible = _editor.HasRiverPreview;
+            var layers = _editor.Layers.OfType<ObjectLayer>().Select(l => new LayerChoice(l.Id, l.Name)).ToArray();
+            if (_riverLayerPicker!.ItemsSource is not LayerChoice[] previousLayers || !previousLayers.SequenceEqual(layers))
+                _riverLayerPicker.ItemsSource = layers;
+            _riverLayerPicker.SelectedItem = null;
+            _riverLayerPicker.IsEnabled = hasWater && layers.Length > 1;
             if (_riverModeButtons is not null)
                 for (var i = 0; i < _riverModeButtons.Count; i++)
                 {
@@ -173,7 +246,7 @@ public sealed partial class EditorView
                 }
             var hasRiver = _editor.SelectedRiver is not null && !_editor.IsCreatingRiver;
             var lake = _editor.SelectedChannelIsLake;
-            _riverNodeBlock!.IsVisible = hasRiver && _editor.SelectedRiverNodeSharp is not null;
+            _riverNodeBlock!.IsVisible = hasRiver && _editor.IsWaterNodeMode && _editor.SelectedRiverNodeSharp is not null;
             _riverNodeWidth!.IsVisible = !lake;
             _riverSplit!.IsVisible = !lake; _riverSplitOff!.IsVisible = !lake; _riverTrimBefore!.IsVisible = !lake; _riverTrimAfter!.IsVisible = !lake;
             _riverSplit.IsEnabled = _editor.CanSplitSelectedChannel; _riverSplitOff.IsEnabled = _editor.CanSplitSelectedChannel;
@@ -191,5 +264,8 @@ public sealed partial class EditorView
     }
 
     private sealed record RiverChoice(Guid Id, string Name)
+    { public override string ToString() => Name; }
+
+    private sealed record LayerChoice(Map.Core.Documents.LayerId Id, string Name)
     { public override string ToString() => Name; }
 }

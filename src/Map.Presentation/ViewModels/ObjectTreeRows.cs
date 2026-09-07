@@ -1,4 +1,4 @@
-﻿using Map.Core.Documents;
+using Map.Core.Documents;
 
 namespace Map.Presentation.ViewModels;
 
@@ -27,6 +27,9 @@ public enum ObjectTreeRowKind
 
     /// <summary>The way back out of an open group; also names the group.</summary>
     Breadcrumb,
+
+    /// <summary>One water system (river with its channels, or a lake) of the map.</summary>
+    Water,
 }
 
 /// <summary>
@@ -45,6 +48,13 @@ public sealed record ObjectTreeRow(
 {
     /// <summary>Ordered group membership for selection state without another document scan.</summary>
     public IReadOnlyList<ObjectId>? MemberIds { get; init; }
+
+    /// <summary>Set on a <see cref="ObjectTreeRowKind.Water"/> row: the river or lake it stands for.</summary>
+    public Guid? WaterId { get; init; }
+
+    /// <summary>Water rows carry the two switches the panel shows, without a second lookup.</summary>
+    public bool WaterVisible { get; init; } = true;
+    public bool WaterLocked { get; init; }
 }
 
 /// <summary>
@@ -70,21 +80,74 @@ public static class ObjectTreeRows
         string searchText,
         ObjectTypeFilter filter,
         Guid? openGroupId,
-        IReadOnlyCollection<ObjectId> selectedIds)
+        IReadOnlyCollection<ObjectId> selectedIds,
+        IReadOnlyCollection<Guid>? selectedWaterIds = null)
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(selectedIds);
         var query = (searchText ?? "").Trim();
         var layers = document.Layers.OfType<ObjectLayer>().ToArray();
+        // Water systems are objects of the map like any other, so they belong in this list. They
+        // are listed above the ordinary rows and only while a group is not open, which is a view
+        // into one group and nothing else.
+        var water = openGroupId is null ? WaterRows(layers, query, filter, selectedWaterIds) : [];
+        IReadOnlyList<ObjectTreeRow> rest;
         if (query.Length == 0 && filter == ObjectTypeFilter.All && openGroupId is null
             && layers.All(layer => GroupedCount(layer) == 0))
-            return new VirtualRowList(new UngroupedEntries(layers), selectedIds);
-        var objects = AllObjects(document).ToList();
-        var groups = BuildGroupIndex(objects);
+            rest = new VirtualRowList(new UngroupedEntries(layers), selectedIds);
+        else
+        {
+            var objects = AllObjects(document).ToList();
+            var groups = BuildGroupIndex(objects);
 
-        // Every panel mode is a virtual row source. Search/filter still scan the document once,
-        // but only compact entries are retained; Avalonia creates a heavy row model on demand.
-        return BuildVirtualRows(objects, groups, openGroupId, selectedIds, query, filter);
+            // Every panel mode is a virtual row source. Search/filter still scan the document once,
+            // but only compact entries are retained; Avalonia creates a heavy row model on demand.
+            rest = BuildVirtualRows(objects, groups, openGroupId, selectedIds, query, filter);
+        }
+        return water.Count == 0 ? rest : new PrefixedRowList(water, rest);
+    }
+
+    /// <summary>One row per river or lake, matching the panel search and the type filter.</summary>
+    private static IReadOnlyList<ObjectTreeRow> WaterRows(
+        IReadOnlyList<ObjectLayer> layers, string query, ObjectTypeFilter filter, IReadOnlyCollection<Guid>? selected)
+    {
+        if (filter is not (ObjectTypeFilter.All or ObjectTypeFilter.Other)) return [];
+        var rows = new List<ObjectTreeRow>();
+        foreach (var layer in layers)
+            foreach (var river in layer.Rivers)
+            {
+                if (query.Length > 0 && !river.Name.Contains(query, StringComparison.OrdinalIgnoreCase)) continue;
+                var lakes = river.Channels.Count(c => c.Closed);
+                var courses = river.Channels.Length - lakes;
+                var subtitle = courses == 0
+                    ? (lakes == 1 ? "Озеро" : $"Озёра: {lakes}")
+                    : lakes == 0 ? $"Русел: {courses}" : $"Русел: {courses}, озёр: {lakes}";
+                rows.Add(new ObjectTreeRow(
+                    ObjectTreeRowKind.Water,
+                    $"WaterRow_{river.Id:D}",
+                    river.Name,
+                    subtitle,
+                    Object: null,
+                    GroupId: null,
+                    ChildCount: river.Channels.Length,
+                    Selected: selected is not null && selected.Contains(river.Id))
+                { WaterId = river.Id, WaterVisible = river.Visible, WaterLocked = river.Locked });
+            }
+        return rows;
+    }
+
+    /// <summary>A fixed set of rows in front of a virtual list, without materializing the list.</summary>
+    private sealed class PrefixedRowList(IReadOnlyList<ObjectTreeRow> prefix, IReadOnlyList<ObjectTreeRow> rest)
+        : IReadOnlyList<ObjectTreeRow>
+    {
+        public int Count => prefix.Count + rest.Count;
+        public ObjectTreeRow this[int index] => index < prefix.Count ? prefix[index] : rest[index - prefix.Count];
+        public IEnumerator<ObjectTreeRow> GetEnumerator()
+        {
+            foreach (var row in prefix) yield return row;
+            foreach (var row in rest) yield return row;
+        }
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
     /// <summary>True when the object passes both the search text and the type filter.</summary>

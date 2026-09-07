@@ -199,12 +199,37 @@ public sealed partial class EditorViewModel : ViewModelBase
     private readonly Map.Core.Resources.WorkingMemoryBudget _workingMemory;
     public int ActiveResourceOperations { get; private set; }
 
-    private async Task<T> RunResourceOperationAsync<T>(Func<Task<T>> operation, CancellationToken token = default)
+    private async Task<T> RunResourceOperationAsync<T>(
+        Func<Task<T>> operation, CancellationToken token = default, long? reserveBytes = null)
         => await RunLocalResourceOperationAsync(async () =>
         {
-            using var reservation = await _workingMemory.EnterHeavyAsync(token);
+            using var reservation = await _workingMemory.EnterHeavyAsync(token, reserveBytes);
             return await operation();
         }, token);
+
+    /// <summary>
+    /// Working bytes a save, an autosave or a version of this document is expected to need: its
+    /// raster tiles are decompressed and re-encoded, its objects are serialized, and a preview is
+    /// rendered. A map made of a few rivers and a handful of stamps costs megabytes, so it must
+    /// not be admitted on the same reserve as a map full of painted tiles. The figure is capped by
+    /// the shared heavy reserve, which is what every one of these operations used to demand
+    /// unconditionally - a small map is now the only case that changes.
+    /// </summary>
+    private static long DocumentOperationBytes(MapDocument document)
+    {
+        var raster = 0L;
+        var objects = 0L;
+        foreach (var layer in document.Layers)
+        {
+            if (layer is IRasterContentLayer content) raster += content.ContentTiles.TotalBytes;
+            if (layer.Mask is { } mask) raster += mask.Tiles.TotalBytes;
+            if (layer is ObjectLayer objectLayer) objects += objectLayer.Objects.Count;
+        }
+        if (document.StampForeground is { } foreground) raster += foreground.Tiles.TotalBytes;
+        // Preview render plus the encoder and the archive buffers working over the same tiles.
+        var preview = 4 * Map.Core.Resources.WorkingMemoryBudget.MiB;
+        return preview + raster * 2 + objects * EditCost.PerObjectBytes;
+    }
 
     private async Task<T> RunLocalResourceOperationAsync<T>(Func<Task<T>> operation, CancellationToken token = default)
     {
@@ -530,9 +555,11 @@ public sealed partial class EditorViewModel : ViewModelBase
                     : $"Выбрано: {EditorLabels.Objects(SelectionCount)}";
             }
 
-            return Session.SelectedObject is { } selected
-                ? EditorLabels.DescribeObject(selected)
-                : "Ничего не выбрано";
+            if (Session.SelectedObject is { } selected) return EditorLabels.DescribeObject(selected);
+
+            // Water is a selection of the map like any other: saying nothing is selected while a
+            // river carries a selection frame on the canvas is simply wrong.
+            return WaterSelectionCount > 0 ? WaterSelectionSummary : "Ничего не выбрано";
         }
     }
 
@@ -704,6 +731,13 @@ public sealed partial class EditorViewModel : ViewModelBase
             }
             _previousTool = _activeTool;
             _activeTool = value;
+            // The river tool is where nodes are edited, and the select tool is where whole things
+            // are moved and deleted. Entering either sets its natural level; the level control in
+            // the panel still overrides it for as long as the user stays in that tool.
+            if (value == EditorTool.River && _waterLevel == WaterSelectionLevel.System)
+                _waterLevel = WaterSelectionLevel.Node;
+            else if (value == EditorTool.Select && _waterLevel == WaterSelectionLevel.Node)
+                _waterLevel = WaterSelectionLevel.System;
             Raise();
             Raise(nameof(MaskEditLayerId));
             Raise(nameof(RasterToolReady));
@@ -6583,7 +6617,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// <summary>The rows the objects panel shows for the current search, filter and open group.</summary>
     public IReadOnlyList<ObjectTreeRow> ObjectTree => ObjectTreeRows.Build(
         Session.Document, _objectSearchText, _objectTypeFilter, _openGroupId,
-        [.. Session.SelectedObjectIds]);
+        [.. Session.SelectedObjectIds], [.. _waterSelection]);
 
     /// <summary>
     /// Ctrl+A: selects the visible, unlocked objects that match BOTH the panel search and the
@@ -6907,6 +6941,9 @@ public sealed partial class EditorViewModel : ViewModelBase
             Session.SetSelection(found);
         }
 
+        // A rubber band over the map takes the water systems it crosses too, so a mixed selection
+        // of stamps and rivers is one gesture and one Delete.
+        AddWaterSelection(WatersIn(marquee), begun.Additive);
         AfterSelectionChange();
     }
 
@@ -7732,15 +7769,28 @@ public sealed partial class EditorViewModel : ViewModelBase
             if (!additive && SelectionCount > 1 && MultiSelectionGeometry.CombinedBounds(Session.SelectedObjects) is { } frame
                 && worldX >= frame.Left && worldX <= frame.Right && worldY >= frame.Top && worldY <= frame.Bottom)
                 return BeginDrag(worldX, worldY) ? CanvasGesture.Drag : CanvasGesture.None;
-            if (!additive && SelectionCount > 0)
+
+            // Rivers and lakes are drawn under the objects of their layer, so they are picked only
+            // where no object answers. From here on they behave like anything else on the canvas:
+            // a click selects, Ctrl extends, and a drag moves the whole water system.
+            if (SelectWaterAt(worldX, worldY, viewScale, additive))
+            {
+                if (!additive && SelectedWaters.Count > 0 && BeginWaterDrag(worldX, worldY)) return CanvasGesture.Drag;
+                return CanvasGesture.None;
+            }
+
+            if (!additive && (SelectionCount > 0 || WaterSelectionCount > 0))
             {
                 Session.ClearSelection();
+                ClearWaterSelection();
                 AfterSelectionChange();
             }
 
             BeginMarquee(worldX, worldY, additive);
             return CanvasGesture.Marquee;
         }
+
+        if (!additive && WaterSelectionCount > 0) ClearWaterSelection();
 
         SelectHit(hit, additive);
         RefreshInspector();
@@ -7781,6 +7831,12 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// <summary>Absolute-cursor drag update covering move, resize and rotate of the whole set.</summary>
     public void UpdateDragTo(double worldX, double worldY)
     {
+        if (IsDraggingWater)
+        {
+            UpdateWaterDrag(worldX, worldY);
+            return;
+        }
+
         if (DragPreview is not { } preview)
         {
             return;
@@ -7836,6 +7892,12 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// <summary>The whole drag becomes exactly one history entry; a no-move drag becomes none.</summary>
     public void EndDrag()
     {
+        if (IsDraggingWater)
+        {
+            EndWaterDrag();
+            return;
+        }
+
         if (DragPreview is not { } preview)
         {
             return;
@@ -7863,6 +7925,7 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public void CancelDrag()
     {
+        CancelWaterDrag();
         if (DragPreview is null)
         {
             return;
@@ -9750,7 +9813,7 @@ public sealed partial class EditorViewModel : ViewModelBase
                     var thumbnail = ThumbnailRenderer.RenderPng(snapshot, stamps: imageSource);
                     _store.Save(snapshot, path, metadata, thumbnail);
                     return thumbnail;
-                }));
+                }), reserveBytes: DocumentOperationBytes(snapshot));
 
                 Session.MarkSaved(checkpoint);
                 _lastPrimaryAutosavedDocument = snapshot;
@@ -9807,7 +9870,7 @@ public sealed partial class EditorViewModel : ViewModelBase
                     var thumbnail = ThumbnailRenderer.RenderPng(snapshot, stamps: imageSource);
                     _store.SaveAutosave(snapshot, sourcePath, metadata, thumbnail);
                     return true;
-                }));
+                }), reserveBytes: DocumentOperationBytes(snapshot));
 
                 _lastAutosavedDocument = snapshot;
                 _lastAutosaveUtc = timestamp;
@@ -9941,7 +10004,7 @@ public sealed partial class EditorViewModel : ViewModelBase
                     var thumbnail = ThumbnailRenderer.RenderPng(snapshot, stamps: imageSource);
                     _store.Save(snapshot, path!, metadata, thumbnail);
                     return thumbnail;
-                }));
+                }), reserveBytes: DocumentOperationBytes(snapshot));
 
                 DocumentPath = path;
                 Session.MarkSaved(checkpoint);

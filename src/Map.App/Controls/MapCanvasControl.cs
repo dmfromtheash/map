@@ -36,12 +36,12 @@ public sealed partial class MapCanvasControl : Control
     private sealed class CanvasRenderResources
     {
         public object Gate { get; } = new();
-        private readonly System.Collections.Generic.Dictionary<int, (TileImageCache Tiles, ObjectOverviewCache Objects)> _contexts = [];
-        public (TileImageCache Tiles, ObjectOverviewCache Objects) Current()
+        private readonly System.Collections.Generic.Dictionary<int, (TileImageCache Tiles, ObjectOverviewCache Objects, CarvedLandCache Land)> _contexts = [];
+        public (TileImageCache Tiles, ObjectOverviewCache Objects, CarvedLandCache Land) Current()
         {
             var thread = Environment.CurrentManagedThreadId;
             if (!_contexts.TryGetValue(thread, out var context))
-                _contexts[thread] = context = (new(4096, 256L * 1024 * 1024), new(1024, 64L * 1024 * 1024));
+                _contexts[thread] = context = (new(4096, 256L * 1024 * 1024), new(1024, 64L * 1024 * 1024), new());
             return context;
         }
         public (int Tiles, int Objects, long Bytes, long Disposals) Counts()
@@ -58,7 +58,7 @@ public sealed partial class MapCanvasControl : Control
         {
             lock (Gate)
             {
-                foreach (var context in _contexts.Values) { context.Tiles.Dispose(); context.Objects.Dispose(); }
+                foreach (var context in _contexts.Values) { context.Tiles.Dispose(); context.Objects.Dispose(); context.Land.Dispose(); }
                 _contexts.Clear();
             }
         }
@@ -421,7 +421,7 @@ public sealed partial class MapCanvasControl : Control
 
         private void RenderFrame(ISkiaSharpApiLeaseFeature feature)
         {
-            var (tileCache, objectCache) = resources.Current();
+            var (tileCache, objectCache, carvedLandCache) = resources.Current();
             tileCache.BeginFrame();
             var overviewFrame = false;
             try
@@ -495,6 +495,7 @@ public sealed partial class MapCanvasControl : Control
                 PlacementInvalid = editor.PendingPlacement?.InvalidReason is not null,
                 TileCache = tileCache,
                 ObjectCache = objectCache,
+                CarvedLand = carvedLandCache,
                 LodTier = tier,
                 Preview = editor.StrokePreview,
                 MaskEditLayerId = editor.MaskEditLayerId,
@@ -524,7 +525,17 @@ public sealed partial class MapCanvasControl : Control
                     canvas.DrawCircle((float)node.X, (float)node.Y, radius, pen);
                 }
             }
-            if (editor.ActiveTool == EditorTool.River && editor.DisplayedRiver is { } river)
+            if (editor.WaterSelectionFrame is { } waterFrame && !editor.IsCreatingRiver)
+            {
+                var scale = (float)Math.Max(.001, viewport.Scale);
+                using var framePen = new SKPaint { Color = new SKColor(90, 200, 255, 190), IsAntialias = true,
+                    Style = SKPaintStyle.Stroke, StrokeWidth = 1.5f / scale,
+                    PathEffect = SKPathEffect.CreateDash([6 / scale, 4 / scale], 0) };
+                canvas.DrawRect(new SKRect((float)waterFrame.Left, (float)waterFrame.Top,
+                    (float)waterFrame.Right, (float)waterFrame.Bottom), framePen);
+            }
+            if (editor.DisplayedRiver is { } river
+                && (editor.ActiveTool == EditorTool.River || editor.IsWaterNodeMode))
             {
                 DrawRiverHandles(canvas, editor, river, (float)Math.Max(.001, viewport.Scale));
             }

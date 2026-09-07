@@ -10,7 +10,22 @@ public enum RiverDrawMode { Nodes, Freehand }
 /// <summary>Stage 19: rivers, distributaries and lakes as one editable water construction.</summary>
 public sealed partial class EditorViewModel
 {
-    private Guid? _selectedRiverId, _selectedChannelId;
+    private Guid? _selectedChannelId;
+
+    /// <summary>
+    /// The primary selected water system. It is not a second selection state: it reads and writes
+    /// the shared water selection, so the river panel, the object list and the canvas can never
+    /// disagree about what is selected.
+    /// </summary>
+    private Guid? _selectedRiverId
+    {
+        get => _waterSelection.Count > 0 ? _waterSelection[^1] : null;
+        set
+        {
+            _waterSelection.Clear();
+            if (value is { } id) _waterSelection.Add(id);
+        }
+    }
     private int _riverNode = -1;
     private River? _riverDraft, _riverOriginal;
     private LayerId? _riverLayer;
@@ -23,6 +38,9 @@ public sealed partial class EditorViewModel
     private River? _riverStrokeSourceRiver;
     private double _riverMeanderPercent = 20;
     private double _riverFlowSourceWidth = 4, _riverFlowGrowth = 6;
+    private double _riverSimplifyTolerance = 6;
+    private bool _riverPreviewing;
+    private int _riverMeanderSeed;
 
     public IReadOnlyList<River> Rivers => Session.Document.Layers.OfType<ObjectLayer>().SelectMany(l => l.Rivers).ToArray();
     public River? SelectedRiver => _selectedRiverId is { } id ? Rivers.FirstOrDefault(r => r.Id == id) : null;
@@ -35,17 +53,32 @@ public sealed partial class EditorViewModel
         {
             if (_riverDraft is not null) return _riverDraft;
             var selected = SelectedRiver;
-            return selected is not null && RiverLayerOf(selected.Id) is { Visible: true } ? selected : null;
+            if (selected is null || RiverLayerOf(selected.Id) is not { Visible: true }) return null;
+            if (_waterDragDrafts is { } drafts && drafts.TryGetValue(selected.Id, out var dragged)) return dragged;
+            return selected.Visible ? selected : null;
         }
     }
 
     public Guid? DisplayedRiverChannelId => _riverDraftChannelId ?? _selectedChannelId;
-    public IReadOnlyList<River>? RiverRenderOverrides => _riverDraft is not null ? [_riverDraft] : null;
+    /// <summary>
+    /// Live substitutions the canvas draws instead of the saved rivers: the gesture draft and the
+    /// water systems currently following the pointer. The document itself is untouched.
+    /// </summary>
+    public IReadOnlyList<River>? RiverRenderOverrides
+    {
+        get
+        {
+            var dragged = WaterDragOverrides;
+            if (_riverDraft is null) return dragged;
+            if (dragged is null) return [_riverDraft];
+            return [.. dragged.Where(r => r.Id != _riverDraft.Id), _riverDraft];
+        }
+    }
     public LayerId? RiverPreviewLayerId => _riverLayer;
     public bool IsCreatingRiver => _riverCreating;
     public bool IsCreatingLake => _riverCreating && _riverCreatingLake;
     public bool HasRiverGesture => _riverDraft is not null;
-    public bool IsDraggingRiver => _riverDragging || _riverDraggingMouth || _riverDraggingSource || _riverStroking;
+    public bool IsDraggingRiver => _riverDragging || _riverDraggingMouth || _riverDraggingSource || _riverStroking || IsDraggingWater;
     public int SelectedRiverNodeIndex => _riverNode;
 
     public RiverDrawMode RiverDrawMode
@@ -61,6 +94,17 @@ public sealed partial class EditorViewModel
     }
 
     public double RiverMeanderPercent { get => _riverMeanderPercent; set { if (double.IsFinite(value)) SetField(ref _riverMeanderPercent, Math.Clamp(value, 1, 100)); } }
+    public double RiverSimplifyTolerance { get => _riverSimplifyTolerance; set { if (double.IsFinite(value)) SetField(ref _riverSimplifyTolerance, Math.Clamp(value, 0.5, 512)); } }
+
+    /// <summary>True while a shape change is shown on the canvas but not yet part of the map.</summary>
+    public bool HasRiverPreview => _riverPreviewing && _riverDraft is not null;
+
+    /// <summary>Curvature handle of the selected node, in percent; 100 % is the plain smooth curve.</summary>
+    public double? SelectedRiverNodeTensionPercent =>
+        SelectedRiverChannel is { } tc && _riverNode >= 0 && _riverNode < tc.Nodes.Length ? tc.Nodes[_riverNode].Tension * 100 : null;
+
+    public double? SelectedChannelTensionPercent =>
+        SelectedRiverChannel is { } cc && cc.Nodes.Length > 0 ? cc.Nodes.Average(n => n.Tension) * 100 : null;
     public double RiverFlowSourceWidth { get => _riverFlowSourceWidth; set { if (double.IsFinite(value)) SetField(ref _riverFlowSourceWidth, Math.Clamp(value, River.MinimumWidth, 4096)); } }
     public double RiverFlowGrowth { get => _riverFlowGrowth; set { if (double.IsFinite(value)) SetField(ref _riverFlowGrowth, Math.Clamp(value, 0, 4096)); } }
 
@@ -117,8 +161,11 @@ public sealed partial class EditorViewModel
         CancelRiverGesture();
         ActiveTool = EditorTool.River;
         _riverCreating = true; _riverCreatingLake = true; _riverNode = -1;
-        StatusDetail = "Озеро: ставьте вершины по контуру, Enter замкнёт контур, Esc — отмена.";
-        RaiseRiverState();
+        _waterSelection.Clear(); _selectedChannelId = null;
+        StatusDetail = _riverDrawMode == RiverDrawMode.Freehand
+            ? "Озеро: обведите берег одним движением — контур замкнётся сам. Esc — отмена."
+            : "Озеро: ставьте вершины по контуру (нужно не меньше трёх), кнопка «Завершить (Enter)» замкнёт контур. Esc — отмена.";
+        RaiseWaterState();
     }
 
     private RiverChannel? DraftChannel => _riverDraft?.Channels.FirstOrDefault(c => c.Id == _riverDraftChannelId);
@@ -182,6 +229,9 @@ public sealed partial class EditorViewModel
 
     private bool CommitDraft(RiverChannel channel, RiverJunction? junction, ObjectLayer? targetLayer, River? targetRiver)
     {
+        // The lake flag has to be read before the gesture is cancelled below: it used to be read
+        // afterwards, which reported a freshly drawn lake as "Река создана".
+        var creatingLake = _riverCreatingLake;
         var (layer, create) = EnsureObjectLayer();
         if (layer is null) { StatusDetail = NoUsableObjectLayer; return false; }
         if (targetLayer is not null && (!targetLayer.Visible || targetLayer.Locked)) { StatusDetail = "Слой реки скрыт или заблокирован."; return false; }
@@ -211,22 +261,33 @@ public sealed partial class EditorViewModel
         else
         {
             requested = _riverDraft!;
-            name = _riverCreatingLake ? "Создать озеро" : "Создать реку";
+            name = creatingLake ? "Создать озеро" : "Создать реку";
         }
         try { requested.Validate(); }
         catch (ArgumentException ex) { StatusDetail = ex.Message; return false; }
+        // A new water body that the land clip would erase completely is created visible instead,
+        // with the reason stated. Silently committing something the canvas never draws is the one
+        // outcome the user cannot act on; the "Только по суше" toggle stays available to restore it.
+        var clipped = RiverVisibility.IsHiddenByLandClip(Session.Document, requested);
+        if (clipped) requested = requested with { Style = requested.Style with { ClipToLand = false } };
         var command = new RiverCommand(layer.Id, requested.Id, requested, name, absorbed);
         var revision = Session.Revision;
         ExecuteWithOptionalLayer(command, create, name);
         if (Session.Revision == revision) { StatusDetail = Session.LastResourceError ?? StatusDetail; return false; }
         CancelRiverGesture();
-        _selectedRiverId = requested.Id; _selectedChannelId = channel.Id; _riverNode = channel.Nodes.Length - 1; _activeLayerId = layer.Id;
+        _selectedRiverId = requested.Id; _selectedChannelId = channel.Id;
+        _riverNode = _waterLevel == WaterSelectionLevel.Node ? channel.Nodes.Length - 1 : -1;
+        _activeLayerId = layer.Id;
         Session.ClearSelection();
-        AfterEdit(); RaiseRiverState();
+        AfterEdit(); RaiseWaterState();
         StatusDetail = targetRiver is not null
             ? "Приток присоединён. Перетаскивайте ромб устья вдоль русла, чтобы перенести место соединения."
-            : _riverCreatingLake ? "Озеро создано. Реки можно завершать на его берегу или начинать от него."
-            : "Река создана. Перетаскивайте узлы, задайте ширину или профиль истока/устья слева.";
+            : creatingLake ? "Озеро создано и выбрано. Реки можно завершать на его берегу или начинать от него."
+            : "Река создана и выбрана. Перетаскивайте узлы, задайте ширину или профиль истока/устья слева.";
+        if (clipped)
+            StatusDetail += creatingLake
+                ? " Контур лежит вне суши, поэтому «Только по суше» для него выключено — иначе озера не было бы видно."
+                : " Русло лежит вне суши, поэтому «Только по суше» для него выключено — иначе реки не было бы видно.";
         return true;
     }
 
@@ -290,7 +351,8 @@ public sealed partial class EditorViewModel
             }
             AddRiverNode(x, y); return true;
         }
-        if (SelectedRiver is { } selected && RiverLayerOf(selected.Id) is { Visible: true, Locked: false } layer)
+        if (SelectedRiver is { Locked: false } selected && _waterLevel == WaterSelectionLevel.Node
+            && RiverLayerOf(selected.Id) is { Visible: true, Locked: false } layer)
         {
             var geometry = RiverGeometry.Evaluate(selected);
             if (SelectedRiverChannel is { } channel && geometry.Channels.TryGetValue(channel.Id, out var g))
@@ -323,11 +385,14 @@ public sealed partial class EditorViewModel
                         _riverDragging = true; _riverLayer = layer.Id; RaiseRiverState(); return true;
                     }
         }
-        if (HitRiver(x, y, tolerance, out _, out var river, out var hitChannel, out var at))
+        if (SelectWaterAt(x, y, Session.Viewport.Scale, additive: false))
         {
-            SelectRiver(river.Id, hitChannel);
-            var nodes = river.FindChannel(hitChannel)!.Nodes;
-            _riverNode = Math.Max(0, nodes.ToList().FindIndex(n => n.Id == at.ParentNodeId));
+            if (_waterLevel == WaterSelectionLevel.Node && SelectedRiver is { Locked: false } picked
+                && RiverLayerOf(picked.Id) is { Visible: true, Locked: false } pickedLayer)
+            {
+                _riverOriginal = picked; _riverDraft = picked; _riverDragging = true; _riverLayer = pickedLayer.Id;
+            }
+            else if (SelectedRiver is { Locked: false } && BeginWaterDrag(x, y)) { /* the whole system follows the pointer */ }
             RaiseRiverState();
             return true;
         }
@@ -336,6 +401,7 @@ public sealed partial class EditorViewModel
 
     public void MoveRiverPointer(double x, double y)
     {
+        if (IsDraggingWater) { UpdateWaterDrag(x, y); return; }
         if (_riverDraft is null || SelectedRiverChannel is not { } channel) return;
         var point = SnapPlacementPoint(Math.Clamp(x, 0, Session.Document.Canvas.Width), Math.Clamp(y, 0, Session.Document.Canvas.Height));
         if (_riverDragging && _riverNode >= 0 && _riverNode < channel.Nodes.Length)
@@ -358,6 +424,7 @@ public sealed partial class EditorViewModel
 
     public bool EndRiverDrag()
     {
+        if (IsDraggingWater) return EndWaterDrag();
         if (_riverDraft is not { } draft || (!_riverDragging && !_riverDraggingMouth && !_riverDraggingSource)) return false;
         var name = _riverDraggingMouth ? "Перенести устье притока" : _riverDraggingSource ? "Перенести исток рукава" : "Переместить узел реки";
         var changed = _riverOriginal is { } original && !SameRiver(original, draft);
@@ -368,7 +435,9 @@ public sealed partial class EditorViewModel
 
     public bool CancelRiverGesture()
     {
+        CancelWaterDrag();
         var active = _riverDraft is not null || _riverInsert || _riverCreating;
+        _riverPreviewing = false;
         _riverDraft = _riverOriginal = null; _riverDraftChannelId = null; _riverStroke = null;
         _riverStrokeSource = null; _riverStrokeSourceRiver = null;
         _riverCreating = _riverCreatingLake = _riverDragging = _riverDraggingMouth = _riverDraggingSource = _riverInsert = _riverStroking = false; _riverLayer = null;
@@ -382,9 +451,32 @@ public sealed partial class EditorViewModel
         var river = Rivers.FirstOrDefault(r => r.Id == id);
         if (river is null) return;
         ActiveTool = EditorTool.River;
-        _selectedRiverId = id; _selectedChannelId = channelId ?? river.Channels[0].Id; _riverNode = 0;
+        _selectedRiverId = id; _selectedChannelId = channelId ?? river.Channels[0].Id;
+        _riverNode = _waterLevel == WaterSelectionLevel.Node ? 0 : -1;
         _activeLayerId = RiverLayerOf(id)?.Id ?? _activeLayerId;
-        Session.ClearSelection(); RaiseRiverState();
+        Session.ClearSelection(); RaiseWaterState();
+    }
+
+    /// <summary>Selects one water system without changing the active tool: used by the object list.</summary>
+    public void SelectWater(Guid id, bool additive = false)
+    {
+        var river = Rivers.FirstOrDefault(r => r.Id == id);
+        if (river is null) return;
+        CancelRiverGesture();
+        if (additive && _waterSelection.Contains(id)) _waterSelection.Remove(id);
+        else
+        {
+            if (!additive)
+            {
+                _waterSelection.Clear();
+                if (Session.SelectedObjectIds.Count > 0) { Session.ClearSelection(); AfterSelectionChange(); }
+            }
+            if (!_waterSelection.Contains(id)) _waterSelection.Add(id);
+            _selectedChannelId = river.Channels[0].Id;
+        }
+        _riverNode = -1;
+        _activeLayerId = RiverLayerOf(id)?.Id ?? _activeLayerId;
+        RaiseWaterState();
     }
 
     public void SelectRiverChannel(Guid channelId)
@@ -419,6 +511,45 @@ public sealed partial class EditorViewModel
         if (!double.IsFinite(width) || width < River.MinimumWidth || width > River.MaximumWidth) { StatusDetail = "Ширина должна быть числом не меньше 1."; return; }
         if (SelectedRiver is { } river && SelectedRiverChannel is { Closed: false } channel && _riverNode >= 0 && _riverNode < channel.Nodes.Length)
             CommitRiver(RiverEditor.SetNodeWidth(river, channel.Id, _riverNode, width), "Изменить ширину реки в узле");
+    }
+
+    /// <summary>
+    /// Direct curvature control: the node keeps its place while the bend through it opens or
+    /// tightens. This is what replaces smoothing again and again in the hope of a nicer curve:
+    /// not a single node is added.
+    /// </summary>
+    public void SetSelectedRiverNodeTensionPercent(double percent)
+    {
+        if (!double.IsFinite(percent)) { StatusDetail = "Кривизна узла задаётся в процентах."; return; }
+        if (SelectedRiver is { } river && SelectedRiverChannel is { } channel && _riverNode >= 0 && _riverNode < channel.Nodes.Length)
+            CommitRiver(RiverEditor.SetNodeTension(river, channel.Id, _riverNode, percent / 100), "Кривизна узла реки");
+    }
+
+    /// <summary>The same handle applied to every node of the channel: one smoothness dial.</summary>
+    public void SetSelectedChannelTensionPercent(double percent)
+    {
+        if (!double.IsFinite(percent)) { StatusDetail = "Плавность русла задаётся в процентах."; return; }
+        if (SelectedRiver is { } river && SelectedRiverChannel is { } channel)
+            CommitRiver(RiverEditor.SetChannelTension(river, channel.Id, percent / 100), "Плавность русла");
+    }
+
+    /// <summary>
+    /// Removes the nodes a freehand stroke does not need, with the accuracy stated in world units:
+    /// no part of the course moves further than the tolerance.
+    /// </summary>
+    public void SimplifySelectedChannel()
+    {
+        if (SelectedRiver is not { } river || SelectedRiverChannel is not { } channel) return;
+        var before = channel.Nodes.Length;
+        var next = RiverEditor.SimplifyChannel(river, channel.Id, _riverSimplifyTolerance);
+        if (next.FindChannel(channel.Id) is not { } simplified || simplified.Nodes.Length == before)
+        { StatusDetail = $"Упрощать нечего: точность {_riverSimplifyTolerance:0.#} ед. уже соблюдена при {before} узлах."; return; }
+        if (CommitRiver(next, "Упростить русло"))
+        {
+            _riverNode = Math.Clamp(_riverNode, -1, simplified.Nodes.Length - 1);
+            StatusDetail = $"Узлов: {before} → {simplified.Nodes.Length}; курс сохранён с точностью {_riverSimplifyTolerance:0.#} ед.";
+            RaiseRiverState();
+        }
     }
 
     public void SetSelectedRiverNodeSharp(bool sharp)
@@ -484,17 +615,45 @@ public sealed partial class EditorViewModel
             CommitRiver(RiverEditor.Reverse(river, channel.Id), "Развернуть течение");
     }
 
+    /// <summary>Relaxes the course in place; the node count is exactly the same afterwards.</summary>
     public void SmoothSelectedChannel()
     {
-        if (SelectedRiver is { } river && SelectedRiverChannel is { } channel)
-            CommitRiver(RiverEditor.Smooth(river, channel.Id), "Сгладить русло");
+        if (SelectedRiver is not { } river || SelectedRiverChannel is not { } channel) return;
+        var before = channel.Nodes.Length;
+        if (CommitRiver(RiverEditor.Smooth(river, channel.Id), "Сгладить русло"))
+            StatusDetail = $"Русло сглажено; узлов по-прежнему {before}. Форму изгиба меняйте кривизной узла.";
     }
 
-    public void MeanderSelectedChannel()
+    /// <summary>
+    /// Shows the meanders on the canvas without touching the map: the node count of the result is
+    /// named up front, so an operation that does multiply points is a decision and not a surprise.
+    /// </summary>
+    public void PreviewMeanderOnSelectedChannel()
     {
-        if (SelectedRiver is { } river && SelectedRiverChannel is { Closed: false } channel)
-            CommitRiver(RiverEditor.Meander(river, channel.Id, _riverMeanderPercent / 100, NextGestureSeed()), "Добавить извилины");
+        if (SelectedRiver is not { } river || SelectedRiverChannel is not { Closed: false } channel) return;
+        if (RiverLayerOf(river.Id) is not { Visible: true, Locked: false } layer) { StatusDetail = "Слой реки скрыт или заблокирован."; return; }
+        CancelRiverGesture();
+        _riverMeanderSeed = NextGestureSeed();
+        River next;
+        try { next = RiverEditor.Meander(river, channel.Id, _riverMeanderPercent / 100, _riverMeanderSeed); }
+        catch (InvalidOperationException ex) { StatusDetail = ex.Message; return; }
+        _riverOriginal = river; _riverDraft = next; _riverLayer = layer.Id; _riverPreviewing = true;
+        StatusDetail = $"Предпросмотр извилин: узлов станет {next.FindChannel(channel.Id)!.Nodes.Length} вместо {channel.Nodes.Length}. "
+            + "«Применить извилины» — принять, Esc — отказаться.";
+        RaiseRiverState();
     }
+
+    /// <summary>Commits whatever the preview shows as one undoable change.</summary>
+    public bool ApplyRiverPreview()
+    {
+        if (!HasRiverPreview) return false;
+        var draft = _riverDraft!; var layer = _riverLayer;
+        _riverPreviewing = false;
+        CancelRiverGesture();
+        return CommitRiver(draft, "Добавить извилины", layer);
+    }
+
+    public void MeanderSelectedChannel() => PreviewMeanderOnSelectedChannel();
 
     public void ApplyWidthByFlow()
     {
@@ -586,6 +745,7 @@ public sealed partial class EditorViewModel
         foreach (var candidateLayer in Session.Document.Layers.OfType<ObjectLayer>().Reverse().Where(l => l.Visible))
             foreach (var candidate in candidateLayer.Rivers.Reverse())
             {
+                if (!candidate.Visible) continue;
                 var set = RiverGeometry.Evaluate(candidate);
                 if (!set.Bounds.Intersects(new WorldBounds(x - tolerance, y - tolerance, x + tolerance, y + tolerance))) continue;
                 Guid hitChannel;
@@ -635,6 +795,8 @@ public sealed partial class EditorViewModel
         Raise(nameof(IsCreatingRiver)); Raise(nameof(IsCreatingLake)); Raise(nameof(SelectedRiverNodeWidth)); Raise(nameof(SelectedRiverNodeSharp));
         Raise(nameof(SelectedChannelSourceWidth)); Raise(nameof(SelectedChannelMouthWidth)); Raise(nameof(SelectedChannelIsTributary));
         Raise(nameof(SelectedChannelHasSource)); Raise(nameof(SelectedChannelIsLake)); Raise(nameof(CanSplitSelectedChannel)); Raise(nameof(RiverDrawMode));
+        Raise(nameof(SelectedRiverNodeTensionPercent)); Raise(nameof(SelectedChannelTensionPercent)); Raise(nameof(HasRiverPreview));
+        Raise(nameof(WaterSelectionSummary)); Raise(nameof(SelectedWaterVisible)); Raise(nameof(SelectedWaterLocked));
         InvalidateScene(EditorChangeReason.CanvasInvalidation);
     }
 }

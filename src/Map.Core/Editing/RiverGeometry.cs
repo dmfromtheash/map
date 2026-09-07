@@ -128,7 +128,7 @@ public static class RiverGeometry
         IReadOnlyDictionary<Guid, RiverChannelGeometry> parents, double minimumWidth)
     {
         var nodes = channel.Nodes;
-        var points = new List<(double X, double Y, double Width, bool Sharp)>(nodes.Length + 2);
+        var points = new List<(double X, double Y, double Width, bool Sharp, double Tension)>(nodes.Length + 2);
         var leaves = false; double sourceHalf = 0;
         (double X, double Y)? before = null;
         if (!channel.Closed && channel.Source is { } source && parents.TryGetValue(source.ParentChannelId, out var sourceParent)
@@ -136,13 +136,13 @@ public static class RiverGeometry
         {
             leaves = true; sourceHalf = sourceParent.Closed ? nodes[0].Width * river.WidthScale : origin.HalfWidth;
             // A distributary departs along the parent flow; a lake outflow departs away from the lake.
-            points.Add((origin.X, origin.Y, nodes[0].Width * river.WidthScale, false));
+            points.Add((origin.X, origin.Y, nodes[0].Width * river.WidthScale, false, 1));
             var reach = Math.Max(sourceHalf * 2, 8);
             var (dx, dy) = sourceParent.Closed ? Inward(sourceParent, origin) : (origin.TangentX, origin.TangentY);
             before = (origin.X - dx * reach, origin.Y - dy * reach);
         }
         var firstNodeIndex = points.Count;
-        foreach (var node in nodes) points.Add((node.X, node.Y, node.Width * river.WidthScale, node.Sharp));
+        foreach (var node in nodes) points.Add((node.X, node.Y, node.Width * river.WidthScale, node.Sharp, node.EffectiveTension));
         if (channel.Closed) points.Add(points[firstNodeIndex]);
 
         var joins = false; double parentHalf = 0, parentTx = 0, parentTy = 0;
@@ -157,7 +157,7 @@ public static class RiverGeometry
             // a lake it heads straight for the shore instead.
             var (dx, dy) = parent.Closed ? Inward(parent, junction) : (junction.TangentX, junction.TangentY);
             parentTx = dx; parentTy = dy;
-            points.Add((junction.X, junction.Y, last.Width, false));
+            points.Add((junction.X, junction.Y, last.Width, false, 1));
             var reach = Math.Max(parentHalf * 2, 8);
             beyond = (junction.X + dx * reach, junction.Y + dy * reach);
         }
@@ -178,8 +178,11 @@ public static class RiverGeometry
             else p3 = beyond ?? (points[i + 1].X * 2 - points[i].X, points[i + 1].Y * 2 - points[i].Y);
             var chord = Math.Sqrt((p2.Item1 - p1.Item1) * (p2.Item1 - p1.Item1) + (p2.Item2 - p1.Item2) * (p2.Item2 - p1.Item2));
             var steps = Math.Clamp((int)Math.Ceiling(chord / 5), 6, 64);
-            var m1 = points[i].Sharp ? (0d, 0d) : (0.5 * (p2.Item1 - p0.Item1), 0.5 * (p2.Item2 - p0.Item2));
-            var m2 = points[i + 1].Sharp ? (0d, 0d) : (0.5 * (p3.Item1 - p1.Item1), 0.5 * (p3.Item2 - p1.Item2));
+            // The node's own tension scales the tangent the curve leaves and enters it with, so
+            // the bend is edited in place instead of by inserting more nodes. Sharp reads 0.
+            var t1 = points[i].Tension; var t2 = points[i + 1].Tension;
+            var m1 = (0.5 * t1 * (p2.Item1 - p0.Item1), 0.5 * t1 * (p2.Item2 - p0.Item2));
+            var m2 = (0.5 * t2 * (p3.Item1 - p1.Item1), 0.5 * t2 * (p3.Item2 - p1.Item2));
             pointIndex[i] = samples.Count;
             for (var s = 0; s < steps; s++)
             {
@@ -390,6 +393,10 @@ public static class RiverGeometry
         Func<RiverChannel, bool>? filter = null)
     {
         channelId = Guid.Empty; segment = int.MinValue; fraction = 0; distance = double.MaxValue; halfWidth = 0;
+        // Ranked by how far the point lies OUTSIDE the drawn body, not by its distance to the
+        // centreline. A click well inside a wide river is a hit on that river even when a narrow
+        // channel happens to run its centreline closer to the cursor.
+        var best = double.MaxValue;
         foreach (var geometry in set.Channels.Values)
         {
             if (filter is not null && !filter(geometry.Channel)) continue;
@@ -402,8 +409,9 @@ public static class RiverGeometry
                 var px = a.X + dx * t; var py = a.Y + dy * t;
                 var d = Math.Sqrt((x - px) * (x - px) + (y - py) * (y - py));
                 var h = a.HalfWidth + (b.HalfWidth - a.HalfWidth) * t;
-                if (d - h > tolerance || d >= distance) continue;
-                distance = d; halfWidth = h; channelId = geometry.Channel.Id;
+                var outside = d - h;
+                if (outside > tolerance || outside >= best) continue;
+                best = outside; distance = d; halfWidth = h; channelId = geometry.Channel.Id;
                 var seg = NodeSegmentOf(geometry, i);
                 segment = seg;
                 if (seg < 0) { fraction = 0; continue; }
@@ -469,6 +477,21 @@ public static class RiverGeometry
     public static IReadOnlyList<VectorPoint> Simplify(IReadOnlyList<VectorPoint> points, double tolerance)
     {
         if (points.Count <= 2) return points;
+        var indices = SimplifyIndices(points, tolerance);
+        var kept = new List<VectorPoint>(indices.Count);
+        foreach (var index in indices) kept.Add(points[index]);
+        return kept;
+    }
+
+    /// <summary>
+    /// The indices Ramer–Douglas–Peucker keeps for the given world tolerance: no dropped point
+    /// lies further than <paramref name="tolerance"/> from the kept course. Exposed so an existing
+    /// channel can be simplified without losing the widths and ids of the nodes that survive.
+    /// </summary>
+    public static IReadOnlyList<int> SimplifyIndices(IReadOnlyList<VectorPoint> points, double tolerance)
+    {
+        ArgumentNullException.ThrowIfNull(points);
+        if (points.Count <= 2) return [.. Enumerable.Range(0, points.Count)];
         var keep = new bool[points.Count]; keep[0] = keep[^1] = true;
         var stack = new Stack<(int, int)>(); stack.Push((0, points.Count - 1));
         while (stack.Count > 0)
@@ -484,8 +507,8 @@ public static class RiverGeometry
             }
             if (best >= 0) { keep[best] = true; stack.Push((a, best)); stack.Push((best, b)); }
         }
-        var result = new List<VectorPoint>();
-        for (var i = 0; i < points.Count; i++) if (keep[i]) result.Add(points[i]);
+        var result = new List<int>();
+        for (var i = 0; i < points.Count; i++) if (keep[i]) result.Add(i);
         return result;
     }
 }

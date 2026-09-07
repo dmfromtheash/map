@@ -37,6 +37,7 @@ public static class RiverRenderer
         if (layer.Rivers.IsEmpty && options.RiverOverrides is not { Count: > 0 }) return;
         foreach (var river in Resolve(layer, options))
         {
+            if (!river.Visible) continue;
             if (!RiverGeometry.Evaluate(river).Bounds.Intersects(view)) continue;
             Draw(canvas, river, options.ViewScale, options.FastPreview, river.Style.ClipToLand ? drawLandCoverage : null);
             if (options.Stats is { } stats) { stats.ObjectsDrawn++; stats.DrawCalls++; }
@@ -212,7 +213,11 @@ public static class RiverRenderer
         // Round every corner of the merged outline in world space, independently of any clip or
         // device offset, so the inner corner of a confluence merges softly and a tile never
         // disagrees with the viewport. Radius follows the river's average width.
-        var average = set.Channels.Values.SelectMany(g => g.Samples).Average(s => s.HalfWidth);
+        // A lake contributes hundreds of samples with no half width at all, and averaging those in
+        // collapsed the radius to almost nothing: the inner corner where an inflow met the shore
+        // stayed a sharp dark V. The radius follows the water that actually has a width.
+        var flowing = set.Channels.Values.SelectMany(g => g.Samples).Where(s => s.HalfWidth > 0).ToList();
+        var average = flowing.Count > 0 ? flowing.Average(s => s.HalfWidth) : 0;
         var rounded = RoundCorners(body, (float)Math.Min(12, average * 0.8));
         body.Dispose();
         return rounded;

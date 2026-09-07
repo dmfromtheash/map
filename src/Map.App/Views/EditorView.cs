@@ -3763,6 +3763,7 @@ public sealed partial class EditorView : UserControl
             identityImage.IsVisible = identityImage.Source is not null;
             identityText.Text = count switch
             {
+                0 when _editor.WaterSelectionCount > 0 => _editor.WaterSelectionSummary,
                 0 => "Ничего не выбрано",
                 1 => selected?.Name ?? "Объект",
                 _ => "Выбрано: " + EditorLabels.Objects(count),
@@ -8155,9 +8156,13 @@ public sealed partial class EditorView : UserControl
         _objectListRebuildCount++;
         RefreshObjectSelectionSet();
         SyncObjectFilterButtons();
-        _selectionCountText.Text = _editor.SelectionCount == 0
-            ? "Ничего не выбрано"
-            : $"Выбрано: {EditorLabels.Objects(_editor.SelectionCount)}";
+        _selectionCountText.Text = (_editor.SelectionCount, _editor.WaterSelectionCount) switch
+        {
+            (0, 0) => "Ничего не выбрано",
+            (0, var water) => $"Выбрано водных систем: {water}",
+            (var objects, 0) => $"Выбрано: {EditorLabels.Objects(objects)}",
+            var (objects, water) => $"Выбрано: {EditorLabels.Objects(objects)} и водных систем: {water}",
+        };
 
         var rows = _editor.ObjectTree;
         if (rows.Count == 0)
@@ -8232,6 +8237,54 @@ public sealed partial class EditorView : UserControl
             $"Группа «{row.Title}» · {row.Subtitle}",
             enter);
 
+        Ui.SetStructureSelected(host, row.Selected);
+        return host;
+    }
+
+    /// <summary>
+    /// One river or lake in the objects panel: selecting it is the same selection the canvas uses,
+    /// and the two switches beside it hide and lock that water system alone.
+    /// </summary>
+    private Border BuildWaterRow(ObjectTreeRow row)
+    {
+        var waterId = row.WaterId!.Value;
+        var visible = Ui.RowAction(
+            $"WaterRowVisible_{waterId:D}",
+            row.WaterVisible ? "Скрыть воду" : "Показать воду",
+            row.WaterVisible ? MapIcons.Eye : MapIcons.EyeOff,
+            () =>
+            {
+                _editor.SelectWater(waterId);
+                _editor.SetSelectedWaterVisible(!row.WaterVisible);
+                SyncObjectList();
+                SyncContextArea();
+            });
+        var locked = Ui.RowAction(
+            $"WaterRowLocked_{waterId:D}",
+            row.WaterLocked ? "Разблокировать воду" : "Заблокировать воду",
+            row.WaterLocked ? MapIcons.Lock : MapIcons.Unlock,
+            () =>
+            {
+                _editor.SelectWater(waterId);
+                _editor.SetSelectedWaterLocked(!row.WaterLocked);
+                SyncObjectList();
+                SyncContextArea();
+            });
+        var states = row.WaterVisible ? row.WaterLocked ? " · заблокировано" : "" : " · скрыто";
+        var host = Ui.StructureRow(
+            row.AutomationId,
+            MapIcons.River,
+            row.Title,
+            row.Subtitle + states,
+            () =>
+            {
+                _editor.SelectWater(waterId);
+                SyncObjectListSelection();
+                SyncContextArea();
+            },
+            $"Вода «{row.Title}» · {row.Subtitle}{states}",
+            visible,
+            locked);
         Ui.SetStructureSelected(host, row.Selected);
         return host;
     }
@@ -8321,6 +8374,8 @@ public sealed partial class EditorView : UserControl
         ObjectTreeRowKind.Group =>
             row.MemberIds is { Count: > 0 } members
             && members.All(_objectSelectionSet.Contains),
+        ObjectTreeRowKind.Water =>
+            row.WaterId is { } waterId && _editor.WaterSelectionIds.Contains(waterId),
         _ => false,
     };
 
@@ -8423,6 +8478,7 @@ public sealed partial class EditorView : UserControl
             {
                 ObjectTreeRowKind.Breadcrumb => _owner.BuildGroupBreadcrumbRow(row),
                 ObjectTreeRowKind.Group => _owner.BuildGroupRow(row),
+                ObjectTreeRowKind.Water => _owner.BuildWaterRow(row),
                 _ => _owner.BuildObjectRow(row),
             };
             RefreshSelection();
