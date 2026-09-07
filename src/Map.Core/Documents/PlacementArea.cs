@@ -11,6 +11,22 @@ public readonly record struct PlacementAreaSlot(int X, int Y, int Ordinal)
 }
 public sealed record PlacementAreaMember(PlacementAreaSlot Slot, ObjectId ObjectId);
 
+public enum PlacementAreaPattern { Masses, Ridge, Groups }
+
+/// <summary>Normalized alpha bounds, measured once from the shared source and frozen with the area.</summary>
+public readonly record struct StampContentBounds(double Left, double Top, double Right, double Bottom)
+{
+    public static StampContentBounds Full => new(0, 0, 1, 1);
+    [JsonIgnore] public double Width => Right - Left;
+    [JsonIgnore] public double Height => Bottom - Top;
+    public void Validate()
+    {
+        if (!double.IsFinite(Left) || !double.IsFinite(Top) || !double.IsFinite(Right) || !double.IsFinite(Bottom)
+            || Left < 0 || Top < 0 || Right > 1 || Bottom > 1 || Width <= 0 || Height <= 0)
+            throw new ArgumentException("Некорректные границы видимой части изображения области.");
+    }
+}
+
 /// <summary>Immutable fill inputs and a persistent cell ownership map. Pixels remain shared assets.</summary>
 public sealed record PlacementArea
 {
@@ -24,6 +40,12 @@ public sealed record PlacementArea
     public ImmutableHashSet<PlacementAreaSlot> Exclusions { get; init; } = [];
     // Missing in early Stage 18 files: preserve their materialized scatter until explicit repack.
     public int LayoutVersion { get; init; }
+    public VectorPoint CompositionOrigin { get; init; }
+    public double CompositionLength { get; init; }
+    public double CompositionAngleDegrees { get; init; }
+    public PlacementAreaPattern Pattern { get; init; }
+    public ImmutableDictionary<string, StampContentBounds> ContentBounds { get; init; } = ImmutableDictionary<string, StampContentBounds>.Empty;
+    public double SizeVariationPercent { get; init; } = 30;
     public ImmutableHashSet<PlacementAreaSlot> OccupiedSlots { get; init; } = [];
     public int MemberCount { get; init; }
     public double Density { get; init; } = 5;
@@ -42,10 +64,21 @@ public sealed record PlacementArea
         new PlacementPath { Id = Id, Name = Name, Nodes = Nodes, Variants = Variants, Request = Request,
             RotationDegrees = RotationDegrees, ScalePercent = ScalePercent, Sublayer = Sublayer,
             Opacity = Opacity, Style = Style }.Validate();
-        if (Cells is null || Exclusions is null || OccupiedSlots is null || LayoutVersion is < 0 or > 2
+        if (Cells is null || Exclusions is null || OccupiedSlots is null || ContentBounds is null || LayoutVersion is < 0 or > 3
+            || !double.IsFinite(CompositionOrigin.X) || !double.IsFinite(CompositionOrigin.Y)
+            || !double.IsFinite(CompositionLength) || CompositionLength < 0 || CompositionLength > CanvasDimensionPolicy.Maximum * 2d
+            || !double.IsFinite(CompositionAngleDegrees) || CompositionAngleDegrees is < -180 or > 180 || !Enum.IsDefined(Pattern)
+            || !double.IsFinite(SizeVariationPercent) || SizeVariationPercent is < 0 or > 50
+            || Math.Abs(CompositionOrigin.X) > CanvasDimensionPolicy.Maximum || Math.Abs(CompositionOrigin.Y) > CanvasDimensionPolicy.Maximum
             || OccupiedSlots.Any(s => s.Ordinal < 0) || MemberCount < 0 || !double.IsFinite(Density)
             || Density < 0 || Density >= int.MaxValue || Exclusions.Any(s => s.Ordinal < 0))
             throw new ArgumentException("Плотность области должна быть неотрицательной; связи и исключения — корректными.");
+        if (LayoutVersion >= 3 && Density > 100) throw new ArgumentException("Плотность естественной расстановки — от 0 до 100%.");
+        foreach (var (sha, bounds) in ContentBounds)
+        {
+            if (!Variants.Any(v => v.Sha256 == sha)) throw new ArgumentException("Границы принадлежат неизвестному изображению области.");
+            bounds.Validate();
+        }
         PlacementAreaGeometry.Validate(Nodes);
     }
 
@@ -67,7 +100,7 @@ public sealed record PlacementArea
         var spans = PlacementAreaGeometry.Coverage(Nodes);
         var spacingEstimate = PlacementAreaSampler.EstimateBytes(this, spans);
         if (spacingEstimate > long.MaxValue) throw new ArgumentException("Наполнение области превышает доступные ресурсы.");
-        var estimated = (decimal)spans.Sum(s => (long)s.MaxX - s.MinX + 1) * (decimal)Math.Ceiling(Density) * 96 + spacingEstimate;
+        var estimated = (decimal)spans.Sum(s => (long)s.MaxX - s.MinX + 1) * PlacementAreaPlanner.CandidatePasses(this) * 96 + spacingEstimate;
         if (estimated > long.MaxValue) throw new ArgumentException("Наполнение области превышает доступные ресурсы.");
         if (!Map.Core.Resources.WorkingMemoryBudget.Shared.TryReserve((long)estimated, out var reservation, out var reason))
             throw new InvalidOperationException(reason);

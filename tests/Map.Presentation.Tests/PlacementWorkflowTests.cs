@@ -126,13 +126,14 @@ public sealed class PlacementWorkflowTests : IDisposable
         Assert.Equal(1, editor.Session.UndoDepth);
         foreach (var item in preview) Assert.Equal(item, Map.Core.Editing.DocumentEditor.FindObject(editor.Session.Document, item.Id));
         var created = editor.Session.Document; var area = editor.SelectedEditableArea!;
-        Assert.Equal(2, area.LayoutVersion);
+        Assert.Equal(3, area.LayoutVersion);
         router.Press(CanvasPointerButton.Left, 800, 100); router.Move(700, 150);
         Assert.Same(created, editor.Session.Document); editor.HandleEscape(); router.Release(700, 150);
         Assert.Same(created, editor.Session.Document);
         router.Press(CanvasPointerButton.Left, 800, 100); router.Move(700, 150); router.Release(700, 150);
         Assert.Equal(2, editor.Session.UndoDepth); Assert.Equal(700, editor.SelectedEditableArea!.Nodes[1].X);
-        editor.SetEditableAreaDensity(5); Assert.Equal(5, editor.SelectedEditableArea.Density);
+        Assert.Equal(area.CompositionOrigin, editor.SelectedEditableArea.CompositionOrigin);
+        editor.SetEditableAreaDensity(80); Assert.Equal(80, editor.SelectedEditableArea.Density);
         var member = editor.SelectedEditableArea.Members.First();
         editor.Session.SelectedObjectId = member.ObjectId; editor.DetachSelectedAreaObject();
         var detached = Map.Core.Editing.DocumentEditor.FindObject(editor.Session.Document, member.ObjectId);
@@ -150,6 +151,44 @@ public sealed class PlacementWorkflowTests : IDisposable
         Assert.Equal(70, editor.EditableAreas.Single(a => a.Id == area.Id).ScalePercent);
         var count = Objects(editor).Length; editor.StampPlacementMode = StampPlacementMode.One; Point(100, 100);
         Assert.Null(editor.SelectedEditableArea); Assert.Equal(count + 1, Objects(editor).Length);
+    }
+
+    [Fact]
+    public void Stage18_natural_density_and_sizes_are_independent_of_scatter_and_reroll_is_one_undoable_action()
+    {
+        var editor = Editor(out _); editor.StampDensity = 7; editor.SetStampScalePercent(25);
+        editor.StartEditableArea(); editor.SetEditableAreaDensity(65); editor.SetEditableAreaSizeVariation(20);
+        editor.AddEditableAreaNode(100, 100); editor.AddEditableAreaNode(900, 100);
+        editor.AddEditableAreaNode(900, 700); editor.AddEditableAreaNode(100, 700);
+        editor.AdjustStampDensity(1, true); Assert.Equal(75, editor.EditableAreaDensity);
+        editor.SetEditableAreaDensity(65); Assert.Equal(7, editor.StampDensity);
+        var original = editor.Session.Document; var firstSeed = editor.DisplayedEditableArea!.Seed;
+        editor.TryAnotherEditableAreaArrangement();
+        Assert.NotEqual(firstSeed, editor.DisplayedEditableArea!.Seed);
+        Assert.Same(original, editor.Session.Document); Assert.Equal(0, editor.Session.UndoDepth);
+        var preview = editor.PlacementPreviewObjects.ToArray();
+        Assert.True(editor.FinishEditableArea(), editor.StatusDetail);
+        var area = editor.SelectedEditableArea!; var placed = editor.Session.Document;
+        Assert.Equal(65, area.Density); Assert.Equal(20, area.SizeVariationPercent); Assert.Equal(7, editor.StampDensity);
+        Assert.All(preview, item => Assert.Equal(item, DocumentEditor.FindObject(placed, item.Id)));
+        editor.TryAnotherEditableAreaArrangement(); var changed = editor.Session.Document;
+        Assert.Equal(2, editor.Session.UndoDepth); Assert.NotEqual(area.Seed, editor.SelectedEditableArea!.Seed);
+        editor.Undo(); Assert.Same(placed, editor.Session.Document); editor.Redo(); Assert.Same(changed, editor.Session.Document);
+        editor.SetEditableAreaSizeVariation(0);
+        Assert.All(editor.SelectedEditableArea!.Members, m => Assert.Equal(area.Request.BaseWidth,
+            DocumentEditor.FindObject(editor.Session.Document, m.ObjectId)!.Width));
+        editor.SetStampScalePercent(28); editor.ApplyStampSettingsToEditableArea();
+        Assert.Equal(65, editor.SelectedEditableArea!.Density);
+        var beforeInvalid = editor.Session.Document; editor.SetEditableAreaDensity(101);
+        Assert.Same(beforeInvalid, editor.Session.Document);
+        // Loading/selecting an old area keeps its existing objects until the explicit upgrade.
+        var layerId = editor.ActiveLayer!.Id; area = editor.SelectedEditableArea;
+        editor.Session.Execute(new PlacementAreaCommand(layerId, area.Id, area with { LayoutVersion = 2, Density = 5 }, "legacy fixture"));
+        var legacy = editor.Session.Document; editor.SelectEditableArea(area.Id);
+        Assert.Same(legacy, editor.Session.Document); Assert.False(editor.UsesNaturalAreaLayout);
+        editor.ArrangeEditableAreaNaturally(); Assert.Equal(3, editor.SelectedEditableArea!.LayoutVersion);
+        Assert.Equal(65, editor.SelectedEditableArea.Density);
+        editor.Undo(); Assert.Same(legacy, editor.Session.Document);
     }
 
     [Fact]

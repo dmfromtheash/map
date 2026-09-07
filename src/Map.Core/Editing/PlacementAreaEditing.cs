@@ -17,14 +17,27 @@ public static class PlacementAreaPlanner
         Span<byte> hash = stackalloc byte[32]; SHA256.HashData(input, hash);
         return new(new Guid(hash[..16]));
     }
-    private static ulong Mix(ulong x)
+    internal static ulong Mix(ulong x)
     {
         x += 0x9e3779b97f4a7c15UL; x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9UL;
         x = (x ^ (x >> 27)) * 0x94d049bb133111ebUL; return x ^ (x >> 31);
     }
-    private static ulong Random(PlacementArea area, PlacementAreaSlot slot) =>
+    internal static ulong Random(PlacementArea area, PlacementAreaSlot slot) =>
         Mix(unchecked((ulong)slot.Cell) ^ Mix((uint)slot.Ordinal) ^ Mix((uint)area.Seed));
-    private static double Unit(ulong n) => (n >> 11) * (1d / (1UL << 53));
+    internal static double Unit(ulong n) => (n >> 11) * (1d / (1UL << 53));
+    public static VectorPoint CompositionOrigin(IReadOnlyList<PlacementPathNode> nodes)
+    { PlacementAreaGeometry.Validate(nodes); return PlacementAreaComposition.Origin(nodes); }
+    public static PlacementArea InitializeComposition(PlacementArea area)
+    {
+        var origin = CompositionOrigin(area.Nodes);
+        var xx = 0d; var yy = 0d; var xy = 0d;
+        foreach (var n in area.Nodes)
+        { var x = n.X - origin.X; var y = n.Y - origin.Y; xx += x * x; yy += y * y; xy += x * y; }
+        var angle = .5 * Math.Atan2(2 * xy, xx - yy);
+        var projections = area.Nodes.Select(n => (n.X - origin.X) * Math.Cos(angle) + (n.Y - origin.Y) * Math.Sin(angle));
+        return area with { CompositionOrigin = origin, CompositionAngleDegrees = angle * 180 / Math.PI,
+            CompositionLength = projections.Max() - projections.Min() };
+    }
     internal static ulong Priority(PlacementArea area, PlacementAreaSlot slot) => Mix(Random(area, slot) ^ 0x7ad614e2UL);
     public static VectorPoint Anchor(PlacementArea area, PlacementAreaSlot slot)
     {
@@ -36,11 +49,14 @@ public static class PlacementAreaPlanner
             slot.Y * PlacementAreaGeometry.CellSize + Offset(Mix(bits)));
     }
     public static bool Includes(PlacementArea area, PlacementAreaSlot slot) => new PlacementAreaSampler(area).Includes(slot);
+    public static int CandidatePasses(PlacementArea area) => area.Density == 0 ? 0
+        : area.LayoutVersion >= 3 ? PlacementAreaComposition.Passes(area) : (int)Math.Ceiling(area.Density);
     internal static bool IncludesGeometry(PlacementArea area, PlacementAreaSlot slot)
     {
-        if (slot.Ordinal < 0 || slot.Ordinal >= Math.Ceiling(area.Density) || area.Exclusions.Contains(slot)
+        if (slot.Ordinal < 0 || slot.Ordinal >= CandidatePasses(area) || area.Exclusions.Contains(slot)
             || area.OccupiedSlots.Contains(slot)) return false;
-        if (slot.Ordinal >= Math.Floor(area.Density) && Unit(Mix(Random(area, slot) ^ 0x74814UL)) >= area.Density % 1) return false;
+        if (area.LayoutVersion < 3 && slot.Ordinal >= Math.Floor(area.Density)
+            && Unit(Mix(Random(area, slot) ^ 0x74814UL)) >= area.Density % 1) return false;
         var point = Anchor(area, slot);
         return PlacementAreaGeometry.Contains(area.Nodes, point.X, point.Y);
     }
@@ -48,10 +64,13 @@ public static class PlacementAreaPlanner
     {
         return new PlacementAreaSampler(area).Slots(x, y);
     }
-    public static SceneObject Item(PlacementArea area, PlacementAreaSlot slot)
+    public static SceneObject Item(PlacementArea area, PlacementAreaSlot slot) => Item(area, slot,
+        area.LayoutVersion >= 3 ? PlacementAreaComposition.At(area, slot) : null);
+    internal static SceneObject Item(PlacementArea area, PlacementAreaSlot slot, PlacementAreaComposition.Sample? composition)
     {
         var point = Anchor(area, slot);
         var request = area.Request with { CenterX = point.X, CenterY = point.Y, AreaRadius = 0,
+            BaseWidth = area.Request.BaseWidth * (composition?.Scale ?? 1),
             Density = 0, Seed = unchecked((int)Mix(Random(area, slot) ^ 0x1559UL)) };
         var item = StampPlacement.PlanArea(request, area.Variants)[0];
         var style = area.Style with { AssetSha256 = item.Sha256, MaskAssetSha256 = item.MaskSha256,
@@ -66,12 +85,38 @@ public static class PlacementAreaPlanner
     public static bool SameSettings(PlacementArea a, PlacementArea b) => a.Density == b.Density && a.Seed == b.Seed
         && a.Request == b.Request && a.Style == b.Style && a.RotationDegrees == b.RotationDegrees
         && a.ScalePercent == b.ScalePercent && a.Sublayer == b.Sublayer && a.Opacity == b.Opacity
-        && a.Name == b.Name && a.LayoutVersion == b.LayoutVersion && a.Variants.SequenceEqual(b.Variants);
+        && a.Name == b.Name && a.LayoutVersion == b.LayoutVersion && a.CompositionOrigin == b.CompositionOrigin
+        && a.SizeVariationPercent == b.SizeVariationPercent && a.Pattern == b.Pattern
+        && a.CompositionLength == b.CompositionLength && a.CompositionAngleDegrees == b.CompositionAngleDegrees
+        && a.ContentBounds.Count == b.ContentBounds.Count && a.ContentBounds.All(kv => b.ContentBounds.TryGetValue(kv.Key, out var value) && value == kv.Value)
+        && a.Variants.SequenceEqual(b.Variants);
 
     public static IReadOnlyList<PlacementAreaGeometry.CellSpan> Affected(PlacementArea? before, PlacementArea after) =>
         before is null ? PlacementAreaGeometry.Coverage(after.Nodes)
         : SameSettings(before, after) ? PlacementAreaGeometry.ChangedCoverage(before.Nodes, after.Nodes)
         : PlacementAreaGeometry.Merge(PlacementAreaGeometry.Coverage(before.Nodes).Concat(PlacementAreaGeometry.Coverage(after.Nodes)));
+
+    /// <summary>Exact prediction without retaining the full object list. Caller can cancel stale UI work.</summary>
+    public static long Count(PlacementArea area, PlacementAreaObstacles? obstacles = null,
+        WorkingMemoryBudget? memory = null, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested(); area.Validate();
+        var spans = PlacementAreaGeometry.Coverage(area.Nodes);
+        var estimate = PlacementAreaSampler.EstimateBytes(area, spans);
+        if (estimate > long.MaxValue) throw new InvalidOperationException("Для подсчёта заполнения недостаточно доступной памяти.");
+        if (!(memory ?? WorkingMemoryBudget.Shared).TryReserve((long)estimate, out var reservation, out var reason))
+            throw new InvalidOperationException(reason);
+        using var held = reservation;
+        var sampler = new PlacementAreaSampler(area, cancellationToken); long count = 0;
+        foreach (var span in spans)
+            for (var x = span.MinX; x <= span.MaxX; x++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                foreach (var slot in sampler.Slots(x, span.Y))
+                    if (obstacles is null || !obstacles.Blocks(sampler.Item(slot))) count++;
+            }
+        return count;
+    }
 
     /// <summary>At most 64 concrete stamps, sampled across the changed cells, with bounded candidate work.</summary>
     public static IReadOnlyList<SceneObject> Preview(PlacementArea area, PlacementArea? before = null, int maximum = 64,
@@ -79,7 +124,7 @@ public static class PlacementAreaPlanner
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maximum, 1);
         area.Validate();
-        var spans = Affected(before, area); var slots = (long)Math.Ceiling(area.Density);
+        var spans = Affected(before, area); var slots = (long)CandidatePasses(area);
         var estimate = PlacementAreaSampler.EstimateBytes(area, spans);
         if (estimate > long.MaxValue) throw new InvalidOperationException("Для предпросмотра такой плотности недостаточно доступной памяти.");
         if (!(memory ?? WorkingMemoryBudget.Shared).TryReserve((long)estimate, out var reservation, out var reason))
@@ -167,13 +212,14 @@ public sealed class PlacementAreaCommand : IEditCommand
             var cellCount = spans.Sum(s => (long)s.MaxX - s.MinX + 1);
             var spacingEstimate = PlacementAreaSampler.EstimateBytes(next, spans);
             if (spacingEstimate > long.MaxValue) throw new InvalidOperationException("Область с такой плотностью не помещается в доступную память.");
-            var estimatedBytes = (decimal)cellCount * (128 + (decimal)Math.Ceiling(Math.Max(next.Density, old?.Density ?? 0)) * 1664) + spacingEstimate;
+            var estimatedBytes = (decimal)cellCount * (128 + (decimal)Math.Max(PlacementAreaPlanner.CandidatePasses(next),
+                old is null ? 0 : PlacementAreaPlanner.CandidatePasses(old)) * 1664) + spacingEstimate;
             if (estimatedBytes > long.MaxValue) throw new InvalidOperationException("Область с такой плотностью не помещается в доступную память.");
             var estimate = (long)estimatedBytes;
             if (!WorkingMemoryBudget.Shared.TryReserve(estimate, out var reservation, out var reason)) throw new InvalidOperationException(reason);
             using var held = reservation;
             var sampler = new PlacementAreaSampler(next);
-            var obstacles = next.LayoutVersion == 0 ? null : new PlacementAreaObstacles(document, layer.Id, _id, next.Sublayer, next.LayoutVersion);
+            var obstacles = next.LayoutVersion == 0 ? null : new PlacementAreaObstacles(document, layer.Id, _id, next.Sublayer, next.LayoutVersion, next);
             var occupied = next.OccupiedSlots.ToBuilder();
             var cells = (old?.Cells ?? ImmutableDictionary<long, ImmutableArray<PlacementAreaMember>>.Empty).ToBuilder();
             var memberCount = old?.MemberCount ?? 0;

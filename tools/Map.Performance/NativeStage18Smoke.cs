@@ -46,6 +46,11 @@ internal sealed class NativeStage18Report
     public int? OverlappingPairs { get; set; }
     public int? LegacyFillCount { get; set; }
     public int? CompactFillCount { get; set; }
+    public int? NaturalFillCount { get; set; }
+    public int? TreeFillCount { get; set; }
+    public Dictionary<int, int> DensityCounts { get; } = [];
+    public string? TreeScreenshot { get; set; }
+    public string? SparseScreenshot { get; set; }
     public int? ManuallyEditedSelectionCount { get; set; }
     public string? Screenshot { get; set; }
     public string? PlacementDraftScreenshot { get; set; }
@@ -85,6 +90,7 @@ public sealed class Stage18Application : Application
     private readonly NativeStage18Report _report = new();
     private string _workspace = "";
     private AssetCatalog _catalog = null!;
+    private string? _densitySetId, _treeSetId;
     private Window _window = null!;
     private EditorView _view = null!;
     private EditorViewModel _editor = null!;
@@ -108,10 +114,13 @@ public sealed class Stage18Application : Application
         Environment.SetEnvironmentVariable("MAP_UI_TEST_PROFILE_ROOT", Path.Combine(_workspace, "profile"));
         _catalog = new AssetCatalog(Path.Combine(_workspace, "catalog"));
         if (densityAsset is not null)
-            _catalog.ImportSet([densityAsset], "Горы", new(), DateTimeOffset.UnixEpoch);
+            _densitySetId = _catalog.ImportSet([densityAsset], "Горы", new(), DateTimeOffset.UnixEpoch).Id;
         else if (_report.MeasurementRequired)
             _catalog.ImportSet([Path.Combine(Environment.CurrentDirectory, "src/Map.Assets/StarterAssets/sample-tree.png")],
                 "Деревья", new(), DateTimeOffset.UnixEpoch);
+        if (Environment.GetEnvironmentVariable("MAP_STAGE18_NATURAL_CHECK") == "1")
+            _treeSetId = _catalog.ImportSet([Path.Combine(Environment.CurrentDirectory, "src/Map.Assets/StarterAssets/sample-tree.png")],
+                "Деревья", new(), DateTimeOffset.UnixEpoch).Id;
         _window = new Window { Width = 1440, Height = 900, Title = "Map — Stage 18", ShowActivated = false,
             ShowInTaskbar = false, WindowStartupLocation = WindowStartupLocation.Manual, Position = new PixelPoint(-32000, -32000) };
         var document = new MapDocument(DocumentId.New(), densityAsset is null ? "Редактируемая область леса" : "Редактируемая область гор", DateTimeOffset.UnixEpoch,
@@ -126,7 +135,9 @@ public sealed class Stage18Application : Application
         {
             try
             {
-                if (densityAsset is not null && Environment.GetEnvironmentVariable("MAP_STAGE18_SELECTION_CHECK") == "1")
+                if (densityAsset is not null && Environment.GetEnvironmentVariable("MAP_STAGE18_NATURAL_CHECK") == "1")
+                    await ExecuteNaturalCorrection(densityAsset);
+                else if (densityAsset is not null && Environment.GetEnvironmentVariable("MAP_STAGE18_SELECTION_CHECK") == "1")
                     await ExecuteSelectionCorrection(densityAsset);
                 else if (densityAsset is not null) await ExecuteDensityCorrection(densityAsset);
                 else if (_report.MeasurementRequired) await Execute(); else await ExecuteUiCorrection();
@@ -177,7 +188,7 @@ public sealed class Stage18Application : Application
             && _editor.Session.UndoDepth == 0 && preview.Length is > 0 and <= 64;
         await Click("FinishEditableAreaButton");
         Require(_editor.SelectedEditableArea is { Nodes.Length: 5 }, "Area controls did not create a concave polygon: " + _editor.StatusDetail);
-        _report.Checks["new-area-has-spacing"] = _editor.SelectedEditableArea!.LayoutVersion == 1;
+        _report.Checks["new-area-has-spacing"] = _editor.SelectedEditableArea!.LayoutVersion == 3;
         _report.Checks["native-create-preview-equals-commit"] = preview.All(o => o == DocumentEditor.FindObject(_editor.Session.Document, o.Id));
         var created = _editor.Session.Document;
         Drag(750, 100, 820, 100); await Settle();
@@ -263,21 +274,19 @@ public sealed class Stage18Application : Application
         var sourceHash = SHA256.HashData(File.ReadAllBytes(fixture));
         var original = _editor.EditableAreas.Single();
         _editor.SelectEditableArea(original.Id); await Settle();
-        if (original.LayoutVersion == 0)
+        if (original.LayoutVersion < 3)
         {
             var old = _editor.Session.Document;
-            await Click("RemoveEditableAreaOverlapsButton");
-            _report.Checks["legacy-area-upgrades-without-moving-survivors"] = _editor.SelectedEditableArea!.LayoutVersion == 1
-                && _editor.SelectedEditableArea.Members.All(m => ReferenceEquals(DocumentEditor.FindObject(old, m.ObjectId),
-                    DocumentEditor.FindObject(_editor.Session.Document, m.ObjectId)));
-            var packed = _editor.Session.Document; _editor.Undo(); _editor.Redo();
-            _report.Checks["spacing-upgrade-undo-redo"] = ReferenceEquals(packed, _editor.Session.Document);
+            await Click("NaturalEditableAreaButton");
+            _report.Checks["legacy-area-upgrades-explicitly"] = _editor.SelectedEditableArea!.LayoutVersion == 3 && CountOverlaps() == 0;
+            var packed = _editor.Session.Document; _editor.Undo(); var exact = ReferenceEquals(old, _editor.Session.Document); _editor.Redo();
+            _report.Checks["spacing-upgrade-undo-redo"] = exact && ReferenceEquals(packed, _editor.Session.Document);
         }
         await Number("EditableAreaDensityBox", "5");
         var units = Find<TextBlock>("EditableAreaDensityUnits"); units.BringIntoView(); await Settle();
         _report.Checks["density-caption-wraps"] = units.IsEffectivelyVisible && units.Bounds.Width > 0
             && units.TextWrapping == Avalonia.Media.TextWrapping.Wrap
-            && units.Text!.StartsWith("До указанного числа объектов", StringComparison.Ordinal);
+            && units.Text!.StartsWith("От 0 до 100%", StringComparison.Ordinal);
         _report.Checks["density-changes-without-catalog"] = _editor.SelectedEditableArea!.Density == 5 && _catalog.Sets.Count == 0;
         var scale = Find<Slider>("FutureStampScaleSlider"); scale.BringIntoView(); await Settle(); scale.Value = 65;
         await Click("StampCurrentAssetButton");
@@ -327,43 +336,102 @@ public sealed class Stage18Application : Application
         else _report.Checks["save-ui-completes"] = _editor.SaveState == SaveState.Saved && !_editor.Session.IsDirty;
         _report.Checks["fixture-read-only"] = sourceHash.SequenceEqual(SHA256.HashData(File.ReadAllBytes(fixture)));
     }
+    private async Task ExecuteNaturalCorrection(string assetPath)
+    {
+        var treePath = Path.Combine(Environment.CurrentDirectory, "src/Map.Assets/StarterAssets/sample-tree.png");
+        var treeHash = SHA256.HashData(File.ReadAllBytes(treePath));
+        await Settle();
+        _editor.ChooseGalleryVariant(_treeSetId!, null); await Settle();
+        await Click("StampModeFillArea"); Find<Slider>("FutureStampScaleSlider").Value = 25; await Settle();
+        await Click("StartEditableAreaButton"); await Number("EditableAreaDensityBox", "100");
+        Point(90, 100); Point(950, 100); Point(950, 670); Point(590, 580); Point(330, 690); Point(90, 560);
+        await Number("EditableAreaSeedBox", "18");
+        var draft = _editor.DisplayedEditableArea!; var untouched = _editor.Session.Document;
+        await Click("AnotherEditableAreaArrangementButton");
+        _report.Checks["draft-another-pattern-keeps-document-and-history"] = _editor.DisplayedEditableArea!.Seed != draft.Seed
+            && ReferenceEquals(untouched, _editor.Session.Document) && _editor.Session.UndoDepth == 0;
+        await Number("EditableAreaSeedBox", "18"); var preview = _editor.PlacementPreviewObjects.ToArray();
+        await Click("FinishEditableAreaButton"); await Frame();
+        var area = _editor.SelectedEditableArea!;
+        _report.TreeFillCount = area.MemberCount;
+        _report.Checks["trees-use-general-natural-composition"] = area.LayoutVersion == 3 && area.MemberCount > 10 && CountOverlaps() == 0;
+        _report.Checks["tree-preview-is-exact"] = preview.Length > 0 && preview.All(o => o == DocumentEditor.FindObject(_editor.Session.Document, o.Id));
+        _report.TreeScreenshot = Path.ChangeExtension(Options.OutputPath, ".trees.png"); SaveVisual(_report.TreeScreenshot);
+        _report.Checks["starter-tree-read-only"] = treeHash.SequenceEqual(SHA256.HashData(File.ReadAllBytes(treePath)));
+        _view.Canvas.DisposeRenderCaches();
+        OpenEditor(new MapDocument(DocumentId.New(), "Естественная расстановка гор", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(1024, 768, "px", "#FFF2EAD5"),
+            [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFF2EAD5"),
+                new ObjectLayer(LayerId.New(), "Горы", true, false, 1, [])]));
+        await ExecuteSelectionCorrection(assetPath);
+    }
+
     private async Task ExecuteSelectionCorrection(string assetPath)
     {
         var sourceHash = SHA256.HashData(File.ReadAllBytes(assetPath));
-        await Settle(); _editor.ChooseGalleryVariant(_catalog.Sets[0].Id, null); await Settle();
+        await Settle(); _editor.ChooseGalleryVariant(_densitySetId!, null); await Settle();
         await Click("StampModeFillArea");
         Find<Slider>("FutureStampScaleSlider").Value = 32; await Settle();
         await Click("StartEditableAreaButton");
-        await Number("EditableAreaDensityBox", "20");
+        await Number("EditableAreaDensityBox", "100");
         Point(90, 110); Point(950, 110); Point(520, 650);
         await Number("EditableAreaSeedBox", "-184929685");
         var draft = _editor.DisplayedEditableArea!;
         var preview = _editor.PlacementPreviewObjects.ToArray();
-        var legacy = draft with { LayoutVersion = 1 };
+        var legacy = draft with { LayoutVersion = 2, Density = 20 };
         var legacySampler = new PlacementAreaSampler(legacy);
         _report.LegacyFillCount = PlacementAreaGeometry.Coverage(legacy.Nodes).Sum(span =>
             Enumerable.Range(span.MinX, span.MaxX - span.MinX + 1).Sum(x => legacySampler.Slots(x, span.Y).Count()));
         await Click("FinishEditableAreaButton"); await Frame();
         var area = _editor.SelectedEditableArea!;
         var layerId = DocumentEditor.FindLayerOf(_editor.Session.Document, area.Members.First().ObjectId)!.Id;
-        _report.CompactFillCount = area.MemberCount;
-        _report.Checks["compact-fill-uses-more-free-positions"] = area.LayoutVersion == 2 && area.MemberCount > _report.LegacyFillCount;
-        _report.Checks["compact-preview-matches-placed-stamps"] = preview.Length > 0
+        _report.NaturalFillCount = area.MemberCount;
+        _report.Checks["new-fill-uses-natural-groups"] = area.LayoutVersion == 3 && area.MemberCount > 3;
+        _report.Checks["natural-preview-matches-placed-stamps"] = preview.Length > 0
             && preview.All(o => o == DocumentEditor.FindObject(_editor.Session.Document, o.Id));
         _report.OverlappingPairs = CountOverlaps();
-        _report.Checks["compact-fill-has-no-overlaps"] = _report.OverlappingPairs == 0;
+        _report.Checks["natural-fill-has-no-overlaps"] = _report.OverlappingPairs == 0;
         _report.PlacementDraftScreenshot = Path.ChangeExtension(Options.OutputPath, ".packing.png"); SaveVisual(_report.PlacementDraftScreenshot);
 
         // Exercise the explicit upgrade control too; source files are never rewritten on open.
-        _editor.Session.Execute(new PlacementAreaCommand(layerId, area.Id, area with { LayoutVersion = 1 }, "Legacy fixture"));
+        _editor.Session.Execute(new PlacementAreaCommand(layerId, area.Id, area with { LayoutVersion = 2, Density = 20 }, "Legacy fixture"));
         _editor.SelectEditableArea(area.Id); await Settle();
         var beforeUpgrade = _editor.Session.Document;
-        await Click("RemoveEditableAreaOverlapsButton");
+        await Click("NaturalEditableAreaButton");
         var upgraded = _editor.Session.Document;
-        _report.Checks["legacy-fill-upgrades-through-visible-button"] = _editor.SelectedEditableArea is { LayoutVersion: 2 }
-            && _editor.SelectedEditableArea.MemberCount == _report.CompactFillCount;
+        _report.Checks["legacy-fill-upgrades-through-visible-button"] = _editor.SelectedEditableArea is { LayoutVersion: 3 }
+            && _editor.SelectedEditableArea.MemberCount == _report.NaturalFillCount;
         _editor.Undo(); var undoUpgrade = ReferenceEquals(beforeUpgrade, _editor.Session.Document); _editor.Redo();
         _report.Checks["repack-undo-redo-exact"] = undoUpgrade && ReferenceEquals(upgraded, _editor.Session.Document);
+
+        await Number("EditableAreaDensityBox", "0"); var previousDensity = _editor.Session.Document;
+        var densityWorks = _editor.SelectedEditableArea!.MemberCount == 0; var stable = true;
+        foreach (var value in new[] { 20, 50, 80, 100 })
+        {
+            var previousArea = _editor.SelectedEditableArea!;
+            await Number("EditableAreaDensityBox", value.ToString()); await Frame();
+            var current = _editor.SelectedEditableArea!; _report.DensityCounts[value] = current.MemberCount;
+            densityWorks &= current.MemberCount > previousArea.MemberCount && CountOverlaps() == 0;
+            stable &= current.CompositionOrigin == area.CompositionOrigin && previousArea.Members.All(m =>
+                ReferenceEquals(DocumentEditor.FindObject(previousDensity, m.ObjectId), DocumentEditor.FindObject(_editor.Session.Document, m.ObjectId)));
+            previousDensity = _editor.Session.Document;
+            if (value == 20) { _report.SparseScreenshot = Path.ChangeExtension(Options.OutputPath, ".density20.png"); SaveVisual(_report.SparseScreenshot); }
+        }
+        _report.Checks["density-adds-objects-at-20-50-80-100-percent"] = densityWorks;
+        _report.Checks["density-keeps-existing-positions-heights-and-origin"] = stable;
+        var beforeAnother = _editor.Session.Document; var anotherDepth = _editor.Session.UndoDepth;
+        var oldSeed = _editor.SelectedEditableArea!.Seed;
+        await Click("AnotherEditableAreaArrangementButton"); var another = _editor.Session.Document;
+        _report.Checks["another-pattern-is-one-real-edit"] = _editor.SelectedEditableArea!.Seed != oldSeed && _editor.Session.UndoDepth == anotherDepth + 1;
+        _editor.Undo(); var anotherUndo = ReferenceEquals(beforeAnother, _editor.Session.Document); _editor.Redo();
+        _report.Checks["another-pattern-undo-redo-exact"] = anotherUndo && ReferenceEquals(another, _editor.Session.Document);
+        _editor.Undo(); await Settle();
+        var varied = _editor.Session.Document;
+        await Number("EditableAreaSizeVariationBox", "0");
+        _report.Checks["size-variation-can-be-disabled"] = _editor.SelectedEditableArea!.Members.All(m =>
+            Math.Abs(DocumentEditor.FindObject(_editor.Session.Document, m.ObjectId)!.Width - area.Request.BaseWidth) < .00001);
+        _editor.Undo(); _report.Checks["size-variation-undo-exact"] = ReferenceEquals(varied, _editor.Session.Document);
+        await Settle();
 
         area = _editor.SelectedEditableArea!;
         var items = area.Members.Select(m => DocumentEditor.FindObject(_editor.Session.Document, m.ObjectId)!).ToArray();
@@ -404,7 +472,7 @@ public sealed class Stage18Application : Application
         _editor.Undo(); var undoDelete = ReferenceEquals(beforeDelete, _editor.Session.Document); _editor.Redo();
         _report.Checks["selection-delete-undo-redo-exact"] = undoDelete && ReferenceEquals(deleted, _editor.Session.Document);
         _editor.SelectEditableArea(area.Id); _editor.ActiveTool = EditorTool.Stamp; await Settle();
-        await Number("EditableAreaDensityBox", "24");
+        await Number("EditableAreaDensityBox", "80");
         var final = _editor.Session.Document;
         _report.Checks["manual-deletions-survive-density-change"] = selection.All(o => DocumentEditor.FindObject(final, o.Id) is null);
         await Click("SaveButton"); await Until(() => _editor.SaveState != SaveState.Saving);
@@ -412,8 +480,9 @@ public sealed class Stage18Application : Application
         _report.SavedProject = Path.Combine(_workspace, "editable-area.mapproj");
         var opened = MapProjectStore.Open(_report.SavedProject).Document;
         var savedArea = ((ObjectLayer)opened.FindLayer(layerId)!).PlacementAreas.Single();
-        _report.Checks["compact-fill-and-manual-exclusions-reopen"] = _editor.SaveState == SaveState.Saved
-            && savedArea.LayoutVersion == 2 && deletedSlots.All(savedArea.Exclusions.Contains)
+        _report.Checks["natural-fill-and-manual-exclusions-reopen"] = _editor.SaveState == SaveState.Saved
+            && savedArea.LayoutVersion == 3 && savedArea.CompositionOrigin == area.CompositionOrigin
+            && savedArea.SizeVariationPercent == area.SizeVariationPercent && deletedSlots.All(savedArea.Exclusions.Contains)
             && selection.All(o => DocumentEditor.FindObject(opened, o.Id) is null);
         _report.Checks["owner-asset-read-only"] = sourceHash.SequenceEqual(SHA256.HashData(File.ReadAllBytes(assetPath)));
     }

@@ -8,6 +8,84 @@ public sealed class Stage18EditableAreaTests
     [Theory]
     [InlineData(18)]
     [InlineData(-184929685)]
+    [InlineData(718)]
+    public void Natural_groups_keep_spacing_scale_variation_and_exact_survivors_after_density_and_edge_edits(int seed)
+    {
+        var session = Session(out var layer);
+        var area = Area() with { LayoutVersion = 3, Seed = seed, Density = 20, CompositionOrigin = new(860, 840),
+            Variants = [new(Sha, 128, 128), new(Other, 128, 96)],
+            Request = new() { BaseWidth = 112, RandomizeVariant = true, RandomAngleStep = StampRandomAngleStep.Degrees15 },
+            Style = new(Sha) { Blur = 1, ShadowOpacity = .3, ShadowOffsetX = 4, ShadowOffsetY = 5 } };
+        var preview = PlacementAreaPlanner.Preview(area);
+        session.Execute(new PlacementAreaCommand(layer.Id, area.Id, area, "natural"));
+        Assert.Null(session.LastResourceError); Get(session.Document).ValidateMembers();
+        var before = session.Document;
+        var objects = ((ObjectLayer)before.FindLayer(layer.Id)!).Objects;
+        Assert.True(objects.Count > 3, $"Sparse 20% fixture needs several neighbours, got {objects.Count}");
+        Assert.False(HasOverlap(objects));
+        Assert.All(objects, item => Assert.InRange(item.Width / area.Request.BaseWidth, .7, 1.3));
+        Assert.True(objects.Max(o => o.Width) - objects.Min(o => o.Width) > area.Request.BaseWidth * .12);
+        Assert.All(preview, item => Assert.Equal(item, DocumentEditor.FindObject(before, item.Id)));
+        session.Execute(new PlacementAreaCommand(layer.Id, area.Id, Get(before) with { Density = 60 }, "density"));
+        Assert.Null(session.LastResourceError); Get(session.Document).ValidateMembers();
+        Assert.All(objects, item => Assert.Same(item, DocumentEditor.FindObject(session.Document, item.Id)));
+        var dense = session.Document;
+        session.Execute(new PlacementAreaCommand(layer.Id, area.Id, Get(dense) with {
+            Nodes = area.Nodes.SetItem(1, area.Nodes[1] with { X = 1780 }) }, "edge"));
+        Assert.Null(session.LastResourceError); Get(session.Document).ValidateMembers();
+        Assert.Equal(area.CompositionOrigin, Get(session.Document).CompositionOrigin);
+        Assert.All(Get(session.Document).Members.Where(m => DocumentEditor.FindObject(dense, m.ObjectId) is not null),
+            m => Assert.Same(DocumentEditor.FindObject(dense, m.ObjectId), DocumentEditor.FindObject(session.Document, m.ObjectId)));
+        Assert.False(HasOverlap(((ObjectLayer)session.Document.FindLayer(layer.Id)!).Objects));
+        var edited = session.Document; session.Undo(); Assert.Same(dense, session.Document);
+        session.Redo(); Assert.Same(edited, session.Document);
+        var member = Get(edited).Members.First();
+        session.Execute(new ManualAreaSelectionCommand(new DeleteObjectsCommand(edited, [member.ObjectId]), [member.ObjectId]));
+        session.Execute(new PlacementAreaCommand(layer.Id, area.Id, Get(session.Document) with { Seed = seed + 99 }, "another"));
+        Assert.Null(session.LastResourceError); Get(session.Document).ValidateMembers();
+        Assert.Null(DocumentEditor.FindObject(session.Document, member.ObjectId));
+        Assert.False(HasOverlap(((ObjectLayer)session.Document.FindLayer(layer.Id)!).Objects));
+        Assert.True(PlacementAreaSampler.EstimateBytes(area, PlacementAreaGeometry.Coverage(area.Nodes)) < 32 * 1024 * 1024);
+    }
+
+    [Fact]
+    public void Natural_density_grows_the_final_population_through_its_full_range_and_size_variation_can_be_disabled()
+    {
+        var session = Session(out var layer);
+        var area = Area() with { LayoutVersion = 3, Density = 0, CompositionOrigin = new(900, 900),
+            Variants = [new(Sha, 128, 128)], Request = new() { BaseWidth = 110 } };
+        session.Execute(new PlacementAreaCommand(layer.Id, area.Id, area, "empty"));
+        Assert.Empty(Get(session.Document).Members);
+        var previous = session.Document;
+        foreach (var density in new[] { 20, 50, 80, 100 })
+        {
+            session.Execute(new PlacementAreaCommand(layer.Id, area.Id, Get(previous) with { Density = density }, "density"));
+            Assert.Null(session.LastResourceError);
+            Assert.True(Get(session.Document).MemberCount > Get(previous).MemberCount,
+                $"Density {density}% must add objects: {Get(previous).MemberCount} -> {Get(session.Document).MemberCount}");
+            Assert.All(Get(previous).Members, m => Assert.Same(DocumentEditor.FindObject(previous, m.ObjectId),
+                DocumentEditor.FindObject(session.Document, m.ObjectId)));
+            previous = session.Document;
+        }
+        session.Execute(new PlacementAreaCommand(layer.Id, area.Id, Get(previous) with { SizeVariationPercent = 0 }, "equal sizes"));
+        Assert.Null(session.LastResourceError); Get(session.Document).ValidateMembers();
+        var items = ((ObjectLayer)session.Document.FindLayer(layer.Id)!).Objects;
+        Assert.All(items, o => Assert.Equal(110, o.Width)); Assert.False(HasOverlap(items));
+    }
+
+    [Fact]
+    public void Composition_origin_is_inside_a_concave_polygon_even_when_its_centroid_is_outside()
+    {
+        PlacementPathNode[] nodes = [new(Guid.NewGuid(), 0, 0), new(Guid.NewGuid(), 900, 0), new(Guid.NewGuid(), 900, 100),
+            new(Guid.NewGuid(), 100, 100), new(Guid.NewGuid(), 100, 900), new(Guid.NewGuid(), 0, 900)];
+        var origin = PlacementAreaPlanner.CompositionOrigin(nodes);
+        Assert.True(double.IsFinite(origin.X) && double.IsFinite(origin.Y));
+        Assert.True(PlacementAreaGeometry.Contains(nodes, origin.X, origin.Y));
+    }
+
+    [Theory]
+    [InlineData(18)]
+    [InlineData(-184929685)]
     public void Compact_layout_fills_more_real_spaces_without_overlap_or_moving_survivors(int seed)
     {
         var legacy = Area() with { Density = 12, Seed = seed, Request = new() { BaseWidth = 110 },
@@ -87,10 +165,12 @@ public sealed class Stage18EditableAreaTests
         var placed = session.Document; session.Undo(); Assert.Same(original, session.Document);
         session.Redo(); Assert.Same(placed, session.Document);
     }
-    [Fact]
-    public void Evicting_candidate_cache_keeps_seeded_slot_decisions_and_items_exact()
+    [Theory]
+    [InlineData(1)]
+    [InlineData(3)]
+    public void Evicting_candidate_cache_keeps_seeded_slot_decisions_and_items_exact(int layoutVersion)
     {
-        var area = Area() with { Density = 20 };
+        var area = Area() with { Density = 20, LayoutVersion = layoutVersion };
         var sampler = new PlacementAreaSampler(area);
         var slots = Enumerable.Range(0, 20).SelectMany(n => Enumerable.Range(0, 12).Select(x => new PlacementAreaSlot(x, 2, n))).ToArray();
         var included = slots.Select(sampler.Includes).ToArray(); var items = slots.Select(sampler.Item).ToArray();

@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using Map.Core.Documents;
 using Map.Core.Editing;
+using Map.Presentation.Services;
 
 namespace Map.Presentation.ViewModels;
 
@@ -19,6 +20,42 @@ public sealed partial class EditorViewModel
     private bool _areaPreviewInvalid;
     private PlacementArea? _newAreaTemplate;
     private bool _areaStartRequested;
+    private double _naturalAreaDensity = 70, _naturalAreaSizeVariation = 30;
+    private PlacementAreaPattern _naturalAreaPattern;
+    private readonly Dictionary<string, StampContentBounds> _areaContentBoundsCache = [];
+    private CancellationTokenSource? _areaCountCancellation;
+    private Task _areaCountTask = Task.CompletedTask;
+    private long? _areaPredictedCount;
+    private string? _areaCountError;
+    public Task PendingEditableAreaCount => _areaCountTask;
+    public long? PlannedEditableAreaCount => _areaCreating ? _areaPredictedCount : SelectedEditableArea?.MemberCount;
+    public string EditableAreaResult
+    {
+        get
+        {
+            var count = PlannedEditableAreaCount is { } n ? $"Объектов: {n:N0}"
+                : _areaCreating && _areaDraft is { Nodes.Length: >= 3 } ? _areaCountError ?? "Подсчёт объектов…" : "Обозначьте границу области";
+            if (!UsesNaturalAreaLayout) return count;
+            var density = EditableAreaDensity;
+            var pattern = density == 0 ? "пустая область" : EditableAreaPattern switch
+            {
+                PlacementAreaPattern.Ridge => density <= 40 ? "основные вершины" : density <= 75 ? "гряда и ответвления" : "гряда с предгорьями",
+                PlacementAreaPattern.Groups => density <= 40 ? "небольшие группы" : density <= 75 ? "группы с просветами" : "плотные отдельные группы",
+                _ => density <= 40 ? "ядра массивов" : density <= 75 ? "массивы с просветами" : "массивы с неровной опушкой",
+            };
+            return $"{count} · {pattern}\nРазмеры: {(EditableAreaSizeVariation == 0 ? "одинаковые" : $"до ±{EditableAreaSizeVariation:0}%")}";
+        }
+    }
+    public bool UsesNaturalAreaLayout => DisplayedEditableArea is not { LayoutVersion: < 3 };
+    public double EditableAreaDensity => DisplayedEditableArea?.Density ?? _naturalAreaDensity;
+    public double EditableAreaSizeVariation => DisplayedEditableArea?.SizeVariationPercent ?? _naturalAreaSizeVariation;
+    public PlacementAreaPattern EditableAreaPattern => DisplayedEditableArea?.Pattern ?? _naturalAreaPattern;
+    public string EditableAreaPatternHint => EditableAreaPattern switch
+    {
+        PlacementAreaPattern.Ridge => "Извилистая гряда: крупные вершины вдоль хребта, меньшие по бокам и на ответвлениях.",
+        PlacementAreaPattern.Groups => "Отдельные плотные группы: крупные объекты внутри, мелкие по краям, свободные проходы между группами.",
+        _ => "Связные массивы: плотная середина, неровный край и просветы. Подходит для лесов и больших скоплений.",
+    };
     public IReadOnlyList<SceneObject>? EditableAreaPreviewOverrides => _areaDragging ? _areaOverrides : null;
 
     public IReadOnlyList<PlacementArea> EditableAreas => Session.Document.Layers.OfType<ObjectLayer>()
@@ -95,8 +132,9 @@ public sealed partial class EditorViewModel
             {
                 _areaDraft = template with { Id = Guid.NewGuid(), Name = NextAreaName(template.Name.Split(" · ", 2).Last()),
                     Nodes = [], Cells = ImmutableDictionary<long, ImmutableArray<PlacementAreaMember>>.Empty,
-                    MemberCount = 0, Exclusions = [], OccupiedSlots = [], LayoutVersion = 2,
-                    Density = settings.Density, Seed = NextGestureSeed(),
+                    MemberCount = 0, Exclusions = [], OccupiedSlots = [], LayoutVersion = 3,
+                    Density = _naturalAreaDensity, SizeVariationPercent = _naturalAreaSizeVariation, Seed = NextGestureSeed(),
+                    Pattern = _naturalAreaPattern, ContentBounds = ReadAreaContentBounds(template.Variants, template.ContentBounds),
                     ScalePercent = settings.ScalePercent, RotationDegrees = settings.RotationDegrees,
                     Sublayer = settings.Sublayer, Opacity = settings.ObjectOpacity, Style = settings.Style ?? template.Style,
                     Request = template.Request with { BaseWidth = template.Request.BaseWidth * settings.ScalePercent / template.ScalePercent,
@@ -117,9 +155,10 @@ public sealed partial class EditorViewModel
                 _areaAssets = references; _areaLayer = ActiveObjectLayer()?.Id;
                 _areaDraft = new PlacementArea
                 {
-                    Name = NextAreaName(SelectedSet?.Name ?? "штампы"), AssetSetId = _selectedSetId, LayoutVersion = 2,
+                    Name = NextAreaName(SelectedSet?.Name ?? "штампы"), AssetSetId = _selectedSetId, LayoutVersion = 3,
                     VariantId = CurrentVariant?.Id, Variants = [.. sources], Request = request,
-                    Seed = NextGestureSeed(), Density = settings.Density,
+                    Seed = NextGestureSeed(), Density = _naturalAreaDensity, SizeVariationPercent = _naturalAreaSizeVariation,
+                    Pattern = _naturalAreaPattern, ContentBounds = ReadAreaContentBounds(sources),
                     RotationDegrees = settings.RotationDegrees, ScalePercent = settings.ScalePercent,
                     Sublayer = settings.Sublayer, Opacity = settings.ObjectOpacity,
                     Style = settings.Style ?? new StampStyle(sources[0].Sha256),
@@ -167,8 +206,11 @@ public sealed partial class EditorViewModel
     private void SyncEditableAreaSettings()
     {
         if (SelectedEditableArea is not { } path) return;
+        if (path.LayoutVersion >= 3)
+        { _naturalAreaDensity = path.Density; _naturalAreaSizeVariation = path.SizeVariationPercent; _naturalAreaPattern = path.Pattern; }
         _stampToolSettings = _stampToolSettings with { Mode = StampPlacementMode.FillArea,
-            Density = path.Density, ScalePercent = path.ScalePercent, RotationDegrees = path.RotationDegrees, Sublayer = path.Sublayer,
+            Density = path.LayoutVersion >= 3 ? _stampToolSettings.Density : path.Density,
+            ScalePercent = path.ScalePercent, RotationDegrees = path.RotationDegrees, Sublayer = path.Sublayer,
             ObjectOpacity = path.Opacity, Style = path.Style, RandomizeVariant = path.Request.RandomizeVariant,
             RandomAngleStep = path.Request.RandomAngleStep, RandomFlip = path.Request.RandomFlip };
         RaiseStampToolState();
@@ -245,12 +287,36 @@ public sealed partial class EditorViewModel
     }
     public void SetEditableAreaDensity(double value)
     {
-        if (!double.IsFinite(value) || value < 0 || value >= int.MaxValue) { StatusDetail = "Плотность — целое число от 0 объектов на 10 000 ед²."; return; }
-        _stampToolSettings = _stampToolSettings with { Density = Math.Round(value) };
+        if (!double.IsFinite(value) || value < 0 || value >= int.MaxValue || UsesNaturalAreaLayout && value > 100)
+        { StatusDetail = UsesNaturalAreaLayout ? "Плотность области — от 0 до 100%." : "Плотность — целое число от 0 объектов на 10 000 ед²."; return; }
+        if (UsesNaturalAreaLayout) _naturalAreaDensity = Math.Round(value);
+        else _stampToolSettings = _stampToolSettings with { Density = Math.Round(value) };
         if (_areaCreating && _areaDraft is { } draft)
         { _areaDraft = draft with { Density = Math.Round(value) }; UpdateAreaPreview(); RaiseAreaState(); }
         else if (SelectedEditableArea is { } p) CommitAreaChange(p with { Density = Math.Round(value) }, "Изменить плотность области");
         RaiseStampToolState();
+    }
+    public void SetEditableAreaSizeVariation(double value)
+    {
+        if (!UsesNaturalAreaLayout) return;
+        if (!double.IsFinite(value) || value is < 0 or > 50)
+        { StatusDetail = "Разброс размера — от 0 до 50%. Ноль оставляет одинаковый размер."; return; }
+        _naturalAreaSizeVariation = Math.Round(value);
+        if (_areaCreating && _areaDraft is { } draft)
+        { _areaDraft = draft with { SizeVariationPercent = _naturalAreaSizeVariation }; UpdateAreaPreview(); RaiseAreaState(); }
+        else if (SelectedEditableArea is { } p)
+            CommitAreaChange(p with { SizeVariationPercent = _naturalAreaSizeVariation }, "Изменить разнообразие размеров области");
+        else RaiseAreaState();
+    }
+    public void SetEditableAreaPattern(PlacementAreaPattern value)
+    {
+        if (!UsesNaturalAreaLayout || !Enum.IsDefined(value)) return;
+        _naturalAreaPattern = value;
+        if (_areaCreating && _areaDraft is { } draft)
+        { _areaDraft = draft with { Pattern = value }; UpdateAreaPreview(); RaiseAreaState(); }
+        else if (SelectedEditableArea is { } area)
+            CommitAreaChange(area with { Pattern = value }, "Изменить рисунок области");
+        else RaiseAreaState();
     }
     public void SetEditableAreaSeed(double value)
     {
@@ -264,16 +330,24 @@ public sealed partial class EditorViewModel
         if (SelectedEditableArea is not { } p) return;
         var settings = _stampToolSettings;
         var width = p.Request.BaseWidth * settings.ScalePercent / p.ScalePercent;
-        CommitAreaChange(p with { Density = settings.Density, ScalePercent = settings.ScalePercent, RotationDegrees = settings.RotationDegrees,
+        CommitAreaChange(p with { Density = p.LayoutVersion >= 3 ? p.Density : settings.Density,
+            ScalePercent = settings.ScalePercent, RotationDegrees = settings.RotationDegrees,
             Sublayer = settings.Sublayer, Opacity = settings.ObjectOpacity, Style = settings.Style ?? p.Style,
             Request = p.Request with { BaseWidth = width, RandomizeVariant = settings.RandomizeVariant,
                 RandomAngleStep = settings.RandomAngleStep, RandomFlip = settings.RandomFlip } }, "Изменить параметры области");
     }
-    public void RemoveEditableAreaOverlaps()
+    public void ArrangeEditableAreaNaturally()
     {
-        if (SelectedEditableArea is not { LayoutVersion: < 2 } p) return;
-        if (CommitAreaChange(p with { LayoutVersion = 2, OccupiedSlots = [] }, "Уплотнить заполнение области"))
-            StatusDetail = "Заполнение уплотнено без наложений. Отделённые объекты сохранены; действие можно отменить.";
+        if (SelectedEditableArea is not { LayoutVersion: < 3 } p) return;
+        if (CommitAreaChange(PlacementAreaPlanner.InitializeComposition(p with { LayoutVersion = 3, OccupiedSlots = [], Density = _naturalAreaDensity,
+            SizeVariationPercent = _naturalAreaSizeVariation, Pattern = _naturalAreaPattern,
+            ContentBounds = ReadAreaContentBounds(p.Variants, p.ContentBounds) }), "Расположить область естественно"))
+            StatusDetail = "Объекты собраны в естественные группы без наложений. Отделённые объекты сохранены; действие можно отменить.";
+    }
+    public void TryAnotherEditableAreaArrangement()
+    {
+        if (DisplayedEditableArea is not { } p) return;
+        SetEditableAreaSeed(unchecked(p.Seed + 104729));
     }
     public void DetachSelectedAreaObject()
     {
@@ -318,6 +392,7 @@ public sealed partial class EditorViewModel
     }
     public bool CancelEditableAreaGesture()
     {
+        CancelAreaCount();
         var active = _areaDraft is not null || _areaInsert || _areaPickObject || _areaStartRequested;
         _areaDraft = _areaOriginal = null; _areaAssets = []; _areaPreviewObjects = []; _areaOverrides = [];
         _areaPreviewError = null; _areaPreviewInvalid = false; _areaStartRequested = false;
@@ -328,15 +403,27 @@ public sealed partial class EditorViewModel
     }
     private void UpdateAreaPreview()
     {
+        CancelAreaCount();
         if (_areaDraft is not { Nodes.Length: >= 3 } path)
         { _areaPreviewObjects = []; _areaOverrides = []; _areaPreviewError = null; _areaPreviewInvalid = false; return; }
         try
         {
+            if (_areaCreating && path.LayoutVersion >= 3)
+                _areaDraft = path = PlacementAreaPlanner.InitializeComposition(path);
             var obstacles = path.LayoutVersion > 0 && _areaLayer is { } layerId
-                ? new PlacementAreaObstacles(Session.Document, layerId, path.Id, path.Sublayer, path.LayoutVersion) : null;
+                ? new PlacementAreaObstacles(Session.Document, layerId, path.Id, path.Sublayer, path.LayoutVersion, path) : null;
             var samples = PlacementAreaPlanner.Preview(path, _areaDragging ? _areaOriginal : null, obstacles: obstacles, memory: _workingMemory);
             _areaPreviewError = null; _areaPreviewInvalid = false;
-            if (!_areaDragging) { _areaPreviewObjects = samples; return; }
+            if (!_areaDragging)
+            {
+                _areaPreviewObjects = samples;
+                if (_areaCreating)
+                {
+                    var cancellation = _areaCountCancellation = new CancellationTokenSource();
+                    _areaCountTask = CountAreaDraftAsync(_areaCountTask, path, obstacles, cancellation);
+                }
+                return;
+            }
             var index = DocumentRevisionIndex.For(Session.Document);
             _areaOverrides = samples.Where(o => index.FindObject(o.Id) is not null).ToArray();
             _areaPreviewObjects = samples.Where(o => index.FindObject(o.Id) is null).ToArray();
@@ -359,11 +446,42 @@ public sealed partial class EditorViewModel
         }
     }
 
+    private void CancelAreaCount()
+    {
+        _areaCountCancellation?.Cancel(); _areaCountCancellation = null;
+        _areaPredictedCount = null; _areaCountError = null;
+    }
+    private async Task CountAreaDraftAsync(Task previous, PlacementArea draft, PlacementAreaObstacles? obstacles,
+        CancellationTokenSource cancellation)
+    {
+        var token = cancellation.Token;
+        try
+        {
+            // Debounce input and serialize counters. Moving vertices never queues simultaneous
+            // full-map counters or publishes the result of an obsolete seed/shape/density.
+            await Task.Delay(150, token); await previous; token.ThrowIfCancellationRequested();
+            var count = await Task.Run(() => PlacementAreaPlanner.Count(draft, obstacles, _workingMemory, token), token);
+            if (!token.IsCancellationRequested && ReferenceEquals(_areaDraft, draft))
+            { _areaPredictedCount = count; Raise(nameof(PlannedEditableAreaCount)); Raise(nameof(EditableAreaResult)); }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException or OverflowException)
+        {
+            if (!token.IsCancellationRequested && ReferenceEquals(_areaDraft, draft))
+            { _areaCountError = "Подсчёт недоступен"; Raise(nameof(EditableAreaResult)); }
+        }
+        finally
+        {
+            if (ReferenceEquals(_areaCountCancellation, cancellation)) _areaCountCancellation = null;
+            cancellation.Dispose();
+        }
+    }
+
     private void RefreshAreaDraftSettings()
     {
         if (!_areaCreating || _areaDraft is not { } draft) return;
         var settings = _stampToolSettings;
-        _areaDraft = draft with { Density = settings.Density, ScalePercent = settings.ScalePercent,
+        _areaDraft = draft with { Density = draft.LayoutVersion >= 3 ? draft.Density : settings.Density, ScalePercent = settings.ScalePercent,
             RotationDegrees = settings.RotationDegrees, Sublayer = settings.Sublayer, Opacity = settings.ObjectOpacity,
             Style = settings.Style ?? draft.Style,
             Request = draft.Request with { BaseWidth = draft.Request.BaseWidth * settings.ScalePercent / draft.ScalePercent,
@@ -375,7 +493,29 @@ public sealed partial class EditorViewModel
         Raise(nameof(EditableAreas)); Raise(nameof(SelectedEditableArea)); Raise(nameof(EditableAreaSummary));
         Raise(nameof(IsCreatingEditableArea)); Raise(nameof(CanDetachAreaObject));
         Raise(nameof(CanPlaceEditableArea)); Raise(nameof(EditableAreaPlacementHint));
+        Raise(nameof(UsesNaturalAreaLayout)); Raise(nameof(EditableAreaDensity)); Raise(nameof(EditableAreaSizeVariation));
+        Raise(nameof(PlannedEditableAreaCount)); Raise(nameof(EditableAreaResult));
+        Raise(nameof(EditableAreaPattern)); Raise(nameof(EditableAreaPatternHint));
         InvalidateScene(EditorChangeReason.CanvasInvalidation);
+    }
+    private ImmutableDictionary<string, StampContentBounds> ReadAreaContentBounds(IEnumerable<StampVariantSource> variants,
+        ImmutableDictionary<string, StampContentBounds>? saved = null)
+    {
+        var result = (saved ?? ImmutableDictionary<string, StampContentBounds>.Empty).ToBuilder();
+        foreach (var source in variants)
+        {
+            if (result.ContainsKey(source.Sha256)) continue;
+            if (!_areaContentBoundsCache.TryGetValue(source.Sha256, out var bounds))
+            {
+                if (StampImages?.TryGetImage(source.Sha256) is not { } image) continue;
+                bounds = StampContentMeasurer.Measure(image);
+                // This small scalar cache is not the image cache and never grows with stamp count.
+                if (_areaContentBoundsCache.Count >= 256) _areaContentBoundsCache.Clear();
+                _areaContentBoundsCache[source.Sha256] = bounds;
+            }
+            result[source.Sha256] = bounds;
+        }
+        return result.ToImmutable();
     }
     private string NextAreaName(string assetName)
     {

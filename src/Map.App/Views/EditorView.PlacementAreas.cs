@@ -14,8 +14,13 @@ public sealed partial class EditorView
     private Control? _fillAreaPanel;
     private Control? _fillAreaPlacementActions;
     private TextBlock? _fillAreaPlacementHint;
+    private TextBlock? _fillAreaResult;
     private Button? _fillAreaFinish, _fillAreaDetach;
-    private Button? _fillAreaRemoveOverlaps;
+    private Button? _fillAreaNatural, _fillAreaAnother;
+    private TextBlock? _fillAreaArrangementHint;
+    private TextBlock? _fillAreaDensityUnits;
+    private Control? _fillAreaSizeVariation;
+    private ComboBox? _fillAreaPattern;
     private bool _syncingAreas;
     private Avalonia.Media.Imaging.Bitmap? _fillAreaThumbnail;
     private string? _fillAreaThumbnailHash;
@@ -30,17 +35,29 @@ public sealed partial class EditorView
         };
         _fillAreaSummary = new TextBlock { Name = "EditableAreaSummary", TextWrapping = TextWrapping.Wrap };
         _fillAreaDetach = Ui.TextButton("DetachAreaObjectButton", "Отделить выбранный объект", _editor.DetachSelectedAreaObject, "compact");
-        _fillAreaRemoveOverlaps = Ui.TextButton("RemoveEditableAreaOverlapsButton", "Уплотнить заполнение", _editor.RemoveEditableAreaOverlaps, "compact");
+        _fillAreaNatural = Ui.TextButton("NaturalEditableAreaButton", "Расположить естественно", _editor.ArrangeEditableAreaNaturally, "compact");
+        _fillAreaAnother = Ui.TextButton("AnotherEditableAreaArrangementButton", "Другой рисунок", _editor.TryAnotherEditableAreaArrangement, "compact");
+        _fillAreaArrangementHint = new TextBlock { Name = "EditableAreaArrangementHint", TextWrapping = TextWrapping.Wrap }.Classed("faint", "role-caption");
+        _fillAreaDensityUnits = new TextBlock { Name = "EditableAreaDensityUnits", TextWrapping = TextWrapping.Wrap }.Classed("faint", "role-caption");
+        _fillAreaSizeVariation = AppearanceNumberBox("EditableAreaSizeVariationBox", "Размеры, ±%", null,
+            () => _editor.EditableAreaSizeVariation, _editor.SetEditableAreaSizeVariation);
+        _fillAreaPattern = new ComboBox { Name = "EditableAreaPatternBox", HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch,
+            ItemsSource = new[] { new PatternChoice(PlacementAreaPattern.Masses, "Массивы"),
+                new PatternChoice(PlacementAreaPattern.Ridge, "Гряда"), new PatternChoice(PlacementAreaPattern.Groups, "Группы") } };
+        _fillAreaPattern.SelectionChanged += (_, _) =>
+        {
+            if (!_syncingAreas && _fillAreaPattern.SelectedItem is PatternChoice choice) _editor.SetEditableAreaPattern(choice.Pattern);
+        };
         _fillAreaPanel = new StackPanel
         {
             Spacing = 6, Children =
             {
                 _fillAreaPicker, _fillAreaSummary,
                 Ui.TextButton("StartEditableAreaButton", "Новая редактируемая область", _editor.StartEditableArea, "compact"),
-                _fillAreaRemoveOverlaps,
-                new TextBlock { Text = "Клики — вершины · кнопка «Разместить» внизу — заполнить · Esc — отменить. Центр изображения внутри границы; края не обрезаются. Предпросмотр выборочный, до 64 штампов в изменяемой части.", TextWrapping = TextWrapping.Wrap }.Classed("faint", "role-caption"),
-                AppearanceNumberBox("EditableAreaDensityBox", "Плотность", null, () => _editor.DisplayedEditableArea?.Density ?? _editor.StampDensity, _editor.SetEditableAreaDensity),
-                new TextBlock { Name = "EditableAreaDensityUnits", Text = "До указанного числа объектов на 10 000 квадратных единиц карты. Размер изображений и промежутки ограничивают заполнение.", TextWrapping = TextWrapping.Wrap }.Classed("faint", "role-caption"),
+                _fillAreaNatural, _fillAreaPattern, _fillAreaArrangementHint,
+                AppearanceNumberBox("EditableAreaDensityBox", "Плотность", null, () => _editor.EditableAreaDensity, _editor.SetEditableAreaDensity),
+                _fillAreaDensityUnits, _fillAreaSizeVariation, _fillAreaAnother,
+                new TextBlock { Text = "Центры внутри границы; края не обрезаются. В предпросмотре до 64 объектов; полный результат — после «Разместить».", TextWrapping = TextWrapping.Wrap }.Classed("faint", "role-caption"),
                 AppearanceNumberBox("EditableAreaSeedBox", "Seed", null, () => _editor.DisplayedEditableArea?.Seed, _editor.SetEditableAreaSeed),
                 Ui.TextButton("InsertEditableAreaNodeButton", "Добавить вершину на ребре", _editor.InsertEditableAreaNode, "compact"),
                 Ui.TextButton("DeleteEditableAreaNodeButton", "Удалить вершину (в черновике — последнюю)", _editor.DeleteEditableAreaNode, "compact"),
@@ -60,11 +77,12 @@ public sealed partial class EditorView
         _fillAreaFinish.HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch;
         _fillAreaPlacementHint = new TextBlock { Name = "EditableAreaPlacementHint", TextWrapping = TextWrapping.Wrap }
             .Classed("faint", "role-caption");
+        _fillAreaResult = new TextBlock { Name = "EditableAreaResult", TextWrapping = TextWrapping.Wrap, FontWeight = FontWeight.SemiBold };
         // The commit action stays outside the scrolling settings, including before the first vertex.
         _fillAreaPlacementActions = new Border
         {
             Name = "EditableAreaPlacementActions", IsVisible = false, Padding = new Avalonia.Thickness(12, 8, 12, 12),
-            Child = new StackPanel { Spacing = 8, Children = { _fillAreaPlacementHint, _fillAreaFinish } },
+            Child = new StackPanel { Spacing = 8, Children = { _fillAreaResult, _fillAreaPlacementHint, _fillAreaFinish } },
         };
         return _fillAreaPlacementActions;
     }
@@ -87,8 +105,19 @@ public sealed partial class EditorView
                     && _editor.StampPlacementMode == Map.Presentation.ViewModels.StampPlacementMode.FillArea;
                 _fillAreaFinish!.IsEnabled = _editor.CanPlaceEditableArea;
                 _fillAreaPlacementHint!.Text = _editor.EditableAreaPlacementHint;
+                _fillAreaResult!.Text = _editor.EditableAreaResult;
             }
-            _fillAreaRemoveOverlaps!.IsVisible = _editor.SelectedEditableArea is { LayoutVersion: < 2 };
+            _fillAreaNatural!.IsVisible = _editor.SelectedEditableArea is { LayoutVersion: < 3 };
+            _fillAreaAnother!.IsEnabled = _editor.DisplayedEditableArea is not null;
+            _fillAreaArrangementHint!.Text = _editor.DisplayedEditableArea is { LayoutVersion: < 3 }
+                ? "Сохранена прежняя расстановка. «Расположить естественно» соберёт объекты в группы; Ctrl+Z вернёт прежний вид."
+                : _editor.EditableAreaPatternHint;
+            _fillAreaPattern!.IsVisible = _editor.UsesNaturalAreaLayout;
+            _fillAreaPattern.SelectedItem = _fillAreaPattern.Items.OfType<PatternChoice>().FirstOrDefault(p => p.Pattern == _editor.EditableAreaPattern);
+            _fillAreaDensityUnits!.Text = _editor.UsesNaturalAreaLayout
+                ? "0–100% · добавляет объекты от середины к краям. Число объектов — внизу."
+                : "До указанного числа объектов на 10 000 квадратных единиц карты. Размер изображений и промежутки ограничивают заполнение.";
+            _fillAreaSizeVariation!.IsVisible = _editor.UsesNaturalAreaLayout;
             _fillAreaDetach!.IsEnabled = _editor.CanDetachAreaObject;
             _fillAreaPanel.IsVisible = _editor.StampPlacementMode == Map.Presentation.ViewModels.StampPlacementMode.FillArea
                 || choices.Length > 0 || _editor.IsCreatingEditableArea;
@@ -98,6 +127,8 @@ public sealed partial class EditorView
     }
 
     private sealed record AreaChoice(Guid Id, string Name)
+    { public override string ToString() => Name; }
+    private sealed record PatternChoice(PlacementAreaPattern Pattern, string Name)
     { public override string ToString() => Name; }
 
     private void SyncAreaAssetCard()
@@ -121,6 +152,7 @@ public sealed partial class EditorView
         _stampCurrentAssetButton.IsEnabled = true;
         Avalonia.Automation.AutomationProperties.SetName(_stampCurrentAssetButton, "Начать новую область: " + area.Name);
         ToolTip.SetTip(_stampCurrentAssetButton, "Новая область теми же сохранёнными изображениями");
-        _stampToolAreaText.Text = $"Область · плотность {area.Density:0} на 10 000 ед²";
+        _stampToolAreaText.Text = area.LayoutVersion >= 3 ? $"Область · плотность {area.Density:0}%"
+            : $"Область · плотность {area.Density:0} на 10 000 ед²";
     }
 }

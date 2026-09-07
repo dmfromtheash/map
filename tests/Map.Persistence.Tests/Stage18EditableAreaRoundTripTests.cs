@@ -13,6 +13,7 @@ public sealed class Stage18EditableAreaRoundTripTests
     [Theory]
     [InlineData(1)]
     [InlineData(2)]
+    [InlineData(3)]
     public void V6_roundtrip_retains_area_exclusions_frozen_images_and_v5_path_versions_without_changing_original(int layoutVersion)
     {
         using var workspace = new TempWorkspace();
@@ -30,7 +31,8 @@ public sealed class Stage18EditableAreaRoundTripTests
         var loaded = MapProjectStore.Open(source).Document;
         var oldVersion = new MapCheckpoint(CheckpointId.New(), "Path version", DateTimeOffset.UnixEpoch, MapCheckpointSnapshot.Capture(loaded), bytes);
         session = new EditingSession(loaded.WithCheckpoints([oldVersion]));
-        var area = new PlacementArea { AssetSetId = "frozen", VariantId = "tree", Density = 5, Seed = 18, LayoutVersion = layoutVersion,
+        var area = new PlacementArea { AssetSetId = "frozen", VariantId = "tree", Density = layoutVersion >= 3 ? 65 : 5, Seed = 18, LayoutVersion = layoutVersion,
+            CompositionOrigin = new(315, 228),
             Nodes = [new(Guid.NewGuid(), 50, 50), new(Guid.NewGuid(), 600, 50), new(Guid.NewGuid(), 600, 400), new(Guid.NewGuid(), 50, 400)],
             Variants = [new(sha, 32, 32)], Style = new(sha) { Blur = 1, ShadowOpacity = .2 },
             Request = new() { BaseWidth = 32, RandomFlip = true, RandomAngleStep = StampRandomAngleStep.Degrees60 } };
@@ -54,6 +56,8 @@ public sealed class Stage18EditableAreaRoundTripTests
         Assert.Equal(area.Request, actual.Request); Assert.Equal(area.Style, actual.Style);
         Assert.Equal(area.AssetSetId, actual.AssetSetId); Assert.Equal(area.VariantId, actual.VariantId);
         Assert.Equal(layoutVersion, actual.LayoutVersion); Assert.True(area.OccupiedSlots.SetEquals(actual.OccupiedSlots));
+        Assert.Equal(area.CompositionOrigin, actual.CompositionOrigin);
+        Assert.Equal(area.SizeVariationPercent, actual.SizeVariationPercent);
         Assert.Contains(member.Slot, actual.Exclusions); Assert.Equal(2, reopened.Checkpoints.Count);
         Assert.Empty(reopened.Checkpoints[0].Snapshot.Layers.OfType<ObjectLayer>().First().PlacementAreas);
         Assert.Single(reopened.Checkpoints[1].Snapshot.Layers.OfType<ObjectLayer>().First().PlacementAreas);

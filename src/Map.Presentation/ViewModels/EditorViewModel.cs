@@ -2602,6 +2602,8 @@ public sealed partial class EditorViewModel : ViewModelBase
             {
                 StampPlacementMode.One => area + " · один ассет",
                 StampPlacementMode.Series => area + " · серия по одному ассету",
+                StampPlacementMode.FillArea => UsesNaturalAreaLayout ? $"Область · плотность {EditableAreaDensity:0}%"
+                    : $"Область · плотность {EditableAreaDensity:0} на 10 000 ед²",
                 _ => $"{area} · плотность {StampDensity:0} на 10 000 ед² · {PlannedStampCount} шт.",
             };
         }
@@ -2625,6 +2627,12 @@ public sealed partial class EditorViewModel : ViewModelBase
             return;
         }
 
+        if (ActiveTool == EditorTool.Stamp && StampPlacementMode == StampPlacementMode.FillArea)
+        {
+            SetEditableAreaDensity(Math.Clamp(EditableAreaDensity + Math.Sign(direction) * (largerStep ? 10 : 1),
+                0, UsesNaturalAreaLayout ? 100 : int.MaxValue - 1));
+            return;
+        }
         StampDensity += Math.Sign(direction) * (largerStep ? 10 : 1);
         StatusDetail = StampAreaSummary;
     }
