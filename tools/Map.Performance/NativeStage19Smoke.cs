@@ -427,9 +427,11 @@ public sealed class Stage19Application : Application
     /// <summary>Map's own fill materials, chosen through the real panels and rendered for review.</summary>
     private async Task Materials()
     {
-        // Ground: activate the land layer and pick a material from its panel swatches.
+        // Ground: the land tool is where the appearance of land lives now, next to where the
+        // appearance of water lives. Pick the layer, open the tool, choose the material.
         var land = _editor.Session.Document.Layers.OfType<LandLayer>().First();
         _editor.SelectLayer(land.Id); await Settle();
+        await Click("LandToolButton"); await Settle();
         await Click("LandTexturePicker_parchment");
         var ground = _editor.Session.Document.Layers.OfType<LandLayer>().First().EdgeStyle;
         _report.Checks["ground-material-from-the-panel"] =
@@ -546,7 +548,23 @@ public sealed class Stage19Application : Application
     private void Drag(double x, double y, double toX, double toY)
     { var a = _editor.Session.Viewport.WorldToScreen(x, y); var b = _editor.Session.Viewport.WorldToScreen(toX, toY);
         _view.Canvas.PressMoveReleaseForSmoke(a.X, a.Y, b.X, b.Y); }
-    private T Find<T>(string name) where T : Control => _view.GetVisualDescendants().OfType<T>().First(c => c.Name == name);
+    /// <summary>
+    /// Finds a control, opening whatever category or disclosure it is folded inside - the way a
+    /// user opens them. A collapsed expander has no realized content at all, so the panel is
+    /// unfolded a layer at a time until the control exists.
+    /// </summary>
+    private T Find<T>(string name) where T : Control
+    {
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            if (_view.GetVisualDescendants().OfType<T>().FirstOrDefault(c => c.Name == name) is { } found) return found;
+            var folded = _view.GetVisualDescendants().OfType<Expander>().Where(e => !e.IsExpanded).ToArray();
+            if (folded.Length == 0) break;
+            foreach (var expander in folded) expander.IsExpanded = true;
+            _view.UpdateLayout();
+        }
+        throw new InvalidOperationException($"{name} is not in the panel, even with every section opened");
+    }
     private async Task Click(string name)
     { var button = Find<Button>(name); button.BringIntoView(); await Settle(); Require(button.IsEffectivelyVisible && button.IsEnabled, name + " is unavailable");
         button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Settle(); }

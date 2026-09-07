@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Linq;
 using System.Collections.Generic;
 using Avalonia;
@@ -271,6 +271,61 @@ public static class Ui
             },
         }.Classed("property-group").Classed(classes);
     }
+
+    /// <summary>
+    /// One named category of a settings panel: a coloured stripe, a title, and everything that
+    /// belongs to that part of the work, foldable away when it does not.
+    /// <para>
+    /// The panels grew past four screens of controls in one flat column, which is unreadable
+    /// however good each control is. A category answers "what am I doing" before it answers
+    /// "which number is this", and the same four accents mean the same four things in every
+    /// panel: green makes new things, blue is what is selected, amber is shape, violet is looks.
+    /// </para>
+    /// </summary>
+    public static Expander Category(string name, string title, string accent, Control content, bool expanded = true)
+    {
+        var header = new DockPanel { LastChildFill = true };
+        header.Children.Add(new Border
+        {
+            Width = 4,
+            Height = 16,
+            CornerRadius = new CornerRadius(2),
+            Margin = new Thickness(0, 0, 8, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        }.Classed("category-accent", accent).Docked(Dock.Left));
+        header.Children.Add(new TextBlock
+        {
+            Text = title,
+            VerticalAlignment = VerticalAlignment.Center,
+        }.Classed("role-panel"));
+
+        var expander = new Expander
+        {
+            Header = header,
+            Content = new Border { Padding = new Thickness(0, 6, 0, 0), Child = content },
+            IsExpanded = expanded,
+        }.Named(name).Classed("category", accent);
+        AutomationProperties.SetName(expander, title);
+        return expander;
+    }
+
+    /// <summary>
+    /// A labelled block inside a category. It carries a caption and nothing else - no card, no
+    /// second background - so nesting stays readable instead of turning into boxes in boxes.
+    /// </summary>
+    public static Control Subgroup(string title, Control content) => new StackPanel
+    {
+        Spacing = 4,
+        Children =
+        {
+            new TextBlock { Text = title, TextWrapping = TextWrapping.Wrap }.Classed("faint", "role-caption", "subgroup-title"),
+            content,
+        },
+    };
+
+    /// <summary>One muted line of guidance under a category header; never a paragraph.</summary>
+    public static Control Hint(string text) =>
+        new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap }.Classed("faint", "role-caption");
 
     /// <summary>
     /// The disclosure that holds the rare settings of a tool. Common parameters stay visible;

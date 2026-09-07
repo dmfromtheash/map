@@ -259,6 +259,8 @@ public sealed partial class EditorView : UserControl
     private Control _layerCommonBlock = null!;
     private Control _baseColorLayerBlock = null!;
     private Control _landLayerBlock = null!;
+    private Control _landStylePointer = null!;
+    private Control _landStyleMissing = null!;
     private Control _gridLayerBlock = null!;
     private Control _filterLayerBlock = null!;
     private Control _layerIdentity = null!;
@@ -2053,24 +2055,43 @@ public sealed partial class EditorView : UserControl
             return true;
         }
 
+        _landLayerBlock = BuildLandLayerBlock();
+        _landStyleMissing = Ui.EmptyState(
+            "LandStyleMissingState",
+            MapIcons.Layers,
+            "Слой земли не выбран",
+            "Выберите слой земли в списке слоёв, чтобы задать цвет, материал и берег.");
+
         return new StackPanel
         {
             Spacing = 8,
             Children =
             {
-                Explanation("Круг рисует сушу от руки. Любая другая форма превращает протягивание "
-                            + "по холсту в область: рамка показывает, что будет залито."),
                 BuildRasterToolReadiness("Land"),
-                Ui.Section("Действие", actions),
-                Ui.Section("Форма", shapes),
-                Ui.SliderRow("LandSizeSlider", "Размер кисти", 1, 256, _editor.BrushSettings.Radius, "px",
-                    value => _editor.BrushSettings = _editor.BrushSettings with { Radius = value }),
-                Ui.SliderRow("LandRoughnessSlider", "Неровность края", 0, 100,
-                    _editor.BrushSettings.Scatter * 100, "%",
-                    value => _editor.BrushSettings = _editor.BrushSettings with { Scatter = value / 100 }, 5),
-                Ui.SliderRow("LandSmoothingSlider", "Сглаживание", 0, 100,
-                    _editor.BrushSettings.Softness * 100, "%",
-                    value => _editor.BrushSettings = _editor.BrushSettings with { Softness = value / 100 }, 5),
+                // The land tool carries the same two categories the river tool does, in the same
+                // order and the same colours: make the shape first, dress it afterwards.
+                Ui.Category("LandCreateCategory", "Рисование", "accent-create", new StackPanel
+                {
+                    Spacing = 6,
+                    Children =
+                    {
+                        Ui.Hint("Круг рисует сушу от руки; любая другая форма превращает протягивание в область."),
+                        Ui.Subgroup("Действие", actions),
+                        Ui.Subgroup("Форма", shapes),
+                        Ui.SliderRow("LandSizeSlider", "Размер кисти", 1, 256, _editor.BrushSettings.Radius, "px",
+                            value => _editor.BrushSettings = _editor.BrushSettings with { Radius = value }),
+                        Ui.SliderRow("LandRoughnessSlider", "Неровность края", 0, 100,
+                            _editor.BrushSettings.Scatter * 100, "%",
+                            value => _editor.BrushSettings = _editor.BrushSettings with { Scatter = value / 100 }, 5),
+                        Ui.SliderRow("LandSmoothingSlider", "Сглаживание", 0, 100,
+                            _editor.BrushSettings.Softness * 100, "%",
+                            value => _editor.BrushSettings = _editor.BrushSettings with { Softness = value / 100 }, 5),
+                    },
+                }),
+                Ui.Category("LandStyleCategory", "Оформление", "accent-look", new StackPanel
+                {
+                    Spacing = 4, Children = { _landLayerBlock, _landStyleMissing },
+                }, expanded: false),
                 Ui.Advanced("LandAdvanced", new StackPanel
                 {
                     Spacing = 6,
@@ -4455,7 +4476,16 @@ public sealed partial class EditorView : UserControl
 
         _layerCommonBlock = BuildLayerCommonBlock();
         _baseColorLayerBlock = BuildBaseColorLayerBlock();
-        _landLayerBlock = BuildLandLayerBlock();
+        _landStylePointer = new StackPanel
+        {
+            Spacing = 4,
+            Children =
+            {
+                Ui.Hint("Цвет, материал и берег земли — в панели инструмента «Земля»."),
+                Ui.TextButton("OpenLandStyleButton", "Открыть оформление земли",
+                    () => { _editor.ActiveTool = EditorTool.Land; SyncSidePanels(); }, "compact"),
+            },
+        };
         _gridLayerBlock = BuildGridLayerBlock();
         _filterLayerBlock = BuildFilterLayerBlock();
 
@@ -4471,7 +4501,7 @@ public sealed partial class EditorView : UserControl
                     _layerIdentity,
                     _layerCommonBlock,
                     _baseColorLayerBlock,
-                    _landLayerBlock,
+                    _landStylePointer,
                     _gridLayerBlock,
                     _filterLayerBlock,
                 },
@@ -4686,68 +4716,100 @@ public sealed partial class EditorView : UserControl
             [("Обрыв", () => { if (Style()?.RippleCount > 0) _editor.CycleActiveLandStyle(); }),
              ("Берег с прибоем", () => { if (Style()?.RippleCount == 0) _editor.CycleActiveLandStyle(); })]);
         _landEdgeValue = button;
-        return Ui.Section("Земля", new StackPanel
+
+        // The same order the river panel uses inside its own Оформление: the surface first, then
+        // its edge, then everything rarely touched. The category that holds this is built by the
+        // land tool panel, so land and water are dressed in the same place and the same way.
+        return new StackPanel
         {
             Spacing = 4,
             Children =
             {
                 row,
-                AppearanceColorBox("LandFillColorBox", "Цвет суши", () => Style()?.FillColor,
-                    value =>
+                Ui.Subgroup("Поверхность", new StackPanel
+                {
+                    Spacing = 4,
+                    Children =
                     {
-                        if (AppearanceColor.Normalize(value) is { } color)
-                            _editor.SetActiveLandStyle(style => style with { FillColor = color });
-                    }),
-                BuildFillTexturePicker("LandTexturePicker", MapFillTextureKind.Ground,
-                    () => Style()?.FillTextureId,
-                    id => _editor.SetActiveLandStyle(style => style with { FillTextureId = id })),
-                AppearanceSlider("LandTextureOpacitySlider", "Сила материала", 0, 100, "%",
-                    () => Style()?.FillTextureOpacity * 100,
-                    (v, _) => _editor.SetActiveLandStyle(style => style with { FillTextureOpacity = v / 100 }), 5),
-                AppearanceSlider("LandTextureScaleSlider", "Размер материала", 16, 1024, "ед.",
-                    () => Style()?.FillTextureScale,
-                    (v, _) => _editor.SetActiveLandStyle(style => style with { FillTextureScale = v }), 8),
-                AppearanceColorBox("LandOutlineColorBox", "Цвет контура", () => Style()?.OutlineColor,
-                    value =>
+                        AppearanceColorBox("LandFillColorBox", "Цвет суши", () => Style()?.FillColor,
+                            value =>
+                            {
+                                if (AppearanceColor.Normalize(value) is { } color)
+                                    _editor.SetActiveLandStyle(style => style with { FillColor = color });
+                            }),
+                        BuildFillTexturePicker("LandTexturePicker", MapFillTextureKind.Ground,
+                            () => Style()?.FillTextureId,
+                            id => _editor.SetActiveLandStyle(style => style with { FillTextureId = id })),
+                        AppearanceSlider("LandTextureOpacitySlider", "Сила материала", 0, 100, "%",
+                            () => Style()?.FillTextureOpacity * 100,
+                            (v, _) => _editor.SetActiveLandStyle(style => style with { FillTextureOpacity = v / 100 }), 5),
+                    },
+                }),
+                Ui.Subgroup("Берег", new StackPanel
+                {
+                    Spacing = 4,
+                    Children =
                     {
-                        if (AppearanceColor.Normalize(value) is { } color)
-                            _editor.SetActiveLandStyle(style => style with { OutlineColor = color });
-                    }),
-                AppearanceSlider("LandOutlineWidthSlider", "Толщина контура", 0, 64, "px",
-                    () => Style()?.OutlineWidth,
-                    (v, _) => _editor.SetActiveLandStyle(style => style with { OutlineWidth = v })),
-                AppearanceSlider("LandInnerShadowOpacitySlider", "Внутренняя тень", 0, 100, "%",
-                    () => Style()?.InnerShadowOpacity * 100,
-                    (v, _) => _editor.SetActiveLandStyle(style => style with { InnerShadowOpacity = v / 100 }), 5),
-                AppearanceSlider("LandOuterShadowOpacitySlider", "Внешняя тень", 0, 100, "%",
-                    () => Style()?.OuterShadowOpacity * 100,
-                    (v, _) => _editor.SetActiveLandStyle(style => style with { OuterShadowOpacity = v / 100 }), 5),
-                AppearanceSlider("LandShadowBlurSlider", "Размытие теней", 0, 64, "px",
-                    () => Style()?.ShadowBlur,
-                    (v, _) => _editor.SetActiveLandStyle(style => style with { ShadowBlur = v })),
-                AppearanceNumberBox("LandShadowOffsetXBox", "Тень X", "px",
-                    () => Style()?.ShadowOffsetX,
-                    v => _editor.SetActiveLandStyle(style => style with { ShadowOffsetX = v })),
-                AppearanceNumberBox("LandShadowOffsetYBox", "Тень Y", "px",
-                    () => Style()?.ShadowOffsetY,
-                    v => _editor.SetActiveLandStyle(style => style with { ShadowOffsetY = v })),
-                AppearanceColorBox("LandRippleColorBox", "Цвет ряби", () => Style()?.RippleColor,
-                    value =>
+                        AppearanceColorBox("LandOutlineColorBox", "Цвет контура", () => Style()?.OutlineColor,
+                            value =>
+                            {
+                                if (AppearanceColor.Normalize(value) is { } color)
+                                    _editor.SetActiveLandStyle(style => style with { OutlineColor = color });
+                            }),
+                        AppearanceSlider("LandOutlineWidthSlider", "Толщина контура", 0, 64, "px",
+                            () => Style()?.OutlineWidth,
+                            (v, _) => _editor.SetActiveLandStyle(style => style with { OutlineWidth = v })),
+                    },
+                }),
+                Ui.Advanced("LandStyleAdvanced", new StackPanel
+                {
+                    Spacing = 4,
+                    Children =
                     {
-                        if (AppearanceColor.Normalize(value) is { } color)
-                            _editor.SetActiveLandStyle(style => style with { RippleColor = color });
-                    }),
-                AppearanceSlider("LandRippleWidthSlider", "Толщина ряби", 0, 32, "px",
-                    () => Style()?.RippleWidth,
-                    (v, _) => _editor.SetActiveLandStyle(style => style with { RippleWidth = v })),
-                AppearanceSlider("LandRippleSpacingSlider", "Шаг ряби", 1, 128, "px",
-                    () => Style()?.RippleSpacing,
-                    (v, _) => _editor.SetActiveLandStyle(style => style with { RippleSpacing = v })),
-                AppearanceSlider("LandRippleCountSlider", "Число линий ряби", 0, 12, "",
-                    () => Style()?.RippleCount,
-                    (v, _) => _editor.SetActiveLandStyle(style => style with { RippleCount = (int)Math.Round(v) })),
+                        AppearanceSlider("LandTextureScaleSlider", "Размер материала", 16, 1024, "ед.",
+                            () => Style()?.FillTextureScale,
+                            (v, _) => _editor.SetActiveLandStyle(style => style with { FillTextureScale = v }), 8),
+                        AppearanceSlider("LandInnerShadowOpacitySlider", "Внутренняя тень", 0, 100, "%",
+                            () => Style()?.InnerShadowOpacity * 100,
+                            (v, _) => _editor.SetActiveLandStyle(style => style with { InnerShadowOpacity = v / 100 }), 5),
+                        AppearanceSlider("LandOuterShadowOpacitySlider", "Внешняя тень", 0, 100, "%",
+                            () => Style()?.OuterShadowOpacity * 100,
+                            (v, _) => _editor.SetActiveLandStyle(style => style with { OuterShadowOpacity = v / 100 }), 5),
+                        AppearanceSlider("LandShadowBlurSlider", "Размытие теней", 0, 64, "px",
+                            () => Style()?.ShadowBlur,
+                            (v, _) => _editor.SetActiveLandStyle(style => style with { ShadowBlur = v })),
+                        AppearanceNumberBox("LandShadowOffsetXBox", "Тень X", "px",
+                            () => Style()?.ShadowOffsetX,
+                            v => _editor.SetActiveLandStyle(style => style with { ShadowOffsetX = v })),
+                        AppearanceNumberBox("LandShadowOffsetYBox", "Тень Y", "px",
+                            () => Style()?.ShadowOffsetY,
+                            v => _editor.SetActiveLandStyle(style => style with { ShadowOffsetY = v })),
+                        Ui.Subgroup("Прибой", new StackPanel
+                        {
+                            Spacing = 4,
+                            Children =
+                            {
+                                AppearanceColorBox("LandRippleColorBox", "Цвет ряби", () => Style()?.RippleColor,
+                                    value =>
+                                    {
+                                        if (AppearanceColor.Normalize(value) is { } color)
+                                            _editor.SetActiveLandStyle(style => style with { RippleColor = color });
+                                    }),
+                                AppearanceSlider("LandRippleWidthSlider", "Толщина ряби", 0, 32, "px",
+                                    () => Style()?.RippleWidth,
+                                    (v, _) => _editor.SetActiveLandStyle(style => style with { RippleWidth = v })),
+                                AppearanceSlider("LandRippleSpacingSlider", "Шаг ряби", 1, 128, "px",
+                                    () => Style()?.RippleSpacing,
+                                    (v, _) => _editor.SetActiveLandStyle(style => style with { RippleSpacing = v })),
+                                AppearanceSlider("LandRippleCountSlider", "Число линий ряби", 0, 12, "",
+                                    () => Style()?.RippleCount,
+                                    (v, _) => _editor.SetActiveLandStyle(style => style with { RippleCount = (int)Math.Round(v) })),
+                            },
+                        }),
+                    },
+                }),
             },
-        }).Named("LandLayerBlock");
+        }.Named("LandLayerBlock");
     }
 
     /// <summary>
@@ -8129,7 +8191,12 @@ public sealed partial class EditorView : UserControl
         _layerIdentity.IsVisible = layer is not null;
         _layerCommonBlock.IsVisible = editable;
         _baseColorLayerBlock.IsVisible = layer is BaseColorLayer;
-        _landLayerBlock.IsVisible = layer is LandLayer;
+        _landStylePointer.IsVisible = layer is LandLayer;
+        // In the tool panel the same block appears only while a land layer is the active one;
+        // otherwise the panel says which layer to pick instead of showing dead controls.
+        var landActive = _editor.ActiveLayer is LandLayer;
+        _landLayerBlock.IsVisible = landActive;
+        _landStyleMissing.IsVisible = !landActive;
         _gridLayerBlock.IsVisible = layer is GridLayer;
         _filterLayerBlock.IsVisible = layer is FilterLayer;
 

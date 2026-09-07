@@ -1,4 +1,4 @@
-<Application xmlns="https://github.com/avaloniaui"
+﻿<Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="Map.App.App"
              RequestedThemeVariant="Light">
@@ -1613,6 +1613,37 @@
         <Style Selector="Button.new-card /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="BoxShadow" Value="0 2 6 0 #1614263F" />
         </Style>
+        <!-- Panel categories. One accent colour per kind of work, identical in every panel:
+             the eye finds the part it wants before it reads a single label. -->
+        <Style Selector="Border.category-accent">
+            <Setter Property="Background" Value="{DynamicResource MapMutedBrush}" />
+        </Style>
+        <Style Selector="Border.category-accent.accent-create">
+            <Setter Property="Background" Value="#FF56C08A" />
+        </Style>
+        <Style Selector="Border.category-accent.accent-select">
+            <Setter Property="Background" Value="#FF4FA8E8" />
+        </Style>
+        <Style Selector="Border.category-accent.accent-shape">
+            <Setter Property="Background" Value="#FFE0A445" />
+        </Style>
+        <Style Selector="Border.category-accent.accent-look">
+            <Setter Property="Background" Value="#FF9B7BE8" />
+        </Style>
+        <Style Selector="Expander.category">
+            <Setter Property="Margin" Value="0,2" />
+            <Setter Property="Padding" Value="8,6,8,8" />
+            <Setter Property="Background" Value="{DynamicResource MapPropertyGroupBrush}" />
+            <Setter Property="CornerRadius" Value="{DynamicResource MapCardRadius}" />
+        </Style>
+        <Style Selector="Expander.category /template/ ToggleButton#ExpanderHeader">
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="TextBlock.subgroup-title">
+            <Setter Property="Margin" Value="0,6,0,0" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+
         <!-- Group surfaces carry structure; rows retain a flat list rhythm. -->
         <Style Selector="Border.property-group">
             <Setter Property="Background" Value="{DynamicResource MapPropertyGroupBrush}" />
