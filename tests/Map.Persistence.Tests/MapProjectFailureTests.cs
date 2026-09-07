@@ -120,7 +120,7 @@ public class MapProjectFailureTests
 
         // Rewrite the manifest to a future schema, keeping its checksum contract out of the way:
         // schema is checked before checksums, per the open order in the store.
-        var futureSchema = MapProjectFormat.SchemaVersion + 1;
+        var futureSchema = MapProjectFormat.MaxSupportedSchemaVersion + 1;
         RewriteManifestSchemaVersion(path, futureSchema);
         var bytesBefore = File.ReadAllBytes(path);
 

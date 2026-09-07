@@ -565,15 +565,20 @@ public sealed class MainWindow : Window
             case EditorShortcutSettings.Commands.Notes:
                 view.OpenNotes();
                 break;
+            case EditorShortcutSettings.Commands.River:
+                editor.ActiveTool = EditorTool.River;
+                break;
             case EditorShortcutSettings.Commands.Escape:
                 editor.HandleEscape();
                 break;
             case EditorShortcutSettings.Commands.FinishPath:
-                if (editor.IsCreatingEditableArea) editor.FinishEditableArea();
+                if (editor.IsCreatingRiver) editor.FinishRiver();
+                else if (editor.IsCreatingEditableArea) editor.FinishEditableArea();
                 else if (editor.IsCreatingEditablePath) editor.FinishEditablePath(); else editor.FinishPenPath();
                 break;
             case EditorShortcutSettings.Commands.Delete:
             case EditorShortcutSettings.Commands.DeleteAlternate:
+                if (editor.ActiveTool == EditorTool.River && editor.SelectedRiver is not null) { editor.DeleteSelectedRiverNode(); break; }
                 editor.DeleteSelectedObject();
                 break;
             case EditorShortcutSettings.Commands.NudgeLeft:

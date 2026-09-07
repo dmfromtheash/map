@@ -1,0 +1,21 @@
+{
+  "reviewedAt": "2026-09-07",
+  "scope": "Research candidates, not installed dependencies. See RESEARCH_AND_REPOSITORIES.md for decisions and limitations.",
+  "repositories": [
+    { "repository": "AngusJohnson/Clipper2", "stages": [19,20,21,22], "use": "Candidate: polygon union and offset; upstream triangulation warning." },
+    { "repository": "NetTopologySuite/NetTopologySuite", "stages": [19,20,21,22], "use": "Conditional candidate: geometric predicates, validity and topology." },
+    { "repository": "speps/LibTessDotNet", "stages": [19,20,21,22], "use": "Reserve tessellator; low recent activity, compare allocations on actual input." },
+    { "repository": "mono/SkiaSharp", "stages": [19,20,21,22,23,24], "use": "Already used: prefer existing renderer and image pipeline." },
+    { "repository": "AvaloniaUI/Avalonia", "stages": [19,20,21,22,23], "use": "Already used: native UI and controls, version 12.1.1 in Map." },
+    { "repository": "wieslawsoltes/Svg.Skia", "stages": [24], "use": "Optional SVG rendering if existing import is insufficient." },
+    { "repository": "KDE/krita", "stages": [24], "use": "Optional external art tool, GitHub mirror, not a Map runtime dependency." },
+    { "repository": "MicrosoftDocs/mcp", "stages": [19,20,21,22,23,24], "use": "Configured official .NET documentation server; development only." },
+    { "repository": "anthropics/skills", "stages": [19,20,21,22,23,24], "use": "Skill format and examples; project skills authored specifically for Map." },
+    { "repository": "anthropics/claude-code", "stages": [19,20,21,22,23,24], "use": "Official release notes and issue reference; existing Claude Code runtime." },
+    { "repository": "upstash/context7", "stages": [19,20,21,22,23,24], "use": "Optional versioned documentation lookup; current README requires API key." },
+    { "repository": "oraios/serena", "stages": [19,20,21,22,23,24], "use": "Optional semantic C# navigation after checking language server cost and compatibility." },
+    { "repository": "microsoft/skills", "stages": [19,20,21,22,23,24], "use": "Inspected, not installed: mostly cloud SDK workflows outside Map scope." },
+    { "repository": "markpitt/claude-skills", "stages": [19,20,21,22,23], "use": "Avalonia reference inspected, not copied: license unclear and scope too broad." },
+    { "repository": "ykdojo/claude-code-tips", "stages": [19,20,21,22,23,24], "use": "Community tips found via Telegram; no blanket plugin or configuration import." }
+  ]
+}

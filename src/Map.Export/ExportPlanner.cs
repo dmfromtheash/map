@@ -163,6 +163,12 @@ public static class ExportPlanner
                 {
                     world = Math.Max(world, EffectBleedWorld(item));
                 }
+
+                // A river bank and its blurred halo reach past the water outline (Stage 19).
+                foreach (var river in objects.Rivers)
+                {
+                    world = Math.Max(world, river.Style.BankWidth + (river.Style.BankShadowBlur * 3) + 1);
+                }
             }
         }
 

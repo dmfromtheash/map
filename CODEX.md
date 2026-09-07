@@ -41,6 +41,11 @@ Stage 18 реализован по отдельному поручению вл�
 
 ## Локальные команды
 
+Если владелец просит промпт для Opus или Fable, используй `docs/ai/CLAUDE_WORKFLOW.md`,
+`docs/ai/claude-models.json` и `tools/ai/New-ClaudeTask.ps1`. Без нового номера этапа продолжай
+текущую задачу из верхнего раздела handoff. Подготовка промпта сама не начинает реализацию.
+Это явно запрошенный владельцем 2026-09-07 комплект для Claude, а не перенос инструментов Codex.
+
 ```powershell
 dotnet build .\Map.slnx -c Release -m:1 -nr:false -p:UseSharedCompilation=false
 & .\src\Map.App\bin\Release\net10.0\win-x64\Map.App.exe

@@ -1390,6 +1390,7 @@ public sealed partial class EditorView : UserControl
         _toolPanels[EditorTool.Land] = BuildLandPanel();
         _toolPanels[EditorTool.Stamp] = BuildStampToolPanel();
         _toolPanels[EditorTool.Notes] = BuildNotesTab();
+        _toolPanels[EditorTool.River] = BuildRiverPanel();
     }
 
     // Select only selects existing objects. Assets are a separate rail command, while object
@@ -7313,6 +7314,7 @@ public sealed partial class EditorView : UserControl
         SyncStatus();
         SyncEditablePathPanel();
         SyncEditableAreaPanel();
+        SyncRiverPanel();
         if (scene) SyncSidePanels();
         if (changed.Overlaps([nameof(EditorViewModel.XText), nameof(EditorViewModel.YText),
             nameof(EditorViewModel.WidthText), nameof(EditorViewModel.HeightText),
@@ -7620,6 +7622,9 @@ public sealed partial class EditorView : UserControl
             _editor.SelectionKind is not null,
             _contextPrefersToolPanel);
         if (_editor.ActiveTool == EditorTool.Stamp && (_editor.SelectedEditablePath is not null || _editor.StampPlacementMode == StampPlacementMode.FillArea))
+            scope = EditorContextPanelKind.ToolPanel;
+        // A river is not a scene object: its panel is the only place its properties live.
+        if (_editor.ActiveTool == EditorTool.River)
             scope = EditorContextPanelKind.ToolPanel;
 
         _contextSwitch.IsVisible = !_contextCollapsed && EditorContextPanel.ToggleApplies(_editor.SelectionCount);

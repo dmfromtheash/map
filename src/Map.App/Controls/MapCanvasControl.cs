@@ -451,7 +451,8 @@ public sealed partial class MapCanvasControl : Control
             var renderDocument = editor.DragPreview is null
                 ? editor.RenderDocument
                 : editor.Session.Document;
-            var hasLiveObjectPreview = editor.DragPreview is not null || editor.HasPendingPlacement || editor.HasPathGesture;
+            var hasLiveObjectPreview = editor.DragPreview is not null || editor.HasPendingPlacement || editor.HasPathGesture
+                || editor.HasRiverGesture;
             var tier = performanceMode == CanvasPerformanceMode.Performance && viewport.Scale < 0.25
                 ? RenderLodTier.Overview
                 : viewport.Scale < 0.125
@@ -478,6 +479,8 @@ public sealed partial class MapCanvasControl : Control
                 VisibleWorld = new Map.Core.Documents.WorldBounds(
                     X, Y, bottomRight.X, bottomRight.Y),
                 ObjectOverrides = editor.EditableAreaPreviewOverrides ?? editor.EditablePathPreviewOverrides ?? editor.DragPreview?.Proposed,
+                RiverOverrides = editor.RiverRenderOverrides,
+                RiverPreviewLayerId = editor.RiverPreviewLayerId,
                 PlacementPreviewObjects = editor.PlacementPreviewObjects,
                 PlacementPreviewLayerId = editor.PlacementPreviewLayerId,
                 PlacementArea = editor.PendingPlacement is
@@ -521,6 +524,10 @@ public sealed partial class MapCanvasControl : Control
                     canvas.DrawCircle((float)node.X, (float)node.Y, radius, pen);
                 }
             }
+            if (editor.ActiveTool == EditorTool.River && editor.DisplayedRiver is { } river)
+            {
+                DrawRiverHandles(canvas, editor, river, (float)Math.Max(.001, viewport.Scale));
+            }
             if (editor.ActiveTool == EditorTool.Stamp && editor.DisplayedEditablePath is { } editablePath)
             {
                 var scale = (float)Math.Max(.001, viewport.Scale);
@@ -548,6 +555,60 @@ public sealed partial class MapCanvasControl : Control
             {
                 tileCache.EndFrame();
                 if (overviewFrame) objectCache.EndFrame();
+            }
+        }
+
+        /// <summary>
+        /// Editor chrome of the river tool: faint centrelines, one circle per node, a larger ring
+        /// on the selected channel and a diamond on the mouth of a tributary. Drawn after the
+        /// scene, never by the exporter.
+        /// </summary>
+        private static void DrawRiverHandles(SKCanvas canvas, EditorViewModel editor, Map.Core.Documents.River river, float scale)
+        {
+            var geometry = Map.Core.Editing.RiverGeometry.Evaluate(river);
+            using var centre = new SKPaint { Color = new SKColor(255, 255, 255, 150), IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 1 / scale };
+            using var pen = new SKPaint { Color = new SKColor(90, 200, 255), IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 2 / scale };
+            using var faint = new SKPaint { Color = new SKColor(90, 200, 255, 140), IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 1.5f / scale };
+            using var nodePaint = new SKPaint { Color = new SKColor(22, 55, 78), IsAntialias = true };
+            using var mouthPaint = new SKPaint { Color = new SKColor(255, 196, 64), IsAntialias = true };
+            using var sourcePaint = new SKPaint { Color = new SKColor(120, 230, 150), IsAntialias = true };
+            var selectedChannel = editor.DisplayedRiverChannelId;
+            void Diamond(Map.Core.Documents.VectorPoint at, bool active, SKPaint fill)
+            {
+                var size = (active ? 8 : 6) / scale;
+                using var diamond = new SKPath();
+                diamond.MoveTo((float)at.X, (float)(at.Y - size)); diamond.LineTo((float)(at.X + size), (float)at.Y);
+                diamond.LineTo((float)at.X, (float)(at.Y + size)); diamond.LineTo((float)(at.X - size), (float)at.Y); diamond.Close();
+                canvas.DrawPath(diamond, fill);
+                canvas.DrawPath(diamond, active ? pen : faint);
+            }
+            foreach (var channel in river.Channels)
+            {
+                if (!geometry.Channels.TryGetValue(channel.Id, out var g)) continue;
+                using var path = new SKPath();
+                for (var i = 0; i < g.Samples.Length; i++)
+                {
+                    var s = g.Samples[i];
+                    if (i == 0) path.MoveTo((float)s.X, (float)s.Y); else path.LineTo((float)s.X, (float)s.Y);
+                }
+                canvas.DrawPath(path, centre);
+                var active = channel.Id == selectedChannel;
+                for (var n = 0; n < channel.Nodes.Length; n++)
+                {
+                    var node = channel.Nodes[n];
+                    var radius = (active && n == editor.SelectedRiverNodeIndex ? 7 : active ? 5 : 4) / scale;
+                    if (channel.Closed)
+                    {
+                        var half = radius;
+                        canvas.DrawRect((float)(node.X - half), (float)(node.Y - half), (float)(half * 2), (float)(half * 2), nodePaint);
+                        canvas.DrawRect((float)(node.X - half), (float)(node.Y - half), (float)(half * 2), (float)(half * 2), active ? pen : faint);
+                        continue;
+                    }
+                    canvas.DrawCircle((float)node.X, (float)node.Y, radius, nodePaint);
+                    canvas.DrawCircle((float)node.X, (float)node.Y, radius, active ? pen : faint);
+                }
+                if (channel.Mouth is not null) Diamond(g.End, active, mouthPaint);
+                if (channel.Source is not null) Diamond(g.Start, active, sourcePaint);
             }
         }
 

@@ -194,6 +194,14 @@ public sealed class RenderOptions
 
     public bool PlacementInvalid { get; init; }
 
+    /// <summary>
+    /// Live river substitutions for an editor gesture, matched by id. A river whose id is not on
+    /// any layer is a draft and is drawn on <see cref="RiverPreviewLayerId"/> only.
+    /// </summary>
+    public IReadOnlyList<River>? RiverOverrides { get; init; }
+
+    public LayerId? RiverPreviewLayerId { get; init; }
+
     public TileImageCache? TileCache { get; init; }
 
     /// <summary>Render-context-local cache used only by the editor overview tier.</summary>
@@ -529,6 +537,11 @@ public static class SceneRenderer
                 break;
 
             case ObjectLayer objectLayer:
+                // Rivers are terrain: they sit under every object of their layer (Stage 19).
+                RiverRenderer.DrawLayerRivers(canvas, objectLayer, view, options,
+                    document.Layers.OfType<LandLayer>().Any(l => l.Visible && l.Opacity > 0 && l.GeometryTiles.TileCount > 0)
+                        ? (target, paint) => DrawAllLandCoverage(target, document, view, options, paint)
+                        : null);
                 if (options.PlacementPreviewLayerId == objectLayer.Id
                     && options.PlacementPreviewObjects is { Count: > 0 } placementPreview)
                 {
@@ -542,7 +555,7 @@ public static class SceneRenderer
                 break;
 
             case LandLayer landLayer:
-                DrawLand(canvas, landLayer, view, options);
+                DrawLand(canvas, document, landLayer, view, options);
                 break;
 
             case GridLayer gridLayer:
@@ -564,8 +577,41 @@ public static class SceneRenderer
         }
     }
 
+    /// <summary>
+    /// Union of every visible Land layer's coverage inside the view, drawn with the caller's
+    /// paint. Rivers use it (DstIn) to stay on land; it never evaluates edge styling.
+    /// </summary>
+    private static void DrawAllLandCoverage(SKCanvas canvas, MapDocument document, WorldBounds view, RenderOptions options, SKPaint paint)
+    {
+        var sampling = options.ViewScale < 0.9
+            ? new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear)
+            : new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None);
+        foreach (var land in document.Layers.OfType<LandLayer>().Where(l => l.Visible && l.Opacity > 0))
+        {
+            foreach (var key in land.GeometryTiles.KeysIntersecting(view.Left, view.Top, view.Right, view.Bottom))
+            {
+                var coverage = land.GeometryTiles.TryGet(key)!;
+                var image = options.TileCache is not null
+                    ? options.TileCache.Get(land.Id, key, TileImageKind.LandCoverage, coverage)
+                    : BuildCoverageImage(coverage, TileImageKind.LandCoverage);
+                canvas.DrawImage(image, TileRect(key), sampling, paint);
+                if (options.TileCache is null) image.Dispose();
+            }
+        }
+    }
+
+    /// <summary>Rivers that carve the land, from every object layer, with live editor substitutions.</summary>
+    private static List<River> LandCuttingRivers(MapDocument document, WorldBounds view, RenderOptions options)
+    {
+        var result = new List<River>();
+        foreach (var layer in document.Layers.OfType<ObjectLayer>().Where(l => l.Visible && l.Opacity > 0))
+            foreach (var river in RiverRenderer.Resolve(layer, options))
+                if (river.Style.CutsLand && RiverGeometry.Evaluate(river).Bounds.Intersects(view)) result.Add(river);
+        return result;
+    }
+
     private static void DrawLand(
-        SKCanvas canvas, LandLayer layer, WorldBounds view, RenderOptions options)
+        SKCanvas canvas, MapDocument document, LandLayer layer, WorldBounds view, RenderOptions options)
     {
         if (layer.GeometryTiles.TileCount == 0)
         {
@@ -583,6 +629,42 @@ public static class SceneRenderer
         {
             return;
         }
+
+        // Stage 19: rivers carve the coverage before any edge styling, so the coast wraps their
+        // banks and the sea enters their mouths. The carved coverage is rasterized once per frame
+        // at device resolution and then feeds every pass exactly like the tile images would.
+        SKImage? carved = null;
+        var cutters = options.LodTier == RenderLodTier.Overview && !options.IsExport ? [] : LandCuttingRivers(document, view, options);
+        if (cutters.Count > 0)
+        {
+            var matrix = canvas.TotalMatrix;
+            var scale = Math.Max(1e-4, Math.Sqrt(matrix.ScaleX * matrix.ScaleX + matrix.SkewY * matrix.SkewY));
+            var width = (int)Math.Clamp(Math.Ceiling((view.Right - view.Left) * scale) + 2, 1, 16384);
+            var height = (int)Math.Clamp(Math.Ceiling((view.Bottom - view.Top) * scale) + 2, 1, 16384);
+            using var surface = SKSurface.Create(new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Premul));
+            if (surface is not null)
+            {
+                var target = surface.Canvas;
+                target.Clear(SKColors.Transparent);
+                target.Scale((float)scale);
+                target.Translate((float)-view.Left, (float)-view.Top);
+                foreach (var key in keys)
+                {
+                    var coverage = layer.GeometryTiles.TryGet(key)!;
+                    var image = options.TileCache is not null
+                        ? options.TileCache.Get(layer.Id, key, TileImageKind.LandCoverage, coverage)
+                        : BuildCoverageImage(coverage, TileImageKind.LandCoverage);
+                    target.DrawImage(image, TileRect(key), sampling, null);
+                    if (options.TileCache is null) image.Dispose();
+                }
+                foreach (var river in cutters) RiverRenderer.CutBody(target, river, options.ViewScale);
+                carved = surface.Snapshot();
+            }
+        }
+        using var carvedImage = carved;
+        var carvedRect = new SKRect((float)view.Left, (float)view.Top,
+            (float)(view.Left + (carved?.Width ?? 0) / Math.Max(1e-4, Math.Sqrt(canvas.TotalMatrix.ScaleX * canvas.TotalMatrix.ScaleX + canvas.TotalMatrix.SkewY * canvas.TotalMatrix.SkewY))),
+            (float)(view.Top + (carved?.Height ?? 0) / Math.Max(1e-4, Math.Sqrt(canvas.TotalMatrix.ScaleX * canvas.TotalMatrix.ScaleX + canvas.TotalMatrix.SkewY * canvas.TotalMatrix.SkewY))));
 
         // At overview scale the edge effects are below a screen pixel, but each one replays the
         // complete tile set (rings do it several times). Keep the exact style at edit/export zoom
@@ -669,6 +751,11 @@ public static class SceneRenderer
 
         void DrawCoverageImages(SKPaint? paint)
         {
+            if (carvedImage is not null)
+            {
+                canvas.DrawImage(carvedImage, carvedRect, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None), paint);
+                return;
+            }
             foreach (var key in keys)
             {
                 var coverage = layer.GeometryTiles.TryGet(key)!;

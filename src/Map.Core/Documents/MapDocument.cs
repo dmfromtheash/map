@@ -220,6 +220,13 @@ public sealed record MapDocument
                 Editing.PlacementAreaDrawOrder.Warm(area, area.Members.Select(m => objectsById[m.ObjectId]));
             }
         }
+        var riverIds = new HashSet<Guid>();
+        foreach (var river in Layers.OfType<ObjectLayer>().SelectMany(l => l.Rivers))
+        {
+            if (river is null) throw new ArgumentException("Null river.");
+            river.Validate();
+            if (!riverIds.Add(river.Id)) throw new ArgumentException("Duplicate river id.");
+        }
         if (Checkpoints.Count > MapCheckpointLimits.MaxCount)
         {
             throw new ArgumentException(

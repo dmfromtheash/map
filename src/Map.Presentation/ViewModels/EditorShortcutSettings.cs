@@ -170,6 +170,7 @@ public sealed class EditorShortcutSettings
         public const string Line = "line";
         public const string Text = "text";
         public const string Notes = "notes";
+        public const string River = "river";
         public const string Escape = "escape";
         public const string Delete = "delete";
         public const string DeleteAlternate = "delete-alternate";
@@ -252,6 +253,7 @@ public sealed class EditorShortcutSettings
         D(Commands.Mask, "Инструмент «Маска»", "Инструменты", ShortcutContext.Editor, "M", "Активировать маску"),
         D(Commands.Land, "Инструмент «Земля»", "Инструменты", ShortcutContext.Editor, "", "Активировать землю"),
         D(Commands.Notes, "Заметки", "Инструменты", ShortcutContext.Editor, "N", "Открыть панель заметок"),
+        D(Commands.River, "Инструмент «Река»", "Инструменты", ShortcutContext.Editor, "H", "Активировать реки"),
         D(Commands.Escape, "Выйти из группы / снять выбор", "Выделение", ShortcutContext.Editor, "Escape", "Закрыть текущий уровень выделения"),
         D(Commands.FinishPath, "Завершить контур", "Инструменты", ShortcutContext.Canvas, "Enter", "Замкнуть контур режима Pen"),
         D(Commands.Delete, "Удалить выделение", "Выделение", ShortcutContext.Selection, "Delete", "Удалить выбранные объекты"),
@@ -504,6 +506,7 @@ public sealed class EditorShortcutSettings
         EditorTool.Mask => Commands.Mask,
         EditorTool.Land => Commands.Land,
         EditorTool.Notes => Commands.Notes,
+        EditorTool.River => Commands.River,
         _ => "",
     };
 

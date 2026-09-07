@@ -296,6 +296,11 @@ public static class CanvasTransformService
             ObjectLayer objects => (objects with
             {
                 Objects = [.. objects.Objects.Select(item => TranslateObject(item, offsetX, offsetY))],
+                // Rivers move with the canvas; a region keeps only rivers that reach into it.
+                Rivers = [.. objects.Rivers
+                    .Where(river => clip is null || RiverGeometry.Evaluate(river).Bounds.Intersects(
+                        new WorldBounds(-offsetX, -offsetY, -offsetX + clip.Value.Width, -offsetY + clip.Value.Height)))
+                    .Select(river => TranslateRiver(river, offsetX, offsetY))],
             }).WithMask(mask),
             BrushLayer brush => (brush with
             {
@@ -320,6 +325,15 @@ public static class CanvasTransformService
 
     private static SceneObject TranslateObject(SceneObject source, int offsetX, int offsetY) =>
         SceneObjectClone.At(source, source.X + offsetX, source.Y + offsetY);
+
+    /// <summary>Rivers keep their ids, junctions and widths; only the node coordinates shift.</summary>
+    private static River TranslateRiver(River river, int offsetX, int offsetY) => river with
+    {
+        Channels = [.. river.Channels.Select(channel => channel with
+        {
+            Nodes = [.. channel.Nodes.Select(node => node with { X = node.X + offsetX, Y = node.Y + offsetY })],
+        })],
+    };
 
     private static TileMap TransformTiles(
         TileMap source,

@@ -22,6 +22,8 @@ public enum CanvasInputGesture
     StampSeries,
     PlacementPathNode,
     PlacementAreaNode,
+    RiverNode,
+    RiverStroke,
     VectorDraw,
     LandShape,
     TextPlacement,
@@ -166,6 +168,16 @@ public sealed class CanvasInputRouter
         {
             _gesture = _editor.IsDraggingPathNode ? CanvasInputGesture.PlacementPathNode : CanvasInputGesture.None;
             return new CanvasInputResult { Handled = true, Invalidate = true, CapturePointer = _editor.IsDraggingPathNode };
+        }
+        if (_editor.BeginRiverStroke(worldX, worldY))
+        {
+            _gesture = CanvasInputGesture.RiverStroke;
+            return new CanvasInputResult { Handled = true, Invalidate = true, CapturePointer = true };
+        }
+        if (_editor.PressRiver(worldX, worldY))
+        {
+            _gesture = _editor.IsDraggingRiver ? CanvasInputGesture.RiverNode : CanvasInputGesture.None;
+            return new CanvasInputResult { Handled = true, Invalidate = true, CapturePointer = _editor.IsDraggingRiver };
         }
         if (_editor.HasPendingPlacement)
         {
@@ -344,6 +356,12 @@ public sealed class CanvasInputRouter
             case CanvasInputGesture.PlacementPathNode:
                 _editor.MoveEditablePathNode(worldX, worldY);
                 return new CanvasInputResult { Handled = true, Invalidate = true };
+            case CanvasInputGesture.RiverNode:
+                _editor.MoveRiverPointer(worldX, worldY);
+                return new CanvasInputResult { Handled = true, Invalidate = true };
+            case CanvasInputGesture.RiverStroke:
+                _editor.ContinueRiverStroke(worldX, worldY);
+                return new CanvasInputResult { Handled = true, Invalidate = true };
             case CanvasInputGesture.StampSeries:
                 _editor.ContinueStampSeries(worldX, worldY);
                 return new CanvasInputResult { Handled = true, Invalidate = true };
@@ -408,6 +426,16 @@ public sealed class CanvasInputRouter
                 var pathEnd = _editor.Session.Viewport.ScreenToWorld(screenX, screenY);
                 _editor.MoveEditablePathNode(pathEnd.X, pathEnd.Y);
                 _editor.EndEditablePathNodeDrag();
+                return new CanvasInputResult { Handled = true, Invalidate = true, ReleasePointer = true };
+            case CanvasInputGesture.RiverNode:
+                var riverEnd = _editor.Session.Viewport.ScreenToWorld(screenX, screenY);
+                _editor.MoveRiverPointer(riverEnd.X, riverEnd.Y);
+                _editor.EndRiverDrag();
+                return new CanvasInputResult { Handled = true, Invalidate = true, ReleasePointer = true };
+            case CanvasInputGesture.RiverStroke:
+                var strokeEnd = _editor.Session.Viewport.ScreenToWorld(screenX, screenY);
+                _editor.ContinueRiverStroke(strokeEnd.X, strokeEnd.Y);
+                _editor.EndRiverStroke();
                 return new CanvasInputResult { Handled = true, Invalidate = true, ReleasePointer = true };
             case CanvasInputGesture.StampSeries:
                 var end = _editor.Session.Viewport.ScreenToWorld(screenX, screenY);
@@ -523,6 +551,9 @@ public sealed class CanvasInputRouter
                 return _editor.CancelEditableAreaGesture();
             case CanvasInputGesture.PlacementPathNode:
                 return _editor.CancelEditablePathGesture();
+            case CanvasInputGesture.RiverNode:
+            case CanvasInputGesture.RiverStroke:
+                return _editor.CancelRiverGesture();
             case CanvasInputGesture.StampSeries:
                 return _editor.CancelStampSeries();
             case CanvasInputGesture.ObjectDrag:

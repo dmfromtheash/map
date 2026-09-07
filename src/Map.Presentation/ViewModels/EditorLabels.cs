@@ -23,6 +23,7 @@ public static class EditorLabels
         EditorTool.Land => "Земля",
         EditorTool.Stamp => "Размещение ассета",
         EditorTool.Notes => "Заметки",
+        EditorTool.River => "Река",
         _ => "Инструмент",
     };
 
@@ -38,6 +39,7 @@ public static class EditorLabels
         EditorTool.Land => "Протяните по холсту, чтобы добавить сушу. Режим «Убрать» стирает её.",
         EditorTool.Stamp => "Выберите ассет в каталоге и щёлкните по холсту. Область и плотность настраиваются слева.",
         EditorTool.Notes => "Создавайте заметки карты или привязывайте их к выделенному объекту.",
+        EditorTool.River => "Нажмите «Новая река» и ставьте узлы от истока к устью. Клик по руслу — приток, Enter — свободный конец.",
         _ => "",
     };
 

@@ -23,6 +23,9 @@ public static partial class MapProjectStore
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = false };
 
     private static int SchemaFor(MapDocument document) =>
+        document.Layers.OfType<ObjectLayer>().Any(l => !l.Rivers.IsEmpty)
+        || document.Checkpoints.Any(c => c.Snapshot.Layers.OfType<ObjectLayer>().Any(l => !l.Rivers.IsEmpty))
+            ? MapProjectFormat.RiversSchemaVersion :
         document.Layers.OfType<ObjectLayer>().Any(l => !l.PlacementAreas.IsEmpty)
         || document.Checkpoints.Any(c => c.Snapshot.Layers.OfType<ObjectLayer>().Any(l => !l.PlacementAreas.IsEmpty))
             ? MapProjectFormat.EditableAreasSchemaVersion :
@@ -659,7 +662,7 @@ public static partial class MapProjectStore
 
             if (manifest.SchemaVersion != expectedSchemaVersion
                 && !(expectedSchemaVersion == MapProjectFormat.SchemaVersion
-                    && manifest.SchemaVersion is MapProjectFormat.EditablePathsSchemaVersion or MapProjectFormat.EditableAreasSchemaVersion))
+                    && MapProjectFormat.IsExtendedV4Schema(manifest.SchemaVersion)))
             {
                 throw new UnsupportedSchemaVersionException(manifest.SchemaVersion);
             }
@@ -1220,8 +1223,7 @@ public static partial class MapProjectStore
                     throw new MapProjectCorruptedException("A construction checkpoint requires a matching container schema.");
                 if (schemaVersion == MapProjectFormat.SchemaVersion
                     && snapshotManifest.SchemaVersion != MapProjectFormat.SchemaVersion
-                    && snapshotManifest.SchemaVersion != MapProjectFormat.EditablePathsSchemaVersion
-                    && snapshotManifest.SchemaVersion != MapProjectFormat.EditableAreasSchemaVersion)
+                    && !MapProjectFormat.IsExtendedV4Schema(snapshotManifest.SchemaVersion))
                 {
                     throw new MapProjectCorruptedException(
                         $"Checkpoint {id} snapshot manifest does not declare a supported object-chunk schema.");
@@ -1625,6 +1627,7 @@ public static partial class MapProjectStore
             PlacementAreas = layer is ObjectLayer areaLayer && !areaLayer.PlacementAreas.IsEmpty ? [.. areaLayer.PlacementAreas] : null,
             PlacementPaths = layer is ObjectLayer pathLayer && !pathLayer.PlacementPaths.IsEmpty
                 ? [.. pathLayer.PlacementPaths] : null,
+            Rivers = layer is ObjectLayer riverLayer && !riverLayer.Rivers.IsEmpty ? [.. riverLayer.Rivers] : null,
             Id = layer.Id.ToString(),
             Type = layer switch
             {
@@ -1939,6 +1942,7 @@ public static partial class MapProjectStore
                 SublayerStates = ToSublayerStates(layer.Sublayers),
                 PlacementPaths = layer.PlacementPaths is null ? [] : [.. layer.PlacementPaths],
                 PlacementAreas = layer.PlacementAreas is null ? [] : [.. layer.PlacementAreas],
+                Rivers = layer.Rivers is null ? [] : [.. layer.Rivers],
             },
             "BaseColor" => new BaseColorLayer(
                 id, name, layer.Visible, layer.Locked, layer.Opacity,

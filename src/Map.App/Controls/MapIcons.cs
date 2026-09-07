@@ -26,6 +26,9 @@ public static class MapIcons
     public const string Land = "M16.5 3.5 L20.5 7.5 L13 15 L8.5 16.5 L10 12 Z " +
                                "M2.5 18 C5.5 16.2 8.5 16.8 11.5 18.2 C14.5 19.6 17.5 19.6 21.5 17.5 " +
                                "M2.5 21 C6 19.5 9 20.2 12 21";
+    // A meandering main channel with one tributary joining downstream.
+    public const string River = "M4 4 C 9 6, 8 12, 12 13.5 C 16 15, 15 19, 20 20.5 " +
+                                "M17 5.5 C 14 8.5, 13.5 11, 12.5 13.8";
 
     // ----------------------------------------------------------------- panels
     public const string Layers = "M12 3.5 L21 8.5 L12 13.5 L3 8.5 Z M3.5 13 L12 17.8 L20.5 13";
@@ -167,6 +170,7 @@ public static class MapIcons
         Map.Presentation.ViewModels.EditorTool.Brush => Brush,
         Map.Presentation.ViewModels.EditorTool.Mask => Mask,
         Map.Presentation.ViewModels.EditorTool.Stamp => Assets,
+        Map.Presentation.ViewModels.EditorTool.River => River,
         _ => Select,
     };
 

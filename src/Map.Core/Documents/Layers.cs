@@ -149,6 +149,9 @@ public sealed record ObjectLayer : MapLayer
     public System.Collections.Immutable.ImmutableArray<PlacementPath> PlacementPaths { get; init; } = [];
     public System.Collections.Immutable.ImmutableArray<PlacementArea> PlacementAreas { get; init; } = [];
 
+    /// <summary>Editable rivers of this layer, drawn under its objects (Stage 19).</summary>
+    public System.Collections.Immutable.ImmutableArray<River> Rivers { get; init; } = [];
+
     /// <summary>Only non-default states need to be stored; an absent band is visible and unlocked.</summary>
     public IReadOnlyList<ObjectSublayerState> SublayerStates { get; init; } = [];
 
@@ -162,7 +165,11 @@ public sealed record ObjectLayer : MapLayer
     {
         if (!PlacementPaths.IsEmpty || !PlacementAreas.IsEmpty)
             throw new InvalidOperationException("Перед дублированием слоя превратите его пути и области в обычные объекты.");
-        return this with { Id = LayerId.New(), Objects = [.. Objects.Select(VectorGeometry.WithNewIds)] };
+        return this with
+        {
+            Id = LayerId.New(), Objects = [.. Objects.Select(VectorGeometry.WithNewIds)],
+            Rivers = [.. Rivers.Select(river => river.WithNewIds())],
+        };
     }
 
     public override MapLayer WithMask(LayerMask? mask) => this with { Mask = mask };

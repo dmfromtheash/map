@@ -79,6 +79,8 @@ public static class EditorSurfaceLayout
             // what a new map needs first.
             new EditorRailEntry("AssetsLibraryButton", EditorTool.Stamp, EditorRailEntryKind.Library),
             new EditorRailEntry("LandToolButton", EditorTool.Land, EditorRailEntryKind.Tool),
+            // Rivers are terrain too: they follow Земля and precede the drawing tools.
+            new EditorRailEntry("RiverToolButton", EditorTool.River, EditorRailEntryKind.Tool),
         ],
         [
             new EditorRailEntry("LineToolButton", EditorTool.Line, EditorRailEntryKind.Tool),

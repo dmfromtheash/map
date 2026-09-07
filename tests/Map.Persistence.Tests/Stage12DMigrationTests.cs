@@ -214,7 +214,7 @@ public sealed class Stage12DMigrationTests
             ProjectFixtures.Document(), future, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
         RewriteManifest(
             future,
-            root => root["schemaVersion"] = MapProjectFormat.SchemaVersion + 1);
+            root => root["schemaVersion"] = MapProjectFormat.MaxSupportedSchemaVersion + 1);
         Assert.Equal(ProjectFileStatus.UnsupportedVersion, MapProjectStore.Inspect(future).Status);
 
         var malformed = workspace.File("malformed.mapproj");

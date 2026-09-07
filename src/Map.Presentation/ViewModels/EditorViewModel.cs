@@ -44,6 +44,7 @@ public enum EditorTool
     Text,
     Stamp,
     Notes,
+    River,
 }
 
 /// <summary>
@@ -692,7 +693,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             CancelTextPlacement();
             CancelShapeBooleanPreview();
             CancelPlacement();
-            CancelEditablePathGesture(); CancelEditableAreaGesture();
+            CancelEditablePathGesture(); CancelEditableAreaGesture(); CancelRiverGesture();
             CancelDrag();
             CancelMarquee();
             CancelVectorElementDrag();
@@ -6789,6 +6790,8 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// </summary>
     public bool HandleEscape()
     {
+        if (CancelRiverGesture())
+        { CanvasGestureCancelled?.Invoke(this, EventArgs.Empty); StatusDetail = "Правка реки отменена."; return true; }
         if (CancelEditableAreaGesture())
         { CanvasGestureCancelled?.Invoke(this, EventArgs.Empty); PendingPlacement = null; StatusDetail = "Правка области отменена."; return true; }
         if (CancelEditablePathGesture())
@@ -7871,7 +7874,7 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public void Undo()
     {
-        CancelEditablePathGesture(); CancelEditableAreaGesture();
+        CancelEditablePathGesture(); CancelEditableAreaGesture(); CancelRiverGesture();
         if (Session.Undo())
         {
             SyncEditablePathSettings(); SyncEditableAreaSettings();
@@ -7881,7 +7884,7 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public void Redo()
     {
-        CancelEditablePathGesture(); CancelEditableAreaGesture();
+        CancelEditablePathGesture(); CancelEditableAreaGesture(); CancelRiverGesture();
         if (Session.Redo())
         {
             SyncEditablePathSettings(); SyncEditableAreaSettings();
@@ -8124,6 +8127,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     {
         RaisePathState();
         RaiseAreaState();
+        RaiseRiverState();
         _lastCommittedEditUtc = _clock();
         SaveState = Session.IsDirty ? SaveState.Unsaved : SaveState.Saved;
         StatusDetail = "";

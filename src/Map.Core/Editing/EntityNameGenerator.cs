@@ -84,6 +84,28 @@ public static partial class EntityNameGenerator
 
     public static string Group(int objectCount) => $"Группа · {Math.Max(0, objectCount)} объектов";
 
+    /// <summary>"Озеро 1", "Озеро 2"… unique among river names of the document.</summary>
+    public static string Lake(MapDocument document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        return Unique(
+            document.Layers.OfType<ObjectLayer>().SelectMany(layer => layer.Rivers).Select(river => river.Name)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase),
+            "Озеро",
+            suffixFirst: true);
+    }
+
+    /// <summary>"Река 1", "Река 2"… unique across every object layer of the document.</summary>
+    public static string River(MapDocument document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        return Unique(
+            document.Layers.OfType<ObjectLayer>().SelectMany(layer => layer.Rivers).Select(river => river.Name)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase),
+            "Река",
+            suffixFirst: true);
+    }
+
     private static string Unique(HashSet<string> names, string basis, bool suffixFirst)
     {
         if (!suffixFirst && !names.Contains(basis))

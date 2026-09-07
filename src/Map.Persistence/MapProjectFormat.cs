@@ -8,7 +8,18 @@ public static class MapProjectFormat
     public const int SchemaVersion = 4;
     public const int EditablePathsSchemaVersion = 5;
     public const int EditableAreasSchemaVersion = 6;
+    public const int RiversSchemaVersion = 7;
     public const string Extension = ".mapproj";
+
+    /// <summary>The newest schema this build writes and reads.</summary>
+    public const int MaxSupportedSchemaVersion = RiversSchemaVersion;
+
+    /// <summary>
+    /// Schemas v5–v7 share the v4 container and differ only by the layer constructs they may
+    /// carry (paths, areas, rivers). A reader expecting v4 accepts all of them.
+    /// </summary>
+    public static bool IsExtendedV4Schema(int schemaVersion) =>
+        schemaVersion is >= EditablePathsSchemaVersion and <= MaxSupportedSchemaVersion;
 
     public const string ManifestEntry = "manifest.json";
     public const string SceneEntry = "scene.json";
