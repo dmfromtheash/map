@@ -424,7 +424,7 @@ public sealed class RiverCommand : IEditCommand
     public const long NodeWorkingBytes = 4 * 1024;
     public const long RiverCommandBaseBytes = 256 * 1024;
 
-    public long EstimatedWorkingBytes
+    public long? MeasuredWorkingBytes
     {
         get
         {

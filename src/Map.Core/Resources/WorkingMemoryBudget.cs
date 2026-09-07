@@ -19,12 +19,14 @@ public sealed class WorkingMemoryBudget
     // The allowance is cumulative, so many small reservations cannot bypass the large-work gate.
     public const long SmallOperationLimitBytes = 256 * MiB;
     public const long SmallSystemReserveBytes = 512 * MiB;
-    // A vector edit that only rewrites a handful of nodes commits kilobytes, not megabytes. Such
-    // an operation must not inherit the reserve of a raster edit: on a busy desktop the machine
-    // can be down to a few hundred MiB free and still owe the user a moved river node. The floor
-    // stays well above zero so the OS keeps a working set even while Map admits the edit.
-    public const long TinyOperationLimitBytes = 4 * MiB;
+    // What separates a cautious reserve from a mean one is not the size of the work but whether
+    // its size is known. An operation that measured itself - a river of four nodes, a save of a
+    // map made of one rectangle - is asked to leave MeasuredReserveFactor times what it takes,
+    // between a floor that keeps the OS working and the same ceiling unknown work owes. There is
+    // no step in that curve: one more object on a small map must not move the save into a
+    // category that demands half a gigabyte of idle RAM.
     public const long TinySystemReserveBytes = 64 * MiB;
+    public const long MeasuredReserveFactor = 4;
     public static WorkingMemoryBudget Shared { get; } = new(ReadSystem);
     private readonly Func<WorkingMemorySnapshot> _read;
     private readonly object _gate = new();
@@ -49,13 +51,18 @@ public sealed class WorkingMemoryBudget
 
     private bool _shedding;
 
-    public bool TryReserve(long bytes, out IDisposable? reservation, out string? reason)
+    /// <summary>
+    /// Admits one operation. <paramref name="measured"/> says the caller computed
+    /// <paramref name="bytes"/> from the work in front of it rather than taking a shared default;
+    /// only then is the OS reserve allowed to follow the size of the operation.
+    /// </summary>
+    public bool TryReserve(long bytes, out IDisposable? reservation, out string? reason, bool measured = false)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(bytes);
         lock (_gate)
         {
             var memory = _read();
-            var headroom = Headroom(memory, bytes);
+            var headroom = Headroom(memory, bytes, measured);
             if (bytes > headroom - _reserved && !_shedding)
             {
                 // Under pressure the caches are asked to let go once, and the decision is retaken
@@ -65,7 +72,7 @@ public sealed class WorkingMemoryBudget
                 try { ReleaseDerivedCaches?.Invoke(); }
                 finally { _shedding = false; }
                 memory = _read();
-                headroom = Headroom(memory, bytes);
+                headroom = Headroom(memory, bytes, measured);
             }
             if (bytes > headroom - _reserved)
             {
@@ -88,18 +95,21 @@ public sealed class WorkingMemoryBudget
     }
 
     /// <summary>
-    /// Memory this budget may hand out for one operation of the given size. The OS reserve is
-    /// tiered by the real cost of the work: a node edit, a small edit and a raster operation do
-    /// not owe the same idle RAM. The tier is chosen with the already reserved bytes included,
-    /// so repeated tiny reservations cannot add up into an unguarded large one.
+    /// Memory this budget may hand out for one operation of the given size. Work whose size is
+    /// known leaves <see cref="MeasuredReserveFactor"/> times what it takes, never less than
+    /// <see cref="TinySystemReserveBytes"/> and never more than work of unknown size owes. Work of
+    /// unknown size keeps the cautious floor it always had. Either way the figure is computed with
+    /// the already reserved bytes included, so repeated small admissions cannot add up into an
+    /// unguarded large one, and large work still answers to the full OS reserve.
     /// </summary>
-    private long Headroom(WorkingMemorySnapshot memory, long bytes)
+    private long Headroom(WorkingMemorySnapshot memory, long bytes, bool measured)
     {
-        var systemReserve = bytes <= TinyOperationLimitBytes - _reserved
-            ? Math.Min(SystemReserve(memory), TinySystemReserveBytes)
-            : bytes <= SmallOperationLimitBytes - _reserved
-                ? Math.Min(SystemReserve(memory), SmallSystemReserveBytes)
-                : SystemReserve(memory);
+        var effective = bytes + _reserved;
+        var systemReserve = effective > SmallOperationLimitBytes
+            ? SystemReserve(memory)
+            : Math.Min(SystemReserve(memory), measured
+                ? Math.Clamp(effective * MeasuredReserveFactor, TinySystemReserveBytes, SmallSystemReserveBytes)
+                : SmallSystemReserveBytes);
         return Math.Min(memory.AvailableBytes - systemReserve, PrivateLimit(memory) - memory.MapPrivateBytes);
     }
 
@@ -126,7 +136,7 @@ public sealed class WorkingMemoryBudget
                 catch (AbandonedMutexException) { owned = true; }
                 if (!owned) throw new OperationCanceledException(token);
                 token.ThrowIfCancellationRequested();
-                if (!TryReserve(reserve, out var reservation, out var reason))
+                if (!TryReserve(reserve, out var reservation, out var reason, measured: reserveBytes is not null))
                     throw new InvalidOperationException(reason);
                 completion.TrySetResult(new HeavyReservation(reservation!, released));
                 released.Wait();

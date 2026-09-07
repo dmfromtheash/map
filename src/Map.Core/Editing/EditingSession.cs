@@ -176,9 +176,10 @@ public sealed class EditingSession
     public void Execute(IEditCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
-        var cost = Math.Clamp(command.EstimatedWorkingBytes, 0,
+        var measured = command.MeasuredWorkingBytes;
+        var cost = Math.Clamp(measured ?? Map.Core.Resources.WorkingMemoryBudget.EditReserveBytes, 0,
             Map.Core.Resources.WorkingMemoryBudget.SmallOperationLimitBytes);
-        if (!_memory.TryReserve(cost, out var reservation, out var reason))
+        if (!_memory.TryReserve(cost, out var reservation, out var reason, measured: measured is not null))
         {
             LastResourceError = reason;
             ResourceAdmissionChanged?.Invoke(this, EventArgs.Empty);

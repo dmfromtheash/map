@@ -196,9 +196,9 @@ public sealed partial class EditorViewModel
                 if (!river.Visible || river.Locked) continue;
                 var set = RiverGeometry.Evaluate(river);
                 if (!set.Bounds.Intersects(marquee)) continue;
-                if (set.Channels.Values.Any(g => g.Samples.Any(s =>
-                        s.X >= marquee.Left && s.X <= marquee.Right && s.Y >= marquee.Top && s.Y <= marquee.Bottom)))
-                    found.Add(river.Id);
+                // By the drawn body, not by the centreline: a band over the visible edge of a wide
+                // river selects it even when it never reaches the middle of the channel.
+                if (RiverGeometry.IntersectsRect(set, marquee)) found.Add(river.Id);
             }
         return found;
     }

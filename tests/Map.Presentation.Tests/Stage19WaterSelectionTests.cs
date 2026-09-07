@@ -80,6 +80,67 @@ public sealed class Stage19WaterSelectionTests
     }
 
     [Fact]
+    public void A_rubber_band_over_the_visible_edge_of_a_wide_river_selects_it()
+    {
+        var (editor, router, _, _) = NewEditor();
+        var river = CreateRiver(editor, router, 80, (100, 300), (400, 300), (700, 300));
+        var channelId = river.Channels[0].Id;
+        var samples = RiverGeometry.Evaluate(editor.Rivers[0]).Channels[channelId].Samples;
+        var middle = samples[samples.Length / 2];
+        Assert.True(middle.HalfWidth >= 39);
+
+        editor.ActiveTool = EditorTool.Select;
+        editor.ClearWaterSelection();
+
+        // The band crosses the drawn water but stops well short of the centreline.
+        router.Press(CanvasPointerButton.Left, 200, middle.Y - 38);
+        router.Move(500, middle.Y - 12);
+        router.Release(500, middle.Y - 12);
+        Assert.Equal(1, editor.WaterSelectionCount);
+        Assert.Equal(river.Id, editor.WaterSelectionIds[0]);
+
+        // Clear of the water on the same side: nothing is taken.
+        editor.ClearWaterSelection();
+        router.Press(CanvasPointerButton.Left, 200, middle.Y - 120);
+        router.Move(500, middle.Y - 60);
+        router.Release(500, middle.Y - 60);
+        Assert.Equal(0, editor.WaterSelectionCount);
+    }
+
+    [Fact]
+    public async Task A_small_map_saves_with_506_MiB_of_free_memory()
+    {
+        // The owner's report: one rectangle on a small map, 506 MiB free, and the save was
+        // refused before the file was ever written.
+        var layer = new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, []);
+        var document = new MapDocument(DocumentId.New(), "Small", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(1024, 768, "px", "#FFEEE6D2"),
+            [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFEEE6D2"), layer]);
+        var memory = new WorkingMemoryBudget(() => new WorkingMemorySnapshot(
+            16L * 1024 * WorkingMemoryBudget.MiB, 506 * WorkingMemoryBudget.MiB, 1024 * WorkingMemoryBudget.MiB));
+        var store = new FakeProjectStore();
+        var picker = new FakeFilePicker { NextSavePath = @"C:\maps\small.mapproj" };
+        var editor = new EditorViewModel(document, null, false, store, new FakeRecentMaps(),
+            picker, new FakePrompts(), new FakeLog(), memory: memory);
+        editor.Session.Viewport.Set(0, 0, 1);
+
+        editor.AddObject(SceneObjectKind.Rectangle);
+        Assert.Single(editor.Session.Document.Layers.OfType<ObjectLayer>().Single().Objects);
+
+        Assert.True(await editor.SaveAsync(), editor.StatusDetail);
+        Assert.True(store.Saved.ContainsKey(@"C:\maps\small.mapproj"));
+        Assert.False(editor.Session.IsDirty);
+        Assert.Null(editor.Session.LastResourceError);
+
+        // A river of four nodes on the same map saves just as well.
+        var router = new CanvasInputRouter(editor);
+        CreateRiver(editor, router, 12, (100, 100), (300, 140), (500, 100), (700, 160));
+        Assert.True(await editor.SaveAsync(), editor.StatusDetail);
+        Assert.Single(store.Saved[@"C:\maps\small.mapproj"].Document.Layers.OfType<ObjectLayer>()
+            .SelectMany(l => l.Rivers));
+    }
+
+    [Fact]
     public void A_rubber_band_takes_several_water_systems_and_one_delete_removes_them_with_one_undo()
     {
         var (editor, router, _, _) = NewEditor();

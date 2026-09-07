@@ -226,8 +226,10 @@ public sealed partial class EditorViewModel : ViewModelBase
             if (layer is ObjectLayer objectLayer) objects += objectLayer.Objects.Count;
         }
         if (document.StampForeground is { } foreground) raster += foreground.Tiles.TotalBytes;
-        // Preview render plus the encoder and the archive buffers working over the same tiles.
-        var preview = 4 * Map.Core.Resources.WorkingMemoryBudget.MiB;
+        // The preview is a few hundred kilobytes of pixels; the encoder and the archive buffers
+        // work over the tiles counted above. One megabyte covers the fixed part with room to
+        // spare, and a map made of one rectangle must not cost more than that.
+        var preview = Map.Core.Resources.WorkingMemoryBudget.MiB;
         return preview + raster * 2 + objects * EditCost.PerObjectBytes;
     }
 

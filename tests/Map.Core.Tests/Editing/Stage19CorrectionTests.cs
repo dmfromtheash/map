@@ -42,8 +42,8 @@ public sealed class Stage19CorrectionTests
         var river = FourNodeRiver();
         var command = new RiverCommand(layer.Id, river.Id, river, "Создать реку");
 
-        Assert.True(command.EstimatedWorkingBytes < WorkingMemoryBudget.TinyOperationLimitBytes);
-        Assert.True(command.EstimatedWorkingBytes < WorkingMemoryBudget.EditReserveBytes);
+        Assert.NotNull(command.MeasuredWorkingBytes);
+        Assert.True(command.MeasuredWorkingBytes < WorkingMemoryBudget.EditReserveBytes);
 
         session.Execute(command);
         Assert.Null(session.LastResourceError);
@@ -60,6 +60,56 @@ public sealed class Stage19CorrectionTests
         Assert.True(session.Undo());
         Assert.Single(session.Document.Layers.OfType<ObjectLayer>().Single(l => l.Id == layer.Id).Rivers);
         Assert.Equal(0, budget.ReservedBytes);
+    }
+
+    [Fact]
+    public void A_measured_operation_never_falls_off_a_cliff_when_it_grows_by_one_object()
+    {
+        // The owner's second report: a map of one rectangle refused to save at 506 MiB free,
+        // because the estimate crossed a fixed 4 MiB boundary and inherited the 512 MiB floor.
+        // The reserve a measured operation owes has to be continuous in its size.
+        var memory = new WorkingMemorySnapshot(16 * GiB, 506 * MiB, GiB);
+        var budget = new WorkingMemoryBudget(() => memory);
+        foreach (var bytes in new[] { 64 * 1024L, MiB, 4 * MiB, 4 * MiB + 4096, 8 * MiB, 32 * MiB, 64 * MiB })
+        {
+            Assert.True(budget.TryReserve(bytes, out var lease, out var reason, measured: true),
+                $"{bytes / 1024} KiB of measured work was refused at 506 MiB free: {reason}");
+            lease!.Dispose();
+        }
+
+        // Work of unknown size at the same free memory still answers to the cautious floor, and
+        // measured work large enough to matter still does too.
+        Assert.False(budget.TryReserve(WorkingMemoryBudget.EditReserveBytes, out _, out _));
+        Assert.False(budget.TryReserve(200 * MiB, out _, out _, measured: true));
+        Assert.Equal(0, budget.ReservedBytes);
+    }
+
+    [Fact]
+    public void A_rubber_band_over_the_visible_water_finds_the_river()
+    {
+        // The band crosses the drawn surface of a 80-wide river without reaching its centreline.
+        var wide = RiverEditor.NewChannel([new VectorPoint(0, 200), new VectorPoint(400, 200)], 80);
+        var river = new River { Name = "Река", Channels = [wide] };
+        river.Validate();
+        var set = RiverGeometry.Evaluate(river);
+
+        Assert.True(RiverGeometry.IntersectsRect(set, new WorldBounds(100, 150, 300, 175)));
+        Assert.True(RiverGeometry.IntersectsRect(set, new WorldBounds(100, 225, 300, 260)));
+        // Clear of the body on both sides: nothing is selected by accident.
+        Assert.False(RiverGeometry.IntersectsRect(set, new WorldBounds(100, 100, 300, 155)));
+        Assert.False(RiverGeometry.IntersectsRect(set, new WorldBounds(100, 246, 300, 300)));
+
+        // A band drawn entirely inside a lake is still a selection of that lake.
+        var lake = new River
+        {
+            Name = "Озеро",
+            Channels = [RiverEditor.NewLake(
+                [new VectorPoint(600, 100), new VectorPoint(800, 120), new VectorPoint(760, 300), new VectorPoint(600, 260)])],
+        };
+        lake.Validate();
+        var lakeSet = RiverGeometry.Evaluate(lake);
+        Assert.True(RiverGeometry.IntersectsRect(lakeSet, new WorldBounds(660, 160, 700, 200)));
+        Assert.False(RiverGeometry.IntersectsRect(lakeSet, new WorldBounds(900, 400, 950, 450)));
     }
 
     [Fact]

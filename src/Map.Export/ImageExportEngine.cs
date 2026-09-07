@@ -76,7 +76,7 @@ public sealed class ImageExportEngine : IImageExporter
         using var operation = await Map.Core.Resources.WorkingMemoryBudget.Shared
             .EnterHeavyAsync(cancellationToken, leased).ConfigureAwait(false);
         if (!Map.Core.Resources.WorkingMemoryBudget.Shared.TryReserve(
-            Math.Max(0, required - leased), out var memoryReservation, out var memoryReason))
+            Math.Max(0, required - leased), out var memoryReservation, out var memoryReason, measured: true))
             throw new ExportValidationException(memoryReason!);
         using var heldMemory = memoryReservation;
         Report(progress, ExportPhase.Preparing, 0.01, "Подготовка снимка карты…");

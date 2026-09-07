@@ -14,7 +14,7 @@ public sealed class ManualAreaSelectionCommand(IEditCommand edit, IReadOnlyColle
     private MapDocument? _before, _after;
     public string Name => edit.Name;
 
-    public long EstimatedWorkingBytes => edit.EstimatedWorkingBytes;
+    public long? MeasuredWorkingBytes => edit.MeasuredWorkingBytes;
     public int DetachedCount { get; private set; }
 
     public MapDocument Apply(MapDocument document)

@@ -16,11 +16,12 @@ public interface IEditCommand
 
     /// <summary>
     /// Working bytes this command really needs while it runs: the rebuilt snapshot plus whatever
-    /// it derives on the way. The default is the shared edit reserve, which suits a command whose
-    /// cost is not known in advance. A command that rewrites a bounded amount of vector data
-    /// reports its own figure, so a four-node river is not admitted like a raster operation.
+    /// it derives on the way. Null means the cost is not known in advance, and the command is
+    /// admitted on the shared edit reserve exactly as it always was. A command that rewrites a
+    /// bounded amount of vector data reports its own figure, so a four-node river is not admitted
+    /// like a raster operation.
     /// </summary>
-    long EstimatedWorkingBytes => Map.Core.Resources.WorkingMemoryBudget.EditReserveBytes;
+    long? MeasuredWorkingBytes => null;
 }
 
 /// <summary>
@@ -51,13 +52,20 @@ public sealed class CompositeCommand : IEditCommand
     internal bool ContainsPlacementPath => _steps.Any(step => step is PlacementPathCommand or PlacementAreaCommand
         || step is CompositeCommand { ContainsPlacementPath: true });
 
-    /// <summary>The gesture runs its steps one after another, so its cost is their sum.</summary>
-    public long EstimatedWorkingBytes
+    /// <summary>
+    /// The gesture runs its steps one after another, so its cost is their sum - but only while
+    /// every step knows its own. One step of unknown size makes the whole gesture unknown.
+    /// </summary>
+    public long? MeasuredWorkingBytes
     {
         get
         {
             var total = 0L;
-            foreach (var step in _steps) total = checked(total + step.EstimatedWorkingBytes);
+            foreach (var step in _steps)
+            {
+                if (step.MeasuredWorkingBytes is not { } step_bytes) return null;
+                total = checked(total + step_bytes);
+            }
             return total;
         }
     }
@@ -117,7 +125,7 @@ public sealed class AddObjectCommand : IEditCommand
 
     public string Name => $"Add {_added.Kind}";
 
-    public long EstimatedWorkingBytes => EditCost.ForObjects(1);
+    public long? MeasuredWorkingBytes => EditCost.ForObjects(1);
 
     public ObjectId AddedObjectId => _added.Id;
 
@@ -148,7 +156,7 @@ public sealed class AddObjectsCommand : IEditCommand
 
     public string Name => $"Scatter {_added.Count} objects";
 
-    public long EstimatedWorkingBytes => EditCost.ForObjects(_added.Count);
+    public long? MeasuredWorkingBytes => EditCost.ForObjects(_added.Count);
 
     public int Count => _added.Count;
 
@@ -211,7 +219,7 @@ public sealed class PlaceAssetObjectsCommand : IEditCommand
         ? "Place stamp"
         : $"Scatter {_objects.Count} stamps ({VariantCount} variants)";
 
-    public long EstimatedWorkingBytes => EditCost.ForObjects(_objects.Count);
+    public long? MeasuredWorkingBytes => EditCost.ForObjects(_objects.Count);
 
     public int Count => _objects.Count;
 
@@ -293,7 +301,7 @@ public sealed class PasteObjectsCommand : IEditCommand
 
     public string Name => _objects.Count == 1 ? "Paste object" : $"Paste {_objects.Count} objects";
 
-    public long EstimatedWorkingBytes => EditCost.ForObjects(_objects.Count);
+    public long? MeasuredWorkingBytes => EditCost.ForObjects(_objects.Count);
 
     public int Count => _objects.Count;
 
@@ -520,7 +528,7 @@ public sealed class ReplaceObjectsCommand : IEditCommand
 
     public string Name { get; }
 
-    public long EstimatedWorkingBytes => EditCost.ForObjects(_before.Count + _after.Count);
+    public long? MeasuredWorkingBytes => EditCost.ForObjects(_before.Count + _after.Count);
 
     public MapDocument Apply(MapDocument document) => Replace(document, _after);
 
@@ -560,7 +568,7 @@ public sealed class ReorderObjectsCommand : IEditCommand
 
     public string Name { get; }
 
-    public long EstimatedWorkingBytes => EditCost.ForObjects(_after.Count);
+    public long? MeasuredWorkingBytes => EditCost.ForObjects(_after.Count);
 
     public MapDocument Apply(MapDocument document) => Order(document, _after);
 
@@ -605,7 +613,7 @@ public sealed class TransformObjectCommand : IEditCommand
 
     public string Name => _inner.Name;
 
-    public long EstimatedWorkingBytes => _inner.EstimatedWorkingBytes;
+    public long? MeasuredWorkingBytes => _inner.MeasuredWorkingBytes;
 
     public ObjectId ObjectId { get; }
 
@@ -640,7 +648,7 @@ public sealed class RemoveObjectsCommand : IEditCommand
 
     public string Name => $"Delete {_removed.Count} object(s)";
 
-    public long EstimatedWorkingBytes => EditCost.ForObjects(_removed.Count);
+    public long? MeasuredWorkingBytes => EditCost.ForObjects(_removed.Count);
 
     public MapDocument Apply(MapDocument document)
     {
@@ -694,7 +702,7 @@ public sealed class MoveObjectsToLayerCommand : IEditCommand
 
     public string Name => $"Move {_moved.Count} object(s) to another layer";
 
-    public long EstimatedWorkingBytes => EditCost.ForObjects(_moved.Count * 2);
+    public long? MeasuredWorkingBytes => EditCost.ForObjects(_moved.Count * 2);
 
     public MapDocument Apply(MapDocument document)
     {
@@ -813,7 +821,7 @@ public sealed class SetGroupCommand : IEditCommand
 
     public string Name => _inner.Name;
 
-    public long EstimatedWorkingBytes => _inner.EstimatedWorkingBytes;
+    public long? MeasuredWorkingBytes => _inner.MeasuredWorkingBytes;
 
     public MapDocument Apply(MapDocument document) => _inner.Apply(document);
 
@@ -887,7 +895,7 @@ public sealed class DeleteObjectsCommand : IEditCommand
 
     public string Name => $"Delete {_count} object(s)";
 
-    public long EstimatedWorkingBytes => EditCost.ForObjects(_count);
+    public long? MeasuredWorkingBytes => EditCost.ForObjects(_count);
 
     public MapDocument Apply(MapDocument document)
     {
@@ -1005,7 +1013,7 @@ public sealed class ReorderLayerCommand(LayerId layerId, bool up) : IEditCommand
 
     public string Name => "Reorder layer";
 
-    public long EstimatedWorkingBytes => EditCost.BaseBytes;
+    public long? MeasuredWorkingBytes => EditCost.BaseBytes;
 
     public MapDocument Apply(MapDocument document)
     {
@@ -1060,7 +1068,7 @@ public sealed class UpdateLayerCommand : IEditCommand
 
     public string Name { get; }
 
-    public long EstimatedWorkingBytes => EditCost.BaseBytes;
+    public long? MeasuredWorkingBytes => EditCost.BaseBytes;
 
     public static UpdateLayerCommand Rename(MapLayer layer, string newName)
     {
@@ -1341,7 +1349,7 @@ public sealed class UpdateLandStyleCommand : IEditCommand
 
     public string Name => "Land edge style";
 
-    public long EstimatedWorkingBytes => EditCost.BaseBytes;
+    public long? MeasuredWorkingBytes => EditCost.BaseBytes;
 
     public MapDocument Apply(MapDocument document) => Write(document, _after);
     public MapDocument Revert(MapDocument document) => Write(document, _before);

@@ -273,7 +273,11 @@ public class EditorViewModelTests
         var snapshot = editor.Session.Document; var depth = editor.Session.UndoDepth;
         const string reason = "Недостаточно свободной памяти с резервом для Windows и открытых карт.";
         // Exercise the real admission before any thumbnail or store write, then restore headroom.
-        memory = memory with { AvailableBytes = 512L << 20 };
+        // 512 MiB is no longer a refusal for a map of one rectangle: a save that measured itself
+        // owes a reserve proportional to its own size (see Stage19CorrectionTests). The contract
+        // this test guards - a refused save changes nothing at all - is proven where the machine
+        // really has nothing left.
+        memory = memory with { AvailableBytes = 32L << 20 };
         Assert.False(await editor.SaveAsync());
         Assert.Same(snapshot, editor.Session.Document); Assert.Equal(depth, editor.Session.UndoDepth);
         Assert.True(editor.Session.IsDirty); Assert.Equal(SaveState.SaveFailed, editor.SaveState);

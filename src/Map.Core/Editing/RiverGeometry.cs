@@ -446,6 +446,33 @@ public static class RiverGeometry
         return inside;
     }
 
+    /// <summary>
+    /// True when the water the user can see meets the rectangle: any point of the drawn body -
+    /// the centreline expanded by its own half width - falls inside it, or the rectangle lies
+    /// within a lake. A rubber band that crosses the visible surface of a wide river without
+    /// reaching its centreline is still a selection of that river.
+    /// </summary>
+    public static bool IntersectsRect(RiverGeometrySet set, WorldBounds rect)
+    {
+        ArgumentNullException.ThrowIfNull(set);
+        foreach (var geometry in set.Channels.Values)
+        {
+            foreach (var sample in geometry.Samples)
+            {
+                var dx = Math.Max(0, Math.Max(rect.Left - sample.X, sample.X - rect.Right));
+                var dy = Math.Max(0, Math.Max(rect.Top - sample.Y, sample.Y - rect.Bottom));
+                if (dx * dx + dy * dy <= sample.HalfWidth * sample.HalfWidth) return true;
+            }
+            if (!geometry.Closed) continue;
+            // A band drawn entirely inside a lake never touches its outline, but it is still on it.
+            var midX = (rect.Left + rect.Right) / 2; var midY = (rect.Top + rect.Bottom) / 2;
+            if (InsideLake(geometry, rect.Left, rect.Top) || InsideLake(geometry, rect.Right, rect.Top)
+                || InsideLake(geometry, rect.Right, rect.Bottom) || InsideLake(geometry, rect.Left, rect.Bottom)
+                || InsideLake(geometry, midX, midY)) return true;
+        }
+        return false;
+    }
+
     /// <summary>Point-in-river test with an optional extra tolerance, in world units.</summary>
     public static bool Contains(River river, double x, double y, double tolerance = 0)
     {
