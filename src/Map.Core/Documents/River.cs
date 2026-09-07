@@ -75,6 +75,23 @@ public sealed record RiverStyle
     /// <summary>Hand-drawn wobble of the banks, 0..1 of the local half width.</summary>
     public double EdgeRoughness { get; init; }
 
+    /// <summary>
+    /// A built-in water material blended over <see cref="WaterColor"/>, by id
+    /// (<see cref="MapFillTextures"/>); null keeps the flat fill. The scale is the world size of
+    /// one tile, so the surface keeps its size as the view zooms.
+    /// </summary>
+    public string? TextureId { get; init; } = "water-still";
+    public double TextureOpacity { get; init; } = 0.5;
+    public double TextureScale { get; init; } = MapFillTextures.DefaultWaterScale;
+
+    /// <summary>
+    /// A lighter band of shallow water along the banks, in world units; 0 removes it. Drawn water
+    /// on a map is never one flat tone: it lightens towards the shore, which is what makes a
+    /// channel read as a body of water rather than as a coloured ribbon.
+    /// </summary>
+    public double ShallowWidth { get; init; } = 2.5;
+    public string ShallowColor { get; init; } = "#8CBFD9E8";
+
     /// <summary>The water carves the Land layers below: the coast wraps the banks and the sea enters the mouth.</summary>
     public bool CutsLand { get; init; } = true;
 
@@ -195,12 +212,14 @@ public sealed record River
                     throw new ArgumentException("Русло не может впадать в собственное течение или вытекать из него.");
         var s = Style;
         if (string.IsNullOrWhiteSpace(s.WaterColor) || string.IsNullOrWhiteSpace(s.BankColor)
-            || string.IsNullOrWhiteSpace(s.HighlightColor)
-            || new[] { s.Opacity, s.BankWidth, s.BankShadowOpacity, s.BankShadowBlur, s.HighlightOpacity, s.MouthFade, s.EdgeRoughness }
+            || string.IsNullOrWhiteSpace(s.HighlightColor) || string.IsNullOrWhiteSpace(s.ShallowColor)
+            || new[] { s.Opacity, s.BankWidth, s.BankShadowOpacity, s.BankShadowBlur, s.HighlightOpacity, s.MouthFade, s.EdgeRoughness, s.ShallowWidth }
                 .Any(v => !double.IsFinite(v))
             || s.Opacity is < 0 or > 1 || s.BankWidth is < 0 or > 64 || s.BankShadowOpacity is < 0 or > 1
             || s.BankShadowBlur is < 0 or > 64 || s.HighlightOpacity is < 0 or > 1 || s.MouthFade is < 0 or > MaximumWidth
-            || s.EdgeRoughness is < 0 or > 1)
+            || s.EdgeRoughness is < 0 or > 1 || s.ShallowWidth is < 0 or > 512
+            || !MapFillTextures.IsValidId(s.TextureId) || !MapFillTextures.IsValidOpacity(s.TextureOpacity)
+            || !MapFillTextures.IsValidScale(s.TextureScale))
             throw new ArgumentException("Некорректное оформление реки.");
     }
 

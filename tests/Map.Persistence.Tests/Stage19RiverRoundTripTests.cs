@@ -41,7 +41,13 @@ public sealed class Stage19RiverRoundTripTests
         {
             Name = "Серебрянка", Channels = [main, tributary, lake, branch], WidthScale = 1.25,
             Visible = true, Locked = true,
-            Style = new RiverStyle { WaterColor = "#FF3B7A99", BankWidth = 2, HighlightOpacity = 0.4, MouthFade = 30, TaperSource = false, EdgeRoughness = 0.35, CutsLand = false, ClipToLand = true },
+            Style = new RiverStyle
+            {
+                WaterColor = "#FF3B7A99", BankWidth = 2, HighlightOpacity = 0.4, MouthFade = 30,
+                TaperSource = false, EdgeRoughness = 0.35, CutsLand = false, ClipToLand = true,
+                TextureId = "water-open", TextureOpacity = 0.65, TextureScale = 220,
+                ShallowWidth = 4.5, ShallowColor = "#99CCE4F0",
+            },
         };
         var session = new EditingSession(reopenedOld);
         session.Execute(new RiverCommand(layer.Id, river.Id, river, "create"));
@@ -65,6 +71,11 @@ public sealed class Stage19RiverRoundTripTests
         var edited = new RiverCommand(layer.Id, actual.Id, moved, "move").Apply(opened);
         var set = RiverGeometry.Evaluate(((ObjectLayer)edited.FindLayer(layer.Id)!).Rivers.Single());
         Assert.True(set.Channels[tributary.Id].JoinsParent);
+
+        // The water material and the shallows survive save and reopen; the record comparison above
+        // already covers the whole style, this names the two the eye actually notices.
+        Assert.Equal("water-open", actual.Style.TextureId);
+        Assert.Equal(4.5, actual.Style.ShallowWidth);
 
         // The curvature handles and the per-river switches survive save and reopen unchanged.
         Assert.Equal(1.75, actual.FindChannel(main.Id)!.Nodes[1].Tension);

@@ -93,7 +93,8 @@ public sealed class Stage19Application : Application
         "select-tool-picks-river-body", "marquee-takes-both-water-systems",
         "drag-moves-the-whole-selection", "delete-key-removes-selected-water",
         "undo-restores-deleted-water", "delete-key-in-text-box-keeps-the-map",
-        "smooth-keeps-node-count", "node-curvature-changes-shape", "resources-disposed",
+        "smooth-keeps-node-count", "node-curvature-changes-shape",
+        "ground-material-from-the-panel", "water-material-from-the-panel", "resources-disposed",
     ];
 
     /// <summary>Checks the short lake scenario must record and pass. It is not the full run.</summary>
@@ -419,6 +420,43 @@ public sealed class Stage19Application : Application
         _view.Canvas.Focus(); await Settle();
         await Frame();
         SaveVisual(Path.ChangeExtension(Options.OutputPath, ".selection.png"));
+
+        await Materials();
+    }
+
+    /// <summary>Map's own fill materials, chosen through the real panels and rendered for review.</summary>
+    private async Task Materials()
+    {
+        // Ground: activate the land layer and pick a material from its panel swatches.
+        var land = _editor.Session.Document.Layers.OfType<LandLayer>().First();
+        _editor.SelectLayer(land.Id); await Settle();
+        await Click("LandTexturePicker_parchment");
+        var ground = _editor.Session.Document.Layers.OfType<LandLayer>().First().EdgeStyle;
+        _report.Checks["ground-material-from-the-panel"] =
+            ground.FillTextureId == "parchment" && ground.FillTextureOpacity > 0;
+
+        // Water: pick a material for the selected river from the appearance panel.
+        await Click("RiverToolButton");
+        var river = _editor.Rivers[0];
+        _editor.SelectRiver(river.Id); await Settle();
+        await Click("RiverTexturePicker_water-open");
+        _report.Checks["water-material-from-the-panel"] =
+            _editor.Rivers.Single(r => r.Id == river.Id).Style.TextureId == "water-open"
+            && _editor.Rivers.Single(r => r.Id == river.Id).Style.ShallowWidth > 0;
+
+        _editor.Session.Viewport.Set(0, 0, 1);
+        await Frame();
+        SaveVisual(Path.ChangeExtension(Options.OutputPath, ".materials.png"));
+        SaveCanvas(Path.ChangeExtension(Options.OutputPath, ".materials.canvas.png"));
+    }
+
+    private void SaveCanvas(string path)
+    {
+        using var canvas = new RenderTargetBitmap(new PixelSize(
+            (int)Math.Ceiling(_view.Canvas.Bounds.Width), (int)Math.Ceiling(_view.Canvas.Bounds.Height)));
+        canvas.Render(_view.Canvas);
+        using var file = File.Create(path);
+        canvas.Save(file, PngBitmapEncoderOptions.Default);
     }
 
     private static VectorPoint MidSample(Map.Core.Documents.River river, Guid channelId)

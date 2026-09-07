@@ -106,6 +106,34 @@ public static class RiverRenderer
             using (var water = new SKPaint { Color = SceneRenderer.ParseColor(style.WaterColor), IsAntialias = true, Style = SKPaintStyle.Fill })
                 canvas.DrawPath(body, water);
 
+            // The water material and the shallows are what stop a river reading as a flat ribbon:
+            // the surface gets a grain, and the water lightens where it meets the bank, the way it
+            // does on a drawn map. Both stay inside the merged body, so a confluence has no seam.
+            var hasTexture = !fastPreview && style.TextureOpacity > 0
+                && MapTextureLibrary.Image(style.TextureId) is not null;
+            var shallow = style.ShallowWidth * (1 + 1 / Math.Max(1, scale * 8));
+            var hasShallow = !fastPreview && style.ShallowWidth > 0 && shallow * scale >= 0.75;
+            if (hasTexture || hasShallow)
+            {
+                canvas.Save();
+                canvas.ClipPath(body, SKClipOperation.Intersect, antialias: true);
+                if (hasTexture)
+                    MapTextureLibrary.DrawFill(canvas, style.TextureId, style.TextureScale, style.TextureOpacity, rect);
+                if (hasShallow)
+                {
+                    // Stroked along the edge and clipped to the body, so only the inner half of
+                    // the stroke survives: a band of the given width just inside the bank.
+                    using var band = new SKPaint
+                    {
+                        Color = SceneRenderer.ParseColor(style.ShallowColor), IsAntialias = true,
+                        Style = SKPaintStyle.Stroke, StrokeWidth = (float)(shallow * 2), StrokeJoin = SKStrokeJoin.Round,
+                        MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, (float)Math.Max(0.35, shallow * 0.45)),
+                    };
+                    canvas.DrawPath(body, band);
+                }
+                canvas.Restore();
+            }
+
             if (style.HighlightOpacity > 0)
                 DrawHighlights(canvas, set, style, body, scale);
 
@@ -159,18 +187,22 @@ public static class RiverRenderer
             var averageHalf = samples.Average(s => s.HalfWidth);
             // Too thin on screen: light strokes would only turn into noise.
             if (averageHalf * scale < 3) continue;
-            var width = Math.Max(0.75 / scale, averageHalf * 0.14);
+            var width = Math.Max(0.6 / scale, averageHalf * 0.10);
+            var seed = geometry.Channel.Id.GetHashCode();
             using var paint = new SKPaint { Color = color, IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = (float)width, StrokeCap = SKStrokeCap.Round };
-            using var second = new SKPaint { Color = color.WithAlpha((byte)(color.Alpha * 0.7)), IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = (float)(width * 0.8), StrokeCap = SKStrokeCap.Round };
-            using var left = DashedOffsetPath(samples, 0.34, averageHalf * 3.2, averageHalf * 4.5, 0);
-            using var right = DashedOffsetPath(samples, -0.34, averageHalf * 2.4, averageHalf * 5.6, averageHalf * 3.7);
+            using var second = new SKPaint { Color = color.WithAlpha((byte)(color.Alpha * 0.65)), IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = (float)(width * 0.8), StrokeCap = SKStrokeCap.Round };
+            // Short, uneven and drifting across the channel. Even dashes down the middle read as
+            // lane markings on a road, which is the one thing water never looks like.
+            using var left = DashedOffsetPath(samples, 0.30, averageHalf * 1.5, averageHalf * 3.4, 0, seed);
+            using var right = DashedOffsetPath(samples, -0.34, averageHalf * 1.2, averageHalf * 4.2, averageHalf * 2.6, seed ^ 0x51ED);
             canvas.DrawPath(left, paint);
             canvas.DrawPath(right, second);
         }
         canvas.Restore();
     }
 
-    private static SKPath DashedOffsetPath(RiverSample[] samples, double offsetFraction, double dash, double gap, double phase)
+    private static SKPath DashedOffsetPath(
+        RiverSample[] samples, double offsetFraction, double dash, double gap, double phase, int seed)
     {
         var path = new SKPath();
         var period = dash + gap;
@@ -179,9 +211,13 @@ public static class RiverRenderer
         {
             var s = samples[i];
             var position = (s.Distance + phase) % period;
-            var on = position < dash;
+            // The length of each stroke and its distance from the centre both wander, so no two
+            // strands are the same and none of them runs the length of the channel.
+            var lengthWobble = 0.55 + 0.75 * (0.5 + 0.5 * RiverGeometry.Noise(seed, (s.Distance + phase) / Math.Max(1e-6, period)));
+            var on = position < dash * lengthWobble;
             var nx = -s.TangentY; var ny = s.TangentX;
-            var offset = s.HalfWidth * offsetFraction;
+            var drift = 1 + 0.35 * RiverGeometry.Noise(seed ^ 0x2545, s.Distance / Math.Max(1e-6, period * 1.7));
+            var offset = s.HalfWidth * offsetFraction * drift;
             var point = new SKPoint((float)(s.X + nx * offset), (float)(s.Y + ny * offset));
             if (on)
             {

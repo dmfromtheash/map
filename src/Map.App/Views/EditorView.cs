@@ -2622,6 +2622,8 @@ public sealed partial class EditorView : UserControl
             {
                 sync();
             }
+
+            SyncTextureSwatches();
         }
         finally
         {
@@ -4696,6 +4698,15 @@ public sealed partial class EditorView : UserControl
                         if (AppearanceColor.Normalize(value) is { } color)
                             _editor.SetActiveLandStyle(style => style with { FillColor = color });
                     }),
+                BuildFillTexturePicker("LandTexturePicker", MapFillTextureKind.Ground,
+                    () => Style()?.FillTextureId,
+                    id => _editor.SetActiveLandStyle(style => style with { FillTextureId = id })),
+                AppearanceSlider("LandTextureOpacitySlider", "Сила материала", 0, 100, "%",
+                    () => Style()?.FillTextureOpacity * 100,
+                    (v, _) => _editor.SetActiveLandStyle(style => style with { FillTextureOpacity = v / 100 }), 5),
+                AppearanceSlider("LandTextureScaleSlider", "Размер материала", 16, 1024, "ед.",
+                    () => Style()?.FillTextureScale,
+                    (v, _) => _editor.SetActiveLandStyle(style => style with { FillTextureScale = v }), 8),
                 AppearanceColorBox("LandOutlineColorBox", "Цвет контура", () => Style()?.OutlineColor,
                     value =>
                     {
@@ -4737,6 +4748,102 @@ public sealed partial class EditorView : UserControl
                     (v, _) => _editor.SetActiveLandStyle(style => style with { RippleCount = (int)Math.Round(v) })),
             },
         }).Named("LandLayerBlock");
+    }
+
+    /// <summary>
+    /// One row of material swatches plus "без материала". The swatch is the tile itself, so what
+    /// the user picks is what the map gets, and only materials of the right kind are offered.
+    /// </summary>
+    private Control BuildFillTexturePicker(
+        string name, MapFillTextureKind kind, Func<string?> current, Action<string?> choose)
+    {
+        var grid = new Ui.ChoiceGrid { MaxColumns = 4, MinimumItemWidth = 52, Gap = 6 }.Named(name);
+        var buttons = new List<(Button Button, string? Id)>();
+        void Add(string? id, string title)
+        {
+            var swatch = TextureSwatch(id, title);
+            var button = new Button
+            {
+                Name = name + "_" + (id ?? "none"),
+                Content = swatch,
+                Padding = new Thickness(2),
+            }.Classed("swatch");
+            ToolTip.SetTip(button, title);
+            AutomationProperties.SetName(button, title);
+            button.Click += (_, _) => { choose(id); SyncAppearanceSections(); Canvas.InvalidateVisual(); };
+            buttons.Add((button, id));
+            _textureSwatchBorders[button] = swatch;
+            grid.Children.Add(button);
+        }
+
+        Add(null, "Без материала");
+        foreach (var texture in MapFillTextures.Of(kind)) Add(texture.Id, texture.Title);
+        _textureSwatchGroups.Add((grid, buttons, current));
+        return new StackPanel
+        {
+            Spacing = 4,
+            Children =
+            {
+                new TextBlock { Text = "Материал" }.Classed("faint", "role-caption"),
+                grid,
+            },
+        };
+    }
+
+    /// <summary>A small preview of one material, drawn from the same tile the renderer uses.</summary>
+    private static Border TextureSwatch(string? id, string title)
+    {
+        var border = new Border
+        {
+            Width = 46,
+            Height = 34,
+            CornerRadius = new CornerRadius(4),
+            BorderThickness = new Thickness(1),
+            BorderBrush = new SolidColorBrush(Color.FromArgb(90, 255, 255, 255)),
+            ClipToBounds = true,
+        };
+        if (Map.Rendering.MapTextureLibrary.Image(id) is { } image)
+        {
+            using var data = image.Encode(SkiaSharp.SKEncodedImageFormat.Png, 90);
+            using var stream = new MemoryStream(data.ToArray());
+            border.Background = new ImageBrush(new Avalonia.Media.Imaging.Bitmap(stream))
+            { Stretch = Stretch.UniformToFill };
+        }
+        else
+        {
+            border.Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
+            border.Child = new TextBlock
+            {
+                Text = "нет",
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+            }.Classed("faint");
+        }
+        _ = title;
+        return border;
+    }
+
+    private readonly List<(Ui.ChoiceGrid Grid, List<(Button Button, string? Id)> Buttons, Func<string?> Current)>
+        _textureSwatchGroups = [];
+    private readonly Dictionary<Button, Border> _textureSwatchBorders = [];
+
+    /// <summary>Marks the swatch the current style actually uses, so the choice is visible.</summary>
+    private void SyncTextureSwatches()
+    {
+        foreach (var group in _textureSwatchGroups)
+        {
+            var selected = group.Current();
+            foreach (var (button, id) in group.Buttons)
+            {
+                var active = string.Equals(id, selected, StringComparison.Ordinal);
+                Ui.SetClass(button, "active", active);
+                if (!_textureSwatchBorders.TryGetValue(button, out var swatch)) continue;
+                swatch.BorderThickness = new Thickness(active ? 2.5 : 1);
+                swatch.BorderBrush = new SolidColorBrush(active
+                    ? Color.FromArgb(255, 90, 200, 255)
+                    : Color.FromArgb(90, 255, 255, 255));
+            }
+        }
     }
 
     private Control BuildGridLayerBlock()

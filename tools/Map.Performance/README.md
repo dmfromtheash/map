@@ -19,6 +19,13 @@ interaction-start до завершения Skia scene pass. `stage13d` допо
 canvas, bounded export plan, 50K/100K save-reopen и test-only 262K boundary; 262K не меняет
 production policy.
 
+## Материалы заливки
+
+`--profile textures --output src/Map.Rendering/Textures` перегенерирует собственные бесшовные
+материалы земли и воды из `TextureForge.cs`. Тайлы детерминированы: одинаковый seed даёт
+одинаковый файл на любой машине. Ничего не заимствуется — только слоёный value-noise. После
+перегенерации достаточно обычной сборки: PNG встроены в `Map.Rendering` как ресурсы.
+
 ## Адресная проверка Stage 19
 
 `--profile native-stage19 --output artifacts/stage19-check/native.json` открывает собственное

@@ -717,6 +717,30 @@ public sealed partial class EditorViewModel
     public void SetRiverTaperSource(bool taper) => SetRiverStyle(s => s with { TaperSource = taper }, "Сужение истока");
     public void SetRiverMouthFade(double length) => SetRiverStyle(s => s with { MouthFade = Math.Clamp(length, 0, River.MaximumWidth) }, "Растворение устья");
     public void SetRiverEdgeRoughnessPercent(double percent) => SetRiverStyle(s => s with { EdgeRoughness = Math.Clamp(percent, 0, 100) / 100 }, "Шероховатость кромки");
+    public string? RiverTextureId => SelectedRiver?.Style.TextureId;
+    public double? RiverTextureOpacityPercent => SelectedRiver is { } r ? r.Style.TextureOpacity * 100 : null;
+    public double? RiverTextureScale => SelectedRiver?.Style.TextureScale;
+    public double? RiverShallowWidth => SelectedRiver?.Style.ShallowWidth;
+    public string? RiverShallowColor => SelectedRiver?.Style.ShallowColor;
+
+    /// <summary>Picks one of Map's own water materials, or none for a flat fill.</summary>
+    public void SetRiverTexture(string? id) => SetRiverStyle(
+        s => s with { TextureId = MapFillTextures.Find(id) is { Kind: MapFillTextureKind.Water } water ? water.Id : null },
+        id is null ? "Убрать текстуру воды" : "Текстура воды");
+
+    public void SetRiverTextureOpacityPercent(double percent) =>
+        SetRiverStyle(s => s with { TextureOpacity = Math.Clamp(percent, 0, 100) / 100 }, "Сила текстуры воды");
+
+    public void SetRiverTextureScale(double scale) => SetRiverStyle(
+        s => s with { TextureScale = Math.Clamp(scale, MapFillTextures.MinimumScale, MapFillTextures.MaximumScale) },
+        "Размер текстуры воды");
+
+    public void SetRiverShallowWidth(double width) =>
+        SetRiverStyle(s => s with { ShallowWidth = Math.Clamp(width, 0, 512) }, "Отмель у берега");
+
+    public void SetRiverShallowColor(string color) =>
+        SetRiverStyle(s => s with { ShallowColor = AppearanceColor.Normalize(color) ?? s.ShallowColor }, "Цвет отмели");
+
     public void SetRiverCutsLand(bool cuts) => SetRiverStyle(s => s with { CutsLand = cuts }, cuts ? "Река режет землю" : "Река поверх земли");
     public void SetRiverClipToLand(bool clip) => SetRiverStyle(s => s with { ClipToLand = clip }, clip ? "Река только по суше" : "Река и над морем");
 
@@ -796,6 +820,8 @@ public sealed partial class EditorViewModel
         Raise(nameof(SelectedChannelSourceWidth)); Raise(nameof(SelectedChannelMouthWidth)); Raise(nameof(SelectedChannelIsTributary));
         Raise(nameof(SelectedChannelHasSource)); Raise(nameof(SelectedChannelIsLake)); Raise(nameof(CanSplitSelectedChannel)); Raise(nameof(RiverDrawMode));
         Raise(nameof(SelectedRiverNodeTensionPercent)); Raise(nameof(SelectedChannelTensionPercent)); Raise(nameof(HasRiverPreview));
+        Raise(nameof(RiverTextureId)); Raise(nameof(RiverTextureOpacityPercent)); Raise(nameof(RiverTextureScale));
+        Raise(nameof(RiverShallowWidth)); Raise(nameof(RiverShallowColor));
         Raise(nameof(WaterSelectionSummary)); Raise(nameof(SelectedWaterVisible)); Raise(nameof(SelectedWaterLocked));
         InvalidateScene(EditorChangeReason.CanvasInvalidation);
     }

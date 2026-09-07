@@ -171,8 +171,15 @@ public sealed class Stage19RiverRenderingTests
             $"coast outline should hug the bank, got {ring}");
         var beside = plain.GetPixel(120, 128 - 8);
         Assert.True(Math.Abs(beside.Red - fill.Red) < 6 && Math.Abs(beside.Green - fill.Green) < 6 && Math.Abs(beside.Blue - fill.Blue) < 6, $"no ring without carving, got {beside}");
+        // The default water now carries one of Map's own materials, so the pixel is the water
+        // colour with the material mixed into it. Without a material it is that colour exactly.
         using var visible = Render(LandFixture(out _, new RiverStyle { CutsLand = true, ClipToLand = false }), 1);
-        Assert.Equal(new SKColor(0x4E, 0x86, 0xA3), visible.GetPixel(120, 128));
+        var water = visible.GetPixel(120, 128);
+        Assert.True(Math.Abs(water.Red - 0x4E) < 24 && Math.Abs(water.Green - 0x86) < 24 && Math.Abs(water.Blue - 0xA3) < 24,
+            $"the carved channel should read as water, got {water}");
+        using var plainWater = Render(
+            LandFixture(out _, new RiverStyle { CutsLand = true, ClipToLand = false, TextureId = null, ShallowWidth = 0 }), 1);
+        Assert.Equal(new SKColor(0x4E, 0x86, 0xA3), plainWater.GetPixel(120, 128));
         Assert.True(visible.GetPixel(350, 128).Alpha > 0, "without clipping the river keeps flowing over the sea");
         using var clipped = Render(LandFixture(out _, new RiverStyle { CutsLand = true, ClipToLand = true }), 1);
         SaveForReview(clipped, "land-clip.png");

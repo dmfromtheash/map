@@ -224,6 +224,16 @@ public sealed record LandEdgeStyle
     public double RippleWidth { get; init; } = 2;
     public double RippleSpacing { get; init; } = 10;
     public int RippleCount { get; init; } = 2;
+
+    /// <summary>
+    /// A built-in ground material blended over <see cref="FillColor"/>, by id
+    /// (<see cref="MapFillTextures"/>); null keeps the flat fill every older map has.
+    /// <see cref="FillTextureScale"/> is the world size of one tile, so the grain keeps its
+    /// physical size as the view zooms instead of turning into noise.
+    /// </summary>
+    public string? FillTextureId { get; init; }
+    public double FillTextureOpacity { get; init; } = 0.55;
+    public double FillTextureScale { get; init; } = MapFillTextures.DefaultGroundScale;
 }
 
 /// <summary>

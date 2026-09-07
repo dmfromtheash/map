@@ -21,7 +21,11 @@ public sealed class LandRoundTripTests
         var first = new LandLayer(
             firstId, "continent", true, false, 1,
             TileMap.Empty(1).With(new TileKey(2, 3), firstCoverage),
-            new LandEdgeStyle { FillColor = "#FF557733", RippleCount = 3, RippleSpacing = 14 },
+            new LandEdgeStyle
+            {
+                FillColor = "#FF557733", RippleCount = 3, RippleSpacing = 14,
+                FillTextureId = "meadow", FillTextureOpacity = 0.42, FillTextureScale = 240,
+            },
             new LayerMask(TileMap.Empty(1).With(new TileKey(2, 3), mask), true));
         var second = new LandLayer(
             secondId, "island", true, false, 0.8,
@@ -50,6 +54,13 @@ public sealed class LandRoundTripTests
         Assert.Null(secondAgain.Mask);
         Assert.Equal("#FFAA7733", secondAgain.EdgeStyle.FillColor);
         Assert.Null(secondAgain.GeometryTiles.TryGet(new TileKey(2, 3)));
+
+        // The ground material is part of the style and survives reopen; a layer without one keeps
+        // the plain fill, which is what every file written before materials existed carries.
+        Assert.Equal("meadow", firstAgain.EdgeStyle.FillTextureId);
+        Assert.Equal(0.42, firstAgain.EdgeStyle.FillTextureOpacity);
+        Assert.Equal(240, firstAgain.EdgeStyle.FillTextureScale);
+        Assert.Null(secondAgain.EdgeStyle.FillTextureId);
     }
 
     private static string GeometryHash(TileMap tiles)

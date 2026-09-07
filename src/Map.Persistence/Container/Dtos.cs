@@ -176,6 +176,12 @@ internal sealed class LandStyleDto
     [JsonPropertyName("rippleWidth")] public double RippleWidth { get; set; }
     [JsonPropertyName("rippleSpacing")] public double RippleSpacing { get; set; }
     [JsonPropertyName("rippleCount")] public int RippleCount { get; set; }
+
+    // Absent in every file written before ground materials existed, and absent again whenever no
+    // material is chosen, so a map that does not use one is byte-identical to what it always was.
+    [JsonPropertyName("fillTextureId")] public string? FillTextureId { get; set; }
+    [JsonPropertyName("fillTextureOpacity")] public double? FillTextureOpacity { get; set; }
+    [JsonPropertyName("fillTextureScale")] public double? FillTextureScale { get; set; }
 }
 
 internal sealed class MaskDto

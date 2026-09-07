@@ -2375,6 +2375,11 @@ public static partial class MapProjectStore
         RippleWidth = style.RippleWidth,
         RippleSpacing = style.RippleSpacing,
         RippleCount = style.RippleCount,
+        // Written only when a ground material is actually chosen, so a map without one keeps the
+        // exact bytes it had before materials existed.
+        FillTextureId = style.FillTextureId,
+        FillTextureOpacity = style.FillTextureId is null ? null : style.FillTextureOpacity,
+        FillTextureScale = style.FillTextureId is null ? null : style.FillTextureScale,
     };
 
     private static LandEdgeStyle ToLandStyle(LandStyleDto? style)
@@ -2398,6 +2403,13 @@ public static partial class MapProjectStore
             RippleWidth = style.RippleWidth,
             RippleSpacing = style.RippleSpacing,
             RippleCount = style.RippleCount,
+            // An unknown material simply falls back to a plain fill: a file from a newer Map, or
+            // one edited by hand, still opens and still looks like a map.
+            FillTextureId = MapFillTextures.Find(style.FillTextureId)?.Id,
+            FillTextureOpacity = style.FillTextureOpacity is { } textureOpacity && MapFillTextures.IsValidOpacity(textureOpacity)
+                ? textureOpacity : new LandEdgeStyle().FillTextureOpacity,
+            FillTextureScale = style.FillTextureScale is { } textureScale && MapFillTextures.IsValidScale(textureScale)
+                ? textureScale : new LandEdgeStyle().FillTextureScale,
         };
     }
 

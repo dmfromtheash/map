@@ -728,6 +728,24 @@ public static class SceneRenderer
             DrawCoverageImages(fill);
         }
 
+        // The ground material, mixed into the fill colour and kept inside the coverage. The
+        // coverage is redrawn into a layer only to provide the shape; its own colour is discarded
+        // by SrcIn, so the land keeps exactly the colour the user chose, with grain on top.
+        if (!options.FastPreview && !simplifiedOverview
+            && MapTextureLibrary.Image(style.FillTextureId) is not null && style.FillTextureOpacity > 0)
+        {
+            canvas.SaveLayer(ToRect(view), null);
+            DrawCoverageImages(null);
+            using (var shape = new SKPaint { BlendMode = SKBlendMode.SrcIn })
+            {
+                canvas.SaveLayer(ToRect(view), shape);
+                MapTextureLibrary.DrawFill(canvas, style.FillTextureId, style.FillTextureScale,
+                    style.FillTextureOpacity, ToRect(view));
+                canvas.Restore();
+            }
+            canvas.Restore();
+        }
+
         if (!options.FastPreview && !simplifiedOverview
             && style.InnerShadowOpacity > 0 && style.ShadowBlur > 0)
         {

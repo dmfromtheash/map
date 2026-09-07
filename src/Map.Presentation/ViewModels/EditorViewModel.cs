@@ -6455,6 +6455,10 @@ public sealed partial class EditorViewModel : ViewModelBase
             RippleWidth = Math.Clamp(proposed.RippleWidth, 0, 32),
             RippleSpacing = Math.Clamp(proposed.RippleSpacing, 1, 128),
             RippleCount = Math.Clamp(proposed.RippleCount, 0, 12),
+            FillTextureId = MapFillTextures.Find(proposed.FillTextureId) is { Kind: MapFillTextureKind.Ground } ground
+                ? ground.Id : null,
+            FillTextureOpacity = Math.Clamp(proposed.FillTextureOpacity, 0, 1),
+            FillTextureScale = Math.Clamp(proposed.FillTextureScale, MapFillTextures.MinimumScale, MapFillTextures.MaximumScale),
         };
         if (updated == land.EdgeStyle) return false;
         Session.Execute(new UpdateLandStyleCommand(land, updated)); AfterEdit(); return true;

@@ -4,6 +4,15 @@ using Map.Performance;
 var options = PerformanceOptions.Parse(args);
 object report;
 bool gatePassed;
+if (options.Profile == "textures")
+{
+    // Regenerates Map's own seamless fill textures into the assets folder.
+    var files = TextureForge.Write(options.OutputPath);
+    Console.WriteLine("Textures written:");
+    foreach (var file in files) Console.WriteLine("  " + file);
+    return 0;
+}
+
 if (options.Profile == "native-stage19")
 {
     var nativeReport = NativeStage19Smoke.Run(options); report = nativeReport; gatePassed = nativeReport.GatePassed;
