@@ -24,10 +24,10 @@ public sealed class PlacementAreaSampler(PlacementArea area)
     private readonly double _reach = MaximumReach(area);
     public int CachedCandidateCount => _candidates.Count;
 
-    public static WorldBounds Footprint(SceneObject item)
+    public static WorldBounds Footprint(SceneObject item, int layoutVersion = 1)
     {
         var b = SceneGeometry.BoundsOf(item);
-        var gap = Math.Max(2, Math.Min(item.Width, item.Height) * .06);
+        var gap = Math.Max(2, Math.Min(item.Width, item.Height) * (layoutVersion >= 2 ? .02 : .06));
         return new(b.Left - gap, b.Top - gap, b.Right + gap, b.Bottom + gap);
     }
     public static bool Overlaps(WorldBounds a, WorldBounds b) =>
@@ -39,7 +39,7 @@ public sealed class PlacementAreaSampler(PlacementArea area)
         return Math.Sqrt(p.Request.BaseWidth * p.Request.BaseWidth + height * height) / 2
             + p.Style.Blur * 3 + (p.Style.ShadowOpacity > 0
                 ? Math.Max(Math.Abs(p.Style.ShadowOffsetX), Math.Abs(p.Style.ShadowOffsetY)) + p.Style.ShadowBlur * 3 : 0)
-            + Math.Max(2, Math.Min(p.Request.BaseWidth, height) * .06);
+            + Math.Max(2, Math.Min(p.Request.BaseWidth, height) * (p.LayoutVersion >= 2 ? .02 : .06));
     }
     public static decimal EstimateBytes(PlacementArea p, IReadOnlyList<PlacementAreaGeometry.CellSpan> spans)
     {
@@ -61,7 +61,7 @@ public sealed class PlacementAreaSampler(PlacementArea area)
         if (_candidates.Count == MaximumCachedCandidates)
         { _candidates.Remove(_recent.First!.Value); _recent.RemoveFirst(); }
         var item = PlacementAreaPlanner.Item(area, slot);
-        return _candidates[slot] = new(item, Footprint(item), PlacementAreaPlanner.Priority(area, slot), _recent.AddLast(slot));
+        return _candidates[slot] = new(item, Footprint(item, area.LayoutVersion), PlacementAreaPlanner.Priority(area, slot), _recent.AddLast(slot));
     }
     public bool Includes(PlacementAreaSlot slot)
     {
@@ -101,7 +101,11 @@ public sealed class PlacementAreaSampler(PlacementArea area)
             var neighbour = CandidateAt(other);
             var earlier = neighbour.Priority < candidate.Priority || neighbour.Priority == candidate.Priority
                 && (other.X < slot.X || other.X == slot.X && other.Y < slot.Y);
-            if (earlier && Overlaps(candidate.Bounds, neighbour.Bounds) && ClearEarlier(other))
+            // V1 also let rejected neighbours block free positions. V2 resolves the earlier
+            // neighbour first; decreasing (ordinal, priority, cell) makes dependencies acyclic.
+            // Keep V1 unchanged so opening an existing map never repacks its saved objects.
+            if (earlier && Overlaps(candidate.Bounds, neighbour.Bounds)
+                && (area.LayoutVersion >= 2 ? Accepted(other) : ClearEarlier(other)))
             { candidate.Accepted = false; return false; }
         }
         candidate.Accepted = true; return true;
@@ -109,12 +113,12 @@ public sealed class PlacementAreaSampler(PlacementArea area)
 }
 
 /// <summary>Existing visible stamps in the same layer/band are obstacles, never moved by the fill.</summary>
-public sealed class PlacementAreaObstacles(MapDocument document, LayerId layerId, Guid areaId, int sublayer)
+public sealed class PlacementAreaObstacles(MapDocument document, LayerId layerId, Guid areaId, int sublayer, int layoutVersion = 1)
 {
     public bool Blocks(SceneObject item)
     {
         if (document.FindLayer(layerId) is not ObjectLayer layer) return false;
-        var footprint = PlacementAreaSampler.Footprint(item);
+        var footprint = PlacementAreaSampler.Footprint(item, layoutVersion);
         foreach (var other in ObjectSpatialIndex.For(layer).Query(footprint))
             if (other.Id != item.Id && other.Kind == SceneObjectKind.Stamp && other.Visible && other.Sublayer == sublayer
                 && PlacementAreaOwnership.Owner(document, other.Id)?.Id != areaId

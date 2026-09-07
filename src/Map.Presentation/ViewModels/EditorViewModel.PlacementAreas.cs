@@ -95,7 +95,7 @@ public sealed partial class EditorViewModel
             {
                 _areaDraft = template with { Id = Guid.NewGuid(), Name = NextAreaName(template.Name.Split(" · ", 2).Last()),
                     Nodes = [], Cells = ImmutableDictionary<long, ImmutableArray<PlacementAreaMember>>.Empty,
-                    MemberCount = 0, Exclusions = [], OccupiedSlots = [], LayoutVersion = 1,
+                    MemberCount = 0, Exclusions = [], OccupiedSlots = [], LayoutVersion = 2,
                     Density = settings.Density, Seed = NextGestureSeed(),
                     ScalePercent = settings.ScalePercent, RotationDegrees = settings.RotationDegrees,
                     Sublayer = settings.Sublayer, Opacity = settings.ObjectOpacity, Style = settings.Style ?? template.Style,
@@ -117,7 +117,7 @@ public sealed partial class EditorViewModel
                 _areaAssets = references; _areaLayer = ActiveObjectLayer()?.Id;
                 _areaDraft = new PlacementArea
                 {
-                    Name = NextAreaName(SelectedSet?.Name ?? "штампы"), AssetSetId = _selectedSetId, LayoutVersion = 1,
+                    Name = NextAreaName(SelectedSet?.Name ?? "штампы"), AssetSetId = _selectedSetId, LayoutVersion = 2,
                     VariantId = CurrentVariant?.Id, Variants = [.. sources], Request = request,
                     Seed = NextGestureSeed(), Density = settings.Density,
                     RotationDegrees = settings.RotationDegrees, ScalePercent = settings.ScalePercent,
@@ -271,9 +271,9 @@ public sealed partial class EditorViewModel
     }
     public void RemoveEditableAreaOverlaps()
     {
-        if (SelectedEditableArea is not { LayoutVersion: 0 } p) return;
-        if (CommitAreaChange(p with { LayoutVersion = 1, OccupiedSlots = [] }, "Разместить область без наложений"))
-            StatusDetail = "Наложения убраны с учётом размеров изображений. Сохранённые деревья остались на своих местах; действие можно отменить.";
+        if (SelectedEditableArea is not { LayoutVersion: < 2 } p) return;
+        if (CommitAreaChange(p with { LayoutVersion = 2, OccupiedSlots = [] }, "Уплотнить заполнение области"))
+            StatusDetail = "Заполнение уплотнено без наложений. Отделённые объекты сохранены; действие можно отменить.";
     }
     public void DetachSelectedAreaObject()
     {
@@ -332,8 +332,8 @@ public sealed partial class EditorViewModel
         { _areaPreviewObjects = []; _areaOverrides = []; _areaPreviewError = null; _areaPreviewInvalid = false; return; }
         try
         {
-            var obstacles = path.LayoutVersion == 1 && _areaLayer is { } layerId
-                ? new PlacementAreaObstacles(Session.Document, layerId, path.Id, path.Sublayer) : null;
+            var obstacles = path.LayoutVersion > 0 && _areaLayer is { } layerId
+                ? new PlacementAreaObstacles(Session.Document, layerId, path.Id, path.Sublayer, path.LayoutVersion) : null;
             var samples = PlacementAreaPlanner.Preview(path, _areaDragging ? _areaOriginal : null, obstacles: obstacles, memory: _workingMemory);
             _areaPreviewError = null; _areaPreviewInvalid = false;
             if (!_areaDragging) { _areaPreviewObjects = samples; return; }

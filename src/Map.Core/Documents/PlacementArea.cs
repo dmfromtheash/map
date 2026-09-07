@@ -42,7 +42,7 @@ public sealed record PlacementArea
         new PlacementPath { Id = Id, Name = Name, Nodes = Nodes, Variants = Variants, Request = Request,
             RotationDegrees = RotationDegrees, ScalePercent = ScalePercent, Sublayer = Sublayer,
             Opacity = Opacity, Style = Style }.Validate();
-        if (Cells is null || Exclusions is null || OccupiedSlots is null || LayoutVersion is < 0 or > 1
+        if (Cells is null || Exclusions is null || OccupiedSlots is null || LayoutVersion is < 0 or > 2
             || OccupiedSlots.Any(s => s.Ordinal < 0) || MemberCount < 0 || !double.IsFinite(Density)
             || Density < 0 || Density >= int.MaxValue || Exclusions.Any(s => s.Ordinal < 0))
             throw new ArgumentException("Плотность области должна быть неотрицательной; связи и исключения — корректными.");

@@ -30,7 +30,7 @@ public sealed partial class EditorView
         };
         _fillAreaSummary = new TextBlock { Name = "EditableAreaSummary", TextWrapping = TextWrapping.Wrap };
         _fillAreaDetach = Ui.TextButton("DetachAreaObjectButton", "Отделить выбранный объект", _editor.DetachSelectedAreaObject, "compact");
-        _fillAreaRemoveOverlaps = Ui.TextButton("RemoveEditableAreaOverlapsButton", "Разместить без наложений", _editor.RemoveEditableAreaOverlaps, "compact");
+        _fillAreaRemoveOverlaps = Ui.TextButton("RemoveEditableAreaOverlapsButton", "Уплотнить заполнение", _editor.RemoveEditableAreaOverlaps, "compact");
         _fillAreaPanel = new StackPanel
         {
             Spacing = 6, Children =
@@ -88,7 +88,7 @@ public sealed partial class EditorView
                 _fillAreaFinish!.IsEnabled = _editor.CanPlaceEditableArea;
                 _fillAreaPlacementHint!.Text = _editor.EditableAreaPlacementHint;
             }
-            _fillAreaRemoveOverlaps!.IsVisible = _editor.SelectedEditableArea is { LayoutVersion: 0 };
+            _fillAreaRemoveOverlaps!.IsVisible = _editor.SelectedEditableArea is { LayoutVersion: < 2 };
             _fillAreaDetach!.IsEnabled = _editor.CanDetachAreaObject;
             _fillAreaPanel.IsVisible = _editor.StampPlacementMode == Map.Presentation.ViewModels.StampPlacementMode.FillArea
                 || choices.Length > 0 || _editor.IsCreatingEditableArea;

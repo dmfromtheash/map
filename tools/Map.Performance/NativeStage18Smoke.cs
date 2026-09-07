@@ -44,6 +44,9 @@ internal sealed class NativeStage18Report
     public int HistoryDepth { get; set; }
     public double? MeasurementEditX { get; set; }
     public int? OverlappingPairs { get; set; }
+    public int? LegacyFillCount { get; set; }
+    public int? CompactFillCount { get; set; }
+    public int? ManuallyEditedSelectionCount { get; set; }
     public string? Screenshot { get; set; }
     public string? PlacementDraftScreenshot { get; set; }
     public string? SavedProject { get; set; }
@@ -123,7 +126,9 @@ public sealed class Stage18Application : Application
         {
             try
             {
-                if (densityAsset is not null) await ExecuteDensityCorrection(densityAsset);
+                if (densityAsset is not null && Environment.GetEnvironmentVariable("MAP_STAGE18_SELECTION_CHECK") == "1")
+                    await ExecuteSelectionCorrection(densityAsset);
+                else if (densityAsset is not null) await ExecuteDensityCorrection(densityAsset);
                 else if (_report.MeasurementRequired) await Execute(); else await ExecuteUiCorrection();
             }
             catch (Exception ex)
@@ -322,6 +327,97 @@ public sealed class Stage18Application : Application
         else _report.Checks["save-ui-completes"] = _editor.SaveState == SaveState.Saved && !_editor.Session.IsDirty;
         _report.Checks["fixture-read-only"] = sourceHash.SequenceEqual(SHA256.HashData(File.ReadAllBytes(fixture)));
     }
+    private async Task ExecuteSelectionCorrection(string assetPath)
+    {
+        var sourceHash = SHA256.HashData(File.ReadAllBytes(assetPath));
+        await Settle(); _editor.ChooseGalleryVariant(_catalog.Sets[0].Id, null); await Settle();
+        await Click("StampModeFillArea");
+        Find<Slider>("FutureStampScaleSlider").Value = 32; await Settle();
+        await Click("StartEditableAreaButton");
+        await Number("EditableAreaDensityBox", "20");
+        Point(90, 110); Point(950, 110); Point(520, 650);
+        await Number("EditableAreaSeedBox", "-184929685");
+        var draft = _editor.DisplayedEditableArea!;
+        var preview = _editor.PlacementPreviewObjects.ToArray();
+        var legacy = draft with { LayoutVersion = 1 };
+        var legacySampler = new PlacementAreaSampler(legacy);
+        _report.LegacyFillCount = PlacementAreaGeometry.Coverage(legacy.Nodes).Sum(span =>
+            Enumerable.Range(span.MinX, span.MaxX - span.MinX + 1).Sum(x => legacySampler.Slots(x, span.Y).Count()));
+        await Click("FinishEditableAreaButton"); await Frame();
+        var area = _editor.SelectedEditableArea!;
+        var layerId = DocumentEditor.FindLayerOf(_editor.Session.Document, area.Members.First().ObjectId)!.Id;
+        _report.CompactFillCount = area.MemberCount;
+        _report.Checks["compact-fill-uses-more-free-positions"] = area.LayoutVersion == 2 && area.MemberCount > _report.LegacyFillCount;
+        _report.Checks["compact-preview-matches-placed-stamps"] = preview.Length > 0
+            && preview.All(o => o == DocumentEditor.FindObject(_editor.Session.Document, o.Id));
+        _report.OverlappingPairs = CountOverlaps();
+        _report.Checks["compact-fill-has-no-overlaps"] = _report.OverlappingPairs == 0;
+        _report.PlacementDraftScreenshot = Path.ChangeExtension(Options.OutputPath, ".packing.png"); SaveVisual(_report.PlacementDraftScreenshot);
+
+        // Exercise the explicit upgrade control too; source files are never rewritten on open.
+        _editor.Session.Execute(new PlacementAreaCommand(layerId, area.Id, area with { LayoutVersion = 1 }, "Legacy fixture"));
+        _editor.SelectEditableArea(area.Id); await Settle();
+        var beforeUpgrade = _editor.Session.Document;
+        await Click("RemoveEditableAreaOverlapsButton");
+        var upgraded = _editor.Session.Document;
+        _report.Checks["legacy-fill-upgrades-through-visible-button"] = _editor.SelectedEditableArea is { LayoutVersion: 2 }
+            && _editor.SelectedEditableArea.MemberCount == _report.CompactFillCount;
+        _editor.Undo(); var undoUpgrade = ReferenceEquals(beforeUpgrade, _editor.Session.Document); _editor.Redo();
+        _report.Checks["repack-undo-redo-exact"] = undoUpgrade && ReferenceEquals(upgraded, _editor.Session.Document);
+
+        area = _editor.SelectedEditableArea!;
+        var items = area.Members.Select(m => DocumentEditor.FindObject(_editor.Session.Document, m.ObjectId)!).ToArray();
+        var bounds = MultiSelectionGeometry.CombinedBounds(items)!.Value;
+        _editor.ActiveTool = EditorTool.Select; _editor.Session.ClearSelection(); await Settle();
+        Drag(bounds.Left - 20, bounds.Top - 20, (bounds.Left + bounds.Right) / 2, bounds.Bottom + 20); await Settle();
+        var selection = _editor.Session.SelectedObjects.ToArray();
+        Require(selection.Length >= 2 && selection.Length < items.Length, "Marquee must select part of the fill");
+        _report.ManuallyEditedSelectionCount = selection.Length;
+        _report.Checks["canvas-marquee-selects-multiple-area-members"] = selection.All(o => PlacementAreaOwnership.Owner(_editor.Session.Document, o.Id)?.Id == area.Id);
+        _report.Screenshot = Path.ChangeExtension(Options.OutputPath, ".selection.png"); SaveVisual(_report.Screenshot);
+        var beforeMove = _editor.Session.Document; var depth = _editor.Session.UndoDepth;
+        var grab = selection[0]; var x = grab.X + grab.Width / 2; var y = grab.Y + grab.Height / 2;
+        Point(x, y);
+        _report.Checks["selection-click-does-not-detach-or-add-history"] = ReferenceEquals(beforeMove, _editor.Session.Document)
+            && _editor.Session.UndoDepth == depth;
+        Drag(x, y, x + 35, y + 20); await Frame();
+        var moved = _editor.Session.Document;
+        _report.Checks["whole-marquee-selection-drags-as-one-step"] = _editor.Session.UndoDepth == depth + 1
+            && selection.All(o => DocumentEditor.FindObject(moved, o.Id) is { } actual
+                && Math.Abs(actual.X - o.X - 35) <= .5 && Math.Abs(actual.Y - o.Y - 20) <= .5);
+        _report.Checks["drag-detaches-only-selected-stamps"] = selection.All(o => PlacementAreaOwnership.Owner(moved, o.Id) is null)
+            && ((ObjectLayer)moved.FindLayer(layerId)!).PlacementAreas.Single().MemberCount == area.MemberCount - selection.Length;
+        _editor.Undo(); var undoMove = ReferenceEquals(beforeMove, _editor.Session.Document); _editor.Redo();
+        _report.Checks["selection-move-undo-redo-exact"] = undoMove && ReferenceEquals(moved, _editor.Session.Document);
+        _editor.Undo(); await Settle();
+
+        var beforeDelete = _editor.Session.Document; depth = _editor.Session.UndoDepth;
+        await Click("MultiDeleteButton"); await Frame();
+        var deleted = _editor.Session.Document;
+        var deletedArea = ((ObjectLayer)deleted.FindLayer(layerId)!).PlacementAreas.Single();
+        var selectedIds = selection.Select(o => o.Id).ToHashSet();
+        var deletedSlots = area.Members.Where(m => selectedIds.Contains(m.ObjectId)).Select(m => m.Slot).ToArray();
+        _report.Checks["delete-button-removes-entire-selection-in-one-step"] = _editor.Session.UndoDepth == depth + 1
+            && selection.All(o => DocumentEditor.FindObject(deleted, o.Id) is null) && _editor.SelectionCount == 0;
+        _report.Checks["delete-keeps-unselected-objects-and-records-exclusions"] = deletedSlots.All(deletedArea.Exclusions.Contains)
+            && deletedArea.Members.All(m => ReferenceEquals(DocumentEditor.FindObject(beforeDelete, m.ObjectId), DocumentEditor.FindObject(deleted, m.ObjectId)));
+        _editor.Undo(); var undoDelete = ReferenceEquals(beforeDelete, _editor.Session.Document); _editor.Redo();
+        _report.Checks["selection-delete-undo-redo-exact"] = undoDelete && ReferenceEquals(deleted, _editor.Session.Document);
+        _editor.SelectEditableArea(area.Id); _editor.ActiveTool = EditorTool.Stamp; await Settle();
+        await Number("EditableAreaDensityBox", "24");
+        var final = _editor.Session.Document;
+        _report.Checks["manual-deletions-survive-density-change"] = selection.All(o => DocumentEditor.FindObject(final, o.Id) is null);
+        await Click("SaveButton"); await Until(() => _editor.SaveState != SaveState.Saving);
+        _report.SaveOutcome = _editor.SaveState.ToString();
+        _report.SavedProject = Path.Combine(_workspace, "editable-area.mapproj");
+        var opened = MapProjectStore.Open(_report.SavedProject).Document;
+        var savedArea = ((ObjectLayer)opened.FindLayer(layerId)!).PlacementAreas.Single();
+        _report.Checks["compact-fill-and-manual-exclusions-reopen"] = _editor.SaveState == SaveState.Saved
+            && savedArea.LayoutVersion == 2 && deletedSlots.All(savedArea.Exclusions.Contains)
+            && selection.All(o => DocumentEditor.FindObject(opened, o.Id) is null);
+        _report.Checks["owner-asset-read-only"] = sourceHash.SequenceEqual(SHA256.HashData(File.ReadAllBytes(assetPath)));
+    }
+
     private async Task ExecuteDensityCorrection(string assetPath)
     {
         var sourceHash = SHA256.HashData(File.ReadAllBytes(assetPath));

@@ -10,8 +10,10 @@ namespace Map.Persistence.Tests;
 
 public sealed class Stage18EditableAreaRoundTripTests
 {
-    [Fact]
-    public void V6_roundtrip_retains_area_exclusions_frozen_images_and_v5_path_versions_without_changing_original()
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void V6_roundtrip_retains_area_exclusions_frozen_images_and_v5_path_versions_without_changing_original(int layoutVersion)
     {
         using var workspace = new TempWorkspace();
         var source = workspace.File("path-v5.mapproj"); var target = workspace.File("areas-v6.mapproj");
@@ -28,7 +30,7 @@ public sealed class Stage18EditableAreaRoundTripTests
         var loaded = MapProjectStore.Open(source).Document;
         var oldVersion = new MapCheckpoint(CheckpointId.New(), "Path version", DateTimeOffset.UnixEpoch, MapCheckpointSnapshot.Capture(loaded), bytes);
         session = new EditingSession(loaded.WithCheckpoints([oldVersion]));
-        var area = new PlacementArea { AssetSetId = "frozen", VariantId = "tree", Density = 5, Seed = 18, LayoutVersion = 1,
+        var area = new PlacementArea { AssetSetId = "frozen", VariantId = "tree", Density = 5, Seed = 18, LayoutVersion = layoutVersion,
             Nodes = [new(Guid.NewGuid(), 50, 50), new(Guid.NewGuid(), 600, 50), new(Guid.NewGuid(), 600, 400), new(Guid.NewGuid(), 50, 400)],
             Variants = [new(sha, 32, 32)], Style = new(sha) { Blur = 1, ShadowOpacity = .2 },
             Request = new() { BaseWidth = 32, RandomFlip = true, RandomAngleStep = StampRandomAngleStep.Degrees60 } };
@@ -51,7 +53,7 @@ public sealed class Stage18EditableAreaRoundTripTests
         Assert.Equal(area.Nodes.ToArray(), actual.Nodes.ToArray()); Assert.Equal(area.Variants.ToArray(), actual.Variants.ToArray());
         Assert.Equal(area.Request, actual.Request); Assert.Equal(area.Style, actual.Style);
         Assert.Equal(area.AssetSetId, actual.AssetSetId); Assert.Equal(area.VariantId, actual.VariantId);
-        Assert.Equal(1, actual.LayoutVersion); Assert.True(area.OccupiedSlots.SetEquals(actual.OccupiedSlots));
+        Assert.Equal(layoutVersion, actual.LayoutVersion); Assert.True(area.OccupiedSlots.SetEquals(actual.OccupiedSlots));
         Assert.Contains(member.Slot, actual.Exclusions); Assert.Equal(2, reopened.Checkpoints.Count);
         Assert.Empty(reopened.Checkpoints[0].Snapshot.Layers.OfType<ObjectLayer>().First().PlacementAreas);
         Assert.Single(reopened.Checkpoints[1].Snapshot.Layers.OfType<ObjectLayer>().First().PlacementAreas);

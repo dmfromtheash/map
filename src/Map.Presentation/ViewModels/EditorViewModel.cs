@@ -6955,30 +6955,30 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public void NudgeSelectedObject(double deltaX, double deltaY)
     {
-        if (EditableSelectionList() is not { } before) return;
+        if (EditableSelectionList(allowAreaMembers: true) is not { } before) return;
         var after = QuantizeTransformedGeometries(before, MultiSelectionGeometry.Translate(before, deltaX, deltaY));
         // Other tools expose moved node coordinates; integer normalization can also alter an
         // older stamp's size/angle. Those cases still need the complete context-panel refresh.
         var positionOnly = before.Zip(after).All(pair => pair.First.Kind == SceneObjectKind.Stamp
             && pair.First.Width == pair.Second.Width && pair.First.Height == pair.Second.Height
             && pair.First.RotationDegrees == pair.Second.RotationDegrees);
-        ExecuteWholeSelection(before, after, "Nudge selection", geometryOnly: positionOnly);
+        ExecuteWholeSelection(before, after, "Nudge selection", geometryOnly: positionOnly, manualAreaEdit: true);
     }
 
     public void ResizeSelectedObject(int direction, bool largerStep = false)
     {
-        if (EditableSelectionList() is not { } before || direction == 0) return;
+        if (EditableSelectionList(allowAreaMembers: true) is not { } before || direction == 0) return;
         var factor = MultiSelectionGeometry.ClampScaleFactor(
             before, 1 + Math.Sign(direction) * (largerStep ? 0.1 : 0.01));
         var frame = MultiSelectionGeometry.CombinedBounds(before)!.Value;
         ExecuteWholeSelection(before, QuantizeTransformedGeometries(before, MultiSelectionGeometry.ScaleAroundCentre(
             before, factor, (frame.Left + frame.Right) / 2, (frame.Top + frame.Bottom) / 2)),
-            "Resize selection from shortcut");
+            "Resize selection from shortcut", manualAreaEdit: true);
     }
 
     public void RotateSelectedObject(int direction, bool largerStep = false, bool fineStep = false)
     {
-        if (EditableSelectionList() is not { } before || direction == 0) return;
+        if (EditableSelectionList(allowAreaMembers: true) is not { } before || direction == 0) return;
         // Geometry is intentionally integer-only. Alt therefore keeps the normal one-degree
         // step instead of creating hidden quarter-degree values.
         var step = largerStep ? 15 : 1;
@@ -6986,7 +6986,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         ExecuteWholeSelection(before, QuantizeTransformedGeometries(before, MultiSelectionGeometry.RotateAroundCentre(
             before, Math.Sign(direction) * step,
             (frame.Left + frame.Right) / 2, (frame.Top + frame.Bottom) / 2)),
-            "Rotate selection from shortcut");
+            "Rotate selection from shortcut", manualAreaEdit: true);
     }
 
     public void AdjustSelectedSublayer(int direction)
@@ -7371,7 +7371,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// </summary>
     public bool MoveSelectionToLayer(LayerId targetId)
     {
-        if (EditableSelectionList() is null)
+        if (EditableSelectionList(allowAreaMembers: true) is null)
         {
             return false;
         }
@@ -7394,16 +7394,22 @@ public sealed partial class EditorViewModel : ViewModelBase
             return false;
         }
 
+        if (ids.Select(id => DocumentEditor.FindObject(Session.Document, id)!).Any(item => !IsObjectAvailable(item)
+            || target.StateFor(item.Sublayer) is not { Visible: true, Locked: false }))
+        {
+            StatusDetail = "Объект, исходный слой или целевой подуровень скрыт либо заблокирован — перенос отклонён целиком.";
+            return false;
+        }
+
         var steps = bySource
             .Select(group => (IEditCommand)new MoveObjectsToLayerCommand(
                 Session.Document, group.Key, targetId, [.. group.Select(pair => pair.Id)]))
             .ToList();
-        Session.Execute(steps.Count == 1
+        if (!ExecuteManualAreaSelection(steps.Count == 1
             ? steps[0]
-            : new CompositeCommand("Move selection to another layer", steps));
+            : new CompositeCommand("Move selection to another layer", steps), ids)) return false;
         _activeLayerId = targetId;
         Session.SetSelection(ids);
-        AfterEdit();
         AfterSelectionChange();
         StatusDetail = $"Перенесено на слой «{target.Name}»: {EditorLabels.Objects(ids.Count)}.";
         return true;
@@ -7490,29 +7496,52 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     /// <summary>One whole-selection edit = one history entry; an unchanged result = none.</summary>
     private void ExecuteWholeSelection(
-        IReadOnlyList<SceneObject> before, IReadOnlyList<SceneObject> after, string name, bool geometryOnly = false)
+        IReadOnlyList<SceneObject> before, IReadOnlyList<SceneObject> after, string name, bool geometryOnly = false,
+        bool manualAreaEdit = false)
     {
         if (before.SequenceEqual(after))
         {
             return;
         }
 
+        if (manualAreaEdit)
+        {
+            ExecuteManualAreaSelection(new ReplaceObjectsCommand(before, after, name),
+                before.Select(o => o.Id).ToArray(), geometryOnly);
+            return;
+        }
         Session.Execute(new ReplaceObjectsCommand(before, after, name));
         AfterEdit(geometryOnly);
+    }
+
+    private bool ExecuteManualAreaSelection(IEditCommand command, IReadOnlyCollection<ObjectId> ids, bool geometryOnly = false)
+    {
+        var hasAreaMembers = ids.Any(id => PlacementAreaOwnership.Owner(Session.Document, id) is not null);
+        var before = Session.Document;
+        Session.Execute(hasAreaMembers ? new ManualAreaSelectionCommand(command, ids) : command);
+        if (ReferenceEquals(before, Session.Document))
+        {
+            if (Session.LastResourceError is { } error) StatusDetail = error;
+            return false;
+        }
+        AfterEdit(geometryOnly && !hasAreaMembers);
+        if (hasAreaMembers) StatusDetail = "Выбранные объекты изменены и отделены от области. Отмена вернёт объекты и связь с областью.";
+        return true;
     }
 
     /// <summary>
     /// The whole selection, editable or nothing: a hidden or locked member refuses the entire
     /// geometric change so no partial result can ever land (Stage 10C contract).
     /// </summary>
-    private IReadOnlyList<SceneObject>? EditableSelectionList()
+    private IReadOnlyList<SceneObject>? EditableSelectionList(bool allowAreaMembers = false)
     {
         var selected = Session.SelectedObjects;
         if (selected.Count == 0)
         {
             return null;
         }
-        if (selected.Any(o => PlacementOwnership.Owner(Session.Document, o.Id) is not null))
+        if (selected.Any(o => PlacementPathOwnership.Owner(Session.Document, o.Id) is not null
+            || !allowAreaMembers && PlacementAreaOwnership.Owner(Session.Document, o.Id) is not null))
         { StatusDetail = PlacementOwnership.DetachFirst; return null; }
 
         if (selected.Any(sceneObject => !IsObjectAvailable(sceneObject)))
@@ -7618,17 +7647,15 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// <summary>Deletes the whole selection, across layers, as one history entry.</summary>
     public void DeleteSelectedObject()
     {
-        if (Session.SelectedObjectIds.Any(id => PlacementOwnership.Owner(Session.Document, id) is not null))
-        { StatusDetail = PlacementOwnership.DetachFirst; return; }
+        if (EditableSelectionList(allowAreaMembers: true) is null) return;
         var ids = Session.SelectedObjectIds;
         if (ids.Count == 0)
         {
             return;
         }
 
-        Session.Execute(new DeleteObjectsCommand(Session.Document, [.. ids]));
+        if (!ExecuteManualAreaSelection(new DeleteObjectsCommand(Session.Document, [.. ids]), ids)) return;
         Session.ClearSelection();
-        AfterEdit();
     }
 
     /// <summary>Selected, editable object - locked and hidden objects cannot be edited.</summary>
@@ -7652,7 +7679,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     public HandleKind? HitHandle(double worldX, double worldY, double viewScale)
     {
         var selected = Session.SelectedObjects;
-        if (selected.Count == 0 || selected.Any(o => !o.Visible || o.Locked))
+        if (selected.Count == 0 || selected.Any(o => !IsObjectAvailable(o)))
         {
             return null;
         }
@@ -7678,9 +7705,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     {
         if (!additive && HitHandle(worldX, worldY, viewScale) is { } grabbed)
         {
-            var selected = Session.SelectedObjects;
-            if (selected.Any(o => PlacementOwnership.Owner(Session.Document, o.Id) is not null))
-            { StatusDetail = PlacementOwnership.DetachFirst; return CanvasGesture.None; }
+            if (EditableSelectionList(allowAreaMembers: true) is not { } selected) return CanvasGesture.None;
             DragPreview = new DragPreview(
                 selected, selected,
                 grabbed == HandleKind.Rotate ? DragMode.Rotate : DragMode.Resize,
@@ -7692,6 +7717,10 @@ public sealed partial class EditorViewModel : ViewModelBase
         var hit = SceneGeometry.HitTest(Session.Document, worldX, worldY);
         if (hit is null)
         {
+            // The empty space inside a multi-selection frame is also a move handle.
+            if (!additive && SelectionCount > 1 && MultiSelectionGeometry.CombinedBounds(Session.SelectedObjects) is { } frame
+                && worldX >= frame.Left && worldX <= frame.Right && worldY >= frame.Top && worldY <= frame.Bottom)
+                return BeginDrag(worldX, worldY) ? CanvasGesture.Drag : CanvasGesture.None;
             if (!additive && SelectionCount > 0)
             {
                 Session.ClearSelection();
@@ -7704,7 +7733,7 @@ public sealed partial class EditorViewModel : ViewModelBase
 
         SelectHit(hit, additive);
         RefreshInspector();
-        if (Session.SelectedObjectIds.Any(id => PlacementOwnership.Owner(Session.Document, id) is not null))
+        if (Session.SelectedObjectIds.Any(id => PlacementPathOwnership.Owner(Session.Document, id) is not null))
         { StatusDetail = PlacementOwnership.DetachFirst; return CanvasGesture.None; }
         if (additive)
         {
@@ -7730,13 +7759,7 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public bool BeginDrag(double startWorldX = 0, double startWorldY = 0)
     {
-        var selected = Session.SelectedObjects;
-        if (selected.Any(o => PlacementOwnership.Owner(Session.Document, o.Id) is not null))
-        { StatusDetail = PlacementOwnership.DetachFirst; return false; }
-        if (selected.Count == 0 || selected.Any(o => !o.Visible || o.Locked))
-        {
-            return false;
-        }
+        if (EditableSelectionList(allowAreaMembers: true) is not { } selected) return false;
 
         DragPreview = new DragPreview(
             selected, selected, DragMode.Move, null, startWorldX, startWorldY,
@@ -7809,12 +7832,17 @@ public sealed partial class EditorViewModel : ViewModelBase
 
         DragPreview = null;
 
+        // A click must not round saved geometry or detach an area member without a drag.
+        if (preview.Proposed.SequenceEqual(preview.Before))
+        {
+            InvalidateScene(EditorChangeReason.CanvasInvalidation);
+            return;
+        }
         var proposed = QuantizeTransformedGeometries(preview.Before, preview.Proposed);
         if (!proposed.SequenceEqual(preview.Before))
         {
-            Session.Execute(new ReplaceObjectsCommand(
-                preview.Before, proposed, "Transform selection"));
-            AfterEdit();
+            ExecuteManualAreaSelection(new ReplaceObjectsCommand(
+                preview.Before, proposed, "Transform selection"), preview.Before.Select(o => o.Id).ToArray());
         }
         else
         {

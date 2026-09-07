@@ -5,6 +5,65 @@ namespace Map.Core.Tests.Editing;
 
 public sealed class Stage18EditableAreaTests
 {
+    [Theory]
+    [InlineData(18)]
+    [InlineData(-184929685)]
+    public void Compact_layout_fills_more_real_spaces_without_overlap_or_moving_survivors(int seed)
+    {
+        var legacy = Area() with { Density = 12, Seed = seed, Request = new() { BaseWidth = 110 },
+            Variants = [new(Sha, 128, 128)],
+            Nodes = [new(Guid.NewGuid(), 10, 10), new(Guid.NewGuid(), 1100, 10), new(Guid.NewGuid(), 550, 660)] };
+        var compact = legacy with { LayoutVersion = 2 };
+        SceneObject[] Fill(PlacementArea area)
+        {
+            var sampler = new PlacementAreaSampler(area);
+            return PlacementAreaGeometry.Coverage(area.Nodes).SelectMany(s => Enumerable.Range(s.MinX, s.MaxX - s.MinX + 1)
+                .SelectMany(x => sampler.Slots(x, s.Y))).Select(sampler.Item).ToArray();
+        }
+        var oldObjects = Fill(legacy); var objects = Fill(compact);
+        Assert.True(objects.Length > oldObjects.Length, $"Compact {objects.Length}, legacy {oldObjects.Length}");
+        Assert.False(HasOverlap(objects));
+        Assert.All(objects, item => Assert.True(PlacementAreaGeometry.Contains(compact.Nodes,
+            item.X + item.Width / 2, item.Y + item.Height / 2)));
+
+        var session = Session(out var layer);
+        session.Execute(new PlacementAreaCommand(layer.Id, compact.Id, compact, "compact"));
+        Assert.Null(session.LastResourceError); Get(session.Document).ValidateMembers();
+        var before = session.Document; var areaBefore = Get(before);
+        session.Execute(new PlacementAreaCommand(layer.Id, compact.Id, areaBefore with { Density = 16 }, "density"));
+        Assert.Null(session.LastResourceError); Get(session.Document).ValidateMembers();
+        Assert.All(areaBefore.Members, member => Assert.Same(DocumentEditor.FindObject(before, member.ObjectId),
+            DocumentEditor.FindObject(session.Document, member.ObjectId)));
+        var dense = session.Document;
+        session.Execute(new PlacementAreaCommand(layer.Id, compact.Id, Get(dense) with {
+            Nodes = compact.Nodes.SetItem(1, compact.Nodes[1] with { X = 1000 }) }, "edge"));
+        Assert.Null(session.LastResourceError); Get(session.Document).ValidateMembers();
+        Assert.All(Get(session.Document).Members.Where(m => DocumentEditor.FindObject(dense, m.ObjectId) is not null),
+            member => Assert.Same(DocumentEditor.FindObject(dense, member.ObjectId), DocumentEditor.FindObject(session.Document, member.ObjectId)));
+        session.Undo(); Assert.Same(dense, session.Document);
+    }
+
+    [Fact]
+    public void Manual_batch_detach_and_delete_is_atomic_and_exclusions_survive_regeneration()
+    {
+        var session = Session(out var layer); var area = Area() with { LayoutVersion = 2 };
+        session.Execute(new PlacementAreaCommand(layer.Id, area.Id, area, "area"));
+        var original = session.Document; var stored = Get(original); var members = stored.Members.Take(5).ToArray();
+        var ids = members.Select(m => m.ObjectId).ToArray();
+        session.Execute(new ManualAreaSelectionCommand(new DeleteObjectsCommand(original, ids), ids));
+        Assert.Null(session.LastResourceError); Assert.Equal(2, session.UndoDepth);
+        var deleted = session.Document;
+        Assert.Equal(stored.MemberCount - ids.Length, Get(deleted).MemberCount);
+        Assert.All(ids, id => Assert.Null(DocumentEditor.FindObject(deleted, id)));
+        Assert.All(members, m => Assert.Contains(m.Slot, Get(deleted).Exclusions));
+        Assert.All(Get(deleted).Members, m => Assert.Same(DocumentEditor.FindObject(original, m.ObjectId), DocumentEditor.FindObject(deleted, m.ObjectId)));
+        Get(deleted).ValidateMembers();
+        session.Undo(); Assert.Same(original, session.Document); session.Redo(); Assert.Same(deleted, session.Document);
+        session.Execute(new PlacementAreaCommand(layer.Id, area.Id, Get(deleted) with { Density = 8, Seed = 98 }, "regenerate"));
+        Assert.Null(session.LastResourceError); Get(session.Document).ValidateMembers();
+        Assert.All(ids, id => Assert.Null(DocumentEditor.FindObject(session.Document, id)));
+    }
+
     private static readonly string Sha = new('a', 64);
     private static readonly string Other = new('b', 64);
     [Theory]

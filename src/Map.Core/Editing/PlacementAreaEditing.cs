@@ -173,7 +173,7 @@ public sealed class PlacementAreaCommand : IEditCommand
             if (!WorkingMemoryBudget.Shared.TryReserve(estimate, out var reservation, out var reason)) throw new InvalidOperationException(reason);
             using var held = reservation;
             var sampler = new PlacementAreaSampler(next);
-            var obstacles = next.LayoutVersion == 0 ? null : new PlacementAreaObstacles(document, layer.Id, _id, next.Sublayer);
+            var obstacles = next.LayoutVersion == 0 ? null : new PlacementAreaObstacles(document, layer.Id, _id, next.Sublayer, next.LayoutVersion);
             var occupied = next.OccupiedSlots.ToBuilder();
             var cells = (old?.Cells ?? ImmutableDictionary<long, ImmutableArray<PlacementAreaMember>>.Empty).ToBuilder();
             var memberCount = old?.MemberCount ?? 0;

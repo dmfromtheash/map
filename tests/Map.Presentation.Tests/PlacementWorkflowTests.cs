@@ -1,5 +1,6 @@
 using Map.Assets;
 using Map.Core.Documents;
+using Map.Core.Editing;
 using Map.Presentation.Tests.Support;
 using Map.Presentation.ViewModels;
 using SkiaSharp;
@@ -8,6 +9,103 @@ namespace Map.Presentation.Tests;
 
 public sealed class PlacementWorkflowTests : IDisposable
 {
+    [Fact]
+    public void Stage18_mixed_selection_drags_from_empty_frame_space_and_nudges_as_one_undoable_edit()
+    {
+        var (editor, area, selected) = AreaSelection();
+        var before = editor.Session.Document; var depth = editor.Session.UndoDepth;
+        var ids = selected.Select(o => o.Id).ToArray(); editor.Session.SetSelection(ids);
+        var frame = MultiSelectionGeometry.CombinedBounds(selected)!.Value;
+        var x = selected[^1].X - 80; var y = frame.Top + 10;
+        Assert.Null(SceneGeometry.HitTest(before, x, y));
+        Assert.Equal(CanvasGesture.Drag, editor.BeginCanvasInteraction(x, y, 1));
+        editor.EndDrag(); Assert.Same(before, editor.Session.Document); Assert.Equal(depth, editor.Session.UndoDepth);
+        Assert.Equal(CanvasGesture.Drag, editor.BeginCanvasInteraction(x, y, 1));
+        editor.UpdateDrag(40, 25); Assert.Same(before, editor.Session.Document);
+        editor.CancelDrag(); Assert.Same(before, editor.Session.Document); Assert.Equal(depth, editor.Session.UndoDepth);
+        Assert.Equal(CanvasGesture.Drag, editor.BeginCanvasInteraction(x, y, 1));
+        editor.UpdateDrag(40, 25); editor.EndDrag();
+        Assert.Null(editor.Session.LastResourceError); Assert.Equal(depth + 1, editor.Session.UndoDepth);
+        var moved = editor.Session.Document;
+        foreach (var item in selected)
+        {
+            var actual = DocumentEditor.FindObject(moved, item.Id)!;
+            Assert.InRange(Math.Abs(actual.X - item.X - 40), 0, .5);
+            Assert.InRange(Math.Abs(actual.Y - item.Y - 25), 0, .5);
+            Assert.Null(PlacementAreaOwnership.Owner(moved, item.Id));
+        }
+        var remaining = moved.Layers.OfType<ObjectLayer>().SelectMany(l => l.PlacementAreas).Single();
+        Assert.Equal(area.MemberCount - 2, remaining.MemberCount); remaining.ValidateMembers();
+        Assert.All(remaining.Members, m => Assert.Same(DocumentEditor.FindObject(before, m.ObjectId), DocumentEditor.FindObject(moved, m.ObjectId)));
+        editor.Undo(); Assert.Same(before, editor.Session.Document); editor.Redo(); Assert.Same(moved, editor.Session.Document);
+        editor.Undo(); editor.Session.SetSelection(ids); editor.NudgeSelectedObject(10, -5);
+        Assert.Null(editor.Session.LastResourceError); Assert.Equal(depth + 1, editor.Session.UndoDepth);
+        Assert.All(selected, item => Assert.InRange(Math.Abs(DocumentEditor.FindObject(editor.Session.Document, item.Id)!.X - item.X - 10), 0, .5));
+    }
+
+    [Fact]
+    public void Stage18_delete_and_layer_transfer_detach_only_selected_members_and_keep_exact_history()
+    {
+        var (editor, area, selected) = AreaSelection();
+        var ids = selected.Select(o => o.Id).ToArray(); editor.Session.SetSelection(ids);
+        var before = editor.Session.Document; var depth = editor.Session.UndoDepth;
+        editor.DeleteSelectedObject(); var deleted = editor.Session.Document;
+        Assert.Null(editor.Session.LastResourceError); Assert.Equal(depth + 1, editor.Session.UndoDepth);
+        Assert.Empty(editor.Session.SelectedObjectIds);
+        Assert.All(ids, id => Assert.Null(DocumentEditor.FindObject(deleted, id)));
+        var remaining = deleted.Layers.OfType<ObjectLayer>().SelectMany(l => l.PlacementAreas).Single();
+        Assert.Equal(area.MemberCount - 2, remaining.MemberCount); remaining.ValidateMembers();
+        editor.Undo(); Assert.Same(before, editor.Session.Document); editor.Redo(); Assert.Same(deleted, editor.Session.Document);
+        editor.Undo(); editor.AddObjectLayer(); var target = editor.ActiveLayer!.Id;
+        editor.Session.SetSelection(ids); before = editor.Session.Document; depth = editor.Session.UndoDepth;
+        Assert.True(editor.MoveSelectionToLayer(target), editor.StatusDetail);
+        Assert.Equal(depth + 1, editor.Session.UndoDepth); var transferred = editor.Session.Document;
+        Assert.All(selected, item => {
+            Assert.Same(item, DocumentEditor.FindObject(transferred, item.Id));
+            Assert.Equal(target, DocumentEditor.FindLayerOf(transferred, item.Id)!.Id);
+            Assert.Null(PlacementAreaOwnership.Owner(transferred, item.Id));
+        });
+        transferred.Layers.OfType<ObjectLayer>().SelectMany(l => l.PlacementAreas).Single().ValidateMembers();
+        editor.Undo(); Assert.Same(before, editor.Session.Document); editor.Redo(); Assert.Same(transferred, editor.Session.Document);
+    }
+
+    [Fact]
+    public void Stage18_refused_batch_keeps_selection_objects_and_area_links_untouched()
+    {
+        const long gib = 1024L * 1024 * 1024;
+        var available = gib;
+        var memory = new Map.Core.Resources.WorkingMemoryBudget(() => new(16 * gib, available, 100 * 1024 * 1024));
+        var (editor, _, selected) = AreaSelection(memory);
+        var ids = selected.Select(o => o.Id).ToArray(); editor.Session.SetSelection(ids);
+        var before = editor.Session.Document; var depth = editor.Session.UndoDepth;
+        available = 256 * 1024 * 1024; editor.DeleteSelectedObject();
+        Assert.Same(before, editor.Session.Document); Assert.Equal(depth, editor.Session.UndoDepth);
+        Assert.Equal(ids, editor.Session.SelectedObjectIds); Assert.NotNull(editor.Session.LastResourceError);
+        available = gib;
+        var ordinary = selected[^1]; editor.Session.SetSelection([ordinary.Id]); editor.SetSelectedObjectLock(true);
+        editor.Session.SetSelection(ids);
+        before = editor.Session.Document; depth = editor.Session.UndoDepth;
+        Assert.False(editor.BeginDrag()); editor.DeleteSelectedObject();
+        Assert.Same(before, editor.Session.Document); Assert.Equal(depth, editor.Session.UndoDepth);
+        Assert.Equal(ids, editor.Session.SelectedObjectIds);
+    }
+
+    private (EditorViewModel Editor, PlacementArea Area, SceneObject[] Selected) AreaSelection(Map.Core.Resources.WorkingMemoryBudget? memory = null)
+    {
+        var editor = Editor(out _, memory); editor.StampDensity = 8; editor.SetStampScalePercent(20); editor.StartEditableArea();
+        editor.AddEditableAreaNode(100, 100); editor.AddEditableAreaNode(900, 100);
+        editor.AddEditableAreaNode(900, 700); editor.AddEditableAreaNode(100, 700);
+        Assert.True(editor.FinishEditableArea(), editor.StatusDetail);
+        var area = editor.SelectedEditableArea!;
+        var members = area.Members.Select(m => DocumentEditor.FindObject(editor.Session.Document, m.ObjectId)!).OrderBy(o => o.X).ToArray();
+        Assert.True(members.Length >= 3);
+        var ordinary = new SceneObject(ObjectId.New(), SceneObjectKind.Rectangle, "Ручной объект", 1700, 100, 30, 30,
+            0, "#FFFFFFFF", "#00000000", 0, true, false);
+        editor.Session.Execute(new AddObjectCommand(editor.ActiveLayer!.Id, ordinary));
+        editor.ActiveTool = EditorTool.Select;
+        return (editor, area, [members[0], members[^1], ordinary]);
+    }
+
     [Fact]
     public void Stage18_router_creation_preview_cancel_edit_parameters_detach_and_repeat_preserve_history()
     {
@@ -28,7 +126,7 @@ public sealed class PlacementWorkflowTests : IDisposable
         Assert.Equal(1, editor.Session.UndoDepth);
         foreach (var item in preview) Assert.Equal(item, Map.Core.Editing.DocumentEditor.FindObject(editor.Session.Document, item.Id));
         var created = editor.Session.Document; var area = editor.SelectedEditableArea!;
-        Assert.Equal(1, area.LayoutVersion);
+        Assert.Equal(2, area.LayoutVersion);
         router.Press(CanvasPointerButton.Left, 800, 100); router.Move(700, 150);
         Assert.Same(created, editor.Session.Document); editor.HandleEscape(); router.Release(700, 150);
         Assert.Same(created, editor.Session.Document);
