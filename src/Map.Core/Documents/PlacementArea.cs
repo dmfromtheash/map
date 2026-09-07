@@ -11,7 +11,18 @@ public readonly record struct PlacementAreaSlot(int X, int Y, int Ordinal)
 }
 public sealed record PlacementAreaMember(PlacementAreaSlot Slot, ObjectId ObjectId);
 
-public enum PlacementAreaPattern { Masses, Ridge, Groups }
+public enum PlacementAreaPattern { Masses, Ridge, Groups, Clearings }
+
+/// <summary>A small shared silhouette, frozen per source image, not per placed object.</summary>
+public sealed record StampContentMask(ImmutableArray<uint> Rows)
+{
+    public const int Edge = 32;
+    public void Validate()
+    {
+        if (Rows.IsDefault || Rows.Length != Edge || !Rows.Any(r => r != 0))
+            throw new ArgumentException("Некорректный силуэт изображения области.");
+    }
+}
 
 /// <summary>Normalized alpha bounds, measured once from the shared source and frozen with the area.</summary>
 public readonly record struct StampContentBounds(double Left, double Top, double Right, double Bottom)
@@ -44,7 +55,9 @@ public sealed record PlacementArea
     public double CompositionLength { get; init; }
     public double CompositionAngleDegrees { get; init; }
     public PlacementAreaPattern Pattern { get; init; }
+    public bool JoinEdges { get; init; }
     public ImmutableDictionary<string, StampContentBounds> ContentBounds { get; init; } = ImmutableDictionary<string, StampContentBounds>.Empty;
+    public ImmutableDictionary<string, StampContentMask> ContentMasks { get; init; } = ImmutableDictionary<string, StampContentMask>.Empty;
     public double SizeVariationPercent { get; init; } = 30;
     public ImmutableHashSet<PlacementAreaSlot> OccupiedSlots { get; init; } = [];
     public int MemberCount { get; init; }
@@ -64,7 +77,7 @@ public sealed record PlacementArea
         new PlacementPath { Id = Id, Name = Name, Nodes = Nodes, Variants = Variants, Request = Request,
             RotationDegrees = RotationDegrees, ScalePercent = ScalePercent, Sublayer = Sublayer,
             Opacity = Opacity, Style = Style }.Validate();
-        if (Cells is null || Exclusions is null || OccupiedSlots is null || ContentBounds is null || LayoutVersion is < 0 or > 3
+        if (Cells is null || Exclusions is null || OccupiedSlots is null || ContentBounds is null || ContentMasks is null || LayoutVersion is < 0 or > 4
             || !double.IsFinite(CompositionOrigin.X) || !double.IsFinite(CompositionOrigin.Y)
             || !double.IsFinite(CompositionLength) || CompositionLength < 0 || CompositionLength > CanvasDimensionPolicy.Maximum * 2d
             || !double.IsFinite(CompositionAngleDegrees) || CompositionAngleDegrees is < -180 or > 180 || !Enum.IsDefined(Pattern)
@@ -78,6 +91,12 @@ public sealed record PlacementArea
         {
             if (!Variants.Any(v => v.Sha256 == sha)) throw new ArgumentException("Границы принадлежат неизвестному изображению области.");
             bounds.Validate();
+        }
+        foreach (var (sha, mask) in ContentMasks)
+        {
+            if (!Variants.Any(v => v.Sha256 == sha) || mask is null)
+                throw new ArgumentException("Силуэт принадлежит неизвестному изображению области.");
+            mask.Validate();
         }
         PlacementAreaGeometry.Validate(Nodes);
     }

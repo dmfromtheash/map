@@ -126,7 +126,7 @@ public sealed class PlacementWorkflowTests : IDisposable
         Assert.Equal(1, editor.Session.UndoDepth);
         foreach (var item in preview) Assert.Equal(item, Map.Core.Editing.DocumentEditor.FindObject(editor.Session.Document, item.Id));
         var created = editor.Session.Document; var area = editor.SelectedEditableArea!;
-        Assert.Equal(3, area.LayoutVersion);
+        Assert.Equal(4, area.LayoutVersion);
         router.Press(CanvasPointerButton.Left, 800, 100); router.Move(700, 150);
         Assert.Same(created, editor.Session.Document); editor.HandleEscape(); router.Release(700, 150);
         Assert.Same(created, editor.Session.Document);
@@ -154,7 +154,7 @@ public sealed class PlacementWorkflowTests : IDisposable
     }
 
     [Fact]
-    public void Stage18_natural_density_and_sizes_are_independent_of_scatter_and_reroll_is_one_undoable_action()
+    public async Task Stage18_natural_density_and_sizes_are_independent_of_scatter_and_reroll_is_one_undoable_action()
     {
         var editor = Editor(out _); editor.StampDensity = 7; editor.SetStampScalePercent(25);
         editor.StartEditableArea(); editor.SetEditableAreaDensity(65); editor.SetEditableAreaSizeVariation(20);
@@ -166,9 +166,13 @@ public sealed class PlacementWorkflowTests : IDisposable
         editor.TryAnotherEditableAreaArrangement();
         Assert.NotEqual(firstSeed, editor.DisplayedEditableArea!.Seed);
         Assert.Same(original, editor.Session.Document); Assert.Equal(0, editor.Session.UndoDepth);
+        await editor.PendingEditableAreaCount;
+        var predicted = editor.PlannedEditableAreaCount;
+        Assert.True(predicted > 0); Assert.Contains($"{predicted:N0}", editor.EditableAreaResult);
         var preview = editor.PlacementPreviewObjects.ToArray();
         Assert.True(editor.FinishEditableArea(), editor.StatusDetail);
         var area = editor.SelectedEditableArea!; var placed = editor.Session.Document;
+        Assert.Equal(predicted, area.MemberCount); Assert.True(area.JoinEdges);
         Assert.Equal(65, area.Density); Assert.Equal(20, area.SizeVariationPercent); Assert.Equal(7, editor.StampDensity);
         Assert.All(preview, item => Assert.Equal(item, DocumentEditor.FindObject(placed, item.Id)));
         editor.TryAnotherEditableAreaArrangement(); var changed = editor.Session.Document;
@@ -186,9 +190,40 @@ public sealed class PlacementWorkflowTests : IDisposable
         editor.Session.Execute(new PlacementAreaCommand(layerId, area.Id, area with { LayoutVersion = 2, Density = 5 }, "legacy fixture"));
         var legacy = editor.Session.Document; editor.SelectEditableArea(area.Id);
         Assert.Same(legacy, editor.Session.Document); Assert.False(editor.UsesNaturalAreaLayout);
-        editor.ArrangeEditableAreaNaturally(); Assert.Equal(3, editor.SelectedEditableArea!.LayoutVersion);
+        editor.ArrangeEditableAreaNaturally(); Assert.Equal(4, editor.SelectedEditableArea!.LayoutVersion);
         Assert.Equal(65, editor.SelectedEditableArea.Density);
         editor.Undo(); Assert.Same(legacy, editor.Session.Document);
+    }
+
+    [Fact]
+    public async Task Stage18_counter_drops_obsolete_drafts_and_escape_has_no_history()
+    {
+        var editor = Editor(out _); editor.SetStampScalePercent(30); editor.StartEditableArea();
+        editor.AddEditableAreaNode(100, 100); editor.AddEditableAreaNode(800, 100); editor.AddEditableAreaNode(800, 600);
+        var original = editor.Session.Document;
+        editor.SetEditableAreaPattern(PlacementAreaPattern.Ridge); editor.SetEditableAreaDensity(35);
+        editor.TryAnotherEditableAreaArrangement(); editor.SetEditableAreaDensity(80); editor.SetEditableAreaJoinEdges(false);
+        await editor.PendingEditableAreaCount;
+        Assert.Equal(PlacementAreaPlanner.Count(editor.DisplayedEditableArea!), editor.PlannedEditableAreaCount);
+        Assert.Equal(0, editor.Session.UndoDepth); Assert.Same(original, editor.Session.Document);
+        editor.SetEditableAreaDensity(60); editor.HandleEscape(); await editor.PendingEditableAreaCount;
+        Assert.False(editor.HasAreaGesture); Assert.Null(editor.PlannedEditableAreaCount);
+        Assert.DoesNotContain("Подсчёт", editor.EditableAreaResult); Assert.Same(original, editor.Session.Document);
+    }
+
+    [Fact]
+    public void Stage18_alpha_measurement_reads_shared_pixels_and_keeps_a_filtering_fringe()
+    {
+        using var bitmap = new SKBitmap(20, 10, SKColorType.Rgba8888, SKAlphaType.Premul);
+        bitmap.Erase(SKColors.Transparent);
+        for (var y = 2; y < 8; y++) for (var x = 4; x < 16; x++) bitmap.SetPixel(x, y, SKColors.Green);
+        using var image = SKImage.FromBitmap(bitmap);
+        var measured = Map.Presentation.Services.StampContentMeasurer.Read(image);
+        Assert.Equal(new StampContentBounds(.15, .1, .85, .9), measured.Bounds);
+        Assert.NotNull(measured.Mask); measured.Mask.Validate();
+        Assert.Equal(0u, measured.Mask.Rows[0]); Assert.Equal(0u, measured.Mask.Rows[31]);
+        Assert.Equal(0x03ffffc0u, measured.Mask.Rows[16]);
+        Assert.Equal(SKColors.Green, bitmap.GetPixel(4, 2)); Assert.Equal(0, bitmap.GetPixel(0, 0).Alpha);
     }
 
     [Fact]

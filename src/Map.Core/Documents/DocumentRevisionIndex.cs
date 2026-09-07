@@ -449,7 +449,7 @@ public sealed class DocumentRevisionIndex
     internal static void RegisterAppends(
         MapDocument source,
         MapDocument target,
-        IReadOnlyList<DocumentObjectLocation> additions)
+        IReadOnlyList<DocumentObjectLocation> additions, ObjectLayer? structuralLayer = null)
     {
         if (additions.Count == 0
             || !Cache.TryGetValue(source, out var sourceIndex)
@@ -470,6 +470,9 @@ public sealed class DocumentRevisionIndex
 
         var segment = new AppendSegment(
             sourceIndex._appendTail, locations, [.. additions], identities);
+        var structural = sourceIndex._structuralLayers;
+        if (structuralLayer is not null)
+        { var revised = structural.ToDictionary(p => p.Key, p => p.Value); revised[structuralLayer.Id] = structuralLayer; structural = revised; }
         Cache.Add(target, new DocumentRevisionIndex(
             target,
             sourceIndex._root,
@@ -477,7 +480,7 @@ public sealed class DocumentRevisionIndex
             sourceIndex._overrideIdentities,
             segment,
             checked(sourceIndex._appendedCount + additions.Count),
-            sourceIndex._appendDepth + 1) { _structuralLayers = sourceIndex._structuralLayers, _removedCount = sourceIndex._removedCount });
+            sourceIndex._appendDepth + 1) { _structuralLayers = structural, _removedCount = sourceIndex._removedCount });
     }
 
     /// <summary>

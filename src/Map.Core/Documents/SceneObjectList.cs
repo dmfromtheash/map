@@ -160,6 +160,42 @@ public sealed class SceneObjectList : IReadOnlyList<SceneObject>
     public SceneObjectList InsertRange(int index, IReadOnlyList<SceneObject> inserted) =>
         Splice(index, removeCount: 0, inserted);
 
+    /// <summary>Batch insertions at original indices; only intersected chunks are rebuilt.</summary>
+    internal SceneObjectList InsertMany(IReadOnlyDictionary<int, IReadOnlyList<SceneObject>> insertions)
+    {
+        if (insertions.Count == 0) return this;
+        var ordered = insertions.OrderBy(kv => kv.Key).ToArray();
+        if (ordered[0].Key < 0 || ordered[^1].Key > Count) throw new ArgumentOutOfRangeException(nameof(insertions));
+        var chunks = new List<SceneObject[]>(); var at = 0; var added = 0;
+        foreach (var (chunk, start) in _chunks.Zip(_starts))
+        {
+            var end = start + chunk.Length;
+            if (at == ordered.Length || ordered[at].Key >= end) { chunks.Add(chunk); continue; }
+            var buffer = new List<SceneObject>(); var offset = 0;
+            while (at < ordered.Length && ordered[at].Key < end)
+            {
+                var insertion = ordered[at++];
+                while (start + offset < insertion.Key) buffer.Add(chunk[offset++]);
+                buffer.AddRange(insertion.Value); added = checked(added + insertion.Value.Count);
+            }
+            while (offset < chunk.Length) buffer.Add(chunk[offset++]);
+            AddChunks(buffer);
+        }
+        if (at < ordered.Length)
+        { var tail = ordered[at].Value; added = checked(added + tail.Count); AddChunks(tail); }
+        return new SceneObjectList([.. chunks], checked(Count + added), this);
+
+        void AddChunks(IReadOnlyList<SceneObject> buffer)
+        {
+            for (var start = 0; start < buffer.Count; start += ChunkSize)
+            {
+                var part = new SceneObject[Math.Min(ChunkSize, buffer.Count - start)];
+                for (var i = 0; i < part.Length; i++) part[i] = buffer[start + i];
+                chunks.Add(part);
+            }
+        }
+    }
+
     /// <summary>
     /// Appends a placement/paste batch without flattening the already stored prefix. Only the
     /// last partial chunk, the new chunks and the small chunk directory are copied.

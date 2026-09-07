@@ -10,7 +10,7 @@ namespace Map.Core.Editing;
 internal static class PlacementAreaComposition
 {
     public static double MaximumScale(PlacementArea area) => 1 + area.SizeVariationPercent / 100;
-    internal readonly record struct Sample(bool Eligible, double Scale, ulong Priority, double Activation);
+    internal readonly record struct Sample(bool Eligible, double Scale, ulong Priority, double Activation, VectorPoint? Point = null);
 
     private static (double Width, double Height) Size(PlacementArea area, StampVariantSource variant)
     {

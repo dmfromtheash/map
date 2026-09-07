@@ -201,6 +201,7 @@ public sealed record MapDocument
             {
                 if (area is null || !pathIds.Add(area.Id)) throw new ArgumentException("Null or duplicate placement area id.");
                 area.ValidateMembers();
+                var composition = area.LayoutVersion >= 4 ? new Editing.PlacementAreaLayout(area) : null;
                 foreach (var member in area.Members)
                 {
                     if (!ownedIds.Add(member.ObjectId) || !objectsById.TryGetValue(member.ObjectId, out var item)
@@ -208,7 +209,7 @@ public sealed record MapDocument
                         || !area.Variants.Any(v => v.Sha256 == item.Stamp.AssetSha256)
                         || item.Stamp.MaskAssetSha256 is { } mask && !Assets.Any(a => a.Sha256 == mask))
                         throw new ArgumentException("Invalid or multiply owned placement area member.");
-                    var anchor = Editing.PlacementAreaPlanner.Anchor(area, member.Slot);
+                    var anchor = composition?.At(member.Slot).Point ?? Editing.PlacementAreaPlanner.Anchor(area, member.Slot);
                     if (Math.Abs(item.X + item.Width / 2 - anchor.X) > .000001
                         || Math.Abs(item.Y + item.Height / 2 - anchor.Y) > .000001 || item.Sublayer != area.Sublayer)
                         throw new ArgumentException("A placement area member is outside its saved slot or sublayer.");
@@ -216,6 +217,7 @@ public sealed record MapDocument
                 if (area.Variants.Any(v => !Assets.Any(a => a.Sha256 == v.Sha256)
                     || v.MaskSha256 is { } mask && !Assets.Any(a => a.Sha256 == mask)))
                     throw new ArgumentException("A saved area must retain every resolved variant and mask.");
+                Editing.PlacementAreaDrawOrder.Warm(area, area.Members.Select(m => objectsById[m.ObjectId]));
             }
         }
         if (Checkpoints.Count > MapCheckpointLimits.MaxCount)

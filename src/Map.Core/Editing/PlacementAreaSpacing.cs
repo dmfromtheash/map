@@ -10,20 +10,24 @@ namespace Map.Core.Editing;
 public sealed class PlacementAreaSampler(PlacementArea area, CancellationToken cancellationToken = default)
 {
     public const int MaximumCachedCandidates = 16_384;
-    private sealed class Candidate(SceneObject item, WorldBounds bounds, ulong priority, bool eligible, double activation, LinkedListNode<PlacementAreaSlot> node)
+    public const double MaximumJoinedOverlap = .55;
+    private sealed class Candidate(SceneObject item, WorldBounds bounds, WorldBounds visible, ulong priority, bool eligible, double activation, LinkedListNode<PlacementAreaSlot> node)
     {
         public SceneObject Item { get; } = item;
         public WorldBounds Bounds { get; } = bounds;
+        public WorldBounds Visible { get; } = visible;
         public ulong Priority { get; } = priority;
         public bool Eligible { get; } = eligible;
         public double Activation { get; } = activation;
         public LinkedListNode<PlacementAreaSlot> Node { get; } = node;
         public bool? ClearEarlier { get; set; }
         public bool? Accepted { get; set; }
+        public PlacementAreaSilhouette? Silhouette { get; init; }
     }
     private readonly Dictionary<PlacementAreaSlot, Candidate> _candidates = [];
     private readonly LinkedList<PlacementAreaSlot> _recent = new();
     private readonly double _reach = MaximumReach(area);
+    private readonly PlacementAreaLayout? _layout = area.LayoutVersion >= 4 ? new(area) : null;
     public int CachedCandidateCount => _candidates.Count;
 
     public static WorldBounds Footprint(SceneObject item, int layoutVersion = 1)
@@ -55,11 +59,44 @@ public sealed class PlacementAreaSampler(PlacementArea area, CancellationToken c
     {
         if (area.LayoutVersion < 3) return Footprint(item, area.LayoutVersion);
         var b = VisibleBounds(area, item);
+        if (area.JoinEdges)
+        {
+            // Canopies/bases can interlock more vertically than horizontally. Keep the centre
+            // clear and independently limit intersection of the smaller visible rectangle.
+            var insetX = (b.Right - b.Left) * .18; var insetY = (b.Bottom - b.Top) * .32;
+            return new(b.Left + insetX, b.Top + insetY, b.Right - insetX, b.Bottom - insetY);
+        }
         var gap = Math.Max(.5, Math.Min(b.Right - b.Left, b.Bottom - b.Top) * .01);
         return new(b.Left - gap, b.Top - gap, b.Right + gap, b.Bottom + gap);
     }
     public static bool Overlaps(WorldBounds a, WorldBounds b) =>
         a.Left < b.Right && a.Right > b.Left && a.Top < b.Bottom && a.Bottom > b.Top;
+    public static double OverlapFraction(WorldBounds a, WorldBounds b)
+    {
+        var intersection = Math.Max(0, Math.Min(a.Right, b.Right) - Math.Max(a.Left, b.Left))
+            * Math.Max(0, Math.Min(a.Bottom, b.Bottom) - Math.Max(a.Top, b.Top));
+        return intersection / Math.Min((a.Right - a.Left) * (a.Bottom - a.Top), (b.Right - b.Left) * (b.Bottom - b.Top));
+    }
+    private static bool CoresConflict(PlacementArea area, WorldBounds a, WorldBounds b)
+    {
+        if (area.LayoutVersion < 4 || !area.JoinEdges) return Overlaps(a, b);
+        // Rounded protected centres let diagonal edges interlock without rectangular holes.
+        var dx = (a.Left + a.Right - b.Left - b.Right) / (a.Right - a.Left + b.Right - b.Left);
+        var dy = (a.Top + a.Bottom - b.Top - b.Bottom) / (a.Bottom - a.Top + b.Bottom - b.Top);
+        return dx * dx + dy * dy < 1;
+    }
+    public static bool Conflicts(PlacementArea area, SceneObject a, SceneObject b)
+    {
+        var av = VisibleBounds(area, a); var bv = VisibleBounds(area, b);
+        if (PlacementAreaSilhouette.Create(area, a, av) is { } sa && PlacementAreaSilhouette.Create(area, b, bv) is { } sb)
+            return Overlaps(av, bv) && PlacementAreaSilhouette.Conflicts(sa, sb);
+        return CoresConflict(area, Footprint(area, a), Footprint(area, b)) || area.LayoutVersion >= 3 && area.JoinEdges
+            && OverlapFraction(av, bv) > MaximumJoinedOverlap;
+    }
+    private bool Conflicts(Candidate a, Candidate b) => a.Silhouette is { } sa && b.Silhouette is { } sb
+        ? Overlaps(a.Visible, b.Visible) && PlacementAreaSilhouette.Conflicts(sa, sb)
+        : CoresConflict(area, a.Bounds, b.Bounds)
+            || area.LayoutVersion >= 3 && area.JoinEdges && OverlapFraction(a.Visible, b.Visible) > MaximumJoinedOverlap;
 
     private static double MaximumReach(PlacementArea p)
     {
@@ -76,7 +113,8 @@ public sealed class PlacementAreaSampler(PlacementArea area, CancellationToken c
         // Reserve the bounded working cache, live dependency frames and the <=64 preview results.
         // The old whole dependency halo grew cubically with density (gigabytes for a few mountains).
         // Eviction only recomputes pure slot decisions; it never changes the stored layout rule.
-        return (MaximumCachedCandidates + 2 * (decimal)PlacementAreaPlanner.CandidatePasses(p) + 256) * 1664;
+        return (MaximumCachedCandidates + 2 * (decimal)(p.LayoutVersion >= 4 ? 0 : PlacementAreaPlanner.CandidatePasses(p)) + 256) * 1664
+            + (p.LayoutVersion >= 4 ? 4 * 1024 * 1024 : 0);
     }
     public SceneObject Item(PlacementAreaSlot slot) => area.LayoutVersion == 0
         ? PlacementAreaPlanner.Item(area, slot) : CandidateAt(slot).Item;
@@ -90,23 +128,34 @@ public sealed class PlacementAreaSampler(PlacementArea area, CancellationToken c
         }
         if (_candidates.Count == MaximumCachedCandidates)
         { _candidates.Remove(_recent.First!.Value); _recent.RemoveFirst(); }
-        PlacementAreaComposition.Sample? composition = area.LayoutVersion >= 3 ? PlacementAreaComposition.At(area, slot) : null;
+        PlacementAreaComposition.Sample? composition = _layout?.At(slot)
+            ?? (area.LayoutVersion >= 3 ? PlacementAreaComposition.At(area, slot) : null);
         var item = PlacementAreaPlanner.Item(area, slot, composition);
-        return _candidates[slot] = new(item, Footprint(area, item),
+        var visible = VisibleBounds(area, item);
+        return _candidates[slot] = new(item, Footprint(area, item), visible,
             composition?.Priority ?? PlacementAreaPlanner.Priority(area, slot), composition?.Eligible ?? true,
-            composition?.Activation ?? 0, _recent.AddLast(slot));
+            composition?.Activation ?? 0, _recent.AddLast(slot)) { Silhouette = PlacementAreaSilhouette.Create(area, item, visible) };
     }
     public bool Includes(PlacementAreaSlot slot)
     {
-        if (!PlacementAreaPlanner.IncludesGeometry(area, slot)) return false;
+        if (!PlacementAreaPlanner.IncludesGeometry(area, slot, _layout?.At(slot).Point)) return false;
         if (area.LayoutVersion >= 3 && CandidateAt(slot).Activation > area.Density) return false;
         return area.LayoutVersion == 0 || Accepted(slot);
     }
     public IEnumerable<PlacementAreaSlot> Slots(int x, int y)
     {
-        var passes = PlacementAreaPlanner.CandidatePasses(area);
+        var passes = area.Density == 0 ? 0 : _layout?.Cell(x, y).Count ?? PlacementAreaPlanner.CandidatePasses(area);
         for (var ordinal = 0; ordinal < passes; ordinal++)
         { var slot = new PlacementAreaSlot(x, y, ordinal); if (Includes(slot)) yield return slot; }
+    }
+    internal IEnumerable<PlacementAreaSlot> PreviewSlots(int x, int y, int maximum)
+    {
+        var count = _layout!.Cell(x, y).Count; var take = Math.Min(count, maximum);
+        for (var i = 0; i < take; i++)
+        {
+            var slot = new PlacementAreaSlot(x, y, take == 1 ? 0 : (int)((long)i * (count - 1) / (take - 1)));
+            if (Includes(slot)) yield return slot;
+        }
     }
     private IEnumerable<PlacementAreaSlot> Neighbours(WorldBounds b, int ordinal)
     {
@@ -120,8 +169,8 @@ public sealed class PlacementAreaSampler(PlacementArea area, CancellationToken c
         var candidate = CandidateAt(slot);
         if (candidate.ClearEarlier is { } clear) return clear;
         for (var ordinal = 0; ordinal < slot.Ordinal; ordinal++)
-            foreach (var other in Neighbours(candidate.Bounds, ordinal))
-                if (Overlaps(candidate.Bounds, CandidateAt(other).Bounds) && Accepted(other))
+            foreach (var other in Neighbours(area.LayoutVersion >= 3 ? candidate.Visible : candidate.Bounds, ordinal))
+                if (Conflicts(candidate, CandidateAt(other)) && Accepted(other))
                 { candidate.ClearEarlier = false; return false; }
         candidate.ClearEarlier = true; return true;
     }
@@ -130,8 +179,27 @@ public sealed class PlacementAreaSampler(PlacementArea area, CancellationToken c
         var candidate = CandidateAt(slot);
         if (candidate.Accepted is { } accepted) return accepted;
         if (!candidate.Eligible) { candidate.Accepted = false; return false; }
+        if (_layout is not null)
+        {
+            foreach (var cell in Neighbours(candidate.Visible, 0))
+            {
+                var count = _layout.Cell(cell.X, cell.Y).Count;
+                for (var ordinal = 0; ordinal < count; ordinal++)
+                {
+                    var other = cell with { Ordinal = ordinal };
+                    if (other == slot) continue;
+                    var neighbour = CandidateAt(other);
+                    var earlier = neighbour.Priority < candidate.Priority || neighbour.Priority == candidate.Priority
+                        && (other.X < slot.X || other.X == slot.X && (other.Y < slot.Y
+                            || other.Y == slot.Y && other.Ordinal < slot.Ordinal));
+                    if (earlier && Conflicts(candidate, neighbour) && Accepted(other))
+                    { candidate.Accepted = false; return false; }
+                }
+            }
+            candidate.Accepted = true; return true;
+        }
         if (!ClearEarlier(slot)) { candidate.Accepted = false; return false; }
-        foreach (var other in Neighbours(candidate.Bounds, slot.Ordinal))
+        foreach (var other in Neighbours(area.LayoutVersion >= 3 ? candidate.Visible : candidate.Bounds, slot.Ordinal))
         {
             if (other == slot) continue;
             var neighbour = CandidateAt(other);
@@ -140,7 +208,7 @@ public sealed class PlacementAreaSampler(PlacementArea area, CancellationToken c
             // V1 also let rejected neighbours block free positions. V2 resolves the earlier
             // neighbour first; decreasing (ordinal, priority, cell) makes dependencies acyclic.
             // Keep V1 unchanged so opening an existing map never repacks its saved objects.
-            if (earlier && Overlaps(candidate.Bounds, neighbour.Bounds)
+            if (earlier && Conflicts(candidate, neighbour)
                 && (area.LayoutVersion >= 2 ? Accepted(other) : ClearEarlier(other)))
             { candidate.Accepted = false; return false; }
         }
@@ -155,7 +223,9 @@ public sealed class PlacementAreaObstacles(MapDocument document, LayerId layerId
     public bool Blocks(SceneObject item)
     {
         if (document.FindLayer(layerId) is not ObjectLayer layer) return false;
-        var footprint = area is null ? PlacementAreaSampler.Footprint(item, layoutVersion) : PlacementAreaSampler.Footprint(area, item);
+        // Joining is only between this area's members. Foreign and detached objects remain clear.
+        var footprint = area is null || area.LayoutVersion < 3 ? PlacementAreaSampler.Footprint(item, layoutVersion)
+            : PlacementAreaSampler.VisibleBounds(area, item);
         foreach (var other in ObjectSpatialIndex.For(layer).Query(footprint))
             if (other.Id != item.Id && other.Kind == SceneObjectKind.Stamp && other.Visible && other.Sublayer == sublayer
                 && PlacementAreaOwnership.Owner(document, other.Id)?.Id != areaId

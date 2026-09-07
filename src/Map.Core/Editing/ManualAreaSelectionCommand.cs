@@ -57,6 +57,7 @@ public sealed class ManualAreaSelectionCommand(IEditCommand edit, IReadOnlyColle
                 }
                 areas[ai] = area with { Cells = cells.ToImmutable(), MemberCount = area.MemberCount - removed.Length,
                     Exclusions = area.Exclusions.Union(removed.Select(m => m.Slot)) };
+                PlacementAreaDrawOrder.Detach(area, areas[ai], removed.Select(m => index.FindObject(m.ObjectId)!));
                 detachedCount += removed.Length;
                 changed = true;
             }

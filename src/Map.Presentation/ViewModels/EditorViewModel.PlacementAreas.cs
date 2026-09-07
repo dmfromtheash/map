@@ -20,9 +20,10 @@ public sealed partial class EditorViewModel
     private bool _areaPreviewInvalid;
     private PlacementArea? _newAreaTemplate;
     private bool _areaStartRequested;
-    private double _naturalAreaDensity = 70, _naturalAreaSizeVariation = 30;
+    private double _naturalAreaDensity = 70, _naturalAreaSizeVariation = 50;
     private PlacementAreaPattern _naturalAreaPattern;
-    private readonly Dictionary<string, StampContentBounds> _areaContentBoundsCache = [];
+    private bool _naturalAreaJoinEdges = true;
+    private readonly Dictionary<string, StampContentMeasurer.Measurement> _areaContentBoundsCache = [];
     private CancellationTokenSource? _areaCountCancellation;
     private Task _areaCountTask = Task.CompletedTask;
     private long? _areaPredictedCount;
@@ -41,6 +42,7 @@ public sealed partial class EditorViewModel
             {
                 PlacementAreaPattern.Ridge => density <= 40 ? "основные вершины" : density <= 75 ? "гряда и ответвления" : "гряда с предгорьями",
                 PlacementAreaPattern.Groups => density <= 40 ? "небольшие группы" : density <= 75 ? "группы с просветами" : "плотные отдельные группы",
+                PlacementAreaPattern.Clearings => "группы вокруг свободных дворов и проходов",
                 _ => density <= 40 ? "ядра массивов" : density <= 75 ? "массивы с просветами" : "массивы с неровной опушкой",
             };
             return $"{count} · {pattern}\nРазмеры: {(EditableAreaSizeVariation == 0 ? "одинаковые" : $"до ±{EditableAreaSizeVariation:0}%")}";
@@ -50,10 +52,12 @@ public sealed partial class EditorViewModel
     public double EditableAreaDensity => DisplayedEditableArea?.Density ?? _naturalAreaDensity;
     public double EditableAreaSizeVariation => DisplayedEditableArea?.SizeVariationPercent ?? _naturalAreaSizeVariation;
     public PlacementAreaPattern EditableAreaPattern => DisplayedEditableArea?.Pattern ?? _naturalAreaPattern;
+    public bool EditableAreaJoinEdges => DisplayedEditableArea?.JoinEdges ?? _naturalAreaJoinEdges;
     public string EditableAreaPatternHint => EditableAreaPattern switch
     {
         PlacementAreaPattern.Ridge => "Извилистая гряда: крупные вершины вдоль хребта, меньшие по бокам и на ответвлениях.",
         PlacementAreaPattern.Groups => "Отдельные плотные группы: крупные объекты внутри, мелкие по краям, свободные проходы между группами.",
+        PlacementAreaPattern.Clearings => "Объекты вокруг свободных дворов и проходов. Для домов и лагерей отключите «Смыкать края»; для растительности можно оставить включённым.",
         _ => "Связные массивы: плотная середина, неровный край и просветы. Подходит для лесов и больших скоплений.",
     };
     public IReadOnlyList<SceneObject>? EditableAreaPreviewOverrides => _areaDragging ? _areaOverrides : null;
@@ -132,9 +136,10 @@ public sealed partial class EditorViewModel
             {
                 _areaDraft = template with { Id = Guid.NewGuid(), Name = NextAreaName(template.Name.Split(" · ", 2).Last()),
                     Nodes = [], Cells = ImmutableDictionary<long, ImmutableArray<PlacementAreaMember>>.Empty,
-                    MemberCount = 0, Exclusions = [], OccupiedSlots = [], LayoutVersion = 3,
+                    MemberCount = 0, Exclusions = [], OccupiedSlots = [], LayoutVersion = 4,
                     Density = _naturalAreaDensity, SizeVariationPercent = _naturalAreaSizeVariation, Seed = NextGestureSeed(),
-                    Pattern = _naturalAreaPattern, ContentBounds = ReadAreaContentBounds(template.Variants, template.ContentBounds),
+                    Pattern = _naturalAreaPattern, JoinEdges = _naturalAreaJoinEdges, ContentBounds = ReadAreaContentBounds(template.Variants, template.ContentBounds),
+                    ContentMasks = ReadAreaContentMasks(template.Variants, template.ContentMasks),
                     ScalePercent = settings.ScalePercent, RotationDegrees = settings.RotationDegrees,
                     Sublayer = settings.Sublayer, Opacity = settings.ObjectOpacity, Style = settings.Style ?? template.Style,
                     Request = template.Request with { BaseWidth = template.Request.BaseWidth * settings.ScalePercent / template.ScalePercent,
@@ -155,10 +160,11 @@ public sealed partial class EditorViewModel
                 _areaAssets = references; _areaLayer = ActiveObjectLayer()?.Id;
                 _areaDraft = new PlacementArea
                 {
-                    Name = NextAreaName(SelectedSet?.Name ?? "штампы"), AssetSetId = _selectedSetId, LayoutVersion = 3,
+                    Name = NextAreaName(SelectedSet?.Name ?? "штампы"), AssetSetId = _selectedSetId, LayoutVersion = 4,
                     VariantId = CurrentVariant?.Id, Variants = [.. sources], Request = request,
                     Seed = NextGestureSeed(), Density = _naturalAreaDensity, SizeVariationPercent = _naturalAreaSizeVariation,
-                    Pattern = _naturalAreaPattern, ContentBounds = ReadAreaContentBounds(sources),
+                    Pattern = _naturalAreaPattern, JoinEdges = _naturalAreaJoinEdges, ContentBounds = ReadAreaContentBounds(sources),
+                    ContentMasks = ReadAreaContentMasks(sources),
                     RotationDegrees = settings.RotationDegrees, ScalePercent = settings.ScalePercent,
                     Sublayer = settings.Sublayer, Opacity = settings.ObjectOpacity,
                     Style = settings.Style ?? new StampStyle(sources[0].Sha256),
@@ -207,7 +213,8 @@ public sealed partial class EditorViewModel
     {
         if (SelectedEditableArea is not { } path) return;
         if (path.LayoutVersion >= 3)
-        { _naturalAreaDensity = path.Density; _naturalAreaSizeVariation = path.SizeVariationPercent; _naturalAreaPattern = path.Pattern; }
+        { _naturalAreaDensity = path.Density; _naturalAreaSizeVariation = path.SizeVariationPercent;
+            _naturalAreaPattern = path.Pattern; _naturalAreaJoinEdges = path.JoinEdges; }
         _stampToolSettings = _stampToolSettings with { Mode = StampPlacementMode.FillArea,
             Density = path.LayoutVersion >= 3 ? _stampToolSettings.Density : path.Density,
             ScalePercent = path.ScalePercent, RotationDegrees = path.RotationDegrees, Sublayer = path.Sublayer,
@@ -313,9 +320,19 @@ public sealed partial class EditorViewModel
         if (!UsesNaturalAreaLayout || !Enum.IsDefined(value)) return;
         _naturalAreaPattern = value;
         if (_areaCreating && _areaDraft is { } draft)
-        { _areaDraft = draft with { Pattern = value }; UpdateAreaPreview(); RaiseAreaState(); }
+        { _areaDraft = draft with { Pattern = value, LayoutVersion = 4 }; UpdateAreaPreview(); RaiseAreaState(); }
         else if (SelectedEditableArea is { } area)
-            CommitAreaChange(area with { Pattern = value }, "Изменить рисунок области");
+            CommitAreaChange(area with { Pattern = value, LayoutVersion = 4 }, "Изменить рисунок области");
+        else RaiseAreaState();
+    }
+    public void SetEditableAreaJoinEdges(bool value)
+    {
+        if (!UsesNaturalAreaLayout) return;
+        _naturalAreaJoinEdges = value;
+        if (_areaCreating && _areaDraft is { } draft)
+        { _areaDraft = draft with { JoinEdges = value }; UpdateAreaPreview(); RaiseAreaState(); }
+        else if (SelectedEditableArea is { } area)
+            CommitAreaChange(area with { JoinEdges = value }, "Изменить смыкание объектов области");
         else RaiseAreaState();
     }
     public void SetEditableAreaSeed(double value)
@@ -338,11 +355,12 @@ public sealed partial class EditorViewModel
     }
     public void ArrangeEditableAreaNaturally()
     {
-        if (SelectedEditableArea is not { LayoutVersion: < 3 } p) return;
-        if (CommitAreaChange(PlacementAreaPlanner.InitializeComposition(p with { LayoutVersion = 3, OccupiedSlots = [], Density = _naturalAreaDensity,
-            SizeVariationPercent = _naturalAreaSizeVariation, Pattern = _naturalAreaPattern,
-            ContentBounds = ReadAreaContentBounds(p.Variants, p.ContentBounds) }), "Расположить область естественно"))
-            StatusDetail = "Объекты собраны в естественные группы без наложений. Отделённые объекты сохранены; действие можно отменить.";
+        if (SelectedEditableArea is not { LayoutVersion: < 4 } p) return;
+        if (CommitAreaChange(PlacementAreaPlanner.InitializeComposition(p with { LayoutVersion = 4, OccupiedSlots = [], Density = _naturalAreaDensity,
+            SizeVariationPercent = _naturalAreaSizeVariation, Pattern = _naturalAreaPattern, JoinEdges = _naturalAreaJoinEdges,
+            ContentBounds = ReadAreaContentBounds(p.Variants, p.ContentBounds),
+            ContentMasks = ReadAreaContentMasks(p.Variants, p.ContentMasks) }), "Расположить область естественно"))
+            StatusDetail = "Рисунок области обновлён. Отделённые объекты сохранены; действие можно отменить.";
     }
     public void TryAnotherEditableAreaArrangement()
     {
@@ -496,6 +514,7 @@ public sealed partial class EditorViewModel
         Raise(nameof(UsesNaturalAreaLayout)); Raise(nameof(EditableAreaDensity)); Raise(nameof(EditableAreaSizeVariation));
         Raise(nameof(PlannedEditableAreaCount)); Raise(nameof(EditableAreaResult));
         Raise(nameof(EditableAreaPattern)); Raise(nameof(EditableAreaPatternHint));
+        Raise(nameof(EditableAreaJoinEdges));
         InvalidateScene(EditorChangeReason.CanvasInvalidation);
     }
     private ImmutableDictionary<string, StampContentBounds> ReadAreaContentBounds(IEnumerable<StampVariantSource> variants,
@@ -505,17 +524,26 @@ public sealed partial class EditorViewModel
         foreach (var source in variants)
         {
             if (result.ContainsKey(source.Sha256)) continue;
-            if (!_areaContentBoundsCache.TryGetValue(source.Sha256, out var bounds))
-            {
-                if (StampImages?.TryGetImage(source.Sha256) is not { } image) continue;
-                bounds = StampContentMeasurer.Measure(image);
-                // This small scalar cache is not the image cache and never grows with stamp count.
-                if (_areaContentBoundsCache.Count >= 256) _areaContentBoundsCache.Clear();
-                _areaContentBoundsCache[source.Sha256] = bounds;
-            }
-            result[source.Sha256] = bounds;
+            if (ReadAreaContent(source.Sha256) is { } measured) result[source.Sha256] = measured.Bounds;
         }
         return result.ToImmutable();
+    }
+    private ImmutableDictionary<string, StampContentMask> ReadAreaContentMasks(IEnumerable<StampVariantSource> variants,
+        ImmutableDictionary<string, StampContentMask>? saved = null)
+    {
+        var result = (saved ?? ImmutableDictionary<string, StampContentMask>.Empty).ToBuilder();
+        foreach (var source in variants)
+            if (!result.ContainsKey(source.Sha256) && ReadAreaContent(source.Sha256)?.Mask is { } mask)
+                result[source.Sha256] = mask;
+        return result.ToImmutable();
+    }
+    private StampContentMeasurer.Measurement? ReadAreaContent(string sha)
+    {
+        if (_areaContentBoundsCache.TryGetValue(sha, out var cached)) return cached;
+        if (StampImages?.TryGetImage(sha) is not { } image) return null;
+        // 128 silhouette bytes per source; shared by every stamp and every undo revision.
+        if (_areaContentBoundsCache.Count >= 256) _areaContentBoundsCache.Clear();
+        return _areaContentBoundsCache[sha] = StampContentMeasurer.Read(image);
     }
     private string NextAreaName(string assetName)
     {

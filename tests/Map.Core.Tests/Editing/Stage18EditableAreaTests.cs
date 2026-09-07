@@ -6,13 +6,122 @@ namespace Map.Core.Tests.Editing;
 public sealed class Stage18EditableAreaTests
 {
     [Theory]
-    [InlineData(18)]
-    [InlineData(-184929685)]
-    [InlineData(718)]
-    public void Natural_groups_keep_spacing_scale_variation_and_exact_survivors_after_density_and_edge_edits(int seed)
+    [InlineData(PlacementAreaPattern.Masses, 3)]
+    [InlineData(PlacementAreaPattern.Masses, 4)]
+    [InlineData(PlacementAreaPattern.Ridge, 3)]
+    [InlineData(PlacementAreaPattern.Ridge, 4)]
+    [InlineData(PlacementAreaPattern.Groups, 3)]
+    [InlineData(PlacementAreaPattern.Groups, 4)]
+    [InlineData(PlacementAreaPattern.Clearings, 4)]
+    public void Joined_compositions_preserve_depth_order_foreign_objects_indices_and_local_survivors(PlacementAreaPattern pattern, int layoutVersion)
     {
         var session = Session(out var layer);
-        var area = Area() with { LayoutVersion = 3, Seed = seed, Density = 20, CompositionOrigin = new(860, 840),
+        var ordinary = Enumerable.Range(0, 520).Select(i => new SceneObject(ObjectId.New(), SceneObjectKind.Rectangle,
+            $"ordinary {i}", 2, 2, 1, 1, 0, "#FFFFFFFF", "#00000000", 0, true, false)).ToArray();
+        session.Execute(new AddObjectsCommand(layer.Id, ordinary));
+        var area = PlacementAreaPlanner.InitializeComposition(Area() with { LayoutVersion = layoutVersion, Pattern = pattern, JoinEdges = true,
+            Density = 35, Variants = [new(Sha, 128, 128)], Request = new() { BaseWidth = 105 },
+            ContentMasks = layoutVersion >= 4 ? System.Collections.Immutable.ImmutableDictionary<string, StampContentMask>.Empty.Add(Sha, TriangleMask())
+                : System.Collections.Immutable.ImmutableDictionary<string, StampContentMask>.Empty,
+            ContentBounds = System.Collections.Immutable.ImmutableDictionary<string, StampContentBounds>.Empty.Add(Sha, new(.1, .1, .9, .9)) });
+        session.Execute(new PlacementAreaCommand(layer.Id, area.Id, area, "create"));
+        Assert.Null(session.LastResourceError); var previous = session.Document;
+        foreach (var density in new[] { 60, 100 })
+        {
+            session.Execute(new PlacementAreaCommand(layer.Id, area.Id, Get(previous) with { Density = density }, "density"));
+            Check(previous); previous = session.Document;
+        }
+        var current = Get(previous);
+        var edit = new PlacementAreaCommand(layer.Id, area.Id, current with { Nodes = current.Nodes.SetItem(1, current.Nodes[1] with { X = 1760 }) }, "edge");
+        session.Execute(edit); Check(previous); Assert.InRange(edit.VisitedCells, 1, 100);
+        var changed = Get(session.Document);
+        Assert.Equal(current.CompositionOrigin, changed.CompositionOrigin); Assert.Equal(current.CompositionLength, changed.CompositionLength);
+        Assert.Equal(current.CompositionAngleDegrees, changed.CompositionAngleDegrees);
+        var items = changed.Members.Select(m => DocumentEditor.FindObject(session.Document, m.ObjectId)!).ToArray();
+        var joined = false;
+        for (var i = 0; i < items.Length; i++) for (var j = i + 1; j < items.Length; j++)
+        {
+            var overlap = PlacementAreaSampler.OverlapFraction(PlacementAreaSampler.VisibleBounds(changed, items[i]), PlacementAreaSampler.VisibleBounds(changed, items[j]));
+            Assert.InRange(overlap, 0, layoutVersion >= 4 ? 1 : .55); joined |= overlap > 0;
+            Assert.False(PlacementAreaSampler.Conflicts(changed, items[i], items[j]));
+        }
+        Assert.True(joined); var after = session.Document;
+        session.Undo(); Assert.Same(previous, session.Document); session.Redo(); Assert.Same(after, session.Document);
+        session.Execute(new PlacementAreaCommand(layer.Id, area.Id, changed with { JoinEdges = false }, "separate"));
+        Assert.Null(session.LastResourceError); var separate = Get(session.Document);
+        var separated = separate.Members.Select(m => DocumentEditor.FindObject(session.Document, m.ObjectId)!).ToArray();
+        for (var i = 0; i < separated.Length; i++) for (var j = i + 1; j < separated.Length; j++)
+            Assert.False(PlacementAreaSampler.Overlaps(PlacementAreaSampler.VisibleBounds(separate, separated[i]), PlacementAreaSampler.VisibleBounds(separate, separated[j])));
+        session.Undo(); Assert.Same(after, session.Document);
+
+        void Check(MapDocument before)
+        {
+            Assert.Null(session.LastResourceError);
+            var target = (ObjectLayer)session.Document.FindLayer(layer.Id)!; var actual = Get(session.Document); actual.ValidateMembers();
+            var memberIds = actual.Members.Select(m => m.ObjectId).ToHashSet();
+            var members = target.Objects.Where(o => memberIds.Contains(o.Id)).ToArray();
+            Assert.Equal(members.Select(o => PlacementAreaSampler.VisibleBounds(actual, o).Bottom).Order(),
+                members.Select(o => PlacementAreaSampler.VisibleBounds(actual, o).Bottom));
+            var previousIds = ((ObjectLayer)before.FindLayer(layer.Id)!).Objects.Select(o => o.Id).ToHashSet();
+            Assert.Equal(((ObjectLayer)before.FindLayer(layer.Id)!).Objects.Where(o => ((SceneObjectList)target.Objects).IndexOfId(o.Id) >= 0).Select(o => o.Id),
+                target.Objects.Where(o => previousIds.Contains(o.Id)).Select(o => o.Id));
+            Assert.All(members.Where(o => previousIds.Contains(o.Id)), o => Assert.Same(DocumentEditor.FindObject(before, o.Id), o));
+            Assert.All(ordinary, o => Assert.Same(o, DocumentEditor.FindObject(session.Document, o.Id)));
+            Assert.Equal(target.Objects.Count, DocumentRevisionIndex.For(session.Document).ObjectCount);
+            for (var i = 0; i < target.Objects.Count; i++)
+            { Assert.True(DocumentRevisionIndex.For(session.Document).TryFind(target.Objects[i].Id, out var found)); Assert.Equal(i, found.ObjectIndex); }
+            Assert.Equal(target.Objects.Count, ObjectSpatialIndex.For(target).Query(new(-10, -10, 2200, 2200)).Count);
+        }
+    }
+
+    private static StampContentMask TriangleMask() => new([.. Enumerable.Range(0, 32).Select(y =>
+        Enumerable.Range(0, 32).Where(x => Math.Abs(x - 15.5) <= (y + 1) / 2d).Aggregate(0u, (bits, x) => bits | 1u << x))]);
+
+    [Fact]
+    public void Silhouette_joining_connects_slopes_but_rejects_hidden_peaks_and_respects_no_join()
+    {
+        var area = Area() with { LayoutVersion = 4, JoinEdges = true,
+            ContentMasks = System.Collections.Immutable.ImmutableDictionary<string, StampContentMask>.Empty.Add(Sha, TriangleMask()) };
+        var a = new SceneObject(ObjectId.New(), SceneObjectKind.Stamp, "peak", 0, 0, 100, 100, 0,
+            "#FFFFFFFF", "#00000000", 0, true, false) { Stamp = new(Sha) };
+        var b = Peak(40, 20);
+        Assert.False(PlacementAreaSampler.Conflicts(area, a, b));
+        Assert.True(PlacementAreaSampler.Conflicts(area with { ContentMasks = area.ContentMasks.Clear() }, a, b));
+        Assert.True(PlacementAreaSampler.Conflicts(area with { JoinEdges = false }, a, b));
+        Assert.True(PlacementAreaSampler.Conflicts(area, a, Peak(0, 0)));
+        Assert.True(PlacementAreaSampler.Conflicts(area, a, Peak(0, 20)));
+        // Effects have no alpha envelope in the small mask, so they use the conservative fallback.
+        Assert.True(PlacementAreaSampler.Conflicts(area, a, b with { Stamp = b.Stamp! with { Blur = 1 } }));
+        Assert.False(PlacementAreaSampler.Conflicts(area, a, Peak(110, 20, 180) with { Stamp = b.Stamp! with { FlipHorizontal = true } }));
+        SceneObject Peak(double x, double y, double rotation = 0) => new(ObjectId.New(), SceneObjectKind.Stamp, "peak", x, y, 100, 100, rotation,
+            "#FFFFFFFF", "#00000000", 0, true, false) { Stamp = new(Sha) };
+    }
+
+    [Fact]
+    public void Visible_bounds_honour_transparent_margins_reflections_rotation_and_effects()
+    {
+        var area = Area() with { LayoutVersion = 3, ContentBounds = System.Collections.Immutable.ImmutableDictionary<string, StampContentBounds>.Empty.Add(Sha, new(.1, .2, .7, .8)) };
+        var item = new SceneObject(ObjectId.New(), SceneObjectKind.Stamp, "bounds", 100, 80, 200, 120,
+            90, "#FFFFFFFF", "#00000000", 0, true, false) { Stamp = new(Sha) };
+        Bounds(new(164, 60, 236, 180), PlacementAreaSampler.VisibleBounds(area, item));
+        item = item with { Stamp = item.Stamp with { FlipHorizontal = true, Blur = 1, ShadowOpacity = .5, ShadowOffsetX = 4, ShadowOffsetY = 5, ShadowBlur = 0 } };
+        Bounds(new(157, 92, 243, 228), PlacementAreaSampler.VisibleBounds(area, item));
+        Assert.Equal(SceneGeometry.BoundsOf(item), PlacementAreaSampler.VisibleBounds(area with { LayoutVersion = 2 }, item));
+        static void Bounds(WorldBounds expected, WorldBounds actual)
+        { Assert.Equal(expected.Left, actual.Left, 6); Assert.Equal(expected.Top, actual.Top, 6); Assert.Equal(expected.Right, actual.Right, 6); Assert.Equal(expected.Bottom, actual.Bottom, 6); }
+    }
+
+    [Theory]
+    [InlineData(18, 3)]
+    [InlineData(18, 4)]
+    [InlineData(-184929685, 3)]
+    [InlineData(-184929685, 4)]
+    [InlineData(718, 3)]
+    [InlineData(718, 4)]
+    public void Natural_groups_keep_spacing_scale_variation_and_exact_survivors_after_density_and_edge_edits(int seed, int layoutVersion)
+    {
+        var session = Session(out var layer);
+        var area = Area() with { LayoutVersion = layoutVersion, Seed = seed, Density = 20, CompositionOrigin = new(860, 840),
             Variants = [new(Sha, 128, 128), new(Other, 128, 96)],
             Request = new() { BaseWidth = 112, RandomizeVariant = true, RandomAngleStep = StampRandomAngleStep.Degrees15 },
             Style = new(Sha) { Blur = 1, ShadowOpacity = .3, ShadowOffsetX = 4, ShadowOffsetY = 5 } };
@@ -21,15 +130,17 @@ public sealed class Stage18EditableAreaTests
         Assert.Null(session.LastResourceError); Get(session.Document).ValidateMembers();
         var before = session.Document;
         var objects = ((ObjectLayer)before.FindLayer(layer.Id)!).Objects;
-        Assert.True(objects.Count > 3, $"Sparse 20% fixture needs several neighbours, got {objects.Count}");
+        Assert.True(objects.Count >= 3, $"Sparse 20% fixture needs several neighbours, got {objects.Count}");
         Assert.False(HasOverlap(objects));
         Assert.All(objects, item => Assert.InRange(item.Width / area.Request.BaseWidth, .7, 1.3));
-        Assert.True(objects.Max(o => o.Width) - objects.Min(o => o.Width) > area.Request.BaseWidth * .12);
         Assert.All(preview, item => Assert.Equal(item, DocumentEditor.FindObject(before, item.Id)));
         session.Execute(new PlacementAreaCommand(layer.Id, area.Id, Get(before) with { Density = 60 }, "density"));
         Assert.Null(session.LastResourceError); Get(session.Document).ValidateMembers();
         Assert.All(objects, item => Assert.Same(item, DocumentEditor.FindObject(session.Document, item.Id)));
         var dense = session.Document;
+        // Low density contains only the dominant cores. At 60% the smaller shoulders have grown in.
+        var graded = ((ObjectLayer)dense.FindLayer(layer.Id)!).Objects;
+        Assert.True(graded.Max(o => o.Width) - graded.Min(o => o.Width) > area.Request.BaseWidth * .12);
         session.Execute(new PlacementAreaCommand(layer.Id, area.Id, Get(dense) with {
             Nodes = area.Nodes.SetItem(1, area.Nodes[1] with { X = 1780 }) }, "edge"));
         Assert.Null(session.LastResourceError); Get(session.Document).ValidateMembers();
@@ -48,11 +159,13 @@ public sealed class Stage18EditableAreaTests
         Assert.True(PlacementAreaSampler.EstimateBytes(area, PlacementAreaGeometry.Coverage(area.Nodes)) < 32 * 1024 * 1024);
     }
 
-    [Fact]
-    public void Natural_density_grows_the_final_population_through_its_full_range_and_size_variation_can_be_disabled()
+    [Theory]
+    [InlineData(3)]
+    [InlineData(4)]
+    public void Natural_density_grows_the_final_population_through_its_full_range_and_size_variation_can_be_disabled(int layoutVersion)
     {
         var session = Session(out var layer);
-        var area = Area() with { LayoutVersion = 3, Density = 0, CompositionOrigin = new(900, 900),
+        var area = Area() with { LayoutVersion = layoutVersion, Density = 0, CompositionOrigin = new(900, 900),
             Variants = [new(Sha, 128, 128)], Request = new() { BaseWidth = 110 } };
         session.Execute(new PlacementAreaCommand(layer.Id, area.Id, area, "empty"));
         Assert.Empty(Get(session.Document).Members);

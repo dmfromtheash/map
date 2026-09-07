@@ -41,6 +41,7 @@ public static class PlacementAreaPlanner
     internal static ulong Priority(PlacementArea area, PlacementAreaSlot slot) => Mix(Random(area, slot) ^ 0x7ad614e2UL);
     public static VectorPoint Anchor(PlacementArea area, PlacementAreaSlot slot)
     {
+        if (area.LayoutVersion >= 4) return new PlacementAreaLayout(area).At(slot).Point!.Value;
         var bits = Random(area, slot);
         // Follow the editor's whole-world-unit placement convention. Stable integer centres
         // avoid introducing another subpixel phase when an export tile changes its origin.
@@ -50,14 +51,15 @@ public static class PlacementAreaPlanner
     }
     public static bool Includes(PlacementArea area, PlacementAreaSlot slot) => new PlacementAreaSampler(area).Includes(slot);
     public static int CandidatePasses(PlacementArea area) => area.Density == 0 ? 0
+        : area.LayoutVersion >= 4 ? PlacementAreaLayout.Passes(area)
         : area.LayoutVersion >= 3 ? PlacementAreaComposition.Passes(area) : (int)Math.Ceiling(area.Density);
-    internal static bool IncludesGeometry(PlacementArea area, PlacementAreaSlot slot)
+    internal static bool IncludesGeometry(PlacementArea area, PlacementAreaSlot slot, VectorPoint? anchor = null)
     {
         if (slot.Ordinal < 0 || slot.Ordinal >= CandidatePasses(area) || area.Exclusions.Contains(slot)
             || area.OccupiedSlots.Contains(slot)) return false;
         if (area.LayoutVersion < 3 && slot.Ordinal >= Math.Floor(area.Density)
             && Unit(Mix(Random(area, slot) ^ 0x74814UL)) >= area.Density % 1) return false;
-        var point = Anchor(area, slot);
+        var point = anchor ?? Anchor(area, slot);
         return PlacementAreaGeometry.Contains(area.Nodes, point.X, point.Y);
     }
     public static IEnumerable<PlacementAreaSlot> Slots(PlacementArea area, int x, int y)
@@ -65,10 +67,11 @@ public static class PlacementAreaPlanner
         return new PlacementAreaSampler(area).Slots(x, y);
     }
     public static SceneObject Item(PlacementArea area, PlacementAreaSlot slot) => Item(area, slot,
-        area.LayoutVersion >= 3 ? PlacementAreaComposition.At(area, slot) : null);
+        area.LayoutVersion >= 4 ? new PlacementAreaLayout(area).At(slot)
+        : area.LayoutVersion >= 3 ? PlacementAreaComposition.At(area, slot) : null);
     internal static SceneObject Item(PlacementArea area, PlacementAreaSlot slot, PlacementAreaComposition.Sample? composition)
     {
-        var point = Anchor(area, slot);
+        var point = composition?.Point ?? Anchor(area, slot);
         var request = area.Request with { CenterX = point.X, CenterY = point.Y, AreaRadius = 0,
             BaseWidth = area.Request.BaseWidth * (composition?.Scale ?? 1),
             Density = 0, Seed = unchecked((int)Mix(Random(area, slot) ^ 0x1559UL)) };
@@ -87,8 +90,10 @@ public static class PlacementAreaPlanner
         && a.ScalePercent == b.ScalePercent && a.Sublayer == b.Sublayer && a.Opacity == b.Opacity
         && a.Name == b.Name && a.LayoutVersion == b.LayoutVersion && a.CompositionOrigin == b.CompositionOrigin
         && a.SizeVariationPercent == b.SizeVariationPercent && a.Pattern == b.Pattern
+        && a.JoinEdges == b.JoinEdges
         && a.CompositionLength == b.CompositionLength && a.CompositionAngleDegrees == b.CompositionAngleDegrees
         && a.ContentBounds.Count == b.ContentBounds.Count && a.ContentBounds.All(kv => b.ContentBounds.TryGetValue(kv.Key, out var value) && value == kv.Value)
+        && a.ContentMasks.Count == b.ContentMasks.Count && a.ContentMasks.All(kv => b.ContentMasks.TryGetValue(kv.Key, out var value) && value.Rows.SequenceEqual(kv.Value.Rows))
         && a.Variants.SequenceEqual(b.Variants);
 
     public static IReadOnlyList<PlacementAreaGeometry.CellSpan> Affected(PlacementArea? before, PlacementArea after) =>
@@ -133,6 +138,28 @@ public static class PlacementAreaPlanner
         var sampler = new PlacementAreaSampler(area);
         var candidates = checked(spans.Sum(s => (long)s.MaxX - s.MinX + 1) * slots);
         if (candidates == 0) return [];
+        if (area.LayoutVersion >= 4)
+        {
+            // Structured cells have different populations. Sampling the conservative ordinal
+            // bound can miss every real position; sample actual positions across world cells.
+            var cells = spans.Sum(s => (long)s.MaxX - s.MinX + 1);
+            var cellProbes = (int)Math.Min(cells, maximum * 4L);
+            var found = new List<SceneObject>(); var si = 0; long cellStart = 0;
+            for (var i = 0; i < cellProbes; i++)
+            {
+                var rank = cellProbes == 1 ? 0 : (long)((decimal)i * (cells - 1) / (cellProbes - 1));
+                while (rank >= cellStart + (long)spans[si].MaxX - spans[si].MinX + 1)
+                    cellStart += (long)spans[si].MaxX - spans[si++].MinX + 1;
+                var span = spans[si]; var x = span.MinX + (int)(rank - cellStart);
+                foreach (var slot in sampler.PreviewSlots(x, span.Y, 16))
+                    if ((before is null || !SameSettings(before, area) || !IncludesGeometry(before, slot))
+                        && (obstacles is null || !obstacles.Blocks(sampler.Item(slot)))) found.Add(sampler.Item(slot));
+            }
+            var count = Math.Min(maximum, found.Count);
+            var sample = Enumerable.Range(0, count).Select(i => found[count == 1 ? found.Count / 2
+                : (int)((long)i * (found.Count - 1) / (count - 1))]);
+            return (PlacementAreaDrawOrder.Uses(area) ? sample.OrderBy(o => PlacementAreaDrawOrder.Key(area, o)) : sample).ToArray();
+        }
         var probes = (int)Math.Min(candidates, maximum * 64L);
         var accepted = new List<PlacementAreaSlot>();
         var spanIndex = 0; long start = 0;
@@ -147,8 +174,9 @@ public static class PlacementAreaPlanner
                 && (obstacles is null || !obstacles.Blocks(sampler.Item(slot)))) accepted.Add(slot);
         }
         var take = Math.Min(maximum, accepted.Count);
-        return Enumerable.Range(0, take).Select(i => sampler.Item(
-            accepted[take == 1 ? accepted.Count / 2 : (int)((long)i * (accepted.Count - 1) / (take - 1))])).ToArray();
+        var result = Enumerable.Range(0, take).Select(i => sampler.Item(
+            accepted[take == 1 ? accepted.Count / 2 : (int)((long)i * (accepted.Count - 1) / (take - 1))]));
+        return (PlacementAreaDrawOrder.Uses(area) ? result.OrderBy(o => PlacementAreaDrawOrder.Key(area, o)) : result).ToArray();
     }
 }
 
@@ -185,6 +213,8 @@ public sealed class PlacementAreaCommand : IEditCommand
         var index = DocumentRevisionIndex.For(document);
         var replacements = new List<SceneObject>(); var additions = new List<SceneObject>(); var removals = new HashSet<ObjectId>();
         PlacementArea? next = _requested;
+        var reorder = old is not null && next is not null && (PlacementAreaDrawOrder.Uses(old) || PlacementAreaDrawOrder.Uses(next))
+            && !PlacementAreaPlanner.SameSettings(old with { Density = next.Density }, next);
         if (_detach is { } detach)
         {
             var member = old?.Members.FirstOrDefault(m => m.ObjectId == detach)
@@ -239,6 +269,7 @@ public sealed class PlacementAreaCommand : IEditCommand
                         members.Add(new(slot, item.Id)); used.Add(item.Id);
                         if (existing is null) additions.Add(item);
                         else if (!previousIds.Contains(item.Id)) throw new InvalidOperationException("Слот области занят посторонним объектом.");
+                        else if (reorder) { RequireEditable(item.Id); removals.Add(item.Id); additions.Add(item); }
                         else if (existing != item) { RequireEditable(item.Id); replacements.Add(item); }
                     }
                     foreach (var member in previous.Where(m => !used.Contains(m.ObjectId)))
@@ -261,7 +292,16 @@ public sealed class PlacementAreaCommand : IEditCommand
         if (introduced.Length > 0) updated = updated.WithAssets([.. document.Assets, .. introduced]);
         if (replacements.Count > 0) updated = DocumentEditor.ReplaceObjects(updated, replacements);
         if (removals.Count > 0) updated = DocumentEditor.RemovePathObjects(updated, _layerId, removals);
-        if (additions.Count > 0) updated = DocumentEditor.AppendObjects(updated, _layerId, additions);
+        if (PlacementAreaDrawOrder.Uses(next))
+        {
+            var ordered = old is null || reorder || !PlacementAreaDrawOrder.Uses(old)
+                ? ImmutableSortedSet<PlacementAreaDrawOrder.Entry>.Empty : PlacementAreaDrawOrder.For(old);
+            if (old is not null && !reorder)
+                ordered = ordered.Except(removals.Concat(_detach is { } d ? [d] : []).Select(id => PlacementAreaDrawOrder.Key(old, index.FindObject(id)!)));
+            if (additions.Count > 0) updated = PlacementAreaDrawOrder.Insert(updated, _layerId, next!, ordered, additions);
+            PlacementAreaDrawOrder.Register(next!, ordered.Union(additions.Select(o => PlacementAreaDrawOrder.Key(next!, o))));
+        }
+        else if (additions.Count > 0) updated = DocumentEditor.AppendObjects(updated, _layerId, additions);
         var updatedLayer = (ObjectLayer)updated.FindLayer(_layerId)!;
         var areas = updatedLayer.PlacementAreas;
         var position = old is null ? -1 : areas.IndexOf(old);

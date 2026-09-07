@@ -21,6 +21,7 @@ public sealed partial class EditorView
     private TextBlock? _fillAreaDensityUnits;
     private Control? _fillAreaSizeVariation;
     private ComboBox? _fillAreaPattern;
+    private Control? _fillAreaJoinEdges;
     private bool _syncingAreas;
     private Avalonia.Media.Imaging.Bitmap? _fillAreaThumbnail;
     private string? _fillAreaThumbnailHash;
@@ -43,11 +44,15 @@ public sealed partial class EditorView
             () => _editor.EditableAreaSizeVariation, _editor.SetEditableAreaSizeVariation);
         _fillAreaPattern = new ComboBox { Name = "EditableAreaPatternBox", HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch,
             ItemsSource = new[] { new PatternChoice(PlacementAreaPattern.Masses, "Массивы"),
-                new PatternChoice(PlacementAreaPattern.Ridge, "Гряда"), new PatternChoice(PlacementAreaPattern.Groups, "Группы") } };
+                new PatternChoice(PlacementAreaPattern.Ridge, "Гряда"), new PatternChoice(PlacementAreaPattern.Groups, "Группы"),
+                new PatternChoice(PlacementAreaPattern.Clearings, "Вокруг просветов") } };
         _fillAreaPattern.SelectionChanged += (_, _) =>
         {
             if (!_syncingAreas && _fillAreaPattern.SelectedItem is PatternChoice choice) _editor.SetEditableAreaPattern(choice.Pattern);
         };
+        _fillAreaJoinEdges = AppearanceToggle("EditableAreaJoinEdgesToggle", "Смыкать края",
+            () => _editor.EditableAreaJoinEdges, _editor.SetEditableAreaJoinEdges);
+        ToolTip.SetTip(_fillAreaJoinEdges, "Небольшое перекрытие крон и подножий. Выключите, чтобы объекты стояли раздельно.");
         _fillAreaPanel = new StackPanel
         {
             Spacing = 6, Children =
@@ -56,7 +61,7 @@ public sealed partial class EditorView
                 Ui.TextButton("StartEditableAreaButton", "Новая редактируемая область", _editor.StartEditableArea, "compact"),
                 _fillAreaNatural, _fillAreaPattern, _fillAreaArrangementHint,
                 AppearanceNumberBox("EditableAreaDensityBox", "Плотность", null, () => _editor.EditableAreaDensity, _editor.SetEditableAreaDensity),
-                _fillAreaDensityUnits, _fillAreaSizeVariation, _fillAreaAnother,
+                _fillAreaDensityUnits, _fillAreaSizeVariation, _fillAreaJoinEdges, _fillAreaAnother,
                 new TextBlock { Text = "Центры внутри границы; края не обрезаются. В предпросмотре до 64 объектов; полный результат — после «Разместить».", TextWrapping = TextWrapping.Wrap }.Classed("faint", "role-caption"),
                 AppearanceNumberBox("EditableAreaSeedBox", "Seed", null, () => _editor.DisplayedEditableArea?.Seed, _editor.SetEditableAreaSeed),
                 Ui.TextButton("InsertEditableAreaNodeButton", "Добавить вершину на ребре", _editor.InsertEditableAreaNode, "compact"),
@@ -107,9 +112,9 @@ public sealed partial class EditorView
                 _fillAreaPlacementHint!.Text = _editor.EditableAreaPlacementHint;
                 _fillAreaResult!.Text = _editor.EditableAreaResult;
             }
-            _fillAreaNatural!.IsVisible = _editor.SelectedEditableArea is { LayoutVersion: < 3 };
+            _fillAreaNatural!.IsVisible = _editor.SelectedEditableArea is { LayoutVersion: < 4 };
             _fillAreaAnother!.IsEnabled = _editor.DisplayedEditableArea is not null;
-            _fillAreaArrangementHint!.Text = _editor.DisplayedEditableArea is { LayoutVersion: < 3 }
+            _fillAreaArrangementHint!.Text = _editor.DisplayedEditableArea is { LayoutVersion: < 4 }
                 ? "Сохранена прежняя расстановка. «Расположить естественно» соберёт объекты в группы; Ctrl+Z вернёт прежний вид."
                 : _editor.EditableAreaPatternHint;
             _fillAreaPattern!.IsVisible = _editor.UsesNaturalAreaLayout;
@@ -118,6 +123,7 @@ public sealed partial class EditorView
                 ? "0–100% · добавляет объекты от середины к краям. Число объектов — внизу."
                 : "До указанного числа объектов на 10 000 квадратных единиц карты. Размер изображений и промежутки ограничивают заполнение.";
             _fillAreaSizeVariation!.IsVisible = _editor.UsesNaturalAreaLayout;
+            _fillAreaJoinEdges!.IsVisible = _editor.UsesNaturalAreaLayout;
             _fillAreaDetach!.IsEnabled = _editor.CanDetachAreaObject;
             _fillAreaPanel.IsVisible = _editor.StampPlacementMode == Map.Presentation.ViewModels.StampPlacementMode.FillArea
                 || choices.Length > 0 || _editor.IsCreatingEditableArea;

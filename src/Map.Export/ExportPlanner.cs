@@ -1,5 +1,6 @@
 using Map.Core.Documents;
 using Map.Core.Editing;
+using SkiaSharp;
 
 namespace Map.Export;
 
@@ -97,7 +98,7 @@ public static class ExportPlanner
                 ? checked((long)request.OutputWidth * request.OutputHeight * 8) : 0;
             var rowBuffers = streamingPng
                 ? checked((long)request.OutputWidth * 8 + columns * 65536L + 1024 * 1024) : 0;
-            var estimate = checked(AssetCacheBudget + tileCacheBytes + (surfaceBytes * 3)
+            var estimate = checked(AssetWorkingBytes(document) + tileCacheBytes + (surfaceBytes * 3)
                 + singleOutputBytes + rowBuffers);
 
             return new ExportPlan(
@@ -120,6 +121,26 @@ public static class ExportPlanner
             throw new ExportValidationException(
                 "Размер или оценка памяти вышли за поддерживаемый числовой диапазон.", ex);
         }
+    }
+
+    private static long AssetWorkingBytes(MapDocument document)
+    {
+        // A cache capacity is not an allocation. Inspect embedded headers without decoding or
+        // copying payloads; small maps must not reserve a full 256 MiB cache they cannot fill.
+        // Linked/unknown content retains the existing conservative bound.
+        var bytes = 16L * 1024 * 1024;
+        foreach (var asset in document.Assets)
+        {
+            if (asset.EmbeddedContent is not { } encoded) return AssetCacheBudget;
+            using var stream = new MemoryStream(encoded, writable: false);
+            using var codec = SKCodec.Create(stream);
+            if (codec is null || codec.Info.Width <= 0 || codec.Info.Height <= 0) return AssetCacheBudget;
+            var pixels = (long)codec.Info.Width * codec.Info.Height;
+            if (pixels >= AssetCacheBudget / 8 || encoded.LongLength >= AssetCacheBudget / 2) return AssetCacheBudget;
+            bytes += pixels * 8 + encoded.LongLength * 2;
+            if (bytes >= AssetCacheBudget) return AssetCacheBudget;
+        }
+        return bytes;
     }
 
     private static int EffectBleedPixels(

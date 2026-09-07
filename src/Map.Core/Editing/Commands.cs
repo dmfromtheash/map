@@ -1354,6 +1354,24 @@ public static class DocumentEditor
         return target;
     }
 
+    internal static MapDocument InsertObjects(MapDocument document, LayerId layerId,
+        IReadOnlyDictionary<int, IReadOnlyList<SceneObject>> batches)
+    {
+        var additions = batches.OrderBy(kv => kv.Key).SelectMany(kv => kv.Value).ToArray();
+        DocumentRevisionIndex.For(document).ValidateAppends(additions);
+        var layers = document.Layers.ToArray(); var li = Array.FindIndex(layers, l => l.Id == layerId);
+        var source = (ObjectLayer)layers[li];
+        var revised = source with { Objects = source.ObjectStorage.InsertMany(batches) }; layers[li] = revised;
+        var result = document.WithRevisedLayers(layers);
+        var locations = new List<DocumentObjectLocation>(); var offset = 0;
+        foreach (var batch in batches.OrderBy(kv => kv.Key))
+            foreach (var item in batch.Value) locations.Add(new(item, layerId, li, batch.Key + offset++));
+        DocumentRevisionIndex.RegisterAppends(document, result, locations, revised);
+        ObjectNameIndex.Register(document, result, [], additions);
+        ObjectLayerChanges.Register(source, revised, [], locations.Select(l => l.ObjectIndex).ToArray(), orderCompacted: true);
+        return result;
+    }
+
     /// <summary>
     /// Undo fast path for append commands. The normal LIFO history removes one tail range without
     /// flattening the prefix; an out-of-order direct Revert keeps the older id-based semantics.
