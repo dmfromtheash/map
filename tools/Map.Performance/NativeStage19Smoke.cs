@@ -8,6 +8,7 @@ using Avalonia.Interactivity;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using Map.App.Services;
 using Map.App.Views;
 using Map.Core.Documents;
 using Map.Core.Editing;
@@ -33,7 +34,20 @@ internal sealed class NativeStage19Report
     public string? SavedProject { get; set; }
     public string? Export { get; set; }
     public string? Failure { get; set; }
-    public bool GatePassed => Failure is null && Checks.Count >= 10 && Checks.Values.All(v => v);
+
+    /// <summary>The scenario that actually ran, so its gate is judged by its own checks.</summary>
+    public string Scenario { get; set; } = "full";
+
+    /// <summary>
+    /// Checks this scenario has to record and pass. A count taken from the full run used to fail
+    /// the short lake scenario even when every one of its own checks was true.
+    /// </summary>
+    public string[] Required { get; set; } = [];
+
+    public string[] Missing => [.. Required.Where(name => !Checks.ContainsKey(name))];
+
+    public bool GatePassed => Failure is null && Missing.Length == 0
+        && Required.Length > 0 && Required.All(name => Checks[name]) && Checks.Values.All(v => v);
 }
 
 internal static class NativeStage19Smoke
@@ -63,7 +77,31 @@ public sealed class Stage19Application : Application
     private Window _window = null!;
     private EditorView _view = null!;
     private EditorViewModel _editor = null!;
+    private EditorShortcutSettings _shortcuts = null!;
     private readonly LocalPrompts _prompts = new();
+
+    /// <summary>Checks the full scenario must record and pass before the gate is green.</summary>
+    private static readonly string[] FullRequired =
+    [
+        "draft-outside-document-history", "create-four-nodes", "width-profile-from-panel",
+        "node-width-from-panel", "tributary-attached-by-click", "mouth-moved-by-drag",
+        "parent-nodes-untouched-by-mouth-move", "undo-redo-exact", "junction-water-on-canvas",
+        "save-open-keeps-junction-and-widths", "reopened-river-editable",
+        "export-full-size-with-river", "river-stops-at-the-coast", "lake-created-by-clicks",
+        "inflow-joins-lake-shore", "distributary-leaves-main-channel", "split-channel-in-node",
+        "width-by-flow", "edge-roughness", "far-zoom-keeps-river",
+        "select-tool-picks-river-body", "marquee-takes-both-water-systems",
+        "drag-moves-the-whole-selection", "delete-key-removes-selected-water",
+        "undo-restores-deleted-water", "delete-key-in-text-box-keeps-the-map",
+        "smooth-keeps-node-count", "node-curvature-changes-shape", "resources-disposed",
+    ];
+
+    /// <summary>Checks the short lake scenario must record and pass. It is not the full run.</summary>
+    private static readonly string[] LakeRequired =
+    [
+        "lake-mode-armed", "first-vertex-makes-draft", "lake-committed", "lake-visible-on-canvas",
+        "lake-selected-after-creation", "resources-disposed",
+    ];
 
     public override void Initialize()
     {
@@ -76,17 +114,26 @@ public sealed class Stage19Application : Application
     public override void OnFrameworkInitializationCompleted()
     {
         var desktop = (IClassicDesktopStyleApplicationLifetime)ApplicationLifetime!;
+        _shortcuts = new EditorShortcutSettings();
         _workspace = Path.Combine(Path.GetDirectoryName(Options.OutputPath)!, "stage19-native");
         Directory.CreateDirectory(_workspace);
         Environment.SetEnvironmentVariable("MAP_UI_TEST_MODE", "1");
         Environment.SetEnvironmentVariable("MAP_UI_TEST_PROFILE_ROOT", Path.Combine(_workspace, "profile"));
         _window = new Window { Width = 1440, Height = 900, Title = "Map — Stage 19", ShowActivated = false,
             ShowInTaskbar = false, WindowStartupLocation = WindowStartupLocation.Manual, Position = new PixelPoint(-32000, -32000) };
+        // The production keyboard path, wired exactly as MainWindow wires it: a real Avalonia key
+        // event, the real focus manager, the real shortcut table and the real command handler.
+        _window.AddHandler(InputElement.KeyDownEvent,
+            (object? _, KeyEventArgs args) =>
+            { if (EditorKeyRouting.TryHandleKey(_window, _view, _shortcuts, args)) args.Handled = true; },
+            RoutingStrategies.Bubble, handledEventsToo: true);
         var document = new MapDocument(DocumentId.New(), "Река с притоком", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(1024, 768, "px", "#FFEDE3CD"),
             [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFEDE3CD"),
                 LandBlock(), new ObjectLayer(LayerId.New(), "Реки", true, false, 1, [])]);
         OpenEditor(document);
+        _report.Required = Environment.GetEnvironmentVariable("MAP_STAGE19_LAKE_ONLY") == "1" ? LakeRequired : FullRequired;
+        _report.Scenario = Environment.GetEnvironmentVariable("MAP_STAGE19_LAKE_ONLY") == "1" ? "lake-only" : "full";
         _window.Opened += async (_, _) =>
         {
             try { await Execute(); }
@@ -264,7 +311,126 @@ public sealed class Stage19Application : Application
         _report.Checks["far-zoom-keeps-river"] = _view.Canvas.LastFrameObjectsDrawn > 0;
         _editor.Session.Viewport.Set(0, 0, 1); await Frame();
         SaveVisual(Path.ChangeExtension(Options.OutputPath, ".reopened.png"));
+
+        await ShapeSelectionAndKeyboard();
     }
+
+    /// <summary>
+    /// Shape control without node inflation, picking a river by its drawn body with the ordinary
+    /// select tool, and the real Delete key - both on the canvas and inside a text box.
+    /// </summary>
+    private async Task ShapeSelectionAndKeyboard()
+    {
+        // A deliberately wide course in open water, so a click far from its axis is still a click
+        // on the river the user sees.
+        await Click("RiverToolButton");
+        await Number("NewRiverWidthBox", "60");
+        await Click("StartRiverButton");
+        Point(150, 690); Point(400, 660); Point(650, 700); Point(900, 670);
+        await Click("FinishRiverButton");
+        Require(_editor.SelectedRiver is { } created && created.Channels[0].Nodes.Length == 4,
+            "The wide test river was not created: " + _editor.StatusDetail);
+        var wide = _editor.SelectedRiver!;
+        var wideChannel = wide.Channels[0].Id;
+
+        // Smooth relaxes the course in place: the node count is the same afterwards.
+        await Click("SmoothRiverChannelButton");
+        var smoothed = _editor.Rivers.Single(r => r.Id == wide.Id).FindChannel(wideChannel)!;
+        _report.Checks["smooth-keeps-node-count"] = smoothed.Nodes.Length == 4;
+
+        // The curvature handle changes the drawn shape without adding a node.
+        _editor.WaterLevel = WaterSelectionLevel.Node;
+        _editor.SelectRiverNode(1); await Settle();
+        var beforeCurve = MidSample(_editor.Rivers.Single(r => r.Id == wide.Id), wideChannel);
+        await Number("RiverNodeTensionBox", "230");
+        var afterRiver = _editor.Rivers.Single(r => r.Id == wide.Id);
+        var afterCurve = MidSample(afterRiver, wideChannel);
+        _report.Checks["node-curvature-changes-shape"] =
+            afterRiver.FindChannel(wideChannel)!.Nodes.Length == 4
+            && Math.Abs(afterCurve.X - beforeCurve.X) + Math.Abs(afterCurve.Y - beforeCurve.Y) > 0.5;
+
+        // The ordinary select tool picks the river by its body, well away from the centreline.
+        _editor.WaterLevel = WaterSelectionLevel.System;
+        _editor.ClearWaterSelection();
+        await Click("SelectToolButton");
+        var body = RiverGeometry.Evaluate(_editor.Rivers.Single(r => r.Id == wide.Id)).Channels[wideChannel];
+        var sample = body.Samples[body.Samples.Length / 2];
+        var offAxisX = sample.X - sample.TangentY * sample.HalfWidth * 0.8;
+        var offAxisY = sample.Y + sample.TangentX * sample.HalfWidth * 0.8;
+        Point(offAxisX, offAxisY); await Settle();
+        _report.Checks["select-tool-picks-river-body"] =
+            _editor.ActiveTool == EditorTool.Select && _editor.WaterSelectionCount == 1
+            && _editor.WaterSelectionIds[0] == wide.Id && sample.HalfWidth > 8;
+
+        // A second course, then a rubber band over both: a group selection of water systems.
+        await Click("RiverToolButton");
+        await Number("NewRiverWidthBox", "20");
+        await Click("StartRiverButton");
+        // Kept clear of the first course and of the main system, whose mouth sits near (900,600).
+        Point(150, 600); Point(300, 592); Point(450, 604); Point(640, 596);
+        await Click("FinishRiverButton");
+        var second = _editor.SelectedRiver!;
+        await Click("SelectToolButton");
+        _editor.ClearWaterSelection();
+        DragOnCanvas(100, 560, 700, 745); await Settle();
+        _report.Checks["marquee-takes-both-water-systems"] =
+            _editor.WaterSelectionCount == 2
+            && _editor.WaterSelectionIds.Contains(wide.Id) && _editor.WaterSelectionIds.Contains(second.Id);
+
+        var wideBefore = _editor.Rivers.Single(r => r.Id == wide.Id).Channels[0].Nodes[0];
+        var secondBefore = _editor.Rivers.Single(r => r.Id == second.Id).Channels[0].Nodes[0];
+        var depthBeforeMove = _editor.Session.UndoDepth;
+        var grab = RiverGeometry.Evaluate(_editor.Rivers.Single(r => r.Id == wide.Id)).Channels[wideChannel].Samples[10];
+        DragOnCanvas(grab.X, grab.Y, grab.X + 30, grab.Y - 25); await Settle();
+        var wideAfter = _editor.Rivers.Single(r => r.Id == wide.Id).Channels[0].Nodes[0];
+        var secondAfter = _editor.Rivers.Single(r => r.Id == second.Id).Channels[0].Nodes[0];
+        _report.Checks["drag-moves-the-whole-selection"] =
+            _editor.Session.UndoDepth == depthBeforeMove + 1
+            && Math.Abs(wideAfter.X - wideBefore.X - 30) < 1.5 && Math.Abs(wideAfter.Y - wideBefore.Y + 25) < 1.5
+            && Math.Abs(secondAfter.X - secondBefore.X - 30) < 1.5 && Math.Abs(secondAfter.Y - secondBefore.Y + 25) < 1.5;
+        _editor.Undo(); await Settle();
+        _editor.SelectWater(wide.Id);
+        await Click("SelectToolButton");
+
+        // A real Delete key on the focused canvas, through the production key routing.
+        var beforeDelete = _editor.Rivers.Count;
+        var depthBeforeDelete = _editor.Session.UndoDepth;
+        _view.Canvas.Focus(); await Settle();
+        PressKey(_view.Canvas, Key.Delete); await Settle();
+        _report.Checks["delete-key-removes-selected-water"] =
+            _editor.Rivers.Count == beforeDelete - 1
+            && _editor.Rivers.All(r => r.Id != wide.Id)
+            && _editor.Session.UndoDepth == depthBeforeDelete + 1;
+
+        _editor.Undo(); await Settle();
+        _report.Checks["undo-restores-deleted-water"] =
+            _editor.Rivers.Count == beforeDelete && _editor.Rivers.Any(r => r.Id == wide.Id);
+
+        // The same key inside a text box is text: it must not touch the map.
+        await Click("RiverToolButton");
+        _editor.SelectRiver(wide.Id); await Settle();
+        var nameBox = Find<TextBox>("RiverNameBox");
+        nameBox.BringIntoView(); nameBox.Focus(); await Settle();
+        var beforeTyping = _editor.Session.Document;
+        var riversBeforeTyping = _editor.Rivers.Count;
+        PressKey(nameBox, Key.Delete); await Settle();
+        _report.Checks["delete-key-in-text-box-keeps-the-map"] =
+            ReferenceEquals(beforeTyping, _editor.Session.Document) && _editor.Rivers.Count == riversBeforeTyping;
+        _view.Canvas.Focus(); await Settle();
+        await Frame();
+        SaveVisual(Path.ChangeExtension(Options.OutputPath, ".selection.png"));
+    }
+
+    private static VectorPoint MidSample(Map.Core.Documents.River river, Guid channelId)
+    {
+        var geometry = RiverGeometry.Evaluate(river).Channels[channelId];
+        var sample = geometry.Samples[geometry.Samples.Length / 2];
+        return new VectorPoint(sample.X, sample.Y);
+    }
+
+    /// <summary>A real Avalonia key event on a real focused element; the window routes it.</summary>
+    private static void PressKey(InputElement target, Key key) =>
+        target.RaiseEvent(new KeyEventArgs { RoutedEvent = InputElement.KeyDownEvent, Key = key, Source = target });
 
     /// <summary>Reproduces the owner's report: the lake button as the very first action.</summary>
     private async Task LakeOnly()
@@ -294,6 +460,10 @@ public sealed class Stage19Application : Application
             _report.JunctionAfter = $"lake pixel {pixel}";
             _report.Checks["lake-visible-on-canvas"] = pixel.Blue > pixel.Red;
         }
+        // Creation ends with the new lake selected, so the very next action addresses it.
+        _report.Checks["lake-selected-after-creation"] =
+            _editor.WaterSelectionCount == 1 && _editor.Rivers.Count == 1
+            && _editor.WaterSelectionIds[0] == _editor.Rivers[0].Id;
     }
 
     private bool JunctionIsWater(string screenshotPath)
@@ -334,6 +504,7 @@ public sealed class Stage19Application : Application
     }
     private void Point(double x, double y)
     { var p = _editor.Session.Viewport.WorldToScreen(x, y); _view.Canvas.ClickForSmoke(p.X, p.Y); }
+    private void DragOnCanvas(double x, double y, double toX, double toY) => Drag(x, y, toX, toY);
     private void Drag(double x, double y, double toX, double toY)
     { var a = _editor.Session.Viewport.WorldToScreen(x, y); var b = _editor.Session.Viewport.WorldToScreen(toX, toY);
         _view.Canvas.PressMoveReleaseForSmoke(a.X, a.Y, b.X, b.Y); }
