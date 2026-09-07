@@ -30,6 +30,7 @@ internal sealed class NativeStage18Report
     public Dictionary<string, bool> Checks { get; } = [];
     public int FixtureObjects { get; set; }
     public bool MeasurementPerformed { get; set; }
+    public bool MeasurementOnly { get; set; }
     public bool MeasurementRequired { get; set; } = true;
     public int ChangedObjects { get; set; }
     public int VisitedCells { get; set; }
@@ -68,7 +69,7 @@ internal sealed class NativeStage18Report
     public long? PlacementRetainedManagedBytes { get; set; }
     public string? Failure { get; set; }
     public bool GatePassed => Failure is null && (!MeasurementRequired || MeasurementPerformed)
-        && Checks.Count >= (MeasurementRequired ? 20 : 7) && Checks.Values.All(v => v);
+        && Checks.Count >= (MeasurementRequired && !MeasurementOnly ? 20 : 7) && Checks.Values.All(v => v);
 }
 
 internal static class NativeStage18Smoke
@@ -114,6 +115,7 @@ public sealed class Stage18Application : Application
         var desktop = (IClassicDesktopStyleApplicationLifetime)ApplicationLifetime!;
         _workspace = Path.Combine(Path.GetDirectoryName(Options.OutputPath)!, "stage18-native");
         var densityAsset = Environment.GetEnvironmentVariable("MAP_STAGE18_DENSITY_ASSET");
+        _report.MeasurementOnly = Environment.GetEnvironmentVariable("MAP_STAGE18_LOCAL_MEASUREMENT_ONLY") == "1";
         _report.MeasurementRequired = Environment.GetEnvironmentVariable("MAP_STAGE18_UI_ONLY") != "1" && densityAsset is null;
         Directory.CreateDirectory(_workspace);
         Environment.SetEnvironmentVariable("MAP_UI_TEST_MODE", "1");
@@ -144,7 +146,8 @@ public sealed class Stage18Application : Application
         {
             try
             {
-                if (densityAsset is not null && Environment.GetEnvironmentVariable("MAP_STAGE18_NATURAL_CHECK") == "1")
+                if (_report.MeasurementOnly) await MeasureExistingMap();
+                else if (densityAsset is not null && Environment.GetEnvironmentVariable("MAP_STAGE18_NATURAL_CHECK") == "1")
                     await ExecuteNaturalCorrection(densityAsset);
                 else if (densityAsset is not null && Environment.GetEnvironmentVariable("MAP_STAGE18_SELECTION_CHECK") == "1")
                     await ExecuteSelectionCorrection(densityAsset);
@@ -667,10 +670,10 @@ public sealed class Stage18Application : Application
         _report.MeasurementPerformed = true;
         Require(_report.FixtureObjects is >= 19000 and <= 21000, "Fixture is not the requested ordinary map");
         _view.Canvas.DisposeRenderCaches();
-        _catalog.ImportSet([Path.Combine(Environment.CurrentDirectory, "src/Map.Assets/StarterAssets/sample-tree.png")], "Деревья", new(), DateTimeOffset.UnixEpoch);
+        var measurementSet = _catalog.ImportSet([Path.Combine(Environment.CurrentDirectory, "src/Map.Assets/StarterAssets/sample-tree.png")], "Деревья", new(), DateTimeOffset.UnixEpoch).Id;
         OpenEditor(document); _editor.AddObjectLayer();
         _report.Checks["measurement-new-layer-only-in-copy"] = document.FindLayer(_editor.ActiveLayer!.Id) is null;
-        _editor.ChooseGalleryVariant(_catalog.Sets[0].Id, null);
+        _editor.ChooseGalleryVariant(measurementSet, null);
         _editor.StampDensity = 3; _editor.SetStampScalePercent(55); _editor.Session.Viewport.Set(0, 0, .35); await Settle();
         await Click("StampModeFillArea"); await Click("StartEditableAreaButton");
         Point(300, 300); Point(1800, 300); Point(1800, 1600); Point(300, 1600);
