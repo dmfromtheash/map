@@ -21,6 +21,17 @@ public static class RiverRenderer
 
     private static readonly ConditionalWeakTable<River, BodyCache> Bodies = [];
 
+    /// <summary>World-space coverage needed beyond an export tile for coast joins and bank fades.</summary>
+    public static double CoastCoveragePadding(River river)
+    {
+        var half = river.Channels.SelectMany(c => c.Nodes).Select(n => n.Width * river.WidthScale / 2).DefaultIfEmpty(0).Max();
+        var padding = river.Style.CutsLand ? 24d : 0; // Three sigmas of the bounded mouth rounding.
+        if (river.Style.ClipToLand)
+            padding = Math.Max(padding, Math.Max(Math.Clamp(half * 2.2, 3, 80) * 1.85,
+                Math.Clamp(half * 2.4, 8, 48) * 1.9));
+        return padding;
+    }
+
     /// <summary>Rivers of the layer with live editor substitutions applied by id.</summary>
     public static IReadOnlyList<River> Resolve(ObjectLayer layer, RenderOptions options)
     {
@@ -111,43 +122,6 @@ public static class RiverRenderer
             using var edge = new SKPaint { BlendMode = blend, IsAntialias = true, Style = SKPaintStyle.Stroke,
                 StrokeWidth = (float)Math.Max(river.Style.BankWidth * 0.5, 0.6 / scale), StrokeJoin = SKStrokeJoin.Round };
             canvas.DrawPath(entry.Body, edge);
-        }
-    }
-
-    /// <summary>
-    /// Dissolves the coast where a channel crosses it. The carve alone leaves a notch with the
-    /// coast line, the rings and the shadow running sharply into it; here the coverage around
-    /// each crossing is softened, so the outline of the land washes out into the mouth instead
-    /// of being cut by it. <paramref name="insideLand"/> reads the layer's own coverage.
-    /// </summary>
-    public static void WashCoast(SKCanvas canvas, River river, Func<double, double, bool> insideLand, double viewScale,
-        SKBlendMode blend = SKBlendMode.DstOut)
-    {
-        ArgumentNullException.ThrowIfNull(insideLand);
-        var scale = Math.Max(viewScale, 1e-4);
-        var set = RiverGeometry.Evaluate(river);
-        foreach (var geometry in set.Channels.Values)
-        {
-            if (geometry.Closed) continue;
-            var samples = geometry.Samples;
-            if (samples.Length < 2) continue;
-            var previousInside = insideLand(samples[0].X, samples[0].Y);
-            for (var i = 1; i < samples.Length; i++)
-            {
-                var inside = insideLand(samples[i].X, samples[i].Y);
-                if (inside == previousInside) continue;
-                previousInside = inside;
-                var sample = samples[i];
-                var half = Math.Max(sample.HalfWidth, MinimumScreenWidth / scale / 2);
-                var sigma = half * 0.7;
-                if (sigma * scale < 0.5) continue;
-                using var wash = new SKPaint
-                {
-                    Color = SKColors.Black, BlendMode = blend, IsAntialias = true,
-                    MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, (float)sigma),
-                };
-                canvas.DrawCircle((float)sample.X, (float)sample.Y, (float)(half * 1.5), wash);
-            }
         }
     }
 
@@ -262,6 +236,15 @@ public static class RiverRenderer
         }
         void EnterNearby() { canvas.Save(); if (context.Count > 0) canvas.ClipPath(nearby, SKClipOperation.Intersect, antialias: true); }
 
+        void BeginBanks() { if (clipToLand is not null) canvas.SaveLayer(layerRect, null); }
+        void EndBanks()
+        {
+            if (clipToLand is null) return;
+            RiverCoastRenderer.MaskBanks(canvas, clipToLand, layerRect, Math.Clamp(typicalHalf * 2.4, 8, 48));
+            canvas.Restore();
+        }
+
+        BeginBanks();
         var haloVisible = style.BankShadowOpacity > 0 && !fastPreview && style.BankShadowBlur * scale >= 0.5;
         if (haloVisible)
         {
@@ -285,6 +268,8 @@ public static class RiverRenderer
             RiverBankRenderer.Draw(canvas, union, style, scale, clipToLand, layerRect);
             canvas.Restore();
         }
+
+        EndBanks();
 
         foreach (var part in parts)
         {
@@ -339,6 +324,7 @@ public static class RiverRenderer
             }
         }
 
+        BeginBanks();
         if (hasShallow)
         {
             // The rim is the light colour everywhere the water is, minus a blurred copy of the
@@ -398,6 +384,8 @@ public static class RiverRenderer
             }
             canvas.Restore();
         }
+
+        EndBanks();
 
         foreach (var channel in fadeChannels)
         {

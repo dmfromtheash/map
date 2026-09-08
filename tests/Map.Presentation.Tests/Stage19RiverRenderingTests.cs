@@ -118,6 +118,26 @@ public sealed class Stage19RiverRenderingTests
     }
 
     [Fact]
+    public async Task A_mouth_at_a_tile_boundary_matches_an_unsplit_export()
+    {
+        using var temp = new TempDirectory();
+        var document = LandFixture(out _, RiverStyle.Illustrated());
+        var layer = document.Layers.OfType<ObjectLayer>().Single();
+        document = document.WithLayer(layer.Id, _ => layer with
+            { Rivers = [layer.Rivers[0] with { Style = RiverStyle.Illustrated() with { TaperSource = false } }] });
+        var request = new ExportRequest(ExportImageFormat.Png, ExportAreaMode.WholeCanvas, null, 512, 256,
+            ExportOutputMode.SingleImage, true, false);
+        using var stamps = new ExportStampImageSource(document, null, null);
+        var whole = new ImageExportEngine(new ExportEngineSettings { TileEdge = 512 });
+        var tiled = new ImageExportEngine(new ExportEngineSettings { TileEdge = 256 });
+        var a = Path.Combine(temp.Path, "unsplit.png"); var b = Path.Combine(temp.Path, "tiled.png");
+        await whole.ExportAsync(document, whole.Plan(document, request), a, stamps);
+        await tiled.ExportAsync(document, tiled.Plan(document, request), b, stamps);
+        using var expected = SKBitmap.Decode(a); using var actual = SKBitmap.Decode(b);
+        AssertNearlyEqual(expected, actual, "estuary at the export tile boundary", exact: false);
+    }
+
+    [Fact]
     public void Override_and_draft_preview_replace_or_add_a_river_without_touching_the_document()
     {
         var document = Fixture(out var river, out var main, out _);

@@ -797,7 +797,7 @@ public static class SceneRenderer
         {
             var matrix = canvas.TotalMatrix;
             var scale = Math.Max(1e-4, Math.Sqrt(matrix.ScaleX * matrix.ScaleX + matrix.SkewY * matrix.SkewY));
-            // The layer's own coverage at a world point, for the coast wash; a missing tile is sea.
+            // The layer's own coverage at a world point, for the river mouth; a missing tile is sea.
             bool InsideLand(double x, double y)
             {
                 var key = new TileKey((int)Math.Floor(x / TileMap.TileSize), (int)Math.Floor(y / TileMap.TileSize));
@@ -830,7 +830,19 @@ public static class SceneRenderer
                         Color = SKColors.White.WithAlpha(Alpha(owner.Opacity)) };
                     target.SaveLayer(ToRect(view), erase);
                     RiverRenderer.CutBody(target, river, options.ViewScale, SKBlendMode.SrcOver);
-                    RiverRenderer.WashCoast(target, river, InsideLand, options.ViewScale, SKBlendMode.SrcOver);
+                    RiverCoastRenderer.SmoothMouths(target, river, scale, InsideLand,
+                        (coverage, paint) =>
+                        {
+                            foreach (var key in keys)
+                            {
+                                var bytes = layer.GeometryTiles.TryGet(key)!;
+                                var image = options.TileCache is not null
+                                    ? options.TileCache.Get(layer.Id, key, TileImageKind.LandCoverage, bytes)
+                                    : BuildCoverageImage(bytes, TileImageKind.LandCoverage);
+                                coverage.DrawImage(image, TileRect(key), sampling, paint);
+                                if (options.TileCache is null) image.Dispose();
+                            }
+                        }, water => RiverRenderer.CutBody(water, river, options.ViewScale, SKBlendMode.SrcOver));
                     if (owner.Mask is { Enabled: true } mask && HasEffectiveMask(mask, view))
                         ApplyMask(target, owner.Id, mask, view, options);
                     if (owner.Effects.ClippingEnabled && LowerLayer(document, owner) is { Visible: true, Opacity: > 0 } lower)

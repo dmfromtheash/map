@@ -1,5 +1,6 @@
 using Map.Core.Documents;
 using Map.Core.Editing;
+using Map.Rendering;
 using SkiaSharp;
 
 namespace Map.Export;
@@ -169,6 +170,8 @@ public static class ExportPlanner
                 {
                     world = Math.Max(world, river.Style.BankWidth + (river.Style.BankShadowBlur * 3)
                         + river.Style.BankReliefWidth * 1.8 + 1);
+                    if (document.Layers.OfType<LandLayer>().Any(l => l.Visible && l.Opacity > 0 && l.Level <= river.Level))
+                        world = Math.Max(world, RiverRenderer.CoastCoveragePadding(river));
                 }
             }
         }

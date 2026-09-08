@@ -58,6 +58,7 @@ public sealed partial class Stage19Application
         _report.Screenshot = Path.ChangeExtension(Options.OutputPath, ".shore-editor.png");
         SaveVisual(_report.Screenshot);
         using (var map = ShoreBitmap()) SaveShore(map, "shore-map");
+        using (var mouths = ShoreBitmap(new WorldBounds(300, 530, 805, 768), 2)) SaveShore(mouths, "shore-mouths");
         await Click("SaveButton");
         await Until(() => File.Exists(Path.Combine(_workspace, "river.mapproj")) && !_editor.Session.IsDirty);
         _report.SavedProject = Path.Combine(_workspace, "river.mapproj");
@@ -69,11 +70,15 @@ public sealed partial class Stage19Application
             && restored.Channels.Select(c => c.Mouth).SequenceEqual(river.Channels.Select(c => c.Mouth));
     }
 
-    private SKBitmap ShoreBitmap()
+    private SKBitmap ShoreBitmap(WorldBounds? region = null, double scale = 1)
     {
-        var info = new SKImageInfo(1024, 768);
+        var view = region ?? new WorldBounds(0, 0, 1024, 768);
+        var info = new SKImageInfo((int)((view.Right - view.Left) * scale), (int)((view.Bottom - view.Top) * scale));
         using var surface = SKSurface.Create(info)!;
-        SceneRenderer.Render(surface.Canvas, _editor.Session.Document, new RenderOptions { IsExport = true });
+        surface.Canvas.Scale((float)scale);
+        surface.Canvas.Translate((float)-view.Left, (float)-view.Top);
+        SceneRenderer.Render(surface.Canvas, _editor.Session.Document,
+            new RenderOptions { IsExport = true, VisibleWorld = view, ViewScale = scale });
         var bitmap = new SKBitmap(info);
         surface.ReadPixels(info, bitmap.GetPixels(), info.RowBytes, 0, 0);
         return bitmap;
