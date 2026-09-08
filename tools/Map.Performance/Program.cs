@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Map.Performance;
 
 var options = PerformanceOptions.Parse(args);
@@ -13,7 +13,29 @@ if (options.Profile == "textures")
     return 0;
 }
 
-if (options.Profile == "native-stage19")
+if (options.Profile == "starter-art")
+{
+    // Renders Map's own starter art (mountains, trees, buildings) into a folder for review.
+    Directory.CreateDirectory(options.OutputPath);
+    var watch = System.Diagnostics.Stopwatch.StartNew();
+    foreach (var set in Map.Assets.StarterArtForge.Sets)
+    {
+        for (var variant = 0; variant < set.VariantCount; variant++)
+        {
+            var path = Path.Combine(options.OutputPath, Map.Assets.StarterArtForge.FileName(set, variant));
+            File.WriteAllBytes(path, Map.Assets.StarterArtForge.Render(set, variant));
+            Console.WriteLine($"  {path} ({new FileInfo(path).Length / 1024} KiB, {watch.ElapsedMilliseconds} ms)");
+        }
+    }
+    return 0;
+}
+
+if (options.Profile == "native-asset-catalog")
+{
+    var smoke = NativeAssetCatalogSmoke.Run(options);
+    report = smoke; gatePassed = smoke.GatePassed;
+}
+else if (options.Profile == "native-stage19")
 {
     var nativeReport = NativeStage19Smoke.Run(options); report = nativeReport; gatePassed = nativeReport.GatePassed;
 }

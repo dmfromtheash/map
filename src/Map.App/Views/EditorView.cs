@@ -1,9 +1,11 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
@@ -315,8 +317,6 @@ public sealed partial class EditorView : UserControl
     private ToggleButton _favoriteButton = null!;
     private Button _previousVariantButton = null!;
     private Button _nextVariantButton = null!;
-    private readonly Dictionary<string, Button> _librarySortButtons = [];
-    private readonly Dictionary<string, Button> _libraryGroupButtons = [];
     private readonly Dictionary<string, Button> _libraryFilterButtons = [];
     private readonly Dictionary<string, Button> _placementModeButtons = [];
     private readonly Dictionary<PlacementAutoSelectPolicy, Button> _autoSelectButtons = [];
@@ -335,13 +335,17 @@ public sealed partial class EditorView : UserControl
     private readonly TextBlock _libraryFilterSummary = new() { Name = "LibraryFilterSummary" };
     private readonly TextBlock _variantStateText = new() { Name = "VariantStateText" };
     private readonly Dictionary<string, List<TileState>> _tileStates = [];
-    private Expander _libraryFilterDetails = null!;
-    private Expander _libraryCollections = null!;
     private Expander _setManagementDetails = null!;
     private Control _selectedSetBlock = null!;
     private Control _stampGestureBlock = null!;
     private Control _stampPlacementOptions = null!;
-    private Control _stampCatalogDetails = null!;
+    private ToggleButton _randomRotationToggle = null!;
+    private ToggleButton _stampFavoriteToggle = null!;
+    private ToggleButton _tweakColorsToggle = null!;
+    private Button _stampPreviewButton = null!;
+    private Control _stampColorsBlock = null!;
+    private TextBlock _stampPlaceCaption = null!;
+    private Control _stampAutoSelectRow = null!;
     private TextBlock _stampVariantCounter = null!;
     private TextBlock _stampVariantName = null!;
     private StackPanel _stampAreaControls = null!;
@@ -383,6 +387,7 @@ public sealed partial class EditorView : UserControl
         Action requestShortcutSettings)
     {
         _editor = editor;
+        _thumbnails.OriginalFor = path => _editor.TryDescribeLibraryThumbnail(path, out var original) ? original : null;
         Name = "EditorView";
 
         var topBar = BuildTopBar(requestBack, requestSecondWindow, requestShortcutSettings);
@@ -427,6 +432,7 @@ public sealed partial class EditorView : UserControl
         _canvas.ViewportChanged += (_, _) => _viewportStatus.Text = _editor.ViewportStatus;
         _canvas.StampPlaced += (_, _) => OnEditorChanged(this, new(nameof(EditorViewModel.CompactRecentSets)));
         _canvas.VariantCycled += (_, _) => OnEditorChanged(this, new(nameof(EditorViewModel.CurrentVariant)));
+        _canvas.SecondaryPressed += (_, e) => ShowCanvasContextMenu(e);
         _editor.PropertyChanged += OnEditorChanged;
         _editor.Shortcuts.Changed += OnShortcutsChanged;
         _editor.SceneChanged += (_, _) =>
@@ -579,7 +585,7 @@ public sealed partial class EditorView : UserControl
         _assetCatalogAutoCloseForStamp = _editor.ActiveTool == EditorTool.Stamp;
         _assetCatalogWindow = ShowAuxiliaryWindow(
             _assetCatalogWindow,
-            "Локальная библиотека ассетов",
+            "Каталог ассетов",
             _assetCatalogContent,
             1240,
             820,
@@ -955,6 +961,128 @@ public sealed partial class EditorView : UserControl
             () => _editor.SelectionRotationDegrees,
             value => _editor.SetSelectionRotationDegrees(value, commit: true));
 
+        // The size in map units, for the one object whose size has one meaning. It writes
+        // through the same geometry commit the panel's fields use: one command, one history entry.
+        var width = BuildQuickNumber(
+            "QuickWidth", "Ширина", "px", 1, 1_000_000,
+            () => _editor.SelectionCount == 1 ? _editor.Session.SelectedObject?.Width : null,
+            value => CommitQuickSize(value, isWidth: true));
+        var height = BuildQuickNumber(
+            "QuickHeight", "Высота", "px", 1, 1_000_000,
+            () => _editor.SelectionCount == 1 ? _editor.Session.SelectedObject?.Height : null,
+            value => CommitQuickSize(value, isWidth: false));
+        var size = QuickGroup(width, height);
+
+        // Order inside the level: the four moves a selected object needs most often, as
+        // arrows next to the level they act within, with the current shortcut in the tip.
+        Button Order(string name, string caption, string icon, int direction, bool extreme, string command)
+        {
+            var button = Ui.IconButton(name, caption, icon, () =>
+            {
+                _editor.ReorderSelection(direction, extreme);
+                RefreshAfterSelectionCommand();
+            });
+            DynamicTip(button, () => caption + " (" + _editor.Shortcuts.Get(command) + ")");
+            return button;
+        }
+        var ordering = QuickField("Порядок", new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 2,
+            VerticalAlignment = VerticalAlignment.Center,
+            Children =
+            {
+                Order("QuickRaiseTopButton", "Наверх: сделать выделение самым верхним в его слое",
+                    MapIcons.ArrowToTop, 1, true, EditorShortcutSettings.Commands.ObjectTop),
+                Order("QuickRaiseButton", "Выше: поднять выделение над соседями того же уровня",
+                    MapIcons.ArrowUp, 1, false, EditorShortcutSettings.Commands.ObjectUp),
+                Order("QuickLowerButton", "Ниже: опустить выделение под соседей того же уровня",
+                    MapIcons.ArrowDown, -1, false, EditorShortcutSettings.Commands.ObjectDown),
+                Order("QuickLowerBottomButton", "Вниз: сделать выделение самым нижним в его слое",
+                    MapIcons.ArrowToBottom, -1, true, EditorShortcutSettings.Commands.ObjectBottom),
+            },
+        });
+        var stacking = QuickGroup(QuickField("Слой", layer), levelBlock, ordering);
+        var appearance = QuickGroup(scale, opacity, rotation);
+
+        // The same strip for a piece of land: the Land tool works on one land layer at a time,
+        // and what the owner reaches for there is where that piece sits among the others and
+        // how much it lets through. Land is always below objects, so its order is among land.
+        Button LandOrder(string name, string caption, string icon, bool up, string command)
+        {
+            var button = Ui.IconButton(name, caption, icon, () =>
+            {
+                _editor.ReorderActiveLayer(up);
+                RefreshAfterSelectionCommand();
+            });
+            DynamicTip(button, () => caption + " (" + _editor.Shortcuts.Get(command) + ")");
+            return button;
+        }
+        var landOrder = QuickField("Порядок", new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 2,
+            VerticalAlignment = VerticalAlignment.Center,
+            Children =
+            {
+                LandOrder("QuickLandUpButton", "Выше: поднять этот слой земли над соседним",
+                    MapIcons.ArrowUp, true, EditorShortcutSettings.Commands.LayerUp),
+                LandOrder("QuickLandDownButton", "Ниже: опустить этот слой земли под соседний",
+                    MapIcons.ArrowDown, false, EditorShortcutSettings.Commands.LayerDown),
+            },
+        });
+        var landOpacity = BuildQuickNumber(
+            "QuickLandOpacity", "Непрозрачность", "%", 0, 100,
+            () => _editor.ActiveLayer is LandLayer active ? active.Opacity * 100 : null,
+            value => _editor.SetActiveLayerOpacity(value),
+            () => _editor.ActiveLayer is LandLayer);
+        var landVisible = Ui.TextButton("QuickLandVisibilityButton", "Показан", () =>
+        {
+            _editor.ToggleActiveLayerVisibility();
+            RefreshAfterSelectionCommand();
+        }, "compact");
+        var landLevel = BuildQuickLevelBlock("QuickLandLevel", "Уровень земли",
+            () => _editor.LandTargetLevel,
+            value => _editor.SetLandLevel(value),
+            delta => _editor.ShiftLandLevel(delta),
+            () => _editor.LandTarget is not null);
+        var land = QuickGroup(landLevel, landOrder, landOpacity, QuickField("Видимость", landVisible));
+
+        // Water has the same level and order as everything else on the map.
+        var waterLevel = BuildQuickLevelBlock("QuickWaterLevel", "Уровень воды",
+            () => _editor.WaterSelectionLevelValue,
+            value => _editor.SetSelectedWaterLevel(value),
+            delta => _editor.ShiftSelectedWaterLevel(delta),
+            () => _editor.WaterSelectionCount > 0);
+        Button WaterOrder(string name, string caption, string icon, int direction, bool extreme, string command)
+        {
+            var button = Ui.IconButton(name, caption, icon, () =>
+            {
+                _editor.ReorderSelectedWater(direction, extreme);
+                RefreshAfterSelectionCommand();
+            });
+            DynamicTip(button, () => caption + " (" + _editor.Shortcuts.Get(command) + ")");
+            return button;
+        }
+        var waterOrder = QuickField("Порядок", new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 2,
+            VerticalAlignment = VerticalAlignment.Center,
+            Children =
+            {
+                WaterOrder("QuickWaterTopButton", "Наверх: сделать воду самой верхней среди воды слоя",
+                    MapIcons.ArrowToTop, 1, true, EditorShortcutSettings.Commands.ObjectTop),
+                WaterOrder("QuickWaterUpButton", "Выше: поднять воду над соседней водой",
+                    MapIcons.ArrowUp, 1, false, EditorShortcutSettings.Commands.ObjectUp),
+                WaterOrder("QuickWaterDownButton", "Ниже: опустить воду под соседнюю воду",
+                    MapIcons.ArrowDown, -1, false, EditorShortcutSettings.Commands.ObjectDown),
+                WaterOrder("QuickWaterBottomButton", "Вниз: сделать воду самой нижней среди воды слоя",
+                    MapIcons.ArrowToBottom, -1, true, EditorShortcutSettings.Commands.ObjectBottom),
+            },
+        });
+        var waterGroup = QuickGroup(waterLevel, waterOrder);
+
         var strip = new WrapPanel
         {
             Orientation = Orientation.Horizontal,
@@ -963,8 +1091,11 @@ public sealed partial class EditorView : UserControl
             Children =
             {
                 QuickGroup(thumbnail, identity),
-                QuickGroup(QuickField("Слой", layer), levelBlock),
-                QuickGroup(scale, opacity, rotation),
+                stacking,
+                waterGroup,
+                size,
+                appearance,
+                land,
             },
         };
         var host = new Border { Padding = new Thickness(10, 6), Child = strip }
@@ -973,8 +1104,15 @@ public sealed partial class EditorView : UserControl
         _quickSyncs.Add(() =>
         {
             var count = _editor.SelectionCount;
+            var water = _editor.WaterSelectionCount;
             var selected = _editor.Session.SelectedObject;
-            host.IsVisible = count > 0;
+            // A selected piece of land, or the active land layer under the Land tool.
+            var landLayer = _editor.SelectedLand
+                ?? (count == 0 && water == 0 && _editor.ActiveTool == EditorTool.Land ? _editor.ActiveLayer as LandLayer : null);
+            // Water is a selection too: the strip names it and offers its layer, and keeps the
+            // object-only fields out of the way. Under the Land tool the strip speaks for the
+            // active piece of land.
+            host.IsVisible = count > 0 || water > 0 || landLayer is not null;
 
             thumbnail.Source = count == 1 && selected is not null
                 ? _thumbnails.Image(_editor.ObjectThumbnailPath(selected))
@@ -982,6 +1120,8 @@ public sealed partial class EditorView : UserControl
             thumbnail.IsVisible = thumbnail.Source is not null;
             identity.Text = count switch
             {
+                0 when water > 0 => "Выделено: " + _editor.WaterSelectionSummary.TrimEnd('.'),
+                0 when landLayer is not null => "Земля: " + landLayer.Name,
                 0 => "",
                 1 => "Выделено: " + (selected?.Name ?? "Объект"),
                 _ => "Выбрано: " + EditorLabels.Objects(count),
@@ -989,12 +1129,38 @@ public sealed partial class EditorView : UserControl
             ToolTip.SetTip(identity, identity.Text);
             AutomationProperties.SetName(identity, identity.Text);
 
+            stacking.IsVisible = landLayer is null;
+            levelBlock.IsVisible = count > 0;
+            ordering.IsVisible = count > 0;
+            waterGroup.IsVisible = count == 0 && water > 0;
+            appearance.IsVisible = count > 0;
+            size.IsVisible = count == 1;
+            land.IsVisible = landLayer is not null;
+            if (landLayer is not null)
+            {
+                landVisible.Content = landLayer.Visible ? "Показан" : "Скрыт";
+                AutomationProperties.SetName(landVisible, "Видимость слоя земли: " + landVisible.Content);
+            }
+
             // A percentage of a bitmap's own reference size means nothing for a shape or a
             // caption, so the field is absent rather than lying with a blank.
             scale.IsVisible = _editor.SelectionIsAllStamps;
         });
 
         return host;
+    }
+
+    /// <summary>
+    /// One side of the size from the strip. The other fields are refreshed from the object first,
+    /// so only the typed side changes; a locked stamp aspect follows it through the same commit.
+    /// </summary>
+    private void CommitQuickSize(double value, bool isWidth)
+    {
+        _editor.RefreshInspector();
+        var text = value.ToString("0", CultureInfo.InvariantCulture);
+        if (isWidth) _editor.WidthText = text; else _editor.HeightText = text;
+        _editor.CommitInspector();
+        SyncInspector();
     }
 
     private static Control QuickGroup(params Control[] fields)
@@ -1149,13 +1315,105 @@ public sealed partial class EditorView : UserControl
     }
 
     /// <summary>
+    /// A level entry for water or land: the same -10..+10 band, the same −/+ steps, the same
+    /// reset, writing through the given commands. Objects keep their own block; this one serves
+    /// everything else on the map so the strip reads the same whatever is selected.
+    /// </summary>
+    private Control BuildQuickLevelBlock(
+        string name, string what, Func<int?> read, Action<int> set, Action<int> shift, Func<bool> enabled)
+    {
+        var box = new TextBox
+        {
+            Width = 62,
+            VerticalAlignment = VerticalAlignment.Center,
+            TextAlignment = Avalonia.Media.TextAlignment.Center,
+        }.Named(name + "Box");
+        AutomationProperties.SetName(box, what);
+        var syncing = false;
+
+        void Commit()
+        {
+            if (syncing) return;
+            var text = (box.Text ?? "").Trim().Replace('−', '-').Replace('+', ' ').Trim();
+            if (text.Length == 0 || text == "разные") { SyncQuickBar(); return; }
+            if (!int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value))
+            {
+                _editor.ReportInspectorError(what + " — целое число от " + TerrainOrder.MinimumLevel + " до +" + TerrainOrder.MaximumLevel + ".");
+                SyncQuickBar();
+                return;
+            }
+            set(TerrainOrder.Clamp(value));
+            RefreshAfterSelectionCommand();
+        }
+        box.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter) { Commit(); e.Handled = true; }
+            else if (e.Key == Key.Escape) { SyncQuickBar(); e.Handled = true; }
+        };
+        box.LostFocus += (_, _) => Commit();
+
+        Button Step(string suffix, string caption, int direction, string tip)
+        {
+            var button = Ui.TextButton(name + suffix, caption, () =>
+            {
+                shift(direction);
+                RefreshAfterSelectionCommand();
+            }, "compact");
+            ToolTip.SetTip(button, tip);
+            return button;
+        }
+        var reset = ResetGlyph(name + "ResetButton", "Сбросить уровень к нулю", () =>
+        {
+            set(0);
+            RefreshAfterSelectionCommand();
+        });
+
+        _quickSyncs.Add(() =>
+        {
+            syncing = true;
+            try
+            {
+                var on = enabled();
+                var value = read();
+                box.Text = !on ? "—" : value is { } level ? EditorViewModel.FormatSublayer(level) : "разные";
+                Ui.SetClass(box, "mixed", on && value is null);
+                box.IsEnabled = on;
+                reset.IsEnabled = on;
+                AutomationProperties.SetName(box, what + ": " + box.Text);
+                ToolTip.SetTip(box, what + ", целое число от " + TerrainOrder.MinimumLevel + " до +" + TerrainOrder.MaximumLevel
+                    + ". Земля и вода более высокого уровня накрывают более низкие. Введите значение и нажмите Enter.");
+            }
+            finally
+            {
+                syncing = false;
+            }
+        });
+
+        return new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 3,
+            VerticalAlignment = VerticalAlignment.Center,
+            Children =
+            {
+                new TextBlock { Text = "Уровень", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) }.Classed("muted"),
+                Step("DownButton", "−", -1, "Опустить на один уровень."),
+                box,
+                Step("UpButton", "+", 1, "Поднять на один уровень."),
+                reset,
+            },
+        };
+    }
+
+    /// <summary>
     /// One compact numeric field of the strip. Empty means "the selected objects disagree", which
     /// is the honest answer; typing a number gives all of them that value as one undoable command.
     /// </summary>
     private Control BuildQuickNumber(
         string name, string caption, string unit, double minimum, double maximum,
-        Func<double?> read, Action<double> apply)
+        Func<double?> read, Action<double> apply, Func<bool>? enabled = null)
     {
+        enabled ??= () => _editor.SelectionCount > 0;
         var box = new TextBox
         {
             Width = 68,
@@ -1221,7 +1479,7 @@ public sealed partial class EditorView : UserControl
                     ? number.ToString("0", CultureInfo.InvariantCulture)
                     : _editor.SelectionCount > 1 ? "разные" : "";
                 Ui.SetClass(box, "mixed", value is null && _editor.SelectionCount > 1);
-                box.IsEnabled = _editor.SelectionCount > 0;
+                box.IsEnabled = enabled();
                 AutomationProperties.SetName(box, $"{caption}, {unit}: {box.Text}");
                 ToolTip.SetTip(box,
                     $"{caption} выделения, {minimum:0}…{maximum:0} {unit}, только целые значения. Введите число и нажмите Enter.");
@@ -2169,40 +2427,32 @@ public sealed partial class EditorView : UserControl
         || double.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out value);
 
     /// <summary>
-    /// The stamp tool's context panel. It states what is current and how to change it; the full
-    /// library, the variant strip and the Area/Density controls live in the side panel.
+    /// The stamp tool's context panel, in the order a map maker reads it: the asset (name,
+    /// picture, variants, recents and favourites), then how it will be placed (scale, rotation,
+    /// level, flips, opacity, shadow, blend, blur, mask), then the placement mode and the rare
+    /// options. The picture opens the catalog; the catalog is the only other place to go.
     /// </summary>
     private StackPanel BuildStampToolPanel()
     {
-        var current = new TextBlock { Name = "StampToolCurrentText", TextWrapping = TextWrapping.Wrap }
-            .Classed("muted");
+        var current = new TextBlock { Name = "StampToolCurrentText", TextWrapping = TextWrapping.Wrap, FontWeight = FontWeight.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center };
         var area = new TextBlock { Name = "StampToolAreaText", TextWrapping = TextWrapping.Wrap }
             .Classed("faint", "role-caption");
 
         _stampToolCurrentText = current;
         _stampToolAreaText = area;
         _stampGestureBlock = BuildStampGestureBlock();
-        var openLibrary = ShortcutTextButton(
-            "OpenLibraryButton", "Каталог ассетов",
-            EditorShortcutSettings.Commands.StampFocusLibrary,
-            () => OpenAssetCatalog(focusSearch: true), "compact");
-        openLibrary.Classes.Add("accent");
 
-        // The asset itself opens the panel: its picture, its name and the one button that goes
-        // back to the catalog. Everything below is a property OF that asset and of the placement
-        // about to happen, which is what the old "Штамп" heading never said.
         return new StackPanel
         {
             Spacing = 8,
             Children =
             {
                 BuildCompactStampCatalog(),
-                openLibrary,
-                _stampGestureBlock,
+                BuildFutureStampProperties(),
+                Ui.Section("Размещение", new StackPanel { Spacing = 6, Children = { _stampGestureBlock, _stampAutoSelectRow } }),
                 BuildEditableAreaPanel(),
                 BuildEditablePathPanel(),
-                BuildStampEditor("FutureStamp"),
-                _stampCatalogDetails,
                 _stampPlacementOptions,
                 Ui.TextButton(
                     "CreateStampPlacementLayerButton",
@@ -2229,6 +2479,147 @@ public sealed partial class EditorView : UserControl
                     [EditorShortcutSettings.Commands.StampDensityUp,
                      EditorShortcutSettings.Commands.StampDensityDown], "плотность"),
                 } }, false),
+            },
+        };
+    }
+
+    /// <summary>
+    /// The properties of the stamp about to be placed, flat and in one order: size, turn, level,
+    /// mirror, opacity, shadow, blend, blur, mask. Colour tweaks unfold from the palette toggle
+    /// in the asset header. Every control keeps its automation name from the old layout.
+    /// </summary>
+    private Control BuildFutureStampProperties()
+    {
+        const string prefix = "FutureStamp";
+        StampStyle? Style() => _editor.StampPanelStyle;
+
+        _randomRotationToggle = new ToggleButton { Content = MapIcons.Stroked(MapIcons.Rotate, 14), Width = 26, Height = 26, MinHeight = 26,
+            Padding = new Thickness(0), Margin = new Thickness(4, 0, 0, 0) }.Named("RandomRotationToggle").Classed("segment");
+        _randomRotationToggle.Click += (_, _) =>
+        {
+            _editor.StampRandomAngle = !_editor.StampRandomAngle;
+            SyncAssetList();
+        };
+        var rotationTrailing = new StackPanel { Orientation = Orientation.Horizontal, Children =
+        {
+            ResetGlyph(prefix + "RotationResetButton", "Сбросить поворот", () => _editor.SetStampRotationDegrees(0)),
+            _randomRotationToggle,
+        } };
+
+        var transform = new StackPanel { Spacing = 2 };
+        transform.Children.Add(AppearanceSlider(prefix + "ScaleSlider", "Масштаб", 10, 400, "%",
+            () => _editor.StampScalePercent,
+            (value, commit) => _editor.SetStampScalePercent(value, commit), 5,
+            ResetGlyph(prefix + "ScaleResetButton", "Сбросить масштаб к 100 %",
+                () => _editor.SetStampScalePercent(100))));
+        transform.Children.Add(AppearanceSlider(prefix + "RotationSlider", "Поворот", 0, 359, "°",
+            () => _editor.StampRotationDegrees,
+            (value, commit) => _editor.SetStampRotationDegrees(value, commit), 1, rotationTrailing));
+        transform.Children.Add(AppearanceSlider(prefix + "SublayerSlider", "Уровень",
+            EditorViewModel.MinimumSublayer, EditorViewModel.MaximumSublayer, "",
+            () => _editor.StampSublayer,
+            (value, commit) => _editor.SetStampSublayer((int)Math.Round(value), commit)));
+        var flips = new Ui.ChoiceGrid
+        {
+            MaxColumns = 2, MinimumItemWidth = 96, Gap = 4,
+            Children =
+            {
+                AppearanceToggle(prefix + "FlipHorizontalToggle", "Отразить ↔",
+                    () => Style()?.FlipHorizontal, value => _editor.SetStampFlip(horizontal: value)),
+                AppearanceToggle(prefix + "FlipVerticalToggle", "Отразить ↕",
+                    () => Style()?.FlipVertical, value => _editor.SetStampFlip(vertical: value)),
+            },
+        };
+        transform.Children.Add(flips);
+        transform.Children.Add(AppearanceSlider(prefix + "OpacitySlider", "Непрозрачность", 0, 100, "%",
+            () => _editor.StampOpacityPercent,
+            (value, commit) => _editor.SetStampOpacityPercent(value, commit), 5));
+
+        var shadowColor = AppearanceColorBox(
+            prefix + "ShadowColorBox", "Цвет тени",
+            () => Style()?.ShadowColor ?? AppearanceColor.OpaqueBlack,
+            (value, commit) => _editor.SetStampShadowColor(value, commit),
+            cancelPreview: _editor.CancelAppearanceGesture);
+        var shadowState = AppearanceChoice(
+            prefix + "ShadowPlacementChoice", "Тень",
+            [
+                ("None", "Нет"),
+                ("Standard", "Стандартная"),
+                ("Custom", "Своя"),
+                ("Layer", "За слоем"),
+            ],
+            () => Style() is not { ShadowOpacity: > 0 } ? "None"
+                : Style()!.ShadowPlacement == StampShadowPlacement.Layer ? "Layer"
+                : IsStandardStampShadow(Style()!) ? "Standard" : "Custom",
+            value =>
+            {
+                if (value == "None") _editor.SetStampShadowNone();
+                else if (value == "Standard") _editor.SetStampShadowStandard();
+                else _editor.SetStampShadowPlacement(value == "Layer"
+                    ? StampShadowPlacement.Layer : StampShadowPlacement.Object);
+            });
+        var shadowDetails = Disclosure(prefix + "ShadowDetails", "Настройка тени", new StackPanel
+        {
+            Spacing = 4,
+            Children =
+            {
+                shadowColor,
+                ShadowBlock(prefix,
+                    () => Style() is { } s
+                        ? (s.ShadowOffsetX, s.ShadowOffsetY, s.ShadowBlur, s.ShadowOpacity)
+                        : null,
+                    _editor.SetStampShadowNone, _editor.SetStampShadowStandard,
+                    (x, y, b, o, c) => _editor.SetStampShadow(x, y, b, o, c)),
+            },
+        }, false);
+
+        var looks = new StackPanel { Spacing = 4 };
+        looks.Children.Add(shadowState);
+        looks.Children.Add(shadowDetails);
+        looks.Children.Add(BlendChoice(prefix + "BlendChoice", () => Style()?.Blend, _editor.SetStampBlend));
+        looks.Children.Add(AppearanceSlider(prefix + "BlurSlider", "Размытие", 0, 32, "px",
+            () => Style()?.Blur, (v, c) => _editor.SetStampBlur(v, c)));
+        looks.Children.Add(Disclosure(prefix + "Geometry", "Маска", BuildStampClipMaskGroup(prefix), false));
+
+        _stampColorsBlock = new StackPanel
+        {
+            Spacing = 4, IsVisible = false,
+            Children =
+            {
+                AppearanceSlider(prefix + "HueSlider", "Оттенок", -180, 180, "°",
+                    () => Style()?.Hue, (v, c) => _editor.SetStampHueDegrees(v, c), 5,
+                    ResetGlyph(prefix + "HueResetButton", "Сбросить оттенок",
+                        () => _editor.SetStampHueDegrees(0))),
+                AppearanceSlider(prefix + "SaturationSlider", "Насыщенность", 0, 200, "%",
+                    () => Style() is { } s ? ColorAdjustment.OffsetToPercent(s.Saturation) : null,
+                    (v, c) => _editor.SetStampSaturationPercent(v, c), 5,
+                    ResetGlyph(prefix + "SaturationResetButton", "Сбросить насыщенность",
+                        () => _editor.SetStampSaturationPercent(100))),
+                AppearanceSlider(prefix + "BrightnessSlider", "Яркость", 0, 200, "%",
+                    () => Style() is { } s ? ColorAdjustment.OffsetToPercent(s.Brightness) : null,
+                    (v, c) => _editor.SetStampBrightnessPercent(v, c), 5,
+                    ResetGlyph(prefix + "BrightnessResetButton", "Сбросить яркость",
+                        () => _editor.SetStampBrightnessPercent(100))),
+                AppearanceSlider(prefix + "ContrastSlider", "Контраст", 0, 200, "%",
+                    () => Style() is { } s ? ColorAdjustment.OffsetToPercent(s.Contrast) : null,
+                    (v, c) => _editor.SetStampContrastPercent(v, c), 5,
+                    ResetGlyph(prefix + "ContrastResetButton", "Сбросить контраст",
+                        () => _editor.SetStampContrastPercent(100))),
+                Ui.TextButton(prefix + "ResetColorsButton", "Сбросить цветокоррекцию",
+                    _editor.ResetStampColorAdjustments, "compact"),
+                Ui.TextButton(prefix + "ResetAppearanceButton", "Сбросить весь внешний вид",
+                    _editor.ResetStampAppearance, "compact"),
+            },
+        }.Named(prefix + "Appearance");
+        AutomationProperties.SetName(_stampColorsBlock, "Цвета");
+
+        return new StackPanel
+        {
+            Spacing = 8,
+            Children =
+            {
+                Ui.Section("Размер и положение", transform),
+                Ui.Section("Вид", new StackPanel { Spacing = 4, Children = { looks, _stampColorsBlock } }),
             },
         };
     }
@@ -3936,13 +4327,14 @@ public sealed partial class EditorView : UserControl
                 // A selection spread over several layers must not show one of them as if it were
                 // the answer - and it must not look like an empty field either, which is exactly
                 // how the earlier "—" read. It says so in words.
-                var mixed = _editor.SelectionCount > 0 && current is null;
-                caption.Text = _editor.SelectionCount == 0
+                var any = _editor.SelectionCount > 0 || _editor.WaterSelectionCount > 0;
+                var mixed = any && current is null;
+                caption.Text = !any
                     ? "—"
                     : mixed ? MixedLayerCaption : current!.Name;
                 Ui.SetClass(caption, "mixed", mixed);
                 Ui.SetClass(button, "mixed", mixed);
-                button.IsEnabled = _editor.SelectionCount > 0 && targets.Count > 0;
+                button.IsEnabled = any && targets.Count > 0;
 
                 AutomationProperties.SetName(button, "Слой-владелец выделения: " + caption.Text);
                 ToolTip.SetTip(button, mixed
@@ -5143,68 +5535,6 @@ public sealed partial class EditorView : UserControl
         return body;
     }
 
-    private Control BuildAssetsTab()
-    {
-        BuildLibraryDiagnosticBanner();
-        BuildLibraryGrid();
-        _selectedSetBlock = BuildSelectedSetBlock();
-        var imports = new Ui.ChoiceGrid
-        {
-            MaxColumns = 1,
-            Children =
-            {
-                Ui.TextButton("ImportAssetButton", "Добавить файл", () => _ = ImportAssetAsync(linked: false), "compact"),
-                Ui.TextButton("ImportAssetSetButton", "Добавить набор", () => _ = ImportAssetSetAsync(), "compact"),
-                Ui.TextButton("LinkAssetButton", "Связать файл", () => _ = ImportAssetAsync(linked: true), "compact"),
-            },
-        };
-        _libraryCollections = Disclosure("LibraryCollectionsDetails", "Коллекции и источники", _collectionTree, expanded: true);
-        var navigation = new ScrollViewer
-        {
-            Content = new StackPanel { Spacing = 12, Children = { _libraryCollections, imports } },
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-        };
-        var top = new StackPanel
-        {
-            Spacing = 8, Children =
-            {
-                _breadcrumbs, _libraryDiagnostic, _assetSearch, BuildLibraryFilterControls(), _libraryCountText,
-            },
-        };
-        var managementScroll = new ScrollViewer { MaxHeight = 230, Content = _selectedSetBlock, ClipToBounds = true,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
-        var management = Disclosure("LibraryOrganizationDetails", "Организация выбранного набора", managementScroll, expanded: false);
-        var filterContent = (Control)_libraryFilterDetails.Content!;
-        _libraryFilterDetails.Content = null;
-        var filterScroll = new ScrollViewer { Content = filterContent, MaxHeight = 100, ClipToBounds = true,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
-        _libraryFilterDetails.Content = filterScroll;
-        // These are alternate editing sections. Keep the search and gallery available when either opens.
-        _libraryFilterDetails.PropertyChanged += (_, e) =>
-        {
-            if (e.Property == Expander.IsExpandedProperty && _libraryFilterDetails.IsExpanded)
-                management.IsExpanded = false;
-        };
-        management.PropertyChanged += (_, e) =>
-        {
-            if (e.Property == Expander.IsExpandedProperty && management.IsExpanded)
-                _libraryFilterDetails.IsExpanded = false;
-        };
-        var main = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto"), RowSpacing = 10,
-            Children = { top, _libraryGrid, management } };
-        Grid.SetRow(_libraryGrid, 1);
-        Grid.SetRow(management, 2);
-        var body = new Grid { Margin = new Thickness(16), ColumnDefinitions = new ColumnDefinitions("220,*"),
-            ColumnSpacing = 16, Children = { navigation, main } };
-        Grid.SetColumn(main, 1);
-        body.SizeChanged += (_, _) =>
-        {
-            body.ColumnDefinitions[0].Width = new GridLength(body.Bounds.Width < 850 ? 170 : 220);
-            filterScroll.MaxHeight = Math.Clamp(body.Bounds.Height * .16, 88, 220);
-            managementScroll.MaxHeight = Math.Clamp(body.Bounds.Height * .12, 64, 180);
-        };
-        return body;
-    }
 
     private static Expander Disclosure(string name, string title, Control content, bool expanded)
     {
@@ -5243,31 +5573,6 @@ public sealed partial class EditorView : UserControl
         AutomationProperties.SetName(_libraryDiagnostic, "Состояние библиотеки");
     }
 
-    /// <summary>
-    /// One real virtualized list over a flat sequence of group headers and cards. Avalonia
-    /// realises only the containers it can show, so grouping ten thousand cards by tag still
-    /// costs the handful of rows on screen rather than a second control tree.
-    /// </summary>
-    private void BuildLibraryGrid()
-    {
-        AutomationProperties.SetName(_libraryGrid, "Галерея ассетов");
-        _libraryGrid.ItemTemplate = new FuncDataTemplate<GalleryRow>(
-            (row, _) => BuildGalleryRow(row), supportsRecycling: false);
-        _libraryGrid.SizeChanged += (_, _) =>
-        {
-            if (_galleryResizeQueued) return;
-            _galleryResizeQueued = true;
-            Dispatcher.UIThread.Post(() =>
-            {
-                _galleryResizeQueued = false;
-                var columns = Math.Clamp((int)(_libraryGrid.Bounds.Width / 180), 1, 8);
-                if (columns == _galleryColumns) return;
-                _galleryColumns = columns;
-                RebuildGalleryRows();
-            }, DispatcherPriority.Loaded);
-        };
-        _libraryGrid.LayoutUpdated += (_, _) => ReportGalleryRange();
-    }
 
     /// <summary>
     /// Moves the visual selection from a header onto the nearest card, continuing in the
@@ -5598,48 +5903,13 @@ public sealed partial class EditorView : UserControl
         SyncSelectedSetAvailability();
     }
     /// <summary>
-    /// The whole filter surface. Every control says in words what it does: a row of mute icons
-    /// would leave the user unable to tell why the library looks empty, so each toggle carries
-    /// its label, and the summary line underneath names everything that is switched on.
+    /// The content of the "Фильтр" flyout. Every control says in words what it does, and the
+    /// toolbar shows a chip for each filter that is on, so the user can always tell why the
+    /// library looks empty.
     /// </summary>
     private StackPanel BuildLibraryFilterControls()
     {
-        var (sort, sortButtons) = Ui.Segmented("LibrarySort", [
-            ("Newest", "Новые", null),
-            ("Oldest", "Старые", null),
-            ("NameAsc", "А–Я", null),
-            ("NameDesc", "Я–А", null),
-        ], key =>
-        {
-            _editor.LibrarySort = key switch
-            {
-                "Oldest" => AssetSortOrder.ImportedOldest,
-                "NameAsc" => AssetSortOrder.NameAscending,
-                "NameDesc" => AssetSortOrder.NameDescending,
-                _ => AssetSortOrder.ImportedNewest,
-            };
-            SyncAssetList();
-        });
-        Register(_librarySortButtons, ["Newest", "Oldest", "NameAsc", "NameDesc"], sortButtons);
-
-        var (group, groupButtons) = Ui.Segmented("LibraryGroup", [
-            ("None", "Без групп", null),
-            ("Collection", "По коллекции", null),
-            ("Tag", "По тегу", null),
-        ], key =>
-        {
-            _editor.LibraryGrouping = key switch
-            {
-                "Collection" => AssetGrouping.Collection,
-                "Tag" => AssetGrouping.Tag,
-                _ => AssetGrouping.None,
-            };
-            SyncAssetList();
-        });
-        Register(_libraryGroupButtons, ["None", "Collection", "Tag"], groupButtons);
-
-        var quickFilters = new Ui.ChoiceGrid { MaxColumns = 3, MinimumItemWidth = 112 };
-        var advancedFilters = new Ui.ChoiceGrid { MaxColumns = 3, MinimumItemWidth = 112 };
+        var quickFilters = new Ui.ChoiceGrid { MaxColumns = 2, MinimumItemWidth = 112 };
         foreach (var (key, title, icon) in new[]
         {
             ("Favorites", "Избранное", MapIcons.Check),
@@ -5670,14 +5940,7 @@ public sealed partial class EditorView : UserControl
             });
             _libraryFilterButtons[key] = button;
             button.Classes.Add("filter-chip");
-            if (key == "Untagged")
-            {
-                advancedFilters.Children.Add(button);
-            }
-            else
-            {
-                quickFilters.Children.Add(button);
-            }
+            quickFilters.Children.Add(button);
         }
 
         _libraryTagFilter = ChoiceBox("LibraryTagFilter", "Тег", "Любой тег", value =>
@@ -5710,8 +5973,9 @@ public sealed partial class EditorView : UserControl
         _libraryFilterSummary.TextWrapping = TextWrapping.Wrap;
         _libraryFilterSummary.Classes.Add("faint");
         _libraryFilterSummary.Classes.Add("role-caption");
+        _libraryFilterSummary.IsVisible = false;
 
-        _clearFiltersButton = Ui.TextButton("LibraryClearFiltersButton", "Сбросить", () =>
+        _clearFiltersButton = Ui.TextButton("LibraryClearFiltersButton", "Сбросить фильтры", () =>
         {
             _editor.ClearLibraryFilters();
             _assetSearch.Text = "";
@@ -5723,35 +5987,17 @@ public sealed partial class EditorView : UserControl
         AutomationProperties.SetName(_clearFiltersButton, "Сбросить все фильтры библиотеки");
         ToolTip.SetTip(_clearFiltersButton, "Снять поиск, коллекцию, теги, тип и даты");
 
-        _libraryFilterDetails = Disclosure(
-            "LibraryFilterDetails",
-            "Фильтры и порядок",
-            new StackPanel
-            {
-                Spacing = 7,
-                Children =
-                {
-                    Ui.Section("Сначала", sort),
-                    Ui.Section("Показывать", group),
-                    Ui.Section("Дополнительный фильтр", advancedFilters),
-                    Ui.PropertyRow("Тег", _libraryTagFilter),
-                    Ui.PropertyRow("Формат", _libraryMediaFilter),
-                    Ui.PropertyRow("Добавлено с", _libraryImportedFrom),
-                    Ui.PropertyRow("Добавлено по", _libraryImportedTo),
-                    _libraryDateHint,
-                },
-            },
-            expanded: false);
-
         return new StackPanel
         {
-            Spacing = 6,
+            Spacing = 7,
             Children =
             {
-                quickFilters,
-                _libraryFilterSummary,
-                _clearFiltersButton,
-                _libraryFilterDetails,
+                Ui.Section("Показывать только", quickFilters),
+                Ui.PropertyRow("Тег", _libraryTagFilter),
+                Ui.PropertyRow("Формат", _libraryMediaFilter),
+                Ui.PropertyRow("Добавлено с", _libraryImportedFrom),
+                Ui.PropertyRow("Добавлено по", _libraryImportedTo),
+                _libraryDateHint,
             },
         };
 
@@ -5762,15 +6008,6 @@ public sealed partial class EditorView : UserControl
             "Untagged" => "Только без тегов",
             _ => "Только используемое на карте",
         };
-
-        static void Register(
-            Dictionary<string, Button> target, string[] keys, IReadOnlyList<Button> buttons)
-        {
-            for (var index = 0; index < keys.Length; index++)
-            {
-                target[keys[index]] = buttons[index];
-            }
-        }
     }
 
     /// <summary>
@@ -6074,16 +6311,8 @@ public sealed partial class EditorView : UserControl
         _autoSelectButtons[PlacementAutoSelectPolicy.Auto] = autoSelectButtons[0];
         _autoSelectButtons[PlacementAutoSelectPolicy.Always] = autoSelectButtons[1];
         _autoSelectButtons[PlacementAutoSelectPolicy.Off] = autoSelectButtons[2];
+        _stampAutoSelectRow = Ui.Subgroup("Автовыбор после размещения", autoSelect);
 
-        // Labelled, not icon-only: these three decide whether a scatter multiplies the variant or
-        // turns and mirrors every copy, and a user must be able to see which without hovering.
-        _randomVariantToggle = LabelledToggle(
-            "RandomVariantToggle", "Смешивать варианты", "Случайный вариант после размещения",
-            MapIcons.Duplicate, () =>
-            {
-                _editor.RandomVariantAfterPlacement = !_editor.RandomVariantAfterPlacement;
-                SyncAssetList();
-            });
         var randomAngleChoice = AppearanceChoice(
             "RandomAngleStepChoice", "Случайный угол",
             [
@@ -6098,7 +6327,7 @@ public sealed partial class EditorView : UserControl
             () => _editor.StampRandomAngleStep.ToString(),
             value => _editor.StampRandomAngleStep = Enum.Parse<StampRandomAngleStep>(value));
         _randomFlipToggle = LabelledToggle(
-            "RandomFlipToggle", "Отражать", "Случайное зеркальное отражение ассета",
+            "RandomFlipToggle", "Случайное отражение", "Случайное зеркальное отражение ассета",
             MapIcons.Select, () =>
             {
                 _editor.StampRandomFlip = !_editor.StampRandomFlip;
@@ -6122,15 +6351,13 @@ public sealed partial class EditorView : UserControl
 
         _seriesSpacingControl = AppearanceSlider("StampSeriesSpacingSlider", "Шаг серии", 10, 400, "% размера",
             () => _editor.SeriesSpacingPercent, (value, commit) => _editor.SetSeriesSpacingPercent(value, commit));
-        _stampPlacementOptions = Disclosure("PlacementOptions", "Параметры размещения", new StackPanel
+        _stampPlacementOptions = Disclosure("PlacementOptions", "Ещё", new StackPanel
             {
                 Spacing = 6,
                 Children =
                 {
-                    new TextBlock { Text = "Автовыбор" }.Classed("role-panel"),
-                    autoSelect,
-                    Disclosure("StampScatterDetails", "Варианты и случайность",
-                        new StackPanel { Spacing = 4, Children = { _randomVariantToggle, randomAngleChoice, _randomFlipToggle } }, false),
+                    randomAngleChoice,
+                    _randomFlipToggle,
                     AssetCommand("ReplaceStampVariantButton", "Заменить ассет выделенного объекта", () =>
                     {
                         _editor.ReplaceSelectedStampWithCurrentVariant();
@@ -6253,7 +6480,7 @@ public sealed partial class EditorView : UserControl
 
     private Control BuildCompactStampCatalog()
     {
-        _stampToolThumbnail = new Image { Width = 56, Height = 56, Stretch = Stretch.Uniform };
+        _stampToolThumbnail = new Image { Width = 128, Height = 128, Stretch = Stretch.Uniform };
         _stampVariantStrip = BuildCompactVariantList();
         _stampRecentStrip = BuildCompactSetList("StampRecentSet");
         _stampFavoriteStrip = BuildCompactSetList("StampFavoriteSet");
@@ -6274,29 +6501,86 @@ public sealed partial class EditorView : UserControl
         previous.Width = next.Width = 30;
         _commandButtons.Add((previous, "Предыдущий вариант", EditorShortcutSettings.Commands.StampPreviousVariant));
         _commandButtons.Add((next, "Следующий вариант", EditorShortcutSettings.Commands.StampNextVariant));
-        var details = new StackPanel
+
+        // Header: the name of the asset and the two switches that belong to the asset itself.
+        _randomVariantToggle = new ToggleButton { Content = MapIcons.Stroked(MapIcons.Duplicate, 15), Width = 28, Height = 28, MinHeight = 28,
+            Padding = new Thickness(0) }.Named("RandomVariantToggle").Classed("segment");
+        _randomVariantToggle.Click += (_, _) =>
         {
-            Margin = new Thickness(8, 0, 0, 0), Spacing = 2,
-            VerticalAlignment = VerticalAlignment.Center,
+            _editor.RandomVariantAfterPlacement = !_editor.RandomVariantAfterPlacement;
+            SyncAssetList();
+        };
+        _tweakColorsToggle = new ToggleButton { Content = MapIcons.Stroked(MapIcons.Color, 15), Width = 28, Height = 28, MinHeight = 28,
+            Padding = new Thickness(0) }.Named("StampTweakColorsToggle").Classed("segment");
+        AutomationProperties.SetName(_tweakColorsToggle, "Настроить цвета");
+        ToolTip.SetTip(_tweakColorsToggle, "Оттенок, насыщенность, яркость и контраст будущего штампа");
+        _tweakColorsToggle.Click += (_, _) =>
+        {
+            var on = _tweakColorsToggle.IsChecked == true;
+            _stampColorsBlock.IsVisible = on;
+            Ui.SetSelected(_tweakColorsToggle, on);
+        };
+        var header = new DockPanel
+        {
+            LastChildFill = true,
             Children =
             {
+                new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Children = { _randomVariantToggle, _tweakColorsToggle } }
+                    .Docked(Dock.Right),
                 _stampToolCurrentText,
-                _stampVariantName,
             },
         };
-        Grid.SetColumn(details, 1);
+
+        _stampPreviewButton = new Button
+        {
+            Name = "StampPreviewButton", Padding = new Thickness(6), HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Center, Cursor = new Cursor(StandardCursorType.Hand),
+            Content = _stampToolThumbnail,
+        }.Classed("asset-tile");
+        _stampPreviewButton.Click += (_, _) => OpenAssetCatalog(focusSearch: false);
+        var openLibrary = ShortcutTextButton(
+            "OpenLibraryButton", "Каталог",
+            EditorShortcutSettings.Commands.StampFocusLibrary,
+            () => OpenAssetCatalog(focusSearch: true), "compact");
+        var pager = new DockPanel
+        {
+            LastChildFill = true,
+            Children =
+            {
+                openLibrary.Docked(Dock.Right),
+                new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, Children = { previous, _stampVariantCounter, next } },
+            },
+        };
+
+        _stampFavoriteToggle = new ToggleButton { Content = new TextBlock { Text = "★", FontSize = 15 }, Width = 28, Height = 28, MinHeight = 28,
+            Padding = new Thickness(0), VerticalAlignment = VerticalAlignment.Center }.Named("StampFavoriteToggle").Classed("segment");
+        _stampFavoriteToggle.Click += (_, _) =>
+        {
+            _editor.ToggleSelectedSetFavorite();
+            SyncAssetList();
+            SyncStatus();
+        };
+        var strips = new TabControl
+        {
+            Items =
+            {
+                new TabItem { Header = "Недавние", Content = _stampRecentStrip },
+                new TabItem { Header = "Избранное", Content = _stampFavoriteStrip },
+            },
+        };
+        var stripsHost = new DockPanel { LastChildFill = true, Children = { _stampFavoriteToggle.Docked(Dock.Right), strips } };
+
+        _stampPlaceCaption = new TextBlock { VerticalAlignment = VerticalAlignment.Center };
         _stampCurrentAssetButton = new Button
         {
             Name = "StampCurrentAssetButton",
-            Padding = new Thickness(4),
-            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            Padding = new Thickness(8, 4),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Center,
             Cursor = new Cursor(StandardCursorType.Hand),
-            Content = new Grid
-            {
-                ColumnDefinitions = new ColumnDefinitions("56,*"),
-                Children = { _stampToolThumbnail, details },
-            },
-        }.Classed("compact", "asset-entry");
+            Content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6,
+                Children = { MapIcons.Stroked(MapIcons.ObjectStamp, 14), _stampPlaceCaption } },
+        }.Classed("compact", "accent");
         _stampCurrentAssetButton.Click += (_, _) =>
         {
             if (_editor.StampPlacementMode == StampPlacementMode.FillArea) _editor.StartEditableArea();
@@ -6306,35 +6590,25 @@ public sealed partial class EditorView : UserControl
             SyncContextArea();
             _canvas.Focus();
         };
-        _stampCatalogDetails = Disclosure("StampCatalogDetails", "Варианты и быстрый доступ", new StackPanel
-        {
-            Spacing = 4,
-            Children =
-            {
-                new TextBlock { Text = "Варианты" }.Classed("role-caption"),
-                _stampVariantStrip,
-                new TabControl { Items =
-                {
-                    new TabItem { Header = "Недавние", Content = _stampRecentStrip },
-                    new TabItem { Header = "Избранное", Content = _stampFavoriteStrip },
-                } },
-            },
-        }, false);
         return new StackPanel
         {
-            Spacing = 4,
+            Spacing = 6,
             Children =
             {
+                header,
+                _stampPreviewButton,
+                pager,
+                _stampVariantName,
+                _stampVariantStrip,
+                stripsHost,
                 _stampCurrentAssetButton,
-                new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4,
-                    HorizontalAlignment = HorizontalAlignment.Center,
-                    Children = { previous, _stampVariantCounter, next } },
             },
         };
     }
     private Button CompactStampSetButton(AssetSetSummary summary, string prefix)
     {
-        var image = _thumbnails.Image(_editor.LibraryThumbnailPath(summary));
+        var image = new Image { Stretch = Stretch.Uniform };
+        _thumbnails.Assign(image, _editor.LibraryThumbnailPath(summary));
         var button = new Button
         {
             Name = prefix + "_" + Sanitize(summary.SetId),
@@ -6350,9 +6624,7 @@ public sealed partial class EditorView : UserControl
                         Width = 40,
                         Height = 40,
                         HorizontalAlignment = HorizontalAlignment.Center,
-                        Child = image is null
-                            ? MapIcons.Stroked(MapIcons.Missing, 18)
-                            : new Image { Source = image, Stretch = Stretch.Uniform },
+                        Child = image,
                     },
                     new TextBlock
                     {
@@ -6391,14 +6663,24 @@ public sealed partial class EditorView : UserControl
         _stampVariantName.Text = _editor.CurrentVariant?.Label ?? "Выберите вариант";
         ToolTip.SetTip(_stampVariantName, _stampVariantName.Text);
         _stampCurrentAssetButton.IsEnabled = _editor.CurrentVariant is not null;
-        var currentAction = _editor.StampPlacementMode == StampPlacementMode.Path
-            ? "Начать новый путь" : "Разместить ещё";
+        var currentAction = _editor.StampPlacementMode switch
+        {
+            StampPlacementMode.Path => "Начать новый путь",
+            StampPlacementMode.FillArea => "Новая область",
+            _ => "Разместить ещё",
+        };
+        _stampPlaceCaption.Text = currentAction;
         var currentHint = _editor.CurrentVariant is null ? "Сначала выберите ассет в каталоге."
             : $"{currentAction}: {set?.Name} · {_editor.CurrentVariant.Label}";
         AutomationProperties.SetName(_stampCurrentAssetButton, currentHint);
         ToolTip.SetTip(_stampCurrentAssetButton, currentHint);
+        var previewHint = set is null ? "Открыть каталог ассетов (F)" : $"{set.Name} · открыть каталог (F)";
+        AutomationProperties.SetName(_stampPreviewButton, previewHint);
+        ToolTip.SetTip(_stampPreviewButton, previewHint);
+        SetToggle(_stampFavoriteToggle, set?.Favorite == true ? "Убрать из избранного" : "В избранное", set?.Favorite == true);
+        _stampFavoriteToggle.IsEnabled = set is not null;
         _stampToolAreaText.Text = _editor.StampAreaSummary;
-        _stampToolThumbnail.Source = _thumbnails.Image(
+        _thumbnails.Assign(_stampToolThumbnail,
             _editor.CurrentVariant is { } variant
                 ? _editor.LibraryThumbnailPathForVariant(variant.Id)
                 : null);
@@ -6491,31 +6773,122 @@ public sealed partial class EditorView : UserControl
     }
 
     /// <summary>
-    /// A tiny bounded LRU of decoded covers. Without the bound, scrolling a large library would
-    /// hold every thumbnail it ever showed.
+    /// A bounded LRU of decoded previews. A tile asks for its picture with <see cref="Assign"/>:
+    /// a cached preview is shown at once, anything else is decoded on a worker and delivered when
+    /// it lands, so scrolling a large library never decodes on the UI thread. A preview smaller
+    /// than the catalog standard is rebuilt from its original on the same worker before it is
+    /// shown, which is how catalogs written with 128 px previews sharpen up on first sight.
     /// </summary>
     private sealed class ThumbnailCache(int capacity) : IDisposable
     {
-        private const int MaxThumbnailDimension = 512;
+        private const int MaxThumbnailDimension = 1024;
         private const long MaxDecodedBytes = 64L * 1024 * 1024;
+        private static readonly SemaphoreSlim DecodeGate = new(2, 2);
         private readonly Dictionary<string, (Bitmap Image, long Used, long Bytes)> _entries =
             new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, List<Image>> _pending = new(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _rebuilt = new(StringComparer.OrdinalIgnoreCase);
         private long _clock;
         private long _decodedBytes;
+        private bool _disposed;
+
+        /// <summary>Names the original behind a preview file; null when it cannot be rebuilt.</summary>
+        public Func<string, string?>? OriginalFor { get; set; }
 
         public void Dispose()
         {
-            foreach (var entry in _entries.Values) entry.Image.Dispose();
-            _entries.Clear(); _decodedBytes = 0;
+            _disposed = true;
+            // Evicted and disposed pictures are not disposed here either: an Image that is still
+            // on screen may draw them once more before it is torn down.
+            _entries.Clear(); _decodedBytes = 0; _pending.Clear();
         }
 
-        public Bitmap? Image(string? path)
+        /// <summary>Shows the preview in the target as soon as it is available.</summary>
+        public void Assign(Image target, string? path)
         {
-            if (string.IsNullOrEmpty(path))
+            ArgumentNullException.ThrowIfNull(target);
+            target.Tag = path;
+            if (string.IsNullOrEmpty(path)) { target.Source = null; return; }
+            if (_entries.TryGetValue(path, out var hit))
             {
-                return null;
+                _entries[path] = (hit.Image, ++_clock, hit.Bytes);
+                target.Source = hit.Image;
+                return;
             }
 
+            target.Source = null;
+            if (_pending.TryGetValue(path, out var waiters)) { waiters.Add(target); return; }
+            _pending[path] = [target];
+            string? original = null;
+            if (_rebuilt.Add(path)) original = OriginalFor?.Invoke(path);
+            _ = LoadAsync(path, original);
+        }
+
+        private async Task LoadAsync(string path, string? original)
+        {
+            (Bitmap? Image, long Bytes) loaded = default;
+            await DecodeGate.WaitAsync();
+            try { loaded = await Task.Run(() => Decode(path, original)); }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+                or InvalidDataException or ArgumentException or InvalidOperationException)
+            {
+                loaded = default;
+            }
+            finally { DecodeGate.Release(); }
+
+            // Task.Run continuations come back on the UI thread through the Avalonia context.
+            if (_disposed) return;
+            _pending.Remove(path, out var waiters);
+            if (loaded.Image is null) return;
+            Store(path, loaded.Image, loaded.Bytes);
+            if (waiters is null) return;
+            foreach (var image in waiters)
+                if (string.Equals(image.Tag as string, path, StringComparison.OrdinalIgnoreCase)) image.Source = loaded.Image;
+        }
+
+        private static (Bitmap? Image, long Bytes) Decode(string path, string? original)
+        {
+            var encoded = AssetImagePolicy.ReadEncodedFile(path);
+            var metadata = AssetImagePolicy.Inspect(encoded);
+            if (original is not null && Math.Max(metadata.Width, metadata.Height) < AssetCatalog.ThumbnailSize)
+            {
+                try
+                {
+                    AssetCatalog.RebuildThumbnailFile(original, path);
+                    encoded = AssetImagePolicy.ReadEncodedFile(path);
+                    metadata = AssetImagePolicy.Inspect(encoded);
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+                    or InvalidDataException or InvalidOperationException)
+                {
+                    // The old preview is still a preview; it is shown as it is.
+                }
+            }
+
+            if (metadata.Width > MaxThumbnailDimension || metadata.Height > MaxThumbnailDimension) return default;
+            using var stream = new MemoryStream(encoded, writable: false);
+            return (new Bitmap(stream), metadata.DecodedBytes);
+        }
+
+        private void Store(string path, Bitmap bitmap, long bytes)
+        {
+            while (_entries.Count > 0 && (_entries.Count >= capacity || _decodedBytes > MaxDecodedBytes - bytes))
+            {
+                string? oldestKey = null; var oldestUsed = long.MaxValue;
+                foreach (var pair in _entries)
+                    if (pair.Value.Used < oldestUsed) { oldestUsed = pair.Value.Used; oldestKey = pair.Key; }
+                if (oldestKey is null) break;
+                _decodedBytes -= _entries[oldestKey].Bytes;
+                _entries.Remove(oldestKey);
+            }
+            _entries[path] = (bitmap, ++_clock, bytes);
+            _decodedBytes += bytes;
+        }
+
+        /// <summary>A preview right now, or null while it is still being decoded.</summary>
+        public Bitmap? Image(string? path)
+        {
+            if (string.IsNullOrEmpty(path)) return null;
             if (_entries.TryGetValue(path, out var hit))
             {
                 _entries[path] = (hit.Image, ++_clock, hit.Bytes);
@@ -6528,20 +6901,7 @@ public sealed partial class EditorView : UserControl
             {
                 var encoded = AssetImagePolicy.ReadEncodedFile(path);
                 metadata = AssetImagePolicy.Inspect(encoded);
-                if (metadata.Width > MaxThumbnailDimension || metadata.Height > MaxThumbnailDimension)
-                {
-                    return null;
-                }
-
-                while (_entries.Count >= capacity
-                    || _decodedBytes > MaxDecodedBytes - metadata.DecodedBytes)
-                {
-                    var oldest = _entries.OrderBy(pair => pair.Value.Used).First();
-                    _decodedBytes -= oldest.Value.Bytes;
-                    oldest.Value.Image.Dispose();
-                    _entries.Remove(oldest.Key);
-                }
-
+                if (metadata.Width > MaxThumbnailDimension || metadata.Height > MaxThumbnailDimension) return null;
                 using var stream = new MemoryStream(encoded, writable: false);
                 bitmap = new Bitmap(stream);
             }
@@ -6551,8 +6911,7 @@ public sealed partial class EditorView : UserControl
                 return null;
             }
 
-            _entries[path] = (bitmap, ++_clock, metadata.DecodedBytes);
-            _decodedBytes += metadata.DecodedBytes;
+            Store(path, bitmap, metadata.DecodedBytes);
             return bitmap;
         }
     }
@@ -7496,6 +7855,7 @@ public sealed partial class EditorView : UserControl
         {
             SyncContextArea();
             SyncStampGestureReadout();
+            SyncQuickBar();
         }
         if (changed.Overlaps([nameof(EditorViewModel.StampToolSettings), nameof(EditorViewModel.CurrentVariant),
             nameof(EditorViewModel.CompactRecentSets), nameof(EditorViewModel.CompactFavoriteSets)]))
@@ -8029,6 +8389,91 @@ public sealed partial class EditorView : UserControl
     }
 
     /// <summary>
+    /// The right-click menu of the canvas: what lies under the pointer becomes the selection,
+    /// and the menu offers the moves that decide what covers what - order inside the level,
+    /// the level itself, the owning layer - plus deletion. Every item calls the same view model
+    /// command the strip and the shortcuts call, so the three can never disagree. Empty ground
+    /// under the pointer opens nothing.
+    /// </summary>
+    private void ShowCanvasContextMenu(PointerPressedEventArgs e)
+    {
+        var position = e.GetPosition(_canvas);
+        var (worldX, worldY) = _editor.Session.Viewport.ScreenToWorld(position.X, position.Y);
+        var hit = SceneGeometry.HitTest(_editor.Session.Document, worldX, worldY);
+        if (hit is not null)
+        {
+            if (!_editor.Session.SelectedObjects.Any(item => item.Id == hit.Id))
+            {
+                _editor.SelectObject(hit.Id);
+            }
+        }
+        else if (!_editor.SelectWaterAt(worldX, worldY, _editor.Session.Viewport.Scale, additive: false)
+            && !_editor.SelectLandAt(worldX, worldY))
+        {
+            return;
+        }
+        RefreshAfterSelectionCommand();
+
+        // Objects, water and land answer the same verbs; the view model routes each to its
+        // own command. Land has no order of its own besides its level and its layer.
+        var objects = _editor.SelectionCount > 0;
+        var water = !objects && _editor.WaterSelectionCount > 0;
+        var landPiece = !objects && !water && _editor.SelectedLand is not null;
+        var menu = new MenuFlyout();
+        menu.Items.Add(Item("Выше", EditorShortcutSettings.Commands.ObjectUp, () => _editor.ReorderSelection(1), objects || water));
+        menu.Items.Add(Item("Ниже", EditorShortcutSettings.Commands.ObjectDown, () => _editor.ReorderSelection(-1), objects || water));
+        menu.Items.Add(Item("Наверх", EditorShortcutSettings.Commands.ObjectTop, () => _editor.ReorderSelection(1, toExtreme: true), objects || water));
+        menu.Items.Add(Item("Вниз", EditorShortcutSettings.Commands.ObjectBottom, () => _editor.ReorderSelection(-1, toExtreme: true), objects || water));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(Item("Уровень выше", EditorShortcutSettings.Commands.SublayerUp, () => _editor.AdjustSelectedSublayer(1), true));
+        menu.Items.Add(Item("Уровень ниже", EditorShortcutSettings.Commands.SublayerDown, () => _editor.AdjustSelectedSublayer(-1), true));
+        if (landPiece)
+        {
+            menu.Items.Add(Item("Слой земли выше", EditorShortcutSettings.Commands.LayerUp, () => _editor.ReorderActiveLayer(true), true));
+            menu.Items.Add(Item("Слой земли ниже", EditorShortcutSettings.Commands.LayerDown, () => _editor.ReorderActiveLayer(false), true));
+        }
+        menu.Items.Add(new Separator());
+
+        var layers = new MenuItem { Name = "CanvasMenuLayer", Header = "Перенести на слой" };
+        foreach (var target in _editor.ObjectLayerTargets)
+        {
+            var captured = target;
+            var item = new MenuItem
+            {
+                Name = "CanvasMenuLayer_" + target.Id,
+                Header = target.IsCurrent ? "● " + target.Name : target.Display,
+                IsEnabled = target.Available && !target.IsCurrent,
+            };
+            item.Click += (_, _) =>
+            {
+                _editor.MoveSelectionToLayer(captured.Id);
+                RefreshAfterSelectionCommand();
+            };
+            layers.Items.Add(item);
+        }
+        layers.IsEnabled = layers.Items.Count > 0 && !landPiece;
+        menu.Items.Add(layers);
+        menu.Items.Add(new Separator());
+        menu.Items.Add(Item("Удалить", EditorShortcutSettings.Commands.Delete, () => _editor.DeleteSelection(), !landPiece));
+        menu.ShowAt(_canvas, showAtPointer: true);
+        e.Handled = true;
+
+        MenuItem Item(string header, string command, Action action, bool enabled)
+        {
+            var item = new MenuItem { Name = "CanvasMenu_" + command, Header = header, IsEnabled = enabled };
+            var gesture = _editor.Shortcuts.Get(command);
+            try { item.InputGesture = KeyGesture.Parse(gesture); }
+            catch (Exception) { item.Header = header + "   " + gesture; }
+            item.Click += (_, _) =>
+            {
+                action();
+                RefreshAfterSelectionCommand();
+            };
+            return item;
+        }
+    }
+
+    /// <summary>
     /// The interactive Ctrl+G flow: the panel's name box wins when filled; otherwise a small
     /// dialog asks for the name and states exactly how many objects the group will hold.
     /// </summary>
@@ -8277,8 +8722,18 @@ public sealed partial class EditorView : UserControl
             }
 
             // The kind is a useful subtitle only when it adds something the name does not say.
+            // An object layer also says what it holds, so the stack can be read without opening
+            // each layer: how many objects, how many rivers and lakes.
             var kind = EditorLabels.LayerKind(layer);
             var secondary = EditorLabels.SecondaryKind(layer.Name, kind);
+            if (layer is ObjectLayer objectLayer)
+            {
+                var counts = new List<string>();
+                if (objectLayer.Objects.Count > 0) counts.Add(EditorLabels.Objects(objectLayer.Objects.Count));
+                if (objectLayer.Rivers.Length > 0) counts.Add(EditorLabels.Waters(objectLayer.Rivers.Length));
+                var held = counts.Count == 0 ? "пусто" : string.Join(" · ", counts);
+                secondary = secondary is null ? held : secondary + " · " + held;
+            }
 
             var tooltip = $"{layer.Name} · {kind} · наложение: {EditorLabels.Blend(layer.Blend)}";
             if (layer.Mask is { } mask)
@@ -8312,6 +8767,7 @@ public sealed partial class EditorView : UserControl
         SyncNoteList();
         SyncCheckpointList();
         SyncCanvasWorkflow();
+        SyncQuickBar();
     }
 
     private static string LayerIcon(MapLayer layer) => layer switch
@@ -8332,6 +8788,7 @@ public sealed partial class EditorView : UserControl
         SyncObjectFilterButtons();
         _selectionCountText.Text = (_editor.SelectionCount, _editor.WaterSelectionCount) switch
         {
+            (0, 0) when _editor.SelectedLand is { } land => $"Выбрана земля «{land.Name}»",
             (0, 0) => "Ничего не выбрано",
             (0, var water) => $"Выбрано водных систем: {water}",
             (var objects, 0) => $"Выбрано: {EditorLabels.Objects(objects)}",
@@ -8449,7 +8906,7 @@ public sealed partial class EditorView : UserControl
             row.AutomationId,
             MapIcons.River,
             row.Title,
-            row.Subtitle + states,
+            row.Subtitle + " · уровень " + EditorViewModel.FormatSublayer(row.Level) + states,
             () =>
             {
                 _editor.SelectWater(waterId);
@@ -8457,6 +8914,53 @@ public sealed partial class EditorView : UserControl
                 SyncContextArea();
             },
             $"Вода «{row.Title}» · {row.Subtitle}{states}",
+            visible,
+            locked);
+        Ui.SetStructureSelected(host, row.Selected);
+        return host;
+    }
+
+    /// <summary>
+    /// One piece of land in the objects panel: selecting it is the same selection a click on
+    /// the land makes, and the two switches beside it hide and lock that land layer.
+    /// </summary>
+    private Border BuildLandRow(ObjectTreeRow row)
+    {
+        var landId = row.LandId!.Value;
+        var visible = Ui.RowAction(
+            $"LandRowVisible_{landId}",
+            row.WaterVisible ? "Скрыть землю" : "Показать землю",
+            row.WaterVisible ? MapIcons.Eye : MapIcons.EyeOff,
+            () =>
+            {
+                _editor.ToggleLayerVisibility(landId);
+                SyncObjectList();
+                SyncContextArea();
+            });
+        var locked = Ui.RowAction(
+            $"LandRowLocked_{landId}",
+            row.WaterLocked ? "Разблокировать землю" : "Заблокировать землю",
+            row.WaterLocked ? MapIcons.Lock : MapIcons.Unlock,
+            () =>
+            {
+                _editor.ToggleLayerLock(landId);
+                SyncObjectList();
+                SyncContextArea();
+            });
+        var states = row.WaterVisible ? row.WaterLocked ? " · заблокирована" : "" : " · скрыта";
+        var host = Ui.StructureRow(
+            row.AutomationId,
+            MapIcons.LayerLand,
+            row.Title,
+            "Земля · уровень " + EditorViewModel.FormatSublayer(row.Level) + states,
+            () =>
+            {
+                _editor.SelectLand(landId);
+                SyncObjectListSelection();
+                SyncContextArea();
+                SyncQuickBar();
+            },
+            $"Земля «{row.Title}» · уровень {EditorViewModel.FormatSublayer(row.Level)}{states}",
             visible,
             locked);
         Ui.SetStructureSelected(host, row.Selected);
@@ -8495,12 +8999,28 @@ public sealed partial class EditorView : UserControl
             secondary.Add(kindLabel);
         }
 
-        // The level is the one number the row still has to carry, and it carries a sign so "+3"
-        // and "-3" can never be read as the same thing.
-        if (sceneObject.Sublayer != 0)
+        // The level is the one number the row always carries, at the far right of every row so
+        // the column can be read down the list, and with a sign so "+3" and "-3" can never be
+        // read as the same thing. Zero is shown too: a blank would make the column uneven.
+        var levelText = EditorViewModel.FormatSublayer(sceneObject.Sublayer);
+        var level = new Border
         {
-            secondary.Add(EditorViewModel.FormatSublayer(sceneObject.Sublayer));
-        }
+            Padding = new Thickness(5, 1),
+            Margin = new Thickness(6, 0, 0, 0),
+            Child = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 3,
+                Children =
+                {
+                    MapIcons.Stroked(MapIcons.Layers, 12, Application.Current?.FindResource("MapMutedBrush") as IBrush),
+                    new TextBlock { Text = levelText, FontSize = 11, VerticalAlignment = VerticalAlignment.Center }
+                        .Classed("muted"),
+                },
+            },
+        }.Classed("badge").Named("ObjectRowLevel_" + sceneObject.Id);
+        ToolTip.SetTip(level, "Уровень объекта: " + levelText + ". Чем выше уровень, тем выше объект на карте.");
+        AutomationProperties.SetName(level, "Уровень " + levelText);
 
         var listRow = Ui.ListRow(
             row.AutomationId,
@@ -8514,9 +9034,9 @@ public sealed partial class EditorView : UserControl
                 SyncObjectListSelection();
                 SyncContextArea();
             },
-            $"{sceneObject.Name} · {EditorLabels.ObjectKind(sceneObject.Kind)} · уровень "
-                + EditorViewModel.FormatSublayer(sceneObject.Sublayer),
-            thumbnail);
+            $"{sceneObject.Name} · {EditorLabels.ObjectKind(sceneObject.Kind)} · уровень " + levelText,
+            thumbnail,
+            level);
 
         Ui.SetSelected(listRow, row.Selected);
         return listRow;
@@ -8550,6 +9070,8 @@ public sealed partial class EditorView : UserControl
             && members.All(_objectSelectionSet.Contains),
         ObjectTreeRowKind.Water =>
             row.WaterId is { } waterId && _editor.WaterSelectionIds.Contains(waterId),
+        ObjectTreeRowKind.Land =>
+            row.LandId is { } landId && _editor.SelectedLand?.Id == landId,
         _ => false,
     };
 
@@ -8653,6 +9175,7 @@ public sealed partial class EditorView : UserControl
                 ObjectTreeRowKind.Breadcrumb => _owner.BuildGroupBreadcrumbRow(row),
                 ObjectTreeRowKind.Group => _owner.BuildGroupRow(row),
                 ObjectTreeRowKind.Water => _owner.BuildWaterRow(row),
+                ObjectTreeRowKind.Land => _owner.BuildLandRow(row),
                 _ => _owner.BuildObjectRow(row),
             };
             RefreshSelection();
@@ -8717,19 +9240,7 @@ public sealed partial class EditorView : UserControl
 
     private void SyncLibraryFilterState()
     {
-        SetSegment(_librarySortButtons, _editor.LibrarySort switch
-        {
-            AssetSortOrder.ImportedOldest => "Oldest",
-            AssetSortOrder.NameAscending => "NameAsc",
-            AssetSortOrder.NameDescending => "NameDesc",
-            _ => "Newest",
-        });
-        SetSegment(_libraryGroupButtons, _editor.LibraryGrouping switch
-        {
-            AssetGrouping.Collection => "Collection",
-            AssetGrouping.Tag => "Tag",
-            _ => "None",
-        });
+        SyncLibraryToolbar();
         SetSegment(_placementModeButtons, _editor.StampPlacementMode switch
         {
             StampPlacementMode.Series => "Series",
@@ -8748,6 +9259,9 @@ public sealed partial class EditorView : UserControl
             _randomVariantToggle, "Случайный вариант после размещения", _editor.RandomVariantAfterPlacement);
         SetToggle(
             _randomFlipToggle, "Случайное зеркальное отражение ассета", _editor.StampRandomFlip);
+        SetToggle(_randomRotationToggle,
+            _editor.StampRandomAngle ? $"Случайный поворот: шаг {EditorLabels.RandomAngleStep(_editor.StampRandomAngleStep)}" : "Случайный поворот выключен",
+            _editor.StampRandomAngle);
 
         FillChoices(_libraryTagFilter, "Любой тег", _editor.LibraryTagChoices, _editor.LibraryTag);
         FillChoices(
@@ -8769,21 +9283,12 @@ public sealed partial class EditorView : UserControl
         Ui.SetClass(_libraryDateHint, "danger", _editor.HasLibraryDateError);
         Ui.SetClass(_libraryDateHint, "faint", !_editor.HasLibraryDateError);
         AutomationProperties.SetName(_libraryDateHint, dateHint);
-        _libraryDateHint.IsVisible = _editor.HasLibraryDateError;
-        if (_editor.HasLibraryDateError)
-        {
-            _libraryFilterDetails.IsExpanded = true;
-        }
+        _libraryDateHint.IsVisible = true;
 
         var summary = "Фильтры: " + _editor.ActiveLibraryFilterSummary;
         _libraryFilterSummary.Text = summary;
-        Ui.SetClass(_libraryFilterSummary, "accent", _editor.HasActiveLibraryFilters);
-        Ui.SetClass(_libraryFilterSummary, "faint", !_editor.HasActiveLibraryFilters);
         AutomationProperties.SetName(_libraryFilterSummary, summary);
-        ToolTip.SetTip(_libraryFilterSummary, summary);
         _clearFiltersButton.IsEnabled = _editor.HasActiveLibraryFilters;
-        _libraryFilterSummary.IsVisible = _editor.HasActiveLibraryFilters;
-        _clearFiltersButton.IsVisible = _editor.HasActiveLibraryFilters;
 
         static void FillChoices(
             ComboBox box, string anyLabel, IReadOnlyList<string> choices, string? selected)
@@ -8808,53 +9313,6 @@ public sealed partial class EditorView : UserControl
         }
     }
 
-    private void SyncCollectionTree()
-    {
-        _collectionTree.Children.Clear();
-        var all = Ui.ListRow(
-            "Collection_All", MapIcons.Layers, "Все коллекции",
-            _editor.LibrarySets.Count.ToString(), [],
-            () =>
-            {
-                _editor.LibraryCollectionId = null;
-                SyncAssetList();
-            },
-            "Все коллекции");
-        Ui.SetSelected(all, _editor.LibraryCollectionId is null);
-        _collectionTree.Children.Add(all);
-
-        Add(_editor.LibraryCollections, 0);
-
-        if (_editor.LibraryCollections.Count == 0)
-        {
-            _collectionTree.Children.Add(new TextBlock
-            {
-                Text = "Коллекции появятся после первого импорта.",
-                TextWrapping = TextWrapping.Wrap,
-            }.Classed("faint", "role-caption").Named("NoCollectionsText"));
-        }
-
-        void Add(IReadOnlyList<AssetCollectionNode> nodes, int depth)
-        {
-            foreach (var node in nodes)
-            {
-                var captured = node.Id;
-                var row = Ui.ListRow(
-                    "Collection_" + node.Id, MapIcons.Layers, node.Name,
-                    node.TotalCount.ToString(), [],
-                    () =>
-                    {
-                        _editor.LibraryCollectionId = captured;
-                        SyncAssetList();
-                    },
-                    $"{node.Name}, карточек: {node.TotalCount}");
-                row.Margin = new Thickness(depth * 12, 0, 0, 0);
-                Ui.SetSelected(row, _editor.LibraryCollectionId == node.Id);
-                _collectionTree.Children.Add(row);
-                Add(node.Children, depth + 1);
-            }
-        }
-    }
 
     /// <summary>
     /// The breadcrumb trail. Each ancestor segment is a real button that navigates back up, so
@@ -9079,18 +9537,27 @@ public sealed partial class EditorView : UserControl
         string namePrefix,
         double previewSize)
     {
-        var thumbnail = _thumbnails.Image(_editor.LibraryThumbnailPathForVariant(variant.Id));
+        var picture = new Image { Stretch = Stretch.Uniform };
+        _thumbnails.Assign(picture, _editor.LibraryThumbnailPathForVariant(variant.Id));
         var isCover = variant.Id == _editor.SelectedSet?.CoverVariantId;
         var availability = _editor.AvailabilityOf(variant.Sha256);
         var flagged = availability is not (AssetAvailability.Unknown or AssetAvailability.Available);
 
-        Control face = new Border
+        // The number is what the pager and the shortcuts count by, so the cell says it.
+        Control face = new Panel
         {
             Width = previewSize,
             Height = previewSize,
-            Child = thumbnail is null
-                ? MapIcons.Stroked(MapIcons.Missing, 16)
-                : new Image { Source = thumbnail, Stretch = Stretch.Uniform },
+            Children =
+            {
+                picture,
+                new TextBlock
+                {
+                    Text = (position + 1).ToString(), FontSize = 10, IsHitTestVisible = false,
+                    HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top,
+                    Margin = new Thickness(2, 0, 0, 0),
+                }.Classed("muted"),
+            },
         };
 
         // Cover and file-state marks remain distinct from the selected outline.

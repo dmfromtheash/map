@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Text.Json;
 using System.Runtime.InteropServices;
 using Avalonia;
@@ -487,8 +487,15 @@ public sealed class PlacementWorkflowApplication : Application
         Check("variant count expands and stays open", window.IsVisible && Count(editor.Session.Document) == count);
         Capture(window, "gallery");
         Click(window, "GalleryVariant_longv1"); await Task.Delay(100);
-        Check("variant image chooses exact fixed ghost without click-through", !window.IsVisible
+        // One click chooses and keeps the catalog open, like the reference editor; the double
+        // click (or Escape) is what returns to the canvas with the ghost armed.
+        Check("variant image chooses exact variant and keeps the catalog", window.IsVisible
             && editor.CurrentVariant?.Id == "longv1" && !editor.RandomVariantAfterPlacement
+            && editor.PendingPlacement is not null && Count(editor.Session.Document) == count);
+        var chosenTile = window.GetVisualDescendants().OfType<Button>().First(b => b.Name == "GalleryVariant_longv1");
+        chosenTile.RaiseEvent(new TappedEventArgs(InputElement.DoubleTappedEvent, null!)); await Task.Delay(100);
+        Check("double click arms exact fixed ghost without click-through", !window.IsVisible
+            && editor.CurrentVariant?.Id == "longv1"
             && editor.PendingPlacement is { PointerVisible: true } && Count(editor.Session.Document) == count);
         Check("selection is not recent usage", recent.SequenceEqual(_catalog.Recent));
         _view.OpenAssetCatalog(); await Task.Delay(100);

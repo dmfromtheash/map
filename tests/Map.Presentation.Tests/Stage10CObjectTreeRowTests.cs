@@ -41,16 +41,44 @@ public class Stage10CObjectTreeRowTests
 
         var rows = ObjectTreeRows.Build(document, "", ObjectTypeFilter.All, openGroupId: null, []);
 
+        // The list reads top to bottom like the map does: C was placed last, so it is on top
+        // and comes first; the group sits where its topmost member is.
         Assert.Equal(2, rows.Count);
-        var groupRow = rows[0];
+        Assert.Equal(ObjectTreeRowKind.Object, rows[0].Kind);
+        Assert.Equal("C", rows[0].Title);
+        Assert.StartsWith("ObjectRow_", rows[0].AutomationId);
+
+        var groupRow = rows[1];
         Assert.Equal(ObjectTreeRowKind.Group, groupRow.Kind);
         Assert.Contains("Тестовая группа", groupRow.Title);
         Assert.Contains("2", groupRow.Subtitle);
         Assert.Equal($"GroupRow_{GroupId:D}", groupRow.AutomationId);
+    }
 
-        Assert.Equal(ObjectTreeRowKind.Object, rows[1].Kind);
-        Assert.Equal("C", rows[1].Title);
-        Assert.StartsWith("ObjectRow_", rows[1].AutomationId);
+    [Fact]
+    public void Rows_list_the_topmost_object_first_by_layer_level_and_order()
+    {
+        // Draw order: bottom layer first, low level first, list order inside a level. The panel
+        // shows the reverse, so what covers everything on the map is the first row.
+        var low = Object("Низ");
+        var high = Object("Верх") with { Sublayer = 3 };
+        var later = Object("Позже");
+        var upper = Object("Верхний слой");
+        var document = new MapDocument(
+            DocumentId.New(), "map", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(1920, 1080, "px", "#FF1E2430"),
+            [
+                new BaseColorLayer(LayerId.New(), "Фон", true, false, 1.0, "#FF1E2430"),
+                new ObjectLayer(LayerId.New(), "Нижний", true, false, 1.0, [low, high, later]),
+                new ObjectLayer(LayerId.New(), "Верхний", true, false, 1.0, [upper]),
+            ]);
+
+        var plain = ObjectTreeRows.Build(document, "", ObjectTypeFilter.All, null, []);
+        Assert.Equal(["Верхний слой", "Верх", "Позже", "Низ"], plain.Select(row => row.Title).ToArray());
+
+        // The filtered path walks the same order.
+        var filtered = ObjectTreeRows.Build(document, "", ObjectTypeFilter.Shapes, null, []);
+        Assert.Equal(["Верхний слой", "Верх", "Позже", "Низ"], filtered.Select(row => row.Title).ToArray());
     }
 
     [Fact]
@@ -63,7 +91,8 @@ public class Stage10CObjectTreeRowTests
         var indexed = Assert.IsAssignableFrom<System.Collections.IList>(rows);
         Assert.True(indexed.IsReadOnly);
         Assert.True(indexed.IsFixedSize);
-        Assert.Equal("B", Assert.IsType<ObjectTreeRow>(indexed[1]).Title);
+        // Top first: A was placed first, so it lies under B and is the second row.
+        Assert.Equal("A", Assert.IsType<ObjectTreeRow>(indexed[1]).Title);
     }
 
     [Fact]
@@ -93,10 +122,12 @@ public class Stage10CObjectTreeRowTests
         Assert.Equal("GroupBreadcrumb", rows[0].AutomationId);
         Assert.Contains("Тестовая группа", rows[0].Title);
 
+        // Children read top to bottom as well: B covers A, so B comes first.
         Assert.Equal(ObjectTreeRowKind.GroupChild, rows[1].Kind);
-        Assert.Equal($"GroupChildRow_{a.Id}", rows[1].AutomationId);
-        Assert.True(rows[1].Selected);
-        Assert.False(rows[2].Selected);
+        Assert.Equal($"GroupChildRow_{b.Id}", rows[1].AutomationId);
+        Assert.False(rows[1].Selected);
+        Assert.Equal($"GroupChildRow_{a.Id}", rows[2].AutomationId);
+        Assert.True(rows[2].Selected);
 
         // The outsider C is not shown while the group is open.
         Assert.DoesNotContain(rows, row => row.Title == "C");

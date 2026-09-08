@@ -38,7 +38,7 @@ public static class EditorKeyRouting
 
         // Water systems are a selection too: without this, Delete never even resolved while a
         // river was the only thing selected.
-        if (view.Editor.SelectionCount > 0 || view.Editor.WaterSelectionCount > 0)
+        if (view.Editor.SelectionCount > 0 || view.Editor.WaterSelectionCount > 0 || view.Editor.LandSelectionCount > 0)
             contexts.Add(ShortcutContext.Selection);
         if (view.IsNotesOpen) contexts.Add(ShortcutContext.Notes);
         contexts.Add(view.Editor.ActiveTool switch

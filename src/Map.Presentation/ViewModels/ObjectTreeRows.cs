@@ -30,6 +30,9 @@ public enum ObjectTreeRowKind
 
     /// <summary>One water system (river with its channels, or a lake) of the map.</summary>
     Water,
+
+    /// <summary>One piece of land (a Land layer) of the map.</summary>
+    Land,
 }
 
 /// <summary>
@@ -55,6 +58,12 @@ public sealed record ObjectTreeRow(
     /// <summary>Water rows carry the two switches the panel shows, without a second lookup.</summary>
     public bool WaterVisible { get; init; } = true;
     public bool WaterLocked { get; init; }
+
+    /// <summary>Set on a <see cref="ObjectTreeRowKind.Land"/> row: the land layer it stands for.</summary>
+    public LayerId? LandId { get; init; }
+
+    /// <summary>The terrain level of a water or land row (see TerrainOrder); zero for the rest.</summary>
+    public int Level { get; init; }
 }
 
 /// <summary>
@@ -81,16 +90,20 @@ public static class ObjectTreeRows
         ObjectTypeFilter filter,
         Guid? openGroupId,
         IReadOnlyCollection<ObjectId> selectedIds,
-        IReadOnlyCollection<Guid>? selectedWaterIds = null)
+        IReadOnlyCollection<Guid>? selectedWaterIds = null,
+        LayerId? selectedLandId = null)
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(selectedIds);
         var query = (searchText ?? "").Trim();
         var layers = document.Layers.OfType<ObjectLayer>().ToArray();
-        // Water systems are objects of the map like any other, so they belong in this list. They
-        // are listed above the ordinary rows and only while a group is not open, which is a view
-        // into one group and nothing else.
-        var water = openGroupId is null ? WaterRows(layers, query, filter, selectedWaterIds) : [];
+        // Water systems and pieces of land are objects of the map like any other, so they belong
+        // in this list. They are listed above the ordinary rows - water, then land, each from the
+        // highest level down - and only while a group is not open, which is a view into one group
+        // and nothing else.
+        var water = openGroupId is null
+            ? [.. WaterRows(layers, query, filter, selectedWaterIds), .. LandRows(document, query, filter, selectedLandId)]
+            : (IReadOnlyList<ObjectTreeRow>)[];
         IReadOnlyList<ObjectTreeRow> rest;
         if (query.Length == 0 && filter == ObjectTypeFilter.All && openGroupId is null
             && layers.All(layer => GroupedCount(layer) == 0))
@@ -107,14 +120,39 @@ public static class ObjectTreeRows
         return water.Count == 0 ? rest : new PrefixedRowList(water, rest);
     }
 
-    /// <summary>One row per river or lake, matching the panel search and the type filter.</summary>
+    /// <summary>One row per piece of land, highest level first, matching the search and the type filter.</summary>
+    private static IReadOnlyList<ObjectTreeRow> LandRows(
+        MapDocument document, string query, ObjectTypeFilter filter, LayerId? selected)
+    {
+        if (filter is not (ObjectTypeFilter.All or ObjectTypeFilter.Other)) return [];
+        var rows = new List<ObjectTreeRow>();
+        var lands = TerrainOrder.Lands(document);
+        for (var i = lands.Count - 1; i >= 0; i--)
+        {
+            var land = lands[i];
+            if (query.Length > 0 && !land.Name.Contains(query, StringComparison.OrdinalIgnoreCase)) continue;
+            rows.Add(new ObjectTreeRow(
+                ObjectTreeRowKind.Land,
+                $"LandRow_{land.Id}",
+                land.Name,
+                "Земля",
+                Object: null,
+                GroupId: null,
+                ChildCount: 0,
+                Selected: selected is { } id && id == land.Id)
+            { LandId = land.Id, Level = land.Level, WaterVisible = land.Visible, WaterLocked = land.Locked });
+        }
+        return rows;
+    }
+
+    /// <summary>One row per river or lake, highest level first, matching the panel search and the type filter.</summary>
     private static IReadOnlyList<ObjectTreeRow> WaterRows(
         IReadOnlyList<ObjectLayer> layers, string query, ObjectTypeFilter filter, IReadOnlyCollection<Guid>? selected)
     {
         if (filter is not (ObjectTypeFilter.All or ObjectTypeFilter.Other)) return [];
         var rows = new List<ObjectTreeRow>();
-        foreach (var layer in layers)
-            foreach (var river in layer.Rivers)
+        foreach (var layer in layers.Reverse())
+            foreach (var river in layer.Rivers.Reverse())
             {
                 if (query.Length > 0 && !river.Name.Contains(query, StringComparison.OrdinalIgnoreCase)) continue;
                 var lakes = river.Channels.Count(c => c.Closed);
@@ -131,9 +169,9 @@ public static class ObjectTreeRows
                     GroupId: null,
                     ChildCount: river.Channels.Length,
                     Selected: selected is not null && selected.Contains(river.Id))
-                { WaterId = river.Id, WaterVisible = river.Visible, WaterLocked = river.Locked });
+                { WaterId = river.Id, WaterVisible = river.Visible, WaterLocked = river.Locked, Level = river.Level });
             }
-        return rows;
+        return [.. rows.OrderByDescending(row => row.Level)];
     }
 
     /// <summary>A fixed set of rows in front of a virtual list, without materializing the list.</summary>
@@ -202,8 +240,28 @@ public static class ObjectTreeRows
                 or SceneObjectKind.Shape or SceneObjectKind.Rectangle or SceneObjectKind.Ellipse),
     };
 
-    private static IEnumerable<SceneObject> AllObjects(MapDocument document) =>
-        document.Layers.OfType<ObjectLayer>().SelectMany(layer => layer.Objects);
+    /// <summary>
+    /// Every object of the document as the panel lists them: the topmost first. A layers panel
+    /// reads top to bottom, and so does this list - the layer that covers the others leads, and
+    /// inside a layer the object drawn last (the one on top) leads. Below this size the order
+    /// is the true draw order, sublayer included; a larger layer keeps its list order reversed,
+    /// so a million-object scene never sorts on every refresh, and the level badge of each row
+    /// still says where it sits.
+    /// </summary>
+    private static IEnumerable<SceneObject> AllObjects(MapDocument document)
+    {
+        var layers = document.Layers.OfType<ObjectLayer>().ToArray();
+        for (var l = layers.Length - 1; l >= 0; l--)
+        {
+            var ordered = StackOrder(layers[l]);
+            for (var i = ordered.Count - 1; i >= 0; i--) yield return ordered[i];
+        }
+    }
+
+    /// <summary>Objects of one layer bottom to top; the exact draw order while sorting stays cheap.</summary>
+    internal const int DrawOrderSortLimit = 5000;
+    private static IReadOnlyList<SceneObject> StackOrder(ObjectLayer layer) =>
+        layer.Objects.Count <= DrawOrderSortLimit ? SceneGeometry.InDrawOrder(layer) : layer.Objects;
 
     private static Dictionary<Guid, List<SceneObject>> BuildGroupIndex(
         IReadOnlyList<SceneObject> objects)
@@ -295,24 +353,36 @@ public static class ObjectTreeRows
             new(ObjectTreeRowKind.Breadcrumb, null, groupId, members);
     }
 
-    private sealed class UngroupedEntries(ObjectLayer[] layers) : IReadOnlyList<VirtualRowEntry>
+    /// <summary>Top-first rows over the layers without copying them; see <see cref="AllObjects"/>.</summary>
+    private sealed class UngroupedEntries : IReadOnlyList<VirtualRowEntry>
     {
-        public int Count { get; } = layers.Sum(l => l.Objects.Count);
+        private readonly IReadOnlyList<SceneObject>[] _stacks;
+
+        public UngroupedEntries(ObjectLayer[] layers)
+        {
+            _stacks = new IReadOnlyList<SceneObject>[layers.Length];
+            for (var l = 0; l < layers.Length; l++) _stacks[l] = StackOrder(layers[layers.Length - 1 - l]);
+            Count = _stacks.Sum(stack => stack.Count);
+        }
+
+        public int Count { get; }
+
         public VirtualRowEntry this[int index]
         {
             get
             {
-                foreach (var layer in layers)
+                foreach (var stack in _stacks)
                 {
-                    if (index < layer.Objects.Count) return VirtualRowEntry.ForObject(layer.Objects[index]);
-                    index -= layer.Objects.Count;
+                    if (index < stack.Count) return VirtualRowEntry.ForObject(stack[stack.Count - 1 - index]);
+                    index -= stack.Count;
                 }
                 throw new ArgumentOutOfRangeException(nameof(index));
             }
         }
         public IEnumerator<VirtualRowEntry> GetEnumerator()
         {
-            foreach (var layer in layers) foreach (var item in layer.Objects) yield return VirtualRowEntry.ForObject(item);
+            foreach (var stack in _stacks)
+                for (var i = stack.Count - 1; i >= 0; i--) yield return VirtualRowEntry.ForObject(stack[i]);
         }
         System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }

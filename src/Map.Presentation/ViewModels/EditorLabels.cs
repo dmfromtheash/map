@@ -251,4 +251,25 @@ public static class EditorLabels
 
     public static string Objects(int count) =>
         $"{count} {Plural(count, "объект", "объекта", "объектов")}";
+
+    /// <summary>Rivers and lakes of a layer, counted the way the layers panel says it.</summary>
+    public static string Waters(int count) =>
+        $"{count} {Plural(count, "водоём", "водоёма", "водоёмов")}";
+
+    public static string RandomAngleStep(Map.Core.Editing.StampRandomAngleStep step) => step switch
+    {
+        Map.Core.Editing.StampRandomAngleStep.Degrees15 => "15°",
+        Map.Core.Editing.StampRandomAngleStep.Degrees30 => "30°",
+        Map.Core.Editing.StampRandomAngleStep.Degrees45 => "45°",
+        Map.Core.Editing.StampRandomAngleStep.Degrees60 => "60°",
+        Map.Core.Editing.StampRandomAngleStep.Degrees90 => "90°",
+        Map.Core.Editing.StampRandomAngleStep.Degrees180 => "180°",
+        _ => "выкл.",
+    };
+
+    public static string AssetCount(int count) =>
+        $"{count} {Plural(count, "ассет", "ассета", "ассетов")}";
+
+    public static string VariantCount(int count) =>
+        $"{count} {Plural(count, "вариант", "варианта", "вариантов")}";
 }

@@ -163,6 +163,7 @@ public sealed partial class EditorViewModel
             }
         }
         _waterSelection.Add(river.Id);
+        ClearLandSelection();
         _selectedChannelId = channelId;
         _riverNode = _waterLevel == WaterSelectionLevel.Node ? NearestNode(river, channelId, worldX, worldY) : -1;
         _activeLayerId = layer.Id;
@@ -208,6 +209,7 @@ public sealed partial class EditorViewModel
         var before = _waterSelection.Count;
         if (!additive) _waterSelection.Clear();
         foreach (var id in ids) if (!_waterSelection.Contains(id)) _waterSelection.Add(id);
+        if (_waterSelection.Count > 0) ClearLandSelection();
         if (_waterSelection.Count == 1 && SelectedRiver is { } river && SelectedRiverChannel is null)
             _selectedChannelId = river.Channels[0].Id;
         if (_waterSelection.Count == 0) { _selectedChannelId = null; _riverNode = -1; }
@@ -297,7 +299,16 @@ public sealed partial class EditorViewModel
     {
         if (_waterSelection.Count == 0)
         {
-            if (Session.SelectedObjectIds.Count == 0) return false;
+            if (Session.SelectedObjectIds.Count == 0)
+            {
+                // A piece of land is a whole layer: Delete names the way instead of taking it.
+                if (SelectedLand is { } land)
+                {
+                    StatusDetail = $"Земля «{land.Name}» удаляется вместе со слоем: «Удалить слой» в панели слоёв.";
+                    return true;
+                }
+                return false;
+            }
             DeleteSelectedObject();
             return true;
         }

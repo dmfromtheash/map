@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -41,6 +41,14 @@ public sealed class MainWindow : Window
     private readonly DispatcherTimer _autosaveTimer;
 
     private EditorView? _editorView;
+
+    /// <summary>The catalog gained cards outside the editor's own commands; the open library re-reads it.</summary>
+    public void NotifyAssetCatalogChanged()
+    {
+        if (_editorView is null) return;
+        _editorView.Editor.RefreshLibrary();
+        _editorView.RefreshLibraryPanel();
+    }
     private bool _autosaveTickRunning;
     private Key? _heldPanKey;
     private string? _shortcutLoadWarning;

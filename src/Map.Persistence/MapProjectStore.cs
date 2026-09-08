@@ -1656,6 +1656,7 @@ public static partial class MapProjectStore
                 ? new MaskDto { Enabled = mask.Enabled, Tiles = ToTileDtos(mask.Tiles) }
                 : null,
             LandStyle = layer is LandLayer land ? ToLandStyleDto(land.EdgeStyle) : null,
+            Level = layer is LandLayer { Level: not 0 } leveled ? leveled.Level : null,
             Grids = layer is GridLayer gridLayer
                 ? [.. gridLayer.Grids.Select(ToGridDto)]
                 : null,
@@ -1953,7 +1954,7 @@ public static partial class MapProjectStore
             "Land" => new LandLayer(
                 id, name, layer.Visible, layer.Locked, layer.Opacity,
                 ToTileMap(layer.Tiles ?? [], entryRoot + MapProjectFormat.RasterPrefix, id, 1, tileEntries),
-                ToLandStyle(layer.LandStyle), mask),
+                ToLandStyle(layer.LandStyle), mask) { Level = TerrainOrder.Clamp(layer.Level ?? 0) },
             "Grid" => new GridLayer(
                 id, name, layer.Visible, layer.Locked, layer.Opacity,
                 [.. (layer.Grids ?? []).Select(ToGrid)], mask),

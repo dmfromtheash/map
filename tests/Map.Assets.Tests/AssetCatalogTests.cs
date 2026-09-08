@@ -40,8 +40,8 @@ public sealed class AssetCatalogTests : IDisposable
         Assert.Equal(provenance, record.Provenance);
         Assert.True(File.Exists(catalog.ThumbnailPath(record)));
         using var thumbnail = SKBitmap.Decode(catalog.ThumbnailPath(record));
-        Assert.Equal(128, thumbnail!.Width);
-        Assert.Equal(128, thumbnail.Height);
+        Assert.Equal(AssetCatalog.ThumbnailSize, thumbnail!.Width);
+        Assert.Equal(AssetCatalog.ThumbnailSize, thumbnail.Height);
     }
 
     [Fact]

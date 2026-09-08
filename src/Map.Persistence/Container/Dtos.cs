@@ -69,6 +69,9 @@ internal sealed class LayerDto
     [JsonPropertyName("locked")] public bool Locked { get; set; }
     [JsonPropertyName("opacity")] public double Opacity { get; set; }
     [JsonPropertyName("blend")] public string Blend { get; set; } = "Normal";
+    [JsonPropertyName("level")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Level { get; set; }
     [JsonPropertyName("color")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Color { get; set; }

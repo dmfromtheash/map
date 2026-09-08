@@ -103,6 +103,8 @@ public static class MapIcons
     public const string Duplicate = "M8 8 H20 V20 H8 Z M4.5 16 V4 H16";
     public const string ArrowUp = "M12 19.5 V4.5 M6 10.5 L12 4.5 L18 10.5";
     public const string ArrowDown = "M12 4.5 V19.5 M6 13.5 L12 19.5 L18 13.5";
+    public const string ArrowToTop = "M12 20 V8 M6.5 13.5 L12 8 L17.5 13.5 M5 4.5 H19";
+    public const string ArrowToBottom = "M12 4 V16 M6.5 10.5 L12 16 L17.5 10.5 M5 19.5 H19";
     public const string Close = "M6.5 6.5 L17.5 17.5 M17.5 6.5 L6.5 17.5";
     public const string ChevronDown = "M6 9 L12 15 L18 9";
     public const string ChevronRight = "M9 5.5 L15.5 12 L9 18.5";

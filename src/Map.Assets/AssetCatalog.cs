@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+﻿using System.Security.Cryptography;
 using SkiaSharp;
 
 namespace Map.Assets;
@@ -1141,17 +1141,69 @@ public sealed class AssetCatalog : IAsyncDisposable
         _ => throw new InvalidDataException($"Image format {format} is not supported."),
     };
 
+    /// <summary>
+    /// Side of the square preview written next to every original. A gallery tile is drawn up to
+    /// about 180 px wide on an ordinary window, so a 128 px preview was always upscaled and soft.
+    /// </summary>
+    public const int ThumbnailSize = 256;
+
+    /// <summary>
+    /// Names the original behind one preview file, so a caller that found the preview too small
+    /// can rebuild it in the background without touching the index. False when the preview does
+    /// not belong to this catalog or the original is not stored locally.
+    /// </summary>
+    public bool TryDescribeThumbnail(string thumbnailPath, out string originalPath)
+    {
+        originalPath = "";
+        if (string.IsNullOrEmpty(thumbnailPath)) return false;
+        var name = Path.GetFileNameWithoutExtension(thumbnailPath);
+        if (!_bySha.TryGetValue(name, out var record)) return false;
+        if (!TryThumbnailPath(record, out var expected)
+            || !string.Equals(Path.GetFullPath(expected!), Path.GetFullPath(thumbnailPath), StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (record.StoredRelativePath is { } stored
+            && CatalogRelativePath.TryResolve(_root, stored, "originals", out var storedPath)
+            && File.Exists(storedPath))
+        {
+            originalPath = storedPath!;
+            return true;
+        }
+
+        if (record.LinkedPath is { } linked && File.Exists(linked))
+        {
+            originalPath = linked;
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Rewrites one preview from its original at the current <see cref="ThumbnailSize"/>. Pure
+    /// file work: safe off the UI thread, and the index is not involved because the preview path
+    /// is derived from the content hash and never changes.
+    /// </summary>
+    public static void RebuildThumbnailFile(string originalPath, string thumbnailPath)
+    {
+        var bytes = AssetImagePolicy.ReadEncodedFile(originalPath);
+        AtomicWrite(thumbnailPath, BuildThumbnail(bytes));
+    }
+
     private static byte[] BuildThumbnail(byte[] encoded)
     {
-        using var bitmap = AssetImagePolicy.DecodeThumbnailSource(encoded, 128);
-        var info = new SKImageInfo(128, 128, SKColorType.Rgba8888, SKAlphaType.Premul);
+        const int size = ThumbnailSize;
+        using var bitmap = AssetImagePolicy.DecodeThumbnailSource(encoded, size);
+        var info = new SKImageInfo(size, size, SKColorType.Rgba8888, SKAlphaType.Premul);
         using var surface = SKSurface.Create(info)
             ?? throw new InvalidOperationException("Cannot create thumbnail surface.");
         surface.Canvas.Clear(SKColors.Transparent);
-        var scale = Math.Min(128.0 / bitmap.Width, 128.0 / bitmap.Height);
+        var scale = Math.Min((double)size / bitmap.Width, (double)size / bitmap.Height);
         var width = (float)(bitmap.Width * scale);
         var height = (float)(bitmap.Height * scale);
-        var rect = new SKRect((128 - width) / 2, (128 - height) / 2, (128 + width) / 2, (128 + height) / 2);
+        var rect = new SKRect((size - width) / 2, (size - height) / 2, (size + width) / 2, (size + height) / 2);
         using var source = SKImage.FromBitmap(bitmap);
         surface.Canvas.DrawImage(
             source, rect, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear));

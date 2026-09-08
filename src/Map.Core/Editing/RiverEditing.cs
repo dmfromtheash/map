@@ -473,3 +473,48 @@ public sealed class RiverCommand : IEditCommand
         return target;
     }
 }
+
+/// <summary>
+/// Changes only the order of one layer's rivers, which decides what covers what among water of
+/// the same level. The same rivers come out; ids the order does not name keep their place after
+/// the named ones.
+/// </summary>
+public sealed class ReorderRiversCommand : IEditCommand
+{
+    private readonly LayerId _layerId;
+    private readonly IReadOnlyList<Guid> _order;
+    private IReadOnlyList<Guid>? _before;
+
+    public ReorderRiversCommand(LayerId layerId, IReadOnlyList<Guid> order, string name)
+    {
+        ArgumentNullException.ThrowIfNull(order);
+        _layerId = layerId;
+        _order = [.. order];
+        Name = string.IsNullOrWhiteSpace(name) ? "Reorder water" : name;
+    }
+
+    public string Name { get; }
+
+    public long? MeasuredWorkingBytes => RiverCommand.RiverCommandBaseBytes;
+
+    public MapDocument Apply(MapDocument document)
+    {
+        var layer = document.FindLayer(_layerId) as ObjectLayer ?? throw new InvalidOperationException("Слой воды не найден.");
+        _before ??= [.. layer.Rivers.Select(r => r.Id)];
+        return document.WithLayer(_layerId, l => Ordered((ObjectLayer)l, _order));
+    }
+
+    public MapDocument Revert(MapDocument document) =>
+        _before is null ? document : document.WithLayer(_layerId, l => Ordered((ObjectLayer)l, _before));
+
+    private static ObjectLayer Ordered(ObjectLayer layer, IReadOnlyList<Guid> order)
+    {
+        var current = layer.Rivers.ToDictionary(r => r.Id);
+        var result = new List<River>(layer.Rivers.Length);
+        foreach (var id in order)
+            if (current.Remove(id, out var river)) result.Add(river);
+        foreach (var river in layer.Rivers)
+            if (current.ContainsKey(river.Id)) result.Add(river);
+        return layer with { Rivers = [.. result] };
+    }
+}

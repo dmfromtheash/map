@@ -442,6 +442,15 @@ public sealed class NativeObjectWorkflowApplication : Application
         await SettleAsync();
         await NextFrameAsync(view);
 
+        // The shared block is collapsed by default since the panels were regrouped; the smoke
+        // opens it the way a user would, so its controls join the visual tree before they are read.
+        if (Named<Expander>(view, "ObjectPrimarySection") is { IsExpanded: false } collapsed)
+        {
+            collapsed.IsExpanded = true;
+            await SettleAsync();
+            await NextFrameAsync(view);
+        }
+
         var primary = Named<Control>(view, "ObjectPrimarySection");
         var primaryNames = primary is null
             ? new List<string>()
@@ -541,6 +550,12 @@ public sealed class NativeObjectWorkflowApplication : Application
         editor.SelectObject(pair[1].Id, additive: true);
         await SettleAsync();
         await NextFrameAsync(view);
+        if (Named<Expander>(view, "MultiPrimarySection") is { IsExpanded: false } collapsedMulti)
+        {
+            collapsedMulti.IsExpanded = true;
+            await SettleAsync();
+            await NextFrameAsync(view);
+        }
         var mixedReadout = Named<TextBlock>(view, "MultiLevelValue")?.Text
             ?? Named<TextBlock>(view, "ObjectLevelValue")?.Text;
         var mixedSelectionRefusesToInventAValue = editor.SelectionSublayerIsMixed
@@ -571,6 +586,10 @@ public sealed class NativeObjectWorkflowApplication : Application
         await SettleAsync();
 
         // ---- 7b2. the quick strip, the layer list and the exact level entry --------------
+        // The strip hides with an empty selection by design, so it is read with one in place.
+        editor.SelectObject(single.Id, additive: false);
+        await SettleAsync();
+        await NextFrameAsync(view);
         var quickBar = Named<Control>(view, "QuickPropertyBar");
         var quickLayer = Named<Button>(view, "QuickOwnerLayerSelector");
         var quickLayerCaption = Named<TextBlock>(view, "QuickOwnerLayerCaption");
@@ -880,18 +899,25 @@ public sealed class NativeObjectWorkflowApplication : Application
         window.Height = 640;
         await SettleAsync();
         await NextFrameAsync(view);
+        // Only the captions the strip shows right now: the land group carries captions of its
+        // own that are hidden while an object is selected.
         var compactCaptions = quickBar?.GetVisualDescendants().OfType<TextBlock>()
-            .Where(item => item.Text is "Слой" or "Уровень" or "Масштаб" or "Непрозрачность" or "Поворот")
+            .Where(item => item.IsEffectivelyVisible
+                && item.Text is "Слой" or "Уровень" or "Масштаб" or "Непрозрачность" or "Поворот")
             .ToList() ?? [];
         var horizontalAccess = quickBar?.GetVisualDescendants().OfType<ScrollBar>()
             .Any(item => item.Orientation == Orientation.Horizontal
                 && item.IsVisible && item.Maximum > item.Minimum) == true;
+        // The strip wraps whole groups onto further lines; a horizontal scrollbar is the other
+        // acceptable way to keep every caption reachable. Either counts, hidden captions do not.
+        var everyCaptionLaidOut = compactCaptions.Count == 5
+            && compactCaptions.All(item => item.IsVisible && item.Bounds.Width >= 24 && item.Bounds.Height > 0);
         var compactLayoutUsable = quickBar is not null
             && quickBar.IsVisible
             && quickBar.Bounds.Height > 0
             && compactCaptions.Select(item => item.Text).Distinct(StringComparer.Ordinal).Count() == 5
             && compactCaptions.All(item => item.Bounds.Width >= 24)
-            && horizontalAccess
+            && (horizontalAccess || everyCaptionLaidOut)
             && view.Canvas.Bounds.Width >= 300
             && view.Canvas.Bounds.Height >= 240;
         Capture(window, compactShot, 960, 640);
@@ -935,6 +961,17 @@ public sealed class NativeObjectWorkflowApplication : Application
         await SettleAsync();
         await NextFrameAsync(view);
         Capture(view, panelScreenshot, 1_416, 939);
+
+        // The objects tab of the working panel: the stack of rows with the level of each object.
+        if (Named<TabControl>(view, "EditorSideTabs") is { } sideTabs)
+        {
+            sideTabs.SelectedIndex = 1;
+            await SettleAsync();
+            await NextFrameAsync(view);
+            Capture(view, Path.ChangeExtension(options.OutputPath, ".objectlist.png"), 1_416, 939);
+            sideTabs.SelectedIndex = 0;
+            await SettleAsync();
+        }
 
         // ---- 9. save, reopen, and compare the render order ----------------------------
         var expectedOrder = AllObjects(editor)

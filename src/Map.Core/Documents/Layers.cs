@@ -270,6 +270,14 @@ public sealed record LandLayer : MapLayer, IRasterContentLayer
 
     public TileMap GeometryTiles { get; init; }
     public LandEdgeStyle EdgeStyle { get; init; }
+
+    /// <summary>
+    /// This piece's level among the terrain (<see cref="TerrainOrder"/>). Land is drawn level
+    /// by level with the water of each level on top of it, so a piece at a higher level covers
+    /// rivers and lakes of a lower level. Zero for every older file.
+    /// </summary>
+    public int Level { get; init; }
+
     public override LayerMask? Mask { get; init; }
 
     TileMap IRasterContentLayer.ContentTiles => GeometryTiles;

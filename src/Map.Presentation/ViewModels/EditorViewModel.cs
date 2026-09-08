@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using Map.Assets;
 using Map.Core.Documents;
 using Map.Core.Editing;
@@ -1422,6 +1422,16 @@ public sealed partial class EditorViewModel : ViewModelBase
         _assetCatalog?.ThumbnailPathForVariant(variantId);
 
     /// <summary>
+    /// The stored original behind one preview file, for a view that found the preview smaller
+    /// than the current standard and wants to rebuild it off the UI thread. Metadata only.
+    /// </summary>
+    public bool TryDescribeLibraryThumbnail(string thumbnailPath, out string originalPath)
+    {
+        originalPath = "";
+        return _assetCatalog is not null && _assetCatalog.TryDescribeThumbnail(thumbnailPath, out originalPath);
+    }
+
+    /// <summary>
     /// The catalog thumbnail of the exact asset a placed object draws, or null when the object is
     /// not asset-backed or the catalog cannot show it. Lists use this so a placed tree looks like
     /// that tree instead of like the tool that placed it.
@@ -1606,6 +1616,9 @@ public sealed partial class EditorViewModel : ViewModelBase
             text, "yyyy-MM-dd", CultureInfo.InvariantCulture,
             DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out _);
     }
+
+    /// <summary>The plain name of a collection for a breadcrumb or a tooltip; the id when unknown.</summary>
+    public string LibraryCollectionTitle(string id) => CollectionTitle(id).Trim('«', '»');
 
     private string CollectionTitle(string id)
     {
@@ -6623,7 +6636,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// <summary>The rows the objects panel shows for the current search, filter and open group.</summary>
     public IReadOnlyList<ObjectTreeRow> ObjectTree => ObjectTreeRows.Build(
         Session.Document, _objectSearchText, _objectTypeFilter, _openGroupId,
-        [.. Session.SelectedObjectIds], [.. _waterSelection]);
+        [.. Session.SelectedObjectIds], [.. _waterSelection], _selectedLandId);
 
     /// <summary>
     /// Ctrl+A: selects the visible, unlocked objects that match BOTH the panel search and the
@@ -6653,6 +6666,13 @@ public sealed partial class EditorViewModel : ViewModelBase
                 matching.Add(sceneObject.Id);
             }
         }
+
+        // The panel lists the topmost object first; the selection keeps document order, so the
+        // primary object and every order-dependent command stay what they were before the panel
+        // was turned around.
+        var chosen = matching.ToHashSet();
+        matching = [.. Session.Document.Layers.OfType<ObjectLayer>()
+            .SelectMany(layer => layer.Objects).Select(item => item.Id).Where(chosen.Contains)];
 
         Session.SetSelection(matching);
         StatusDetail = matching.Count == 0
@@ -6932,6 +6952,15 @@ public sealed partial class EditorViewModel : ViewModelBase
             return;
         }
 
+        // A press on land that never moved is a click on that land, not an empty rubber band.
+        var threshold = 3 / Math.Max(0.001, Session.Viewport.Scale);
+        if (_selectedLandId is not null && marquee.Right - marquee.Left < threshold && marquee.Bottom - marquee.Top < threshold)
+        {
+            InvalidateScene(EditorChangeReason.CanvasInvalidation);
+            return;
+        }
+        ClearLandSelection();
+
         var found = new List<ObjectId>();
         foreach (var hit in MultiSelectionGeometry.ObjectsInMarquee(Session.Document, marquee))
         {
@@ -6984,6 +7013,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// <summary>One notification bundle for every way the selection can change.</summary>
     private void AfterSelectionChange()
     {
+        if (Session.SelectedObjectIds.Count > 0) ClearLandSelection();
         if (_selectedVectorNodeId is { } nodeId && SelectedVectorNodes.All(node => node.Id != nodeId))
             _selectedVectorNodeId = null;
         if (_selectedPortalId is { } portalId && SelectedVectorPortals.All(portal => portal.Id != portalId))
@@ -7045,6 +7075,9 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public void AdjustSelectedSublayer(int direction)
     {
+        // The one level shortcut serves the whole map: objects, then water, then land.
+        if (Session.SelectedObjects.Count == 0 && WaterSelectionCount > 0) { ShiftSelectedWaterLevel(direction); return; }
+        if (Session.SelectedObjects.Count == 0 && WaterSelectionCount == 0 && SelectedLand is not null) { ShiftLandLevel(direction); return; }
         if (EditableSelectionList() is not { } before || direction == 0) return;
         ExecuteWholeSelection(before,
             [.. before.Select(o => CopyObject(o) with
@@ -7346,7 +7379,9 @@ public sealed partial class EditorViewModel : ViewModelBase
     {
         get
         {
-            var owners = SelectionOwnerLayerIds();
+            // Water is a selection too: with no ordinary object selected, the list speaks for
+            // the selected rivers and lakes, and choosing a layer moves them.
+            var owners = Session.SelectedObjects.Count > 0 ? SelectionOwnerLayerIds() : WaterOwnerLayerIds();
             var current = owners.Count == 1 ? owners[0] : (LayerId?)null;
             return
             [
@@ -7370,6 +7405,16 @@ public sealed partial class EditorViewModel : ViewModelBase
         .. Session.SelectedObjects
             .Select(sceneObject => DocumentEditor.FindLayerOf(Session.Document, sceneObject.Id))
             .OfType<MapLayer>()
+            .Select(layer => layer.Id)
+            .Distinct(),
+    ];
+
+    /// <summary>The object layers holding the selected water systems, without duplicates.</summary>
+    private IReadOnlyList<LayerId> WaterOwnerLayerIds() =>
+    [
+        .. SelectedWaters
+            .Select(river => RiverLayerOf(river.Id))
+            .OfType<ObjectLayer>()
             .Select(layer => layer.Id)
             .Distinct(),
     ];
@@ -7425,6 +7470,13 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// </summary>
     public bool MoveSelectionToLayer(LayerId targetId)
     {
+        // The one "Слой" control serves water as well: with only rivers or lakes selected, it
+        // moves them, as one undoable step, exactly like the river panel's own picker.
+        if (Session.SelectedObjects.Count == 0 && WaterSelectionCount > 0)
+        {
+            return MoveSelectedWaterToLayer(targetId);
+        }
+
         if (EditableSelectionList(allowAreaMembers: true) is null)
         {
             return false;
@@ -7476,6 +7528,11 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// </summary>
     public bool ReorderSelection(int direction, bool toExtreme = false)
     {
+        if (Session.SelectedObjects.Count == 0 && WaterSelectionCount > 0)
+        {
+            return ReorderSelectedWater(direction, toExtreme);
+        }
+
         if (direction == 0 || EditableSelectionList() is not { } selection)
         {
             return false;
@@ -7792,11 +7849,20 @@ public sealed partial class EditorViewModel : ViewModelBase
                 AfterSelectionChange();
             }
 
+            // Land under the pointer is a piece of the map like any other: a press selects it.
+            // The marquee still starts, so a drag from here rubber-bands as it always did; a
+            // press that does not move keeps the land selected (see EndMarquee).
+            if (!additive && !SelectLandAt(worldX, worldY))
+            {
+                ClearLandSelection();
+            }
+
             BeginMarquee(worldX, worldY, additive);
             return CanvasGesture.Marquee;
         }
 
         if (!additive && WaterSelectionCount > 0) ClearWaterSelection();
+        ClearLandSelection();
 
         SelectHit(hit, additive);
         RefreshInspector();

@@ -119,6 +119,12 @@ public sealed partial class MapCanvasControl : Control
     public event EventHandler? VariantCycled;
 
     /// <summary>
+    /// A secondary press the router left alone: it cancelled nothing, so the shell may answer it
+    /// with a context menu. The position is read from the event by the subscriber.
+    /// </summary>
+    public event EventHandler<PointerPressedEventArgs>? SecondaryPressed;
+
+    /// <summary>
     /// Own-process instrumentation hook raised after the Skia scene pass finishes for an Avalonia
     /// frame. It is used by the hidden Stage 13 native profile, never persisted or telemetered.
     /// </summary>
@@ -525,6 +531,15 @@ public sealed partial class MapCanvasControl : Control
                     canvas.DrawCircle((float)node.X, (float)node.Y, radius, pen);
                 }
             }
+            if (editor.LandSelectionFrame is { } landFrame)
+            {
+                var scale = (float)Math.Max(.001, viewport.Scale);
+                using var landPen = new SKPaint { Color = new SKColor(160, 200, 90, 200), IsAntialias = true,
+                    Style = SKPaintStyle.Stroke, StrokeWidth = 1.5f / scale,
+                    PathEffect = SKPathEffect.CreateDash([8 / scale, 4 / scale], 0) };
+                canvas.DrawRect(new SKRect((float)landFrame.Left, (float)landFrame.Top,
+                    (float)landFrame.Right, (float)landFrame.Bottom), landPen);
+            }
             if (editor.WaterSelectionFrame is { } waterFrame && !editor.IsCreatingRiver)
             {
                 var scale = (float)Math.Max(.001, viewport.Scale);
@@ -655,14 +670,19 @@ public sealed partial class MapCanvasControl : Control
         _lastPointer = position;
         ApplyDrawModifiers(e.KeyModifiers);
 
+        var button = ButtonOf(point);
         Apply(
             _input.Press(
-                ButtonOf(point),
+                button,
                 position.X,
                 position.Y,
                 e.KeyModifiers.HasFlag(KeyModifiers.Control),
                 point.Properties.Pressure),
             e);
+        if (button == CanvasPointerButton.Right && !e.Handled)
+        {
+            SecondaryPressed?.Invoke(this, e);
+        }
     }
 
     protected override void OnPointerMoved(PointerEventArgs e)

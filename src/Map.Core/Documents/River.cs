@@ -128,6 +128,14 @@ public sealed record River
     /// <summary>Multiplies every node width, so a whole river can be made wider without retouching nodes.</summary>
     public double WidthScale { get; init; } = 1;
 
+    /// <summary>
+    /// The water's level among the terrain, <see cref="TerrainOrder.MinimumLevel"/> to
+    /// <see cref="TerrainOrder.MaximumLevel"/>, like an object's level: land at a higher level
+    /// covers this water, land at the same or a lower level is carved by it and carries it.
+    /// Absent in older files, where zero keeps every river on top of every piece of land.
+    /// </summary>
+    public int Level { get; init; }
+
     public RiverChannel? FindChannel(Guid id) => Channels.FirstOrDefault(c => c.Id == id);
 
     /// <summary>Channels whose mouth or source lies on the given channel.</summary>
@@ -182,7 +190,8 @@ public sealed record River
     public void Validate()
     {
         if (Id == Guid.Empty || string.IsNullOrWhiteSpace(Name) || Channels.IsDefault || Channels.IsEmpty
-            || Style is null || !double.IsFinite(WidthScale) || WidthScale is < 0.01 or > 100)
+            || Style is null || !double.IsFinite(WidthScale) || WidthScale is < 0.01 or > 100
+            || !TerrainOrder.IsValidLevel(Level))
             throw new ArgumentException("Некорректные параметры реки.");
         if (Channels.Any(c => c is null) || Channels.Select(c => c.Id).Distinct().Count() != Channels.Length)
             throw new ArgumentException("Русла реки должны иметь уникальные идентификаторы.");

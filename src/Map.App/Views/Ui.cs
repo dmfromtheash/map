@@ -623,9 +623,18 @@ public static class Ui
         IReadOnlyList<(string Icon, string Title)> states,
         Action activate,
         string? tooltip = null,
-        IImage? image = null)
+        IImage? image = null,
+        Control? trailing = null)
     {
         var content = new DockPanel { LastChildFill = true };
+
+        // A trailing value the row always shows (the object's level), at the far right where the
+        // eye lands after the name; state badges follow it inward.
+        if (trailing is not null)
+        {
+            trailing.VerticalAlignment = VerticalAlignment.Center;
+            content.Children.Add(trailing.Docked(Dock.Right));
+        }
 
         if (states.Count > 0)
         {
@@ -665,7 +674,15 @@ public static class Ui
             caption.Children.Add(Trimmed(secondary, "faint", "role-caption"));
         content.Children.Add(caption);
 
-        var row = new ToggleButton { Content = content, MinHeight = 44 }.Named(name).Classed("list-row");
+        // The row spans the list, so a trailing value sits in one column down the whole list
+        // instead of following each name to a different place.
+        var row = new ToggleButton
+        {
+            Content = content,
+            MinHeight = 44,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+        }.Named(name).Classed("list-row");
         AutomationProperties.SetName(row, tooltip ?? primary);
         ToolTip.SetTip(row, tooltip ?? primary);
         row.Click += (_, _) =>

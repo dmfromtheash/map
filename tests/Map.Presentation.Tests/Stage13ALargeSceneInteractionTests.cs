@@ -100,11 +100,12 @@ public sealed class Stage13ALargeSceneInteractionTests
 
         var ordinary = ObjectTreeRows.Build(
             document, "", ObjectTypeFilter.All, null, [groupedA.Id, groupedB.Id]);
+        // Rows read top to bottom: the loose tower was placed last and covers the group.
         Assert.Equal(2, ordinary.Count);
-        Assert.Equal(ObjectTreeRowKind.Group, ordinary[0].Kind);
-        Assert.True(ordinary[0].Selected);
-        Assert.Equal([groupedA.Id, groupedB.Id], ordinary[0].MemberIds);
-        Assert.Equal(loose.Id, ordinary[1].Object!.Id);
+        Assert.Equal(loose.Id, ordinary[0].Object!.Id);
+        Assert.Equal(ObjectTreeRowKind.Group, ordinary[1].Kind);
+        Assert.True(ordinary[1].Selected);
+        Assert.Equal([groupedB.Id, groupedA.Id], ordinary[1].MemberIds);
 
         var filtered = ObjectTreeRows.Build(
             document, "tower", ObjectTypeFilter.All, null, Array.Empty<ObjectId>());
@@ -114,9 +115,9 @@ public sealed class Stage13ALargeSceneInteractionTests
         var opened = ObjectTreeRows.Build(
             document, "", ObjectTypeFilter.All, groupId, [groupedB.Id]);
         Assert.Equal(ObjectTreeRowKind.Breadcrumb, opened[0].Kind);
-        Assert.Equal([groupedA.Id, groupedB.Id], opened.Skip(1).Select(row => row.Object!.Id));
-        Assert.False(opened[1].Selected);
-        Assert.True(opened[2].Selected);
+        Assert.Equal([groupedB.Id, groupedA.Id], opened.Skip(1).Select(row => row.Object!.Id));
+        Assert.True(opened[1].Selected);
+        Assert.False(opened[2].Selected);
     }
 
     [Fact]

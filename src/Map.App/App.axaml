@@ -1762,6 +1762,56 @@
         <Style Selector="ToggleButton.property-toggle:disabled TextBlock">
             <Setter Property="Foreground" Value="{DynamicResource MapDisabledTextBrush}" />
         </Style>
+        <!-- Catalog tile: a square picture on a quiet surface; the chosen one wears the accent. -->
+        <Style Selector=":is(Button).asset-tile">
+            <Setter Property="Background" Value="{DynamicResource MapElevatedBrush}" />
+            <Setter Property="BorderThickness" Value="2" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapBorderBrush}" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Padding" Value="0" />
+        </Style>
+        <Style Selector=":is(Button).asset-tile:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapControlHoverBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapBorderStrongBrush}" />
+        </Style>
+        <Style Selector=":is(Button).asset-tile.variant">
+            <Setter Property="Background" Value="{DynamicResource MapAccentDimBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
+        </Style>
+        <Style Selector=":is(Button).asset-tile.selected /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapSelectionBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBrush}" />
+        </Style>
+        <Style Selector=":is(Button).asset-tile.selected:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapSelectionBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentHoverBrush}" />
+        </Style>
+        <Style Selector="Button.gallery-badge">
+            <Setter Property="Background" Value="{DynamicResource MapChromeBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapChromeBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapChromeTextBrush}" />
+            <Setter Property="CornerRadius" Value="4" />
+            <Setter Property="FontSize" Value="11" />
+        </Style>
+        <Style Selector="Button.gallery-badge:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapChromeHoverBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapChromeTextBrush}" />
+        </Style>
+        <Style Selector="Border.gallery-group-header">
+            <Setter Property="Background" Value="{DynamicResource MapPanelBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapBorderBrush}" />
+            <Setter Property="BorderThickness" Value="0,0,0,1" />
+            <Setter Property="CornerRadius" Value="6,6,0,0" />
+            <Setter Property="Cursor" Value="Hand" />
+        </Style>
+        <Style Selector="Button.filter-chip-active">
+            <Setter Property="Background" Value="{DynamicResource MapAccentDimBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
+            <Setter Property="CornerRadius" Value="12" />
+            <Setter Property="Padding" Value="8,2" />
+            <Setter Property="MinHeight" Value="24" />
+        </Style>
+
         <Style Selector=":is(Button).asset-card">
             <Setter Property="Background" Value="{DynamicResource MapElevatedBrush}" />
             <Setter Property="BorderThickness" Value="2" />

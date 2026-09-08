@@ -1104,6 +1104,18 @@ public sealed class UpdateLayerCommand : IEditCommand
             l => Mutate(l, blend: layer.Blend));
     }
 
+    /// <summary>The level of a piece of land among the terrain; see <see cref="TerrainOrder"/>.</summary>
+    public static UpdateLayerCommand SetLandLevel(LandLayer layer, int level)
+    {
+        ArgumentNullException.ThrowIfNull(layer);
+        var bounded = TerrainOrder.Clamp(level);
+        var previous = layer.Level;
+        return new UpdateLayerCommand(
+            "Land level", layer.Id,
+            l => l is LandLayer land ? land with { Level = bounded } : l,
+            l => l is LandLayer land ? land with { Level = previous } : l);
+    }
+
     public static UpdateLayerCommand SetBaseColor(BaseColorLayer layer, string color)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(color);
