@@ -73,7 +73,9 @@ public sealed partial class EditorViewModel
         if (land.Locked) { StatusDetail = "Слой земли заблокирован: снимите блокировку, чтобы менять уровень."; return false; }
         var bounded = TerrainOrder.Clamp(level);
         if (bounded == land.Level) return false;
+        var revision = Session.Revision;
         Session.Execute(UpdateLayerCommand.SetLandLevel(land, bounded));
+        if (Session.Revision == revision) { StatusDetail = Session.LastResourceError ?? StatusDetail; return false; }
         AfterEdit();
         RaiseLandState();
         StatusDetail = $"Земля «{land.Name}» · уровень {FormatSublayer(bounded)}";
@@ -141,6 +143,8 @@ public sealed partial class EditorViewModel
     public bool ReorderSelectedWater(int direction, bool toExtreme = false)
     {
         if (direction == 0) return false;
+        if (SelectedWaters.Any(river => river.Locked))
+        { StatusDetail = "Выбранная вода заблокирована: снимите блокировку, чтобы менять порядок."; return false; }
         var selected = SelectedWaters.Select(river => river.Id).ToHashSet();
         if (selected.Count == 0) return false;
         var steps = new List<IEditCommand>();
@@ -172,7 +176,9 @@ public sealed partial class EditorViewModel
                 steps.Add(new ReorderRiversCommand(layer.Id, order, "Порядок воды"));
         }
         if (steps.Count == 0) { StatusDetail = direction > 0 ? "Вода уже сверху." : "Вода уже снизу."; return false; }
+        var revision = Session.Revision;
         Session.Execute(steps.Count == 1 ? steps[0] : new CompositeCommand("Порядок воды", steps));
+        if (Session.Revision == revision) { StatusDetail = Session.LastResourceError ?? StatusDetail; return false; }
         AfterEdit(geometryOnly: true); RaiseWaterState();
         return true;
     }

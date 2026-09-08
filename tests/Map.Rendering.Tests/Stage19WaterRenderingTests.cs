@@ -10,6 +10,45 @@ namespace Map.Rendering.Tests;
 /// </summary>
 public sealed class Stage19WaterRenderingTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Water_obeys_owner_opacity_and_mask_and_a_mask_edit_invalidates_carving(bool illustrated)
+    {
+        var (document, _, river) = Scene(true);
+        var owner = document.Layers.OfType<ObjectLayer>().Single();
+        if (illustrated)
+        {
+            owner = owner with { Rivers = [river with { Style = RiverStyle.Illustrated() }] };
+            document = document.WithLayer(owner.Id, _ => owner);
+        }
+        using var cache = new CarvedLandCache();
+        using var opaque = Render(document, cache);
+        var fadedDocument = document.WithLayer(owner.Id, layer => layer with { Opacity = .25 });
+        using var faded = Render(fadedDocument, cache);
+        Assert.NotEqual(opaque.GetPixel(120, 105), faded.GetPixel(120, 105));
+        var hiddenDocument = document.WithLayer(owner.Id, layer => layer.WithMask(new LayerMask(
+            TileMap.Empty(1).With(new TileKey(0, 0), new byte[TileMap.TileSize * TileMap.TileSize]), true)));
+        using var masked = Render(hiddenDocument, cache);
+        using var absent = Render(document.WithLayer(owner.Id, layer => ((ObjectLayer)layer) with { Rivers = [] }));
+        Assert.Equal(3, cache.Misses);
+        Assert.Equal(absent.Pixels, masked.Pixels);
+    }
+
+    [Fact]
+    public void Interleaved_water_styles_keep_their_stack_order()
+    {
+        var (document, landId, river) = Scene(true);
+        var owner = document.Layers.OfType<ObjectLayer>().Single();
+        var plain = river.Style with { CutsLand = false, ClipToLand = false, BankWidth = 0,
+            BankShadowOpacity = 0, ShallowWidth = 0, HighlightOpacity = 0, MouthFade = 0, TextureId = null };
+        var a = river with { Style = plain with { WaterColor = "#FFFF0000" } };
+        var b = river with { Id = Guid.NewGuid(), Style = plain with { WaterColor = "#FF00FF00", BankWidth = 1 } };
+        var c = river with { Id = Guid.NewGuid(), Style = plain with { WaterColor = "#FF0000FF" } };
+        using var rendered = Render(document.WithLayer(owner.Id, layer => ((ObjectLayer)layer) with { Rivers = [a, b, c] }));
+        Assert.Equal(SKColors.Blue, rendered.GetPixel(120, 105));
+    }
+
     private static (MapDocument Document, LayerId LandId, River River) Scene(bool visible)
     {
         var coverage = Enumerable.Repeat((byte)255, TileMap.TileSize * TileMap.TileSize).ToArray();

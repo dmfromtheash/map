@@ -373,15 +373,16 @@ public static class SceneRenderer
         var lands = TerrainOrder.Lands(document)
             .Where(land => land.Visible && land.Opacity > 0 && land.GeometryTiles.TileCount > 0)
             .ToList();
-        var rivers = new List<River>();
+        var rivers = new List<(ObjectLayer Owner, River River)>();
         foreach (var layer in document.Layers.OfType<ObjectLayer>())
         {
             if (!layer.Visible || layer.Opacity <= 0) continue;
             foreach (var river in RiverRenderer.Resolve(layer, options))
-                if (river.Visible && RiverGeometry.Evaluate(river).Bounds.Intersects(view)) rivers.Add(river);
+                if (river.Visible && river.Style.Opacity > 0 && RiverGeometry.Evaluate(river).Bounds.Intersects(view))
+                    rivers.Add((layer, river));
         }
 
-        var levels = lands.Select(land => land.Level).Concat(rivers.Select(river => river.Level))
+        var levels = lands.Select(land => land.Level).Concat(rivers.Select(pair => pair.River.Level))
             .Distinct().OrderBy(level => level).ToList();
         foreach (var level in levels)
         {
@@ -392,12 +393,35 @@ public static class SceneRenderer
                 DrawLayer(canvas, document, land, null, view, options);
             }
 
-            var water = rivers.Where(river => river.Level == level).ToList();
+            var water = rivers.Where(pair => pair.River.Level == level).ToList();
             if (water.Count == 0) continue;
             var below = lands.Where(land => land.Level <= level).ToList();
-            RiverRenderer.DrawRivers(canvas, water, view, options,
-                below.Count > 0 ? (target, paint) => DrawLandCoverage(target, below, view, options, paint) : null);
+            foreach (var group in water.GroupBy(pair => pair.Owner))
+            {
+                var owner = group.Key;
+                var ownWater = group.Select(pair => pair.River).ToArray();
+                // Only unmasked, opaque neighbours can safely remove a shared bank. Hidden
+                // portions of another layer must never erase the outline of this layer.
+                var neighbours = SeamCompatible(owner)
+                    ? water.Where(pair => pair.Owner.Id != owner.Id && SeamCompatible(pair.Owner))
+                        .Select(pair => pair.River).ToArray()
+                    : [];
+                DrawLayer(canvas, document, owner, LowerLayer(document, owner), view, options,
+                    contentOverride: target => RiverRenderer.DrawRivers(target, ownWater, view, options,
+                        below.Count > 0 ? (coverage, paint) => DrawLandCoverage(coverage, below, view, options, paint) : null,
+                        neighbours));
+            }
         }
+
+        static bool SeamCompatible(ObjectLayer layer) => layer.Opacity == 1 && layer.Blend == "Normal"
+            && layer.Mask is not { Enabled: true } && !layer.Effects.ClippingEnabled;
+    }
+
+    private static MapLayer? LowerLayer(MapDocument document, MapLayer layer)
+    {
+        for (var i = 1; i < document.Layers.Count; i++)
+            if (document.Layers[i].Id == layer.Id) return document.Layers[i - 1];
+        return null;
     }
 
     private static bool TryIntersect(WorldBounds first, WorldBounds second, out WorldBounds result)
@@ -500,8 +524,13 @@ public static class SceneRenderer
 
     private static void DrawLayer(
         SKCanvas canvas, MapDocument document, MapLayer layer, MapLayer? clippingSource,
-        WorldBounds view, RenderOptions options, bool drawRivers = true)
+        WorldBounds view, RenderOptions options, bool drawRivers = true, Action<SKCanvas>? contentOverride = null)
     {
+        void DrawContent(bool includePreview)
+        {
+            if (contentOverride is not null) contentOverride(canvas);
+            else DrawLayerContent(canvas, document, layer, view, options, includePreview, drawRivers);
+        }
         var mask = layer.Mask is { Enabled: true } m
             && HasEffectiveMask(m, view)
                 ? m
@@ -544,11 +573,11 @@ public static class SceneRenderer
                     ParseColor(effects.ShadowColor).WithAlpha(Alpha(effects.OuterShadowOpacity))),
             };
             canvas.SaveLayer(ToRect(view), shadowPaint);
-            DrawLayerContent(canvas, document, layer, view, options, includePreview: false);
+            DrawContent(includePreview: false);
             canvas.Restore();
         }
 
-        DrawLayerContent(canvas, document, layer, view, options, includePreview: true, drawRivers);
+        DrawContent(includePreview: true);
 
         if (effects is { InnerShadowOpacity: > 0 } && options.LodTier != RenderLodTier.Overview)
         {
@@ -562,13 +591,13 @@ public static class SceneRenderer
             })
             {
                 canvas.SaveLayer(ToRect(view), shadowPaint);
-                DrawLayerContent(canvas, document, layer, view, options, includePreview: false);
+                DrawContent(includePreview: false);
                 canvas.Restore();
             }
             using (var inside = new SKPaint { BlendMode = SKBlendMode.DstIn })
             {
                 canvas.SaveLayer(ToRect(view), inside);
-                DrawLayerContent(canvas, document, layer, view, options, includePreview: false);
+                DrawContent(includePreview: false);
                 canvas.Restore();
             }
             canvas.Restore();
@@ -583,13 +612,13 @@ public static class SceneRenderer
         {
             using var clipPaint = new SKPaint { BlendMode = SKBlendMode.DstIn };
             canvas.SaveLayer(ToRect(view), clipPaint);
-            DrawLayerContent(canvas, document, clippingSource, view, options, includePreview: false);
-            if (clippingSource.Mask is { Enabled: true } lowerMask && HasEffectiveMask(lowerMask, view))
+            DrawClippingCoverage(canvas, document, clippingSource, view, options);
+            if (clippingSource is not LandLayer && clippingSource.Mask is { Enabled: true } lowerMask && HasEffectiveMask(lowerMask, view))
                 ApplyMask(canvas, clippingSource.Id, lowerMask, view, options);
             canvas.Restore();
         }
 
-        if (maskEdit)
+        if (maskEdit && contentOverride is null)
         {
             DrawMaskOverlay(canvas, layer, view, options);
         }
@@ -657,6 +686,19 @@ public static class SceneRenderer
         }
     }
 
+    private static void DrawClippingCoverage(SKCanvas canvas, MapDocument document, MapLayer source,
+        WorldBounds view, RenderOptions options)
+    {
+        // Use original terrain coverage: carving the very river being clipped would create a
+        // circular dependency and remove its own clipping surface.
+        if (source is LandLayer land)
+        {
+            using var paint = new SKPaint();
+            DrawLandCoverage(canvas, [land], view, options, paint);
+        }
+        else DrawLayerContent(canvas, document, source, view, options, includePreview: false);
+    }
+
     /// <summary>
     /// Union of every visible Land layer's coverage inside the view, drawn with the caller's
     /// paint. Rivers use it (DstIn) to stay on land; it never evaluates edge styling.
@@ -672,15 +714,26 @@ public static class SceneRenderer
             : new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None);
         foreach (var land in layers)
         {
+            var mask = land.Mask is { Enabled: true } m && HasEffectiveMask(m, view) ? m : null;
+            var grouped = land.Opacity < 1 || mask is not null;
+            if (grouped)
+            {
+                canvas.SaveLayer(ToRect(view), paint);
+                using var opacity = new SKPaint { Color = SKColors.White.WithAlpha(Alpha(land.Opacity)) };
+                canvas.SaveLayer(ToRect(view), opacity);
+            }
             foreach (var key in land.GeometryTiles.KeysIntersecting(view.Left, view.Top, view.Right, view.Bottom))
             {
                 var coverage = land.GeometryTiles.TryGet(key)!;
                 var image = options.TileCache is not null
                     ? options.TileCache.Get(land.Id, key, TileImageKind.LandCoverage, coverage)
                     : BuildCoverageImage(coverage, TileImageKind.LandCoverage);
-                canvas.DrawImage(image, TileRect(key), sampling, paint);
+                canvas.DrawImage(image, TileRect(key), sampling, grouped ? null : paint);
                 if (options.TileCache is null) image.Dispose();
             }
+            if (mask is not null)
+                ApplyMask(canvas, land.Id, mask, view, options);
+            if (grouped) { canvas.Restore(); canvas.Restore(); }
         }
     }
 
@@ -688,14 +741,14 @@ public static class SceneRenderer
     /// Rivers that carve this land, from every object layer, with live editor substitutions:
     /// only water at this land's level or above lies on it; water below passes underneath.
     /// </summary>
-    private static List<River> LandCuttingRivers(MapDocument document, LandLayer land, WorldBounds view, RenderOptions options)
+    private static List<(ObjectLayer Owner, River River)> LandCuttingRivers(MapDocument document, LandLayer land, WorldBounds view, RenderOptions options)
     {
-        var result = new List<River>();
+        var result = new List<(ObjectLayer Owner, River River)>();
         foreach (var layer in document.Layers.OfType<ObjectLayer>().Where(l => l.Visible && l.Opacity > 0))
             foreach (var river in RiverRenderer.Resolve(layer, options))
                 if (river.Visible && river.Style.CutsLand && TerrainOrder.Covers(river, land)
                     && RiverGeometry.Evaluate(river).Bounds.Intersects(view))
-                    result.Add(river);
+                    result.Add((layer, river));
         return result;
     }
 
@@ -771,10 +824,25 @@ public static class SceneRenderer
                     target.DrawImage(image, TileRect(key), sampling, null);
                     if (options.TileCache is null) image.Dispose();
                 }
-                foreach (var river in cutters)
+                foreach (var (owner, river) in cutters)
                 {
-                    RiverRenderer.CutBody(target, river, options.ViewScale);
-                    RiverRenderer.WashCoast(target, river, InsideLand, options.ViewScale);
+                    using var erase = new SKPaint { BlendMode = SKBlendMode.DstOut,
+                        Color = SKColors.White.WithAlpha(Alpha(owner.Opacity)) };
+                    target.SaveLayer(ToRect(view), erase);
+                    RiverRenderer.CutBody(target, river, options.ViewScale, SKBlendMode.SrcOver);
+                    RiverRenderer.WashCoast(target, river, InsideLand, options.ViewScale, SKBlendMode.SrcOver);
+                    if (owner.Mask is { Enabled: true } mask && HasEffectiveMask(mask, view))
+                        ApplyMask(target, owner.Id, mask, view, options);
+                    if (owner.Effects.ClippingEnabled && LowerLayer(document, owner) is { Visible: true, Opacity: > 0 } lower)
+                    {
+                        using var clip = new SKPaint { BlendMode = SKBlendMode.DstIn };
+                        target.SaveLayer(ToRect(view), clip);
+                        DrawClippingCoverage(target, document, lower, view, options);
+                        if (lower is not LandLayer && lower.Mask is { Enabled: true } lowerMask && HasEffectiveMask(lowerMask, view))
+                            ApplyMask(target, lower.Id, lowerMask, view, options);
+                        target.Restore();
+                    }
+                    target.Restore();
                 }
                 return surface.Snapshot();
             }
@@ -782,7 +850,9 @@ public static class SceneRenderer
             // Nothing about the coast changed between two frames that share this key, so the
             // carved raster is reused instead of being rebuilt. The cache owns what it hands back.
             if (options.CarvedLand is { } reuse)
-                carved = reuse.Get(layer.Id, layer.GeometryTiles, view, scale, cutters, Build, out _, out _);
+                carved = reuse.Get(layer.Id, layer.GeometryTiles, view, scale, cutters.Select(c => c.River).ToArray(),
+                    Build, out _, out _, cutters.SelectMany(c => c.Owner.Effects.ClippingEnabled
+                        && LowerLayer(document, c.Owner) is { } lower ? new MapLayer[] { c.Owner, lower } : [c.Owner]).ToArray());
             else { carved = Build(
                 (int)Math.Clamp(Math.Ceiling((view.Right - view.Left) * scale) + 2, 1, 16384),
                 (int)Math.Clamp(Math.Ceiling((view.Bottom - view.Top) * scale) + 2, 1, 16384)); carvedOwned = true; }
@@ -874,25 +944,26 @@ public static class SceneRenderer
         if (!options.FastPreview && !simplifiedOverview
             && style.InnerShadowOpacity > 0 && style.ShadowBlur > 0)
         {
+            // An inner shadow is coverage minus its shifted, blurred copy. Drawing the blurred
+            // coverage itself darkened the entire interior and made the very edge lighter.
             using var filter = SKImageFilter.CreateDropShadowOnly(
                 (float)style.ShadowOffsetX, (float)style.ShadowOffsetY,
                 (float)style.ShadowBlur, (float)style.ShadowBlur,
-                SKColors.Black.WithAlpha(Alpha(style.InnerShadowOpacity)));
-            if (blends)
+                SKColors.Black);
+            using var strength = new SKPaint { Color = SKColors.White.WithAlpha(Alpha(style.InnerShadowOpacity)) };
+            canvas.SaveLayer(ToRect(view), strength);
+            withLowers = blends;
+            using (var black = SKColorFilter.CreateBlendMode(SKColors.Black, SKBlendMode.SrcIn))
+            using (var fillShadow = new SKPaint { ColorFilter = black }) DrawCoverageImages(fillShadow);
+            DrawFilteredCoverage(filter, color: null, SKBlendMode.DstOut);
+            withLowers = false;
+            using (var keep = new SKPaint { BlendMode = SKBlendMode.DstIn })
             {
-                // The shading is that of the whole landmass, laid over this piece only: the same
-                // tone on both sides of the join, lighter only towards the real coast.
-                using var atop = new SKPaint { BlendMode = SKBlendMode.SrcATop };
-                canvas.SaveLayer(ToRect(view), atop);
-                withLowers = true;
-                DrawFilteredCoverage(filter, color: null, SKBlendMode.SrcOver);
-                withLowers = false;
+                canvas.SaveLayer(ToRect(view), keep);
+                DrawCoverageImages(null);
                 canvas.Restore();
             }
-            else
-            {
-                DrawFilteredCoverage(filter, color: null, SKBlendMode.SrcATop);
-            }
+            canvas.Restore();
         }
 
         if (blends)

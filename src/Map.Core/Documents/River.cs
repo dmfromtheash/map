@@ -62,6 +62,24 @@ public sealed record RiverStyle
     public double BankShadowOpacity { get; init; } = 0.28;
     public double BankShadowBlur { get; init; } = 4;
 
+    /// <summary>Drawn earth bank outside the water. Zero retains the appearance of older maps.</summary>
+    public double BankReliefWidth { get; init; }
+    public string BankReliefColor { get; init; } = "#FFC1A17D";
+    public double BankHatchOpacity { get; init; } = 0.55;
+
+    /// <summary>Texture-free regional-map drawing; only new rivers and an explicit preset use it.</summary>
+    public static RiverStyle Illustrated(bool pen = false) => new()
+    {
+        WaterColor = pen ? "#FF91A4AB" : "#FF74A7A1",
+        BankColor = pen ? "#FF413B32" : "#FF3F4233", BankWidth = 1.5,
+        BankShadowOpacity = 0.10, BankShadowBlur = 1.4,
+        BankReliefWidth = pen ? 4 : 7,
+        BankReliefColor = pen ? "#28AA987A" : "#FFBA9876", BankHatchOpacity = pen ? 0.68 : 0.48,
+        ShallowColor = pen ? "#90D8DDDA" : "#A0C5DBCA", ShallowWidth = 4,
+        HighlightColor = "#FFE0E4D8", HighlightOpacity = 0.52,
+        EdgeRoughness = 0.42, TextureId = null,
+    };
+
     /// <summary>Thin light flow strokes inside the water; 0 disables them.</summary>
     public string HighlightColor { get; init; } = "#FFDDEFF4";
     public double HighlightOpacity { get; init; } = 0.55;
@@ -222,11 +240,13 @@ public sealed record River
         var s = Style;
         if (string.IsNullOrWhiteSpace(s.WaterColor) || string.IsNullOrWhiteSpace(s.BankColor)
             || string.IsNullOrWhiteSpace(s.HighlightColor) || string.IsNullOrWhiteSpace(s.ShallowColor)
-            || new[] { s.Opacity, s.BankWidth, s.BankShadowOpacity, s.BankShadowBlur, s.HighlightOpacity, s.MouthFade, s.EdgeRoughness, s.ShallowWidth }
+            || string.IsNullOrWhiteSpace(s.BankReliefColor)
+            || new[] { s.Opacity, s.BankWidth, s.BankShadowOpacity, s.BankShadowBlur, s.HighlightOpacity, s.MouthFade, s.EdgeRoughness, s.ShallowWidth, s.BankReliefWidth, s.BankHatchOpacity }
                 .Any(v => !double.IsFinite(v))
             || s.Opacity is < 0 or > 1 || s.BankWidth is < 0 or > 64 || s.BankShadowOpacity is < 0 or > 1
             || s.BankShadowBlur is < 0 or > 64 || s.HighlightOpacity is < 0 or > 1 || s.MouthFade is < 0 or > MaximumWidth
             || s.EdgeRoughness is < 0 or > 1 || s.ShallowWidth is < 0 or > 512
+            || s.BankReliefWidth is < 0 or > 128 || s.BankHatchOpacity is < 0 or > 1
             || !MapFillTextures.IsValidId(s.TextureId) || !MapFillTextures.IsValidOpacity(s.TextureOpacity)
             || !MapFillTextures.IsValidScale(s.TextureScale))
             throw new ArgumentException("Некорректное оформление реки.");

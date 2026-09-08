@@ -57,7 +57,7 @@ public static class RiverRenderer
         var visible = new List<River>();
         foreach (var river in rivers)
         {
-            if (!river.Visible) continue;
+            if (!river.Visible || river.Style.Opacity <= 0) continue;
             if (!RiverGeometry.Evaluate(river).Bounds.Intersects(view)) continue;
             visible.Add(river);
         }
@@ -75,9 +75,9 @@ public static class RiverRenderer
         foreach (var river in visible)
         {
             var key = EdgeKey(river.Style);
-            var index = groups.FindIndex(g => g.Key == key);
-            if (index < 0) groups.Add((key, [river]));
-            else groups[index].Rivers.Add(river);
+            // Merge adjacent looks only. A/B/A must retain its stack order at crossings.
+            if (groups.Count == 0 || groups[^1].Key != key) groups.Add((key, [river]));
+            else groups[^1].Rivers.Add(river);
         }
         foreach (var (key, members) in groups)
         {
@@ -98,17 +98,17 @@ public static class RiverRenderer
     };
 
     /// <summary>Erases the merged body of a river from whatever the canvas holds (land coverage carving).</summary>
-    public static void CutBody(SKCanvas canvas, River river, double viewScale)
+    public static void CutBody(SKCanvas canvas, River river, double viewScale, SKBlendMode blend = SKBlendMode.DstOut)
     {
         var scale = Math.Max(viewScale, 1e-4);
         var cache = Bodies.GetValue(river, static _ => new BodyCache());
         lock (cache)
         {
             var entry = cache.Get(river, MinimumScreenWidth / scale);
-            using var erase = new SKPaint { BlendMode = SKBlendMode.DstOut, IsAntialias = true, Style = SKPaintStyle.Fill };
+            using var erase = new SKPaint { BlendMode = blend, IsAntialias = true, Style = SKPaintStyle.Fill };
             canvas.DrawPath(entry.Body, erase);
             // A hair of extra clearance keeps the coast outline from peeking under the bank stroke.
-            using var edge = new SKPaint { BlendMode = SKBlendMode.DstOut, IsAntialias = true, Style = SKPaintStyle.Stroke,
+            using var edge = new SKPaint { BlendMode = blend, IsAntialias = true, Style = SKPaintStyle.Stroke,
                 StrokeWidth = (float)Math.Max(river.Style.BankWidth * 0.5, 0.6 / scale), StrokeJoin = SKStrokeJoin.Round };
             canvas.DrawPath(entry.Body, edge);
         }
@@ -120,7 +120,8 @@ public static class RiverRenderer
     /// each crossing is softened, so the outline of the land washes out into the mouth instead
     /// of being cut by it. <paramref name="insideLand"/> reads the layer's own coverage.
     /// </summary>
-    public static void WashCoast(SKCanvas canvas, River river, Func<double, double, bool> insideLand, double viewScale)
+    public static void WashCoast(SKCanvas canvas, River river, Func<double, double, bool> insideLand, double viewScale,
+        SKBlendMode blend = SKBlendMode.DstOut)
     {
         ArgumentNullException.ThrowIfNull(insideLand);
         var scale = Math.Max(viewScale, 1e-4);
@@ -142,7 +143,7 @@ public static class RiverRenderer
                 if (sigma * scale < 0.5) continue;
                 using var wash = new SKPaint
                 {
-                    Color = SKColors.Black, BlendMode = SKBlendMode.DstOut, IsAntialias = true,
+                    Color = SKColors.Black, BlendMode = blend, IsAntialias = true,
                     MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, (float)sigma),
                 };
                 canvas.DrawCircle((float)sample.X, (float)sample.Y, (float)(half * 1.5), wash);
@@ -254,7 +255,7 @@ public static class RiverRenderer
             using var reach = new SKPaint
             {
                 Style = SKPaintStyle.Stroke, StrokeJoin = SKStrokeJoin.Round,
-                StrokeWidth = (float)(2 * (bank + style.BankShadowBlur * 3 + 2)),
+                StrokeWidth = (float)(2 * (bank + style.BankShadowBlur * 3 + style.BankReliefWidth * 1.8 + 2)),
             };
             reach.GetFillPath(ownUnion, nearby);
             nearby.AddPath(ownUnion);
@@ -275,6 +276,13 @@ public static class RiverRenderer
                 MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, (float)style.BankShadowBlur),
             };
             canvas.DrawPath(union, halo);
+            canvas.Restore();
+        }
+
+        if (!fastPreview && style.BankReliefWidth > 0)
+        {
+            EnterNearby();
+            RiverBankRenderer.Draw(canvas, union, style, scale, clipToLand, layerRect);
             canvas.Restore();
         }
 
@@ -352,9 +360,16 @@ public static class RiverRenderer
             canvas.Restore();
         }
 
+        if (!fastPreview && style.BankReliefWidth > 0)
+        {
+            canvas.Save();
+            canvas.ClipPath(ownUnion, SKClipOperation.Intersect, antialias: true);
+            RiverBankRenderer.DrawWaterLines(canvas, union, style, scale);
+            canvas.Restore();
+        }
         foreach (var part in parts)
         {
-            if (part.River.Style.HighlightOpacity <= 0) continue;
+            if (part.River.Style.HighlightOpacity <= 0 || style.BankReliefWidth > 0) continue;
             // Flow strokes belong to the channel that flows: where its end lies inside another
             // body of water they would cross that water, so they stop at its edge.
             canvas.Save();
@@ -368,12 +383,19 @@ public static class RiverRenderer
         if (bank > 0)
         {
             EnterNearby();
-            using var edge = new SKPaint
+            if (!fastPreview && style.BankReliefWidth > 0)
             {
-                Color = SceneRenderer.ParseColor(style.BankColor), IsAntialias = true,
-                Style = SKPaintStyle.Stroke, StrokeWidth = (float)bank, StrokeJoin = SKStrokeJoin.Round,
-            };
-            canvas.DrawPath(union, edge);
+                RiverBankRenderer.DrawInkOutline(canvas, union, style);
+            }
+            else
+            {
+                using var edge = new SKPaint
+                {
+                    Color = SceneRenderer.ParseColor(style.BankColor), IsAntialias = true,
+                    Style = SKPaintStyle.Stroke, StrokeWidth = (float)bank, StrokeJoin = SKStrokeJoin.Round,
+                };
+                canvas.DrawPath(union, edge);
+            }
             canvas.Restore();
         }
 
@@ -498,14 +520,24 @@ public static class RiverRenderer
     /// <summary>Builds the merged body outline of every channel of a river for one evaluation.</summary>
     internal static SKPath BuildBody(RiverGeometrySet set, RiverStyle style)
     {
-        using var union = new SKPath { FillType = SKPathFillType.Winding };
+        using var union = new SKPath();
         foreach (var geometry in set.Channels.Values)
         {
             var outline = RiverGeometry.Outline(geometry, style.EdgeRoughness);
             if (outline.Count < 3) continue;
-            union.MoveTo((float)outline[0].X, (float)outline[0].Y);
-            for (var i = 1; i < outline.Count; i++) union.LineTo((float)outline[i].X, (float)outline[i].Y);
-            union.Close();
+            using var channel = new SKPath();
+            channel.MoveTo((float)outline[0].X, (float)outline[0].Y);
+            for (var i = 1; i < outline.Count; i++) channel.LineTo((float)outline[i].X, (float)outline[i].Y);
+            channel.Close();
+            // A lake may be traced in either direction. Adding opposite windings to one path
+            // cancels their overlap and leaves an earth plug in its inflow/outflow.
+            if (union.IsEmpty) union.AddPath(channel);
+            else
+            {
+                using var merged = new SKPath();
+                if (union.Op(channel, SKPathOp.Union, merged)) { union.Reset(); union.AddPath(merged); }
+                else union.AddPath(channel);
+            }
         }
         var body = new SKPath();
         if (!union.Simplify(body)) { body.Dispose(); body = new SKPath(union); }

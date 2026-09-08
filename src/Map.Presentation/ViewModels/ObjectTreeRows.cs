@@ -98,11 +98,11 @@ public static class ObjectTreeRows
         var query = (searchText ?? "").Trim();
         var layers = document.Layers.OfType<ObjectLayer>().ToArray();
         // Water systems and pieces of land are objects of the map like any other, so they belong
-        // in this list. They are listed above the ordinary rows - water, then land, each from the
-        // highest level down - and only while a group is not open, which is a view into one group
-        // and nothing else.
+        // in this list. Ordinary objects cover the terrain; terrain then follows descending
+        // level, water above land within a level. An open group shows only its own members.
         var water = openGroupId is null
-            ? [.. WaterRows(layers, query, filter, selectedWaterIds), .. LandRows(document, query, filter, selectedLandId)]
+            ? WaterRows(layers, query, filter, selectedWaterIds).Concat(LandRows(document, query, filter, selectedLandId))
+                .OrderByDescending(row => row.Level).ThenBy(row => row.Kind == ObjectTreeRowKind.Water ? 0 : 1).ToArray()
             : (IReadOnlyList<ObjectTreeRow>)[];
         IReadOnlyList<ObjectTreeRow> rest;
         if (query.Length == 0 && filter == ObjectTypeFilter.All && openGroupId is null
@@ -117,7 +117,7 @@ public static class ObjectTreeRows
             // but only compact entries are retained; Avalonia creates a heavy row model on demand.
             rest = BuildVirtualRows(objects, groups, openGroupId, selectedIds, query, filter);
         }
-        return water.Count == 0 ? rest : new PrefixedRowList(water, rest);
+        return water.Count == 0 ? rest : new PrefixedRowList(rest, water);
     }
 
     /// <summary>One row per piece of land, highest level first, matching the search and the type filter.</summary>
@@ -243,10 +243,8 @@ public static class ObjectTreeRows
     /// <summary>
     /// Every object of the document as the panel lists them: the topmost first. A layers panel
     /// reads top to bottom, and so does this list - the layer that covers the others leads, and
-    /// inside a layer the object drawn last (the one on top) leads. Below this size the order
-    /// is the true draw order, sublayer included; a larger layer keeps its list order reversed,
-    /// so a million-object scene never sorts on every refresh, and the level badge of each row
-    /// still says where it sits.
+    /// inside a layer the object drawn last (the one on top) leads. Immutable object lists share
+    /// their cached ordering across selection, mask and layer-property refreshes.
     /// </summary>
     private static IEnumerable<SceneObject> AllObjects(MapDocument document)
     {
@@ -258,10 +256,12 @@ public static class ObjectTreeRows
         }
     }
 
-    /// <summary>Objects of one layer bottom to top; the exact draw order while sorting stays cheap.</summary>
-    internal const int DrawOrderSortLimit = 5000;
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<object, DrawOrder> DrawOrders = [];
+    private sealed record DrawOrder(IReadOnlyList<SceneObject> Items);
+
+    /// <summary>Exact stable order at every scene size; computed once per immutable object list.</summary>
     private static IReadOnlyList<SceneObject> StackOrder(ObjectLayer layer) =>
-        layer.Objects.Count <= DrawOrderSortLimit ? SceneGeometry.InDrawOrder(layer) : layer.Objects;
+        DrawOrders.GetValue(layer.Objects, _ => new(SceneGeometry.InDrawOrder(layer))).Items;
 
     private static Dictionary<Guid, List<SceneObject>> BuildGroupIndex(
         IReadOnlyList<SceneObject> objects)

@@ -112,10 +112,22 @@ public sealed partial class EditorViewModel
     /// </summary>
     public bool HitWater(double x, double y, double tolerance, out ObjectLayer layer, out River river, out Guid channelId)
     {
-        foreach (var candidateLayer in Session.Document.Layers.OfType<ObjectLayer>().Reverse().Where(l => l.Visible && l.Opacity > 0))
-            foreach (var candidate in candidateLayer.Rivers.Reverse())
+        var document = Session.Document;
+        if (!double.IsFinite(x) || !double.IsFinite(y) || x < 0 || y < 0
+            || x >= document.Canvas.Width || y >= document.Canvas.Height)
+        { layer = null!; river = null!; channelId = Guid.Empty; return false; }
+        var coveringLand = TerrainOrder.LandAt(document, x, y);
+        var candidates = document.Layers.OfType<ObjectLayer>()
+            .Where(l => l.Visible && l.Opacity > 0 && TerrainOrder.MaskCoverageAt(l, x, y) > 0)
+            .SelectMany(l => l.Rivers.Select(r => (Layer: l, River: r)))
+            .OrderBy(pair => pair.River.Level).Reverse();
+        foreach (var pair in candidates)
             {
-                if (!candidate.Visible) continue;
+                var candidateLayer = pair.Layer;
+                var candidate = pair.River;
+                if (!candidate.Visible || candidate.Style.Opacity <= 0 && !candidate.Style.CutsLand
+                    || coveringLand is { } land && land.Level > candidate.Level
+                    || !WaterClippingVisibleAt(document, candidateLayer, x, y)) continue;
                 var set = RiverGeometry.Evaluate(candidate);
                 if (!set.Bounds.Intersects(new WorldBounds(x - tolerance, y - tolerance, x + tolerance, y + tolerance))) continue;
                 if (RiverGeometry.TryClosest(set, x, y, tolerance, out var hit, out _, out _, out _, out _))
@@ -125,6 +137,29 @@ public sealed partial class EditorViewModel
             }
         layer = null!; river = null!; channelId = Guid.Empty;
         return false;
+    }
+
+    private static bool WaterClippingVisibleAt(MapDocument document, ObjectLayer layer, double x, double y)
+    {
+        if (!layer.Effects.ClippingEnabled) return true;
+        var index = document.Layers.ToList().FindIndex(l => l.Id == layer.Id);
+        if (index <= 0 || document.Layers[index - 1] is not { Visible: true, Opacity: > 0 } lower) return true;
+        if (TerrainOrder.MaskCoverageAt(lower, x, y) == 0) return false;
+        if (lower is LandLayer land) return TerrainOrder.CoverageAt(land, x, y) > 0;
+        if (lower is ObjectLayer objects)
+            return objects.Objects.Any(o => o.Visible && objects.StateFor(o.Sublayer).Visible && SceneGeometry.Contains(o, x, y))
+                || objects.Rivers.Any(r => r.Visible && r.Style.Opacity > 0 && RiverGeometry.TryClosest(
+                    RiverGeometry.Evaluate(r), x, y, 0, out _, out _, out _, out _, out _))
+                || objects.Rivers.Where(r => r.Visible && r.Style.Opacity > 0).Any(r =>
+                    RiverGeometry.Evaluate(r).Channels.Values.Any(c => RiverGeometry.InsideLake(c, x, y)));
+        if (lower is IRasterContentLayer raster)
+        {
+            var key = new TileKey((int)Math.Floor(x / TileMap.TileSize), (int)Math.Floor(y / TileMap.TileSize));
+            var tile = raster.ContentTiles.TryGet(key);
+            var offset = ((int)y % TileMap.TileSize * TileMap.TileSize + (int)x % TileMap.TileSize) * raster.ContentTiles.BytesPerPixel;
+            return tile is not null && tile[offset + raster.ContentTiles.BytesPerPixel - 1] > 0;
+        }
+        return true;
     }
 
     /// <summary>

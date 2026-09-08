@@ -12,6 +12,43 @@ namespace Map.Presentation.Tests;
 /// </summary>
 public sealed class Stage19LandSelectionTests
 {
+    [Fact]
+    public void Picking_follows_terrain_levels_and_hidden_water_cannot_be_reordered()
+    {
+        var (editor, router, land, objects) = NewEditor();
+        var low = new River { Name = "low", Level = -1, Channels = [RiverEditor.NewChannel([new(20, 100), new(230, 100)], 30)] };
+        var high = low with { Id = Guid.NewGuid(), Name = "high", Level = 3 };
+        editor.Session.Execute(new RiverCommand(objects.Id, high.Id, high, "high"));
+        editor.Session.Execute(new RiverCommand(objects.Id, low.Id, low, "low"));
+        Click(router, 120, 100);
+        Assert.Equal(high.Id, editor.SelectedRiver?.Id);
+        editor.Session.Execute(new RiverCommand(objects.Id, high.Id, high with { Visible = false }, "hide"));
+        editor.ClearWaterSelection();
+        Click(router, 120, 100);
+        Assert.Equal(land.Id, editor.SelectedLand?.Id);
+        Assert.Equal(0, editor.WaterSelectionCount);
+        editor.Session.Execute(new RiverCommand(objects.Id, low.Id, low with { Locked = true }, "lock"));
+        editor.SelectWater(low.Id);
+        var revision = editor.Session.Revision;
+        Assert.False(editor.ReorderSelectedWater(-1, true));
+        Assert.Equal(revision, editor.Session.Revision);
+    }
+
+    [Fact]
+    public void A_zero_mask_hides_water_and_land_from_picking()
+    {
+        var (editor, _, land, objects) = NewEditor();
+        var river = new River { Channels = [RiverEditor.NewChannel([new(20, 100), new(230, 100)], 30)] };
+        editor.Session.Execute(new RiverCommand(objects.Id, river.Id, river, "river"));
+        var mask = new LayerMask(TileMap.Empty(1).With(new TileKey(0, 0), new byte[TileMap.TileSize * TileMap.TileSize]), true);
+        var document = editor.Session.Document.WithLayer(objects.Id, layer => layer.WithMask(mask))
+            .WithLayer(land.Id, layer => layer.WithMask(mask));
+        var masked = new EditorViewModel(document, null, false, new FakeProjectStore(), new FakeRecentMaps(),
+            new FakeFilePicker(), new FakePrompts(), new FakeLog());
+        Assert.False(masked.HitWater(120, 100, 0, out _, out _, out _));
+        Assert.Null(TerrainOrder.LandAt(document, 120, 100));
+    }
+
     private static (EditorViewModel Editor, CanvasInputRouter Router, LandLayer Land, ObjectLayer Objects) NewEditor()
     {
         var coverage = Enumerable.Repeat((byte)255, TileMap.TileSize * TileMap.TileSize).ToArray();

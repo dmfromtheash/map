@@ -47,6 +47,7 @@ public sealed class Stage19RiverRoundTripTests
                 TaperSource = false, EdgeRoughness = 0.35, CutsLand = false, ClipToLand = true,
                 TextureId = "water-open", TextureOpacity = 0.65, TextureScale = 220,
                 ShallowWidth = 4.5, ShallowColor = "#99CCE4F0",
+                BankReliefWidth = 6.5, BankReliefColor = "#FFA9896A", BankHatchOpacity = .64,
             },
         };
         var session = new EditingSession(reopenedOld);

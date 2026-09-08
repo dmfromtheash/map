@@ -46,7 +46,7 @@ public static class TerrainOrder
         {
             var land = lands[i];
             if (!land.Visible || land.Opacity <= 0) continue;
-            if (CoverageAt(land, x, y) > 127) return land;
+            if (CoverageAt(land, x, y) > 127 && MaskCoverageAt(land, x, y) > 0) return land;
         }
         return null;
     }
@@ -61,6 +61,18 @@ public static class TerrainOrder
         var px = (int)Math.Clamp(x - (key.X * TileMap.TileSize), 0, TileMap.TileSize - 1);
         var py = (int)Math.Clamp(y - (key.Y * TileMap.TileSize), 0, TileMap.TileSize - 1);
         return tile[(py * TileMap.TileSize) + px];
+    }
+
+    /// <summary>Effective mask coverage; missing tiles and disabled masks reveal the layer.</summary>
+    public static byte MaskCoverageAt(MapLayer layer, double x, double y)
+    {
+        if (!double.IsFinite(x) || !double.IsFinite(y)) return 0;
+        if (layer.Mask is not { Enabled: true } mask) return 255;
+        var key = new TileKey((int)Math.Floor(x / TileMap.TileSize), (int)Math.Floor(y / TileMap.TileSize));
+        if (mask.Tiles.TryGet(key) is not { } tile) return 255;
+        var px = (int)Math.Clamp(x - key.X * TileMap.TileSize, 0, TileMap.TileSize - 1);
+        var py = (int)Math.Clamp(y - key.Y * TileMap.TileSize, 0, TileMap.TileSize - 1);
+        return tile[py * TileMap.TileSize + px];
     }
 
     /// <summary>World bounds of the tiles a land layer holds, or null when it holds none.</summary>

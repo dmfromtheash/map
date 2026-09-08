@@ -81,11 +81,19 @@ public sealed class Stage19RiverRenderingTests
         Assert.False(RiverGeometry.Contains(river, 20, 240));
     }
 
-    [Fact]
-    public async Task Export_tiles_match_the_single_image_across_the_junction_boundary()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Export_tiles_match_the_single_image_across_the_junction_boundary(bool illustrated)
     {
         using var temp = new TempDirectory();
         var document = Fixture(out _, out _, out _);
+        if (illustrated)
+        {
+            var layer = document.Layers.OfType<ObjectLayer>().Single();
+            document = document.WithLayer(layer.Id, _ => layer with
+                { Rivers = [layer.Rivers[0] with { Style = RiverStyle.Illustrated() with { BankReliefWidth = 24 } }] });
+        }
         using var stamps = new ExportStampImageSource(document, null, null);
         var engine = new ImageExportEngine(new ExportEngineSettings { TileEdge = 256 });
         ExportRequest Request(ExportOutputMode mode) => new(ExportImageFormat.Png, ExportAreaMode.WholeCanvas, null, 512, 256, mode, true, false);

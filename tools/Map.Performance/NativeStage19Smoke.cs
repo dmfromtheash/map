@@ -68,7 +68,7 @@ internal static class NativeStage19Smoke
     }
 }
 
-public sealed class Stage19Application : Application
+public sealed partial class Stage19Application : Application
 {
     internal static PerformanceOptions Options = null!;
     internal static TaskCompletionSource<NativeStage19Report> Completion = null!;
@@ -116,7 +116,7 @@ public sealed class Stage19Application : Application
     {
         var desktop = (IClassicDesktopStyleApplicationLifetime)ApplicationLifetime!;
         _shortcuts = new EditorShortcutSettings();
-        _workspace = Path.Combine(Path.GetDirectoryName(Options.OutputPath)!, "stage19-native");
+        _workspace = Path.Combine(Path.GetDirectoryName(Options.OutputPath)!, "stage19-native-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_workspace);
         Environment.SetEnvironmentVariable("MAP_UI_TEST_MODE", "1");
         Environment.SetEnvironmentVariable("MAP_UI_TEST_PROFILE_ROOT", Path.Combine(_workspace, "profile"));
@@ -135,6 +135,8 @@ public sealed class Stage19Application : Application
         OpenEditor(document);
         _report.Required = Environment.GetEnvironmentVariable("MAP_STAGE19_LAKE_ONLY") == "1" ? LakeRequired : FullRequired;
         _report.Scenario = Environment.GetEnvironmentVariable("MAP_STAGE19_LAKE_ONLY") == "1" ? "lake-only" : "full";
+        if (Environment.GetEnvironmentVariable("MAP_STAGE19_SHORES_ONLY") == "1")
+        { _report.Required = ShoreRequired; _report.Scenario = "illustrated-shores"; }
         _window.Opened += async (_, _) =>
         {
             try { await Execute(); }
@@ -176,6 +178,7 @@ public sealed class Stage19Application : Application
     private async Task Execute()
     {
         await Settle();
+        if (_report.Scenario == "illustrated-shores") { await ShoreOnly(); return; }
         await Click("RiverToolButton");
         if (Environment.GetEnvironmentVariable("MAP_STAGE19_LAKE_ONLY") == "1") { await LakeOnly(); return; }
         Require(_editor.ActiveTool == EditorTool.River, "Rail button did not activate the river tool");

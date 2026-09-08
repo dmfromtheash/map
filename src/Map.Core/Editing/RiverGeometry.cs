@@ -104,7 +104,7 @@ public static class RiverGeometry
         foreach (var channel in pending)
             result[channel.Id] = BuildChannel(river, channel with { Mouth = null, Source = null }, result, minimumWidth);
 
-        var pad = river.Style.BankWidth + river.Style.BankShadowBlur * 3 + 1;
+        var pad = river.Style.BankWidth + river.Style.BankShadowBlur * 3 + river.Style.BankReliefWidth * 1.8 + 1;
         var bounds = new WorldBounds(double.MaxValue, double.MaxValue, double.MinValue, double.MinValue);
         foreach (var geometry in result.Values)
         {

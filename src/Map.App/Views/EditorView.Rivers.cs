@@ -151,8 +151,9 @@ public sealed partial class EditorView
         });
 
         _riverTaper = AppearanceToggle("RiverTaperSourceToggle", "Сужать исток", () => _editor.SelectedRiver?.Style.TaperSource, _editor.SetRiverTaperSource);
-        _riverCutsLand = AppearanceToggle("RiverCutsLandToggle", "Резать землю (берег огибает реку)", () => _editor.SelectedRiver?.Style.CutsLand, _editor.SetRiverCutsLand);
-        _riverClipToLand = AppearanceToggle("RiverClipToLandToggle", "Только по суше (обрывать у берега)", () => _editor.SelectedRiver?.Style.ClipToLand, _editor.SetRiverClipToLand);
+        _riverCutsLand = AppearanceToggle("RiverCutsLandToggle", "Формировать русло и берега", () => _editor.SelectedRiver?.Style.CutsLand, _editor.SetRiverCutsLand);
+        ToolTip.SetTip(_riverCutsLand, "Река прорезает землю своего уровня и ниже. Земля более высокого уровня перекрывает реку.");
+        _riverClipToLand = AppearanceToggle("RiverClipToLandToggle", "Переходить в море у берега", () => _editor.SelectedRiver?.Style.ClipToLand, _editor.SetRiverClipToLand);
         _riverFlowBlock = Ui.Subgroup("Ширина по течению", new StackPanel
         {
             Spacing = 4, Children =
@@ -170,6 +171,14 @@ public sealed partial class EditorView
             Spacing = 4, Children =
             {
                 _riverName,
+                Ui.Subgroup("Стиль рисунка", new StackPanel
+                {
+                    Spacing = 4, Children =
+                    {
+                        Ui.TextButton("RiverIllustratedStyleButton", "Рисованная карта", () => _editor.ApplyIllustratedRiverStyle(false), "compact"),
+                        Ui.TextButton("RiverPenStyleButton", "Атлас пером", () => _editor.ApplyIllustratedRiverStyle(true), "compact"),
+                    },
+                }),
                 Ui.Subgroup("Вода", new StackPanel
                 {
                     Spacing = 4, Children =
@@ -189,6 +198,8 @@ public sealed partial class EditorView
                     {
                         AppearanceColorBox("RiverBankColorBox", "Цвет берега", () => _editor.RiverBankColor, _editor.SetRiverBankColor),
                         AppearanceNumberBox("RiverBankWidthBox", "Кромка берега", "px", () => _editor.SelectedRiver?.Style.BankWidth, _editor.SetRiverBankWidth),
+                        AppearanceNumberBox("RiverBankReliefBox", "Ширина откоса", "ед.", () => _editor.SelectedRiver?.Style.BankReliefWidth, _editor.SetRiverBankReliefWidth),
+                        _riverCutsLand,
                     },
                 }),
                 Ui.Advanced("RiverStyleAdvanced", new StackPanel
@@ -200,13 +211,14 @@ public sealed partial class EditorView
                             () => _editor.RiverTextureScale, _editor.SetRiverTextureScale),
                         AppearanceColorBox("RiverShallowColorBox", "Цвет отмели", () => _editor.RiverShallowColor, _editor.SetRiverShallowColor),
                         AppearanceNumberBox("RiverBankShadowBox", "Тень берега", "%", () => _editor.SelectedRiver is { } r ? r.Style.BankShadowOpacity * 100 : null, _editor.SetRiverBankShadowPercent),
+                        AppearanceColorBox("RiverBankReliefColorBox", "Земляной откос", () => _editor.SelectedRiver?.Style.BankReliefColor, _editor.SetRiverBankReliefColor),
+                        AppearanceNumberBox("RiverBankHatchBox", "Штриховка берега", "%", () => _editor.SelectedRiver is { } r ? r.Style.BankHatchOpacity * 100 : null, _editor.SetRiverBankHatchPercent),
                         AppearanceNumberBox("RiverEdgeRoughnessBox", "Шероховатость кромки", "%", () => _editor.SelectedRiver is { } r ? r.Style.EdgeRoughness * 100 : null, _editor.SetRiverEdgeRoughnessPercent),
                         AppearanceColorBox("RiverHighlightColorBox", "Блики", () => _editor.RiverHighlightColor, _editor.SetRiverHighlightColor),
                         AppearanceNumberBox("RiverHighlightBox", "Сила бликов", "%", () => _editor.SelectedRiver is { } r ? r.Style.HighlightOpacity * 100 : null, _editor.SetRiverHighlightPercent),
                         AppearanceNumberBox("RiverOpacityBox", "Непрозрачность", "%", () => _editor.SelectedRiver is { } r ? r.Style.Opacity * 100 : null, _editor.SetRiverOpacityPercent),
                         _riverTaper,
                         AppearanceNumberBox("RiverMouthFadeBox", "Растворять устье", "ед.", () => _editor.SelectedRiver?.Style.MouthFade, _editor.SetRiverMouthFade),
-                        _riverCutsLand,
                         _riverClipToLand,
                     },
                 }),

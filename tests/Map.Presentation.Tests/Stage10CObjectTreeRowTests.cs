@@ -10,6 +10,15 @@ namespace Map.Presentation.Tests;
 /// </summary>
 public class Stage10CObjectTreeRowTests
 {
+    [Fact]
+    public void Large_layers_keep_the_same_order_as_the_canvas()
+    {
+        var objects = Enumerable.Range(0, 6000).Select(index => Object($"item-{index}") with { Sublayer = index % 21 - 10 }).ToArray();
+        var document = Build(objects);
+        var rows = ObjectTreeRows.Build(document, "", ObjectTypeFilter.All, null, []);
+        Assert.Equal(objects.OrderBy(o => o.Sublayer).Reverse().Select(o => o.Id), rows.Select(row => row.Object!.Id));
+    }
+
     private static readonly Guid GroupId = Guid.Parse("12345678-1234-1234-1234-123456789012");
 
     private static SceneObject Object(
