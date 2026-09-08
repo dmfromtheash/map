@@ -1,5 +1,7 @@
 namespace Map.Assets;
 
+public enum AssetSourceFilter { All, Mine, BuiltIn }
+
 public enum AssetSortOrder
 {
     ImportedNewest = 0,
@@ -27,6 +29,10 @@ public sealed record AssetQuery
     public string? CollectionId { get; init; }
 
     public string? Tag { get; init; }
+
+    /// <summary>Any selected tag within a branch, all selected branches (Style, Subject, etc.).</summary>
+    public IReadOnlyCollection<string> Tags { get; init; } = [];
+    public AssetSourceFilter Source { get; init; }
 
     public bool UntaggedOnly { get; init; }
 

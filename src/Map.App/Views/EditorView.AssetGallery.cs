@@ -67,6 +67,8 @@ public sealed partial class EditorView
 
     private Control BuildAssetsTab()
     {
+        _galleryTileSize = _editor.LibraryTileSize;
+        _galleryShowNames = _editor.LibraryShowNames;
         BuildLibraryDiagnosticBanner();
         BuildLibraryGrid();
         _selectedSetBlock = BuildSelectedSetBlock();
@@ -164,7 +166,12 @@ public sealed partial class EditorView
         _libraryGroupMenu.Flyout = groupMenu;
 
         var viewMenu = new MenuFlyout();
-        _libraryShowNamesItem = MenuEntry("Показывать названия", () => { _galleryShowNames = !_galleryShowNames; RebuildGalleryRows(); }, "LibraryShowNamesItem");
+        _libraryShowNamesItem = MenuEntry("Показывать названия", () =>
+        {
+            _galleryShowNames = !_galleryShowNames;
+            _editor.LibraryShowNames = _galleryShowNames;
+            RebuildGalleryRows();
+        }, "LibraryShowNamesItem");
         _libraryShowNamesItem.ToggleType = MenuItemToggleType.CheckBox;
         viewMenu.Items.Add(_libraryShowNamesItem);
         viewMenu.Items.Add(new Separator());
@@ -199,6 +206,7 @@ public sealed partial class EditorView
             var size = Math.Round(_libraryTileSizeSlider.Value / 8) * 8;
             if (Math.Abs(size - _galleryTileSize) < 0.5) return;
             _galleryTileSize = size;
+            _editor.LibraryTileSize = size;
             QueueGalleryRelayout();
         };
         var toolsRight = new StackPanel
@@ -280,9 +288,18 @@ public sealed partial class EditorView
     private void SyncCollectionTree()
     {
         _collectionTree.Children.Clear();
-        _collectionTree.Children.Add(NavigatorRow("Collection_All", "Все ассеты", _editor.LibrarySets.Count, 0, null,
-            _editor.LibraryCollectionId is null, () => { _editor.LibraryCollectionId = null; SyncAssetList(); }));
-        Add(_editor.LibraryCollections, 0);
+        _collectionTree.Children.Add(NavigatorRow("Collection_All", "Все ассеты", _editor.LibrarySourceCount(AssetSourceFilter.All), 0, null,
+            _editor.LibraryCollectionId is null && _editor.LibrarySource == AssetSourceFilter.All,
+            () => { _editor.LibrarySource = AssetSourceFilter.All; _editor.LibraryCollectionId = null; SyncAssetList(); }));
+        foreach (var (source, title) in new[] { (AssetSourceFilter.Mine, "Мои"), (AssetSourceFilter.BuiltIn, "Map") })
+        {
+            var capturedSource = source;
+            _collectionTree.Children.Add(NavigatorRow("Collection_Source" + source, title,
+                _editor.LibrarySourceCount(source), 0, null,
+                _editor.LibrarySource == source && _editor.LibraryCollectionId is null,
+                () => { _editor.LibrarySource = capturedSource; _editor.LibraryCollectionId = null; SyncAssetList(); }));
+        }
+        Add(_editor.LibraryCollections, 1);
         if (_editor.LibraryCollections.Count == 0)
         {
             _collectionTree.Children.Add(new TextBlock
@@ -385,7 +402,10 @@ public sealed partial class EditorView
             chip.Click += (_, _) => { clear(); SyncAssetList(); };
             _libraryFilterChips.Children.Add(chip);
         }
-        if (_editor.LibraryTag is { } tag) Chip("Tag", "Тег: " + tag, () => _editor.LibraryTag = null);
+        foreach (var tag in _editor.LibraryTags)
+            Chip("Tag_" + Sanitize(tag), "Тег: " + tag, () => _editor.SetLibraryTagSelected(tag, false));
+        if (_editor.LibrarySource != AssetSourceFilter.All)
+            Chip("Source", _editor.LibrarySource == AssetSourceFilter.Mine ? "Мои" : "Map", () => _editor.LibrarySource = AssetSourceFilter.All);
         if (_editor.LibraryUntaggedOnly) Chip("Untagged", "Без тегов", () => _editor.LibraryUntaggedOnly = false);
         if (_editor.LibraryFavoritesOnly) Chip("Favorites", "Избранное", () => _editor.LibraryFavoritesOnly = false);
         if (_editor.LibraryRecentOnly) Chip("Recent", "Недавние", () => _editor.LibraryRecentOnly = false);
@@ -435,7 +455,7 @@ public sealed partial class EditorView
             {
                 _libraryTagSuggestions.IsOpen = false;
                 _assetSearch.Text = "";
-                _editor.LibraryTag = captured;
+                _editor.SetLibraryTagSelected(captured, true);
                 SyncAssetList();
             };
             _libraryTagSuggestionItems.Children.Add(item);
@@ -444,6 +464,46 @@ public sealed partial class EditorView
     }
 
     // ------------------------------------------------------------------ grid
+
+    private readonly HashSet<string> _collapsedTagBranches = new(StringComparer.OrdinalIgnoreCase);
+    private string? _libraryTagTreeKey;
+
+    private void SyncLibraryTagTree()
+    {
+        var key = string.Join('\n', _editor.LibraryTagChoices) + "\n--\n" + string.Join('\n', _editor.LibraryTags.Order());
+        if (_libraryTagTreeKey == key) return;
+        _libraryTagTreeKey = key;
+        _libraryTagTree.Children.Clear();
+        _libraryTagTree.Children.Add(new TextBlock
+        {
+            Text = "Внутри раздела — любой тег; между разделами — пересечение.", TextWrapping = TextWrapping.Wrap,
+        }.Classed("faint", "role-caption"));
+        Add(_libraryTagTree, _editor.LibraryTagChoices, "");
+
+        void Add(StackPanel panel, IEnumerable<string> tags, string prefix)
+        {
+            foreach (var group in tags.GroupBy(tag => tag[prefix.Length..].Split('/')[0], StringComparer.OrdinalIgnoreCase))
+            {
+                var path = prefix + group.Key;
+                if (group.Any(tag => tag.Equals(path, StringComparison.OrdinalIgnoreCase)))
+                {
+                    var check = new CheckBox { Content = group.Key, IsChecked = _editor.LibraryTags.Contains(path, StringComparer.OrdinalIgnoreCase) }
+                        .Named("LibraryTag_" + Sanitize(path));
+                    AutomationProperties.SetName(check, "Тег " + path);
+                    check.IsCheckedChanged += (_, _) => { _editor.SetLibraryTagSelected(path, check.IsChecked == true); SyncAssetList(); };
+                    panel.Children.Add(check);
+                }
+                var descendants = group.Where(tag => tag.Length > path.Length).ToArray();
+                if (descendants.Length == 0) continue;
+                var children = new StackPanel { Margin = new Thickness(12, 0, 0, 0), Spacing = 2 };
+                Add(children, descendants, path + "/");
+                var branch = new Expander { Header = group.Key, Content = children, IsExpanded = !_collapsedTagBranches.Contains(path) };
+                branch.Collapsed += (_, _) => _collapsedTagBranches.Add(path);
+                branch.Expanded += (_, _) => _collapsedTagBranches.Remove(path);
+                panel.Children.Add(branch);
+            }
+        }
+    }
 
     /// <summary>
     /// One real virtualized list over a flat sequence of group headers and tile rows. Avalonia

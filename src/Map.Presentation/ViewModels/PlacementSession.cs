@@ -44,7 +44,9 @@ public sealed record StampToolSettings
 public sealed record EditorLocalPreferences(
     PlacementAutoSelectPolicy AutoSelect = PlacementAutoSelectPolicy.Auto,
     bool PrimaryAutosaveEnabled = true,
-    StampToolSettings? Stamp = null);
+    StampToolSettings? Stamp = null,
+    double LibraryTileSize = 112,
+    bool LibraryShowNames = true);
 
 /// <summary>
 /// Editor-only description of an armed placement. It never enters the document or history. Dense

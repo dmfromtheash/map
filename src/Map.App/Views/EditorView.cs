@@ -321,7 +321,7 @@ public sealed partial class EditorView : UserControl
     private readonly Dictionary<string, Button> _placementModeButtons = [];
     private readonly Dictionary<PlacementAutoSelectPolicy, Button> _autoSelectButtons = [];
     private ToggleButton _randomVariantToggle = null!;
-    private ComboBox _libraryTagFilter = null!;
+    private StackPanel _libraryTagTree = null!;
     private ComboBox _libraryMediaFilter = null!;
     private TextBox _libraryImportedFrom = null!;
     private TextBox _libraryImportedTo = null!;
@@ -5231,7 +5231,8 @@ public sealed partial class EditorView : UserControl
         }
 
         Add(null, "Без материала");
-        foreach (var texture in MapFillTextures.Of(kind)) Add(texture.Id, texture.Title);
+        foreach (var texture in MapFillTextures.Of(kind))
+            if (Map.Rendering.MapTextureLibrary.Image(texture.Id) is not null) Add(texture.Id, texture.Title);
         _textureSwatchGroups.Add((grid, buttons, current));
         return new StackPanel
         {
@@ -5943,11 +5944,7 @@ public sealed partial class EditorView : UserControl
             quickFilters.Children.Add(button);
         }
 
-        _libraryTagFilter = ChoiceBox("LibraryTagFilter", "Тег", "Любой тег", value =>
-        {
-            _editor.LibraryTag = value;
-            SyncAssetList();
-        });
+        _libraryTagTree = new StackPanel { Spacing = 3 }.Named("LibraryTagFilter");
         _libraryMediaFilter = ChoiceBox("LibraryMediaFilter", "Тип файла", "Любой тип", value =>
         {
             _editor.LibraryMediaType = value;
@@ -5993,7 +5990,7 @@ public sealed partial class EditorView : UserControl
             Children =
             {
                 Ui.Section("Показывать только", quickFilters),
-                Ui.PropertyRow("Тег", _libraryTagFilter),
+                Ui.Section("Теги", _libraryTagTree),
                 Ui.PropertyRow("Формат", _libraryMediaFilter),
                 Ui.PropertyRow("Добавлено с", _libraryImportedFrom),
                 Ui.PropertyRow("Добавлено по", _libraryImportedTo),
@@ -9263,7 +9260,7 @@ public sealed partial class EditorView : UserControl
             _editor.StampRandomAngle ? $"Случайный поворот: шаг {EditorLabels.RandomAngleStep(_editor.StampRandomAngleStep)}" : "Случайный поворот выключен",
             _editor.StampRandomAngle);
 
-        FillChoices(_libraryTagFilter, "Любой тег", _editor.LibraryTagChoices, _editor.LibraryTag);
+        SyncLibraryTagTree();
         FillChoices(
             _libraryMediaFilter, "Любой тип", _editor.LibraryMediaTypeChoices, _editor.LibraryMediaType);
         if ((_libraryImportedFrom.Text ?? "") != _editor.LibraryImportedFromText)

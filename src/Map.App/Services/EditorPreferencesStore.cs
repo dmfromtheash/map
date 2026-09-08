@@ -36,7 +36,7 @@ public sealed class EditorPreferencesStore
             var bytes = File.ReadAllBytes(_path);
             if (bytes.Length is <= 0 or > 32 * 1024) return new EditorLocalPreferences();
             var file = JsonSerializer.Deserialize<PreferencesFile>(bytes, JsonOptions);
-            if (file is not { Version: 1 or 2 }
+            if (file is not { Version: 1 or 2 or 3 }
                 || !Enum.TryParse<PlacementAutoSelectPolicy>(file.AutoSelect, true, out var policy)
                 || !Enum.IsDefined(policy))
             {
@@ -45,7 +45,8 @@ public sealed class EditorPreferencesStore
 
             return new EditorLocalPreferences(
                 policy, file.PrimaryAutosaveEnabled,
-                file.Version >= 2 ? SanitizeStamp(file.Stamp, policy) : null);
+                file.Version >= 2 ? SanitizeStamp(file.Stamp, policy) : null,
+                Finite(file.LibraryTileSize, 112, 64, 176), file.LibraryShowNames);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
@@ -57,10 +58,12 @@ public sealed class EditorPreferencesStore
     {
         var bytes = JsonSerializer.SerializeToUtf8Bytes(new PreferencesFile
         {
-            Version = 2,
+            Version = 3,
             AutoSelect = preferences.AutoSelect.ToString(),
             PrimaryAutosaveEnabled = preferences.PrimaryAutosaveEnabled,
             Stamp = SanitizeStamp(preferences.Stamp, preferences.AutoSelect),
+            LibraryTileSize = Finite(preferences.LibraryTileSize, 112, 64, 176),
+            LibraryShowNames = preferences.LibraryShowNames,
         }, JsonOptions);
         Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
         var temp = _path + ".tmp-" + Guid.NewGuid().ToString("N");
@@ -95,6 +98,8 @@ public sealed class EditorPreferencesStore
         public string AutoSelect { get; set; } = nameof(PlacementAutoSelectPolicy.Auto);
         public bool PrimaryAutosaveEnabled { get; set; } = true;
         public StampToolSettings? Stamp { get; set; }
+        public double LibraryTileSize { get; set; } = 112;
+        public bool LibraryShowNames { get; set; } = true;
     }
 
     private static StampToolSettings? SanitizeStamp(

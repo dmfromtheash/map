@@ -36,6 +36,7 @@ public partial class App : Application
             try
             {
                 StarterPackBootstrapper.EnsureInstalled(assetCatalog, DateTimeOffset.UtcNow);
+                AtlasArtPack.EnsureInstalled(assetCatalog, DateTimeOffset.UtcNow);
             }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException
                 or InvalidDataException or InvalidOperationException)

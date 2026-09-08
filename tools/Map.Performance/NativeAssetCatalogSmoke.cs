@@ -77,10 +77,10 @@ public sealed class AssetCatalogApplication : Application
         Environment.SetEnvironmentVariable("MAP_UI_TEST_MODE", "1");
         Environment.SetEnvironmentVariable("MAP_UI_TEST_PROFILE_ROOT", Path.Combine(_workspace, "profile"));
         // A fresh isolated catalog using only the pre-existing starter pack.
-        var catalogRoot = Path.Combine(_workspace, "catalog");
-        if (Directory.Exists(catalogRoot)) Directory.Delete(catalogRoot, recursive: true);
+        var catalogRoot = Path.Combine(_workspace, "catalog-" + Guid.NewGuid().ToString("N"));
         _catalog = new AssetCatalog(catalogRoot);
         StarterPackBootstrapper.EnsureInstalled(_catalog, DateTimeOffset.UnixEpoch);
+        AtlasArtPack.EnsureInstalled(_catalog, DateTimeOffset.UnixEpoch);
         _window = new Window { Width = 1440, Height = 900, Title = "Map — каталог ассетов", ShowActivated = false,
             ShowInTaskbar = false, WindowStartupLocation = WindowStartupLocation.Manual, Position = new PixelPoint(-32000, -32000) };
         var document = new MapDocument(DocumentId.New(), "Каталог ассетов", DateTimeOffset.UnixEpoch,
@@ -112,8 +112,8 @@ public sealed class AssetCatalogApplication : Application
     {
         await Settle();
         // 1. The existing starter content remains available after removal of the rejected art.
-        Check("three original starter sets", _catalog.Sets.Count == 3);
-        Check("two original collections", _catalog.Collections.Count == 2);
+        Check("original sets plus nine atlas artworks", _catalog.Sets.Count == 12);
+        Check("three styles with three categories each", _catalog.CollectionTree().Count(c => c.Children.Count == 3 && c.TotalCount == 3) == 3);
         Check("rejected art is not generated", !Directory.Exists(Path.Combine(_catalog.Root, "starter-pack-source", "art")));
         _editor.RefreshLibrary(); _view.RefreshLibraryPanel();
 
@@ -126,6 +126,25 @@ public sealed class AssetCatalogApplication : Application
         Check("tiles realised and bounded", _view.GalleryRealizedCards is > 0 and < 200);
         await WaitForThumbnails(window);
         Capture(window, "gallery");
+
+        var mine = window.GetVisualDescendants().OfType<Avalonia.Controls.Primitives.ToggleButton>().Single(b => b.Name == "Collection_SourceMine");
+        mine.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Settle();
+        Check("My source is separate", _editor.LibrarySource == AssetSourceFilter.Mine && _editor.LibrarySets.Count == 0);
+        _editor.LibrarySource = AssetSourceFilter.BuiltIn;
+        _editor.LibraryGrouping = AssetGrouping.None;
+        _editor.SetLibraryTagSelected("Карта/Региональная", true);
+        _view.RefreshLibraryPanel(); await Settle(); await WaitForThumbnails(window);
+        Check("all nine atlas cards available", _editor.LibrarySets.Count == 9);
+        Capture(window, "atlas-gallery");
+        _editor.SetLibraryTagSelected("Стиль/Атлас пером", true);
+        _editor.SetLibraryTagSelected("Тема/Горы", true);
+        _editor.SetLibraryTagSelected("Тема/Деревья", true);
+        _view.RefreshLibraryPanel(); await Settle();
+        Check("tag branches intersect and choices combine", _editor.LibrarySets.Count == 2);
+        _editor.ClearLibraryFilters();
+        _editor.LibraryGrouping = AssetGrouping.Collection;
+        _editor.LibraryCollectionId = _catalog.Sets.Single(s => s.Name == StarterPackBootstrapper.PackName).CollectionId;
+        _view.RefreshLibraryPanel(); await Settle(); await WaitForThumbnails(window);
 
         // 3. One click chooses and keeps the window; the side panel already shows the choice.
         var painted = _catalog.Sets.Single(s => s.Name == StarterPackBootstrapper.PackName);
@@ -166,6 +185,75 @@ public sealed class AssetCatalogApplication : Application
         Capture(_view.Canvas, "canvas-zoom4");
         _editor.Undo(); await Settle();
         Check("undo removes the last stamp", objects() == 3);
+
+        // Place each original image through the production stamp tool. A single sheet makes
+        // style, transparency, scale and category readable together in the native canvas.
+        while (_editor.Session.UndoDepth > 0) _editor.Undo();
+        _editor.Session.Viewport.Set(0, 0, 1);
+        _editor.LibraryCollectionId = null;
+        var row = 0;
+        foreach (var style in AtlasArtPack.Artworks.GroupBy(a => a.StyleId))
+        {
+            var column = 0;
+            foreach (var art in style)
+            {
+                var set = _catalog.Sets.Single(s => s.VariantIds.Any(id => _catalog.FindVariant(id)!.Sha256 == art.Sha256));
+                _editor.ChooseGalleryVariant(set.Id, null);
+                _editor.SetStampScalePercent(90, commit: true);
+                _editor.StampRandomAngle = false; _editor.StampRandomFlip = false;
+                Point(175 + column++ * 330, 145 + row * 235);
+            }
+            row++;
+        }
+        _editor.HandleEscape();
+        _editor.Session.Viewport.Set(0, 0, Math.Min(_view.Canvas.Bounds.Width / 1024, _view.Canvas.Bounds.Height / 768));
+        await Settle(); await Rendered();
+        Check("all nine artworks placed", objects() == 9);
+        Capture(_view.Canvas, "atlas-canvas");
+        var preferences = new global::Map.App.Services.EditorPreferencesStore(Path.Combine(_workspace, "gallery-preferences.json"));
+        preferences.Save(new EditorLocalPreferences(LibraryTileSize: 160, LibraryShowNames: false));
+        var loaded = preferences.Load();
+        Check("gallery preferences survive disk reload", loaded.LibraryTileSize == 160 && !loaded.LibraryShowNames);
+        await CheckTerrain();
+    }
+
+    private async Task CheckTerrain()
+    {
+        _view.Canvas.DisposeRenderCaches();
+        var land = new LandLayer(LayerId.New(), "Верхнее плато", true, false, 1,
+            TileMap.Empty(1).With(new TileKey(0, 0), Enumerable.Repeat((byte)255, TileMap.TileSize * TileMap.TileSize).ToArray()),
+            new LandEdgeStyle { FillColor = "#FF829568" }) { Level = 2 };
+        var low = new River { Name = "Нижняя река", Level = 0, Style = new RiverStyle { CutsLand = false, ClipToLand = false },
+            Channels = [RiverEditor.NewChannel([new(40, 128), new(470, 128)], 24)] };
+        var high = new River { Name = "Верхняя река", Level = 3, Style = low.Style,
+            Channels = [RiverEditor.NewChannel([new(128, 40), new(128, 330)], 24)] };
+        var owner = new ObjectLayer(LayerId.New(), "Вода с маской", true, false, .6, []) { Rivers = [high, low] };
+        var document = new MapDocument(DocumentId.New(), "Вода и уровни", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(512, 384, "px", "#FFE9E0C8"),
+            [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFE9E0C8"), land, owner]);
+        _editor = new EditorViewModel(document, null, false, new ProjectStore(new RecoveryJournal(Path.Combine(_workspace, "terrain-recovery"))),
+            new LocalRecent(), new LocalPicker(Path.Combine(_workspace, "terrain.mapproj")), new LocalPrompts(), new LocalLog(),
+            assetCatalog: _catalog, localPreferences: new EditorLocalPreferences(PrimaryAutosaveEnabled: false));
+        _view = new EditorView(_editor, () => Task.CompletedTask, () => { }, () => { });
+        _window.Content = _view; await Settle();
+        _editor.Session.Viewport.Set(0, 0, 1.4); _editor.ActiveTool = EditorTool.Select;
+        Point(128, 128); await Settle();
+        Check("native crossing selects higher water", _editor.SelectedRiver?.Id == high.Id);
+        _editor.Session.Execute(new RiverCommand(owner.Id, high.Id, high with { Visible = false }, "Скрыть верхнюю воду"));
+        _editor.ClearWaterSelection(); Point(128, 128); await Settle();
+        Check("native plateau covers lower water selection", _editor.SelectedLand?.Id == land.Id && _editor.WaterSelectionCount == 0);
+        _editor.Session.Execute(new RiverCommand(owner.Id, low.Id, low with { Locked = true }, "Блокировка"));
+        _editor.SelectWater(low.Id); var revision = _editor.Session.Revision;
+        Check("native locked water refuses reorder", !_editor.ReorderSelectedWater(-1, true) && revision == _editor.Session.Revision);
+        _editor.Session.Execute(new RiverCommand(owner.Id, high.Id, high, "Показать верхнюю воду"));
+        var masked = owner with { Mask = new LayerMask(TileMap.Empty(1).With(new TileKey(0, 0), new byte[TileMap.TileSize * TileMap.TileSize]), true) };
+        _editor.Session.Execute(UpdateMaskCommand.CopyMask(masked, owner));
+        _editor.ClearWaterSelection(); Point(128, 128); await Settle(); await Rendered();
+        Check("native mask hides upper water from picking", _editor.SelectedLand?.Id == land.Id && _editor.WaterSelectionCount == 0);
+        Capture(_view, "terrain-masked");
+        _editor.Undo(); _editor.ClearLandSelection(); Point(128, 128); await Settle();
+        Check("native undo restores masked water", _editor.SelectedRiver?.Id == high.Id);
+        await Rendered(); Capture(_view, "terrain-restored");
     }
 
     private async Task WaitForThumbnails(Window window)

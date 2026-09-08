@@ -1,4 +1,4 @@
-﻿using Map.Assets;
+using Map.Assets;
 using Map.Core.Documents;
 using Map.Core.Editing;
 using Map.Presentation.Tests.Support;
@@ -11,12 +11,40 @@ namespace Map.Presentation.Tests;
 /// The set-aware stamp tool: which set and which variant are current, what the measurable Area
 /// and Density controls do, and that a gesture becomes exactly one undoable command.
 /// </summary>
-public sealed class Stage10LibraryStampTests : IDisposable
+public sealed class Stage10LibraryStampTests : IAsyncLifetime
 {
     private readonly string _root = Path.Combine(
         Path.GetTempPath(), "map-library-tests", Guid.NewGuid().ToString("N"));
 
     // ---------------------------------------------------------------- library state
+
+    [Fact]
+    public void Gallery_preferences_survive_a_new_editor_and_sources_separate_user_imports()
+    {
+        EditorLocalPreferences? saved = null;
+        var catalog = TrackCatalog(CatalogRoot());
+        var editor = new EditorViewModel(TestData.Document(), null, false,
+            new FakeProjectStore(), new FakeRecentMaps(), new FakeFilePicker(), new FakePrompts(), new FakeLog(),
+            assetCatalog: catalog, saveLocalPreferences: preferences => saved = preferences);
+        catalog.Import(Source("свой дом", SKColors.Brown), new AssetImportOptions { Tags = ["Тема/Дома", "Стиль/Графика"] }, Stamp(1));
+        editor.LibraryTileSize = 160;
+        editor.LibraryShowNames = false;
+        var reopened = new EditorViewModel(TestData.Document(), null, false,
+            new FakeProjectStore(), new FakeRecentMaps(), new FakeFilePicker(), new FakePrompts(), new FakeLog(),
+            assetCatalog: catalog, localPreferences: saved);
+        Assert.Equal(160, reopened.LibraryTileSize);
+        Assert.False(reopened.LibraryShowNames);
+        reopened.LibrarySource = AssetSourceFilter.Mine;
+        Assert.Single(reopened.LibrarySets);
+        reopened.SetLibraryTagSelected("Тема/Дома", true);
+        reopened.SetLibraryTagSelected("Стиль/Графика", true);
+        Assert.Single(reopened.LibrarySets);
+        reopened.LibrarySource = AssetSourceFilter.BuiltIn;
+        Assert.Empty(reopened.LibrarySets);
+        reopened.ClearLibraryFilters();
+        Assert.Single(reopened.LibrarySets);
+        Assert.Empty(reopened.LibraryTags);
+    }
 
     [Fact]
     public void The_library_lists_logical_cards_with_their_badge_count()
@@ -112,7 +140,7 @@ public sealed class Stage10LibraryStampTests : IDisposable
         editor.ToggleSelectedSetFavorite();
 
         Assert.True(editor.SelectedSet!.Favorite);
-        var reopened = new AssetCatalog(CatalogRoot());
+        var reopened = TrackCatalog(CatalogRoot());
         Assert.True(reopened.FindSet(set.Id)!.Favorite);
     }
 
@@ -605,7 +633,7 @@ public sealed class Stage10LibraryStampTests : IDisposable
     [Fact]
     public void Area_plan_over_the_project_asset_budget_is_refused_before_resolving_any_original()
     {
-        var catalog = new AssetCatalog(Path.Combine(_root, "aggregate-preflight"));
+        var catalog = TrackCatalog(Path.Combine(_root, "aggregate-preflight"));
         var document = new AssetLibraryDocument();
         var variantIds = new List<string>();
         // Nine distinct 60 MiB sources exceed the current 512 MiB project asset envelope.
@@ -656,7 +684,6 @@ public sealed class Stage10LibraryStampTests : IDisposable
         before.AssertUnchanged(editor);
         Assert.Empty(resolver.Resolved);
         Assert.Contains("лимит", editor.StatusDetail, StringComparison.OrdinalIgnoreCase);
-        catalog.FlushMetadataAsync().GetAwaiter().GetResult();
     }
 
     [Fact]
@@ -700,7 +727,7 @@ public sealed class Stage10LibraryStampTests : IDisposable
     [Fact]
     public void Used_in_the_current_map_finds_line_shape_fill_composition_and_filter_assets()
     {
-        var catalog = new AssetCatalog(CatalogRoot());
+        var catalog = TrackCatalog(CatalogRoot());
         var hashes = new List<string>();
         foreach (var name in new[] { "stamp", "line", "stroke", "fill", "nested", "filter", "unused" })
         {
@@ -967,7 +994,7 @@ public sealed class Stage10LibraryStampTests : IDisposable
 
         Assert.Equal("Свой набор", editor.SelectedSet!.Name);
         Assert.Equal(set.Id, editor.SelectedSetId);
-        Assert.Equal("Свой набор", new AssetCatalog(CatalogRoot()).FindSet(set.Id)!.Name);
+        Assert.Equal("Свой набор", TrackCatalog(CatalogRoot()).FindSet(set.Id)!.Name);
     }
 
     [Fact]
@@ -985,11 +1012,11 @@ public sealed class Stage10LibraryStampTests : IDisposable
 
         Assert.Equal(2, editor.CurrentVariantIndex);
         Assert.Equal(moving, editor.CurrentVariant!.Id);
-        Assert.Equal(moving, new AssetCatalog(CatalogRoot()).FindSet(set.Id)!.VariantIds[2]);
+        Assert.Equal(moving, TrackCatalog(CatalogRoot()).FindSet(set.Id)!.VariantIds[2]);
 
         Assert.True(editor.MoveCurrentVariant(-1));
         Assert.Equal(1, editor.CurrentVariantIndex);
-        Assert.Equal(moving, new AssetCatalog(CatalogRoot()).FindSet(set.Id)!.VariantIds[1]);
+        Assert.Equal(moving, TrackCatalog(CatalogRoot()).FindSet(set.Id)!.VariantIds[1]);
     }
 
     [Fact]
@@ -1007,7 +1034,7 @@ public sealed class Stage10LibraryStampTests : IDisposable
         editor.SelectVariantAt(11);
         Assert.False(editor.CanMoveCurrentVariant(1));
         Assert.True(editor.CanMoveCurrentVariant(-1));
-        Assert.Equal(set.VariantIds, [.. new AssetCatalog(CatalogRoot()).FindSet(set.Id)!.VariantIds]);
+        Assert.Equal(set.VariantIds, [.. TrackCatalog(CatalogRoot()).FindSet(set.Id)!.VariantIds]);
     }
 
     [Fact]
@@ -1028,7 +1055,7 @@ public sealed class Stage10LibraryStampTests : IDisposable
         Assert.True(editor.IsCurrentVariantTheCover);
         Assert.False(editor.CanMakeCurrentVariantCover);
         Assert.Equal(wanted, editor.SelectedSet!.CoverVariantId);
-        Assert.Equal(wanted, new AssetCatalog(CatalogRoot()).FindSet(set.Id)!.CoverVariantId);
+        Assert.Equal(wanted, TrackCatalog(CatalogRoot()).FindSet(set.Id)!.CoverVariantId);
 
         // The cover moved, but the content and the order behind it did not.
         Assert.Equal(12, editor.SelectedSetVariants.Count);
@@ -1228,7 +1255,7 @@ public sealed class Stage10LibraryStampTests : IDisposable
 
     private EditorViewModel AreaEditor(string slot, out AssetCatalog catalog, out CountingResolver resolver)
     {
-        catalog = new AssetCatalog(Path.Combine(_root, slot));
+        catalog = TrackCatalog(Path.Combine(_root, slot));
         resolver = new CountingResolver(new CatalogAssetContentResolver(catalog));
         var editor = new EditorViewModel(
             TestData.Document(), documentPath: null, startDirty: false,
@@ -1548,11 +1575,19 @@ public sealed class Stage10LibraryStampTests : IDisposable
 
     private EditorViewModel Editor(out AssetCatalog catalog)
     {
-        catalog = new AssetCatalog(CatalogRoot());
+        catalog = TrackCatalog(CatalogRoot());
         return new EditorViewModel(
             TestData.Document(), documentPath: null, startDirty: false,
             new FakeProjectStore(), new FakeRecentMaps(), new FakeFilePicker(),
             new FakePrompts(), new FakeLog(), clock: () => Stamp(0), assetCatalog: catalog);
+    }
+
+    private readonly List<AssetCatalog> _catalogs = [];
+    private AssetCatalog TrackCatalog(string root)
+    {
+        var catalog = new AssetCatalog(root);
+        _catalogs.Add(catalog);
+        return catalog;
     }
 
     private string CatalogRoot() => Path.Combine(_root, "catalog");
@@ -1599,8 +1634,11 @@ public sealed class Stage10LibraryStampTests : IDisposable
         return path;
     }
 
-    public void Dispose()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
+        foreach (var catalog in _catalogs) await catalog.DisposeAsync();
         if (Directory.Exists(_root))
         {
             Directory.Delete(_root, recursive: true);

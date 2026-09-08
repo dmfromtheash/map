@@ -384,6 +384,8 @@ public sealed partial class EditorViewModel : ViewModelBase
         _exportDestinationPicker = exportDestinationPicker;
         _folderLauncher = folderLauncher;
         var preferences = localPreferences ?? new EditorLocalPreferences();
+        _libraryTileSize = double.IsFinite(preferences.LibraryTileSize) ? Math.Clamp(preferences.LibraryTileSize, 64, 176) : 112;
+        _libraryShowNames = preferences.LibraryShowNames;
         _stampToolSettings = NormalizeStampToolSettings(preferences.Stamp ?? new StampToolSettings
         {
             AutoSelect = preferences.AutoSelect,
@@ -1038,10 +1040,12 @@ public sealed partial class EditorViewModel : ViewModelBase
         get => _libraryTag;
         set
         {
-            if (SetField(ref _libraryTag, value))
-            {
-                RefreshLibrary();
-            }
+            if (_libraryTags.Count == (value is null ? 0 : 1) && _libraryTag == value) return;
+            _libraryTags.Clear();
+            if (value is not null) _libraryTags.Add(value);
+            _libraryTag = value;
+            Raise(nameof(LibraryTag)); Raise(nameof(LibraryTags));
+            RefreshLibrary();
         }
     }
 
@@ -1183,7 +1187,7 @@ public sealed partial class EditorViewModel : ViewModelBase
 
         _librarySets = result.Sets;
         _libraryGroups = result.Groups;
-        _libraryCollections = _assetCatalog.CollectionTree();
+        _libraryCollections = _assetCatalog.CollectionTree(LibrarySource);
         _libraryRows = BuildLibraryRows(result);
         RefreshFilterChoices();
         SyncSelectedLibraryRow();
@@ -1206,7 +1210,8 @@ public sealed partial class EditorViewModel : ViewModelBase
         {
             Text = _librarySearchText,
             CollectionId = _libraryCollectionId,
-            Tag = _libraryTag,
+            Tags = _libraryTags.ToArray(),
+            Source = LibrarySource,
             UntaggedOnly = _libraryUntaggedOnly,
             FavoritesOnly = _libraryFavoritesOnly,
             RecentOnly = _libraryRecentOnly,
@@ -1474,6 +1479,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     public bool HasActiveLibraryFilters =>
         _librarySearchText.Length > 0
         || _libraryCollectionId is not null
+        || _librarySource != AssetSourceFilter.All
         || _libraryTag is not null
         || _libraryMediaType is not null
         || _libraryUntaggedOnly
@@ -1502,7 +1508,7 @@ public sealed partial class EditorViewModel : ViewModelBase
                 parts.Add("коллекция " + CollectionTitle(_libraryCollectionId));
             }
 
-            if (_libraryTag is { } tag)
+            foreach (var tag in _libraryTags)
             {
                 parts.Add($"тег «{tag}»");
             }
@@ -1558,6 +1564,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         {
             LibrarySearchText = "";
             LibraryCollectionId = null;
+            LibrarySource = AssetSourceFilter.All;
             LibraryTag = null;
             LibraryMediaType = null;
             LibraryUntaggedOnly = false;
@@ -3611,7 +3618,8 @@ public sealed partial class EditorViewModel : ViewModelBase
             or Map.Core.Editing.StampRandomAngleStep.Degrees180;
 
     private void PersistLocalPreferences() => _saveLocalPreferences?.Invoke(
-        new EditorLocalPreferences(PlacementAutoSelect, _primaryAutosaveEnabled, _stampToolSettings));
+        new EditorLocalPreferences(PlacementAutoSelect, _primaryAutosaveEnabled, _stampToolSettings,
+            LibraryTileSize, LibraryShowNames));
 
     /// <summary>
     /// One pointer gesture, all or nothing. The plan is resolved first, then every distinct hash

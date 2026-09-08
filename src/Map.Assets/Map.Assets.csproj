@@ -9,6 +9,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="AtlasArt\**\*.png" />
     <EmbeddedResource Include="StarterAssets\sample-mountains.png"
                       LogicalName="Map.Assets.StarterAssets.sample-mountains.png" />
     <EmbeddedResource Include="StarterAssets\sample-tree.png"

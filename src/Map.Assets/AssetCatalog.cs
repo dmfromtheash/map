@@ -335,9 +335,14 @@ public sealed class AssetCatalog : IAsyncDisposable
             : new HashSet<string>(query.UsedContentHashes, StringComparer.OrdinalIgnoreCase);
 
         var matched = new List<AssetSetSummary>(_document.Sets.Count);
+        var collections = query.CollectionId is { } root ? DescendantCollections(root) : null;
+        var tagGroups = query.Tags.Where(t => !string.IsNullOrWhiteSpace(t))
+            .GroupBy(t => t.Contains('/') ? t[..t.IndexOf('/')] : "", StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.ToArray()).ToArray();
         foreach (var set in _document.Sets)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (!MatchesSource(set, query.Source)) continue;
             if (query.FavoritesOnly && !set.Favorite)
             {
                 continue;
@@ -348,8 +353,7 @@ public sealed class AssetCatalog : IAsyncDisposable
                 continue;
             }
 
-            if (query.CollectionId is { } collection
-                && !string.Equals(set.CollectionId, collection, StringComparison.Ordinal))
+            if (collections is not null && (set.CollectionId is null || !collections.Contains(set.CollectionId)))
             {
                 continue;
             }
@@ -363,6 +367,10 @@ public sealed class AssetCatalog : IAsyncDisposable
             {
                 continue;
             }
+
+            if (tagGroups.Any(group => !group.Any(selected => set.Tags.Any(tag =>
+                tag.Equals(selected, StringComparison.OrdinalIgnoreCase)
+                || tag.StartsWith(selected + "/", StringComparison.OrdinalIgnoreCase))))) continue;
 
             if (query.ImportedFromUtc is { } from && set.ImportedUtc < from)
             {
@@ -507,8 +515,17 @@ public sealed class AssetCatalog : IAsyncDisposable
         }
     }
 
-    private string CollectionName(string id) =>
-        _document.Collections.FirstOrDefault(item => item.Id == id)?.Name ?? id;
+    private string CollectionName(string id)
+    {
+        var path = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        string? current = id;
+        while (current is not null && seen.Add(current)
+            && _document.Collections.FirstOrDefault(item => item.Id == current) is { } collection)
+        { path.Add(collection.Name); current = collection.ParentId; }
+        path.Reverse();
+        return path.Count == 0 ? id : string.Join(" / ", path);
+    }
 
     public AssetSetSummary? Summarize(AssetSet set)
     {
@@ -541,10 +558,10 @@ public sealed class AssetCatalog : IAsyncDisposable
         FindSet(setId) is { } set ? Summarize(set) : null;
 
     /// <summary>Collection tree with the number of logical cards in each node and its subtree.</summary>
-    public IReadOnlyList<AssetCollectionNode> CollectionTree()
+    public IReadOnlyList<AssetCollectionNode> CollectionTree(AssetSourceFilter source = AssetSourceFilter.All)
     {
         var direct = _document.Sets
-            .Where(set => set.CollectionId is not null)
+            .Where(set => set.CollectionId is not null && MatchesSource(set, source))
             .GroupBy(set => set.CollectionId!)
             .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
 
@@ -575,6 +592,7 @@ public sealed class AssetCatalog : IAsyncDisposable
 
                 var sub = Build(collection.Id);
                 var own = direct.GetValueOrDefault(collection.Id);
+                if (source != AssetSourceFilter.All && own == 0 && sub.Count == 0) continue;
                 nodes.Add(new AssetCollectionNode(
                     collection.Id, collection.Name, own, own + sub.Sum(node => node.TotalCount), sub));
             }
@@ -584,6 +602,40 @@ public sealed class AssetCatalog : IAsyncDisposable
     }
 
     // ---------------------------------------------------------------- mutation
+
+    public int CountSets(AssetSourceFilter source) => _document.Sets.Count(set => MatchesSource(set, source));
+
+    internal void NestBuiltInCollection(string pack, string parent, string title)
+    {
+        using var mutation = BeginMutation();
+        AssetLibraryStore.EnsureCollection(_document, parent);
+        var id = AssetIdentity.CollectionId(pack);
+        var index = _document.Collections.FindIndex(c => c.Id == id);
+        if (index < 0) throw new InvalidOperationException("Imported collection is missing.");
+        _document.Collections[index] = _document.Collections[index] with
+        { Name = title, ParentId = AssetIdentity.CollectionId(parent) };
+        SaveIndex();
+    }
+
+    private bool MatchesSource(AssetSet set, AssetSourceFilter source)
+    {
+        if (source == AssetSourceFilter.All) return true;
+        return set.VariantIds.Any(id => _byVariantId.TryGetValue(id, out var variant)
+            && _bySha.TryGetValue(variant.Sha256, out var record)
+            && (source == AssetSourceFilter.BuiltIn) == (record.Provenance.Source is
+                StarterPackBootstrapper.ProvenanceSource or AtlasArtPack.ProvenanceSource));
+    }
+
+    private HashSet<string> DescendantCollections(string root)
+    {
+        var result = new HashSet<string>(StringComparer.Ordinal) { root };
+        var children = _document.Collections.ToLookup(c => c.ParentId ?? "");
+        var pending = new Queue<string>(); pending.Enqueue(root);
+        while (pending.TryDequeue(out var parent))
+            foreach (var child in children[parent])
+                if (result.Add(child.Id)) pending.Enqueue(child.Id);
+        return result;
+    }
 
     /// <summary>
     /// Validates a local image completely before changing the library, then commits the mask
