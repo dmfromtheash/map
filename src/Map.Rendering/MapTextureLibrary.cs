@@ -9,8 +9,8 @@ namespace Map.Rendering;
 /// embedded in this assembly, decoded once per process and handed out as a repeating shader in
 /// world space, so the viewport, a tile and a single-image export cannot disagree about the grain.
 /// <para>
-/// Map's own materials: every tile is generated from layered value noise by
-/// <c>tools/Map.Performance --profile textures</c>. An unknown id yields no shader, and the caller
+/// The generated starter tiles were removed at the owner's request. A missing tile or unknown
+/// id yields no shader, and the caller
 /// simply draws the plain fill it would have drawn before - a map written by a newer version of
 /// Map still opens and still looks like a map.
 /// </para>

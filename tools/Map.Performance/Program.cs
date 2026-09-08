@@ -4,32 +4,6 @@ using Map.Performance;
 var options = PerformanceOptions.Parse(args);
 object report;
 bool gatePassed;
-if (options.Profile == "textures")
-{
-    // Regenerates Map's own seamless fill textures into the assets folder.
-    var files = TextureForge.Write(options.OutputPath);
-    Console.WriteLine("Textures written:");
-    foreach (var file in files) Console.WriteLine("  " + file);
-    return 0;
-}
-
-if (options.Profile == "starter-art")
-{
-    // Renders Map's own starter art (mountains, trees, buildings) into a folder for review.
-    Directory.CreateDirectory(options.OutputPath);
-    var watch = System.Diagnostics.Stopwatch.StartNew();
-    foreach (var set in Map.Assets.StarterArtForge.Sets)
-    {
-        for (var variant = 0; variant < set.VariantCount; variant++)
-        {
-            var path = Path.Combine(options.OutputPath, Map.Assets.StarterArtForge.FileName(set, variant));
-            File.WriteAllBytes(path, Map.Assets.StarterArtForge.Render(set, variant));
-            Console.WriteLine($"  {path} ({new FileInfo(path).Length / 1024} KiB, {watch.ElapsedMilliseconds} ms)");
-        }
-    }
-    return 0;
-}
-
 if (options.Profile == "native-asset-catalog")
 {
     var smoke = NativeAssetCatalogSmoke.Run(options);

@@ -63,69 +63,6 @@ public static class StarterPackBootstrapper
         }
     }
 
-    /// <summary>The art sets whose cards are not in the catalog yet, by set name.</summary>
-    public static IReadOnlyList<StarterArtForge.ArtSet> MissingArtSets(AssetCatalog catalog)
-    {
-        ArgumentNullException.ThrowIfNull(catalog);
-        if (catalog.Status == AssetLibraryStatus.Damaged) return [];
-        var present = new HashSet<string>(catalog.Sets.Select(set => set.Name), StringComparer.Ordinal);
-        return [.. StarterArtForge.Sets.Where(set => !present.Contains(set.Name))];
-    }
-
-    /// <summary>
-    /// Writes the PNG files of the given art sets under the catalog root. Pure Skia and file work:
-    /// meant for a worker thread, because painting twenty-seven pictures at 2048 px takes
-    /// seconds, and the catalog index is not touched here.
-    /// </summary>
-    public static IReadOnlyList<(StarterArtForge.ArtSet Set, string[] Files)> RenderArtFiles(
-        string catalogRoot, IReadOnlyList<StarterArtForge.ArtSet> sets, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(catalogRoot);
-        ArgumentNullException.ThrowIfNull(sets);
-        var root = Path.Combine(catalogRoot, "starter-pack-source", "art");
-        Directory.CreateDirectory(root);
-        var result = new List<(StarterArtForge.ArtSet, string[])>();
-        foreach (var set in sets)
-        {
-            var files = new string[set.VariantCount];
-            for (var variant = 0; variant < set.VariantCount; variant++)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var path = Path.Combine(root, StarterArtForge.FileName(set, variant));
-                if (!File.Exists(path))
-                {
-                    var temp = path + ".tmp";
-                    File.WriteAllBytes(temp, StarterArtForge.Render(set, variant));
-                    File.Move(temp, path, overwrite: true);
-                }
-                files[variant] = path;
-            }
-            result.Add((set, files));
-        }
-        return result;
-    }
-
-    /// <summary>Adds rendered art sets to the catalog as ordered variant sets. UI thread, like every import.</summary>
-    public static int ImportArt(AssetCatalog catalog,
-        IReadOnlyList<(StarterArtForge.ArtSet Set, string[] Files)> rendered, DateTimeOffset installedUtc)
-    {
-        ArgumentNullException.ThrowIfNull(catalog);
-        ArgumentNullException.ThrowIfNull(rendered);
-        var imported = 0;
-        foreach (var (set, files) in rendered)
-        {
-            if (catalog.Sets.Any(existing => string.Equals(existing.Name, set.Name, StringComparison.Ordinal))) continue;
-            catalog.ImportSet(files, set.Name, new AssetImportOptions
-            {
-                Pack = set.Collection,
-                Tags = ["map-original", "starter", .. set.Tags],
-                Provenance = StarterProvenance(),
-            }, installedUtc);
-            imported++;
-        }
-        return imported;
-    }
-
     private static AssetProvenance StarterProvenance() => new()
     {
         Source = ProvenanceSource,

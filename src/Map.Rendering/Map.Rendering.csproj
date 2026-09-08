@@ -8,7 +8,7 @@
     <PackageReference Include="SkiaSharp" Version="3.119.4" />
   </ItemGroup>
 
-  <!-- Map's own seamless fill materials; regenerate with the textures profile of Map.Performance. -->
+  <!-- Reserved for owner-approved fill material files. -->
   <ItemGroup>
     <EmbeddedResource Include="Textures\*.png" LogicalName="Map.Rendering.Textures.%(Filename)%(Extension)" />
   </ItemGroup>

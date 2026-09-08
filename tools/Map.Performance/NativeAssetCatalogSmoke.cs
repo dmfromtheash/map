@@ -23,16 +23,14 @@ internal sealed class NativeAssetCatalogReport
 {
     public string Observation { get; } = "Own native Avalonia window, ShowActivated=false; the real catalog window, the real stamp panel and the production canvas router. No system input.";
     public Dictionary<string, bool> Checks { get; } = [];
-    public double ArtRenderMs { get; set; }
-    public int ArtSetsImported { get; set; }
     public string? Failure { get; set; }
     public bool GatePassed => Failure is null && Checks.Count >= 10 && Checks.Values.All(v => v);
 }
 
 /// <summary>
-/// The asset catalog as the user meets it: Map's own starter art is painted into a fresh
-/// catalog, the catalog window opens grouped by collection, one click chooses, a double click
-/// returns to the canvas with the ghost armed, and three stamps land on the map at two zooms.
+/// The asset catalog with the pre-existing basic shapes and nature samples: the catalog opens
+/// grouped by collection, one click chooses, a double click returns to the canvas with the ghost
+/// armed, and four stamps land on the map at two zooms.
 /// </summary>
 internal static class NativeAssetCatalogSmoke
 {
@@ -78,7 +76,7 @@ public sealed class AssetCatalogApplication : Application
         Directory.CreateDirectory(_workspace);
         Environment.SetEnvironmentVariable("MAP_UI_TEST_MODE", "1");
         Environment.SetEnvironmentVariable("MAP_UI_TEST_PROFILE_ROOT", Path.Combine(_workspace, "profile"));
-        // A fresh catalog every run: the scenario is the first meeting with the starter art.
+        // A fresh isolated catalog using only the pre-existing starter pack.
         var catalogRoot = Path.Combine(_workspace, "catalog");
         if (Directory.Exists(catalogRoot)) Directory.Delete(catalogRoot, recursive: true);
         _catalog = new AssetCatalog(catalogRoot);
@@ -113,16 +111,10 @@ public sealed class AssetCatalogApplication : Application
     private async Task Execute()
     {
         await Settle();
-        // 1. The starter art: painted on a worker, imported on the UI thread, like the app does it.
-        var missing = StarterPackBootstrapper.MissingArtSets(_catalog);
-        Check("art missing from a fresh catalog", missing.Count == StarterArtForge.Sets.Count);
-        var watch = Stopwatch.StartNew();
-        var root = _catalog.Root;
-        var rendered = await Task.Run(() => StarterPackBootstrapper.RenderArtFiles(root, missing));
-        _report.ArtRenderMs = watch.Elapsed.TotalMilliseconds;
-        _report.ArtSetsImported = StarterPackBootstrapper.ImportArt(_catalog, rendered, DateTimeOffset.UnixEpoch);
-        Check("nine art sets imported", _report.ArtSetsImported == 9 && StarterPackBootstrapper.MissingArtSets(_catalog).Count == 0);
-        Check("three art collections", _catalog.Collections.Count(c => c.Name.StartsWith("Map · ", StringComparison.Ordinal)) >= 3);
+        // 1. The existing starter content remains available after removal of the rejected art.
+        Check("three original starter sets", _catalog.Sets.Count == 3);
+        Check("two original collections", _catalog.Collections.Count == 2);
+        Check("rejected art is not generated", !Directory.Exists(Path.Combine(_catalog.Root, "starter-pack-source", "art")));
         _editor.RefreshLibrary(); _view.RefreshLibraryPanel();
 
         // 2. The catalog window, grouped by collection, tiles realised only for what is on screen.
@@ -130,13 +122,13 @@ public sealed class AssetCatalogApplication : Application
         _view.OpenAssetCatalog(); await Task.Delay(400);
         var window = _view.AssetCatalogWindowForSmoke!; window.UpdateLayout(); await Task.Delay(300);
         Check("catalog groups by collection", _editor.LibraryGrouping == AssetGrouping.Collection
-            && window.GetVisualDescendants().OfType<Border>().Count(b => b.Name?.StartsWith("LibraryGroupHeader_", StringComparison.Ordinal) == true) >= 3);
+            && window.GetVisualDescendants().OfType<Border>().Count(b => b.Name?.StartsWith("LibraryGroupHeader_", StringComparison.Ordinal) == true) >= 2);
         Check("tiles realised and bounded", _view.GalleryRealizedCards is > 0 and < 200);
         await WaitForThumbnails(window);
         Capture(window, "gallery");
 
         // 3. One click chooses and keeps the window; the side panel already shows the choice.
-        var painted = _catalog.Sets.Single(s => s.Name == "Горы · живопись");
+        var painted = _catalog.Sets.Single(s => s.Name == StarterPackBootstrapper.PackName);
         var tile = window.GetVisualDescendants().OfType<Button>().First(b => b.Name == "GalleryCover_" + Sanitize(painted.Id));
         tile.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Settle();
         Check("one click chooses and keeps the catalog", window.IsVisible && _editor.SelectedSetId == painted.Id && _editor.CurrentVariant is not null);
@@ -156,15 +148,15 @@ public sealed class AssetCatalogApplication : Application
         await Task.Delay(300);
         Capture(_view, "editor");
 
-        // 4. Three stamps on the map, then the same map at 4× zoom.
+        // 4. Four stamps on the map, then the same map at 4× zoom.
         var objects = () => _editor.Session.Document.Layers.OfType<ObjectLayer>().Sum(l => l.Objects.Count);
         _editor.SetStampScalePercent(220, commit: true); await Settle();
         Point(330, 420);
-        Check("mountain placed", objects() == 1);
-        var spruce = _catalog.Sets.Single(s => s.Name == "Ель · живопись");
+        Check("basic shape placed", objects() == 1);
+        var spruce = _catalog.Sets.Single(s => s.Name == "Дерево");
         _editor.ChooseGalleryVariant(spruce.Id, null); _editor.SetStampScalePercent(140, commit: true); await Settle();
         Point(640, 470); Point(700, 500);
-        var tower = _catalog.Sets.Single(s => s.Name == "Башня · живопись");
+        var tower = _catalog.Sets.Single(s => s.Name == "Горы");
         _editor.ChooseGalleryVariant(tower.Id, null); _editor.SetStampScalePercent(150, commit: true); await Settle();
         Point(560, 380);
         Check("four stamps placed from three sets", objects() == 4);
