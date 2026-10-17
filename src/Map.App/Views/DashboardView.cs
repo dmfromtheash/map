@@ -131,7 +131,8 @@ public sealed class DashboardView : UserControl
         var body = new StackPanel
         {
             Name = "DashboardContent",
-            MaxWidth = 1680,
+            // Wide screens get a wide page: the grid and the artwork fill it (FitCards, FitWelcome).
+            MaxWidth = 2400,
             HorizontalAlignment = HorizontalAlignment.Stretch,
             VerticalAlignment = VerticalAlignment.Top,
             Margin = new Thickness(40, 26, 40, 32), Spacing = 18,
@@ -164,8 +165,31 @@ public sealed class DashboardView : UserControl
             _dashboard.PropertyChanged -= DashboardChanged;
             ReleaseThumbnails(); _renderedCards = null;
         };
+        _recentPanel.SizeChanged += (_, _) => FitCards(_recentPanel, oneRow: false);
+        _latestPanel.SizeChanged += (_, _) => FitCards(_latestPanel, oneRow: true);
         ShowSection(Section.Home);
         Rebuild();
+    }
+
+    /// <summary>
+    /// Cards fill their row: as many columns of at least 260 px as the width allows, every card
+    /// stretched to share the row (up to 440 px), its picture keeping the 300×220 proportion. The
+    /// latest maps on the home page are one full row - as many as fit, none cut in half.
+    /// </summary>
+    private static void FitCards(WrapPanel panel, bool oneRow)
+    {
+        var width = panel.Bounds.Width;
+        if (width <= 0) return;
+        var columns = Math.Max(1, (int)((width + CardGap) / (260 + CardGap)));
+        var cardWidth = Math.Min(440, Math.Floor((width - CardGap * (columns - 1)) / columns));
+        var index = 0;
+        foreach (var card in panel.Children.OfType<StackPanel>())
+        {
+            if (Math.Abs(card.Width - cardWidth) > .5) card.Width = cardWidth;
+            if (card.Children.FirstOrDefault() is Panel picture) picture.Height = Math.Round(cardWidth * 220 / 300);
+            card.IsVisible = !oneRow || index < columns;
+            index++;
+        }
     }
 
     public void Refresh() { _dashboard.Refresh(); Rebuild(); }
@@ -466,9 +490,10 @@ public sealed class DashboardView : UserControl
 
         // Without maps the picture fills the page; with them it takes about half, and the
         // latest maps sit right under it.
-        var share = _empty == true ? 1.0 : .52;
+        // Without maps the picture fills the page; with them it takes a little over half the
+        // height (taller on tall screens), and the latest maps sit right under it.
         var target = Math.Floor(Math.Max(layout.Copy.DesiredSize.Height + 2,
-            _empty == true ? viewport - 120 : Math.Clamp(viewport * share, 360, 640)));
+            _empty == true ? viewport - 120 : Math.Clamp(viewport * .56, 360, 860)));
         if (Math.Abs(_welcome.Height - target) > .5) _welcome.Height = target;
 
         if (_welcomeShade is not null)
@@ -783,6 +808,7 @@ public sealed class DashboardView : UserControl
         _latestBlock.IsVisible = latest.Count > 0;
         for (var i = 0; i < latest.Count; i++)
             _latestPanel.Children.Add(BuildMapCard(latest[i], i, "Latest"));
+        FitCards(_latestPanel, oneRow: true);
     }
 
     private void BuildGrid()
@@ -840,6 +866,7 @@ public sealed class DashboardView : UserControl
             else ShowEmpty(false, "", "", "", null);
         }
         _recentPanel.IsVisible = count > 0;
+        FitCards(_recentPanel, oneRow: false);
     }
 
     private void ShowEmpty(bool show, string icon, string title, string hint, (string Text, Action Action)? action)

@@ -8,6 +8,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Media;
 using Avalonia.Styling;
 using Avalonia.Threading;
 using Map.App.Controls;
@@ -38,6 +39,7 @@ public sealed class MainWindow : Window
     private readonly AppSettingsStore _appSettingsStore;
     private AppSettings _appSettings;
     private readonly ContentControl _host = new() { Name = "ViewHost" };
+    private readonly ScaleTransform _uiScale = new(1, 1);
     private readonly DashboardViewModel _dashboard;
     private readonly MapLibrary _library;
     private readonly DispatcherTimer _autosaveTimer;
@@ -91,13 +93,19 @@ public sealed class MainWindow : Window
         _editorPreferencesStore = new EditorPreferencesStore(preferencesPath);
         _editorPreferences = _editorPreferencesStore.Load();
 
-        Title = $"Map · {AppVersion.Current}";
+        // The build time in the title tells at a glance whether the shortcut starts the newest build.
+        var built = File.GetLastWriteTime(typeof(MainWindow).Assembly.Location);
+        Title = $"Map · {AppVersion.Current} · сборка {built:dd.MM HH:mm}";
         Name = "MainWindow";
         Width = 1024;
         Height = 680;
         MinWidth = 960;
         MinHeight = 640;
-        Content = _host;
+        // Every page is laid out for about 1920×1080. On a larger screen the whole interface grows
+        // with the window (UpdateUiScale), so a 1440p or 4K monitor is not a small island of
+        // controls in a sea of empty space; the user's own scale setting multiplies on top.
+        Content = new LayoutTransformControl { Name = "UiScaleHost", LayoutTransform = _uiScale, Child = _host };
+        SizeChanged += (_, _) => UpdateUiScale();
         // Inkarnate's editor owns the whole screen; a 1024×680 window left the map a fraction of
         // it. Ordinary starts open maximised (Width/Height above remain the restore size).
         if (!TestMode.StartupSmoke)
@@ -329,7 +337,8 @@ public sealed class MainWindow : Window
         {
             application.RequestedThemeVariant = ThemeVariant.Dark;
         }
-        FontSize = 13 * _appSettings.UiScale;
+        FontSize = 13;
+        UpdateUiScale();
         UiFeel.Apply(_appSettings.InterfaceSounds, _appSettings.InterfaceEffects);
         ApplyCursor();
         if (!TestMode.Enabled)
@@ -339,6 +348,22 @@ public sealed class MainWindow : Window
             editorView.Canvas.PerformanceMode = _appSettings.PerformanceMode;
             ConfigureExportDefaults(editorView.Editor);
         }
+    }
+
+    /// <summary>
+    /// The scale of the whole interface: 1 up to a 1920×1080 window, then growing with the
+    /// smaller of the two ratios at 60 % of the rate (2560×1440 → ×1.16, 3440×1440 → ×1.17,
+    /// 3840×2160 → ×1.5 at most), times the scale chosen in the settings.
+    /// </summary>
+    private void UpdateUiScale()
+    {
+        var size = ClientSize;
+        if (size.Width <= 0 || size.Height <= 0) return;
+        UiScaling.UserScale = _appSettings.UiScale;
+        var scale = UiScaling.ForSize(size.Width, size.Height);
+        if (Math.Abs(_uiScale.ScaleX - scale) < .004) return;
+        _uiScale.ScaleX = scale;
+        _uiScale.ScaleY = scale;
     }
 
     private void ConfigureExportDefaults(EditorViewModel editor) => editor.ConfigureExportDefaults(

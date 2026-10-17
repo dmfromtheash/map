@@ -148,7 +148,7 @@ public sealed class DashboardViewModel : ViewModelBase
 
     /// <summary>The latest maps for the home page, newest first.</summary>
     public IReadOnlyList<RecentCard> LatestCards => _allRecentCards.Where(card => card.IsAvailable)
-        .OrderByDescending(card => card.ModifiedUtc).Take(5).ToList();
+        .OrderByDescending(card => card.ModifiedUtc).Take(8).ToList();
 
     public void SetFavorite(RecentCard card, bool favorite)
     {
@@ -284,6 +284,7 @@ public sealed class DashboardViewModel : ViewModelBase
             foreach (var file in _snapshot.Maps)
             {
                 var summary = MapLibrary.ReadSummary(file.Path);
+                if (summary.CreatedUtc is { Year: < 2000 }) summary = summary with { CreatedUtc = null };
                 var size = summary.CanvasWidth > 0 ? $"{summary.CanvasWidth}×{summary.CanvasHeight}" : "";
                 if (byPath.TryGetValue(FullPath(file.Path), out var index))
                 {
