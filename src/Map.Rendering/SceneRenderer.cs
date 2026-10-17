@@ -53,6 +53,8 @@ public sealed class RenderStats
     public int MaskTilesDrawn { get; set; }
     public int MipmappedTiles { get; set; }
     public int MissingAssets { get; set; }
+    /// <summary>Object layers drawn from their kept gesture image (<see cref="LayerImageCache"/>) in this frame.</summary>
+    public int LayerImagesKept { get; set; }
     public int ExactObjects { get; set; }
     public int OverviewObjects { get; set; }
     public int OverviewChunks { get; set; }
@@ -106,6 +108,7 @@ public sealed class RenderStats
         MaskTilesDrawn = 0;
         MipmappedTiles = 0;
         MissingAssets = 0;
+        LayerImagesKept = 0;
         ExactObjects = 0;
         OverviewObjects = 0;
         OverviewChunks = 0;
@@ -279,6 +282,13 @@ public sealed class RenderOptions
     /// </summary>
     public RenderImageCache? Terrain { get; init; }
 
+    /// <summary>
+    /// Reuse of whole object layers during a stroke or an armed placement, when the frame
+    /// repeats the view and the layer is not part of the gesture. Absent (export, tests) every
+    /// layer is drawn directly.
+    /// </summary>
+    public LayerImageCache? LayerImages { get; init; }
+
     /// <summary>Optional editor worker for refining an unchanged terrain after a camera move.</summary>
     public TerrainRefinement? TerrainRefinement { get; init; }
     public Action? RequestRefinedFrame { get; init; }
@@ -447,6 +457,13 @@ public static class SceneRenderer
         // where the first object layer sits when the map has no land. The stack still keeps
         // land below objects; inside the terrain the levels decide what covers what.
         var terrainAnchor = TerrainAnchor(document, options);
+        // A stroke or a placement ghost repeats the same view frame after frame and changes no
+        // object layer: those layers are drawn from kept images (DrawKeptObjectLayer). Between
+        // gestures the images are dropped, so they hold video memory only while they serve.
+        var keepLayers = options.LayerImages is not null && options.Stats is not null && !options.IsExport
+            && options.ObjectOverrides is not { Count: > 0 }
+            && (options.Preview is not null || options.PlacementPreviewObjects is { Count: > 0 });
+        if (!keepLayers) options.LayerImages?.Clear();
         for (var layerIndex = 0; layerIndex < document.Layers.Count; layerIndex++)
         {
             var layer = document.Layers[layerIndex];
@@ -486,6 +503,9 @@ public static class SceneRenderer
             }
 
             var clippingSource = layerIndex > 0 ? document.Layers[layerIndex - 1] : null;
+            if (keepLayers && layer is ObjectLayer objects && CanKeepLayerImage(objects, options)
+                && DrawKeptObjectLayer(canvas, document, objects, clippingSource, view, options))
+                continue;
             DrawLayer(canvas, document, layer, clippingSource, view, options, drawRivers: false);
         }
 
@@ -493,6 +513,66 @@ public static class SceneRenderer
         DrawSelectionChrome(canvas, document, options);
         canvas.Restore();
         DrawBoundaryOverlay(canvas, options.BoundaryOverlay, options.ViewScale);
+    }
+
+    /// <summary>
+    /// An object layer's pixels can be kept apart from the frame when they do not depend on what
+    /// is drawn under them (Normal blending for the layer and every object, no clipping to the
+    /// layer below, no clip masks against the stamp foreground) and the gesture does not draw
+    /// into the layer (its stroke, its mask being edited, the ghost's "behind layer" shadow).
+    /// </summary>
+    private static bool CanKeepLayerImage(ObjectLayer layer, RenderOptions options) =>
+        layer.Blend == "Normal" && !layer.Effects.ClippingEnabled
+        && options.Preview?.LayerId != layer.Id && options.MaskEditLayerId != layer.Id
+        && !(options.PlacementPreviewLayerId == layer.Id && options.PlacementPreviewObjects is { Count: > 0 } ghost
+            && ghost.Any(o => o.Stamp is { ShadowPlacement: StampShadowPlacement.Layer, ShadowOpacity: > 0 }))
+        && KeptLayerSupport.GetValue(layer, static l => new(l)).Supported;
+
+    /// <summary>Per layer revision: how many objects would read the destination (non-Normal blend, clip mask, unknown kinds).</summary>
+    private sealed class LayerImageSupport
+    {
+        private readonly int _unsupported;
+        public bool Supported => _unsupported == 0;
+        public LayerImageSupport(ObjectLayer layer)
+        {
+            if (ObjectLayerChanges.TryGet(layer, out var delta)
+                && KeptLayerSupport.TryGetValue(delta.Source, out var previous))
+            {
+                _unsupported = previous._unsupported - delta.Removed.Count(i => !Independent(delta.Source.Objects[i]))
+                    + delta.Added.Count(i => !Independent(layer.Objects[i]));
+            }
+            else
+            {
+                _unsupported = layer.Objects.Count(o => !Independent(o));
+            }
+        }
+
+        private static bool Independent(SceneObject o) => o.Kind switch
+        {
+            SceneObjectKind.Stamp => o.Stamp is { Blend: "Normal", ClipMaskEnabled: false },
+            SceneObjectKind.Text => o.Text is null or { Blend: "Normal" },
+            _ => false,
+        };
+    }
+
+    private static readonly ConditionalWeakTable<ObjectLayer, LayerImageSupport> KeptLayerSupport = [];
+
+    private static bool DrawKeptObjectLayer(SKCanvas canvas, MapDocument document, ObjectLayer layer, MapLayer? clippingSource,
+        WorldBounds view, RenderOptions options)
+    {
+        var stats = options.Stats!;
+        var missingBefore = stats.MissingAssets;
+        var built = false;
+        // Everything the layer's pixels are drawn from besides the layer itself: the detail
+        // level and per-object effects of the frame, the stamp images, the foreground surface.
+        object[] parts = [layer, options.LodTier, options.FastPreview, options.ViewScale, (object?)options.Stamps ?? DBNull.Value,
+            (object?)document.StampForeground ?? DBNull.Value, document.Assets];
+        var drawn = options.LayerImages!.TryDraw(canvas, layer.Id, parts, options.GpuContext,
+            target => { built = true; DrawLayer(target, document, layer, clippingSource, view, options, drawRivers: false); },
+            () => stats.MissingAssets == missingBefore);
+        if (drawn && !built) stats.LayerImagesKept++;
+        if (drawn) stats.LayersDrawn++;
+        return drawn;
     }
 
     /// <summary>The stack index the terrain pass is drawn at: the first visible land with coverage, else the first visible object layer.</summary>

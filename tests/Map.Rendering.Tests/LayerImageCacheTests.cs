@@ -1,0 +1,91 @@
+using Map.Core.Documents;
+using SkiaSharp;
+
+namespace Map.Rendering.Tests;
+
+/// <summary>
+/// The kept object layers of a gesture frame: a frame drawn from them is the frame drawn without
+/// them, at any transform; an edited layer is never shown from its old image; a layer whose
+/// pixels depend on what lies beneath (Multiply) is always drawn directly.
+/// </summary>
+public sealed class LayerImageCacheTests
+{
+    [Fact]
+    public void Kept_layers_match_the_direct_frame_and_follow_edits()
+    {
+        using var sprite = SKSurface.Create(new SKImageInfo(32, 32))!;
+        sprite.Canvas.Clear(SKColors.Transparent);
+        using (var ink = new SKPaint { Color = new SKColor(40, 110, 50, 220), IsAntialias = true })
+            sprite.Canvas.DrawCircle(16, 16, 13, ink);
+        using var image = sprite.Snapshot();
+        SceneObject Tree(int i) => new(ObjectId.New(), SceneObjectKind.Stamp, "Tree " + i,
+            10 + i % 9 * 27.3, 12 + i / 9 * 23.7, 30, 30, i * 17 % 360, "#FFFFFFFF", "#00000000", 0, true, false)
+            { Stamp = new StampStyle(new string('c', 64)), ObjectOpacity = .8 };
+        var forest = new ObjectLayer(LayerId.New(), "Лес", true, false, .7, [.. Enumerable.Range(0, 60).Select(Tree)]);
+        var multiplied = new ObjectLayer(LayerId.New(), "Тень", true, false, 1, [.. Enumerable.Range(60, 20).Select(Tree)]) { Blend = "Multiply" };
+        var stroked = new ObjectLayer(LayerId.New(), "Мазок", true, false, 1, []);
+        var document = new MapDocument(DocumentId.New(), "Kept", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(256, 256, "px", "#FFD8D2B0"),
+            [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFD8D2B0"), forest, multiplied, stroked]);
+        var coverage = new byte[TileMap.TileSize * TileMap.TileSize];
+        for (var y = 40; y < 90; y++) for (var x = 30; x < 200; x++) coverage[y * TileMap.TileSize + x] = 255;
+        var preview = new StrokePreview { LayerId = stroked.Id, Coverage = new Dictionary<TileKey, byte[]> { [new(0, 0)] = coverage }, Color = "#FF3060A0" };
+        using var cache = new LayerImageCache();
+        var stamps = new Images(image);
+
+        SKBitmap Draw(MapDocument scene, LayerImageCache? layers, RenderStats stats)
+        {
+            using var surface = SKSurface.Create(new SKImageInfo(200, 180))!;
+            surface.Canvas.Clear(SKColors.Black);
+            // A fractional scale and offset: the kept image must land on the very same pixels.
+            surface.Canvas.Translate(-13.37f, -7.61f);
+            surface.Canvas.Scale(.83f);
+            SceneRenderer.Render(surface.Canvas, scene, new RenderOptions
+            {
+                Stamps = stamps, Preview = preview, LayerImages = layers, Stats = stats,
+                ViewScale = .83, VisibleWorld = new(16.1, 9.2, 16.1 + 200 / .83, 9.2 + 180 / .83),
+            });
+            using var snapshot = surface.Snapshot();
+            return SKBitmap.FromImage(snapshot);
+        }
+        // The kept image is composited once more than the direct frame (a translucent group over
+        // a half-float layer): rounding moves a few pixels by up to two channel units. A stale
+        // or misplaced image differs by far more.
+        void Same(SKBitmap a, SKBitmap b) => Assert.All(a.Pixels.Zip(b.Pixels), p =>
+        {
+            Assert.InRange(Math.Abs(p.First.Red - p.Second.Red), 0, 2);
+            Assert.InRange(Math.Abs(p.First.Green - p.Second.Green), 0, 2);
+            Assert.InRange(Math.Abs(p.First.Blue - p.Second.Blue), 0, 2);
+        });
+
+        using var direct = Draw(document, null, new());
+        var build = new RenderStats();
+        using var first = Draw(document, cache, build);
+        var reuse = new RenderStats();
+        using var second = Draw(document, cache, reuse);
+        Same(direct, first);
+        Same(direct, second);
+        Assert.Equal(0, build.LayerImagesKept);
+        // Only the forest is kept: the multiplied layer reads the frame, the stroked one is the gesture.
+        Assert.Equal(1, reuse.LayerImagesKept);
+        Assert.Equal(1, cache.Count);
+
+        // An edited forest is a new record: drawn anew, never from the old image.
+        var edited = document.WithLayer(forest.Id, _ => forest with { Objects = [.. forest.Objects.Skip(5)] });
+        using var editedDirect = Draw(edited, null, new());
+        var afterEdit = new RenderStats();
+        using var editedKept = Draw(edited, cache, afterEdit);
+        Assert.Equal(0, afterEdit.LayerImagesKept);
+        Same(editedDirect, editedKept);
+
+        // Without a gesture nothing is kept and the images are released.
+        using var surface = SKSurface.Create(new SKImageInfo(64, 64))!;
+        SceneRenderer.Render(surface.Canvas, edited, new RenderOptions { Stamps = stamps, LayerImages = cache, Stats = new() });
+        Assert.Equal(0, cache.Count);
+    }
+
+    private sealed class Images(SKImage image) : IStampImageSource
+    {
+        public SKImage? TryGetImage(string sha256) => image;
+    }
+}
