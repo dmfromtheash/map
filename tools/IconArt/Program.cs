@@ -41,6 +41,8 @@ foreach (var (key, emblem) in apps)
     Art.Save(Path.Combine(output, $"app-{key}-32.png"), 32, Draw);
     Art.Save(Path.Combine(output, $"app-{key}-16.png"), 16, Draw);
 }
+// Six style directions to choose from (Styles.cs).
+Styles.Write(output);
 Console.WriteLine("written to " + output);
 
 /// <summary>The rail's solid silhouettes (24-unit grid, from MapIcons), plus the emblems' own.</summary>
