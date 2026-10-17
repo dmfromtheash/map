@@ -47,6 +47,8 @@ Styles.Write(output);
 Worlds.Write(output);
 // Second round of logo concepts (Logos.cs).
 Logos.Write(output);
+// Minimal logo marks (Minimal.cs).
+Minimal.Write(output);
 Console.WriteLine("written to " + output);
 
 /// <summary>The rail's solid silhouettes (24-unit grid, from MapIcons), plus the emblems' own.</summary>
