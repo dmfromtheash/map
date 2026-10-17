@@ -44,6 +44,7 @@ internal static class NativePaintPerfSmoke
     public static NativePaintPerfReport Run(PerformanceOptions options)
     {
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
+        System.Runtime.GCSettings.LatencyMode = System.Runtime.GCLatencyMode.SustainedLowLatency; // as Map.App.Program sets it
         var completion = new TaskCompletionSource<NativePaintPerfReport>(TaskCreationOptions.RunContinuationsAsynchronously);
         var thread = new Thread(() =>
         {
@@ -356,6 +357,8 @@ public sealed class PaintPerfApplication : Application
     {
         var target = new ZoomRouteReport { Name = name, ScaleStart = _editor.Session.Viewport.Scale };
         var canvas = _view.Canvas;
+        var gcBefore = (GC.CollectionCount(0), GC.CollectionCount(1), GC.CollectionCount(2));
+        var pauseBefore = GC.GetTotalPauseDuration();
         var sceneTimes = new List<double>();
         var frameStamps = new List<(long Stamp, long Revision)>();
         var lastRevision = canvas.CompletedSceneRevision;
@@ -427,7 +430,9 @@ public sealed class PaintPerfApplication : Application
         target.FramesRendered = frames.Count;
         target.WallMs = frames.Count > 0 ? (frames[^1].Stamp - inputStamps[0].Stamp) * 1000.0 / Stopwatch.Frequency : watch.Elapsed.TotalMilliseconds;
         target.ScaleEnd = _editor.Session.Viewport.Scale;
+        target.SlowRefinementFrames.Add($"gc gen0/1/2 during route: {GC.CollectionCount(0) - gcBefore.Item1}/{GC.CollectionCount(1) - gcBefore.Item2}/{GC.CollectionCount(2) - gcBefore.Item3}; gc pause during route {(GC.GetTotalPauseDuration() - pauseBefore).TotalMilliseconds:0} ms");
         Complete(target, burst: true);
+        Console.WriteLine("    " + target.SlowRefinementFrames[^1]);
     }
 
     private void Complete(ZoomRouteReport target, bool burst = false)
@@ -456,6 +461,7 @@ public sealed class PaintPerfApplication : Application
         target.SystemAvailableMiBLast = Map.Core.Resources.WorkingMemoryBudget.Shared.Snapshot.AvailableBytes / (1024 * 1024);
         _report.Routes.Add(target);
         var handler = target.GpuFlushMs.Count == 3 ? $" handler P50/P95/max={target.GpuFlushMs[0]:0.0}/{target.GpuFlushMs[1]:0.0}/{target.GpuFlushMs[2]:0.0}" : "";
+        if (System.Environment.GetEnvironmentVariable("MAP_MEASURE_GPU_FLUSH") == "1") handler += $" gpuFlushLast={Map.App.Controls.MapCanvasControl.LastFrameGpuFlushMilliseconds:0.0}";
         Console.WriteLine($"{target.Name}: steps={target.Steps} frames={target.FramesRendered} fps={target.Fps:0.0} " +
             $"scene P50/P95/max={target.SceneP50:0.0}/{target.SceneP95:0.0}/{target.SceneMax:0.0} " +
             $"latency P50/P95/max={target.LatencyP50:0.0}/{target.LatencyP95:0.0}/{target.LatencyMax:0.0} pauses>50={target.LongPauses}{handler} " +

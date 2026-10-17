@@ -8790,19 +8790,27 @@ public sealed partial class EditorView : UserControl
     /// </summary>
     private void SyncContextArea()
     {
+        var timings = EditorViewModel.CollectEditTimings ? _editor.LastEditTimings : null;
+        void Timed(string step, Action action)
+        {
+            if (timings is null) { action(); return; }
+            var started = System.Diagnostics.Stopwatch.GetTimestamp();
+            action();
+            timings.Add(("ui:context/" + step, System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds));
+        }
         foreach (var pair in _toolButtons)
         {
             Ui.SetToolActive(pair.Value, pair.Key == _editor.ActiveTool);
         }
 
-        SyncLandButtons();
-        SyncMaskModeButtons();
-        SyncLayerBlocks();
-        SyncHint();
-        SyncAppearanceSections();
+        Timed("land-buttons", SyncLandButtons);
+        Timed("mask-buttons", SyncMaskModeButtons);
+        Timed("layer-blocks", SyncLayerBlocks);
+        Timed("hint", SyncHint);
+        Timed("appearance", SyncAppearanceSections);
         // The strip is refreshed on every context change, including "nothing is selected" - the
         // panel's own refresh only runs while an inspector is mounted.
-        SyncQuickBar();
+        Timed("quick-bar", SyncQuickBar);
         // A new selection points the panel at the object; a new tool points it at the tool. Both
         // remain reachable afterwards, which is the part the old ActiveTool == Select gate broke.
         var selectionSignature = _editor.SelectionCount > 0
@@ -9549,11 +9557,48 @@ public sealed partial class EditorView : UserControl
         }
     }
 
+    /// <summary>
+    /// The rows of the layer list by layer, with the signature of what each row shows. A row is
+    /// rebuilt only when that changes: a stroke, a placement or an undo changes the tiles or the
+    /// objects of a layer, not its row (its object count aside), so the list is not torn down
+    /// and rebuilt control by control on every edit.
+    /// </summary>
+    private readonly Dictionary<LayerId, (string Signature, Border Row)> _layerRows = [];
+
     private void SyncSidePanels()
     {
         var sidePanelsStarted = System.Diagnostics.Stopwatch.GetTimestamp();
-        _layerList.Children.Clear();
+        var rows = new List<Border>(_editor.Layers.Count);
+        var seen = new HashSet<LayerId>();
         foreach (var layer in _editor.Layers.Reverse())
+        {
+            seen.Add(layer.Id);
+            var signature = LayerRowSignature(layer);
+            if (_layerRows.TryGetValue(layer.Id, out var kept) && kept.Signature == signature)
+            {
+                Ui.SetStructureSelected(kept.Row, layer.Id == _editor.ActiveLayerId);
+                rows.Add(kept.Row);
+                continue;
+            }
+            var built = BuildLayerRow(layer);
+            _layerRows[layer.Id] = (signature, built);
+            rows.Add(built);
+        }
+        foreach (var gone in _layerRows.Keys.Where(id => !seen.Contains(id)).ToArray()) _layerRows.Remove(gone);
+        if (_layerList.Children.Count == rows.Count)
+        {
+            // Same layers in the same order: only the rows that were rebuilt are swapped, so the
+            // others keep their visual state and are not detached and re-styled.
+            for (var i = 0; i < rows.Count; i++)
+                if (!ReferenceEquals(_layerList.Children[i], rows[i])) _layerList.Children[i] = rows[i];
+        }
+        else
+        {
+            _layerList.Children.Clear();
+            foreach (var row in rows) _layerList.Children.Add(row);
+        }
+
+        Border BuildLayerRow(MapLayer layer)
         {
             var captured = layer;
             var isBase = layer is BaseColorLayer;
@@ -9623,7 +9668,7 @@ public sealed partial class EditorView : UserControl
             Ui.SetStructureMeta(row, LayerMeta(layer));
 
             Ui.SetStructureSelected(row, layer.Id == _editor.ActiveLayerId);
-            _layerList.Children.Add(row);
+            return row;
         }
 
         _layerName.Text = _editor.ActiveLayer?.Name ?? "";
@@ -9643,6 +9688,14 @@ public sealed partial class EditorView : UserControl
         Timed("checkpoint-list", SyncCheckpointList);
         Timed("canvas-workflow", SyncCanvasWorkflow);
         Timed("quick-bar", SyncQuickBar);
+    }
+
+    /// <summary>Everything a layer row shows, as one string: name, kind, switches, counts, blend and mask state.</summary>
+    private static string LayerRowSignature(MapLayer layer)
+    {
+        var counts = layer is ObjectLayer objects ? $"{objects.Objects.Count}/{objects.Rivers.Length}/{objects.Roads.Length}" : "";
+        var mask = layer.Mask is { } m ? (m.Enabled ? "m+" : "m-") : "m0";
+        return $"{layer.GetType().Name}|{layer.Name}|{layer.Visible}|{layer.Locked}|{layer.Blend}|{mask}|{counts}|{LayerMeta(layer)}";
     }
 
     private static string LayerIcon(MapLayer layer) => layer switch

@@ -1,4 +1,4 @@
-using Map.Core.Documents;
+﻿using Map.Core.Documents;
 using Map.Core.Editing;
 using SkiaSharp;
 
@@ -61,7 +61,7 @@ public sealed class RenderImageCacheTests
             for (var x = 0; x < 200; x++) coverage[y * TileMap.TileSize + x] = 255;
         var land = new LandLayer(LayerId.New(), "Земля", true, false, 1,
             TileMap.Empty(1).With(new TileKey(0, 0), coverage),
-            style ?? new LandEdgeStyle { FillColor = "#FF7FA35A", FillTextureId = "regional-ochre", FillTextureOpacity = 0.7, FillTextureScale = 128 });
+            style ?? new LandEdgeStyle { FillColor = "#FF7FA35A", FillTextureId = MapFillTextures.Foothill, FillTextureOpacity = 0.7, FillTextureScale = 128 });
         var water = new River
         {
             Style = RiverStyle.Illustrated() with { EdgeRoughness = 0 },
@@ -227,7 +227,7 @@ public sealed class RenderImageCacheTests
     }
 
     [Fact]
-    public void The_land_shape_preview_carries_the_material_and_the_paint_preview_bypasses_the_cache()
+    public void The_land_shape_preview_carries_the_material_and_the_paint_preview_draws_over_the_kept_terrain()
     {
         var document = Scene(river: false);
         var piece = document.Layers.OfType<LandLayer>().Single();
@@ -249,14 +249,24 @@ public sealed class RenderImageCacheTests
         var grown = frame.GetPixel(230, 200);
         Assert.NotEqual(new SKColor(0x6E, 0x9F, 0xBF), grown);
         Assert.NotEqual(new SKColor(0x7F, 0xA3, 0x5A), grown);
-        Assert.Equal(0, terrain.Misses);
+        // The frame of a live stroke builds (and keeps) the idle terrain once and lays the stroke over it.
+        Assert.Equal(1, terrain.Misses); Assert.Equal(0, terrain.Hits);
 
-        var paint = new StrokePreview { LayerId = piece.Id, IsLandPaint = true, Coverage = stroke.Coverage, Color = "#FFFF0000", Opacity = 1 };
+        // A material stroke on the land itself (the land ends at x = 200): red paint over (150, 200).
+        var painting = new RasterStrokeSession(piece.PaintTiles, new BrushSettings { Radius = 30, Softness = 0, Color = "#FFFF0000" });
+        painting.AddPoint(150, 200);
+        var paint = new StrokePreview { LayerId = piece.Id, IsLandPaint = true, Coverage = painting.Coverage, Color = "#FFFF0000", Opacity = 1,
+            PaintSettings = new BrushSettings { Radius = 30, Softness = 0, Color = "#FFFF0000" } };
         SceneRenderer.Render(surface.Canvas, document, new RenderOptions
         { StyledLand = land, Terrain = terrain, Preview = paint, VisibleWorld = new WorldBounds(0, 0, 256, 256) });
-        // The live paint frame composes the land in full: neither cache is consulted for it.
-        Assert.Equal(0, terrain.Misses); Assert.Equal(0, terrain.Hits);
+        surface.ReadPixels(info, frame.GetPixels(), info.RowBytes, 0, 0);
+        // The live paint frame draws the kept terrain and the paint inside the land's coverage:
+        // the terrain is a hit, the land's own image is not consulted again, the sea stays clean.
+        Assert.Equal(1, terrain.Misses); Assert.Equal(1, terrain.Hits);
         Assert.Equal(1, land.Misses); Assert.Equal(0, land.Hits);
+        var painted = frame.GetPixel(150, 200);
+        Assert.True(painted.Red > painted.Green + 40, $"paint is missing on the land: {painted}");
+        Assert.Equal(new SKColor(0x6E, 0x9F, 0xBF), frame.GetPixel(240, 200));
     }
 
     [Theory]
@@ -290,8 +300,9 @@ public sealed class RenderImageCacheTests
         Assert.NotEqual(idle.GetPixel(x, 180), grown.GetPixel(x, 180));
         Assert.Equal(first.GetPixel(x, 60), grown.GetPixel(x, 60));
         Assert.Equal(0, MaxDifference(grown, grownCold));
-        Assert.Equal(1, warm.Misses); Assert.Equal(0, warm.Hits);
-        Assert.Equal(0, cold.Misses); Assert.Equal(0, cold.Hits);
+        // A stroke frame reuses the idle terrain (or builds it once) and never stores the stroke.
+        Assert.Equal(1, warm.Misses); Assert.Equal(2, warm.Hits);
+        Assert.Equal(1, cold.Misses); Assert.Equal(1, cold.Hits);
 
         using var cancelled = Render(document, land, warm);
         using var cancelledCold = Render(document, land, cold);
@@ -308,7 +319,7 @@ public sealed class RenderImageCacheTests
     {
         var document = Scene(new LandEdgeStyle
         {
-            FillColor = "#FF7FA35A", FillTextureId = "regional-ochre", FillTextureOpacity = 0.7,
+            FillColor = "#FF7FA35A", FillTextureId = MapFillTextures.Foothill, FillTextureOpacity = 0.7,
             FillTextureScale = 128, OutlineWidth = 0, RippleCount = 0,
             OuterShadowOpacity = 0, InnerShadowOpacity = 0,
         }, river: false);
@@ -371,7 +382,7 @@ public sealed class RenderImageCacheDiagnostics
             var coverage = new byte[TileMap.TileSize * TileMap.TileSize];
             for (var y = 0; y < TileMap.TileSize; y++) for (var x = 0; x < 200; x++) coverage[y * TileMap.TileSize + x] = 255;
             var land = new LandLayer(LayerId.New(), "Земля", true, false, 1, TileMap.Empty(1).With(new TileKey(0, 0), coverage),
-                new LandEdgeStyle { FillColor = "#FF7FA35A", FillTextureId = "regional-ochre", FillTextureOpacity = 0.7, FillTextureScale = 128 });
+                new LandEdgeStyle { FillColor = "#FF7FA35A", FillTextureId = MapFillTextures.Foothill, FillTextureOpacity = 0.7, FillTextureScale = 128 });
             var water = new River { Style = style, Channels = [RiverEditor.NewChannel([new VectorPoint(20, 128), new VectorPoint(246, 128)], 30)] };
             var objects = new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, []) { Rivers = [water] };
             var document = new MapDocument(DocumentId.New(), "cache", DateTimeOffset.UnixEpoch, new CanvasDefinition(256, 256, "px", "#FF6E9FBF"),

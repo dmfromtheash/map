@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Threading.Tasks;
 using Avalonia;
@@ -20,6 +20,11 @@ internal static class Program
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
             log.Error("Unhandled exception", e.ExceptionObject as Exception);
 
+        // An editor frame must not stop for a full blocking collection: a long stroke promotes a
+        // few hundred kilobytes per frame, and the resulting gen2 pauses were the 200-250 ms
+        // hitches in otherwise 60 FPS painting. Background collection keeps running; only the
+        // blocking full collections are avoided unless the machine is genuinely short of memory.
+        System.Runtime.GCSettings.LatencyMode = System.Runtime.GCLatencyMode.SustainedLowLatency;
         try
         {
             log.Info("Startup.");

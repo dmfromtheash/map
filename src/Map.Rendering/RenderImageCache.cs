@@ -1,4 +1,4 @@
-using Map.Core.Documents;
+﻿using Map.Core.Documents;
 using SkiaSharp;
 
 namespace Map.Rendering;
@@ -284,6 +284,44 @@ public sealed class RenderImageCache : IDisposable
             if (best is null) return null;
             view = best.View; scale = best.Scale;
             return best.Image;
+        }
+    }
+
+    /// <summary>
+    /// The newest image built for exactly this view and scale on this context, whatever inputs it
+    /// was built from, with those inputs resolved: the terrain as it was before the edit that
+    /// just changed it. A frame draws it while the exact terrain of the new inputs is prepared in
+    /// the background, laying only the changed ground over it. Null when nothing is held for the
+    /// view or an input of the candidate has been collected. The image belongs to the cache.
+    /// </summary>
+    public SKImage? TryGetStale(WorldBounds view, double scale, GRContext? context, out IReadOnlyList<object> parts)
+    {
+        var handle = context?.Handle ?? IntPtr.Zero;
+        var left = Quantize(view.Left); var top = Quantize(view.Top);
+        var right = Quantize(view.Right); var bottom = Quantize(view.Bottom);
+        var bits = BitConverter.DoubleToInt64Bits(scale);
+        lock (_gate)
+        {
+            parts = [];
+            if (_context != handle) return null;
+            PurgeDead();
+            for (var i = _order.Count - 1; i >= 0; i--)
+            {
+                var key = _order[i];
+                if (key.Left != left || key.Top != top || key.Right != right || key.Bottom != bottom || key.Scale != bits || key.Context != handle)
+                    continue;
+                var resolved = new object[key.Parts.Length];
+                var alive = true;
+                for (var p = 0; p < resolved.Length && alive; p++)
+                {
+                    resolved[p] = Resolve(key.Parts[p]);
+                    alive = !ReferenceEquals(resolved[p], DeadPart);
+                }
+                if (!alive) continue;
+                parts = resolved;
+                return _entries[key].Image;
+            }
+            return null;
         }
     }
 

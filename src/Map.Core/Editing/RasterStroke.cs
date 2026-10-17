@@ -285,7 +285,20 @@ public sealed class RasterStrokeSession
     /// fixed for a cell size, so it is computed once per tile and stroke and every rough dab
     /// that crosses the tile is a lookup per pixel instead of nine hashed sites per pixel.
     /// </summary>
-    private sealed record RoughTile(ushort[] Cells, double[] SiteX, double[] SiteY, int Window);
+    private sealed class RoughTile
+    {
+        // The index fits a byte for cells of 20 units and up (the usual coast); a 64 KiB byte
+        // array stays out of the large-object heap, where a 128 KiB one per touched tile made
+        // every long stroke pay a full collection.
+        private readonly byte[]? _small;
+        private readonly ushort[]? _wide;
+        public required double[] SiteX { get; init; }
+        public required double[] SiteY { get; init; }
+        public required int Window { get; init; }
+        public RoughTile(int cellCount) { if (cellCount <= 256) _small = new byte[TileMap.TileSize * TileMap.TileSize]; else _wide = new ushort[TileMap.TileSize * TileMap.TileSize]; }
+        public int Cell(int index) => _small is not null ? _small[index] : _wide![index];
+        public void Set(int index, int cell) { if (_small is not null) _small[index] = (byte)cell; else _wide![index] = (ushort)cell; }
+    }
 
     /// <summary>Tiles of rough cells kept per stroke; 128 KiB each, released with the stroke.</summary>
     private const int MaxRoughTiles = 512;
@@ -330,7 +343,7 @@ public sealed class RasterStrokeSession
             }
         }
 
-        var cells = new ushort[TileMap.TileSize * TileMap.TileSize];
+        var tile = new RoughTile(window * window) { SiteX = siteX, SiteY = siteY, Window = window };
         for (var y = 0; y < TileMap.TileSize; y++)
         {
             var worldY = originY + y + 0.5;
@@ -358,11 +371,10 @@ public sealed class RasterStrokeSession
                     }
                 }
 
-                cells[(y * TileMap.TileSize) + x] = (ushort)best;
+                tile.Set((y * TileMap.TileSize) + x, best);
             }
         }
 
-        var tile = new RoughTile(cells, siteX, siteY, window);
         _roughTiles[key] = tile;
         return tile;
     }
@@ -518,7 +530,7 @@ public sealed class RasterStrokeSession
                             // The pixel belongs to the dab when the centre of its cell does.
                             if (rough is not null)
                             {
-                                if (!insideCells![rough.Cells[index]])
+                                if (!insideCells![rough.Cell(index)])
                                 {
                                     continue;
                                 }

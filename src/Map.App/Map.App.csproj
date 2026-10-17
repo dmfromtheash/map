@@ -1,8 +1,13 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
+    <!-- Methods with loops (every per-pixel brush, coverage and sampling loop) are compiled
+         optimized at their first call instead of running tier-0 code until re-jitted: the first
+         stroke of a session used to queue 200-300 ms of input behind unoptimized loops. -->
+    <TieredCompilationQuickJitForLoops>false</TieredCompilationQuickJitForLoops>
+    <TieredPGO>false</TieredPGO>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\AppIcon-Large.ico</ApplicationIcon>
     <AvaloniaIncludeApplicationIconAsWindowIcon>true</AvaloniaIncludeApplicationIconAsWindowIcon>

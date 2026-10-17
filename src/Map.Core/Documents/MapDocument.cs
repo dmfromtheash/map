@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 
 namespace Map.Core.Documents;
 
@@ -363,13 +363,16 @@ public sealed record MapDocument
     public MapDocument WithLayer(LayerId id, Func<MapLayer, MapLayer> rewrite)
     {
         var found = false;
+        MapLayer? original = null, rewritten = null;
         var layers = new List<MapLayer>(Layers.Count);
         foreach (var layer in Layers)
         {
             if (layer.Id == id)
             {
                 found = true;
-                layers.Add(rewrite(layer));
+                original = layer;
+                rewritten = rewrite(layer);
+                layers.Add(rewritten);
             }
             else
             {
@@ -380,6 +383,20 @@ public sealed record MapDocument
         if (!found)
         {
             throw new InvalidOperationException($"Layer {id} is not part of this document.");
+        }
+
+        // A rewrite that keeps the layer's identity, kind and objects (a stroke on its tiles, a
+        // mask, a style, a river or a road) is a replacement revision: nothing the whole-document
+        // invariants guard - ids, groups, placement areas, ownership - can have changed, and the
+        // full check rebuilt every placement area of the map on each stroke (a quarter of a
+        // second on a regional map). The indexes of the unchanged layers carry over.
+        if (rewritten!.Id == id && rewritten.GetType() == original!.GetType()
+            && (original is not ObjectLayer before || rewritten is ObjectLayer after && ReferenceEquals(before.Objects, after.Objects)))
+        {
+            var target = WithRevisedLayers(layers);
+            ObjectNameIndex.Share(this, target);
+            DocumentRevisionIndex.ShareUnchangedLayers(this, target);
+            return target;
         }
 
         return WithLayers(layers);

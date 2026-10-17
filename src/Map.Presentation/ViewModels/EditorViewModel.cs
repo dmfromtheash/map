@@ -974,14 +974,24 @@ public sealed partial class EditorViewModel : ViewModelBase
         return true;
     }
 
+    // The render thread reads the preview while the UI thread adds dabs; it gets the snapshot
+    // the UI thread published after its last dab, never the live dictionaries.
+    private (IReadOnlyDictionary<TileKey, byte[]> Coverage, IReadOnlyDictionary<TileKey, int> Versions)? _strokeSnapshot;
+
+    private void PublishStrokeSnapshot()
+    {
+        if (_stroke is null) { _strokeSnapshot = null; return; }
+        _strokeSnapshot = (new Dictionary<TileKey, byte[]>(_stroke.CommittedCoverage), new Dictionary<TileKey, int>(_stroke.CommittedVersions));
+    }
+
     public StrokePreview? StrokePreview => _stroke is null
         || (!_editingStampForeground && _activeLayerId is null)
         ? null
         : new StrokePreview
         {
             LayerId = _activeLayerId ?? default,
-            Coverage = _stroke.CommittedCoverage,
-            Versions = _stroke.CommittedVersions,
+            Coverage = _strokeSnapshot?.Coverage ?? _stroke.CommittedCoverage,
+            Versions = _strokeSnapshot?.Versions ?? _stroke.CommittedVersions,
             Color = ActiveTool == EditorTool.Land && !LandPaintMode && ActiveLayer is LandLayer land
                 ? land.EdgeStyle.FillColor
                 : _stroke.Settings.Color,
@@ -6674,6 +6684,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             };
             _stroke = new RasterStrokeSession(foreground.Tiles, BrushSettings);
             _stroke.AddPoint(worldX, worldY, pressure);
+            PublishStrokeSnapshot();
             InvalidateScene(EditorChangeReason.CanvasInvalidation);
             return true;
         }
@@ -6707,6 +6718,7 @@ public sealed partial class EditorViewModel : ViewModelBase
                 ? LandPaintMode ? LandPaintSettings() : LandShapeSettings()
                 : BrushSettings);
         _stroke.AddPoint(worldX, worldY, pressure);
+        PublishStrokeSnapshot();
         InvalidateScene(EditorChangeReason.CanvasInvalidation);
         return true;
     }
@@ -6767,6 +6779,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
 
         _stroke.AddPoint(worldX, worldY, pressure);
+        PublishStrokeSnapshot();
         InvalidateScene(EditorChangeReason.CanvasInvalidation);
     }
 
@@ -6780,6 +6793,7 @@ public sealed partial class EditorViewModel : ViewModelBase
 
         var stroke = _stroke;
         _stroke = null;
+        _strokeSnapshot = null;
         if (stroke.IsEmpty)
         {
             InvalidateScene(EditorChangeReason.CanvasInvalidation);

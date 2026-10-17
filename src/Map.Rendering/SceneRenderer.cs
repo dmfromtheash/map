@@ -688,6 +688,27 @@ public static class SceneRenderer
                 return;
             }
         }
+        // The document changed under this very view - a stroke was released, ground was added or
+        // taken away - and no image exists for the new inputs. Instead of holding the frame for
+        // every coast and river pass (0.4-0.6 s on a regional map), the previous terrain of the
+        // same view is drawn with the changed ground laid over it in its plain look - the look the
+        // live stroke already had - and the exact terrain is prepared in the background; the frame
+        // that adopts it is requested when it is done.
+        if (cacheable && options.TerrainRefinement is { } staleRefinement && options.RequestRefinedFrame is { } staleFrame
+            && options.RiverOverrides is null && options.RoadOverrides is null
+            && surfaces.All(surface => !surface.Owner.Effects.ClippingEnabled)
+            && options.Terrain!.TryGetStale(view, terrainScale, options.GpuContext, out var staleParts) is { } previous
+            && OnlyLandsDiffer(terrainParts!, staleParts, out var changedLands)
+            && staleRefinement.Queue(terrainParts!, view, terrainScale,
+                BackgroundTerrain(document, lands, surfaces, view, terrainScale, options), staleFrame))
+        {
+            canvas.DrawImage(previous, RenderImageCache.Placement(previous, view, terrainScale),
+                new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None));
+            foreach (var (current, before) in changedLands) DrawLandChange(canvas, document, current, before, view, options);
+            if (options.Stats is { } staleStats) { staleStats.TerrainRefinementsPending++; staleStats.TerrainReused++; }
+            DrawTerrainLiveOverlay(canvas, document, lands, view, options);
+            return;
+        }
         // Nothing of the terrain has been built in this view's cache yet - a map was just opened,
         // or memory pressure dropped every kept image. There is no earlier exact frame the user
         // could see jump, so the first frame draws the plain terrain (the same fast passes a pan
@@ -736,6 +757,89 @@ public static class SceneRenderer
     }
 
     /// <summary>
+    /// True when the two input lists of a terrain image differ only in land layers (an edit of
+    /// coverage, paint or style), pairing each changed land with the one it replaces. Water,
+    /// roads and layer settings must be the same, or the previous image cannot stand in.
+    /// </summary>
+    private static bool OnlyLandsDiffer(IReadOnlyList<object> current, IReadOnlyList<object> previous,
+        out List<(LandLayer Current, LandLayer Before)> changed)
+    {
+        changed = [];
+        if (current.Count != previous.Count) return false;
+        for (var i = 0; i < current.Count; i++)
+        {
+            if (Equals(current[i], previous[i])) continue;
+            if (current[i] is LandLayer now && previous[i] is LandLayer then && now.Id == then.Id) changed.Add((now, then));
+            else return false;
+        }
+        return changed.Count > 0;
+    }
+
+    /// <summary>
+    /// What changed between two states of one land, in the plain look of the live stroke: the
+    /// added ground in the fill colour with the material, the removed ground in the sea colour.
+    /// Drawn over the previous terrain image while the exact coast is prepared in the background.
+    /// </summary>
+    private static void DrawLandChange(SKCanvas canvas, MapDocument document, LandLayer current, LandLayer before,
+        WorldBounds view, RenderOptions options)
+    {
+        var style = current.EdgeStyle;
+        var sameShape = ReferenceEquals(current.GeometryTiles, before.GeometryTiles);
+        using var group = new SKPaint { Color = SKColors.White.WithAlpha(Alpha(current.Opacity)) };
+        if (!sameShape || !ReferenceEquals(current.PaintTiles, before.PaintTiles) || !Equals(current.EdgeStyle, before.EdgeStyle))
+        {
+            canvas.SaveLayer(ToRect(view), group);
+            using (var tint = SKColorFilter.CreateBlendMode(ParseColor(style.FillColor), SKBlendMode.SrcIn))
+            using (var fill = new SKPaint { ColorFilter = tint })
+                DrawLandCoverage(canvas, [current], view, options, fill);
+            if (MapTextureLibrary.Image(style.FillTextureId) is not null && style.FillTextureOpacity > 0)
+            {
+                canvas.SaveLayer(ToRect(view), null);
+                using (var plain = new SKPaint()) DrawLandCoverage(canvas, [current], view, options, plain);
+                using (var shape = new SKPaint { BlendMode = SKBlendMode.SrcIn })
+                {
+                    canvas.SaveLayer(ToRect(view), shape);
+                    MapTextureLibrary.DrawFill(canvas, style.FillTextureId, style.FillTextureScale, style.FillTextureOpacity, ToRect(view));
+                    canvas.Restore();
+                }
+                canvas.Restore();
+            }
+            if (current.PaintTiles.TileCount > 0)
+            {
+                canvas.SaveLayer(ToRect(view), null);
+                DrawTiles(canvas, current.Id, current.PaintTiles, view, options, TileImageKind.Content);
+                using (var keepPaint = new SKPaint { BlendMode = SKBlendMode.DstIn })
+                {
+                    canvas.SaveLayer(ToRect(view), keepPaint);
+                    using (var plain = new SKPaint()) DrawLandCoverage(canvas, [current], view, options, plain);
+                    canvas.Restore();
+                }
+                canvas.Restore();
+            }
+            // Only the added ground when the shape changed: the finished look of the unchanged
+            // ground stays as the previous image shows it. A change of paint or style redraws the
+            // whole piece in its plain look.
+            if (!sameShape && ReferenceEquals(current.PaintTiles, before.PaintTiles) && Equals(current.EdgeStyle, before.EdgeStyle))
+            {
+                using var cut = new SKPaint { BlendMode = SKBlendMode.DstOut };
+                DrawLandCoverage(canvas, [before], view, options, cut);
+            }
+            if (current.Mask is { Enabled: true } mask && HasEffectiveMask(mask, view)) ApplyMask(canvas, current.Id, mask, view, options);
+            canvas.Restore();
+        }
+        if (!sameShape)
+        {
+            canvas.SaveLayer(ToRect(view), null);
+            using (var tint = SKColorFilter.CreateBlendMode(ParseColor(document.BaseColor.Color), SKBlendMode.SrcIn))
+            using (var sea = new SKPaint { ColorFilter = tint })
+                DrawLandCoverage(canvas, [before], view, options, sea);
+            using (var keep = new SKPaint { BlendMode = SKBlendMode.DstOut })
+                DrawLandCoverage(canvas, [current], view, options, keep);
+            canvas.Restore();
+        }
+    }
+
+    /// <summary>
     /// The live part of a raster gesture on the terrain, over the kept terrain image: the new
     /// ground of a land-shape stroke in the land's colour and material (or the sea colour where
     /// land is being taken away), the material of a land-paint stroke inside the land's coverage
@@ -749,7 +853,10 @@ public static class SceneRenderer
         if (options.Preview is { IsMask: false } preview
             && lands.FirstOrDefault(land => land.Id == preview.LayerId) is { } land)
         {
-            canvas.SaveLayer(ToRect(view), null);
+            // The stroke joins the land's own group: its opacity and mask apply to the new ground
+            // exactly as they will once the stroke is committed and the land drawn in full.
+            using var group = new SKPaint { Color = SKColors.White.WithAlpha(Alpha(land.Opacity)) };
+            canvas.SaveLayer(ToRect(view), group);
             if (preview.IsLandPaint)
             {
                 if (preview.Eraser)
@@ -767,6 +874,7 @@ public static class SceneRenderer
                 { LayerId = land.Id, Coverage = preview.Coverage, Opacity = preview.Opacity, Color = document.BaseColor.Color }, view, options);
             }
             else DrawLandShapePreview(canvas, land, preview, view, options);
+            if (land.Mask is { Enabled: true } mask && HasEffectiveMask(mask, view)) ApplyMask(canvas, land.Id, mask, view, options);
             canvas.Restore();
         }
         if (options.MaskEditLayerId is { } editing && lands.FirstOrDefault(land => land.Id == editing) is { Mask: not null } masked)
