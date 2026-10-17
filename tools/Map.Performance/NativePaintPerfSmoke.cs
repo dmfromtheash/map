@@ -86,7 +86,7 @@ public sealed class PaintPerfApplication : Application
         System.Environment.SetEnvironmentVariable("MAP_UI_TEST_MODE", "1");
         System.Environment.SetEnvironmentVariable("MAP_UI_TEST_PROFILE_ROOT", Path.Combine(_workspace, "profile"));
         _catalog = new AssetCatalog(Path.Combine(_workspace, "catalog"));
-        _window = new Window { Width = 1440, Height = 900, Title = "Map — paint performance", ShowActivated = false,
+        _window = new Window { Width = EnvNumber("MAP_PAINT_W", 1440), Height = EnvNumber("MAP_PAINT_H", 900), Title = "Map — paint performance", ShowActivated = false,
             ShowInTaskbar = false, WindowStartupLocation = WindowStartupLocation.Manual, Position = new PixelPoint(-32000, -32000) };
         _window.Opened += async (_, _) =>
         {
@@ -146,7 +146,7 @@ public sealed class PaintPerfApplication : Application
 
         // The view: 100 % around the centre of the land's coverage, so strokes hit real terrain.
         var centre = CoverageCentre(land);
-        SetScale(centre, 1.0); await Settle(); await WaitRefined();
+        SetScale(centre, EnvNumber("MAP_PAINT_SCALE", 1.0)); await Settle(); await WaitRefined();
         _report.Environment["view-centre"] = $"{centre.X:0},{centre.Y:0}";
         var seaStart = SeaPointNear(land, centre);
         _report.Environment["sea-start"] = seaStart is { } s ? $"{s.X:0},{s.Y:0}" : "none";
@@ -288,6 +288,10 @@ public sealed class PaintPerfApplication : Application
         try { await first.Task.WaitAsync(TimeSpan.FromSeconds(60)); }
         finally { canvas.FrameRendered -= OnFrame; }
     }
+
+    /// <summary>Window size and zoom of the routes: MAP_PAINT_W/H/SCALE reproduce a large maximised window over the whole map.</summary>
+    private static double EnvNumber(string name, double fallback) =>
+        double.TryParse(Environment.GetEnvironmentVariable(name), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var value) ? value : fallback;
 
     private void SetScale((double X, double Y) anchor, double scale)
     {

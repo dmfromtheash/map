@@ -1,4 +1,5 @@
 using Map.Core.Documents;
+using Map.Core.Editing;
 using SkiaSharp;
 
 namespace Map.Rendering.Tests;
@@ -82,6 +83,57 @@ public sealed class LayerImageCacheTests
         using var surface = SKSurface.Create(new SKImageInfo(64, 64))!;
         SceneRenderer.Render(surface.Canvas, edited, new RenderOptions { Stamps = stamps, LayerImages = cache, Stats = new() });
         Assert.Equal(0, cache.Count);
+    }
+
+    [Fact]
+    public void A_placed_stamp_is_drawn_over_the_kept_image_and_matches_the_direct_frame()
+    {
+        using var sprite = SKSurface.Create(new SKImageInfo(32, 32))!;
+        sprite.Canvas.Clear(SKColors.Transparent);
+        using (var ink = new SKPaint { Color = new SKColor(150, 60, 40, 230), IsAntialias = true })
+            sprite.Canvas.DrawRoundRect(3, 5, 26, 22, 6, 6, ink);
+        using var image = sprite.Snapshot();
+        var stamps = new Images(image);
+        SceneObject House(int i) => new(ObjectId.New(), SceneObjectKind.Stamp, "House " + i,
+            12 + i % 8 * 26.4, 14 + i / 8 * 25.1, 28, 28, i * 23 % 360, "#FFFFFFFF", "#00000000", 0, true, false)
+            { Stamp = new StampStyle(new string('d', 64)), ObjectOpacity = .9 };
+        var houses = new ObjectLayer(LayerId.New(), "Дома", true, false, 1, [.. Enumerable.Range(0, 40).Select(House)]);
+        var marks = new ObjectLayer(LayerId.New(), "Пометки", true, false, 1, []);
+        var document = new MapDocument(DocumentId.New(), "Append", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(256, 256, "px", "#FFE0D8B8"),
+            [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFE0D8B8"), houses, marks]);
+        // The ghost of the next placement over the houses: the frames of an armed placement.
+        IReadOnlyList<SceneObject> ghost = [House(99) with { Name = "Ghost" }];
+        using var cache = new LayerImageCache();
+
+        SKBitmap Draw(MapDocument scene, LayerImageCache? layers)
+        {
+            using var surface = SKSurface.Create(new SKImageInfo(220, 200))!;
+            surface.Canvas.Clear(SKColors.Black);
+            surface.Canvas.Translate(-5.25f, -3.5f);
+            surface.Canvas.Scale(.91f);
+            SceneRenderer.Render(surface.Canvas, scene, new RenderOptions
+            {
+                Stamps = stamps, PlacementPreviewObjects = ghost, PlacementPreviewLayerId = marks.Id,
+                LayerImages = layers, Stats = new(), ViewScale = .91,
+                VisibleWorld = new(5.77, 3.85, 5.77 + 220 / .91, 3.85 + 200 / .91),
+            });
+            using var snapshot = surface.Snapshot();
+            return SKBitmap.FromImage(snapshot);
+        }
+
+        using var warm = Draw(document, cache);
+        var placed = new AddObjectCommand(houses.Id, House(40) with { Name = "Placed" }).Apply(document);
+        Assert.True(ObjectLayerChanges.TryGet((ObjectLayer)placed.Layers[1], out _));
+        using var appended = Draw(placed, cache);
+        using var direct = Draw(placed, null);
+        Assert.Equal(1, cache.Appended);
+        Assert.All(appended.Pixels.Zip(direct.Pixels), p =>
+        {
+            Assert.InRange(Math.Abs(p.First.Red - p.Second.Red), 0, 2);
+            Assert.InRange(Math.Abs(p.First.Green - p.Second.Green), 0, 2);
+            Assert.InRange(Math.Abs(p.First.Blue - p.Second.Blue), 0, 2);
+        });
     }
 
     private sealed class Images(SKImage image) : IStampImageSource

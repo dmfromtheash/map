@@ -567,12 +567,49 @@ public static class SceneRenderer
         // level and per-object effects of the frame, the stamp images, the foreground surface.
         object[] parts = [layer, options.LodTier, options.FastPreview, options.ViewScale, (object?)options.Stamps ?? DBNull.Value,
             (object?)document.StampForeground ?? DBNull.Value, document.Assets];
+        var appended = AppendedObjects(layer, view, options, out var previous);
         var drawn = options.LayerImages!.TryDraw(canvas, layer.Id, parts, options.GpuContext,
             target => { built = true; DrawLayer(target, document, layer, clippingSource, view, options, drawRivers: false); },
-            () => stats.MissingAssets == missingBefore);
+            () => stats.MissingAssets == missingBefore,
+            previous,
+            appended is null ? null : target =>
+            {
+                built = true;
+                foreach (var sceneObject in appended)
+                {
+                    if (!sceneObject.Visible || !layer.StateFor(sceneObject.Sublayer).Visible) continue;
+                    DrawObject(target, sceneObject, document.StampForeground, options);
+                    stats.ObjectsDrawn++;
+                }
+            });
         if (drawn && !built) stats.LayerImagesKept++;
         if (drawn) stats.LayersDrawn++;
         return drawn;
+    }
+
+    /// <summary>
+    /// The objects a placement appended to <paramref name="layer"/>, when drawing just them over
+    /// the image of the previous revision gives the same pixels as drawing the whole layer: the
+    /// layer has no group of its own (full opacity, no mask, no layer shadows), every object sits
+    /// on sublayer 0 so the new ones are drawn last, nothing was removed, the new objects cast no
+    /// "behind layer" shadow (that prepass runs under all objects) and the tier is not the
+    /// overview's point rendering. Null otherwise.
+    /// </summary>
+    private static IReadOnlyList<SceneObject>? AppendedObjects(ObjectLayer layer, WorldBounds view, RenderOptions options,
+        out ObjectLayer? previous)
+    {
+        previous = null;
+        if (options.LodTier == RenderLodTier.Overview || layer.Opacity < 1
+            || layer.Mask is { Enabled: true } mask && HasEffectiveMask(mask, view)
+            || layer.Effects is { OuterShadowOpacity: > 0 } or { InnerShadowOpacity: > 0 }
+            || !ObjectLayerChanges.TryGet(layer, out var delta) || delta.Removed.Count > 0 || delta.Added.Count == 0
+            || delta.Added.Any(index => index < delta.Source.Objects.Count)
+            || !DetailRevisions.GetValue(layer, static l => new(l)).AllOnFirstSublayer)
+            return null;
+        var added = delta.Added.Select(index => layer.Objects[index]).ToArray();
+        if (added.Any(o => o.Stamp is { ShadowPlacement: StampShadowPlacement.Layer, ShadowOpacity: > 0 })) return null;
+        previous = delta.Source;
+        return added;
     }
 
     /// <summary>The stack index the terrain pass is drawn at: the first visible land with coverage, else the first visible object layer.</summary>
@@ -2365,6 +2402,7 @@ public static class SceneRenderer
         private readonly int _nonzeroSublayers;
         private readonly SceneObject[]? _appended;
         public bool CanCache => _unsupported == 0;
+        public bool AllOnFirstSublayer => _nonzeroSublayers == 0;
         public DetailTileRevisions(ObjectLayer layer)
         {
             if (ObjectLayerChanges.TryGet(layer, out var delta))
