@@ -55,8 +55,15 @@ public sealed class DiagnosticsLogAdapter(DiagnosticsLog log) : IAppLog
 }
 
 /// <summary>Native file dialogs over the Avalonia storage provider.</summary>
-public sealed class AvaloniaFilePicker(Window owner) : IFilePicker
+public sealed class AvaloniaFilePicker(Window owner, Func<string?>? startFolder = null) : IFilePicker
 {
+    private async Task<IStorageFolder?> StartLocation()
+    {
+        if (startFolder?.Invoke() is not { Length: > 0 } folder) return null;
+        try { return await owner.StorageProvider.TryGetFolderFromPathAsync(folder); }
+        catch (Exception) { return null; }
+    }
+
     private static readonly FilePickerFileType MapProjectType = new("Карта Map")
     {
         Patterns = ["*.mapproj"],
@@ -69,6 +76,7 @@ public sealed class AvaloniaFilePicker(Window owner) : IFilePicker
             var files = await owner.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
             {
                 Title = "Открыть карту",
+                SuggestedStartLocation = await StartLocation(),
                 AllowMultiple = false,
                 FileTypeFilter = [MapProjectType],
             });
@@ -84,6 +92,7 @@ public sealed class AvaloniaFilePicker(Window owner) : IFilePicker
             var file = await owner.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
             {
                 Title = "Сохранить карту",
+                SuggestedStartLocation = await StartLocation(),
                 SuggestedFileName = suggestedFileName,
                 DefaultExtension = "mapproj",
                 FileTypeChoices = [MapProjectType],

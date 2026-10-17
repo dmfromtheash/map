@@ -39,6 +39,7 @@ public sealed class MainWindow : Window
     private AppSettings _appSettings;
     private readonly ContentControl _host = new() { Name = "ViewHost" };
     private readonly DashboardViewModel _dashboard;
+    private readonly MapLibrary _library;
     private readonly DispatcherTimer _autosaveTimer;
 
     private EditorView? _editorView;
@@ -133,14 +134,22 @@ public sealed class MainWindow : Window
             };
         }
 
+        // Every map in this folder (and its folders) is listed on the library page, whether or not
+        // it was opened recently; save and open dialogs start here.
+        var profileRoot = TestMode.Enabled ? AppPaths.ResolveTestProfileRoot(TestMode.ProfileRootOverride) : AppPaths.Root;
+        _library = new MapLibrary(
+            _appSettings.MapsRoot ?? (TestMode.Enabled
+                ? Path.Combine(profileRoot, "Maps")
+                : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Map")),
+            Path.Combine(profileRoot, "library.json"));
         _dashboard = new DashboardViewModel(
             _store,
             _recent,
             _log,
-            new AvaloniaFilePicker(this),
+            new AvaloniaFilePicker(this, LibraryFolder),
             new DialogPrompts(this),
             new WindowsProjectTrash(),
-            appVersion: AppVersion.Current, assetCatalog: _assets);
+            appVersion: AppVersion.Current, assetCatalog: _assets, library: _library);
         _autosaveTimer = new DispatcherTimer
         {
             Interval = TestMode.Enabled
@@ -163,6 +172,9 @@ public sealed class MainWindow : Window
         AddHandler(KeyDownEvent, OnWindowKeyDown, RoutingStrategies.Bubble, handledEventsToo: true);
         AddHandler(KeyUpEvent, OnWindowKeyUp, RoutingStrategies.Bubble, handledEventsToo: true);
     }
+
+    /// <summary>The library folder, created on first use; null when the disk refuses (dialogs then open where Windows chooses).</summary>
+    private string? LibraryFolder() => _library.EnsureExists() ? _library.Root : null;
 
     // ---------------------------------------------------------------- navigation
 
@@ -234,7 +246,7 @@ public sealed class MainWindow : Window
             startDirty,
             _store,
             _recent,
-            new AvaloniaFilePicker(this),
+            new AvaloniaFilePicker(this, LibraryFolder),
             new DialogPrompts(this),
             _log,
             lastSavedUtc: lastSavedUtc,
@@ -265,7 +277,7 @@ public sealed class MainWindow : Window
 
     private async Task OpenFileAsync()
     {
-        var path = UiTestFilePaths.MapPath ?? await new AvaloniaFilePicker(this).PickOpenAsync();
+        var path = UiTestFilePaths.MapPath ?? await new AvaloniaFilePicker(this, LibraryFolder).PickOpenAsync();
         if (path is not null)
         {
             await OpenPathAsync(path);
@@ -286,7 +298,7 @@ public sealed class MainWindow : Window
 
     private async Task CreateFromUserTemplateAsync()
     {
-        var path = await new AvaloniaFilePicker(this).PickOpenAsync();
+        var path = await new AvaloniaFilePicker(this, LibraryFolder).PickOpenAsync();
         if (path is null) return;
         await _dashboard.CloneAsync(new RecentCard(
             path, Path.GetFileNameWithoutExtension(path), DateTimeOffset.MinValue, true, null),

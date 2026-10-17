@@ -220,6 +220,8 @@ public sealed class NativeStage16Application : Application
 
         Find<Button>(dashboardView, "AppSettingsButton").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         Find<Button>(dashboardView, "LocalHelpButton").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        // The library page (search, sort, every map) is the rail's "Карты" section since 2026-10-17.
+        Find<Button>(dashboardView, "RailMapsButton").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         await SettleAsync();
         var dashboardScreenshot = Path.ChangeExtension(options.OutputPath, ".dashboard.png");
         SaveVisual(dashboardView, dashboardScreenshot, 960, 640);

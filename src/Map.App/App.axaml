@@ -2754,5 +2754,164 @@
         <Style Selector=":is(Button).strip-step /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="BoxShadow" Value="0 0 0 0 Transparent" />
         </Style>
+
+        <!-- ================================================================================
+             Library (2026-10-17): Inkarnate's dashboard layout - an 84 px section rail, the
+             library toolbar, Maps/Folders/Exports/Favourites tabs and 300x220 map cards whose
+             actions appear under the pointer - in the tavern palette.
+             ================================================================================ -->
+        <Style Selector="Border.library-rail">
+            <Setter Property="Background" Value="{DynamicResource MapChromeBrush}" />
+            <Setter Property="BorderBrush" Value="#6E5532" />
+            <Setter Property="BorderThickness" Value="0,0,1,0" />
+            <Setter Property="BoxShadow" Value="inset -3 0 0 0 #17110D, inset -4 0 0 0 #33C9A15A" />
+        </Style>
+        <Style Selector="Border.library-rail :is(Button).library-rail-item">
+            <Setter Property="Width" Value="72" />
+            <Setter Property="MinHeight" Value="60" />
+            <Setter Property="Padding" Value="0,8,0,6" />
+            <Setter Property="HorizontalAlignment" Value="Center" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Foreground" Value="#B9A586" />
+        </Style>
+        <Style Selector="Border.library-rail :is(Button).library-rail-item /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="BoxShadow" Value="0 0 0 0 Transparent" />
+        </Style>
+        <Style Selector="Border.library-rail :is(Button).library-rail-item TextBlock.library-rail-caption">
+            <Setter Property="FontSize" Value="11.5" />
+            <Setter Property="Foreground" Value="#B9A586" />
+        </Style>
+        <Style Selector="Border.library-rail :is(Button).library-rail-item:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#3E2F23" />
+            <Setter Property="BorderBrush" Value="#6E5532" />
+            <Setter Property="Foreground" Value="#F3E3BF" />
+        </Style>
+        <Style Selector="Border.library-rail :is(Button).library-rail-item:pointerover TextBlock.library-rail-caption">
+            <Setter Property="Foreground" Value="#F3E3BF" />
+        </Style>
+        <Style Selector="Border.library-rail ToggleButton.library-rail-item:checked /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#4E3C25" />
+            <Setter Property="BorderBrush" Value="#C9A15A" />
+            <Setter Property="Foreground" Value="{DynamicResource MapAccentBrush}" />
+            <Setter Property="BoxShadow" Value="0 1 2 0 #50000000" />
+        </Style>
+        <Style Selector="Border.library-rail ToggleButton.library-rail-item:checked TextBlock.library-rail-caption">
+            <Setter Property="Foreground" Value="{DynamicResource MapAccentBrush}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <Style Selector="Border.library-create-disc">
+            <Setter Property="Background" Value="{DynamicResource MapPrimaryFillBrush}" />
+            <Setter Property="BorderBrush" Value="#E7C982" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="BoxShadow" Value="inset 0 0 0 2 #15100C, 0 0 12 0 #40E7C982" />
+            <Setter Property="TextElement.Foreground" Value="#F6E2B0" />
+        </Style>
+        <Style Selector="Border.library-rail :is(Button).library-rail-create:pointerover Border.library-create-disc">
+            <Setter Property="BoxShadow" Value="inset 0 0 0 2 #15100C, 0 0 20 2 #73E7C982" />
+        </Style>
+        <Style Selector="Border.library-rail :is(Button).library-rail-create TextBlock.library-rail-caption">
+            <Setter Property="Foreground" Value="{DynamicResource MapAccentBrush}" />
+        </Style>
+
+        <Style Selector="Border.library-tab-row">
+            <Setter Property="BorderBrush" Value="#4D3B28" />
+            <Setter Property="BorderThickness" Value="0,0,0,1" />
+        </Style>
+        <Style Selector=":is(Button).library-tab">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0,0,0,2" />
+            <Setter Property="CornerRadius" Value="0" />
+            <Setter Property="Padding" Value="2,8,2,10" />
+            <Setter Property="Foreground" Value="#C9B796" />
+        </Style>
+        <Style Selector=":is(Button).library-tab /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="BoxShadow" Value="0 0 0 0 Transparent" />
+            <Setter Property="Background" Value="Transparent" />
+        </Style>
+        <Style Selector=":is(Button).library-tab:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Foreground" Value="#F3E3BF" />
+            <Setter Property="Background" Value="Transparent" />
+        </Style>
+        <Style Selector=":is(Button).library-tab.selected /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBrush}" />
+            <Setter Property="Foreground" Value="#F6E2B0" />
+        </Style>
+        <Style Selector=":is(Button).library-tab.selected TextBlock">
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <Style Selector=":is(Button).library-tab TextBlock.library-tab-count">
+            <Setter Property="Foreground" Value="{DynamicResource MapAccentBrush}" />
+        </Style>
+
+        <Style Selector="Panel.library-card-thumb">
+            <Setter Property="ClipToBounds" Value="True" />
+        </Style>
+        <Style Selector=":is(Button).library-card-picture">
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="CornerRadius" Value="4" />
+            <Setter Property="Background" Value="{DynamicResource MapElevatedBrush}" />
+            <Setter Property="BorderBrush" Value="#4D3B28" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="VerticalAlignment" Value="Stretch" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="VerticalContentAlignment" Value="Stretch" />
+            <Setter Property="ClipToBounds" Value="True" />
+        </Style>
+        <Style Selector=":is(Button).library-card-picture /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="BoxShadow" Value="0 4 14 0 #66000000" />
+        </Style>
+        <Style Selector="Panel.library-card-thumb:pointerover :is(Button).library-card-picture /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="BorderBrush" Value="#C9A15A" />
+            <Setter Property="BoxShadow" Value="0 0 0 1 #C9A15A, 0 6 18 0 #80000000" />
+        </Style>
+        <Style Selector=":is(Panel).library-card-overlay">
+            <Setter Property="Opacity" Value="0" />
+            <Setter Property="Background" Value="#3A0D0906" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <DoubleTransition Property="Opacity" Duration="0:0:0.12" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Panel.library-card-thumb:pointerover :is(Panel).library-card-overlay">
+            <Setter Property="Opacity" Value="1" />
+        </Style>
+        <Style Selector=":is(Button).library-card-chip">
+            <Setter Property="Width" Value="34" />
+            <Setter Property="Height" Value="30" />
+            <Setter Property="MinHeight" Value="30" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Background" Value="#CC17110D" />
+            <Setter Property="BorderBrush" Value="#6E5532" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Foreground" Value="#F3E3BF" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+        </Style>
+        <Style Selector=":is(Button).library-card-chip:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#4E3C25" />
+            <Setter Property="BorderBrush" Value="#C9A15A" />
+            <Setter Property="Foreground" Value="{DynamicResource MapAccentBrush}" />
+        </Style>
+        <Style Selector=":is(Button).library-card-chip.on">
+            <Setter Property="Foreground" Value="{DynamicResource MapAccentBrush}" />
+        </Style>
+        <Style Selector=":is(Button).library-card-open">
+            <Setter Property="MinHeight" Value="44" />
+            <Setter Property="Padding" Value="22,6" />
+        </Style>
+        <Style Selector="TextBlock.library-card-date">
+            <Setter Property="FontSize" Value="11.5" />
+            <Setter Property="Foreground" Value="#EADBB8" />
+            <Setter Property="HorizontalAlignment" Value="Right" />
+        </Style>
     </Application.Styles>
 </Application>

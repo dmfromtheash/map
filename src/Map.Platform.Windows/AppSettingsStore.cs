@@ -22,6 +22,8 @@ public sealed record AppSettings
     public int RecoveryItemBudget { get; init; } = 12;
     public CanvasPerformanceMode PerformanceMode { get; init; } = CanvasPerformanceMode.Balanced;
     public string? LibraryRoot { get; init; }
+    /// <summary>The folder of the map library (Inkarnate's "Maps"); null = Documents\Map.</summary>
+    public string? MapsRoot { get; init; }
     public string? CacheRoot { get; init; }
     public string DefaultExportFormat { get; init; } = "Png";
     public int DefaultExportScalePercent { get; init; } = 100;

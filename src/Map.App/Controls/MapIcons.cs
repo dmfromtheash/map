@@ -253,6 +253,40 @@ public static class MapIcons
         "M5.6 10.6 C6.8 9.6 8.6 9.6 9.8 10.8 C8.6 12.2 6.8 12.2 5.6 10.6 Z " +
         "M18.4 10.6 C17.2 9.6 15.4 9.6 14.2 10.8 C15.4 12.2 17.2 12.2 18.4 10.6 Z");
 
+    // Library rail (2026-10-17, Inkarnate's dashboard rail): home, maps, templates, pictures, help,
+    // settings, plus the favourite star and the folder of the library cards - the same 24-unit grid.
+    public static readonly SolidGlyph SolidHome = new(
+        "F0 M12 2.6 L22 11 H19 V21.4 H14.4 V15 H9.6 V21.4 H5 V11 H2 Z");
+    public static readonly SolidGlyph SolidMaps = new(
+        "F0 M2.6 5.6 L8.6 3 L15.4 5.6 L21.4 3 V18.4 L15.4 21 L8.6 18.4 L2.6 21 Z " +
+        "M9.8 5.2 V16.6 L14.2 18.3 V6.9 Z");
+    public static readonly SolidGlyph SolidTemplate = new(
+        "F0 M4.4 2.4 H14.6 L19.6 7.4 V21.6 H4.4 Z M7.2 10.4 H16.8 V12.2 H7.2 Z M7.2 14 H16.8 V15.8 H7.2 Z M7.2 17.6 H13.4 V19.4 H7.2 Z");
+    public static readonly SolidGlyph SolidPicture = new(
+        "F0 M2.4 4.4 H21.6 V19.6 H2.4 Z M4.6 17.4 H19.4 L14.6 10.2 L11.2 15 L8.8 12.4 Z " +
+        "M8.4 6.8 A1.8 1.8 0 1 0 8.4 10.4 A1.8 1.8 0 1 0 8.4 6.8 Z");
+    public static readonly SolidGlyph SolidHelp = new(
+        "F0 M12 2 A10 10 0 1 0 12 22 A10 10 0 1 0 12 2 Z " +
+        "M10.8 16 H13.2 V18.4 H10.8 Z M8.4 9.6 C8.4 7.3 10 5.8 12.2 5.8 C14.4 5.8 15.8 7.2 15.8 9 " +
+        "C15.8 11.2 13.2 11.6 13.2 14 H10.8 C10.8 10.8 13.4 10.6 13.4 9.1 C13.4 8.4 12.9 8 12.1 8 C11.2 8 10.8 8.6 10.8 9.6 Z");
+    public static readonly SolidGlyph SolidGear = new(
+        "F0 M10.2 2 H13.8 L14.4 4.9 L16.6 5.8 L19.1 4.2 L21.6 6.7 L20 9.2 L20.9 11.4 L23.8 12 V15.6 L20.9 16.2 L20 18.4 " +
+        "L21.6 20.9 L19.1 23.4 L16.6 21.8 L14.4 22.7 L13.8 25.6 H10.2 L9.6 22.7 L7.4 21.8 L4.9 23.4 L2.4 20.9 L4 18.4 " +
+        "L3.1 16.2 L0.2 15.6 V12 L3.1 11.4 L4 9.2 L2.4 6.7 L4.9 4.2 L7.4 5.8 L9.6 4.9 Z " +
+        "M12 10.2 A3.6 3.6 0 1 0 12 17.4 A3.6 3.6 0 1 0 12 10.2 Z");
+    public static readonly SolidGlyph SolidPlus = new("M10.4 3 H13.6 V10.4 H21 V13.6 H13.6 V21 H10.4 V13.6 H3 V10.4 H10.4 Z");
+    public static readonly SolidGlyph SolidStar = new(
+        "M12 2.2 L14.9 8.6 L21.8 9.3 L16.6 14 L18.1 20.9 L12 17.4 L5.9 20.9 L7.4 14 L2.2 9.3 L9.1 8.6 Z");
+    public static readonly SolidGlyph SolidFolder = new(
+        "M2.4 5.2 C2.4 4.5 3 4 3.6 4 H9.2 L11.4 6.4 H20.4 C21 6.4 21.6 6.9 21.6 7.6 V18.8 C21.6 19.5 21 20 20.4 20 H3.6 " +
+        "C3 20 2.4 19.5 2.4 18.8 Z");
+    public const string Star = "M12 3.2 L14.6 8.9 L20.8 9.6 L16.1 13.8 L17.5 20 L12 16.8 L6.5 20 L7.9 13.8 L3.2 9.6 L9.4 8.9 Z";
+    public const string Folder = "M3 6 C3 5.4 3.5 5 4 5 H9 L11 7.2 H20 C20.6 7.2 21 7.6 21 8.2 V18 C21 18.6 20.6 19 20 19 H4 C3.4 19 3 18.6 3 18 Z";
+    public static readonly SolidGlyph SolidMore = new(
+        "M5 10 A2 2 0 1 0 5 14 A2 2 0 1 0 5 10 Z M12 10 A2 2 0 1 0 12 14 A2 2 0 1 0 12 10 Z M19 10 A2 2 0 1 0 19 14 A2 2 0 1 0 19 10 Z");
+    public const string Clock = "M12 3.5 A8.5 8.5 0 1 0 12 20.5 A8.5 8.5 0 1 0 12 3.5 Z M12 7.5 V12 L15 14";
+    public const string Filter = "M3.5 5 H20.5 L14 12.6 V18.5 L10 20 V12.6 Z";
+
     /// <summary>The solid rail glyph of a tool.</summary>
     public static SolidGlyph SolidTool(Map.Presentation.ViewModels.EditorTool tool) => tool switch
     {

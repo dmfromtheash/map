@@ -14,7 +14,11 @@ public sealed record RecentCard(
     bool IsAvailable,
     byte[]? ThumbnailPng,
     string MapType = "Локальная карта",
-    long SizeBytes = 0)
+    long SizeBytes = 0,
+    string? Folder = null,
+    bool IsFavorite = false,
+    DateTimeOffset? CreatedUtc = null,
+    string CanvasSize = "")
 {
     public string Subtitle => IsAvailable
         ? $"{MapType} · {ModifiedUtc.ToLocalTime():g} · {FormatSize(SizeBytes)}"
@@ -30,6 +34,9 @@ public sealed record RecentCard(
 }
 
 public enum DashboardSortOrder { ModifiedNewest, NameAscending, TypeAscending, SizeDescending }
+
+/// <summary>The four collections of the library page, as Inkarnate's Folders / Maps / Exports / Liked.</summary>
+public enum DashboardTab { Maps, Folders, Exports, Favorites }
 
 /// <summary>One offered recovery candidate.</summary>
 public sealed record RecoveryCard(RecoveryCandidate Candidate)
@@ -57,6 +64,11 @@ public sealed class DashboardViewModel : ViewModelBase
     private readonly string _appVersion;
     private readonly AssetCatalog? _assetCatalog;
     private readonly SemaphoreSlim _openGate = new(1, 1);
+    private readonly MapLibrary? _library;
+    private LibrarySnapshot _snapshot = LibrarySnapshot.Empty;
+    private DashboardTab _tab;
+    private string? _currentFolder;
+    private string _typeFilter = "";
 
     private string _lastNotice = "";
     private IReadOnlyList<RecentCard> _recentCards = [];
@@ -75,8 +87,9 @@ public sealed class DashboardViewModel : ViewModelBase
         IUserPrompts? prompts = null,
         IProjectTrash? trash = null,
         Func<DateTimeOffset>? clock = null,
-        string appVersion = "Map", AssetCatalog? assetCatalog = null)
+        string appVersion = "Map", AssetCatalog? assetCatalog = null, MapLibrary? library = null)
     {
+        _library = library;
         _store = store;
         _recent = recent;
         _log = log;
@@ -96,6 +109,87 @@ public sealed class DashboardViewModel : ViewModelBase
 
     /// <summary>The library size before search, so no matches is distinct from a first launch.</summary>
     public int TotalRecentCount => _allRecentCards.Count;
+
+    /// <summary>The library folder, or null when the dashboard runs without one (tests, old callers).</summary>
+    public MapLibrary? Library => _library;
+
+    public DashboardTab Tab
+    {
+        get => _tab;
+        set { if (SetField(ref _tab, value)) ApplyQuery(); }
+    }
+
+    /// <summary>The folder the Maps tab is showing (its name), or null for every map.</summary>
+    public string? CurrentFolder
+    {
+        get => _currentFolder;
+        set { if (SetField(ref _currentFolder, string.IsNullOrEmpty(value) ? null : value)) ApplyQuery(); }
+    }
+
+    /// <summary>Only maps of this type ("" = all types).</summary>
+    public string TypeFilter
+    {
+        get => _typeFilter;
+        set { if (SetField(ref _typeFilter, value ?? "")) ApplyQuery(); }
+    }
+
+    public IReadOnlyList<string> MapTypes => _allRecentCards.Select(card => card.MapType).Distinct()
+        .Order(StringComparer.CurrentCultureIgnoreCase).ToList();
+
+    public IReadOnlyList<LibraryFolder> Folders => string.IsNullOrWhiteSpace(SearchText) ? _snapshot.Folders
+        : _snapshot.Folders.Where(f => f.Name.Contains(SearchText.Trim(), StringComparison.CurrentCultureIgnoreCase)).ToList();
+
+    public IReadOnlyList<LibraryExport> Exports => string.IsNullOrWhiteSpace(SearchText) ? _snapshot.Exports
+        : _snapshot.Exports.Where(e => e.Name.Contains(SearchText.Trim(), StringComparison.CurrentCultureIgnoreCase)).ToList();
+
+    public int FolderCount => _snapshot.Folders.Count;
+    public int ExportCount => _snapshot.Exports.Count;
+    public int FavoriteCount => _allRecentCards.Count(card => card.IsFavorite);
+
+    /// <summary>The latest maps for the home page, newest first.</summary>
+    public IReadOnlyList<RecentCard> LatestCards => _allRecentCards.Where(card => card.IsAvailable)
+        .OrderByDescending(card => card.ModifiedUtc).Take(5).ToList();
+
+    public void SetFavorite(RecentCard card, bool favorite)
+    {
+        if (_library is null) return;
+        _library.SetFavorite(card.Path, favorite);
+        Refresh();
+    }
+
+    /// <summary>Creates a folder in the library; its name, or null when the disk refused.</summary>
+    public string? CreateFolder(string name)
+    {
+        var created = _library?.CreateFolder(name);
+        if (created is null) { LastError = "Папку создать не удалось. Карты не изменены."; return null; }
+        LastError = "";
+        Refresh();
+        return Path.GetFileName(created);
+    }
+
+    /// <summary>Moves a map into a library folder ("" = the library itself) and keeps its recent entry pointing at it.</summary>
+    public bool MoveToFolder(RecentCard card, string folder)
+    {
+        if (_library is null || !card.IsAvailable) return false;
+        var moved = _library.MoveToFolder(card.Path, folder);
+        if (moved is null)
+        {
+            LastError = $"Карту «{card.Title}» переместить не удалось: в папке уже есть файл с таким именем или нет доступа.";
+            return false;
+        }
+        if (!string.Equals(moved, card.Path, StringComparison.OrdinalIgnoreCase)
+            && _recent.Load().Any(entry => string.Equals(entry.Path, card.Path, StringComparison.OrdinalIgnoreCase)))
+        {
+            _recent.Remove(card.Path);
+            _recent.Touch(moved, Guid.Empty, card.Title, card.ModifiedUtc, card.ThumbnailPng, card.MapType);
+        }
+        LastError = "";
+        LastNotice = string.IsNullOrEmpty(folder)
+            ? $"Карта «{card.Title}» перенесена в библиотеку."
+            : $"Карта «{card.Title}» перенесена в папку «{folder}».";
+        Refresh();
+        return true;
+    }
 
     public IReadOnlyList<RecoveryCard> RecoveryCards
     {
@@ -182,9 +276,38 @@ public sealed class DashboardViewModel : ViewModelBase
                 entry.MapType, entry.SizeBytes));
         }
 
+        if (_library is not null)
+        {
+            _snapshot = _library.Scan();
+            var byPath = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            for (var i = 0; i < cards.Count; i++) byPath[FullPath(cards[i].Path)] = i;
+            foreach (var file in _snapshot.Maps)
+            {
+                var summary = MapLibrary.ReadSummary(file.Path);
+                var size = summary.CanvasWidth > 0 ? $"{summary.CanvasWidth}×{summary.CanvasHeight}" : "";
+                if (byPath.TryGetValue(FullPath(file.Path), out var index))
+                {
+                    var known = cards[index];
+                    cards[index] = known with
+                    {
+                        Folder = file.Folder, CreatedUtc = summary.CreatedUtc ?? file.CreatedUtc, CanvasSize = size,
+                        SizeBytes = known.SizeBytes > 0 ? known.SizeBytes : file.SizeBytes,
+                        ThumbnailPng = known.ThumbnailPng ?? summary.PreviewPng,
+                    };
+                    continue;
+                }
+                cards.Add(new RecentCard(file.Path, summary.Title ?? file.Title, file.ModifiedUtc, true, summary.PreviewPng,
+                    "Карта из библиотеки", file.SizeBytes, file.Folder, false, summary.CreatedUtc ?? file.CreatedUtc, size));
+            }
+            for (var i = 0; i < cards.Count; i++)
+                if (_library.IsFavorite(cards[i].Path)) cards[i] = cards[i] with { IsFavorite = true };
+        }
+
         _allRecentCards = cards;
         ApplyQuery();
         Raise(nameof(TotalRecentCount));
+        Raise(nameof(FolderCount)); Raise(nameof(ExportCount)); Raise(nameof(FavoriteCount));
+        Raise(nameof(Folders)); Raise(nameof(Exports)); Raise(nameof(LatestCards)); Raise(nameof(MapTypes));
 
         try
         {
@@ -285,9 +408,20 @@ public sealed class DashboardViewModel : ViewModelBase
         }
     }
 
+    private static string FullPath(string path)
+    {
+        try { return Path.GetFullPath(path); }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { return path; }
+    }
+
     private void ApplyQuery()
     {
         IEnumerable<RecentCard> query = _allRecentCards;
+        if (Tab == DashboardTab.Favorites) query = query.Where(card => card.IsFavorite);
+        if (CurrentFolder is { } folder)
+            query = query.Where(card => string.Equals(card.Folder, folder, StringComparison.CurrentCultureIgnoreCase));
+        if (TypeFilter.Length > 0) query = query.Where(card => card.MapType == TypeFilter);
+        Raise(nameof(Folders)); Raise(nameof(Exports));
         var text = SearchText.Trim();
         if (text.Length > 0)
         {
