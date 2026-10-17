@@ -8462,13 +8462,33 @@ public sealed partial class EditorView : UserControl
             action();
             timings.Add(("ui:" + step, System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds));
         }
+        // An edit that leaves the tool, the selection and the creation modes as they were (a placed
+        // stamp, a released stroke, undo) only changes what the panels list. Those panels cost
+        // 15-40 ms together and ran right before the next frame, so every click dropped frames;
+        // they now follow a moment later, one at a time, between input and render work.
+        var structure = UiStructureKey();
+        var deferPanels = scene && structure == _lastUiStructure;
+        _lastUiStructure = structure;
         Timed("status", SyncStatus);
         Timed("stamp-strip", SyncStampStrip);
-        Timed("path-panel", SyncEditablePathPanel);
-        Timed("area-panel", SyncEditableAreaPanel);
-        Timed("river-panel", SyncRiverPanel);
-        Timed("road-panel", SyncRoadPanel);
-        if (scene) Timed("side-panels", SyncSidePanels);
+        if (deferPanels)
+        {
+            DeferPanels(DeferredPanel.Path | DeferredPanel.Area | DeferredPanel.River | DeferredPanel.Road
+                | DeferredPanel.Side | DeferredPanel.Context);
+        }
+        else
+        {
+            Timed("path-panel", SyncEditablePathPanel);
+            Timed("area-panel", SyncEditableAreaPanel);
+            Timed("river-panel", SyncRiverPanel);
+            Timed("road-panel", SyncRoadPanel);
+            _deferredPanels &= ~(DeferredPanel.Path | DeferredPanel.Area | DeferredPanel.River | DeferredPanel.Road);
+            if (scene)
+            {
+                Timed("side-panels", SyncSidePanels);
+                _deferredPanels &= ~DeferredPanel.Side;
+            }
+        }
         // Water, roads and land are selections too: the section that lists them opens, its
         // property block refreshes, and the rows show the selected state.
         if (changed.Overlaps([nameof(EditorViewModel.WaterSelectionIds), nameof(EditorViewModel.RoadSelectionIds),
@@ -8481,14 +8501,15 @@ public sealed partial class EditorView : UserControl
         if (changed.Overlaps([nameof(EditorViewModel.XText), nameof(EditorViewModel.YText),
             nameof(EditorViewModel.WidthText), nameof(EditorViewModel.HeightText),
             nameof(EditorViewModel.RotationText), nameof(EditorViewModel.HasEditableSelection)])) Timed("inspector", SyncInspector);
-        if (scene || changed.Overlaps([nameof(EditorViewModel.ActiveTool), nameof(EditorViewModel.SelectionKind),
+        if (!deferPanels && (scene || changed.Overlaps([nameof(EditorViewModel.ActiveTool), nameof(EditorViewModel.SelectionKind),
             nameof(EditorViewModel.SelectionCount), nameof(EditorViewModel.SelectedGroupId),
             nameof(EditorViewModel.ActiveLayer), nameof(EditorViewModel.HasPendingPlacement),
-            nameof(EditorViewModel.PlacementAutoSelect), nameof(EditorViewModel.StampPlacementMode)]))
+            nameof(EditorViewModel.PlacementAutoSelect), nameof(EditorViewModel.StampPlacementMode)])))
         {
             Timed("context-area", SyncContextArea);
             Timed("gesture-readout", SyncStampGestureReadout);
             Timed("quick-bar", SyncQuickBar);
+            _deferredPanels &= ~DeferredPanel.Context;
         }
         if (changed.Overlaps([nameof(EditorViewModel.StampToolSettings), nameof(EditorViewModel.CurrentVariant),
             nameof(EditorViewModel.CompactRecentSets), nameof(EditorViewModel.CompactFavoriteSets)]))
@@ -8501,6 +8522,71 @@ public sealed partial class EditorView : UserControl
         if (changed.Any(p => p.StartsWith("Export", StringComparison.Ordinal)) || changed.Overlaps([
             nameof(EditorViewModel.CurrentExportPlan), nameof(EditorViewModel.CanStartExport),
             nameof(EditorViewModel.CanCancelExport), nameof(EditorViewModel.CanOpenExportFolder)])) Timed("export", SyncExport);
+    }
+
+    [Flags]
+    private enum DeferredPanel { None = 0, Path = 1, Area = 2, River = 4, Road = 8, Side = 16, Context = 32 }
+
+    private DeferredPanel _deferredPanels;
+    private bool _deferredPanelQueued;
+    private string? _lastUiStructure;
+
+    /// <summary>What decides which panels and inspectors are mounted: tool, selection, active layer, creation modes.</summary>
+    private string UiStructureKey() => string.Join('|',
+        _editor.ActiveTool, _editor.SelectionKind, _editor.SelectionCount, _editor.Session.SelectedObjectId,
+        _editor.SelectedGroupId, _editor.OpenGroupId, _editor.ActiveLayerId, _editor.HasPendingPlacement,
+        _editor.StampPlacementMode, _editor.LandPaintMode,
+        _editor.WaterSelectionCount, _editor.SelectedRiver?.Id, _editor.IsCreatingRiver,
+        _editor.RoadSelectionCount, _editor.SelectedRoad?.Id, _editor.IsCreatingRoad,
+        _editor.SelectedEditablePath?.Id, _editor.IsCreatingEditablePath,
+        _editor.SelectedEditableArea?.Id, _editor.IsCreatingEditableArea);
+
+    private void DeferPanels(DeferredPanel panels)
+    {
+        _deferredPanels |= panels;
+        if (_deferredPanelQueued) return;
+        _deferredPanelQueued = true;
+        Dispatcher.UIThread.Post(RunDeferredPanel, DispatcherPriority.Background);
+    }
+
+    /// <summary>
+    /// Refreshes one deferred panel and queues the next, so no single dispatcher job holds the
+    /// UI thread for more than a few milliseconds; input and frames go first (Background priority).
+    /// </summary>
+    private void RunDeferredPanel()
+    {
+        _deferredPanelQueued = false;
+        var next = DeferredPanel.None;
+        foreach (var panel in (ReadOnlySpan<DeferredPanel>)[DeferredPanel.Context, DeferredPanel.Side, DeferredPanel.Path,
+                     DeferredPanel.Area, DeferredPanel.River, DeferredPanel.Road])
+        {
+            if ((_deferredPanels & panel) != 0) { next = panel; break; }
+        }
+        if (next == DeferredPanel.None) return;
+        _deferredPanels &= ~next;
+
+        var timings = EditorViewModel.CollectEditTimings ? _editor.LastEditTimings : null;
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        switch (next)
+        {
+            case DeferredPanel.Context:
+                SyncContextArea();
+                SyncStampGestureReadout();
+                SyncQuickBar();
+                break;
+            case DeferredPanel.Side: SyncSidePanels(); break;
+            case DeferredPanel.Path: SyncEditablePathPanel(); break;
+            case DeferredPanel.Area: SyncEditableAreaPanel(); break;
+            case DeferredPanel.River: SyncRiverPanel(); break;
+            case DeferredPanel.Road: SyncRoadPanel(); break;
+        }
+        timings?.Add(("ui:deferred/" + next.ToString().ToLowerInvariant(), System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds));
+
+        if (_deferredPanels != DeferredPanel.None)
+        {
+            _deferredPanelQueued = true;
+            Dispatcher.UIThread.Post(RunDeferredPanel, DispatcherPriority.Background);
+        }
     }
 
     private void SyncCanvasWorkflow()

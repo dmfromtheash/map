@@ -223,6 +223,15 @@ public sealed class PaintPerfApplication : Application
                     var pt = _editor.Session.Viewport.WorldToScreen(centre.X - 300 + i * 10, centre.Y - 60);
                     canvas.MovePlacementPointerForSmoke(pt.X, pt.Y);
                 });
+                // The way a user places: the ghost follows the pointer every frame and a click lands
+                // every eighth move (~7 clicks a second); a frame lost to a click shows up here.
+                await BurstRoute("placement-clicks" + suffix, 64, i =>
+                {
+                    var pt = _editor.Session.Viewport.WorldToScreen(centre.X - 300 + i * 9, centre.Y + 60 + (i % 8) * 4);
+                    canvas.MovePlacementPointerForSmoke(pt.X, pt.Y);
+                    if (i % 8 == 4) { canvas.CommitPlacementForSmoke(); placed++; }
+                });
+                await Settle();
                 for (var i = 0; i < placed; i++) _editor.Undo();
                 _editor.CancelPlacement();
             }
@@ -329,7 +338,7 @@ public sealed class PaintPerfApplication : Application
         var timings = _editor.LastEditTimings;
         if (timings.Count == 0) return;
         var total = timings.Sum(t => t.Ms);
-        var top = timings.Where(t => t.Ms >= 1).OrderByDescending(t => t.Ms).Take(8)
+        var top = timings.Where(t => t.Ms >= 0.3).OrderByDescending(t => t.Ms).Take(24)
             .Select(t => $"{t.Step}={t.Ms:0.0}");
         Console.WriteLine($"    {label} ui-steps total={total:0.0} ms: {string.Join(", ", top)}");
         var stats = _view.Canvas.LastRenderStats;

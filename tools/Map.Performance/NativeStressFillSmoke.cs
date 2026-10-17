@@ -360,7 +360,7 @@ public sealed class StressFillApplication : Application
         var timings = _editor.LastEditTimings;
         if (timings.Count == 0) return;
         var total = timings.Sum(t => t.Ms);
-        var top = timings.Where(t => t.Ms >= 1).OrderByDescending(t => t.Ms).Take(8)
+        var top = timings.Where(t => t.Ms >= 0.3).OrderByDescending(t => t.Ms).Take(24)
             .Select(t => $"{t.Step}={t.Ms:0.0}");
         Console.WriteLine($"    {label} ui-steps total={total:0.0} ms: {string.Join(", ", top)}");
         var stats = _view.Canvas.LastRenderStats;
