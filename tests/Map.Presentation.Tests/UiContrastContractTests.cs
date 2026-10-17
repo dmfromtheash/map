@@ -22,14 +22,29 @@ public sealed class UiContrastContractTests
 
     private static readonly Lazy<string> Markup = new(() => File.ReadAllText(AppMarkupPath()));
 
-    private static readonly Lazy<IReadOnlyDictionary<string, string>> Palette = new(() =>
+    /// <summary>
+    /// Every brush key with all the colours it can show: one for a solid brush, each stop for a
+    /// gradient. Most surfaces are gradients, so reading only solid brushes left them unchecked.
+    /// </summary>
+    private static readonly Lazy<IReadOnlyDictionary<string, string[]>> Palette = new(() =>
     {
-        var found = new Dictionary<string, string>(StringComparer.Ordinal);
+        var found = new Dictionary<string, string[]>(StringComparer.Ordinal);
         foreach (Match match in Regex.Matches(
             Markup.Value,
             "<SolidColorBrush\\s+x:Key=\"(?<key>[^\"]+)\"\\s+Color=\"(?<color>#[0-9A-Fa-f]{6,8})\""))
         {
-            found[match.Groups["key"].Value] = match.Groups["color"].Value;
+            found[match.Groups["key"].Value] = [match.Groups["color"].Value];
+        }
+
+        foreach (Match match in Regex.Matches(
+            Markup.Value,
+            "<(?<kind>Linear|Radial)GradientBrush\\s+x:Key=\"(?<key>[^\"]+)\"(?<body>.*?)</\\k<kind>GradientBrush>",
+            RegexOptions.Singleline))
+        {
+            found[match.Groups["key"].Value] = Regex.Matches(
+                    match.Groups["body"].Value, "Color=\"(?<color>#[0-9A-Fa-f]{6,8})\"")
+                .Select(stop => stop.Groups["color"].Value)
+                .ToArray();
         }
 
         return found;
@@ -70,10 +85,16 @@ public sealed class UiContrastContractTests
     {
         Assert.True(Palette.Value.ContainsKey(foregroundKey), "No such brush: " + foregroundKey);
         Assert.True(Palette.Value.ContainsKey(backgroundKey), "No such brush: " + backgroundKey);
-        var first = Luminance(Palette.Value[foregroundKey]);
-        var second = Luminance(Palette.Value[backgroundKey]);
-        var (lighter, darker) = first >= second ? (first, second) : (second, first);
-        return (lighter + 0.05) / (darker + 0.05);
+        // A gradient is only as readable as its worst stop.
+        return Palette.Value[foregroundKey]
+            .SelectMany(_ => Palette.Value[backgroundKey], (foreground, background) =>
+            {
+                var first = Luminance(foreground);
+                var second = Luminance(background);
+                var (lighter, darker) = first >= second ? (first, second) : (second, first);
+                return (lighter + 0.05) / (darker + 0.05);
+            })
+            .Min();
     }
 
     private static void Require(string foreground, string background, double minimum)
@@ -154,11 +175,10 @@ public sealed class UiContrastContractTests
             Require("MapChromeMutedBrush", surface, LargeOrGraphic);
         }
 
-        // This is the defect itself, stated as a fact: the work-area text token cannot be read on
-        // the shell, which is why every rail and app-bar style has to supply its own colour.
-        Assert.True(
-            Contrast("MapTextBrush", "MapChromeBrush") < LargeOrGraphic,
-            "MapTextBrush would be legible on the chrome, so this guard no longer means anything.");
+        // In the dark Tavern palette (2026-10-17) the panels and the shell are both wood, so the
+        // work-area text must now read on the shell as well: a style that borrows it there is
+        // still legible instead of vanishing.
+        Require("MapTextBrush", "MapChromeBrush", BodyText);
     }
 
     [Fact]
@@ -228,7 +248,7 @@ public sealed class UiContrastContractTests
     {
         // #2B2B2B belongs to no Map surface. If a brush ever lands in that neutral near-black
         // band, a variant's colour has been copied into the palette instead of fixed.
-        foreach (var (key, hex) in Palette.Value)
+        foreach (var (key, hex) in Palette.Value.SelectMany(entry => entry.Value, (entry, hex) => (entry.Key, hex)))
         {
             var value = hex.TrimStart('#');
             if (value.Length == 8)
@@ -261,8 +281,11 @@ public sealed class UiContrastContractTests
     [Fact]
     public void State_colours_carry_their_own_readable_text()
     {
-        Require("MapOnAccentBrush", "MapAccentBrush", BodyText);
-        Require("MapOnAccentBrush", "MapAccentHoverBrush", BodyText);
+        // Since the Candle & Ornament style (2026-10-17) the main command is a dark, candle-lit
+        // ground with a brass caption rather than a brass fill: the caption is checked on it.
+        Require("MapOnAccentBrush", "MapPrimaryFillBrush", BodyText);
+        Require("MapOnAccentBrush", "MapPrimaryHoverFillBrush", BodyText);
+        Require("MapOnAccentBrush", "MapPrimaryPressedFillBrush", BodyText);
         Require("MapDangerBrush", "MapPanelBrush", BodyText);
         Require("MapDangerBrush", "MapDangerDimBrush", BodyText);
         Require("MapWarnBrush", "MapPanelBrush", BodyText);
@@ -323,7 +346,10 @@ public sealed class UiContrastContractTests
             Path.GetDirectoryName(AppMarkupPath())!, "MainWindow.cs");
         var source = File.ReadAllText(main);
 
-        Assert.Contains("RequestedThemeVariant = ThemeVariant.Light", source, StringComparison.Ordinal);
-        Assert.DoesNotContain("ThemeVariant.Dark", source, StringComparison.Ordinal);
+        // The Tavern palette (2026-10-17) is a dark one, so the pinned variant is Dark - and the
+        // markup must name the same variant, never follow the system.
+        Assert.Contains("RequestedThemeVariant = ThemeVariant.Dark", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("ThemeVariant.Light", source, StringComparison.Ordinal);
+        Assert.Contains("RequestedThemeVariant=\"Dark\"", Markup.Value, StringComparison.Ordinal);
     }
 }

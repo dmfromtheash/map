@@ -3,7 +3,8 @@
 Подготовлено по поручению владельца 2026-09-07. Это рабочие инструкции и инструменты разработки,
 не новый функциональный этап. Общие требования остаются в [AGENTS.md](../../AGENTS.md).
 Текущая продуктовая папка, ветка, HEAD и незавершённая работа — в верхнем
-[STATE_HANDOFF.md](../STATE_HANDOFF.md). Комплект не закрывает визуальный остаток Stage 18.
+[STATE_HANDOFF.md](../STATE_HANDOFF.md). Комплект не закрывает открытые технические или
+художественные замечания; номер этапа и отсрочки сверяются с текущими handoff и roadmap.
 
 ## Как получить промпт одним сообщением
 
@@ -14,7 +15,7 @@
 
 ```powershell
 pwsh -File tools/ai/New-ClaudeTask.ps1 -Model Fable
-pwsh -File tools/ai/New-ClaudeTask.ps1 -Model Opus -Stage 19
+pwsh -File tools/ai/New-ClaudeTask.ps1 -Model Opus
 pwsh -File tools/ai/New-ClaudeTask.ps1 -Model Fable -Task 'Исправь конкретное поведение, описанное владельцем.'
 ```
 

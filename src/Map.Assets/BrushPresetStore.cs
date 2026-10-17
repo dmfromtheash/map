@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Map.Core.Editing;
+using Map.Core.Documents;
 
 namespace Map.Assets;
 
@@ -7,6 +8,9 @@ public sealed record LocalBrushPreset
 {
     public required string Id { get; init; }
     public required string Name { get; init; }
+    // Absent in older files: they remain ordinary brush presets in the same bounded store.
+    public PlacementStylePreset? Placement { get; init; }
+    public CopiedAppearance? Appearance { get; init; }
     public string? TextureSha256 { get; init; }
     public string TipKind { get; init; } = "RoundSoft";
     public double Radius { get; init; } = 24;
@@ -33,6 +37,14 @@ public sealed record LocalBrushPreset
     public bool PressureAffectsOpacity { get; init; }
     public bool PressureAffectsSoftness { get; init; }
 }
+
+public sealed record PlacementStylePreset(string SetId, string? VariantId, string Mode,
+    double Scale, double Rotation, int Sublayer, double Opacity, double Spacing, bool RandomVariants,
+    StampStyle? Style, double Density, double SizeVariation, PlacementAreaPattern Pattern, bool JoinEdges,
+    StampRandomAngleStep RandomAngleStep = 0, bool RandomFlip = false);
+
+public sealed record CopiedAppearance(string Kind, double Opacity = 1,
+    StampStyle? Stamp = null, TextStyle? Text = null, RoadStyle? Road = null);
 
 /// <summary>Bounded local brush presets. Texture identity is referenced by SHA; bytes are never copied.</summary>
 public sealed class BrushPresetStore

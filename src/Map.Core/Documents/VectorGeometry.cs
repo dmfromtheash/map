@@ -78,6 +78,12 @@ public sealed record VectorStrokeStyle
     public double AssetSpacing { get; init; } = 1;
     public double Hue { get; init; }
     public double Saturation { get; init; }
+
+    /// <summary>
+    /// «Стена блокирует свет»: the stroke is a wall for virtual tabletops (dd2vtt line of sight);
+    /// its portals are the doors. It changes nothing on the map itself.
+    /// </summary>
+    public bool BlocksLight { get; init; }
 }
 
 public sealed record LineStyle
@@ -294,6 +300,34 @@ public static class VectorGeometry
 
         result.Add(Map(owner, nodes[closed ? 0 : ^1].X, nodes[closed ? 0 : ^1].Y));
         return result;
+    }
+
+    /// <summary>
+    /// The closed outline of one shape region in world units (before the object's rotation): the
+    /// flattened nodes, or 32 steps around an ellipse primitive. Rendering and export share it.
+    /// </summary>
+    public static IReadOnlyList<VectorPoint> RegionOutline(SceneObject owner, ShapeRegion region)
+    {
+        if (RoomGeometry.CanRound(owner, region))
+        {
+            return RoomGeometry.RoundedOutline(RoomGeometry.Corners(owner, region), owner.Room!.CornerRadius);
+        }
+
+        if (region.Primitive != ShapePrimitiveKind.Ellipse)
+        {
+            return Flatten(owner, region.Nodes, closed: true);
+        }
+
+        var a = region.Nodes[0]; var b = region.Nodes[1];
+        var cx = (a.X + b.X) / 2; var cy = (a.Y + b.Y) / 2;
+        var rx = Math.Abs(b.X - a.X) / 2; var ry = Math.Abs(b.Y - a.Y) / 2;
+        return [.. Enumerable.Range(0, 33).Select(index =>
+        {
+            var angle = index * Math.PI * 2 / 32;
+            return new VectorPoint(
+                owner.X + ((cx + Math.Cos(angle) * rx) * owner.Width),
+                owner.Y + ((cy + Math.Sin(angle) * ry) * owner.Height));
+        })];
     }
 
     public static bool ContainsShape(SceneObject owner, double worldX, double worldY)

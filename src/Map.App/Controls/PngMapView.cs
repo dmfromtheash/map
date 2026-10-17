@@ -165,7 +165,7 @@ public sealed class PngMapView : Control, IDisposable
     public override void Render(DrawingContext context)
     {
         base.Render(context);
-        context.FillRectangle(new SolidColorBrush(Color.Parse("#101B2C")), new Rect(Bounds.Size));
+        context.FillRectangle(new SolidColorBrush(Color.Parse("#0E0B08")), new Rect(Bounds.Size));
         if (_pyramid is not { } p) return;
         using var clip = context.PushClip(new Rect(Bounds.Size));
         using var imageClip = context.PushClip(new Rect(_x, _y, p.Width * _scale, p.Height * _scale));

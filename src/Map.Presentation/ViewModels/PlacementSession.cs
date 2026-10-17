@@ -30,6 +30,10 @@ public sealed record StampToolSettings
     public double ObjectOpacity { get; init; } = 1;
     public StampStyle? Style { get; init; }
     public StampPlacementMode Mode { get; init; } = StampPlacementMode.One;
+    /// <summary>
+    /// «После размещения». The default Auto never selects placed assets (the next click places
+    /// again) and selects a single placed shape; Always selects whatever was placed.
+    /// </summary>
     public PlacementAutoSelectPolicy AutoSelect { get; init; } = PlacementAutoSelectPolicy.Auto;
     public double AreaRadius { get; init; } = 160;
     public double Density { get; init; } = 40;
@@ -37,6 +41,17 @@ public sealed record StampToolSettings
     public bool RandomizeVariant { get; init; }
     public StampRandomAngleStep RandomAngleStep { get; init; } = StampRandomAngleStep.Off;
     public bool RandomFlip { get; init; }
+
+    /// <summary>«Без наложений» in scatter: stamps whose collision boxes would intersect are left out.</summary>
+    public bool AvoidOverlap { get; init; }
+
+    /// <summary>Per-stamp variation of a series, path or scatter: degrees for rotation and hue, percent for the rest.</summary>
+    public double RotationJitterDegrees { get; init; }
+    public double SizeJitterPercent { get; init; }
+    public double OpacityJitterPercent { get; init; }
+    public double HueJitterDegrees { get; init; }
+    public double SaturationJitterPercent { get; init; }
+    public double BrightnessJitterPercent { get; init; }
     public string? AssetSetId { get; init; }
     public string? VariantId { get; init; }
 }

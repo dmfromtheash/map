@@ -343,6 +343,7 @@ public sealed class AssetCatalog : IAsyncDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!MatchesSource(set, query.Source)) continue;
+            if (set.Archived && !query.IncludeArchived) continue;
             if (query.FavoritesOnly && !set.Favorite)
             {
                 continue;
@@ -551,6 +552,7 @@ public sealed class AssetCatalog : IAsyncDisposable
             CoverWidth = record?.Width ?? 0,
             CoverHeight = record?.Height ?? 0,
             MediaType = record?.MediaType ?? "",
+            Archived = set.Archived,
         };
     }
 
@@ -561,7 +563,7 @@ public sealed class AssetCatalog : IAsyncDisposable
     public IReadOnlyList<AssetCollectionNode> CollectionTree(AssetSourceFilter source = AssetSourceFilter.All)
     {
         var direct = _document.Sets
-            .Where(set => set.CollectionId is not null && MatchesSource(set, source))
+            .Where(set => set.CollectionId is not null && !set.Archived && MatchesSource(set, source))
             .GroupBy(set => set.CollectionId!)
             .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
 
@@ -603,7 +605,7 @@ public sealed class AssetCatalog : IAsyncDisposable
 
     // ---------------------------------------------------------------- mutation
 
-    public int CountSets(AssetSourceFilter source) => _document.Sets.Count(set => MatchesSource(set, source));
+    public int CountSets(AssetSourceFilter source) => _document.Sets.Count(set => !set.Archived && MatchesSource(set, source));
 
     internal void NestBuiltInCollection(string pack, string parent, string title)
     {
@@ -623,7 +625,8 @@ public sealed class AssetCatalog : IAsyncDisposable
         return set.VariantIds.Any(id => _byVariantId.TryGetValue(id, out var variant)
             && _bySha.TryGetValue(variant.Sha256, out var record)
             && (source == AssetSourceFilter.BuiltIn) == (record.Provenance.Source is
-                StarterPackBootstrapper.ProvenanceSource or AtlasArtPack.ProvenanceSource));
+                // Recognise metadata from former packs without installing or recreating them.
+                "map-original-generated-starter" or "map-original-ai-atlas-20260908"));
     }
 
     private HashSet<string> DescendantCollections(string root)
@@ -748,6 +751,39 @@ public sealed class AssetCatalog : IAsyncDisposable
             }
         }
 
+        SaveIndex();
+    }
+
+    /// <summary>
+    /// Stores the placement passport of a card. A passport equal to the built-in defaults is
+    /// written as absent, so an untouched card keeps the exact older catalog shape.
+    /// </summary>
+    public void SetPlacementDefaults(string setId, AssetPlacementDefaults? defaults)
+    {
+        using var mutation = BeginMutation();
+        var index = RequireSetIndex(setId);
+        if (defaults is not null && ((defaults.CollisionFraction is { } fraction && !double.IsFinite(fraction))
+            || !double.IsFinite(defaults.RandomSizePercent)))
+            throw new ArgumentOutOfRangeException(nameof(defaults), "Значения паспорта должны быть числами.");
+        var normalized = defaults is null ? null : defaults with
+        {
+            CollisionFraction = defaults.CollisionFraction is { } value ? Math.Clamp(value, 0.05, 1) : null,
+            RandomSizePercent = Math.Clamp(defaults.RandomSizePercent, 0, 100),
+        };
+        _document.Sets[index] = _document.Sets[index] with
+        {
+            Placement = normalized == new AssetPlacementDefaults() ? null : normalized,
+        };
+        SaveIndex();
+    }
+
+    /// <summary>Moves a card into the archive or back; nothing is deleted either way.</summary>
+    public void SetSetArchived(string setId, bool archived)
+    {
+        using var mutation = BeginMutation();
+        var index = RequireSetIndex(setId);
+        if (_document.Sets[index].Archived == archived) return;
+        _document.Sets[index] = _document.Sets[index] with { Archived = archived };
         SaveIndex();
     }
 
@@ -887,6 +923,19 @@ public sealed class AssetCatalog : IAsyncDisposable
             AssetLibraryStore.AddSingleton(_document, record);
         }
 
+        SaveIndex();
+    }
+
+    /// <summary>Changes only one variant's label and placement defaults, preserving all other owner metadata.</summary>
+    public void SetVariantPresentation(string variantId, string label, double anchorX, double anchorY, double defaultScale)
+    {
+        using var mutation = BeginMutation();
+        var index = _document.Variants.FindIndex(v => v.Id == variantId);
+        if (index < 0) throw new ArgumentException("Вариант не найден.", nameof(variantId));
+        if (string.IsNullOrWhiteSpace(label) || !double.IsFinite(anchorX) || !double.IsFinite(anchorY)
+            || !double.IsFinite(defaultScale) || defaultScale <= 0) throw new ArgumentException("Неверные параметры варианта.");
+        _document.Variants[index] = _document.Variants[index] with
+        { Label = label.Trim(), AnchorX = Math.Clamp(anchorX, 0, 1), AnchorY = Math.Clamp(anchorY, 0, 1), DefaultScale = defaultScale };
         SaveIndex();
     }
 
@@ -1033,6 +1082,14 @@ public sealed class AssetCatalog : IAsyncDisposable
                     CoverVariantId = remaining.Contains(set.CoverVariantId, StringComparer.Ordinal)
                         ? set.CoverVariantId : remaining[0],
                 };
+                // Recent uses and the remembered variant of a set that keeps other variants must not
+                // point at the removed one: the index validator rejects such a save, so the removal
+                // used to fail outright once the asset had been placed.
+                _document.Recent.RemoveAll(item => item.SetId == set.Id && variantIds.Contains(item.VariantId));
+                if (_document.CurrentVariantBySet.TryGetValue(set.Id, out var current) && variantIds.Contains(current))
+                {
+                    _document.CurrentVariantBySet[set.Id] = remaining[0];
+                }
             }
         }
         SaveIndex();

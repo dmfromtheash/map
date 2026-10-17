@@ -1,9 +1,10 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Text.Json;
 using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Controls.Primitives;
 using Avalonia.Fonts.Inter;
 using Avalonia.Media.Imaging;
 using Avalonia.Interactivity;
@@ -104,8 +105,8 @@ public sealed class PlacementWorkflowApplication : Application
         Environment.SetEnvironmentVariable("MAP_UI_TEST_PROFILE_ROOT", Path.Combine(_workspace, "profile"));
         _catalog = new AssetCatalog(Path.Combine(_workspace, "catalog"));
         _catalog.ImportSet([
-            Path.Combine(Environment.CurrentDirectory, "src/Map.Assets/StarterAssets/sample-tree.png"),
-            Path.Combine(Environment.CurrentDirectory, "src/Map.Assets/StarterAssets/sample-mountains.png")],
+            Path.Combine(Environment.CurrentDirectory, "tests/fixtures/assets/diagnostic-stamp-01.png"),
+            Path.Combine(Environment.CurrentDirectory, "tests/fixtures/assets/diagnostic-stamp-02.png")],
             "Дерево", new AssetImportOptions(), DateTimeOffset.UnixEpoch);
         _window = new Window
         {
@@ -170,6 +171,13 @@ public sealed class PlacementWorkflowApplication : Application
 
     private async Task RunAsync()
     {
+        if (Options.Profile == "native-placement-overlap")
+        {
+            await AttachAsync(Document(8192));
+            await OverlapAsync();
+            _report.GatePassed = _report.Checks.Count > 0 && _report.Checks.Values.All(v => v);
+            return;
+        }
         if (Options.Profile == "native-placement-ux")
         {
             await AttachAsync(Document(8192));
@@ -458,6 +466,69 @@ public sealed class PlacementWorkflowApplication : Application
         Check("armed real primary autosave", await editor.TryPrimaryAutosaveAsync(ignoreDebounce: true));
         snapshot = editor.Session.Document;
         Check("primary exact committed snapshot", await Task.Run(() => SameScene(snapshot, _store.Open(editor.DocumentPath!).Document)));
+    }
+
+    /// <summary>«Без наложений» through the real panel toggle and real canvas clicks.</summary>
+    private async Task OverlapAsync()
+    {
+        Step("no-overlap scatter");
+        var editor = _view.Editor;
+        editor.StampAreaRadius = 220;
+        editor.StampDensity = 260;
+        await Task.Delay(50);
+        var toggle = _view.GetVisualDescendants().OfType<ToggleButton>().First(b => b.Name == "StampAvoidOverlapToggle");
+        toggle.BringIntoView(); _view.UpdateLayout();
+        Check("toggle visible in the scatter mode", toggle.IsEffectivelyVisible && !editor.StampAvoidOverlap);
+        toggle.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Task.Delay(50);
+        Check("toggle switches the tool", editor.StampAvoidOverlap && toggle.IsChecked == true
+            && editor.StampAreaSummary.Contains("без наложений"));
+
+        var before = Count(editor.Session.Document);
+        _view.Canvas.ClickForSmoke(500, 420); await Task.Delay(80);
+        var first = Count(editor.Session.Document) - before;
+        _view.Canvas.ClickForSmoke(600, 420); await Task.Delay(80);
+        var stamps = editor.Session.Document.Layers.OfType<ObjectLayer>().SelectMany(l => l.Objects)
+            .Where(o => o.Kind == SceneObjectKind.Stamp).ToArray();
+        var boxes = stamps.Select(o => StampCollision.Box(o.X + o.Width / 2, o.Y + o.Height / 2, o.Width, o.Height,
+            o.RotationDegrees, StampCollision.DefaultFraction)).ToArray();
+        var overlaps = 0;
+        for (var i = 0; i < boxes.Length; i++)
+        for (var j = i + 1; j < boxes.Length; j++)
+            if (StampCollision.Overlaps(boxes[i], boxes[j])) overlaps++;
+        Console.WriteLine($"no-overlap: first click {first}, total {stamps.Length - before}, planned {editor.PlannedStampCount}, overlaps {overlaps}");
+        Check("first click places fewer than planned", first > 1 && first < editor.PlannedStampCount);
+        Check("second click adds only into free space", stamps.Length - before > first);
+        Check("no collision boxes intersect", overlaps == 0);
+        Check("two clicks are two undo steps", editor.Session.UndoDepth == 2);
+        await Dispatcher.UIThread.InvokeAsync(() => { _view.UpdateLayout(); }, DispatcherPriority.Background);
+        Capture(_view, "no-overlap");
+        toggle.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Task.Delay(50);
+        Check("toggle switches back off", !editor.StampAvoidOverlap);
+
+        // «После размещения: выделять / не выделять» through the real segmented buttons.
+        Step("select after placement");
+        editor.StampPlacementMode = StampPlacementMode.One; await Task.Delay(50);
+        Button Segment(string name)
+        {
+            var button = _view.GetVisualDescendants().OfType<Button>().First(b => b.Name == name);
+            button.BringIntoView(); _view.UpdateLayout();
+            return button;
+        }
+        var dontSelect = Segment("PlacementAutoSelectOff");
+        var select = Segment("PlacementAutoSelectAlways");
+        Check("after-placement switch shows not selecting", dontSelect.IsEffectivelyVisible && !editor.SelectAfterPlacement
+            && dontSelect.Classes.Contains("selected") != select.Classes.Contains("selected"));
+        select.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Task.Delay(50);
+        var placedBefore = Count(editor.Session.Document);
+        _view.Canvas.ClickForSmoke(800, 300); await Task.Delay(80);
+        Check("select: placed asset is selected and the tool stays armed", editor.SelectAfterPlacement
+            && Count(editor.Session.Document) == placedBefore + 1 && editor.Session.SelectedObjectId is not null && editor.HasPendingPlacement);
+        dontSelect.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Task.Delay(50);
+        _view.Canvas.ClickForSmoke(850, 340); await Task.Delay(80);
+        var newest = editor.Session.Document.Layers.OfType<ObjectLayer>().SelectMany(l => l.Objects).Last();
+        Check("dont select: placed asset is not selected", !editor.SelectAfterPlacement
+            && Count(editor.Session.Document) == placedBefore + 2 && !editor.Session.SelectedObjectIds.Contains(newest.Id));
+        Capture(_view, "select-after");
     }
 
     private async Task GalleryAsync()

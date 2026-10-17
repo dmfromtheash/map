@@ -1,4 +1,4 @@
-using Avalonia;
+﻿using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Shapes;
@@ -29,6 +29,9 @@ public static class MapIcons
     // A meandering main channel with one tributary joining downstream.
     public const string River = "M4 4 C 9 6, 8 12, 12 13.5 C 16 15, 15 19, 20 20.5 " +
                                 "M17 5.5 C 14 8.5, 13.5 11, 12.5 13.8";
+    // A road forking: two edges of a way that opens into a Y, with a short rut in the middle.
+    public const string Road = "M5 20.5 C 7 14, 9 9, 12 3.5 M19 20.5 C 17 14, 15 9, 12 3.5 " +
+                               "M12 12 L 12 14.5 M12 17 L 12 19.5";
 
     // ----------------------------------------------------------------- panels
     public const string Layers = "M12 3.5 L21 8.5 L12 13.5 L3 8.5 Z M3.5 13 L12 17.8 L20.5 13";
@@ -160,6 +163,192 @@ public static class MapIcons
     public const string Move = "M12 3.5 V20.5 M3.5 12 H20.5 M9 6.5 L12 3.5 L15 6.5 " +
                                "M9 17.5 L12 20.5 L15 17.5 M6.5 9 L3.5 12 L6.5 15 M17.5 9 L20.5 12 L17.5 15";
 
+    // ------------------------------------------------ line set (UI redesign 2026-09-26)
+    // A calm outline family on one 24-unit grid, drawn by Grid24 without Stretch so every icon
+    // keeps its designed proportions. The older glyphs above stay untouched: the quick property
+    // strip over the canvas draws with them and must not change.
+    private static string Ring(double cx, double cy, double r) => string.Create(
+        System.Globalization.CultureInfo.InvariantCulture,
+        $"M{cx - r} {cy} A{r} {r} 0 1 0 {cx + r} {cy} A{r} {r} 0 1 0 {cx - r} {cy} ");
+
+    public static readonly string LineSelect = "M6 3.5 L18.5 10.7 L12.9 12.1 L10.3 17.5 Z M12.9 12.1 L16.9 17.5";
+    public static readonly string LineAssets = "M3 20.5 H21 " + Ring(7.5, 9, 3.6) +
+        "M7.5 12.6 V20.5 M12.5 20.5 V14.3 L16.5 10.9 L20.5 14.3 V20.5 M15.2 20.5 V17.5 H17.8 V20.5";
+    public static readonly string LineLand = "M3.5 14.5 C3.9 10.9 6.8 9.2 9.3 9.6 C10.2 6.3 14.9 5 17.5 7.6 " +
+        "C19.9 9.9 19.6 14.2 16.7 15.7 C14.5 16.9 12.3 16.2 10.3 17.3 C7.5 18.9 3.2 18 3.5 14.5 Z " +
+        "M8.5 13.2 L10.5 10.6 L12.1 12.4 L13.6 10.4 L16 13.2";
+    public static readonly string LineRiver = "M8 2.5 C6.4 5.8 10.9 7.4 9.8 10.9 C8.9 13.9 4.9 14.5 5.2 18.1 C5.4 19.8 6.5 20.9 7.5 21.5 " +
+        "M13 2.5 C11.4 5.8 15.9 7.4 14.8 10.9 C13.9 13.9 9.9 14.5 10.2 18.1 C10.4 19.8 11.5 20.9 12.5 21.5 " +
+        "M14.8 10.9 C16.4 11.3 18.4 10.6 20.5 8.7";
+    public static readonly string LineRoad = "M8.5 21.5 L10.8 2.5 M15.5 21.5 L13.2 2.5 M12 5 V7.2 M12 10.3 V12.9 M12 16.2 V19.2";
+    public static readonly string LineStroke = "M4 18.5 C7.5 9 11.5 20 20 6.5 " + Ring(4, 18.5, 1.6) + Ring(20, 6.5, 1.6);
+    public static readonly string LineShape = "M5 3.5 H12.5 A1.5 1.5 0 0 1 14 5 V12.5 A1.5 1.5 0 0 1 12.5 14 H5 " +
+        "A1.5 1.5 0 0 1 3.5 12.5 V5 A1.5 1.5 0 0 1 5 3.5 Z " + Ring(15, 15, 5.5);
+    public static readonly string LineText = "M5 6.5 V4 H19 V6.5 M12 4 V20 M9 20 H15";
+    public static readonly string LineNotes = "M6 3.5 H14.5 L18 7 V20.5 H6 Z M14.5 3.5 V7 H18 M9 11 H15 M9 14 H15 M9 17 H13";
+    public static readonly string LineBrush = "M20 4 L10.5 13.5 M13.2 10.8 L10.5 8.1 " +
+        "M10.4 13.6 C7.6 13 5.4 14.4 5.1 17 C4.9 18.8 4.3 19.8 3.5 20.5 C7.3 21.1 10.8 20.1 11.3 16.9";
+    public static readonly string LineMask = Ring(12, 12, 8.5) + "M12 3.5 V20.5 M12 5.5 L17.6 11.1 M12 10 L18.7 16.7 M12 14.6 L15.8 18.4";
+    public static readonly string LineLayers = "M12 3.5 L20.5 8 L12 12.5 L3.5 8 Z M3.5 12 L12 16.5 L20.5 12 M3.5 16 L12 20.5 L20.5 16";
+    public static readonly string LineWater = "M12 3.5 C15.6 7.8 18 10.9 18 13.8 A6 6 0 0 1 6 13.8 C6 10.9 8.4 7.8 12 3.5 Z M9.2 14.6 A3 3 0 0 0 11.6 17.2";
+    public static readonly string LineOther = "M4 20 L8.5 11 L13 20 Z " + Ring(17, 8, 3.5) + "M4 4.5 H11";
+    public static readonly string LineReset = "M4.5 5 V9.5 H9 M5 9.2 A7.5 7.5 0 1 1 6.1 16.6";
+    public static readonly string LineSparkle = "M12 4 L13.8 8.9 L19 10.5 L13.8 12.2 L12 17 L10.2 12.2 L5 10.5 L10.2 8.9 Z";
+    public static readonly string LineTarget = Ring(12, 12, 8) + Ring(12, 12, 3.5) + "M12 2 V5 M12 19 V22 M2 12 H5 M19 12 H22";
+    public static readonly string LineWand = "M4 20 L15 9 M15 4 V6 M19 8 H21 M18 5 L19.5 3.5 M20 11 L19 12";
+    public static readonly string LineCatalog = "M5 3.5 H9 A1.5 1.5 0 0 1 10.5 5 V9 A1.5 1.5 0 0 1 9 10.5 H5 A1.5 1.5 0 0 1 3.5 9 V5 A1.5 1.5 0 0 1 5 3.5 Z " +
+        "M15 3.5 H19 A1.5 1.5 0 0 1 20.5 5 V9 A1.5 1.5 0 0 1 19 10.5 H15 A1.5 1.5 0 0 1 13.5 9 V5 A1.5 1.5 0 0 1 15 3.5 Z " +
+        "M5 13.5 H9 A1.5 1.5 0 0 1 10.5 15 V19 A1.5 1.5 0 0 1 9 20.5 H5 A1.5 1.5 0 0 1 3.5 19 V15 A1.5 1.5 0 0 1 5 13.5 Z " +
+        "M15 13.5 H19 A1.5 1.5 0 0 1 20.5 15 V19 A1.5 1.5 0 0 1 19 20.5 H15 A1.5 1.5 0 0 1 13.5 19 V15 A1.5 1.5 0 0 1 15 13.5 Z";
+    public static readonly string LinePanelLeft = "M5.5 4 H18.5 A2 2 0 0 1 20.5 6 V18 A2 2 0 0 1 18.5 20 H5.5 A2 2 0 0 1 3.5 18 V6 A2 2 0 0 1 5.5 4 Z M9 4 V20 M15.5 9.5 L13 12 L15.5 14.5";
+    public static readonly string LinePanelRight = "M5.5 4 H18.5 A2 2 0 0 1 20.5 6 V18 A2 2 0 0 1 18.5 20 H5.5 A2 2 0 0 1 3.5 18 V6 A2 2 0 0 1 5.5 4 Z M15 4 V20 M8.5 9.5 L11 12 L8.5 14.5";
+    public static readonly string LineTrash = "M4.5 6.5 H19.5 M9.5 6.5 V4 H14.5 V6.5 M6.5 6.5 L7.5 20.5 H16.5 L17.5 6.5 M10 10.5 V16.5 M14 10.5 V16.5";
+    public static readonly string LineInfo = Ring(12, 12, 8.5) + "M12 11 V16.5 M12 7.8 V8";
+    public static readonly string ModeOne =Ring(12, 12, 3) + Ring(12, 12, 7.5);
+    public static readonly string ModeSeries = Ring(5, 15, 2) + Ring(12, 12, 2) + Ring(19, 9, 2);
+    public static readonly string ModeScatter = Ring(12, 12, 8.5) + Ring(9, 9, 1.4) + Ring(15, 10, 1.4) + Ring(10, 15.5, 1.4) + Ring(15.5, 15, 1.4);
+    public static readonly string ModePath = "M3.5 18 C7.5 9 14.5 17 20.5 6 " + Ring(6, 14.5, 1.6) + Ring(12, 12.3, 1.6) + Ring(18, 8.8, 1.6);
+    public static readonly string ModeArea = "M4 7 L11 3.5 L20 7.5 L18 18.5 L7 20 Z " + Ring(9, 10, 1.3) + Ring(14, 9, 1.3) + Ring(11, 14.5, 1.3) + Ring(15.5, 14, 1.3);
+
+    // ------------------------------------------- solid set (Inkarnate parity 2026-10-16)
+    // REA showed Inkarnate's rail as 24 px solid glyphs that read at a glance; Map's 1.6 px outlines
+    // at 21 px looked faint on the dark rail. These are Map's own drawings on the same 24-unit
+    // grid: a filled body (F0 = even-odd, so inner shapes cut windows) plus an optional heavy
+    // stroke for the parts that are lines by nature (rivers, a drawn line).
+    public sealed record SolidGlyph(string Fill, string? Stroke = null, double StrokeWidth = 2.6);
+
+    public static readonly SolidGlyph SolidSelect = new("M5 2.5 L5 19.6 L9.7 15.3 L12.7 21.7 L15.8 20.2 L12.8 13.9 L19.2 13.6 Z");
+    // Tavern set (2026-10-17): assets are a keep with battlements, shapes a heraldic shield, text a
+    // quill, notes a scroll and the mask a masquerade mask - the genre's own objects, same grid.
+    public static readonly SolidGlyph SolidAssets = new(
+        "F0 M3.6 21.6 V6.4 H6.4 V8.8 H8.6 V6.4 H11 V8.8 H13 V6.4 H15.4 V8.8 H17.6 V6.4 H20.4 V21.6 H14.6 V17.2 " +
+        "A2.6 2.6 0 0 0 9.4 17.2 V21.6 Z M10.9 11.2 H13.1 V14 H10.9 Z M11.4 1.6 V6 H12.6 V3.9 L15.4 3.1 L12.6 2.3 V1.6 Z");
+    public static readonly SolidGlyph SolidLand = new(
+        "F0 M2.8 14.6 C2.8 10.5 6.1 8.4 9 8.9 C10.3 5.2 15.5 4 18.3 6.9 C21.1 9.6 20.8 14.6 17.4 16.4 " +
+        "C14.9 17.7 12.5 17 10.2 18.3 C7 20 2.8 18.8 2.8 14.6 Z M7.9 14.4 L10.5 10.8 L12.3 13 L14 10.8 L16.8 14.4 Z");
+    public static readonly SolidGlyph SolidRiver = new("M0 0",
+        "M7.4 2.4 C5.6 6 11.2 7.6 10.2 11.6 C9.3 15.2 4.7 15.6 5.1 19.2 C5.3 20.5 6.1 21.2 7.2 21.6 " +
+        "M17.6 2.8 C16 6.6 14 9 10.4 11.5", 3.3);
+    public static readonly SolidGlyph SolidRoad = new(
+        "F0 M3.6 21.6 L9.6 2.4 H14.4 L20.4 21.6 Z M11.2 4.6 H12.8 V7.4 H11.2 Z M11 9.8 H13 V13 H11 Z M10.8 15.4 H13.2 V19.4 H10.8 Z");
+    public static readonly SolidGlyph SolidLine = new(
+        "M4.4 15.6 A2.6 2.6 0 1 0 4.4 20.8 A2.6 2.6 0 1 0 4.4 15.6 Z M19.6 3.6 A2.6 2.6 0 1 0 19.6 8.8 A2.6 2.6 0 1 0 19.6 3.6 Z",
+        "M4.4 18.2 C8.2 8.6 12.2 19.8 19.6 6.2", 2.6);
+    public static readonly SolidGlyph SolidShape = new(
+        "F0 M12 2.2 L20.4 5.2 V11.4 C20.4 16.6 16.8 20.2 12 22 C7.2 20.2 3.6 16.6 3.6 11.4 V5.2 Z " +
+        "M12 4.8 V19.4 C8.6 17.8 6.1 15.2 6.1 11.4 V7 Z");
+    public static readonly SolidGlyph SolidText = new(
+        "M21.2 2.4 C14.2 3.2 9.4 7.6 7.6 14 L6.3 18.6 L7.9 19.1 L9.3 15.4 C13.8 15 17.8 12 18.9 8.1 L15.8 8.6 " +
+        "L19.5 5.9 C20.3 4.8 20.8 3.7 21.2 2.4 Z", "M3 21.6 H13", 1.8);
+    public static readonly SolidGlyph SolidNotes = new(
+        "F0 M7.2 2.6 H18.2 A2.6 2.6 0 0 1 18.2 7.8 H17 V18.8 A2.8 2.8 0 0 1 14.2 21.6 H5.4 A2.6 2.6 0 0 1 5.4 16.4 H6.6 V3.2 " +
+        "C6.6 2.9 6.9 2.6 7.2 2.6 Z M9.2 7.6 H14.6 V9.2 H9.2 Z M9.2 11 H14.6 V12.6 H9.2 Z M9.2 14.4 H13 V16 H9.2 Z");
+    public static readonly SolidGlyph SolidBrush = new(
+        "M21 2.1 C21.9 3 21.4 4.4 20.4 5.4 L13.5 12.7 L11.3 10.5 L18.6 3.6 C19.6 2.6 20.2 1.3 21 2.1 Z " +
+        "M10.4 11.5 L12.5 13.6 C12.4 17 10.2 19.8 6.4 20.6 C5.1 20.9 3.7 21 2.4 20.8 C3.5 19.8 4 18.5 4.3 17 " +
+        "C4.8 13.9 7.1 11.7 10.4 11.5 Z");
+    public static readonly SolidGlyph SolidMask = new(
+        "F0 M2.2 7.6 C5.8 6 9.4 7.1 12 9.1 C14.6 7.1 18.2 6 21.8 7.6 C21.9 12.8 19.6 16.4 16.2 16.4 " +
+        "C14.4 16.4 13 15.2 12 13.6 C11 15.2 9.6 16.4 7.8 16.4 C4.4 16.4 2.1 12.8 2.2 7.6 Z " +
+        "M5.6 10.6 C6.8 9.6 8.6 9.6 9.8 10.8 C8.6 12.2 6.8 12.2 5.6 10.6 Z " +
+        "M18.4 10.6 C17.2 9.6 15.4 9.6 14.2 10.8 C15.4 12.2 17.2 12.2 18.4 10.6 Z");
+
+    /// <summary>The solid rail glyph of a tool.</summary>
+    public static SolidGlyph SolidTool(Map.Presentation.ViewModels.EditorTool tool) => tool switch
+    {
+        Map.Presentation.ViewModels.EditorTool.Select => SolidSelect,
+        Map.Presentation.ViewModels.EditorTool.Land => SolidLand,
+        Map.Presentation.ViewModels.EditorTool.Line => SolidLine,
+        Map.Presentation.ViewModels.EditorTool.Shape => SolidShape,
+        Map.Presentation.ViewModels.EditorTool.Text => SolidText,
+        Map.Presentation.ViewModels.EditorTool.Notes => SolidNotes,
+        Map.Presentation.ViewModels.EditorTool.Brush => SolidBrush,
+        Map.Presentation.ViewModels.EditorTool.Mask => SolidMask,
+        Map.Presentation.ViewModels.EditorTool.Stamp => SolidAssets,
+        Map.Presentation.ViewModels.EditorTool.River => SolidRiver,
+        Map.Presentation.ViewModels.EditorTool.Road => SolidRoad,
+        _ => SolidSelect,
+    };
+
+    /// <summary>Draws a solid glyph on its 24-unit grid, following the host's foreground.</summary>
+    public static Control Solid24(SolidGlyph glyph, double size = 24, IBrush? brush = null)
+    {
+        // Scaled to the drawing's own bounds, not to the 24-unit grid: Inkarnate's glyphs fill
+        // their cell, and every Map glyph then reads at the same optical size.
+        var fill = Geometry.Parse(glyph.Fill);
+        var strokeGeometry = glyph.Stroke is { } s ? Geometry.Parse(s) : null;
+        var bounds = fill.Bounds.Width > 0.1 ? fill.Bounds : default;
+        if (strokeGeometry is not null)
+        {
+            var inflated = strokeGeometry.Bounds.Inflate(glyph.StrokeWidth / 2);
+            bounds = bounds.Width > 0.1 ? bounds.Union(inflated) : inflated;
+        }
+        var side = System.Math.Max(bounds.Width, bounds.Height);
+        var canvas = new Canvas { Width = side, Height = side };
+        var offset = new Point((side - bounds.Width) / 2 - bounds.X, (side - bounds.Height) / 2 - bounds.Y);
+        var body = new Path { Data = fill, IsHitTestVisible = false };
+        Canvas.SetLeft(body, offset.X); Canvas.SetTop(body, offset.Y);
+        Paint(body, Path.FillProperty, brush);
+        canvas.Children.Add(body);
+        if (strokeGeometry is not null)
+        {
+            var line = new Path
+            {
+                Data = strokeGeometry,
+                StrokeThickness = glyph.StrokeWidth,
+                StrokeLineCap = PenLineCap.Round,
+                StrokeJoin = PenLineJoin.Round,
+                IsHitTestVisible = false,
+            };
+            Paint(line, Path.StrokeProperty, brush);
+            Canvas.SetLeft(line, offset.X); Canvas.SetTop(line, offset.Y);
+            canvas.Children.Add(line);
+        }
+        return new Viewbox { Width = size, Height = size, Stretch = Stretch.Uniform, IsHitTestVisible = false, Child = canvas };
+    }
+
+    /// <summary>The line-set rail glyph of a tool (UI redesign).</summary>
+    public static string LineTool(Map.Presentation.ViewModels.EditorTool tool) => tool switch
+    {
+        Map.Presentation.ViewModels.EditorTool.Select => LineSelect,
+        Map.Presentation.ViewModels.EditorTool.Land => LineLand,
+        Map.Presentation.ViewModels.EditorTool.Line => LineStroke,
+        Map.Presentation.ViewModels.EditorTool.Shape => LineShape,
+        Map.Presentation.ViewModels.EditorTool.Text => LineText,
+        Map.Presentation.ViewModels.EditorTool.Notes => LineNotes,
+        Map.Presentation.ViewModels.EditorTool.Brush => LineBrush,
+        Map.Presentation.ViewModels.EditorTool.Mask => LineMask,
+        Map.Presentation.ViewModels.EditorTool.Stamp => LineAssets,
+        Map.Presentation.ViewModels.EditorTool.River => LineRiver,
+        Map.Presentation.ViewModels.EditorTool.Road => LineRoad,
+        _ => LineSelect,
+    };
+
+    /// <summary>
+    /// A line-set glyph drawn on its own 24-unit grid and scaled as a whole, so thin details keep
+    /// their place instead of being stretched to the path's bounds.
+    /// </summary>
+    public static Control Grid24(string data, double size = 18, IBrush? brush = null, double thickness = 1.7)
+    {
+        var path = new Path
+        {
+            Data = Geometry.Parse(data),
+            StrokeThickness = thickness,
+            StrokeLineCap = PenLineCap.Round,
+            StrokeJoin = PenLineJoin.Round,
+            IsHitTestVisible = false,
+        };
+        Paint(path, Path.StrokeProperty, brush);
+        return new Viewbox
+        {
+            Width = size,
+            Height = size,
+            Stretch = Stretch.Uniform,
+            IsHitTestVisible = false,
+            Child = new Canvas { Width = 24, Height = 24, Children = { path } },
+        };
+    }
+
     /// <summary>The rail glyph of a tool, so the rail can be built from the shared layout list.</summary>
     public static string Tool(Map.Presentation.ViewModels.EditorTool tool) => tool switch
     {
@@ -173,6 +362,7 @@ public static class MapIcons
         Map.Presentation.ViewModels.EditorTool.Mask => Mask,
         Map.Presentation.ViewModels.EditorTool.Stamp => Assets,
         Map.Presentation.ViewModels.EditorTool.River => River,
+        Map.Presentation.ViewModels.EditorTool.Road => Road,
         _ => Select,
     };
 

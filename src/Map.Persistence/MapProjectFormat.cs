@@ -9,14 +9,18 @@ public static class MapProjectFormat
     public const int EditablePathsSchemaVersion = 5;
     public const int EditableAreasSchemaVersion = 6;
     public const int RiversSchemaVersion = 7;
+    public const int RoadsSchemaVersion = 8;
+    public const int LandPaintSchemaVersion = 9;
+    public const int BaseMaterialSchemaVersion = 10;
     public const string Extension = ".mapproj";
 
     /// <summary>The newest schema this build writes and reads.</summary>
-    public const int MaxSupportedSchemaVersion = RiversSchemaVersion;
+    public const int MaxSupportedSchemaVersion = BaseMaterialSchemaVersion;
 
     /// <summary>
-    /// Schemas v5–v7 share the v4 container and differ only by the layer constructs they may
-    /// carry (paths, areas, rivers). A reader expecting v4 accepts all of them.
+    /// Schemas v5–v10 share the v4 container and differ only by the layer constructs they may
+    /// carry (paths, areas, rivers, roads, land painting, a material on the page colour). This
+    /// reader accepts all of them.
     /// </summary>
     public static bool IsExtendedV4Schema(int schemaVersion) =>
         schemaVersion is >= EditablePathsSchemaVersion and <= MaxSupportedSchemaVersion;
@@ -26,6 +30,7 @@ public static class MapProjectFormat
     public const string AssetManifestEntry = "asset-manifest.json";
     public const string PreviewEntry = "preview.png";
     public const string RasterPrefix = "rasters/";
+    public const string LandPaintPrefix = "rasters/land-paint/";
     public const string MaskPrefix = "masks/";
     public const string AssetPrefix = "assets/";
     public const string ObjectPrefix = "objects/";

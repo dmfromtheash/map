@@ -858,6 +858,30 @@ public sealed class Stage10LibraryStampTests : IAsyncLifetime
     }
 
     [Fact]
+    public void Choosing_an_asset_places_it_one_at_a_time_after_an_area_was_used()
+    {
+        var catalog = TrackCatalog(CatalogRoot());
+        var restored = new EditorViewModel(
+            TestData.Document(), documentPath: null, startDirty: false,
+            new FakeProjectStore(), new FakeRecentMaps(), new FakeFilePicker(),
+            new FakePrompts(), new FakeLog(), clock: () => Stamp(0), assetCatalog: catalog,
+            localPreferences: new EditorLocalPreferences(Stamp: new StampToolSettings { Mode = StampPlacementMode.FillArea }));
+        Assert.Equal(StampPlacementMode.One, restored.StampPlacementMode);
+
+        var set = ImportTwelve(catalog);
+        restored.RefreshLibrary();
+        restored.StampPlacementMode = StampPlacementMode.FillArea;
+        var card = restored.LibraryRows.ToList().FindIndex(row => !row.IsHeader);
+        Assert.True(restored.SelectLibraryRow(card));
+        Assert.Equal(set.Id, restored.SelectedSetId);
+        Assert.Equal(StampPlacementMode.One, restored.StampPlacementMode);
+
+        restored.StampPlacementMode = StampPlacementMode.Series;
+        restored.UseSinglePlacementForNewAsset();
+        Assert.Equal(StampPlacementMode.Series, restored.StampPlacementMode);
+    }
+
+    [Fact]
     public void A_header_row_can_never_become_the_selected_asset_set()
     {
         var editor = Editor(out var catalog);

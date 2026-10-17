@@ -12,8 +12,8 @@ public sealed class Stage10EGridViewModelTests
     {
         Assert.Equal("Квадратная", EditorLabels.GridGeometry(GridGeometry.Square));
         Assert.Equal("Изометрическая", EditorLabels.GridGeometry(GridGeometry.IsometricSquares));
-        Assert.Equal("Шестиугольная, плоский верх", EditorLabels.GridGeometry(GridGeometry.HexFlat));
-        Assert.Equal("Шестиугольная, острый верх", EditorLabels.GridGeometry(GridGeometry.HexPointy));
+        Assert.Equal("Гексы: вертикальные столбцы (плоский верх)", EditorLabels.GridGeometry(GridGeometry.HexFlat));
+        Assert.Equal("Гексы: горизонтальные ряды (острый верх)", EditorLabels.GridGeometry(GridGeometry.HexPointy));
     }
 
     [Fact]

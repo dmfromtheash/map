@@ -1,227 +1,258 @@
 ﻿<Application xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="Map.App.App"
-             RequestedThemeVariant="Light">
-    <!-- Blue Atlas: opaque working surfaces, semantic colors and embedded Onest typography. -->
+             RequestedThemeVariant="Dark">
+    <!-- Tavern (2026-10-17, owner's choice "E"): dark wood and leather, warm cream text, brass
+         accents. Only the map is bright; every surface around it stays dim and warm. -->
     <Application.Resources>
         <FontFamily x:Key="MapUiFont">avares://Map.App/Assets/Fonts/Onest#Onest</FontFamily>
+        <!-- Display serif of the Candle & Ornament style: headings, the main commands. OFL. -->
+        <FontFamily x:Key="MapDisplayFont">avares://Map.App/Assets/Fonts/Cormorant#Cormorant Garamond</FontFamily>
         <x:Double x:Key="MapControlHeight">36</x:Double>
         <x:Double x:Key="MapCompactHeight">30</x:Double>
-        <CornerRadius x:Key="MapControlRadius">6</CornerRadius>
-        <CornerRadius x:Key="MapCardRadius">10</CornerRadius>
+        <CornerRadius x:Key="MapControlRadius">3</CornerRadius>
+        <CornerRadius x:Key="MapCardRadius">6</CornerRadius>
         <!-- Opaque working surfaces keep text contrast independent of decorative artwork. -->
         <LinearGradientBrush x:Key="MapWorkspaceBrush" StartPoint="0%,0%" EndPoint="0%,100%">
-            <GradientStop Color="#F9FBFF" Offset="0" />
-            <GradientStop Color="#EFF4FA" Offset="1" />
+            <GradientStop Color="#1C1510" Offset="0" />
+            <GradientStop Color="#120E0B" Offset="1" />
         </LinearGradientBrush>
-        <SolidColorBrush x:Key="MapCanvasSurroundBrush" Color="#E5EDF6" />
+        <SolidColorBrush x:Key="MapCanvasSurroundBrush" Color="#0E0B08" />
         <LinearGradientBrush x:Key="MapPropertyGroupBrush" StartPoint="0%,0%" EndPoint="0%,100%">
-            <GradientStop Color="#EFF4FB" Offset="0" />
-            <GradientStop Color="#E5EEF8" Offset="1" />
+            <GradientStop Color="#261D16" Offset="0" />
+            <GradientStop Color="#201812" Offset="1" />
         </LinearGradientBrush>
-        <BoxShadows x:Key="MapFocusShadow">0 0 0 2 #176BC2</BoxShadows>
-        <BoxShadows x:Key="MapChromeFocusShadow">0 0 0 2 #BBDFFF</BoxShadows>
+        <BoxShadows x:Key="MapFocusShadow">0 0 0 2 #E7C982</BoxShadows>
+        <BoxShadows x:Key="MapChromeFocusShadow">0 0 0 2 #E7C982</BoxShadows>
         <LinearGradientBrush x:Key="MapSurfaceBrush" StartPoint="0%,0%" EndPoint="0%,100%">
-            <GradientStop Color="#F9FBFF" Offset="0" />
-            <GradientStop Color="#EFF4FA" Offset="1" />
+            <GradientStop Color="#1E1712" Offset="0" />
+            <GradientStop Color="#18120E" Offset="1" />
         </LinearGradientBrush>
         <LinearGradientBrush x:Key="MapPanelBrush" StartPoint="0%,0%" EndPoint="0%,100%">
-            <GradientStop Color="#FCFDFF" Offset="0" />
-            <GradientStop Color="#F2F6FC" Offset="1" />
+            <GradientStop Color="#221A14" Offset="0" />
+            <GradientStop Color="#1A140F" Offset="1" />
         </LinearGradientBrush>
         <LinearGradientBrush x:Key="MapElevatedBrush" StartPoint="0%,0%" EndPoint="0%,100%">
-            <GradientStop Color="#FFFFFF" Offset="0" />
-            <GradientStop Color="#F9FBFF" Offset="1" />
+            <GradientStop Color="#2C221A" Offset="0" />
+            <GradientStop Color="#231B15" Offset="1" />
         </LinearGradientBrush>
         <LinearGradientBrush x:Key="MapControlBrush" StartPoint="0%,0%" EndPoint="0%,100%">
-            <GradientStop Color="#FFFFFF" Offset="0" />
-            <GradientStop Color="#E9EFF7" Offset="1" />
+            <GradientStop Color="#211913" Offset="0" />
+            <GradientStop Color="#1C1511" Offset="1" />
         </LinearGradientBrush>
-        <LinearGradientBrush x:Key="MapControlHoverBrush" StartPoint="0%,0%" EndPoint="0%,100%">
-            <GradientStop Color="#F8FCFF" Offset="0" />
-            <GradientStop Color="#DCEAF9" Offset="1" />
-        </LinearGradientBrush>
-        <LinearGradientBrush x:Key="MapControlPressedBrush" StartPoint="0%,0%" EndPoint="0%,100%">
-            <GradientStop Color="#D0E1F3" Offset="0" />
-            <GradientStop Color="#E5EFFA" Offset="1" />
-        </LinearGradientBrush>
-        <SolidColorBrush x:Key="MapBorderBrush" Color="#C3D0DF" />
-        <SolidColorBrush x:Key="MapBorderStrongBrush" Color="#637C9B" />
+        <RadialGradientBrush x:Key="MapControlHoverBrush" Center="50%,110%" GradientOrigin="50%,110%" RadiusX="80%" RadiusY="150%">
+            <GradientStop Color="#42301E" Offset="0" />
+            <GradientStop Color="#2A1F16" Offset="0.7" />
+            <GradientStop Color="#211913" Offset="1" />
+        </RadialGradientBrush>
+        <RadialGradientBrush x:Key="MapControlPressedBrush" Center="50%,110%" GradientOrigin="50%,110%" RadiusX="80%" RadiusY="150%">
+            <GradientStop Color="#432F1B" Offset="0" />
+            <GradientStop Color="#2E2218" Offset="0.65" />
+            <GradientStop Color="#241B14" Offset="1" />
+        </RadialGradientBrush>
+        <SolidColorBrush x:Key="MapBorderBrush" Color="#4A3926" />
+        <SolidColorBrush x:Key="MapBorderStrongBrush" Color="#8A6A3A" />
         <!-- The one border that has to clear 3:1 on its own: MapFieldBrush and MapPanelBrush are
              a shade apart, so nothing else tells the user where the input begins. -->
-        <SolidColorBrush x:Key="MapFieldBorderBrush" Color="#637C9B" />
+        <SolidColorBrush x:Key="MapFieldBorderBrush" Color="#8A6A3A" />
         <LinearGradientBrush x:Key="MapFieldBrush" StartPoint="0%,0%" EndPoint="0%,100%">
-            <GradientStop Color="#FFFFFF" Offset="0" />
-            <GradientStop Color="#FCFDFF" Offset="1" />
+            <GradientStop Color="#0F0B08" Offset="0" />
+            <GradientStop Color="#140F0B" Offset="1" />
         </LinearGradientBrush>
 
-        <!-- Dark chrome frames the light work area. -->
+        <!-- Chrome: the darkest wood, framing the panels and the map. -->
         <LinearGradientBrush x:Key="MapChromeBrush" StartPoint="0%,0%" EndPoint="0%,100%">
-            <GradientStop Color="#1B304B" Offset="0" />
-            <GradientStop Color="#0D1D33" Offset="1" />
+            <GradientStop Color="#261C15" Offset="0" />
+            <GradientStop Color="#17110D" Offset="1" />
         </LinearGradientBrush>
         <LinearGradientBrush x:Key="MapChromeElevatedBrush" StartPoint="0%,0%" EndPoint="0%,100%">
-            <GradientStop Color="#2B4665" Offset="0" />
-            <GradientStop Color="#1B314D" Offset="1" />
+            <GradientStop Color="#33271D" Offset="0" />
+            <GradientStop Color="#261C15" Offset="1" />
         </LinearGradientBrush>
         <LinearGradientBrush x:Key="MapChromeHoverBrush" StartPoint="0%,0%" EndPoint="0%,100%">
-            <GradientStop Color="#365D83" Offset="0" />
-            <GradientStop Color="#233F60" Offset="1" />
+            <GradientStop Color="#433326" Offset="0" />
+            <GradientStop Color="#33271D" Offset="1" />
         </LinearGradientBrush>
         <LinearGradientBrush x:Key="MapChromePressedBrush" StartPoint="0%,0%" EndPoint="0%,100%">
-            <GradientStop Color="#162C47" Offset="0" />
-            <GradientStop Color="#284565" Offset="1" />
+            <GradientStop Color="#1A140F" Offset="0" />
+            <GradientStop Color="#2A2019" Offset="1" />
         </LinearGradientBrush>
-        <SolidColorBrush x:Key="MapChromeBorderBrush" Color="#95B0CE" />
-        <SolidColorBrush x:Key="MapChromeTextBrush" Color="#F5F9FF" />
-        <SolidColorBrush x:Key="MapChromeMutedBrush" Color="#C5D5E7" />
+        <SolidColorBrush x:Key="MapChromeBorderBrush" Color="#6E5532" />
+        <SolidColorBrush x:Key="MapChromeTextBrush" Color="#F3E3BF" />
+        <SolidColorBrush x:Key="MapChromeMutedBrush" Color="#C2AE8E" />
         <LinearGradientBrush x:Key="MapRailTileBrush" StartPoint="0%,0%" EndPoint="0%,100%">
-            <GradientStop Color="#FFFFFF" Offset="0" />
-            <GradientStop Color="#DCE5F1" Offset="1" />
+            <GradientStop Color="#30251C" Offset="0" />
+            <GradientStop Color="#1A140F" Offset="1" />
         </LinearGradientBrush>
         <LinearGradientBrush x:Key="MapRailTileHoverBrush" StartPoint="0%,0%" EndPoint="0%,100%">
-            <GradientStop Color="#FFFFFF" Offset="0" />
-            <GradientStop Color="#EAF3FD" Offset="1" />
+            <GradientStop Color="#36291E" Offset="0" />
+            <GradientStop Color="#241B15" Offset="1" />
         </LinearGradientBrush>
         <LinearGradientBrush x:Key="MapRailTileSelectedBrush" StartPoint="0%,0%" EndPoint="0%,100%">
-            <GradientStop Color="#F5FBFF" Offset="0" />
-            <GradientStop Color="#D7E8FA" Offset="1" />
+            <GradientStop Color="#3E2F1E" Offset="0" />
+            <GradientStop Color="#2A2016" Offset="1" />
         </LinearGradientBrush>
-        <SolidColorBrush x:Key="MapRailTileBorderBrush" Color="#637C9B" />
+        <SolidColorBrush x:Key="MapRailTileBorderBrush" Color="#6E5532" />
 
-        <LinearGradientBrush x:Key="MapPrimaryFillBrush" StartPoint="0%,0%" EndPoint="0%,100%">
-            <GradientStop Color="#2C78BE" Offset="0" />
-            <GradientStop Color="#185A9E" Offset="1" />
-        </LinearGradientBrush>
-        <LinearGradientBrush x:Key="MapPrimaryHoverFillBrush" StartPoint="0%,0%" EndPoint="0%,100%">
-            <GradientStop Color="#236AAC" Offset="0" />
-            <GradientStop Color="#104675" Offset="1" />
-        </LinearGradientBrush>
-        <LinearGradientBrush x:Key="MapPrimaryPressedFillBrush" StartPoint="0%,0%" EndPoint="0%,100%">
-            <GradientStop Color="#174F8B" Offset="0" />
-            <GradientStop Color="#0E3158" Offset="1" />
-        </LinearGradientBrush>
+        <!-- Brass: the one filled action and the chosen mode. -->
+        <RadialGradientBrush x:Key="MapPrimaryFillBrush" Center="50%,110%" GradientOrigin="50%,110%" RadiusX="80%" RadiusY="150%">
+            <GradientStop Color="#4A321C" Offset="0" />
+            <GradientStop Color="#2A1F16" Offset="0.7" />
+            <GradientStop Color="#1E1712" Offset="1" />
+        </RadialGradientBrush>
+        <RadialGradientBrush x:Key="MapPrimaryHoverFillBrush" Center="50%,110%" GradientOrigin="50%,110%" RadiusX="80%" RadiusY="150%">
+            <GradientStop Color="#5E3E20" Offset="0" />
+            <GradientStop Color="#33251A" Offset="0.7" />
+            <GradientStop Color="#231A14" Offset="1" />
+        </RadialGradientBrush>
+        <RadialGradientBrush x:Key="MapPrimaryPressedFillBrush" Center="50%,110%" GradientOrigin="50%,110%" RadiusX="80%" RadiusY="150%">
+            <GradientStop Color="#6E4824" Offset="0" />
+            <GradientStop Color="#3A2A1C" Offset="0.65" />
+            <GradientStop Color="#2A2019" Offset="1" />
+        </RadialGradientBrush>
         <LinearGradientBrush x:Key="MapDisabledSurfaceBrush" StartPoint="0%,0%" EndPoint="0%,100%">
-            <GradientStop Color="#EDF1F6" Offset="0" />
-            <GradientStop Color="#E2E8F0" Offset="1" />
+            <GradientStop Color="#221B15" Offset="0" />
+            <GradientStop Color="#1D1712" Offset="1" />
         </LinearGradientBrush>
 
         <!-- text -->
-        <SolidColorBrush x:Key="MapTextBrush" Color="#1C304A" />
-        <SolidColorBrush x:Key="MapInputTextBrush" Color="#1C304A" />
-        <SolidColorBrush x:Key="MapMutedBrush" Color="#4F647D" />
-        <SolidColorBrush x:Key="MapFaintBrush" Color="#4F647D" />
+        <SolidColorBrush x:Key="MapTextBrush" Color="#E9DCC4" />
+        <SolidColorBrush x:Key="MapInputTextBrush" Color="#F3E3BF" />
+        <SolidColorBrush x:Key="MapMutedBrush" Color="#C4B294" />
+        <SolidColorBrush x:Key="MapFaintBrush" Color="#B5A385" />
         <!-- A control that is off right now must still be legible: "not now", never "not there".
              Kept well clear of the faint brush so a greyed caption is not mistaken for a hint. -->
-        <SolidColorBrush x:Key="MapDisabledTextBrush" Color="#536881" />
+        <SolidColorBrush x:Key="MapDisabledTextBrush" Color="#A39A8A" />
 
         <!-- meaning -->
-        <SolidColorBrush x:Key="MapAccentBrush" Color="#2366AD" />
-        <SolidColorBrush x:Key="MapAccentHoverBrush" Color="#18558F" />
+        <SolidColorBrush x:Key="MapAccentBrush" Color="#D4AE62" />
+        <SolidColorBrush x:Key="MapAccentHoverBrush" Color="#E7C982" />
         <LinearGradientBrush x:Key="MapAccentDimBrush" StartPoint="0%,0%" EndPoint="0%,100%">
-            <GradientStop Color="#F0F7FF" Offset="0" />
-            <GradientStop Color="#DCEBFA" Offset="1" />
+            <GradientStop Color="#3D2F1D" Offset="0" />
+            <GradientStop Color="#30251A" Offset="1" />
         </LinearGradientBrush>
-        <SolidColorBrush x:Key="MapAccentBorderBrush" Color="#174F8B" />
-        <SolidColorBrush x:Key="MapOnAccentBrush" Color="#FFFFFF" />
-        <SolidColorBrush x:Key="MapDangerBrush" Color="#AE3544" />
-        <SolidColorBrush x:Key="MapDangerDimBrush" Color="#FCEBED" />
-        <SolidColorBrush x:Key="MapDangerHoverBrush" Color="#F6D6DC" />
-        <SolidColorBrush x:Key="MapDangerBorderBrush" Color="#AE3544" />
-        <SolidColorBrush x:Key="MapSuccessBrush" Color="#246443" />
-        <SolidColorBrush x:Key="MapWarnBrush" Color="#805512" />
-        <SolidColorBrush x:Key="MapWarnDimBrush" Color="#FFF2D8" />
-        <SolidColorBrush x:Key="MapWarnBorderBrush" Color="#916015" />
-        <SolidColorBrush x:Key="MapFocusBrush" Color="#176BC2" />
-        <SolidColorBrush x:Key="MapChromeFocusBrush" Color="#BBDFFF" />
+        <SolidColorBrush x:Key="MapAccentBorderBrush" Color="#A9833F" />
+        <SolidColorBrush x:Key="MapOnAccentBrush" Color="#F0D79A" />
+        <SolidColorBrush x:Key="MapDangerBrush" Color="#E5907A" />
+        <SolidColorBrush x:Key="MapDangerDimBrush" Color="#3A1F18" />
+        <SolidColorBrush x:Key="MapDangerHoverBrush" Color="#4B271E" />
+        <SolidColorBrush x:Key="MapDangerBorderBrush" Color="#B5654A" />
+        <SolidColorBrush x:Key="MapSuccessBrush" Color="#86C49A" />
+        <SolidColorBrush x:Key="MapWarnBrush" Color="#E3B565" />
+        <SolidColorBrush x:Key="MapWarnDimBrush" Color="#3A2C14" />
+        <SolidColorBrush x:Key="MapWarnBorderBrush" Color="#A07A30" />
+        <SolidColorBrush x:Key="MapFocusBrush" Color="#E7C982" />
+        <SolidColorBrush x:Key="MapChromeFocusBrush" Color="#E7C982" />
         <LinearGradientBrush x:Key="MapSelectionBrush" StartPoint="0%,0%" EndPoint="0%,100%">
-            <GradientStop Color="#EFF6FF" Offset="0" />
-            <GradientStop Color="#DFEAF7" Offset="1" />
+            <GradientStop Color="#35291A" Offset="0" />
+            <GradientStop Color="#2C2217" Offset="1" />
         </LinearGradientBrush>
         <x:Double x:Key="TextControlPlaceholderOpacity">1</x:Double>
-        <SolidColorBrush x:Key="MapSelectionBorderBrush" Color="#316CAB" />
+        <SolidColorBrush x:Key="MapSelectionBorderBrush" Color="#C9A15A" />
         <LinearGradientBrush x:Key="MapNewCardBrush" StartPoint="0%,0%" EndPoint="0%,100%">
-            <GradientStop Color="#F8FBFF" Offset="0" />
-            <GradientStop Color="#E7EFFA" Offset="1" />
+            <GradientStop Color="#261D16" Offset="0" />
+            <GradientStop Color="#1C1511" Offset="1" />
         </LinearGradientBrush>
         <LinearGradientBrush x:Key="MapNewCardHoverBrush" StartPoint="0%,0%" EndPoint="0%,100%">
-            <GradientStop Color="#FFFFFF" Offset="0" />
-            <GradientStop Color="#DCEBFB" Offset="1" />
+            <GradientStop Color="#33271D" Offset="0" />
+            <GradientStop Color="#241B15" Offset="1" />
         </LinearGradientBrush>
         <LinearGradientBrush x:Key="MapNewCardPressedBrush" StartPoint="0%,0%" EndPoint="0%,100%">
-            <GradientStop Color="#D6E5F7" Offset="0" />
-            <GradientStop Color="#EDF4FD" Offset="1" />
+            <GradientStop Color="#1A140F" Offset="0" />
+            <GradientStop Color="#261D16" Offset="1" />
         </LinearGradientBrush>
 
         <!--
             Avalonia Fluent paints the slider track's pressed state from these theme resources.
-            Keep both halves stable while the thumb is being dragged: blue before it, navy after it.
+            Keep both halves stable while the thumb is being dragged: brass before it, wood after it.
         -->
-        <SolidColorBrush x:Key="SliderTrackFill" Color="#1C304A" />
+        <SolidColorBrush x:Key="SliderTrackFill" Color="#4A3926" />
         <!-- Size the Fluent track and its thumb together; never crop a 50 px template to 30. -->
         <GridLength x:Key="SliderPreContentMargin">8</GridLength>
         <GridLength x:Key="SliderPostContentMargin">8</GridLength>
         <x:Double x:Key="SliderHorizontalHeight">36</x:Double>
-        <SolidColorBrush x:Key="SliderTrackFillPointerOver" Color="#1C304A" />
-        <SolidColorBrush x:Key="SliderTrackFillPressed" Color="#1C304A" />
-        <SolidColorBrush x:Key="SliderTrackValueFill" Color="#2366AD" />
-        <SolidColorBrush x:Key="SliderTrackValueFillPointerOver" Color="#2366AD" />
-        <SolidColorBrush x:Key="SliderTrackValueFillPressed" Color="#2366AD" />
+        <SolidColorBrush x:Key="SliderTrackFillPointerOver" Color="#5A4630" />
+        <SolidColorBrush x:Key="SliderTrackFillPressed" Color="#5A4630" />
+        <SolidColorBrush x:Key="SliderTrackValueFill" Color="#C9A15A" />
+        <SolidColorBrush x:Key="SliderTrackValueFillPointerOver" Color="#D9B56C" />
+        <SolidColorBrush x:Key="SliderTrackValueFillPressed" Color="#D9B56C" />
+        <SolidColorBrush x:Key="SliderThumbBackground" Color="#E7C982" />
+        <SolidColorBrush x:Key="SliderThumbBackgroundPointerOver" Color="#F0D79A" />
+        <SolidColorBrush x:Key="SliderThumbBackgroundPressed" Color="#D9B56C" />
 
         <!--
             Fluent's Button and ToggleButton themes address their internal ContentPresenter with
             these resources. Overriding them here keeps every ordinary clickable surface visible
             even before a more specialised Map class supplies its own colours.
         -->
-        <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="#DFEAF6" />
-        <SolidColorBrush x:Key="ButtonBorderBrushPointerOver" Color="#637C9B" />
-        <SolidColorBrush x:Key="ButtonForegroundPointerOver" Color="#1C304A" />
-        <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="#CDDFF1" />
-        <SolidColorBrush x:Key="ButtonBorderBrushPressed" Color="#637C9B" />
-        <SolidColorBrush x:Key="ButtonForegroundPressed" Color="#1C304A" />
+        <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="#3E2F23" />
+        <SolidColorBrush x:Key="ButtonBorderBrushPointerOver" Color="#8A6A3A" />
+        <SolidColorBrush x:Key="ButtonForegroundPointerOver" Color="#F3E3BF" />
+        <SolidColorBrush x:Key="ButtonBackgroundPressed" Color="#1F1813" />
+        <SolidColorBrush x:Key="ButtonBorderBrushPressed" Color="#8A6A3A" />
+        <SolidColorBrush x:Key="ButtonForegroundPressed" Color="#F3E3BF" />
 
         <!--
             The other half of the same problem: Fluent decides "off" and "elevated" colours from
             its own resources, and a disabled caption drawn from them either vanished or shrank to
             an unreadable grey. Naming Map's tokens here means a control that is off still reads
-            as off rather than as absent, and a popup surface is Map's paper rather than the
+            as off rather than as absent, and a popup surface is Map's wood rather than the
             variant's card colour.
         -->
-        <SolidColorBrush x:Key="ButtonForegroundDisabled" Color="#536881" />
-        <SolidColorBrush x:Key="ToggleButtonForegroundDisabled" Color="#536881" />
-        <SolidColorBrush x:Key="TextControlForegroundDisabled" Color="#536881" />
-        <SolidColorBrush x:Key="TextControlBackgroundDisabled" Color="#EAF0F7" />
-        <SolidColorBrush x:Key="ComboBoxBackgroundDisabled" Color="#EAF0F7" />
-        <SolidColorBrush x:Key="TextControlPlaceholderForegroundDisabled" Color="#536881" />
-        <SolidColorBrush x:Key="ComboBoxForegroundDisabled" Color="#536881" />
-        <SolidColorBrush x:Key="MenuFlyoutItemForegroundDisabled" Color="#536881" />
+        <SolidColorBrush x:Key="ButtonForegroundDisabled" Color="#A39A8A" />
+        <SolidColorBrush x:Key="ToggleButtonForegroundDisabled" Color="#A39A8A" />
+        <SolidColorBrush x:Key="TextControlForegroundDisabled" Color="#A39A8A" />
+        <SolidColorBrush x:Key="TextControlBackgroundDisabled" Color="#1C1611" />
+        <SolidColorBrush x:Key="ComboBoxBackgroundDisabled" Color="#1C1611" />
+        <SolidColorBrush x:Key="TextControlPlaceholderForegroundDisabled" Color="#A39A8A" />
+        <SolidColorBrush x:Key="ComboBoxForegroundDisabled" Color="#A39A8A" />
+        <SolidColorBrush x:Key="MenuFlyoutItemForegroundDisabled" Color="#A39A8A" />
         <!-- Fluent colours a menu caption from these, not from the MenuItem's own Foreground, so a
              flyout came out with near-invisible words over crisp icons - the same defect the owner
              photographed in the file menu. -->
-        <SolidColorBrush x:Key="MenuFlyoutItemForeground" Color="#1C304A" />
-        <SolidColorBrush x:Key="MenuFlyoutItemForegroundPointerOver" Color="#1C304A" />
-        <SolidColorBrush x:Key="MenuFlyoutItemForegroundPressed" Color="#1C304A" />
-        <SolidColorBrush x:Key="MenuFlyoutSubItemForeground" Color="#1C304A" />
-        <SolidColorBrush x:Key="MenuFlyoutSubItemForegroundPointerOver" Color="#1C304A" />
-        <SolidColorBrush x:Key="ComboBoxDropDownBackground" Color="#FFFFFF" />
-        <SolidColorBrush x:Key="ComboBoxDropDownForeground" Color="#1C304A" />
-        <SolidColorBrush x:Key="MenuFlyoutPresenterBackground" Color="#FFFFFF" />
-        <SolidColorBrush x:Key="FlyoutPresenterBackground" Color="#FFFFFF" />
-        <SolidColorBrush x:Key="ToolTipBackground" Color="#203852" />
-        <SolidColorBrush x:Key="ToolTipForeground" Color="#F5F9FF" />
+        <SolidColorBrush x:Key="MenuFlyoutItemForeground" Color="#E9DCC4" />
+        <SolidColorBrush x:Key="MenuFlyoutItemForegroundPointerOver" Color="#F3E3BF" />
+        <SolidColorBrush x:Key="MenuFlyoutItemForegroundPressed" Color="#F3E3BF" />
+        <SolidColorBrush x:Key="MenuFlyoutSubItemForeground" Color="#E9DCC4" />
+        <SolidColorBrush x:Key="MenuFlyoutSubItemForegroundPointerOver" Color="#F3E3BF" />
+        <SolidColorBrush x:Key="MenuFlyoutItemBackgroundPointerOver" Color="#3E2F23" />
+        <SolidColorBrush x:Key="MenuFlyoutItemBackgroundPressed" Color="#1F1813" />
+        <SolidColorBrush x:Key="ComboBoxDropDownBackground" Color="#221A14" />
+        <SolidColorBrush x:Key="ComboBoxDropDownForeground" Color="#E9DCC4" />
+        <SolidColorBrush x:Key="ComboBoxDropDownBorderBrush" Color="#6E5532" />
+        <SolidColorBrush x:Key="MenuFlyoutPresenterBackground" Color="#221A14" />
+        <SolidColorBrush x:Key="MenuFlyoutPresenterBorderBrush" Color="#6E5532" />
+        <SolidColorBrush x:Key="FlyoutPresenterBackground" Color="#221A14" />
+        <SolidColorBrush x:Key="FlyoutBorderThemeBrush" Color="#6E5532" />
+        <!-- Fluent's own "accent" button theme paints its presenter from these keys, which would
+             otherwise be the system accent (a light brass fill under light text). -->
+        <SolidColorBrush x:Key="AccentButtonBackground" Color="#2A1F16" />
+        <SolidColorBrush x:Key="AccentButtonBackgroundPointerOver" Color="#35281C" />
+        <SolidColorBrush x:Key="AccentButtonBackgroundPressed" Color="#3D2D1E" />
+        <SolidColorBrush x:Key="AccentButtonBackgroundDisabled" Color="#1C1611" />
+        <SolidColorBrush x:Key="AccentButtonForeground" Color="#F0D79A" />
+        <SolidColorBrush x:Key="AccentButtonForegroundPointerOver" Color="#F6E2B0" />
+        <SolidColorBrush x:Key="AccentButtonForegroundPressed" Color="#F6E2B0" />
+        <SolidColorBrush x:Key="AccentButtonForegroundDisabled" Color="#A39A8A" />
+        <SolidColorBrush x:Key="AccentButtonBorderBrush" Color="#C9A15A" />
+        <SolidColorBrush x:Key="AccentButtonBorderBrushPointerOver" Color="#E7C982" />
+        <SolidColorBrush x:Key="AccentButtonBorderBrushPressed" Color="#F0D79A" />
+        <SolidColorBrush x:Key="ToolTipBackground" Color="#2E231A" />
+        <SolidColorBrush x:Key="ToolTipForeground" Color="#F3E3BF" />
+        <SolidColorBrush x:Key="ToolTipBorderBrush" Color="#8A6A3A" />
 
         <!--
             Fluent derives slider tracks, checkboxes and selection highlights from the system
             accent. Redefining it here is what keeps a stock control from painting itself in a
             colour that belongs to no part of Map's palette.
         -->
-        <Color x:Key="SystemAccentColor">#2366AD</Color>
-        <Color x:Key="SystemAccentColorLight1">#18558F</Color>
-        <Color x:Key="SystemAccentColorLight2">#79AADB</Color>
-        <Color x:Key="SystemAccentColorLight3">#DCEBFA</Color>
-        <Color x:Key="SystemAccentColorDark1">#18558F</Color>
-        <Color x:Key="SystemAccentColorDark2">#174F8B</Color>
-        <Color x:Key="SystemAccentColorDark3">#123E6E</Color>
+        <Color x:Key="SystemAccentColor">#C9A15A</Color>
+        <Color x:Key="SystemAccentColorLight1">#D9B56C</Color>
+        <Color x:Key="SystemAccentColorLight2">#E7C982</Color>
+        <Color x:Key="SystemAccentColorLight3">#F0D79A</Color>
+        <Color x:Key="SystemAccentColorDark1">#A9833F</Color>
+        <Color x:Key="SystemAccentColorDark2">#8A6A3A</Color>
+        <Color x:Key="SystemAccentColorDark3">#5A4220</Color>
     </Application.Resources>
 
     <Application.Styles>
@@ -1380,6 +1411,23 @@
             <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
         </Style>
 
+        <!-- Material categories use ordinary text rows, so they need their own selection. -->
+        <Style Selector="ListBox.material-groups ListBoxItem">
+            <Setter Property="Padding" Value="10,8" />
+            <Setter Property="Margin" Value="0,0,0,4" />
+            <Setter Property="MinHeight" Value="36" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        </Style>
+        <Style Selector="ListBox.material-groups ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapControlHoverBrush}" />
+        </Style>
+        <Style Selector="ListBox.material-groups ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapControlPressedBrush}" />
+        </Style>
+        <Style Selector="ListBox.material-groups ListBoxItem:selected:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapControlPressedBrush}" />
+        </Style>
+
         <Style Selector="FlyoutPresenter">
             <Setter Property="Background" Value="{DynamicResource MapElevatedBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource MapBorderBrush}" />
@@ -1596,10 +1644,10 @@
 
         <!-- Soft relief follows the owner's Blue Atlas component reference. -->
         <Style Selector=":is(Button) /template/ ContentPresenter#PART_ContentPresenter">
-            <Setter Property="BoxShadow" Value="0 1 2 0 #1814263F" />
+            <Setter Property="BoxShadow" Value="0 1 2 0 #40000000" />
         </Style>
         <Style Selector=":is(Button).tool-button /template/ ContentPresenter#PART_ContentPresenter">
-            <Setter Property="BoxShadow" Value="0 2 4 0 #40101E33" />
+            <Setter Property="BoxShadow" Value="0 2 4 0 #66000000" />
         </Style>
         <Style Selector=":is(Button).icon /template/ ContentPresenter#PART_ContentPresenter, :is(Button).ghost /template/ ContentPresenter#PART_ContentPresenter, :is(Button).list-row /template/ ContentPresenter#PART_ContentPresenter, :is(Button).row-action /template/ ContentPresenter#PART_ContentPresenter, :is(Button).map-card-main /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="BoxShadow" Value="0 0 0 0 Transparent" />
@@ -1608,10 +1656,10 @@
             <Setter Property="BoxShadow" Value="0 0 0 0 Transparent" />
         </Style>
         <Style Selector="Border.map-card-shell, Border.elevated, Border.row-host.selected">
-            <Setter Property="BoxShadow" Value="0 2 6 0 #1614263F" />
+            <Setter Property="BoxShadow" Value="0 2 6 0 #55000000" />
         </Style>
         <Style Selector="Button.new-card /template/ ContentPresenter#PART_ContentPresenter">
-            <Setter Property="BoxShadow" Value="0 2 6 0 #1614263F" />
+            <Setter Property="BoxShadow" Value="0 2 6 0 #55000000" />
         </Style>
         <!-- Panel categories. One accent colour per kind of work, identical in every panel:
              the eye finds the part it wants before it reads a single label. -->
@@ -1619,16 +1667,16 @@
             <Setter Property="Background" Value="{DynamicResource MapMutedBrush}" />
         </Style>
         <Style Selector="Border.category-accent.accent-create">
-            <Setter Property="Background" Value="#FF56C08A" />
+            <Setter Property="Background" Value="#FF6FA77F" />
         </Style>
         <Style Selector="Border.category-accent.accent-select">
-            <Setter Property="Background" Value="#FF4FA8E8" />
+            <Setter Property="Background" Value="#FF7FA3B8" />
         </Style>
         <Style Selector="Border.category-accent.accent-shape">
-            <Setter Property="Background" Value="#FFE0A445" />
+            <Setter Property="Background" Value="#FFD4AE62" />
         </Style>
         <Style Selector="Border.category-accent.accent-look">
-            <Setter Property="Background" Value="#FF9B7BE8" />
+            <Setter Property="Background" Value="#FFB48AA8" />
         </Style>
         <Style Selector="Expander.category">
             <Setter Property="Margin" Value="0,2" />
@@ -1845,6 +1893,866 @@
         </Style>
         <Style Selector=":is(Button).mode-choice:disabled TextBlock, :is(Button).mode-choice:disabled AccessText">
             <Setter Property="Foreground" Value="{DynamicResource MapDisabledTextBrush}" />
+        </Style>
+
+        <!-- ===================================================== UI redesign 2026-09-26 -->
+        <!--
+            Calm side panels. Every rule below is scoped to the two side panels (context-panel,
+            panel), the rail, or a container that opts in with "calm-modes". The quick property
+            strip above the canvas is none of these, so its look cannot change through them.
+        -->
+        <Style Selector="Border.mode-group">
+            <Setter Property="Background" Value="{DynamicResource MapFieldBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="7" />
+            <Setter Property="Padding" Value="3" />
+        </Style>
+        <Style Selector=":is(Control).calm-modes Border.mode-group">
+            <Setter Property="Background" Value="#15100C" />
+            <Setter Property="BorderBrush" Value="#3C2E22" />
+            <Setter Property="Padding" Value="2" />
+        </Style>
+        <!-- A chosen mode is a dark plaque with a brass outline, never the solid fill of the one
+             main action: choosing and doing no longer look alike. -->
+        <Style Selector=":is(Control).calm-modes ToggleButton.mode-choice:checked /template/ ContentPresenter#PART_ContentPresenter, :is(Control).calm-modes :is(Button).mode-choice.selected /template/ ContentPresenter#PART_ContentPresenter, :is(Control).calm-modes :is(Button).mode-choice.active /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#3D2F1D" />
+            <Setter Property="BorderBrush" Value="#C9A15A" />
+            <Setter Property="BorderThickness" Value="1.5" />
+            <Setter Property="Foreground" Value="{DynamicResource MapAccentBrush}" />
+            <Setter Property="BoxShadow" Value="0 1 2 0 #40000000" />
+        </Style>
+        <Style Selector=":is(Control).calm-modes ToggleButton.mode-choice:checked, :is(Control).calm-modes :is(Button).mode-choice.selected, :is(Control).calm-modes :is(Button).mode-choice.active">
+            <Setter Property="Foreground" Value="{DynamicResource MapAccentBrush}" />
+        </Style>
+        <Style Selector=":is(Control).calm-modes ToggleButton.mode-choice:checked TextBlock, :is(Control).calm-modes ToggleButton.mode-choice:checked AccessText, :is(Control).calm-modes :is(Button).mode-choice.selected TextBlock, :is(Control).calm-modes :is(Button).mode-choice.selected AccessText, :is(Control).calm-modes :is(Button).mode-choice.active TextBlock, :is(Control).calm-modes :is(Button).mode-choice.active AccessText">
+            <Setter Property="Foreground" Value="{DynamicResource MapAccentBrush}" />
+            <Setter Property="FontWeight" Value="Bold" />
+        </Style>
+        <Style Selector=":is(Control).calm-modes ToggleButton.mode-choice:checked:pointerover /template/ ContentPresenter#PART_ContentPresenter, :is(Control).calm-modes :is(Button).mode-choice.selected:pointerover /template/ ContentPresenter#PART_ContentPresenter, :is(Control).calm-modes :is(Button).mode-choice.active:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#4A3923" />
+        </Style>
+        <Style Selector=":is(Control).calm-modes ToggleButton.mode-choice:checked:pressed /template/ ContentPresenter#PART_ContentPresenter, :is(Control).calm-modes :is(Button).mode-choice.selected:pressed /template/ ContentPresenter#PART_ContentPresenter, :is(Control).calm-modes :is(Button).mode-choice.active:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#2E2318" />
+        </Style>
+
+        <!-- Flat sections: no card inside a card. Structure is a thin divider, not a tint. -->
+        <Style Selector="Border.context-panel Expander, Border.panel Expander">
+            <Setter Property="Margin" Value="0,2" />
+            <Setter Property="Padding" Value="0,2,0,6" />
+        </Style>
+        <Style Selector="Border.context-panel Expander /template/ ToggleButton#ExpanderHeader, Border.panel Expander /template/ ToggleButton#ExpanderHeader">
+            <Setter Property="MinHeight" Value="32" />
+        </Style>
+        <Style Selector="Border.context-panel Border.property-group, Border.panel Border.property-group">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="CornerRadius" Value="0" />
+            <Setter Property="Padding" Value="0" />
+        </Style>
+        <Style Selector="Border.context-panel Expander.category, Border.panel Expander.category">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="CornerRadius" Value="0" />
+            <Setter Property="Margin" Value="0" />
+            <Setter Property="Padding" Value="0,2,0,10" />
+            <Setter Property="BorderBrush" Value="#3C2E22" />
+            <Setter Property="BorderThickness" Value="0,0,0,1" />
+        </Style>
+        <Style Selector="Border.context-panel Border.category-accent, Border.panel Border.category-accent">
+            <Setter Property="IsVisible" Value="False" />
+        </Style>
+        <Style Selector="Border.context-panel TextBlock.role-panel, Border.panel TextBlock.role-panel">
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+            <Setter Property="FontWeight" Value="Bold" />
+        </Style>
+        <Style Selector="Border.context-panel Expander.section, Border.panel Expander.section">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Margin" Value="0" />
+            <Setter Property="Padding" Value="0,0,0,10" />
+            <Setter Property="BorderBrush" Value="#3C2E22" />
+            <Setter Property="BorderThickness" Value="0,0,0,1" />
+        </Style>
+        <Style Selector="Expander.section /template/ ToggleButton#ExpanderHeader">
+            <Setter Property="MinHeight" Value="36" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+
+        <!-- Section summary: what a folded section holds, and a dot when it differs from base. -->
+        <Style Selector="TextBlock.section-summary">
+            <Setter Property="FontSize" Value="11.5" />
+            <Setter Property="FontWeight" Value="Normal" />
+            <Setter Property="Foreground" Value="#A08D70" />
+            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="TextBlock.section-change">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="FontWeight" Value="Medium" />
+            <Setter Property="Foreground" Value="{DynamicResource MapAccentBrush}" />
+            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="Ellipse.change-dot">
+            <Setter Property="Width" Value="7" />
+            <Setter Property="Height" Value="7" />
+            <Setter Property="Fill" Value="{DynamicResource MapAccentBrush}" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+
+        <!-- Scope chips: who a block acts on. Colour always travels with its word. -->
+        <Style Selector="Border.scope-chip">
+            <Setter Property="CornerRadius" Value="10" />
+            <Setter Property="Padding" Value="6,1,8,1" />
+            <Setter Property="MinHeight" Value="20" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="Border.scope-chip TextBlock">
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="Border.scope-chip.scope-new">
+            <Setter Property="Background" Value="#3A2D1C" />
+            <Setter Property="BorderBrush" Value="#7A5E36" />
+        </Style>
+        <Style Selector="Border.scope-chip.scope-new TextBlock">
+            <Setter Property="Foreground" Value="#E7C982" />
+        </Style>
+        <Style Selector="Border.scope-chip.scope-object">
+            <Setter Property="Background" Value="#1E3328" />
+            <Setter Property="BorderBrush" Value="#3E6B52" />
+        </Style>
+        <Style Selector="Border.scope-chip.scope-object TextBlock">
+            <Setter Property="Foreground" Value="#9ED4B0" />
+        </Style>
+        <Style Selector="Border.scope-chip.scope-layer">
+            <Setter Property="Background" Value="#33223A" />
+            <Setter Property="BorderBrush" Value="#6A4C72" />
+        </Style>
+        <Style Selector="Border.scope-chip.scope-layer TextBlock">
+            <Setter Property="Foreground" Value="#D6B3DE" />
+        </Style>
+        <Style Selector="Border.scope-chip.scope-tool">
+            <Setter Property="Background" Value="#2A2019" />
+            <Setter Property="BorderBrush" Value="#5A4630" />
+        </Style>
+        <Style Selector="Border.scope-chip.scope-tool TextBlock">
+            <Setter Property="Foreground" Value="#C2AE8E" />
+        </Style>
+        <Style Selector="Border.scope-line">
+            <Setter Property="BorderBrush" Value="#3C2E22" />
+            <Setter Property="BorderThickness" Value="0,0,0,1" />
+            <Setter Property="Padding" Value="12,6" />
+        </Style>
+        <Style Selector="Border.scope-line TextBlock.scope-target">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Foreground" Value="{DynamicResource MapMutedBrush}" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style Selector="Border.context-panel Border.panel-header TextBlock.panel-title, Border.panel Border.panel-header TextBlock.panel-title">
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+
+        <!-- Quiet commands inside the panels: a text action and a red-text delete kept apart. -->
+        <Style Selector="Button.quiet">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource MapAccentBrush}" />
+            <Setter Property="MinHeight" Value="28" />
+            <Setter Property="Padding" Value="8,3" />
+            <Setter Property="FontSize" Value="12.5" />
+        </Style>
+        <Style Selector="Button.quiet TextBlock, Button.quiet AccessText">
+            <Setter Property="Foreground" Value="{DynamicResource MapAccentBrush}" />
+        </Style>
+        <Style Selector="Button.quiet /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="BoxShadow" Value="0 0 0 0 Transparent" />
+        </Style>
+        <Style Selector="Button.danger-text">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource MapDangerBrush}" />
+            <Setter Property="MinHeight" Value="28" />
+            <Setter Property="Padding" Value="8,3" />
+            <Setter Property="FontSize" Value="12.5" />
+            <Setter Property="HorizontalAlignment" Value="Left" />
+        </Style>
+        <Style Selector="Button.danger-text TextBlock, Button.danger-text AccessText">
+            <Setter Property="Foreground" Value="{DynamicResource MapDangerBrush}" />
+        </Style>
+        <Style Selector="Button.danger-text:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapDangerDimBrush}" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Foreground" Value="{DynamicResource MapDangerBrush}" />
+        </Style>
+        <Style Selector="Button.danger-text /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="BoxShadow" Value="0 0 0 0 Transparent" />
+        </Style>
+        <Style Selector="Border.panel-footer">
+            <Setter Property="Background" Value="{DynamicResource MapPanelBrush}" />
+            <Setter Property="BorderBrush" Value="#3C2E22" />
+            <Setter Property="BorderThickness" Value="0,1,0,0" />
+            <Setter Property="Padding" Value="12,8" />
+        </Style>
+
+        <!-- Rail with captions: outline glyphs on the dark shell, the active tool a light tile. -->
+        <Style Selector="Border.rail :is(Button).rail-tool">
+            <Setter Property="Width" Value="56" />
+            <Setter Property="Height" Value="52" />
+            <Setter Property="MinHeight" Value="52" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Foreground" Value="#C2AE8E" />
+        </Style>
+        <Style Selector="Border.rail :is(Button).rail-tool /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="BoxShadow" Value="0 0 0 0 Transparent" />
+        </Style>
+        <Style Selector="Border.rail :is(Button).rail-tool TextBlock.rail-caption">
+            <Setter Property="Foreground" Value="#C2AE8E" />
+            <Setter Property="FontSize" Value="10.5" />
+            <Setter Property="HorizontalAlignment" Value="Center" />
+            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+        </Style>
+        <Style Selector="Border.rail :is(Button).rail-tool:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#3E2F23" />
+            <Setter Property="BorderBrush" Value="#6E5532" />
+            <Setter Property="Foreground" Value="#F3E3BF" />
+        </Style>
+        <Style Selector="Border.rail :is(Button).rail-tool:pointerover TextBlock.rail-caption">
+            <Setter Property="Foreground" Value="#F3E3BF" />
+        </Style>
+        <Style Selector="Border.rail :is(Button).rail-tool.active, Border.rail ToggleButton.rail-tool:checked">
+            <Setter Property="Foreground" Value="{DynamicResource MapAccentBrush}" />
+        </Style>
+        <Style Selector="Border.rail :is(Button).rail-tool.active /template/ ContentPresenter#PART_ContentPresenter, Border.rail ToggleButton.rail-tool:checked /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#4E3C25" />
+            <Setter Property="BorderBrush" Value="#C9A15A" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Foreground" Value="{DynamicResource MapAccentBrush}" />
+            <Setter Property="BoxShadow" Value="0 1 2 0 #50000000" />
+        </Style>
+        <Style Selector="Border.rail :is(Button).rail-tool.active TextBlock.rail-caption, Border.rail ToggleButton.rail-tool:checked TextBlock.rail-caption">
+            <Setter Property="Foreground" Value="{DynamicResource MapAccentBrush}" />
+            <Setter Property="FontWeight" Value="Bold" />
+        </Style>
+        <Style Selector=":is(UserControl).compact-window Border.rail :is(Button).rail-tool">
+            <Setter Property="Width" Value="40" />
+            <Setter Property="Height" Value="40" />
+            <Setter Property="MinHeight" Value="40" />
+        </Style>
+        <Style Selector=":is(UserControl).compact-window Border.rail TextBlock.rail-caption">
+            <Setter Property="IsVisible" Value="False" />
+        </Style>
+
+        <!-- Right panel sections as one row of icon tabs with short captions. -->
+        <Style Selector="Border.panel :is(Button).section-tab">
+            <Setter Property="MinHeight" Value="44" />
+            <Setter Property="Padding" Value="0,4" />
+            <Setter Property="CornerRadius" Value="6,6,0,0" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0,0,0,2" />
+            <Setter Property="Foreground" Value="{DynamicResource MapMutedBrush}" />
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="HorizontalContentAlignment" Value="Center" />
+        </Style>
+        <Style Selector="Border.panel :is(Button).section-tab /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="BoxShadow" Value="0 0 0 0 Transparent" />
+        </Style>
+        <Style Selector="Border.panel :is(Button).section-tab TextBlock">
+            <Setter Property="FontSize" Value="10.5" />
+            <Setter Property="Foreground" Value="{DynamicResource MapMutedBrush}" />
+            <Setter Property="HorizontalAlignment" Value="Center" />
+            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+        </Style>
+        <Style Selector="Border.panel ToggleButton.section-tab:checked /template/ ContentPresenter#PART_ContentPresenter, Border.panel :is(Button).section-tab.selected /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBrush}" />
+            <Setter Property="BorderThickness" Value="0,0,0,2.5" />
+            <Setter Property="Foreground" Value="{DynamicResource MapAccentBrush}" />
+        </Style>
+        <Style Selector="Border.panel ToggleButton.section-tab:checked, Border.panel :is(Button).section-tab.selected">
+            <Setter Property="Foreground" Value="{DynamicResource MapAccentBrush}" />
+        </Style>
+        <Style Selector="Border.panel ToggleButton.section-tab:checked TextBlock, Border.panel :is(Button).section-tab.selected TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource MapAccentBrush}" />
+            <Setter Property="FontWeight" Value="Bold" />
+        </Style>
+
+        <!-- One-line structure rows in the side panel lists. -->
+        <Style Selector="Border.panel Border.row-host ToggleButton.list-row, Border.panel ToggleButton.list-row">
+            <Setter Property="MinHeight" Value="34" />
+        </Style>
+
+        <!-- Transient message over the canvas: replaces the third bottom line. -->
+        <Style Selector="Border.canvas-toast">
+            <Setter Property="Background" Value="#EE2A2019" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Padding" Value="12,7" />
+            <Setter Property="Margin" Value="14" />
+            <Setter Property="HorizontalAlignment" Value="Left" />
+            <Setter Property="VerticalAlignment" Value="Bottom" />
+            <Setter Property="MaxWidth" Value="560" />
+            <Setter Property="BoxShadow" Value="0 4 14 0 #40000000" />
+        </Style>
+        <Style Selector="Border.canvas-toast TextBlock">
+            <Setter Property="Foreground" Value="#F3E3BF" />
+            <Setter Property="FontSize" Value="12.5" />
+        </Style>
+        <Style Selector="Border.canvas-toast.error">
+            <Setter Property="Background" Value="#F27A2E22" />
+        </Style>
+
+        <!-- ================================================================================
+             Inkarnate parity: geometry and touch (2026-10-16). Every number below was measured
+             in the running Inkarnate editor through REA/CDP (computed styles at 2560×1343):
+             top bar 40, controls 32 high with radius 5, rail buttons 46×48 with 24 px solid
+             glyphs, floating cards with a soft shadow, hover = a lighter fill in 0.1-0.2 s and
+             no movement, the active tool = one solid accent fill. Colours are Map's own (Tavern since 2026-10-17): dark wood
+             chrome and panels, the brass accent. The quick strip over the canvas
+             (Border.quick-bar) is deliberately not matched by any rule here.
+             ================================================================================ -->
+
+        <!-- top bar -->
+        <Style Selector="Border.app-bar">
+            <Setter Property="MinHeight" Value="40" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="BoxShadow" Value="0 0 10 0 #55000000" />
+            <Setter Property="ZIndex" Value="2" />
+        </Style>
+        <Style Selector="Border.app-bar :is(Button)">
+            <Setter Property="MinHeight" Value="32" />
+            <Setter Property="Height" Value="32" />
+            <Setter Property="Padding" Value="10,0" />
+            <Setter Property="CornerRadius" Value="5" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Background" Value="#22F3E3BF" />
+        </Style>
+        <Style Selector="Border.app-bar :is(Button) /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Background" Duration="0:0:0.15" />
+                </Transitions>
+            </Setter>
+            <Setter Property="BoxShadow" Value="0 0 0 0 Transparent" />
+        </Style>
+        <Style Selector="Border.app-bar :is(Button).icon, Border.app-bar :is(Button).ghost">
+            <Setter Property="Background" Value="Transparent" />
+        </Style>
+        <Style Selector="Border.app-bar :is(Button).icon">
+            <Setter Property="Width" Value="32" />
+            <Setter Property="MinWidth" Value="32" />
+            <Setter Property="Padding" Value="0" />
+        </Style>
+        <Style Selector="Border.app-bar :is(Button):pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#33F3E3BF" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+        </Style>
+        <Style Selector="Border.app-bar :is(Button):pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#44F3E3BF" />
+        </Style>
+        <Style Selector="Border.app-bar :is(Button).primary">
+            <Setter Property="Background" Value="{DynamicResource MapPrimaryFillBrush}" />
+        </Style>
+        <Style Selector="Border.app-bar :is(Button).primary:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapPrimaryHoverFillBrush}" />
+        </Style>
+        <Style Selector="Border.app-bar :is(Button).primary:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapPrimaryPressedFillBrush}" />
+        </Style>
+
+        <!-- floating rail: one dark card against the left edge, tools touching each other -->
+        <Style Selector="Border.rail">
+            <Setter Property="Background" Value="{DynamicResource MapChromeBrush}" />
+            <Setter Property="BorderBrush" Value="#6E5532" />
+            <Setter Property="BorderThickness" Value="0,1,1,1" />
+            <Setter Property="CornerRadius" Value="0,5,5,0" />
+            <Setter Property="BoxShadow" Value="0 0 10 0 #66000000" />
+            <Setter Property="ClipToBounds" Value="True" />
+        </Style>
+        <Style Selector="Border.rail :is(Button).rail-tool">
+            <Setter Property="Width" Value="46" />
+            <Setter Property="Height" Value="48" />
+            <Setter Property="MinHeight" Value="48" />
+            <Setter Property="CornerRadius" Value="5" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="#C2AE8E" />
+        </Style>
+        <Style Selector="Border.rail :is(Button).rail-tool /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Background" Duration="0:0:0.1" />
+                </Transitions>
+            </Setter>
+            <Setter Property="BorderThickness" Value="0" />
+        </Style>
+        <Style Selector="Border.rail :is(Button).rail-tool:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#2EF3E3BF" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Foreground" Value="#F3E3BF" />
+        </Style>
+        <Style Selector="Border.rail :is(Button).rail-tool:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#44F3E3BF" />
+        </Style>
+        <Style Selector="Border.rail :is(Button).rail-tool.active, Border.rail ToggleButton.rail-tool:checked">
+            <Setter Property="Foreground" Value="#F0D79A" />
+        </Style>
+        <Style Selector="Border.rail :is(Button).rail-tool.active /template/ ContentPresenter#PART_ContentPresenter, Border.rail ToggleButton.rail-tool:checked /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapRailTileSelectedBrush}" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Foreground" Value="#F0D79A" />
+            <Setter Property="BoxShadow" Value="inset 0 0 0 1 #C9A15A, 0 0 12 0 #66C9A15A" />
+        </Style>
+        <Style Selector="Border.rail :is(Button).rail-tool.active:pointerover /template/ ContentPresenter#PART_ContentPresenter, Border.rail ToggleButton.rail-tool:checked:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#5A4630" />
+        </Style>
+        <Style Selector=":is(UserControl).compact-window Border.rail :is(Button).rail-tool">
+            <Setter Property="Width" Value="40" />
+            <Setter Property="Height" Value="40" />
+            <Setter Property="MinHeight" Value="40" />
+        </Style>
+
+        <!-- floating tool panel: a card over the canvas with a 32 px title -->
+        <Style Selector="Border.context-panel">
+            <Setter Property="BorderBrush" Value="{DynamicResource MapBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="5" />
+            <Setter Property="ClipToBounds" Value="True" />
+            <Setter Property="BoxShadow" Value="0 4 11 0 #80000000" />
+        </Style>
+        <Style Selector="Border.context-panel Border.panel-header, Border.panel Border.panel-header">
+            <Setter Property="MinHeight" Value="32" />
+            <Setter Property="Padding" Value="10,0,4,0" />
+            <Setter Property="Background" Value="#1AC9A15A" />
+        </Style>
+        <Style Selector="Border.context-panel Border.panel-header Button.icon, Border.panel Border.panel-header Button.icon">
+            <Setter Property="MinHeight" Value="28" />
+            <Setter Property="Height" Value="28" />
+            <Setter Property="Width" Value="28" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="CornerRadius" Value="5" />
+        </Style>
+
+        <!-- controls inside the panels: 32 px, radius 5, a lighter fill on hover -->
+        <Style Selector="Border.context-panel :is(Button), Border.panel :is(Button)">
+            <Setter Property="CornerRadius" Value="5" />
+        </Style>
+        <Style Selector="Border.context-panel :is(Button) /template/ ContentPresenter#PART_ContentPresenter, Border.panel :is(Button) /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Background" Duration="0:0:0.15" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Border.context-panel :is(Button).mode-choice, Border.panel :is(Button).mode-choice, Border.context-panel :is(Button).segment, Border.panel :is(Button).segment">
+            <Setter Property="MinHeight" Value="32" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontWeight" Value="Medium" />
+        </Style>
+        <!-- the chosen mode is one solid accent fill, as Inkarnate's Add / Subtract -->
+        <Style Selector="Border.context-panel ToggleButton.mode-choice:checked /template/ ContentPresenter#PART_ContentPresenter, Border.context-panel :is(Button).mode-choice.selected /template/ ContentPresenter#PART_ContentPresenter, Border.context-panel :is(Button).mode-choice.active /template/ ContentPresenter#PART_ContentPresenter, Border.panel ToggleButton.mode-choice:checked /template/ ContentPresenter#PART_ContentPresenter, Border.panel :is(Button).mode-choice.active /template/ ContentPresenter#PART_ContentPresenter, Border.context-panel ToggleButton.segment:checked /template/ ContentPresenter#PART_ContentPresenter, Border.panel ToggleButton.segment:checked /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapPrimaryFillBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
+            <Setter Property="Foreground" Value="#24180C" />
+            <Setter Property="BoxShadow" Value="0 0 0 0 Transparent" />
+        </Style>
+        <Style Selector="Border.context-panel ToggleButton.mode-choice:checked, Border.context-panel :is(Button).mode-choice.active, Border.context-panel :is(Button).mode-choice.selected, Border.panel ToggleButton.mode-choice:checked, Border.panel :is(Button).mode-choice.active, Border.context-panel ToggleButton.segment:checked, Border.panel ToggleButton.segment:checked">
+            <Setter Property="Foreground" Value="#24180C" />
+        </Style>
+        <Style Selector="Border.context-panel ToggleButton.mode-choice:checked TextBlock, Border.context-panel ToggleButton.mode-choice:checked AccessText, Border.context-panel :is(Button).mode-choice.active TextBlock, Border.context-panel :is(Button).mode-choice.active AccessText, Border.panel ToggleButton.mode-choice:checked TextBlock, Border.panel ToggleButton.mode-choice:checked AccessText, Border.context-panel ToggleButton.segment:checked TextBlock, Border.context-panel ToggleButton.segment:checked AccessText, Border.panel ToggleButton.segment:checked TextBlock, Border.panel ToggleButton.segment:checked AccessText">
+            <Setter Property="Foreground" Value="#24180C" />
+        </Style>
+        <Style Selector="Border.context-panel ToggleButton.mode-choice:checked:pointerover /template/ ContentPresenter#PART_ContentPresenter, Border.context-panel :is(Button).mode-choice.active:pointerover /template/ ContentPresenter#PART_ContentPresenter, Border.panel ToggleButton.mode-choice:checked:pointerover /template/ ContentPresenter#PART_ContentPresenter, Border.context-panel ToggleButton.segment:checked:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapPrimaryHoverFillBrush}" />
+        </Style>
+
+        <!-- sliders: thin 4 px track, small round thumb that grows a little under the pointer -->
+        <Style Selector="Border.context-panel Slider /template/ Thumb, Border.panel Slider /template/ Thumb">
+            <Setter Property="Width" Value="14" />
+            <Setter Property="Height" Value="14" />
+            <Setter Property="CornerRadius" Value="7" />
+            <Setter Property="RenderTransform" Value="scale(1)" />
+            <Setter Property="Transitions">
+                <Transitions>
+                    <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.15" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Border.context-panel Slider:pointerover /template/ Thumb, Border.panel Slider:pointerover /template/ Thumb">
+            <Setter Property="RenderTransform" Value="scale(1.2)" />
+        </Style>
+
+        <Style Selector="Border.context-panel Slider /template/ RepeatButton#PART_DecreaseButton, Border.panel Slider /template/ RepeatButton#PART_DecreaseButton, Border.context-panel Slider /template/ RepeatButton#PART_IncreaseButton, Border.panel Slider /template/ RepeatButton#PART_IncreaseButton">
+            <Setter Property="Height" Value="4" />
+            <Setter Property="CornerRadius" Value="2" />
+        </Style>
+        <Style Selector="Border.context-panel Slider /template/ RepeatButton#PART_IncreaseButton, Border.panel Slider /template/ RepeatButton#PART_IncreaseButton">
+            <Setter Property="Background" Value="{DynamicResource MapBorderStrongBrush}" />
+        </Style>
+        <Style Selector="Border.context-panel Slider:pointerover /template/ RepeatButton#PART_IncreaseButton, Border.panel Slider:pointerover /template/ RepeatButton#PART_IncreaseButton">
+            <Setter Property="Background" Value="#A9833F" />
+        </Style>
+        <Style Selector="Border.panel :is(Button).section-tab TextBlock">
+            <Setter Property="FontSize" Value="9.5" />
+        </Style>
+        <Style Selector="Border.panel :is(Button).section-tab">
+            <Setter Property="Padding" Value="0,4" />
+            <Setter Property="MinWidth" Value="0" />
+        </Style>
+
+        <!-- layer panel rows: 32 px, hover tint, the chosen row a brass tint with a brass edge -->
+        <Style Selector="Border.panel">
+            <Setter Property="BoxShadow" Value="0 0 10 0 #66000000" />
+        </Style>
+        <Style Selector="Border.panel Border.row-host ToggleButton.list-row, Border.panel ToggleButton.list-row">
+            <Setter Property="MinHeight" Value="32" />
+        </Style>
+        <Style Selector="Border.panel Border.row-host">
+            <Setter Property="CornerRadius" Value="5" />
+        </Style>
+        <Style Selector="Border.panel Border.row-host:pointerover">
+            <Setter Property="Background" Value="#1FF3E3BF" />
+        </Style>
+        <Style Selector="Border.panel Border.row-host.selected">
+            <Setter Property="Background" Value="#33C9A15A" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+        </Style>
+
+        <!-- status bar: 26 px with 11 px readouts -->
+        <Style Selector="Border.status-bar">
+            <Setter Property="MinHeight" Value="26" />
+            <Setter Property="BoxShadow" Value="0 0 10 0 #40000000" />
+        </Style>
+        <Style Selector="Border.status-bar TextBlock">
+            <Setter Property="FontSize" Value="11.5" />
+        </Style>
+        <Style Selector="Border.status-bar :is(Button)">
+            <Setter Property="MinHeight" Value="20" />
+            <Setter Property="Height" Value="20" />
+            <Setter Property="Padding" Value="6,0" />
+            <Setter Property="CornerRadius" Value="3" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Background" Value="#22F3E3BF" />
+        </Style>
+        <Style Selector="Border.status-bar :is(Button):pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#44F3E3BF" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+        </Style>
+
+        <!-- shortcut hint: a floating pill centred over the bottom of the canvas -->
+        <Style Selector="Border.hint-pill">
+            <Setter Property="Background" Value="{DynamicResource MapElevatedBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="10" />
+            <Setter Property="Padding" Value="16,5" />
+            <Setter Property="MinHeight" Value="30" />
+            <Setter Property="BoxShadow" Value="0 2 10 0 #80000000" />
+        </Style>
+
+        <!-- ================================================================================
+             Tavern frames (2026-10-17, owner's choice "E"): every floating card is framed like a
+             carved board - a brass hairline, a thin inner gap of dark wood and a second, fainter
+             brass line - so panels read as one set of furniture around the bright map.
+             The quick strip over the canvas keeps its own layout; it only takes the palette.
+             ================================================================================ -->
+        <Style Selector="Border.rail">
+            <Setter Property="BorderBrush" Value="#8A6A3A" />
+            <Setter Property="BoxShadow" Value="inset 0 0 0 2 #17110D, inset 0 0 0 3 #4DC9A15A, 0 6 18 0 #8C000000" />
+        </Style>
+        <Style Selector="Border.context-panel">
+            <Setter Property="BorderBrush" Value="#8A6A3A" />
+            <Setter Property="BoxShadow" Value="inset 0 0 0 3 #1A140F, inset 0 0 0 4 #4DC9A15A, 0 8 24 0 #8C000000" />
+        </Style>
+        <Style Selector="Border.panel">
+            <Setter Property="BorderBrush" Value="#6E5532" />
+            <Setter Property="BoxShadow" Value="inset 0 0 0 3 #1A140F, inset 0 0 0 4 #33C9A15A, 0 0 14 0 #80000000" />
+        </Style>
+        <Style Selector="Border.hint-pill">
+            <Setter Property="BorderBrush" Value="#6E5532" />
+        </Style>
+        <Style Selector="Border.app-bar">
+            <Setter Property="BorderBrush" Value="#6E5532" />
+            <Setter Property="BorderThickness" Value="0,0,0,1" />
+        </Style>
+        <Style Selector="Border.status-bar">
+            <Setter Property="BorderBrush" Value="#4A3926" />
+            <Setter Property="BorderThickness" Value="0,1,0,0" />
+        </Style>
+        <!-- Panel titles read as engraved brass. -->
+        <Style Selector="Border.context-panel Border.panel-header TextBlock.panel-title, Border.panel Border.panel-header TextBlock.panel-title">
+            <Setter Property="Foreground" Value="#E7C982" />
+        </Style>
+        <!-- Rail glyphs are brass-tinted parchment, the hovered slot warms up. -->
+        <Style Selector="Border.rail :is(Button).rail-tool:not(.active):not(:checked):pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="BoxShadow" Value="inset 0 0 0 1 #6E5532" />
+        </Style>
+        <!-- Tactile commands (2026-10-17): a brass glow gathers under the pointer and flares on
+             the press; the press itself (sink and spring back) and the ornaments live in
+             Controls/Tactile.cs. -->
+        <Style Selector=":is(Button).tactile /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Background" Duration="0:0:0.16" />
+                    <BoxShadowsTransition Property="BoxShadow" Duration="0:0:0.22" Easing="CubicEaseOut" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector=":is(Button).tactile:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="BoxShadow" Value="0 0 16 0 #40C9A15A, inset 0 0 0 1 #8A6A3A" />
+        </Style>
+        <Style Selector=":is(Button).tactile:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="BoxShadow" Value="0 0 22 2 #80E7C982, inset 0 0 0 1 #E7C982" />
+        </Style>
+
+        <!-- ================================================================================
+             Candle & Ornament (2026-10-17, owner's choice III of three element styles).
+             Commands carry no plaque - a hairline and a caption - and light does the talking:
+             the pointer warms a command from below and its rim glows, a press flares brighter.
+             The main command is framed by a double brass hairline with a serif caption; a chosen
+             mode is glowing text on a brass underline; tools are round medallions; a slider is
+             a hairline with a lit bead; a tick box is a diamond; headings use the display serif.
+             Avalonia has no selector specificity - the last matching style wins - so this block
+             only restates specific selectors, and the general hover glow comes before the rail,
+             primary and mode rules that refine it.
+             ================================================================================ -->
+        <Style Selector=":is(Button) /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Background" Duration="0:0:0.18" />
+                    <BrushTransition Property="BorderBrush" Duration="0:0:0.18" />
+                    <BoxShadowsTransition Property="BoxShadow" Duration="0:0:0.25" Easing="CubicEaseOut" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector=":is(Button):pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="BorderBrush" Value="#C9A15A" />
+            <Setter Property="BoxShadow" Value="0 0 14 0 #38E7C982" />
+        </Style>
+        <Style Selector=":is(Button):pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="BorderBrush" Value="#E7C982" />
+            <Setter Property="BoxShadow" Value="0 0 20 2 #59F0B060" />
+        </Style>
+
+        <!-- the main command: double brass hairline, serif caption, candle light underneath -->
+        <Style Selector="Button.primary, :is(Button).accent">
+            <Setter Property="BorderBrush" Value="#C9A15A" />
+            <Setter Property="FontFamily" Value="{DynamicResource MapDisplayFont}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="FontSize" Value="16" />
+        </Style>
+        <Style Selector="Button.primary /template/ ContentPresenter#PART_ContentPresenter, :is(Button).accent /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="BoxShadow" Value="inset 0 0 0 3 #15100C, inset 0 0 0 4 #59C9A15A" />
+        </Style>
+        <Style Selector="Button.primary:pointerover /template/ ContentPresenter#PART_ContentPresenter, :is(Button).accent:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapPrimaryHoverFillBrush}" />
+            <Setter Property="BorderBrush" Value="#E7C982" />
+            <Setter Property="BoxShadow" Value="inset 0 0 0 3 #15100C, inset 0 0 0 4 #8CE7C982, 0 0 16 0 #4DE7C982" />
+        </Style>
+        <Style Selector="Button.primary:pressed /template/ ContentPresenter#PART_ContentPresenter, :is(Button).accent:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapPrimaryPressedFillBrush}" />
+            <Setter Property="BorderBrush" Value="#F0D79A" />
+            <Setter Property="BoxShadow" Value="inset 0 0 0 3 #15100C, inset 0 0 0 4 #E7C982, 0 0 22 2 #73F0B060" />
+        </Style>
+
+        <!-- a chosen mode: glowing text on a brass underline, no fill block -->
+        <Style Selector="ToggleButton.mode-choice:checked /template/ ContentPresenter#PART_ContentPresenter, :is(Button).mode-choice.selected /template/ ContentPresenter#PART_ContentPresenter, :is(Button).mode-choice.active /template/ ContentPresenter#PART_ContentPresenter, ToggleButton.segment:checked /template/ ContentPresenter#PART_ContentPresenter, :is(Button).segment.active /template/ ContentPresenter#PART_ContentPresenter, RadioButton.segment:checked /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#1FE7C982" />
+            <Setter Property="BorderBrush" Value="#E7C982" />
+            <Setter Property="BorderThickness" Value="0,0,0,2" />
+            <Setter Property="CornerRadius" Value="0" />
+            <Setter Property="Foreground" Value="#F6E7C4" />
+            <Setter Property="BoxShadow" Value="0 0 0 0 Transparent" />
+        </Style>
+        <Style Selector="ToggleButton.mode-choice:checked:pointerover /template/ ContentPresenter#PART_ContentPresenter, :is(Button).mode-choice.selected:pointerover /template/ ContentPresenter#PART_ContentPresenter, :is(Button).mode-choice.active:pointerover /template/ ContentPresenter#PART_ContentPresenter, ToggleButton.segment:checked:pointerover /template/ ContentPresenter#PART_ContentPresenter, :is(Button).segment.active:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#2EE7C982" />
+            <Setter Property="BorderBrush" Value="#F0D79A" />
+            <Setter Property="BoxShadow" Value="0 0 12 0 #33E7C982" />
+        </Style>
+        <Style Selector="ToggleButton.mode-choice:checked, :is(Button).mode-choice.selected, :is(Button).mode-choice.active, ToggleButton.segment:checked, :is(Button).segment.active, RadioButton.segment:checked">
+            <Setter Property="Foreground" Value="#F6E7C4" />
+        </Style>
+        <Style Selector="ToggleButton.mode-choice:checked TextBlock, ToggleButton.mode-choice:checked AccessText, :is(Button).mode-choice.selected TextBlock, :is(Button).mode-choice.selected AccessText, :is(Button).mode-choice.active TextBlock, :is(Button).mode-choice.active AccessText, ToggleButton.segment:checked TextBlock, ToggleButton.segment:checked AccessText, :is(Button).segment.active TextBlock, :is(Button).segment.active AccessText">
+            <Setter Property="Foreground" Value="#F6E7C4" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+
+        <!-- tools: round medallions; the chosen one ringed and lit -->
+        <Style Selector="Border.rail :is(Button).rail-tool">
+            <Setter Property="Width" Value="42" />
+            <Setter Property="Height" Value="42" />
+            <Setter Property="MinHeight" Value="42" />
+            <Setter Property="Margin" Value="3" />
+            <Setter Property="CornerRadius" Value="21" />
+        </Style>
+        <Style Selector="Border.rail :is(Button).rail-tool /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="CornerRadius" Value="21" />
+            <Setter Property="BoxShadow" Value="inset 0 0 0 1 #40C9A15A" />
+        </Style>
+        <Style Selector="Border.rail :is(Button).rail-tool:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapControlHoverBrush}" />
+            <Setter Property="BoxShadow" Value="inset 0 0 0 1 #C9A15A, 0 0 12 0 #40E7C982" />
+        </Style>
+        <Style Selector="Border.rail :is(Button).rail-tool.active /template/ ContentPresenter#PART_ContentPresenter, Border.rail ToggleButton.rail-tool:checked /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapPrimaryFillBrush}" />
+            <Setter Property="Foreground" Value="#F6E2B0" />
+            <Setter Property="BoxShadow" Value="inset 0 0 0 1 #E7C982, 0 0 0 2 #17110D, 0 0 0 3 #80E7C982, 0 0 16 0 #59E7C982" />
+        </Style>
+        <Style Selector="Border.rail :is(Button).rail-tool.active:pointerover /template/ ContentPresenter#PART_ContentPresenter, Border.rail ToggleButton.rail-tool:checked:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapPrimaryHoverFillBrush}" />
+        </Style>
+        <Style Selector="Border.rail :is(Button).rail-tool.active, Border.rail ToggleButton.rail-tool:checked">
+            <Setter Property="Foreground" Value="#F6E2B0" />
+        </Style>
+        <Style Selector=":is(UserControl).compact-window Border.rail :is(Button).rail-tool">
+            <Setter Property="Width" Value="36" />
+            <Setter Property="Height" Value="36" />
+            <Setter Property="MinHeight" Value="36" />
+            <Setter Property="CornerRadius" Value="18" />
+        </Style>
+        <Style Selector=":is(UserControl).compact-window Border.rail :is(Button).rail-tool /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="CornerRadius" Value="18" />
+        </Style>
+
+        <!-- sliders: a hairline track, brass where it is filled, a small lit bead -->
+        <Style Selector="Slider /template/ RepeatButton#PART_DecreaseButton, Slider /template/ RepeatButton#PART_IncreaseButton">
+            <Setter Property="Height" Value="2" />
+            <Setter Property="CornerRadius" Value="1" />
+        </Style>
+        <Style Selector="Slider /template/ RepeatButton#PART_DecreaseButton, Slider:pointerover /template/ RepeatButton#PART_DecreaseButton, Slider:pressed /template/ RepeatButton#PART_DecreaseButton">
+            <Setter Property="Background" Value="#E7C982" />
+        </Style>
+        <Style Selector="Slider /template/ RepeatButton#PART_IncreaseButton, Slider:pointerover /template/ RepeatButton#PART_IncreaseButton, Slider:pressed /template/ RepeatButton#PART_IncreaseButton">
+            <Setter Property="Background" Value="#6E5532" />
+        </Style>
+        <Style Selector="Slider /template/ Thumb">
+            <Setter Property="Width" Value="12" />
+            <Setter Property="Height" Value="12" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Background" Value="#FFE9B8" />
+            <Setter Property="BorderBrush" Value="#C9A15A" />
+            <Setter Property="BorderThickness" Value="1" />
+        </Style>
+        <Style Selector="Slider:disabled /template/ Thumb">
+            <Setter Property="Background" Value="#857560" />
+        </Style>
+
+        <!-- a tick box is a diamond that lights when ticked -->
+        <Style Selector="CheckBox /template/ Border#NormalRectangle">
+            <Setter Property="Width" Value="14" />
+            <Setter Property="Height" Value="14" />
+            <Setter Property="CornerRadius" Value="0" />
+            <Setter Property="RenderTransform" Value="rotate(45deg)" />
+            <Setter Property="BorderBrush" Value="#C9A15A" />
+            <Setter Property="BorderThickness" Value="1.5" />
+            <Setter Property="Background" Value="Transparent" />
+        </Style>
+        <Style Selector="CheckBox:pointerover /template/ Border#NormalRectangle">
+            <Setter Property="BorderBrush" Value="#F0D79A" />
+            <Setter Property="BoxShadow" Value="0 0 8 0 #59E7C982" />
+        </Style>
+        <Style Selector="CheckBox:checked /template/ Border#NormalRectangle">
+            <Setter Property="Background" Value="#F0D79A" />
+            <Setter Property="BorderBrush" Value="#F0D79A" />
+            <Setter Property="BoxShadow" Value="0 0 10 0 #CCE7C982" />
+        </Style>
+        <Style Selector="CheckBox:disabled /template/ Border#NormalRectangle">
+            <Setter Property="BorderBrush" Value="#6E5532" />
+            <Setter Property="BoxShadow" Value="0 0 0 0 Transparent" />
+        </Style>
+        <Style Selector="CheckBox /template/ Path#CheckGlyph">
+            <Setter Property="Opacity" Value="0" />
+        </Style>
+
+        <!-- headings in the display serif -->
+        <Style Selector="TextBlock.role-screen">
+            <Setter Property="FontFamily" Value="{DynamicResource MapDisplayFont}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="FontSize" Value="30" />
+        </Style>
+        <Style Selector="TextBlock.role-section">
+            <Setter Property="FontFamily" Value="{DynamicResource MapDisplayFont}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="FontSize" Value="19" />
+        </Style>
+        <Style Selector="Border.context-panel Border.panel-header TextBlock.panel-title, Border.panel Border.panel-header TextBlock.panel-title">
+            <Setter Property="FontFamily" Value="{DynamicResource MapDisplayFont}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="FontSize" Value="17" />
+            <Setter Property="Foreground" Value="#F0D79A" />
+        </Style>
+        <Style Selector="Border.context-panel TextBlock.role-panel, Border.panel TextBlock.role-panel">
+            <Setter Property="FontFamily" Value="{DynamicResource MapDisplayFont}" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="FontSize" Value="16" />
+            <Setter Property="Foreground" Value="#F0D79A" />
+        </Style>
+        <Style Selector="TextBlock.section-summary, TextBlock.section-change">
+            <Setter Property="FontFamily" Value="{DynamicResource MapUiFont}" />
+        </Style>
+        <!-- the library's secondary commands: no plaque at all, a faint brass hairline -->
+        <Style Selector=":is(Button).dashboard-command, Button.dashboard-command:disabled">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="#59C9A15A" />
+        </Style>
+
+        <!-- The creating tools' big call to action (Новая земля / река / дорога): full width, lit,
+             a double brass frame, a serif title over a one-line hint - impossible to overlook. -->
+        <Style Selector=":is(Button).create-hero">
+            <Setter Property="MinHeight" Value="62" />
+            <Setter Property="Padding" Value="16,10" />
+            <Setter Property="Margin" Value="0,4,0,6" />
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="Background" Value="{DynamicResource MapPrimaryFillBrush}" />
+            <Setter Property="BorderBrush" Value="#E7C982" />
+            <Setter Property="BorderThickness" Value="1.5" />
+            <Setter Property="CornerRadius" Value="4" />
+            <Setter Property="Foreground" Value="#F6E2B0" />
+            <Setter Property="FontFamily" Value="{DynamicResource MapDisplayFont}" />
+            <Setter Property="FontSize" Value="19" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <Style Selector=":is(Button).create-hero /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="BoxShadow" Value="inset 0 0 0 3 #15100C, inset 0 0 0 4 #8CE7C982, 0 0 18 0 #40E7C982" />
+        </Style>
+        <Style Selector=":is(Button).create-hero:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapPrimaryHoverFillBrush}" />
+            <Setter Property="BorderBrush" Value="#F6E2B0" />
+            <Setter Property="BoxShadow" Value="inset 0 0 0 3 #15100C, inset 0 0 0 4 #E7C982, 0 0 26 2 #73E7C982" />
+        </Style>
+        <Style Selector=":is(Button).create-hero:pressed /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapPrimaryPressedFillBrush}" />
+            <Setter Property="BoxShadow" Value="inset 0 0 0 3 #15100C, inset 0 0 0 4 #F6E2B0, 0 0 30 4 #8CF0B060" />
+        </Style>
+        <Style Selector=":is(Button).create-hero TextBlock, :is(Button).create-hero AccessText">
+            <Setter Property="Foreground" Value="#F6E2B0" />
+        </Style>
+        <Style Selector=":is(Button).create-hero TextBlock.hero-hint">
+            <Setter Property="FontFamily" Value="{DynamicResource MapUiFont}" />
+            <Setter Property="FontWeight" Value="Normal" />
+            <Setter Property="Foreground" Value="#C4B294" />
+        </Style>
+        <Style Selector=":is(Button).create-hero:disabled /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="BoxShadow" Value="0 0 0 0 Transparent" />
+        </Style>
+
+        <!-- the assets strip: tiny step arrows and reset, quiet until the pointer reaches them -->
+        <Style Selector=":is(Button).strip-step">
+            <Setter Property="Background" Value="#14F3E3BF" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="CornerRadius" Value="2" />
+            <Setter Property="MinWidth" Value="0" />
+        </Style>
+        <Style Selector=":is(Button).strip-step /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="BoxShadow" Value="0 0 0 0 Transparent" />
         </Style>
     </Application.Styles>
 </Application>

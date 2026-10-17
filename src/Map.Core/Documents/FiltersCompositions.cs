@@ -12,6 +12,36 @@ public sealed record FilterSettings
     public string? TextureAssetSha256 { get; init; }
     public double TextureOpacity { get; init; } = 0.25;
     public double TextureScale { get; init; } = 1;
+
+    /// <summary>Recolours the lower scene by brightness: shadows, midtones and highlights each get a colour.</summary>
+    public FilterGradientMap GradientMap { get; init; } = new();
+
+    /// <summary>True per-pixel saturation, brightness, contrast and sharpness of the lower scene.</summary>
+    public FilterPostProcess PostProcess { get; init; } = new();
+
+    /// <summary>0..1 - how much of the gradient map and post-processing reaches the map ("Сила эффекта").</summary>
+    public double ColorStrength { get; init; } = 1;
+
+    /// <summary>The one-click preset last applied, for the panel caption only; null after manual edits.</summary>
+    public string? ColorPresetId { get; init; }
+}
+
+/// <summary>Three colours by brightness of the scene below, mixed with the original by <see cref="Strength"/> (0..1).</summary>
+public sealed record FilterGradientMap
+{
+    public string ShadowColor { get; init; } = "#FF000000";
+    public string MidtoneColor { get; init; } = "#FF808080";
+    public string HighlightColor { get; init; } = "#FFFFFFFF";
+    public double Strength { get; init; }
+}
+
+/// <summary>Saturation, brightness and contrast in -1..1 (0 = unchanged); sharpness 0..1.</summary>
+public sealed record FilterPostProcess
+{
+    public double Saturation { get; init; }
+    public double Brightness { get; init; }
+    public double Contrast { get; init; }
+    public double Sharpness { get; init; }
 }
 
 /// <summary>Asset identity/provenance retained by a composition without duplicating payload bytes.</summary>

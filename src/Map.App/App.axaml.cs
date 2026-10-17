@@ -33,16 +33,8 @@ public partial class App : Application
 
             var assetCatalog = new AssetCatalog(
                 appSettings.LibraryRoot ?? Path.Combine(profileRoot, "Assets"));
-            try
-            {
-                StarterPackBootstrapper.EnsureInstalled(assetCatalog, DateTimeOffset.UtcNow);
-                AtlasArtPack.EnsureInstalled(assetCatalog, DateTimeOffset.UtcNow);
-            }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException
-                or InvalidDataException or InvalidOperationException)
-            {
-                diagnostics.Error("STARTER_PACK_INSTALL_FAILED", error);
-            }
+            // The owner starts the artwork library from scratch. Opening Map never seeds assets;
+            // new content enters the existing catalog through an explicit import.
 
             var mainWindow = new MainWindow(
                 new ProjectStore(journal),
@@ -53,6 +45,8 @@ public partial class App : Application
                 appSettingsStore: appSettingsStore,
                 appSettings: appSettings);
             desktop.MainWindow = mainWindow;
+            // Sound on every button, switch, slider, list and menu - one switch silences it all.
+            UiSoundHooks.Install();
         }
 
         base.OnFrameworkInitializationCompleted();

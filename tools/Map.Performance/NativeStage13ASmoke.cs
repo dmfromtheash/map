@@ -205,6 +205,7 @@ public sealed class NativeSmokeApplication : Application
         EditorView view)
     {
         view.OpenObjects();
+        view.ShowPanelSection(PanelSection.Other);
         await SettleAsync();
 
         var logicalRows = view.ObjectListLogicalCount;

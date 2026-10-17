@@ -189,7 +189,8 @@ public sealed partial class EditorViewModel
         {
             _riverStrokeSource = null; _riverStrokeSourceRiver = null;
             _riverDraft = new River { Name = _riverCreatingLake ? EntityNameGenerator.Lake(Session.Document) : EntityNameGenerator.River(Session.Document),
-                Channels = [channel], Style = RiverStyle.Illustrated() };
+                Channels = [channel], Style = Services.RegionalMapFactory.IsRegional(Session.Document)
+                    ? Services.RegionalMapFactory.WaterStyle : RiverStyle.Illustrated() };
         }
         _riverNode = 0; RaiseRiverState(); return true;
     }

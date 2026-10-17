@@ -34,13 +34,13 @@ public sealed partial class EditorView
                 Ui.TextButton("StartEditablePathButton", "Новый редактируемый путь", _editor.StartEditablePath, "compact"),
                 _pathFinish,
                 new TextBlock { Text = "Клики — узлы · Enter — завершить · Esc — отменить. Перетаскивайте круглый узел. Длинный ряд показан выборочно по всей длине. Все объекты появятся после завершения.", TextWrapping = TextWrapping.Wrap }.Classed("faint", "role-caption"),
-                AppearanceNumberBox("EditablePathSpacingBox", "Шаг", "ед.", () => _editor.SelectedEditablePath?.Spacing, _editor.SetEditablePathSpacing),
-                AppearanceNumberBox("EditablePathSeedBox", "Seed", null, () => _editor.SelectedEditablePath?.Seed, _editor.SetEditablePathSeed),
+                AppearanceNumberBox("EditablePathSpacingBox", "Шаг", "ед.", () => _editor.DisplayedEditablePath?.Spacing, _editor.SetEditablePathSpacing),
+                AppearanceNumberBox("EditablePathSeedBox", "Рисунок", null, () => _editor.DisplayedEditablePath?.Seed, _editor.SetEditablePathSeed),
                 Ui.TextButton("InsertEditablePathNodeButton", "Добавить узел на сегменте", _editor.InsertEditablePathNode, "compact"),
-                Ui.TextButton("DeleteEditablePathNodeButton", "Удалить выбранный узел", _editor.DeleteEditablePathNode, "compact"),
+                Ui.TextButton("DeleteEditablePathNodeButton", "Удалить узел (в черновике — последний)", _editor.DeleteEditablePathNode, "compact"),
                 Ui.TextButton("SelectPathObjectButton", "Выбрать объект пути", _editor.PickEditablePathObject, "compact"),
                 _pathDetach,
-                Ui.TextButton("ApplyEditablePathSettingsButton", "Применить параметры штампа к пути", _editor.ApplyStampSettingsToEditablePath, "compact"),
+                Ui.TextButton("ApplyEditablePathSettingsButton", "Применить параметры ассета к пути", _editor.ApplyStampSettingsToEditablePath, "compact"),
                 Ui.TextButton("BakeEditablePathButton", "Превратить путь в обычные объекты", _editor.BakeEditablePath, "compact"),
                 Ui.TextButton("DeleteEditablePathButton", "Удалить путь и связанные объекты", _editor.DeleteEditablePath, "compact", "destructive"),
             },
@@ -63,7 +63,7 @@ public sealed partial class EditorView
             _pathFinish!.IsVisible = _editor.IsCreatingEditablePath;
             _pathDetach!.IsEnabled = _editor.CanDetachPathObject;
             _pathPanel.IsVisible = _editor.StampPlacementMode == Map.Presentation.ViewModels.StampPlacementMode.Path
-                || choices.Length > 0 || _editor.IsCreatingEditablePath;
+                || _editor.IsCreatingEditablePath || _editor.SelectedEditablePath is not null;
             SyncAppearanceSections();
         }
         finally { _syncingPaths = false; }

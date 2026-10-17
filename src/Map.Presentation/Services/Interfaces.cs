@@ -72,6 +72,9 @@ public interface IExportDestinationPicker
     Task<string?> PickImageAsync(string suggestedFileName, ExportImageFormat format);
 
     Task<string?> PickTilePackageAsync(string suggestedFolderName);
+
+    /// <summary>Where to write a Universal VTT file (*.dd2vtt); null when cancelled or not supported.</summary>
+    Task<string?> PickVttAsync(string suggestedFileName) => Task.FromResult<string?>(null);
 }
 
 /// <summary>Opens the local result folder after a successful export.</summary>

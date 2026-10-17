@@ -44,6 +44,7 @@ public sealed partial class EditorViewModel
             AfterSelectionChange();
         }
         ClearWaterSelection();
+        ClearRoadSelection();
         _selectedLandId = id;
         _activeLayerId = id;
         StatusDetail = $"Земля «{land.Name}» · уровень {FormatSublayer(land.Level)}"

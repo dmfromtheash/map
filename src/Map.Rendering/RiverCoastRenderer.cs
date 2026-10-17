@@ -7,6 +7,7 @@ namespace Map.Rendering;
 /// <summary>Joins the derived river cut to the sea before land outlines and shore waves are drawn.</summary>
 internal static class RiverCoastRenderer
 {
+    internal const double MaximumMouthRadius = 80;
     public static void SmoothMouths(SKCanvas canvas, River river, double scale,
         Func<double, double, bool> insideLand, Action<SKCanvas, SKPaint> drawLand,
         Action<SKCanvas> drawWater)
@@ -35,7 +36,7 @@ internal static class RiverCoastRenderer
                         }
                         var centre = new SKPoint((a.X + b.X) / 2, (a.Y + b.Y) / 2);
                         var half = Math.Max(sample.HalfWidth, RiverRenderer.MinimumScreenWidth / scale / 2);
-                        Round(centre, (float)Math.Clamp(half * .4, 1.25, 8), (float)Math.Clamp(half * 2.5, 10, 80));
+                        Round(centre, (float)Math.Clamp(half * .4, 1.25, 8), (float)Math.Clamp(half * 2.5, 10, MaximumMouthRadius));
                     }
                     previous = point; wasLand = isLand;
                 }
@@ -63,7 +64,9 @@ internal static class RiverCoastRenderer
             {
                 canvas.SaveLayer(filterBounds, filter);
                 using (var sea = new SKPaint { Color = SKColors.White }) canvas.DrawRect(filterBounds, sea);
-                using (var subtract = new SKPaint { BlendMode = SKBlendMode.DstOut }) drawLand(canvas, subtract);
+                // Sea starts beyond the support of the land, not wherever its soft coverage
+                // drops below 50%. Thresholding the inverse opacity punched pale holes inland.
+                DrawLandSupport(canvas, drawLand, filterBounds, SKBlendMode.DstOut);
                 drawWater(canvas);
                 canvas.Restore();
             }
@@ -77,24 +80,37 @@ internal static class RiverCoastRenderer
         }
     }
 
-    /// <summary>River-specific ink and waves give way to the continuous land coastline at an estuary.</summary>
-    public static void MaskBanks(SKCanvas canvas, Action<SKCanvas, SKPaint> drawLand, SKRect bounds, double reach)
+    /// <summary>Banks follow the land's exact coverage, with no inland inset or extra water fade.</summary>
+    public static void MaskBanks(SKCanvas canvas, Action<SKCanvas, SKPaint> drawLand, SKRect bounds)
     {
+        // An inset proportional to river width stopped the cliff inside feathered ground.
+        // Use land opacity once, so the cliff disappears together with that ground.
         using var keep = new SKPaint { BlendMode = SKBlendMode.DstIn };
         canvas.SaveLayer(bounds, keep);
-        using var erode = SKImageFilter.CreateErode((float)reach, (float)reach);
-        using var blur = SKImageFilter.CreateBlur((float)(reach * .3), (float)(reach * .3), erode);
-        using (var soft = new SKPaint { ImageFilter = blur })
-        {
-            canvas.SaveLayer(bounds, soft);
-            using var plain = new SKPaint();
-            drawLand(canvas, plain);
-            canvas.Restore();
-        }
-        // Even a translucent edge must not leave a closed bank line over open sea.
-        canvas.SaveLayer(bounds, keep);
-        using (var plain = new SKPaint()) drawLand(canvas, plain);
+        using var plain = new SKPaint();
+        drawLand(canvas, plain);
         canvas.Restore();
+    }
+
+    /// <summary>
+    /// Shape only: every covered pixel belongs to land, including a softly painted edge or a
+    /// translucent layer. Mouth rounding needs the boundary of that shape rather than its
+    /// half-opacity contour; the original soft coverage is preserved when the cut is applied.
+    /// </summary>
+    private static void DrawLandSupport(SKCanvas canvas, Action<SKCanvas, SKPaint> drawLand,
+        SKRect bounds, SKBlendMode blend = SKBlendMode.SrcOver)
+    {
+        using var support = SKColorFilter.CreateColorMatrix(
+        [
+            0, 0, 0, 0, 1,
+            0, 0, 0, 0, 1,
+            0, 0, 0, 0, 1,
+            0, 0, 0, 255, 0,
+        ]);
+        // Apply after the union, masks and layer opacity have been composed by the caller.
+        using var paint = new SKPaint { ColorFilter = support, BlendMode = blend };
+        canvas.SaveLayer(bounds, paint);
+        using (var plain = new SKPaint()) drawLand(canvas, plain);
         canvas.Restore();
     }
 

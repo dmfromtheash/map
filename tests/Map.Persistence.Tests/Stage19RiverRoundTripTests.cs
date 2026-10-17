@@ -110,6 +110,7 @@ public sealed class Stage19RiverRoundTripTests
         using var manifest = JsonDocument.Parse(zip.GetEntry("manifest.json")!.Open());
         Assert.Equal(MapProjectFormat.SchemaVersion, manifest.RootElement.GetProperty("schemaVersion").GetInt32());
         Assert.True(MapProjectFormat.IsExtendedV4Schema(MapProjectFormat.RiversSchemaVersion));
-        Assert.False(MapProjectFormat.IsExtendedV4Schema(MapProjectFormat.RiversSchemaVersion + 1));
+        Assert.True(MapProjectFormat.IsExtendedV4Schema(MapProjectFormat.RoadsSchemaVersion)); // v8 (roads) shares the v4 container too
+        Assert.False(MapProjectFormat.IsExtendedV4Schema(MapProjectFormat.MaxSupportedSchemaVersion + 1));
     }
 }

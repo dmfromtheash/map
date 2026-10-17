@@ -7,7 +7,7 @@ namespace Map.Rendering.Tests;
 public sealed class LandRenderingTests
 {
     [Fact]
-    public void Exact_land_pass_draws_style_while_fast_preview_draws_same_source_coverage()
+    public void Exact_land_pass_draws_style_while_fast_terrain_draws_same_source_coverage()
     {
         var coverage = new byte[TileMap.TileSize * TileMap.TileSize];
         for (var y = 40; y < 210; y++)
@@ -67,7 +67,7 @@ public sealed class LandRenderingTests
     {
         var info = new SKImageInfo(256, 256);
         using var surface = SKSurface.Create(info)!;
-        SceneRenderer.Render(surface.Canvas, document, new RenderOptions { FastPreview = fast });
+        SceneRenderer.Render(surface.Canvas, document, new RenderOptions { FastTerrain = fast });
         var bitmap = new SKBitmap(info);
         surface.ReadPixels(info, bitmap.GetPixels(), info.RowBytes, 0, 0);
         return bitmap;

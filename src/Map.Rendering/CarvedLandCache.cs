@@ -16,7 +16,7 @@ namespace Map.Rendering;
 /// </summary>
 public sealed class CarvedLandCache : IDisposable
 {
-    private sealed record Key(LayerId Layer, object Tiles, long Left, long Top, long Right, long Bottom, long Scale, River[] Cutters, MapLayer[] Owners)
+    private sealed record Key(LayerId Layer, object Tiles, long Left, long Top, long Right, long Bottom, long Scale, River[] Cutters, object[] Owners)
     {
         public bool Equals(Key? other) =>
             other is not null && Layer == other.Layer && ReferenceEquals(Tiles, other.Tiles)
@@ -24,7 +24,7 @@ public sealed class CarvedLandCache : IDisposable
             && Scale == other.Scale && Cutters.Length == other.Cutters.Length
             && !Cutters.Where((river, i) => !ReferenceEquals(river, other.Cutters[i])).Any()
             && Owners.Length == other.Owners.Length
-            && !Owners.Where((owner, i) => !ReferenceEquals(owner, other.Owners[i])).Any();
+            && !Owners.Where((owner, i) => !Equals(owner, other.Owners[i])).Any();
 
         public override int GetHashCode()
         {
@@ -62,12 +62,12 @@ public sealed class CarvedLandCache : IDisposable
     /// it and must not dispose it.
     /// </summary>
     public SKImage? Get(LayerId layer, TileMap tiles, WorldBounds view, double scale, IReadOnlyList<River> cutters,
-        Func<int, int, SKImage?> build, out int width, out int height, IReadOnlyList<MapLayer>? owners = null)
+        Func<int, int, SKImage?> build, out int width, out int height, IReadOnlyList<object>? owners = null)
     {
         ArgumentNullException.ThrowIfNull(build);
         ArgumentNullException.ThrowIfNull(cutters);
         var key = new Key(layer, tiles, Quantize(view.Left), Quantize(view.Top), Quantize(view.Right),
-            Quantize(view.Bottom), Quantize(scale), [.. cutters], owners is null ? [] : [.. owners]);
+            Quantize(view.Bottom), BitConverter.DoubleToInt64Bits(scale), [.. cutters], owners is null ? [] : [.. owners]);
         lock (_gate)
         {
             if (_entries.TryGetValue(key, out var found))

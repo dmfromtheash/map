@@ -76,6 +76,9 @@ public static class SceneGeometry
         else if (sceneObject.Shape?.Stroke is { } shapeStroke)
         {
             pad += (shapeStroke.Width / 2) + Math.Abs(shapeStroke.Offset) + (shapeStroke.Blur * 3);
+            // Room caps are centred on the corners and may be taller than wide: half their diagonal spills out.
+            if (sceneObject.Room is { CapAssetSha256: not null } room)
+                pad = Math.Max(pad, shapeStroke.Width * room.CapScale * 1.5);
             if (shapeStroke.ShadowOpacity > 0)
             {
                 shadowX = Math.Abs(shapeStroke.ShadowOffsetX) + (shapeStroke.ShadowBlur * 3);

@@ -69,6 +69,9 @@ public sealed class DashboardView : UserControl
     private Ui.InlineChoice _sort = null!;
     private Border? _moreActions;
     private Button? _moreButton;
+    // The page's items rise in one after another the first time it is built after it appears.
+    private bool _revealPending = true;
+
     private bool? _empty;
     private string? _helpTopic;
 
@@ -146,7 +149,7 @@ public sealed class DashboardView : UserControl
             else if (_preview.IsVisible) { ClosePreview(); e.Handled = true; }
             else if (_help.IsVisible) { _help.IsVisible = false; e.Handled = true; }
         };
-        AttachedToVisualTree += (_, _) => { _dashboard.PropertyChanged += DashboardChanged; Rebuild(); };
+        AttachedToVisualTree += (_, _) => { _revealPending = true; _dashboard.PropertyChanged += DashboardChanged; Rebuild(); };
         DetachedFromVisualTree += (_, _) =>
         {
             _dashboard.PropertyChanged -= DashboardChanged;
@@ -164,6 +167,9 @@ public sealed class DashboardView : UserControl
     }
 
     private static IBrush? Brush(string key) => Application.Current?.FindResource(key) as IBrush;
+    // The display serif of the Candle & Ornament style; Onest stays the reading face.
+    private static FontFamily Display =>
+        Application.Current?.FindResource("MapDisplayFont") as FontFamily ?? FontFamily.Default;
 
     private Control BuildHeader()
     {
@@ -174,13 +180,14 @@ public sealed class DashboardView : UserControl
             Children =
             {
                 ApprovedArtwork.Image("map", 32, 32).Named("DashboardBrandIcon"),
-                new TextBlock { Text = "Map", FontSize = 22, FontWeight = FontWeight.Medium,
-                    VerticalAlignment = VerticalAlignment.Center },
+                new TextBlock { Text = "Map", FontSize = 26, FontWeight = FontWeight.SemiBold,
+                    FontFamily = Display, VerticalAlignment = VerticalAlignment.Center },
                 new TextBlock { Text = "Библиотека карт", FontSize = 14,
                     VerticalAlignment = VerticalAlignment.Center }.Classed("muted"),
             },
         };
         var commands = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
+        commands.Children.Add(SoundToggle.Create("DashboardSoundButton", withCaption: true));
         if (_helpRequested is not null)
             commands.Children.Add(Ui.CommandButton("LocalHelpButton", "Справка", MapIcons.Help, _helpRequested, "compact"));
         if (_settingsRequested is not null)
@@ -190,6 +197,7 @@ public sealed class DashboardView : UserControl
             button.FontSize = 14;
             button.MinHeight = 40;
             button.Padding = new Thickness(12, 8);
+            Tactile.Attach(button, ornaments: false);
         }
         return new Border
         {
@@ -218,8 +226,8 @@ public sealed class DashboardView : UserControl
         _intro.Children.Clear(); _entryButtons.Clear();
         _welcome = null; _welcomeShade = null; _welcomeLayout = null;
         _moreActions = null; _moreButton = null;
-        var title = new TextBlock { Name = "DashboardTitle", Text = "Ваши карты",
-            FontSize = 28, FontWeight = FontWeight.Bold, VerticalAlignment = VerticalAlignment.Center };
+        var title = new TextBlock { Name = "DashboardTitle", Text = "Ваши карты", FontFamily = Display,
+            FontSize = 32, FontWeight = FontWeight.SemiBold, VerticalAlignment = VerticalAlignment.Center };
         var create = EntryButton("NewMapButton", empty ? "Создать карту" : "Новая карта", _newMapRequested, true);
         ToolTip.SetTip(create, $"Создать новую карту  ({_shortcuts.Get(EditorShortcutSettings.Commands.NewMap)})");
         var open = EntryButton("OpenFileButton", "Открыть проект", _openFileRequested);
@@ -260,8 +268,12 @@ public sealed class DashboardView : UserControl
                 _moreButton.MinHeight = 40;
                 commands.Children.Add(_moreButton);
             }
+            foreach (var button in commands.Children.OfType<Button>()) Tactile.Attach(button, ornaments: false);
+            if (_moreActions is not null)
+                foreach (var button in extras.Children.OfType<Button>()) Tactile.Attach(button, ornaments: false);
             _intro.Children.Add(new DockPanel { Children = { commands.Docked(Dock.Right), title } });
             if (_moreActions is not null) _intro.Children.Add(_moreActions);
+            if (_revealPending) { _revealPending = false; Tactile.Reveal(commands.Children.ToList()); }
         }
     }
 
@@ -272,7 +284,7 @@ public sealed class DashboardView : UserControl
         button.Padding = new Thickness(secondary ? 14 : 20, 10);
         button.CornerRadius = new CornerRadius(8);
         var label = new TextBlock { Name = button.Name + "Caption", Text = caption,
-            FontWeight = FontWeight.Medium, TextWrapping = TextWrapping.Wrap,
+            FontFamily = Display, FontWeight = FontWeight.SemiBold, TextWrapping = TextWrapping.Wrap,
             VerticalAlignment = VerticalAlignment.Center };
         Grid.SetColumn(label, 1);
         button.Content = new Grid
@@ -287,20 +299,22 @@ public sealed class DashboardView : UserControl
     {
         WelcomeCommand(create, "Создать карту", MapIcons.NewMap);
         WelcomeCommand(open, "Открыть проект", MapIcons.Open);
-        var secondary = new Grid { Name = "DashboardSecondaryActions", ColumnSpacing = 12 };
+        var secondary = new StackPanel { Name = "DashboardSecondaryActions", Spacing = 6 };
         foreach (var button in extras.Children.OfType<Button>().ToArray())
         {
             extras.Children.Remove(button);
-            var template = button.Name == "CreateFromTemplateButton";
-            WelcomeCommand(button, template ? "Из шаблона" : "Импорт копии",
-                template ? MapIcons.Duplicate : MapIcons.Import, secondary: true);
-            Grid.SetColumn(button, secondary.Children.Count);
-            secondary.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Star));
+            var (caption, icon) = button.Name switch
+            {
+                "CreateFromTemplateButton" => ("Из шаблона", MapIcons.Duplicate),
+                "OpenExportedPngButton" => ("Просмотр PNG", MapIcons.Open),
+                _ => ("Импорт копии", MapIcons.Import),
+            };
+            WelcomeCommand(button, caption, icon, secondary: true);
             secondary.Children.Add(button);
         }
         secondary.IsVisible = secondary.Children.Count > 0;
         var heading = new TextBlock { Name = "DashboardWelcomeHeading", Text = "Начните с\nчистого листа",
-            FontSize = 36, FontWeight = FontWeight.Bold, LineHeight = 42,
+            FontFamily = Display, FontSize = 40, FontWeight = FontWeight.SemiBold, LineHeight = 44,
             TextAlignment = TextAlignment.Center, TextWrapping = TextWrapping.Wrap };
         var lead = new TextBlock { Name = "DashboardWelcomeLead",
             Text = "Создайте новую карту или продолжите\nработу с сохранённым проектом.",
@@ -315,8 +329,8 @@ public sealed class DashboardView : UserControl
             {
                 new StackPanel { Spacing = 12, Children =
                 {
-                    new TextBlock { Text = "ВАША МАСТЕРСКАЯ", FontSize = 14,
-                        FontWeight = FontWeight.Medium, TextAlignment = TextAlignment.Center,
+                    new TextBlock { Text = "Ваша мастерская", FontSize = 19, FontFamily = Display,
+                        FontStyle = FontStyle.Italic, FontWeight = FontWeight.Medium, TextAlignment = TextAlignment.Center,
                         Foreground = Brush("MapAccentBrush") },
                     heading, lead,
                 } },
@@ -325,6 +339,16 @@ public sealed class DashboardView : UserControl
             },
         };
         _welcomeLayout = new WelcomeLayout(copy, heading, lead);
+        Tactile.Attach(create);
+        Tactile.Attach(open);
+        foreach (var button in secondary.Children.OfType<Button>()) Tactile.Attach(button);
+        if (_revealPending)
+        {
+            _revealPending = false;
+            var entrance = new List<Control> { copy.Children[0], create, open };
+            entrance.AddRange(secondary.Children.OfType<Control>());
+            Tactile.Reveal(entrance, firstDelayMs: 80, staggerMs: 80);
+        }
         var artwork = new Image { Name = "DashboardHeroArtwork", Source = HomeArtwork.Value,
             Stretch = Stretch.UniformToFill, IsHitTestVisible = false };
         RenderOptions.SetBitmapInterpolationMode(artwork, BitmapInterpolationMode.HighQuality);
@@ -347,9 +371,9 @@ public sealed class DashboardView : UserControl
                             EndPoint = new RelativePoint(1, 0, RelativeUnit.Relative),
                             GradientStops = new GradientStops
                             {
-                                new GradientStop(Color.Parse("#FCFDFF"), 0),
-                                new GradientStop(Color.Parse("#F8FCFDFF"), .28),
-                                new GradientStop(Color.Parse("#00FCFDFF"), .62),
+                                new GradientStop(Color.Parse("#1A140F"), 0),
+                                new GradientStop(Color.Parse("#F21A140F"), .28),
+                                new GradientStop(Color.Parse("#001A140F"), .62),
                             },
                         },
                     },
@@ -600,7 +624,8 @@ public sealed class DashboardView : UserControl
     private void ShowPreview(RecentCard card)
     {
         CloseMore(); _sort.Close();
-        var open = Ui.AsyncButton("OpenDashboardPreviewButton", "Открыть карту", () => _openRecentRequested(card), "primary");
+        var open = Tactile.Attach(
+            Ui.AsyncButton("OpenDashboardPreviewButton", "Открыть карту", () => _openRecentRequested(card), "primary"));
         open.IsEnabled = card.IsAvailable && !_dashboard.IsBusy;
         var heading = new DockPanel
         {
@@ -679,6 +704,7 @@ public sealed class DashboardView : UserControl
 
         var captured = card;
         openButton.Click += async (_, _) => await _openRecentRequested(captured);
+        Tactile.Attach(openButton, ornaments: false);
 
         if (_cloneRequested is null && _deleteRequested is null)
         {

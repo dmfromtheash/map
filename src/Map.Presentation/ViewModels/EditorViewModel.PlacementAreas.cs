@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using Map.Core.Documents;
 using Map.Core.Editing;
+using Map.Core.Resources;
 using Map.Presentation.Services;
 
 namespace Map.Presentation.ViewModels;
@@ -29,6 +30,28 @@ public sealed partial class EditorViewModel
     private long? _areaPredictedCount;
     private string? _areaCountError;
     public Task PendingEditableAreaCount => _areaCountTask;
+    // Area work that does not finish within these budgets on the UI thread continues in the
+    // background: a large forest used to freeze the editor for 0.2-0.6 s per click or vertex
+    // move and for 1.5-2 s per setting change. Small areas still complete synchronously.
+    private static readonly TimeSpan QuickAreaPreview = TimeSpan.FromMilliseconds(16);
+    private static readonly TimeSpan QuickAreaCommand = TimeSpan.FromMilliseconds(40);
+    private CancellationTokenSource? _areaPreviewCancellation;
+    private Task _areaPreviewTask = Task.CompletedTask;
+    private bool _areaPreviewRunning, _areaPreviewQueued;
+    private (Func<PlacementArea, PlacementArea?> Change, Guid AreaId, string Name)? _areaQueuedChange;
+    private int _areaWorkGeneration;
+    private Task _areaWorkTask = Task.CompletedTask;
+    /// <summary>The background preview of the draft or dragged vertex; completed when idle.</summary>
+    public Task PendingEditableAreaPreview => _areaPreviewTask;
+    /// <summary>A placement or setting change of a large area being computed off the UI thread.</summary>
+    public Task PendingEditableAreaWork => _areaWorkTask;
+    public bool IsEditableAreaBusy { get; private set; }
+    /// <summary>
+    /// Set by the editor window: slow area work may continue off the UI thread and land through
+    /// the UI dispatcher. Without a window (tests, tools) every area operation stays synchronous.
+    /// </summary>
+    public bool AllowsBackgroundAreaWork { get; set; }
+    private bool HasUiContext => AllowsBackgroundAreaWork && SynchronizationContext.Current is not null;
     public long? PlannedEditableAreaCount => _areaCreating ? _areaPredictedCount : SelectedEditableArea?.MemberCount;
     public string EditableAreaResult
     {
@@ -78,11 +101,12 @@ public sealed partial class EditorViewModel
         }
     }
     public bool IsCreatingEditableArea => _areaCreating;
-    public bool CanPlaceEditableArea => _areaCreating && _areaDraft is { Nodes.Length: >= 3 } && !_areaPreviewInvalid;
+    public bool CanPlaceEditableArea => _areaCreating && _areaDraft is { Nodes.Length: >= 3 } && !_areaPreviewInvalid && !IsEditableAreaBusy;
     public string EditableAreaPlacementHint
     {
         get
         {
+            if (IsEditableAreaBusy) return "Пересчитываю область… Esc или Ctrl+Z отменят пересчёт.";
             if (_areaCreating)
                 return _areaPreviewError ?? (_areaDraft is { Nodes.Length: >= 3 }
                     ? "Граница готова. Нажмите «Разместить». Enter — разместить · Esc — отменить."
@@ -160,7 +184,7 @@ public sealed partial class EditorViewModel
                 _areaAssets = references; _areaLayer = ActiveObjectLayer()?.Id;
                 _areaDraft = new PlacementArea
                 {
-                    Name = NextAreaName(SelectedSet?.Name ?? "штампы"), AssetSetId = _selectedSetId, LayoutVersion = 4,
+                    Name = NextAreaName(SelectedSet?.Name ?? "ассеты"), AssetSetId = _selectedSetId, LayoutVersion = 4,
                     VariantId = CurrentVariant?.Id, Variants = [.. sources], Request = request,
                     Seed = NextGestureSeed(), Density = _naturalAreaDensity, SizeVariationPercent = _naturalAreaSizeVariation,
                     Pattern = _naturalAreaPattern, JoinEdges = _naturalAreaJoinEdges, ContentBounds = ReadAreaContentBounds(sources),
@@ -184,24 +208,101 @@ public sealed partial class EditorViewModel
         if (!_areaCreating || _areaDraft is not { Nodes.Length: >= 3 } draft)
         { StatusDetail = "Для области нужны хотя бы три разных вершины."; return false; }
         if (_areaPreviewInvalid) { StatusDetail = _areaPreviewError!; return false; }
+        if (IsEditableAreaBusy) return false;
         var (layer, create) = EnsureObjectLayer();
         if (layer is null) { StatusDetail = NoUsableObjectLayer; return false; }
-        var command = new PlacementAreaCommand(layer.Id, draft.Id, draft, "Создать редактируемую область", _areaAssets);
+        var assets = _areaAssets;
+        PlacementAreaCommand Command(CancellationToken token) => new(layer.Id, draft.Id, draft, "Создать редактируемую область", assets,
+            cancellationToken: token);
+        if (!HasUiContext || create is not null) return CompleteAreaPlacement(Command(default), layer, create, draft.Id);
+        if (TryQuickAreaCommand(Command, out var quick)) return CompleteAreaPlacement(quick, layer, create, draft.Id);
+        // A large fill is computed in the background; the draft stays on screen until it lands.
+        _areaWorkTask = PlaceAreaInBackground(() => Command(default), layer);
+        return true;
+    }
+
+    private bool CompleteAreaPlacement(PlacementAreaCommand command, ObjectLayer layer, AddLayerCommand? create, Guid areaId)
+    {
         var revision = Session.Revision;
         ExecuteWithOptionalLayer(command, create, command.Name);
-        if (Session.Revision == revision) return false;
-        _selectedAreaId = draft.Id; _activeLayerId = layer.Id; _gestureCounter++;
+        if (Session.Revision == revision)
+        { if (Session.LastResourceError is { } error) StatusDetail = error; RaiseAreaState(); return false; }
+        _selectedAreaId = areaId; _activeLayerId = layer.Id; _gestureCounter++;
         CancelEditableAreaGesture(); PendingPlacement = null; Session.ClearSelection();
         LastAreaChangedObjects = command.ChangedObjects; LastAreaVisitedCells = command.VisitedCells;
         LastAreaChangedCells = command.ChangedCells;
+        if (SelectedEditableArea?.MemberCount > 0) RememberPlacedFamily();
         AfterEdit(); RaiseAreaState();
         StatusDetail = EditableAreaPlacementHint;
         return true;
     }
 
+    private async Task PlaceAreaInBackground(Func<PlacementAreaCommand> create, ObjectLayer layer)
+    {
+        var generation = ++_areaWorkGeneration; var areaId = _areaDraft!.Id;
+        SetAreaBusy(true);
+        try
+        {
+            var document = Session.Document; var command = create();
+            var error = await PrecomputeAreaCommand(command, document);
+            // Only Esc or undo abandon a placement the user asked for; a tool switch does not.
+            if (generation != _areaWorkGeneration) return;
+            if (error is not null) { StatusDetail = error; return; }
+            // Another edit landed meanwhile: rebuild the command against the current map.
+            if (!ReferenceEquals(document, Session.Document)) command = create();
+            SetAreaBusy(false);
+            CompleteAreaPlacement(command, layer, create: null, areaId);
+        }
+        finally { if (generation == _areaWorkGeneration) SetAreaBusy(false); }
+    }
+
+    /// <summary>
+    /// Runs the command on the UI thread for at most <see cref="QuickAreaCommand"/>. A finished
+    /// command keeps its result, so executing it afterwards costs nothing; one that ran out of
+    /// time is discarded and the caller moves the work to the background.
+    /// </summary>
+    private bool TryQuickAreaCommand(Func<CancellationToken, PlacementAreaCommand> make, out PlacementAreaCommand command)
+    {
+        using var budget = new CancellationTokenSource(QuickAreaCommand);
+        command = make(budget.Token);
+        try { command.Apply(Session.Document); return true; }
+        catch (OperationCanceledException) { return false; }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            // Session.Execute reports the refusal; it must not meet the expired budget.
+            command = make(default); return true;
+        }
+    }
+
+    private static async Task<string?> PrecomputeAreaCommand(PlacementAreaCommand command, MapDocument document)
+    {
+        try { await Task.Run(() => command.Apply(document)); return null; }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException) { return ex.Message; }
+        // Nothing thrown off the UI thread may vanish unnoticed: the change is refused and said so.
+        catch (Exception ex) when (ex is not OperationCanceledException) { return "Область не пересчитана: " + ex.Message; }
+    }
+
+    private void SetAreaBusy(bool busy)
+    {
+        if (IsEditableAreaBusy == busy) return;
+        IsEditableAreaBusy = busy;
+        if (busy) StatusDetail = EditableAreaPlacementHint;
+        Raise(nameof(IsEditableAreaBusy)); RaiseAreaState();
+    }
+
+    /// <summary>Abandons a background placement or setting change that has not landed yet.</summary>
+    public bool CancelEditableAreaWork()
+    {
+        var active = IsEditableAreaBusy || _areaQueuedChange is not null;
+        _areaWorkGeneration++; _areaQueuedChange = null;
+        SetAreaBusy(false);
+        if (active) StatusDetail = "Пересчёт области отменён.";
+        return active;
+    }
+
     public void SelectEditableArea(Guid id)
     {
-        CancelPlacement(); CancelEditableAreaGesture();
+        CancelPlacement(); CancelEditableAreaGesture(); RememberStampSettingsBeforeConstruction();
         var layer = Session.Document.Layers.OfType<ObjectLayer>().FirstOrDefault(l => l.PlacementAreas.Any(p => p.Id == id));
         if (layer is null) return;
         _selectedPathId = null; CancelEditablePathGesture();
@@ -212,6 +313,7 @@ public sealed partial class EditorViewModel
     private void SyncEditableAreaSettings()
     {
         if (SelectedEditableArea is not { } path) return;
+        SyncPlacementFamily(path.AssetSetId, path.VariantId, path.Variants);
         if (path.LayoutVersion >= 3)
         { _naturalAreaDensity = path.Density; _naturalAreaSizeVariation = path.SizeVariationPercent;
             _naturalAreaPattern = path.Pattern; _naturalAreaJoinEdges = path.JoinEdges; }
@@ -227,6 +329,8 @@ public sealed partial class EditorViewModel
     {
         if (ActiveTool != EditorTool.Stamp) return false;
         if (_areaPickObject) { _areaPickObject = false; return false; }
+        if (IsEditableAreaBusy && (_areaCreating || StampPlacementMode == StampPlacementMode.FillArea))
+        { StatusDetail = EditableAreaPlacementHint; return true; }
         if (_areaCreating || _areaStartRequested || PendingPlacement is { Mode: StampPlacementMode.FillArea })
         { AddEditableAreaNode(x, y); return true; }
         var tolerance = 9 / Math.Max(.01, Session.Viewport.Scale);
@@ -238,9 +342,8 @@ public sealed partial class EditorViewModel
                 if (segment >= 0)
                 {
                     _areaInsert = false; var point = SnapPlacementPoint(x, y);
-                    _areaNode = segment + 1;
-                    return CommitAreaChange(selected with { Nodes = selected.Nodes.Insert(_areaNode,
-                        new(Guid.NewGuid(), point.X, point.Y)) }, "Добавить вершину области");
+                    _areaNode = segment + 1; var nodes = selected.Nodes.Insert(_areaNode, new(Guid.NewGuid(), point.X, point.Y));
+                    return CommitAreaChange(a => a with { Nodes = nodes }, "Добавить вершину области");
                 }
             }
             for (var i = 0; i < selected.Nodes.Length; i++)
@@ -256,6 +359,11 @@ public sealed partial class EditorViewModel
                     if (layer.StateFor(path.Sublayer).Visible && (ClosestAreaSegment(path, x, y, tolerance) >= 0
                         || PlacementAreaGeometry.Contains(path.Nodes, x, y)))
                     { SelectEditableArea(path.Id); return true; }
+        // The «Область» mode is still on: a click on free ground starts the next area with the
+        // same images, instead of silently doing nothing until «Новая область» is found.
+        if (StampPlacementMode == StampPlacementMode.FillArea && (SelectedEditableArea is not null || _newAreaTemplate is not null
+            || SelectedSet is not null || CurrentVariant is not null))
+        { StartEditableArea(); AddEditableAreaNode(x, y); return true; }
         return false;
     }
     public bool IsDraggingAreaNode => _areaDragging;
@@ -273,24 +381,40 @@ public sealed partial class EditorViewModel
         if (!_areaDragging || _areaDraft is not { } draft) return false;
         var changed = _areaOriginal is { } original && !original.Nodes.SequenceEqual(draft.Nodes);
         CancelEditableAreaGesture();
-        return changed && CommitAreaChange(draft, "Переместить вершину области");
+        var nodes = draft.Nodes;
+        return changed && CommitAreaChange(a => a with { Nodes = nodes }, "Переместить вершину области");
     }
 
     public void InsertEditableAreaNode()
     { _areaInsert = true; StatusDetail = "Щёлкните по сегменту области, чтобы добавить вершину."; }
     public void PickEditableAreaObject()
-    { _areaPickObject = true; StatusDetail = "Щёлкните по нужному штампу, затем нажмите «Отделить выбранный объект»."; }
+    { _areaPickObject = true; StatusDetail = "Щёлкните по нужному ассету, затем нажмите «Отделить выбранный объект»."; }
     public void DeleteEditableAreaNode()
     {
-        if (_areaCreating && _areaDraft is { Nodes.Length: > 0 } draft)
-        {
-            _areaDraft = draft with { Nodes = draft.Nodes.RemoveAt(draft.Nodes.Length - 1) };
-            _areaNode = _areaDraft.Nodes.Length - 1; UpdateAreaPreview(); RaiseAreaState(); return;
-        }
+        if (RemoveLastAreaDraftNode()) return;
         if (SelectedEditableArea is not { } path || _areaNode < 0 || _areaNode >= path.Nodes.Length) return;
         if (path.Nodes.Length <= 3) { StatusDetail = "Оставьте три вершины или удалите всю область."; return; }
-        var next = path with { Nodes = path.Nodes.RemoveAt(_areaNode) };
-        _areaNode = Math.Min(_areaNode, next.Nodes.Length - 1); CommitAreaChange(next, "Удалить вершину области");
+        var nodes = path.Nodes.RemoveAt(_areaNode);
+        _areaNode = Math.Min(_areaNode, nodes.Length - 1); CommitAreaChange(a => a with { Nodes = nodes }, "Удалить вершину области");
+    }
+    /// <summary>
+    /// The step back inside an unfinished boundary: the last vertex goes, and with the last one
+    /// gone the tool is simply armed again. Undo during drawing used to cancel the draft AND undo
+    /// the previous, unrelated edit of the map.
+    /// </summary>
+    private bool RemoveLastAreaDraftNode()
+    {
+        if (!_areaCreating || _areaDraft is not { Nodes.Length: > 0 } draft) return false;
+        if (draft.Nodes.Length == 1)
+        {
+            var template = _newAreaTemplate; CancelEditableAreaGesture(); _newAreaTemplate = template;
+            ArmStampPlacement(); _areaStartRequested = true;
+            StatusDetail = "Черновик области пуст. Ставьте вершины кликами."; RaiseAreaState(); return true;
+        }
+        _areaDraft = draft with { Nodes = draft.Nodes.RemoveAt(draft.Nodes.Length - 1) };
+        _areaNode = _areaDraft.Nodes.Length - 1; UpdateAreaPreview(); RaiseAreaState();
+        StatusDetail = $"Последняя вершина убрана. Вершин: {_areaDraft.Nodes.Length}.";
+        return true;
     }
     public void SetEditableAreaDensity(double value)
     {
@@ -300,7 +424,7 @@ public sealed partial class EditorViewModel
         else _stampToolSettings = _stampToolSettings with { Density = Math.Round(value) };
         if (_areaCreating && _areaDraft is { } draft)
         { _areaDraft = draft with { Density = Math.Round(value) }; UpdateAreaPreview(); RaiseAreaState(); }
-        else if (SelectedEditableArea is { } p) CommitAreaChange(p with { Density = Math.Round(value) }, "Изменить плотность области");
+        else if (SelectedEditableArea is not null) { var density = Math.Round(value); CommitAreaChange(a => a with { Density = density }, "Изменить плотность области"); }
         RaiseStampToolState();
     }
     public void SetEditableAreaSizeVariation(double value)
@@ -311,8 +435,8 @@ public sealed partial class EditorViewModel
         _naturalAreaSizeVariation = Math.Round(value);
         if (_areaCreating && _areaDraft is { } draft)
         { _areaDraft = draft with { SizeVariationPercent = _naturalAreaSizeVariation }; UpdateAreaPreview(); RaiseAreaState(); }
-        else if (SelectedEditableArea is { } p)
-            CommitAreaChange(p with { SizeVariationPercent = _naturalAreaSizeVariation }, "Изменить разнообразие размеров области");
+        else if (SelectedEditableArea is not null)
+        { var variation = _naturalAreaSizeVariation; CommitAreaChange(a => a with { SizeVariationPercent = variation }, "Изменить разнообразие размеров области"); }
         else RaiseAreaState();
     }
     public void SetEditableAreaPattern(PlacementAreaPattern value)
@@ -321,8 +445,8 @@ public sealed partial class EditorViewModel
         _naturalAreaPattern = value;
         if (_areaCreating && _areaDraft is { } draft)
         { _areaDraft = draft with { Pattern = value, LayoutVersion = 4 }; UpdateAreaPreview(); RaiseAreaState(); }
-        else if (SelectedEditableArea is { } area)
-            CommitAreaChange(area with { Pattern = value, LayoutVersion = 4 }, "Изменить рисунок области");
+        else if (SelectedEditableArea is not null)
+            CommitAreaChange(a => a with { Pattern = value, LayoutVersion = 4 }, "Изменить рисунок области");
         else RaiseAreaState();
     }
     public void SetEditableAreaJoinEdges(bool value)
@@ -331,8 +455,8 @@ public sealed partial class EditorViewModel
         _naturalAreaJoinEdges = value;
         if (_areaCreating && _areaDraft is { } draft)
         { _areaDraft = draft with { JoinEdges = value }; UpdateAreaPreview(); RaiseAreaState(); }
-        else if (SelectedEditableArea is { } area)
-            CommitAreaChange(area with { JoinEdges = value }, "Изменить смыкание объектов области");
+        else if (SelectedEditableArea is not null)
+            CommitAreaChange(a => a with { JoinEdges = value }, "Изменить смыкание объектов области");
         else RaiseAreaState();
     }
     public void SetEditableAreaSeed(double value)
@@ -340,32 +464,34 @@ public sealed partial class EditorViewModel
         if (!double.IsFinite(value) || value < int.MinValue || value > int.MaxValue) return;
         if (_areaCreating && _areaDraft is { } draft)
         { _areaDraft = draft with { Seed = (int)Math.Round(value) }; UpdateAreaPreview(); RaiseAreaState(); }
-        else if (SelectedEditableArea is { } p) CommitAreaChange(p with { Seed = (int)Math.Round(value) }, "Изменить seed области");
+        else if (SelectedEditableArea is not null) { var seed = (int)Math.Round(value); CommitAreaChange(a => a with { Seed = seed }, "Изменить seed области"); }
     }
     public void ApplyStampSettingsToEditableArea()
     {
-        if (SelectedEditableArea is not { } p) return;
+        if (SelectedEditableArea is null) return;
         var settings = _stampToolSettings;
-        var width = p.Request.BaseWidth * settings.ScalePercent / p.ScalePercent;
-        CommitAreaChange(p with { Density = p.LayoutVersion >= 3 ? p.Density : settings.Density,
+        CommitAreaChange(p => p with { Density = p.LayoutVersion >= 3 ? p.Density : settings.Density,
             ScalePercent = settings.ScalePercent, RotationDegrees = settings.RotationDegrees,
             Sublayer = settings.Sublayer, Opacity = settings.ObjectOpacity, Style = settings.Style ?? p.Style,
-            Request = p.Request with { BaseWidth = width, RandomizeVariant = settings.RandomizeVariant,
-                RandomAngleStep = settings.RandomAngleStep, RandomFlip = settings.RandomFlip } }, "Изменить параметры области");
+            Request = p.Request with { BaseWidth = p.Request.BaseWidth * settings.ScalePercent / p.ScalePercent,
+                RandomizeVariant = settings.RandomizeVariant, RandomAngleStep = settings.RandomAngleStep,
+                RandomFlip = settings.RandomFlip } }, "Изменить параметры области");
     }
     public void ArrangeEditableAreaNaturally()
     {
         if (SelectedEditableArea is not { LayoutVersion: < 4 } p) return;
-        if (CommitAreaChange(PlacementAreaPlanner.InitializeComposition(p with { LayoutVersion = 4, OccupiedSlots = [], Density = _naturalAreaDensity,
+        var natural = PlacementAreaPlanner.InitializeComposition(p with { LayoutVersion = 4, OccupiedSlots = [], Density = _naturalAreaDensity,
             SizeVariationPercent = _naturalAreaSizeVariation, Pattern = _naturalAreaPattern, JoinEdges = _naturalAreaJoinEdges,
             ContentBounds = ReadAreaContentBounds(p.Variants, p.ContentBounds),
-            ContentMasks = ReadAreaContentMasks(p.Variants, p.ContentMasks) }), "Расположить область естественно"))
+            ContentMasks = ReadAreaContentMasks(p.Variants, p.ContentMasks) });
+        if (CommitAreaChange(a => a.LayoutVersion < 4 ? natural : null, "Расположить область естественно"))
             StatusDetail = "Рисунок области обновлён. Отделённые объекты сохранены; действие можно отменить.";
     }
     public void TryAnotherEditableAreaArrangement()
     {
         if (DisplayedEditableArea is not { } p) return;
-        SetEditableAreaSeed(unchecked(p.Seed + 104729));
+        if (_areaCreating) { SetEditableAreaSeed(unchecked(p.Seed + 104729)); return; }
+        CommitAreaChange(a => a with { Seed = unchecked(a.Seed + 104729) }, "Изменить seed области");
     }
     public void DetachSelectedAreaObject()
     {
@@ -394,23 +520,69 @@ public sealed partial class EditorViewModel
         { StatusDetail = "Слой области скрыт или заблокирован."; return null; }
         return layer;
     }
-    private bool CommitAreaChange(PlacementArea next, string name)
+    /// <summary>
+    /// One setting or geometry change of the selected area. Changes are functions of the area as
+    /// it is when they run, so several quick edits of a large area queue up and compose instead
+    /// of each one reverting the fields of the previous one.
+    /// </summary>
+    private bool CommitAreaChange(Func<PlacementArea, PlacementArea?> change, string name)
     {
-        if (EditableAreaLayer(next) is not { } layer) return false;
-        if (next == SelectedEditableArea) return false;
-        return RunAreaCommand(new(layer.Id, next.Id, next, name));
+        if (SelectedEditableArea is not { } current || EditableAreaLayer(current) is not { } layer) return false;
+        if (IsEditableAreaBusy)
+        {
+            // Compose with a change that has not started yet; the newest name labels the step.
+            _areaQueuedChange = _areaQueuedChange is { } queued && queued.AreaId == current.Id
+                ? (a => queued.Change(a) is { } mid ? change(mid) : null, current.Id, name) : (change, current.Id, name);
+            StatusDetail = EditableAreaPlacementHint; return true;
+        }
+        if (change(current) is not { } next || next == current) return false;
+        if (!HasUiContext) return RunAreaCommand(new(layer.Id, next.Id, next, name));
+        if (TryQuickAreaCommand(token => new(layer.Id, next.Id, next, name, cancellationToken: token), out var quick))
+            return RunAreaCommand(quick);
+        _areaQueuedChange = (change, current.Id, name);
+        _areaWorkTask = ChangeAreaInBackground();
+        return true;
+    }
+
+    private async Task ChangeAreaInBackground()
+    {
+        var generation = ++_areaWorkGeneration;
+        SetAreaBusy(true);
+        try
+        {
+            while (_areaQueuedChange is { } job && generation == _areaWorkGeneration)
+            {
+                _areaQueuedChange = null;
+                var area = EditableAreas.FirstOrDefault(a => a.Id == job.AreaId);
+                if (area is null || EditableAreaLayer(area) is not { } layer || job.Change(area) is not { } next || next == area) continue;
+                var document = Session.Document;
+                var command = new PlacementAreaCommand(layer.Id, next.Id, next, job.Name);
+                var error = await PrecomputeAreaCommand(command, document);
+                if (generation != _areaWorkGeneration) return;
+                if (error is not null) { StatusDetail = error; continue; }
+                if (!ReferenceEquals(document, Session.Document))
+                {
+                    // The map changed meanwhile: recompute from the area as it is now.
+                    if (EditableAreas.FirstOrDefault(a => a.Id == job.AreaId) is not { } latest || job.Change(latest) is not { } again) continue;
+                    command = new PlacementAreaCommand(layer.Id, again.Id, again, job.Name);
+                }
+                RunAreaCommand(command);
+            }
+        }
+        finally { if (generation == _areaWorkGeneration) SetAreaBusy(false); }
     }
     private bool RunAreaCommand(PlacementAreaCommand command)
     {
         var revision = Session.Revision; Session.Execute(command);
-        if (revision == Session.Revision) return false;
+        if (revision == Session.Revision)
+        { if (Session.LastResourceError is { } error) StatusDetail = error; return false; }
         LastAreaChangedObjects = command.ChangedObjects; LastAreaVisitedCells = command.VisitedCells;
         LastAreaChangedCells = command.ChangedCells;
         AfterEdit(geometryOnly: true); RaiseAreaState(); return true;
     }
     public bool CancelEditableAreaGesture()
     {
-        CancelAreaCount();
+        CancelAreaCount(); CancelAreaPreview();
         var active = _areaDraft is not null || _areaInsert || _areaPickObject || _areaStartRequested;
         _areaDraft = _areaOriginal = null; _areaAssets = []; _areaPreviewObjects = []; _areaOverrides = [];
         _areaPreviewError = null; _areaPreviewInvalid = false; _areaStartRequested = false;
@@ -423,45 +595,121 @@ public sealed partial class EditorViewModel
     {
         CancelAreaCount();
         if (_areaDraft is not { Nodes.Length: >= 3 } path)
-        { _areaPreviewObjects = []; _areaOverrides = []; _areaPreviewError = null; _areaPreviewInvalid = false; return; }
+        { CancelAreaPreview(); _areaPreviewObjects = []; _areaOverrides = []; _areaPreviewError = null; _areaPreviewInvalid = false; return; }
         try
         {
+            path.Validate();
             if (_areaCreating && path.LayoutVersion >= 3)
                 _areaDraft = path = PlacementAreaPlanner.InitializeComposition(path);
-            var obstacles = path.LayoutVersion > 0 && _areaLayer is { } layerId
-                ? new PlacementAreaObstacles(Session.Document, layerId, path.Id, path.Sublayer, path.LayoutVersion, path) : null;
-            var samples = PlacementAreaPlanner.Preview(path, _areaDragging ? _areaOriginal : null, obstacles: obstacles, memory: _workingMemory);
             _areaPreviewError = null; _areaPreviewInvalid = false;
-            if (!_areaDragging)
+            var obstacles = AreaObstacles(path);
+            if (_areaCreating && !_areaDragging)
             {
-                _areaPreviewObjects = samples;
-                if (_areaCreating)
-                {
-                    var cancellation = _areaCountCancellation = new CancellationTokenSource();
-                    _areaCountTask = CountAreaDraftAsync(_areaCountTask, path, obstacles, cancellation);
-                }
+                var cancellation = _areaCountCancellation = new CancellationTokenSource();
+                _areaCountTask = CountAreaDraftAsync(_areaCountTask, path, obstacles, cancellation);
+            }
+            var original = _areaDragging ? _areaOriginal : null;
+            if (!HasUiContext)
+            {
+                (_areaPreviewObjects, _areaOverrides) = ComputeAreaPreview(path, original, _areaDragging, obstacles,
+                    Session.Document, _workingMemory, default);
                 return;
             }
-            var index = DocumentRevisionIndex.For(Session.Document);
-            _areaOverrides = samples.Where(o => index.FindObject(o.Id) is not null).ToArray();
-            _areaPreviewObjects = samples.Where(o => index.FindObject(o.Id) is null).ToArray();
-            // Bounded deletion samples show the changed edge even while the polygon is shrinking.
-            if (_areaOriginal is { } original)
+            // Large areas: the outline follows the pointer at once; the sampled objects follow
+            // as soon as the background pass for the latest shape is ready.
+            if (_areaPreviewRunning) { _areaPreviewQueued = true; return; }
+            using (var budget = new CancellationTokenSource(QuickAreaPreview))
             {
-                var removed = PlacementAreaPlanner.Preview(original, path, memory: _workingMemory).Where(o =>
-                    !PlacementAreaGeometry.Contains(path.Nodes, o.X + o.Width / 2, o.Y + o.Height / 2))
-                    .Select(o => o with { ObjectOpacity = 0 });
-                _areaOverrides = _areaOverrides.Concat(removed).Take(128).ToArray();
+                try
+                {
+                    (_areaPreviewObjects, _areaOverrides) = ComputeAreaPreview(path, original, _areaDragging, obstacles,
+                        Session.Document, _workingMemory, budget.Token);
+                    return;
+                }
+                catch (OperationCanceledException) { }
             }
+            _areaPreviewTask = RunAreaPreviewLoop();
         }
         catch (ArgumentException ex)
-        { _areaPreviewObjects = []; _areaOverrides = []; _areaPreviewInvalid = true; _areaPreviewError = ex.Message; StatusDetail = ex.Message; return; }
+        {
+            CancelAreaPreview(); _areaPreviewObjects = []; _areaOverrides = []; _areaPreviewInvalid = true;
+            _areaPreviewError = ex.Message; StatusDetail = ex.Message;
+        }
         catch (InvalidOperationException ex)
         {
-            _areaPreviewObjects = []; _areaOverrides = []; _areaPreviewInvalid = false;
+            CancelAreaPreview(); _areaPreviewObjects = []; _areaOverrides = []; _areaPreviewInvalid = false;
             _areaPreviewError = ex.Message + (_areaCreating ? " Нажмите «Разместить», чтобы повторить попытку." : "");
-            StatusDetail = _areaPreviewError; return;
+            StatusDetail = _areaPreviewError;
         }
+    }
+
+    private PlacementAreaObstacles? AreaObstacles(PlacementArea path) => path.LayoutVersion > 0 && _areaLayer is { } layerId
+        ? new PlacementAreaObstacles(Session.Document, layerId, path.Id, path.Sublayer, path.LayoutVersion, path) : null;
+
+    private static (IReadOnlyList<SceneObject> Objects, IReadOnlyList<SceneObject> Overrides) ComputeAreaPreview(
+        PlacementArea path, PlacementArea? original, bool dragging, PlacementAreaObstacles? obstacles,
+        MapDocument document, WorkingMemoryBudget memory, CancellationToken token)
+    {
+        var samples = PlacementAreaPlanner.Preview(path, original, obstacles: obstacles, memory: memory, cancellationToken: token);
+        if (!dragging) return (samples, []);
+        var index = DocumentRevisionIndex.For(document);
+        var overrides = samples.Where(o => index.FindObject(o.Id) is not null).ToArray();
+        var added = samples.Where(o => index.FindObject(o.Id) is null).ToArray();
+        // Bounded deletion samples show the changed edge even while the polygon is shrinking.
+        if (original is null) return (added, overrides);
+        var removed = PlacementAreaPlanner.Preview(original, path, memory: memory, cancellationToken: token).Where(o =>
+            !PlacementAreaGeometry.Contains(path.Nodes, o.X + o.Width / 2, o.Y + o.Height / 2))
+            .Select(o => o with { ObjectOpacity = 0 });
+        return (added, overrides.Concat(removed).Take(128).ToArray());
+    }
+
+    private async Task RunAreaPreviewLoop()
+    {
+        _areaPreviewRunning = true;
+        try
+        {
+            do
+            {
+                _areaPreviewQueued = false;
+                if (_areaDraft is not { Nodes.Length: >= 3 } draft) return;
+                var original = _areaDragging ? _areaOriginal : null; var dragging = _areaDragging;
+                var obstacles = AreaObstacles(draft); var document = Session.Document; var memory = _workingMemory;
+                var cancellation = _areaPreviewCancellation = new CancellationTokenSource(); var token = cancellation.Token;
+                try
+                {
+                    var result = await Task.Run(() => ComputeAreaPreview(draft, original, dragging, obstacles, document, memory, token), token);
+                    // A result for an older shape of the same draft is still closer than nothing;
+                    // the pass for the newest shape is already queued behind it.
+                    if (!token.IsCancellationRequested && _areaDraft?.Id == draft.Id && _areaDragging == dragging)
+                    {
+                        (_areaPreviewObjects, _areaOverrides) = result;
+                        Raise(nameof(EditableAreaSummary)); InvalidateScene(EditorChangeReason.CanvasInvalidation);
+                    }
+                }
+                // A cancelled pass ends here; a newer shape queued meanwhile still gets its pass.
+                catch (OperationCanceledException) { }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    if (!token.IsCancellationRequested && _areaDraft?.Id == draft.Id)
+                    {
+                        _areaPreviewObjects = []; _areaOverrides = [];
+                        _areaPreviewError = ex.Message; StatusDetail = ex.Message; RaiseAreaState();
+                    }
+                }
+                finally
+                {
+                    if (ReferenceEquals(_areaPreviewCancellation, cancellation)) _areaPreviewCancellation = null;
+                    cancellation.Dispose();
+                }
+            } while (_areaPreviewQueued);
+        }
+        finally { _areaPreviewRunning = false; }
+    }
+
+    private void CancelAreaPreview()
+    {
+        _areaPreviewQueued = false;
+        _areaPreviewCancellation?.Cancel(); _areaPreviewCancellation = null;
     }
 
     private void CancelAreaCount()
@@ -508,6 +756,7 @@ public sealed partial class EditorViewModel
     }
     private void RaiseAreaState()
     {
+        Raise(nameof(CanUndo)); Raise(nameof(CanRedo));
         Raise(nameof(EditableAreas)); Raise(nameof(SelectedEditableArea)); Raise(nameof(EditableAreaSummary));
         Raise(nameof(IsCreatingEditableArea)); Raise(nameof(CanDetachAreaObject));
         Raise(nameof(CanPlaceEditableArea)); Raise(nameof(EditableAreaPlacementHint));

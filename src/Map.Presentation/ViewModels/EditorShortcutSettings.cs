@@ -48,7 +48,7 @@ public readonly record struct ShortcutGesture(string Key, ShortcutModifiers Modi
 {
     private static readonly HashSet<string> NamedKeys = new(StringComparer.OrdinalIgnoreCase)
     {
-        "Space", "Tab", "Escape", "Delete", "Backspace",
+        "Space", "Tab", "Enter", "Escape", "Delete", "Backspace",
         "Left", "Right", "Up", "Down",
         "Slash", "Comma", "Period", "Backquote", "LeftBracket", "RightBracket",
     };
@@ -171,6 +171,7 @@ public sealed class EditorShortcutSettings
         public const string Text = "text";
         public const string Notes = "notes";
         public const string River = "river";
+        public const string Road = "road";
         public const string Escape = "escape";
         public const string Delete = "delete";
         public const string DeleteAlternate = "delete-alternate";
@@ -251,11 +252,12 @@ public sealed class EditorShortcutSettings
         D(Commands.Stamp, "Ассеты — размещение", "Инструменты", ShortcutContext.Editor, "O", "Открыть каталог ассетов и перейти к размещению"),
         D(Commands.Brush, "Инструмент «Кисть»", "Инструменты", ShortcutContext.Editor, "B", "Активировать кисть"),
         D(Commands.Mask, "Инструмент «Маска»", "Инструменты", ShortcutContext.Editor, "M", "Активировать маску"),
-        D(Commands.Land, "Инструмент «Земля»", "Инструменты", ShortcutContext.Editor, "", "Активировать землю"),
+        D(Commands.Land, "Инструмент «Земля»", "Инструменты", ShortcutContext.Editor, "P", "Активировать землю (на русской раскладке — клавиша «З»)"),
         D(Commands.Notes, "Заметки", "Инструменты", ShortcutContext.Editor, "N", "Открыть панель заметок"),
         D(Commands.River, "Инструмент «Река»", "Инструменты", ShortcutContext.Editor, "H", "Активировать реки"),
+        D(Commands.Road, "Инструмент «Дорога»", "Инструменты", ShortcutContext.Editor, "J", "Активировать дороги"),
         D(Commands.Escape, "Выйти из группы / снять выбор", "Выделение", ShortcutContext.Editor, "Escape", "Закрыть текущий уровень выделения"),
-        D(Commands.FinishPath, "Завершить контур", "Инструменты", ShortcutContext.Canvas, "Enter", "Замкнуть контур режима Pen"),
+        D(Commands.FinishPath, "Завершить контур", "Инструменты", ShortcutContext.Canvas, "Enter", "Замкнуть контур режима «По узлам»"),
         D(Commands.Delete, "Удалить выделение", "Выделение", ShortcutContext.Selection, "Delete", "Удалить выбранные объекты"),
         D(Commands.DeleteAlternate, "Удалить выделение (доп.)", "Выделение", ShortcutContext.Selection, "Backspace", "Второе сочетание удаления"),
         D(Commands.NudgeLeft, "Сдвинуть влево", "Выделение", ShortcutContext.Selection, "Left", "Сдвинуть на один шаг"),
@@ -290,12 +292,12 @@ public sealed class EditorShortcutSettings
         D(Commands.ObjectBottom, "Объект вниз", "Слои", ShortcutContext.Selection, "Shift+Alt+Down", "Сделать выделение самым нижним в слое"),
         D(Commands.LayerUp, "Слой выше", "Слои", ShortcutContext.Editor, "Ctrl+Shift+Up", "Поднять активный слой"),
         D(Commands.LayerDown, "Слой ниже", "Слои", ShortcutContext.Editor, "Ctrl+Shift+Down", "Опустить активный слой"),
-        D(Commands.StampFocusLibrary, "Поиск в каталоге", "Размещение ассета", ShortcutContext.Stamp, "F", "Открыть каталог ассетов и перейти к поиску"),
+        D(Commands.StampFocusLibrary, "Поиск в каталоге", "Размещение ассета", ShortcutContext.Editor, "F", "Открыть каталог ассетов и перейти к поиску"),
         D(Commands.StampNextVariant, "Следующий вариант", "Размещение ассета", ShortcutContext.Stamp, "Alt+Right", "Выбрать следующий вариант ассета"),
         D(Commands.StampPreviousVariant, "Предыдущий вариант", "Размещение ассета", ShortcutContext.Stamp, "Alt+Left", "Выбрать предыдущий вариант ассета"),
         D(Commands.StampDensityUp, "Плотность размещения +", "Размещение ассета", ShortcutContext.Stamp, "Alt+Q", "Увеличить плотность"),
         D(Commands.StampDensityDown, "Плотность размещения −", "Размещение ассета", ShortcutContext.Stamp, "Alt+A", "Уменьшить плотность"),
-        D(Commands.StampCycleVariant, "Вариант колёсиком", "Мышь", ShortcutContext.Mouse, "Alt+Wheel", "Прокрутить варианты над холстом", false),
+        D(Commands.StampCycleVariant, "Вариант и набор колёсиком", "Мышь", ShortcutContext.Mouse, "Alt+Wheel", "Варианты текущего набора, за последним — следующий набор каталога", false),
         D(Commands.FontPrevious, "Предыдущий шрифт", "Текст", ShortcutContext.Selection, "[", "Выбрать предыдущий локальный шрифт"),
         D(Commands.FontNext, "Следующий шрифт", "Текст", ShortcutContext.Selection, "]", "Выбрать следующий локальный шрифт"),
     ];
@@ -507,6 +509,7 @@ public sealed class EditorShortcutSettings
         EditorTool.Land => Commands.Land,
         EditorTool.Notes => Commands.Notes,
         EditorTool.River => Commands.River,
+        EditorTool.Road => Commands.Road,
         _ => "",
     };
 

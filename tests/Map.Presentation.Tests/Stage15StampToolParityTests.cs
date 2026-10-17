@@ -13,6 +13,79 @@ public sealed class Stage15StampToolParityTests : IDisposable
     private readonly string _root = Path.Combine(
         Path.GetTempPath(), "map-stage15-tests-" + Guid.NewGuid().ToString("N"));
 
+    [Theory]
+    [InlineData(StampPlacementMode.One)]
+    [InlineData(StampPlacementMode.Series)]
+    [InlineData(StampPlacementMode.Area)]
+    [InlineData(StampPlacementMode.Path)]
+    [InlineData(StampPlacementMode.FillArea)]
+    public void Reset_tool_returns_to_single_neutral_placement_without_editing_the_map(StampPlacementMode mode)
+    {
+        var editor = AssetEditor(out var catalog);
+        editor.SelectAssetSet(catalog.Sets[0].Id);
+        var neutral = editor.StampToolSettings;
+        Assert.True(editor.PlaceCurrentVariantAt(200, 200));
+        var document = editor.Session.Document;
+        var undo = editor.Session.UndoDepth;
+        var revision = editor.Session.Revision;
+        editor.ArmStampPlacement();
+        editor.SetStampScalePercent(175, commit: true);
+        editor.SetStampRotationDegrees(90, commit: true);
+        editor.SetStampSublayer(-5);
+        editor.SetStampOpacityPercent(35, commit: true);
+        editor.SetStampFlip(true, true);
+        editor.SetStampBlend("Screen");
+        editor.SetStampHueDegrees(60);
+        editor.SetStampShadowStandard();
+        editor.SetStampAreaRadius(300, persist: true);
+        editor.SetStampDensity(80, persist: true);
+        editor.SetSeriesSpacingPercent(150, persist: true);
+        editor.PlacementAutoSelect = PlacementAutoSelectPolicy.Always;
+        editor.RandomVariantAfterPlacement = true;
+        editor.StampRandomAngleStep = StampRandomAngleStep.Degrees45;
+        editor.StampRandomFlip = true;
+        editor.StampPlacementMode = mode;
+        if (mode == StampPlacementMode.FillArea)
+        {
+            editor.StartEditableArea();
+            editor.AddEditableAreaNode(300, 300);
+        }
+        else if (mode == StampPlacementMode.Path)
+        {
+            editor.StartEditablePath();
+            editor.AddEditablePathNode(300, 300);
+        }
+        editor.ResetStampToolSettings();
+
+        Assert.Equal(neutral, editor.StampToolSettings);
+        Assert.Equal(StampPlacementMode.One, editor.PendingPlacement!.Mode);
+        Assert.False(editor.IsCreatingEditableArea);
+        Assert.False(editor.IsCreatingEditablePath);
+        Assert.Same(document, editor.Session.Document);
+        Assert.Equal(undo, editor.Session.UndoDepth);
+        Assert.Equal(revision, editor.Session.Revision);
+        editor.StampPlacementMode = StampPlacementMode.Series;
+        editor.StampPlacementMode = StampPlacementMode.One;
+        Assert.Equal(neutral, editor.StampToolSettings);
+    }
+
+    [Fact]
+    public void Reset_tool_with_a_selected_stamp_preserves_its_appearance()
+    {
+        var editor = AssetEditor(out var catalog);
+        editor.SelectAssetSet(catalog.Sets[0].Id);
+        editor.SetStampOpacityPercent(35, commit: true);
+        Assert.True(editor.PlaceCurrentVariantAt(200, 200));
+        editor.CancelPlacement();
+        editor.ActiveTool = EditorTool.Select;
+        editor.Session.SelectedObjectId = Objects(editor)[0].Id;
+        var document = editor.Session.Document;
+        editor.ResetStampToolSettings();
+        Assert.Same(document, editor.Session.Document);
+        Assert.Equal(0.35, Objects(editor)[0].ObjectOpacity, 8);
+        Assert.Equal(1, editor.StampToolSettings.ObjectOpacity);
+    }
+
     [Fact]
     public void Future_stamp_settings_are_transient_and_commit_materialises_the_exact_resolved_plan()
     {
@@ -300,6 +373,41 @@ public sealed class Stage15StampToolParityTests : IDisposable
         using var data = image.Encode(SKEncodedImageFormat.Png, 100);
         File.WriteAllBytes(path, data.ToArray());
         return path;
+    }
+
+    [Fact]
+    public void Alt_in_the_scatter_mode_erases_the_stamps_inside_the_circle_as_one_undo_entry()
+    {
+        var editor = AssetEditor(out var catalog);
+        var set = catalog.FindSetForContent(catalog.Records[0].Sha256)!;
+        editor.SelectAssetSet(set.Id);
+        editor.StampPlacementMode = StampPlacementMode.Area;
+        editor.SetStampAreaRadius(120, persist: true);
+        editor.SetStampDensity(80, persist: true);
+        editor.UpdatePlacementPreview(500, 350);
+        Assert.True(editor.CommitPendingPlacement());
+        editor.UpdatePlacementPreview(900, 350);
+        Assert.True(editor.CommitPendingPlacement());
+        var placed = Objects(editor).Count;
+        Assert.True(placed > 4, $"the scatter should place several stamps, placed {placed}");
+        var depth = editor.Session.UndoDepth;
+
+        // The eraser takes the first cluster away over two events of one drag, leaving the
+        // second cluster alone, and the drag is one undo entry.
+        editor.SetStampAreaRadius(140, persist: true);
+        Assert.True(editor.EraseStampsAround(480, 350));
+        editor.EraseStampsAround(520, 350);
+        editor.EndStampErase();
+        var left = Objects(editor);
+        Assert.True(left.Count < placed && left.Count > 0, $"left {left.Count} of {placed}");
+        Assert.All(left, o => Assert.True(o.X + (o.Width / 2) > 640, "a stamp of the far cluster survives"));
+        Assert.Equal(depth + 1, editor.Session.UndoDepth);
+        Assert.True(editor.Session.Undo());
+        Assert.Equal(placed, Objects(editor).Count);
+        Assert.True(editor.Session.Redo());
+        Assert.Equal(left.Count, Objects(editor).Count);
+        // Nothing to erase at sea: no entry is written.
+        Assert.False(editor.EraseStampsAround(100, 100));
     }
 
     private static IReadOnlyList<SceneObject> Objects(EditorViewModel editor) =>

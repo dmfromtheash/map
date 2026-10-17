@@ -179,6 +179,7 @@ public sealed record MapDocument
         }
         var pathIds = new HashSet<Guid>();
         var ownedIds = new HashSet<ObjectId>();
+        var areaChecks = CheckAreaMembersInParallel(Layers);
         foreach (var layer in Layers.OfType<ObjectLayer>().Where(l => !l.PlacementPaths.IsEmpty || !l.PlacementAreas.IsEmpty))
         {
             var objectsById = layer.Objects.ToDictionary(o => o.Id);
@@ -200,7 +201,9 @@ public sealed record MapDocument
             foreach (var area in layer.PlacementAreas)
             {
                 if (area is null || !pathIds.Add(area.Id)) throw new ArgumentException("Null or duplicate placement area id.");
-                area.ValidateMembers();
+                if (areaChecks is null || !areaChecks.TryGetValue(area, out var failure)) area.ValidateMembers();
+                else if (failure is InvalidOperationException) area.ValidateMembers();
+                else if (failure is not null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(failure);
                 var composition = area.LayoutVersion >= 4 ? new Editing.PlacementAreaLayout(area) : null;
                 foreach (var member in area.Members)
                 {
@@ -226,6 +229,12 @@ public sealed record MapDocument
             if (river is null) throw new ArgumentException("Null river.");
             river.Validate();
             if (!riverIds.Add(river.Id)) throw new ArgumentException("Duplicate river id.");
+        }
+        foreach (var road in Layers.OfType<ObjectLayer>().SelectMany(l => l.Roads))
+        {
+            if (road is null) throw new ArgumentException("Null road.");
+            road.Validate();
+            if (!riverIds.Add(road.Id)) throw new ArgumentException("Duplicate road id.");
         }
         if (Checkpoints.Count > MapCheckpointLimits.MaxCount)
         {
@@ -265,6 +274,40 @@ public sealed record MapDocument
     public BaseColorLayer BaseColor => (BaseColorLayer)Layers[0];
 
     public MapLayer? FindLayer(LayerId id) => Layers.FirstOrDefault(l => l.Id == id);
+
+    /// <summary>
+    /// Runs the full member check of every placement area at once when there are several.
+    /// </summary>
+    /// <remarks>
+    /// Each check rebuilds the whole scatter of its area; on the regional map this was 0.4 s of
+    /// every open, one area after another. The checks are pure and independent. The caller keeps
+    /// its order: it rethrows a stored failure where the sequential check would have thrown, and
+    /// repeats a check refused by the memory budget alone, since parallel reservations can refuse
+    /// what one reservation at a time would allow. Returns null when there is nothing to share.
+    /// </remarks>
+    private static Dictionary<PlacementArea, Exception?>? CheckAreaMembersInParallel(IReadOnlyList<MapLayer> layers)
+    {
+        var areas = layers.OfType<ObjectLayer>().SelectMany(layer => layer.PlacementAreas)
+            .Where(area => area is not null).Distinct<PlacementArea>(ReferenceEqualityComparer.Instance).ToArray();
+        if (areas.Length < 2)
+        {
+            return null;
+        }
+
+        var failures = new Exception?[areas.Length];
+        Parallel.For(0, areas.Length, index =>
+        {
+            try { areas[index].ValidateMembers(); }
+            catch (Exception error) { failures[index] = error; }
+        });
+        var results = new Dictionary<PlacementArea, Exception?>(ReferenceEqualityComparer.Instance);
+        for (var index = 0; index < areas.Length; index++)
+        {
+            results[areas[index]] = failures[index];
+        }
+
+        return results;
+    }
 
     public MapDocument WithLayers(IReadOnlyList<MapLayer> layers) =>
         new(Id, Title, CreatedUtc, Canvas, layers, Assets, Notes, Checkpoints, StampForeground);

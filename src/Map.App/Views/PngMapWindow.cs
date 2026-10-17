@@ -48,7 +48,7 @@ public sealed class PngMapWindow : Window
             Ui.TextButton("ZoomInPngViewButton", "+", () => ImageView.ZoomAt(Center(), ImageView.Zoom * 1.5), "ghost"),
             _cancel,
         } };
-        _statistics.Foreground = new SolidColorBrush(Color.Parse("#246F9A"));
+        _statistics.Foreground = new SolidColorBrush(Color.Parse("#D4AE62"));
         _status.Text = "Откройте PNG из Map. Колесо — приближение, перетаскивание — перемещение.";
         Content = Ui.WorkspaceBackdrop(new DockPanel { Children =
         {

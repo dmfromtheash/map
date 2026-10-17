@@ -20,9 +20,14 @@ namespace Map.App.Views;
 /// </summary>
 public static class Ui
 {
-    public const double RailWidth = 56;
-    public const double ContextPanelWidth = 264;
-    public const double SidePanelWidth = 300;
+    // Workspace geometry measured in Inkarnate through REA/CDP at 2560×1343 (2026-10-16): a 48 px
+    // floating rail of 46×48 tool buttons, a 289 px tool panel that floats over the canvas 12 px
+    // below the top bar, a 240 px layer panel. Colours stay Map's own.
+    public const double RailWidth = 48;
+    public const double ContextPanelWidth = 289;
+    public const double SidePanelWidth = 240;
+    /// <summary>Gap between the top chrome and the floating rail / tool panel.</summary>
+    public const double FloatingGap = 12;
 
     /// <summary>A calm, opaque workspace surface shared by every native window.</summary>
     public static Grid WorkspaceBackdrop(Control content) => new Grid
@@ -150,6 +155,14 @@ public static class Ui
         Text = text, TextWrapping = TextWrapping.Wrap,
         VerticalAlignment = VerticalAlignment.Center,
     };
+
+    /// <summary>Renames a command button built by <see cref="CommandButton"/>, caption and accessible name together.</summary>
+    public static void SetCommandText(Button button, string text)
+    {
+        if (button.Content is Grid grid && grid.Children.OfType<TextBlock>().FirstOrDefault() is { } caption)
+            caption.Text = text;
+        AutomationProperties.SetName(button, text);
+    }
 
     /// <summary>An independent setting, with a persistent checkbox rather than a mode face.</summary>
     public static ToggleButton PropertyToggle(string name, string label)
@@ -511,19 +524,198 @@ public static class Ui
             strip.Children.Add(button);
         }
 
+        // Colours, border and padding come from the "mode-group" style, so a calm panel can
+        // restyle its choices; a local value here would outrank every style.
         var host = new Border
         {
-            Background = Application.Current?.FindResource("MapFieldBrush") as IBrush,
-            BorderBrush = Application.Current?.FindResource("MapBorderBrush") as IBrush,
-            BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(7),
-            Padding = new Thickness(3),
             Child = strip,
             HorizontalAlignment = HorizontalAlignment.Stretch,
         };
 
         host.Classes.Add("mode-group");
         return (host, buttons);
+    }
+
+    /// <summary>
+    /// One row of mutually exclusive modes, each a line glyph over a short caption. Used where
+    /// the mode decides what a click on the map does, so it sits first and is read at a glance.
+    /// </summary>
+    public static (Control Control, IReadOnlyList<Button> Buttons) TallSegmented(
+        string namePrefix, IReadOnlyList<(string Key, string Text, string Icon)> options, Action<string> chosen)
+    {
+        var buttons = new List<Button>(options.Count);
+        // Always one row: equal columns, captions trim instead of wrapping the strip.
+        var strip = new Avalonia.Controls.Primitives.UniformGrid { Rows = 1, Columns = options.Count };
+        foreach (var option in options)
+        {
+            var button = new ToggleButton
+            {
+                Content = new StackPanel
+                {
+                    Spacing = 2,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    Children =
+                    {
+                        new Border { HorizontalAlignment = HorizontalAlignment.Center, Child = MapIcons.Grid24(option.Icon, 19) },
+                        new TextBlock { Text = option.Text, FontSize = 10.5, HorizontalAlignment = HorizontalAlignment.Center,
+                            TextTrimming = TextTrimming.CharacterEllipsis },
+                    },
+                },
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                Padding = new Thickness(1, 4),
+                Margin = new Thickness(1, 0),
+                MinHeight = 44,
+            }.Named(namePrefix + option.Key).Classed("segment", "mode-choice");
+            AutomationProperties.SetName(button, option.Text);
+            ToolTip.SetTip(button, option.Text);
+            var key = option.Key;
+            button.Click += (_, _) => chosen(key);
+            buttons.Add(button);
+            strip.Children.Add(button);
+        }
+        return (new Border { Child = strip, HorizontalAlignment = HorizontalAlignment.Stretch }.Classed("mode-group"), buttons);
+    }
+
+    // ---------------------------------------------------------- scope and sections
+
+    /// <summary>Who a block acts on. The four kinds keep one colour each, always with the word.</summary>
+    public enum Scope { New, Object, Layer, Tool }
+
+    public static Border ScopeChip(Scope scope, string? text = null)
+    {
+        var (css, icon, word, colour) = scope switch
+        {
+            Scope.New => ("scope-new", MapIcons.LineSparkle, "Для новых", "#E7C982"),
+            Scope.Object => ("scope-object", MapIcons.LineTarget, "Выделенное", "#9ED4B0"),
+            Scope.Layer => ("scope-layer", MapIcons.LineLayers, "Слой", "#D6B3DE"),
+            _ => ("scope-tool", MapIcons.LineWand, "Инструмент", "#C2AE8E"),
+        };
+        var label = new TextBlock { Text = text ?? word };
+        var chip = new Border
+        {
+            Child = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 4,
+                Children = { MapIcons.Grid24(icon, 12, new SolidColorBrush(Color.Parse(colour)), 2.2), label },
+            },
+        }.Classed("scope-chip", css);
+        AutomationProperties.SetName(chip, "Область действия: " + label.Text);
+        ToolTip.SetTip(chip, scope switch
+        {
+            Scope.New => "Эти настройки применяются к следующему создаваемому объекту.",
+            Scope.Object => "Эти настройки меняют выбранный на карте объект.",
+            Scope.Layer => "Эти настройки действуют на весь слой.",
+            _ => "Эти настройки определяют, как работает инструмент.",
+        });
+        return chip;
+    }
+
+    /// <summary>
+    /// A foldable section of a side panel. Folded, it says what it holds on the right; when any
+    /// setting inside differs from its base value, a dot and the name of the change stay visible,
+    /// so collapsing a section never hides what the next click will do.
+    /// </summary>
+    public sealed class SectionPanel : Expander
+    {
+        private readonly TextBlock _summary = new TextBlock().Classed("section-summary");
+        private readonly TextBlock _change = new TextBlock { MaxWidth = 120 }.Classed("section-change");
+        private readonly Avalonia.Controls.Shapes.Ellipse _dot = new Avalonia.Controls.Shapes.Ellipse { IsVisible = false }.Classed("change-dot");
+        private string _summaryText = "";
+        private string? _changeText;
+
+        protected override Type StyleKeyOverride => typeof(Expander);
+
+        public SectionPanel(string name, string title, Control content, bool expanded, Scope? scope = null)
+        {
+            var titleText = new TextBlock { Text = title, VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis }.Classed("role-panel");
+            var left = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Children = { titleText } };
+            if (scope is { } kind) left.Children.Add(ScopeChip(kind));
+            left.Children.Add(_dot);
+            left.Children.Add(_change);
+            _summary.Margin = new Thickness(8, 0, 0, 0);
+            _summary.HorizontalAlignment = HorizontalAlignment.Right;
+            _summary.TextAlignment = TextAlignment.Right;
+            // Title first, summary in the remaining width: a long summary trims, it never overlaps.
+            var header = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), Children = { left, _summary } };
+            Grid.SetColumn(_summary, 1);
+            Header = header;
+            Content = new Border { Padding = new Thickness(0, 4, 0, 0), Child = content };
+            IsExpanded = expanded;
+            Name = name;
+            Classes.Add("section");
+            AutomationProperties.SetName(this, title);
+            PropertyChanged += (_, e) => { if (e.Property == IsExpandedProperty) Refresh(); };
+            Refresh();
+        }
+
+        public void SetSummary(string text) { _summaryText = text; Refresh(); }
+
+        /// <summary>Null or empty: nothing inside differs from the base values.</summary>
+        public void SetChange(string? text) { _changeText = string.IsNullOrWhiteSpace(text) ? null : text; Refresh(); }
+
+        private void Refresh()
+        {
+            var folded = !IsExpanded;
+            _dot.IsVisible = _changeText is not null;
+            _change.Text = folded ? _changeText ?? "" : "";
+            _change.IsVisible = folded && _changeText is not null;
+            _summary.Text = _summaryText;
+            _summary.IsVisible = folded && _changeText is null && _summaryText.Length > 0;
+            var tip = _changeText is null ? _summaryText : "Изменено: " + _changeText;
+            if (tip.Length > 0) ToolTip.SetTip(this, tip);
+        }
+    }
+
+    /// <summary>
+    /// A rail tool with its short caption under the glyph. Active state keeps three signals:
+    /// the light tile, the accent colour and the side marker.
+    /// </summary>
+    public static Button RailToolButton(string name, string title, string caption, MapIcons.SolidGlyph icon,
+        string shortcut, Action action)
+    {
+        var marker = new Border
+        {
+            Width = 3, Height = 22,
+            CornerRadius = new CornerRadius(0, 2, 2, 0),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(-4, 0, 0, 0),
+            Background = Brushes.Transparent,
+            IsVisible = false,
+        }.Named(name + "Marker");
+        var body = new StackPanel
+        {
+            Spacing = 3,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            Children =
+            {
+                // Inkarnate rail: a 24 px solid glyph and no caption; the name and key are in the tooltip.
+                new Border { HorizontalAlignment = HorizontalAlignment.Center, Child = MapIcons.Solid24(icon, 21) },
+                new TextBlock { Text = caption, IsVisible = false }.Classed("rail-caption"),
+            },
+        };
+        var button = new ToggleButton
+        {
+            Content = new Panel { Children = { marker, body } },
+            Padding = new Thickness(0),
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            VerticalContentAlignment = VerticalAlignment.Stretch,
+        }.Named(name).Classed("tool-button", "rail-tool");
+        AutomationProperties.SetName(button, title);
+        ToolTip.SetTip(button, shortcut.Length > 0 ? $"{title}  ({shortcut})" : title);
+        // The rail has no captions any more, so its names come out beside the button and fast.
+        ToolTip.SetPlacement(button, PlacementMode.Right);
+        ToolTip.SetHorizontalOffset(button, 6);
+        ToolTip.SetShowDelay(button, 250);
+        button.Click += (_, _) =>
+        {
+            action();
+            button.IsChecked = true;
+        };
+        return button;
     }
 
     /// <summary>Icon-only variant of the segmented control, for shape and mode pickers.</summary>
@@ -975,6 +1167,25 @@ public static class Ui
         {
             Child = new DockPanel { Children = { trailing.Docked(Dock.Right), select } },
         }.Classed("row-host");
+    }
+
+    /// <summary>
+    /// A short value at the right edge of a structure row, before its actions: a one-line row
+    /// keeps the count visible without a second caption line.
+    /// </summary>
+    public static void SetStructureMeta(Border row, string meta)
+    {
+        if (row.Child is not DockPanel panel || panel.Children.Count == 0
+            || panel.Children[panel.Children.Count - 1] is not ToggleButton select) return;
+        select.MinHeight = 34;
+        if (select.Content is DockPanel label && meta.Length > 0)
+        {
+            label.Children.Insert(0, new TextBlock
+            {
+                Text = meta, FontSize = 11, Margin = new Thickness(6, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center,
+            }.Classed("faint").Docked(Dock.Right));
+        }
     }
 
     /// <summary>Synchronises a composite structure row without nesting its trailing actions.</summary>

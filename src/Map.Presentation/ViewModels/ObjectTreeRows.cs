@@ -11,6 +11,37 @@ public enum ObjectTypeFilter
     Lines,
     Shapes,
     Other,
+
+    /// <summary>Every object that is not a placed asset: text, lines, shapes, compositions, placeholders.</summary>
+    NotStamps,
+
+    /// <summary>Pieces of land only (one row per Land layer).</summary>
+    Land,
+
+    /// <summary>Rivers and lakes only.</summary>
+    Water,
+
+    /// <summary>Road networks only.</summary>
+    Roads,
+}
+
+/// <summary>
+/// The working sections of the right panel. Each one lists one kind of map content with the
+/// actions that fit it, so land, water, placed assets and roads are never one mixed list. The
+/// sections are a view of the same map: switching one changes nothing on the canvas.
+/// </summary>
+public enum PanelSection
+{
+    Land,
+    Water,
+    Assets,
+    Roads,
+
+    /// <summary>Text, lines, shapes, compositions and the rest of the ordinary objects.</summary>
+    Other,
+
+    /// <summary>The stack of every layer in its real drawing order, with layer properties.</summary>
+    Layers,
 }
 
 /// <summary>What one row of the objects panel is, for both the view and UI Automation.</summary>
@@ -33,6 +64,15 @@ public enum ObjectTreeRowKind
 
     /// <summary>One piece of land (a Land layer) of the map.</summary>
     Land,
+
+    /// <summary>One road network of the map.</summary>
+    Road,
+
+    /// <summary>Every placed copy of one asset picture, as one row ("Зелёный дуб · 840").</summary>
+    AssetKind,
+
+    /// <summary>The way back out of an opened asset kind; also names the kind.</summary>
+    AssetKindBreadcrumb,
 }
 
 /// <summary>
@@ -62,8 +102,17 @@ public sealed record ObjectTreeRow(
     /// <summary>Set on a <see cref="ObjectTreeRowKind.Land"/> row: the land layer it stands for.</summary>
     public LayerId? LandId { get; init; }
 
+    /// <summary>Set on a <see cref="ObjectTreeRowKind.Road"/> row: the road it stands for.</summary>
+    public Guid? RoadId { get; init; }
+
     /// <summary>The terrain level of a water or land row (see TerrainOrder); zero for the rest.</summary>
     public int Level { get; init; }
+
+    /// <summary>The name of the object layer a water or road row belongs to, when the map has more than one.</summary>
+    public string? LayerName { get; init; }
+
+    /// <summary>Set on asset-kind rows: the picture every member of the kind draws.</summary>
+    public string? AssetKey { get; init; }
 }
 
 /// <summary>
@@ -91,19 +140,32 @@ public static class ObjectTreeRows
         Guid? openGroupId,
         IReadOnlyCollection<ObjectId> selectedIds,
         IReadOnlyCollection<Guid>? selectedWaterIds = null,
-        LayerId? selectedLandId = null)
+        LayerId? selectedLandId = null,
+        IReadOnlyCollection<Guid>? selectedRoadIds = null,
+        string? openAssetKey = null,
+        Func<string, string?>? assetTitle = null)
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(selectedIds);
         var query = (searchText ?? "").Trim();
         var layers = document.Layers.OfType<ObjectLayer>().ToArray();
-        // Water systems and pieces of land are objects of the map like any other, so they belong
-        // in this list. Ordinary objects cover the terrain; terrain then follows descending
-        // level, water above land within a level. An open group shows only its own members.
+        // Water systems, roads and pieces of land are objects of the map like any other, so they
+        // belong in this list. Ordinary objects cover the terrain; terrain then follows descending
+        // level, water above roads above land within a level. An open group shows only its own members.
+        // The panel's sections ask for one kind at a time (Land, Water, Roads); "All" is the
+        // complete list, the way Ctrl+A over everything and the older single list read it.
         var water = openGroupId is null
-            ? WaterRows(layers, query, filter, selectedWaterIds).Concat(LandRows(document, query, filter, selectedLandId))
-                .OrderByDescending(row => row.Level).ThenBy(row => row.Kind == ObjectTreeRowKind.Water ? 0 : 1).ToArray()
+            ? WaterRows(layers, query, filter, selectedWaterIds).Concat(RoadRows(layers, query, filter, selectedRoadIds))
+                .Concat(LandRows(document, query, filter, selectedLandId))
+                .OrderByDescending(row => row.Level)
+                .ThenBy(row => row.Kind == ObjectTreeRowKind.Water ? 0 : row.Kind == ObjectTreeRowKind.Road ? 1 : 2).ToArray()
             : (IReadOnlyList<ObjectTreeRow>)[];
+        if (filter is ObjectTypeFilter.Land or ObjectTypeFilter.Water or ObjectTypeFilter.Roads) return water;
+        // The Assets section lists placed assets by picture: 840 identical oaks are one row that
+        // opens into its copies, instead of 840 rows the eye cannot tell apart. Searching still
+        // lists every matching object.
+        if (filter == ObjectTypeFilter.Stamps && query.Length == 0 && openGroupId is null)
+            return AssetKindRows(document, selectedIds, openAssetKey, assetTitle);
         IReadOnlyList<ObjectTreeRow> rest;
         if (query.Length == 0 && filter == ObjectTypeFilter.All && openGroupId is null
             && layers.All(layer => GroupedCount(layer) == 0))
@@ -120,11 +182,59 @@ public static class ObjectTreeRows
         return water.Count == 0 ? rest : new PrefixedRowList(rest, water);
     }
 
+    /// <summary>The picture a placed asset draws, or its name when it has none.</summary>
+    public static string AssetKeyOf(SceneObject sceneObject) =>
+        sceneObject.Stamp?.AssetSha256 is { Length: > 0 } sha ? sha : "name:" + sceneObject.Name;
+
+    private static string KindTitle(string key, IReadOnlyList<SceneObject> members, Func<string, string?>? assetTitle)
+    {
+        if (!key.StartsWith("name:", StringComparison.Ordinal) && assetTitle?.Invoke(key) is { Length: > 0 } title) return title;
+        var name = members[0].Name;
+        var cut = name.IndexOf(" · ", StringComparison.Ordinal);
+        return cut > 0 ? name[..cut] : name;
+    }
+
+    private static IReadOnlyList<ObjectTreeRow> AssetKindRows(
+        MapDocument document, IReadOnlyCollection<ObjectId> selectedIds, string? openAssetKey, Func<string, string?>? assetTitle)
+    {
+        var kinds = new Dictionary<string, List<SceneObject>>(StringComparer.Ordinal);
+        var order = new List<string>();
+        foreach (var sceneObject in AllObjects(document))
+        {
+            if (sceneObject.Kind != SceneObjectKind.Stamp) continue;
+            var key = AssetKeyOf(sceneObject);
+            if (!kinds.TryGetValue(key, out var members))
+            {
+                members = [];
+                kinds.Add(key, members);
+                order.Add(key);
+            }
+            members.Add(sceneObject);
+        }
+        var selected = selectedIds as ISet<ObjectId> ?? new HashSet<ObjectId>(selectedIds);
+        if (openAssetKey is { } open && kinds.TryGetValue(open, out var openMembers))
+        {
+            var crumb = new ObjectTreeRow(ObjectTreeRowKind.AssetKindBreadcrumb, "AssetKindBreadcrumb",
+                KindTitle(open, openMembers, assetTitle), EditorLabels.Objects(openMembers.Count), openMembers[0],
+                GroupId: null, ChildCount: openMembers.Count, Selected: false) { AssetKey = open };
+            var copies = new VirtualRowList([.. openMembers.Select(VirtualRowEntry.ForObject)], selectedIds);
+            return new PrefixedRowList([crumb], copies);
+        }
+        return [.. order.Select(key =>
+        {
+            var members = kinds[key];
+            return new ObjectTreeRow(ObjectTreeRowKind.AssetKind, $"AssetKindRow_{key}",
+                KindTitle(key, members, assetTitle), EditorLabels.Objects(members.Count), members[0],
+                GroupId: null, ChildCount: members.Count, Selected: members.Any(member => selected.Contains(member.Id)))
+            { AssetKey = key, MemberIds = [.. members.Select(member => member.Id)] };
+        })];
+    }
+
     /// <summary>One row per piece of land, highest level first, matching the search and the type filter.</summary>
     private static IReadOnlyList<ObjectTreeRow> LandRows(
         MapDocument document, string query, ObjectTypeFilter filter, LayerId? selected)
     {
-        if (filter is not (ObjectTypeFilter.All or ObjectTypeFilter.Other)) return [];
+        if (filter is not (ObjectTypeFilter.All or ObjectTypeFilter.Land)) return [];
         var rows = new List<ObjectTreeRow>();
         var lands = TerrainOrder.Lands(document);
         for (var i = lands.Count - 1; i >= 0; i--)
@@ -145,12 +255,40 @@ public static class ObjectTreeRows
         return rows;
     }
 
+    /// <summary>One row per road, highest level first, matching the panel search and the type filter.</summary>
+    private static IReadOnlyList<ObjectTreeRow> RoadRows(
+        IReadOnlyList<ObjectLayer> layers, string query, ObjectTypeFilter filter, IReadOnlyCollection<Guid>? selected)
+    {
+        if (filter is not (ObjectTypeFilter.All or ObjectTypeFilter.Roads)) return [];
+        var rows = new List<ObjectTreeRow>();
+        var several = layers.Count > 1;
+        foreach (var layer in layers.Reverse())
+            foreach (var road in layer.Roads.Reverse())
+            {
+                if (query.Length > 0 && !road.Name.Contains(query, StringComparison.OrdinalIgnoreCase)) continue;
+                var subtitle = road.Branches.Length == 1 ? "Дорога" : $"Участков: {road.Branches.Length}";
+                rows.Add(new ObjectTreeRow(
+                    ObjectTreeRowKind.Road,
+                    $"RoadRow_{road.Id:D}",
+                    road.Name,
+                    subtitle,
+                    Object: null,
+                    GroupId: null,
+                    ChildCount: road.Branches.Length,
+                    Selected: selected is not null && selected.Contains(road.Id))
+                { RoadId = road.Id, WaterVisible = road.Visible, WaterLocked = road.Locked, Level = road.Level,
+                  LayerName = several ? layer.Name : null });
+            }
+        return [.. rows.OrderByDescending(row => row.Level)];
+    }
+
     /// <summary>One row per river or lake, highest level first, matching the panel search and the type filter.</summary>
     private static IReadOnlyList<ObjectTreeRow> WaterRows(
         IReadOnlyList<ObjectLayer> layers, string query, ObjectTypeFilter filter, IReadOnlyCollection<Guid>? selected)
     {
-        if (filter is not (ObjectTypeFilter.All or ObjectTypeFilter.Other)) return [];
+        if (filter is not (ObjectTypeFilter.All or ObjectTypeFilter.Water)) return [];
         var rows = new List<ObjectTreeRow>();
+        var several = layers.Count > 1;
         foreach (var layer in layers.Reverse())
             foreach (var river in layer.Rivers.Reverse())
             {
@@ -169,7 +307,8 @@ public static class ObjectTreeRows
                     GroupId: null,
                     ChildCount: river.Channels.Length,
                     Selected: selected is not null && selected.Contains(river.Id))
-                { WaterId = river.Id, WaterVisible = river.Visible, WaterLocked = river.Locked, Level = river.Level });
+                { WaterId = river.Id, WaterVisible = river.Visible, WaterLocked = river.Locked, Level = river.Level,
+                  LayerName = several ? layer.Name : null });
             }
         return [.. rows.OrderByDescending(row => row.Level)];
     }
@@ -205,8 +344,35 @@ public static class ObjectTreeRows
         ObjectTypeFilter.Text => "Текст",
         ObjectTypeFilter.Lines => "Линии",
         ObjectTypeFilter.Shapes => "Фигуры",
-        ObjectTypeFilter.Other => "Прочее",
+        ObjectTypeFilter.Other => "Другое",
+        ObjectTypeFilter.NotStamps => "Все прочие",
+        ObjectTypeFilter.Land => "Земля",
+        ObjectTypeFilter.Water => "Реки и озёра",
+        ObjectTypeFilter.Roads => "Дороги",
         _ => "Все",
+    };
+
+    /// <summary>The user-facing name of a panel section.</summary>
+    public static string SectionTitle(PanelSection section) => section switch
+    {
+        PanelSection.Land => "Земля",
+        PanelSection.Water => "Реки и озёра",
+        PanelSection.Assets => "Ассеты",
+        PanelSection.Roads => "Дороги",
+        PanelSection.Other => "Прочее",
+        _ => "Слои",
+    };
+
+    /// <summary>The rows a section lists: its own kind of content, nothing of the other sections.</summary>
+    public static ObjectTypeFilter FilterOf(PanelSection section, ObjectTypeFilter otherFilter) => section switch
+    {
+        PanelSection.Land => ObjectTypeFilter.Land,
+        PanelSection.Water => ObjectTypeFilter.Water,
+        PanelSection.Assets => ObjectTypeFilter.Stamps,
+        PanelSection.Roads => ObjectTypeFilter.Roads,
+        PanelSection.Other => otherFilter is ObjectTypeFilter.Text or ObjectTypeFilter.Lines or ObjectTypeFilter.Shapes
+            or ObjectTypeFilter.Other or ObjectTypeFilter.NotStamps ? otherFilter : ObjectTypeFilter.NotStamps,
+        _ => ObjectTypeFilter.All,
     };
 
     public static string GroupTitle(IReadOnlyList<SceneObject> members) =>
@@ -235,6 +401,8 @@ public static class ObjectTreeRows
         ObjectTypeFilter.Lines => sceneObject.Kind == SceneObjectKind.Line,
         ObjectTypeFilter.Shapes => sceneObject.Kind
             is SceneObjectKind.Shape or SceneObjectKind.Rectangle or SceneObjectKind.Ellipse,
+        ObjectTypeFilter.NotStamps => sceneObject.Kind != SceneObjectKind.Stamp,
+        ObjectTypeFilter.Land or ObjectTypeFilter.Water or ObjectTypeFilter.Roads => false,
         _ => sceneObject.Kind
             is not (SceneObjectKind.Stamp or SceneObjectKind.Text or SceneObjectKind.Line
                 or SceneObjectKind.Shape or SceneObjectKind.Rectangle or SceneObjectKind.Ellipse),

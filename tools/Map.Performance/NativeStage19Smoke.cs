@@ -35,6 +35,9 @@ internal sealed class NativeStage19Report
     public string? Export { get; set; }
     public string? Failure { get; set; }
 
+    /// <summary>R01 observation points of the native-history-memory scenario; empty elsewhere.</summary>
+    public List<HistoryMemoryPoint> HistoryMemory { get; } = [];
+
     /// <summary>The scenario that actually ran, so its gate is judged by its own checks.</summary>
     public string Scenario { get; set; } = "full";
 
@@ -128,7 +131,8 @@ public sealed partial class Stage19Application : Application
             (object? _, KeyEventArgs args) =>
             { if (EditorKeyRouting.TryHandleKey(_window, _view, _shortcuts, args)) args.Handled = true; },
             RoutingStrategies.Bubble, handledEventsToo: true);
-        var document = new MapDocument(DocumentId.New(), "Река с притоком", DateTimeOffset.UnixEpoch,
+        var document = Options.Profile == "native-history-memory" ? HistoryMemoryDocument()
+            : new MapDocument(DocumentId.New(), "Река с притоком", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(1024, 768, "px", "#FFEDE3CD"),
             [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFEDE3CD"),
                 LandBlock(), new ObjectLayer(LayerId.New(), "Реки", true, false, 1, [])]);
@@ -137,6 +141,32 @@ public sealed partial class Stage19Application : Application
         _report.Scenario = Environment.GetEnvironmentVariable("MAP_STAGE19_LAKE_ONLY") == "1" ? "lake-only" : "full";
         if (Environment.GetEnvironmentVariable("MAP_STAGE19_SHORES_ONLY") == "1")
         { _report.Required = ShoreRequired; _report.Scenario = "illustrated-shores"; }
+        if (Options.Profile == "native-land-materials")
+        { _report.Required = LandMaterialRequired; _report.Scenario = "land-materials"; }
+        if (Options.Profile == "native-soft-coast")
+        { _report.Required = SoftCoastRequired; _report.Scenario = "soft-coast"; }
+        if (Options.Profile == "native-history-memory")
+        { _report.Required = HistoryMemoryRequired; _report.Scenario = "history-memory"; }
+        if (Options.Profile == "native-room")
+        { _report.Required = RoomRequired; _report.Scenario = "room"; _window.Height = 1300; }
+        if (Options.Profile == "native-versions")
+        { _report.Required = VersionsRequired; _report.Scenario = "versions"; _prompts.ConfirmCheckpoints = true; }
+        if (Options.Profile == "native-grid-types")
+        { _report.Required = GridTypesRequired; _report.Scenario = "grid-types"; _window.Height = 1100; }
+        if (Options.Profile == "native-vtt-export")
+        { _report.Required = VttRequired; _report.Scenario = "vtt-export"; }
+        if (Options.Profile == "native-color-presets")
+        { _report.Required = ColorPresetRequired; _report.Scenario = "color-presets"; _window.Height = 1380; }
+        if (Options.Profile == "native-panel-shots")
+        { _report.Required = ["panel-shots-saved"]; _report.Scenario = "panel-shots"; _window.Height = 1380; }
+        if (Options.Profile == "native-ui-shots")
+        {
+            // Whole-editor shots at the owner's screen size (Inkarnate measured 2560×1343 there), so
+            // layout, button sizes and the visible canvas can be compared side by side.
+            _report.Required = ["ui-shots-saved"]; _report.Scenario = "ui-shots";
+            _window.Width = int.TryParse(Environment.GetEnvironmentVariable("MAP_UI_W"), out var w) ? w : 2560;
+            _window.Height = int.TryParse(Environment.GetEnvironmentVariable("MAP_UI_H"), out var h) ? h : 1343;
+        }
         _window.Opened += async (_, _) =>
         {
             try { await Execute(); }
@@ -165,19 +195,29 @@ public sealed partial class Stage19Application : Application
         return new LandLayer(LayerId.New(), "Земля", true, false, 1, tiles, new LandEdgeStyle());
     }
 
-    private void OpenEditor(MapDocument document, string? path = null)
+    private void OpenEditor(MapDocument document, string? path = null, Map.Assets.AssetCatalog? assetCatalog = null)
     {
         _editor = new EditorViewModel(document, path, false, new ProjectStore(new RecoveryJournal(Path.Combine(_workspace, "recovery"))),
             new LocalRecent(), new LocalPicker(Path.Combine(_workspace, "river.mapproj")), _prompts, new LocalLog(),
             exportDestinationPicker: new ExportPicker(Path.Combine(_workspace, "river-export.png")),
             imageExporter: new ImageExportEngine(new ExportEngineSettings { TileEdge = 256 }),
-            localPreferences: new EditorLocalPreferences(PrimaryAutosaveEnabled: false));
+            assetCatalog: assetCatalog, localPreferences: new EditorLocalPreferences(PrimaryAutosaveEnabled: false));
         _view = new EditorView(_editor, () => Task.CompletedTask, () => { }, () => { }); _window.Content = _view;
     }
 
     private async Task Execute()
     {
         await Settle();
+        if (_report.Scenario == "land-materials") { await LandMaterialsOnly(); return; }
+        if (_report.Scenario == "soft-coast") { await SoftCoastOnly(); return; }
+        if (_report.Scenario == "history-memory") { await HistoryMemoryOnly(); return; }
+        if (_report.Scenario == "panel-shots") { await PanelShotsOnly(); return; }
+        if (_report.Scenario == "ui-shots") { await UiShotsOnly(); return; }
+        if (_report.Scenario == "color-presets") { await ColorPresetsOnly(); return; }
+        if (_report.Scenario == "vtt-export") { await VttExportOnly(); return; }
+        if (_report.Scenario == "grid-types") { await GridTypesOnly(); return; }
+        if (_report.Scenario == "versions") { await VersionsOnly(); return; }
+        if (_report.Scenario == "room") { await RoomOnly(); return; }
         if (_report.Scenario == "illustrated-shores") { await ShoreOnly(); return; }
         await Click("RiverToolButton");
         if (Environment.GetEnvironmentVariable("MAP_STAGE19_LAKE_ONLY") == "1") { await LakeOnly(); return; }
@@ -430,23 +470,25 @@ public sealed partial class Stage19Application : Application
     /// <summary>Map's own fill materials, chosen through the real panels and rendered for review.</summary>
     private async Task Materials()
     {
-        // Ground: the land tool is where the appearance of land lives now, next to where the
-        // appearance of water lives. Pick the layer, open the tool, choose the material.
+        // Only materials with pixels are offered (the 2026-09-09 textures were retired), so the
+        // check uses the regional atlas set. Ground: the land tool is where the appearance of
+        // land lives now, next to where the appearance of water lives. Pick the layer, open the
+        // tool, choose the material.
         var land = _editor.Session.Document.Layers.OfType<LandLayer>().First();
         _editor.SelectLayer(land.Id); await Settle();
         await Click("LandToolButton"); await Settle();
-        await Click("LandTexturePicker_parchment");
+        await Click("LandTexturePicker_regional-meadow");
         var ground = _editor.Session.Document.Layers.OfType<LandLayer>().First().EdgeStyle;
         _report.Checks["ground-material-from-the-panel"] =
-            ground.FillTextureId == "parchment" && ground.FillTextureOpacity > 0;
+            ground.FillTextureId == "regional-meadow" && ground.FillTextureOpacity > 0;
 
         // Water: pick a material for the selected river from the appearance panel.
         await Click("RiverToolButton");
         var river = _editor.Rivers[0];
         _editor.SelectRiver(river.Id); await Settle();
-        await Click("RiverTexturePicker_water-open");
+        await Click("RiverTexturePicker_regional-water");
         _report.Checks["water-material-from-the-panel"] =
-            _editor.Rivers.Single(r => r.Id == river.Id).Style.TextureId == "water-open"
+            _editor.Rivers.Single(r => r.Id == river.Id).Style.TextureId == "regional-water"
             && _editor.Rivers.Single(r => r.Id == river.Id).Style.ShallowWidth > 0;
 
         _editor.Session.Viewport.Set(0, 0, 1);
@@ -536,6 +578,399 @@ public sealed partial class Stage19Application : Application
         return Water(At(downstream), page) && Water(At(upstream), page);
     }
 
+    /// <summary>
+    /// Review shots of the land look and the river panels with their sections open, for looking
+    /// at the controls themselves: the real window, the real panels, nothing synthesized.
+    /// </summary>
+    private async Task UiShotsOnly()
+    {
+        var land = _editor.Session.Document.Layers.OfType<LandLayer>().First();
+        _editor.SelectLayer(land.Id); await Settle(); await Frame();
+        SaveWindow(".select.png");
+        foreach (var (button, suffix) in new[] { ("LandToolButton", ".land.png"), ("RiverToolButton", ".river.png"),
+                     ("RoadToolButton", ".road.png"), ("ShapeToolButton", ".shape.png"), ("TextToolButton", ".text.png"),
+                     ("BrushToolButton", ".brush.png") })
+        { await Click(button); await Settle(); await Frame(); SaveWindow(suffix); }
+        // The assets strip in the top bar shows while the stamp tool is in hand.
+        _editor.ActiveTool = EditorTool.Stamp; await Settle(); await Frame(); SaveWindow(".stamp.png");
+        _report.Checks["ui-shots-saved"] = true;
+    }
+
+    private void SaveWindow(string suffix)
+    {
+        using var bitmap = new RenderTargetBitmap(new PixelSize((int)_window.Width, (int)_window.Height));
+        bitmap.Render(_view);
+        using var file = File.Create(Path.ChangeExtension(Options.OutputPath, suffix));
+        bitmap.Save(file, PngBitmapEncoderOptions.Default);
+    }
+
+    private async Task PanelShotsOnly()
+    {
+        var land = _editor.Session.Document.Layers.OfType<LandLayer>().First();
+        _editor.SelectLayer(land.Id); await Settle();
+        await Click("LandToolButton"); await Settle();
+        Find<Control>("LandLayerBlock").BringIntoView(); await Settle(); await Frame();
+        SaveTall(Path.ChangeExtension(Options.OutputPath, ".land-look.png"));
+        Find<Control>("LandShadowOffsetYSlider").BringIntoView(); await Settle();
+        SaveTall(Path.ChangeExtension(Options.OutputPath, ".land-look-bottom.png"));
+
+        await Click("RiverToolButton");
+        await Click("StartRiverButton");
+        Point(120, 220); Point(380, 320); Point(640, 280); Point(900, 600);
+        await Click("FinishRiverButton");
+        Require(_editor.SelectedRiver is not null, "The river was not created: " + _editor.StatusDetail);
+        Point(380, 320); await Settle();
+        Find<Control>("RiverNodeWidthBox").BringIntoView(); await Settle(); await Frame();
+        SaveTall(Path.ChangeExtension(Options.OutputPath, ".river-shape.png"));
+        Find<Control>("RiverFlowGrowthBox").BringIntoView(); await Settle();
+        SaveTall(Path.ChangeExtension(Options.OutputPath, ".river-shape-bottom.png"));
+        Find<Control>("RiverTextureOpacityBox").BringIntoView(); await Settle();
+        SaveTall(Path.ChangeExtension(Options.OutputPath, ".river-look.png"));
+        Find<Control>("RiverMouthFadeBox").BringIntoView(); await Settle();
+        SaveTall(Path.ChangeExtension(Options.OutputPath, ".river-look-bottom.png"));
+        _report.Checks["panel-shots-saved"] = true;
+    }
+
+    private static readonly string[] RoomRequired =
+    [
+        "new-room-button", "room-panel-shown", "floor-and-wall-on-canvas", "corner-radius-from-box",
+        "door-from-button", "caps-from-asset-button", "cap-on-canvas", "room-walls-for-vtt", "undo-room", "resources-disposed",
+    ];
+
+    /// <summary>A dungeon room made and dressed with the real panel buttons; checked on the canvas.</summary>
+    private async Task RoomOnly()
+    {
+        // A small own catalog with one red «column» picture, only inside this smoke workspace.
+        var catalog = new Map.Assets.AssetCatalog(Path.Combine(_workspace, "catalog"));
+        var picture = Path.Combine(_workspace, "Колонна.png");
+        using (var surface = SKSurface.Create(new SKImageInfo(32, 32))!)
+        {
+            surface.Canvas.Clear(new SKColor(220, 30, 30));
+            using var image = surface.Snapshot();
+            using var data = image.Encode(SKEncodedImageFormat.Png, 100);
+            File.WriteAllBytes(picture, data.ToArray());
+        }
+        catalog.ImportSet([picture], "Колонна", new Map.Assets.AssetImportOptions(), DateTimeOffset.UnixEpoch);
+        OpenEditor(new MapDocument(DocumentId.New(), "Подземелье", DateTimeOffset.UnixEpoch, new CanvasDefinition(1024, 768, "px", "#FF20242B"),
+            [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FF20242B"), new ObjectLayer(LayerId.New(), "Комнаты", true, false, 1, [])]),
+            assetCatalog: catalog);
+        await Settle(); await Frame();
+
+        await Click("StartRoomFromEmptyButton"); await Frame();
+        var room = _editor.Session.SelectedObject;
+        _report.Checks["new-room-button"] = room is { Room: not null, Shape.Stroke.BlocksLight: true } && room.Name == "Комната 1";
+        _report.Checks["room-panel-shown"] = Find<Control>("RoomBlock").IsEffectivelyVisible
+            && Find<Control>("RoomCornerRadiusSlider").IsEffectivelyVisible;
+        var centre = new VectorPoint(room!.X + room.Width / 2, room.Y + room.Height / 2);
+        // Pixels are read without the selection frame and handles on top.
+        _editor.Session.SetSelection([]); await Settle(); await Frame();
+        var floor = CanvasPixels([(centre.X, centre.Y)])[0];
+        var wall = CanvasPixels([(room.X + room.Width * 0.3, room.Y)])[0];
+        _editor.SelectObject(room.Id); await Settle();
+        _report.Checks["floor-and-wall-on-canvas"] = floor == SKColor.Parse(EditorViewModel.RoomFloorColor)
+            && wall.Red < 80 && wall.Green < 80;
+        Console.WriteLine($"room: floor {floor}, wall {wall}");
+
+        var radiusBox = Find<TextBox>("RoomCornerRadiusSliderBox");
+        radiusBox.BringIntoView(); radiusBox.Focus(); await Settle();
+        radiusBox.Text = "0";
+        radiusBox.RaiseEvent(new KeyEventArgs { RoutedEvent = InputElement.KeyDownEvent, Key = Key.Enter }); await Settle();
+        Console.WriteLine($"room: radius after box {_editor.SelectedRoom?.CornerRadius}, status {_editor.StatusDetail}");
+        _report.Checks["corner-radius-from-box"] = _editor.SelectedRoom?.CornerRadius == 0;
+        await Click("RoomAddDoorButton"); await Frame();
+        _report.Checks["door-from-button"] = _editor.Session.SelectedObject!.Shape!.Portals.Count == 1;
+
+        _editor.SelectAssetSet(catalog.Sets[0].Id);
+        _editor.CancelPlacement();
+        _editor.ActiveTool = EditorTool.Select;
+        _editor.SelectObject(room.Id); await Settle();
+        await Click("RoomCapsFromAssetButton"); await Frame();
+        _report.Checks["caps-from-asset-button"] = _editor.SelectedRoom?.CapAssetSha256 == catalog.Records[0].Sha256;
+        _editor.Session.SetSelection([]); await Settle(); await Frame();
+        var corner = CanvasPixels([(room.X, room.Y)])[0];
+        _report.Checks["cap-on-canvas"] = corner.Red > 150 && corner.Green < 90;
+        Console.WriteLine($"room: corner {corner}");
+        SaveTall(Path.ChangeExtension(Options.OutputPath, ".room.png"));
+
+        _editor.SelectObject(room.Id); await Settle(); await Frame();
+        SaveTall(Path.ChangeExtension(Options.OutputPath, ".room-panel.png"));
+        var walls = VttGeometry.Collect(_editor.Session.Document);
+        _report.Checks["room-walls-for-vtt"] = walls.Walls.Count == 2 && walls.Portals.Count == 1;
+        var depth = _editor.Session.UndoDepth;
+        for (var i = 0; i < depth; i++) _editor.Undo();
+        _report.Checks["undo-room"] = !_editor.Session.Document.Layers.OfType<ObjectLayer>().SelectMany(l => l.Objects).Any();
+        await catalog.FlushMetadataAsync();
+    }
+
+    private static readonly string[] VersionsRequired =
+    [
+        "snapshot-one-click-autoname", "thumbnail-shown", "rename-with-enter", "restore-from-button",
+        "restore-undoable", "delete-from-button", "count-shown", "resources-disposed",
+    ];
+
+    /// <summary>The «Версии» window driven by its own buttons and boxes.</summary>
+    private async Task VersionsOnly()
+    {
+        _view.OpenVersions(); await Settle();
+        var window = _view.VersionsWindowForSmoke!;
+        T In<T>(string name) where T : Control =>
+            window.GetVisualDescendants().OfType<T>().First(c => c.Name == name);
+        async Task Press(Button button)
+        {
+            button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            for (var i = 0; i < 100 && _editor.Session.IsDirty == false; i++) await Task.Delay(30);
+            await Settle(); await Task.Delay(150); window.UpdateLayout();
+        }
+
+        await Press(In<Button>("CreateVersionButton"));
+        for (var i = 0; i < 100 && _editor.Checkpoints.Count == 0; i++) await Task.Delay(50);
+        await Settle(); window.UpdateLayout();
+        var first = _editor.Checkpoints.Single();
+        _report.Checks["snapshot-one-click-autoname"] = first.Name.StartsWith("Версия 01 · ", StringComparison.Ordinal)
+            && first.Name.Contains(DateTimeOffset.Now.ToString("dd.MM.yyyy"));
+        _report.Checks["thumbnail-shown"] = first.PreviewPng.Length > 100
+            && window.GetVisualDescendants().OfType<Image>().Any(image => image.Source is not null);
+
+        var box = In<TextBox>("VersionName_" + first.Id);
+        box.Text = "Перед штормом";
+        box.RaiseEvent(new KeyEventArgs { RoutedEvent = InputElement.KeyDownEvent, Key = Key.Enter }); await Settle();
+        _report.Checks["rename-with-enter"] = _editor.Checkpoints.Single().Name == "Перед штормом";
+
+        // Change the map, then bring the snapshot back with its own button.
+        var land = _editor.Session.Document.Layers.OfType<LandLayer>().First();
+        _editor.SelectLayer(land.Id);
+        _editor.Session.Execute(new DeleteLayerCommand(_editor.Session.Document, land.Id)); await Settle();
+        var changed = _editor.Session.Document;
+        window.UpdateLayout();
+        await Press(In<Button>("RestoreCheckpoint_" + first.Id));
+        for (var i = 0; i < 100 && ReferenceEquals(_editor.Session.Document, changed); i++) await Task.Delay(30);
+        _report.Checks["restore-from-button"] = _editor.Session.Document.Layers.OfType<LandLayer>().Any();
+        _editor.Undo();
+        _report.Checks["restore-undoable"] = !_editor.Session.Document.Layers.OfType<LandLayer>().Any();
+        _editor.Redo(); await Settle();
+
+        _view.OpenVersions(); await Settle(); window.UpdateLayout();
+        await Press(In<Button>("CreateVersionButton"));
+        for (var i = 0; i < 100 && _editor.Checkpoints.Count < 2; i++) await Task.Delay(50);
+        await Settle(); window.UpdateLayout();
+        _report.Checks["count-shown"] = In<TextBlock>("CheckpointCountText").Text == $"2 из {MapCheckpointLimits.MaxCount}";
+        using (var shot = new RenderTargetBitmap(new PixelSize((int)window.Bounds.Width, (int)window.Bounds.Height)))
+        {
+            shot.Render(window);
+            shot.Save(Path.ChangeExtension(Options.OutputPath, ".versions.png"), PngBitmapEncoderOptions.Default);
+        }
+        await Press(In<Button>("DeleteCheckpoint_" + first.Id));
+        for (var i = 0; i < 100 && _editor.Checkpoints.Count > 1; i++) await Task.Delay(30);
+        _report.Checks["delete-from-button"] = _editor.Checkpoints.Count == 1 && _editor.Checkpoints[0].Id != first.Id;
+    }
+
+    private static readonly string[] GridTypesRequired =
+    [
+        "isometric-chosen-from-panel", "isometric-drawn-differently", "vertical-hex-chosen-from-panel",
+        "vertical-hex-drawn-differently", "placement-snaps-to-hex-node", "object-snap-button-uses-hex",
+        "resources-disposed",
+    ];
+
+    /// <summary>Isometric and vertical-hex grids chosen with the panel radios; drawing and snapping checked.</summary>
+    private async Task GridTypesOnly()
+    {
+        _editor.AddGridLayer(); await Settle();
+        var gridLayerId = _editor.ActiveLayer!.Id;
+        GridDefinition Grid() => ((GridLayer)_editor.Session.Document.FindLayer(gridLayerId)!).Grids[0];
+        var snap = Find<CheckBox>("GridSnapToggle"); snap.IsChecked = true; await Settle();
+        await Frame();
+        var square = CanvasPixels(SamplePoints);
+
+        async Task Choose(GridGeometry geometry)
+        {
+            var radio = Find<RadioButton>("GridGeometry" + geometry + "Radio");
+            radio.BringIntoView(); await Settle();
+            radio.IsChecked = true; await Settle(); await Frame();
+        }
+        await Choose(GridGeometry.IsometricSquares);
+        var hint = Find<TextBlock>("GridGeometryHint").Text ?? "";
+        _report.Checks["isometric-chosen-from-panel"] = Grid().Geometry == GridGeometry.IsometricSquares && hint.Contains("30°");
+        var iso = CanvasPixels(SamplePoints);
+        _report.Checks["isometric-drawn-differently"] = !iso.SequenceEqual(square);
+        SaveTall(Path.ChangeExtension(Options.OutputPath, ".grid-isometric.png"));
+
+        await Choose(GridGeometry.HexFlat);
+        _report.Checks["vertical-hex-chosen-from-panel"] = Grid().Geometry == GridGeometry.HexFlat
+            && Find<TextBlock>("GridGeometryHint").Text?.Contains("столбцами") == true;
+        var hex = CanvasPixels(SamplePoints);
+        _report.Checks["vertical-hex-drawn-differently"] = !hex.SequenceEqual(iso) && !hex.SequenceEqual(square);
+        SaveTall(Path.ChangeExtension(Options.OutputPath, ".grid-hex-vertical.png"));
+
+        // A shape placed with the pointer lands on a hex node; the object snap button uses the same grid.
+        var objects = _editor.Session.Document.Layers.OfType<ObjectLayer>().First();
+        _editor.SelectLayer(objects.Id);
+        _editor.ArmPrimitivePlacement(SceneObjectKind.Rectangle);
+        Point(507.3, 333.8); await Settle();
+        var placed = _editor.Session.Document.Layers.OfType<ObjectLayer>().SelectMany(l => l.Objects).LastOrDefault();
+        var node = GridGeometryContract.Snap(Grid(), new VectorPoint(507.3, 333.8));
+        _report.Checks["placement-snaps-to-hex-node"] = placed is not null
+            && Math.Abs(placed.X + placed.Width / 2 - node.X) < 0.51 && Math.Abs(placed.Y + placed.Height / 2 - node.Y) < 0.51
+            || placed is not null && Math.Abs(placed.X - node.X) < 0.51 && Math.Abs(placed.Y - node.Y) < 0.51;
+        Console.WriteLine($"grid-types: placed {placed?.X:0.##},{placed?.Y:0.##} {placed?.Width:0.##}x{placed?.Height:0.##}, node {node.X:0.##},{node.Y:0.##}");
+        var moved = MultiSelectionGeometry.Translate([placed!], 13.7, -9.2)[0];
+        _editor.Session.Execute(new ReplaceObjectsCommand([placed], [moved], "test move"));
+        _editor.SelectObject(moved.Id);
+        _editor.SnapSelectedObjectToGrid(); await Settle();
+        var snappedObject = _editor.Session.Document.Layers.OfType<ObjectLayer>().SelectMany(l => l.Objects).Single(o => o.Id == moved.Id);
+        _report.Checks["object-snap-button-uses-hex"] = snappedObject == GridSnapService.SnapObject(moved, Grid()) && snappedObject != moved;
+    }
+
+    private static readonly (double X, double Y)[] SamplePoints =
+        [.. Enumerable.Range(0, 60).SelectMany(i => Enumerable.Range(0, 40).Select(j => (40 + i * 13.0, 40 + j * 13.0)))];
+
+    /// <summary>Colours of the real canvas at several map points, from one frame of the window.</summary>
+    private SKColor[] CanvasPixels((double X, double Y)[] points)
+    {
+        var path = Path.Combine(_workspace, "pixels.png");
+        SaveVisual(path);
+        using var bitmap = SKBitmap.Decode(path);
+        return [.. points.Select(p =>
+        {
+            var screen = _editor.Session.Viewport.WorldToScreen(p.X, p.Y);
+            var inView = _view.Canvas.TranslatePoint(new global::Avalonia.Point(screen.X, screen.Y), _view)!.Value;
+            return bitmap.GetPixel((int)Math.Round(inView.X), (int)Math.Round(inView.Y));
+        })];
+    }
+
+    private static readonly string[] VttRequired =
+    [
+        "wall-switch-from-panel", "export-window-shows-walls", "dd2vtt-written-from-button",
+        "dd2vtt-structure", "dd2vtt-picture-matches-png-export", "resources-disposed",
+    ];
+
+    /// <summary>A wall with a door, marked through the line panel and exported from the export window.</summary>
+    private async Task VttExportOnly()
+    {
+        var wall = new SceneObject(ObjectId.New(), SceneObjectKind.Line, "Стена замка", 200, 600, 600, 1, 0,
+            "#00000000", "#FF3D566E", 10, true, false)
+        {
+            Line = new LineStyle([new VectorNode(VectorNodeId.New(), 0, 0), new VectorNode(VectorNodeId.New(), 1, 0)],
+                new VectorStrokeStyle { Width = 10 }, [new LinePortal(PortalId.New(), 0.5, 80)]),
+        };
+        var objects = _editor.Session.Document.Layers.OfType<ObjectLayer>().First();
+        _editor.Session.Execute(new AddObjectCommand(objects.Id, wall));
+        _editor.Session.Execute(new AddLayerCommand(new GridLayer(LayerId.New(), "Сетка", true, false, 1,
+            [new GridDefinition(GridId.New(), GridGeometry.Square, 64)]), objects.Id));
+        _editor.SelectObject(wall.Id); await Settle();
+        _view.OpenObjects(); await Settle();
+        var toggle = Find<global::Avalonia.Controls.Primitives.ToggleButton>("LineBlocksLightToggle");
+        toggle.BringIntoView(); await Settle();
+        toggle.IsChecked = true;
+        toggle.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Settle();
+        var marked = _editor.Session.Document.Layers.OfType<ObjectLayer>().SelectMany(l => l.Objects).Single(o => o.Id == wall.Id);
+        _report.Checks["wall-switch-from-panel"] = marked.Line!.Stroke.BlocksLight && _editor.Session.UndoDepth == 3;
+
+        _view.OpenExport(); await _editor.WaitForExportPreviewAsync(); await Settle();
+        var window = _view.ExportWindowForSmoke!;
+        var summary = window.GetVisualDescendants().OfType<TextBlock>().First(t => t.Name == "ExportVttSummary");
+        _report.Checks["export-window-shows-walls"] = summary.Text?.Contains("Стен: 2, дверей: 1") == true;
+        var start = window.GetVisualDescendants().OfType<Button>().First(b => b.Name == "StartVttExportButton");
+        start.BringIntoView(); window.UpdateLayout();
+        using (var shot = new RenderTargetBitmap(new PixelSize((int)window.Bounds.Width, (int)window.Bounds.Height)))
+        {
+            shot.Render(window);
+            shot.Save(Path.ChangeExtension(Options.OutputPath, ".vtt-export.png"), PngBitmapEncoderOptions.Default);
+        }
+        start.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        var vtt = Path.Combine(_workspace, "river-export.dd2vtt");
+        await Until(() => File.Exists(vtt) && !_editor.ExportRunning);
+        _report.Export = vtt;
+        _report.Checks["dd2vtt-written-from-button"] = _editor.LastVttExportText.Contains("стен 2, дверей 1");
+
+        using var json = System.Text.Json.JsonDocument.Parse(File.ReadAllBytes(vtt));
+        var root = json.RootElement;
+        var resolution = root.GetProperty("resolution");
+        _report.Checks["dd2vtt-structure"] = root.GetProperty("format").GetDouble() > 0
+            && resolution.GetProperty("pixels_per_grid").GetInt32() == 64
+            && root.GetProperty("line_of_sight").GetArrayLength() == 2
+            && root.GetProperty("portals").GetArrayLength() == 1
+            && root.GetProperty("lights").GetArrayLength() == 0
+            && root.GetProperty("environment").GetProperty("ambient_light").GetString() == "ffffffff";
+        using var picture = SKBitmap.Decode(Convert.FromBase64String(root.GetProperty("image").GetString()!));
+        _report.Checks["dd2vtt-picture-matches-png-export"] = picture.Width == 1024 && picture.Height == 768
+            && picture.GetPixel(100, 700) == new SKColor(0xED, 0xE3, 0xCD);
+        Console.WriteLine($"vtt: {new FileInfo(vtt).Length} bytes, {_editor.LastVttExportText}");
+    }
+
+    private static readonly string[] ColorPresetRequired =
+    [
+        "preset-button-applies-sepia", "canvas-recoloured-warm", "strength-box-halves-effect",
+        "second-preset-replaces-first", "undo-restores-previous-look", "save-open-keeps-colour-pass",
+        "panel-shot-saved", "resources-disposed",
+    ];
+
+    /// <summary>Colour presets of a filter layer driven through the real panel buttons and boxes.</summary>
+    private async Task ColorPresetsOnly()
+    {
+        _editor.AddFilterLayer(); await Settle();
+        var filterId = _editor.ActiveLayer!.Id;
+        // The layer starts neutral, so the canvas below shows the map as it was.
+        _editor.SetActiveFilter(brightness: 0, contrast: 0, saturation: 0);
+        await Settle(); await Frame();
+        var before = CanvasPixel(300, 250);
+
+        var depth = _editor.Session.UndoDepth;
+        await Click("FilterColorPreset_sepia"); await Frame();
+        var sepia = ((FilterLayer)_editor.Session.Document.FindLayer(filterId)!).Settings;
+        _report.Checks["preset-button-applies-sepia"] = sepia.ColorPresetId == "sepia" && _editor.Session.UndoDepth == depth + 1;
+        var warm = CanvasPixel(300, 250);
+        _report.Checks["canvas-recoloured-warm"] = warm != before && warm.Red > warm.Blue + 20;
+        Console.WriteLine($"color-presets: before={before} sepia={warm}");
+
+        await Number("FilterColorStrengthSliderBox", "50"); await Frame();
+        var half = CanvasPixel(300, 250);
+        var halfSettings = ((FilterLayer)_editor.Session.Document.FindLayer(filterId)!).Settings;
+        _report.Checks["strength-box-halves-effect"] = Math.Abs(halfSettings.ColorStrength - 0.5) < 0.001
+            && halfSettings.ColorPresetId == "sepia" && half != warm && half != before;
+
+        Find<Control>("FilterColorBlock").BringIntoView(); await Settle(); await Frame();
+        SaveTall(Path.ChangeExtension(Options.OutputPath, ".color-presets.png"));
+        _report.Checks["panel-shot-saved"] = true;
+
+        await Click("FilterColorPreset_night"); await Frame();
+        var night = ((FilterLayer)_editor.Session.Document.FindLayer(filterId)!).Settings;
+        var dark = CanvasPixel(300, 250);
+        _report.Checks["second-preset-replaces-first"] = night.ColorPresetId == "night" && night.ColorStrength == 1
+            && dark.Blue > dark.Red && dark.Red + dark.Green + dark.Blue < before.Red + before.Green + before.Blue;
+        SaveVisual(Path.ChangeExtension(Options.OutputPath, ".color-night.png"));
+
+        _editor.Undo(); await Frame();
+        _report.Checks["undo-restores-previous-look"] =
+            ((FilterLayer)_editor.Session.Document.FindLayer(filterId)!).Settings == halfSettings;
+        _editor.Redo(); await Settle();
+
+        await Click("SaveButton");
+        var saved = Path.Combine(_workspace, "river.mapproj");
+        await Until(() => File.Exists(saved) && !_editor.Session.IsDirty);
+        var reopened = MapProjectStore.Open(saved).Document.FindLayer(filterId) as FilterLayer;
+        _report.SavedProject = saved;
+        _report.Checks["save-open-keeps-colour-pass"] = reopened?.Settings == night;
+    }
+
+    /// <summary>The colour the real canvas shows at a map point, read from a frame of the window.</summary>
+    private SKColor CanvasPixel(double worldX, double worldY)
+    {
+        var screen = _editor.Session.Viewport.WorldToScreen(worldX, worldY);
+        var inView = _view.Canvas.TranslatePoint(new global::Avalonia.Point(screen.X, screen.Y), _view)!.Value;
+        var path = Path.Combine(_workspace, "pixel.png");
+        SaveVisual(path);
+        using var bitmap = SKBitmap.Decode(path);
+        return bitmap.GetPixel((int)Math.Round(inView.X), (int)Math.Round(inView.Y));
+    }
+
+    private void SaveTall(string path)
+    {
+        using var bitmap = new RenderTargetBitmap(new PixelSize((int)_window.Width, (int)_window.Height));
+        bitmap.Render(_view);
+        using var file = File.Create(path);
+        bitmap.Save(file, PngBitmapEncoderOptions.Default);
+    }
+
     private async Task Frame()
     {
         var completion = new TaskCompletionSource();
@@ -585,6 +1020,7 @@ public sealed partial class Stage19Application : Application
     { public Task<string?> PickOpenAsync() => Task.FromResult<string?>(path); public Task<string?> PickSaveAsync(string suggestedFileName) => Task.FromResult<string?>(path); }
     private sealed class ExportPicker(string path) : IExportDestinationPicker
     { public Task<string?> PickImageAsync(string name, ExportImageFormat format) => Task.FromResult<string?>(path);
+        public Task<string?> PickVttAsync(string name) => Task.FromResult<string?>(Path.ChangeExtension(path, ".dd2vtt"));
         public Task<string?> PickTilePackageAsync(string name) => Task.FromResult<string?>(Path.ChangeExtension(path, null) + "-tiles"); }
     private sealed class LocalRecent : IRecentMaps
     { public IReadOnlyList<RecentMapItem> Load() => []; public void Remove(string path) { }
@@ -594,8 +1030,10 @@ public sealed partial class Stage19Application : Application
     private sealed class LocalPrompts : IUserPrompts
     {
         public Task<CloseChoice> ConfirmCloseDirtyAsync(string title) => Task.FromResult(CloseChoice.Cancel);
-        public Task<bool> ConfirmRestoreCheckpointAsync(string name) => Task.FromResult(false);
-        public Task<bool> ConfirmDeleteCheckpointAsync(string name) => Task.FromResult(false);
+        /// <summary>The versions scenario answers «Да» to restore and delete; every other scenario keeps «Нет».</summary>
+        public bool ConfirmCheckpoints { get; set; }
+        public Task<bool> ConfirmRestoreCheckpointAsync(string name) => Task.FromResult(ConfirmCheckpoints);
+        public Task<bool> ConfirmDeleteCheckpointAsync(string name) => Task.FromResult(ConfirmCheckpoints);
         public Task<bool> ConfirmMigrationCopyAsync() => Task.FromResult(false);
         public Task<bool> ConfirmDeleteProjectAsync(string title, bool fileAlreadyMissing = false) => Task.FromResult(false);
         public Task ShowErrorAsync(string title, string message) => throw new InvalidOperationException(title + ": " + message);

@@ -101,6 +101,29 @@ public static class PlacementAreaPlanner
         : SameSettings(before, after) ? PlacementAreaGeometry.ChangedCoverage(before.Nodes, after.Nodes)
         : PlacementAreaGeometry.Merge(PlacementAreaGeometry.Coverage(before.Nodes).Concat(PlacementAreaGeometry.Coverage(after.Nodes)));
 
+    /// <summary>
+    /// Admission estimate of objects per cell. Version 4 layouts publish only a conservative
+    /// upper bound (<see cref="CandidatePasses"/>), often dozens of times the real population, so
+    /// a large forest asked for gigabytes and was refused on a machine with 2 GB free. Here the
+    /// real positions of up to 64 cells spread over the change are counted, doubled for safety.
+    /// </summary>
+    public static int EstimatedCellPopulation(PlacementArea area, IReadOnlyList<PlacementAreaGeometry.CellSpan> spans)
+    {
+        var bound = CandidatePasses(area);
+        if (area.LayoutVersion < 4 || bound == 0 || spans.Count == 0) return bound;
+        var layout = new PlacementAreaLayout(area);
+        var cells = spans.Sum(s => (long)s.MaxX - s.MinX + 1);
+        var probes = (int)Math.Min(cells, 64); var most = 0; var si = 0; long start = 0;
+        for (var i = 0; i < probes; i++)
+        {
+            var rank = probes == 1 ? 0 : (long)((decimal)i * (cells - 1) / (probes - 1));
+            while (rank >= start + (long)spans[si].MaxX - spans[si].MinX + 1)
+                start += (long)spans[si].MaxX - spans[si++].MinX + 1;
+            most = Math.Max(most, layout.Cell(spans[si].MinX + (int)(rank - start), spans[si].Y).Count);
+        }
+        return (int)Math.Min(bound, Math.Max(1L, most * 2L));
+    }
+
     /// <summary>Exact prediction without retaining the full object list. Caller can cancel stale UI work.</summary>
     public static long Count(PlacementArea area, PlacementAreaObstacles? obstacles = null,
         WorkingMemoryBudget? memory = null, CancellationToken cancellationToken = default)
@@ -125,7 +148,7 @@ public static class PlacementAreaPlanner
 
     /// <summary>At most 64 concrete stamps, sampled across the changed cells, with bounded candidate work.</summary>
     public static IReadOnlyList<SceneObject> Preview(PlacementArea area, PlacementArea? before = null, int maximum = 64,
-        PlacementAreaObstacles? obstacles = null, WorkingMemoryBudget? memory = null)
+        PlacementAreaObstacles? obstacles = null, WorkingMemoryBudget? memory = null, CancellationToken cancellationToken = default)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maximum, 1);
         area.Validate();
@@ -135,7 +158,7 @@ public static class PlacementAreaPlanner
         if (!(memory ?? WorkingMemoryBudget.Shared).TryReserve((long)estimate, out var reservation, out var reason))
             throw new InvalidOperationException(reason);
         using var held = reservation;
-        var sampler = new PlacementAreaSampler(area);
+        var sampler = new PlacementAreaSampler(area, cancellationToken);
         var candidates = checked(spans.Sum(s => (long)s.MaxX - s.MinX + 1) * slots);
         if (candidates == 0) return [];
         if (area.LayoutVersion >= 4)
@@ -147,6 +170,7 @@ public static class PlacementAreaPlanner
             var found = new List<SceneObject>(); var si = 0; long cellStart = 0;
             for (var i = 0; i < cellProbes; i++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var rank = cellProbes == 1 ? 0 : (long)((decimal)i * (cells - 1) / (cellProbes - 1));
                 while (rank >= cellStart + (long)spans[si].MaxX - spans[si].MinX + 1)
                     cellStart += (long)spans[si].MaxX - spans[si++].MinX + 1;
@@ -189,6 +213,7 @@ public sealed class PlacementAreaCommand : IEditCommand
     private readonly IReadOnlyList<MapAssetReference> _assets;
     private readonly ObjectId? _detach;
     private readonly bool _bake;
+    private readonly CancellationToken _cancellation;
     private MapDocument? _before, _after;
     public string Name { get; }
     public int VisitedCells { get; private set; }
@@ -196,8 +221,13 @@ public sealed class PlacementAreaCommand : IEditCommand
     public int ChangedObjects { get; private set; }
 
     public PlacementAreaCommand(LayerId layerId, Guid id, PlacementArea? requested, string name,
-        IReadOnlyList<MapAssetReference>? assets = null, ObjectId? detach = null, bool bake = false)
-    { _layerId = layerId; _id = id; _requested = requested; Name = name; _assets = assets ?? []; _detach = detach; _bake = bake; }
+        IReadOnlyList<MapAssetReference>? assets = null, ObjectId? detach = null, bool bake = false,
+        CancellationToken cancellationToken = default)
+    {
+        _layerId = layerId; _id = id; _requested = requested; Name = name; _assets = assets ?? []; _detach = detach; _bake = bake;
+        // Only the first Apply can be cancelled; a completed result is cached and never recomputed.
+        _cancellation = cancellationToken;
+    }
 
     public MapDocument Apply(MapDocument document)
     {
@@ -242,13 +272,13 @@ public sealed class PlacementAreaCommand : IEditCommand
             var cellCount = spans.Sum(s => (long)s.MaxX - s.MinX + 1);
             var spacingEstimate = PlacementAreaSampler.EstimateBytes(next, spans);
             if (spacingEstimate > long.MaxValue) throw new InvalidOperationException("Область с такой плотностью не помещается в доступную память.");
-            var estimatedBytes = (decimal)cellCount * (128 + (decimal)Math.Max(PlacementAreaPlanner.CandidatePasses(next),
-                old is null ? 0 : PlacementAreaPlanner.CandidatePasses(old)) * 1664) + spacingEstimate;
+            var estimatedBytes = (decimal)cellCount * (128 + (decimal)Math.Max(PlacementAreaPlanner.EstimatedCellPopulation(next, spans),
+                old is null ? 0 : PlacementAreaPlanner.EstimatedCellPopulation(old, spans)) * 1664) + spacingEstimate;
             if (estimatedBytes > long.MaxValue) throw new InvalidOperationException("Область с такой плотностью не помещается в доступную память.");
             var estimate = (long)estimatedBytes;
             if (!WorkingMemoryBudget.Shared.TryReserve(estimate, out var reservation, out var reason)) throw new InvalidOperationException(reason);
             using var held = reservation;
-            var sampler = new PlacementAreaSampler(next);
+            var sampler = new PlacementAreaSampler(next, _cancellation);
             var obstacles = next.LayoutVersion == 0 ? null : new PlacementAreaObstacles(document, layer.Id, _id, next.Sublayer, next.LayoutVersion, next);
             var occupied = next.OccupiedSlots.ToBuilder();
             var cells = (old?.Cells ?? ImmutableDictionary<long, ImmutableArray<PlacementAreaMember>>.Empty).ToBuilder();

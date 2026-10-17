@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using Avalonia.Controls;
+using Map.App.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Media;
 using Map.Core.Documents;
@@ -13,6 +14,8 @@ public sealed partial class EditorView
 {
     private ComboBox? _riverPicker, _riverChannelPicker;
     private TextBlock? _riverSummary;
+    private TextBlock? _riverShapeHint, _riverStyleHint;
+    private Expander? _riverCreateCategory, _riverSelectCategory, _riverShapeCategory, _riverStyleCategory;
     private Button? _riverFinish, _riverDetach, _riverDetachSource, _riverDeleteChannel, _riverSplit, _riverSplitOff, _riverTrimBefore, _riverTrimAfter, _riverReverse, _riverMeander;
     private Button? _riverApplyPreview, _riverHide, _riverLock, _riverDeleteSelection;
     private Control? _riverNodeBlock, _riverChannelBlock, _riverStyleBlock, _riverNodeWidth, _riverProfileBlock, _riverFlowBlock;
@@ -60,7 +63,7 @@ public sealed partial class EditorView
         _riverHide = Ui.TextButton("ToggleWaterVisibleButton", "Скрыть воду", _editor.ToggleSelectedWaterVisible, "compact");
         _riverLock = Ui.TextButton("ToggleWaterLockButton", "Заблокировать воду", _editor.ToggleSelectedWaterLock, "compact");
         _riverDeleteSelection = Ui.TextButton("DeleteWaterSelectionButton", "Удалить выбранное (Delete)",
-            () => _editor.DeleteSelection(), "compact", "destructive");
+            () => _editor.DeleteSelection(), "danger-text");
         Avalonia.Automation.AutomationProperties.SetName(_riverDeleteSelection, "Удалить выбранное");
         _riverLayerPicker = new ComboBox { Name = "WaterLayerPicker", HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch,
             PlaceholderText = "Перенести воду на слой" };
@@ -92,16 +95,17 @@ public sealed partial class EditorView
         _riverSplitOff = Ui.TextButton("DetachDownstreamRiverButton", "Отделить нижнее течение в отдельную реку", _editor.DetachDownstreamAsRiver, "compact");
         _riverTrimBefore = Ui.TextButton("TrimRiverBeforeButton", "Обрезать всё выше узла", _editor.TrimSelectedChannelBeforeNode, "compact");
         _riverTrimAfter = Ui.TextButton("TrimRiverAfterButton", "Обрезать всё ниже узла", _editor.TrimSelectedChannelAfterNode, "compact");
-        _riverNodeWidth = AppearanceNumberBox("RiverNodeWidthBox", "Ширина в узле", "ед.", () => _editor.SelectedRiverNodeWidth, _editor.SetSelectedRiverNodeWidth);
-        _riverNodeTension = AppearanceNumberBox("RiverNodeTensionBox", "Кривизна узла", "%",
-            () => _editor.SelectedRiverNodeTensionPercent, _editor.SetSelectedRiverNodeTensionPercent);
+        _riverNodeWidth = AppearanceNumberBox("RiverNodeWidthBox", "Ширина в узле", "ед.", () => _editor.SelectedRiverNodeWidth, _editor.SetSelectedRiverNodeWidth,
+            slider: (1, 400), description: "Ширина русла в выбранном узле, в единицах карты. Между узлами ширина плавно переходит.");
+        _riverNodeTension = AppearanceNumberBox("RiverNodeTensionBox", "Кривизна в узле", "%",
+            () => _editor.SelectedRiverNodeTensionPercent, _editor.SetSelectedRiverNodeTensionPercent, slider: (0, 250),
+            defaultValue: 100, description: "0 % — острый угол, 100 % — обычная плавная кривая, больше — размашистый изгиб.", step: 5);
         _riverNodeBlock = Ui.Subgroup("Узел", new StackPanel
         {
             Spacing = 4, Children =
             {
                 _riverNodeWidth,
                 _riverNodeTension,
-                Ui.Hint("0 % — угол, 100 % — обычная кривая, больше — шире размах."),
                 _riverSharp,
                 Ui.TextButton("InsertRiverNodeButton", "Добавить узел на русле", _editor.InsertRiverNode, "compact"),
                 Ui.TextButton("DeleteRiverNodeButton", "Удалить выбранный узел (Delete)", () => _editor.DeleteSelectedRiverNode(), "compact"),
@@ -121,9 +125,10 @@ public sealed partial class EditorView
         {
             Spacing = 4, Children =
             {
-                AppearanceNumberBox("RiverSourceWidthBox", "Ширина истока", "ед.", () => _editor.SelectedChannelSourceWidth, _editor.SetSelectedChannelSourceWidth),
-                AppearanceNumberBox("RiverMouthWidthBox", "Ширина устья", "ед.", () => _editor.SelectedChannelMouthWidth, _editor.SetSelectedChannelMouthWidth),
-                new TextBlock { Text = "Профиль от истока к устью распределяется по всем узлам русла. Ромбы истока и устья перетаскиваются вдоль других русел и берегов озёр.", TextWrapping = TextWrapping.Wrap }.Classed("faint", "role-caption"),
+                AppearanceNumberBox("RiverSourceWidthBox", "Ширина у истока", "ед.", () => _editor.SelectedChannelSourceWidth, _editor.SetSelectedChannelSourceWidth,
+                    slider: (1, 400), description: "Ширина в первом узле русла. Профиль от истока к устью распределяется по всем узлам."),
+                AppearanceNumberBox("RiverMouthWidthBox", "Ширина у устья", "ед.", () => _editor.SelectedChannelMouthWidth, _editor.SetSelectedChannelMouthWidth,
+                    slider: (1, 400), description: "Ширина в последнем узле русла. Ромбы истока и устья перетаскиваются вдоль других русел и берегов озёр."),
             },
         };
         _riverChannelBlock = Ui.Subgroup("Русло", new StackPanel
@@ -131,16 +136,19 @@ public sealed partial class EditorView
             Spacing = 4, Children =
             {
                 _riverProfileBlock,
-                AppearanceNumberBox("RiverChannelTensionBox", "Плавность русла", "%", () => _editor.SelectedChannelTensionPercent, _editor.SetSelectedChannelTensionPercent),
+                AppearanceNumberBox("RiverChannelTensionBox", "Плавность всего русла", "%", () => _editor.SelectedChannelTensionPercent, _editor.SetSelectedChannelTensionPercent, slider: (0, 250),
+                    defaultValue: 100, step: 5, description: "Кривизна сразу во всех узлах русла: 0 % — ломаная, 100 % — плавная линия, больше — широкие петли."),
                 Ui.TextButton("SmoothRiverChannelButton", "Сгладить русло (без новых узлов)", _editor.SmoothSelectedChannel, "compact"),
-                AppearanceNumberBox("RiverMeanderBox", "Извилины", "%", () => _editor.RiverMeanderPercent, value => _editor.RiverMeanderPercent = value),
+                AppearanceNumberBox("RiverMeanderBox", "Извилистость", "%", () => _editor.RiverMeanderPercent, value => _editor.RiverMeanderPercent = value, slider: (1, 100),
+                    defaultValue: 20, step: 5, description: "Сколько новых изгибов добавит «Показать извилины». Сначала показывается предпросмотр, затем его можно применить."),
                 _riverMeander,
                 _riverApplyPreview,
                 Ui.Advanced("RiverChannelAdvanced", new StackPanel
                 {
                     Spacing = 4, Children =
                     {
-                        AppearanceNumberBox("RiverSimplifyToleranceBox", "Точность упрощения", "ед.", () => _editor.RiverSimplifyTolerance, value => _editor.RiverSimplifyTolerance = value),
+                        AppearanceNumberBox("RiverSimplifyToleranceBox", "Допуск упрощения", "ед.", () => _editor.RiverSimplifyTolerance, value => _editor.RiverSimplifyTolerance = value,
+                            slider: (1, 64), defaultValue: 6, description: "Насколько линия может отойти от нынешней, когда «Упростить русло» убирает лишние узлы."),
                         Ui.TextButton("SimplifyRiverChannelButton", "Упростить русло", _editor.SimplifySelectedChannel, "compact"),
                         _riverReverse,
                         _riverDetach,
@@ -158,9 +166,11 @@ public sealed partial class EditorView
         {
             Spacing = 4, Children =
             {
-                Ui.Hint("Ширина растёт по длине и после каждого притока; рукав получает половину."),
-                AppearanceNumberBox("RiverFlowSourceWidthBox", "Ширина истоков", "ед.", () => _editor.RiverFlowSourceWidth, value => _editor.RiverFlowSourceWidth = value),
-                AppearanceNumberBox("RiverFlowGrowthBox", "Рост на 1000 ед.", "ед.", () => _editor.RiverFlowGrowth, value => _editor.RiverFlowGrowth = value),
+                Ui.Hint("Расчёт задаёт ширину каждому узлу: она растёт по длине и после каждого притока; рукав получает половину."),
+                AppearanceNumberBox("RiverFlowSourceWidthBox", "Ширина истоков", "ед.", () => _editor.RiverFlowSourceWidth, value => _editor.RiverFlowSourceWidth = value,
+                    slider: (1, 200), defaultValue: 4, description: "С какой ширины начинается каждый ручей у своего истока."),
+                AppearanceNumberBox("RiverFlowGrowthBox", "Прирост на 1000 ед. длины", "ед.", () => _editor.RiverFlowGrowth, value => _editor.RiverFlowGrowth = value,
+                    slider: (0, 200), defaultValue: 6, description: "На сколько единиц река становится шире на каждые 1000 единиц пути."),
                 Ui.TextButton("ApplyRiverFlowWidthButton", "Рассчитать ширину по притокам", _editor.ApplyWidthByFlow, "compact"),
             },
         });
@@ -171,7 +181,17 @@ public sealed partial class EditorView
             Spacing = 4, Children =
             {
                 _riverName,
-                Ui.Subgroup("Стиль рисунка", new StackPanel
+                Ui.Subgroup("Готовые стили", new Ui.ChoiceGrid
+                {
+                    MaxColumns = 2, MinimumItemWidth = 100, Gap = 4, Children =
+                    {
+                        LookButton("RiverLookMountainStream", "Горный ручей", "Узкое русло, неровные берега, тонкая отмель", () => _editor.ApplyRiverLook(RiverLookPreset.MountainStream)),
+                        LookButton("RiverLookLowlandRiver", "Равнинная река", "Обычная ширина, спокойные берега", () => _editor.ApplyRiverLook(RiverLookPreset.LowlandRiver)),
+                        LookButton("RiverLookWideRiver", "Широкая река", "Ширина ×1,7, широкая отмель и откос", () => _editor.ApplyRiverLook(RiverLookPreset.WideRiver)),
+                        LookButton("RiverLookInkAtlas", "Атлас пером", "Рисунок пером, ширина не меняется", () => _editor.ApplyRiverLook(RiverLookPreset.InkAtlas)),
+                    },
+                }),
+                Ui.Subgroup("Только рисунок", new StackPanel
                 {
                     Spacing = 4, Children =
                     {
@@ -185,11 +205,23 @@ public sealed partial class EditorView
                     {
                         AppearanceColorBox("RiverWaterColorBox", "Цвет воды", () => _editor.RiverWaterColor, _editor.SetRiverWaterColor),
                         BuildFillTexturePicker("RiverTexturePicker", Map.Core.Documents.MapFillTextureKind.Water,
-                            () => _editor.RiverTextureId, _editor.SetRiverTexture),
-                        AppearanceNumberBox("RiverTextureOpacityBox", "Сила материала", "%",
-                            () => _editor.RiverTextureOpacityPercent, _editor.SetRiverTextureOpacityPercent),
-                        AppearanceNumberBox("RiverShallowWidthBox", "Отмель у берега", "ед.",
-                            () => _editor.RiverShallowWidth, _editor.SetRiverShallowWidth),
+                            () => _editor.RiverTextureId, _editor.SetRiverTexture,
+                            // Water materials are laid over the water colour of the selected river.
+                            () => MaterialPreviewContext.Over(_editor.RiverWaterColor ?? new Map.Core.Documents.RiverStyle().WaterColor,
+                                _editor.RiverTextureOpacityPercent / 100 ?? new Map.Core.Documents.RiverStyle().TextureOpacity,
+                                _editor.RiverTextureScale ?? Map.Core.Documents.MapFillTextures.DefaultWaterScale)),
+                        AppearanceNumberBox("RiverTextureOpacityBox", "Заметность материала", "%",
+                            () => _editor.RiverTextureOpacityPercent, _editor.SetRiverTextureOpacityPercent, slider: (0, 100),
+                            defaultValue: 50, step: 5, description: "Насколько фактура воды проступает поверх цвета. 0 — только цвет."),
+                        AppearanceNumberBox("RiverTextureScaleBox", "Крупность материала", "ед.",
+                            () => _editor.RiverTextureScale, _editor.SetRiverTextureScale, slider: (16, 1024),
+                            defaultValue: Map.Core.Documents.MapFillTextures.DefaultWaterScale, step: 8,
+                            description: "Размер одной плитки фактуры воды в единицах карты."),
+                        AppearanceNumberBox("RiverOpacityBox", "Непрозрачность", "%", () => _editor.SelectedRiver is { } r ? r.Style.Opacity * 100 : null, _editor.SetRiverOpacityPercent, slider: (0, 100),
+                            defaultValue: 100, step: 5, description: "Прозрачность всей реки вместе с берегами. Меньше 100 % — сквозь воду видна карта."),
+                        AppearanceColorBox("RiverHighlightColorBox", "Цвет бликов", () => _editor.RiverHighlightColor, _editor.SetRiverHighlightColor),
+                        AppearanceNumberBox("RiverHighlightBox", "Сила бликов", "%", () => _editor.SelectedRiver is { } r ? r.Style.HighlightOpacity * 100 : null, _editor.SetRiverHighlightPercent, slider: (0, 100),
+                            defaultValue: 55, step: 5, description: "Светлые штрихи по течению, как отблески на воде. 0 выключает."),
                     },
                 }),
                 Ui.Subgroup("Берег", new StackPanel
@@ -197,28 +229,40 @@ public sealed partial class EditorView
                     Spacing = 4, Children =
                     {
                         AppearanceColorBox("RiverBankColorBox", "Цвет берега", () => _editor.RiverBankColor, _editor.SetRiverBankColor),
-                        AppearanceNumberBox("RiverBankWidthBox", "Кромка берега", "px", () => _editor.SelectedRiver?.Style.BankWidth, _editor.SetRiverBankWidth),
-                        AppearanceNumberBox("RiverBankReliefBox", "Ширина откоса", "ед.", () => _editor.SelectedRiver?.Style.BankReliefWidth, _editor.SetRiverBankReliefWidth),
+                        AppearanceNumberBox("RiverBankWidthBox", "Линия берега", "px", () => _editor.SelectedRiver?.Style.BankWidth, _editor.SetRiverBankWidth,
+                            slider: (0, 32), defaultValue: 2, description: "Толщина тёмной линии по урезу воды. 0 — без линии."),
+                        AppearanceNumberBox("RiverBankShadowBox", "Тень под берегом", "%", () => _editor.SelectedRiver is { } r ? r.Style.BankShadowOpacity * 100 : null, _editor.SetRiverBankShadowPercent, slider: (0, 100),
+                            defaultValue: 28, step: 5, description: "Затемнение воды вдоль берега — река кажется глубже."),
+                        AppearanceNumberBox("RiverEdgeRoughnessBox", "Неровность линии", "%", () => _editor.SelectedRiver is { } r ? r.Style.EdgeRoughness * 100 : null, _editor.SetRiverEdgeRoughnessPercent, slider: (0, 100),
+                            defaultValue: 0, step: 5, description: "Дрожание линии берега, как у рисунка от руки. 0 — ровная линия."),
                         _riverCutsLand,
                     },
                 }),
-                Ui.Advanced("RiverStyleAdvanced", new StackPanel
+                Ui.Subgroup("Откос и отмель", new StackPanel
+                {
+                    Spacing = 4,
+                    Children =
+                    {
+                        AppearanceColorBox("RiverBankReliefColorBox", "Цвет откоса", () => _editor.SelectedRiver?.Style.BankReliefColor, _editor.SetRiverBankReliefColor),
+                        AppearanceNumberBox("RiverBankReliefBox", "Ширина откоса", "ед.", () => _editor.SelectedRiver?.Style.BankReliefWidth, _editor.SetRiverBankReliefWidth,
+                            slider: (0, 200), defaultValue: 0, description: "Полоса голой земли между водой и сушей. 0 — без откоса."),
+                        AppearanceNumberBox("RiverBankHatchBox", "Штриховка откоса", "%", () => _editor.SelectedRiver is { } r ? r.Style.BankHatchOpacity * 100 : null, _editor.SetRiverBankHatchPercent, slider: (0, 100),
+                            defaultValue: 55, step: 5, description: "Перьевые штрихи по откосу. Видны только при ширине откоса больше 0."),
+                        AppearanceColorBox("RiverShallowColorBox", "Цвет отмели", () => _editor.RiverShallowColor, _editor.SetRiverShallowColor),
+                        AppearanceNumberBox("RiverShallowWidthBox", "Ширина отмели", "ед.",
+                            () => _editor.RiverShallowWidth, _editor.SetRiverShallowWidth, slider: (0, 200),
+                            defaultValue: 3, description: "Светлая полоса мелководья вдоль берега внутри реки. 0 — без отмели."),
+                    },
+                }),
+                Ui.Subgroup("Размер, исток и устье", new StackPanel
                 {
                     Spacing = 4, Children =
                     {
-                        AppearanceNumberBox("RiverWidthScaleBox", "Ширина всей реки", "%", () => _editor.SelectedRiver is { } r ? r.WidthScale * 100 : null, _editor.SetRiverWidthScalePercent),
-                        AppearanceNumberBox("RiverTextureScaleBox", "Размер материала", "ед.",
-                            () => _editor.RiverTextureScale, _editor.SetRiverTextureScale),
-                        AppearanceColorBox("RiverShallowColorBox", "Цвет отмели", () => _editor.RiverShallowColor, _editor.SetRiverShallowColor),
-                        AppearanceNumberBox("RiverBankShadowBox", "Тень берега", "%", () => _editor.SelectedRiver is { } r ? r.Style.BankShadowOpacity * 100 : null, _editor.SetRiverBankShadowPercent),
-                        AppearanceColorBox("RiverBankReliefColorBox", "Земляной откос", () => _editor.SelectedRiver?.Style.BankReliefColor, _editor.SetRiverBankReliefColor),
-                        AppearanceNumberBox("RiverBankHatchBox", "Штриховка берега", "%", () => _editor.SelectedRiver is { } r ? r.Style.BankHatchOpacity * 100 : null, _editor.SetRiverBankHatchPercent),
-                        AppearanceNumberBox("RiverEdgeRoughnessBox", "Шероховатость кромки", "%", () => _editor.SelectedRiver is { } r ? r.Style.EdgeRoughness * 100 : null, _editor.SetRiverEdgeRoughnessPercent),
-                        AppearanceColorBox("RiverHighlightColorBox", "Блики", () => _editor.RiverHighlightColor, _editor.SetRiverHighlightColor),
-                        AppearanceNumberBox("RiverHighlightBox", "Сила бликов", "%", () => _editor.SelectedRiver is { } r ? r.Style.HighlightOpacity * 100 : null, _editor.SetRiverHighlightPercent),
-                        AppearanceNumberBox("RiverOpacityBox", "Непрозрачность", "%", () => _editor.SelectedRiver is { } r ? r.Style.Opacity * 100 : null, _editor.SetRiverOpacityPercent),
+                        AppearanceNumberBox("RiverWidthScaleBox", "Ширина всей реки", "%", () => _editor.SelectedRiver is { } r ? r.WidthScale * 100 : null, _editor.SetRiverWidthScalePercent, slider: (10, 400),
+                            defaultValue: 100, step: 5, description: "Множитель ширины сразу для всех узлов и русел реки. Форма не меняется."),
                         _riverTaper,
-                        AppearanceNumberBox("RiverMouthFadeBox", "Растворять устье", "ед.", () => _editor.SelectedRiver?.Style.MouthFade, _editor.SetRiverMouthFade),
+                        AppearanceNumberBox("RiverMouthFadeBox", "Растворение устья", "ед.", () => _editor.SelectedRiver?.Style.MouthFade, _editor.SetRiverMouthFade,
+                            slider: (0, 400), defaultValue: 0, description: "На какой длине перед устьем река растворяется в море или озере. 0 — чёткий край."),
                         _riverClipToLand,
                     },
                 }),
@@ -232,24 +276,37 @@ public sealed partial class EditorView
             Spacing = 4,
             Children =
             {
-                Ui.Category("RiverCreateCategory", "Создание", "accent-create", new StackPanel
+                (_riverCreateCategory = Ui.Category("RiverCreateCategory", "Создание", "accent-create", new StackPanel
                 {
                     Spacing = 4, Children =
                     {
                         modes,
-                        Ui.TextButton("StartRiverButton", "Новая река, приток или рукав", _editor.StartRiver, "compact"),
+                        HeroButton("StartRiverButton", "Новая река", "Клики от истока к устью; клик по руслу — приток или рукав",
+                            MapIcons.SolidRiver, _editor.StartRiver),
                         Ui.TextButton("StartLakeButton", "Новое озеро", _editor.StartLake, "compact"),
                         _riverFinish,
-                        AppearanceNumberBox("NewRiverWidthBox", "Ширина новых узлов", "ед.", () => _editor.NewRiverWidth, value => _editor.NewRiverWidth = value),
+                        AppearanceNumberBox("NewRiverWidthBox", "Ширина новых узлов", "ед.", () => _editor.NewRiverWidth, value => _editor.NewRiverWidth = value,
+                            slider: (1, 200), defaultValue: 12, description: "Ширина, с которой ставится каждый новый узел реки или озера."),
                         Ui.Hint("Узлы: клики от истока к устью, Enter — свободный конец. Клик по руслу — рукав или приток. Esc — отмена."),
                     },
-                }),
-                Ui.Category("RiverSelectCategory", "Выбор", "accent-select", _riverSelectionBlock),
-                Ui.Category("RiverShapeCategory", "Форма", "accent-shape", new StackPanel
+                })),
+                (_riverSelectCategory = Ui.Category("RiverSelectCategory", "Выбор", "accent-select", _riverSelectionBlock)),
+                (_riverShapeCategory = Ui.Category("RiverShapeCategory", "Форма", "accent-shape", new StackPanel
                 {
-                    Spacing = 4, Children = { _riverNodeBlock, _riverChannelBlock, _riverFlowBlock },
-                }, expanded: false),
-                Ui.Category("RiverStyleCategory", "Оформление", "accent-look", _riverStyleBlock, expanded: false),
+                    Spacing = 4, Children =
+                    {
+                        (_riverShapeHint = (TextBlock)Ui.Hint("Выберите реку или озеро в списке выше.").Named("RiverShapeHint")),
+                        _riverNodeBlock, _riverChannelBlock, _riverFlowBlock,
+                    },
+                }, expanded: false)),
+                (_riverStyleCategory = Ui.Category("RiverStyleCategory", "Оформление", "accent-look", new StackPanel
+                {
+                    Spacing = 4, Children =
+                    {
+                        (_riverStyleHint = (TextBlock)Ui.Hint("Выберите реку или озеро в списке выше.").Named("RiverStyleHint")),
+                        _riverStyleBlock,
+                    },
+                }, expanded: false)),
             },
         };
     }
@@ -325,10 +382,19 @@ public sealed partial class EditorView
             _riverDetach!.IsVisible = _editor.SelectedChannelIsTributary;
             _riverDetachSource!.IsVisible = _editor.SelectedChannelHasSource;
             _riverFlowBlock!.IsVisible = hasRiver && _editor.SelectedRiver!.Channels.Any(c => !c.Closed);
+            var hint = _editor.IsCreatingRiver
+                ? "Завершите рисование кнопкой выше или Enter — затем здесь можно изменить форму и оформление."
+                : rivers.Length > 0 ? "Выберите реку или озеро на карте либо в списке выше."
+                    : "Создайте реку или озеро — здесь появятся их настройки.";
+            _riverShapeHint!.Text = hint;
+            _riverStyleHint!.Text = hint;
+            _riverShapeHint.IsVisible = !_riverNodeBlock.IsVisible && !_riverChannelBlock.IsVisible && !_riverFlowBlock.IsVisible;
+            _riverStyleHint.IsVisible = !hasRiver;
             if (_riverName is not null && !_riverName.IsFocused) _riverName.Text = _editor.SelectedRiver?.Name ?? "";
             SyncAppearanceSections();
         }
         finally { _syncingRivers = false; }
+        SyncSurfaceScope();
     }
 
     private sealed record RiverChoice(Guid Id, string Name)

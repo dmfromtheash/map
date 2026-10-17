@@ -59,7 +59,8 @@ public sealed class VectorAssetStyleCommand(
             || item.Stamp?.MaskAssetSha256 == asset.Sha256
             || item.Line?.Stroke.AssetSha256 == asset.Sha256
             || item.Shape?.Stroke.AssetSha256 == asset.Sha256
-            || item.Shape?.Fill.TextureAssetSha256 == asset.Sha256);
+            || item.Shape?.Fill.TextureAssetSha256 == asset.Sha256
+            || item.Room?.CapAssetSha256 == asset.Sha256);
         return _introduced && !used
             ? reverted.WithAssets([.. reverted.Assets.Where(item => item.Sha256 != asset.Sha256)])
             : reverted;

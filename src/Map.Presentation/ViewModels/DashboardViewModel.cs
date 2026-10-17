@@ -2,6 +2,7 @@ using Map.Persistence;
 using Map.Persistence.Recovery;
 using Map.Presentation.Services;
 using Map.Rendering;
+using Map.Assets;
 
 namespace Map.Presentation.ViewModels;
 
@@ -54,6 +55,7 @@ public sealed class DashboardViewModel : ViewModelBase
     private readonly IProjectTrash? _trash;
     private readonly Func<DateTimeOffset> _clock;
     private readonly string _appVersion;
+    private readonly AssetCatalog? _assetCatalog;
     private readonly SemaphoreSlim _openGate = new(1, 1);
 
     private string _lastNotice = "";
@@ -73,7 +75,7 @@ public sealed class DashboardViewModel : ViewModelBase
         IUserPrompts? prompts = null,
         IProjectTrash? trash = null,
         Func<DateTimeOffset>? clock = null,
-        string appVersion = "Map")
+        string appVersion = "Map", AssetCatalog? assetCatalog = null)
     {
         _store = store;
         _recent = recent;
@@ -83,6 +85,7 @@ public sealed class DashboardViewModel : ViewModelBase
         _trash = trash;
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
         _appVersion = appVersion;
+        _assetCatalog = assetCatalog;
     }
 
     public IReadOnlyList<RecentCard> RecentCards
@@ -346,9 +349,14 @@ public sealed class DashboardViewModel : ViewModelBase
                 Map.Core.Documents.DocumentId.New(), title, created,
                 sourceDocument.Canvas, sourceDocument.Layers, sourceDocument.Assets,
                 sourceDocument.Notes, checkpoints: [], stampForeground: sourceDocument.StampForeground);
-            var preview = ThumbnailRenderer.RenderPng(copy);
-            await Task.Run(() => _store.Save(
-                copy, destination, new SaveMetadata(_appVersion, created), preview));
+            copy = IndependentProjectImages.Prepare(copy, source.Path, _assetCatalog);
+            var preview = await Task.Run(() =>
+            {
+                using var images = new ExportStampImageSource(copy, source.Path, _assetCatalog);
+                var thumbnail = ThumbnailRenderer.RenderPng(copy, stamps: images);
+                _store.Save(copy, destination, new SaveMetadata(_appVersion, created), thumbnail);
+                return thumbnail;
+            });
             _recent.Touch(destination, copy.Id.Value, copy.Title, created, preview,
                 asTemplate ? "Карта из шаблона" : "Копия карты");
             LastError = "";

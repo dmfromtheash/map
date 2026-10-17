@@ -23,6 +23,15 @@ public static partial class MapProjectStore
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = false };
 
     private static int SchemaFor(MapDocument document) =>
+        document.Layers.OfType<BaseColorLayer>().Any(l => l.TextureId is not null)
+        || document.Checkpoints.Any(c => c.Snapshot.Layers.OfType<BaseColorLayer>().Any(l => l.TextureId is not null))
+            ? MapProjectFormat.BaseMaterialSchemaVersion :
+        document.Layers.OfType<LandLayer>().Any(l => l.PaintTiles.TileCount > 0)
+        || document.Checkpoints.Any(c => c.Snapshot.Layers.OfType<LandLayer>().Any(l => l.PaintTiles.TileCount > 0))
+            ? MapProjectFormat.LandPaintSchemaVersion :
+        document.Layers.OfType<ObjectLayer>().Any(l => !l.Roads.IsEmpty)
+        || document.Checkpoints.Any(c => c.Snapshot.Layers.OfType<ObjectLayer>().Any(l => !l.Roads.IsEmpty))
+            ? MapProjectFormat.RoadsSchemaVersion :
         document.Layers.OfType<ObjectLayer>().Any(l => !l.Rivers.IsEmpty)
         || document.Checkpoints.Any(c => c.Snapshot.Layers.OfType<ObjectLayer>().Any(l => !l.Rivers.IsEmpty))
             ? MapProjectFormat.RiversSchemaVersion :
@@ -898,6 +907,9 @@ public static partial class MapProjectStore
                 layerId,
                 bytesPerPixel: layer.Type == "Land" ? 1 : 4);
             ReadTileList(layer.Mask?.Tiles, maskPrefix, layerId, bytesPerPixel: 1);
+            if (layer.LandPaintTiles is not null && layer.Type != "Land")
+                throw new MapProjectCorruptedException("Only land can carry material paint tiles.");
+            ReadTileList(layer.LandPaintTiles, entryRoot + MapProjectFormat.LandPaintPrefix, layerId, bytesPerPixel: 4);
         }
         if (scene.StampForeground is not null && scene.StampForeground.Tiles is null)
         {
@@ -1628,6 +1640,9 @@ public static partial class MapProjectStore
             PlacementPaths = layer is ObjectLayer pathLayer && !pathLayer.PlacementPaths.IsEmpty
                 ? [.. pathLayer.PlacementPaths] : null,
             Rivers = layer is ObjectLayer riverLayer && !riverLayer.Rivers.IsEmpty ? [.. riverLayer.Rivers] : null,
+            Roads = layer is ObjectLayer roadLayer && !roadLayer.Roads.IsEmpty ? [.. roadLayer.Roads] : null,
+            SurfaceOrder = layer is ObjectLayer orderLayer && !orderLayer.SurfaceOrder.IsDefaultOrEmpty && !orderLayer.Roads.IsEmpty
+                ? [.. orderLayer.SurfaceOrder] : null,
             Id = layer.Id.ToString(),
             Type = layer switch
             {
@@ -1645,6 +1660,9 @@ public static partial class MapProjectStore
             Opacity = layer.Opacity,
             Blend = layer.Blend,
             Color = (layer as BaseColorLayer)?.Color,
+            BaseMaterial = layer is BaseColorLayer { TextureId: { } baseTexture } textured
+                ? new BaseMaterialDto { TextureId = baseTexture, Opacity = textured.TextureOpacity, Scale = textured.TextureScale }
+                : null,
             Objects = null,
             ObjectChunks = layer is ObjectLayer
                 ? [.. objectChunks[layer.Id.ToString()]]
@@ -1656,6 +1674,8 @@ public static partial class MapProjectStore
                 ? new MaskDto { Enabled = mask.Enabled, Tiles = ToTileDtos(mask.Tiles) }
                 : null,
             LandStyle = layer is LandLayer land ? ToLandStyleDto(land.EdgeStyle) : null,
+            LandPaintTiles = layer is LandLayer { PaintTiles.TileCount: > 0 } painted
+                ? ToTileDtos(painted.PaintTiles) : null,
             Level = layer is LandLayer { Level: not 0 } leveled ? leveled.Level : null,
             Grids = layer is GridLayer gridLayer
                 ? [.. gridLayer.Grids.Select(ToGridDto)]
@@ -1727,6 +1747,14 @@ public static partial class MapProjectStore
             : null,
         Line = sceneObject.Line is { } line ? ToLineDto(line) : null,
         Shape = sceneObject.Shape is { } shape ? ToShapeDto(shape) : null,
+        Room = sceneObject.Room is { } room ? new RoomStyleDto
+        {
+            CornerRadius = room.CornerRadius,
+            CapAssetSha256 = RequireOptionalSha256(room.CapAssetSha256, "room cap asset hash"),
+            CapScale = room.CapScale,
+            CapAngle = room.CapAngleDegrees,
+            CapShadow = room.CapShadow,
+        } : null,
         Text = sceneObject.Text is { } text ? ToTextDto(text) : null,
         Composition = sceneObject.Composition is { } composition ? ToCompositionDto(composition) : null,
         PlaceholderReason = sceneObject.PlaceholderReason,
@@ -1801,6 +1829,22 @@ public static partial class MapProjectStore
             filter.TextureAssetSha256, "filter texture asset hash"),
         TextureOpacity = filter.TextureOpacity,
         TextureScale = filter.TextureScale,
+        GradientMap = filter.GradientMap == new FilterGradientMap() ? null : new FilterGradientMapDto
+        {
+            Shadow = filter.GradientMap.ShadowColor,
+            Midtone = filter.GradientMap.MidtoneColor,
+            Highlight = filter.GradientMap.HighlightColor,
+            Strength = filter.GradientMap.Strength,
+        },
+        PostProcess = filter.PostProcess == new FilterPostProcess() ? null : new FilterPostProcessDto
+        {
+            Saturation = filter.PostProcess.Saturation,
+            Brightness = filter.PostProcess.Brightness,
+            Contrast = filter.PostProcess.Contrast,
+            Sharpness = filter.PostProcess.Sharpness,
+        },
+        ColorStrength = filter.ColorStrength == 1 ? null : filter.ColorStrength,
+        ColorPresetId = filter.ColorPresetId,
     };
 
     private static EditableCompositionDto ToCompositionDto(EditableComposition composition) => new()
@@ -1944,17 +1988,23 @@ public static partial class MapProjectStore
                 PlacementPaths = layer.PlacementPaths is null ? [] : [.. layer.PlacementPaths],
                 PlacementAreas = layer.PlacementAreas is null ? [] : [.. layer.PlacementAreas],
                 Rivers = layer.Rivers is null ? [] : [.. layer.Rivers],
+                Roads = layer.Roads is null ? [] : [.. layer.Roads],
+                SurfaceOrder = layer.SurfaceOrder is null ? [] : [.. layer.SurfaceOrder],
             },
-            "BaseColor" => new BaseColorLayer(
+            "BaseColor" => ToBaseMaterial(new BaseColorLayer(
                 id, name, layer.Visible, layer.Locked, layer.Opacity,
-                RequireString(layer.Color, "base color")),
+                RequireString(layer.Color, "base color")), layer.BaseMaterial),
             "Brush" => new BrushLayer(
                 id, name, layer.Visible, layer.Locked, layer.Opacity,
                 ToTileMap(layer.Tiles ?? [], entryRoot + MapProjectFormat.RasterPrefix, id, 4, tileEntries), mask),
             "Land" => new LandLayer(
                 id, name, layer.Visible, layer.Locked, layer.Opacity,
                 ToTileMap(layer.Tiles ?? [], entryRoot + MapProjectFormat.RasterPrefix, id, 1, tileEntries),
-                ToLandStyle(layer.LandStyle), mask) { Level = TerrainOrder.Clamp(layer.Level ?? 0) },
+                ToLandStyle(layer.LandStyle), mask)
+            {
+                Level = TerrainOrder.Clamp(layer.Level ?? 0),
+                PaintTiles = ToTileMap(layer.LandPaintTiles ?? [], entryRoot + MapProjectFormat.LandPaintPrefix, id, 4, tileEntries),
+            },
             "Grid" => new GridLayer(
                 id, name, layer.Visible, layer.Locked, layer.Opacity,
                 [.. (layer.Grids ?? []).Select(ToGrid)], mask),
@@ -2050,6 +2100,14 @@ public static partial class MapProjectStore
             : null,
         Line = dto.Line is { } line ? ToLine(line) : null,
         Shape = dto.Shape is { } shape ? ToShape(shape) : null,
+        Room = dto.Room is { } room ? new RoomStyle
+        {
+            CornerRadius = RequireFinite(room.CornerRadius, "room corner radius", 0, RoomStyle.MaxCornerRadius),
+            CapAssetSha256 = RequireOptionalSha256(room.CapAssetSha256, "room cap asset hash"),
+            CapScale = RequireFinite(room.CapScale, "room cap scale", 0.01, RoomStyle.MaxCapScale),
+            CapAngleDegrees = RequireFinite(room.CapAngle, "room cap angle", -360, 360),
+            CapShadow = room.CapShadow,
+        } : null,
         Text = dto.Text is { } text ? ToText(text) : null,
         Composition = dto.Composition is { } composition
             ? ToComposition(composition, allowUnknownObjectKinds)
@@ -2149,7 +2207,28 @@ public static partial class MapProjectStore
             filter.TextureAssetSha256, "filter texture asset hash"),
         TextureOpacity = filter.TextureOpacity,
         TextureScale = filter.TextureScale,
+        GradientMap = filter.GradientMap is not { } map ? new() : new FilterGradientMap
+        {
+            ShadowColor = RequireFilterColor(map.Shadow, "filter gradient shadow colour"),
+            MidtoneColor = RequireFilterColor(map.Midtone, "filter gradient midtone colour"),
+            HighlightColor = RequireFilterColor(map.Highlight, "filter gradient highlight colour"),
+            Strength = RequireFinite(map.Strength, "filter gradient strength", 0, 1),
+        },
+        PostProcess = filter.PostProcess is not { } post ? new() : new FilterPostProcess
+        {
+            Saturation = RequireFinite(post.Saturation, "filter saturation", -1, 1),
+            Brightness = RequireFinite(post.Brightness, "filter brightness", -1, 1),
+            Contrast = RequireFinite(post.Contrast, "filter contrast", -1, 1),
+            Sharpness = RequireFinite(post.Sharpness, "filter sharpness", 0, 1),
+        },
+        ColorStrength = RequireFinite(filter.ColorStrength ?? 1, "filter colour strength", 0, 1),
+        ColorPresetId = filter.ColorPresetId is { Length: > 0 and <= 64 } presetId ? presetId : null,
     };
+
+    private static string RequireFilterColor(string value, string field) =>
+        FilterColorEffects.IsColor(value)
+            ? value
+            : throw new MapProjectCorruptedException($"scene.json holds an invalid {field} \"{value}\".");
 
     private static EditableComposition ToComposition(
         EditableCompositionDto composition,
@@ -2246,6 +2325,7 @@ public static partial class MapProjectStore
         AssetSpacing = stroke.AssetSpacing,
         Hue = stroke.Hue,
         Saturation = stroke.Saturation,
+        BlocksLight = stroke.BlocksLight,
     };
 
     private static LineStyle ToLine(LineStyleDto line) => new(
@@ -2300,10 +2380,12 @@ public static partial class MapProjectStore
         AssetSpacing = stroke.AssetSpacing,
         Hue = stroke.Hue,
         Saturation = stroke.Saturation,
+        BlocksLight = stroke.BlocksLight,
     };
 
     private static bool HasInvalidLayerDto(LayerDto? layer) => layer is null
         || layer.Tiles?.Any(static tile => tile is null) == true
+        || layer.LandPaintTiles?.Any(static tile => tile is null) == true
         || layer.Mask is { Tiles: null }
         || layer.Mask?.Tiles.Any(static tile => tile is null) == true
         || layer.Grids is null && layer.Type == "Grid"
@@ -2437,6 +2519,12 @@ public static partial class MapProjectStore
                         TileEntryName(entryRoot + MapProjectFormat.MaskPrefix, layer.Id.ToString(), key.X, key.Y),
                         mask.Tiles.TryGet(key)!);
                 }
+            }
+            if (layer is LandLayer paintedLand)
+            {
+                foreach (var key in paintedLand.PaintTiles.Keys)
+                    yield return (TileEntryName(entryRoot + MapProjectFormat.LandPaintPrefix,
+                        layer.Id.ToString(), key.X, key.Y), paintedLand.PaintTiles.TryGet(key)!);
             }
         }
 
@@ -2618,7 +2706,8 @@ public static partial class MapProjectStore
         layer is ObjectLayer objectLayer ? objectLayer.Objects.Count : 0;
 
     private static int TileCount(MapLayer layer) =>
-        layer is IRasterContentLayer raster ? raster.ContentTiles.TileCount : 0;
+        (layer is IRasterContentLayer raster ? raster.ContentTiles.TileCount : 0)
+        + (layer is LandLayer land ? land.PaintTiles.TileCount : 0);
 
     private static LayerId LegacyBaseLayerId(string documentId)
     {

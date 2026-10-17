@@ -44,6 +44,16 @@ public sealed class ObjectOverviewCache : IDisposable
     private readonly HashSet<Key> _framePins = [];
     private readonly List<SKImage> _retired = [];
     private bool _disposeRequested;
+    private IntPtr _gpuContext;
+
+    /// <summary>Texture-backed entries belong to one Skia context, even on the same render thread.</summary>
+    public void BindGpuContext(IntPtr context)
+    {
+        EnsureOwnerThread();
+        if (_gpuContext == context) return;
+        foreach (var key in _entries.Keys.ToArray()) Remove(key, eviction: false);
+        _gpuContext = context;
+    }
 
     public void BeginFrame()
     {
@@ -156,7 +166,11 @@ public sealed class ObjectOverviewCache : IDisposable
 
     private void Trim(Key? protectedKey)
     {
-        var budget = Map.Core.Resources.WorkingMemoryBudget.Shared.IsUnderPressure ? 0 : _byteBudget;
+        // Keep a small working set even below the cautious OS reserve. Dropping every
+        // visible tile each frame makes the next frame rebuild it (and its atlas), causing
+        // both allocation churn and severe camera stalls while memory stays scarce.
+        var budget = Map.Core.Resources.WorkingMemoryBudget.Shared.IsUnderPressure
+            ? Math.Min(_byteBudget, 16L * 1024 * 1024) : _byteBudget;
         while (_entries.Count > _itemBudget || Bytes > budget)
         {
             var eligible = _entries.Where(pair => pair.Key != protectedKey && !_framePins.Contains(pair.Key)).ToArray();

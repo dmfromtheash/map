@@ -26,6 +26,7 @@ public sealed partial class EditorViewModel
     {
         get
         {
+            // The draft's own step and pattern are what the panel edits while drawing.
             if (_pathDraft is not null) return _pathDraft;
             var selected = SelectedEditablePath;
             return selected is not null && Session.Document.Layers.OfType<ObjectLayer>()
@@ -74,7 +75,7 @@ public sealed partial class EditorViewModel
             _pathAssets = references; _pathLayer = ActiveObjectLayer()?.Id;
             _pathDraft = new PlacementPath
             {
-                Name = "Путь: " + (SelectedSet?.Name ?? "штампы"), AssetSetId = _selectedSetId,
+                Name = "Путь: " + (SelectedSet?.Name ?? "ассеты"), AssetSetId = _selectedSetId,
                 VariantId = CurrentVariant?.Id, Variants = [.. sources], Request = request,
                 Seed = NextGestureSeed(), Spacing = Math.Max(1, Math.Round(request.BaseWidth * settings.SeriesSpacingPercent / 100)),
                 RotationDegrees = settings.RotationDegrees, ScalePercent = settings.ScalePercent,
@@ -103,15 +104,16 @@ public sealed partial class EditorViewModel
         _selectedPathId = draft.Id; _activeLayerId = layer.Id; _gestureCounter++;
         CancelEditablePathGesture(); PendingPlacement = null; Session.ClearSelection();
         LastPathChangedObjects = command.ChangedObjects; LastPathRegeneratedSegments = command.RegeneratedSegments;
+        if (SelectedEditablePath?.Members.Length > 0) RememberPlacedFamily();
         AfterEdit(); RaisePathState();
-        StatusDetail = "Путь создан. Перетаскивайте узлы; шаг и seed доступны ниже. Для ручной правки отделите штамп.";
+        StatusDetail = "Путь создан. Перетаскивайте узлы; интервал и рисунок — в настройках пути. Для ручной правки отделите ассет.";
         return true;
     }
 
     public void SelectEditablePath(Guid id)
     {
         CancelEditableAreaGesture(); _selectedAreaId = null;
-        CancelPlacement(); CancelEditablePathGesture();
+        CancelPlacement(); CancelEditablePathGesture(); RememberStampSettingsBeforeConstruction();
         var layer = Session.Document.Layers.OfType<ObjectLayer>().FirstOrDefault(l => l.PlacementPaths.Any(p => p.Id == id));
         if (layer is null) return;
         ActiveTool = EditorTool.Stamp; _selectedPathId = id; _activeLayerId = layer.Id;
@@ -121,6 +123,7 @@ public sealed partial class EditorViewModel
     private void SyncEditablePathSettings()
     {
         if (SelectedEditablePath is not { } path) return;
+        SyncPlacementFamily(path.AssetSetId, path.VariantId, path.Variants);
         _stampToolSettings = _stampToolSettings with { Mode = StampPlacementMode.Path,
             ScalePercent = path.ScalePercent, RotationDegrees = path.RotationDegrees, Sublayer = path.Sublayer,
             ObjectOpacity = path.Opacity, Style = path.Style, RandomizeVariant = path.Request.RandomizeVariant,
@@ -183,22 +186,42 @@ public sealed partial class EditorViewModel
     public void InsertEditablePathNode()
     { _pathInsert = true; StatusDetail = "Щёлкните по сегменту пути, чтобы добавить узел."; }
     public void PickEditablePathObject()
-    { _pathPickObject = true; StatusDetail = "Щёлкните по нужному штампу, затем нажмите «Отделить выбранный объект»."; }
+    { _pathPickObject = true; StatusDetail = "Щёлкните по нужному ассету, затем нажмите «Отделить выбранный объект»."; }
     public void DeleteEditablePathNode()
     {
+        if (RemoveLastPathDraftNode()) return;
         if (SelectedEditablePath is not { } path || _pathNode < 0 || _pathNode >= path.Nodes.Length) return;
         if (path.Nodes.Length <= 2) { StatusDetail = "Оставьте два узла или удалите весь путь."; return; }
         var next = path with { Nodes = path.Nodes.RemoveAt(_pathNode) };
         _pathNode = Math.Min(_pathNode, next.Nodes.Length - 1); CommitPathChange(next, "Удалить узел пути");
     }
+    /// <summary>The step back inside an unfinished path: the last node goes, never the map history.</summary>
+    private bool RemoveLastPathDraftNode()
+    {
+        if (!_pathCreating || _pathDraft is not { Nodes.Length: > 0 } draft) return false;
+        if (draft.Nodes.Length == 1)
+        {
+            CancelEditablePathGesture(); ArmStampPlacement();
+            StatusDetail = "Черновик пути пуст. Ставьте узлы кликами."; RaisePathState(); return true;
+        }
+        _pathDraft = draft with { Nodes = draft.Nodes.RemoveAt(draft.Nodes.Length - 1) };
+        _pathNode = _pathDraft.Nodes.Length - 1; UpdatePathPreview(); RaisePathState();
+        StatusDetail = $"Последний узел убран. Узлов: {_pathDraft.Nodes.Length}.";
+        return true;
+    }
     public void SetEditablePathSpacing(double value)
     {
         if (!double.IsFinite(value) || value < 1 || value > int.MaxValue) { StatusDetail = "Шаг должен быть целым числом от 1."; return; }
+        // The step of a path still being drawn applies to the draft, as it does for areas.
+        if (_pathCreating && _pathDraft is { } draft)
+        { _pathDraft = draft with { Spacing = Math.Round(value) }; UpdatePathPreview(); RaisePathState(); return; }
         if (SelectedEditablePath is { } p) CommitPathChange(p with { Spacing = Math.Round(value) }, "Изменить шаг пути");
     }
     public void SetEditablePathSeed(double value)
     {
         if (!double.IsFinite(value) || value < int.MinValue || value > int.MaxValue) return;
+        if (_pathCreating && _pathDraft is { } draft)
+        { _pathDraft = draft with { Seed = (int)Math.Round(value) }; UpdatePathPreview(); RaisePathState(); return; }
         if (SelectedEditablePath is { } p) CommitPathChange(p with { Seed = (int)Math.Round(value) }, "Изменить seed пути");
     }
     public void ApplyStampSettingsToEditablePath()
@@ -274,6 +297,7 @@ public sealed partial class EditorViewModel
     }
     private void RaisePathState()
     {
+        Raise(nameof(CanUndo)); Raise(nameof(CanRedo));
         Raise(nameof(EditablePaths)); Raise(nameof(SelectedEditablePath)); Raise(nameof(EditablePathSummary));
         Raise(nameof(IsCreatingEditablePath)); Raise(nameof(CanDetachPathObject));
         InvalidateScene(EditorChangeReason.CanvasInvalidation);

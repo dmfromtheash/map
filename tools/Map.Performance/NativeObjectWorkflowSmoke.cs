@@ -575,13 +575,13 @@ public sealed class NativeObjectWorkflowApplication : Application
         await SettleAsync();
         await NextFrameAsync(view);
         var shapePrimary = Named<Control>(view, "ObjectPrimarySection");
-        var shapeSlot = Named<ContentControl>(view, "SelectionKindSlot");
+        var shapeSlot = Named<Map.App.Controls.RetainedSlot>(view, "SelectionKindSlot");
         var mountedForShape = (shapeSlot?.Content as Control)?.Name;
         var shapeGetsTheSharedBlockWithoutTheBitmapOne = shapePrimary is not null
             && Named<Slider>(view, "ObjectLevelSlider") is not null
             && Named<Button>(view, "ObjectOwnerLayerSelector") is not null
             && mountedForShape != "StampObjectActions"
-            && Named<Button>(view, "StampReplaceAssetButton") is null;
+            && Named<Button>(view, "StampReplaceAssetButton") is not { IsEffectivelyVisible: true };
         editor.Undo();
         await SettleAsync();
 
@@ -963,13 +963,13 @@ public sealed class NativeObjectWorkflowApplication : Application
         Capture(view, panelScreenshot, 1_416, 939);
 
         // The objects tab of the working panel: the stack of rows with the level of each object.
-        if (Named<TabControl>(view, "EditorSideTabs") is { } sideTabs)
+        if (Named<Control>(view, "PanelSectionSwitcher") is not null)
         {
-            sideTabs.SelectedIndex = 1;
+            view.ShowPanelSection(Map.Presentation.ViewModels.PanelSection.Assets);
             await SettleAsync();
             await NextFrameAsync(view);
             Capture(view, Path.ChangeExtension(options.OutputPath, ".objectlist.png"), 1_416, 939);
-            sideTabs.SelectedIndex = 0;
+            view.ShowPanelSection(Map.Presentation.ViewModels.PanelSection.Layers);
             await SettleAsync();
         }
 

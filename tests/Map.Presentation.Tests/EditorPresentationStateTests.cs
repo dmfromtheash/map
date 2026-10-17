@@ -140,11 +140,7 @@ public class EditorPresentationStateTests
 
             Assert.False(string.IsNullOrWhiteSpace(name));
             Assert.False(string.IsNullOrWhiteSpace(hint));
-            if (tool == EditorTool.Land)
-            {
-                Assert.Empty(shortcut);
-            }
-            else
+            // Земля got its own key (P, the «З» key on a Russian layout) with the 2026-09-26 redesign.
             {
                 Assert.Single(shortcut);
                 Assert.True(keys.Add(shortcut), $"Tool key '{shortcut}' is used twice.");

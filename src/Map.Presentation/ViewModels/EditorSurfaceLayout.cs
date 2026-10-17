@@ -81,6 +81,8 @@ public static class EditorSurfaceLayout
             new EditorRailEntry("LandToolButton", EditorTool.Land, EditorRailEntryKind.Tool),
             // Rivers are terrain too: they follow Земля and precede the drawing tools.
             new EditorRailEntry("RiverToolButton", EditorTool.River, EditorRailEntryKind.Tool),
+            // Roads lie on the terrain like water does: the road tool sits right after the river one.
+            new EditorRailEntry("RoadToolButton", EditorTool.Road, EditorRailEntryKind.Tool),
         ],
         [
             new EditorRailEntry("LineToolButton", EditorTool.Line, EditorRailEntryKind.Tool),

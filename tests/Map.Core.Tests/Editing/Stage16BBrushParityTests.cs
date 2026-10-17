@@ -6,6 +6,16 @@ namespace Map.Core.Tests.Editing;
 public sealed class Stage16BBrushParityTests
 {
     [Fact]
+    public void Small_material_scale_is_not_clamped_to_the_old_low_resolution_limit()
+    {
+        var texture = new BrushTexture(3, 1, [255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255]);
+        var coverage = new byte[256 * 256]; coverage[1] = 255;
+        var pixels = RasterStrokeSession.RenderPreviewTile(new BrushSettings
+        { Texture = texture, TextureScale = 1.0 / 40, Color = "#FFFFFFFF" }, new(0, 0), coverage);
+        Assert.Equal(new byte[] { 0, 255, 0, 255 }, pixels.AsSpan(4, 4).ToArray());
+    }
+
+    [Fact]
     public void Live_preview_pixels_equal_commit_over_transparent_tiles()
     {
         var texture = new BrushTexture(2, 2,

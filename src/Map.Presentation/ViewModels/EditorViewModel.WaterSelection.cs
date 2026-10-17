@@ -148,6 +148,7 @@ public sealed partial class EditorViewModel
         if (lower is LandLayer land) return TerrainOrder.CoverageAt(land, x, y) > 0;
         if (lower is ObjectLayer objects)
             return objects.Objects.Any(o => o.Visible && objects.StateFor(o.Sublayer).Visible && SceneGeometry.Contains(o, x, y))
+                || objects.Roads.Any(r => r.Visible && r.Style.Opacity > 0 && RoadGeometry.Contains(r, x, y))
                 || objects.Rivers.Any(r => r.Visible && r.Style.Opacity > 0 && RiverGeometry.TryClosest(
                     RiverGeometry.Evaluate(r), x, y, 0, out _, out _, out _, out _, out _))
                 || objects.Rivers.Where(r => r.Visible && r.Style.Opacity > 0).Any(r =>
@@ -191,6 +192,7 @@ public sealed partial class EditorViewModel
         if (!additive)
         {
             _waterSelection.Clear();
+            ClearRoadSelection();
             if (Session.SelectedObjectIds.Count > 0)
             {
                 Session.ClearSelection();
@@ -332,6 +334,12 @@ public sealed partial class EditorViewModel
     /// </summary>
     public bool DeleteSelection()
     {
+        if (_roadSelection.Count > 0)
+        {
+            // Roads and water in one selection go together; a road alone follows its own level.
+            var roads = DeleteRoadSelection();
+            if (_waterSelection.Count == 0) return roads;
+        }
         if (_waterSelection.Count == 0)
         {
             if (Session.SelectedObjectIds.Count == 0)

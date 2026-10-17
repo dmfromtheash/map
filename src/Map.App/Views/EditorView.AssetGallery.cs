@@ -58,10 +58,11 @@ public sealed partial class EditorView
     private StackPanel _libraryTagSuggestionItems = null!;
     private Slider _libraryTileSizeSlider = null!;
     private Flyout _libraryFilterFlyout = null!;
+    private readonly List<Action> _quickFilterSyncs = [];
     public Window? AssetCatalogWindowForSmoke => _assetCatalogWindow;
     public int GalleryRealizedCards => _realizedGalleryTiles.Count;
     private sealed record CompactVariant(AssetVariant Variant, int Index);
-    private IReadOnlyList<AssetVariant>? _compactVariants;
+    private IReadOnlyList<StampFamilyVariant>? _compactVariants;
 
     // ------------------------------------------------------------------ window layout
 
@@ -222,10 +223,10 @@ public sealed partial class EditorView
         var row2 = new WrapPanel
         {
             Orientation = Orientation.Horizontal, ItemSpacing = 8, LineSpacing = 6,
-            Children = { searchHost, upload, addFilter, _libraryFilterChips, _clearFiltersButton },
+            Children = { searchHost, upload, RegionalPackButton("ImportRegionalPackButton"), addFilter, _libraryFilterChips, _clearFiltersButton },
         };
         _clearFiltersButton.VerticalAlignment = VerticalAlignment.Center;
-        var top = new StackPanel { Spacing = 8, Children = { row1, row2, _libraryDiagnostic } };
+        var top = new StackPanel { Spacing = 8, Children = { row1, row2, BuildQuickFilters(), _libraryDiagnostic } };
 
         // ---- bottom: count and the organisation of the chosen set
         var managementScroll = new ScrollViewer { MaxHeight = 200, Content = _selectedSetBlock, ClipToBounds = true,
@@ -237,8 +238,8 @@ public sealed partial class EditorView
         var bottom = new DockPanel { LastChildFill = true, Children = { _libraryCountText.Docked(Dock.Left), management } };
 
         var main = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto"), RowSpacing = 8,
-            Children = { top, _libraryGrid, bottom } };
-        Grid.SetRow(_libraryGrid, 1);
+            Children = { top, new Grid { Name="LibraryCardsHost", Children={_libraryGrid, BuildRegionalLibraryEmpty()} }, bottom } };
+        Grid.SetRow(main.Children[1], 1);
         Grid.SetRow(bottom, 2);
         var body = new Grid { Margin = new Thickness(12), ColumnDefinitions = new ColumnDefinitions("Auto,*"),
             ColumnSpacing = 12, Children = { navigator, main } };
@@ -246,9 +247,116 @@ public sealed partial class EditorView
         body.SizeChanged += (_, _) =>
         {
             navigator.Width = body.Bounds.Width < 900 ? 170 : 210;
-            managementScroll.MaxHeight = Math.Clamp(body.Bounds.Height * .18, 64, 220);
+            managementScroll.MaxHeight = Math.Clamp(body.Bounds.Height * .3, 64, 360);
         };
         return body;
+    }
+
+    /// <summary>
+    /// Quick switches right above the grid: «На этой карте», collection, tags, favourites and
+    /// «Архивные». They combine with the search box and with each other, like the filter menu.
+    /// </summary>
+    private Control BuildQuickFilters()
+    {
+        ToggleButton Quick(string name, string title, string hint, Func<bool> read, Action<bool> write)
+        {
+            var toggle = new ToggleButton { Content = new TextBlock { Text = title } }.Named(name).Classed("segment", "filter-chip");
+            AutomationProperties.SetName(toggle, title);
+            ToolTip.SetTip(toggle, hint);
+            toggle.Click += (_, _) => { write(!read()); SyncAssetList(); };
+            _quickFilterSyncs.Add(() => { toggle.IsChecked = read(); Ui.SetClass(toggle, "active", read()); });
+            return toggle;
+        }
+
+        var collectionText = new TextBlock { Text = "Коллекция: все" }.Named("QuickFilterCollectionText");
+        var collectionMenu = new MenuFlyout();
+        collectionMenu.Opening += (_, _) =>
+        {
+            collectionMenu.Items.Clear();
+            collectionMenu.Items.Add(MenuEntry("Все коллекции", () => { _editor.LibraryCollectionId = null; SyncAssetList(); }, "QuickCollection_All"));
+            void Add(IReadOnlyList<AssetCollectionNode> nodes, int depth)
+            {
+                foreach (var node in nodes)
+                {
+                    var id = node.Id;
+                    collectionMenu.Items.Add(MenuEntry(new string('\u00A0', depth * 3) + $"{node.Name} ({node.TotalCount})",
+                        () => { _editor.LibraryCollectionId = id; SyncAssetList(); }, "QuickCollection_" + Sanitize(id)));
+                    Add(node.Children, depth + 1);
+                }
+            }
+            Add(_editor.LibraryCollections, 0);
+        };
+        var collection = new Button
+        {
+            Content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6,
+                Children = { collectionText, MapIcons.Stroked(MapIcons.ChevronDown, 11) } },
+            Flyout = collectionMenu,
+        }.Named("QuickFilterCollection").Classed("compact");
+        AutomationProperties.SetName(collection, "Фильтр по коллекции");
+        ToolTip.SetTip(collection, "Показать только одну коллекцию (вместе с вложенными)");
+        _quickFilterSyncs.Add(() =>
+        {
+            collectionText.Text = _editor.LibraryCollectionId is { } id ? "Коллекция: " + _editor.LibraryCollectionTitle(id) : "Коллекция: все";
+            Ui.SetClass(collection, "active", _editor.LibraryCollectionId is not null);
+        });
+
+        var tagText = new TextBlock { Text = "Теги" }.Named("QuickFilterTagsText");
+        var tagMenu = new MenuFlyout();
+        tagMenu.Opening += (_, _) =>
+        {
+            tagMenu.Items.Clear();
+            if (_editor.LibraryTagChoices.Count == 0)
+            {
+                tagMenu.Items.Add(new MenuItem { Header = "Тегов пока нет", IsEnabled = false });
+                return;
+            }
+            foreach (var tag in _editor.LibraryTagChoices)
+            {
+                var captured = tag;
+                var item = MenuEntry(tag, () =>
+                {
+                    _editor.SetLibraryTagSelected(captured, !_editor.LibraryTags.Contains(captured, StringComparer.OrdinalIgnoreCase));
+                    SyncAssetList();
+                }, "QuickTag_" + Sanitize(tag));
+                item.ToggleType = MenuItemToggleType.CheckBox;
+                item.IsChecked = _editor.LibraryTags.Contains(tag, StringComparer.OrdinalIgnoreCase);
+                tagMenu.Items.Add(item);
+            }
+        };
+        var tags = new Button
+        {
+            Content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6,
+                Children = { tagText, MapIcons.Stroked(MapIcons.ChevronDown, 11) } },
+            Flyout = tagMenu,
+        }.Named("QuickFilterTags").Classed("compact");
+        AutomationProperties.SetName(tags, "Фильтр по тегам");
+        ToolTip.SetTip(tags, "Отметьте теги: внутри одной ветки подходит любой, разные ветки должны совпасть все");
+        _quickFilterSyncs.Add(() =>
+        {
+            tagText.Text = _editor.LibraryTags.Count == 0 ? "Теги" : $"Теги: {_editor.LibraryTags.Count}";
+            Ui.SetClass(tags, "active", _editor.LibraryTags.Count > 0);
+        });
+
+        return new WrapPanel
+        {
+            Orientation = Orientation.Horizontal, ItemSpacing = 6, LineSpacing = 6,
+            Children =
+            {
+                Quick("QuickFilterUsedInMap", "На этой карте", "Только ассеты, которые уже стоят на открытой карте",
+                    () => _editor.LibraryUsedInMapOnly, v => _editor.LibraryUsedInMapOnly = v),
+                collection,
+                tags,
+                Quick("QuickFilterFavorites", "★ Избранное", "Только отмеченные звёздочкой",
+                    () => _editor.LibraryFavoritesOnly, v => _editor.LibraryFavoritesOnly = v),
+                Quick("QuickFilterArchived", "Архивные", "Показать и наборы из архива (они помечены «в архиве»)",
+                    () => _editor.LibraryShowArchived, v => _editor.LibraryShowArchived = v),
+            },
+        }.Named("LibraryQuickFilters");
+    }
+
+    private void SyncQuickFilters()
+    {
+        foreach (var sync in _quickFilterSyncs) sync();
     }
 
     private static MenuItem MenuEntry(string title, Action action, string? name = null)
@@ -677,6 +785,17 @@ public sealed partial class EditorView
             Content = caption is null ? face : new DockPanel { Children = { caption.Docked(Dock.Bottom), face } },
         }.Classed("asset-tile");
         if (cell.Variant is not null) tile.Classes.Add("variant");
+        if (cell.Set.Archived && cell.Variant is null)
+        {
+            face.Opacity = 0.55;
+            face.Children.Add(new Border
+            {
+                Child = new TextBlock { Text = "в архиве", FontSize = 10 }, Padding = new Thickness(4, 0),
+                HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Bottom,
+                Margin = new Thickness(3, 0, 0, 3), IsHitTestVisible = false,
+            }.Classed("badge"));
+            title += " (в архиве)";
+        }
         if (cell.Set.Favorite && cell.Variant is null)
         {
             face.Children.Add(new TextBlock
@@ -699,6 +818,7 @@ public sealed partial class EditorView
         {
             e.Handled = true;
             // One click chooses and keeps the window: the side panel already shows the choice.
+            _editor.UseSinglePlacementForNewAsset();
             if (!_editor.ChooseGalleryVariant(cell.Set.SetId, cell.Variant?.Id)) return;
             RefreshGallerySelection();
             RefreshLibraryPanel();
@@ -787,7 +907,7 @@ public sealed partial class EditorView
         ItemTemplate = new FuncDataTemplate<CompactVariant[]>((row, _) =>
         {
             var panel = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
-            foreach (var cell in row ?? []) panel.Children.Add(BuildVariantChoice(cell.Variant, cell.Index, "StampVariant_", 44));
+            foreach (var cell in row ?? []) panel.Children.Add(BuildVariantChoice(cell.Variant, cell.Index, "StampVariant_", 44, stampFamily: true));
             return panel;
         }, supportsRecycling: false),
     };

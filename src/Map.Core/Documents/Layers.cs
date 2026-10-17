@@ -102,6 +102,18 @@ public sealed record BaseColorLayer : MapLayer
     /// <summary>Page colour as "#AARRGGBB".</summary>
     public string Color { get; init; }
 
+    /// <summary>
+    /// Optional material laid over the page colour - the grain and surf of an open sea. Null
+    /// keeps the plain colour every earlier map has.
+    /// </summary>
+    public string? TextureId { get; init; }
+
+    /// <summary>Strength of <see cref="TextureId"/>, 0..1.</summary>
+    public double TextureOpacity { get; init; } = 0.6;
+
+    /// <summary>World size of one material tile, see <see cref="MapFillTextures"/>.</summary>
+    public double TextureScale { get; init; } = MapFillTextures.DefaultWaterScale;
+
     public override LayerMask? Mask
     {
         get => null;
@@ -152,6 +164,17 @@ public sealed record ObjectLayer : MapLayer
     /// <summary>Editable rivers of this layer, drawn under its objects (Stage 19).</summary>
     public System.Collections.Immutable.ImmutableArray<River> Rivers { get; init; } = [];
 
+    /// <summary>Editable roads of this layer, drawn with the terrain under its objects (Stage 20).</summary>
+    public System.Collections.Immutable.ImmutableArray<Road> Roads { get; init; } = [];
+
+    /// <summary>
+    /// Explicit draw order of this layer's roads and water at one level, bottom first, by id.
+    /// Empty on every older map and whenever the order is the default one (roads, then water):
+    /// then <see cref="LayerSurfaceOrder.Resolve"/> derives it from the two lists, so a map
+    /// without roads looks exactly as it did before roads existed.
+    /// </summary>
+    public System.Collections.Immutable.ImmutableArray<Guid> SurfaceOrder { get; init; } = [];
+
     /// <summary>Only non-default states need to be stored; an absent band is visible and unlocked.</summary>
     public IReadOnlyList<ObjectSublayerState> SublayerStates { get; init; } = [];
 
@@ -165,10 +188,16 @@ public sealed record ObjectLayer : MapLayer
     {
         if (!PlacementPaths.IsEmpty || !PlacementAreas.IsEmpty)
             throw new InvalidOperationException("Перед дублированием слоя превратите его пути и области в обычные объекты.");
+        var rivers = Rivers.Select(river => (Old: river.Id, New: river.WithNewIds())).ToList();
+        var roads = Roads.Select(road => (Old: road.Id, New: road.WithNewIds())).ToList();
+        var remap = rivers.ToDictionary(p => p.Old, p => p.New.Id);
+        foreach (var pair in roads) remap[pair.Old] = pair.New.Id;
         return this with
         {
             Id = LayerId.New(), Objects = [.. Objects.Select(VectorGeometry.WithNewIds)],
-            Rivers = [.. Rivers.Select(river => river.WithNewIds())],
+            Rivers = [.. rivers.Select(p => p.New)],
+            Roads = [.. roads.Select(p => p.New)],
+            SurfaceOrder = [.. SurfaceOrder.Where(remap.ContainsKey).Select(id => remap[id])],
         };
     }
 
@@ -212,6 +241,16 @@ public sealed record BrushLayer : MapLayer, IRasterContentLayer
 /// <summary>Appearance evaluated from land coverage at render time; never baked into geometry.</summary>
 public sealed record LandEdgeStyle
 {
+    /// <summary>Initial appearance for newly created land; legacy deserialization keeps the defaults below.</summary>
+    public static LandEdgeStyle SoftWatercolor() => new()
+    {
+        FillColor = "#FFD6DBC0", FillTextureId = MapFillTextures.Foothill,
+        FillTextureOpacity = .9, FillTextureScale = 512,
+        OutlineColor = "#FFD9CEA6", OutlineWidth = 3,
+        InnerShadowOpacity = .025, OuterShadowOpacity = .05, ShadowBlur = 3,
+        RippleColor = "#487C9897", RippleWidth = .8, RippleSpacing = 4, RippleCount = 1,
+    };
+
     public string FillColor { get; init; } = "#FF8CA36B";
     public string OutlineColor { get; init; } = "#FF3F5131";
     public double OutlineWidth { get; init; } = 3;
@@ -266,10 +305,26 @@ public sealed record LandLayer : MapLayer, IRasterContentLayer
     }
 
     public static LandLayer CreateEmpty(LayerId id, string name) => new(
-        id, name, true, false, 1, TileMap.Empty(1), new LandEdgeStyle());
+        id, name, true, false, 1, TileMap.Empty(1), LandEdgeStyle.SoftWatercolor());
 
     public TileMap GeometryTiles { get; init; }
     public LandEdgeStyle EdgeStyle { get; init; }
+
+    private TileMap _paintTiles = TileMap.Empty(4);
+
+    /// <summary>Premultiplied RGBA material painting, clipped to the current carved land at render time.
+    /// Separate from coverage: erasing paint reveals the base material without erasing the coast.</summary>
+    public TileMap PaintTiles
+    {
+        get => _paintTiles;
+        init
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            if (value.BytesPerPixel != 4)
+                throw new ArgumentException("Land paint stores RGBA tiles.", nameof(value));
+            _paintTiles = value;
+        }
+    }
 
     /// <summary>
     /// This piece's level among the terrain (<see cref="TerrainOrder"/>). Land is drawn level

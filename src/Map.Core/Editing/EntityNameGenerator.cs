@@ -95,6 +95,17 @@ public static partial class EntityNameGenerator
             suffixFirst: true);
     }
 
+    /// <summary>"Дорога 1", "Дорога 2"… unique among road names of the document.</summary>
+    public static string Road(MapDocument document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        return Unique(
+            document.Layers.OfType<ObjectLayer>().SelectMany(layer => layer.Roads).Select(road => road.Name)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase),
+            "Дорога",
+            suffixFirst: true);
+    }
+
     /// <summary>"Река 1", "Река 2"… unique across every object layer of the document.</summary>
     public static string River(MapDocument document)
     {

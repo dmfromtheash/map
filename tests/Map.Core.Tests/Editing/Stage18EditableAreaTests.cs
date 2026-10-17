@@ -437,6 +437,32 @@ public sealed class Stage18EditableAreaTests
         Assert.False(HasOverlap(((ObjectLayer)session.Document.FindLayer(layer.Id)!).Objects));
         Assert.Same(obstacle, DocumentEditor.FindObject(session.Document, obstacle.Id));
     }
+
+    [Fact]
+    public void A_region_of_a_map_with_an_area_keeps_its_stamps_as_ordinary_objects_and_leaves_the_source_editable()
+    {
+        var session = Session(out var layer);
+        var area = Area();
+        session.Execute(new PlacementAreaCommand(layer.Id, area.Id, area, "create"));
+        var source = session.Document;
+        var members = Get(source).MemberCount;
+
+        var extracted = CanvasTransformService.ExtractRegion(
+            source, new CanvasRegion(500, 500, 600, 400), "Регион", DocumentId.New(), DateTimeOffset.UnixEpoch);
+
+        var result = extracted.Layers.OfType<ObjectLayer>().Single();
+        Assert.Empty(result.PlacementAreas);
+        Assert.Empty(result.PlacementPaths);
+        Assert.InRange(result.Objects.Count, 1, members - 1);
+        // Draw order of the forest survives: the region keeps the source order of its objects.
+        var sourceOrder = ((ObjectLayer)source.FindLayer(layer.Id)!).Objects
+            .Select((item, index) => (item.Id, index)).ToDictionary(p => p.Id, p => p.index);
+        var positions = result.Objects.Select(item => sourceOrder[item.Id]).ToArray();
+        Assert.Equal(positions.Order(), positions);
+        Assert.Same(source, session.Document);
+        Assert.Equal(members, Get(source).MemberCount);
+    }
+
     private static bool HasOverlap(IReadOnlyList<SceneObject> objects)
     {
         for (var i = 0; i < objects.Count; i++)

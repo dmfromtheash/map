@@ -70,6 +70,33 @@ public static class ApprovedArtwork
         return image;
     }
 
+    private static int _prewarmStarted;
+
+    /// <summary>
+    /// Decodes the tool rail artwork on a worker thread while the home screen is shown.
+    /// </summary>
+    /// <remarks>
+    /// The first editor of a session otherwise decodes every rail icon inside its constructor
+    /// (about 140 ms of the first open on the owner's PC). Decoding is behind the same lock as a
+    /// normal load, so a concurrent load simply waits for or reuses the finished bitmap.
+    /// </remarks>
+    public static void PrewarmInBackground()
+    {
+        if (System.Threading.Interlocked.Exchange(ref _prewarmStarted, 1) != 0)
+        {
+            return;
+        }
+
+        System.Threading.Tasks.Task.Run(() =>
+        {
+            foreach (var assetName in new HashSet<string>(IconByToken.Values, StringComparer.Ordinal))
+            {
+                try { LoadBitmap(assetName); }
+                catch (Exception) { return; } // The editor loads it again and reports a real failure.
+            }
+        });
+    }
+
     private static Bitmap LoadBitmap(string assetName)
     {
         lock (Sync)

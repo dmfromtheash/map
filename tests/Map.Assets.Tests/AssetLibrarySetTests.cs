@@ -119,6 +119,52 @@ public sealed class AssetLibrarySetTests : IDisposable
     }
 
     [Fact]
+    public void Archived_cards_are_kept_hidden_by_default_and_not_counted()
+    {
+        var catalog = NewCatalog();
+        var kept = catalog.ImportSet([Source("kept", SKColors.Navy)], "Оставить", new AssetImportOptions { Pack = "Архив" }, Stamp(0));
+        var old = catalog.ImportSet([Source("old", SKColors.Maroon)], "Старое", new AssetImportOptions { Pack = "Архив" }, Stamp(1));
+        Assert.DoesNotContain("\"archived\"", File.ReadAllText(Path.Combine(catalog.Root, "catalog.json")));
+
+        catalog.SetSetArchived(old.Id, true);
+        var reopened = new AssetCatalog(RootPath());
+        Assert.True(reopened.FindSet(old.Id)!.Archived);
+        Assert.Equal([kept.Id], reopened.Query(new AssetQuery()).Sets.Select(s => s.SetId));
+        Assert.Equal(2, reopened.Query(new AssetQuery { IncludeArchived = true }).Sets.Count);
+        Assert.True(reopened.Query(new AssetQuery { IncludeArchived = true, Text = "old" }).Sets.Single().Archived);
+        Assert.Equal(1, reopened.CountSets(AssetSourceFilter.All));
+        Assert.Equal(1, reopened.CollectionTree().Single().TotalCount);
+        Assert.Equal(2, reopened.Records.Count);
+
+        catalog.SetSetArchived(old.Id, false);
+        Assert.Equal(2, new AssetCatalog(RootPath()).Query(new AssetQuery()).Sets.Count);
+    }
+
+    [Fact]
+    public void Placement_passport_survives_a_restart_and_defaults_are_written_as_absent()
+    {
+        var catalog = NewCatalog();
+        var set = catalog.ImportSet(
+            [Source("p1", SKColors.Olive), Source("p2", SKColors.Teal)], "Паспорт", new AssetImportOptions(), Stamp(0));
+        var untouched = File.ReadAllText(Path.Combine(catalog.Root, "catalog.json"));
+        Assert.DoesNotContain("\"placement\"", untouched);
+
+        catalog.SetPlacementDefaults(set.Id, new AssetPlacementDefaults { CollisionFraction = 0.45 });
+        Assert.Equal(0.45, new AssetCatalog(RootPath()).FindSet(set.Id)!.Placement!.CollisionFraction);
+
+        catalog.SetPlacementDefaults(set.Id, new AssetPlacementDefaults { CollisionFraction = 7 });
+        Assert.Equal(1, new AssetCatalog(RootPath()).FindSet(set.Id)!.Placement!.CollisionFraction);
+
+        var flags = new AssetPlacementDefaults { RandomRotation = true, RandomSizePercent = 250, CanFlip = false, NoShadow = true };
+        catalog.SetPlacementDefaults(set.Id, flags);
+        Assert.Equal(flags with { RandomSizePercent = 100 }, new AssetCatalog(RootPath()).FindSet(set.Id)!.Placement);
+
+        catalog.SetPlacementDefaults(set.Id, new AssetPlacementDefaults());
+        Assert.Null(new AssetCatalog(RootPath()).FindSet(set.Id)!.Placement);
+        Assert.DoesNotContain("\"placement\"", File.ReadAllText(Path.Combine(catalog.Root, "catalog.json")));
+    }
+
+    [Fact]
     public async Task Set_favorite_and_recent_survive_a_catalog_restart()
     {
         var catalog = NewCatalog();
@@ -230,6 +276,24 @@ public sealed class AssetLibrarySetTests : IDisposable
     private AssetCatalog NewCatalog() => new(RootPath());
 
     private string RootPath() => Path.Combine(_root, "catalog");
+
+    [Fact]
+    public void Removing_a_used_variant_keeps_the_rest_of_its_set_and_saves()
+    {
+        var catalog = NewCatalog();
+        var set = catalog.ImportSet([Source("used", SKColors.Olive), Source("kept", SKColors.Teal)],
+            "Использованный", new AssetImportOptions(), Stamp(0));
+        var used = catalog.FindVariant(set.VariantIds[0])!;
+        catalog.TouchRecent(set.Id, used.Id, Stamp(1));
+
+        // Used to throw: the recent entry still pointed at the removed variant and the index refused to save.
+        catalog.RemoveRecord(used.Sha256);
+
+        var reopened = NewCatalog();
+        var left = Assert.Single(reopened.Sets);
+        Assert.Equal([set.VariantIds[1]], left.VariantIds);
+        Assert.Null(reopened.Find(used.Sha256));
+    }
 
     private static DateTimeOffset Stamp(int seconds) => DateTimeOffset.UnixEpoch.AddSeconds(seconds);
 

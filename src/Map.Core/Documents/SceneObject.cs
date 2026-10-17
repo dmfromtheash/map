@@ -166,6 +166,9 @@ public sealed record SceneObject
     /// <summary>Nondestructive vector expression when <see cref="Kind"/> is Shape.</summary>
     public ShapeStyle? Shape { get; init; }
 
+    /// <summary>«Комната»: rounded corners and wall caps on top of this shape; null for an ordinary shape.</summary>
+    public RoomStyle? Room { get; init; }
+
     /// <summary>
     /// Optional gradient for the plain primitives (Rectangle, Ellipse), which otherwise only have
     /// the flat <see cref="FillColor"/>. Null means the flat colour is used, so every existing

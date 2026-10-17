@@ -24,6 +24,7 @@ public static class EditorLabels
         EditorTool.Stamp => "Размещение ассета",
         EditorTool.Notes => "Заметки",
         EditorTool.River => "Река",
+        EditorTool.Road => "Дорога",
         _ => "Инструмент",
     };
 
@@ -40,6 +41,7 @@ public static class EditorLabels
         EditorTool.Stamp => "Выберите ассет в каталоге и щёлкните по холсту. Область и плотность настраиваются слева.",
         EditorTool.Notes => "Создавайте заметки карты или привязывайте их к выделенному объекту.",
         EditorTool.River => "Нажмите «Новая река» и ставьте узлы от истока к устью. Клик по руслу — приток, Enter — свободный конец.",
+        EditorTool.Road => "Нажмите «Новая дорога» и ставьте узлы. Клик по дороге — ветвь через общий узел, Enter — свободный конец.",
         _ => "",
     };
 
@@ -184,12 +186,22 @@ public static class EditorLabels
         _ => "Форма",
     };
 
+    /// <summary>One line on what the grid is for and where objects snap.</summary>
+    public static string GridGeometryHint(GridGeometry geometry) => geometry switch
+    {
+        Core.Documents.GridGeometry.Square => "Обычные клетки. Объекты и узлы прилипают к пересечениям линий.",
+        Core.Documents.GridGeometry.IsometricSquares => "Ромбы под 30° для изометрических карт. Объекты и узлы прилипают к вершинам ромбов.",
+        Core.Documents.GridGeometry.HexFlat => "Шестиугольники стоят столбцами, верх плоский — как у многих варгеймов. Привязка к вершинам шестиугольников.",
+        Core.Documents.GridGeometry.HexPointy => "Шестиугольники идут рядами, верх острый. Привязка к вершинам шестиугольников.",
+        _ => "",
+    };
+
     public static string GridGeometry(GridGeometry geometry) => geometry switch
     {
         Core.Documents.GridGeometry.Square => "Квадратная",
         Core.Documents.GridGeometry.IsometricSquares => "Изометрическая",
-        Core.Documents.GridGeometry.HexFlat => "Шестиугольная, плоский верх",
-        Core.Documents.GridGeometry.HexPointy => "Шестиугольная, острый верх",
+        Core.Documents.GridGeometry.HexFlat => "Гексы: вертикальные столбцы (плоский верх)",
+        Core.Documents.GridGeometry.HexPointy => "Гексы: горизонтальные ряды (острый верх)",
         _ => "Сетка",
     };
 
@@ -226,6 +238,11 @@ public static class EditorLabels
     public static string FilterPreset(FilterLayer layer) =>
         layer.Settings.Temperature > 0 ? "Тёплый" : "Холодный";
 
+    /// <summary>Caption of the colour look: the preset title, «Свой» after manual edits, or «Нет».</summary>
+    public static string FilterColorLook(FilterLayer layer) =>
+        FilterColorEffects.Preset(layer.Settings.ColorPresetId)?.Title
+        ?? (FilterColorEffects.HasGradient(layer.Settings) || FilterColorEffects.HasPost(layer.Settings) ? "Свой" : "Нет");
+
     // ------------------------------------------------------------------ counts
 
     /// <summary>Russian plural agreement, so the status bar never says «3 изменения» wrongly.</summary>
@@ -255,6 +272,10 @@ public static class EditorLabels
     /// <summary>Rivers and lakes of a layer, counted the way the layers panel says it.</summary>
     public static string Waters(int count) =>
         $"{count} {Plural(count, "водоём", "водоёма", "водоёмов")}";
+
+    /// <summary>Roads of a layer, counted the way the layers panel says it.</summary>
+    public static string RoadsCount(int count) =>
+        $"{count} {Plural(count, "дорога", "дороги", "дорог")}";
 
     public static string RandomAngleStep(Map.Core.Editing.StampRandomAngleStep step) => step switch
     {

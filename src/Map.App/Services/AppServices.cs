@@ -205,6 +205,19 @@ public sealed class AvaloniaExportDestinationPicker(Window owner) : IExportDesti
             return file?.TryGetLocalPath();
         });
 
+    public Task<string?> PickVttAsync(string suggestedFileName) =>
+        Dispatcher.UIThread.InvokeAsync(async () =>
+        {
+            var file = await owner.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+            {
+                Title = "Экспорт для виртуальных столов",
+                SuggestedFileName = suggestedFileName,
+                DefaultExtension = "dd2vtt",
+                FileTypeChoices = [new FilePickerFileType("Universal VTT") { Patterns = ["*.dd2vtt"] }],
+            });
+            return file?.TryGetLocalPath();
+        });
+
     public Task<string?> PickTilePackageAsync(string suggestedFolderName) =>
         Dispatcher.UIThread.InvokeAsync(async () =>
         {

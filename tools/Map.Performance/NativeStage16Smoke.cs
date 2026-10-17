@@ -493,14 +493,14 @@ public sealed class NativeStage16Application : Application
     {
         var canvas = view.Canvas;
         var context = Find<Control>(view, "ContextPanel");
-        var side = Find<TabControl>(view, "EditorSideTabs");
+        var side = Find<Control>(view, "PanelSectionSwitcher");
         var select = Find<Button>(view, "SelectToolButton");
         var canvasReady = canvas.IsVisible && canvas.Bounds.Width >= 120 && canvas.Bounds.Height >= 180;
         var keyboardPath = !string.IsNullOrWhiteSpace(ToolTip.GetTip(select)?.ToString())
             && !string.IsNullOrWhiteSpace(AutomationProperties.GetName(select));
         return canvasReady && context.IsVisible && context.Bounds.Width > 0
             && side.IsVisible && side.Bounds.Width > 0
-            && (side.ItemsSource as IEnumerable<object>)?.Count() == 2
+            && view.WorkspaceTabCount == 6
             && select.IsVisible && select.Bounds.Width > 0 && keyboardPath;
     }
 

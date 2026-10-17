@@ -28,9 +28,8 @@ public sealed partial class EditorView
     {
         _mapStatistics.Classes.Add("role-caption");
         _mapObjectCount.Classes.Add("role-caption");
-        _mapStatistics.Foreground = Brush.Parse("#9DD7EF");
-        _mapObjectCount.Foreground = Brush.Parse("#C8BCEF");
-        _frameRateStatus.Foreground = Brush.Parse("#F4BEAA");
+        _mapStatistics.Foreground = Brush.Parse("#E7C982");
+        _mapObjectCount.Foreground = Brush.Parse("#C2AE8E");
         _statisticsFlyout = new Flyout
         {
             Placement = PlacementMode.TopEdgeAlignedLeft,
@@ -65,7 +64,7 @@ public sealed partial class EditorView
         var button = new Button
         {
             Name = "MapStatisticsButton", Content = readouts, Flyout = _statisticsFlyout,
-            Background = Brush.Parse("#203B59"), BorderBrush = Brush.Parse("#436487"),
+            Background = Brush.Parse("#2A2019"), BorderBrush = Brush.Parse("#6E5532"),
             BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(7),
             Padding = new Thickness(4, 1), MinHeight = 0,
             VerticalAlignment = VerticalAlignment.Center,
@@ -91,7 +90,12 @@ public sealed partial class EditorView
     private void SyncFrameStatistics()
     {
         var frame = _canvas.ReadFrameStatistics();
-        _frameRateStatus.Text = frame.Fps is { } fps ? $"FPS {fps:0}" : "FPS — покой";
+        // The rate is shown only while the map is actually moving. At rest two stray repaints
+        // used to read as "FPS 1" in an alarm colour, which looked like a failure.
+        var moving = frame.Fps is not null && _canvas.RecentFrameCount() >= 6;
+        _frameRateStatus.IsVisible = moving;
+        _frameRateStatus.Text = moving ? $"FPS {frame.Fps:0}" : "FPS — покой";
+        _frameRateStatus.Foreground = Brush.Parse(moving && frame.Fps < 20 ? "#E5907A" : "#C2AE8E");
         ToolTip.SetTip(_frameRateStatus, $"Последняя отрисовка холста: {frame.RenderMilliseconds:0.0} мс. " +
             "FPS измеряется по завершённым обновлениям карты; это не частота монитора.");
         if (_statisticsFlyout.IsOpen) SyncMapStatistics();
@@ -108,9 +112,9 @@ public sealed partial class EditorView
         _mapObjectCount.Text = $"Объектов {objects:N0}";
         _saveState.Foreground = Brush.Parse(_editor.SaveState switch
         {
-            Map.Presentation.ViewModels.SaveState.Saved => "#A8D8B6",
-            Map.Presentation.ViewModels.SaveState.SaveFailed => "#FFA9A9",
-            _ => "#F1D18A",
+            Map.Presentation.ViewModels.SaveState.Saved => "#86C49A",
+            Map.Presentation.ViewModels.SaveState.SaveFailed => "#E5907A",
+            _ => "#E3B565",
         });
         _statisticsDetails.Text = $"Размер: {canvas.Width:N0} × {canvas.Height:N0} {unit}\n" +
             $"Объектов: {objects:N0}\nСлоёв: {document.Layers.Count}\n" +

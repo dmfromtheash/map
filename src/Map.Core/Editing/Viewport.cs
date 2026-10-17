@@ -8,7 +8,14 @@ namespace Map.Core.Editing;
 public sealed class Viewport
 {
     public const double MinScale = 0.005;
-    public const double MaxScale = 64.0;
+
+    /// <summary>
+    /// 1600 %. One world unit is one document pixel and a stamp draws from at most four source
+    /// pixels per unit (DEC-035), so past 400 % the view only magnifies; sixteen times leaves a
+    /// generous margin for placing and aligning small objects without promising detail that is
+    /// not there. Old documents keep their geometry: the limit is session state, never saved.
+    /// </summary>
+    public const double MaxScale = 16.0;
     private double _effectiveMinScale = MinScale;
 
     public double Scale { get; private set; } = 1.0;

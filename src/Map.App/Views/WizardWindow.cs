@@ -10,6 +10,8 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Map.App.Controls;
 using Map.Core.Documents;
+using Map.Assets;
+using Map.Presentation.Services;
 using Map.Presentation.ViewModels;
 
 namespace Map.App.Views;
@@ -25,10 +27,10 @@ public sealed class WizardWindow : Window
 
     private static readonly IReadOnlyList<SizePreset> Presets =
     [
-        new("Standard", "Обычная", "1920 × 1080", 1920, 1080),
-        new("Large", "Крупная", "4096 × 4096", 4096, 4096),
-        new("Huge", "Очень крупная", "16384 × 16384", 16384, 16384),
-        new("Max", "Максимальная", "131072 × 131072", 131072, 131072),
+        new("Standard", "Обычная", "1920 × 1080 · один экран", 1920, 1080),
+        new("Large", "Крупная", "4096 × 4096 · 8 экранов", 4096, 4096),
+        new("Huge", "Очень крупная", "16384 × 16384 · 130 экранов", 16384, 16384),
+        new("Max", "Максимальная", "131072 × 131072 · предел формата", 131072, 131072),
     ];
 
     private static readonly IReadOnlyList<(string Key, string Title)> Backgrounds =
@@ -47,12 +49,19 @@ public sealed class WizardWindow : Window
     private readonly TextBox _heightBox = new() { Name = "WizardHeightBox" };
     private readonly ComboBox _backgroundCombo;
     private readonly TextBlock _error = new() { Name = "WizardErrorText", TextWrapping = TextWrapping.Wrap };
+    private readonly TextBlock _sizeHint = new() { Name = "WizardSizeHint", TextWrapping = TextWrapping.Wrap };
     private Control _customBlock = null!;
+    private Control _backgroundBlock = null!;
     private string _presetKey = "Standard";
     private MapDocument? _created;
+    private readonly AssetCatalog? _catalog;
+    private readonly ComboBox _startingPoint = new() { Name = "WizardStartingPoint", ItemsSource = new[]
+        { "Чистый холст", "Тихий атлас · пустой регион", "Тихий атлас · долина Листвы" }, SelectedIndex = 0 };
+    public MapDocument? CreatedDocument => _created;
 
-    private WizardWindow()
+    public WizardWindow(AssetCatalog? catalog = null)
     {
+        _catalog = catalog;
         Title = "Новая карта";
         Name = "WizardWindow";
         Width = 1080;
@@ -78,6 +87,7 @@ public sealed class WizardWindow : Window
 
         _error.Classes.Add("danger");
         _error.IsVisible = false;
+        _backgroundBlock = BuildBackgroundBlock();
 
         Content = Ui.WorkspaceBackdrop(new DockPanel
         {
@@ -103,7 +113,7 @@ public sealed class WizardWindow : Window
                         Child = new StackPanel
                         {
                             Spacing = 20,
-                            Children = { BuildNameBlock(), BuildSizeBlock(), BuildBackgroundBlock(), _backgroundCombo },
+                            Children = { BuildNameBlock(), BuildStartingPoint(), BuildSizeBlock(), _backgroundBlock, _backgroundCombo },
                         },
                     },
                 },
@@ -112,6 +122,25 @@ public sealed class WizardWindow : Window
 
         SyncPresetButtons();
         SyncBackgroundButtons();
+    }
+
+    private Control BuildStartingPoint()
+    {
+        _startingPoint.IsEnabled = _catalog is not null && RegionalArtPack.IsAvailable;
+        _startingPoint.SelectionChanged += (_, _) =>
+        {
+            if (_backgroundBlock is not null) _backgroundBlock.IsVisible = _startingPoint.SelectedIndex == 0;
+            if (_startingPoint.SelectedIndex <= 0) { SyncPresetButtons(); return; }
+            _presetKey = "Custom"; _widthBox.Text = "4096"; _heightBox.Text = "3072";
+            _titleBox.Text = _startingPoint.SelectedIndex == 2 ? "Долина Листвы" : "Новый регион";
+            SyncPresetButtons();
+        };
+        AutomationProperties.SetName(_startingPoint, "С чего начать карту");
+        return Ui.Section("С чего начать", new StackPanel { Spacing = 6, Children = {
+            _startingPoint,
+            new TextBlock { Text = "Регион подключает оригинальный комплект «Тихий атлас» в вашу библиотеку. " +
+                "Пустой регион задаёт палитру и слои. Долина — самостоятельная карта с редактируемыми лесами, хребтами, поселениями, реками и дорогами.",
+                TextWrapping = TextWrapping.Wrap }.Classed("muted", "role-caption") } });
     }
 
     private static Control BuildIntro() => new DockPanel
@@ -132,7 +161,7 @@ public sealed class WizardWindow : Window
                     new TextBlock { Text = "Новая карта" }.Classed("role-screen"),
                     new TextBlock
                     {
-                        Text = "Выберите размер и фон. Точные значения можно задать в своём размере.",
+                        Text = "Выберите основу и размер. Содержимое и оформление карты можно менять позже.",
                         TextWrapping = TextWrapping.Wrap,
                     }.Classed("muted"),
                 },
@@ -204,12 +233,7 @@ public sealed class WizardWindow : Window
                             },
                         },
                     },
-                    new TextBlock
-                    {
-                        Text = $"Допустимо от {NewMapWizardViewModel.MinDimension} " +
-                               $"до {NewMapWizardViewModel.MaxDimension} пикселей по каждой стороне.",
-                        TextWrapping = TextWrapping.Wrap,
-                    }.Classed("faint", "role-caption"),
+                    _sizeHint.Classed("faint", "role-caption"),
                 },
             },
         }.Classed("group").Named("WizardCustomSize");
@@ -223,6 +247,11 @@ public sealed class WizardWindow : Window
             {
                 new TextBlock { Text = "Размер холста" }.Classed("role-section"),
                 strip,
+                new TextBlock
+                {
+                    Text = "Крупный холст даёт больше места для деталей. «Свой размер» позволяет задать точные ширину и высоту.",
+                    TextWrapping = TextWrapping.Wrap,
+                }.Classed("faint", "role-caption").Named("WizardSizeMeaning"),
                 _customBlock,
             },
         };
@@ -233,7 +262,7 @@ public sealed class WizardWindow : Window
         var button = new ToggleButton
         {
             HorizontalAlignment = HorizontalAlignment.Stretch,
-            Height = 156,
+            Height = 102,
             Margin = new Thickness(4),
             Content = new StackPanel
             {
@@ -243,9 +272,9 @@ public sealed class WizardWindow : Window
                 {
                     new Border
                     {
-                        Height = 64,
+                        Height = 28,
                         Child = ApprovedArtwork.Image("map",
-                            key switch { "Standard" => 48, "Large" => 54, "Huge" => 60, "Max" => 64, _ => 52 }, 64),
+                            28, 28),
                     },
                     new TextBlock
                     {
@@ -376,7 +405,12 @@ public sealed class WizardWindow : Window
                 },
             },
         }.Classed("primary", "wizard-action");
-        create.Click += (_, _) => Create();
+        create.Click += async (_, _) =>
+        {
+            create.IsEnabled = false;
+            try { await CreateAsync(); }
+            finally { create.IsEnabled = true; }
+        };
         AutomationProperties.SetName(create, "Создать карту");
         create.IsDefault = true;
 
@@ -432,8 +466,14 @@ public sealed class WizardWindow : Window
 
     private void SyncPresetButtons()
     {
+        var regional = _startingPoint.SelectedIndex > 0;
+        _sizeHint.Text = regional
+            ? "Для региона — от 512 до 8192 пикселей по каждой стороне."
+            : $"Допустимо от {NewMapWizardViewModel.MinDimension} до {NewMapWizardViewModel.MaxDimension} пикселей по каждой стороне.";
         foreach (var button in _presetButtons)
         {
+            var preset = Presets.FirstOrDefault(p => button.Name == "WizardPreset" + p.Key);
+            button.IsEnabled = !regional || preset is null || (preset.Width <= 8192 && preset.Height <= 8192);
             var active = button.Name == "WizardPreset" + _presetKey;
             Ui.SetClass(button, "active", active);
             button.IsChecked = active;
@@ -458,7 +498,7 @@ public sealed class WizardWindow : Window
         }
     }
 
-    private void Create()
+    private async Task CreateAsync()
     {
         _wizard.Title = _titleBox.Text ?? "";
         _wizard.WidthText = _widthBox.Text ?? "";
@@ -478,14 +518,31 @@ public sealed class WizardWindow : Window
             return;
         }
 
-        _created = document;
+        if (_startingPoint.SelectedIndex > 0 && _catalog is not null)
+        {
+            if (document.Canvas.Width is < 512 or > 8192 || document.Canvas.Height is < 512 or > 8192)
+            {
+                _error.Text = "Для иллюстрированного региона выберите от 512 до 8192 пикселей по каждой стороне.";
+                _error.IsVisible = true; return;
+            }
+            _error.Text = "Подключение комплекта и создание региона…"; _error.IsVisible = true;
+            var illustrated = _startingPoint.SelectedIndex == 2;
+            try
+            {
+                _created = await Task.Run(() => RegionalMapFactory.Create(RegionalArtPack.Import(_catalog),
+                    _catalog, document.Title, document.Canvas.Width, document.Canvas.Height, illustrated));
+            }
+            catch (Exception error) when (error is System.IO.IOException or UnauthorizedAccessException or InvalidOperationException)
+            { _error.Text = "Не удалось создать регион: " + error.Message; return; }
+        }
+        else _created = document;
         Close();
     }
 
     /// <summary>Returns the created blank document, or null when the user cancelled.</summary>
-    public static async Task<MapDocument?> ShowAsync(Window owner)
+    public static async Task<MapDocument?> ShowAsync(Window owner, AssetCatalog? catalog = null)
     {
-        var window = new WizardWindow();
+        var window = new WizardWindow(catalog);
         await window.ShowDialog(owner);
         return window._created;
     }

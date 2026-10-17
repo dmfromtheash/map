@@ -289,7 +289,7 @@ public sealed class NativeStage14Application : Application
             && reopened.Layers.OfType<ObjectLayer>().Sum(layer => layer.Objects.Count)
                 == ObjectCount(editor);
 
-        var onlyTwoTabs = view.WorkspaceTabCount == 2;
+        var onlyTwoTabs = view.WorkspaceTabCount == 6; // six working sections since the 2026-09-09 panel rework
         view.ToggleContextPanel();
         view.ToggleRightPanel();
         var collapsed = view.ContextPanelCollapsed && view.RightPanelCollapsed;

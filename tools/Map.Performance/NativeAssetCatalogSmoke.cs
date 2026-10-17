@@ -16,6 +16,7 @@ using Map.Persistence;
 using Map.Persistence.Recovery;
 using Map.Presentation.Services;
 using Map.Presentation.ViewModels;
+using Map.Rendering;
 
 namespace Map.Performance;
 
@@ -28,9 +29,8 @@ internal sealed class NativeAssetCatalogReport
 }
 
 /// <summary>
-/// The asset catalog with the pre-existing basic shapes and nature samples: the catalog opens
-/// grouped by collection, one click chooses, a double click returns to the canvas with the ghost
-/// armed, and four stamps land on the map at two zooms.
+/// An empty library first, then explicit imports of existing diagnostic fixtures into its own
+/// isolated catalog. Exercises the real gallery and stamp tool without reinstalling product art.
 /// </summary>
 internal static class NativeAssetCatalogSmoke
 {
@@ -76,17 +76,22 @@ public sealed class AssetCatalogApplication : Application
         Directory.CreateDirectory(_workspace);
         Environment.SetEnvironmentVariable("MAP_UI_TEST_MODE", "1");
         Environment.SetEnvironmentVariable("MAP_UI_TEST_PROFILE_ROOT", Path.Combine(_workspace, "profile"));
-        // A fresh isolated catalog using only the pre-existing starter pack.
+        // Opening a fresh catalog never installs content.
         var catalogRoot = Path.Combine(_workspace, "catalog-" + Guid.NewGuid().ToString("N"));
         _catalog = new AssetCatalog(catalogRoot);
-        StarterPackBootstrapper.EnsureInstalled(_catalog, DateTimeOffset.UnixEpoch);
-        AtlasArtPack.EnsureInstalled(_catalog, DateTimeOffset.UnixEpoch);
         _window = new Window { Width = 1440, Height = 900, Title = "Map — каталог ассетов", ShowActivated = false,
             ShowInTaskbar = false, WindowStartupLocation = WindowStartupLocation.Manual, Position = new PixelPoint(-32000, -32000) };
         var document = new MapDocument(DocumentId.New(), "Каталог ассетов", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(1024, 768, "px", "#FFE9E0C8"),
             [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFE9E0C8"),
                 new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, [])]);
+        if (Options.Profile == "native-empty-artwork")
+            document = document with { Layers = document.Layers.Append(
+                LandLayer.CreateEmpty(LayerId.New(), "Земля") with
+                {
+                    GeometryTiles = TileMap.Empty(1).With(new TileKey(0, 0),
+                        Enumerable.Repeat((byte)255, TileMap.TileSize * TileMap.TileSize).ToArray()),
+                }).ToArray() };
         _editor = new EditorViewModel(document, null, false, new ProjectStore(new RecoveryJournal(Path.Combine(_workspace, "recovery"))),
             new LocalRecent(), new LocalPicker(Path.Combine(_workspace, "catalog.mapproj")), new LocalPrompts(), new LocalLog(),
             assetCatalog: _catalog, localPreferences: new EditorLocalPreferences(PrimaryAutosaveEnabled: false));
@@ -111,16 +116,39 @@ public sealed class AssetCatalogApplication : Application
     private async Task Execute()
     {
         await Settle();
-        // 1. The existing starter content remains available after removal of the rejected art.
-        Check("original sets plus nine atlas artworks", _catalog.Sets.Count == 12);
-        Check("three styles with three categories each", _catalog.CollectionTree().Count(c => c.Children.Count == 3 && c.TotalCount == 3) == 3);
-        Check("rejected art is not generated", !Directory.Exists(Path.Combine(_catalog.Root, "starter-pack-source", "art")));
+        Check("fresh library is ready and empty", _catalog.Status == AssetLibraryStatus.Ready
+            && _catalog.Records.Count == 0 && _catalog.Sets.Count == 0);
+        Check("fresh library has no collections or recent cards", _catalog.Collections.Count == 0 && _catalog.Recent.Count == 0);
+        Check("no former artwork is embedded", !typeof(AssetCatalog).Assembly.GetManifestResourceNames()
+            .Any(name => name.EndsWith(".png", StringComparison.OrdinalIgnoreCase)));
         _editor.RefreshLibrary(); _view.RefreshLibraryPanel();
 
-        // 2. The catalog window, grouped by collection, tiles realised only for what is on screen.
         _editor.ActiveTool = EditorTool.Stamp; await Settle();
         _view.OpenAssetCatalog(); await Task.Delay(400);
         var window = _view.AssetCatalogWindowForSmoke!; window.UpdateLayout(); await Task.Delay(300);
+        Check("empty catalog window opens without asset cards", window.IsVisible
+            && _editor.LibrarySets.Count == 0 && _view.GalleryRealizedCards == 0);
+        Capture(window, "empty-gallery");
+
+        if (Options.Profile == "native-empty-artwork")
+        {
+            Check("empty catalog does not offer the removed regional pack", !window.GetVisualDescendants().OfType<Button>()
+                .Any(b => b.Name is "ImportRegionalPackButton" or "EmptyLibraryRegionalPackButton" && b.IsVisible));
+            window.Close();
+            await CheckEmptyArtwork();
+            return;
+        }
+
+        // Test fixtures are deliberately imported only into this isolated smoke catalog.
+        string Fixture(int number) => Path.Combine(Environment.CurrentDirectory, "tests", "fixtures", "assets", $"diagnostic-stamp-{number:00}.png");
+        _catalog.ImportSet([Fixture(1), Fixture(2), Fixture(3)], "Диагностические варианты",
+            new AssetImportOptions { Pack = "Проверка вариантов", Tags = ["Тема/Фигуры"] }, DateTimeOffset.UnixEpoch);
+        var sample4 = _catalog.ImportSet([Fixture(4)], "Диагностический образец 4",
+            new AssetImportOptions { Pack = "Проверка одиночных", Tags = ["Тема/Образцы"] }, DateTimeOffset.UnixEpoch);
+        var sample5 = _catalog.ImportSet([Fixture(5)], "Диагностический образец 5",
+            new AssetImportOptions { Pack = "Проверка одиночных", Tags = ["Тема/Образцы"] }, DateTimeOffset.UnixEpoch);
+        _editor.RefreshLibrary(); _view.RefreshLibraryPanel(); await Settle();
+        Check("explicit diagnostic import creates three sets", _catalog.Records.Count == 5 && _catalog.Sets.Count == 3);
         Check("catalog groups by collection", _editor.LibraryGrouping == AssetGrouping.Collection
             && window.GetVisualDescendants().OfType<Border>().Count(b => b.Name?.StartsWith("LibraryGroupHeader_", StringComparison.Ordinal) == true) >= 2);
         Check("tiles realised and bounded", _view.GalleryRealizedCards is > 0 and < 200);
@@ -129,28 +157,62 @@ public sealed class AssetCatalogApplication : Application
 
         var mine = window.GetVisualDescendants().OfType<Avalonia.Controls.Primitives.ToggleButton>().Single(b => b.Name == "Collection_SourceMine");
         mine.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Settle();
-        Check("My source is separate", _editor.LibrarySource == AssetSourceFilter.Mine && _editor.LibrarySets.Count == 0);
+        Check("explicit imports appear under My source", _editor.LibrarySource == AssetSourceFilter.Mine && _editor.LibrarySets.Count == 3);
         _editor.LibrarySource = AssetSourceFilter.BuiltIn;
         _editor.LibraryGrouping = AssetGrouping.None;
-        _editor.SetLibraryTagSelected("Карта/Региональная", true);
-        _view.RefreshLibraryPanel(); await Settle(); await WaitForThumbnails(window);
-        Check("all nine atlas cards available", _editor.LibrarySets.Count == 9);
-        Capture(window, "atlas-gallery");
-        _editor.SetLibraryTagSelected("Стиль/Атлас пером", true);
-        _editor.SetLibraryTagSelected("Тема/Горы", true);
-        _editor.SetLibraryTagSelected("Тема/Деревья", true);
         _view.RefreshLibraryPanel(); await Settle();
-        Check("tag branches intersect and choices combine", _editor.LibrarySets.Count == 2);
+        Check("Map source stays empty after explicit import", _editor.LibrarySets.Count == 0);
+        _editor.LibrarySource = AssetSourceFilter.Mine;
+        _editor.SetLibraryTagSelected("Тема/Образцы", true);
+        _view.RefreshLibraryPanel(); await Settle();
+        Check("tag filter selects diagnostic samples", _editor.LibrarySets.Count == 2);
         _editor.ClearLibraryFilters();
         _editor.LibraryGrouping = AssetGrouping.Collection;
-        _editor.LibraryCollectionId = _catalog.Sets.Single(s => s.Name == StarterPackBootstrapper.PackName).CollectionId;
+        _editor.LibraryCollectionId = _catalog.Sets.Single(s => s.Name == "Диагностические варианты").CollectionId;
         _view.RefreshLibraryPanel(); await Settle(); await WaitForThumbnails(window);
 
         // 3. One click chooses and keeps the window; the side panel already shows the choice.
-        var painted = _catalog.Sets.Single(s => s.Name == StarterPackBootstrapper.PackName);
+        var painted = _catalog.Sets.Single(s => s.Name == "Диагностические варианты");
         var tile = window.GetVisualDescendants().OfType<Button>().First(b => b.Name == "GalleryCover_" + Sanitize(painted.Id));
         tile.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Settle();
         Check("one click chooses and keeps the catalog", window.IsVisible && _editor.SelectedSetId == painted.Id && _editor.CurrentVariant is not null);
+        // The passport of the chosen card, edited in the catalog window: the tool takes it at once.
+        var rotationToggle = FindIn<Avalonia.Controls.Primitives.ToggleButton>(window, "PassportRandomRotationToggle");
+        rotationToggle.BringIntoView(); await Settle();
+        rotationToggle.IsChecked = true;
+        rotationToggle.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Settle();
+        var sizeBox = FindIn<TextBox>(window, "PassportRandomSizeSliderBox");
+        sizeBox.Text = "40";
+        sizeBox.RaiseEvent(new KeyEventArgs { RoutedEvent = InputElement.KeyDownEvent, Key = Key.Enter }); await Settle();
+        var passport = _catalog.FindSet(painted.Id)!.Placement;
+        Check("passport flags saved from the catalog window", passport is { RandomRotation: true, RandomSizePercent: 40 });
+        Check("tool takes passport flags as starting values", _editor.StampRotationJitterDegrees == 180 && _editor.StampSizeJitterPercent == 40);
+        await WaitForThumbnails(window);
+        Capture(window, "passport");
+
+        // Quick filters above the grid, with the archive button of the chosen card.
+        void Press(string name)
+        {
+            var control = FindIn<Button>(window, name);
+            if (control is Avalonia.Controls.Primitives.ToggleButton toggle) toggle.IsChecked = !(toggle.IsChecked == true);
+            control.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        }
+        Press("SetArchiveButton"); await Settle();
+        Check("archive button hides the card", _catalog.FindSet(painted.Id)!.Archived
+            && _editor.LibrarySets.All(s => s.SetId != painted.Id) && _catalog.Records.Count == 5);
+        Press("QuickFilterArchived"); await Settle(); await WaitForThumbnails(window);
+        Check("archived switch shows the card marked", _editor.LibraryShowArchived
+            && _editor.LibrarySets.Any(s => s.SetId == painted.Id && s.Archived)
+            && window.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "в архиве"));
+        Capture(window, "archived");
+        Press("SetArchiveButton"); await Settle();
+        Press("QuickFilterArchived"); await Settle();
+        Check("card returns from the archive", !_catalog.FindSet(painted.Id)!.Archived && !_editor.LibraryShowArchived
+            && _editor.LibrarySets.Any(s => s.SetId == painted.Id));
+        Press("QuickFilterUsedInMap"); await Settle();
+        Check("used on this map is empty before placing", _editor.LibraryUsedInMapOnly && _editor.LibrarySets.Count == 0);
+        Press("QuickFilterUsedInMap"); await Settle();
+        await WaitForThumbnails(window);
         // The count badge unfolds the variants inline.
         var badge = window.GetVisualDescendants().OfType<Button>().First(b => b.Name == "GalleryExpand_" + Sanitize(painted.Id));
         badge.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Task.Delay(200);
@@ -171,12 +233,10 @@ public sealed class AssetCatalogApplication : Application
         var objects = () => _editor.Session.Document.Layers.OfType<ObjectLayer>().Sum(l => l.Objects.Count);
         _editor.SetStampScalePercent(220, commit: true); await Settle();
         Point(330, 420);
-        Check("basic shape placed", objects() == 1);
-        var spruce = _catalog.Sets.Single(s => s.Name == "Дерево");
-        _editor.ChooseGalleryVariant(spruce.Id, null); _editor.SetStampScalePercent(140, commit: true); await Settle();
+        Check("diagnostic variant placed", objects() == 1);
+        _editor.ChooseGalleryVariant(sample4.Id, null); _editor.SetStampScalePercent(140, commit: true); await Settle();
         Point(640, 470); Point(700, 500);
-        var tower = _catalog.Sets.Single(s => s.Name == "Горы");
-        _editor.ChooseGalleryVariant(tower.Id, null); _editor.SetStampScalePercent(150, commit: true); await Settle();
+        _editor.ChooseGalleryVariant(sample5.Id, null); _editor.SetStampScalePercent(150, commit: true); await Settle();
         Point(560, 380);
         Check("four stamps placed from three sets", objects() == 4);
         _editor.HandleEscape(); await Settle();
@@ -186,35 +246,97 @@ public sealed class AssetCatalogApplication : Application
         _editor.Undo(); await Settle();
         Check("undo removes the last stamp", objects() == 3);
 
-        // Place each original image through the production stamp tool. A single sheet makes
-        // style, transparency, scale and category readable together in the native canvas.
-        while (_editor.Session.UndoDepth > 0) _editor.Undo();
-        _editor.Session.Viewport.Set(0, 0, 1);
-        _editor.LibraryCollectionId = null;
-        var row = 0;
-        foreach (var style in AtlasArtPack.Artworks.GroupBy(a => a.StyleId))
+        // Alt+wheel over the canvas: through the variants of the set, then on into the next set.
+        _editor.ClearLibraryFilters(); _view.RefreshLibraryPanel(); await Settle();
+        _editor.ChooseGalleryVariant(painted.Id, painted.VariantIds[0]); await Settle();
+        var centre = (X: _view.Canvas.Bounds.Width / 2, Y: _view.Canvas.Bounds.Height / 2);
+        var path = new List<string>();
+        for (var i = 0; i < 3; i++)
         {
-            var column = 0;
-            foreach (var art in style)
-            {
-                var set = _catalog.Sets.Single(s => s.VariantIds.Any(id => _catalog.FindVariant(id)!.Sha256 == art.Sha256));
-                _editor.ChooseGalleryVariant(set.Id, null);
-                _editor.SetStampScalePercent(90, commit: true);
-                _editor.StampRandomAngle = false; _editor.StampRandomFlip = false;
-                Point(175 + column++ * 330, 145 + row * 235);
-            }
-            row++;
+            _view.Canvas.WheelForSmoke(centre.X, centre.Y, 1, KeyModifiers.Alt); await Settle();
+            path.Add(_editor.SelectedSet!.SetId + "/" + _editor.CurrentVariant!.Id);
         }
-        _editor.HandleEscape();
-        _editor.Session.Viewport.Set(0, 0, Math.Min(_view.Canvas.Bounds.Width / 1024, _view.Canvas.Bounds.Height / 768));
-        await Settle(); await Rendered();
-        Check("all nine artworks placed", objects() == 9);
-        Capture(_view.Canvas, "atlas-canvas");
+        Check("alt wheel walks the variants then leaves the set",
+            path[0] == painted.Id + "/" + painted.VariantIds[1] && path[1] == painted.Id + "/" + painted.VariantIds[2]
+            && !path[2].StartsWith(painted.Id, StringComparison.Ordinal) && objects() == 3);
+        _view.Canvas.WheelForSmoke(centre.X, centre.Y, -1, KeyModifiers.Alt); await Settle();
+        Check("alt wheel back returns to the last variant", _editor.SelectedSet!.SetId == painted.Id
+            && _editor.CurrentVariant!.Id == painted.VariantIds[2]);
+        var zoomBefore = _editor.Session.Viewport.Scale;
+        _view.Canvas.WheelForSmoke(centre.X, centre.Y, 1, KeyModifiers.None); await Settle();
+        Check("plain wheel still zooms", Math.Abs(_editor.Session.Viewport.Scale - zoomBefore) > 1e-9
+            && _editor.CurrentVariant!.Id == painted.VariantIds[2]);
+
+        await _catalog.FlushMetadataAsync();
+        await using (var reopened = new AssetCatalog(_catalog.Root))
+            Check("only explicit imports survive catalog reopen", reopened.Records.Count == 5 && reopened.Sets.Count == 3);
         var preferences = new global::Map.App.Services.EditorPreferencesStore(Path.Combine(_workspace, "gallery-preferences.json"));
         preferences.Save(new EditorLocalPreferences(LibraryTileSize: 160, LibraryShowNames: false));
         var loaded = preferences.Load();
-        Check("gallery preferences survive disk reload", loaded.LibraryTileSize == 160 && !loaded.LibraryShowNames);
+        Check("gallery starts at defaults after disk reload", loaded.LibraryTileSize == 112 && loaded.LibraryShowNames);
         await CheckTerrain();
+    }
+
+    private async Task CheckEmptyArtwork()
+    {
+        Check("retired texture pixels remain absent", !typeof(MapTextureLibrary).Assembly.GetManifestResourceNames()
+            .Any(name => name.StartsWith("Map.Rendering.Textures.", StringComparison.Ordinal)));
+        Check("legacy texture identifiers have no available images", MapFillTextures.All
+            .All(t => MapTextureLibrary.Image(t.Id) is null));
+        Check("removed regional artwork cannot be reimported", !RegionalArtPack.IsAvailable);
+        var availableMaterials=MapFillTextures.All.Count(t=>MapTextureLibrary.Image(t.Id) is not null);
+        Check("new water uses plain colour", new RiverStyle().TextureId is null);
+        Check("land brush starts with colour and no recent materials", _editor.LandPaintWithColor && _editor.RecentLandMaterials.Count == 0);
+        _editor.SetLandPaintAction("Texture");
+        Check("retired material cannot be selected", !_editor.ChooseLandMaterial("meadow"));
+        _editor.SetLandPaintAction("Color");
+
+        var land = _editor.Session.Document.Layers.OfType<LandLayer>().Single();
+        _editor.SelectLayer(land.Id); _editor.ActiveTool = EditorTool.Land;
+        _editor.SetLandPaintMode(true); await Settle();
+        T Find<T>(string name) where T : Control
+        {
+            for (var attempt = 0; attempt < 8; attempt++)
+            {
+                if (_view.GetVisualDescendants().OfType<T>().FirstOrDefault(c => c.Name == name) is { } control) return control;
+                var folded = _view.GetVisualDescendants().OfType<Expander>().Where(e => !e.IsExpanded).ToArray();
+                if (folded.Length == 0) break;
+                foreach (var expander in folded) expander.IsExpanded = true;
+                _view.UpdateLayout();
+            }
+            throw new InvalidOperationException("Control not found: " + name);
+        }
+        Check("material brush availability matches installed content", Find<Button>("LandPaintActionTexture").IsEnabled==(availableMaterials>0));
+        _editor.BrushSettings = _editor.BrushSettings with { Radius = 16, Softness = 0, Color = "#FFB08040" };
+        _editor.Session.Viewport.Set(0, 0, 1); await Settle();
+        var p = _editor.Session.Viewport.WorldToScreen(80, 80);
+        _view.Canvas.PressForSmoke(p.X, p.Y); _view.Canvas.ReleaseForSmoke(p.X, p.Y);
+        await Rendered();
+        var painted = (LandLayer)_editor.Session.Document.FindLayer(land.Id)!;
+        Check("colour stroke paints without artwork", painted.PaintTiles.TileCount > 0 && ReferenceEquals(land.GeometryTiles, painted.GeometryTiles));
+        Check("native canvas renders empty artwork library", _view.Canvas.FramesRendered > 0
+            && ReferenceEquals(_view.Canvas.LastRenderedDocument, _editor.Session.Document));
+        _editor.Undo();
+        Check("colour stroke remains undoable", ((LandLayer)_editor.Session.Document.FindLayer(land.Id)!).PaintTiles.TileCount == 0);
+        Capture(_view, "empty-materials-editor");
+
+        _editor.SetLandPaintMode(false); await Settle();
+        Find<Button>("LandTexturePickerCatalogButton").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        await Settle();
+        var dialog = ((IClassicDesktopStyleApplicationLifetime)ApplicationLifetime!).Windows.Single(w => w.Name == "MaterialCatalogWindow");
+        dialog.UpdateLayout();
+        var expectedGroundCards = MapFillTextures.Of(MapFillTextureKind.Ground)
+            .Where(t => MapTextureLibrary.Image(t.Id) is not null).Select(t => "MaterialCatalog_" + t.Id).ToHashSet();
+        Check("material catalog shows only available content", dialog.IsVisible
+            && expectedGroundCards.SetEquals(dialog.GetVisualDescendants().OfType<WrapPanel>()
+                .Single(t => t.Name == "MaterialCatalogTiles").Children.Select(c => c.Name)));
+        Capture(dialog, "empty-materials-catalog");
+        dialog.Close();
+
+        await _catalog.FlushMetadataAsync();
+        await using var reopened = new AssetCatalog(_catalog.Root);
+        Check("reopened library remains empty", reopened.Status == AssetLibraryStatus.Ready
+            && reopened.Records.Count == 0 && reopened.Sets.Count == 0 && reopened.Collections.Count == 0 && reopened.Recent.Count == 0);
     }
 
     private async Task CheckTerrain()
@@ -254,6 +376,20 @@ public sealed class AssetCatalogApplication : Application
         _editor.Undo(); _editor.ClearLandSelection(); Point(128, 128); await Settle();
         Check("native undo restores masked water", _editor.SelectedRiver?.Id == high.Id);
         await Rendered(); Capture(_view, "terrain-restored");
+    }
+
+    /// <summary>A named control of a window, opening folded sections the way a user would.</summary>
+    private static T FindIn<T>(Window window, string name) where T : Control
+    {
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            if (window.GetVisualDescendants().OfType<T>().FirstOrDefault(c => c.Name == name) is { } found) return found;
+            var folded = window.GetVisualDescendants().OfType<Expander>().Where(e => !e.IsExpanded).ToArray();
+            if (folded.Length == 0) break;
+            foreach (var expander in folded) expander.IsExpanded = true;
+            window.UpdateLayout();
+        }
+        throw new InvalidOperationException(name + " is not in the catalog window");
     }
 
     private async Task WaitForThumbnails(Window window)

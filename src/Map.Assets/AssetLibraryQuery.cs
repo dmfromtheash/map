@@ -38,6 +38,9 @@ public sealed record AssetQuery
 
     public bool FavoritesOnly { get; init; }
 
+    /// <summary>«Архивные»: archived cards are shown too (they are hidden otherwise).</summary>
+    public bool IncludeArchived { get; init; }
+
     /// <summary>Only sets present in the bounded recent list, most recently used first.</summary>
     public bool RecentOnly { get; init; }
 
@@ -75,6 +78,7 @@ public sealed record AssetSetSummary
     public int CoverWidth { get; init; }
     public int CoverHeight { get; init; }
     public string MediaType { get; init; } = "";
+    public bool Archived { get; init; }
 
     /// <summary>A card with more than one variant is what the UI badges.</summary>
     public bool IsSet => VariantCount > 1;

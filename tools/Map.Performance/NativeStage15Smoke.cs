@@ -30,7 +30,7 @@ internal sealed record NativeStage15Report(
     bool UndoRedoWorked,
     bool SelectedSliderWasOneCommand,
     bool SeriesAndScatterCancelWorked,
-    bool PreferencesReopenedBoundedPreset,
+    bool PreferencesReopenedAtDefaults,
     bool ObjectAndLayerShadowSwitched,
     bool ClipMaskLibraryForegroundAndStateWorked,
     bool SaveReopenAndExactExportMatched,
@@ -348,38 +348,22 @@ public sealed class NativeStage15Application : Application
             && cancelled && ObjectCount(editor) == beforeCancel;
 
         var loadedPreferences = preferences.Load();
-        var validPresetReopened = loadedPreferences.Stamp is
-        {
-            ScalePercent: 180,
-            Sublayer: 5,
-            RandomAngleStep: StampRandomAngleStep.Degrees45,
-        } loaded
-            && loaded.Style is { Blend: "Screen", ShadowColor: "#FFFFC000" };
-        preferences.Save(new EditorLocalPreferences(Stamp: loadedPreferences.Stamp! with
+        var neutralReopened = loadedPreferences.Stamp is null
+            && loadedPreferences.AutoSelect == PlacementAutoSelectPolicy.Auto;
+        preferences.Save(new EditorLocalPreferences(Stamp: new StampToolSettings
         {
             ScalePercent = 9_999,
             Sublayer = 99,
             ObjectOpacity = -2,
             RandomAngleStep = (StampRandomAngleStep)17,
-            Style = loadedPreferences.Stamp.Style! with
+            Style = new StampStyle(new string('a', 64))
             {
                 Blend = "unknown",
                 ShadowColor = "bad",
                 ShadowBlur = 999,
             },
         }));
-        var bounded = preferences.Load().Stamp!;
-        var preferencesReady = validPresetReopened
-            && bounded.ScalePercent == 400
-            && bounded.Sublayer == 10
-            && bounded.ObjectOpacity == 0
-            && bounded.RandomAngleStep == StampRandomAngleStep.Off
-            && bounded.Style is
-            {
-                Blend: BlendModes.Normal,
-                ShadowColor: AppearanceColor.OpaqueBlack,
-                ShadowBlur: AppearanceLimits.MaxShadowBlur,
-            };
+        var preferencesReady = neutralReopened && preferences.Load().Stamp is null;
 
         editor.Session.SelectedObjectId = placedId;
         editor.ActiveTool = EditorTool.Select;

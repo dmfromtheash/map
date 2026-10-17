@@ -20,10 +20,14 @@ public enum CanvasInputGesture
     RegionSelect,
     Stroke,
     StampSeries,
+    /// <summary>Alt held in the scatter mode: the circle removes stamps instead of placing them.</summary>
+    StampErase,
     PlacementPathNode,
     PlacementAreaNode,
     RiverNode,
     RiverStroke,
+    RoadNode,
+    RoadStroke,
     VectorDraw,
     LandShape,
     TextPlacement,
@@ -179,9 +183,27 @@ public sealed class CanvasInputRouter
             _gesture = _editor.IsDraggingRiver ? CanvasInputGesture.RiverNode : CanvasInputGesture.None;
             return new CanvasInputResult { Handled = true, Invalidate = true, CapturePointer = _editor.IsDraggingRiver };
         }
+        if (_editor.BeginRoadStroke(worldX, worldY))
+        {
+            _gesture = CanvasInputGesture.RoadStroke;
+            return new CanvasInputResult { Handled = true, Invalidate = true, CapturePointer = true };
+        }
+        if (_editor.PressRoad(worldX, worldY))
+        {
+            _gesture = _editor.IsDraggingRoad ? CanvasInputGesture.RoadNode : CanvasInputGesture.None;
+            return new CanvasInputResult { Handled = true, Invalidate = true, CapturePointer = _editor.IsDraggingRoad };
+        }
         if (_editor.HasPendingPlacement)
         {
             _editor.UpdatePlacementPreview(worldX, worldY);
+            if (_editor.PendingPlacement is { Target: PlacementTargetKind.Stamp, Mode: StampPlacementMode.Area }
+                && _editor.VectorDrawFromCenter)
+            {
+                // Alt turns the scatter circle into an eraser: the same radius, taking stamps away.
+                _editor.EraseStampsAround(worldX, worldY);
+                _gesture = CanvasInputGesture.StampErase;
+                return new CanvasInputResult { Handled = true, Invalidate = true, CapturePointer = true };
+            }
             if (_editor.PendingPlacement is { Target: PlacementTargetKind.Stamp, Mode: StampPlacementMode.Series })
             {
                 var began = _editor.BeginStampSeries(worldX, worldY);
@@ -362,8 +384,18 @@ public sealed class CanvasInputRouter
             case CanvasInputGesture.RiverStroke:
                 _editor.ContinueRiverStroke(worldX, worldY);
                 return new CanvasInputResult { Handled = true, Invalidate = true };
+            case CanvasInputGesture.RoadNode:
+                _editor.MoveRoadPointer(worldX, worldY);
+                return new CanvasInputResult { Handled = true, Invalidate = true };
+            case CanvasInputGesture.RoadStroke:
+                _editor.ContinueRoadStroke(worldX, worldY);
+                return new CanvasInputResult { Handled = true, Invalidate = true };
             case CanvasInputGesture.StampSeries:
                 _editor.ContinueStampSeries(worldX, worldY);
+                return new CanvasInputResult { Handled = true, Invalidate = true };
+            case CanvasInputGesture.StampErase:
+                _editor.UpdatePlacementPreview(worldX, worldY);
+                _editor.EraseStampsAround(worldX, worldY);
                 return new CanvasInputResult { Handled = true, Invalidate = true };
             case CanvasInputGesture.RegionSelect:
                 _editor.UpdateRegionSelection(worldX, worldY);
@@ -437,11 +469,24 @@ public sealed class CanvasInputRouter
                 _editor.ContinueRiverStroke(strokeEnd.X, strokeEnd.Y);
                 _editor.EndRiverStroke();
                 return new CanvasInputResult { Handled = true, Invalidate = true, ReleasePointer = true };
+            case CanvasInputGesture.RoadNode:
+                var roadEnd = _editor.Session.Viewport.ScreenToWorld(screenX, screenY);
+                _editor.MoveRoadPointer(roadEnd.X, roadEnd.Y);
+                _editor.EndRoadDrag();
+                return new CanvasInputResult { Handled = true, Invalidate = true, ReleasePointer = true };
+            case CanvasInputGesture.RoadStroke:
+                var roadStrokeEnd = _editor.Session.Viewport.ScreenToWorld(screenX, screenY);
+                _editor.ContinueRoadStroke(roadStrokeEnd.X, roadStrokeEnd.Y);
+                _editor.EndRoadStroke();
+                return new CanvasInputResult { Handled = true, Invalidate = true, ReleasePointer = true };
             case CanvasInputGesture.StampSeries:
                 var end = _editor.Session.Viewport.ScreenToWorld(screenX, screenY);
                 _editor.ContinueStampSeries(end.X, end.Y);
                 var placed = _editor.EndStampSeries();
                 return new CanvasInputResult { Handled = true, ReleasePointer = true, Invalidate = true, StampPlaced = placed };
+            case CanvasInputGesture.StampErase:
+                _editor.EndStampErase();
+                return new CanvasInputResult { Handled = true, ReleasePointer = true, Invalidate = true };
             case CanvasInputGesture.ObjectDrag:
                 _editor.EndDrag();
                 break;
@@ -554,8 +599,14 @@ public sealed class CanvasInputRouter
             case CanvasInputGesture.RiverNode:
             case CanvasInputGesture.RiverStroke:
                 return _editor.CancelRiverGesture();
+            case CanvasInputGesture.RoadNode:
+            case CanvasInputGesture.RoadStroke:
+                return _editor.CancelRoadGesture();
             case CanvasInputGesture.StampSeries:
                 return _editor.CancelStampSeries();
+            case CanvasInputGesture.StampErase:
+                _editor.EndStampErase();
+                return true;
             case CanvasInputGesture.ObjectDrag:
                 _editor.CancelDrag();
                 return true;

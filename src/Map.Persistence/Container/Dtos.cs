@@ -49,8 +49,21 @@ internal sealed class StampForegroundDto
     [JsonPropertyName("tiles")] public List<TileDto> Tiles { get; set; } = [];
 }
 
+internal sealed class BaseMaterialDto
+{
+    [JsonPropertyName("textureId")]
+    public string? TextureId { get; set; }
+    [JsonPropertyName("opacity")]
+    public double Opacity { get; set; }
+    [JsonPropertyName("scale")]
+    public double Scale { get; set; }
+}
+
 internal sealed class LayerDto
 {
+    [JsonPropertyName("baseMaterial")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public BaseMaterialDto? BaseMaterial { get; set; }
     [JsonPropertyName("placementPaths")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<Map.Core.Documents.PlacementPath>? PlacementPaths { get; set; }
@@ -60,6 +73,12 @@ internal sealed class LayerDto
     [JsonPropertyName("rivers")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<Map.Core.Documents.River>? Rivers { get; set; }
+    [JsonPropertyName("roads")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<Map.Core.Documents.Road>? Roads { get; set; }
+    [JsonPropertyName("surfaceOrder")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<Guid>? SurfaceOrder { get; set; }
     [JsonPropertyName("id")] public string Id { get; set; } = "";
     [JsonPropertyName("type")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -84,6 +103,9 @@ internal sealed class LayerDto
     [JsonPropertyName("tiles")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<TileDto>? Tiles { get; set; }
+    [JsonPropertyName("landPaintTiles")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<TileDto>? LandPaintTiles { get; set; }
     [JsonPropertyName("mask")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public MaskDto? Mask { get; set; }
@@ -134,6 +156,35 @@ internal sealed class FilterSettingsDto
     public string? TextureAssetSha256 { get; set; }
     [JsonPropertyName("textureOpacity")] public double TextureOpacity { get; set; }
     [JsonPropertyName("textureScale")] public double TextureScale { get; set; }
+    // Colour pass (2026-10-16). Absent in older files; written only when it changes pixels.
+    [JsonPropertyName("gradientMap")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public FilterGradientMapDto? GradientMap { get; set; }
+    [JsonPropertyName("postProcess")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public FilterPostProcessDto? PostProcess { get; set; }
+    [JsonPropertyName("colorStrength")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? ColorStrength { get; set; }
+    [JsonPropertyName("colorPresetId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ColorPresetId { get; set; }
+}
+
+internal sealed class FilterGradientMapDto
+{
+    [JsonPropertyName("shadow")] public string Shadow { get; set; } = "";
+    [JsonPropertyName("midtone")] public string Midtone { get; set; } = "";
+    [JsonPropertyName("highlight")] public string Highlight { get; set; } = "";
+    [JsonPropertyName("strength")] public double Strength { get; set; }
+}
+
+internal sealed class FilterPostProcessDto
+{
+    [JsonPropertyName("saturation")] public double Saturation { get; set; }
+    [JsonPropertyName("brightness")] public double Brightness { get; set; }
+    [JsonPropertyName("contrast")] public double Contrast { get; set; }
+    [JsonPropertyName("sharpness")] public double Sharpness { get; set; }
 }
 
 internal sealed class GridDefinitionDto
@@ -243,6 +294,9 @@ internal sealed class SceneObjectDto
     [JsonPropertyName("shape")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ShapeStyleDto? Shape { get; set; }
+    [JsonPropertyName("room")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RoomStyleDto? Room { get; set; }
     [JsonPropertyName("text")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public TextStyleDto? Text { get; set; }
@@ -428,6 +482,20 @@ internal sealed class VectorStrokeDto
     [JsonPropertyName("assetSpacing")] public double AssetSpacing { get; set; }
     [JsonPropertyName("hue")] public double Hue { get; set; }
     [JsonPropertyName("saturation")] public double Saturation { get; set; }
+    [JsonPropertyName("blocksLight")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool BlocksLight { get; set; }
+}
+
+internal sealed class RoomStyleDto
+{
+    [JsonPropertyName("cornerRadius")] public double CornerRadius { get; set; }
+    [JsonPropertyName("capAssetSha256")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? CapAssetSha256 { get; set; }
+    [JsonPropertyName("capScale")] public double CapScale { get; set; }
+    [JsonPropertyName("capAngle")] public double CapAngle { get; set; }
+    [JsonPropertyName("capShadow")] public bool CapShadow { get; set; }
 }
 
 internal sealed class LineStyleDto

@@ -98,7 +98,7 @@ public sealed record RiverStyle
     /// (<see cref="MapFillTextures"/>); null keeps the flat fill. The scale is the world size of
     /// one tile, so the surface keeps its size as the view zooms.
     /// </summary>
-    public string? TextureId { get; init; } = "water-still";
+    public string? TextureId { get; init; }
     public double TextureOpacity { get; init; } = 0.5;
     public double TextureScale { get; init; } = MapFillTextures.DefaultWaterScale;
 

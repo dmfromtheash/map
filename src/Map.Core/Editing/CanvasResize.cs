@@ -192,7 +192,6 @@ public static class CanvasTransformService
         DocumentId newDocumentId,
         DateTimeOffset createdUtc)
     {
-        RejectEditablePaths(source);
         ArgumentNullException.ThrowIfNull(source);
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
         ValidateDimensions(region.Width, region.Height);
@@ -269,10 +268,16 @@ public static class CanvasTransformService
         CanvasRegion clip)
     {
         var translated = TranslateLayer(layer, offsetX, offsetY, clip);
+        // Editable paths and areas regenerate over their whole outline, which a region cuts, so
+        // the new map keeps their stamps as ordinary objects (the same result as the "turn into
+        // ordinary objects" command). Draw order is already stored in the object list, so the
+        // picture is unchanged; the source map keeps its editable constructions.
         return translated is ObjectLayer objects
             ? objects with
             {
                 Objects = [.. objects.Objects.Where(item => includedIds.Contains(item.Id))],
+                PlacementPaths = [],
+                PlacementAreas = [],
             }
             : translated;
     }
@@ -301,6 +306,11 @@ public static class CanvasTransformService
                     .Where(river => clip is null || RiverGeometry.Evaluate(river).Bounds.Intersects(
                         new WorldBounds(-offsetX, -offsetY, -offsetX + clip.Value.Width, -offsetY + clip.Value.Height)))
                     .Select(river => TranslateRiver(river, offsetX, offsetY))],
+                // Roads move the same way; a region keeps only roads that reach into it.
+                Roads = [.. objects.Roads
+                    .Where(road => clip is null || RoadGeometry.Evaluate(road).Bounds.Intersects(
+                        new WorldBounds(-offsetX, -offsetY, -offsetX + clip.Value.Width, -offsetY + clip.Value.Height)))
+                    .Select(road => RoadEditor.Translate(road, offsetX, offsetY))],
             }).WithMask(mask),
             BrushLayer brush => (brush with
             {
@@ -309,6 +319,7 @@ public static class CanvasTransformService
             LandLayer land => (land with
             {
                 GeometryTiles = TransformTiles(land.GeometryTiles, offsetX, offsetY, clip),
+                PaintTiles = TransformTiles(land.PaintTiles, offsetX, offsetY, clip),
             }).WithMask(mask),
             GridLayer grids => (grids with
             {

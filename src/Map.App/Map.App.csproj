@@ -20,6 +20,8 @@
     <AvaloniaResource Include="Assets\Atlas\*.png" />
     <AvaloniaResource Include="Assets\Fonts\Onest\*.ttf" />
     <AvaloniaResource Include="Assets\Fonts\Onest\OFL.txt" />
+    <AvaloniaResource Include="Assets\Fonts\Cormorant\*.ttf" />
+    <AvaloniaResource Include="Assets\Fonts\Cormorant\OFL.txt" />
   </ItemGroup>
 
   <ItemGroup>

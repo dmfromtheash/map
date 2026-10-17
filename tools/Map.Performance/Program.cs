@@ -4,12 +4,50 @@ using Map.Performance;
 var options = PerformanceOptions.Parse(args);
 object report;
 bool gatePassed;
-if (options.Profile == "native-asset-catalog")
+if (options.Profile == "regional-terrain-probe")
+{
+    report = RegionalTerrainProbe.Run(); gatePassed = true;
+}
+else if (options.Profile == "regional-art-probe")
+{
+    report = RegionalArtProbe.Run(options); gatePassed = true;
+}
+else if (options.Profile is "native-regional-art" or "native-regional" or "native-regional-reopen" or "native-regional-surfaces" or "native-regional-finish" or "native-area-explore" or "native-asset-opacity" or "native-editor-defaults")
+{
+    var smoke = NativeRegionalSmoke.Run(options); report = smoke; gatePassed = smoke.GatePassed;
+    if (smoke.Failure is not null) Console.WriteLine(smoke.Failure);
+}
+else if (options.Profile is "native-mountain-foundation" or "native-stamp-family")
+{
+    var smoke = NativeMountainFoundationSmoke.Run(options); report = smoke; gatePassed = smoke.GatePassed;
+}
+else if (options.Profile == "install-mountain-foundation")
+{
+    var install = MountainFoundationPack.Install(); report = install; gatePassed = install.GatePassed;
+}
+else if (options.Profile == "native-zoom-assets")
+{
+    var smoke = NativeZoomAssetsSmoke.Run(options); report = smoke; gatePassed = smoke.GatePassed;
+    Console.WriteLine($"native-zoom-assets: scenarios={smoke.Scenarios.Count}, gate={(smoke.GatePassed ? "PASS" : "FAIL")}");
+    if (smoke.Failure is not null) Console.WriteLine(smoke.Failure);
+}
+else if (options.Profile is "native-asset-catalog" or "native-empty-artwork")
 {
     var smoke = NativeAssetCatalogSmoke.Run(options);
     report = smoke; gatePassed = smoke.GatePassed;
 }
-else if (options.Profile == "native-stage19")
+else if (options.Profile == "native-render-audit")
+{
+    var audit = NativeRenderAuditSmoke.Run(options); report = audit; gatePassed = audit.GatePassed;
+    Console.WriteLine($"native-render-audit: checks={audit.Checks.Count(c => c.Value)}/{audit.Checks.Count}, gate={(audit.GatePassed ? "PASS" : "FAIL")}");
+    foreach (var note in audit.Notes) Console.WriteLine($"  {note.Key} = {note.Value}");
+    if (audit.Failure is not null) Console.WriteLine(audit.Failure);
+}
+else if (options.Profile == "native-stage20")
+{
+    var nativeReport = NativeStage20Smoke.Run(options); report = nativeReport; gatePassed = nativeReport.GatePassed;
+}
+else if (options.Profile is "native-stage19" or "native-land-materials" or "native-soft-coast" or "native-history-memory" or "native-panel-shots" or "native-ui-shots" or "native-color-presets" or "native-vtt-export" or "native-grid-types" or "native-versions" or "native-room")
 {
     var nativeReport = NativeStage19Smoke.Run(options); report = nativeReport; gatePassed = nativeReport.GatePassed;
 }
@@ -21,7 +59,7 @@ else if (options.Profile == "native-stage17")
 {
     var nativeReport = NativeStage17Smoke.Run(options); report = nativeReport; gatePassed = nativeReport.GatePassed;
 }
-else if (options.Profile is "native-placement-workflow" or "native-placement-baseline" or "native-placement-ux")
+else if (options.Profile is "native-placement-workflow" or "native-placement-baseline" or "native-placement-ux" or "native-placement-overlap")
 {
     var placementReport = NativePlacementWorkflowSmoke.Run(options);
     report = placementReport;

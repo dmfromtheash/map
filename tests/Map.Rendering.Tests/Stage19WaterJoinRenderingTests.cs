@@ -209,8 +209,13 @@ public sealed class Stage19WaterJoinRenderingTests
         SKColor At(double along) => frame.GetPixel(
             (int)Math.Round(coast.X + coast.TangentX * along), (int)Math.Round(coast.Y + coast.TangentY * along));
 
-        // Just past the coast the water is still there; well past it the page shows through.
-        Assert.True(IsWater(At(6)), $"water 6 units past the coast is {At(6)}");
+        // Just past the coast the water is still there - nearer the water's own colour than the
+        // page it dissolves into; well past it the page shows through. (The surf lines no longer
+        // cross the mouth, so the pixel here is the water itself, not water under a blue ring.)
+        var water = SKColor.Parse(main.Style.WaterColor);
+        var page = frame.GetPixel(frame.Width - 4, 4);
+        static int Distance(SKColor a, SKColor b) => Math.Abs(a.Red - b.Red) + Math.Abs(a.Green - b.Green) + Math.Abs(a.Blue - b.Blue);
+        Assert.True(Distance(At(6), water) < Distance(At(6), page), $"water 6 units past the coast is {At(6)}, water {water}, page {page}");
         var far = At(60);
         Assert.True(far.Red > far.Blue, $"60 units past the coast the sea page should show, got {far}");
         // And the plain cut is gone: the pixel a hair past the coast is not the page colour.

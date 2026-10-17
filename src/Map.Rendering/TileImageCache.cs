@@ -33,7 +33,10 @@ public sealed class TileImageCache : IDisposable
 
     private sealed class Entry
     {
-        public required byte[] Source { get; init; }
+        // Held weakly: the image is a copy of the pixels, and the array only proves that the layer
+        // still points at the same tile. A strong reference kept the tiles of undone states that
+        // left the history alive until LRU eviction (20 MiB after a discarded redo branch).
+        public required WeakReference<byte[]> Source { get; init; }
         public required SKImage Image { get; init; }
         public required long Bytes { get; init; }
         public long LastUsed { get; set; }
@@ -127,6 +130,7 @@ public sealed class TileImageCache : IDisposable
             else
             {
                 if (_releaseRequested) { ReleaseUnpinned(); _releaseRequested = false; }
+                RemoveCollected();
                 Trim(protectedKey: null);
                 DisposeRetired();
             }
@@ -151,7 +155,7 @@ public sealed class TileImageCache : IDisposable
             var key = new Key(layer, tile, kind);
             if (_entries.TryGetValue(key, out var entry))
             {
-                if (ReferenceEquals(entry.Source, source))
+                if (entry.Source.TryGetTarget(out var held) && ReferenceEquals(held, source))
                 {
                     Hits++;
                     entry.LastUsed = ++_clock;
@@ -170,7 +174,7 @@ public sealed class TileImageCache : IDisposable
             var bytes = ImageBytes(kind);
             _entries[key] = new Entry
             {
-                Source = source,
+                Source = new WeakReference<byte[]>(source),
                 Image = image,
                 Bytes = bytes,
                 LastUsed = ++_clock,
@@ -185,9 +189,23 @@ public sealed class TileImageCache : IDisposable
         }
     }
 
+    /// <summary>Entries whose tile no document state holds any more can never be hit again.</summary>
+    private void RemoveCollected()
+    {
+        List<Key>? dead = null;
+        foreach (var pair in _entries)
+            if (!pair.Value.Source.TryGetTarget(out _)) (dead ??= []).Add(pair.Key);
+        if (dead is null) return;
+        foreach (var key in dead)
+            if (_entries.TryGetValue(key, out var entry)) Remove(key, entry, eviction: true);
+    }
+
     private void Trim(Key? protectedKey)
     {
-        var budget = Map.Core.Resources.WorkingMemoryBudget.Shared.IsUnderPressure ? 0 : _byteCapacity;
+        // Preserve a bounded set for the current view instead of decoding those same tiles
+        // on every frame. An explicit ReleaseDerivedCaches still clears unpinned entries.
+        var budget = Map.Core.Resources.WorkingMemoryBudget.Shared.IsUnderPressure
+            ? Math.Min(_byteCapacity, 8L * 1024 * 1024) : _byteCapacity;
         while (_entries.Count > _capacity || Bytes > budget)
         {
             Key oldestKey = default;

@@ -10,6 +10,7 @@ using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Styling;
 using Avalonia.Threading;
+using Map.App.Controls;
 using Map.App.Services;
 using Map.App.Views;
 using Map.Assets;
@@ -96,6 +97,13 @@ public sealed class MainWindow : Window
         MinWidth = 960;
         MinHeight = 640;
         Content = _host;
+        // Inkarnate's editor owns the whole screen; a 1024×680 window left the map a fraction of
+        // it. Ordinary starts open maximised (Width/Height above remain the restore size).
+        if (!TestMode.StartupSmoke)
+        {
+            WindowStartupLocation = WindowStartupLocation.CenterScreen;
+            WindowState = WindowState.Maximized;
+        }
         if (TestMode.StartupSmoke)
         {
             ShowActivated = false;
@@ -132,7 +140,7 @@ public sealed class MainWindow : Window
             new AvaloniaFilePicker(this),
             new DialogPrompts(this),
             new WindowsProjectTrash(),
-            appVersion: AppVersion.Current);
+            appVersion: AppVersion.Current, assetCatalog: _assets);
         _autosaveTimer = new DispatcherTimer
         {
             Interval = TestMode.Enabled
@@ -141,10 +149,13 @@ public sealed class MainWindow : Window
         };
         _autosaveTimer.Tick += OnAutosaveTick;
 
+        // The sound button at the top of the library and the editor saves its choice here.
+        UiFeel.PersistSounds = on => _appSettings = _appSettingsStore.Save(_appSettings with { InterfaceSounds = on });
         ApplySettings(_appSettings);
 
         ShowDashboard();
         Closing += OnClosing;
+        ScalingChanged += (_, _) => ApplyCursor();
 
         // KeyDown is a bubbling-only event in Avalonia, so a tunnel handler would never fire.
         // Listening on the bubble route with handledEventsToo keeps the shortcuts working even
@@ -159,6 +170,7 @@ public sealed class MainWindow : Window
     {
         _autosaveTimer.Stop();
         _editorView = null;
+        Map.App.Controls.ApprovedArtwork.PrewarmInBackground();
         var view = new DashboardView(
             _dashboard,
             newMapRequested: NewMapAsync,
@@ -195,7 +207,10 @@ public sealed class MainWindow : Window
         // Without a focused element inside the window, key input has nowhere to route and every
         // shortcut silently does nothing. The canvas is the natural first owner of the keyboard.
         Avalonia.Threading.Dispatcher.UIThread.Post(
-            () => _editorView?.Canvas.Focus(),
+            () =>
+            {
+                if (!OwnedWindows.Any(window => window.IsVisible)) _editorView?.Canvas.Focus();
+            },
             Avalonia.Threading.DispatcherPriority.Loaded);
     }
 
@@ -240,7 +255,7 @@ public sealed class MainWindow : Window
 
     private async Task NewMapAsync()
     {
-        var document = await WizardWindow.ShowAsync(this);
+        var document = await WizardWindow.ShowAsync(this, _assets);
         if (document is not null)
         {
             _log.Info("NEW_MAP_CREATED");
@@ -287,21 +302,24 @@ public sealed class MainWindow : Window
         await dialog.ShowDialog(this);
     }
 
+    /// <summary>Map's brass pointer while interface effects are on; the system arrow otherwise.</summary>
+    private void ApplyCursor() => Cursor = UiFeel.EffectsEnabled ? BrassCursor.For(RenderScaling) : null;
+
     private void ApplySettings(AppSettings settings)
     {
         _appSettings = AppSettings.Sanitize(settings);
 
-        // Map has ONE approved palette and one approved icon set, both drawn for a light working
-        // surface over dark chrome. Handing Fluent a dark variant replaced the container colours
-        // underneath that palette while Map's own text and artwork stayed light-surface: the
-        // objects list ended up with #10264A text on a #2B2B2B ground (1.03:1) and the file menu
-        // showed navy artwork on near-black. The variant is therefore pinned, and the palette
-        // below is what decides every colour.
+        // Map has ONE approved palette: since 2026-10-17 the dark "Tavern" one (owner's choice
+        // "E"). Fluent's variant must match it, or its own container colours end up underneath
+        // Map's text - the light variant once put #10264A text on a #2B2B2B ground (1.03:1). The
+        // variant is therefore pinned to the palette's, and App.axaml decides every colour.
         if (Application.Current is { } application)
         {
-            application.RequestedThemeVariant = ThemeVariant.Light;
+            application.RequestedThemeVariant = ThemeVariant.Dark;
         }
         FontSize = 13 * _appSettings.UiScale;
+        UiFeel.Apply(_appSettings.InterfaceSounds, _appSettings.InterfaceEffects);
+        ApplyCursor();
         if (!TestMode.Enabled)
             _autosaveTimer.Interval = TimeSpan.FromSeconds(_appSettings.AutosaveIntervalSeconds);
         if (_editorView is { } editorView)
@@ -444,6 +462,9 @@ public sealed class MainWindow : Window
 
     private void OnWindowKeyDown(object? sender, KeyEventArgs e)
     {
+        // A field may commit Enter and return focus to the canvas during this same event.
+        // Do not also finish the canvas contour when that handled event reaches the window.
+        if (e.Handled && e.Key == Key.Enter) return;
         // Application shortcuts never steal editing keys from any text field. The settings dialog
         // is a separate window and captures its own gesture input explicitly.
         // The editor-only commands run through the same routing a smoke run drives with a real
@@ -454,12 +475,12 @@ public sealed class MainWindow : Window
             return;
         }
 
-        if (IsTypingInText() || !ShortcutKeyAdapter.TryCreate(e, out var input))
+        if (EditorKeyRouting.IsTypingInText(this, e) || !ShortcutKeyAdapter.TryCreate(e, out var input))
         {
             return;
         }
 
-        var activeContexts = ActiveShortcutContexts();
+        var activeContexts = EditorKeyRouting.Contexts(_editorView, e);
         var command = _shortcuts.Resolve(input, activeContexts);
         if (command is not null && ExecuteShortcut(command, e.Key))
         {
@@ -525,6 +546,7 @@ public sealed class MainWindow : Window
                 break;
             case EditorShortcutSettings.Commands.PreviousTool:
                 editor.SelectPreviousTool();
+                view.Canvas.Focus();
                 break;
             case EditorShortcutSettings.Commands.Pan:
                 view.Canvas.IsSpacePanHeld = true;
@@ -560,6 +582,9 @@ public sealed class MainWindow : Window
                 break;
             case EditorShortcutSettings.Commands.River:
                 editor.ActiveTool = EditorTool.River;
+                break;
+            case EditorShortcutSettings.Commands.Road:
+                editor.ActiveTool = EditorTool.Road;
                 break;
             // Escape, Enter and Delete are handled by EditorKeyRouting before this switch runs.
             case EditorShortcutSettings.Commands.NudgeLeft:
@@ -677,14 +702,15 @@ public sealed class MainWindow : Window
                 editor.ReorderActiveLayer(up: false);
                 break;
             case EditorShortcutSettings.Commands.StampFocusLibrary:
+                editor.ActiveTool = EditorTool.Stamp;
                 view.OpenAssetCatalog(focusSearch: true);
                 break;
             case EditorShortcutSettings.Commands.StampNextVariant:
-                editor.NextVariant();
+                editor.NextStampFamilyVariant();
                 view.RefreshLibraryPanel();
                 break;
             case EditorShortcutSettings.Commands.StampPreviousVariant:
-                editor.PreviousVariant();
+                editor.PreviousStampFamilyVariant();
                 view.RefreshLibraryPanel();
                 break;
             case EditorShortcutSettings.Commands.StampDensityUp:

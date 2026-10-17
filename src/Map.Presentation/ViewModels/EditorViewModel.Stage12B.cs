@@ -3,6 +3,7 @@ using Map.Core.Documents;
 using Map.Core.Editing;
 using Map.Persistence;
 using Map.Rendering;
+using Map.Presentation.Services;
 
 namespace Map.Presentation.ViewModels;
 
@@ -298,17 +299,24 @@ public sealed partial class EditorViewModel
         {
             var modifiedUtc = _clock();
             var metadata = new SaveMetadata(_appVersion, modifiedUtc, savedRevision: 0);
-            await Task.Run(() =>
+            extracted = IndependentProjectImages.Prepare(extracted, DocumentPath, _assetCatalog);
+            using var images = new ExportStampImageSource(extracted, DocumentPath, _assetCatalog);
+            var preview = await Task.Run(() =>
             {
-                var preview = ThumbnailRenderer.RenderPng(extracted);
-                _store.Save(extracted, path, metadata, preview);
+                var thumbnail = ThumbnailRenderer.RenderPng(extracted, stamps: images);
+                _store.Save(extracted, path, metadata, thumbnail);
+                return thumbnail;
             }).ConfigureAwait(false);
 
             _recent.Touch(
                 path, extracted.Id.Value, extracted.Title, modifiedUtc,
-                ThumbnailRenderer.RenderPng(extracted));
+                preview);
             CloseCanvasWorkflow();
             StatusDetail = $"Создана независимая карта из региона: {path}. Исходная карта осталась открыта и не изменена.";
+            if (source.Layers.OfType<ObjectLayer>().Any(l => !l.PlacementPaths.IsEmpty || !l.PlacementAreas.IsEmpty))
+            {
+                StatusDetail += " Пути и области вошли в новую карту обычными объектами; в исходной они остались редактируемыми.";
+            }
             _log.Info("REGION_MAP_CREATED");
             return true;
         }

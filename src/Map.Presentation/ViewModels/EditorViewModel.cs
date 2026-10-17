@@ -45,6 +45,7 @@ public enum EditorTool
     Stamp,
     Notes,
     River,
+    Road,
 }
 
 /// <summary>
@@ -313,6 +314,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     private bool _libraryFavoritesOnly;
     private bool _libraryRecentOnly;
     private bool _libraryUsedInMapOnly;
+    private bool _libraryShowArchived;
     private string? _libraryMediaType;
     private DateTimeOffset? _libraryImportedFromUtc;
     private DateTimeOffset? _libraryImportedToUtc;
@@ -390,6 +392,10 @@ public sealed partial class EditorViewModel : ViewModelBase
         {
             AutoSelect = preferences.AutoSelect,
         });
+        // «Область» and «Путь» are constructions for one task, not a standing preference: after one
+        // «Лес по области» every later session used to open trees as an area instead of one tree.
+        if (_stampToolSettings.Mode is StampPlacementMode.FillArea or StampPlacementMode.Path)
+            _stampToolSettings = _stampToolSettings with { Mode = StampPlacementMode.One };
         _primaryAutosaveEnabled = preferences.PrimaryAutosaveEnabled;
         _saveLocalPreferences = saveLocalPreferences;
         Shortcuts = shortcuts ?? new EditorShortcutSettings();
@@ -562,7 +568,9 @@ public sealed partial class EditorViewModel : ViewModelBase
             if (Session.SelectedObject is { } selected) return EditorLabels.DescribeObject(selected);
 
             // Water is a selection of the map like any other: saying nothing is selected while a
-            // river carries a selection frame on the canvas is simply wrong.
+            // river carries a selection frame on the canvas is simply wrong. So is a road.
+            if (WaterSelectionCount > 0 && RoadSelectionCount > 0) return $"Выбрано: водных систем {WaterSelectionCount}, дорог {RoadSelectionCount}";
+            if (RoadSelectionCount > 0) return RoadSelectionSummary;
             return WaterSelectionCount > 0 ? WaterSelectionSummary : "Ничего не выбрано";
         }
     }
@@ -684,7 +692,8 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
     }
 
-    public bool CanUndo => Session.CanUndo;
+    public bool CanUndo => Session.CanUndo || IsEditableAreaBusy
+        || _areaCreating && _areaDraft is { Nodes.Length: > 0 } || _pathCreating && _pathDraft is { Nodes.Length: > 0 };
 
     public bool CanRedo => Session.CanRedo;
 
@@ -723,8 +732,10 @@ public sealed partial class EditorViewModel : ViewModelBase
             CancelLandShapeGesture();
             CancelTextPlacement();
             CancelShapeBooleanPreview();
+            var hadConstructionDraft = _areaCreating || _pathCreating;
             CancelPlacement();
-            CancelEditablePathGesture(); CancelEditableAreaGesture(); CancelRiverGesture();
+            CancelEditablePathGesture(); CancelEditableAreaGesture(); CancelRiverGesture(); CancelRoadGesture();
+            if (hadConstructionDraft) StatusDetail = "Незавершённый контур отменён: выбран другой инструмент.";
             CancelDrag();
             CancelMarquee();
             CancelVectorElementDrag();
@@ -742,6 +753,10 @@ public sealed partial class EditorViewModel : ViewModelBase
                 _waterLevel = WaterSelectionLevel.Node;
             else if (value == EditorTool.Select && _waterLevel == WaterSelectionLevel.Node)
                 _waterLevel = WaterSelectionLevel.System;
+            if (value == EditorTool.Road && _roadLevel == RoadSelectionLevel.Road)
+                _roadLevel = RoadSelectionLevel.Node;
+            else if (value == EditorTool.Select && _roadLevel != RoadSelectionLevel.Road)
+                _roadLevel = RoadSelectionLevel.Road;
             Raise();
             Raise(nameof(MaskEditLayerId));
             Raise(nameof(RasterToolReady));
@@ -885,7 +900,7 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     /// <summary>True while a Land drag describes a region instead of painting freehand.</summary>
     public bool LandDrawsRegion =>
-        ActiveTool == EditorTool.Land && ActiveLandShape != LandShapeKind.Circle;
+        ActiveTool == EditorTool.Land && !LandPaintMode && ActiveLandShape != LandShapeKind.Circle;
 
     /// <summary>The region the current Land drag would fill; the canvas outlines it.</summary>
     public WorldBounds? LandShapePreview =>
@@ -965,18 +980,19 @@ public sealed partial class EditorViewModel : ViewModelBase
         : new StrokePreview
         {
             LayerId = _activeLayerId ?? default,
-            Coverage = _stroke.Coverage,
-            Color = ActiveTool == EditorTool.Land && ActiveLayer is LandLayer land
+            Coverage = _stroke.CommittedCoverage,
+            Color = ActiveTool == EditorTool.Land && !LandPaintMode && ActiveLayer is LandLayer land
                 ? land.EdgeStyle.FillColor
                 : _stroke.Settings.Color,
             Opacity = _stroke.Settings.Opacity,
             Eraser = _stroke.Settings.Eraser,
             PaintSettings = ActiveTool == EditorTool.Mask ? null
-                : ActiveTool == EditorTool.Land && ActiveLayer is LandLayer previewLand
+                : ActiveTool == EditorTool.Land && !LandPaintMode && ActiveLayer is LandLayer previewLand
                     ? _stroke.Settings with { Texture = null, Color = previewLand.EdgeStyle.FillColor }
                     : _stroke.Settings,
             IsMask = ActiveTool == EditorTool.Mask,
             IsStampForeground = _editingStampForeground,
+            IsLandPaint = ActiveTool == EditorTool.Land && LandPaintMode,
         };
 
     public bool IsEditingStampForeground => _editingStampForeground;
@@ -1098,6 +1114,42 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
     }
 
+    /// <summary>«Архивные»: archived cards are listed too, marked as archived.</summary>
+    public bool LibraryShowArchived
+    {
+        get => _libraryShowArchived;
+        set
+        {
+            if (SetField(ref _libraryShowArchived, value))
+            {
+                RefreshLibrary();
+            }
+        }
+    }
+
+    /// <summary>True when the chosen card is in the archive.</summary>
+    public bool SelectedSetArchived => _selectedSetId is { } id && _assetCatalog?.FindSet(id)?.Archived == true;
+
+    /// <summary>
+    /// Moves the chosen card into the archive or back. Nothing is deleted: maps keep their
+    /// stamps, and «Архивные» shows the card again.
+    /// </summary>
+    public bool ToggleSelectedSetArchived()
+    {
+        if (_selectedSetId is not { } id || _assetCatalog is null)
+        {
+            StatusDetail = "Сначала выберите набор в библиотеке.";
+            return false;
+        }
+        var archived = !SelectedSetArchived;
+        if (!MutateSet(() => _assetCatalog.SetSetArchived(id, archived))) return false;
+        Raise(nameof(SelectedSetArchived));
+        StatusDetail = archived
+            ? "Набор перенесён в архив: в каталоге он виден только с фильтром «Архивные»."
+            : "Набор возвращён из архива.";
+        return true;
+    }
+
     public string? LibraryMediaType
     {
         get => _libraryMediaType;
@@ -1214,6 +1266,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             Source = LibrarySource,
             UntaggedOnly = _libraryUntaggedOnly,
             FavoritesOnly = _libraryFavoritesOnly,
+            IncludeArchived = _libraryShowArchived,
             RecentOnly = _libraryRecentOnly,
             UsedContentHashes = _libraryUsedInMapOnly ? UsedContentHashes() : null,
             MediaType = _libraryMediaType,
@@ -1331,6 +1384,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             return false;
         }
 
+        UseSinglePlacementForNewAsset();
         SelectAssetSet(card.SetId);
         return true;
     }
@@ -1486,6 +1540,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         || _libraryFavoritesOnly
         || _libraryRecentOnly
         || _libraryUsedInMapOnly
+        || _libraryShowArchived
         || _libraryImportedFromText.Length > 0
         || _libraryImportedToText.Length > 0;
 
@@ -1533,6 +1588,11 @@ public sealed partial class EditorViewModel : ViewModelBase
                 parts.Add("используется на карте");
             }
 
+            if (_libraryShowArchived)
+            {
+                parts.Add("с архивными");
+            }
+
             if (_libraryMediaType is { } media)
             {
                 parts.Add("тип " + media);
@@ -1571,6 +1631,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             LibraryFavoritesOnly = false;
             LibraryRecentOnly = false;
             LibraryUsedInMapOnly = false;
+            LibraryShowArchived = false;
             LibraryImportedFromText = "";
             LibraryImportedToText = "";
         }
@@ -1978,6 +2039,36 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public StampToolSettings StampToolSettings => _stampToolSettings;
 
+    /// <summary>Reset future placement without editing any placed object or adding undo history.</summary>
+    public void ResetStampToolSettings()
+    {
+        CancelEditableAreaWork();
+        CancelAppearanceTransfer();
+        CancelPlacement();
+        CancelDrag();
+        _selectedAreaId = _selectedPathId = null;
+        _newAreaTemplate = null;
+        _stampSettingsBeforeConstruction = null;
+        _areaSettingsBeforeConstruction = null;
+        _naturalAreaDensity = 70;
+        _naturalAreaSizeVariation = 50;
+        _naturalAreaPattern = default;
+        _naturalAreaJoinEdges = true;
+        _stampToolSettings = new StampToolSettings();
+        BindStampToolToCurrentVariant();
+        ActiveTool = EditorTool.Stamp;
+        Session.ClearSelection();
+        CanvasGestureCancelled?.Invoke(this, EventArgs.Empty);
+        if (CurrentVariant is not null) ArmStampPlacement();
+        RaiseStampToolState();
+        RaiseAreaState();
+        RaisePathState();
+        Raise(nameof(SeriesSpacingPercent));
+        PersistLocalPreferences();
+        StatusDetail = "Базовые настройки восстановлены: одиночное размещение, масштаб 100%, поворот 0°, непрозрачность 100%.";
+        InvalidateScene(EditorChangeReason.CanvasInvalidation);
+    }
+
     public bool IsEditingFutureStamp =>
         ActiveTool == EditorTool.Stamp && (PendingPlacement?.Target == PlacementTargetKind.Stamp
             || SelectedEditablePath is not null || IsCreatingEditablePath
@@ -2050,6 +2141,17 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// <summary>Makes one logical card current and restores the variant last used inside it.</summary>
     public void SelectAssetSet(string? setId) => SelectAssetSet(setId, armPlacement: true);
 
+    /// <summary>
+    /// A new image picked in the library or catalog is placed one at a time. A leftover «Область»
+    /// or «Путь» with nothing drawn yet is dropped, so choosing trees never starts an area by itself.
+    /// </summary>
+    public void UseSinglePlacementForNewAsset()
+    {
+        if (StampPlacementMode is StampPlacementMode.FillArea or StampPlacementMode.Path
+            && _areaDraft is null && _pathDraft is null)
+            StampPlacementMode = StampPlacementMode.One;
+    }
+
     private void SelectAssetSet(string? setId, bool armPlacement)
     {
         if (setId is null || _assetCatalog is null || _assetCatalog.FindSet(setId) is not { } set)
@@ -2084,11 +2186,93 @@ public sealed partial class EditorViewModel : ViewModelBase
         _currentVariantIndex = index >= 0 ? index : Math.Max(0, coverIndex);
         RememberCurrentVariant();
         BindStampToolToCurrentVariant();
+        ApplyPlacementPassport(set);
         SyncSelectedLibraryRow();
         RaiseVariantState();
         RaiseStampToolState();
         PersistLocalPreferences();
         if (armPlacement) ArmStampPlacement();
+    }
+
+    // The passport values the tool last took from a card, and what the tool held before, so a
+    // card without a passport gets the user's own values back when they were left untouched.
+    private (string SetId, AssetPlacementDefaults Passport, double Rotation, double Size, bool Flip)? _passportApplied;
+    private (double Rotation, double Size, bool Flip)? _beforePassport;
+
+    /// <summary>
+    /// Takes the starting values of the tool from the chosen card's passport, the way the
+    /// reference editor seeds its rotation spread from "randomize angle by default". The user may
+    /// change them afterwards; choosing the same card again does not undo that change.
+    /// </summary>
+    private void ApplyPlacementPassport(AssetSet set)
+    {
+        var passport = set.Placement;
+        if (_passportApplied is { } same && same.SetId == set.Id && Equals(same.Passport, passport ?? new AssetPlacementDefaults()))
+            return;
+        var settings = _stampToolSettings;
+        if (_passportApplied is { } applied && _beforePassport is { } before
+            && settings.RotationJitterDegrees == applied.Rotation && settings.SizeJitterPercent == applied.Size
+            && settings.RandomFlip == applied.Flip)
+        {
+            settings = settings with { RotationJitterDegrees = before.Rotation, SizeJitterPercent = before.Size, RandomFlip = before.Flip };
+        }
+        _passportApplied = null;
+        _beforePassport = null;
+        if (passport is not null)
+        {
+            _beforePassport = (settings.RotationJitterDegrees, settings.SizeJitterPercent, settings.RandomFlip);
+            settings = settings with
+            {
+                RotationJitterDegrees = passport.RandomRotation ? 180 : 0,
+                SizeJitterPercent = Math.Clamp(passport.RandomSizePercent, 0, 100),
+                RandomFlip = passport.CanFlip && settings.RandomFlip,
+            };
+            if (settings.Style is { } style)
+            {
+                settings = settings with
+                {
+                    Style = style with
+                    {
+                        ShadowOpacity = passport.NoShadow ? 0 : style.ShadowOpacity,
+                        FlipHorizontal = passport.CanFlip && style.FlipHorizontal,
+                        FlipVertical = passport.CanFlip && style.FlipVertical,
+                    },
+                };
+            }
+            _passportApplied = (set.Id, passport, settings.RotationJitterDegrees, settings.SizeJitterPercent, settings.RandomFlip);
+        }
+        _stampToolSettings = settings;
+        Raise(nameof(StampRotationJitterDegrees));
+        Raise(nameof(StampSizeJitterPercent));
+        Raise(nameof(StampRandomFlip));
+        Raise(nameof(SelectedSetPlacement));
+        Raise(nameof(SelectedSetCanFlip));
+    }
+
+    /// <summary>The placement passport of the chosen card (built-in defaults when it has none).</summary>
+    public AssetPlacementDefaults SelectedSetPlacement =>
+        _selectedSetId is { } id && _assetCatalog?.FindSet(id)?.Placement is { } passport ? passport : new AssetPlacementDefaults();
+
+    /// <summary>False when the chosen card's passport forbids mirroring it.</summary>
+    public bool SelectedSetCanFlip => SelectedSetPlacement.CanFlip;
+
+    /// <summary>
+    /// Edits the passport of the chosen card in the catalog; the tool takes the new values as its
+    /// starting point at once. Returns false when nothing is chosen or the catalog refused.
+    /// </summary>
+    public bool SetSelectedSetPlacement(Func<AssetPlacementDefaults, AssetPlacementDefaults> change)
+    {
+        ArgumentNullException.ThrowIfNull(change);
+        if (_selectedSetId is not { } id || _assetCatalog is null)
+        {
+            StatusDetail = "Сначала выберите набор в библиотеке.";
+            return false;
+        }
+        var updated = change(SelectedSetPlacement);
+        if (updated == SelectedSetPlacement) return false;
+        if (!MutateSet(() => _assetCatalog.SetPlacementDefaults(id, updated))) return false;
+        StatusDetail = "Паспорт ассета сохранён: инструмент взял новые значения как стартовые.";
+        return true;
     }
 
     public void NextVariant() => MoveVariant(1);
@@ -2392,13 +2576,13 @@ public sealed partial class EditorViewModel : ViewModelBase
     {
         if (Session.Document.StampForeground is null)
         {
-            StatusDetail = "Сначала создайте foreground-поверхность.";
+            StatusDetail = "Сначала создайте передний план ассета.";
             return;
         }
         ActiveTool = EditorTool.Brush;
         _editingStampForeground = true;
         Raise(nameof(IsEditingStampForeground));
-        StatusDetail = "Редактируется foreground-поверхность: рисуйте обычной кистью на холсте.";
+        StatusDetail = "Рисуется передний план ассета: рисуйте обычной кистью на холсте.";
         InvalidateScene(EditorChangeReason.CanvasInvalidation);
     }
 
@@ -2500,11 +2684,14 @@ public sealed partial class EditorViewModel : ViewModelBase
             {
                 var leavingPath = _selectedPathId is not null && value != StampPlacementMode.Path;
                 var leavingArea = _selectedAreaId is not null && value != StampPlacementMode.FillArea;
+                var hadDraft = _areaDraft is not null || _pathDraft is not null;
                 CancelEditablePathGesture(); CancelEditableAreaGesture();
                 CancelStampSeries();
                 _stampToolSettings = _stampToolSettings with { Mode = value };
+                if (value is not (StampPlacementMode.FillArea or StampPlacementMode.Path)) RestoreStampSettingsAfterConstruction();
                 if (leavingPath) { _selectedPathId = null; ArmStampPlacement(); RaisePathState(); }
                 if (leavingArea) { _selectedAreaId = null; _newAreaTemplate = null; ArmStampPlacement(); RaiseAreaState(); }
+                if (hadDraft && PendingPlacement is null && _activeTool == EditorTool.Stamp) ArmStampPlacement();
                 Raise();
                 Raise(nameof(PlannedStampCount));
                 Raise(nameof(StampAreaSummary));
@@ -2512,6 +2699,16 @@ public sealed partial class EditorViewModel : ViewModelBase
                 PersistLocalPreferences();
             }
         }
+    }
+
+    /// <summary>
+    /// «После размещения: выделять / не выделять» of the asset tool. Not selecting is the default
+    /// (policy Auto: assets are never selected, a single shape still is); selecting is Always.
+    /// </summary>
+    public bool SelectAfterPlacement
+    {
+        get => PlacementAutoSelect == PlacementAutoSelectPolicy.Always;
+        set => PlacementAutoSelect = value ? PlacementAutoSelectPolicy.Always : PlacementAutoSelectPolicy.Auto;
     }
 
     public PlacementAutoSelectPolicy PlacementAutoSelect
@@ -2639,6 +2836,73 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
     }
 
+    /// <summary>«Без наложений» of the scatter mode; remembered with the other tool settings.</summary>
+    public bool StampAvoidOverlap
+    {
+        get => _stampToolSettings.AvoidOverlap;
+        set
+        {
+            if (_stampToolSettings.AvoidOverlap != value)
+            {
+                _stampToolSettings = _stampToolSettings with { AvoidOverlap = value };
+                Raise();
+                Raise(nameof(StampAreaSummary));
+                RefreshArmedPlacement();
+                PersistLocalPreferences();
+            }
+        }
+    }
+
+    /// <summary>Per-stamp variation of a series, path or scatter, as the panel's sliders hold it.</summary>
+    public double StampRotationJitterDegrees
+    {
+        get => _stampToolSettings.RotationJitterDegrees;
+        set => SetStampJitter(Math.Clamp(value, 0, 180), s => s.RotationJitterDegrees, (s, v) => s with { RotationJitterDegrees = v });
+    }
+
+    public double StampSizeJitterPercent
+    {
+        get => _stampToolSettings.SizeJitterPercent;
+        set => SetStampJitter(Math.Clamp(value, 0, 100), s => s.SizeJitterPercent, (s, v) => s with { SizeJitterPercent = v });
+    }
+
+    public double StampOpacityJitterPercent
+    {
+        get => _stampToolSettings.OpacityJitterPercent;
+        set => SetStampJitter(Math.Clamp(value, 0, 100), s => s.OpacityJitterPercent, (s, v) => s with { OpacityJitterPercent = v });
+    }
+
+    public double StampHueJitterDegrees
+    {
+        get => _stampToolSettings.HueJitterDegrees;
+        set => SetStampJitter(Math.Clamp(value, 0, 180), s => s.HueJitterDegrees, (s, v) => s with { HueJitterDegrees = v });
+    }
+
+    public double StampSaturationJitterPercent
+    {
+        get => _stampToolSettings.SaturationJitterPercent;
+        set => SetStampJitter(Math.Clamp(value, 0, 100), s => s.SaturationJitterPercent, (s, v) => s with { SaturationJitterPercent = v });
+    }
+
+    public double StampBrightnessJitterPercent
+    {
+        get => _stampToolSettings.BrightnessJitterPercent;
+        set => SetStampJitter(Math.Clamp(value, 0, 100), s => s.BrightnessJitterPercent, (s, v) => s with { BrightnessJitterPercent = v });
+    }
+
+    private void SetStampJitter(double value, Func<StampToolSettings, double> read,
+        Func<StampToolSettings, double, StampToolSettings> write)
+    {
+        if (!double.IsFinite(value) || Math.Abs(read(_stampToolSettings) - value) < 0.0001) return;
+        _stampToolSettings = write(_stampToolSettings, value);
+        Raise(nameof(StampRotationJitterDegrees)); Raise(nameof(StampSizeJitterPercent));
+        Raise(nameof(StampOpacityJitterPercent)); Raise(nameof(StampHueJitterDegrees));
+        Raise(nameof(StampSaturationJitterPercent)); Raise(nameof(StampBrightnessJitterPercent));
+        Raise(nameof(StampToolChanges));
+        RefreshArmedPlacement();
+        PersistLocalPreferences();
+    }
+
     /// <summary>How many stamps the current Area and Density would place.</summary>
     public int PlannedStampCount => StampPlacementMode is StampPlacementMode.One or StampPlacementMode.Series
         ? 1
@@ -2661,7 +2925,9 @@ public sealed partial class EditorViewModel : ViewModelBase
                 StampPlacementMode.Series => area + " · серия по одному ассету",
                 StampPlacementMode.FillArea => UsesNaturalAreaLayout ? $"Область · плотность {EditableAreaDensity:0}%"
                     : $"Область · плотность {EditableAreaDensity:0} на 10 000 ед²",
-                _ => $"{area} · плотность {StampDensity:0} на 10 000 ед² · {PlannedStampCount} шт.",
+                _ => StampAvoidOverlap
+                    ? $"{area} · плотность {StampDensity:0} на 10 000 ед² · до {PlannedStampCount} шт., без наложений"
+                    : $"{area} · плотность {StampDensity:0} на 10 000 ед² · {PlannedStampCount} шт.",
             };
         }
     }
@@ -2988,6 +3254,39 @@ public sealed partial class EditorViewModel : ViewModelBase
         return true;
     }
 
+    private int _stampEraseEntries;
+
+    /// <summary>
+    /// The scatter circle run backwards: every stamp whose centre lies inside the circle at the
+    /// pointer leaves the map. Held Alt in the Area mode drives it (as Inkarnate's subtract
+    /// radius does); a whole drag is one undo entry, however many events it took.
+    /// </summary>
+    public bool EraseStampsAround(double worldX, double worldY)
+    {
+        if (PendingPlacement is not { Target: PlacementTargetKind.Stamp } pending) return false;
+        var layer = pending.LayerId is { } layerId ? Session.Document.FindLayer(layerId) as ObjectLayer : ActiveObjectLayer();
+        if (layer is not { Visible: true, Locked: false }) return false;
+        var radius = Math.Max(1, StampAreaRadius);
+        var ids = layer.Objects
+            .Where(o => o.Kind == SceneObjectKind.Stamp
+                && Math.Pow(o.X + (o.Width / 2) - worldX, 2) + Math.Pow(o.Y + (o.Height / 2) - worldY, 2) <= radius * radius)
+            .Select(o => o.Id).ToList();
+        if (ids.Count == 0) return false;
+        Session.Execute(new DeleteObjectsCommand(Session.Document, ids));
+        _stampEraseEntries++;
+        AfterEdit();
+        StatusDetail = $"Убрано ассетов: {ids.Count}. Alt + протягивание стирает дальше.";
+        return true;
+    }
+
+    /// <summary>Folds the deletions of one Alt-drag into a single history entry.</summary>
+    public void EndStampErase()
+    {
+        if (_stampEraseEntries > 1) Session.MergeLastEntries(_stampEraseEntries, "Стереть ассеты");
+        _stampEraseEntries = 0;
+        Raise(nameof(CanUndo)); Raise(nameof(CanRedo));
+    }
+
     public bool CommitPendingPlacement()
     {
         if (PendingPlacement is not { } pending)
@@ -3097,9 +3396,15 @@ public sealed partial class EditorViewModel : ViewModelBase
             CenterY = pending.WorldY,
             Seed = pending.Seed,
         };
+        if (gesturePlan is null) request = request with { ExistingCollisions = ExistingCollisionBoxes(request, layer.Id) };
         var plan = gesturePlan ?? (pending.Mode == StampPlacementMode.Area
             ? StampPlacement.PlanArea(request, sources)
             : StampPlacement.PlanOne(request, sources[0]));
+        if (plan.Count == 0)
+        {
+            StatusDetail = "Здесь нет свободного места: с «Без наложений» каждый ассет задел бы уже стоящий.";
+            return false;
+        }
         if (gesturePlan is null) plan = ApplyPlacementRotation(plan, settings.RotationDegrees);
         if (ResolvePlan(plan, records, out var references, out refusal) is not { } byHash)
         {
@@ -3298,9 +3603,16 @@ public sealed partial class EditorViewModel : ViewModelBase
             CenterY = centerY,
             Seed = NextGestureSeed(),
         };
+        request = request with { ExistingCollisions = ExistingCollisionBoxes(request, layer?.Id) };
         var plan = StampPlacementMode == StampPlacementMode.Area
             ? StampPlacement.PlanAreaPreview(request, sources, MaximumScatterPreviewObjects)
             : StampPlacement.PlanOne(request, sources[0]);
+        if (plan.Count == 0)
+        {
+            // Only «Без наложений» can leave nothing: every box would hit a stamp already there.
+            return EmptyStampPlacement(centerX, centerY, layer?.Id, pointerVisible,
+                "Здесь нет свободного места: с «Без наложений» каждый ассет задел бы уже стоящий.", rotationDegrees);
+        }
         plan = ApplyPlacementRotation(plan, rotationDegrees);
         var preview = plan.Select((item, index) => StampObject(
             item,
@@ -3415,7 +3727,8 @@ public sealed partial class EditorViewModel : ViewModelBase
                 records.TryAdd(maskRecord.Sha256, maskRecord);
             }
             resolvedSources.Add(new StampVariantSource(
-                record.Sha256, record.Width, record.Height, variant.MaskSha256));
+                record.Sha256, record.Width, record.Height, variant.MaskSha256,
+                StampCollision.ClampFraction(_assetCatalog.FindSet(SelectedSet.SetId)?.Placement?.CollisionFraction)));
         }
         if (resolvedSources.Count == 0)
         {
@@ -3430,10 +3743,46 @@ public sealed partial class EditorViewModel : ViewModelBase
             Density = settings.Density,
             RandomizeVariant = randomize && sources.Count > 1,
             RandomAngleStep = scatter ? settings.RandomAngleStep : Map.Core.Editing.StampRandomAngleStep.Off,
-            RandomFlip = settings.RandomFlip && scatter,
+            RandomFlip = settings.RandomFlip && scatter && SelectedSetCanFlip,
             BaseWidth = DefaultStampReferenceWidth() * settings.ScalePercent / 100.0,
+            RotationJitterDegrees = scatter ? settings.RotationJitterDegrees : 0,
+            SizeJitter = scatter ? settings.SizeJitterPercent / 100.0 : 0,
+            OpacityJitter = scatter ? settings.OpacityJitterPercent / 100.0 : 0,
+            HueJitterDegrees = scatter ? settings.HueJitterDegrees : 0,
+            SaturationJitter = scatter ? settings.SaturationJitterPercent / 100.0 : 0,
+            BrightnessJitter = scatter ? settings.BrightnessJitterPercent / 100.0 : 0,
+            AvoidOverlap = settings.AvoidOverlap && settings.Mode == StampPlacementMode.Area,
+            CollisionRotationDegrees = NormalizeAngle(settings.RotationDegrees),
         };
         return true;
+    }
+
+    /// <summary>
+    /// Collision boxes of the stamps already on the target layer around a scatter gesture. Each
+    /// stamp uses the passport of its own card (30 % when it has none); only the neighbourhood
+    /// of the circle is read, through the layer's cached spatial index.
+    /// </summary>
+    private IReadOnlyList<StampCollisionBox> ExistingCollisionBoxes(StampPlacementRequest request, LayerId? layerId)
+    {
+        if (!request.AvoidOverlap || layerId is not { } id
+            || Session.Document.FindLayer(id) is not ObjectLayer layer || layer.Objects.Count == 0) return [];
+        var margin = request.AreaRadius + (request.BaseWidth * 4);
+        var bounds = new WorldBounds(request.CenterX - margin, request.CenterY - margin,
+            request.CenterX + margin, request.CenterY + margin);
+        var fractions = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        var boxes = new List<StampCollisionBox>();
+        foreach (var item in ObjectSpatialIndex.For(layer).Query(bounds))
+        {
+            if (item.Kind != SceneObjectKind.Stamp || item.Stamp is not { } stamp || !item.Visible) continue;
+            if (!fractions.TryGetValue(stamp.AssetSha256, out var fraction))
+            {
+                fraction = StampCollision.ClampFraction(_assetCatalog?.FindSetForContent(stamp.AssetSha256)?.Placement?.CollisionFraction);
+                fractions[stamp.AssetSha256] = fraction;
+            }
+            boxes.Add(StampCollision.Box(item.X + (item.Width / 2), item.Y + (item.Height / 2),
+                item.Width, item.Height, item.RotationDegrees, fraction));
+        }
+        return boxes;
     }
 
     private static SceneObject StampObject(
@@ -3446,7 +3795,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         "#FFFFFFFF", "#00000000", 0, true, false)
     {
         Sublayer = settings.Sublayer,
-        ObjectOpacity = settings.ObjectOpacity * (previewOpacityMultiplier ?? 1),
+        ObjectOpacity = Math.Clamp(settings.ObjectOpacity * item.OpacityFactor, 0, 1) * (previewOpacityMultiplier ?? 1),
         Stamp = new StampStyle(item.Sha256)
         {
             ReferenceWidth = item.Width / Math.Max(0.1, settings.ScalePercent / 100.0),
@@ -3464,12 +3813,18 @@ public sealed partial class EditorViewModel : ViewModelBase
             ShadowOpacity = settings.Style?.ShadowOpacity ?? 0,
             ShadowPlacement = settings.Style?.ShadowPlacement ?? StampShadowPlacement.Object,
             ShadowColor = settings.Style?.ShadowColor ?? AppearanceColor.OpaqueBlack,
-            Hue = settings.Style?.Hue ?? 0,
-            Saturation = settings.Style?.Saturation ?? 0,
-            Brightness = settings.Style?.Brightness ?? 0,
+            Hue = NormalizeSignedAngle((settings.Style?.Hue ?? 0) + item.HueShift),
+            Saturation = Math.Clamp((settings.Style?.Saturation ?? 0) + item.SaturationShift, -1, 1),
+            Brightness = Math.Clamp((settings.Style?.Brightness ?? 0) + item.BrightnessShift, -1, 1),
             Contrast = settings.Style?.Contrast ?? 0,
         },
     };
+
+    private static double NormalizeSignedAngle(double degrees)
+    {
+        var wrapped = ((degrees + 180) % 360 + 360) % 360 - 180;
+        return wrapped;
+    }
 
     private static IReadOnlyList<StampPlacementItem> ApplyPlacementRotation(
         IReadOnlyList<StampPlacementItem> plan,
@@ -3551,6 +3906,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         Raise(nameof(StampRandomAngleStep));
         Raise(nameof(StampRandomAngle));
         Raise(nameof(StampRandomFlip));
+        Raise(nameof(StampAvoidOverlap));
         Raise(nameof(PlannedStampCount));
         Raise(nameof(StampAreaSummary));
     }
@@ -3892,6 +4248,9 @@ public sealed partial class EditorViewModel : ViewModelBase
         Raise(nameof(CurrentVariantIndex));
         Raise(nameof(CurrentVariant));
         Raise(nameof(CurrentVariantLabel));
+        Raise(nameof(StampFamilyVariants));
+        Raise(nameof(StampFamilyName));
+        Raise(nameof(CurrentStampFamilyLabel));
         Raise(nameof(IsCurrentVariantTheCover));
         Raise(nameof(SelectedLibraryRowIndex));
         Raise(nameof(CanMakeCurrentVariantCover));
@@ -4546,6 +4905,8 @@ public sealed partial class EditorViewModel : ViewModelBase
                 return resizePreview;
             }
 
+            if (ValidAppearancePreview is { } appearancePreview) return appearancePreview;
+
             if (DragPreview is not { } preview)
             {
                 return Session.Document;
@@ -5128,7 +5489,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     {
         if (ResolveShapeBooleanSelection() is not { } operands)
         {
-            StatusDetail = "Для preview явно выделите две фигуры на одном доступном Object layer.";
+            StatusDetail = "Для предпросмотра выделите две фигуры на одном доступном слое объектов.";
             return false;
         }
         var command = new ShapeBooleanCommand(Session.Document, operands.Layer.Id,
@@ -5302,6 +5663,67 @@ public sealed partial class EditorViewModel : ViewModelBase
         return true;
     }
 
+    /// <summary>One click: the active filter layer takes a colour preset at full strength (one Undo step).</summary>
+    public bool ApplyActiveFilterPreset(string presetId)
+    {
+        if (ActiveLayer is not FilterLayer { Locked: false } before
+            || FilterColorEffects.Preset(presetId) is not { } preset) return false;
+        return CommitFilter(before, FilterColorEffects.WithPreset(before.Settings, preset));
+    }
+
+    /// <summary>Removes the gradient map and post-processing of the active filter layer; old overlays stay.</summary>
+    public bool ClearActiveFilterColor()
+    {
+        if (ActiveLayer is not FilterLayer { Locked: false } before) return false;
+        return CommitFilter(before, FilterColorEffects.WithoutColor(before.Settings));
+    }
+
+    /// <summary>
+    /// Edits the colour pass of the active filter layer. Strength is 0..1; saturation, brightness
+    /// and contrast -1..1; sharpness 0..1. A manual change of any colour value detaches the preset
+    /// caption; changing only the effect strength keeps it.
+    /// </summary>
+    public bool SetActiveFilterColor(
+        double? colorStrength = null, double? gradientStrength = null,
+        string? shadowColor = null, string? midtoneColor = null, string? highlightColor = null,
+        double? saturation = null, double? brightness = null, double? contrast = null, double? sharpness = null)
+    {
+        if (ActiveLayer is not FilterLayer { Locked: false } before) return false;
+        var current = before.Settings;
+        static string Color(string? value, string fallback) => FilterColorEffects.IsColor(value) ? value! : fallback;
+        var map = current.GradientMap with
+        {
+            ShadowColor = Color(shadowColor, current.GradientMap.ShadowColor),
+            MidtoneColor = Color(midtoneColor, current.GradientMap.MidtoneColor),
+            HighlightColor = Color(highlightColor, current.GradientMap.HighlightColor),
+            Strength = Math.Clamp(gradientStrength ?? current.GradientMap.Strength, 0, 1),
+        };
+        var post = current.PostProcess with
+        {
+            Saturation = Math.Clamp(saturation ?? current.PostProcess.Saturation, -1, 1),
+            Brightness = Math.Clamp(brightness ?? current.PostProcess.Brightness, -1, 1),
+            Contrast = Math.Clamp(contrast ?? current.PostProcess.Contrast, -1, 1),
+            Sharpness = Math.Clamp(sharpness ?? current.PostProcess.Sharpness, 0, 1),
+        };
+        var manual = map != current.GradientMap || post != current.PostProcess;
+        var updated = current with
+        {
+            GradientMap = map,
+            PostProcess = post,
+            ColorStrength = Math.Clamp(colorStrength ?? current.ColorStrength, 0, 1),
+            ColorPresetId = manual ? null : current.ColorPresetId,
+        };
+        return CommitFilter(before, updated);
+    }
+
+    private bool CommitFilter(FilterLayer before, FilterSettings updated)
+    {
+        if (updated == before.Settings) return false;
+        Session.Execute(new UpdateFilterCommand(before, before with { Settings = updated }));
+        AfterEdit();
+        return true;
+    }
+
     public void UseAssetAsActiveFilterTexture(AssetRecord record)
     {
         if (_assetResolver is null || ActiveLayer is not FilterLayer { Locked: false } before) return;
@@ -5470,7 +5892,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     {
         if (Session.SelectedObjectIds.Count == 0)
         {
-            StatusDetail = "Для package сначала выделите хотя бы один объект.";
+            StatusDetail = "Чтобы сохранить композицию в файл, сначала выделите хотя бы один объект.";
             return false;
         }
         try
@@ -5483,13 +5905,13 @@ public sealed partial class EditorViewModel : ViewModelBase
             CompositionPackageStore.Export(
                 package, path, new SaveMetadata(_appVersion, now),
                 RenderPreview(Session.Document));
-            StatusDetail = "Composition package сохранён локально с hashes и provenance.";
+            StatusDetail = "Композиция сохранена в файл вместе с контрольными суммами и сведениями об источниках.";
             return true;
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException
             or MapProjectException or ArgumentException)
         {
-            StatusDetail = "Composition package не сохранён; карта не изменена.";
+            StatusDetail = "Композиция не сохранена в файл; карта не изменена.";
             _log.Error("COMPOSITION_PACKAGE_EXPORT_FAILED", error);
             return false;
         }
@@ -5500,7 +5922,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         var layer = ActiveObjectLayer();
         if (layer is null)
         {
-            StatusDetail = "Для импорта package выберите разблокированный слой объектов.";
+            StatusDetail = "Чтобы вставить композицию из файла, выберите разблокированный слой объектов.";
             return false;
         }
         try
@@ -5518,13 +5940,13 @@ public sealed partial class EditorViewModel : ViewModelBase
             Session.SelectedObjectId = instance.Id;
             _activeLayerId = layer.Id;
             AfterEdit();
-            StatusDetail = "Composition package импортирован как редактируемая композиция.";
+            StatusDetail = "Композиция из файла вставлена как редактируемая.";
             return true;
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException
             or MapProjectException or ArgumentException)
         {
-            StatusDetail = "Composition package отклонён; карта не изменена.";
+            StatusDetail = "Файл композиции отклонён; карта не изменена.";
             _log.Error("COMPOSITION_PACKAGE_IMPORT_FAILED", error);
             return false;
         }
@@ -6268,7 +6690,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         {
             EditorTool.Brush => ((BrushLayer)layer).Tiles,
             EditorTool.Mask => layer.Mask!.Tiles,
-            _ => ((LandLayer)layer).GeometryTiles,
+            _ => LandPaintMode ? ((LandLayer)layer).PaintTiles : ((LandLayer)layer).GeometryTiles,
         };
 
         // The stroke's randomness is decided here, BEFORE any command exists: the committed
@@ -6278,11 +6700,62 @@ public sealed partial class EditorViewModel : ViewModelBase
             Seed = GestureSeed.From(Session.Revision, "brush-stroke", 0, ++_brushSeedCounter),
         };
 
-        _stroke = new RasterStrokeSession(target, BrushSettings);
+        _stroke = new RasterStrokeSession(target,
+            ActiveTool == EditorTool.Land
+                ? LandPaintMode ? LandPaintSettings() : LandShapeSettings()
+                : BrushSettings);
         _stroke.AddPoint(worldX, worldY, pressure);
         InvalidateScene(EditorChangeReason.CanvasInvalidation);
         return true;
     }
+
+    private double _landRoughness = 64;
+
+    /// <summary>
+    /// Feature size, in world units, of the coast a freehand Land stroke leaves: 0 draws a plain
+    /// circle whose edge is the smoothing; any other value makes the dab out of the irregular
+    /// cells of <see cref="RoughCells"/>, so the shore comes out jagged like a drawn coastline
+    /// instead of a row of circles. Default 64, the size of a small bay on a regional map.
+    /// </summary>
+    public double LandRoughness
+    {
+        get => _landRoughness;
+        set
+        {
+            var bounded = Math.Clamp(double.IsFinite(value) ? value : 0, 0, 512);
+            if (Math.Abs(_landRoughness - bounded) < 1e-9) return;
+            CancelStroke();
+            _landRoughness = bounded;
+            Raise(nameof(LandRoughness));
+            SceneChanged?.Invoke(this, EventArgs.Empty);
+        }
+    }
+
+    /// <summary>
+    /// The footprint the raster tools would paint at the pointer, for the canvas to outline:
+    /// the brush circle, or the cells of a rough land dab. Null when the pointer is not over a
+    /// painting tool - a region drag, a workflow dialog or any other tool shows nothing.
+    /// </summary>
+    public Map.Rendering.BrushCursorPreview? BrushCursorAt(double worldX, double worldY)
+    {
+        if (CanvasWorkflowOpen) return null;
+        switch (ActiveTool)
+        {
+            case EditorTool.Brush:
+            case EditorTool.Mask:
+                return new(worldX, worldY, BrushSettings.Radius, 0, BrushSettings.Eraser || (ActiveTool == EditorTool.Mask && MaskMode == MaskPaintMode.Hide));
+            case EditorTool.Land when LandPaintMode:
+                return new(worldX, worldY, BrushSettings.Radius, 0, LandPaintEraser);
+            case EditorTool.Land when !LandDrawsRegion:
+                return new(worldX, worldY, BrushSettings.Radius, LandRoughness, LandSubtract);
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>The brush of a freehand Land stroke: the shared settings with the land's roughness.</summary>
+    private BrushSettings LandShapeSettings() =>
+        BrushSettings with { RoughCellSize = LandRoughness, RoughSmoothing = BrushSettings.Softness, Scatter = 0 };
 
     public void ContinueStroke(double worldX, double worldY, double pressure = 1)
     {
@@ -6323,6 +6796,12 @@ public sealed partial class EditorViewModel : ViewModelBase
                 missingTileValue: 255,
                 subtract: MaskMode == MaskPaintMode.Hide);
             Session.Execute(new MaskStrokeCommand(activeLayerId.GetValueOrDefault(), Before, After));
+        }
+        else if (ActiveTool == EditorTool.Land && LandPaintMode)
+        {
+            var (before, after) = stroke.Commit();
+            Session.Execute(new LandPaintCommand(activeLayerId.GetValueOrDefault(), before, after,
+                stroke.Settings.Eraser ? "Erase land material" : "Paint land material"));
         }
         else if (ActiveTool == EditorTool.Land)
         {
@@ -6420,18 +6899,8 @@ public sealed partial class EditorViewModel : ViewModelBase
 
         var centre = Session.Viewport.ScreenToWorld(
             Session.Viewport.ViewWidth / 2, Session.Viewport.ViewHeight / 2);
-        var (Before, After) = LandRasterizer.MoveRegion(
-            land.GeometryTiles,
-            new WorldBounds(centre.X - 256, centre.Y - 256, centre.X + 256, centre.Y + 256),
-            deltaX,
-            deltaY);
-        if (Before.Count == 0)
-        {
-            return;
-        }
-
-        Session.Execute(new BrushStrokeCommand(land.Id, Before, After, "Move land area"));
-        AfterEdit();
+        MoveActiveLandArea(new WorldBounds(centre.X - 256, centre.Y - 256, centre.X + 256, centre.Y + 256),
+            deltaX, deltaY, snapToGrid: false);
     }
 
     public bool MoveActiveLandArea(WorldBounds region, int deltaX, int deltaY, bool snapToGrid)
@@ -6445,16 +6914,22 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
         var (before, after) = LandRasterizer.MoveRegion(land.GeometryTiles, region, deltaX, deltaY);
         if (before.Count == 0) return false;
-        Session.Execute(new BrushStrokeCommand(land.Id, before, after, "Move selected land area"));
+        var geometry = new BrushStrokeCommand(land.Id, before, after, "Move selected land area");
+        if (land.PaintTiles.TileCount == 0) Session.Execute(geometry);
+        else
+        {
+            var (paintBefore, paintAfter) = LandRasterizer.MoveRegion(land.PaintTiles, region, deltaX, deltaY);
+            Session.Execute(new CompositeCommand("Move land with material painting",
+                [geometry, new LandPaintCommand(land.Id, paintBefore, paintAfter, "Move material painting")]));
+        }
         AfterEdit(); return true;
     }
 
     public bool ClearActiveLand()
     {
         if (ActiveLayer is not LandLayer { Locked: false } land || !land.GeometryTiles.Keys.Any()) return false;
-        var before = land.GeometryTiles.Keys.ToDictionary(key => key, key => land.GeometryTiles.TryGet(key));
-        var after = before.Keys.ToDictionary(key => key, _ => (byte[]?)null);
-        Session.Execute(new BrushStrokeCommand(land.Id, before, after, "Clear land"));
+        Session.Execute(UpdateLayerCommand.Replace(land,
+            land with { GeometryTiles = TileMap.Empty(1), PaintTiles = TileMap.Empty(4) }, "Clear land"));
         AfterEdit(); return true;
     }
 
@@ -6505,6 +6980,22 @@ public sealed partial class EditorViewModel : ViewModelBase
 
         Session.Execute(UpdateLayerCommand.SetBaseColor(layer, color));
         AfterEdit();
+    }
+
+    /// <summary>
+    /// The water material of the open sea, laid over the background colour; null keeps the
+    /// plain colour. One undo step. Only water materials that the renderer can draw are taken.
+    /// </summary>
+    public bool SetBaseMaterial(string? textureId)
+    {
+        if (textureId is not null && (MapFillTextures.Find(textureId) is not { Kind: MapFillTextureKind.Water }
+            || Map.Rendering.MapTextureLibrary.Image(textureId) is null))
+            return false;
+        var layer = Session.Document.BaseColor;
+        if (layer.TextureId == textureId) return false;
+        Session.Execute(UpdateLayerCommand.Replace(layer, layer with { TextureId = textureId }, "Материал моря"));
+        AfterEdit();
+        return true;
     }
 
     public void CancelStroke()
@@ -6638,13 +7129,62 @@ public sealed partial class EditorViewModel : ViewModelBase
     public ObjectTypeFilter ObjectTypeFilter
     {
         get => _objectTypeFilter;
-        set => SetField(ref _objectTypeFilter, value);
+        set
+        {
+            // The "Прочее" section remembers its own sub-filter; the other sections own theirs.
+            if (_panelSection == PanelSection.Other && ObjectTreeRows.FilterOf(PanelSection.Other, value) == value)
+                _otherFilter = value;
+            SetField(ref _objectTypeFilter, value);
+        }
     }
 
     /// <summary>The rows the objects panel shows for the current search, filter and open group.</summary>
     public IReadOnlyList<ObjectTreeRow> ObjectTree => ObjectTreeRows.Build(
         Session.Document, _objectSearchText, _objectTypeFilter, _openGroupId,
-        [.. Session.SelectedObjectIds], [.. _waterSelection], _selectedLandId);
+        [.. Session.SelectedObjectIds], [.. _waterSelection], _selectedLandId, [.. _roadSelection],
+        _openAssetKey, AssetKindTitle);
+
+    private string? _openAssetKey;
+
+    /// <summary>The asset kind opened in the Assets section, or null for the list of kinds.</summary>
+    public string? OpenAssetKey => _openAssetKey;
+
+    public void OpenAssetKind(string key)
+    {
+        _openAssetKey = key;
+        Raise(nameof(ObjectTree));
+    }
+
+    public void CloseAssetKind()
+    {
+        if (_openAssetKey is null) return;
+        _openAssetKey = null;
+        Raise(nameof(ObjectTree));
+    }
+
+    /// <summary>
+    /// A selection made on the map opens the kind that holds it, so its row can be seen and
+    /// scrolled to; a selection of several kinds shows the list of kinds.
+    /// </summary>
+    public void RevealSelectionInAssetKinds()
+    {
+        var keys = Session.SelectedObjects.Where(o => o.Kind == SceneObjectKind.Stamp)
+            .Select(ObjectTreeRows.AssetKeyOf).Distinct().Take(2).ToArray();
+        var next = keys.Length == 1 && Session.SelectedObjects.Count > 0 ? keys[0] : null;
+        if (next is null && Session.SelectedObjects.Count == 0) return;
+        if (next == _openAssetKey) return;
+        _openAssetKey = next;
+        Raise(nameof(ObjectTree));
+    }
+
+    /// <summary>The name a kind row shows: the variant label from the library, else the file name.</summary>
+    private string? AssetKindTitle(string sha)
+    {
+        if (_assetCatalog is null) return null;
+        foreach (var variant in _assetCatalog.Variants)
+            if (string.Equals(variant.Sha256, sha, StringComparison.OrdinalIgnoreCase)) return variant.Label;
+        return _assetCatalog.Find(sha)?.DisplayName;
+    }
 
     /// <summary>
     /// Ctrl+A: selects the visible, unlocked objects that match BOTH the panel search and the
@@ -6652,10 +7192,27 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// </summary>
     public void SelectAllByFilter()
     {
+        if (SelectAllTerrainByFilter())
+        {
+            AfterSelectionChange();
+            return;
+        }
+
+        // Ctrl+A over objects addresses objects only: water, roads or land picked earlier would
+        // otherwise ride along invisibly and be moved or deleted with them.
+        ClearWaterSelection(); ClearRoadSelection(); ClearLandSelection();
         var availableIds = AvailableObjectIds();
         var matching = new List<ObjectId>();
         foreach (var row in ObjectTree)
         {
+            // An asset-kind row stands for all its copies: Ctrl+A over the Assets list still
+            // selects every placed asset the list holds.
+            if (row.Kind == ObjectTreeRowKind.AssetKind && row.MemberIds is { } kindMembers)
+            {
+                matching.AddRange(kindMembers.Where(availableIds.Contains));
+                continue;
+            }
+
             if (row.Kind == ObjectTreeRowKind.Group && row.GroupId is { } groupId)
             {
                 var members = SceneGeometry.GroupMembers(Session.Document, groupId);
@@ -6858,6 +7415,11 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// </summary>
     public bool HandleEscape()
     {
+        if (CancelEditableAreaWork()) { CancelEditableAreaGesture(); CanvasGestureCancelled?.Invoke(this, EventArgs.Empty); return true; }
+        if (HasAppearanceTransferPreview)
+        { CancelAppearanceTransfer(); StatusDetail = "Предпросмотр оформления отменён."; return true; }
+        if (CancelRoadGesture())
+        { CanvasGestureCancelled?.Invoke(this, EventArgs.Empty); StatusDetail = "Правка дороги отменена."; return true; }
         if (CancelRiverGesture())
         { CanvasGestureCancelled?.Invoke(this, EventArgs.Empty); StatusDetail = "Правка реки отменена."; return true; }
         if (CancelEditableAreaGesture())
@@ -6984,9 +7546,10 @@ public sealed partial class EditorViewModel : ViewModelBase
             Session.SetSelection(found);
         }
 
-        // A rubber band over the map takes the water systems it crosses too, so a mixed selection
-        // of stamps and rivers is one gesture and one Delete.
+        // A rubber band over the map takes the water systems and roads it crosses too, so a mixed
+        // selection of stamps, rivers and roads is one gesture and one Delete.
         AddWaterSelection(WatersIn(marquee), begun.Additive);
+        AddRoadSelection(RoadsIn(marquee), begun.Additive);
         AfterSelectionChange();
     }
 
@@ -7083,9 +7646,9 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public void AdjustSelectedSublayer(int direction)
     {
-        // The one level shortcut serves the whole map: objects, then water, then land.
-        if (Session.SelectedObjects.Count == 0 && WaterSelectionCount > 0) { ShiftSelectedWaterLevel(direction); return; }
-        if (Session.SelectedObjects.Count == 0 && WaterSelectionCount == 0 && SelectedLand is not null) { ShiftLandLevel(direction); return; }
+        // The one level shortcut serves the whole map: objects, then water and roads, then land.
+        if (Session.SelectedObjects.Count == 0 && SurfaceSelectionCount > 0) { ShiftSelectedSurfaceLevel(direction); return; }
+        if (Session.SelectedObjects.Count == 0 && SurfaceSelectionCount == 0 && SelectedLand is not null) { ShiftLandLevel(direction); return; }
         if (EditableSelectionList() is not { } before || direction == 0) return;
         ExecuteWholeSelection(before,
             [.. before.Select(o => CopyObject(o) with
@@ -7389,7 +7952,8 @@ public sealed partial class EditorViewModel : ViewModelBase
         {
             // Water is a selection too: with no ordinary object selected, the list speaks for
             // the selected rivers and lakes, and choosing a layer moves them.
-            var owners = Session.SelectedObjects.Count > 0 ? SelectionOwnerLayerIds() : WaterOwnerLayerIds();
+            var owners = Session.SelectedObjects.Count > 0 ? SelectionOwnerLayerIds()
+                : [.. WaterOwnerLayerIds().Concat(RoadOwnerLayerIds()).Distinct()];
             var current = owners.Count == 1 ? owners[0] : (LayerId?)null;
             return
             [
@@ -7480,9 +8044,12 @@ public sealed partial class EditorViewModel : ViewModelBase
     {
         // The one "Слой" control serves water as well: with only rivers or lakes selected, it
         // moves them, as one undoable step, exactly like the river panel's own picker.
-        if (Session.SelectedObjects.Count == 0 && WaterSelectionCount > 0)
+        if (Session.SelectedObjects.Count == 0 && SurfaceSelectionCount > 0)
         {
-            return MoveSelectedWaterToLayer(targetId);
+            var moved = false;
+            if (WaterSelectionCount > 0) moved |= MoveSelectedWaterToLayer(targetId);
+            if (RoadSelectionCount > 0) moved |= MoveSelectedRoadsToLayer(targetId);
+            return moved;
         }
 
         if (EditableSelectionList(allowAreaMembers: true) is null)
@@ -7536,9 +8103,12 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// </summary>
     public bool ReorderSelection(int direction, bool toExtreme = false)
     {
-        if (Session.SelectedObjects.Count == 0 && WaterSelectionCount > 0)
+        if (Session.SelectedObjects.Count == 0 && SurfaceSelectionCount > 0)
         {
-            return ReorderSelectedWater(direction, toExtreme);
+            // Water alone keeps its own command; with roads in the layer the one surface order decides.
+            var roadsInvolved = RoadSelectionCount > 0
+                || SelectedWaters.Any(river => RiverLayerOf(river.Id) is { Roads.Length: > 0 });
+            return roadsInvolved ? ReorderSelectedSurfaces(direction, toExtreme) : ReorderSelectedWater(direction, toExtreme);
         }
 
         if (direction == 0 || EditableSelectionList() is not { } selection)
@@ -7844,16 +8414,18 @@ public sealed partial class EditorViewModel : ViewModelBase
             // Rivers and lakes are drawn under the objects of their layer, so they are picked only
             // where no object answers. From here on they behave like anything else on the canvas:
             // a click selects, Ctrl extends, and a drag moves the whole water system.
-            if (SelectWaterAt(worldX, worldY, viewScale, additive))
+            if (SelectSurfaceAt(worldX, worldY, viewScale, additive))
             {
+                if (!additive && SelectedRoads.Count > 0 && BeginRoadDrag(worldX, worldY)) return CanvasGesture.Drag;
                 if (!additive && SelectedWaters.Count > 0 && BeginWaterDrag(worldX, worldY)) return CanvasGesture.Drag;
                 return CanvasGesture.None;
             }
 
-            if (!additive && (SelectionCount > 0 || WaterSelectionCount > 0))
+            if (!additive && (SelectionCount > 0 || WaterSelectionCount > 0 || RoadSelectionCount > 0))
             {
                 Session.ClearSelection();
                 ClearWaterSelection();
+                ClearRoadSelection();
                 AfterSelectionChange();
             }
 
@@ -7870,6 +8442,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
 
         if (!additive && WaterSelectionCount > 0) ClearWaterSelection();
+        if (!additive && RoadSelectionCount > 0) ClearRoadSelection();
         ClearLandSelection();
 
         SelectHit(hit, additive);
@@ -7911,6 +8484,11 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// <summary>Absolute-cursor drag update covering move, resize and rotate of the whole set.</summary>
     public void UpdateDragTo(double worldX, double worldY)
     {
+        if (IsDraggingRoads)
+        {
+            UpdateRoadDrag(worldX, worldY);
+            return;
+        }
         if (IsDraggingWater)
         {
             UpdateWaterDrag(worldX, worldY);
@@ -7972,6 +8550,11 @@ public sealed partial class EditorViewModel : ViewModelBase
     /// <summary>The whole drag becomes exactly one history entry; a no-move drag becomes none.</summary>
     public void EndDrag()
     {
+        if (IsDraggingRoads)
+        {
+            EndRoadsDrag();
+            return;
+        }
         if (IsDraggingWater)
         {
             EndWaterDrag();
@@ -8006,6 +8589,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     public void CancelDrag()
     {
         CancelWaterDrag();
+        CancelRoadDrag();
         if (DragPreview is null)
         {
             return;
@@ -8017,7 +8601,12 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public void Undo()
     {
-        CancelEditablePathGesture(); CancelEditableAreaGesture(); CancelRiverGesture();
+        // Inside an unfinished area or path, undo steps back one vertex. It never also reaches
+        // into the map history: that used to discard the draft AND the previous finished edit.
+        if (RemoveLastAreaDraftNode() || RemoveLastPathDraftNode()) return;
+        // A large area change still being computed is simply dropped: it never happened.
+        if (CancelEditableAreaWork()) { RaiseSessionState(); return; }
+        CancelEditablePathGesture(); CancelEditableAreaGesture(); CancelRiverGesture(); CancelRoadGesture();
         if (Session.Undo())
         {
             SyncEditablePathSettings(); SyncEditableAreaSettings();
@@ -8027,7 +8616,9 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public void Redo()
     {
-        CancelEditablePathGesture(); CancelEditableAreaGesture(); CancelRiverGesture();
+        if (_areaCreating || _pathCreating) return;
+        CancelEditableAreaWork();
+        CancelEditablePathGesture(); CancelEditableAreaGesture(); CancelRiverGesture(); CancelRoadGesture();
         if (Session.Redo())
         {
             SyncEditablePathSettings(); SyncEditableAreaSettings();
@@ -8213,7 +8804,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         {
             Session.Execute(RestoreCheckpointCommand.Create(Session.Document, id));
             AfterEdit();
-            StatusDetail = $"Восстановлена версия «{checkpoint.Name}». Действие можно отменить одной командой Undo.";
+            StatusDetail = $"Восстановлена версия «{checkpoint.Name}». Действие можно отменить одной командой (Ctrl+Z).";
             return true;
         }
         catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException)
@@ -8271,6 +8862,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         RaisePathState();
         RaiseAreaState();
         RaiseRiverState();
+        RaiseRoadState();
         _lastCommittedEditUtc = _clock();
         SaveState = Session.IsDirty ? SaveState.Unsaved : SaveState.Saved;
         StatusDetail = "";
@@ -9703,7 +10295,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         return new BrushTipShape(size, size, alpha);
     }
 
-    public IReadOnlyList<LocalBrushPreset> BrushPresets => _brushPresets;
+    public IReadOnlyList<LocalBrushPreset> BrushPresets => _brushPresets.Where(p => p.Placement is null && p.Appearance is null).ToArray();
 
     public bool SaveBrushPreset(string name)
     {

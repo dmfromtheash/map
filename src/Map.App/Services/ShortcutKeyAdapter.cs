@@ -10,6 +10,7 @@ internal static class ShortcutKeyAdapter
         input = null!;
         var key = args.PhysicalKey switch
         {
+            >= PhysicalKey.A and <= PhysicalKey.Z => args.PhysicalKey.ToString(),
             PhysicalKey.Slash => "Slash",
             PhysicalKey.Comma => "Comma",
             PhysicalKey.Period => "Period",
@@ -52,6 +53,7 @@ internal static class ShortcutKeyAdapter
         {
             Key.Space => "Space",
             Key.Tab => "Tab",
+            Key.Enter => "Enter",
             Key.Escape => "Escape",
             Key.Delete => "Delete",
             Key.Back => "Backspace",

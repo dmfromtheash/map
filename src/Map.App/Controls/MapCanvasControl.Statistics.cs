@@ -28,6 +28,21 @@ public sealed partial class MapCanvasControl
         }
     }
 
+    /// <summary>
+    /// Distinct map frames completed in the last second. Continuous work (pan, zoom, a stroke)
+    /// gives dozens; a count of one or two is a stray repaint, not a frame rate worth showing.
+    /// </summary>
+    public int RecentFrameCount()
+    {
+        lock (_statisticsGate)
+        {
+            var now = Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency;
+            var count = 0;
+            foreach (var time in _frameTimes) if (now - time <= 1) count++;
+            return count;
+        }
+    }
+
     /// <summary>Completed distinct map frames, not estimated monitor refresh or 1000/render time.</summary>
     public (double? Fps, double RenderMilliseconds, long Frames) ReadFrameStatistics()
     {

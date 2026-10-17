@@ -191,8 +191,8 @@ public sealed class EditingSession
         MapDocument candidate;
         try { candidate = command.Apply(Document); }
         catch (Exception ex) when (ex is InvalidOperationException or ArgumentException
-            && (command is PlacementPathCommand or PlacementAreaCommand or RiverCommand or CompositeCommand { ContainsPlacementPath: true }
-                || Document.Layers.OfType<ObjectLayer>().Any(l => !l.PlacementPaths.IsEmpty || !l.PlacementAreas.IsEmpty || !l.Rivers.IsEmpty)))
+            && (command is PlacementPathCommand or PlacementAreaCommand or RiverCommand or RoadCommand or ReorderSurfaceCommand or CompositeCommand { ContainsPlacementPath: true }
+                || Document.Layers.OfType<ObjectLayer>().Any(l => !l.PlacementPaths.IsEmpty || !l.PlacementAreas.IsEmpty || !l.Rivers.IsEmpty || !l.Roads.IsEmpty)))
         { LastResourceError = ex.Message; ResourceAdmissionChanged?.Invoke(this, EventArgs.Empty); return; }
         if (command is not PlacementPathCommand && !PlacementPathOwnership.Allows(Document, candidate, out var pathReason))
         { LastResourceError = pathReason; ResourceAdmissionChanged?.Invoke(this, EventArgs.Empty); return; }
@@ -209,6 +209,27 @@ public sealed class EditingSession
 
     public string? LastResourceError { get; private set; }
     public event EventHandler? ResourceAdmissionChanged;
+
+    /// <summary>
+    /// Folds the newest <paramref name="count"/> history entries into one, so a gesture that had
+    /// to commit step by step (an erasing drag) is undone in one go. The document and the state
+    /// chain do not change: the merged entry runs from the first entry's before-state to the last
+    /// entry's after-state, which is the current state.
+    /// </summary>
+    public bool MergeLastEntries(int count, string name)
+    {
+        if (count < 2 || _undo.Count < count)
+        {
+            return false;
+        }
+
+        var entries = _undo.GetRange(_undo.Count - count, count);
+        _undo.RemoveRange(_undo.Count - count, count);
+        _undo.Add(new HistoryEntry(
+            new CompositeCommand(name, [.. entries.Select(entry => entry.Command)]),
+            entries[0].BeforeState, entries[^1].AfterState));
+        return true;
+    }
 
     public bool Undo()
     {

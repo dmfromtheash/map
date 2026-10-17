@@ -32,13 +32,43 @@ public sealed class WorkingMemoryBudget
     private readonly object _gate = new();
     private long _reserved;
     private volatile bool _pressure;
+    private long _lastPressureProbe;
+    private int _pressureProbeRunning;
     private static readonly Mutex HeavyGate = new(false, "Local\\Map.HeavyOperation."
         + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Environment.UserDomainName + "\\" + Environment.UserName)))[..16]);
 
     public WorkingMemoryBudget(Func<WorkingMemorySnapshot> read) => _read = read;
     public long ReservedBytes { get { lock (_gate) return _reserved; } }
     public WorkingMemorySnapshot Snapshot => _read();
-    public bool IsUnderPressure => _pressure;
+    public bool IsUnderPressure
+    {
+        get
+        {
+            // A failed or completed edit may leave this flag set for an entire camera-only
+            // session. Recheck recovery without scanning processes on the render thread.
+            // Admission still reads fresh memory synchronously inside TryReserve.
+            if (_pressure && Environment.TickCount64 - Volatile.Read(ref _lastPressureProbe) >= 500
+                && Interlocked.CompareExchange(ref _pressureProbeRunning, 1, 0) == 0)
+            {
+                Volatile.Write(ref _lastPressureProbe, Environment.TickCount64);
+                _ = Task.Run(() =>
+                {
+                    try
+                    {
+                        lock (_gate)
+                        {
+                            var memory = _read();
+                            _pressure = Math.Min(memory.AvailableBytes - SystemReserve(memory),
+                                PrivateLimit(memory) - memory.MapPrivateBytes) - _reserved < HeavyReserveBytes;
+                        }
+                    }
+                    catch { /* A failed probe must not relax the last known pressure state. */ }
+                    finally { Volatile.Write(ref _pressureProbeRunning, 0); }
+                });
+            }
+            return _pressure;
+        }
+    }
     public static long PrivateLimit(WorkingMemorySnapshot memory) => Math.Min(6 * 1024 * MiB, memory.PhysicalBytes * 2 / 5);
     public static long SystemReserve(WorkingMemorySnapshot memory) => Math.Max(2 * 1024 * MiB, memory.PhysicalBytes / 8);
 
@@ -170,21 +200,84 @@ public sealed class WorkingMemoryBudget
         { if (Interlocked.Exchange(ref _reservation, null) is { } held) { held.Dispose(); released.Set(); } }
     }
 
+    // Private bytes of the other open Map windows. Enumerating processes walks a snapshot of every
+    // process in Windows (7-20 ms on the owner's PC) and ran two to three times per edit on the
+    // UI thread. The figure is refreshed in the background at most once per second; this
+    // process's own commitment and the free physical memory stay exact on every read.
+    private static long _otherMapPrivate;
+    private static long _otherMapPrivateRead = long.MinValue;
+    private static int _otherMapPrivateRefreshing;
+    private const long OtherMapPrivateRefreshMs = 1000;
+
     private static WorkingMemorySnapshot ReadSystem()
     {
         var status = new MemoryStatus { Length = (uint)Marshal.SizeOf<MemoryStatus>() };
-        using var current = Process.GetCurrentProcess();
-        var totalPrivate = current.PrivateMemorySize64;
-        foreach (var process in Process.GetProcessesByName("Map.App"))
-        {
-            using (process)
-                try { if (process.Id != current.Id) totalPrivate += process.PrivateMemorySize64; }
-                catch (InvalidOperationException) { /* A concurrently closed process owns no next operation. */ }
-        }
+        var totalPrivate = OwnPrivateBytes() + OtherMapPrivateBytes();
         if (OperatingSystem.IsWindows() && GlobalMemoryStatusEx(ref status))
             return new((long)status.TotalPhysical, (long)status.AvailablePhysical, totalPrivate);
         var available = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes;
         return new(available, Math.Max(0, available - totalPrivate), totalPrivate);
+    }
+
+    private static long OwnPrivateBytes()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            var counters = new ProcessMemoryCounters { Size = (uint)Marshal.SizeOf<ProcessMemoryCounters>() };
+            if (K32GetProcessMemoryInfo(GetCurrentProcess(), ref counters, counters.Size))
+                return (long)counters.PrivateUsage;
+        }
+        using var current = Process.GetCurrentProcess();
+        return current.PrivateMemorySize64;
+    }
+
+    private static long OtherMapPrivateBytes()
+    {
+        var read = Interlocked.Read(ref _otherMapPrivateRead);
+        if (read == long.MinValue)
+        {
+            // The first admission of the process has no earlier figure to lean on.
+            RefreshOtherMapPrivate();
+            return Interlocked.Read(ref _otherMapPrivate);
+        }
+        if (Environment.TickCount64 - read >= OtherMapPrivateRefreshMs
+            && Interlocked.CompareExchange(ref _otherMapPrivateRefreshing, 1, 0) == 0)
+        {
+            _ = Task.Run(() =>
+            {
+                try { RefreshOtherMapPrivate(); }
+                catch { /* The last known figure stays in use. */ }
+                finally { Volatile.Write(ref _otherMapPrivateRefreshing, 0); }
+            });
+        }
+        return Interlocked.Read(ref _otherMapPrivate);
+    }
+
+    private static void RefreshOtherMapPrivate()
+    {
+        var own = Environment.ProcessId;
+        long total = 0;
+        foreach (var process in Process.GetProcessesByName("Map.App"))
+        {
+            using (process)
+                try { if (process.Id != own) total += process.PrivateMemorySize64; }
+                catch (InvalidOperationException) { /* A concurrently closed process owns no next operation. */ }
+        }
+        Interlocked.Exchange(ref _otherMapPrivate, total);
+        Interlocked.Exchange(ref _otherMapPrivateRead, Environment.TickCount64);
+    }
+
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr GetCurrentProcess();
+    [DllImport("kernel32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool K32GetProcessMemoryInfo(IntPtr process, ref ProcessMemoryCounters counters, uint size);
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ProcessMemoryCounters
+    {
+        public uint Size, PageFaultCount;
+        public nuint PeakWorkingSetSize, WorkingSetSize, QuotaPeakPagedPoolUsage, QuotaPagedPoolUsage,
+            QuotaPeakNonPagedPoolUsage, QuotaNonPagedPoolUsage, PagefileUsage, PeakPagefileUsage, PrivateUsage;
     }
 
     [DllImport("kernel32.dll")]

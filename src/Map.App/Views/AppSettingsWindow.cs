@@ -24,7 +24,7 @@ public sealed class AppSettingsWindow : Window
     private readonly TextBlock _theme = new()
     {
         Name = "SettingsTheme",
-        Text = "Map · Blue Atlas",
+        Text = "Map · Таверна",
         VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
     };
     private readonly NumericUpDown _scale = Number("SettingsUiScale", 80, 200, 5);
@@ -36,6 +36,8 @@ public sealed class AppSettingsWindow : Window
     private readonly ComboBox _exportFormat = Choice("SettingsExportFormat", ["PNG", "JPEG", "WebP"]);
     private readonly NumericUpDown _exportScale = Number("SettingsExportScale", 10, 800, 10);
     private readonly CheckBox _exportGrid = new() { Name = "SettingsExportGrid", Content = "Включать сетку по умолчанию" };
+    private readonly CheckBox _sounds = new() { Name = "SettingsInterfaceSounds", Content = "Звуки интерфейса: отклик при наведении и нажатии" };
+    private readonly CheckBox _effects = new() { Name = "SettingsInterfaceEffects", Content = "Анимация интерфейса: искры, плавные кнопки, латунный курсор" };
     private readonly TextBlock _diagnosticsText = new() { Name = "SettingsDiagnostics", TextWrapping = Avalonia.Media.TextWrapping.Wrap };
 
     public AppSettingsWindow(
@@ -116,6 +118,8 @@ public sealed class AppSettingsWindow : Window
                             {
                                 Heading("Интерфейс"),
                                 Ui.PropertyRow("Тема", _theme, captionWidth: 220),
+                                Ui.PropertyRow("Звук", _sounds, captionWidth: 220),
+                                Ui.PropertyRow("Анимация", _effects, captionWidth: 220),
                                 new TextBlock
                                 {
                                     Text = "Оформление Map не следует за тёмной темой Windows: "
@@ -175,6 +179,8 @@ public sealed class AppSettingsWindow : Window
         _exportFormat.SelectedIndex = settings.DefaultExportFormat switch { "Jpeg" => 1, "Webp" => 2, _ => 0 };
         _exportScale.Value = settings.DefaultExportScalePercent;
         _exportGrid.IsChecked = settings.DefaultExportIncludeGrid;
+        _sounds.IsChecked = settings.InterfaceSounds;
+        _effects.IsChecked = settings.InterfaceEffects;
     }
 
     private void Save()
@@ -191,6 +197,8 @@ public sealed class AppSettingsWindow : Window
             DefaultExportFormat = _exportFormat.SelectedIndex switch { 1 => "Jpeg", 2 => "Webp", _ => "Png" },
             DefaultExportScalePercent = (int)(_exportScale.Value ?? 100),
             DefaultExportIncludeGrid = _exportGrid.IsChecked == true,
+            InterfaceSounds = _sounds.IsChecked == true,
+            InterfaceEffects = _effects.IsChecked == true,
         });
         _apply(saved);
         RefreshDiagnostics();

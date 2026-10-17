@@ -61,6 +61,42 @@ public sealed record AssetSet
     public IReadOnlyList<string> Tags { get; init; } = [];
     public bool Favorite { get; init; }
     public required DateTimeOffset ImportedUtc { get; init; }
+
+    /// <summary>
+    /// An archived card is kept with all its content and maps that use it still resolve it, but
+    /// the catalog hides it unless «Архивные» is switched on. Older catalogs read as not archived.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Archived { get; init; }
+
+    /// <summary>Placement passport of the card; null keeps the built-in defaults (older catalogs).</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public AssetPlacementDefaults? Placement { get; init; }
+}
+
+/// <summary>
+/// How an asset prefers to be placed. Values are starting points of the tool; the user can
+/// always override them for a gesture.
+/// </summary>
+public sealed record AssetPlacementDefaults
+{
+    /// <summary>
+    /// Side of the no-overlap box as a share of the stamp side (0.05..1); null = 30 %. Smaller
+    /// boxes let a scatter pack tighter, larger ones keep pictures further apart.
+    /// </summary>
+    public double? CollisionFraction { get; init; }
+
+    /// <summary>«Случайный поворот»: the tool starts with a full ±180° rotation spread.</summary>
+    public bool RandomRotation { get; init; }
+
+    /// <summary>«Случайный размер ±%» (0..100): the tool starts with this size spread.</summary>
+    public double RandomSizePercent { get; init; }
+
+    /// <summary>«Можно отражать»: false keeps the picture unmirrored (text, a compass, a coat of arms).</summary>
+    public bool CanFlip { get; init; } = true;
+
+    /// <summary>«Без тени»: the tool starts with the shadow off for this asset.</summary>
+    public bool NoShadow { get; init; }
 }
 
 /// <summary>Deterministic identity for content-derived singleton sets and variants.</summary>

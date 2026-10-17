@@ -23,6 +23,8 @@ public sealed record BrushTexture
     public int Width { get; }
     public int Height { get; }
     public byte[] Pixels { get; }
+    /// <summary>Reflect alternate tiles, matching the renderer and avoiding a colour jump at the tile edge.</summary>
+    public bool MirrorRepeat { get; init; }
 }
 
 /// <summary>
@@ -60,6 +62,27 @@ public sealed record BrushSettings
 
     /// <summary>0 = hard edge, 1 = the whole radius is a gradient.</summary>
     public double Softness { get; init; } = 0.5;
+
+    /// <summary>
+    /// Size in world units of the coast cells of a rough land dab; 0 keeps the plain round dab.
+    /// With it, the dab is not a circle but the union of every cell of a fixed, map-wide cell field
+    /// (<see cref="RoughCells"/>) whose centre lies inside the circle: the edge becomes an organic
+    /// coastline whose feature size is this value, and consecutive dabs share the same cells, so
+    /// a stroke joins seamlessly with itself and with earlier land. Softness is ignored: the cells
+    /// are crisp, the renderer smooths the magnified edge. Only the procedural tip honours it.
+    /// </summary>
+    public double RoughCellSize { get; init; }
+
+    /// <summary>
+    /// 0..1: how far the corners of a rough stroke are rounded, as a fraction of half a cell.
+    /// The cells keep their irregular layout; only their tips and notches are softened into
+    /// arcs, the way a drawn coastline bends around a bay instead of breaking at an angle.
+    /// </summary>
+    public double RoughSmoothing { get; init; }
+
+    /// <summary>The rounding radius in world units that <see cref="RoughSmoothing"/> asks for.</summary>
+    public int RoughSmoothingRadius =>
+        RoughCellSize > 0 ? (int)Math.Round(Math.Clamp(RoughSmoothing, 0, 1) * RoughCellSize * 0.5) : 0;
 
     /// <summary>Stroke opacity 0..1 applied once per stroke, not once per dab.</summary>
     public double Opacity { get; init; } = 1.0;
@@ -161,8 +184,37 @@ public sealed class RasterStrokeSession
 
     public BrushSettings Settings { get; }
 
-    /// <summary>Per-tile coverage 0..255 accumulated by this stroke. The canvas draws it as preview.</summary>
+    /// <summary>Per-tile coverage 0..255 accumulated by this stroke, dab by dab.</summary>
     public IReadOnlyDictionary<TileKey, byte[]> Coverage => _coverage;
+
+    private IReadOnlyDictionary<TileKey, byte[]>? _smoothed;
+    private int _smoothedDabs;
+    private int _dabs;
+
+    /// <summary>
+    /// The coverage as it will be committed: the dabs, with the corners of a rough stroke
+    /// rounded by its smoothing. The canvas draws this as the preview, so the stroke looks the
+    /// same while it is drawn and once it is on the map. Computed once per added dab.
+    /// </summary>
+    public IReadOnlyDictionary<TileKey, byte[]> CommittedCoverage
+    {
+        get
+        {
+            var radius = Settings.RoughSmoothingRadius;
+            if (radius <= 0)
+            {
+                return _coverage;
+            }
+
+            if (_smoothed is null || _smoothedDabs != _dabs)
+            {
+                _smoothed = CoverageSmoothing.Round(_coverage, radius);
+                _smoothedDabs = _dabs;
+            }
+
+            return _smoothed;
+        }
+    }
 
     public int TouchedTileCount => _coverage.Count;
 
@@ -251,8 +303,15 @@ public sealed class RasterStrokeSession
         var angleCos = Math.Cos(angleRadians);
         var angleSin = Math.Sin(angleRadians);
 
-        var minTile = TileMap.KeyAt(centerX - radius, centerY - radius);
-        var maxTile = TileMap.KeyAt(centerX + radius, centerY + radius);
+        // A rough dab keeps every cell whose centre is inside the circle, and a cell reaches
+        // beyond its centre by up to RoughCells.Reach of the cell size: that is the footprint.
+        var cellSize = tip is null && Settings.RoughCellSize > 0 ? Settings.RoughCellSize : 0;
+        var reach = cellSize > 0 ? radius + (cellSize * RoughCells.Reach) : radius;
+        var radiusSquared = radius * radius;
+
+        var minTile = TileMap.KeyAt(centerX - reach, centerY - reach);
+        var maxTile = TileMap.KeyAt(centerX + reach, centerY + reach);
+        _dabs++;
 
         for (var ty = minTile.Y; ty <= maxTile.Y; ty++)
         {
@@ -268,10 +327,10 @@ public sealed class RasterStrokeSession
                 var originX = tx * TileMap.TileSize;
                 var originY = ty * TileMap.TileSize;
 
-                var x0 = Math.Max(0, (int)Math.Floor(centerX - radius) - originX);
-                var x1 = Math.Min(TileMap.TileSize - 1, (int)Math.Ceiling(centerX + radius) - originX);
-                var y0 = Math.Max(0, (int)Math.Floor(centerY - radius) - originY);
-                var y1 = Math.Min(TileMap.TileSize - 1, (int)Math.Ceiling(centerY + radius) - originY);
+                var x0 = Math.Max(0, (int)Math.Floor(centerX - reach) - originX);
+                var x1 = Math.Min(TileMap.TileSize - 1, (int)Math.Ceiling(centerX + reach) - originX);
+                var y0 = Math.Max(0, (int)Math.Floor(centerY - reach) - originY);
+                var y1 = Math.Min(TileMap.TileSize - 1, (int)Math.Ceiling(centerY + reach) - originY);
 
                 for (var y = y0; y <= y1; y++)
                 {
@@ -283,7 +342,20 @@ public sealed class RasterStrokeSession
                         var dx = originX + x + 0.5 - centerX;
 
                         double alpha;
-                        if (tip is null)
+                        if (cellSize > 0)
+                        {
+                            // The pixel belongs to the dab when the centre of its cell does.
+                            var (siteX, siteY) = RoughCells.NearestSite(originX + x + 0.5, originY + y + 0.5, cellSize);
+                            var sx = siteX - centerX;
+                            var sy = siteY - centerY;
+                            if ((sx * sx) + (sy * sy) > radiusSquared)
+                            {
+                                continue;
+                            }
+
+                            alpha = 1.0;
+                        }
+                        else if (tip is null)
                         {
                             var distance = Math.Sqrt((dx * dx) + (dy * dy));
                             if (distance > radius)
@@ -291,9 +363,18 @@ public sealed class RasterStrokeSession
                                 continue;
                             }
 
-                            alpha = distance <= inner
-                                ? 1.0
-                                : radius - inner <= 0 ? 1.0 : 1.0 - ((distance - inner) / (radius - inner));
+                            // The soft part of the dab falls off as a Gaussian bell, not a straight
+                            // ramp: dense, full near the solid core and fading to a feathered tail,
+                            // which reads as a natural brush edge instead of a cone of alpha.
+                            if (distance <= inner || radius - inner <= 0)
+                            {
+                                alpha = 1.0;
+                            }
+                            else
+                            {
+                                var t = (distance - inner) / (radius - inner);
+                                alpha = Math.Exp(-t * t * 6.0);
+                            }
                         }
                         else
                         {
@@ -320,13 +401,18 @@ public sealed class RasterStrokeSession
                             alpha = tip.Alpha[((int)v * tip.Width) + (int)u] / 255.0;
                         }
 
-                        var value = (byte)Math.Clamp(Math.Round(alpha * opacityFactor * 255), 0, 255);
+                        var value = Math.Clamp(alpha * opacityFactor, 0, 1);
                         var index = rowStart + x;
 
-                        // Max, not sum: overlapping dabs of one stroke must not darken the seam.
-                        if (value > tile[index])
+                        // Dabs accumulate "over" one another towards full coverage - never past
+                        // it, so a seam cannot darken, and never below what is there - so the soft
+                        // rims of neighbouring dabs build a dense, even stroke instead of leaving
+                        // the scalloped edge that keeping only the strongest dab produces.
+                        var existing = tile[index];
+                        var combined = (byte)Math.Clamp(Math.Round(existing + (value * (255 - existing))), 0, 255);
+                        if (combined > existing)
                         {
-                            tile[index] = value;
+                            tile[index] = combined;
                         }
                     }
                 }
@@ -432,13 +518,13 @@ public sealed class RasterStrokeSession
         if (settings.Texture is { } texture)
         {
             worldX -= settings.TextureOffsetX; worldY -= settings.TextureOffsetY;
-            var scale = Math.Clamp(settings.TextureScale, 0.05, 64);
+            var scale = Math.Clamp(settings.TextureScale, 1.0 / 4096, 64);
             var radians = -settings.TextureRotationDegrees * Math.PI / 180;
             var cos = Math.Cos(radians); var sin = Math.Sin(radians);
             var textureX = ((worldX * cos) - (worldY * sin)) / scale;
             var textureY = ((worldX * sin) + (worldY * cos)) / scale;
-            var tx = Mod((int)Math.Floor(textureX), texture.Width);
-            var ty = Mod((int)Math.Floor(textureY), texture.Height);
+            var tx = TextureIndex(textureX, texture.Width, texture.MirrorRepeat);
+            var ty = TextureIndex(textureY, texture.Height, texture.MirrorRepeat);
             var to = ((ty * texture.Width) + tx) * 4;
             var textureAlpha = texture.Pixels[to + 3] / 255.0;
             if (textureAlpha <= 0) return (0, 0, 0, 0);
@@ -451,6 +537,12 @@ public sealed class RasterStrokeSession
         return (sr, sg, sb, alpha);
     }
 
+    private static int TextureIndex(double position, int size, bool mirror)
+    {
+        var index = Mod((int)Math.Floor(position), mirror ? size * 2 : size);
+        return index < size ? index : size * 2 - 1 - index;
+    }
+
     /// <summary>Same, for a single-channel mask or land coverage surface.</summary>
     public (Dictionary<TileKey, byte[]?> Before, Dictionary<TileKey, byte[]?> After) CommitCoverage(
         byte missingTileValue, bool subtract)
@@ -460,11 +552,12 @@ public sealed class RasterStrokeSession
             throw new InvalidOperationException("CommitCoverage works on single-channel tiles.");
         }
 
-        var before = new Dictionary<TileKey, byte[]?>(_coverage.Count);
-        var after = new Dictionary<TileKey, byte[]?>(_coverage.Count);
+        var committed = CommittedCoverage;
+        var before = new Dictionary<TileKey, byte[]?>(committed.Count);
+        var after = new Dictionary<TileKey, byte[]?>(committed.Count);
         var strokeAlpha = Math.Clamp(Settings.Opacity, 0, 1);
 
-        foreach (var (key, coverage) in _coverage)
+        foreach (var (key, coverage) in committed)
         {
             var original = _baseTiles.TryGet(key);
             before[key] = original;

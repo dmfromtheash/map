@@ -5,7 +5,8 @@ namespace Map.Core.Editing;
 /// carried so each variant of a set keeps its own aspect ratio at a shared base width.
 /// </summary>
 public sealed record StampVariantSource(
-    string Sha256, int PixelWidth, int PixelHeight, string? MaskSha256 = null);
+    string Sha256, int PixelWidth, int PixelHeight, string? MaskSha256 = null,
+    double CollisionFraction = StampCollision.DefaultFraction);
 
 /// <summary>Discrete, deterministic random rotation increments for a scatter gesture.</summary>
 public enum StampRandomAngleStep
@@ -54,6 +55,34 @@ public sealed record StampPlacementRequest
 
     /// <summary>Width of one placed stamp in world units; the height follows the aspect ratio.</summary>
     public double BaseWidth { get; init; } = 96;
+
+    /// <summary>
+    /// Continuous per-stamp variation, each drawn from its own seeded sequence so switching one
+    /// on never moves the others. Rotation and hue in degrees (± that much), the rest 0..1 as a
+    /// fraction (± that fraction of size or opacity, ± that offset of saturation or brightness).
+    /// </summary>
+    public double RotationJitterDegrees { get; init; }
+    public double SizeJitter { get; init; }
+    public double OpacityJitter { get; init; }
+    public double HueJitterDegrees { get; init; }
+    public double SaturationJitter { get; init; }
+    public double BrightnessJitter { get; init; }
+
+    /// <summary>
+    /// «Без наложений»: a scattered stamp is left out when its collision box would intersect the
+    /// box of a stamp already planned in this gesture or listed in <see cref="ExistingCollisions"/>.
+    /// Every random draw is still taken, so switching it on only removes stamps, never moves them.
+    /// </summary>
+    public bool AvoidOverlap { get; init; }
+
+    /// <summary>Boxes of stamps already on the target layer near the gesture.</summary>
+    public IReadOnlyList<StampCollisionBox> ExistingCollisions { get; init; } = [];
+
+    /// <summary>Tool rotation applied after planning; the collision boxes are turned by it as well.</summary>
+    public double CollisionRotationDegrees { get; init; }
+
+    public bool HasJitter => RotationJitterDegrees > 0 || SizeJitter > 0 || OpacityJitter > 0
+        || HueJitterDegrees > 0 || SaturationJitter > 0 || BrightnessJitter > 0;
 }
 
 /// <summary>
@@ -69,7 +98,11 @@ public sealed record StampPlacementItem(
     double RotationDegrees,
     bool FlipHorizontal,
     bool FlipVertical,
-    string? MaskSha256 = null);
+    string? MaskSha256 = null,
+    double OpacityFactor = 1,
+    double HueShift = 0,
+    double SaturationShift = 0,
+    double BrightnessShift = 0);
 
 /// <summary>
 /// Turns a gesture into an immutable placement plan. The renderer never sees this type: it knows
@@ -156,9 +189,16 @@ public static class StampPlacement
             throw new ArgumentException("Размещение требует хотя бы один вариант.", nameof(variants));
         }
 
-        var count = Math.Min(CountFor(request.Density, request.AreaRadius), maximumItems);
+        var attempts = CountFor(request.Density, request.AreaRadius);
+        // Without the no-overlap rule the plan is the familiar prefix; with it every attempt is
+        // drawn and the preview keeps the first accepted stamps of the same sequence.
+        var count = request.AvoidOverlap ? attempts : Math.Min(attempts, maximumItems);
+        var collisions = request.AvoidOverlap ? CollisionGrid(request, variants) : null;
         var random = new DeterministicRandom(request.Seed);
-        var items = new List<StampPlacementItem>(count);
+        // The jitters have a sequence of their own: a gesture recorded before they existed keeps
+        // every position, variant, angle step and flip it had.
+        var jitter = new DeterministicRandom(unchecked(request.Seed * 31 + 0x5f3759df));
+        var items = new List<StampPlacementItem>(Math.Min(count, Math.Min(maximumItems, 4096)));
         for (var index = 0; index < count; index++)
         {
             // Uniform inside a disc: sqrt on the radius, otherwise the centre would crowd.
@@ -178,20 +218,75 @@ public static class StampPlacement
                 ? variants[Math.Min(variants.Count - 1, (int)(variantDraw * variants.Count))]
                 : variants[0];
             var step = (int)request.RandomAngleStep;
-            var rotation = step > 0 && 360 % step == 0
+            double rotation = step > 0 && 360 % step == 0
                 ? Math.Min((int)(rotationDraw * (360 / step)), (360 / step) - 1) * step
                 : 0;
-            items.Add(Item(
+            var item = Item(
                 request,
                 variant,
                 x,
                 y,
                 rotation,
                 request.RandomFlip && flipHorizontalDraw < 0.5,
-                request.RandomFlip && flipVerticalDraw < 0.25));
+                request.RandomFlip && flipVerticalDraw < 0.25);
+            var placed = Jittered(request, item, jitter);
+            if (collisions is not null)
+            {
+                var box = StampCollision.For(placed, variant.CollisionFraction, request.CollisionRotationDegrees);
+                if (collisions.Collides(box)) continue;
+                collisions.Add(box);
+            }
+            items.Add(placed);
+            if (items.Count >= maximumItems) break;
         }
 
         return items;
+    }
+
+    private static StampCollisionGrid CollisionGrid(StampPlacementRequest request, IReadOnlyList<StampVariantSource> variants)
+    {
+        var width = request.BaseWidth <= 0 ? 1 : request.BaseWidth;
+        var tallest = variants.Max(v => v.PixelWidth <= 0 ? 1.0 : (double)v.PixelHeight / v.PixelWidth);
+        var grid = new StampCollisionGrid(Math.Max(width, width * tallest) * (1 + Math.Clamp(request.SizeJitter, 0, 1)));
+        foreach (var existing in request.ExistingCollisions) grid.Add(existing);
+        return grid;
+    }
+
+    /// <summary>
+    /// The continuous variations of one stamp, every draw taken whether used or not. The size
+    /// change keeps the stamp centred where the plan put it.
+    /// </summary>
+    private static StampPlacementItem Jittered(StampPlacementRequest request, StampPlacementItem item, DeterministicRandom jitter)
+    {
+        var rotationDraw = (jitter.NextDouble() * 2) - 1;
+        var sizeDraw = (jitter.NextDouble() * 2) - 1;
+        var opacityDraw = jitter.NextDouble();
+        var hueDraw = (jitter.NextDouble() * 2) - 1;
+        var saturationDraw = (jitter.NextDouble() * 2) - 1;
+        var brightnessDraw = (jitter.NextDouble() * 2) - 1;
+        if (!request.HasJitter)
+        {
+            return item;
+        }
+
+        var scale = 1 + (Math.Clamp(request.SizeJitter, 0, 1) * sizeDraw);
+        scale = Math.Max(0.05, scale);
+        var width = item.Width * scale;
+        var height = item.Height * scale;
+        var rotation = item.RotationDegrees + (Math.Clamp(request.RotationJitterDegrees, 0, 180) * rotationDraw);
+        rotation = ((rotation % 360) + 360) % 360;
+        return item with
+        {
+            X = item.X + ((item.Width - width) / 2),
+            Y = item.Y + ((item.Height - height) / 2),
+            Width = width,
+            Height = height,
+            RotationDegrees = rotation,
+            OpacityFactor = 1 - (Math.Clamp(request.OpacityJitter, 0, 1) * opacityDraw),
+            HueShift = Math.Clamp(request.HueJitterDegrees, 0, 180) * hueDraw,
+            SaturationShift = Math.Clamp(request.SaturationJitter, 0, 1) * saturationDraw,
+            BrightnessShift = Math.Clamp(request.BrightnessJitter, 0, 1) * brightnessDraw,
+        };
     }
 
     /// <summary>

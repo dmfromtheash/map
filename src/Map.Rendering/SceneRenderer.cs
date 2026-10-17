@@ -3,6 +3,7 @@ using Map.Core.Editing;
 using SkiaSharp;
 using System.Runtime.CompilerServices;
 using System.Collections.Immutable;
+using System.Diagnostics;
 
 namespace Map.Rendering;
 
@@ -32,6 +33,7 @@ public sealed class StrokePreview
 
     /// <summary>The preview belongs to the document-owned, map-aligned stamp foreground.</summary>
     public bool IsStampForeground { get; init; }
+    public bool IsLandPaint { get; init; }
 }
 
 /// <summary>Per-frame counters. Optional: the editor sets it only when the HUD or a test needs it.</summary>
@@ -64,6 +66,25 @@ public sealed class RenderStats
     public int VectorObjects { get; set; }
     public int CompositionObjects { get; set; }
     public int EffectObjects { get; set; }
+    /// <summary>Where the scene pass spent its CPU time: the terrain pass, the object layers, and inside those the stamp paths.</summary>
+    public double TerrainMilliseconds { get; set; }
+    public double LandMilliseconds { get; set; }
+    public double WaterMilliseconds { get; set; }
+    public double RiverMilliseconds { get; set; }
+    /// <summary>River passes: halo, bank relief, water fill, material, coast wash, shallows, water lines, outline.</summary>
+    public double[] RiverPassMilliseconds { get; } = new double[8];
+    public double RoadMilliseconds { get; set; }
+    public double ObjectsMilliseconds { get; set; }
+    public double StampBatchMilliseconds { get; set; }
+    /// <summary>Frames that drew the kept terrain image resampled because the camera was moving.</summary>
+    public int TerrainReused { get; set; }
+    public int TerrainRefinementsPending { get; set; }
+    public double TerrainRefinementBuildMilliseconds { get; set; }
+    /// <summary>Layers whose kept detail tiles of a neighbouring zoom bucket were drawn resampled while the camera moved.</summary>
+    public int TilesReused { get; set; }
+    public double StampSingleMilliseconds { get; set; }
+    public int StampMipBlends { get; set; }
+    public double StampMipBlendMilliseconds { get; set; }
     private readonly HashSet<string> _seenAssets = new(StringComparer.Ordinal);
 
     public void Reset()
@@ -95,6 +116,21 @@ public sealed class RenderStats
         VectorObjects = 0;
         CompositionObjects = 0;
         EffectObjects = 0;
+        TerrainMilliseconds = 0;
+        LandMilliseconds = 0;
+        WaterMilliseconds = 0;
+        RiverMilliseconds = 0;
+        Array.Clear(RiverPassMilliseconds);
+        RoadMilliseconds = 0;
+        ObjectsMilliseconds = 0;
+        StampBatchMilliseconds = 0;
+        TerrainReused = 0;
+        TerrainRefinementsPending = 0;
+        TerrainRefinementBuildMilliseconds = 0;
+        TilesReused = 0;
+        StampSingleMilliseconds = 0;
+        StampMipBlends = 0;
+        StampMipBlendMilliseconds = 0;
         _seenAssets.Clear();
     }
 
@@ -134,6 +170,9 @@ public sealed class RenderStats
 /// Editor-only rendering fidelity. Export always evaluates the exact document regardless of this
 /// value; overview is a bounded screen-space representation for far zoom only.
 /// </summary>
+/// <summary>The brush footprint shown under the pointer: a circle, or the cells of a rough land dab.</summary>
+public sealed record BrushCursorPreview(double WorldX, double WorldY, double Radius, double RoughCellSize, bool Subtract);
+
 public enum RenderLodTier
 {
     Exact,
@@ -202,6 +241,11 @@ public sealed class RenderOptions
 
     public LayerId? RiverPreviewLayerId { get; init; }
 
+    /// <summary>Live road substitutions for an editor gesture, matched by id; a draft is drawn on <see cref="RoadPreviewLayerId"/> only.</summary>
+    public IReadOnlyList<Road>? RoadOverrides { get; init; }
+
+    public LayerId? RoadPreviewLayerId { get; init; }
+
     public TileImageCache? TileCache { get; init; }
 
     /// <summary>
@@ -210,8 +254,33 @@ public sealed class RenderOptions
     /// </summary>
     public CarvedLandCache? CarvedLand { get; init; }
 
+    /// <summary>
+    /// Reuse of the complete look of a piece of land for an unchanged view. With it, a frame
+    /// drawn during a stroke, an armed placement or a drag shows the same material and coast as
+    /// the idle frame at the cost of one image. Absent (export, tests) the land is drawn in full.
+    /// </summary>
+    public RenderImageCache? StyledLand { get; init; }
+
+    /// <summary>
+    /// Reuse of the whole terrain of a level run - land and water together - for an unchanged
+    /// view. Strokes, placement and drags then cost one image for the entire ground; a change
+    /// to any land, river or road, a pan or a zoom rebuilds it.
+    /// </summary>
+    public RenderImageCache? Terrain { get; init; }
+
+    /// <summary>Optional editor worker for refining an unchanged terrain after a camera move.</summary>
+    public TerrainRefinement? TerrainRefinement { get; init; }
+    public Action? RequestRefinedFrame { get; init; }
+
     /// <summary>Render-context-local cache used only by the editor overview tier.</summary>
     public ObjectOverviewCache? ObjectCache { get; init; }
+
+    /// <summary>
+    /// Where the per-zoom-bucket stamp atlases of dense tiles live: a few large images with a
+    /// budget of their own, so one atlas cannot evict a screen of tiles. Falls back to
+    /// <see cref="ObjectCache"/> when not set.
+    /// </summary>
+    public ObjectOverviewCache? AtlasCache { get; init; }
 
     public RenderLodTier LodTier { get; init; } = RenderLodTier.Exact;
 
@@ -224,11 +293,32 @@ public sealed class RenderOptions
 
     public RenderStats? Stats { get; init; }
 
-    /// <summary>During pan/gesture draw source land fill only; idle/export evaluates all effects.</summary>
+    /// <summary>
+    /// A gesture is moving objects or the pointer: per-object effects (blur, shadow, outline of
+    /// vector shapes) are left out until it ends. The terrain no longer follows this flag - see
+    /// <see cref="FastTerrain"/> - so a stroke or an armed placement keeps the land's material.
+    /// </summary>
     public bool FastPreview { get; init; }
+
+    /// <summary>
+    /// The view itself is moving (a pan) or the geometry of water or roads is being dragged:
+    /// the terrain draws its plain fills and skips the coast, bank and material passes that
+    /// would otherwise be rebuilt for every frame. Idle, strokes, placement, selection and
+    /// export evaluate the complete terrain.
+    /// </summary>
+    public bool FastTerrain { get; init; }
 
     /// <summary>Export paths opt in so editor-only grids can be omitted independently.</summary>
     public bool IsExport { get; init; }
+
+    /// <summary>The brush under the pointer, drawn over everything as its true footprint; null hides it.</summary>
+    public BrushCursorPreview? BrushCursor { get; init; }
+
+    /// <summary>
+    /// Draws every coast with the filter passes instead of the distance field (CoastDistanceField),
+    /// for comparing the two in tests and measurements without touching global state.
+    /// </summary>
+    public bool CoastFilters { get; init; }
 
     /// <summary>
     /// The mandatory document base is normally drawn. Transparent PNG/WebP export explicitly
@@ -266,6 +356,32 @@ public static class SceneRenderer
     private static readonly SKColor SelectionColor = new(255, 214, 10, 255);
     // Spatial revisions retain untouched tiles; each raster is capped at 512 screen pixels.
     private const double OverviewChunkSize = 8_192;
+
+    /// <summary>
+    /// How much finer than the document a stamp is sampled in the editor. One world unit is one
+    /// document pixel; a stamp W units wide draws from a mip of at most W × 4 source pixels
+    /// however far the view zooms in, so the detail a map can show grows with its size and with
+    /// the world size of its objects, not with the zoom (DEC-035). Export is never capped: it
+    /// evaluates the full source for the requested output size.
+    /// </summary>
+    public const double StampDetailHeadroom = 4;
+
+    /// <summary>
+    /// What the terrain reads from an object layer: its visibility, blending, effects and mask.
+    /// The objects on the layer are not part of it, so placing or moving a stamp keeps every
+    /// kept terrain image; the rivers and roads themselves are separate parts of the key.
+    /// </summary>
+    private sealed record TerrainOwnerKey(LayerId Id, bool Visible, double Opacity, string Blend, LayerEffects Effects, LayerMask? Mask);
+
+    private static object OwnerKey(MapLayer layer) => layer is ObjectLayer owner
+        ? new TerrainOwnerKey(owner.Id, owner.Visible, owner.Opacity, owner.Blend, owner.Effects, owner.Mask)
+        : layer;
+
+    /// <summary>Source pixels a stamp of this world size may draw from at this device scale.</summary>
+    private static double DetailPixels(double worldSize, double pixelScale, RenderOptions options) =>
+        worldSize * (options.IsExport ? pixelScale : Math.Min(pixelScale, StampDetailHeadroom));
+
+
     private const double OverviewExactScreenSize = 4;
     private static readonly ConditionalWeakTable<ObjectLayer, ObjectOverviewPlan> OverviewPlans = [];
     private static readonly ConditionalWeakTable<ObjectLayer, DetailTileRevisions> DetailRevisions = [];
@@ -299,7 +415,7 @@ public static class SceneRenderer
         // level (TerrainOrder), drawn where the first visible land layer sits in the stack, or
         // where the first object layer sits when the map has no land. The stack still keeps
         // land below objects; inside the terrain the levels decide what covers what.
-        var terrainAnchor = TerrainAnchor(document);
+        var terrainAnchor = TerrainAnchor(document, options);
         for (var layerIndex = 0; layerIndex < document.Layers.Count; layerIndex++)
         {
             var layer = document.Layers[layerIndex];
@@ -323,7 +439,10 @@ public static class SceneRenderer
 
             if (layerIndex == terrainAnchor)
             {
+                var terrainStarted = Stopwatch.GetTimestamp();
                 DrawTerrain(canvas, document, view, options);
+                if (options.Stats is { } terrainStats)
+                    terrainStats.TerrainMilliseconds += Stopwatch.GetElapsedTime(terrainStarted).TotalMilliseconds;
             }
             if (layer is LandLayer)
             {
@@ -346,14 +465,14 @@ public static class SceneRenderer
     }
 
     /// <summary>The stack index the terrain pass is drawn at: the first visible land with coverage, else the first visible object layer.</summary>
-    private static int TerrainAnchor(MapDocument document)
+    private static int TerrainAnchor(MapDocument document, RenderOptions options)
     {
         var firstObjects = -1;
         for (var index = 0; index < document.Layers.Count; index++)
         {
             switch (document.Layers[index])
             {
-                case LandLayer { Visible: true, Opacity: > 0 } land when land.GeometryTiles.TileCount > 0:
+                case LandLayer { Visible: true, Opacity: > 0 } land when land.GeometryTiles.TileCount > 0 || HasLandShapePreview(land, options):
                     return index;
                 case ObjectLayer { Visible: true, Opacity: > 0 } when firstObjects < 0:
                     firstObjects = index;
@@ -368,21 +487,255 @@ public static class SceneRenderer
     /// path (mask, opacity, blend); the water of a level follows it, carved into and clipped to
     /// the land at that level or below, and covered by the land of the levels above.
     /// </summary>
-    private static void DrawTerrain(SKCanvas canvas, MapDocument document, WorldBounds view, RenderOptions options)
+    /// <summary>One road or river of an object layer, in that layer's surface order, with its terrain level.</summary>
+    private readonly record struct Surface(ObjectLayer Owner, int Order, River? River, Road? Road)
     {
-        var lands = TerrainOrder.Lands(document)
-            .Where(land => land.Visible && land.Opacity > 0 && land.GeometryTiles.TileCount > 0)
-            .ToList();
-        var rivers = new List<(ObjectLayer Owner, River River)>();
+        public int Level => River?.Level ?? Road!.Level;
+    }
+
+    /// <summary>
+    /// The visible roads and water of every object layer, in stack order and, inside a layer, in
+    /// its own surface order - with the editor's live substitutions applied. A draft road takes
+    /// the default place of a road, under the water of its layer, so the preview and the result agree.
+    /// </summary>
+    private static List<Surface> Surfaces(MapDocument document, WorldBounds view, RenderOptions options)
+    {
+        var result = new List<Surface>();
         foreach (var layer in document.Layers.OfType<ObjectLayer>())
         {
             if (!layer.Visible || layer.Opacity <= 0) continue;
-            foreach (var river in RiverRenderer.Resolve(layer, options))
+            result.AddRange(LayerSurfaces(layer, view, options));
+        }
+        return result;
+    }
+
+    private static IEnumerable<Surface> LayerSurfaces(ObjectLayer layer, WorldBounds view, RenderOptions options)
+    {
+        var rivers = RiverRenderer.Resolve(layer, options);
+        var roads = RoadRenderer.Resolve(layer, options);
+        if (rivers.Count == 0 && roads.Count == 0) yield break;
+        var resolved = layer with { Rivers = [.. rivers], Roads = [.. roads] };
+        var order = 0;
+        foreach (var entry in LayerSurfaceOrder.Resolve(resolved))
+        {
+            if (entry.Kind == SurfaceKind.Water)
+            {
+                var river = rivers.First(r => r.Id == entry.Id);
                 if (river.Visible && river.Style.Opacity > 0 && RiverGeometry.Evaluate(river).Bounds.Intersects(view))
-                    rivers.Add((layer, river));
+                    yield return new Surface(layer, order, river, null);
+            }
+            else
+            {
+                var road = roads.First(r => r.Id == entry.Id);
+                if (road.Visible && road.Style.Opacity > 0 && RoadGeometry.Evaluate(road).Bounds.Intersects(view))
+                    yield return new Surface(layer, order, null, road);
+            }
+            order++;
+        }
+    }
+
+    /// <summary>
+    /// Draws one owner's surfaces of one level in their order: consecutive rivers as one body of
+    /// water (so shared looks share an outline), each road as itself. A/B/A stays A/B/A.
+    /// </summary>
+    private static void DrawSurfaceRun(SKCanvas target, IReadOnlyList<Surface> run, WorldBounds view, RenderOptions options,
+        Action<SKCanvas, SKPaint>? landCoverage, IReadOnlyList<River> neighbours)
+    {
+        var index = 0;
+        while (index < run.Count)
+        {
+            if (run[index].Road is { } road)
+            {
+                var roadStarted = Stopwatch.GetTimestamp();
+                RoadRenderer.DrawRoads(target, [road], view, options);
+                if (options.Stats is { } roadStats) roadStats.RoadMilliseconds += Stopwatch.GetElapsedTime(roadStarted).TotalMilliseconds;
+                index++;
+                continue;
+            }
+            var water = new List<River>();
+            while (index < run.Count && run[index].River is { } river) { water.Add(river); index++; }
+            var riverStarted = Stopwatch.GetTimestamp();
+            RiverRenderer.DrawRivers(target, water, view, options, landCoverage, neighbours);
+            if (options.Stats is { } riverStats) riverStats.RiverMilliseconds += Stopwatch.GetElapsedTime(riverStarted).TotalMilliseconds;
+        }
+    }
+
+    private static void DrawTerrain(SKCanvas canvas, MapDocument document, WorldBounds view, RenderOptions options)
+    {
+        var lands = TerrainOrder.Lands(document)
+            .Where(land => land.Visible && land.Opacity > 0
+                && (land.GeometryTiles.TileCount > 0 || HasLandShapePreview(land, options)))
+            .ToList();
+        var surfaces = Surfaces(document, view, options);
+        if (lands.Count == 0 && surfaces.Count == 0) return;
+
+        // The whole terrain of the view is kept between frames when nothing in it can change
+        // from one frame to the next: no live land stroke, no mask editing, no pan or geometry
+        // drag, and only Normal blending (a multiplied layer must meet what lies beneath it in
+        // the frame, not in a kept image). An edit to any land, river or road, or a change of
+        // view, produces new inputs and rebuilds the image.
+        var keepable = options.Terrain is not null && !options.IsExport
+            && options.LodTier != RenderLodTier.Overview
+            && options.Preview is not { IsLandPaint: true }
+            && !lands.Any(land => HasLandShapePreview(land, options))
+            && options.MaskEditLayerId is null
+            && lands.All(land => land.Blend == "Normal")
+            && surfaces.All(surface => surface.Owner.Blend == "Normal"
+                && (!surface.Owner.Effects.ClippingEnabled || options.ObjectOverrides is null));
+        var cacheable = keepable && !options.FastTerrain;
+        // The identity of the kept image does not depend on the view: every visible land and
+        // every visible river and road of the map is part of it, whether or not it is on screen,
+        // so a zoomed-in frame can still recognise the image built for the whole map.
+        List<object> TerrainParts()
+        {
+            var parts = new List<object>();
+            foreach (var land in lands) parts.Add(land);
+            foreach (var surface in Surfaces(document, new WorldBounds(0, 0, document.Canvas.Width, document.Canvas.Height), options))
+            {
+                parts.Add(OwnerKey(surface.Owner));
+                parts.Add((object?)surface.River ?? surface.Road!);
+                if (surface.Owner.Effects.ClippingEnabled && LowerLayer(document, surface.Owner) is { } lower) parts.Add(lower);
+            }
+            return parts;
+        }
+        // The camera is moving: the terrain last finished for these very layers, rivers and
+        // roads is drawn resampled into the new view - the same land, coast and material, only
+        // scaled - and the plain fills cover whatever the kept image no longer reaches. The
+        // exact terrain is rebuilt once the camera settles (MapCanvasControl schedules that
+        // frame). Nothing about the terrain changed, or the inputs would not match.
+        var terrainParts = keepable ? TerrainParts() : null;
+        var deviceScale = Math.Max(1e-4, Math.Sqrt(canvas.TotalMatrix.ScaleX * canvas.TotalMatrix.ScaleX + canvas.TotalMatrix.SkewY * canvas.TotalMatrix.SkewY));
+        // Above the editor's detail headroom, magnify the same terrain pixels, just as
+        // stamps do. Keep display scaling, but do not recalculate a coastline's blur and
+        // morphology at ever larger radii for magnification alone. Export remains exact.
+        var terrainScale = options.IsExport ? deviceScale
+            : deviceScale * Math.Min(1, StampDetailHeadroom / Math.Max(1e-4, options.ViewScale));
+        if (cacheable && options.TerrainRefinement is { } refinement)
+        {
+            if (options.Stats is { } refinementStats) refinementStats.TerrainRefinementBuildMilliseconds = refinement.LastBuildMilliseconds;
+            var exact = options.Terrain!.TryGetExact(terrainParts!, view, terrainScale, options.GpuContext);
+            if (exact is null && refinement.Take(terrainParts!, view, terrainScale) is { } ready)
+                exact = options.Terrain.Get(terrainParts!, view, terrainScale, options.GpuContext, (_, _) => ready);
+            if (exact is not null)
+            {
+                canvas.DrawImage(exact, RenderImageCache.Placement(exact, view, terrainScale),
+                    new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None));
+                return;
+            }
+        }
+        if (keepable && (options.FastTerrain || options.TerrainRefinement is not null)
+            && options.Terrain!.TryGetBest(terrainParts!, view, terrainScale,
+                options.GpuContext, out var keptView, out var keptScale) is { } kept)
+        {
+            var placement = RenderImageCache.Placement(kept, keptView, keptScale);
+            var covered = placement.Left <= view.Left + 1e-6 && placement.Top <= view.Top + 1e-6
+                && placement.Right >= view.Right - 1e-6 && placement.Bottom >= view.Bottom - 1e-6;
+            var refining = false;
+            if (!options.FastTerrain && covered && options.RequestRefinedFrame is { } requestFrame
+                && options.RiverOverrides is null && options.RoadOverrides is null
+                && surfaces.All(surface => !surface.Owner.Effects.ClippingEnabled))
+            {
+                // Prepare terrain from immutable inputs with private CPU resources. Even a
+                // clipped GPU replay can stall on morphology filters and shader compilation;
+                // the render thread only uploads the complete result. No borrowed context,
+                // asset source or frame cache crosses threads.
+                refining = options.TerrainRefinement!.Queue(terrainParts!, view, terrainScale,
+                    BackgroundTerrain(document, lands, surfaces, view, terrainScale, options), requestFrame);
+            }
+            if (refining && options.Stats is { } pendingStats) pendingStats.TerrainRefinementsPending++;
+            if (options.FastTerrain && !covered)
+            {
+                // Only the newly exposed area is missing. Drawing the fallback underneath the
+                // kept image would apply translucent ground/water twice in their overlap.
+                canvas.Save();
+                canvas.ClipRect(placement, SKClipOperation.Difference);
+                DrawTerrainPasses(canvas, document, lands, surfaces, view, options);
+                canvas.Restore();
+            }
+            if (options.FastTerrain || refining)
+            {
+                canvas.DrawImage(kept, placement, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear));
+                if (options.Stats is { } keptStats) keptStats.TerrainReused++;
+                return;
+            }
+        }
+        // Nothing of the terrain has been built in this view's cache yet - a map was just opened,
+        // or memory pressure dropped every kept image. There is no earlier exact frame the user
+        // could see jump, so the first frame draws the plain terrain (the same fast passes a pan
+        // uses) and the exact one is prepared in the background, instead of holding the first
+        // frame of the editor for the whole coast, bank and material work (0.7 s on the 4096×3072
+        // regional map). After that, an edit still rebuilds its exact terrain in the same frame.
+        if (cacheable && options.Terrain!.Count == 0 && options.TerrainRefinement is { } first
+            && options.RequestRefinedFrame is { } firstFrame
+            && options.RiverOverrides is null && options.RoadOverrides is null
+            && surfaces.All(surface => !surface.Owner.Effects.ClippingEnabled)
+            && first.Queue(terrainParts!, view, terrainScale,
+                BackgroundTerrain(document, lands, surfaces, view, terrainScale, options), firstFrame))
+        {
+            var plain = new RenderOptions
+            {
+                ViewScale = options.ViewScale, VisibleWorld = view, LodTier = options.LodTier,
+                TileCache = options.TileCache, GpuContext = options.GpuContext, FastTerrain = true, Stats = options.Stats,
+            };
+            DrawTerrainPasses(canvas, document, lands, surfaces, view, plain);
+            if (options.Stats is { } firstStats) firstStats.TerrainRefinementsPending++;
+            return;
+        }
+        if (cacheable)
+        {
+            var parts = terrainParts!;
+            var image = options.Terrain!.Get(parts, view, terrainScale, options.GpuContext, (width, height) =>
+            {
+                using var surface = RenderImageCache.CreateSurface(options.GpuContext, width, height, view, terrainScale);
+                if (surface is null) return null;
+                DrawTerrainPasses(surface.Canvas, document, lands, surfaces, view, options);
+                surface.Canvas.Flush();
+                return surface.Snapshot();
+            });
+            if (image is not null)
+            {
+                canvas.DrawImage(image, RenderImageCache.Placement(image, view, terrainScale),
+                    new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None));
+                return;
+            }
         }
 
-        var levels = lands.Select(land => land.Level).Concat(rivers.Select(pair => pair.River.Level))
+        DrawTerrainPasses(canvas, document, lands, surfaces, view, options);
+    }
+
+    /// <summary>
+    /// Prepares the exact terrain of a view from immutable inputs with private CPU resources. Even
+    /// a clipped GPU replay can stall on morphology filters and shader compilation; the render
+    /// thread only uploads the complete result. No borrowed context, asset source or frame cache
+    /// crosses threads.
+    /// </summary>
+    private static Func<SKImage?> BackgroundTerrain(MapDocument document, List<LandLayer> lands, List<Surface> surfaces,
+        WorldBounds view, double terrainScale, RenderOptions options)
+    {
+        var worldScale = options.ViewScale;
+        var tier = options.LodTier;
+        return () =>
+        {
+            using var tiles = new TileImageCache(1024, 64L * 1024 * 1024);
+            tiles.BeginFrame();
+            try
+            {
+                var (width, height) = RenderImageCache.SizeOf(view, terrainScale);
+                using var surface = RenderImageCache.CreateSurface(null, width, height, view, terrainScale);
+                if (surface is null) return null;
+                var backgroundOptions = new RenderOptions
+                { ViewScale = worldScale, VisibleWorld = view, LodTier = tier, TileCache = tiles };
+                DrawTerrainPasses(surface.Canvas, document, lands, surfaces, view, backgroundOptions);
+                return surface.Snapshot();
+            }
+            finally { tiles.EndFrame(); }
+        };
+    }
+
+    private static void DrawTerrainPasses(SKCanvas canvas, MapDocument document, List<LandLayer> lands,
+        List<Surface> surfaces, WorldBounds view, RenderOptions options)
+    {
+        var levels = lands.Select(land => land.Level).Concat(surfaces.Select(surface => surface.Level))
             .Distinct().OrderBy(level => level).ToList();
         foreach (var level in levels)
         {
@@ -390,26 +743,31 @@ public static class SceneRenderer
             {
                 if (land.Level != level) continue;
                 if (options.Stats is { } stats) stats.LayersDrawn++;
+                var landStarted = Stopwatch.GetTimestamp();
                 DrawLayer(canvas, document, land, null, view, options);
+                if (options.Stats is { } landStats) landStats.LandMilliseconds += Stopwatch.GetElapsedTime(landStarted).TotalMilliseconds;
             }
 
-            var water = rivers.Where(pair => pair.River.Level == level).ToList();
-            if (water.Count == 0) continue;
+            var atLevel = surfaces.Where(surface => surface.Level == level).ToList();
+            if (atLevel.Count == 0) continue;
             var below = lands.Where(land => land.Level <= level).ToList();
-            foreach (var group in water.GroupBy(pair => pair.Owner))
+            var water = atLevel.Where(surface => surface.River is not null).ToList();
+            foreach (var group in atLevel.GroupBy(surface => surface.Owner))
             {
                 var owner = group.Key;
-                var ownWater = group.Select(pair => pair.River).ToArray();
+                var run = group.OrderBy(surface => surface.Order).ToList();
                 // Only unmasked, opaque neighbours can safely remove a shared bank. Hidden
                 // portions of another layer must never erase the outline of this layer.
                 var neighbours = SeamCompatible(owner)
-                    ? water.Where(pair => pair.Owner.Id != owner.Id && SeamCompatible(pair.Owner))
-                        .Select(pair => pair.River).ToArray()
+                    ? water.Where(surface => surface.Owner.Id != owner.Id && SeamCompatible(surface.Owner))
+                        .Select(surface => surface.River!).ToArray()
                     : [];
+                var waterStarted = Stopwatch.GetTimestamp();
                 DrawLayer(canvas, document, owner, LowerLayer(document, owner), view, options,
-                    contentOverride: target => RiverRenderer.DrawRivers(target, ownWater, view, options,
+                    contentOverride: target => DrawSurfaceRun(target, run, view, options,
                         below.Count > 0 ? (coverage, paint) => DrawLandCoverage(coverage, below, view, options, paint) : null,
                         neighbours));
+                if (options.Stats is { } waterStats) waterStats.WaterMilliseconds += Stopwatch.GetElapsedTime(waterStarted).TotalMilliseconds;
             }
         }
 
@@ -547,8 +905,22 @@ public static class SceneRenderer
             && erasing.LayerId == layer.Id;
         var needsGroup = mask is not null || clipsToLower || erasesInPreview
             || layer.Opacity < 1.0 || layer.Blend != "Normal";
+        using var colorPass = layer is FilterLayer { Settings: var colorSettings } && contentOverride is null
+            ? FilterColorPass(colorSettings, options)
+            : null;
 
-        if (needsGroup)
+        if (colorPass is not null)
+        {
+            // The group starts as the recoloured copy of everything drawn below it; opacity and
+            // the mask then decide how much of that copy replaces the original.
+            using var groupPaint = new SKPaint
+            {
+                Color = SKColors.White.WithAlpha((byte)Math.Clamp(Math.Round(layer.Opacity * 255), 0, 255)),
+                BlendMode = ParseBlend(layer.Blend),
+            };
+            canvas.SaveLayer(new SKCanvasSaveLayerRec { Bounds = ToRect(view), Paint = groupPaint, Backdrop = colorPass });
+        }
+        else if (needsGroup)
         {
             using var groupPaint = new SKPaint
             {
@@ -637,6 +1009,11 @@ public static class SceneRenderer
                 {
                     canvas.DrawRect(0, 0, document.Canvas.Width, document.Canvas.Height, page);
                 }
+                // The open sea carries the same water material as rivers and lakes, so the water
+                // of a map reads as one surface wherever it is.
+                if (!options.FastTerrain && baseColor.TextureId is { } pageMaterial)
+                    MapTextureLibrary.DrawFill(canvas, pageMaterial, baseColor.TextureScale, baseColor.TextureOpacity,
+                        new SKRect(0, 0, document.Canvas.Width, document.Canvas.Height));
 
                 break;
 
@@ -646,10 +1023,12 @@ public static class SceneRenderer
                 // shadow, or the clip it lends to the layer above - still includes its water.
                 if (drawRivers)
                 {
-                    RiverRenderer.DrawLayerRivers(canvas, objectLayer, view, options,
-                        document.Layers.OfType<LandLayer>().Any(l => l.Visible && l.Opacity > 0 && l.GeometryTiles.TileCount > 0)
-                            ? (target, paint) => DrawAllLandCoverage(target, document, view, options, paint)
-                            : null);
+                    var run = LayerSurfaces(objectLayer, view, options).OrderBy(surface => surface.Level).ThenBy(surface => surface.Order).ToList();
+                    if (run.Count > 0)
+                        DrawSurfaceRun(canvas, run, view, options,
+                            document.Layers.OfType<LandLayer>().Any(l => l.Visible && l.Opacity > 0 && l.GeometryTiles.TileCount > 0)
+                                ? (target, paint) => DrawAllLandCoverage(target, document, view, options, paint)
+                                : null, []);
                 }
                 if (options.PlacementPreviewLayerId == objectLayer.Id
                     && options.PlacementPreviewObjects is { Count: > 0 } placementPreview)
@@ -660,7 +1039,10 @@ public static class SceneRenderer
                             canvas, previewObject, document.StampForeground, options);
                     }
                 }
+                var objectsStarted = Stopwatch.GetTimestamp();
                 DrawObjects(canvas, document, objectLayer, view, options);
+                if (options.Stats is { } objectStats)
+                    objectStats.ObjectsMilliseconds += Stopwatch.GetElapsedTime(objectsStarted).TotalMilliseconds;
                 break;
 
             case LandLayer landLayer:
@@ -680,10 +1062,56 @@ public static class SceneRenderer
                 break;
         }
 
-        if (includePreview && options.Preview is { } preview && preview.LayerId == layer.Id && !preview.IsMask)
+        if (includePreview && options.Preview is { } preview && preview.LayerId == layer.Id && !preview.IsMask && !preview.IsLandPaint)
         {
-            DrawStrokePreview(canvas, preview, view, options);
+            if (layer is LandLayer previewLand && !preview.Eraser && !options.FastTerrain)
+                DrawLandShapePreview(canvas, previewLand, preview, view, options);
+            else
+                DrawStrokePreview(canvas, preview, view, options);
         }
+    }
+
+    private static bool HasLandShapePreview(LandLayer land, RenderOptions options) =>
+        options.Preview is { IsMask: false, IsLandPaint: false } preview && preview.LayerId == land.Id;
+
+    /// <summary>
+    /// The live part of a land-shape stroke: the new ground in the land's colour with its
+    /// material mixed in by the same formula the finished land uses, so the piece being drawn
+    /// already looks like the land it is about to join. Coast styling of the new edge follows
+    /// on release, when the coverage is one piece again.
+    /// </summary>
+    private static void DrawLandShapePreview(
+        SKCanvas canvas, LandLayer land, StrokePreview preview, WorldBounds view, RenderOptions options)
+    {
+        var style = land.EdgeStyle;
+        // Geometry uses coverage and opacity only; paint colour adjustments do not change it.
+        var shapePreview = new StrokePreview
+        {
+            LayerId = land.Id, Coverage = preview.Coverage,
+            Color = style.FillColor, Opacity = preview.Opacity,
+        };
+        DrawStrokePreview(canvas, shapePreview, view, options);
+        if (MapTextureLibrary.Image(style.FillTextureId) is null || style.FillTextureOpacity <= 0)
+        {
+            return;
+        }
+
+        // Match DrawStyled: preserve the coloured fill, then composite the material over it
+        // through a separate coverage mask. SrcIn must replace only that mask, not the fill.
+        canvas.SaveLayer(ToRect(view), null);
+        DrawStrokePreview(canvas, new StrokePreview
+        {
+            LayerId = land.Id, Coverage = preview.Coverage,
+            Color = "#FFFFFFFF", Opacity = preview.Opacity,
+        }, view, options);
+        using (var shape = new SKPaint { BlendMode = SKBlendMode.SrcIn })
+        {
+            canvas.SaveLayer(ToRect(view), shape);
+            MapTextureLibrary.DrawFill(canvas, style.FillTextureId, style.FillTextureScale,
+                style.FillTextureOpacity, ToRect(view));
+            canvas.Restore();
+        }
+        canvas.Restore();
     }
 
     private static void DrawClippingCoverage(SKCanvas canvas, MapDocument document, MapLayer source,
@@ -707,6 +1135,14 @@ public static class SceneRenderer
         DrawLandCoverage(canvas, document.Layers.OfType<LandLayer>().Where(l => l.Visible && l.Opacity > 0), view, options, paint);
 
     /// <summary>Coverage of the given Land layers inside the view, drawn with the caller's paint.</summary>
+    /// <summary>
+    /// Far enough out that a land tile is a few screen pixels, the coverage is drawn from coarse
+    /// blocks of 16×16 tiles reduced sixteenfold (one 256² image per 4096-unit block) instead of
+    /// one image per tile: a filled 131072² map would otherwise ask for a quarter of a million
+    /// tile images per frame and thrash every cache.
+    /// </summary>
+    private static bool UseCoarseCoverage(RenderOptions options) => !options.IsExport && TileMap.TileSize * options.ViewScale <= 24;
+
     private static void DrawLandCoverage(SKCanvas canvas, IEnumerable<LandLayer> layers, WorldBounds view, RenderOptions options, SKPaint paint)
     {
         var sampling = options.ViewScale < 0.9
@@ -722,6 +1158,9 @@ public static class SceneRenderer
                 using var opacity = new SKPaint { Color = SKColors.White.WithAlpha(Alpha(land.Opacity)) };
                 canvas.SaveLayer(ToRect(view), opacity);
             }
+            if (UseCoarseCoverage(options))
+                CoarseCoverage.Draw(canvas, land.Id, land.GeometryTiles, view, sampling, grouped ? null : paint, BuildCoverageImage);
+            else
             foreach (var key in land.GeometryTiles.KeysIntersecting(view.Left, view.Top, view.Right, view.Bottom))
             {
                 var coverage = land.GeometryTiles.TryGet(key)!;
@@ -747,19 +1186,60 @@ public static class SceneRenderer
         foreach (var layer in document.Layers.OfType<ObjectLayer>().Where(l => l.Visible && l.Opacity > 0))
             foreach (var river in RiverRenderer.Resolve(layer, options))
                 if (river.Visible && river.Style.CutsLand && TerrainOrder.Covers(river, land)
-                    && RiverGeometry.Evaluate(river).Bounds.Intersects(view))
+                    && RiverGeometry.Evaluate(river).Bounds.Intersects(view)
+                    // The cut is bounded by the mouth's radial mask. The wider fade of water
+                    // over the sea does not carve land and must not make a dry view run filters.
+                    && RiverRenderer.BodyTouches(river, Expand(view, RiverCoastRenderer.MaximumMouthRadius
+                        + LandEdgeReach(land.EdgeStyle) + river.Style.BankWidth + 2 / Math.Max(.01,options.ViewScale)), options.ViewScale))
                     result.Add((layer, river));
         return result;
     }
 
+    private static double LandEdgeReach(LandEdgeStyle style) => 3 + Math.Max(style.OutlineWidth,
+        Math.Max(style.ShadowBlur * 4 + Math.Max(Math.Abs(style.ShadowOffsetX),Math.Abs(style.ShadowOffsetY)),
+            RippleReach(style) + style.RippleWidth * 3));
+
+    /// <summary>Distance of surf line <paramref name="index"/> (from 1) in units of the style's spacing:
+    /// every line a quarter of a spacing farther from the previous one than that was from its own.</summary>
+    public static double RippleDistance(int index) => index * (1 + 0.25 * (index - 1));
+
+    /// <summary>Opacity factor of surf line <paramref name="index"/> (from 1): the outer lines fade.</summary>
+    public static double RippleStrength(int index) => Math.Max(0.3, 1 - 0.28 * (index - 1));
+
+    /// <summary>How far beyond the land its outermost surf line reaches, in world units.</summary>
+    public static double RippleReach(LandEdgeStyle style) =>
+        style.RippleSpacing * RippleDistance(Math.Clamp(style.RippleCount, 0, 8)) + style.RippleWidth;
+
+    private static bool SolidLandInterior(LandLayer layer, WorldBounds view)
+    {
+        for (var y=(int)Math.Floor(view.Top/TileMap.TileSize);y<=(int)Math.Floor(view.Bottom/TileMap.TileSize);y++)
+            for (var x=(int)Math.Floor(view.Left/TileMap.TileSize);x<=(int)Math.Floor(view.Right/TileMap.TileSize);x++)
+            {
+                if (layer.GeometryTiles.TryGet(new(x,y)) is not { } pixels) return false;
+                if (IsFullyCovered(pixels)) continue;
+                // A partial tile can have its coastline far outside this view and every filter.
+                // Prove the queried pixels, rather than rejecting the entire 256-pixel tile.
+                var left = Math.Clamp((int)Math.Floor(view.Left-x*TileMap.TileSize),0,TileMap.TileSize);
+                var right = Math.Clamp((int)Math.Ceiling(view.Right-x*TileMap.TileSize)+1,0,TileMap.TileSize);
+                var top = Math.Clamp((int)Math.Floor(view.Top-y*TileMap.TileSize),0,TileMap.TileSize);
+                var bottom = Math.Clamp((int)Math.Ceiling(view.Bottom-y*TileMap.TileSize)+1,0,TileMap.TileSize);
+                for (var row=top;row<bottom;row++)
+                    if (pixels.AsSpan(row*TileMap.TileSize+left,right-left).IndexOfAnyExcept((byte)255)>=0) return false;
+            }
+        return true;
+    }
+
     private static void DrawLand(
-        SKCanvas canvas, MapDocument document, LandLayer layer, WorldBounds view, RenderOptions options)
+        SKCanvas output, MapDocument document, LandLayer layer, WorldBounds view, RenderOptions options)
     {
         if (layer.GeometryTiles.TileCount == 0)
         {
             return;
         }
 
+        // The passes below draw on "canvas": the frame itself, or - for the kept image of the
+        // finished land - an offscreen surface standing in for it.
+        var canvas = output;
         var style = layer.EdgeStyle;
         var sampling = options.ViewScale < 0.9
             ? new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear)
@@ -793,23 +1273,32 @@ public static class SceneRenderer
         SKImage? carved = null;
         var carvedOwned = false;
         var cutters = options.LodTier == RenderLodTier.Overview && !options.IsExport ? [] : LandCuttingRivers(document, layer, view, options);
+        // A fully opaque interior has no coast, ripple or inner shadow. Prove coverage beyond
+        // every filter's reach before skipping those costly morphology passes. Materials and
+        // paint still draw normally; partial tiles, cuts, translucent fill and overlaps do not qualify.
+        var solidInterior = !options.FastTerrain && cutters.Count == 0 && lowers.Count == 0
+            && ParseColor(style.FillColor).Alpha == 255
+            && SolidLandInterior(layer, Expand(view,LandEdgeReach(style)+2/Math.Max(.01,options.ViewScale)));
         if (cutters.Count > 0)
         {
             var matrix = canvas.TotalMatrix;
             var scale = Math.Max(1e-4, Math.Sqrt(matrix.ScaleX * matrix.ScaleX + matrix.SkewY * matrix.SkewY));
-            // The layer's own coverage at a world point, for the river mouth; a missing tile is sea.
+            // A soft edge is still land while it has coverage. The 50% contour lies inside it
+            // and would start a rounded sea opening before the visible ground actually ends.
             bool InsideLand(double x, double y)
             {
                 var key = new TileKey((int)Math.Floor(x / TileMap.TileSize), (int)Math.Floor(y / TileMap.TileSize));
                 if (layer.GeometryTiles.TryGet(key) is not { } tile) return false;
                 var px = (int)Math.Clamp(x - (key.X * TileMap.TileSize), 0, TileMap.TileSize - 1);
                 var py = (int)Math.Clamp(y - (key.Y * TileMap.TileSize), 0, TileMap.TileSize - 1);
-                return tile[(py * TileMap.TileSize) + px] > 127;
+                return tile[(py * TileMap.TileSize) + px] > 0;
             }
 
             SKImage? Build(int width, int height)
             {
-                using var surface = SKSurface.Create(new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Premul));
+                var info = new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Premul);
+                using var surface = (options.GpuContext is { } gpu
+                    ? SKSurface.Create(gpu, false, info) : null) ?? SKSurface.Create(info);
                 if (surface is null) return null;
                 var target = surface.Canvas;
                 target.Clear(SKColors.Transparent);
@@ -856,7 +1345,10 @@ public static class SceneRenderer
                     }
                     target.Restore();
                 }
-                return surface.Snapshot();
+                var snapshot = surface.Snapshot();
+                if (!snapshot.IsTextureBacked) return snapshot;
+                // This coverage cache is also consumed by CPU exports; retain portable bytes.
+                using (snapshot) return snapshot.ToRasterImage();
             }
 
             // Nothing about the coast changed between two frames that share this key, so the
@@ -864,15 +1356,16 @@ public static class SceneRenderer
             if (options.CarvedLand is { } reuse)
                 carved = reuse.Get(layer.Id, layer.GeometryTiles, view, scale, cutters.Select(c => c.River).ToArray(),
                     Build, out _, out _, cutters.SelectMany(c => c.Owner.Effects.ClippingEnabled
-                        && LowerLayer(document, c.Owner) is { } lower ? new MapLayer[] { c.Owner, lower } : [c.Owner]).ToArray());
+                        && LowerLayer(document, c.Owner) is { } lower ? new[] { OwnerKey(c.Owner), lower } : [OwnerKey(c.Owner)]).ToArray());
             else { carved = Build(
                 (int)Math.Clamp(Math.Ceiling((view.Right - view.Left) * scale) + 2, 1, 16384),
                 (int)Math.Clamp(Math.Ceiling((view.Bottom - view.Top) * scale) + 2, 1, 16384)); carvedOwned = true; }
         }
         using var carvedImage = carvedOwned ? carved : null;
+        var deviceScale = Math.Max(1e-4, Math.Sqrt(output.TotalMatrix.ScaleX * output.TotalMatrix.ScaleX + output.TotalMatrix.SkewY * output.TotalMatrix.SkewY));
         var carvedRect = new SKRect((float)view.Left, (float)view.Top,
-            (float)(view.Left + (carved?.Width ?? 0) / Math.Max(1e-4, Math.Sqrt(canvas.TotalMatrix.ScaleX * canvas.TotalMatrix.ScaleX + canvas.TotalMatrix.SkewY * canvas.TotalMatrix.SkewY))),
-            (float)(view.Top + (carved?.Height ?? 0) / Math.Max(1e-4, Math.Sqrt(canvas.TotalMatrix.ScaleX * canvas.TotalMatrix.ScaleX + canvas.TotalMatrix.SkewY * canvas.TotalMatrix.SkewY))));
+            (float)(view.Left + (carved?.Width ?? 0) / deviceScale),
+            (float)(view.Top + (carved?.Height ?? 0) / deviceScale));
 
         // At overview scale the edge effects are below a screen pixel, but each one replays the
         // complete tile set (rings do it several times). Keep the exact style at edit/export zoom
@@ -889,136 +1382,329 @@ public static class SceneRenderer
             return;
         }
 
+        // The live material stroke is composed inside the passes below (between the material
+        // and the inner shading), so a frame that carries one always draws the land in full.
+        var paintPreview = options.Preview is { IsLandPaint: true } live && live.LayerId == layer.Id ? live : null;
+
         // With land beneath, this piece's coast is the coast of the whole landmass: every edge
         // pass reads the union of this coverage and the land below (withLowers), and is then
         // erased inside the zone the lower land's own coast already occupies - the reach of
         // that very pass. Equal styles give exactly the coast of the union; the seam is gone.
-        var blends = lowers.Count > 0 && !options.FastPreview;
+        var blends = lowers.Count > 0 && !options.FastTerrain;
         var withLowers = false;
-        if (blends)
+        // Surf lines follow the coast of the land as drawn, not the banks the rivers carve into
+        // it: grown from the carved coverage they ran up every channel and had to be cut away
+        // at each mouth, which left the lines ending abruptly on both sides of an estuary.
+        var uncarved = false;
+        // Magnified, the coverage raster shows its world pixels as steps along the coast. A blur
+        // of about one world unit, brought back to a crisp edge by an alpha curve, turns them
+        // into one smooth line; a soft coast keeps a (slightly steeper) soft ramp.
+        var smoothEdges = !options.FastTerrain && deviceScale > 1.5;
+
+        // State of the distance-field coast (TryBuildCoastField), and the bounds and tile set the
+        // coverage pass currently draws: the view, or the padded view while the field is rasterized.
+        float[]? coastField = null, surfField = null, lowersField = null;
+        byte[]? coastAlpha = null;
+        var fieldWidth = 0; var fieldHeight = 0;
+        var fieldRect = SKRect.Empty;
+        var coverageBounds = ToRect(view);
+        IReadOnlyList<TileKey> drawKeys = keys;
+
+        // The finished look of this piece for this very view is kept between frames. A stroke,
+        // an armed placement or a drag changes nothing about the land and does not move the
+        // view, so those frames draw the kept image and look exactly like the idle frame. A
+        // pan draws the plain fill (FastTerrain) and never enters the cache.
+        if (options.StyledLand is { } styled && paintPreview is null && !options.IsExport && !options.FastTerrain)
         {
-            canvas.SaveLayer(ToRect(view), null);
+            var parts = new List<object> { layer.Id, layer.GeometryTiles, layer.PaintTiles, layer.EdgeStyle };
+            parts.AddRange(lowers);
+            foreach (var (owner, river) in cutters)
+            {
+                parts.Add(OwnerKey(owner)); parts.Add(river);
+                if (owner.Effects.ClippingEnabled && LowerLayer(document, owner) is { } lower) parts.Add(lower);
+            }
+            var image = styled.Get(parts, view, deviceScale, options.GpuContext, (width, height) =>
+            {
+                using var surface = RenderImageCache.CreateSurface(options.GpuContext, width, height, view, deviceScale);
+                if (surface is null) return null;
+                canvas = surface.Canvas;
+                try { DrawStyled(); canvas.Flush(); }
+                finally { canvas = output; }
+                return surface.Snapshot();
+            });
+            if (image is not null)
+            {
+                output.DrawImage(image, RenderImageCache.Placement(image, view, deviceScale),
+                    new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None));
+                CountTiles();
+                return;
+            }
         }
 
-        if (!options.FastPreview && !simplifiedOverview)
+        DrawStyled();
+        CountTiles();
+        return;
+
+        void CountTiles()
         {
-            withLowers = blends;
-            if (style.OuterShadowOpacity > 0 && style.ShadowBlur > 0)
+            if (options.Stats is { } stats)
             {
+                stats.TilesDrawn += keys.Count;
+                if (options.ViewScale < 0.9)
+                {
+                    stats.MipmappedTiles += keys.Count;
+                }
+            }
+        }
+
+        // Every pass of the finished land, in order, on whatever canvas is current: the frame
+        // itself, or the kept image that stands in for it.
+        void DrawStyled()
+        {
+            if (blends)
+            {
+                canvas.SaveLayer(ToRect(view), null);
+            }
+
+            // One piece of land alone in the view: its coast becomes a distance field and the
+            // outline, the surf and both shadows are one lookup per pixel (CoastDistanceField).
+            // Land that overlaps other land keeps the filter passes, whose erase steps share one
+            // coast between the pieces.
+            var useField = CoastDistanceField.Enabled && !options.CoastFilters && !options.FastTerrain && !solidInterior
+                && options.LodTier != RenderLodTier.Overview && TryBuildCoastField();
+
+            if (useField)
+            {
+                using var outer = CoastDistanceField.OuterEffects(
+                    coastField!, surfField, fieldWidth, fieldHeight, style, deviceScale, lowersField);
+                if (outer is not null)
+                {
+                    canvas.DrawImage(outer, fieldRect, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None));
+                }
+            }
+            else if (!options.FastTerrain && !solidInterior)
+            {
+                withLowers = blends;
+                if (style.OuterShadowOpacity > 0 && style.ShadowBlur > 0)
+                {
+                    using var filter = SKImageFilter.CreateDropShadowOnly(
+                        (float)style.ShadowOffsetX, (float)style.ShadowOffsetY,
+                        (float)style.ShadowBlur, (float)style.ShadowBlur,
+                        SKColors.Black.WithAlpha(Alpha(style.OuterShadowOpacity)));
+                    DrawFilteredCoverage(filter, color: null, SKBlendMode.SrcOver);
+                    EraseLowerZone(style.ShadowBlur * 3 + Math.Max(Math.Abs(style.ShadowOffsetX), Math.Abs(style.ShadowOffsetY)));
+                }
+
+                // Surf lines as a drawn atlas has them: each line a little farther from the one
+                // before and a little fainter, so the water calms away from the shore instead of
+                // repeating the coast as evenly spaced parallel tracks.
+                var ripples = Math.Clamp(style.RippleCount, 0, 8);
+                for (var ripple = ripples; ripple >= 1; ripple--)
+                {
+                    var radius = Math.Max(0, style.RippleSpacing * RippleDistance(ripple));
+                    var width = Math.Max(0.5, style.RippleWidth);
+                    var color = ParseColor(style.RippleColor);
+                    color = color.WithAlpha((byte)Math.Round(color.Alpha * RippleStrength(ripple)));
+                    DrawCoverageRing(radius, width, color);
+                    EraseLowerZone(radius + width * 1.5);
+                }
+
+                if (style.OutlineWidth > 0)
+                {
+                    DrawExpandedCoverage(style.OutlineWidth, ParseColor(style.OutlineColor));
+                    EraseLowerZone(style.OutlineWidth);
+                }
+                withLowers = false;
+            }
+
+            using (var tint = SKColorFilter.CreateBlendMode(ParseColor(style.FillColor), SKBlendMode.SrcIn))
+            using (var fill = new SKPaint { ColorFilter = tint, IsAntialias = true })
+            {
+                DrawCoverageImages(fill);
+            }
+
+            // The ground material, mixed into the fill colour and kept inside the coverage. The
+            // coverage is redrawn into a layer only to provide the shape; its own colour is discarded
+            // by SrcIn, so the land keeps exactly the colour the user chose, with grain on top.
+            if (!options.FastTerrain
+                && MapTextureLibrary.Image(style.FillTextureId) is not null && style.FillTextureOpacity > 0)
+            {
+                canvas.SaveLayer(ToRect(view), null);
+                DrawCoverageImages(null);
+                using (var shape = new SKPaint { BlendMode = SKBlendMode.SrcIn })
+                {
+                    canvas.SaveLayer(ToRect(view), shape);
+                    MapTextureLibrary.DrawFill(canvas, style.FillTextureId, style.FillTextureScale,
+                        style.FillTextureOpacity, ToRect(view));
+                    canvas.Restore();
+                }
+                canvas.Restore();
+            }
+
+            // Paint lives inside the same carved coverage as the base material. Composing paint and
+            // its live eraser on an isolated surface preserves the base and coast below the paint.
+            if (layer.PaintTiles.TileCount > 0 || paintPreview is not null)
+            {
+                canvas.SaveLayer(ToRect(view), null);
+                DrawTiles(canvas, layer.Id, layer.PaintTiles, view, options, TileImageKind.Content);
+                if (paintPreview is not null) DrawStrokePreview(canvas, paintPreview, view, options);
+                using (var keepPaint = new SKPaint { BlendMode = SKBlendMode.DstIn })
+                {
+                    canvas.SaveLayer(ToRect(view), keepPaint);
+                    DrawCoverageImages(null);
+                    canvas.Restore();
+                }
+                canvas.Restore();
+            }
+
+            if (useField)
+            {
+                using var inner = CoastDistanceField.InnerShadow(
+                    coastField!, coastAlpha!, fieldWidth, fieldHeight, style, deviceScale);
+                if (inner is not null)
+                {
+                    canvas.DrawImage(inner, fieldRect, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None));
+                }
+            }
+            else if (!options.FastTerrain && !solidInterior && style.InnerShadowOpacity > 0 && style.ShadowBlur > 0)
+            {
+                // An inner shadow is coverage minus its shifted, blurred copy. Drawing the blurred
+                // coverage itself darkened the entire interior and made the very edge lighter.
                 using var filter = SKImageFilter.CreateDropShadowOnly(
                     (float)style.ShadowOffsetX, (float)style.ShadowOffsetY,
                     (float)style.ShadowBlur, (float)style.ShadowBlur,
-                    SKColors.Black.WithAlpha(Alpha(style.OuterShadowOpacity)));
-                DrawFilteredCoverage(filter, color: null, SKBlendMode.SrcOver);
-                EraseLowerZone(style.ShadowBlur * 3 + Math.Max(Math.Abs(style.ShadowOffsetX), Math.Abs(style.ShadowOffsetY)));
-            }
-
-            for (var ripple = Math.Clamp(style.RippleCount, 0, 8); ripple >= 1; ripple--)
-            {
-                var radius = Math.Max(0, style.RippleSpacing * ripple);
-                var width = Math.Max(0.5, style.RippleWidth);
-                DrawCoverageRing(radius, width, ParseColor(style.RippleColor));
-                EraseLowerZone(radius + width * 1.5);
-            }
-
-            if (style.OutlineWidth > 0)
-            {
-                DrawExpandedCoverage(style.OutlineWidth, ParseColor(style.OutlineColor));
-                EraseLowerZone(style.OutlineWidth);
-            }
-            withLowers = false;
-        }
-
-        using (var tint = SKColorFilter.CreateBlendMode(ParseColor(style.FillColor), SKBlendMode.SrcIn))
-        using (var fill = new SKPaint { ColorFilter = tint, IsAntialias = true })
-        {
-            DrawCoverageImages(fill);
-        }
-
-        // The ground material, mixed into the fill colour and kept inside the coverage. The
-        // coverage is redrawn into a layer only to provide the shape; its own colour is discarded
-        // by SrcIn, so the land keeps exactly the colour the user chose, with grain on top.
-        if (!options.FastPreview && !simplifiedOverview
-            && MapTextureLibrary.Image(style.FillTextureId) is not null && style.FillTextureOpacity > 0)
-        {
-            canvas.SaveLayer(ToRect(view), null);
-            DrawCoverageImages(null);
-            using (var shape = new SKPaint { BlendMode = SKBlendMode.SrcIn })
-            {
-                canvas.SaveLayer(ToRect(view), shape);
-                MapTextureLibrary.DrawFill(canvas, style.FillTextureId, style.FillTextureScale,
-                    style.FillTextureOpacity, ToRect(view));
-                canvas.Restore();
-            }
-            canvas.Restore();
-        }
-
-        if (!options.FastPreview && !simplifiedOverview
-            && style.InnerShadowOpacity > 0 && style.ShadowBlur > 0)
-        {
-            // An inner shadow is coverage minus its shifted, blurred copy. Drawing the blurred
-            // coverage itself darkened the entire interior and made the very edge lighter.
-            using var filter = SKImageFilter.CreateDropShadowOnly(
-                (float)style.ShadowOffsetX, (float)style.ShadowOffsetY,
-                (float)style.ShadowBlur, (float)style.ShadowBlur,
-                SKColors.Black);
-            using var strength = new SKPaint { Color = SKColors.White.WithAlpha(Alpha(style.InnerShadowOpacity)) };
-            canvas.SaveLayer(ToRect(view), strength);
-            withLowers = blends;
-            using (var black = SKColorFilter.CreateBlendMode(SKColors.Black, SKBlendMode.SrcIn))
-            using (var fillShadow = new SKPaint { ColorFilter = black }) DrawCoverageImages(fillShadow);
-            DrawFilteredCoverage(filter, color: null, SKBlendMode.DstOut);
-            withLowers = false;
-            using (var keep = new SKPaint { BlendMode = SKBlendMode.DstIn })
-            {
-                canvas.SaveLayer(ToRect(view), keep);
-                DrawCoverageImages(null);
-                canvas.Restore();
-            }
-            canvas.Restore();
-        }
-
-        if (blends)
-        {
-            // The edge of this piece dissolves into the land beneath over about the shadow's
-            // reach, and stays crisp against the sea. The mask is 1 - lower * (1 - blur(this)):
-            // one over the sea, the blurred edge of this piece over other land.
-            var feather = (float)Math.Max(6, style.ShadowBlur * 1.5);
-            using (var keep = new SKPaint { BlendMode = SKBlendMode.DstIn })
-            {
-                canvas.SaveLayer(ToRect(view), keep);
-                using (var white = new SKPaint { Color = SKColors.White })
+                    SKColors.Black);
+                using var strength = new SKPaint { Color = SKColors.White.WithAlpha(Alpha(style.InnerShadowOpacity)) };
+                canvas.SaveLayer(ToRect(view), strength);
+                withLowers = blends;
+                using (var black = SKColorFilter.CreateBlendMode(SKColors.Black, SKBlendMode.SrcIn))
+                using (var fillShadow = new SKPaint { ColorFilter = black }) DrawCoverageImages(fillShadow);
+                DrawFilteredCoverage(filter, color: null, SKBlendMode.DstOut);
+                withLowers = false;
+                using (var keep = new SKPaint { BlendMode = SKBlendMode.DstIn })
                 {
-                    canvas.DrawRect(ToRect(view), white);
+                    canvas.SaveLayer(ToRect(view), keep);
+                    DrawCoverageImages(null);
+                    canvas.Restore();
                 }
-                using (var subtract = new SKPaint { BlendMode = SKBlendMode.DstOut })
+                canvas.Restore();
+            }
+
+            if (blends)
+            {
+                // The edge of this piece dissolves into the land beneath over about the shadow's
+                // reach, and stays crisp against the sea. The mask is 1 - lower * (1 - blur(this)):
+                // one over the sea, the blurred edge of this piece over other land.
+                var feather = (float)Math.Max(6, style.ShadowBlur * 1.5);
+                using (var keep = new SKPaint { BlendMode = SKBlendMode.DstIn })
                 {
-                    canvas.SaveLayer(ToRect(view), subtract);
-                    using (var plain = new SKPaint())
+                    canvas.SaveLayer(ToRect(view), keep);
+                    using (var white = new SKPaint { Color = SKColors.White })
                     {
-                        DrawLandCoverage(canvas, lowers, view, options, plain);
+                        canvas.DrawRect(ToRect(view), white);
                     }
-                    using (var soften = SKImageFilter.CreateBlur(feather, feather))
-                    using (var cut = new SKPaint { BlendMode = SKBlendMode.DstOut, ImageFilter = soften })
+                    using (var subtract = new SKPaint { BlendMode = SKBlendMode.DstOut })
                     {
-                        canvas.SaveLayer(ToRect(view), cut);
-                        DrawCoverageImages(null);
+                        canvas.SaveLayer(ToRect(view), subtract);
+                        using (var plain = new SKPaint())
+                        {
+                            DrawLandCoverage(canvas, lowers, view, options, plain);
+                        }
+                        using (var soften = SKImageFilter.CreateBlur(feather, feather))
+                        using (var cut = new SKPaint { BlendMode = SKBlendMode.DstOut, ImageFilter = soften })
+                        {
+                            canvas.SaveLayer(ToRect(view), cut);
+                            DrawCoverageImages(null);
+                            canvas.Restore();
+                        }
                         canvas.Restore();
                     }
                     canvas.Restore();
                 }
                 canvas.Restore();
             }
-            canvas.Restore();
         }
 
-        if (options.Stats is { } stats)
+        // The coast as a signed distance field at device resolution, over the view plus the reach
+        // of the farthest effect, so an effect near the edge of the view still sees the land
+        // just outside it. False when the view is too large for the field (export at full size).
+        bool TryBuildCoastField()
         {
-            stats.TilesDrawn += keys.Count;
-            if (options.ViewScale < 0.9)
+            var hasEffects = (style.OuterShadowOpacity > 0 && style.ShadowBlur > 0)
+                || (style.InnerShadowOpacity > 0 && style.ShadowBlur > 0)
+                || style.OutlineWidth > 0 || (style.RippleCount > 0 && style.RippleWidth > 0);
+            if (!hasEffects) return false;
+            var reach = Math.Max(CoastDistanceField.OuterReach(style),
+                style.InnerShadowOpacity > 0 ? (3 * style.ShadowBlur) + Math.Max(Math.Abs(style.ShadowOffsetX), Math.Abs(style.ShadowOffsetY)) : 0);
+            var pad = (int)Math.Ceiling(reach * deviceScale) + 2;
+            var width = (int)Math.Ceiling((view.Right - view.Left) * deviceScale) + (2 * pad);
+            var height = (int)Math.Ceiling((view.Bottom - view.Top) * deviceScale) + (2 * pad);
+            if (width <= 0 || height <= 0 || (long)width * height > CoastDistanceField.PixelBudget) return false;
+
+            var padded = new WorldBounds(view.Left - (pad / deviceScale), view.Top - (pad / deviceScale),
+                view.Right + (pad / deviceScale), view.Bottom + (pad / deviceScale));
+            // This piece alone masks its own inner shadow; over other land the coast and every
+            // effect come from the union, cut back by the lower land's own coast zone.
+            var alpha = RasterizeCoverage(padded, width, height, surf: false, CoverageSet.ThisPiece);
+            if (alpha is null) return false;
+            coastAlpha = alpha;
+            var union = blends ? RasterizeCoverage(padded, width, height, surf: false, CoverageSet.WithLowers) : alpha;
+            if (union is null) return false;
+            coastField = CoastDistanceField.SignedDistance(union, width, height);
+            if (blends)
             {
-                stats.MipmappedTiles += keys.Count;
+                var lowersAlpha = RasterizeCoverage(padded, width, height, surf: false, CoverageSet.LowersOnly);
+                if (lowersAlpha is null) return false;
+                lowersField = CoastDistanceField.SignedDistance(lowersAlpha, width, height);
             }
+            if (cutters.Count > 0 && style.RippleCount > 0 && style.RippleWidth > 0)
+            {
+                var surfAlpha = RasterizeCoverage(padded, width, height, surf: true, blends ? CoverageSet.WithLowers : CoverageSet.ThisPiece);
+                surfField = surfAlpha is null ? null : CoastDistanceField.SignedDistance(surfAlpha, width, height);
+            }
+            fieldWidth = width; fieldHeight = height;
+            fieldRect = new SKRect((float)padded.Left, (float)padded.Top,
+                (float)(padded.Left + (width / deviceScale)), (float)(padded.Top + (height / deviceScale)));
+            return true;
+        }
+
+        // The coverage drawn by the ordinary coverage pass into a CPU raster of the padded view;
+        // only its alpha is kept. The surf raster follows the uncarved coast, as the ring pass did.
+        byte[]? RasterizeCoverage(WorldBounds padded, int width, int height, bool surf, CoverageSet set)
+        {
+            var info = new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Premul);
+            using var surface = SKSurface.Create(info);
+            if (surface is null) return null;
+            var target = surface.Canvas;
+            target.Clear(SKColors.Transparent);
+            target.Scale((float)deviceScale);
+            target.Translate((float)-padded.Left, (float)-padded.Top);
+            var previousCanvas = canvas; var previousBounds = coverageBounds; var previousKeys = drawKeys;
+            var previousLowers = withLowers;
+            canvas = target; coverageBounds = ToRect(padded);
+            drawKeys = layer.GeometryTiles.KeysIntersecting(padded.Left, padded.Top, padded.Right, padded.Bottom).ToList();
+            uncarved = surf;
+            withLowers = set == CoverageSet.WithLowers;
+            try
+            {
+                if (set == CoverageSet.LowersOnly)
+                {
+                    using var plain = new SKPaint();
+                    DrawLandCoverage(canvas, lowers, padded, options, plain);
+                }
+                else DrawCoverageImages(null);
+            }
+            finally
+            {
+                canvas = previousCanvas; coverageBounds = previousBounds; drawKeys = previousKeys;
+                uncarved = false; withLowers = previousLowers;
+            }
+            using var bitmap = new SKBitmap(info);
+            if (!surface.ReadPixels(info, bitmap.GetPixels(), bitmap.RowBytes, 0, 0)) return null;
+            var pixels = bitmap.GetPixelSpan();
+            var alpha = new byte[width * height];
+            for (var i = 0; i < alpha.Length; i++) alpha[i] = pixels[(i * 4) + 3];
+            return alpha;
         }
 
         void DrawFilteredCoverage(SKImageFilter filter, SKColor? color, SKBlendMode blend)
@@ -1040,17 +1726,39 @@ public static class SceneRenderer
 
         void DrawCoverageImages(SKPaint? paint)
         {
+            if (solidInterior)
+            {
+                // Adjacent opaque tile images can expose a subpixel join when magnified.
+                // The proven solid interior is one continuous coverage, including its material mask.
+                using var solid = paint?.Clone() ?? new SKPaint();
+                solid.Color=SKColors.White.WithAlpha(paint?.Color.Alpha??255);solid.IsAntialias=false;
+                canvas.DrawRect(ToRect(view),solid);return;
+            }
+            if (smoothEdges)
+            {
+                using var layerPaint = paint?.Clone() ?? new SKPaint();
+                using var blur = SKImageFilter.CreateBlur(0.9f, 0.9f);
+                using var edge = SKColorFilter.CreateTable(SmoothEdgeAlpha, IdentityTable, IdentityTable, IdentityTable);
+                using var smooth = SKImageFilter.CreateColorFilter(edge, blur);
+                layerPaint.ImageFilter = smooth;
+                canvas.SaveLayer(SKRect.Inflate(coverageBounds, 2, 2), layerPaint);
+                smoothEdges = false;
+                try { DrawCoverageImages(null); }
+                finally { smoothEdges = true; }
+                canvas.Restore();
+                return;
+            }
             if (withLowers)
             {
                 using var plain = paint is null ? new SKPaint() : null;
                 DrawLandCoverage(canvas, lowers, view, options, paint ?? plain!);
             }
-            if (carved is not null)
+            if (carved is not null && !uncarved)
             {
                 canvas.DrawImage(carved, carvedRect, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None), paint);
                 return;
             }
-            foreach (var key in keys)
+            foreach (var key in drawKeys)
             {
                 var coverage = layer.GeometryTiles.TryGet(key)!;
                 var image = options.TileCache is not null
@@ -1080,6 +1788,13 @@ public static class SceneRenderer
 
         void DrawOverviewCoverage()
         {
+            if (UseCoarseCoverage(options))
+            {
+                using var coarseTint = SKColorFilter.CreateBlendMode(ParseColor(style.FillColor), SKBlendMode.SrcIn);
+                using var coarsePaint = new SKPaint { ColorFilter = coarseTint, IsAntialias = false };
+                CoarseCoverage.Draw(canvas, layer.Id, layer.GeometryTiles, view, sampling, coarsePaint, BuildCoverageImage);
+                return;
+            }
             using var fullTilePath = new SKPath();
             var partial = new List<(TileKey Key, byte[] Coverage)>();
             foreach (var key in keys)
@@ -1133,9 +1848,17 @@ public static class SceneRenderer
             using var soften = SKImageFilter.CreateBlur((float)(width * 0.3), (float)(width * 0.3));
             using var ringPaint = new SKPaint { ImageFilter = soften };
             canvas.SaveLayer(ToRect(view), ringPaint);
-            DrawExpandedCoverage(radius + width, color);
-            using var erase = new SKPaint { BlendMode = SKBlendMode.DstOut };
-            DrawExpandedCoverageCore(radius, null, erase);
+            uncarved = true;
+            try
+            {
+                DrawExpandedCoverage(radius + width, color);
+                using var erase = new SKPaint { BlendMode = SKBlendMode.DstOut };
+                DrawExpandedCoverageCore(radius, null, erase);
+                // The land itself, carved rivers included, never carries a surf line: the
+                // ring lies in the sea, passing in front of a river mouth as a drawn coast does.
+                DrawExpandedCoverageCore(0, null, erase);
+            }
+            finally { uncarved = false; }
             canvas.Restore();
         }
 
@@ -1151,7 +1874,7 @@ public static class SceneRenderer
             using var tint = paint is null && color is { } value
                 ? SKColorFilter.CreateBlendMode(value, SKBlendMode.SrcIn)
                 : null;
-            using var grow = radius > 0 ? SKImageFilter.CreateDilate((float)radius, (float)radius) : null;
+            using var grow = RoundGrowth(radius);
             using var layer = new SKPaint
             {
                 ColorFilter = paint?.ColorFilter ?? tint,
@@ -1159,15 +1882,57 @@ public static class SceneRenderer
                 ImageFilter = grow,
                 IsAntialias = true,
             };
-            var reach = (float)Math.Max(0, radius) + 1;
+            var reach = (float)(Math.Max(0, radius) * 2.5) + 1;
             canvas.SaveLayer(SKRect.Inflate(ToRect(view), reach, reach), layer);
             DrawCoverageImages(null);
             canvas.Restore();
         }
     }
 
+    /// <summary>Which land the coverage raster of the distance field holds.</summary>
+    private enum CoverageSet { ThisPiece, WithLowers, LowersOnly }
+
     private static byte Alpha(double opacity) =>
         (byte)Math.Clamp(Math.Round(opacity * 255), 0, 255);
+
+    private static readonly byte[] RoundGrowthAlpha = BuildRoundGrowthAlpha();
+    private static readonly byte[] IdentityTable = [.. Enumerable.Range(0, 256).Select(i => (byte)i)];
+    private static readonly byte[] SmoothEdgeAlpha = [.. Enumerable.Range(0, 256).Select(i =>
+    {
+        var t = Math.Clamp((i / 255.0 - 0.22) / 0.56, 0, 1);
+        return (byte)Math.Round(t * t * (3 - 2 * t) * 255);
+    })];
+
+    /// <summary>
+    /// Grows a coverage by <paramref name="radius"/> world units with round corners. A blur of
+    /// r / 1.5 reaches 6.7 % at distance r from a straight edge; the alpha curve turns that level
+    /// into the new edge. A dilation alone grows by a square, so every surf line and outline had
+    /// square corners at a cape.
+    /// </summary>
+    private static SKImageFilter? RoundGrowth(double radius)
+    {
+        if (radius <= 0) return null;
+        // The blur's softness grows with its radius, so only the last few units are grown
+        // round; the rest is an exact dilation. The corner keeps a round end of that size and
+        // the line stays as crisp as the coast it follows.
+        var round = Math.Min(radius, 3);
+        using var dilate = radius > round ? SKImageFilter.CreateDilate((float)(radius - round), (float)(radius - round)) : null;
+        var sigma = (float)Math.Max(round / 1.5, 0.35);
+        using var blur = SKImageFilter.CreateBlur(sigma, sigma, dilate);
+        using var edge = SKColorFilter.CreateTable(RoundGrowthAlpha, IdentityTable, IdentityTable, IdentityTable);
+        return SKImageFilter.CreateColorFilter(edge, blur);
+    }
+
+    private static byte[] BuildRoundGrowthAlpha()
+    {
+        var table = new byte[256];
+        for (var i = 0; i < 256; i++)
+        {
+            var t = Math.Clamp((i / 255.0 - 0.035) / (0.10 - 0.035), 0, 1);
+            table[i] = (byte)Math.Round(t * t * (3 - 2 * t) * 255);
+        }
+        return table;
+    }
 
     private static void DrawObjects(
         SKCanvas canvas,
@@ -1176,11 +1941,14 @@ public static class SceneRenderer
         WorldBounds view,
         RenderOptions options)
     {
-        // At a readable stamp size the overview's exact subset can itself be a dense forest.
-        // Cache that composited detail before entering the far-zoom aggregate path.
+        // A screen holding a dense forest - many stamps in view at a readable size - is composited
+        // into cached tiles: pan and revisits reuse them, and each tile is drawn as one atlas mesh.
+        // A screen with a few hundred stamps draws them directly, which is faster than a tile
+        // and needs no atlas at all, whatever the size of the layer behind it.
         if (!options.IsExport && options.ViewScale >= .03
             && options.ObjectCache is not null && options.VisibleWorld is not null
-            && options.ObjectOverrides is not { Count: > 0 } && layer.Objects.Count >= 2000
+            && options.ObjectOverrides is not { Count: > 0 } && layer.Objects.Count >= DenseTileMinimumObjects
+            && ObjectSpatialIndex.For(layer).Query(view).Count >= DenseTileMinimumVisible
             && DetailRevisions.GetValue(layer, static l => new(l)).CanCache
             && document.Assets.All(asset => options.Stamps?.TryGetImage(asset.Sha256) is not null))
         {
@@ -1290,14 +2058,19 @@ public static class SceneRenderer
                 continue;
             }
 
+            var objectStarted = Stopwatch.GetTimestamp();
             if (!options.IsExport && TryDrawStampBatch(canvas, ordered, objectIndex, options) is > 0 and var batched)
             {
                 objectIndex += batched - 1;
+                if (options.Stats is { } batchStats)
+                    batchStats.StampBatchMilliseconds += Stopwatch.GetElapsedTime(objectStarted).TotalMilliseconds;
                 continue;
             }
             DrawObject(canvas, sceneObject, document.StampForeground, options);
             if (options.Stats is { } s)
             {
+                if (sceneObject.Kind == SceneObjectKind.Stamp)
+                    s.StampSingleMilliseconds += Stopwatch.GetElapsedTime(objectStarted).TotalMilliseconds;
                 s.ObjectsDrawn++;
                 s.ExactObjects++;
                 s.DrawCalls++;
@@ -1371,12 +2144,30 @@ public static class SceneRenderer
 
     private static void DrawDetailedStampTiles(SKCanvas canvas, MapDocument document, ObjectLayer layer, WorldBounds view, RenderOptions options)
     {
+        options.ObjectCache!.BindGpuContext(options.GpuContext?.Handle ?? IntPtr.Zero);
+        options.AtlasCache?.BindGpuContext(options.GpuContext?.Handle ?? IntPtr.Zero);
         var bucket = (int)Math.Ceiling(Math.Log2(options.ViewScale) * 4);
         var scale = Math.Pow(2, bucket / 4d);
         var worldSize = 512 / scale;
         var revisions = DetailRevisions.GetValue(layer, static l => new(l));
         var cache = options.ObjectCache!;
         var hits = cache.Hits; var misses = cache.Misses;
+        // While the camera moves, the tiles of the nearest zoom bucket that are all still kept
+        // are drawn resampled instead of building this bucket for every notch of the wheel;
+        // the settled frame builds the exact bucket. Like the terrain: same objects, only scaled.
+        if (options.FastTerrain)
+        {
+            if (TryDrawKeptTiles(canvas, layer, view, bucket, revisions, cache, options)) return;
+            for (var delta = 1; delta <= 6; delta++)
+            {
+                if (TryDrawKeptTiles(canvas, layer, view, bucket - delta, revisions, cache, options)
+                    || TryDrawKeptTiles(canvas, layer, view, bucket + delta, revisions, cache, options))
+                {
+                    if (options.Stats is { } keptStats) keptStats.TilesReused++;
+                    return;
+                }
+            }
+        }
         using var batchScratch = new StampBatchScratch();
         for (var y = (int)Math.Floor(view.Top / worldSize); y <= (int)Math.Floor(view.Bottom / worldSize); y++)
         for (var x = (int)Math.Floor(view.Left / worldSize); x <= (int)Math.Floor(view.Right / worldSize); x++)
@@ -1423,17 +2214,16 @@ public static class SceneRenderer
                     else DrawObject(target, ordered[i], document.StampForeground, options);
                 }
                 var snapshot = surface.Snapshot();
-                // A read-back completes GPU work and leaves the existing CPU-owned cache/close
-                // contract intact. Timing includes completion, not just queued GPU commands.
-                var result = snapshot;
+                // Keep the finished texture on the context that built it. Reading every new
+                // tile back to the CPU and uploading it again stalled each cold zoom level.
+                // BindGpuContext drops these entries before another context can use them.
                 if (snapshot.IsTextureBacked)
                 {
                     if (options.Stats is { } gpuStats) gpuStats.GpuDetailTiles++;
-                    using (snapshot) result = snapshot.ToRasterImage();
                 }
                 if (options.Stats is { } raster)
                     raster.DetailRasterMilliseconds += System.Diagnostics.Stopwatch.GetElapsedTime(rasterStarted).TotalMilliseconds;
-                return result;
+                return snapshot;
             }, () => (objectCount, culledCount));
             // One pixel of bleed avoids seams from neighboring tiles under fractional pan/zoom.
             canvas.DrawImage(cached.Image, new SKRect(1, 1, 513, 513),
@@ -1448,6 +2238,34 @@ public static class SceneRenderer
         }
         if (options.Stats is { } finalStats)
         { finalStats.ObjectCacheHits += cache.Hits - hits; finalStats.ObjectCacheMisses += cache.Misses - misses; }
+    }
+
+    /// <summary>Draws the view from kept tiles of one zoom bucket, or nothing when any tile of it is missing.</summary>
+    private static bool TryDrawKeptTiles(SKCanvas canvas, ObjectLayer layer, WorldBounds view, int bucket,
+        DetailTileRevisions revisions, ObjectOverviewCache cache, RenderOptions options)
+    {
+        var scale = Math.Pow(2, bucket / 4d);
+        var worldSize = 512 / scale;
+        var tiles = new List<(WorldBounds Bounds, ObjectOverviewCacheResult Tile)>();
+        for (var y = (int)Math.Floor(view.Top / worldSize); y <= (int)Math.Floor(view.Bottom / worldSize); y++)
+        for (var x = (int)Math.Floor(view.Left / worldSize); x <= (int)Math.Floor(view.Right / worldSize); x++)
+        {
+            if (tiles.Count > 64) return false;
+            var bounds = new WorldBounds(x * worldSize, y * worldSize, (x + 1) * worldSize, (y + 1) * worldSize);
+            var revision = revisions.Version(x, y, bucket, Expand(bounds, 1 / scale));
+            if (!cache.TryGet(layer.Id, x, y, 10000 + bucket, revision, out var kept)) return false;
+            tiles.Add((bounds, kept));
+        }
+        var drawn = 0;
+        foreach (var (bounds, tile) in tiles)
+        {
+            canvas.DrawImage(tile.Image, new SKRect(1, 1, 513, 513),
+                new SKRect((float)bounds.Left, (float)bounds.Top, (float)bounds.Right, (float)bounds.Bottom),
+                new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear));
+            drawn += tile.ObjectCount;
+        }
+        if (options.Stats is { } stats) { stats.DrawCalls += tiles.Count; stats.ObjectTilesDrawn += tiles.Count; stats.ObjectsDrawn += drawn; }
+        return true;
     }
 
     /// <summary>Consecutive, compatible stamps share one submission without reordering the scene.</summary>
@@ -1480,12 +2298,11 @@ public static class SceneRenderer
         if (options.Stamps is { } stamps)
         {
             image = stamps.TryGetImageForPixelSize(first.Stamp!.AssetSha256,
-                first.Width * pixelScale, first.Height * pixelScale) ?? image;
+                DetailPixels(first.Width, pixelScale, options), DetailPixels(first.Height, pixelScale, options)) ?? image;
         }
-        // The individual GPU evaluator supplies explicit CPU mip pixels for a fractional level.
-        // Keep that same sampling when a small/non-cacheable scene would otherwise use DrawAtlas.
-        if (options.GpuContext is not null
-            && StampMipSampling.Weight(image, first.Width * pixelScale, first.Height * pixelScale) > 0) return 0;
+        // Odd-sized source images round their mip width and height independently. DrawAtlas
+        // has only a uniform scale; DrawImage preserves the exact rectangle in this case.
+        if (Math.Abs(first.Width / image.Width - first.Height / image.Height) > 0.000001) return 0;
         var (transforms, sources, colors) = scratch?.Get(count)
             ?? (new SKRotationScaleMatrix[count], new SKRect[count], new SKColor[count]);
         for (var i = 0; i < count; i++)
@@ -1822,6 +2639,24 @@ public static class SceneRenderer
         canvas.Restore();
     }
 
+    /// <summary>
+    /// When a layer's stamps are composited into cached tiles instead of drawn one by one: the
+    /// layer is large and the view holds many of them. Below that the direct path is cheaper
+    /// (a few hundred atlas draws a frame) and needs no tile or atlas memory.
+    /// </summary>
+    private const int DenseTileMinimumObjects = 2000;
+    private const int DenseTileMinimumVisible = 1200;
+
+    /// <summary>One raster atlas per zoom bucket holds every (asset, mip) a dense tile needs; the largest allowed.</summary>
+    private const int DenseAtlasMaxSide = 4096;
+
+    /// <summary>
+    /// Every neutral stamp of a dense tile in one mesh: an atlas of the mips the tile needs (one
+    /// sprite per asset and world size, packed on shelves) is sampled bilinearly, and the
+    /// objects become quads in their original order, so overlap and opacity are what the map
+    /// says. Texture switches are the only thing that disappears; a tile of ten thousand trees
+    /// is a handful of draw calls. The atlas is kept per zoom bucket in the atlas cache.
+    /// </summary>
     private static bool TryDrawDenseAtlas(SKCanvas canvas, IReadOnlyList<SceneObject> objects,
         LayerId layer, int bucket, ObjectOverviewCache cache, RenderOptions options, StampBatchScratch scratch)
     {
@@ -1837,32 +2672,40 @@ public static class SceneRenderer
                 return false;
             var key = (stamp.AssetSha256, item.Width, item.Height);
             if (sources.ContainsKey(key)) continue;
-            if (sources.Count >= 8 || stamps.TryGetImage(stamp.AssetSha256) is not { } original) return false;
-            var image = stamps.TryGetImageForPixelSize(stamp.AssetSha256, item.Width * scale, item.Height * scale) ?? original;
-            // At most one lower mip is sampled. Four transparent border pixels isolate it from
-            // neighbouring atlas cells; close zoom still uses every original source pixel.
-            if (image.Width > 1024 || image.Height > 1024
-                || image.Width > item.Width * scale * 2.001 || image.Height > item.Height * scale * 2.001
-                || Math.Abs(item.Width / image.Width - item.Height / image.Height) > .000001) return false;
+            if (stamps.TryGetImage(stamp.AssetSha256) is not { } original) return false;
+            var image = stamps.TryGetImageForPixelSize(stamp.AssetSha256,
+                DetailPixels(item.Width, scale, options), DetailPixels(item.Height, scale, options)) ?? original;
+            if (image.Width > DenseAtlasMaxSide - 8 || image.Height > DenseAtlasMaxSide - 8) return false;
             sources.Add(key, image);
         }
         if (sources.Count == 0) return true;
-        var keys = sources.Keys.OrderBy(key => sources[key].UniqueId).ThenBy(key => key.Width).ThenBy(key => key.Height).ToArray();
-        var cell = 16;
-        while (cell < sources.Values.Max(image => Math.Max(image.Width + Math.Max(1, image.Width / 2) + 12, image.Height + 8))) cell *= 2;
-        var columns = keys.Length <= 1 ? 1 : keys.Length <= 4 ? 2 : 4;
-        var rows = keys.Length <= columns ? 1 : 2;
-        if ((long)columns * rows * cell * cell > 4L * 1024 * 1024) return false;
+
+        // Shelf packing: tallest sprites first, two transparent pixels around each so bilinear
+        // sampling never reads a neighbour. The atlas doubles until everything fits.
+        var keys = sources.Keys.OrderByDescending(key => sources[key].Height).ThenBy(key => sources[key].UniqueId)
+            .ThenBy(key => key.Width).ThenBy(key => key.Height).ToArray();
+        var area = keys.Sum(key => (long)(sources[key].Width + 4) * (sources[key].Height + 4));
+        var side = 256;
+        while ((long)side * side < area * 5 / 4 && side < DenseAtlasMaxSide) side *= 2;
         var slots = new Dictionary<(string Sha, double Width, double Height), int>();
-        var upper = new SKRect[keys.Length]; var lower = new SKRect[keys.Length]; var weights = new float[keys.Length];
-        for (var index = 0; index < keys.Length; index++)
+        var rects = new SKRect[keys.Length];
+        int atlasHeight;
+        while (true)
         {
-            var key = keys[index]; var image = sources[key]; slots.Add(key, index);
-            var x = index % columns * cell + 4; var y = index / columns * cell + 4;
-            upper[index] = new(x, y, x + image.Width, y + image.Height);
-            lower[index] = new(x + image.Width + 4, y, x + image.Width + 4 + Math.Max(1, image.Width / 2), y + Math.Max(1, image.Height / 2));
-            weights[index] = StampMipSampling.Weight(image, key.Width * scale, key.Height * scale);
+            var x = 2; var y = 2; var shelf = 0; var fits = true;
+            for (var index = 0; index < keys.Length; index++)
+            {
+                var image = sources[keys[index]];
+                if (x + image.Width + 2 > side) { x = 2; y += shelf + 4; shelf = 0; }
+                if (y + image.Height + 2 > side) { fits = false; break; }
+                rects[index] = new SKRect(x, y, x + image.Width, y + image.Height);
+                x += image.Width + 4; shelf = Math.Max(shelf, image.Height);
+            }
+            if (fits) { atlasHeight = Math.Min(side, y + shelf + 2); break; }
+            if (side >= DenseAtlasMaxSide) return false;
+            side *= 2;
         }
+        for (var index = 0; index < keys.Length; index++) slots.Add(keys[index], index);
         var hash = 14695981039346656037UL;
         foreach (var key in keys)
         {
@@ -1870,30 +2713,23 @@ public static class SceneRenderer
             hash = unchecked((hash ^ (ulong)BitConverter.DoubleToInt64Bits(key.Width)) * 1099511628211UL);
             hash = unchecked((hash ^ (ulong)BitConverter.DoubleToInt64Bits(key.Height)) * 1099511628211UL);
         }
-        var atlas = cache.GetOrCreate(layer, 0, 0, 20000 + bucket, hash, () =>
+        var atlasCache = options.AtlasCache ?? cache;
+        var atlas = atlasCache.GetOrCreate(layer, 0, 0, 20000 + bucket, hash, () =>
         {
-            using var surface = SKSurface.Create(new SKImageInfo(columns * cell, rows * cell))!;
+            var info = new SKImageInfo(side, atlasHeight);
+            using var surface = (options.GpuContext is { } gpu
+                ? SKSurface.Create(gpu, false, info) : null) ?? SKSurface.Create(info)!;
             surface.Canvas.Clear(SKColors.Transparent);
             for (var index = 0; index < keys.Length; index++)
-            {
-                var image = sources[keys[index]];
-                StampMipSampling.CopyClamped(surface.Canvas, image, upper[index]);
-                using var half = StampMipSampling.Half(image);
-                StampMipSampling.CopyClamped(surface.Canvas, half, lower[index]);
-            }
+                StampMipSampling.CopyClamped(surface.Canvas, sources[keys[index]], rects[index]);
             return surface.Snapshot();
         }).Image;
-        using var shader = weights.Any(weight => weight > 0) ? StampMipSampling.Shader(atlas, upper, lower, weights) : null;
-        using var directShader = atlas.ToShader(SKShaderTileMode.Clamp, SKShaderTileMode.Clamp, new SKSamplingOptions(SKFilterMode.Linear));
-        using var paint = new SKPaint { BlendMode = SKBlendMode.SrcOver };
+        using var shader = atlas.ToShader(SKShaderTileMode.Clamp, SKShaderTileMode.Clamp, new SKSamplingOptions(SKFilterMode.Linear));
+        using var paint = new SKPaint { BlendMode = SKBlendMode.SrcOver, Shader = shader };
         // Keep the original order, including overlap and opacity. Only texture switches disappear.
-        bool NeedsMip(SceneObject item) => item.Visible && weights[slots[(item.Stamp!.AssetSha256, item.Width, item.Height)]] > 0;
         for (var start = 0; start < objects.Count;)
         {
-            var mip = NeedsMip(objects[start]);
-            var count = 1;
-            while (start + count < objects.Count && count < 8192 && NeedsMip(objects[start + count]) == mip) count++;
-            paint.Shader = mip ? shader : directShader;
+            var count = Math.Min(8192, objects.Count - start);
             var positions = new SKPoint[count * 4]; var texture = new SKPoint[count * 4];
             var colors = new SKColor[count * 4]; var indices = new ushort[count * 6];
             for (var index = 0; index < count; index++)
@@ -1902,16 +2738,20 @@ public static class SceneRenderer
                 if (!item.Visible) continue;
                 var image = sources[(item.Stamp!.AssetSha256, item.Width, item.Height)];
                 var angle = item.RotationDegrees * Math.PI / 180;
-                var ratio = item.Width / image.Width;
-                var cos = ratio * Math.Cos(angle); var sin = ratio * Math.Sin(angle);
-                var tx = item.X + item.Width / 2 - cos * image.Width / 2 + sin * image.Height / 2;
-                var ty = item.Y + item.Height / 2 - sin * image.Width / 2 - cos * image.Height / 2;
+                // Mips round each source dimension independently. Stretch that sampled image
+                // to the exact saved rectangle instead of rejecting nearly every real PNG
+                // whose reduced aspect ratio differs by a fraction of a source pixel.
+                var cos = Math.Cos(angle); var sin = Math.Sin(angle);
+                var dx = cos * item.Width; var dy = sin * item.Width;
+                var hx = -sin * item.Height; var hy = cos * item.Height;
+                var tx = item.X + item.Width / 2 - (dx + hx) / 2;
+                var ty = item.Y + item.Height / 2 - (dy + hy) / 2;
                 var vertex = index * 4;
                 positions[vertex] = new((float)tx, (float)ty);
-                positions[vertex + 1] = new((float)(tx + cos * image.Width), (float)(ty + sin * image.Width));
-                positions[vertex + 2] = new((float)(tx + cos * image.Width - sin * image.Height), (float)(ty + sin * image.Width + cos * image.Height));
-                positions[vertex + 3] = new((float)(tx - sin * image.Height), (float)(ty + cos * image.Height));
-                var rect = upper[slots[(item.Stamp.AssetSha256, item.Width, item.Height)]];
+                positions[vertex + 1] = new((float)(tx + dx), (float)(ty + dy));
+                positions[vertex + 2] = new((float)(tx + dx + hx), (float)(ty + dy + hy));
+                positions[vertex + 3] = new((float)(tx + hx), (float)(ty + hy));
+                var rect = rects[slots[(item.Stamp.AssetSha256, item.Width, item.Height)]];
                 texture[vertex] = new(rect.Left, rect.Top); texture[vertex + 1] = new(rect.Right, rect.Top);
                 texture[vertex + 2] = new(rect.Right, rect.Bottom); texture[vertex + 3] = new(rect.Left, rect.Bottom);
                 for (var corner = 0; corner < 4; corner++) colors[vertex + corner] = SKColors.White.WithAlpha(Alpha(item.ObjectOpacity));
@@ -2054,6 +2894,77 @@ public static class SceneRenderer
         canvas.DrawRect(rect, fill); canvas.DrawRect(rect, stroke);
         canvas.DrawLine(rect.Left, rect.Top, rect.Right, rect.Bottom, stroke);
         canvas.DrawLine(rect.Right, rect.Top, rect.Left, rect.Bottom, stroke);
+    }
+
+    /// <summary>
+    /// The gradient map and post-processing of a filter layer as one image filter over the scene
+    /// below it, or null when they change nothing. Numbers come from <see cref="FilterColorEffects"/>
+    /// so the canvas, the export and the tests share one formula. Sharpening is skipped while the
+    /// view moves or is far out (it is a detail effect); idle frames and exports always apply it.
+    /// </summary>
+    private static SKImageFilter? FilterColorPass(FilterSettings settings, RenderOptions options)
+    {
+        if (!FilterColorEffects.IsActive(settings)) return null;
+        SKColorFilter? color = null;
+        var gradientWeight = FilterColorEffects.GradientWeight(settings);
+        if (gradientWeight > 0)
+        {
+            var (red, green, blue) = FilterColorEffects.GradientLut(settings.GradientMap);
+            var alpha = new byte[256];
+            for (var i = 0; i < alpha.Length; i++) alpha[i] = (byte)i;
+            float r = (float)FilterColorEffects.LumaR, g = (float)FilterColorEffects.LumaG, b = (float)FilterColorEffects.LumaB;
+            using var luma = SKColorFilter.CreateColorMatrix(
+            [
+                r, g, b, 0, 0,
+                r, g, b, 0, 0,
+                r, g, b, 0, 0,
+                0, 0, 0, 1, 0,
+            ]);
+            using var table = SKColorFilter.CreateTable(alpha, red, green, blue);
+            var mapped = SKColorFilter.CreateCompose(table, luma);
+            // CreateLerp at weight 1 hands back the first filter (checked in FilterColorRenderingTests),
+            // so a full-strength gradient is used as is.
+            if (gradientWeight >= 1) color = mapped;
+            else
+            {
+                using var identity = SKColorFilter.CreateColorMatrix(
+                [
+                    1, 0, 0, 0, 0,
+                    0, 1, 0, 0, 0,
+                    0, 0, 1, 0, 0,
+                    0, 0, 0, 1, 0,
+                ]);
+                color = SKColorFilter.CreateLerp((float)gradientWeight, identity, mapped);
+                mapped.Dispose();
+            }
+        }
+        if (FilterColorEffects.HasPost(settings))
+        {
+            using var post = SKColorFilter.CreateColorMatrix(
+                FilterColorEffects.PostMatrix(settings.PostProcess, settings.ColorStrength));
+            var combined = color is null ? null : SKColorFilter.CreateCompose(post, color);
+            color?.Dispose();
+            color = combined ?? SKColorFilter.CreateColorMatrix(
+                FilterColorEffects.PostMatrix(settings.PostProcess, settings.ColorStrength));
+        }
+        SKImageFilter? pass = null;
+        if (color is not null)
+        {
+            pass = SKImageFilter.CreateColorFilter(color);
+            color.Dispose();
+        }
+        var sharpen = FilterColorEffects.SharpenWeight(settings);
+        if (sharpen > 0 && (options.IsExport || options.LodTier is not (RenderLodTier.Interactive or RenderLodTier.Overview)))
+        {
+            var n = (float)-sharpen;
+            var centre = (float)(1 + (8 * sharpen));
+            var kernel = new[] { n, n, n, n, centre, n, n, n, n };
+            var sharpened = SKImageFilter.CreateMatrixConvolution(
+                new SKSizeI(3, 3), kernel, 1, 0, new SKPointI(1, 1), SKShaderTileMode.Clamp, false, pass);
+            pass?.Dispose();
+            pass = sharpened;
+        }
+        return pass;
     }
 
     private static void DrawFilterOverlay(
@@ -2309,10 +3220,58 @@ public static class SceneRenderer
             DrawVectorStroke(canvas, owner, points, closed: true, shape.Portals, strokeStyle, objectAlpha, options);
         }
 
+        // «Комната»: the third layer - a cap on every corner, over floor and wall.
+        if (owner.Room is { CapAssetSha256: { } capHash } room)
+        {
+            DrawRoomCaps(canvas, owner, shape, room, capHash, strokeStyle, objectAlpha, options);
+        }
+
         if (wrapped)
         {
             canvas.Restore();
         }
+    }
+
+    /// <summary>
+    /// The caps of a room: the cap picture centred on each (rounded) corner, turned along the wall
+    /// plus the room's cap angle, as wide as the wall times the cap scale, with the wall's shadow.
+    /// </summary>
+    private static void DrawRoomCaps(
+        SKCanvas canvas, SceneObject owner, ShapeStyle shape, RoomStyle room, string capHash,
+        VectorStrokeStyle wall, byte objectAlpha, RenderOptions options)
+    {
+        var image = options.Stamps?.TryGetImage(capHash);
+        if (image is null)
+        {
+            if (options.Stats is { } stats) stats.MissingAssets++;
+            return;
+        }
+        var width = (float)Math.Max(1, wall.Width * room.CapScale);
+        var height = width * image.Height / Math.Max(1f, image.Width);
+        using var paint = new SKPaint
+        {
+            Color = SKColors.White.WithAlpha((byte)Math.Clamp(Math.Round(objectAlpha * wall.Opacity), 0, 255)),
+            IsAntialias = true,
+            ImageFilter = room.CapShadow && !options.FastPreview
+                ? SKImageFilter.CreateDropShadow(
+                    (float)wall.ShadowOffsetX, (float)wall.ShadowOffsetY,
+                    (float)Math.Max(0.5, wall.ShadowBlur / 2), (float)Math.Max(0.5, wall.ShadowBlur / 2),
+                    SKColors.Black.WithAlpha((byte)Math.Round(255 * (wall.ShadowOpacity > 0 ? wall.ShadowOpacity : 0.35))))
+                : null,
+        };
+        var sampling = new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear);
+        foreach (var region in shape.Regions)
+        {
+            foreach (var cap in RoomGeometry.Caps(owner, region))
+            {
+                canvas.Save();
+                canvas.Translate((float)cap.Centre.X, (float)cap.Centre.Y);
+                canvas.RotateDegrees((float)cap.AngleDegrees);
+                canvas.DrawImage(image, new SKRect(-width / 2, -height / 2, width / 2, height / 2), sampling, paint);
+                canvas.Restore();
+            }
+        }
+        paint.ImageFilter?.Dispose();
     }
 
     private static SKPath BuildRegionPath(SceneObject owner, ShapeRegion region)
@@ -2329,31 +3288,16 @@ public static class SceneRenderer
             return path;
         }
 
-        var points = VectorGeometry.Flatten(owner, region.Nodes, closed: true);
+        // Same outline as the stroke: the flattened nodes, or a room's rounded corners.
+        var points = VectorGeometry.RegionOutline(owner, region);
         path.MoveTo((float)points[0].X, (float)points[0].Y);
         foreach (var point in points.Skip(1)) path.LineTo((float)point.X, (float)point.Y);
         path.Close();
         return path;
     }
 
-    private static IReadOnlyList<VectorPoint> RegionPoints(SceneObject owner, ShapeRegion region)
-    {
-        if (region.Primitive != ShapePrimitiveKind.Ellipse)
-        {
-            return VectorGeometry.Flatten(owner, region.Nodes, closed: true);
-        }
-
-        var a = region.Nodes[0]; var b = region.Nodes[1];
-        var cx = (a.X + b.X) / 2; var cy = (a.Y + b.Y) / 2;
-        var rx = Math.Abs(b.X - a.X) / 2; var ry = Math.Abs(b.Y - a.Y) / 2;
-        return [.. Enumerable.Range(0, 33).Select(index =>
-        {
-            var angle = index * Math.PI * 2 / 32;
-            return new VectorPoint(
-                owner.X + ((cx + Math.Cos(angle) * rx) * owner.Width),
-                owner.Y + ((cy + Math.Sin(angle) * ry) * owner.Height));
-        })];
-    }
+    private static IReadOnlyList<VectorPoint> RegionPoints(SceneObject owner, ShapeRegion region) =>
+        VectorGeometry.RegionOutline(owner, region);
 
     private static void DrawVectorStroke(
         SKCanvas canvas, SceneObject owner, IReadOnlyList<VectorPoint> points, bool closed,
@@ -2620,7 +3564,8 @@ public static class SceneRenderer
             // Clip Mask off (and unresolved legacy/missing mask) keeps the exact pre-Stage-15 path.
             var matrix = canvas.TotalMatrix;
             var viewScale = Math.Sqrt(matrix.ScaleX * matrix.ScaleX + matrix.SkewY * matrix.SkewY);
-            image = options.Stamps?.TryGetImageForPixelSize(stamp.AssetSha256, rect.Width * viewScale, rect.Height * viewScale) ?? image;
+            image = options.Stamps?.TryGetImageForPixelSize(stamp.AssetSha256,
+                DetailPixels(rect.Width, viewScale, options), DetailPixels(rect.Height, viewScale, options)) ?? image;
             DrawStampImage(canvas, image, rect, stamp, paint, options);
         }
         else
@@ -2778,7 +3723,8 @@ public static class SceneRenderer
             canvas.Scale(stamp.FlipHorizontal ? -1 : 1, stamp.FlipVertical ? -1 : 1);
             canvas.Translate(-rect.MidX, -rect.MidY);
         }
-        if (options.GpuContext is null || !StampMipSampling.DrawImage(canvas, image, rect, paint))
+        // The cached mip level of the stamp, filtered by the GPU: the same sampling in the live
+        // frame, in an appended tile and in a rebuilt one.
         canvas.DrawImage(
             image,
             rect,
@@ -3008,6 +3954,90 @@ public static class SceneRenderer
         if (options.Marquee is { } marquee)
         {
             DrawMarquee(canvas, marquee, viewScale);
+        }
+
+        if (options.BrushCursor is { } brush)
+        {
+            DrawBrushCursor(canvas, brush, viewScale);
+        }
+    }
+
+    /// <summary>
+    /// The footprint the next dab would leave, under the pointer: a thin light ring with a dark
+    /// shadow line, readable over sea and land alike. A rough land brush shows its actual cells,
+    /// so the jagged shore is seen before it is drawn; the plain brush shows its circle.
+    /// </summary>
+    private static void DrawBrushCursor(SKCanvas canvas, BrushCursorPreview brush, double viewScale)
+    {
+        if (brush.Radius <= 0 || viewScale <= 0) return;
+        var px = (float)(1.0 / viewScale);
+        var light = brush.Subtract ? new SKColor(255, 170, 150, 230) : new SKColor(255, 255, 255, 220);
+        var dark = new SKColor(0, 0, 0, 110);
+        if (brush.RoughCellSize <= 0)
+        {
+            using var shadow = new SKPaint { Color = dark, IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 3 * px };
+            using var ring = new SKPaint { Color = light, IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 1.2f * px };
+            canvas.DrawCircle((float)brush.WorldX, (float)brush.WorldY, (float)brush.Radius, shadow);
+            canvas.DrawCircle((float)brush.WorldX, (float)brush.WorldY, (float)brush.Radius, ring);
+            return;
+        }
+
+        // The cells, sampled into a small mask at about screen resolution (at most 192 px
+        // across), then drawn as a faint fill with an outline of one dilated minus one eroded
+        // copy. The same cell field decides the dab, so the outline is the coast to come.
+        var reach = brush.Radius + (brush.RoughCellSize * RoughCells.Reach);
+        var worldSize = reach * 2;
+        var pixels = (int)Math.Clamp(Math.Ceiling(worldSize * viewScale), 24, 192);
+        var step = worldSize / pixels;
+        var left = brush.WorldX - reach;
+        var top = brush.WorldY - reach;
+        var mask = new byte[pixels * pixels * 4];
+        var radiusSquared = brush.Radius * brush.Radius;
+        for (var y = 0; y < pixels; y++)
+        {
+            var worldY = top + ((y + 0.5) * step);
+            for (var x = 0; x < pixels; x++)
+            {
+                var worldX = left + ((x + 0.5) * step);
+                var (siteX, siteY) = RoughCells.NearestSite(worldX, worldY, brush.RoughCellSize);
+                var dx = siteX - brush.WorldX; var dy = siteY - brush.WorldY;
+                if ((dx * dx) + (dy * dy) > radiusSquared) continue;
+                var offset = ((y * pixels) + x) * 4;
+                mask[offset] = mask[offset + 1] = mask[offset + 2] = mask[offset + 3] = 255;
+            }
+        }
+
+        var info = new SKImageInfo(pixels, pixels, SKColorType.Rgba8888, SKAlphaType.Premul);
+        using var data = SKData.CreateCopy(mask);
+        using var image = SKImage.FromPixels(info, data, info.RowBytes);
+        if (image is null) return;
+        var rect = new SKRect((float)left, (float)top, (float)(left + worldSize), (float)(top + worldSize));
+        var sampling = new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None);
+        using (var tint = SKColorFilter.CreateBlendMode(light.WithAlpha(40), SKBlendMode.SrcIn))
+        using (var fill = new SKPaint { ColorFilter = tint })
+        {
+            canvas.DrawImage(image, rect, sampling, fill);
+        }
+
+        // Outline in mask pixels: the mask grown by one pixel, minus the mask shrunk by one.
+        var one = (float)(1.0 / step * px); // one screen pixel, in mask pixels
+        using var grow = SKImageFilter.CreateDilate(one * 1.5f, one * 1.5f);
+        using var shrink = SKImageFilter.CreateErode(one * 0.5f, one * 0.5f);
+        using (var outer = new SKPaint { ImageFilter = grow, ColorFilter = SKColorFilter.CreateBlendMode(dark, SKBlendMode.SrcIn) })
+        using (var inner = new SKPaint { ImageFilter = shrink, BlendMode = SKBlendMode.DstOut })
+        {
+            canvas.SaveLayer(SKRect.Inflate(rect, 2 * px, 2 * px), null);
+            canvas.DrawImage(image, rect, sampling, outer);
+            canvas.DrawImage(image, rect, sampling, inner);
+            canvas.Restore();
+        }
+        using (var lightEdge = new SKPaint { ImageFilter = grow, ColorFilter = SKColorFilter.CreateBlendMode(light, SKBlendMode.SrcIn) })
+        using (var cut = new SKPaint { BlendMode = SKBlendMode.DstOut })
+        {
+            canvas.SaveLayer(SKRect.Inflate(rect, 2 * px, 2 * px), null);
+            canvas.DrawImage(image, rect, sampling, lightEdge);
+            canvas.DrawImage(image, rect, sampling, cut);
+            canvas.Restore();
         }
     }
 

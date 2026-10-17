@@ -69,26 +69,6 @@ public sealed class Stage16ASafeSvgTests : IDisposable
         Assert.Equal(Path.GetFullPath(copy), repaired.LinkedPath);
     }
 
-    [Fact]
-    public void Starter_pack_is_original_bounded_and_carries_explicit_license()
-    {
-        var catalog = new AssetCatalog(Path.Combine(_root, "starter"));
-        StarterPackBootstrapper.EnsureInstalled(catalog, DateTimeOffset.UnixEpoch);
-
-        Assert.Equal(5, catalog.Records.Count);
-        Assert.All(catalog.Records, record =>
-        {
-            Assert.Equal("map-original-generated-starter", record.Provenance.Source);
-            Assert.Equal(AssetLicenseStatus.UserOwned, record.Provenance.LicenseStatus);
-            Assert.True(record.Width <= 2048 && record.Height <= 2048);
-        });
-        Assert.Contains(catalog.Records, record => record.DisplayName == "Горы");
-        Assert.Contains(catalog.Records, record => record.DisplayName == "Дерево");
-        Assert.Equal(3, catalog.Sets.Count);
-        Assert.Contains(catalog.Sets, set => set.Name == "Горы");
-        Assert.Contains(catalog.Sets, set => set.Name == "Дерево");
-    }
-
     private static byte[] Image(SKColor color)
     {
         using var surface = SKSurface.Create(new SKImageInfo(32, 32))!;

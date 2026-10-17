@@ -124,10 +124,10 @@ public sealed class Stage18Application : Application
         if (densityAsset is not null)
             _densitySetId = _catalog.ImportSet([densityAsset], "Горы", new(), DateTimeOffset.UnixEpoch).Id;
         else if (_report.MeasurementRequired)
-            _catalog.ImportSet([Path.Combine(Environment.CurrentDirectory, "src/Map.Assets/StarterAssets/sample-tree.png")],
+            _catalog.ImportSet([Path.Combine(Environment.CurrentDirectory, "tests/fixtures/assets/diagnostic-stamp-01.png")],
                 "Деревья", new(), DateTimeOffset.UnixEpoch);
         if (Environment.GetEnvironmentVariable("MAP_STAGE18_NATURAL_CHECK") == "1")
-            _treeSetId = _catalog.ImportSet([Path.Combine(Environment.CurrentDirectory, "src/Map.Assets/StarterAssets/sample-tree.png")],
+            _treeSetId = _catalog.ImportSet([Path.Combine(Environment.CurrentDirectory, "tests/fixtures/assets/diagnostic-stamp-01.png")],
                 "Деревья", new(), DateTimeOffset.UnixEpoch).Id;
         if (_densitySetId is not null) _catalog.RenameSet(_densitySetId, "Горы");
         if (_treeSetId is not null) _catalog.RenameSet(_treeSetId, "Деревья");
@@ -194,7 +194,7 @@ public sealed class Stage18Application : Application
         _editor.StampDensity = 3; _editor.SetStampScalePercent(45);
         await Click("StampModeFillArea"); await Click("StartEditableAreaButton");
         var before = _editor.Session.Document;
-        Point(100, 100); Point(750, 100); Point(750, 600); Point(480, 450); Point(100, 600);
+        Point(100, 100); Point(750, 100); Point(750, 600); Point(480, 450); Point(100, 600); await Settle();
         var preview = _editor.PlacementPreviewObjects.ToArray();
         _report.Checks["draft-outside-document-history"] = ReferenceEquals(before, _editor.Session.Document)
             && _editor.Session.UndoDepth == 0 && preview.Length is > 0 and <= 64;
@@ -350,7 +350,7 @@ public sealed class Stage18Application : Application
     }
     private async Task ExecuteNaturalCorrection(string assetPath)
     {
-        var treePath = Path.Combine(Environment.CurrentDirectory, "src/Map.Assets/StarterAssets/sample-tree.png");
+        var treePath = Path.Combine(Environment.CurrentDirectory, "tests/fixtures/assets/diagnostic-stamp-01.png");
         var treeHash = SHA256.HashData(File.ReadAllBytes(treePath));
         await Settle();
         _editor.ChooseGalleryVariant(_treeSetId!, null); await Settle();
@@ -670,7 +670,7 @@ public sealed class Stage18Application : Application
         _report.MeasurementPerformed = true;
         Require(_report.FixtureObjects is >= 19000 and <= 21000, "Fixture is not the requested ordinary map");
         _view.Canvas.DisposeRenderCaches();
-        var measurementSet = _catalog.ImportSet([Path.Combine(Environment.CurrentDirectory, "src/Map.Assets/StarterAssets/sample-tree.png")], "Деревья", new(), DateTimeOffset.UnixEpoch).Id;
+        var measurementSet = _catalog.ImportSet([Path.Combine(Environment.CurrentDirectory, "tests/fixtures/assets/diagnostic-stamp-01.png")], "Деревья", new(), DateTimeOffset.UnixEpoch).Id;
         OpenEditor(document); _editor.AddObjectLayer();
         _report.Checks["measurement-new-layer-only-in-copy"] = document.FindLayer(_editor.ActiveLayer!.Id) is null;
         _editor.ChooseGalleryVariant(measurementSet, null);
@@ -739,7 +739,14 @@ public sealed class Stage18Application : Application
             canvas.Save(canvasFile, PngBitmapEncoderOptions.Default);
         }
     }
-    private static async Task Settle() { await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Render); await Task.Delay(50); }
+    private async Task Settle()
+    {
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Render); await Task.Delay(50);
+        // Slow area previews and recalculations finish off the UI thread; wait for them to land.
+        if (_editor is { } editor)
+            await Task.WhenAll(editor.PendingEditableAreaWork, editor.PendingEditableAreaPreview).WaitAsync(TimeSpan.FromSeconds(60));
+        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Render);
+    }
     private static async Task Until(Func<bool> condition)
     { var watch = Stopwatch.StartNew(); while (!condition()) { if (watch.Elapsed > TimeSpan.FromSeconds(25)) throw new TimeoutException(); await Task.Delay(50); } }
     private static void Require(bool value, string reason) { if (!value) throw new InvalidOperationException(reason); }

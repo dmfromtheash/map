@@ -209,9 +209,12 @@ public sealed class AssetImageCache : IDisposable
         var level = Math.Clamp((int)Math.Floor(Math.Log2(Math.Max(1, ratio))), 0, 15);
         if (level == 0) return image;
         if (entry.Mips.TryGetValue(level, out var cached)) return cached;
-        var width = Math.Max(1, image.Width >> level);
-        var height = Math.Max(1, image.Height >> level);
-        var bytes = checked((long)width * height * 4);
+        // Populate the intervening levels as well. A fit view normally asks for a small image
+        // first; generating only that level forced each later zoom-in to resample the original
+        // again on the frame thread. The pyramid costs at most one third of the source pixels.
+        long bytes = 0;
+        for (var n = 1; n <= level; n++)
+            if (!entry.Mips.ContainsKey(n)) bytes += (long)Math.Max(1, image.Width >> n) * Math.Max(1, image.Height >> n) * 4;
         // The bitmap and immutable image may overlap during construction.
         while (ResidentBytes + bytes * 2 > _decodedByteCapacity)
         {
@@ -220,15 +223,21 @@ public sealed class AssetImageCache : IDisposable
             var oldest = candidates.MinBy(pair => pair.Value.LastUsed);
             Remove(oldest.Key); Evictions++;
         }
-        using var bitmap = new SKBitmap(new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Premul));
-        using var pixels = bitmap.PeekPixels();
-        if (!image.ScalePixels(pixels, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear))) return image;
-        bitmap.SetImmutable();
-        var mip = SKImage.FromBitmap(bitmap);
-        entry.Mips.Add(level, mip);
-        entry.MipBytes += bytes;
-        ResidentBytes += bytes;
-        return mip;
+        var source = image;
+        for (var n = 1; n <= level; n++)
+        {
+            if (entry.Mips.TryGetValue(n, out var held)) { source = held; continue; }
+            var width = Math.Max(1, image.Width >> n); var height = Math.Max(1, image.Height >> n);
+            using var bitmap = new SKBitmap(new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Premul));
+            using var pixels = bitmap.PeekPixels();
+            if (!source.ScalePixels(pixels, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None))) return image;
+            bitmap.SetImmutable();
+            source = SKImage.FromBitmap(bitmap);
+            entry.Mips.Add(n, source);
+            var added = (long)width * height * 4;
+            entry.MipBytes += added; ResidentBytes += added;
+        }
+        return source;
     }
 
     private static SKImage? Decode(byte[] encoded)

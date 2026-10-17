@@ -98,9 +98,9 @@ public static class LandRasterizer
     public static (Dictionary<TileKey, byte[]?> Before, Dictionary<TileKey, byte[]?> After) MoveRegion(
         TileMap source, WorldBounds region, int deltaX, int deltaY)
     {
-        if (source.BytesPerPixel != 1)
+        if (source.BytesPerPixel is not (1 or 4))
         {
-            throw new ArgumentException("Land source must be single-channel coverage.", nameof(source));
+            throw new ArgumentException("Land source must be coverage or RGBA paint.", nameof(source));
         }
 
         var bounds = Normalize(region);
@@ -113,12 +113,16 @@ public static class LandRasterizer
 
         var x0 = (int)Math.Floor(bounds.Left);
         var y0 = (int)Math.Floor(bounds.Top);
-        var captured = new List<(int X, int Y, byte Value)>();
+        var captured = new List<(int X, int Y, uint Value)>();
         for (var y = y0; y < y0 + height; y++)
         {
             for (var x = x0; x < x0 + width; x++)
             {
-                var value = Read(source, x, y);
+                var tile = source.TryGet(TileMap.KeyAt(x, y));
+                var offset = (Mod(y, TileMap.TileSize) * TileMap.TileSize + Mod(x, TileMap.TileSize)) * source.BytesPerPixel;
+                uint value = 0;
+                if (tile is not null)
+                    for (var channel = 0; channel < source.BytesPerPixel; channel++) value |= (uint)tile[offset + channel] << (channel * 8);
                 if (value != 0)
                 {
                     captured.Add((x, y, value));
@@ -161,20 +165,22 @@ public static class LandRasterizer
 
         return (before, after);
 
-        void Write(int worldX, int worldY, byte value)
+        void Write(int worldX, int worldY, uint value)
         {
             var key = TileMap.KeyAt(worldX, worldY);
             if (!working.TryGetValue(key, out var tile))
             {
                 tile = source.TryGet(key) is { } original
                     ? (byte[])original.Clone()
-                    : new byte[TileMap.TileSize * TileMap.TileSize];
+                    : new byte[TileMap.TileSize * TileMap.TileSize * source.BytesPerPixel];
                 working[key] = tile;
             }
 
             var localX = Mod(worldX, TileMap.TileSize);
             var localY = Mod(worldY, TileMap.TileSize);
-            tile[(localY * TileMap.TileSize) + localX] = value;
+            var offset = ((localY * TileMap.TileSize) + localX) * source.BytesPerPixel;
+            for (var channel = 0; channel < source.BytesPerPixel; channel++)
+                tile[offset + channel] = (byte)(value >> (channel * 8));
         }
     }
 

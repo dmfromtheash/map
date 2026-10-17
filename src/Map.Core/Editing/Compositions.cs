@@ -79,6 +79,7 @@ public static class CompositionTransfer
             if (item.Line?.Stroke.AssetSha256 is { } line) result.Add(line);
             if (item.Shape?.Stroke.AssetSha256 is { } shape) result.Add(shape);
             if (item.Shape?.Fill.TextureAssetSha256 is { } texture) result.Add(texture);
+            if (item.Room?.CapAssetSha256 is { } cap) result.Add(cap);
             if (item.Composition is { } composition)
             {
                 foreach (var child in composition.Items) Visit(child);

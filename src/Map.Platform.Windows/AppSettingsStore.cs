@@ -26,6 +26,10 @@ public sealed record AppSettings
     public string DefaultExportFormat { get; init; } = "Png";
     public int DefaultExportScalePercent { get; init; } = 100;
     public bool DefaultExportIncludeGrid { get; init; }
+    /// <summary>Short synthesised sounds when the pointer reaches or presses a command.</summary>
+    public bool InterfaceSounds { get; init; } = true;
+    /// <summary>Interface motion: drifting embers, unfolding ornaments, springy press, brass cursor.</summary>
+    public bool InterfaceEffects { get; init; } = true;
 
     public static AppSettings Sanitize(AppSettings? value)
     {

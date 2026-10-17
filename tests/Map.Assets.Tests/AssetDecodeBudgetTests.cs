@@ -172,6 +172,10 @@ public sealed class AssetDecodeBudgetTests
             Assert.InRange(pixel.Green, 159, 161);
         }
         Assert.Same(mip, cache.GetForPixelSize("source", 20, 20));
+        var bytesAfterFit = cache.ResidentBytes;
+        var zoomed = cache.GetForPixelSize("source", 40, 40)!;
+        Assert.Equal((50, 50), (zoomed.Width, zoomed.Height));
+        Assert.Equal(bytesAfterFit, cache.ResidentBytes); // first zoom-in uses the prepared larger level
         Assert.Same(original, cache.GetForPixelSize("source", 100, 100));
         Assert.InRange(cache.ResidentBytes, 42_500, 90_000);
         Assert.NotNull(cache.GetEncoded("next", Image(100, 100, SKColors.Blue)));

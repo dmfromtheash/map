@@ -181,7 +181,9 @@ public class ViewportTests
     public void Zoom_is_clamped_at_both_ends()
     {
         Assert.Equal(0.005, Viewport.MinScale, 9);
-        Assert.Equal(64.0, Viewport.MaxScale, 9);
+        // 1600 %: four source pixels per document pixel is the editor's detail cap (DEC-035),
+        // and sixteen times leaves room to place small objects without promising more.
+        Assert.Equal(16.0, Viewport.MaxScale, 9);
 
         var viewport = new Viewport();
         viewport.Resize(800, 600);

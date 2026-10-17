@@ -154,7 +154,7 @@ public static class ExportPlanner
             {
                 var style = land.EdgeStyle;
                 world = Math.Max(world, Math.Max(
-                    Math.Max(style.OutlineWidth, style.RippleSpacing * style.RippleCount + style.RippleWidth),
+                    Math.Max(style.OutlineWidth, SceneRenderer.RippleReach(style)),
                     style.ShadowBlur * 3));
             }
 
@@ -173,6 +173,10 @@ public static class ExportPlanner
                     if (document.Layers.OfType<LandLayer>().Any(l => l.Visible && l.Opacity > 0 && l.Level <= river.Level))
                         world = Math.Max(world, RiverRenderer.CoastCoveragePadding(river));
                 }
+
+                // A road's shoulder, its soft tone patches and the edge marks reach past the body (Stage 20).
+                foreach (var road in objects.Roads)
+                    world = Math.Max(world, RoadRenderer.CoveragePadding(road));
             }
         }
 

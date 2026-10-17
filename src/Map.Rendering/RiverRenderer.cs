@@ -70,6 +70,9 @@ public static class RiverRenderer
         {
             if (!river.Visible || river.Style.Opacity <= 0) continue;
             if (!RiverGeometry.Evaluate(river).Bounds.Intersects(view)) continue;
+            var reach = CoastCoveragePadding(river) + river.Style.BankWidth + river.Style.BankShadowBlur * 4
+                + river.Style.BankReliefWidth * 2 + 4 / Math.Max(.01,options.ViewScale);
+            if (!BodyTouches(river,new WorldBounds(view.Left-reach,view.Top-reach,view.Right+reach,view.Bottom+reach),options.ViewScale)) continue;
             visible.Add(river);
         }
         if (visible.Count == 0) return;
@@ -93,7 +96,7 @@ public static class RiverRenderer
         foreach (var (key, members) in groups)
         {
             var context = around.Where(river => EdgeKey(river.Style) == key).ToList();
-            DrawGroup(canvas, members, context, options.ViewScale, options.FastPreview, key.ClipToLand ? drawLandCoverage : null);
+            DrawGroup(canvas, members, context, options.ViewScale, options.FastTerrain, key.ClipToLand ? drawLandCoverage : null, options.Stats);
             if (options.Stats is { } stats) { stats.ObjectsDrawn += members.Count; stats.DrawCalls++; }
         }
     }
@@ -125,12 +128,28 @@ public static class RiverRenderer
         }
     }
 
+    /// <summary>Conservative exact-body query: a winding river's large bounding box can contain
+    /// a completely dry viewport. Callers include their full effect reach in the rectangle.</summary>
+    internal static bool BodyTouches(River river, WorldBounds view, double viewScale)
+    {
+        var cache = Bodies.GetValue(river, static _ => new BodyCache());
+        lock (cache)
+        {
+            var entry = cache.Get(river, MinimumScreenWidth / Math.Max(viewScale, 1e-4));
+            using var rectangle = new SKPath();
+            rectangle.AddRect(new SKRect((float)view.Left,(float)view.Top,(float)view.Right,(float)view.Bottom));
+            using var intersection = new SKPath();
+            // Failed path operations must draw normally, never omit water or a bank.
+            return !entry.Body.Op(rectangle,SKPathOp.Intersect,intersection) || !intersection.IsEmpty;
+        }
+    }
+
     /// <summary>Draws one river at the given view scale. Public so the editor can preview a draft identically.</summary>
     public static void Draw(SKCanvas canvas, River river, double viewScale, bool fastPreview, Action<SKCanvas, SKPaint>? clipToLand = null) =>
         DrawGroup(canvas, [river], [], viewScale, fastPreview, clipToLand);
 
     /// <summary>One evaluated river of a group: its geometry, merged body and the width the shallows follow.</summary>
-    private readonly record struct Part(River River, RiverGeometrySet Geometry, SKPath Body, double AverageHalfWidth);
+    private readonly record struct Part(River River, RiverGeometrySet Geometry, SKPath Body, double AverageHalfWidth, double WidthKey);
 
     /// <summary>
     /// Draws rivers that share one look as one body of water. The order of the passes is the
@@ -139,7 +158,7 @@ public static class RiverRenderer
     /// line - each of the shared passes on the union, so no seam can exist where two parts meet.
     /// </summary>
     private static void DrawGroup(SKCanvas canvas, IReadOnlyList<River> rivers, IReadOnlyList<River> context,
-        double viewScale, bool fastPreview, Action<SKCanvas, SKPaint>? clipToLand)
+        double viewScale, bool fastPreview, Action<SKCanvas, SKPaint>? clipToLand, RenderStats? stats = null)
     {
         if (rivers.Count == 0) return;
         var scale = Math.Max(viewScale, 1e-4);
@@ -158,7 +177,7 @@ public static class RiverRenderer
         {
             foreach (var river in rivers) parts.Add(Take(river, minimumWidth));
             foreach (var river in context) others.Add(Take(river, minimumWidth));
-            DrawParts(canvas, parts, others, style, scale, fastPreview, clipToLand);
+            DrawParts(canvas, parts, others, style, scale, fastPreview, clipToLand, stats);
         }
         finally
         {
@@ -172,7 +191,7 @@ public static class RiverRenderer
             lock (cache)
             {
                 var entry = cache.Get(river, minimumWidth);
-                return new Part(river, entry.Geometry, new SKPath(entry.Body), entry.AverageHalfWidth);
+                return new Part(river, entry.Geometry, new SKPath(entry.Body), entry.AverageHalfWidth, entry.WidthKey);
             }
         }
     }
@@ -183,10 +202,19 @@ public static class RiverRenderer
     /// seam decision, but their water is painted by their own layer.
     /// </param>
     private static void DrawParts(SKCanvas canvas, List<Part> parts, List<Part> context, RiverStyle style, double scale,
-        bool fastPreview, Action<SKCanvas, SKPaint>? clipToLand)
+        bool fastPreview, Action<SKCanvas, SKPaint>? clipToLand, RenderStats? stats = null)
     {
+        var passStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+        void Pass(int index)
+        {
+            if (stats is not null) stats.RiverPassMilliseconds[index] += System.Diagnostics.Stopwatch.GetElapsedTime(passStarted).TotalMilliseconds;
+            passStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+        }
         var all = context.Count == 0 ? parts : [.. parts, .. context];
         using var union = UnionOf(all);
+        // The bodies were evaluated at these widths: zero for a river the on-screen floor never
+        // touched, so its bank geometry is shared by every zoom level that leaves it unclamped.
+        var bankKey = new RiverBankRenderer.BankKey([.. all.Select(p => p.River)], all.Max(p => p.WidthKey), style);
         using var ownUnion = context.Count == 0 ? new SKPath(union) : UnionOf(parts);
         var bounds = parts[0].Geometry.Bounds;
         foreach (var part in parts.Skip(1)) bounds = Union(bounds, part.Geometry.Bounds);
@@ -201,13 +229,16 @@ public static class RiverRenderer
         // confluence and never turns a thin channel into a light tube with dark edges.
         var flowing = parts.Where(p => p.AverageHalfWidth > 0).Select(p => p.AverageHalfWidth).ToList();
         var typicalHalf = flowing.Count > 0 ? flowing.Average() : 0;
-        var shallow = style.ShallowWidth * (1 + 1 / Math.Max(1, scale * 8));
+        var paintedWater = style.TextureId == "watercolour-water";
+        var shallow = style.ShallowWidth * (paintedWater ? 1 : 1 + 1 / Math.Max(1, scale * 8));
         if (typicalHalf > 0) shallow = Math.Min(shallow, typicalHalf * 0.55);
         var hasShallow = !fastPreview && style.ShallowWidth > 0 && shallow * scale >= 0.75;
 
-        // Water that leaves the land is not cut at the coast: it runs on for about its own width
-        // and dissolves, the way an estuary washes the shore out on a drawn map.
-        var feather = clipToLand is not null ? Math.Clamp(typicalHalf * 2.2, 3, 80) : 0;
+        // A river meets the sea along the coast itself, the way a drawn atlas has it: its water
+        // ends on the shore line with only a narrow soft edge. Running on beyond it for its own
+        // width left a straight-sided tongue in the sea - pale with its material and shallows,
+        // or dark with its own colour - that no coast has.
+        var feather = clipToLand is not null ? Math.Clamp(typicalHalf * 0.15, 1.5, 6) : 0;
         var layerRect = feather > 0 ? SKRect.Inflate(rect, (float)(feather * 2), (float)(feather * 2)) : rect;
 
         var grouped = style.Opacity < 1 || fadeChannels.Length > 0 || clipToLand is not null;
@@ -240,7 +271,7 @@ public static class RiverRenderer
         void EndBanks()
         {
             if (clipToLand is null) return;
-            RiverCoastRenderer.MaskBanks(canvas, clipToLand, layerRect, Math.Clamp(typicalHalf * 2.4, 8, 48));
+            RiverCoastRenderer.MaskBanks(canvas, clipToLand, layerRect);
             canvas.Restore();
         }
 
@@ -261,16 +292,21 @@ public static class RiverRenderer
             canvas.DrawPath(union, halo);
             canvas.Restore();
         }
+        Pass(0);
 
         if (!fastPreview && style.BankReliefWidth > 0)
         {
             EnterNearby();
-            RiverBankRenderer.Draw(canvas, union, style, scale, clipToLand, layerRect);
+            RiverBankRenderer.Draw(canvas, union, style, scale, bankKey);
             canvas.Restore();
         }
 
         EndBanks();
+        Pass(1);
 
+        // Only water continues beyond the coast. Banks above and below this pass receive
+        // the original land alpha once, so a soft edge cannot shorten or harden their ends.
+        if (clipToLand is not null) canvas.SaveLayer(layerRect, null);
         foreach (var part in parts)
         {
             using var water = new SKPaint { Color = SceneRenderer.ParseColor(part.River.Style.WaterColor), IsAntialias = true, Style = SKPaintStyle.Fill };
@@ -304,6 +340,7 @@ public static class RiverRenderer
             canvas.Restore();
         }
 
+        Pass(2);
         if (!fastPreview)
         {
             // The material is laid once over every part that shares it, inside their common
@@ -324,8 +361,34 @@ public static class RiverRenderer
             }
         }
 
+        Pass(3);
+        if (clipToLand is not null)
+        {
+            // Grow and blur the composed coverage, never individual tiles: the wash stays
+            // continuous at tile boundaries and applies only to the water fill/material.
+            using var keep = new SKPaint { BlendMode = SKBlendMode.DstIn };
+            canvas.SaveLayer(layerRect, keep);
+            using var dilate = SKImageFilter.CreateDilate((float)(feather * 0.5), (float)(feather * 0.5));
+            using var soften = SKImageFilter.CreateBlur((float)(feather * 0.45), (float)(feather * 0.45), dilate);
+            using var wash = new SKPaint { ImageFilter = soften };
+            canvas.SaveLayer(layerRect, wash);
+            using var plain = new SKPaint();
+            clipToLand(canvas, plain);
+            canvas.Restore();
+            canvas.Restore();
+            canvas.Restore();
+        }
+
+        Pass(4);
         BeginBanks();
-        if (hasShallow)
+        if (hasShallow && paintedWater)
+        {
+            canvas.Save();
+            canvas.ClipPath(ownUnion, SKClipOperation.Intersect, antialias: true);
+            RiverBankRenderer.DrawPaintedShallows(canvas, union, style, shallow, bankKey);
+            canvas.Restore();
+        }
+        else if (hasShallow)
         {
             // The rim is the light colour everywhere the water is, minus a blurred copy of the
             // body: full in the middle, half at the shore, so the light stays along the outline
@@ -336,21 +399,31 @@ public static class RiverRenderer
             canvas.SaveLayer(rect, null);
             using (var light = new SKPaint { Color = SceneRenderer.ParseColor(style.ShallowColor), IsAntialias = true, Style = SKPaintStyle.Fill })
                 canvas.DrawPath(union, light);
-            using (var core = new SKPaint
+            // The core that stays deep is the water drawn half a band in from the shore, then
+            // softened: the shore itself carries the full light tone and it fades into the deep
+            // water over about the band's width, like the foam of a painted river. A core that
+            // reached the shore left only half the tone there, so the rim barely showed.
+            // The inset is a raster erosion of the drawn water: a path difference with the stroked
+            // shore failed on complex outlines and left whole reaches without a deep core.
+            using (var erode = SKImageFilter.CreateErode((float)(shallow * 0.5), (float)(shallow * 0.5)))
+            using (var soften = SKImageFilter.CreateBlur((float)Math.Max(0.35, shallow * 0.5), (float)Math.Max(0.35, shallow * 0.5), erode))
+            using (var core = new SKPaint { BlendMode = SKBlendMode.DstOut, ImageFilter = soften })
             {
-                Color = SKColors.Black, IsAntialias = true, Style = SKPaintStyle.Fill, BlendMode = SKBlendMode.DstOut,
-                MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, (float)Math.Max(0.35, shallow * 0.8)),
-            })
-                canvas.DrawPath(union, core);
+                canvas.SaveLayer(rect, core);
+                using (var black = new SKPaint { Color = SKColors.Black, IsAntialias = true, Style = SKPaintStyle.Fill })
+                    canvas.DrawPath(union, black);
+                canvas.Restore();
+            }
             canvas.Restore();
             canvas.Restore();
         }
 
+        Pass(5);
         if (!fastPreview && style.BankReliefWidth > 0)
         {
             canvas.Save();
             canvas.ClipPath(ownUnion, SKClipOperation.Intersect, antialias: true);
-            RiverBankRenderer.DrawWaterLines(canvas, union, style, scale);
+            RiverBankRenderer.DrawWaterLines(canvas, union, style, scale, bankKey);
             canvas.Restore();
         }
         foreach (var part in parts)
@@ -366,6 +439,7 @@ public static class RiverRenderer
             canvas.Restore();
         }
 
+        Pass(6);
         if (bank > 0)
         {
             EnterNearby();
@@ -386,6 +460,7 @@ public static class RiverRenderer
         }
 
         EndBanks();
+        Pass(7);
 
         foreach (var channel in fadeChannels)
         {
@@ -396,24 +471,6 @@ public static class RiverRenderer
                 [SKColors.Black, SKColors.Black.WithAlpha(0)], [0f, 1f], SKShaderTileMode.Clamp);
             using var erase = new SKPaint { Shader = shader, BlendMode = SKBlendMode.DstOut, IsAntialias = true };
             canvas.DrawCircle((float)end.X, (float)end.Y, radius, erase);
-        }
-        if (clipToLand is not null)
-        {
-            // Keep the water where Land coverage exists, and let it run on past the coast for
-            // about its own width before it dissolves: the coverage is grown by half the reach
-            // and blurred by the other half, then applied as the alpha of the whole group. The
-            // filter is applied to one layer holding every tile, never to a tile on its own, so
-            // a tile border can never show as a step in the fade.
-            using var keep = new SKPaint { BlendMode = SKBlendMode.DstIn };
-            canvas.SaveLayer(layerRect, keep);
-            using var dilate = SKImageFilter.CreateDilate((float)(feather * 0.5), (float)(feather * 0.5));
-            using var soften = SKImageFilter.CreateBlur((float)(feather * 0.45), (float)(feather * 0.45), dilate);
-            using var wash = new SKPaint { ImageFilter = soften };
-            canvas.SaveLayer(layerRect, wash);
-            using var plain = new SKPaint();
-            clipToLand(canvas, plain);
-            canvas.Restore();
-            canvas.Restore();
         }
         canvas.Restore();
     }
@@ -517,6 +574,7 @@ public static class RiverRenderer
             channel.MoveTo((float)outline[0].X, (float)outline[0].Y);
             for (var i = 1; i < outline.Count; i++) channel.LineTo((float)outline[i].X, (float)outline[i].Y);
             channel.Close();
+            TrimAtLake(channel, set, geometry);
             // A lake may be traced in either direction. Adding opposite windings to one path
             // cancels their overlap and leaves an earth plug in its inflow/outflow.
             if (union.IsEmpty) union.AddPath(channel);
@@ -540,6 +598,41 @@ public static class RiverRenderer
         var rounded = RoundCorners(body, (float)Math.Min(12, average * 0.8));
         body.Dispose();
         return rounded;
+    }
+
+    /// <summary>
+    /// A channel that leaves or enters a lake starts or ends exactly on the lake's outline, so
+    /// its rounded end reached past the shore: a tooth where an outflow left the lake and a bump
+    /// beside an inflow. Near that point, whatever of the channel lies outside the lake is
+    /// removed; the channel then opens straight out of the lake as one body of water.
+    /// </summary>
+    private static void TrimAtLake(SKPath channel, RiverGeometrySet set, RiverChannelGeometry geometry)
+    {
+        if (geometry.Closed || geometry.Samples.Length < 2) return;
+        var samples = geometry.Samples;
+        if (geometry.LeavesParent && geometry.Channel.Source is { } source
+            && set.Channels.TryGetValue(source.ParentChannelId, out var from) && from.Closed)
+            Trim(channel, samples[0], from);
+        if (geometry.JoinsParent && geometry.Channel.Mouth is { } mouth
+            && set.Channels.TryGetValue(mouth.ParentChannelId, out var into) && into.Closed)
+            Trim(channel, samples[^1], into);
+
+        static void Trim(SKPath path, RiverSample at, RiverChannelGeometry lake)
+        {
+            var radius = (float)(Math.Max(at.HalfWidth, 0.5) * 1.6 + 1);
+            using var shore = new SKPath();
+            shore.MoveTo((float)lake.Samples[0].X, (float)lake.Samples[0].Y);
+            for (var i = 1; i < lake.Samples.Length; i++) shore.LineTo((float)lake.Samples[i].X, (float)lake.Samples[i].Y);
+            shore.Close();
+            using var around = new SKPath();
+            around.AddCircle((float)at.X, (float)at.Y, radius);
+            using var outside = new SKPath();
+            if (!around.Op(shore, SKPathOp.Difference, outside)) return;
+            using var trimmed = new SKPath();
+            if (!path.Op(outside, SKPathOp.Difference, trimmed) || trimmed.IsEmpty) return;
+            path.Reset();
+            path.AddPath(trimmed);
+        }
     }
 
     /// <summary>Replaces each polygon corner by a quadratic arc reaching at most half a segment back and forth.</summary>
@@ -597,12 +690,37 @@ public static class RiverRenderer
     private sealed class BodyCache
     {
         private readonly List<(double MinimumWidth, RiverGeometrySet Geometry, SKPath Body, double AverageHalfWidth)> _entries = [];
+        private double? _narrowest;
 
-        public (RiverGeometrySet Geometry, SKPath Body, double AverageHalfWidth) Get(River river, double minimumWidth)
+        /// <summary>
+        /// The narrowest drawn width of the river with no floor at all. A floor below it changes
+        /// nothing, so every such zoom level shares one body under the key 0 instead of
+        /// re-evaluating the geometry and rebuilding the outline for each new scale.
+        /// </summary>
+        private double Narrowest(River river) => _narrowest ??= RiverGeometry.Evaluate(river).Channels.Values
+            .Where(g => !g.Closed).SelectMany(g => g.Samples).Select(s => s.HalfWidth * 2).DefaultIfEmpty(0).Min();
+
+        /// <summary>
+        /// The floor a body is evaluated at. Below the river's own narrowest width the floor is
+        /// moot (key 0). Above it, the floor is raised to the next doubling of that width: the
+        /// thinnest part of the river then draws between 1.5 and 3 screen pixels instead of
+        /// exactly 1.5, and one body serves a whole octave of zoom instead of every scale
+        /// getting its own outline, ledges and shore lines.
+        /// </summary>
+        private double KeyFor(River river, double minimumWidth)
         {
-            var key = Math.Round(minimumWidth, 3);
+            var narrowest = Narrowest(river);
+            if (minimumWidth <= narrowest) return 0;
+            if (narrowest <= 0.01) return Math.Round(minimumWidth, 3);
+            var octave = Math.Ceiling(Math.Log2(minimumWidth / narrowest));
+            return Math.Round(narrowest * Math.Pow(2, octave), 3);
+        }
+
+        public (RiverGeometrySet Geometry, SKPath Body, double AverageHalfWidth, double WidthKey) Get(River river, double minimumWidth)
+        {
+            var key = KeyFor(river, minimumWidth);
             foreach (var entry in _entries)
-                if (entry.MinimumWidth == key) return (entry.Geometry, entry.Body, entry.AverageHalfWidth);
+                if (entry.MinimumWidth == key) return (entry.Geometry, entry.Body, entry.AverageHalfWidth, key);
             var geometry = RiverGeometry.Evaluate(river, key);
             var body = BuildBody(geometry, river.Style);
             // The width of the water that flows: a lake's outline samples carry no width and
@@ -615,7 +733,7 @@ public static class RiverRenderer
                 _entries.RemoveAt(0);
             }
             _entries.Add((key, geometry, body, average));
-            return (geometry, body, average);
+            return (geometry, body, average, key);
         }
     }
 }

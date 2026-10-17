@@ -6,6 +6,22 @@ namespace Map.Core.Tests.Editing;
 
 public sealed class WorkingMemoryBudgetTests
 {
+    [Fact]
+    public async Task Render_caches_can_recover_after_memory_returns_without_a_new_edit()
+    {
+        long available = WorkingMemoryBudget.SmallSystemReserveBytes;
+        var budget = new WorkingMemoryBudget(() => new(16L * 1024 * WorkingMemoryBudget.MiB,
+            Interlocked.Read(ref available), WorkingMemoryBudget.MiB));
+        Assert.False(budget.TryReserve(WorkingMemoryBudget.EditReserveBytes, out _, out _));
+        Assert.True(budget.IsUnderPressure);
+        Interlocked.Exchange(ref available, 8L * 1024 * WorkingMemoryBudget.MiB);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (budget.IsUnderPressure) await Task.Delay(10, timeout.Token);
+        Assert.Equal(0, budget.ReservedBytes);
+        Assert.True(budget.TryReserve(WorkingMemoryBudget.EditReserveBytes, out var held, out _));
+        held!.Dispose();
+    }
+
     private const long GiB = 1024 * WorkingMemoryBudget.MiB;
     private static WorkingMemorySnapshot Roomy => new(16 * GiB, 8 * GiB, GiB);
 

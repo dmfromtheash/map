@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Map.App.Controls;
 using Map.App.Views;
 using Map.Presentation.ViewModels;
 
@@ -21,10 +22,15 @@ namespace Map.App.Services;
 public static class EditorKeyRouting
 {
     /// <summary>A key pressed inside a text box is text, never a map command.</summary>
-    public static bool IsTypingInText(TopLevel? root) => root?.FocusManager?.GetFocusedElement() is TextBox;
+    public static bool IsTypingInText(TopLevel? root, KeyEventArgs? key = null) => key?.Source switch
+    {
+        TextBox => true,
+        MapCanvasControl => false,
+        _ => root?.FocusManager?.GetFocusedElement() is TextBox,
+    };
 
     /// <summary>The shortcut contexts the editor is in right now.</summary>
-    public static IReadOnlySet<ShortcutContext> Contexts(EditorView? view)
+    public static IReadOnlySet<ShortcutContext> Contexts(EditorView? view, KeyEventArgs? key = null)
     {
         var contexts = new HashSet<ShortcutContext>();
         if (view is null)
@@ -34,11 +40,14 @@ public static class EditorKeyRouting
         }
 
         contexts.Add(ShortcutContext.Editor);
-        if (view.Canvas.IsFocused) contexts.Add(ShortcutContext.Canvas);
+        // Tab navigation can move focus before this bubbling event reaches MainWindow. Its
+        // original canvas source still owns that key; Tab inside controls remains navigation.
+        if (view.Canvas.IsFocused || ReferenceEquals(key?.Source, view.Canvas)) contexts.Add(ShortcutContext.Canvas);
 
         // Water systems are a selection too: without this, Delete never even resolved while a
         // river was the only thing selected.
-        if (view.Editor.SelectionCount > 0 || view.Editor.WaterSelectionCount > 0 || view.Editor.LandSelectionCount > 0)
+        if (view.Editor.SelectionCount > 0 || view.Editor.WaterSelectionCount > 0 || view.Editor.RoadSelectionCount > 0
+            || view.Editor.LandSelectionCount > 0)
             contexts.Add(ShortcutContext.Selection);
         if (view.IsNotesOpen) contexts.Add(ShortcutContext.Notes);
         contexts.Add(view.Editor.ActiveTool switch
@@ -62,8 +71,8 @@ public static class EditorKeyRouting
         System.ArgumentNullException.ThrowIfNull(view);
         System.ArgumentNullException.ThrowIfNull(shortcuts);
         System.ArgumentNullException.ThrowIfNull(args);
-        if (IsTypingInText(root) || !ShortcutKeyAdapter.TryCreate(args, out var input)) return false;
-        var command = shortcuts.Resolve(input, Contexts(view));
+        if (IsTypingInText(root, args) || !ShortcutKeyAdapter.TryCreate(args, out var input)) return false;
+        var command = shortcuts.Resolve(input, Contexts(view, args));
         return command is not null && TryExecuteEditorCommand(view, command);
     }
 
@@ -86,6 +95,7 @@ public static class EditorKeyRouting
             case EditorShortcutSettings.Commands.FinishPath:
                 if (editor.HasRiverPreview) editor.ApplyRiverPreview();
                 else if (editor.IsCreatingRiver) editor.FinishRiver();
+                else if (editor.IsCreatingRoad) editor.FinishRoad();
                 else if (editor.IsCreatingEditableArea) editor.FinishEditableArea();
                 else if (editor.IsCreatingEditablePath) editor.FinishEditablePath();
                 else editor.FinishPenPath();

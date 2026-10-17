@@ -63,12 +63,12 @@ public sealed partial class EditorView
                 AppearanceNumberBox("EditableAreaDensityBox", "Плотность", null, () => _editor.EditableAreaDensity, _editor.SetEditableAreaDensity),
                 _fillAreaDensityUnits, _fillAreaSizeVariation, _fillAreaJoinEdges, _fillAreaAnother,
                 new TextBlock { Text = "Центры внутри границы; края не обрезаются. В предпросмотре до 64 объектов; полный результат — после «Разместить».", TextWrapping = TextWrapping.Wrap }.Classed("faint", "role-caption"),
-                AppearanceNumberBox("EditableAreaSeedBox", "Seed", null, () => _editor.DisplayedEditableArea?.Seed, _editor.SetEditableAreaSeed),
+                AppearanceNumberBox("EditableAreaSeedBox", "Номер рисунка", null, () => _editor.DisplayedEditableArea?.Seed, _editor.SetEditableAreaSeed),
                 Ui.TextButton("InsertEditableAreaNodeButton", "Добавить вершину на ребре", _editor.InsertEditableAreaNode, "compact"),
                 Ui.TextButton("DeleteEditableAreaNodeButton", "Удалить вершину (в черновике — последнюю)", _editor.DeleteEditableAreaNode, "compact"),
                 Ui.TextButton("SelectAreaObjectButton", "Выбрать объект области", _editor.PickEditableAreaObject, "compact"),
                 _fillAreaDetach,
-                Ui.TextButton("ApplyEditableAreaSettingsButton", "Применить параметры штампа к области", _editor.ApplyStampSettingsToEditableArea, "compact"),
+                Ui.TextButton("ApplyEditableAreaSettingsButton", "Применить параметры ассета к области", _editor.ApplyStampSettingsToEditableArea, "compact"),
                 Ui.TextButton("BakeEditableAreaButton", "Превратить область в обычные объекты", _editor.BakeEditableArea, "compact"),
                 Ui.TextButton("DeleteEditableAreaButton", "Удалить область и связанные объекты", _editor.DeleteEditableArea, "compact", "destructive"),
             },
@@ -78,7 +78,11 @@ public sealed partial class EditorView
 
     private Control BuildEditableAreaPlacementActions()
     {
-        _fillAreaFinish = Ui.TextButton("FinishEditableAreaButton", "Разместить", () => _editor.FinishEditableArea(), "primary");
+        _fillAreaFinish = Ui.TextButton("FinishEditableAreaButton", "Разместить", () =>
+        {
+            if (!_editor.IsCreatingEditableArea && _editor.SelectedEditableArea is not null) _editor.StartEditableArea();
+            else _editor.FinishEditableArea();
+        }, "primary");
         _fillAreaFinish.HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch;
         _fillAreaPlacementHint = new TextBlock { Name = "EditableAreaPlacementHint", TextWrapping = TextWrapping.Wrap }
             .Classed("faint", "role-caption");
@@ -108,7 +112,9 @@ public sealed partial class EditorView
             {
                 _fillAreaPlacementActions.IsVisible = _editor.ActiveTool == Map.Presentation.ViewModels.EditorTool.Stamp
                     && _editor.StampPlacementMode == Map.Presentation.ViewModels.StampPlacementMode.FillArea;
-                _fillAreaFinish!.IsEnabled = _editor.CanPlaceEditableArea;
+                var canStart = !_editor.IsCreatingEditableArea && _editor.SelectedEditableArea is not null;
+                _fillAreaFinish!.IsEnabled = _editor.CanPlaceEditableArea || canStart;
+                _fillAreaFinish.Content = canStart ? "Новая область" : "Разместить";
                 _fillAreaPlacementHint!.Text = _editor.EditableAreaPlacementHint;
                 _fillAreaResult!.Text = _editor.EditableAreaResult;
             }
@@ -125,8 +131,10 @@ public sealed partial class EditorView
             _fillAreaSizeVariation!.IsVisible = _editor.UsesNaturalAreaLayout;
             _fillAreaJoinEdges!.IsVisible = _editor.UsesNaturalAreaLayout;
             _fillAreaDetach!.IsEnabled = _editor.CanDetachAreaObject;
+            // Only in the «Область» mode or with an area in hand: the full area panel used to sit
+            // in «Один», «Серия» and «Россыпь» too as soon as the map had any area at all.
             _fillAreaPanel.IsVisible = _editor.StampPlacementMode == Map.Presentation.ViewModels.StampPlacementMode.FillArea
-                || choices.Length > 0 || _editor.IsCreatingEditableArea;
+                || _editor.IsCreatingEditableArea || _editor.SelectedEditableArea is not null;
             SyncAppearanceSections();
         }
         finally { _syncingAreas = false; }
