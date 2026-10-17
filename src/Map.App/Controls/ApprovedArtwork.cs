@@ -8,7 +8,7 @@ using Avalonia.Platform;
 
 namespace Map.App.Controls;
 
-/// <summary>Blue Atlas artwork with an explicit image size and a real transparent background.</summary>
+/// <summary>Brass icon artwork (tools/IconArt) with an explicit image size and a real transparent background.</summary>
 public static class ApprovedArtwork
 {
     private const string ResourceRoot = "avares://Map.App/Assets/Atlas/";

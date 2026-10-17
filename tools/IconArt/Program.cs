@@ -1,471 +1,362 @@
-// Map's own icon art in the tavern palette (dark wood, brass, parchment, ink), drawn with SkiaSharp.
-// Writes: three variants of the map icons of the "Создать карту" dialog (the main map + one per
-// canvas size) and six variants of the application icon, plus contact sheets for choosing.
-//   dotnet run --project tools/IconArt -- <output folder>
+// Map's icon art in the program's own style ("Свеча и орнамент" + the tavern palette): every emblem
+// is the same solid silhouette vocabulary as the tool rail (MapIcons.Solid*), cast in brass - light
+// at the top, deep at the bottom, a dark engraved edge and engraved detail lines - and, where an
+// icon needs a ground, it sits on dark wood framed like the program's panels (a brass hairline, a
+// dark gap and a fainter inner brass line) with the warm candle glow from below.
+//   dotnet run --project tools/IconArt -- <output folder> [<display font .ttf>]
+// Writes the tool icons and map icons the program uses (Assets/Atlas) and six application icons.
 using SkiaSharp;
 
 var output = args.Length > 0 ? args[0] : Path.Combine(Environment.CurrentDirectory, "icon-art");
 Directory.CreateDirectory(output);
+var fontPath = args.Length > 1 ? args[1] : "";
 
-var sizes = new[] { "standard", "large", "huge", "max" };
-var sets = new (string Key, string Title, Action<SKCanvas, int> Draw)[]
-{
-    ("a", "Пергамент и латунь", (c, level) => Art.FoldedMap(c, level)),
-    ("b", "Свиток", (c, level) => Art.Scroll(c, level)),
-    ("c", "Медальон", (c, level) => Art.Medallion(c, level)),
-};
-foreach (var (key, _, draw) in sets)
-{
-    Art.Save(Path.Combine(output, $"map-{key}-plain.png"), 512, c => draw(c, 0));
-    Art.Save(Path.Combine(output, $"map-{key}-main.png"), 512, c => { draw(c, 0); Art.PlusBadge(c); });
-    for (var i = 0; i < sizes.Length; i++)
-    {
-        var level = i + 1;
-        Art.Save(Path.Combine(output, $"map-{key}-{sizes[i]}.png"), 512, c => draw(c, level));
-    }
-}
+// Tool icons shown large in panels (the rail draws the same shapes as vector glyphs).
+foreach (var (name, glyph) in Glyphs.Tools)
+    Art.Save(Path.Combine(output, name + ".png"), 512, c => Art.Cast(c, glyph, new SKRect(28, 28, 228, 228)));
 
-var apps = new (string Key, string Title, Action<SKCanvas> Draw)[]
+// Map icons of the library and of the create-map dialog: a folded map plate; the finer its
+// engraved grid, the bigger the canvas.
+Art.Save(Path.Combine(output, "map.png"), 512, c => Art.MapPlate(c, 0));
+Art.Save(Path.Combine(output, "map-custom.png"), 512, c => { Art.MapPlate(c, 0); Art.Corners(c); });
+Art.Save(Path.Combine(output, "map-new.png"), 512, c => { Art.MapPlate(c, 0); Art.PlusSeal(c); });
+foreach (var (name, level) in new[] { ("standard", 1), ("large", 2), ("huge", 3), ("max", 4) })
+    Art.Save(Path.Combine(output, $"map-{name}.png"), 512, c => Art.MapPlate(c, level));
+
+var apps = new (string Key, Action<SKCanvas> Emblem)[]
 {
-    ("1", "Латунная роза ветров", Art.AppCompass),
-    ("2", "Сложенная карта", Art.AppFoldedMap),
-    ("3", "Перо и пергамент", Art.AppQuill),
-    ("4", "Сургучная печать", Art.AppSeal),
-    ("5", "Гравюра-медальон", Art.AppEngraving),
-    ("6", "Свеча над картой", Art.AppCandle),
+    ("1", Art.EmblemCompass),
+    ("2", c => Art.MapPlate(c, 0, new SKRect(52, 62, 204, 194))),
+    ("3", Art.EmblemQuill),
+    ("4", c => Art.Cast(c, Glyphs.Keep, new SKRect(62, 54, 194, 196))),
+    ("5", Art.EmblemLand),
+    ("6", c => Art.EmblemMonogram(c, fontPath)),
 };
-foreach (var (key, _, draw) in apps)
+foreach (var (key, emblem) in apps)
 {
-    Art.Save(Path.Combine(output, $"app-{key}.png"), 1024, draw);
-    Art.Save(Path.Combine(output, $"app-{key}-64.png"), 64, draw);
-    Art.Save(Path.Combine(output, $"app-{key}-32.png"), 32, draw);
+    void Draw(SKCanvas c) { Art.Board(c); emblem(c); }
+    Art.Save(Path.Combine(output, $"app-{key}.png"), 1024, Draw);
+    Art.Save(Path.Combine(output, $"app-{key}-256.png"), 256, Draw);
+    Art.Save(Path.Combine(output, $"app-{key}-64.png"), 64, Draw);
+    Art.Save(Path.Combine(output, $"app-{key}-32.png"), 32, Draw);
+    Art.Save(Path.Combine(output, $"app-{key}-16.png"), 16, Draw);
 }
 Console.WriteLine("written to " + output);
 
+/// <summary>The rail's solid silhouettes (24-unit grid, from MapIcons), plus the emblems' own.</summary>
+static class Glyphs
+{
+    public record Glyph(string Fill, string? Stroke = null, float StrokeWidth = 2.6f);
+
+    public static readonly Glyph Select = new("M5 2.5 L5 19.6 L9.7 15.3 L12.7 21.7 L15.8 20.2 L12.8 13.9 L19.2 13.6 Z");
+    public static readonly Glyph Keep = new(
+        "M3.6 21.6 V6.4 H6.4 V8.8 H8.6 V6.4 H11 V8.8 H13 V6.4 H15.4 V8.8 H17.6 V6.4 H20.4 V21.6 H14.6 V17.2 " +
+        "A2.6 2.6 0 0 0 9.4 17.2 V21.6 Z M10.9 11.2 H13.1 V14 H10.9 Z M11.4 1.6 V6 H12.6 V3.9 L15.4 3.1 L12.6 2.3 V1.6 Z");
+    public static readonly Glyph Land = new(
+        "M2.8 14.6 C2.8 10.5 6.1 8.4 9 8.9 C10.3 5.2 15.5 4 18.3 6.9 C21.1 9.6 20.8 14.6 17.4 16.4 " +
+        "C14.9 17.7 12.5 17 10.2 18.3 C7 20 2.8 18.8 2.8 14.6 Z M7.9 14.4 L10.5 10.8 L12.3 13 L14 10.8 L16.8 14.4 Z");
+    public static readonly Glyph Line = new(
+        "M4.4 15.6 A2.6 2.6 0 1 0 4.4 20.8 A2.6 2.6 0 1 0 4.4 15.6 Z M19.6 3.6 A2.6 2.6 0 1 0 19.6 8.8 A2.6 2.6 0 1 0 19.6 3.6 Z",
+        "M4.4 18.2 C8.2 8.6 12.2 19.8 19.6 6.2", 2.6f);
+    public static readonly Glyph Shape = new(
+        "M12 2.2 L20.4 5.2 V11.4 C20.4 16.6 16.8 20.2 12 22 C7.2 20.2 3.6 16.6 3.6 11.4 V5.2 Z " +
+        "M12 4.8 V19.4 C8.6 17.8 6.1 15.2 6.1 11.4 V7 Z");
+    public static readonly Glyph Quill = new(
+        "M21.2 2.4 C14.2 3.2 9.4 7.6 7.6 14 L6.3 18.6 L7.9 19.1 L9.3 15.4 C13.8 15 17.8 12 18.9 8.1 L15.8 8.6 " +
+        "L19.5 5.9 C20.3 4.8 20.8 3.7 21.2 2.4 Z", "M3 21.6 H13", 1.8f);
+    public static readonly Glyph Scroll = new(
+        "M7.2 2.6 H18.2 A2.6 2.6 0 0 1 18.2 7.8 H17 V18.8 A2.8 2.8 0 0 1 14.2 21.6 H5.4 A2.6 2.6 0 0 1 5.4 16.4 H6.6 V3.2 " +
+        "C6.6 2.9 6.9 2.6 7.2 2.6 Z M9.2 7.6 H14.6 V9.2 H9.2 Z M9.2 11 H14.6 V12.6 H9.2 Z M9.2 14.4 H13 V16 H9.2 Z");
+    public static readonly Glyph Brush = new(
+        "M21 2.1 C21.9 3 21.4 4.4 20.4 5.4 L13.5 12.7 L11.3 10.5 L18.6 3.6 C19.6 2.6 20.2 1.3 21 2.1 Z " +
+        "M10.4 11.5 L12.5 13.6 C12.4 17 10.2 19.8 6.4 20.6 C5.1 20.9 3.7 21 2.4 20.8 C3.5 19.8 4 18.5 4.3 17 " +
+        "C4.8 13.9 7.1 11.7 10.4 11.5 Z");
+    public static readonly Glyph Mask = new(
+        "M2.2 7.6 C5.8 6 9.4 7.1 12 9.1 C14.6 7.1 18.2 6 21.8 7.6 C21.9 12.8 19.6 16.4 16.2 16.4 " +
+        "C14.4 16.4 13 15.2 12 13.6 C11 15.2 9.6 16.4 7.8 16.4 C4.4 16.4 2.1 12.8 2.2 7.6 Z " +
+        "M5.6 10.6 C6.8 9.6 8.6 9.6 9.8 10.8 C8.6 12.2 6.8 12.2 5.6 10.6 Z " +
+        "M18.4 10.6 C17.2 9.6 15.4 9.6 14.2 10.8 C15.4 12.2 17.2 12.2 18.4 10.6 Z");
+
+    public static readonly (string Name, Glyph Glyph)[] Tools =
+    [
+        ("select", Select), ("land", Land), ("line", Line), ("shape", Shape),
+        ("text", Quill), ("notes", Scroll), ("brush", Brush), ("mask", Mask),
+    ];
+}
+
 static class Art
 {
-    // Tavern palette.
-    public static readonly SKColor Wood = SKColor.Parse("#1A140F");
-    public static readonly SKColor WoodLight = SKColor.Parse("#3A2B1E");
-    public static readonly SKColor Brass = SKColor.Parse("#C9A15A");
+    public static readonly SKColor Wood = SKColor.Parse("#17110D");
+    public static readonly SKColor WoodWarm = SKColor.Parse("#3A2B1E");
     public static readonly SKColor BrassLight = SKColor.Parse("#F6E2B0");
+    public static readonly SKColor Brass = SKColor.Parse("#C9A15A");
     public static readonly SKColor BrassDeep = SKColor.Parse("#7A5A2C");
-    public static readonly SKColor Parchment = SKColor.Parse("#EEDDB5");
-    public static readonly SKColor ParchmentDeep = SKColor.Parse("#C9AE7C");
-    public static readonly SKColor Ink = SKColor.Parse("#3B2A1A");
-    public static readonly SKColor Water = SKColor.Parse("#6F8F86");
-    public static readonly SKColor Wax = SKColor.Parse("#8E2F22");
+    public static readonly SKColor Engrave = SKColor.Parse("#2A1D12");
 
     public static void Save(string path, int size, Action<SKCanvas> draw)
     {
         using var surface = SKSurface.Create(new SKImageInfo(size, size, SKColorType.Rgba8888, SKAlphaType.Premul))!;
-        var canvas = surface.Canvas;
-        canvas.Clear(SKColors.Transparent);
-        canvas.Scale(size / 256f);
-        draw(canvas);
+        surface.Canvas.Clear(SKColors.Transparent);
+        surface.Canvas.Scale(size / 256f);
+        draw(surface.Canvas);
         using var image = surface.Snapshot();
         using var data = image.Encode(SKEncodedImageFormat.Png, 100);
         using var file = File.Create(path);
         data.SaveTo(file);
     }
 
-    static SKPaint Fill(SKColor color) => new() { IsAntialias = true, Color = color, Style = SKPaintStyle.Fill };
-    static SKPaint Stroke(SKColor color, float width) => new()
+    static SKPaint StrokePaint(SKColor color, float width) => new()
     { IsAntialias = true, Color = color, Style = SKPaintStyle.Stroke, StrokeWidth = width, StrokeCap = SKStrokeCap.Round, StrokeJoin = SKStrokeJoin.Round };
 
-    static SKShader Vertical(SKRect r, params SKColor[] colors) =>
-        SKShader.CreateLinearGradient(new SKPoint(r.MidX, r.Top), new SKPoint(r.MidX, r.Bottom), colors, null, SKShaderTileMode.Clamp);
+    /// <summary>Cast brass: light from above, deep below, a warm middle - the program's brass gradient.</summary>
+    static SKShader BrassFill(SKRect r) => SKShader.CreateLinearGradient(
+        new SKPoint(r.MidX - r.Width * .15f, r.Top), new SKPoint(r.MidX + r.Width * .15f, r.Bottom),
+        [BrassLight, SKColor.Parse("#E2BF78"), Brass, BrassDeep], [0, .3f, .62f, 1], SKShaderTileMode.Clamp);
 
-    static SKShader BrassShader(SKRect r) => SKShader.CreateLinearGradient(
-        new SKPoint(r.Left, r.Top), new SKPoint(r.Right, r.Bottom),
-        [BrassLight, Brass, BrassDeep, Brass], [0, .35f, .75f, 1], SKShaderTileMode.Clamp);
-
-    /// <summary>Parchment: warm radial body with a fine fibre noise.</summary>
-    static void ParchmentFill(SKCanvas c, SKPath shape, SKRect r)
+    static void Shadow(SKCanvas c, SKPath shape, float dy = 4, float blur = 5, byte alpha = 150)
     {
-        using var body = new SKPaint { IsAntialias = true, Shader = SKShader.CreateRadialGradient(
-            new SKPoint(r.MidX - r.Width * .15f, r.MidY - r.Height * .2f), Math.Max(r.Width, r.Height) * .8f,
-            [SKColor.Parse("#F7EBCB"), Parchment, ParchmentDeep], [0, .55f, 1], SKShaderTileMode.Clamp) };
-        c.DrawPath(shape, body);
-        using var noise = new SKPaint { IsAntialias = true, BlendMode = SKBlendMode.Multiply,
-            Shader = SKShader.CreatePerlinNoiseFractalNoise(.06f, .09f, 3, 7), Color = SKColors.White.WithAlpha(40) };
-        c.Save(); c.ClipPath(shape, antialias: true);
-        using var tint = new SKPaint { Shader = SKShader.CreateCompose(
-            SKShader.CreatePerlinNoiseFractalNoise(.05f, .08f, 3, 11),
-            SKShader.CreateColor(SKColor.Parse("#5A3C1E")), SKBlendMode.DstIn) };
-        tint.Color = tint.Color.WithAlpha(255);
-        using var layer = new SKPaint { Color = SKColors.White.WithAlpha(46) };
-        c.SaveLayer(layer);
-        c.DrawRect(r, tint);
-        c.Restore();
-        c.Restore();
-    }
-
-    static void Shadow(SKCanvas c, SKPath shape, float dy = 6, float blur = 7, byte alpha = 150)
-    {
-        using var p = new SKPaint { IsAntialias = true, Color = SKColors.Black.WithAlpha(alpha),
-            ImageFilter = SKImageFilter.CreateBlur(blur, blur) };
+        using var p = new SKPaint { IsAntialias = true, Color = SKColors.Black.WithAlpha(alpha), ImageFilter = SKImageFilter.CreateBlur(blur, blur) };
         c.Save(); c.Translate(0, dy); c.DrawPath(shape, p); c.Restore();
     }
 
-    // ------------------------------------------------------------------ map content
-
-    /// <summary>The drawing on the sheet; <paramref name="level"/> 0 = plain, 1..4 = canvas sizes (more of the world, finer grid).</summary>
-    static void Landscape(SKCanvas c, SKRect r, int level, SKColor ink, float scale = 1)
+    /// <summary>
+    /// A shape cast in brass: the gradient body, an inner light along the upper edge, a dark
+    /// engraved rim and a soft shadow. Every icon is built from this.
+    /// </summary>
+    public static void CastPath(SKCanvas c, SKPath shape, float rim = 2.2f)
     {
-        using var river = Stroke(Water.WithAlpha(230), 5.5f * scale);
-        using var path = new SKPath();
-        path.MoveTo(r.Left + r.Width * .12f, r.Top + r.Height * .18f);
-        path.CubicTo(r.Left + r.Width * .45f, r.Top + r.Height * .25f, r.Left + r.Width * .2f, r.Top + r.Height * .6f,
-            r.Left + r.Width * .5f, r.Top + r.Height * .66f);
-        path.CubicTo(r.Left + r.Width * .75f, r.Top + r.Height * .72f, r.Left + r.Width * .7f, r.Top + r.Height * .9f,
-            r.Left + r.Width * .9f, r.Top + r.Height * .92f);
-        c.DrawPath(path, river);
-
-        void Mountain(float x, float y, float s)
-        {
-            using var m = new SKPath();
-            m.MoveTo(x - s, y); m.LineTo(x, y - s * 1.25f); m.LineTo(x + s, y);
-            using var body = Fill(SKColor.Parse("#B7976A"));
-            c.DrawPath(m, body);
-            using var shade = new SKPath(); shade.MoveTo(x, y - s * 1.25f); shade.LineTo(x + s, y); shade.LineTo(x + s * .2f, y);
-            using var dark = Fill(ink.WithAlpha(90)); c.DrawPath(shade, dark);
-            using var line = Stroke(ink, 2.4f * scale); c.DrawPath(m, line);
-        }
-        Mountain(r.Left + r.Width * .66f, r.Top + r.Height * .38f, r.Width * .13f);
-        Mountain(r.Left + r.Width * .82f, r.Top + r.Height * .44f, r.Width * .09f);
-        if (level != 1) Mountain(r.Left + r.Width * .3f, r.Top + r.Height * .86f, r.Width * .08f);
-
-        if (level >= 2)
-        {
-            // The finer the grid, the bigger the world on the sheet.
-            var cells = level switch { 2 => 2, 3 => 3, _ => 4 };
-            using var grid = Stroke(ink.WithAlpha((byte)(level >= 4 ? 120 : 140)), 1.6f * scale);
-            grid.PathEffect = SKPathEffect.CreateDash([5 * scale, 4 * scale], 0);
-            for (var i = 1; i < cells; i++)
-            {
-                c.DrawLine(r.Left + r.Width * i / cells, r.Top + 4, r.Left + r.Width * i / cells, r.Bottom - 4, grid);
-                c.DrawLine(r.Left + 4, r.Top + r.Height * i / cells, r.Right - 4, r.Top + r.Height * i / cells, grid);
-            }
-        }
-        if (level >= 4) Rose(c, new SKPoint(r.Left + r.Width * .24f, r.Top + r.Height * .3f), r.Width * .14f, ink);
+        var r = shape.Bounds;
+        Shadow(c, shape);
+        using var body = new SKPaint { IsAntialias = true, Shader = BrassFill(r) };
+        c.DrawPath(shape, body);
+        // the lit upper edge: the shape minus itself shifted down
+        c.Save(); c.ClipPath(shape, antialias: true);
+        using var shifted = new SKPath(shape); shifted.Transform(SKMatrix.CreateTranslation(0, 3));
+        using var light = new SKPaint { IsAntialias = true, Color = SKColor.Parse("#FFF4D6").WithAlpha(120) };
+        using var lightPath = shape.Op(shifted, SKPathOp.Difference);
+        if (lightPath is not null) c.DrawPath(lightPath, light);
+        c.Restore();
+        using var edge = StrokePaint(Engrave.WithAlpha(230), rim);
+        c.DrawPath(shape, edge);
     }
 
-    static void Rose(SKCanvas c, SKPoint o, float s, SKColor ink)
+    /// <summary>A rail glyph scaled into <paramref name="box"/> and cast in brass (its line parts as brass strokes).</summary>
+    public static void Cast(SKCanvas c, Glyphs.Glyph glyph, SKRect box)
     {
-        using var p = new SKPath();
-        for (var i = 0; i < 4; i++)
+        using var fill = SKPath.ParseSvgPathData(glyph.Fill)!;
+        fill.FillType = SKPathFillType.EvenOdd;
+        using var stroke = glyph.Stroke is { } s ? SKPath.ParseSvgPathData(s) : null;
+        var bounds = fill.Bounds;
+        if (stroke is not null) { var sb = stroke.Bounds; sb.Inflate(glyph.StrokeWidth / 2, glyph.StrokeWidth / 2); bounds.Union(sb); }
+        var scale = Math.Min(box.Width / bounds.Width, box.Height / bounds.Height);
+        var matrix = SKMatrix.CreateTranslation(-bounds.MidX, -bounds.MidY)
+            .PostConcat(SKMatrix.CreateScale(scale, scale))
+            .PostConcat(SKMatrix.CreateTranslation(box.MidX, box.MidY));
+        using var shape = new SKPath(fill); shape.Transform(matrix);
+        if (stroke is not null)
         {
-            var a = i * MathF.PI / 2 - MathF.PI / 2;
-            var tip = new SKPoint(o.X + MathF.Cos(a) * s, o.Y + MathF.Sin(a) * s);
-            var l = new SKPoint(o.X + MathF.Cos(a - MathF.PI / 4) * s * .28f, o.Y + MathF.Sin(a - MathF.PI / 4) * s * .28f);
-            var rr = new SKPoint(o.X + MathF.Cos(a + MathF.PI / 4) * s * .28f, o.Y + MathF.Sin(a + MathF.PI / 4) * s * .28f);
-            p.MoveTo(o); p.LineTo(l); p.LineTo(tip); p.LineTo(rr); p.Close();
+            using var line = new SKPath(stroke); line.Transform(matrix);
+            using var outline = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = glyph.StrokeWidth * scale,
+                StrokeCap = SKStrokeCap.Round, StrokeJoin = SKStrokeJoin.Round };
+            using var stroked = outline.GetFillPath(line);
+            using var union = stroked.Op(shape, SKPathOp.Union) ?? new SKPath(shape);
+            CastPath(c, union, Math.Max(1.4f, scale * .12f));
+            return;
         }
-        using var body = Fill(Brass); c.DrawPath(p, body);
-        using var line = Stroke(ink, 1.6f); c.DrawPath(p, line);
+        CastPath(c, shape, Math.Max(1.4f, scale * .12f));
     }
 
-    // ------------------------------------------------------------------ variant A: folded map
-
-    public static void FoldedMap(SKCanvas c, int level)
+    /// <summary>
+    /// A folded map as one brass plate, its three panels creased, with an engraved river and
+    /// mountains; <paramref name="level"/> 2..4 engraves a grid (2×2, 3×3, 4×4 and a rose).
+    /// </summary>
+    public static void MapPlate(SKCanvas c, int level, SKRect? area = null)
     {
-        var r = new SKRect(22, 46, 234, 214);
-        var w = r.Width / 3;
+        var r = area ?? new SKRect(26, 50, 230, 206);
+        var w = r.Width / 3; var d = r.Height * .07f;
         using var sheet = new SKPath();
-        sheet.MoveTo(r.Left, r.Top + 10); sheet.LineTo(r.Left + w, r.Top); sheet.LineTo(r.Left + 2 * w, r.Top + 10);
-        sheet.LineTo(r.Right, r.Top); sheet.LineTo(r.Right, r.Bottom - 10); sheet.LineTo(r.Left + 2 * w, r.Bottom);
-        sheet.LineTo(r.Left + w, r.Bottom - 10); sheet.LineTo(r.Left, r.Bottom); sheet.Close();
-        Shadow(c, sheet);
-        ParchmentFill(c, sheet, r);
+        sheet.MoveTo(r.Left, r.Top + d); sheet.LineTo(r.Left + w, r.Top); sheet.LineTo(r.Left + 2 * w, r.Top + d);
+        sheet.LineTo(r.Right, r.Top); sheet.LineTo(r.Right, r.Bottom - d); sheet.LineTo(r.Left + 2 * w, r.Bottom);
+        sheet.LineTo(r.Left + w, r.Bottom - d); sheet.LineTo(r.Left, r.Bottom); sheet.Close();
+        CastPath(c, sheet, 2.4f);
         c.Save(); c.ClipPath(sheet, antialias: true);
-        Landscape(c, new SKRect(r.Left + 8, r.Top + 14, r.Right - 8, r.Bottom - 14), level, Ink);
-        // folds: the middle panel is lit, the outer two are in shade
-        using var fold = new SKPaint { IsAntialias = true, Color = SKColor.Parse("#5A3C1E").WithAlpha(46) };
-        c.DrawRect(new SKRect(r.Left, r.Top, r.Left + w, r.Bottom), fold);
-        c.DrawRect(new SKRect(r.Left + 2 * w, r.Top, r.Right, r.Bottom), fold);
+        // the outer panels turn away from the light
+        using var shade = new SKPaint { IsAntialias = true, Color = Engrave.WithAlpha(46) };
+        c.DrawRect(new SKRect(r.Left, r.Top, r.Left + w, r.Bottom), shade);
+        c.DrawRect(new SKRect(r.Left + 2 * w, r.Top, r.Right, r.Bottom), shade);
+        var inner = new SKRect(r.Left + r.Width * .05f, r.Top + r.Height * .12f, r.Right - r.Width * .05f, r.Bottom - r.Height * .12f);
+        Engraving(c, inner, level, r.Width / 204f);
         c.Restore();
-        using var crease = Stroke(SKColor.Parse("#8A6A3A").WithAlpha(160), 1.6f);
-        c.DrawLine(r.Left + w, r.Top, r.Left + w, r.Bottom - 10, crease);
-        c.DrawLine(r.Left + 2 * w, r.Top + 10, r.Left + 2 * w, r.Bottom, crease);
-        using var rim = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 7, StrokeJoin = SKStrokeJoin.Round, Shader = BrassShader(r) };
-        c.DrawPath(sheet, rim);
-        using var inner = Stroke(Wood.WithAlpha(170), 1.4f);
-        c.DrawPath(sheet, inner);
+        using var crease = StrokePaint(Engrave.WithAlpha(150), 1.6f * r.Width / 204f);
+        c.DrawLine(r.Left + w, r.Top, r.Left + w, r.Bottom - d, crease);
+        c.DrawLine(r.Left + 2 * w, r.Top + d, r.Left + 2 * w, r.Bottom, crease);
     }
 
-    // ------------------------------------------------------------------ variant B: scroll
-
-    public static void Scroll(SKCanvas c, int level)
+    static void Engraving(SKCanvas c, SKRect r, int level, float k)
     {
-        var r = new SKRect(44, 44, 212, 212);
-        using var sheet = new SKPath();
-        sheet.MoveTo(r.Left, r.Top); sheet.CubicTo(r.Left + 60, r.Top + 10, r.Right - 60, r.Top - 8, r.Right, r.Top);
-        sheet.LineTo(r.Right, r.Bottom); sheet.CubicTo(r.Right - 60, r.Bottom - 10, r.Left + 60, r.Bottom + 8, r.Left, r.Bottom); sheet.Close();
-        Shadow(c, sheet);
-        ParchmentFill(c, sheet, r);
-        c.Save(); c.ClipPath(sheet, antialias: true);
-        Landscape(c, new SKRect(r.Left + 6, r.Top + 14, r.Right - 6, r.Bottom - 14), level, Ink);
-        c.Restore();
-        using var edge = Stroke(SKColor.Parse("#8A6A3A"), 2.2f); c.DrawPath(sheet, edge);
-        foreach (var y in new[] { r.Top, r.Bottom })
-        {
-            var rod = new SKRect(r.Left - 22, y - 10, r.Right + 22, y + 10);
-            using var rodPath = new SKPath(); rodPath.AddRoundRect(rod, 10, 10);
-            Shadow(c, rodPath, 3, 4, 120);
-            using var brass = new SKPaint { IsAntialias = true, Shader = Vertical(rod, BrassLight, Brass, BrassDeep) };
-            c.DrawRoundRect(rod, 10, 10, brass);
-            using var line = Stroke(Wood.WithAlpha(200), 1.6f); c.DrawRoundRect(rod, 10, 10, line);
-            foreach (var x in new[] { rod.Left + 6, rod.Right - 6 })
-            {
-                using var knob = new SKPaint { IsAntialias = true, Shader = SKShader.CreateRadialGradient(new SKPoint(x - 2, y - 3), 10, [BrassLight, BrassDeep], SKShaderTileMode.Clamp) };
-                c.DrawCircle(x, y, 9, knob); c.DrawCircle(x, y, 9, line);
-            }
-        }
-    }
-
-    // ------------------------------------------------------------------ variant C: medallion
-
-    public static void Medallion(SKCanvas c, int level)
-    {
-        var o = new SKPoint(128, 128);
-        using var disc = new SKPath(); disc.AddCircle(o.X, o.Y, 104);
-        Shadow(c, disc);
-        var rect = new SKRect(24, 24, 232, 232);
-        using var rim = new SKPaint { IsAntialias = true, Shader = BrassShader(rect) };
-        c.DrawCircle(o, 104, rim);
-        using var rimLine = Stroke(Wood.WithAlpha(200), 2); c.DrawCircle(o, 104, rimLine);
-        using var face = new SKPath(); face.AddCircle(o.X, o.Y, 86);
-        ParchmentFill(c, face, new SKRect(42, 42, 214, 214));
-        c.Save(); c.ClipPath(face, antialias: true);
-        Landscape(c, new SKRect(52, 52, 204, 204), level, Ink);
-        c.Restore();
-        using var faceLine = Stroke(BrassDeep, 3); c.DrawCircle(o, 86, faceLine);
-        using var ticks = Stroke(Wood.WithAlpha(160), 2);
-        for (var i = 0; i < 24; i++)
-        {
-            var a = i * MathF.PI * 2 / 24;
-            var r1 = i % 6 == 0 ? 90f : 94f;
-            c.DrawLine(o.X + MathF.Cos(a) * r1, o.Y + MathF.Sin(a) * r1, o.X + MathF.Cos(a) * 100, o.Y + MathF.Sin(a) * 100, ticks);
-        }
-    }
-
-    /// <summary>The "new" mark of the main map icon: a brass disc with a plus, lower right.</summary>
-    public static void PlusBadge(SKCanvas c)
-    {
-        var o = new SKPoint(200, 196);
-        using var p = new SKPath(); p.AddCircle(o.X, o.Y, 34);
-        Shadow(c, p, 3, 4, 140);
-        using var body = new SKPaint { IsAntialias = true, Shader = SKShader.CreateRadialGradient(new SKPoint(o.X - 10, o.Y - 12), 46,
-            [BrassLight, Brass, BrassDeep], [0, .5f, 1], SKShaderTileMode.Clamp) };
-        c.DrawCircle(o, 34, body);
-        using var ring = Stroke(Wood, 3); c.DrawCircle(o, 34, ring);
-        using var plus = Stroke(Wood, 9);
-        c.DrawLine(o.X - 15, o.Y, o.X + 15, o.Y, plus); c.DrawLine(o.X, o.Y - 15, o.X, o.Y + 15, plus);
-    }
-
-    // ------------------------------------------------------------------ application icons
-
-    /// <summary>The common tile: a dark wood squircle with a double brass frame.</summary>
-    static void Tile(SKCanvas c)
-    {
-        var r = new SKRect(12, 12, 244, 244);
-        using var shape = new SKPath(); shape.AddRoundRect(r, 52, 52);
-        Shadow(c, shape, 5, 6, 120);
-        using var wood = new SKPaint { IsAntialias = true, Shader = SKShader.CreateRadialGradient(new SKPoint(110, 90), 220,
-            [WoodLight, Wood], SKShaderTileMode.Clamp) };
-        c.DrawPath(shape, wood);
-        using var grain = new SKPaint { IsAntialias = true, BlendMode = SKBlendMode.Overlay,
-            Shader = SKShader.CreatePerlinNoiseFractalNoise(.004f, .08f, 2, 3), Color = SKColors.White.WithAlpha(60) };
-        c.Save(); c.ClipPath(shape, antialias: true); c.DrawRect(r, grain); c.Restore();
-        using var outer = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 5, Shader = BrassShader(r) };
-        c.DrawRoundRect(new SKRect(16, 16, 240, 240), 48, 48, outer);
-        using var innerLine = Stroke(Brass.WithAlpha(110), 1.6f);
-        c.DrawRoundRect(new SKRect(25, 25, 231, 231), 40, 40, innerLine);
-    }
-
-    /// <summary>A soft light kept inside the tile's frame.</summary>
-    static void Glow(SKCanvas c, SKPoint o, float radius, SKColor color, byte alpha)
-    {
-        using var p = new SKPaint { IsAntialias = true, Shader = SKShader.CreateRadialGradient(o, radius,
-            [color.WithAlpha(alpha), color.WithAlpha(0)], SKShaderTileMode.Clamp) };
-        c.Save();
-        c.ClipRoundRect(new SKRoundRect(new SKRect(19, 19, 237, 237), 45, 45), antialias: true);
-        c.DrawCircle(o, radius, p);
-        c.Restore();
-    }
-
-    public static void AppCompass(SKCanvas c)
-    {
-        Tile(c);
-        var o = new SKPoint(128, 128);
-        Glow(c, o, 110, BrassLight, 50);
-        using var ring = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 10, Shader = BrassShader(new SKRect(40, 40, 216, 216)) };
-        c.DrawCircle(o, 82, ring);
-        using var tick = Stroke(BrassLight.WithAlpha(200), 2.4f);
-        for (var i = 0; i < 32; i++)
-        {
-            var a = i * MathF.PI * 2 / 32;
-            var r1 = i % 4 == 0 ? 64f : 70f;
-            c.DrawLine(o.X + MathF.Cos(a) * r1, o.Y + MathF.Sin(a) * r1, o.X + MathF.Cos(a) * 75, o.Y + MathF.Sin(a) * 75, tick);
-        }
-        // eight-point rose: long cardinal points, short diagonals, lit and shaded halves
-        for (var i = 0; i < 8; i++)
-        {
-            var a = i * MathF.PI / 4 - MathF.PI / 2;
-            var len = i % 2 == 0 ? 104f : 58f;
-            var half = i % 2 == 0 ? 15f : 11f;
-            var tip = new SKPoint(o.X + MathF.Cos(a) * len, o.Y + MathF.Sin(a) * len);
-            var l = new SKPoint(o.X + MathF.Cos(a - MathF.PI / 2) * half, o.Y + MathF.Sin(a - MathF.PI / 2) * half);
-            var r = new SKPoint(o.X + MathF.Cos(a + MathF.PI / 2) * half, o.Y + MathF.Sin(a + MathF.PI / 2) * half);
-            using var lit = new SKPath(); lit.MoveTo(o); lit.LineTo(l); lit.LineTo(tip); lit.Close();
-            using var dark = new SKPath(); dark.MoveTo(o); dark.LineTo(r); dark.LineTo(tip); dark.Close();
-            using var litPaint = Fill(i == 0 ? SKColor.Parse("#F3D48A") : BrassLight);
-            using var darkPaint = Fill(i == 0 ? SKColor.Parse("#A8432E") : BrassDeep);
-            c.DrawPath(lit, litPaint); c.DrawPath(dark, darkPaint);
-            using var edge = Stroke(Wood, 1.6f); c.DrawPath(lit, edge); c.DrawPath(dark, edge);
-        }
-        using var hub = new SKPaint { IsAntialias = true, Shader = SKShader.CreateRadialGradient(new SKPoint(124, 124), 14, [BrassLight, BrassDeep], SKShaderTileMode.Clamp) };
-        c.DrawCircle(o, 11, hub);
-        using var hubLine = Stroke(Wood, 2); c.DrawCircle(o, 11, hubLine);
-    }
-
-    public static void AppFoldedMap(SKCanvas c)
-    {
-        Tile(c);
-        Glow(c, new SKPoint(128, 120), 120, BrassLight, 36);
-        c.Save(); c.Translate(128, 132); c.Scale(.8f); c.Translate(-128, -128);
-        FoldedMap(c, 0);
-        c.Restore();
-        c.Save(); c.Translate(186, 70); c.Scale(.5f); c.Translate(-128, -128);
-        Rose(c, new SKPoint(128, 128), 70, Wood);
-        c.Restore();
-    }
-
-    public static void AppQuill(SKCanvas c)
-    {
-        Tile(c);
-        var r = new SKRect(52, 58, 204, 206);
-        using var sheet = new SKPath();
-        sheet.MoveTo(r.Left, r.Top + 6); sheet.LineTo(r.Right - 10, r.Top); sheet.LineTo(r.Right, r.Bottom - 6); sheet.LineTo(r.Left + 8, r.Bottom); sheet.Close();
-        Shadow(c, sheet);
-        ParchmentFill(c, sheet, r);
-        c.Save(); c.ClipPath(sheet, antialias: true);
-        using var coast = Stroke(Ink, 3);
-        using var path = new SKPath();
-        path.MoveTo(60, 160); path.CubicTo(80, 120, 110, 150, 120, 118); path.CubicTo(130, 90, 165, 108, 170, 84);
-        c.DrawPath(path, coast);
-        using var hatch = Stroke(Ink.WithAlpha(110), 1.6f);
-        for (var i = 0; i < 6; i++) c.DrawLine(70 + i * 9, 186, 82 + i * 9, 172, hatch);
-        c.Restore();
-        using var edge = Stroke(SKColor.Parse("#8A6A3A"), 2); c.DrawPath(sheet, edge);
-        // the quill: an ivory vane with a brass nib, laid across the sheet
-        c.Save(); c.Translate(150, 120); c.RotateDegrees(-38);
-        using var vane = new SKPath();
-        vane.MoveTo(0, -98); vane.CubicTo(30, -60, 26, 20, 4, 70); vane.LineTo(-4, 70); vane.CubicTo(-22, 20, -26, -60, 0, -98); vane.Close();
-        Shadow(c, vane, 4, 5, 120);
-        using var feather = new SKPaint { IsAntialias = true, Shader = SKShader.CreateLinearGradient(new SKPoint(-24, 0), new SKPoint(24, 0),
-            [SKColor.Parse("#F8F0DC"), SKColor.Parse("#D8C49C")], SKShaderTileMode.Clamp) };
-        c.DrawPath(vane, feather);
-        using var shaft = Stroke(BrassDeep, 2.6f); c.DrawLine(0, -92, 0, 92, shaft);
-        using var barbs = Stroke(SKColor.Parse("#B39C72"), 1.2f);
-        for (var y = -80; y < 60; y += 9) { c.DrawLine(0, y, 16, y - 10, barbs); c.DrawLine(0, y, -16, y - 10, barbs); }
-        using var nibPath = new SKPath(); nibPath.MoveTo(-5, 70); nibPath.LineTo(5, 70); nibPath.LineTo(0, 100); nibPath.Close();
-        using var nib = new SKPaint { IsAntialias = true, Shader = Vertical(new SKRect(-5, 70, 5, 100), BrassLight, BrassDeep) };
-        c.DrawPath(nibPath, nib);
-        using var outline = Stroke(Wood, 1.6f); c.DrawPath(vane, outline); c.DrawPath(nibPath, outline);
-        c.Restore();
-    }
-
-    public static void AppSeal(SKCanvas c)
-    {
-        Tile(c);
-        var r = new SKRect(50, 50, 206, 206);
-        using var sheet = new SKPath(); sheet.AddRoundRect(r, 6, 6);
-        Shadow(c, sheet);
-        ParchmentFill(c, sheet, r);
-        c.Save(); c.ClipPath(sheet, antialias: true);
-        Landscape(c, new SKRect(r.Left + 6, r.Top + 6, r.Right - 6, r.Bottom - 6), 2, Ink.WithAlpha(150));
-        c.Restore();
-        using var edge = Stroke(SKColor.Parse("#8A6A3A"), 2); c.DrawPath(sheet, edge);
-        // ribbon under the seal
-        using var ribbon = new SKPath(); ribbon.MoveTo(150, 170); ribbon.LineTo(138, 232); ribbon.LineTo(152, 220); ribbon.LineTo(164, 234); ribbon.LineTo(170, 172); ribbon.Close();
-        using var ribbonPaint = Fill(SKColor.Parse("#6E2318")); c.DrawPath(ribbon, ribbonPaint);
-        var o = new SKPoint(160, 160);
-        using var blob = new SKPath();
-        for (var i = 0; i <= 24; i++)
-        {
-            var a = i * MathF.PI * 2 / 24;
-            var rr = 40 + (i % 2 == 0 ? 3 : -2);
-            var p = new SKPoint(o.X + MathF.Cos(a) * rr, o.Y + MathF.Sin(a) * rr);
-            if (i == 0) blob.MoveTo(p); else blob.LineTo(p);
-        }
-        blob.Close();
-        Shadow(c, blob, 4, 5, 150);
-        using var wax = new SKPaint { IsAntialias = true, Shader = SKShader.CreateRadialGradient(new SKPoint(150, 148), 52,
-            [SKColor.Parse("#C0503A"), Wax, SKColor.Parse("#4E1810")], [0, .55f, 1], SKShaderTileMode.Clamp) };
-        c.DrawPath(blob, wax);
-        using var press = Stroke(SKColor.Parse("#5E1E14"), 2.4f); c.DrawCircle(o, 29, press);
-        using var letter = new SKPaint { IsAntialias = true, Color = SKColor.Parse("#E8B08E").WithAlpha(220) };
-        using var font = new SKFont(SKTypeface.FromFamilyName("Georgia", SKFontStyle.Bold), 38);
-        c.DrawText("M", o.X, o.Y + 13, SKTextAlign.Center, font, letter);
-    }
-
-    public static void AppEngraving(SKCanvas c)
-    {
-        Tile(c);
-        var o = new SKPoint(128, 128);
-        var rect = new SKRect(34, 34, 222, 222);
-        using var gold = new SKPaint { IsAntialias = true, Shader = BrassShader(rect) };
-        c.DrawCircle(o, 92, gold);
-        using var edge = Stroke(Wood, 2.4f); c.DrawCircle(o, 92, edge); c.DrawCircle(o, 78, edge);
-        // engraved landscape in dark lines on the gold face
-        c.Save(); using var clip = new SKPath(); clip.AddCircle(o.X, o.Y, 77); c.ClipPath(clip, antialias: true);
-        using var line = Stroke(Wood, 3.2f);
-        using var hatch = Stroke(Wood.WithAlpha(150), 1.6f);
+        using var line = StrokePaint(Engrave.WithAlpha(215), 3.2f * k);
+        using var thin = StrokePaint(Engrave.WithAlpha(150), 1.5f * k);
+        using var river = new SKPath();
+        river.MoveTo(r.Left + r.Width * .04f, r.Top + r.Height * .1f);
+        river.CubicTo(r.Left + r.Width * .4f, r.Top + r.Height * .15f, r.Left + r.Width * .14f, r.Top + r.Height * .62f, r.Left + r.Width * .48f, r.Top + r.Height * .68f);
+        river.CubicTo(r.Left + r.Width * .74f, r.Top + r.Height * .73f, r.Left + r.Width * .74f, r.Top + r.Height * .95f, r.Right - r.Width * .02f, r.Bottom);
+        c.DrawPath(river, line);
         void Peak(float x, float y, float s)
         {
-            using var m = new SKPath(); m.MoveTo(x - s, y); m.LineTo(x, y - s * 1.2f); m.LineTo(x + s, y);
+            using var m = new SKPath(); m.MoveTo(x - s, y); m.LineTo(x, y - s * 1.15f); m.LineTo(x + s, y);
             c.DrawPath(m, line);
-            for (var i = 1; i < 5; i++) c.DrawLine(x + s * i / 6f, y - s * 1.2f * (1 - i / 6f), x + s * i / 6f + s * .25f, y, hatch);
+            for (var i = 1; i <= 3; i++) c.DrawLine(x + s * i / 4.5f, y - s * 1.15f * (1 - i / 4.5f), x + s * i / 4.5f + s * .2f, y, thin);
         }
-        Peak(100, 132, 40); Peak(150, 124, 32); Peak(180, 138, 22);
-        using var river = Stroke(Wood, 3);
-        using var path = new SKPath(); path.MoveTo(64, 172); path.CubicTo(100, 150, 120, 190, 150, 168); path.CubicTo(170, 154, 190, 176, 210, 160);
-        c.DrawPath(path, river);
-        for (var y = 182; y < 210; y += 7) c.DrawLine(50, y, 210, y - 4, hatch);
-        c.Restore();
-        using var star = Fill(BrassLight); c.DrawCircle(o.X, 58, 0, star);
-        Rose(c, new SKPoint(o.X, 66), 13, Wood);
+        Peak(r.Left + r.Width * .66f, r.Top + r.Height * .36f, r.Width * .12f);
+        Peak(r.Left + r.Width * .84f, r.Top + r.Height * .42f, r.Width * .08f);
+        Peak(r.Left + r.Width * .26f, r.Top + r.Height * .9f, r.Width * .07f);
+        if (level >= 2)
+        {
+            var cells = level switch { 2 => 2, 3 => 3, _ => 4 };
+            using var grid = StrokePaint(Engrave.WithAlpha(170), 1.8f * k);
+            grid.PathEffect = SKPathEffect.CreateDash([6 * k, 4 * k], 0);
+            for (var i = 1; i < cells; i++)
+            {
+                c.DrawLine(r.Left + r.Width * i / cells, r.Top - 10 * k, r.Left + r.Width * i / cells, r.Bottom + 10 * k, grid);
+                c.DrawLine(r.Left - 6 * k, r.Top + r.Height * i / cells, r.Right + 6 * k, r.Top + r.Height * i / cells, grid);
+            }
+        }
+        if (level >= 4)
+        {
+            using var rose = RosePath(new SKPoint(r.Left + r.Width * .2f, r.Top + r.Height * .34f), r.Width * .12f, 4, .26f);
+            using var ink = new SKPaint { IsAntialias = true, Color = Engrave.WithAlpha(170) };
+            c.DrawPath(rose, ink);
+        }
     }
 
-    public static void AppCandle(SKCanvas c)
+    static SKPath RosePath(SKPoint o, float s, int points, float waist)
     {
-        Tile(c);
-        Glow(c, new SKPoint(150, 92), 120, SKColor.Parse("#FFC86A"), 90);
-        var r = new SKRect(40, 120, 216, 214);
-        using var sheet = new SKPath();
-        sheet.MoveTo(r.Left, r.Top + 8); sheet.LineTo(r.Right, r.Top); sheet.LineTo(r.Right - 6, r.Bottom); sheet.LineTo(r.Left + 6, r.Bottom - 4); sheet.Close();
-        Shadow(c, sheet);
-        ParchmentFill(c, sheet, r);
-        c.Save(); c.ClipPath(sheet, antialias: true);
-        Landscape(c, new SKRect(r.Left + 4, r.Top + 4, r.Right - 4, r.Bottom - 4), 0, Ink);
+        var p = new SKPath();
+        for (var i = 0; i < points; i++)
+        {
+            var a = i * MathF.PI * 2 / points - MathF.PI / 2;
+            var len = points == 8 && i % 2 == 1 ? s * .55f : s;
+            p.MoveTo(o);
+            p.LineTo(o.X + MathF.Cos(a - MathF.PI / points) * s * waist, o.Y + MathF.Sin(a - MathF.PI / points) * s * waist);
+            p.LineTo(o.X + MathF.Cos(a) * len, o.Y + MathF.Sin(a) * len);
+            p.LineTo(o.X + MathF.Cos(a + MathF.PI / points) * s * waist, o.Y + MathF.Sin(a + MathF.PI / points) * s * waist);
+            p.Close();
+        }
+        return p;
+    }
+
+    /// <summary>"Свой размер": brass corner marks around the plate.</summary>
+    public static void Corners(SKCanvas c)
+    {
+        foreach (var (x, y, dx, dy) in new[] { (12f, 30f, 1, 1), (244f, 30f, -1, 1), (12f, 226f, 1, -1), (244f, 226f, -1, -1) })
+        {
+            using var mark = new SKPath();
+            mark.MoveTo(x, y + dy * 30); mark.LineTo(x, y); mark.LineTo(x + dx * 30, y);
+            using var pen = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 8, StrokeCap = SKStrokeCap.Round, StrokeJoin = SKStrokeJoin.Round };
+            using var band = pen.GetFillPath(mark);
+            CastPath(c, band, 1.4f);
+        }
+    }
+
+    /// <summary>The "new" mark: a brass seal with an engraved plus, lower right.</summary>
+    public static void PlusSeal(SKCanvas c)
+    {
+        using var seal = new SKPath(); seal.AddCircle(198, 194, 40);
+        CastPath(c, seal, 3);
+        using var ring = StrokePaint(Engrave.WithAlpha(150), 2); c.DrawCircle(198, 194, 31, ring);
+        using var plus = StrokePaint(Engrave, 9);
+        c.DrawLine(181, 194, 215, 194, plus); c.DrawLine(198, 177, 198, 211, plus);
+    }
+
+    // ------------------------------------------------------------------ the application board
+
+    /// <summary>
+    /// Dark wood, framed like the program's panels - a brass hairline, a dark gap, a fainter inner
+    /// brass line - with the candle's warm glow from below.
+    /// </summary>
+    public static void Board(SKCanvas c)
+    {
+        var outer = new SKRect(10, 10, 246, 246);
+        using var shape = new SKPath(); shape.AddRoundRect(outer, 34, 34);
+        Shadow(c, shape, 4, 6, 140);
+        using var wood = new SKPaint { IsAntialias = true, Shader = SKShader.CreateRadialGradient(new SKPoint(128, 112), 190,
+            [WoodWarm, SKColor.Parse("#221911"), Wood], [0, .55f, 1], SKShaderTileMode.Clamp) };
+        c.DrawPath(shape, wood);
+        c.Save(); c.ClipPath(shape, antialias: true);
+        using var grain = new SKPaint { IsAntialias = true, BlendMode = SKBlendMode.Overlay, Color = SKColors.White.WithAlpha(46),
+            Shader = SKShader.CreatePerlinNoiseFractalNoise(.004f, .09f, 2, 5) };
+        c.DrawRect(outer, grain);
+        using var glow = new SKPaint { IsAntialias = true, Shader = SKShader.CreateRadialGradient(new SKPoint(128, 250), 170,
+            [SKColor.Parse("#FFB347").WithAlpha(92), SKColor.Parse("#FFB347").WithAlpha(0)], SKShaderTileMode.Clamp) };
+        c.DrawRect(outer, glow);
         c.Restore();
-        using var edge = Stroke(SKColor.Parse("#8A6A3A"), 2); c.DrawPath(sheet, edge);
-        // candle in a brass holder
-        var body = new SKRect(138, 60, 162, 132);
-        using var holderPath = new SKPath(); holderPath.AddOval(new SKRect(116, 124, 184, 146));
-        Shadow(c, holderPath, 3, 4, 140);
-        using var holder = new SKPaint { IsAntialias = true, Shader = Vertical(new SKRect(116, 124, 184, 146), BrassLight, BrassDeep) };
-        c.DrawPath(holderPath, holder);
-        using var wax = new SKPaint { IsAntialias = true, Shader = SKShader.CreateLinearGradient(new SKPoint(body.Left, 0), new SKPoint(body.Right, 0),
-            [SKColor.Parse("#FFF4DC"), SKColor.Parse("#E2CFA6")], SKShaderTileMode.Clamp) };
-        c.DrawRoundRect(body, 4, 4, wax);
-        using var outline = Stroke(Wood, 1.8f); c.DrawRoundRect(body, 4, 4, outline); c.DrawPath(holderPath, outline);
-        using var wick = Stroke(Wood, 2); c.DrawLine(150, 60, 150, 52, wick);
-        Glow(c, new SKPoint(150, 40), 26, SKColor.Parse("#FFE2A0"), 200);
-        using var flame = new SKPath(); flame.MoveTo(150, 20); flame.CubicTo(162, 34, 160, 50, 150, 54); flame.CubicTo(140, 50, 138, 34, 150, 20); flame.Close();
-        using var flamePaint = new SKPaint { IsAntialias = true, Shader = Vertical(new SKRect(140, 20, 160, 54), SKColor.Parse("#FFF6D8"), SKColor.Parse("#FFB347")) };
-        c.DrawPath(flame, flamePaint);
+        using var hairline = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 5, Shader = BrassFill(outer) };
+        c.DrawRoundRect(new SKRect(13, 13, 243, 243), 31, 31, hairline);
+        using var gap = StrokePaint(Wood, 3); c.DrawRoundRect(new SKRect(18, 18, 238, 238), 27, 27, gap);
+        using var inner = StrokePaint(Brass.WithAlpha(120), 1.6f); c.DrawRoundRect(new SKRect(21.5f, 21.5f, 234.5f, 234.5f), 24, 24, inner);
+    }
+
+    public static void EmblemCompass(SKCanvas c)
+    {
+        var o = new SKPoint(128, 128);
+        using var ring = new SKPath(); ring.AddCircle(o.X, o.Y, 86); ring.AddCircle(o.X, o.Y, 74); ring.FillType = SKPathFillType.EvenOdd;
+        CastPath(c, ring, 2);
+        using var tick = StrokePaint(Engrave.WithAlpha(190), 2);
+        for (var i = 0; i < 32; i++)
+        {
+            var a = i * MathF.PI * 2 / 32; var r1 = i % 4 == 0 ? 75f : 80f;
+            c.DrawLine(o.X + MathF.Cos(a) * r1, o.Y + MathF.Sin(a) * r1, o.X + MathF.Cos(a) * 85, o.Y + MathF.Sin(a) * 85, tick);
+        }
+        using var rose = RosePath(o, 96, 8, .17f);
+        CastPath(c, rose, 2);
+        // each point split into a lit and a shaded side
+        using var half = new SKPaint { IsAntialias = true, Color = Engrave.WithAlpha(80) };
+        for (var i = 0; i < 8; i++)
+        {
+            var a = i * MathF.PI / 4 - MathF.PI / 2; var len = i % 2 == 1 ? 96 * .55f : 96;
+            using var h = new SKPath(); h.MoveTo(o);
+            h.LineTo(o.X + MathF.Cos(a + MathF.PI / 8) * 96 * .17f, o.Y + MathF.Sin(a + MathF.PI / 8) * 96 * .17f);
+            h.LineTo(o.X + MathF.Cos(a) * len, o.Y + MathF.Sin(a) * len); h.Close();
+            c.DrawPath(h, half);
+        }
+        using var hub = new SKPath(); hub.AddCircle(o.X, o.Y, 10);
+        CastPath(c, hub, 2);
+    }
+
+    public static void EmblemQuill(SKCanvas c)
+    {
+        Cast(c, Glyphs.Scroll, new SKRect(52, 74, 156, 214));
+        Cast(c, Glyphs.Quill, new SKRect(106, 40, 214, 172));
+    }
+
+    public static void EmblemLand(SKCanvas c)
+    {
+        Cast(c, Glyphs.Land, new SKRect(44, 52, 212, 172));
+        using var river = new SKPath();
+        river.MoveTo(54, 204); river.CubicTo(90, 184, 120, 212, 150, 194); river.CubicTo(170, 182, 190, 198, 206, 190);
+        using var pen = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 11, StrokeCap = SKStrokeCap.Round };
+        using var band = pen.GetFillPath(river);
+        CastPath(c, band, 1.8f);
+    }
+
+    public static void EmblemMonogram(SKCanvas c, string fontPath)
+    {
+        var o = new SKPoint(128, 130);
+        using var ring = new SKPath(); ring.AddCircle(o.X, o.Y, 88); ring.AddCircle(o.X, o.Y, 80); ring.FillType = SKPathFillType.EvenOdd;
+        CastPath(c, ring, 1.6f);
+        using var typeface = File.Exists(fontPath) ? SKTypeface.FromFile(fontPath) : SKTypeface.FromFamilyName("Georgia", SKFontStyle.Bold);
+        using var font = new SKFont(typeface, 150);
+        using var letter = font.GetTextPath("M", new SKPoint(0, 0));
+        var b = letter.Bounds;
+        letter.Transform(SKMatrix.CreateTranslation(o.X - b.MidX, o.Y - b.MidY));
+        CastPath(c, letter, 2.2f);
+        // four small diamonds on the ring - the program's ornament
+        foreach (var a in new[] { 0f, 90f, 180f, 270f })
+        {
+            var rad = a * MathF.PI / 180;
+            var p = new SKPoint(o.X + MathF.Cos(rad) * 84, o.Y + MathF.Sin(rad) * 84);
+            using var dia = new SKPath(); dia.MoveTo(p.X, p.Y - 10); dia.LineTo(p.X + 7, p.Y); dia.LineTo(p.X, p.Y + 10); dia.LineTo(p.X - 7, p.Y); dia.Close();
+            CastPath(c, dia, 1.4f);
+        }
     }
 }
