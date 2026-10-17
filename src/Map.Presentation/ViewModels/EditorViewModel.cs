@@ -981,6 +981,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         {
             LayerId = _activeLayerId ?? default,
             Coverage = _stroke.CommittedCoverage,
+            Versions = _stroke.CommittedVersions,
             Color = ActiveTool == EditorTool.Land && !LandPaintMode && ActiveLayer is LandLayer land
                 ? land.EdgeStyle.FillColor
                 : _stroke.Settings.Color,
@@ -3383,6 +3384,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         IReadOnlyList<StampPlacementItem>? gesturePlan = null)
     {
         var timing = System.Diagnostics.Stopwatch.StartNew();
+        if (CollectEditTimings) LastEditTimings.Clear();
         var settings = pending.StampSettingsSnapshot ?? _stampToolSettings;
         if (!TryStampInputs(settings, out var requestTemplate, out var sources, out var records, out var refusal))
         {
@@ -3428,10 +3430,11 @@ public sealed partial class EditorViewModel : ViewModelBase
         var placedLabel = CurrentVariantLabel;
         var previousSelection = Session.SelectedObjectIds.ToArray();
         _gestureCounter++;
-        ExecuteWithOptionalLayer(
+        if (CollectEditTimings) LastEditTimings.Add(("prepare+names", prepareMs + namesMs));
+        Timed("session-execute", () => ExecuteWithOptionalLayer(
             new PlaceAssetObjectsCommand(layer.Id, references, objects),
-            createLayer, "Place stamp on a new layer");
-        ApplyPlacementSelection(previousSelection, objects[^1].Id, pending);
+            createLayer, "Place stamp on a new layer"));
+        Timed("placement-selection", () => ApplyPlacementSelection(previousSelection, objects[^1].Id, pending));
         _activeLayerId = layer.Id;
         AfterEdit();
         var commitMs = timing.Elapsed.TotalMilliseconds - prepareMs - namesMs;
@@ -3451,9 +3454,8 @@ public sealed partial class EditorViewModel : ViewModelBase
         var placementMessage = objects.Count == 1
             ? $"Размещён вариант {placedLabel}."
             : $"Размещено объектов: {objects.Count}, вариантов: {plan.Select(item => item.Sha256).Distinct(StringComparer.OrdinalIgnoreCase).Count()}.";
-        Raise(nameof(CompactRecentSets));
-        Raise(nameof(RecentCount));
-        FinishOrContinuePlacement(pending, objects[^1].Name);
+        Timed("raise recent", () => { Raise(nameof(CompactRecentSets)); Raise(nameof(RecentCount)); });
+        Timed("finish-or-continue", () => FinishOrContinuePlacement(pending, objects[^1].Name));
         StatusDetail = placementMessage + " Ассет остаётся активным · Esc завершить.";
         if (_assetCatalog?.MetadataSaveError is not null)
             StatusDetail += " Объекты размещены; недавние пока не удалось сохранить на диск.";
@@ -6784,38 +6786,44 @@ public sealed partial class EditorViewModel : ViewModelBase
             return;
         }
 
+        if (CollectEditTimings) LastEditTimings.Clear();
         if (_editingStampForeground)
         {
-            var (Before, After) = stroke.Commit();
-            Session.Execute(new StampForegroundStrokeCommand(
-                Before, After, BrushSettings.Eraser ? "Erase stamp foreground" : "Paint stamp foreground"));
+            Dictionary<TileKey, byte[]?> Before = null!, After = null!;
+            Timed("stroke-commit", () => (Before, After) = stroke.Commit());
+            Timed("session-execute", () => Session.Execute(new StampForegroundStrokeCommand(
+                Before, After, BrushSettings.Eraser ? "Erase stamp foreground" : "Paint stamp foreground")));
         }
         else if (ActiveTool == EditorTool.Mask)
         {
-            var (Before, After) = stroke.CommitCoverage(
+            Dictionary<TileKey, byte[]?> Before = null!, After = null!;
+            Timed("stroke-commit", () => (Before, After) = stroke.CommitCoverage(
                 missingTileValue: 255,
-                subtract: MaskMode == MaskPaintMode.Hide);
-            Session.Execute(new MaskStrokeCommand(activeLayerId.GetValueOrDefault(), Before, After));
+                subtract: MaskMode == MaskPaintMode.Hide));
+            Timed("session-execute", () => Session.Execute(new MaskStrokeCommand(activeLayerId.GetValueOrDefault(), Before, After)));
         }
         else if (ActiveTool == EditorTool.Land && LandPaintMode)
         {
-            var (before, after) = stroke.Commit();
-            Session.Execute(new LandPaintCommand(activeLayerId.GetValueOrDefault(), before, after,
-                stroke.Settings.Eraser ? "Erase land material" : "Paint land material"));
+            Dictionary<TileKey, byte[]?> before = null!, after = null!;
+            Timed("stroke-commit", () => (before, after) = stroke.Commit());
+            Timed("session-execute", () => Session.Execute(new LandPaintCommand(activeLayerId.GetValueOrDefault(), before, after,
+                stroke.Settings.Eraser ? "Erase land material" : "Paint land material")));
         }
         else if (ActiveTool == EditorTool.Land)
         {
-            var (Before, After) = stroke.CommitCoverage(missingTileValue: 0, subtract: LandSubtract);
-            Session.Execute(new BrushStrokeCommand(
+            Dictionary<TileKey, byte[]?> Before = null!, After = null!;
+            Timed("stroke-commit", () => (Before, After) = stroke.CommitCoverage(missingTileValue: 0, subtract: LandSubtract));
+            Timed("session-execute", () => Session.Execute(new BrushStrokeCommand(
                 activeLayerId.GetValueOrDefault(), Before, After,
-                LandSubtract ? "Subtract land" : "Add land"));
+                LandSubtract ? "Subtract land" : "Add land")));
         }
         else
         {
-            var (Before, After) = stroke.Commit();
-            Session.Execute(new BrushStrokeCommand(
+            Dictionary<TileKey, byte[]?> Before = null!, After = null!;
+            Timed("stroke-commit", () => (Before, After) = stroke.Commit());
+            Timed("session-execute", () => Session.Execute(new BrushStrokeCommand(
                 activeLayerId.GetValueOrDefault(), Before, After,
-                BrushSettings.Eraser ? "Erase stroke" : "Brush stroke"));
+                BrushSettings.Eraser ? "Erase stroke" : "Brush stroke")));
         }
 
         AfterEdit();
@@ -8857,16 +8865,41 @@ public sealed partial class EditorViewModel : ViewModelBase
         Raise(nameof(CanRedo));
     }
 
+    /// <summary>
+    /// Diagnostics for the native profiles: when set, every edit records how long each step of
+    /// <see cref="AfterEdit"/> and of a stroke's commit took on the UI thread (the handlers of
+    /// the raised properties included). Never on in the product.
+    /// </summary>
+    private static bool _collectEditTimings;
+    public static bool CollectEditTimings
+    {
+        get => _collectEditTimings;
+        set
+        {
+            _collectEditTimings = value;
+            EditingSession.StepTimed = value ? (step, ms) => _timingSink?.LastEditTimings.Add((step, ms)) : null;
+        }
+    }
+    private static EditorViewModel? _timingSink;
+    public List<(string Step, double Ms)> LastEditTimings { get { _timingSink = this; return _lastEditTimings; } }
+    private readonly List<(string Step, double Ms)> _lastEditTimings = [];
+
+    private void Timed(string step, Action action)
+    {
+        if (!CollectEditTimings) { action(); return; }
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        action();
+        LastEditTimings.Add((step, System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds));
+    }
+
     private void AfterEdit(bool geometryOnly = false)
     {
-        RaisePathState();
-        RaiseAreaState();
-        RaiseRiverState();
-        RaiseRoadState();
+        if (CollectEditTimings) { LastEditTimings.Add(("after-edit", 0)); }
+        Timed("path/area/river/road state", () => { RaisePathState(); RaiseAreaState(); RaiseRiverState(); RaiseRoadState(); });
         _lastCommittedEditUtc = _clock();
-        SaveState = Session.IsDirty ? SaveState.Unsaved : SaveState.Saved;
-        StatusDetail = "";
-        RefreshCanvasWorkflowAfterDocumentChange();
+        Timed("save-state", () => SaveState = Session.IsDirty ? SaveState.Unsaved : SaveState.Saved);
+        Timed("status", () => StatusDetail = "");
+        Timed("canvas-workflow", RefreshCanvasWorkflowAfterDocumentChange);
 
         if (_activeLayerId is null || Session.Document.FindLayer(_activeLayerId.Value) is null)
         {
@@ -8882,7 +8915,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         {
             _openGroupId = null;
         }
-        RefreshInspector();
+        Timed("inspector", RefreshInspector);
         if (geometryOnly)
         {
             // A nudge changes coordinates, not layer/library/note/version rows. Keep the
@@ -8892,28 +8925,19 @@ public sealed partial class EditorViewModel : ViewModelBase
             InvalidateScene(EditorChangeReason.ObjectProperties | EditorChangeReason.CanvasInvalidation);
             return;
         }
-        Raise(nameof(SelectionStatus));
-        Raise(nameof(SelectionKind));
-        Raise(nameof(SelectionCount));
-        Raise(nameof(ShowSingleInspector));
-        Raise(nameof(SelectedGroupId));
-        Raise(nameof(SelectedGroupName));
-        Raise(nameof(OpenGroupId));
-        Raise(nameof(SelectionVisibilitySummary));
-        Raise(nameof(SelectionLockSummary));
-        Raise(nameof(Title));
-        Raise(nameof(Layers));
-        Raise(nameof(Notes));
-        Raise(nameof(Checkpoints));
-        Raise(nameof(PrimaryAutosaveSummary));
-        Raise(nameof(ActiveLayer));
-        Raise(nameof(ActiveLayerId));
-        Raise(nameof(ActiveLayerSummary));
-        Raise(nameof(GridSummary));
-        Raise(nameof(MaskEditLayerId));
-        Raise(nameof(SelectedTextFontResolution));
-        RaiseSessionState();
-        SceneChanged?.Invoke(this, EventArgs.Empty);
+        foreach (var name in new[]
+        {
+            nameof(SelectionStatus), nameof(SelectionKind), nameof(SelectionCount), nameof(ShowSingleInspector),
+            nameof(SelectedGroupId), nameof(SelectedGroupName), nameof(OpenGroupId), nameof(SelectionVisibilitySummary),
+            nameof(SelectionLockSummary), nameof(Title), nameof(Layers), nameof(Notes), nameof(Checkpoints),
+            nameof(PrimaryAutosaveSummary), nameof(ActiveLayer), nameof(ActiveLayerId), nameof(ActiveLayerSummary),
+            nameof(GridSummary), nameof(MaskEditLayerId), nameof(SelectedTextFontResolution),
+        })
+        {
+            Timed("raise " + name, () => Raise(name));
+        }
+        Timed("session-state", RaiseSessionState);
+        Timed("scene-changed", () => SceneChanged?.Invoke(this, EventArgs.Empty));
     }
 
     // ---------------------------------------------------------------- inspector

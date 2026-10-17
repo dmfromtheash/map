@@ -25,6 +25,12 @@ else if (options.Profile == "install-mountain-foundation")
 {
     var install = MountainFoundationPack.Install(); report = install; gatePassed = install.GatePassed;
 }
+else if (options.Profile == "native-paint-perf")
+{
+    var smoke = NativePaintPerfSmoke.Run(options); report = smoke; gatePassed = smoke.GatePassed;
+    Console.WriteLine($"native-paint-perf: routes={smoke.Routes.Count}, gate={(smoke.GatePassed ? "PASS" : "FAIL")}");
+    if (smoke.Failure is not null) Console.WriteLine(smoke.Failure);
+}
 else if (options.Profile == "native-zoom-assets")
 {
     var smoke = NativeZoomAssetsSmoke.Run(options); report = smoke; gatePassed = smoke.GatePassed;

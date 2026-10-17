@@ -1,4 +1,4 @@
-using Map.Core.Documents;
+﻿using Map.Core.Documents;
 using Map.Core.Editing;
 using SkiaSharp;
 using System.Runtime.CompilerServices;
@@ -22,6 +22,13 @@ public sealed class StrokePreview
 
     /// <summary>Per-tile coverage 0..255 from the in-progress <c>RasterStrokeSession</c>.</summary>
     public required IReadOnlyDictionary<TileKey, byte[]> Coverage { get; init; }
+
+    /// <summary>
+    /// Change counter per tile of <see cref="Coverage"/>, when the source tracks one: a tile whose
+    /// array and counter are unchanged since the last frame has the same pixels, so its preview
+    /// image is drawn again instead of being rebuilt. Without it every tile is rebuilt per frame.
+    /// </summary>
+    public IReadOnlyDictionary<TileKey, int>? Versions { get; init; }
 
     public string Color { get; init; } = "#FF000000";
     public double Opacity { get; init; } = 1.0;
@@ -286,10 +293,29 @@ public sealed class RenderOptions
 
     public IStampImageSource? Stamps { get; init; }
 
-    public StrokePreview? Preview { get; init; }
+    public StrokePreview? Preview { get => _liveSuppressed ? null : _preview; init => _preview = value; }
+    private StrokePreview? _preview;
+
+    /// <summary>Images of the stroke preview's tiles kept between the frames of one gesture.</summary>
+    public StrokePreviewCache? PreviewCache { get; init; }
 
     /// <summary>While a mask is being edited its hidden area is tinted red on this layer only.</summary>
-    public LayerId? MaskEditLayerId { get; init; }
+    public LayerId? MaskEditLayerId { get => _liveSuppressed ? null : _maskEditLayerId; init => _maskEditLayerId = value; }
+    private LayerId? _maskEditLayerId;
+    private bool _liveSuppressed;
+
+    /// <summary>
+    /// The same options with the live gesture state (stroke preview, mask-edit tint) hidden: what
+    /// a kept image of the terrain is built from, so a frame drawn in the middle of a stroke can
+    /// reuse the idle terrain and lay the stroke over it instead of rebuilding every coast.
+    /// </summary>
+    internal RenderOptions WithoutLiveState()
+    {
+        if (_liveSuppressed || (_preview is null && _maskEditLayerId is null)) return this;
+        var copy = (RenderOptions)MemberwiseClone();
+        copy._liveSuppressed = true;
+        return copy;
+    }
 
     public RenderStats? Stats { get; init; }
 
@@ -397,6 +423,7 @@ public static class SceneRenderer
         ArgumentNullException.ThrowIfNull(options);
 
         options.Stats?.Reset();
+        options.PreviewCache?.Sync(options.Preview);
 
         var canvasBounds = new WorldBounds(0, 0, document.Canvas.Width, document.Canvas.Height);
         var requestedView = options.VisibleWorld ?? canvasBounds;
@@ -574,11 +601,11 @@ public static class SceneRenderer
         // drag, and only Normal blending (a multiplied layer must meet what lies beneath it in
         // the frame, not in a kept image). An edit to any land, river or road, or a change of
         // view, produces new inputs and rebuilds the image.
+        // A live stroke on a land (its shape or its material) or a mask being edited does not
+        // change the document: the kept terrain is still exact, and the stroke is composited
+        // over it (DrawTerrainLiveOverlay) instead of rebuilding every coast and river per frame.
         var keepable = options.Terrain is not null && !options.IsExport
             && options.LodTier != RenderLodTier.Overview
-            && options.Preview is not { IsLandPaint: true }
-            && !lands.Any(land => HasLandShapePreview(land, options))
-            && options.MaskEditLayerId is null
             && lands.All(land => land.Blend == "Normal")
             && surfaces.All(surface => surface.Owner.Blend == "Normal"
                 && (!surface.Owner.Effects.ClippingEnabled || options.ObjectOverrides is null));
@@ -620,6 +647,7 @@ public static class SceneRenderer
             {
                 canvas.DrawImage(exact, RenderImageCache.Placement(exact, view, terrainScale),
                     new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None));
+                DrawTerrainLiveOverlay(canvas, document, lands, view, options);
                 return;
             }
         }
@@ -656,6 +684,7 @@ public static class SceneRenderer
             {
                 canvas.DrawImage(kept, placement, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear));
                 if (options.Stats is { } keptStats) keptStats.TerrainReused++;
+                DrawTerrainLiveOverlay(canvas, document, lands, view, options);
                 return;
             }
         }
@@ -679,16 +708,18 @@ public static class SceneRenderer
             };
             DrawTerrainPasses(canvas, document, lands, surfaces, view, plain);
             if (options.Stats is { } firstStats) firstStats.TerrainRefinementsPending++;
+            DrawTerrainLiveOverlay(canvas, document, lands, view, options);
             return;
         }
         if (cacheable)
         {
             var parts = terrainParts!;
+            var idle = options.WithoutLiveState();
             var image = options.Terrain!.Get(parts, view, terrainScale, options.GpuContext, (width, height) =>
             {
                 using var surface = RenderImageCache.CreateSurface(options.GpuContext, width, height, view, terrainScale);
                 if (surface is null) return null;
-                DrawTerrainPasses(surface.Canvas, document, lands, surfaces, view, options);
+                DrawTerrainPasses(surface.Canvas, document, lands, surfaces, view, idle);
                 surface.Canvas.Flush();
                 return surface.Snapshot();
             });
@@ -696,11 +727,50 @@ public static class SceneRenderer
             {
                 canvas.DrawImage(image, RenderImageCache.Placement(image, view, terrainScale),
                     new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None));
+                DrawTerrainLiveOverlay(canvas, document, lands, view, options);
                 return;
             }
         }
 
         DrawTerrainPasses(canvas, document, lands, surfaces, view, options);
+    }
+
+    /// <summary>
+    /// The live part of a raster gesture on the terrain, over the kept terrain image: the new
+    /// ground of a land-shape stroke in the land's colour and material (or the sea colour where
+    /// land is being taken away), the material of a land-paint stroke inside the land's coverage
+    /// (or the bare land where paint is being erased), and the red tint of a land mask being
+    /// edited. The exact coast of the new edge follows on release, when the document changes and
+    /// the terrain is rebuilt once; during the gesture this overlay is all that is drawn per frame.
+    /// </summary>
+    private static void DrawTerrainLiveOverlay(SKCanvas canvas, MapDocument document, List<LandLayer> lands,
+        WorldBounds view, RenderOptions options)
+    {
+        if (options.Preview is { IsMask: false } preview
+            && lands.FirstOrDefault(land => land.Id == preview.LayerId) is { } land)
+        {
+            canvas.SaveLayer(ToRect(view), null);
+            if (preview.IsLandPaint)
+            {
+                if (preview.Eraser)
+                    DrawLandShapePreview(canvas, land, new StrokePreview
+                    { LayerId = land.Id, Coverage = preview.Coverage, Opacity = preview.Opacity }, view, options);
+                else DrawStrokePreview(canvas, preview, view, options);
+                using var keep = new SKPaint { BlendMode = SKBlendMode.DstIn };
+                canvas.SaveLayer(ToRect(view), keep);
+                using (var plain = new SKPaint()) DrawLandCoverage(canvas, [land], view, options, plain);
+                canvas.Restore();
+            }
+            else if (preview.Eraser)
+            {
+                DrawStrokePreview(canvas, new StrokePreview
+                { LayerId = land.Id, Coverage = preview.Coverage, Opacity = preview.Opacity, Color = document.BaseColor.Color }, view, options);
+            }
+            else DrawLandShapePreview(canvas, land, preview, view, options);
+            canvas.Restore();
+        }
+        if (options.MaskEditLayerId is { } editing && lands.FirstOrDefault(land => land.Id == editing) is { Mask: not null } masked)
+            DrawMaskOverlay(canvas, masked, view, options);
     }
 
     /// <summary>
@@ -2490,29 +2560,51 @@ public static class SceneRenderer
                 continue;
             }
 
-            // Preview tiles change every mouse move, so they are built fresh, never cached.
-            var pixels = !preview.IsMask && !preview.Eraser && preview.PaintSettings is { } settings
-                ? RasterStrokeSession.RenderPreviewTile(settings, key, coverage)
-                : new byte[TileMap.TileSize * TileMap.TileSize * 4];
-            if (preview.IsMask || preview.Eraser || preview.PaintSettings is null)
+            // Only the tiles the dabs since the last frame changed are rebuilt; the rest of the
+            // stroke is drawn from the images kept in the preview cache. Without a cache (export,
+            // tests) every tile is built for the frame and dropped.
+            SKImage BuildImage()
             {
-                for (var i = 0; i < coverage.Length; i++)
+                // One pooled buffer per tile build: a fresh 256 KiB array per tile per frame went
+                // to the large-object heap and cost a full collection every few frames of a stroke.
+                var pixels = System.Buffers.ArrayPool<byte>.Shared.Rent(TileMap.TileSize * TileMap.TileSize * 4);
+                try
                 {
-                    if (coverage[i] == 0) continue;
-
-                    var value = coverage[i] / 255.0 * alpha;
-                    var offset = i * 4;
-                    pixels[offset] = (byte)Math.Round(r * value);
-                    pixels[offset + 1] = (byte)Math.Round(g * value);
-                    pixels[offset + 2] = (byte)Math.Round(b * value);
-                    pixels[offset + 3] = (byte)Math.Round(255 * value);
+                if (!preview.IsMask && !preview.Eraser && preview.PaintSettings is { } settings)
+                    RasterStrokeSession.RenderPreviewTile(settings, key, coverage, pixels);
+                else
+                {
+                    Array.Clear(pixels, 0, TileMap.TileSize * TileMap.TileSize * 4);
+                    Span<byte> lutR = stackalloc byte[256], lutG = stackalloc byte[256], lutB = stackalloc byte[256], lutA = stackalloc byte[256];
+                    for (var c = 1; c < 256; c++)
+                    {
+                        var value = c / 255.0 * alpha;
+                        lutR[c] = (byte)Math.Round(r * value); lutG[c] = (byte)Math.Round(g * value);
+                        lutB[c] = (byte)Math.Round(b * value); lutA[c] = (byte)Math.Round(255 * value);
+                    }
+                    for (var i = 0; i < coverage.Length; i++)
+                    {
+                        var c = coverage[i];
+                        if (c == 0) continue;
+                        var offset = i * 4;
+                        pixels[offset] = lutR[c]; pixels[offset + 1] = lutG[c]; pixels[offset + 2] = lutB[c]; pixels[offset + 3] = lutA[c];
+                    }
                 }
+
+                return SKImage.FromPixelCopy(
+                    new SKImageInfo(TileMap.TileSize, TileMap.TileSize, SKColorType.Rgba8888, SKAlphaType.Premul),
+                    pixels.AsSpan(0, TileMap.TileSize * TileMap.TileSize * 4));
+                }
+                finally { System.Buffers.ArrayPool<byte>.Shared.Return(pixels); }
             }
 
-            using var image = SKImage.FromPixelCopy(
-                new SKImageInfo(TileMap.TileSize, TileMap.TileSize, SKColorType.Rgba8888, SKAlphaType.Premul),
-                pixels);
+            if (options.PreviewCache is { } cache && preview.Versions is { } versions && versions.TryGetValue(key, out var version))
+            {
+                canvas.DrawImage(cache.Get(preview, key, coverage, version, BuildImage), rect, sampling, paint);
+                continue;
+            }
 
+            using var image = BuildImage();
             canvas.DrawImage(image, rect, sampling, paint);
         }
     }

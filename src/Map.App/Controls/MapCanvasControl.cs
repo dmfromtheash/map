@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Diagnostics;
 using Avalonia;
 using Avalonia.Automation;
@@ -79,8 +79,8 @@ public sealed partial class MapCanvasControl : Control
     private sealed class CanvasRenderResources
     {
         public object Gate { get; } = new();
-        private readonly System.Collections.Generic.Dictionary<int, (TileImageCache Tiles, ObjectOverviewCache Objects, CarvedLandCache Land, RenderImageCache Styled, RenderImageCache Terrain, ObjectOverviewCache Atlases, TerrainRefinement Refinement)> _contexts = [];
-        public (TileImageCache Tiles, ObjectOverviewCache Objects, CarvedLandCache Land, RenderImageCache Styled, RenderImageCache Terrain, ObjectOverviewCache Atlases, TerrainRefinement Refinement) Current()
+        private readonly System.Collections.Generic.Dictionary<int, (TileImageCache Tiles, ObjectOverviewCache Objects, CarvedLandCache Land, RenderImageCache Styled, RenderImageCache Terrain, ObjectOverviewCache Atlases, TerrainRefinement Refinement, StrokePreviewCache Preview)> _contexts = [];
+        public (TileImageCache Tiles, ObjectOverviewCache Objects, CarvedLandCache Land, RenderImageCache Styled, RenderImageCache Terrain, ObjectOverviewCache Atlases, TerrainRefinement Refinement, StrokePreviewCache Preview) Current()
         {
             var thread = Environment.CurrentManagedThreadId;
             if (!_contexts.TryGetValue(thread, out var context))
@@ -88,7 +88,7 @@ public sealed partial class MapCanvasControl : Control
                 // image (about 10 MiB at 1440×900): enough that returning to a recent view, the
                 // settled frame after a zoom, or placing an object does not rebuild the terrain.
                 // Six stamp atlases of dense tiles (one per zoom bucket, up to 64 MiB each).
-                _contexts[thread] = context = (new(4096, 256L * 1024 * 1024), new(1024, 64L * 1024 * 1024), new(), new(8), new(6), new(6, 192L * 1024 * 1024), new());
+                _contexts[thread] = context = (new(4096, 256L * 1024 * 1024), new(1024, 64L * 1024 * 1024), new(), new(8), new(6), new(6, 192L * 1024 * 1024), new(), new());
             return context;
         }
         public (int Tiles, int Objects, long Bytes, long Disposals) Counts()
@@ -105,7 +105,7 @@ public sealed partial class MapCanvasControl : Control
         {
             lock (Gate)
             {
-                foreach (var context in _contexts.Values) { context.Refinement.Dispose(); context.Tiles.Dispose(); context.Objects.Dispose(); context.Land.Dispose(); context.Styled.Dispose(); context.Terrain.Dispose(); context.Atlases.Dispose(); }
+                foreach (var context in _contexts.Values) { context.Refinement.Dispose(); context.Tiles.Dispose(); context.Objects.Dispose(); context.Land.Dispose(); context.Styled.Dispose(); context.Terrain.Dispose(); context.Atlases.Dispose(); context.Preview.Dispose(); }
                 _contexts.Clear();
             }
         }
@@ -605,7 +605,7 @@ public sealed partial class MapCanvasControl : Control
 
         private void RenderFrame(ISkiaSharpApiLeaseFeature feature)
         {
-            var (tileCache, objectCache, carvedLandCache, styledLandCache, terrainCache, atlasCache, refinement) = resources.Current();
+            var (tileCache, objectCache, carvedLandCache, styledLandCache, terrainCache, atlasCache, refinement, previewCache) = resources.Current();
             tileCache.BeginFrame();
             var overviewFrame = false;
             try
@@ -694,6 +694,7 @@ public sealed partial class MapCanvasControl : Control
                 RequestRefinedFrame = requestRefinedFrame,
                 LodTier = tier,
                 Preview = editor.StrokePreview,
+                PreviewCache = previewCache,
                 MaskEditLayerId = editor.MaskEditLayerId,
                 Stamps = editor.StampImages,
                 FastPreview = editor.StrokePreview is not { IsLandPaint: true }

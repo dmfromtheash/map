@@ -1,4 +1,4 @@
-using Map.Core.Documents;
+﻿using Map.Core.Documents;
 
 namespace Map.Core.Editing;
 
@@ -173,9 +173,21 @@ public sealed class EditingSession
     public SceneObject? SelectedObject =>
         SelectedObjectId is { } id ? DocumentEditor.FindObject(Document, id) : null;
 
+    /// <summary>Diagnostics for the native profiles: receives the duration of each step of <see cref="Execute"/>. Never set in the product.</summary>
+    public static Action<string, double>? StepTimed { get; set; }
+
     public void Execute(IEditCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
+        var timed = StepTimed;
+        var started = timed is null ? 0 : System.Diagnostics.Stopwatch.GetTimestamp();
+        void Mark(string step)
+        {
+            if (timed is null) return;
+            var now = System.Diagnostics.Stopwatch.GetTimestamp();
+            timed("execute:" + step, System.Diagnostics.Stopwatch.GetElapsedTime(started, now).TotalMilliseconds);
+            started = now;
+        }
         var measured = command.MeasuredWorkingBytes;
         var cost = Math.Clamp(measured ?? Map.Core.Resources.WorkingMemoryBudget.EditReserveBytes, 0,
             Map.Core.Resources.WorkingMemoryBudget.SmallOperationLimitBytes);
@@ -185,6 +197,7 @@ public sealed class EditingSession
             ResourceAdmissionChanged?.Invoke(this, EventArgs.Empty);
             return;
         }
+        Mark("reserve");
         using var held = reservation;
         if (LastResourceError is not null)
         { LastResourceError = null; ResourceAdmissionChanged?.Invoke(this, EventArgs.Empty); }
@@ -194,10 +207,12 @@ public sealed class EditingSession
             && (command is PlacementPathCommand or PlacementAreaCommand or RiverCommand or RoadCommand or ReorderSurfaceCommand or CompositeCommand { ContainsPlacementPath: true }
                 || Document.Layers.OfType<ObjectLayer>().Any(l => !l.PlacementPaths.IsEmpty || !l.PlacementAreas.IsEmpty || !l.Rivers.IsEmpty || !l.Roads.IsEmpty)))
         { LastResourceError = ex.Message; ResourceAdmissionChanged?.Invoke(this, EventArgs.Empty); return; }
+        Mark("apply");
         if (command is not PlacementPathCommand && !PlacementPathOwnership.Allows(Document, candidate, out var pathReason))
         { LastResourceError = pathReason; ResourceAdmissionChanged?.Invoke(this, EventArgs.Empty); return; }
         if (command is not PlacementAreaCommand && !PlacementAreaOwnership.Allows(Document, candidate, out var areaReason))
         { LastResourceError = areaReason; ResourceAdmissionChanged?.Invoke(this, EventArgs.Empty); return; }
+        Mark("ownership");
         Document = candidate;
         Revision++;
         var afterState = new StateNode(_currentState);
@@ -205,6 +220,7 @@ public sealed class EditingSession
         _currentState = afterState;
         _redo.Clear();
         PruneSelection();
+        Mark("history");
     }
 
     public string? LastResourceError { get; private set; }

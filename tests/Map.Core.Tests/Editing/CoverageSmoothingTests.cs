@@ -1,4 +1,4 @@
-using Map.Core.Documents;
+﻿using Map.Core.Documents;
 using Map.Core.Editing;
 
 namespace Map.Core.Tests.Editing;
@@ -50,6 +50,41 @@ public sealed class CoverageSmoothingTests
         {
             Assert.Equal(tile, after[key]);
         }
+    }
+
+    [Fact]
+    public void Incremental_rounding_during_a_stroke_equals_the_full_rounding()
+    {
+        foreach (var (cell, smoothing) in new[] { (40.0, 1.0), (64.0, .5), (24.0, .3), (160.0, 1.0) })
+        {
+            var settings = new BrushSettings { Radius = 48, RoughCellSize = cell, RoughSmoothing = smoothing, Spacing = .25 };
+            var stroke = new RasterStrokeSession(TileMap.Empty(1), settings);
+            var random = new Random(2026);
+            double x = 300, y = 300;
+            for (var step = 0; step < 40; step++)
+            {
+                x += random.NextDouble() * 60 - 20; y += random.NextDouble() * 40 - 10;
+                stroke.AddPoint(x, y);
+                var incremental = stroke.CommittedCoverage;
+                var full = CoverageSmoothing.Round(stroke.Coverage, settings.RoughSmoothingRadius);
+                Assert.Equal(full.Keys.OrderBy(k => (k.X, k.Y)), incremental.Keys.OrderBy(k => (k.X, k.Y)));
+                foreach (var (key, tile) in full) Assert.True(tile.AsSpan().SequenceEqual(incremental[key]), $"tile {key} differs at step {step}, cell {cell}");
+                Assert.Equal(incremental.Keys.ToHashSet(), stroke.CommittedVersions.Keys.ToHashSet());
+            }
+        }
+    }
+
+    [Fact]
+    public void Versions_change_only_for_tiles_a_dab_wrote()
+    {
+        var stroke = new RasterStrokeSession(TileMap.Empty(1), new BrushSettings { Radius = 20, Softness = 0 });
+        stroke.AddPoint(100, 100);
+        var first = stroke.Versions.ToDictionary(p => p.Key, p => p.Value);
+        stroke.AddPoint(100, 100); // the same hard dab again changes nothing
+        Assert.Equal(first, stroke.Versions);
+        stroke.AddPoint(1000, 1000);
+        Assert.True(stroke.Versions[new TileKey(3, 3)] > first[new TileKey(0, 0)]);
+        Assert.All(stroke.Coverage.Values, tile => Assert.Contains(tile, v => v != 0)); // no empty tiles are materialized
     }
 
     [Fact]

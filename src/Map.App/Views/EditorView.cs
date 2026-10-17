@@ -8500,45 +8500,54 @@ public sealed partial class EditorView : UserControl
             scene = _sceneSyncPending;
             _sceneSyncPending = false;
         }
-        SyncStatus();
-        SyncStampStrip();
-        SyncEditablePathPanel();
-        SyncEditableAreaPanel();
-        SyncRiverPanel();
-        SyncRoadPanel();
-        if (scene) SyncSidePanels();
+        // Diagnostics only (native profiles): how long each panel sync took on the UI thread.
+        var timings = EditorViewModel.CollectEditTimings ? _editor.LastEditTimings : null;
+        void Timed(string step, Action action)
+        {
+            if (timings is null) { action(); return; }
+            var started = System.Diagnostics.Stopwatch.GetTimestamp();
+            action();
+            timings.Add(("ui:" + step, System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds));
+        }
+        Timed("status", SyncStatus);
+        Timed("stamp-strip", SyncStampStrip);
+        Timed("path-panel", SyncEditablePathPanel);
+        Timed("area-panel", SyncEditableAreaPanel);
+        Timed("river-panel", SyncRiverPanel);
+        Timed("road-panel", SyncRoadPanel);
+        if (scene) Timed("side-panels", SyncSidePanels);
         // Water, roads and land are selections too: the section that lists them opens, its
         // property block refreshes, and the rows show the selected state.
         if (changed.Overlaps([nameof(EditorViewModel.WaterSelectionIds), nameof(EditorViewModel.RoadSelectionIds),
             nameof(EditorViewModel.SelectedLand), nameof(EditorViewModel.SelectionCount)]))
         {
-            FollowSelectionToSection();
-            SyncObjectListSelection();
-            SyncSectionFooter();
+            Timed("follow-selection", FollowSelectionToSection);
+            Timed("object-list-selection", SyncObjectListSelection);
+            Timed("section-footer", SyncSectionFooter);
         }
         if (changed.Overlaps([nameof(EditorViewModel.XText), nameof(EditorViewModel.YText),
             nameof(EditorViewModel.WidthText), nameof(EditorViewModel.HeightText),
-            nameof(EditorViewModel.RotationText), nameof(EditorViewModel.HasEditableSelection)])) SyncInspector();
+            nameof(EditorViewModel.RotationText), nameof(EditorViewModel.HasEditableSelection)])) Timed("inspector", SyncInspector);
         if (scene || changed.Overlaps([nameof(EditorViewModel.ActiveTool), nameof(EditorViewModel.SelectionKind),
             nameof(EditorViewModel.SelectionCount), nameof(EditorViewModel.SelectedGroupId),
             nameof(EditorViewModel.ActiveLayer), nameof(EditorViewModel.HasPendingPlacement),
             nameof(EditorViewModel.PlacementAutoSelect), nameof(EditorViewModel.StampPlacementMode)]))
         {
-            SyncContextArea();
-            SyncStampGestureReadout();
-            SyncQuickBar();
+            Timed("context-area", SyncContextArea);
+            Timed("gesture-readout", SyncStampGestureReadout);
+            Timed("quick-bar", SyncQuickBar);
         }
         if (changed.Overlaps([nameof(EditorViewModel.StampToolSettings), nameof(EditorViewModel.CurrentVariant),
             nameof(EditorViewModel.CompactRecentSets), nameof(EditorViewModel.CompactFavoriteSets)]))
         {
-            SyncAppearanceSections();
-            SyncStampToolPanel();
+            Timed("appearance-sections", SyncAppearanceSections);
+            Timed("stamp-tool-panel", SyncStampToolPanel);
         }
         if (changed.Any(p => p.StartsWith("Canvas", StringComparison.Ordinal) || p.StartsWith("Region", StringComparison.Ordinal)))
-            SyncCanvasWorkflow();
+            Timed("canvas-workflow", SyncCanvasWorkflow);
         if (changed.Any(p => p.StartsWith("Export", StringComparison.Ordinal)) || changed.Overlaps([
             nameof(EditorViewModel.CurrentExportPlan), nameof(EditorViewModel.CanStartExport),
-            nameof(EditorViewModel.CanCancelExport), nameof(EditorViewModel.CanOpenExportFolder)])) SyncExport();
+            nameof(EditorViewModel.CanCancelExport), nameof(EditorViewModel.CanOpenExportFolder)])) Timed("export", SyncExport);
     }
 
     private void SyncCanvasWorkflow()
@@ -9542,6 +9551,7 @@ public sealed partial class EditorView : UserControl
 
     private void SyncSidePanels()
     {
+        var sidePanelsStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         _layerList.Children.Clear();
         foreach (var layer in _editor.Layers.Reverse())
         {
@@ -9617,13 +9627,22 @@ public sealed partial class EditorView : UserControl
         }
 
         _layerName.Text = _editor.ActiveLayer?.Name ?? "";
-        SyncLayerBlocks();
-        SyncObjectList();
-        SyncAssetList();
-        SyncNoteList();
-        SyncCheckpointList();
-        SyncCanvasWorkflow();
-        SyncQuickBar();
+        var timings = EditorViewModel.CollectEditTimings ? _editor.LastEditTimings : null;
+        void Timed(string step, Action action)
+        {
+            if (timings is null) { action(); return; }
+            var started = System.Diagnostics.Stopwatch.GetTimestamp();
+            action();
+            timings.Add(("ui:side/" + step, System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds));
+        }
+        if (timings is not null) timings.Add(("ui:side/layer-rows", System.Diagnostics.Stopwatch.GetElapsedTime(sidePanelsStarted).TotalMilliseconds));
+        Timed("layer-blocks", SyncLayerBlocks);
+        Timed("object-list", SyncObjectList);
+        Timed("asset-list", SyncAssetList);
+        Timed("note-list", SyncNoteList);
+        Timed("checkpoint-list", SyncCheckpointList);
+        Timed("canvas-workflow", SyncCanvasWorkflow);
+        Timed("quick-bar", SyncQuickBar);
     }
 
     private static string LayerIcon(MapLayer layer) => layer switch
