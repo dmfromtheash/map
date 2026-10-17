@@ -145,9 +145,14 @@ public sealed class StressFillApplication : Application
         var centre = CoverageCentre(land);
         var seaStart = SeaPointNear(land, centre);
 
-        // The assets the map already uses, with their pixel sizes from the imported pack.
-        var references = document.Assets.Select(a => (a.Sha256, Record: _catalog.Find(a.Sha256))).Where(a => a.Record is not null).ToArray();
-        if (references.Length == 0) throw new InvalidOperationException("The project references no assets the catalog knows.");
+        // The pack's pictures, embedded into the map by the same command a placement gesture uses.
+        var references = pack.Records.Values.DistinctBy(r => r.Sha256)
+            .Select(r => (Sha256: r.Sha256, Record: r, Reference: new MapAssetReference(r.Sha256, r.DisplayName, r.MediaType, r.Extension,
+                ProjectAssetStorage.Embedded, DateTimeOffset.UnixEpoch, "stress-fill-smoke", "owner-generated-study",
+                embeddedContent: _catalog.ReadVerified(r).Content!)))
+            .ToArray();
+        if (references.Length == 0) throw new InvalidOperationException("The pack has no pictures.");
+        var allReferences = references.Select(r => r.Reference).ToArray();
         var objects = document.Layers.OfType<ObjectLayer>().OrderByDescending(l => l.Objects.Count).First();
         var random = new Random(20261017);
 
@@ -200,6 +205,8 @@ public sealed class StressFillApplication : Application
                     canvas.MovePlacementPointerForSmoke(pt.X, pt.Y);
                     canvas.CommitPlacementForSmoke();
                 });
+                await Settle();
+                PrintEditTimings("placement-commit(last)" + suffix);
                 for (var i = 0; i < 10; i++) _editor.Undo();
                 _editor.CancelPlacement();
             }
@@ -208,6 +215,7 @@ public sealed class StressFillApplication : Application
             _editor.DeselectObject(); await Settle();
             await Route("undo-redo" + suffix, 2, i => { if (i == 0) _editor.Undo(); else _editor.Redo(); });
             await Settle();
+            PrintEditTimings("redo(last)" + suffix);
         }
 
         await Measure("@base");
@@ -225,7 +233,7 @@ public sealed class StressFillApplication : Application
                 var batch = new List<SceneObject>(count);
                 for (var i = 0; i < count; i++)
                 {
-                    var (sha, record) = references[random.Next(references.Length)];
+                    var (sha, record, _) = references[random.Next(references.Length)];
                     var size = 24 + random.NextDouble() * 72;
                     double x, y;
                     if (random.NextDouble() < .4)
@@ -236,7 +244,7 @@ public sealed class StressFillApplication : Application
                         "#FFFFFFFF", "#00000000", 0, true, false) { Stamp = new StampStyle(sha) { ReferenceWidth = size, ReferenceHeight = height } });
                 }
                 var started = Stopwatch.GetTimestamp();
-                await Dispatcher.UIThread.InvokeAsync(() => _editor.ExecuteEditForSmoke(new AddObjectsCommand(objects.Id, batch)));
+                await Dispatcher.UIThread.InvokeAsync(() => _editor.ExecuteEditForSmoke(new PlaceAssetObjectsCommand(objects.Id, allReferences, batch)));
                 chunkTimes.Add(Stopwatch.GetElapsedTime(started).TotalMilliseconds);
                 await Settle();
             }
@@ -488,7 +496,7 @@ public sealed class StressFillApplication : Application
         Console.WriteLine($"{target.Name}: steps={target.Steps} frames={target.FramesRendered} fps={target.Fps:0.0} " +
             $"scene P50/P95/max={target.SceneP50:0.0}/{target.SceneP95:0.0}/{target.SceneMax:0.0} " +
             $"latency P50/P95/max={target.LatencyP50:0.0}/{target.LatencyP95:0.0}/{target.LatencyMax:0.0} pauses>50={target.LongPauses}{handler} " +
-            $"ws={target.WorkingSetMiB}MiB last: terrain={target.TerrainMsLast:0.0} (land={target.LandMsLast:0.0} water={target.WaterMsLast:0.0}) objects={target.ObjectsMsLast:0.0} drawn={target.ObjectsDrawnLast} tier={target.TierLast} terrainReused={target.TerrainReusedLast}");
+            $"ws={target.WorkingSetMiB}MiB last: terrain={target.TerrainMsLast:0.0} (land={target.LandMsLast:0.0} water={target.WaterMsLast:0.0}) objects={target.ObjectsMsLast:0.0} drawn={target.ObjectsDrawnLast} tier={target.TierLast} terrainReused={target.TerrainReusedLast} tilePrep={stats.DetailPrepareMilliseconds:0.0} tileRaster={stats.DetailRasterMilliseconds:0.0} tiles={stats.ObjectTilesDrawn} occluded={stats.StampOccludedObjects} batch={stats.StampBatchMilliseconds:0.0}/{stats.StampAtlasBatches} single={stats.StampSingleMilliseconds:0.0}");
     }
 
     private async Task<(double Scene, double Latency)> Step(Action input)

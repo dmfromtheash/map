@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
 
 namespace Map.Core.Documents;
@@ -76,6 +76,36 @@ public sealed class ObjectSpatialIndex
         return hits.Order().Select(i => _objects[i])
             .Where(o => { var b = SceneGeometry.BoundsOf(o); return b.Left <= worldX && b.Right >= worldX
                 && b.Top <= worldY && b.Bottom >= worldY; }).ToArray();
+    }
+
+    /// <summary>
+    /// Whether at least <paramref name="threshold"/> objects may lie in the view, from the sizes
+    /// of the cells it touches alone: no sorting, no bounds test, no list. An object that spans
+    /// several cells counts once per cell, so this can say yes where the exact query would say
+    /// no by a little; the renderer uses it only to choose between two correct ways of drawing a
+    /// screen, and the exact query of a dense screen was itself several milliseconds per frame.
+    /// </summary>
+    public bool MayContainAtLeast(WorldBounds view, int threshold)
+    {
+        if (threshold <= 0) return true;
+        var basis = _stableBasis ?? this;
+        var count = basis._oversized.Count + _structuralOverrides.Count;
+        if (count >= threshold) return true;
+        var minX = (int)Math.Floor(view.Left / CellSize);
+        var maxX = (int)Math.Floor(view.Right / CellSize);
+        var minY = (int)Math.Floor(view.Top / CellSize);
+        var maxY = (int)Math.Floor(view.Bottom / CellSize);
+        if (((long)maxX - minX + 1) * ((long)maxY - minY + 1) <= basis._cells.Count)
+        {
+            for (var y = minY; y <= maxY; y++) for (var x = minX; x <= maxX; x++)
+                if (basis._cells.TryGetValue((x, y), out var bucket) && (count += bucket.Count) >= threshold) return true;
+        }
+        else
+        {
+            foreach (var (cell, bucket) in basis._cells)
+                if (cell.X >= minX && cell.X <= maxX && cell.Y >= minY && cell.Y <= maxY && (count += bucket.Count) >= threshold) return true;
+        }
+        return false;
     }
 
     public IReadOnlyList<SceneObject> Query(WorldBounds view)

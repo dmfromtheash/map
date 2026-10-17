@@ -2142,7 +2142,7 @@ public static class SceneRenderer
         if (!options.IsExport && options.ViewScale >= .03
             && options.ObjectCache is not null && options.VisibleWorld is not null
             && options.ObjectOverrides is not { Count: > 0 } && layer.Objects.Count >= DenseTileMinimumObjects
-            && ObjectSpatialIndex.For(layer).Query(view).Count >= DenseTileMinimumVisible
+            && ObjectSpatialIndex.For(layer).MayContainAtLeast(view, DenseTileMinimumVisible)
             && DetailRevisions.GetValue(layer, static l => new(l)).CanCache
             && document.Assets.All(asset => options.Stamps?.TryGetImage(asset.Sha256) is not null))
         {
