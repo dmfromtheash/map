@@ -43,6 +43,10 @@ foreach (var (key, emblem) in apps)
 }
 // Six style directions to choose from (Styles.cs).
 Styles.Write(output);
+// Six application icon concepts from the home picture's crystal worlds (Worlds.cs).
+Worlds.Write(output);
+// Second round of logo concepts (Logos.cs).
+Logos.Write(output);
 Console.WriteLine("written to " + output);
 
 /// <summary>The rail's solid silhouettes (24-unit grid, from MapIcons), plus the emblems' own.</summary>
