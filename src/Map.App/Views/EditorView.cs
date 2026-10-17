@@ -50,14 +50,6 @@ public sealed partial class EditorView : UserControl
     private readonly TextBlock _selectionStatus = Status("SelectionStatusText");
     private readonly TextBlock _activeLayerStatus = Status("ActiveLayerText");
     private readonly TextBlock _gridStatus = Status("GridStatusText");
-    private readonly TextBlock _hintText = new() { Name = "ToolHintText", VerticalAlignment = VerticalAlignment.Center };
-    private readonly StackPanel _hintKeys = new()
-    {
-        Orientation = Orientation.Horizontal,
-        Spacing = 10,
-        Margin = new Thickness(16, 0, 0, 0),
-        VerticalAlignment = VerticalAlignment.Center,
-    };
 
     // -------------------------------------------------------------- inspector
     private readonly TextBlock _inspectorError = Status("InspectorErrorText");
@@ -415,7 +407,6 @@ public sealed partial class EditorView : UserControl
         var rail = BuildToolRail();
         var contextPanel = BuildContextPanel();
         var sidePanel = BuildSidePanel();
-        var hintBar = BuildHintBar();
         var statusBar = BuildStatusBar();
         SyncShortcutSurfaces();
 
@@ -429,15 +420,11 @@ public sealed partial class EditorView : UserControl
         contextPanel.HorizontalAlignment = HorizontalAlignment.Left;
         contextPanel.VerticalAlignment = VerticalAlignment.Top;
         contextPanel.Margin = new Thickness(Ui.RailWidth + 4, Ui.FloatingGap, 0, Ui.FloatingGap);
-        hintBar.HorizontalAlignment = HorizontalAlignment.Center;
-        hintBar.VerticalAlignment = VerticalAlignment.Bottom;
-        hintBar.Margin = new Thickness(0, 0, 0, 10);
-        canvasHost.Children.Add(hintBar);
+        // The tool-hint pill at the bottom of the canvas was removed at the owner's request
+        // (2026-10-17): the map keeps that space.
         canvasHost.Children.Add(rail);
         canvasHost.Children.Add(contextPanel);
         _canvas.FitInsetLeft = FloatingInsetLeft;
-        _hintPill = hintBar;
-        contextPanel.SizeChanged += (_, _) => PlaceHintPill();
 
         Content = new DockPanel
         {
@@ -678,18 +665,10 @@ public sealed partial class EditorView : UserControl
 
     public void ToggleSidePanel() => _sidePanel.IsVisible = !_sidePanel.IsVisible;
 
-    private Control? _hintPill;
-
     /// <summary>How far the floating rail and tool panel reach into the canvas from the left.</summary>
     private double FloatingInsetLeft() => _contextPanel.IsVisible
         ? _contextPanel.Margin.Left + _contextPanel.Bounds.Width + 8
         : Ui.RailWidth + 8;
-
-    /// <summary>The hint pill is centred in the canvas part the floating panels leave free.</summary>
-    private void PlaceHintPill()
-    {
-        if (_hintPill is not null) _hintPill.Margin = new Thickness(FloatingInsetLeft(), 0, 0, 10);
-    }
 
     public void ToggleContextPanel()
     {
@@ -8297,30 +8276,6 @@ public sealed partial class EditorView : UserControl
         _statusToastTimer.Start();
     }
 
-    private Control BuildHintBar()
-    {
-        _hintText.Classes.Add("role-caption");
-        _hintText.Classes.Add("muted");
-        _hintText.TextTrimming = TextTrimming.CharacterEllipsis;
-
-        // A floating pill centred over the bottom of the canvas (Inkarnate's shortcut bar), not a
-        // full-width band: the map keeps the height.
-        return new Border
-        {
-            MaxWidth = 900,
-            Child = new DockPanel
-            {
-                Children =
-                {
-                    _hintKeys.Docked(Dock.Right),
-                    new Border { Width = 20, VerticalAlignment = VerticalAlignment.Center,
-                        Child = MapIcons.Grid24(MapIcons.LineInfo, 14, Application.Current?.FindResource("MapMutedBrush") as IBrush) }.Docked(Dock.Left),
-                    _hintText,
-                },
-            },
-        }.Named("ToolHintBar").Classed("hint-pill");
-    }
-
     private Control BuildStatusBar()
     {
         foreach (var block in new[]
@@ -8398,8 +8353,6 @@ public sealed partial class EditorView : UserControl
             SetCommandTip(item.Button, item.Label, item.Command);
         foreach (var sync in _shortcutSurfaceSyncs)
             sync();
-
-        SyncHint();
     }
 
     private void SetCommandTip(Button button, string label, string command)
@@ -8806,7 +8759,6 @@ public sealed partial class EditorView : UserControl
         Timed("land-buttons", SyncLandButtons);
         Timed("mask-buttons", SyncMaskModeButtons);
         Timed("layer-blocks", SyncLayerBlocks);
-        Timed("hint", SyncHint);
         Timed("appearance", SyncAppearanceSections);
         // The strip is refreshed on every context change, including "nothing is selected" - the
         // panel's own refresh only runs while an inspector is mounted.
@@ -9422,42 +9374,6 @@ public sealed partial class EditorView : UserControl
         }
 
         return await completion.Task;
-    }
-
-    private void SyncHint()
-    {
-        _hintText.Text = _editor.ActiveTool == EditorTool.Land && _editor.LandPaintMode
-            ? _editor.LandPaintEraser
-                ? "Ластик убирает раскраску и возвращает основу земли. Размер и мягкость — слева."
-                : "Рисуйте по суше выбранным материалом или цветом. Размер, мягкость и каталог — слева."
-            : EditorLabels.ToolHint(_editor.ActiveTool);
-        ToolTip.SetTip(_hintText, _hintText.Text);
-
-        _hintKeys.Children.Clear();
-        foreach (var pair in new (string Label, string Key)[]
-                 {
-                     ("Отменить", _editor.Shortcuts.Get(EditorShortcutSettings.Commands.Undo)),
-                     ("Сохранить", _editor.Shortcuts.Get(EditorShortcutSettings.Commands.Save)),
-                     (EditorLabels.Tool(_editor.ActiveTool), ToolShortcut(_editor.ActiveTool)),
-                 })
-        {
-            if (pair.Key.Length == 0)
-            {
-                continue;
-            }
-
-            _hintKeys.Children.Add(new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                Spacing = 5,
-                Children =
-                {
-                    new TextBlock { Text = pair.Label, VerticalAlignment = VerticalAlignment.Center }
-                        .Classed("faint", "role-caption"),
-                    Ui.KeyChip(pair.Key),
-                },
-            });
-        }
     }
 
     private void SyncLandButtons()
