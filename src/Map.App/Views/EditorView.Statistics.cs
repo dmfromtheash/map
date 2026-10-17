@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Linq;
 using Avalonia;
@@ -93,6 +93,9 @@ public sealed partial class EditorView
         // The rate is shown only while the map is actually moving. At rest two stray repaints
         // used to read as "FPS 1" in an alarm colour, which looked like a failure.
         var moving = frame.Fps is not null && _canvas.RecentFrameCount() >= 6;
+        // The badge on the canvas is painted with the map; once the map rests it needs one
+        // repaint to say so (a plain repaint, not a counted frame).
+        if (_canvas.ShowFpsBadge && _canvas.FpsBadgeShowedMotion != moving) _canvas.InvalidateVisual();
         _frameRateStatus.IsVisible = moving;
         _frameRateStatus.Text = moving ? $"FPS {frame.Fps:0}" : "FPS — покой";
         _frameRateStatus.Foreground = Brush.Parse(moving && frame.Fps < 20 ? "#E5907A" : "#C2AE8E");

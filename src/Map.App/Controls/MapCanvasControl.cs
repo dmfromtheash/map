@@ -540,6 +540,7 @@ public sealed partial class MapCanvasControl : Control
                 if (TopLevel.GetTopLevel(this) is not null) QueueVisualInvalidation();
             }, Avalonia.Threading.DispatcherPriority.Render),
             (surface, canvas) => CompleteGpuCapture(surface, canvas, sceneRevision),
+            ShowFpsBadge ? DrawFpsBadge : null,
             (tier, elapsedMilliseconds, document, fastTerrain, styledHits, styledMisses, terrainHits, terrainMisses, gpu) =>
             {
                 LastLodTier = tier;
@@ -556,6 +557,7 @@ public sealed partial class MapCanvasControl : Control
                 LastRenderedDocument = document;
                 System.Threading.Interlocked.Exchange(ref _completedSceneRevision, sceneRevision);
                 RecordStatisticsFrame(requestedFrame, elapsedMilliseconds);
+                TraceFrame(elapsedMilliseconds, tier, fastTerrain, _renderStats, System.Threading.Interlocked.Read(ref _requestedFrame), requestedFrame);
                 FrameRendered?.Invoke(this, EventArgs.Empty);
             },
             BrushCursorPreview()));
@@ -582,6 +584,7 @@ public sealed partial class MapCanvasControl : Control
     private sealed class SceneDrawOperation(
         Rect bounds, EditorViewModel editor, CanvasRenderResources resources, RenderStats renderStats,
         CanvasPerformanceMode performanceMode, bool fastPreview, bool fastTerrain, Action requestRefinedFrame, Action<SKSurface, SKCanvas> captureFrame,
+        Action<SKCanvas, float, float>? drawBadge,
         Action<RenderLodTier, double, Map.Core.Documents.MapDocument, bool, long, long, long, long, bool> frameRendered,
         Map.Rendering.BrushCursorPreview? brushCursor) : ICustomDrawOperation
     {
@@ -789,6 +792,8 @@ public sealed partial class MapCanvasControl : Control
 
             canvas.Restore();
             if (lease.GrContext is not null && lease.SkSurface is { } nativeSurface) captureFrame(nativeSurface, canvas);
+            // After the capture: the smokes compare map pixels, and the readout is not the map.
+            drawBadge?.Invoke(canvas, (float)Bounds.Width, (float)Bounds.Height);
             frameRendered(tier, sceneStopwatch.Elapsed.TotalMilliseconds, renderDocument, fastTerrain,
                     styledLandCache.Hits + terrainCache.Hits - styledHitsBefore - terrainHitsBefore,
                     styledLandCache.Misses + terrainCache.Misses - styledMissesBefore - terrainMissesBefore,
@@ -956,12 +961,14 @@ public sealed partial class MapCanvasControl : Control
             return;
         }
 
+        var started = Stopwatch.GetTimestamp();
         var position = e.GetPosition(this);
         ApplyDrawModifiers(e.KeyModifiers);
         Apply(_input.Move(position.X, position.Y, e.GetCurrentPoint(this).Properties.Pressure), e);
         _lastPointer = position;
         SyncCursor(position);
         TrackHover(position);
+        if (_input.ActiveGesture != CanvasInputGesture.None || _editor.HasPendingPlacement) TraceInput("move", started);
     }
 
     /// <summary>
@@ -1068,7 +1075,9 @@ public sealed partial class MapCanvasControl : Control
     protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
     {
         base.OnPointerWheelChanged(e);
+        var started = Stopwatch.GetTimestamp();
         if (HandleWheel(e.GetPosition(this), e.Delta.Y, e.KeyModifiers)) e.Handled = true;
+        TraceInput("wheel", started);
     }
 
     /// <summary>Own-process smoke hook: the same wheel path a real mouse takes, with its modifiers.</summary>

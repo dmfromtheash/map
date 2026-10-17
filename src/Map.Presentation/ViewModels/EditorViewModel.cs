@@ -8879,6 +8879,14 @@ public sealed partial class EditorViewModel : ViewModelBase
         Raise(nameof(CanRedo));
     }
 
+    /// <summary>Own-process smoke hook: one prepared edit through the same path a panel command takes (history, panels, canvas).</summary>
+    public void ExecuteEditForSmoke(IEditCommand command)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        Session.Execute(command);
+        AfterEdit();
+    }
+
     /// <summary>
     /// Diagnostics for the native profiles: when set, every edit records how long each step of
     /// <see cref="AfterEdit"/> and of a stroke's commit took on the UI thread (the handlers of

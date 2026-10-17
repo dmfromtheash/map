@@ -87,6 +87,9 @@ public sealed class RenderStats
     public int TerrainReused { get; set; }
     public int TerrainRefinementsPending { get; set; }
     public double TerrainRefinementBuildMilliseconds { get; set; }
+    /// <summary>Frames of a moving camera whose kept terrain image did not cover the view, so the plain passes ran for the rest; the last such case described.</summary>
+    public int TerrainUncovered { get; set; }
+    public string TerrainUncoveredDetail { get; set; } = "";
     /// <summary>Layers whose kept detail tiles of a neighbouring zoom bucket were drawn resampled while the camera moved.</summary>
     public int TilesReused { get; set; }
     public double StampSingleMilliseconds { get; set; }
@@ -132,6 +135,7 @@ public sealed class RenderStats
         ObjectsMilliseconds = 0;
         StampBatchMilliseconds = 0;
         TerrainReused = 0;
+        TerrainUncovered = 0; TerrainUncoveredDetail = "";
         TerrainRefinementsPending = 0;
         TerrainRefinementBuildMilliseconds = 0;
         TilesReused = 0;
@@ -604,8 +608,10 @@ public static class SceneRenderer
         // A live stroke on a land (its shape or its material) or a mask being edited does not
         // change the document: the kept terrain is still exact, and the stroke is composited
         // over it (DrawTerrainLiveOverlay) instead of rebuilding every coast and river per frame.
+        // The overview tier (far zoom) is kept as well: its simplified land and water are as
+        // deterministic per view and scale as the exact ones, and without the kept image every
+        // wheel notch of a zoom-out redrew all the water of the map (40-50 ms per frame).
         var keepable = options.Terrain is not null && !options.IsExport
-            && options.LodTier != RenderLodTier.Overview
             && lands.All(land => land.Blend == "Normal")
             && surfaces.All(surface => surface.Owner.Blend == "Normal"
                 && (!surface.Owner.Effects.ClippingEnabled || options.ObjectOverrides is null));
@@ -656,8 +662,13 @@ public static class SceneRenderer
                 options.GpuContext, out var keptView, out var keptScale) is { } kept)
         {
             var placement = RenderImageCache.Placement(kept, keptView, keptScale);
-            var covered = placement.Left <= view.Left + 1e-6 && placement.Top <= view.Top + 1e-6
-                && placement.Right >= view.Right - 1e-6 && placement.Bottom >= view.Bottom - 1e-6;
+            // The placement is a single-precision rectangle: at world coordinates in the thousands
+            // its edges differ from the double view by up to a few 1e-4, which a 1e-6 slack read
+            // as "not covered" and made every frame of a deep zoom rerun the plain passes (35-60 ms).
+            // A thousandth of a world unit is far below a screen pixel at any editor scale.
+            const double slack = 1e-3;
+            var covered = placement.Left <= view.Left + slack && placement.Top <= view.Top + slack
+                && placement.Right >= view.Right - slack && placement.Bottom >= view.Bottom - slack;
             var refining = false;
             if (!options.FastTerrain && covered && options.RequestRefinedFrame is { } requestFrame
                 && options.RiverOverrides is null && options.RoadOverrides is null
@@ -673,6 +684,11 @@ public static class SceneRenderer
             if (refining && options.Stats is { } pendingStats) pendingStats.TerrainRefinementsPending++;
             if (options.FastTerrain && !covered)
             {
+                if (options.Stats is { } uncoveredStats)
+                {
+                    uncoveredStats.TerrainUncovered++;
+                    uncoveredStats.TerrainUncoveredDetail = FormattableString.Invariant($"view=({view.Left:0.#},{view.Top:0.#},{view.Right:0.#},{view.Bottom:0.#}) kept=({placement.Left:0.#},{placement.Top:0.#},{placement.Right:0.#},{placement.Bottom:0.#}) keptScale={keptScale:0.###} wanted={terrainScale:0.###} count={options.Terrain.Count}");
+                }
                 // Only the newly exposed area is missing. Drawing the fallback underneath the
                 // kept image would apply translucent ground/water twice in their overlap.
                 canvas.Save();
