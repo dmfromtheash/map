@@ -5,30 +5,32 @@ using System.Runtime.InteropServices;
 namespace Map.App.Services;
 
 /// <summary>
-/// Map's interface sounds - «Перо и пергамент» (owner's pick, 2026-10-17): a quill nib scratching
-/// parchment over a quietly rustling sheet. No tones and nothing bright: every sound is band-limited
-/// noise, shaped. The pointer reaching a command is a tiny nib touch; a press is a short stroke that
-/// settles on the page; switching on is two quick strokes, off one longer stroke; a slider ticks with
-/// nib touches whose pitch follows its value; a list opens and closes like a page turned. All of it
-/// is synthesised here (the same formulas as the listening page the owner chose from), played
-/// asynchronously through the Windows multimedia API, and silenced by one switch
+/// Map's interface sounds - «Перо и пергамент», softened (owner, 2026-10-17: "рваный и грубый,
+/// нужно мягче и плавнее"). Still no tones, only shaped noise, but low and round: the pointer
+/// reaching a command is a faint breath of paper, a press a soft felt tap with a little paper
+/// after it, switching on two soft taps rising, off one lower tap, a slider ticks with tiny taps
+/// whose pitch follows its value, a list opens and closes like a page sliding. The former nib
+/// "grains" (noise chopped into pieces at 2.3-2.9 kHz) were the roughness and are gone: every
+/// sound now has a raised-cosine attack, a smooth decay that ends in silence, and a gentle
+/// low-pass. All of it plays through one continuous output stream (<see cref="UiAudioOutput"/>),
+/// so sounds overlap instead of cutting each other off, and one switch silences it
 /// (<see cref="UiFeel.SoundsEnabled"/>).
 /// </summary>
 public static class UiSound
 {
-    private const int SampleRate = 44100;
+    private const int SampleRate = UiAudioOutput.SampleRate;
     private const int TickPitches = 7;
 
-    // Quiet peaks per kind, the levels the owner listened to.
-    private const double HoverPeak = 0.032, PressPeak = 0.065, OnPeak = 0.055, OffPeak = 0.045;
-    private const double TickPeak = 0.03, OpenPeak = 0.04, ClosePeak = 0.035;
+    // Quiet peaks per kind: a little below the former levels, the press the loudest.
+    private const double HoverPeak = 0.02, PressPeak = 0.05, OnPeak = 0.045, OffPeak = 0.038;
+    private const double TickPeak = 0.02, OpenPeak = 0.034, ClosePeak = 0.03;
 
-    private static readonly Lazy<Clip> Hover = Make(() => Scratch(201, 0.045, 2600, 90), HoverPeak);
-    private static readonly Lazy<Clip> Press = Make(() => Mix(Scratch(203, 0.12, 2300, 70), Page(205, 0.10, 1300, 900, 0.01), 0.06, 0.7), PressPeak);
-    private static readonly Lazy<Clip> On = Make(() => Mix(Mix(Buffer(0.22), Scratch(207, 0.07, 2200, 80), 0, 1), Scratch(209, 0.08, 2900, 90), 0.09, 1), OnPeak);
-    private static readonly Lazy<Clip> Off = Make(() => Scratch(211, 0.16, 2400, 60), OffPeak);
-    private static readonly Lazy<Clip> Open = Make(() => Mix(Page(215, 0.18, 800, 1900, 0.05), Scratch(217, 0.06, 2600, 80), 0.05, 0.6), OpenPeak);
-    private static readonly Lazy<Clip> Close = Make(() => Mix(Scratch(219, 0.05, 2300, 70), Page(221, 0.13, 1700, 700, 0.01), 0.02, 1), ClosePeak);
+    private static readonly Lazy<Clip> Hover = Make(() => Soft(201, 0.07, 1400, 0.9, 0.018), HoverPeak);
+    private static readonly Lazy<Clip> Press = Make(() => Mix(Soft(203, 0.10, 720, 0.8, 0.005), Soft(205, 0.16, 1250, 0.7, 0.025), 0.012, 0.45), PressPeak);
+    private static readonly Lazy<Clip> On = Make(() => Mix(Mix(Buffer(0.22), Soft(207, 0.09, 820, 0.9, 0.006), 0, 1), Soft(209, 0.10, 1150, 0.9, 0.006), 0.085, 0.9), OnPeak);
+    private static readonly Lazy<Clip> Off = Make(() => Soft(211, 0.15, 650, 0.8, 0.008), OffPeak);
+    private static readonly Lazy<Clip> Open = Make(() => Mix(Page(215, 0.22, 550, 1150, 0.05), Soft(217, 0.07, 1000, 0.9, 0.008), 0.03, 0.5), OpenPeak);
+    private static readonly Lazy<Clip> Close = Make(() => Mix(Soft(219, 0.06, 950, 0.9, 0.006), Page(221, 0.16, 1050, 550, 0.02), 0.01, 1), ClosePeak);
     private static readonly Lazy<Clip>[] Ticks = CreateTicks();
 
     private static long _lastHover;
@@ -77,12 +79,12 @@ public static class UiSound
         {
             var p = i / (double)(TickPitches - 1);
             var seed = 213 + i;
-            ticks[i] = Make(() => Scratch(seed, 0.014, 2000 + p * 1400, 200), TickPeak);
+            ticks[i] = Make(() => Soft(seed, 0.035, 850 + p * 650, 1.0, 0.004), TickPeak);
         }
         return ticks;
     }
 
-    private static Lazy<Clip> Make(Func<float[]> synth, double peak) => new(() => new Clip(ToWav(Level(synth(), peak))));
+    private static Lazy<Clip> Make(Func<float[]> synth, double peak) => new(() => new Clip(Level(Smooth(synth()), peak)));
 
     /// <summary>Builds the clip on first use and plays it; audio is decoration and never throws.</summary>
     private static void Play(Lazy<Clip> clip)
@@ -91,17 +93,19 @@ public static class UiSound
         catch (Exception) { /* a missing device or a failed synthesis must never break a click */ }
     }
 
-    /// <summary>A pinned WAV image: PlaySound reads it from memory while it plays.</summary>
-    private sealed class Clip
+    /// <summary>
+    /// A synthesised sound. It is mixed into the one interface stream; PlaySound (one stream per
+    /// sound) remains only as the fallback when that stream cannot be opened.
+    /// </summary>
+    private sealed class Clip(float[] samples)
     {
-        private readonly GCHandle _handle;
-
-        public Clip(byte[] wav) => _handle = GCHandle.Alloc(wav, GCHandleType.Pinned);
+        private GCHandle _wav;
 
         public void Play()
         {
-            if (!OperatingSystem.IsWindows()) return;
-            PlaySound(_handle.AddrOfPinnedObject(), IntPtr.Zero, SndMemory | SndAsync | SndNoDefault);
+            if (!OperatingSystem.IsWindows() || UiAudioOutput.Play(samples)) return;
+            if (!_wav.IsAllocated) _wav = GCHandle.Alloc(ToWav(samples), GCHandleType.Pinned);
+            PlaySound(_wav.AddrOfPinnedObject(), IntPtr.Zero, SndMemory | SndAsync | SndNoDefault);
         }
     }
 
@@ -161,12 +165,54 @@ public static class UiSound
         for (var i = 0; i < y.Length; i++)
         {
             var t = i / (double)SampleRate;
-            y[i] *= (float)(Math.Min(1, t / attack) * Math.Pow(Math.Max(0, 1 - t / seconds), 1.3));
+            y[i] *= (float)(Rise(t, attack) * Math.Pow(Math.Max(0, 1 - t / seconds), 1.6));
         }
         return y;
     }
 
-    /// <summary>A quill nib on parchment: a narrow band of noise chopped into tiny scratchy grains.</summary>
+    /// <summary>A raised-cosine rise from 0 to 1 over <paramref name="attack"/> seconds: no step at the start.</summary>
+    private static double Rise(double t, double attack) => t >= attack ? 1 : 0.5 - 0.5 * Math.Cos(Math.PI * t / attack);
+
+    /// <summary>
+    /// A soft tap or breath: band-passed noise with a raised-cosine attack and a rounded decay to
+    /// silence. The lower the centre and the wider the band, the softer it reads.
+    /// </summary>
+    private static float[] Soft(int seed, double seconds, double centre, double q, double attack)
+    {
+        var y = BandPass(Noise(seconds, seed), _ => centre, q);
+        for (var i = 0; i < y.Length; i++)
+        {
+            var t = i / (double)SampleRate;
+            var tail = Math.Max(0, 1 - t / seconds);
+            y[i] *= (float)(Rise(t, attack) * tail * tail * (3 - 2 * tail));
+        }
+        return y;
+    }
+
+    /// <summary>
+    /// The finish every sound gets: a two-pole low-pass at 3.2 kHz (no hiss, no edge) and a 6 ms
+    /// cosine fade at the very end, so even a mix of sounds stops on silence.
+    /// </summary>
+    private static float[] Smooth(float[] x)
+    {
+        var w = 2 * Math.PI * 3200 / SampleRate;
+        var alpha = Math.Sin(w) / (2 * 0.707);
+        var cos = Math.Cos(w);
+        var a0 = 1 + alpha;
+        double x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+        for (var i = 0; i < x.Length; i++)
+        {
+            var v = ((1 - cos) / 2 * x[i] + (1 - cos) * x1 + (1 - cos) / 2 * x2 + 2 * cos * y1 - (1 - alpha) * y2) / a0;
+            x2 = x1; x1 = x[i]; y2 = y1; y1 = v;
+            x[i] = (float)v;
+        }
+        var fade = Math.Min(x.Length, (int)(SampleRate * 0.006));
+        for (var i = 0; i < fade; i++)
+            x[x.Length - 1 - i] *= (float)(0.5 - 0.5 * Math.Cos(Math.PI * i / fade));
+        return x;
+    }
+
+    /// <summary>A quill nib on parchment: a narrow band of noise chopped into tiny scratchy grains (no longer used; kept for the listening page's formulas).</summary>
     private static float[] Scratch(int seed, double seconds, double centre, double grainHz)
     {
         var random = new Lcg(seed);
