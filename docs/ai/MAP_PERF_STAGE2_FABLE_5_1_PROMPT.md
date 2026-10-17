@@ -1,4 +1,4 @@
-# Поручение: оптимизация ядра Map, этап 2 (Fable 5.1)
+﻿# Поручение: оптимизация ядра Map, этап 2 (Fable 5.1)
 
 Рабочая копия: `C:\Users\Leshe\.codex\worktrees\stage10f-fonts-bindings\Map`, ветка
 `codex/stage-18-editable-areas`. Перед началом прочитать `AGENTS.md`, верхний раздел
@@ -16,6 +16,16 @@
   (заполнение карты N ассетами и те же маршруты), `MAP_FRAME_TRACE=<файл>` (построчная трасса
   кадров и ввода настоящего окна), скрипты живого ввода и захвата окна —
   `docs/STATE_HANDOFF.md` описывает, как ими пользоваться.
+
+## Первым делом
+
+Проверить на базовом коммите 277aa0f (временный worktree) тесты
+`Stage10CObjectTreeRowTests.Type_filter_keeps_groups_with_at_least_one_matching_member` и
+`Stage10CMultiSelectionViewModelTests.Select_all_keeps_a_closed_group_atomic_when_only_one_member_matches_the_filter`:
+в конце сессии 1 они падали («Expected Group, Actual AssetKind») после ввода `ObjectTreeRows.KindIndex`
+(коммит после 8b47ec5); ветка `AssetKindRows` при фильтре «Ассеты» выбиралась и раньше, поэтому
+падение, вероятно, старое — но это не проверено. Затем перемерить `native-stress-fill` на 50 000:
+`ui:side/object-list` должен упасть с 23–149 мс до единиц миллисекунд.
 
 ## Что осталось (по убыванию пользы), цифры из `artifacts/paint-perf-2026-10-17/stress/run3.log`
 

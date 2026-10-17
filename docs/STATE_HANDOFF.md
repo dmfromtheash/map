@@ -45,6 +45,13 @@
 - **NOT CHECKED:** `native-render-audit` теперь 63/67 + падение в `PanelAndSwatchChecks` —
   аудит ссылается на удалённую текстуру `regional-ochre` (заменена на foothill в коде аудита,
   повторный прогон не делался); вид оверлея мазка глазами владельца; звук.
+- **Последний коммит сессии:** `ObjectTreeRows.KindIndex` — группировка ассетов по картинке в панели
+  считается по дельте слоя (`ObjectLayerChanges`), а не по всем объектам на каждую правку. Build 0 ошибок;
+  Presentation-тесты 110/113: `Stage10CObjectTreeRowTests.Type_filter_keeps_groups…` и
+  `Stage10CMultiSelectionViewModelTests.Select_all_keeps_a_closed_group_atomic…` ожидают строки групп
+  при фильтре «Ассеты», а код (и до этой правки — та же ветка `AssetKindRows`) отдаёт строки видов;
+  **NOT CHECKED на 277aa0f** — первым делом в следующей сессии проверить на базовом коммите и решить,
+  устарели тесты или сломано поведение. Эффект на 50 000 объектов не перемерен (NOT CHECKED).
 - **Что дальше:** `docs/ai/MAP_PERF_STAGE2_FABLE_5_1_PROMPT.md` (панели при тысячах объектов,
   фоновое построение плотных тайлов, первый обзорный кадр, холодный старт, память).
 
