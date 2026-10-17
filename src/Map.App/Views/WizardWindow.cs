@@ -149,7 +149,7 @@ public sealed class WizardWindow : Window
         {
             new Border
             {
-                Child = ApprovedArtwork.Image("map", 72, 72),
+                Child = ApprovedArtwork.Image("map-new", 72, 72),
                 Margin = new Thickness(0, 0, 20, 0),
             }.Docked(Dock.Left),
             new StackPanel
@@ -262,7 +262,7 @@ public sealed class WizardWindow : Window
         var button = new ToggleButton
         {
             HorizontalAlignment = HorizontalAlignment.Stretch,
-            Height = 102,
+            Height = 124,
             Margin = new Thickness(4),
             Content = new StackPanel
             {
@@ -272,9 +272,9 @@ public sealed class WizardWindow : Window
                 {
                     new Border
                     {
-                        Height = 28,
-                        Child = ApprovedArtwork.Image("map",
-                            28, 28),
+                        Height = 44,
+                        // Each size has its own sheet: the finer its grid, the more of the world it holds.
+                        Child = ApprovedArtwork.Image("map-" + key.ToLowerInvariant(), 44, 44),
                     },
                     new TextBlock
                     {

@@ -1,4 +1,4 @@
-param([string]$Action = "rect", [int]$X = 100, [int]$Y = 80, [int]$W = 1600, [int]$H = 1000, [string]$Path = "")
+param([string]$Action = "rect", [int]$X = 100, [int]$Y = 80, [int]$W = 1600, [int]$H = 1000, [string]$Path = "", [string]$Title = "Map")
 Add-Type -TypeDefinition @"
 using System;
 using System.Drawing;
@@ -28,25 +28,25 @@ public static class MapWin {
   }
 }
 "@ -ReferencedAssemblies System.Drawing
-if (-not ([System.Management.Automation.PSTypeName]"MapFind").Type) { Add-Type -TypeDefinition @"
+if (-not ([System.Management.Automation.PSTypeName]"MapFindTitled").Type) { Add-Type -TypeDefinition @"
 using System; using System.Text; using System.Runtime.InteropServices;
-public static class MapFind {
+public static class MapFindTitled {
   public delegate bool EnumProc(IntPtr h, IntPtr l);
   [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc p, IntPtr l);
   [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
-  public static IntPtr Find(uint pid) {
+  public static IntPtr Find(uint pid, string prefix) {
     IntPtr found = IntPtr.Zero;
     EnumWindows((h, l) => { uint p; GetWindowThreadProcessId(h, out p); if (p != pid || !IsWindowVisible(h)) return true;
-      var sb = new StringBuilder(256); GetWindowText(h, sb, 256); if (sb.ToString().StartsWith("Map")) { found = h; return false; } return true; }, IntPtr.Zero);
+      var sb = new StringBuilder(256); GetWindowText(h, sb, 256); if (sb.ToString().StartsWith(prefix)) { found = h; return false; } return true; }, IntPtr.Zero);
     return found;
   }
 }
 "@
 }
 $proc = Get-Process Map.App -ErrorAction Stop | Select-Object -First 1
-$h = [MapFind]::Find([uint32]$proc.Id)
+$h = [MapFindTitled]::Find([uint32]$proc.Id, $Title)
 if ($h -eq [IntPtr]::Zero) { throw "Map window not found" }
 switch ($Action) {
   "rect" { $r = New-Object MapWin+RECT; [MapWin]::GetWindowRect($h, [ref]$r) | Out-Null; $c = New-Object MapWin+RECT; [MapWin]::GetClientRect($h, [ref]$c) | Out-Null; $p = New-Object MapWin+POINT; [MapWin]::ClientToScreen($h, [ref]$p) | Out-Null; "pid=$($proc.Id) window=$($r.Left),$($r.Top),$($r.Right),$($r.Bottom) client=$($p.X),$($p.Y) size=$($c.Right)x$($c.Bottom)" }
