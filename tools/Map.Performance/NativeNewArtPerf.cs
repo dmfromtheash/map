@@ -145,6 +145,7 @@ public sealed partial class PaintPerfApplication
             _report.Environment["exact/tier-up" + suffix] = (await TimedRefined()).ToString("0");
             await BurstRoute("cliff-slider" + suffix, 30, i =>
                 _editor.SetActiveLandStyle(style => style with { Cliff = style.Cliff with { Height = 30 + i } }));
+            PrintEditTimings("cliff-slider(last step)" + suffix);
             _report.Environment["exact/cliff-slider" + suffix] = (await TimedRefined()).ToString("0");
             _editor.BrushSettings = _editor.BrushSettings with { Radius = 40, Softness = .5, Spacing = .25 };
             await StrokeRoute("tier-land-stroke" + suffix, (1250, 1580), 60, 9, 4);

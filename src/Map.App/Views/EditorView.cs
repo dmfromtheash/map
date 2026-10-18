@@ -8553,12 +8553,32 @@ public sealed partial class EditorView : UserControl
         _editor.SelectedEditablePath?.Id, _editor.IsCreatingEditablePath,
         _editor.SelectedEditableArea?.Id, _editor.IsCreatingEditableArea);
 
+    private DispatcherTimer? _deferredPanelTimer;
+
+    /// <summary>
+    /// Queues the listed panels for a refresh once the edits pause for a moment. A slider drag or a
+    /// burst of placements edits the document 60 times a second; refreshing the context and side
+    /// panels after every one of those edits (15-20 ms of UI thread each on the owner's test map)
+    /// held a cliff slider at about 40 FPS. The panels show the result of the last edit as soon
+    /// as the stream of edits stops.
+    /// </summary>
     private void DeferPanels(DeferredPanel panels)
     {
         _deferredPanels |= panels;
         if (_deferredPanelQueued) return;
-        _deferredPanelQueued = true;
-        Dispatcher.UIThread.Post(RunDeferredPanel, DispatcherPriority.Background);
+        if (_deferredPanelTimer is null)
+        {
+            _deferredPanelTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(40) };
+            _deferredPanelTimer.Tick += (_, _) =>
+            {
+                _deferredPanelTimer.Stop();
+                if (_deferredPanelQueued) return;
+                _deferredPanelQueued = true;
+                Dispatcher.UIThread.Post(RunDeferredPanel, DispatcherPriority.Background);
+            };
+        }
+        _deferredPanelTimer.Stop();
+        _deferredPanelTimer.Start();
     }
 
     /// <summary>

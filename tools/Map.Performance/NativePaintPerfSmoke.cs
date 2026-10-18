@@ -49,7 +49,12 @@ internal static class NativePaintPerfSmoke
         var thread = new Thread(() =>
         {
             PaintPerfApplication.Options = options; PaintPerfApplication.Completion = completion;
-            try { AppBuilder.Configure<PaintPerfApplication>().UsePlatformDetect().WithInterFont()
+            // Under RenderDoc the WinUI compositor rejects the wrapped D3D11 device: MAP_RENDERDOC_ROUTE
+            // switches the window to a redirection surface (the scene's Skia work is the same).
+            var builder = AppBuilder.Configure<PaintPerfApplication>().UsePlatformDetect();
+            if (System.Environment.GetEnvironmentVariable("MAP_RENDERDOC_ROUTE") is { Length: > 0 })
+                builder = builder.With(new Win32PlatformOptions { CompositionMode = [Win32CompositionMode.RedirectionSurface] });
+            try { builder.WithInterFont()
                 .StartWithClassicDesktopLifetime([], ShutdownMode.OnExplicitShutdown); }
             catch (Exception ex) { completion.TrySetException(ex); }
         }) { IsBackground = true };
@@ -412,6 +417,7 @@ public sealed partial class PaintPerfApplication : Application
                         {
                             var started = Stopwatch.GetTimestamp();
                             step(index);
+                            RenderDocCapture.OnStep(name, index);
                             handlerMs[index] = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
                             inputStamps[index] = (stamp, canvas.RequestFrameForSmoke());
                             if (index == steps - 1) submitted.TrySetResult();

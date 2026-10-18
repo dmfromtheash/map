@@ -59,10 +59,22 @@ public static class Ui
 
     public static void SetClass(StyledElement element, string className, bool enabled)
     {
-        element.Classes.Remove(className);
+        // Only a real change touches the class list. Removing and re-adding an unchanged class made
+        // Avalonia re-match the element's styles twice and validate the name with a culture-aware
+        // comparison each time: hundreds of times per panel refresh, 370 ms of UI-thread time in a
+        // 90-step cliff slider drag on the owner's test map (2026-10-18).
+        if (element.Classes.Contains(className) == enabled)
+        {
+            return;
+        }
+
         if (enabled)
         {
             element.Classes.Add(className);
+        }
+        else
+        {
+            element.Classes.Remove(className);
         }
     }
 

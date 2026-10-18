@@ -273,6 +273,9 @@ public sealed class PlacementWorkflowApplication : Application
         if (editor.PlannedStampCount != 1000) throw new InvalidOperationException("Expected exactly 1000 planned stamps.");
     }
 
+    private bool ShowsObjects() => _view.Canvas.LastFrameObjectsDrawn > 0
+        || _view.Canvas.LastRenderStats.LayerImagesKept > 0 || _view.Canvas.LastRenderStats.ObjectTilesDrawn > 0;
+
     private async Task BatchesAsync(string phase, int count)
     {
         var editor = _view.Editor;
@@ -304,8 +307,10 @@ public sealed class PlacementWorkflowApplication : Application
                         var nextFrame = new TaskCompletionSource<double>(TaskCreationOptions.RunContinuationsAsynchronously);
                         void OnFrame(object? sender, EventArgs args)
                         {
+                            // A frame shows the objects when it drew them, drew their cached dense tiles,
+                            // or drew their layer from its kept image (LayerImageCache: still and pan frames).
                             if (_view.Canvas.LastRenderedDocument is { } frameDocument && Count(frameDocument) >= requiredCount
-                                && _view.Canvas.LastFrameObjectsDrawn > 0)
+                                && ShowsObjects())
                                 nextFrame.TrySetResult(_view.Canvas.LastSceneRenderMilliseconds);
                         }
                         _view.Canvas.FrameRendered += OnFrame;
@@ -324,7 +329,7 @@ public sealed class PlacementWorkflowApplication : Application
                             var rendered = _view.Canvas.LastRenderedDocument;
                             if (rendered is null || Count(rendered) < requiredCount
                                 || Count(document) != requiredCount
-                                || _view.Canvas.LastFrameObjectsDrawn < 1)
+                                || !ShowsObjects())
                                 throw new InvalidOperationException($"Frame mismatch: same={ReferenceEquals(rendered, editor.Session.Document)}, objects={Count(document)}, expected={startCount + (index + 1) * 1000}, drawn={_view.Canvas.LastRenderStats.ObjectsDrawn}, canvas={_view.Canvas.Bounds}, visible={_view.Canvas.IsEffectivelyVisible}, status={editor.StatusDetail}.");
                             var sample = new PlacementSample(phase, index, Count(document),
                                 Stopwatch.GetElapsedTime(submittedAt, began).TotalMilliseconds,
