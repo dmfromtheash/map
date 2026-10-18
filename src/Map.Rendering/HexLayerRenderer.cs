@@ -303,6 +303,12 @@ public static partial class HexLayerRenderer
     /// <summary>Below this many screen pixels per hex the grid lines are left out.</summary>
     public const double GridBelowPixels = 7;
 
+    /// <summary>An export draws flat colours below this many pixels per hex.</summary>
+    public const double ExportFlatBelowPixels = 4;
+
+    /// <summary>An export leaves the grid out below this many pixels per hex.</summary>
+    public const double ExportGridBelowPixels = 3;
+
     /// <summary>Below this many screen pixels per hex the numbers are left out.</summary>
     public const double NumbersBelowPixels = 44;
 
@@ -341,7 +347,9 @@ public static partial class HexLayerRenderer
     {
         var board = layer.Board;
         var hexPixels = board.Layout.HexWidth * viewScale;
-        var flat = hexPixels < FlatColourBelowPixels && !isExport;
+        // An export far smaller than the board (a library thumbnail of a 512 × 512 board) draws the
+        // far look too: hundreds of thousands of tiles a pixel wide only average to grey.
+        var flat = hexPixels < (isExport ? ExportFlatBelowPixels : FlatColourBelowPixels);
         var budget = new BuildBudget(System.Diagnostics.Stopwatch.GetTimestamp());
         if (!isExport) DrawBackdrop(canvas, layer, viewScale, hexPixels);
 
@@ -369,7 +377,8 @@ public static partial class HexLayerRenderer
             requestFrame?.Invoke();
         }
 
-        if (layer.Grid.Visible && (hexPixels >= GridBelowPixels || isExport))
+        // Grid lines on hexes a few pixels wide would cover them: the board would be all grid.
+        if (layer.Grid.Visible && (hexPixels >= GridBelowPixels || (isExport && hexPixels >= ExportGridBelowPixels)))
         {
             if (cache is null || isExport || !TryDrawGridPattern(canvas, layer, view, viewScale, hexPixels, cache))
             {

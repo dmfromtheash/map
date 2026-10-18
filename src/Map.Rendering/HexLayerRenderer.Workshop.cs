@@ -546,7 +546,7 @@ public static partial class HexLayerRenderer
 
             case HexPathKind.Road:
             {
-                var width = Math.Max(r * 0.075 * path.Width, 1.4 * pixel);
+                var width = Math.Max(r * 0.1 * path.Width, 2 * pixel);
                 using var edge = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeCap = SKStrokeCap.Round, StrokeJoin = SKStrokeJoin.Round, StrokeWidth = (float)(width * 1.6), Color = new SKColor(0x4A, 0x34, 0x20, (byte)(alpha * 0.85)) };
                 using var surface = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeCap = SKStrokeCap.Round, StrokeJoin = SKStrokeJoin.Round, StrokeWidth = (float)width, Color = color };
                 canvas.DrawPath(shape.Whole, edge);
@@ -556,7 +556,7 @@ public static partial class HexLayerRenderer
 
             case HexPathKind.Trail:
             {
-                var width = Math.Max(r * 0.04 * path.Width, 1.1 * pixel);
+                var width = Math.Max(r * 0.055 * path.Width, 1.5 * pixel);
                 using var dash = SKPathEffect.CreateDash([(float)(r * 0.12), (float)(r * 0.08)], 0);
                 using var paint = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeCap = SKStrokeCap.Round, StrokeWidth = (float)width, Color = color, PathEffect = dash };
                 canvas.DrawPath(shape.Whole, paint);
@@ -713,6 +713,19 @@ public static partial class HexLayerRenderer
                 canvas.DrawPath(path, paint);
             }
         }
+
+        if (!player || view.Top > BoardRect(board).Top + board.Layout.HexHeight) return;
+        // Tall tiles of the first row rise above the board: for the players the fog covers that too.
+        using var above = new SKPath();
+        foreach (var hex in board.HexesIn(view with { Bottom = BoardRect(board).Top + board.Layout.HexHeight }))
+        {
+            if (board.Layout.ToOffset(hex).Row != 0 || board[hex]?.Revealed == true) continue;
+            var bounds = board.Layout.Bounds(hex);
+            above.AddRect(new SKRect((float)bounds.Left, (float)(bounds.Top - (HexStarterTiles.MaxOverhang + 0.3) * board.Layout.HexHeight),
+                (float)bounds.Right, (float)(bounds.Top + board.Layout.HexHeight / 2)));
+        }
+
+        canvas.DrawPath(above, paint);
     }
 
     /// <summary>How many board hexes lie in a chunk (edge chunks are cut by the board).</summary>
@@ -741,13 +754,6 @@ public static partial class HexLayerRenderer
                 }
 
                 path.AddPoly(corners, close: true);
-                if (offset.Row == 0)
-                {
-                    // Tall tiles of the first row rise above the board: the fog covers that too.
-                    var bounds = board.Layout.Bounds(hex);
-                    path.AddRect(new SKRect((float)bounds.Left, (float)(bounds.Top - (HexStarterTiles.MaxOverhang + 0.3) * board.Layout.HexHeight),
-                        (float)bounds.Right, (float)cy));
-                }
             }
         }
 

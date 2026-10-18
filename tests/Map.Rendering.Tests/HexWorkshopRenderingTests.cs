@@ -94,10 +94,25 @@ public sealed class HexWorkshopRenderingTests
             var bridge = At(gm, layer.Board.Layout, crossing, scale);
             Assert.True(bridge.Red > bridge.Blue, $"bridge pixel {bridge}");
 
-            // The game master sees through the fog; the players do not.
-            var seen = At(gm, layer.Board.Layout, fogged, scale, 0, layer.Board.Layout.Size * 0.5);
+            // The game master sees through the fog; the players do not (brightness over the hex,
+            // since a single pixel may land on a dark tree).
+            double Brightness(SKBitmap bitmap)
+            {
+                var total = 0.0;
+                for (var dx = -2; dx <= 2; dx++)
+                {
+                    for (var dy = -2; dy <= 2; dy++)
+                    {
+                        var c = At(bitmap, layer.Board.Layout, fogged, scale, dx * layer.Board.Layout.Size * 0.15, dy * layer.Board.Layout.Size * 0.15);
+                        total += c.Red + c.Green + c.Blue;
+                    }
+                }
+
+                return total / 25;
+            }
+
+            Assert.True(Brightness(gm) > Brightness(player) + 40, $"{Brightness(gm)} / {Brightness(player)}");
             var hidden = At(player, layer.Board.Layout, fogged, scale, 0, layer.Board.Layout.Size * 0.5);
-            Assert.True(seen.Red + seen.Green + seen.Blue > hidden.Red + hidden.Green + hidden.Blue + 60, $"{seen} / {hidden}");
             Assert.True(Math.Abs(hidden.Red - 0x22) < 6 && Math.Abs(hidden.Blue - 0x26) < 6, $"player fog {hidden}");
 
             // Kept chunk pictures show the same world as direct drawing.

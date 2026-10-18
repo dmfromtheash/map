@@ -2238,7 +2238,8 @@
             <Setter Property="CornerRadius" Value="8" />
             <Setter Property="Padding" Value="12,7" />
             <Setter Property="Margin" Value="14" />
-            <Setter Property="HorizontalAlignment" Value="Left" />
+            <!-- Centred: at the left the floating tool panel covered the message. -->
+            <Setter Property="HorizontalAlignment" Value="Center" />
             <Setter Property="VerticalAlignment" Value="Bottom" />
             <Setter Property="MaxWidth" Value="560" />
             <Setter Property="BoxShadow" Value="0 4 14 0 #40000000" />

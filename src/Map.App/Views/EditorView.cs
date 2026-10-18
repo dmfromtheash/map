@@ -833,6 +833,21 @@ public sealed partial class EditorView : UserControl
             window.WindowStartupLocation = WindowStartupLocation.Manual;
             window.Position = new PixelPoint(-32000, -32000);
         }
+        else
+        {
+            // Open on the owner's screen; a window born on a screen of another scale used to keep
+            // the old scale's layout there, with black bands right and below.
+            window.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+        }
+
+        window.ScalingChanged += (_, _) =>
+        {
+            var size = window.ClientSize;
+            window.Width = size.Width;
+            window.Height = size.Height;
+            window.InvalidateMeasure();
+            window.InvalidateArrange();
+        };
         if (TopLevel.GetTopLevel(this) is Window owner)
         {
             window.Show(owner);

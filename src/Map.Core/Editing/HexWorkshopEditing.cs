@@ -142,7 +142,7 @@ public static class HexBoardOps
         return Remap(layer, columns, board.Rows, offset =>
             offset.Column < at ? offset
             : count < 0 && offset.Column < at - count ? null
-            : offset with { Column = offset.Column + count });
+            : offset with { Column = offset.Column + count }, fillGaps: count > 0);
     }
 
     /// <summary>Inserts (or with a negative count deletes) rows, like <see cref="InsertColumns"/>.</summary>
@@ -158,7 +158,7 @@ public static class HexBoardOps
         return Remap(layer, board.Columns, rows, offset =>
             offset.Row < at ? offset
             : count < 0 && offset.Row < at - count ? null
-            : offset with { Row = offset.Row + count });
+            : offset with { Row = offset.Row + count }, fillGaps: count > 0);
     }
 
     /// <summary>The board grown or cut at its right and bottom edges; hexes keep their place.</summary>
@@ -172,7 +172,7 @@ public static class HexBoardOps
     }
 
     /// <summary>Moves every hex, path node and note through an offset map; unmapped ones are removed.</summary>
-    private static HexLayer Remap(HexLayer layer, int columns, int rows, Func<HexOffset, HexOffset?> map)
+    private static HexLayer Remap(HexLayer layer, int columns, int rows, Func<HexOffset, HexOffset?> map, bool fillGaps = false)
     {
         var layout = layer.Board.Layout;
         HexCoord? Move(HexCoord hex) => map(layout.ToOffset(hex)) is { } moved ? layout.FromOffset(moved) : null;
@@ -193,7 +193,7 @@ public static class HexBoardOps
         {
             Board = board,
             Notes = notes.ToImmutable(),
-            Paths = HexPaths.Remap(layer.Paths, layout, hex => Move(hex) is { } moved && board.Contains(moved) ? moved : null),
+            Paths = HexPaths.Remap(layer.Paths, layout, hex => Move(hex) is { } moved && board.Contains(moved) ? moved : null, fillGaps),
         };
     }
 }
@@ -205,7 +205,11 @@ public static class HexPaths
     /// Moves paths node by node. Where a node has no new place, or two nodes stop being neighbours,
     /// the path is cut in two; pieces shorter than two nodes are dropped. The first piece keeps the id.
     /// </summary>
-    public static ImmutableList<HexPath> Remap(ImmutableList<HexPath> paths, HexLayout layout, Func<HexCoord, HexCoord?> map)
+    /// <param name="fillGaps">
+    /// When two moved nodes stop being neighbours, join them with the straight run between them
+    /// instead of cutting (inserted rows or columns: a road keeps crossing them).
+    /// </param>
+    public static ImmutableList<HexPath> Remap(ImmutableList<HexPath> paths, HexLayout layout, Func<HexCoord, HexCoord?> map, bool fillGaps = false)
     {
         ArgumentNullException.ThrowIfNull(paths);
         var result = ImmutableList.CreateBuilder<HexPath>();
@@ -236,7 +240,12 @@ public static class HexPaths
                     }
 
                     var next = layout.Canonical(vertex with { Hex = moved });
-                    if (piece.Count > 0 && !layout.VertexNeighbors(piece[^1]).Contains(next)) FlushVertices();
+                    if (piece.Count > 0 && next != piece[^1] && !layout.VertexNeighbors(piece[^1]).Contains(next))
+                    {
+                        if (fillGaps) piece.AddRange(EdgeWalk(layout, piece[^1], next).Skip(1).SkipLast(1));
+                        else FlushVertices();
+                    }
+
                     piece.Add(next);
                 }
 
@@ -265,8 +274,13 @@ public static class HexPaths
                     continue;
                 }
 
-                if (hexes.Count > 0 && HexCoord.Distance(hexes[^1], moved) != 1) Flush();
-                hexes.Add(moved);
+                if (hexes.Count > 0 && HexCoord.Distance(hexes[^1], moved) != 1)
+                {
+                    if (fillGaps && moved != hexes[^1]) hexes.AddRange(HexCoord.Line(hexes[^1], moved).Skip(1).SkipLast(1));
+                    else Flush();
+                }
+
+                if (hexes.Count == 0 || hexes[^1] != moved) hexes.Add(moved);
             }
 
             Flush();

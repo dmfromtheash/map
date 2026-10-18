@@ -218,6 +218,16 @@ public sealed class MainWindow : Window
             requestSecondWindow: OpenSecondWindow,
             requestShortcutSettings: OpenShortcutSettings);
         _editorView.Canvas.PerformanceMode = _appSettings.PerformanceMode;
+        if (editor.IsHexWorkshop)
+        {
+            editor.HexPlayerViewRequested += (_, _) => new HexPlayerWindow(editor).Show();
+            editor.HexChildMapRequested += async (_, hex) =>
+            {
+                // A child map opens in a window of its own, so the parent map stays where it was.
+                if (await editor.PrepareHexChildMapAsync(hex) is { } childPath) OpenInNewWindow(childPath);
+            };
+        }
+
         _host.Content = _editorView;
         if (TestMode.AutosaveEnabled)
         {
@@ -232,6 +242,19 @@ public sealed class MainWindow : Window
                 if (!OwnedWindows.Any(window => window.IsVisible)) _editorView?.Canvas.Focus();
             },
             Avalonia.Threading.DispatcherPriority.Loaded);
+    }
+
+    /// <summary>Opens a map file in a further Map window (a hex's child map).</summary>
+    private void OpenInNewWindow(string path)
+    {
+        var window = new MainWindow(
+            _store, _recent, _log, _assets, _shortcutStore, _shortcuts, _shortcutLoadWarning,
+            _appSettingsStore, _appSettings)
+        {
+            Title = $"Map · {AppVersion.Current} · {System.IO.Path.GetFileNameWithoutExtension(path)}",
+        };
+        window.Show();
+        Avalonia.Threading.Dispatcher.UIThread.Post(() => _ = window.OpenPathAsync(path), Avalonia.Threading.DispatcherPriority.Loaded);
     }
 
     private void OpenSecondWindow()
@@ -322,7 +345,7 @@ public sealed class MainWindow : Window
         }
     }
 
-    private async Task OpenPathAsync(string path)
+    internal async Task OpenPathAsync(string path)
     {
         var opened = await _dashboard.TryOpenAsync(path);
         if (opened is not null)

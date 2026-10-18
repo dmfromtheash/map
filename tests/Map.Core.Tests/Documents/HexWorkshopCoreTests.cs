@@ -142,9 +142,11 @@ public sealed class HexWorkshopCoreTests
         Assert.NotNull(wider.Board[At(9, 2)]);
         Assert.Null(wider.Board[At(3, 2)]);
         Assert.True(wider.Notes.ContainsKey(At(7, 2)));
-        // Two new empty columns cut the road into the part before and the part after them.
-        Assert.Equal(2, wider.Paths.Count);
-        Assert.Equal(layer.Paths[0].Id, wider.Paths[0].Id);
+        // The road keeps crossing the two new columns: one path, still a run of neighbours.
+        var road = Assert.Single(wider.Paths);
+        Assert.Equal(layer.Paths[0].Id, road.Id);
+        for (var i = 1; i < road.Hexes.Length; i++) Assert.Equal(1, HexCoord.Distance(road.Hexes[i - 1], road.Hexes[i]));
+        Assert.Equal(At(9, 2), road.Hexes[^1]);
 
         var narrower = HexBoardOps.InsertColumns(layer, 2, -3);
         Assert.Equal(9, narrower.Board.Columns);

@@ -679,6 +679,14 @@ public sealed partial class EditorViewModel : ViewModelBase
     {
         get
         {
+            // A hex map has its own grid: the hexes'. The page grid of the standard maker is not offered there.
+            if (IsHexWorkshop)
+            {
+                return HexGrid is { Visible: true } hexGrid
+                    ? hexGrid.Numbers ? "Сетка гексов · номера" : "Сетка гексов"
+                    : "Сетка гексов скрыта";
+            }
+
             var grids = Session.Document.Layers.OfType<GridLayer>()
                 .Where(layer => layer.Visible)
                 .SelectMany(layer => layer.Grids)
@@ -5658,8 +5666,11 @@ public sealed partial class EditorViewModel : ViewModelBase
             ? HexBoard.Create(HexOrientation.Flat, 64, 30, 20)
             : HexBoard.FromCells(model.Board.Layout, model.Board.Columns, model.Board.Rows, []);
         var layer = new HexLayer(LayerId.New(), EntityNameGenerator.Layer(Session.Document, typeof(HexLayer)),
-            true, false, 1, board) { Grid = model?.Grid ?? new HexGridStyle() };
-        Session.Execute(new AddLayerCommand(layer, _activeLayerId));
+            true, false, 1, board) { Grid = model?.Grid ?? new HexGridStyle(), Level = model?.Level ?? 0 };
+        // Hexes are the ground: a new hex layer goes over the other hex layers but stays under
+        // the labels, which would otherwise hide under it.
+        var topHexes = Session.Document.Layers.OfType<HexLayer>().LastOrDefault()?.Id;
+        Session.Execute(new AddLayerCommand(layer, topHexes ?? _activeLayerId));
         _activeLayerId = layer.Id;
         ActiveTool = EditorTool.Hex;
         AfterEdit();
@@ -6204,6 +6215,17 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public void SnapSelectedObjectToGrid()
     {
+        if (IsHexWorkshop && EditableSelection() is { } label && ActiveHexLayer is { } hexes)
+        {
+            // In a hex map "the grid" is the hexes: a label goes to the middle of its hex.
+            var layout = hexes.Board.Layout;
+            var (cx, cy) = layout.Center(layout.HexAt(label.X + label.Width / 2, label.Y + label.Height / 2));
+            var moved = MultiSelectionGeometry.Translate([label], cx - label.Width / 2 - label.X, cy - label.Height / 2 - label.Y)[0];
+            if (moved != label) ReplaceSelected(label, moved, "Snap object to hex");
+            StatusDetail = "Объект поставлен в центр гекса.";
+            return;
+        }
+
         if (EditableSelection() is not { } before || ActiveSnapGrid() is not { } grid) return;
         ReplaceSelected(before, GridSnapService.SnapObject(before, grid), "Snap object to grid");
     }

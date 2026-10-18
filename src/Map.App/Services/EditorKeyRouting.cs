@@ -71,9 +71,60 @@ public static class EditorKeyRouting
         System.ArgumentNullException.ThrowIfNull(view);
         System.ArgumentNullException.ThrowIfNull(shortcuts);
         System.ArgumentNullException.ThrowIfNull(args);
-        if (IsTypingInText(root, args) || !ShortcutKeyAdapter.TryCreate(args, out var input)) return false;
+        if (IsTypingInText(root, args)) return false;
+        if (TryHandleHexKey(view.Editor, args)) return true;
+        if (!ShortcutKeyAdapter.TryCreate(args, out var input)) return false;
         var command = shortcuts.Resolve(input, Contexts(view, args));
         return command is not null && TryExecuteEditorCommand(view, command);
+    }
+
+    /// <summary>
+    /// The keys of the hex tool: [ and ] turn the brush or the paste, Ctrl+C / Ctrl+X / Ctrl+V copy,
+    /// cut and paste hexes, Delete clears the selection, M mirrors the paste, Ctrl+A selects every
+    /// painted hex, Escape drops the paste, then the selection. Physical keys, so they work on the
+    /// Russian layout too.
+    /// </summary>
+    public static bool TryHandleHexKey(EditorViewModel editor, KeyEventArgs args)
+    {
+        System.ArgumentNullException.ThrowIfNull(editor);
+        System.ArgumentNullException.ThrowIfNull(args);
+        if (!editor.IsHexWorkshop || editor.ActiveTool != EditorTool.Hex) return false;
+        var ctrl = args.KeyModifiers.HasFlag(KeyModifiers.Control);
+        switch (args.Key)
+        {
+            case Key.OemOpenBrackets when !ctrl:
+                editor.RotateHexBrush(-1);
+                return true;
+            case Key.OemCloseBrackets when !ctrl:
+                editor.RotateHexBrush(1);
+                return true;
+            case Key.C when ctrl && editor.HexSelection.Count > 0:
+                editor.CopyHexSelection();
+                return true;
+            case Key.X when ctrl && editor.HexSelection.Count > 0:
+                editor.CutHexSelection();
+                return true;
+            case Key.V when ctrl && editor.HasHexClipboard:
+                editor.BeginHexPaste();
+                return true;
+            case Key.A when ctrl && editor.HexMode == HexToolMode.Select:
+                editor.SelectAllHexes();
+                return true;
+            case Key.M when !ctrl && editor.HasHexPaste:
+                editor.MirrorHexPaste();
+                return true;
+            case Key.Delete or Key.Back when editor.HexMode == HexToolMode.Select && editor.HexSelection.Count > 0:
+                editor.DeleteHexSelection();
+                return true;
+            case Key.Escape when editor.HasHexPaste:
+                editor.CancelHexPaste();
+                return true;
+            case Key.Escape when editor.HexMode == HexToolMode.Select && editor.HexSelection.Count > 0:
+                editor.ClearHexSelection();
+                return true;
+            default:
+                return false;
+        }
     }
 
     /// <summary>The commands that need only the editor view. Everything else returns false.</summary>

@@ -26,7 +26,7 @@ public sealed class NewMapWizardViewModel : ViewModelBase
     private string _hexSizeText = "64";
 
     /// <summary>Largest board side the create dialog offers; the format allows more.</summary>
-    public const int MaxHexDimension = 512;
+    public const int MaxHexDimension = 1024;
 
     public const int MinHexSize = 24;
 
@@ -43,7 +43,7 @@ public sealed class NewMapWizardViewModel : ViewModelBase
     public MapCategoryId Category
     {
         get => _category;
-        set => SetField(ref _category, value);
+        set { if (SetField(ref _category, value)) Revalidate(); }
     }
 
     /// <summary>True when the chosen category builds its map from hexes; step 2 then asks for the board.</summary>
@@ -53,28 +53,28 @@ public sealed class NewMapWizardViewModel : ViewModelBase
     public HexOrientation HexOrientation
     {
         get => _hexOrientation;
-        set => SetField(ref _hexOrientation, value);
+        set { if (SetField(ref _hexOrientation, value)) Revalidate(); }
     }
 
     /// <summary>Hexes across a hex map.</summary>
     public string HexColumnsText
     {
         get => _hexColumnsText;
-        set => SetField(ref _hexColumnsText, value);
+        set { if (SetField(ref _hexColumnsText, value)) Revalidate(); }
     }
 
     /// <summary>Hexes down a hex map.</summary>
     public string HexRowsText
     {
         get => _hexRowsText;
-        set => SetField(ref _hexRowsText, value);
+        set { if (SetField(ref _hexRowsText, value)) Revalidate(); }
     }
 
     /// <summary>Hex size (centre to corner) in canvas units.</summary>
     public string HexSizeText
     {
         get => _hexSizeText;
-        set => SetField(ref _hexSizeText, value);
+        set { if (SetField(ref _hexSizeText, value)) Revalidate(); }
     }
 
     /// <summary>The canvas a hex board of the current settings needs, or null while a field is invalid.</summary>
@@ -86,19 +86,19 @@ public sealed class NewMapWizardViewModel : ViewModelBase
     public string Title
     {
         get => _title;
-        set => SetField(ref _title, value);
+        set { if (SetField(ref _title, value)) Revalidate(); }
     }
 
     public string WidthText
     {
         get => _widthText;
-        set => SetField(ref _widthText, value);
+        set { if (SetField(ref _widthText, value)) Revalidate(); }
     }
 
     public string HeightText
     {
         get => _heightText;
-        set => SetField(ref _heightText, value);
+        set { if (SetField(ref _heightText, value)) Revalidate(); }
     }
 
     public string Background
@@ -111,6 +111,15 @@ public sealed class NewMapWizardViewModel : ViewModelBase
     {
         get => _validationError;
         private set => SetField(ref _validationError, value);
+    }
+
+    /// <summary>
+    /// Once an error is shown, every change of a field checks again, so the message goes away as
+    /// soon as the fields are right (it used to stay until the next press of Create).
+    /// </summary>
+    private void Revalidate()
+    {
+        if (_validationError.Length > 0) Validate();
     }
 
     /// <summary>Swaps width and height - the wizard's orientation toggle.</summary>

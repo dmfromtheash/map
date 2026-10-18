@@ -290,4 +290,30 @@ public sealed class HexWorkshopToolsTests
         editor.HexLevel = 0;
         Assert.Equal(0, editor.ActiveHexLayer!.Level);
     }
+
+    [Fact]
+    public void The_wizard_error_goes_away_once_the_fields_are_right_and_boards_reach_1024()
+    {
+        var wizard = new NewMapWizardViewModel { Category = MapCategories.Hex.Id, HexColumnsText = "0", HexRowsText = "20", HexSizeText = "24" };
+        Assert.False(wizard.Validate());
+        Assert.NotEmpty(wizard.ValidationError);
+        wizard.HexColumnsText = "1024";
+        Assert.Empty(wizard.ValidationError);
+        wizard.HexRowsText = "1024";
+        Assert.True(wizard.Validate());
+        var board = wizard.Create(DateTimeOffset.UnixEpoch)!.Layers.OfType<HexLayer>().Single().Board;
+        Assert.Equal((1024, 1024), (board.Columns, board.Rows));
+    }
+
+    [Fact]
+    public void A_new_hex_layer_stays_under_the_labels_and_the_status_names_the_hex_grid()
+    {
+        var editor = HexEditor();
+        Assert.StartsWith("Сетка гексов", editor.GridSummary);
+        editor.AddHexLayer();
+        var layers = editor.Session.Document.Layers;
+        var labels = layers.ToList().FindIndex(layer => layer is ObjectLayer);
+        Assert.All(layers.Select((layer, index) => (layer, index)).Where(pair => pair.layer is HexLayer),
+            pair => Assert.True(pair.index < labels, "a hex layer above the labels"));
+    }
 }

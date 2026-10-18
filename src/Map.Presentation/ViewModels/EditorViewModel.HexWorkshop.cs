@@ -1,6 +1,8 @@
 using System.Collections.Immutable;
 using Map.Core.Documents;
 using Map.Core.Editing;
+using Map.Persistence;
+using Map.Presentation.Services;
 using Map.Rendering;
 
 namespace Map.Presentation.ViewModels;
@@ -519,6 +521,64 @@ public sealed partial class EditorViewModel
     public void OpenHexChildMap()
     {
         if (_hexKeyHex is { } hex) HexChildMapRequested?.Invoke(this, hex);
+    }
+
+    /// <summary>Hexes across a new child map.</summary>
+    public int HexChildAcross { get; set; } = 12;
+
+    /// <summary>
+    /// The file of a hex's child map: the linked one when it still exists, otherwise a new hex map
+    /// saved next to this map (its land continues the neighbours of the hex) and linked in the
+    /// hex's key. Null when this map has no file yet or saving failed.
+    /// </summary>
+    public async Task<string?> PrepareHexChildMapAsync(HexCoord hex)
+    {
+        if (ActiveHexLayer is not { } layer || !layer.Board.Contains(hex)) return null;
+        if (string.IsNullOrEmpty(DocumentPath))
+        {
+            StatusDetail = "Сохраните карту: подкарты лежат рядом с её файлом.";
+            return null;
+        }
+
+        var folder = Path.GetDirectoryName(DocumentPath)!;
+        if (layer.Notes.GetValueOrDefault(hex)?.ChildMap is { } linked)
+        {
+            var existing = Path.IsPathRooted(linked) ? linked : Path.Combine(folder, linked);
+            if (File.Exists(existing)) return existing;
+        }
+
+        var number = HexLayerRenderer.NumberOf(layer.Board, layer.Board.Layout.ToOffset(hex));
+        var title = $"{Session.Document.Title} — гекс {number}";
+        var child = HexChildMaps.Create(layer, hex, HexChildAcross, title, _clock(), Session.Document.Category,
+            Session.Document.Canvas.Background);
+        var fileName = SafeProjectFileName(title) + MapProjectFormat.Extension;
+        for (var copy = 2; File.Exists(Path.Combine(folder, fileName)); copy++)
+        {
+            fileName = SafeProjectFileName(title) + $" ({copy})" + MapProjectFormat.Extension;
+        }
+
+        var path = Path.Combine(folder, fileName);
+        try
+        {
+            var metadata = new SaveMetadata(_appVersion, _clock(), savedRevision: 0);
+            var preview = await Task.Run(() =>
+            {
+                var thumbnail = ThumbnailRenderer.RenderPng(child);
+                _store.Save(child, path, metadata, thumbnail);
+                return thumbnail;
+            }).ConfigureAwait(true);
+            _recent.Touch(path, child.Id.Value, child.Title, metadata.ModifiedUtc, preview);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            StatusDetail = "Не удалось сохранить подкарту: " + error.Message;
+            _log.Error("HEX_CHILD_MAP_SAVE_FAILED", error);
+            return null;
+        }
+
+        LinkHexChildMap(hex, fileName);
+        StatusDetail = $"Подкарта гекса {number} создана: {fileName}. Сохраните эту карту, чтобы ссылка осталась.";
+        return path;
     }
 
     /// <summary>Remembers the child map file of a hex in its key (one undo step).</summary>
