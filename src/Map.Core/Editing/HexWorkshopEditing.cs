@@ -611,3 +611,65 @@ public static class HexTransitions
         return [.. runs.OrderByDescending(run => run.Length).ThenBy(run => run.Start)];
     }
 }
+
+/// <summary>
+/// Travel over a hex layer (the hex-crawl ruler): the cost of a step is the entered tile's travel
+/// cost, halved along a road or trail, with a little extra for wading a river where no road crosses.
+/// </summary>
+public sealed class HexTravelPlanner
+{
+    private readonly HexLayer _layer;
+    private readonly Func<string, double?> _tileCost;
+    private readonly HashSet<(HexCoord, HexCoord)> _roadSteps = [];
+    private readonly HashSet<HexCoord> _river = [];
+
+    /// <param name="tileCost">Travel cost of a terrain tile id relative to plains (null: cannot be entered).</param>
+    public HexTravelPlanner(HexLayer layer, Func<string, double?> tileCost)
+    {
+        ArgumentNullException.ThrowIfNull(layer);
+        ArgumentNullException.ThrowIfNull(tileCost);
+        _layer = layer;
+        _tileCost = tileCost;
+        foreach (var path in layer.Paths)
+        {
+            if (path.Kind == HexPathKind.River) _river.UnionWith(path.Hexes);
+            if (path.Kind is not (HexPathKind.Road or HexPathKind.Trail)) continue;
+            for (var i = 1; i < path.Hexes.Length; i++)
+            {
+                _roadSteps.Add((path.Hexes[i - 1], path.Hexes[i]));
+                _roadSteps.Add((path.Hexes[i], path.Hexes[i - 1]));
+            }
+        }
+    }
+
+    /// <summary>The cheapest step is half a plains hex (a road).</summary>
+    public const double RoadFactor = 0.5;
+
+    public double? StepCost(HexCoord from, HexCoord to)
+    {
+        if (!_layer.Board.Contains(to)) return null;
+        if (_roadSteps.Contains((from, to))) return RoadFactor;
+        // An unpainted hex is unknown country: priced like plains.
+        var cost = _layer.Board[to] is { } cell ? _tileCost(cell.Terrain) : 1;
+        if (cost is null) return null;
+        return cost.Value + (_river.Contains(to) ? 0.5 : 0);
+    }
+
+    /// <summary>The quickest way between two hexes, or null when none exists.</summary>
+    public HexRoute? Route(HexCoord from, HexCoord to)
+    {
+        var hexes = HexRouting.FindRoute(from, to, StepCost, RoadFactor, limit: 400_000);
+        if (hexes is null) return null;
+        var cost = HexRouting.CostOf(hexes, StepCost);
+        var scale = _layer.Travel;
+        return new HexRoute(hexes, hexes.Count - 1, (hexes.Count - 1) * scale.DistancePerHex,
+            cost * scale.DistancePerHex / scale.DistancePerDay, scale.Unit);
+    }
+}
+
+/// <summary>A measured way: its hexes, its length in hexes and distance units, and the days it takes.</summary>
+public sealed record HexRoute(IReadOnlyList<HexCoord> Hexes, int Steps, double Distance, double Days, string Unit)
+{
+    public string Label => string.Create(System.Globalization.CultureInfo.GetCultureInfo("ru-RU"),
+        $"{Steps} гекс. · {Distance:0.#} {Unit} · {Days:0.#} дн.");
+}

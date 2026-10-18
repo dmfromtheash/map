@@ -227,7 +227,7 @@ public sealed class CanvasInputRouter
         {
             // Hexes are the hex constructor's only content: a press always belongs to the tool.
             // Fill and pick finish on the press; place and erase continue as a drag.
-            var dragging = _editor.BeginHexGesture(worldX, worldY);
+            var dragging = _editor.BeginHexGesture(worldX, worldY, additive);
             _gesture = dragging ? CanvasInputGesture.HexPaint : CanvasInputGesture.None;
             return new CanvasInputResult { Handled = true, CapturePointer = dragging, Invalidate = true };
         }

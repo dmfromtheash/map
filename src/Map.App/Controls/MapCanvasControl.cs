@@ -709,6 +709,9 @@ public sealed partial class MapCanvasControl : Control
                 HexChunks = resources.Hex(),
                 HexCursor = editor.CanvasWorkflowOpen ? null : editor.HexCursor,
                 HexGestureLive = editor.HasHexGesture,
+                HexOverlay = editor.CanvasWorkflowOpen ? null : editor.HexOverlay,
+                HexLevel = editor.HexLevelShown,
+                HexGhostLevel = editor.HexGhostLevel,
                 ViewScale = viewport.Scale,
                 VisibleWorld = new Map.Core.Documents.WorldBounds(
                     X, Y, bottomRight.X, bottomRight.Y),

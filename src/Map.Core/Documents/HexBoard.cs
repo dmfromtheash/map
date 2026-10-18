@@ -523,3 +523,53 @@ public static class HexMapFactory
             category: category);
     }
 }
+
+/// <summary>
+/// Child maps of the hex category (Hexographer child maps, Hextml submaps): one hex of a map
+/// opened as its own hex map, finer by a chosen number of hexes across.
+/// </summary>
+public static class HexChildMaps
+{
+    /// <summary>
+    /// A new hex map for one hex of <paramref name="parent"/>: <paramref name="across"/> small hexes
+    /// across, filled with the parent hex's terrain; the rim of small hexes facing a neighbour takes
+    /// that neighbour's terrain, so the child continues into the land around it.
+    /// </summary>
+    public static MapDocument Create(HexLayer parent, HexCoord hex, int across, string title, DateTimeOffset createdUtc,
+        MapCategoryId category, string background, double hexSize = 48)
+    {
+        ArgumentNullException.ThrowIfNull(parent);
+        across = Math.Clamp(across, 3, 64);
+        var document = HexMapFactory.Create(title, createdUtc, category, parent.Board.Orientation, hexSize, across, across, background);
+        var layer = document.Layers.OfType<HexLayer>().Single();
+        var board = layer.Board;
+        var center = board.Layout.Center(board.Layout.FromOffset(new HexOffset(across / 2, across / 2)));
+        var own = parent.Board[hex];
+        var cells = new List<KeyValuePair<HexCoord, HexCell?>>();
+        var unit = new HexLayout(parent.Board.Orientation, 1, 0, 0);
+        for (var row = 0; row < across; row++)
+        {
+            for (var column = 0; column < across; column++)
+            {
+                var small = board.Layout.FromOffset(new HexOffset(column, row));
+                var (x, y) = board.Layout.Center(small);
+                // Where the small hex lies inside the big one, in big-hex radii from its centre.
+                var dx = (x - center.X) / (across / 2.0 * board.Layout.HexWidth / unit.HexWidth);
+                var dy = (y - center.Y) / (across / 2.0 * board.Layout.HexHeight / unit.HexHeight);
+                var source = own;
+                if (Math.Sqrt(dx * dx + dy * dy) > 0.72)
+                {
+                    var toward = unit.HexAt(dx * 1.6, dy * 1.6);
+                    if (toward != new HexCoord(0, 0) && parent.Board[hex + toward] is { } outside) source = outside;
+                }
+
+                if (source is null) continue;
+                var variant = (int)(Map.Core.Editing.HexEditing.Noise(small, 17) % 3);
+                cells.Add(new(small, HexCell.Of(source.Terrain, variant)));
+            }
+        }
+
+        var filled = layer with { Board = board.With(cells) };
+        return document.WithLayer(layer.Id, _ => filled);
+    }
+}
