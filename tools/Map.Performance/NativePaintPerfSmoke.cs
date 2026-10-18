@@ -354,6 +354,7 @@ public sealed partial class PaintPerfApplication : Application
     private async Task Route(string name, int steps, Action<int> step)
     {
         var target = new ZoomRouteReport { Name = name, ScaleStart = _editor.Session.Viewport.Scale };
+        MarkJit();
         var watch = Stopwatch.StartNew();
         for (var i = 0; i < steps; i++)
         {
@@ -371,6 +372,7 @@ public sealed partial class PaintPerfApplication : Application
     private async Task BurstRoute(string name, int steps, Action<int> step)
     {
         var target = new ZoomRouteReport { Name = name, ScaleStart = _editor.Session.Viewport.Scale };
+        MarkJit();
         var canvas = _view.Canvas;
         var gcBefore = (GC.CollectionCount(0), GC.CollectionCount(1), GC.CollectionCount(2));
         var pauseBefore = GC.GetTotalPauseDuration();
@@ -450,6 +452,15 @@ public sealed partial class PaintPerfApplication : Application
         Console.WriteLine("    " + target.SlowRefinementFrames[^1]);
     }
 
+    private TimeSpan _jitTime;
+    private long _jitMethods;
+
+    private void MarkJit()
+    {
+        _jitTime = System.Runtime.JitInfo.GetCompilationTime();
+        _jitMethods = System.Runtime.JitInfo.GetCompiledMethodCount();
+    }
+
     private void Complete(ZoomRouteReport target, bool burst = false)
     {
         var scene = target.SceneMs.Order().ToArray();
@@ -475,6 +486,11 @@ public sealed partial class PaintPerfApplication : Application
         target.MemoryPressureLast = Map.Core.Resources.WorkingMemoryBudget.Shared.IsUnderPressure;
         target.SystemAvailableMiBLast = Map.Core.Resources.WorkingMemoryBudget.Shared.Snapshot.AvailableBytes / (1024 * 1024);
         _report.Routes.Add(target);
+        // Cold-start attribution: JIT time and methods compiled, all threads, during the route.
+        var jitMs = (System.Runtime.JitInfo.GetCompilationTime() - _jitTime).TotalMilliseconds;
+        var jitMethods = System.Runtime.JitInfo.GetCompiledMethodCount() - _jitMethods;
+        if (jitMethods > 0) target.SlowRefinementFrames.Add($"jit {jitMs:0} ms / {jitMethods} methods");
+        if (jitMs >= 5) Console.WriteLine($"    {target.Name} jit={jitMs:0} ms methods={jitMethods}");
         var handler = target.GpuFlushMs.Count == 3 ? $" handler P50/P95/max={target.GpuFlushMs[0]:0.0}/{target.GpuFlushMs[1]:0.0}/{target.GpuFlushMs[2]:0.0}" : "";
         if (System.Environment.GetEnvironmentVariable("MAP_MEASURE_GPU_FLUSH") == "1") handler += $" gpuFlushLast={Map.App.Controls.MapCanvasControl.LastFrameGpuFlushMilliseconds:0.0}";
         Console.WriteLine($"{target.Name}: steps={target.Steps} frames={target.FramesRendered} fps={target.Fps:0.0} " +
