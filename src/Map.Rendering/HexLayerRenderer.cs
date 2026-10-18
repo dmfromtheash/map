@@ -11,38 +11,77 @@ namespace Map.Rendering;
 /// <param name="Erase">Outlined as an eraser instead of a placement.</param>
 public sealed record HexCursorPreview(LayerId LayerId, IReadOnlyList<HexCoord> Hexes, bool Erase = false);
 
+/// <summary>Which picture of a chunk is kept: the far look, the ground with its transitions, or what stands on it.</summary>
+public enum HexLook
+{
+    /// <summary>Flat average colours, far away.</summary>
+    Flat,
+
+    /// <summary>Terrain tiles, transitions, coasts and region tints.</summary>
+    Terrain,
+
+    /// <summary>Features, living-terrain icons and region frontiers, drawn over the paths.</summary>
+    Features,
+}
+
+/// <summary>
+/// What the hex workshop shows over a hex layer while a tool works: the selection, a paste that
+/// follows the pointer, a path being drawn, a measured route, the hex whose key is open.
+/// </summary>
+public sealed record HexOverlay(LayerId LayerId)
+{
+    public IReadOnlyCollection<HexCoord> Selection { get; init; } = [];
+
+    /// <summary>Cells a paste would write, at their board positions (null cells are holes).</summary>
+    public IReadOnlyDictionary<HexCoord, HexCell?>? Ghost { get; init; }
+
+    public HexPath? PathPreview { get; init; }
+
+    public IReadOnlyList<HexCoord>? Route { get; init; }
+
+    public string? RouteLabel { get; init; }
+
+    public HexCoord? Focus { get; init; }
+}
+
 /// <summary>
 /// Kept pictures of hex chunks. A chunk is drawn once into an image at a power-of-two scale and
-/// redrawn only when that chunk itself changes: chunks are immutable and shared between snapshots,
-/// so the chunk object is the key, and an edit invalidates exactly the chunks it copied. The far
-/// look (flat colours) and the painted look are kept separately.
+/// redrawn only when that chunk itself changes - or, for the ground and feature looks, one of its
+/// eight neighbours or the layer's regions: transitions, coasts and frontiers read the neighbours.
+/// Chunks are immutable and shared between snapshots, so the chunk object is the key, and an edit
+/// invalidates exactly the chunks it copied and the pictures around them.
 /// </summary>
 public sealed class HexChunkCache : IDisposable
 {
     /// <summary>Video memory the kept chunk images may hold.</summary>
     public const long BudgetBytes = 192L * 1024 * 1024;
 
-    /// <summary>A chunk image larger than this on a side is not kept; the hexes are drawn directly.</summary>
-    public const int MaxImageSide = 2048;
+    /// <summary>
+    /// A chunk image larger than this on a side is not kept; the hexes are drawn directly. A chunk
+    /// picture carries room for tall tiles above its top row, so a 64-unit hex chunk at level 0 is
+    /// just over 2048 pixels high.
+    /// </summary>
+    public const int MaxImageSide = 2560;
 
-    private readonly Dictionary<(HexChunk Chunk, HexOrientation Orientation, int Level, bool Flat), Entry> _entries = new(new KeyComparer());
+    private readonly Dictionary<(HexChunk Chunk, HexOrientation Orientation, int Level, HexLook Look), Entry> _entries = new(new KeyComparer());
     private long _bytes;
     private long _clock;
 
-    private sealed class Entry(SKImage image, long bytes)
+    private sealed class Entry(SKImage image, long bytes, HexChunkContext? context)
     {
         public SKImage Image { get; } = image;
         public long Bytes { get; } = bytes;
+        public HexChunkContext? Context { get; } = context;
         public long LastUse { get; set; }
     }
 
-    private sealed class KeyComparer : IEqualityComparer<(HexChunk Chunk, HexOrientation Orientation, int Level, bool Flat)>
+    private sealed class KeyComparer : IEqualityComparer<(HexChunk Chunk, HexOrientation Orientation, int Level, HexLook Look)>
     {
-        public bool Equals((HexChunk Chunk, HexOrientation Orientation, int Level, bool Flat) x, (HexChunk Chunk, HexOrientation Orientation, int Level, bool Flat) y) =>
-            ReferenceEquals(x.Chunk, y.Chunk) && x.Orientation == y.Orientation && x.Level == y.Level && x.Flat == y.Flat;
+        public bool Equals((HexChunk Chunk, HexOrientation Orientation, int Level, HexLook Look) x, (HexChunk Chunk, HexOrientation Orientation, int Level, HexLook Look) y) =>
+            ReferenceEquals(x.Chunk, y.Chunk) && x.Orientation == y.Orientation && x.Level == y.Level && x.Look == y.Look;
 
-        public int GetHashCode((HexChunk Chunk, HexOrientation Orientation, int Level, bool Flat) key) =>
-            HashCode.Combine(RuntimeHelpers.GetHashCode(key.Chunk), key.Orientation, key.Level, key.Flat);
+        public int GetHashCode((HexChunk Chunk, HexOrientation Orientation, int Level, HexLook Look) key) =>
+            HashCode.Combine(RuntimeHelpers.GetHashCode(key.Chunk), key.Orientation, key.Level, key.Look);
     }
 
     private (object Key, SKImage Image)? _gridTile;
@@ -62,6 +101,10 @@ public sealed class HexChunkCache : IDisposable
 
     private readonly Dictionary<(LayerId Layer, HexOrientation Orientation, int X, int Y, int Span, int Level), FlatBlock> _blocks = [];
     private long _blockBytes;
+
+    // Fog outlines of chunks nobody painted (one per layout and position) and of painted chunks.
+    private readonly Dictionary<(HexLayout Layout, int Columns, int Rows, HexChunkKey Key), SKPath> _emptyFog = [];
+    private readonly ConditionalWeakTable<HexChunk, Tuple<HexLayout, int, int, SKPath>> _fog = new();
 
     internal FlatBlock? Block((LayerId Layer, HexOrientation Orientation, int X, int Y, int Span, int Level) key)
     {
@@ -95,6 +138,9 @@ public sealed class HexChunkCache : IDisposable
 
     public long Bytes => _bytes;
 
+    /// <summary>Chunk pictures drawn since the cache was made (kept ones are not counted again).</summary>
+    public long Built { get; private set; }
+
     /// <summary>The one kept tile of the repeating grid pattern (a grid rarely changes style or level).</summary>
     internal SKImage GridTile(object key, Func<SKImage> draw)
     {
@@ -105,40 +151,45 @@ public sealed class HexChunkCache : IDisposable
         return image;
     }
 
-    internal SKImage? TryGet(HexChunk chunk, HexOrientation orientation, int level, bool flat)
+    /// <summary>The kept picture drawn for exactly these neighbours and this style (any, for a null context), or null.</summary>
+    internal SKImage? TryGet(HexChunk chunk, HexOrientation orientation, int level, HexLook look, HexChunkContext? context)
     {
-        if (!_entries.TryGetValue((chunk, orientation, level, flat), out var entry)) return null;
+        if (!_entries.TryGetValue((chunk, orientation, level, look), out var entry)) return null;
+        if (context is not null && !context.Matches(entry.Context)) return null;
         entry.LastUse = ++_clock;
         return entry.Image;
     }
 
-    /// <summary>A kept image of the chunk at the nearest other level (either look), to stand in while the right one is drawn.</summary>
-    internal (SKImage Image, int Level)? NearestOther(HexChunk chunk, HexOrientation orientation, int level, bool flat)
+    /// <summary>
+    /// A kept picture of the chunk to stand in while the right one is drawn: the same level drawn
+    /// with older neighbours first, then the nearest other level of the same look.
+    /// </summary>
+    internal (SKImage Image, int Level)? StandIn(HexChunk chunk, HexOrientation orientation, int level, HexLook look)
     {
-        if (TryGet(chunk, orientation, level, !flat) is { } look) return (look, level);
+        if (TryGet(chunk, orientation, level, look, null) is { } stale) return (stale, level);
         for (var distance = 1; distance <= 8; distance++)
         {
             foreach (var candidate in (ReadOnlySpan<int>)[level - distance, level + distance])
             {
-                if (TryGet(chunk, orientation, candidate, flat) is { } same) return (same, candidate);
-                if (TryGet(chunk, orientation, candidate, !flat) is { } other) return (other, candidate);
+                if (TryGet(chunk, orientation, candidate, look, null) is { } kept) return (kept, candidate);
             }
         }
 
         return null;
     }
 
-    internal void Add(HexChunk chunk, HexOrientation orientation, int level, bool flat, SKImage image)
+    internal void Add(HexChunk chunk, HexOrientation orientation, int level, HexLook look, SKImage image, HexChunkContext? context)
     {
         var bytes = (long)image.Width * image.Height * 4;
-        if (_entries.Remove((chunk, orientation, level, flat), out var old))
+        if (_entries.Remove((chunk, orientation, level, look), out var old))
         {
             _bytes -= old.Bytes;
             old.Image.Dispose();
         }
 
-        _entries[(chunk, orientation, level, flat)] = new Entry(image, bytes) { LastUse = ++_clock };
+        _entries[(chunk, orientation, level, look)] = new Entry(image, bytes, context) { LastUse = ++_clock };
         _bytes += bytes;
+        Built++;
         if (_bytes <= BudgetBytes) return;
 
         // Over budget: drop the least recently used quarter at once instead of scanning per image.
@@ -152,6 +203,32 @@ public sealed class HexChunkCache : IDisposable
         }
     }
 
+    /// <summary>The outline of every hex of a chunk that the players have not seen.</summary>
+    internal SKPath FogPath(HexBoard board, HexChunkKey key, HexChunk? chunk)
+    {
+        if (chunk is null)
+        {
+            var emptyKey = (board.Layout, board.Columns, board.Rows, key);
+            if (_emptyFog.TryGetValue(emptyKey, out var empty)) return empty;
+            if (_emptyFog.Count > 4096)
+            {
+                foreach (var path in _emptyFog.Values) path.Dispose();
+                _emptyFog.Clear();
+            }
+
+            return _emptyFog[emptyKey] = HexLayerRenderer.BuildFogPath(board, key, null);
+        }
+
+        if (_fog.TryGetValue(chunk, out var kept) && kept.Item1 == board.Layout && kept.Item2 == board.Columns && kept.Item3 == board.Rows)
+        {
+            return kept.Item4;
+        }
+
+        var built = HexLayerRenderer.BuildFogPath(board, key, chunk);
+        _fog.AddOrUpdate(chunk, Tuple.Create(board.Layout, board.Columns, board.Rows, built));
+        return built;
+    }
+
     public void Clear()
     {
         foreach (var entry in _entries.Values) entry.Image.Dispose();
@@ -162,19 +239,63 @@ public sealed class HexChunkCache : IDisposable
         foreach (var block in _blocks.Values) block.Image.Dispose();
         _blocks.Clear();
         _blockBytes = 0;
+        foreach (var path in _emptyFog.Values) path.Dispose();
+        _emptyFog.Clear();
+        _fog.Clear();
     }
 
     public void Dispose() => Clear();
 }
 
 /// <summary>
-/// Draws a hex layer: terrain tiles, feature tiles, the grid and the numbers. Rows are drawn top
-/// to bottom so a feature never hides under the row in front of it. Far away a hex is its tile's
-/// average colour; at any other distance it is the painted tile. With a <see cref="HexChunkCache"/>
-/// both looks are kept per chunk, and a frame draws only as many new chunk images as its budget
-/// allows: the others stand in from a neighbouring level and follow in the next frames.
+/// What a kept chunk picture depended on besides the chunk: its eight neighbour chunks (by
+/// reference) and the style it was drawn with. A picture is current while both are the same.
 /// </summary>
-public static class HexLayerRenderer
+internal sealed class HexChunkContext(HexChunk?[] neighbours, object? style)
+{
+    private readonly HexChunk?[] _neighbours = neighbours;
+    private readonly object? _style = style;
+
+    public bool Matches(HexChunkContext? other)
+    {
+        if (other is null || !Equals(_style, other._style)) return false;
+        for (var i = 0; i < _neighbours.Length; i++)
+        {
+            if (!ReferenceEquals(_neighbours[i], other._neighbours[i])) return false;
+        }
+
+        return true;
+    }
+
+    public static HexChunkContext For(HexBoard board, HexChunkKey key, object? style)
+    {
+        var neighbours = new HexChunk?[8];
+        var i = 0;
+        for (var dy = -1; dy <= 1; dy++)
+        {
+            for (var dx = -1; dx <= 1; dx++)
+            {
+                if (dx == 0 && dy == 0) continue;
+                var x = key.X + dx;
+                var y = key.Y + dy;
+                neighbours[i++] = x < 0 || y < 0 ? null : board.Chunk(new HexChunkKey(x, y));
+            }
+        }
+
+        return new HexChunkContext(neighbours, style);
+    }
+}
+
+/// <summary>
+/// Draws a hex layer. Order: the board's backdrop, the ground of every hex (terrain tiles with
+/// their transitions, coasts and region tints), rivers, roads and borders, then everything that
+/// stands on the ground (features, living-terrain icons, region frontiers), the grid, the hex key,
+/// the fog of war and the tool overlays. Rows are drawn top to bottom so a tall tile or a feature
+/// never hides under the row in front of it. Far away a hex is its tile's average colour. With a
+/// <see cref="HexChunkCache"/> both chunk looks are kept, and a frame draws only as many new chunk
+/// images as its budget allows: the others stand in and follow in the next frames.
+/// </summary>
+public static partial class HexLayerRenderer
 {
     /// <summary>Below this many screen pixels per hex the tile is drawn as its average colour.</summary>
     public const double FlatColourBelowPixels = 10;
@@ -200,58 +321,51 @@ public static class HexLayerRenderer
 
     private static readonly ConditionalWeakTable<HexChunk, StrongBox<SKColor>> ChunkAverages = new();
 
+    /// <summary>Draws a hex layer with the editor's or the export's options.</summary>
+    public static void Draw(SKCanvas canvas, HexLayer layer, WorldBounds view, RenderOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        Draw(canvas, layer, view, options.ViewScale, options.HexChunks, options.GpuContext,
+            options.HexPlayerView ? null : options.HexCursor, options.IsExport, options.RequestRefinedFrame,
+            options.Stats, options.HexGestureLive, options.HexPlayerView,
+            options.HexPlayerView ? null : options.HexOverlay);
+    }
+
     /// <param name="requestFrame">Asks for another frame when some chunk images are still to be drawn.</param>
     /// <param name="stats">Counts the chunks that stood in this frame.</param>
+    /// <param name="player">The players' view: fog is opaque and only what the players may read is shown.</param>
     public static void Draw(SKCanvas canvas, HexLayer layer, WorldBounds view, double viewScale,
         HexChunkCache? cache, GRContext? gpu, HexCursorPreview? cursor, bool isExport,
-        Action? requestFrame = null, RenderStats? stats = null, bool live = false)
+        Action? requestFrame = null, RenderStats? stats = null, bool live = false, bool player = false,
+        HexOverlay? overlay = null)
     {
         var board = layer.Board;
         var hexPixels = board.Layout.HexWidth * viewScale;
         var flat = hexPixels < FlatColourBelowPixels && !isExport;
-        var started = System.Diagnostics.Stopwatch.GetTimestamp();
-        var built = 0;
-        var pending = 0;
+        var budget = new BuildBudget(System.Diagnostics.Stopwatch.GetTimestamp());
+        if (!isExport) DrawBackdrop(canvas, layer, viewScale, hexPixels);
+
+        // A chunk below the view can still hang into it: tall tiles rise over the rows behind.
+        var reach = new WorldBounds(view.Left, view.Top, view.Right,
+            view.Bottom + (HexStarterTiles.MaxOverhang + 0.2) * board.Layout.HexHeight);
         if (flat && cache is not null)
         {
-            DrawFlatBlocks(canvas, layer, view, viewScale, cache, started, ref pending);
+            DrawFlatBlocks(canvas, layer, view, viewScale, cache, ref budget);
         }
-        else foreach (var key in board.ChunksIn(view))
+        else
         {
-            var chunk = board.Chunk(key);
-            if (chunk is null) continue;
-            if (cache is not null && !isExport)
-            {
-                // During a drag a chunk changes on every move: drawing its hexes directly is cheaper
-                // than a new image (a GPU surface) per move; the image is made once the drag ends.
-                var mayBuild = !live && (built == 0
-                    || System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds < BuildBudgetMilliseconds);
-                if (live && !flat && cache.TryGet(chunk, board.Orientation, LevelFor(viewScale), flat: false) is null)
-                {
-                    DrawChunkTiles(canvas, board, key, chunk, view, viewScale);
-                    continue;
-                }
-
-                switch (TryDrawCached(canvas, board, key, chunk, viewScale, cache, gpu, flat, mayBuild))
-                {
-                    case CachedDraw.Kept:
-                        continue;
-                    case CachedDraw.Built:
-                        built++;
-                        continue;
-                    case CachedDraw.Deferred:
-                        pending++;
-                        continue;
-                }
-            }
-
-            if (flat) DrawChunkFlat(canvas, board, key, chunk);
-            else DrawChunkTiles(canvas, board, key, chunk, view, viewScale);
+            DrawPass(canvas, layer, flat ? HexLook.Flat : HexLook.Terrain, flat ? view : reach, viewScale, cache, gpu, isExport, live, ref budget);
         }
 
-        if (pending > 0)
+        DrawPaths(canvas, layer, view, viewScale, hexPixels);
+        if (!flat)
         {
-            if (stats is not null) stats.HexChunksPending += pending;
+            DrawPass(canvas, layer, HexLook.Features, reach, viewScale, cache, gpu, isExport, live, ref budget);
+        }
+
+        if (budget.Pending > 0)
+        {
+            if (stats is not null) stats.HexChunksPending += budget.Pending;
             requestFrame?.Invoke();
         }
 
@@ -263,14 +377,122 @@ public static class HexLayerRenderer
             }
         }
 
+        DrawNotes(canvas, layer, view, viewScale, hexPixels, player, overlay?.Focus);
+        DrawFog(canvas, layer, view, cache, player);
+
+        if (overlay is not null && overlay.LayerId == layer.Id)
+        {
+            DrawOverlay(canvas, layer, overlay, viewScale);
+        }
+
         if (cursor is not null && cursor.LayerId == layer.Id && cursor.Hexes.Count > 0)
         {
-            DrawCursor(canvas, board, cursor, viewScale);
+            DrawHexSet(canvas, board, cursor.Hexes, viewScale,
+                cursor.Erase ? new SKColor(0xC8, 0x30, 0x30, 44) : new SKColor(0xF0, 0xC0, 0x50, 44),
+                cursor.Erase ? new SKColor(0xF0, 0x70, 0x60) : new SKColor(0xF4, 0xD0, 0x70));
+        }
+    }
+
+    /// <summary>How many chunk images a frame built, how many it left for later, and when it started.</summary>
+    private struct BuildBudget(long started)
+    {
+        public long Started = started;
+        public int Built;
+        public int Pending;
+
+        /// <summary>Images built by the current pass: every pass may build one even over the budget, so it never starves.</summary>
+        public int PassBuilt;
+
+        public readonly bool MayBuild => PassBuilt == 0
+            || System.Diagnostics.Stopwatch.GetElapsedTime(Started).TotalMilliseconds < BuildBudgetMilliseconds;
+    }
+
+    /// <summary>
+    /// The board's extent, faint, with its frame: an empty board, or one seen from too far for
+    /// its grid, is still visible as the area hexes go on.
+    /// </summary>
+    private static void DrawBackdrop(SKCanvas canvas, HexLayer layer, double viewScale, double hexPixels)
+    {
+        if (layer.Grid.Visible && hexPixels >= GridBelowPixels && layer.Grid.ShowEmpty) return;
+        var rect = BoardRect(layer.Board);
+        var color = ParseColor(layer.Grid.Color);
+        using var fill = new SKPaint { Color = color.WithAlpha((byte)Math.Min(40, color.Alpha / 3 + 8)) };
+        canvas.DrawRect(rect, fill);
+        using var frame = new SKPaint
+        {
+            IsAntialias = true, Style = SKPaintStyle.Stroke, Color = color.WithAlpha((byte)Math.Min(255, color.Alpha * 2)),
+            StrokeWidth = (float)(1.2 / Math.Max(viewScale, 1e-6)),
+        };
+        canvas.DrawRect(rect, frame);
+    }
+
+    /// <summary>The bounding box of the whole board.</summary>
+    public static SKRect BoardRect(HexBoard board)
+    {
+        var left = board.Layout.OriginX - board.Layout.HexWidth / 2;
+        var top = board.Layout.OriginY - board.Layout.HexHeight / 2;
+        return new SKRect((float)left, (float)top, (float)(left + board.PixelWidth), (float)(top + board.PixelHeight));
+    }
+
+    private static void DrawPass(SKCanvas canvas, HexLayer layer, HexLook look, WorldBounds view, double viewScale,
+        HexChunkCache? cache, GRContext? gpu, bool isExport, bool live, ref BuildBudget budget)
+    {
+        var board = layer.Board;
+        budget.PassBuilt = 0;
+        foreach (var key in board.ChunksIn(view))
+        {
+            var chunk = board.Chunk(key);
+            if (chunk is null) continue;
+            if (look == HexLook.Features && !Info(chunk).NeedsFeatures) continue;
+            if (cache is not null && !isExport)
+            {
+                var context = look == HexLook.Flat ? null : HexChunkContext.For(board, key, layer.Regions);
+                // During a drag a chunk changes on every move: drawing its hexes directly is cheaper
+                // than a new image (a GPU surface) per move; the image is made once the drag ends.
+                if (live && look != HexLook.Flat
+                    && cache.TryGet(chunk, board.Orientation, LevelFor(viewScale), look, context) is null)
+                {
+                    DrawChunk(canvas, layer, key, chunk, look, view, viewScale);
+                    continue;
+                }
+
+                switch (TryDrawCached(canvas, layer, key, chunk, look, viewScale, cache, gpu, context, budget.MayBuild && !live))
+                {
+                    case CachedDraw.Kept:
+                        continue;
+                    case CachedDraw.Built:
+                        budget.Built++;
+                        budget.PassBuilt++;
+                        continue;
+                    case CachedDraw.Deferred:
+                        budget.Pending++;
+                        continue;
+                }
+            }
+
+            DrawChunk(canvas, layer, key, chunk, look, isExport ? null : view, viewScale);
+        }
+    }
+
+    private static void DrawChunk(SKCanvas canvas, HexLayer layer, HexChunkKey key, HexChunk chunk, HexLook look, WorldBounds? clip, double pixelScale)
+    {
+        switch (look)
+        {
+            case HexLook.Flat:
+                DrawChunkFlat(canvas, layer.Board, key, chunk);
+                break;
+            case HexLook.Terrain:
+                DrawChunkGround(canvas, layer, key, chunk, clip, pixelScale);
+                break;
+            default:
+                DrawChunkFeatures(canvas, layer, key, chunk, clip, pixelScale);
+                break;
         }
     }
 
     /// <summary>Draws one tile picture into a hex; used by the canvas and by the palette thumbnails.</summary>
-    public static void DrawTile(SKCanvas canvas, HexLayout layout, HexCoord hex, string tileId, int variant, float bleed = 0)
+    /// <param name="rotation">The picture turned by this many 60° steps clockwise.</param>
+    public static void DrawTile(SKCanvas canvas, HexLayout layout, HexCoord hex, string tileId, int variant, float bleed = 0, int rotation = 0)
     {
         var image = HexTileArt.Image(tileId, variant, layout.Orientation);
         if (image is null)
@@ -280,8 +502,21 @@ public static class HexLayerRenderer
         }
 
         var bounds = layout.Bounds(hex);
-        var rect = new SKRect((float)bounds.Left - bleed, (float)bounds.Top - bleed, (float)bounds.Right + bleed, (float)bounds.Bottom + bleed);
+        // A tall picture is the hex picture plus room above it: the hex sits at its bottom.
+        var hexPixels = HexTileArt.PixelSize(layout.Orientation).Height;
+        var above = (image.Height - hexPixels) * (bounds.Bottom - bounds.Top) / hexPixels;
+        var rect = new SKRect((float)bounds.Left - bleed, (float)(bounds.Top - above) - bleed, (float)bounds.Right + bleed, (float)bounds.Bottom + bleed);
+        if (rotation % 6 == 0 || above > 0)
+        {
+            canvas.DrawImage(image, rect, Sampling);
+            return;
+        }
+
+        var (cx, cy) = layout.Center(hex);
+        canvas.Save();
+        canvas.RotateDegrees(60 * (rotation % 6), (float)cx, (float)cy);
         canvas.DrawImage(image, rect, Sampling);
+        canvas.Restore();
     }
 
     private static void DrawMissing(SKCanvas canvas, HexLayout layout, HexCoord hex)
@@ -291,25 +526,47 @@ public static class HexLayerRenderer
         canvas.DrawPath(path, fill);
     }
 
-    private static void DrawChunkTiles(SKCanvas canvas, HexBoard board, HexChunkKey key, HexChunk chunk, WorldBounds? clip, double pixelScale)
+    /// <summary>The order hexes are drawn in: row by row, and on flat boards the higher (even) columns of a row first.</summary>
+    private static IEnumerable<(int Column, int Row)> DrawOrder(HexBoard board)
     {
+        var flat = board.Orientation == HexOrientation.Flat;
+        for (var row = 0; row < HexBoard.ChunkSize; row++)
+        {
+            if (!flat)
+            {
+                for (var column = 0; column < HexBoard.ChunkSize; column++) yield return (column, row);
+                continue;
+            }
+
+            for (var parity = 0; parity < 2; parity++)
+            {
+                for (var column = parity; column < HexBoard.ChunkSize; column += 2) yield return (column, row);
+            }
+        }
+    }
+
+    private static void DrawChunkGround(SKCanvas canvas, HexLayer layer, HexChunkKey key, HexChunk chunk, WorldBounds? clip, double pixelScale)
+    {
+        var board = layer.Board;
         // Terrain overlaps its neighbours by a hair, at least one pixel of the target, so antialiased
         // edges never show the page between hexes - also where two kept chunk images meet.
         var bleed = (float)Math.Min(board.Layout.Size * 0.1, Math.Max(board.Layout.Size * 0.012, 2.0 / Math.Max(pixelScale, 1e-6)));
-        for (var pass = 0; pass < 2; pass++)
+        var detail = board.Layout.Size * pixelScale;
+        foreach (var (column, row) in DrawOrder(board))
         {
-            for (var row = 0; row < HexBoard.ChunkSize; row++)
-            {
-                for (var column = 0; column < HexBoard.ChunkSize; column++)
-                {
-                    if (chunk[column, row] is not { } cell) continue;
-                    var hex = board.CoordOf(key, column, row);
-                    if (clip is { } view && !Intersects(board.Layout.Bounds(hex), view)) continue;
-                    if (pass == 0) DrawTile(canvas, board.Layout, hex, cell.Terrain, cell.Variant, bleed);
-                    else if (cell.Feature is { } feature) DrawTile(canvas, board.Layout, hex, feature, cell.FeatureVariant);
-                }
-            }
+            if (chunk[column, row] is not { } cell) continue;
+            var hex = board.CoordOf(key, column, row);
+            if (clip is { } view && !Intersects(TallBounds(board.Layout, hex), view)) continue;
+            DrawTile(canvas, board.Layout, hex, cell.Terrain, cell.Variant, bleed, cell.Rotation);
+            if (detail >= 4) DrawTransitions(canvas, board, hex, cell, detail);
+            if (cell.Region != 0 && layer.Region(cell.Region) is { } region) TintHex(canvas, board.Layout, hex, region.Color);
         }
+    }
+
+    private static WorldBounds TallBounds(HexLayout layout, HexCoord hex)
+    {
+        var bounds = layout.Bounds(hex);
+        return bounds with { Top = bounds.Top - HexStarterTiles.MaxOverhang * layout.HexHeight };
     }
 
     private static void DrawChunkFlat(SKCanvas canvas, HexBoard board, HexChunkKey key, HexChunk chunk)
@@ -318,13 +575,15 @@ public static class HexLayerRenderer
         var paths = new Dictionary<SKColor, SKPath>();
         var corners = new SKPoint[6];
         const double grow = 1.04;
+        SKPath? marks = null;
+        var markColors = new Dictionary<SKColor, SKPath>();
         for (var row = 0; row < HexBoard.ChunkSize; row++)
         {
             for (var column = 0; column < HexBoard.ChunkSize; column++)
             {
                 if (chunk[column, row] is not { } cell) continue;
                 var hex = board.CoordOf(key, column, row);
-                var color = AverageOf(cell);
+                var color = AverageOf(cell.Terrain);
                 if (!paths.TryGetValue(color, out var path)) paths[color] = path = new SKPath();
                 var (cx, cy) = board.Layout.Center(hex);
                 for (var i = 0; i < 6; i++)
@@ -334,6 +593,15 @@ public static class HexLayerRenderer
                 }
 
                 path.AddPoly(corners, close: true);
+                if (cell.Feature is { } feature)
+                {
+                    // Far away a settlement stays visible: a dark-rimmed dot of its colour on the hex.
+                    var markColor = AverageOf(feature);
+                    if (!markColors.TryGetValue(markColor, out var mark)) markColors[markColor] = mark = new SKPath();
+                    mark.AddCircle((float)cx, (float)cy, (float)(board.Layout.Size * 0.42));
+                    marks ??= new SKPath();
+                    marks.AddCircle((float)cx, (float)cy, (float)(board.Layout.Size * 0.56));
+                }
             }
         }
 
@@ -344,11 +612,24 @@ public static class HexLayerRenderer
             canvas.DrawPath(path, paint);
             path.Dispose();
         }
+
+        if (marks is null) return;
+        using var rim = new SKPaint { IsAntialias = true, Color = new SKColor(0x20, 0x18, 0x10, 230) };
+        canvas.DrawPath(marks, rim);
+        marks.Dispose();
+        using var dot = new SKPaint { IsAntialias = true };
+        foreach (var (color, path) in markColors)
+        {
+            dot.Color = Lighten(color);
+            canvas.DrawPath(path, dot);
+            path.Dispose();
+        }
     }
 
-    private static SKColor AverageOf(HexCell cell) =>
-        (HexStarterTiles.Find(cell.Feature ?? cell.Terrain) ?? HexStarterTiles.Find(cell.Terrain))?.Average
-        ?? new SKColor(0xD0, 0x40, 0xA0);
+    private static SKColor Lighten(SKColor color) => new(
+        (byte)Math.Min(255, color.Red + 50), (byte)Math.Min(255, color.Green + 40), (byte)Math.Min(255, color.Blue + 30));
+
+    private static SKColor AverageOf(string tileId) => HexStarterTiles.Find(tileId)?.Average ?? new SKColor(0xD0, 0x40, 0xA0);
 
     /// <summary>The colour of a whole chunk seen from very far: the mean of its hexes' colours.</summary>
     private static SKColor ChunkAverage(HexChunk chunk) => ChunkAverages.GetValue(chunk, static c =>
@@ -359,13 +640,36 @@ public static class HexLayerRenderer
             for (var column = 0; column < HexBoard.ChunkSize; column++)
             {
                 if (c[column, row] is not { } cell) continue;
-                var color = AverageOf(cell);
+                var color = AverageOf(cell.Terrain);
                 r += color.Red; g += color.Green; b += color.Blue; n++;
             }
         }
 
         return new StrongBox<SKColor>(n == 0 ? SKColors.Transparent : new SKColor((byte)(r / n), (byte)(g / n), (byte)(b / n)));
     }).Value;
+
+    /// <summary>What a chunk holds besides terrain, counted once per chunk object.</summary>
+    internal sealed record ChunkInfo(bool NeedsFeatures, int Revealed);
+
+    private static readonly ConditionalWeakTable<HexChunk, ChunkInfo> ChunkInfos = new();
+
+    internal static ChunkInfo Info(HexChunk chunk) => ChunkInfos.GetValue(chunk, static c =>
+    {
+        var needs = false;
+        var revealed = 0;
+        for (var row = 0; row < HexBoard.ChunkSize; row++)
+        {
+            for (var column = 0; column < HexBoard.ChunkSize; column++)
+            {
+                if (c[column, row] is not { } cell) continue;
+                if (cell.Revealed) revealed++;
+                needs |= cell.Feature is not null || cell.Region != 0
+                    || HexStarterTiles.Find(cell.Terrain)?.Dynamic is { } kind && kind != HexDynamicIcon.None;
+            }
+        }
+
+        return new ChunkInfo(needs, revealed);
+    });
 
     private enum CachedDraw { Direct, Kept, Built, Deferred }
 
@@ -377,7 +681,7 @@ public static class HexLayerRenderer
     /// into view. A block whose chunks changed keeps showing its old picture until it is redrawn.
     /// </summary>
     private static void DrawFlatBlocks(SKCanvas canvas, HexLayer layer, WorldBounds view, double viewScale,
-        HexChunkCache cache, long started, ref int pending)
+        HexChunkCache cache, ref BuildBudget budget)
     {
         var board = layer.Board;
         var level = LevelFor(viewScale);
@@ -395,7 +699,6 @@ public static class HexLayerRenderer
         if (maxX < 0) return;
         var lastChunkX = (board.Columns - 1) / HexBoard.ChunkSize;
         var lastChunkY = (board.Rows - 1) / HexBoard.ChunkSize;
-        var built = 0;
         for (var by = minY / span; by <= maxY / span; by++)
         {
             for (var bx = minX / span; bx <= maxX / span; bx++)
@@ -423,7 +726,7 @@ public static class HexLayerRenderer
                 var kept = cache.Block(blockKey);
                 if (kept is not null && kept.Layout != board.Layout) kept = null;
                 var current = kept is not null && kept.Chunks.AsSpan().SequenceEqual(chunks, ReferenceComparer.Instance);
-                if (!current && (built == 0 || System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds < BuildBudgetMilliseconds))
+                if (!current && budget.MayBuild)
                 {
                     var topLeft = board.ChunkBounds(new HexChunkKey(bx * span, by * span));
                     var bottomRight = board.ChunkBounds(new HexChunkKey(Math.Min(bx * span + span - 1, lastChunkX), Math.Min(by * span + span - 1, lastChunkY)));
@@ -450,7 +753,8 @@ public static class HexLayerRenderer
 
                         kept = new HexChunkCache.FlatBlock(chunks, board.Layout, bounds, surface.Snapshot());
                         cache.PutBlock(blockKey, kept);
-                        built++;
+                        budget.Built++;
+                        budget.PassBuilt++;
                         current = true;
                     }
                 }
@@ -475,7 +779,7 @@ public static class HexLayerRenderer
                     }
                 }
 
-                if (!current) pending++;
+                if (!current) budget.Pending++;
             }
         }
     }
@@ -489,13 +793,37 @@ public static class HexLayerRenderer
         public int GetHashCode(HexChunk? obj) => RuntimeHelpers.GetHashCode(obj);
     }
 
-    private static CachedDraw TryDrawCached(SKCanvas canvas, HexBoard board, HexChunkKey key, HexChunk chunk,
-        double viewScale, HexChunkCache cache, GRContext? gpu, bool flat, bool mayBuild)
+    /// <summary>
+    /// The canvas area a chunk picture covers: the chunk's hexes, the room tall tiles need above
+    /// them and a margin for icons and transitions that reach a little past a hex.
+    /// </summary>
+    private static WorldBounds PictureBounds(HexBoard board, HexChunkKey key, HexLook look)
     {
-        // Level n keeps the chunk at scale 2^n: the nearest level at or above the view scale.
-        var level = (int)Math.Ceiling(Math.Log2(Math.Max(viewScale, 1.0 / 1024)));
-        var scale = Math.Pow(2, level);
         var bounds = board.ChunkBounds(key);
+        if (look == HexLook.Flat) return bounds;
+        var layout = board.Layout;
+        return new WorldBounds(
+            bounds.Left - layout.HexWidth * 0.3,
+            bounds.Top - layout.HexHeight * (HexStarterTiles.MaxOverhang + 0.25),
+            bounds.Right + layout.HexWidth * 0.3,
+            bounds.Bottom + layout.HexHeight * 0.15);
+    }
+
+    /// <summary>
+    /// The picture's corner moved onto a whole pixel of its own scale: drawn at that scale its
+    /// pixels then sit on the screen's pixels instead of being resampled half a pixel off.
+    /// </summary>
+    private static WorldBounds Snapped(WorldBounds bounds, double scale) =>
+        bounds with { Left = Math.Floor(bounds.Left * scale) / scale, Top = Math.Floor(bounds.Top * scale) / scale };
+
+    private static CachedDraw TryDrawCached(SKCanvas canvas, HexLayer layer, HexChunkKey key, HexChunk chunk, HexLook look,
+        double viewScale, HexChunkCache cache, GRContext? gpu, HexChunkContext? context, bool mayBuild)
+    {
+        var board = layer.Board;
+        // Level n keeps the chunk at scale 2^n: the nearest level at or above the view scale.
+        var level = LevelFor(viewScale);
+        var scale = Math.Pow(2, level);
+        var bounds = Snapped(PictureBounds(board, key, look), scale);
         var width = (int)Math.Ceiling((bounds.Right - bounds.Left) * scale);
         var height = (int)Math.Ceiling((bounds.Bottom - bounds.Top) * scale);
         if (width <= 0 || height <= 0 || width > HexChunkCache.MaxImageSide || height > HexChunkCache.MaxImageSide)
@@ -503,27 +831,33 @@ public static class HexLayerRenderer
             return CachedDraw.Direct;
         }
 
-        var image = cache.TryGet(chunk, board.Orientation, level, flat);
+        var image = cache.TryGet(chunk, board.Orientation, level, look, context);
         var result = CachedDraw.Kept;
         if (image is null && !mayBuild)
         {
-            if (cache.NearestOther(chunk, board.Orientation, level, flat) is { } other)
+            if (cache.StandIn(chunk, board.Orientation, level, look) is { } other)
             {
+                // Every picture of a look covers the same canvas area, its corner snapped to its own pixels.
                 var otherScale = Math.Pow(2, other.Level);
+                var otherBounds = Snapped(PictureBounds(board, key, look), otherScale);
                 canvas.DrawImage(other.Image,
-                    new SKRect((float)bounds.Left, (float)bounds.Top,
-                        (float)(bounds.Left + other.Image.Width / otherScale), (float)(bounds.Top + other.Image.Height / otherScale)),
+                    new SKRect((float)otherBounds.Left, (float)otherBounds.Top,
+                        (float)(otherBounds.Left + other.Image.Width / otherScale), (float)(otherBounds.Top + other.Image.Height / otherScale)),
                     ChunkSampling);
             }
-            else if (chunk.Count < HexBoard.ChunkSize * HexBoard.ChunkSize * 3 / 4)
+            else if (look == HexLook.Terrain)
             {
-                // A sparse chunk is cheap to draw flat, and a rectangle would paint its empty hexes.
-                DrawChunkFlat(canvas, board, key, chunk);
-            }
-            else
-            {
-                using var paint = new SKPaint { Color = ChunkAverage(chunk) };
-                canvas.DrawRect(new SKRect((float)bounds.Left, (float)bounds.Top, (float)bounds.Right, (float)bounds.Bottom), paint);
+                if (chunk.Count < HexBoard.ChunkSize * HexBoard.ChunkSize * 3 / 4)
+                {
+                    // A sparse chunk is cheap to draw flat, and a rectangle would paint its empty hexes.
+                    DrawChunkFlat(canvas, board, key, chunk);
+                }
+                else
+                {
+                    var flatBounds = board.ChunkBounds(key);
+                    using var paint = new SKPaint { Color = ChunkAverage(chunk) };
+                    canvas.DrawRect(new SKRect((float)flatBounds.Left, (float)flatBounds.Top, (float)flatBounds.Right, (float)flatBounds.Bottom), paint);
+                }
             }
 
             return CachedDraw.Deferred;
@@ -538,11 +872,10 @@ public static class HexLayerRenderer
             target.Clear(SKColors.Transparent);
             target.Scale((float)scale);
             target.Translate((float)-bounds.Left, (float)-bounds.Top);
-            if (flat) DrawChunkFlat(target, board, key, chunk);
-            else DrawChunkTiles(target, board, key, chunk, clip: null, scale);
+            DrawChunk(target, layer, key, chunk, look, clip: null, scale);
             image = surface.Snapshot();
             if (image is null) return CachedDraw.Direct;
-            cache.Add(chunk, board.Orientation, level, flat, image);
+            cache.Add(chunk, board.Orientation, level, look, image, context);
             result = CachedDraw.Built;
         }
 
@@ -697,21 +1030,22 @@ public static class HexLayerRenderer
         return digits == 2 ? column + row : column + "." + row;
     }
 
-    private static void DrawCursor(SKCanvas canvas, HexBoard board, HexCursorPreview cursor, double viewScale)
+    /// <summary>A set of hexes filled and ringed round its outside (cursor, selection).</summary>
+    private static void DrawHexSet(SKCanvas canvas, HexBoard board, IReadOnlyCollection<HexCoord> hexes, double viewScale, SKColor fillColor, SKColor ringColor)
     {
         using var path = new SKPath();
-        foreach (var hex in cursor.Hexes)
+        foreach (var hex in hexes)
         {
             using var outline = HexOutline(board.Layout, hex, 0);
             path.AddPath(outline);
         }
 
-        // The ring goes round the footprint only: the edges between two hexes of it are left out
+        // The ring goes round the set only: the edges between two hexes of it are left out
         // (a footprint of 217 hexes has 1 302 edges, its outline 96), which keeps the stroked
         // outline cheap for the GPU on every pointer move.
-        var inside = cursor.Hexes.ToHashSet();
+        var inside = hexes as IReadOnlySet<HexCoord> ?? hexes.ToHashSet();
         using var border = new SKPath();
-        foreach (var hex in cursor.Hexes)
+        foreach (var hex in hexes)
         {
             var (cx, cy) = board.Layout.Center(hex);
             for (var i = 0; i < 6; i++)
@@ -726,19 +1060,18 @@ public static class HexLayerRenderer
         }
 
         var screen = (float)(1 / Math.Max(viewScale, 1e-6));
-        using var fill = new SKPaint { IsAntialias = true, Color = cursor.Erase ? new SKColor(0xC8, 0x30, 0x30, 44) : new SKColor(0xF0, 0xC0, 0x50, 44) };
+        using var fill = new SKPaint { IsAntialias = true, Color = fillColor };
         using var halo = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeCap = SKStrokeCap.Round, StrokeWidth = 4 * screen, Color = new SKColor(0, 0, 0, 120) };
         using var ring = new SKPaint
         {
-            IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeCap = SKStrokeCap.Round, StrokeWidth = 2 * screen,
-            Color = cursor.Erase ? new SKColor(0xF0, 0x70, 0x60) : new SKColor(0xF4, 0xD0, 0x70),
+            IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeCap = SKStrokeCap.Round, StrokeWidth = 2 * screen, Color = ringColor,
         };
         canvas.DrawPath(path, fill);
         canvas.DrawPath(border, halo);
         canvas.DrawPath(border, ring);
     }
 
-    private static SKPath HexOutline(HexLayout layout, HexCoord hex, double grow)
+    internal static SKPath HexOutline(HexLayout layout, HexCoord hex, double grow)
     {
         var path = new SKPath();
         var (cx, cy) = layout.Center(hex);
@@ -759,6 +1092,6 @@ public static class HexLayerRenderer
     private static bool Intersects(WorldBounds a, WorldBounds b) =>
         a.Left < b.Right && a.Right > b.Left && a.Top < b.Bottom && a.Bottom > b.Top;
 
-    private static SKColor ParseColor(string value) =>
+    internal static SKColor ParseColor(string value) =>
         SKColor.TryParse(value, out var color) ? color : new SKColor(0x20, 0x18, 0x10, 0x66);
 }

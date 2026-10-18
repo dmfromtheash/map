@@ -280,6 +280,21 @@ public sealed class RenderOptions
     /// <summary>A hex drag is running: changed hex chunks are drawn directly, their kept images follow at release.</summary>
     public bool HexGestureLive { get; init; }
 
+    /// <summary>The selection, paste, path, route and open key of the hex workshop tools.</summary>
+    public HexOverlay? HexOverlay { get; init; }
+
+    /// <summary>
+    /// The players' view of a hex map: the fog of war is opaque, only player notes of revealed hexes
+    /// show, and no tool overlays are drawn (the player window and the player export).
+    /// </summary>
+    public bool HexPlayerView { get; init; }
+
+    /// <summary>The level of the world shown (hex layers of other levels are left out); null shows every level.</summary>
+    public int? HexLevel { get; init; }
+
+    /// <summary>With <see cref="HexLevel"/>: this level is also shown, faint, under it (the surface over a dungeon).</summary>
+    public int? HexGhostLevel { get; init; }
+
     /// <summary>
     /// Reuse of the land coverage rivers were already carved out of. Absent (export, tests) the
     /// image is simply built for the frame, exactly as before.
@@ -542,6 +557,13 @@ public static class SceneRenderer
             // replace it: a hidden editor grid with IncludeInExport=true still belongs in export.
             var hiddenOnlyInEditor = options.IsExport && layer is GridLayer;
             if ((!layer.Visible && !hiddenOnlyInEditor) || layer.Opacity <= 0)
+            {
+                continue;
+            }
+
+            // One level of a hex world at a time; another level only as the faint ghost asked for.
+            if (layer is HexLayer { Level: var hexLevel } && options.HexLevel is { } shownLevel
+                && hexLevel != shownLevel && hexLevel != options.HexGhostLevel)
             {
                 continue;
             }
@@ -1747,8 +1769,18 @@ public static class SceneRenderer
                 break;
 
             case HexLayer hexLayer:
-                HexLayerRenderer.Draw(canvas, hexLayer, view, options.ViewScale, options.HexChunks,
-                    options.GpuContext, options.HexCursor, options.IsExport, options.RequestRefinedFrame, options.Stats, options.HexGestureLive);
+                if (options.HexLevel is { } shown && hexLayer.Level != shown)
+                {
+                    // Another level of the world, shown faint under the one being edited.
+                    using var faint = new SKPaint { Color = SKColors.White.WithAlpha(64) };
+                    canvas.SaveLayer(faint);
+                    HexLayerRenderer.Draw(canvas, hexLayer, view, options.ViewScale, null, options.GpuContext, null,
+                        options.IsExport, null, null, false, options.HexPlayerView, null);
+                    canvas.Restore();
+                    break;
+                }
+
+                HexLayerRenderer.Draw(canvas, hexLayer, view, options);
                 break;
 
             case IRasterContentLayer raster:

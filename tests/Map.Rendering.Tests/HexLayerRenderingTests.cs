@@ -138,28 +138,32 @@ public sealed class HexLayerRenderingTests
     }
 
     [Fact]
-    public void A_changed_hex_rebuilds_only_its_own_chunk()
+    public void A_changed_hex_rebuilds_only_its_own_chunk_and_the_pictures_that_touch_it()
     {
         var document = Sample(HexOrientation.Flat, 40, 40);
         using var cache = new HexChunkCache();
         // A frame draws as many new chunk images as its budget allows; the rest follow in the next frames.
         void Settle(MapDocument map)
         {
-            var last = -1;
-            while (cache.Count != last)
+            var last = -1L;
+            while (cache.Built != last)
             {
-                last = cache.Count;
+                last = cache.Built;
                 using (Render(map, 0.25, cache)) { }
             }
         }
 
         Settle(document);
-        var before = cache.Count;
+        var before = cache.Built;
+        Assert.True(before >= 9, $"{before} pictures for 9 chunks");
         var layer = document.Layers.OfType<HexLayer>().Single();
         var hex = layer.Board.Layout.FromOffset(new HexOffset(0, 0));
         var edited = HexPaintCommand.Create("Лес", layer, new Dictionary<HexCoord, HexCell?> { [hex] = new HexCell("starter/snow") })!.Apply(document);
         Settle(edited);
-        Assert.Equal(before + 1, cache.Count);
+        // The corner chunk and at most its three neighbours (transitions read across chunk edges),
+        // each with its ground and what stands on it - never the other five chunks of the 3 × 3 board.
+        var rebuilt = cache.Built - before;
+        Assert.InRange(rebuilt, 1, 8);
     }
 
     /// <summary>
