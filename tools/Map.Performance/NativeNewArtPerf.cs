@@ -211,6 +211,44 @@ public sealed partial class PaintPerfApplication
             }
         }
         await Capture("newart-end");
+        // Memory: the managed heap against the process, and Skia's own CPU caches. With
+        // MAP_HOLD_AT_END=<seconds> the process waits so dotnet-gcdump / dotnet-counters can attach.
+        var gc = GC.GetGCMemoryInfo();
+        _report.Environment["mem/gc-heap-mib"] = (gc.HeapSizeBytes / (1024 * 1024)).ToString();
+        _report.Environment["mem/gc-committed-mib"] = (gc.TotalCommittedBytes / (1024 * 1024)).ToString();
+        _report.Environment["mem/gc-fragmented-mib"] = (gc.FragmentedBytes / (1024 * 1024)).ToString();
+        _report.Environment["mem/skia-raster-cache-mib"] = (SkiaSharp.SKGraphics.GetResourceCacheTotalBytesUsed() / (1024 * 1024)).ToString();
+        _report.Environment["mem/skia-font-cache-mib"] = (SkiaSharp.SKGraphics.GetFontCacheUsed() / (1024 * 1024)).ToString();
+        _report.Environment["mem/object-cache-mib"] = (_view.Canvas.ObjectCacheBytes / (1024 * 1024)).ToString();
+        if (System.Environment.GetEnvironmentVariable("MAP_MEM_SPLIT") == "1")
+        {
+            // What the render caches and stamp images hold: private bytes before and after they are
+            // dropped and the heap is compacted. The rest is the editor, the document, the history,
+            // Avalonia and the graphics driver.
+            static long Private() { using var p = Process.GetCurrentProcess(); p.Refresh(); return p.PrivateMemorySize64 / (1024 * 1024); }
+            GC.Collect(2, GCCollectionMode.Forced, true, true); GC.WaitForPendingFinalizers();
+            var before = Private();
+            _report.Environment["mem/gpu-resource-cache-mib"] = (Map.App.Controls.MapCanvasControl.LastGpuResourceCacheBytes / (1024 * 1024)).ToString();
+            Map.App.Controls.MapCanvasControl.PurgeGpuResourcesOnNextFrame();
+            _view.Canvas.InvalidateVisual(); await Settle(); await Task.Delay(1000);
+            var afterGpu = Private();
+            _report.Environment["mem/private-after-gpu-purge-mib"] = afterGpu.ToString();
+            Console.WriteLine($"MEM private {before} MiB -> {afterGpu} MiB after purging the GPU resource cache ({_report.Environment["mem/gpu-resource-cache-mib"]} MiB held)");
+            _view.Canvas.DisposeRenderCaches();
+            System.Runtime.GCSettings.LargeObjectHeapCompactionMode = System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+            GC.Collect(2, GCCollectionMode.Forced, true, true); GC.WaitForPendingFinalizers();
+            await Task.Delay(1500);
+            var after = Private();
+            _report.Environment["mem/private-before-drop-mib"] = before.ToString();
+            _report.Environment["mem/private-after-drop-mib"] = after.ToString();
+            _report.Environment["mem/gc-heap-after-drop-mib"] = (GC.GetGCMemoryInfo().HeapSizeBytes / (1024 * 1024)).ToString();
+            Console.WriteLine($"MEM private {before} MiB -> {after} MiB after dropping render caches and stamp images");
+        }
+        if (int.TryParse(System.Environment.GetEnvironmentVariable("MAP_HOLD_AT_END"), out var hold) && hold > 0)
+        {
+            Console.WriteLine($"HOLD pid={System.Environment.ProcessId} for {hold} s");
+            await Task.Delay(TimeSpan.FromSeconds(hold));
+        }
         var (ws, pb) = Memory();
         _report.Environment["working-set-mib"] = ws.ToString(); _report.Environment["private-mib"] = pb.ToString();
         _report.Environment["cliff-fields"] = $"computed={Map.Rendering.LandCliffField.Computed} compute={Map.Rendering.LandCliffField.ComputeMilliseconds:0} ms draw={Map.Rendering.LandCliffField.DrawMilliseconds:0} ms";

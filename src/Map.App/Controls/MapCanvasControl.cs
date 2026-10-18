@@ -154,6 +154,13 @@ public sealed partial class MapCanvasControl : Control
 
     private bool CameraMoving => _lastCameraMotion != long.MinValue && Stopwatch.GetElapsedTime(_lastCameraMotion) < CameraSettle;
 
+    /// <summary>Diagnostics: bytes held by the shared GPU context's resource cache at the last frame.</summary>
+    public static long LastGpuResourceCacheBytes { get; private set; }
+    private static int _purgeGpuResources;
+
+    /// <summary>Diagnostics: the next frame frees every GPU resource the context does not need right now.</summary>
+    public static void PurgeGpuResourcesOnNextFrame() => System.Threading.Interlocked.Exchange(ref _purgeGpuResources, 1);
+
     /// <summary>Diagnostic: when MAP_MEASURE_GPU_FLUSH=1 the frame waits for its GPU work and records the wait.</summary>
     private static readonly bool MeasureGpuFlush = Environment.GetEnvironmentVariable("MAP_MEASURE_GPU_FLUSH") == "1";
     public static double LastFrameGpuFlushMilliseconds { get; private set; }
@@ -620,6 +627,12 @@ public sealed partial class MapCanvasControl : Control
                 // cache; active frame resources remain owned by the borrowed lease/driver.
                 if (lease.GrContext is { } gpu && gpu.GetResourceCacheLimit() != GpuResourceCacheBytes)
                     gpu.SetResourceCacheLimit(GpuResourceCacheBytes);
+                if (lease.GrContext is { } diagnosed)
+                {
+                    diagnosed.GetResourceCacheUsage(out _, out var gpuBytes);
+                    LastGpuResourceCacheBytes = gpuBytes;
+                    if (System.Threading.Interlocked.Exchange(ref _purgeGpuResources, 0) == 1) diagnosed.PurgeResources();
+                }
                 var canvas = lease.SkCanvas;
                 var viewport = editor.Session.Viewport;
                 var (X, Y) = viewport.ScreenToWorld(0, 0);
