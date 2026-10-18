@@ -35,3 +35,4 @@ repomix-output.*
 # OS files
 Thumbs.db
 Desktop.ini
+__pycache__/

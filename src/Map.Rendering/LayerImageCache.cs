@@ -156,7 +156,8 @@ public sealed class LayerImageCache : IDisposable
         var matrix = canvas.TotalMatrix; var device = canvas.DeviceClipBounds;
         lock (_gate)
         {
-            var motion = matrix == _lastMatrix && device == _lastDevice ? FrameMotion.Still
+            // The first frame has nothing to differ from: it is treated as a still view.
+            var motion = _lastDevice.IsEmpty || matrix == _lastMatrix && device == _lastDevice ? FrameMotion.Still
                 // The device clip is the map's page: it moves with the camera, so only the scale decides.
                 : SameLinearPart(matrix, _lastMatrix) ? FrameMotion.Panned
                 : FrameMotion.Changed;
@@ -212,7 +213,7 @@ public sealed class LayerImageCache : IDisposable
                 var linear = Math.Abs(relative.SkewX) < 1e-6 && Math.Abs(relative.SkewY) < 1e-6
                     && Math.Abs(relative.ScaleY - ratio) < 1e-4 * Math.Abs(ratio);
                 // A zoomed-in stand-in is held to 1.6×, a zoomed-out one to 0.8× of its own scale.
-                var scaleOk = Math.Abs(ratio - 1) < 1e-6 || allowScale && ratio is >= .8f and <= 1.6f;
+                var scaleOk = Math.Abs(ratio - 1) < 1e-5 || allowScale && ratio is >= .8f and <= 1.6f;
                 if (linear && scaleOk && relative.TryInvert(out var toKept))
                 {
                     var view = toKept.MapRect(new SKRect(device.Left, device.Top, device.Right, device.Bottom));
@@ -224,8 +225,11 @@ public sealed class LayerImageCache : IDisposable
                 }
             }
         }
-        var exact = Math.Abs(relative.ScaleX - 1) < 1e-6 && relative.TransX == MathF.Round(relative.TransX)
-            && relative.TransY == MathF.Round(relative.TransY);
+        // A whole device-pixel shift (inverting and composing the two transforms leaves a few
+        // millionths of a pixel) reproduces the layer's own pixels; it is snapped to the pixel.
+        var exact = Math.Abs(relative.ScaleX - 1) < 1e-5 && Math.Abs(relative.TransX - MathF.Round(relative.TransX)) < 1e-3f
+            && Math.Abs(relative.TransY - MathF.Round(relative.TransY)) < 1e-3f;
+        if (exact) relative = SKMatrix.CreateTranslation(MathF.Round(relative.TransX), MathF.Round(relative.TransY));
         if (reuseOnly && (entry is null || !exact)) return false;
         if (entry is null)
         {
@@ -263,6 +267,16 @@ public sealed class LayerImageCache : IDisposable
             new SKSamplingOptions(exact ? SKFilterMode.Nearest : SKFilterMode.Linear, SKMipmapMode.None));
         canvas.Restore();
         return true;
+    }
+
+    /// <summary>Drops the kept images of still frames, keeping the pan images (the camera is moving).</summary>
+    public void ClearStill()
+    {
+        lock (_gate)
+        {
+            foreach (var entry in _entries.Values) entry.Image.Dispose();
+            _entries.Clear();
+        }
     }
 
     /// <summary>Drops the kept pan images (the camera stopped or zoomed).</summary>

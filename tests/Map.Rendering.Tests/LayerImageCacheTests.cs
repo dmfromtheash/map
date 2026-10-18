@@ -136,6 +136,61 @@ public sealed class LayerImageCacheTests
         });
     }
 
+    [Fact]
+    public void A_pan_shifts_the_kept_layer_and_matches_the_direct_frame()
+    {
+        using var sprite = SKSurface.Create(new SKImageInfo(32, 32))!;
+        sprite.Canvas.Clear(SKColors.Transparent);
+        using (var ink = new SKPaint { Color = new SKColor(90, 120, 160, 235), IsAntialias = true })
+            sprite.Canvas.DrawCircle(16, 16, 14, ink);
+        using var image = sprite.Snapshot();
+        var stamps = new Images(image);
+        SceneObject Peak(int i) => new(ObjectId.New(), SceneObjectKind.Stamp, "Peak " + i,
+            8 + i % 10 * 24.6, 6 + i / 10 * 22.9, 26, 26, i * 13 % 360, "#FFFFFFFF", "#00000000", 0, true, false)
+            { Stamp = new StampStyle(new string('e', 64)), ObjectOpacity = .85 };
+        var peaks = new ObjectLayer(LayerId.New(), "Горы", true, false, 1, [.. Enumerable.Range(0, 90).Select(Peak)]);
+        var document = new MapDocument(DocumentId.New(), "Pan", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(256, 256, "px", "#FFE6E2D0"),
+            [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFE6E2D0"), peaks]);
+        using var cache = new LayerImageCache();
+
+        SKBitmap Draw(float shiftX, LayerImageCache? layers, RenderStats stats)
+        {
+            using var surface = SKSurface.Create(new SKImageInfo(180, 160))!;
+            surface.Canvas.Clear(SKColors.Black);
+            surface.Canvas.Translate(-11f + shiftX, -6f);
+            surface.Canvas.Scale(.8f);
+            SceneRenderer.Render(surface.Canvas, document, new RenderOptions
+            {
+                Stamps = stamps, LayerImages = layers, Stats = stats, ViewScale = .8,
+                VisibleWorld = new((11 - shiftX) / .8, 6 / .8, (11 - shiftX + 180) / .8, (6 + 160) / .8),
+            });
+            using var snapshot = surface.Snapshot();
+            return SKBitmap.FromImage(snapshot);
+        }
+
+        using var still = Draw(0, cache, new());
+        // Whole-pixel steps of a pan: the first builds the wider image, the next ones only shift it.
+        var built = new RenderStats();
+        using var first = Draw(-10, cache, built);
+        var shifted = new RenderStats();
+        using var second = Draw(-20, cache, shifted);
+        using var direct = Draw(-20, null, new());
+        Assert.Equal(0, built.LayerImagesKept);
+        Assert.Equal(1, shifted.LayerImagesKept);
+        Assert.Equal(0, shifted.ObjectsDrawn);
+        Assert.All(second.Pixels.Zip(direct.Pixels), p =>
+        {
+            Assert.InRange(Math.Abs(p.First.Red - p.Second.Red), 0, 2);
+            Assert.InRange(Math.Abs(p.First.Green - p.Second.Green), 0, 2);
+            Assert.InRange(Math.Abs(p.First.Blue - p.Second.Blue), 0, 2);
+        });
+        // The frame after the pan stops repeats the view: the shifted image serves it as it is.
+        var paused = new RenderStats();
+        using var third = Draw(-20, cache, paused);
+        Assert.Equal(1, paused.LayerImagesKept);
+    }
+
     private sealed class Images(SKImage image) : IStampImageSource
     {
         public SKImage? TryGetImage(string sha256) => image;

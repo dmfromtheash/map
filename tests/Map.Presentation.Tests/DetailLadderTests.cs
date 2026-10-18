@@ -54,6 +54,28 @@ public sealed class DetailLadderTests : IDisposable
     }
 
     [Fact]
+    public void A_save_preview_reads_the_ladder_like_the_editor()
+    {
+        // A 320×180 preview of a map with many large mountains decoded a master for every
+        // object (2026-10-18: 65 s per save); the export source now picks steps by size too.
+        Directory.CreateDirectory(_root);
+        var source = Path.Combine(_root, "Гряда.png");
+        File.WriteAllBytes(source, Picture(4096, 3200));
+        var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        var record = catalog.Import(source, new AssetImportOptions(), DateTimeOffset.UnixEpoch);
+        var document = new MapDocument(DocumentId.New(), "Save", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(1024, 1024, "px", "#FFFFFFFF"),
+            [new BaseColorLayer(LayerId.New(), "Base", true, false, 1, "#FFFFFFFF")], []);
+        using var images = new ExportStampImageSource(document, null, catalog);
+
+        Assert.Equal(2048, images.TryGetImage(record.Sha256)!.Width);
+        Assert.True(images.TryGetImageForPixelSize(record.Sha256, 40, 31)!.Width <= 512);
+        Assert.Equal(1024, images.TryGetImageForPixelSize(record.Sha256, 1000, 780)!.Width);
+        // An export large enough to need every source pixel still gets the master.
+        Assert.Equal(4096, images.TryGetImageForPixelSize(record.Sha256, 3000, 2340)!.Width);
+    }
+
+    [Fact]
     public void Ordinary_sizes_get_no_ladder_and_keep_the_original()
     {
         Directory.CreateDirectory(_root);

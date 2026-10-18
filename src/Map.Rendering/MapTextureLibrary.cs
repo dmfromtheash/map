@@ -59,7 +59,14 @@ public static class MapTextureLibrary
         using var stream = typeof(MapTextureLibrary).Assembly.GetManifestResourceStream(name);
         if (stream is null) return null;
         using var data = SKData.Create(stream);
-        return SKImage.FromEncodedData(data);
+        // Decoded once into owned pixels: an encoded-backed image may be decoded again whenever
+        // Skia's raster cache drops it, and the owner's grounds are 2048² (16 MiB each) - a
+        // PNG decode on the render thread for every redraw that samples them.
+        var encoded = SKImage.FromEncodedData(data);
+        if (encoded is null) return null;
+        var raster = encoded.ToRasterImage(ensurePixelData: true);
+        if (!ReferenceEquals(raster, encoded)) encoded.Dispose();
+        return raster;
     }
 
     /// <summary>

@@ -476,7 +476,10 @@ public static class SceneRenderer
         var panning = eligible && motion is FrameMotion.Panned or FrameMotion.Changed;
         var keepLayers = eligible && !panning
             && (options.Preview is not null || options.PlacementPreviewObjects is { Count: > 0 } || motion == FrameMotion.Still);
+        // Kept images hold video memory only while they serve: a moving camera keeps only its pan
+        // images, a frame with neither a gesture nor a still view releases everything.
         if (!keepLayers && !panning) options.LayerImages?.Clear();
+        else if (panning) options.LayerImages!.ClearStill();
         for (var layerIndex = 0; layerIndex < document.Layers.Count; layerIndex++)
         {
             var layer = document.Layers[layerIndex];
