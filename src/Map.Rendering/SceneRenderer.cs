@@ -57,6 +57,8 @@ public sealed class RenderStats
     public int LayerImagesKept { get; set; }
     /// <summary>Terrain images completed from a partial background build (a redrawn part laid into the previous image).</summary>
     public int TerrainPatches { get; set; }
+    /// <summary>Diagnostics: why a layer large enough for dense tiles was drawn object by object in this frame (null when it was not).</summary>
+    public string? DenseSkip { get; set; }
     public int ExactObjects { get; set; }
     public int OverviewObjects { get; set; }
     public int OverviewChunks { get; set; }
@@ -112,6 +114,7 @@ public sealed class RenderStats
         MissingAssets = 0;
         LayerImagesKept = 0;
         TerrainPatches = 0;
+        DenseSkip = null;
         ExactObjects = 0;
         OverviewObjects = 0;
         OverviewChunks = 0;
@@ -2735,6 +2738,10 @@ public static class SceneRenderer
             DrawDetailedStampTiles(canvas, document, layer, view, options);
             return;
         }
+        if (options.Stats is { } skipped && !options.IsExport && layer.Objects.Count >= DenseTileMinimumObjects)
+            skipped.DenseSkip = options.ViewScale < .03 ? "far" : options.ObjectCache is null ? "no-cache" : options.VisibleWorld is null ? "no-view"
+                : options.ObjectOverrides is { Count: > 0 } ? "overrides" : !ObjectSpatialIndex.For(layer).MayContainAtLeast(view, DenseTileMinimumVisible) ? "sparse"
+                : !RevisionsFor(layer).CanCache ? "uncacheable" : "asset-missing";
 
         if (!options.IsExport
             && options.LodTier == RenderLodTier.Overview
