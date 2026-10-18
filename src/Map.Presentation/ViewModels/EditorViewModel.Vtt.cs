@@ -44,6 +44,8 @@ public sealed partial class EditorViewModel
     public string LastVttExportText { get; private set; } = "";
 
     private double DefaultVttGridSize() =>
+        // A tabletop hex is measured across its flat sides (Foundry and the dd2vtt importer agree).
+        IsHexWorkshop && ActiveHexLayer is { } hexes ? hexes.Board.Layout.Size * HexLayout.Sqrt3 :
         Session.Document.Layers.OfType<GridLayer>().Where(layer => layer.Visible)
             .SelectMany(layer => layer.Grids).Select(grid => grid.CellSize).FirstOrDefault(size => size > 0) is var size and > 0
             ? size
@@ -102,6 +104,7 @@ public sealed partial class EditorViewModel
             _exportResultPath = result.Path;
             _exportResultMode = ExportOutputMode.SingleImage;
             _exportResultText = $"Готово для виртуального стола: {result.Path} · стен {result.Walls}, дверей {result.Portals}, {result.PixelsPerGrid} px на клетку";
+            if (IsHexWorkshop && ActiveHexLayer is { } hexes) WriteFoundryHint(result.Path, hexes);
             LastVttExportText = _exportResultText;
             Raise(nameof(LastVttExportText));
             _log.Info($"VTT_EXPORT_SUCCEEDED walls={result.Walls} portals={result.Portals}");

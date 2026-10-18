@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Automation;
 using Avalonia.Controls;
@@ -162,6 +163,7 @@ public sealed partial class EditorView
                 radiusSection,
                 BuildHexLevelSection(),
                 BuildHexGeneratorSection(),
+                BuildHexExportSection(),
                 Ui.Section("Сетка", new StackPanel { Spacing = 4, Children = { gridVisible, gridNumbers, gridEmpty } }),
             },
         };
@@ -907,6 +909,75 @@ public sealed partial class EditorView
                 },
             },
         });
+    }
+
+    // ------------------------------------------------------------------ export
+
+    private Control BuildHexExportSection()
+    {
+        var players = Ui.PropertyToggle("HexExportPlayersToggle", "Экспорт так, как видят игроки (туман, ключи для игроков)");
+        players.IsCheckedChanged += (_, _) => { if (!_syncingHex) _editor.ExportHexPlayers = players.IsChecked == true; };
+        HexSync(() => players.IsChecked = _editor.ExportHexPlayers, nameof(EditorViewModel.ExportHexPlayers));
+
+        var size = Ui.SliderRow("HexPrintHexSlider", "Гекс на бумаге", 10, 60, _editor.HexPrintOptions.HexMillimetres, "мм",
+            value => { if (!_syncingHex) _editor.HexPrintOptions = _editor.HexPrintOptions with { HexMillimetres = value }; });
+        var landscape = Ui.PropertyToggle("HexPrintLandscapeToggle", "Альбомные листы");
+        landscape.IsCheckedChanged += (_, _) => { if (!_syncingHex) _editor.HexPrintOptions = _editor.HexPrintOptions with { Landscape = landscape.IsChecked == true }; };
+        var a3 = Ui.PropertyToggle("HexPrintA3Toggle", "Лист A3 (иначе A4)");
+        a3.IsCheckedChanged += (_, _) => { if (!_syncingHex) _editor.HexPrintOptions = _editor.HexPrintOptions with { A3 = a3.IsChecked == true }; };
+        var key = Ui.PropertyToggle("HexPrintKeyToggle", "Ключ гексов после карты");
+        key.IsCheckedChanged += (_, _) => { if (!_syncingHex) _editor.HexPrintOptions = _editor.HexPrintOptions with { IncludeKey = key.IsChecked == true }; };
+        HexSync(() =>
+        {
+            landscape.IsChecked = _editor.HexPrintOptions.Landscape;
+            a3.IsChecked = _editor.HexPrintOptions.A3;
+            key.IsChecked = _editor.HexPrintOptions.IncludeKey;
+        }, nameof(EditorViewModel.HexPrintOptions));
+
+        Button B(string name, string text, Func<Task> action, string style = "compact") =>
+            Ui.TextButton(name, text, () => _ = action(), style);
+        return Ui.Section("Экспорт гекс-карты", new StackPanel
+        {
+            Spacing = 6,
+            Children =
+            {
+                players,
+                new TextBlock
+                {
+                    Text = "PNG и файл для виртуальных столов (Foundry, Roll20 — .dd2vtt с гекс-сеткой и стенами из границ «по рёбрам») — кнопка «Экспорт» вверху. Рядом с .dd2vtt пишется подсказка с макросом сетки для Foundry.",
+                    TextWrapping = TextWrapping.Wrap,
+                }.Classed("faint", "role-caption"),
+                size,
+                landscape,
+                a3,
+                key,
+                B("HexPrintButton", "PDF для печати по листам…", () => _editor.ExportHexPrintAsync(), "accent"),
+                new WrapPanel
+                {
+                    ItemSpacing = 6, LineSpacing = 6,
+                    Children =
+                    {
+                        B("HexJsonExportButton", "JSON карты…", () => _editor.ExportHexJsonAsync()),
+                        B("HexJsonImportButton", "Загрузить JSON…", ImportHexJsonAsync),
+                        B("HexKeyExportButton", "Ключ (Markdown)…", () => _editor.ExportHexKeyAsync(false)),
+                        B("HexKeyPlayersExportButton", "Ключ для игроков…", () => _editor.ExportHexKeyAsync(true)),
+                    },
+                },
+            },
+        });
+    }
+
+    private async Task ImportHexJsonAsync()
+    {
+        if (TopLevel.GetTopLevel(this) is not { } top) return;
+        var files = await top.StorageProvider.OpenFilePickerAsync(new Avalonia.Platform.Storage.FilePickerOpenOptions
+        {
+            Title = "JSON гексовой карты",
+            AllowMultiple = false,
+            FileTypeFilter = [new Avalonia.Platform.Storage.FilePickerFileType("JSON гексовой карты") { Patterns = ["*.json"] }],
+        });
+        if (files.Count == 0 || Avalonia.Platform.Storage.StorageProviderExtensions.TryGetLocalPath(files[0]) is not { } path) return;
+        _editor.ImportHexJson(await File.ReadAllTextAsync(path));
     }
 
     private void SyncHexPanel(string? property)

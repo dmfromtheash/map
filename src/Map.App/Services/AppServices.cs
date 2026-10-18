@@ -227,6 +227,19 @@ public sealed class AvaloniaExportDestinationPicker(Window owner) : IExportDesti
             return file?.TryGetLocalPath();
         });
 
+    public Task<string?> PickFileAsync(string suggestedFileName, string extension, string description) =>
+        Dispatcher.UIThread.InvokeAsync(async () =>
+        {
+            var file = await owner.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+            {
+                Title = description,
+                SuggestedFileName = suggestedFileName,
+                DefaultExtension = extension,
+                FileTypeChoices = [new FilePickerFileType(description) { Patterns = ["*." + extension] }],
+            });
+            return file?.TryGetLocalPath();
+        });
+
     public Task<string?> PickTilePackageAsync(string suggestedFolderName) =>
         Dispatcher.UIThread.InvokeAsync(async () =>
         {

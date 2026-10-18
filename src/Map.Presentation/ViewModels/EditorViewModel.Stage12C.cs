@@ -530,7 +530,11 @@ public sealed partial class EditorViewModel
             _exportOutputMode,
             _exportTransparentBackground,
             _exportIncludeGrid,
-            _exportQuality);
+            _exportQuality)
+        {
+            // A hex map exports the level being edited, as the master or as the players see it.
+            Hex = IsHexWorkshop ? new HexExportView(ExportHexPlayers, HexLevelShown) : null,
+        };
     }
 
     private void SetExportText(ref string field, string value, string propertyName, bool sourceGeometry)

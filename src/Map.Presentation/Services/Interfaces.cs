@@ -75,6 +75,9 @@ public interface IExportDestinationPicker
 
     /// <summary>Where to write a Universal VTT file (*.dd2vtt); null when cancelled or not supported.</summary>
     Task<string?> PickVttAsync(string suggestedFileName) => Task.FromResult<string?>(null);
+
+    /// <summary>Where to write another kind of export file (PDF, JSON, Markdown); null when cancelled or not supported.</summary>
+    Task<string?> PickFileAsync(string suggestedFileName, string extension, string description) => Task.FromResult<string?>(null);
 }
 
 /// <summary>Opens the local result folder after a successful export.</summary>

@@ -432,6 +432,8 @@ public sealed class ImageExportEngine : IImageExporter
             ViewScale = Math.Max(scaleX, scaleY),
             TileCache = tileCache,
             Stamps = stamps,
+            HexPlayerView = plan.Hex?.Players ?? false,
+            HexLevel = plan.Hex?.Level,
         });
         canvas.Restore();
         canvas.Flush();

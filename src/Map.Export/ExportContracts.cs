@@ -57,7 +57,14 @@ public sealed record ExportRequest(
     ExportOutputMode OutputMode,
     bool TransparentBackground,
     bool IncludeGrid,
-    int Quality = 90);
+    int Quality = 90)
+{
+    /// <summary>For a hex map: export the players' view and/or one level of the world.</summary>
+    public HexExportView? Hex { get; init; }
+}
+
+/// <summary>How a hex map is exported: as the players see it (opaque fog, player keys) and which level.</summary>
+public sealed record HexExportView(bool Players, int? Level);
 
 public sealed record ExportPlan(
     ExportImageFormat Format,
@@ -74,6 +81,9 @@ public sealed record ExportPlan(
     int EffectBleedPixels,
     long EstimatedRawWorkingBytes)
 {
+    /// <summary>See <see cref="ExportRequest.Hex"/>.</summary>
+    public HexExportView? Hex { get; init; }
+
     public int TileCount => checked(Columns * Rows);
     public bool IncludesBackground => !TransparentBackground;
     public bool UsesStreamingPng => Format == ExportImageFormat.Png && OutputMode == ExportOutputMode.SingleImage;

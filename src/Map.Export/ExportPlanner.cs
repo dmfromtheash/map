@@ -115,7 +115,7 @@ public static class ExportPlanner
                 columns,
                 rows,
                 bleed,
-                estimate);
+                estimate) { Hex = request.Hex };
         }
         catch (OverflowException ex)
         {

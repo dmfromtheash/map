@@ -24,6 +24,21 @@ public static class VttGeometry
         ArgumentNullException.ThrowIfNull(document);
         var walls = new List<IReadOnlyList<VectorPoint>>();
         var portals = new List<VttPortal>();
+        // Hex maps: border lines drawn along hex edges (walls, cliffs, frontiers) block sight.
+        foreach (var hexLayer in document.Layers.OfType<HexLayer>())
+        {
+            if (!hexLayer.Visible) continue;
+            foreach (var path in hexLayer.Paths)
+            {
+                if (path.Kind != HexPathKind.Border || path.Style != HexRouteStyle.Edges || path.Vertices.Length < 2) continue;
+                walls.Add([.. path.Vertices.Select(vertex =>
+                {
+                    var (x, y) = hexLayer.Board.Layout.Position(vertex);
+                    return new VectorPoint(x, y);
+                })]);
+            }
+        }
+
         foreach (var layer in document.Layers.OfType<ObjectLayer>())
         {
             if (!layer.Visible) continue;
