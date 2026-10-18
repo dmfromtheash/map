@@ -244,8 +244,8 @@ public sealed record LandEdgeStyle
     /// <summary>Initial appearance for newly created land; legacy deserialization keeps the defaults below.</summary>
     public static LandEdgeStyle SoftWatercolor() => new()
     {
-        FillColor = "#FFD6DBC0", FillTextureId = MapFillTextures.Foothill,
-        FillTextureOpacity = .9, FillTextureScale = 512,
+        FillColor = "#FFD6DBC0", FillTextureId = MapFillTextures.OwnerSnow,
+        FillTextureOpacity = 1, FillTextureScale = 1024,
         OutlineColor = "#FFD9CEA6", OutlineWidth = 3,
         InnerShadowOpacity = .025, OuterShadowOpacity = .05, ShadowBlur = 3,
         RippleColor = "#487C9897", RippleWidth = .8, RippleSpacing = 4, RippleCount = 1,
@@ -273,6 +273,14 @@ public sealed record LandEdgeStyle
     public string? FillTextureId { get; init; }
     public double FillTextureOpacity { get; init; } = 0.55;
     public double FillTextureScale { get; init; } = MapFillTextures.DefaultGroundScale;
+
+    /// <summary>
+    /// The cliffs of this land (<see cref="LandCliffStyle"/>). Where the land stands above what lies
+    /// beneath it - lower land, or the sea at level 0 - its southern edges drop as walls of rock,
+    /// one step per level of difference. Land at level 0 over the sea has no cliff, so every older
+    /// map looks exactly as before.
+    /// </summary>
+    public LandCliffStyle Cliff { get; init; } = new();
 }
 
 /// <summary>

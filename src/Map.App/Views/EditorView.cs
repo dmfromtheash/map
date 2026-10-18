@@ -2483,6 +2483,13 @@ public sealed partial class EditorView : UserControl
                                 SyncSidePanels();
                                 SyncContextArea();
                             }),
+                        // The ground is chosen in sight, before the land exists: the next new
+                        // land starts with it, and the active land takes it at once.
+                        Ui.Subgroup("Текстура земли", BuildFillTexturePicker("NewLandTexturePicker", MapFillTextureKind.Ground,
+                            () => _editor.ActiveLayer is LandLayer land ? land.EdgeStyle.FillTextureId : _editor.NewLandTextureId,
+                            id => _editor.ChooseLandTexture(id),
+                            () => MaterialPreviewContext.RawTexture(768),
+                            "Для новой земли и выбранного слоя суши")),
                         Ui.Hint("Круг рисует сушу от руки; любая другая форма превращает протягивание в область. "
                             + "Неровность — размер «ячеек» берега: 0 даёт ровный круг, 64 — изрезанный берег. "
                             + "Сглаживание скругляет их углы; для ровного круга это мягкость края."),
@@ -5473,6 +5480,7 @@ public sealed partial class EditorView : UserControl
                         (v, _) => Set(style => style with { InnerShadowOpacity = v / 100 }), 5,
                         defaultValue: defaults.InnerShadowOpacity * 100,
                         description: "Насколько темнее суша у самой кромки.")),
+                BuildLandCliffSection(Style, Set),
                 Ui.Subgroup("Мягкость и направление теней", new StackPanel
                 {
                     Spacing = 4,
@@ -5505,14 +5513,18 @@ public sealed partial class EditorView : UserControl
     /// </summary>
     private Control BuildFillTexturePicker(
         string name, MapFillTextureKind kind, Func<string?> current, Action<string?> choose,
-        Func<MaterialPreviewContext> context)
+        Func<MaterialPreviewContext> context, string? fixedCaption = null)
     {
-        var grid = new Ui.ChoiceGrid { MaxColumns = 4, MinimumItemWidth = 52, Gap = 6 }.Named(name);
+        var offered = MapFillTextures.Of(kind).Count(texture => Map.Rendering.MapTextureLibrary.Image(texture.Id) is not null);
+        // «нет» and every material in one row while they fit: the cells narrow a little instead of
+        // leaving one swatch alone, stretched across a second row.
+        var grid = new Ui.ChoiceGrid { MaxColumns = Math.Max(4, offered + 1), MinimumItemWidth = offered + 1 > 4 ? 40 : 52, Gap = 6 }.Named(name);
         var buttons = new List<(Button Button, string? Id)>();
         var preview = context();
         void Add(string? id, string title)
         {
             var swatch = TextureSwatch(id, title, preview);
+            if (offered + 1 > 4) swatch.Width = 36;
             var button = new Button
             {
                 Name = name + "_" + (id ?? "none"),
@@ -5537,8 +5549,8 @@ public sealed partial class EditorView : UserControl
         _appearanceSyncs.Add(() =>
         {
             var now = context();
-            caption.Text = now.Raw ? "Материал · как кладёт кисть"
-                : kind == MapFillTextureKind.Water ? "Материал · с цветом воды" : "Материал · с цветом и силой";
+            caption.Text = fixedCaption ?? (now.Raw ? "Материал · как кладёт кисть"
+                : kind == MapFillTextureKind.Water ? "Материал · с цветом воды" : "Материал · с цветом и силой");
         });
         return new StackPanel
         {

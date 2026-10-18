@@ -1,7 +1,30 @@
-{
-  "id": "watercolour-foothill",
-  "title": "Акварель · подножие гор",
-  "source": "Recovered unchanged from the previous local Watercolor.Materials pack at the owner request",
-  "sha256": "bcfd470d5c860df40e34927eeee2cb1ebfaa518d6942b547e0941944a77ed7ee",
-  "selectedOn": "2026-10-10"
-}
+[
+  {
+    "id": "owner-snow-drifts",
+    "title": "Снег · наст со штриховкой",
+    "source": "Owner drawing «текстура 2.png» redrawn 4x (Real-ESRGAN x4plus + x4plus-anime, grain restored), 2048 seamless tile; see content/Owner.Mountains.2026-10-18",
+    "sha256": "0d4223165fb5dc2773b2a29a27349eed127e4dd4fceed860717cc3ed0515982f",
+    "selectedOn": "2026-10-18"
+  },
+  {
+    "id": "owner-snow-sparkle",
+    "title": "Снег · искристая пыль",
+    "source": "Owner drawing «текстура 1.png (новая, 11:36)» redrawn 4x: Real-ESRGAN shapes + the source speckle band re-drawn as crisp dots (refine_speckle.py), light evened, 2048 seamless tile; see content/Owner.Mountains.2026-10-18",
+    "sha256": "dc30df48c3af0414002b0f0b8df86f176695352dec973763257cf2c01107ed4e",
+    "selectedOn": "2026-10-18"
+  },
+  {
+    "id": "owner-snow-soft",
+    "title": "Снег · мягкие надувы",
+    "source": "Owner drawing «текстура 3.png» redrawn 4x: Real-ESRGAN shapes + the source speckle band re-drawn as crisp dots (refine_speckle.py), light evened, 2048 seamless tile; see content/Owner.Mountains.2026-10-18",
+    "sha256": "91cd70c85541c3e64a8b70df906631cf8283459b1e3f9737a70fb83d2c941d96",
+    "selectedOn": "2026-10-18"
+  },
+  {
+    "id": "owner-ice-wash",
+    "title": "Лёд · голубая размывка",
+    "source": "Owner drawing «текстура 4.png» redrawn 4x: Real-ESRGAN shapes + the source speckle band re-drawn as crisp dots (refine_speckle.py), light evened, 2048 seamless tile; see content/Owner.Mountains.2026-10-18",
+    "sha256": "7da8bf703ff378c44258cee0a115518bb816364c006c42c58a461269614dcdcd",
+    "selectedOn": "2026-10-18"
+  }
+]

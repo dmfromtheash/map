@@ -2463,6 +2463,38 @@ public static partial class MapProjectStore
         FillTextureId = style.FillTextureId,
         FillTextureOpacity = style.FillTextureId is null ? null : style.FillTextureOpacity,
         FillTextureScale = style.FillTextureId is null ? null : style.FillTextureScale,
+        Cliff = style.Cliff == new LandCliffStyle() ? null : new LandCliffDto
+        {
+            Height = style.Cliff.Height,
+            HeightVariation = style.Cliff.HeightVariation,
+            VariationLength = style.Cliff.VariationLength,
+            Gaps = style.Cliff.Gaps,
+            GapLength = style.Cliff.GapLength,
+            Lean = style.Cliff.Lean,
+            Facets = style.Cliff.Facets,
+            FacetWidth = style.Cliff.FacetWidth,
+            FacetLines = style.Cliff.FacetLines,
+            Color = style.Cliff.Color,
+            ShadeColor = style.Cliff.ShadeColor,
+            Contrast = style.Cliff.Contrast,
+            Wash = style.Cliff.Wash,
+            RimShadow = style.Cliff.RimShadow,
+            Hatching = style.Cliff.Hatching,
+            HatchSpacing = style.Cliff.HatchSpacing,
+            HatchLength = style.Cliff.HatchLength,
+            HatchSlant = style.Cliff.HatchSlant,
+            Stipple = style.Cliff.Stipple,
+            StippleSize = style.Cliff.StippleSize,
+            Strata = style.Cliff.Strata,
+            InkColor = style.Cliff.InkColor,
+            InkWidth = style.Cliff.InkWidth,
+            Foot = (int)style.Cliff.Foot,
+            FootRoughness = style.Cliff.FootRoughness,
+            FootTicks = style.Cliff.FootTicks,
+            BaseShadow = style.Cliff.BaseShadow,
+            BaseShadowLength = style.Cliff.BaseShadowLength,
+            BaseShadowColor = style.Cliff.BaseShadowColor,
+        },
     };
 
     private static LandEdgeStyle ToLandStyle(LandStyleDto? style)
@@ -2472,7 +2504,7 @@ public static partial class MapProjectStore
             throw new MapProjectCorruptedException("A land layer has no landStyle object.");
         }
 
-        return new LandEdgeStyle
+        var result = new LandEdgeStyle
         {
             FillColor = RequireString(style.FillColor, "land fill color"),
             OutlineColor = RequireString(style.OutlineColor, "land outline color"),
@@ -2493,6 +2525,45 @@ public static partial class MapProjectStore
                 ? textureOpacity : new LandEdgeStyle().FillTextureOpacity,
             FillTextureScale = style.FillTextureScale is { } textureScale && MapFillTextures.IsValidScale(textureScale)
                 ? textureScale : new LandEdgeStyle().FillTextureScale,
+        };
+        if (style.Cliff is not { } cliff) return result;
+        // Out-of-range or unreadable values fall back to the default look instead of failing the
+        // whole map: the cliff is appearance only, never geometry.
+        var fallback = new LandCliffStyle();
+        return result with
+        {
+            Cliff = new LandCliffStyle
+            {
+                Height = cliff.Height is { } heightValue && double.IsFinite(heightValue) ? heightValue : fallback.Height,
+                HeightVariation = cliff.HeightVariation is { } heightVariationValue && double.IsFinite(heightVariationValue) ? heightVariationValue : fallback.HeightVariation,
+                VariationLength = cliff.VariationLength is { } variationLengthValue && double.IsFinite(variationLengthValue) ? variationLengthValue : fallback.VariationLength,
+                Gaps = cliff.Gaps is { } gapsValue && double.IsFinite(gapsValue) ? gapsValue : fallback.Gaps,
+                GapLength = cliff.GapLength is { } gapLengthValue && double.IsFinite(gapLengthValue) ? gapLengthValue : fallback.GapLength,
+                Lean = cliff.Lean is { } leanValue && double.IsFinite(leanValue) ? leanValue : fallback.Lean,
+                Facets = cliff.Facets is { } facetsValue && double.IsFinite(facetsValue) ? facetsValue : fallback.Facets,
+                FacetWidth = cliff.FacetWidth is { } facetWidthValue && double.IsFinite(facetWidthValue) ? facetWidthValue : fallback.FacetWidth,
+                FacetLines = cliff.FacetLines is { } facetLinesValue && double.IsFinite(facetLinesValue) ? facetLinesValue : fallback.FacetLines,
+                Color = AppearanceColor.Normalize(cliff.Color) ?? fallback.Color,
+                ShadeColor = AppearanceColor.Normalize(cliff.ShadeColor) ?? fallback.ShadeColor,
+                Contrast = cliff.Contrast is { } contrastValue && double.IsFinite(contrastValue) ? contrastValue : fallback.Contrast,
+                Wash = cliff.Wash is { } washValue && double.IsFinite(washValue) ? washValue : fallback.Wash,
+                RimShadow = cliff.RimShadow is { } rimShadowValue && double.IsFinite(rimShadowValue) ? rimShadowValue : fallback.RimShadow,
+                Hatching = cliff.Hatching is { } hatchingValue && double.IsFinite(hatchingValue) ? hatchingValue : fallback.Hatching,
+                HatchSpacing = cliff.HatchSpacing is { } hatchSpacingValue && double.IsFinite(hatchSpacingValue) ? hatchSpacingValue : fallback.HatchSpacing,
+                HatchLength = cliff.HatchLength is { } hatchLengthValue && double.IsFinite(hatchLengthValue) ? hatchLengthValue : fallback.HatchLength,
+                HatchSlant = cliff.HatchSlant is { } hatchSlantValue && double.IsFinite(hatchSlantValue) ? hatchSlantValue : fallback.HatchSlant,
+                Stipple = cliff.Stipple is { } stippleValue && double.IsFinite(stippleValue) ? stippleValue : fallback.Stipple,
+                StippleSize = cliff.StippleSize is { } stippleSizeValue && double.IsFinite(stippleSizeValue) ? stippleSizeValue : fallback.StippleSize,
+                Strata = cliff.Strata ?? fallback.Strata,
+                InkColor = AppearanceColor.Normalize(cliff.InkColor) ?? fallback.InkColor,
+                InkWidth = cliff.InkWidth is { } inkWidthValue && double.IsFinite(inkWidthValue) ? inkWidthValue : fallback.InkWidth,
+                Foot = cliff.Foot is { } footValue && Enum.IsDefined((CliffFoot)footValue) ? (CliffFoot)footValue : fallback.Foot,
+                FootRoughness = cliff.FootRoughness is { } footRoughnessValue && double.IsFinite(footRoughnessValue) ? footRoughnessValue : fallback.FootRoughness,
+                FootTicks = cliff.FootTicks is { } footTicksValue && double.IsFinite(footTicksValue) ? footTicksValue : fallback.FootTicks,
+                BaseShadow = cliff.BaseShadow is { } baseShadowValue && double.IsFinite(baseShadowValue) ? baseShadowValue : fallback.BaseShadow,
+                BaseShadowLength = cliff.BaseShadowLength is { } baseShadowLengthValue && double.IsFinite(baseShadowLengthValue) ? baseShadowLengthValue : fallback.BaseShadowLength,
+                BaseShadowColor = AppearanceColor.Normalize(cliff.BaseShadowColor) ?? fallback.BaseShadowColor,
+            }.Bounded(),
         };
     }
 

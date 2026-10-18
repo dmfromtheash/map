@@ -204,6 +204,7 @@ public sealed class AssetImageCache : IDisposable
     public SKImage? GetForPixelSize(string key, double pixelWidth, double pixelHeight)
     {
         if (!_entries.TryGetValue(key, out var entry)) return null;
+        entry.LastUsed = ++_clock;
         var image = entry.Image;
         var ratio = Math.Min(image.Width / Math.Max(1, pixelWidth), image.Height / Math.Max(1, pixelHeight));
         var level = Math.Clamp((int)Math.Floor(Math.Log2(Math.Max(1, ratio))), 0, 15);

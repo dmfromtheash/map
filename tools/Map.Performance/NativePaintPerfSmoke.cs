@@ -58,7 +58,7 @@ internal static class NativePaintPerfSmoke
     }
 }
 
-public sealed class PaintPerfApplication : Application
+public sealed partial class PaintPerfApplication : Application
 {
     internal static PerformanceOptions Options = null!;
     internal static TaskCompletionSource<NativePaintPerfReport> Completion = null!;
@@ -125,6 +125,7 @@ public sealed class PaintPerfApplication : Application
                 _report.Environment["build/" + assembly] = File.GetLastWriteTimeUtc(path).ToString("u") + " sha256=" +
                     Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path)))[..16];
         }
+        if (System.Environment.GetEnvironmentVariable("MAP_CLIFF_PERF") == "1") { await CliffRoutes(); return; }
         var projectPath = System.Environment.GetEnvironmentVariable("MAP_REGIONAL_PROJECT");
         if (string.IsNullOrWhiteSpace(projectPath) || !File.Exists(projectPath))
             throw new InvalidOperationException("MAP_REGIONAL_PROJECT must name an existing .mapproj");

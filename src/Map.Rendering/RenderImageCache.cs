@@ -325,6 +325,54 @@ public sealed class RenderImageCache : IDisposable
         }
     }
 
+    /// <summary>
+    /// Like <see cref="TryGetStale"/>, but when nothing is held for exactly this view, the image
+    /// of another view that serves it best: one that covers the whole view at the nearest scale,
+    /// otherwise the one that covers most of it. A frame after a view change and an edit together
+    /// (a zoom back, then a slider) draws it resampled instead of rebuilding the terrain in the
+    /// frame. The image belongs to the cache.
+    /// </summary>
+    public SKImage? TryGetStaleNear(WorldBounds wanted, double wantedScale, GRContext? context,
+        out IReadOnlyList<object> parts, out WorldBounds view, out double scale)
+    {
+        view = wanted; scale = wantedScale;
+        if (TryGetStale(wanted, wantedScale, context, out parts) is { } exact) return exact;
+        var handle = context?.Handle ?? IntPtr.Zero;
+        lock (_gate)
+        {
+            if (_context != handle) return null;
+            Entry? best = null; object[]? bestParts = null; var bestRank = double.NegativeInfinity; var bestCovers = false;
+            var wantedArea = Math.Max(1e-9, (wanted.Right - wanted.Left) * (wanted.Bottom - wanted.Top));
+            for (var i = _order.Count - 1; i >= 0; i--)
+            {
+                var key = _order[i];
+                if (key.Context != handle) continue;
+                var resolved = new object[key.Parts.Length];
+                var alive = true;
+                for (var p = 0; p < resolved.Length && alive; p++)
+                {
+                    resolved[p] = Resolve(key.Parts[p]);
+                    alive = !ReferenceEquals(resolved[p], DeadPart);
+                }
+                if (!alive) continue;
+                var entry = _entries[key];
+                var placement = Placement(entry.Image, entry.View, entry.Scale);
+                var left = Math.Max(placement.Left, wanted.Left); var top = Math.Max(placement.Top, wanted.Top);
+                var right = Math.Min(placement.Right, wanted.Right); var bottom = Math.Min(placement.Bottom, wanted.Bottom);
+                var share = right > left && bottom > top ? (right - left) * (bottom - top) / wantedArea : 0;
+                if (share <= 0) continue;
+                var covers = share >= 1 - 1e-6;
+                var ratio = Math.Log2(Math.Max(1e-9, entry.Scale / Math.Max(1e-9, wantedScale)));
+                var rank = covers ? -Math.Abs(ratio) + (ratio >= 0 ? .01 : 0) : share;
+                if (best is null || (covers && !bestCovers) || covers == bestCovers && rank > bestRank)
+                { bestRank = rank; best = entry; bestParts = resolved; bestCovers = covers; }
+            }
+            if (best is null) return null;
+            parts = bestParts!; view = best.View; scale = best.Scale;
+            return best.Image;
+        }
+    }
+
     /// <summary>Pixel size the cache expects an image for this view and scale to have.</summary>
     public static (int Width, int Height) SizeOf(WorldBounds view, double scale) => (
         (int)Math.Clamp(Math.Ceiling((view.Right - view.Left) * scale) + 2, 1, 16384),

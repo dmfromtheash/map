@@ -21,7 +21,7 @@ public sealed class LandMaterialWorkflowTests
         Assert.False(editor.ChooseLandMaterial("meadow"));
         editor.SetLandPaintAction("Texture");
         Assert.False(editor.LandPaintWithColor);
-        Assert.Equal(MapFillTextures.Foothill, editor.LandMaterialId);
+        Assert.Equal(MapFillTextures.OwnerSnow, editor.LandMaterialId);
         editor.SelectLayer(land.Id); editor.ActiveTool = EditorTool.Land;
         editor.ActiveLandShape = LandShapeKind.Rectangle;
         editor.SetLandPaintMode(true); editor.SetLandPaintAction("Color");
@@ -58,13 +58,13 @@ public sealed class LandMaterialWorkflowTests
         var editor = new EditorViewModel(doc, null, false, new FakeProjectStore(), new FakeRecentMaps(), new FakeFilePicker(), new FakePrompts(), new FakeLog());
         editor.AddLandLayer();
         var newLand = Assert.IsType<LandLayer>(editor.ActiveLayer);
-        Assert.Equal(MapFillTextures.Foothill, newLand.EdgeStyle.FillTextureId);
+        Assert.Equal(MapFillTextures.OwnerSnow, newLand.EdgeStyle.FillTextureId);
         Assert.Same(oldLand.EdgeStyle, ((LandLayer)editor.Session.Document.FindLayer(oldLand.Id)!).EdgeStyle);
         Assert.Null(oldLand.EdgeStyle.FillTextureId);
         editor.SetLandPaintMode(true);
         Assert.False(editor.LandPaintWithColor);
-        Assert.Equal(MapFillTextures.Foothill, editor.LandMaterialId);
-        Assert.True(editor.ChooseLandMaterial(MapFillTextures.Foothill));
+        Assert.Equal(MapFillTextures.OwnerSnow, editor.LandMaterialId);
+        Assert.True(editor.ChooseLandMaterial(MapFillTextures.OwnerSnow));
         Assert.False(editor.ChooseLandMaterial(MapFillTextures.SoftMeadow));
         Assert.False(editor.ChooseLandMaterial(MapFillTextures.SoftSand));
         Assert.False(editor.ChooseLandMaterial(MapFillTextures.SoftMoss));

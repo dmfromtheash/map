@@ -23,6 +23,13 @@ public static class MapFillTextures
     public const string SoftMeadow = "watercolor-soft-meadow";
     public const string SoftSand = "watercolor-soft-sand";
     public const string SoftMoss = "watercolor-soft-moss";
+    /// <summary>The owner's own painted ground (2026-10-18), redrawn at four times the source size. Since
+    /// 2026-10-18 only these four owner grounds have pixels; the foothill and the first ice are retired ids.</summary>
+    public const string OwnerIce = "owner-ice-strokes";
+    public const string OwnerSnow = "owner-snow-drifts";
+    public const string OwnerSnowSparkle = "owner-snow-sparkle";
+    public const string OwnerSnowSoft = "owner-snow-soft";
+    public const string OwnerIceWash = "owner-ice-wash";
 
     public static IReadOnlyList<MapFillTexture> All { get; } =
     [
@@ -36,6 +43,11 @@ public static class MapFillTextures
         new("watercolour-grass", "Акварель · трава", MapFillTextureKind.Ground, "Акварель"),
         new("watercolour-water", "Акварель · вода", MapFillTextureKind.Water, "Акварель"),
         new(Foothill, "Акварель · подножие гор", MapFillTextureKind.Ground, "Акварель"),
+        new(OwnerIce, "Лёд · мазки", MapFillTextureKind.Ground, "Снег и лёд"),
+        new(OwnerSnow, "Снег · наст со штриховкой", MapFillTextureKind.Ground, "Снег и лёд"),
+        new(OwnerSnowSparkle, "Снег · искристая пыль", MapFillTextureKind.Ground, "Снег и лёд"),
+        new(OwnerSnowSoft, "Снег · мягкие надувы", MapFillTextureKind.Ground, "Снег и лёд"),
+        new(OwnerIceWash, "Лёд · голубая размывка", MapFillTextureKind.Ground, "Снег и лёд"),
         new("meadow", "Луг", MapFillTextureKind.Ground, "Трава и лес"),
         new("sand", "Тёплый песок", MapFillTextureKind.Ground, "Почва и камень"),
         new("stone", "Выветренный камень", MapFillTextureKind.Ground, "Почва и камень"),

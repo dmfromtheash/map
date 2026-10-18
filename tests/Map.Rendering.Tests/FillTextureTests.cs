@@ -13,14 +13,15 @@ public sealed class FillTextureTests
     public void Removed_materials_keep_legacy_ids_but_have_no_pixels_shader_or_brush_sampler()
     {
         Assert.NotEmpty(MapFillTextures.All);
-        foreach (var texture in MapFillTextures.All.Where(t => t.Id != MapFillTextures.Foothill))
+        string[] bundled = [MapFillTextures.OwnerSnow, MapFillTextures.OwnerSnowSparkle, MapFillTextures.OwnerSnowSoft, MapFillTextures.OwnerIceWash];
+        foreach (var texture in MapFillTextures.All.Where(t => !bundled.Contains(t.Id)))
         {
             Assert.True(MapFillTextures.IsValidId(texture.Id));
             Assert.Null(MapTextureLibrary.Image(texture.Id));
             Assert.Null(MapTextureLibrary.Shader(texture.Id, 128));
             Assert.Null(MapTextureLibrary.BrushTexture(texture.Id));
         }
-        Assert.Equal(1, typeof(MapTextureLibrary).Assembly.GetManifestResourceNames()
+        Assert.Equal(bundled.Length, typeof(MapTextureLibrary).Assembly.GetManifestResourceNames()
             .Count(name => name.StartsWith("Map.Rendering.Textures.", StringComparison.Ordinal)));
 
         Assert.Null(MapTextureLibrary.Image("no-such-material"));
@@ -30,7 +31,10 @@ public sealed class FillTextureTests
     }
 
     [Theory]
-    [InlineData(MapFillTextures.Foothill)]
+    [InlineData(MapFillTextures.OwnerSnow)]
+    [InlineData(MapFillTextures.OwnerSnowSparkle)]
+    [InlineData(MapFillTextures.OwnerSnowSoft)]
+    [InlineData(MapFillTextures.OwnerIceWash)]
     public void Retained_material_fill_and_brush_match_across_tile_edges_and_negative_coordinates(string id)
     {
         var image = Assert.IsType<SKImage>(MapTextureLibrary.Image(id));

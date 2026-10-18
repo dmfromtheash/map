@@ -10,7 +10,8 @@ namespace Map.Rendering;
 /// embedded in this assembly, decoded once per process and handed out as a repeating shader in
 /// world space, so the viewport, a tile and a single-image export cannot disagree about the grain.
 /// <para>
-/// Only the owner-selected watercolor foothill is bundled. Retired texture IDs retain their
+/// Bundled: only the owner's own snow and ice grounds (redrawn at four times their source size,
+/// made seamless; the owner removed every other texture on 2026-10-18). Retired texture IDs retain their
 /// metadata but no pixels. A missing tile or unknown
 /// id yields no shader, and the caller
 /// simply draws the plain fill it would have drawn before - a map written by a newer version of
@@ -72,7 +73,9 @@ public static class MapTextureLibrary
         var scale = (float)(Math.Clamp(worldPerTile, MapFillTextures.MinimumScale, MapFillTextures.MaximumScale)
             / Math.Max(1, image.Width));
         var mode = MapFillTextures.Find(id)!.MirrorRepeat ? SKShaderTileMode.Mirror : SKShaderTileMode.Repeat;
-        return image.ToShader(mode, mode,
+        // Trilinear: a far view averages the grain instead of picking one texel out of many
+        // (a large tile shimmers then), and a close one blends texels instead of showing squares.
+        return image.ToShader(mode, mode, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear),
             SKMatrix.CreateScale(scale, scale));
     }
 

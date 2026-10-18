@@ -236,6 +236,46 @@ internal sealed class LandStyleDto
     [JsonPropertyName("fillTextureId")] public string? FillTextureId { get; set; }
     [JsonPropertyName("fillTextureOpacity")] public double? FillTextureOpacity { get; set; }
     [JsonPropertyName("fillTextureScale")] public double? FillTextureScale { get; set; }
+
+    // Written only when the cliff look differs from the default, so an untouched land keeps the
+    // bytes it had before cliffs existed; an absent object reads back as the default look.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("cliff")] public LandCliffDto? Cliff { get; set; }
+}
+
+internal sealed class LandCliffDto
+{
+    // Every value may be absent: a file from an older Map, or one that predates a setting,
+    // reads the missing ones as the default look.
+    [JsonPropertyName("height")] public double? Height { get; set; }
+    [JsonPropertyName("heightVariation")] public double? HeightVariation { get; set; }
+    [JsonPropertyName("variationLength")] public double? VariationLength { get; set; }
+    [JsonPropertyName("gaps")] public double? Gaps { get; set; }
+    [JsonPropertyName("gapLength")] public double? GapLength { get; set; }
+    [JsonPropertyName("lean")] public double? Lean { get; set; }
+    [JsonPropertyName("facets")] public double? Facets { get; set; }
+    [JsonPropertyName("facetWidth")] public double? FacetWidth { get; set; }
+    [JsonPropertyName("facetLines")] public double? FacetLines { get; set; }
+    [JsonPropertyName("color")] public string? Color { get; set; }
+    [JsonPropertyName("shadeColor")] public string? ShadeColor { get; set; }
+    [JsonPropertyName("contrast")] public double? Contrast { get; set; }
+    [JsonPropertyName("wash")] public double? Wash { get; set; }
+    [JsonPropertyName("rimShadow")] public double? RimShadow { get; set; }
+    [JsonPropertyName("hatching")] public double? Hatching { get; set; }
+    [JsonPropertyName("hatchSpacing")] public double? HatchSpacing { get; set; }
+    [JsonPropertyName("hatchLength")] public double? HatchLength { get; set; }
+    [JsonPropertyName("hatchSlant")] public double? HatchSlant { get; set; }
+    [JsonPropertyName("stipple")] public double? Stipple { get; set; }
+    [JsonPropertyName("stippleSize")] public double? StippleSize { get; set; }
+    [JsonPropertyName("strata")] public int? Strata { get; set; }
+    [JsonPropertyName("inkColor")] public string? InkColor { get; set; }
+    [JsonPropertyName("inkWidth")] public double? InkWidth { get; set; }
+    [JsonPropertyName("foot")] public int? Foot { get; set; }
+    [JsonPropertyName("footRoughness")] public double? FootRoughness { get; set; }
+    [JsonPropertyName("footTicks")] public double? FootTicks { get; set; }
+    [JsonPropertyName("baseShadow")] public double? BaseShadow { get; set; }
+    [JsonPropertyName("baseShadowLength")] public double? BaseShadowLength { get; set; }
+    [JsonPropertyName("baseShadowColor")] public string? BaseShadowColor { get; set; }
 }
 
 internal sealed class MaskDto

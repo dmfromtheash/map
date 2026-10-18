@@ -136,7 +136,7 @@ public sealed class RenderAuditApplication : Application
         for (var y = 60; y < 200; y++) for (var x = 40; x < 220; x++)
         { var o = (y * TileMap.TileSize + x) * 4; paint[o] = 184; paint[o + 1] = 120; paint[o + 2] = 70; paint[o + 3] = 255; }
         var land = new LandLayer(LayerId.New(), "Земля", true, false, 1, tiles,
-            new LandEdgeStyle { FillColor = "#FF7FA35A", FillTextureId = "watercolour-foothill", FillTextureOpacity = 0.7, FillTextureScale = 256 })
+            new LandEdgeStyle { FillColor = "#FF7FA35A", FillTextureId = "owner-snow-drifts", FillTextureOpacity = 0.7, FillTextureScale = 256 })
         { PaintTiles = TileMap.Empty(4).With(new TileKey(1, 0), paint) };
         _landId = land.Id;
         var river = new River
@@ -524,7 +524,7 @@ public sealed class RenderAuditApplication : Application
         _editor.SelectLayer(_landId); _editor.ActiveTool = EditorTool.Land; _editor.SetLandPaintMode(false); await Settle();
         // The expected swatch colour is the renderer's own formula: base colour, then the
         // material at its strength. The material's mean tone is read from the very tile.
-        var stoneTile = MapTextureLibrary.Image("watercolour-foothill")!;
+        var stoneTile = MapTextureLibrary.Image("owner-snow-drifts")!;
         using var stoneBitmap = SKBitmap.FromImage(stoneTile);
         long sr = 0, sg = 0, sb = 0, sn = 0;
         for (var y = 0; y < stoneBitmap.Height; y += 8) for (var x = 0; x < stoneBitmap.Width; x += 8)
@@ -536,22 +536,22 @@ public sealed class RenderAuditApplication : Application
             (byte)Math.Round(baseColor.Blue + (material.Blue - baseColor.Blue) * opacity));
         static bool Near(SKColor actual, SKColor expected, int tolerance) => Distance(actual, expected) <= tolerance;
         var green = new SKColor(0x7F, 0xA3, 0x5A); var red = new SKColor(0xB0, 0x30, 0x30);
-        var stone = SwatchOf(Find<Button>("LandTexturePicker_watercolour-foothill"));
+        var stone = SwatchOf(Find<Button>("LandTexturePicker_owner-snow-drifts"));
         var greenStone = AverageOf(stone);
         Note("swatch-green-stone", $"{greenStone} expected {Mix(green, stoneMean, 0.7)} raw {stoneMean}");
         Check("swatch-shows-green-land-with-stone", Near(greenStone, Mix(green, stoneMean, 0.7), 14) && Distance(greenStone, Mix(green, stoneMean, 0.7)) < Distance(greenStone, stoneMean));
         _editor.SetActiveLandStyle(s => s with { FillColor = "#FFB03030" }); await Settle(); await Settle();
-        var redStone = AverageOf(SwatchOf(Find<Button>("LandTexturePicker_watercolour-foothill")));
+        var redStone = AverageOf(SwatchOf(Find<Button>("LandTexturePicker_owner-snow-drifts")));
         Note("swatch-red-stone", $"{redStone} expected {Mix(red, stoneMean, 0.7)}");
         Check("swatch-follows-land-colour", Near(redStone, Mix(red, stoneMean, 0.7), 14));
         _editor.SetActiveLandStyle(s => s with { FillTextureOpacity = 0.0 }); await Settle(); await Settle();
-        var flat = AverageOf(SwatchOf(Find<Button>("LandTexturePicker_watercolour-foothill")));
+        var flat = AverageOf(SwatchOf(Find<Button>("LandTexturePicker_owner-snow-drifts")));
         Check("swatch-follows-material-strength", Near(flat, red, 4));
         _editor.Undo(); _editor.Undo(); await Settle(); await Settle();
-        var back = AverageOf(SwatchOf(Find<Button>("LandTexturePicker_watercolour-foothill")));
+        var back = AverageOf(SwatchOf(Find<Button>("LandTexturePicker_owner-snow-drifts")));
         Note("swatch-after-undo", back.ToString());
         Check("swatch-follows-undo", Near(back, Mix(green, stoneMean, 0.7), 14));
-        _editor.SetLandPaintMode(true); _editor.ChooseLandMaterial("watercolour-foothill"); await Settle();
+        _editor.SetLandPaintMode(true); _editor.ChooseLandMaterial("owner-snow-drifts"); await Settle();
         var raw = AverageOf(Find<Border>("LandMaterialPreview"));
         Note("brush-raw-stone", $"{raw} tile {stoneMean}");
         Check("brush-sample-shows-raw-material", Near(raw, stoneMean, 14));
@@ -562,7 +562,7 @@ public sealed class RenderAuditApplication : Application
         var watch = Stopwatch.StartNew();
         while (!desktop.Windows.Any(w => w.Name == "MaterialCatalogWindow") && watch.Elapsed < TimeSpan.FromSeconds(10)) await Task.Delay(50);
         var catalog = desktop.Windows.Single(w => w.Name == "MaterialCatalogWindow"); await Settle();
-        var card = catalog.GetVisualDescendants().OfType<Button>().First(b => b.Name == "MaterialCatalog_watercolour-foothill");
+        var card = catalog.GetVisualDescendants().OfType<Button>().First(b => b.Name == "MaterialCatalog_owner-snow-drifts");
         var catalogStone = AverageOf(card.GetVisualDescendants().OfType<Border>().First(b => b.Background is ImageBrush));
         Note("catalog-stone", catalogStone.ToString());
         Check("catalog-swatch-uses-land-colour", Near(catalogStone, Mix(green, stoneMean, 0.7), 14));

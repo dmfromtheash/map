@@ -253,6 +253,11 @@ public sealed class AssetCatalog : IAsyncDisposable
             File.WriteAllBytes(thumbnailPath, BuildThumbnail(bytes));
         }
 
+        if (storedRelative is not null && DetailLadderDepth(metadata.Width, metadata.Height) > 0)
+        {
+            BuildDetailLadder(bytes, Path.Combine(_root, "ladder", sha256));
+        }
+
         var record = new AssetRecord
         {
             Sha256 = sha256,
@@ -1319,5 +1324,85 @@ public sealed class AssetCatalog : IAsyncDisposable
         using var image = surface.Snapshot();
         using var png = image.Encode(SKEncodedImageFormat.Png, 100);
         return png.ToArray();
+    }
+
+    // ---------------------------------------------------------------- detail ladder
+
+    /// <summary>
+    /// A stored original longer than this on its long side also gets a ladder of halved copies
+    /// (<c>ladder/&lt;sha&gt;/&lt;level&gt;.png</c>). A far view then decodes the small step it
+    /// needs instead of the whole high-resolution master, which is only read when the view is
+    /// close enough to show its pixels. The steps are derived files like thumbnails: the
+    /// identity and the original bytes of the asset do not change.
+    /// </summary>
+    public const int DetailLadderThreshold = 2048;
+
+    /// <summary>The ladder stops at the first step whose long side is at most this.</summary>
+    public const int DetailLadderSmallestSide = 512;
+
+    /// <summary>How many halved steps an image of this size gets; zero for ordinary sizes.</summary>
+    public static int DetailLadderDepth(int width, int height)
+    {
+        var side = Math.Max(width, height);
+        if (side <= DetailLadderThreshold) return 0;
+        var depth = 0;
+        while ((side >> depth) > DetailLadderSmallestSide) depth++;
+        return depth;
+    }
+
+    /// <summary>The file of one halved step (1 = half size), when it exists in this catalog.</summary>
+    public bool TryDetailLevelPath(AssetRecord record, int level, out string? path)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        path = null;
+        if (level < 1 || level > DetailLadderDepth(record.Width, record.Height)) return false;
+        return CatalogRelativePath.TryResolve(_root, $"ladder/{record.Sha256.ToLowerInvariant()}/{level}.png", "ladder", out path)
+            && File.Exists(path);
+    }
+
+    /// <summary>
+    /// Writes every missing step of the ladder for one original. Each step is resampled from
+    /// the one above it with a Mitchell cubic filter, so ink lines stay crisp and paper grain
+    /// does not alias. Pure file work: safe off the UI thread.
+    /// </summary>
+    public static void BuildDetailLadder(byte[] encoded, string directory)
+    {
+        ArgumentNullException.ThrowIfNull(encoded);
+        using var decoded = SKBitmap.Decode(encoded)
+            ?? throw new InvalidDataException("The original cannot be decoded for its detail ladder.");
+        var depth = DetailLadderDepth(decoded.Width, decoded.Height);
+        if (depth == 0) return;
+        Directory.CreateDirectory(directory);
+        var source = SKImage.FromBitmap(decoded);
+        try
+        {
+            for (var level = 1; level <= depth; level++)
+            {
+                var width = Math.Max(1, decoded.Width >> level);
+                var height = Math.Max(1, decoded.Height >> level);
+                var bitmap = new SKBitmap(new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Premul));
+                using (var pixels = bitmap.PeekPixels())
+                {
+                    if (!source.ScalePixels(pixels, new SKSamplingOptions(SKCubicResampler.Mitchell)))
+                    {
+                        bitmap.Dispose();
+                        throw new InvalidDataException("A detail ladder step could not be resampled.");
+                    }
+                }
+                bitmap.SetImmutable();
+                var next = SKImage.FromBitmap(bitmap);
+                bitmap.Dispose();
+                source.Dispose();
+                source = next;
+                var path = Path.Combine(directory, level.ToString(System.Globalization.CultureInfo.InvariantCulture) + ".png");
+                if (File.Exists(path)) continue;
+                using var png = source.Encode(SKEncodedImageFormat.Png, 100);
+                AtomicWrite(path, png.ToArray());
+            }
+        }
+        finally
+        {
+            source.Dispose();
+        }
     }
 }

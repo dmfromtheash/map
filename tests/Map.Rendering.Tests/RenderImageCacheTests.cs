@@ -61,7 +61,7 @@ public sealed class RenderImageCacheTests
             for (var x = 0; x < 200; x++) coverage[y * TileMap.TileSize + x] = 255;
         var land = new LandLayer(LayerId.New(), "Земля", true, false, 1,
             TileMap.Empty(1).With(new TileKey(0, 0), coverage),
-            style ?? new LandEdgeStyle { FillColor = "#FF7FA35A", FillTextureId = MapFillTextures.Foothill, FillTextureOpacity = 0.7, FillTextureScale = 128 });
+            style ?? new LandEdgeStyle { FillColor = "#FF7FA35A", FillTextureId = MapFillTextures.OwnerSnow, FillTextureOpacity = 0.7, FillTextureScale = 128 });
         var water = new River
         {
             Style = RiverStyle.Illustrated() with { EdgeRoughness = 0 },
@@ -319,7 +319,7 @@ public sealed class RenderImageCacheTests
     {
         var document = Scene(new LandEdgeStyle
         {
-            FillColor = "#FF7FA35A", FillTextureId = MapFillTextures.Foothill, FillTextureOpacity = 0.7,
+            FillColor = "#FF7FA35A", FillTextureId = MapFillTextures.OwnerSnow, FillTextureOpacity = 0.7,
             FillTextureScale = 128, OutlineWidth = 0, RippleCount = 0,
             OuterShadowOpacity = 0, InnerShadowOpacity = 0,
         }, river: false);
@@ -382,7 +382,7 @@ public sealed class RenderImageCacheDiagnostics
             var coverage = new byte[TileMap.TileSize * TileMap.TileSize];
             for (var y = 0; y < TileMap.TileSize; y++) for (var x = 0; x < 200; x++) coverage[y * TileMap.TileSize + x] = 255;
             var land = new LandLayer(LayerId.New(), "Земля", true, false, 1, TileMap.Empty(1).With(new TileKey(0, 0), coverage),
-                new LandEdgeStyle { FillColor = "#FF7FA35A", FillTextureId = MapFillTextures.Foothill, FillTextureOpacity = 0.7, FillTextureScale = 128 });
+                new LandEdgeStyle { FillColor = "#FF7FA35A", FillTextureId = MapFillTextures.OwnerSnow, FillTextureOpacity = 0.7, FillTextureScale = 128 });
             var water = new River { Style = style, Channels = [RiverEditor.NewChannel([new VectorPoint(20, 128), new VectorPoint(246, 128)], 30)] };
             var objects = new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, []) { Rivers = [water] };
             var document = new MapDocument(DocumentId.New(), "cache", DateTimeOffset.UnixEpoch, new CanvasDefinition(256, 256, "px", "#FF6E9FBF"),

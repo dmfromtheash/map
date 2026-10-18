@@ -5595,10 +5595,40 @@ public sealed partial class EditorViewModel : ViewModelBase
         AfterEdit();
     }
 
+    /// <summary>
+    /// The ground texture the next new land starts with. It is chosen in the land panel right
+    /// under "Новая земля", so it can be picked before any land exists. Null is plain colour.
+    /// </summary>
+    public string? NewLandTextureId { get; private set; } = MapFillTextures.OwnerSnow;
+
+    /// <summary>
+    /// Picks the ground texture for new land and, when a land layer is active, for that land too
+    /// (one undoable step). The owner's own grounds are painted pictures, so they are shown as
+    /// painted - fully opaque and at their own size - instead of mixed into the fill colour.
+    /// </summary>
+    public bool ChooseLandTexture(string? id)
+    {
+        if (id is not null && MapFillTextures.Find(id) is not { Kind: MapFillTextureKind.Ground }) return false;
+        NewLandTextureId = id;
+        return SetActiveLandStyle(style => WithGroundTexture(style, id));
+    }
+
+    public static LandEdgeStyle WithGroundTexture(LandEdgeStyle style, string? id)
+    {
+        return id switch
+        {
+            null => style with { FillTextureId = null },
+            MapFillTextures.OwnerSnow or MapFillTextures.OwnerSnowSparkle or MapFillTextures.OwnerSnowSoft or MapFillTextures.OwnerIceWash =>
+                style with { FillTextureId = id, FillTextureOpacity = 1, FillTextureScale = 1024 },
+            _ => style with { FillTextureId = id },
+        };
+    }
+
     public void AddLandLayer()
     {
         var layer = LandLayer.CreateEmpty(
             LayerId.New(), EntityNameGenerator.Layer(Session.Document, typeof(LandLayer)));
+        layer = layer with { EdgeStyle = WithGroundTexture(layer.EdgeStyle, NewLandTextureId) };
         Session.Execute(new AddLayerCommand(layer, _activeLayerId));
         _activeLayerId = layer.Id;
         ActiveTool = EditorTool.Land;
@@ -6959,7 +6989,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     {
         if (ActiveLayer is not LandLayer { Locked: false } land) return false;
         var proposed = change(land.EdgeStyle);
-        var updated = proposed with
+        var updated = (proposed with
         {
             FillColor = AppearanceColor.Normalize(proposed.FillColor) ?? land.EdgeStyle.FillColor,
             OutlineColor = AppearanceColor.Normalize(proposed.OutlineColor) ?? land.EdgeStyle.OutlineColor,
@@ -6977,7 +7007,14 @@ public sealed partial class EditorViewModel : ViewModelBase
                 ? ground.Id : null,
             FillTextureOpacity = Math.Clamp(proposed.FillTextureOpacity, 0, 1),
             FillTextureScale = Math.Clamp(proposed.FillTextureScale, MapFillTextures.MinimumScale, MapFillTextures.MaximumScale),
-        };
+            Cliff = (proposed.Cliff with
+            {
+                Color = AppearanceColor.Normalize(proposed.Cliff.Color) ?? land.EdgeStyle.Cliff.Color,
+                ShadeColor = AppearanceColor.Normalize(proposed.Cliff.ShadeColor) ?? land.EdgeStyle.Cliff.ShadeColor,
+                InkColor = AppearanceColor.Normalize(proposed.Cliff.InkColor) ?? land.EdgeStyle.Cliff.InkColor,
+                BaseShadowColor = AppearanceColor.Normalize(proposed.Cliff.BaseShadowColor) ?? land.EdgeStyle.Cliff.BaseShadowColor,
+            }).Bounded(),
+        });
         if (updated == land.EdgeStyle) return false;
         Session.Execute(new UpdateLandStyleCommand(land, updated)); AfterEdit(); return true;
     }

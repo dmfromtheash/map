@@ -399,12 +399,19 @@ public static class SceneRenderer
 
     /// <summary>
     /// How much finer than the document a stamp is sampled in the editor. One world unit is one
-    /// document pixel; a stamp W units wide draws from a mip of at most W × 4 source pixels
-    /// however far the view zooms in, so the detail a map can show grows with its size and with
-    /// the world size of its objects, not with the zoom (DEC-035). Export is never capped: it
-    /// evaluates the full source for the requested output size.
+    /// document pixel; a stamp W units wide draws from a mip of at most W × 16 source pixels,
+    /// which is the editor's deepest zoom (DEC-046; DEC-035 capped it at four). A high-resolution
+    /// asset therefore keeps its own detail all the way in, while far views still draw from a
+    /// small step of its detail ladder. Export is never capped: it evaluates the full source for
+    /// the requested output size.
     /// </summary>
-    public const double StampDetailHeadroom = 4;
+    public const double StampDetailHeadroom = 16;
+
+    /// <summary>
+    /// Above this zoom the terrain magnifies the same pixels instead of recomputing coastlines
+    /// at ever larger radii (DEC-035). Stamps have their own, deeper headroom above.
+    /// </summary>
+    public const double TerrainDetailHeadroom = 4;
 
     /// <summary>
     /// What the terrain reads from an object layer: its visibility, blending, effects and mask.
@@ -759,7 +766,7 @@ public static class SceneRenderer
         // stamps do. Keep display scaling, but do not recalculate a coastline's blur and
         // morphology at ever larger radii for magnification alone. Export remains exact.
         var terrainScale = options.IsExport ? deviceScale
-            : deviceScale * Math.Min(1, StampDetailHeadroom / Math.Max(1e-4, options.ViewScale));
+            : deviceScale * Math.Min(1, TerrainDetailHeadroom / Math.Max(1e-4, options.ViewScale));
         if (cacheable && options.TerrainRefinement is { } refinement)
         {
             if (options.Stats is { } refinementStats) refinementStats.TerrainRefinementBuildMilliseconds = refinement.LastBuildMilliseconds;
@@ -787,7 +794,11 @@ public static class SceneRenderer
             var covered = placement.Left <= view.Left + slack && placement.Top <= view.Top + slack
                 && placement.Right >= view.Right - slack && placement.Bottom >= view.Bottom - slack;
             var refining = false;
-            if (!options.FastTerrain && covered && options.RequestRefinedFrame is { } requestFrame
+            // A kept image that covers only part of the view still stands in while the exact
+            // terrain is prepared in the background: the uncovered part gets the plain passes. A
+            // view that no kept image covers - back to a scale visited before, a fit to the canvas -
+            // used to rebuild every coast in the frame (0.7-1.3 s on a 4096×3072 map of tiers).
+            if (!options.FastTerrain && options.RequestRefinedFrame is { } requestFrame
                 && options.RiverOverrides is null && options.RoadOverrides is null
                 && surfaces.All(surface => !surface.Owner.Effects.ClippingEnabled))
             {
@@ -799,7 +810,7 @@ public static class SceneRenderer
                     BackgroundTerrain(document, lands, surfaces, view, terrainScale, options), requestFrame);
             }
             if (refining && options.Stats is { } pendingStats) pendingStats.TerrainRefinementsPending++;
-            if (options.FastTerrain && !covered)
+            if ((options.FastTerrain || refining) && !covered)
             {
                 if (options.Stats is { } uncoveredStats)
                 {
@@ -807,10 +818,16 @@ public static class SceneRenderer
                     uncoveredStats.TerrainUncoveredDetail = FormattableString.Invariant($"view=({view.Left:0.#},{view.Top:0.#},{view.Right:0.#},{view.Bottom:0.#}) kept=({placement.Left:0.#},{placement.Top:0.#},{placement.Right:0.#},{placement.Bottom:0.#}) keptScale={keptScale:0.###} wanted={terrainScale:0.###} count={options.Terrain.Count}");
                 }
                 // Only the newly exposed area is missing. Drawing the fallback underneath the
-                // kept image would apply translucent ground/water twice in their overlap.
+                // kept image would apply translucent ground/water twice in their overlap. The
+                // plain passes in any case: the exact terrain of this view is on its way.
+                var uncoveredOptions = options.FastTerrain ? options : new RenderOptions
+                {
+                    ViewScale = options.ViewScale, VisibleWorld = view, LodTier = options.LodTier,
+                    TileCache = options.TileCache, GpuContext = options.GpuContext, FastTerrain = true, Stats = options.Stats,
+                };
                 canvas.Save();
                 canvas.ClipRect(placement, SKClipOperation.Difference);
-                DrawTerrainPasses(canvas, document, lands, surfaces, view, options);
+                DrawTerrainPasses(canvas, document, lands, surfaces, view, uncoveredOptions);
                 canvas.Restore();
             }
             if (options.FastTerrain || refining)
@@ -830,13 +847,30 @@ public static class SceneRenderer
         if (cacheable && options.TerrainRefinement is { } staleRefinement && options.RequestRefinedFrame is { } staleFrame
             && options.RiverOverrides is null && options.RoadOverrides is null
             && surfaces.All(surface => !surface.Owner.Effects.ClippingEnabled)
-            && options.Terrain!.TryGetStale(view, terrainScale, options.GpuContext, out var staleParts) is { } previous
-            && OnlyLandsDiffer(terrainParts!, staleParts, out var changedLands)
+            && options.Terrain!.TryGetStaleNear(view, terrainScale, options.GpuContext, out var staleParts,
+                out var staleView, out var staleScale) is { } previous
+            && OnlyLandsDiffer(terrainParts!, staleParts, out var changedLands, allowSame: true)
             && staleRefinement.Queue(terrainParts!, view, terrainScale,
                 BackgroundTerrain(document, lands, surfaces, view, terrainScale, options), staleFrame))
         {
-            canvas.DrawImage(previous, RenderImageCache.Placement(previous, view, terrainScale),
-                new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None));
+            // The previous terrain, of this view or - after a view change - of the nearest one,
+            // resampled; whatever it does not cover gets the plain passes.
+            var stalePlacement = RenderImageCache.Placement(previous, staleView, staleScale);
+            const double staleSlack = 1e-3;
+            if (stalePlacement.Left > view.Left + staleSlack || stalePlacement.Top > view.Top + staleSlack
+                || stalePlacement.Right < view.Right - staleSlack || stalePlacement.Bottom < view.Bottom - staleSlack)
+            {
+                var plainOptions = new RenderOptions
+                {
+                    ViewScale = options.ViewScale, VisibleWorld = view, LodTier = options.LodTier,
+                    TileCache = options.TileCache, GpuContext = options.GpuContext, FastTerrain = true, Stats = options.Stats,
+                };
+                canvas.Save();
+                canvas.ClipRect(stalePlacement, SKClipOperation.Difference);
+                DrawTerrainPasses(canvas, document, lands, surfaces, view, plainOptions);
+                canvas.Restore();
+            }
+            canvas.DrawImage(previous, stalePlacement, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear));
             foreach (var (current, before) in changedLands) DrawLandChange(canvas, document, current, before, view, options);
             if (options.Stats is { } staleStats) { staleStats.TerrainRefinementsPending++; staleStats.TerrainReused++; }
             DrawTerrainLiveOverlay(canvas, document, lands, view, options);
@@ -895,7 +929,7 @@ public static class SceneRenderer
     /// roads and layer settings must be the same, or the previous image cannot stand in.
     /// </summary>
     private static bool OnlyLandsDiffer(IReadOnlyList<object> current, IReadOnlyList<object> previous,
-        out List<(LandLayer Current, LandLayer Before)> changed)
+        out List<(LandLayer Current, LandLayer Before)> changed, bool allowSame = false)
     {
         changed = [];
         if (current.Count != previous.Count) return false;
@@ -905,7 +939,7 @@ public static class SceneRenderer
             if (current[i] is LandLayer now && previous[i] is LandLayer then && now.Id == then.Id) changed.Add((now, then));
             else return false;
         }
-        return changed.Count > 0;
+        return allowSame || changed.Count > 0;
     }
 
     /// <summary>
@@ -1555,8 +1589,17 @@ public static class SceneRenderer
         var sampling = options.ViewScale < 0.9
             ? new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear)
             : new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None);
+        // A piece of land above the ground or sea beneath it drops as a cliff below its southern
+        // edges (LandCliffField, LandCliffShader): the wall of land just above the view reaches into it, so the
+        // view is extended upwards by the tallest wall this piece can have over what lies below.
+        var earlier = TerrainOrder.Lands(document).TakeWhile(candidate => !ReferenceEquals(candidate, layer))
+            .Where(candidate => candidate is { Visible: true, Opacity: > 0 } && candidate.GeometryTiles.TileCount > 0)
+            .ToList();
+        var lowestFloor = Math.Min(0, earlier.Count > 0 ? earlier.Min(candidate => candidate.Level) : 0);
+        var cliffReach = options.FastTerrain ? 0 : style.Cliff.Reach(style.Cliff.Steps(layer.Level, lowestFloor));
+        var reachTop = view.Top - cliffReach;
         var keys = layer.GeometryTiles
-            .KeysIntersecting(view.Left, view.Top, view.Right, view.Bottom)
+            .KeysIntersecting(view.Left, reachTop, view.Right, view.Bottom)
             .ToList();
         if (keys.Count == 0)
         {
@@ -1566,16 +1609,14 @@ public static class SceneRenderer
         // Land drawn before this piece in terrain order, inside the view. Where this piece lies
         // over another, the two are one landmass: no coast is drawn between them and this edge
         // dissolves into the land beneath instead of standing on it as a hard cut.
-        var lowers = new List<LandLayer>();
-        foreach (var candidate in TerrainOrder.Lands(document))
-        {
-            if (ReferenceEquals(candidate, layer)) break;
-            if (candidate is { Visible: true, Opacity: > 0 } && candidate.GeometryTiles.TileCount > 0
-                && candidate.GeometryTiles.KeysIntersecting(view.Left, view.Top, view.Right, view.Bottom).Any())
-            {
-                lowers.Add(candidate);
-            }
-        }
+        var beneath = earlier
+            .Where(candidate => candidate.GeometryTiles.KeysIntersecting(view.Left, reachTop, view.Right, view.Bottom).Any())
+            .ToList();
+        // A raised piece is not one landmass with the lower ground it stands on: it keeps its own
+        // rim there, stands on it as a hard edge and drops to it as a cliff. Only land at its own
+        // level shares its coast and dissolves into it; the land below is its ground.
+        var lowers = cliffReach > 0 ? beneath.Where(lower => lower.Level >= layer.Level).ToList() : beneath;
+        var ground = cliffReach > 0 ? beneath.Where(lower => lower.Level < layer.Level).ToList() : [];
 
         // Stage 19: rivers carve the coverage before any edge styling, so the coast wraps their
         // banks and the sea enters their mouths. The carved coverage is rasterized at device
@@ -1587,7 +1628,7 @@ public static class SceneRenderer
         // A fully opaque interior has no coast, ripple or inner shadow. Prove coverage beyond
         // every filter's reach before skipping those costly morphology passes. Materials and
         // paint still draw normally; partial tiles, cuts, translucent fill and overlaps do not qualify.
-        var solidInterior = !options.FastTerrain && cutters.Count == 0 && lowers.Count == 0
+        var solidInterior = !options.FastTerrain && cutters.Count == 0 && beneath.Count == 0
             && ParseColor(style.FillColor).Alpha == 255
             && SolidLandInterior(layer, Expand(view,LandEdgeReach(style)+2/Math.Max(.01,options.ViewScale)));
         if (cutters.Count > 0)
@@ -1727,8 +1768,8 @@ public static class SceneRenderer
         // pan draws the plain fill (FastTerrain) and never enters the cache.
         if (options.StyledLand is { } styled && paintPreview is null && !options.IsExport && !options.FastTerrain)
         {
-            var parts = new List<object> { layer.Id, layer.GeometryTiles, layer.PaintTiles, layer.EdgeStyle };
-            parts.AddRange(lowers);
+            var parts = new List<object> { layer.Id, layer.GeometryTiles, layer.PaintTiles, layer.EdgeStyle, layer.Level };
+            parts.AddRange(beneath);
             foreach (var (owner, river) in cutters)
             {
                 parts.Add(OwnerKey(owner)); parts.Add(river);
@@ -1784,6 +1825,12 @@ public static class SceneRenderer
             var useField = CoastDistanceField.Enabled && !options.CoastFilters && !options.FastTerrain && !solidInterior
                 && options.LodTier != RenderLodTier.Overview && TryBuildCoastField();
 
+            // Over the lower ground a raised piece has no surf - what lies there is land, not
+            // water - so its outer effects are drawn apart, cut away over that ground, and only
+            // the rim line and the shadow are laid there again (RimOverGround).
+            var rimOverGround = ground.Count > 0 && !options.FastTerrain && !solidInterior;
+            if (rimOverGround) canvas.SaveLayer(ToRect(view), null);
+
             if (useField)
             {
                 using var outer = CoastDistanceField.OuterEffects(
@@ -1827,6 +1874,22 @@ public static class SceneRenderer
                 }
                 withLowers = false;
             }
+
+            if (rimOverGround)
+            {
+                using (var erase = new SKPaint { BlendMode = SKBlendMode.DstOut })
+                {
+                    canvas.SaveLayer(ToRect(view), erase);
+                    using (var plain = new SKPaint()) DrawLandCoverage(canvas, ground, view, options, plain);
+                    canvas.Restore();
+                }
+                canvas.Restore();
+                RimOverGround();
+            }
+
+            // The cliff below the raised edges: over the surf and shadows at its foot, under the
+            // fill, which covers the top of the wall exactly along the edge.
+            if (cliffReach > 0 && !solidInterior) DrawCliffs();
 
             using (var tint = SKColorFilter.CreateBlendMode(ParseColor(style.FillColor), SKBlendMode.SrcIn))
             using (var fill = new SKPaint { ColorFilter = tint, IsAntialias = true })
@@ -1934,6 +1997,83 @@ public static class SceneRenderer
                 }
                 canvas.Restore();
             }
+        }
+
+        // The edge of a raised piece where it stands on lower ground: its outline and its shadow,
+        // kept inside that ground's coverage.
+        void RimOverGround()
+        {
+            var shadow = style.OuterShadowOpacity > 0 && style.ShadowBlur > 0;
+            if (!shadow && style.OutlineWidth <= 0) return;
+            canvas.SaveLayer(ToRect(view), null);
+            if (shadow)
+            {
+                using var filter = SKImageFilter.CreateDropShadowOnly(
+                    (float)style.ShadowOffsetX, (float)style.ShadowOffsetY,
+                    (float)style.ShadowBlur, (float)style.ShadowBlur,
+                    SKColors.Black.WithAlpha(Alpha(style.OuterShadowOpacity)));
+                DrawFilteredCoverage(filter, color: null, SKBlendMode.SrcOver);
+            }
+            if (style.OutlineWidth > 0) DrawExpandedCoverage(style.OutlineWidth, ParseColor(style.OutlineColor));
+            using (var keep = new SKPaint { BlendMode = SKBlendMode.DstIn })
+            {
+                canvas.SaveLayer(ToRect(view), keep);
+                using (var plain = new SKPaint()) DrawLandCoverage(canvas, ground, view, options, plain);
+                canvas.Restore();
+            }
+            canvas.Restore();
+        }
+
+        // The cliff of this piece over the view: one field per square of the map at the detail of
+        // the current zoom (a texel about a device pixel), each drawn by the wall shader over the
+        // bounds of its wall. Fields are kept between frames and only an edit of this land or of
+        // the land below recomputes them; a slider or a zoom only redraws.
+        void DrawCliffs()
+        {
+            var cliff = style.Cliff;
+            if (!LandCliffShader.Available || cliff.Height * deviceScale < 1.2) return;
+            var lod = Math.Clamp((int)Math.Floor(Math.Log2(1 / Math.Max(1e-6, deviceScale))), 0, 6);
+            var size = LandCliffField.Size * (double)(1 << lod);
+            var pixel = 1 / deviceScale;
+            var rimWidth = style.OutlineWidth > 0 ? style.OutlineWidth : 0;
+            using var paint = new SKPaint { IsAntialias = false };
+            for (var fy = (int)Math.Floor(view.Top / size); fy * size < view.Bottom; fy++)
+                for (var fx = (int)Math.Floor(view.Left / size); fx * size < view.Right; fx++)
+                {
+                    // Only squares a wall of this land can reach: some of its coverage lies above
+                    // them within reach (or beside them, by the lean).
+                    var side = Math.Abs(cliff.Lean) * cliffReach + 2;
+                    if (!layer.GeometryTiles.KeysIntersecting(fx * size - side, fy * size - cliffReach - 2,
+                            (fx + 1) * size + side, (fy + 1) * size).Any()) continue;
+                    var field = LandCliffField.Get(layer, beneath, cliff.Lean, cliffReach, lod, fx, fy);
+                    if (field.Wall is not { } wall || !wall.Intersects(view)) continue;
+                    var drawStarted = Stopwatch.GetTimestamp();
+                    // At a texel no larger than a device pixel the kept wall image of the square
+                    // stands in for the shader; closer in, the shader draws every pixel crisply.
+                    if (deviceScale * field.Texel <= 1.001)
+                    {
+                        using var kept = field.WallImage(cliff, style.OutlineColor, rimWidth);
+                        if (kept is not null)
+                        {
+                            canvas.DrawImage(kept, new SKRect((float)field.Left, (float)field.Top,
+                                (float)(field.Left + field.WorldSize), (float)(field.Top + field.WorldSize)),
+                                new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None));
+                            LandCliffField.DrawMilliseconds += Stopwatch.GetElapsedTime(drawStarted).TotalMilliseconds;
+                            continue;
+                        }
+                    }
+                    using var fieldShader = field.ToShader(out var image);
+                    using (image)
+                    using (var shader = LandCliffShader.Create(fieldShader, cliff, style.OutlineColor, rimWidth, pixel))
+                    {
+                        if (shader is null) return;
+                        paint.Shader = shader;
+                        using var area = field.WallArea();
+                        canvas.DrawPath(area, paint);
+                        paint.Shader = null;
+                    }
+                    LandCliffField.DrawMilliseconds += Stopwatch.GetElapsedTime(drawStarted).TotalMilliseconds;
+                }
         }
 
         // The coast as a signed distance field at device resolution, over the view plus the reach
