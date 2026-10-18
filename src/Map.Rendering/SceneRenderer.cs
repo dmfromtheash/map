@@ -435,6 +435,33 @@ public static class SceneRenderer
     private const double OverviewExactScreenSize = 4;
     private static readonly ConditionalWeakTable<ObjectLayer, ObjectOverviewPlan> OverviewPlans = [];
     private static readonly ConditionalWeakTable<ObjectLayer, DetailTileRevisions> DetailRevisions = [];
+
+    /// <summary>The revisions of a layer's objects by the identity of its object list (see <see cref="RevisionsFor"/>).</summary>
+    private static readonly ConditionalWeakTable<object, ObjectRevisions> RevisionsByObjects = [];
+
+    private sealed record ObjectRevisions(IReadOnlyList<ObjectSublayerState> Sublayers, DetailTileRevisions Revisions);
+
+    /// <summary>
+    /// The tile revisions of an object layer. A new record of the layer that keeps the very same
+    /// object list and sublayer visibility - a mask, an opacity, a name, a lock changed - shares the
+    /// revisions of the record before it, so its dense tiles stay valid: the tiles hold only the
+    /// objects, the layer's group applies everything else. Each such change rebuilt every tile of the
+    /// view in the frame (30 tiles, 350-430 ms with 50 000 of the owner's mountains: a mask stroke's
+    /// press and release, its undo).
+    /// </summary>
+    private static DetailTileRevisions RevisionsFor(ObjectLayer layer)
+    {
+        if (DetailRevisions.TryGetValue(layer, out var known)) return known;
+        if (RevisionsByObjects.TryGetValue(layer.Objects, out var shared)
+            && shared.Sublayers.SequenceEqual(layer.SublayerStates))
+        {
+            DetailRevisions.AddOrUpdate(layer, shared.Revisions);
+            return shared.Revisions;
+        }
+        var revisions = DetailRevisions.GetValue(layer, static l => new(l));
+        RevisionsByObjects.AddOrUpdate(layer.Objects, new ObjectRevisions(layer.SublayerStates, revisions));
+        return revisions;
+    }
     private static long _detailRevision;
     private static readonly ConditionalWeakTable<byte[], MaskCoverageState> MaskCoverageStates = [];
     private static readonly ConditionalWeakTable<byte[], LandCoverageState> LandCoverageStates = [];
@@ -702,7 +729,7 @@ public static class SceneRenderer
             || layer.Effects is { OuterShadowOpacity: > 0 } or { InnerShadowOpacity: > 0 }
             || !ObjectLayerChanges.TryGet(layer, out var delta) || delta.Removed.Count > 0 || delta.Added.Count == 0
             || delta.Added.Any(index => index < delta.Source.Objects.Count)
-            || !DetailRevisions.GetValue(layer, static l => new(l)).AllOnFirstSublayer)
+            || !RevisionsFor(layer).AllOnFirstSublayer)
             return null;
         var added = delta.Added.Select(index => layer.Objects[index]).ToArray();
         if (added.Any(o => o.Stamp is { ShadowPlacement: StampShadowPlacement.Layer, ShadowOpacity: > 0 })) return null;
@@ -2693,7 +2720,7 @@ public static class SceneRenderer
             && options.ObjectCache is not null && options.VisibleWorld is not null
             && options.ObjectOverrides is not { Count: > 0 } && layer.Objects.Count >= DenseTileMinimumObjects
             && ObjectSpatialIndex.For(layer).MayContainAtLeast(view, DenseTileMinimumVisible)
-            && DetailRevisions.GetValue(layer, static l => new(l)).CanCache
+            && RevisionsFor(layer).CanCache
             && document.Assets.All(asset => options.Stamps?.TryGetImage(asset.Sha256) is not null))
         {
             DrawDetailedStampTiles(canvas, document, layer, view, options);
@@ -2840,7 +2867,7 @@ public static class SceneRenderer
         {
             if (ObjectLayerChanges.TryGet(layer, out var delta))
             {
-                var previous = DetailRevisions.GetValue(delta.Source, static l => new(l));
+                var previous = RevisionsFor(delta.Source);
                 _parent = previous;
                 _unsupported = previous._unsupported - delta.Removed.Count(i => !Neutral(delta.Source.Objects[i]))
                     + delta.Added.Count(i => !Neutral(layer.Objects[i]));
@@ -2894,7 +2921,7 @@ public static class SceneRenderer
         var bucket = (int)Math.Ceiling(Math.Log2(options.ViewScale) * 4);
         var scale = Math.Pow(2, bucket / 4d);
         var worldSize = 512 / scale;
-        var revisions = DetailRevisions.GetValue(layer, static l => new(l));
+        var revisions = RevisionsFor(layer);
         var cache = options.ObjectCache!;
         var hits = cache.Hits; var misses = cache.Misses;
         // While the camera moves, the tiles of the nearest zoom bucket that are all still kept

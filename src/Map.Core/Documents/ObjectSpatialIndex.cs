@@ -59,7 +59,25 @@ public sealed class ObjectSpatialIndex
         }
     }
 
-    public static ObjectSpatialIndex For(ObjectLayer layer) => Cache.GetValue(layer, static l => new(l));
+    /// <summary>
+    /// The index of a layer's objects. It depends on the object list alone: a new record of the
+    /// layer with the very same list (a mask, opacity, name or lock changed) shares the index of the
+    /// record before it instead of indexing every object again (50 000 objects per mask stroke).
+    /// </summary>
+    public static ObjectSpatialIndex For(ObjectLayer layer)
+    {
+        if (Cache.TryGetValue(layer, out var known)) return known;
+        if (ByObjects.TryGetValue(layer.Objects, out var shared))
+        {
+            Cache.AddOrUpdate(layer, shared);
+            return shared;
+        }
+        var index = Cache.GetValue(layer, static l => new(l));
+        ByObjects.AddOrUpdate(layer.Objects, index);
+        return index;
+    }
+
+    private static readonly ConditionalWeakTable<object, ObjectSpatialIndex> ByObjects = [];
     // All three edit kinds now use the same lazy ObjectLayerChanges handoff.
     internal static void RegisterReplacements(ObjectLayer source, ObjectLayer target,
         IReadOnlyDictionary<int, SceneObject> replacements) { }
