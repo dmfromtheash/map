@@ -379,8 +379,15 @@ public static class ObjectTreeRows
     }
 
     /// <summary>A fixed set of rows in front of a virtual list, without materializing the list.</summary>
+    /// <summary>
+    /// Header rows before the rows of a list. A read-only <see cref="System.Collections.IList"/>
+    /// as well, like <see cref="VirtualRowList"/>: an items control given anything else copies
+    /// the whole source into a list of its own - every row of 100 000 objects on each refresh of
+    /// the object list (0.8-0.9 s over a few dozen edits), while a virtualizing list only reads
+    /// the rows it shows.
+    /// </summary>
     private sealed class PrefixedRowList(IReadOnlyList<ObjectTreeRow> prefix, IReadOnlyList<ObjectTreeRow> rest)
-        : IReadOnlyList<ObjectTreeRow>
+        : IReadOnlyList<ObjectTreeRow>, System.Collections.IList
     {
         public int Count => prefix.Count + rest.Count;
         public ObjectTreeRow this[int index] => index < prefix.Count ? prefix[index] : rest[index - prefix.Count];
@@ -390,6 +397,45 @@ public static class ObjectTreeRows
             foreach (var row in rest) yield return row;
         }
         System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+
+        object? System.Collections.IList.this[int index]
+        {
+            get => this[index];
+            set => throw new NotSupportedException("The object list is read-only.");
+        }
+
+        bool System.Collections.IList.IsFixedSize => true;
+        bool System.Collections.IList.IsReadOnly => true;
+        bool System.Collections.ICollection.IsSynchronized => false;
+        object System.Collections.ICollection.SyncRoot => this;
+        int System.Collections.IList.Add(object? value) => throw new NotSupportedException("The object list is read-only.");
+        void System.Collections.IList.Clear() => throw new NotSupportedException("The object list is read-only.");
+        void System.Collections.IList.Insert(int index, object? value) => throw new NotSupportedException("The object list is read-only.");
+        void System.Collections.IList.Remove(object? value) => throw new NotSupportedException("The object list is read-only.");
+        void System.Collections.IList.RemoveAt(int index) => throw new NotSupportedException("The object list is read-only.");
+        bool System.Collections.IList.Contains(object? value) => IndexOf(value) >= 0;
+        int System.Collections.IList.IndexOf(object? value) => IndexOf(value);
+
+        void System.Collections.ICollection.CopyTo(Array array, int index)
+        {
+            ArgumentNullException.ThrowIfNull(array);
+            for (var i = 0; i < Count; i++) array.SetValue(this[i], index + i);
+        }
+
+        private int IndexOf(object? value)
+        {
+            if (value is not ObjectTreeRow wanted) return -1;
+            for (var i = 0; i < prefix.Count; i++)
+                if (prefix[i] == wanted) return i;
+            if (rest is System.Collections.IList list)
+            {
+                var found = list.IndexOf(wanted);
+                return found < 0 ? -1 : prefix.Count + found;
+            }
+            for (var i = 0; i < rest.Count; i++)
+                if (rest[i] == wanted) return prefix.Count + i;
+            return -1;
+        }
     }
 
     /// <summary>True when the object passes both the search text and the type filter.</summary>
