@@ -68,6 +68,58 @@ public sealed class KeptLayerStillFrameTests
         Assert.Equal(0, cache.Count);
     }
 
+    [Fact]
+    public void A_still_frame_after_a_wheel_zoom_is_drawn_exactly_and_not_from_the_zoom_stand_in()
+    {
+        // Enough stamps for the dense-tile path: the frames of a wheel zoom draw the kept tiles of
+        // a nearby zoom bucket, resampled, and the frame after the zoom must draw the exact bucket.
+        using var image = Sprite(new SKColor(60, 80, 140, 240));
+        var stamps = new Images(image);
+        SceneObject Peak(int i) => new(ObjectId.New(), SceneObjectKind.Stamp, "Peak " + i,
+            520 + i % 50 * 14.3, 520 + i / 50 * 14.1, 12, 12, i * 29 % 360, "#FFFFFFFF", "#00000000", 0, true, false)
+            { Stamp = new StampStyle(new string('f', 64)), ObjectOpacity = 1 };
+        var peaks = new ObjectLayer(LayerId.New(), "Горы", true, false, 1, [.. Enumerable.Range(0, 2500).Select(Peak)]);
+        var document = new MapDocument(DocumentId.New(), "Zoom", DateTimeOffset.UnixEpoch, new CanvasDefinition(2048, 2048, "px", "#FFE6E2D0"),
+            [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFE6E2D0"), peaks]);
+        using var cache = new LayerImageCache();
+        using var tiles = new ObjectOverviewCache();
+
+        SKBitmap Draw(float scale, float offset, bool fast, LayerImageCache? layers, RenderStats stats)
+        {
+            using var surface = SKSurface.Create(new SKImageInfo(600, 600))!;
+            surface.Canvas.Clear(SKColors.Black);
+            surface.Canvas.Translate(offset, offset);
+            surface.Canvas.Scale(scale);
+            var origin = -offset / scale;
+            SceneRenderer.Render(surface.Canvas, document, new RenderOptions
+            {
+                Stamps = stamps, LayerImages = layers, Stats = stats, ViewScale = scale, FastTerrain = fast,
+                ObjectCache = tiles, VisibleWorld = new(origin, origin, origin + (600 / scale), origin + (600 / scale)),
+            });
+            using var snapshot = surface.Snapshot();
+            return SKBitmap.FromImage(snapshot);
+        }
+
+        // The whole map at rest, then one notch of the wheel: a zoom frame, then the settled frame.
+        // Both views lie inside the page, the far one around the near one with room to spare:
+        // the zoom frame's wider stand-in image finds every tile of the far bucket it needs.
+        using var far = Draw(.4f, -80, false, cache, new());
+        var zoom = new RenderStats();
+        using var zooming = Draw(.8f, -400, true, cache, zoom);
+        var settled = new RenderStats();
+        using var near = Draw(.8f, -400, false, cache, settled);
+        using var direct = Draw(.8f, -400, false, null, new());
+        // The zoom frame stood in with the far bucket's tiles; the settled frame draws the exact
+        // bucket itself and keeps nothing of the zoom frame. (Tiles drawn through the kept image's
+        // half-float surface round antialiased edges by a few more units than a whole layer does,
+        // so the pixels are compared loosely here; the statistics are the check.)
+        Assert.Equal(1, zoom.TilesReused);
+        Assert.Equal(0, settled.LayerImagesKept);
+        Assert.Equal(0, settled.TilesReused);
+        Assert.True(settled.ObjectsDrawn > 1000, "the settled frame draws the objects");
+        Assert.All(near.Pixels.Zip(direct.Pixels), p => Assert.InRange(Math.Abs(p.First.Red - p.Second.Red) + Math.Abs(p.First.Blue - p.Second.Blue), 0, 32));
+    }
+
     private static SKImage Sprite(SKColor color)
     {
         using var sprite = SKSurface.Create(new SKImageInfo(32, 32))!;

@@ -1,4 +1,4 @@
-# Builds the owner's local copy of Map with ReadyToRun (precompiled code: the first frame of a map
+﻿# Builds the owner's local copy of Map with ReadyToRun (precompiled code: the first frame of a map
 # 1.5 -> 1.0 s, fewer JIT pauses on first actions; measured 2026-10-18) into C:\Users\Leshe\Apps\Map,
 # where the desktop shortcut "Map — конструктор карт" points. Local use on this PC only: not a release.
 # Run after changes, with Map closed:

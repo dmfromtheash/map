@@ -606,7 +606,7 @@ public static class SceneRenderer
     {
         var stats = options.Stats!;
         var missingBefore = stats.MissingAssets;
-        object[] parts = [layer.Objects, layer.SublayerStates, options.LodTier, options.FastPreview, options.ViewScale,
+        object[] parts = [layer.Objects, layer.SublayerStates, options.LodTier, options.FastPreview, options.FastTerrain, options.ViewScale,
             (object?)options.Stamps ?? DBNull.Value, (object?)document.StampForeground ?? DBNull.Value, document.Assets];
         var built = false;
         void Draw(SKCanvas target)
@@ -662,7 +662,9 @@ public static class SceneRenderer
         var built = false;
         // Everything the layer's pixels are drawn from besides the layer itself: the detail
         // level and per-object effects of the frame, the stamp images, the foreground surface.
-        object[] parts = [layer, options.LodTier, options.FastPreview, options.ViewScale, (object?)options.Stamps ?? DBNull.Value,
+        // A fast frame (the camera moving) draws dense tiles of a nearby zoom bucket resampled:
+        // its image must not serve the exact frame that follows.
+        object[] parts = [layer, options.LodTier, options.FastPreview, options.FastTerrain, options.ViewScale, (object?)options.Stamps ?? DBNull.Value,
             (object?)document.StampForeground ?? DBNull.Value, document.Assets];
         var appended = AppendedObjects(layer, view, options, out var previous);
         var drawn = options.LayerImages!.TryDraw(canvas, layer.Id, parts, options.GpuContext,
@@ -696,7 +698,10 @@ public static class SceneRenderer
         var missingBefore = stats.MissingAssets;
         var built = false;
         // No scale in the key: within its limits the image of another scale stands in, resampled.
-        object[] parts = [layer, options.LodTier, options.FastPreview, (object?)options.Stamps ?? DBNull.Value,
+        // The fast flag is in it: the image a wheel zoom built from resampled tiles of a nearby
+        // bucket served every still frame after the zoom (the exact bucket was built only by the
+        // next edit, 0.4-0.6 s inside a stroke on 50 000 objects; found in the live check 2026-10-18).
+        object[] parts = [layer, options.LodTier, options.FastPreview, options.FastTerrain, (object?)options.Stamps ?? DBNull.Value,
             (object?)document.StampForeground ?? DBNull.Value, document.Assets];
         var device = canvas.DeviceClipBounds;
         var margin = Math.Max(device.Width, device.Height) / 4;
