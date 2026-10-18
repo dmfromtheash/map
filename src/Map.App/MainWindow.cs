@@ -273,13 +273,40 @@ public sealed class MainWindow : Window
         return editor;
     }
 
+    /// <summary>
+    /// Opens a document in the workshop of its category. Every road into an editor - a new map,
+    /// a file, a recovered copy - passes here, so a future category with its own surface is one
+    /// more case, and a category this build lacks is refused instead of opened as standard.
+    /// </summary>
+    private void OpenInWorkshop(Map.Core.Documents.MapDocument document, string? path, bool startDirty,
+        DateTimeOffset? lastSavedUtc = null)
+    {
+        if (!_dashboard.AcceptsCategory(document))
+        {
+            ShowDashboard();
+            return;
+        }
+
+        switch (MapCategories.Find(document.Category)?.Workshop)
+        {
+            case MapCategories.StandardWorkshop:
+                ShowEditor(CreateEditor(document, path, startDirty, lastSavedUtc));
+                break;
+            default:
+                _dashboard.LastError = MapCategories.UnknownCategoryMessage(document.Title, document.Category);
+                _log.Error("WORKSHOP_UNAVAILABLE " + document.Category);
+                ShowDashboard();
+                break;
+        }
+    }
+
     private async Task NewMapAsync()
     {
         var document = await WizardWindow.ShowAsync(this, _assets);
         if (document is not null)
         {
-            _log.Info("NEW_MAP_CREATED");
-            ShowEditor(CreateEditor(document, path: null, startDirty: true));
+            _log.Info("NEW_MAP_CREATED " + document.Category);
+            OpenInWorkshop(document, path: null, startDirty: true);
         }
     }
 
@@ -297,8 +324,8 @@ public sealed class MainWindow : Window
         var opened = await _dashboard.TryOpenAsync(path);
         if (opened is not null)
         {
-            ShowEditor(CreateEditor(opened.Project.Document, opened.Path, startDirty: false,
-                lastSavedUtc: opened.Project.ModifiedUtc));
+            OpenInWorkshop(opened.Project.Document, opened.Path, startDirty: false,
+                lastSavedUtc: opened.Project.ModifiedUtc);
         }
     }
 
@@ -436,7 +463,7 @@ public sealed class MainWindow : Window
         {
             // The recovered snapshot opens DIRTY and unbound to the original path decision:
             // nothing overwrites the old file until the user explicitly saves.
-            ShowEditor(CreateEditor(restored.Document, card.Candidate.TargetPath, startDirty: true));
+            OpenInWorkshop(restored.Document, card.Candidate.TargetPath, startDirty: true);
         }
 
         return Task.CompletedTask;

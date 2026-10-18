@@ -4,13 +4,15 @@ using Map.Core.Documents;
 namespace Map.Presentation.ViewModels;
 
 /// <summary>
-/// The minimal create wizard: title, dimensions, background, blank preset. Validation refuses
-/// nonsense before a document ever exists.
+/// The minimal create wizard: category, title, dimensions, background, blank preset. Validation
+/// refuses nonsense before a document ever exists.
 /// </summary>
 public sealed class NewMapWizardViewModel : ViewModelBase
 {
     public const int MinDimension = CanvasDimensionPolicy.Minimum;
     public const int MaxDimension = CanvasDimensionPolicy.Maximum;
+
+    private MapCategoryId _category = MapCategoryId.Standard;
 
     private string _title = "Новая карта";
     private string _widthText = "1920";
@@ -21,6 +23,16 @@ public sealed class NewMapWizardViewModel : ViewModelBase
     /// <summary>Own neutral palette; final visual language is a later, owner-approved decision.</summary>
     public IReadOnlyList<string> BackgroundChoices { get; } =
         ["#FF1E2430", "#FFF2E9DC", "#FF223322", "#FFFFFFFF"];
+
+    /// <summary>
+    /// The workshop the new map belongs to (step 1 of the dialog). It is written into the document
+    /// once and never changes afterwards.
+    /// </summary>
+    public MapCategoryId Category
+    {
+        get => _category;
+        set => SetField(ref _category, value);
+    }
 
     public string Title
     {
@@ -95,7 +107,8 @@ public sealed class NewMapWizardViewModel : ViewModelBase
                     LayerId.New(), "Цвет фона", visible: true, locked: false, opacity: 1.0, Background),
                 new ObjectLayer(
                     LayerId.New(), "Объекты", visible: true, locked: false, opacity: 1.0, []),
-            ]);
+            ],
+            category: Category);
     }
 
     private static bool TryParseDimension(string text, out int value) =>

@@ -38,6 +38,7 @@ public sealed record MapDocument
             ? source.Checkpoints
             : new ReadOnlyCollection<MapCheckpoint>([.. revisedCheckpoints]);
         StampForeground = replaceStampForeground ? revisedStampForeground : source.StampForeground;
+        Category = source.Category;
     }
 
     public MapDocument(
@@ -49,7 +50,8 @@ public sealed record MapDocument
         IReadOnlyList<MapAssetReference>? assets = null,
         IReadOnlyList<MapNote>? notes = null,
         IReadOnlyList<MapCheckpoint>? checkpoints = null,
-        StampForegroundSurface? stampForeground = null)
+        StampForegroundSurface? stampForeground = null,
+        MapCategoryId category = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
         ArgumentNullException.ThrowIfNull(canvas);
@@ -167,6 +169,7 @@ public sealed record MapDocument
         Notes = new ReadOnlyCollection<MapNote>([.. notes]);
         Checkpoints = new ReadOnlyCollection<MapCheckpoint>([.. checkpoints]);
         StampForeground = stampForeground;
+        Category = category;
 
         if (Assets.Select(asset => asset.Sha256).Distinct(StringComparer.OrdinalIgnoreCase).Count()
             != Assets.Count)
@@ -270,6 +273,12 @@ public sealed record MapDocument
     /// <summary>Optional map-wide paint revealed only through enabled per-stamp clip masks.</summary>
     public StampForegroundSurface? StampForeground { get; init; }
 
+    /// <summary>
+    /// The workshop this map belongs to (<see cref="MapCategoryId"/>). Fixed at creation: edits,
+    /// versions, resize and clones keep it; nothing in Core changes it afterwards.
+    /// </summary>
+    public MapCategoryId Category { get; init; }
+
     /// <summary>The mandatory background layer.</summary>
     public BaseColorLayer BaseColor => (BaseColorLayer)Layers[0];
 
@@ -310,7 +319,7 @@ public sealed record MapDocument
     }
 
     public MapDocument WithLayers(IReadOnlyList<MapLayer> layers) =>
-        new(Id, Title, CreatedUtc, Canvas, layers, Assets, Notes, Checkpoints, StampForeground);
+        new(Id, Title, CreatedUtc, Canvas, layers, Assets, Notes, Checkpoints, StampForeground, Category);
 
     public MapDocument WithAssets(IReadOnlyList<MapAssetReference> assets)
     {

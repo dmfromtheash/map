@@ -28,6 +28,7 @@ public sealed class MapCheckpointSnapshot
         Assets = new ReadOnlyCollection<MapAssetReference>([.. document.Assets]);
         Notes = new ReadOnlyCollection<MapNote>([.. document.Notes]);
         StampForeground = document.StampForeground;
+        Category = document.Category;
     }
 
     public string Title { get; }
@@ -37,6 +38,7 @@ public sealed class MapCheckpointSnapshot
     public IReadOnlyList<MapAssetReference> Assets { get; }
     public IReadOnlyList<MapNote> Notes { get; }
     public StampForegroundSurface? StampForeground { get; }
+    public MapCategoryId Category { get; }
 
     public static MapCheckpointSnapshot Capture(MapDocument document)
     {
@@ -59,7 +61,8 @@ public sealed class MapCheckpointSnapshot
             Assets,
             Notes,
             checkpoints,
-            StampForeground);
+            StampForeground,
+            Category);
 }
 
 /// <summary>One named durable checkpoint with its bounded preview and immutable map snapshot.</summary>

@@ -483,7 +483,8 @@ public sealed class DashboardViewModel : ViewModelBase
             var copy = new Map.Core.Documents.MapDocument(
                 Map.Core.Documents.DocumentId.New(), title, created,
                 sourceDocument.Canvas, sourceDocument.Layers, sourceDocument.Assets,
-                sourceDocument.Notes, checkpoints: [], stampForeground: sourceDocument.StampForeground);
+                sourceDocument.Notes, checkpoints: [], stampForeground: sourceDocument.StampForeground,
+                category: sourceDocument.Category);
             copy = IndependentProjectImages.Prepare(copy, source.Path, _assetCatalog);
             var preview = await Task.Run(() =>
             {
@@ -565,8 +566,29 @@ public sealed class DashboardViewModel : ViewModelBase
         }
     }
 
-    private DashboardOpenResult CompleteOpen(string path, OpenedProject opened, string code)
+    /// <summary>
+    /// Categories do not mix: a map of a workshop this build lacks is reported here and never
+    /// opened in the standard editor as if it were a standard map. True when the map may open.
+    /// </summary>
+    public bool AcceptsCategory(Map.Core.Documents.MapDocument document)
     {
+        if (MapCategories.IsKnown(document.Category))
+        {
+            return true;
+        }
+
+        LastError = MapCategories.UnknownCategoryMessage(document.Title, document.Category);
+        _log.Error("FILE_CATEGORY_UNKNOWN " + document.Category);
+        return false;
+    }
+
+    private DashboardOpenResult? CompleteOpen(string path, OpenedProject opened, string code)
+    {
+        if (!AcceptsCategory(opened.Document))
+        {
+            return null;
+        }
+
         _recent.Touch(
             path, opened.Document.Id.Value, opened.Document.Title, opened.ModifiedUtc,
             opened.PreviewPng);
@@ -591,6 +613,11 @@ public sealed class DashboardViewModel : ViewModelBase
         try
         {
             var restored = _store.RestoreRecovery(card.Candidate);
+            if (!AcceptsCategory(restored.Document))
+            {
+                return null;
+            }
+
             _log.Info("RECOVERY_RESTORED");
             return restored;
         }

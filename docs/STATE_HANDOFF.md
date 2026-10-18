@@ -1,4 +1,44 @@
 ﻿# STATE_HANDOFF — актуальное состояние Map
+## Актуально на 2026-10-18 (поздний вечер) — категории карт: шаг 1 мастера «Новая карта», DEC-047
+
+**FACT.** По поручению владельца (после разбора окна «Create New Map» Inkarnate через REA/CDP, страница только
+читалась) в Map введены **категории карт** — отдельные мастерские внутри одного приложения, которые не
+смешиваются: общие холст, файл, рендер и производительность, разные инструменты/размещение/генерация.
+Первая и пока единственная категория — **«Стандартный Конструктор карт»** (`standard`): весь нынешний
+функционал и все ассеты. Следующая категория появится по отдельному поручению владельца.
+- **Core:** `MapCategoryId` (токен `a–z0–9-` ≤ 64), `MapDocument.Category` (задаётся при создании, умолчание
+  `standard`; правки, версии, resize/crop, клон/шаблон сохраняют). `MapCheckpointSnapshot.Category`.
+- **Файл:** манифест — необязательное поле `category` после `preset`; стандартная карта его не пишет (байты и
+  схема прежних файлов не меняются, все старые карты читаются как стандартные); другая категория → schema
+  **v11** (`MapProjectFormat.CategoriesSchemaVersion`, `MaxSupported` = 11); категория в более старой схеме —
+  `MapProjectCorruptedException`. Снимки именованных версий наследуют категорию карты.
+- **Presentation:** реестр `MapCategories` (`Standard`, `All`, `Find`, `IsKnown`, `UnknownCategoryMessage`;
+  у записи — название, подзаголовок, описание, «что внутри», `ArtworkKey`/`GalleryKey`, стартовый размер,
+  токен мастерской `Workshop` = `standard-editor`). `NewMapWizardViewModel.Category`.
+  `DashboardViewModel.AcceptsCategory`: открытие/восстановление карты неизвестной категории даёт `LastError`
+  «создана в категории …, которой нет в этой сборке Map. Файл не изменён» и не открывает редактор.
+- **App:** `WizardWindow` — два шага. Шаг 1 «Категория карты»: слева карточки `WizardCategory<Id>` (стиль
+  `category-card`), справа `WizardCategoryTitle/Tagline/Gallery/Description/Highlights`, внизу
+  `CancelWizardButton` / `ChooseCategoryButton`. Шаг 2 — прежние настройки, `WizardBackButton` / `CreateMapButton`.
+  Категория подставляет стартовый размер один раз (`ApplyCategoryDefaults`). `MainWindow.OpenInWorkshop` —
+  единая точка входа в редактор (новая карта, файл, восстановление): мастерская по категории документа,
+  неизвестная → библиотека с сообщением. Smoke `native-regional`/`native-regional-reopen` нажимают
+  `ChooseCategoryButton` перед настройками.
+- **Проверено (FACT):** `Map.slnx` Release — 0 ошибок; Core 24/24 (MapCategoryIdTests + MapDocumentTests),
+  Persistence 4/4 (MapCategoryPersistenceTests: стандарт без поля и в прежней схеме, другая категория v11 +
+  наследование версией, подделка в старой схеме → повреждён; BaseMaterial), Presentation 20/20
+  (MapCategoryTests + NewMapWizardTests + DashboardViewModelTests). Новый smoke `native-map-categories`
+  (`tools/Map.Performance`, собственное окно за экраном) — 13/13: список категорий, выбор по умолчанию,
+  детали, отсутствие кнопки создания на шаге 1, переход/возврат, созданная карта `standard`, сохранение без
+  `category` в schema v4, повторное открытие. Снимки `artifacts/map-categories/check.01-category-step.png`,
+  `check.02-settings-step.png`.
+- **NOT CHECKED:** живой проход в окне владельца через windows-mcp (smoke покрывает тот же production
+  `WizardWindow`); `native-regional` целиком (нужен MAP_REGIONAL_PROJECT и комплект) — изменены только два
+  нажатия перед прежними шагами.
+- **Открыто / следующий шаг:** вторая категория по поручению владельца (своя запись `MapCategories`, свой
+  `Workshop` и поверхность в `OpenInWorkshop`); бейдж категории на карточках библиотеки и фильтр «Карты» по
+  категории не делались (с одной категорией невидимы).
+
 ## Актуально на 2026-10-18 (вечер, ревью и проверка в окне) — три исправления кэша картинок слоёв (запушено)
 
 **FACT.** Ревью диффа `f838624..690b98e` (оптимизации 2026-10-18) и проверка в настоящем окне через windows-mcp

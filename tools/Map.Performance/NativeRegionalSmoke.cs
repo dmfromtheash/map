@@ -109,6 +109,7 @@ public sealed partial class RegionalApplication : Application
         if(Options.Profile=="native-area-explore") { await ExploreAreas(); return; }
         if(Options.Profile=="native-asset-opacity") { await VerifyAssetOpacity(); return; }
         if(Options.Profile=="native-editor-defaults") { await VerifyEditorDefaults(); return; }
+        if(Options.Profile=="native-map-categories") { await VerifyMapCategories(); return; }
         var dashboard = new DashboardViewModel(_store, _recent, new LocalLog(), _picker);
         _window.Content = new DashboardView(dashboard, () => Task.CompletedTask, () => Task.CompletedTask,
             _ => Task.CompletedTask, _ => Task.CompletedTask, templateRequested: () => Task.CompletedTask,
@@ -138,7 +139,8 @@ public sealed partial class RegionalApplication : Application
         {
             var wizard=new WizardWindow(_catalog) { ShowActivated=false,ShowInTaskbar=false,
                 WindowStartupLocation=WindowStartupLocation.Manual,Position=new PixelPoint(-32000,-32000) };
-            wizard.Show();await Settle();
+            wizard.Show();await Settle();Capture(wizard,"02-wizard-category");
+            Click(wizard,"ChooseCategoryButton");await Settle();
             wizard.GetVisualDescendants().OfType<ComboBox>().Single(c=>c.Name=="WizardStartingPoint").SelectedIndex=1;
             await Settle();Capture(wizard,"02a-blank-region-choice");
             wizard.GetVisualDescendants().OfType<ComboBox>().Single(c=>c.Name=="WizardStartingPoint").SelectedIndex=2;
@@ -319,6 +321,7 @@ public sealed partial class RegionalApplication : Application
         var wizard = new WizardWindow(_catalog) { ShowActivated = false, ShowInTaskbar = false,
             WindowStartupLocation = WindowStartupLocation.Manual, Position = new PixelPoint(-32000, -32000) };
         wizard.Show(); await Settle();
+        Click(wizard, "ChooseCategoryButton"); await Settle();
         var startingPoint = wizard.GetVisualDescendants().OfType<ComboBox>().Single(c => c.Name == "WizardStartingPoint");
         startingPoint.SelectedIndex = 2; await Settle();
         Check("wizard shows the regional size limit", wizard.GetVisualDescendants().OfType<TextBlock>()

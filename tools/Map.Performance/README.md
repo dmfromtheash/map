@@ -1,5 +1,14 @@
 # Map.Performance
 
+## Категории карт в мастере «Новая карта» (2026-10-18, DEC-047)
+
+`--profile native-map-categories --output artifacts/map-categories/check.json` открывает production
+`WizardWindow` в собственном окне за экраном без системного ввода: шаг 1 перечисляет категории
+(одна — «Стандартный Конструктор карт», выбрана по умолчанию, кнопки создания и пресетов размера
+нет), «Выбрать категорию» ведёт к настройкам, «Назад» возвращает, созданная карта несёт `standard`,
+сохраняется в прежней схеме без поля `category` и открывается обратно как стандартная. Снимки
+`01-category-step`, `02-settings-step`. Карта пишется только в `<отчёт>-workspace`.
+
 ## Адресная проверка настроек ассетов и клавиатуры
 
 `--profile native-editor-defaults --output artifacts/native-editor-defaults/check.json`

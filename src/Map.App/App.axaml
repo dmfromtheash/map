@@ -838,6 +838,50 @@
             <Setter Property="BorderThickness" Value="2" />
             <Setter Property="TextElement.Foreground" Value="{DynamicResource MapTextBrush}" />
         </Style>
+        <!-- Step 1 of the create dialog: one card per map category, a master list beside the detail pane. -->
+        <Style Selector="ToggleButton.category-card">
+            <Setter Property="Padding" Value="12,10" />
+            <Setter Property="CornerRadius" Value="9" />
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="Background" Value="{DynamicResource MapPanelBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapBorderStrongBrush}" />
+            <Setter Property="BorderThickness" Value="2" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="ToggleButton.category-card:pointerover">
+            <Setter Property="Background" Value="{DynamicResource MapControlHoverBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapBorderStrongBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="ToggleButton.category-card:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapControlHoverBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapBorderStrongBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="ToggleButton.category-card.active">
+            <Setter Property="Background" Value="{DynamicResource MapSelectionBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="ToggleButton.category-card:checked /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapSelectionBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBorderBrush}" />
+            <Setter Property="BorderThickness" Value="2" />
+            <Setter Property="TextElement.Foreground" Value="{DynamicResource MapTextBrush}" />
+        </Style>
+        <Style Selector="Border.category-master">
+            <Setter Property="Background" Value="{DynamicResource MapElevatedBrush}" />
+            <Setter Property="CornerRadius" Value="10" />
+            <Setter Property="Padding" Value="12" />
+        </Style>
+        <Style Selector="Border.category-gallery">
+            <Setter Property="Background" Value="{DynamicResource MapElevatedBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapBorderStrongBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="10" />
+            <Setter Property="ClipToBounds" Value="True" />
+        </Style>
         <Style Selector="ToggleButton.background-card">
             <Setter Property="Padding" Value="10,7" />
             <Setter Property="CornerRadius" Value="8" />

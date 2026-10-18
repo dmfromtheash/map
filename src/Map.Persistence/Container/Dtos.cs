@@ -18,6 +18,13 @@ internal sealed class ManifestDto
     [JsonPropertyName("modifiedUtc")] public string ModifiedUtc { get; set; } = "";
     [JsonPropertyName("canvas")] public CanvasDto Canvas { get; set; } = new();
     [JsonPropertyName("preset")] public string Preset { get; set; } = "blank";
+    /// <summary>
+    /// The map category (workshop) token; absent for the standard constructor, so every file
+    /// written before categories keeps its bytes and its meaning. Any other value needs v11.
+    /// </summary>
+    [JsonPropertyName("category")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Category { get; set; }
     [JsonPropertyName("sceneSha256")] public string SceneSha256 { get; set; } = "";
     [JsonPropertyName("assetManifestSha256")] public string AssetManifestSha256 { get; set; } = "";
     [JsonPropertyName("checkpointCatalogSha256")]

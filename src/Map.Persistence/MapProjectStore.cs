@@ -23,6 +23,8 @@ public static partial class MapProjectStore
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = false };
 
     private static int SchemaFor(MapDocument document) =>
+        !document.Category.IsStandard
+            ? MapProjectFormat.CategoriesSchemaVersion :
         document.Layers.OfType<BaseColorLayer>().Any(l => l.TextureId is not null)
         || document.Checkpoints.Any(c => c.Snapshot.Layers.OfType<BaseColorLayer>().Any(l => l.TextureId is not null))
             ? MapProjectFormat.BaseMaterialSchemaVersion :
@@ -434,6 +436,7 @@ public static partial class MapProjectStore
                 Unit = document.Canvas.Unit,
                 Background = document.Canvas.Background,
             },
+            Category = document.Category.IsStandard ? null : document.Category.Value,
             SceneSha256 = Sha256Hex(sceneBytes),
             AssetManifestSha256 = Sha256Hex(assetManifestBytes),
             CheckpointCatalogSha256 = checkpointCatalogSha256,
@@ -1314,12 +1317,15 @@ public static partial class MapProjectStore
                     : new Dictionary<string, SceneObjectList>(StringComparer.Ordinal);
                 var tiles = ReadAndValidateTiles(archive, scene, root);
                 var assets = ReadAndValidateAssets(archive, assetManifest, root);
+                // A named version belongs to the same workshop as the map that holds it.
                 var domainManifest = new ManifestDto
                 {
+                    SchemaVersion = mainManifest.SchemaVersion,
                     DocumentId = snapshotManifest.DocumentId,
                     Title = snapshotManifest.Title,
                     CreatedUtc = snapshotManifest.CreatedUtc,
                     Canvas = snapshotManifest.Canvas,
+                    Category = mainManifest.Category,
                 };
                 var snapshotDocument = ToDomain(
                     domainManifest, scene, objectStorages, assetManifest, tiles, assets,
@@ -1914,6 +1920,7 @@ public static partial class MapProjectStore
                     "schema v2 requires an explicit type on every layer.");
             }
 
+            var category = ToCategory(manifest);
             var layers = scene.Layers.Select(layer => ToLayer(
                 layer, objectStorages, tileEntries, entryRoot, allowUnknownObjectKinds)).ToList();
             if (legacyStage2)
@@ -1944,7 +1951,8 @@ public static partial class MapProjectStore
                         "foreground",
                         4,
                         tileEntries))
-                    : null);
+                    : null,
+                category);
         }
         catch (Exception ex) when (ex is ArgumentException or FormatException or InvalidOperationException)
         {
@@ -1953,6 +1961,33 @@ public static partial class MapProjectStore
             throw new MapProjectCorruptedException(
                 "The container holds values the document model rejects: " + ex.Message, ex);
         }
+    }
+
+    /// <summary>
+    /// The category recorded in the manifest. A missing value is the standard constructor; any
+    /// other category is a v11 construct, so an older schema carrying one is a damaged file, not a
+    /// map this build may quietly open as standard.
+    /// </summary>
+    private static MapCategoryId ToCategory(ManifestDto manifest)
+    {
+        if (manifest.Category is null)
+        {
+            return MapCategoryId.Standard;
+        }
+
+        if (!MapCategoryId.IsValid(manifest.Category))
+        {
+            throw new MapProjectCorruptedException("manifest.json names an invalid map category.");
+        }
+
+        var category = new MapCategoryId(manifest.Category);
+        if (!category.IsStandard && manifest.SchemaVersion < MapProjectFormat.CategoriesSchemaVersion)
+        {
+            throw new MapProjectCorruptedException(
+                $"A map category other than the standard one requires schema v{MapProjectFormat.CategoriesSchemaVersion}.");
+        }
+
+        return category;
     }
 
     private static MapLayer ToLayer(
