@@ -85,7 +85,7 @@ public sealed partial class MapCanvasControl : Control
         public HexChunkCache Hex()
         {
             var thread = Environment.CurrentManagedThreadId;
-            if (!_hexChunks.TryGetValue(thread, out var cache)) _hexChunks[thread] = cache = new HexChunkCache();
+            if (!_hexChunks.TryGetValue(thread, out var cache)) _hexChunks[thread] = cache = new HexChunkCache { BuildInBackground = true };
             return cache;
         }
         private readonly System.Collections.Generic.Dictionary<int, (TileImageCache Tiles, ObjectOverviewCache Objects, CarvedLandCache Land, RenderImageCache Styled, RenderImageCache Terrain, ObjectOverviewCache Atlases, TerrainRefinement Refinement, StrokePreviewCache Preview, LayerImageCache Layers)> _contexts = [];

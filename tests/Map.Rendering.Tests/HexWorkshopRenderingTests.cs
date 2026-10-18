@@ -207,4 +207,40 @@ public sealed class HexWorkshopRenderingTests
         using var data = bitmap.Encode(SKEncodedImageFormat.Png, 100);
         File.WriteAllBytes(Path.Combine(folder, $"generated-{orientation.ToString().ToLowerInvariant()}.png"), data.ToArray());
     }
+
+    [Fact]
+    public async Task Pictures_drawn_in_the_background_show_the_same_world_once_they_arrive()
+    {
+        var (document, _, _, _) = World(HexOrientation.Flat);
+        const double scale = 0.5;
+        using var direct = Render(document, scale, null);
+        using var cache = new HexChunkCache { BuildInBackground = true };
+        SKBitmap kept = Render(document, scale, cache);
+        Assert.True(cache.Queued > 0, "the first frame asks the worker for pictures");
+        for (var frame = 0; frame < 200 && (cache.Queued > 0 || frame < 3); frame++)
+        {
+            await Task.Delay(20);
+            kept.Dispose();
+            kept = Render(document, scale, cache);
+        }
+
+        using (kept)
+        {
+            Assert.Equal(0, cache.Queued);
+            var differing = 0;
+            var samples = 0;
+            for (var y = 0; y < direct.Height; y += 3)
+            {
+                for (var x = 0; x < direct.Width; x += 3)
+                {
+                    samples++;
+                    var a = direct.GetPixel(x, y);
+                    var b = kept.GetPixel(x, y);
+                    if (Math.Abs(a.Red - b.Red) + Math.Abs(a.Green - b.Green) + Math.Abs(a.Blue - b.Blue) > 60) differing++;
+                }
+            }
+
+            Assert.True(differing < samples / 50, $"{differing} of {samples} pixels differ");
+        }
+    }
 }

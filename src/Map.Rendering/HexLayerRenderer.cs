@@ -231,6 +231,12 @@ public sealed class HexChunkCache : IDisposable
 
     public void Clear()
     {
+        lock (_gate)
+        {
+            _generation++;
+            _queued.Clear();
+        }
+
         foreach (var entry in _entries.Values) entry.Image.Dispose();
         _entries.Clear();
         _bytes = 0;
@@ -244,7 +250,165 @@ public sealed class HexChunkCache : IDisposable
         _fog.Clear();
     }
 
-    public void Dispose() => Clear();
+    public void Dispose()
+    {
+        lock (_gate)
+        {
+            _closed = true;
+            _queued.Clear();
+            foreach (var done in _done) done.Image?.Dispose();
+            _done.Clear();
+        }
+
+        _signal.Release();
+        Clear();
+    }
+
+    // ------------------------------------------------------------------ pictures drawn in the background
+
+    /// <summary>
+    /// New chunk pictures are drawn on a worker thread (CPU raster) while the frame shows a stand-in;
+    /// they join the cache at the start of a later frame. A picture with transitions and living
+    /// terrain can take longer than a whole frame, which made zooming stutter when drawn in-frame.
+    /// </summary>
+    public bool BuildInBackground { get; init; }
+
+    private sealed class BuildRequest(HexChunk chunk, HexOrientation orientation, int level, HexLook look,
+        HexChunkContext? context, Func<SKImage?> draw, long generation)
+    {
+        public HexChunk Chunk { get; } = chunk;
+        public HexOrientation Orientation { get; } = orientation;
+        public int Level { get; } = level;
+        public HexLook Look { get; } = look;
+        public HexChunkContext? Context { get; } = context;
+        public Func<SKImage?> Draw { get; } = draw;
+        public long Generation { get; } = generation;
+        public long Stamp { get; set; }
+        public SKImage? Image { get; set; }
+    }
+
+    private const int MaxQueued = 384;
+    private readonly object _gate = new();
+    private readonly Dictionary<(HexChunk Chunk, HexOrientation Orientation, int Level, HexLook Look), BuildRequest> _queued = new(new KeyComparer());
+    private readonly List<BuildRequest> _done = [];
+    private readonly SemaphoreSlim _signal = new(0);
+    private Task? _worker;
+    private long _stamp;
+    private long _generation;
+    private bool _closed;
+
+    /// <summary>Pictures asked for and not drawn yet.</summary>
+    public int Queued
+    {
+        get { lock (_gate) return _queued.Count + _done.Count; }
+    }
+
+    /// <summary>Asks for a picture to be drawn in the background (again with the newest context if already asked).</summary>
+    internal void Enqueue(HexChunk chunk, HexOrientation orientation, int level, HexLook look, HexChunkContext? context, Func<SKImage?> draw)
+    {
+        lock (_gate)
+        {
+            if (_closed) return;
+            var key = (chunk, orientation, level, look);
+            var stamp = ++_stamp;
+            if (_queued.TryGetValue(key, out var asked) && (context is null ? asked.Context is null : context.Matches(asked.Context)))
+            {
+                asked.Stamp = stamp;
+                return;
+            }
+
+            _queued[key] = new BuildRequest(chunk, orientation, level, look, context, draw, _generation) { Stamp = stamp };
+            if (_queued.Count > MaxQueued)
+            {
+                // The oldest asks are for places the view has left long ago.
+                foreach (var old in _queued.OrderBy(pair => pair.Value.Stamp).Take(_queued.Count - MaxQueued).ToList())
+                {
+                    _queued.Remove(old.Key);
+                }
+            }
+
+            _worker ??= Task.Factory.StartNew(Work, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        }
+
+        _signal.Release();
+    }
+
+    /// <summary>True when this picture is already asked for.</summary>
+    internal bool IsQueued(HexChunk chunk, HexOrientation orientation, int level, HexLook look)
+    {
+        lock (_gate) return _queued.ContainsKey((chunk, orientation, level, look));
+    }
+
+    /// <summary>Moves the pictures the worker finished into the cache; called on the render thread.</summary>
+    internal int Collect()
+    {
+        List<BuildRequest> finished;
+        lock (_gate)
+        {
+            if (_done.Count == 0) return 0;
+            finished = [.. _done];
+            _done.Clear();
+        }
+
+        var added = 0;
+        foreach (var request in finished)
+        {
+            if (request.Image is null) continue;
+            if (request.Generation != _generation)
+            {
+                request.Image.Dispose();
+                continue;
+            }
+
+            Add(request.Chunk, request.Orientation, request.Level, request.Look, request.Image, request.Context);
+            added++;
+        }
+
+        return added;
+    }
+
+    private void Work()
+    {
+        while (true)
+        {
+            _signal.Wait();
+            BuildRequest? next;
+            lock (_gate)
+            {
+                if (_closed) return;
+                next = null;
+                foreach (var request in _queued.Values)
+                {
+                    if (next is null || request.Stamp > next.Stamp) next = request;
+                }
+
+                if (next is null) continue;
+                _queued.Remove((next.Chunk, next.Orientation, next.Level, next.Look));
+            }
+
+            try
+            {
+                next.Image = next.Draw();
+            }
+            catch (Exception error) when (error is InvalidOperationException or ArgumentException or OutOfMemoryException)
+            {
+                next.Image = null;
+            }
+
+            lock (_gate)
+            {
+                if (_closed)
+                {
+                    next.Image?.Dispose();
+                    return;
+                }
+
+                _done.Add(next);
+                // More asks are waiting: keep going without a new signal.
+                if (_queued.Count > 0 && _signal.CurrentCount == 0) _signal.Release();
+            }
+        }
+    }
 }
 
 /// <summary>
@@ -351,6 +515,7 @@ public static partial class HexLayerRenderer
         // far look too: hundreds of thousands of tiles a pixel wide only average to grey.
         var flat = hexPixels < (isExport ? ExportFlatBelowPixels : FlatColourBelowPixels);
         var budget = new BuildBudget(System.Diagnostics.Stopwatch.GetTimestamp());
+        if (cache is { BuildInBackground: true } && !isExport) cache.Collect();
         if (!isExport) DrawBackdrop(canvas, layer, viewScale, hexPixels);
 
         // A chunk below the view can still hang into it: tall tiles rise over the rows behind.
@@ -409,10 +574,8 @@ public static partial class HexLayerRenderer
         public int Built;
         public int Pending;
 
-        /// <summary>Images built by the current pass: every pass may build one even over the budget, so it never starves.</summary>
-        public int PassBuilt;
-
-        public readonly bool MayBuild => PassBuilt == 0
+        /// <summary>The first picture of a frame is always drawn; more only while the frame's budget lasts.</summary>
+        public readonly bool MayBuild => Built == 0
             || System.Diagnostics.Stopwatch.GetElapsedTime(Started).TotalMilliseconds < BuildBudgetMilliseconds;
     }
 
@@ -447,31 +610,35 @@ public static partial class HexLayerRenderer
         HexChunkCache? cache, GRContext? gpu, bool isExport, bool live, ref BuildBudget budget)
     {
         var board = layer.Board;
-        budget.PassBuilt = 0;
+        var crossed = look == HexLook.Flat ? null : PathChunks(layer);
         foreach (var key in board.ChunksIn(view))
         {
             var chunk = board.Chunk(key);
             if (chunk is null) continue;
-            if (look == HexLook.Features && !Info(chunk).NeedsFeatures) continue;
+            // No path runs through the chunk: what stands on the ground goes into the ground's
+            // picture, one picture instead of two.
+            var merged = crossed is not null && !crossed.Contains(key);
+            if (look == HexLook.Features && (merged || !Info(chunk).NeedsFeatures)) continue;
             if (cache is not null && !isExport)
             {
-                var context = look == HexLook.Flat ? null : HexChunkContext.For(board, key, layer.Regions);
+                var context = look == HexLook.Flat ? null : HexChunkContext.For(board, key, new LookStyle(layer.Regions, merged));
+                var level = LevelFor(viewScale);
                 // During a drag a chunk changes on every move: drawing its hexes directly is cheaper
                 // than a new image (a GPU surface) per move; the image is made once the drag ends.
-                if (live && look != HexLook.Flat
-                    && cache.TryGet(chunk, board.Orientation, LevelFor(viewScale), look, context) is null)
+                // A neighbour of the edit keeps its picture (only its edge transitions are a step late).
+                if (live && look != HexLook.Flat && cache.TryGet(chunk, board.Orientation, level, look, context) is null)
                 {
-                    DrawChunk(canvas, layer, key, chunk, look, view, viewScale);
+                    if (cache.TryGet(chunk, board.Orientation, level, look, null) is { } stale) DrawPicture(canvas, board, key, look, stale, level);
+                    else DrawChunk(canvas, layer, key, chunk, look, view, viewScale, merged);
                     continue;
                 }
 
-                switch (TryDrawCached(canvas, layer, key, chunk, look, viewScale, cache, gpu, context, budget.MayBuild && !live))
+                switch (TryDrawCached(canvas, layer, key, chunk, look, viewScale, cache, gpu, context, budget.MayBuild && !live, merged))
                 {
                     case CachedDraw.Kept:
                         continue;
                     case CachedDraw.Built:
                         budget.Built++;
-                        budget.PassBuilt++;
                         continue;
                     case CachedDraw.Deferred:
                         budget.Pending++;
@@ -479,11 +646,40 @@ public static partial class HexLayerRenderer
                 }
             }
 
-            DrawChunk(canvas, layer, key, chunk, look, isExport ? null : view, viewScale);
+            DrawChunk(canvas, layer, key, chunk, look, isExport ? null : view, viewScale, merged);
         }
     }
 
-    private static void DrawChunk(SKCanvas canvas, HexLayer layer, HexChunkKey key, HexChunk chunk, HexLook look, WorldBounds? clip, double pixelScale)
+    /// <summary>The style a ground picture was drawn with: the regions, and whether it carries what stands on the ground.</summary>
+    private readonly record struct LookStyle(System.Collections.Immutable.ImmutableList<HexRegion> Regions, bool WithFeatures);
+
+    private static readonly ConditionalWeakTable<System.Collections.Immutable.ImmutableList<HexPath>, Tuple<HexLayout, HashSet<HexChunkKey>>> CrossedChunks = new();
+
+    /// <summary>The chunks some path of the layer runs through, kept per path list.</summary>
+    private static HashSet<HexChunkKey> PathChunks(HexLayer layer)
+    {
+        var layout = layer.Board.Layout;
+        if (CrossedChunks.TryGetValue(layer.Paths, out var kept) && kept.Item1 == layout) return kept.Item2;
+        var keys = new HashSet<HexChunkKey>();
+        foreach (var path in layer.Paths)
+        {
+            var hexes = path.Style == HexRouteStyle.Edges ? path.Vertices.Select(v => v.Hex) : path.Hexes.AsEnumerable();
+            foreach (var hex in hexes)
+            {
+                // A path piece reaches into the neighbours' halves of the edges it crosses.
+                foreach (var near in HexCoord.Range(hex, 1))
+                {
+                    if (layer.Board.Contains(near)) keys.Add(HexBoard.ChunkOf(layout.ToOffset(near)));
+                }
+            }
+        }
+
+        CrossedChunks.AddOrUpdate(layer.Paths, Tuple.Create(layout, keys));
+        return keys;
+    }
+
+    private static void DrawChunk(SKCanvas canvas, HexLayer layer, HexChunkKey key, HexChunk chunk, HexLook look, WorldBounds? clip,
+        double pixelScale, bool merged = false)
     {
         switch (look)
         {
@@ -492,11 +688,21 @@ public static partial class HexLayerRenderer
                 break;
             case HexLook.Terrain:
                 DrawChunkGround(canvas, layer, key, chunk, clip, pixelScale);
+                if (merged && Info(chunk).NeedsFeatures) DrawChunkFeatures(canvas, layer, key, chunk, clip, pixelScale);
                 break;
             default:
                 DrawChunkFeatures(canvas, layer, key, chunk, clip, pixelScale);
                 break;
         }
+    }
+
+    /// <summary>A kept chunk picture at its place on the canvas.</summary>
+    private static void DrawPicture(SKCanvas canvas, HexBoard board, HexChunkKey key, HexLook look, SKImage image, int level)
+    {
+        var scale = Math.Pow(2, level);
+        var bounds = Snapped(PictureBounds(board, key, look), scale);
+        canvas.DrawImage(image, new SKRect((float)bounds.Left, (float)bounds.Top,
+            (float)(bounds.Left + image.Width / scale), (float)(bounds.Top + image.Height / scale)), ChunkSampling);
     }
 
     /// <summary>Draws one tile picture into a hex; used by the canvas and by the palette thumbnails.</summary>
@@ -763,7 +969,6 @@ public static partial class HexLayerRenderer
                         kept = new HexChunkCache.FlatBlock(chunks, board.Layout, bounds, surface.Snapshot());
                         cache.PutBlock(blockKey, kept);
                         budget.Built++;
-                        budget.PassBuilt++;
                         current = true;
                     }
                 }
@@ -826,7 +1031,7 @@ public static partial class HexLayerRenderer
         bounds with { Left = Math.Floor(bounds.Left * scale) / scale, Top = Math.Floor(bounds.Top * scale) / scale };
 
     private static CachedDraw TryDrawCached(SKCanvas canvas, HexLayer layer, HexChunkKey key, HexChunk chunk, HexLook look,
-        double viewScale, HexChunkCache cache, GRContext? gpu, HexChunkContext? context, bool mayBuild)
+        double viewScale, HexChunkCache cache, GRContext? gpu, HexChunkContext? context, bool mayBuild, bool merged)
     {
         var board = layer.Board;
         // Level n keeps the chunk at scale 2^n: the nearest level at or above the view scale.
@@ -842,6 +1047,25 @@ public static partial class HexLayerRenderer
 
         var image = cache.TryGet(chunk, board.Orientation, level, look, context);
         var result = CachedDraw.Kept;
+        if (image is null && cache.BuildInBackground)
+        {
+            // Drawn on the worker from the immutable layer; this frame shows a stand-in.
+            var drawScale = scale;
+            var drawBounds = bounds;
+            cache.Enqueue(chunk, board.Orientation, level, look, context, () =>
+            {
+                using var surface = SKSurface.Create(new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Premul));
+                if (surface is null) return null;
+                var target = surface.Canvas;
+                target.Clear(SKColors.Transparent);
+                target.Scale((float)drawScale);
+                target.Translate((float)-drawBounds.Left, (float)-drawBounds.Top);
+                DrawChunk(target, layer, key, chunk, look, clip: null, drawScale, merged);
+                return surface.Snapshot();
+            });
+            mayBuild = false;
+        }
+
         if (image is null && !mayBuild)
         {
             if (cache.StandIn(chunk, board.Orientation, level, look) is { } other)
@@ -881,7 +1105,7 @@ public static partial class HexLayerRenderer
             target.Clear(SKColors.Transparent);
             target.Scale((float)scale);
             target.Translate((float)-bounds.Left, (float)-bounds.Top);
-            DrawChunk(target, layer, key, chunk, look, clip: null, scale);
+            DrawChunk(target, layer, key, chunk, look, clip: null, scale, merged);
             image = surface.Snapshot();
             if (image is null) return CachedDraw.Direct;
             cache.Add(chunk, board.Orientation, level, look, image, context);

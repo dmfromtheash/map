@@ -76,6 +76,8 @@ public sealed class HexLayerRenderingTests
         var document = Sample(orientation);
         using var direct = Render(document, 0.5, cache: null);
         using var cache = new HexChunkCache();
+        // A frame builds one new picture over its budget; a few frames build them all.
+        for (var frame = 0; frame < 4; frame++) Render(document, 0.5, cache).Dispose();
         using var kept = Render(document, 0.5, cache);
         Assert.True(cache.Count > 0);
         var differing = 0;

@@ -67,7 +67,7 @@ internal sealed class HexPlayerCanvas : Control
 {
     private readonly EditorViewModel _editor;
     private readonly Viewport _viewport = new();
-    private readonly HexChunkCache _cache = new();
+    private readonly HexChunkCache _cache = new() { BuildInBackground = true };
     private readonly DispatcherTimer _timer;
     private WriteableBitmap? _bitmap;
     private bool _dirty = true;
