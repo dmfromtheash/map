@@ -8568,7 +8568,9 @@ public sealed partial class EditorView : UserControl
         if (_deferredPanelQueued) return;
         if (_deferredPanelTimer is null)
         {
-            _deferredPanelTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(40) };
+            // 250 ms: placement clicks come about every 130 ms; with 50 000 objects the side and
+            // surface panels cost 20-25 ms per refresh, which landed between every two clicks.
+            _deferredPanelTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(250) };
             _deferredPanelTimer.Tick += (_, _) =>
             {
                 _deferredPanelTimer.Stop();
