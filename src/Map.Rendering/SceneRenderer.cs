@@ -558,7 +558,7 @@ public static class SceneRenderer
             if (keepLayers && layer is ObjectLayer masked && options.MaskEditLayerId == masked.Id && CanKeepMaskedContent(masked, options))
             {
                 DrawLayer(canvas, document, layer, clippingSource, view, options, drawRivers: false,
-                    contentOverride: target => DrawKeptObjectContent(target, document, masked, view, options));
+                    contentOverride: target => DrawKeptObjectContent(target, document, masked, view, options), maskOverlay: true);
                 continue;
             }
             DrawLayer(canvas, document, layer, clippingSource, view, options, drawRivers: false);
@@ -577,7 +577,8 @@ public static class SceneRenderer
     /// into the layer (its stroke, its mask being edited, the ghost's "behind layer" shadow).
     /// </summary>
     private static bool CanKeepLayerImage(ObjectLayer layer, RenderOptions options) =>
-        layer.Blend == "Normal" && !layer.Effects.ClippingEnabled
+        // An empty layer draws nothing: an image of the view for it is only memory (40 MiB during a pan).
+        layer.Objects.Count > 0 && layer.Blend == "Normal" && !layer.Effects.ClippingEnabled
         && options.Preview?.LayerId != layer.Id && options.MaskEditLayerId != layer.Id
         && !(options.PlacementPreviewLayerId == layer.Id && options.PlacementPreviewObjects is { Count: > 0 } ghost
             && ghost.Any(o => o.Stamp is { ShadowPlacement: StampShadowPlacement.Layer, ShadowOpacity: > 0 }))
@@ -590,7 +591,7 @@ public static class SceneRenderer
     /// stroke preview of an object layer is always its mask's: objects take no raster strokes.
     /// </summary>
     private static bool CanKeepMaskedContent(ObjectLayer layer, RenderOptions options) =>
-        options.LayerImages is not null && options.Stats is not null && !options.IsExport
+        layer.Objects.Count > 0 && options.LayerImages is not null && options.Stats is not null && !options.IsExport
         && options.ObjectOverrides is not { Count: > 0 }
         && !(options.PlacementPreviewLayerId == layer.Id && options.PlacementPreviewObjects is { Count: > 0 })
         && KeptLayerSupport.GetValue(layer, static l => new(l)).Supported;
@@ -1547,7 +1548,8 @@ public static class SceneRenderer
 
     private static void DrawLayer(
         SKCanvas canvas, MapDocument document, MapLayer layer, MapLayer? clippingSource,
-        WorldBounds view, RenderOptions options, bool drawRivers = true, Action<SKCanvas>? contentOverride = null)
+        WorldBounds view, RenderOptions options, bool drawRivers = true, Action<SKCanvas>? contentOverride = null,
+        bool maskOverlay = false)
     {
         void DrawContent(bool includePreview)
         {
@@ -1655,7 +1657,9 @@ public static class SceneRenderer
             canvas.Restore();
         }
 
-        if (maskEdit && contentOverride is null)
+        // A surface run drawn through contentOverride is one piece of the layer and shows no
+        // overlay; the kept objects of a layer whose mask is being edited are the whole layer and do.
+        if (maskEdit && (contentOverride is null || maskOverlay))
         {
             DrawMaskOverlay(canvas, layer, view, options);
         }
