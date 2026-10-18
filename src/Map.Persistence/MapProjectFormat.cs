@@ -16,15 +16,21 @@ public static class MapProjectFormat
     public const int CategoriesSchemaVersion = 11;
     /// <summary>A map that carries a hex layer (layer type <c>Hex</c>, the hex category's surface).</summary>
     public const int HexLayersSchemaVersion = 12;
+    /// <summary>
+    /// A hex layer that carries the workshop constructs of DEC-049: turned tiles, regions, fog,
+    /// paths, the hex key, levels or a travel scale (block <c>hex</c> with <c>stride</c> 9 and its
+    /// optional lists).
+    /// </summary>
+    public const int HexWorkshopSchemaVersion = 13;
     public const string Extension = ".mapproj";
 
     /// <summary>The newest schema this build writes and reads.</summary>
-    public const int MaxSupportedSchemaVersion = HexLayersSchemaVersion;
+    public const int MaxSupportedSchemaVersion = HexWorkshopSchemaVersion;
 
     /// <summary>
-    /// Schemas v5–v12 share the v4 container and differ only by the constructs they may carry
+    /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry
     /// (paths, areas, rivers, roads, land painting, a material on the page colour, a map category
-    /// other than the standard one, hex layers). This reader accepts all of them.
+    /// other than the standard one, hex layers, the hex workshop). This reader accepts all of them.
     /// </summary>
     public static bool IsExtendedV4Schema(int schemaVersion) =>
         schemaVersion is >= EditablePathsSchemaVersion and <= MaxSupportedSchemaVersion;

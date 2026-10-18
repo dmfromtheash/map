@@ -150,8 +150,54 @@ internal sealed class HexBoardDto
     [JsonPropertyName("columns")] public int Columns { get; set; }
     [JsonPropertyName("rows")] public int Rows { get; set; }
     [JsonPropertyName("tiles")] public List<string> Tiles { get; set; } = [];
+    /// <summary>Ints per hex in <see cref="Cells"/>: 6 (v12), or 9 with rotation, region and revealed (v13).</summary>
+    [JsonPropertyName("stride")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public int? Stride { get; set; }
     [JsonPropertyName("cells")] public List<int> Cells { get; set; } = [];
     [JsonPropertyName("grid")] public HexGridDto? Grid { get; set; }
+    [JsonPropertyName("paths")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<HexPathDto>? Paths { get; set; }
+    [JsonPropertyName("hexRegions")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<HexRegionDto>? Regions { get; set; }
+    [JsonPropertyName("hexKey")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<HexNoteDto>? Notes { get; set; }
+    [JsonPropertyName("level")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public int? Level { get; set; }
+    [JsonPropertyName("fog")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public bool? Fog { get; set; }
+    [JsonPropertyName("travel")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public HexTravelDto? Travel { get; set; }
+}
+
+internal sealed class HexPathDto
+{
+    [JsonPropertyName("id")] public string Id { get; set; } = "";
+    [JsonPropertyName("kind")] public string Kind { get; set; } = "";
+    [JsonPropertyName("style")] public string Style { get; set; } = "";
+    /// <summary>Offset column, row per hex - or column, row, corner per corner of an edge path.</summary>
+    [JsonPropertyName("nodes")] public List<int>? Nodes { get; set; }
+    [JsonPropertyName("width")] public double Width { get; set; } = 1;
+    [JsonPropertyName("color")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Color { get; set; }
+    [JsonPropertyName("name")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Name { get; set; }
+    [JsonPropertyName("seed")] public int Seed { get; set; }
+}
+
+internal sealed class HexRegionDto
+{
+    [JsonPropertyName("id")] public int Id { get; set; }
+    [JsonPropertyName("name")] public string? Name { get; set; }
+    [JsonPropertyName("color")] public string Color { get; set; } = "";
+}
+
+internal sealed class HexNoteDto
+{
+    [JsonPropertyName("column")] public int Column { get; set; }
+    [JsonPropertyName("row")] public int Row { get; set; }
+    [JsonPropertyName("title")] public string? Title { get; set; }
+    [JsonPropertyName("category")] public string? Category { get; set; }
+    [JsonPropertyName("gm")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? GmText { get; set; }
+    [JsonPropertyName("player")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? PlayerText { get; set; }
+    [JsonPropertyName("childMap")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? ChildMap { get; set; }
+}
+
+internal sealed class HexTravelDto
+{
+    [JsonPropertyName("perHex")] public double DistancePerHex { get; set; } = 6;
+    [JsonPropertyName("unit")] public string? Unit { get; set; }
+    [JsonPropertyName("perDay")] public double DistancePerDay { get; set; } = 24;
 }
 
 internal sealed class HexGridDto

@@ -23,6 +23,9 @@ public static partial class MapProjectStore
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = false };
 
     private static int SchemaFor(MapDocument document) =>
+        document.Layers.OfType<HexLayer>().Any(layer => layer.NeedsWorkshopSchema)
+        || document.Checkpoints.Any(c => c.Snapshot.Layers.OfType<HexLayer>().Any(layer => layer.NeedsWorkshopSchema))
+            ? MapProjectFormat.HexWorkshopSchemaVersion :
         document.Layers.OfType<HexLayer>().Any()
         || document.Checkpoints.Any(c => c.Snapshot.Layers.OfType<HexLayer>().Any())
             ? MapProjectFormat.HexLayersSchemaVersion :
@@ -1729,7 +1732,10 @@ public static partial class MapProjectStore
             return index;
         }
 
-        var cells = new List<int>(board.CellCount * 6);
+        // Stride 6 (the first hex format) unless a hex is turned, in a region or revealed: then 9.
+        var wide = board.Cells.Any(pair => pair.Value.NeedsWorkshopSchema);
+        var stride = wide ? 9 : 6;
+        var cells = new List<int>(board.CellCount * stride);
         foreach (var (hex, cell) in board.Cells)
         {
             var offset = board.Layout.ToOffset(hex);
@@ -1739,6 +1745,38 @@ public static partial class MapProjectStore
             cells.Add(cell.Variant);
             cells.Add(cell.Feature is null ? -1 : Index(cell.Feature));
             cells.Add(cell.FeatureVariant);
+            if (wide)
+            {
+                cells.Add(cell.Rotation);
+                cells.Add(cell.Region);
+                cells.Add(cell.Revealed ? 1 : 0);
+            }
+        }
+
+        List<int> Nodes(HexPath path)
+        {
+            var nodes = new List<int>(path.NodeCount * 3);
+            if (path.Style == HexRouteStyle.Edges)
+            {
+                foreach (var vertex in path.Vertices)
+                {
+                    var offset = board.Layout.ToOffset(vertex.Hex);
+                    nodes.Add(offset.Column);
+                    nodes.Add(offset.Row);
+                    nodes.Add(vertex.Corner);
+                }
+            }
+            else
+            {
+                foreach (var hex in path.Hexes)
+                {
+                    var offset = board.Layout.ToOffset(hex);
+                    nodes.Add(offset.Column);
+                    nodes.Add(offset.Row);
+                }
+            }
+
+            return nodes;
         }
 
         return new HexBoardDto
@@ -1750,6 +1788,7 @@ public static partial class MapProjectStore
             Columns = board.Columns,
             Rows = board.Rows,
             Tiles = tiles,
+            Stride = wide ? stride : null,
             Cells = cells,
             Grid = new HexGridDto
             {
@@ -1758,6 +1797,42 @@ public static partial class MapProjectStore
                 Width = layer.Grid.Width,
                 Numbers = layer.Grid.Numbers,
                 ShowEmpty = layer.Grid.ShowEmpty,
+            },
+            Paths = layer.Paths.IsEmpty ? null : [.. layer.Paths.Select(path => new HexPathDto
+            {
+                Id = path.Id.ToString(),
+                Kind = path.Kind.ToString(),
+                Style = path.Style.ToString(),
+                Nodes = Nodes(path),
+                Width = path.Width,
+                Color = path.Color,
+                Name = path.Name.Length == 0 ? null : path.Name,
+                Seed = path.Seed,
+            })],
+            Regions = layer.Regions.IsEmpty ? null : [.. layer.Regions.Select(region => new HexRegionDto
+            {
+                Id = region.Id, Name = region.Name, Color = region.Color,
+            })],
+            Notes = layer.Notes.IsEmpty ? null : [.. layer.Notes
+                .Select(pair => (Offset: board.Layout.ToOffset(pair.Key), Note: pair.Value))
+                .OrderBy(pair => pair.Offset.Row).ThenBy(pair => pair.Offset.Column)
+                .Select(pair => new HexNoteDto
+                {
+                    Column = pair.Offset.Column,
+                    Row = pair.Offset.Row,
+                    Title = pair.Note.Title,
+                    Category = pair.Note.Category.ToString(),
+                    GmText = pair.Note.GmText.Length == 0 ? null : pair.Note.GmText,
+                    PlayerText = pair.Note.PlayerText.Length == 0 ? null : pair.Note.PlayerText,
+                    ChildMap = pair.Note.ChildMap,
+                })],
+            Level = layer.Level == 0 ? null : layer.Level,
+            Fog = layer.FogEnabled ? true : null,
+            Travel = layer.Travel == HexTravelScale.Default ? null : new HexTravelDto
+            {
+                DistancePerHex = layer.Travel.DistancePerHex,
+                Unit = layer.Travel.Unit,
+                DistancePerDay = layer.Travel.DistancePerDay,
             },
         };
     }
@@ -1774,23 +1849,34 @@ public static partial class MapProjectStore
         var size = RequireFinite(dto.Size, "hex size", HexBoard.MinHexSize, HexBoard.MaxHexSize);
         if (dto.Columns is < 1 or > HexBoard.MaxDimension || dto.Rows is < 1 or > HexBoard.MaxDimension)
             throw new MapProjectCorruptedException($"Hex layer {id} has an invalid board size.");
-        if (dto.Tiles.Any(tile => !HexCell.IsValidTileId(tile)) || dto.Cells.Count % 6 != 0)
+        var stride = dto.Stride ?? 6;
+        if (stride is not (6 or 9) || dto.Tiles.Any(tile => !HexCell.IsValidTileId(tile)) || dto.Cells.Count % stride != 0)
             throw new MapProjectCorruptedException($"Hex layer {id} has damaged cells.");
         var layout = new HexLayout(orientation, size,
             RequireFinite(dto.OriginX, "hex origin", -1e7, 1e7), RequireFinite(dto.OriginY, "hex origin", -1e7, 1e7));
-        var cells = new List<KeyValuePair<HexCoord, HexCell>>(dto.Cells.Count / 6);
+        var cells = new List<KeyValuePair<HexCoord, HexCell>>(dto.Cells.Count / stride);
         var seen = new HashSet<HexOffset>();
-        for (var i = 0; i < dto.Cells.Count; i += 6)
+        for (var i = 0; i < dto.Cells.Count; i += stride)
         {
             var offset = new HexOffset(dto.Cells[i], dto.Cells[i + 1]);
             int terrain = dto.Cells[i + 2], variant = dto.Cells[i + 3], feature = dto.Cells[i + 4], featureVariant = dto.Cells[i + 5];
+            int rotation = 0, region = 0, revealed = 0;
+            if (stride == 9)
+            {
+                rotation = dto.Cells[i + 6];
+                region = dto.Cells[i + 7];
+                revealed = dto.Cells[i + 8];
+            }
+
             if (offset.Column < 0 || offset.Column >= dto.Columns || offset.Row < 0 || offset.Row >= dto.Rows
                 || !seen.Add(offset)
                 || terrain < 0 || terrain >= dto.Tiles.Count || variant < 0
-                || feature < -1 || feature >= dto.Tiles.Count || featureVariant < 0)
+                || feature < -1 || feature >= dto.Tiles.Count || featureVariant < 0
+                || rotation is < 0 or > 5 || region is < 0 or > HexCell.MaxRegion || revealed is not (0 or 1))
                 throw new MapProjectCorruptedException($"Hex layer {id} has damaged cells.");
             cells.Add(new(layout.FromOffset(offset), HexCell.Of(
-                dto.Tiles[terrain], variant, feature < 0 ? null : dto.Tiles[feature], featureVariant)));
+                dto.Tiles[terrain], variant, feature < 0 ? null : dto.Tiles[feature], featureVariant,
+                rotation, region, revealed == 1)));
         }
 
         var grid = dto.Grid is null ? new HexGridStyle() : new HexGridStyle
@@ -1801,8 +1887,90 @@ public static partial class MapProjectStore
             Numbers = dto.Grid.Numbers,
             ShowEmpty = dto.Grid.ShowEmpty,
         };
-        return new HexLayer(id, name, layer.Visible, layer.Locked, layer.Opacity,
-            HexBoard.FromCells(layout, dto.Columns, dto.Rows, cells), mask) { Grid = grid };
+        var board = HexBoard.FromCells(layout, dto.Columns, dto.Rows, cells);
+        HexCoord At(int column, int row)
+        {
+            if (column < 0 || column >= dto.Columns || row < 0 || row >= dto.Rows)
+                throw new MapProjectCorruptedException($"Hex layer {id} has a path or a hex key outside its board.");
+            return layout.FromOffset(new HexOffset(column, row));
+        }
+
+        var paths = System.Collections.Immutable.ImmutableList.CreateBuilder<HexPath>();
+        var pathIds = new HashSet<Guid>();
+        foreach (var path in dto.Paths ?? [])
+        {
+            if (!Guid.TryParse(path.Id, out var pathId) || !pathIds.Add(pathId)
+                || !Enum.TryParse<HexPathKind>(path.Kind, out var kind) || !Enum.IsDefined(kind)
+                || !Enum.TryParse<HexRouteStyle>(path.Style, out var style) || !Enum.IsDefined(style))
+                throw new MapProjectCorruptedException($"Hex layer {id} has a damaged path.");
+            var nodes = path.Nodes ?? [];
+            try
+            {
+                if (style == HexRouteStyle.Edges)
+                {
+                    if (nodes.Count % 3 != 0) throw new MapProjectCorruptedException($"Hex layer {id} has a damaged path.");
+                    var vertices = new List<HexVertex>(nodes.Count / 3);
+                    for (var i = 0; i < nodes.Count; i += 3)
+                    {
+                        if (nodes[i + 2] is < 0 or > 5) throw new MapProjectCorruptedException($"Hex layer {id} has a damaged path.");
+                        vertices.Add(layout.Canonical(new HexVertex(At(nodes[i], nodes[i + 1]), nodes[i + 2])));
+                    }
+
+                    paths.Add(new HexPath(new HexPathId(pathId), kind, style, [], [.. vertices], path.Width, path.Color, path.Name ?? "", path.Seed));
+                }
+                else
+                {
+                    if (nodes.Count % 2 != 0) throw new MapProjectCorruptedException($"Hex layer {id} has a damaged path.");
+                    var hexes = new List<HexCoord>(nodes.Count / 2);
+                    for (var i = 0; i < nodes.Count; i += 2) hexes.Add(At(nodes[i], nodes[i + 1]));
+                    paths.Add(new HexPath(new HexPathId(pathId), kind, style, [.. hexes], [], path.Width, path.Color, path.Name ?? "", path.Seed));
+                }
+            }
+            catch (ArgumentException error)
+            {
+                throw new MapProjectCorruptedException($"Hex layer {id} has a damaged path: {error.Message}");
+            }
+        }
+
+        var regions = System.Collections.Immutable.ImmutableList.CreateBuilder<HexRegion>();
+        foreach (var region in dto.Regions ?? [])
+        {
+            if (region.Id is < 1 or > HexCell.MaxRegion || regions.Any(r => r.Id == region.Id) || AppearanceColor.Normalize(region.Color) is null)
+                throw new MapProjectCorruptedException($"Hex layer {id} has a damaged region.");
+            regions.Add(new HexRegion(region.Id, region.Name ?? "", region.Color));
+        }
+
+        var notes = System.Collections.Immutable.ImmutableDictionary.CreateBuilder<HexCoord, HexNote>();
+        foreach (var note in dto.Notes ?? [])
+        {
+            var hex = At(note.Column, note.Row);
+            if (notes.ContainsKey(hex) || !Enum.TryParse<HexNoteCategory>(note.Category ?? nameof(HexNoteCategory.Other), out var category)
+                || !Enum.IsDefined(category))
+                throw new MapProjectCorruptedException($"Hex layer {id} has a damaged hex key.");
+            notes[hex] = new HexNote(note.Title ?? "", category, note.GmText ?? "", note.PlayerText ?? "", note.ChildMap);
+        }
+
+        HexTravelScale travel;
+        try
+        {
+            travel = dto.Travel is null ? HexTravelScale.Default
+                : new HexTravelScale(dto.Travel.DistancePerHex, dto.Travel.Unit ?? "", dto.Travel.DistancePerDay);
+        }
+        catch (ArgumentException)
+        {
+            throw new MapProjectCorruptedException($"Hex layer {id} has a damaged travel scale.");
+        }
+
+        return new HexLayer(id, name, layer.Visible, layer.Locked, layer.Opacity, board, mask)
+        {
+            Grid = grid,
+            Paths = paths.ToImmutable(),
+            Regions = regions.ToImmutable(),
+            Notes = notes.ToImmutable(),
+            Level = dto.Level is { } level ? Math.Clamp(level, -64, 64) : 0,
+            FogEnabled = dto.Fog == true,
+            Travel = travel == HexTravelScale.Default ? HexTravelScale.Default : travel,
+        };
     }
 
     private static SceneObjectDto ToObjectDto(SceneObject sceneObject) => new()

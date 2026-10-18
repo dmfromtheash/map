@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Map.Core.Documents;
 
 namespace Map.Core.Editing;
@@ -10,12 +11,21 @@ public enum HexPaintTarget
 
     /// <summary>The feature drawn over the terrain; a feature needs terrain under it.</summary>
     Feature,
+
+    /// <summary>The region of a painted hex (<see cref="HexTileChoice.Region"/>; 0 takes it out of every region).</summary>
+    Region,
+
+    /// <summary>The fog of war of a painted hex: reveal it (<see cref="HexTileChoice.Reveal"/>) or cover it again.</summary>
+    Fog,
 }
+
+/// <summary>One tile of a mixed brush and how often it comes up relative to the others.</summary>
+public sealed record HexMixEntry(string TileId, int VariantCount, double Weight = 1);
 
 /// <summary>The tile a hex gesture puts down and how it chooses among the tile's variants.</summary>
 /// <param name="TileId">Library id of the tile.</param>
 /// <param name="VariantCount">How many pictures the tile has (at least 1).</param>
-/// <param name="Target">Terrain or feature.</param>
+/// <param name="Target">Terrain, feature, region or fog.</param>
 /// <param name="RandomVariant">Each hex gets its own picture, chosen by the hex position and <paramref name="Seed"/>.</param>
 /// <param name="FixedVariant">The picture used when <paramref name="RandomVariant"/> is off.</param>
 /// <param name="Seed">Changes the random pictures without changing which hexes are painted.</param>
@@ -25,7 +35,29 @@ public sealed record HexTileChoice(
     HexPaintTarget Target = HexPaintTarget.Terrain,
     bool RandomVariant = true,
     int FixedVariant = 0,
-    int Seed = 0);
+    int Seed = 0)
+{
+    /// <summary>
+    /// Several tiles with weights (the Hex Kit multi-select, the Hexxmap sampler): every hex gets one
+    /// of them, chosen by its position. Empty means just <see cref="TileId"/>.
+    /// </summary>
+    public IReadOnlyList<HexMixEntry> Mix { get; init; } = [];
+
+    /// <summary>Terrain pictures are turned by this many 60° steps (0..5).</summary>
+    public int Rotation { get; init; }
+
+    /// <summary>Each hex gets its own turn of the picture (only for tiles that may turn).</summary>
+    public bool RandomRotation { get; init; }
+
+    /// <summary>The tile may be turned; tall tiles and tiles with a top never are.</summary>
+    public bool Rotatable { get; init; } = true;
+
+    /// <summary>Region id a <see cref="HexPaintTarget.Region"/> gesture writes.</summary>
+    public int Region { get; init; }
+
+    /// <summary>A <see cref="HexPaintTarget.Fog"/> gesture reveals (true) or covers again (false).</summary>
+    public bool Reveal { get; init; } = true;
+}
 
 /// <summary>
 /// Pure hex-editing rules shared by every hex gesture: footprints, flood fill, the change a tile
@@ -76,14 +108,32 @@ public static class HexEditing
         return region;
     }
 
+    /// <summary>A stable hash of a hex position and a salt: the same hex and salt always give the same number.</summary>
+    public static uint Noise(HexCoord hex, int salt)
+    {
+        unchecked
+        {
+            var h = (uint)hex.Q * 0x9E3779B1u ^ (uint)hex.R * 0x85EBCA77u ^ (uint)salt * 0xC2B2AE3Du;
+            h ^= h >> 15;
+            h *= 0x2C1B3C6Du;
+            h ^= h >> 12;
+            h *= 0x297A2D39u;
+            h ^= h >> 15;
+            return h;
+        }
+    }
+
     /// <summary>
     /// The picture a hex gets: a stable hash of its position, so repainting the same hex with the
     /// same seed gives the same picture and neighbours rarely repeat.
     /// </summary>
-    public static int VariantFor(HexCoord hex, HexTileChoice choice)
+    public static int VariantFor(HexCoord hex, HexTileChoice choice) =>
+        VariantFor(hex, choice, choice.VariantCount);
+
+    private static int VariantFor(HexCoord hex, HexTileChoice choice, int variantCount)
     {
         ArgumentNullException.ThrowIfNull(choice);
-        var count = Math.Max(1, choice.VariantCount);
+        var count = Math.Max(1, variantCount);
         if (!choice.RandomVariant)
         {
             return Math.Clamp(choice.FixedVariant, 0, count - 1);
@@ -91,6 +141,7 @@ public static class HexEditing
 
         unchecked
         {
+            // The first formula of the hex category: kept so painted maps repaint the same way.
             var h = (uint)hex.Q * 0x9E3779B1u ^ (uint)hex.R * 0x85EBCA77u ^ (uint)choice.Seed * 0xC2B2AE3Du;
             h ^= h >> 15;
             h *= 0x2C1B3C6Du;
@@ -99,21 +150,57 @@ public static class HexEditing
         }
     }
 
+    /// <summary>The tile of the choice a hex gets: the tile itself, or one of a mix by weight.</summary>
+    public static (string TileId, int VariantCount) TileFor(HexCoord hex, HexTileChoice choice)
+    {
+        ArgumentNullException.ThrowIfNull(choice);
+        if (choice.Mix.Count == 0) return (choice.TileId, choice.VariantCount);
+        var total = 0.0;
+        foreach (var entry in choice.Mix) total += Math.Max(0, entry.Weight);
+        if (total <= 0) return (choice.Mix[0].TileId, choice.Mix[0].VariantCount);
+        var pick = Noise(hex, choice.Seed ^ 0x5bd1e995) / (double)uint.MaxValue * total;
+        foreach (var entry in choice.Mix)
+        {
+            pick -= Math.Max(0, entry.Weight);
+            if (pick < 0) return (entry.TileId, entry.VariantCount);
+        }
+
+        return (choice.Mix[^1].TileId, choice.Mix[^1].VariantCount);
+    }
+
+    /// <summary>The turn of the terrain picture a hex gets.</summary>
+    public static int RotationFor(HexCoord hex, HexTileChoice choice)
+    {
+        ArgumentNullException.ThrowIfNull(choice);
+        if (!choice.Rotatable) return 0;
+        return choice.RandomRotation ? (int)(Noise(hex, choice.Seed ^ 0x1b873593) % 6) : ((choice.Rotation % 6) + 6) % 6;
+    }
+
     /// <summary>What a hex becomes when the tile is put on it, or the hex unchanged when the tile does not apply.</summary>
     public static HexCell? Place(HexCell? current, HexCoord hex, HexTileChoice choice)
     {
         ArgumentNullException.ThrowIfNull(choice);
-        var variant = VariantFor(hex, choice);
+        switch (choice.Target)
+        {
+            case HexPaintTarget.Region:
+                return current is null || current.Region == choice.Region ? current : current.WithRegion(choice.Region);
+            case HexPaintTarget.Fog:
+                return current is null || current.Revealed == choice.Reveal ? current : current.WithRevealed(choice.Reveal);
+        }
+
+        var (tile, variants) = TileFor(hex, choice);
+        var variant = VariantFor(hex, choice, variants);
+        var rotation = RotationFor(hex, choice);
         return choice.Target switch
         {
             HexPaintTarget.Terrain => current is null
-                ? HexCell.Of(choice.TileId, variant)
-                : current.Terrain == choice.TileId && !choice.RandomVariant && current.Variant == variant
+                ? HexCell.Of(tile, variant, rotation: rotation)
+                : current.Terrain == tile && !choice.RandomVariant && current.Variant == variant && current.Rotation == rotation
                     ? current
-                    // Repainting the terrain keeps the feature that stood on it.
-                    : HexCell.Of(choice.TileId, variant, current.Feature, current.FeatureVariant),
+                    // Repainting the terrain keeps the feature, the region and the fog of the hex.
+                    : current.WithTerrain(tile, variant, rotation),
             // A feature needs ground: on an empty hex it does nothing.
-            HexPaintTarget.Feature => current?.WithFeature(choice.TileId, variant),
+            HexPaintTarget.Feature => current?.WithFeature(tile, variant),
             _ => current,
         };
     }
@@ -122,6 +209,8 @@ public static class HexEditing
     public static HexCell? Erase(HexCell? current, HexPaintTarget target) => target switch
     {
         HexPaintTarget.Feature => current?.Feature is null ? current : current.WithFeature(null),
+        HexPaintTarget.Region => current is null || current.Region == 0 ? current : current.WithRegion(0),
+        HexPaintTarget.Fog => current is null || !current.Revealed ? current : current.WithRevealed(false),
         _ => null,
     };
 }

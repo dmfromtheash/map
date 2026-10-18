@@ -7,12 +7,18 @@ namespace Map.Core.Documents;
 /// What stands on one hex: a ready painted terrain tile, and optionally a feature tile drawn over
 /// it (a village, a tower, a ruin). Tiles are named by a stable id of the hex tile library and a
 /// variant number, so a forest painted with random variants keeps exactly the pictures it got.
+/// A hex also carries how its terrain picture is turned (60° steps), the region it belongs to
+/// (0 is none; borders are drawn where regions meet) and whether the players have seen it yet.
 /// </summary>
 public sealed record HexCell
 {
     public const int MaxTileIdLength = 96;
 
-    public HexCell(string terrain, int variant = 0, string? feature = null, int featureVariant = 0)
+    /// <summary>Region ids are 1..MaxRegion; 0 means the hex belongs to no region.</summary>
+    public const int MaxRegion = 4096;
+
+    public HexCell(string terrain, int variant = 0, string? feature = null, int featureVariant = 0,
+        int rotation = 0, int region = 0, bool revealed = false)
     {
         if (!IsValidTileId(terrain))
         {
@@ -26,10 +32,18 @@ public sealed record HexCell
 
         ArgumentOutOfRangeException.ThrowIfNegative(variant);
         ArgumentOutOfRangeException.ThrowIfNegative(featureVariant);
+        if (region is < 0 or > MaxRegion)
+        {
+            throw new ArgumentOutOfRangeException(nameof(region), region, $"A region id is 0..{MaxRegion}.");
+        }
+
         Terrain = terrain;
         Variant = variant;
         Feature = feature;
         FeatureVariant = feature is null ? 0 : featureVariant;
+        Rotation = ((rotation % 6) + 6) % 6;
+        Region = region;
+        Revealed = revealed;
     }
 
     public string Terrain { get; }
@@ -40,8 +54,32 @@ public sealed record HexCell
 
     public int FeatureVariant { get; }
 
+    /// <summary>The terrain picture turned by this many 60° steps clockwise (0..5).</summary>
+    public int Rotation { get; }
+
+    /// <summary>The region of the hex (0 is none).</summary>
+    public int Region { get; }
+
+    /// <summary>The players have seen this hex: the fog of war leaves it open.</summary>
+    public bool Revealed { get; }
+
+    /// <summary>True when the hex carries anything the first hex format (schema v12) cannot hold.</summary>
+    public bool NeedsWorkshopSchema => Rotation != 0 || Region != 0 || Revealed;
+
     public HexCell WithFeature(string? feature, int featureVariant = 0) =>
-        Of(Terrain, Variant, feature, featureVariant);
+        Of(Terrain, Variant, feature, featureVariant, Rotation, Region, Revealed);
+
+    public HexCell WithTerrain(string terrain, int variant, int rotation) =>
+        Of(terrain, variant, Feature, FeatureVariant, rotation, Region, Revealed);
+
+    public HexCell WithRotation(int rotation) =>
+        Of(Terrain, Variant, Feature, FeatureVariant, rotation, Region, Revealed);
+
+    public HexCell WithRegion(int region) =>
+        Of(Terrain, Variant, Feature, FeatureVariant, Rotation, region, Revealed);
+
+    public HexCell WithRevealed(bool revealed) =>
+        Of(Terrain, Variant, Feature, FeatureVariant, Rotation, Region, revealed);
 
     /// <summary>Distinct values are few (tiles × variants) while a board holds up to millions of hexes.</summary>
     private const int MaxShared = 1 << 16;
@@ -52,9 +90,10 @@ public sealed record HexCell
     /// The cell with these tiles, shared by every hex that shows the same: a filled board of
     /// 262 144 hexes holds a few dozen cell objects instead of one per hex.
     /// </summary>
-    public static HexCell Of(string terrain, int variant = 0, string? feature = null, int featureVariant = 0)
+    public static HexCell Of(string terrain, int variant = 0, string? feature = null, int featureVariant = 0,
+        int rotation = 0, int region = 0, bool revealed = false)
     {
-        var cell = new HexCell(terrain, variant, feature, featureVariant);
+        var cell = new HexCell(terrain, variant, feature, featureVariant, rotation, region, revealed);
         if (Shared.TryGetValue(cell, out var shared)) return shared;
         return Shared.Count < MaxShared ? Shared.GetOrAdd(cell, cell) : cell;
     }
@@ -415,6 +454,39 @@ public sealed record HexLayer : MapLayer
     public HexBoard Board { get; init; }
 
     public HexGridStyle Grid { get; init; } = new();
+
+    /// <summary>Rivers, roads, trails and border lines, drawn in this order over the terrain.</summary>
+    public ImmutableList<HexPath> Paths { get; init; } = [];
+
+    /// <summary>The regions the hexes of <see cref="Board"/> may belong to.</summary>
+    public ImmutableList<HexRegion> Regions { get; init; } = [];
+
+    /// <summary>The hex key: notes for running a game, by hex.</summary>
+    public ImmutableDictionary<HexCoord, HexNote> Notes { get; init; } = ImmutableDictionary<HexCoord, HexNote>.Empty;
+
+    /// <summary>
+    /// Which level of the world the layer shows: 0 is the surface, -1 the first level under it,
+    /// and so on. The editor shows one level at a time; levels share the grid, so a cave entrance
+    /// on the surface sits exactly over its hex below.
+    /// </summary>
+    public int Level { get; init; }
+
+    /// <summary>The fog of war is on: hexes the players have not seen are covered.</summary>
+    public bool FogEnabled { get; init; }
+
+    /// <summary>How far a hex is, for the travel ruler.</summary>
+    public HexTravelScale Travel { get; init; } = HexTravelScale.Default;
+
+    /// <summary>The region with this id, or null.</summary>
+    public HexRegion? Region(int id) => id == 0 ? null : Regions.Find(region => region.Id == id);
+
+    /// <summary>The path with this id, or null.</summary>
+    public HexPath? Path(HexPathId id) => Paths.Find(path => path.Id == id);
+
+    /// <summary>True when the layer uses anything beyond the first hex format (schema v12).</summary>
+    public bool NeedsWorkshopSchema =>
+        !Paths.IsEmpty || !Regions.IsEmpty || !Notes.IsEmpty || Level != 0 || FogEnabled
+        || Travel != HexTravelScale.Default || Board.Cells.Any(pair => pair.Value.NeedsWorkshopSchema);
 
     public override LayerMask? Mask { get; init; }
 

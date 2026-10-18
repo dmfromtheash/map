@@ -124,6 +124,45 @@ public readonly record struct HexCoord(int Q, int R)
         return new HexCoord((int)rq, (int)rr);
     }
 
+    /// <summary>
+    /// This hex turned around <paramref name="center"/> by <paramref name="steps"/> × 60° clockwise on
+    /// screen (y down) - the same sense as <see cref="HexCell.Rotation"/>; negative steps turn back.
+    /// </summary>
+    public HexCoord RotatedAround(HexCoord center, int steps)
+    {
+        var d = this - center;
+        int q = d.Q, r = d.R, s = d.S;
+        for (var i = 0; i < ((steps % 6) + 6) % 6; i++)
+        {
+            // (q, r, s) → (−r, −s, −q): Directions[i] becomes Directions[i − 1], a clockwise turn.
+            (q, r, s) = (-r, -s, -q);
+        }
+
+        return new HexCoord(center.Q + q, center.R + r);
+    }
+
+    /// <summary>This hex mirrored left-right on screen across the vertical line through <paramref name="center"/>.</summary>
+    public HexCoord MirroredAround(HexCoord center, HexOrientation orientation)
+    {
+        var d = this - center;
+        // Flat: x = 1.5q, so q → −q and r → r + q. Pointy: x = √3(q + r/2), so q → −q − r.
+        return orientation == HexOrientation.Flat
+            ? new HexCoord(center.Q - d.Q, center.R + d.R + d.Q)
+            : new HexCoord(center.Q + d.S, center.R + d.R);
+    }
+
+    /// <summary>The direction (0..5) from this hex to a neighbour, or -1 when it is not a neighbour.</summary>
+    public int DirectionTo(HexCoord neighbour)
+    {
+        var d = neighbour - this;
+        for (var i = 0; i < 6; i++)
+        {
+            if (Directions[i] == d) return i;
+        }
+
+        return -1;
+    }
+
     public override string ToString() => $"{Q},{R}";
 }
 
@@ -215,6 +254,104 @@ public sealed record HexLayout
         var (cx, cy) = Center(hex);
         return new WorldBounds(cx - HexWidth / 2, cy - HexHeight / 2, cx + HexWidth / 2, cy + HexHeight / 2);
     }
+
+    /// <summary>The middle of the edge between a hex and its neighbour in <paramref name="direction"/>.</summary>
+    public (double X, double Y) EdgeMiddle(HexCoord hex, int direction)
+    {
+        var (ax, ay) = Center(hex);
+        var (bx, by) = Center(hex.Neighbor(direction));
+        return ((ax + bx) / 2, (ay + by) / 2);
+    }
+
+    /// <summary>
+    /// The screen angle (degrees, y down) from a hex centre to the neighbour in a direction. Used to
+    /// turn a tile picture so that a side of its art faces a neighbour.
+    /// </summary>
+    public double DirectionAngle(int direction)
+    {
+        var (ax, ay) = Center(new HexCoord(0, 0));
+        var (bx, by) = Center(new HexCoord(0, 0).Neighbor(direction));
+        return Math.Atan2(by - ay, bx - ax) * 180 / Math.PI;
+    }
+
+    /// <summary>The canvas point of a hex corner.</summary>
+    public (double X, double Y) Position(HexVertex vertex) => Corner(vertex.Hex, vertex.Corner);
+
+    /// <summary>
+    /// The one stored form of a corner: of the three hexes that meet there, the smallest by (q, r).
+    /// Depends only on the orientation, so a moved or resized board keeps its corners.
+    /// </summary>
+    public HexVertex Canonical(HexVertex vertex)
+    {
+        var best = vertex with { Corner = ((vertex.Corner % 6) + 6) % 6 };
+        foreach (var other in Around(best))
+        {
+            if (other.Hex.Q < best.Hex.Q || (other.Hex.Q == best.Hex.Q && other.Hex.R < best.Hex.R)) best = other;
+        }
+
+        return best;
+    }
+
+    /// <summary>The three corners joined to this one by an edge, in canonical form.</summary>
+    public IReadOnlyList<HexVertex> VertexNeighbors(HexVertex vertex)
+    {
+        var self = Canonical(vertex);
+        var result = new List<HexVertex>(3);
+        foreach (var form in Around(self).Prepend(self))
+        {
+            foreach (var step in (ReadOnlySpan<int>)[1, 5])
+            {
+                var next = Canonical(new HexVertex(form.Hex, (form.Corner + step) % 6));
+                if (next != self && !result.Contains(next)) result.Add(next);
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>The corner of a hex nearest a canvas point.</summary>
+    public HexVertex NearestVertex(double x, double y)
+    {
+        var hex = HexAt(x, y);
+        var best = 0;
+        var bestDistance = double.MaxValue;
+        for (var i = 0; i < 6; i++)
+        {
+            var (cx, cy) = Corner(hex, i);
+            var distance = (cx - x) * (cx - x) + (cy - y) * (cy - y);
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                best = i;
+            }
+        }
+
+        return Canonical(new HexVertex(hex, best));
+    }
+
+    /// <summary>The same corner as seen from the two other hexes that meet there.</summary>
+    private IEnumerable<HexVertex> Around(HexVertex vertex)
+    {
+        // A unit layout of the same orientation: corners are compared in hex units, so the canvas
+        // size and origin of this layout never change a corner's identity.
+        var unit = Orientation == HexOrientation.Flat ? UnitFlat : UnitPointy;
+        var (vx, vy) = unit.Corner(vertex.Hex, vertex.Corner);
+        foreach (var neighbour in vertex.Hex.Neighbors())
+        {
+            for (var i = 0; i < 6; i++)
+            {
+                var (x, y) = unit.Corner(neighbour, i);
+                if (Math.Abs(x - vx) < 1e-6 && Math.Abs(y - vy) < 1e-6)
+                {
+                    yield return new HexVertex(neighbour, i);
+                }
+            }
+        }
+    }
+
+    private static readonly HexLayout UnitFlat = new(HexOrientation.Flat, 1, 0, 0);
+
+    private static readonly HexLayout UnitPointy = new(HexOrientation.Pointy, 1, 0, 0);
 
     public HexOffset ToOffset(HexCoord hex) => Orientation == HexOrientation.Flat
         ? new HexOffset(hex.Q, hex.R + (hex.Q - (hex.Q & 1)) / 2)
