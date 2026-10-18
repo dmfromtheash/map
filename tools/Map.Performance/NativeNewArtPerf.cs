@@ -117,6 +117,10 @@ public sealed partial class PaintPerfApplication
             // Land: a shape stroke across the plain's edge into the sea.
             _editor.ActiveTool = EditorTool.Land; _editor.SetLandPaintMode(false);
             _editor.SelectLayer(plain.Id);
+            // The land panel resizes the canvas: wait for the exact terrain of the new view, as
+            // a user who looks before drawing does; the first stroke right after a tool change
+            // rebuilds the whole view (no earlier image of that view exists).
+            await TimedRefined();
             if (Want("land")) {
             _editor.BrushSettings = _editor.BrushSettings with { Radius = 40, Softness = .5, Spacing = .25 };
             await StrokeRoute("land-shape-stroke" + suffix, (260, 1500), 60, 9, 4);
@@ -148,6 +152,7 @@ public sealed partial class PaintPerfApplication
             PrintEditTimings("cliff-slider(last step)" + suffix);
             _report.Environment["exact/cliff-slider" + suffix] = (await TimedRefined()).ToString("0");
             _editor.BrushSettings = _editor.BrushSettings with { Radius = 40, Softness = .5, Spacing = .25 };
+            await TimedRefined();
             await StrokeRoute("tier-land-stroke" + suffix, (1250, 1580), 60, 9, 4);
             _report.Environment["exact/tier-land-stroke" + suffix] = (await TimedRefined()).ToString("0");
             for (var u = 0; u < 3; u++) _editor.Undo();
@@ -156,7 +161,7 @@ public sealed partial class PaintPerfApplication
             // A new land on top, the way the owner starts a new tier: «Новая земля» and a stroke.
             if (Want("newland")) {
             _editor.ChooseLandTexture(MapFillTextures.OwnerSnowSoft);
-            _editor.AddLandLayer(); await Settle();
+            _editor.AddLandLayer(); await Settle(); await TimedRefined();
             await StrokeRoute("new-land-stroke" + suffix, (1700, 1400), 60, 9, 5);
             _report.Environment["exact/new-land" + suffix] = (await TimedRefined()).ToString("0");
             await Route("new-land-tier-up" + suffix, 1, _ => _editor.ShiftLandLevel(1));

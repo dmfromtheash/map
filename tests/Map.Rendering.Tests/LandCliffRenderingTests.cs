@@ -7,6 +7,8 @@ namespace Map.Rendering.Tests;
 /// A raised piece of land drops as a cliff below its southern edge, one step per level above the
 /// ground or sea beneath it; land at level 0 over the sea keeps exactly its former look.
 /// </summary>
+// LandCliffField keeps one process-wide cache and counter: tests that compute fields run one at a time.
+[Collection("Land cliff fields")]
 public sealed class LandCliffRenderingTests
 {
     private const int Width = 768;

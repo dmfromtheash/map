@@ -11,7 +11,7 @@ namespace Map.Rendering;
 public sealed class TerrainRefinement : IDisposable
 {
     private sealed record Request(object[] Parts, WorldBounds View, double Scale,
-        Func<SKImage?> Build, Action Ready)
+        Func<SKImage?> Build, Action Ready, object? Tag = null)
     {
         public bool Matches(IReadOnlyList<object> parts, WorldBounds view, double scale) =>
             View == view && Scale == scale && Parts.Length == parts.Count
@@ -25,13 +25,28 @@ public sealed class TerrainRefinement : IDisposable
     public string? LastError { get; private set; }
     public double LastBuildMilliseconds { get; private set; }
 
+    /// <summary>
+    /// Set by the renderer when a partial result could not be completed (its base image was gone):
+    /// the next request of the stale path rebuilds the whole view instead.
+    /// </summary>
+    public bool PreferFullBuild { get; set; }
+
     /// <summary>Transfers ownership of a complete image to the render thread.</summary>
-    public SKImage? Take(IReadOnlyList<object> parts, WorldBounds view, double scale)
+    public SKImage? Take(IReadOnlyList<object> parts, WorldBounds view, double scale) =>
+        Take(parts, view, scale, out _);
+
+    /// <summary>
+    /// Like <see cref="Take(IReadOnlyList{object}, WorldBounds, double)"/>, with the tag the request
+    /// was queued with: a partial result says there how it is laid into the image it completes.
+    /// </summary>
+    public SKImage? Take(IReadOnlyList<object> parts, WorldBounds view, double scale, out object? tag)
     {
         lock (_gate)
         {
+            tag = null;
             if (_finished?.Matches(parts, view, scale) != true) return null;
             var image = _image;
+            tag = _finished.Tag;
             _image = null; _finished = null;
             return image;
         }
@@ -39,7 +54,7 @@ public sealed class TerrainRefinement : IDisposable
 
     /// <returns>False after disposal or a failed build of these inputs; the caller can draw synchronously.</returns>
     public bool Queue(IReadOnlyList<object> parts, WorldBounds view, double scale,
-        Func<SKImage?> build, Action ready)
+        Func<SKImage?> build, Action ready, object? tag = null)
     {
         lock (_gate)
         {
@@ -52,7 +67,7 @@ public sealed class TerrainRefinement : IDisposable
             if (_pending?.Matches(parts, view, scale) == true || _finished?.Matches(parts, view, scale) == true)
                 return true;
             _image?.Dispose(); _image = null; _finished = null;
-            var request = new Request([.. parts], view, scale, build, ready);
+            var request = new Request([.. parts], view, scale, build, ready, tag);
             if (_running is not null) _pending = request;
             else
             {

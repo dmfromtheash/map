@@ -55,6 +55,8 @@ public sealed class RenderStats
     public int MissingAssets { get; set; }
     /// <summary>Object layers drawn from their kept gesture image (<see cref="LayerImageCache"/>) in this frame.</summary>
     public int LayerImagesKept { get; set; }
+    /// <summary>Terrain images completed from a partial background build (a redrawn part laid into the previous image).</summary>
+    public int TerrainPatches { get; set; }
     public int ExactObjects { get; set; }
     public int OverviewObjects { get; set; }
     public int OverviewChunks { get; set; }
@@ -109,6 +111,7 @@ public sealed class RenderStats
         MipmappedTiles = 0;
         MissingAssets = 0;
         LayerImagesKept = 0;
+        TerrainPatches = 0;
         ExactObjects = 0;
         OverviewObjects = 0;
         OverviewChunks = 0;
@@ -859,8 +862,12 @@ public static class SceneRenderer
         {
             if (options.Stats is { } refinementStats) refinementStats.TerrainRefinementBuildMilliseconds = refinement.LastBuildMilliseconds;
             var exact = options.Terrain!.TryGetExact(terrainParts!, view, terrainScale, options.GpuContext);
-            if (exact is null && refinement.Take(terrainParts!, view, terrainScale) is { } ready)
-                exact = options.Terrain.Get(terrainParts!, view, terrainScale, options.GpuContext, (_, _) => ready);
+            if (exact is null && refinement.Take(terrainParts!, view, terrainScale, out var tag) is { } ready)
+            {
+                var adopted = tag is TerrainPatch patch ? ComposeTerrainPatch(ready, patch, view, terrainScale, options) : ready;
+                if (adopted is null) refinement.PreferFullBuild = true;
+                else exact = options.Terrain.Get(terrainParts!, view, terrainScale, options.GpuContext, (_, _) => adopted);
+            }
             if (exact is not null)
             {
                 canvas.DrawImage(exact, RenderImageCache.Placement(exact, view, terrainScale),
@@ -938,8 +945,8 @@ public static class SceneRenderer
             && options.Terrain!.TryGetStaleNear(view, terrainScale, options.GpuContext, out var staleParts,
                 out var staleView, out var staleScale) is { } previous
             && OnlyLandsDiffer(terrainParts!, staleParts, out var changedLands, allowSame: true)
-            && staleRefinement.Queue(terrainParts!, view, terrainScale,
-                BackgroundTerrain(document, lands, surfaces, view, terrainScale, options), staleFrame))
+            && QueueStaleTerrain(staleRefinement, terrainParts!, view, terrainScale, staleParts, staleView, staleScale,
+                changedLands, document, lands, surfaces, options, staleFrame))
         {
             // The previous terrain, of this view or - after a view change - of the nearest one,
             // resampled; whatever it does not cover gets the plain passes.
@@ -1019,6 +1026,132 @@ public static class SceneRenderer
         }
 
         DrawTerrainPasses(canvas, document, lands, surfaces, view, options);
+    }
+
+    /// <summary>
+    /// A partial terrain build: <see cref="RenderView"/> was drawn in the background, and the pixels
+    /// <see cref="Copy"/> (in the pixels of the view's image) replace those of the image built for
+    /// <see cref="BaseParts"/> - the terrain before the edit.
+    /// </summary>
+    private sealed record TerrainPatch(object[] BaseParts, WorldBounds RenderView, SKRectI Copy, SKPointI Offset);
+
+    /// <summary>
+    /// Queues the exact terrain after an edit. When the previous image is of this very view and
+    /// scale and the edit changed only some tiles of its lands, only the part of the view those
+    /// tiles can affect is drawn: every land, coast, cliff and river effect reaches no farther from
+    /// its cause than <see cref="TerrainEffectReach"/>. A stroke rebuilt the whole view on the CPU
+    /// (1.5-3 s on the owner's test map, 2560×1369), during which the plain look stood in.
+    /// </summary>
+    private static bool QueueStaleTerrain(TerrainRefinement refinement, IReadOnlyList<object> parts, WorldBounds view,
+        double scale, IReadOnlyList<object> staleParts, WorldBounds staleView, double staleScale,
+        List<(LandLayer Current, LandLayer Before)> changed, MapDocument document, List<LandLayer> lands,
+        List<Surface> surfaces, RenderOptions options, Action ready)
+    {
+        if (!refinement.PreferFullBuild && staleView == view && staleScale == scale
+            && TerrainPatchRegion(changed, lands, surfaces.Any(surface => surface.River is not null), view, scale) is { } region)
+        {
+            var (renderView, copy, offset) = region;
+            return refinement.Queue(parts, view, scale,
+                BackgroundTerrain(document, lands, surfaces, renderView, scale, options), ready,
+                new TerrainPatch([.. staleParts], renderView, copy, offset));
+        }
+        refinement.PreferFullBuild = false;
+        return refinement.Queue(parts, view, scale, BackgroundTerrain(document, lands, surfaces, view, scale, options), ready);
+    }
+
+    /// <summary>
+    /// The part of the view an edit of these lands can change, or null when the whole view must be
+    /// rebuilt: a change other than coverage or paint tiles (style, level, visibility, mask, name),
+    /// or more than about half of the view. The copied pixels are the changed tiles widened by the
+    /// effect reach; they are drawn with the reach once more around them, so a blur or a distance
+    /// near their edge sees everything it would see in the whole view.
+    /// </summary>
+    private static (WorldBounds RenderView, SKRectI Copy, SKPointI Offset)? TerrainPatchRegion(
+        List<(LandLayer Current, LandLayer Before)> changed, List<LandLayer> lands, bool rivers, WorldBounds view, double scale)
+    {
+        if (changed.Count == 0) return null;
+        double left = double.MaxValue, top = double.MaxValue, right = double.MinValue, bottom = double.MinValue;
+        void Add(TileKey key)
+        {
+            var rect = TileRect(key);
+            left = Math.Min(left, rect.Left); top = Math.Min(top, rect.Top);
+            right = Math.Max(right, rect.Right); bottom = Math.Max(bottom, rect.Bottom);
+        }
+        foreach (var (current, before) in changed)
+        {
+            if (!Equals(before with { GeometryTiles = current.GeometryTiles, PaintTiles = current.PaintTiles }, current)) return null;
+            foreach (var key in current.GeometryTiles.Keys.Union(before.GeometryTiles.Keys))
+                if (!ReferenceEquals(current.GeometryTiles.TryGet(key), before.GeometryTiles.TryGet(key))) Add(key);
+            foreach (var key in current.PaintTiles.Keys.Union(before.PaintTiles.Keys))
+                if (!ReferenceEquals(current.PaintTiles.TryGet(key), before.PaintTiles.TryGet(key))) Add(key);
+        }
+        if (left == double.MaxValue)
+        {
+            // New records of the same tiles: nothing to redraw, the previous image is the result.
+            var pixel = new WorldBounds(view.Left, view.Top, view.Left + (1 / scale), view.Top + (1 / scale));
+            return (pixel, SKRectI.Empty, SKPointI.Empty);
+        }
+        var reach = TerrainEffectReach(lands, rivers, scale);
+        var (width, height) = RenderImageCache.SizeOf(view, scale);
+        // The copied pixels, in the pixels of the view's image.
+        var x0 = Math.Clamp((int)Math.Floor((left - reach - view.Left) * scale), 0, width);
+        var y0 = Math.Clamp((int)Math.Floor((top - reach - view.Top) * scale), 0, height);
+        var x1 = Math.Clamp((int)Math.Ceiling((right + reach - view.Left) * scale), 0, width);
+        var y1 = Math.Clamp((int)Math.Ceiling((bottom + reach - view.Top) * scale), 0, height);
+        if (x1 <= x0 || y1 <= y0 || (long)(x1 - x0) * (y1 - y0) > (long)width * height * 55 / 100) return null;
+        // Drawn with the reach once more around them, on the same pixel grid.
+        var margin = (int)Math.Ceiling(reach * scale) + 2;
+        var rx0 = x0 - margin; var ry0 = y0 - margin; var rx1 = x1 + margin; var ry1 = y1 + margin;
+        var renderView = new WorldBounds(view.Left + (rx0 / scale), view.Top + (ry0 / scale),
+            view.Left + (rx1 / scale), view.Top + (ry1 / scale));
+        return (renderView, new SKRectI(x0, y0, x1, y1), new SKPointI(rx0, ry0));
+    }
+
+    /// <summary>
+    /// How far, in world units, a change of land coverage can change the terrain around it: the
+    /// widest coast effect of any land (outline, shadow, surf), the tallest cliff below a raised
+    /// edge with its lean, a river mouth that reads the coast (when the map has water), and two
+    /// device pixels of sampling.
+    /// </summary>
+    private static double TerrainEffectReach(List<LandLayer> lands, bool rivers, double scale)
+    {
+        var lowest = Math.Min(0, lands.Count > 0 ? lands.Min(land => land.Level) : 0);
+        var reach = 0.0;
+        foreach (var land in lands)
+        {
+            var style = land.EdgeStyle;
+            var cliff = style.Cliff.Reach(style.Cliff.Steps(land.Level, lowest));
+            reach = Math.Max(reach, LandEdgeReach(style) + (cliff * (1 + Math.Abs(style.Cliff.Lean))));
+        }
+        return reach + (rivers ? RiverCoastRenderer.MaximumMouthRadius : 0) + (2 / Math.Max(1e-4, scale)) + 2;
+    }
+
+    /// <summary>
+    /// The terrain image after an edit: the image before it with the redrawn part laid over it,
+    /// pixel for pixel. Null when the image before it is no longer kept (the whole view is then
+    /// rebuilt on the next request). Takes ownership of <paramref name="part"/>.
+    /// </summary>
+    private static SKImage? ComposeTerrainPatch(SKImage part, TerrainPatch patch, WorldBounds view, double scale, RenderOptions options)
+    {
+        using (part)
+        {
+            if (options.Terrain!.TryGetExact(patch.BaseParts, view, scale, options.GpuContext) is not { } baseImage) return null;
+            var info = new SKImageInfo(baseImage.Width, baseImage.Height, SKColorType.RgbaF16, SKAlphaType.Premul);
+            using var surface = (options.GpuContext is { } context ? SKSurface.Create(context, false, info) : null) ?? SKSurface.Create(info);
+            if (surface is null) return null;
+            var canvas = surface.Canvas;
+            using var replace = new SKPaint { BlendMode = SKBlendMode.Src };
+            canvas.DrawImage(baseImage, 0, 0, replace);
+            var copy = patch.Copy;
+            var source = new SKRect(copy.Left - patch.Offset.X, copy.Top - patch.Offset.Y,
+                copy.Right - patch.Offset.X, copy.Bottom - patch.Offset.Y);
+            if (!copy.IsEmpty)
+                canvas.DrawImage(part, source, new SKRect(copy.Left, copy.Top, copy.Right, copy.Bottom),
+                    new SKSamplingOptions(SKFilterMode.Nearest, SKMipmapMode.None), replace);
+            canvas.Flush();
+            if (options.Stats is { } stats) stats.TerrainPatches++;
+            return surface.Snapshot();
+        }
     }
 
     /// <summary>The slot of <see cref="LayerImageCache"/> that keeps the terrain's stand-in while the exact terrain is prepared.</summary>
