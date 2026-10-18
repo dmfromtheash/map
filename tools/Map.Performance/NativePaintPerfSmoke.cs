@@ -126,6 +126,7 @@ public sealed partial class PaintPerfApplication : Application
                     Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path)))[..16];
         }
         if (System.Environment.GetEnvironmentVariable("MAP_CLIFF_PERF") == "1") { await CliffRoutes(); return; }
+        if (System.Environment.GetEnvironmentVariable("MAP_NEW_ART_PERF") == "1") { await NewArtRoutes(); return; }
         var projectPath = System.Environment.GetEnvironmentVariable("MAP_REGIONAL_PROJECT");
         if (string.IsNullOrWhiteSpace(projectPath) || !File.Exists(projectPath))
             throw new InvalidOperationException("MAP_REGIONAL_PROJECT must name an existing .mapproj");

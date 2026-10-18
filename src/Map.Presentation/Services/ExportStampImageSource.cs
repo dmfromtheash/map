@@ -16,6 +16,7 @@ public sealed class ExportStampImageSource : IStampImageSource, IDisposable
     private readonly string? _catalogRoot;
     private readonly IReadOnlyDictionary<string, AssetRecord> _catalogRecords;
     private readonly AssetImageCache _cache = new(64);
+    private readonly HashSet<string> _missingSteps = new(StringComparer.OrdinalIgnoreCase);
 
     public ExportStampImageSource(MapDocument snapshot, string? projectPath, AssetCatalog? catalog)
     {
@@ -29,7 +30,17 @@ public sealed class ExportStampImageSource : IStampImageSource, IDisposable
             ?? new Dictionary<string, AssetRecord>(StringComparer.OrdinalIgnoreCase);
     }
 
-    public SKImage? TryGetImage(string sha256)
+    /// <summary>
+    /// The working image of an asset, as in the editor: for an original with a detail ladder its
+    /// first halved step (shadows, foreground masks and presence checks read it); the drawn
+    /// picture itself comes from <see cref="TryGetImageForPixelSize"/> at the output's size.
+    /// </summary>
+    public SKImage? TryGetImage(string sha256) =>
+        (_catalogRoot is not null && _catalogRecords.TryGetValue(sha256, out var record)
+            && AssetCatalog.DetailLadderDepth(record.Width, record.Height) > 0 ? LadderStep(record, 1) : null)
+        ?? TryGetOriginal(sha256);
+
+    private SKImage? TryGetOriginal(string sha256)
     {
         var reference = _snapshot.Assets.FirstOrDefault(
             asset => string.Equals(asset.Sha256, sha256, StringComparison.OrdinalIgnoreCase));
@@ -85,8 +96,38 @@ public sealed class ExportStampImageSource : IStampImageSource, IDisposable
         return null;
     }
 
-    public SKImage? TryGetImageForPixelSize(string sha256, double width, double height) =>
-        _cache.GetForPixelSize(sha256, width, height) ?? TryGetImage(sha256);
+    /// <summary>
+    /// A large catalog original is read through its detail ladder, as the editor reads it
+    /// (CatalogStampImageSource): the halved step just above the drawn size, the master only when
+    /// the output needs more pixels than the first step holds. A save's 320×180 preview of a map
+    /// with 1 500 of the owner's 4096 px mountains decoded a master for every object (the six
+    /// masters do not fit the cache together): over two minutes of CPU behind every save and autosave.
+    /// </summary>
+    public SKImage? TryGetImageForPixelSize(string sha256, double width, double height)
+    {
+        if (_catalogRoot is not null && _catalogRecords.TryGetValue(sha256, out var record)
+            && AssetCatalog.DetailLadderDepth(record.Width, record.Height) is > 0 and var depth)
+        {
+            var ratio = Math.Min(record.Width / Math.Max(1, width), record.Height / Math.Max(1, height));
+            var level = Math.Min(depth, (int)Math.Floor(Math.Log2(Math.Max(1, ratio))));
+            if (level == 0) return TryGetOriginal(sha256) ?? LadderStep(record, 1);
+            if (LadderStep(record, level) is { } step)
+                return _cache.GetForPixelSize(sha256 + "@" + level, width, height) ?? step;
+        }
+
+        return _cache.GetForPixelSize(sha256, width, height) ?? TryGetOriginal(sha256);
+    }
+
+    private SKImage? LadderStep(AssetRecord record, int level)
+    {
+        var key = record.Sha256 + "@" + level;
+        if (_cache.Get(key, null) is { } held) return held;
+        if (_missingSteps.Contains(key)) return null;
+        if (AssetCatalog.TryDetailLevelPath(_catalogRoot!, record, level, out var path) && _cache.Get(key, path) is { } image)
+            return image;
+        _missingSteps.Add(key);
+        return null;
+    }
 
     public void Dispose() => _cache.Dispose();
 

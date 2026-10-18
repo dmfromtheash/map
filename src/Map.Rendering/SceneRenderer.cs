@@ -467,10 +467,16 @@ public static class SceneRenderer
         // A stroke or a placement ghost repeats the same view frame after frame and changes no
         // object layer: those layers are drawn from kept images (DrawKeptObjectLayer). Between
         // gestures the images are dropped, so they hold video memory only while they serve.
-        var keepLayers = options.LayerImages is not null && options.Stats is not null && !options.IsExport
-            && options.ObjectOverrides is not { Count: > 0 }
-            && (options.Preview is not null || options.PlacementPreviewObjects is { Count: > 0 });
-        if (!keepLayers) options.LayerImages?.Clear();
+        // The same holds for any frame that repeats the previous frame's view (LayerImageCache.Steady);
+        // a frame that only moves the camera at the same scale shifts a wider kept image (TryDrawPanned).
+        var motion = options.LayerImages is not null && !options.IsExport ? options.LayerImages.Motion(canvas) : FrameMotion.Changed;
+        var eligible = options.LayerImages is not null && options.Stats is not null && !options.IsExport
+            && options.ObjectOverrides is not { Count: > 0 };
+        // A wheel notch changes the scale: the kept image stands in, scaled, within its limits.
+        var panning = eligible && motion is FrameMotion.Panned or FrameMotion.Changed;
+        var keepLayers = eligible && !panning
+            && (options.Preview is not null || options.PlacementPreviewObjects is { Count: > 0 } || motion == FrameMotion.Still);
+        if (!keepLayers && !panning) options.LayerImages?.Clear();
         for (var layerIndex = 0; layerIndex < document.Layers.Count; layerIndex++)
         {
             var layer = document.Layers[layerIndex];
@@ -510,9 +516,18 @@ public static class SceneRenderer
             }
 
             var clippingSource = layerIndex > 0 ? document.Layers[layerIndex - 1] : null;
+            if ((panning || keepLayers && motion == FrameMotion.Still) && layer is ObjectLayer panned && CanKeepLayerImage(panned, options)
+                && DrawPannedObjectLayer(canvas, document, panned, clippingSource, options, reuseOnly: !panning))
+                continue;
             if (keepLayers && layer is ObjectLayer objects && CanKeepLayerImage(objects, options)
                 && DrawKeptObjectLayer(canvas, document, objects, clippingSource, view, options))
                 continue;
+            if (keepLayers && layer is ObjectLayer masked && options.MaskEditLayerId == masked.Id && CanKeepMaskedContent(masked, options))
+            {
+                DrawLayer(canvas, document, layer, clippingSource, view, options, drawRivers: false,
+                    contentOverride: target => DrawKeptObjectContent(target, document, masked, view, options));
+                continue;
+            }
             DrawLayer(canvas, document, layer, clippingSource, view, options, drawRivers: false);
         }
 
@@ -534,6 +549,47 @@ public static class SceneRenderer
         && !(options.PlacementPreviewLayerId == layer.Id && options.PlacementPreviewObjects is { Count: > 0 } ghost
             && ghost.Any(o => o.Stamp is { ShadowPlacement: StampShadowPlacement.Layer, ShadowOpacity: > 0 }))
         && KeptLayerSupport.GetValue(layer, static l => new(l)).Supported;
+
+    /// <summary>
+    /// The objects of a layer whose mask is being edited can be kept apart from the mask: the
+    /// stroke changes only the mask, which the layer's group applies over its objects afterwards.
+    /// The objects themselves must not depend on the destination, as for a whole kept layer. The
+    /// stroke preview of an object layer is always its mask's: objects take no raster strokes.
+    /// </summary>
+    private static bool CanKeepMaskedContent(ObjectLayer layer, RenderOptions options) =>
+        options.LayerImages is not null && options.Stats is not null && !options.IsExport
+        && options.ObjectOverrides is not { Count: > 0 }
+        && !(options.PlacementPreviewLayerId == layer.Id && options.PlacementPreviewObjects is { Count: > 0 })
+        && KeptLayerSupport.GetValue(layer, static l => new(l)).Supported;
+
+    /// <summary>
+    /// The objects of <paramref name="layer"/> only (no mask, opacity or effects: the caller's
+    /// group applies those) from their kept image, slot 1 of <see cref="LayerImageCache"/>. A mask
+    /// stroke over 1 500 mountains redrew every stamp in every frame of the stroke (45 FPS).
+    /// </summary>
+    private static void DrawKeptObjectContent(SKCanvas canvas, MapDocument document, ObjectLayer layer, WorldBounds view,
+        RenderOptions options)
+    {
+        var stats = options.Stats!;
+        var missingBefore = stats.MissingAssets;
+        object[] parts = [layer.Objects, layer.SublayerStates, options.LodTier, options.FastPreview, options.ViewScale,
+            (object?)options.Stamps ?? DBNull.Value, (object?)document.StampForeground ?? DBNull.Value, document.Assets];
+        var built = false;
+        void Draw(SKCanvas target)
+        {
+            built = true;
+            var started = Stopwatch.GetTimestamp();
+            DrawObjects(target, document, layer, view, options);
+            stats.ObjectsMilliseconds += Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        }
+        if (!options.LayerImages!.TryDraw(canvas, layer.Id, parts, options.GpuContext, Draw,
+                () => stats.MissingAssets == missingBefore, slot: 1))
+        {
+            Draw(canvas);
+            return;
+        }
+        if (!built) stats.LayerImagesKept++;
+    }
 
     /// <summary>Per layer revision: how many objects would read the destination (non-Normal blend, clip mask, unknown kinds).</summary>
     private sealed class LayerImageSupport
@@ -589,6 +645,35 @@ public static class SceneRenderer
                     stats.ObjectsDrawn++;
                 }
             });
+        if (drawn && !built) stats.LayerImagesKept++;
+        if (drawn) stats.LayersDrawn++;
+        return drawn;
+    }
+
+    /// <summary>
+    /// An object layer in a frame of a pan, from a kept image of the view widened by a quarter of
+    /// its size on every side (LayerImageCache.TryDrawPanned): the layer is drawn over that wider
+    /// area once, and the following frames of the pan shift it.
+    /// </summary>
+    private static bool DrawPannedObjectLayer(SKCanvas canvas, MapDocument document, ObjectLayer layer, MapLayer? clippingSource,
+        RenderOptions options, bool reuseOnly = false)
+    {
+        var stats = options.Stats!;
+        var missingBefore = stats.MissingAssets;
+        var built = false;
+        // No scale in the key: within its limits the image of another scale stands in, resampled.
+        object[] parts = [layer, options.LodTier, options.FastPreview, (object?)options.Stamps ?? DBNull.Value,
+            (object?)document.StampForeground ?? DBNull.Value, document.Assets];
+        var device = canvas.DeviceClipBounds;
+        var margin = Math.Max(device.Width, device.Height) / 4;
+        var drawn = options.LayerImages!.TryDrawPanned(canvas, layer.Id, parts, options.GpuContext, margin,
+            (target, world) =>
+            {
+                built = true;
+                DrawLayer(target, document, layer, clippingSource, new WorldBounds(world.Left, world.Top, world.Right, world.Bottom),
+                    options, drawRivers: false);
+            },
+            () => stats.MissingAssets == missingBefore, reuseOnly, allowScale: !reuseOnly);
         if (drawn && !built) stats.LayerImagesKept++;
         if (drawn) stats.LayersDrawn++;
         return drawn;
@@ -856,22 +941,29 @@ public static class SceneRenderer
             // The previous terrain, of this view or - after a view change - of the nearest one,
             // resampled; whatever it does not cover gets the plain passes.
             var stalePlacement = RenderImageCache.Placement(previous, staleView, staleScale);
-            const double staleSlack = 1e-3;
-            if (stalePlacement.Left > view.Left + staleSlack || stalePlacement.Top > view.Top + staleSlack
-                || stalePlacement.Right < view.Right - staleSlack || stalePlacement.Bottom < view.Bottom - staleSlack)
+            // The stand-in does not change until the exact terrain arrives (1.5-3 s): it is drawn
+            // once and kept while the view stands still. Laying the changed land over the previous
+            // image in every frame cost 10-90 ms a frame after each stroke on the owner's test map.
+            DrawTerrainStandIn(canvas, options, StaleTerrainSlot,
+                [.. terrainParts!, previous, staleView, staleScale, terrainScale, options.ViewScale, options.LodTier], target =>
             {
-                var plainOptions = new RenderOptions
+                const double staleSlack = 1e-3;
+                if (stalePlacement.Left > view.Left + staleSlack || stalePlacement.Top > view.Top + staleSlack
+                    || stalePlacement.Right < view.Right - staleSlack || stalePlacement.Bottom < view.Bottom - staleSlack)
                 {
-                    ViewScale = options.ViewScale, VisibleWorld = view, LodTier = options.LodTier,
-                    TileCache = options.TileCache, GpuContext = options.GpuContext, FastTerrain = true, Stats = options.Stats,
-                };
-                canvas.Save();
-                canvas.ClipRect(stalePlacement, SKClipOperation.Difference);
-                DrawTerrainPasses(canvas, document, lands, surfaces, view, plainOptions);
-                canvas.Restore();
-            }
-            canvas.DrawImage(previous, stalePlacement, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear));
-            foreach (var (current, before) in changedLands) DrawLandChange(canvas, document, current, before, view, options);
+                    var plainOptions = new RenderOptions
+                    {
+                        ViewScale = options.ViewScale, VisibleWorld = view, LodTier = options.LodTier,
+                        TileCache = options.TileCache, GpuContext = options.GpuContext, FastTerrain = true, Stats = options.Stats,
+                    };
+                    target.Save();
+                    target.ClipRect(stalePlacement, SKClipOperation.Difference);
+                    DrawTerrainPasses(target, document, lands, surfaces, view, plainOptions);
+                    target.Restore();
+                }
+                target.DrawImage(previous, stalePlacement, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear));
+                foreach (var (current, before) in changedLands) DrawLandChange(target, document, current, before, view, options);
+            });
             if (options.Stats is { } staleStats) { staleStats.TerrainRefinementsPending++; staleStats.TerrainReused++; }
             DrawTerrainLiveOverlay(canvas, document, lands, view, options);
             return;
@@ -894,7 +986,10 @@ public static class SceneRenderer
                 ViewScale = options.ViewScale, VisibleWorld = view, LodTier = options.LodTier,
                 TileCache = options.TileCache, GpuContext = options.GpuContext, FastTerrain = true, Stats = options.Stats,
             };
-            DrawTerrainPasses(canvas, document, lands, surfaces, view, plain);
+            // Kept as well while the first exact terrain is prepared (18-27 ms a frame for the
+            // first seconds of an opened map otherwise).
+            DrawTerrainStandIn(canvas, options, StaleTerrainSlot, [.. terrainParts!, terrainScale, options.ViewScale, options.LodTier],
+                target => DrawTerrainPasses(target, document, lands, surfaces, view, plain));
             if (options.Stats is { } firstStats) firstStats.TerrainRefinementsPending++;
             DrawTerrainLiveOverlay(canvas, document, lands, view, options);
             return;
@@ -923,6 +1018,27 @@ public static class SceneRenderer
         DrawTerrainPasses(canvas, document, lands, surfaces, view, options);
     }
 
+    /// <summary>The slot of <see cref="LayerImageCache"/> that keeps the terrain's stand-in while the exact terrain is prepared.</summary>
+    private static readonly LayerId StaleTerrainSlot = new(new Guid("b6a2f0d4-5c1e-4f7a-9d3b-2e8c7a1f6d40"));
+
+    /// <summary>
+    /// Draws a stand-in for the terrain (the previous image with the change laid over it, or the
+    /// plain passes) from a kept device-pixel image while the view stands still; directly otherwise.
+    /// </summary>
+    private static void DrawTerrainStandIn(SKCanvas canvas, RenderOptions options, LayerId slot, object[] parts, Action<SKCanvas> draw)
+    {
+        // Only a stand-in the previous frame already showed is kept: a slider drag makes a new one
+        // every frame, and building an image for it each time cost more than drawing it.
+        var repeated = _lastStandInParts is { } last && last.AsSpan().SequenceEqual(parts);
+        _lastStandInParts = parts;
+        if (repeated && options.LayerImages is { LastMotion: FrameMotion.Still } images && options.Stats is not null && !options.IsExport
+            && images.TryDraw(canvas, slot, parts, options.GpuContext, draw, static () => true, slot: 2))
+            return;
+        draw(canvas);
+    }
+
+    [ThreadStatic] private static object[]? _lastStandInParts;
+
     /// <summary>
     /// True when the two input lists of a terrain image differ only in land layers (an edit of
     /// coverage, paint or style), pairing each changed land with the one it replaces. Water,
@@ -932,14 +1048,55 @@ public static class SceneRenderer
         out List<(LandLayer Current, LandLayer Before)> changed, bool allowSame = false)
     {
         changed = [];
-        if (current.Count != previous.Count) return false;
-        for (var i = 0; i < current.Count; i++)
+        var aligned = current.Count == previous.Count;
+        for (var i = 0; i < current.Count && aligned; i++)
         {
             if (Equals(current[i], previous[i])) continue;
             if (current[i] is LandLayer now && previous[i] is LandLayer then && now.Id == then.Id) changed.Add((now, then));
-            else return false;
+            else aligned = false;
         }
+        if (aligned) return allowSame || changed.Count > 0;
+
+        // The lands moved in the terrain order (a change of level), or one was added («Новая
+        // земля» with its first stroke) or removed (its undo): water and roads must still be the
+        // same, in the same order, and the lands are paired by identity. A level-only change draws
+        // nothing over the previous image; an added land is its whole ground in the plain look, a
+        // removed one is its ground given back to the sea. Each of these was a whole terrain
+        // rebuild in the frame (0.76-0.88 s on the 4096×3072 test map of the owner's art).
+        changed = [];
+        var others = 0;
+        var before = new Dictionary<LayerId, LandLayer>();
+        foreach (var part in previous)
+        {
+            if (part is LandLayer land) before[land.Id] = land;
+        }
+        foreach (var part in current)
+        {
+            if (part is not LandLayer) others++;
+        }
+        if (others != previous.Count - before.Count) return false;
+        int ci = 0, pi = 0;
+        while (true)
+        {
+            while (ci < current.Count && current[ci] is LandLayer) ci++;
+            while (pi < previous.Count && previous[pi] is LandLayer) pi++;
+            if (ci >= current.Count || pi >= previous.Count) break;
+            if (!Equals(current[ci], previous[pi])) return false;
+            ci++; pi++;
+        }
+        foreach (var part in current)
+        {
+            if (part is not LandLayer now) continue;
+            if (before.Remove(now.Id, out var then))
+            {
+                if (!Equals(now, then)) changed.Add((now, then));
+            }
+            else changed.Add((now, Bare(now)));
+        }
+        foreach (var gone in before.Values) changed.Add((Bare(gone), gone));
         return allowSame || changed.Count > 0;
+
+        static LandLayer Bare(LandLayer land) => land with { GeometryTiles = TileMap.Empty(1), PaintTiles = TileMap.Empty(4) };
     }
 
     /// <summary>

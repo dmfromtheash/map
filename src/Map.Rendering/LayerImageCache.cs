@@ -18,12 +18,15 @@ namespace Map.Rendering;
 /// between gestures and whenever the working-memory budget asks.
 /// </para>
 /// </summary>
+/// <summary>How a frame's view relates to the previous frame's.</summary>
+public enum FrameMotion { Still, Panned, Changed }
+
 public sealed class LayerImageCache : IDisposable
 {
     private sealed record Entry(object[] Key, SKImage Image, SKRectI Device);
 
     private readonly object _gate = new();
-    private readonly Dictionary<LayerId, Entry> _entries = [];
+    private readonly Dictionary<(LayerId Layer, int Slot), Entry> _entries = [];
     private readonly Action _release;
     private IntPtr _context;
 
@@ -50,10 +53,15 @@ public sealed class LayerImageCache : IDisposable
     /// (everything else equal), <paramref name="append"/> draws only what the new revision adds
     /// over a copy of it: a placed stamp costs that stamp, not the whole layer again.
     /// </para>
+    /// <para>
+    /// <paramref name="slot"/> keeps a second image per layer: slot 1 holds only the objects of a
+    /// layer whose mask is being edited, so the mask stroke recomposites them instead of redrawing them.
+    /// </para>
     /// </summary>
     public bool TryDraw(SKCanvas canvas, LayerId layer, object[] parts, GRContext? context,
-        Action<SKCanvas> draw, Func<bool> keep, object? previous = null, Action<SKCanvas>? append = null)
+        Action<SKCanvas> draw, Func<bool> keep, object? previous = null, Action<SKCanvas>? append = null, int slot = 0)
     {
+        var entryKey = (layer, slot);
         var device = canvas.DeviceClipBounds;
         if (device.Width <= 0 || device.Height <= 0 || device.Width > 8192 || device.Height > 8192) return false;
         var matrix = canvas.TotalMatrix;
@@ -66,7 +74,7 @@ public sealed class LayerImageCache : IDisposable
         lock (_gate)
         {
             if (_context != handle) { ClearLocked(); _context = handle; }
-            if (_entries.TryGetValue(layer, out var found))
+            if (_entries.TryGetValue(entryKey, out var found))
             {
                 if (found.Key.AsSpan().SequenceEqual(key))
                 {
@@ -103,8 +111,8 @@ public sealed class LayerImageCache : IDisposable
                 Misses++;
                 if (_context == handle && keep())
                 {
-                    if (_entries.Remove(layer, out var replaced)) replaced.Image.Dispose();
-                    _entries[layer] = new Entry(key, image, device);
+                    if (_entries.Remove(entryKey, out var replaced)) replaced.Image.Dispose();
+                    _entries[entryKey] = new Entry(key, image, device);
                 }
                 else
                 {
@@ -127,6 +135,146 @@ public sealed class LayerImageCache : IDisposable
         canvas.Restore();
     }
 
+    private SKMatrix _lastMatrix;
+    private SKRectI _lastDevice;
+
+    /// <summary>
+    /// True when this frame repeats the transform and device clip of the previous one: the view
+    /// stands still. A slider, a change of level, a mask stroke on another layer and the frames
+    /// that bring in the refined terrain all redraw an unchanged view, and with the owner's 1 500
+    /// mountains every such frame redrew every stamp (5-20 ms CPU plus the GPU work; 20-30 FPS on
+    /// a cliff slider). A moving view clears the cache instead, so it holds memory only while it serves.
+    /// </summary>
+    public bool Steady(SKCanvas canvas) => Motion(canvas) == FrameMotion.Still;
+
+    /// <summary>What the last <see cref="Motion"/> call found: the current frame's camera motion.</summary>
+    public FrameMotion LastMotion { get; private set; } = FrameMotion.Changed;
+
+    /// <summary>How this frame's transform differs from the previous frame's (see <see cref="Steady"/>).</summary>
+    public FrameMotion Motion(SKCanvas canvas)
+    {
+        var matrix = canvas.TotalMatrix; var device = canvas.DeviceClipBounds;
+        lock (_gate)
+        {
+            var motion = matrix == _lastMatrix && device == _lastDevice ? FrameMotion.Still
+                // The device clip is the map's page: it moves with the camera, so only the scale decides.
+                : SameLinearPart(matrix, _lastMatrix) ? FrameMotion.Panned
+                : FrameMotion.Changed;
+            _lastMatrix = matrix; _lastDevice = device;
+            LastMotion = motion;
+            return motion;
+        }
+    }
+
+    private static bool SameLinearPart(SKMatrix a, SKMatrix b) =>
+        a.ScaleX == b.ScaleX && a.SkewX == b.SkewX && a.SkewY == b.SkewY && a.ScaleY == b.ScaleY
+        && a.Persp0 == 0 && a.Persp1 == 0 && b.Persp0 == 0 && b.Persp1 == 0 && a.Persp2 == b.Persp2;
+
+    /// <summary>The kept pan image of a layer: device pixels of a wider area than the view, at one scale.</summary>
+    private sealed record PanEntry(object[] Key, SKImage Image, SKMatrix Matrix, SKRectI Covered);
+
+    private readonly Dictionary<LayerId, PanEntry> _pan = [];
+
+    /// <summary>
+    /// Draws a layer for a frame of a pan: the camera moved but kept its scale. The layer is drawn
+    /// once over the view widened by <paramref name="margin"/> device pixels on every side
+    /// (<paramref name="draw"/> receives that wider world area), and the frames of the pan only
+    /// shift that image while the view stays inside it - the owner's 1 500 mountains cost one
+    /// image copy per frame instead of 1 500 stamps (46-54 FPS while panning a whole-map view).
+    /// The image is resampled at sub-pixel offsets; the frame after the camera stops is drawn exactly.
+    /// </summary>
+    /// <para>
+    /// With <paramref name="reuseOnly"/> nothing is built: a held image serves only at a whole
+    /// device-pixel offset, where it gives the same pixels as drawing the layer. A frame that
+    /// repeats a pan frame's view (the camera paused for one frame) then keeps the pan image
+    /// instead of building an exact one and dropping it, which made every other pan frame redraw.
+    /// </para>
+    public bool TryDrawPanned(SKCanvas canvas, LayerId layer, object[] parts, GRContext? context, int margin,
+        Action<SKCanvas, SKRect> draw, Func<bool> keep, bool reuseOnly = false, bool allowScale = false)
+    {
+        var device = canvas.DeviceClipBounds;
+        var matrix = canvas.TotalMatrix;
+        if (device.Width <= 0 || device.Height <= 0 || device.Width + 2 * margin > 8192 || device.Height + 2 * margin > 8192) return false;
+        if (!matrix.TryInvert(out var inverse)) return false;
+        var handle = context?.Handle ?? IntPtr.Zero;
+        object[] key = [.. parts, handle];
+        PanEntry? entry = null;
+        // From the kept image's device space to this frame's: a shift, and during a zoom a scale.
+        var relative = SKMatrix.Identity;
+        lock (_gate)
+        {
+            if (_context != handle) { ClearLocked(); _context = handle; }
+            if (_pan.TryGetValue(layer, out var found) && found.Key.AsSpan().SequenceEqual(key)
+                && found.Matrix.TryInvert(out var back))
+            {
+                relative = matrix.PreConcat(back);
+                var ratio = relative.ScaleX;
+                var linear = Math.Abs(relative.SkewX) < 1e-6 && Math.Abs(relative.SkewY) < 1e-6
+                    && Math.Abs(relative.ScaleY - ratio) < 1e-4 * Math.Abs(ratio);
+                // A zoomed-in stand-in is held to 1.6×, a zoomed-out one to 0.8× of its own scale.
+                var scaleOk = Math.Abs(ratio - 1) < 1e-6 || allowScale && ratio is >= .8f and <= 1.6f;
+                if (linear && scaleOk && relative.TryInvert(out var toKept))
+                {
+                    var view = toKept.MapRect(new SKRect(device.Left, device.Top, device.Right, device.Bottom));
+                    if (view.Left >= found.Covered.Left - .01f && view.Top >= found.Covered.Top - .01f
+                        && view.Right <= found.Covered.Right + .01f && view.Bottom <= found.Covered.Bottom + .01f)
+                    {
+                        entry = found; Hits++;
+                    }
+                }
+            }
+        }
+        var exact = Math.Abs(relative.ScaleX - 1) < 1e-6 && relative.TransX == MathF.Round(relative.TransX)
+            && relative.TransY == MathF.Round(relative.TransY);
+        if (reuseOnly && (entry is null || !exact)) return false;
+        if (entry is null)
+        {
+            var covered = new SKRectI(device.Left - margin, device.Top - margin, device.Right + margin, device.Bottom + margin);
+            var info = new SKImageInfo(covered.Width, covered.Height, SKColorType.Rgba8888, SKAlphaType.Premul);
+            using var surface = (context is not null ? SKSurface.Create(context, false, info) : null) ?? SKSurface.Create(info);
+            if (surface is null) return false;
+            surface.Canvas.Clear(SKColors.Transparent);
+            surface.Canvas.SetMatrix(SKMatrix.CreateTranslation(-covered.Left, -covered.Top).PreConcat(matrix));
+            draw(surface.Canvas, inverse.MapRect(new SKRect(covered.Left, covered.Top, covered.Right, covered.Bottom)));
+            surface.Canvas.Flush();
+            var image = surface.Snapshot();
+            if (image is null) return false;
+            lock (_gate)
+            {
+                Misses++;
+                if (_context == handle && keep())
+                {
+                    if (_pan.Remove(layer, out var replaced)) replaced.Image.Dispose();
+                    entry = new PanEntry(key, image, matrix, covered);
+                    _pan[layer] = entry;
+                }
+            }
+            if (entry is null)
+            {
+                Blit(canvas, image, covered);
+                image.Dispose();
+                return true;
+            }
+            relative = SKMatrix.Identity; exact = true;
+        }
+        canvas.Save();
+        canvas.SetMatrix(relative);
+        canvas.DrawImage(entry.Image, new SKRect(entry.Covered.Left, entry.Covered.Top, entry.Covered.Right, entry.Covered.Bottom),
+            new SKSamplingOptions(exact ? SKFilterMode.Nearest : SKFilterMode.Linear, SKMipmapMode.None));
+        canvas.Restore();
+        return true;
+    }
+
+    /// <summary>Drops the kept pan images (the camera stopped or zoomed).</summary>
+    public void ClearPanned()
+    {
+        lock (_gate)
+        {
+            foreach (var entry in _pan.Values) entry.Image.Dispose();
+            _pan.Clear();
+        }
+    }
+
     public void Clear()
     {
         lock (_gate) ClearLocked();
@@ -136,6 +284,8 @@ public sealed class LayerImageCache : IDisposable
     {
         foreach (var entry in _entries.Values) entry.Image.Dispose();
         _entries.Clear();
+        foreach (var entry in _pan.Values) entry.Image.Dispose();
+        _pan.Clear();
     }
 
     public void Dispose()

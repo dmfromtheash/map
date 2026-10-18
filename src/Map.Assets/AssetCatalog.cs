@@ -1351,12 +1351,20 @@ public sealed class AssetCatalog : IAsyncDisposable
     }
 
     /// <summary>The file of one halved step (1 = half size), when it exists in this catalog.</summary>
-    public bool TryDetailLevelPath(AssetRecord record, int level, out string? path)
+    public bool TryDetailLevelPath(AssetRecord record, int level, out string? path) =>
+        TryDetailLevelPath(_root, record, level, out path);
+
+    /// <summary>
+    /// The same for a catalog known only by its root: an export or a save works from frozen
+    /// catalog records on a worker and must not touch the live catalog.
+    /// </summary>
+    public static bool TryDetailLevelPath(string root, AssetRecord record, int level, out string? path)
     {
+        ArgumentNullException.ThrowIfNull(root);
         ArgumentNullException.ThrowIfNull(record);
         path = null;
         if (level < 1 || level > DetailLadderDepth(record.Width, record.Height)) return false;
-        return CatalogRelativePath.TryResolve(_root, $"ladder/{record.Sha256.ToLowerInvariant()}/{level}.png", "ladder", out path)
+        return CatalogRelativePath.TryResolve(root, $"ladder/{record.Sha256.ToLowerInvariant()}/{level}.png", "ladder", out path)
             && File.Exists(path);
     }
 
