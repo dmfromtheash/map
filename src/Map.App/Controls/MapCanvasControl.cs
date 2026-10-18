@@ -79,6 +79,15 @@ public sealed partial class MapCanvasControl : Control
     private sealed class CanvasRenderResources
     {
         public object Gate { get; } = new();
+        private readonly System.Collections.Generic.Dictionary<int, HexChunkCache> _hexChunks = [];
+
+        /// <summary>Kept hex chunk pictures of the current render thread.</summary>
+        public HexChunkCache Hex()
+        {
+            var thread = Environment.CurrentManagedThreadId;
+            if (!_hexChunks.TryGetValue(thread, out var cache)) _hexChunks[thread] = cache = new HexChunkCache();
+            return cache;
+        }
         private readonly System.Collections.Generic.Dictionary<int, (TileImageCache Tiles, ObjectOverviewCache Objects, CarvedLandCache Land, RenderImageCache Styled, RenderImageCache Terrain, ObjectOverviewCache Atlases, TerrainRefinement Refinement, StrokePreviewCache Preview, LayerImageCache Layers)> _contexts = [];
         public (TileImageCache Tiles, ObjectOverviewCache Objects, CarvedLandCache Land, RenderImageCache Styled, RenderImageCache Terrain, ObjectOverviewCache Atlases, TerrainRefinement Refinement, StrokePreviewCache Preview, LayerImageCache Layers) Current()
         {
@@ -110,6 +119,8 @@ public sealed partial class MapCanvasControl : Control
         {
             lock (Gate)
             {
+                foreach (var hex in _hexChunks.Values) hex.Dispose();
+                _hexChunks.Clear();
                 foreach (var context in _contexts.Values) { context.Refinement.Dispose(); context.Tiles.Dispose(); context.Objects.Dispose(); context.Land.Dispose(); context.Styled.Dispose(); context.Terrain.Dispose(); context.Atlases.Dispose(); context.Preview.Dispose(); context.Layers.Dispose(); }
                 _contexts.Clear();
             }
@@ -590,7 +601,17 @@ public sealed partial class MapCanvasControl : Control
     {
         var shown = BrushCursorPreview() is not null;
         _hoverPointer = position;
-        if (shown || BrushCursorPreview() is not null) QueueVisualInvalidation();
+        var hexChanged = false;
+        if (_editor is not null)
+        {
+            if (position is { } pointer)
+            {
+                var world = _editor.Session.Viewport.ScreenToWorld(pointer.X, pointer.Y);
+                hexChanged = _editor.UpdateHexHover(world.X, world.Y);
+            }
+            else hexChanged = _editor.UpdateHexHover(null, null);
+        }
+        if (shown || hexChanged || BrushCursorPreview() is not null) QueueVisualInvalidation();
     }
 
     private sealed class SceneDrawOperation(
@@ -685,6 +706,8 @@ public sealed partial class MapCanvasControl : Control
                     ? null
                     : editor.MarqueeWorld ?? editor.LandShapePreview,
                 BrushCursor = brushCursor,
+                HexChunks = resources.Hex(),
+                HexCursor = editor.CanvasWorkflowOpen ? null : editor.HexCursor,
                 ViewScale = viewport.Scale,
                 VisibleWorld = new Map.Core.Documents.WorldBounds(
                     X, Y, bottomRight.X, bottomRight.Y),

@@ -46,6 +46,9 @@ public enum EditorTool
     Notes,
     River,
     Road,
+
+    /// <summary>The hex constructor's tool: puts ready painted hex tiles on the hex board.</summary>
+    Hex,
 }
 
 /// <summary>
@@ -723,10 +726,18 @@ public sealed partial class EditorViewModel : ViewModelBase
                 return;
             }
 
+            // Categories never mix: a hex map has no land, river, road or brush tools, so a
+            // shortcut of the standard constructor does nothing there.
+            if (IsHexWorkshop && !EditorSurfaceLayout.OffersTool(hexWorkshop: true, value))
+            {
+                return;
+            }
+
             // Switching tools abandons every kind of unfinished gesture, not only the drawing
             // ones. A surviving drag, marquee or node grab used to commit itself on the next
             // release under the new tool - history the user never asked for.
             CancelStroke();
+            CancelHexGesture();
             CancelVectorDraw();
             CancelPenPath();
             CancelLandShapeGesture();
@@ -746,6 +757,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             }
             _previousTool = _activeTool;
             _activeTool = value;
+            RefreshHexCursor();
             // The river tool is where nodes are edited, and the select tool is where whole things
             // are moved and deleted. Entering either sets its natural level; the level control in
             // the panel still overrides it for as long as the user stays in that tool.
@@ -5632,6 +5644,24 @@ public sealed partial class EditorViewModel : ViewModelBase
         Session.Execute(new AddLayerCommand(layer, _activeLayerId));
         _activeLayerId = layer.Id;
         ActiveTool = EditorTool.Land;
+        AfterEdit();
+    }
+
+    /// <summary>
+    /// A further hex layer laid out exactly like the board below it (same orientation, size and
+    /// extent), so hexes of the two layers line up - an overlay of features or a second terrain.
+    /// </summary>
+    public void AddHexLayer()
+    {
+        var model = ActiveLayer as HexLayer ?? Session.Document.Layers.OfType<HexLayer>().LastOrDefault();
+        var board = model is null
+            ? HexBoard.Create(HexOrientation.Flat, 64, 30, 20)
+            : HexBoard.FromCells(model.Board.Layout, model.Board.Columns, model.Board.Rows, []);
+        var layer = new HexLayer(LayerId.New(), EntityNameGenerator.Layer(Session.Document, typeof(HexLayer)),
+            true, false, 1, board) { Grid = model?.Grid ?? new HexGridStyle() };
+        Session.Execute(new AddLayerCommand(layer, _activeLayerId));
+        _activeLayerId = layer.Id;
+        ActiveTool = EditorTool.Hex;
         AfterEdit();
     }
 

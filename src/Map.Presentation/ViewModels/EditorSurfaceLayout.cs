@@ -100,6 +100,31 @@ public static class EditorSurfaceLayout
     public static IReadOnlyList<EditorRailEntry> Rail { get; } = [.. RailGroups.SelectMany(group => group)];
 
     /// <summary>
+    /// The rail of the hex constructor. The map is built only from hex tiles, so the free drawing
+    /// tools of the standard constructor - land and mask brushes, rivers, roads, lines, shapes and
+    /// the asset catalog - are not offered; selection, labels and notes stay from the shared core.
+    /// </summary>
+    public static IReadOnlyList<IReadOnlyList<EditorRailEntry>> HexRailGroups { get; } =
+    [
+        [new EditorRailEntry("SelectToolButton", EditorTool.Select, EditorRailEntryKind.Tool)],
+        [new EditorRailEntry("HexToolButton", EditorTool.Hex, EditorRailEntryKind.Tool)],
+        [
+            new EditorRailEntry("TextToolButton", EditorTool.Text, EditorRailEntryKind.Tool),
+            new EditorRailEntry("NotesToolButton", EditorTool.Notes, EditorRailEntryKind.Tool),
+        ],
+    ];
+
+    public static IReadOnlyList<EditorRailEntry> HexRail { get; } = [.. HexRailGroups.SelectMany(group => group)];
+
+    /// <summary>The rail of a workshop: the hex constructor has its own, every other map the standard one.</summary>
+    public static IReadOnlyList<IReadOnlyList<EditorRailEntry>> RailGroupsFor(bool hexWorkshop) =>
+        hexWorkshop ? HexRailGroups : RailGroups;
+
+    /// <summary>True when a tool belongs to the workshop's rail (Stamp counts as the Assets entry).</summary>
+    public static bool OffersTool(bool hexWorkshop, EditorTool tool) =>
+        (hexWorkshop ? HexRail : Rail).Any(entry => entry.Tool == tool);
+
+    /// <summary>
     /// The first block of a selected object. Layer and level lead because they decide what covers
     /// what; scale, opacity and rotation follow because they are touched constantly. Everything
     /// rarer - geometry, appearance, shadow, blend, blur, colour, clip mask - stays below in its

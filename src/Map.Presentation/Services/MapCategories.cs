@@ -43,6 +43,12 @@ public static class MapCategories
     /// <summary>The editing surface of the standard constructor: the editor Map has today.</summary>
     public const string StandardWorkshop = "standard-editor";
 
+    /// <summary>The editing surface of the hex constructor: the shared editor with the hex tool set.</summary>
+    public const string HexWorkshop = "hex-editor";
+
+    /// <summary>The token of the hex category written into documents and files.</summary>
+    public const string HexValue = "hex";
+
     public static MapCategoryDefinition Standard { get; } = new(
         MapCategoryId.Standard,
         "Стандартный Конструктор карт",
@@ -65,8 +71,40 @@ public static class MapCategories
         DefaultHeight: 1080,
         Workshop: StandardWorkshop);
 
+    /// <summary>
+    /// The hex constructor: a map built only from ready painted hexes put on a hex board, after the
+    /// classic hex mappers (Hex Kit, Hexographer, the Wesnoth editor, HEXMAPMAKER). No brushes:
+    /// every hex holds one terrain tile and one feature tile, and labels and notes go on top.
+    /// </summary>
+    public static MapCategoryDefinition Hex { get; } = new(
+        new MapCategoryId(HexValue),
+        "Гексовый Конструктор карт",
+        "Карта целиком из гексов: готовые нарисованные гексы местности ставятся на сетку, без кистей.",
+        "Мастерская в духе классических гексовых редакторов. Холст — поле гексов с плоским или острым верхом, "
+        + "с нумерацией клеток. Каждый гекс — готовый рисованный тайл местности: равнины, поля, леса, холмы, горы, "
+        + "пустыня, болото, снега, мелководье и море. Поверх местности ставятся поселения и места: деревни, "
+        + "города, замки, башни, руины, пещеры. Гекс можно поставить по одному, протянуть линией, круглой "
+        + "площадкой в несколько гексов или залить целую область; у каждого тайла несколько вариантов, и случайный "
+        + "вариант не даёт лесу повторяться. Подписи и заметки — поверх поля.",
+        [
+            "Поле гексов: плоский или острый верх, колонки × ряды, нумерация 0101",
+            "Готовые рисованные гексы местности и надстроек, несколько вариантов у каждого",
+            "Поставить, площадка радиусом до 8 гексов, заливка области, ластик, пипетка",
+            "Случайный вариант на каждый гекс, отмена одним шагом на каждый мазок",
+            "Подписи, заметки, слои, версии и экспорт PNG из общего ядра Map",
+        ],
+        ArtworkKey: "map-hex",
+        GalleryKey: "hex-gallery",
+        // The canvas of the default board: 30 × 20 flat hexes of 64 units.
+        DefaultWidth: 2912,
+        DefaultHeight: 2273,
+        Workshop: HexWorkshop);
+
     /// <summary>In the order the create dialog lists them.</summary>
-    public static IReadOnlyList<MapCategoryDefinition> All { get; } = [Standard];
+    public static IReadOnlyList<MapCategoryDefinition> All { get; } = [Standard, Hex];
+
+    /// <summary>True when the map lives in the hex constructor.</summary>
+    public static bool IsHex(MapCategoryId id) => Find(id)?.Workshop == HexWorkshop;
 
     public static MapCategoryDefinition? Find(MapCategoryId id) =>
         All.FirstOrDefault(definition => definition.Id == id);

@@ -68,6 +68,9 @@ internal sealed class BaseMaterialDto
 
 internal sealed class LayerDto
 {
+    [JsonPropertyName("hex")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public HexBoardDto? Hex { get; set; }
     [JsonPropertyName("baseMaterial")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public BaseMaterialDto? BaseMaterial { get; set; }
@@ -131,6 +134,33 @@ internal sealed class LayerDto
     [JsonPropertyName("sublayers")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<ObjectSublayerStateDto>? Sublayers { get; set; }
+}
+
+/// <summary>
+/// The hexes of a hex layer (schema v12). Cells are stored in board offset coordinates as one flat
+/// array of six integers per painted hex - column, row, terrain index, variant, feature index
+/// (-1 for none), feature variant - with tile ids in a palette, so a 100 000-hex board stays compact.
+/// </summary>
+internal sealed class HexBoardDto
+{
+    [JsonPropertyName("orientation")] public string Orientation { get; set; } = "flat";
+    [JsonPropertyName("size")] public double Size { get; set; }
+    [JsonPropertyName("originX")] public double OriginX { get; set; }
+    [JsonPropertyName("originY")] public double OriginY { get; set; }
+    [JsonPropertyName("columns")] public int Columns { get; set; }
+    [JsonPropertyName("rows")] public int Rows { get; set; }
+    [JsonPropertyName("tiles")] public List<string> Tiles { get; set; } = [];
+    [JsonPropertyName("cells")] public List<int> Cells { get; set; } = [];
+    [JsonPropertyName("grid")] public HexGridDto? Grid { get; set; }
+}
+
+internal sealed class HexGridDto
+{
+    [JsonPropertyName("visible")] public bool Visible { get; set; }
+    [JsonPropertyName("color")] public string Color { get; set; } = "#66201810";
+    [JsonPropertyName("width")] public double Width { get; set; }
+    [JsonPropertyName("numbers")] public bool Numbers { get; set; }
+    [JsonPropertyName("showEmpty")] public bool ShowEmpty { get; set; }
 }
 
 internal sealed class LayerEffectsDto

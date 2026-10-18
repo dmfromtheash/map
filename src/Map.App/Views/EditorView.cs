@@ -389,6 +389,7 @@ public sealed partial class EditorView : UserControl
     private Button _redoButton = null!;
     private Button _saveButton = null!;
     private Button _shortcutSettingsButton = null!;
+    private readonly bool _isHexWorkshop;
     private int _objectListRebuildCount;
     private readonly HashSet<ObjectId> _objectSelectionSet = [];
 
@@ -399,6 +400,15 @@ public sealed partial class EditorView : UserControl
         Action requestShortcutSettings)
     {
         _editor = editor;
+        // The workshop is fixed by the map's category: a hex map opens with the hex tool set and
+        // never shows the standard constructor's tools.
+        _isHexWorkshop = editor.IsHexWorkshop;
+        if (_isHexWorkshop)
+        {
+            if (_editor.ActiveLayer is not HexLayer && _editor.ActiveHexLayer is { } hexes) _editor.SelectLayer(hexes.Id);
+            _editor.ActiveTool = EditorTool.Hex;
+            _editor.PanelSection = PanelSection.Layers;
+        }
         _thumbnails.OriginalFor = path => _editor.TryDescribeLibraryThumbnail(path, out var original) ? original : null;
         Name = "EditorView";
 
@@ -1662,7 +1672,7 @@ public sealed partial class EditorView : UserControl
         // again here: the rail and the test that guards it cannot drift apart.
         // Inkarnate rail: buttons touch each other (46×48), groups are split by a hairline.
         var stack = new StackPanel { Spacing = 0, Margin = new Thickness(0), HorizontalAlignment = HorizontalAlignment.Center };
-        foreach (var group in EditorSurfaceLayout.RailGroups)
+        foreach (var group in EditorSurfaceLayout.RailGroupsFor(_isHexWorkshop))
         {
             if (stack.Children.Count > 0)
             {
@@ -1792,6 +1802,7 @@ public sealed partial class EditorView : UserControl
         _toolPanels[EditorTool.Notes] = BuildNotesTab();
         _toolPanels[EditorTool.River] = BuildRiverPanel();
         _toolPanels[EditorTool.Road] = BuildRoadPanel();
+        if (_isHexWorkshop) _toolPanels[EditorTool.Hex] = BuildHexPanel();
     }
 
     // Select only selects existing objects. Assets are a separate rail command, while object
@@ -3175,12 +3186,20 @@ public sealed partial class EditorView : UserControl
                     "Ничего не выбрано",
                     "Щёлкните объект на карте или строку в панели «Карта» справа. Рамкой можно выбрать несколько."),
                 new TextBlock { Text = "Начать" }.Classed("faint", "role-caption", "subgroup-title"),
-                Start("StartAssetsButton", "Поставить ассет", MapIcons.Assets, EditorTool.Stamp, () => OpenAssetCatalog(focusSearch: true)),
-                Start("StartLandButton", "Нарисовать сушу", MapIcons.Land, EditorTool.Land),
-                Start("StartRiverFromEmptyButton", "Новая река", MapIcons.River, EditorTool.River),
-                NewRoomButton("StartRoomFromEmptyButton"),
             },
         };
+        if (_isHexWorkshop)
+        {
+            ((StackPanel)_selectionEmpty).Children.Add(Start("StartHexButton", "Поставить гексы", MapIcons.Hex, EditorTool.Hex));
+            ((StackPanel)_selectionEmpty).Children.Add(Start("StartHexTextButton", "Подписать место", MapIcons.Text, EditorTool.Text));
+        }
+        else
+        {
+            ((StackPanel)_selectionEmpty).Children.Add(Start("StartAssetsButton", "Поставить ассет", MapIcons.Assets, EditorTool.Stamp, () => OpenAssetCatalog(focusSearch: true)));
+            ((StackPanel)_selectionEmpty).Children.Add(Start("StartLandButton", "Нарисовать сушу", MapIcons.Land, EditorTool.Land));
+            ((StackPanel)_selectionEmpty).Children.Add(Start("StartRiverFromEmptyButton", "Новая река", MapIcons.River, EditorTool.River));
+            ((StackPanel)_selectionEmpty).Children.Add(NewRoomButton("StartRoomFromEmptyButton"));
+        }
 
         _inspectorPanel = BuildInspector();
 
@@ -5033,17 +5052,26 @@ public sealed partial class EditorView : UserControl
             return item;
         }
 
-        var addMenu = new MenuFlyout
-        {
-            Items =
+        var addMenu = _isHexWorkshop
+            ? new MenuFlyout
             {
-                AddLayer("AddObjectLayerButton", "Слой объектов", _editor.AddObjectLayer),
-                AddLayer("AddBrushLayerButton", "Слой кисти", _editor.AddBrushLayer),
-                AddLayer("AddLandLayerButton", "Слой земли", _editor.AddLandLayer),
-                AddLayer("AddGridLayerButton", "Слой сетки", _editor.AddGridLayer),
-                AddLayer("AddFilterLayerButton", "Слой фильтра", _editor.AddFilterLayer),
-            },
-        };
+                Items =
+                {
+                    AddLayer("AddHexLayerButton", "Слой гексов", _editor.AddHexLayer),
+                    AddLayer("AddObjectLayerButton", "Слой подписей", _editor.AddObjectLayer),
+                },
+            }
+            : new MenuFlyout
+            {
+                Items =
+                {
+                    AddLayer("AddObjectLayerButton", "Слой объектов", _editor.AddObjectLayer),
+                    AddLayer("AddBrushLayerButton", "Слой кисти", _editor.AddBrushLayer),
+                    AddLayer("AddLandLayerButton", "Слой земли", _editor.AddLandLayer),
+                    AddLayer("AddGridLayerButton", "Слой сетки", _editor.AddGridLayer),
+                    AddLayer("AddFilterLayerButton", "Слой фильтра", _editor.AddFilterLayer),
+                },
+            };
         var addLayerButton = Ui.CommandButton("AddLayerButton", "Добавить слой", MapIcons.Plus, () => { }, "compact");
         addLayerButton.HorizontalAlignment = HorizontalAlignment.Left;
         addLayerButton.Flyout = addMenu;

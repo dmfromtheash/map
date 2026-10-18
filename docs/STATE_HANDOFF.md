@@ -1,4 +1,49 @@
 ﻿# STATE_HANDOFF — актуальное состояние Map
+## Актуально на 2026-10-18 (ночь) — вторая категория «Гексовый Конструктор карт», фундамент, DEC-048
+
+**FACT.** По поручению владельца (найти гексовый конструктор, затем через REA взять лучшее из найденных
+программ и заложить обособленную вторую категорию на общем ядре) в Map добавлена категория
+**«Гексовый Конструктор карт»** (`hex`, мастерская `hex-editor`): карта только из готовых нарисованных
+гексов, без кистей. Подробности — DEC-048, формат — docs/05 (schema v12).
+- **Core:** `HexGeometry.cs` (`HexCoord`, `HexOffset`, `HexLayout`, `HexOrientation`), `HexBoard.cs`
+  (`HexCell`, `HexChunk`/`HexChunkKey` 16×16, `HexBoard`, `HexGridStyle`, `HexLayer`, `HexMapFactory`),
+  `Editing/HexEditing.cs` (`HexEditing`, `HexTileChoice`, `HexPaintTarget`, `HexPaintCommand`,
+  `UpdateHexGridCommand`); `HexLayer` добавлен в resize/crop (поле сдвигается целиком), в правку
+  свойств слоя и в генератор имён.
+- **Файл:** слой `Hex` + блок `hex` (палитра + 6 int на гекс), `HexLayersSchemaVersion = 12` = максимум.
+- **Rendering:** `HexTileArt.cs` (`HexStarterTiles` — 11 местностей ×3 и 6 надстроек ×2, собственная
+  процедурная рисовка Skia; `HexTileArt.Image`), `HexLayerRenderer.cs` (`HexChunkCache` 192 МиБ на поток
+  рендера, LOD: средний цвет < 10 px, без сетки < 7 px, номера ≥ 44 px; `HexCursorPreview`);
+  `RenderOptions.HexChunks/HexCursor`; `SceneRenderer` рисует `HexLayer`.
+- **Presentation:** `MapCategories.Hex`/`HexWorkshop`/`IsHex`; `NewMapWizardViewModel` — поле гексов
+  (`HexOrientation`, `HexColumnsText`, `HexRowsText`, `HexSizeText`, `HexCanvasSize`, 1–512 × 1–512,
+  гекс 24–256); `EditorTool.Hex`, `EditorViewModel.Hex.cs` (режимы, палитра, площадка, варианты, жест
+  протяжки одной записью истории, заливка, ластик, пипетка, сетка, `AddHexLayer`); инструменты не из
+  `EditorSurfaceLayout.HexRail` в гексовой карте отклоняются; `CanvasInputGesture.HexPaint`; клавиша U.
+- **App:** `OpenInWorkshop` → `hex-editor` = общий `EditorView`, который строит набор категории:
+  рельс Выбор/Гексы/Текст/Заметки, панель `EditorView.Hex.cs` (`HexToolPanel`, `HexMode*`,
+  `HexTile_<id>`, `HexRadiusSlider`, `HexRandomVariantToggle`, `HexVariant<n>`, `HexShuffleButton`,
+  `HexGrid*Toggle`), правая панель «Слои»/«Прочее», «Добавить слой» = гексы/подписи, стартовые кнопки
+  «Поставить гексы»/«Подписать место». Мастер: карточка `WizardCategoryHex`, блок `WizardHexBoard`
+  (`WizardHexOrientation*`, `WizardHexColumnsBox`, `WizardHexRowsBox`, `WizardHexSizeBox`,
+  `WizardHexCanvasHint`). Арт категории `Assets/Atlas/map-hex.png`, `hex-gallery.png` нарисован из тех же
+  стартовых тайлов (`HexLayerRenderingTests`, MAP_HEX_PNG).
+- **Проверено (FACT):** `Map.slnx` Release — 0 ошибок. Core: hex 15/15, затронутые 71/71. Persistence:
+  hex+категории 6/6. Rendering: hex 6/6. Presentation: hex/категории/мастер/рельс/сочетания/маршрутизация
+  171/172 — падает только известный `A_press_that_starts_no_tool_gesture_still_reaches_selection`.
+  Новый smoke `native-hex-category` (`tools/Map.Performance`) — 15/15: вторая карточка, поле вместо
+  размера, редактор только с гексовым рельсом, вся палитра, линия леса протяжкой по холсту = 1 шаг
+  отмены, заливка 384 гексов, деревня на лесу, schema v12 + повторное открытие гекс в гекс, Undo.
+  `native-map-categories` обновлён (2 карточки) — 13/13. Снимки `artifacts/hex-category/check.hex-0*.png`.
+- **Известные посторонние падения (NOT CHECKED на HEAD, по коду не связаны):** Persistence
+  `Stage10VariantSetRoundTripTests.The_project_schema_gained_no_set_or_variant_field_for_this_slice`
+  (`assetSha256` в scene.json) и 4 × `Stage18EditableAreaRoundTripTests.V6_roundtrip…` (сравнение
+  `ExistingCollisions` массив/список в `StampPlacementRequest`).
+- **NOT CHECKED:** живой проход в окне владельца через windows-mcp; R2R-ярлык не переопубликован.
+- **Открыто / следующий шаг (PROPOSED):** свои наборы гексов владельца через каталог (импорт PNG
+  гексов, высокий тайл с нависанием), реки/дороги по граням, границы, автопобережья и переходы,
+  автораскладка значков, подписи/заметки на гекс, поворот 60°, туман войны, уровни, генератор.
+
 ## Актуально на 2026-10-18 (поздний вечер) — категории карт: шаг 1 мастера «Новая карта», DEC-047
 
 **FACT.** По поручению владельца (после разбора окна «Create New Map» Inkarnate через REA/CDP, страница только

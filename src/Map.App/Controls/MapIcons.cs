@@ -30,6 +30,8 @@ public static class MapIcons
     public const string River = "M4 4 C 9 6, 8 12, 12 13.5 C 16 15, 15 19, 20 20.5 " +
                                 "M17 5.5 C 14 8.5, 13.5 11, 12.5 13.8";
     // A road forking: two edges of a way that opens into a Y, with a short rut in the middle.
+    // One hex with a smaller one inside: a tile on its board.
+    public const string Hex = "M12 2.5 L20.2 7.25 V16.75 L12 21.5 L3.8 16.75 V7.25 Z M12 7.6 L15.8 9.8 V14.2 L12 16.4 L8.2 14.2 V9.8 Z";
     public const string Road = "M5 20.5 C 7 14, 9 9, 12 3.5 M19 20.5 C 17 14, 15 9, 12 3.5 " +
                                "M12 12 L 12 14.5 M12 17 L 12 19.5";
 
@@ -229,6 +231,10 @@ public static class MapIcons
     public static readonly SolidGlyph SolidRiver = new("M0 0",
         "M7.4 2.4 C5.6 6 11.2 7.6 10.2 11.6 C9.3 15.2 4.7 15.6 5.1 19.2 C5.3 20.5 6.1 21.2 7.2 21.6 " +
         "M17.6 2.8 C16 6.6 14 9 10.4 11.5", 3.3);
+    // Three hexes of a board, the hex constructor's own tool.
+    public static readonly SolidGlyph SolidHex = new(
+        "M7.6 2.6 L11.6 4.9 V9.5 L7.6 11.8 L3.6 9.5 V4.9 Z M16.4 2.6 L20.4 4.9 V9.5 L16.4 11.8 L12.4 9.5 V4.9 Z "
+        + "M12 10.2 L16 12.5 V17.1 L12 19.4 L8 17.1 V12.5 Z");
     public static readonly SolidGlyph SolidRoad = new(
         "F0 M3.6 21.6 L9.6 2.4 H14.4 L20.4 21.6 Z M11.2 4.6 H12.8 V7.4 H11.2 Z M11 9.8 H13 V13 H11 Z M10.8 15.4 H13.2 V19.4 H10.8 Z");
     public static readonly SolidGlyph SolidLine = new(
@@ -301,6 +307,7 @@ public static class MapIcons
         Map.Presentation.ViewModels.EditorTool.Stamp => SolidAssets,
         Map.Presentation.ViewModels.EditorTool.River => SolidRiver,
         Map.Presentation.ViewModels.EditorTool.Road => SolidRoad,
+        Map.Presentation.ViewModels.EditorTool.Hex => SolidHex,
         _ => SolidSelect,
     };
 
@@ -355,6 +362,7 @@ public static class MapIcons
         Map.Presentation.ViewModels.EditorTool.Stamp => LineAssets,
         Map.Presentation.ViewModels.EditorTool.River => LineRiver,
         Map.Presentation.ViewModels.EditorTool.Road => LineRoad,
+        Map.Presentation.ViewModels.EditorTool.Hex => Hex,
         _ => LineSelect,
     };
 
@@ -397,6 +405,7 @@ public static class MapIcons
         Map.Presentation.ViewModels.EditorTool.Stamp => Assets,
         Map.Presentation.ViewModels.EditorTool.River => River,
         Map.Presentation.ViewModels.EditorTool.Road => Road,
+        Map.Presentation.ViewModels.EditorTool.Hex => Hex,
         _ => Select,
     };
 

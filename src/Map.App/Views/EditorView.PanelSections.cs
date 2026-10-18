@@ -24,11 +24,17 @@ namespace Map.App.Views;
 /// </summary>
 public sealed partial class EditorView
 {
-    private static readonly PanelSection[] Sections =
+    private static readonly PanelSection[] StandardSections =
     [
         PanelSection.Land, PanelSection.Water, PanelSection.Assets,
         PanelSection.Roads, PanelSection.Other, PanelSection.Layers,
     ];
+
+    // A hex map has no land, water, assets or roads of the standard constructor: its hexes live
+    // in hex layers (Слои), and labels and notes are its other objects (Прочее).
+    private static readonly PanelSection[] HexSections = [PanelSection.Layers, PanelSection.Other];
+
+    private PanelSection[] Sections => _isHexWorkshop ? HexSections : StandardSections;
 
     private readonly Dictionary<PanelSection, ToggleButton> _sectionButtons = [];
     private readonly ComboBox _compactSectionPicker = new() { Name = "CompactPanelSectionPicker", HorizontalAlignment = HorizontalAlignment.Stretch };

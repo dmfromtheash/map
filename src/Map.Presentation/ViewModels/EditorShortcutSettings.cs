@@ -172,6 +172,7 @@ public sealed class EditorShortcutSettings
         public const string Notes = "notes";
         public const string River = "river";
         public const string Road = "road";
+        public const string Hex = "hex";
         public const string Escape = "escape";
         public const string Delete = "delete";
         public const string DeleteAlternate = "delete-alternate";
@@ -256,6 +257,7 @@ public sealed class EditorShortcutSettings
         D(Commands.Notes, "Заметки", "Инструменты", ShortcutContext.Editor, "N", "Открыть панель заметок"),
         D(Commands.River, "Инструмент «Река»", "Инструменты", ShortcutContext.Editor, "H", "Активировать реки"),
         D(Commands.Road, "Инструмент «Дорога»", "Инструменты", ShortcutContext.Editor, "J", "Активировать дороги"),
+        D(Commands.Hex, "Инструмент «Гексы»", "Инструменты", ShortcutContext.Editor, "U", "Активировать гексы в гексовой карте (на русской раскладке — клавиша «Г»)"),
         D(Commands.Escape, "Выйти из группы / снять выбор", "Выделение", ShortcutContext.Editor, "Escape", "Закрыть текущий уровень выделения"),
         D(Commands.FinishPath, "Завершить контур", "Инструменты", ShortcutContext.Canvas, "Enter", "Замкнуть контур режима «По узлам»"),
         D(Commands.Delete, "Удалить выделение", "Выделение", ShortcutContext.Selection, "Delete", "Удалить выбранные объекты"),
@@ -510,6 +512,7 @@ public sealed class EditorShortcutSettings
         EditorTool.Notes => Commands.Notes,
         EditorTool.River => Commands.River,
         EditorTool.Road => Commands.Road,
+        EditorTool.Hex => Commands.Hex,
         _ => "",
     };
 

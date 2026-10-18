@@ -268,6 +268,12 @@ public sealed class RenderOptions
 
     public TileImageCache? TileCache { get; init; }
 
+    /// <summary>Kept pictures of hex chunks (hex category); null draws every hex directly.</summary>
+    public HexChunkCache? HexChunks { get; init; }
+
+    /// <summary>The hexes the hex tool would touch, outlined under the pointer.</summary>
+    public HexCursorPreview? HexCursor { get; init; }
+
     /// <summary>
     /// Reuse of the land coverage rivers were already carved out of. Absent (export, tests) the
     /// image is simply built for the frame, exactly as before.
@@ -1732,6 +1738,11 @@ public static class SceneRenderer
 
             case FilterLayer filterLayer:
                 DrawFilterOverlay(canvas, filterLayer.Settings, view, options);
+                break;
+
+            case HexLayer hexLayer:
+                HexLayerRenderer.Draw(canvas, hexLayer, view, options.ViewScale, options.HexChunks,
+                    options.GpuContext, options.HexCursor, options.IsExport);
                 break;
 
             case IRasterContentLayer raster:

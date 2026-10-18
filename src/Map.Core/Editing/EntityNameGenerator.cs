@@ -75,6 +75,7 @@ public static partial class EntityNameGenerator
             : layerType == typeof(LandLayer) ? "Земля"
             : layerType == typeof(GridLayer) ? "Сетка"
             : layerType == typeof(FilterLayer) ? "Фильтр"
+            : layerType == typeof(HexLayer) ? "Гексы"
             : "Слой";
         return Unique(
             document.Layers.Select(layer => layer.Name).ToHashSet(StringComparer.OrdinalIgnoreCase),

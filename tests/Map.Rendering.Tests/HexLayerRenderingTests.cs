@@ -1,0 +1,153 @@
+using Map.Core.Documents;
+using Map.Core.Editing;
+using Map.Rendering;
+using SkiaSharp;
+
+namespace Map.Rendering.Tests;
+
+public sealed class HexLayerRenderingTests
+{
+    /// <summary>Writes review pictures when MAP_HEX_PNG names a folder.</summary>
+    private static readonly string? ReviewFolder = Environment.GetEnvironmentVariable("MAP_HEX_PNG");
+
+    internal static MapDocument Sample(HexOrientation orientation, int columns = 12, int rows = 9)
+    {
+        var document = HexMapFactory.Create("Гексы", DateTimeOffset.UnixEpoch, new MapCategoryId("hex"),
+            orientation, 64, columns, rows, "#FFF2E9DC");
+        var layer = document.Layers.OfType<HexLayer>().Single();
+        var terrains = HexStarterTiles.All.Where(tile => tile.Target == HexPaintTarget.Terrain).ToList();
+        var features = HexStarterTiles.All.Where(tile => tile.Target == HexPaintTarget.Feature).ToList();
+        var cells = new Dictionary<HexCoord, HexCell?>();
+        var index = 0;
+        foreach (var hex in layer.Board.HexesIn(new WorldBounds(0, 0, layer.Board.PixelWidth, layer.Board.PixelHeight)))
+        {
+            var offset = layer.Board.Layout.ToOffset(hex);
+            if (offset.Column == columns - 1 && offset.Row % 2 == 0) continue;
+            var terrain = terrains[(offset.Column / 2 + offset.Row / 3 * 3) % terrains.Count];
+            var feature = index % 7 == 3 ? features[index / 7 % features.Count] : null;
+            var cell = HexEditing.Place(null, hex, new HexTileChoice(terrain.Id, terrain.VariantCount));
+            if (feature is not null) cell = HexEditing.Place(cell, hex, new HexTileChoice(feature.Id, feature.VariantCount, HexPaintTarget.Feature));
+            cells[hex] = cell;
+            index++;
+        }
+
+        var painted = HexPaintCommand.Create("Пример", layer, cells)!;
+        return painted.Apply(document);
+    }
+
+    private static SKBitmap Render(MapDocument document, double scale, HexChunkCache? cache)
+    {
+        var width = (int)(document.Canvas.Width * scale);
+        var height = (int)(document.Canvas.Height * scale);
+        var bitmap = new SKBitmap(width, height, SKColorType.Rgba8888, SKAlphaType.Premul);
+        using var canvas = new SKCanvas(bitmap);
+        canvas.Scale((float)scale);
+        SceneRenderer.Render(canvas, document, new RenderOptions { ViewScale = scale, HexChunks = cache });
+        return bitmap;
+    }
+
+    [Theory]
+    [InlineData(HexOrientation.Flat)]
+    [InlineData(HexOrientation.Pointy)]
+    public void Every_starter_tile_paints_a_hex_shaped_picture(HexOrientation orientation)
+    {
+        foreach (var tile in HexStarterTiles.All)
+        {
+            for (var variant = 0; variant < tile.VariantCount; variant++)
+            {
+                var image = HexTileArt.Image(tile.Id, variant, orientation);
+                Assert.NotNull(image);
+                using var pixels = SKBitmap.FromImage(image);
+                // Inside the hex is painted (features may leave gaps), the corners of the box are empty.
+                Assert.Equal(0, pixels.GetPixel(1, 1).Alpha);
+                if (tile.Target == HexPaintTarget.Terrain)
+                    Assert.True(pixels.GetPixel(pixels.Width / 2, pixels.Height / 2).Alpha > 200, tile.Id);
+            }
+        }
+
+        Assert.Null(HexTileArt.Image("starter/unknown", 0, orientation));
+    }
+
+    [Theory]
+    [InlineData(HexOrientation.Flat)]
+    [InlineData(HexOrientation.Pointy)]
+    public void Kept_chunk_images_draw_the_same_map_as_direct_drawing(HexOrientation orientation)
+    {
+        var document = Sample(orientation);
+        using var direct = Render(document, 0.5, cache: null);
+        using var cache = new HexChunkCache();
+        using var kept = Render(document, 0.5, cache);
+        Assert.True(cache.Count > 0);
+        var differing = 0;
+        for (var y = 0; y < direct.Height; y += 3)
+        {
+            for (var x = 0; x < direct.Width; x += 3)
+            {
+                var a = direct.GetPixel(x, y);
+                var b = kept.GetPixel(x, y);
+                if (Math.Abs(a.Red - b.Red) + Math.Abs(a.Green - b.Green) + Math.Abs(a.Blue - b.Blue) > 60) differing++;
+            }
+        }
+
+        Assert.True(differing < direct.Width * direct.Height / 9 / 50, $"{differing} pixels differ");
+
+        if (ReviewFolder is { } folder)
+        {
+            Directory.CreateDirectory(folder);
+            using var full = Render(document, 1, cache);
+            using var data = full.Encode(SKEncodedImageFormat.Png, 100);
+            File.WriteAllBytes(Path.Combine(folder, $"hex-{orientation.ToString().ToLowerInvariant()}.png"), data.ToArray());
+            using var far = Render(document, 0.06, cache);
+            using var farData = far.Encode(SKEncodedImageFormat.Png, 100);
+            File.WriteAllBytes(Path.Combine(folder, $"hex-{orientation.ToString().ToLowerInvariant()}-far.png"), farData.ToArray());
+        }
+    }
+
+    /// <summary>
+    /// The category card and gallery pictures of the hex constructor are painted from the starter
+    /// tiles themselves (MAP_HEX_PNG): map-hex.png (a cluster of seven hexes) and hex-gallery.png.
+    /// </summary>
+    [Fact]
+    public void The_category_artwork_is_painted_from_the_starter_tiles()
+    {
+        using var card = new SKBitmap(256, 256, SKColorType.Rgba8888, SKAlphaType.Premul);
+        using (var canvas = new SKCanvas(card))
+        {
+            canvas.Clear(SKColors.Transparent);
+            var layout = new HexLayout(HexOrientation.Pointy, 50, 128, 128);
+            string[] tiles = ["starter/forest", "starter/mountains", "starter/hills", "starter/grass", "starter/sea", "starter/pines", "starter/desert"];
+            var index = 0;
+            foreach (var hex in HexCoord.Range(new HexCoord(0, 0), 1))
+            {
+                HexLayerRenderer.DrawTile(canvas, layout, hex, tiles[index++], 0, 0.6f);
+            }
+
+            HexLayerRenderer.DrawTile(canvas, layout, new HexCoord(0, 0), "starter/castle", 0);
+        }
+
+        Assert.True(card.GetPixel(128, 128).Alpha > 200);
+        Assert.Equal(0, card.GetPixel(2, 2).Alpha);
+        if (ReviewFolder is not { } folder) return;
+        Directory.CreateDirectory(folder);
+        using (var data = card.Encode(SKEncodedImageFormat.Png, 100))
+            File.WriteAllBytes(Path.Combine(folder, "map-hex.png"), data.ToArray());
+        var gallery = Sample(HexOrientation.Flat, 16, 10);
+        using var full = Render(gallery, 0.5, null);
+        using var galleryData = full.Encode(SKEncodedImageFormat.Png, 100);
+        File.WriteAllBytes(Path.Combine(folder, "hex-gallery.png"), galleryData.ToArray());
+    }
+
+    [Fact]
+    public void A_changed_hex_rebuilds_only_its_own_chunk()
+    {
+        var document = Sample(HexOrientation.Flat, 40, 40);
+        using var cache = new HexChunkCache();
+        using (Render(document, 0.25, cache)) { }
+        var before = cache.Count;
+        var layer = document.Layers.OfType<HexLayer>().Single();
+        var hex = layer.Board.Layout.FromOffset(new HexOffset(0, 0));
+        var edited = HexPaintCommand.Create("Лес", layer, new Dictionary<HexCoord, HexCell?> { [hex] = new HexCell("starter/snow") })!.Apply(document);
+        using (Render(edited, 0.25, cache)) { }
+        Assert.Equal(before + 1, cache.Count);
+    }
+}

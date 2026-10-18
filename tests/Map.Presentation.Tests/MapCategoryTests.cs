@@ -9,9 +9,17 @@ namespace Map.Presentation.Tests;
 public class MapCategoryTests
 {
     [Fact]
-    public void The_standard_constructor_is_the_only_category_of_this_build()
+    public void The_build_offers_the_standard_and_the_hex_constructors_in_that_order()
     {
-        var standard = Assert.Single(MapCategories.All);
+        Assert.Equal([MapCategories.Standard, MapCategories.Hex], MapCategories.All);
+        var hex = MapCategories.Hex;
+        Assert.Equal("hex", hex.Id.Value);
+        Assert.Equal(MapCategories.HexWorkshop, hex.Workshop);
+        Assert.NotEqual(MapCategories.StandardWorkshop, hex.Workshop);
+        Assert.True(MapCategories.IsHex(hex.Id));
+        Assert.False(MapCategories.IsHex(MapCategoryId.Standard));
+        Assert.NotEmpty(hex.Highlights);
+        var standard = MapCategories.Standard;
         Assert.Equal(MapCategoryId.Standard, standard.Id);
         Assert.Equal("Стандартный Конструктор карт", standard.Title);
         Assert.Equal(MapCategories.StandardWorkshop, standard.Workshop);

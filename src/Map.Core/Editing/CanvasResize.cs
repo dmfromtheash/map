@@ -332,6 +332,8 @@ public static class CanvasTransformService
                 })],
             }).WithMask(mask),
             FilterLayer filter => filter.WithMask(mask),
+            // Hexes move with the canvas as a whole board; a region keeps the board and its cells.
+            HexLayer hexes => (hexes with { Board = hexes.Board.Translated(offsetX, offsetY) }).WithMask(mask),
             _ => throw new InvalidOperationException($"Unknown layer type {layer.GetType().Name}."),
         };
     }

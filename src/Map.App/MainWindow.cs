@@ -290,6 +290,9 @@ public sealed class MainWindow : Window
         switch (MapCategories.Find(document.Category)?.Workshop)
         {
             case MapCategories.StandardWorkshop:
+            // The hex constructor runs on the shared editor core; the editor builds its own tool
+            // set from the document's category, so the two workshops still never mix.
+            case MapCategories.HexWorkshop:
                 ShowEditor(CreateEditor(document, path, startDirty, lastSavedUtc));
                 break;
             default:
@@ -629,6 +632,8 @@ public sealed class MainWindow : Window
                 editor.ActiveTool = EditorTool.Text;
                 break;
             case EditorShortcutSettings.Commands.Stamp:
+                // A hex map has no asset catalog: its tiles are in the hex palette.
+                if (editor.IsHexWorkshop) break;
                 editor.ActiveTool = EditorTool.Stamp;
                 view.OpenAssetCatalog();
                 break;
@@ -649,6 +654,9 @@ public sealed class MainWindow : Window
                 break;
             case EditorShortcutSettings.Commands.Road:
                 editor.ActiveTool = EditorTool.Road;
+                break;
+            case EditorShortcutSettings.Commands.Hex:
+                editor.ActiveTool = EditorTool.Hex;
                 break;
             // Escape, Enter and Delete are handled by EditorKeyRouting before this switch runs.
             case EditorShortcutSettings.Commands.NudgeLeft:

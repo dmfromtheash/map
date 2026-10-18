@@ -30,9 +30,10 @@ public sealed partial class RegionalApplication
         wizard.Show(); await Settle(); Capture(wizard, "01-category-step");
 
         var cards = wizard.GetVisualDescendants().OfType<ToggleButton>().Where(b => b.Name?.StartsWith("WizardCategory", StringComparison.Ordinal) == true).ToList();
-        Check("step 1 lists exactly the known categories", cards.Count == MapCategories.All.Count && cards.Count == 1);
-        Check("the standard constructor is chosen by default", cards.Single().Name == "WizardCategoryStandard"
-            && cards.Single().IsChecked == true && wizard.SelectedCategory == MapCategoryId.Standard && wizard.Step == 1);
+        Check("step 1 lists exactly the known categories", cards.Count == MapCategories.All.Count && cards.Count == 2);
+        Check("the standard constructor is chosen by default", cards[0].Name == "WizardCategoryStandard"
+            && cards[0].IsChecked == true && cards[1].IsChecked != true
+            && wizard.SelectedCategory == MapCategoryId.Standard && wizard.Step == 1);
         Check("the detail pane names the chosen category", Text(wizard, "WizardCategoryTitle") == MapCategories.Standard.Title
             && Text(wizard, "WizardCategoryDescription") == MapCategories.Standard.Description);
         Check("step 1 shows what is inside", wizard.GetVisualDescendants().OfType<StackPanel>().Single(p => p.Name == "WizardCategoryHighlights")

@@ -79,6 +79,14 @@ public sealed class WizardWindow : Window
     private Control _settingsStep = null!;
     private Control _customBlock = null!;
     private Control _backgroundBlock = null!;
+    private Control _startBlock = null!;
+    private Control _sizeBlock = null!;
+    private Control _hexBlock = null!;
+    private readonly TextBox _hexColumnsBox = new() { Name = "WizardHexColumnsBox" };
+    private readonly TextBox _hexRowsBox = new() { Name = "WizardHexRowsBox" };
+    private readonly TextBox _hexSizeBox = new() { Name = "WizardHexSizeBox" };
+    private readonly TextBlock _hexCanvasHint = new() { Name = "WizardHexCanvasHint", TextWrapping = TextWrapping.Wrap };
+    private IReadOnlyList<Button> _hexOrientationButtons = [];
     private string _presetKey = "Standard";
     private int _step;
     private MapCategoryDefinition _category = MapCategories.Standard;
@@ -184,6 +192,12 @@ public sealed class WizardWindow : Window
             _stepTitle.Text = $"Шаг 2 из 2 · Настройки карты «{_category.Title}». "
                 + "Выберите основу и размер. Содержимое и оформление карты можно менять позже.";
             ApplyCategoryDefaults();
+            // A hex map is a board of hexes: no starting pack and no pixel canvas to choose.
+            var hex = MapCategories.IsHex(_category.Id);
+            _startBlock.IsVisible = !hex;
+            _sizeBlock.IsVisible = !hex;
+            _hexBlock.IsVisible = hex;
+            if (hex) _startingPoint.SelectedIndex = 0;
             _stepHost.Content = _settingsStep;
             _footer.Children.Add(_create.Docked(Dock.Right));
             _footer.Children.Add(_back.Docked(Dock.Left));
@@ -206,6 +220,12 @@ public sealed class WizardWindow : Window
         _widthBox.Text = _category.DefaultWidth.ToString(System.Globalization.CultureInfo.InvariantCulture);
         _heightBox.Text = _category.DefaultHeight.ToString(System.Globalization.CultureInfo.InvariantCulture);
         SyncPresetButtons();
+        // Painted hexes read best on parchment; the user can still pick another page colour.
+        if (MapCategories.IsHex(_category.Id))
+        {
+            _wizard.Background = "#FFF2E9DC";
+            SyncBackgroundButtons();
+        }
     }
 
     private Control BuildIntro() => new DockPanel
@@ -429,10 +449,85 @@ public sealed class WizardWindow : Window
             Child = new StackPanel
             {
                 Spacing = 20,
-                Children = { BuildNameBlock(), BuildStartingPoint(), BuildSizeBlock(), _backgroundBlock, _backgroundCombo },
+                Children =
+                {
+                    BuildNameBlock(), (_startBlock = BuildStartingPoint()), (_sizeBlock = BuildSizeBlock()),
+                    (_hexBlock = BuildHexBoardBlock()), _backgroundBlock, _backgroundCombo,
+                },
             },
         },
     }.Named("WizardSettingsStep");
+
+    /// <summary>
+    /// The board of a hex map instead of a canvas size: which way the hexes point, how many across
+    /// and down, and how large one hex is. The canvas follows from the board.
+    /// </summary>
+    private Control BuildHexBoardBlock()
+    {
+        _hexColumnsBox.Text = _wizard.HexColumnsText;
+        _hexRowsBox.Text = _wizard.HexRowsText;
+        _hexSizeBox.Text = _wizard.HexSizeText;
+        AutomationProperties.SetName(_hexColumnsBox, "Колонки гексов");
+        AutomationProperties.SetName(_hexRowsBox, "Ряды гексов");
+        AutomationProperties.SetName(_hexSizeBox, "Размер гекса в пикселях");
+        var (orientation, buttons) = Ui.Segmented("WizardHexOrientation",
+        [
+            (nameof(HexOrientation.Flat), "Плоский верх · колонки", null),
+            (nameof(HexOrientation.Pointy), "Острый верх · ряды", null),
+        ], key =>
+        {
+            _wizard.HexOrientation = Enum.Parse<HexOrientation>(key);
+            SyncHexBoard();
+        });
+        _hexOrientationButtons = buttons;
+        foreach (var box in new[] { _hexColumnsBox, _hexRowsBox, _hexSizeBox })
+        {
+            box.TextChanged += (_, _) => SyncHexBoard();
+        }
+
+        var block = new StackPanel
+        {
+            Spacing = 8,
+            Children =
+            {
+                new TextBlock { Text = "Поле гексов" }.Classed("role-section"),
+                orientation,
+                new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 10,
+                    Children =
+                    {
+                        LabelledField("Колонки", _hexColumnsBox),
+                        LabelledField("Ряды", _hexRowsBox),
+                        LabelledField("Размер гекса, px", _hexSizeBox),
+                    },
+                },
+                _hexCanvasHint.Classed("faint", "role-caption"),
+            },
+        }.Named("WizardHexBoard");
+        block.IsVisible = false;
+        SyncHexBoard();
+        return block;
+    }
+
+    private void SyncHexBoard()
+    {
+        _wizard.HexColumnsText = _hexColumnsBox.Text ?? "";
+        _wizard.HexRowsText = _hexRowsBox.Text ?? "";
+        _wizard.HexSizeText = _hexSizeBox.Text ?? "";
+        foreach (var button in _hexOrientationButtons.OfType<ToggleButton>())
+        {
+            var active = button.Name == "WizardHexOrientation" + _wizard.HexOrientation;
+            button.IsChecked = active;
+            Ui.SetClass(button, "active", active);
+        }
+
+        _hexCanvasHint.Text = _wizard.HexCanvasSize is { } canvas
+            ? $"Холст под это поле: {canvas.Width} × {canvas.Height} пикселей. Размер гекса — от центра до угла."
+            : $"Колонки и ряды — от 1 до {NewMapWizardViewModel.MaxHexDimension}, размер гекса — "
+              + $"от {NewMapWizardViewModel.MinHexSize} до {NewMapWizardViewModel.MaxHexSize} пикселей.";
+    }
 
     private Control BuildStartingPoint()
     {
@@ -833,6 +928,7 @@ public sealed class WizardWindow : Window
     private async Task CreateAsync()
     {
         _wizard.Category = _category.Id;
+        SyncHexBoard();
         _wizard.Title = _titleBox.Text ?? "";
         _wizard.WidthText = _widthBox.Text ?? "";
         _wizard.HeightText = _heightBox.Text ?? "";

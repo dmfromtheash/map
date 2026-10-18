@@ -1,0 +1,234 @@
+using Map.Core.Documents;
+
+namespace Map.Core.Editing;
+
+/// <summary>Which part of a hex a hex gesture writes.</summary>
+public enum HexPaintTarget
+{
+    /// <summary>The terrain tile; erasing it clears the whole hex.</summary>
+    Terrain,
+
+    /// <summary>The feature drawn over the terrain; a feature needs terrain under it.</summary>
+    Feature,
+}
+
+/// <summary>The tile a hex gesture puts down and how it chooses among the tile's variants.</summary>
+/// <param name="TileId">Library id of the tile.</param>
+/// <param name="VariantCount">How many pictures the tile has (at least 1).</param>
+/// <param name="Target">Terrain or feature.</param>
+/// <param name="RandomVariant">Each hex gets its own picture, chosen by the hex position and <paramref name="Seed"/>.</param>
+/// <param name="FixedVariant">The picture used when <paramref name="RandomVariant"/> is off.</param>
+/// <param name="Seed">Changes the random pictures without changing which hexes are painted.</param>
+public sealed record HexTileChoice(
+    string TileId,
+    int VariantCount,
+    HexPaintTarget Target = HexPaintTarget.Terrain,
+    bool RandomVariant = true,
+    int FixedVariant = 0,
+    int Seed = 0);
+
+/// <summary>
+/// Pure hex-editing rules shared by every hex gesture: footprints, flood fill, the change a tile
+/// makes to one hex, and the deterministic variant choice. Nothing here touches a document.
+/// </summary>
+public static class HexEditing
+{
+    /// <summary>Largest footprint radius in hexes (radius 0 is one hex).</summary>
+    public const int MaxRadius = 8;
+
+    /// <summary>Flood fill never grows past this many hexes in one gesture.</summary>
+    public const int MaxFillHexes = 262_144;
+
+    /// <summary>The hexes of a footprint of the given radius that lie on the board.</summary>
+    public static IEnumerable<HexCoord> Footprint(HexBoard board, HexCoord center, int radius) =>
+        HexCoord.Range(center, Math.Clamp(radius, 0, MaxRadius)).Where(board.Contains);
+
+    /// <summary>
+    /// The connected region around <paramref name="start"/> whose hexes hold the same terrain
+    /// (or are all empty when the start is empty), bounded by the board.
+    /// </summary>
+    public static IReadOnlyList<HexCoord> FloodRegion(HexBoard board, HexCoord start, int limit = MaxFillHexes)
+    {
+        ArgumentNullException.ThrowIfNull(board);
+        if (!board.Contains(start))
+        {
+            return [];
+        }
+
+        var terrain = board[start]?.Terrain;
+        var region = new List<HexCoord>();
+        var seen = new HashSet<HexCoord> { start };
+        var queue = new Queue<HexCoord>();
+        queue.Enqueue(start);
+        while (queue.Count > 0 && region.Count < limit)
+        {
+            var hex = queue.Dequeue();
+            region.Add(hex);
+            foreach (var next in hex.Neighbors())
+            {
+                if (seen.Add(next) && board.Contains(next) && board[next]?.Terrain == terrain)
+                {
+                    queue.Enqueue(next);
+                }
+            }
+        }
+
+        return region;
+    }
+
+    /// <summary>
+    /// The picture a hex gets: a stable hash of its position, so repainting the same hex with the
+    /// same seed gives the same picture and neighbours rarely repeat.
+    /// </summary>
+    public static int VariantFor(HexCoord hex, HexTileChoice choice)
+    {
+        ArgumentNullException.ThrowIfNull(choice);
+        var count = Math.Max(1, choice.VariantCount);
+        if (!choice.RandomVariant)
+        {
+            return Math.Clamp(choice.FixedVariant, 0, count - 1);
+        }
+
+        unchecked
+        {
+            var h = (uint)hex.Q * 0x9E3779B1u ^ (uint)hex.R * 0x85EBCA77u ^ (uint)choice.Seed * 0xC2B2AE3Du;
+            h ^= h >> 15;
+            h *= 0x2C1B3C6Du;
+            h ^= h >> 12;
+            return (int)(h % (uint)count);
+        }
+    }
+
+    /// <summary>What a hex becomes when the tile is put on it, or the hex unchanged when the tile does not apply.</summary>
+    public static HexCell? Place(HexCell? current, HexCoord hex, HexTileChoice choice)
+    {
+        ArgumentNullException.ThrowIfNull(choice);
+        var variant = VariantFor(hex, choice);
+        return choice.Target switch
+        {
+            HexPaintTarget.Terrain => current is null
+                ? new HexCell(choice.TileId, variant)
+                : current.Terrain == choice.TileId && !choice.RandomVariant && current.Variant == variant
+                    ? current
+                    // Repainting the terrain keeps the feature that stood on it.
+                    : new HexCell(choice.TileId, variant, current.Feature, current.FeatureVariant),
+            // A feature needs ground: on an empty hex it does nothing.
+            HexPaintTarget.Feature => current?.WithFeature(choice.TileId, variant),
+            _ => current,
+        };
+    }
+
+    /// <summary>What a hex becomes when it is erased in the given target.</summary>
+    public static HexCell? Erase(HexCell? current, HexPaintTarget target) => target switch
+    {
+        HexPaintTarget.Feature => current?.Feature is null ? current : current.WithFeature(null),
+        _ => null,
+    };
+}
+
+/// <summary>
+/// One hex gesture as exact before/after values of every hex it touched. Apply writes the after
+/// values, Revert the before values; the board shares every untouched chunk.
+/// </summary>
+public sealed class HexPaintCommand : IEditCommand
+{
+    private readonly LayerId _layerId;
+    private readonly KeyValuePair<HexCoord, HexCell?>[] _before;
+    private readonly KeyValuePair<HexCoord, HexCell?>[] _after;
+
+    public HexPaintCommand(
+        string name, LayerId layerId,
+        IReadOnlyDictionary<HexCoord, HexCell?> before,
+        IReadOnlyDictionary<HexCoord, HexCell?> after)
+    {
+        ArgumentNullException.ThrowIfNull(before);
+        ArgumentNullException.ThrowIfNull(after);
+        Name = string.IsNullOrWhiteSpace(name) ? "Hex edit" : name;
+        _layerId = layerId;
+        _before = [.. before];
+        _after = [.. after];
+    }
+
+    /// <summary>
+    /// Builds the command for a set of new hex values, recording the values they replace and
+    /// dropping hexes that would not change. Null when nothing changes.
+    /// </summary>
+    public static HexPaintCommand? Create(string name, HexLayer layer, IReadOnlyDictionary<HexCoord, HexCell?> after)
+    {
+        ArgumentNullException.ThrowIfNull(layer);
+        ArgumentNullException.ThrowIfNull(after);
+        var before = new Dictionary<HexCoord, HexCell?>();
+        var changed = new Dictionary<HexCoord, HexCell?>();
+        foreach (var (hex, cell) in after)
+        {
+            if (!layer.Board.Contains(hex))
+            {
+                continue;
+            }
+
+            var old = layer.Board[hex];
+            if (Equals(old, cell))
+            {
+                continue;
+            }
+
+            before[hex] = old;
+            changed[hex] = cell;
+        }
+
+        return changed.Count == 0 ? null : new HexPaintCommand(name, layer.Id, before, changed);
+    }
+
+    public string Name { get; }
+
+    public LayerId LayerId => _layerId;
+
+    public int HexCount => _after.Length;
+
+    public IEnumerable<HexCoord> Hexes => _after.Select(pair => pair.Key);
+
+    public long? MeasuredWorkingBytes => EditCost.BaseBytes + (long)_after.Length * 64;
+
+    public MapDocument Apply(MapDocument document) => Write(document, _after);
+
+    public MapDocument Revert(MapDocument document) => Write(document, _before);
+
+    private MapDocument Write(MapDocument document, KeyValuePair<HexCoord, HexCell?>[] values)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        var layers = document.Layers.ToList();
+        var index = layers.FindIndex(layer => layer.Id == _layerId);
+        if (index < 0 || layers[index] is not HexLayer hexLayer)
+        {
+            throw new InvalidOperationException($"Hex layer {_layerId} is not in the document.");
+        }
+
+        layers[index] = hexLayer with { Board = hexLayer.Board.With(values) };
+        return document.WithLayers(layers);
+    }
+}
+
+/// <summary>Changes how a hex layer draws its grid; undoable like every layer setting.</summary>
+public sealed class UpdateHexGridCommand(LayerId layerId, HexGridStyle before, HexGridStyle after) : IEditCommand
+{
+    public string Name => "Hex grid";
+
+    public long? MeasuredWorkingBytes => EditCost.BaseBytes;
+
+    public MapDocument Apply(MapDocument document) => Write(document, after);
+
+    public MapDocument Revert(MapDocument document) => Write(document, before);
+
+    private MapDocument Write(MapDocument document, HexGridStyle style)
+    {
+        var layers = document.Layers.ToList();
+        var index = layers.FindIndex(layer => layer.Id == layerId);
+        if (index < 0 || layers[index] is not HexLayer hexLayer)
+        {
+            throw new InvalidOperationException($"Hex layer {layerId} is not in the document.");
+        }
+
+        layers[index] = hexLayer with { Grid = style };
+        return document.WithLayers(layers);
+    }
+}

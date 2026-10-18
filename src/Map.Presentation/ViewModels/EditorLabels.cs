@@ -25,6 +25,7 @@ public static class EditorLabels
         EditorTool.Notes => "Заметки",
         EditorTool.River => "Река",
         EditorTool.Road => "Дорога",
+        EditorTool.Hex => "Гексы",
         _ => "Инструмент",
     };
 
@@ -42,6 +43,7 @@ public static class EditorLabels
         EditorTool.Notes => "Создавайте заметки карты или привязывайте их к выделенному объекту.",
         EditorTool.River => "Нажмите «Новая река» и ставьте узлы от истока к устью. Клик по руслу — приток, Enter — свободный конец.",
         EditorTool.Road => "Нажмите «Новая дорога» и ставьте узлы. Клик по дороге — ветвь через общий узел, Enter — свободный конец.",
+        EditorTool.Hex => "Выберите гекс в палитре и щёлкайте или протягивайте по полю. Заливка красит область, ластик снимает верх гекса.",
         _ => "",
     };
 
@@ -55,6 +57,7 @@ public static class EditorLabels
         LandLayer => "Земля",
         GridLayer => "Сетка",
         FilterLayer => "Фильтр",
+        HexLayer => "Гексы",
         _ => "Слой",
     };
 

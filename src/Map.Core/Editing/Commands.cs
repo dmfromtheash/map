@@ -1196,6 +1196,14 @@ public sealed class UpdateLayerCommand : IEditCommand
                 Opacity = opacity ?? filter.Opacity,
                 Blend = blend ?? filter.Blend,
             },
+            HexLayer hexes => hexes with
+            {
+                Name = name ?? hexes.Name,
+                Visible = visible ?? hexes.Visible,
+                Locked = locked ?? hexes.Locked,
+                Opacity = opacity ?? hexes.Opacity,
+                Blend = blend ?? hexes.Blend,
+            },
             _ => throw new InvalidOperationException($"Unknown layer type {layer.GetType().Name}."),
         };
 

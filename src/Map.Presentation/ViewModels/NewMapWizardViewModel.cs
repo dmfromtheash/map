@@ -1,5 +1,6 @@
 using System.Globalization;
 using Map.Core.Documents;
+using Map.Presentation.Services;
 
 namespace Map.Presentation.ViewModels;
 
@@ -19,6 +20,17 @@ public sealed class NewMapWizardViewModel : ViewModelBase
     private string _heightText = "1080";
     private string _background = "#FF1E2430";
     private string _validationError = "";
+    private HexOrientation _hexOrientation = HexOrientation.Flat;
+    private string _hexColumnsText = "30";
+    private string _hexRowsText = "20";
+    private string _hexSizeText = "64";
+
+    /// <summary>Largest board side the create dialog offers; the format allows more.</summary>
+    public const int MaxHexDimension = 512;
+
+    public const int MinHexSize = 24;
+
+    public const int MaxHexSize = 256;
 
     /// <summary>Own neutral palette; final visual language is a later, owner-approved decision.</summary>
     public IReadOnlyList<string> BackgroundChoices { get; } =
@@ -33,6 +45,43 @@ public sealed class NewMapWizardViewModel : ViewModelBase
         get => _category;
         set => SetField(ref _category, value);
     }
+
+    /// <summary>True when the chosen category builds its map from hexes; step 2 then asks for the board.</summary>
+    public bool IsHexCategory => MapCategories.IsHex(Category);
+
+    /// <summary>Flat top (columns) or pointy top (rows) for a hex map.</summary>
+    public HexOrientation HexOrientation
+    {
+        get => _hexOrientation;
+        set => SetField(ref _hexOrientation, value);
+    }
+
+    /// <summary>Hexes across a hex map.</summary>
+    public string HexColumnsText
+    {
+        get => _hexColumnsText;
+        set => SetField(ref _hexColumnsText, value);
+    }
+
+    /// <summary>Hexes down a hex map.</summary>
+    public string HexRowsText
+    {
+        get => _hexRowsText;
+        set => SetField(ref _hexRowsText, value);
+    }
+
+    /// <summary>Hex size (centre to corner) in canvas units.</summary>
+    public string HexSizeText
+    {
+        get => _hexSizeText;
+        set => SetField(ref _hexSizeText, value);
+    }
+
+    /// <summary>The canvas a hex board of the current settings needs, or null while a field is invalid.</summary>
+    public (int Width, int Height)? HexCanvasSize =>
+        TryParseHexBoard(out var columns, out var rows, out var size)
+            ? HexBoard.CanvasSizeFor(HexOrientation, size, columns, rows)
+            : null;
 
     public string Title
     {
@@ -75,6 +124,25 @@ public sealed class NewMapWizardViewModel : ViewModelBase
             return false;
         }
 
+        if (IsHexCategory)
+        {
+            if (!TryParseHexBoard(out _, out _, out _))
+            {
+                ValidationError = $"Колонки и ряды — целые числа от 1 до {MaxHexDimension}, "
+                    + $"размер гекса — от {MinHexSize} до {MaxHexSize}.";
+                return false;
+            }
+
+            if (HexCanvasSize is not { } canvas || !CanvasDimensionPolicy.IsValid(canvas.Width) || !CanvasDimensionPolicy.IsValid(canvas.Height))
+            {
+                ValidationError = "Поле гексов такого размера не помещается на холст. Уменьшите число гексов или их размер.";
+                return false;
+            }
+
+            ValidationError = "";
+            return true;
+        }
+
         if (!TryParseDimension(WidthText, out _) || !TryParseDimension(HeightText, out _))
         {
             ValidationError =
@@ -94,6 +162,12 @@ public sealed class NewMapWizardViewModel : ViewModelBase
             return null;
         }
 
+        if (IsHexCategory)
+        {
+            TryParseHexBoard(out var columns, out var rows, out var size);
+            return HexMapFactory.Create(Title.Trim(), createdUtc, Category, HexOrientation, size, columns, rows, Background);
+        }
+
         TryParseDimension(WidthText, out var width);
         TryParseDimension(HeightText, out var height);
 
@@ -109,6 +183,15 @@ public sealed class NewMapWizardViewModel : ViewModelBase
                     LayerId.New(), "Объекты", visible: true, locked: false, opacity: 1.0, []),
             ],
             category: Category);
+    }
+
+    private bool TryParseHexBoard(out int columns, out int rows, out int size)
+    {
+        var ok = int.TryParse(HexColumnsText, NumberStyles.None, CultureInfo.InvariantCulture, out columns)
+            & int.TryParse(HexRowsText, NumberStyles.None, CultureInfo.InvariantCulture, out rows)
+            & int.TryParse(HexSizeText, NumberStyles.None, CultureInfo.InvariantCulture, out size);
+        return ok && columns is >= 1 and <= MaxHexDimension && rows is >= 1 and <= MaxHexDimension
+            && size is >= MinHexSize and <= MaxHexSize;
     }
 
     private static bool TryParseDimension(string text, out int value) =>

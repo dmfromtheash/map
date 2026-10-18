@@ -14,15 +14,17 @@ public static class MapProjectFormat
     public const int BaseMaterialSchemaVersion = 10;
     /// <summary>A map whose category is not the standard constructor (manifest <c>category</c>).</summary>
     public const int CategoriesSchemaVersion = 11;
+    /// <summary>A map that carries a hex layer (layer type <c>Hex</c>, the hex category's surface).</summary>
+    public const int HexLayersSchemaVersion = 12;
     public const string Extension = ".mapproj";
 
     /// <summary>The newest schema this build writes and reads.</summary>
-    public const int MaxSupportedSchemaVersion = CategoriesSchemaVersion;
+    public const int MaxSupportedSchemaVersion = HexLayersSchemaVersion;
 
     /// <summary>
-    /// Schemas v5–v11 share the v4 container and differ only by the constructs they may carry
+    /// Schemas v5–v12 share the v4 container and differ only by the constructs they may carry
     /// (paths, areas, rivers, roads, land painting, a material on the page colour, a map category
-    /// other than the standard one). This reader accepts all of them.
+    /// other than the standard one, hex layers). This reader accepts all of them.
     /// </summary>
     public static bool IsExtendedV4Schema(int schemaVersion) =>
         schemaVersion is >= EditablePathsSchemaVersion and <= MaxSupportedSchemaVersion;

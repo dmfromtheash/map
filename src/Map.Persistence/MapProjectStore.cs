@@ -23,6 +23,9 @@ public static partial class MapProjectStore
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = false };
 
     private static int SchemaFor(MapDocument document) =>
+        document.Layers.OfType<HexLayer>().Any()
+        || document.Checkpoints.Any(c => c.Snapshot.Layers.OfType<HexLayer>().Any())
+            ? MapProjectFormat.HexLayersSchemaVersion :
         !document.Category.IsStandard
             ? MapProjectFormat.CategoriesSchemaVersion :
         document.Layers.OfType<BaseColorLayer>().Any(l => l.TextureId is not null)
@@ -1658,6 +1661,7 @@ public static partial class MapProjectStore
                 LandLayer => "Land",
                 GridLayer => "Grid",
                 FilterLayer => "Filter",
+                HexLayer => "Hex",
                 _ => throw new InvalidOperationException($"Unknown layer type {layer.GetType().Name}."),
             },
             Name = layer.Name,
@@ -1687,6 +1691,7 @@ public static partial class MapProjectStore
                 ? [.. gridLayer.Grids.Select(ToGridDto)]
                 : null,
             Filter = layer is FilterLayer filterLayer ? ToFilterDto(filterLayer.Settings) : null,
+            Hex = layer is HexLayer hexLayer ? ToHexDto(hexLayer) : null,
             Effects = layer is ObjectLayer effectsLayer ? new LayerEffectsDto
             {
                 ClippingEnabled = effectsLayer.Effects.ClippingEnabled,
@@ -1705,6 +1710,99 @@ public static partial class MapProjectStore
                 : null,
         };
         return dto;
+    }
+
+    private static HexBoardDto ToHexDto(HexLayer layer)
+    {
+        var board = layer.Board;
+        var palette = new Dictionary<string, int>(StringComparer.Ordinal);
+        var tiles = new List<string>();
+        int Index(string id)
+        {
+            if (!palette.TryGetValue(id, out var index))
+            {
+                index = tiles.Count;
+                palette.Add(id, index);
+                tiles.Add(id);
+            }
+
+            return index;
+        }
+
+        var cells = new List<int>(board.CellCount * 6);
+        foreach (var (hex, cell) in board.Cells)
+        {
+            var offset = board.Layout.ToOffset(hex);
+            cells.Add(offset.Column);
+            cells.Add(offset.Row);
+            cells.Add(Index(cell.Terrain));
+            cells.Add(cell.Variant);
+            cells.Add(cell.Feature is null ? -1 : Index(cell.Feature));
+            cells.Add(cell.FeatureVariant);
+        }
+
+        return new HexBoardDto
+        {
+            Orientation = board.Orientation == HexOrientation.Flat ? "flat" : "pointy",
+            Size = board.Layout.Size,
+            OriginX = board.Layout.OriginX,
+            OriginY = board.Layout.OriginY,
+            Columns = board.Columns,
+            Rows = board.Rows,
+            Tiles = tiles,
+            Cells = cells,
+            Grid = new HexGridDto
+            {
+                Visible = layer.Grid.Visible,
+                Color = layer.Grid.Color,
+                Width = layer.Grid.Width,
+                Numbers = layer.Grid.Numbers,
+                ShowEmpty = layer.Grid.ShowEmpty,
+            },
+        };
+    }
+
+    private static HexLayer ToHexLayer(LayerId id, string name, LayerDto layer, LayerMask? mask)
+    {
+        var dto = layer.Hex ?? throw new MapProjectCorruptedException($"Hex layer {id} has no hex board.");
+        var orientation = dto.Orientation switch
+        {
+            "flat" => HexOrientation.Flat,
+            "pointy" => HexOrientation.Pointy,
+            _ => throw new MapProjectCorruptedException($"Hex layer {id} has an unknown orientation."),
+        };
+        var size = RequireFinite(dto.Size, "hex size", HexBoard.MinHexSize, HexBoard.MaxHexSize);
+        if (dto.Columns is < 1 or > HexBoard.MaxDimension || dto.Rows is < 1 or > HexBoard.MaxDimension)
+            throw new MapProjectCorruptedException($"Hex layer {id} has an invalid board size.");
+        if (dto.Tiles.Any(tile => !HexCell.IsValidTileId(tile)) || dto.Cells.Count % 6 != 0)
+            throw new MapProjectCorruptedException($"Hex layer {id} has damaged cells.");
+        var layout = new HexLayout(orientation, size,
+            RequireFinite(dto.OriginX, "hex origin", -1e7, 1e7), RequireFinite(dto.OriginY, "hex origin", -1e7, 1e7));
+        var cells = new List<KeyValuePair<HexCoord, HexCell>>(dto.Cells.Count / 6);
+        var seen = new HashSet<HexOffset>();
+        for (var i = 0; i < dto.Cells.Count; i += 6)
+        {
+            var offset = new HexOffset(dto.Cells[i], dto.Cells[i + 1]);
+            int terrain = dto.Cells[i + 2], variant = dto.Cells[i + 3], feature = dto.Cells[i + 4], featureVariant = dto.Cells[i + 5];
+            if (offset.Column < 0 || offset.Column >= dto.Columns || offset.Row < 0 || offset.Row >= dto.Rows
+                || !seen.Add(offset)
+                || terrain < 0 || terrain >= dto.Tiles.Count || variant < 0
+                || feature < -1 || feature >= dto.Tiles.Count || featureVariant < 0)
+                throw new MapProjectCorruptedException($"Hex layer {id} has damaged cells.");
+            cells.Add(new(layout.FromOffset(offset), new HexCell(
+                dto.Tiles[terrain], variant, feature < 0 ? null : dto.Tiles[feature], featureVariant)));
+        }
+
+        var grid = dto.Grid is null ? new HexGridStyle() : new HexGridStyle
+        {
+            Visible = dto.Grid.Visible,
+            Color = RequireAppearanceColor(dto.Grid.Color, "hex grid color"),
+            Width = RequireFinite(dto.Grid.Width, "hex grid width", 0, 64),
+            Numbers = dto.Grid.Numbers,
+            ShowEmpty = dto.Grid.ShowEmpty,
+        };
+        return new HexLayer(id, name, layer.Visible, layer.Locked, layer.Opacity,
+            HexBoard.FromCells(layout, dto.Columns, dto.Rows, cells), mask) { Grid = grid };
     }
 
     private static SceneObjectDto ToObjectDto(SceneObject sceneObject) => new()
@@ -2046,6 +2144,7 @@ public static partial class MapProjectStore
             "Filter" => new FilterLayer(
                 id, name, layer.Visible, layer.Locked, layer.Opacity,
                 ToFilter(layer.Filter!), mask),
+            "Hex" => ToHexLayer(id, name, layer, mask),
             _ => throw new MapProjectCorruptedException(
                 $"scene.json holds layer type \"{layer.Type}\" this version does not define."),
         };

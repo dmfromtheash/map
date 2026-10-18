@@ -34,6 +34,8 @@ public enum CanvasInputGesture
     VectorElementDrag,
     ObjectDrag,
     Marquee,
+    /// <summary>A drag of the hex tool: places or erases hexes along the way.</summary>
+    HexPaint,
 }
 
 /// <summary>What the hosting control has to do for its UI framework after a routed event.</summary>
@@ -221,6 +223,15 @@ public sealed class CanvasInputRouter
             };
         }
 
+        if (_editor.ActiveTool == EditorTool.Hex)
+        {
+            // Hexes are the hex constructor's only content: a press always belongs to the tool.
+            // Fill and pick finish on the press; place and erase continue as a drag.
+            var dragging = _editor.BeginHexGesture(worldX, worldY);
+            _gesture = dragging ? CanvasInputGesture.HexPaint : CanvasInputGesture.None;
+            return new CanvasInputResult { Handled = true, CapturePointer = dragging, Invalidate = true };
+        }
+
         if (_editor.ActiveTool is EditorTool.Brush or EditorTool.Mask or EditorTool.Land)
         {
             // A chosen land shape turns the drag into a region: press and release describe the
@@ -404,6 +415,9 @@ public sealed class CanvasInputRouter
                 LastPressureSample = Math.Clamp(pressure, 0, 1);
                 _editor.ContinueStroke(worldX, worldY, LastPressureSample);
                 return new CanvasInputResult { Handled = true };
+            case CanvasInputGesture.HexPaint:
+                _editor.ContinueHexGesture(worldX, worldY);
+                return new CanvasInputResult { Handled = true, Invalidate = true };
             case CanvasInputGesture.VectorDraw:
                 if (TravelledPastClickThreshold(screenX, screenY))
                 {
@@ -512,6 +526,11 @@ public sealed class CanvasInputRouter
             case CanvasInputGesture.Stroke:
                 _editor.EndStroke();
                 break;
+            case CanvasInputGesture.HexPaint:
+                var hexEnd = _editor.Session.Viewport.ScreenToWorld(screenX, screenY);
+                _editor.ContinueHexGesture(hexEnd.X, hexEnd.Y);
+                _editor.EndHexGesture();
+                break;
             case CanvasInputGesture.VectorDraw:
                 if (tentative && clicked)
                 {
@@ -616,6 +635,8 @@ public sealed class CanvasInputRouter
             case CanvasInputGesture.Stroke:
                 _editor.CancelStroke();
                 return true;
+            case CanvasInputGesture.HexPaint:
+                return _editor.CancelHexGesture();
             case CanvasInputGesture.VectorDraw:
                 _editor.CancelVectorDraw();
                 return true;
