@@ -13,4 +13,15 @@ if ($LASTEXITCODE -ne 0) { throw "publish failed: $LASTEXITCODE" }
 # The regional pack is not in the repository; it lives beside the Release build and is copied as is.
 $atlas = "$root\src\Map.App\bin\Release\net10.0\win-x64\RegionalAtlas"
 if (Test-Path $atlas) { robocopy $atlas "$target\RegionalAtlas" /E /NFL /NDL /NJH /NJS | Out-Null }
+# The desktop shortcut names the build it starts (its tooltip) and takes the icon from the program.
+$link = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Map — конструктор карт.lnk'
+if (Test-Path $link) {
+    $commit = (git -C $root rev-parse --short HEAD).Trim()
+    $built = (Get-Item "$target\Map.App.dll").LastWriteTime.ToString('dd.MM HH:mm')
+    $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($link)
+    $shortcut.TargetPath = "$target\Map.App.exe"; $shortcut.WorkingDirectory = $target
+    $shortcut.IconLocation = "$target\Map.App.exe,0"
+    $shortcut.Description = "Map · сборка $built (ускоренная, коммит $commit)"
+    $shortcut.Save()
+}
 Write-Output "Published to $target"
