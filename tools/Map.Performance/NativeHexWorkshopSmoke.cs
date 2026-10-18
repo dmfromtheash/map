@@ -175,6 +175,16 @@ public sealed partial class RegionalApplication
         Check("it opens back with its hexes, paths, regions, keys, fog and level", surface.Board.Cells.SequenceEqual(Layer().Board.Cells)
             && surface.Paths.Count == 2 && surface.Regions.Count == 1 && surface.Notes.Count == 1 && surface.FogEnabled
             && reopened.Layers.OfType<HexLayer>().Any(l => l.Level == -1));
+
+        // The world generator through its panel buttons, step by step, on the surface.
+        var depthBefore = _editor.Session.UndoDepth;
+        Click(_view, "HexGenAllButton"); await Settle();
+        Check("the generator builds a world as six undo steps", _editor.Session.UndoDepth == depthBefore + 6
+            && Layer().Board.Cells.Any(p => p.Value.Terrain == "starter/sea") && Layer().Paths.Any(p => p.Kind == HexPathKind.Road));
+        Click(_view, "HexGenRerollButton"); await Settle();
+        Check("the last step can be dealt again", _editor.Session.UndoDepth == depthBefore + 6);
+        _view.Canvas.FitToCanvas(); await Settle(); await Task.Delay(300); await Settle();
+        Capture(_view, "workshop-08-generated");
         _editor.Session.MarkSaved(_editor.Session.CaptureSaveCheckpoint());
     }
 }

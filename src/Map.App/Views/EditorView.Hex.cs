@@ -161,6 +161,7 @@ public sealed partial class EditorView
                 select,
                 radiusSection,
                 BuildHexLevelSection(),
+                BuildHexGeneratorSection(),
                 Ui.Section("Сетка", new StackPanel { Spacing = 4, Children = { gridVisible, gridNumbers, gridEmpty } }),
             },
         };
@@ -830,6 +831,80 @@ public sealed partial class EditorView
                     },
                 },
                 ghost,
+            },
+        });
+    }
+
+    // ------------------------------------------------------------------ world generator
+
+    private Control BuildHexGeneratorSection()
+    {
+        var seed = new TextBox { Name = "HexGeneratorSeedBox", Width = 90 };
+        HexSync(() => seed.Text = _editor.HexGeneratorSettings.Seed.ToString(CultureInfo.InvariantCulture), nameof(EditorViewModel.HexGeneratorSettings));
+        seed.LostFocus += (_, _) =>
+        {
+            if (int.TryParse(seed.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value))
+                _editor.HexGeneratorSettings = _editor.HexGeneratorSettings with { Seed = value };
+        };
+
+        Control Slider(string name, string label, double min, double max, Func<HexGeneratorSettings, double> read,
+            Func<HexGeneratorSettings, double, HexGeneratorSettings> write, string unit = "")
+        {
+            return Ui.SliderRow(name, label, min, max, read(_editor.HexGeneratorSettings), unit,
+                value => { if (!_syncingHex) _editor.HexGeneratorSettings = write(_editor.HexGeneratorSettings, value); });
+        }
+
+        var sliders = new StackPanel
+        {
+            Spacing = 2,
+            Children =
+            {
+                Slider("HexGenLandSlider", "Суша", 10, 90, s => s.LandShare * 100, (s, v) => s with { LandShare = v / 100 }, "%"),
+                Slider("HexGenIslandsSlider", "Острова", 0, 100, s => s.Fragmentation * 100, (s, v) => s with { Fragmentation = v / 100 }, "%"),
+                Slider("HexGenReliefSlider", "Горы и холмы", 0, 60, s => s.Relief * 100, (s, v) => s with { Relief = v / 100 }, "%"),
+                Slider("HexGenMoistureSlider", "Влажность", -100, 100, s => s.Moisture * 100, (s, v) => s with { Moisture = v / 100 }),
+                Slider("HexGenTemperatureSlider", "Тепло", -100, 100, s => s.Temperature * 100, (s, v) => s with { Temperature = v / 100 }),
+                Slider("HexGenRiversSlider", "Реки на 1000 гексов", 0, 30, s => s.RiversPerThousand, (s, v) => s with { RiversPerThousand = v }),
+                Slider("HexGenTownsSlider", "Поселения на 1000 гексов", 0, 30, s => s.SettlementsPerThousand, (s, v) => s with { SettlementsPerThousand = v }),
+            },
+        };
+
+        var steps = new WrapPanel { ItemSpacing = 6, LineSpacing = 6 };
+        foreach (var step in Enum.GetValues<HexGenerationStep>())
+        {
+            var value = step;
+            steps.Children.Add(Ui.TextButton("HexGenStep" + step, $"{(int)step + 1}. {EditorViewModel.HexGenerationStepName(step)}",
+                () => _editor.RunHexGeneratorStep(value), "compact"));
+        }
+
+        var reroll = Ui.TextButton("HexGenRerollButton", "Перебросить последний шаг", _editor.RerollHexGeneratorStep, "compact");
+        HexSync(() => reroll.IsEnabled = _editor.HexCanRerollGenerator, [.. DocumentChanged, nameof(EditorViewModel.HexCanRerollGenerator)]);
+        return Ui.Section("Генератор мира", new StackPanel
+        {
+            Spacing = 6,
+            Children =
+            {
+                new TextBlock
+                {
+                    Text = "Шаги идут по порядку и строятся на том, что уже есть на поле: между шагами можно рисовать руками. Шаг «Суша и моря» перерисовывает всё поле. Каждый шаг — одна отмена.",
+                    TextWrapping = TextWrapping.Wrap,
+                }.Classed("faint", "role-caption"),
+                Ui.PropertyRow("Зерно", new StackPanel
+                {
+                    Orientation = Orientation.Horizontal, Spacing = 6,
+                    Children = { seed, Ui.TextButton("HexGenSeedButton", "Случайное", _editor.NewHexGeneratorSeed, "compact") },
+                }),
+                sliders,
+                steps,
+                new WrapPanel
+                {
+                    ItemSpacing = 6, LineSpacing = 6,
+                    Children =
+                    {
+                        Ui.TextButton("HexGenAllButton", "Создать мир целиком", _editor.RunHexGeneratorAll, "accent"),
+                        reroll,
+                    },
+                },
             },
         });
     }

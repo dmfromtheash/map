@@ -180,4 +180,31 @@ public sealed class HexWorkshopRenderingTests
         var b = turned.GetPixel(100, 140);
         Assert.True(Math.Abs(a.Red - b.Red) + Math.Abs(a.Green - b.Green) + Math.Abs(a.Blue - b.Blue) < 40, $"{a} vs {b}");
     }
+
+    [Theory]
+    [InlineData(HexOrientation.Flat)]
+    [InlineData(HexOrientation.Pointy)]
+    public void A_generated_world_draws_seas_land_rivers_and_towns(HexOrientation orientation)
+    {
+        var document = HexMapFactory.Create("Мир", DateTimeOffset.UnixEpoch, new MapCategoryId("hex"), orientation, 32, 60, 40, "#FFF2E9DC");
+        var layer = document.Layers.OfType<HexLayer>().Single();
+        var world = HexWorldGenerator.RunAll(layer, new HexGeneratorSettings { Seed = 4, SettlementsPerThousand = 10 });
+        document = document.WithLayer(layer.Id, _ => world);
+        using var bitmap = Render(document, 0.5, null);
+        var colours = new HashSet<(int, int, int)>();
+        for (var y = 0; y < bitmap.Height; y += 7)
+        {
+            for (var x = 0; x < bitmap.Width; x += 7)
+            {
+                var c = bitmap.GetPixel(x, y);
+                colours.Add((c.Red / 32, c.Green / 32, c.Blue / 32));
+            }
+        }
+
+        Assert.True(colours.Count > 25, $"{colours.Count} colour buckets");
+        if (ReviewFolder is not { } folder) return;
+        Directory.CreateDirectory(folder);
+        using var data = bitmap.Encode(SKEncodedImageFormat.Png, 100);
+        File.WriteAllBytes(Path.Combine(folder, $"generated-{orientation.ToString().ToLowerInvariant()}.png"), data.ToArray());
+    }
 }

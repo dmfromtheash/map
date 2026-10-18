@@ -316,4 +316,27 @@ public sealed class HexWorkshopToolsTests
         Assert.All(layers.Select((layer, index) => (layer, index)).Where(pair => pair.layer is HexLayer),
             pair => Assert.True(pair.index < labels, "a hex layer above the labels"));
     }
+
+    [Fact]
+    public void Generator_steps_are_one_undo_each_and_the_last_one_can_be_dealt_again()
+    {
+        var editor = HexEditor(60, 40);
+        editor.HexGeneratorSettings = new Map.Core.Editing.HexGeneratorSettings { Seed = 9 };
+        var depth = editor.Session.UndoDepth;
+        editor.RunHexGeneratorStep(Map.Core.Editing.HexGenerationStep.Land);
+        editor.RunHexGeneratorStep(Map.Core.Editing.HexGenerationStep.Relief);
+        Assert.Equal(depth + 2, editor.Session.UndoDepth);
+        Assert.Equal(60 * 40, Hexes(editor).Board.CellCount);
+        Assert.True(editor.HexCanRerollGenerator);
+        var before = Hexes(editor).Board.Cells.Where(p => p.Value.Terrain == "starter/mountains").Select(p => p.Key).ToHashSet();
+        editor.RerollHexGeneratorStep();
+        Assert.Equal(depth + 2, editor.Session.UndoDepth);
+        Assert.Equal(10, editor.HexGeneratorSettings.Seed);
+        var after = Hexes(editor).Board.Cells.Where(p => p.Value.Terrain == "starter/mountains").Select(p => p.Key).ToHashSet();
+        Assert.False(before.SetEquals(after));
+        editor.RunHexGeneratorAll();
+        Assert.Contains(Hexes(editor).Paths, path => path.Kind == HexPathKind.Road);
+        editor.Undo();
+        Assert.DoesNotContain(Hexes(editor).Paths, path => path.Kind == HexPathKind.Road);
+    }
 }
