@@ -2930,7 +2930,9 @@ public static class SceneRenderer
         if (options.FastTerrain)
         {
             if (TryDrawKeptTiles(canvas, layer, view, bucket, revisions, cache, options)) return;
-            for (var delta = 1; delta <= 6; delta++)
+            // Twelve buckets either way: a wheel zoom from a whole-map view to 160 % crosses eight,
+            // and the bucket the zoom started from is the one that is complete.
+            for (var delta = 1; delta <= 12; delta++)
             {
                 if (TryDrawKeptTiles(canvas, layer, view, bucket - delta, revisions, cache, options)
                     || TryDrawKeptTiles(canvas, layer, view, bucket + delta, revisions, cache, options))

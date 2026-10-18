@@ -88,7 +88,12 @@ public sealed partial class MapCanvasControl : Control
                 // image (about 10 MiB at 1440×900): enough that returning to a recent view, the
                 // settled frame after a zoom, or placing an object does not rebuild the terrain.
                 // Six stamp atlases of dense tiles (one per zoom bucket, up to 64 MiB each).
-                _contexts[thread] = context = (new(4096, 256L * 1024 * 1024), new(1024, 64L * 1024 * 1024), new(), new(8), new(6), new(6, 192L * 1024 * 1024), new(), new(), new());
+                // Dense object tiles are GPU textures of about 1 MiB: 256 MiB of video memory hold the
+                // buckets of a wheel zoom across a whole-map view at 2560×1369 (24-42 tiles each), so
+                // the frames of the zoom find a complete kept bucket instead of rebuilding tiles of
+                // 50 000 objects in the frame (64 MiB held about one and a half buckets). Under memory
+                // pressure the cache still drops to 16 MiB.
+                _contexts[thread] = context = (new(4096, 256L * 1024 * 1024), new(1024, 256L * 1024 * 1024), new(), new(8), new(6), new(6, 192L * 1024 * 1024), new(), new(), new());
             return context;
         }
         public (int Tiles, int Objects, long Bytes, long Disposals) Counts()
