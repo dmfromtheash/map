@@ -228,9 +228,9 @@ public sealed class EditingSession
 
     /// <summary>
     /// Folds the newest <paramref name="count"/> history entries into one, so a gesture that had
-    /// to commit step by step (an erasing drag) is undone in one go. The document and the state
-    /// chain do not change: the merged entry runs from the first entry's before-state to the last
-    /// entry's after-state, which is the current state.
+    /// to commit step by step (an erasing drag) is undone in one go. The document does not change.
+    /// The merged entry runs from the first entry's before-state to one new after-state that
+    /// replaces the current state, so the gesture counts as one unsaved change, not one per step.
     /// </summary>
     public bool MergeLastEntries(int count, string name)
     {
@@ -241,9 +241,13 @@ public sealed class EditingSession
 
         var entries = _undo.GetRange(_undo.Count - count, count);
         _undo.RemoveRange(_undo.Count - count, count);
+        var after = ReferenceEquals(_currentState, entries[^1].AfterState)
+            ? new StateNode(entries[0].BeforeState)
+            : entries[^1].AfterState;
+        if (ReferenceEquals(_currentState, entries[^1].AfterState)) _currentState = after;
         _undo.Add(new HistoryEntry(
             new CompositeCommand(name, [.. entries.Select(entry => entry.Command)]),
-            entries[0].BeforeState, entries[^1].AfterState));
+            entries[0].BeforeState, after));
         return true;
     }
 

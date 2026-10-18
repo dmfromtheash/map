@@ -142,12 +142,87 @@ public sealed class HexLayerRenderingTests
     {
         var document = Sample(HexOrientation.Flat, 40, 40);
         using var cache = new HexChunkCache();
-        using (Render(document, 0.25, cache)) { }
+        // A frame draws as many new chunk images as its budget allows; the rest follow in the next frames.
+        void Settle(MapDocument map)
+        {
+            var last = -1;
+            while (cache.Count != last)
+            {
+                last = cache.Count;
+                using (Render(map, 0.25, cache)) { }
+            }
+        }
+
+        Settle(document);
         var before = cache.Count;
         var layer = document.Layers.OfType<HexLayer>().Single();
         var hex = layer.Board.Layout.FromOffset(new HexOffset(0, 0));
         var edited = HexPaintCommand.Create("Лес", layer, new Dictionary<HexCoord, HexCell?> { [hex] = new HexCell("starter/snow") })!.Apply(document);
-        using (Render(edited, 0.25, cache)) { }
+        Settle(edited);
         Assert.Equal(before + 1, cache.Count);
+    }
+
+    /// <summary>
+    /// The repeating grid picture (many small hexes on screen) and the far-look blocks draw what
+    /// direct drawing draws: the same hexes, lines and colours, also at the jagged board edge.
+    /// </summary>
+    [Theory]
+    [InlineData(HexOrientation.Flat, 0.25)]
+    [InlineData(HexOrientation.Pointy, 0.25)]
+    [InlineData(HexOrientation.Flat, 0.6)]
+    [InlineData(HexOrientation.Pointy, 0.6)]
+    [InlineData(HexOrientation.Flat, 0.05)]
+    [InlineData(HexOrientation.Pointy, 0.05)]
+    public void The_grid_picture_and_far_blocks_draw_the_same_map_as_direct_drawing(HexOrientation orientation, double scale)
+    {
+        var document = Sample(orientation, 40, 32);
+        using var direct = Render(document, scale, cache: null);
+        using var cache = new HexChunkCache();
+        SKBitmap kept = Render(document, scale, cache);
+        for (var frame = 0; frame < 64; frame++)
+        {
+            kept.Dispose();
+            kept = Render(document, scale, cache);
+        }
+
+        using (kept)
+        {
+            var differing = 0;
+            var samples = 0;
+            for (var y = 0; y < direct.Height; y += 2)
+            {
+                for (var x = 0; x < direct.Width; x += 2)
+                {
+                    samples++;
+                    var a = direct.GetPixel(x, y);
+                    var b = kept.GetPixel(x, y);
+                    if (Math.Abs(a.Red - b.Red) + Math.Abs(a.Green - b.Green) + Math.Abs(a.Blue - b.Blue) > 90) differing++;
+                }
+            }
+
+            if (ReviewFolder is { } folder)
+            {
+                Directory.CreateDirectory(folder);
+                foreach (var (name, bitmap) in new[] { ("direct", direct), ("kept", kept) })
+                {
+                    using var data = bitmap.Encode(SKEncodedImageFormat.Png, 100);
+                    File.WriteAllBytes(Path.Combine(folder, $"equal-{orientation}-{scale:0.00}-{name}.png"), data.ToArray());
+                }
+            }
+
+            // Far away the kept block is made at the next power-of-two scale and shrinks on screen,
+            // which softens the hexes' edges a little: there the edge pixels may differ.
+            Assert.True(differing < samples / (scale < 0.1 ? 15 : 40), $"{differing} of {samples} pixels differ");
+        }
+    }
+
+    [Fact]
+    public void Hex_numbers_never_run_together_on_large_boards()
+    {
+        var small = HexBoard.Create(HexOrientation.Flat, 64, 30, 20);
+        var large = HexBoard.Create(HexOrientation.Flat, 64, 512, 300);
+        Assert.Equal("0101", HexLayerRenderer.NumberOf(small, new HexOffset(0, 0)));
+        Assert.Equal("3020", HexLayerRenderer.NumberOf(small, new HexOffset(29, 19)));
+        Assert.Equal("251.009", HexLayerRenderer.NumberOf(large, new HexOffset(250, 8)));
     }
 }

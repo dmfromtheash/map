@@ -708,6 +708,7 @@ public sealed partial class MapCanvasControl : Control
                 BrushCursor = brushCursor,
                 HexChunks = resources.Hex(),
                 HexCursor = editor.CanvasWorkflowOpen ? null : editor.HexCursor,
+                HexGestureLive = editor.HasHexGesture,
                 ViewScale = viewport.Scale,
                 VisibleWorld = new Map.Core.Documents.WorldBounds(
                     X, Y, bottomRight.X, bottomRight.Y),

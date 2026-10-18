@@ -185,4 +185,19 @@ public sealed class HexEditingTests
         Assert.Equal(layer.Board.Layout.Center(hex).X + 100, moved.Layout.Center(hex).X, 6);
         Assert.Equal("starter/grass", moved[hex]!.Terrain);
     }
+
+    [Fact]
+    public void A_filled_board_shares_one_cell_object_per_distinct_tile()
+    {
+        var (_, layer) = NewMap();
+        var start = layer.Board.Layout.FromOffset(new HexOffset(0, 0));
+        var choice = new HexTileChoice("starter/forest", 3);
+        var region = HexEditing.FloodRegion(layer.Board, start);
+        var filled = layer.Board.With(region.Select(hex => new KeyValuePair<HexCoord, HexCell?>(hex, HexEditing.Place(null, hex, choice))));
+        var distinct = filled.Cells.Select(pair => pair.Value).Distinct(ReferenceEqualityComparer.Instance).Count();
+        Assert.Equal(region.Count, filled.CellCount);
+        Assert.InRange(distinct, 1, 3);
+        Assert.Same(HexCell.Of("starter/forest", 1), HexCell.Of("starter/forest", 1));
+        Assert.Equal(new HexCell("starter/forest", 1), HexCell.Of("starter/forest", 1));
+    }
 }

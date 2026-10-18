@@ -1789,7 +1789,7 @@ public static partial class MapProjectStore
                 || terrain < 0 || terrain >= dto.Tiles.Count || variant < 0
                 || feature < -1 || feature >= dto.Tiles.Count || featureVariant < 0)
                 throw new MapProjectCorruptedException($"Hex layer {id} has damaged cells.");
-            cells.Add(new(layout.FromOffset(offset), new HexCell(
+            cells.Add(new(layout.FromOffset(offset), HexCell.Of(
                 dto.Tiles[terrain], variant, feature < 0 ? null : dto.Tiles[feature], featureVariant)));
         }
 

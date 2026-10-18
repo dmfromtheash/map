@@ -408,6 +408,10 @@ public sealed partial class EditorView : UserControl
             if (_editor.ActiveLayer is not HexLayer && _editor.ActiveHexLayer is { } hexes) _editor.SelectLayer(hexes.Id);
             _editor.ActiveTool = EditorTool.Hex;
             _editor.PanelSection = PanelSection.Layers;
+            foreach (var orientation in editor.Session.Document.Layers.OfType<HexLayer>().Select(l => l.Board.Orientation).Distinct())
+            {
+                _ = Task.Run(() => Map.Rendering.HexTileArt.Warm(orientation));
+            }
         }
         _thumbnails.OriginalFor = path => _editor.TryDescribeLibraryThumbnail(path, out var original) ? original : null;
         Name = "EditorView";

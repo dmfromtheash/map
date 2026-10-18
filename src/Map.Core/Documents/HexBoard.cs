@@ -41,7 +41,23 @@ public sealed record HexCell
     public int FeatureVariant { get; }
 
     public HexCell WithFeature(string? feature, int featureVariant = 0) =>
-        new(Terrain, Variant, feature, featureVariant);
+        Of(Terrain, Variant, feature, featureVariant);
+
+    /// <summary>Distinct values are few (tiles × variants) while a board holds up to millions of hexes.</summary>
+    private const int MaxShared = 1 << 16;
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<HexCell, HexCell> Shared = new();
+
+    /// <summary>
+    /// The cell with these tiles, shared by every hex that shows the same: a filled board of
+    /// 262 144 hexes holds a few dozen cell objects instead of one per hex.
+    /// </summary>
+    public static HexCell Of(string terrain, int variant = 0, string? feature = null, int featureVariant = 0)
+    {
+        var cell = new HexCell(terrain, variant, feature, featureVariant);
+        if (Shared.TryGetValue(cell, out var shared)) return shared;
+        return Shared.Count < MaxShared ? Shared.GetOrAdd(cell, cell) : cell;
+    }
 
     /// <summary>a–z, 0–9, '-', '_', '.', '/' - a library-relative name such as <c>starter/forest</c>.</summary>
     public static bool IsValidTileId(string? value)

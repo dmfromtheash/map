@@ -77,10 +77,13 @@ public sealed class HexWorkshopTests
         editor.HexTileId = HexStarterTiles.Prefix + "forest";
         var (x0, y0) = CenterOf(editor, 2, 5);
         var (x1, y1) = CenterOf(editor, 10, 5);
+        var pending = editor.PendingChanges;
         Assert.True(editor.BeginHexGesture(x0, y0));
         editor.ContinueHexGesture((x0 + x1) / 2, (y0 + y1) / 2);
         editor.ContinueHexGesture(x1, y1);
         editor.EndHexGesture();
+        // The status bar counts the drag as one unsaved change, not one per pointer move.
+        Assert.Equal(pending + 1, editor.PendingChanges);
 
         var board = Hexes(editor).Board;
         Assert.True(board.CellCount >= 9);
@@ -90,6 +93,7 @@ public sealed class HexWorkshopTests
         editor.Undo();
         Assert.Equal(0, Hexes(editor).Board.CellCount);
         Assert.False(editor.CanUndo);
+        Assert.Equal(pending, editor.PendingChanges);
     }
 
     [Fact]

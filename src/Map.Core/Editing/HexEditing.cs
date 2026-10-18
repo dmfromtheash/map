@@ -107,11 +107,11 @@ public static class HexEditing
         return choice.Target switch
         {
             HexPaintTarget.Terrain => current is null
-                ? new HexCell(choice.TileId, variant)
+                ? HexCell.Of(choice.TileId, variant)
                 : current.Terrain == choice.TileId && !choice.RandomVariant && current.Variant == variant
                     ? current
                     // Repainting the terrain keeps the feature that stood on it.
-                    : new HexCell(choice.TileId, variant, current.Feature, current.FeatureVariant),
+                    : HexCell.Of(choice.TileId, variant, current.Feature, current.FeatureVariant),
             // A feature needs ground: on an empty hex it does nothing.
             HexPaintTarget.Feature => current?.WithFeature(choice.TileId, variant),
             _ => current,

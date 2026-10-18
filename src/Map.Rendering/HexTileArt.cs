@@ -69,6 +69,18 @@ public static class HexTileArt
             return tile is null ? null : Paint(tile, Math.Clamp(key.Variant, 0, tile.VariantCount - 1), key.Orientation);
         });
 
+    /// <summary>
+    /// Paints every starter picture of an orientation ahead of need (safe on any thread): the first
+    /// zoom to painted hexes otherwise paints them all inside one frame (about 0.3 s).
+    /// </summary>
+    public static void Warm(HexOrientation orientation)
+    {
+        foreach (var tile in HexStarterTiles.All)
+        {
+            for (var variant = 0; variant < tile.VariantCount; variant++) Image(tile.Id, variant, orientation);
+        }
+    }
+
     /// <summary>Picture size for an orientation: flat hexes are wider than tall, pointy ones taller.</summary>
     public static (int Width, int Height) PixelSize(HexOrientation orientation) => orientation == HexOrientation.Flat
         ? (TilePixels, (int)Math.Round(TilePixels * HexLayout.Sqrt3 / 2))

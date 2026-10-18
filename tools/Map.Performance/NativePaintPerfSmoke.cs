@@ -132,6 +132,7 @@ public sealed partial class PaintPerfApplication : Application
         }
         if (System.Environment.GetEnvironmentVariable("MAP_CLIFF_PERF") == "1") { await CliffRoutes(); return; }
         if (System.Environment.GetEnvironmentVariable("MAP_NEW_ART_PERF") == "1") { await NewArtRoutes(); return; }
+        if (System.Environment.GetEnvironmentVariable("MAP_HEX_STRESS") == "1") { await HexStressRoutes(); return; }
         var projectPath = System.Environment.GetEnvironmentVariable("MAP_REGIONAL_PROJECT");
         if (string.IsNullOrWhiteSpace(projectPath) || !File.Exists(projectPath))
             throw new InvalidOperationException("MAP_REGIONAL_PROJECT must name an existing .mapproj");

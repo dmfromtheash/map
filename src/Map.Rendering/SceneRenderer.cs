@@ -92,6 +92,8 @@ public sealed class RenderStats
     /// <summary>Frames that drew the kept terrain image resampled because the camera was moving.</summary>
     public int TerrainReused { get; set; }
     public int TerrainRefinementsPending { get; set; }
+    /// <summary>Hex chunks that stood in this frame because their image was not drawn yet (they follow in the next frames).</summary>
+    public int HexChunksPending { get; set; }
     public double TerrainRefinementBuildMilliseconds { get; set; }
     /// <summary>Frames of a moving camera whose kept terrain image did not cover the view, so the plain passes ran for the rest; the last such case described.</summary>
     public int TerrainUncovered { get; set; }
@@ -146,6 +148,7 @@ public sealed class RenderStats
         TerrainReused = 0;
         TerrainUncovered = 0; TerrainUncoveredDetail = "";
         TerrainRefinementsPending = 0;
+        HexChunksPending = 0;
         TerrainRefinementBuildMilliseconds = 0;
         TilesReused = 0;
         StampSingleMilliseconds = 0;
@@ -273,6 +276,9 @@ public sealed class RenderOptions
 
     /// <summary>The hexes the hex tool would touch, outlined under the pointer.</summary>
     public HexCursorPreview? HexCursor { get; init; }
+
+    /// <summary>A hex drag is running: changed hex chunks are drawn directly, their kept images follow at release.</summary>
+    public bool HexGestureLive { get; init; }
 
     /// <summary>
     /// Reuse of the land coverage rivers were already carved out of. Absent (export, tests) the
@@ -1742,7 +1748,7 @@ public static class SceneRenderer
 
             case HexLayer hexLayer:
                 HexLayerRenderer.Draw(canvas, hexLayer, view, options.ViewScale, options.HexChunks,
-                    options.GpuContext, options.HexCursor, options.IsExport);
+                    options.GpuContext, options.HexCursor, options.IsExport, options.RequestRefinedFrame, options.Stats, options.HexGestureLive);
                 break;
 
             case IRasterContentLayer raster:
