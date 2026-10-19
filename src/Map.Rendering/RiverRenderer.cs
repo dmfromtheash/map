@@ -487,9 +487,15 @@ public static class RiverRenderer
                 result.Dispose();
                 result = merged;
             }
+            else if (RobustPathOps.TryUnion(result, parts[i].Body, merged))
+            {
+                // A degenerate operand (DEC-051): the topology fallback resolves the union.
+                result.Dispose();
+                result = merged;
+            }
             else
             {
-                // A degenerate operand: keep both outlines in one path rather than lose water.
+                // Keep both outlines in one path rather than lose water.
                 merged.Dispose();
                 result.AddPath(parts[i].Body);
             }
@@ -581,7 +587,8 @@ public static class RiverRenderer
             else
             {
                 using var merged = new SKPath();
-                if (union.Op(channel, SKPathOp.Union, merged)) { union.Reset(); union.AddPath(merged); }
+                if (union.Op(channel, SKPathOp.Union, merged)
+                    || RobustPathOps.TryUnion(union, channel, merged)) { union.Reset(); union.AddPath(merged); }
                 else union.AddPath(channel);
             }
         }
@@ -627,9 +634,9 @@ public static class RiverRenderer
             using var around = new SKPath();
             around.AddCircle((float)at.X, (float)at.Y, radius);
             using var outside = new SKPath();
-            if (!around.Op(shore, SKPathOp.Difference, outside)) return;
+            if (!around.Op(shore, SKPathOp.Difference, outside) && !RobustPathOps.TryDifference(around, shore, outside)) return;
             using var trimmed = new SKPath();
-            if (!path.Op(outside, SKPathOp.Difference, trimmed) || trimmed.IsEmpty) return;
+            if ((!path.Op(outside, SKPathOp.Difference, trimmed) && !RobustPathOps.TryDifference(path, outside, trimmed)) || trimmed.IsEmpty) return;
             path.Reset();
             path.AddPath(trimmed);
         }

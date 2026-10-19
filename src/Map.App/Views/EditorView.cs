@@ -8168,6 +8168,8 @@ public sealed partial class EditorView : UserControl
                     _exportModeButtons, _editor.SetExportOutputMode),
                 Choice("ExportTilesButton", "Пакет тайлов", ExportOutputMode.TilePackage,
                     _exportModeButtons, _editor.SetExportOutputMode),
+                Choice("ExportMbTilesButton", "MBTiles", ExportOutputMode.MbTiles,
+                    _exportModeButtons, _editor.SetExportOutputMode),
             },
         };
 

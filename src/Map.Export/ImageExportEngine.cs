@@ -84,13 +84,18 @@ public sealed class ImageExportEngine : IImageExporter
         try
         {
             using var tileCache = new TileImageCache(_settings.TileCacheCapacity);
-            return plan.OutputMode == ExportOutputMode.SingleImage
-                ? await ExportSingleAsync(
+            return plan.OutputMode switch
+            {
+                ExportOutputMode.SingleImage => await ExportSingleAsync(
                     snapshot, plan, destinationPath, stamps, tileCache, progress, cancellationToken)
-                    .ConfigureAwait(false)
-                : await ExportTilesAsync(
+                    .ConfigureAwait(false),
+                ExportOutputMode.MbTiles => await ExportMbTilesAsync(
                     snapshot, plan, destinationPath, stamps, tileCache, progress, cancellationToken)
-                    .ConfigureAwait(false);
+                    .ConfigureAwait(false),
+                _ => await ExportTilesAsync(
+                    snapshot, plan, destinationPath, stamps, tileCache, progress, cancellationToken)
+                    .ConfigureAwait(false),
+            };
         }
         catch (OperationCanceledException)
         {
@@ -109,6 +114,55 @@ public sealed class ImageExportEngine : IImageExporter
                 + "Попробуйте меньший размер, пакет тайлов или другую папку.", ex);
         }
     }, cancellationToken);
+
+    /// <summary>
+    /// MBTiles (DEC-051): the picture is streamed to a temporary PNG next to the destination, cut
+    /// into the viewing pyramid of <see cref="PngTilePyramid"/> and written as one SQLite file,
+    /// which is then moved into place. Working memory follows the streaming PNG and the pyramid.
+    /// </summary>
+    private async Task<ExportResult> ExportMbTilesAsync(
+        MapDocument snapshot,
+        ExportPlan plan,
+        string destinationPath,
+        IStampImageSource? stamps,
+        TileImageCache tileCache,
+        IProgress<ExportProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        var fullPath = Path.GetFullPath(destinationPath);
+        if (!fullPath.EndsWith(MbTilesWriter.Extension, StringComparison.OrdinalIgnoreCase))
+            throw new ExportValidationException("Файл MBTiles должен иметь расширение .mbtiles.");
+        var directory = Path.GetDirectoryName(fullPath)
+            ?? throw new ExportValidationException("Укажите папку для файла MBTiles.");
+        var work = Path.Combine(directory, "." + Path.GetFileName(fullPath) + "." + Guid.NewGuid().ToString("N") + ".tmp");
+        Directory.CreateDirectory(work);
+        try
+        {
+            var png = Path.Combine(work, "picture.png");
+            await ExportSingleAsync(snapshot, plan with { OutputMode = ExportOutputMode.SingleImage }, png, stamps,
+                tileCache, new ScaledProgress(progress, 0, 0.6), cancellationToken).ConfigureAwait(false);
+            Report(progress, ExportPhase.EncodingAndWriting, 0.6, "Построение пирамиды тайлов…");
+            var pyramid = await PngTilePyramid.OpenUnderHeavyAsync(png, Path.Combine(work, "pyramid"),
+                new ScaledProgress(progress, 0.6, 0.85), cancellationToken, _settings).ConfigureAwait(false);
+            var temporary = Path.Combine(work, "result" + MbTilesWriter.Extension);
+            var tiles = MbTilesWriter.Write(pyramid, temporary, snapshot.Title, cancellationToken,
+                fraction => Report(progress, ExportPhase.Finalizing, 0.85 + fraction * 0.13, "Запись MBTiles…"));
+            _settings.FaultInjector?.Invoke(ExportFaultPoint.BeforeFinalize);
+            File.Move(temporary, fullPath, overwrite: true);
+            Report(progress, ExportPhase.Completed, 1, "Экспорт завершён.");
+            return new ExportResult(fullPath, ExportOutputMode.MbTiles, tiles);
+        }
+        finally
+        {
+            TryDeleteDirectory(work);
+        }
+    }
+
+    private sealed class ScaledProgress(IProgress<ExportProgress>? inner, double start, double end) : IProgress<ExportProgress>
+    {
+        public void Report(ExportProgress value) =>
+            inner?.Report(new ExportProgress(value.Phase, start + Math.Clamp(value.Fraction, 0, 1) * (end - start), value.Message));
+    }
 
     private async Task<ExportResult> ExportSingleAsync(
         MapDocument snapshot,

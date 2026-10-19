@@ -27,9 +27,23 @@ public sealed record PngTilePyramid(string DirectoryPath, int Width, int Height,
         return Path.Combine(DirectoryPath, level.ToString(), $"{column}_{row}.png");
     }
 
-    public static async Task<PngTilePyramid> OpenAsync(string sourcePath, string cacheRoot,
+    public static Task<PngTilePyramid> OpenAsync(string sourcePath, string cacheRoot,
         IProgress<ExportProgress>? progress = null, CancellationToken cancellationToken = default,
-        ExportEngineSettings? settings = null)
+        ExportEngineSettings? settings = null) =>
+        OpenAsync(sourcePath, cacheRoot, progress, cancellationToken, settings, insideHeavyOperation: false);
+
+    /// <summary>
+    /// Builds the pyramid for a caller that already holds the heavy-operation slot (the MBTiles
+    /// export). The slot is one named mutex for every Map process, so entering it again from
+    /// inside would wait on itself forever — and keep every other window from saving meanwhile.
+    /// </summary>
+    internal static Task<PngTilePyramid> OpenUnderHeavyAsync(string sourcePath, string cacheRoot,
+        IProgress<ExportProgress>? progress, CancellationToken cancellationToken, ExportEngineSettings? settings) =>
+        OpenAsync(sourcePath, cacheRoot, progress, cancellationToken, settings, insideHeavyOperation: true);
+
+    private static async Task<PngTilePyramid> OpenAsync(string sourcePath, string cacheRoot,
+        IProgress<ExportProgress>? progress, CancellationToken cancellationToken,
+        ExportEngineSettings? settings, bool insideHeavyOperation)
     {
         progress?.Report(new(ExportPhase.Preparing, 0, "Подготовка просмотра…"));
         await BuildGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -45,8 +59,10 @@ public sealed record PngTilePyramid(string DirectoryPath, int Width, int Height,
             var estimate = sourceBytes > 0
                 ? Math.Max(4 * Map.Core.Resources.WorkingMemoryBudget.MiB, sourceBytes * 6)
                 : Map.Core.Resources.WorkingMemoryBudget.HeavyReserveBytes;
-            using var reservation = await Map.Core.Resources.WorkingMemoryBudget.Shared
-                .EnterHeavyAsync(cancellationToken, estimate).ConfigureAwait(false);
+            using var reservation = insideHeavyOperation
+                ? null
+                : await Map.Core.Resources.WorkingMemoryBudget.Shared
+                    .EnterHeavyAsync(cancellationToken, estimate).ConfigureAwait(false);
             return await Task.Run(() => OpenCore(sourcePath, cacheRoot, progress, cancellationToken,
                 settings ?? new ExportEngineSettings()), cancellationToken).ConfigureAwait(false);
         }

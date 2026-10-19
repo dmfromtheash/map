@@ -661,7 +661,8 @@ public static class RoadRenderer
         for (var i = 1; i < parts.Count; i++)
         {
             var merged = new SKPath();
-            if (result.Op(parts[i], SKPathOp.Union, merged)) { result.Dispose(); result = merged; }
+            if (result.Op(parts[i], SKPathOp.Union, merged)
+                || RobustPathOps.TryUnion(result, parts[i], merged)) { result.Dispose(); result = merged; }
             else { merged.Dispose(); result.AddPath(parts[i]); }
         }
         return result;
@@ -715,7 +716,8 @@ public static class RoadRenderer
             for (var i = 1; i < wedge.Count; i++) polygon.LineTo((float)wedge[i].X, (float)wedge[i].Y);
             polygon.Close();
             var merged = new SKPath();
-            if (result.Op(polygon, SKPathOp.Union, merged)) { result.Dispose(); result = merged; }
+            if (result.Op(polygon, SKPathOp.Union, merged)
+                || RobustPathOps.TryUnion(result, polygon, merged)) { result.Dispose(); result = merged; }
             else merged.Dispose();
         }
         return result;

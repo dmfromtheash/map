@@ -297,12 +297,17 @@ public sealed partial class EditorViewModel
         }
 
         var suggestedBase = SafeExportName(snapshot.Title);
-        var destination = plan.OutputMode == ExportOutputMode.SingleImage
-            ? await _exportDestinationPicker.PickImageAsync(
+        var destination = plan.OutputMode switch
+        {
+            ExportOutputMode.SingleImage => await _exportDestinationPicker.PickImageAsync(
                 $"{suggestedBase}.{ImageExportEngine.Extension(plan.Format)}", plan.Format)
-                .ConfigureAwait(true)
-            : await _exportDestinationPicker.PickTilePackageAsync($"{suggestedBase}-tiles")
-                .ConfigureAwait(true);
+                .ConfigureAwait(true),
+            ExportOutputMode.MbTiles => await _exportDestinationPicker.PickFileAsync(
+                suggestedBase + MbTilesWriter.Extension, "mbtiles", "MBTiles — пирамида тайлов в одном файле")
+                .ConfigureAwait(true),
+            _ => await _exportDestinationPicker.PickTilePackageAsync($"{suggestedBase}-tiles")
+                .ConfigureAwait(true),
+        };
         if (string.IsNullOrWhiteSpace(destination))
         {
             return false;
@@ -343,9 +348,12 @@ public sealed partial class EditorViewModel
                 _exportRunCancellation.Token), _exportRunCancellation.Token).ConfigureAwait(true);
             _exportResultPath = result.DestinationPath;
             _exportResultMode = result.OutputMode;
-            _exportResultText = result.OutputMode == ExportOutputMode.SingleImage
-                ? $"Готово: {result.DestinationPath}"
-                : $"Готов пакет ({result.FileCount - 1} тайлов): {result.DestinationPath}";
+            _exportResultText = result.OutputMode switch
+            {
+                ExportOutputMode.SingleImage => $"Готово: {result.DestinationPath}",
+                ExportOutputMode.MbTiles => $"Готов MBTiles ({result.FileCount} тайлов): {result.DestinationPath}",
+                _ => $"Готов пакет ({result.FileCount - 1} тайлов): {result.DestinationPath}",
+            };
             _log.Info($"EXPORT_SUCCEEDED mode={result.OutputMode}");
             return true;
         }

@@ -10,7 +10,9 @@ using FlaUI.Core.WindowsAPI;
 using FlaUI.UIA3;
 
 // Live pass over the real Map.App.exe through UI Automation. Usage:
-//   dotnet run --project tools/Map.LiveCheck -c Release -- [--exe <Map.App.exe>] [--out <folder>]
+//   dotnet run --project tools/Map.LiveCheck -c Release -- [--exe <Map.App.exe>] [--out <folder>] [--map <file.mapproj>]
+// With --map the file is copied into the isolated profile and opened from the command line; the
+// pass then opens the export window, dumps and screenshots it and checks the three output modes.
 // Exit code 0: every step found its element; 2: a step could not find its element (screenshots
 // and the UIA tree are still written); 1: the program did not start or crashed.
 var root = FindRepoRoot();
@@ -35,6 +37,19 @@ var profile = Path.Combine(outDir, "profile");
 Directory.CreateDirectory(Path.Combine(profile, "Maps"));
 Directory.CreateDirectory(Path.Combine(profile, "Recovery"));
 var start = new ProcessStartInfo(exe) { WorkingDirectory = Path.GetDirectoryName(exe)!, UseShellExecute = false };
+var mapArgument = Arg("--map");
+if (mapArgument is not null)
+{
+    if (!File.Exists(mapArgument))
+    {
+        Log($"FAIL: no map at {mapArgument}");
+        return 1;
+    }
+
+    var copy = Path.Combine(profile, "Maps", Path.GetFileName(mapArgument));
+    File.Copy(mapArgument, copy, overwrite: true);
+    start.ArgumentList.Add(copy);
+}
 start.Environment["MAP_UI_TEST_MODE"] = "1";
 start.Environment["MAP_UI_TEST_PROFILE_ROOT"] = profile;
 start.Environment["MAP_UI_TEST_RECOVERY_ROOT"] = Path.Combine(profile, "Recovery");
@@ -51,6 +66,63 @@ try
 
     var main = app.GetMainWindow(automation, TimeSpan.FromSeconds(60));
     Log($"main window '{main.Title}' after {clock.ElapsedMilliseconds} ms");
+
+    if (mapArgument is not null)
+    {
+        // The map given on the command line opens straight into the workshop.
+        var export = Retry.WhileNull(() => main.FindFirstDescendant(cf => cf.ByAutomationId("ExportButton")),
+            TimeSpan.FromSeconds(90), TimeSpan.FromMilliseconds(250)).Result;
+        Log(export is null ? "MISSING: ExportButton (workshop did not open the map)" : $"workshop with the map after {clock.ElapsedMilliseconds} ms");
+        if (export is null) missing++;
+        Thread.Sleep(1500);
+        Dump(main, Path.Combine(outDir, "ui-tree-workshop.txt"));
+        Shot(main, Path.Combine(outDir, "10-workshop.png"));
+        if (export is not null)
+        {
+            export.AsButton().Invoke();
+            var pid2 = app.ProcessId;
+            var desktop2 = automation.GetDesktop();
+            var exportWindow = Retry.WhileNull(() => desktop2
+                    .FindAllChildren(cf => cf.ByProcessId(pid2).And(cf.ByControlType(FlaUI.Core.Definitions.ControlType.Window)))
+                    .Select(e => e.AsWindow())
+                    .FirstOrDefault(w => w.AutomationId == "ExportWorkflowWindow" || w.FindFirstDescendant(cf => cf.ByAutomationId("StartExportButton")) is not null),
+                TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(250)).Result;
+            if (exportWindow is null)
+            {
+                missing++;
+                Log("MISSING: export window (StartExportButton)");
+            }
+            else
+            {
+                Thread.Sleep(1000);
+                Log($"export window '{exportWindow.Title}' after {clock.ElapsedMilliseconds} ms");
+                Dump(exportWindow, Path.Combine(outDir, "ui-tree-export.txt"));
+                Shot(exportWindow, Path.Combine(outDir, "11-export.png"));
+                foreach (var id in new[] { "ExportSingleButton", "ExportTilesButton", "ExportMbTilesButton", "StartExportButton", "CloseExportButton" })
+                {
+                    var part = exportWindow.FindFirstDescendant(cf => cf.ByAutomationId(id));
+                    Log(part is null ? $"MISSING: {id}" : $"found {id}: '{part.Name}'");
+                    if (part is null) missing++;
+                }
+
+                var mbtiles = exportWindow.FindFirstDescendant(cf => cf.ByAutomationId("ExportMbTilesButton"));
+                if (mbtiles is not null)
+                {
+                    mbtiles.AsButton().Invoke();
+                    Thread.Sleep(800);
+                    Shot(exportWindow, Path.Combine(outDir, "12-export-mbtiles.png"));
+                }
+
+                exportWindow.FindFirstDescendant(cf => cf.ByAutomationId("CloseExportButton"))?.AsButton().Invoke();
+                Thread.Sleep(500);
+            }
+        }
+
+        try { main.Close(); } catch (FlaUI.Core.Exceptions.ElementNotEnabledException) { }
+        for (var i = 0; i < 20 && !app.HasExited; i++) Thread.Sleep(500);
+        Log(app.HasExited ? $"closed after {clock.ElapsedMilliseconds} ms" : "program still running after close; killing it");
+        return missing switch { 0 => 0, < 0 => 1, _ => 2 };
+    }
 
     // The library page is ready when its create button is in the tree.
     var create = Retry.WhileNull(() => main.FindFirstDescendant(cf => cf.ByAutomationId("RailCreateButton")),

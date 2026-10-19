@@ -1,4 +1,57 @@
 ﻿# STATE_HANDOFF — актуальное состояние Map
+## Актуально на 2026-10-19 (поздняя ночь) — DEC-051: протокол этапа, NetTopologySuite, MBTiles, Visual Studio
+
+**FACT.** По поручению владельца («устанавливай» оставшиеся кандидаты; «детально изучи все инструкции,
+плагины, скиллы, инструменты… сделай отдельную самую приоритетную инструкцию с обязательными
+чек-листами при работе над каждым этапом и отчётом по каждому пункту»). Решение — DEC-051.
+- **Протокол:** `docs/00_STAGE_PROTOCOL.md` — чек-листы A–G, стоп-условия H, отвергнутые подходы I,
+  давние падения J, действующие разрешения владельца K, подводные камни L, шпаргалка M. Ссылки:
+  `AGENTS.md` (приоритет 2), `CLAUDE.md`, `CODEX.md`, `docs/00_START_HERE.md`, `docs/ai/PROMPT_*.md`.
+  Источники изучения (вне Git): `study_governance.md`, `study_tooling.md`, `study_memory.md`
+  (конспекты AGENTS/CODEX/00–10/ai/skills/tools/handoff/памяти; 14 противоречий документов — в
+  конспекте governance §8: GitHub «заморожено» vs DEC-050, DESIGN_SYSTEM описывает Blue Atlas,
+  `00_START_HERE` говорит schema v9, `pwsh` отсутствует и т. п.; документы не правились молча).
+- **NetTopologySuite 2.6.0:** `Map.Core/Geometry/PolygonTopology.cs` (Union/Difference/Area, починка
+  колец `GeometryFixer`, `OverlayNGRobust`), `Map.Rendering/RobustPathOps.cs` (SKPath ↔ кольца,
+  сохранение направления обхода первого операнда — иначе последующие `AddPath` в nonzero-путь
+  взаимно гасились; `MAP_ROBUST_PATHOPS=0` отключает для A/B). Подключено в `RiverRenderer`
+  (UnionOf, BuildBody, TrimAtLake) и `RoadRenderer` (UnionOf, JoinFillets) только на ветках, где
+  `SKPath.Op` возвращает false.
+- **MBTiles:** `ExportOutputMode.MbTiles`, кнопка «MBTiles» (`ExportMbTilesButton`),
+  `Map.Export/MbTilesWriter.cs` (Microsoft.Data.Sqlite 10.0.13), `ImageExportEngine.ExportMbTilesAsync`
+  (PNG → `PngTilePyramid` → SQLite → `File.Move`), только PNG. Документ: `docs/STAGE_12C_FULL_EXPORT.md §8`.
+- **Дедлок (найден и исправлен):** `WorkingMemoryBudget.HeavyGate` — именованный мьютекс на все
+  процессы Map; `PngTilePyramid.OpenAsync` входил в него повторно изнутри экспорта → тест висел
+  15 мин и, держа мьютекс, блокировал сохранение в параллельных смоуках `native-stage17/18`
+  («Сохранение…» без конца). Добавлен `PngTilePyramid.OpenUnderHeavyAsync`.
+- **Map.LiveCheck:** `--map <файл>` — карта открывается из командной строки, проход открывает окно
+  экспорта, снимает и проверяет `ExportSingleButton/ExportTilesButton/ExportMbTilesButton/
+  StartExportButton/CloseExportButton`, выбирает MBTiles.
+- **Проверено (FACT):** Release 0 ошибок (анализаторы — предупреждения); `PolygonTopologyTests` 4/4;
+  `RobustPathOpsTests` 4/4; `MbTilesExportTests` 3/3 (300×200 → 1 тайл z0; 2100×1100 → 9 тайлов,
+  maxzoom 2, TMS-строка); `PngTilePyramidTests`+`Stage12CExportTests` 19/19; Rendering
+  Stage19/20/River/Road 53/57 — падают `A_lake_outflow…` ×2, `Water_runs_past…`,
+  `Stage19EstuaryScenarioTests.A_tributary…` (строка 184, пробка озера) — все четыре и с
+  `MAP_ROBUST_PATHOPS=0`, т. е. не от DEC-051; живой проход `Map.LiveCheck --map ordinary-map-copy`:
+  мастерская 51 элемент, окно экспорта 65 элементов, три режима найдены, выход 0
+  (`artifacts/live-check-2026-10-19-export/`).
+- **Смоуки (FACT, не регрессия DEC-051):** `native-stage18` после починки дедлока — 12/12 проверок,
+  затем падает на `FutureStampScaleSlider` (элемента нет после переделок панелей); `native-stage17` —
+  11/12 (`reopened-path-appearance-controls`) и требует `MAP_STAGE17_FIXTURE`. Оба профиля не
+  запускались с сентября; A/B на базовом коммите не делалось (NOT CHECKED), падения — до шага экспорта.
+- **Visual Studio 2026 Community:** `winget install --id Microsoft.VisualStudio.Community` с
+  workload ManagedDesktop запущен, но прерван системой (Claude Code остановил фоновые процессы
+  при нехватке памяти, 5 ГБ свободно после); `C:\Program Files\Microsoft Visual Studio` нет.
+  Повторный запуск — по слову владельца (команда в DEC-051/README протокола).
+- **Версия:** `VersionPrefix` 0.3.0 (новый режим экспорта), тег `v0.3.0` → `release.yml`.
+- **NOT CHECKED:** живой просмотр владельцем; MBTiles в стороннем просмотрщике (MapLibre/Leaflet с
+  `tileSize: 1024`, CRS Simple); экспорт MBTiles карты 131072² (память: PNG потоковый, пирамида
+  построчная — ожидается в бюджете, не измерено); действие fallback NTS на настоящих реках владельца
+  (ветка срабатывает только при отказе Skia; `RobustPathOps.Fallbacks` — счётчик).
+- **Следующий шаг (PROPOSED):** завершить установку Visual Studio при свободной памяти; починить
+  четыре давних падения пробки озера в `RiverRenderer.TrimAtLake` (fallback NTS их не лечит —
+  причина в логике обрезки, не в булевых операциях); обновить устаревшие профили `native-stage17/18`.
+
 ## Актуально на 2026-10-19 (ночь) — DEC-050: инструменты из вакансий, публичный GitHub, скачиваемая сборка
 
 **FACT.** По поручению владельца (ресёрч 200 вакансий → «установи всё это, внедри и проверь», «выложи

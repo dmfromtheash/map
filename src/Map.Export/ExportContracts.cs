@@ -21,6 +21,8 @@ public enum ExportOutputMode
 {
     SingleImage,
     TilePackage,
+    /// <summary>One .mbtiles file with a tile pyramid of the PNG picture (DEC-051).</summary>
+    MbTiles,
 }
 
 public enum ExportPhase
@@ -86,7 +88,7 @@ public sealed record ExportPlan(
 
     public int TileCount => checked(Columns * Rows);
     public bool IncludesBackground => !TransparentBackground;
-    public bool UsesStreamingPng => Format == ExportImageFormat.Png && OutputMode == ExportOutputMode.SingleImage;
+    public bool UsesStreamingPng => Format == ExportImageFormat.Png && OutputMode is ExportOutputMode.SingleImage or ExportOutputMode.MbTiles;
     public int RasterTileHeight => UsesStreamingPng ? Math.Min(TileEdge, 512) : TileEdge;
 
     // A complete sibling result and one temporary row of raw tiles coexist until publication.
