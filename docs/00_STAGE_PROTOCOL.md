@@ -203,6 +203,11 @@ updater, подпись, новый remote/Project/issue, изменение п�
 - Снимки смоуков — рендер контрола, не монитор; `gatePassed` ≠ 40 FPS ≠ приёмка владельца.
 - `Map.App.exe` владельца держит Release-выход: пересборка после закрытия.
 - Классификатор auto-mode блокирует связки `git push … && gh …` — по одной команде.
+- Профилировщик VS `CpuUsageHigh` (4000 выборок/с) снижает FPS в 2–4 раза: под ним верны только доли
+  времени; FPS — без профилировщика или с `CpuUsageBase`. `.etl` из `-Expand` читается ETW-инструментами
+  (символы: `C:\SymCache`, `srv*C:\Symbols*https://msdl.microsoft.com/download/symbols`).
+- Снимки только через `PrintWindow` (`mapwin.ps1`, `Map.LiveCheck`); `Capture.Element`/копия экрана сохраняет
+  чужое окно, если Map перекрыт (2026-10-19 так попала переписка владельца).
 
 ## M. Шпаргалка команд
 
@@ -214,6 +219,7 @@ dotnet build tools/Map.Performance -c Release
 dotnet tools/Map.Performance/bin/Release/net10.0/win-x64/Map.Performance.dll --profile native-<x> --output artifacts/<тема>-<дата>/<x>.json
 dotnet run --project tools/Map.LiveCheck -c Release -- --out artifacts/live-check-<дата>
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/ai/live/renderdoc-capture.ps1 -Map <.mapproj> -Frames 10 -Out artifacts/renderdoc-<дата>
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/ai/live/vs-profile.ps1 -Scenario native-paint-perf -Agent CpuUsageBase -Vars "MAP_HEX_STRESS=1;MAP_PAINT_W=2560;MAP_PAINT_H=1369" -Out artifacts/vs-profile-<дата> -Expand
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/ai/publish-local-r2r.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/release/publish-release.ps1
 gh run list --limit 3 ; gh run watch <id> --exit-status

@@ -1,4 +1,62 @@
 ﻿# STATE_HANDOFF — актуальное состояние Map
+## Актуально на 2026-10-19 (вечер) — проверка программы новыми инструментами (VS 2026, RenderDoc, FlaUI, анализаторы, CI)
+
+**FACT.** По поручению владельца («нужно установить этот вижуал студио»; «а теперь сделай проверку нашей
+программы новыми инструментами»). Код продукта не менялся; изменены только инструменты проверки.
+- **Visual Studio 2026 Community 18.11.12306.390** установлена (`C:\Program Files\Microsoft Visual
+  Studio\18\Community`): ManagedDesktop + рекомендуемые, `Component.DiagnosticTools` (профилировщик
+  CPU/GPU Usage/Memory), `Component.Graphics.Tools`. Ставить длинные установки отдельным процессом
+  (`Start-Process winget …`), не фоновой задачей сессии — иначе её снимает чистильщик памяти Claude Code.
+- **Новый скрипт `tools/ai/live/vs-profile.ps1`:** профилировщик VS из командной строки
+  (`VSDiagnostics.exe`, агенты из `…\DiagnosticsHub\Collector\AgentConfigs`) по любому смоуку
+  `Map.Performance` в изолированном профиле → `.diagsession` (открывается в VS) и, с `-Expand`, `.etl`.
+- **Исправлен `tools/Map.LiveCheck`:** снимки делались `Capture.Element` — копией прямоугольника
+  экрана; если окно Map было перекрыто, в PNG попадало чужое окно (в этом прогоне — переписка в
+  Telegram; файл сразу удалён, в Git `artifacts/` не входит). Теперь все видимые окна процесса Map
+  рисуют себя через `PrintWindow(…, 2)` снизу вверх (диалоги и всплывающие окна поверх видны,
+  чужие окна — нет).
+
+**Проверено (FACT):**
+- Release `Map.slnx`: 0 ошибок, 231 уникальное предупреждение (CA1859 151, CA1305 15, CA1806 9,
+  CA1822 8, …). Значимые: **CA1001** — `DashboardViewModel._openGate`, `EditorViewModel` (5 CTS/гейтов),
+  `EditorView` (`_checkpointPreviews`, `_exportPreviewBitmap`, `_fillAreaThumbnail`, `_thumbnails`),
+  `HexPlayerCanvas` (`_bitmap`, `_cache`), `PngMapWindow._cancellation` — владеют освобождаемыми
+  объектами без `Dispose` (возможная утечка нативной памяти при закрытии окон; NOT CHECKED в живой
+  программе); **CA1806** — `UiAudioOutput` не проверяет коды `waveOut*`; `NewMapWizardViewModel`
+  игнорирует `TryParse*`; **CS0618** — устаревшие `Bitmap.Save(…, int?)`, `TextBox.Watermark`.
+  Журнал: `artifacts/tools-check-2026-10-19/build.log`.
+- **Профилировщик VS (CpuUsageHigh) на `native-paint-perf` + `MAP_HEX_STRESS=1`, 2560×1369,
+  `MAP_MEASURE_GPU_FLUSH=1`**: 52 маршрута, gate PASS; 138 с CPU за 77 с. Разбор `.etl` (ETW):
+  libSkiaSharp 59 с (43 %), clrjit 10 с (JIT смоука без R2R), coreclr 13 с. Потоки: отрисовка 34 с
+  (Skia GPU + ANGLE `av_libglesv2` 5,9 с + драйвер NVIDIA; кода Map там < 0,6 с), две фоновые сборки
+  картинок гексовых кусков по 26 с, UI 26 с (раскладка Avalonia 1,8 с, `SyncAppearanceSections`
+  0,56 с). **Главное: `HexLayerRenderer.DrawTransitions` (→ `Band`) — 33 с включительно, 24 % всего
+  CPU и ~63 % фоновой сборки кусков**; именно она задерживает появление деталей после зума/панорамы.
+- **Цена профилировщика:** тот же сценарий без него — FPS в 2–4 раза выше (hex512 drag-r3 11,8 → 57,2;
+  hex128 zoom-in 8,0 → 24,5; pan-12px 19,1 → 63,6). Абсолютные FPS под CpuUsageHigh (4000 выборок/с)
+  недостоверны — только доли времени; для FPS брать `CpuUsageBase` (100/с) или прогон без профилировщика.
+  Без профилировщика hex512 drag-r3 57 FPS — как в a47ed46 (52–60), регрессии нет.
+- **RenderDoc** (`renderdoc-capture.ps1`, hex512, кадры 12 и 62): 348/398 вызовов Draw и 285/335
+  `UpdateSubresource` на кадр (кадры во время загрузки карты; установившийся режим NOT CHECKED).
+- **FlaUI** `Map.LiveCheck --map hex128-stress.mapproj`: мастерская 44 элемента, окно экспорта 57,
+  пять кнопок найдены, MBTiles выбирается, выход 0; снимки просмотрены — только окна Map.
+  Первый запуск один раз упал на `UIA Timeout` в `GetMainWindow` (ПК, 1,7–2,8 ГБ свободно), повтор зелёный.
+- Адресные тесты: `MbTilesExportTests` 3/3, `PolygonTopologyTests` 4/4, `RobustPathOpsTests` 4/4,
+  `WorkingMemoryBudgetTests` 9/9; весь `Map.Core.Tests` 409/409.
+- **CI:** прогон `39281120154` (ветка, коммит 2daabe5) упал в воротах на 3 тестах
+  `WorkingMemoryBudgetTests` (5-секундные тайм-ауты), тот же коммит на `main` (`39281134267`) — зелёный.
+  `Rejected_heavy_operation…` получил `TimeoutException` вместо `InvalidOperationException`: задача
+  `Task.Run` в `EnterHeavyAsync` не стартовала за 5 с. **ASSUMPTION:** голодание пула потоков на 2 vCPU
+  раннера (держатель мьютекса блокирует поток пула `released.Wait()` на весь срок аренды).
+
+**NOT CHECKED:** живой просмотр владельцем; GPU Usage профилировщика (только в окне VS, не из CLI);
+установившийся кадр в RenderDoc; реальный файл MBTiles в стороннем просмотрщике; утечки по CA1001.
+
+**Следующий шаг (PROPOSED):** (1) ускорить фоновые полосы переходов гексов (`DrawTransitions/Band`,
+24 % CPU) — например, готовые картинки полос на пару местностей; (2) `EnterHeavyAsync` — отдельный
+поток (`TaskCreationOptions.LongRunning`) вместо потока пула, затем убедиться в стабильности CI;
+(3) закрыть CA1001 в `HexPlayerCanvas`/`PngMapWindow`/`EditorView`. Всё — по решению владельца.
+
 ## Актуально на 2026-10-19 (поздняя ночь) — DEC-051: протокол этапа, NetTopologySuite, MBTiles, Visual Studio
 
 **FACT.** По поручению владельца («устанавливай» оставшиеся кандидаты; «детально изучи все инструкции,
@@ -39,16 +97,17 @@
   затем падает на `FutureStampScaleSlider` (элемента нет после переделок панелей); `native-stage17` —
   11/12 (`reopened-path-appearance-controls`) и требует `MAP_STAGE17_FIXTURE`. Оба профиля не
   запускались с сентября; A/B на базовом коммите не делалось (NOT CHECKED), падения — до шага экспорта.
-- **Visual Studio 2026 Community:** `winget install --id Microsoft.VisualStudio.Community` с
-  workload ManagedDesktop запущен, но прерван системой (Claude Code остановил фоновые процессы
-  при нехватке памяти, 5 ГБ свободно после); `C:\Program Files\Microsoft Visual Studio` нет.
-  Повторный запуск — по слову владельца (команда в DEC-051/README протокола).
+- **Visual Studio 2026 Community (FACT, 2026-10-19 вечер):** установлена по слову владельца —
+  18.11.12306.390, `C:\Program Files\Microsoft Visual Studio8\Community`, workload ManagedDesktop
+  + рекомендуемые, `Component.DiagnosticTools` (профилировщик CPU/GPU Usage/Memory) и
+  `Component.Graphics.Tools`. Запуск winget отдельным процессом (`Start-Process`), а не фоновой
+  задачей сессии — иначе его убивает чистильщик памяти Claude Code.
 - **Версия:** `VersionPrefix` 0.3.0 (новый режим экспорта), тег `v0.3.0` → `release.yml`.
 - **NOT CHECKED:** живой просмотр владельцем; MBTiles в стороннем просмотрщике (MapLibre/Leaflet с
   `tileSize: 1024`, CRS Simple); экспорт MBTiles карты 131072² (память: PNG потоковый, пирамида
   построчная — ожидается в бюджете, не измерено); действие fallback NTS на настоящих реках владельца
   (ветка срабатывает только при отказе Skia; `RobustPathOps.Fallbacks` — счётчик).
-- **Следующий шаг (PROPOSED):** завершить установку Visual Studio при свободной памяти; починить
+- **Следующий шаг (PROPOSED):** первый замер профилировщиком VS (GPU Usage) на протяжке гексов r3 / зуме; починить
   четыре давних падения пробки озера в `RiverRenderer.TrimAtLake` (fallback NTS их не лечит —
   причина в логике обрезки, не в булевых операциях); обновить устаревшие профили `native-stage17/18`.
 

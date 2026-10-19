@@ -3,7 +3,6 @@ using System.Globalization;
 using System.Text;
 using FlaUI.Core;
 using FlaUI.Core.AutomationElements;
-using FlaUI.Core.Capturing;
 using FlaUI.Core.Input;
 using FlaUI.Core.Tools;
 using FlaUI.Core.WindowsAPI;
@@ -218,12 +217,45 @@ static string FindRepoRoot()
     return dir?.FullName ?? Directory.GetCurrentDirectory();
 }
 
+// Every visible window of Map draws itself into the picture (PrintWindow, as tools/ai/live/mapwin.ps1
+// does), bottom to top, so dialogs and popups over the element's window are included. A screen copy
+// of the rectangle (Capture.Element) would save whatever other program covers Map.
 void Shot(AutomationElement element, string path)
 {
     try
     {
-        using var image = Capture.Element(element);
-        image.ToFile(path);
+        var handle = element.Properties.NativeWindowHandle.ValueOrDefault;
+        if (handle == IntPtr.Zero || !GetWindowRect(handle, out var rect))
+            throw new InvalidOperationException("the element has no window of its own");
+        GetWindowThreadProcessId(handle, out var pid);
+        var windows = new List<IntPtr>(); // top of the z-order first
+        EnumWindows((window, _) =>
+        {
+            if (IsWindowVisible(window) && GetWindowThreadProcessId(window, out var owner) != 0 && owner == pid)
+                windows.Add(window);
+            return true;
+        }, IntPtr.Zero);
+        windows.Reverse();
+        using var bitmap = new System.Drawing.Bitmap(rect.Right - rect.Left, rect.Bottom - rect.Top);
+        using (var graphics = System.Drawing.Graphics.FromImage(bitmap))
+        {
+            foreach (var window in windows)
+            {
+                if (!GetWindowRect(window, out var part) || part.Right <= part.Left || part.Bottom <= part.Top) continue;
+                using var layer = new System.Drawing.Bitmap(part.Right - part.Left, part.Bottom - part.Top);
+                using (var layerGraphics = System.Drawing.Graphics.FromImage(layer))
+                {
+                    var dc = layerGraphics.GetHdc();
+                    try
+                    {
+                        if (!PrintWindow(window, dc, 2)) continue;
+                    }
+                    finally { layerGraphics.ReleaseHdc(dc); }
+                }
+                graphics.DrawImageUnscaled(layer, part.Left - rect.Left, part.Top - rect.Top);
+            }
+        }
+        bitmap.Save(path, System.Drawing.Imaging.ImageFormat.Png);
         Log($"shot {Path.GetFileName(path)}");
     }
     catch (Exception error)
@@ -265,4 +297,27 @@ void Dump(AutomationElement rootElement, string path)
     Walk(rootElement, 0);
     File.WriteAllText(path, lines.ToString());
     Log($"ui tree {Path.GetFileName(path)}: {count} elements");
+}
+
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+static extern bool PrintWindow(IntPtr window, IntPtr dc, uint flags);
+
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+static extern bool GetWindowRect(IntPtr window, out WindowRect rect);
+
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+static extern bool EnumWindows(EnumWindowsProc callback, IntPtr parameter);
+
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+static extern bool IsWindowVisible(IntPtr window);
+
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+
+delegate bool EnumWindowsProc(IntPtr window, IntPtr parameter);
+
+[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+struct WindowRect
+{
+    public int Left, Top, Right, Bottom;
 }
