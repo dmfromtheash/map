@@ -8,6 +8,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Map.App.Controls;
 
 namespace Map.App.Views;
 
@@ -174,18 +175,59 @@ public sealed partial class EditorView
         header.Children.Add(box.Docked(Dock.Right));
         if (reset is not null) header.Children.Add(reset.Docked(Dock.Right));
         header.Children.Add(readout.Docked(Dock.Right));
-        header.Children.Add(caption);
-
-        var panel = new StackPanel { Margin = new Thickness(0, 2), Children = { header, slider } };
-        if (description is not null)
+        // The explanation is an "i" beside the name, read on hover: a paragraph under every slider
+        // made the land and river panels five screens long (audit 2026-10-19).
+        header.Children.Add(description is null ? caption : new StackPanel
         {
-            panel.Children.Add(new TextBlock
-            {
-                Text = description, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, -2, 0, 2),
-            }.Classed("faint", "role-caption"));
+            Orientation = Orientation.Horizontal, Spacing = 5, VerticalAlignment = VerticalAlignment.Center,
+            Children = { caption, Ui.InfoGlyph(description) },
+        });
+
+        return new StackPanel { Margin = new Thickness(0, 2), Children = { header, slider } };
+    }
+
+    /// <summary>
+    /// One action on the selected object as an icon (hide, lock, duplicate, delete): the stack of
+    /// full-width text buttons took a third of the selection block. The words live in the tooltip
+    /// and the accessible name, which change with the state (<see cref="SetActionIcon"/>).
+    /// </summary>
+    private static Button ActionIcon(string name, string text, string icon, Action action, bool danger = false)
+    {
+        var button = new Button
+        {
+            Content = MapIcons.Stroked(icon, 17), HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Center, MinHeight = 32, Padding = new Thickness(0),
+        }.Named(name).Classed("compact");
+        if (danger) button.Classes.Add("destructive");
+        SetActionIcon(button, text, icon);
+        button.Click += (_, _) => action();
+        return button;
+    }
+
+    /// <summary>Renames an action icon for its current state (Скрыть ↔ Показать) and swaps its glyph.</summary>
+    private static void SetActionIcon(Button button, string text, string icon)
+    {
+        if (button.Tag as string != icon)
+        {
+            button.Content = MapIcons.Stroked(icon, 17);
+            button.Tag = icon;
         }
 
-        return panel;
+        ToolTip.SetTip(button, text);
+        AutomationProperties.SetName(button, text);
+    }
+
+    /// <summary>The action icons of a selection in one row of equal cells, the destructive one last.</summary>
+    private static Control ActionRow(params Button[] actions)
+    {
+        var row = new Avalonia.Controls.Primitives.UniformGrid { Rows = 1, Columns = actions.Length };
+        foreach (var action in actions)
+        {
+            action.Margin = new Thickness(0, 0, 4, 0);
+            row.Children.Add(action);
+        }
+
+        return row;
     }
 
     /// <summary>
@@ -214,21 +256,18 @@ public sealed partial class EditorView
         ToolTip.SetTip(toggle, description);
         var body = new StackPanel { Spacing = 4, Margin = new Thickness(0, 2, 0, 0) };
         foreach (var setting in settings) body.Children.Add(setting);
+        // An effect that is off is one line; its settings open with it (the explanation is the
+        // switch's tooltip).
         _appearanceSyncs.Add(() =>
         {
             var on = strength() > 0;
             body.IsEnabled = on;
-            body.Opacity = on ? 1 : 0.55;
+            body.IsVisible = on && body.Children.Count > 0;
         });
         return new StackPanel
         {
             Spacing = 2,
-            Children =
-            {
-                toggle,
-                new TextBlock { Text = description, TextWrapping = TextWrapping.Wrap }.Classed("faint", "role-caption"),
-                body,
-            },
+            Children = { toggle, body },
         }.Named(name + "Section");
     }
 }

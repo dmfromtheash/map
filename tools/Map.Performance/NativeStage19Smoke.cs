@@ -161,6 +161,8 @@ public sealed partial class Stage19Application : Application
         { _report.Required = VttRequired; _report.Scenario = "vtt-export"; }
         if (Options.Profile == "native-color-presets")
         { _report.Required = ColorPresetRequired; _report.Scenario = "color-presets"; _window.Height = 1380; }
+        if (Options.Profile == "native-standard-panel-shots")
+        { _report.Required = ["standard-panel-shots-saved"]; _report.Scenario = "standard-panel-shots"; }
         if (Options.Profile == "native-panel-shots")
         { _report.Required = ["panel-shots-saved"]; _report.Scenario = "panel-shots"; _window.Height = 1380; }
         if (Options.Profile == "native-ui-shots")
@@ -218,6 +220,7 @@ public sealed partial class Stage19Application : Application
         if (_report.Scenario == "owner-art") { await OwnerArtOnly(); return; }
         if (_report.Scenario == "history-memory") { await HistoryMemoryOnly(); return; }
         if (_report.Scenario == "panel-shots") { await PanelShotsOnly(); return; }
+        if (_report.Scenario == "standard-panel-shots") { await StandardPanelShotsOnly(); return; }
         if (_report.Scenario == "ui-shots") { await UiShotsOnly(); return; }
         if (_report.Scenario == "color-presets") { await ColorPresetsOnly(); return; }
         if (_report.Scenario == "vtt-export") { await VttExportOnly(); return; }
@@ -999,6 +1002,7 @@ public sealed partial class Stage19Application : Application
     /// </summary>
     private T Find<T>(string name) where T : Control
     {
+        RevealTab(_view, name);
         for (var attempt = 0; attempt < 8; attempt++)
         {
             if (_view.GetVisualDescendants().OfType<T>().FirstOrDefault(c => c.Name == name) is { } found) return found;
@@ -1009,6 +1013,24 @@ public sealed partial class Stage19Application : Application
         }
         throw new InvalidOperationException($"{name} is not in the panel, even with every section opened");
     }
+    /// <summary>
+    /// Opens the panel tab a control lives in, the way a user would: a hidden host tagged
+    /// <c>Reveal:&lt;button&gt;</c> (see Ui.CategoryTabs) names the tab button that shows it.
+    /// The logical tree is searched because a hidden page is not templated yet.
+    /// </summary>
+    internal static void RevealTab(Control root, string name)
+    {
+        var target = Avalonia.LogicalTree.LogicalExtensions.GetLogicalDescendants(root).OfType<Control>().FirstOrDefault(c => c.Name == name);
+        if (target is null) return;
+        foreach (var ancestor in Avalonia.LogicalTree.LogicalExtensions.GetLogicalAncestors(target).OfType<Control>().Reverse())
+        {
+            if (ancestor.IsVisible || ancestor.Tag is not string tag || !tag.StartsWith("Reveal:", StringComparison.Ordinal)) continue;
+            var tab = Avalonia.LogicalTree.LogicalExtensions.GetLogicalDescendants(root).OfType<Button>().FirstOrDefault(b => b.Name == tag["Reveal:".Length..]);
+            tab?.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            root.UpdateLayout();
+        }
+    }
+
     private async Task Click(string name)
     { var button = Find<Button>(name); button.BringIntoView(); await Settle(); Require(button.IsEffectivelyVisible && button.IsEnabled, name + " is unavailable");
         button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Settle(); }

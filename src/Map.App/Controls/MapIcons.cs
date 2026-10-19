@@ -212,6 +212,13 @@ public static class MapIcons
     public static readonly string ModePath = "M3.5 18 C7.5 9 14.5 17 20.5 6 " + Ring(6, 14.5, 1.6) + Ring(12, 12.3, 1.6) + Ring(18, 8.8, 1.6);
     public static readonly string ModeArea = "M4 7 L11 3.5 L20 7.5 L18 18.5 L7 20 Z " + Ring(9, 10, 1.3) + Ring(14, 9, 1.3) + Ring(11, 14.5, 1.3) + Ring(15.5, 14, 1.3);
 
+    // Tool panel tabs of the standard constructor (2026-10-19).
+    public static readonly string LinePalette = "M12 3.5 A8.5 8.5 0 1 0 12 20.5 C13.4 20.5 13.8 19.4 13.2 18.4 C12.5 17.2 13.3 16 14.6 16 H16.5 A4 4 0 0 0 20.5 12 C20.5 7.3 16.7 3.5 12 3.5 Z " +
+        Ring(7.8, 11, 1.2) + Ring(10, 7.3, 1.2) + Ring(14.5, 7.3, 1.2);
+    public static readonly string LineGear = Ring(12, 12, 3) + "M12 3 V5.5 M12 18.5 V21 M3 12 H5.5 M18.5 12 H21 M5.6 5.6 L7.4 7.4 M16.6 16.6 L18.4 18.4 M5.6 18.4 L7.4 16.6 M16.6 7.4 L18.4 5.6";
+    public static readonly string LineStamp = Ring(8, 8, 4) + "M12.5 12.5 H20.5 V20.5 H12.5 Z";
+    public static readonly string LineList = "M8.5 6 H20 M8.5 12 H20 M8.5 18 H20 M4 6 H4.5 M4 12 H4.5 M4 18 H4.5";
+
     // Hex constructor panel (2026-10-19): its tabs, click modes and sections, same line style.
     public static readonly string HexPlace = "M10 3.5 L16.5 7.2 V14.8 L10 18.5 L3.5 14.8 V7.2 Z M18.5 13.5 V21.5 M14.5 17.5 H22.5";
     public static readonly string HexFill = "M4.5 11 L11 4.5 L18.5 12 L12 18.5 Z M4.5 11 H18 M8.5 7 L4 2.5 " +

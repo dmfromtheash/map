@@ -50,8 +50,8 @@ public sealed partial class EditorView
             key => _editor.RiverDrawMode = key == "Freehand" ? RiverDrawMode.Freehand : RiverDrawMode.Nodes);
         _riverModeButtons = modeButtons;
 
-        var (levels, levelButtons) = Ui.Segmented("WaterSelectionLevel",
-            [("System", "Вся система", null), ("Channel", "Русло / озеро", null), ("Node", "Узлы", null)],
+        var (levels, levelButtons) = Ui.TallSegmented("WaterSelectionLevel",
+            [("System", "Система", MapIcons.LineRiver), ("Channel", "Русло", MapIcons.ModePath), ("Node", "Узлы", MapIcons.ModeSeries)],
             key => _editor.WaterLevel = key switch
             {
                 "Node" => WaterSelectionLevel.Node,
@@ -60,10 +60,9 @@ public sealed partial class EditorView
             });
         _riverLevelButtons = levelButtons;
         _riverSelectionSummary = new TextBlock { Name = "WaterSelectionSummary", TextWrapping = TextWrapping.Wrap };
-        _riverHide = Ui.TextButton("ToggleWaterVisibleButton", "Скрыть воду", _editor.ToggleSelectedWaterVisible, "compact");
-        _riverLock = Ui.TextButton("ToggleWaterLockButton", "Заблокировать воду", _editor.ToggleSelectedWaterLock, "compact");
-        _riverDeleteSelection = Ui.TextButton("DeleteWaterSelectionButton", "Удалить выбранное (Delete)",
-            () => _editor.DeleteSelection(), "danger-text");
+        _riverHide = ActionIcon("ToggleWaterVisibleButton", "Скрыть воду", MapIcons.Eye, _editor.ToggleSelectedWaterVisible);
+        _riverLock = ActionIcon("ToggleWaterLockButton", "Заблокировать воду", MapIcons.Lock, _editor.ToggleSelectedWaterLock);
+        _riverDeleteSelection = ActionIcon("DeleteWaterSelectionButton", "Удалить выбранное (Delete)", MapIcons.Trash, () => _editor.DeleteSelection(), danger: true);
         Avalonia.Automation.AutomationProperties.SetName(_riverDeleteSelection, "Удалить выбранное");
         _riverLayerPicker = new ComboBox { Name = "WaterLayerPicker", HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch,
             PlaceholderText = "Перенести воду на слой" };
@@ -78,11 +77,10 @@ public sealed partial class EditorView
             {
                 _riverPicker,
                 _riverChannelPicker,
-                levels,
-                Ui.Hint("Уровень решает, к чему относятся перетаскивание и Delete."),
+                Ui.Subgroup("Что выделяет щелчок", levels),
                 _riverSelectionSummary,
                 _riverSummary,
-                _riverHide, _riverLock, _riverDeleteSelection,
+                ActionRow(_riverHide, _riverLock, _riverDeleteSelection),
                 Ui.Advanced("RiverSelectionAdvanced", new StackPanel
                 {
                     Spacing = 4, Children = { _riverLayerPicker, _riverDeleteChannel },
@@ -271,12 +269,10 @@ public sealed partial class EditorView
 
         // Four categories in the order of the work: make it, choose it, shape it, dress it.
         // The same four accents and the same order are used by the land panel.
-        return new StackPanel
-        {
-            Spacing = 4,
-            Children =
-            {
-                (_riverCreateCategory = Ui.Category("RiverCreateCategory", "Создание", "accent-create", new StackPanel
+        // Four tabs in the order of the work: make it, choose it, shape it, dress it. A tab is
+        // offered while its category is: creation for the tool, the rest for a selected one.
+        return Ui.CategoryTabs("RiverTabs",
+            new Ui.CategoryTab("Create", "Создание", MapIcons.LineSparkle, (_riverCreateCategory = Ui.Category("RiverCreateCategory", "Создание", "accent-create", new StackPanel
                 {
                     Spacing = 4, Children =
                     {
@@ -289,26 +285,24 @@ public sealed partial class EditorView
                             slider: (1, 200), defaultValue: 12, description: "Ширина, с которой ставится каждый новый узел реки или озера."),
                         Ui.Hint("Узлы: клики от истока к устью, Enter — свободный конец. Клик по руслу — рукав или приток. Esc — отмена."),
                     },
-                })),
-                (_riverSelectCategory = Ui.Category("RiverSelectCategory", "Выбор", "accent-select", _riverSelectionBlock)),
-                (_riverShapeCategory = Ui.Category("RiverShapeCategory", "Форма", "accent-shape", new StackPanel
+                })), "Новая река или озеро и ширина новых узлов"),
+            new Ui.CategoryTab("Select", "Выбор", MapIcons.LineTarget, (_riverSelectCategory = Ui.Category("RiverSelectCategory", "Выбор", "accent-select", _riverSelectionBlock)), "Какую воду и что в ней выделяет щелчок; скрыть, заблокировать, удалить"),
+            new Ui.CategoryTab("Shape", "Форма", MapIcons.ModePath, (_riverShapeCategory = Ui.Category("RiverShapeCategory", "Форма", "accent-shape", new StackPanel
                 {
                     Spacing = 4, Children =
                     {
                         (_riverShapeHint = (TextBlock)Ui.Hint("Выберите реку или озеро в списке выше.").Named("RiverShapeHint")),
                         _riverNodeBlock, _riverChannelBlock, _riverFlowBlock,
                     },
-                }, expanded: false)),
-                (_riverStyleCategory = Ui.Category("RiverStyleCategory", "Оформление", "accent-look", new StackPanel
+                }, expanded: false)), "Ширина и кривизна узлов, всё русло или участок"),
+            new Ui.CategoryTab("Style", "Вид", MapIcons.LineWater, (_riverStyleCategory = Ui.Category("RiverStyleCategory", "Оформление", "accent-look", new StackPanel
                 {
                     Spacing = 4, Children =
                     {
                         (_riverStyleHint = (TextBlock)Ui.Hint("Выберите реку или озеро в списке выше.").Named("RiverStyleHint")),
                         _riverStyleBlock,
                     },
-                }, expanded: false)),
-            },
-        };
+                }, expanded: false)), "Материал, цвет, берега и оформление"));
     }
 
     private void SyncRiverPanel()
@@ -345,17 +339,17 @@ public sealed partial class EditorView
             var hasWater = _editor.WaterSelectionCount > 0;
             _riverSelectionBlock!.IsVisible = true;
             _riverHide!.IsEnabled = hasWater;
-            _riverHide.Content = _editor.SelectedWaterVisible ? "Скрыть воду" : "Показать воду";
+            SetActionIcon(_riverHide, _editor.SelectedWaterVisible ? "Скрыть воду" : "Показать воду", _editor.SelectedWaterVisible ? MapIcons.Eye : MapIcons.EyeOff);
             _riverLock!.IsEnabled = hasWater;
-            _riverLock.Content = _editor.SelectedWaterLocked ? "Разблокировать воду" : "Заблокировать воду";
+            SetActionIcon(_riverLock, _editor.SelectedWaterLocked ? "Разблокировать воду" : "Заблокировать воду", _editor.SelectedWaterLocked ? MapIcons.Unlock : MapIcons.Lock);
             _riverDeleteSelection!.IsEnabled = hasWater;
             // One delete for the whole panel, and it says out loud what it is about to take.
-            _riverDeleteSelection.Content = _editor.WaterLevel switch
+            SetActionIcon(_riverDeleteSelection, _editor.WaterLevel switch
             {
                 WaterSelectionLevel.Node => "Удалить узел (Delete)",
                 WaterSelectionLevel.Channel => _editor.SelectedChannelIsLake ? "Удалить озеро (Delete)" : "Удалить русло (Delete)",
                 _ => _editor.WaterSelectionCount > 1 ? "Удалить выбранные системы (Delete)" : "Удалить реку целиком (Delete)",
-            };
+            }, MapIcons.Trash);
             _riverDeleteChannel!.IsVisible = _editor.SelectedRiver is { Channels.Length: > 1 };
             _riverApplyPreview!.IsVisible = _editor.HasRiverPreview;
             var layers = _editor.Layers.OfType<ObjectLayer>().Select(l => new LayerChoice(l.Id, l.Name)).ToArray();

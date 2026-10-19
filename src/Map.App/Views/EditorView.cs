@@ -2007,16 +2007,7 @@ public sealed partial class EditorView : UserControl
 
         _eraserButton = new ToggleButton
         {
-            Content = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                Spacing = 7,
-                Children =
-                {
-                    MapIcons.Stroked(MapIcons.Eraser, 16),
-                    new TextBlock { Text = "Ластик", VerticalAlignment = VerticalAlignment.Center },
-                },
-            },
+            Content = TallCaption(MapIcons.HexErase, "Ластик"), MinHeight = 44, Padding = new Thickness(2, 4),
         }.Named("EraserButton").Classed("button-command", "segment");
         AutomationProperties.SetName(_eraserButton, "Ластик");
         _eraserButton.Click += (_, _) =>
@@ -2128,30 +2119,37 @@ public sealed partial class EditorView : UserControl
             },
         };
 
-        return new StackPanel
+        var solid = new Button
+        {
+            Content = TallCaption(MapIcons.LinePalette, "Цвет"), MinHeight = 44, Padding = new Thickness(2, 4),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+        }.Named("BrushSolidMaterialButton").Classed("segment");
+        AutomationProperties.SetName(solid, "Цвет");
+        ToolTip.SetTip(solid, "Сплошной цвет без текстуры");
+        solid.Click += (_, _) =>
+        {
+            _editor.ClearBrushTexture();
+            _editor.BrushSettings = _editor.BrushSettings with { Eraser = false };
+            SyncAppearanceSections();
+        };
+        var texture = new Button
+        {
+            Content = TallCaption(MapIcons.LineCatalog, "Текстура"), MinHeight = 44, Padding = new Thickness(2, 4),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+        }.Named("BrushTextureMaterialButton").Classed("segment");
+        AutomationProperties.SetName(texture, "Текстура из библиотеки");
+        ToolTip.SetTip(texture, "Текстура из библиотеки: открывает каталог");
+        texture.Click += (_, _) => OpenAssetCatalog(focusSearch: true);
+
+        // Three tabs (audit 2026-10-19): what and how big the brush paints, the shape of its dab
+        // with the fine settings, and the saved presets.
+        var brushPage = new StackPanel
         {
             Spacing = 8,
             Children =
             {
-                Explanation("Рисуйте по холсту. Штрих ложится на слой кисти."),
                 BuildRasterToolReadiness("Brush"),
-                Ui.Section("Материал", new Ui.ChoiceGrid
-                {
-                    MaxColumns = 1,
-                    Children =
-                    {
-                        Ui.TextButton("BrushSolidMaterialButton", "Цвет", () =>
-                        {
-                            _editor.ClearBrushTexture();
-                            _editor.BrushSettings = _editor.BrushSettings with { Eraser = false };
-                            SyncAppearanceSections();
-                        }, "segment"),
-                        Ui.CommandButton(
-                            "BrushTextureMaterialButton", "Текстура из библиотеки", MapIcons.Assets,
-                            () => OpenAssetCatalog(focusSearch: true), "segment"),
-                        _eraserButton,
-                    },
-                }),
+                Ui.Subgroup("Чем рисует", new Avalonia.Controls.Primitives.UniformGrid { Rows = 1, Columns = 3, Children = { solid, texture, _eraserButton } }),
                 AppearanceColorBox("BrushColorBox", "Цвет",
                     () => _editor.BrushSettings.Color, _editor.SetBrushColor),
                 AppearanceSlider("BrushSizeSlider", "Размер кисти", 1, 256, "px",
@@ -2160,12 +2158,19 @@ public sealed partial class EditorView : UserControl
                 AppearanceSlider("BrushOpacitySlider", "Непрозрачность", 5, 100, "%",
                     () => _editor.BrushSettings.Opacity * 100,
                     (value, _) => UpdateSettings(settings => settings with { Opacity = value / 100.0 }), 5),
-                Ui.Section("Форма отпечатка", BuildBrushTipList()),
-                Ui.Section("Локальные пресеты", new StackPanel
-                {
-                    Spacing = 6,
-                    Children = { presetName, presetChoice, presetCommands },
-                }),
+            },
+        };
+        var presetsPage = new StackPanel
+        {
+            Spacing = 6,
+            Children = { Ui.Hint("Пресеты хранятся только на этом компьютере."), presetName, presetChoice, presetCommands },
+        };
+        var tipPage = new StackPanel
+        {
+            Spacing = 8,
+            Children =
+            {
+                BuildBrushTipList(),
                 Ui.Advanced("BrushAdvanced", new StackPanel
                 {
                     Spacing = 8,
@@ -2285,6 +2290,10 @@ public sealed partial class EditorView : UserControl
                 }),
             },
         };
+        return Ui.CategoryTabs("BrushTabs",
+            new Ui.CategoryTab("Paint", "Кисть", MapIcons.LineBrush, brushPage, "Цвет, текстура или ластик, размер и непрозрачность"),
+            new Ui.CategoryTab("Tip", "Отпечаток", MapIcons.LineStamp, tipPage, "Форма отпечатка, мягкость, шаг, разброс и текстура"),
+            new Ui.CategoryTab("Presets", "Пресеты", MapIcons.LineSparkle, presetsPage, "Сохранить, применить, переименовать пресет кисти"));
     }
 
     /// <summary>
@@ -2296,6 +2305,17 @@ public sealed partial class EditorView : UserControl
     /// the row wrapped into an unreadable block.
     /// </para>
     /// </summary>
+    /// <summary>A glyph over a short caption, the content of a compact square-ish choice.</summary>
+    private static Control TallCaption(string icon, string text) => new StackPanel
+    {
+        Spacing = 2, HorizontalAlignment = HorizontalAlignment.Center,
+        Children =
+        {
+            new Border { HorizontalAlignment = HorizontalAlignment.Center, Child = MapIcons.Grid24(icon, 18) },
+            new TextBlock { Text = text, FontSize = 10.5, HorizontalAlignment = HorizontalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis },
+        },
+    };
+
     private Control BuildBrushTipList()
     {
         var tips = new (BrushPresetKind Kind, string Name, string Purpose)[]
@@ -2308,6 +2328,12 @@ public sealed partial class EditorView : UserControl
             (BrushPresetKind.Ellipse, "Эллипс", "Приплюснутый овал"),
             (BrushPresetKind.Polygon, "Многоугольник", "Скошенный к низу силуэт"),
         };
+        static string Short(BrushPresetKind kind) => kind switch
+        {
+            BrushPresetKind.RoundHard => "Жёсткий", BrushPresetKind.RoundSoft => "Мягкий", BrushPresetKind.EdgeBlock => "Рамка",
+            BrushPresetKind.GridBlock => "Блок", BrushPresetKind.Rectangle => "Мазок", BrushPresetKind.Ellipse => "Овал",
+            _ => "Силуэт",
+        };
 
         // No height cap and no scroller of its own: seven tips are meant to be compared at a
         // glance, and the context panel around them already scrolls.
@@ -2317,7 +2343,8 @@ public sealed partial class EditorView : UserControl
             SelectionMode = SelectionMode.Single,
             // This fixed seven-item chooser is already inside the context scroller. A virtual
             // panel can leave its last rows unrealized when the nested scroller is disabled.
-            ItemsPanel = new FuncTemplate<Panel?>(() => new StackPanel()),
+            // Four dabs in a row: seven shapes are compared at a glance instead of a column of seven rows.
+            ItemsPanel = new FuncTemplate<Panel?>(() => new Avalonia.Controls.Primitives.UniformGrid { Columns = 4 }),
         };
         ScrollViewer.SetVerticalScrollBarVisibility(list, ScrollBarVisibility.Disabled);
         AutomationProperties.SetName(list, "Форма отпечатка кисти");
@@ -2327,36 +2354,26 @@ public sealed partial class EditorView : UserControl
         {
             var row = new ListBoxItem
             {
-                Padding = new Thickness(6, 5, 6, 5),
-                Content = new DockPanel
+                Padding = new Thickness(2, 5), Margin = new Thickness(0, 0, 3, 3), HorizontalContentAlignment = HorizontalAlignment.Center,
+                Content = new StackPanel
                 {
-                    LastChildFill = true,
+                    Spacing = 3, HorizontalAlignment = HorizontalAlignment.Center,
                     Children =
                     {
                         new Border
                         {
-                            Margin = new Thickness(0, 0, 9, 0),
-                            VerticalAlignment = VerticalAlignment.Center,
+                            HorizontalAlignment = HorizontalAlignment.Center,
                             Child = new BrushTipPreview(
                                 EditorViewModel.PreviewTip(tip.Kind),
                                 EditorViewModel.PreviewSoftness(tip.Kind)),
-                        }.Docked(Dock.Left),
-                        new StackPanel
-                        {
-                            VerticalAlignment = VerticalAlignment.Center,
-                            Children =
-                            {
-                                new TextBlock { Text = tip.Name, TextWrapping = TextWrapping.Wrap },
-                                new TextBlock { Text = tip.Purpose, TextWrapping = TextWrapping.Wrap }
-                                    .Classed("faint", "role-caption"),
-                            },
                         },
+                        new TextBlock { Text = Short(tip.Kind), FontSize = 10.5, HorizontalAlignment = HorizontalAlignment.Center },
                     },
                 },
                 Tag = tip.Kind,
             }.Named("BrushTip" + tip.Kind);
             AutomationProperties.SetName(row, tip.Name + ". " + tip.Purpose);
-            ToolTip.SetTip(row, tip.Purpose);
+            ToolTip.SetTip(row, tip.Name + ": " + tip.Purpose);
             rows.Add(row);
         }
 
@@ -2491,7 +2508,9 @@ public sealed partial class EditorView : UserControl
             "Слой земли не выбран",
             "Выберите слой земли в списке слоёв, чтобы задать цвет, материал и берег.");
 
-        return new StackPanel
+        // Three tabs (audit 2026-10-19): draw the shape or paint it, dress the selected land, and the
+        // rare exact-area tools. «Форма земли» needs no header of its own inside its tab.
+        var drawPage = new StackPanel
         {
             Spacing = 8,
             Children =
@@ -2520,9 +2539,7 @@ public sealed partial class EditorView : UserControl
                             id => _editor.ChooseLandTexture(id),
                             () => MaterialPreviewContext.RawTexture(768),
                             "Для новой земли и выбранного слоя суши")),
-                        Ui.Hint("Круг рисует сушу от руки; любая другая форма превращает протягивание в область. "
-                            + "Неровность — размер «ячеек» берега: 0 даёт ровный круг, 64 — изрезанный берег. "
-                            + "Сглаживание скругляет их углы; для ровного круга это мягкость края."),
+                        LandShapeHint(),
                         Ui.Subgroup("Действие", actions),
                         Ui.Subgroup("Форма", shapes),
                         AppearanceSlider("LandSizeSlider", "Размер кисти", 1, 256, "px", () => _editor.BrushSettings.Radius,
@@ -2536,11 +2553,14 @@ public sealed partial class EditorView : UserControl
                     },
                 })),
                 (_landPaintControls = BuildLandPaintPanel()),
-                Ui.Category("LandStyleCategory", "Оформление", "accent-look", new StackPanel
-                {
-                    Spacing = 4, Children = { _landLayerBlock, _landStyleMissing },
-                }, expanded: false),
-                (_landShapeAdvanced = Ui.Advanced("LandAdvanced", new StackPanel
+            },
+        };
+        _landShapeControls!.Classes.Add("tabbed");
+        var stylePage = Ui.Category("LandStyleCategory", "Оформление", "accent-look", new StackPanel
+        {
+            Spacing = 4, Children = { _landLayerBlock, _landStyleMissing },
+        }, expanded: false);
+        var morePage = (_landShapeAdvanced = Ui.Advanced("LandAdvanced", new StackPanel
                 {
                     Spacing = 6,
                     Children =
@@ -2566,9 +2586,11 @@ public sealed partial class EditorView : UserControl
                         Ui.AsyncButton("LandClearButton", "Очистить слой…", ClearActiveLandAsync,
                             "destructive", "compact"),
                     },
-                })),
-            },
-        };
+                }));
+        return Ui.CategoryTabs("LandTabs",
+            new Ui.CategoryTab("Draw", "Рисовать", MapIcons.LineBrush, drawPage, "Новая земля, форма кисти и раскраска суши материалами"),
+            new Ui.CategoryTab("Style", "Оформление", MapIcons.LinePalette, stylePage, "Цвет и материал выбранной суши, контур, прибой, тени и обрывы"),
+            new Ui.CategoryTab("More", "Ещё", MapIcons.LineGear, morePage, "Точная область, сдвиг и очистка слоя"));
     }
 
     /// <summary>
@@ -2584,6 +2606,16 @@ public sealed partial class EditorView : UserControl
         }
 
         SyncContextArea();
+    }
+
+    /// <summary>One line on the brush shapes; the whole explanation is its tooltip.</summary>
+    private static Control LandShapeHint()
+    {
+        var hint = Ui.Hint("Круг рисует от руки, остальные формы — областью.");
+        ToolTip.SetTip(hint, "Круг рисует сушу от руки; любая другая форма превращает протягивание в область. "
+            + "Неровность — размер «ячеек» берега: 0 даёт ровный круг, 64 — изрезанный берег. "
+            + "Сглаживание скругляет их углы; для ровного круга это мягкость края.");
+        return hint;
     }
 
     private static LandShapeKind LandShapeByKey(string key) => key switch
@@ -7653,92 +7685,96 @@ public sealed partial class EditorView : UserControl
         _noteMarkdown.TextChanged += (_, _) => RefreshPreview();
         RefreshPreview();
 
-        var body = new StackPanel
+        // Formatting as one toolbar row, its words in the tooltips.
+        Button Format(string name, string caption, string tip, Action action, FontWeight weight = default, FontStyle style = FontStyle.Normal)
         {
-            Margin = new Thickness(12, 10, 12, 18),
-            Spacing = 10,
+            var button = new Button
+            {
+                Content = new TextBlock { Text = caption, FontWeight = weight == default ? FontWeight.SemiBold : weight, FontStyle = style },
+                HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Center,
+                MinHeight = 30, Padding = new Thickness(0), Margin = new Thickness(0, 0, 3, 0),
+            }.Named(name).Classed("compact");
+            AutomationProperties.SetName(button, tip);
+            ToolTip.SetTip(button, tip);
+            button.Click += (_, _) => action();
+            return button;
+        }
+
+        var link = Ui.IconButton("NoteLinkButton", "Ссылка для выделенного текста", MapIcons.Open, () =>
+            ReplaceSelection("[", $"]({(linkTarget.Text ?? "").Trim()})", "текст ссылки"));
+        var listPage = new StackPanel
+        {
+            Spacing = 8,
             Children =
             {
-                new TextBlock
-                {
-                    Text = "Заметки видны только вам: на карту и в экспорт они не попадают.",
-                    TextWrapping = TextWrapping.Wrap,
-                }.Classed("faint", "role-caption"),
+                Ui.Hint("Заметки видны только вам: на карту и в экспорт они не попадают."),
                 _noteSearch,
                 _noteList,
-                new Ui.ChoiceGrid
+                Ui.Subgroup("Новая заметка", new Avalonia.Controls.Primitives.UniformGrid
                 {
-                    MaxColumns = 1,
+                    Rows = 1, Columns = 2,
                     Children =
                     {
-                        Ui.TextButton("AddWorldNoteButton", "В центре экрана",
-                            _editor.AddNoteAtViewCentre, "compact"),
-                        Ui.TextButton("AddObjectNoteButton", "К выделенному",
-                            _editor.AddNoteForSelection, "compact"),
+                        Ui.CommandButton("AddWorldNoteButton", "В центре", MapIcons.Plus, _editor.AddNoteAtViewCentre, "compact"),
+                        Ui.CommandButton("AddObjectNoteButton", "К объекту", MapIcons.LineTarget, _editor.AddNoteForSelection, "compact"),
                     },
-                },
-                (_noteSelectionEditor = new Border
-                {
-                    Child = new StackPanel
-                    {
-                        Spacing = 6,
-                        Children =
-                        {
-                            new TextBlock { Text = "Выбранная заметка" }.Classed("role-panel"),
-                            _noteTitle,
-                            new Ui.ChoiceGrid
-                            {
-                                MaxColumns = 2,
-                                Children =
-                                {
-                                    Ui.TextButton("NoteHeadingButton", "Заголовок", () => PrefixSelection("## "), "compact"),
-                                    Ui.TextButton("NoteListButton", "Список", () => PrefixSelection("- "), "compact"),
-                                    Ui.TextButton("NoteBoldButton", "Полужирный", () => ReplaceSelection("**", "**", "текст"), "compact"),
-                                    Ui.TextButton("NoteItalicButton", "Курсив", () => ReplaceSelection("*", "*", "текст"), "compact"),
-                                },
-                            },
-                            linkTarget,
-                            Ui.TextButton("NoteLinkButton", "Ссылка для выделенного текста", () =>
-                                ReplaceSelection("[", $"]({(linkTarget.Text ?? "").Trim()})", "текст ссылки"), "compact"),
-                            new TextBlock { Text = "Текст заметки" }.Classed("role-panel"),
-                            _noteMarkdown,
-                            new TextBlock { Text = "Предпросмотр заметки", TextWrapping = TextWrapping.Wrap }.Classed("role-panel"),
-                            new Border { Padding = new Thickness(8), Child = preview }.Classed("group"),
-                            new Ui.ChoiceGrid
-                            {
-                                MaxColumns = 1,
-                                Children =
-                                {
-                                    Ui.TextButton("SaveNoteButton", "Сохранить", () =>
-                                    {
-                                        if (_selectedNoteId is { } id)
-                                            _editor.EditNote(id, _noteTitle.Text ?? "", _noteMarkdown.Text ?? "");
-                                    }, "compact"),
-                                    Ui.TextButton("GoToNoteButton", "Перейти", () =>
-                                    {
-                                        if (_selectedNoteId is { } id) _editor.GoToNote(id);
-                                    }, "compact"),
-                                    Ui.TextButton("DeleteNoteButton", "Удалить", () =>
-                                    {
-                                        if (_selectedNoteId is { } id)
-                                        {
-                                            _editor.DeleteNote(id);
-                                            _selectedNoteId = null;
-                                        }
-                                    }, "destructive", "compact"),
-                                },
-                            },
-                        },
-                    },
-                }.Classed("group")),
+                }),
             },
         };
-
-        return new ScrollViewer
+        _noteSelectionEditor = new StackPanel
         {
-            HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
-            Content = body,
+            Spacing = 6,
+            Children =
+            {
+                Ui.Subgroup("Заголовок", _noteTitle),
+                new Avalonia.Controls.Primitives.UniformGrid
+                {
+                    Rows = 1, Columns = 4,
+                    Children =
+                    {
+                        Format("NoteHeadingButton", "H", "Заголовок: строка начнётся с ##", () => PrefixSelection("## ")),
+                        Format("NoteListButton", "•", "Список: строки начнутся с -", () => PrefixSelection("- ")),
+                        Format("NoteBoldButton", "Ж", "Полужирный", () => ReplaceSelection("**", "**", "текст"), FontWeight.Black),
+                        Format("NoteItalicButton", "К", "Курсив", () => ReplaceSelection("*", "*", "текст"), FontWeight.Normal, FontStyle.Italic),
+                    },
+                },
+                new DockPanel { Children = { link.Docked(Dock.Right), linkTarget } },
+                Ui.Subgroup("Текст заметки", _noteMarkdown),
+                Ui.Subgroup("Как выглядит", new Border { Padding = new Thickness(8), Child = preview }.Classed("group")),
+                new Avalonia.Controls.Primitives.UniformGrid
+                {
+                    Rows = 1, Columns = 3,
+                    Children =
+                    {
+                        Ui.CommandButton("SaveNoteButton", "Сохранить", MapIcons.Check, () =>
+                        {
+                            if (_selectedNoteId is { } id)
+                                _editor.EditNote(id, _noteTitle.Text ?? "", _noteMarkdown.Text ?? "");
+                        }, "compact"),
+                        Ui.CommandButton("GoToNoteButton", "Перейти", MapIcons.LineTarget, () =>
+                        {
+                            if (_selectedNoteId is { } id) _editor.GoToNote(id);
+                        }, "compact"),
+                        Ui.CommandButton("DeleteNoteButton", "Удалить", MapIcons.Trash, () =>
+                        {
+                            if (_selectedNoteId is { } id)
+                            {
+                                _editor.DeleteNote(id);
+                                _selectedNoteId = null;
+                            }
+                        }, "destructive", "compact"),
+                    },
+                },
+            },
         };
+        linkTarget.MinWidth = 0;
+        linkTarget.Margin = new Thickness(0, 0, 4, 0);
+
+        // Two tabs (audit 2026-10-19): the list with the new-note commands, and the chosen note,
+        // which opens by itself when a note is picked.
+        return Ui.CategoryTabs("NotesTabs",
+            new Ui.CategoryTab("List", "Все заметки", MapIcons.LineList, listPage, "Поиск и список заметок, новая заметка"),
+            new Ui.CategoryTab("Note", "Заметка", MapIcons.LineNotes, _noteSelectionEditor, "Заголовок, текст и действия выбранной заметки", Prefer: true));
     }
 
     private Control BuildCheckpointsTab()
@@ -10706,7 +10742,7 @@ public sealed partial class EditorView : UserControl
     private void SyncNoteList()
     {
         if (_noteSelectionEditor is not null)
-            _noteSelectionEditor.IsEnabled = _selectedNoteId is { } selected
+            _noteSelectionEditor.IsVisible = _selectedNoteId is { } selected
                 && _editor.Session.Document.Notes.Any(note => note.Id == selected);
         var query = (_noteSearch.Text ?? "").Trim();
         _noteList.Children.Clear();

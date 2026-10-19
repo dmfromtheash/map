@@ -49,8 +49,8 @@ public sealed partial class EditorView
             key => _editor.RoadDrawMode = key == "Freehand" ? RoadDrawMode.Freehand : RoadDrawMode.Nodes);
         _roadModeButtons = modeButtons;
 
-        var (levels, levelButtons) = Ui.Segmented("RoadSelectionLevel",
-            [("Road", "Вся дорога", null), ("Branch", "Участок", null), ("Node", "Узлы", null)],
+        var (levels, levelButtons) = Ui.TallSegmented("RoadSelectionLevel",
+            [("Road", "Дорога", MapIcons.LineRoad), ("Branch", "Участок", MapIcons.ModePath), ("Node", "Узлы", MapIcons.ModeSeries)],
             key => _editor.RoadLevel = key switch
             {
                 "Node" => RoadSelectionLevel.Node,
@@ -59,11 +59,10 @@ public sealed partial class EditorView
             });
         _roadLevelButtons = levelButtons;
         _roadSelectionSummary = new TextBlock { Name = "RoadSelectionSummary", TextWrapping = TextWrapping.Wrap };
-        _roadHide = Ui.TextButton("ToggleRoadVisibleButton", "Скрыть дорогу", _editor.ToggleSelectedRoadVisible, "compact");
-        _roadLock = Ui.TextButton("ToggleRoadLockButton", "Заблокировать дорогу", _editor.ToggleSelectedRoadLock, "compact");
-        _roadDuplicate = Ui.TextButton("DuplicateRoadButton", "Дублировать дорогу", () => _editor.DuplicateSelectedRoads(), "compact");
-        _roadDeleteSelection = Ui.TextButton("DeleteRoadSelectionButton", "Удалить выбранное (Delete)",
-            () => _editor.DeleteSelection(), "danger-text");
+        _roadHide = ActionIcon("ToggleRoadVisibleButton", "Скрыть дорогу", MapIcons.Eye, _editor.ToggleSelectedRoadVisible);
+        _roadLock = ActionIcon("ToggleRoadLockButton", "Заблокировать дорогу", MapIcons.Lock, _editor.ToggleSelectedRoadLock);
+        _roadDuplicate = ActionIcon("DuplicateRoadButton", "Дублировать дорогу", MapIcons.Duplicate, () => _editor.DuplicateSelectedRoads());
+        _roadDeleteSelection = ActionIcon("DeleteRoadSelectionButton", "Удалить выбранное (Delete)", MapIcons.Trash, () => _editor.DeleteSelection(), danger: true);
         Avalonia.Automation.AutomationProperties.SetName(_roadDeleteSelection, "Удалить выбранное");
         _roadLayerPicker = new ComboBox { Name = "RoadLayerPicker", HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch, PlaceholderText = "Перенести дорогу на слой" };
         _roadLayerPicker.SelectionChanged += (_, _) =>
@@ -78,11 +77,10 @@ public sealed partial class EditorView
             {
                 _roadPicker,
                 _roadBranchPicker,
-                levels,
-                Ui.Hint("Уровень решает, к чему относятся перетаскивание, Delete и оформление."),
+                Ui.Subgroup("Что выделяет щелчок", levels),
                 _roadSelectionSummary,
                 _roadSummary,
-                _roadHide, _roadLock, _roadDuplicate, _roadDeleteSelection,
+                ActionRow(_roadHide, _roadLock, _roadDuplicate, _roadDeleteSelection),
                 Ui.Advanced("RoadSelectionAdvanced", new StackPanel
                 {
                     Spacing = 4, Children = { _roadLayerPicker, _roadDetachBranch, _roadDeleteBranch },
@@ -234,12 +232,10 @@ public sealed partial class EditorView
             },
         };
 
-        return new StackPanel
-        {
-            Spacing = 4,
-            Children =
-            {
-                (_roadCreateCategory = Ui.Category("RoadCreateCategory", "Создание", "accent-create", new StackPanel
+        // Four tabs in the order of the work: make it, choose it, shape it, dress it. A tab is
+        // offered while its category is: creation for the tool, the rest for a selected one.
+        return Ui.CategoryTabs("RoadTabs",
+            new Ui.CategoryTab("Create", "Создание", MapIcons.LineSparkle, (_roadCreateCategory = Ui.Category("RoadCreateCategory", "Создание", "accent-create", new StackPanel
                 {
                     Spacing = 4, Children =
                     {
@@ -250,15 +246,13 @@ public sealed partial class EditorView
                         AppearanceNumberBox("NewRoadWidthBox", "Ширина новых узлов", "ед.", () => _editor.NewRoadWidth, value => _editor.NewRoadWidth = value),
                         Ui.Hint("Узлы: клики по холсту. Первый клик по дороге — ветвь от общего узла; клик по дороге с узлами в черновике — соединение; клик по первому узлу — замкнуть. Enter — свободный конец, Esc — отмена."),
                     },
-                })),
-                (_roadSelectCategory = Ui.Category("RoadSelectCategory", "Выбор", "accent-select", _roadSelectionBlock)),
-                (_roadShapeCategory = Ui.Category("RoadShapeCategory", "Форма", "accent-shape", new StackPanel
+                })), "Новая дорога и ширина новых узлов"),
+            new Ui.CategoryTab("Select", "Выбор", MapIcons.LineTarget, (_roadSelectCategory = Ui.Category("RoadSelectCategory", "Выбор", "accent-select", _roadSelectionBlock)), "Какую дорогу и что в ней выделяет щелчок; скрыть, заблокировать, удалить"),
+            new Ui.CategoryTab("Shape", "Форма", MapIcons.ModePath, (_roadShapeCategory = Ui.Category("RoadShapeCategory", "Форма", "accent-shape", new StackPanel
                 {
                     Spacing = 4, Children = { _roadNodeBlock, _roadBranchBlock },
-                }, expanded: false)),
-                (_roadStyleCategory = Ui.Category("RoadStyleCategory", "Оформление", "accent-look", _roadStyleBlock, expanded: false)),
-            },
-        };
+                }, expanded: false)), "Ширина и кривизна узлов, всё русло или участок"),
+            new Ui.CategoryTab("Style", "Вид", MapIcons.LineRoad, (_roadStyleCategory = Ui.Category("RoadStyleCategory", "Оформление", "accent-look", _roadStyleBlock, expanded: false)), "Материал, цвет, берега и оформление"));
     }
 
     private static RoadEndCap ParseCap(string key) => key switch
@@ -297,17 +291,17 @@ public sealed partial class EditorView
             _roadSelectionSummary!.Text = _editor.RoadSelectionSummary;
             var hasRoads = _editor.RoadSelectionCount > 0;
             _roadHide!.IsEnabled = hasRoads;
-            _roadHide.Content = _editor.SelectedRoadVisible ? "Скрыть дорогу" : "Показать дорогу";
+            SetActionIcon(_roadHide, _editor.SelectedRoadVisible ? "Скрыть дорогу" : "Показать дорогу", _editor.SelectedRoadVisible ? MapIcons.Eye : MapIcons.EyeOff);
             _roadLock!.IsEnabled = hasRoads;
-            _roadLock.Content = _editor.SelectedRoadLocked ? "Разблокировать дорогу" : "Заблокировать дорогу";
+            SetActionIcon(_roadLock, _editor.SelectedRoadLocked ? "Разблокировать дорогу" : "Заблокировать дорогу", _editor.SelectedRoadLocked ? MapIcons.Unlock : MapIcons.Lock);
             _roadDuplicate!.IsEnabled = hasRoads;
             _roadDeleteSelection!.IsEnabled = hasRoads;
-            _roadDeleteSelection.Content = _editor.RoadLevel switch
+            SetActionIcon(_roadDeleteSelection, _editor.RoadLevel switch
             {
                 RoadSelectionLevel.Node => "Удалить узел (Delete)",
                 RoadSelectionLevel.Branch => "Удалить участок (Delete)",
                 _ => _editor.RoadSelectionCount > 1 ? "Удалить выбранные дороги (Delete)" : "Удалить дорогу целиком (Delete)",
-            };
+            }, MapIcons.Trash);
             _roadDeleteBranch!.IsVisible = _editor.SelectedRoad is { Branches.Length: > 1 };
             _roadDetachBranch!.IsVisible = _editor.SelectedRoad is { Branches.Length: > 1 };
             var layers = _editor.Layers.OfType<ObjectLayer>().Select(l => new LayerChoice(l.Id, l.Name)).ToArray();

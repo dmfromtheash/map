@@ -307,6 +307,100 @@ public static class Ui
     /// panel: green makes new things, blue is what is selected, amber is shape, violet is looks.
     /// </para>
     /// </summary>
+    /// <summary>One tab of <see cref="CategoryTabs"/>: its key, caption, line glyph and page.</summary>
+    /// <param name="Prefer">The tab opens by itself when its page appears (a note chosen in the list).</param>
+    public sealed record CategoryTab(string Key, string Title, string Icon, Control Page, string? Tip = null, bool Prefer = false);
+
+    /// <summary>
+    /// Tabs with icons over the categories of a tool panel, one category on screen at a time: the
+    /// land, river and road panels had grown to five screens of folded categories one under another
+    /// (audit 2026-10-19). A tab is offered while its page is visible (the panel's own logic still
+    /// shows or hides a category by scope); a category used as a page loses its own header and
+    /// stays unfolded. A hidden page names its tab in its host's Tag (<c>Reveal:&lt;button&gt;</c>),
+    /// so automation can open it the way a user would.
+    /// </summary>
+    public static Control CategoryTabs(string name, params CategoryTab[] tabs)
+    {
+        var strip = new UniformGrid { Rows = 1 }.Named(name + "Strip");
+        var stripHost = new Border { Child = strip, HorizontalAlignment = HorizontalAlignment.Stretch }.Classed("mode-group");
+        var buttons = new ToggleButton[tabs.Length];
+        var hosts = new Border[tabs.Length];
+        var selected = 0;
+        var showing = false;
+        var wasAvailable = tabs.Select(t => t.Page.IsVisible).ToArray();
+
+        void Show()
+        {
+            if (showing) return;
+            showing = true;
+            try
+            {
+                var available = tabs.Select(t => t.Page.IsVisible).ToArray();
+                for (var i = 0; i < tabs.Length; i++)
+                {
+                    if (tabs[i].Prefer && available[i] && !wasAvailable[i]) selected = i;
+                }
+
+                wasAvailable = available;
+                if (!available[selected] && Array.IndexOf(available, true) is var first and >= 0) selected = first;
+                strip.Children.Clear();
+                for (var i = 0; i < tabs.Length; i++)
+                {
+                    if (available[i]) strip.Children.Add(buttons[i]);
+                    var active = i == selected;
+                    buttons[i].IsChecked = active;
+                    SetClass(buttons[i], "active", active);
+                    hosts[i].IsVisible = active && available[i];
+                    if (tabs[i].Page is Expander { IsExpanded: false } folded && active) folded.IsExpanded = true;
+                }
+
+                strip.Columns = Math.Max(1, strip.Children.Count);
+                stripHost.IsVisible = strip.Children.Count > 1;
+            }
+            finally
+            {
+                showing = false;
+            }
+        }
+
+        var panel = new StackPanel { Spacing = 8 }.Named(name);
+        panel.Children.Add(stripHost);
+        for (var i = 0; i < tabs.Length; i++)
+        {
+            var index = i;
+            var tab = tabs[i];
+            var button = new ToggleButton
+            {
+                Content = new StackPanel
+                {
+                    Spacing = 2, HorizontalAlignment = HorizontalAlignment.Center,
+                    Children =
+                    {
+                        new Border { HorizontalAlignment = HorizontalAlignment.Center, Child = MapIcons.Grid24(tab.Icon, 19) },
+                        new TextBlock { Text = tab.Title, FontSize = 10.5, HorizontalAlignment = HorizontalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis },
+                    },
+                },
+                HorizontalAlignment = HorizontalAlignment.Stretch, Padding = new Thickness(1, 4), Margin = new Thickness(1, 0), MinHeight = 44,
+            }.Named(name + tab.Key).Classed("segment", "mode-choice");
+            AutomationProperties.SetName(button, tab.Title);
+            ToolTip.SetTip(button, tab.Tip ?? tab.Title);
+            button.Click += (_, _) => { selected = index; Show(); };
+            buttons[i] = button;
+            if (tab.Page is Expander category)
+            {
+                category.Classes.Add("tabbed");
+                category.IsExpanded = true;
+            }
+
+            tab.Page.PropertyChanged += (_, e) => { if (e.Property == Visual.IsVisibleProperty) Show(); };
+            hosts[i] = new Border { Child = tab.Page, Tag = "Reveal:" + button.Name };
+            panel.Children.Add(hosts[i]);
+        }
+
+        Show();
+        return panel;
+    }
+
     public static Expander Category(string name, string title, string accent, Control content, bool expanded = true)
     {
         var header = new DockPanel { LastChildFill = true };
@@ -1051,6 +1145,20 @@ public static class Ui
     /// Inspector caption with the approved semantic glyph when the label describes a known
     /// parameter. The text remains present: icons aid scanning but never replace meaning.
     /// </summary>
+    /// <summary>A small "i" whose tooltip carries the explanation of the setting beside it.</summary>
+    public static Control InfoGlyph(string text)
+    {
+        var glyph = new Border
+        {
+            Width = 16, Height = 16, Background = Brushes.Transparent, VerticalAlignment = VerticalAlignment.Center,
+            Child = MapIcons.Grid24(MapIcons.LineInfo, 14),
+        }.Classed("info-glyph");
+        ToolTip.SetTip(glyph, text);
+        ToolTip.SetShowDelay(glyph, 150);
+        AutomationProperties.SetName(glyph, "Пояснение: " + text);
+        return glyph;
+    }
+
     public static Control ParameterLabel(string label, double? width = null)
     {
         var text = new TextBlock

@@ -2001,6 +2001,14 @@
             <Setter Property="BorderBrush" Value="#3C2E22" />
             <Setter Property="BorderThickness" Value="0,0,0,1" />
         </Style>
+        <!-- A category shown as a tab page: the tab is its header. -->
+        <Style Selector="Expander.tabbed /template/ ToggleButton#ExpanderHeader">
+            <Setter Property="IsVisible" Value="False" />
+        </Style>
+        <Style Selector="Border.context-panel Expander.category.tabbed, Border.panel Expander.category.tabbed">
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+        </Style>
         <Style Selector="Border.context-panel Border.category-accent, Border.panel Border.category-accent">
             <Setter Property="IsVisible" Value="False" />
         </Style>

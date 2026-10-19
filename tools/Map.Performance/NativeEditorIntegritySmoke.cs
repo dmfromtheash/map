@@ -476,6 +476,9 @@ public sealed class NativeEditorIntegrityApplication : Application
         // ------------------------------------------------------- brush tip chooser
         // The tip used to be seven identical buttons with no selected state; the list has to show
         // which tip is live, switch it, and fit the panel it sits in.
+        // The tips live on the brush panel's «Отпечаток» tab: open it the way a user would.
+        Stage19Application.RevealTab(view, "BrushTipList");
+        await SettleAsync();
         var tipList = Find<ListBox>(view, "BrushTipList");
         await StabiliseLayoutAsync(view);
         var tipRows = tipList.GetVisualDescendants().OfType<ListBoxItem>().ToList();

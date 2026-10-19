@@ -59,7 +59,7 @@ else if (options.Profile == "native-stage20")
 {
     var nativeReport = NativeStage20Smoke.Run(options); report = nativeReport; gatePassed = nativeReport.GatePassed;
 }
-else if (options.Profile is "native-stage19" or "native-land-materials" or "native-soft-coast" or "native-history-memory" or "native-panel-shots" or "native-ui-shots" or "native-color-presets" or "native-vtt-export" or "native-grid-types" or "native-versions" or "native-room" or "native-land-cliffs" or "native-owner-art")
+else if (options.Profile is "native-stage19" or "native-land-materials" or "native-soft-coast" or "native-history-memory" or "native-panel-shots" or "native-standard-panel-shots" or "native-ui-shots" or "native-color-presets" or "native-vtt-export" or "native-grid-types" or "native-versions" or "native-room" or "native-land-cliffs" or "native-owner-art")
 {
     var nativeReport = NativeStage19Smoke.Run(options); report = nativeReport; gatePassed = nativeReport.GatePassed;
 }

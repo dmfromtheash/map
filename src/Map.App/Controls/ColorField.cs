@@ -460,13 +460,13 @@ public sealed class ColorField
                 {
                     new Border
                     {
-                        Width = 26,
+                        Width = 20,
                         Height = 16,
                         BorderThickness = new Thickness(1),
                         BorderBrush = Application.Current?.FindResource("MapBorderStrongBrush") as IBrush,
                         CornerRadius = new CornerRadius(3),
                         ClipToBounds = true,
-                        Margin = new Thickness(0, 0, 8, 0),
+                        Margin = new Thickness(0, 0, 6, 0),
                         Child = _swatch,
                     }.Docked(Dock.Left),
                     _valueText,
@@ -478,7 +478,18 @@ public sealed class ColorField
         ToolTip.SetTip(_button, $"{label}. Нажмите, чтобы выбрать цвет");
         _button.Click += (_, _) => Open();
 
-        Row = Ui.PropertyRow(label, _button, captionWidth: captionWidth);
+        // One line: the name on the left, the swatch with its value on the right. The inspector
+        // row stacked them in the 264 px tool panel, two lines for every colour (audit 2026-10-19).
+        var caption = Ui.ParameterLabel(label);
+        ToolTip.SetTip(caption, label);
+        _button.Width = 146;
+        _button.HorizontalAlignment = HorizontalAlignment.Right;
+        Grid.SetColumn(_button, 1);
+        Row = new Grid
+        {
+            ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 8, MinHeight = 30,
+            Children = { caption, _button },
+        };
         Sync();
     }
 
