@@ -1,4 +1,52 @@
 ﻿# STATE_HANDOFF — актуальное состояние Map
+## Актуально на 2026-10-19 (ночь) — DEC-050: инструменты из вакансий, публичный GitHub, скачиваемая сборка
+
+**FACT.** По поручению владельца (ресёрч 200 вакансий → «установи всё это, внедри и проверь», «выложи
+последнюю версию на GitHub, чтобы кто угодно мог скачать, запустить ярлык и работать»). Отчёт —
+`docs/research/TOOLS_FROM_200_VACANCIES_2026-10-19.md`, решение — DEC-050.
+- **RenderDoc / PIX:** RenderDoc 1.46 уже стоял, PIX 2603.25 поставлен winget. В приложении —
+  `Services/RenderDocCapture.cs` (триггер захвата по `MAP_RENDERDOC_CAPTURE_FRAMES`, снятие
+  обработчика сбоев RenderDoc первым делом в `Main`), `MAP_WIN32_COMPOSITION` в `BuildAvaloniaApp`,
+  открытие `.mapproj` из аргумента командной строки (`App.axaml.cs`). Причина падений под RenderDoc
+  найдена дампом (`dotnet-dump`): `ICompositorInterop.CreateGraphicsDevice` на пути WinUI-композиции
+  (Avalonia #15911); `RENDERDOC_HOOK_EGL=0` и снятие обработчика сбоев сами по себе не помогают,
+  `LowLatencyDxgiSwapChain` и `RedirectionSurface` живут. Скрипт
+  `tools/ai/live/renderdoc-capture.ps1 -Map <.mapproj> -Frames 10` → `.rdc`.
+  **Проверено:** `hex512-stress.mapproj` → `map-frame_frame12.rdc` 6,3 МБ, `renderdoccmd thumb`
+  даёт PNG 1920×991 (`artifacts/renderdoc-2026-10-19/run/`). Холст в покое кадров не рисует: для
+  захвата поздних кадров нужен ввод (`mapinput.ps1`) — не делалось.
+- **Анализаторы SDK:** `AnalysisLevel=latest-recommended` (документация/именование выключены).
+  Release: 0 ошибок, 128 предупреждений — CA1859 (конкретные типы вместо интерфейсов) большинство,
+  CA1305 14, CA1806 12, CS0618 10, CA1001 6, CA1861 4, CA1822 4, CA1720 2. Не чинились.
+- **GitHub Actions:** `build.yml` — Release-сборка + unit-тесты; ворота — Core 405/405 и Assets
+  149/149; информационно (`continue-on-error`) — Rendering 6, Persistence 15, Presentation 5 давних
+  падений (список ниже). `release.yml` — по тегу `v*` собирает zip и прикладывает к релизу.
+- **FlaUI:** `tools/Map.LiveCheck` (net10.0-windows, FlaUI.UIA3 5.0.0; `UseWindowsForms` ради
+  сборки Accessibility). **Проверено:** `dotnet run --project tools/Map.LiveCheck -c Release` — окно
+  библиотеки за 2 с, 44 элемента в дереве UIA (имена Avalonia = AutomationId), мастер «Новая карта»
+  как модальное окно (`main.ModalWindows`), 33 элемента, `ChooseCategoryButton`/`CancelWizardButton`
+  найдены, Escape закрывает, выход 0; снимки и слепки — `artifacts/live-check-2026-10-19/`.
+  `WizardFooter` (DockPanel) пира автоматизации не имеет — это норма Avalonia.
+- **Не сделано:** профилировщик Visual Studio (VS на ПК нет, 10+ ГБ — решение владельца);
+  NetTopologySuite и MBTiles отложены (как в списке).
+- **Публикация:** `tools/release/publish-release.ps1` (self-contained win-x64 R2R, без нативных
+  PDB, + `make-shortcut.ps1`, `Создать ярлык на рабочем столе.cmd`, `ЧИТАЙ-МЕНЯ.txt`) → zip 80 МБ;
+  стартовый смоук упакованного exe в изолированном профиле — выход 0; `.cmd` проверен в песочнице
+  (ярлык с верным путём). `RegionalAtlas` в архив не входит (лицензия «owner's own use»). README —
+  шаги скачивания. Репозиторий публичный, `main` = `codex/stage-18-editable-areas`, релиз `v0.2.0`.
+- **Давние падения unit-тестов (FACT, 2026-10-19, до правок DEC-050):** Persistence —
+  `Stage18EditableAreaRoundTripTests.V6_roundtrip…` ×4, `ContainerHardeningTests.Null_elements…` ×5,
+  `An_unknown_object_kind…` ×3, `Stage13DLargeCanvasRoundTripTests.Large_sparse_canvas…`,
+  `Stage17EditablePathRoundTripTests.V4_opens_unchanged…`, `Stage10VariantSetRoundTripTests.The_project_schema…`;
+  Presentation — `Stage10CMultiSelectionViewModelTests.Select_all…`, `Stage10CObjectTreeRowTests.Type_filter…`,
+  `Stage10FFontsAndSettingsTests.Default_registry…`, `Stage10EGridViewModelTests.Stage10EPortalSnapReviewFix…`,
+  `EditorIntegrityInputRoutingTests.A_press…`; Rendering — `Stage19IllustratedWaterTests.A_lake_outflow…` ×2,
+  `Stage19WaterJoinRenderingTests.Water_runs_past…`, `Stage14PlacementPreviewRenderingTests.Stage14_stamp_ghost…`,
+  `RenderImageCacheDiagnostics.Where_the_cached_frame_differs`.
+- **NOT CHECKED:** живой просмотр владельцем; `.rdc` в qrenderdoc глазами; PIX timing-захват;
+  скачивание и запуск архива на другом ПК; первый прогон `build.yml`/`release.yml` — см. ниже в
+  журнале коммитов.
+
 ## Актуально на 2026-10-19 (вечер) — панели стандартного конструктора: аудит, прототип, вкладки
 
 **FACT.** По поручению владельца («сделай так же с первым разделом»: REA, разбивка на разделы со

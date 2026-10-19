@@ -1,0 +1,59 @@
+name: build
+
+# Independent check of every push: Release build of Map.slnx and the five unit test projects
+# on a clean Windows runner (DEC-050). Native window smokes (tools/Map.Performance) stay local.
+# Map.Core.Tests and Map.Assets.Tests gate the run. Rendering, Persistence and Presentation carry
+# 26 failures that predate the workflow (listed in docs/STATE_HANDOFF.md, 2026-10-19); they run and
+# upload their results but do not fail the job until those tests are repaired — then drop
+# `continue-on-error` below.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: .NET SDK from global.json
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Build Release (Map.slnx)
+        run: dotnet build .\Map.slnx -c Release -nologo
+
+      - name: Unit tests (gate)
+        shell: pwsh
+        run: |
+          foreach ($p in 'Map.Core.Tests','Map.Assets.Tests') {
+            dotnet test "tests\$p\$p.csproj" -c Release -nologo --logger "trx;LogFileName=$p.trx" --results-directory artifacts\test-results
+            if ($LASTEXITCODE -ne 0) { Write-Host "::error::$p failed"; exit 1 }
+          }
+
+      - name: Unit tests (known failures, informational)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $failed = @()
+          foreach ($p in 'Map.Rendering.Tests','Map.Persistence.Tests','Map.Presentation.Tests') {
+            dotnet test "tests\$p\$p.csproj" -c Release -nologo --logger "trx;LogFileName=$p.trx" --results-directory artifacts\test-results
+            if ($LASTEXITCODE -ne 0) { $failed += $p }
+          }
+          if ($failed.Count -gt 0) { Write-Host "::warning::Projects with failing tests: $($failed -join ', ')"; exit 1 }
+
+      - name: Test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: artifacts/test-results
+          if-no-files-found: ignore

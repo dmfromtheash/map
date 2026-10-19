@@ -45,6 +45,17 @@ public partial class App : Application
                 appSettingsStore: appSettingsStore,
                 appSettings: appSettings);
             desktop.MainWindow = mainWindow;
+            // A map file on the command line (a shortcut, a double-click, a script such as
+            // tools/ai/live/renderdoc-capture.ps1) opens in the workshop as soon as the window is up.
+            foreach (var argument in desktop.Args ?? [])
+            {
+                if (argument.EndsWith(".mapproj", StringComparison.OrdinalIgnoreCase) && File.Exists(argument))
+                {
+                    var mapPath = Path.GetFullPath(argument);
+                    mainWindow.Opened += (_, _) => _ = mainWindow.OpenPathAsync(mapPath);
+                    break;
+                }
+            }
             // Sound on every button, switch, slider, list and menu - one switch silences it all.
             UiSoundHooks.Install();
             // Dialogs grow with large screens like the main window does.

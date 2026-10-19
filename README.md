@@ -1,5 +1,7 @@
 # Map
 
+[![build](https://github.com/dmfromtheash/map/actions/workflows/build.yml/badge.svg)](https://github.com/dmfromtheash/map/actions/workflows/build.yml)
+
 Map — нативный офлайн-конструктор карт для Windows 10/11 x64: стандартный конструктор (земля,
 реки, дороги, области, штампы, заметки, экспорт PNG/JPEG/WebP) и гексовый конструктор (поле
 гексов, регионы, пути, туман войны, ключ гексов, подкарты, экспорт JSON и для Foundry/Roll20).

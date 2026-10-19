@@ -1,4 +1,4 @@
-<Project>
+﻿<Project>
   <PropertyGroup>
     <!-- Map is used only on the owner's current Windows x64 PC. -->
     <VersionPrefix>0.2.0</VersionPrefix>
@@ -9,5 +9,10 @@
     <RepositoryType>git</RepositoryType>
     <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-x64</RuntimeIdentifier>
     <SelfContained>false</SelfContained>
+    <!-- Анализаторы из .NET SDK (без пакетов): рекомендуемые правила качества и скорости
+         (CA18xx — аллокации, LINQ в горячих путях) как предупреждения, не ошибки. DEC-050. -->
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <AnalysisModeDocumentation>None</AnalysisModeDocumentation>
+    <AnalysisModeNaming>None</AnalysisModeNaming>
   </PropertyGroup>
 </Project>

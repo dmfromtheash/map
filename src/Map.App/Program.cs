@@ -13,6 +13,9 @@ internal static class Program
     [STAThread]
     public static void Main(string[] args)
     {
+        // Under RenderDoc (tools/ai/live/renderdoc-capture.ps1) its crash handler would end the
+        // process on the first hardware access violation the .NET runtime uses for null checks.
+        RenderDocCapture.DisableCrashHandler();
         var profileRoot = TestMode.ProfileRootOverride is { } testProfileRoot
             ? AppPaths.ResolveTestProfileRoot(testProfileRoot)
             : AppPaths.Root;
@@ -45,8 +48,19 @@ internal static class Program
     /// here opens a socket (DEC-001).
     /// </summary>
     public static AppBuilder BuildAvaloniaApp()
-        => AppBuilder.Configure<App>()
+    {
+        var builder = AppBuilder.Configure<App>()
             .UsePlatformDetect()
             .WithInterFont()
             .LogToTrace();
+        // Diagnostics only (DEC-050): MAP_WIN32_COMPOSITION=LowLatencyDxgiSwapChain|RedirectionSurface
+        // swaps the Win32 composition path. RenderDoc kills the process on the default WinUI
+        // composition path (Avalonia #15911); tools/ai/live/renderdoc-capture.ps1 sets this.
+        if (Enum.TryParse<Avalonia.Win32CompositionMode>(Environment.GetEnvironmentVariable("MAP_WIN32_COMPOSITION"), ignoreCase: true, out var composition))
+        {
+            builder = builder.With(new Avalonia.Win32PlatformOptions { CompositionMode = [composition] });
+        }
+
+        return builder;
+    }
 }

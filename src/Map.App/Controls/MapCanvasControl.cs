@@ -571,6 +571,7 @@ public sealed partial class MapCanvasControl : Control
                 LastTerrainRefinementPending = _renderStats.TerrainRefinementsPending > 0;
                 LastFrameHadGpuContext = gpu;
                 System.Threading.Interlocked.Increment(ref _framesRendered);
+                Map.App.Services.RenderDocCapture.OnFrameRendered(System.Threading.Interlocked.Read(ref _framesRendered));
                 LastFrameStyledLandHits = styledHits;
                 LastFrameStyledLandMisses = styledMisses;
                 LastFrameTerrainHits = terrainHits;
