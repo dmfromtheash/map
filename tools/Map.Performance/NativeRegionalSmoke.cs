@@ -112,6 +112,7 @@ public sealed partial class RegionalApplication : Application
         if(Options.Profile=="native-map-categories") { await VerifyMapCategories(); return; }
         if(Options.Profile=="native-hex-category") { await VerifyHexCategory(); return; }
         if(Options.Profile=="native-hex-workshop") { await VerifyHexWorkshop(); return; }
+        if(Options.Profile=="native-hex-panel-shots") { await HexPanelShots(); return; }
         var dashboard = new DashboardViewModel(_store, _recent, new LocalLog(), _picker);
         _window.Content = new DashboardView(dashboard, () => Task.CompletedTask, () => Task.CompletedTask,
             _ => Task.CompletedTask, _ => Task.CompletedTask, templateRequested: () => Task.CompletedTask,

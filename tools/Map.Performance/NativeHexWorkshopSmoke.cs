@@ -30,6 +30,44 @@ public sealed partial class RegionalApplication
         toggle.IsChecked = toggle.IsChecked != true;
     }
 
+    /// <summary>
+    /// Opens what hides a control of the hex panel, the way a user would: the tab (or the half of
+    /// the palette) named by a hidden ancestor's <c>HexReveal:&lt;button&gt;</c> tag, and folded
+    /// categories. «HexModeSelect» is the «Правка» tab itself.
+    /// </summary>
+    private static void RevealHex(Control root, string name)
+    {
+        if (name == "HexModeSelect") return;
+        // The logical tree: hidden parts are not templated yet, so they are not in the visual tree.
+        var target = Avalonia.LogicalTree.LogicalExtensions.GetLogicalDescendants(root).OfType<Control>().First(c => c.Name == name);
+        foreach (var ancestor in Avalonia.LogicalTree.LogicalExtensions.GetLogicalAncestors(target).OfType<Control>().Reverse())
+        {
+            if (ancestor is Expander { IsExpanded: false } folded) folded.IsExpanded = true;
+            if (!ancestor.IsVisible && ancestor.Tag is string tag && tag.StartsWith("HexReveal:", StringComparison.Ordinal))
+            {
+                root.UpdateLayout();
+                Click(root, tag["HexReveal:".Length..]);
+            }
+        }
+
+        root.UpdateLayout();
+    }
+
+    /// <summary>A hex panel button pressed after opening its tab or category.</summary>
+    private static void PressHex(Control root, string name)
+    {
+        RevealHex(root, name);
+        Click(root, name == "HexModeSelect" ? "HexTabEdit" : name);
+    }
+
+    /// <summary>True when the control can be reached through the panel's tabs and categories.</summary>
+    private static bool ReachableHex(Control root, string name)
+    {
+        if (name == "HexModeSelect") return Visible(root, "HexTabEdit");
+        RevealHex(root, name);
+        return Visible(root, name);
+    }
+
     private async Task VerifyHexWorkshop()
     {
         var document = HexMapFactory.Create("Мастерская · проверка", DateTimeOffset.UtcNow, MapCategories.Hex.Id,
@@ -56,38 +94,38 @@ public sealed partial class RegionalApplication
         HexCoord Hex(int c, int r) => Layer().Board.Layout.FromOffset(new HexOffset(c, r));
 
         Check("the panel offers the terrain and the workshop modes", new[] { "Place", "Fill", "Erase", "Pick", "Region", "Path", "Fog", "Key", "Measure", "Select" }
-            .All(mode => Visible(_view, "HexMode" + mode)));
+            .All(mode => ReachableHex(_view, "HexMode" + mode)));
 
         // Ground: grass everywhere, a sea on the left, tall peaks and a living forest.
-        Click(_view, "HexModeFill"); Click(_view, "HexTile_grass"); Click(_view, "HexModeFill"); await Settle();
+        PressHex(_view, "HexModeFill"); PressHex(_view, "HexTile_grass"); PressHex(_view, "HexModeFill"); await Settle();
         ClickHex(15, 10); await Settle();
         Check("a fill covers the board", Layer().Board.CellCount == 600);
-        Click(_view, "HexModePlace"); Click(_view, "HexTile_sea"); await Settle();
+        PressHex(_view, "HexModePlace"); PressHex(_view, "HexTile_sea"); await Settle();
         _editor.HexRadius = 1;
         Drag(1, 0, 1, 19); Drag(3, 0, 3, 19); await Settle();
-        Click(_view, "HexTile_peaks"); _editor.HexRadius = 0;
+        PressHex(_view, "HexTile_peaks"); _editor.HexRadius = 0;
         Drag(20, 2, 26, 2); Drag(21, 3, 25, 3); await Settle();
-        Click(_view, "HexTile_live-forest"); _editor.HexRadius = 2;
+        PressHex(_view, "HexTile_live-forest"); _editor.HexRadius = 2;
         Drag(18, 13, 24, 14); await Settle();
-        Click(_view, "HexTile_canyon"); _editor.HexRadius = 0; await Settle();
-        Click(_view, "HexRotateRightButton"); Click(_view, "HexRotateRightButton"); await Settle();
+        PressHex(_view, "HexTile_canyon"); _editor.HexRadius = 0; await Settle();
+        PressHex(_view, "HexRotateRightButton"); PressHex(_view, "HexRotateRightButton"); await Settle();
         ClickHex(10, 16); await Settle();
         Check("the turn buttons turn the next tile", Layer().Board[Hex(10, 16)] is { Terrain: "starter/canyon", Rotation: 2 });
         Check("a tall tile is painted", Layer().Board[Hex(22, 2)]?.Terrain == "starter/peaks");
         Capture(_view, "workshop-01-ground");
 
         // A region painted through the canvas.
-        Click(_view, "HexModeRegion"); await Settle();
-        Click(_view, "HexAddRegionButton"); await Settle();
+        PressHex(_view, "HexModeRegion"); await Settle();
+        PressHex(_view, "HexAddRegionButton"); await Settle();
         _editor.HexRadius = 2;
         Drag(8, 5, 14, 9); await Settle();
         var region = Layer().Regions.Single();
         Check("a region is created and painted with the brush", Layer().Board.Cells.Count(p => p.Value.Region == region.Id) >= 19);
 
         // A river and a road crossing it.
-        Click(_view, "HexModePath"); Click(_view, "HexPathKindRiver"); await Settle();
+        PressHex(_view, "HexModePath"); PressHex(_view, "HexPathKindRiver"); await Settle();
         Drag(24, 5, 5, 12); await Settle();
-        Click(_view, "HexPathKindRoad"); await Settle();
+        PressHex(_view, "HexPathKindRoad"); await Settle();
         Drag(12, 1, 12, 18); await Settle();
         var paths = Layer().Paths;
         Check("a river and a road are drawn as paths", paths.Count == 2 && paths.Any(p => p.Kind == HexPathKind.River) && paths.Any(p => p.Kind == HexPathKind.Road));
@@ -97,8 +135,8 @@ public sealed partial class RegionalApplication
         _view.Canvas.FitToCanvas(); await Settle();
 
         // The fog of war.
-        Click(_view, "HexModeFog"); await Settle();
-        Toggle(_view, "HexFogToggle"); await Settle();
+        PressHex(_view, "HexModeFog"); await Settle();
+        RevealHex(_view, "HexFogToggle"); Toggle(_view, "HexFogToggle"); await Settle();
         Check("the fog switch turns the fog on", Layer().FogEnabled);
         _editor.HexRadius = 3;
         Drag(8, 8, 14, 8); await Settle();
@@ -107,47 +145,47 @@ public sealed partial class RegionalApplication
         Capture(_view, "workshop-03-fog");
 
         // A hex key typed into the panel.
-        Click(_view, "HexModeKey"); await Settle();
+        PressHex(_view, "HexModeKey"); await Settle();
         ClickHex(12, 8); await Settle();
         var boxes = _view.GetVisualDescendants().OfType<TextBox>().ToList();
         boxes.Single(b => b.Name == "HexKeyTitleBox").Text = "Брод";
         boxes.Single(b => b.Name == "HexKeyGmBox").Text = "Под мостом живёт тролль.";
         boxes.Single(b => b.Name == "HexKeyPlayerBox").Text = "Старый мост через реку.";
-        Click(_view, "HexKeySaveButton"); await Settle();
+        PressHex(_view, "HexKeySaveButton"); await Settle();
         Check("the key typed into the panel is stored on its hex", Layer().Notes.TryGetValue(Hex(12, 8), out var note)
             && note.Title == "Брод" && note.GmText.Contains("тролль", StringComparison.Ordinal) && note.PlayerText.Length > 0);
-        Check("the key table lists it", Visible(_view, "HexKeyRow_" + HexLayerRenderer.NumberOf(Layer().Board, new HexOffset(12, 8))));
+        Check("the key table lists it", ReachableHex(_view, "HexKeyRow_" + HexLayerRenderer.NumberOf(Layer().Board, new HexOffset(12, 8))));
 
         // The travel ruler.
-        Click(_view, "HexModeMeasure"); await Settle();
+        PressHex(_view, "HexModeMeasure"); await Settle();
         Drag(6, 10, 28, 10); await Settle();
         Check("the ruler names hexes, distance and days", _editor.HexRoute is { Steps: > 0 } && Text(_view, "HexRouteText").Contains("дн.", StringComparison.Ordinal));
         Capture(_view, "workshop-04-ruler");
 
         // Selection, copy and paste, inserted columns.
-        Click(_view, "HexModeSelect"); await Settle();
+        PressHex(_view, "HexModeSelect"); await Settle();
         Drag(20, 1, 24, 4); await Settle();
         var selected = _editor.HexSelection.Count;
         Check("a drag selects a rectangle of hexes", selected >= 15);
-        Click(_view, "HexCopyButton"); Click(_view, "HexPasteButton"); await Settle();
+        PressHex(_view, "HexCopyButton"); PressHex(_view, "HexPasteButton"); await Settle();
         _editor.UpdateHexHover(Layer().Board.Layout.Center(Hex(22, 16)).X, Layer().Board.Layout.Center(Hex(22, 16)).Y);
         var depth = _editor.Session.UndoDepth;
         ClickHex(22, 16); await Settle();
         var pastedPeaks = Map.Core.Editing.HexSelection.Rectangle(Layer().Board, Hex(19, 13), Hex(25, 19)).Count(h => Layer().Board[h]?.Terrain == "starter/peaks");
         Check("a paste is one undo step and puts the copied peaks down", _editor.Session.UndoDepth == depth + 1 && !_editor.HasHexPaste && pastedPeaks >= 5);
-        Click(_view, "HexInsertColumnsButton"); await Settle();
+        PressHex(_view, "HexInsertColumnsButton"); await Settle();
         Check("inserting columns widens every hex layer and the page", Layer().Board.Columns == 32
             && _editor.Session.Document.Canvas.Width >= (int)Layer().Board.PixelWidth - 1);
         Capture(_view, "workshop-05-select-paste");
 
         // An underground level on the same grid.
-        Click(_view, "HexAddLevelBelowButton"); await Settle();
-        Check("a level is added under the surface", _editor.HexLevel == -1 && Visible(_view, "HexLevel_m1"));
-        Click(_view, "HexModePlace"); Click(_view, "HexTile_mountains"); _editor.HexRadius = 1; await Settle();
+        PressHex(_view, "HexAddLevelBelowButton"); await Settle();
+        Check("a level is added under the surface", _editor.HexLevel == -1 && ReachableHex(_view, "HexLevel_m1"));
+        PressHex(_view, "HexModePlace"); PressHex(_view, "HexTile_mountains"); _editor.HexRadius = 1; await Settle();
         Drag(10, 6, 16, 6); await Settle();
         Check("the level holds its own hexes", Layer(-1).Board.CellCount > 0 && Layer(0).Board[Hex(12, 6)]?.Terrain != "starter/mountains");
         Capture(_view, "workshop-06-underground");
-        Click(_view, "HexLevel_0"); await Settle();
+        PressHex(_view, "HexLevel_0"); await Settle();
         Check("switching back shows the surface", _editor.HexLevel == 0 && _editor.ActiveHexLayer?.Level == 0);
 
         // The players' window.
@@ -178,10 +216,10 @@ public sealed partial class RegionalApplication
 
         // The world generator through its panel buttons, step by step, on the surface.
         var depthBefore = _editor.Session.UndoDepth;
-        Click(_view, "HexGenAllButton"); await Settle();
+        PressHex(_view, "HexGenAllButton"); await Settle();
         Check("the generator builds a world as six undo steps", _editor.Session.UndoDepth == depthBefore + 6
             && Layer().Board.Cells.Any(p => p.Value.Terrain == "starter/sea") && Layer().Paths.Any(p => p.Kind == HexPathKind.Road));
-        Click(_view, "HexGenRerollButton"); await Settle();
+        PressHex(_view, "HexGenRerollButton"); await Settle();
         Check("the last step can be dealt again", _editor.Session.UndoDepth == depthBefore + 6);
         _view.Canvas.FitToCanvas(); await Settle(); await Task.Delay(300); await Settle();
         Capture(_view, "workshop-08-generated");

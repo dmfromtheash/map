@@ -212,6 +212,37 @@ public static class MapIcons
     public static readonly string ModePath = "M3.5 18 C7.5 9 14.5 17 20.5 6 " + Ring(6, 14.5, 1.6) + Ring(12, 12.3, 1.6) + Ring(18, 8.8, 1.6);
     public static readonly string ModeArea = "M4 7 L11 3.5 L20 7.5 L18 18.5 L7 20 Z " + Ring(9, 10, 1.3) + Ring(14, 9, 1.3) + Ring(11, 14.5, 1.3) + Ring(15.5, 14, 1.3);
 
+    // Hex constructor panel (2026-10-19): its tabs, click modes and sections, same line style.
+    public static readonly string HexPlace = "M10 3.5 L16.5 7.2 V14.8 L10 18.5 L3.5 14.8 V7.2 Z M18.5 13.5 V21.5 M14.5 17.5 H22.5";
+    public static readonly string HexFill = "M4.5 11 L11 4.5 L18.5 12 L12 18.5 Z M4.5 11 H18 M8.5 7 L4 2.5 " +
+        "M19.8 15.4 C19.4 16.4 19.4 17.6 20.4 17.8 C21.4 17.6 21.4 16.4 21 15.4 L20.4 14 Z";
+    public static readonly string HexErase = "M14.5 4 L20.5 10 L11.5 19 H6.5 L3.5 16 Z M9 9.5 L15 15.5 M11.5 19 H20.5";
+    public static readonly string HexPick = "M13.5 5.5 L18.5 10.5 M16 8 L18.6 5.4 A1.9 1.9 0 0 1 21.3 8.1 L18.7 10.7 M15 9 L6.5 17.5 L4.5 20.5 L3.5 19.5 L6.5 17.5";
+    public static readonly string HexRegion = "M5.5 21 V3.5 M5.5 4.5 C9 2.8 11.5 6.2 15 4.5 C16.8 3.6 18.5 4 18.5 4 V13 " +
+        "C18.5 13 16.8 12.6 15 13.5 C11.5 15.2 9 11.8 5.5 13.5";
+    public static readonly string HexFog = "M7 16.5 H17.5 A3.5 3.5 0 0 0 17 9.6 A5 5 0 0 0 7.6 8.4 A4 4 0 0 0 7 16.5 Z M4 20.5 H13.5 M16.5 20.5 H20";
+    public static readonly string HexKey = Ring(8, 12, 4) + "M12 12 H21 M18.5 12 V15 M15.5 12 V14";
+    public static readonly string HexRuler = "M3 16.5 L16.5 3 L21 7.5 L7.5 21 Z M7 12.5 L9 14.5 M10 9.5 L12 11.5 M13 6.5 L15 8.5";
+    public static readonly string HexSelectBox = "M4 4 H7 M10 4 H14 M17 4 H20 V7 M20 10 V14 M20 17 V20 H17 M14 20 H10 M7 20 H4 V17 M4 14 V10 M4 7 V4";
+    public static readonly string HexGlobe = Ring(12, 12, 8.5) + "M3.5 12 H20.5 M12 3.5 C8.5 7 8.5 17 12 20.5 M12 3.5 C15.5 7 15.5 17 12 20.5";
+    public static readonly string HexDice = "M6 3.5 H18 A2.5 2.5 0 0 1 20.5 6 V18 A2.5 2.5 0 0 1 18 20.5 H6 A2.5 2.5 0 0 1 3.5 18 V6 A2.5 2.5 0 0 1 6 3.5 Z " +
+        Ring(8.5, 8.5, 0.7) + Ring(12, 12, 0.7) + Ring(15.5, 15.5, 0.7);
+    public static readonly string HexTurnLeft = "M4.5 5 V9.5 H9 M5 9.2 A7.5 7.5 0 1 1 6.1 16.6";
+    public static readonly string HexTurnRight = "M19.5 5 V9.5 H15 M19 9.2 A7.5 7.5 0 1 0 17.9 16.6";
+    public static readonly string HexMirror = "M12 3 V21 M9 6.5 L4 17.5 H9 Z M15 6.5 L20 17.5 H15 Z";
+    public static readonly string HexTrail = "M4 20 C5.5 17.5 7 16 9 15 M11.5 13.5 C13 12.5 14 11.5 15 10 M16.5 7.5 L18 5 M19.5 3.5 L20 3";
+    public static readonly string HexBorder = "M3.5 19 L6.5 15 M8.5 13.5 L11.5 15 M13 13 L15 9 M16.5 7 L20.5 4";
+    public static readonly string HexGrid = "M7 3.5 L11 5.8 V10.3 L7 12.6 L3 10.3 V5.8 Z M17 3.5 L21 5.8 V10.3 L17 12.6 L13 10.3 V5.8 Z " +
+        "M12 11.4 L16 13.7 V18.2 L12 20.5 L8 18.2 V13.7 Z";
+    public static readonly string HexFootprint = "M12 2.5 L20.2 7.2 V16.8 L12 21.5 L3.8 16.8 V7.2 Z M12 8.5 L15 10.2 V13.8 L12 15.5 L9 13.8 V10.2 Z";
+    public static readonly string HexBoard = "M3.5 5 H20.5 V19 H3.5 Z M3.5 9.5 H20.5 M3.5 14.2 H20.5 M9.2 5 V19 M14.8 5 V19";
+    public static readonly string HexExport = "M12 14.5 V3.5 M8 7.5 L12 3.5 L16 7.5 M5 12.5 V20 H19 V12.5";
+    public static readonly string HexPrint = "M7 9 V3.5 H17 V9 M7 17 H4.5 V9 H19.5 V17 H17 M7 14 H17 V20.5 H7 Z";
+    public static readonly string HexCopy = "M8.5 8.5 H19.5 V19.5 H8.5 Z M15.5 8.5 V4.5 H4.5 V15.5 H8.5";
+    public static readonly string HexCut = Ring(6.5, 17.5, 2.8) + Ring(17.5, 17.5, 2.8) + "M8.6 15.6 L18 3.5 M15.4 15.6 L6 3.5";
+    public static readonly string HexPaste = "M8.5 4.5 H5.5 V20.5 H18.5 V4.5 H15.5 M8.5 3 H15.5 V6.5 H8.5 Z M9 11.5 H15 M9 15 H15";
+    public static readonly string HexPlayer = "M2.5 12 C5 7.5 8.3 5.5 12 5.5 C15.7 5.5 19 7.5 21.5 12 C19 16.5 15.7 18.5 12 18.5 C8.3 18.5 5 16.5 2.5 12 Z " + Ring(12, 12, 3);
+
     // ------------------------------------------- solid set (Inkarnate parity 2026-10-16)
     // REA showed Inkarnate's rail as 24 px solid glyphs that read at a glance; Map's 1.6 px outlines
     // at 21 px looked faint on the dark rail. These are Map's own drawings on the same 24-unit

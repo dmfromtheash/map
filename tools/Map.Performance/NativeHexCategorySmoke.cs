@@ -65,7 +65,7 @@ public sealed partial class RegionalApplication
             && !Visible(_view, "LandToolButton") && !Visible(_view, "RiverToolButton") && !Visible(_view, "RoadToolButton")
             && !Visible(_view, "AssetsLibraryButton") && !Visible(_view, "BrushToolButton"));
         Check("the palette shows every starter tile", HexStarterTiles.All.All(tile =>
-            Visible(_view, "HexTile_" + tile.Id[(tile.Id.IndexOf('/') + 1)..])));
+            ReachableHex(_view, "HexTile_" + tile.Id[(tile.Id.IndexOf('/') + 1)..])));
 
         HexLayer Layer() => _editor.Session.Document.Layers.OfType<HexLayer>().Single();
         (double X, double Y) Screen(int column, int row)
@@ -76,7 +76,7 @@ public sealed partial class RegionalApplication
             return (point.X, point.Y);
         }
 
-        Click(_view, "HexTile_forest"); await Settle();
+        PressHex(_view, "HexTile_forest"); await Settle();
         var depth = _editor.Session.UndoDepth;
         var (ax, ay) = Screen(2, 4);
         var (bx, by) = Screen(14, 4);
@@ -87,8 +87,8 @@ public sealed partial class RegionalApplication
             && line.Cells.All(pair => pair.Value.Terrain == "starter/forest"));
         Check("the whole drag is one undo step", _editor.Session.UndoDepth == depth + 1);
 
-        Click(_view, "HexModeFill"); Click(_view, "HexTile_grass"); await Settle();
-        Click(_view, "HexModeFill"); await Settle();
+        PressHex(_view, "HexModeFill"); PressHex(_view, "HexTile_grass"); await Settle();
+        PressHex(_view, "HexModeFill"); await Settle();
         var (fx, fy) = Screen(0, 15);
         _view.Canvas.ClickForSmoke(fx, fy);
         await Settle();
@@ -96,12 +96,12 @@ public sealed partial class RegionalApplication
         Check("a fill paints the empty rest of the board", filled.CellCount == 24 * 16
             && filled.Cells.Count(pair => pair.Value.Terrain == "starter/forest") == line.CellCount);
 
-        Click(_view, "HexModePlace"); Click(_view, "HexTile_village"); await Settle();
+        PressHex(_view, "HexModePlace"); PressHex(_view, "HexTile_village"); await Settle();
         var (vx, vy) = Screen(8, 4);
         _view.Canvas.ClickForSmoke(vx, vy);
-        Click(_view, "HexTile_mountains");
+        PressHex(_view, "HexTile_mountains");
         _view.Canvas.PressMoveReleaseForSmoke(Screen(18, 9).Item1, Screen(18, 9).Item2, Screen(22, 12).Item1, Screen(22, 12).Item2);
-        Click(_view, "HexTile_sea");
+        PressHex(_view, "HexTile_sea");
         _view.Canvas.PressMoveReleaseForSmoke(Screen(3, 11).Item1, Screen(3, 11).Item2, Screen(9, 14).Item1, Screen(9, 14).Item2);
         await Settle(); Capture(_view, "hex-05-painted");
         var village = Layer().Board[Layer().Board.Layout.FromOffset(new HexOffset(8, 4))];
