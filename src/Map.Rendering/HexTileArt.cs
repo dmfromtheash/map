@@ -271,7 +271,7 @@ public static class HexTileArt
         canvas.Clear(SKColors.Transparent);
         canvas.Translate(0, above);
         using var hex = HexPath(orientation, 0, 0, width, height);
-        var random = new Random(HashCode.Combine(tile.Id.GetHashCode(StringComparison.Ordinal), variant * 7919));
+        var random = new Random(StableSeed(tile.Id, variant * 7919));
         var name = tile.Id[HexStarterTiles.Prefix.Length..];
         canvas.Save();
         canvas.ClipPath(hex, antialias: true);
@@ -330,7 +330,7 @@ public static class HexTileArt
             // The tall part stands on the hex and rises out of it: drawn without the hex clip.
             canvas.Save();
             canvas.Translate((width - TilePixels) / 2f, (height - TilePixels) / 2f);
-            new TilePainter(canvas, new Random(HashCode.Combine(name.GetHashCode(StringComparison.Ordinal), variant * 104729))).Tall(name, (TilePixels - height) / 2f, above);
+            new TilePainter(canvas, new Random(StableSeed(name, variant * 104729))).Tall(name, (TilePixels - height) / 2f, above);
             canvas.Restore();
         }
 
@@ -353,7 +353,7 @@ public static class HexTileArt
         var canvas = surface.Canvas;
         canvas.Clear(SKColors.Transparent);
         canvas.Translate((width - TilePixels) / 2f, (height - TilePixels) / 2f);
-        var painter = new TilePainter(canvas, new Random(HashCode.Combine(tile.Id.GetHashCode(StringComparison.Ordinal), 31)));
+        var painter = new TilePainter(canvas, new Random(StableSeed(tile.Id, 31)));
         painter.Ground(GroundColour(tile));
         switch (tile.Id[HexStarterTiles.Prefix.Length..])
         {
@@ -365,6 +365,18 @@ public static class HexTileArt
         return surface.Snapshot();
     }
 
+    /// <summary>
+    /// The seed of a tile's brushwork. string.GetHashCode and HashCode.Combine change with every
+    /// start of the program, so the same map was painted differently after each launch and in each
+    /// export; FNV-1a of the name is the same everywhere.
+    /// </summary>
+    public static int StableSeed(string name, int salt)
+    {
+        var hash = 2166136261u;
+        foreach (var c in name) hash = (hash ^ c) * 16777619u;
+        return unchecked((int)(hash ^ (uint)salt * 0x9E3779B1u));
+    }
+
     private static SKImage PaintIcon(HexDynamicIcon kind, int variant)
     {
         using var surface = SKSurface.Create(new SKImageInfo(IconPixels, IconPixels, SKColorType.Rgba8888, SKAlphaType.Premul));
@@ -372,7 +384,7 @@ public static class HexTileArt
         canvas.Clear(SKColors.Transparent);
         // Icons are painted in the 256 box like tiles and scaled into their picture.
         canvas.Scale(IconPixels / 256f);
-        var painter = new TilePainter(canvas, new Random(HashCode.Combine((int)kind, variant * 15485863)));
+        var painter = new TilePainter(canvas, new Random(StableSeed(kind.ToString(), variant * 15485863)));
         painter.Icon(kind);
         return surface.Snapshot();
     }

@@ -155,8 +155,10 @@ public sealed class WorkingMemoryBudget
         var reserve = Math.Clamp(reserveBytes ?? HeavyReserveBytes, MiB, HeavyReserveBytes);
         // The mutex owner stays on one worker until disposal. OS abandonment recovery releases
         // the slot after a crashed process; a named semaphore would strand other open windows.
+        // The worker is a thread of its own: it waits for the whole lease, and holding a pool
+        // thread that long left the pool short on a 2-core machine (5 s waits in CI).
         var completion = new TaskCompletionSource<IDisposable>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _ = Task.Run(() =>
+        _ = Task.Factory.StartNew(() =>
         {
             var owned = false;
             using var released = new ManualResetEventSlim();
@@ -174,7 +176,7 @@ public sealed class WorkingMemoryBudget
             catch (OperationCanceledException) { completion.TrySetCanceled(token); }
             catch (Exception ex) { completion.TrySetException(ex); }
             finally { if (owned) HeavyGate.ReleaseMutex(); }
-        });
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
         return completion.Task;
     }
 

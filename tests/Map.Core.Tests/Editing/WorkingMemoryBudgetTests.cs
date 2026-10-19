@@ -104,6 +104,29 @@ public sealed class WorkingMemoryBudgetTests
     }
 
     [Fact]
+    public void The_heavy_slot_is_granted_while_the_thread_pool_is_busy()
+    {
+        // The slot's owner waits for the whole lease. On a pool thread it queued behind busy work
+        // and a 2-core CI machine timed out after 5 s; a thread of its own starts at once.
+        var budget = new WorkingMemoryBudget(() => Roomy);
+        // Not disposed: queued work items that start after the test still wait on it.
+        var release = new ManualResetEventSlim();
+        var busy = Environment.ProcessorCount * 8;
+        for (var i = 0; i < busy; i++) ThreadPool.UnsafeQueueUserWorkItem(_ => release.Wait(TimeSpan.FromSeconds(10)), null);
+        try
+        {
+            var lease = budget.EnterHeavyAsync();
+            // Waited synchronously: an await would need a pool thread of its own.
+            Assert.True(lease.Wait(TimeSpan.FromSeconds(2)), "the slot waited for the busy pool");
+            lease.Result.Dispose();
+        }
+        finally
+        {
+            release.Set();
+        }
+    }
+
+    [Fact]
     public async Task Rejected_heavy_operation_releases_the_cross_window_slot()
     {
         var memory = Roomy with { AvailableBytes = WorkingMemoryBudget.SmallSystemReserveBytes };

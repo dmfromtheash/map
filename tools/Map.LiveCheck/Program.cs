@@ -61,6 +61,10 @@ try
 {
     app = FlaUI.Core.Application.Launch(start);
     using var automation = new UIA3Automation();
+    // A hung window of another program slows every UIA call on the desktop; the 2 s default
+    // made the first call fail on a busy machine.
+    automation.ConnectionTimeout = TimeSpan.FromSeconds(30);
+    automation.TransactionTimeout = TimeSpan.FromSeconds(30);
     Log($"started pid {app.ProcessId}: {exe}");
 
     var main = app.GetMainWindow(automation, TimeSpan.FromSeconds(60));

@@ -144,6 +144,15 @@ public sealed class HexWorkshopRenderingTests
     }
 
     [Fact]
+    public void Tile_brushwork_is_seeded_the_same_in_every_run_of_the_program()
+    {
+        // string.GetHashCode and HashCode.Combine change with each start of the process, which
+        // painted the starter tiles (and every export of a hex map) differently after each launch.
+        Assert.Equal(255315222, HexTileArt.StableSeed("starter/grass", 7919));
+        Assert.NotEqual(HexTileArt.StableSeed("starter/grass", 0), HexTileArt.StableSeed("starter/grass", 1));
+    }
+
+    [Fact]
     public void A_tall_tile_hangs_over_the_row_behind_it()
     {
         var document = HexMapFactory.Create("Горы", DateTimeOffset.UnixEpoch, new MapCategoryId("hex"),

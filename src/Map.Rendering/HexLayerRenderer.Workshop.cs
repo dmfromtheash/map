@@ -95,9 +95,14 @@ public static partial class HexLayerRenderer
 
         if (spilling.Count == 0 && coastMask == 0) return false;
         var layout = board.Layout;
-        canvas.Save();
-        using (var clip = HexOutline(layout, hex, 0))
+        // Spilled bands are built on the hex edge itself and never leave the hex, so they need no
+        // clip: an antialiased clip per hex was a large share of a band's cost. Only the coast's
+        // surf strokes reach past the edge and are clipped.
+        var clipped = coastMask != 0;
+        if (clipped)
         {
+            canvas.Save();
+            using var clip = HexOutline(layout, hex, 0);
             canvas.ClipPath(clip, antialias: true);
         }
 
@@ -117,16 +122,26 @@ public static partial class HexLayerRenderer
             var ground = HexTileArt.Ground(spilling[i].Id, layout.Orientation);
             if (ground is null) continue;
             var bounds = layout.Bounds(hex);
+            // As in DrawScaled: on a CPU canvas the band samples a kept halved copy of the ground
+            // linearly; sampling the 256-pixel ground through mipmaps was most of a band's cost.
+            var sampling = Sampling;
+            var pixels = (bounds.Right - bounds.Left) * Math.Abs(canvas.TotalMatrix.ScaleX);
+            if (canvas.Context is null && pixels > 0 && pixels * 2 <= ground.Width)
+            {
+                ground = HexTileArt.Reduced(ground, (int)Math.Floor(Math.Log2(ground.Width / pixels)));
+                sampling = ChunkSampling;
+            }
+
             var matrix = SKMatrix.CreateScale((float)((bounds.Right - bounds.Left) / ground.Width), (float)((bounds.Bottom - bounds.Top) / ground.Height))
                 .PostConcat(SKMatrix.CreateTranslation((float)bounds.Left, (float)bounds.Top));
-            using var shader = SKShader.CreateImage(ground, SKShaderTileMode.Clamp, SKShaderTileMode.Clamp, Sampling, matrix);
+            using var shader = SKShader.CreateImage(ground, SKShaderTileMode.Clamp, SKShaderTileMode.Clamp, sampling, matrix);
             using var paint = new SKPaint { IsAntialias = true, Shader = shader };
             foreach (var (start, length) in HexTransitions.Runs(mask))
             {
                 for (var step = 0; step < steps.Length; step++)
                 {
                     paint.Color = SKColors.White.WithAlpha(steps[step].Alpha);
-                    using var band = Band(layout, hex, start, length, steps[step].Depth, noiseSeed + i * 13 + step * 101, out var bandEdge);
+                    using var band = Band(layout, hex, start, length, steps[step].Depth, noiseSeed + i * 13 + step * 101, out var bandEdge, push: 1);
                     canvas.DrawPath(band, paint);
                     bandEdge.Dispose();
                 }
@@ -161,7 +176,7 @@ public static partial class HexLayerRenderer
             }
         }
 
-        canvas.Restore();
+        if (clipped) canvas.Restore();
         return true;
     }
 
@@ -213,11 +228,13 @@ public static partial class HexLayerRenderer
     }
 
     /// <summary>
-    /// A band along a run of sides of a hex: outside the hex edge by a little (so a blurred band is
-    /// solid where it meets the neighbour) and inside by <paramref name="depth"/> of the radius with a
-    /// wavy inner line that comes back to the corners at the ends of a partial run.
+    /// A band along a run of sides of a hex: from <paramref name="push"/> times the hex edge (a little
+    /// outside by default, for bands that are clipped to the hex; 1 lays it on the edge, which is
+    /// the same shape without a clip) inward by <paramref name="depth"/> of the radius with a wavy
+    /// inner line that comes back to the corners at the ends of a partial run. The inner line never
+    /// goes deeper than 0.58 of the radius, so it stays inside the hex.
     /// </summary>
-    private static SKPath Band(HexLayout layout, HexCoord hex, int start, int length, double depth, int seed, out SKPath innerLine)
+    private static SKPath Band(HexLayout layout, HexCoord hex, int start, int length, double depth, int seed, out SKPath innerLine, double push = 1.12)
     {
         var orientation = layout.Orientation == HexOrientation.Flat ? 0 : 1;
         var (cx, cy) = layout.Center(hex);
@@ -248,7 +265,6 @@ public static partial class HexLayerRenderer
         for (var i = 0; i < count; i++)
         {
             var (x, y) = outer[i];
-            var push = 1.12;
             var px = cx + (x - cx) * push;
             var py = cy + (y - cy) * push;
             if (i == 0) path.MoveTo((float)px, (float)py);

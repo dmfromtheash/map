@@ -203,6 +203,8 @@ updater, подпись, новый remote/Project/issue, изменение п�
 - Снимки смоуков — рендер контрола, не монитор; `gatePassed` ≠ 40 FPS ≠ приёмка владельца.
 - `Map.App.exe` владельца держит Release-выход: пересборка после закрытия.
 - Классификатор auto-mode блокирует связки `git push … && gh …` — по одной команде.
+- Зерно случайности — только стабильное (FNV, `Guid`, сохранённый `Seed`): `string.GetHashCode` и
+  `HashCode.Combine` меняются при каждом запуске (2026-10-19 так менялись гексовые тайлы).
 - Профилировщик VS `CpuUsageHigh` (4000 выборок/с) снижает FPS в 2–4 раза: под ним верны только доли
   времени; FPS — без профилировщика или с `CpuUsageBase`. `.etl` из `-Expand` читается ETW-инструментами
   (символы: `C:\SymCache`, `srv*C:\Symbols*https://msdl.microsoft.com/download/symbols`).
