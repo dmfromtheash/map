@@ -35,15 +35,65 @@ public sealed class HexLayerRenderingTests
         return painted.Apply(document);
     }
 
-    private static SKBitmap Render(MapDocument document, double scale, HexChunkCache? cache)
+    private static SKBitmap Render(MapDocument document, double scale, HexChunkCache? cache, bool live = false)
     {
         var width = (int)(document.Canvas.Width * scale);
         var height = (int)(document.Canvas.Height * scale);
         var bitmap = new SKBitmap(width, height, SKColorType.Rgba8888, SKAlphaType.Premul);
         using var canvas = new SKCanvas(bitmap);
         canvas.Scale((float)scale);
-        SceneRenderer.Render(canvas, document, new RenderOptions { ViewScale = scale, HexChunks = cache });
+        SceneRenderer.Render(canvas, document, new RenderOptions { ViewScale = scale, HexChunks = cache, HexGestureLive = live });
         return bitmap;
+    }
+
+    private static int Differing(SKBitmap a, SKBitmap b)
+    {
+        var differing = 0;
+        for (var y = 0; y < a.Height; y += 3)
+        {
+            for (var x = 0; x < a.Width; x += 3)
+            {
+                var p = a.GetPixel(x, y);
+                var q = b.GetPixel(x, y);
+                if (Math.Abs(p.Red - q.Red) + Math.Abs(p.Green - q.Green) + Math.Abs(p.Blue - q.Blue) > 60) differing++;
+            }
+        }
+
+        return differing;
+    }
+
+    /// <summary>
+    /// During a drag an edited chunk keeps its picture and only the changed hexes are drawn into it
+    /// again: move by move the frame shows what drawing the whole map would, and after the release
+    /// that picture stands in until the exact one is drawn.
+    /// </summary>
+    [Theory]
+    [InlineData(HexOrientation.Flat)]
+    [InlineData(HexOrientation.Pointy)]
+    public void A_drag_draws_the_same_map_as_drawing_it_whole(HexOrientation orientation)
+    {
+        var document = Sample(orientation, 20, 20);
+        using var cache = new HexChunkCache();
+        for (var frame = 0; frame < 12; frame++) Render(document, 0.5, cache).Dispose();
+        var layer = document.Layers.OfType<HexLayer>().Single();
+        var choice = new HexTileChoice("starter/forest", 1);
+        // A drag from (4, 5) to (10, 9) with footprint 1, one history entry per move as the editor does.
+        foreach (var (column, row) in new[] { (4, 5), (5, 6), (6, 6), (7, 7), (8, 8), (9, 8), (10, 9) })
+        {
+            layer = document.Layers.OfType<HexLayer>().Single();
+            var cells = HexCoord.Range(layer.Board.Layout.FromOffset(new HexOffset(column, row)), 1)
+                .Where(layer.Board.Contains)
+                .ToDictionary(hex => hex, hex => HexEditing.Place(layer.Board[hex], hex, choice));
+            document = HexPaintCommand.Create("Лес", layer, cells)!.Apply(document);
+            Render(document, 0.5, cache, live: true).Dispose();
+        }
+
+        using var direct = Render(document, 0.5, cache: null);
+        using var live = Render(document, 0.5, cache, live: true);
+        var limit = direct.Width * direct.Height / 9 / 50;
+        Assert.True(Differing(direct, live) < limit, $"{Differing(direct, live)} pixels differ during the drag");
+        using var released = Render(document, 0.5, cache);
+        Assert.True(Differing(direct, released) < limit, $"{Differing(direct, released)} pixels differ after the release");
     }
 
     [Theory]

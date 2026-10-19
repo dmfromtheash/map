@@ -77,6 +77,17 @@ public sealed partial class PaintPerfApplication
         // Hex tool drags at 100 %.
         SetScale(centre, 0.5); await Settle();
         _editor.HexTileId = "starter/forest"; _editor.HexMode = HexToolMode.Place;
+        // MAP_HEX_DRAG_REPEAT=N: N more drags (footprint MAP_HEX_DRAG_REPEAT_RADIUS, 3 by default)
+        // first, so a trace of the run is mostly drags.
+        var repeat = int.TryParse(System.Environment.GetEnvironmentVariable("MAP_HEX_DRAG_REPEAT"), out var r) ? r : 0;
+        _editor.HexRadius = int.TryParse(System.Environment.GetEnvironmentVariable("MAP_HEX_DRAG_REPEAT_RADIUS"), out var rr) ? rr : 3;
+        await Settle();
+        for (var i = 0; i < repeat; i++)
+        {
+            await StrokeRoute($"{tag}/drag-r{_editor.HexRadius}-repeat{i}", (centre.X, centre.Y + (i % 5 - 2) * 120), 60, 9, 3);
+            _editor.Undo(); await Settle();
+        }
+
         foreach (var radius in new[] { 0, 3, 8 })
         {
             _editor.HexRadius = radius; await Settle();

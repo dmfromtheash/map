@@ -62,10 +62,10 @@ public static partial class HexLayerRenderer
     /// are one band, the longest run first) and draws a sandy shore with surf where land meets water.
     /// Everything is clipped to the hex, so the neighbour's own picture is never covered.
     /// </summary>
-    private static void DrawTransitions(SKCanvas canvas, HexBoard board, HexCoord hex, HexCell cell, double detail)
+    private static bool DrawTransitions(SKCanvas canvas, HexBoard board, HexCoord hex, HexCell cell, double detail)
     {
         var self = HexStarterTiles.Find(cell.Terrain);
-        if (self is null || !self.Blends) return;
+        if (self is null || !self.Blends) return false;
         Span<int> neighbourIndex = stackalloc int[6];
         var spilling = new List<HexTileDefinition>(3);
         var coastMask = 0;
@@ -93,7 +93,7 @@ public static partial class HexLayerRenderer
             neighbourIndex[d] = index;
         }
 
-        if (spilling.Count == 0 && coastMask == 0) return;
+        if (spilling.Count == 0 && coastMask == 0) return false;
         var layout = board.Layout;
         canvas.Save();
         using (var clip = HexOutline(layout, hex, 0))
@@ -162,6 +162,54 @@ public static partial class HexLayerRenderer
         }
 
         canvas.Restore();
+        return true;
+    }
+
+    /// <summary>A kept transition picture larger than this on a side is not made; the bands are drawn directly.</summary>
+    private const int MaxTransitionPixels = 768;
+
+    /// <summary>
+    /// The transitions of a hex from a kept picture. During a drag the edited chunk is drawn hex by
+    /// hex on every move, and its antialiased bands, each clipped to its hex, took most of the GPU's
+    /// frame (29 FPS with footprint 3): a kept picture is one image draw, and only the hexes whose
+    /// neighbourhood changed are drawn again (on the CPU, a picture of a few dozen pixels).
+    /// </summary>
+    private static void DrawTransitionsKept(SKCanvas canvas, HexBoard board, HexCoord hex, HexCell cell, double pixelScale, HexChunkCache cache)
+    {
+        var self = HexStarterTiles.Find(cell.Terrain);
+        if (self is null || !self.Blends) return;
+        var layout = board.Layout;
+        var detail = layout.Size * pixelScale;
+        var level = LevelFor(pixelScale);
+        var scale = Math.Pow(2, level);
+        var bounds = layout.Bounds(hex);
+        var width = (int)Math.Ceiling((bounds.Right - bounds.Left) * scale) + 2;
+        var height = (int)Math.Ceiling((bounds.Bottom - bounds.Top) * scale) + 2;
+        if (width > MaxTransitionPixels || height > MaxTransitionPixels)
+        {
+            DrawTransitions(canvas, board, hex, cell, detail);
+            return;
+        }
+
+        string? Terrain(int d) => board[hex.Neighbor(d)]?.Terrain;
+        var key = new HexChunkCache.TransitionKey(layout, hex, level, detail >= 14, cell.Terrain,
+            Terrain(0), Terrain(1), Terrain(2), Terrain(3), Terrain(4), Terrain(5));
+        var image = cache.Transition(key, () =>
+        {
+            using var surface = SKSurface.Create(new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Premul));
+            if (surface is null) return null;
+            var target = surface.Canvas;
+            target.Clear(SKColors.Transparent);
+            // One pixel of room round the hex for the antialiased edge of its clip.
+            target.Translate(1, 1);
+            target.Scale((float)scale);
+            target.Translate((float)-bounds.Left, (float)-bounds.Top);
+            return DrawTransitions(target, board, hex, cell, detail) ? surface.Snapshot() : null;
+        });
+        if (image is null) return;
+        var left = bounds.Left - 1 / scale;
+        var top = bounds.Top - 1 / scale;
+        canvas.DrawImage(image, new SKRect((float)left, (float)top, (float)(left + image.Width / scale), (float)(top + image.Height / scale)), ChunkSampling);
     }
 
     /// <summary>
@@ -238,7 +286,8 @@ public static partial class HexLayerRenderer
     private readonly record struct Standing(float SortY, SKImage Image, SKRect Rect);
 
     /// <summary>Everything that stands on the ground of a chunk, sorted back to front, and the region frontiers.</summary>
-    private static void DrawChunkFeatures(SKCanvas canvas, HexLayer layer, HexChunkKey key, HexChunk chunk, WorldBounds? clip, double pixelScale)
+    private static void DrawChunkFeatures(SKCanvas canvas, HexLayer layer, HexChunkKey key, HexChunk chunk, WorldBounds? clip, double pixelScale,
+        IReadOnlySet<HexCoord>? only = null)
     {
         var board = layer.Board;
         var layout = board.Layout;
@@ -248,6 +297,7 @@ public static partial class HexLayerRenderer
             if (chunk[column, row] is not { } cell) continue;
             var hex = board.CoordOf(key, column, row);
             if (clip is { } view && !Intersects(TallBounds(layout, hex), view)) continue;
+            if (only is not null && !only.Contains(hex)) continue;
             if (HexStarterTiles.Find(cell.Terrain) is { Dynamic: not HexDynamicIcon.None } living)
             {
                 AddLivingIcons(items, board, hex, cell, living);
@@ -262,7 +312,7 @@ public static partial class HexLayerRenderer
         }
 
         items.Sort((a, b) => a.SortY.CompareTo(b.SortY));
-        foreach (var item in items) canvas.DrawImage(item.Image, item.Rect, Sampling);
+        foreach (var item in items) DrawScaled(canvas, item.Image, item.Rect);
         if (!layer.Regions.IsEmpty) DrawFrontiers(canvas, layer, key, chunk, pixelScale);
     }
 

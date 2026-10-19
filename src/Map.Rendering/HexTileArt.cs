@@ -187,6 +187,28 @@ public static class HexTileArt
             return tile is null || tile.Target != HexPaintTarget.Terrain ? null : PaintGround(tile, key.Orientation);
         });
 
+    private static readonly ConcurrentDictionary<(SKImage Image, int Halvings), SKImage> ReducedCopies = new();
+
+    /// <summary>
+    /// A starter picture halved <paramref name="halvings"/> times (kept): what a CPU canvas samples
+    /// when the picture is shown at under half its size. Safe on any thread.
+    /// </summary>
+    public static SKImage Reduced(SKImage image, int halvings)
+    {
+        ArgumentNullException.ThrowIfNull(image);
+        halvings = Math.Clamp(halvings, 0, 6);
+        if (halvings == 0) return image;
+        return ReducedCopies.GetOrAdd((image, halvings), static key =>
+        {
+            var width = Math.Max(1, key.Image.Width >> key.Halvings);
+            var height = Math.Max(1, key.Image.Height >> key.Halvings);
+            using var surface = SKSurface.Create(new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Premul));
+            surface.Canvas.Clear(SKColors.Transparent);
+            surface.Canvas.DrawImage(key.Image, new SKRect(0, 0, width, height), new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear));
+            return surface.Snapshot();
+        });
+    }
+
     /// <summary>One living-terrain icon (a tree, a pine, a hill, a peak) standing on the bottom middle of its picture.</summary>
     public static SKImage Icon(HexDynamicIcon kind, int variant) =>
         Icons.GetOrAdd((kind, ((variant % IconVariants) + IconVariants) % IconVariants), key => PaintIcon(key.Kind, key.Variant));
