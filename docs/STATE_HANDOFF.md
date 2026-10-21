@@ -1,4 +1,20 @@
 ﻿# STATE_HANDOFF — актуальное состояние Map
+## Актуально на 2026-10-21 (ночь, R03) — быстрые победы экспорта и библиотеки интегрированы
+
+**FACT.** Codex выполнил R03 в `codex/roadmap-R03` (ed5956c), интегратор перенёс как 602b8d2 поверх R06. JSON-импорт
+гексов (`HexJsonImporter`, `HexImportCommand`, `EditorViewModel.HexImport.cs`, `EditorView.HexImport.cs`): выбор слоя,
+авторазмер поля/холста, отчёт о потерях, один Undo. Печать гексов (`HexPrintPaper`, `EditorView.HexPrint.cs`): A4/A3/Letter/свой
+лист, метки реза, bleed. Экспорт Standard: единицы px/мм/дюймы + DPI (`ExportPlanner.Units.cs`, `EditorView.ExportUnits.cs`).
+Библиотека: бейджи и фильтр категорий, «Сменить папку библиотеки…» (`MapLibrary.Folder.cs`, `DashboardView.Library.cs`),
+`MapsRoot` в профиле. Схема v14 сохранена. Новые профили `native-export-wins`, `native-library-wins`; `Map.LiveCheck` —
+маршруты экспорта/печати и библиотеки.
+
+**Проверено (FACT):** у Codex — Release 0 ошибок; Core 2/2; Presentation/Export 142 проверки; смоуки 12/12, 9/9,
+R02 13/13; живые проходы PASS, PrintWindow-снимки просмотрены (и интегратором: единицы/DPI, бейджи и смена папки).
+У интегратора после cherry-pick: 1714/1714: Core 427, Persistence 218, Presentation 690, Rendering 230, Assets 149; смоуки native-export-wins 12/12, native-crossings 29/29.
+**NOT CHECKED:** физическая печать; живой просмотр владельцем; чёрные поля на PrintWindow-снимке окна экспорта (R05).
+**Следующий шаг:** push → CI → R03 ✅ (6 из 44). Дальше: Codex — R13 или R19, Claude — R07 или остаток R05.
+
 ## Актуально на 2026-10-21 (ночь, R06) — мосты и броды: переправы из геометрии, схема v15
 
 **FACT.** R06 (Claude). `Map.Core.Editing.RoadCrossings.Detect(roads, rivers)` находит пересечения участков дорог с
