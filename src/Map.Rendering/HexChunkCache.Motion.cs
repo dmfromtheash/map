@@ -18,7 +18,7 @@ public sealed partial class HexChunkCache
     /// <summary>How long a hex takes to come out of the fog or to go back under it.</summary>
     public const double FogFadeMilliseconds = 260;
 
-    /// <summary>How long the far (flat colour) and the near look take to hand over.</summary>
+    /// <summary>How long the near look takes to fade into the far (flat colour) one on a zoom out.</summary>
     public const double LookFadeMilliseconds = 220;
 
     /// <summary>More hexes than this changing fog at once (a whole level, a new board) switch at once.</summary>
@@ -193,7 +193,9 @@ public sealed partial class HexChunkCache
 
         if (state.Flat != flat)
         {
-            state = (flat, state.Flat, now);
+            // Only a zoom out fades (the near look into the far one). Zooming in, the far look would
+            // have to be drawn again at the new scale under the fade: 42-46 → 24-35 FPS measured.
+            state = flat ? (flat, state.Flat, now) : (flat, flat, 0);
             _looks[layer] = state;
         }
 

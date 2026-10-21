@@ -939,7 +939,8 @@ public static partial class HexLayerRenderer
 
     /// <summary>Draws one tile picture into a hex; used by the canvas and by the palette thumbnails.</summary>
     /// <param name="rotation">The picture turned by this many 60° steps clockwise.</param>
-    public static void DrawTile(SKCanvas canvas, HexLayout layout, HexCoord hex, string tileId, int variant, float bleed = 0, int rotation = 0)
+    public static void DrawTile(SKCanvas canvas, HexLayout layout, HexCoord hex, string tileId, int variant, float bleed = 0, int rotation = 0,
+        SKPaint? paint = null)
     {
         var image = HexTileArt.Image(tileId, variant, layout.Orientation);
         if (image is null)
@@ -952,14 +953,14 @@ public static partial class HexLayerRenderer
         var above = layout.Bounds(hex).Top - bleed - rect.Top;
         if (rotation % 6 == 0 || above > 0.01)
         {
-            DrawScaled(canvas, image, rect);
+            DrawScaled(canvas, image, rect, paint);
             return;
         }
 
         var (cx, cy) = layout.Center(hex);
         canvas.Save();
         canvas.RotateDegrees(60 * (rotation % 6), (float)cx, (float)cy);
-        DrawScaled(canvas, image, rect);
+        DrawScaled(canvas, image, rect, paint);
         canvas.Restore();
     }
 
@@ -981,19 +982,19 @@ public static partial class HexLayerRenderer
     /// size is taken from a copy halved once or more (kept), sampled linearly: sampling the full
     /// 256-pixel picture through mipmaps cost a chunk drawn on the CPU most of its time.
     /// </summary>
-    internal static void DrawScaled(SKCanvas canvas, SKImage image, SKRect rect)
+    internal static void DrawScaled(SKCanvas canvas, SKImage image, SKRect rect, SKPaint? paint = null)
     {
         if (canvas.Context is null)
         {
             var pixels = rect.Width * Math.Abs(canvas.TotalMatrix.ScaleX);
             if (pixels > 0 && pixels * 2 <= image.Width)
             {
-                canvas.DrawImage(HexTileArt.Reduced(image, (int)Math.Floor(Math.Log2(image.Width / pixels))), rect, ChunkSampling);
+                canvas.DrawImage(HexTileArt.Reduced(image, (int)Math.Floor(Math.Log2(image.Width / pixels))), rect, ChunkSampling, paint);
                 return;
             }
         }
 
-        canvas.DrawImage(image, rect, Sampling);
+        canvas.DrawImage(image, rect, Sampling, paint);
     }
 
     private static void DrawMissing(SKCanvas canvas, HexLayout layout, HexCoord hex)
@@ -1384,7 +1385,12 @@ public static partial class HexLayerRenderer
             {
                 // Every picture of a look covers the same canvas area, its corner snapped to its own pixels.
                 DrawPicture(canvas, board, key, look, other.Image, other.Level);
-                cache.NoteStandIn(place, other.Image, other.Level);
+                // The same hexes at another level only sharpen when the right picture comes (a zoom):
+                // that is not faded, it would cost every chunk on screen a second picture per frame.
+                if (other.Level == level || cache.StandIn(chunk, board.Orientation, level, look) is null)
+                {
+                    cache.NoteStandIn(place, other.Image, other.Level);
+                }
             }
             else if (look == HexLook.Terrain)
             {
@@ -1773,7 +1779,7 @@ public static partial class HexLayerRenderer
         }
 
         // A small footprint is filled smoothly; a large one stays aliased (its edge lies under the line).
-        using var fillPaint = new SKPaint { IsAntialias = glow.Hexes.Count <= 19, Color = fill.WithAlpha((byte)Math.Round(15 * strength)) };
+        using var fillPaint = new SKPaint { IsAntialias = glow.Hexes.Count <= 7, Color = fill.WithAlpha((byte)Math.Round(15 * strength)) };
         using var seat = new SKPaint
         {
             IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeCap = SKStrokeCap.Round, StrokeJoin = SKStrokeJoin.Round,

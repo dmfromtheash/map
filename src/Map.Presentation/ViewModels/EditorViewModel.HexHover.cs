@@ -69,7 +69,7 @@ public sealed partial class EditorViewModel
             var layout = layer.Board.Layout;
             // A jump of several hexes (a zoom, a new layer) is taken at once instead of slid across.
             var point = _hexHoverPoint is { } p && Math.Abs(p.X - hover.X) + Math.Abs(p.Y - hover.Y) < 4 * layout.Size
-                ? Follow(p, hover.X, hover.Y, HexHoverFollowMs, dt)
+                ? Follow(p, hover.X, hover.Y, SimpleHexHover ? 1 : HexHoverFollowMs, dt)
                 : (hover.X, hover.Y, 0, 0);
             _hexHoverPoint = point;
             if (Math.Abs(point.X - hover.X) + Math.Abs(point.Y - hover.Y) > layout.Size * 0.002
@@ -88,7 +88,9 @@ public sealed partial class EditorViewModel
             if (candidates.Count > 0)
             {
                 var nearest = candidates.Min(c => c.D2);
-                var sharp = 1.6 / (HexHoverBlend * HexHoverBlend);
+                // A large brush (more than 37 hexes) outlines only the footprint under the pointer:
+                // several overlapping footprints of hundreds of hexes each cost a drag its frames.
+                var sharp = SimpleHexHover ? 1e9 : 1.6 / (HexHoverBlend * HexHoverBlend);
                 foreach (var (hex, d2) in candidates)
                 {
                     var target = Math.Exp(-sharp * (d2 - nearest));
@@ -107,8 +109,8 @@ public sealed partial class EditorViewModel
         {
             var (strength, hexes) = _hexHoverCells[hex];
             var target = targets.GetValueOrDefault(hex);
-            var ms = target > strength ? HexHoverRiseMs : HexHoverFadeMs;
-            strength += (target - strength) * (1 - Math.Exp(-dt * 1000 / (ms / 3)));
+            var ms = SimpleHexHover ? 0 : target > strength ? HexHoverRiseMs : HexHoverFadeMs;
+            strength = ms <= 0 ? target : strength + (target - strength) * (1 - Math.Exp(-dt * 1000 / (ms / 3)));
             if (Math.Abs(target - strength) <= 0.002) strength = target;
             else busy = true;
             if (strength <= 0.003 && target == 0) _hexHoverCells.Remove(hex);
@@ -123,6 +125,13 @@ public sealed partial class EditorViewModel
         if (!busy) _hexHoverStamp = 0;
         return busy || settling;
     }
+
+    /// <summary>
+    /// One outline, straight under the pointer, instead of the eased hand-over: a large brush, or
+    /// a brush wider than one hex while it paints (two or three overlapping footprints of 19-37
+    /// hexes cost a drag about 3 ms a frame: r3 61 → 47 FPS, eraser r2 59 → 51).
+    /// </summary>
+    private bool SimpleHexHover => _hexRadius > 3 || (_hexGestureLayer is not null && _hexRadius > 0);
 
     /// <summary>The hexes the hex tool covers when its footprint is centred on <paramref name="center"/>.</summary>
     private List<HexCoord> HexCursorFootprint(HexLayer layer, HexCoord center) =>

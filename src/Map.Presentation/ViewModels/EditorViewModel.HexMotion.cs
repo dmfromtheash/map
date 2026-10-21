@@ -23,8 +23,8 @@ public sealed partial class EditorViewModel
     /// <summary>More hexes than this at once (a large fill, the generator) just appear.</summary>
     internal const int MaxHexSettles = 420;
 
-    /// <summary>A brush footprint larger than this (radius 4 and up) just appears: a drag stays fast.</summary>
-    internal const int MaxStrokeSettles = 37;
+    /// <summary>A brush footprint larger than this (radius 2 and up) just appears: a drag stays fast (r3: 54 → 40 FPS with it).</summary>
+    internal const int MaxStrokeSettles = 7;
 
     private sealed class HexSettleState(LayerId layer, HexCoord hex, HexCell? from, HexCell? to, HexSettleKind kind, long start, double milliseconds)
     {

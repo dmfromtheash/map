@@ -41,6 +41,7 @@ public static partial class HexLayerRenderer
         var pixel = (float)(1 / Math.Max(viewScale, 1e-6));
         using var paint = new SKPaint { IsAntialias = true };
         using var rim = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeJoin = SKStrokeJoin.Round };
+        using var fade = new SKPaint { Color = SKColors.White };
         // Waiting hexes first (they show what was there), then the moving ones over them.
         foreach (var settle in settles)
         {
@@ -62,28 +63,16 @@ public static partial class HexLayerRenderer
                     var cover = t < LandShare ? 1 : 1 - HexChunkCache.Ease((t - LandShare) / (1 - LandShare));
                     var lift = layout.Size * 0.12 * (1 - down);
                     var scale = 1 + 0.09 * (1 - down);
-                    // Its shadow on the ground, softest while it is highest.
-                    paint.Color = new SKColor(0, 0, 0, (byte)Math.Round(70 * (1 - down) * cover));
-                    paint.MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, (float)(layout.Size * 0.06));
+                    // Its shadow on the ground, darkest just before it lands. No blur and no layer:
+                    // a brush stroke has dozens of these on screen at once.
+                    paint.Color = new SKColor(0, 0, 0, (byte)Math.Round(56 * (1 - down) * cover));
                     canvas.DrawPath(outline, paint);
-                    paint.MaskFilter = null;
-                    var bounds = layout.Bounds(settle.Hex);
-                    var room = TileOverhang(to) * (bounds.Bottom - bounds.Top);
-                    using var fade = new SKPaint { Color = SKColors.White.WithAlpha((byte)Math.Round(255 * cover)) };
-                    // While it is fully there it is drawn straight; only its fade needs a layer.
-                    if (cover < 0.999)
-                    {
-                        canvas.SaveLayer(new SKRect((float)(bounds.Left - layout.Size * 0.3), (float)(bounds.Top - room - layout.Size * 0.4),
-                            (float)(bounds.Right + layout.Size * 0.3), (float)(bounds.Bottom + layout.Size * 0.3)), fade);
-                    }
-                    else
-                    {
-                        canvas.Save();
-                    }
+                    fade.Color = SKColors.White.WithAlpha((byte)Math.Round(255 * cover));
+                    canvas.Save();
                     canvas.Translate((float)cx, (float)(cy - lift));
                     canvas.Scale((float)scale);
                     canvas.Translate((float)-cx, (float)-cy);
-                    DrawCell(canvas, layout, settle.Hex, to, pixel);
+                    DrawCell(canvas, layout, settle.Hex, to, pixel, fade);
                     canvas.Restore();
                     // A short warm rim as it touches down.
                     rim.StrokeWidth = 1.25f * pixel;
@@ -94,16 +83,13 @@ public static partial class HexLayerRenderer
                 case HexSettleKind.Lift when settle.From is { } gone:
                 {
                     var e = HexChunkCache.Ease(t);
-                    var bounds = layout.Bounds(settle.Hex);
-                    var room = TileOverhang(gone) * (bounds.Bottom - bounds.Top);
-                    using var fade = new SKPaint { Color = SKColors.White.WithAlpha((byte)Math.Round(255 * (1 - e))) };
-                    canvas.SaveLayer(new SKRect((float)(bounds.Left - layout.Size * 0.2), (float)(bounds.Top - room - layout.Size * 0.2),
-                        (float)(bounds.Right + layout.Size * 0.2), (float)(bounds.Bottom + layout.Size * 0.2)), fade);
+                    fade.Color = SKColors.White.WithAlpha((byte)Math.Round(255 * (1 - e)));
+                    canvas.Save();
                     var scale = 1 - 0.14 * e;
                     canvas.Translate((float)cx, (float)(cy + layout.Size * 0.05 * e));
                     canvas.Scale((float)scale);
                     canvas.Translate((float)-cx, (float)-cy);
-                    DrawCell(canvas, layout, settle.Hex, gone, pixel);
+                    DrawCell(canvas, layout, settle.Hex, gone, pixel, fade);
                     canvas.Restore();
                     break;
                 }
@@ -125,15 +111,11 @@ public static partial class HexLayerRenderer
 
     private static double OutCubic(double t) => 1 - Math.Pow(1 - Math.Clamp(t, 0, 1), 3);
 
-    /// <summary>How far a cell's pictures rise above its hex, in hex heights.</summary>
-    private static double TileOverhang(HexCell cell) =>
-        Math.Max(HexStarterTiles.Find(cell.Terrain)?.Overhang ?? 0, cell.Feature is { } f ? HexStarterTiles.Find(f)?.Overhang ?? 0 : 0);
-
     /// <summary>A cell's own pictures (its terrain and what stands on it), without its neighbours' transitions.</summary>
-    private static void DrawCell(SKCanvas canvas, HexLayout layout, HexCoord hex, HexCell cell, float pixel)
+    private static void DrawCell(SKCanvas canvas, HexLayout layout, HexCoord hex, HexCell cell, float pixel, SKPaint? paint = null)
     {
-        DrawTile(canvas, layout, hex, cell.Terrain, cell.Variant, 0.5f * pixel, cell.Rotation);
-        if (cell.Feature is { } feature) DrawTile(canvas, layout, hex, feature, cell.FeatureVariant);
+        DrawTile(canvas, layout, hex, cell.Terrain, cell.Variant, 0.5f * pixel, cell.Rotation, paint);
+        if (cell.Feature is { } feature) DrawTile(canvas, layout, hex, feature, cell.FeatureVariant, 0, 0, paint);
     }
 
     /// <summary>The chosen tile, faint, on the hexes under the pointer: what a click would put down.</summary>
