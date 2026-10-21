@@ -114,6 +114,22 @@ public sealed partial class RegionalApplication
         Check("a tall tile is painted", Layer().Board[Hex(22, 2)]?.Terrain == "starter/peaks");
         Capture(_view, "workshop-01-ground");
 
+        // The hover outline at a hex border: both neighbours show and hand over, then it fades out.
+        PressHex(_view, "HexModePlace"); _editor.HexRadius = 0; await Settle();
+        var (ha, hb) = (Screen(12, 8), Screen(12, 9));
+        _view.Canvas.HoverForSmoke((ha.X + hb.X) / 2, (ha.Y + hb.Y) / 2);
+        await Settle(); await Settle(); await Settle();
+        var glows = _editor.HexCursorShown?.Glows ?? [];
+        Console.WriteLine("hover glows: " + string.Join(", ", glows.Select(g => $"{g.Hexes[0]}={g.Strength:0.00}")));
+        Check("at a hex border the hover outline shows both neighbours", glows.Count(g => g.Strength > 0.3) >= 2);
+        Capture(_view, "workshop-01b-hover-border");
+        _view.Canvas.HoverForSmoke(ha.X, ha.Y);
+        await Settle(); await Settle(); await Settle();
+        Capture(_view, "workshop-01c-hover-centre");
+        _view.Canvas.HoverForSmoke(null, null);
+        await Settle(); await Settle(); await Settle(); await Settle();
+        Check("the hover outline fades out by itself after the pointer leaves", _editor.HexCursorShown is null);
+
         // A region painted through the canvas.
         PressHex(_view, "HexModeRegion"); await Settle();
         PressHex(_view, "HexAddRegionButton"); await Settle();

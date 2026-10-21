@@ -283,6 +283,9 @@ public sealed partial class EditorViewModel
     /// <summary>The footprint under the pointer, outlined on the canvas while the hex tool is active.</summary>
     public HexCursorPreview? HexCursor => _hexCursor;
 
+    /// <summary>What the canvas draws for the hover: <see cref="HexCursor"/> eased by <see cref="StepHexHover"/>.</summary>
+    public HexCursorPreview? HexCursorShown => _hexHoverShown ?? _hexCursor;
+
     private HexTileChoice HexChoice => _hexMode switch
     {
         HexToolMode.Region => new HexTileChoice(HexTile.Id, 1, HexPaintTarget.Region) { Region = _hexRegionErase ? 0 : _hexRegionId },
@@ -303,8 +306,8 @@ public sealed partial class EditorViewModel
         _hexHover = worldX is { } x && worldY is { } y ? (x, y) : null;
         var before = _hexCursor;
         RefreshHexCursor();
-        var changed = !Equals(before?.Hexes.FirstOrDefault(), _hexCursor?.Hexes.FirstOrDefault())
-            || before?.Hexes.Count != _hexCursor?.Hexes.Count || (before is null) != (_hexCursor is null);
+        // The eased outline follows the pointer inside a hex too, so any move over the board redraws.
+        var changed = _hexCursor is not null || before is not null;
         if (_hexPaste is not null && _hexHover is { } hover && ActiveHexLayer is { } layer)
         {
             var at = layer.Board.Layout.HexAt(hover.X, hover.Y);

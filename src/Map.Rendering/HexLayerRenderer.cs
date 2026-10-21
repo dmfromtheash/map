@@ -9,7 +9,15 @@ namespace Map.Rendering;
 /// <param name="LayerId">The hex layer the tool works on.</param>
 /// <param name="Hexes">The footprint.</param>
 /// <param name="Erase">Outlined as an eraser instead of a placement.</param>
-public sealed record HexCursorPreview(LayerId LayerId, IReadOnlyList<HexCoord> Hexes, bool Erase = false);
+/// <param name="Glows">
+/// When set, what is drawn instead of <paramref name="Hexes"/>: the footprints round the pointer,
+/// each at its own strength, so the outline flows from hex to hex instead of jumping.
+/// </param>
+public sealed record HexCursorPreview(LayerId LayerId, IReadOnlyList<HexCoord> Hexes, bool Erase = false,
+    IReadOnlyList<HexCursorGlow>? Glows = null);
+
+/// <summary>One footprint of the hover outline and how strongly it shows (0..1).</summary>
+public sealed record HexCursorGlow(IReadOnlyList<HexCoord> Hexes, double Strength);
 
 /// <summary>Which picture of a chunk is kept: the far look, the ground with its transitions, or what stands on it.</summary>
 public enum HexLook
@@ -693,11 +701,16 @@ public static partial class HexLayerRenderer
             DrawOverlay(canvas, layer, overlay, viewScale);
         }
 
-        if (cursor is not null && cursor.LayerId == layer.Id && cursor.Hexes.Count > 0)
+        if (cursor is not null && cursor.LayerId == layer.Id)
         {
-            DrawHexSet(canvas, board, cursor.Hexes, viewScale,
-                cursor.Erase ? new SKColor(0xC8, 0x30, 0x30, 44) : new SKColor(0xF0, 0xC0, 0x50, 44),
-                cursor.Erase ? new SKColor(0xF0, 0x70, 0x60) : new SKColor(0xF4, 0xD0, 0x70));
+            if (cursor.Glows is { } glows)
+            {
+                foreach (var glow in glows) DrawHoverGlow(canvas, board, glow, cursor.Erase, viewScale);
+            }
+            else if (cursor.Hexes.Count > 0)
+            {
+                DrawHoverGlow(canvas, board, new HexCursorGlow(cursor.Hexes, 1), cursor.Erase, viewScale);
+            }
         }
     }
 
@@ -1601,6 +1614,58 @@ public static partial class HexLayerRenderer
         };
         canvas.DrawPath(path, fill);
         canvas.DrawPath(border, halo);
+        canvas.DrawPath(border, ring);
+    }
+
+    /// <summary>
+    /// The hover outline ("Шёлк", owner 2026-10-21): a faint even fill, a 1.25 px line on a soft
+    /// dark seat, all scaled by the footprint's strength - no hard black halo.
+    /// </summary>
+    private static void DrawHoverGlow(SKCanvas canvas, HexBoard board, HexCursorGlow glow, bool erase, double viewScale)
+    {
+        var strength = Math.Clamp(glow.Strength, 0, 1);
+        if (strength <= 0.003 || glow.Hexes.Count == 0) return;
+        var alpha = (byte)Math.Round(255 * strength);
+        var screen = (float)(1 / Math.Max(viewScale, 1e-6));
+        var (fill, line) = erase
+            ? (new SKColor(0xC8, 0x30, 0x30), new SKColor(0xF0, 0x70, 0x60))
+            : (new SKColor(0xF4, 0xD0, 0x70), new SKColor(0xF4, 0xD0, 0x70));
+        using var area = new SKPath();
+        foreach (var hex in glow.Hexes)
+        {
+            using var outline = HexOutline(board.Layout, hex, 0);
+            area.AddPath(outline);
+        }
+
+        var inside = glow.Hexes as IReadOnlySet<HexCoord> ?? glow.Hexes.ToHashSet();
+        using var border = new SKPath();
+        foreach (var hex in glow.Hexes)
+        {
+            var (cx, cy) = board.Layout.Center(hex);
+            for (var i = 0; i < 6; i++)
+            {
+                var (ax, ay) = board.Layout.Corner(hex, i);
+                var (bx, by) = board.Layout.Corner(hex, (i + 1) % 6);
+                if (inside.Contains(board.Layout.HexAt(ax + bx - cx, ay + by - cy))) continue;
+                border.MoveTo((float)ax, (float)ay);
+                border.LineTo((float)bx, (float)by);
+            }
+        }
+
+        // A small footprint is filled smoothly; a large one stays aliased (its edge lies under the line).
+        using var fillPaint = new SKPaint { IsAntialias = glow.Hexes.Count <= 19, Color = fill.WithAlpha((byte)Math.Round(15 * strength)) };
+        using var seat = new SKPaint
+        {
+            IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeCap = SKStrokeCap.Round, StrokeJoin = SKStrokeJoin.Round,
+            StrokeWidth = 2.75f * screen, Color = new SKColor(0x14, 0x0C, 0x04, (byte)Math.Round(82 * strength)),
+        };
+        using var ring = new SKPaint
+        {
+            IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeCap = SKStrokeCap.Round, StrokeJoin = SKStrokeJoin.Round,
+            StrokeWidth = 1.25f * screen, Color = line.WithAlpha(alpha),
+        };
+        canvas.DrawPath(area, fillPaint);
+        canvas.DrawPath(border, seat);
         canvas.DrawPath(border, ring);
     }
 

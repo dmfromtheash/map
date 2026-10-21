@@ -150,6 +150,37 @@ public sealed class HexWorkshopTests
     }
 
     [Fact]
+    public void The_hover_outline_flows_across_a_hex_border_and_fades_out()
+    {
+        var editor = HexEditor();
+        var (ax, ay) = CenterOf(editor, 8, 7);
+        var (bx, by) = CenterOf(editor, 9, 7);
+        var tick = System.Diagnostics.Stopwatch.Frequency / 60;
+        var now = tick;
+        Dictionary<string, double> Shown() => editor.HexCursorShown!.Glows!
+            .ToDictionary(g => g.Hexes[0].ToString(), g => g.Strength);
+
+        editor.UpdateHexHover(ax, ay);
+        for (var i = 0; i < 60; i++) editor.StepHexHover(now += tick);
+        var before = Shown();
+        // Walk to the neighbour at 60 frames a second: no hex ever switches at once (a switch is a step of 1).
+        for (var i = 1; i <= 40; i++)
+        {
+            editor.UpdateHexHover(ax + (bx - ax) * i / 40, ay + (by - ay) * i / 40);
+            editor.StepHexHover(now += tick);
+            var shown = Shown();
+            foreach (var key in shown.Keys.Union(before.Keys))
+                Assert.True(Math.Abs(shown.GetValueOrDefault(key) - before.GetValueOrDefault(key)) < 0.5, $"{key} jumped at step {i}");
+            before = shown;
+        }
+
+        editor.UpdateHexHover(null, null);
+        var frames = 0;
+        while (editor.StepHexHover(now += tick)) Assert.True(++frames < 120);
+        Assert.Null(editor.HexCursorShown);
+    }
+
+    [Fact]
     public void A_hex_layer_added_later_lines_up_with_the_board()
     {
         var editor = HexEditor();

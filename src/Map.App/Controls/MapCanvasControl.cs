@@ -357,6 +357,10 @@ public sealed partial class MapCanvasControl : Control
     }
 
     /// <summary>Own-process smoke hook: a click that never moves, i.e. the selection gesture.</summary>
+    /// <summary>Moves the hover pointer to a screen point (null: it left the canvas), as a real move does.</summary>
+    public void HoverForSmoke(double? screenX, double? screenY) =>
+        TrackHover(screenX is { } x && screenY is { } y ? new Point(x, y) : null);
+
     public void ClickForSmoke(double screenX, double screenY, bool additive = false) =>
         PressMoveReleaseForSmoke(screenX, screenY, screenX, screenY, additive);
 
@@ -546,6 +550,18 @@ public sealed partial class MapCanvasControl : Control
             return;
         }
 
+        // The hover outline eases every frame; while it still moves, ask for the next one.
+        if (_editor.StepHexHover(Stopwatch.GetTimestamp()) && !_hexHoverFrameQueued
+            && TopLevel.GetTopLevel(this) is { } top)
+        {
+            _hexHoverFrameQueued = true;
+            top.RequestAnimationFrame(_ =>
+            {
+                _hexHoverFrameQueued = false;
+                QueueVisualInvalidation();
+            });
+        }
+
         var requestedFrame = System.Threading.Interlocked.Read(ref _requestedFrame);
         var sceneRevision = System.Threading.Interlocked.Read(ref _sceneRevision);
         context.Custom(new SceneDrawOperation(
@@ -588,6 +604,7 @@ public sealed partial class MapCanvasControl : Control
     }
 
     private Point? _hoverPointer;
+    private bool _hexHoverFrameQueued;
 
     /// <summary>The brush footprint under the pointer, when a painting tool is active and the pointer is over the canvas.</summary>
     private Map.Rendering.BrushCursorPreview? BrushCursorPreview()
@@ -708,7 +725,7 @@ public sealed partial class MapCanvasControl : Control
                     : editor.MarqueeWorld ?? editor.LandShapePreview,
                 BrushCursor = brushCursor,
                 HexChunks = resources.Hex(),
-                HexCursor = editor.CanvasWorkflowOpen ? null : editor.HexCursor,
+                HexCursor = editor.CanvasWorkflowOpen ? null : editor.HexCursorShown,
                 HexGestureLive = editor.HasHexGesture,
                 HexOverlay = editor.CanvasWorkflowOpen ? null : editor.HexOverlay,
                 HexLevel = editor.HexLevelShown,
