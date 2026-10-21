@@ -159,6 +159,7 @@ public sealed partial class EditorViewModel
     public void BeginExport()
     {
         ResetExportHexLevel();
+        _exportSizeUnit = ExportSizeUnit.Pixels;
         var canvas = Session.Document.Canvas;
         _exportOpen = true;
         _exportFormat = _defaultExportFormat;
@@ -502,11 +503,7 @@ public sealed partial class EditorViewModel
 
     private ExportRequest BuildExportRequest()
     {
-        if (!TryInt(_exportOutputWidthText, out var outputWidth)
-            || !TryInt(_exportOutputHeightText, out var outputHeight))
-        {
-            throw new ExportValidationException("Итоговые ширина и высота должны быть целыми числами.");
-        }
+        var (outputWidth, outputHeight) = ExportPixelSize();
 
         CanvasRegion? region = null;
         if (_exportAreaMode == ExportAreaMode.Region)
@@ -555,36 +552,37 @@ public sealed partial class EditorViewModel
 
     private void SyncExportHeightFromWidth()
     {
-        if (!TryInt(_exportOutputWidthText, out var width) || width <= 0
+        if (!TryExportNumber(_exportOutputWidthText, out var width) || width <= 0
             || !TryExportSourceSize(out var sourceWidth, out var sourceHeight))
         {
             return;
         }
 
-        var height = Math.Max(1, (int)Math.Round(
-            width * (sourceHeight / (double)sourceWidth), MidpointRounding.AwayFromZero));
-        SetExportDimension(ref _exportOutputHeightText, height, nameof(ExportOutputHeightText));
+        var height = width * (sourceHeight / (double)sourceWidth);
+        SetExportDisplayDimension(ref _exportOutputHeightText, height, nameof(ExportOutputHeightText));
     }
 
     private void SyncExportWidthFromHeight()
     {
-        if (!TryInt(_exportOutputHeightText, out var height) || height <= 0
+        if (!TryExportNumber(_exportOutputHeightText, out var height) || height <= 0
             || !TryExportSourceSize(out var sourceWidth, out var sourceHeight))
         {
             return;
         }
 
-        var width = Math.Max(1, (int)Math.Round(
-            height * (sourceWidth / (double)sourceHeight), MidpointRounding.AwayFromZero));
-        SetExportDimension(ref _exportOutputWidthText, width, nameof(ExportOutputWidthText));
+        var width = height * (sourceWidth / (double)sourceHeight);
+        SetExportDisplayDimension(ref _exportOutputWidthText, width, nameof(ExportOutputWidthText));
     }
 
-    private void SetExportDimension(ref string field, int value, string propertyName)
+    private void SetExportDimension(ref string field, int value, string propertyName) =>
+        SetExportDisplayDimension(ref field, value / ExportPlanner.PixelsPerUnit(_exportSizeUnit, ExportDpi), propertyName);
+
+    private void SetExportDisplayDimension(ref string field, double value, string propertyName)
     {
         _syncingExportFields = true;
         try
         {
-            var text = value.ToString(CultureInfo.InvariantCulture);
+            var text = FormatExportDimension(value);
             if (!string.Equals(field, text, StringComparison.Ordinal))
             {
                 field = text;

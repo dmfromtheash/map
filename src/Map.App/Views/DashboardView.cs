@@ -33,7 +33,7 @@ namespace Map.App.Views;
 /// owner's artwork with "Ваша мастерская", the tavern palette, the serif headings and the
 /// tactile buttons. Every map in the library folder is listed, not only the recently opened ones.
 /// </summary>
-public sealed class DashboardView : UserControl
+public sealed partial class DashboardView : UserControl
 {
     private const double CardWidth = 300;
     private const double CardGap = 20;
@@ -321,6 +321,7 @@ public sealed class DashboardView : UserControl
                     VerticalAlignment = VerticalAlignment.Center },
             },
         });
+        _latestBlock.Children.Add(BuildLibraryCategoryFilter("Home"));
         _latestBlock.Children.Add(_latestPanel);
         _home.Children.Add(_intro);
         _home.Children.Add(_latestBlock);
@@ -657,6 +658,7 @@ public sealed class DashboardView : UserControl
             new TextBlock { Name = "DashboardTitle", Text = "Мои карты", FontFamily = Display, FontSize = 30,
                 FontWeight = FontWeight.SemiBold },
             toolbar,
+            BuildLibraryCategoryFilter("Maps"),
             new Border { Child = tabRow, Padding = new Thickness(0, 4, 0, 0) }.Classed("library-tab-row"),
         } });
         _maps.Children.Add(_breadcrumb);
@@ -674,15 +676,15 @@ public sealed class DashboardView : UserControl
             library.EnsureExists();
             Reveal(library.Root, select: false);
         }, "ghost", "compact");
-        return new StackPanel
+        return new WrapPanel
         {
-            Orientation = Orientation.Horizontal, Spacing = 10, Margin = new Thickness(0, 10, 0, 0),
+            ItemSpacing = 10, LineSpacing = 8, Margin = new Thickness(0, 10, 0, 0),
             Children =
             {
                 MapIcons.Stroked(MapIcons.Folder, 16, Brush("MapMutedBrush")),
-                new TextBlock { Text = "Папка библиотеки: " + library.Root, VerticalAlignment = VerticalAlignment.Center,
-                    TextWrapping = TextWrapping.Wrap }.Classed("muted", "role-caption"),
+                BuildLibraryFolderLabel(),
                 reveal,
+                BuildLibraryFolderButton(),
             },
         };
     }
@@ -833,7 +835,7 @@ public sealed class DashboardView : UserControl
     {
         _latestPanel.Children.Clear();
         var latest = _dashboard.LatestCards;
-        _latestBlock.IsVisible = latest.Count > 0;
+        _latestBlock.IsVisible = _dashboard.TotalRecentCount > 0 || _dashboard.LibraryCategoryFilter.Length > 0;
         for (var i = 0; i < latest.Count; i++)
             _latestPanel.Children.Add(BuildMapCard(latest[i], i, "Latest"));
         FitCards(_latestPanel, oneRow: true);
@@ -1029,7 +1031,7 @@ public sealed class DashboardView : UserControl
             TextTrimming = TextTrimming.CharacterEllipsis }.Named(main ? $"RecentSubtitle{index}" : $"LatestSubtitle{index}")
             .Classed(card.IsAvailable ? "muted" : "danger");
 
-        var shell = new StackPanel { Width = CardWidth, Children = { pictureHost, title, caption } }.Classed("library-card");
+        var shell = new StackPanel { Width = CardWidth, Children = { pictureHost, title, BuildLibraryCategoryBadge(card), caption } }.Classed("library-card");
         Tactile.Attach(openButton, ornaments: false);
         return shell;
     }

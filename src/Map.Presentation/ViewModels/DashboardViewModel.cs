@@ -1,3 +1,4 @@
+using Map.Core.Documents;
 using Map.Persistence;
 using Map.Persistence.Recovery;
 using Map.Presentation.Services;
@@ -20,6 +21,8 @@ public sealed record RecentCard(
     DateTimeOffset? CreatedUtc = null,
     string CanvasSize = "")
 {
+    public MapCategoryId? Category { get; init; }
+    public string CategoryLabel => Category?.Value switch { "standard" => "Стандартный", "hex" => "Гексовый", null => "Категория неизвестна", _ => "Категория: " + Category.Value.Value };
     public string Subtitle => IsAvailable
         ? $"{MapType} · {ModifiedUtc.ToLocalTime():g} · {FormatSize(SizeBytes)}"
         : "Файл не найден";
@@ -52,7 +55,7 @@ public sealed record DashboardOpenResult(OpenedProject Project, string Path);
 /// The local dashboard: recent maps with real thumbnails, plus recovery candidates found in the
 /// journal. Missing or damaged files are shown honestly and never take the app down.
 /// </summary>
-public sealed class DashboardViewModel : ViewModelBase
+public sealed partial class DashboardViewModel : ViewModelBase
 {
     private readonly IProjectStore _store;
     private readonly IRecentMaps _recent;
@@ -87,9 +90,10 @@ public sealed class DashboardViewModel : ViewModelBase
         IUserPrompts? prompts = null,
         IProjectTrash? trash = null,
         Func<DateTimeOffset>? clock = null,
-        string appVersion = "Map", AssetCatalog? assetCatalog = null, MapLibrary? library = null)
+        string appVersion = "Map", AssetCatalog? assetCatalog = null, MapLibrary? library = null, Action<string>? persistLibraryFolder = null)
     {
         _library = library;
+        _persistLibraryFolder = persistLibraryFolder;
         _store = store;
         _recent = recent;
         _log = log;
@@ -147,7 +151,7 @@ public sealed class DashboardViewModel : ViewModelBase
     public int FavoriteCount => _allRecentCards.Count(card => card.IsFavorite);
 
     /// <summary>The latest maps for the home page, newest first.</summary>
-    public IReadOnlyList<RecentCard> LatestCards => _allRecentCards.Where(card => card.IsAvailable)
+    public IReadOnlyList<RecentCard> LatestCards => _allRecentCards.Where(card => card.IsAvailable && MatchesLibraryCategory(card))
         .OrderByDescending(card => card.ModifiedUtc).Take(8).ToList();
 
     public void SetFavorite(RecentCard card, bool favorite)
@@ -273,7 +277,7 @@ public sealed class DashboardViewModel : ViewModelBase
 
             cards.Add(new RecentCard(
                 entry.Path, entry.Title, entry.ModifiedUtc, available, thumbnail,
-                entry.MapType, entry.SizeBytes));
+                entry.MapType, entry.SizeBytes) { Category = available ? MapLibrary.ReadSummary(entry.Path).Category : null });
         }
 
         if (_library is not null)
@@ -291,14 +295,14 @@ public sealed class DashboardViewModel : ViewModelBase
                     var known = cards[index];
                     cards[index] = known with
                     {
-                        Folder = file.Folder, CreatedUtc = summary.CreatedUtc ?? file.CreatedUtc, CanvasSize = size,
+                        Category = summary.Category, Folder = file.Folder, CreatedUtc = summary.CreatedUtc ?? file.CreatedUtc, CanvasSize = size,
                         SizeBytes = known.SizeBytes > 0 ? known.SizeBytes : file.SizeBytes,
                         ThumbnailPng = known.ThumbnailPng ?? summary.PreviewPng,
                     };
                     continue;
                 }
                 cards.Add(new RecentCard(file.Path, summary.Title ?? file.Title, file.ModifiedUtc, true, summary.PreviewPng,
-                    "Карта из библиотеки", file.SizeBytes, file.Folder, false, summary.CreatedUtc ?? file.CreatedUtc, size));
+                    "Карта из библиотеки", file.SizeBytes, file.Folder, false, summary.CreatedUtc ?? file.CreatedUtc, size) { Category = summary.Category });
             }
             for (var i = 0; i < cards.Count; i++)
                 if (_library.IsFavorite(cards[i].Path)) cards[i] = cards[i] with { IsFavorite = true };
@@ -417,7 +421,7 @@ public sealed class DashboardViewModel : ViewModelBase
 
     private void ApplyQuery()
     {
-        IEnumerable<RecentCard> query = _allRecentCards;
+        IEnumerable<RecentCard> query = _allRecentCards.Where(MatchesLibraryCategory);
         if (Tab == DashboardTab.Favorites) query = query.Where(card => card.IsFavorite);
         if (CurrentFolder is { } folder)
             query = query.Where(card => string.Equals(card.Folder, folder, StringComparison.CurrentCultureIgnoreCase));

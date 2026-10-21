@@ -484,3 +484,23 @@ Undo/Redo. Для замера
 на заполненной карте создаётся отдельный пустой объектный слой только в её временной копии:
 исходные 20 тысяч объектов сохраняются. Непустая локальная правка границы выбирается по геометрии
 до запуска таймера, без пробных правок; её конечная X-координата записывается в report.
+
+
+### R03: экспорт и библиотека
+
+Собирать `Map.slnx`, затем отдельно `tools/Map.Performance` и `tools/Map.LiveCheck` в Release.
+Запускать последовательно; все данные и три тестовых пути профиля находятся под `artifacts/r03`.
+
+```powershell
+dotnet tools/Map.Performance/bin/Release/net10.0/win-x64/Map.Performance.dll --profile native-export-wins --output artifacts/r03/export-wins.json
+dotnet tools/Map.Performance/bin/Release/net10.0/win-x64/Map.Performance.dll --profile native-library-wins --output artifacts/r03/library-wins.json
+dotnet tools/Map.LiveCheck/bin/Release/net10.0-windows/win-x64/Map.LiveCheck.dll --map artifacts/r03/export-wins-workspace/hex.mapproj --export-wins true --out artifacts/r03/live-export
+dotnet tools/Map.LiveCheck/bin/Release/net10.0-windows/win-x64/Map.LiveCheck.dll --library-wins artifacts/r03/library-wins-workspace/library --library-folder artifacts/r03/library-wins-workspace/other-library --out artifacts/r03/live-library
+```
+
+`native-export-wins`: настоящий диалог выбора слоя и отчёта JSON, расширение, Undo/Redo,
+мм/дюймы/DPI и готовый PNG, Letter/свой PDF с метками/вылетом, save/reopen v14.
+`native-library-wins`: бейджи, оба фильтра (включая пустую выдачу), смена каталога, повторное
+чтение настройки профиля, сохранность старых файлов. Native-профили не снимают экран.
+LiveCheck получает только созданные ими фикстуры, проверяет отклик UIA, выбирает папку через
+системный диалог и сохраняет только окна Map через PrintWindow. PNG необходимо открыть глазами.

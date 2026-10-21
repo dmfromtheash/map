@@ -5,7 +5,7 @@ using SkiaSharp;
 
 namespace Map.Export;
 
-public static class ExportPlanner
+public static partial class ExportPlanner
 {
     private const long AssetCacheBudget = 256L * 1024 * 1024;
 

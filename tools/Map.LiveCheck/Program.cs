@@ -39,6 +39,10 @@ Directory.CreateDirectory(Path.Combine(profile, "Maps"));
 Directory.CreateDirectory(Path.Combine(profile, "Recovery"));
 var start = new ProcessStartInfo(exe) { WorkingDirectory = Path.GetDirectoryName(exe)!, UseShellExecute = false };
 var mapArgument = Arg("--map");
+var libraryArgument = Arg("--library-wins");
+if (libraryArgument is not null)
+    foreach (var file in Directory.GetFiles(Path.GetFullPath(libraryArgument), "*.mapproj"))
+        File.Copy(file, Path.Combine(profile, "Maps", Path.GetFileName(file)), overwrite: true);
 if (mapArgument is not null)
 {
     if (!File.Exists(mapArgument))
@@ -176,6 +180,8 @@ try
                         Shot(exportWindow, Path.Combine(outDir, "r01-export-level.png"));
                     }
                 }
+                if (Arg("--export-wins") is not null)
+                    missing += ExportWinsCheck.Export(exportWindow, outDir, Log, Shot, Dump);
                 if (Arg("--player-package") is not null)
                     missing += PlayerPackageCheck.Run(exportWindow, outDir, Log, Shot, Dump);
                 var mbtiles = exportWindow.FindFirstDescendant(cf => cf.ByAutomationId("ExportMbTilesButton"));
@@ -205,6 +211,13 @@ try
     Thread.Sleep(700);
     Dump(main, Path.Combine(outDir, "ui-tree-library.txt"));
     Shot(main, Path.Combine(outDir, "01-library.png"));
+
+    if (libraryArgument is not null)
+    {
+        missing += ExportWinsCheck.Library(main, outDir, Arg("--library-folder"), Log, Shot, Dump);
+        main.Close();
+        return missing == 0 ? 0 : 2;
+    }
 
     if (create is not null)
     {

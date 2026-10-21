@@ -1,3 +1,4 @@
+using Map.Core.Documents;
 using System.IO.Compression;
 using System.Text.Json;
 
@@ -14,7 +15,10 @@ public sealed record LibraryFolder(string Path, string Name, int MapCount, DateT
 public sealed record LibraryExport(string Path, string Name, DateTimeOffset ModifiedUtc, long SizeBytes);
 
 /// <summary>What a map file says about itself without being opened: its manifest and preview.</summary>
-public sealed record LibraryMapSummary(string? Title, DateTimeOffset? CreatedUtc, int CanvasWidth, int CanvasHeight, byte[]? PreviewPng);
+public sealed record LibraryMapSummary(string? Title, DateTimeOffset? CreatedUtc, int CanvasWidth, int CanvasHeight, byte[]? PreviewPng)
+{
+    public MapCategoryId? Category { get; init; }
+}
 
 /// <summary>One scan of the library folder.</summary>
 public sealed record LibrarySnapshot(
@@ -30,7 +34,7 @@ public sealed record LibrarySnapshot(
 /// favourites ("Избранное") are kept in a small file in the profile. Only the file system is
 /// read - nothing here opens or changes a map.
 /// </summary>
-public sealed class MapLibrary
+public sealed partial class MapLibrary
 {
     public const string ExportsFolderName = "Экспорт";
     private static readonly string[] ExportPatterns = ["*.png", "*.jpg", "*.jpeg", "*.webp"];
@@ -44,7 +48,7 @@ public sealed class MapLibrary
         _favoritesPath = favoritesPath;
     }
 
-    public string Root { get; }
+    public string Root { get; private set; }
     public string ExportsFolder => System.IO.Path.Combine(Root, ExportsFolderName);
 
     /// <summary>Creates the library folder if it is missing; false when the disk refuses.</summary>
@@ -220,11 +224,16 @@ public sealed class MapLibrary
         {
             using var archive = ZipFile.OpenRead(path);
             string? title = null; DateTimeOffset? created = null; int width = 0, height = 0;
+            MapCategoryId? category = null;
             if (archive.GetEntry("manifest.json") is { Length: < 1 << 20 } manifest)
             {
                 using var stream = manifest.Open();
                 using var json = JsonDocument.Parse(stream);
                 var root = json.RootElement;
+                category = root.TryGetProperty("category", out var categoryJson)
+                    ? categoryJson.ValueKind == JsonValueKind.String && MapCategoryId.IsValid(categoryJson.GetString())
+                        ? new MapCategoryId(categoryJson.GetString()!) : null
+                    : MapCategoryId.Standard;
                 if (root.TryGetProperty("title", out var t) && t.ValueKind == JsonValueKind.String) title = t.GetString();
                 if (root.TryGetProperty("createdUtc", out var c) && c.TryGetDateTimeOffset(out var when)) created = when;
                 if (root.TryGetProperty("canvas", out var canvas) && canvas.ValueKind == JsonValueKind.Object)
@@ -241,7 +250,7 @@ public sealed class MapLibrary
                 stream.CopyTo(copy);
                 preview = copy.ToArray();
             }
-            summary = new LibraryMapSummary(title, created, width, height, preview);
+            summary = new LibraryMapSummary(title, created, width, height, preview) { Category = category };
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or JsonException)
         {

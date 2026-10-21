@@ -192,6 +192,7 @@ public sealed class AppSettingsWindow : Window
             AutosaveIntervalSeconds = (int)(_autosave.Value ?? 60),
             RecoveryItemBudget = (int)(_recovery.Value ?? 12),
             PerformanceMode = (CanvasPerformanceMode)Math.Max(0, _performance.SelectedIndex),
+            MapsRoot = _store.Load().MapsRoot,
             LibraryRoot = EmptyToNull(_libraryRoot.Text),
             CacheRoot = EmptyToNull(_cacheRoot.Text),
             DefaultExportFormat = _exportFormat.SelectedIndex switch { 1 => "Jpeg", 2 => "Webp", _ => "Png" },

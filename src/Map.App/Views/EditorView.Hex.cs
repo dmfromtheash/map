@@ -1141,23 +1141,6 @@ public sealed partial class EditorView
         players.IsCheckedChanged += (_, _) => { if (!_syncingHex) _editor.ExportHexPlayers = players.IsChecked == true; };
         HexSync(() => players.IsChecked = _editor.ExportHexPlayers, nameof(EditorViewModel.ExportHexPlayers));
 
-        var size = Ui.SliderRow("HexPrintHexSlider", "Гекс на бумаге", 10, 60, _editor.HexPrintOptions.HexMillimetres, "мм",
-            value => { if (!_syncingHex) _editor.HexPrintOptions = _editor.HexPrintOptions with { HexMillimetres = value }; });
-        var landscape = Ui.PropertyToggle("HexPrintLandscapeToggle", "Альбомные листы");
-        landscape.IsCheckedChanged += (_, _) => { if (!_syncingHex) _editor.HexPrintOptions = _editor.HexPrintOptions with { Landscape = landscape.IsChecked == true }; };
-        var a3 = Ui.PropertyToggle("HexPrintA3Toggle", "Лист A3 (иначе A4)");
-        a3.IsCheckedChanged += (_, _) => { if (!_syncingHex) _editor.HexPrintOptions = _editor.HexPrintOptions with { A3 = a3.IsChecked == true }; };
-        var key = Ui.PropertyToggle("HexPrintKeyToggle", "Ключ гексов после карты");
-        key.IsCheckedChanged += (_, _) => { if (!_syncingHex) _editor.HexPrintOptions = _editor.HexPrintOptions with { IncludeKey = key.IsChecked == true }; };
-        HexSync(() =>
-        {
-            landscape.IsChecked = _editor.HexPrintOptions.Landscape;
-            a3.IsChecked = _editor.HexPrintOptions.A3;
-            key.IsChecked = _editor.HexPrintOptions.IncludeKey;
-        }, nameof(EditorViewModel.HexPrintOptions));
-
-        Button B(string name, string text, string icon, Func<Task> action, string style = "compact") =>
-            HexCommand(name, text, icon, () => _ = action(), style);
         return Ui.Category("HexExportCategory", "Экспорт и печать", "accent-look", new StackPanel
         {
             Spacing = 8,
@@ -1166,15 +1149,7 @@ public sealed partial class EditorView
                 players,
                 BuildExportPackagePreview("HexExport"),
                 HexHint("PNG и .dd2vtt для Foundry и Roll20 — кнопка «Экспорт» вверху; рядом с .dd2vtt пишется макрос сетки для Foundry."),
-                Ui.Subgroup("Печать по листам", new StackPanel
-                {
-                    Spacing = 2,
-                    Children =
-                    {
-                        size, landscape, a3, key,
-                        B("HexPrintButton", "PDF для печати…", MapIcons.HexPrint, () => _editor.ExportHexPrintAsync(), "accent"),
-                    },
-                }),
+                HexCommand("HexPrintButton", "PDF для печати…", MapIcons.HexPrint, () => _ = ShowHexPrintAsync(), "accent"),
                 Ui.Subgroup("Файлы", HexGrid(4,
                     HexTall("HexJsonExportButton", "JSON", MapIcons.HexExport, () => _ = _editor.ExportHexJsonAsync(), "Сохранить карту в JSON…"),
                     HexTall("HexJsonImportButton", "Из JSON", MapIcons.Import, () => _ = ImportHexJsonAsync(), "Загрузить карту из JSON…"),
@@ -1194,7 +1169,9 @@ public sealed partial class EditorView
             FileTypeFilter = [new Avalonia.Platform.Storage.FilePickerFileType("JSON гексовой карты") { Patterns = ["*.json"] }],
         });
         if (files.Count == 0 || Avalonia.Platform.Storage.StorageProviderExtensions.TryGetLocalPath(files[0]) is not { } path) return;
-        _editor.ImportHexJson(await File.ReadAllTextAsync(path));
+        try { await ShowHexImportAsync(await File.ReadAllTextAsync(path)); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException)
+        { await ShowHexImportResultAsync(error.Message); }
     }
 
     private void SyncHexPanel(string? property)

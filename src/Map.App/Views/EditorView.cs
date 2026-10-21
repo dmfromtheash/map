@@ -8139,8 +8139,8 @@ public sealed partial class EditorView : UserControl
             Columns = 2,
             Children =
             {
-                Field("Итоговая ширина, px", _exportOutputWidthBox),
-                Field("Итоговая высота, px", _exportOutputHeightBox),
+                Field("Итоговая ширина", _exportOutputWidthBox),
+                Field("Итоговая высота", _exportOutputHeightBox),
             },
         };
         var detailScale = new UniformGrid
@@ -8264,6 +8264,7 @@ public sealed partial class EditorView : UserControl
                 areas,
                 _exportRegionPanel,
                 detailScale,
+                BuildExportUnits(),
                 outputSize,
                 _exportDetailSummary,
                 _exportAspectToggle,

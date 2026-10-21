@@ -157,7 +157,8 @@ public sealed class MainWindow : Window
             new AvaloniaFilePicker(this, LibraryFolder),
             new DialogPrompts(this),
             new WindowsProjectTrash(),
-            appVersion: AppVersion.Current, assetCatalog: _assets, library: _library);
+            appVersion: AppVersion.Current, assetCatalog: _assets, library: _library,
+            persistLibraryFolder: path => _appSettings = _appSettingsStore.Save(_appSettings with { MapsRoot = path }));
         _autosaveTimer = new DispatcherTimer
         {
             Interval = TestMode.Enabled

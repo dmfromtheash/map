@@ -71,7 +71,11 @@ public sealed partial class RegionalApplication
         await Export("StartExportButton", "png");
         var png = File.ReadAllBytes(destination.File("png"));
         Check("R02 player dd2vtt image equals player PNG", png.SequenceEqual(vtt.RootElement.GetProperty("image").GetBytesFromBase64()));
-        await Export("ExportPackagePrintButton", "pdf");
+        Click(export, "ExportPackagePrintButton"); await Settle();
+        var print = R03Window("HexPrintWindow");
+        Click(print, "HexPrintSaveButton");
+        await WaitUntil(() => File.Exists(destination.File("pdf")), "player PDF");
+        Click(print, "HexPrintCloseButton"); await Settle();
         Check("R02 player PDF was written", System.Text.Encoding.ASCII.GetString(File.ReadAllBytes(destination.File("pdf")), 0, 4) == "%PDF");
 
         destination.Recipient = "gm";

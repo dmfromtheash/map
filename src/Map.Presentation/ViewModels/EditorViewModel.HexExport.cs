@@ -121,27 +121,6 @@ public sealed partial class EditorViewModel
         }
     }
 
-    /// <summary>Lays the hexes, paths, regions and key of a hex JSON file onto the active hex layer (one undo step).</summary>
-    public bool ImportHexJson(string json)
-    {
-        if (ActiveHexLayer is not { } layer) return false;
-        try
-        {
-            var after = HexJsonExporter.Read(json, layer);
-            ExecuteHexLayerEdit("Импорт JSON гексов", layer, after, EditCost.BaseBytes + (long)after.Board.CellCount * 48);
-            Raise(nameof(HexPaths));
-            Raise(nameof(HexRegions));
-            Raise(nameof(HexKeys));
-            StatusDetail = $"Из JSON взято гексов: {after.Board.CellCount}, путей: {after.Paths.Count}, ключей: {after.Notes.Count}.";
-            return true;
-        }
-        catch (InvalidDataException error)
-        {
-            StatusDetail = error.Message;
-            return false;
-        }
-    }
-
     /// <summary>Writes the hex key as Markdown: the master's full key, or only what the players may read.</summary>
     public async Task<string?> ExportHexKeyAsync(bool playersOnly)
     {

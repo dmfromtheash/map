@@ -14,7 +14,7 @@ namespace Map.Export;
 /// the paths, the regions, the hex key and the tile legend. <see cref="Read"/> takes it back.
 /// Positions are board columns and rows from 0, the printed hex number is given as well.
 /// </summary>
-public static class HexJsonExporter
+public static partial class HexJsonExporter
 {
     public const string Format = "map-hex-json";
 
@@ -151,114 +151,7 @@ public static class HexJsonExporter
         };
     }
 
-    /// <summary>
-    /// The hexes, paths, regions and key of one JSON layer laid onto a hex layer of the same board
-    /// (positions outside it are left out). Throws <see cref="InvalidDataException"/> on a file that is not this format.
-    /// </summary>
-    public static HexLayer Read(string json, HexLayer target, int layerIndex = 0)
-    {
-        ArgumentNullException.ThrowIfNull(target);
-        JsonNode? root;
-        try
-        {
-            root = JsonNode.Parse(json);
-        }
-        catch (JsonException error)
-        {
-            throw new InvalidDataException("Файл не похож на JSON гексовой карты: " + error.Message, error);
-        }
 
-        if (root?["format"]?.GetValue<string>() != Format)
-            throw new InvalidDataException("Это не JSON гексовой карты Map.");
-        var layers = root["layers"]?.AsArray() ?? throw new InvalidDataException("В файле нет слоёв гексов.");
-        if (layerIndex < 0 || layerIndex >= layers.Count) throw new InvalidDataException("В файле нет такого слоя.");
-        var source = layers[layerIndex]!;
-        var board = target.Board;
-        HexCoord? At(JsonNode? node)
-        {
-            if (node is not JsonArray { Count: >= 2 } pair) return null;
-            var offset = new HexOffset(pair[0]!.GetValue<int>(), pair[1]!.GetValue<int>());
-            return board.Contains(offset) ? board.Layout.FromOffset(offset) : null;
-        }
-
-        try
-        {
-            var cells = new List<KeyValuePair<HexCoord, HexCell>>();
-            foreach (var item in source["cells"]?.AsArray() ?? [])
-            {
-                if (At(item?["at"]) is not { } hex) continue;
-                cells.Add(new(hex, HexCell.Of(
-                    item!["terrain"]!.GetValue<string>(),
-                    item["variant"]?.GetValue<int>() ?? 0,
-                    item["feature"]?.GetValue<string>(),
-                    item["featureVariant"]?.GetValue<int>() ?? 0,
-                    item["turn"]?.GetValue<int>() ?? 0,
-                    item["region"]?.GetValue<int>() ?? 0,
-                    item["revealed"]?.GetValue<bool>() ?? false)));
-            }
-
-            var paths = ImmutableList.CreateBuilder<HexPath>();
-            foreach (var item in source["paths"]?.AsArray() ?? [])
-            {
-                var kind = Enum.Parse<HexPathKind>(item!["kind"]!.GetValue<string>());
-                var route = Enum.Parse<HexRouteStyle>(item["route"]!.GetValue<string>());
-                var width = item["width"]?.GetValue<double>() ?? 1;
-                var color = item["color"]?.GetValue<string>();
-                var name = item["name"]?.GetValue<string>() ?? "";
-                if (route == HexRouteStyle.Edges)
-                {
-                    var corners = (item["corners"]?.AsArray() ?? []).Select(node => node is JsonArray { Count: 3 } c && At(c) is { } hex
-                        ? board.Layout.Canonical(new HexVertex(hex, c[2]!.GetValue<int>())) : (HexVertex?)null).ToList();
-                    if (corners.Any(c => c is null) || corners.Count < 2) continue;
-                    paths.Add(new HexPath(HexPathId.New(), kind, route, [], [.. corners.Select(c => c!.Value)], width, color, name)
-                    {
-                        BlocksSight = item["blocksSight"]?.GetValue<bool>() ?? (kind == HexPathKind.Border && route == HexRouteStyle.Edges),
-                        BlocksMove = item["blocksMove"]?.GetValue<bool>() ?? false,
-                        BlocksLight = item["blocksLight"]?.GetValue<bool>() ?? false,
-                    });
-                }
-                else
-                {
-                    var hexes = (item["hexes"]?.AsArray() ?? []).Select(At).ToList();
-                    if (hexes.Any(h => h is null) || hexes.Count < 2) continue;
-                    paths.Add(new HexPath(HexPathId.New(), kind, route, [.. Map.Core.Editing.HexPaths.Walk(hexes.Select(h => h!.Value))], [], width, color, name)
-                    {
-                        BlocksSight = item["blocksSight"]?.GetValue<bool>() ?? (kind == HexPathKind.Border && route == HexRouteStyle.Edges),
-                        BlocksMove = item["blocksMove"]?.GetValue<bool>() ?? false,
-                        BlocksLight = item["blocksLight"]?.GetValue<bool>() ?? false,
-                    });
-                }
-            }
-
-            var regions = ImmutableList.CreateBuilder<HexRegion>();
-            foreach (var item in source["regions"]?.AsArray() ?? [])
-            {
-                regions.Add(new HexRegion(item!["id"]!.GetValue<int>(), item["name"]?.GetValue<string>() ?? "", item["color"]!.GetValue<string>()));
-            }
-
-            var notes = ImmutableDictionary.CreateBuilder<HexCoord, HexNote>();
-            foreach (var item in source["key"]?.AsArray() ?? [])
-            {
-                if (At(item?["at"]) is not { } hex) continue;
-                notes[hex] = new HexNote(item!["title"]?.GetValue<string>() ?? "",
-                    Enum.TryParse<HexNoteCategory>(item["category"]?.GetValue<string>(), out var category) ? category : HexNoteCategory.Other,
-                    item["gm"]?.GetValue<string>() ?? "", item["players"]?.GetValue<string>() ?? "", item["childMap"]?.GetValue<string>());
-            }
-
-            return target with
-            {
-                Board = HexBoard.FromCells(board.Layout, board.Columns, board.Rows, cells),
-                Paths = paths.ToImmutable(),
-                Regions = regions.ToImmutable(),
-                Notes = notes.ToImmutable(),
-                FogEnabled = source["fog"]?.GetValue<bool>() ?? target.FogEnabled,
-            };
-        }
-        catch (Exception error) when (error is ArgumentException or InvalidOperationException or FormatException or NullReferenceException)
-        {
-            throw new InvalidDataException("Не удалось прочитать JSON гексовой карты: " + error.Message, error);
-        }
-    }
 }
 
 /// <summary>Paper and scale of a printed hex map.</summary>
@@ -275,7 +168,12 @@ public sealed record HexPrintOptions(
     bool Players = false,
     int? Level = null,
     bool IncludeKey = true,
-    double OverlapMillimetres = 8);
+    double OverlapMillimetres = 8,
+    HexPaperFormat? PaperFormat = null,
+    double CustomWidthMillimetres = 210,
+    double CustomHeightMillimetres = 297,
+    bool CropMarks = false,
+    double BleedMillimetres = 0);
 
 /// <summary>What a print export wrote.</summary>
 public sealed record HexPrintResult(string Path, int MapPages, int KeyPages, int Columns, int Rows);
@@ -286,7 +184,7 @@ public sealed record HexPrintResult(string Path, int MapPages, int KeyPages, int
 /// overlap, each sheet labelled with its place (A1, A2 … B1) and the hex numbers it holds, then the
 /// hex key. Drawn into Skia's PDF document, so lines and text stay sharp at any printer resolution.
 /// </summary>
-public static class HexPrintExporter
+public static partial class HexPrintExporter
 {
     private const double PointsPerMillimetre = 72 / 25.4;
 
@@ -306,14 +204,14 @@ public static class HexPrintExporter
             key = layer.Notes.OrderBy(p => board.Layout.ToOffset(p.Key).Column)
                 .ThenBy(p => board.Layout.ToOffset(p.Key).Row)
                 .Select(p => (HexLayerRenderer.NumberOf(board, board.Layout.ToOffset(p.Key)), p.Value)).ToList();
-        var (paperW, paperH) = options.A3 ? (297.0, 420.0) : (210.0, 297.0);
-        if (options.Landscape) (paperW, paperH) = (paperH, paperW);
+        var (paperW, paperH) = PaperSizeMillimetres(options);
         var pageW = (float)(paperW * PointsPerMillimetre);
         var pageH = (float)(paperH * PointsPerMillimetre);
         const float Margin = 28; // ≈10 mm: printers do not print to the edge
         const float Header = 22;
-        var printW = pageW - 2 * Margin;
-        var printH = pageH - 2 * Margin - Header;
+        var bleed = (float)(options.BleedMillimetres * PointsPerMillimetre);
+        var printW = pageW - 2 * Margin - 2 * bleed;
+        var printH = pageH - 2 * Margin - Header - 2 * bleed;
         // World units per point: one hex's flat-to-flat width becomes HexMillimetres on paper.
         var flatToFlat = board.Layout.Size * HexLayout.Sqrt3;
         var scale = Math.Clamp(options.HexMillimetres, 5, 200) * PointsPerMillimetre / flatToFlat;
@@ -353,21 +251,24 @@ public static class HexPrintExporter
                         canvas.DrawText($"{document.Title} · лист {name} ({row + 1}-{column + 1} из {rows}×{columns})" + numbers,
                             Margin, Margin + 12, SKTextAlign.Left, labelFont, labelPaint);
                         canvas.Save();
-                        canvas.Translate(Margin, Margin + Header);
-                        canvas.ClipRect(new SKRect(0, 0, printW, printH));
+                        canvas.Translate(Margin + bleed, Margin + Header + bleed);
+                        canvas.ClipRect(new SKRect(-bleed, -bleed, printW + bleed, printH + bleed));
                         canvas.Scale((float)scale);
                         canvas.Translate((float)-left, (float)-top);
                         SceneRenderer.Render(canvas, document, new RenderOptions
                         {
                             IsExport = true,
                             IncludeBaseColor = true,
-                            VisibleWorld = view,
+                            VisibleWorld = new WorldBounds(view.Left - bleed / scale, view.Top - bleed / scale, view.Right + bleed / scale, view.Bottom + bleed / scale),
                             ViewScale = scale * 300 / 72.0,
                             HexPlayerView = scene.Players,
                             HexLevel = scene.HexLevel,
                         });
                         canvas.Restore();
-                        canvas.DrawRect(new SKRect(Margin, Margin + Header, Margin + printW, Margin + Header + printH), frame);
+                        var trim = new SKRect(Margin + bleed, Margin + Header + bleed,
+                            Margin + bleed + printW, Margin + Header + bleed + printH);
+                        canvas.DrawRect(trim, frame);
+                        if (options.CropMarks) DrawCropMarks(canvas, trim, bleed);
                         pdf.EndPage();
                     }
                 }
