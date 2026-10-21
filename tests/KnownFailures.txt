@@ -1,0 +1,27 @@
+﻿# Известные (давние) падения тестов — tools/ci/Test-KnownFailures.ps1 читает этот список (R00, DEC-052).
+# Полное имя теста Namespace.Class.Method; `*` в конце — префикс; `#` — комментарий.
+# Падение вне списка краснит CI. Прошедший тест из списка печатается как подсказка убрать строку.
+# Источник: docs/00_STAGE_PROTOCOL.md §J (2026-10-19) и прогон 2026-10-21 (artifacts/roadmap-baseline-2026-10-21/tests).
+# Список правится только вместе с починкой или обоснованной перезаписью теста (этап R04).
+
+# Map.Persistence.Tests (15 падений в 6 тестах; часть — theory с несколькими вариантами)
+Map.Persistence.Tests.ContainerHardeningTests.An_unknown_object_kind_is_reported_as_corruption_naming_the_kind
+Map.Persistence.Tests.ContainerHardeningTests.Null_elements_inside_scene_collections_are_reported_as_corruption
+Map.Persistence.Tests.Stage10VariantSetRoundTripTests.The_project_schema_gained_no_set_or_variant_field_for_this_slice
+Map.Persistence.Tests.Stage13DLargeCanvasRoundTripTests.Large_sparse_canvas_round_trip_preserves_groups_compositions_tiles_and_expanded_envelope
+Map.Persistence.Tests.Stage17EditablePathRoundTripTests.V4_opens_unchanged_and_v5_retains_editable_inputs_members_exclusions_and_checkpoints
+Map.Persistence.Tests.Stage18EditableAreaRoundTripTests.V6_roundtrip_retains_area_exclusions_frozen_images_and_v5_path_versions_without_changing_original
+
+# Map.Presentation.Tests (5)
+Map.Presentation.Tests.EditorIntegrityInputRoutingTests.A_press_that_starts_no_tool_gesture_still_reaches_selection
+Map.Presentation.Tests.Stage10CMultiSelectionViewModelTests.Select_all_keeps_a_closed_group_atomic_when_only_one_member_matches_the_filter
+Map.Presentation.Tests.Stage10CObjectTreeRowTests.Type_filter_keeps_groups_with_at_least_one_matching_member
+Map.Presentation.Tests.Stage10EGridViewModelTests.Stage10EPortalSnapReviewFix_success_no_op_and_refusal_have_exact_history_and_status
+Map.Presentation.Tests.Stage10FFontsAndSettingsTests.Default_registry_is_conflict_free_and_allows_only_non_overlapping_reuse
+
+# Map.Rendering.Tests (6; пробка озера RiverRenderer.TrimAtLake — Stage19*)
+Map.Rendering.Tests.RenderImageCacheDiagnostics.Where_the_cached_frame_differs
+Map.Rendering.Tests.Stage14PlacementPreviewRenderingTests.Stage14_stamp_ghost_reuses_real_asset_source_and_export_without_preview_stays_clean
+Map.Rendering.Tests.Stage19EstuaryScenarioTests.A_tributary_and_a_lake_outflow_join_without_seams_or_double_rims
+Map.Rendering.Tests.Stage19IllustratedWaterTests.A_lake_outflow_has_no_earth_plug_for_either_lake_winding
+Map.Rendering.Tests.Stage19WaterJoinRenderingTests.Water_runs_past_the_coast_and_dissolves_instead_of_stopping_at_it

@@ -2,15 +2,20 @@ name: build
 
 # Independent check of every push: Release build of Map.slnx and the five unit test projects
 # on a clean Windows runner (DEC-050). Native window smokes (tools/Map.Performance) stay local.
-# Map.Core.Tests and Map.Assets.Tests gate the run. Rendering, Persistence and Presentation carry
-# 26 failures that predate the workflow (listed in docs/STATE_HANDOFF.md, 2026-10-19); they run and
-# upload their results but do not fail the job until those tests are repaired — then drop
-# `continue-on-error` below.
+# Map.Core.Tests and Map.Assets.Tests gate the run directly. Rendering, Persistence and Presentation
+# carry long-standing failures (docs/00_STAGE_PROTOCOL.md §J): they run fully, and
+# tools/ci/Test-KnownFailures.ps1 compares the .trx results with tests/KnownFailures.txt — any failure
+# NOT in that list turns the job red (R00, DEC-052). A known failure that starts passing is reported
+# as a notice so the list can be trimmed.
 on:
   push:
     branches: ["**"]
   pull_request:
   workflow_dispatch:
+
+# Least privilege for the job token (R00, agent-security note 2026-10-21): the build only reads the repo.
+permissions:
+  contents: read
 
 concurrency:
   group: build-${{ github.ref }}
@@ -39,16 +44,15 @@ jobs:
             if ($LASTEXITCODE -ne 0) { Write-Host "::error::$p failed"; exit 1 }
           }
 
-      - name: Unit tests (known failures, informational)
+      - name: Unit tests (known failures filtered)
         shell: pwsh
-        continue-on-error: true
         run: |
-          $failed = @()
           foreach ($p in 'Map.Rendering.Tests','Map.Persistence.Tests','Map.Presentation.Tests') {
-            dotnet test "tests\$p\$p.csproj" -c Release -nologo --logger "trx;LogFileName=$p.trx" --results-directory artifacts\test-results
-            if ($LASTEXITCODE -ne 0) { $failed += $p }
+            dotnet test "tests\$p\$p.csproj" -c Release -nologo --logger "trx;LogFileName=$p.trx" --results-directory artifacts	est-results
+            Write-Host "$p exit code $LASTEXITCODE (judged by Test-KnownFailures)"
           }
-          if ($failed.Count -gt 0) { Write-Host "::warning::Projects with failing tests: $($failed -join ', ')"; exit 1 }
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools/ci/Test-KnownFailures.ps1 -ResultsDir artifacts/test-results -KnownList tests/KnownFailures.txt
+          if ($LASTEXITCODE -ne 0) { Write-Host "::error::new test failures outside tests/KnownFailures.txt"; exit 1 }
 
       - name: Test results
         if: always()
