@@ -1,4 +1,21 @@
 ﻿# STATE_HANDOFF — актуальное состояние Map
+## Актуально на 2026-10-21 (ночь, последнее) — R02 интегрирован: пакет игрока без секретов
+
+**FACT.** Codex выполнил R02 в `codex/roadmap-R02` (a261895), интегратор перенёс его как 34a9679 поверх R05.
+`ExportPlayerVisibility` (Core) очищает сцену игрока от GM-текста, `childMap`, скрытых туманом гексов и их заметок,
+регионов и участков путей; в окне экспорта — `ExportRecipientComboBox` («Ведущий»/«Игрок») и блок «Что попадёт в
+пакет» (`EditorView.PlayerPackage.cs`, `EditorViewModel.PlayerPackage.cs`); JSON/MD/PDF/PNG/dd2vtt идут через
+`ExportScene` с получателем. Документ, Undo и схема v14 не меняются. Новый смоук `native-player-package`, флаг
+`Map.LiveCheck --player-package true`.
+
+**Проверено (FACT):** у Codex — Release 0 ошибок; Core 51/51, Presentation 72/72, Persistence 23/23; смоук 13/13;
+живой проход PASS, PrintWindow-снимок и PNG игрока/ведущего просмотрены (и интегратором). У интегратора после
+cherry-pick: 1673/1673: Core 421, Persistence 215, Presentation 659, Rendering 229, Assets 149.
+**NOT CHECKED:** импорт dd2vtt игрока в Foundry/Roll20 (R14); живой просмотр владельцем; чёрные поля на
+PrintWindow-снимке окна экспорта (наблюдение для R05/D5). Реестр расхождений: шапка `06_DEVELOPMENT_ROADMAP.md`
+называет v13, текущая схема — v14 (поправлено в этом коммите).
+**Следующий шаг:** push → CI → R02 ✅; Codex — R03, Claude — остаток R05 (фоновая растеризация плиток объектов).
+
 ## Актуально на 2026-10-21 (ночь, позже) — R05 PARTIAL: обрывы в обзоре, кадр после зума, кэш гексовой доски
 
 **FACT.** R00, R01, R04 ✅ (CI зелёный, b14a520). R05 (Claude), сделано частично:
