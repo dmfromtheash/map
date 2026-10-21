@@ -329,7 +329,9 @@ public sealed partial class EditorView
 
         ((INotifyPropertyChanged)_editor).PropertyChanged += (_, e) =>
         {
-            if (e.PropertyName is { } name && (name.StartsWith("Hex", StringComparison.Ordinal) || name is nameof(EditorViewModel.CanUndo)))
+            if (e.PropertyName is { } name && (name.StartsWith("Hex", StringComparison.Ordinal)
+                || name is nameof(EditorViewModel.CanUndo) or nameof(EditorViewModel.SelectedHexPath)
+                    or nameof(EditorViewModel.ExportHexLevel) or nameof(EditorViewModel.ExportHexPlayers)))
             {
                 SyncHexPanel(name);
             }
@@ -685,11 +687,13 @@ public sealed partial class EditorView
 
         var list = new StackPanel { Name = "HexPathList", Spacing = 2 };
         object? shown = null;
+        HexPathId? selected = null;
         HexSync(() =>
         {
             var paths = _editor.HexPaths;
-            if (ReferenceEquals(shown, paths)) return;
+            if (ReferenceEquals(shown, paths) && selected == _editor.SelectedHexPath?.Id) return;
             shown = paths;
+            selected = _editor.SelectedHexPath?.Id;
             list.Children.Clear();
             if (paths.Count == 0) list.Children.Add(Ui.Hint("Путей пока нет."));
             foreach (var group in paths.GroupBy(path => path.Kind))
@@ -705,12 +709,13 @@ public sealed partial class EditorView
                         Children =
                         {
                             HexIcon("HexPathRemove_" + index + "_" + path.Kind, "Удалить путь", MapIcons.LineTrash, () => _editor.RemoveHexPath(id)).Docked(Dock.Right),
-                            new TextBlock { Text = text, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis },
+                            Ui.TextButton("HexPathSelect_" + index + "_" + path.Kind, text, () => _editor.SelectHexPath(id),
+                                selected == id ? "active" : "ghost", "compact"),
                         },
                     });
                 }
             }
-        }, [.. DocumentChanged, nameof(EditorViewModel.HexPaths), nameof(EditorViewModel.HexMode)]);
+        }, [.. DocumentChanged, nameof(EditorViewModel.HexPaths), nameof(EditorViewModel.HexMode), nameof(EditorViewModel.SelectedHexPath)]);
 
         return Ui.Category("HexPathCategory", "Пути", "accent-create", new StackPanel
         {
@@ -720,6 +725,7 @@ public sealed partial class EditorView
                 kinds,
                 Ui.Subgroup("Как идёт путь", styles),
                 new StackPanel { Spacing = 2, Children = { auto, erase } },
+                BuildHexPathBlockingSection(),
                 Ui.Subgroup("Пути на карте", list),
             },
         });

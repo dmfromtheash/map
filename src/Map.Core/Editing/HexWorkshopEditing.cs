@@ -224,7 +224,8 @@ public static class HexPaths
                     if (piece.Count >= 2)
                     {
                         result.Add(new HexPath(first ? path.Id : HexPathId.New(), path.Kind, path.Style, [], [.. piece],
-                            path.Width, path.Color, path.Name, path.Seed));
+                            path.Width, path.Color, path.Name, path.Seed)
+                        { BlocksSight = path.BlocksSight, BlocksMove = path.BlocksMove, BlocksLight = path.BlocksLight });
                         first = false;
                     }
 
@@ -259,7 +260,8 @@ public static class HexPaths
                 if (hexes.Count >= 2)
                 {
                     result.Add(new HexPath(first ? path.Id : HexPathId.New(), path.Kind, path.Style, [.. hexes], [],
-                        path.Width, path.Color, path.Name, path.Seed));
+                        path.Width, path.Color, path.Name, path.Seed)
+                        { BlocksSight = path.BlocksSight, BlocksMove = path.BlocksMove, BlocksLight = path.BlocksLight });
                     first = false;
                 }
 
@@ -560,7 +562,9 @@ public sealed record HexClip(
             .ToList();
         var board = layer.Board.With(changes);
         var moved = Paths.Select(path => new HexPath(HexPathId.New(), path.Kind, path.Style, path.Hexes, path.Vertices,
-            path.Width, path.Color, path.Name, path.Seed).Moved(hex => hex + at)).ToImmutableList();
+            path.Width, path.Color, path.Name, path.Seed)
+            { BlocksSight = path.BlocksSight, BlocksMove = path.BlocksMove, BlocksLight = path.BlocksLight }
+            .Moved(hex => hex + at)).ToImmutableList();
         var paths = layer.Paths.AddRange(HexPaths.Remap(moved, layer.Board.Layout, hex => board.Contains(hex) ? hex : null));
         var notes = layer.Notes.ToBuilder();
         foreach (var (hex, note) in Notes)

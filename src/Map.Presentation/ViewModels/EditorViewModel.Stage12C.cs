@@ -158,6 +158,7 @@ public sealed partial class EditorViewModel
 
     public void BeginExport()
     {
+        ResetExportHexLevel();
         var canvas = Session.Document.Canvas;
         _exportOpen = true;
         _exportFormat = _defaultExportFormat;
@@ -541,7 +542,7 @@ public sealed partial class EditorViewModel
             _exportQuality)
         {
             // A hex map exports the level being edited, as the master or as the players see it.
-            Hex = IsHexWorkshop ? new HexExportView(ExportHexPlayers, HexLevelShown) : null,
+            Hex = IsHexWorkshop ? new HexExportView(ExportHexPlayers, ExportHexLevel) : null,
         };
     }
 

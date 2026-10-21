@@ -23,6 +23,9 @@ public static partial class MapProjectStore
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = false };
 
     private static int SchemaFor(MapDocument document) =>
+        document.Layers.OfType<HexLayer>().Any(layer => layer.Paths.Any(path => path.NeedsBlockingSchema))
+        || document.Checkpoints.Any(c => c.Snapshot.Layers.OfType<HexLayer>().Any(layer => layer.Paths.Any(path => path.NeedsBlockingSchema)))
+            ? MapProjectFormat.HexPathBlockingSchemaVersion :
         document.Layers.OfType<HexLayer>().Any(layer => layer.NeedsWorkshopSchema)
         || document.Checkpoints.Any(c => c.Snapshot.Layers.OfType<HexLayer>().Any(layer => layer.NeedsWorkshopSchema))
             ? MapProjectFormat.HexWorkshopSchemaVersion :
@@ -1808,6 +1811,9 @@ public static partial class MapProjectStore
                 Color = path.Color,
                 Name = path.Name.Length == 0 ? null : path.Name,
                 Seed = path.Seed,
+                BlocksSight = path.BlocksSight != path.LegacyBlocksSight ? path.BlocksSight : null,
+                BlocksMove = path.BlocksMove ? true : null,
+                BlocksLight = path.BlocksLight ? true : null,
             })],
             Regions = layer.Regions.IsEmpty ? null : [.. layer.Regions.Select(region => new HexRegionDto
             {
@@ -1916,14 +1922,24 @@ public static partial class MapProjectStore
                         vertices.Add(layout.Canonical(new HexVertex(At(nodes[i], nodes[i + 1]), nodes[i + 2])));
                     }
 
-                    paths.Add(new HexPath(new HexPathId(pathId), kind, style, [], [.. vertices], path.Width, path.Color, path.Name ?? "", path.Seed));
+                    paths.Add(new HexPath(new HexPathId(pathId), kind, style, [], [.. vertices], path.Width, path.Color, path.Name ?? "", path.Seed)
+                    {
+                        BlocksSight = path.BlocksSight ?? (kind == HexPathKind.Border && style == HexRouteStyle.Edges),
+                        BlocksMove = path.BlocksMove ?? false,
+                        BlocksLight = path.BlocksLight ?? false,
+                    });
                 }
                 else
                 {
                     if (nodes.Count % 2 != 0) throw new MapProjectCorruptedException($"Hex layer {id} has a damaged path.");
                     var hexes = new List<HexCoord>(nodes.Count / 2);
                     for (var i = 0; i < nodes.Count; i += 2) hexes.Add(At(nodes[i], nodes[i + 1]));
-                    paths.Add(new HexPath(new HexPathId(pathId), kind, style, [.. hexes], [], path.Width, path.Color, path.Name ?? "", path.Seed));
+                    paths.Add(new HexPath(new HexPathId(pathId), kind, style, [.. hexes], [], path.Width, path.Color, path.Name ?? "", path.Seed)
+                    {
+                        BlocksSight = path.BlocksSight ?? (kind == HexPathKind.Border && style == HexRouteStyle.Edges),
+                        BlocksMove = path.BlocksMove ?? false,
+                        BlocksLight = path.BlocksLight ?? false,
+                    });
                 }
             }
             catch (ArgumentException error)

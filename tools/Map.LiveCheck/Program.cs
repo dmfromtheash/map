@@ -12,6 +12,7 @@ using FlaUI.UIA3;
 //   dotnet run --project tools/Map.LiveCheck -c Release -- [--exe <Map.App.exe>] [--out <folder>] [--map <file.mapproj>]
 // With --map the file is copied into the isolated profile and opened from the command line; the
 // pass then opens the export window, dumps and screenshots it and checks the three output modes.
+// With --hex-paths true and --map, selects the first border and flips all three blocking switches using UIA.
 // Exit code 0: every step found its element; 2: a step could not find its element (screenshots
 // and the UIA tree are still written); 1: the program did not start or crashed.
 var root = FindRepoRoot();
@@ -97,6 +98,36 @@ try
             Shot(main, Path.Combine(outDir, "hover-rest.png"));
             Log($"hover: glided across the canvas {box}");
         }
+        if (Arg("--hex-paths") is not null)
+        {
+            foreach (var id in new[] { "HexTabMarkup", "HexModePath", "HexPathSelect_1_Border" })
+            {
+                var button = Retry.WhileNull(() => main.FindFirstDescendant(cf => cf.ByAutomationId(id)),
+                    TimeSpan.FromSeconds(10), TimeSpan.FromMilliseconds(200)).Result;
+                if (button is null) { missing++; Log("MISSING: " + id); continue; }
+                if (button.Patterns.Invoke.IsSupported) button.Patterns.Invoke.Pattern.Invoke();
+                else if (button.Patterns.Toggle.IsSupported) button.Patterns.Toggle.Pattern.Toggle();
+                else { missing++; Log("MISSING activation pattern: " + id); }
+                Thread.Sleep(350);
+            }
+            Shot(main, Path.Combine(outDir, "r01-path-before.png"));
+            foreach (var id in new[] { "HexPathBlocksSightCheckBox", "HexPathBlocksMoveCheckBox", "HexPathBlocksLightCheckBox" })
+            {
+                var part = main.FindFirstDescendant(cf => cf.ByAutomationId(id));
+                if (part is null) { missing++; Log("MISSING: " + id); continue; }
+                var check = part.AsCheckBox();
+                var before = check.IsChecked;
+                check.Toggle();
+                Thread.Sleep(350);
+                var after = main.FindFirstDescendant(cf => cf.ByAutomationId(id))!.AsCheckBox().IsChecked;
+                if (after == before) missing++;
+                Log($"R01 {id}: {before} -> {after}; enabled={check.IsEnabled}");
+                // Restore the fixture flags with a second real UIA toggle; only the isolated copy is edited.
+                check.Toggle();
+                Thread.Sleep(250);
+            }
+            Shot(main, Path.Combine(outDir, "r01-path-after.png"));
+        }
         Dump(main, Path.Combine(outDir, "ui-tree-workshop.txt"));
         Shot(main, Path.Combine(outDir, "10-workshop.png"));
         if (export is not null)
@@ -127,6 +158,23 @@ try
                     if (part is null) missing++;
                 }
 
+                if (Arg("--hex-paths") is not null)
+                {
+                    var level = exportWindow.FindFirstDescendant(cf => cf.ByAutomationId("ExportHexLevelComboBox"));
+                    if (level is null) { missing++; Log("MISSING: ExportHexLevelComboBox"); }
+                    else
+                    {
+                        var combo = level.AsComboBox();
+                        combo.Select(1);
+                        Thread.Sleep(800);
+                        var selected = combo.SelectedItem;
+                        if (selected is null) Log("R01 export level index 1 selected; UIA does not report SelectedItem. Verify the visible label in r01-export-level.png.");
+                        else Log("R01 export level: " + selected.Name);
+                        combo.Collapse();
+                        Thread.Sleep(300);
+                        Shot(exportWindow, Path.Combine(outDir, "r01-export-level.png"));
+                    }
+                }
                 var mbtiles = exportWindow.FindFirstDescendant(cf => cf.ByAutomationId("ExportMbTilesButton"));
                 if (mbtiles is not null)
                 {

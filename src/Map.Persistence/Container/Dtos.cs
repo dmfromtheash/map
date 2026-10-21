@@ -173,6 +173,9 @@ internal sealed class HexPathDto
     [JsonPropertyName("color")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Color { get; set; }
     [JsonPropertyName("name")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Name { get; set; }
     [JsonPropertyName("seed")] public int Seed { get; set; }
+    [JsonPropertyName("blocksSight")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public bool? BlocksSight { get; set; }
+    [JsonPropertyName("blocksMove")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public bool? BlocksMove { get; set; }
+    [JsonPropertyName("blocksLight")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public bool? BlocksLight { get; set; }
 }
 
 internal sealed class HexRegionDto

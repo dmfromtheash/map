@@ -28,6 +28,8 @@ public sealed class ImageExportEngine : IImageExporter
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentNullException.ThrowIfNull(plan);
+        // One selection contract for every output mode, including the preview and tiled renders.
+        snapshot = plan.CreateScene(snapshot).RenderDocument();
         cancellationToken.ThrowIfCancellationRequested();
         using var operation = await Map.Core.Resources.WorkingMemoryBudget.Shared.EnterHeavyAsync(cancellationToken).ConfigureAwait(false);
 
@@ -65,6 +67,8 @@ public sealed class ImageExportEngine : IImageExporter
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentNullException.ThrowIfNull(plan);
+        // One selection contract for every output mode, including the preview and tiled renders.
+        snapshot = plan.CreateScene(snapshot).RenderDocument();
         ArgumentException.ThrowIfNullOrWhiteSpace(destinationPath);
         cancellationToken.ThrowIfCancellationRequested();
         ExportResourceAdmission.Check(plan, destinationPath, _settings);

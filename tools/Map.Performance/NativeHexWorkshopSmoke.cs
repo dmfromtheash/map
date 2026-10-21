@@ -20,7 +20,7 @@ public sealed partial class RegionalApplication
     /// the real canvas - tiles that turn, tall and living tiles, a region, a river and a road with
     /// its bridge, the fog of war, a hex key typed into the panel, the travel ruler, a selection
     /// copied and pasted, inserted columns, an underground level, the players' window - then the
-    /// map saves at schema v13 and opens back the same.
+    /// map saves at schema v14 and opens back the same, including independent path blocking flags.
     /// </summary>
     /// <summary>A property toggle as the user flips it (a raised Click does not flip a toggle).</summary>
     private static void Toggle(Control root, string name)
@@ -73,7 +73,8 @@ public sealed partial class RegionalApplication
         var document = HexMapFactory.Create("Мастерская · проверка", DateTimeOffset.UtcNow, MapCategories.Hex.Id,
             HexOrientation.Flat, 48, 30, 20, "#FFF2E9DC");
         _editor = new EditorViewModel(document, null, true, _store, _recent, _picker, new LocalPrompts(), new LocalLog(),
-            assetCatalog: _catalog, localPreferences: new EditorLocalPreferences(PrimaryAutosaveEnabled: false));
+            assetCatalog: _catalog, localPreferences: new EditorLocalPreferences(PrimaryAutosaveEnabled: false),
+            exportDestinationPicker: new HexVttDestination(() => _hexVttPath));
         _view = new EditorView(_editor, () => Task.CompletedTask, () => { }, () => { });
         _window.Content = _view;
         await Settle();
@@ -224,6 +225,8 @@ public sealed partial class RegionalApplication
         PressHex(_view, "HexLevel_0"); await Settle();
         Check("switching back shows the surface", _editor.HexLevel == 0 && _editor.ActiveHexLayer?.Level == 0);
 
+        await VerifyHexPathBlockingExports();
+
         // The players' window.
         var player = new HexPlayerWindow(_editor)
         {
@@ -240,15 +243,17 @@ public sealed partial class RegionalApplication
         using (var archive = ZipFile.OpenRead(path))
         using (var manifest = JsonDocument.Parse(archive.GetEntry("manifest.json")!.Open()))
         {
-            Check("a workshop map saves at schema v13", manifest.RootElement.GetProperty("schemaVersion").GetInt32() == MapProjectFormat.HexWorkshopSchemaVersion);
+            Check("a workshop map saves blocking flags at schema v14", manifest.RootElement.GetProperty("schemaVersion").GetInt32() == MapProjectFormat.HexPathBlockingSchemaVersion);
         }
 
         var reopened = MapProjectStore.Open(path).Document;
         var surface = reopened.Layers.OfType<HexLayer>().Single(l => l.Level == 0);
         Console.WriteLine($"reopen: cells {surface.Board.Cells.SequenceEqual(Layer().Board.Cells)} paths {surface.Paths.Count} regions {surface.Regions.Count} notes {surface.Notes.Count} fog {surface.FogEnabled}");
         Check("it opens back with its hexes, paths, regions, keys, fog and level", surface.Board.Cells.SequenceEqual(Layer().Board.Cells)
-            && surface.Paths.Count == 2 && surface.Regions.Count == 1 && surface.Notes.Count == 1 && surface.FogEnabled
+            && surface.Paths.Count == 3 && surface.Regions.Count == 1 && surface.Notes.Count == 1 && surface.FogEnabled
             && reopened.Layers.OfType<HexLayer>().Any(l => l.Level == -1));
+        Check("R01 save/reopen preserves all blocking flags on both levels", reopened.Layers.OfType<HexLayer>()
+            .All(l => l.Paths.Count(p => p.BlocksSight && p.BlocksMove && p.BlocksLight) == 1));
 
         // The world generator through its panel buttons, step by step, on the surface.
         var depthBefore = _editor.Session.UndoDepth;

@@ -13,6 +13,29 @@ namespace Map.Presentation.ViewModels;
 /// </summary>
 public sealed partial class EditorViewModel
 {
+    private int? _exportHexLevel;
+
+    /// <summary>One selected level for PNG/VTT; starts from the level being edited.</summary>
+    public int ExportHexLevel
+    {
+        get => _exportHexLevel is { } level && HexLevels.Contains(level) ? level : HexLevel;
+        set
+        {
+            if (!HexLevels.Contains(value) || ExportHexLevel == value) return;
+            _exportHexLevel = value;
+            Raise(nameof(ExportHexLevel));
+            Raise(nameof(ExportVttGridSize));
+            RebuildExportPlanAndPreview();
+            Raise(nameof(ExportVttSummary));
+        }
+    }
+
+    private void ResetExportHexLevel()
+    {
+        _exportHexLevel = HexLevel;
+        Raise(nameof(ExportHexLevel));
+    }
+
     private bool _exportHexPlayers;
     private HexPrintOptions _hexPrint = new();
 

@@ -1,5 +1,22 @@
 # Map.Performance
 
+## R01: блокировка гекс-путей и экспорт уровней
+
+`native-hex-workshop` включает создание неблокирующих границ на уровнях 0 и −1, три переключателя
+`HexPathBlocksSightCheckBox` / `HexPathBlocksMoveCheckBox` / `HexPathBlocksLightCheckBox`, Undo/Redo,
+экспорт обоих уровней в dd2vtt и проверку координат стен, save/reopen v14. Артефакты остаются в
+`artifacts/r01/hex-workshop-workspace/`; профиль изолирован. Запускать проверки по одной:
+
+```powershell
+dotnet build tools/Map.Performance -c Release
+dotnet tools/Map.Performance/bin/Release/net10.0/win-x64/Map.Performance.dll --profile native-hex-workshop --output artifacts/r01/hex-workshop.json
+dotnet run --project tools/Map.LiveCheck -c Release -- --out artifacts/r01/live --map artifacts/r01/hex-workshop-workspace/hex-workshop.mapproj --hex-paths true
+```
+
+`Map.LiveCheck --hex-paths true` открывает карту в собственной копии профиля, выбирает границу,
+переключает свойства через UI Automation и меняет уровень в окне экспорта. Снимки только окон
+этого процесса через PrintWindow; этот проход не является просмотром владельцем.
+
 ## Стресс гексовой категории (2026-10-18)
 
 `MAP_HEX_STRESS=1` с `--profile native-paint-perf` — маршруты по полям `MAP_HEX_BOARDS` (по умолчанию

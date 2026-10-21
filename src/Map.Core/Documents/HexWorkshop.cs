@@ -128,6 +128,18 @@ public sealed record HexPath
     /// <summary>Changes how a meander winds without changing where it goes.</summary>
     public int Seed { get; init; }
 
+    /// <summary>Independent gameplay properties; new paths do not block by default.</summary>
+    public bool BlocksSight { get; init; }
+
+    public bool BlocksMove { get; init; }
+
+    public bool BlocksLight { get; init; }
+
+    /// <summary>The pre-v14 sight default, used only when reading/writing older files.</summary>
+    public bool LegacyBlocksSight => Kind == HexPathKind.Border && Style == HexRouteStyle.Edges;
+
+    public bool NeedsBlockingSchema => BlocksSight != LegacyBlocksSight || BlocksMove || BlocksLight;
+
     public int NodeCount => Style == HexRouteStyle.Edges ? Vertices.Length : Hexes.Length;
 
     /// <summary>The style a new path of this kind uses unless the user picks another.</summary>
@@ -142,7 +154,8 @@ public sealed record HexPath
     public bool SameAs(HexPath? other) =>
         other is not null && Id == other.Id && Kind == other.Kind && Style == other.Style
         && Hexes.SequenceEqual(other.Hexes) && Vertices.SequenceEqual(other.Vertices)
-        && Width.Equals(other.Width) && Color == other.Color && Name == other.Name && Seed == other.Seed;
+        && Width.Equals(other.Width) && Color == other.Color && Name == other.Name && Seed == other.Seed
+        && BlocksSight == other.BlocksSight && BlocksMove == other.BlocksMove && BlocksLight == other.BlocksLight;
 
     /// <summary>The same path moved by an axial offset (copy, paste, inserted rows).</summary>
     public HexPath Moved(Func<HexCoord, HexCoord> map) => this with

@@ -403,6 +403,7 @@ public sealed partial class EditorViewModel
         }
 
         ExecuteHexLayerEdit(PathKindName(path.Kind) + ": новый путь", layer, layer with { Paths = layer.Paths.Add(path) });
+        SelectHexPath(path.Id);
         Raise(nameof(HexPaths));
         StatusDetail = $"{PathKindName(path.Kind)}: {path.NodeCount} {(path.Style == HexRouteStyle.Edges ? "углов" : "гексов")}."
             + (path.Kind == HexPathKind.Road && layer.Paths.Any(p => p.Kind == HexPathKind.River && p.Hexes.Intersect(path.Hexes).Any())

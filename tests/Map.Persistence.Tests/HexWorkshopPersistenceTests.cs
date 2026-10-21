@@ -40,7 +40,7 @@ public sealed class HexWorkshopPersistenceTests
         var river = new HexPath(HexPathId.New(), HexPathKind.River, HexRouteStyle.Meander,
             [.. Map.Core.Editing.HexPaths.Walk([At(1, 1), At(9, 6)])], [], 1.5, "#FF3070C0", "Светлая", 7);
         var border = new HexPath(HexPathId.New(), HexPathKind.Border, HexRouteStyle.Edges, [],
-            [.. Map.Core.Editing.HexPaths.EdgeWalk(layout, new HexVertex(At(10, 0), 2), new HexVertex(At(10, 8), 4))]);
+            [.. Map.Core.Editing.HexPaths.EdgeWalk(layout, new HexVertex(At(10, 0), 2), new HexVertex(At(10, 8), 4))]) { BlocksSight = true };
         var painted = layer with
         {
             Board = layer.Board.With(cells),

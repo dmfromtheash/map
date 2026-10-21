@@ -120,7 +120,7 @@ public static class ExportPlanner
                 columns,
                 rows,
                 bleed,
-                estimate) { Hex = request.Hex };
+                estimate) { Hex = request.Hex, VisibleLayerIds = request.VisibleLayerIds };
         }
         catch (OverflowException ex)
         {

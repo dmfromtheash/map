@@ -32,8 +32,10 @@ public sealed partial class EditorViewModel
     {
         get
         {
-            var walls = VttGeometry.Collect(Session.Document);
             var plan = CurrentExportPlan;
+            var scene = plan?.CreateScene(Session.Document) ?? new ExportScene(Session.Document,
+                IsHexWorkshop ? ExportHexLevel : null);
+            var walls = VttGeometry.Collect(scene);
             var ppg = plan is null ? "" : $" · {UniversalVttExporter.PixelsPerGrid(plan, ExportVttGridSize)} px на клетку";
             return walls.Walls.Count == 0
                 ? $"Стен нет: у линий, контуров или дорог включите «Стена блокирует свет».{ppg}"
@@ -45,7 +47,8 @@ public sealed partial class EditorViewModel
 
     private double DefaultVttGridSize() =>
         // A tabletop hex is measured across its flat sides (Foundry and the dd2vtt importer agree).
-        IsHexWorkshop && ActiveHexLayer is { } hexes ? hexes.Board.Layout.Size * HexLayout.Sqrt3 :
+        IsHexWorkshop && Session.Document.Layers.OfType<HexLayer>().FirstOrDefault(layer => layer.Visible && layer.Level == ExportHexLevel) is { } hexes
+            ? hexes.Board.Layout.Size * HexLayout.Sqrt3 :
         Session.Document.Layers.OfType<GridLayer>().Where(layer => layer.Visible)
             .SelectMany(layer => layer.Grids).Select(grid => grid.CellSize).FirstOrDefault(size => size > 0) is var size and > 0
             ? size
@@ -104,7 +107,8 @@ public sealed partial class EditorViewModel
             _exportResultPath = result.Path;
             _exportResultMode = ExportOutputMode.SingleImage;
             _exportResultText = $"Готово для виртуального стола: {result.Path} · стен {result.Walls}, дверей {result.Portals}, {result.PixelsPerGrid} px на клетку";
-            if (IsHexWorkshop && ActiveHexLayer is { } hexes) WriteFoundryHint(result.Path, hexes);
+            if (IsHexWorkshop && plan.CreateScene(snapshot).Layers.OfType<HexLayer>().FirstOrDefault() is { } hexes)
+                WriteFoundryHint(result.Path, hexes);
             LastVttExportText = _exportResultText;
             Raise(nameof(LastVttExportText));
             _log.Info($"VTT_EXPORT_SUCCEEDED walls={result.Walls} portals={result.Portals}");

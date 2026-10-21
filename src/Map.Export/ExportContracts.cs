@@ -63,6 +63,9 @@ public sealed record ExportRequest(
 {
     /// <summary>For a hex map: export the players' view and/or one level of the world.</summary>
     public HexExportView? Hex { get; init; }
+
+    /// <summary>An optional subset of document-visible layers, captured with the export request.</summary>
+    public System.Collections.Immutable.ImmutableHashSet<LayerId>? VisibleLayerIds { get; init; }
 }
 
 /// <summary>How a hex map is exported: as the players see it (opaque fog, player keys) and which level.</summary>
@@ -85,6 +88,12 @@ public sealed record ExportPlan(
 {
     /// <summary>See <see cref="ExportRequest.Hex"/>.</summary>
     public HexExportView? Hex { get; init; }
+
+    /// <summary>An optional subset of document-visible layers, captured with the export request.</summary>
+    public System.Collections.Immutable.ImmutableHashSet<LayerId>? VisibleLayerIds { get; init; }
+
+    public ExportScene CreateScene(MapDocument document) => new(document, Hex?.Level,
+        Hex?.Players == true ? ExportRecipient.Players : ExportRecipient.GameMaster, SourceRegion, VisibleLayerIds);
 
     public int TileCount => checked(Columns * Rows);
     public bool IncludesBackground => !TransparentBackground;

@@ -25,7 +25,9 @@ public static class MapProjectFormat
     public const string Extension = ".mapproj";
 
     /// <summary>The newest schema this build writes and reads.</summary>
-    public const int MaxSupportedSchemaVersion = HexWorkshopSchemaVersion;
+    public const int HexPathBlockingSchemaVersion = 14;
+
+    public const int MaxSupportedSchemaVersion = HexPathBlockingSchemaVersion;
 
     /// <summary>
     /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry

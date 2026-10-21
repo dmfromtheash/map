@@ -17,6 +17,10 @@ public static partial class MapProjectStore
 
     private static void ValidatePathSchema(SceneDto scene, int schema)
     {
+        if (schema < MapProjectFormat.HexPathBlockingSchemaVersion
+            && scene.Layers?.Any(l => l?.Hex?.Paths?.Any(p => p is not null
+                && (p.BlocksSight.HasValue || p.BlocksMove.HasValue || p.BlocksLight.HasValue)) == true) == true)
+            throw new MapProjectCorruptedException("Hex path blocking properties require schema v14.");
         if (scene.Layers?.Any(l => l?.BaseMaterial is not null) == true
             && schema < MapProjectFormat.BaseMaterialSchemaVersion)
             throw new MapProjectCorruptedException("A material on the base colour requires schema v10.");

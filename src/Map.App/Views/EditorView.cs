@@ -8058,6 +8058,7 @@ public sealed partial class EditorView : UserControl
             Spacing = 6,
             Children =
             {
+                BuildHexExportLevelSelector(),
                 AppearanceSlider("ExportVttGridSizeSlider", "Клетка стола", 4, 1024, "ед.",
                     () => _editor.ExportVttGridSize,
                     (v, _) => { _editor.ExportVttGridSize = v; SyncExport(); }, 1, defaultValue: null,

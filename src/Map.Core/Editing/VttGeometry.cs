@@ -19,27 +19,25 @@ public sealed record VttWalls(IReadOnlyList<IReadOnlyList<VectorPoint>> Walls, I
 /// </summary>
 public static class VttGeometry
 {
-    public static VttWalls Collect(MapDocument document)
+    public static VttWalls Collect(MapDocument document) => Collect(new ExportScene(document));
+
+    public static VttWalls Collect(ExportScene scene)
     {
-        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(scene);
         var walls = new List<IReadOnlyList<VectorPoint>>();
         var portals = new List<VttPortal>();
-        // Hex maps: border lines drawn along hex edges (walls, cliffs, frontiers) block sight.
-        foreach (var hexLayer in document.Layers.OfType<HexLayer>())
+        // Border is a visual kind. Only the explicit sight flag contributes to dd2vtt LOS.
+        foreach (var hexLayer in scene.Layers.OfType<HexLayer>())
         {
             if (!hexLayer.Visible) continue;
             foreach (var path in hexLayer.Paths)
             {
-                if (path.Kind != HexPathKind.Border || path.Style != HexRouteStyle.Edges || path.Vertices.Length < 2) continue;
-                walls.Add([.. path.Vertices.Select(vertex =>
-                {
-                    var (x, y) = hexLayer.Board.Layout.Position(vertex);
-                    return new VectorPoint(x, y);
-                })]);
+                if (!path.BlocksSight || path.NodeCount < 2) continue;
+                walls.Add(HexPathGeometry.Flatten(path, hexLayer.Board.Layout));
             }
         }
 
-        foreach (var layer in document.Layers.OfType<ObjectLayer>())
+        foreach (var layer in scene.Layers.OfType<ObjectLayer>())
         {
             if (!layer.Visible) continue;
             foreach (var item in layer.Objects)

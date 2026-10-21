@@ -46,10 +46,11 @@ public static class UniversalVttExporter
         var temporary = Path.Combine(folder, "." + Path.GetFileName(destinationPath) + "." + Guid.NewGuid().ToString("N") + ".tmp");
         try
         {
-            await engine.ExportAsync(snapshot, plan, image, stamps, progress, cancellationToken);
+            var scene = plan.CreateScene(snapshot);
+            await engine.ExportAsync(scene.RenderDocument(), plan, image, stamps, progress, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             var png = await File.ReadAllBytesAsync(image, cancellationToken);
-            var (walls, portals) = Write(snapshot, plan, gridCellWorld, png, temporary, out var pixelsPerGrid);
+            var (walls, portals) = Write(scene, plan, gridCellWorld, png, temporary, out var pixelsPerGrid);
             File.Move(temporary, destinationPath, overwrite: true);
             return new VttExportResult(destinationPath, pixelsPerGrid, walls, portals, new FileInfo(destinationPath).Length);
         }
@@ -65,11 +66,11 @@ public static class UniversalVttExporter
         Math.Max(1, (int)Math.Round(gridCellWorld * plan.OutputWidth / (double)plan.SourceRegion.Width));
 
     private static (int Walls, int Portals) Write(
-        MapDocument snapshot, ExportPlan plan, double cell, byte[] png, string path, out int pixelsPerGrid)
+        ExportScene scene, ExportPlan plan, double cell, byte[] png, string path, out int pixelsPerGrid)
     {
-        var region = plan.SourceRegion;
+        var region = scene.Region;
         pixelsPerGrid = PixelsPerGrid(plan, cell);
-        var collected = VttGeometry.Collect(snapshot);
+        var collected = VttGeometry.Collect(scene);
         var reach = new WorldBounds(region.X - cell, region.Y - cell, region.X + region.Width + cell, region.Y + region.Height + cell);
         var walls = collected.Walls.Where(wall => wall.Any(p => Inside(reach, p))).ToList();
         var doors = collected.Portals.Where(door => Inside(reach, door.Centre)).ToList();

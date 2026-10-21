@@ -24,7 +24,7 @@ public sealed class HexExportTests
             Notes = ImmutableDictionary<HexCoord, HexNote>.Empty.Add(layout.FromOffset(new HexOffset(5, 5)),
                 new HexNote("Башня", HexNoteCategory.Landmark, "Секрет мага", "Высокая башня", "tower.mapproj")),
             Paths = world.Paths.Add(new HexPath(HexPathId.New(), HexPathKind.Border, HexRouteStyle.Edges, [],
-                [.. HexPaths.EdgeWalk(layout, new HexVertex(layout.FromOffset(new HexOffset(2, 2)), 0), new HexVertex(layout.FromOffset(new HexOffset(2, 9)), 2))])),
+                [.. HexPaths.EdgeWalk(layout, new HexVertex(layout.FromOffset(new HexOffset(2, 2)), 0), new HexVertex(layout.FromOffset(new HexOffset(2, 9)), 2))]) { BlocksSight = true }),
             FogEnabled = true,
         };
         return (document.WithLayer(layer.Id, _ => world), world);
@@ -66,7 +66,7 @@ public sealed class HexExportTests
     }
 
     [Fact]
-    public void Edge_borders_become_walls_for_virtual_tabletops_and_the_foundry_grid_follows_the_orientation()
+    public void Edge_paths_marked_as_sight_blockers_become_walls_and_the_foundry_grid_follows_the_orientation()
     {
         var (document, _) = World();
         var walls = VttGeometry.Collect(document);

@@ -20,22 +20,27 @@ public static class HexJsonExporter
 
     public const int Version = 1;
 
-    public static void Write(MapDocument document, string path)
+    public static void Write(MapDocument document, string path) => Write(new ExportScene(document), path);
+
+    public static void Write(ExportScene scene, string path)
     {
-        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(scene);
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        var json = ToJson(document);
+        var json = ToJson(scene);
         var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         File.WriteAllText(temporary, json.ToJsonString(new JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }));
         File.Move(temporary, path, overwrite: true);
     }
 
-    public static JsonObject ToJson(MapDocument document)
+    public static JsonObject ToJson(MapDocument document) => ToJson(new ExportScene(document));
+
+    public static JsonObject ToJson(ExportScene scene)
     {
-        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(scene);
+        var document = scene.Document;
         var layers = new JsonArray();
         var used = new SortedSet<string>(StringComparer.Ordinal);
-        foreach (var layer in document.Layers.OfType<HexLayer>())
+        foreach (var layer in scene.Layers.OfType<HexLayer>())
         {
             var board = layer.Board;
             JsonArray Position(HexCoord hex)
@@ -89,6 +94,10 @@ public static class HexJsonExporter
 
                 if (p.Width != 1) item["width"] = p.Width;
                 if (p.Color is not null) item["color"] = p.Color;
+                // Explicit values distinguish a new non-blocking border from old JSON's defaults.
+                item["blocksSight"] = p.BlocksSight;
+                item["blocksMove"] = p.BlocksMove;
+                item["blocksLight"] = p.BlocksLight;
                 paths.Add(item);
             }
 
@@ -124,7 +133,7 @@ public static class HexJsonExporter
             });
         }
 
-        var first = document.Layers.OfType<HexLayer>().FirstOrDefault()?.Board;
+        var first = scene.Layers.OfType<HexLayer>().FirstOrDefault()?.Board;
         return new JsonObject
         {
             ["format"] = Format,
@@ -201,13 +210,23 @@ public static class HexJsonExporter
                     var corners = (item["corners"]?.AsArray() ?? []).Select(node => node is JsonArray { Count: 3 } c && At(c) is { } hex
                         ? board.Layout.Canonical(new HexVertex(hex, c[2]!.GetValue<int>())) : (HexVertex?)null).ToList();
                     if (corners.Any(c => c is null) || corners.Count < 2) continue;
-                    paths.Add(new HexPath(HexPathId.New(), kind, route, [], [.. corners.Select(c => c!.Value)], width, color, name));
+                    paths.Add(new HexPath(HexPathId.New(), kind, route, [], [.. corners.Select(c => c!.Value)], width, color, name)
+                    {
+                        BlocksSight = item["blocksSight"]?.GetValue<bool>() ?? (kind == HexPathKind.Border && route == HexRouteStyle.Edges),
+                        BlocksMove = item["blocksMove"]?.GetValue<bool>() ?? false,
+                        BlocksLight = item["blocksLight"]?.GetValue<bool>() ?? false,
+                    });
                 }
                 else
                 {
                     var hexes = (item["hexes"]?.AsArray() ?? []).Select(At).ToList();
                     if (hexes.Any(h => h is null) || hexes.Count < 2) continue;
-                    paths.Add(new HexPath(HexPathId.New(), kind, route, [.. Map.Core.Editing.HexPaths.Walk(hexes.Select(h => h!.Value))], [], width, color, name));
+                    paths.Add(new HexPath(HexPathId.New(), kind, route, [.. Map.Core.Editing.HexPaths.Walk(hexes.Select(h => h!.Value))], [], width, color, name)
+                    {
+                        BlocksSight = item["blocksSight"]?.GetValue<bool>() ?? (kind == HexPathKind.Border && route == HexRouteStyle.Edges),
+                        BlocksMove = item["blocksMove"]?.GetValue<bool>() ?? false,
+                        BlocksLight = item["blocksLight"]?.GetValue<bool>() ?? false,
+                    });
                 }
             }
 
@@ -275,8 +294,10 @@ public static class HexPrintExporter
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(options);
-        var layer = document.Layers.OfType<HexLayer>().FirstOrDefault(l => l.Level == (options.Level ?? 0))
-            ?? document.Layers.OfType<HexLayer>().FirstOrDefault()
+        var scene = new ExportScene(document, options.Level, options.Players ? ExportRecipient.Players : ExportRecipient.GameMaster);
+        document = scene.RenderDocument();
+        var layer = scene.Layers.OfType<HexLayer>().FirstOrDefault(l => l.Level == (scene.HexLevel ?? 0))
+            ?? scene.Layers.OfType<HexLayer>().FirstOrDefault()
             ?? throw new InvalidOperationException("На карте нет слоя гексов.");
         var board = layer.Board;
         var (paperW, paperH) = options.A3 ? (297.0, 420.0) : (210.0, 297.0);
@@ -336,8 +357,8 @@ public static class HexPrintExporter
                             IncludeBaseColor = true,
                             VisibleWorld = view,
                             ViewScale = scale * 300 / 72.0,
-                            HexPlayerView = options.Players,
-                            HexLevel = options.Level,
+                            HexPlayerView = scene.Players,
+                            HexLevel = scene.HexLevel,
                         });
                         canvas.Restore();
                         canvas.DrawRect(new SKRect(Margin, Margin + Header, Margin + printW, Margin + Header + printH), frame);
