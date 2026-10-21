@@ -275,7 +275,7 @@ public static partial class HexPrintExporter
 
                 if (board is not null && options.IncludeKey && key is { Count: > 0 })
                 {
-                    keyPages = WriteKey(pdf, document.Title, key, pageW, pageH, Margin, typeface, options.Players);
+                    keyPages = WriteKey(pdf, document.Title, key, pageW, pageH, Margin, typeface, scene.Players);
                 }
 
                 pdf.Close();

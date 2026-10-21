@@ -26,11 +26,12 @@ public sealed class HexPrintTests
         Assert.InRange(Math.Abs(double.Parse(match.Groups[2].Value, CultureInfo.InvariantCulture) - h * 72 / 25.4), 0, 0.121);
     }
 
-    [Fact]
-    public void Crop_marks_add_eight_strokes_outside_the_trim_box_in_the_actual_pdf()
+    [Theory]
+    [InlineData(false)] [InlineData(true)]
+    public void Crop_marks_add_eight_strokes_outside_the_trim_box_in_the_actual_pdf(bool hex)
     {
-        var off = Content(Pdf(new HexPrintOptions(IncludeKey: false, CropMarks: false, BleedMillimetres: 3)));
-        var on = Content(Pdf(new HexPrintOptions(IncludeKey: false, CropMarks: true, BleedMillimetres: 3)));
+        var off = Content(Pdf(new HexPrintOptions(IncludeKey: false, CropMarks: false, BleedMillimetres: 3, MapWidthMillimetres: 100), hex));
+        var on = Content(Pdf(new HexPrintOptions(IncludeKey: false, CropMarks: true, BleedMillimetres: 3, MapWidthMillimetres: 100), hex));
         // Skia quantizes page size and stroke widths at RasterDpi=300 (half a pixel <= 0.121 pt).
         Assert.Equal(8, Regex.Matches(on, @"\bS\b").Count - Regex.Matches(off, @"\bS\b").Count);
     }
@@ -41,9 +42,11 @@ public sealed class HexPrintTests
         Assert.Throws<InvalidOperationException>(() => HexPrintExporter.PaperSizeMillimetres(new HexPrintOptions(
             PaperFormat: HexPaperFormat.Custom, CustomWidthMillimetres: width, CustomHeightMillimetres: height, BleedMillimetres: bleed)));
 
-    private static byte[] Pdf(HexPrintOptions options)
+    private static byte[] Pdf(HexPrintOptions options, bool hex = true)
     {
-        var doc = HexMapFactory.Create("Paper", DateTimeOffset.UnixEpoch, new MapCategoryId("hex"), HexOrientation.Pointy, 16, 2, 2, "#FFFFFFFF");
+        var doc = hex ? HexMapFactory.Create("Paper", DateTimeOffset.UnixEpoch, new MapCategoryId("hex"), HexOrientation.Pointy, 16, 2, 2, "#FFFFFFFF")
+            : new MapDocument(DocumentId.New(), "Paper", DateTimeOffset.UnixEpoch, new CanvasDefinition(64, 48, "px", "#FFFFFFFF"),
+                [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFFFFFFF")]);
         var path = Path.Combine(Path.GetTempPath(), "map-r03-" + Guid.NewGuid().ToString("N") + ".pdf");
         try { HexPrintExporter.Write(doc, path, options); return File.ReadAllBytes(path); }
         finally { File.Delete(path); }

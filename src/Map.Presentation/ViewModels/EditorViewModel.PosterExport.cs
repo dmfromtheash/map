@@ -22,6 +22,8 @@ public sealed partial class EditorViewModel
             var path = await _exportDestinationPicker.PickFileAsync(SafeExportName(snapshot.Title) + " - печать.pdf", "pdf", "PDF для печати").ConfigureAwait(true);
             if (string.IsNullOrWhiteSpace(path)) return null;
             CancelExportPreview();
+            _exportRunCancellation?.Dispose();
+            _exportRunCancellation = null;
             _exportRunning = true;
             RaiseRunState();
             StatusDetail = "Готовлю листы для печати…";
@@ -54,6 +56,8 @@ public sealed partial class EditorViewModel
             var path = await _exportDestinationPicker.PickLayerPackageAsync(SafeExportName(snapshot.Title) + " - слои").ConfigureAwait(true);
             if (string.IsNullOrWhiteSpace(path)) return null;
             CancelExportPreview();
+            _exportRunCancellation?.Dispose();
+            _exportRunCancellation = null;
             _exportRunning = true;
             RaiseRunState();
             StatusDetail = "Готовлю PNG видимых слоёв…";

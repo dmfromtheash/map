@@ -40,7 +40,14 @@ public static class LayerPngExporter
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var layer = layers[index];
-                var plan = exporter.Plan(snapshot, pngRequest with
+                // A hidden editor grid can opt into normal image export. Remove every other
+                // layer from this transient snapshot so such a grid cannot bleed into each PNG.
+                // Keep the mandatory base colour record for material colours, hidden unless it
+                // is the exported layer. The source document and layer records remain immutable.
+                var isolated = scene.Document.WithLayers([.. scene.Document.Layers
+                    .Where(l => l is BaseColorLayer || l.Id == layer.Id)
+                    .Select(l => l.Id == layer.Id ? l : l with { Visible = false })]);
+                var plan = exporter.Plan(isolated, pngRequest with
                 {
                     VisibleLayerIds = ImmutableHashSet.Create(layer.Id),
                     // The base colour has its own file. Other layers retain their alpha channel.
@@ -48,7 +55,7 @@ public static class LayerPngExporter
                 });
                 var filename = $"{index + 1:D3}-{SafeLayerName(layer.Name)}.png";
                 progress?.Report(new(ExportPhase.Rendering, index / (double)layers.Length, $"Слой {index + 1}/{layers.Length}: {layer.Name}"));
-                await exporter.ExportAsync(snapshot, plan, System.IO.Path.Combine(temporary, filename), stamps,
+                await exporter.ExportAsync(isolated, plan, System.IO.Path.Combine(temporary, filename), stamps,
                     cancellationToken: cancellationToken).ConfigureAwait(false);
             }
             cancellationToken.ThrowIfCancellationRequested();

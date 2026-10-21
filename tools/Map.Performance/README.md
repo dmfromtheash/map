@@ -532,3 +532,23 @@ dotnet tools/Map.LiveCheck/bin/Release/net10.0-windows/win-x64/Map.LiveCheck.dll
 чтение настройки профиля, сохранность старых файлов. Native-профили не снимают экран.
 LiveCheck получает только созданные ими фикстуры, проверяет отклик UIA, выбирает папку через
 системный диалог и сохраняет только окна Map через PrintWindow. PNG необходимо открыть глазами.
+
+### R13: постер и PNG слоёв
+
+Собирать `Map.slnx`, затем отдельно Performance и LiveCheck в Release с
+`-m:1 -nr:false -p:UseSharedCompilation=false`. Запуски последовательно:
+
+```powershell
+dotnet tools/Map.Performance/bin/Release/net10.0/win-x64/Map.Performance.dll --profile native-poster-export --output artifacts/r13/poster.json
+dotnet tools/Map.LiveCheck/bin/Release/net10.0-windows/win-x64/Map.LiveCheck.dll --map artifacts/r13/poster-workspace/standard.mapproj --poster-export true --out artifacts/r13/live-standard
+dotnet tools/Map.LiveCheck/bin/Release/net10.0-windows/win-x64/Map.LiveCheck.dll --map artifacts/r13/poster-workspace/hex.mapproj --poster-export true --out artifacts/r13/live-hex
+```
+
+Профиль `native-poster-export` проверяет кнопки обеих категорий, семь вариантов бумаги,
+PDF A0/Letter/свой с обзором, перекрытием и bleed; число страниц читается из файлов.
+PNG-пакеты имеют общую рамку 640×480 и нумерацию слоёв; snapshot/Undo неизменны,
+фикстуры сохраняются и открываются снова. Все три пути профиля под workspace вывода.
+LiveCheck выбирает PDF и новую папку через настоящие системные диалоги (Save: id `1`
+**и** тип Button), читает MediaBox PDF и размеры PNG, снимает только Map через PrintWindow.
+Открыть PNG и отрисованные страницы PDF, проверить рамку, нумерацию, метки и схему склейки.
+Для повторного живого запуска использовать новую папку `--out`: PNG-пакет не перезаписывает прежний.

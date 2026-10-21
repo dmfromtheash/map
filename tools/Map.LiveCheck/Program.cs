@@ -15,6 +15,7 @@ using FlaUI.UIA3;
 // With --hex-paths true and --map, selects the first border and flips all three blocking switches using UIA.
 // With --player-package true and --map, selects the player recipient and verifies the visible package preview.
 // With --obsidian-export true and --map, exports both Obsidian recipients through the native destination dialog.
+// With --poster-export true and --map, writes a poster PDF and a layer PNG folder through system dialogs.
 // Exit code 0: every step found its element; 2: a step could not find its element (screenshots
 // and the UIA tree are still written); 1: the program did not start or crashed.
 // Per-monitor DPI awareness: without it Windows scales this process's view of a 125 % window,
@@ -192,6 +193,8 @@ try
                     missing += PlayerPackageCheck.Run(exportWindow, outDir, Log, Shot, Dump);
                 if (Arg("--obsidian-export") is not null)
                     missing += ObsidianExportCheck.Run(main, exportWindow, outDir, Log, Shot);
+                if (Arg("--poster-export") is not null)
+                    missing += PosterExportCheck.Run(main, exportWindow, outDir, Log, Shot);
                 var mbtiles = exportWindow.FindFirstDescendant(cf => cf.ByAutomationId("ExportMbTilesButton"));
                 if (mbtiles is not null)
                 {

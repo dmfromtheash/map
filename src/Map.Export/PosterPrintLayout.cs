@@ -6,7 +6,7 @@ namespace Map.Export;
 
 /// <summary>Physical points and world coordinates of the same poster layout used by both categories.</summary>
 public sealed record PosterPrintLayout(float PageWidth, float PageHeight, float Bleed,
-    float PrintWidth, float PrintHeight, double Scale, WorldBounds Area,
+    float PrintWidth, float PrintHeight, double Scale, SKRect Area,
     double StepWidth, double StepHeight, double Overlap, int Columns, int Rows);
 
 public static partial class HexPrintExporter
@@ -27,7 +27,7 @@ public static partial class HexPrintExporter
         var overlapPoints = options.OverlapMillimetres * PointsPerMillimetre;
         if (printW <= overlapPoints || printH <= overlapPoints)
             throw new InvalidOperationException("Перекрытие должно быть меньше области печати. Увеличьте лист или уменьшите перекрытие/вылет.");
-        WorldBounds area;
+        SKRect area;
         double scale;
         if (scene.Category.Value == "hex")
         {
@@ -43,7 +43,7 @@ public static partial class HexPrintExporter
                 throw new InvalidOperationException("Область печати должна находиться внутри карты.");
             if (!double.IsFinite(options.MapWidthMillimetres) || options.MapWidthMillimetres is < 10 or > 20000)
                 throw new InvalidOperationException("Ширина карты на бумаге: от 10 до 20000 мм.");
-            area = new WorldBounds(region.X, region.Y, region.Right, region.Bottom);
+            area = new SKRect(region.X, region.Y, region.Right, region.Bottom);
             scale = options.MapWidthMillimetres * PointsPerMillimetre / area.Width;
         }
         var stepW = printW / scale;
@@ -87,7 +87,7 @@ public static partial class HexPrintExporter
         SceneRenderer.Render(canvas, scene.RenderDocument(), new RenderOptions
         {
             IsExport = true, IncludeBaseColor = true, IncludeExportGrids = options.IncludeGrid,
-            VisibleWorld = area, ViewScale = scale * 300 / 72, HexPlayerView = scene.Players,
+            VisibleWorld = new WorldBounds(area.Left, area.Top, area.Right, area.Bottom), ViewScale = scale * 300 / 72, HexPlayerView = scene.Players,
             HexLevel = scene.HexLevel, Stamps = stamps, TileCache = tiles,
         });
         canvas.Restore();
