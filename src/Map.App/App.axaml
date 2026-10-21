@@ -2708,9 +2708,10 @@
             <Setter Property="Background" Value="#857560" />
         </Style>
 
-        <!-- a tick box is a diamond that lights when ticked. It is drawn inside the square box, not
-             by turning the box: Avalonia clipped a turned border to its unturned square, and the
-             diamonds before «Звук» and «Анимация» came out with a cut corner (owner 2026-10-21). -->
+        <!-- a tick box is a diamond that lights when ticked. The diamond is the template's own
+             vector glyph (Path#CheckGlyph) with a diamond outline in every state, so it stays smooth
+             at any scale: a turned border was clipped to its unturned square and a drawing brush
+             came out pixelated at 125 % (owner 2026-10-21). The square box itself is invisible. -->
         <Style Selector="CheckBox /template/ Border#NormalRectangle">
             <Setter Property="Width" Value="16" />
             <Setter Property="Height" Value="16" />
@@ -2718,64 +2719,41 @@
             <Setter Property="RenderTransform" Value="none" />
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Background" Value="Transparent" />
             <Setter Property="BoxShadow" Value="0 0 0 0 Transparent" />
-            <Setter Property="Background">
-                <Setter.Value>
-                <DrawingBrush Stretch="None" AlignmentX="Center" AlignmentY="Center">
-                    <DrawingBrush.Drawing><GeometryDrawing Brush="Transparent" Geometry="M8,1.5 L14.5,8 L8,14.5 L1.5,8 Z">
-                        <GeometryDrawing.Pen><Pen Brush="#C9A15A" Thickness="1.5" LineJoin="Round" /></GeometryDrawing.Pen>
-                    </GeometryDrawing></DrawingBrush.Drawing>
-                </DrawingBrush>
-            </Setter.Value>
-            </Setter>
         </Style>
-        <Style Selector="CheckBox:pointerover /template/ Border#NormalRectangle">
+        <Style Selector="CheckBox:pointerover /template/ Border#NormalRectangle, CheckBox:checked /template/ Border#NormalRectangle, CheckBox:checked:pointerover /template/ Border#NormalRectangle, CheckBox:disabled /template/ Border#NormalRectangle, CheckBox:pressed /template/ Border#NormalRectangle, CheckBox:focus-visible /template/ Border#NormalRectangle, CheckBox:indeterminate /template/ Border#NormalRectangle">
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="BorderBrush" Value="Transparent" />
-            <Setter Property="Background">
-                <Setter.Value>
-                <DrawingBrush Stretch="None" AlignmentX="Center" AlignmentY="Center">
-                    <DrawingBrush.Drawing><GeometryDrawing Brush="#22E7C982" Geometry="M8,1.5 L14.5,8 L8,14.5 L1.5,8 Z">
-                        <GeometryDrawing.Pen><Pen Brush="#F0D79A" Thickness="1.5" LineJoin="Round" /></GeometryDrawing.Pen>
-                    </GeometryDrawing></DrawingBrush.Drawing>
-                </DrawingBrush>
-            </Setter.Value>
-            </Setter>
+            <Setter Property="Background" Value="Transparent" />
         </Style>
-        <Style Selector="CheckBox:checked /template/ Border#NormalRectangle">
-            <Setter Property="BorderThickness" Value="0" />
-            <Setter Property="BorderBrush" Value="Transparent" />
-            <Setter Property="Background">
-                <Setter.Value>
-                <DrawingBrush Stretch="None" AlignmentX="Center" AlignmentY="Center">
-                    <DrawingBrush.Drawing><GeometryDrawing Brush="#F0D79A" Geometry="M8,1.5 L14.5,8 L8,14.5 L1.5,8 Z">
-                        <GeometryDrawing.Pen><Pen Brush="#F6E2B0" Thickness="1" LineJoin="Round" /></GeometryDrawing.Pen>
-                    </GeometryDrawing></DrawingBrush.Drawing>
-                </DrawingBrush>
-            </Setter.Value>
-            </Setter>
+        <Style Selector="CheckBox /template/ Path#CheckGlyph, CheckBox:unchecked /template/ Path#CheckGlyph, CheckBox:indeterminate /template/ Path#CheckGlyph">
+            <Setter Property="IsVisible" Value="True" />
+            <Setter Property="Opacity" Value="1" />
+            <Setter Property="Data" Value="M 8,1.2 L 14.8,8 L 8,14.8 L 1.2,8 Z" />
+            <Setter Property="Fill" Value="Transparent" />
+            <Setter Property="Stroke" Value="#C9A15A" />
+            <Setter Property="StrokeThickness" Value="1.4" />
+            <Setter Property="StrokeJoin" Value="Round" />
+            <Setter Property="Width" Value="13" />
+            <Setter Property="Height" Value="13" />
+            <Setter Property="Stretch" Value="Uniform" />
         </Style>
-        <Style Selector="CheckBox:disabled /template/ Border#NormalRectangle">
-            <Setter Property="BorderThickness" Value="0" />
-            <Setter Property="BorderBrush" Value="Transparent" />
-            <Setter Property="Background">
-                <Setter.Value>
-                <DrawingBrush Stretch="None" AlignmentX="Center" AlignmentY="Center">
-                    <DrawingBrush.Drawing><GeometryDrawing Brush="Transparent" Geometry="M8,1.5 L14.5,8 L8,14.5 L1.5,8 Z">
-                        <GeometryDrawing.Pen><Pen Brush="#6E5532" Thickness="1.5" LineJoin="Round" /></GeometryDrawing.Pen>
-                    </GeometryDrawing></DrawingBrush.Drawing>
-                </DrawingBrush>
-            </Setter.Value>
-            </Setter>
+        <Style Selector="CheckBox:pointerover /template/ Path#CheckGlyph">
+            <Setter Property="Stroke" Value="#F0D79A" />
+            <Setter Property="Fill" Value="#26E7C982" />
         </Style>
-        <Style Selector="CheckBox:checked:pointerover /template/ Border#NormalRectangle, CheckBox:focus-visible /template/ Border#NormalRectangle, CheckBox:pressed /template/ Border#NormalRectangle">
-            <Setter Property="BorderThickness" Value="0" />
-            <Setter Property="BorderBrush" Value="Transparent" />
+        <Style Selector="CheckBox:checked /template/ Path#CheckGlyph, CheckBox:checked:pointerover /template/ Path#CheckGlyph">
+            <Setter Property="IsVisible" Value="True" />
+            <Setter Property="Opacity" Value="1" />
+            <Setter Property="Data" Value="M 8,1.2 L 14.8,8 L 8,14.8 L 1.2,8 Z" />
+            <Setter Property="Fill" Value="#F0D79A" />
+            <Setter Property="Stroke" Value="#F6E2B0" />
+            <Setter Property="StrokeThickness" Value="1" />
         </Style>
-        <!-- the lit diamond is the tick: no glyph inside it, in any state -->
-        <Style Selector="CheckBox /template/ Path#CheckGlyph, CheckBox:checked /template/ Path#CheckGlyph, CheckBox:indeterminate /template/ Path#CheckGlyph, CheckBox:pointerover /template/ Path#CheckGlyph">
-            <Setter Property="Opacity" Value="0" />
-            <Setter Property="IsVisible" Value="False" />
+        <Style Selector="CheckBox:disabled /template/ Path#CheckGlyph">
+            <Setter Property="Stroke" Value="#6E5532" />
+            <Setter Property="Fill" Value="Transparent" />
         </Style>
 
         <!-- headings in the display serif -->
