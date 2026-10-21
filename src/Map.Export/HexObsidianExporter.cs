@@ -58,7 +58,7 @@ public static class HexObsidianExporter
                 foreach (var hex in hexes)
                     if (board[hex] is { Region: > 0 } cell) regions.TryAdd(cell.Region, $"Регион {cell.Region}");
                 var groups = hexes.ToLookup(h => board[h]?.Region ?? 0);
-                index.AppendLine($"## {Inline(layer.Name)} · уровень {Number(layer.Level)}").AppendLine();
+                index.AppendLine(CultureInfo.InvariantCulture, $"## {Inline(layer.Name)} · уровень {Number(layer.Level)}").AppendLine();
                 foreach (var (id, name) in regions.OrderBy(p => p.Key))
                 {
                     var members = groups[id].ToArray();
@@ -76,7 +76,7 @@ public static class HexObsidianExporter
                     if (members.Length == 0) region.AppendLine("Нет гексов с содержимым.");
                     Save(temporary, RegionStem(layer, id), region);
                     regionCount++;
-                    index.AppendLine($"### {Link(RegionStem(layer, id), name)} ({members.Length})").AppendLine();
+                    index.AppendLine(CultureInfo.InvariantCulture, $"### {Link(RegionStem(layer, id), name)} ({members.Length})").AppendLine();
                     foreach (var hex in members) index.AppendLine("- " + HexLink(layer, hex));
                     index.AppendLine();
                 }
@@ -102,7 +102,7 @@ public static class HexObsidianExporter
         }
     }
 
-    private static StringBuilder HexNoteText(HexLayer layer, HexCoord hex, IReadOnlyDictionary<int, string> regions,
+    private static StringBuilder HexNoteText(HexLayer layer, HexCoord hex, Dictionary<int, string> regions,
         HashSet<HexCoord> included, bool players)
     {
         var cell = layer.Board[hex];
@@ -130,7 +130,7 @@ public static class HexObsidianExporter
         Tags(text, tags);
         text.AppendLine("---").AppendLine().AppendLine("# " + Inline(HexTitle(layer, hex))).AppendLine()
             .AppendLine("[[index|Карта — оглавление]]").AppendLine()
-            .AppendLine($"- Координаты: {Number(offset.Column)}, {Number(offset.Row)} (q={Number(hex.Q)}, r={Number(hex.R)})")
+            .AppendLine(CultureInfo.InvariantCulture, $"- Координаты: {Number(offset.Column)}, {Number(offset.Row)} (q={Number(hex.Q)}, r={Number(hex.R)})")
             .AppendLine("- Уровень: " + Number(layer.Level))
             .AppendLine("- Местность: " + Inline(terrain))
             .AppendLine("- Надстройка: " + (cell?.Feature is { } f ? Inline(TileName(f)) : "Нет"))

@@ -1,5 +1,22 @@
 # Map.Performance
 
+## R19: папка Obsidian
+
+`native-player-package` также нажимает `ExportObsidianButton` для ведущего и игрока:
+83/22 Markdown-файла (80/20 гексов, 2/1 региона и индекс), YAML и теги, отсутствие секретов
+у игрока, все цели `[[ссылок]]` существуют. Повторный экспорт после переименования гекса
+сохраняет имена файлов. Артефакты, профиль, recovery и shortcuts — только под `artifacts/r19`.
+
+```powershell
+dotnet build tools/Map.Performance -c Release -m:1 -nr:false -p:UseSharedCompilation=false
+dotnet tools/Map.Performance/bin/Release/net10.0/win-x64/Map.Performance.dll --profile native-player-package --output artifacts/r19/player-package.json
+dotnet run --project tools/Map.LiveCheck -c Release -- --out artifacts/r19/live --map artifacts/r19/player-package-workspace/player-package.mapproj --obsidian-export true
+```
+
+Живой проход создаёт обе папки через системный диалог, проверяет содержимое и ссылки.
+Снимки `r19-obsidian-gm.png` и `r19-obsidian-player.png` сделаны PrintWindow; их нужно открыть.
+Obsidian не требуется для экспорта. Открытие в самом Obsidian отмечается отдельно, если оно проверялось.
+
 ## R02: пакет игрока без секретов
 
 `native-player-package` выбирает «Игрок» в `ExportRecipientComboBox`, проверяет видимый

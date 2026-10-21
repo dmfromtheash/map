@@ -58,6 +58,7 @@ public sealed partial class RegionalApplication
         }
         await Export("ExportPackageJsonButton", "json");
         await Export("ExportPackageMarkdownButton", "md");
+        await VerifyObsidianPackage(export, destination, document, players: true);
         foreach (var extension in new[] { "json", "md" })
         {
             var text = File.ReadAllText(destination.File(extension));
@@ -83,6 +84,7 @@ public sealed partial class RegionalApplication
         await _editor.WaitForExportPreviewAsync(); await Settle();
         await Export("ExportPackageJsonButton", "json");
         await Export("StartExportButton", "png");
+        await VerifyObsidianPackage(export, destination, document, players: false);
         var gm = File.ReadAllText(destination.File("json"));
         Check("R02 master JSON retains GM text hidden entries and child map", gm.Contains("GM_SECRET", StringComparison.Ordinal)
             && gm.Contains("HIDDEN_TEXT", StringComparison.Ordinal) && gm.Contains("secret.mapproj", StringComparison.Ordinal));
@@ -112,10 +114,12 @@ public sealed partial class RegionalApplication
         var layout = layer.Board.Layout;
         HexCoord H(int c, int r) => layout.FromOffset(new(c, r));
         var cells = from c in Enumerable.Range(0, 10) from r in Enumerable.Range(0, 8)
-            select new KeyValuePair<HexCoord, HexCell?>(H(c, r), HexCell.Of(c > 6 ? "starter/peaks" : "starter/grass", revealed: c < 5 && r < 4));
+            select new KeyValuePair<HexCoord, HexCell?>(H(c, r), HexCell.Of(c > 6 ? "starter/peaks" : "starter/grass",
+                feature: c == 2 && r == 2 ? "starter/village" : null, region: c < 5 ? 1 : 2, revealed: c < 5 && r < 4));
         layer = layer with
         {
             FogEnabled = true, Board = layer.Board.With(cells),
+            Regions = [new(1, "Долина", "#FF668844"), new(2, "HIDDEN_REGION", "#FF887766")],
             Notes = ImmutableDictionary<HexCoord, HexNote>.Empty
                 .Add(H(2, 2), new("Переправа", gmText: "GM_SECRET", playerText: "Знакомая переправа", childMap: "secret.mapproj"))
                 .Add(H(3, 2), new("GM_TITLE", gmText: "GM_SECRET"))
@@ -135,6 +139,8 @@ public sealed partial class RegionalApplication
         public string File(string extension) => Path.Combine(root, Recipient + "." + extension);
         public Task<string?> PickImageAsync(string name, ExportImageFormat format) => Task.FromResult<string?>(File("png"));
         public Task<string?> PickTilePackageAsync(string name) => Task.FromResult<string?>(Path.Combine(root, Recipient + "-tiles"));
+        public string ObsidianFolder => Path.Combine(root, Recipient + "-obsidian");
+        public Task<string?> PickObsidianPackageAsync(string name) => Task.FromResult<string?>(ObsidianFolder);
         public Task<string?> PickVttAsync(string name) => Task.FromResult<string?>(File("dd2vtt"));
         public Task<string?> PickFileAsync(string name, string extension, string description) => Task.FromResult<string?>(File(extension));
     }
