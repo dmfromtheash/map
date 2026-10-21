@@ -940,12 +940,9 @@ public static partial class HexLayerRenderer
             return;
         }
 
-        var bounds = layout.Bounds(hex);
-        // A tall picture is the hex picture plus room above it: the hex sits at its bottom.
-        var hexPixels = HexTileArt.PixelSize(layout.Orientation).Height;
-        var above = (image.Height - hexPixels) * (bounds.Bottom - bounds.Top) / hexPixels;
-        var rect = new SKRect((float)bounds.Left - bleed, (float)(bounds.Top - above) - bleed, (float)bounds.Right + bleed, (float)bounds.Bottom + bleed);
-        if (rotation % 6 == 0 || above > 0)
+        var rect = TileRect(layout, hex, image, bleed);
+        var above = layout.Bounds(hex).Top - bleed - rect.Top;
+        if (rotation % 6 == 0 || above > 0.01)
         {
             DrawScaled(canvas, image, rect);
             return;
@@ -957,6 +954,19 @@ public static partial class HexLayerRenderer
         DrawScaled(canvas, image, rect);
         canvas.Restore();
     }
+
+    /// <summary>Where a tile picture goes: a tall picture is the hex picture plus room above it, the hex at its bottom.</summary>
+    internal static SKRect TileRect(HexLayout layout, HexCoord hex, SKImage image, float bleed)
+    {
+        var bounds = layout.Bounds(hex);
+        var hexPixels = HexTileArt.PixelSize(layout.Orientation).Height;
+        var above = (image.Height - hexPixels) * (bounds.Bottom - bounds.Top) / hexPixels;
+        return new SKRect((float)bounds.Left - bleed, (float)(bounds.Top - above) - bleed, (float)bounds.Right + bleed, (float)bounds.Bottom + bleed);
+    }
+
+    /// <summary>The hair terrain tiles overlap their neighbours by, at least one pixel of the target.</summary>
+    internal static float TileBleed(HexLayout layout, double pixelScale) =>
+        (float)Math.Min(layout.Size * 0.1, Math.Max(layout.Size * 0.012, 2.0 / Math.Max(pixelScale, 1e-6)));
 
     /// <summary>
     /// A tile or icon picture into a rectangle. On a CPU canvas a picture shown at under half its
@@ -1010,8 +1020,9 @@ public static partial class HexLayerRenderer
         var board = layer.Board;
         // Terrain overlaps its neighbours by a hair, at least one pixel of the target, so antialiased
         // edges never show the page between hexes - also where two kept chunk images meet.
-        var bleed = (float)Math.Min(board.Layout.Size * 0.1, Math.Max(board.Layout.Size * 0.012, 2.0 / Math.Max(pixelScale, 1e-6)));
+        var bleed = TileBleed(board.Layout, pixelScale);
         var detail = board.Layout.Size * pixelScale;
+        List<HexCoord>? tall = null;
         foreach (var (column, row) in DrawOrder(board))
         {
             if (chunk[column, row] is not { } cell) continue;
@@ -1022,7 +1033,34 @@ public static partial class HexLayerRenderer
             if (detail >= 4 && live is not null) DrawTransitionsKept(canvas, board, hex, cell, pixelScale, live);
             else if (detail >= 4) DrawTransitions(canvas, board, hex, cell, detail);
             if (cell.Region != 0 && layer.Region(cell.Region) is { } region) TintHex(canvas, board.Layout, hex, region.Color);
+            if (detail >= 8 && HexStarterTiles.Find(cell.Terrain) is { Overhang: > 0 }) (tall ??= []).Add(hex);
         }
+
+        // A tall tile throws a soft shadow down and to the right onto the low ground round it.
+        if (tall is not null && only is null)
+        {
+            foreach (var hex in tall) DrawBaseShadow(canvas, board, hex, bleed);
+        }
+    }
+
+    /// <summary>The soft shadow at the foot of a tall tile, kept off the tile itself.</summary>
+    private static void DrawBaseShadow(SKCanvas canvas, HexBoard board, HexCoord hex, float bleed)
+    {
+        var layout = board.Layout;
+        if (board[hex] is not { } cell || HexTileArt.Image(cell.Terrain, cell.Variant, layout.Orientation) is not { } image) return;
+        var r = (float)layout.Size;
+        using var shape = HexOutline(layout, hex, layout.Size * 0.14);
+        using var paint = new SKPaint
+        {
+            IsAntialias = true, Color = new SKColor(0x10, 0x0C, 0x08, 58),
+            MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, r * 0.12f),
+        };
+        canvas.Save();
+        using (var own = HexOutline(layout, hex, 0)) canvas.ClipPath(own, SKClipOperation.Difference, antialias: true);
+        canvas.ClipRect(TileRect(layout, hex, image, bleed) with { Bottom = (float)layout.Bounds(hex).Top + bleed }, SKClipOperation.Difference);
+        canvas.Translate(r * 0.16f, r * 0.11f);
+        canvas.DrawPath(shape, paint);
+        canvas.Restore();
     }
 
     private static WorldBounds TallBounds(HexLayout layout, HexCoord hex)

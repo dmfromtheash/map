@@ -30,6 +30,7 @@ public sealed partial class HexChunkCache
     private readonly Dictionary<(LayerId Layer, HexChunkKey Key), List<(HexCoord Hex, bool Revealed, long Start)>> _fogFades = [];
     private readonly Dictionary<LayerId, (bool Flat, bool From, long Since)> _looks = [];
     private int _fogFadeCount;
+    private (int Shown, int From, long Since)? _level;
     private long _animateUntil;
 
     /// <summary>The clock every eased change is timed by.</summary>
@@ -142,6 +143,37 @@ public sealed partial class HexChunkCache
 
         if (fades.Count == 0) _fogFades.Remove(id);
         return result.Count > 0 ? result : null;
+    }
+
+    /// <summary>
+    /// The level of a hex world shown before a switch, and how far the new one has faded in (0..1);
+    /// null when no switch is under way. Asked several times a frame, it changes only when the
+    /// shown level does.
+    /// </summary>
+    public (int From, double T)? LevelChange(int shown, long now)
+    {
+        if (_level is not { } state)
+        {
+            _level = (shown, shown, 0);
+            return null;
+        }
+
+        if (state.Shown != shown)
+        {
+            state = (shown, state.Shown, now);
+            _level = state;
+        }
+
+        if (state.Since == 0) return null;
+        var t = Progress(state.Since, now, LookFadeMilliseconds);
+        if (t >= 1)
+        {
+            _level = (shown, shown, 0);
+            return null;
+        }
+
+        KeepAnimating(now, 16);
+        return (state.From, t);
     }
 
     /// <summary>

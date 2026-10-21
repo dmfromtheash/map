@@ -564,9 +564,11 @@ public static class SceneRenderer
                 continue;
             }
 
-            // One level of a hex world at a time; another level only as the faint ghost asked for.
+            // One level of a hex world at a time; another level only as the faint ghost asked for,
+            // or the level just left while the new one fades in over it.
             if (layer is HexLayer { Level: var hexLevel } && options.HexLevel is { } shownLevel
-                && hexLevel != shownLevel && hexLevel != options.HexGhostLevel)
+                && hexLevel != shownLevel && hexLevel != options.HexGhostLevel
+                && !(options.HexChunks?.LevelChange(shownLevel, HexChunkCache.Now) is { } leaving && leaving.From == hexLevel))
             {
                 continue;
             }
@@ -1772,19 +1774,40 @@ public static class SceneRenderer
                 break;
 
             case HexLayer hexLayer:
+            {
+                // A switch of level: the new one fades in over the one just left (220 ms).
+                var levelChange = options.HexLevel is { } current && !options.IsExport
+                    ? options.HexChunks?.LevelChange(current, HexChunkCache.Now)
+                    : null;
                 if (options.HexLevel is { } shown && hexLayer.Level != shown)
                 {
-                    // Another level of the world, shown faint under the one being edited.
-                    using var faint = new SKPaint { Color = SKColors.White.WithAlpha(64) };
+                    // Another level of the world, shown faint under the one being edited; the one
+                    // just left fades out. Its pictures are kept like the edited level's.
+                    var leavingAlpha = levelChange is { } gone && gone.From == hexLayer.Level ? 1 - HexChunkCache.Ease(levelChange.Value.T) : 0;
+                    var ghostAlpha = hexLayer.Level == options.HexGhostLevel ? 64 / 255.0 : 0;
+                    var alpha = Math.Max(leavingAlpha, ghostAlpha);
+                    if (alpha <= 0.004) break;
+                    using var faint = new SKPaint { Color = SKColors.White.WithAlpha((byte)Math.Round(255 * alpha)) };
                     canvas.SaveLayer(faint);
-                    HexLayerRenderer.Draw(canvas, hexLayer, view, options.ViewScale, null, options.GpuContext, null,
-                        options.IsExport, null, null, false, options.HexPlayerView, null);
+                    HexLayerRenderer.Draw(canvas, hexLayer, view, options.ViewScale, options.IsExport ? null : options.HexChunks,
+                        options.GpuContext, null, options.IsExport, options.RequestRefinedFrame, null, false, options.HexPlayerView, null);
                     canvas.Restore();
+                    break;
+                }
+
+                if (levelChange is { } arriving)
+                {
+                    using var fade = new SKPaint { Color = SKColors.White.WithAlpha((byte)Math.Round(255 * HexChunkCache.Ease(arriving.T))) };
+                    canvas.SaveLayer(fade);
+                    HexLayerRenderer.Draw(canvas, hexLayer, view, options);
+                    canvas.Restore();
+                    options.RequestRefinedFrame?.Invoke();
                     break;
                 }
 
                 HexLayerRenderer.Draw(canvas, hexLayer, view, options);
                 break;
+            }
 
             case IRasterContentLayer raster:
                 DrawTiles(canvas, layer.Id, raster.ContentTiles, view, options, TileImageKind.Content);

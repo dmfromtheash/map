@@ -110,7 +110,8 @@ public static partial class HexLayerRenderer
         // band is laid three times, deep and faint, then shallower and solid.
         var soft = detail >= 14;
         var noiseSeed = (int)HexEditing.Noise(hex, 77);
-        ReadOnlySpan<(double Depth, byte Alpha)> steps = soft ? [(0.4, 80), (0.3, 140), (0.2, 255)] : [(0.3, 255)];
+        // Four layers instead of three: the edge falls off more evenly (owner, 2026-10-21).
+        ReadOnlySpan<(double Depth, byte Alpha)> steps = soft ? [(0.42, 52), (0.35, 105), (0.28, 170), (0.2, 255)] : [(0.3, 255)];
         for (var i = 0; i < spilling.Count; i++)
         {
             var mask = 0;
@@ -299,7 +300,8 @@ public static partial class HexLayerRenderer
 
     // ------------------------------------------------------------------ features, living terrain, frontiers
 
-    private readonly record struct Standing(float SortY, SKImage Image, SKRect Rect);
+    /// <param name="ClipBottom">When set, only the part of the picture above this line is drawn.</param>
+    private readonly record struct Standing(float SortY, SKImage Image, SKRect Rect, float ClipBottom = float.NaN);
 
     /// <summary>Everything that stands on the ground of a chunk, sorted back to front, and the region frontiers.</summary>
     private static void DrawChunkFeatures(SKCanvas canvas, HexLayer layer, HexChunkKey key, HexChunk chunk, WorldBounds? clip, double pixelScale,
@@ -325,10 +327,33 @@ public static partial class HexLayerRenderer
                 items.Add(new Standing((float)(layout.Center(hex).Y + layout.Size * 0.45), picture,
                     new SKRect((float)bounds.Left, (float)bounds.Top, (float)bounds.Right, (float)bounds.Bottom)));
             }
+
+            // A tall tile is drawn with the ground, but its top rises over the row behind: it goes
+            // into the same back-to-front order as what stands there, so a village or a tree in the
+            // row behind no longer shows over a peak in front of it. Only the part above the hex's
+            // middle is drawn again; its foot keeps the transitions drawn on it.
+            if (HexStarterTiles.Find(cell.Terrain) is { Overhang: > 0 }
+                && HexTileArt.Image(cell.Terrain, cell.Variant, layout.Orientation) is { } tall)
+            {
+                var (_, cy) = layout.Center(hex);
+                items.Add(new Standing((float)cy, tall, TileRect(layout, hex, tall, TileBleed(layout, pixelScale)), (float)cy));
+            }
         }
 
         items.Sort((a, b) => a.SortY.CompareTo(b.SortY));
-        foreach (var item in items) DrawScaled(canvas, item.Image, item.Rect);
+        foreach (var item in items)
+        {
+            if (float.IsNaN(item.ClipBottom))
+            {
+                DrawScaled(canvas, item.Image, item.Rect);
+                continue;
+            }
+
+            canvas.Save();
+            canvas.ClipRect(item.Rect with { Bottom = item.ClipBottom });
+            DrawScaled(canvas, item.Image, item.Rect);
+            canvas.Restore();
+        }
         if (!layer.Regions.IsEmpty) DrawFrontiers(canvas, layer, key, chunk, pixelScale);
     }
 
@@ -404,6 +429,7 @@ public static partial class HexLayerRenderer
         var layout = board.Layout;
         var orientation = layout.Orientation == HexOrientation.Flat ? 0 : 1;
         var paths = new Dictionary<int, SKPath>();
+        var feathers = new Dictionary<int, (SKPath Near, SKPath Deep)>();
         for (var row = 0; row < HexBoard.ChunkSize; row++)
         {
             for (var column = 0; column < HexBoard.ChunkSize; column++)
@@ -422,6 +448,12 @@ public static partial class HexLayerRenderer
                     const double Inset = 0.07;
                     path.MoveTo((float)(ax + (cx - ax) * Inset), (float)(ay + (cy - ay) * Inset));
                     path.LineTo((float)(bx + (cx - bx) * Inset), (float)(by + (cy - by) * Inset));
+                    if (!feathers.TryGetValue(cell.Region, out var feather)) feathers[cell.Region] = feather = (new SKPath(), new SKPath());
+                    foreach (var (into, depth) in new[] { (feather.Near, 0.16), (feather.Deep, 0.26) })
+                    {
+                        into.MoveTo((float)(ax + (cx - ax) * depth), (float)(ay + (cy - ay) * depth));
+                        into.LineTo((float)(bx + (cx - bx) * depth), (float)(by + (cy - by) * depth));
+                    }
                 }
             }
         }
@@ -432,6 +464,21 @@ public static partial class HexLayerRenderer
             var color = layer.Region(id) is { } region ? ParseColor(region.Color) : SKColors.Gray;
             using var shadow = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = width * 1.8f, Color = new SKColor(0, 0, 0, 50), StrokeCap = SKStrokeCap.Round };
             using var line = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = width, Color = color.WithAlpha(230), StrokeCap = SKStrokeCap.Round };
+            // A soft glow of the region's colour inside its frontier: the tint fades in from the
+            // edge instead of starting at a hard line.
+            using var glow = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeCap = SKStrokeCap.Round, StrokeJoin = SKStrokeJoin.Round };
+            if (feathers.TryGetValue(id, out var inner))
+            {
+                glow.StrokeWidth = (float)(layout.Size * 0.3);
+                glow.Color = color.WithAlpha(22);
+                canvas.DrawPath(inner.Deep, glow);
+                glow.StrokeWidth = (float)(layout.Size * 0.18);
+                glow.Color = color.WithAlpha(34);
+                canvas.DrawPath(inner.Near, glow);
+                inner.Deep.Dispose();
+                inner.Near.Dispose();
+            }
+
             canvas.DrawPath(path, shadow);
             canvas.DrawPath(path, line);
             path.Dispose();

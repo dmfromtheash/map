@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using Map.Core.Documents;
 using Map.Core.Editing;
 using Map.Rendering;
@@ -308,5 +308,64 @@ public sealed class HexWorkshopRenderingTests
         await Task.Delay((int)HexChunkCache.FogFadeMilliseconds + 80);
         using var last = Render(next, scale, cache);
         Assert.True(Distance(At(last, layout, fogged, scale), clear) < 12, "the fog has melted away");
+    }
+
+    [Fact]
+    public void A_peak_in_front_hides_a_village_in_the_row_behind()
+    {
+        static (MapDocument, HexLayer) Board(bool village)
+        {
+            var document = HexMapFactory.Create("Глубина", DateTimeOffset.UnixEpoch, new MapCategoryId("hex"),
+                HexOrientation.Flat, 64, 6, 6, "#FFF2E9DC");
+            var layer = document.Layers.OfType<HexLayer>().Single();
+            var layout = layer.Board.Layout;
+            var cells = new Dictionary<HexCoord, HexCell?>();
+            for (var c = 0; c < 6; c++)
+            {
+                for (var r = 0; r < 6; r++) cells[layout.FromOffset(new HexOffset(c, r))] = HexCell.Of("starter/grass", 0);
+            }
+
+            cells[layout.FromOffset(new HexOffset(2, 3))] = HexCell.Of("starter/peaks", 0);
+            if (village) cells[layout.FromOffset(new HexOffset(2, 2))] = HexCell.Of("starter/grass", 0).WithFeature("starter/village", 0);
+            layer = layer with { Board = layer.Board.With(cells) };
+            return (document.WithLayer(layer.Id, _ => layer), layer);
+        }
+
+        const double scale = 1;
+        var (with, layer) = Board(village: true);
+        var (without, _) = Board(village: false);
+        using var cache = new HexChunkCache();
+        using var a = Render(with, scale, cache);
+        using var b = Render(without, scale, null);
+        var layout = layer.Board.Layout;
+        var peak = layout.FromOffset(new HexOffset(2, 3));
+        var art = HexTileArt.Image("starter/peaks", 0, HexOrientation.Flat)!;
+        using var pixels = SKBitmap.FromImage(art);
+        var bounds = layout.Bounds(peak);
+        var (_, cy) = layout.Center(peak);
+        var hexPixels = HexTileArt.PixelSize(HexOrientation.Flat).Height;
+        var top = bounds.Top - (art.Height - hexPixels) * (bounds.Bottom - bounds.Top) / hexPixels;
+        int covered = 0, differing = 0;
+        for (var y = top; y < cy; y += 2)
+        {
+            for (var x = bounds.Left; x < bounds.Right; x += 2)
+            {
+                var u = (int)((x - bounds.Left) / (bounds.Right - bounds.Left) * art.Width);
+                var v = (int)((y - top) / (bounds.Bottom - top) * art.Height);
+                if (u < 0 || v < 0 || u >= art.Width || v >= art.Height || pixels.GetPixel(u, v).Alpha < 250) continue;
+                covered++;
+                if (Distance(a.GetPixel((int)(x * scale), (int)(y * scale)), b.GetPixel((int)(x * scale), (int)(y * scale))) > 24) differing++;
+            }
+        }
+
+        if (ReviewFolder is { } folder)
+        {
+            Directory.CreateDirectory(folder);
+            using (var fa = File.Create(Path.Combine(folder, "depth-with.png"))) a.Encode(fa, SKEncodedImageFormat.Png, 100);
+            using (var fb = File.Create(Path.Combine(folder, "depth-without.png"))) b.Encode(fb, SKEncodedImageFormat.Png, 100);
+        }
+
+        Assert.True(covered > 50, "the peak rises over the row behind");
+        Assert.True(differing <= covered / 60, $"{differing} of {covered} pixels of the peak show the village behind it");
     }
 }
