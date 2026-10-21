@@ -862,7 +862,7 @@ public static partial class HexLayerRenderer
 
         if (layer.Notes.IsEmpty || hexPixels < 6) return;
         var pixel = 1 / Math.Max(viewScale, 1e-6);
-        var radius = (float)Math.Clamp(layout.Size * 0.16, 5 * pixel, layout.Size * 0.32);
+        var radius = (float)Math.Clamp(layout.Size * 0.16, Math.Min(5 * pixel, layout.Size * 0.32), layout.Size * 0.32);
         using var font = new SKFont(SKTypeface.Default, radius * 1.3f) { Embolden = true };
         using var titleFont = new SKFont(SKTypeface.Default, (float)(layout.Size * 0.21));
         using var fill = new SKPaint { IsAntialias = true };

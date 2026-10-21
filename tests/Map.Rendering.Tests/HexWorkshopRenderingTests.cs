@@ -65,6 +65,19 @@ public sealed class HexWorkshopRenderingTests
         return bitmap;
     }
 
+    [Theory]
+    [InlineData(0.1)]
+    [InlineData(0.2)]
+    [InlineData(0.3)]
+    public void Hex_key_markers_render_at_small_export_scales_without_inverting_radius_limits(double scale)
+    {
+        var (document, layer, _, _) = World(HexOrientation.Flat);
+        using var withNotes = Render(document, scale, null);
+        using var withoutNotes = Render(document.WithLayer(layer.Id, _ => layer with
+            { Notes = ImmutableDictionary<HexCoord, HexNote>.Empty }), scale, null);
+        Assert.False(withNotes.Bytes.SequenceEqual(withoutNotes.Bytes));
+    }
+
     private static SKColor At(SKBitmap bitmap, HexLayout layout, HexCoord hex, double scale, double dx = 0, double dy = 0)
     {
         var (x, y) = layout.Center(hex);
