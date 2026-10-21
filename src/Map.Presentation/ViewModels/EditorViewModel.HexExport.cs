@@ -144,26 +144,5 @@ public sealed partial class EditorViewModel
     }
 
     /// <summary>The hex map printed page by page into a PDF (with the key after the map).</summary>
-    public async Task<HexPrintResult?> ExportHexPrintAsync()
-    {
-        if (_exportDestinationPicker is null || ActiveHexLayer is not { } layer) return null;
-        var snapshot = Session.Document;
-        var options = _hexPrint with { Level = ExportHexPlayers ? ExportHexLevel : HexLevelShown, Players = ExportHexPlayers };
-        var key = HexKeys.Select(row => (row.Number, row.Note)).ToList();
-        var path = await _exportDestinationPicker.PickFileAsync(SafeExportName(snapshot.Title) + " - печать.pdf", "pdf", "PDF для печати").ConfigureAwait(true);
-        if (string.IsNullOrWhiteSpace(path)) return null;
-        try
-        {
-            StatusDetail = "Готовлю листы для печати…";
-            var result = await Task.Run(() => HexPrintExporter.Write(snapshot, path, options, key)).ConfigureAwait(true);
-            StatusDetail = $"PDF для печати: {result.MapPages} листов карты ({result.Rows} × {result.Columns})"
-                + (result.KeyPages > 0 ? $" и {result.KeyPages} листов ключа" : "") + $" · {path}";
-            return result;
-        }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
-        {
-            StatusDetail = "Не удалось сделать PDF: " + error.Message;
-            return null;
-        }
-    }
+    public Task<HexPrintResult?> ExportHexPrintAsync() => ExportPosterAsync();
 }

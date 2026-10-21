@@ -8256,6 +8256,7 @@ public sealed partial class EditorView : UserControl
             {
                 new TextBlock { Text = "Экспорт изображения" }.Classed("role-panel"),
                 BuildExportRecipient(),
+                BuildPosterAndLayersExport(),
                 new TextBlock
                 {
                     Text = "Предпросмотр уменьшен для этого окна. Размер готового файла задаётся ниже; заметки и панели редактора в него не попадают.",

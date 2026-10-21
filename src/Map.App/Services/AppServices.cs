@@ -246,6 +246,9 @@ public sealed class AvaloniaExportDestinationPicker(Window owner) : IExportDesti
     public Task<string?> PickObsidianPackageAsync(string suggestedFolderName) =>
         PickPackageAsync(suggestedFolderName, "Новая папка Obsidian");
 
+    public Task<string?> PickLayerPackageAsync(string suggestedFolderName) =>
+        PickPackageAsync(suggestedFolderName, "Новая папка PNG-слоёв");
+
     private Task<string?> PickPackageAsync(string suggestedFolderName, string title) =>
         Dispatcher.UIThread.InvokeAsync(async () =>
         {

@@ -62,7 +62,7 @@ public sealed class HexExportTests
         var bytes = File.ReadAllBytes(path);
         Assert.Equal("%PDF", Encoding.ASCII.GetString(bytes, 0, 4));
         var pages = System.Text.RegularExpressions.Regex.Matches(Encoding.Latin1.GetString(bytes), @"/Type\s*/Page\b").Count;
-        Assert.Equal(result.MapPages + result.KeyPages, pages);
+        Assert.Equal(result.TotalPages, pages);
     }
 
     [Fact]

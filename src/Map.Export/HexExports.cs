@@ -173,10 +173,17 @@ public sealed record HexPrintOptions(
     double CustomWidthMillimetres = 210,
     double CustomHeightMillimetres = 297,
     bool CropMarks = false,
-    double BleedMillimetres = 0);
+    double BleedMillimetres = 0,
+    double MapWidthMillimetres = 600,
+    bool IncludeOverview = true,
+    bool IncludeGrid = true);
 
 /// <summary>What a print export wrote.</summary>
-public sealed record HexPrintResult(string Path, int MapPages, int KeyPages, int Columns, int Rows);
+public sealed record HexPrintResult(string Path, int MapPages, int KeyPages, int Columns, int Rows)
+{
+    public int OverviewPages { get; init; }
+    public int TotalPages => MapPages + KeyPages + OverviewPages;
+}
 
 /// <summary>
 /// A hex map printed page by page (asked of Pixel Hex: big tiles to print and cut; Hexroll prints
@@ -188,40 +195,29 @@ public static partial class HexPrintExporter
 {
     private const double PointsPerMillimetre = 72 / 25.4;
 
-    public static HexPrintResult Write(MapDocument document, string path, HexPrintOptions options, IReadOnlyList<(string Number, HexNote Note)>? key = null)
+    public static HexPrintResult Write(MapDocument document, string path, HexPrintOptions options, IReadOnlyList<(string Number, HexNote Note)>? key = null) =>
+        Write(new ExportScene(document, options.Level, options.Players ? ExportRecipient.Players : ExportRecipient.GameMaster), path, options, key);
+
+    /// <summary>Shared poster writer for Standard and Hex. The legacy name keeps R03 callers compatible.</summary>
+    public static HexPrintResult Write(ExportScene scene, string path, HexPrintOptions options,
+        IReadOnlyList<(string Number, HexNote Note)>? key = null, IStampImageSource? stamps = null)
     {
-        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(scene);
         ArgumentNullException.ThrowIfNull(options);
-        var scene = new ExportScene(document, options.Level, options.Players ? ExportRecipient.Players : ExportRecipient.GameMaster);
-        document = scene.RenderDocument();
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        var document = scene.RenderDocument();
         var layer = scene.Layers.OfType<HexLayer>().FirstOrDefault(l => l.Level == (scene.HexLevel ?? 0))
-            ?? scene.Layers.OfType<HexLayer>().FirstOrDefault()
-            ?? throw new InvalidOperationException("На карте нет слоя гексов.");
-        var board = layer.Board;
+            ?? scene.Layers.OfType<HexLayer>().FirstOrDefault();
+        var board = scene.Category.Value == "hex" ? layer?.Board : null;
         // A caller's key can contain GM-only entries or belong to another level. For players
         // derive it exclusively from the sanitized scene, never from that untrusted list.
-        if (scene.Players)
-            key = layer.Notes.OrderBy(p => board.Layout.ToOffset(p.Key).Column)
+        if (board is not null && layer is not null && (scene.Players || key is null))
+            key = layer.Notes.Where(p => !p.Value.IsEmpty).OrderBy(p => board.Layout.ToOffset(p.Key).Column)
                 .ThenBy(p => board.Layout.ToOffset(p.Key).Row)
                 .Select(p => (HexLayerRenderer.NumberOf(board, board.Layout.ToOffset(p.Key)), p.Value)).ToList();
-        var (paperW, paperH) = PaperSizeMillimetres(options);
-        var pageW = (float)(paperW * PointsPerMillimetre);
-        var pageH = (float)(paperH * PointsPerMillimetre);
-        const float Margin = 28; // ≈10 mm: printers do not print to the edge
-        const float Header = 22;
-        var bleed = (float)(options.BleedMillimetres * PointsPerMillimetre);
-        var printW = pageW - 2 * Margin - 2 * bleed;
-        var printH = pageH - 2 * Margin - Header - 2 * bleed;
-        // World units per point: one hex's flat-to-flat width becomes HexMillimetres on paper.
-        var flatToFlat = board.Layout.Size * HexLayout.Sqrt3;
-        var scale = Math.Clamp(options.HexMillimetres, 5, 200) * PointsPerMillimetre / flatToFlat;
-        var area = HexLayerRenderer.BoardRect(board);
-        var stepW = printW / scale;
-        var stepH = printH / scale;
-        var overlap = Math.Clamp(options.OverlapMillimetres, 0, 30) * PointsPerMillimetre / scale;
-        var columns = Math.Max(1, (int)Math.Ceiling((area.Width - overlap) / Math.Max(1, stepW - overlap)));
-        var rows = Math.Max(1, (int)Math.Ceiling((area.Height - overlap) / Math.Max(1, stepH - overlap)));
-        if (columns * rows > 400) throw new InvalidOperationException($"Получится {columns * rows} листов: увеличьте лист или уменьшите гексы.");
+        var layout = Plan(scene, options);
+        var (pageW, pageH, bleed, printW, printH, scale, area, stepW, stepH, overlap, columns, rows) = layout;
+        using var tiles = new TileImageCache(128);
 
         var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         var keyPages = 0;
@@ -237,6 +233,7 @@ public static partial class HexPrintExporter
                 using var labelFont = new SKFont(typeface, 10);
                 using var labelPaint = new SKPaint { IsAntialias = true, Color = new SKColor(0x30, 0x28, 0x20) };
                 using var frame = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 0.6f, Color = new SKColor(0x80, 0x78, 0x70) };
+                if (options.IncludeOverview) WriteOverview(pdf, scene, options, layout, stamps, tiles, typeface);
                 for (var row = 0; row < rows; row++)
                 {
                     for (var column = 0; column < columns; column++)
@@ -246,8 +243,8 @@ public static partial class HexPrintExporter
                         var view = new WorldBounds(left, top, left + stepW, top + stepH);
                         var canvas = pdf.BeginPage(pageW, pageH);
                         canvas.Clear(SKColors.White);
-                        var name = $"{(char)('A' + Math.Min(row, 25))}{column + 1}";
-                        var numbers = Numbers(board, view);
+                        var name = SheetName(row, column);
+                        var numbers = board is null ? "" : Numbers(board, view);
                         canvas.DrawText($"{document.Title} · лист {name} ({row + 1}-{column + 1} из {rows}×{columns})" + numbers,
                             Margin, Margin + 12, SKTextAlign.Left, labelFont, labelPaint);
                         canvas.Save();
@@ -259,10 +256,13 @@ public static partial class HexPrintExporter
                         {
                             IsExport = true,
                             IncludeBaseColor = true,
+                            IncludeExportGrids = options.IncludeGrid,
                             VisibleWorld = new WorldBounds(view.Left - bleed / scale, view.Top - bleed / scale, view.Right + bleed / scale, view.Bottom + bleed / scale),
                             ViewScale = scale * 300 / 72.0,
                             HexPlayerView = scene.Players,
                             HexLevel = scene.HexLevel,
+                            TileCache = tiles,
+                            Stamps = stamps,
                         });
                         canvas.Restore();
                         var trim = new SKRect(Margin + bleed, Margin + Header + bleed,
@@ -273,7 +273,7 @@ public static partial class HexPrintExporter
                     }
                 }
 
-                if (options.IncludeKey && key is { Count: > 0 })
+                if (board is not null && options.IncludeKey && key is { Count: > 0 })
                 {
                     keyPages = WriteKey(pdf, document.Title, key, pageW, pageH, Margin, typeface, options.Players);
                 }
@@ -288,7 +288,7 @@ public static partial class HexPrintExporter
             if (File.Exists(temporary)) File.Delete(temporary);
         }
 
-        return new HexPrintResult(path, columns * rows, keyPages, columns, rows);
+        return new HexPrintResult(path, columns * rows, keyPages, columns, rows) { OverviewPages = options.IncludeOverview ? 1 : 0 };
     }
 
     /// <summary>The first and last hex number fully on a sheet, for its label.</summary>

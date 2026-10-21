@@ -8,6 +8,26 @@ namespace Map.App.Views;
 
 public sealed partial class EditorView
 {
+    private Control BuildPosterAndLayersExport()
+    {
+        var result = new TextBlock { Name = "ExportLayersResultText", TextWrapping = TextWrapping.Wrap };
+        var poster = Ui.AsyncButton("ExportPosterButton", "Печать по листам…", ShowHexPrintAsync, "compact");
+        poster.IsVisible = !_editor.IsHexWorkshop;
+        return new StackPanel { Spacing = 6, Children =
+        {
+            new WrapPanel { ItemSpacing = 6, LineSpacing = 6, Children =
+            {
+                poster, Ui.AsyncButton("ExportLayersButton", "Слои отдельными PNG…", async () =>
+                {
+                    await _editor.ExportLayersAsync();
+                    result.Text = _editor.StatusDetail;
+                }, "compact"),
+            } },
+            new TextBlock { Text = "PNG: по файлу на видимый слой, в порядке слоёв. Размер и область — как ниже; фон отдельным файлом.", TextWrapping = TextWrapping.Wrap }.Classed("faint", "role-caption"),
+            result,
+        } };
+    }
+
     private Control BuildExportRecipient()
     {
         var recipient = new ComboBox

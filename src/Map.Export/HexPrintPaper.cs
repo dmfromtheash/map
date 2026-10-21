@@ -2,7 +2,7 @@ using SkiaSharp;
 
 namespace Map.Export;
 
-public enum HexPaperFormat { A4, A3, Letter, Custom }
+public enum HexPaperFormat { A4, A3, Letter, Custom, A2, A1, A0 }
 
 public static partial class HexPrintExporter
 {
@@ -13,6 +13,9 @@ public static partial class HexPrintExporter
         {
             HexPaperFormat.A4 => (210d, 297d),
             HexPaperFormat.A3 => (297d, 420d),
+            HexPaperFormat.A2 => (420d, 594d),
+            HexPaperFormat.A1 => (594d, 841d),
+            HexPaperFormat.A0 => (841d, 1189d),
             HexPaperFormat.Letter => (215.9, 279.4),
             HexPaperFormat.Custom => (options.CustomWidthMillimetres, options.CustomHeightMillimetres),
             _ => throw new InvalidOperationException("Неизвестный формат бумаги."),
@@ -23,6 +26,8 @@ public static partial class HexPrintExporter
             throw new InvalidOperationException("Вылет за линию реза: от 0 до 5 мм.");
         if (!double.IsFinite(options.HexMillimetres) || !double.IsFinite(options.OverlapMillimetres))
             throw new InvalidOperationException("Размер гекса и перекрытие листов должны быть числами.");
+        if (options.OverlapMillimetres is < 0 or > 30)
+            throw new InvalidOperationException("Перекрытие листов: от 0 до 30 мм.");
         // Custom dimensions are literal width/height; orientation only affects standard paper.
         if (options.Landscape && options.PaperFormat != HexPaperFormat.Custom) (width, height) = (height, width);
         return (width, height);
