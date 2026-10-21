@@ -1,4 +1,25 @@
 ﻿# STATE_HANDOFF — актуальное состояние Map
+## Актуально на 2026-10-21 (ночь) — R01 интегрирован: сцена экспорта, уровни и блокировка гекс-путей (схема v14)
+
+**FACT.** Codex (gpt-6-astra) выполнил R01 в отдельной копии `C:\Users\Leshe\.codex\worktrees\roadmap-codex\Map`
+(ветка `codex/roadmap-codex`, от 4827eba); интегратор перенёс коммиты e236b82 и 8338ae0 поверх R04.
+- `ExportScene` в Core; `ImageExportEngine`, VTT и гекс-экспорт используют общий контракт выбора сцены. Стены dd2vtt
+  ограничены выбранным уровнем (`ExportHexLevelComboBox` в окне экспорта, только для гексовой мастерской).
+- У `HexPath` — `BlocksSight/BlocksMove/BlocksLight`; в панели «Пути» три переключателя у выбранного пути с
+  Undo/Redo (`HexPathBlocksSightCheckBox` и т. д., `EditorView.HexPathBlocking.cs`, `EditorViewModel.HexPathBlocking.cs`).
+- Схема **v14**: пишется только при отличии от мигрированных дефолтов, включая именованные версии; старые
+  Border+Edges получают `BlocksSight=true` (поведение сохранено), новые границы не блокируют (ASSUMPTION по R01).
+  `docs/05` обновлён. Попутно исправлено падение значков ключей при уменьшенном экспорте.
+
+**Проверено (FACT):** у Codex — Release 0 ошибок; Core 45/45, Presentation 67/67, Rendering 3/3, Persistence 116/123
+(7 давних падений — закрыты R04 в той же интеграции), новые тесты R01 17/17; `native-hex-workshop` 39/39; `Map.LiveCheck
+--hex-paths true` exit 0, PrintWindow-снимки просмотрены (переключатели читаемы, уровень «Подземелье 1» выбран).
+У интегратора после cherry-pick: все 5 тестовых проектов — 1661/1661: Core 415, Persistence 215, Presentation 654, Rendering 228, Assets 149.
+**NOT CHECKED:** импорт dd2vtt в Foundry/Roll20 (R14); живой просмотр владельцем; чёрные поля справа/снизу на
+PrintWindow-снимке окна экспорта (наблюдение для R05/D5). `BlocksMove/BlocksLight` в dd2vtt не передаются
+(`line_of_sight` = `BlocksSight`).
+**Следующий шаг:** push → CI → R01 ✅; Codex берёт R02 (пакет игрока), Claude — R05.
+
 ## Актуально на 2026-10-21 (ночь) — R04: давних падений тестов больше нет; R00 подтверждён CI
 
 **FACT.** По поручению владельца («приступайте к выполнению… делайте всё, что можно без ответа; всё новое тестируйте
