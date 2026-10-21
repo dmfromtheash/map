@@ -56,6 +56,21 @@ public sealed class LandCliffRenderingTests
     }
 
     [Fact]
+    public void The_far_view_keeps_the_cliff_wall_of_a_raised_island()
+    {
+        // The overview tier used to draw raised land flat (D6, handoff 2026-10-18); the wall is
+        // drawn there from the same kept field images (R05).
+        var island = Styled(Land("Остров", 1, (x, y) => Blob(x, y, 384, 230, 250, 150)), Solid);
+        var overview = new RenderOptions { LodTier = RenderLodTier.Overview };
+        using var flat = Render(Document(island with { Level = 0 }), overview);
+        using var raised = Render(Document(island), overview);
+        Assert.Equal(flat.GetPixel(384, 250), raised.GetPixel(384, 250));
+        var rock = raised.GetPixel(384, 395);
+        Assert.NotEqual(flat.GetPixel(384, 395), rock);
+        Assert.True(rock.Red > rock.Blue, $"the far view must keep the warm rock wall, got {rock}");
+    }
+
+    [Fact]
     public void A_plateau_casts_its_wall_over_the_lower_land_only_where_it_is_higher()
     {
         var island = Styled(Land("Остров", 1, (x, y) => Blob(x, y, 384, 260, 330, 210)), Solid);
@@ -203,11 +218,13 @@ public sealed class LandCliffRenderingTests
         new CanvasDefinition(Width, Height, "px", Sea),
         [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, Sea), .. lands]);
 
-    private static SKBitmap Render(MapDocument document)
+    private static SKBitmap Render(MapDocument document) => Render(document, new RenderOptions());
+
+    private static SKBitmap Render(MapDocument document, RenderOptions options)
     {
         var info = new SKImageInfo(Width, Height);
         using var surface = SKSurface.Create(info)!;
-        SceneRenderer.Render(surface.Canvas, document, new RenderOptions());
+        SceneRenderer.Render(surface.Canvas, document, options);
         var bitmap = new SKBitmap(info);
         surface.ReadPixels(info, bitmap.GetPixels(), info.RowBytes, 0, 0);
         return bitmap;

@@ -69,6 +69,8 @@ public sealed class RenderStats
     public int ObjectTilesDrawn { get; set; }
     public double DetailPrepareMilliseconds { get; set; }
     public double DetailRasterMilliseconds { get; set; }
+    /// <summary>Exact object tiles left for a later frame by the settled-frame budget (R05).</summary>
+    public int DetailTilesPending { get; set; }
     public int GpuDetailTiles { get; set; }
     public long ObjectCacheHits { get; set; }
     public long ObjectCacheMisses { get; set; }
@@ -127,6 +129,7 @@ public sealed class RenderStats
         ObjectTilesDrawn = 0;
         DetailPrepareMilliseconds = 0;
         DetailRasterMilliseconds = 0;
+        DetailTilesPending = 0;
         GpuDetailTiles = 0;
         ObjectCacheHits = 0;
         ObjectCacheMisses = 0;
@@ -2141,6 +2144,9 @@ public static class SceneRenderer
         var simplifiedOverview = !options.IsExport && options.LodTier == RenderLodTier.Overview;
         if (simplifiedOverview)
         {
+            // The far view kept the land flat: raised pieces lost their cliff walls (D6). The wall
+            // is drawn from the same kept field images as up close, under the coverage (R05).
+            if (cliffReach > 0 && !solidInterior) DrawCliffs();
             DrawOverviewCoverage();
             if (options.Stats is { } overviewStats)
             {
@@ -3043,11 +3049,35 @@ public static class SceneRenderer
             }
         }
         using var batchScratch = new StampBatchScratch();
+        // The settled frame after a wheel zoom used to build every tile of the exact bucket at once
+        // (one frame of ~379 ms at 2560×1369 over 50 000 objects). It now builds them under a frame
+        // budget: a tile not built yet shows the kept tiles of the nearest bucket, resampled, and
+        // another frame is requested until the bucket is complete (R05, 2026-10-21). A cold zoom
+        // with nothing kept nearby still builds in full, so no area is ever left blank.
+        // Deferring needs someone to ask for the next frame: without RequestRefinedFrame (tests,
+        // thumbnails) the whole bucket is built now, as before.
+        var fallbackBucket = options.FastTerrain || options.IsExport || options.RequestRefinedFrame is null
+            ? null : NearestKeptBucket(layer, view, bucket, revisions, cache);
+        var budgetStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+        var builtThisFrame = 0;
         for (var y = (int)Math.Floor(view.Top / worldSize); y <= (int)Math.Floor(view.Bottom / worldSize); y++)
         for (var x = (int)Math.Floor(view.Left / worldSize); x <= (int)Math.Floor(view.Right / worldSize); x++)
         {
             var bounds = new WorldBounds(x * worldSize, y * worldSize, (x + 1) * worldSize, (y + 1) * worldSize);
             var revision = revisions.Version(x, y, bucket, Expand(bounds, 1 / scale));
+            var exactKept = cache.TryGet(layer.Id, x, y, 10000 + bucket, revision, out _);
+            if (!exactKept && fallbackBucket is { } fallback && builtThisFrame > 0
+                && System.Diagnostics.Stopwatch.GetElapsedTime(budgetStarted).TotalMilliseconds > DetailBudgetMilliseconds)
+            {
+                canvas.Save();
+                canvas.ClipRect(ToRect(bounds));
+                TryDrawKeptTiles(canvas, layer, bounds, fallback, revisions, cache, options);
+                canvas.Restore();
+                if (options.Stats is { } pending) pending.DetailTilesPending++;
+                options.RequestRefinedFrame?.Invoke();
+                continue;
+            }
+            if (!exactKept) builtThisFrame++;
             var objectCount = 0; var culledCount = 0;
             var drawnBefore = options.Stats?.ObjectsDrawn ?? 0;
             var cached = cache.GetOrCreate(layer.Id, x, y, 10000 + bucket, revision, () =>
@@ -3112,6 +3142,37 @@ public static class SceneRenderer
         }
         if (options.Stats is { } finalStats)
         { finalStats.ObjectCacheHits += cache.Hits - hits; finalStats.ObjectCacheMisses += cache.Misses - misses; }
+    }
+
+    /// <summary>Milliseconds of exact object tiles one settled frame builds before deferring the rest.</summary>
+    private const double DetailBudgetMilliseconds = 24;
+
+    /// <summary>The nearest zoom bucket whose kept tiles cover the whole view, or null when none does.</summary>
+    private static int? NearestKeptBucket(ObjectLayer layer, WorldBounds view, int bucket,
+        DetailTileRevisions revisions, ObjectOverviewCache cache)
+    {
+        for (var delta = 1; delta <= 12; delta++)
+        {
+            if (HasKeptTiles(layer, view, bucket - delta, revisions, cache)) return bucket - delta;
+            if (HasKeptTiles(layer, view, bucket + delta, revisions, cache)) return bucket + delta;
+        }
+        return null;
+    }
+
+    private static bool HasKeptTiles(ObjectLayer layer, WorldBounds view, int bucket,
+        DetailTileRevisions revisions, ObjectOverviewCache cache)
+    {
+        var scale = Math.Pow(2, bucket / 4d);
+        var worldSize = 512 / scale;
+        var count = 0;
+        for (var y = (int)Math.Floor(view.Top / worldSize); y <= (int)Math.Floor(view.Bottom / worldSize); y++)
+        for (var x = (int)Math.Floor(view.Left / worldSize); x <= (int)Math.Floor(view.Right / worldSize); x++)
+        {
+            if (++count > 64) return false;
+            var bounds = new WorldBounds(x * worldSize, y * worldSize, (x + 1) * worldSize, (y + 1) * worldSize);
+            if (!cache.TryGet(layer.Id, x, y, 10000 + bucket, revisions.Version(x, y, bucket, Expand(bounds, 1 / scale)), out _)) return false;
+        }
+        return true;
     }
 
     /// <summary>Draws the view from kept tiles of one zoom bucket, or nothing when any tile of it is missing.</summary>

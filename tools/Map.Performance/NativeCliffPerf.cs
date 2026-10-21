@@ -83,17 +83,23 @@ public sealed partial class PaintPerfApplication
         _report.Checks["routes"] = _report.Routes.Count >= 4;
     }
 
+    /// <summary>The longest scene frame seen while the last TimedRefined waited.</summary>
+    private double LastRefinedMaxFrameMs;
+
     /// <summary>Time from now until a frame shows the exact (refined) terrain, polled at 15 ms.</summary>
     private async Task<double> TimedRefined()
     {
         var canvas = _view.Canvas;
         var watch = Stopwatch.StartNew();
+        LastRefinedMaxFrameMs = 0;
         await Task.Delay(15);
         while (watch.Elapsed < TimeSpan.FromSeconds(30))
         {
             canvas.InvalidateVisual();
             await Task.Delay(15);
-            if (!canvas.LastTerrainRefinementPending && !canvas.LastFrameFastTerrain) break;
+            // The longest scene frame on the way to the exact picture: the settled frame after a zoom (R05).
+            LastRefinedMaxFrameMs = Math.Max(LastRefinedMaxFrameMs, canvas.LastSceneRenderMilliseconds);
+            if (!canvas.LastTerrainRefinementPending && !canvas.LastFrameFastTerrain && !canvas.LastDetailTilesPending) break;
         }
         var elapsed = watch.Elapsed.TotalMilliseconds;
         await Settle();

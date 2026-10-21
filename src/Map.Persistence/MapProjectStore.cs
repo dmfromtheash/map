@@ -1736,7 +1736,7 @@ public static partial class MapProjectStore
         }
 
         // Stride 6 (the first hex format) unless a hex is turned, in a region or revealed: then 9.
-        var wide = board.Cells.Any(pair => pair.Value.NeedsWorkshopSchema);
+        var wide = board.AnyCellNeedsWorkshopSchema;
         var stride = wide ? 9 : 6;
         var cells = new List<int>(board.CellCount * stride);
         foreach (var (hex, cell) in board.Cells)

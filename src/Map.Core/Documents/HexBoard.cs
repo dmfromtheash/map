@@ -165,6 +165,11 @@ public sealed class HexBoard
     public const double MaxHexSize = 1024;
 
     private readonly ImmutableDictionary<HexChunkKey, HexChunk> _chunks;
+    // The board is immutable, so what is derived from its chunks is computed once per instance (R05):
+    // the chunk order of Cells and whether any hex needs the workshop schema. Benign races: the
+    // same value is produced by every thread.
+    private KeyValuePair<HexChunkKey, HexChunk>[]? _orderedChunks;
+    private int _workshopCells; // 0 unknown, 1 none, 2 some
 
     private HexBoard(HexLayout layout, int columns, int rows, ImmutableDictionary<HexChunkKey, HexChunk> chunks, int cellCount)
     {
@@ -336,12 +341,13 @@ public sealed class HexBoard
             new HexOffset(Math.Min(Columns - 1, lastColumn), Math.Min(Rows - 1, lastRow)));
     }
 
-    /// <summary>Every painted hex, chunk by chunk.</summary>
+    /// <summary>Every painted hex, chunk by chunk (row-major chunk order, computed once per board).</summary>
     public IEnumerable<KeyValuePair<HexCoord, HexCell>> Cells
     {
         get
         {
-            foreach (var (key, chunk) in _chunks.OrderBy(pair => pair.Key.Y).ThenBy(pair => pair.Key.X))
+            var ordered = _orderedChunks ??= [.. _chunks.OrderBy(pair => pair.Key.Y).ThenBy(pair => pair.Key.X)];
+            foreach (var (key, chunk) in ordered)
             {
                 for (var row = 0; row < ChunkSize; row++)
                 {
@@ -354,6 +360,27 @@ public sealed class HexBoard
                     }
                 }
             }
+        }
+    }
+
+    /// <summary>True when any hex is turned, in a region or revealed (schema v12+); cached per board.</summary>
+    public bool AnyCellNeedsWorkshopSchema
+    {
+        get
+        {
+            if (_workshopCells == 0)
+            {
+                var any = false;
+                foreach (var chunk in _chunks.Values)
+                {
+                    for (var row = 0; row < ChunkSize && !any; row++)
+                        for (var column = 0; column < ChunkSize; column++)
+                            if (chunk[column, row] is { NeedsWorkshopSchema: true }) { any = true; break; }
+                    if (any) break;
+                }
+                _workshopCells = any ? 2 : 1;
+            }
+            return _workshopCells == 2;
         }
     }
 
@@ -486,7 +513,7 @@ public sealed record HexLayer : MapLayer
     /// <summary>True when the layer uses anything beyond the first hex format (schema v12).</summary>
     public bool NeedsWorkshopSchema =>
         !Paths.IsEmpty || !Regions.IsEmpty || !Notes.IsEmpty || Level != 0 || FogEnabled
-        || Travel != HexTravelScale.Default || Board.Cells.Any(pair => pair.Value.NeedsWorkshopSchema);
+        || Travel != HexTravelScale.Default || Board.AnyCellNeedsWorkshopSchema;
 
     public override LayerMask? Mask { get; init; }
 

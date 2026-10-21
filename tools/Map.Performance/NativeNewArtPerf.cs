@@ -102,16 +102,19 @@ public sealed partial class PaintPerfApplication
             if (Want("view")) {
             await BurstRoute("pan" + suffix, 60, _ => canvas.PanByScreenDeltaForSmoke(-10, -4));
             _report.Environment["exact/pan" + suffix] = (await TimedRefined()).ToString("0");
+            _report.Environment["maxframe/pan" + suffix] = LastRefinedMaxFrameMs.ToString("0");
             await BurstRoute("zoom-in" + suffix, 12, _ =>
             {
                 var v = _editor.Session.Viewport; canvas.ZoomAtForSmoke(v.ViewWidth / 2, v.ViewHeight / 2, 1.12);
             });
             _report.Environment["exact/zoom-in" + suffix] = (await TimedRefined()).ToString("0");
+            _report.Environment["maxframe/zoom-in" + suffix] = LastRefinedMaxFrameMs.ToString("0");
             await BurstRoute("zoom-out" + suffix, 12, _ =>
             {
                 var v = _editor.Session.Viewport; canvas.ZoomAtForSmoke(v.ViewWidth / 2, v.ViewHeight / 2, 1 / 1.12);
             });
             _report.Environment["exact/zoom-out" + suffix] = (await TimedRefined()).ToString("0");
+            _report.Environment["maxframe/zoom-out" + suffix] = LastRefinedMaxFrameMs.ToString("0");
             SetScale(centre, scale); await TimedRefined(); }
 
             // Land: a shape stroke across the plain's edge into the sea.

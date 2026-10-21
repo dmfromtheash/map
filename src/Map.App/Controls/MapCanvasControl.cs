@@ -240,6 +240,8 @@ public sealed partial class MapCanvasControl : Control
     /// <summary>Own-process smoke hooks: whether the last frame simplified the terrain, and how the finished-land cache fared in it.</summary>
     public bool LastFrameFastTerrain { get; private set; }
     public bool LastTerrainRefinementPending { get; private set; }
+    /// <summary>True when the last settled frame left exact object tiles for a later frame (R05 budget).</summary>
+    public bool LastDetailTilesPending { get; private set; }
     public long LastFrameStyledLandHits { get; private set; }
     public long LastFrameStyledLandMisses { get; private set; }
     public long LastFrameTerrainHits { get; private set; }
@@ -589,6 +591,7 @@ public sealed partial class MapCanvasControl : Control
                 LastLodTier = tier;
                 LastFrameFastTerrain = fastTerrain;
                 LastTerrainRefinementPending = _renderStats.TerrainRefinementsPending > 0;
+                LastDetailTilesPending = _renderStats.DetailTilesPending > 0;
                 LastFrameHadGpuContext = gpu;
                 System.Threading.Interlocked.Increment(ref _framesRendered);
                 Map.App.Services.RenderDocCapture.OnFrameRendered(System.Threading.Interlocked.Read(ref _framesRendered));
