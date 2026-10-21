@@ -184,6 +184,16 @@ public sealed class Stage20Application : Application
         var main = road.Branches[0];
         _report.Checks["create-four-nodes"] = main.Vertices.Length == 4 && _editor.Session.UndoDepth == 1;
 
+        // R06: the main road crosses the fixture's river once; a bridge by default, the kind is
+        // switched from the panel with one Undo step and comes back with Undo.
+        var crossings = _editor.SelectedRoadCrossings;
+        _report.Checks["crossing-detected-as-bridge"] = crossings.Count == 1 && crossings[0].Kind == RoadCrossingKind.Bridge
+            && Math.Abs(crossings[0].X - 850) < 40;
+        await Click("RoadCrossingKind0Ford");
+        _report.Checks["crossing-kind-from-panel"] = _editor.SelectedRoadCrossings is [{ Kind: RoadCrossingKind.Ford }] && _editor.Session.UndoDepth == 2;
+        _editor.Undo(); await Settle();
+        _report.Checks["crossing-kind-undo"] = _editor.SelectedRoadCrossings is [{ Kind: RoadCrossingKind.Bridge }] && _editor.Session.UndoDepth == 1;
+
         // 2. A path from the middle of the first stretch: the click inserts a real shared node.
         await Number("NewRoadWidthBox", "6");
         await Click("StartRoadButton");
@@ -263,11 +273,18 @@ public sealed class Stage20Application : Application
         var river = _editor.Rivers[0];
         var mainGeometry = RoadGeometry.Evaluate(_editor.Roads[0]).Branches[main.Id];
         var crossing = mainGeometry.Samples.MinBy(s => Math.Abs(s.X - 855))!;
+        // Since R06 the bridge stands over the water at this very point: the order of the two
+        // surfaces is read with the crossing set to «нет» from the panel, then the bridge returns.
+        _editor.SelectRoadOnly(road.Id); await Settle();
+        await Click("RoadCrossingKind0None");
+        Require(_editor.SelectedRoadCrossings is [{ Kind: RoadCrossingKind.None }], "Crossing kind «нет» was not applied: " + _editor.StatusDetail);
         using (var underWater = Bitmap()) _report.Checks["road-under-water-by-default"] = IsWater(underWater.GetPixel((int)crossing.X, (int)crossing.Y));
         _editor.SelectRoadOnly(road.Id);
         Require(_editor.ReorderSelection(1, toExtreme: true), "Reorder refused: " + _editor.StatusDetail);
         using (var overWater = Bitmap()) _report.Checks["road-over-water-after-order"] = IsRoad(overWater.GetPixel((int)crossing.X, (int)crossing.Y));
         _editor.Undo();
+        _editor.Undo(); await Settle();
+        Require(_editor.SelectedRoadCrossings is [{ Kind: RoadCrossingKind.Bridge }], "Undo did not bring the bridge back");
         _ = river;
 
         // 9. Another layer: the whole network travels, the fork stays shared.

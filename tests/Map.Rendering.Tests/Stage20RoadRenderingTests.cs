@@ -256,6 +256,9 @@ public sealed class Stage20RoadRenderingTests
     public void Road_and_water_order_follows_levels_layers_and_the_explicit_surface_order()
     {
         var (document, _, objectsId, road, river) = Terrace();
+        // Since R06 a road over a river carries a bridge by default; this test is about the order
+        // of the surfaces themselves, so the crossing is set to «нет» (RoadCrossingRenderingTests covers the bridge).
+        road = RoadEditor.SetCrossingKind(road, road.Branches[0].Id, river.Channels[0].Id, 0, RoadCrossingKind.None);
         var water = SKColor.Parse("#FF2040C0"); var surface = SKColor.Parse("#FFE0C080");
         var crossing = (380, 128);
         // Same layer, same level, default order: water lies over the road.

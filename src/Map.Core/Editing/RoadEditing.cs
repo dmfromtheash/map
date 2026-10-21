@@ -54,6 +54,19 @@ public static class RoadEditor
     }
 
     /// <summary>One width for the whole branch, every vertex alike.</summary>
+    /// <summary>Chooses what the road does at one crossing; the bridge is the default and stores nothing (R06).</summary>
+    public static Road SetCrossingKind(Road road, Guid branchId, Guid channelId, int ordinal, RoadCrossingKind kind)
+    {
+        _ = RequireBranch(road, branchId);
+        var kept = road.CrossingOverrides.Where(c => !(c.BranchId == branchId && c.ChannelId == channelId && c.Ordinal == ordinal));
+        return road with
+        {
+            CrossingOverrides = kind == RoadCrossingKind.Bridge
+                ? [.. kept]
+                : [.. kept, new RoadCrossingOverride(branchId, channelId, ordinal, kind)],
+        };
+    }
+
     public static Road SetBranchWidth(Road road, Guid branchId, double width)
     {
         var branch = RequireBranch(road, branchId);

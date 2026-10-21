@@ -24,10 +24,15 @@ public static class MapProjectFormat
     public const int HexWorkshopSchemaVersion = 13;
     public const string Extension = ".mapproj";
 
-    /// <summary>The newest schema this build writes and reads.</summary>
     public const int HexPathBlockingSchemaVersion = 14;
 
-    public const int MaxSupportedSchemaVersion = HexPathBlockingSchemaVersion;
+    /// <summary>
+    /// The newest schema this build writes and reads: a road with a crossing kind chosen by hand
+    /// (block <c>crossings</c> on the road; R06). Roads without it stay in their older schema.
+    /// </summary>
+    public const int RoadCrossingsSchemaVersion = 15;
+
+    public const int MaxSupportedSchemaVersion = RoadCrossingsSchemaVersion;
 
     /// <summary>
     /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry

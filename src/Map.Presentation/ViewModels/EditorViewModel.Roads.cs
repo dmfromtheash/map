@@ -1279,6 +1279,7 @@ public sealed partial class EditorViewModel
             || a.Visible != b.Visible || a.Locked != b.Locked || a.Seed != b.Seed
             || a.Nodes.Length != b.Nodes.Length || a.Branches.Length != b.Branches.Length) return false;
         if (!a.Nodes.SequenceEqual(b.Nodes)) return false;
+        if (!a.CrossingOverrides.SequenceEqual(b.CrossingOverrides)) return false;
         for (var i = 0; i < a.Branches.Length; i++)
         {
             var x = a.Branches[i]; var y = b.Branches[i];
@@ -1297,7 +1298,7 @@ public sealed partial class EditorViewModel
         Raise(nameof(SelectedBranchIsClosed)); Raise(nameof(SelectedBranchHasOwnStyle)); Raise(nameof(RoadStyleTargetsBranch)); Raise(nameof(RoadStyleShown));
         Raise(nameof(RoadDrawMode)); Raise(nameof(RoadTextureId)); Raise(nameof(RoadTextureOpacityPercent)); Raise(nameof(RoadTextureScale));
         Raise(nameof(SelectedRoadVisible)); Raise(nameof(SelectedRoadLocked)); Raise(nameof(RoadSelectionLevelValue)); Raise(nameof(SurfaceSelectionLevelValue));
-        Raise(nameof(RoadSelectionFrame)); Raise(nameof(SelectionStatus));
+        Raise(nameof(RoadSelectionFrame)); Raise(nameof(SelectionStatus)); Raise(nameof(SelectedRoadCrossings));
         InvalidateScene(EditorChangeReason.CanvasInvalidation);
     }
 }

@@ -1,4 +1,23 @@
 ﻿# STATE_HANDOFF — актуальное состояние Map
+## Актуально на 2026-10-21 (ночь, R06) — мосты и броды: переправы из геометрии, схема v15
+
+**FACT.** R06 (Claude). `Map.Core.Editing.RoadCrossings.Detect(roads, rivers)` находит пересечения участков дорог с
+руслами рек (озёра не пересекаются) и нумерует их вдоль участка; переправа — производная сущность и следует за
+правкой узлов (начало графа зависимостей T3). `Road.CrossingOverrides` хранит только выбранный вручную вид
+(`RoadCrossingKind`: Bridge по умолчанию, Ford, Ferry, None); `RoadEditor.SetCrossingKind`; JSON `crossings` пишется
+только при непустом списке → схема **v15** (`MapProjectFormat.RoadCrossingsSchemaVersion`, `docs/05`), иначе дорога
+остаётся в прежней схеме. Рендер `RoadCrossingRenderer` (настил, доски, перила, тень; брод; паром) вызывается из
+`SceneRenderer.DrawSurfaceRun` поверх дорог и рек прогона; река уровнем выше дороги переправу скрывает. Панель дорог:
+блок «Переправы» (`EditorView.RoadCrossings.cs`, `EditorViewModel.RoadCrossings.cs`): строка на переправу и
+сегмент `RoadCrossingKind<i><Kind>`; Undo одним шагом. Тест порядка поверхностей Stage 20 получил «нет» у переправы,
+так как теперь мост по умолчанию перекрывает воду.
+
+**Проверено (FACT):** Release 0 ошибок; Core 425/425, Persistence 218/218, Presentation 659/659, Rendering 230/230 (новые: RoadCrossingsTests 4, RoadCrossingsPersistenceTests 3, RoadCrossingRenderingTests 1); `native-crossings` 29/29, gate PASS (3 новые проверки: мост по умолчанию, брод из панели с Undo-шагом, Undo возвращает мост); живой проход — `artifacts/r06/live (10-workshop.png: мост над рекой в настоящем окне, открытие 6,7 с)`
+(снимки PrintWindow просмотрены).
+**NOT CHECKED:** живой просмотр владельцем; художественная приёмка моста/брода (процедурные заглушки до арта владельца);
+реки из других слоёв под дорогой (переправа только внутри слоя).
+**Следующий шаг:** push → CI → R06 ✅; интеграция R03 от Codex.
+
 ## Актуально на 2026-10-21 (ночь, последнее) — R02 интегрирован: пакет игрока без секретов
 
 **FACT.** Codex выполнил R02 в `codex/roadmap-R02` (a261895), интегратор перенёс его как 34a9679 поверх R05.

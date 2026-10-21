@@ -23,6 +23,9 @@ public static partial class MapProjectStore
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = false };
 
     private static int SchemaFor(MapDocument document) =>
+        document.Layers.OfType<ObjectLayer>().Any(l => l.Roads.Any(r => r.NeedsCrossingsSchema))
+        || document.Checkpoints.Any(c => c.Snapshot.Layers.OfType<ObjectLayer>().Any(l => l.Roads.Any(r => r.NeedsCrossingsSchema)))
+            ? MapProjectFormat.RoadCrossingsSchemaVersion :
         document.Layers.OfType<HexLayer>().Any(layer => layer.Paths.Any(path => path.NeedsBlockingSchema))
         || document.Checkpoints.Any(c => c.Snapshot.Layers.OfType<HexLayer>().Any(layer => layer.Paths.Any(path => path.NeedsBlockingSchema)))
             ? MapProjectFormat.HexPathBlockingSchemaVersion :

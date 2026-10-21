@@ -55,7 +55,7 @@ else if (options.Profile == "native-render-audit")
     foreach (var note in audit.Notes) Console.WriteLine($"  {note.Key} = {note.Value}");
     if (audit.Failure is not null) Console.WriteLine(audit.Failure);
 }
-else if (options.Profile == "native-stage20")
+else if (options.Profile is "native-stage20" or "native-crossings")
 {
     var nativeReport = NativeStage20Smoke.Run(options); report = nativeReport; gatePassed = nativeReport.GatePassed;
 }

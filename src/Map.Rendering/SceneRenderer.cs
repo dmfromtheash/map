@@ -891,6 +891,29 @@ public static class SceneRenderer
             RiverRenderer.DrawRivers(target, water, view, options, landCoverage, neighbours);
             if (options.Stats is { } riverStats) riverStats.RiverMilliseconds += Stopwatch.GetElapsedTime(riverStarted).TotalMilliseconds;
         }
+        // Bridges, fords and ferries where this run's roads cross the owner's rivers, above both (R06).
+        if (run.Count > 0 && run[0].Owner.Rivers.Length > 0)
+        {
+            var runRoads = new List<Road>();
+            foreach (var surface in run) if (surface.Road is { } road) runRoads.Add(road);
+            if (runRoads.Count > 0)
+            {
+                var rivers = RiverRenderer.Resolve(run[0].Owner, options);
+                var crossings = RoadCrossings.Detect(runRoads, rivers);
+                if (crossings.Count > 0)
+                {
+                    // Water at a higher level than the road flows over it: no bridge there.
+                    var kept = new List<RoadCrossing>(crossings.Count);
+                    foreach (var crossing in crossings)
+                    {
+                        var roadLevel = runRoads.First(r => r.Id == crossing.RoadId).Level;
+                        var riverLevel = rivers.First(r => r.Id == crossing.RiverId).Level;
+                        if (riverLevel <= roadLevel) kept.Add(crossing);
+                    }
+                    if (kept.Count > 0) RoadCrossingRenderer.Draw(target, kept, options.ViewScale, options.FastPreview);
+                }
+            }
+        }
     }
 
     private static void DrawTerrain(SKCanvas canvas, MapDocument document, WorldBounds view, RenderOptions options)

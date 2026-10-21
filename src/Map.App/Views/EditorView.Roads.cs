@@ -126,6 +126,7 @@ public sealed partial class EditorView
                 _roadBranchName,
                 AppearanceNumberBox("RoadBranchWidthBox", "Ширина участка", "ед.", () => _editor.SelectedBranchWidth, _editor.SetSelectedBranchWidth),
                 _roadProfileBlock,
+                BuildRoadCrossingsBlock(),
                 AppearanceNumberBox("RoadBranchTensionBox", "Плавность участка", "%", () => _editor.SelectedBranchTensionPercent, _editor.SetSelectedBranchTensionPercent, slider: (0, 250)),
                 Ui.TextButton("SmoothRoadBranchButton", "Сгладить участок (без новых узлов)", _editor.SmoothSelectedBranch, "compact"),
                 _roadClose,
@@ -340,6 +341,7 @@ public sealed partial class EditorView
             SyncCaps(_roadEndCapButtons, _editor.RoadStyleShown?.EndCap);
             if (_roadName is not null && !_roadName.IsFocused) _roadName.Text = _editor.SelectedRoad?.Name ?? "";
             if (_roadBranchName is not null && !_roadBranchName.IsFocused) _roadBranchName.Text = _editor.SelectedRoadBranch?.Name ?? "";
+            SyncRoadCrossings();
             SyncAppearanceSections();
         }
         finally { _syncingRoads = false; }

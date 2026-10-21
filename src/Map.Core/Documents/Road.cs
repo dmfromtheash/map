@@ -208,6 +208,25 @@ public sealed record Road
     /// <summary>Seed of the drawn details, so a saved road looks the same on every open and in every tile.</summary>
     public int Seed { get; init; }
 
+    /// <summary>
+    /// Kinds chosen by hand for the crossings this road makes over rivers (R06). The crossings
+    /// themselves are derived from the geometry (<c>RoadCrossings.Detect</c>); only departures from
+    /// the default bridge are stored, so a road without them keeps its older schema.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public ImmutableArray<RoadCrossingOverride> CrossingOverrides { get; init; } = [];
+
+    [System.Text.Json.Serialization.JsonPropertyName("crossings")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public List<RoadCrossingOverride>? CrossingsJson
+    {
+        get => CrossingOverrides.IsDefaultOrEmpty ? null : [.. CrossingOverrides];
+        init => CrossingOverrides = value is null ? [] : [.. value];
+    }
+
+    /// <summary>True when a crossing kind was chosen by hand (schema v15).</summary>
+    public bool NeedsCrossingsSchema => !CrossingOverrides.IsDefaultOrEmpty;
+
     public RoadNode? FindNode(Guid id) => Nodes.FirstOrDefault(n => n.Id == id);
     public RoadBranch? FindBranch(Guid id) => Branches.FirstOrDefault(b => b.Id == id);
 
@@ -236,15 +255,17 @@ public sealed record Road
     public Road WithNewIds()
     {
         var nodeIds = Nodes.ToDictionary(n => n.Id, _ => Guid.NewGuid());
+        var branchIds = Branches.ToDictionary(b => b.Id, _ => Guid.NewGuid());
         return this with
         {
             Id = Guid.NewGuid(),
             Nodes = [.. Nodes.Select(n => n with { Id = nodeIds[n.Id] })],
             Branches = [.. Branches.Select(b => b with
             {
-                Id = Guid.NewGuid(),
+                Id = branchIds[b.Id],
                 Vertices = [.. b.Vertices.Select(v => v with { NodeId = nodeIds[v.NodeId] })],
             })],
+            CrossingOverrides = [.. CrossingOverrides.Where(c => branchIds.ContainsKey(c.BranchId)).Select(c => c with { BranchId = branchIds[c.BranchId] })],
         };
     }
 
@@ -254,6 +275,14 @@ public sealed record Road
             || Style is null || !double.IsFinite(WidthScale) || WidthScale is < 0.01 or > 100 || !TerrainOrder.IsValidLevel(Level))
             throw new ArgumentException("Некорректные параметры дороги.");
         Style.Validate();
+        if (!CrossingOverrides.IsDefaultOrEmpty)
+        {
+            var keys = new HashSet<(Guid, Guid, int)>();
+            foreach (var crossing in CrossingOverrides)
+                if (crossing is null || crossing.Ordinal < 0 || !Enum.IsDefined(crossing.Kind)
+                    || FindBranch(crossing.BranchId) is null || !keys.Add((crossing.BranchId, crossing.ChannelId, crossing.Ordinal)))
+                    throw new ArgumentException("Некорректная переправа дороги.");
+        }
         var nodeIds = new HashSet<Guid>();
         foreach (var node in Nodes)
         {
