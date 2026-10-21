@@ -36,7 +36,9 @@ public sealed class Stage13DLargeCanvasRoundTripTests
         var sceneJson = reader.ReadToEnd();
         Assert.DoesNotContain('\n', sceneJson);
         Assert.DoesNotContain('\r', sceneJson);
-        Assert.Equal(512L * 1024 * 1024, MapProjectFormat.MaxJsonEntryBytes);
+        // Structural JSON is capped at 32 MiB per entry since object chunks carry the objects
+        // (DEC on the container budget, docs/05 §limits); the total stays at 2 GiB.
+        Assert.Equal(32L * 1024 * 1024, MapProjectFormat.MaxJsonEntryBytes);
         Assert.Equal(2_048L * 1024 * 1024, MapProjectFormat.MaxTotalUncompressedBytes);
     }
 

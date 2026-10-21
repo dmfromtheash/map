@@ -417,6 +417,7 @@ public sealed class Stage20Application : Application
         _view.Canvas.PressMoveReleaseForSmoke(a.X, a.Y, b.X, b.Y); }
     private T Find<T>(string name) where T : Control
     {
+        Stage19Application.RevealTab(_view, name);
         for (var attempt = 0; attempt < 8; attempt++)
         {
             if (_view.GetVisualDescendants().OfType<T>().FirstOrDefault(c => c.Name == name) is { } found) return found;
@@ -428,7 +429,7 @@ public sealed class Stage20Application : Application
         throw new InvalidOperationException($"{name} is not in the panel, even with every section opened");
     }
     private async Task Click(string name)
-    { var button = Find<Button>(name); button.BringIntoView(); await Settle(); Require(button.IsEffectivelyVisible && button.IsEnabled, name + " is unavailable");
+    { var button = Find<Button>(name); button.BringIntoView(); await Settle(); Require(button.IsEffectivelyVisible && button.IsEnabled, name + " is unavailable (" + (button.IsEffectivelyVisible ? "visible" : "hidden by " + string.Join(" > ", Avalonia.VisualTree.VisualExtensions.GetVisualAncestors(button).OfType<Control>().Where(a => !a.IsVisible).Select(a => a.GetType().Name + ":" + (a.Name ?? a.Tag?.ToString() ?? "?")))) + ", " + (button.IsEnabled ? "enabled" : "disabled") + ")");
         button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Settle(); }
     private async Task Number(string name, string value)
     { var box = Find<TextBox>(name); box.BringIntoView(); await Settle(); box.Text = value;

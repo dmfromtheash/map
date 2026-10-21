@@ -97,6 +97,11 @@ public class Stage14PlacementPreviewRenderingTests
             return string.Equals(sha256, _sha, StringComparison.OrdinalIgnoreCase) ? _image : null;
         }
 
+        // The detail ladder (2026-10-18) asks for a size-matched picture after the original; this
+        // source has one picture, so that question is answered without counting a second request.
+        public SKImage? TryGetImageForPixelSize(string sha256, double width, double height) =>
+            string.Equals(sha256, _sha, StringComparison.OrdinalIgnoreCase) ? _image : null;
+
         public void Dispose() => _image.Dispose();
     }
 }

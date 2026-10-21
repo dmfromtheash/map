@@ -64,8 +64,10 @@ public sealed partial class Stage19Application
         catalog.GetVisualDescendants().OfType<TextBox>().Single(x => x.Name == "MaterialCatalogSearch").Text = "подножие";
         await Settle();
         var cards = catalog.GetVisualDescendants().OfType<Button>().Where(x => x.Name?.StartsWith("MaterialCatalog_") == true).ToArray();
-        var filtered = cards.Length == 1 && cards[0].Name == "MaterialCatalog_" + MapFillTextures.OwnerSnow;
-        Require(filtered, "Material search did not filter the category to foothill");
+        // The owner's library grew since 2026-10-09 (ice and snow textures of 2026-10-18 also answer
+        // «подножие»); the search must narrow the group to the matching cards and keep the snow one.
+        var filtered = cards.Length >= 1 && cards.Length < 6 && cards.Any(c => c.Name == "MaterialCatalog_" + MapFillTextures.OwnerSnow);
+        Require(filtered, $"Material search did not filter the category to foothill: {cards.Length} cards: {string.Join(", ", cards.Select(c => c.Name))}");
         cards[0].RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Settle();
         _report.Checks["catalog-filter-and-choose"] = _editor.LandMaterialId == MapFillTextures.OwnerSnow && _editor.LandPaintMode;
 

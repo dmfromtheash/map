@@ -6239,8 +6239,10 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public void SnapSelectedPortalToGrid()
     {
-        if (EditableSelection() is not { Line: not null } before || ActiveSnapGrid() is not { } grid
-            || _selectedPortalId is not { } portalId) return;
+        if (EditableSelection() is not { Line: not null } before || ActiveSnapGrid() is not { } grid) return;
+        // A line with a single portal needs no portal click first: the button means that one.
+        var chosen = _selectedPortalId ?? (before.Line.Portals.Count == 1 ? before.Line.Portals[0].Id : null);
+        if (chosen is not { } portalId) return;
         var after = GridSnapService.SnapPortal(before, portalId, grid, out var outcome);
         if (outcome == PortalSnapOutcome.AlreadySnapped)
         {
@@ -7320,7 +7322,20 @@ public sealed partial class EditorViewModel : ViewModelBase
             // selects every placed asset the list holds.
             if (row.Kind == ObjectTreeRowKind.AssetKind && row.MemberIds is { } kindMembers)
             {
-                matching.AddRange(kindMembers.Where(availableIds.Contains));
+                // A closed group stays atomic here too: a copy that belongs to a group brings
+                // the whole group along, or stays out when any member is unavailable (R04).
+                foreach (var memberId in kindMembers)
+                {
+                    if (!availableIds.Contains(memberId) || matching.Contains(memberId)) continue;
+                    if (DocumentEditor.FindObject(Session.Document, memberId) is { GroupId: { } memberGroup })
+                    {
+                        var members = SceneGeometry.GroupMembers(Session.Document, memberGroup);
+                        if (members.Count > 0 && members.All(member => availableIds.Contains(member.Id)))
+                            matching.AddRange(members.Select(member => member.Id).Where(id => !matching.Contains(id)));
+                        continue;
+                    }
+                    matching.Add(memberId);
+                }
                 continue;
             }
 
@@ -8574,9 +8589,14 @@ public sealed partial class EditorViewModel : ViewModelBase
         // why beats a frame that silently refuses to follow the pointer.
         if (Session.SelectedObjects is { Count: > 0 } blocked)
         {
+            // Name the real reason: the object itself, or the layer it sits on (R04).
+            var layerLocked = blocked.Any(item => !item.Locked && item.Visible
+                && DocumentEditor.FindLayerOf(Session.Document, item.Id) is { Locked: true });
             StatusDetail = blocked.Any(item => item.Locked)
                 ? "Объект заблокирован: снимите блокировку, чтобы перемещать его."
-                : "Объект скрыт: включите видимость, чтобы перемещать его.";
+                : layerLocked
+                    ? "Слой заблокирован: снимите блокировку слоя объектов, чтобы перемещать его."
+                    : "Объект скрыт: включите видимость, чтобы перемещать его.";
         }
 
         return CanvasGesture.None;

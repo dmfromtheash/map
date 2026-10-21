@@ -75,8 +75,36 @@ public sealed record StampPlacementRequest
     /// </summary>
     public bool AvoidOverlap { get; init; }
 
-    /// <summary>Boxes of stamps already on the target layer near the gesture.</summary>
+    /// <summary>
+    /// Boxes of stamps already on the target layer near the gesture. Gesture-time input only: it
+    /// is neither saved nor part of equality, so a request read back from a file equals the one
+    /// that was written (R04, 2026-10-21).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
     public IReadOnlyList<StampCollisionBox> ExistingCollisions { get; init; } = [];
+
+    public bool Equals(StampPlacementRequest? other) =>
+        other is not null
+        && CenterX.Equals(other.CenterX) && CenterY.Equals(other.CenterY)
+        && AreaRadius.Equals(other.AreaRadius) && Density.Equals(other.Density)
+        && Seed == other.Seed && RandomizeVariant == other.RandomizeVariant
+        && RandomAngleStep == other.RandomAngleStep && RandomFlip == other.RandomFlip
+        && BaseWidth.Equals(other.BaseWidth)
+        && RotationJitterDegrees.Equals(other.RotationJitterDegrees) && SizeJitter.Equals(other.SizeJitter)
+        && OpacityJitter.Equals(other.OpacityJitter) && HueJitterDegrees.Equals(other.HueJitterDegrees)
+        && SaturationJitter.Equals(other.SaturationJitter) && BrightnessJitter.Equals(other.BrightnessJitter)
+        && AvoidOverlap == other.AvoidOverlap
+        && CollisionRotationDegrees.Equals(other.CollisionRotationDegrees);
+
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(CenterX); hash.Add(CenterY); hash.Add(AreaRadius); hash.Add(Density); hash.Add(Seed);
+        hash.Add(RandomizeVariant); hash.Add(RandomAngleStep); hash.Add(RandomFlip); hash.Add(BaseWidth);
+        hash.Add(RotationJitterDegrees); hash.Add(SizeJitter); hash.Add(OpacityJitter); hash.Add(HueJitterDegrees);
+        hash.Add(SaturationJitter); hash.Add(BrightnessJitter); hash.Add(AvoidOverlap); hash.Add(CollisionRotationDegrees);
+        return hash.ToHashCode();
+    }
 
     /// <summary>Tool rotation applied after planning; the collision boxes are turned by it as well.</summary>
     public double CollisionRotationDegrees { get; init; }

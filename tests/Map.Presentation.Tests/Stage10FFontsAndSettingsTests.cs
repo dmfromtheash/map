@@ -15,8 +15,10 @@ public sealed class Stage10FFontsAndSettingsTests
 
         Assert.Empty(settings.GetConflicts());
 
-        settings.Set(EditorShortcutSettings.Commands.MaskMode, "P");
-        settings.Set(EditorShortcutSettings.Commands.StampDensityUp, "P");
+        // «P» became the Land tool (editor-wide) in 2026-09; a gesture no editor command owns
+        // shows the same rule: Mask and Stamp contexts never overlap, so one key serves both.
+        settings.Set(EditorShortcutSettings.Commands.MaskMode, "Alt+M");
+        settings.Set(EditorShortcutSettings.Commands.StampDensityUp, "Alt+M");
         Assert.Empty(settings.GetConflicts()); // Mask and Stamp tools cannot be active together.
 
         settings.Set(EditorShortcutSettings.Commands.SidePanel, "V");

@@ -343,7 +343,7 @@ public static partial class MapProjectStore
                          or JsonTokenType.Null)
                 {
                     throw new MapProjectCorruptedException(
-                        $"Object chunk {entryName} contains a non-object array item.");
+                        $"Object chunk {entryName} contains a null or non-object array item.");
                 }
                 else if (reader.CurrentDepth == 0 && reader.TokenType == JsonTokenType.EndArray)
                 {

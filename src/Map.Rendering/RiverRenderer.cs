@@ -617,22 +617,26 @@ public static class RiverRenderer
     {
         if (geometry.Closed || geometry.Samples.Length < 2) return;
         var samples = geometry.Samples;
+        // Only the half of the disc on the lake's side is cut: for an outflow the channel runs
+        // along +tangent away from the lake, so its tooth lies behind the start (−tangent); for
+        // an inflow the channel arrives along +tangent, so the bump lies ahead of the end.
+        // Cutting the whole disc (R04, 2026-10-21) also removed the channel's own first stretch
+        // outside the lake and left a plug of land with a rim across the exit.
         if (geometry.LeavesParent && geometry.Channel.Source is { } source
             && set.Channels.TryGetValue(source.ParentChannelId, out var from) && from.Closed)
-            Trim(channel, samples[0], from);
+            Trim(channel, samples[0], from, -samples[0].TangentX, -samples[0].TangentY);
         if (geometry.JoinsParent && geometry.Channel.Mouth is { } mouth
             && set.Channels.TryGetValue(mouth.ParentChannelId, out var into) && into.Closed)
-            Trim(channel, samples[^1], into);
+            Trim(channel, samples[^1], into, samples[^1].TangentX, samples[^1].TangentY);
 
-        static void Trim(SKPath path, RiverSample at, RiverChannelGeometry lake)
+        static void Trim(SKPath path, RiverSample at, RiverChannelGeometry lake, double sideX, double sideY)
         {
             var radius = (float)(Math.Max(at.HalfWidth, 0.5) * 1.6 + 1);
             using var shore = new SKPath();
             shore.MoveTo((float)lake.Samples[0].X, (float)lake.Samples[0].Y);
             for (var i = 1; i < lake.Samples.Length; i++) shore.LineTo((float)lake.Samples[i].X, (float)lake.Samples[i].Y);
             shore.Close();
-            using var around = new SKPath();
-            around.AddCircle((float)at.X, (float)at.Y, radius);
+            using var around = HalfDisc(at.X, at.Y, radius, sideX, sideY);
             using var outside = new SKPath();
             if (!around.Op(shore, SKPathOp.Difference, outside) && !RobustPathOps.TryDifference(around, shore, outside)) return;
             using var trimmed = new SKPath();
@@ -640,6 +644,30 @@ public static class RiverRenderer
             path.Reset();
             path.AddPath(trimmed);
         }
+    }
+
+    /// <summary>
+    /// The half of a disc of <paramref name="radius"/> around (x, y) that lies on the side of the
+    /// unit direction (sideX, sideY); a full disc when the direction is degenerate.
+    /// </summary>
+    private static SKPath HalfDisc(double x, double y, float radius, double sideX, double sideY)
+    {
+        var path = new SKPath();
+        var length = Math.Sqrt(sideX * sideX + sideY * sideY);
+        if (length < 1e-9) { path.AddCircle((float)x, (float)y, radius); return path; }
+        var ux = sideX / length; var uy = sideY / length;
+        var vx = -uy; var vy = ux;
+        const int steps = 24;
+        for (var i = 0; i <= steps; i++)
+        {
+            var angle = -Math.PI / 2 + Math.PI * i / steps;
+            var cos = Math.Cos(angle); var sin = Math.Sin(angle);
+            var px = (float)(x + radius * (cos * ux + sin * vx));
+            var py = (float)(y + radius * (cos * uy + sin * vy));
+            if (i == 0) path.MoveTo(px, py); else path.LineTo(px, py);
+        }
+        path.Close();
+        return path;
     }
 
     /// <summary>Replaces each polygon corner by a quadratic arc reaching at most half a segment back and forth.</summary>

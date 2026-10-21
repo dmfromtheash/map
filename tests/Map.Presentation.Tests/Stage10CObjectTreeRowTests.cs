@@ -184,9 +184,12 @@ public class Stage10CObjectTreeRowTests
         var plainText = Object("Заголовок", SceneObjectKind.Text);
         var document = Build(stamp, text, plainText);
 
+        // The Assets section lists placed assets by picture (2026-10-18): one asset-kind row that
+        // still knows the grouped stamp as its member; the group itself is kept whole by Ctrl+A.
         var stamps = ObjectTreeRows.Build(document, "", ObjectTypeFilter.Stamps, null, []);
         Assert.Single(stamps);
-        Assert.Equal(ObjectTreeRowKind.Group, stamps[0].Kind);
+        Assert.Equal(ObjectTreeRowKind.AssetKind, stamps[0].Kind);
+        Assert.Contains(stamp.Id, stamps[0].MemberIds!);
 
         var texts = ObjectTreeRows.Build(document, "", ObjectTypeFilter.Text, null, []);
         Assert.Equal(2, texts.Count);

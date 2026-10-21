@@ -60,14 +60,19 @@ public sealed class Stage10VariantSetRoundTripTests
         using var archive = ZipFile.OpenRead(path);
         var scene = ReadEntry(archive, "scene.json");
         var manifest = ReadEntry(archive, "manifest.json");
+        // Objects live in object-chunk entries since schema v4; the stamp's asset reference is there.
+        var chunks = string.Join("\n", archive.Entries
+            .Where(entry => entry.FullName.StartsWith(MapProjectFormat.ObjectPrefix, StringComparison.Ordinal))
+            .Select(entry => ReadEntry(archive, entry.FullName)));
 
         foreach (var forbidden in new[] { "setId", "variantId", "assetSet", "assetVariant" })
         {
             Assert.DoesNotContain(forbidden, scene, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain(forbidden, manifest, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(forbidden, chunks, StringComparison.OrdinalIgnoreCase);
         }
 
-        Assert.Contains("assetSha256", scene, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("assetSha256", chunks, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

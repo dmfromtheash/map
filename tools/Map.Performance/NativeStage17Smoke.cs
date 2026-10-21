@@ -337,7 +337,12 @@ public sealed class Stage17Application : Application
     private void Drag(double x, double y, double toX, double toY)
     { var a = _editor.Session.Viewport.WorldToScreen(x, y); var b = _editor.Session.Viewport.WorldToScreen(toX, toY);
         _view.Canvas.PressMoveReleaseForSmoke(a.X, a.Y, b.X, b.Y); }
-    private T Find<T>(string name) where T : Control => _view.GetVisualDescendants().OfType<T>().First(c => c.Name == name);
+    private T Find<T>(string name) where T : Control
+    {
+        Stage19Application.RevealTab(_view, name);
+        return _view.GetVisualDescendants().OfType<T>().FirstOrDefault(c => c.Name == name)
+            ?? throw new InvalidOperationException($"{name} is not in the panel");
+    }
     private async Task Click(string name)
     { var button = Find<Button>(name); button.BringIntoView(); await Settle(); Require(button.IsEffectivelyVisible && button.IsEnabled, name + " is unavailable");
         button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Settle(); }

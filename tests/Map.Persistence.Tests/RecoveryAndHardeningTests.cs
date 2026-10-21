@@ -336,17 +336,21 @@ public class ContainerHardeningTests
         Assert.Contains(expectedFragment, corruption.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    // Schema v4 keeps objects in chunk entries declared by scene.json (R04 rewrote the v2-era
+    // fixtures): a scene-level null sits in the scene, an object-level null in the chunk.
     [Theory]
-    [InlineData("{\"documentId\":\"11111111-2222-3333-4444-555555555555\",\"layers\":[{\"id\":\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\",\"type\":\"Brush\",\"objects\":[],\"tiles\":[null]}],\"notes\":[]}")]
-    [InlineData("{\"documentId\":\"11111111-2222-3333-4444-555555555555\",\"layers\":[],\"notes\":[null]}")]
-    [InlineData("{\"documentId\":\"11111111-2222-3333-4444-555555555555\",\"layers\":[{\"id\":\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\",\"type\":\"Object\",\"objects\":[{\"line\":{\"nodes\":[null],\"stroke\":{},\"portals\":[]}}]}],\"notes\":[]}")]
-    [InlineData("{\"documentId\":\"11111111-2222-3333-4444-555555555555\",\"layers\":[{\"id\":\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\",\"type\":\"Object\",\"objects\":[{\"shape\":{\"regions\":[{\"nodes\":[null]}],\"fill\":{},\"stroke\":{},\"portals\":[null]}}]}],\"notes\":[]}")]
-    [InlineData("{\"documentId\":\"11111111-2222-3333-4444-555555555555\",\"layers\":[{\"id\":\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\",\"type\":\"Object\",\"objects\":[{\"composition\":{\"items\":[],\"assets\":[null],\"grids\":[null],\"filters\":[null]}}]}],\"notes\":[]}")]
-    public void Null_elements_inside_scene_collections_are_reported_as_corruption(string sceneJson)
+    [InlineData("{\"documentId\":\"11111111-2222-3333-4444-555555555555\",\"layers\":[{\"id\":\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\",\"type\":\"Brush\",\"name\":\"l\",\"visible\":true,\"locked\":false,\"opacity\":1,\"tiles\":[null]}],\"notes\":[]}", null)]
+    [InlineData("{\"documentId\":\"11111111-2222-3333-4444-555555555555\",\"layers\":[],\"notes\":[null]}", null)]
+    [InlineData(null, "[{\"id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"kind\":\"Line\",\"name\":\"o\",\"x\":0,\"y\":0,\"width\":10,\"height\":10,\"line\":{\"nodes\":[null],\"stroke\":{},\"portals\":[]}}]")]
+    [InlineData(null, "[{\"id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"kind\":\"Shape\",\"name\":\"o\",\"x\":0,\"y\":0,\"width\":10,\"height\":10,\"shape\":{\"regions\":[{\"nodes\":[null]}],\"fill\":{},\"stroke\":{},\"portals\":[null]}}]")]
+    [InlineData(null, "[{\"id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"kind\":\"Composition\",\"name\":\"o\",\"x\":0,\"y\":0,\"width\":10,\"height\":10,\"composition\":{\"items\":[],\"assets\":[null],\"grids\":[null],\"filters\":[null]}}]")]
+    [InlineData(null, "[null]")]
+    public void Null_elements_inside_scene_collections_are_reported_as_corruption(string? sceneJson, string? chunkJson)
     {
         using var workspace = new TempWorkspace();
         var path = SavedProject(workspace);
-        ReplaceSceneJson(path, sceneJson);
+        if (chunkJson is not null) ReplaceSceneWithObjectChunk(path, chunkJson);
+        else { RemoveObjectChunks(path); ReplaceSceneJson(path, sceneJson!); }
         var bytesBeforeOpen = File.ReadAllBytes(path);
 
         var corruption = Assert.Throws<MapProjectCorruptedException>(() => MapProjectStore.Open(path));
@@ -378,17 +382,13 @@ public class ContainerHardeningTests
         using var workspace = new TempWorkspace();
         var path = SavedProject(workspace);
 
-        var sceneJson =
-            "{\"documentId\":\"11111111-2222-3333-4444-555555555555\",\"layers\":[" +
-            "{\"id\":\"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\",\"type\":\"Object\"," +
-            "\"name\":\"l\",\"visible\":true," +
-            "\"locked\":false,\"opacity\":1,\"objects\":[" +
-            "{\"id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"kind\":\"" + kind + "\"," +
+        var chunkJson =
+            "[{\"id\":\"01234567-89ab-cdef-0123-456789abcdef\",\"kind\":\"" + kind + "\"," +
             "\"name\":\"o\",\"x\":0,\"y\":0,\"width\":10,\"height\":10,\"rotationDegrees\":0," +
             "\"fillColor\":\"#FF000000\",\"strokeColor\":\"#FF000000\",\"strokeWidth\":0," +
-            "\"visible\":true,\"locked\":false}]}],\"notes\":[]}";
+            "\"visible\":true,\"locked\":false}]";
 
-        ReplaceSceneJson(path, sceneJson);
+        ReplaceSceneWithObjectChunk(path, chunkJson);
 
         var corruption = Assert.Throws<MapProjectCorruptedException>(() => MapProjectStore.Open(path));
         Assert.Contains(kind, corruption.Message);
@@ -480,6 +480,50 @@ public class ContainerHardeningTests
     }
 
     /// <summary>Swaps scene.json content and fixes the recorded checksum, isolating the shape check.</summary>
+    /// <summary>
+    /// Rewrites the project as one schema-v4 Object layer whose single chunk entry holds
+    /// <paramref name="chunkJson"/> (a JSON array of objects), with a descriptor that passes the
+    /// count, byte-length, checksum and bounds checks so the reader reaches the objects themselves.
+    /// </summary>
+    private static void ReplaceSceneWithObjectChunk(string path, string chunkJson)
+    {
+        const string layerId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        var chunkBytes = System.Text.Encoding.UTF8.GetBytes(chunkJson);
+        var entryName = MapProjectFormat.ObjectPrefix + layerId + "/00000000.json";
+        var count = 0;
+        using (var document = System.Text.Json.JsonDocument.Parse(chunkBytes))
+            count = document.RootElement.GetArrayLength();
+        var descriptor =
+            "{\"ordinal\":0,\"count\":" + count + ",\"byteLength\":" + chunkBytes.Length +
+            ",\"sha256\":\"" + MapProjectRoundTripTests.Sha256Hex(chunkBytes) + "\"," +
+            "\"bounds\":{\"left\":-100000,\"top\":-100000,\"right\":100000,\"bottom\":100000}," +
+            "\"entry\":\"" + entryName + "\",\"representationVersion\":" + MapProjectFormat.ObjectChunkRepresentationVersion + "}";
+        var sceneJson =
+            "{\"documentId\":\"11111111-2222-3333-4444-555555555555\",\"layers\":[" +
+            "{\"id\":\"" + layerId + "\",\"type\":\"Object\",\"name\":\"l\",\"visible\":true," +
+            "\"locked\":false,\"opacity\":1,\"blend\":\"Normal\",\"objectChunks\":[" + descriptor + "]," +
+            "\"sublayers\":[]}],\"notes\":[]}";
+
+        RemoveObjectChunks(path);
+        using (var archive = ZipFile.Open(path, ZipArchiveMode.Update))
+        {
+            var chunk = archive.CreateEntry(entryName);
+            using var stream = chunk.Open();
+            stream.Write(chunkBytes);
+        }
+
+        ReplaceSceneJson(path, sceneJson);
+    }
+
+    /// <summary>Drops the fixture's own object-chunk entries so a replaced scene declares every chunk left.</summary>
+    private static void RemoveObjectChunks(string path)
+    {
+        using var archive = ZipFile.Open(path, ZipArchiveMode.Update);
+        foreach (var stale in archive.Entries
+            .Where(entry => entry.FullName.StartsWith(MapProjectFormat.ObjectPrefix, StringComparison.Ordinal)).ToList())
+            stale.Delete();
+    }
+
     private static void ReplaceSceneJson(string path, string sceneJson)
     {
         using var archive = ZipFile.Open(path, ZipArchiveMode.Update);

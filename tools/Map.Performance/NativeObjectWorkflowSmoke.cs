@@ -461,10 +461,10 @@ public sealed class NativeObjectWorkflowApplication : Application
         int At(string name) => primaryNames.IndexOf(name);
         var objectPanelOpensWithLayerAndLevel = primary is not null
             && At("ObjectOwnerLayerSelector") >= 0
-            && At("ObjectLevelSlider") >= 0
-            && At("ObjectOwnerLayerSelector") < At("ObjectLevelSlider")
-            && At("ObjectLevelSlider") < At("ObjectOpacitySlider")
-            && At("ObjectLevelSlider") < At("ObjectRotationSlider");
+            && At("ObjectSublayerSlider") >= 0
+            && At("ObjectOwnerLayerSelector") < At("ObjectSublayerSlider")
+            && At("ObjectSublayerSlider") < At("ObjectOpacitySlider")
+            && At("ObjectSublayerSlider") < At("ObjectRotationSlider");
 
         var selector = Named<Button>(view, "ObjectOwnerLayerSelector");
         var selectorCaption = Named<TextBlock>(view, "ObjectOwnerLayerCaption");
@@ -489,7 +489,7 @@ public sealed class NativeObjectWorkflowApplication : Application
                 && !target.Display.Contains(target.Id.Value.ToString("D"), StringComparison.OrdinalIgnoreCase))
             && targets.Count(target => target.IsCurrent) == 1;
 
-        var slider = Named<Slider>(view, "ObjectLevelSlider");
+        var slider = Named<Slider>(view, "ObjectSublayerSlider");
         var levelSliderBand = slider is null
             ? "(отсутствует)"
             : $"[{slider.Minimum:0}..{slider.Maximum:0}] шаг {slider.SmallChange:0} snap={slider.IsSnapToTickEnabled}";
@@ -578,7 +578,7 @@ public sealed class NativeObjectWorkflowApplication : Application
         var shapeSlot = Named<Map.App.Controls.RetainedSlot>(view, "SelectionKindSlot");
         var mountedForShape = (shapeSlot?.Content as Control)?.Name;
         var shapeGetsTheSharedBlockWithoutTheBitmapOne = shapePrimary is not null
-            && Named<Slider>(view, "ObjectLevelSlider") is not null
+            && Named<Slider>(view, "ObjectSublayerSlider") is not null
             && Named<Button>(view, "ObjectOwnerLayerSelector") is not null
             && mountedForShape != "StampObjectActions"
             && Named<Button>(view, "StampReplaceAssetButton") is not { IsEffectivelyVisible: true };
@@ -642,7 +642,7 @@ public sealed class NativeObjectWorkflowApplication : Application
             && low.Text == EditorViewModel.MinimumSublayer.ToString(CultureInfo.InvariantCulture)
             && Named<TextBlock>(view, "ObjectLevelMaximumCaption") is { IsVisible: true } high
             && high.Text == "+" + EditorViewModel.MaximumSublayer.ToString(CultureInfo.InvariantCulture)
-            && Named<Slider>(view, "ObjectLevelSlider")!.TickPlacement != TickPlacement.None;
+            && Named<Slider>(view, "ObjectSublayerSlider")!.TickPlacement != TickPlacement.None;
 
         await NextFrameAsync(view);
         var quickShot = Path.ChangeExtension(options.OutputPath, ".quickbar.png");
@@ -1134,8 +1134,16 @@ public sealed class NativeObjectWorkflowApplication : Application
         return args.Handled;
     }
 
-    private static T? Named<T>(Visual root, string name) where T : Control =>
-        root.GetVisualDescendants().OfType<T>().FirstOrDefault(item => item.Name == name);
+    private static T? Named<T>(Visual root, string name) where T : Control
+    {
+        if (root.GetVisualDescendants().OfType<T>().FirstOrDefault(item => item.Name == name) is { } found) return found;
+        // Folded sections of the inspector are not templated yet (2026-10-19 panel redesign):
+        // open them the way a user would and look again.
+        if (root is Control control) Stage19Application.RevealTab(control, name);
+        foreach (var folded in root.GetVisualDescendants().OfType<Expander>().Where(e => !e.IsExpanded).ToArray()) folded.IsExpanded = true;
+        (root as Control)?.UpdateLayout();
+        return root.GetVisualDescendants().OfType<T>().FirstOrDefault(item => item.Name == name);
+    }
 
     /// <summary>The flat colour a brush paints, or null when it is not a flat opaque colour.</summary>
     private static Color? Resolve(IBrush? brush) =>

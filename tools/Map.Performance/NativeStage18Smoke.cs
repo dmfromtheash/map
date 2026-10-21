@@ -721,7 +721,31 @@ public sealed class Stage18Application : Application
     private void Drag(double x, double y, double toX, double toY)
     { var a = _editor.Session.Viewport.WorldToScreen(x, y); var b = _editor.Session.Viewport.WorldToScreen(toX, toY);
         _view.Canvas.PressMoveReleaseForSmoke(a.X, a.Y, b.X, b.Y); }
-    private T Find<T>(string name) where T : Control => _view.GetVisualDescendants().OfType<T>().First(c => c.Name == name);
+    private T Find<T>(string name) where T : Control
+    {
+        Stage19Application.RevealTab(_view, name);
+        if (_view.GetVisualDescendants().OfType<T>().FirstOrDefault(c => c.Name == name) is { } found) return found;
+        // The tool's own controls (FutureStamp…) live in the «Инструмент» half of the context area,
+        // which a selected area hides behind «Объект» (2026-10-19): switch the way a user would.
+        if (_view.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Name == "ContextScopeTool") is { } scope)
+        {
+            scope.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); _view.UpdateLayout();
+            Stage19Application.RevealTab(_view, name);
+        }
+        if (name.StartsWith("FutureStamp", StringComparison.Ordinal)
+            && _view.GetVisualDescendants().OfType<T>().All(c => c.Name != name))
+        {
+            // The tool page is the asset tool's; the rail has no button for it (the catalog arms
+            // it), so the smoke activates it the way the catalog does, then its half of the area.
+            _editor.ActiveTool = EditorTool.Stamp; _view.UpdateLayout();
+            _view.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Name == "ContextScopeTool")?.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            _view.UpdateLayout();
+            foreach (var folded in _view.GetVisualDescendants().OfType<Expander>().Where(e => !e.IsExpanded).ToArray()) folded.IsExpanded = true;
+            _view.UpdateLayout();
+        }
+        return _view.GetVisualDescendants().OfType<T>().FirstOrDefault(c => c.Name == name)
+            ?? throw new InvalidOperationException($"{name} is not in the panel");
+    }
     private async Task Click(string name)
     { var button = Find<Button>(name); button.BringIntoView(); await Settle(); Require(button.IsEffectivelyVisible && button.IsEnabled, name + " is unavailable");
         button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Settle(); }

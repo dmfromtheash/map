@@ -151,24 +151,36 @@ REA по файлам игр и чтение React-props Inkarnate.
 
 ## J. Давние падения, которые не считаются регрессией (сверять с handoff, список переписывать)
 
-- Unit-тесты (2026-10-19): Persistence 15 (`Stage18EditableAreaRoundTripTests.V6_roundtrip…` ×4,
-  `ContainerHardeningTests.Null_elements…` ×5, `An_unknown_object_kind…` ×3,
-  `Stage13DLargeCanvasRoundTripTests…`, `Stage17EditablePathRoundTripTests.V4_opens…`,
-  `Stage10VariantSetRoundTripTests…`); Presentation 5 (`Stage10CMultiSelectionViewModelTests.Select_all…`,
-  `Stage10CObjectTreeRowTests.Type_filter…`, `Stage10FFontsAndSettingsTests.Default_registry…`,
-  `Stage10EGridViewModelTests.Stage10EPortalSnapReviewFix…`, `EditorIntegrityInputRoutingTests.A_press…`);
-  Rendering 6 (`Stage19IllustratedWaterTests.A_lake_outflow…` ×2, `Stage19WaterJoinRenderingTests…`,
-  `Stage19EstuaryScenarioTests.A_tributary_and_a_lake_outflow…` (строка 184, та же пробка озера; падает и с
-  `MAP_ROBUST_PATHOPS=0`), `Stage14PlacementPreviewRenderingTests…`, `RenderImageCacheDiagnostics.Where_the_cached_frame_differs`).
-  В CI (`build.yml`) эти три проекта идут информационно; ворота — Core и Assets.
-- Смоуки: `native-stage19`, `native-stage20` («StartRiver/RoadButton is unavailable»),
-  `native-land-materials`, `native-land-cliffs`, `native-history-memory`, `native-object-workflow`,
-  `native-editor-integrity` (2 проверки), `native-brush-stress`, `native-placement-workflow` (память),
-  `native-stamp-family`/`native-mountain-foundation`/`native-editor-defaults`/`native-regional*`
-  (требуют удалённое наполнение или `RegionalAtlas`); `native-stage18` (`FutureStampScaleSlider`
-  больше нет в панели, 12/12 проверок до него зелёные) и `native-stage17`
-  (`reopened-path-appearance-controls`, нужен `MAP_STAGE17_FIXTURE`) — устаревшие имена элементов,
-  2026-10-19. Для окна экспорта живой проход — `Map.LiveCheck --map <файл>`.
+- **Unit-тесты: давних падений нет** (R04, 2026-10-21). Rendering 225/225, Persistence 198/198, Presentation
+  650/650 на 2026-10-21; `tests/KnownFailures.txt` пуст, CI краснит любое падение этих проектов. Один тест
+  ложно падает только под нагрузкой (параллельная сборка второго агента):
+  `PlacementWorkflowTests.Stage18_temporary_preview_memory_refusal…` (остаётся `ReservedBytes`) — перед словом
+  «регрессия» прогнать его одиночно.
+- **Смоуки (2026-10-21, после R04):** зелёные `native-stage19` (31/31), `native-stage20` (26/26), `native-hex-workshop`.
+  Остаются и объяснены:
+  - `native-stage18` — `FutureStampScaleSlider` не монтируется даже при инструменте ассетов и области «Инструмент»
+    (12/12 проверок до него зелёные); следующий шаг — выяснить, какой контрол задаёт масштаб у сохранённой
+    области после редизайна панелей 2026-10-19, и переписать шаг `reopen-edit-without-catalog`.
+  - `native-object-workflow` — NRE на `ObjectSublayerSlider` (прежнее имя `ObjectLevelSlider` заменено): слайдер
+    уровня выбранного объекта не находится и после раскрытия всех секций; проверить, где теперь «Уровень».
+  - `native-land-materials` — поиск «подножие» в окне каталога материалов даёт 0 карточек в группе «Акварель»
+    (название снежной текстуры владельца изменилось 2026-10-18); переписать на текущее имя.
+  - `native-land-cliffs` — одна проверка `island-and-plateau-tiers` (пиксель берега 512,625 после подъёма острова и
+    плато); остальные 5 зелёные.
+  - `native-history-memory` — `closed-editor-collected` (закрытый редактор не собран GC за отведённое время;
+    6/7 зелёные) — проверить одиночно без второго агента, затем искать удержание.
+  - `native-editor-integrity` — 2 сценария: `gradient_is_created_and_edited_from_the_panel` и
+    `layer_rows_stay_reachable_at_both_sizes` (ряд слоя размером 0×0 на широком окне, 96×34 в компактном — см.
+    notes отчёта).
+  - `native-stage17` — нужен настоящий «обычный» фикстурный `.mapproj` (`MAP_STAGE17_FIXTURE`); тестовая карта
+    новых ассетов не подходит (`Fixture is not the requested ordinary map`).
+  - Требуют `RegionalAtlas` (удалён по DEC-037) или удалённое наполнение: `native-stamp-family`,
+    `native-mountain-foundation`, `native-editor-defaults`, `native-regional*`, «обычный» маршрут `native-paint-perf`
+    (`MAP_REGIONAL_PROJECT`); `native-brush-stress`, `native-placement-workflow` — память.
+  - Помощник `Stage19Application.RevealTab` (общий для stage17/18/19/20, object-workflow) открывает вкладки
+    `Reveal:`, переключает область контекста «Объект/Инструмент» (`ContextScopeObject/Tool`) и раскрывает
+    свёрнутые секции; новые смоуки используют его, а не прямой `First(c => c.Name == …)`.
+  Для окна экспорта живой проход — `Map.LiveCheck --map <файл>`.
 - Перед словом «регрессия» — A/B на базовом коммите из копии bin-папки.
 
 ## K. Действующие разрешения владельца (с датами; новые — только записью сюда и в DEC)

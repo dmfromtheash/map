@@ -180,8 +180,13 @@ public sealed class Stage19EstuaryScenarioTests
         Assert.True(IsWaterish(frame.GetPixel((int)mouth.X, (int)mouth.Y)), $"tributary mouth is not water: {frame.GetPixel((int)mouth.X, (int)mouth.Y)}");
         var outflowEnd = geometry.Channels[outflow.Id].End;
         Assert.True(IsWaterish(frame.GetPixel((int)outflowEnd.X, (int)outflowEnd.Y)));
-        var outflowStart = geometry.Channels[outflow.Id].Start;
-        Assert.True(IsWaterish(frame.GetPixel((int)outflowStart.X, (int)outflowStart.Y)));
+        // The outflow's first node sits inside the lake, so its start lies on the shore line itself,
+        // which the ink outline (2026-09-23) draws dark by design; the water is a few units in along
+        // the channel (R04 rewrote the exact-shore-pixel expectation of 2026-09-08).
+        var outflowGeometry = geometry.Channels[outflow.Id];
+        var first = outflowGeometry.Samples[0];
+        var justInside = frame.GetPixel((int)(first.X + first.TangentX * 4), (int)(first.Y + first.TangentY * 4));
+        Assert.True(IsWaterish(justInside), $"outflow start is not water just inside the lake: {justInside}");
         // Inside the lake: water, no plug where the outflow leaves.
         Assert.True(IsWaterish(frame.GetPixel(400, 160)));
     }
