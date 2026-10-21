@@ -1,4 +1,21 @@
 ﻿# STATE_HANDOFF — актуальное состояние Map
+## Актуально на 2026-10-21 (ночь, сессия 2, R19) — экспорт Obsidian интегрирован
+
+**FACT.** Codex выполнил R19 в `codex/roadmap-R19` (2ba37f0, d817bec; продолжение после обрыва — модель gpt-6.1-sol по
+указанию владельца), интегратор перенёс как bfd9ffc, abe2cf1. `src/Map.Export/HexObsidianExporter.cs` пишет новую папку
+Markdown (файл на гекс и регион, YAML, теги, `[[ссылки]]` на соседей/регион, `index.md`); `EditorViewModel.Obsidian.cs`,
+`ExportObsidianButton`, `IFileDialogs.PickObsidianPackageAsync`. Получатель — через `ExportScene` (игроку без GM-текста,
+`childMap`, гексов под туманом). Устойчивые имена: id слоя + координаты / id региона. Схема не менялась (v15).
+`native-player-package` расширен проверками R19; `Map.LiveCheck --obsidian-export true` — живой маршрут через системный диалог
+(кнопка «Сохранить» ищется по AutomationId="1" **и** типу Button).
+
+**Проверено (FACT):** у Codex — Release 0 ошибок, Core 50/50, Presentation 109/109, смоук 22/22, LiveCheck PASS (83/22 файла,
+0 битых ссылок), PNG открыты. У интегратора — Release slnx 0 ошибок, Presentation `~Obsidian|~Export` 69/69, PNG игрока просмотрен.
+**NOT CHECKED:** открытие в Obsidian (не установлен); живой просмотр владельцем; чёрные поля окна экспорта на снимке (R05).
+**Правило владельца 2026-10-21:** после каждой проверки удалять тестовые папки, профили, неудачные попытки и логи; оставлять
+только снимки/отчёты. Убрано ~0,85 ГБ (`artifacts/r05` и `roadmap-baseline` paint-perf копии, попытки r02/r03/r19).
+**Следующий шаг:** push → CI → R19 ✅ (7 из 44). В работе: Claude — R07 (схема v16 забронирована), Codex — R13.
+
 ## Актуально на 2026-10-21 (ночь, R03) — быстрые победы экспорта и библиотеки интегрированы
 
 **FACT.** Codex выполнил R03 в `codex/roadmap-R03` (ed5956c), интегратор перенёс как 602b8d2 поверх R06. JSON-импорт
