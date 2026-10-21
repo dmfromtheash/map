@@ -2451,12 +2451,15 @@
         <Style Selector="Border.context-panel Slider:pointerover /template/ RepeatButton#PART_IncreaseButton, Border.panel Slider:pointerover /template/ RepeatButton#PART_IncreaseButton">
             <Setter Property="Background" Value="#A9833F" />
         </Style>
+        <!-- six sections share ~260 px: the words touched each other (owner 2026-10-21), so the
+             tabs show the glyph only; the name is in the tooltip and in the section caption below -->
         <Style Selector="Border.panel :is(Button).section-tab TextBlock">
-            <Setter Property="FontSize" Value="9.5" />
+            <Setter Property="IsVisible" Value="False" />
         </Style>
         <Style Selector="Border.panel :is(Button).section-tab">
-            <Setter Property="Padding" Value="0,4" />
+            <Setter Property="Padding" Value="0,6" />
             <Setter Property="MinWidth" Value="0" />
+            <Setter Property="MinHeight" Value="32" />
         </Style>
 
         <!-- layer panel rows: 32 px, hover tint, the chosen row a brass tint with a brass edge -->
@@ -2638,16 +2641,17 @@
             <Setter Property="FontWeight" Value="SemiBold" />
         </Style>
 
-        <!-- tools: round medallions; the chosen one ringed and lit -->
+        <!-- tools: round medallions with air between them (owner 2026-10-21: the 42 px circles
+             touched each other and looked too big); the chosen one ringed and lit -->
         <Style Selector="Border.rail :is(Button).rail-tool">
-            <Setter Property="Width" Value="42" />
-            <Setter Property="Height" Value="42" />
-            <Setter Property="MinHeight" Value="42" />
-            <Setter Property="Margin" Value="3" />
-            <Setter Property="CornerRadius" Value="21" />
+            <Setter Property="Width" Value="34" />
+            <Setter Property="Height" Value="34" />
+            <Setter Property="MinHeight" Value="34" />
+            <Setter Property="Margin" Value="5" />
+            <Setter Property="CornerRadius" Value="17" />
         </Style>
         <Style Selector="Border.rail :is(Button).rail-tool /template/ ContentPresenter#PART_ContentPresenter">
-            <Setter Property="CornerRadius" Value="21" />
+            <Setter Property="CornerRadius" Value="17" />
             <Setter Property="BoxShadow" Value="inset 0 0 0 1 #40C9A15A" />
         </Style>
         <Style Selector="Border.rail :is(Button).rail-tool:pointerover /template/ ContentPresenter#PART_ContentPresenter">
@@ -2657,7 +2661,7 @@
         <Style Selector="Border.rail :is(Button).rail-tool.active /template/ ContentPresenter#PART_ContentPresenter, Border.rail ToggleButton.rail-tool:checked /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="{DynamicResource MapPrimaryFillBrush}" />
             <Setter Property="Foreground" Value="#F6E2B0" />
-            <Setter Property="BoxShadow" Value="inset 0 0 0 1 #E7C982, 0 0 0 2 #17110D, 0 0 0 3 #80E7C982, 0 0 16 0 #59E7C982" />
+            <Setter Property="BoxShadow" Value="inset 0 0 0 1.5 #E7C982, 0 0 10 0 #59E7C982" />
         </Style>
         <Style Selector="Border.rail :is(Button).rail-tool.active:pointerover /template/ ContentPresenter#PART_ContentPresenter, Border.rail ToggleButton.rail-tool:checked:pointerover /template/ ContentPresenter#PART_ContentPresenter">
             <Setter Property="Background" Value="{DynamicResource MapPrimaryHoverFillBrush}" />
@@ -2665,14 +2669,20 @@
         <Style Selector="Border.rail :is(Button).rail-tool.active, Border.rail ToggleButton.rail-tool:checked">
             <Setter Property="Foreground" Value="#F6E2B0" />
         </Style>
+        <!-- the chosen tool is the ringed circle only: no square tile behind it -->
+        <Style Selector="Border.rail ToggleButton.rail-tool:checked, Border.rail :is(Button).rail-tool.active">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+        </Style>
         <Style Selector=":is(UserControl).compact-window Border.rail :is(Button).rail-tool">
-            <Setter Property="Width" Value="36" />
-            <Setter Property="Height" Value="36" />
-            <Setter Property="MinHeight" Value="36" />
-            <Setter Property="CornerRadius" Value="18" />
+            <Setter Property="Width" Value="30" />
+            <Setter Property="Height" Value="30" />
+            <Setter Property="MinHeight" Value="30" />
+            <Setter Property="Margin" Value="4" />
+            <Setter Property="CornerRadius" Value="15" />
         </Style>
         <Style Selector=":is(UserControl).compact-window Border.rail :is(Button).rail-tool /template/ ContentPresenter#PART_ContentPresenter">
-            <Setter Property="CornerRadius" Value="18" />
+            <Setter Property="CornerRadius" Value="15" />
         </Style>
 
         <!-- sliders: a hairline track, brass where it is filled, a small lit bead -->
@@ -2698,31 +2708,74 @@
             <Setter Property="Background" Value="#857560" />
         </Style>
 
-        <!-- a tick box is a diamond that lights when ticked -->
+        <!-- a tick box is a diamond that lights when ticked. It is drawn inside the square box, not
+             by turning the box: Avalonia clipped a turned border to its unturned square, and the
+             diamonds before «Звук» and «Анимация» came out with a cut corner (owner 2026-10-21). -->
         <Style Selector="CheckBox /template/ Border#NormalRectangle">
-            <Setter Property="Width" Value="14" />
-            <Setter Property="Height" Value="14" />
+            <Setter Property="Width" Value="16" />
+            <Setter Property="Height" Value="16" />
             <Setter Property="CornerRadius" Value="0" />
-            <Setter Property="RenderTransform" Value="rotate(45deg)" />
-            <Setter Property="BorderBrush" Value="#C9A15A" />
-            <Setter Property="BorderThickness" Value="1.5" />
-            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="RenderTransform" Value="none" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BoxShadow" Value="0 0 0 0 Transparent" />
+            <Setter Property="Background">
+                <Setter.Value>
+                <DrawingBrush Stretch="None" AlignmentX="Center" AlignmentY="Center">
+                    <DrawingBrush.Drawing><GeometryDrawing Brush="Transparent" Geometry="M8,1.5 L14.5,8 L8,14.5 L1.5,8 Z">
+                        <GeometryDrawing.Pen><Pen Brush="#C9A15A" Thickness="1.5" LineJoin="Round" /></GeometryDrawing.Pen>
+                    </GeometryDrawing></DrawingBrush.Drawing>
+                </DrawingBrush>
+            </Setter.Value>
+            </Setter>
         </Style>
         <Style Selector="CheckBox:pointerover /template/ Border#NormalRectangle">
-            <Setter Property="BorderBrush" Value="#F0D79A" />
-            <Setter Property="BoxShadow" Value="0 0 8 0 #59E7C982" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Background">
+                <Setter.Value>
+                <DrawingBrush Stretch="None" AlignmentX="Center" AlignmentY="Center">
+                    <DrawingBrush.Drawing><GeometryDrawing Brush="#22E7C982" Geometry="M8,1.5 L14.5,8 L8,14.5 L1.5,8 Z">
+                        <GeometryDrawing.Pen><Pen Brush="#F0D79A" Thickness="1.5" LineJoin="Round" /></GeometryDrawing.Pen>
+                    </GeometryDrawing></DrawingBrush.Drawing>
+                </DrawingBrush>
+            </Setter.Value>
+            </Setter>
         </Style>
         <Style Selector="CheckBox:checked /template/ Border#NormalRectangle">
-            <Setter Property="Background" Value="#F0D79A" />
-            <Setter Property="BorderBrush" Value="#F0D79A" />
-            <Setter Property="BoxShadow" Value="0 0 10 0 #CCE7C982" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Background">
+                <Setter.Value>
+                <DrawingBrush Stretch="None" AlignmentX="Center" AlignmentY="Center">
+                    <DrawingBrush.Drawing><GeometryDrawing Brush="#F0D79A" Geometry="M8,1.5 L14.5,8 L8,14.5 L1.5,8 Z">
+                        <GeometryDrawing.Pen><Pen Brush="#F6E2B0" Thickness="1" LineJoin="Round" /></GeometryDrawing.Pen>
+                    </GeometryDrawing></DrawingBrush.Drawing>
+                </DrawingBrush>
+            </Setter.Value>
+            </Setter>
         </Style>
         <Style Selector="CheckBox:disabled /template/ Border#NormalRectangle">
-            <Setter Property="BorderBrush" Value="#6E5532" />
-            <Setter Property="BoxShadow" Value="0 0 0 0 Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="Background">
+                <Setter.Value>
+                <DrawingBrush Stretch="None" AlignmentX="Center" AlignmentY="Center">
+                    <DrawingBrush.Drawing><GeometryDrawing Brush="Transparent" Geometry="M8,1.5 L14.5,8 L8,14.5 L1.5,8 Z">
+                        <GeometryDrawing.Pen><Pen Brush="#6E5532" Thickness="1.5" LineJoin="Round" /></GeometryDrawing.Pen>
+                    </GeometryDrawing></DrawingBrush.Drawing>
+                </DrawingBrush>
+            </Setter.Value>
+            </Setter>
         </Style>
-        <Style Selector="CheckBox /template/ Path#CheckGlyph">
+        <Style Selector="CheckBox:checked:pointerover /template/ Border#NormalRectangle, CheckBox:focus-visible /template/ Border#NormalRectangle, CheckBox:pressed /template/ Border#NormalRectangle">
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+        </Style>
+        <!-- the lit diamond is the tick: no glyph inside it, in any state -->
+        <Style Selector="CheckBox /template/ Path#CheckGlyph, CheckBox:checked /template/ Path#CheckGlyph, CheckBox:indeterminate /template/ Path#CheckGlyph, CheckBox:pointerover /template/ Path#CheckGlyph">
             <Setter Property="Opacity" Value="0" />
+            <Setter Property="IsVisible" Value="False" />
         </Style>
 
         <!-- headings in the display serif -->
@@ -2965,6 +3018,30 @@
             <Setter Property="FontSize" Value="11.5" />
             <Setter Property="Foreground" Value="#EADBB8" />
             <Setter Property="HorizontalAlignment" Value="Right" />
+        </Style>
+        <!-- Calm hover for the tool rail (owner 2026-10-21: "it flickers like an epileptic fit; do it
+             as with the hexes"). Four older hover styles changed the fill, the border and the glow
+             at once under a fill transition; here the only change is a soft fill fading in over
+             150 ms, the ring and shadow stay as they are at rest. Last in the file, so it wins. -->
+        <Style Selector="Border.rail :is(Button).rail-tool /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="Background" Duration="0:0:0.15" Easing="CubicEaseOut" />
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Border.rail :is(Button).rail-tool:pointerover">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+        </Style>
+        <Style Selector="Border.rail :is(Button).rail-tool:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#26E7C982" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BoxShadow" Value="inset 0 0 0 1 #40C9A15A" />
+        </Style>
+        <Style Selector="Border.rail ToggleButton.rail-tool:checked:pointerover /template/ ContentPresenter#PART_ContentPresenter, Border.rail :is(Button).rail-tool.active:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource MapPrimaryFillBrush}" />
+            <Setter Property="BoxShadow" Value="inset 0 0 0 1.5 #E7C982, 0 0 10 0 #59E7C982" />
         </Style>
     </Application.Styles>
 </Application>

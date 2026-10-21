@@ -144,7 +144,7 @@ public sealed class DialogPrompts(Window owner) : IUserPrompts
             owner,
             "Восстановить версию?",
             $"Текущее состояние карты будет заменено состоянием «{checkpointName}». "
-                + "Это действие можно отменить одной командой Undo.",
+                + "Это действие можно отменить одной командой «Отменить».",
             "Восстановить",
             "RestoreCheckpointConfirmButton"));
 

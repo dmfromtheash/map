@@ -15,8 +15,11 @@ public sealed class MigrationPromptWindow : Window
     {
         Title = "Нужно обновить копию проекта";
         Name = "MigrationPromptWindow";
-        Width = 520;
-        SizeToContent = SizeToContent.Height;
+        // The window grows to its buttons instead of pushing the last one past its edge (owner
+        // 2026-10-21: «Отмена» stuck out of the unsaved-changes window); text wraps from 680 px.
+        MinWidth = 520;
+        MaxWidth = 680;
+        SizeToContent = SizeToContent.WidthAndHeight;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         CanResize = false;
 
@@ -77,8 +80,11 @@ public sealed class ClosePromptWindow : Window
     private ClosePromptWindow(string documentTitle)
     {
         Title = "Несохранённые изменения";
-        Width = 460;
-        SizeToContent = SizeToContent.Height;
+        // The window grows to its buttons instead of pushing the last one past its edge (owner
+        // 2026-10-21: «Отмена» stuck out of the unsaved-changes window); text wraps from 620 px.
+        MinWidth = 460;
+        MaxWidth = 620;
+        SizeToContent = SizeToContent.WidthAndHeight;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         CanResize = false;
 
@@ -135,8 +141,11 @@ public sealed class ErrorWindow : Window
     private ErrorWindow(string title, string message)
     {
         Title = title;
-        Width = 520;
-        SizeToContent = SizeToContent.Height;
+        // The window grows to its buttons instead of pushing the last one past its edge (owner
+        // 2026-10-21: «Отмена» stuck out of the unsaved-changes window); text wraps from 680 px.
+        MinWidth = 520;
+        MaxWidth = 680;
+        SizeToContent = SizeToContent.WidthAndHeight;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         CanResize = false;
 
@@ -184,8 +193,11 @@ public sealed class ConfirmationWindow : Window
         bool destructive)
     {
         Title = title;
-        Width = 500;
-        SizeToContent = SizeToContent.Height;
+        // The window grows to its buttons instead of pushing the last one past its edge (owner
+        // 2026-10-21: «Отмена» stuck out of the unsaved-changes window); text wraps from 660 px.
+        MinWidth = 500;
+        MaxWidth = 660;
+        SizeToContent = SizeToContent.WidthAndHeight;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         CanResize = false;
 

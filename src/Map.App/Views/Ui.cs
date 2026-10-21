@@ -799,7 +799,7 @@ public static class Ui
             Children =
             {
                 // Inkarnate rail: a 24 px solid glyph and no caption; the name and key are in the tooltip.
-                new Border { HorizontalAlignment = HorizontalAlignment.Center, Child = MapIcons.Solid24(icon, 21) },
+                new Border { HorizontalAlignment = HorizontalAlignment.Center, Child = MapIcons.Solid24(icon, 17) },
                 new TextBlock { Text = caption, IsVisible = false }.Classed("rail-caption"),
             },
         };
@@ -1169,7 +1169,10 @@ public static class Ui
             TextWrapping = TextWrapping.Wrap,
         }.Classed("muted");
 
-        var icon = MapIcons.ForProperty(label);
+        // A long caption ("Непрозрачность слоя") broke inside the word next to its glyph: such a
+        // caption gives the glyph's room to the words and wraps only between them.
+        var icon = label.Length > 16 ? null : MapIcons.ForProperty(label);
+        if (label.Length > 16) text.FontSize = 12;
         if (icon is null)
         {
             if (width is { } plainWidth) text.Width = plainWidth;

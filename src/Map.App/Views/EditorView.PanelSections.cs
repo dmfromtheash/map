@@ -194,7 +194,8 @@ public sealed partial class EditorView
             button.IsChecked = active;
             Ui.SetClass(button, "active", active);
         }
-        _sectionCaption.Text = SectionHint(section);
+        // The tabs show only glyphs, so the caption names the open section first.
+        _sectionCaption.Text = ObjectTreeRows.SectionTitle(section) + " · " + SectionHint(section);
         var body = section == PanelSection.Layers ? _layersBody : _objectsBody;
         if (!ReferenceEquals(_sectionHost.Content, body)) _sectionHost.Content = body;
         _otherFilterStrip.IsVisible = section == PanelSection.Other;

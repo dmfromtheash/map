@@ -55,6 +55,10 @@ else if (options.Profile == "native-render-audit")
     foreach (var note in audit.Notes) Console.WriteLine($"  {note.Key} = {note.Value}");
     if (audit.Failure is not null) Console.WriteLine(audit.Failure);
 }
+else if (options.Profile == "native-giant-export")
+{
+    var giant = NativeGiantExport.Run(options); report = giant; gatePassed = giant.GatePassed;
+}
 else if (options.Profile == "native-text-on-path")
 {
     var smoke = NativeTextOnPathSmoke.Run(options); report = smoke; gatePassed = smoke.GatePassed;

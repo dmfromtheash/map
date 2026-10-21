@@ -222,6 +222,7 @@ public sealed class ImageExportEngine : IImageExporter
             {
                 var row = new byte[checked(plan.OutputWidth * 4)];
                 var tileIndex = 0;
+                var scratchBase = ScratchBase(tempPath, (long)plan.OutputWidth * plan.RasterTileHeight * 4);
                 for (var y = 0; y < plan.OutputHeight; y += plan.RasterTileHeight)
                 {
                     var height = Math.Min(plan.RasterTileHeight, plan.OutputHeight - y);
@@ -244,7 +245,7 @@ public sealed class ImageExportEngine : IImageExporter
                                 throw new InvalidDataException("Не удалось прочитать пиксели PNG.");
                             // One tile-column file per band. Buffered sequential reads assemble rows;
                             // no full-width/full-height bitmap or memory-mapped full band is allocated.
-                            var scratch = new FileStream(tempPath + $".{band.Count:D4}.rgba",
+                            var scratch = new FileStream(scratchBase + $".{band.Count:D4}.rgba",
                                 FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, 65536,
                                 FileOptions.DeleteOnClose | FileOptions.SequentialScan);
                             band.Add((scratch, checked(tile.Width * 4)));
@@ -292,6 +293,26 @@ public sealed class ImageExportEngine : IImageExporter
         }
         Report(progress, ExportPhase.Completed, 1, "PNG в выбранном разрешении сохранён.");
         return new ExportResult(fullPath, ExportOutputMode.SingleImage, 1);
+    }
+
+    /// <summary>
+    /// Where the band's tile columns wait to be assembled into rows. The rows are read back from
+    /// all columns in turn, so on the destination volume - often an external spinning disk - each
+    /// band cost its size twice in seek-bound I/O (a 131072² map: ~137 GB). A local temporary
+    /// folder with room for a few bands is used instead; the destination only when there is none.
+    /// </summary>
+    private static string ScratchBase(string tempPath, long bandBytes)
+    {
+        try
+        {
+            var local = Path.GetTempPath();
+            var free = new DriveInfo(Path.GetPathRoot(Path.GetFullPath(local))!).AvailableFreeSpace;
+            if (free > bandBytes * 4 + 2L * 1024 * 1024 * 1024)
+                return Path.Combine(local, "map-export-" + Guid.NewGuid().ToString("N"));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { }
+
+        return tempPath;
     }
 
     private async Task<ExportResult> ExportTilesAsync(

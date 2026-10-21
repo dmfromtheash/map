@@ -239,7 +239,7 @@ public sealed partial class EditorViewModel
         Session.Execute(new ResizeCanvasCommand(before, after));
         AfterEdit();
         StatusDetail = $"Размер карты изменён до {plan.Width} × {plan.Height} px одной командой. "
-            + "Данные за границей сохранены; действие можно отменить через Undo.";
+            + "Данные за границей сохранены; действие можно отменить кнопкой «Отменить».";
         return true;
     }
 

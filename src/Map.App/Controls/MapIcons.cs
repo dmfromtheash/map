@@ -255,9 +255,11 @@ public static class MapIcons
     // at 21 px looked faint on the dark rail. These are Map's own drawings on the same 24-unit
     // grid: a filled body (F0 = even-odd, so inner shapes cut windows) plus an optional heavy
     // stroke for the parts that are lines by nature (rivers, a drawn line).
-    public sealed record SolidGlyph(string Fill, string? Stroke = null, double StrokeWidth = 2.6);
+    /// <summary>A solid glyph; <paramref name="Optical"/> is how far its painted mass, rather than its box, is centred (0..1).</summary>
+    public sealed record SolidGlyph(string Fill, string? Stroke = null, double StrokeWidth = 2.6, double Optical = 0.5);
 
-    public static readonly SolidGlyph SolidSelect = new("M5 2.5 L5 19.6 L9.7 15.3 L12.7 21.7 L15.8 20.2 L12.8 13.9 L19.2 13.6 Z");
+    // The pointer's head is its weight: centred by mass, not by its box, or it reads as pushed aside.
+    public static readonly SolidGlyph SolidSelect = new("M5 2.5 L5 19.6 L9.7 15.3 L12.7 21.7 L15.8 20.2 L12.8 13.9 L19.2 13.6 Z", Optical: 1);
     // Tavern set (2026-10-17): assets are a keep with battlements, shapes a heraldic shield, text a
     // quill, notes a scroll and the mask a masquerade mask - the genre's own objects, same grid.
     public static readonly SolidGlyph SolidAssets = new(
@@ -362,9 +364,18 @@ public static class MapIcons
             var inflated = strokeGeometry.Bounds.Inflate(glyph.StrokeWidth / 2);
             bounds = bounds.Width > 0.1 ? bounds.Union(inflated) : inflated;
         }
-        var side = System.Math.Max(bounds.Width, bounds.Height);
+        // Optical centre (owner 2026-10-21: "centre the glyphs inside the icons"): a glyph heavy
+        // on one side (a quill, a brush, a road in perspective) looks off-centre when only its
+        // bounding box is centred. Half way between the box centre and the centre of the painted
+        // area sits where the eye expects it.
+        var (massX, massY) = MassCentre(fill, strokeGeometry, glyph.StrokeWidth, bounds);
+        var centreX = bounds.Center.X + (massX - bounds.Center.X) * glyph.Optical;
+        var centreY = bounds.Center.Y + (massY - bounds.Center.Y) * glyph.Optical;
+        var halfWidth = System.Math.Max(centreX - bounds.Left, bounds.Right - centreX);
+        var halfHeight = System.Math.Max(centreY - bounds.Top, bounds.Bottom - centreY);
+        var side = 2 * System.Math.Max(halfWidth, halfHeight);
         var canvas = new Canvas { Width = side, Height = side };
-        var offset = new Point((side - bounds.Width) / 2 - bounds.X, (side - bounds.Height) / 2 - bounds.Y);
+        var offset = new Point(side / 2 - centreX, side / 2 - centreY);
         var body = new Path { Data = fill, IsHitTestVisible = false };
         Canvas.SetLeft(body, offset.X); Canvas.SetTop(body, offset.Y);
         Paint(body, Path.FillProperty, brush);
@@ -384,6 +395,22 @@ public static class MapIcons
             canvas.Children.Add(line);
         }
         return new Viewbox { Width = size, Height = size, Stretch = Stretch.Uniform, IsHitTestVisible = false, Child = canvas };
+    }
+
+    private static (double X, double Y) MassCentre(Geometry fill, Geometry? stroke, double strokeWidth, Rect bounds)
+    {
+        const int Steps = 40;
+        var pen = stroke is null ? null : new Pen(Brushes.Black, strokeWidth);
+        double sumX = 0, sumY = 0; var count = 0;
+        for (var j = 0; j < Steps; j++)
+        for (var i = 0; i < Steps; i++)
+        {
+            var point = new Point(bounds.X + (i + 0.5) * bounds.Width / Steps, bounds.Y + (j + 0.5) * bounds.Height / Steps);
+            if (!fill.FillContains(point) && !(stroke is not null && stroke.StrokeContains(pen!, point))) continue;
+            sumX += point.X; sumY += point.Y; count++;
+        }
+
+        return count == 0 ? (bounds.Center.X, bounds.Center.Y) : (sumX / count, sumY / count);
     }
 
     /// <summary>The line-set rail glyph of a tool (UI redesign).</summary>

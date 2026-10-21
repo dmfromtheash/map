@@ -15,7 +15,18 @@ public sealed class ExportStampImageSource : IStampImageSource, IDisposable
     private readonly string? _projectPath;
     private readonly string? _catalogRoot;
     private readonly IReadOnlyDictionary<string, AssetRecord> _catalogRecords;
-    private readonly AssetImageCache _cache = new(64);
+    // The export draws every copy of an asset across the whole map, tile after tile: when the
+    // decoded originals do not fit, each tile decodes them again (a 131072² map of the owner's
+    // 4096 px mountains spent more than half its time in SKCodec.GetPixels with the editor's
+    // 256 MiB budget). The export owns this cache for one operation, so it may take a quarter of
+    // the free memory, between the editor's budget and 3 GiB.
+    private readonly AssetImageCache _cache = new(256, ExportDecodedBudget());
+
+    internal static long ExportDecodedBudget()
+    {
+        var available = new Map.Export.ExportEngineSettings().AvailableMemoryBytes();
+        return Math.Clamp(available / 4, AssetImagePolicy.DefaultCacheDecodedBytes, 3L * 1024 * 1024 * 1024);
+    }
     private readonly HashSet<string> _missingSteps = new(StringComparer.OrdinalIgnoreCase);
 
     public ExportStampImageSource(MapDocument snapshot, string? projectPath, AssetCatalog? catalog)

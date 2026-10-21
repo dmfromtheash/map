@@ -255,7 +255,7 @@ public class EditorViewModelTests
 
         Assert.Equal(SaveState.SaveFailed, editor.SaveState);
         Assert.True(editor.Session.IsDirty);
-        Assert.Contains("recovery сохранён здесь", editor.StatusDetail);
+        Assert.Contains("копия для восстановления сохранена здесь", editor.StatusDetail);
         Assert.Contains(".tmp-x", editor.StatusDetail);
 
         // A later retry can still succeed.

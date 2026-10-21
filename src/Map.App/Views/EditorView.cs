@@ -1990,8 +1990,8 @@ public sealed partial class EditorView : UserControl
         Spacing = 10,
         Children =
         {
-            Explanation("Щёлкните для стандартного блока или протяните его размер. До отпускания виден ghost; оформление наследуется только переключателем ниже."),
-            AppearanceToggle("TextInheritToggle", "Синхронизировать с выделенным Text",
+            Explanation("Щёлкните для стандартного блока или протяните его размер. До отпускания виден контур; оформление наследуется только переключателем ниже."),
+            AppearanceToggle("TextInheritToggle", "Синхронизировать с выделенным текстом",
                 () => _editor.TextInheritFromSelection,
                 value => _editor.TextInheritFromSelection = value),
         },
@@ -3731,11 +3731,11 @@ public sealed partial class EditorView : UserControl
                 new TextBlock { Text = "Проходы", TextWrapping = TextWrapping.Wrap }.Classed("role-panel"),
                 BlocksLightToggle(shape),
                 portalChoice,
-                Ui.PropertyRow("Position, %", position), Ui.PropertyRow("Width", width), addPortal,
-                AppearanceNumberBox((shape ? "Shape" : "Line") + "SelectedPortalPosition", "Position", "%",
+                Ui.PropertyRow("Положение, %", position), Ui.PropertyRow("Ширина", width), addPortal,
+                AppearanceNumberBox((shape ? "Shape" : "Line") + "SelectedPortalPosition", "Положение", "%",
                     () => _editor.SelectedVectorPortal?.Position * 100,
                     value => _editor.SetSelectedPortal(value / 100, _editor.SelectedVectorPortal?.Width ?? 0)),
-                AppearanceNumberBox((shape ? "Shape" : "Line") + "SelectedPortalWidth", "Width", "px",
+                AppearanceNumberBox((shape ? "Shape" : "Line") + "SelectedPortalWidth", "Ширина", "px",
                     () => _editor.SelectedVectorPortal?.Width,
                     value => _editor.SetSelectedPortal(_editor.SelectedVectorPortal?.Position ?? 0, value)),
                 new Ui.ChoiceGrid

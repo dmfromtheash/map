@@ -17,6 +17,9 @@ using FlaUI.UIA3;
 // With --obsidian-export true and --map, exports both Obsidian recipients through the native destination dialog.
 // Exit code 0: every step found its element; 2: a step could not find its element (screenshots
 // and the UIA tree are still written); 1: the program did not start or crashed.
+// Per-monitor DPI awareness: without it Windows scales this process's view of a 125 % window,
+// and PrintWindow pictures came out cropped (the "black fields" of the export window were this).
+SetProcessDpiAwarenessContext(new IntPtr(-4));
 var root = FindRepoRoot();
 var exe = Arg("--exe") ?? Path.Combine(root, "src", "Map.App", "bin", "Release", "net10.0", "win-x64", "Map.App.exe");
 var outDir = Arg("--out") ?? Path.Combine(root, "artifacts", "live-check-" + DateTime.Now.ToString("yyyy-MM-dd-HHmm", CultureInfo.InvariantCulture));
@@ -75,6 +78,8 @@ try
     Log($"started pid {app.ProcessId}: {exe}");
 
     var main = app.GetMainWindow(automation, TimeSpan.FromSeconds(60));
+    // The owner works on the primary display: test windows go to another display when there is one.
+    MoveToSecondaryDisplay(main.Properties.NativeWindowHandle.ValueOrDefault, Log);
     Log($"main window '{main.Title}' after {clock.ElapsedMilliseconds} ms");
 
     if (mapArgument is not null)
@@ -214,6 +219,13 @@ try
     Thread.Sleep(700);
     Dump(main, Path.Combine(outDir, "ui-tree-library.txt"));
     Shot(main, Path.Combine(outDir, "01-library.png"));
+
+    if (Arg("--ui-tour") is not null)
+    {
+        missing += UiTourCheck.Run(app, automation, main, outDir, Log, Shot, Dump);
+        try { main.Close(); } catch (FlaUI.Core.Exceptions.ElementNotEnabledException) { }
+        return missing == 0 ? 0 : 2;
+    }
 
     if (libraryArgument is not null)
     {
@@ -403,6 +415,27 @@ static extern bool IsWindowVisible(IntPtr window);
 
 [System.Runtime.InteropServices.DllImport("user32.dll")]
 static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+
+static void MoveToSecondaryDisplay(IntPtr window, Action<string> log)
+{
+    if (Environment.GetEnvironmentVariable("MAP_LIVE_PRIMARY") == "1") return;
+    var screen = System.Windows.Forms.Screen.AllScreens.FirstOrDefault(s => !s.Primary);
+    if (screen is null || window == IntPtr.Zero) return;
+    ShowWindow(window, 9); // restore, so the move is not undone by a maximised state
+    var area = screen.WorkingArea;
+    SetWindowPos(window, IntPtr.Zero, area.X, area.Y, area.Width, area.Height, 0x0040);
+    ShowWindow(window, 3); // maximise on that display
+    Thread.Sleep(800);
+    log($"window moved to {screen.DeviceName} {area}");
+}
+
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+static extern bool SetWindowPos(IntPtr window, IntPtr after, int x, int y, int width, int height, uint flags);
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+static extern bool ShowWindow(IntPtr window, int command);
+
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+static extern bool SetProcessDpiAwarenessContext(IntPtr value);
 
 delegate bool EnumWindowsProc(IntPtr window, IntPtr parameter);
 

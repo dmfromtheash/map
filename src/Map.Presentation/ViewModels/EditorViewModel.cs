@@ -2161,9 +2161,9 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public string StampForegroundStatus => Session.Document.StampForeground switch
     {
-        null => "Foreground-поверхность не создана",
-        { IsEmpty: true } => "Foreground-поверхность пуста",
-        _ => "Foreground-поверхность готова",
+        null => "Поверхность переднего плана не создана",
+        { IsEmpty: true } => "Поверхность переднего плана пуста",
+        _ => "Поверхность переднего плана готова",
     };
 
     /// <summary>True once the user has chosen an asset, so placement has something to place.</summary>
@@ -2600,7 +2600,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             null, StampForegroundSurface.CreateEmpty(), "Create stamp foreground"));
         AfterEdit();
         RaiseStampToolState();
-        StatusDetail = "Foreground-поверхность создана. Выберите её редактирование и рисуйте кистью.";
+        StatusDetail = "Поверхность переднего плана создана. Выберите её редактирование и рисуйте кистью.";
     }
 
     public void EditStampForegroundSurface()
@@ -4460,7 +4460,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     {
         if (_assetResolver is null || Session.SelectedObject is not { Stamp: not null } selected)
         {
-            StatusDetail = "Выберите stamp и новый ассет.";
+            StatusDetail = "Выберите ассет на карте и новый ассет из каталога.";
             return;
         }
 
@@ -4496,7 +4496,7 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     public void KeepSelectedStampPlaceholder()
     {
-        StatusDetail = "Placeholder оставлен: ссылка и исходный SHA-256 не изменены.";
+        StatusDetail = "Заглушка оставлена: ссылка и исходный SHA-256 не изменены.";
     }
 
     public void UpdateSelectedStamp(
@@ -4505,7 +4505,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     {
         if (Session.SelectedObject is not { Stamp: { } style } before || before.Locked)
         {
-            StatusDetail = "Выберите разблокированный stamp.";
+            StatusDetail = "Выберите незаблокированный ассет.";
             return;
         }
 
@@ -5505,7 +5505,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     {
         if (ResolveShapeBooleanSelection() is not { } operands)
         {
-            StatusDetail = "Для boolean явно выделите две совместимые фигуры на одном доступном Object layer.";
+            StatusDetail = "Для объединения или вычитания выделите две совместимые фигуры на одном доступном слое объектов.";
             return;
         }
 
@@ -6013,7 +6013,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             var package = CompositionPackageStore.Import(path);
             if (!MapProjectStore.CanAdmitAdditionalAssets(Session.Document, package.Assets, out var reason))
             {
-                StatusDetail = "Package не помещается в бюджет проекта: " + reason;
+                StatusDetail = "Пакет не помещается в бюджет проекта: " + reason;
                 return false;
             }
             var centre = ViewCentre();
@@ -6759,7 +6759,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         {
             if (ActiveTool != EditorTool.Brush || Session.Document.StampForeground is not { } foreground)
             {
-                StatusDetail = "Foreground-поверхность недоступна для рисования.";
+                StatusDetail = "Поверхность переднего плана недоступна для рисования.";
                 return false;
             }
             BrushSettings = BrushSettings with
@@ -10856,7 +10856,7 @@ public sealed partial class EditorViewModel : ViewModelBase
                 SaveState = SaveState.SaveFailed;
                 StatusDetail = ex.TempPath is null
                     ? "Не удалось сохранить файл. Документ остаётся открытым, данные не потеряны."
-                    : $"Не удалось заменить основной файл. Документ остаётся открыт, recovery сохранён здесь: {ex.TempPath}";
+                    : $"Не удалось заменить основной файл. Документ остаётся открыт, копия для восстановления сохранена здесь: {ex.TempPath}";
                 _log.Error("SAVE_FAILED", ex);
                 return false;
             }
@@ -10916,7 +10916,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            StatusDetail = "Не удалось удалить локальную recovery-копию. Документ остаётся открытым.";
+            StatusDetail = "Не удалось удалить локальную копию для восстановления. Документ остаётся открытым.";
             _log.Error("RECOVERY_DISCARD_FAILED", ex);
             return false;
         }

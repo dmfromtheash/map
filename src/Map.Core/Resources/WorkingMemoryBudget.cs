@@ -18,6 +18,9 @@ public sealed class WorkingMemoryBudget
     // A small edit/save plus its nested validation must not require 2 GiB of idle RAM.
     // The allowance is cumulative, so many small reservations cannot bypass the large-work gate.
     public const long SmallOperationLimitBytes = 256 * MiB;
+
+    /// <summary>Measured heavy operations up to this size skip the cross-window slot (see <see cref="EnterHeavyAsync"/>).</summary>
+    public const long SmallMeasuredBypassBytes = 64 * MiB;
     public const long SmallSystemReserveBytes = 512 * MiB;
     // What separates a cautious reserve from a mean one is not the size of the work but whether
     // its size is known. An operation that measured itself - a river of four nodes, a save of a
@@ -153,6 +156,18 @@ public sealed class WorkingMemoryBudget
     public Task<IDisposable> EnterHeavyAsync(CancellationToken token = default, long? reserveBytes = null)
     {
         var reserve = Math.Clamp(reserveBytes ?? HeavyReserveBytes, MiB, HeavyReserveBytes);
+        // A small measured operation - the save, autosave or version of an ordinary map - does not
+        // queue for the cross-window slot: an hours-long whole-map export in another window held it
+        // and froze every save and the close of the owner's map behind it (2026-10-21). The memory
+        // reservation still admits it only when the machine has room.
+        if (reserveBytes is { } measured && measured <= SmallMeasuredBypassBytes)
+        {
+            token.ThrowIfCancellationRequested();
+            return TryReserve(reserve, out var small, out var smallReason, measured: true)
+                ? Task.FromResult(small!)
+                : Task.FromException<IDisposable>(new InvalidOperationException(smallReason));
+        }
+
         // The mutex owner stays on one worker until disposal. OS abandonment recovery releases
         // the slot after a crashed process; a named semaphore would strand other open windows.
         // The worker is a thread of its own: it waits for the whole lease, and holding a pool
