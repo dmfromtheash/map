@@ -13,8 +13,9 @@ namespace Map.Rendering;
 /// When set, what is drawn instead of <paramref name="Hexes"/>: the footprints round the pointer,
 /// each at its own strength, so the outline flows from hex to hex instead of jumping.
 /// </param>
+/// <param name="Ghost">The tile a click would put down, drawn faint under the outline.</param>
 public sealed record HexCursorPreview(LayerId LayerId, IReadOnlyList<HexCoord> Hexes, bool Erase = false,
-    IReadOnlyList<HexCursorGlow>? Glows = null);
+    IReadOnlyList<HexCursorGlow>? Glows = null, HexGhostTile? Ghost = null);
 
 /// <summary>One footprint of the hover outline and how strongly it shows (0..1).</summary>
 public sealed record HexCursorGlow(IReadOnlyList<HexCoord> Hexes, double Strength);
@@ -641,7 +642,7 @@ public static partial class HexLayerRenderer
         Draw(canvas, layer, view, options.ViewScale, options.HexChunks, options.GpuContext,
             options.HexPlayerView ? null : options.HexCursor, options.IsExport, options.RequestRefinedFrame,
             options.Stats, options.HexGestureLive, options.HexPlayerView,
-            options.HexPlayerView ? null : options.HexOverlay);
+            options.HexPlayerView ? null : options.HexOverlay, options.IsExport ? null : options.HexSettles);
     }
 
     /// <param name="requestFrame">Asks for another frame when some chunk images are still to be drawn.</param>
@@ -650,7 +651,7 @@ public static partial class HexLayerRenderer
     public static void Draw(SKCanvas canvas, HexLayer layer, WorldBounds view, double viewScale,
         HexChunkCache? cache, GRContext? gpu, HexCursorPreview? cursor, bool isExport,
         Action? requestFrame = null, RenderStats? stats = null, bool live = false, bool player = false,
-        HexOverlay? overlay = null)
+        HexOverlay? overlay = null, HexSettles? settles = null)
     {
         var board = layer.Board;
         var hexPixels = board.Layout.HexWidth * viewScale;
@@ -722,6 +723,12 @@ public static partial class HexLayerRenderer
             requestFrame?.Invoke();
         }
 
+        // Hexes the tool just changed ease in over the kept pictures.
+        if (settles is not null && settles.LayerId == layer.Id && settles.Items.Count > 0 && !flat)
+        {
+            DrawSettles(canvas, layer, settles.Items, viewScale);
+        }
+
         // Grid lines on hexes a few pixels wide would cover them: the board would be all grid.
         if (layer.Grid.Visible && (hexPixels >= GridBelowPixels || (isExport && hexPixels >= ExportGridBelowPixels)))
         {
@@ -753,6 +760,11 @@ public static partial class HexLayerRenderer
         {
             if (cursor.Glows is { } glows)
             {
+                if (cursor.Ghost is { } ghost && hexPixels >= 12)
+                {
+                    foreach (var glow in glows) DrawGhostTile(canvas, board, glow, ghost);
+                }
+
                 foreach (var glow in glows) DrawHoverGlow(canvas, board, glow, cursor.Erase, viewScale);
             }
             else if (cursor.Hexes.Count > 0)

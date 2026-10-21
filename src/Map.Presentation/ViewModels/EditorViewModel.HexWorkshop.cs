@@ -879,6 +879,19 @@ public sealed partial class EditorViewModel
         }
 
         var after = paste.PasteInto(source, at);
+        // The pasted hexes come down as a wave from where the paste was put; a moved selection lifts off.
+        var changed = new Dictionary<HexCoord, HexCell?>();
+        foreach (var hex in paste.Cells.Keys)
+        {
+            if (layer.Board.Contains(hex + at)) changed[hex + at] = after.Board[hex + at];
+        }
+
+        if (_hexPasteMoves)
+        {
+            foreach (var hex in _hexSelection) changed.TryAdd(hex, after.Board[hex]);
+        }
+
+        QueueHexSettles(layer, changed, at, HexLandWaveMs);
         ExecuteHexLayerEdit(_hexPasteMoves ? "Перенести гексы" : "Вставить гексы", layer, after,
             EditCost.BaseBytes + (long)paste.Count * 96);
         _hexSelection.Clear();

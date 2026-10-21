@@ -130,6 +130,26 @@ public sealed partial class RegionalApplication
         await Settle(); await Settle(); await Settle(); await Settle();
         Check("the hover outline fades out by itself after the pointer leaves", _editor.HexCursorShown is null);
 
+        // A placed tile lands and a fill runs as a wave: caught half way, then taken back.
+        PressHex(_view, "HexTile_peaks"); await Settle();
+        ClickHex(12, 8);
+        await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => { }, Avalonia.Threading.DispatcherPriority.Render); await Task.Delay(70);
+        Check("a placed tile is shown landing", _editor.HexSettlesShown is { Items.Count: > 0 });
+        Capture(_view, "workshop-01d-landing");
+        await Settle(); await Settle();
+        _editor.Undo(); await Settle();
+        PressHex(_view, "HexModeFill"); PressHex(_view, "HexTile_desert"); await Settle();
+        _editor.HexRadius = 0;
+        var fillDepth = _editor.Session.UndoDepth;
+        _view.Canvas.ClickForSmoke(Screen(21, 13).X, Screen(21, 13).Y);
+        await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => { }, Avalonia.Threading.DispatcherPriority.Render); await Task.Delay(120);
+        Check("a fill runs as a wave from the pressed hex", _editor.Session.UndoDepth == fillDepth + 1
+            && _editor.HexSettlesShown is { } wave && wave.Items.Any(item => item.T < 0) && wave.Items.Any(item => item.T >= 0));
+        Capture(_view, "workshop-01e-wave");
+        await Settle(); await Settle(); await Settle();
+        _editor.Undo(); await Settle();
+        PressHex(_view, "HexModePlace"); await Settle();
+
         // A region painted through the canvas.
         PressHex(_view, "HexModeRegion"); await Settle();
         PressHex(_view, "HexAddRegionButton"); await Settle();

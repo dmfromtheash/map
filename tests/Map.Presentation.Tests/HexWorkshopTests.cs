@@ -150,6 +150,45 @@ public sealed class HexWorkshopTests
     }
 
     [Fact]
+    public void A_placed_tile_lands_a_fill_runs_as_a_wave_and_the_pipette_answers_with_a_ring()
+    {
+        var editor = HexEditor();
+        editor.HexTileId = HexStarterTiles.Prefix + "sea";
+        var tick = System.Diagnostics.Stopwatch.Frequency / 60;
+        var now = System.Diagnostics.Stopwatch.GetTimestamp();
+        var landed = 0;
+        editor.HexTileLanded += _ => landed++;
+        var (cx, cy) = CenterOf(editor, 8, 7);
+        var centre = Hexes(editor).Board.Layout.FromOffset(new HexOffset(8, 7));
+        editor.BeginHexGesture(cx, cy);
+        editor.EndHexGesture();
+        Assert.True(editor.StepHexHover(now += tick));
+        var land = Assert.Single(editor.HexSettlesShown!.Items);
+        Assert.Equal((centre, HexSettleKind.Land), (land.Hex, land.Kind));
+        Assert.Null(land.From);
+        var frames = 0;
+        while (editor.StepHexHover(now += tick)) Assert.True(++frames < 60);
+        Assert.Equal(1, landed);
+        Assert.Null(editor.HexSettlesShown);
+
+        // A fill: hexes far from the pressed one wait for their turn and still show what was there.
+        editor.HexTileId = HexStarterTiles.Prefix + "grass";
+        editor.HexMode = HexToolMode.Fill;
+        var (ex, ey) = CenterOf(editor, 0, 0);
+        editor.BeginHexGesture(ex, ey);
+        editor.StepHexHover(now += tick);
+        var wave = editor.HexSettlesShown!.Items;
+        Assert.Contains(wave, item => item.T < 0);
+        Assert.Contains(wave, item => item.T >= 0);
+        while (editor.StepHexHover(now += tick)) Assert.True(++frames < 200);
+
+        editor.HexMode = HexToolMode.Pick;
+        editor.BeginHexGesture(cx, cy);
+        editor.StepHexHover(System.Diagnostics.Stopwatch.GetTimestamp() + tick);
+        Assert.Equal(HexSettleKind.Touch, Assert.Single(editor.HexSettlesShown!.Items).Kind);
+    }
+
+    [Fact]
     public void The_hover_outline_flows_across_a_hex_border_and_fades_out()
     {
         var editor = HexEditor();

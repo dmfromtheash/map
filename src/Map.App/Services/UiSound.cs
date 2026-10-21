@@ -32,6 +32,10 @@ public static class UiSound
     private static readonly Lazy<Clip> Open = Make(() => Mix(Page(215, 0.22, 550, 1150, 0.05), Soft(217, 0.07, 1000, 0.9, 0.008), 0.03, 0.5), OpenPeak);
     private static readonly Lazy<Clip> Close = Make(() => Mix(Soft(219, 0.06, 950, 0.9, 0.006), Page(221, 0.16, 1050, 550, 0.02), 0.01, 1), ClosePeak);
     private static readonly Lazy<Clip>[] Ticks = CreateTicks();
+    private static readonly Lazy<Clip>[] Places = CreatePlaces();
+    private const double PlacePeak = 0.03;
+    private const int PlacePitches = 5;
+    private static long _lastPlace;
 
     private static long _lastHover;
     private static long _lastTick;
@@ -70,6 +74,32 @@ public static class UiSound
         _lastTick = now;
         var index = (int)Math.Round(Math.Clamp(double.IsFinite(position) ? position : 0.5, 0, 1) * (TickPitches - 1));
         Play(Ticks[index]);
+    }
+
+    /// <summary>A hex tile touching down on the map; <paramref name="pitch"/> 0..1 picks one of a few soft taps.</summary>
+    public static void PlayPlace(double pitch)
+    {
+        if (!UiFeel.SoundsEnabled) return;
+        // A brush stroke lands many tiles: at most about fourteen taps a second.
+        var now = Environment.TickCount64;
+        if (now - _lastPlace < 70) return;
+        _lastPlace = now;
+        var index = (int)Math.Round(Math.Clamp(double.IsFinite(pitch) ? pitch : 0.5, 0, 1) * (PlacePitches - 1));
+        Play(Places[index]);
+    }
+
+    private static Lazy<Clip>[] CreatePlaces()
+    {
+        var places = new Lazy<Clip>[PlacePitches];
+        for (var i = 0; i < PlacePitches; i++)
+        {
+            var p = i / (double)(PlacePitches - 1);
+            var seed = 231 + i;
+            // A low wooden "tok": a short body and a quieter, brighter click on top.
+            places[i] = Make(() => Mix(Soft(seed, 0.07, 380 + p * 160, 0.85, 0.003), Soft(seed + 40, 0.03, 1100 + p * 300, 0.9, 0.002), 0, 0.35), PlacePeak);
+        }
+
+        return places;
     }
 
     private static Lazy<Clip>[] CreateTicks()

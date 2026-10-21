@@ -375,6 +375,7 @@ public sealed partial class EditorViewModel
         switch (_hexMode)
         {
             case HexToolMode.Pick:
+                if (layer.Board[hex] is not null) QueueHexTouch(layer, hex);
                 PickHexTile(layer.Board[hex]);
                 return false;
             case HexToolMode.Fill:
@@ -514,6 +515,7 @@ public sealed partial class EditorViewModel
 
         if (HexPaintCommand.Create(HexGestureName, layer, after) is { } command)
         {
+            QueueHexSettles(layer, after, null, _hexGestureEntries == 0 ? HexLandPressMs : HexLandStrokeMs, MaxStrokeSettles);
             Session.Execute(command);
             _hexGestureEntries++;
             AfterEdit();
@@ -542,6 +544,7 @@ public sealed partial class EditorViewModel
             return;
         }
 
+        QueueHexSettles(layer, after, start, HexLandWaveMs);
         Session.Execute(command);
         AfterEdit();
         StatusDetail = $"Залито гексов «{HexTile.Name}»: {command.HexCount}"

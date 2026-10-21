@@ -277,6 +277,9 @@ public sealed class RenderOptions
     /// <summary>The hexes the hex tool would touch, outlined under the pointer.</summary>
     public HexCursorPreview? HexCursor { get; init; }
 
+    /// <summary>Hexes the hex tool just changed, easing into their new state.</summary>
+    public HexSettles? HexSettles { get; init; }
+
     /// <summary>A hex drag is running: changed hex chunks are drawn directly, their kept images follow at release.</summary>
     public bool HexGestureLive { get; init; }
 

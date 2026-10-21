@@ -36,11 +36,12 @@ public sealed partial class EditorViewModel
     /// </summary>
     public bool StepHexHover(long timestamp)
     {
+        var settling = StepHexSettles(timestamp);
         if (_hexCursor is null && _hexHoverCells.Count == 0)
         {
             _hexHoverShown = null;
             _hexHoverStamp = 0;
-            return false;
+            return settling;
         }
 
         var dt = _hexHoverStamp == 0 ? 1 / 60.0 : Math.Clamp((timestamp - _hexHoverStamp) / (double)Stopwatch.Frequency, 0, 0.05);
@@ -116,10 +117,11 @@ public sealed partial class EditorViewModel
 
         _hexHoverShown = _hexHoverLayer is { } id && _hexHoverCells.Count > 0
             ? new HexCursorPreview(id, _hexCursor?.Hexes ?? [], _hexHoverErase,
-                [.. _hexHoverCells.Values.OrderBy(c => c.Strength).Select(c => new HexCursorGlow(c.Hexes, c.Strength))])
+                [.. _hexHoverCells.Values.OrderBy(c => c.Strength).Select(c => new HexCursorGlow(c.Hexes, c.Strength))],
+                _hexGestureLayer is null ? HexGhost() : null)
             : null;
         if (!busy) _hexHoverStamp = 0;
-        return busy;
+        return busy || settling;
     }
 
     /// <summary>The hexes the hex tool covers when its footprint is centred on <paramref name="center"/>.</summary>
