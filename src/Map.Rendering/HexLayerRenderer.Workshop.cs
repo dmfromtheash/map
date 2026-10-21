@@ -82,7 +82,9 @@ public static partial class HexLayerRenderer
                 continue;
             }
 
-            if (tile.Priority <= self.Priority) continue;
+            // Two kinds of the same priority used to meet at a hard edge: one of them (in a fixed
+            // order by name) now spills onto the other like any higher one.
+            if (tile.Priority < self.Priority || (tile.Priority == self.Priority && string.CompareOrdinal(tile.Id, self.Id) <= 0)) continue;
             var index = spilling.IndexOf(tile);
             if (index < 0)
             {
@@ -145,6 +147,48 @@ public static partial class HexLayerRenderer
                     using var band = Band(layout, hex, start, length, steps[step].Depth, noiseSeed + i * 13 + step * 101, out var bandEdge, push: 1);
                     canvas.DrawPath(band, paint);
                     bandEdge.Dispose();
+                }
+            }
+        }
+
+        // Where two different spilling kinds meet at a corner, both bands taper to nothing there and
+        // the hex's own ground showed as a notch: a small patch of the higher kind fills the corner.
+        if (spilling.Count > 1)
+        {
+            var orientation = layout.Orientation == HexOrientation.Flat ? 0 : 1;
+            var (cx, cy) = layout.Center(hex);
+            for (var d = 0; d < 6; d++)
+            {
+                var next = (d + 1) % 6;
+                if (neighbourIndex[d] < 0 || neighbourIndex[next] < 0 || neighbourIndex[d] == neighbourIndex[next]) continue;
+                var (a0, b0) = SideCorners[orientation][d];
+                var (a1, b1) = SideCorners[orientation][next];
+                var shared = a0 == a1 || a0 == b1 ? a0 : b0 == a1 || b0 == b1 ? b0 : -1;
+                if (shared < 0) continue;
+                var far0 = shared == a0 ? b0 : a0;
+                var far1 = shared == a1 ? b1 : a1;
+                var top = spilling[neighbourIndex[d]].Priority >= spilling[neighbourIndex[next]].Priority
+                    ? spilling[neighbourIndex[d]] : spilling[neighbourIndex[next]];
+                if (HexTileArt.Ground(top.Id, layout.Orientation) is not { } ground) continue;
+                var bounds = layout.Bounds(hex);
+                var matrix = SKMatrix.CreateScale((float)((bounds.Right - bounds.Left) / ground.Width), (float)((bounds.Bottom - bounds.Top) / ground.Height))
+                    .PostConcat(SKMatrix.CreateTranslation((float)bounds.Left, (float)bounds.Top));
+                using var shader = SKShader.CreateImage(ground, SKShaderTileMode.Clamp, SKShaderTileMode.Clamp, Sampling, matrix);
+                using var corner = new SKPaint { IsAntialias = true, Shader = shader };
+                var c = layout.Corner(hex, shared);
+                var p0 = layout.Corner(hex, far0);
+                var p1 = layout.Corner(hex, far1);
+                ReadOnlySpan<(double Reach, byte Alpha)> patches = soft ? [(0.4, 110), (0.28, 255)] : [(0.3, 255)];
+                foreach (var (reach, alpha) in patches)
+                {
+                    using var patch = new SKPath();
+                    patch.MoveTo((float)c.X, (float)c.Y);
+                    patch.LineTo((float)(c.X + (p0.X - c.X) * reach), (float)(c.Y + (p0.Y - c.Y) * reach));
+                    patch.LineTo((float)(c.X + (cx - c.X) * reach * 0.75), (float)(c.Y + (cy - c.Y) * reach * 0.75));
+                    patch.LineTo((float)(c.X + (p1.X - c.X) * reach), (float)(c.Y + (p1.Y - c.Y) * reach));
+                    patch.Close();
+                    corner.Color = SKColors.White.WithAlpha(alpha);
+                    canvas.DrawPath(patch, corner);
                 }
             }
         }
