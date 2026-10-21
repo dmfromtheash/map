@@ -280,6 +280,9 @@ public sealed class RenderOptions
     /// <summary>Hexes the hex tool just changed, easing into their new state.</summary>
     public HexSettles? HexSettles { get; init; }
 
+    /// <summary>The hex world moves while it is looked at (water glints, wind, clouds); never in an export.</summary>
+    public bool HexAmbient { get; init; }
+
     /// <summary>A hex drag is running: changed hex chunks are drawn directly, their kept images follow at release.</summary>
     public bool HexGestureLive { get; init; }
 

@@ -368,4 +368,52 @@ public sealed class HexWorkshopRenderingTests
         Assert.True(covered > 50, "the peak rises over the row behind");
         Assert.True(differing <= covered / 60, $"{differing} of {covered} pixels of the peak show the village behind it");
     }
+
+    [Fact]
+    public async Task The_world_moves_while_it_is_looked_at_and_stands_still_otherwise()
+    {
+        var (document, _, _, _) = World(HexOrientation.Flat);
+        const double scale = 0.5;
+        using var cache = new HexChunkCache();
+        SKBitmap Frame(bool ambient)
+        {
+            var bitmap = new SKBitmap((int)(document.Canvas.Width * scale), (int)(document.Canvas.Height * scale), SKColorType.Rgba8888, SKAlphaType.Premul);
+            using var canvas = new SKCanvas(bitmap);
+            canvas.Scale((float)scale);
+            SceneRenderer.Render(canvas, document, new RenderOptions { ViewScale = scale, HexChunks = cache, HexAmbient = ambient });
+            return bitmap;
+        }
+
+        static int Differing(SKBitmap a, SKBitmap b)
+        {
+            var n = 0;
+            for (var y = 0; y < a.Height; y += 2)
+            {
+                for (var x = 0; x < a.Width; x += 2)
+                {
+                    if (Distance(a.GetPixel(x, y), b.GetPixel(x, y)) > 6) n++;
+                }
+            }
+
+            return n;
+        }
+
+        using (Frame(false)) { }
+        using var still1 = Frame(false);
+        await Task.Delay(400);
+        using var still2 = Frame(false);
+        Assert.Equal(0, Differing(still1, still2));
+        using var live1 = Frame(true);
+        await Task.Delay(400);
+        using var live2 = Frame(true);
+        Assert.True(cache.Animating(HexChunkCache.Now), "a moving world asks for the next frame");
+        if (ReviewFolder is { } folder)
+        {
+            Directory.CreateDirectory(folder);
+            using var file = File.Create(Path.Combine(folder, "ambient.png"));
+            live2.Encode(file, SKEncodedImageFormat.Png, 100);
+        }
+
+        Assert.True(Differing(live1, live2) > 20, "water glints, wind and clouds move between two frames");
+    }
 }

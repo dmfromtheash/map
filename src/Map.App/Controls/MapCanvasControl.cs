@@ -604,7 +604,9 @@ public sealed partial class MapCanvasControl : Control
                 TraceFrame(elapsedMilliseconds, tier, fastTerrain, _renderStats, System.Threading.Interlocked.Read(ref _requestedFrame), requestedFrame);
                 FrameRendered?.Invoke(this, EventArgs.Empty);
             },
-            BrushCursorPreview()));
+            BrushCursorPreview(),
+            // The hex world moves only while its window is in front and the effects are on.
+            Map.App.Services.UiFeel.EffectsEnabled && TopLevel.GetTopLevel(this) is Window { IsActive: true }));
     }
 
     private Point? _hoverPointer;
@@ -641,7 +643,7 @@ public sealed partial class MapCanvasControl : Control
         CanvasPerformanceMode performanceMode, bool fastPreview, bool fastTerrain, Action requestRefinedFrame, Action<SKSurface, SKCanvas> captureFrame,
         Action<SKCanvas, float, float>? drawBadge,
         Action<RenderLodTier, double, Map.Core.Documents.MapDocument, bool, long, long, long, long, bool> frameRendered,
-        Map.Rendering.BrushCursorPreview? brushCursor) : ICustomDrawOperation
+        Map.Rendering.BrushCursorPreview? brushCursor, bool hexAmbient) : ICustomDrawOperation
     {
         public Rect Bounds { get; } = bounds;
 
@@ -731,6 +733,7 @@ public sealed partial class MapCanvasControl : Control
                 HexChunks = resources.Hex(),
                 HexCursor = editor.CanvasWorkflowOpen ? null : editor.HexCursorShown,
                 HexSettles = editor.HexSettlesShown,
+                HexAmbient = hexAmbient && !editor.HasHexGesture,
                 HexGestureLive = editor.HasHexGesture,
                 HexOverlay = editor.CanvasWorkflowOpen ? null : editor.HexOverlay,
                 HexLevel = editor.HexLevelShown,

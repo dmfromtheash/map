@@ -642,7 +642,8 @@ public static partial class HexLayerRenderer
         Draw(canvas, layer, view, options.ViewScale, options.HexChunks, options.GpuContext,
             options.HexPlayerView ? null : options.HexCursor, options.IsExport, options.RequestRefinedFrame,
             options.Stats, options.HexGestureLive, options.HexPlayerView,
-            options.HexPlayerView ? null : options.HexOverlay, options.IsExport ? null : options.HexSettles);
+            options.HexPlayerView ? null : options.HexOverlay, options.IsExport ? null : options.HexSettles,
+            options.HexAmbient && !options.IsExport);
     }
 
     /// <param name="requestFrame">Asks for another frame when some chunk images are still to be drawn.</param>
@@ -651,7 +652,7 @@ public static partial class HexLayerRenderer
     public static void Draw(SKCanvas canvas, HexLayer layer, WorldBounds view, double viewScale,
         HexChunkCache? cache, GRContext? gpu, HexCursorPreview? cursor, bool isExport,
         Action? requestFrame = null, RenderStats? stats = null, bool live = false, bool player = false,
-        HexOverlay? overlay = null, HexSettles? settles = null)
+        HexOverlay? overlay = null, HexSettles? settles = null, bool ambient = false)
     {
         var board = layer.Board;
         var hexPixels = board.Layout.HexWidth * viewScale;
@@ -727,6 +728,13 @@ public static partial class HexLayerRenderer
         if (settles is not null && settles.LayerId == layer.Id && settles.Items.Count > 0 && !flat)
         {
             DrawSettles(canvas, layer, settles.Items, viewScale);
+        }
+
+        // The world alive while it is looked at: water glints, wind over forests, cloud shadows.
+        if (ambient && !flat && cache is not null && hexPixels >= AmbientFromPixels)
+        {
+            DrawAmbient(canvas, layer, view, viewScale, now / (double)System.Diagnostics.Stopwatch.Frequency);
+            cache.KeepAlive(now);
         }
 
         // Grid lines on hexes a few pixels wide would cover them: the board would be all grid.

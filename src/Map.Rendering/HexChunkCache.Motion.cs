@@ -51,6 +51,9 @@ public sealed partial class HexChunkCache
         if (until > _animateUntil) _animateUntil = until;
     }
 
+    /// <summary>Something always moving (the living world) was drawn: ask for the next frame too.</summary>
+    internal void KeepAlive(long now) => KeepAnimating(now, 40);
+
     /// <summary>A stand-in was drawn at a place this frame: when the right picture arrives it fades in over it.</summary>
     internal void NoteStandIn(Place place, SKImage image, int level)
     {
