@@ -367,7 +367,11 @@ public static partial class HexLayerRenderer
         var x1 = (int)Math.Ceiling((cx + r - layout.OriginX) / step) + 1;
         var y0 = (int)Math.Floor((cy - r - layout.OriginY) / rowStep) - 1;
         var y1 = (int)Math.Ceiling((cy + r - layout.OriginY) / rowStep) + 1;
-        var salt = cell.Variant * 7919 + (int)tile.Dynamic;
+        // The lattice is the same for every hex of a kind, whatever its variant: a point near a border
+        // then belongs to exactly one hex, instead of to both or neither (trees doubled or missing at
+        // the seam). The variant only picks the icons and their sizes.
+        var salt = (int)tile.Dynamic * 7919;
+        var look = (uint)(cell.Variant * 40503 + 17) * 2654435761u;
         for (var j = y0; j <= y1; j++)
         {
             for (var i = x0; i <= x1; i++)
@@ -382,8 +386,9 @@ public static partial class HexLayerRenderer
                 if (distance > 0.84 * r) continue;
                 // A settlement keeps its middle free of trees and peaks.
                 if (cell.Feature is not null && distance < 0.62 * r) continue;
-                var variant = (int)(noise % HexTileArt.IconVariants);
-                var scale = size * grow * (0.82 + 0.18 * ((noise >> 8) & 0xFF) / 255.0) * r;
+                var mixed = (uint)noise ^ look;
+                var variant = (int)(mixed % HexTileArt.IconVariants);
+                var scale = size * grow * (0.82 + 0.18 * ((mixed >> 8) & 0xFF) / 255.0) * r;
                 var icon = HexTileArt.Icon(tile.Dynamic, variant);
                 var foot = (float)(py + scale * 12 / 256);
                 items.Add(new Standing((float)py, icon,
@@ -731,8 +736,10 @@ public static partial class HexLayerRenderer
             fill.Color = NoteColour(note.Category);
             canvas.DrawCircle(x, y, radius, fill);
             canvas.DrawCircle(x, y, radius, rim);
-            if (hexPixels >= 36)
+            if (hexPixels >= 32)
             {
+                // Glyphs and titles fade in with the zoom instead of appearing at one notch.
+                glyph.Color = SKColors.White.WithAlpha((byte)Math.Round(255 * Math.Clamp((hexPixels - 32) / 10, 0, 1)));
                 canvas.DrawText(NoteGlyph(note.Category), x, y + radius * 0.45f, SKTextAlign.Center, font, glyph);
             }
 
@@ -743,10 +750,13 @@ public static partial class HexLayerRenderer
                 canvas.DrawCircle(x, y, radius * 1.45f, child);
             }
 
-            if (hexPixels >= 70 && note.Title.Length > 0)
+            if (hexPixels >= 62 && note.Title.Length > 0)
             {
                 var title = note.Title.Length > 28 ? note.Title[..27] + "…" : note.Title;
                 var ty = (float)(cy + layout.Size * 0.66);
+                var titleAlpha = Math.Clamp((hexPixels - 62) / 16, 0, 1);
+                halo.Color = new SKColor(0x1A, 0x14, 0x10, (byte)Math.Round(210 * titleAlpha));
+                ink.Color = new SKColor(0xFF, 0xF6, 0xE0, (byte)Math.Round(255 * titleAlpha));
                 canvas.DrawText(title, (float)cx, ty, SKTextAlign.Center, titleFont, halo);
                 canvas.DrawText(title, (float)cx, ty, SKTextAlign.Center, titleFont, ink);
             }
@@ -765,19 +775,62 @@ public static partial class HexLayerRenderer
             IsAntialias = true,
             Color = player ? new SKColor(0x22, 0x20, 0x26) : new SKColor(0x10, 0x14, 0x24, 0x78),
         };
+        var now = HexChunkCache.Now;
+        var fogAlpha = paint.Color.Alpha;
         foreach (var key in board.ChunksIn(view))
         {
             var chunk = board.Chunk(key);
-            if (chunk is not null && Info(chunk).Revealed == ExtentCount(board, key)) continue;
-            if (cache is not null)
+            // Hexes revealed or hidden lately melt out of or into the fog instead of switching at once.
+            var fades = cache?.FogFades(layer.Id, board, key, chunk, now);
+            var allSeen = chunk is not null && Info(chunk).Revealed == ExtentCount(board, key);
+            if (fades is null && allSeen) continue;
+            SKPath? hiding = null;
+            if (fades is not null)
             {
-                canvas.DrawPath(cache.FogPath(board, key, chunk), paint);
+                foreach (var fade in fades)
+                {
+                    if (fade.Revealed) continue;
+                    hiding ??= new SKPath();
+                    using var one = FogHex(board.Layout, fade.Hex);
+                    hiding.AddPath(one);
+                }
             }
-            else
+
+            if (hiding is not null)
             {
-                using var path = BuildFogPath(board, key, chunk);
-                canvas.DrawPath(path, paint);
+                canvas.Save();
+                canvas.ClipPath(hiding, SKClipOperation.Difference, antialias: true);
             }
+
+            if (!allSeen)
+            {
+                if (cache is not null)
+                {
+                    canvas.DrawPath(cache.FogPath(board, key, chunk), paint);
+                }
+                else
+                {
+                    using var path = BuildFogPath(board, key, chunk);
+                    canvas.DrawPath(path, paint);
+                }
+            }
+
+            if (hiding is not null)
+            {
+                canvas.Restore();
+                hiding.Dispose();
+            }
+
+            if (fades is null) continue;
+            foreach (var fade in fades)
+            {
+                var eased = HexChunkCache.Ease(fade.T);
+                paint.Color = paint.Color.WithAlpha((byte)Math.Round(fogAlpha * (fade.Revealed ? 1 - eased : eased)));
+                using var hex = FogHex(board.Layout, fade.Hex);
+                canvas.DrawPath(hex, paint);
+            }
+
+            paint.Color = paint.Color.WithAlpha(fogAlpha);
         }
 
         if (!player || view.Top > BoardRect(board).Top + board.Layout.HexHeight) return;
@@ -798,6 +851,23 @@ public static partial class HexLayerRenderer
     private static int ExtentCount(HexBoard board, HexChunkKey key) =>
         Math.Max(0, Math.Min(HexBoard.ChunkSize, board.Columns - key.X * HexBoard.ChunkSize))
         * Math.Max(0, Math.Min(HexBoard.ChunkSize, board.Rows - key.Y * HexBoard.ChunkSize));
+
+    /// <summary>One hex of fog, grown a hair like the chunk's fog outline.</summary>
+    private static SKPath FogHex(HexLayout layout, HexCoord hex)
+    {
+        var path = new SKPath();
+        var (cx, cy) = layout.Center(hex);
+        for (var i = 0; i < 6; i++)
+        {
+            var (x, y) = layout.Corner(hex, i);
+            var point = new SKPoint((float)(cx + (x - cx) * 1.03), (float)(cy + (y - cy) * 1.03));
+            if (i == 0) path.MoveTo(point);
+            else path.LineTo(point);
+        }
+
+        path.Close();
+        return path;
+    }
 
     internal static SKPath BuildFogPath(HexBoard board, HexChunkKey key, HexChunk? chunk)
     {

@@ -59,7 +59,7 @@ public sealed record HexOverlay(LayerId LayerId)
 /// Chunks are immutable and shared between snapshots, so the chunk object is the key, and an edit
 /// invalidates exactly the chunks it copied and the pictures around them.
 /// </summary>
-public sealed class HexChunkCache : IDisposable
+public sealed partial class HexChunkCache : IDisposable
 {
     /// <summary>Video memory the kept chunk images may hold.</summary>
     public const long BudgetBytes = 192L * 1024 * 1024;
@@ -607,6 +607,9 @@ public static partial class HexLayerRenderer
     /// <summary>Below this many screen pixels per hex the grid lines are left out.</summary>
     public const double GridBelowPixels = 7;
 
+    /// <summary>From this many screen pixels per hex the grid shows fully; between it fades in with the zoom.</summary>
+    public const double GridFullPixels = 10;
+
     /// <summary>An export draws flat colours below this many pixels per hex.</summary>
     public const double ExportFlatBelowPixels = 4;
 
@@ -663,19 +666,50 @@ public static partial class HexLayerRenderer
         // A chunk below the view can still hang into it: tall tiles rise over the rows behind.
         var reach = new WorldBounds(view.Left, view.Top, view.Right,
             view.Bottom + (HexStarterTiles.MaxOverhang + 0.2) * board.Layout.HexHeight);
-        if (flat && cache is not null)
+        void Ground(bool asFlat, ref BuildBudget budget)
         {
-            DrawFlatBlocks(canvas, layer, view, viewScale, cache, ref budget);
+            if (asFlat && cache is not null)
+            {
+                DrawFlatBlocks(canvas, layer, view, viewScale, cache, ref budget);
+            }
+            else
+            {
+                DrawPass(canvas, layer, asFlat ? HexLook.Flat : HexLook.Terrain, asFlat ? view : reach, viewScale, cache, gpu, isExport, live, ref budget);
+            }
+        }
+
+        // When the zoom crosses between the far and the near look, the new one fades in over the old.
+        var now = HexChunkCache.Now;
+        var change = cache is not null && !isExport ? cache.LookChange(layer.Id, flat, now) : null;
+        var layerRect = new SKRect((float)view.Left, (float)reach.Top, (float)view.Right, (float)reach.Bottom);
+        if (change is { } handOver)
+        {
+            Ground(handOver.FromFlat, ref budget);
+            using var fade = new SKPaint { Color = SKColors.White.WithAlpha((byte)Math.Round(255 * HexChunkCache.Ease(handOver.T))) };
+            canvas.SaveLayer(layerRect, fade);
+            Ground(flat, ref budget);
+            canvas.Restore();
         }
         else
         {
-            DrawPass(canvas, layer, flat ? HexLook.Flat : HexLook.Terrain, flat ? view : reach, viewScale, cache, gpu, isExport, live, ref budget);
+            Ground(flat, ref budget);
         }
 
         DrawPaths(canvas, layer, view, viewScale, hexPixels);
-        if (!flat)
+        var featuresAlpha = change is { } c ? (flat ? 1 - HexChunkCache.Ease(c.T) : c.FromFlat ? HexChunkCache.Ease(c.T) : 1) : 1;
+        if (!flat || (change is { FromFlat: false } && featuresAlpha > 0.01))
         {
-            DrawPass(canvas, layer, HexLook.Features, reach, viewScale, cache, gpu, isExport, live, ref budget);
+            if (featuresAlpha < 0.995)
+            {
+                using var fade = new SKPaint { Color = SKColors.White.WithAlpha((byte)Math.Round(255 * featuresAlpha)) };
+                canvas.SaveLayer(layerRect, fade);
+                DrawPass(canvas, layer, HexLook.Features, reach, viewScale, cache, gpu, isExport, live, ref budget);
+                canvas.Restore();
+            }
+            else
+            {
+                DrawPass(canvas, layer, HexLook.Features, reach, viewScale, cache, gpu, isExport, live, ref budget);
+            }
         }
 
         if (budget.Pending > 0)
@@ -683,14 +717,28 @@ public static partial class HexLayerRenderer
             if (stats is not null) stats.HexChunksPending += budget.Pending;
             requestFrame?.Invoke();
         }
+        else if (cache is not null && !isExport && cache.Animating(HexChunkCache.Now))
+        {
+            requestFrame?.Invoke();
+        }
 
         // Grid lines on hexes a few pixels wide would cover them: the board would be all grid.
         if (layer.Grid.Visible && (hexPixels >= GridBelowPixels || (isExport && hexPixels >= ExportGridBelowPixels)))
         {
+            // The grid fades in with the zoom instead of appearing at one notch.
+            var gridAlpha = isExport ? 1 : Math.Clamp((hexPixels - GridBelowPixels) / (GridFullPixels - GridBelowPixels), 0, 1);
+            if (gridAlpha < 0.995)
+            {
+                using var fade = new SKPaint { Color = SKColors.White.WithAlpha((byte)Math.Round(255 * gridAlpha)) };
+                canvas.SaveLayer(new SKRect((float)view.Left, (float)view.Top, (float)view.Right, (float)view.Bottom), fade);
+            }
+
             if (cache is null || isExport || !TryDrawGridPattern(canvas, layer, view, viewScale, hexPixels, cache))
             {
                 DrawGrid(canvas, layer, view, viewScale, hexPixels, outside: null);
             }
+
+            if (gridAlpha < 0.995) canvas.Restore();
         }
 
         DrawNotes(canvas, layer, view, viewScale, hexPixels, player, overlay?.Focus);
@@ -861,12 +909,12 @@ public static partial class HexLayerRenderer
     }
 
     /// <summary>A kept chunk picture at its place on the canvas.</summary>
-    private static void DrawPicture(SKCanvas canvas, HexBoard board, HexChunkKey key, HexLook look, SKImage image, int level)
+    private static void DrawPicture(SKCanvas canvas, HexBoard board, HexChunkKey key, HexLook look, SKImage image, int level, SKPaint? paint = null)
     {
         var scale = Math.Pow(2, level);
         var bounds = Snapped(PictureBounds(board, key, look), scale);
         canvas.DrawImage(image, new SKRect((float)bounds.Left, (float)bounds.Top,
-            (float)(bounds.Left + image.Width / scale), (float)(bounds.Top + image.Height / scale)), ChunkSampling);
+            (float)(bounds.Left + image.Width / scale), (float)(bounds.Top + image.Height / scale)), ChunkSampling, paint);
     }
 
     /// <summary>Draws one tile picture into a hex; used by the canvas and by the palette thumbnails.</summary>
@@ -1267,15 +1315,18 @@ public static partial class HexLayerRenderer
 
         if (image is null && !mayBuild)
         {
-            if (cache.StandIn(chunk, board.Orientation, level, look) is { } other)
+            // A fill, an undo, a paste or the generator made a new version of the chunk that has no
+            // picture yet: the picture of the version shown here before stands in, instead of a flat
+            // patch of the chunk's average colour.
+            var standIn = cache.StandIn(chunk, board.Orientation, level, look)
+                ?? (cache.LastDrawn(place) is { } before && !ReferenceEquals(before, chunk)
+                    ? cache.StandIn(before, board.Orientation, level, look)
+                    : null);
+            if (standIn is { } other)
             {
                 // Every picture of a look covers the same canvas area, its corner snapped to its own pixels.
-                var otherScale = Math.Pow(2, other.Level);
-                var otherBounds = Snapped(PictureBounds(board, key, look), otherScale);
-                canvas.DrawImage(other.Image,
-                    new SKRect((float)otherBounds.Left, (float)otherBounds.Top,
-                        (float)(otherBounds.Left + other.Image.Width / otherScale), (float)(otherBounds.Top + other.Image.Height / otherScale)),
-                    ChunkSampling);
+                DrawPicture(canvas, board, key, look, other.Image, other.Level);
+                cache.NoteStandIn(place, other.Image, other.Level);
             }
             else if (look == HexLook.Terrain)
             {
@@ -1311,10 +1362,21 @@ public static partial class HexLayerRenderer
             result = CachedDraw.Built;
         }
 
-        canvas.DrawImage(image,
-            new SKRect((float)bounds.Left, (float)bounds.Top,
-                (float)(bounds.Left + image.Width / scale), (float)(bounds.Top + image.Height / scale)),
-            ChunkSampling);
+        // The right picture fades in over the one that stood in for it instead of replacing it at once.
+        if (cache.Swap(place, image, HexChunkCache.Now) is { } swap)
+        {
+            DrawPicture(canvas, board, key, look, swap.From, swap.FromLevel);
+            using var fade = new SKPaint { Color = SKColors.White.WithAlpha((byte)Math.Round(255 * HexChunkCache.Ease(swap.T))) };
+            DrawPicture(canvas, board, key, look, image, level, fade);
+        }
+        else
+        {
+            canvas.DrawImage(image,
+                new SKRect((float)bounds.Left, (float)bounds.Top,
+                    (float)(bounds.Left + image.Width / scale), (float)(bounds.Top + image.Height / scale)),
+                ChunkSampling);
+        }
+
         cache.NoteDrawn(place, chunk);
         return result;
     }

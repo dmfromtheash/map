@@ -252,4 +252,61 @@ public sealed class HexWorkshopRenderingTests
             Assert.True(differing < samples / 50, $"{differing} of {samples} pixels differ");
         }
     }
+
+    private static int Distance(SKColor a, SKColor b) => Math.Abs(a.Red - b.Red) + Math.Abs(a.Green - b.Green) + Math.Abs(a.Blue - b.Blue);
+
+    private static async Task<SKBitmap> Settled(MapDocument document, double scale, HexChunkCache cache)
+    {
+        var bitmap = Render(document, scale, cache);
+        for (var frame = 0; frame < 200 && (cache.Queued > 0 || frame < 3 || cache.Animating(HexChunkCache.Now)); frame++)
+        {
+            await Task.Delay(20);
+            bitmap.Dispose();
+            bitmap = Render(document, scale, cache);
+        }
+
+        return bitmap;
+    }
+
+    [Fact]
+    public async Task An_edited_chunk_keeps_its_previous_picture_until_the_new_one_arrives()
+    {
+        var (document, layer, _, _) = World(HexOrientation.Flat);
+        const double scale = 0.5;
+        using var cache = new HexChunkCache { BuildInBackground = true };
+        using var before = await Settled(document, scale, cache);
+        var layout = layer.Board.Layout;
+        var sea = layout.FromOffset(new HexOffset(1, 5));
+        var edited = layer with { Board = layer.Board.With([new(layout.FromOffset(new HexOffset(5, 5)), HexCell.Of("starter/sea", 0))]) };
+        var next = document.WithLayer(layer.Id, _ => edited);
+        // The first frame after a fill-like edit: no flat patch of the chunk's average colour.
+        using var first = Render(next, scale, cache);
+        Assert.True(Distance(At(before, layout, sea, scale), At(first, layout, sea, scale)) < 40,
+            "the sea keeps its picture while the edited chunk is drawn again");
+        using var after = await Settled(next, scale, cache);
+        using var direct = Render(next, scale, null);
+        Assert.True(Distance(At(direct, layout, layout.FromOffset(new HexOffset(5, 5)), scale),
+            At(after, layout, layout.FromOffset(new HexOffset(5, 5)), scale)) < 60, "the new picture arrives");
+    }
+
+    [Fact]
+    public async Task A_revealed_hex_melts_out_of_the_fog()
+    {
+        var (document, layer, _, fogged) = World(HexOrientation.Flat);
+        const double scale = 0.5;
+        using var cache = new HexChunkCache();
+        using var before = await Settled(document, scale, cache);
+        var revealed = layer with { Board = layer.Board.With([new(fogged, layer.Board[fogged]!.WithRevealed(true))]) };
+        var next = document.WithLayer(layer.Id, _ => revealed);
+        using var direct = Render(next, scale, null);
+        var layout = layer.Board.Layout;
+        var foggy = At(before, layout, fogged, scale);
+        var clear = At(direct, layout, fogged, scale);
+        Assert.True(Distance(foggy, clear) > 20, "the fog shows on the hex");
+        using var first = Render(next, scale, cache);
+        Assert.True(Distance(At(first, layout, fogged, scale), foggy) < Distance(foggy, clear) / 2, "the first frame still shows most of the fog");
+        await Task.Delay((int)HexChunkCache.FogFadeMilliseconds + 80);
+        using var last = Render(next, scale, cache);
+        Assert.True(Distance(At(last, layout, fogged, scale), clear) < 12, "the fog has melted away");
+    }
 }
