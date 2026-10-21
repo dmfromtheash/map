@@ -844,7 +844,7 @@ public static partial class HexLayerRenderer
 
     /// <summary>True when the players may see this key: it has text for them and, under fog, its hex is revealed.</summary>
     public static bool PlayersSee(HexLayer layer, HexCoord hex, HexNote note) =>
-        note.PlayerText.Length > 0 && (!layer.FogEnabled || layer.Board[hex]?.Revealed == true);
+        ExportPlayerVisibility.NoteVisible(layer, hex, note);
 
     private static void DrawNotes(SKCanvas canvas, HexLayer layer, WorldBounds view, double viewScale, double hexPixels, bool player, HexCoord? focus)
     {
@@ -887,7 +887,7 @@ public static partial class HexLayerRenderer
                 canvas.DrawText(NoteGlyph(note.Category), x, y + radius * 0.45f, SKTextAlign.Center, font, glyph);
             }
 
-            if (note.ChildMap is not null && hexPixels >= 36)
+            if (!player && note.ChildMap is not null && hexPixels >= 36)
             {
                 // A child map: a small second ring.
                 using var child = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, Color = fill.Color, StrokeWidth = radius * 0.2f };

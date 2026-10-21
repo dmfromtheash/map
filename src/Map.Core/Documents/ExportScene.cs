@@ -8,7 +8,7 @@ public enum ExportRecipient { GameMaster, Players }
 /// <summary>
 /// One immutable choice of scene shared by picture, VTT and data exports. The source document
 /// remains untouched. A null level includes all visible hex levels; a selected level never
-/// includes another level. Recipient describes the view, not a guarantee of sanitized metadata.
+/// includes another level. Player scenes contain only public hex data, including their render document.
 /// </summary>
 public sealed class ExportScene
 {
@@ -18,7 +18,6 @@ public sealed class ExportScene
     {
         ArgumentNullException.ThrowIfNull(document);
         if (!Enum.IsDefined(recipient)) throw new ArgumentOutOfRangeException(nameof(recipient));
-        Document = document;
         HexLevel = hexLevel;
         Recipient = recipient;
         Region = region ?? new CanvasRegion(0, 0, document.Canvas.Width, document.Canvas.Height);
@@ -27,6 +26,10 @@ public sealed class ExportScene
             && (requested is null || requested.Contains(layer.Id))
             && (layer is not HexLayer hex || hexLevel is null || hex.Level == hexLevel))
             .Select(layer => layer.Id).ToImmutableHashSet();
+        var selected = document.Layers.Where(layer => VisibleLayerIds.Contains(layer.Id)).ToList();
+        Package = ExportPackagePreview.Create(document.Title, selected, Players);
+        Document = Players ? document.WithLayers([.. document.Layers.Select(layer => layer is HexLayer hex
+            ? ExportPlayerVisibility.Sanitize(hex) : layer)]) : document;
     }
 
     public MapDocument Document { get; }
@@ -36,6 +39,7 @@ public sealed class ExportScene
     public bool Players => Recipient == ExportRecipient.Players;
     public CanvasRegion Region { get; }
     public ImmutableHashSet<LayerId> VisibleLayerIds { get; }
+    public ExportPackagePreview Package { get; }
     public IEnumerable<MapLayer> Layers => Document.Layers.Where(layer => VisibleLayerIds.Contains(layer.Id));
 
     /// <summary>Preserves mandatory layers and their order, hiding excluded layers for the renderer.</summary>

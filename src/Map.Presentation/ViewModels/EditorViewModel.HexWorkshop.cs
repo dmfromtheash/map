@@ -594,13 +594,17 @@ public sealed partial class EditorViewModel
     /// <summary>The key table as Markdown: numbers, titles, categories, both texts (or the players' part only).</summary>
     public string HexKeyMarkdown(bool playersOnly)
     {
-        if (ActiveHexLayer is not { } layer) return "";
+        playersOnly |= ExportHexPlayers;
+        var scene = new ExportScene(Session.Document, playersOnly ? ExportHexLevel : HexLevel,
+            playersOnly ? ExportRecipient.Players : ExportRecipient.GameMaster);
+        if (scene.Layers.OfType<HexLayer>().FirstOrDefault() is not { } layer) return "";
         var text = new System.Text.StringBuilder();
         text.AppendLine($"# {Session.Document.Title} — ключ гексов");
         text.AppendLine();
-        foreach (var row in HexKeys)
+        foreach (var pair in layer.Notes.OrderBy(p => layer.Board.Layout.ToOffset(p.Key).Column)
+            .ThenBy(p => layer.Board.Layout.ToOffset(p.Key).Row))
         {
-            if (playersOnly && !HexLayerRenderer.PlayersSee(layer, row.Hex, row.Note)) continue;
+            var row = (Number: HexLayerRenderer.NumberOf(layer.Board, layer.Board.Layout.ToOffset(pair.Key)), Note: pair.Value);
             text.AppendLine($"## {row.Number}{(row.Note.Title.Length > 0 ? " — " + row.Note.Title : "")}");
             text.AppendLine($"*{HexNoteCategoryName(row.Note.Category)}*");
             text.AppendLine();

@@ -13,6 +13,7 @@ using FlaUI.UIA3;
 // With --map the file is copied into the isolated profile and opened from the command line; the
 // pass then opens the export window, dumps and screenshots it and checks the three output modes.
 // With --hex-paths true and --map, selects the first border and flips all three blocking switches using UIA.
+// With --player-package true and --map, selects the player recipient and verifies the visible package preview.
 // Exit code 0: every step found its element; 2: a step could not find its element (screenshots
 // and the UIA tree are still written); 1: the program did not start or crashed.
 var root = FindRepoRoot();
@@ -175,6 +176,8 @@ try
                         Shot(exportWindow, Path.Combine(outDir, "r01-export-level.png"));
                     }
                 }
+                if (Arg("--player-package") is not null)
+                    missing += PlayerPackageCheck.Run(exportWindow, outDir, Log, Shot, Dump);
                 var mbtiles = exportWindow.FindFirstDescendant(cf => cf.ByAutomationId("ExportMbTilesButton"));
                 if (mbtiles is not null)
                 {

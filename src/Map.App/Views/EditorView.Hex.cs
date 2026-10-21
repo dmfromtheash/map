@@ -1164,6 +1164,7 @@ public sealed partial class EditorView
             Children =
             {
                 players,
+                BuildExportPackagePreview("HexExport"),
                 HexHint("PNG и .dd2vtt для Foundry и Roll20 — кнопка «Экспорт» вверху; рядом с .dd2vtt пишется макрос сетки для Foundry."),
                 Ui.Subgroup("Печать по листам", new StackPanel
                 {

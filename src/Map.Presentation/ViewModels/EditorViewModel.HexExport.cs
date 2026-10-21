@@ -27,6 +27,7 @@ public sealed partial class EditorViewModel
             Raise(nameof(ExportVttGridSize));
             RebuildExportPlanAndPreview();
             Raise(nameof(ExportVttSummary));
+            Raise(nameof(PlayerPackagePreview));
         }
     }
 
@@ -39,7 +40,7 @@ public sealed partial class EditorViewModel
     private bool _exportHexPlayers;
     private HexPrintOptions _hexPrint = new();
 
-    /// <summary>PNG, VTT and print show the map as the players see it: opaque fog, player keys only.</summary>
+    /// <summary>All exports share the player recipient: public data and opaque fog.</summary>
     public bool ExportHexPlayers
     {
         get => _exportHexPlayers;
@@ -49,6 +50,8 @@ public sealed partial class EditorViewModel
             _exportHexPlayers = value;
             Raise(nameof(ExportHexPlayers));
             RebuildExportPlanAndPreview();
+            Raise(nameof(ExportVttSummary));
+            Raise(nameof(PlayerPackagePreview));
         }
     }
 
@@ -102,12 +105,12 @@ public sealed partial class EditorViewModel
     public async Task<string?> ExportHexJsonAsync()
     {
         if (_exportDestinationPicker is null) return null;
-        var snapshot = Session.Document;
-        var path = await _exportDestinationPicker.PickFileAsync(SafeExportName(snapshot.Title) + ".hex.json", "json", "JSON гексовой карты").ConfigureAwait(true);
+        var scene = HexDataExportScene();
+        var path = await _exportDestinationPicker.PickFileAsync(SafeExportName(scene.Document.Title) + ".hex.json", "json", "JSON гексовой карты").ConfigureAwait(true);
         if (string.IsNullOrWhiteSpace(path)) return null;
         try
         {
-            await Task.Run(() => HexJsonExporter.Write(snapshot, path)).ConfigureAwait(true);
+            await Task.Run(() => HexJsonExporter.Write(scene, path)).ConfigureAwait(true);
             StatusDetail = "JSON карты сохранён: " + path;
             return path;
         }
@@ -143,6 +146,7 @@ public sealed partial class EditorViewModel
     public async Task<string?> ExportHexKeyAsync(bool playersOnly)
     {
         if (_exportDestinationPicker is null) return null;
+        playersOnly |= ExportHexPlayers;
         var markdown = HexKeyMarkdown(playersOnly);
         var name = SafeExportName(Session.Document.Title) + (playersOnly ? " - ключ для игроков" : " - ключ гексов") + ".md";
         var path = await _exportDestinationPicker.PickFileAsync(name, "md", "Ключ гексов (Markdown)").ConfigureAwait(true);
@@ -165,12 +169,10 @@ public sealed partial class EditorViewModel
     {
         if (_exportDestinationPicker is null || ActiveHexLayer is not { } layer) return null;
         var snapshot = Session.Document;
+        var options = _hexPrint with { Level = ExportHexPlayers ? ExportHexLevel : HexLevelShown, Players = ExportHexPlayers };
+        var key = HexKeys.Select(row => (row.Number, row.Note)).ToList();
         var path = await _exportDestinationPicker.PickFileAsync(SafeExportName(snapshot.Title) + " - печать.pdf", "pdf", "PDF для печати").ConfigureAwait(true);
         if (string.IsNullOrWhiteSpace(path)) return null;
-        var options = _hexPrint with { Level = HexLevelShown, Players = _exportHexPlayers };
-        var key = HexKeys
-            .Where(row => !options.Players || HexLayerRenderer.PlayersSee(layer, row.Hex, row.Note))
-            .Select(row => (row.Number, row.Note)).ToList();
         try
         {
             StatusDetail = "Готовлю листы для печати…";

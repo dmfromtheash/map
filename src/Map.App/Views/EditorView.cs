@@ -8058,7 +8058,6 @@ public sealed partial class EditorView : UserControl
             Spacing = 6,
             Children =
             {
-                BuildHexExportLevelSelector(),
                 AppearanceSlider("ExportVttGridSizeSlider", "Клетка стола", 4, 1024, "ед.",
                     () => _editor.ExportVttGridSize,
                     (v, _) => { _editor.ExportVttGridSize = v; SyncExport(); }, 1, defaultValue: null,
@@ -8254,6 +8253,7 @@ public sealed partial class EditorView : UserControl
             Children =
             {
                 new TextBlock { Text = "Экспорт изображения" }.Classed("role-panel"),
+                BuildExportRecipient(),
                 new TextBlock
                 {
                     Text = "Предпросмотр уменьшен для этого окна. Размер готового файла задаётся ниже; заметки и панели редактора в него не попадают.",

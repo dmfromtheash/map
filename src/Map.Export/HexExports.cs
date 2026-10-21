@@ -300,6 +300,12 @@ public static class HexPrintExporter
             ?? scene.Layers.OfType<HexLayer>().FirstOrDefault()
             ?? throw new InvalidOperationException("На карте нет слоя гексов.");
         var board = layer.Board;
+        // A caller's key can contain GM-only entries or belong to another level. For players
+        // derive it exclusively from the sanitized scene, never from that untrusted list.
+        if (scene.Players)
+            key = layer.Notes.OrderBy(p => board.Layout.ToOffset(p.Key).Column)
+                .ThenBy(p => board.Layout.ToOffset(p.Key).Row)
+                .Select(p => (HexLayerRenderer.NumberOf(board, board.Layout.ToOffset(p.Key)), p.Value)).ToList();
         var (paperW, paperH) = options.A3 ? (297.0, 420.0) : (210.0, 297.0);
         if (options.Landscape) (paperW, paperH) = (paperH, paperW);
         var pageW = (float)(paperW * PointsPerMillimetre);

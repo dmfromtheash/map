@@ -77,6 +77,8 @@ public sealed partial class RegionalApplication : Application
         Directory.CreateDirectory(_workspace);
         Environment.SetEnvironmentVariable("MAP_UI_TEST_MODE", "1");
         Environment.SetEnvironmentVariable("MAP_UI_TEST_PROFILE_ROOT", Path.Combine(_workspace, "profile"));
+        Environment.SetEnvironmentVariable("MAP_UI_TEST_RECOVERY_ROOT", Path.Combine(_workspace, "recovery"));
+        Environment.SetEnvironmentVariable("MAP_UI_TEST_SHORTCUT_SETTINGS_PATH", Path.Combine(_workspace, "profile", "shortcuts.json"));
         _catalog = new AssetCatalog(Path.Combine(_workspace, "catalog"));
         _store = new ProjectStore(new RecoveryJournal(Path.Combine(_workspace, "recovery")));
         _picker = new LocalPicker(Path.Combine(_workspace, "Тихий атлас.mapproj"));
@@ -89,7 +91,7 @@ public sealed partial class RegionalApplication : Application
         _window.Opened += async (_, _) =>
         {
             try { await Execute(); }
-            catch (Exception ex) { _report.Failure = ex.ToString(); if (_window.Content is Control control) Capture(control, "failure"); }
+            catch (Exception ex) { _report.Failure = ex.ToString(); if (Options.Profile != "native-player-package" && _window.Content is Control control) Capture(control, "failure"); }
             finally
             {
                 if (Options.Profile == "native-editor-defaults" && _view is not null)
@@ -112,6 +114,7 @@ public sealed partial class RegionalApplication : Application
         if(Options.Profile=="native-map-categories") { await VerifyMapCategories(); return; }
         if(Options.Profile=="native-hex-category") { await VerifyHexCategory(); return; }
         if(Options.Profile=="native-hex-workshop") { await VerifyHexWorkshop(); return; }
+        if(Options.Profile=="native-player-package") { await VerifyPlayerPackage(); return; }
         if(Options.Profile=="native-hex-panel-shots") { await HexPanelShots(); return; }
         var dashboard = new DashboardViewModel(_store, _recent, new LocalLog(), _picker);
         _window.Content = new DashboardView(dashboard, () => Task.CompletedTask, () => Task.CompletedTask,

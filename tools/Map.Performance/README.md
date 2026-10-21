@@ -1,5 +1,25 @@
 # Map.Performance
 
+## R02: пакет игрока без секретов
+
+`native-player-package` выбирает «Игрок» в `ExportRecipientComboBox`, проверяет видимый
+`ExportPackagePreviewPanel` и счётчики (3 заметки, 1 в пакете; под туманом 60 гексов и 1 заметка),
+нажимает кнопки JSON/Markdown/dd2vtt/PNG/PDF, проверяет секретные строки, стены и пиксели,
+возвращается к ведущему и сохраняет/открывает фикстуру v14. Все четыре `MAP_UI_TEST_*`
+пути находятся в собственном workspace под `artifacts/r02`; снимков рабочего стола нет.
+
+```powershell
+dotnet build tools/Map.Performance -c Release -m:1 -nr:false -p:UseSharedCompilation=false
+dotnet tools/Map.Performance/bin/Release/net10.0/win-x64/Map.Performance.dll --profile native-player-package --output artifacts/r02/player-package.json
+dotnet run --project tools/Map.LiveCheck -c Release -- --out artifacts/r02/live --map artifacts/r02/player-package-workspace/player-package.mapproj --player-package true
+```
+
+Живой проход выбирает получателя через UI Automation, проверяет видимый заголовок и строки
+предпросмотра, а затем доступность кнопки экспорта. Сам контейнер StackPanel проверяется
+нативным смоуком: отдельного UIA-элемента у него нет. Проход пишет `r02-player-package.png`
+только через PrintWindow. PNG нужно открыть и оценить читаемость;
+зелёный smoke сам по себе не является визуальным просмотром или приёмкой владельца.
+
 ## R01: блокировка гекс-путей и экспорт уровней
 
 `native-hex-workshop` включает создание неблокирующих границ на уровнях 0 и −1, три переключателя
