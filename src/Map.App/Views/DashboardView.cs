@@ -79,6 +79,7 @@ public sealed class DashboardView : UserControl
     private sealed record WelcomeLayout(StackPanel Copy, TextBlock Heading, TextBlock Lead);
     private WelcomeLayout? _welcomeLayout;
     private readonly List<Button> _entryButtons = [];
+    private double _homeFontSize = 20;
     private bool? _empty;
 
     // Maps (the library page)
@@ -309,7 +310,8 @@ public sealed class DashboardView : UserControl
     {
         var allMaps = Ui.TextButton("DashboardAllMapsButton", "Все карты", () => ShowSection(Section.Maps), "ghost");
         allMaps.Content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6,
-            Children = { new TextBlock { Text = "Все карты", FontSize = 14 }, MapIcons.Stroked(MapIcons.ChevronRight, 14) } };
+            Children = { new TextBlock { Text = "Все карты" }, MapIcons.Stroked(MapIcons.ChevronRight, 16) } };
+        HomeButton(allMaps);
         _latestBlock.Children.Add(new DockPanel
         {
             Children =
@@ -325,12 +327,22 @@ public sealed class DashboardView : UserControl
         _home.Children.Add(BuildHelpLinks());
     }
 
+    // Every button on the home page shares one caption font and size (owner, 2026-10-21);
+    // FitWelcomeToViewport scales the size with the window.
+    private void HomeButton(Button button)
+    {
+        button.Classes.Add("home-command");
+        button.FontFamily = Display;
+        button.FontWeight = FontWeight.SemiBold;
+        button.FontSize = _homeFontSize;
+    }
+
     private Button EntryButton(string name, string text, Func<Task> action, bool primary = false)
     {
         var button = Ui.AsyncButton(name, text, action, primary ? "primary" : "dashboard-command");
         button.MinHeight = 40;
         button.Padding = new Thickness(14, 8);
-        button.FontSize = 13;
+        HomeButton(button);
         _entryButtons.Add(button);
         return button;
     }
@@ -351,11 +363,12 @@ public sealed class DashboardView : UserControl
         _intro.Children.Add(BuildWelcome(create, open, extras, empty));
     }
 
-    private static void WelcomeCommand(Button button, string caption, string icon, bool secondary = false)
+    // Every welcome command shares one caption font, size and icon; only the height marks the main two.
+    private static void WelcomeCommand(Button button, string caption, string icon)
     {
         button.HorizontalAlignment = HorizontalAlignment.Stretch;
         button.HorizontalContentAlignment = HorizontalAlignment.Center;
-        button.Padding = new Thickness(secondary ? 14 : 20, 10);
+        button.Padding = new Thickness(20, 10);
         button.CornerRadius = new CornerRadius(8);
         var label = new TextBlock { Name = button.Name + "Caption", Text = caption,
             FontFamily = Display, FontWeight = FontWeight.SemiBold, TextWrapping = TextWrapping.Wrap,
@@ -364,8 +377,8 @@ public sealed class DashboardView : UserControl
         button.Content = new Grid
         {
             ColumnDefinitions = new ColumnDefinitions("Auto,Auto"),
-            ColumnSpacing = secondary ? 10 : 14,
-            Children = { MapIcons.Stroked(icon, secondary ? 18 : 22), label },
+            ColumnSpacing = 14,
+            Children = { MapIcons.Stroked(icon, 22), label },
         };
     }
 
@@ -382,7 +395,7 @@ public sealed class DashboardView : UserControl
                 "CreateFromTemplateButton" => ("Из шаблона", MapIcons.Duplicate),
                 _ => ("Импорт копии", MapIcons.Import),
             };
-            WelcomeCommand(button, caption, icon, secondary: true);
+            WelcomeCommand(button, caption, icon);
             secondary.Children.Add(button);
         }
         secondary.IsVisible = secondary.Children.Count > 0;
@@ -484,8 +497,10 @@ public sealed class DashboardView : UserControl
         {
             var main = button.Name is "NewMapButton" or "OpenFileButton";
             button.MinHeight = main ? compact ? 52 : large ? 70 : 62 : compact ? 44 : 54;
-            button.FontSize = main ? compact ? 18 : large ? 22 : 20 : compact ? 15 : 17;
         }
+        _homeFontSize = compact ? 18 : large ? 22 : 20;
+        foreach (var button in _home.GetLogicalDescendants().OfType<Button>())
+            if (button.Classes.Contains("home-command") && button.FontSize != _homeFontSize) button.FontSize = _homeFontSize;
         if (!layout.Copy.IsMeasureValid) return;
 
         // Without maps the picture fills the page; with them it takes about half, and the
@@ -537,7 +552,7 @@ public sealed class DashboardView : UserControl
                 };
                 _help.IsVisible = show;
             }, "ghost", "compact");
-            button.FontSize = 14;
+            HomeButton(button);
             button.MinHeight = 36;
             links.Children.Add(button);
         }
@@ -963,9 +978,10 @@ public sealed class DashboardView : UserControl
 
         if (card.IsAvailable)
         {
-            var open = new Button { Name = $"{prefix}OpenButton{index}", Content = new TextBlock { Text = "Открыть", FontFamily = Display,
-                FontSize = 17, FontWeight = FontWeight.SemiBold }, HorizontalAlignment = HorizontalAlignment.Center,
+            var open = new Button { Name = $"{prefix}OpenButton{index}", Content = new TextBlock { Text = "Открыть" },
+                FontFamily = Display, FontSize = 17, FontWeight = FontWeight.SemiBold, HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center }.Classed("primary", "library-card-open");
+            if (!main) HomeButton(open);
             open.Click += async (_, _) => await _openRecentRequested(captured);
             Grid.SetRow(open, 1);
             overlay.Children.Add(open);
