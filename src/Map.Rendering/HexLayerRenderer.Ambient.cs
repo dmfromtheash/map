@@ -19,7 +19,7 @@ public static partial class HexLayerRenderer
     /// never into them: light sparkles on water, a breath of wind running over the forests as a soft
     /// band of light, and slow cloud shadows drifting across. Nothing moves the pictures themselves.
     /// </summary>
-    private static void DrawAmbient(SKCanvas canvas, HexLayer layer, WorldBounds view, double viewScale, double seconds)
+    private static void DrawAmbient(SKCanvas canvas, HexLayer layer, WorldBounds view, double viewScale, double seconds, double strength = 1)
     {
         var board = layer.Board;
         var layout = board.Layout;
@@ -47,7 +47,7 @@ public static partial class HexLayerRenderer
                     var x = cx + (((seed >> 3) & 0xFF) / 255.0 - 0.5) * r * 1.1;
                     var y = cy + (((seed >> 14) & 0xFF) / 255.0 - 0.5) * r * 0.9;
                     var length = r * (0.12 + 0.1 * glint);
-                    sparkle.Color = new SKColor(0xFF, 0xFF, 0xF4, (byte)Math.Round(150 * glint));
+                    sparkle.Color = new SKColor(0xFF, 0xFF, 0xF4, (byte)Math.Round(150 * glint * strength));
                     canvas.DrawLine((float)(x - length), (float)y, (float)(x + length), (float)y, sparkle);
                 }
             }
@@ -66,7 +66,8 @@ public static partial class HexLayerRenderer
             var travel = (float)(seconds * r * 1.6 % (span * 2));
             using var shader = SKShader.CreateLinearGradient(
                 new SKPoint(0, 0), new SKPoint(span, span * 0.35f),
-                [SKColors.Transparent, new SKColor(0xFF, 0xF6, 0xD8, 30), SKColors.Transparent, new SKColor(0x10, 0x18, 0x08, 22), SKColors.Transparent],
+                [SKColors.Transparent, new SKColor(0xFF, 0xF6, 0xD8, (byte)Math.Round(30 * strength)), SKColors.Transparent,
+                    new SKColor(0x10, 0x18, 0x08, (byte)Math.Round(22 * strength)), SKColors.Transparent],
                 [0f, 0.18f, 0.36f, 0.5f, 0.7f], SKShaderTileMode.Repeat,
                 SKMatrix.CreateTranslation(travel + (float)view.Left, (float)view.Top));
             using var wind = new SKPaint { IsAntialias = true, Shader = shader };
@@ -85,7 +86,8 @@ public static partial class HexLayerRenderer
             var y = view.Top + height * (0.18 + 0.22 * i) + Math.Sin(seconds * 0.05 + i) * height * 0.04;
             var radius = (float)(cloud * (0.8 + 0.15 * i));
             using var gradient = SKShader.CreateRadialGradient(new SKPoint((float)x, (float)y), radius,
-                [new SKColor(0x18, 0x14, 0x20, 24), new SKColor(0x18, 0x14, 0x20, 12), SKColors.Transparent], [0f, 0.55f, 1f], SKShaderTileMode.Clamp);
+                [new SKColor(0x18, 0x14, 0x20, (byte)Math.Round(24 * strength)), new SKColor(0x18, 0x14, 0x20, (byte)Math.Round(12 * strength)), SKColors.Transparent],
+                [0f, 0.55f, 1f], SKShaderTileMode.Clamp);
             shade.Shader = gradient;
             canvas.Save();
             canvas.Scale(1.6f, 1, (float)x, (float)y);

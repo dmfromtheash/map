@@ -400,13 +400,24 @@ public sealed class HexWorkshopRenderingTests
 
         using (Frame(false)) { }
         using var still1 = Frame(false);
+        // The living world fades in over about a second.
+        async Task WarmUp()
+        {
+            for (var i = 0; i < 14; i++)
+            {
+                using (Frame(true)) { }
+                await Task.Delay(90);
+            }
+        }
+
         await Task.Delay(400);
         using var still2 = Frame(false);
         Assert.Equal(0, Differing(still1, still2));
+        await WarmUp();
         using var live1 = Frame(true);
         await Task.Delay(400);
         using var live2 = Frame(true);
-        Assert.True(cache.Animating(HexChunkCache.Now), "a moving world asks for the next frame");
+        Assert.True(cache.Alive(HexChunkCache.Now), "a moving world asks for its next frame");
         if (ReviewFolder is { } folder)
         {
             Directory.CreateDirectory(folder);
@@ -415,5 +426,58 @@ public sealed class HexWorkshopRenderingTests
         }
 
         Assert.True(Differing(live1, live2) > 20, "water glints, wind and clouds move between two frames");
+    }
+
+    [Fact]
+    public async Task Trees_sway_and_only_trees()
+    {
+        var (document, layer, _, _) = World(HexOrientation.Flat);
+        const double scale = 1;
+        using var cache = new HexChunkCache();
+        SKBitmap Frame()
+        {
+            var bitmap = new SKBitmap((int)(document.Canvas.Width * scale), (int)(document.Canvas.Height * scale), SKColorType.Rgba8888, SKAlphaType.Premul);
+            using var canvas = new SKCanvas(bitmap);
+            canvas.Scale((float)scale);
+            SceneRenderer.Render(canvas, document, new RenderOptions { ViewScale = scale, HexChunks = cache, HexAmbient = true });
+            return bitmap;
+        }
+
+        for (var i = 0; i < 14; i++)
+        {
+            using (Frame()) { }
+            await Task.Delay(90);
+        }
+
+        using var a = Frame();
+        await Task.Delay(700);
+        using var b = Frame();
+        if (ReviewFolder is { } folder)
+        {
+            Directory.CreateDirectory(folder);
+            using (var fa = File.Create(Path.Combine(folder, "sway-a.png"))) a.Encode(fa, SKEncodedImageFormat.Png, 100);
+            using (var fb = File.Create(Path.Combine(folder, "sway-b.png"))) b.Encode(fb, SKEncodedImageFormat.Png, 100);
+        }
+
+        var layout = layer.Board.Layout;
+        int Moved(int column, int row)
+        {
+            var bounds = layout.Bounds(layout.FromOffset(new HexOffset(column, row)));
+            var n = 0;
+            for (var y = (int)bounds.Top + 4; y < bounds.Bottom - 4; y += 2)
+            {
+                for (var x = (int)bounds.Left + 4; x < bounds.Right - 4; x += 2)
+                {
+                    if (Distance(a.GetPixel(x, y), b.GetPixel(x, y)) > 30) n++;
+                }
+            }
+
+            return n;
+        }
+
+        // A living forest hex (bottom right) moves; a plain grass hex far from water and woods does not
+        // more than the passing cloud shade could.
+        Assert.True(Moved(11, 8) > 10, "the trees of the living forest sway");
+        Assert.True(Moved(5, 8) <= 2, "plain grass stays where it is");
     }
 }

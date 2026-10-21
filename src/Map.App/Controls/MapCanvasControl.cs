@@ -605,8 +605,29 @@ public sealed partial class MapCanvasControl : Control
                 FrameRendered?.Invoke(this, EventArgs.Empty);
             },
             BrushCursorPreview(),
-            // The hex world moves only while its window is in front and the effects are on.
-            Map.App.Services.UiFeel.EffectsEnabled && TopLevel.GetTopLevel(this) is Window { IsActive: true }));
+            // The hex world moves only while its window is in front, the effects are on and someone
+            // has touched the canvas in the last two minutes (an idle map rests; any move wakes it).
+            Map.App.Services.UiFeel.EffectsEnabled && TopLevel.GetTopLevel(this) is Window { IsActive: true }
+                && Stopwatch.GetElapsedTime(_lastInput) < AmbientRest,
+            () => Avalonia.Threading.Dispatcher.UIThread.Post(QueueAmbientFrame, Avalonia.Threading.DispatcherPriority.Background)));
+    }
+
+    private Avalonia.Threading.DispatcherTimer? _ambientTimer;
+    private long _lastInput = Stopwatch.GetTimestamp();
+
+    /// <summary>After this long without a pointer on the canvas the living hex world rests.</summary>
+    private static readonly TimeSpan AmbientRest = TimeSpan.FromMinutes(2);
+
+    /// <summary>The living hex world's next frame, about 24 a second (a frame of every kind before it counts).</summary>
+    private void QueueAmbientFrame()
+    {
+        if (_ambientTimer is { IsEnabled: true }) return;
+        _ambientTimer ??= new Avalonia.Threading.DispatcherTimer(TimeSpan.FromMilliseconds(41), Avalonia.Threading.DispatcherPriority.Render, (_, _) =>
+        {
+            _ambientTimer!.Stop();
+            if (TopLevel.GetTopLevel(this) is not null) QueueVisualInvalidation();
+        });
+        _ambientTimer.Start();
     }
 
     private Point? _hoverPointer;
@@ -643,7 +664,7 @@ public sealed partial class MapCanvasControl : Control
         CanvasPerformanceMode performanceMode, bool fastPreview, bool fastTerrain, Action requestRefinedFrame, Action<SKSurface, SKCanvas> captureFrame,
         Action<SKCanvas, float, float>? drawBadge,
         Action<RenderLodTier, double, Map.Core.Documents.MapDocument, bool, long, long, long, long, bool> frameRendered,
-        Map.Rendering.BrushCursorPreview? brushCursor, bool hexAmbient) : ICustomDrawOperation
+        Map.Rendering.BrushCursorPreview? brushCursor, bool hexAmbient, Action requestAmbientFrame) : ICustomDrawOperation
     {
         public Rect Bounds { get; } = bounds;
 
@@ -767,6 +788,7 @@ public sealed partial class MapCanvasControl : Control
                 LayerImages = layerImages,
                 TerrainRefinement = lease.GrContext is not null ? refinement : null,
                 RequestRefinedFrame = requestRefinedFrame,
+                RequestAmbientFrame = requestAmbientFrame,
                 LodTier = tier,
                 Preview = editor.StrokePreview,
                 PreviewCache = previewCache,
@@ -998,6 +1020,7 @@ public sealed partial class MapCanvasControl : Control
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
+        _lastInput = Stopwatch.GetTimestamp();
         base.OnPointerPressed(e);
         if (_input is null)
         {
@@ -1027,6 +1050,7 @@ public sealed partial class MapCanvasControl : Control
 
     protected override void OnPointerMoved(PointerEventArgs e)
     {
+        _lastInput = Stopwatch.GetTimestamp();
         base.OnPointerMoved(e);
         if (_editor is null || _input is null)
         {
@@ -1146,6 +1170,7 @@ public sealed partial class MapCanvasControl : Control
 
     protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
     {
+        _lastInput = Stopwatch.GetTimestamp();
         base.OnPointerWheelChanged(e);
         var started = Stopwatch.GetTimestamp();
         if (HandleWheel(e.GetPosition(this), e.Delta.Y, e.KeyModifiers)) e.Handled = true;

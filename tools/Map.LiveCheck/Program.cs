@@ -78,6 +78,25 @@ try
         Log(export is null ? "MISSING: ExportButton (workshop did not open the map)" : $"workshop with the map after {clock.ElapsedMilliseconds} ms");
         if (export is null) missing++;
         Thread.Sleep(1500);
+
+        // --hover: the real mouse glides across the canvas (the hex hover outline), with shots on the way.
+        if (Arg("--hover") is not null && main.FindFirstDescendant(cf => cf.ByAutomationId("MapCanvas")) is { } canvas)
+        {
+            main.Focus();
+            main.SetForeground();
+            var box = canvas.BoundingRectangle;
+            var y = box.Top + box.Height / 2;
+            for (var x = box.Left + box.Width / 3; x < box.Left + box.Width * 2 / 3; x += 3)
+            {
+                Mouse.MoveTo(x, y);
+                Thread.Sleep(16);
+                if ((x - box.Left) % 120 < 3) Shot(main, Path.Combine(outDir, $"hover-{x - box.Left:D4}.png"));
+            }
+
+            Thread.Sleep(600);
+            Shot(main, Path.Combine(outDir, "hover-rest.png"));
+            Log($"hover: glided across the canvas {box}");
+        }
         Dump(main, Path.Combine(outDir, "ui-tree-workshop.txt"));
         Shot(main, Path.Combine(outDir, "10-workshop.png"));
         if (export is not null)

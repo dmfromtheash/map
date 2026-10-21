@@ -31,6 +31,12 @@ public enum HexLook
 
     /// <summary>Features, living-terrain icons and region frontiers, drawn over the paths.</summary>
     Features,
+
+    /// <summary>
+    /// Not drawn itself: where the trees of the living terrain are and how high each pixel sits in
+    /// its tree, kept at half the picture's scale; <see cref="HexTreeSway"/> sways the trees by it.
+    /// </summary>
+    Sway,
 }
 
 /// <summary>
@@ -602,6 +608,13 @@ internal sealed class HexChunkContext(HexChunk?[] neighbours, object? style)
 /// </summary>
 public static partial class HexLayerRenderer
 {
+    /// <summary>How strongly the living world shows in the frame being drawn (it fades in and out).</summary>
+    [ThreadStatic]
+    private static double _swayStrength;
+
+    /// <summary>From this many screen pixels per hex the trees of the living terrain sway (with the living world on).</summary>
+    public const double SwayFromPixels = 34;
+
     /// <summary>Below this many screen pixels per hex the tile is drawn as its average colour.</summary>
     public const double FlatColourBelowPixels = 10;
 
@@ -643,7 +656,7 @@ public static partial class HexLayerRenderer
             options.HexPlayerView ? null : options.HexCursor, options.IsExport, options.RequestRefinedFrame,
             options.Stats, options.HexGestureLive, options.HexPlayerView,
             options.HexPlayerView ? null : options.HexOverlay, options.IsExport ? null : options.HexSettles,
-            options.HexAmbient && !options.IsExport);
+            options.HexAmbient && !options.IsExport, options.RequestAmbientFrame);
     }
 
     /// <param name="requestFrame">Asks for another frame when some chunk images are still to be drawn.</param>
@@ -652,7 +665,7 @@ public static partial class HexLayerRenderer
     public static void Draw(SKCanvas canvas, HexLayer layer, WorldBounds view, double viewScale,
         HexChunkCache? cache, GRContext? gpu, HexCursorPreview? cursor, bool isExport,
         Action? requestFrame = null, RenderStats? stats = null, bool live = false, bool player = false,
-        HexOverlay? overlay = null, HexSettles? settles = null, bool ambient = false)
+        HexOverlay? overlay = null, HexSettles? settles = null, bool ambient = false, Action? requestAmbientFrame = null)
     {
         var board = layer.Board;
         var hexPixels = board.Layout.HexWidth * viewScale;
@@ -668,6 +681,12 @@ public static partial class HexLayerRenderer
         // A chunk below the view can still hang into it: tall tiles rise over the rows behind.
         var reach = new WorldBounds(view.Left, view.Top, view.Right,
             view.Bottom + (HexStarterTiles.MaxOverhang + 0.2) * board.Layout.HexHeight);
+        // Trees sway while the world is alive and close enough to see them; it fades in and out.
+        var alive = cache is not null && !isExport ? cache.AliveLevel(ambient && !flat && hexPixels >= AmbientFromPixels, HexChunkCache.Now) : 0;
+        _swayStrength = alive;
+        var sway = alive > 0 && hexPixels >= SwayFromPixels && HexTreeSway.Available
+            ? System.Diagnostics.Stopwatch.GetTimestamp() / (double)System.Diagnostics.Stopwatch.Frequency
+            : -1;
         void Ground(bool asFlat, ref BuildBudget budget)
         {
             if (asFlat && cache is not null)
@@ -676,7 +695,8 @@ public static partial class HexLayerRenderer
             }
             else
             {
-                DrawPass(canvas, layer, asFlat ? HexLook.Flat : HexLook.Terrain, asFlat ? view : reach, viewScale, cache, gpu, isExport, live, ref budget);
+                DrawPass(canvas, layer, asFlat ? HexLook.Flat : HexLook.Terrain, asFlat ? view : reach, viewScale, cache, gpu, isExport, live, ref budget,
+                    asFlat ? -1 : sway);
             }
         }
 
@@ -710,7 +730,7 @@ public static partial class HexLayerRenderer
             }
             else
             {
-                DrawPass(canvas, layer, HexLook.Features, reach, viewScale, cache, gpu, isExport, live, ref budget);
+                DrawPass(canvas, layer, HexLook.Features, reach, viewScale, cache, gpu, isExport, live, ref budget, sway);
             }
         }
 
@@ -723,6 +743,10 @@ public static partial class HexLayerRenderer
         {
             requestFrame?.Invoke();
         }
+        else if (cache is not null && !isExport && cache.Alive(HexChunkCache.Now))
+        {
+            (requestAmbientFrame ?? requestFrame)?.Invoke();
+        }
 
         // Hexes the tool just changed ease in over the kept pictures.
         if (settles is not null && settles.LayerId == layer.Id && settles.Items.Count > 0 && !flat)
@@ -731,9 +755,9 @@ public static partial class HexLayerRenderer
         }
 
         // The world alive while it is looked at: water glints, wind over forests, cloud shadows.
-        if (ambient && !flat && cache is not null && hexPixels >= AmbientFromPixels)
+        if (alive > 0 && !flat && cache is not null)
         {
-            DrawAmbient(canvas, layer, view, viewScale, now / (double)System.Diagnostics.Stopwatch.Frequency);
+            DrawAmbient(canvas, layer, view, viewScale, now / (double)System.Diagnostics.Stopwatch.Frequency, alive);
             cache.KeepAlive(now);
         }
 
@@ -822,7 +846,7 @@ public static partial class HexLayerRenderer
     }
 
     private static void DrawPass(SKCanvas canvas, HexLayer layer, HexLook look, WorldBounds view, double viewScale,
-        HexChunkCache? cache, GRContext? gpu, bool isExport, bool live, ref BuildBudget budget)
+        HexChunkCache? cache, GRContext? gpu, bool isExport, bool live, ref BuildBudget budget, double sway = -1)
     {
         var board = layer.Board;
         var crossed = look == HexLook.Flat ? null : PathChunks(layer);
@@ -863,7 +887,7 @@ public static partial class HexLayerRenderer
                     continue;
                 }
 
-                switch (TryDrawCached(canvas, layer, key, chunk, look, viewScale, cache, gpu, context, budget.MayBuild && !live, merged, place))
+                switch (TryDrawCached(canvas, layer, key, chunk, look, viewScale, cache, gpu, context, budget.MayBuild && !live, merged, place, sway))
                 {
                     case CachedDraw.Kept:
                         continue;
@@ -921,6 +945,9 @@ public static partial class HexLayerRenderer
             case HexLook.Terrain:
                 DrawChunkGround(canvas, layer, key, chunk, clip, pixelScale, live, only);
                 if (merged && Info(chunk).NeedsFeatures) DrawChunkFeatures(canvas, layer, key, chunk, clip, pixelScale, only);
+                break;
+            case HexLook.Sway:
+                DrawSwayMask(canvas, layer, key, chunk, clip, pixelScale);
                 break;
             default:
                 DrawChunkFeatures(canvas, layer, key, chunk, clip, pixelScale, only);
@@ -1158,13 +1185,14 @@ public static partial class HexLayerRenderer
     }).Value;
 
     /// <summary>What a chunk holds besides terrain, counted once per chunk object.</summary>
-    internal sealed record ChunkInfo(bool NeedsFeatures, int Revealed);
+    internal sealed record ChunkInfo(bool NeedsFeatures, int Revealed, bool Trees = false);
 
     private static readonly ConditionalWeakTable<HexChunk, ChunkInfo> ChunkInfos = new();
 
     internal static ChunkInfo Info(HexChunk chunk) => ChunkInfos.GetValue(chunk, static c =>
     {
         var needs = false;
+        var trees = false;
         var revealed = 0;
         for (var row = 0; row < HexBoard.ChunkSize; row++)
         {
@@ -1174,10 +1202,11 @@ public static partial class HexLayerRenderer
                 if (cell.Revealed) revealed++;
                 needs |= cell.Feature is not null || cell.Region != 0
                     || HexStarterTiles.Find(cell.Terrain)?.Dynamic is { } kind && kind != HexDynamicIcon.None;
+                trees |= HexStarterTiles.Find(cell.Terrain)?.Dynamic is HexDynamicIcon.Trees or HexDynamicIcon.Pines;
             }
         }
 
-        return new ChunkInfo(needs, revealed);
+        return new ChunkInfo(needs, revealed, trees);
     });
 
     private enum CachedDraw { Direct, Kept, Built, Deferred }
@@ -1349,7 +1378,7 @@ public static partial class HexLayerRenderer
 
     private static CachedDraw TryDrawCached(SKCanvas canvas, HexLayer layer, HexChunkKey key, HexChunk chunk, HexLook look,
         double viewScale, HexChunkCache cache, GRContext? gpu, HexChunkContext? context, bool mayBuild, bool merged,
-        HexChunkCache.Place place)
+        HexChunkCache.Place place, double sway = -1)
     {
         var board = layer.Board;
         // Level n keeps the chunk at scale 2^n: the nearest level at or above the view scale.
@@ -1433,7 +1462,7 @@ public static partial class HexLayerRenderer
             using var fade = new SKPaint { Color = SKColors.White.WithAlpha((byte)Math.Round(255 * HexChunkCache.Ease(swap.T))) };
             DrawPicture(canvas, board, key, look, image, level, fade);
         }
-        else
+        else if (sway < 0 || !DrawSwaying(canvas, layer, key, chunk, look, image, level, bounds, cache, context, merged, sway, _swayStrength))
         {
             canvas.DrawImage(image,
                 new SKRect((float)bounds.Left, (float)bounds.Top,

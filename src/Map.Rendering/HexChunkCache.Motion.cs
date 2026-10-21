@@ -51,8 +51,31 @@ public sealed partial class HexChunkCache
         if (until > _animateUntil) _animateUntil = until;
     }
 
-    /// <summary>Something always moving (the living world) was drawn: ask for the next frame too.</summary>
-    internal void KeepAlive(long now) => KeepAnimating(now, 40);
+    private long _aliveUntil;
+    private (double Level, long Stamp) _alive;
+
+    /// <summary>
+    /// How strongly the living world shows (0..1): it fades in and out over about a second when it
+    /// is switched on or off (the window comes to the front, an idle map comes to rest).
+    /// </summary>
+    internal double AliveLevel(bool on, long now)
+    {
+        var dt = _alive.Stamp == 0 ? 0 : Math.Clamp((now - _alive.Stamp) / (double)Stopwatch.Frequency, 0, 0.1);
+        var level = Math.Clamp(_alive.Level + (on ? dt : -dt) / 0.9, 0, 1);
+        _alive = (level, now);
+        if (level > 0 && level < 1) KeepAlive(now);
+        return level;
+    }
+
+    /// <summary>Something always moving (the living world) was drawn: it asks for a frame of its own, not every frame.</summary>
+    internal void KeepAlive(long now)
+    {
+        var until = now + (long)(0.1 * Stopwatch.Frequency);
+        if (until > _aliveUntil) _aliveUntil = until;
+    }
+
+    /// <summary>True while the living world is shown: the canvas draws it again at its own slow rate.</summary>
+    public bool Alive(long now) => now < _aliveUntil;
 
     /// <summary>A stand-in was drawn at a place this frame: when the right picture arrives it fades in over it.</summary>
     internal void NoteStandIn(Place place, SKImage image, int level)

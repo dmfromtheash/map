@@ -345,11 +345,76 @@ public static partial class HexLayerRenderer
     // ------------------------------------------------------------------ features, living terrain, frontiers
 
     /// <param name="ClipBottom">When set, only the part of the picture above this line is drawn.</param>
-    private readonly record struct Standing(float SortY, SKImage Image, SKRect Rect, float ClipBottom = float.NaN);
+    /// <param name="Sways">A tree of the living terrain: it sways in the wind (<see cref="HexTreeSway"/>).</param>
+    /// <param name="Phase">That tree's own beat, 0..1.</param>
+    private readonly record struct Standing(float SortY, SKImage Image, SKRect Rect, float ClipBottom = float.NaN,
+        bool Sways = false, float Phase = 0);
 
     /// <summary>Everything that stands on the ground of a chunk, sorted back to front, and the region frontiers.</summary>
     private static void DrawChunkFeatures(SKCanvas canvas, HexLayer layer, HexChunkKey key, HexChunk chunk, WorldBounds? clip, double pixelScale,
         IReadOnlySet<HexCoord>? only = null)
+    {
+        var items = StandingItems(layer, key, chunk, clip, pixelScale, only);
+        foreach (var item in items)
+        {
+            if (float.IsNaN(item.ClipBottom))
+            {
+                DrawScaled(canvas, item.Image, item.Rect);
+                continue;
+            }
+
+            canvas.Save();
+            canvas.ClipRect(item.Rect with { Bottom = item.ClipBottom });
+            DrawScaled(canvas, item.Image, item.Rect);
+            canvas.Restore();
+        }
+
+        if (!layer.Regions.IsEmpty) DrawFrontiers(canvas, layer, key, chunk, pixelScale);
+    }
+
+    /// <summary>
+    /// The sway mask of a chunk: each tree's pixels hold their height in the tree (red, 0 at the foot)
+    /// and the tree's beat (green); whatever stands in front of a tree (a later item in the same
+    /// back-to-front order) wipes the mask, so only what is seen of a tree moves.
+    /// </summary>
+    private static void DrawSwayMask(SKCanvas canvas, HexLayer layer, HexChunkKey key, HexChunk chunk, WorldBounds? clip, double pixelScale)
+    {
+        var items = StandingItems(layer, key, chunk, clip, pixelScale, null);
+        using var wipe = new SKPaint { BlendMode = SKBlendMode.DstOut };
+        using var paint = new SKPaint();
+        foreach (var item in items)
+        {
+            if (!item.Sways)
+            {
+                if (float.IsNaN(item.ClipBottom))
+                {
+                    canvas.DrawImage(item.Image, item.Rect, ChunkSampling, wipe);
+                    continue;
+                }
+
+                canvas.Save();
+                canvas.ClipRect(item.Rect with { Bottom = item.ClipBottom });
+                canvas.DrawImage(item.Image, item.Rect, ChunkSampling, wipe);
+                canvas.Restore();
+                continue;
+            }
+
+            var phase = (byte)Math.Round(255 * item.Phase);
+            using var height = SKShader.CreateLinearGradient(new SKPoint(0, item.Rect.Bottom), new SKPoint(0, item.Rect.Top),
+                [new SKColor(0, phase, 0, 255), new SKColor(255, phase, 0, 255)], SKShaderTileMode.Clamp);
+            var matrix = SKMatrix.CreateScale(item.Rect.Width / item.Image.Width, item.Rect.Height / item.Image.Height)
+                .PostConcat(SKMatrix.CreateTranslation(item.Rect.Left, item.Rect.Top));
+            using var shape = SKShader.CreateImage(item.Image, SKShaderTileMode.Decal, SKShaderTileMode.Decal, ChunkSampling, matrix);
+            using var tree = SKShader.CreateCompose(height, shape, SKBlendMode.DstIn);
+            paint.Shader = tree;
+            canvas.DrawRect(item.Rect, paint);
+            paint.Shader = null;
+        }
+    }
+
+    /// <summary>Everything that stands on the ground of a chunk, sorted back to front.</summary>
+    private static List<Standing> StandingItems(HexLayer layer, HexChunkKey key, HexChunk chunk, WorldBounds? clip, double pixelScale,
+        IReadOnlySet<HexCoord>? only)
     {
         var board = layer.Board;
         var layout = board.Layout;
@@ -385,20 +450,7 @@ public static partial class HexLayerRenderer
         }
 
         items.Sort((a, b) => a.SortY.CompareTo(b.SortY));
-        foreach (var item in items)
-        {
-            if (float.IsNaN(item.ClipBottom))
-            {
-                DrawScaled(canvas, item.Image, item.Rect);
-                continue;
-            }
-
-            canvas.Save();
-            canvas.ClipRect(item.Rect with { Bottom = item.ClipBottom });
-            DrawScaled(canvas, item.Image, item.Rect);
-            canvas.Restore();
-        }
-        if (!layer.Regions.IsEmpty) DrawFrontiers(canvas, layer, key, chunk, pixelScale);
+        return items;
     }
 
     /// <summary>
@@ -461,7 +513,8 @@ public static partial class HexLayerRenderer
                 var icon = HexTileArt.Icon(tile.Dynamic, variant);
                 var foot = (float)(py + scale * 12 / 256);
                 items.Add(new Standing((float)py, icon,
-                    new SKRect((float)(px - scale / 2), (float)(foot - scale), (float)(px + scale / 2), foot)));
+                    new SKRect((float)(px - scale / 2), (float)(foot - scale), (float)(px + scale / 2), foot),
+                    Sways: tile.Dynamic is HexDynamicIcon.Trees or HexDynamicIcon.Pines, Phase: (mixed >> 20 & 0xFF) / 255f));
             }
         }
     }

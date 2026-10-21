@@ -332,6 +332,12 @@ public sealed class RenderOptions
     public TerrainRefinement? TerrainRefinement { get; init; }
     public Action? RequestRefinedFrame { get; init; }
 
+    /// <summary>
+    /// Asks for a frame a little later (about 24 a second): what only the living hex world needs.
+    /// A slow glint or a passing cloud shade reads as smooth at that rate, at a third of the work.
+    /// </summary>
+    public Action? RequestAmbientFrame { get; init; }
+
     /// <summary>Render-context-local cache used only by the editor overview tier.</summary>
     public ObjectOverviewCache? ObjectCache { get; init; }
 
