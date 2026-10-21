@@ -443,14 +443,15 @@ public sealed class DashboardView : UserControl
         RenderOptions.SetBitmapInterpolationMode(artwork, BitmapInterpolationMode.HighQuality);
         return _welcome = new Border
         {
-            Name = "DashboardWelcome", Height = 420,
+            Name = "DashboardWelcome", MinHeight = 420,
             CornerRadius = new CornerRadius(9), BorderThickness = new Thickness(1),
             BorderBrush = Brush("MapBorderBrush"), ClipToBounds = true,
             Child = new Panel
             {
                 Children =
                 {
-                    artwork,
+                    // The artwork fills whatever height the copy and the window give it, and asks for none.
+                    new Backdrop { Children = { artwork } },
                     new Border
                     {
                         IsHitTestVisible = false,
@@ -470,6 +471,16 @@ public sealed class DashboardView : UserControl
                 },
             },
         };
+    }
+
+    /// <summary>A panel that fills its place but asks for no size: a picture behind content never sets its height.</summary>
+    private sealed class Backdrop : Panel
+    {
+        protected override Size MeasureOverride(Size availableSize)
+        {
+            foreach (var child in Children) child.Measure(availableSize);
+            return default;
+        }
     }
 
     /// <summary>
@@ -507,9 +518,11 @@ public sealed class DashboardView : UserControl
         // latest maps sit right under it.
         // Without maps the picture fills the page; with them it takes a little over half the
         // height (taller on tall screens), and the latest maps sit right under it.
-        var target = Math.Floor(Math.Max(layout.Copy.DesiredSize.Height + 2,
-            _empty == true ? viewport - 120 : Math.Clamp(viewport * .56, 360, 860)));
-        if (Math.Abs(_welcome.Height - target) > .5) _welcome.Height = target;
+        // The artwork's least height; the copy may make it taller. A fixed height clipped the copy on
+        // a low window: measured inside the artwork, its desired size never exceeded the artwork,
+        // so «Из шаблона» stayed cut under the main buttons.
+        var target = Math.Floor(_empty == true ? viewport - 120 : Math.Clamp(viewport * .56, 360, 860));
+        if (Math.Abs(_welcome.MinHeight - target) > .5) _welcome.MinHeight = target;
 
         if (_welcomeShade is not null)
         {
