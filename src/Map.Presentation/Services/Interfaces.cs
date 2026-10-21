@@ -73,6 +73,9 @@ public interface IExportDestinationPicker
 
     Task<string?> PickTilePackageAsync(string suggestedFolderName);
 
+    /// <summary>A new folder for linked Markdown notes; the same destination contract as tile packages.</summary>
+    Task<string?> PickObsidianPackageAsync(string suggestedFolderName) => PickTilePackageAsync(suggestedFolderName);
+
     /// <summary>Where to write a Universal VTT file (*.dd2vtt); null when cancelled or not supported.</summary>
     Task<string?> PickVttAsync(string suggestedFileName) => Task.FromResult<string?>(null);
 

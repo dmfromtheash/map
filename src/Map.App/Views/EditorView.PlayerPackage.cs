@@ -42,6 +42,7 @@ public sealed partial class EditorView
                     {
                         Ui.AsyncButton("ExportPackageJsonButton", "JSON гексов…", async () => { await _editor.ExportHexJsonAsync(); }, "compact"),
                         Ui.AsyncButton("ExportPackageMarkdownButton", "Ключ Markdown…", async () => { await _editor.ExportHexKeyAsync(_editor.ExportHexPlayers); }, "compact"),
+                        Ui.AsyncButton("ExportObsidianButton", "Папка Obsidian…", async () => { await _editor.ExportObsidianAsync(); }, "compact"),
                         Ui.AsyncButton("ExportPackagePrintButton", "PDF по листам…", async () => { await ShowHexPrintAsync(); }, "compact"),
                     },
                 },

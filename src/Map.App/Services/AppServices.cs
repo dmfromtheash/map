@@ -241,12 +241,18 @@ public sealed class AvaloniaExportDestinationPicker(Window owner) : IExportDesti
         });
 
     public Task<string?> PickTilePackageAsync(string suggestedFolderName) =>
+        PickPackageAsync(suggestedFolderName, "Новая папка пакета тайлов");
+
+    public Task<string?> PickObsidianPackageAsync(string suggestedFolderName) =>
+        PickPackageAsync(suggestedFolderName, "Новая папка Obsidian");
+
+    private Task<string?> PickPackageAsync(string suggestedFolderName, string title) =>
         Dispatcher.UIThread.InvokeAsync(async () =>
         {
             // A save-name dialog can name a folder that does not exist yet; a folder picker cannot.
             var folder = await owner.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
             {
-                Title = "Новая папка пакета тайлов",
+                Title = title,
                 SuggestedFileName = suggestedFolderName,
             });
             return folder?.TryGetLocalPath();
