@@ -179,6 +179,7 @@ public sealed partial class EditorView
             Spacing = 4, Children =
             {
                 _riverName,
+                Ui.TextButton("RiverAddLabelButton", "Подпись вдоль реки", () => _editor.AddLabelAlongSelectedPath(Map.Core.Documents.TextPathTarget.River), "compact"),
                 Ui.Subgroup("Готовые стили", new Ui.ChoiceGrid
                 {
                     MaxColumns = 2, MinimumItemWidth = 100, Gap = 4, Children =

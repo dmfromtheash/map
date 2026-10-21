@@ -30,6 +30,9 @@ public sealed record TextStyle
     public bool FlipVertical { get; init; }
     public double Blur { get; init; }
     public string Blend { get; init; } = "Normal";
+
+    /// <summary>Set when the label follows a river, road or hex path (R07); null for free text.</summary>
+    public TextPathBinding? Path { get; init; }
 }
 
 public sealed record MapNote

@@ -1,4 +1,4 @@
-using System.Buffers.Binary;
+﻿using System.Buffers.Binary;
 using System.Globalization;
 using System.IO.Compression;
 using System.Security.Cryptography;
@@ -22,7 +22,12 @@ public static partial class MapProjectStore
     // The container is machine-owned and the reader accepts either representation.
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = false };
 
+    private static bool HasTextPaths(IEnumerable<MapLayer> layers) =>
+        layers.OfType<ObjectLayer>().Any(l => l.Objects.Any(o => o.Text?.Path is not null));
+
     private static int SchemaFor(MapDocument document) =>
+        HasTextPaths(document.Layers) || document.Checkpoints.Any(c => HasTextPaths(c.Snapshot.Layers))
+            ? MapProjectFormat.TextPathsSchemaVersion :
         document.Layers.OfType<ObjectLayer>().Any(l => l.Roads.Any(r => r.NeedsCrossingsSchema))
         || document.Checkpoints.Any(c => c.Snapshot.Layers.OfType<ObjectLayer>().Any(l => l.Roads.Any(r => r.NeedsCrossingsSchema)))
             ? MapProjectFormat.RoadCrossingsSchemaVersion :
@@ -2107,6 +2112,19 @@ public static partial class MapProjectStore
         FlipVertical = text.FlipVertical,
         Blur = text.Blur,
         Blend = text.Blend,
+        Path = text.Path is { } path ? new TextPathDto
+        {
+            Target = path.Target.ToString(),
+            TargetId = path.TargetId.ToString("D"),
+            PartId = path.PartId?.ToString("D"),
+            Position = path.Position,
+            Side = path.Side.ToString(),
+            Gap = path.Gap,
+            KeepUpright = path.KeepUpright,
+            Reverse = path.Reverse,
+            Detached = path.Detached,
+            Baseline = [.. path.Baseline.SelectMany(point => new[] { point.X, point.Y })],
+        } : null,
     };
 
     private static FilterSettingsDto ToFilterDto(FilterSettings filter) => new()
@@ -2515,7 +2533,35 @@ public static partial class MapProjectStore
         Blur = RequireFinite(
             text.Blur, "text blur", min: 0, max: AppearanceLimits.MaxBlur),
         Blend = RequireBlend(text.Blend, "text blend"),
+        Path = text.Path is { } path ? ToTextPath(path) : null,
     };
+
+    private static TextPathBinding ToTextPath(TextPathDto path)
+    {
+        var values = path.Baseline ?? [];
+        if (values.Length % 2 != 0 || values.Length / 2 > TextPathBinding.MaxBaselinePoints)
+            throw new MapProjectCorruptedException("Text path baseline is malformed.");
+        var baseline = System.Collections.Immutable.ImmutableArray.CreateBuilder<VectorPoint>(values.Length / 2);
+        for (var i = 0; i < values.Length; i += 2)
+            baseline.Add(new VectorPoint(
+                RequireFinite(values[i], "text path baseline", min: -1e7, max: 1e7),
+                RequireFinite(values[i + 1], "text path baseline", min: -1e7, max: 1e7)));
+        return new TextPathBinding
+        {
+            Target = ParseDefined<TextPathTarget>(path.Target, "text path target"),
+            TargetId = Guid.TryParse(path.TargetId, out var target) ? target
+                : throw new MapProjectCorruptedException("Text path target id is invalid."),
+            PartId = path.PartId is null ? null : Guid.TryParse(path.PartId, out var part) ? part
+                : throw new MapProjectCorruptedException("Text path part id is invalid."),
+            Position = RequireFinite(path.Position, "text path position", min: 0, max: 1),
+            Side = ParseDefined<TextPathSide>(path.Side, "text path side"),
+            Gap = RequireFinite(path.Gap, "text path gap", min: -10000, max: 10000),
+            KeepUpright = path.KeepUpright,
+            Reverse = path.Reverse,
+            Detached = path.Detached,
+            Baseline = baseline.MoveToImmutable(),
+        };
+    }
 
     private static FilterSettings ToFilter(FilterSettingsDto filter) => new()
     {

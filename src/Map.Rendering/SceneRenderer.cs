@@ -4054,6 +4054,12 @@ public static class SceneRenderer
                 ? SKImageFilter.CreateBlur((float)style.Blur, (float)style.Blur)
                 : null,
         };
+        if (style.Path is { Baseline.Length: >= 2 } along)
+        {
+            DrawTextAlongPath(canvas, style, along, rect, font, paint, objectAlpha, options);
+            return;
+        }
+
         var centreX = rect.MidX; var centreY = rect.MidY;
         canvas.Save();
         canvas.ClipRect(rect);
@@ -4099,6 +4105,99 @@ public static class SceneRenderer
             DrawTextRun(canvas, line, x, y, lineIndex, style, font, paint);
         }
         canvas.Restore();
+    }
+
+    /// <summary>
+    /// A label bound to a river, road or hex path (R07): every glyph sits on the saved baseline,
+    /// turned to its direction, the run centred on the baseline's middle; text longer than the
+    /// baseline runs on straight along its end directions.
+    /// </summary>
+    private static void DrawTextAlongPath(
+        SKCanvas canvas, TextStyle style, TextPathBinding along, SKRect rect, SKFont font, SKPaint paint,
+        byte objectAlpha, RenderOptions options)
+    {
+        var line = TextOnPath.LineOf(style);
+        if (line.Length == 0) return;
+        var points = along.Baseline;
+        var distances = new double[points.Length];
+        for (var i = 1; i < points.Length; i++)
+        {
+            var dx = points[i].X - points[i - 1].X; var dy = points[i].Y - points[i - 1].Y;
+            distances[i] = distances[i - 1] + Math.Sqrt(dx * dx + dy * dy);
+        }
+
+        var length = distances[^1];
+        if (length <= 0) return;
+        var glyphs = new string[line.Length];
+        var advances = new float[line.Length];
+        var total = 0f;
+        for (var i = 0; i < line.Length; i++)
+        {
+            glyphs[i] = line[i].ToString();
+            advances[i] = font.MeasureText(glyphs[i]) + (i < line.Length - 1 ? (float)style.LetterSpacing : 0);
+            total += advances[i];
+        }
+
+        (float X, float Y, float Angle) At(double s)
+        {
+            int segment;
+            if (s <= 0) segment = 1;
+            else if (s >= length) segment = points.Length - 1;
+            else
+            {
+                segment = Array.BinarySearch(distances, s);
+                segment = segment >= 0 ? Math.Max(1, segment) : ~segment;
+            }
+
+            var a = points[segment - 1]; var b = points[segment];
+            var span = Math.Max(1e-9, distances[segment] - distances[segment - 1]);
+            var t = (s - distances[segment - 1]) / span;
+            var angle = Math.Atan2(b.Y - a.Y, b.X - a.X);
+            return ((float)(rect.Left + a.X + (b.X - a.X) * t), (float)(rect.Top + a.Y + (b.Y - a.Y) * t), (float)angle);
+        }
+
+        void Run(SKPaint runPaint, float offsetX, float offsetY)
+        {
+            var cursor = length / 2 - total / 2;
+            for (var i = 0; i < glyphs.Length; i++)
+            {
+                var (x, y, angle) = At(cursor + advances[i] / 2);
+                canvas.Save();
+                canvas.Translate(x + offsetX, y + offsetY);
+                canvas.RotateRadians(angle);
+                canvas.DrawText(glyphs[i], -advances[i] / 2, 0, SKTextAlign.Left, font, runPaint);
+                canvas.Restore();
+                cursor += advances[i];
+            }
+        }
+
+        if (!options.FastPreview && style.ShadowOpacity > 0)
+        {
+            using var shadow = new SKPaint
+            {
+                Color = SKColors.Black.WithAlpha((byte)Math.Clamp(Math.Round(style.ShadowOpacity * objectAlpha), 0, 255)),
+                ImageFilter = SKImageFilter.CreateBlur((float)style.ShadowBlur, (float)style.ShadowBlur),
+                IsAntialias = true,
+                BlendMode = ParseBlend(style.Blend),
+                Style = SKPaintStyle.Fill,
+            };
+            Run(shadow, (float)style.ShadowOffsetX, (float)style.ShadowOffsetY);
+        }
+
+        if (!options.FastPreview && style.OutlineWidth > 0)
+        {
+            using var outline = new SKPaint
+            {
+                Style = SKPaintStyle.Stroke,
+                StrokeWidth = (float)style.OutlineWidth,
+                Color = ParseColor(style.OutlineColor).WithScaledAlpha(objectAlpha),
+                IsAntialias = true,
+                BlendMode = ParseBlend(style.Blend),
+            };
+            Run(outline, 0, 0);
+        }
+
+        Run(paint, 0, 0);
     }
 
     private static void DrawTextRun(

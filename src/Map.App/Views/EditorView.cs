@@ -4360,6 +4360,8 @@ public sealed partial class EditorView : UserControl
                     () => Style()?.Alignment.ToString(),
                     key => _editor.SetTextAlignment(Enum.Parse<Core.Documents.TextAlignment>(key))),
                 font,
+                BuildLabelPresetBlock(),
+                BuildTextPathBlock(),
                 appearance,
             },
         };

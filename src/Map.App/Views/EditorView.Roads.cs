@@ -124,6 +124,7 @@ public sealed partial class EditorView
             Spacing = 4, Children =
             {
                 _roadBranchName,
+                Ui.TextButton("RoadAddLabelButton", "Подпись вдоль участка", () => _editor.AddLabelAlongSelectedPath(Map.Core.Documents.TextPathTarget.Road), "compact"),
                 AppearanceNumberBox("RoadBranchWidthBox", "Ширина участка", "ед.", () => _editor.SelectedBranchWidth, _editor.SetSelectedBranchWidth),
                 _roadProfileBlock,
                 BuildRoadCrossingsBlock(),

@@ -496,6 +496,27 @@ internal sealed class TextStyleDto
     [JsonPropertyName("flipVertical")] public bool FlipVertical { get; set; }
     [JsonPropertyName("blur")] public double Blur { get; set; }
     [JsonPropertyName("blend")] public string Blend { get; set; } = "Normal";
+    [JsonPropertyName("path")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public TextPathDto? Path { get; set; }
+}
+
+/// <summary>A label bound to a river, road or hex path (schema v16, R07).</summary>
+internal sealed class TextPathDto
+{
+    [JsonPropertyName("target")] public string Target { get; set; } = "River";
+    [JsonPropertyName("targetId")] public string TargetId { get; set; } = "";
+    [JsonPropertyName("partId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? PartId { get; set; }
+    [JsonPropertyName("position")] public double Position { get; set; } = 0.5;
+    [JsonPropertyName("side")] public string Side { get; set; } = "Above";
+    [JsonPropertyName("gap")] public double Gap { get; set; }
+    [JsonPropertyName("keepUpright")] public bool KeepUpright { get; set; } = true;
+    [JsonPropertyName("reverse")] public bool Reverse { get; set; }
+    [JsonPropertyName("detached")] public bool Detached { get; set; }
+    /// <summary>Derived baseline, x/y pairs relative to the label's top-left.</summary>
+    [JsonPropertyName("baseline")] public double[] Baseline { get; set; } = [];
 }
 
 internal sealed class StampStyleDto

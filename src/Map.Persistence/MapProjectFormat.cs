@@ -27,12 +27,18 @@ public static class MapProjectFormat
     public const int HexPathBlockingSchemaVersion = 14;
 
     /// <summary>
-    /// The newest schema this build writes and reads: a road with a crossing kind chosen by hand
+    /// A road with a crossing kind chosen by hand
     /// (block <c>crossings</c> on the road; R06). Roads without it stay in their older schema.
     /// </summary>
     public const int RoadCrossingsSchemaVersion = 15;
 
-    public const int MaxSupportedSchemaVersion = RoadCrossingsSchemaVersion;
+    /// <summary>
+    /// The newest schema this build writes and reads: a text label bound to a river, road or hex
+    /// path (block <c>path</c> on the text; R07). Maps without such labels stay in their older schema.
+    /// </summary>
+    public const int TextPathsSchemaVersion = 16;
+
+    public const int MaxSupportedSchemaVersion = TextPathsSchemaVersion;
 
     /// <summary>
     /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry

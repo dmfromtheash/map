@@ -1,5 +1,16 @@
 # Map.Performance
 
+## R07: подписи вдоль пути
+
+`native-text-on-path` — своё скрытое окно: «Подпись вдоль реки», следование за сдвинутой рекой и Undo, пресет и «Имя»
+кнопками панели, привязка свободного текста к ближайшей дороге, «Перевернуть», save → reopen (схема v16). Пишет
+`.river-label.png`, `.road-label.png` и `.fixture.mapproj` (карта для живого прохода) рядом с отчётом; рабочая папка
+удаляется в конце.
+
+```powershell
+dotnet tools/Map.Performance/bin/Release/net10.0/win-x64/Map.Performance.dll --profile native-text-on-path --output artifacts/r07/text-on-path.json
+```
+
 ## R19: папка Obsidian
 
 `native-player-package` также нажимает `ExportObsidianButton` для ведущего и игрока:

@@ -213,6 +213,13 @@ public sealed class EditingSession
         if (command is not PlacementAreaCommand && !PlacementAreaOwnership.Allows(Document, candidate, out var areaReason))
         { LastResourceError = areaReason; ResourceAdmissionChanged?.Invoke(this, EventArgs.Empty); return; }
         Mark("ownership");
+        var followed = TextOnPath.Follow(Document, candidate);
+        if (!ReferenceEquals(followed, candidate))
+        {
+            command = new TextPathFollowCommand(command, candidate, followed);
+            candidate = followed;
+        }
+        Mark("labels");
         Document = candidate;
         Revision++;
         var afterState = new StateNode(_currentState);

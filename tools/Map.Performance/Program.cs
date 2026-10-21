@@ -55,6 +55,13 @@ else if (options.Profile == "native-render-audit")
     foreach (var note in audit.Notes) Console.WriteLine($"  {note.Key} = {note.Value}");
     if (audit.Failure is not null) Console.WriteLine(audit.Failure);
 }
+else if (options.Profile == "native-text-on-path")
+{
+    var smoke = NativeTextOnPathSmoke.Run(options); report = smoke; gatePassed = smoke.GatePassed;
+    Console.WriteLine($"native-text-on-path: checks={smoke.Checks.Count(c => c.Value)}/{smoke.Checks.Count}, gate={(smoke.GatePassed ? "PASS" : "FAIL")}");
+    foreach (var check in smoke.Checks.Where(c => !c.Value)) Console.WriteLine($"  FAILED {check.Key}");
+    if (smoke.Failure is not null) Console.WriteLine(smoke.Failure);
+}
 else if (options.Profile is "native-stage20" or "native-crossings")
 {
     var nativeReport = NativeStage20Smoke.Run(options); report = nativeReport; gatePassed = nativeReport.GatePassed;
