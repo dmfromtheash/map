@@ -112,6 +112,12 @@ public sealed class MainWindow : Window
         {
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
             WindowState = WindowState.Maximized;
+            // A test run never opens on the owner's main screen: with a second display it starts there.
+            if (TestMode.Enabled && Screens.All.FirstOrDefault(screen => !screen.IsPrimary) is { } second)
+            {
+                WindowStartupLocation = WindowStartupLocation.Manual;
+                Position = new PixelPoint(second.WorkingArea.X, second.WorkingArea.Y);
+            }
         }
         if (TestMode.StartupSmoke)
         {

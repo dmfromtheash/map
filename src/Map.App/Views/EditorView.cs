@@ -831,8 +831,10 @@ public sealed partial class EditorView : UserControl
         };
         if (TestMode.Enabled)
         {
+            // Where the tested main window is: the live pass puts it on the second display. A window
+            // sent to -32000 was pulled back by Windows onto the owner's main screen.
             window.WindowStartupLocation = WindowStartupLocation.Manual;
-            window.Position = new PixelPoint(-32000, -32000);
+            window.Position = ownerWindow?.Position ?? new PixelPoint(-32000, -32000);
         }
         else
         {

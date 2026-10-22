@@ -30,6 +30,7 @@ internal static class UiScaling
     private static void Apply(Window window)
     {
         if (window is MainWindow || window.Content is LayoutTransformControl { Name: "UiScaleHost" }) return;
+        FollowOwnerScreen(window);
         if (window.Screens.ScreenFromWindow(window) is not { } screen) return;
         var area = screen.WorkingArea.ToRect(screen.Scaling);
         var scale = ForSize(area.Width, area.Height);
@@ -38,6 +39,21 @@ internal static class UiScaling
         window.Content = null;
         window.Content = new LayoutTransformControl { Name = "UiScaleHost", LayoutTransform = new ScaleTransform(scale, scale), Child = content };
         Scale(window, scale, area);
+    }
+
+    /// <summary>
+    /// A dialog opens on the screen of the window that owns it. With two monitors of different
+    /// scale Windows sometimes put it on the main screen instead; it is moved, centred, to the owner's.
+    /// </summary>
+    private static void FollowOwnerScreen(Window window)
+    {
+        if (window.Owner is not Window owner || owner.WindowState == WindowState.Minimized
+            || window.Screens.ScreenFromWindow(owner) is not { } target) return;
+        if (window.Screens.ScreenFromWindow(window) is { } current && current.Bounds == target.Bounds) return;
+        var area = target.WorkingArea;
+        var width = (int)Math.Min(area.Width, (double.IsNaN(window.Width) ? window.Bounds.Width : window.Width) * target.Scaling);
+        var height = (int)Math.Min(area.Height, (double.IsNaN(window.Height) ? window.Bounds.Height : window.Height) * target.Scaling);
+        window.Position = new PixelPoint(area.X + Math.Max(0, (area.Width - width) / 2), area.Y + Math.Max(0, (area.Height - height) / 2));
     }
 
     /// <summary>Grows a fixed-size dialog by the same factor, never past the screen, re-centred.</summary>
