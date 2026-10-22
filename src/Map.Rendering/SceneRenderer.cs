@@ -582,7 +582,7 @@ public static class SceneRenderer
             // or the level just left while the new one fades in over it.
             if (layer is HexLayer { Level: var hexLevel } && options.HexLevel is { } shownLevel
                 && hexLevel != shownLevel && hexLevel != options.HexGhostLevel
-                && !(options.HexChunks?.LevelChange(shownLevel, HexChunkCache.Now) is { } leaving && leaving.From == hexLevel))
+                && !(options.HexChunks?.LevelChange(shownLevel, options.HexChunks.AnimationNow) is { } leaving && leaving.From == hexLevel))
             {
                 continue;
             }
@@ -1814,7 +1814,7 @@ public static class SceneRenderer
             {
                 // A switch of level: the new one fades in over the one just left (220 ms).
                 var levelChange = options.HexLevel is { } current && !options.IsExport
-                    ? options.HexChunks?.LevelChange(current, HexChunkCache.Now)
+                    ? options.HexChunks?.LevelChange(current, options.HexChunks.AnimationNow)
                     : null;
                 if (options.HexLevel is { } shown && hexLayer.Level != shown)
                 {

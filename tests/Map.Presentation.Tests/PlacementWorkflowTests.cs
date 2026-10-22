@@ -253,7 +253,7 @@ public sealed class PlacementWorkflowTests : IDisposable
     }
 
     [Fact]
-    public void Stage18_temporary_preview_memory_refusal_keeps_place_retry_available_without_redrawing()
+    public async Task Stage18_temporary_preview_memory_refusal_keeps_place_retry_available_without_redrawing()
     {
         const long gib = 1024L * 1024 * 1024;
         var available = 512L * 1024 * 1024;
@@ -267,6 +267,8 @@ public sealed class PlacementWorkflowTests : IDisposable
         available = gib;
         Assert.True(editor.FinishEditableArea(), editor.StatusDetail);
         Assert.True(editor.SelectedEditableArea!.MemberCount > 0); Assert.Equal(1, editor.Session.UndoDepth);
+        // Placement cancels the counter; its in-flight reservation ends when that task finishes.
+        await editor.PendingEditableAreaCount;
         Assert.Equal(0, memory.ReservedBytes);
     }
 

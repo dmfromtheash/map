@@ -933,7 +933,7 @@ public static partial class HexLayerRenderer
             // A painted look: the hidden hexes in view as one shape with a hand-made edge. Hexes
             // revealed or hidden lately melt out of or into it, each with its own share of the look.
             var melting = new List<(HexCoord Hex, double Alpha)>();
-            var moment = HexChunkCache.Now;
+            var moment = (cache?.AnimationNow ?? HexChunkCache.Now);
             foreach (var key in board.ChunksIn(view))
             {
                 var chunk = board.Chunk(key);
@@ -973,7 +973,7 @@ public static partial class HexLayerRenderer
             IsAntialias = true,
             Color = player ? new SKColor(0x22, 0x20, 0x26) : new SKColor(0x10, 0x14, 0x24, 0x78),
         };
-        var now = HexChunkCache.Now;
+        var now = (cache?.AnimationNow ?? HexChunkCache.Now);
         var fogAlpha = paint.Color.Alpha;
         foreach (var key in board.ChunksIn(view))
         {

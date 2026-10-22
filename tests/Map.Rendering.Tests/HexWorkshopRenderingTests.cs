@@ -461,11 +461,12 @@ public sealed class HexWorkshopRenderingTests
     }
 
     [Fact]
-    public async Task Trees_sway_and_only_trees()
+    public void Trees_sway_and_only_trees()
     {
         var (document, layer, _, _) = World(HexOrientation.Flat);
         const double scale = 1;
-        using var cache = new HexChunkCache();
+        var now = 10L * System.Diagnostics.Stopwatch.Frequency;
+        using var cache = new HexChunkCache { AnimationClock = () => now };
         SKBitmap Frame()
         {
             var bitmap = new SKBitmap((int)(document.Canvas.Width * scale), (int)(document.Canvas.Height * scale), SKColorType.Rgba8888, SKAlphaType.Premul);
@@ -475,14 +476,15 @@ public sealed class HexWorkshopRenderingTests
             return bitmap;
         }
 
-        for (var i = 0; i < 14; i++)
+        // Fixed phases: neither the scheduler nor the machine uptime chooses the two frames.
+        for (var i = 0; i < 40; i++)
         {
             using (Frame()) { }
-            await Task.Delay(90);
+            now += System.Diagnostics.Stopwatch.Frequency / 10;
         }
 
         using var a = Frame();
-        await Task.Delay(700);
+        now += System.Diagnostics.Stopwatch.Frequency * 7 / 10;
         using var b = Frame();
         if (ReviewFolder is { } folder)
         {
@@ -509,7 +511,7 @@ public sealed class HexWorkshopRenderingTests
 
         // A living forest hex (bottom right) moves; a plain grass hex far from water and woods does not
         // more than the passing cloud shade could.
-        Assert.True(Moved(11, 8) > 10, "the trees of the living forest sway");
-        Assert.True(Moved(5, 8) <= 2, "plain grass stays where it is");
+        Assert.True(Moved(11, 8) > 10, $"the trees of the living forest sway: {Moved(11, 8)}");
+        Assert.True(Moved(5, 8) <= 2, $"plain grass stays where it is: {Moved(5, 8)}");
     }
 }

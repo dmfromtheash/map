@@ -152,10 +152,10 @@ REA по файлам игр и чтение React-props Inkarnate.
 ## J. Давние падения, которые не считаются регрессией (сверять с handoff, список переписывать)
 
 - **Unit-тесты: давних падений нет** (R04, 2026-10-21). Rendering 225/225, Persistence 198/198, Presentation
-  650/650 на 2026-10-21; `tests/KnownFailures.txt` пуст, CI краснит любое падение этих проектов. Один тест
-  ложно падает только под нагрузкой (параллельная сборка второго агента):
-  `PlacementWorkflowTests.Stage18_temporary_preview_memory_refusal…` (остаётся `ReservedBytes`) — перед словом
-  «регрессия» прогнать его одиночно.
+  650/650 на 2026-10-21; `tests/KnownFailures.txt` пуст, CI краснит любое падение этих проектов.
+  2026-10-22, хвосты: `PlacementWorkflowTests.Stage18_temporary_preview_memory_refusal…`
+  дожидается отменённого фонового подсчёта перед проверкой `ReservedBytes`;
+  `Trees_sway_and_only_trees` использует управляемые часы; переправы сравнивают одну сцену.
 - **Смоуки (2026-10-21, после R04):** зелёные `native-stage19` (31/31), `native-stage20` (26/26), `native-hex-workshop`.
   Остаются и объяснены:
   - `native-stage18` — `FutureStampScaleSlider` не монтируется даже при инструменте ассетов и области «Инструмент»

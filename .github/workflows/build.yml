@@ -48,8 +48,13 @@ jobs:
         shell: pwsh
         run: |
           foreach ($p in 'Map.Rendering.Tests','Map.Persistence.Tests','Map.Presentation.Tests') {
-            dotnet test "tests\$p\$p.csproj" -c Release -nologo --logger "trx;LogFileName=$p.trx" --results-directory artifacts	est-results
+            $testSettings = @()
+            if ($p -eq 'Map.Presentation.Tests') { $testSettings = @('--','xUnit.ParallelizeTestCollections=false') }
+            dotnet test "tests\$p\$p.csproj" -c Release -nologo --logger "trx;LogFileName=$p.trx" --results-directory artifacts/test-results @testSettings
             Write-Host "$p exit code $LASTEXITCODE (judged by Test-KnownFailures)"
+            if (-not (Test-Path -LiteralPath "artifacts/test-results/$p.trx")) {
+              Write-Host "::error::$p did not produce a test report"; exit 1
+            }
           }
           powershell -NoProfile -ExecutionPolicy Bypass -File tools/ci/Test-KnownFailures.ps1 -ResultsDir artifacts/test-results -KnownList tests/KnownFailures.txt
           if ($LASTEXITCODE -ne 0) { Write-Host "::error::new test failures outside tests/KnownFailures.txt"; exit 1 }

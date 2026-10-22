@@ -36,6 +36,11 @@ public sealed partial class HexChunkCache
     /// <summary>The clock every eased change is timed by.</summary>
     public static long Now => Stopwatch.GetTimestamp();
 
+    /// <summary>Optional diagnostic clock in Stopwatch ticks; null keeps the system clock.</summary>
+    public Func<long>? AnimationClock { get; init; }
+
+    internal long AnimationNow => AnimationClock?.Invoke() ?? Now;
+
     /// <summary>True while something eased is still moving and the canvas should draw another frame.</summary>
     public bool Animating(long now) => now < _animateUntil;
 

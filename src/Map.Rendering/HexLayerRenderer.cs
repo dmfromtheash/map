@@ -692,10 +692,10 @@ public static partial class HexLayerRenderer
         var reach = new WorldBounds(view.Left, view.Top, view.Right,
             view.Bottom + (HexStarterTiles.MaxOverhang + 0.2) * board.Layout.HexHeight);
         // Trees sway while the world is alive and close enough to see them; it fades in and out.
-        var alive = cache is not null && !isExport ? cache.AliveLevel(ambient && !flat && hexPixels >= AmbientFromPixels, HexChunkCache.Now) : 0;
+        var alive = cache is not null && !isExport ? cache.AliveLevel(ambient && !flat && hexPixels >= AmbientFromPixels, cache.AnimationNow) : 0;
         _swayStrength = alive;
         var sway = alive > 0 && hexPixels >= SwayFromPixels && HexTreeSway.Available
-            ? System.Diagnostics.Stopwatch.GetTimestamp() / (double)System.Diagnostics.Stopwatch.Frequency
+            ? (cache?.AnimationNow ?? HexChunkCache.Now) / (double)System.Diagnostics.Stopwatch.Frequency
             : -1;
         void Ground(bool asFlat, ref BuildBudget budget)
         {
@@ -711,7 +711,7 @@ public static partial class HexLayerRenderer
         }
 
         // When the zoom crosses between the far and the near look, the new one fades in over the old.
-        var now = HexChunkCache.Now;
+        var now = cache?.AnimationNow ?? HexChunkCache.Now;
         var change = cache is not null && !isExport ? cache.LookChange(layer.Id, flat, now) : null;
         var layerRect = new SKRect((float)view.Left, (float)reach.Top, (float)view.Right, (float)reach.Bottom);
         if (change is { } handOver)
@@ -749,11 +749,11 @@ public static partial class HexLayerRenderer
             if (stats is not null) stats.HexChunksPending += budget.Pending;
             requestFrame?.Invoke();
         }
-        else if (cache is not null && !isExport && cache.Animating(HexChunkCache.Now))
+        else if (cache is not null && !isExport && cache.Animating(cache.AnimationNow))
         {
             requestFrame?.Invoke();
         }
-        else if (cache is not null && !isExport && cache.Alive(HexChunkCache.Now))
+        else if (cache is not null && !isExport && cache.Alive(cache.AnimationNow))
         {
             (requestAmbientFrame ?? requestFrame)?.Invoke();
         }
@@ -1467,7 +1467,7 @@ public static partial class HexLayerRenderer
         }
 
         // The right picture fades in over the one that stood in for it instead of replacing it at once.
-        if (cache.Swap(place, image, HexChunkCache.Now) is { } swap)
+        if (cache.Swap(place, image, cache.AnimationNow) is { } swap)
         {
             DrawPicture(canvas, board, key, look, swap.From, swap.FromLevel);
             using var fade = new SKPaint { Color = SKColors.White.WithAlpha((byte)Math.Round(255 * HexChunkCache.Ease(swap.T))) };

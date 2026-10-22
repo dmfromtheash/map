@@ -146,10 +146,17 @@ public sealed partial class RegionalApplication
         PressHex(_view, "HexModeFill"); PressHex(_view, "HexTile_desert"); await Settle();
         _editor.HexRadius = 0;
         var fillDepth = _editor.Session.UndoDepth;
+        // Inspect the schedule before pumping the UI: a busy PC can miss the whole 540 ms wave.
+        var waveTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
         _view.Canvas.ClickForSmoke(Screen(21, 13).X, Screen(21, 13).Y);
-        await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() => { }, Avalonia.Threading.DispatcherPriority.Render); await Task.Delay(120);
+        _editor.StepHexHover(waveTimestamp);
+        var wave = _editor.HexSettlesShown;
+        var origin = Layer().Board.Layout.FromOffset(new(21, 13));
+        var leading = wave?.Items.SingleOrDefault(item => item.Hex == origin);
         Check("a fill runs as a wave from the pressed hex", _editor.Session.UndoDepth == fillDepth + 1
-            && _editor.HexSettlesShown is { } wave && wave.Items.Any(item => item.T < 0) && wave.Items.Any(item => item.T >= 0));
+            && leading is not null && wave!.Items.All(item => item.T <= leading.T)
+            && wave.Items.Any(item => item.T < leading.T));
+        _editor.StepHexHover(System.Diagnostics.Stopwatch.GetTimestamp());
         Capture(_view, "workshop-01e-wave");
         await Settle(); await Settle(); await Settle();
         _editor.Undo(); await Settle();

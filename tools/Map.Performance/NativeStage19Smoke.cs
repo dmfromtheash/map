@@ -359,9 +359,18 @@ public sealed partial class Stage19Application : Application
         await Click("SaveButton"); await Until(() => !_editor.Session.IsDirty);
 
         // Far zoom keeps the river as a visible thread.
-        _editor.Session.Viewport.Set(0, 0, .04); await Frame();
+        const double farScale = .04;
+        // Keep the tiny map in the unobscured canvas, rather than under the overlaid side panels.
+        _editor.Session.Viewport.Set((_editor.Session.Document.Canvas.Width - _view.Canvas.Bounds.Width / farScale) / 2,
+            (_editor.Session.Document.Canvas.Height - _view.Canvas.Bounds.Height / farScale) / 2, farScale);
+        await Frame();
         var far = Path.ChangeExtension(Options.OutputPath, ".far.png"); SaveVisual(far);
-        _report.Checks["far-zoom-keeps-river"] = _view.Canvas.LastFrameObjectsDrawn > 0;
+        var centre = _editor.Session.Viewport.WorldToScreen(_editor.Session.Document.Canvas.Width / 2,
+            _editor.Session.Document.Canvas.Height / 2);
+        _report.Checks["far-zoom-keeps-river"] = _view.Canvas.LastFrameObjectsDrawn > 0
+            && Math.Abs(_editor.Session.Viewport.Scale - farScale) < 1e-9
+            && Math.Abs(centre.X - _view.Canvas.Bounds.Width / 2) < 1
+            && Math.Abs(centre.Y - _view.Canvas.Bounds.Height / 2) < 1;
         _editor.Session.Viewport.Set(0, 0, 1); await Frame();
         SaveVisual(Path.ChangeExtension(Options.OutputPath, ".reopened.png"));
 
@@ -1010,9 +1019,14 @@ public sealed partial class Stage19Application : Application
     private async Task Frame()
     {
         var completion = new TaskCompletionSource();
+        var revision = long.MaxValue;
         void Rendered(object? sender, EventArgs args)
-        { if (ReferenceEquals(_view.Canvas.LastRenderedDocument, _editor.Session.Document)) completion.TrySetResult(); }
-        _view.Canvas.FrameRendered += Rendered; _view.Canvas.InvalidateVisual();
+        {
+            if (ReferenceEquals(_view.Canvas.LastRenderedDocument, _editor.Session.Document)
+                && _view.Canvas.CompletedSceneRevision >= revision) completion.TrySetResult();
+        }
+        _view.Canvas.FrameRendered += Rendered;
+        revision = _view.Canvas.RequestFrameForSmoke();
         try { await completion.Task.WaitAsync(TimeSpan.FromSeconds(8)); }
         finally { _view.Canvas.FrameRendered -= Rendered; }
     }
