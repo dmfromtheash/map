@@ -125,6 +125,39 @@ public sealed class StreamingPngExportTests
         Assert.DoesNotContain(allocations, a => a.Purpose == ExportSurfacePurpose.SingleImage);
     }
 
+    [Theory]
+    [InlineData(false, true, 2)]   // opaque page: RGB, a quarter fewer bytes before compression
+    [InlineData(true, true, 6)]    // transparent background requested: RGBA
+    [InlineData(false, false, 6)]  // page colour hidden: pixels may be transparent, RGBA
+    public async Task An_opaque_map_is_written_as_rgb_with_the_same_pixels(bool transparent, bool pageVisible, int colorType)
+    {
+        using var temp = new TempDirectory();
+        var document = Fixture();
+        if (!pageVisible) document = document.WithLayer(document.Layers[0].Id, l => l with { Visible = false });
+        var exporter = new ImageExportEngine(new ExportEngineSettings { TileEdge = 64 });
+        var plan = exporter.Plan(document, new ExportRequest(ExportImageFormat.Png, ExportAreaMode.WholeCanvas,
+            null, 160, 96, ExportOutputMode.SingleImage, transparent, false));
+        var path = Path.Combine(temp.Path, "map.png");
+        using var stamps = new ExportStampImageSource(document, null, null);
+        await exporter.ExportAsync(document, plan, path, stamps);
+        var header = new byte[26];
+        using (var file = File.OpenRead(path)) file.ReadExactly(header);
+        Assert.Equal(colorType, header[25]);
+
+        var tilesPath = Path.Combine(temp.Path, "tiles");
+        await exporter.ExportAsync(document, exporter.Plan(document, new ExportRequest(ExportImageFormat.Png, ExportAreaMode.WholeCanvas,
+            null, 160, 96, ExportOutputMode.TilePackage, transparent, false)), tilesPath, stamps);
+        var manifest = JsonSerializer.Deserialize<TilePackageManifest>(File.ReadAllText(Path.Combine(tilesPath, "manifest.json")))!;
+        using var actual = SKBitmap.Decode(path);
+        foreach (var tile in manifest.Tiles)
+        {
+            using var pixels = SKBitmap.Decode(Path.Combine(tilesPath, tile.File));
+            for (var y = 0; y < tile.Height; y++)
+            for (var x = 0; x < tile.Width; x++)
+                Assert.Equal(pixels.GetPixel(x, y), actual.GetPixel(tile.X + x, tile.Y + y));
+        }
+    }
+
     private static MapDocument Fixture()
     {
         using var original = new SKBitmap(128, 128);

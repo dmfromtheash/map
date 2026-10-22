@@ -180,7 +180,18 @@ public sealed class ImageExportEngine : IImageExporter
         var fullPath = Path.GetFullPath(destinationPath);
         ValidateFileExtension(fullPath, plan.Format);
         if (plan.UsesStreamingPng)
-            return ExportStreamingPng(snapshot, plan, fullPath, stamps, tileCache, progress, cancellationToken);
+        {
+            // An opaque picture is written as RGB with real compression: same pixels, about 40 % smaller
+            // than RGBA at the fastest level (measured on the giant map). Should a pixel turn out not to be
+            // opaque after all, the export starts over as RGBA.
+            if (ExpectOpaque(snapshot, plan))
+            {
+                try { return ExportStreamingPng(snapshot, plan, fullPath, stamps, tileCache, progress, cancellationToken, opaque: true); }
+                catch (StreamingPngWriter.NotOpaqueException) { }
+            }
+
+            return ExportStreamingPng(snapshot, plan, fullPath, stamps, tileCache, progress, cancellationToken, opaque: false);
+        }
         Report(progress, ExportPhase.Rendering, 0.08, "Рендеринг изображения…");
         using var bytes = RenderSingleEncoded(snapshot, plan, stamps, tileCache, cancellationToken);
         _settings.FaultInjector?.Invoke(ExportFaultPoint.AfterRender);
@@ -209,16 +220,24 @@ public sealed class ImageExportEngine : IImageExporter
         return new ExportResult(fullPath, ExportOutputMode.SingleImage, 1);
     }
 
+    /// <summary>The page colour is drawn, visible, fully opaque and at full strength: nothing can show through.</summary>
+    private static bool ExpectOpaque(MapDocument snapshot, ExportPlan plan) =>
+        plan.IncludesBackground
+        && snapshot.Layers.Count > 0 && snapshot.Layers[0] is BaseColorLayer { Visible: true, Opacity: >= 1 } page
+        && page.Color.Length == 9 && page.Color.StartsWith("#FF", StringComparison.OrdinalIgnoreCase);
+
     private ExportResult ExportStreamingPng(
         MapDocument snapshot, ExportPlan plan, string fullPath, IStampImageSource? stamps,
-        TileImageCache tileCache, IProgress<ExportProgress>? progress, CancellationToken cancellationToken)
+        TileImageCache tileCache, IProgress<ExportProgress>? progress, CancellationToken cancellationToken,
+        bool opaque)
     {
         var tempPath = UniqueSiblingFile(fullPath);
         try
         {
             using (var destination = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write,
                 FileShare.None, 65536, FileOptions.SequentialScan))
-            using (var png = new StreamingPngWriter(destination, plan.OutputWidth, plan.OutputHeight))
+            using (var png = new StreamingPngWriter(destination, plan.OutputWidth, plan.OutputHeight, opaque,
+                opaque ? System.IO.Compression.CompressionLevel.Optimal : System.IO.Compression.CompressionLevel.Fastest))
             {
                 var row = new byte[checked(plan.OutputWidth * 4)];
                 var tileIndex = 0;
@@ -281,7 +300,7 @@ public sealed class ImageExportEngine : IImageExporter
                 destination.Flush(flushToDisk: true);
             }
             Report(progress, ExportPhase.Finalizing, .92, "Проверка целостности записанного PNG…");
-            StreamingPngWriter.ValidateFile(tempPath, plan.OutputWidth, plan.OutputHeight, cancellationToken);
+            StreamingPngWriter.ValidateFile(tempPath, plan.OutputWidth, plan.OutputHeight, cancellationToken, opaque);
             _settings.FaultInjector?.Invoke(ExportFaultPoint.BeforeFinalize);
             cancellationToken.ThrowIfCancellationRequested();
             FinalizeFile(tempPath, fullPath);

@@ -52,6 +52,9 @@ internal static class NativeGiantExport
         var library = Environment.GetEnvironmentVariable("MAP_OWNER_ART_LIBRARY") ?? throw new InvalidOperationException("MAP_OWNER_ART_LIBRARY is not set");
         var modes = (Environment.GetEnvironmentVariable("MAP_GIANT_MODES") ?? "png").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         var scale = int.TryParse(Environment.GetEnvironmentVariable("MAP_GIANT_SCALE"), out var s) ? s : 1;
+        // MAP_GIANT_REGION = "x,y,side": export only that square of the canvas (scaled to MAP_GIANT_EDGE) — a sample for codec trials.
+        var region = Environment.GetEnvironmentVariable("MAP_GIANT_REGION")?.Split(',') is [var rx, var ry, var rs]
+            ? new Map.Core.Editing.CanvasRegion(int.Parse(rx), int.Parse(ry), int.Parse(rs), int.Parse(rs)) : (Map.Core.Editing.CanvasRegion?)null;
         var exactEdge = int.TryParse(Environment.GetEnvironmentVariable("MAP_GIANT_EDGE"), out var e) && e > 0 ? e : 0;
         var count = int.TryParse(Environment.GetEnvironmentVariable("MAP_GIANT_OBJECTS"), out var n) ? n : 40_000;
         Directory.CreateDirectory(output);
@@ -74,7 +77,7 @@ internal static class NativeGiantExport
                 _ => ExportOutputMode.SingleImage,
             };
             var edge = exactEdge > 0 ? exactEdge : Size * scale;
-            var request = new ExportRequest(ExportImageFormat.Png, ExportAreaMode.WholeCanvas, null, edge, edge, outputMode,
+            var request = new ExportRequest(ExportImageFormat.Png, region is null ? ExportAreaMode.WholeCanvas : ExportAreaMode.Region, region, edge, edge, outputMode,
                 TransparentBackground: false, IncludeGrid: false);
             var plan = engine.Plan(document, request);
             var name = (exactEdge > 0 ? $"giant-{edge}px" : $"giant-{scale}x") + outputMode switch

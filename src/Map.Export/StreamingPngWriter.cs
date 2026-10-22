@@ -4,10 +4,14 @@ using System.Numerics;
 
 namespace Map.Export;
 
-/// <summary>Non-interlaced RGBA8 PNG with a single zlib stream across bounded IDAT chunks.
-/// Rows are supplied in image order; neither encoding nor read-back owns a full image.</summary>
+/// <summary>Non-interlaced RGBA8 (or, for an opaque picture, RGB8) PNG with a single zlib stream
+/// across bounded IDAT chunks. Rows are supplied in image order as RGBA; neither encoding nor
+/// read-back owns a full image.</summary>
 internal sealed class StreamingPngWriter : IDisposable
 {
+    /// <summary>An opaque writer met a pixel that is not fully opaque; the caller writes RGBA instead.</summary>
+    internal sealed class NotOpaqueException() : InvalidOperationException("В картинке есть прозрачные пиксели.");
+
     private static readonly byte[] Signature = [137, 80, 78, 71, 13, 10, 26, 10];
     private static readonly uint[] CrcTable = CreateCrcTable();
     private readonly Stream _destination;
@@ -15,31 +19,41 @@ internal sealed class StreamingPngWriter : IDisposable
     private readonly ZLibStream _zlib;
     private readonly byte[] _filtered;
     private readonly int _height;
+    private readonly bool _opaque;
     private int _rows;
     private bool _complete;
 
-    public StreamingPngWriter(Stream destination, int width, int height)
+    /// <param name="opaque">Write RGB: a quarter fewer bytes for a picture without transparency (R08 follow-up,
+    /// the giant map is 100 % opaque). A row with a non-opaque pixel throws <see cref="NotOpaqueException"/>.</param>
+    /// <param name="level">Compression level; it changes size and time only, never a pixel.</param>
+    public StreamingPngWriter(Stream destination, int width, int height, bool opaque = false,
+        CompressionLevel level = CompressionLevel.Fastest)
     {
         _destination = destination;
         _height = height;
-        _filtered = new byte[checked(width * 4 + 1)];
+        _opaque = opaque;
+        _filtered = new byte[checked(width * (opaque ? 3 : 4) + 1)];
         destination.Write(Signature);
         Span<byte> header = stackalloc byte[13];
         header.Clear();
         BinaryPrimitives.WriteInt32BigEndian(header, width);
         BinaryPrimitives.WriteInt32BigEndian(header[4..], height);
         header[8] = 8;
-        header[9] = 6; // RGBA, including when a hidden/transparent base layer leaves alpha.
+        header[9] = (byte)(opaque ? 2 : 6); // RGBA whenever a hidden/transparent base layer may leave alpha.
         WriteChunk(destination, "IHDR"u8, header);
         _chunks = new IdatStream(destination);
-        // Compression level changes file size/time, never pixel quality.
-        _zlib = new ZLibStream(_chunks, CompressionLevel.Fastest, leaveOpen: true);
+        _zlib = new ZLibStream(_chunks, level, leaveOpen: true);
     }
 
     public void WriteRow(ReadOnlySpan<byte> rgba)
     {
-        if (_complete || _rows >= _height || rgba.Length != _filtered.Length - 1)
+        if (_complete || _rows >= _height || rgba.Length != (_filtered.Length - 1) / (_opaque ? 3 : 4) * 4)
             throw new InvalidOperationException("Неверное число или размер строк PNG.");
+        if (_opaque)
+        {
+            WriteOpaqueRow(rgba);
+            return;
+        }
         _filtered[0] = 1; // Sub; filter the complete row, including boundaries between render tiles.
         rgba[..4].CopyTo(_filtered.AsSpan(1));
         var i = 4;
@@ -51,6 +65,24 @@ internal sealed class StreamingPngWriter : IDisposable
         }
         for (; i < rgba.Length; i++)
             _filtered[i + 1] = unchecked((byte)(rgba[i] - rgba[i - 4]));
+        _zlib.Write(_filtered);
+        _rows++;
+    }
+
+    private void WriteOpaqueRow(ReadOnlySpan<byte> rgba)
+    {
+        // Sub filter over RGB triplets; the first pixel is stored as is.
+        _filtered[0] = 1;
+        byte r0 = 0, g0 = 0, b0 = 0;
+        for (int s = 0, d = 1; s < rgba.Length; s += 4, d += 3)
+        {
+            if (rgba[s + 3] != 255) throw new NotOpaqueException();
+            byte r = rgba[s], g = rgba[s + 1], b = rgba[s + 2];
+            _filtered[d] = unchecked((byte)(r - r0));
+            _filtered[d + 1] = unchecked((byte)(g - g0));
+            _filtered[d + 2] = unchecked((byte)(b - b0));
+            r0 = r; g0 = g; b0 = b;
+        }
         _zlib.Write(_filtered);
         _rows++;
     }
@@ -72,7 +104,7 @@ internal sealed class StreamingPngWriter : IDisposable
 
     // Own-output integrity check, not a general image decoder. Standard decoders are exercised
     // in tests; here every chunk is checked without SKData or full-canvas allocation.
-    public static void ValidateFile(string path, int width, int height, CancellationToken cancellationToken)
+    public static void ValidateFile(string path, int width, int height, CancellationToken cancellationToken, bool opaque = false)
     {
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
             65536, FileOptions.SequentialScan);
@@ -102,7 +134,7 @@ internal sealed class StreamingPngWriter : IDisposable
                 if (!kind.SequenceEqual("IHDR"u8) || length != 13
                     || BinaryPrimitives.ReadInt32BigEndian(data) != width
                     || BinaryPrimitives.ReadInt32BigEndian(data[4..]) != height
-                    || !data[8..].SequenceEqual(new byte[] { 8, 6, 0, 0, 0 }))
+                    || !data[8..].SequenceEqual(new byte[] { 8, (byte)(opaque ? 2 : 6), 0, 0, 0 }))
                     throw new InvalidDataException("Заголовок PNG не совпал с планом.");
                 first = false;
             }
