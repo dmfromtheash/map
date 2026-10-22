@@ -316,14 +316,30 @@ public sealed class HexWorkshopRenderingTests
         var next = document.WithLayer(layer.Id, _ => revealed);
         using var direct = Render(next, scale, null);
         var layout = layer.Board.Layout;
-        var foggy = At(before, layout, fogged, scale);
-        var clear = At(direct, layout, fogged, scale);
-        Assert.True(Distance(foggy, clear) > 20, "the fog shows on the hex");
+        // Sample the hex interior: the centre of new tile art can match the translucent fog.
+        double Difference(SKBitmap a, SKBitmap b)
+        {
+            var total = 0.0;
+            for (var dx = -2; dx <= 2; dx++)
+            {
+                for (var dy = -2; dy <= 2; dy++)
+                {
+                    var x = dx * layout.Size * 0.15;
+                    var y = dy * layout.Size * 0.15;
+                    total += Distance(At(a, layout, fogged, scale, x, y), At(b, layout, fogged, scale, x, y));
+                }
+            }
+
+            return total / 25;
+        }
+
+        var fogDifference = Difference(before, direct);
+        Assert.True(fogDifference > 20, $"the fog shows on the hex: {fogDifference}");
         using var first = Render(next, scale, cache);
-        Assert.True(Distance(At(first, layout, fogged, scale), foggy) < Distance(foggy, clear) / 2, "the first frame still shows most of the fog");
+        Assert.True(Difference(first, before) < fogDifference / 2, "the first frame still shows most of the fog");
         await Task.Delay((int)HexChunkCache.FogFadeMilliseconds + 80);
         using var last = Render(next, scale, cache);
-        Assert.True(Distance(At(last, layout, fogged, scale), clear) < 12, "the fog has melted away");
+        Assert.True(Difference(last, direct) < 12, "the fog has melted away");
     }
 
     [Fact]
