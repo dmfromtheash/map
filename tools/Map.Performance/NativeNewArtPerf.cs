@@ -61,6 +61,15 @@ public sealed partial class PaintPerfApplication
         }
         // Back to front, the way a painted map stacks its mountains.
         objects.Sort((a, b) => (a.Y + a.Height).CompareTo(b.Y + b.Height));
+        // R10: MAP_NEW_ART_BEAUTY=1 gives every mountain a ±5 % tint, a contact shadow and an underlay
+        // blot, as an area with «Красота» does, to measure what they cost on the same map.
+        if (System.Environment.GetEnvironmentVariable("MAP_NEW_ART_BEAUTY") == "1")
+            for (var i = 0; i < objects.Count; i++)
+            {
+                var shade = (byte)(242 + random.Next(14));
+                objects[i] = objects[i] with { Stamp = objects[i].Stamp! with { Tint = $"#FF{shade:X2}{shade:X2}{(byte)(shade - 4):X2}",
+                    GroundShadow = new StampGroundShadow(.34, .5, .95, .8, .12) } };
+            }
         var sea = "#FF9DB7C2";
         var document = new MapDocument(DocumentId.New(), "Новые ассеты — замер", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(4096, 3072, "px", sea),
