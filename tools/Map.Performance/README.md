@@ -570,3 +570,22 @@ LiveCheck выбирает PDF и новую папку через настоя�
 **и** тип Button), читает MediaBox PDF и размеры PNG, снимает только Map через PrintWindow.
 Открыть PNG и отрисованные страницы PDF, проверить рамку, нумерацию, метки и схему склейки.
 Для повторного живого запуска использовать новую папку `--out`: PNG-пакет не перезаписывает прежний.
+## R15 — гекс-комплекты
+
+`native-hex-workshop` включает `VerifyHexTileSetsR15`: процедурные PNG из публичного
+`HexTileArt.Image`, импорт трёх плиток, вкладку «Мои наборы», размещение и Undo/Redo,
+ограничения поворота/TravelCost, 1944 соседства, 18 поворотов, 54 перекрытия,
+save/reopen v24, заглушку пропавшего комплекта и выдачу шаблона.
+Все тестовые файлы создаются внутри workspace отчёта.
+
+```powershell
+dotnet build tools/Map.Performance -c Release -m:1 -nr:false -p:UseSharedCompilation=false
+dotnet tools/Map.Performance/bin/Release/net10.0/win-x64/Map.Performance.dll --profile native-hex-workshop --output artifacts/r15/smoke.json
+dotnet build tools/Map.LiveCheck -c Release -m:1 -nr:false -p:UseSharedCompilation=false
+dotnet tools/Map.LiveCheck/bin/Release/net10.0-windows/win-x64/Map.LiveCheck.dll --map artifacts/r15/smoke-workspace/r15-live.mapproj --hex-sets artifacts/r15/smoke-workspace/r15-source --out artifacts/r15/live
+```
+
+Живой проход выбирает DISPLAY1 1920×1080 125 %, открывает карту без установленного
+комплекта, импортирует папку настоящим системным диалогом, снимает вкладку и три режима
+проверки через PrintWindow. Профили, тестовые карты и копии наборов удаляются после просмотра;
+в итоговых артефактах остаются JSON, отчёт и PNG.

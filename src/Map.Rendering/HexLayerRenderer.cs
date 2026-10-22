@@ -675,6 +675,7 @@ public static partial class HexLayerRenderer
         Action? requestFrame = null, RenderStats? stats = null, bool live = false, bool player = false,
         HexOverlay? overlay = null, HexSettles? settles = null, bool ambient = false, Action? requestAmbientFrame = null)
     {
+        cache?.RefreshTileSets();
         if (player) layer = PlayerLayers.GetValue(layer, ExportPlayerVisibility.Sanitize);
         var board = layer.Board;
         var hexPixels = board.Layout.HexWidth * viewScale;

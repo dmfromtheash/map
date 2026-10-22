@@ -28,8 +28,11 @@ public sealed class HexTileSetTests : IDisposable
             foreach (var orientation in Enum.GetValues<HexOrientation>())
             {
                 using var original = HexTileArt.Image("starter/" + tile.Id, 0, orientation)!.Encode(SKEncodedImageFormat.Png, 100);
-                using var imported = HexTileArt.Image(set.TileId(tile), 0, orientation)!.Encode(SKEncodedImageFormat.Png, 100);
-                Assert.Equal(original.ToArray(), imported.ToArray());
+                var file = orientation == HexOrientation.Pointy ? tile.File : tile.FlatFile;
+                Assert.Equal(original.ToArray(), File.ReadAllBytes(Path.Combine(set.Directory, file)));
+                using var expected = SKBitmap.Decode(original.ToArray());
+                using var imported = SKBitmap.FromImage(HexTileArt.Image(set.TileId(tile), 0, orientation)!);
+                Assert.Equal(expected.Pixels, imported.Pixels);
             }
         }
         Assert.Throws<InvalidDataException>(() => HexUserTileSets.Import(source));
@@ -38,8 +41,8 @@ public sealed class HexTileSetTests : IDisposable
         HexUserTileSets.Initialize(Path.Combine(_root, "user")); Assert.NotNull(HexTileArt.Image("user/procedural/grass", 0, HexOrientation.Flat));
     }
     [Theory]
-    [InlineData("../escape.png", 0, 1)] [InlineData("grass.png", double.NaN, 1)]
-    [InlineData("grass.png", 0, -1)] [InlineData("grass.png", 0, 3)]
+    [InlineData("../escape.png", 1, 0)] [InlineData("grass.png", double.NaN, 0)]
+    [InlineData("grass.png", 1, -1)] [InlineData("grass.png", 1, 3)]
     public void TileSet_rejects_paths_invalid_cost_or_non_tile_target(string file, double cost, int target)
     {
         var source = Source(); var set = HexUserTileSets.Read(source);
@@ -50,6 +53,41 @@ public sealed class HexTileSetTests : IDisposable
         File.WriteAllText(Path.Combine(source, "set.json"), json);
         Assert.ThrowsAny<Exception>(() => HexUserTileSets.Read(source));
     }
+    [Fact]
+    public void TileSet_startup_reports_a_broken_installed_set_without_losing_other_sets()
+    {
+        var root = Path.Combine(_root, "user"); var source = Source();
+        HexUserTileSets.Initialize(root); HexUserTileSets.Import(source);
+        var bad = Path.Combine(root, "broken"); Directory.CreateDirectory(bad);
+        File.WriteAllText(Path.Combine(bad, "set.json"), "{\"Version\":99}");
+        HexUserTileSets.Initialize(Path.Combine(_root, "other")); HexUserTileSets.Initialize(root);
+        Assert.Single(HexUserTileSets.All); Assert.Contains("не загружен", HexUserTileSets.LoadWarning);
+        Assert.NotNull(HexTileArt.Image("user/procedural/grass", 0, HexOrientation.Pointy));
+    }
+
+    [Fact]
+    public void TileSet_import_replaces_cached_missing_markers_without_editing_document()
+    {
+        var source = Source(); HexUserTileSets.Initialize(Path.Combine(_root, "user"));
+        var d = HexMapFactory.Create("Комплект", DateTimeOffset.UnixEpoch, new("hex"), HexOrientation.Flat, 40, 8, 8, "#FFFFFFFF");
+        var l = d.Layers.OfType<HexLayer>().Single(); var at = l.Board.Layout.FromOffset(new(3, 3));
+        l = l with { Board = l.Board.With([new(at, HexCell.Of("user/procedural/grass"))]) }; d = d.WithLayer(l.Id, _ => l);
+        using var cache = new HexChunkCache();
+        SKBitmap Render(HexChunkCache? chunks)
+        {
+            var result = new SKBitmap((int)d.Canvas.Width, (int)d.Canvas.Height);
+            using var canvas = new SKCanvas(result);
+            SceneRenderer.Render(canvas, d, new RenderOptions { ViewScale = 1, HexChunks = chunks });
+            return result;
+        }
+        using var before = Render(cache);
+        HexUserTileSets.Import(source);
+        using var freshCache = new HexChunkCache();
+        using var after = Render(cache); using var fresh = Render(freshCache);
+        Assert.False(before.Pixels.SequenceEqual(after.Pixels));
+        Assert.Equal(fresh.Pixels, after.Pixels);
+    }
+
     [Fact]
     public void TileSet_template_is_importable_and_corrupt_or_wrong_sized_PNG_is_rejected()
     {

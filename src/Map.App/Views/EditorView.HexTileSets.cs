@@ -30,9 +30,10 @@ public sealed partial class EditorView
         try
         {
             var set = HexUserTileSets.Import(path);
+            Canvas.RefreshHexTileLibrary();
             _hexSetMessage = $"Импортирован «{set.Manifest.Name}»: {set.Manifest.Tiles.Count} плитки.";
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Text.Json.JsonException or ArgumentException)
+        catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException or System.Text.Json.JsonException or ArgumentException)
         { _hexSetMessage = "Не удалось импортировать комплект: " + e.Message; }
         _refreshHexSets?.Invoke();
     }
@@ -103,7 +104,7 @@ public sealed partial class EditorView
     private async Task ShowHexTileSetCheck(HexUserTileSet set)
     {
         if (TopLevel.GetTopLevel(this) is not Window owner) return;
-        var window = new Window { Name = "HexTileSetCheckWindow", Title = "Проверка комплекта", Width = 780, Height = 740,
+        var window = new Window { Name = "HexTileSetCheckWindow", Title = "Проверка комплекта", Width = 780, Height = 800,
             WindowStartupLocation = WindowStartupLocation.CenterOwner };
         var kinds = new ComboBox { Name = "HexSetCheckKind", ItemsSource = new[] { "Соседства: все пары, грани и повороты", "Повороты: каждая плитка, шесть положений", "Перекрытия: все пары и шесть направлений" }, SelectedIndex = 0, HorizontalAlignment = HorizontalAlignment.Stretch };
         var orientation = new ComboBox { Name = "HexSetCheckOrientation", ItemsSource = new[] { "Грань сверху", "Вершина сверху" }, SelectedIndex = 0 };
@@ -152,7 +153,7 @@ public sealed partial class EditorView
                 Ui.TextButton("HexSetCheckNext", "Далее", () => number.Value = Math.Min(number.Maximum, (number.Value ?? 1) + 1), "compact"),
                 Ui.TextButton("HexSetCheckNextProblem", "Следующая проблема", NextProblem, "compact"),
             } }, summary, picture, problems,
-            new TextBlock { Text = "Проверяются метки краёв и ограничения комплекта. Автоматического рисования переходов нет. Нумерация граней — порядок Neighbor 0…5. Прозрачность фона сохранена.", TextWrapping = TextWrapping.Wrap },
+            new TextBlock { Text = "Проверяются метки краёв и ограничения комплекта. Стороны 1…6 идут против часовой стрелки от востока (вершина сверху) или юго-востока (грань сверху). Художественный шов проверьте на картинке.", TextWrapping = TextWrapping.Wrap },
             Ui.TextButton("HexSetCheckCloseButton", "Закрыть", window.Close, "compact"),
         } };
         Show();

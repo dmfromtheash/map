@@ -92,6 +92,15 @@ try
         if (export is null) missing++;
         Thread.Sleep(1500);
 
+        if (Arg("--hex-sets") is { } tileSetSource)
+        {
+            MoveToSecondaryDisplay(main.Properties.NativeWindowHandle.ValueOrDefault, Log, "DISPLAY1");
+            missing += HexTileSetCheck.Run(main, tileSetSource,
+                () => app.GetAllTopLevelWindows(automation), outDir, Log, Shot);
+            main.Close();
+            return missing == 0 ? 0 : 2;
+        }
+
         // --hover: the real mouse glides across the canvas (the hex hover outline), with shots on the way.
         if (Arg("--hover") is not null && main.FindFirstDescendant(cf => cf.ByAutomationId("MapCanvas")) is { } canvas)
         {

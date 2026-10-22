@@ -8,6 +8,21 @@ namespace Map.Persistence.Tests;
 public sealed class HexTileSetPersistenceTests
 {
     [Fact]
+    public void Hex_TileSet_reference_only_in_named_checkpoint_selects_v24_and_reopens()
+    {
+        using var w = new TempWorkspace();
+        var d = HexMapFactory.Create("Версия", DateTimeOffset.UnixEpoch, new("hex"), HexOrientation.Flat, 40, 8, 8, "#FFFFFFFF");
+        var layer = d.Layers.OfType<HexLayer>().Single(); var at = new HexCoord(1, 1);
+        var snapshot = d.WithLayer(layer.Id, _ => layer with { Board = layer.Board.With([new(at, HexCell.Of("user/old-set/tile"))]) });
+        d = d.WithCheckpoints([new MapCheckpoint(CheckpointId.New(), "С комплектом", DateTimeOffset.UnixEpoch, MapCheckpointSnapshot.Capture(snapshot), ProjectFixtures.PreviewPng())]);
+        var path = w.File("версия.mapproj"); MapProjectStore.Save(d, path, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
+        using (var zip = ZipFile.OpenRead(path)) Assert.Equal(24, JsonNode.Parse(zip.GetEntry("manifest.json")!.Open())!["schemaVersion"]!.GetValue<int>());
+        var opened = MapProjectStore.Open(path).Document;
+        Assert.Equal(0, opened.Layers.OfType<HexLayer>().Single().Board.CellCount);
+        Assert.Equal("user/old-set/tile", opened.Checkpoints.Single().Snapshot.Layers.OfType<HexLayer>().Single().Board[at]!.Terrain);
+    }
+
+    [Fact]
     public void Hex_TileSet_v24_reopens_without_any_installed_set_and_keeps_all_POI_references()
     {
         using var w = new TempWorkspace();

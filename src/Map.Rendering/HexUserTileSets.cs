@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Map.Core.Documents;
@@ -42,16 +43,18 @@ public sealed record HexUserTileSet(string Directory, HexTileSetManifest Manifes
 public static class HexUserTileSets
 {
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true, PropertyNameCaseInsensitive = true };
-    private static readonly Dictionary<string, HexTileDefinition> Definitions = new(StringComparer.Ordinal);
-    private static readonly Dictionary<(string, HexOrientation), SKImage> Images = [];
+    private static readonly ConcurrentDictionary<string, HexTileDefinition> Definitions = new(StringComparer.Ordinal);
+    private static readonly ConcurrentDictionary<(string, HexOrientation), SKImage> Images = new();
     private static readonly List<HexUserTileSet> Sets = [];
     public static IReadOnlyList<HexUserTileSet> All => Sets.AsReadOnly();
     public static string? Root { get; private set; }
     public static string LoadWarning { get; private set; } = "";
+    private static long _revision;
+    public static long Revision => Interlocked.Read(ref _revision);
     public static HexTileDefinition? Find(string id) => Definitions.GetValueOrDefault(id);
     public static SKImage? Image(string id, HexOrientation orientation) => Images.GetValueOrDefault((id, orientation));
     public static bool IsUserId(string id) => id.StartsWith("user/", StringComparison.Ordinal);
-    public static double MaxOverhang => Definitions.Count == 0 ? 0 : Definitions.Values.Max(t => t.Overhang);
+    public static double MaxOverhang { get; private set; }
 
     public static void Initialize(string root)
     {
@@ -59,14 +62,15 @@ public static class HexUserTileSets
         if (Root == root) return;
         // Initialization happens before any editor/cache is constructed.
         foreach (var image in Images.Values) image.Dispose();
-        Images.Clear(); Definitions.Clear(); Sets.Clear(); Root = root; LoadWarning = "";
+        Images.Clear(); Definitions.Clear(); Sets.Clear(); MaxOverhang = 0; Root = root; LoadWarning = "";
+        Interlocked.Increment(ref _revision);
         if (!System.IO.Directory.Exists(root)) return;
         RejectLink(root);
         foreach (var directory in System.IO.Directory.GetDirectories(root).Order(StringComparer.Ordinal))
         {
             if (Path.GetFileName(directory).StartsWith('.')) continue;
             try { Register(Read(directory)); }
-            catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException or ArgumentException)
+            catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException or JsonException or ArgumentException)
             { LoadWarning += $"Набор «{Path.GetFileName(directory)}» не загружен: {e.Message}\n"; }
         }
     }
@@ -76,6 +80,7 @@ public static class HexUserTileSets
         if (Root is null) throw new InvalidOperationException("Хранилище гекс-комплектов не открыто.");
         var set = Read(source);
         if (Sets.Any(s => s.Manifest.Id == set.Manifest.Id)) throw new InvalidDataException("Такой набор уже установлен. Для новой редакции задайте новый Id.");
+        CheckCapacity(set);
         System.IO.Directory.CreateDirectory(Root);
         RejectLink(Root);
         var destination = Path.Combine(Root, set.Manifest.Id);
@@ -150,12 +155,17 @@ public static class HexUserTileSets
         return new(directory, manifest);
     }
 
-    private static void Register(HexUserTileSet set)
+    private static void CheckCapacity(HexUserTileSet set)
     {
-        if (Sets.Any(s => s.Manifest.Id == set.Manifest.Id)) throw new InvalidDataException("Повторный Id комплекта.");
         if (Sets.Count >= 16 || Images.Values.Sum(i => (long)i.Width * i.Height * 4) + set.Manifest.Tiles.Sum(t =>
             Enum.GetValues<HexOrientation>().Sum(o => (long)HexTileArt.PixelSize(o).Width * (HexTileArt.PixelSize(o).Height + HexTileArt.OverhangPixels(o, t.Overhang)) * 4)) > 64L * 1024 * 1024)
             throw new InvalidDataException("Библиотека комплектов достигла предела: 16 наборов или 64 МиБ PNG в памяти.");
+    }
+
+    private static void Register(HexUserTileSet set)
+    {
+        if (Sets.Any(s => s.Manifest.Id == set.Manifest.Id)) throw new InvalidDataException("Повторный Id комплекта.");
+        CheckCapacity(set);
         var loaded = new Dictionary<(string, HexOrientation), SKImage>();
         try
         {
@@ -169,11 +179,13 @@ public static class HexUserTileSets
             {
                 using var bitmap = SKBitmap.FromImage(loaded[(set.TileId(tile), HexOrientation.Pointy)]);
                 var average = bitmap.GetPixel(bitmap.Width / 2, bitmap.Height - HexTileArt.TilePixels / 2);
-                Definitions.Add(set.TileId(tile), new(set.TileId(tile), tile.Name, tile.Category, tile.Target, 1, average)
-                { Overhang = tile.Overhang, Rotatable = tile.Rotatable, TravelCost = tile.TravelCost, Blends = false, Hint = "Комплект «" + set.Manifest.Name + "»" });
+                Definitions[set.TileId(tile)] = new(set.TileId(tile), tile.Name, tile.Category, tile.Target, 1, average)
+                { Overhang = tile.Overhang, Rotatable = tile.Rotatable, TravelCost = tile.TravelCost, Blends = false, Hint = "Комплект «" + set.Manifest.Name + "»" };
             }
-            foreach (var pair in loaded) Images.Add(pair.Key, pair.Value);
+            foreach (var pair in loaded) Images[pair.Key] = pair.Value;
+            MaxOverhang = Math.Max(MaxOverhang, set.Manifest.Tiles.Max(t => t.Overhang));
             Sets.Add(set);
+            Interlocked.Increment(ref _revision);
         }
         catch { foreach (var image in loaded.Values) image.Dispose(); throw; }
     }

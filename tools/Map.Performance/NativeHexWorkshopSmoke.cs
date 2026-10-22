@@ -70,6 +70,7 @@ public sealed partial class RegionalApplication
 
     private async Task VerifyHexWorkshop()
     {
+        HexUserTileSets.Initialize(Path.Combine(_workspace, "r15-library-" + Guid.NewGuid().ToString("N"), "user"));
         var document = HexMapFactory.Create("Мастерская · проверка", DateTimeOffset.UtcNow, MapCategories.Hex.Id,
             HexOrientation.Flat, 48, 30, 20, "#FFF2E9DC");
         _editor = new EditorViewModel(document, null, true, _store, _recent, _picker, new LocalPrompts(), new LocalLog(),
@@ -271,6 +272,7 @@ public sealed partial class RegionalApplication
         _view.Canvas.FitToCanvas(); await Settle(); await Task.Delay(300); await Settle();
         Capture(_view, "workshop-08-generated");
         await VerifyHexTravelR18();
+        await VerifyHexTileSetsR15();
         _editor.Session.MarkSaved(_editor.Session.CaptureSaveCheckpoint());
     }
 }
