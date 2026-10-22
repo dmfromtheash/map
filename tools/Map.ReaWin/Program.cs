@@ -186,7 +186,17 @@ int Launch(string exe)
     var profile = Path.GetFullPath(Opt("--profile") ?? Path.Combine(Environment.CurrentDirectory, "rea-win-profile"));
     Directory.CreateDirectory(Path.Combine(profile, "Maps"));
     Directory.CreateDirectory(Path.Combine(profile, "Recovery"));
-    var start = new ProcessStartInfo(Path.GetFullPath(exe)) { WorkingDirectory = Path.GetDirectoryName(Path.GetFullPath(exe))!, UseShellExecute = false };
+    // Map must not hold this tool's stdout/stderr: the caller (a shell capturing the JSON line)
+    // waits for EOF, and Windows hands every inheritable handle to the child, not only the ones
+    // it redirects - so «launch hangs» until Map closes. Our std handles stop being inheritable
+    // and Map gets pipes of its own.
+    foreach (var std in new[] { -10, -11, -12 })
+        Native.SetHandleInformation(Native.GetStdHandle(std), 1, 0);
+    var start = new ProcessStartInfo(Path.GetFullPath(exe))
+    {
+        WorkingDirectory = Path.GetDirectoryName(Path.GetFullPath(exe))!, UseShellExecute = false,
+        RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = true,
+    };
     if (Opt("--map") is { } map)
     {
         var copy = Path.Combine(profile, "Maps", Path.GetFileName(map));
@@ -418,6 +428,8 @@ internal static class Audit
 
 internal static class Native
 {
+    [DllImport("kernel32.dll")] public static extern IntPtr GetStdHandle(int which);
+    [DllImport("kernel32.dll")] public static extern bool SetHandleInformation(IntPtr handle, uint mask, uint flags);
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
     public delegate bool EnumWindowsProc(IntPtr window, IntPtr parameter);
     [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr window, IntPtr dc, uint flags);
