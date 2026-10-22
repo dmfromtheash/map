@@ -1,5 +1,23 @@
 # Map.Performance
 
+### R16: структура гекса
+
+`native-hex-workshop` расширен шагами `VerifyHexStructureR16`: редактирование списка POI
+из панели, порядок и отмена удаления, родитель региона и запрет цикла, четыре представления
+без изменения документа, очистка пакета игрока и save/reopen v18.
+
+```powershell
+dotnet tools/Map.Performance/bin/Release/net10.0/win-x64/Map.Performance.dll --profile native-hex-workshop --output artifacts/r16/smoke.json
+dotnet tools/Map.LiveCheck/bin/Release/net10.0-windows/win-x64/Map.LiveCheck.dll --map artifacts/r16/smoke-workspace/r16-live.mapproj --hex-structure true --out artifacts/r16/live
+```
+
+Инструменты собираются отдельно от решения. До запуска убедиться, что Map владельца закрыт,
+а другой Map.Performance не работает; сборки, тесты, смоуки и живой проход выполняются по очереди.
+Живой проход использует изолированный профиль, второй дисплей и PrintWindow. Он должен дать
+четыре снимка видов и отдельные снимки POI/регионов. `gatePassed` и живой результат R16 нельзя
+считать подтверждёнными только по сборке инструментов.
+
+
 ## R07: подписи вдоль пути
 
 `native-text-on-path` — своё скрытое окно: «Подпись вдоль реки», следование за сдвинутой рекой и Undo, пресет и «Имя»
