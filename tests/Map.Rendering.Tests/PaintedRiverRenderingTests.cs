@@ -46,6 +46,27 @@ public sealed class PaintedRiverRenderingTests
         Assert.Equal(0, RiverStyle.Painted().HighlightOpacity);
     }
 
+    [Fact]
+    public void Where_the_shadow_changes_bank_no_ink_line_crosses_the_water()
+    {
+        // East, then turning south: the shadow bank flips on the way. The contour used to jump
+        // across the channel there - a dark bar over the water.
+        VectorPoint[] points = [new(20, 100), new(200, 100), new(300, 200), new(300, 380)];
+        var river = new River { Name = "Р", Style = RiverStyle.Painted() with { TextureId = null }, Channels = [RiverEditor.NewChannel(points, 44)] };
+        using var bitmap = Render(river);
+        var darkest = 255.0;
+        for (var i = 0; i < points.Length - 1; i++)
+            for (var t = 0.0; t <= 1; t += 0.01)
+            {
+                var x = (int)(points[i].X + (points[i + 1].X - points[i].X) * t);
+                var y = (int)(points[i].Y + (points[i + 1].Y - points[i].Y) * t);
+                if (x < 40 || y > 360) continue;
+                var c = bitmap.GetPixel(x, y);
+                darkest = Math.Min(darkest, .3 * c.Red + .59 * c.Green + .11 * c.Blue);
+            }
+        Assert.True(darkest > 70, $"darkest pixel on the channel line: {darkest:0}");
+    }
+
     private static SKBitmap Render(River river)
     {
         var layer = new ObjectLayer(LayerId.New(), "Вода", true, false, 1, []) { Rivers = [river] };

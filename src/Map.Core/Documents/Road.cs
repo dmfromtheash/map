@@ -150,9 +150,9 @@ public sealed record RoadStyle
     {
         Drawing = RoadDrawing.PenRuts,
         SurfaceColor = "#FFD2BC92", ToneColor = "#FFAE9269", ToneVariation = 0.4,
-        ShoulderColor = "#FF9C8A66", ShoulderWidth = 4, ShoulderOpacity = 0.22,
-        EdgeColor = "#FF262A30", EdgeWidth = 1.1, EdgeOpacity = 0.9, EdgeBreak = 0.04,
-        RutColor = "#FF6E5A42", RutOpacity = 0.3, DetailOpacity = 0.45, EdgeRoughness = 0.3,
+        ShoulderColor = "#FF9C8A66", ShoulderWidth = 2.5, ShoulderOpacity = 0.14,
+        EdgeColor = "#FF262A30", EdgeWidth = 0.8, EdgeOpacity = 0.8, EdgeBreak = 0.08,
+        RutColor = "#FF6E5A42", RutOpacity = 0.2, DetailOpacity = 0.3, EdgeRoughness = 0.3,
         PaintStrokes = 1,
     };
 

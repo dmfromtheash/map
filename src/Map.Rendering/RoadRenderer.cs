@@ -554,15 +554,15 @@ public static class RoadRenderer
         using (var shade = OffsetPath(samples, 0.62, Quiet))
         using (var shadow = new SKPaint
         {
-            Color = deep.WithAlpha((byte)(150 * strength)), IsAntialias = true, Style = SKPaintStyle.Stroke,
-            StrokeWidth = (float)(half * 0.8), StrokeCap = SKStrokeCap.Round, StrokeJoin = SKStrokeJoin.Round,
+            Color = deep.WithAlpha((byte)(70 * strength)), IsAntialias = true, Style = SKPaintStyle.Stroke,
+            StrokeWidth = (float)(half * 0.6), StrokeCap = SKStrokeCap.Round, StrokeJoin = SKStrokeJoin.Round,
             MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, (float)Math.Max(0.5, half * 0.25)),
         })
             canvas.DrawPath(shade, shadow);
         using (var lit = OffsetPath(samples, -0.45, Quiet))
         using (var glow = new SKPaint
         {
-            Color = light.WithAlpha((byte)(120 * strength)), IsAntialias = true, Style = SKPaintStyle.Stroke,
+            Color = light.WithAlpha((byte)(30 * strength)), IsAntialias = true, Style = SKPaintStyle.Stroke,
             StrokeWidth = (float)(half * 0.55), StrokeCap = SKStrokeCap.Round, StrokeJoin = SKStrokeJoin.Round,
             MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, (float)Math.Max(0.5, half * 0.3)),
         })
@@ -572,11 +572,11 @@ public static class RoadRenderer
         // (offset across - positive is the shadow side, tone, alpha, width, dash, gap, phase)
         (double Offset, SKColor Color, byte Alpha, double Width, double Dash, double Gap, double Phase)[] strokes =
         [
-            (0.58, deep, 125, 0.15, 3.0, 2.4, 0.0),
-            (0.30, mid, 110, 0.13, 4.4, 3.1, 1.6),
-            (-0.50, light, 150, 0.14, 6.5, 3.4, 0.5),
-            (-0.18, light, 125, 0.10, 4.6, 4.4, 2.8),
-            (0.08, mid, 90, 0.08, 2.6, 5.0, 1.0),
+            // Owner 2026-10-22: «too voluminous and glossy» - quiet earth strokes, no bright ones.
+            (0.55, deep, 80, 0.12, 3.0, 2.6, 0.0),
+            (0.25, mid, 65, 0.10, 4.4, 3.4, 1.6),
+            (-0.40, light, 55, 0.10, 6.0, 4.0, 0.5),
+            (-0.12, mid, 45, 0.08, 3.6, 5.0, 2.8),
         ];
         foreach (var (index, stroke) in strokes.Select((s, i) => (i, s)))
         {
@@ -619,7 +619,7 @@ public static class RoadRenderer
             }
             using var pen = new SKPaint
             {
-                Color = ink.WithAlpha((byte)(135 * strength)), IsAntialias = true, Style = SKPaintStyle.Stroke,
+                Color = ink.WithAlpha((byte)(80 * strength)), IsAntialias = true, Style = SKPaintStyle.Stroke,
                 StrokeWidth = (float)Math.Max(0.5 / scale, style.EdgeWidth * 0.6), StrokeCap = SKStrokeCap.Round,
             };
             canvas.DrawPath(hatch, pen);
@@ -631,8 +631,8 @@ public static class RoadRenderer
         using var bank = OffsetPath(samples, 1.0, Quiet);
         using var heavy = new SKPaint
         {
-            Color = ink.WithAlpha((byte)(190 * strength)), IsAntialias = true, Style = SKPaintStyle.Stroke,
-            StrokeWidth = (float)Math.Max(0.8 / scale, style.EdgeWidth * 2.2), StrokeJoin = SKStrokeJoin.Round, StrokeCap = SKStrokeCap.Round,
+            Color = ink.WithAlpha((byte)(100 * strength)), IsAntialias = true, Style = SKPaintStyle.Stroke,
+            StrokeWidth = (float)Math.Max(0.6 / scale, style.EdgeWidth * 1.4), StrokeJoin = SKStrokeJoin.Round, StrokeCap = SKStrokeCap.Round,
             PathEffect = SKPathEffect.CreateDiscrete((float)Math.Max(1.5, half * 0.2), (float)Math.Max(0.15, style.EdgeWidth * 0.25), (uint)branchSeed),
         };
         canvas.DrawPath(bank, heavy);
@@ -643,12 +643,17 @@ public static class RoadRenderer
     {
         var path = new SKPath();
         var open = false;
+        double? side = null;
         foreach (var s in samples)
         {
             // Where the branch is quiet (a junction, a free end) the line lifts, so it never
-            // crosses the mouth of a fork.
+            // crosses the mouth of a fork; it lifts too where the shadow changes side as the
+            // road turns across the light, instead of jumping across the road.
+            var here = ShadowSide(s);
+            if (side is { } previous && previous != here) open = false;
+            side = here;
             if (quiet?.Invoke(s.Distance) == true) { open = false; continue; }
-            var offset = s.HalfWidth * offsetFraction * ShadowSide(s);
+            var offset = s.HalfWidth * offsetFraction * here;
             var point = new SKPoint((float)(s.X - s.TangentY * offset), (float)(s.Y + s.TangentX * offset));
             if (open) path.LineTo(point); else { path.MoveTo(point); open = true; }
         }
@@ -664,9 +669,17 @@ public static class RoadRenderer
         var path = new SKPath();
         var period = Math.Max(1e-6, dash + gap);
         var open = false;
+        double? side = null;
         for (var i = 0; i < samples.Length; i++)
         {
             var s = samples[i];
+            // A light-relative stroke lifts where the shadow changes side, never crossing the road.
+            if (lightRelative)
+            {
+                var here = ShadowSide(s);
+                if (side is { } previous && previous != here) open = false;
+                side = here;
+            }
             var position = (s.Distance + phase) % period;
             var lengthWobble = 0.5 + 0.8 * (0.5 + 0.5 * RiverGeometry.Noise(seed, (s.Distance + phase) / period));
             // A track is left out now and then, so no two stretches read the same and no track runs the whole way.

@@ -564,7 +564,6 @@ public static class RiverRenderer
         var deep = Mix(water, ink, .45f);
         var mid = Mix(water, ink, .22f);
         var light = Mix(water, new SKColor(236, 242, 246), .62f);
-        var bright = new SKColor(246, 250, 252);
         canvas.Save();
         canvas.ClipPath(body, SKClipOperation.Intersect, antialias: true);
         foreach (var geometry in set.Channels.Values)
@@ -581,15 +580,15 @@ public static class RiverRenderer
                 using var shade = OffsetPath(samples, 0.55, 1);
                 using var shadow = new SKPaint
                 {
-                    Color = deep.WithAlpha((byte)(120 * strength)), IsAntialias = true, Style = SKPaintStyle.Stroke,
-                    StrokeWidth = (float)(half * 0.75), StrokeCap = SKStrokeCap.Round, StrokeJoin = SKStrokeJoin.Round,
+                    Color = deep.WithAlpha((byte)(55 * strength)), IsAntialias = true, Style = SKPaintStyle.Stroke,
+                    StrokeWidth = (float)(half * 0.55), StrokeCap = SKStrokeCap.Round, StrokeJoin = SKStrokeJoin.Round,
                     MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, (float)Math.Max(0.5, half * 0.22)),
                 };
                 canvas.DrawPath(shade, shadow);
                 using var centre = OffsetPath(samples, -0.05, 1);
                 using var form = new SKPaint
                 {
-                    Color = deep.WithAlpha((byte)(60 * strength)), IsAntialias = true, Style = SKPaintStyle.Stroke,
+                    Color = deep.WithAlpha((byte)(20 * strength)), IsAntialias = true, Style = SKPaintStyle.Stroke,
                     StrokeWidth = (float)(half * 0.8), StrokeCap = SKStrokeCap.Round, StrokeJoin = SKStrokeJoin.Round,
                     MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, (float)Math.Max(0.5, half * 0.3)),
                 };
@@ -599,12 +598,11 @@ public static class RiverRenderer
             // light strokes on the lit side, shorter dark ones in the shadow, a few bright flecks.
             (double Offset, SKColor Color, byte Alpha, double Width, double Dash, double Gap, double Phase)[] strokes =
             [
-                (0.62, deep, 120, 0.16, 3.4, 2.6, 0.0),
-                (0.36, mid, 110, 0.14, 4.8, 3.3, 1.7),
-                (-0.46, light, 150, 0.15, 7.5, 3.6, 0.6),
-                (-0.20, light, 135, 0.11, 5.2, 4.8, 3.0),
-                (0.05, light, 110, 0.08, 3.0, 5.6, 1.1),
-                (-0.66, bright, 170, 0.06, 1.4, 6.2, 2.4),
+                // Owner 2026-10-22: «too voluminous and glossy» - quiet strokes, no white flecks.
+                (0.55, deep, 70, 0.12, 3.4, 2.8, 0.0),
+                (0.25, mid, 60, 0.10, 4.8, 3.6, 1.7),
+                (-0.40, light, 55, 0.10, 6.0, 4.2, 0.6),
+                (-0.10, mid, 40, 0.08, 3.6, 5.0, 3.0),
             ];
             foreach (var (index, stroke) in strokes.Select((s, i) => (i, s)))
             {
@@ -624,8 +622,8 @@ public static class RiverRenderer
         // The contour as on the mountains: ink heavier on the shadow side, a thin line on the lit one.
         using var heavy = new SKPaint
         {
-            Color = ink.WithAlpha((byte)(200 * strength)), IsAntialias = true, Style = SKPaintStyle.Stroke,
-            StrokeWidth = (float)Math.Max(0.8 / scale, style.BankWidth * 2.2), StrokeJoin = SKStrokeJoin.Round, StrokeCap = SKStrokeCap.Round,
+            Color = ink.WithAlpha((byte)(110 * strength)), IsAntialias = true, Style = SKPaintStyle.Stroke,
+            StrokeWidth = (float)Math.Max(0.6 / scale, style.BankWidth * 1.4), StrokeJoin = SKStrokeJoin.Round, StrokeCap = SKStrokeCap.Round,
         };
         foreach (var geometry in set.Channels.Values)
         {
@@ -642,12 +640,17 @@ public static class RiverRenderer
     private static SKPath OffsetPath(RiverSample[] samples, double offsetFraction, double scaleAcross)
     {
         var path = new SKPath();
+        double? side = null;
         for (var i = 0; i < samples.Length; i++)
         {
             var s = samples[i];
-            var offset = s.HalfWidth * offsetFraction * scaleAcross * ShadowSide(s);
+            var here = ShadowSide(s);
+            var offset = s.HalfWidth * offsetFraction * scaleAcross * here;
             var point = new SKPoint((float)(s.X - s.TangentY * offset), (float)(s.Y + s.TangentX * offset));
-            if (i == 0) path.MoveTo(point); else path.LineTo(point);
+            // Where the channel turns across the light the shadow changes bank: the line lifts
+            // there instead of being drawn across the water.
+            if (side != here) path.MoveTo(point); else path.LineTo(point);
+            side = here;
         }
         return path;
     }
@@ -661,9 +664,17 @@ public static class RiverRenderer
         var path = new SKPath();
         var period = dash + gap;
         var open = false;
+        double? side = null;
         for (var i = 0; i < samples.Length; i++)
         {
             var s = samples[i];
+            // A light-relative stroke lifts where the shadow changes bank, never crossing the water.
+            if (lightRelative)
+            {
+                var here = ShadowSide(s);
+                if (side is { } previous && previous != here) open = false;
+                side = here;
+            }
             var position = (s.Distance + phase) % period;
             // The length of each stroke and its distance from the centre both wander, so no two
             // strands are the same and none of them runs the length of the channel.

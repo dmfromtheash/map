@@ -88,13 +88,13 @@ public sealed record RiverStyle
     public static RiverStyle Painted() => new()
     {
         WaterColor = "#FF6F95A8",
-        BankColor = "#FF1F2A36", BankWidth = 1.8,
-        BankShadowOpacity = 0.15, BankShadowBlur = 2.5,
+        BankColor = "#FF1F2A36", BankWidth = 1.2,
+        BankShadowOpacity = 0.08, BankShadowBlur = 2,
         BankReliefWidth = 0,
-        ShallowColor = "#6A3B586D", ShallowWidth = 7,
+        ShallowColor = "#553B586D", ShallowWidth = 4,
         HighlightColor = "#FFE7EEF2", HighlightOpacity = 0,
         EdgeRoughness = 0.4,
-        TextureId = MapFillTextures.OwnerIceWash, TextureOpacity = 0.5,
+        TextureId = MapFillTextures.OwnerIceWash, TextureOpacity = 0.35,
         PaintStrokes = 1,
     };
 
