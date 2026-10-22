@@ -36,6 +36,13 @@ public sealed record LayerEffects
     public double ShadowOffsetX { get; init; }
     public double ShadowOffsetY { get; init; }
     public double ShadowBlur { get; init; }
+
+    /// <summary>
+    /// R10 «Ближние поверх дальних» for a whole layer (schema v27): inside each sublayer band the
+    /// object whose lower edge is lower on the map is drawn over the ones above it. Only the drawing
+    /// (and picking) order changes; the stored list order is kept, so switching it off restores it.
+    /// </summary>
+    public bool DepthSort { get; init; }
 }
 
 /// <summary>Visibility and edit lock for one integer Object-layer sublayer band.</summary>

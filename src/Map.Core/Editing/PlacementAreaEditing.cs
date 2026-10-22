@@ -66,16 +66,25 @@ public static class PlacementAreaPlanner
     {
         return new PlacementAreaSampler(area).Slots(x, y);
     }
-    public static SceneObject Item(PlacementArea area, PlacementAreaSlot slot) => Item(area, slot,
-        area.LayoutVersion >= 4 ? new PlacementAreaLayout(area).At(slot)
-        : area.LayoutVersion >= 3 ? PlacementAreaComposition.At(area, slot) : null);
-    internal static SceneObject Item(PlacementArea area, PlacementAreaSlot slot, PlacementAreaComposition.Sample? composition)
+    /// <summary>The finished object of a slot, exactly as the fill stores it.</summary>
+    public static SceneObject Item(PlacementArea area, PlacementAreaSlot slot)
+    {
+        var beauty = PlacementAreaBeautyField.For(area);
+        var item = Item(area, slot, area.LayoutVersion >= 4 ? new PlacementAreaLayout(area).At(slot)
+            : area.LayoutVersion >= 3 ? PlacementAreaComposition.At(area, slot) : null, beauty);
+        return beauty?.Finish(item, slot) ?? item;
+    }
+    internal static SceneObject Item(PlacementArea area, PlacementAreaSlot slot, PlacementAreaComposition.Sample? composition,
+        PlacementAreaBeautyField? beauty = null)
     {
         var point = composition?.Point ?? Anchor(area, slot);
         var request = area.Request with { CenterX = point.X, CenterY = point.Y, AreaRadius = 0,
             BaseWidth = area.Request.BaseWidth * (composition?.Scale ?? 1),
             Density = 0, Seed = unchecked((int)Mix(Random(area, slot) ^ 0x1559UL)) };
-        var item = StampPlacement.PlanArea(request, area.Variants)[0];
+        // «Рощи одного вида»: the kind follows patches of the world; every other draw is unchanged.
+        var variants = area.Request.RandomizeVariant && beauty?.PatchVariant(point.X, point.Y, slot, area.Variants.Length) is { } kind
+            ? [area.Variants[kind]] : (IReadOnlyList<StampVariantSource>)area.Variants;
+        var item = StampPlacement.PlanArea(request, variants)[0];
         var style = area.Style with { AssetSha256 = item.Sha256, MaskAssetSha256 = item.MaskSha256,
             ClipMaskEnabled = item.MaskSha256 is not null && area.Style.ClipMaskEnabled,
             ReferenceWidth = item.Width / (area.ScalePercent / 100), ReferenceHeight = item.Height / (area.ScalePercent / 100),
@@ -91,15 +100,59 @@ public static class PlacementAreaPlanner
         && a.Name == b.Name && a.LayoutVersion == b.LayoutVersion && a.CompositionOrigin == b.CompositionOrigin
         && a.SizeVariationPercent == b.SizeVariationPercent && a.Pattern == b.Pattern
         && a.JoinEdges == b.JoinEdges && a.DepthSort == b.DepthSort && Equals(a.Rules, b.Rules)
+        && Equals(a.Beauty, b.Beauty) && Equals(a.DensityMask, b.DensityMask)
         && a.CompositionLength == b.CompositionLength && a.CompositionAngleDegrees == b.CompositionAngleDegrees
         && a.ContentBounds.Count == b.ContentBounds.Count && a.ContentBounds.All(kv => b.ContentBounds.TryGetValue(kv.Key, out var value) && value == kv.Value)
         && a.ContentMasks.Count == b.ContentMasks.Count && a.ContentMasks.All(kv => b.ContentMasks.TryGetValue(kv.Key, out var value) && value.Rows.SequenceEqual(kv.Value.Rows))
         && a.Variants.SequenceEqual(b.Variants);
 
-    public static IReadOnlyList<PlacementAreaGeometry.CellSpan> Affected(PlacementArea? before, PlacementArea after) =>
-        before is null ? PlacementAreaGeometry.Coverage(after.Nodes)
-        : SameSettings(before, after) ? PlacementAreaGeometry.ChangedCoverage(before.Nodes, after.Nodes)
-        : PlacementAreaGeometry.Merge(PlacementAreaGeometry.Coverage(before.Nodes).Concat(PlacementAreaGeometry.Coverage(after.Nodes)));
+    public static IReadOnlyList<PlacementAreaGeometry.CellSpan> Affected(PlacementArea? before, PlacementArea after)
+    {
+        if (before is null) return PlacementAreaGeometry.Coverage(after.Nodes);
+        if (SameSettings(before, after))
+        {
+            var changed = PlacementAreaGeometry.ChangedCoverage(before.Nodes, after.Nodes);
+            // A soft edge reaches inward from the border: a moved border changes the slots and
+            // sizes up to its width away, not only in the strip between the old and new line.
+            return after.Beauty is { SoftEdge: true } beauty && after.LayoutVersion >= 3 && changed.Count > 0
+                ? PlacementAreaGeometry.Dilate(changed, (int)Math.Ceiling(beauty.EdgeWidth / PlacementAreaGeometry.CellSize) + 1)
+                : changed;
+        }
+        // Only the density brush changed: refill the cells under the stroke, not the whole area.
+        if (before.Nodes.SequenceEqual(after.Nodes) && SameSettings(before with { DensityMask = after.DensityMask }, after)
+            && DensityMaskChange(before.DensityMask, after.DensityMask) is { } stroke)
+            return PlacementAreaGeometry.Clip(PlacementAreaGeometry.Coverage(after.Nodes), stroke);
+        return PlacementAreaGeometry.Merge(PlacementAreaGeometry.Coverage(before.Nodes).Concat(PlacementAreaGeometry.Coverage(after.Nodes)));
+    }
+
+    /// <summary>
+    /// The world rectangle in which two density brushes differ (slightly widened), or null when
+    /// they do not differ. Slots are addressed by the cell of their anchor, which is where the
+    /// brush is read, so only cells touching this rectangle can change.
+    /// </summary>
+    internal static WorldBounds? DensityMaskChange(PlacementAreaDensityMask? before, PlacementAreaDensityMask? after)
+    {
+        if (Equals(before, after)) return null;
+        if (before is null || after is null || before.Left != after.Left || before.Top != after.Top
+            || before.CellSize != after.CellSize || before.Width != after.Width || before.Height != after.Height)
+        {
+            var masks = new[] { before, after }.OfType<PlacementAreaDensityMask>().ToArray();
+            return new WorldBounds(masks.Min(m => m.Left) - 1, masks.Min(m => m.Top) - 1, masks.Max(m => m.Right) + 1, masks.Max(m => m.Bottom) + 1);
+        }
+        var a = before.Values; var b = after.Values;
+        int minX = int.MaxValue, minY = int.MaxValue, maxX = -1, maxY = -1;
+        for (var y = 0; y < after.Height; y++)
+        {
+            var row = y * after.Width;
+            for (var x = 0; x < after.Width; x++)
+                if (a[row + x] != b[row + x])
+                { if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; maxY = y; }
+        }
+        if (maxX < 0) return null;
+        // Bilinear reading reaches one cell further on each side.
+        return new WorldBounds(after.Left + (minX - 1) * after.CellSize - 1, after.Top + (minY - 1) * after.CellSize - 1,
+            after.Left + (maxX + 2) * after.CellSize + 1, after.Top + (maxY + 2) * after.CellSize + 1);
+    }
 
     /// <summary>
     /// Admission estimate of objects per cell. Version 4 layouts publish only a conservative
@@ -244,7 +297,10 @@ public sealed class PlacementAreaCommand : IEditCommand
         var replacements = new List<SceneObject>(); var additions = new List<SceneObject>(); var removals = new HashSet<ObjectId>();
         PlacementArea? next = _requested;
         var reorder = old is not null && next is not null && (PlacementAreaDrawOrder.Uses(old) || PlacementAreaDrawOrder.Uses(next))
-            && !PlacementAreaPlanner.SameSettings(old with { Density = next.Density }, next);
+            && !PlacementAreaPlanner.SameSettings(old with { Density = next.Density, DensityMask = next.DensityMask }, next);
+        // A soft edge resizes objects near a moved border; in a depth-sorted area such an object
+        // moves to its new place in the order instead of keeping a stale one.
+        var resort = old is not null && next is not null && PlacementAreaDrawOrder.Uses(old) && PlacementAreaDrawOrder.Uses(next);
         if (_detach is { } detach)
         {
             var member = old?.Members.FirstOrDefault(m => m.ObjectId == detach)
@@ -306,7 +362,9 @@ public sealed class PlacementAreaCommand : IEditCommand
                         members.Add(new(slot, item.Id)); used.Add(item.Id);
                         if (existing is null) additions.Add(item);
                         else if (!previousIds.Contains(item.Id)) throw new InvalidOperationException("Слот области занят посторонним объектом.");
-                        else if (reorder) { RequireEditable(item.Id); removals.Add(item.Id); additions.Add(item); }
+                        else if (reorder || resort && existing != item
+                            && PlacementAreaDrawOrder.Key(next, item) != PlacementAreaDrawOrder.Key(old!, existing))
+                        { RequireEditable(item.Id); removals.Add(item.Id); additions.Add(item); }
                         else if (existing != item) { RequireEditable(item.Id); replacements.Add(item); }
                     }
                     foreach (var member in previous.Where(m => !used.Contains(m.ObjectId)))

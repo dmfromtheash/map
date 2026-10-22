@@ -68,6 +68,32 @@ public static class PlacementAreaGeometry
         return Rasterize(edges.ToArray());
     }
 
+    /// <summary>The spans grown by <paramref name="cells"/> cells in every direction (R10 soft edge).</summary>
+    public static IReadOnlyList<CellSpan> Dilate(IReadOnlyList<CellSpan> spans, int cells)
+    {
+        if (cells <= 0 || spans.Count == 0) return spans;
+        var grown = new List<CellSpan>(spans.Count * (2 * cells + 1));
+        foreach (var span in spans)
+            for (var dy = -cells; dy <= cells; dy++)
+                grown.Add(new(span.Y + dy, span.MinX - cells, span.MaxX + cells));
+        return Merge(grown);
+    }
+
+    /// <summary>The parts of the spans whose cells touch the world rectangle.</summary>
+    public static IReadOnlyList<CellSpan> Clip(IReadOnlyList<CellSpan> spans, WorldBounds bounds)
+    {
+        var left = Cell(bounds.Left); var right = Cell(bounds.Right);
+        var top = Cell(bounds.Top); var bottom = Cell(bounds.Bottom);
+        var result = new List<CellSpan>();
+        foreach (var span in spans)
+        {
+            if (span.Y < top || span.Y > bottom) continue;
+            var min = Math.Max(span.MinX, left); var max = Math.Min(span.MaxX, right);
+            if (min <= max) result.Add(new(span.Y, min, max));
+        }
+        return result;
+    }
+
     public static IReadOnlyList<CellSpan> Merge(IEnumerable<CellSpan> spans)
     {
         var result = new List<CellSpan>();

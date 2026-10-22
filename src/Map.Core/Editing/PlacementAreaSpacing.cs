@@ -23,11 +23,14 @@ public sealed class PlacementAreaSampler(PlacementArea area, CancellationToken c
         public bool? ClearEarlier { get; set; }
         public bool? Accepted { get; set; }
         public PlacementAreaSilhouette? Silhouette { get; init; }
+        public SceneObject? Finished { get; set; }
     }
     private readonly Dictionary<PlacementAreaSlot, Candidate> _candidates = [];
     private readonly LinkedList<PlacementAreaSlot> _recent = new();
     private readonly double _reach = MaximumReach(area);
     private readonly PlacementAreaLayout? _layout = area.LayoutVersion >= 4 ? new(area) : null;
+    // R10 «Красота» and the density brush; null for every area without them (as before).
+    private readonly PlacementAreaBeautyField? _beauty = PlacementAreaBeautyField.For(area);
     public int CachedCandidateCount => _candidates.Count;
 
     public static WorldBounds Footprint(SceneObject item, int layoutVersion = 1)
@@ -116,8 +119,14 @@ public sealed class PlacementAreaSampler(PlacementArea area, CancellationToken c
         return (MaximumCachedCandidates + 2 * (decimal)(p.LayoutVersion >= 4 ? 0 : PlacementAreaPlanner.CandidatePasses(p)) + 256) * 1664
             + (p.LayoutVersion >= 4 ? 4 * 1024 * 1024 : 0);
     }
-    public SceneObject Item(PlacementAreaSlot slot) => area.LayoutVersion == 0
-        ? PlacementAreaPlanner.Item(area, slot) : CandidateAt(slot).Item;
+    public SceneObject Item(PlacementAreaSlot slot)
+    {
+        if (area.LayoutVersion == 0) return PlacementAreaPlanner.Item(area, slot);
+        var candidate = CandidateAt(slot);
+        // Spacing used the unfinished candidate; the stored object is finished (smaller at the
+        // soft edge, colour, contact shadow), so the border and the noise never decide conflicts.
+        return _beauty is null ? candidate.Item : candidate.Finished ??= _beauty.Finish(candidate.Item, slot);
+    }
     private Candidate CandidateAt(PlacementAreaSlot slot)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -130,7 +139,7 @@ public sealed class PlacementAreaSampler(PlacementArea area, CancellationToken c
         { _candidates.Remove(_recent.First!.Value); _recent.RemoveFirst(); }
         PlacementAreaComposition.Sample? composition = _layout?.At(slot)
             ?? (area.LayoutVersion >= 3 ? PlacementAreaComposition.At(area, slot) : null);
-        var item = PlacementAreaPlanner.Item(area, slot, composition);
+        var item = PlacementAreaPlanner.Item(area, slot, composition, _beauty);
         var visible = VisibleBounds(area, item);
         return _candidates[slot] = new(item, Footprint(area, item), visible,
             composition?.Priority ?? PlacementAreaPlanner.Priority(area, slot), composition?.Eligible ?? true,
@@ -139,7 +148,16 @@ public sealed class PlacementAreaSampler(PlacementArea area, CancellationToken c
     public bool Includes(PlacementAreaSlot slot)
     {
         if (!PlacementAreaPlanner.IncludesGeometry(area, slot, _layout?.At(slot).Point)) return false;
-        if (area.LayoutVersion >= 3 && CandidateAt(slot).Activation > area.Density) return false;
+        if (area.LayoutVersion >= 3)
+        {
+            var candidate = CandidateAt(slot);
+            var density = area.Density;
+            // Soft edge, clumps and the brush scale the density a slot is compared with: a slot
+            // only disappears or returns, the ones that stay keep their places.
+            if (_beauty is { ChangesDensity: true })
+                density *= _beauty.DensityFactor(candidate.Item.X + candidate.Item.Width / 2, candidate.Item.Y + candidate.Item.Height / 2);
+            if (candidate.Activation > density) return false;
+        }
         return area.LayoutVersion == 0 || Accepted(slot);
     }
     public IEnumerable<PlacementAreaSlot> Slots(int x, int y)

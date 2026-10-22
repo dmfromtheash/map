@@ -109,10 +109,28 @@ public static class SceneGeometry
     public static IReadOnlyList<SceneObject> InDrawOrder(ObjectLayer layer)
     {
         ArgumentNullException.ThrowIfNull(layer);
+        if (layer.Effects.DepthSort) return InDrawOrder(layer, layer.Objects);
         return layer.Objects.All(o => o.Sublayer == 0)
             ? layer.Objects
             : [.. layer.Objects.OrderBy(o => o.Sublayer)];
     }
+
+    /// <summary>
+    /// The draw order of some objects of <paramref name="layer"/> given in list order: by sublayer
+    /// band and, with «Ближние поверх дальних» (R10), by the lower edge of each object inside a
+    /// band. Stable: equal keys keep the list order.
+    /// </summary>
+    public static IReadOnlyList<SceneObject> InDrawOrder(ObjectLayer layer, IReadOnlyList<SceneObject> objects)
+    {
+        ArgumentNullException.ThrowIfNull(layer);
+        ArgumentNullException.ThrowIfNull(objects);
+        if (layer.Effects.DepthSort)
+            return objects.Count < 2 ? objects : [.. objects.OrderBy(o => o.Sublayer).ThenBy(DepthKey)];
+        return objects.Count > 1 && objects.Any(o => o.Sublayer != 0) ? [.. objects.OrderBy(o => o.Sublayer)] : objects;
+    }
+
+    /// <summary>The «ближние поверх дальних» key: the lower edge of the object on the map.</summary>
+    public static double DepthKey(SceneObject item) => BoundsOf(item).Bottom;
 
     /// <summary>
     /// Topmost visible object under the point, or null. Hidden objects are not pickable; locked
@@ -143,6 +161,8 @@ public static class SceneGeometry
             // followed by reverse traversal, without sorting or scanning the whole layer.
             SceneObject? best = null;
             var bestSublayer = int.MinValue;
+            var bestDepth = double.MinValue;
+            var depthSort = layer.Effects.DepthSort;
             foreach (var candidate in ObjectSpatialIndex.For(layer).QueryPoint(worldX, worldY))
             {
                 if (candidate.Visible
@@ -150,8 +170,12 @@ public static class SceneGeometry
                     && candidate.Sublayer >= bestSublayer
                     && Contains(candidate, worldX, worldY))
                 {
+                    // «Ближние поверх дальних»: inside a band the lower object is the one on top.
+                    var depth = depthSort ? DepthKey(candidate) : 0;
+                    if (candidate.Sublayer == bestSublayer && depth < bestDepth) continue;
                     best = candidate;
                     bestSublayer = candidate.Sublayer;
+                    bestDepth = depth;
                 }
             }
 

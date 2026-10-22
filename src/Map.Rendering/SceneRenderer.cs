@@ -764,7 +764,8 @@ public static class SceneRenderer
     {
         var stats = options.Stats!;
         var missingBefore = stats.MissingAssets;
-        object[] parts = [layer.Objects, layer.SublayerStates, options.LodTier, options.FastPreview, options.FastTerrain, options.ViewScale,
+        // R10: the depth order of the layer and its areas' underlays are drawn with the objects.
+        object[] parts = [layer.Objects, layer.SublayerStates, layer.Effects.DepthSort, layer.PlacementAreas, options.LodTier, options.FastPreview, options.FastTerrain, options.ViewScale,
             (object?)options.Stamps ?? DBNull.Value, (object?)document.StampForeground ?? DBNull.Value, document.Assets];
         var built = false;
         void Draw(SKCanvas target)
@@ -896,13 +897,15 @@ public static class SceneRenderer
         previous = null;
         if (options.LodTier == RenderLodTier.Overview || layer.Opacity < 1
             || layer.Mask is { Enabled: true } mask && HasEffectiveMask(mask, view)
-            || layer.Effects is { OuterShadowOpacity: > 0 } or { InnerShadowOpacity: > 0 }
+            || layer.Effects is { OuterShadowOpacity: > 0 } or { InnerShadowOpacity: > 0 } or { DepthSort: true }
             || !ObjectLayerChanges.TryGet(layer, out var delta) || delta.Removed.Count > 0 || delta.Added.Count == 0
             || delta.Added.Any(index => index < delta.Source.Objects.Count)
             || !RevisionsFor(layer).AllOnFirstSublayer)
             return null;
         var added = delta.Added.Select(index => layer.Objects[index]).ToArray();
         if (added.Any(o => o.Stamp is { ShadowPlacement: StampShadowPlacement.Layer, ShadowOpacity: > 0 })) return null;
+        // R10 blots go under every object, not over the kept picture.
+        if (added.Any(AreaBeautyRenderer.HasMass)) return null;
         previous = delta.Source;
         return added;
     }
@@ -2989,9 +2992,8 @@ public static class SceneRenderer
         IReadOnlyList<SceneObject> ordered;
         if (options.ObjectOverrides is not { Count: > 0 } overrideList)
         {
-            ordered = candidates.Count > 1 && candidates.Any(o => o.Sublayer != 0)
-                ? [.. candidates.OrderBy(o => o.Sublayer)]
-                : candidates;
+            // Sublayer bands, and with «Ближние поверх дальних» (R10) the lower edge inside a band.
+            ordered = SceneGeometry.InDrawOrder(layer, candidates);
         }
         else
         {
@@ -3037,10 +3039,13 @@ public static class SceneRenderer
                 }
             }
 
-            resolved.Sort(static (left, right) =>
+            var depthSort = layer.Effects.DepthSort;
+            resolved.Sort((left, right) =>
             {
                 var sublayer = left.Object.Sublayer.CompareTo(right.Object.Sublayer);
-                return sublayer != 0 ? sublayer : left.Position.CompareTo(right.Position);
+                if (sublayer != 0) return sublayer;
+                var depth = depthSort ? SceneGeometry.DepthKey(left.Object).CompareTo(SceneGeometry.DepthKey(right.Object)) : 0;
+                return depth != 0 ? depth : left.Position.CompareTo(right.Position);
             });
             ordered = [.. resolved.Select(entry => entry.Object)];
         }
@@ -3058,6 +3063,8 @@ public static class SceneRenderer
             {
                 DrawLayerStampShadow(canvas, sceneObject, document.StampForeground, options);
             }
+            // R10 «Подложка массива»: the soft blots under all objects of the run, before any of them.
+            AreaBeautyRenderer.DrawMasses(canvas, ordered, options);
         }
 
         for (var objectIndex = 0; objectIndex < ordered.Count; objectIndex++)
@@ -3133,6 +3140,8 @@ public static class SceneRenderer
             for (var depth = 0; depth < 64 && current._appended is { } appended && current._parent is { } parent; depth++)
             {
                 segments.Add(appended);
+                // The plain detail key only: a depth-sorted layer (R10) is kept under its own key, so an append
+                // that would break its order by Y never finds a base here and the tile is rebuilt instead.
                 if (cache.TryGet(layer, x, y, 10000 + zoom, parent.Version(x, y, zoom, bounds), out basis))
                 {
                     segments.Reverse();
@@ -3199,7 +3208,7 @@ public static class SceneRenderer
                 fallbackBucket = overviewBucket;
             }
         }
-        var budgetTiles = canRefine && cache.BeginDetailView(layer.Id, 10000 + bucket, view, worldSize, 514L * 514 * 4);
+        var budgetTiles = canRefine && cache.BeginDetailView(layer.Id, DetailZoomKey(layer, bucket), view, worldSize, 514L * 514 * 4);
         var budgetStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         var builtThisFrame = 0;
         var deferredTiles = 0;
@@ -3208,7 +3217,7 @@ public static class SceneRenderer
         {
             var bounds = new WorldBounds(x * worldSize, y * worldSize, (x + 1) * worldSize, (y + 1) * worldSize);
             var revision = revisions.Version(x, y, bucket, Expand(bounds, 1 / scale));
-            var exactKept = cache.TryGet(layer.Id, x, y, 10000 + bucket, revision, out _);
+            var exactKept = cache.TryGet(layer.Id, x, y, DetailZoomKey(layer, bucket), revision, out _);
             // A tile also waits while the images it samples at this zoom are still being decoded
             // off the render thread; the neighbouring level stands in for it meanwhile.
             if (!exactKept && fallbackBucket is { } fallback
@@ -3233,7 +3242,7 @@ public static class SceneRenderer
             if (!exactKept) builtThisFrame++;
             var objectCount = 0; var culledCount = 0;
             var drawnBefore = options.Stats?.ObjectsDrawn ?? 0;
-            var cached = cache.GetOrCreate(layer.Id, x, y, 10000 + bucket, revision, () =>
+            var cached = cache.GetOrCreate(layer.Id, x, y, DetailZoomKey(layer, bucket), revision, () =>
             {
                 // Preserve the established platform pixel layout on both paths: changing it
                 // alters Skia's premultiplied rounding when translucent tiles are appended.
@@ -3242,8 +3251,10 @@ public static class SceneRenderer
                     ? SKSurface.Create(gpu, true, tileInfo) : null) ?? SKSurface.Create(tileInfo)!;
                 var target = surface.Canvas;
                 target.Clear(SKColors.Transparent);
-                var incremental = revisions.TryAppendBase(cache, layer.Id, x, y, bucket, Expand(bounds, 1 / scale),
-                    out var basis, out var appended);
+                // Appended objects go on top of the kept tile; under «Ближние поверх дальних» they may belong below.
+                ObjectOverviewCacheResult basis = default!; IReadOnlyList<SceneObject> appended = [];
+                var incremental = !layer.Effects.DepthSort && revisions.TryAppendBase(cache, layer.Id, x, y, bucket, Expand(bounds, 1 / scale),
+                    out basis, out appended) && !appended.Any(AreaBeautyRenderer.HasMass);
                 if (incremental)
                 {
                     using var copy = new SKPaint { BlendMode = SKBlendMode.Src };
@@ -3255,13 +3266,14 @@ public static class SceneRenderer
                 var prepareStarted = System.Diagnostics.Stopwatch.GetTimestamp();
                 var candidates = incremental ? appended : ObjectSpatialIndex.For(layer).Query(Expand(bounds, 1 / scale));
                 if (layer.SublayerStates.Any(s => !s.Visible)) candidates = candidates.Where(o => layer.StateFor(o.Sublayer).Visible).ToArray();
-                var ordered = candidates.Any(o => o.Sublayer != 0) ? candidates.OrderBy(o => o.Sublayer).ToArray() : candidates;
-                ordered = StampOcclusion.Cull(ordered, Expand(bounds, 1 / scale), scale, options.Stamps);
+                var drawOrder = SceneGeometry.InDrawOrder(layer, candidates);
+                var ordered = StampOcclusion.Cull(drawOrder, Expand(bounds, 1 / scale), scale, options.Stamps);
                 objectCount = (incremental ? basis.ObjectCount : 0) + ordered.Count(o => o.Visible);
                 culledCount = (incremental ? basis.CulledCount : 0) + candidates.Count - ordered.Count;
                 if (options.Stats is { } preparation)
                     preparation.DetailPrepareMilliseconds += System.Diagnostics.Stopwatch.GetElapsedTime(prepareStarted).TotalMilliseconds;
                 var rasterStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+                AreaBeautyRenderer.DrawMasses(target, drawOrder, options);
                 if (!TryDrawDenseAtlas(target, ordered, layer.Id, bucket, cache, options, batchScratch))
                 for (var i = 0; i < ordered.Count; i++)
                 {
@@ -3301,6 +3313,9 @@ public static class SceneRenderer
         { finalStats.ObjectCacheHits += cache.Hits - hits; finalStats.ObjectCacheMisses += cache.Misses - misses; }
     }
 
+    /// <summary>The cache slot of exact object tiles: a depth-sorted layer (R10) keeps its own tiles.</summary>
+    private static int DetailZoomKey(ObjectLayer layer, int bucket) => (layer.Effects.DepthSort ? 40000 : 10000) + bucket;
+
     /// <summary>Milliseconds of exact object tiles one settled frame builds before deferring the rest.</summary>
     private const double DetailBudgetMilliseconds = 24;
 
@@ -3335,7 +3350,7 @@ public static class SceneRenderer
         {
             if (++count > 64) return false;
             var bounds = new WorldBounds(x * worldSize, y * worldSize, (x + 1) * worldSize, (y + 1) * worldSize);
-            if (!cache.TryGet(layer.Id, x, y, 10000 + bucket, revisions.Version(x, y, bucket, Expand(bounds, 1 / scale)), out _)) return false;
+            if (!cache.TryGet(layer.Id, x, y, DetailZoomKey(layer, bucket), revisions.Version(x, y, bucket, Expand(bounds, 1 / scale)), out _)) return false;
         }
         return true;
     }
@@ -3353,7 +3368,7 @@ public static class SceneRenderer
             if (tiles.Count > 64) return false;
             var bounds = new WorldBounds(x * worldSize, y * worldSize, (x + 1) * worldSize, (y + 1) * worldSize);
             var revision = revisions.Version(x, y, bucket, Expand(bounds, 1 / scale));
-            if (!cache.TryGet(layer.Id, x, y, 10000 + bucket, revision, out var kept)) return false;
+            if (!cache.TryGet(layer.Id, x, y, DetailZoomKey(layer, bucket), revision, out var kept)) return false;
             tiles.Add((bounds, kept));
         }
         var drawn = 0;
@@ -3431,7 +3446,8 @@ public static class SceneRenderer
 
         static bool Compatible(SceneObject item) => item.Visible && item.Kind == SceneObjectKind.Stamp
             && item.Stamp is { FlipHorizontal: false, FlipVertical: false, ClipMaskEnabled: false,
-                ShadowOpacity: 0, Blur: 0, Hue: 0, Saturation: 0, Brightness: 0, Contrast: 0, Blend: "Normal" };
+                ShadowOpacity: 0, Blur: 0, Hue: 0, Saturation: 0, Brightness: 0, Contrast: 0, Blend: "Normal",
+                Tint: null, GroundShadow: null };
     }
 
     private static void DrawTiles(
@@ -3793,12 +3809,15 @@ public static class SceneRenderer
         var matrix = canvas.TotalMatrix;
         var scale = Math.Sqrt(matrix.ScaleX * matrix.ScaleX + matrix.SkewY * matrix.SkewY);
         var sources = new Dictionary<(string Sha, double Width, double Height), SKImage>();
+        var anyShadow = false;
         foreach (var item in objects)
         {
             if (!item.Visible) continue;
+            // R10 tint and contact shadow stay in the mesh: a vertex colour and one more quad.
             if (item.Stamp is not { FlipHorizontal: false, FlipVertical: false, ClipMaskEnabled: false,
                 ShadowOpacity: 0, Blur: 0, Hue: 0, Saturation: 0, Brightness: 0, Contrast: 0, Blend: "Normal" } stamp)
                 return false;
+            if (stamp.GroundShadow is { IsValid: true, Opacity: > 0 }) anyShadow = true;
             var key = (stamp.AssetSha256, item.Width, item.Height);
             if (sources.ContainsKey(key)) continue;
             if (stamps.TryGetImage(stamp.AssetSha256) is not { } original) return false;
@@ -3808,6 +3827,8 @@ public static class SceneRenderer
             sources.Add(key, image);
         }
         if (sources.Count == 0) return true;
+        var shadowKey = (AreaBeautyRenderer.ShadowSpriteKey, -1d, -1d);
+        if (anyShadow) sources.Add(shadowKey, AreaBeautyRenderer.ShadowSprite);
 
         // One sprite per sampled image, not per object size: stamps of one asset at different
         // sizes mostly sample the same mip, and every quad stretches its sprite to its own
@@ -3856,11 +3877,14 @@ public static class SceneRenderer
         using var shader = atlas.ToShader(SKShaderTileMode.Clamp, SKShaderTileMode.Clamp, new SKSamplingOptions(SKFilterMode.Linear));
         using var paint = new SKPaint { BlendMode = SKBlendMode.SrcOver, Shader = shader };
         // Keep the original order, including overlap and opacity. Only texture switches disappear.
+        // With contact shadows every object has two quads, its shadow first: half as many per mesh.
+        var perObject = anyShadow ? 2 : 1;
+        var shadowTexture = anyShadow ? rects[slots[AreaBeautyRenderer.ShadowSprite.UniqueId]] : default;
         for (var start = 0; start < objects.Count;)
         {
-            var count = Math.Min(8192, objects.Count - start);
-            var positions = new SKPoint[count * 4]; var texture = new SKPoint[count * 4];
-            var colors = new SKColor[count * 4]; var indices = new ushort[count * 6];
+            var count = Math.Min(8192 / perObject, objects.Count - start);
+            var positions = new SKPoint[count * 4 * perObject]; var texture = new SKPoint[count * 4 * perObject];
+            var colors = new SKColor[count * 4 * perObject]; var indices = new ushort[count * 6 * perObject];
             for (var index = 0; index < count; index++)
             {
                 var item = objects[start + index];
@@ -3875,19 +3899,33 @@ public static class SceneRenderer
                 var hx = -sin * item.Height; var hy = cos * item.Height;
                 var tx = item.X + item.Width / 2 - (dx + hx) / 2;
                 var ty = item.Y + item.Height / 2 - (dy + hy) / 2;
-                var vertex = index * 4;
-                positions[vertex] = new((float)tx, (float)ty);
-                positions[vertex + 1] = new((float)(tx + dx), (float)(ty + dy));
-                positions[vertex + 2] = new((float)(tx + dx + hx), (float)(ty + dy + hy));
-                positions[vertex + 3] = new((float)(tx + hx), (float)(ty + hy));
+                var quad = index * perObject;
+                if (item.Stamp.GroundShadow is { IsValid: true, Opacity: > 0 } ground)
+                {
+                    // The same local rectangle as the single-stamp path, turned with the object.
+                    var local = AreaBeautyRenderer.ShadowRect(new SKRect(0, 0, (float)item.Width, (float)item.Height), ground);
+                    SKPoint Corner(float lx, float ly) => new((float)(tx + cos * lx - sin * ly), (float)(ty + sin * lx + cos * ly));
+                    var shade = SKColors.White.WithAlpha((byte)Math.Clamp(Math.Round(ground.Opacity * Alpha(item.ObjectOpacity)), 0, 255));
+                    Quad(quad, Corner(local.Left, local.Top), Corner(local.Right, local.Top), Corner(local.Right, local.Bottom),
+                        Corner(local.Left, local.Bottom), shadowTexture, shade);
+                }
+                if (anyShadow) quad++;
                 var rect = rects[slots[image.UniqueId]];
-                texture[vertex] = new(rect.Left, rect.Top); texture[vertex + 1] = new(rect.Right, rect.Top);
-                texture[vertex + 2] = new(rect.Right, rect.Bottom); texture[vertex + 3] = new(rect.Left, rect.Bottom);
-                for (var corner = 0; corner < 4; corner++) colors[vertex + corner] = SKColors.White.WithAlpha(Alpha(item.ObjectOpacity));
-                indices[index * 6] = (ushort)vertex; indices[index * 6 + 1] = (ushort)(vertex + 1); indices[index * 6 + 2] = (ushort)(vertex + 2);
-                indices[index * 6 + 3] = (ushort)vertex; indices[index * 6 + 4] = (ushort)(vertex + 2); indices[index * 6 + 5] = (ushort)(vertex + 3);
+                Quad(quad, new((float)tx, (float)ty), new((float)(tx + dx), (float)(ty + dy)),
+                    new((float)(tx + dx + hx), (float)(ty + dy + hy)), new((float)(tx + hx), (float)(ty + hy)), rect,
+                    (item.Stamp.Tint is null ? SKColors.White : AreaBeautyRenderer.Tint(item.Stamp)).WithAlpha(Alpha(item.ObjectOpacity)));
                 if (options.Stats is { } stats)
                 { stats.ObjectsDrawn++; stats.ExactObjects++; stats.RecordExactObject(item); }
+            }
+            void Quad(int quad, SKPoint a, SKPoint b, SKPoint c, SKPoint d, SKRect source, SKColor color)
+            {
+                var vertex = quad * 4;
+                positions[vertex] = a; positions[vertex + 1] = b; positions[vertex + 2] = c; positions[vertex + 3] = d;
+                texture[vertex] = new(source.Left, source.Top); texture[vertex + 1] = new(source.Right, source.Top);
+                texture[vertex + 2] = new(source.Right, source.Bottom); texture[vertex + 3] = new(source.Left, source.Bottom);
+                for (var corner = 0; corner < 4; corner++) colors[vertex + corner] = color;
+                indices[quad * 6] = (ushort)vertex; indices[quad * 6 + 1] = (ushort)(vertex + 1); indices[quad * 6 + 2] = (ushort)(vertex + 2);
+                indices[quad * 6 + 3] = (ushort)vertex; indices[quad * 6 + 4] = (ushort)(vertex + 2); indices[quad * 6 + 5] = (ushort)(vertex + 3);
             }
             using var mesh = SKVertices.CreateCopy(SKVertexMode.Triangles, positions, texture, colors, indices);
             canvas.DrawVertices(mesh, SKBlendMode.Modulate, paint);
@@ -4813,12 +4851,15 @@ public static class SceneRenderer
             }
         }
 
+        // R10 «Тень под объектом»: the contact shadow lies under the stamp, inside its rectangle.
+        if (stamp.GroundShadow is { } ground) AreaBeautyRenderer.DrawGroundShadow(canvas, rect, ground, objectAlpha);
+
         using var paint = new SKPaint
         {
             Color = SKColors.White.WithAlpha(objectAlpha),
             IsAntialias = true,
             BlendMode = ParseBlend(stamp.Blend),
-            ColorFilter = BuildColorFilter(stamp),
+            ColorFilter = AreaBeautyRenderer.Compose(BuildColorFilter(stamp), stamp),
         };
 
         SKImageFilter? filter = null;

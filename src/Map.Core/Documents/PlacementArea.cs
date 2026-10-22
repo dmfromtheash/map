@@ -86,6 +86,16 @@ public sealed record PlacementArea
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool DepthSort { get; init; }
 
+    /// <summary>«Красота» (R10, schema v27); null = none, as in every older map.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PlacementAreaBeauty? Beauty { get; init; }
+
+    /// <summary>The density brush (R10, schema v27); null = untouched.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PlacementAreaDensityMask? DensityMask { get; init; }
+
+    [JsonIgnore] public bool NeedsBeautySchema => Beauty is not null || DensityMask is not null;
+
     [JsonIgnore] public ImmutableHashSet<PlacementAreaSlot> RuleBlocked => RuleSlots ?? [];
     [JsonIgnore] public bool NeedsRulesSchema => Rules is not null || RuleSlots is { Count: > 0 } || DepthSort;
     [JsonIgnore] public IEnumerable<PlacementAreaMember> Members => Cells.Values.SelectMany(c => c);
@@ -107,6 +117,8 @@ public sealed record PlacementArea
             throw new ArgumentException("Плотность области должна быть неотрицательной; связи и исключения — корректными.");
         if (LayoutVersion >= 3 && Density > 100) throw new ArgumentException("Плотность естественной расстановки — от 0 до 100%.");
         Rules?.Validate();
+        Beauty?.Validate();
+        DensityMask?.Validate();
         if (RuleBlocked.Any(s => s.Ordinal < 0)) throw new ArgumentException("Некорректные места, снятые правилами области.");
         foreach (var (sha, bounds) in ContentBounds)
         {

@@ -98,6 +98,30 @@ public sealed record StampStyle
     public double Saturation { get; init; }
     public double Brightness { get; init; }
     public double Contrast { get; init; }
+
+    /// <summary>
+    /// R10 «Разброс цвета»: a multiplying colour (#AARRGGBB, alpha ignored), or null for none. Kept
+    /// apart from the adjustments above so the dense atlas path can still draw the stamp in one mesh.
+    /// </summary>
+    public string? Tint { get; init; }
+
+    /// <summary>R10 «Тень под объектом»: a soft cold contact shadow at the foot, or null for none.</summary>
+    public StampGroundShadow? GroundShadow { get; init; }
+}
+
+/// <summary>
+/// The ground under a placed asset (R10): <see cref="Opacity"/> of the contact shadow and
+/// <see cref="Mass"/> of the wide soft «подложка» drawn under all objects of the layer first, so
+/// that a dense group reads as one dark mass. <see cref="FootX"/>/<see cref="FootY"/> locate the
+/// foot inside the object's rectangle (0..1, after flips), <see cref="Width"/> is the shadow width
+/// as a fraction of the object's width. The renderer shifts both to the south-east (light from the
+/// north-west) and keeps them inside the object's rectangle.
+/// </summary>
+public sealed record StampGroundShadow(double Opacity, double FootX, double FootY, double Width, double Mass = 0)
+{
+    public bool IsValid => double.IsFinite(Opacity) && Opacity is >= 0 and <= 1
+        && double.IsFinite(FootX) && FootX is >= 0 and <= 1 && double.IsFinite(FootY) && FootY is >= 0 and <= 1
+        && double.IsFinite(Width) && Width is > 0 and <= 1 && double.IsFinite(Mass) && Mass is >= 0 and <= 1;
 }
 
 /// <summary>
