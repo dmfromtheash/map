@@ -47,7 +47,8 @@ public static partial class HexLayerRenderer
                     var x = cx + (((seed >> 3) & 0xFF) / 255.0 - 0.5) * r * 1.1;
                     var y = cy + (((seed >> 14) & 0xFF) / 255.0 - 0.5) * r * 0.9;
                     var length = r * (0.12 + 0.1 * glint);
-                    sparkle.Color = new SKColor(0xFF, 0xFF, 0xF4, (byte)Math.Round(150 * glint * strength));
+                    // A pale ripple of the owner's ice palette, not a white glossy glint.
+                    sparkle.Color = new SKColor(0xE2, 0xEF, 0xF5, (byte)Math.Round(115 * glint * strength));
                     canvas.DrawLine((float)(x - length), (float)y, (float)(x + length), (float)y, sparkle);
                 }
             }

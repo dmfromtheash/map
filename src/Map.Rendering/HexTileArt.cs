@@ -176,8 +176,6 @@ public static class HexTileArt
 
     private static readonly ConcurrentDictionary<(HexDynamicIcon Kind, int Variant), SKImage> Icons = new();
 
-    private static readonly ConcurrentDictionary<string, SKImage?> Art = new(StringComparer.Ordinal);
-
     /// <summary>Pictures per living-terrain icon kind.</summary>
     public const int IconVariants = 4;
 
@@ -276,25 +274,22 @@ public static class HexTileArt
     }
 
     /// <summary>
-    /// One built-in art picture, decoded once into a raster image (a lazily decoded image would be
-    /// decoded again on every draw). Null when the build carries no such picture.
+    /// One built-in art picture decoded into a raster image, or null when the build carries no
+    /// such picture. Not kept: each picture is cut once per orientation and the cut is kept, so
+    /// keeping the source as well only held 30 MB more.
     /// </summary>
-    private static SKImage? Load(string file) => Art.GetOrAdd(file, static name =>
+    private static SKImage? Load(string file)
     {
-        using var stream = typeof(HexTileArt).Assembly.GetManifestResourceStream(ResourcePrefix + name);
+        using var stream = typeof(HexTileArt).Assembly.GetManifestResourceStream(ResourcePrefix + file);
         if (stream is null) return null;
-        using var bitmap = SKBitmap.Decode(stream);
+        using var codec = SKCodec.Create(stream);
+        if (codec is null) return null;
+        var info = new SKImageInfo(codec.Info.Width, codec.Info.Height, SKColorType.Rgba8888, SKAlphaType.Premul);
+        using var bitmap = SKBitmap.Decode(codec, info);
         if (bitmap is null) return null;
-        using var premul = new SKBitmap(new SKImageInfo(bitmap.Width, bitmap.Height, SKColorType.Rgba8888, SKAlphaType.Premul));
-        using (var canvas = new SKCanvas(premul))
-        {
-            canvas.Clear(SKColors.Transparent);
-            canvas.DrawBitmap(bitmap, 0, 0);
-        }
-
-        premul.SetImmutable();
-        return SKImage.FromBitmap(premul).ToRasterImage(ensurePixelData: true);
-    });
+        bitmap.SetImmutable();
+        return SKImage.FromBitmap(bitmap);
+    }
 
     private static string NameOf(HexTileDefinition tile) => tile.Id[HexStarterTiles.Prefix.Length..];
 
@@ -309,7 +304,7 @@ public static class HexTileArt
         using var hex = HexPath(orientation, 0, 0, width, height);
         var name = NameOf(tile);
         using var paint = new SKPaint { IsAntialias = true };
-        var art = Load($"{name}_{variant}.webp");
+        using var art = Load($"{name}_{variant}.webp");
         canvas.Save();
         canvas.ClipPath(hex, antialias: true);
         // The art is a 256 x 256 box centred on the hex; the hex cuts it.
@@ -333,7 +328,8 @@ public static class HexTileArt
             canvas.Restore();
         }
 
-        if (tile.Overhang > 0 && Load($"{name}_{variant}_tall.webp") is { } tall)
+        using var tall = tile.Overhang > 0 ? Load($"{name}_{variant}_tall.webp") : null;
+        if (tall is not null)
         {
             // The tall part stands on the hex and rises out of it: drawn without the hex clip.
             canvas.Save();
@@ -352,7 +348,8 @@ public static class HexTileArt
         var canvas = surface.Canvas;
         canvas.Clear(SKColors.Transparent);
         canvas.Translate((width - TilePixels) / 2f, (height - TilePixels) / 2f);
-        if (Load($"{NameOf(tile)}_ground.webp") is { } ground)
+        using var ground = Load($"{NameOf(tile)}_ground.webp");
+        if (ground is not null)
         {
             canvas.DrawImage(ground, 0, 0, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None));
         }
@@ -381,7 +378,8 @@ public static class HexTileArt
         using var surface = SKSurface.Create(new SKImageInfo(IconPixels, IconPixels, SKColorType.Rgba8888, SKAlphaType.Premul));
         var canvas = surface.Canvas;
         canvas.Clear(SKColors.Transparent);
-        if (Load($"icon_{kind}_{variant}.webp") is { } art)
+        using var art = Load($"icon_{kind}_{variant}.webp");
+        if (art is not null)
         {
             canvas.DrawImage(art, new SKRect(0, 0, IconPixels, IconPixels), new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None));
         }
