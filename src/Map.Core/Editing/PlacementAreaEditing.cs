@@ -133,7 +133,10 @@ public static class PlacementAreaPlanner
     internal static WorldBounds? DensityMaskChange(PlacementAreaDensityMask? before, PlacementAreaDensityMask? after)
     {
         if (Equals(before, after)) return null;
-        if (before is null || after is null || before.Left != after.Left || before.Top != after.Top
+        // A first stroke (or «Сбросить»): compare with an untouched raster of the same cells.
+        if (before is null || after is null)
+            return Painted(before ?? after!);
+        if (before.Left != after.Left || before.Top != after.Top
             || before.CellSize != after.CellSize || before.Width != after.Width || before.Height != after.Height)
         {
             var masks = new[] { before, after }.OfType<PlacementAreaDensityMask>().ToArray();
@@ -148,11 +151,25 @@ public static class PlacementAreaPlanner
                 if (a[row + x] != b[row + x])
                 { if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; maxY = y; }
         }
-        if (maxX < 0) return null;
-        // Bilinear reading reaches one cell further on each side.
-        return new WorldBounds(after.Left + (minX - 1) * after.CellSize - 1, after.Top + (minY - 1) * after.CellSize - 1,
-            after.Left + (maxX + 2) * after.CellSize + 1, after.Top + (maxY + 2) * after.CellSize + 1);
+        return Cells(after, minX, minY, maxX, maxY);
     }
+
+    private static WorldBounds? Painted(PlacementAreaDensityMask mask)
+    {
+        var values = mask.Values;
+        int minX = int.MaxValue, minY = int.MaxValue, maxX = -1, maxY = -1;
+        for (var y = 0; y < mask.Height; y++)
+            for (var x = 0; x < mask.Width; x++)
+                if (values[y * mask.Width + x] != PlacementAreaDensityMask.Neutral)
+                { if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; maxY = y; }
+        return Cells(mask, minX, minY, maxX, maxY);
+    }
+
+    private static WorldBounds? Cells(PlacementAreaDensityMask mask, int minX, int minY, int maxX, int maxY) =>
+        maxX < 0 ? null
+        // Bilinear reading reaches one cell further on each side.
+        : new WorldBounds(mask.Left + (minX - 1) * mask.CellSize - 1, mask.Top + (minY - 1) * mask.CellSize - 1,
+            mask.Left + (maxX + 2) * mask.CellSize + 1, mask.Top + (maxY + 2) * mask.CellSize + 1);
 
     /// <summary>
     /// Admission estimate of objects per cell. Version 4 layouts publish only a conservative

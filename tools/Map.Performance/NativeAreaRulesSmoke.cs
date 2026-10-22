@@ -37,7 +37,7 @@ internal sealed class NativeAreaRulesReport
     public Dictionary<string, string> Notes { get; } = [];
     public string[] Screenshots { get; set; } = [];
     public string? Failure { get; set; }
-    public bool GatePassed => Failure is null && Checks.Count >= 9 && Checks.Values.All(v => v);
+    public bool GatePassed => Failure is null && Checks.Count >= 16 && Checks.Values.All(v => v);
 }
 
 internal static class NativeAreaRulesSmoke
@@ -216,6 +216,68 @@ public sealed class AreaRulesApplication : Application
         await Toggle("EditableAreaAvoidWaterToggle", false);
         _report.Checks["all-off-restores-every-asset"] = Area().Rules is null && Stamps().Keys.ToHashSet().SetEquals(plain.Keys);
         await Frame(); Shot("rules-off");
+        await Beauty();
+    }
+
+    /// <summary>
+    /// R10 «Красота» (second pass): the block's switches from the panel, one Undo each, objects that
+    /// stay keep their centres; a density brush stroke is one Undo step; «ближние поверх дальних» of
+    /// the layer from the layer panel; save → reopen keeps all of it in schema v27.
+    /// </summary>
+    private async Task Beauty()
+    {
+        _editor.ArrangeEditableAreaNaturally(); await Settle(); await Until(() => !_editor.IsEditableAreaBusy); await Settle();
+        var natural = Stamps();
+        _report.Notes["natural"] = N(natural.Count);
+        _report.Checks["beauty-block-visible-all-off"] = Area().LayoutVersion == 4
+            && Find<TextBlock>("EditableAreaBeautyState").IsEffectivelyVisible && !_editor.EditableAreaBeauty.Any;
+        var depth = _editor.Session.UndoDepth;
+        await Toggle("EditableAreaSoftEdgeToggle", true);
+        var soft = Stamps();
+        _report.Notes["soft-edge"] = N(soft.Count);
+        static (double, double) Centre(SceneObject o) => (Math.Round(o.X + o.Width / 2, 6), Math.Round(o.Y + o.Height / 2, 6));
+        _report.Checks["soft-edge-one-undo-centres-kept"] = _editor.Session.UndoDepth == depth + 1 && soft.Count < natural.Count
+            && soft.All(p => natural.TryGetValue(p.Key, out var was) && Centre(was) == Centre(p.Value));
+        await Toggle("EditableAreaGroundShadowToggle", true);
+        await Toggle("EditableAreaUnderlayToggle", true);
+        await Toggle("EditableAreaColorVariationToggle", true);
+        _report.Checks["shadow-underlay-tint-on-objects"] = _editor.Session.UndoDepth == depth + 4 && Stamps().Values.All(o =>
+            o.Stamp is { Tint: not null, GroundShadow: { Opacity: > 0, Mass: > 0 } });
+        await Frame(); Shot("beauty-on");
+
+        await Toggle("EditableAreaDensityBrushToggle", true);
+        _report.Checks["density-brush-controls"] = _editor.IsAreaDensityBrushActive
+            && Find<Control>("EditableAreaDensityRadiusSlider").IsEffectivelyVisible;
+        _editor.SetAreaDensityBrushRadius(160); _editor.SetAreaDensityBrushStrength(100);
+        var before = Stamps().Count; depth = _editor.Session.UndoDepth;
+        _editor.BeginAreaDensityStroke(150, 420);
+        for (var x = 170; x <= 850; x += 25) _editor.ContinueAreaDensityStroke(x, 420 + 60 * Math.Sin(x / 90.0));
+        await Frame(); Shot("density-stroke");
+        _editor.EndAreaDensityStroke(); await Settle(); await Until(() => !_editor.IsEditableAreaBusy); await Settle();
+        _report.Notes["density-stroke"] = N(before) + " -> " + N(Stamps().Count);
+        _report.Checks["density-stroke-one-undo"] = _editor.Session.UndoDepth == depth + 1 && Stamps().Count < before && Area().DensityMask is not null;
+        await Frame(); Shot("density-brush");
+        await Toggle("EditableAreaDensityBrushToggle", false);
+
+        _editor.SelectLayer(Objects); await Settle();
+        await Toggle("ObjectLayerDepthSortToggle", true);
+        var layer = _editor.Session.Document.Layers.OfType<ObjectLayer>().Single(l => l.Id == Objects);
+        _report.Checks["layer-depth-sort"] = layer.Effects.DepthSort;
+
+        await Click("SaveButton");
+        var file = Path.Combine(_workspace, "rules.mapproj");
+        await Until(() => !_editor.Session.IsDirty);
+        int schema;
+        using (var zip = ZipFile.OpenRead(file))
+        using (var stream = zip.GetEntry("manifest.json")!.Open())
+            schema = JsonNode.Parse(stream)!["schemaVersion"]!.GetValue<int>();
+        _report.Notes["schema-beauty"] = N(schema);
+        var reopened = MapProjectStore.Open(file).Document;
+        var reopenedLayer = reopened.Layers.OfType<ObjectLayer>().Single(l => l.Id == Objects);
+        var reopenedArea = reopenedLayer.PlacementAreas.Single();
+        _report.Checks["save-reopen-v27"] = schema == 27 && Equals(reopenedArea.Beauty, Area().Beauty)
+            && Equals(reopenedArea.DensityMask, Area().DensityMask) && reopenedLayer.Effects.DepthSort
+            && reopenedArea.MemberCount == Area().MemberCount;
     }
 
     private void Shot(string name)
