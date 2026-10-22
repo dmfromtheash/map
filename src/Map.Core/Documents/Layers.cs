@@ -246,9 +246,12 @@ public sealed record LandEdgeStyle
     {
         FillColor = "#FFD6DBC0", FillTextureId = MapFillTextures.OwnerSnow,
         FillTextureOpacity = 1, FillTextureScale = 1024,
-        OutlineColor = "#FFD9CEA6", OutlineWidth = 3,
-        InnerShadowOpacity = .025, OuterShadowOpacity = .05, ShadowBlur = 3,
+        // The coast as the owner's mountains are drawn (2026-10-22): a pen line in their slate ink
+        // and a soft shadow cast to the south-east by the north-west light.
+        OutlineColor = "#FF1F2A36", OutlineWidth = 2,
+        InnerShadowOpacity = .06, OuterShadowOpacity = .16, ShadowBlur = 4, ShadowOffsetX = 2, ShadowOffsetY = 3,
         RippleColor = "#487C9897", RippleWidth = .8, RippleSpacing = 4, RippleCount = 1,
+        Cliff = LandCliffStyle.OwnerMountains,
     };
 
     public string FillColor { get; init; } = "#FF8CA36B";

@@ -134,12 +134,32 @@ public sealed record LandCliffStyle
     private static double Clamp(double value, double minimum, double maximum, double fallback) =>
         double.IsFinite(value) ? Math.Clamp(value, minimum, maximum) : fallback;
 
+    /// <summary>Id of the look after the owner's own mountains (2026-10-22), the cliff of every new land.</summary>
+    public const string OwnerMountainsId = "owner-mountains";
+
+    /// <summary>
+    /// The rock of the owner's mountains: his limited slate-blue palette sampled from the art
+    /// (#253651 … #E2EFF5), the same ink, faces turned from the north-west light deep and hatched,
+    /// a dark band under the rim and a cool shadow at the foot.
+    /// </summary>
+    public static LandCliffStyle OwnerMountains { get; } = new()
+    {
+        Height = 32, HeightVariation = .35, VariationLength = 70, Gaps = .12, GapLength = 140,
+        Facets = .9, FacetWidth = 26, FacetLines = .9,
+        Color = "#FFD4E3EC", ShadeColor = "#FF253651", Contrast = .85, Wash = -.35, RimShadow = .4,
+        Hatching = .85, HatchSpacing = 3.4, HatchLength = .7, HatchSlant = .35,
+        InkColor = "#FF1F2A36", InkWidth = 1.4, Foot = CliffFoot.Fade, FootRoughness = .5,
+        BaseShadow = .35, BaseShadowLength = .55, BaseShadowColor = "#FF415873",
+    };
+
     /// <summary>
     /// Ready looks after the owner's sheets and atlases. Each sets the whole cliff; the land's own
     /// fill and rim line are chosen separately (<see cref="LandCliffLook.Rim"/> suggests them).
     /// </summary>
     public static IReadOnlyList<LandCliffLook> Looks { get; } =
     [
+        new(OwnerMountainsId, "Как горы", "Как горы владельца: скала в его сине-грифельной гамме, контур пером, штриховка в тени, свет с северо-запада, холодная тень у подножия.",
+            OwnerMountains, "#FF1F2A36", 2),
         new("ink-sepia", "Тушь и сепия", "Жирные линии на углах, косая штриховка и сепия, густая под кромкой и тающая книзу (лист «ярусы 2»).",
             new LandCliffStyle(), "#FF1E1710", 2.6),
         new("ink-dots", "Тушь и точки", "Светлые грани в точках, тень под кромкой, волнистый низ с волосками (лист «ярусы 1»).",

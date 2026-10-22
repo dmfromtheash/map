@@ -48,7 +48,8 @@ public sealed partial class Stage19Application
         _report.Checks["raise-creates-tier"] = raised.Level == 1 && height.IsEffectivelyVisible
             && !Find<Button>("LandCliffRaiseButton").IsEffectivelyVisible;
         var wall = Pixel(_editor.Session.Document, 470, 438);
-        _report.Checks["cliff-drawn-below-edge"] = wall != flat && wall.Red > wall.Blue;
+        // New land takes the cliff of the owner's mountains (2026-10-22): slate-blue rock.
+        _report.Checks["cliff-drawn-below-edge"] = wall != flat && wall.Blue > wall.Red;
 
         var depth = _editor.Session.UndoDepth;
         var before = raised.EdgeStyle;
@@ -67,7 +68,7 @@ public sealed partial class Stage19Application
         var levels = (((LandLayer)_editor.Session.Document.FindLayer(island.Id)!).Level,
             ((LandLayer)_editor.Session.Document.FindLayer(plateau.Id)!).Level);
         var shore = Pixel(_editor.Session.Document, 512, 625);
-        _report.Checks["island-and-plateau-tiers"] = levels == (1, 2) && shore.Red > shore.Blue;
+        _report.Checks["island-and-plateau-tiers"] = levels == (1, 2) && shore.Blue > shore.Red;
         Find<Control>("LandCliffHeightSlider").BringIntoView(); await Settle(); await Frame();
         _report.Screenshot = Path.ChangeExtension(Options.OutputPath, ".png");
         SaveVisual(_report.Screenshot);
