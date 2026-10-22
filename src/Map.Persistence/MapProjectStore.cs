@@ -32,6 +32,9 @@ public static partial class MapProjectStore
     private static bool HasPaintedRivers(IEnumerable<MapLayer> layers) =>
         layers.OfType<ObjectLayer>().Any(l => l.Rivers.Any(r => r.Style.PaintStrokes > 0));
 
+    private static bool HasNaturalRivers(IEnumerable<MapLayer> layers) =>
+        layers.OfType<ObjectLayer>().Any(l => l.Rivers.Any(r => r.Style.BankManner > 0));
+
     private static bool HasPaintedRoads(IEnumerable<MapLayer> layers) =>
         layers.OfType<ObjectLayer>().Any(l => l.Roads.Any(r => r.NeedsPaintedSchema));
 
@@ -39,6 +42,8 @@ public static partial class MapProjectStore
         layers.OfType<ObjectLayer>().Any(l => l.PlacementAreas.Any(a => a.NeedsRulesSchema));
 
     private static int SchemaFor(MapDocument document) =>
+        HasNaturalRivers(document.Layers) || document.Checkpoints.Any(c => HasNaturalRivers(c.Snapshot.Layers))
+            ? MapProjectFormat.NaturalRiversSchemaVersion :
         HasPaintedRoads(document.Layers) || document.Checkpoints.Any(c => HasPaintedRoads(c.Snapshot.Layers))
             ? MapProjectFormat.PaintedRoadsSchemaVersion :
         HasPaintedRivers(document.Layers) || document.Checkpoints.Any(c => HasPaintedRivers(c.Snapshot.Layers))

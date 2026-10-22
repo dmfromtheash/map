@@ -105,6 +105,25 @@ public sealed record RiverStyle
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
     public double PaintStrokes { get; init; }
 
+    /// <summary>
+    /// How the banks are drawn (schema v25): 0 - the even outline every older map has; 1 «Живая
+    /// река», the owner's choice of 2026-10-22 after the way map artists draw real rivers - no pen
+    /// line, a ragged dry-brush edge with pooled pigment, banks that swell apart with the roughness,
+    /// sand bars inside the bends, the deep stream at the outer bank and tufts of reeds.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public int BankManner { get; init; }
+
+    public const int MaximumBankManner = 1;
+
+    /// <summary>«Живая река»: the look of every new river since 2026-10-22.</summary>
+    public static RiverStyle Natural() => Painted() with
+    {
+        WaterColor = "#FF5E7A8E", BankColor = "#FF2A2F36", BankWidth = 1.1, BankShadowOpacity = 0,
+        ShallowColor = "#668FA6B2", ShallowWidth = 4, EdgeRoughness = 0.85, TextureOpacity = 0.3,
+        PaintStrokes = 0.5, BankManner = 1,
+    };
+
     /// <summary>Thin light flow strokes inside the water; 0 disables them.</summary>
     public string HighlightColor { get; init; } = "#FFDDEFF4";
     public double HighlightOpacity { get; init; } = 0.55;
@@ -270,7 +289,7 @@ public sealed record River
                 .Any(v => !double.IsFinite(v))
             || s.Opacity is < 0 or > 1 || s.BankWidth is < 0 or > 64 || s.BankShadowOpacity is < 0 or > 1
             || s.BankShadowBlur is < 0 or > 64 || s.HighlightOpacity is < 0 or > 1 || s.MouthFade is < 0 or > MaximumWidth
-            || s.EdgeRoughness is < 0 or > 1 || s.ShallowWidth is < 0 or > 512
+            || s.EdgeRoughness is < 0 or > 1 || s.ShallowWidth is < 0 or > 512 || s.BankManner is < 0 or > RiverStyle.MaximumBankManner
             || s.BankReliefWidth is < 0 or > 128 || s.BankHatchOpacity is < 0 or > 1
             || !MapFillTextures.IsValidId(s.TextureId) || !MapFillTextures.IsValidOpacity(s.TextureOpacity)
             || !MapFillTextures.IsValidScale(s.TextureScale))

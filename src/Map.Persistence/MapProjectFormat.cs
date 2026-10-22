@@ -78,7 +78,14 @@ public static class MapProjectFormat
     /// </summary>
     public const int PaintedRoadsSchemaVersion = 23;
 
-    public const int MaxSupportedSchemaVersion = PaintedRoadsSchemaVersion;
+    // Number 24 is reserved for R15 (own hex sets).
+    /// <summary>
+    /// «Живая река»: the natural bank manner of a river (`BankManner` of the river style). Rivers
+    /// without it keep the older schema.
+    /// </summary>
+    public const int NaturalRiversSchemaVersion = 25;
+
+    public const int MaxSupportedSchemaVersion = NaturalRiversSchemaVersion;
 
     /// <summary>
     /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry

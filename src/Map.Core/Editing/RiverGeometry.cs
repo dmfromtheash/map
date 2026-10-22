@@ -302,7 +302,7 @@ public static class RiverGeometry
     /// starts under it, so the union of the outlines has no seam and no gap at any entry angle.
     /// A lake's outline is its centreline loop. Roughness wobbles the banks deterministically.
     /// </summary>
-    public static IReadOnlyList<VectorPoint> Outline(RiverChannelGeometry geometry, double roughness)
+    public static IReadOnlyList<VectorPoint> Outline(RiverChannelGeometry geometry, double roughness, int bankManner = 0)
     {
         var samples = geometry.Samples;
         var seed = geometry.Channel.Id.GetHashCode();
@@ -324,10 +324,8 @@ public static class RiverGeometry
         foreach (var s in samples)
         {
             var nx = -s.TangentY; var ny = s.TangentX;
-            var period = Math.Max(4, s.HalfWidth * 1.6);
-            var amp = roughness * Math.Max(0.3, s.HalfWidth * 0.35);
-            var wl = roughness > 0 ? Noise(seed, s.Distance / period) * amp : 0;
-            var wr = roughness > 0 ? Noise(seed ^ 0x5bd1e995, s.Distance / period + 37.1) * amp : 0;
+            var wl = BankWobble(seed, s, left: true, roughness, bankManner);
+            var wr = BankWobble(seed, s, left: false, roughness, bankManner);
             left.Add(new VectorPoint(s.X + nx * (s.HalfWidth + wl), s.Y + ny * (s.HalfWidth + wl)));
             right.Add(new VectorPoint(s.X - nx * (s.HalfWidth + wr), s.Y - ny * (s.HalfWidth + wr)));
         }
@@ -350,6 +348,36 @@ public static class RiverGeometry
         else result.AddRange(Cap(last, backwards: false));
         for (var i = right.Count - 1; i >= 0; i--) result.Add(right[i]);
         return result;
+    }
+
+    /// <summary>
+    /// How far one bank of a channel stands out from its even half width at a sample: the small
+    /// hand-drawn wobble, and with a natural bank manner (owner 2026-10-22, «ближе к настоящим
+    /// рекам») a slow swell of each bank on its own - reaches and narrows, never two parallel banks.
+    /// Shared by the outline and the drawn bank line, so the ink lies exactly on the water's edge.
+    /// </summary>
+    public static double BankWobble(int seed, RiverSample s, bool left, double roughness, int bankManner)
+    {
+        var period = Math.Max(4, s.HalfWidth * 1.6);
+        var amp = roughness * Math.Max(0.3, s.HalfWidth * 0.35);
+        var wobble = roughness <= 0 ? 0 : left
+            ? Noise(seed, s.Distance / period) * amp
+            : Noise(seed ^ 0x5bd1e995, s.Distance / period + 37.1) * amp;
+        if (bankManner <= 0 || s.HalfWidth <= 0) return wobble;
+        // Reaches and narrows: about ±20 % of the width over six to ten widths, each bank apart
+        // (the engraving keeps them calmer).
+        // The roughness slider drives how ragged a natural bank is (owner 2026-10-22: «ещё более
+        // коряво по краям»): bigger reaches, bays and spurs a few widths long, and a jagged tremor.
+        var rough = Math.Clamp(roughness, 0, 1);
+        var swellPeriod = Math.Max(8, s.HalfWidth * 2 * 7.5);
+        var swellAmp = s.HalfWidth * (0.15 + 0.35 * rough);
+        var swell = Noise(seed ^ (left ? 0x2C1B3C6D : 0x297A2D39), s.Distance / swellPeriod + (left ? 3.7 : 11.9)) * swellAmp;
+        var bays = Noise(seed ^ (left ? 0x510E527F : 0x1F83D9AB), s.Distance / Math.Max(3, s.HalfWidth * 2.2) + (left ? 5.1 : 2.3))
+            * s.HalfWidth * 0.3 * rough;
+        // Fine tremor of the pen; ragged with the roughness, but never more than a fifth of the width.
+        var tremorPeriod = Math.Max(1.2, s.HalfWidth * (0.9 - 0.4 * rough));
+        var tremor = Noise(seed ^ (left ? 0x6A09E667 : 0x3C6EF372), s.Distance / tremorPeriod) * s.HalfWidth * (0.04 + 0.12 * rough);
+        return wobble + swell + bays + tremor;
     }
 
     /// <summary>Smooth deterministic noise in -1..1 from a seed and a continuous coordinate.</summary>

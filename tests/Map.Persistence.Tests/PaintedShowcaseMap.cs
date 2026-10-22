@@ -35,7 +35,7 @@ public sealed class PaintedShowcaseMap
         var land = new LandLayer(LayerId.New(), "Остров", true, false, 1, tiles, LandEdgeStyle.SoftWatercolor()) { Level = 1 };
         var river = new River
         {
-            Name = "Серебрянка", Style = RiverStyle.Painted(),
+            Name = "Серебрянка", Style = RiverStyle.Natural(),
             Channels = [RiverEditor.NewChannel([new(560, 300), new(700, 420), new(760, 560), new(900, 700), new(1000, 820)], 26)],
         };
         var road = RoadEditor.NewRoad([new(420, 640), new(620, 600), new(820, 620), new(1040, 560), new(1220, 470)], 18, RoadStyle.Painted(), "Тракт", seed: 5);

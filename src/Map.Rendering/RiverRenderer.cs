@@ -450,7 +450,22 @@ public static class RiverRenderer
         }
 
         Pass(6);
-        if (bank > 0)
+        if (bank > 0 && !fastPreview && style.BankManner > 0)
+        {
+            // Natural banks: each river draws its own banks the way map artists draw real rivers.
+            EnterNearby();
+            foreach (var part in parts)
+            {
+                canvas.Save();
+                foreach (var other in all)
+                    if (!ReferenceEquals(other.River, part.River))
+                        canvas.ClipPath(other.Body, SKClipOperation.Difference, antialias: true);
+                RiverNaturalBanks.Draw(canvas, part.Geometry, part.River.Style, part.Body, scale);
+                canvas.Restore();
+            }
+            canvas.Restore();
+        }
+        else if (bank > 0)
         {
             EnterNearby();
             if (!fastPreview && style.BankReliefWidth > 0)
@@ -703,7 +718,7 @@ public static class RiverRenderer
         using var union = new SKPath();
         foreach (var geometry in set.Channels.Values)
         {
-            var outline = RiverGeometry.Outline(geometry, style.EdgeRoughness);
+            var outline = RiverGeometry.Outline(geometry, style.EdgeRoughness, style.BankManner);
             if (outline.Count < 3) continue;
             using var channel = new SKPath();
             channel.MoveTo((float)outline[0].X, (float)outline[0].Y);

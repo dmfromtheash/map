@@ -184,6 +184,7 @@ public sealed partial class EditorView
                 {
                     MaxColumns = 2, MinimumItemWidth = 100, Gap = 4, Children =
                     {
+                        LookButton("RiverLookNatural", "Живая", "Как настоящая река: рваный край сухой кистью, косы на изгибах, тростник", () => _editor.ApplyRiverLook(RiverLookPreset.Natural)),
                         LookButton("RiverLookPainted", "Живописная", "Как горы владельца: контур пером, мазки, тень у южного берега", () => _editor.ApplyRiverLook(RiverLookPreset.Painted)),
                         LookButton("RiverLookMountainStream", "Горный ручей", "Узкое русло, неровные берега, тонкая отмель", () => _editor.ApplyRiverLook(RiverLookPreset.MountainStream)),
                         LookButton("RiverLookLowlandRiver", "Равнинная река", "Обычная ширина, спокойные берега", () => _editor.ApplyRiverLook(RiverLookPreset.LowlandRiver)),

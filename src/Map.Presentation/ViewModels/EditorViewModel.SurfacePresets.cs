@@ -3,7 +3,7 @@ using Map.Core.Documents;
 namespace Map.Presentation.ViewModels;
 
 /// <summary>Named looks of a river: drawing, bank and width together.</summary>
-public enum RiverLookPreset { MountainStream, LowlandRiver, WideRiver, InkAtlas, Painted }
+public enum RiverLookPreset { MountainStream, LowlandRiver, WideRiver, InkAtlas, Painted, Natural }
 
 /// <summary>Named looks of a road: way of drawing and width together.</summary>
 public enum RoadLookPreset { Trail, CountryRoad, Highway, Painterly, Painted }
@@ -27,6 +27,7 @@ public sealed partial class EditorViewModel
                 { EdgeRoughness = 0.28, ShallowWidth = 9, BankReliefWidth = 10, TaperSource = true }, 1.7, "Река: широкая"),
             RiverLookPreset.InkAtlas => (RiverStyle.Illustrated(true), river.WidthScale, "Река: атлас пером"),
             RiverLookPreset.Painted => (RiverStyle.Painted(), river.WidthScale, "Река: живописная"),
+            RiverLookPreset.Natural => (RiverStyle.Natural(), river.WidthScale, "Река: живая"),
             _ => (RiverStyle.Illustrated(false) with { EdgeRoughness = 0.35, ShallowWidth = 5, TaperSource = true }, 1.0, "Река: равнинная"),
         };
         style = style with

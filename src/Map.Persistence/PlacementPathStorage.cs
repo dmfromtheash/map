@@ -17,6 +17,11 @@ public static partial class MapProjectStore
 
     private static void ValidatePathSchema(SceneDto scene, int schema)
     {
+        if (schema < MapProjectFormat.NaturalRiversSchemaVersion
+            && scene.Layers?.Any(l => l?.Rivers?.Any(r => r is not null && r.Style.BankManner > 0) == true) == true)
+            throw new MapProjectCorruptedException("Живая река требует схему v25.");
+        if (scene.Layers?.Any(l => l?.Rivers?.Any(r => r is not null && r.Style.BankManner is < 0 or > Map.Core.Documents.RiverStyle.MaximumBankManner) == true) == true)
+            throw new MapProjectCorruptedException("Неизвестный вид берегов реки.");
         if (schema < MapProjectFormat.PaintedRoadsSchemaVersion
             && scene.Layers?.Any(l => l?.Roads?.Any(r => r is not null && r.NeedsPaintedSchema) == true) == true)
             throw new MapProjectCorruptedException("Живописные дороги требуют схему v23.");
