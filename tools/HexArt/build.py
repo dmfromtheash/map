@@ -17,6 +17,7 @@ import numpy as np
 from PIL import Image
 from scipy import ndimage as ndi
 
+import owner
 import tiles
 from paint import INK, finish, paint
 
@@ -37,6 +38,20 @@ def build(out: str, only: set[str]):
         if only and name not in only:
             continue
         tall = name in tiles.TALL
+        if name in owner.TILE and owner.available():
+            # the owner's own mountains on a painted snow field (owner.py)
+            g = tiles.paint_terrain(name, 0, ground_only=True)
+            ground = paint(g, S)
+            ground[..., 3] = 1.0
+            ground = finish(ground, (tiles.BOX, tiles.BOX))
+            for v in range(count):
+                tile, over = owner.terrain(name, v, ground, tiles.TALL_ROOM)
+                save(tile, os.path.join(out, f"{name}_{v}.webp"))
+                if over is not None:
+                    save(over, os.path.join(out, f"{name}_{v}_tall.webp"))
+                print(f"{name} {v} (owner)", flush=True)
+            save(ground, os.path.join(out, f"{name}_ground.webp"))
+            continue
         for v in range(count):
             t0 = time.time()
             cv = tiles.paint_terrain(name, v, tall=tall)
@@ -77,6 +92,9 @@ def build(out: str, only: set[str]):
         if only and ("icon_" + kind) not in only and "icons" not in only:
             continue
         for v in range(tiles.ICON_VARIANTS):
+            if kind == "Mountains" and owner.available():
+                save(owner.icon(v), os.path.join(out, f"icon_{kind}_{v}.webp"))
+                continue
             cv = tiles.paint_icon(kind, v)
             save(finish(paint(cv, S, pen=5.0), (128, 128)), os.path.join(out, f"icon_{kind}_{v}.webp"))
             print(f"icon {kind} {v}", flush=True)

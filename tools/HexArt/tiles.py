@@ -433,9 +433,10 @@ def paint_terrain(name: str, variant: int, ground_only=False, tall=False):
                     continue
                 reeds(cv, xs, ys, rng)
         if name == "old-forest":
-            xs = [70, 108, 148, 186] if variant != 1 else [64, 98, 128, 160, 194]
-            for (x, y) in sorted([(x + rng.uniform(-5, 5), rng.uniform(186, 222)) for x in xs], key=lambda p: p[1]):
-                tree(cv, u(x), oy + u(y), u(rng.uniform(112, 124)), rng, lobes=6, lift=0.98, stretch=1.45)
+            # The owner (2026-10-22): the old forest was too big for a hex map: old trees are now
+            # only somewhat taller than the forest's and stay within the hex.
+            for (x, y) in scatter(8, 84, 34, ymin=96):
+                tree(cv, u(x), oy + u(y + 12), u(rng.uniform(60, 72)), rng, lobes=6, lift=0.9, stretch=1.2)
         if name in ("sea", "shallows", "lake"):
             waves(cv, rng, {"sea": 12, "shallows": 8, "lake": 7}[name], ink={"sea": 0.85, "shallows": 0.6, "lake": 0.6}[name])
         if name == "volcano":
