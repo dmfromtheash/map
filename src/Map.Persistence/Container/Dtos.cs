@@ -197,6 +197,7 @@ internal sealed class HexBoardDto
     /// <summary>Ints per hex in <see cref="Cells"/>: 6 (v12), or 9 with rotation, region and revealed (v13).</summary>
     [JsonPropertyName("stride")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public int? Stride { get; set; }
     [JsonPropertyName("cells")] public List<int> Cells { get; set; } = [];
+    [JsonPropertyName("gameplay")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public GameplayDto? Gameplay { get; set; }
     [JsonPropertyName("pointsOfInterest")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<HexPoiCellDto>? Points { get; set; }
     [JsonPropertyName("grid")] public HexGridDto? Grid { get; set; }
     [JsonPropertyName("paths")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<HexPathDto>? Paths { get; set; }

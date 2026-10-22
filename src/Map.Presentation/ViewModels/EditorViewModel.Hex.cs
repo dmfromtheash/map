@@ -8,6 +8,7 @@ namespace Map.Presentation.ViewModels;
 /// <summary>What a press of the hex tool does.</summary>
 public enum HexToolMode
 {
+    Party,
     /// <summary>Puts the chosen tile on the hexes under the footprint; a drag lays a line of them.</summary>
     Place,
 
@@ -345,7 +346,7 @@ public sealed partial class EditorViewModel
     }
 
     /// <summary>True while a hex drag is running.</summary>
-    public bool HasHexGesture => _hexGestureLayer is not null;
+    public bool HasHexGesture => _hexPartyDragging || _hexGestureLayer is not null;
 
     /// <summary>A press of the hex tool. Returns true when a drag follows.</summary>
     public bool BeginHexGesture(double worldX, double worldY, bool additive = false)
@@ -371,6 +372,11 @@ public sealed partial class EditorViewModel
             StatusDetail = "Этот гекс за краем поля.";
             return false;
         }
+
+        var center = layer.Board.Layout.Center(hex);
+        if (_hexMode == HexToolMode.Party || layer.Party.Position == hex
+            && double.Hypot(worldX - center.X, worldY - center.Y) < layer.Board.Layout.Size * 0.28)
+            return BeginHexParty(layer, hex);
 
         switch (_hexMode)
         {
@@ -409,6 +415,13 @@ public sealed partial class EditorViewModel
     /// <summary>The drag reached a new point.</summary>
     public void ContinueHexGesture(double worldX, double worldY)
     {
+        if (_hexPartyDragging && ActiveHexLayer is { } partyLayer)
+        {
+            var h = partyLayer.Board.Layout.HexAt(worldX, worldY);
+            if (partyLayer.Party.Position is { } last && partyLayer.Board.Contains(h))
+                foreach (var step in HexCoord.Line(last, h).Skip(1)) MoveHexParty(step);
+            return;
+        }
         switch (_hexMode)
         {
             case HexToolMode.Path:
@@ -435,6 +448,7 @@ public sealed partial class EditorViewModel
     /// <summary>Release: the whole drag becomes one history entry.</summary>
     public void EndHexGesture()
     {
+        if (_hexPartyDragging) { _hexPartyDragging = false; return; }
         switch (_hexMode)
         {
             case HexToolMode.Path:
@@ -479,6 +493,7 @@ public sealed partial class EditorViewModel
     /// <summary>Abandons a running drag and takes back what it wrote.</summary>
     public bool CancelHexGesture()
     {
+        if (_hexPartyDragging) { _hexPartyDragging = false; return true; }
         var cancelled = CancelHexWorkshopGesture();
         if (_hexGestureLayer is null) return cancelled;
         for (var i = 0; i < _hexGestureEntries; i++) Session.Undo();

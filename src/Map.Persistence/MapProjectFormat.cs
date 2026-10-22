@@ -51,12 +51,19 @@ public static class MapProjectFormat
     public const int HexStructureSchemaVersion = 18;
 
     /// <summary>
-    /// The newest schema this build writes and reads: rules of an editable area - not on water, only
+    /// Rules of an editable area - not on water, only
     /// on water, not on roads, only on land - and the places they keep empty (R10). Areas without rules stay older.
     /// </summary>
     public const int AreaRulesSchemaVersion = 19;
 
-    public const int MaxSupportedSchemaVersion = AreaRulesSchemaVersion;
+
+    /// <summary>
+    /// The newest schema this build writes and reads: the hex game layer - note reveal rules, the party
+    /// marker with its route, rumours and approximate labels (R17). Maps without them stay older.
+    /// </summary>
+    public const int GameplaySchemaVersion = 20;
+
+    public const int MaxSupportedSchemaVersion = GameplaySchemaVersion;
 
     /// <summary>
     /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry

@@ -65,7 +65,7 @@ public sealed partial class EditorView
     {
         HexToolMode.Place => "Поставить", HexToolMode.Fill => "Залить", HexToolMode.Erase => "Стереть",
         HexToolMode.Pick => "Пипетка", HexToolMode.Region => "Регионы", HexToolMode.Path => "Пути",
-        HexToolMode.Fog => "Туман", HexToolMode.Key => "Ключи", HexToolMode.Measure => "Линейка",
+        HexToolMode.Party => "Партия", HexToolMode.Fog => "Туман", HexToolMode.Key => "Ключи", HexToolMode.Measure => "Линейка",
         _ => "Выделение",
     };
 
@@ -256,6 +256,7 @@ public sealed partial class EditorView
         var region = BuildHexRegionSection();
         var paths = BuildHexPathSection();
         var fog = BuildHexFogSection();
+        var party = BuildHexPartySection();
         var key = BuildHexKeySection();
         var measure = BuildHexMeasureSection();
         var editBody = BuildHexSelectSection();
@@ -272,7 +273,7 @@ public sealed partial class EditorView
         var bodies = new Dictionary<HexPage, Control>
         {
             [HexPage.Draw] = drawBody,
-            [HexPage.Markup] = new StackPanel { Spacing = 8, Children = { region, paths, fog, key, measure } },
+            [HexPage.Markup] = new StackPanel { Spacing = 8, Children = { region, paths, fog, key, measure, party } },
             [HexPage.Edit] = editBody,
             [HexPage.World] = worldBody,
         };
@@ -291,6 +292,7 @@ public sealed partial class EditorView
             region.IsVisible = mode == HexToolMode.Region;
             paths.IsVisible = mode == HexToolMode.Path;
             fog.IsVisible = mode == HexToolMode.Fog;
+            party.IsVisible = mode == HexToolMode.Party;
             key.IsVisible = mode == HexToolMode.Key;
             measure.IsVisible = mode == HexToolMode.Measure;
         }
@@ -631,6 +633,7 @@ public sealed partial class EditorView
                         Children = { row,
                             new TextBlock { Text = HexRegionHierarchy.Label(regions, region), TextWrapping = TextWrapping.Wrap }.Classed("faint", "role-caption"),
                             BuildHexParentChoice(region),
+                            BuildHexRegionKnowledge(region),
                             new TextBlock { Text = $"Гексов: {_editor.HexRegionSize(id)}" }.Classed("faint", "role-caption") },
                     },
                 });
@@ -761,6 +764,7 @@ public sealed partial class EditorView
                     HexCommand("HexRevealAllButton", "Открыть всё", MapIcons.Eye, () => _editor.RevealAllHexes(true)),
                     HexCommand("HexHideAllButton", "Скрыть всё", MapIcons.EyeOff, () => _editor.RevealAllHexes(false))),
                 player,
+                Ui.TextButton("HexPartyToolButton", "Партия: разместить или переместить", () => _editor.HexMode = HexToolMode.Party, "compact"),
             },
         });
     }
@@ -811,6 +815,7 @@ public sealed partial class EditorView
             child.Text = note.ChildMap is { } map ? "Подкарта: " + map : "Подкарты пока нет.";
         }, [nameof(EditorViewModel.HexKeyHex), nameof(EditorViewModel.HexKeyNote), nameof(EditorViewModel.HexLevel), nameof(EditorViewModel.HexPresentation)]);
 
+        editor.Children.Add(BuildHexRevealSection());
         editor.Children.Add(BuildHexPoiSection());
         editor.Children.Add(title);
         editor.Children.Add(category);

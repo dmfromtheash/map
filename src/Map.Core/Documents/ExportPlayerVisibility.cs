@@ -9,7 +9,8 @@ public static class ExportPlayerVisibility
         layer.Board.Contains(hex) && (!layer.FogEnabled || layer.Board[hex]?.Revealed == true);
 
     public static bool NoteVisible(HexLayer layer, HexCoord hex, HexNote note) =>
-        !string.IsNullOrWhiteSpace(note.PlayerText) && HexVisible(layer, hex);
+        (!string.IsNullOrWhiteSpace(note.PlayerText) || !string.IsNullOrWhiteSpace(note.Rumor))
+        && HexVisible(layer, hex) && HexGameplay.IsRevealed(layer, hex, note);
 
     public static HexLayer Sanitize(HexLayer layer)
     {
@@ -17,9 +18,11 @@ public static class ExportPlayerVisibility
         var cells = layer.FogEnabled
             ? HexBoard.FromCells(board.Layout, board.Columns, board.Rows, board.Cells.Where(p => p.Value.Revealed))
             : board;
-        cells = cells.With(cells.Cells.Where(p => p.Value.PointsOfInterest.Any(point => !point.PlayerVisible))
+        cells = cells.With(cells.Cells.Where(p => !p.Value.PointsOfInterest.IsEmpty)
             .Select(p => new KeyValuePair<HexCoord, HexCell?>(p.Key,
-                p.Value.WithPointsOfInterest(p.Value.PointsOfInterest.Where(point => point.PlayerVisible)))));
+                p.Value.WithPointsOfInterest(p.Value.PointsOfInterest.Where(point => point.PlayerVisible).Select(point => point with
+                { Name = HexGameplay.PlayerLabel(point.Name, point.ApproximateLabel, point.Rumor, "Неизвестное место"),
+                    ApproximateLabel = "" })))));
         var regions = cells.Cells.Select(p => p.Value.Region).Where(id => id != 0).ToHashSet();
         foreach (var id in regions.ToArray())
         {
@@ -30,8 +33,15 @@ public static class ExportPlayerVisibility
         {
             Board = cells,
             Notes = layer.Notes.Where(p => NoteVisible(layer, p.Key, p.Value))
-                .ToImmutableDictionary(p => p.Key, p => p.Value with { GmText = "", ChildMap = null }),
-            Regions = layer.FogEnabled ? [.. layer.Regions.Where(r => regions.Contains(r.Id))] : layer.Regions,
+                .ToImmutableDictionary(p => p.Key, p => p.Value with { GmText = "", ChildMap = null,
+                    Title = HexGameplay.PlayerLabel(p.Value.Title, p.Value.ApproximateLabel, p.Value.Rumor, "Слух"),
+                    PlayerText = string.IsNullOrWhiteSpace(p.Value.Rumor) ? p.Value.PlayerText : p.Value.Rumor,
+                    Rumor = "", ApproximateLabel = "", RevealCondition = RevealCondition.Always,
+                    ManuallyRevealed = false, RevealDay = 0 }),
+            Regions = [.. layer.Regions.Where(r => !layer.FogEnabled || regions.Contains(r.Id)).Select(r => r with
+            { Name = HexGameplay.PlayerLabel(r.Name, r.ApproximateLabel, r.Rumor, "Неизвестный край"), ApproximateLabel = "" })],
+            Party = new HexParty { Position = layer.Party.Position is { } position && HexVisible(layer, position) ? position : null,
+                History = [] },
             Paths = layer.FogEnabled ? [.. layer.Paths.SelectMany(path => VisibleRuns(layer, path))] : layer.Paths,
         };
     }

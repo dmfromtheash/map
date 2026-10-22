@@ -75,7 +75,7 @@ public sealed partial class EditorView
                 };
                 list.Children.Add(new StackPanel { Spacing = 3, Children =
                 {
-                    name, type, visible,
+                    name, type, visible, BuildHexPoiKnowledge(index, point),
                     HexGrid(3,
                         Ui.TextButton("HexPoiUp_" + i, "Выше", () => _editor.MoveHexPoi(index, -1), "compact"),
                         Ui.TextButton("HexPoiDown_" + i, "Ниже", () => _editor.MoveHexPoi(index, 1), "compact"),

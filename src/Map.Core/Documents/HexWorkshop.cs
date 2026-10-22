@@ -187,6 +187,9 @@ public sealed record HexRegion
 
     public int Id { get; }
 
+    public string Rumor { get; init; } = "";
+    public string ApproximateLabel { get; init; } = "";
+
     public int ParentRegion { get; init; }
 
     public string Name { get; init; }
@@ -228,6 +231,12 @@ public sealed record HexNote
         ChildMap = string.IsNullOrWhiteSpace(childMap) ? null : childMap;
     }
 
+    public RevealCondition RevealCondition { get; init; }
+    public bool ManuallyRevealed { get; init; }
+    public int RevealDay { get; init; }
+    public string Rumor { get; init; } = "";
+    public string ApproximateLabel { get; init; } = "";
+
     public string Title { get; init; }
 
     public HexNoteCategory Category { get; init; }
@@ -241,7 +250,9 @@ public sealed record HexNote
     /// <summary>File name of the child map of this hex, next to this map's file (or an absolute path).</summary>
     public string? ChildMap { get; init; }
 
-    public bool IsEmpty => Title.Length == 0 && GmText.Length == 0 && PlayerText.Length == 0 && ChildMap is null;
+    public bool IsEmpty => Title.Length == 0 && GmText.Length == 0 && PlayerText.Length == 0 && ChildMap is null
+        && Rumor.Length == 0 && ApproximateLabel.Length == 0 && RevealCondition == RevealCondition.Always
+        && !ManuallyRevealed && RevealDay == 0;
 
     private static string Clip(string? value, int max) => (value ?? "").Length > max ? value![..max] : value ?? "";
 }

@@ -16,6 +16,9 @@ public sealed record HexPoi
         Variant = variant;
     }
 
+    public string Rumor { get; init; } = "";
+    public string ApproximateLabel { get; init; } = "";
+
     public string Type { get; init; }
     public string Name { get; init; }
     public bool PlayerVisible { get; init; }

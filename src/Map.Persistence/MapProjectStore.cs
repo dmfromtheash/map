@@ -33,6 +33,9 @@ public static partial class MapProjectStore
         layers.OfType<ObjectLayer>().Any(l => l.PlacementAreas.Any(a => a.NeedsRulesSchema));
 
     private static int SchemaFor(MapDocument document) =>
+        document.Layers.OfType<HexLayer>().Any(NeedsGameplayV20)
+        || document.Checkpoints.Any(c => c.Snapshot.Layers.OfType<HexLayer>().Any(NeedsGameplayV20))
+            ? MapProjectFormat.GameplaySchemaVersion :
         HasAreaRules(document.Layers) || document.Checkpoints.Any(c => HasAreaRules(c.Snapshot.Layers))
             ? MapProjectFormat.AreaRulesSchemaVersion :
         document.Layers.OfType<HexLayer>().Any(NeedsHexStructure)
@@ -1818,6 +1821,7 @@ public static partial class MapProjectStore
             Stride = wide ? stride : null,
             Cells = cells,
             Points = WriteHexStructureV18(layer),
+            Gameplay = WriteGameplayV20(layer),
             Grid = new HexGridDto
             {
                 Visible = layer.Grid.Visible,
@@ -2004,7 +2008,7 @@ public static partial class MapProjectStore
             throw new MapProjectCorruptedException($"Hex layer {id} has a damaged travel scale.");
         }
 
-        return new HexLayer(id, name, layer.Visible, layer.Locked, layer.Opacity, board, mask)
+        return ReadGameplayV20(new HexLayer(id, name, layer.Visible, layer.Locked, layer.Opacity, board, mask)
         {
             Grid = grid,
             Paths = paths.ToImmutable(),
@@ -2013,7 +2017,7 @@ public static partial class MapProjectStore
             Level = dto.Level is { } level ? Math.Clamp(level, -64, 64) : 0,
             FogEnabled = dto.Fog == true,
             Travel = travel == HexTravelScale.Default ? HexTravelScale.Default : travel,
-        };
+        }, dto.Gameplay);
     }
 
     private static SceneObjectDto ToObjectDto(SceneObject sceneObject) => new()

@@ -17,6 +17,8 @@ public static partial class MapProjectStore
 
     private static void ValidatePathSchema(SceneDto scene, int schema)
     {
+        if (schema < MapProjectFormat.GameplaySchemaVersion && scene.Layers?.Any(l => l?.Hex?.Gameplay is not null) == true)
+            throw new MapProjectCorruptedException("Игровые данные гексов требуют схему v20.");
         if (schema < MapProjectFormat.AreaRulesSchemaVersion
             && scene.Layers?.Any(l => l?.PlacementAreas?.Any(a => a is not null && a.NeedsRulesSchema) == true) == true)
             throw new MapProjectCorruptedException("Правила областей расстановки требуют схему v19.");
