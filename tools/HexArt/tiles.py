@@ -16,6 +16,7 @@ from paint import ID, Canvas, fbm, finish, noise, paint, smoothstep
 
 SCALE = 2
 BOX = 256
+RIDGES = True  # mountains drawn as a ridge and its spurs (False: the faceted cones)
 TALL_ROOM = 128  # box pixels of the tall picture above the box (the hex's top is at 17 or 0)
 MARGIN = 48  # ground rows beyond the box so heights never uncover the paper
 
@@ -93,6 +94,89 @@ def massif(f: Field, peaks, rng, material="ice", power=1.25, ledges=False, rough
         band = np.sin(mount / u(7) + noise(rng, f.h.shape, u(3), stretch=3, angle=90) * 0.9)
         dash = noise(rng, f.h.shape, u(4), stretch=3, angle=90) > 0.3
         f.lift += np.where(body & (band > 0.9) & dash, 0.45, 0)
+    return mount
+
+
+def ridge_range(f: Field, rng, cx, by, height, half_width, material="ice", steep=1.9, seed_peaks=3):
+    """A mountain built as artists draw one (tutorials of Jonathan Roberts, Clip Studio): a main
+    ridge along the summits with saddles between them, spurs running down from the ridge towards
+    the viewer and branching, each spur a sharp crest between a lit west face and a shadowed east
+    face; the faces fall steeply; scree and snow lie at the foot."""
+    segs = []  # (x0, y0, h0, x1, y1, h1, steepness)
+
+    def chain(points, s):
+        for (x0, y0, h0), (x1, y1, h1) in zip(points, points[1:]):
+            segs.append((x0, y0, h0, x1, y1, h1, s))
+
+    H = height
+    # the main ridge, west to east, with the summit off the middle
+    sx = cx + rng.uniform(-0.18, 0.18) * half_width
+    ry = by - 0.32 * half_width
+    peaks = [(sx, ry, H)]
+    if seed_peaks >= 2:
+        peaks.append((cx - rng.uniform(0.5, 0.65) * half_width, ry + rng.uniform(4, 10), H * rng.uniform(0.55, 0.72)))
+    if seed_peaks >= 3:
+        peaks.append((cx + rng.uniform(0.5, 0.65) * half_width, ry + rng.uniform(2, 9), H * rng.uniform(0.48, 0.66)))
+    peaks.sort(key=lambda p: p[0])
+    ridge = [(cx - half_width * 1.05, by + 2, 0.0)]
+    for i, p in enumerate(peaks):
+        if i > 0:
+            q = peaks[i - 1]
+            ridge.append(((p[0] + q[0]) / 2 + rng.uniform(-6, 6), (p[1] + q[1]) / 2 - 3, min(p[2], q[2]) * rng.uniform(0.5, 0.68)))
+        ridge.append(p)
+    ridge.append((cx + half_width * 1.05, by + 4, 0.0))
+    chain(ridge, steep)
+    # spurs down towards the viewer from the summits and the saddles, branching once
+    for (px, py, ph) in ridge[1:-1]:
+        for side in (-1, 1):
+            if ph < H * 0.3:
+                continue
+            ang = math.radians(90 + side * rng.uniform(25, 55))  # 90 = straight south (down the screen)
+            length = ph / steep * rng.uniform(1.4, 1.8)
+            pts = [(px, py, ph)]
+            x, y, h = px, py, ph
+            n = 3
+            for k in range(1, n + 1):
+                a = ang + rng.uniform(-0.25, 0.25)
+                x += math.cos(a) * length / n
+                y += math.sin(a) * length / n * 0.8
+                h = ph * (1 - k / n) ** 1.15
+                pts.append((x, y, h))
+            chain(pts, steep * 1.05)
+            # a branch from the middle of the spur
+            mx, my, mh = pts[1]
+            b = ang + side * rng.uniform(0.4, 0.7)
+            bl = mh / steep * 1.4
+            chain([(mx, my, mh), (mx + math.cos(b) * bl * 0.6, my + math.sin(b) * bl * 0.5, mh * 0.45),
+                   (mx + math.cos(b) * bl, my + math.sin(b) * bl * 0.8, 0.0)], steep * 1.1)
+    X, Y = f.X, f.Y
+    field = np.zeros_like(f.h)
+    for (x0, y0, h0, x1, y1, h1, s) in segs:
+        dx, dy = x1 - x0, y1 - y0
+        L2 = dx * dx + dy * dy + 1e-6
+        t = np.clip(((X - x0) * dx + (Y - y0) * dy) / L2, 0, 1)
+        d = np.hypot(X - (x0 + t * dx), Y - (y0 + t * dy))
+        hs = h0 + (h1 - h0) * t
+        field = np.maximum(field, hs - s * d)
+    field = np.clip(field, 0, None)
+    # crests break into small teeth; the faces carry gullies
+    teeth = (1 - np.abs(noise(rng, f.h.shape, u(3.5)))) ** 3
+    field = field * (0.95 + 0.1 * teeth * np.clip(field / 30, 0, 1))
+    gullies = noise(rng, f.h.shape, u(1.6), stretch=6, angle=0)
+    field = field + gullies * 0.05 * np.clip(field / 25, 0, 1)
+    mount = u(1) * field
+    # scree: a few small rocks at the foot, in front
+    for _ in range(int(rng.integers(5, 9))):
+        rx = cx + rng.uniform(-0.9, 0.9) * half_width
+        ry2 = by + rng.uniform(4, 14)
+        r = rng.uniform(3, 6)
+        rock = np.clip(r * 1.1 - 1.6 * np.hypot(X - rx, (Y - ry2) * 1.4), 0, None)
+        mount = np.maximum(mount, u(1) * rock)
+    f.h += mount
+    body = mount > u(2.5)
+    f.mat[body] = ID[material]
+    f.body |= body
+    f.crease[body] = 0.3
     return mount
 
 
@@ -311,13 +395,20 @@ def paint_terrain(name: str, variant: int, ground_only=False, tall=False):
         if variant != 2:
             peaks.append((182 + rng.uniform(-6, 6), 172, rng.uniform(70, 86), 52, 6))
         peaks.append((128 + rng.uniform(-30, 30), 148, rng.uniform(56, 70), 40, 5))
-        massif(f, peaks, rng)
+        if RIDGES:
+            ridge_range(f, rng, 128, 178, rng.uniform(92, 102), 84, steep=1.4, seed_peaks=3 - variant % 2)
+        else:
+            massif(f, peaks, rng)
     elif name == "peaks":
-        peaks = [(128 + rng.uniform(-6, 6), 206, rng.uniform(268, 290), 84, 7),
-                 (74 + rng.uniform(-6, 6), 200, rng.uniform(170, 200), 56, 6),
-                 (184 + rng.uniform(-6, 6), 204, rng.uniform(180, 215), 58, 6),
-                 (104 + rng.uniform(-10, 10), 176, rng.uniform(130, 160), 44, 5)]
-        massif(f, peaks, rng, power=1.15, squash=0.55)
+        if RIDGES:
+            # tall and narrow, but inside the hex like the mountains (the owner, 2026-10-22)
+            ridge_range(f, rng, 128, 180, rng.uniform(128, 138), 74, steep=2.0, seed_peaks=2 + variant % 2)
+        else:
+            peaks = [(128 + rng.uniform(-6, 6), 206, rng.uniform(268, 290), 84, 7),
+                     (74 + rng.uniform(-6, 6), 200, rng.uniform(170, 200), 56, 6),
+                     (184 + rng.uniform(-6, 6), 204, rng.uniform(180, 215), 58, 6),
+                     (104 + rng.uniform(-10, 10), 176, rng.uniform(130, 160), 44, 5)]
+            massif(f, peaks, rng, power=1.15, squash=0.55)
     elif name == "volcano":
         cone = pyramid(f, 128, 206, 214, 100, 9, rng, power=1.2, squash=0.7)
         crater = np.clip(1 - (((f.X - 128) / 24) ** 2 + ((f.Y - 206) / 14) ** 2), 0, None)

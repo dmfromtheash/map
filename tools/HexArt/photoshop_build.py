@@ -46,7 +46,7 @@ def canvas_for(asset: str):
         return tiles.paint_icon(name[5:], v), name, v, "icon"
     if name in tiles.FEATURES:
         return tiles.paint_feature(name, v), name, v, "feature"
-    return tiles.paint_terrain(name, v, tall=name in tiles.TALL), name, v, "terrain"
+    return tiles.paint_terrain(name, v, tall=name in tiles.TALL and name != "peaks"), name, v, "terrain"
 
 
 def main(out: str, assets: list[str]):

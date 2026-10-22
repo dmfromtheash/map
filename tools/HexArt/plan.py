@@ -34,6 +34,10 @@ BRUSH = {
 
 INK = "1F2A36"
 
+# Tone ranges for the Photoshop paint where they differ from the engine's: the owner's ice keeps
+# its shadowed faces deep (navy), so the shade is mapped linearly.
+PLAN_STYLE = {"ice": dict(lo=-0.42, hi=0.8, gamma=1.0)}
+
 # How each material is brushed: stroke angle (0 = down the slope / vertical), length and size in
 # 256-box pixels, the brush for the middle and the dark tones.
 BRUSHING = {
@@ -211,7 +215,7 @@ def trace_ink(cv, k):
             left.discard(nxt)
             run.append(nxt)
             cur = nxt
-        if len(run) >= 4 * k:
+        if len(run) >= 8 * k:
             ys = np.array([p[0] for p in run])
             xs = np.array([p[1] for p in run])
             width = float(np.median(dt[ys, xs])) * 2
@@ -233,7 +237,7 @@ def build_plan(cv, name, out, k, seed=1, opaque=True, pen=1.0, silhouettes=True,
     present.sort(key=lambda n: -float(cv.ground[cv.mat == ID[n]].mean()))
     for n in present:
         m = cv.mat == ID[n]
-        st = STYLE[n]
+        st = dict(STYLE[n], **PLAN_STYLE.get(n, {}))
         t = np.clip(1 - (cv.shade - st["lo"]) / (st["hi"] - st["lo"]), 0, 1) ** st.get("gamma", 1.0)
         t_all[m] = t[m]
     t_all = t_all + ragged
