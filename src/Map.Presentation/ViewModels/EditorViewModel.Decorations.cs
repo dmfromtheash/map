@@ -18,7 +18,7 @@ public sealed partial class EditorViewModel
 
     public static IReadOnlyList<string> DecorationVariantTitles(DecorationKind kind) => kind switch
     {
-        DecorationKind.Compass => ["Восемь лучей", "Четыре луча", "Шестнадцать лучей", "Стрелка"],
+        DecorationKind.Compass => ["Восемь лучей", "Четыре луча", "Шестнадцать лучей", "Стрелка", "Портолан"],
         DecorationKind.Cartouche => ["Рамка", "Лента", "Овал"],
         DecorationKind.ScaleBar => ["Шашки", "Штрихи"],
         _ => [],

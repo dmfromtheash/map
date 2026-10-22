@@ -37,6 +37,17 @@ internal static class DecorationRenderer
     private static SKPaint Stroke(SKColor color, float width) =>
         new() { Color = color, IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = Math.Max(0.5f, width), StrokeJoin = SKStrokeJoin.Round };
 
+    /// <summary>
+    /// A frame line drawn «by hand»: a small, fixed-seed wobble along the stroke, so ornaments read
+    /// as inked on paper and not as a ruler-straight vector. Deterministic, so export equals the screen.
+    /// </summary>
+    private static SKPaint InkStroke(SKColor color, float width)
+    {
+        var paint = Stroke(color, width);
+        paint.PathEffect = SKPathEffect.CreateDiscrete(Math.Max(2.5f, width * 1.6f), Math.Max(.12f, width * .14f), 7);
+        return paint;
+    }
+
     private static void Centered(SKCanvas canvas, string text, float x, float y, SKFont font, SKPaint paint) =>
         canvas.DrawText(text, x - font.MeasureText(text) / 2, y, font, paint);
 
@@ -103,8 +114,9 @@ internal static class DecorationRenderer
         using var inkFill = Fill(ink);
         using var paperFill = Fill(paper);
         using var outline = Stroke(ink, line);
-        var points = variant switch { 1 => 4, 2 => 16, 3 => 4, _ => 8 };
-        if (variant is 0 or 2)
+        var points = variant switch { 1 => 4, 2 => 16, 3 => 4, 4 => 16, _ => 8 };
+        if (variant == 4) DrawRhumbLines(canvas, cx, cy, rect, line, ink);
+        if (variant is 0 or 2 or 4)
         {
             canvas.DrawCircle(cx, cy, radius * 0.82f, outline);
             canvas.DrawCircle(cx, cy, radius * 0.76f, outline);
@@ -152,6 +164,16 @@ internal static class DecorationRenderer
         }
 
         canvas.DrawCircle(cx, cy, radius * 0.06f, inkFill);
+        if (variant == 4)
+        {
+            // Portolan conventions: a fleur-de-lis marks north, a cross marks east (towards the Holy Land).
+            DrawFleurDeLis(canvas, cx, cy - radius * 1.12f, radius * .26f, inkFill, outline);
+            using var cross = Stroke(ink, line * 1.6f);
+            var ex = cx + radius * 1.1f;
+            canvas.DrawLine(ex, cy - radius * .09f, ex, cy + radius * .09f, cross);
+            canvas.DrawLine(ex - radius * .09f, cy, ex + radius * .09f, cy, cross);
+            return;
+        }
         using var font = Font(radius * 0.2f, bold: true);
         var labelRadius = radius * 1.12f;
         for (var i = 0; i < 4; i++)
@@ -178,10 +200,48 @@ internal static class DecorationRenderer
         a.MoveTo(centre); a.LineTo(left); a.LineTo(tip); a.Close();
         using var b = new SKPath();
         b.MoveTo(centre); b.LineTo(tip); b.LineTo(right); b.Close();
-        canvas.DrawPath(a, ink);
-        canvas.DrawPath(b, paper);
+        // Light from the north-west, as cartographers shade relief: the half facing it is paper,
+        // the half turned away is ink - every ray of the rose is lit the same way.
+        var leftFacesLight = (left.X - cx) * -1 + (left.Y - cy) * -1 > 0;
+        canvas.DrawPath(a, leftFacesLight ? paper : ink);
+        canvas.DrawPath(b, leftFacesLight ? ink : paper);
         canvas.DrawPath(a, outline);
         canvas.DrawPath(b, outline);
+    }
+
+    /// <summary>Thin rhumb lines from the rose across its box, as on portolan charts.</summary>
+    private static void DrawRhumbLines(SKCanvas canvas, float cx, float cy, SKRect rect, float line, SKColor ink)
+    {
+        using var rhumb = Stroke(ink.WithAlpha((byte)(ink.Alpha * .35f)), Math.Max(.4f, line * .5f));
+        var reach = Math.Max(rect.Width, rect.Height);
+        canvas.Save();
+        canvas.ClipRect(rect);
+        for (var i = 0; i < 16; i++)
+        {
+            var a = i * Math.PI * 2 / 16;
+            canvas.DrawLine(cx, cy, cx + (float)Math.Sin(a) * reach, cy - (float)Math.Cos(a) * reach, rhumb);
+        }
+        canvas.Restore();
+    }
+
+    /// <summary>A procedural fleur-de-lis: a central petal and two curling side petals over a band.</summary>
+    private static void DrawFleurDeLis(SKCanvas canvas, float x, float y, float size, SKPaint fill, SKPaint outline)
+    {
+        using var path = new SKPath();
+        path.MoveTo(x, y - size);
+        path.CubicTo(x + size * .32f, y - size * .55f, x + size * .22f, y - size * .1f, x, y + size * .25f);
+        path.CubicTo(x - size * .22f, y - size * .1f, x - size * .32f, y - size * .55f, x, y - size);
+        path.Close();
+        foreach (var side in new[] { -1f, 1f })
+        {
+            path.MoveTo(x, y + size * .1f);
+            path.CubicTo(x + side * size * .25f, y - size * .55f, x + side * size * .85f, y - size * .45f, x + side * size * .7f, y - size * .05f);
+            path.CubicTo(x + side * size * .6f, y + size * .15f, x + side * size * .35f, y + size * .1f, x + side * size * .25f, y + size * .3f);
+            path.Close();
+        }
+        path.AddRect(new SKRect(x - size * .42f, y + size * .22f, x + size * .42f, y + size * .36f));
+        canvas.DrawPath(path, fill);
+        canvas.DrawPath(path, outline);
     }
 
     // ------------------------------------------------------------------ cartouche
@@ -191,8 +251,8 @@ internal static class DecorationRenderer
         var line = Math.Max(0.8f, Math.Min(rect.Width, rect.Height) * 0.018f);
         using var paperFill = Fill(paper);
         using var inkFill = Fill(ink);
-        using var outer = Stroke(ink, line * 1.6f);
-        using var inner = Stroke(ink, line * 0.7f);
+        using var outer = InkStroke(ink, line * 1.6f);
+        using var inner = InkStroke(ink, line * 0.7f);
         var inset = line * 4;
         switch (style.Variant)
         {
@@ -272,8 +332,8 @@ internal static class DecorationRenderer
         var line = Math.Max(0.8f, rect.Width * 0.008f);
         using var paperFill = Fill(paper);
         using var inkFill = Fill(ink);
-        using var outer = Stroke(ink, line * 1.5f);
-        using var inner = Stroke(ink, line * 0.6f);
+        using var outer = InkStroke(ink, line * 1.5f);
+        using var inner = InkStroke(ink, line * 0.6f);
         canvas.DrawRect(rect, paperFill);
         canvas.DrawRect(rect, outer);
         canvas.DrawRect(SKRect.Inflate(rect, -line * 3, -line * 3), inner);

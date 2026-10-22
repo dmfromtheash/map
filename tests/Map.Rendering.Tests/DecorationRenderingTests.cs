@@ -16,6 +16,7 @@ public sealed class DecorationRenderingTests
     [InlineData(DecorationKind.Compass, 1)]
     [InlineData(DecorationKind.Compass, 2)]
     [InlineData(DecorationKind.Compass, 3)]
+    [InlineData(DecorationKind.Compass, 4)]
     [InlineData(DecorationKind.Cartouche, 0)]
     [InlineData(DecorationKind.Cartouche, 1)]
     [InlineData(DecorationKind.Cartouche, 2)]

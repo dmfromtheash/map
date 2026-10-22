@@ -86,13 +86,13 @@ public sealed record LegendEntry
 /// </summary>
 public sealed record DecorationStyle
 {
-    public const int CompassStyles = 4;
+    public const int CompassStyles = 5;
     public const int CartoucheStyles = 3;
     public const int MaxLegendEntries = 24;
 
     public DecorationKind Kind { get; init; }
 
-    /// <summary>Style number: compass 0..3, cartouche 0..2, scale bar 0..1; legend ignores it.</summary>
+    /// <summary>Style number: compass 0..4, cartouche 0..2, scale bar 0..1; legend ignores it.</summary>
     public int Variant { get; init; }
 
     /// <summary>Cartouche title or legend heading.</summary>
