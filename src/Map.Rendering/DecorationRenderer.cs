@@ -17,6 +17,14 @@ internal static class DecorationRenderer
     {
         var ink = SceneRenderer.ParseColor(style.InkColor).WithScaledAlpha(alpha);
         var paper = SceneRenderer.ParseColor(style.PaperColor).WithScaledAlpha(alpha);
+        // The owner's painted manner (2026-10-22): the decoration lies on the paper like his
+        // mountains - a soft shadow cast to the south-east by the north-west light.
+        var size = Math.Min(rect.Width, rect.Height);
+        var shadowDepth = Math.Max(1f, size * 0.025f);
+        using var cast = SKImageFilter.CreateDropShadow(shadowDepth, shadowDepth * 1.3f, shadowDepth * 1.1f, shadowDepth * 1.1f,
+            new SKColor(31, 42, 54, (byte)(alpha * 0.28f)));
+        using var layer = new SKPaint { ImageFilter = cast };
+        canvas.SaveLayer(SKRect.Inflate(rect, size * 0.35f + shadowDepth * 6, size * 0.35f + shadowDepth * 6), layer);
         switch (style.Kind)
         {
             case DecorationKind.ScaleBar: DrawScaleBar(canvas, style, rect, ink, paper); break;
@@ -24,6 +32,48 @@ internal static class DecorationRenderer
             case DecorationKind.Cartouche: DrawCartouche(canvas, style, rect, ink, paper); break;
             default: DrawLegend(canvas, style, rect, ink, paper, alpha, options); break;
         }
+        canvas.Restore();
+    }
+
+    /// <summary>
+    /// Paper in the owner's manner, inside <paramref name="area"/>: a wash darkening from the
+    /// north-west light towards the south-east, a quiet shade along the frame and the grain of
+    /// paper-canvas. Seeded noise, so the screen and the export are the same.
+    /// </summary>
+    private static void PaintPaper(SKCanvas canvas, SKPath area, SKColor ink)
+    {
+        var bounds = area.Bounds;
+        if (bounds.Width < 4 || bounds.Height < 4) return;
+        canvas.Save();
+        canvas.ClipPath(area, SKClipOperation.Intersect, antialias: true);
+        var shade = ink.WithAlpha((byte)(ink.Alpha * 0.16f));
+        using (var light = SKShader.CreateLinearGradient(new SKPoint(bounds.Left, bounds.Top), new SKPoint(bounds.Right, bounds.Bottom),
+            [SKColors.White.WithAlpha((byte)(ink.Alpha * 0.22f)), SKColors.Transparent, shade], [0f, 0.45f, 1f], SKShaderTileMode.Clamp))
+        using (var wash = new SKPaint { Shader = light, IsAntialias = true })
+            canvas.DrawRect(bounds, wash);
+        // Shade pooled along the frame, as a brush drags pigment to the edge of a wash.
+        var edge = Math.Max(1f, Math.Min(bounds.Width, bounds.Height) * 0.08f);
+        using (var rim = new SKPaint
+        {
+            Color = ink.WithAlpha((byte)(ink.Alpha * 0.14f)), IsAntialias = true, Style = SKPaintStyle.Stroke,
+            StrokeWidth = edge * 2, MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, edge * 0.6f),
+        })
+            canvas.DrawPath(area, rim);
+        // Grain: fractal noise turned into a faint ink stipple.
+        var frequency = 0.9f / Math.Max(0.8f, Math.Min(bounds.Width, bounds.Height) / 220f);
+        using var noise = SKShader.CreatePerlinNoiseFractalNoise(frequency, frequency, 3, 17);
+        float r = ink.Red / 255f, g = ink.Green / 255f, b = ink.Blue / 255f, a = ink.Alpha / 255f;
+        using var tint = SKColorFilter.CreateColorMatrix(
+        [
+            0, 0, 0, 0, r,
+            0, 0, 0, 0, g,
+            0, 0, 0, 0, b,
+            0.34f * a, 0, 0, 0, -0.11f * a,
+        ]);
+        using var grain = new SKPaint { Shader = noise, ColorFilter = tint };
+        canvas.Translate(bounds.Left, bounds.Top);
+        canvas.DrawRect(new SKRect(0, 0, bounds.Width, bounds.Height), grain);
+        canvas.Restore();
     }
 
     private static SKFont Font(float size, bool bold = false)
@@ -205,6 +255,12 @@ internal static class DecorationRenderer
         var leftFacesLight = (left.X - cx) * -1 + (left.Y - cy) * -1 > 0;
         canvas.DrawPath(a, leftFacesLight ? paper : ink);
         canvas.DrawPath(b, leftFacesLight ? ink : paper);
+        // The owner's manner: the lit half is modelled - paper at the tip, a wash of the ink
+        // towards the centre where the halves fold - instead of a flat cut-out.
+        var shade = ink.Color.WithAlpha((byte)(ink.Color.Alpha * 0.38f));
+        using (var fold = SKShader.CreateLinearGradient(tip, centre, [SKColors.Transparent, shade], [0.35f, 1f], SKShaderTileMode.Clamp))
+        using (var wash = new SKPaint { Shader = fold, IsAntialias = true })
+            canvas.DrawPath(leftFacesLight ? a : b, wash);
         canvas.DrawPath(a, outline);
         canvas.DrawPath(b, outline);
     }
@@ -273,10 +329,12 @@ internal static class DecorationRenderer
                     ribbon.LineTo(edge, band.Bottom + band.Height * 0.08f);
                     ribbon.Close();
                     canvas.DrawPath(ribbon, paperFill);
+                    PaintPaper(canvas, ribbon, ink);
                     canvas.DrawPath(ribbon, inner);
                 }
 
                 canvas.DrawRect(band, paperFill);
+                using (var bandPath = new SKPath()) { bandPath.AddRect(band); PaintPaper(canvas, bandPath, ink); }
                 canvas.DrawRect(band, outer);
                 canvas.DrawRect(SKRect.Inflate(band, -inset, -inset), inner);
                 break;
@@ -284,6 +342,7 @@ internal static class DecorationRenderer
             case 2:
             {
                 canvas.DrawOval(rect, paperFill);
+                using (var ovalPath = new SKPath()) { ovalPath.AddOval(rect); PaintPaper(canvas, ovalPath, ink); }
                 canvas.DrawOval(rect, outer);
                 canvas.DrawOval(SKRect.Inflate(rect, -inset, -inset), inner);
                 break;
@@ -292,6 +351,7 @@ internal static class DecorationRenderer
             {
                 var corner = Math.Min(rect.Width, rect.Height) * 0.18f;
                 canvas.DrawRoundRect(rect, corner, corner, paperFill);
+                using (var roundPath = new SKPath()) { roundPath.AddRoundRect(rect, corner, corner); PaintPaper(canvas, roundPath, ink); }
                 canvas.DrawRoundRect(rect, corner, corner, outer);
                 var r2 = SKRect.Inflate(rect, -inset, -inset);
                 canvas.DrawRoundRect(r2, corner * 0.7f, corner * 0.7f, inner);
@@ -335,6 +395,7 @@ internal static class DecorationRenderer
         using var outer = InkStroke(ink, line * 1.5f);
         using var inner = InkStroke(ink, line * 0.6f);
         canvas.DrawRect(rect, paperFill);
+        using (var sheet = new SKPath()) { sheet.AddRect(rect); PaintPaper(canvas, sheet, ink); }
         canvas.DrawRect(rect, outer);
         canvas.DrawRect(SKRect.Inflate(rect, -line * 3, -line * 3), inner);
 
