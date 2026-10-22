@@ -44,7 +44,7 @@ public sealed partial class EditorView
     private bool _syncingHex;
 
     /// <summary>The four tabs of the hex panel.</summary>
-    private enum HexPage { Draw, Markup, Edit, World }
+    private enum HexPage { Draw, Markup, Edit, World, MySets }
 
     private HexPage _hexPage;
     private HexToolMode? _hexShownMode;
@@ -202,6 +202,7 @@ public sealed partial class EditorView
             (nameof(HexPage.Markup), "Разметка", MapIcons.HexRegion),
             (nameof(HexPage.Edit), "Правка", MapIcons.HexSelectBox),
             (nameof(HexPage.World), "Мир", MapIcons.HexGlobe),
+            (nameof(HexPage.MySets), "Мои наборы", MapIcons.HexPlace),
         ], key => ShowHexPage(Enum.Parse<HexPage>(key)));
         ToolTip.SetTip(tabButtons[0], "Рисовать: ставить, заливать, стирать гексы и брать их пипеткой");
         ToolTip.SetTip(tabButtons[1], "Разметка мастера: регионы, пути, туман войны, ключи гексов, линейка");
@@ -271,6 +272,7 @@ public sealed partial class EditorView
         var heads = new Dictionary<HexPage, Control>
         {
             [HexPage.Draw] = drawModes, [HexPage.Markup] = markupModes, [HexPage.Edit] = editHead, [HexPage.World] = HexHint(worldHint),
+            [HexPage.MySets] = new Border(),
         };
         var bodies = new Dictionary<HexPage, Control>
         {
@@ -278,6 +280,7 @@ public sealed partial class EditorView
             [HexPage.Markup] = new StackPanel { Spacing = 8, Children = { region, paths, fog, key, measure, party } },
             [HexPage.Edit] = editBody,
             [HexPage.World] = worldBody,
+            [HexPage.MySets] = BuildHexUserSets(),
         };
         foreach (var (page, control) in heads.Concat(bodies)) control.Tag = "HexReveal:HexTab" + page;
 
@@ -288,8 +291,8 @@ public sealed partial class EditorView
             HexMark(drawButtons.Concat(markupButtons), "HexMode" + mode);
             foreach (var (page, control) in heads) control.IsVisible = page == _hexPage && page != HexPage.Edit;
             foreach (var (page, control) in bodies) control.IsVisible = page == _hexPage;
-            hint.IsVisible = _hexPage != HexPage.World;
-            radiusBlock.IsVisible = _hexPage != HexPage.World
+            hint.IsVisible = _hexPage is not (HexPage.World or HexPage.MySets);
+            radiusBlock.IsVisible = _hexPage is not (HexPage.World or HexPage.MySets)
                 && mode is HexToolMode.Place or HexToolMode.Erase or HexToolMode.Region or HexToolMode.Fog;
             region.IsVisible = mode == HexToolMode.Region;
             paths.IsVisible = mode == HexToolMode.Path;
@@ -329,6 +332,8 @@ public sealed partial class EditorView
                 bodies[HexPage.Markup],
                 editBody,
                 worldBody,
+                heads[HexPage.MySets],
+                bodies[HexPage.MySets],
             },
         };
 
@@ -349,7 +354,7 @@ public sealed partial class EditorView
     private void ShowHexPage(HexPage page)
     {
         _hexPage = page;
-        if (page != HexPage.World && PageOf(_editor.HexMode) != page)
+        if (page is not (HexPage.World or HexPage.MySets) && PageOf(_editor.HexMode) != page)
         {
             _editor.HexMode = _hexPageMode[page];
             return;

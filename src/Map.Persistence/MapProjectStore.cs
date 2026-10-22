@@ -44,6 +44,9 @@ public static partial class MapProjectStore
     private static int SchemaFor(MapDocument document) =>
         HasNaturalRivers(document.Layers) || document.Checkpoints.Any(c => HasNaturalRivers(c.Snapshot.Layers))
             ? MapProjectFormat.NaturalRiversSchemaVersion :
+        document.Layers.OfType<HexLayer>().Any(NeedsTileSetsV24)
+        || document.Checkpoints.Any(c => c.Snapshot.Layers.OfType<HexLayer>().Any(NeedsTileSetsV24))
+            ? MapProjectFormat.TileSetsSchemaVersion :
         HasPaintedRoads(document.Layers) || document.Checkpoints.Any(c => HasPaintedRoads(c.Snapshot.Layers))
             ? MapProjectFormat.PaintedRoadsSchemaVersion :
         HasPaintedRivers(document.Layers) || document.Checkpoints.Any(c => HasPaintedRivers(c.Snapshot.Layers))
@@ -1841,6 +1844,7 @@ public static partial class MapProjectStore
             Points = WriteHexStructureV18(layer),
             Gameplay = WriteGameplayV20(layer),
             Journey = WriteTravelV21(layer),
+            TileSets = WriteTileSetsV24(layer),
             Grid = new HexGridDto
             {
                 Visible = layer.Grid.Visible,
@@ -2027,7 +2031,7 @@ public static partial class MapProjectStore
             throw new MapProjectCorruptedException($"Hex layer {id} has a damaged travel scale.");
         }
 
-        return ReadTravelV21(ReadGameplayV20(new HexLayer(id, name, layer.Visible, layer.Locked, layer.Opacity, board, mask)
+        var result = ReadTravelV21(ReadGameplayV20(new HexLayer(id, name, layer.Visible, layer.Locked, layer.Opacity, board, mask)
         {
             Grid = grid,
             Paths = paths.ToImmutable(),
@@ -2037,6 +2041,8 @@ public static partial class MapProjectStore
             FogEnabled = dto.Fog == true,
             Travel = travel == HexTravelScale.Default ? HexTravelScale.Default : travel,
         }, dto.Gameplay), dto.Journey);
+        ReadTileSetsV24(result, dto.TileSets);
+        return result;
     }
 
     private static SceneObjectDto ToObjectDto(SceneObject sceneObject) => new()

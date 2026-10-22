@@ -25,6 +25,7 @@ public partial class App : Application
                 : AppPaths.Root;
             var appSettingsStore = new AppSettingsStore(Path.Combine(profileRoot, "settings.json"));
             var appSettings = appSettingsStore.Load();
+            Map.Rendering.HexUserTileSets.Initialize(Path.Combine(profileRoot, "HexTileSets", "user"));
             var diagnostics = new DiagnosticsLog(Path.Combine(
                 appSettings.CacheRoot ?? profileRoot, "Diagnostics"));
             var journal = new RecoveryJournal(

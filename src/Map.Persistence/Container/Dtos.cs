@@ -199,6 +199,7 @@ internal sealed class HexBoardDto
     [JsonPropertyName("cells")] public List<int> Cells { get; set; } = [];
     [JsonPropertyName("gameplay")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public GameplayDto? Gameplay { get; set; }
     [JsonPropertyName("journey")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public TravelV21Dto? Journey { get; set; }
+    [JsonPropertyName("tileSets")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<string>? TileSets { get; set; }
     [JsonPropertyName("pointsOfInterest")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<HexPoiCellDto>? Points { get; set; }
     [JsonPropertyName("grid")] public HexGridDto? Grid { get; set; }
     [JsonPropertyName("paths")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<HexPathDto>? Paths { get; set; }

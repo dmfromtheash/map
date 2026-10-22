@@ -78,7 +78,8 @@ public static class MapProjectFormat
     /// </summary>
     public const int PaintedRoadsSchemaVersion = 23;
 
-    // Number 24 is reserved for R15 (own hex sets).
+    public const int TileSetsSchemaVersion = 24;
+
     /// <summary>
     /// «Живая река»: the natural bank manner of a river (`BankManner` of the river style). Rivers
     /// without it keep the older schema.

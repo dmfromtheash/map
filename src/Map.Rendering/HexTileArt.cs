@@ -140,9 +140,9 @@ public static class HexStarterTiles
     private static readonly Dictionary<string, HexTileDefinition> ById = All.ToDictionary(tile => tile.Id, StringComparer.Ordinal);
 
     /// <summary>Highest overhang of any tile: chunk pictures leave this much room above their top row.</summary>
-    public static double MaxOverhang { get; } = All.Max(tile => tile.Overhang);
+    public static double MaxOverhang => Math.Max(All.Max(tile => tile.Overhang), HexUserTileSets.MaxOverhang);
 
-    public static HexTileDefinition? Find(string id) => ById.GetValueOrDefault(id);
+    public static HexTileDefinition? Find(string id) => ById.GetValueOrDefault(id) ?? HexUserTileSets.Find(id);
 }
 
 /// <summary>
@@ -170,7 +170,7 @@ public static class HexTileArt
 
     /// <summary>The picture of a tile variant, or null for an id this build does not know.</summary>
     public static SKImage? Image(string id, int variant, HexOrientation orientation) =>
-        Images.GetOrAdd((id, variant, orientation), key =>
+        HexUserTileSets.IsUserId(id) ? HexUserTileSets.Image(id, orientation) : Images.GetOrAdd((id, variant, orientation), key =>
         {
             var tile = HexStarterTiles.Find(key.Id);
             return tile is null ? null : Paint(tile, Math.Clamp(key.Variant, 0, tile.VariantCount - 1), key.Orientation);
