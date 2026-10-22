@@ -755,7 +755,7 @@ def paint_icon(kind: str, variant: int):
 # ---------------------------------------------------------------------------- the set
 
 TERRAINS = {
-    "grass": 3, "farmland": 3, "forest": 3, "pines": 3, "jungle": 3, "hills": 3, "mountains": 3, "desert": 3, "swamp": 3,
+    "grass": 3, "farmland": 3, "forest": 3, "pines": 3, "jungle": 3, "hills": 3, "mountains": 6, "desert": 3, "swamp": 3,
     "snow": 3, "canyon": 3, "cliffs": 3, "shallows": 3, "sea": 3, "lake": 3, "peaks": 3, "old-forest": 3, "volcano": 2,
     "live-forest": 3, "live-pines": 3, "live-hills": 3, "live-mountains": 3,
 }

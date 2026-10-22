@@ -81,7 +81,7 @@ public static class HexStarterTiles
         new(Prefix + "pines", "Хвойный лес", "Местность", HexPaintTarget.Terrain, 3, new SKColor(0x80, 0x8E, 0x6D)) { Priority = 61, TravelCost = 2, Rotatable = false },
         new(Prefix + "jungle", "Джунгли", "Местность", HexPaintTarget.Terrain, 3, new SKColor(0x63, 0x7A, 0x56)) { Priority = 62, TravelCost = 3, Rotatable = false },
         new(Prefix + "hills", "Холмы", "Местность", HexPaintTarget.Terrain, 3, new SKColor(0xA1, 0xAD, 0x7E)) { Priority = 70, TravelCost = 2, Rotatable = false },
-        new(Prefix + "mountains", "Горы", "Местность", HexPaintTarget.Terrain, 3, new SKColor(0xCE, 0xDA, 0xE2)) { Priority = 80, TravelCost = 3, Rotatable = false },
+        new(Prefix + "mountains", "Горы", "Местность", HexPaintTarget.Terrain, 6, new SKColor(0xDD, 0xE6, 0xEB)) { Priority = 80, TravelCost = 3, Rotatable = false },
         new(Prefix + "desert", "Пустыня", "Местность", HexPaintTarget.Terrain, 3, new SKColor(0xD6, 0xC4, 0x9D)) { Priority = 30, TravelCost = 1.5 },
         new(Prefix + "swamp", "Болото", "Местность", HexPaintTarget.Terrain, 3, new SKColor(0x83, 0x8E, 0x78)) { Priority = 20, TravelCost = 3 },
         new(Prefix + "snow", "Снега", "Местность", HexPaintTarget.Terrain, 3, new SKColor(0xE0, 0xE9, 0xED)) { Priority = 75, TravelCost = 2 },

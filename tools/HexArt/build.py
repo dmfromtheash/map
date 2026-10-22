@@ -29,7 +29,7 @@ FEATURE_ZOOM = 1.35
 HERE = os.path.dirname(os.path.abspath(__file__))
 PAINTED = os.path.join(HERE, "painted")
 # Photoshop paintings per tile, and the ones the living-ridge icons are cut from.
-PAINTED_TILES = {"mountains": 3, "peaks": 3}
+PAINTED_TILES = {"mountains": 6, "peaks": 3}
 ICON_SOURCES = [("peaks", 0), ("mountains", 0), ("peaks", 2), ("mountains", 2)]
 
 
