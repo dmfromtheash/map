@@ -53,9 +53,12 @@ public static partial class HexLayerRenderer
         return result;
     }
 
-    private static readonly SKColor Sand = new(0xE2, 0xCE, 0x98);
+    private static readonly SKColor Sand = new(0xE2, 0xD0, 0xA6);
 
     private static readonly SKColor Foam = new(0xF4, 0xFA, 0xFA);
+
+    /// <summary>The pen of the hex art (tools/HexArt): the shore is drawn with it, as on the owner's mountains.</summary>
+    private static readonly SKColor Pen = new(0x1F, 0x2A, 0x36);
 
     /// <summary>
     /// Spills the ground of higher-priority neighbours onto this hex (Wesnoth order: sides that touch
@@ -199,8 +202,8 @@ public static partial class HexLayerRenderer
             using var sand = new SKPaint { IsAntialias = true, Color = Sand };
             using var surf = new SKPaint
             {
-                IsAntialias = true, Style = SKPaintStyle.Stroke, Color = Foam.WithAlpha(200), StrokeCap = SKStrokeCap.Round,
-                StrokeWidth = (float)(layout.Size * 0.035),
+                IsAntialias = true, Style = SKPaintStyle.Stroke, Color = Pen.WithAlpha(205), StrokeCap = SKStrokeCap.Round,
+                StrokeJoin = SKStrokeJoin.Round, StrokeWidth = (float)(layout.Size * 0.028),
             };
             using var dash = SKPathEffect.CreateDash([(float)(layout.Size * 0.1), (float)(layout.Size * 0.07)], 0);
             using var outer = new SKPaint

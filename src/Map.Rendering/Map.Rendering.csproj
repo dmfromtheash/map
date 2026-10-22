@@ -13,6 +13,11 @@
     <EmbeddedResource Include="Textures\*.png" LogicalName="Map.Rendering.Textures.%(Filename)%(Extension)" />
   </ItemGroup>
 
+  <!-- The hex tile set painted by tools/HexArt in the manner of the owner's mountains. -->
+  <ItemGroup>
+    <EmbeddedResource Include="HexArt\*.webp" LogicalName="Map.Rendering.HexArt.%(Filename)%(Extension)" />
+  </ItemGroup>
+
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
