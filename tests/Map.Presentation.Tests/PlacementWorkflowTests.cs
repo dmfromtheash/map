@@ -189,6 +189,8 @@ public sealed class PlacementWorkflowTests : IDisposable
         Assert.Equal(2, editor.Session.UndoDepth); Assert.NotEqual(area.Seed, editor.SelectedEditableArea!.Seed);
         editor.Undo(); Assert.Same(placed, editor.Session.Document); editor.Redo(); Assert.Same(changed, editor.Session.Document);
         editor.SetEditableAreaSizeVariation(0);
+        // R10: a new area has a soft edge that shrinks objects at the border on purpose.
+        editor.SetEditableAreaSoftEdge(false);
         Assert.All(editor.SelectedEditableArea!.Members, m => Assert.Equal(area.Request.BaseWidth,
             DocumentEditor.FindObject(editor.Session.Document, m.ObjectId)!.Width));
         editor.SetStampScalePercent(28); editor.ApplyStampSettingsToEditableArea();
