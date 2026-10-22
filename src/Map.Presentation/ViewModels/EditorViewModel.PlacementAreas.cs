@@ -188,6 +188,7 @@ public sealed partial class EditorViewModel
                     VariantId = CurrentVariant?.Id, Variants = [.. sources], Request = request,
                     Seed = NextGestureSeed(), Density = _naturalAreaDensity, SizeVariationPercent = _naturalAreaSizeVariation,
                     Pattern = _naturalAreaPattern, JoinEdges = _naturalAreaJoinEdges, Rules = _naturalAreaRules, ContentBounds = ReadAreaContentBounds(sources),
+                    Beauty = NewAreaBeauty(request.BaseWidth),
                     ContentMasks = ReadAreaContentMasks(sources),
                     RotationDegrees = settings.RotationDegrees, ScalePercent = settings.ScalePercent,
                     Sublayer = settings.Sublayer, Opacity = settings.ObjectOpacity,
@@ -444,7 +445,12 @@ public sealed partial class EditorViewModel
         if (!UsesNaturalAreaLayout || !Enum.IsDefined(value)) return;
         _naturalAreaPattern = value;
         if (_areaCreating && _areaDraft is { } draft)
-        { _areaDraft = draft with { Pattern = value, LayoutVersion = 4 }; UpdateAreaPreview(); RaiseAreaState(); }
+        {
+            // Untouched «Красота» of a draft follows its pattern (a ridge gets no soft edge or clumps).
+            _areaDraft = draft with { Pattern = value, LayoutVersion = 4,
+                Beauty = _naturalAreaBeauty is null ? NewAreaBeauty(draft.Request.BaseWidth) : draft.Beauty };
+            UpdateAreaPreview(); RaiseAreaState();
+        }
         else if (SelectedEditableArea is not null)
             CommitAreaChange(a => a with { Pattern = value, LayoutVersion = 4 }, "Изменить рисунок области");
         else RaiseAreaState();

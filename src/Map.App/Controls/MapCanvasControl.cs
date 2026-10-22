@@ -842,6 +842,8 @@ public sealed partial class MapCanvasControl : Control
                     canvas.DrawCircle((float)node.X, (float)node.Y, radius, pen);
                 }
             }
+            if (editor.ActiveTool == EditorTool.Stamp && editor.AreaDensityOverlayToDraw is { } density)
+                DrawAreaDensityOverlay(canvas, density, editor, (float)Math.Max(.001, viewport.Scale));
             if (editor.ActiveTool == EditorTool.Measure && editor.MeasureLine is { } measure)
             {
                 // R08 «Измерить»: the measured line, its two ends and the distance next to the end.

@@ -42,6 +42,8 @@ public static partial class MapProjectStore
         layers.OfType<ObjectLayer>().Any(l => l.PlacementAreas.Any(a => a.NeedsRulesSchema));
 
     private static int SchemaFor(MapDocument document) =>
+        HasAreaBeautyV27(document.Layers) || document.Checkpoints.Any(c => HasAreaBeautyV27(c.Snapshot.Layers))
+            ? MapProjectFormat.AreaBeautySchemaVersion :
         document.Style is not null || document.Checkpoints.Any(c => c.Snapshot.Style is not null)
             ? MapProjectFormat.StyleSchemaVersion :
         document.Lighting is not null || document.Checkpoints.Any(c => c.Snapshot.Lighting is not null)
@@ -765,6 +767,7 @@ public static partial class MapProjectStore
 
             var scene = ParseJson<SceneDto>(sceneBytes, MapProjectFormat.SceneEntry);
             ValidatePathSchema(scene, manifest.SchemaVersion);
+            ValidateAreaBeautySchemaV27(scene, manifest.SchemaVersion);
             if (expectedSchemaVersion is >= 2 and <= 3)
             {
                 ValidateV2SceneShape(sceneBytes, MapProjectFormat.SceneEntry);
@@ -1334,6 +1337,7 @@ public static partial class MapProjectStore
                 }
                 var scene = ParseJson<SceneDto>(sceneBytes, sceneEntry);
                 ValidatePathSchema(scene, snapshotManifest.SchemaVersion);
+                ValidateAreaBeautySchemaV27(scene, snapshotManifest.SchemaVersion);
                 if (schemaVersion is >= 2 and <= 3)
                 {
                     ValidateV2SceneShape(sceneBytes, sceneEntry);
@@ -1769,6 +1773,7 @@ public static partial class MapProjectStore
                 ShadowOffsetX = effectsLayer.Effects.ShadowOffsetX,
                 ShadowOffsetY = effectsLayer.Effects.ShadowOffsetY,
                 ShadowBlur = effectsLayer.Effects.ShadowBlur,
+                DepthSort = effectsLayer.Effects.DepthSort,
             } : null,
             Sublayers = layer is ObjectLayer sublayerLayer
                 ? [.. sublayerLayer.SublayerStates.Select(state => new ObjectSublayerStateDto
@@ -2101,6 +2106,8 @@ public static partial class MapProjectStore
                 Saturation = stamp.Saturation,
                 Brightness = stamp.Brightness,
                 Contrast = stamp.Contrast,
+                Tint = stamp.Tint,
+                GroundShadow = ToGroundShadowDtoV27(stamp.GroundShadow),
             }
             : null,
         Line = sceneObject.Line is { } line ? ToLineDto(line) : null,
@@ -2484,6 +2491,7 @@ public static partial class MapProjectStore
             ShadowOffsetX = RequireFinite(dto.ShadowOffsetX, "layer shadow offset X", -512, 512),
             ShadowOffsetY = RequireFinite(dto.ShadowOffsetY, "layer shadow offset Y", -512, 512),
             ShadowBlur = RequireFinite(dto.ShadowBlur, "layer shadow blur", 0, 256),
+            DepthSort = dto.DepthSort,
         };
 
     private static IReadOnlyList<ObjectSublayerState> ToSublayerStates(
@@ -2552,6 +2560,8 @@ public static partial class MapProjectStore
                 Saturation = RequireFinite(stamp.Saturation, "stamp saturation", min: -1, max: 1),
                 Brightness = RequireFinite(stamp.Brightness, "stamp brightness", min: -1, max: 1),
                 Contrast = RequireFinite(stamp.Contrast, "stamp contrast", min: -1, max: 1),
+                Tint = ReadTintV27(stamp.Tint),
+                GroundShadow = ReadGroundShadowV27(stamp.GroundShadow),
             }
             : null,
         Line = dto.Line is { } line ? ToLine(line) : null,

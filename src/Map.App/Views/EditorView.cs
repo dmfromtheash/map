@@ -5354,6 +5354,10 @@ public sealed partial class EditorView : UserControl
                 AppearanceToggle("ObjectLayerClippingToggle", "Обрезать по слою ниже",
                     () => Effects()?.ClippingEnabled,
                     value => ChangeEffects(current => current with { ClippingEnabled = value })),
+                // R10: the lower object on the map is drawn over the ones above it, for the whole layer.
+                AppearanceToggle("ObjectLayerDepthSortToggle", "Ближние поверх дальних",
+                    () => Effects()?.DepthSort,
+                    value => ChangeEffects(current => current with { DepthSort = value })),
                 AppearanceColorBox("ObjectLayerShadowColor", "Цвет тени",
                     () => Effects()?.ShadowColor,
                     value => ChangeEffects(current => current with { ShadowColor = value })),
@@ -5394,6 +5398,7 @@ public sealed partial class EditorView : UserControl
             var parts = new List<string>();
             if (effects is { OuterShadowOpacity: > 0 } || effects is { InnerShadowOpacity: > 0 }) parts.Add("тень");
             if (effects is { ClippingEnabled: true }) parts.Add("обрезка");
+            if (effects is { DepthSort: true }) parts.Add("ближние поверх");
             objectEffects.SetSummary(parts.Count == 0 ? "без тени" : string.Join(", ", parts));
         });
         _appearanceSyncs.Add(() => objectEffects.IsVisible = _editor.ActiveLayer is ObjectLayer);

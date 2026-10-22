@@ -37,6 +37,8 @@ public enum CanvasInputGesture
     Marquee,
     /// <summary>A drag of the hex tool: places or erases hexes along the way.</summary>
     HexPaint,
+    /// <summary>R10: a stroke of the density brush over the selected area.</summary>
+    AreaDensity,
 }
 
 /// <summary>What the hosting control has to do for its UI framework after a routed event.</summary>
@@ -170,6 +172,12 @@ public sealed class CanvasInputRouter
             _editor.BeginMeasure(worldX, worldY);
             _gesture = CanvasInputGesture.Measure;
             return new CanvasInputResult { Handled = true, CapturePointer = true, Invalidate = true };
+        }
+
+        if (_editor.BeginAreaDensityStroke(worldX, worldY))
+        {
+            _gesture = CanvasInputGesture.AreaDensity;
+            return new CanvasInputResult { Handled = true, Invalidate = true, CapturePointer = true };
         }
 
         // An armed placement is a pending gesture: finishing it always wins over starting a new one.
@@ -389,8 +397,17 @@ public sealed class CanvasInputRouter
             return new CanvasInputResult { Handled = true, Invalidate = true };
         }
 
+        if (_gesture == CanvasInputGesture.None && _editor.IsAreaDensityBrushActive)
+        {
+            _editor.HoverAreaDensityBrush(worldX, worldY);
+            return new CanvasInputResult { Handled = true, Invalidate = true };
+        }
+
         switch (_gesture)
         {
+            case CanvasInputGesture.AreaDensity:
+                _editor.ContinueAreaDensityStroke(worldX, worldY);
+                return new CanvasInputResult { Handled = true, Invalidate = true };
             case CanvasInputGesture.Measure:
                 _editor.UpdateMeasure(worldX, worldY);
                 return new CanvasInputResult { Handled = true, Invalidate = true };
@@ -474,6 +491,11 @@ public sealed class CanvasInputRouter
         // so two flags left set by a mid-gesture tool switch produced two history entries at once.
         switch (gesture)
         {
+            case CanvasInputGesture.AreaDensity:
+                var densityEnd = _editor.Session.Viewport.ScreenToWorld(screenX, screenY);
+                _editor.ContinueAreaDensityStroke(densityEnd.X, densityEnd.Y);
+                _editor.EndAreaDensityStroke();
+                return new CanvasInputResult { Handled = true, Invalidate = true, ReleasePointer = true };
             case CanvasInputGesture.Measure:
                 var measureEnd = _editor.Session.Viewport.ScreenToWorld(screenX, screenY);
                 _editor.UpdateMeasure(measureEnd.X, measureEnd.Y);
@@ -626,6 +648,8 @@ public sealed class CanvasInputRouter
 
         switch (gesture)
         {
+            case CanvasInputGesture.AreaDensity:
+                return _editor.CancelAreaDensityStroke();
             case CanvasInputGesture.PlacementAreaNode:
                 return _editor.CancelEditableAreaGesture();
             case CanvasInputGesture.PlacementPathNode:

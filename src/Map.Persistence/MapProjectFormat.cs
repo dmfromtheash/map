@@ -90,13 +90,21 @@ public static class MapProjectFormat
 
     /// <summary>
     /// Light and time of day of the map (DEC-057, R09): one manifest block. Documents without it
-    /// keep the older schema. v27 is reserved by R10 (branch claude/r10-beauty, not merged).
+    /// keep the older schema. v27 was reserved by R10 and stays unused: R10 took v30 when merged.
     /// </summary>
     public const int LightingSchemaVersion = 28;
 
     /// <summary>The style of the map (DEC-059, R09): one manifest block. Documents without it keep the older schema.</summary>
     public const int StyleSchemaVersion = 29;
-    public const int MaxSupportedSchemaVersion = StyleSchemaVersion;
+
+    /// <summary>
+    /// R10 «Красота»: the beauty settings and the density brush of an editable area, «ближние поверх
+    /// дальних» of a whole object layer, and the tint and ground of a placed asset. Maps without them
+    /// keep the older schema. Written in the R10 branch as v27, renumbered to v30 on merge (after R09's v28/v29).
+    /// </summary>
+    public const int AreaBeautySchemaVersion = 30;
+
+    public const int MaxSupportedSchemaVersion = AreaBeautySchemaVersion;
 
     /// <summary>
     /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry

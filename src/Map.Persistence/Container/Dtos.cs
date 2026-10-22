@@ -364,6 +364,9 @@ internal sealed class LayerEffectsDto
     [JsonPropertyName("shadowOffsetX")] public double ShadowOffsetX { get; set; }
     [JsonPropertyName("shadowOffsetY")] public double ShadowOffsetY { get; set; }
     [JsonPropertyName("shadowBlur")] public double ShadowBlur { get; set; }
+    [JsonPropertyName("depthSort")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool DepthSort { get; set; }
 }
 
 internal sealed class ObjectSublayerStateDto
@@ -714,6 +717,24 @@ internal sealed class StampStyleDto
     [JsonPropertyName("contrast")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public double Contrast { get; set; }
+    [JsonPropertyName("tint")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Tint { get; set; }
+    [JsonPropertyName("groundShadow")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public GroundShadowDto? GroundShadow { get; set; }
+}
+
+/// <summary>R10 ground of a placed asset (schema v27).</summary>
+internal sealed class GroundShadowDto
+{
+    [JsonPropertyName("opacity")] public double Opacity { get; set; }
+    [JsonPropertyName("footX")] public double FootX { get; set; }
+    [JsonPropertyName("footY")] public double FootY { get; set; }
+    [JsonPropertyName("width")] public double Width { get; set; }
+    [JsonPropertyName("mass")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public double Mass { get; set; }
 }
 
 internal sealed class ObjectChunkDescriptorDto
