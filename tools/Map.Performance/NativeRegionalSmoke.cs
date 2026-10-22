@@ -74,7 +74,11 @@ public sealed partial class RegionalApplication : Application
     {
         var desktop = (IClassicDesktopStyleApplicationLifetime)ApplicationLifetime!;
         _workspace = Path.Combine(Path.GetDirectoryName(Options.OutputPath)!, Path.GetFileNameWithoutExtension(Options.OutputPath) + "-workspace");
+        // This profile exports folders that deliberately cannot overwrite an existing GM/player
+        // package (including renamed-obsidian); every run needs its own complete workspace.
+        if (Options.Profile == "native-player-package") _workspace += "-" + Guid.NewGuid().ToString("N");
         Directory.CreateDirectory(_workspace);
+        if (Options.Profile == "native-player-package") Console.WriteLine("native-player-package workspace: " + _workspace);
         Environment.SetEnvironmentVariable("MAP_UI_TEST_MODE", "1");
         Environment.SetEnvironmentVariable("MAP_UI_TEST_PROFILE_ROOT", Path.Combine(_workspace, "profile"));
         Environment.SetEnvironmentVariable("MAP_UI_TEST_RECOVERY_ROOT", Path.Combine(_workspace, "recovery"));

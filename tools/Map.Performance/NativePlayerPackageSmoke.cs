@@ -19,7 +19,7 @@ public sealed partial class RegionalApplication
     /// <summary>
     /// R02: dotnet tools/Map.Performance/bin/Release/net10.0/win-x64/Map.Performance.dll
     /// --profile native-player-package --output artifacts/r02/player-package.json
-    /// Isolated profile/recovery/shortcuts under that output's workspace. No screen captures:
+    /// Fresh &lt;output&gt;-workspace-&lt;guid&gt; each run; profile/recovery/shortcuts and all exports there. No screen captures:
     /// Map.LiveCheck --map &lt;workspace&gt;/player-package.mapproj --player-package true takes PrintWindow shots.
     /// </summary>
     private async Task VerifyPlayerPackage()
