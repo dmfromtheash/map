@@ -243,15 +243,22 @@ public sealed class HexLayerRenderingTests
 
         using (kept)
         {
+            // The tile art is drawn with a fine pen: a block made at another scale and resampled
+            // moves a pen line by a pixel, which alone is no different map. Both pictures are
+            // compared halved, so such shifts average out and a missing or wrong hex still shows.
+            var half = new SKImageInfo(Math.Max(1, direct.Width / 2), Math.Max(1, direct.Height / 2), SKColorType.Rgba8888, SKAlphaType.Premul);
+            var linear = new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None);
+            using var directHalf = direct.Resize(half, linear);
+            using var keptHalf = kept.Resize(half, linear);
             var differing = 0;
             var samples = 0;
-            for (var y = 0; y < direct.Height; y += 2)
+            for (var y = 0; y < directHalf.Height; y++)
             {
-                for (var x = 0; x < direct.Width; x += 2)
+                for (var x = 0; x < directHalf.Width; x++)
                 {
                     samples++;
-                    var a = direct.GetPixel(x, y);
-                    var b = kept.GetPixel(x, y);
+                    var a = directHalf.GetPixel(x, y);
+                    var b = keptHalf.GetPixel(x, y);
                     if (Math.Abs(a.Red - b.Red) + Math.Abs(a.Green - b.Green) + Math.Abs(a.Blue - b.Blue) > 90) differing++;
                 }
             }

@@ -31,7 +31,10 @@ public sealed record HexTileDefinition(
     /// </summary>
     public double Overhang { get; init; }
 
-    /// <summary>The picture may be turned in 60° steps (tiles with a top, tall tiles and buildings never are).</summary>
+    /// <summary>
+    /// The picture may be turned in 60° steps (tiles with a top, tall tiles, standing trees and
+    /// buildings never are: their light comes from the north-west).
+    /// </summary>
     public bool Rotatable { get; init; } = true;
 
     /// <summary>
@@ -72,69 +75,69 @@ public static class HexStarterTiles
 
     public static IReadOnlyList<HexTileDefinition> All { get; } =
     [
-        new(Prefix + "grass", "Равнина", "Местность", HexPaintTarget.Terrain, 3, new SKColor(0x9C, 0xB8, 0x5E)) { Priority = 50 },
-        new(Prefix + "farmland", "Поля", "Местность", HexPaintTarget.Terrain, 3, new SKColor(0xC4, 0xBE, 0x6A)) { Priority = 45 },
-        new(Prefix + "forest", "Лес", "Местность", HexPaintTarget.Terrain, 3, new SKColor(0x4E, 0x80, 0x3C)) { Priority = 60, TravelCost = 2 },
-        new(Prefix + "pines", "Хвойный лес", "Местность", HexPaintTarget.Terrain, 3, new SKColor(0x3A, 0x66, 0x40)) { Priority = 61, TravelCost = 2 },
-        new(Prefix + "jungle", "Джунгли", "Местность", HexPaintTarget.Terrain, 3, new SKColor(0x2E, 0x74, 0x3A)) { Priority = 62, TravelCost = 3 },
-        new(Prefix + "hills", "Холмы", "Местность", HexPaintTarget.Terrain, 3, new SKColor(0xA6, 0xA8, 0x62)) { Priority = 70, TravelCost = 2, Rotatable = false },
-        new(Prefix + "mountains", "Горы", "Местность", HexPaintTarget.Terrain, 3, new SKColor(0x8E, 0x86, 0x7C)) { Priority = 80, TravelCost = 3, Rotatable = false },
-        new(Prefix + "desert", "Пустыня", "Местность", HexPaintTarget.Terrain, 3, new SKColor(0xE0, 0xC6, 0x86)) { Priority = 30, TravelCost = 1.5 },
-        new(Prefix + "swamp", "Болото", "Местность", HexPaintTarget.Terrain, 3, new SKColor(0x6E, 0x7A, 0x4C)) { Priority = 20, TravelCost = 3 },
-        new(Prefix + "snow", "Снега", "Местность", HexPaintTarget.Terrain, 3, new SKColor(0xE6, 0xEE, 0xF2)) { Priority = 75, TravelCost = 2 },
-        new(Prefix + "canyon", "Каньон", "Местность", HexPaintTarget.Terrain, 3, new SKColor(0xC2, 0x8A, 0x5E))
+        new(Prefix + "grass", "Равнина", "Местность", HexPaintTarget.Terrain, 3, new SKColor(0xAA, 0xB5, 0x84)) { Priority = 50 },
+        new(Prefix + "farmland", "Поля", "Местность", HexPaintTarget.Terrain, 3, new SKColor(0xB0, 0xA8, 0x7B)) { Priority = 45 },
+        new(Prefix + "forest", "Лес", "Местность", HexPaintTarget.Terrain, 3, new SKColor(0x7D, 0x8D, 0x67)) { Priority = 60, TravelCost = 2, Rotatable = false },
+        new(Prefix + "pines", "Хвойный лес", "Местность", HexPaintTarget.Terrain, 3, new SKColor(0x80, 0x8E, 0x6D)) { Priority = 61, TravelCost = 2, Rotatable = false },
+        new(Prefix + "jungle", "Джунгли", "Местность", HexPaintTarget.Terrain, 3, new SKColor(0x63, 0x7A, 0x56)) { Priority = 62, TravelCost = 3, Rotatable = false },
+        new(Prefix + "hills", "Холмы", "Местность", HexPaintTarget.Terrain, 3, new SKColor(0xA1, 0xAD, 0x7E)) { Priority = 70, TravelCost = 2, Rotatable = false },
+        new(Prefix + "mountains", "Горы", "Местность", HexPaintTarget.Terrain, 3, new SKColor(0xC4, 0xD2, 0xDA)) { Priority = 80, TravelCost = 3, Rotatable = false },
+        new(Prefix + "desert", "Пустыня", "Местность", HexPaintTarget.Terrain, 3, new SKColor(0xD6, 0xC4, 0x9D)) { Priority = 30, TravelCost = 1.5 },
+        new(Prefix + "swamp", "Болото", "Местность", HexPaintTarget.Terrain, 3, new SKColor(0x83, 0x8E, 0x78)) { Priority = 20, TravelCost = 3 },
+        new(Prefix + "snow", "Снега", "Местность", HexPaintTarget.Terrain, 3, new SKColor(0xE0, 0xE9, 0xED)) { Priority = 75, TravelCost = 2 },
+        new(Prefix + "canyon", "Каньон", "Местность", HexPaintTarget.Terrain, 3, new SKColor(0xC6, 0xA4, 0x83))
         {
             Priority = 35, TravelCost = 3, Hint = "Поворотный тайл: ущелье идёт от грани к грани, поверните его клавишами [ и ].",
         },
-        new(Prefix + "cliffs", "Обрыв", "Местность", HexPaintTarget.Terrain, 3, new SKColor(0xA8, 0x9A, 0x84))
+        new(Prefix + "cliffs", "Обрыв", "Местность", HexPaintTarget.Terrain, 3, new SKColor(0xA0, 0xA5, 0x84))
         {
             Priority = 72, TravelCost = 3, Hint = "Поворотный тайл: стена обрыва вдоль одной грани.",
         },
-        new(Prefix + "shallows", "Мелководье", "Вода", HexPaintTarget.Terrain, 3, new SKColor(0x6C, 0xB4, 0xBE)) { Priority = 10, IsWater = true, TravelCost = 4 },
-        new(Prefix + "sea", "Море", "Вода", HexPaintTarget.Terrain, 3, new SKColor(0x2E, 0x62, 0x8C)) { Priority = 0, IsWater = true, TravelCost = null },
-        new(Prefix + "lake", "Озеро", "Вода", HexPaintTarget.Terrain, 3, new SKColor(0x4C, 0x8C, 0xB0)) { Priority = 5, IsWater = true, TravelCost = null },
-        new(Prefix + "peaks", "Высокие горы", Tall, HexPaintTarget.Terrain, 3, new SKColor(0x84, 0x7C, 0x74))
+        new(Prefix + "shallows", "Мелководье", "Вода", HexPaintTarget.Terrain, 3, new SKColor(0xB5, 0xCD, 0xD3)) { Priority = 10, IsWater = true, TravelCost = 4 },
+        new(Prefix + "sea", "Море", "Вода", HexPaintTarget.Terrain, 3, new SKColor(0x89, 0xA4, 0xB8)) { Priority = 0, IsWater = true, TravelCost = null },
+        new(Prefix + "lake", "Озеро", "Вода", HexPaintTarget.Terrain, 3, new SKColor(0x9C, 0xB4, 0xC5)) { Priority = 5, IsWater = true, TravelCost = null },
+        new(Prefix + "peaks", "Высокие горы", Tall, HexPaintTarget.Terrain, 3, new SKColor(0x95, 0xA8, 0xB7))
         {
             Priority = 85, TravelCost = 4, Overhang = 0.62, Rotatable = false,
             Hint = "Высокий тайл: вершины нависают над рядом позади (2.5D).",
         },
-        new(Prefix + "old-forest", "Вековой лес", Tall, HexPaintTarget.Terrain, 3, new SKColor(0x3C, 0x6E, 0x36))
+        new(Prefix + "old-forest", "Вековой лес", Tall, HexPaintTarget.Terrain, 3, new SKColor(0x7D, 0x8E, 0x67))
         {
             Priority = 63, TravelCost = 2.5, Overhang = 0.42, Rotatable = false,
             Hint = "Высокий тайл: кроны нависают над рядом позади.",
         },
-        new(Prefix + "volcano", "Вулкан", Tall, HexPaintTarget.Terrain, 2, new SKColor(0x6A, 0x56, 0x4E))
+        new(Prefix + "volcano", "Вулкан", Tall, HexPaintTarget.Terrain, 2, new SKColor(0x6E, 0x62, 0x60))
         {
             Priority = 86, TravelCost = 5, Overhang = 0.55, Rotatable = false,
         },
-        new(Prefix + "live-forest", "Живой лес", Living, HexPaintTarget.Terrain, 3, new SKColor(0x6A, 0x94, 0x4C))
+        new(Prefix + "live-forest", "Живой лес", Living, HexPaintTarget.Terrain, 3, new SKColor(0xAA, 0xB5, 0x83))
         {
             Priority = 58, TravelCost = 2, Dynamic = HexDynamicIcon.Trees,
             Hint = "Живая местность: деревья сами раскладываются по всей области, не повторяя сетку. «Перемешать» даёт новый узор.",
         },
-        new(Prefix + "live-pines", "Живая тайга", Living, HexPaintTarget.Terrain, 3, new SKColor(0x5C, 0x86, 0x58))
+        new(Prefix + "live-pines", "Живая тайга", Living, HexPaintTarget.Terrain, 3, new SKColor(0xA3, 0xAE, 0x7B))
         {
             Priority = 59, TravelCost = 2, Dynamic = HexDynamicIcon.Pines,
         },
-        new(Prefix + "live-hills", "Живые холмы", Living, HexPaintTarget.Terrain, 3, new SKColor(0xAE, 0xB0, 0x6C))
+        new(Prefix + "live-hills", "Живые холмы", Living, HexPaintTarget.Terrain, 3, new SKColor(0xAA, 0xB5, 0x84))
         {
             Priority = 68, TravelCost = 2, Dynamic = HexDynamicIcon.Hills,
         },
-        new(Prefix + "live-mountains", "Живой хребет", Living, HexPaintTarget.Terrain, 3, new SKColor(0xA2, 0x9C, 0x90))
+        new(Prefix + "live-mountains", "Живой хребет", Living, HexPaintTarget.Terrain, 3, new SKColor(0xE8, 0xF0, 0xF4))
         {
             Priority = 78, TravelCost = 3, Dynamic = HexDynamicIcon.Mountains,
             Hint = "Живая местность: чем больше гор рядом, тем выше хребет.",
         },
-        new(Prefix + "village", "Деревня", "Поселения", HexPaintTarget.Feature, 2, new SKColor(0xB4, 0x6A, 0x4A)) { Rotatable = false },
-        new(Prefix + "city", "Город", "Поселения", HexPaintTarget.Feature, 2, new SKColor(0x9A, 0x8C, 0x80)) { Rotatable = false },
-        new(Prefix + "castle", "Замок", "Поселения", HexPaintTarget.Feature, 2, new SKColor(0x88, 0x84, 0x80)) { Rotatable = false },
-        new(Prefix + "port", "Порт", "Поселения", HexPaintTarget.Feature, 2, new SKColor(0x8A, 0x6A, 0x4A)) { Rotatable = false },
-        new(Prefix + "camp", "Лагерь", "Поселения", HexPaintTarget.Feature, 2, new SKColor(0xC8, 0xA8, 0x70)) { Rotatable = false },
-        new(Prefix + "tower", "Башня", "Места", HexPaintTarget.Feature, 2, new SKColor(0x8C, 0x7E, 0x70)) { Rotatable = false },
-        new(Prefix + "ruins", "Руины", "Места", HexPaintTarget.Feature, 2, new SKColor(0xA0, 0x9A, 0x8E)) { Rotatable = false },
-        new(Prefix + "cave", "Пещера", "Места", HexPaintTarget.Feature, 2, new SKColor(0x5A, 0x50, 0x48)) { Rotatable = false },
-        new(Prefix + "temple", "Храм", "Места", HexPaintTarget.Feature, 2, new SKColor(0xD8, 0xD0, 0xBC)) { Rotatable = false },
-        new(Prefix + "mine", "Шахта", "Места", HexPaintTarget.Feature, 2, new SKColor(0x6A, 0x5A, 0x4A)) { Rotatable = false },
+        new(Prefix + "village", "Деревня", "Поселения", HexPaintTarget.Feature, 2, new SKColor(0x8D, 0x77, 0x69)) { Rotatable = false },
+        new(Prefix + "city", "Город", "Поселения", HexPaintTarget.Feature, 2, new SKColor(0x79, 0x70, 0x69)) { Rotatable = false },
+        new(Prefix + "castle", "Замок", "Поселения", HexPaintTarget.Feature, 2, new SKColor(0x80, 0x7F, 0x7B)) { Rotatable = false },
+        new(Prefix + "port", "Порт", "Поселения", HexPaintTarget.Feature, 2, new SKColor(0x7A, 0x7A, 0x7A)) { Rotatable = false },
+        new(Prefix + "camp", "Лагерь", "Поселения", HexPaintTarget.Feature, 2, new SKColor(0x82, 0x80, 0x75)) { Rotatable = false },
+        new(Prefix + "tower", "Башня", "Места", HexPaintTarget.Feature, 2, new SKColor(0x6D, 0x6D, 0x6B)) { Rotatable = false },
+        new(Prefix + "ruins", "Руины", "Места", HexPaintTarget.Feature, 2, new SKColor(0x70, 0x72, 0x70)) { Rotatable = false },
+        new(Prefix + "cave", "Пещера", "Места", HexPaintTarget.Feature, 2, new SKColor(0x7A, 0x77, 0x70)) { Rotatable = false },
+        new(Prefix + "temple", "Храм", "Места", HexPaintTarget.Feature, 2, new SKColor(0x8E, 0x8A, 0x7E)) { Rotatable = false },
+        new(Prefix + "mine", "Шахта", "Места", HexPaintTarget.Feature, 2, new SKColor(0x7D, 0x6E, 0x58)) { Rotatable = false },
     ];
 
     private static readonly Dictionary<string, HexTileDefinition> ById = All.ToDictionary(tile => tile.Id, StringComparer.Ordinal);
