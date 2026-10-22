@@ -32,7 +32,7 @@ internal static class HexGameplayCheck
         else
         {
             move(player); Thread.Sleep(1500);
-            var names = player.FindAllDescendants().Select(c => c.Name).ToArray();
+            var names = player.FindAllDescendants().Select(c => c.Properties.Name.ValueOrDefault ?? "").ToArray();
             var safe = names.Any(n => n.Contains("Старая обитель", StringComparison.Ordinal))
                 && names.Any(n => n.Contains("Говорят", StringComparison.Ordinal))
                 && !names.Any(n => n.Contains("Истинное имя R17", StringComparison.Ordinal) || n.Contains("Секрет ведущего R17", StringComparison.Ordinal));
