@@ -30,6 +30,9 @@ internal sealed class ManifestDto
     [JsonPropertyName("checkpointCatalogSha256")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? CheckpointCatalogSha256 { get; set; }
+    [JsonPropertyName("atlas")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Map.Core.Documents.AtlasLocator? Atlas { get; set; }
 }
 
 internal sealed class CanvasDto

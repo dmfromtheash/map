@@ -29,7 +29,7 @@ public sealed class ExportScene
         var selected = document.Layers.Where(layer => VisibleLayerIds.Contains(layer.Id)).ToList();
         Package = ExportPackagePreview.Create(document.Title, selected, Players);
         Document = Players ? document.WithLayers([.. document.Layers.Select(layer => layer is HexLayer hex
-            ? ExportPlayerVisibility.Sanitize(hex) : layer)]) : document;
+            ? ExportPlayerVisibility.Sanitize(hex) : layer)]) with { Atlas = null } : document;
     }
 
     public MapDocument Document { get; }

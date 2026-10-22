@@ -325,7 +325,7 @@ public sealed class Stage12BCanvasWorkflowTests
         Assert.Same(beforeFailure, setup.Editor.Session.Document);
         Assert.Equal(depthBeforeFailure, setup.Editor.Session.UndoDepth);
         Assert.Same(previousDestination, setup.Store.Saved["C:\\maps\\protected.mapproj"].Document);
-        Assert.Contains("прежний файл назначения не изменены", setup.Editor.StatusDetail);
+        Assert.Contains("Не удалось завершить сохранение атласа", setup.Editor.StatusDetail);
     }
 
     [Fact]

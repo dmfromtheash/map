@@ -10644,7 +10644,7 @@ public sealed partial class EditorViewModel : ViewModelBase
                 var thumbnail = await RunResourceOperationAsync(() => Task.Run(() =>
                 {
                     var thumbnail = ThumbnailRenderer.RenderPng(snapshot, stamps: imageSource);
-                    _store.Save(snapshot, path, metadata, thumbnail);
+                    _store.Save(AtlasSnapshot(snapshot, path), path, metadata, thumbnail);
                     return thumbnail;
                 }), reserveBytes: DocumentOperationBytes(snapshot));
 
@@ -10701,7 +10701,7 @@ public sealed partial class EditorViewModel : ViewModelBase
                 await RunResourceOperationAsync(() => Task.Run(() =>
                 {
                     var thumbnail = ThumbnailRenderer.RenderPng(snapshot, stamps: imageSource);
-                    _store.SaveAutosave(snapshot, sourcePath, metadata, thumbnail);
+                    _store.SaveAutosave(AtlasSnapshot(snapshot, sourcePath), sourcePath, metadata, thumbnail);
                     return true;
                 }), reserveBytes: DocumentOperationBytes(snapshot));
 
@@ -10829,17 +10829,20 @@ public sealed partial class EditorViewModel : ViewModelBase
 
             try
             {
+                var savedSnapshot = AtlasSnapshot(snapshot, path);
                 using var imageSource = new ExportStampImageSource(snapshot, DocumentPath, _assetCatalog);
                 var thumbnail = await RunResourceOperationAsync(() => Task.Run(() =>
                 {
                     // The thumbnail comes from the same scene evaluator as the canvas, without
                     // selection or any editor chrome.
                     var thumbnail = ThumbnailRenderer.RenderPng(snapshot, stamps: imageSource);
-                    _store.Save(snapshot, path!, metadata, thumbnail);
+                    _store.Save(savedSnapshot, path!, metadata, thumbnail);
                     return thumbnail;
                 }), reserveBytes: DocumentOperationBytes(snapshot));
 
                 DocumentPath = path;
+                _atlasLocator = savedSnapshot.Atlas;
+                if (_atlasLocator is not null) AtlasPath = AtlasStore.ManifestPath(savedSnapshot, path!);
                 Session.MarkSaved(checkpoint);
                 _primaryAutosaveArmed = true;
                 _lastPrimaryAutosavedDocument = snapshot;
@@ -10854,6 +10857,7 @@ public sealed partial class EditorViewModel : ViewModelBase
                 Raise(nameof(PrimaryAutosaveSummary));
 
                 TouchRecentAfterSave(path!, snapshot, metadata, thumbnail);
+                if (_atlasLocator is not null) await RefreshAtlasAsync();
                 _log.Info($"SAVE_SUCCEEDED revision={checkpoint.Revision}");
                 return true;
             }
@@ -10866,7 +10870,7 @@ public sealed partial class EditorViewModel : ViewModelBase
                 _log.Error("SAVE_FAILED", ex);
                 return false;
             }
-            catch (InvalidOperationException ex)
+            catch (Exception ex) when (ex is InvalidOperationException or InvalidDataException or IOException or UnauthorizedAccessException)
             {
                 // Resource admission happens before the store's save exception boundary.
                 // Keep a refused save inside the editor, including when closing with Save.

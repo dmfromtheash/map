@@ -39,6 +39,7 @@ public sealed record MapDocument
             : new ReadOnlyCollection<MapCheckpoint>([.. revisedCheckpoints]);
         StampForeground = replaceStampForeground ? revisedStampForeground : source.StampForeground;
         Category = source.Category;
+        Atlas = source.Atlas;
     }
 
     public MapDocument(
@@ -253,6 +254,7 @@ public sealed record MapDocument
     }
 
     public DocumentId Id { get; init; }
+    public AtlasLocator? Atlas { get; init; }
     public string Title { get; init; }
 
     /// <summary>When the document was first created. Supplied by the caller; Core has no clock.</summary>

@@ -58,6 +58,10 @@ if (mapArgument is not null)
 
     var copy = Path.Combine(profile, "Maps", Path.GetFileName(mapArgument));
     File.Copy(mapArgument, copy, overwrite: true);
+    if (Arg("--atlas") is not null)
+        foreach (var pattern in new[] { "*.mapproj", "*.mapatlas" })
+            foreach (var source in Directory.GetFiles(Path.GetDirectoryName(Path.GetFullPath(mapArgument))!, pattern))
+                File.Copy(source, Path.Combine(profile, "Maps", Path.GetFileName(source)), overwrite: true);
     start.ArgumentList.Add(copy);
 }
 start.Environment["MAP_UI_TEST_MODE"] = "1";
@@ -91,6 +95,15 @@ try
         Log(export is null ? "MISSING: ExportButton (workshop did not open the map)" : $"workshop with the map after {clock.ElapsedMilliseconds} ms");
         if (export is null) missing++;
         Thread.Sleep(1500);
+
+        if (Arg("--atlas") is not null)
+        {
+            MoveToSecondaryDisplay(main.Properties.NativeWindowHandle.ValueOrDefault, Log, "DISPLAY1");
+            missing += AtlasCheck.Run(main, () => app.GetAllTopLevelWindows(automation), outDir, Log, Shot);
+            // The shared finally ends this isolated process. Closing through UIA immediately
+            // after the owned check window races its asynchronous close animation.
+            return missing == 0 ? 0 : 2;
+        }
 
         if (Arg("--hex-sets") is { } tileSetSource)
         {

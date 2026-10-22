@@ -547,8 +547,28 @@ public sealed partial class EditorViewModel
         var folder = Path.GetDirectoryName(DocumentPath)!;
         if (layer.Notes.GetValueOrDefault(hex)?.ChildMap is { } linked)
         {
-            var existing = Path.IsPathRooted(linked) ? linked : Path.Combine(folder, linked);
-            if (File.Exists(existing)) return existing;
+            try
+            {
+                var manifestPath = AtlasStore.ManifestPath(AtlasSnapshot(Session.Document), DocumentPath);
+                var existing = AtlasStore.ResolveReference(manifestPath, DocumentPath, linked, ".mapproj");
+                if (File.Exists(existing))
+                {
+                    var existingChild = _store.Open(existing).Document;
+                    await RefreshAtlasAsync();
+                    if (Atlas?.Links.Any(l => l.Parent == Session.Document.Id.Value && l.Child == existingChild.Id.Value) != true)
+                    {
+                        var bounds = layer.Board.Layout.Bounds(hex);
+                        await SaveAtlasChildAsync(Session.Document, existingChild, existing, ThumbnailRenderer.RenderPng(existingChild),
+                            new(bounds.Left, bounds.Top, bounds.Right - bounds.Left, bounds.Bottom - bounds.Top, existingChild.Canvas.Width, existingChild.Canvas.Height), "hex");
+                        await RefreshAtlasAsync();
+                    }
+                    return existing;
+                }
+                StatusDetail = "Подкарта не найдена. Восстановите файл или уберите прежнюю ссылку в ключе гекса.";
+                return null;
+            }
+            catch (Exception error) when (error is InvalidDataException or MapProjectException or IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException)
+            { StatusDetail = "Не удалось открыть связанную подкарту. Ссылка должна вести к доступной карте внутри папки атласа."; _log.Error("ATLAS_HEX_OPEN_FAILED", error); return null; }
         }
 
         var number = HexLayerRenderer.NumberOf(layer.Board, layer.Board.Layout.ToOffset(hex));
@@ -568,20 +588,26 @@ public sealed partial class EditorViewModel
             var preview = await Task.Run(() =>
             {
                 var thumbnail = ThumbnailRenderer.RenderPng(child);
-                _store.Save(child, path, metadata, thumbnail);
                 return thumbnail;
             }).ConfigureAwait(true);
+            var note = layer.Notes.GetValueOrDefault(hex) ?? new HexNote("");
+            var after = layer with { Notes = layer.Notes.SetItem(hex, note with { ChildMap = fileName }) };
+            var parent = Session.Document.WithLayer(layer.Id, _ => after);
+            var bounds = layer.Board.Layout.Bounds(hex);
+            await SaveAtlasChildAsync(parent, child, path, preview,
+                new(bounds.Left, bounds.Top, bounds.Right - bounds.Left, bounds.Bottom - bounds.Top, child.Canvas.Width, child.Canvas.Height), "hex");
             _recent.Touch(path, child.Id.Value, child.Title, metadata.ModifiedUtc, preview);
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
+        catch (Exception error) when (error is InvalidDataException or MapProjectException or IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException)
         {
-            StatusDetail = "Не удалось сохранить подкарту: " + error.Message;
+            StatusDetail = "Не удалось сохранить подкарту. Проверьте доступ к папке атласа и диску. Сохранённые копии незавершённой операции будут использованы при следующем открытии.";
             _log.Error("HEX_CHILD_MAP_SAVE_FAILED", error);
             return null;
         }
 
         LinkHexChildMap(hex, fileName);
-        StatusDetail = $"Подкарта гекса {number} создана: {fileName}. Сохраните эту карту, чтобы ссылка осталась.";
+        await RefreshAtlasAsync();
+        StatusDetail = $"Подкарта гекса {number} создана: {fileName}. Обе карты и связь сохранены в атласе.";
         return path;
     }
 

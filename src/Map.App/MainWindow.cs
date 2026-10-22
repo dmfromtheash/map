@@ -225,6 +225,10 @@ public sealed class MainWindow : Window
             requestSecondWindow: OpenSecondWindow,
             requestShortcutSettings: OpenShortcutSettings);
         _editorView.Canvas.PerformanceMode = _appSettings.PerformanceMode;
+        editor.AtlasMapRequested += async (_, path) =>
+        {
+            if (await editor.ConfirmCloseAsync()) await OpenPathAsync(path);
+        };
         if (editor.IsHexWorkshop)
         {
             editor.HexPlayerViewRequested += (_, _) => new HexPlayerWindow(editor).Show();

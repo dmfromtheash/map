@@ -10,9 +10,11 @@ namespace Map.Persistence.Tests;
 public sealed class NaturalRiverPersistenceTests
 {
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void A_living_river_reopens_in_v25(bool natural)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void A_living_river_reopens_in_v25(bool natural, bool atlas)
     {
         using var workspace = new TempWorkspace();
         var river = new River
@@ -24,16 +26,20 @@ public sealed class NaturalRiverPersistenceTests
             new CanvasDefinition(400, 400, "px", "#FFFFFFFF"),
             [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFFFFFFF"),
              new ObjectLayer(LayerId.New(), "Вода", true, false, 1, []) { Rivers = [river] }]);
+        if (atlas) document = document with { Atlas = new(Guid.NewGuid(), "rivers.mapatlas") };
         var path = workspace.File("river.mapproj");
         MapProjectStore.Save(document, path, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
         using (var zip = ZipFile.OpenRead(path))
         using (var stream = zip.GetEntry("manifest.json")!.Open())
         {
             var schema = JsonNode.Parse(stream)!["schemaVersion"]!.GetValue<int>();
-            if (natural) Assert.Equal(25, schema); else Assert.True(schema < 22);
+            if (atlas) Assert.Equal(26, schema);
+            else if (natural) Assert.Equal(25, schema); else Assert.True(schema < 22);
         }
 
-        var reopened = MapProjectStore.Open(path).Document.Layers.OfType<ObjectLayer>().SelectMany(l => l.Rivers).Single();
+        var opened = MapProjectStore.Open(path).Document;
+        Assert.Equal(document.Atlas, opened.Atlas);
+        var reopened = opened.Layers.OfType<ObjectLayer>().SelectMany(l => l.Rivers).Single();
         Assert.Equal(river.Style, reopened.Style);
     }
 }

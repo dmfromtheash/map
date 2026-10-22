@@ -10,9 +10,17 @@ public sealed class RoadCrossingRenderingTests
     [Fact]
     public void A_bridge_covers_the_water_a_ford_lightens_it_and_none_leaves_the_river()
     {
-        using var none = Render(Document(RoadCrossingKind.None));
-        using var bridge = Render(Document(RoadCrossingKind.Bridge));
-        using var ford = Render(Document(RoadCrossingKind.Ford));
+        var document = Document(RoadCrossingKind.None);
+        var layer = document.Layers.OfType<ObjectLayer>().Single();
+        var road = layer.Roads.Single();
+        MapDocument WithCrossing(RoadCrossingKind kind) => document.WithLayer(layer.Id, _ => layer with
+        {
+            Roads = [RoadEditor.SetCrossingKind(road, road.Branches[0].Id, layer.Rivers[0].Channels[0].Id, 0, kind)],
+        });
+        // Compare the same road (including its seed and branch IDs); only the crossing changes.
+        using var none = Render(document);
+        using var bridge = Render(WithCrossing(RoadCrossingKind.Bridge));
+        using var ford = Render(WithCrossing(RoadCrossingKind.Ford));
         var water = none.GetPixel(200, 200);
         var deck = bridge.GetPixel(200, 200);
         var shallow = ford.GetPixel(200, 200);
@@ -20,9 +28,9 @@ public sealed class RoadCrossingRenderingTests
         Assert.True(deck.Red > deck.Blue + 20, $"the bridge deck is warm wood over the water, got {deck}");
         Assert.True(shallow.Red + shallow.Green + shallow.Blue > water.Red + water.Green + water.Blue + 30,
             $"the ford lightens the water, got {shallow} over {water}");
-        // Away from the river the road itself is unchanged by the crossing (seeded details may differ by a hair).
+        // Away from the river the road itself is unchanged by the crossing.
         var a = none.GetPixel(60, 200); var b = bridge.GetPixel(60, 200);
-        Assert.True(Math.Abs(a.Red - b.Red) + Math.Abs(a.Green - b.Green) + Math.Abs(a.Blue - b.Blue) <= 12, $"road away from the river changed: {a} vs {b}");
+        Assert.Equal(a, b);
     }
 
     private static MapDocument Document(RoadCrossingKind kind)

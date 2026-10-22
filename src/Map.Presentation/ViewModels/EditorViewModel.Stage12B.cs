@@ -267,6 +267,11 @@ public sealed partial class EditorViewModel
             return false;
         }
 
+        if (DocumentPath is null && !await SaveAsync())
+        {
+            CanvasWorkflowError = "Сначала сохраните родительскую карту, чтобы создать атлас.";
+            return false;
+        }
         var source = Session.Document;
         MapDocument extracted;
         try
@@ -301,18 +306,17 @@ public sealed partial class EditorViewModel
             var metadata = new SaveMetadata(_appVersion, modifiedUtc, savedRevision: 0);
             extracted = IndependentProjectImages.Prepare(extracted, DocumentPath, _assetCatalog);
             using var images = new ExportStampImageSource(extracted, DocumentPath, _assetCatalog);
-            var preview = await Task.Run(() =>
-            {
-                var thumbnail = ThumbnailRenderer.RenderPng(extracted, stamps: images);
-                _store.Save(extracted, path, metadata, thumbnail);
-                return thumbnail;
-            }).ConfigureAwait(false);
+            var preview = await Task.Run(() => ThumbnailRenderer.RenderPng(extracted, stamps: images));
+            var result = await SaveAtlasChildAsync(source, extracted, path, preview,
+                new(region.X, region.Y, region.Width, region.Height, extracted.Canvas.Width, extracted.Canvas.Height), "region");
+            extracted = result.Child;
 
             _recent.Touch(
                 path, extracted.Id.Value, extracted.Title, modifiedUtc,
                 preview);
             CloseCanvasWorkflow();
-            StatusDetail = $"Создана независимая карта из региона: {path}. Исходная карта осталась открыта и не изменена.";
+            StatusDetail = $"Создана подкарта из региона: {path}. Обе карты сохранены в атласе; исходная карта осталась открыта.";
+            await RefreshAtlasAsync();
             if (source.Layers.OfType<ObjectLayer>().Any(l => !l.PlacementPaths.IsEmpty || !l.PlacementAreas.IsEmpty))
             {
                 StatusDetail += " Пути и области вошли в новую карту обычными объектами; в исходной они остались редактируемыми.";
@@ -323,7 +327,7 @@ public sealed partial class EditorViewModel
         catch (Exception ex) when (ex is MapProjectSaveException or IOException
             or UnauthorizedAccessException or InvalidDataException or InvalidOperationException)
         {
-            CanvasWorkflowError = "Не удалось создать файл региона. Исходная карта и прежний файл назначения не изменены.";
+            CanvasWorkflowError = "Не удалось завершить сохранение атласа. Исходная карта остаётся открыта. Выберите файл внутри папки атласа и проверьте доступ к диску. Если запись уже началась, она завершится из журнала при следующем открытии.";
             StatusDetail = CanvasWorkflowError;
             _log.Error("REGION_MAP_SAVE_FAILED", ex);
             return false;

@@ -42,6 +42,8 @@ public static partial class MapProjectStore
         layers.OfType<ObjectLayer>().Any(l => l.PlacementAreas.Any(a => a.NeedsRulesSchema));
 
     private static int SchemaFor(MapDocument document) =>
+        document.Atlas is not null
+            ? MapProjectFormat.AtlasSchemaVersion :
         HasNaturalRivers(document.Layers) || document.Checkpoints.Any(c => HasNaturalRivers(c.Snapshot.Layers))
             ? MapProjectFormat.NaturalRiversSchemaVersion :
         document.Layers.OfType<HexLayer>().Any(NeedsTileSetsV24)
@@ -442,6 +444,7 @@ public static partial class MapProjectStore
     public static OpenedProject Open(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        AtlasStore.RecoverForMap(path);
 
         var (manifest, scene, objectStorages, assetManifest, previewPng, tiles, assets, checkpoints) =
             ReadAndValidate(Path.GetFullPath(path));
@@ -481,6 +484,7 @@ public static partial class MapProjectStore
             SchemaVersion = SchemaFor(document),
             AppVersion = metadata.AppVersion,
             DocumentId = document.Id.ToString(),
+            Atlas = document.Atlas,
             Title = document.Title,
             CreatedUtc = FormatTimestamp(document.CreatedUtc),
             ModifiedUtc = FormatTimestamp(metadata.ModifiedUtc),
@@ -2358,7 +2362,7 @@ public static partial class MapProjectStore
                         4,
                         tileEntries))
                     : null,
-                category);
+                category) { Atlas = ReadAtlasV26(manifest) };
         }
         catch (Exception ex) when (ex is ArgumentException or FormatException or InvalidOperationException)
         {

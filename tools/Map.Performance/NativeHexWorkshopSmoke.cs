@@ -129,7 +129,10 @@ public sealed partial class RegionalApplication
         await Settle(); await Settle(); await Settle();
         Capture(_view, "workshop-01c-hover-centre");
         _view.Canvas.HoverForSmoke(null, null);
-        await Settle(); await Settle(); await Settle(); await Settle();
+        // On the shared PC a slow frame clamps the animation's dt. Wait for the visible
+        // condition, bounded to three seconds, instead of assuming four settles are enough.
+        var fadeUntil = DateTime.UtcNow.AddSeconds(3);
+        while (_editor.HexCursorShown is not null && DateTime.UtcNow < fadeUntil) await Settle();
         Check("the hover outline fades out by itself after the pointer leaves", _editor.HexCursorShown is null);
 
         // A placed tile lands and a fill runs as a wave: caught half way, then taken back.

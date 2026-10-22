@@ -429,6 +429,7 @@ public sealed partial class EditorView : UserControl
         // to the layer panel, and the tool rail, the tool panel and the shortcut hint float over it
         // as separate cards. The map gets the whole width; a card covers it only where it stands.
         var canvasHost = (Grid)BuildCanvasHost();
+        var atlasBar = BuildAtlasNavigation(canvasHost);
         rail.HorizontalAlignment = HorizontalAlignment.Left;
         rail.VerticalAlignment = VerticalAlignment.Top;
         rail.Margin = new Thickness(0, Ui.FloatingGap, 0, Ui.FloatingGap);
@@ -450,6 +451,7 @@ public sealed partial class EditorView : UserControl
                 // Docked, not floating: the strip takes its own band and the canvas fills what is
                 // left, so it can never cover the map.
                 quickBar.Docked(Dock.Top),
+                atlasBar.Docked(Dock.Top),
                 statusBar.Docked(Dock.Bottom),
                 sidePanel.Docked(Dock.Right),
                 canvasHost,

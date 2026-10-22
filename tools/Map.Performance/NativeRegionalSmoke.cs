@@ -105,6 +105,7 @@ public sealed partial class RegionalApplication : Application
 
     private async Task Execute()
     {
+        if(Options.Profile=="native-atlas") { await VerifyAtlas(); return; }
         if(Options.Profile=="native-regional-reopen") { await VerifySavedMap(); return; }
         if(Options.Profile=="native-regional-surfaces") { await VerifySurfaceSizes(); return; }
         if(Options.Profile=="native-regional-finish") { await FinishRegion(); return; }

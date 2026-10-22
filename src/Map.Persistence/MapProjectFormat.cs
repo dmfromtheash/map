@@ -86,7 +86,8 @@ public static class MapProjectFormat
     /// </summary>
     public const int NaturalRiversSchemaVersion = 25;
 
-    public const int MaxSupportedSchemaVersion = NaturalRiversSchemaVersion;
+    public const int AtlasSchemaVersion = 26;
+    public const int MaxSupportedSchemaVersion = AtlasSchemaVersion;
 
     /// <summary>
     /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry

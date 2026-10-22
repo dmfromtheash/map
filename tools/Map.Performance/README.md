@@ -589,3 +589,11 @@ dotnet tools/Map.LiveCheck/bin/Release/net10.0-windows/win-x64/Map.LiveCheck.dll
 комплекта, импортирует папку настоящим системным диалогом, снимает вкладку и три режима
 проверки через PrintWindow. Профили, тестовые карты и копии наборов удаляются после просмотра;
 в итоговых артефактах остаются JSON, отчёт и PNG.
+# R25: атлас
+
+`--profile native-atlas --output artifacts/r25/atlas.json`: регион через окно размера/области,
+manifest v1 и v26, гексовая подкарта, преобразования, миниатюра, «Наверх», крошки и проверка.
+Изолированные карты остаются в `atlas-workspace` для живого прохода:
+`Map.LiveCheck --map artifacts/r25/atlas-workspace/parent.mapproj --atlas true --out artifacts/r25/live`.
+Живой проход использует копии карт и manifest, DISPLAY1 и PrintWindow; после проверки удалить
+проверочные карты, профили и временные сборки, оставив JSON/итоговые PNG/отчёт.

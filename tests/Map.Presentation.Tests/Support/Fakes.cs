@@ -136,6 +136,17 @@ public sealed class FakeRecentMaps : IRecentMaps
 /// <summary>In-memory store: saves become dictionary entries, failures are scripted per call.</summary>
 public sealed class FakeProjectStore : IProjectStore
 {
+    public AtlasLinkedResult SaveLinked(AtlasSave parent, AtlasSave child, AtlasTransform transform, string kind)
+    {
+        if (NextSaveFailures.Count > 0) throw NextSaveFailures.Dequeue();
+        var manifest = AtlasStore.ManifestPath(parent.Document, parent.Path);
+        var atlasId = parent.Document.Atlas?.Id ?? Guid.NewGuid();
+        var parentDoc = parent.Document with { Atlas = new(atlasId, Path.GetRelativePath(Path.GetDirectoryName(parent.Path)!, manifest)) };
+        var childDoc = child.Document with { Atlas = new(atlasId, Path.GetRelativePath(Path.GetDirectoryName(child.Path)!, manifest)) };
+        Save(parentDoc, parent.Path, parent.Metadata, parent.Preview);
+        Save(childDoc, child.Path, child.Metadata, child.Preview);
+        return new(parentDoc, childDoc, manifest);
+    }
     public Dictionary<string, (MapDocument Document, SaveMetadata Metadata, byte[] Preview)> Saved { get; } = [];
     public Queue<Exception> NextSaveFailures { get; } = new();
     public Queue<Exception> NextAutosaveFailures { get; } = new();
