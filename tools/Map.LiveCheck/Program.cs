@@ -134,7 +134,7 @@ try
         }
         if (Arg("--object-list-drag") is not null)
         {
-            missing += ObjectListDragCheck.Run(main, outDir, Log, Shot);
+            missing += ObjectListDragCheck.Run(main, outDir, Log, Shot, Arg("--object-list-centre") is not null);
             main.Close();
             return missing == 0 ? 0 : 2;
         }
