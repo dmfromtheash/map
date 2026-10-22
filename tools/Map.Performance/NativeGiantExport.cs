@@ -13,7 +13,8 @@ namespace Map.Performance;
 /// labels along both (R07), a country name and MAP_GIANT_OBJECTS (default 40 000) of the owner's
 /// mountains on the land. Exports with the production engine to MAP_GIANT_OUT (a folder, e.g. the
 /// external disk) in MAP_GIANT_MODES (comma list: png, tiles, mbtiles; default png) at
-/// MAP_GIANT_SCALE (1, 2 or 4; default 1) and reports time, size and peak memory per mode.
+/// MAP_GIANT_SCALE (1, 2 or 4; default 1) or MAP_GIANT_EDGE (exact output side in pixels, e.g. 98304 to
+/// fit the download into a size budget) and reports time, size and peak memory per mode.
 /// MAP_OWNER_ART_LIBRARY = a COPY of %LOCALAPPDATA%\Map\Assets (the owner's mountains).
 /// <code>dotnet tools/Map.Performance/bin/Release/net10.0/win-x64/Map.Performance.dll --profile native-giant-export --output artifacts/giant-export/report.json</code>
 /// </summary>
@@ -51,6 +52,7 @@ internal static class NativeGiantExport
         var library = Environment.GetEnvironmentVariable("MAP_OWNER_ART_LIBRARY") ?? throw new InvalidOperationException("MAP_OWNER_ART_LIBRARY is not set");
         var modes = (Environment.GetEnvironmentVariable("MAP_GIANT_MODES") ?? "png").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         var scale = int.TryParse(Environment.GetEnvironmentVariable("MAP_GIANT_SCALE"), out var s) ? s : 1;
+        var exactEdge = int.TryParse(Environment.GetEnvironmentVariable("MAP_GIANT_EDGE"), out var e) && e > 0 ? e : 0;
         var count = int.TryParse(Environment.GetEnvironmentVariable("MAP_GIANT_OBJECTS"), out var n) ? n : 40_000;
         Directory.CreateDirectory(output);
 
@@ -71,11 +73,11 @@ internal static class NativeGiantExport
                 "mbtiles" => ExportOutputMode.MbTiles,
                 _ => ExportOutputMode.SingleImage,
             };
-            var edge = Size * scale;
+            var edge = exactEdge > 0 ? exactEdge : Size * scale;
             var request = new ExportRequest(ExportImageFormat.Png, ExportAreaMode.WholeCanvas, null, edge, edge, outputMode,
                 TransparentBackground: false, IncludeGrid: false);
             var plan = engine.Plan(document, request);
-            var name = $"giant-{scale}x" + outputMode switch
+            var name = (exactEdge > 0 ? $"giant-{edge}px" : $"giant-{scale}x") + outputMode switch
             {
                 ExportOutputMode.TilePackage => "-tiles",
                 ExportOutputMode.MbTiles => MbTilesWriter.Extension,
