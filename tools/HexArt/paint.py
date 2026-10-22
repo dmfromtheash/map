@@ -71,7 +71,7 @@ ID = {name: i + 1 for i, name in enumerate(NAMES)}
 # How a material is painted: posterise (0 smooth .. 1 hard flat tones), the brush direction of
 # its streaks (0 vertical, 90 horizontal), the streak strength and the shade range it spans.
 STYLE: dict[str, dict] = {
-    "ice": dict(post=0.7, angle=0, streak=0.16, lo=-0.5, hi=0.95, gamma=2.0),
+    "ice": dict(post=0.75, angle=0, streak=0.18, lo=-0.38, hi=0.92, gamma=2.5),
     "snowfield": dict(post=0.55, angle=80, streak=0.1, lo=-0.4, hi=1.0),
     "grass": dict(post=0.55, angle=70, streak=0.1, lo=-0.3, hi=1.0),
     "meadow": dict(post=0.55, angle=70, streak=0.1, lo=-0.3, hi=1.0),
@@ -334,7 +334,7 @@ class Canvas:
         np.maximum.at(self.pen, (yi, xi), (width * taper).astype(np.float32))
 
 
-def paint(cv: Canvas, scale: float, pen: float = 3.0, grain: float = 1.0, crease: float = 0.05, texture: float = 0.5,
+def paint(cv: Canvas, scale: float, pen: float = 3.0, grain: float = 1.0, crease: float = 0.035, texture: float = 0.5,
           shadow_tint=(0.6, 0.68, 0.82), opaque_ground=True) -> np.ndarray:
     """Paints the buffers: flat tones with brushy edges, the pen, the cast shadows and the paper."""
     rng = cv.rng
