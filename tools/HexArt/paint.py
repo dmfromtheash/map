@@ -454,6 +454,8 @@ def paint(cv: Canvas, scale: float, pen: float = 3.0, grain: float = 1.0, crease
         ink = np.clip(wnear / 2 - dist + 0.5, 0, 1)
     else:
         ink = np.zeros(shape, np.float32)
+    cv.ink_alpha = ink.copy()  # the pen as painted here: plan.py traces it for Photoshop
+    cv.ink_width = width
     ink *= 0.94
     colour = colour * (1 - ink[..., None]) + INK * ink[..., None]
 
