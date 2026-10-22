@@ -527,6 +527,8 @@ public sealed record HexLayer : MapLayer
     /// <summary>The fog of war is on: hexes the players have not seen are covered.</summary>
     public bool FogEnabled { get; init; }
 
+    public HexTravelSettings Journey { get; init; } = new();
+
     public int CampaignDay { get; init; }
     public HexParty Party { get; init; } = new();
 
