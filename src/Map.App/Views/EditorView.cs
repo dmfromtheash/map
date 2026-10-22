@@ -6020,6 +6020,8 @@ public sealed partial class EditorView : UserControl
                     new TextBlock { Text = "Композиции" }.Classed("role-panel"),
                     Ui.TextButton("MakeCompositionButton", "Собрать из выделенного",
                         () => _editor.CreateEditableComposition(), "compact"),
+                    Ui.TextButton("SaveSelectionAsAssetButton", "Сохранить выделенное как ассет",
+                        () => _editor.SaveSelectionAsCatalogAsset(), "compact"),
                     Ui.TextButton("PasteCompositionButton", "Вставить композицию",
                         _editor.PasteComposition, "compact"),
                     Ui.AsyncButton("ImportCompositionPackageButton", "Вставить композицию из файла…",
