@@ -11,6 +11,9 @@ public enum SceneObjectKind
     Text = 5,
     Composition = 6,
     Placeholder = 7,
+
+    /// <summary>Scale bar, compass rose, cartouche or live legend (R08).</summary>
+    Decoration = 8,
 }
 
 /// <summary>
@@ -178,6 +181,9 @@ public sealed record SceneObject
 
     /// <summary>Editable text request and appearance; resolved fonts are machine-local derived state.</summary>
     public TextStyle? Text { get; init; }
+
+    /// <summary>Scale bar, compass, cartouche or legend when <see cref="Kind"/> is Decoration (R08).</summary>
+    public DecorationStyle? Decoration { get; init; }
 
     /// <summary>Editable nested object structure when <see cref="Kind"/> is Composition.</summary>
     public EditableComposition? Composition { get; init; }

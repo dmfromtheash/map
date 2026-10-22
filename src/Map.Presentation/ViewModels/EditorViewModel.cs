@@ -49,6 +49,9 @@ public enum EditorTool
 
     /// <summary>The hex constructor's tool: puts ready painted hex tiles on the hex board.</summary>
     Hex,
+
+    /// <summary>«Масштаб и украшения» (R08): a drag measures a distance in map units; the panel sets the scale and adds decorations.</summary>
+    Measure,
 }
 
 /// <summary>
@@ -9204,6 +9207,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             FillGradient = source.FillGradient,
             Text = source.Text,
             Composition = source.Composition,
+            Decoration = source.Decoration,
             PlaceholderReason = source.PlaceholderReason,
             OpaquePayload = source.OpaquePayload,
             ObjectOpacity = source.ObjectOpacity,
@@ -9247,6 +9251,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             FillGradient = source.FillGradient,
             Text = source.Text,
             Composition = source.Composition,
+            Decoration = source.Decoration,
             PlaceholderReason = source.PlaceholderReason,
             OpaquePayload = source.OpaquePayload,
             ObjectOpacity = source.ObjectOpacity,

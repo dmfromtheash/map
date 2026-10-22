@@ -250,6 +250,7 @@ public sealed partial class EditorView : UserControl
     private int _gradientStop;
     private Control _textSection = null!;
     private Control _compositionSection = null!;
+    private Control _decorationSection = null!;
     private RetainedSlot _kindSlot = null!;
     private Control _selectionRoot = null!;
     private Control _selectIdleRoot = null!;
@@ -1821,6 +1822,7 @@ public sealed partial class EditorView : UserControl
         _toolPanels[EditorTool.Notes] = BuildNotesTab();
         _toolPanels[EditorTool.River] = BuildRiverPanel();
         _toolPanels[EditorTool.Road] = BuildRoadPanel();
+        _toolPanels[EditorTool.Measure] = BuildMeasurePanel();
         if (_isHexWorkshop) _toolPanels[EditorTool.Hex] = BuildHexPanel();
     }
 
@@ -3259,6 +3261,7 @@ public sealed partial class EditorView : UserControl
         _shapeSection = BuildShapeSection();
         _primitiveSection = BuildPrimitiveSection();
         _textSection = BuildTextSection();
+        _decorationSection = BuildDecorationSection();
 
         _compositionSection = Ui.Section("Композиция", new StackPanel
         {
@@ -9097,6 +9100,7 @@ public sealed partial class EditorView : UserControl
         SceneObjectKind.Stamp or SceneObjectKind.Placeholder => MapIcons.LineAssets,
         SceneObjectKind.Line => MapIcons.LineStroke,
         SceneObjectKind.Text => MapIcons.LineText,
+        SceneObjectKind.Decoration => MapIcons.HexRuler,
         _ => MapIcons.LineShape,
     };
 
@@ -9261,6 +9265,7 @@ public sealed partial class EditorView : UserControl
             ObjectKindSection.Primitive => _primitiveSection,
             ObjectKindSection.Text => _textSection,
             ObjectKindSection.Composition => _compositionSection,
+            ObjectKindSection.Decoration => _decorationSection,
             _ => null,
         };
 
@@ -10321,6 +10326,7 @@ public sealed partial class EditorView : UserControl
         SceneObjectKind.Line => MapIcons.Line,
         SceneObjectKind.Shape => MapIcons.Shape,
         SceneObjectKind.Text => MapIcons.Text,
+        SceneObjectKind.Decoration => MapIcons.Star,
         SceneObjectKind.Composition => MapIcons.ObjectComposition,
         _ => MapIcons.ObjectPlaceholder,
     };

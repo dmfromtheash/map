@@ -38,6 +38,50 @@ internal sealed class CanvasDto
     [JsonPropertyName("height")] public int Height { get; set; }
     [JsonPropertyName("unit")] public string Unit { get; set; } = "";
     [JsonPropertyName("background")] public string Background { get; set; } = "";
+
+    /// <summary>Real-world size of one pixel (R08, schema v17); absent = pixels only.</summary>
+    [JsonPropertyName("scale")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MapScaleDto? Scale { get; set; }
+}
+
+internal sealed class MapScaleDto
+{
+    [JsonPropertyName("distancePerPixel")] public double DistancePerPixel { get; set; }
+    [JsonPropertyName("unit")] public string Unit { get; set; } = "";
+}
+
+/// <summary>Cartographic decoration (R08, schema v17): scale bar, compass, cartouche, legend.</summary>
+internal sealed class DecorationStyleDto
+{
+    [JsonPropertyName("kind")] public string Kind { get; set; } = "";
+    [JsonPropertyName("variant")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public int Variant { get; set; }
+    [JsonPropertyName("title")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public string? Title { get; set; }
+    [JsonPropertyName("subtitle")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public string? Subtitle { get; set; }
+    [JsonPropertyName("inkColor")] public string InkColor { get; set; } = "";
+    [JsonPropertyName("paperColor")] public string PaperColor { get; set; } = "";
+    [JsonPropertyName("scale")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MapScaleDto? Scale { get; set; }
+    [JsonPropertyName("entries")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<LegendEntryDto>? Entries { get; set; }
+}
+
+internal sealed class LegendEntryDto
+{
+    [JsonPropertyName("kind")] public string Kind { get; set; } = "";
+    [JsonPropertyName("label")] public string Label { get; set; } = "";
+    [JsonPropertyName("color")] public string Color { get; set; } = "";
+    [JsonPropertyName("asset")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? AssetSha256 { get; set; }
 }
 
 /// <summary>scene.json — layer metadata and v4 object-chunk descriptors.</summary>
@@ -429,6 +473,9 @@ internal sealed class SceneObjectDto
     [JsonPropertyName("composition")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public EditableCompositionDto? Composition { get; set; }
+    [JsonPropertyName("decoration")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public DecorationStyleDto? Decoration { get; set; }
     [JsonPropertyName("placeholderReason")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? PlaceholderReason { get; set; }

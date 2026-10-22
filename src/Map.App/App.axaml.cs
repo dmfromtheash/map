@@ -55,6 +55,14 @@ public partial class App : Application
                     mainWindow.Opened += (_, _) => _ = mainWindow.OpenPathAsync(mapPath);
                     break;
                 }
+
+                // An exported picture opens straight in the PNG viewer (e.g. the giant map download).
+                if (argument.EndsWith(".png", StringComparison.OrdinalIgnoreCase) && File.Exists(argument))
+                {
+                    var pngPath = Path.GetFullPath(argument);
+                    mainWindow.Opened += (_, _) => Views.PngMapWindow.ShowFor(mainWindow, pngPath);
+                    break;
+                }
             }
             // Sound on every button, switch, slider, list and menu - one switch silences it all.
             UiSoundHooks.Install();

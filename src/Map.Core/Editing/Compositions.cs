@@ -145,6 +145,7 @@ public static class SceneObjectClone
             FillGradient = source.FillGradient,
             Text = source.Text,
             Composition = source.Composition,
+            Decoration = source.Decoration,
             PlaceholderReason = reason,
             OpaquePayload = kind == SceneObjectKind.Placeholder ? source.OpaquePayload : null,
             ObjectOpacity = source.ObjectOpacity,

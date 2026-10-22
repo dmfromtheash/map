@@ -99,7 +99,7 @@ public sealed class HexBoardShapeCommand : IEditCommand
         var board = after[0].Board;
         var width = Math.Clamp((int)Math.Ceiling(board.PixelWidth), CanvasDimensionPolicy.Minimum, CanvasDimensionPolicy.Maximum);
         var height = Math.Clamp((int)Math.Ceiling(board.PixelHeight), CanvasDimensionPolicy.Minimum, CanvasDimensionPolicy.Maximum);
-        var canvas = new CanvasDefinition(width, height, document.Canvas.Unit, document.Canvas.Background);
+        var canvas = document.Canvas.Resized(width, height);
         return new HexBoardShapeCommand(name, document.Canvas, canvas, before, after);
     }
 

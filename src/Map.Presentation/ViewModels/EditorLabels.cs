@@ -26,6 +26,7 @@ public static class EditorLabels
         EditorTool.River => "Река",
         EditorTool.Road => "Дорога",
         EditorTool.Hex => "Гексы",
+        EditorTool.Measure => "Масштаб и украшения",
         _ => "Инструмент",
     };
 
@@ -44,6 +45,7 @@ public static class EditorLabels
         EditorTool.River => "Нажмите «Новая река» и ставьте узлы от истока к устью. Клик по руслу — приток, Enter — свободный конец.",
         EditorTool.Road => "Нажмите «Новая дорога» и ставьте узлы. Клик по дороге — ветвь через общий узел, Enter — свободный конец.",
         EditorTool.Hex => "Выберите гекс в палитре и щёлкайте или протягивайте по полю. Заливка красит область, ластик снимает верх гекса.",
+        EditorTool.Measure => "Протяните по карте, чтобы измерить расстояние. Здесь же — масштаб карты, линейка, роза ветров, картуш и легенда.",
         _ => "",
     };
 
@@ -120,6 +122,7 @@ public static class EditorLabels
         SceneObjectKind.Text => "Текст",
         SceneObjectKind.Composition => "Композиция",
         SceneObjectKind.Placeholder => "Заменитель",
+        SceneObjectKind.Decoration => "Украшение",
         _ => "Объект",
     };
 

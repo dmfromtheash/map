@@ -17,7 +17,7 @@ public sealed class HexImportCommand : IEditCommand
         var height = Math.Max(before.Canvas.Height, Math.Ceiling(imported.Board.PixelHeight));
         if (width > CanvasDimensionPolicy.Maximum || height > CanvasDimensionPolicy.Maximum)
             throw new InvalidOperationException("Поле импорта превышает допустимый размер холста. Уменьшите размер гекса; карта не изменена.");
-        var canvas = new CanvasDefinition((int)width, (int)height, before.Canvas.Unit, before.Canvas.Background);
+        var canvas = before.Canvas.Resized((int)width, (int)height);
         _after = new MapDocument(before.Id, before.Title, before.CreatedUtc, canvas, layers,
             before.Assets, before.Notes, before.Checkpoints, before.StampForeground, before.Category);
         MeasuredWorkingBytes = EditCost.BaseBytes + (long)imported.Board.CellCount * 48;

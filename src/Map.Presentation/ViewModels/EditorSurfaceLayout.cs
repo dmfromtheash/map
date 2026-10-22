@@ -32,6 +32,7 @@ public enum ObjectKindSection
     Primitive,
     Text,
     Composition,
+    Decoration,
 }
 
 /// <summary>A property of the shared "Объект" block, in the order the user meets it.</summary>
@@ -89,6 +90,7 @@ public static class EditorSurfaceLayout
             new EditorRailEntry("ShapeToolButton", EditorTool.Shape, EditorRailEntryKind.Tool),
             new EditorRailEntry("TextToolButton", EditorTool.Text, EditorRailEntryKind.Tool),
             new EditorRailEntry("NotesToolButton", EditorTool.Notes, EditorRailEntryKind.Tool),
+            new EditorRailEntry("MeasureToolButton", EditorTool.Measure, EditorRailEntryKind.Tool),
         ],
         [
             new EditorRailEntry("BrushToolButton", EditorTool.Brush, EditorRailEntryKind.Tool),
@@ -157,6 +159,7 @@ public static class EditorSurfaceLayout
         SceneObjectKind.Rectangle or SceneObjectKind.Ellipse => ObjectKindSection.Primitive,
         SceneObjectKind.Text => ObjectKindSection.Text,
         SceneObjectKind.Composition => ObjectKindSection.Composition,
+        SceneObjectKind.Decoration => ObjectKindSection.Decoration,
         _ => ObjectKindSection.None,
     };
 }

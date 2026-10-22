@@ -194,6 +194,7 @@ public static class GridSnapService
         Text = source.Text,
         ObjectOpacity = source.ObjectOpacity,
         Composition = source.Composition,
+        Decoration = source.Decoration,
         PlaceholderReason = source.PlaceholderReason,
         OpaquePayload = source.OpaquePayload,
     };

@@ -286,6 +286,10 @@ public static class MapIcons
     public static readonly SolidGlyph SolidText = new(
         "M21.2 2.4 C14.2 3.2 9.4 7.6 7.6 14 L6.3 18.6 L7.9 19.1 L9.3 15.4 C13.8 15 17.8 12 18.9 8.1 L15.8 8.6 " +
         "L19.5 5.9 C20.3 4.8 20.8 3.7 21.2 2.4 Z", "M3 21.6 H13", 1.8);
+    /// <summary>«Масштаб и украшения»: a ruler laid on the diagonal, its notches cut out.</summary>
+    public static readonly SolidGlyph SolidMeasure = new(
+        "F0 M2.4 16.4 L16.4 2.4 L21.6 7.6 L7.6 21.6 Z M6.6 13.4 L8.6 15.4 L9.6 14.4 L7.6 12.4 Z " +
+        "M9.6 10.4 L12.1 12.9 L13.1 11.9 L10.6 9.4 Z M12.6 7.4 L14.6 9.4 L15.6 8.4 L13.6 6.4 Z");
     public static readonly SolidGlyph SolidNotes = new(
         "F0 M7.2 2.6 H18.2 A2.6 2.6 0 0 1 18.2 7.8 H17 V18.8 A2.8 2.8 0 0 1 14.2 21.6 H5.4 A2.6 2.6 0 0 1 5.4 16.4 H6.6 V3.2 " +
         "C6.6 2.9 6.9 2.6 7.2 2.6 Z M9.2 7.6 H14.6 V9.2 H9.2 Z M9.2 11 H14.6 V12.6 H9.2 Z M9.2 14.4 H13 V16 H9.2 Z");
@@ -348,6 +352,7 @@ public static class MapIcons
         Map.Presentation.ViewModels.EditorTool.River => SolidRiver,
         Map.Presentation.ViewModels.EditorTool.Road => SolidRoad,
         Map.Presentation.ViewModels.EditorTool.Hex => SolidHex,
+        Map.Presentation.ViewModels.EditorTool.Measure => SolidMeasure,
         _ => SolidSelect,
     };
 
@@ -428,6 +433,7 @@ public static class MapIcons
         Map.Presentation.ViewModels.EditorTool.River => LineRiver,
         Map.Presentation.ViewModels.EditorTool.Road => LineRoad,
         Map.Presentation.ViewModels.EditorTool.Hex => Hex,
+        Map.Presentation.ViewModels.EditorTool.Measure => HexRuler,
         _ => LineSelect,
     };
 
@@ -471,6 +477,7 @@ public static class MapIcons
         Map.Presentation.ViewModels.EditorTool.River => River,
         Map.Presentation.ViewModels.EditorTool.Road => Road,
         Map.Presentation.ViewModels.EditorTool.Hex => Hex,
+        Map.Presentation.ViewModels.EditorTool.Measure => HexRuler,
         _ => Select,
     };
 

@@ -3584,6 +3584,13 @@ public static class SceneRenderer
             return;
         }
 
+        if (sceneObject.Kind == SceneObjectKind.Decoration && sceneObject.Decoration is { } decoration)
+        {
+            DecorationRenderer.Draw(canvas, decoration, rect, objectAlpha, options);
+            canvas.Restore();
+            return;
+        }
+
         if (sceneObject.Kind == SceneObjectKind.Placeholder)
         {
             DrawPlaceholder(canvas, rect, objectAlpha);
@@ -5731,7 +5738,7 @@ public static class SceneRenderer
         bounds.Left - padding, bounds.Top - padding,
         bounds.Right + padding, bounds.Bottom + padding);
 
-    private static SKColor WithScaledAlpha(this SKColor color, byte layerAlpha) =>
+    internal static SKColor WithScaledAlpha(this SKColor color, byte layerAlpha) =>
         layerAlpha == 255 ? color : color.WithAlpha((byte)(color.Alpha * layerAlpha / 255));
 
     private static (byte R, byte G, byte B, byte A) ParseChannels(string color)

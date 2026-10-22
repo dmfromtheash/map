@@ -238,6 +238,7 @@ public static class MultiSelectionGeometry
             FillGradient = source.FillGradient,
             Text = source.Text,
             Composition = source.Composition,
+            Decoration = source.Decoration,
             PlaceholderReason = source.PlaceholderReason,
             OpaquePayload = source.OpaquePayload,
             ObjectOpacity = source.ObjectOpacity,

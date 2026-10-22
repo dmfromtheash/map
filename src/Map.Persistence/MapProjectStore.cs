@@ -25,7 +25,13 @@ public static partial class MapProjectStore
     private static bool HasTextPaths(IEnumerable<MapLayer> layers) =>
         layers.OfType<ObjectLayer>().Any(l => l.Objects.Any(o => o.Text?.Path is not null));
 
+    private static bool HasDecorations(CanvasDefinition canvas, IEnumerable<MapLayer> layers) =>
+        canvas.Scale is not null
+        || layers.OfType<ObjectLayer>().Any(l => l.Objects.Any(o => o.Decoration is not null));
+
     private static int SchemaFor(MapDocument document) =>
+        HasDecorations(document.Canvas, document.Layers) || document.Checkpoints.Any(c => HasDecorations(c.Snapshot.Canvas, c.Snapshot.Layers))
+            ? MapProjectFormat.DecorationsSchemaVersion :
         HasTextPaths(document.Layers) || document.Checkpoints.Any(c => HasTextPaths(c.Snapshot.Layers))
             ? MapProjectFormat.TextPathsSchemaVersion :
         document.Layers.OfType<ObjectLayer>().Any(l => l.Roads.Any(r => r.NeedsCrossingsSchema))
@@ -452,6 +458,7 @@ public static partial class MapProjectStore
                 Height = document.Canvas.Height,
                 Unit = document.Canvas.Unit,
                 Background = document.Canvas.Background,
+                Scale = ToScaleDto(document.Canvas.Scale),
             },
             Category = document.Category.IsStandard ? null : document.Category.Value,
             SceneSha256 = Sha256Hex(sceneBytes),
@@ -528,6 +535,7 @@ public static partial class MapProjectStore
                     Height = snapshot.Canvas.Height,
                     Unit = snapshot.Canvas.Unit,
                     Background = snapshot.Canvas.Background,
+                    Scale = ToScaleDto(snapshot.Canvas.Scale),
                 },
                 SceneSha256 = Sha256Hex(sceneBytes),
                 AssetManifestSha256 = Sha256Hex(assetManifestBytes),
@@ -2053,6 +2061,7 @@ public static partial class MapProjectStore
         } : null,
         Text = sceneObject.Text is { } text ? ToTextDto(text) : null,
         Composition = sceneObject.Composition is { } composition ? ToCompositionDto(composition) : null,
+        Decoration = sceneObject.Decoration is { } decoration ? ToDecorationDto(decoration) : null,
         PlaceholderReason = sceneObject.PlaceholderReason,
         OpaquePayload = sceneObject.OpaquePayload is { } opaque
             ? new OpaqueSceneObjectPayloadDto
@@ -2089,6 +2098,57 @@ public static partial class MapProjectStore
         SnapEnabled = grid.SnapEnabled,
         IncludeInExport = grid.IncludeInExport,
     };
+
+    private static MapScaleDto? ToScaleDto(MapScale? scale) => scale is null ? null : new()
+    {
+        DistancePerPixel = scale.DistancePerPixel,
+        Unit = scale.Unit,
+    };
+
+    private static MapScale? ToScale(MapScaleDto? dto, string what) => dto is null ? null : new MapScale(
+        RequireFinite(dto.DistancePerPixel, what + " distance", min: double.Epsilon, max: 1e9),
+        RequireString(dto.Unit, what + " unit"));
+
+    private static DecorationStyleDto ToDecorationDto(DecorationStyle style) => new()
+    {
+        Kind = style.Kind.ToString(),
+        Variant = style.Variant,
+        Title = style.Title.Length == 0 ? null : style.Title,
+        Subtitle = style.Subtitle.Length == 0 ? null : style.Subtitle,
+        InkColor = style.InkColor,
+        PaperColor = style.PaperColor,
+        Scale = ToScaleDto(style.Scale),
+        Entries = style.Entries.Count == 0 ? null : style.Entries.Select(entry => new LegendEntryDto
+        {
+            Kind = entry.Kind.ToString(),
+            Label = entry.Label,
+            Color = entry.Color,
+            AssetSha256 = entry.AssetSha256,
+        }).ToList(),
+    };
+
+    private static DecorationStyle ToDecoration(DecorationStyleDto dto)
+    {
+        var entries = dto.Entries ?? [];
+        if (entries.Count > DecorationStyle.MaxLegendEntries)
+            throw new MapProjectCorruptedException("A legend holds more lines than this version allows.");
+        return new DecorationStyle
+        {
+            Kind = ParseDefined<DecorationKind>(dto.Kind, "decoration kind"),
+            Variant = dto.Variant is >= 0 and < 8 ? dto.Variant
+                : throw new MapProjectCorruptedException("A decoration style number is out of range."),
+            Title = dto.Title ?? "",
+            Subtitle = dto.Subtitle ?? "",
+            InkColor = RequireAppearanceColor(dto.InkColor, "decoration ink color"),
+            PaperColor = RequireAppearanceColor(dto.PaperColor, "decoration paper color"),
+            Scale = ToScale(dto.Scale, "decoration scale"),
+            Entries = entries.Select(entry => new LegendEntry(
+                ParseDefined<LegendEntryKind>(entry.Kind, "legend line kind"),
+                RequireString(entry.Label, "legend line label"),
+                RequireAppearanceColor(entry.Color, "legend line color"),
+                RequireOptionalSha256(entry.AssetSha256, "legend asset hash"))).ToArray(),
+        };
+    }
 
     private static TextStyleDto ToTextDto(TextStyle text) => new()
     {
@@ -2242,7 +2302,10 @@ public static partial class MapProjectStore
                     manifest.Canvas.Width,
                     manifest.Canvas.Height,
                     RequireString(manifest.Canvas.Unit, "canvas unit"),
-                    RequireString(manifest.Canvas.Background, "canvas background")),
+                    RequireString(manifest.Canvas.Background, "canvas background"))
+                {
+                    Scale = ToScale(manifest.Canvas.Scale, "canvas scale"),
+                },
                 layers,
                 assetManifest.Assets.Select(asset => ToAsset(asset, assetEntries)).ToList(),
                 scene.Notes.Select(ToNote).ToList(),
@@ -2451,6 +2514,7 @@ public static partial class MapProjectStore
         Composition = dto.Composition is { } composition
             ? ToComposition(composition, allowUnknownObjectKinds)
             : null,
+        Decoration = dto.Decoration is { } decoration ? ToDecoration(decoration) : null,
         PlaceholderReason = allowUnknownObjectKinds && !IsDefinedKind(dto.Kind)
             ? "Неизвестный тип объекта сохранён как заполнитель."
             : dto.PlaceholderReason,

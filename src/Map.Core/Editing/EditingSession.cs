@@ -220,6 +220,13 @@ public sealed class EditingSession
             candidate = followed;
         }
         Mark("labels");
+        var decorated = MapDecorations.Refresh(candidate);
+        if (!ReferenceEquals(decorated, candidate))
+        {
+            command = new DecorationRefreshCommand(command, candidate, decorated);
+            candidate = decorated;
+        }
+        Mark("decorations");
         Document = candidate;
         Revision++;
         var afterState = new StateNode(_currentState);

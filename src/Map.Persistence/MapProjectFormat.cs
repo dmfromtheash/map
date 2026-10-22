@@ -38,7 +38,13 @@ public static class MapProjectFormat
     /// </summary>
     public const int TextPathsSchemaVersion = 16;
 
-    public const int MaxSupportedSchemaVersion = TextPathsSchemaVersion;
+    /// <summary>
+    /// The newest schema this build writes and reads: cartographic decorations - scale bar, compass
+    /// rose, cartouche, live legend - and the map scale on the canvas (R08). Maps without them stay older.
+    /// </summary>
+    public const int DecorationsSchemaVersion = 17;
+
+    public const int MaxSupportedSchemaVersion = DecorationsSchemaVersion;
 
     /// <summary>
     /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry

@@ -830,6 +830,33 @@ public sealed partial class MapCanvasControl : Control
                     canvas.DrawCircle((float)node.X, (float)node.Y, radius, pen);
                 }
             }
+            if (editor.ActiveTool == EditorTool.Measure && editor.MeasureLine is { } measure)
+            {
+                // R08 «Измерить»: the measured line, its two ends and the distance next to the end.
+                var scale = (float)Math.Max(.001, viewport.Scale);
+                using var halo = new SKPaint { Color = new SKColor(20, 16, 10, 200), IsAntialias = true,
+                    Style = SKPaintStyle.Stroke, StrokeWidth = 5 / scale, StrokeCap = SKStrokeCap.Round };
+                using var pen = new SKPaint { Color = new SKColor(232, 196, 120), IsAntialias = true,
+                    Style = SKPaintStyle.Stroke, StrokeWidth = 2 / scale, StrokeCap = SKStrokeCap.Round,
+                    PathEffect = SKPathEffect.CreateDash([10 / scale, 6 / scale], 0) };
+                using var dot = new SKPaint { Color = new SKColor(232, 196, 120), IsAntialias = true };
+                canvas.DrawLine((float)measure.X1, (float)measure.Y1, (float)measure.X2, (float)measure.Y2, halo);
+                canvas.DrawLine((float)measure.X1, (float)measure.Y1, (float)measure.X2, (float)measure.Y2, pen);
+                canvas.DrawCircle((float)measure.X1, (float)measure.Y1, 4 / scale, dot);
+                canvas.DrawCircle((float)measure.X2, (float)measure.Y2, 4 / scale, dot);
+                if (editor.MeasureText is { } label)
+                {
+                    using var font = new SKFont(SKTypeface.Default, 14 / scale);
+                    using var back = new SKPaint { Color = new SKColor(20, 16, 10, 220), IsAntialias = true };
+                    using var ink = new SKPaint { Color = new SKColor(240, 226, 196), IsAntialias = true };
+                    var text = label.Replace("Расстояние: ", "");
+                    var x = (float)measure.X2 + 10 / scale;
+                    var y = (float)measure.Y2 - 10 / scale;
+                    var width = font.MeasureText(text);
+                    canvas.DrawRoundRect(new SKRect(x - 5 / scale, y - 15 / scale, x + width + 5 / scale, y + 5 / scale), 4 / scale, 4 / scale, back);
+                    canvas.DrawText(text, x, y, font, ink);
+                }
+            }
             if (editor.LandSelectionFrame is { } landFrame)
             {
                 var scale = (float)Math.Max(.001, viewport.Scale);

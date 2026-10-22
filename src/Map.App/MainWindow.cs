@@ -682,6 +682,9 @@ public sealed class MainWindow : Window
             case EditorShortcutSettings.Commands.Hex:
                 editor.ActiveTool = EditorTool.Hex;
                 break;
+            case EditorShortcutSettings.Commands.Measure when !editor.IsHexWorkshop:
+                editor.ActiveTool = EditorTool.Measure;
+                break;
             // Escape, Enter and Delete are handled by EditorKeyRouting before this switch runs.
             case EditorShortcutSettings.Commands.NudgeLeft:
                 editor.NudgeSelectedObject(-1, 0);

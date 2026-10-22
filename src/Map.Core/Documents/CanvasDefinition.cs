@@ -40,4 +40,11 @@ public sealed record CanvasDefinition
 
     /// <summary>Page colour as "#AARRGGBB". Stored verbatim; compared exactly.</summary>
     public string Background { get; }
+
+    /// <summary>Real-world distance of one pixel (R08, schema v17); null = the map measures in pixels.</summary>
+    public MapScale? Scale { get; init; }
+
+    /// <summary>The same page with another size; the scale and colour carry over.</summary>
+    public CanvasDefinition Resized(int width, int height) =>
+        new(width, height, Unit, Background) { Scale = Scale };
 }

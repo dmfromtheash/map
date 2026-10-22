@@ -16,6 +16,7 @@ public enum CanvasPointerButton
 public enum CanvasInputGesture
 {
     None,
+    Measure,
     Pan,
     RegionSelect,
     Stroke,
@@ -162,6 +163,13 @@ public sealed class CanvasInputRouter
                 && _editor.BeginRegionSelection(worldX, worldY);
             _gesture = capture ? CanvasInputGesture.RegionSelect : CanvasInputGesture.None;
             return new CanvasInputResult { Handled = true, CapturePointer = capture, Invalidate = true };
+        }
+
+        if (_editor.ActiveTool == EditorTool.Measure)
+        {
+            _editor.BeginMeasure(worldX, worldY);
+            _gesture = CanvasInputGesture.Measure;
+            return new CanvasInputResult { Handled = true, CapturePointer = true, Invalidate = true };
         }
 
         // An armed placement is a pending gesture: finishing it always wins over starting a new one.
@@ -383,6 +391,9 @@ public sealed class CanvasInputRouter
 
         switch (_gesture)
         {
+            case CanvasInputGesture.Measure:
+                _editor.UpdateMeasure(worldX, worldY);
+                return new CanvasInputResult { Handled = true, Invalidate = true };
             case CanvasInputGesture.PlacementAreaNode:
                 _editor.MoveEditableAreaNode(worldX, worldY);
                 return new CanvasInputResult { Handled = true, Invalidate = true };
@@ -463,6 +474,10 @@ public sealed class CanvasInputRouter
         // so two flags left set by a mid-gesture tool switch produced two history entries at once.
         switch (gesture)
         {
+            case CanvasInputGesture.Measure:
+                var measureEnd = _editor.Session.Viewport.ScreenToWorld(screenX, screenY);
+                _editor.UpdateMeasure(measureEnd.X, measureEnd.Y);
+                return new CanvasInputResult { Handled = true, Invalidate = true, ReleasePointer = true };
             case CanvasInputGesture.PlacementAreaNode:
                 var areaEnd = _editor.Session.Viewport.ScreenToWorld(screenX, screenY);
                 _editor.MoveEditableAreaNode(areaEnd.X, areaEnd.Y);
