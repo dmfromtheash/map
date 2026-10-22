@@ -29,10 +29,15 @@ public static partial class MapProjectStore
         canvas.Scale is not null
         || layers.OfType<ObjectLayer>().Any(l => l.Objects.Any(o => o.Decoration is not null));
 
+    private static bool HasPaintedRivers(IEnumerable<MapLayer> layers) =>
+        layers.OfType<ObjectLayer>().Any(l => l.Rivers.Any(r => r.Style.PaintStrokes > 0));
+
     private static bool HasAreaRules(IEnumerable<MapLayer> layers) =>
         layers.OfType<ObjectLayer>().Any(l => l.PlacementAreas.Any(a => a.NeedsRulesSchema));
 
     private static int SchemaFor(MapDocument document) =>
+        HasPaintedRivers(document.Layers) || document.Checkpoints.Any(c => HasPaintedRivers(c.Snapshot.Layers))
+            ? MapProjectFormat.PaintedRiversSchemaVersion :
         document.Layers.OfType<HexLayer>().Any(NeedsGameplayV20)
         || document.Checkpoints.Any(c => c.Snapshot.Layers.OfType<HexLayer>().Any(NeedsGameplayV20))
             ? MapProjectFormat.GameplaySchemaVersion :

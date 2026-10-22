@@ -428,6 +428,16 @@ public static class RiverRenderer
         }
         foreach (var part in parts)
         {
+            if (fastPreview || part.River.Style.PaintStrokes <= 0) continue;
+            canvas.Save();
+            foreach (var other in all)
+                if (!ReferenceEquals(other.River, part.River))
+                    canvas.ClipPath(other.Body, SKClipOperation.Difference, antialias: true);
+            DrawPaintedStrokes(canvas, part.Geometry, part.River.Style, part.Body, scale);
+            canvas.Restore();
+        }
+        foreach (var part in parts)
+        {
             if (part.River.Style.HighlightOpacity <= 0 || style.BankReliefWidth > 0) continue;
             // Flow strokes belong to the channel that flows: where its end lies inside another
             // body of water they would cross that water, so they stop at its edge.
@@ -537,8 +547,116 @@ public static class RiverRenderer
         canvas.Restore();
     }
 
+    /// <summary>
+    /// The painted water of the owner's mountains: a soft deep tone down the channel - the form -
+    /// then tapered strokes of a darker and a lighter tone of the water along the flow, each its own
+    /// length and offset, so the river reads as brushed paint and never as a glossy ribbon.
+    /// Strokes are cut by channel distance (like the flow highlights), so tiles and the view agree.
+    /// </summary>
+    private static void DrawPaintedStrokes(SKCanvas canvas, RiverGeometrySet set, RiverStyle style, SKPath body, double scale)
+    {
+        var strength = (float)Math.Clamp(style.PaintStrokes, 0, 1);
+        var water = SceneRenderer.ParseColor(style.WaterColor);
+        // Tones of the same pigment: the shadow leans to the ink, the light to the paper.
+        var ink = SceneRenderer.ParseColor(style.BankColor);
+        SKColor Mix(SKColor a, SKColor b, float t) => new(
+            (byte)(a.Red + (b.Red - a.Red) * t), (byte)(a.Green + (b.Green - a.Green) * t), (byte)(a.Blue + (b.Blue - a.Blue) * t));
+        var deep = Mix(water, ink, .45f);
+        var mid = Mix(water, ink, .22f);
+        var light = Mix(water, new SKColor(236, 242, 246), .62f);
+        var bright = new SKColor(246, 250, 252);
+        canvas.Save();
+        canvas.ClipPath(body, SKClipOperation.Intersect, antialias: true);
+        foreach (var geometry in set.Channels.Values)
+        {
+            var samples = geometry.Samples;
+            if (samples.Length < 2) continue;
+            var half = samples.Average(s => s.HalfWidth);
+            if (half * scale < 2) continue;
+            var seed = geometry.Channel.Id.GetHashCode();
+            // Form: shadow down the south-east side of the channel (light from the north-west, as on
+            // the mountains) and a soft deep middle - wet washes, not a flat tone.
+            if (!geometry.Closed)
+            {
+                using var shade = OffsetPath(samples, 0.55, 1);
+                using var shadow = new SKPaint
+                {
+                    Color = deep.WithAlpha((byte)(120 * strength)), IsAntialias = true, Style = SKPaintStyle.Stroke,
+                    StrokeWidth = (float)(half * 0.75), StrokeCap = SKStrokeCap.Round, StrokeJoin = SKStrokeJoin.Round,
+                    MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, (float)Math.Max(0.5, half * 0.22)),
+                };
+                canvas.DrawPath(shade, shadow);
+                using var centre = OffsetPath(samples, -0.05, 1);
+                using var form = new SKPaint
+                {
+                    Color = deep.WithAlpha((byte)(60 * strength)), IsAntialias = true, Style = SKPaintStyle.Stroke,
+                    StrokeWidth = (float)(half * 0.8), StrokeCap = SKStrokeCap.Round, StrokeJoin = SKStrokeJoin.Round,
+                    MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, (float)Math.Max(0.5, half * 0.3)),
+                };
+                canvas.DrawPath(centre, form);
+            }
+            // Brush strokes along the flow: (offset across, tone, alpha, width, dash, gap, phase). Long
+            // light strokes on the lit side, shorter dark ones in the shadow, a few bright flecks.
+            (double Offset, SKColor Color, byte Alpha, double Width, double Dash, double Gap, double Phase)[] strokes =
+            [
+                (0.62, deep, 120, 0.16, 3.4, 2.6, 0.0),
+                (0.36, mid, 110, 0.14, 4.8, 3.3, 1.7),
+                (-0.46, light, 150, 0.15, 7.5, 3.6, 0.6),
+                (-0.20, light, 135, 0.11, 5.2, 4.8, 3.0),
+                (0.05, light, 110, 0.08, 3.0, 5.6, 1.1),
+                (-0.66, bright, 170, 0.06, 1.4, 6.2, 2.4),
+            ];
+            foreach (var (index, stroke) in strokes.Select((s, i) => (i, s)))
+            {
+                using var path = DashedOffsetPath(samples, stroke.Offset, half * stroke.Dash, half * stroke.Gap, half * stroke.Phase, seed ^ (0x3779 * (index + 1)), lightRelative: true);
+                using var paint = new SKPaint
+                {
+                    Color = stroke.Color.WithAlpha((byte)(stroke.Alpha * strength)), IsAntialias = true, Style = SKPaintStyle.Stroke,
+                    StrokeWidth = (float)Math.Max(0.6 / scale, half * stroke.Width), StrokeCap = SKStrokeCap.Round, StrokeJoin = SKStrokeJoin.Round,
+                    // A dry brush: the stroke edge breaks up a little instead of being a clean tube.
+                    PathEffect = SKPathEffect.CreateDiscrete((float)Math.Max(1.5, half * 0.14), (float)Math.Max(0.2, half * 0.04), (uint)(seed + index)),
+                };
+                canvas.DrawPath(path, paint);
+            }
+        }
+        canvas.Restore();
+
+        // The contour as on the mountains: ink heavier on the shadow side, a thin line on the lit one.
+        using var heavy = new SKPaint
+        {
+            Color = ink.WithAlpha((byte)(200 * strength)), IsAntialias = true, Style = SKPaintStyle.Stroke,
+            StrokeWidth = (float)Math.Max(0.8 / scale, style.BankWidth * 2.2), StrokeJoin = SKStrokeJoin.Round, StrokeCap = SKStrokeCap.Round,
+        };
+        foreach (var geometry in set.Channels.Values)
+        {
+            if (geometry.Closed || geometry.Samples.Length < 2) continue;
+            using var shadowBank = OffsetPath(geometry.Samples, 1.0, 1);
+            canvas.Save();
+            canvas.ClipPath(body, SKClipOperation.Intersect, antialias: true);
+            canvas.DrawPath(shadowBank, heavy);
+            canvas.Restore();
+        }
+    }
+
+    /// <summary>A line across the channel at a fraction of the half width; positive = the side away from the light.</summary>
+    private static SKPath OffsetPath(RiverSample[] samples, double offsetFraction, double scaleAcross)
+    {
+        var path = new SKPath();
+        for (var i = 0; i < samples.Length; i++)
+        {
+            var s = samples[i];
+            var offset = s.HalfWidth * offsetFraction * scaleAcross * ShadowSide(s);
+            var point = new SKPoint((float)(s.X - s.TangentY * offset), (float)(s.Y + s.TangentX * offset));
+            if (i == 0) path.MoveTo(point); else path.LineTo(point);
+        }
+        return path;
+    }
+
+    /// <summary>+1 where the sample's left normal faces away from a north-west light (the shadow side), else -1.</summary>
+    private static double ShadowSide(RiverSample s) => -s.TangentY + s.TangentX >= 0 ? 1 : -1;
+
     private static SKPath DashedOffsetPath(
-        RiverSample[] samples, double offsetFraction, double dash, double gap, double phase, int seed)
+        RiverSample[] samples, double offsetFraction, double dash, double gap, double phase, int seed, bool lightRelative = false)
     {
         var path = new SKPath();
         var period = dash + gap;
@@ -553,7 +671,7 @@ public static class RiverRenderer
             var on = position < dash * lengthWobble;
             var nx = -s.TangentY; var ny = s.TangentX;
             var drift = 1 + 0.35 * RiverGeometry.Noise(seed ^ 0x2545, s.Distance / Math.Max(1e-6, period * 1.7));
-            var offset = s.HalfWidth * offsetFraction * drift;
+            var offset = s.HalfWidth * offsetFraction * drift * (lightRelative ? ShadowSide(s) : 1);
             var point = new SKPoint((float)(s.X + nx * offset), (float)(s.Y + ny * offset));
             if (on)
             {

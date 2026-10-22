@@ -80,6 +80,31 @@ public sealed record RiverStyle
         EdgeRoughness = 0.42, TextureId = null,
     };
 
+    /// <summary>
+    /// The owner's painted look (2026-10-22): the water of his hand-painted mountains - their own
+    /// ice wash as the material, ink contour, pigment pooled at the banks, a deep tone down the
+    /// channel and visible brush strokes along the flow instead of glossy highlights.
+    /// </summary>
+    public static RiverStyle Painted() => new()
+    {
+        WaterColor = "#FF6F95A8",
+        BankColor = "#FF1F2A36", BankWidth = 1.8,
+        BankShadowOpacity = 0.15, BankShadowBlur = 2.5,
+        BankReliefWidth = 0,
+        ShallowColor = "#6A3B586D", ShallowWidth = 7,
+        HighlightColor = "#FFE7EEF2", HighlightOpacity = 0,
+        EdgeRoughness = 0.4,
+        TextureId = MapFillTextures.OwnerIceWash, TextureOpacity = 0.5,
+        PaintStrokes = 1,
+    };
+
+    /// <summary>
+    /// Strength 0..1 of painted brush strokes inside the water (R-rivers, schema v22); 0 = none, as in
+    /// every older map. Drawn as a deep tone down the channel and tapered light and mid strokes along it.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public double PaintStrokes { get; init; }
+
     /// <summary>Thin light flow strokes inside the water; 0 disables them.</summary>
     public string HighlightColor { get; init; } = "#FFDDEFF4";
     public double HighlightOpacity { get; init; } = 0.55;

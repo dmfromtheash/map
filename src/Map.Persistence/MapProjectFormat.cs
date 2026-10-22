@@ -63,7 +63,14 @@ public static class MapProjectFormat
     /// </summary>
     public const int GameplaySchemaVersion = 20;
 
-    public const int MaxSupportedSchemaVersion = GameplaySchemaVersion;
+    /// <summary>
+    /// The newest schema this build writes and reads: painted brush strokes inside river water
+    /// (`PaintStrokes` of the river style, the owner's painted look). Rivers without them stay older.
+    /// Number 21 is reserved for R18.
+    /// </summary>
+    public const int PaintedRiversSchemaVersion = 22;
+
+    public const int MaxSupportedSchemaVersion = PaintedRiversSchemaVersion;
 
     /// <summary>
     /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry
