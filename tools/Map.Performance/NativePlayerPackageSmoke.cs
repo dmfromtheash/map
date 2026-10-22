@@ -92,7 +92,9 @@ public sealed partial class RegionalApplication
         using var gmImage = SKBitmap.Decode(destination.File("png"));
         var layer = document.Layers.OfType<HexLayer>().Single();
         var (x, y) = layer.Board.Layout.Center(layer.Board.Layout.FromOffset(new(7, 5)));
-        Check("R02 hidden PNG pixel is opaque fog and differs from GM", playerImage.GetPixel((int)x, (int)y) == new SKColor(0x22, 0x20, 0x26)
+        // The fog is the owner's opaque blue-grey «Облака» mist (2026-10-22).
+        var fog = playerImage.GetPixel((int)x, (int)y);
+        Check("R02 hidden PNG pixel is opaque fog and differs from GM", fog.Alpha == 255 && fog.Blue >= fog.Red && fog.Blue is > 90 and < 220
             && playerImage.GetPixel((int)x, (int)y) != gmImage.GetPixel((int)x, (int)y));
         Check("R02 exporting preserves document and undo history", ReferenceEquals(document, _editor.Session.Document) && _editor.Session.UndoDepth == 0);
         Click(export, "CloseExportButton"); await Settle();

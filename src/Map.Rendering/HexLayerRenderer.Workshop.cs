@@ -921,10 +921,50 @@ public static partial class HexLayerRenderer
     // ------------------------------------------------------------------ fog of war
 
     /// <summary>The fog over the hexes the players have not seen: see-through for the game master, opaque for the players.</summary>
-    private static void DrawFog(SKCanvas canvas, HexLayer layer, WorldBounds view, HexChunkCache? cache, bool player)
+    private static void DrawFog(SKCanvas canvas, HexLayer layer, WorldBounds view, HexChunkCache? cache, bool player, double scale = 1)
     {
         if (!layer.FogEnabled) return;
         var board = layer.Board;
+        if (FogLook > 0)
+        {
+            // A painted look: the hidden hexes in view as one shape with a hand-made edge. Hexes
+            // revealed or hidden lately melt out of or into it, each with its own share of the look.
+            var melting = new List<(HexCoord Hex, double Alpha)>();
+            var moment = HexChunkCache.Now;
+            foreach (var key in board.ChunksIn(view))
+            {
+                var chunk = board.Chunk(key);
+                var fades = cache?.FogFades(layer.Id, board, key, chunk, moment);
+                if (fades is null) continue;
+                foreach (var fade in fades)
+                {
+                    var eased = HexChunkCache.Ease(fade.T);
+                    melting.Add((fade.Hex, fade.Revealed ? 1 - eased : eased));
+                }
+            }
+            // The settled fog of the whole board is one shape, merged once per reveal state (the
+            // board is immutable: a reveal makes a new one) and kept with the board.
+            var settled = PaintedFogShapes.GetValue(board, b => new PaintedFogShape(b));
+            using var sampling = new SKPaint();
+            canvas.Save();
+            if (melting.Count > 0)
+            {
+                // A hex that is fading is cut out of the settled picture and painted with its share.
+                using var fading = new SKPath();
+                foreach (var (hex, _) in melting) { using var one = FogHex(board.Layout, hex); fading.AddPath(one); }
+                canvas.ClipPath(fading, SKClipOperation.Difference, antialias: true);
+            }
+            canvas.DrawImage(settled.Image(player), settled.Bounds, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None), sampling);
+            canvas.Restore();
+            foreach (var (hex, alpha) in melting)
+            {
+                if (alpha <= 0.01) continue;
+                using var one = FogHex(board.Layout, hex);
+                using var billow = Billow(one, (float)board.Layout.Size);
+                PaintFog(canvas, billow, player, scale, board.Layout, alpha);
+            }
+            return;
+        }
         using var paint = new SKPaint
         {
             IsAntialias = true,

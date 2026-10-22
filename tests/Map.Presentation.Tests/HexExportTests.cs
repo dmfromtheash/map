@@ -104,7 +104,22 @@ public sealed class HexExportTests
         Assert.True(await editor.StartVttExportAsync());
         using var players = System.Text.Json.JsonDocument.Parse(File.ReadAllBytes(path));
         var hidden = Decode(players.RootElement.GetProperty("image").GetBytesFromBase64());
-        Assert.True(Darkness(hidden) > Darkness(gm) + 0.2, $"{Darkness(hidden):0.00} vs {Darkness(gm):0.00}");
+        // The fog is the owner's «Облака» mist (2026-10-22), not a dark fill: the players' picture
+        // differs from the master's over the hidden land.
+        Assert.True(Differs(hidden, gm) > 0.2, $"share of changed pixels {Differs(hidden, gm):0.00}");
+    }
+
+    private static double Differs(SKBitmap a, SKBitmap b)
+    {
+        var changed = 0; var total = 0;
+        for (var y = 0; y < Math.Min(a.Height, b.Height); y += 3)
+            for (var x = 0; x < Math.Min(a.Width, b.Width); x += 3)
+            {
+                var p = a.GetPixel(x, y); var q = b.GetPixel(x, y);
+                total++;
+                if (Math.Abs(p.Red - q.Red) + Math.Abs(p.Green - q.Green) + Math.Abs(p.Blue - q.Blue) > 40) changed++;
+            }
+        return total == 0 ? 0 : (double)changed / total;
     }
 
     private static SKBitmap Decode(byte[] png) => SKBitmap.Decode(png);

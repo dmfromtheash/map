@@ -69,7 +69,9 @@ public sealed class PlayerPackageExportTests : IDisposable
         using var gmImage = SKBitmap.Decode(gmPng);
         var layer = doc.Layers.OfType<HexLayer>().First();
         var (x, y) = layer.Board.Layout.Center(H(layer, 5));
-        Assert.Equal(new SKColor(0x22, 0x20, 0x26), playerImage.GetPixel((int)x, (int)y));
+        // Opaque «Облака» mist (owner 2026-10-22): blue-grey, fully covering the hidden hex.
+        var fog = playerImage.GetPixel((int)x, (int)y);
+        Assert.True(fog.Alpha == 255 && fog.Blue >= fog.Red && fog.Blue is > 90 and < 220, $"player fog {fog}");
         Assert.NotEqual(gmImage.GetPixel((int)x, (int)y), playerImage.GetPixel((int)x, (int)y));
         var gmVtt = await UniversalVttExporter.ExportAsync(engine, doc, gm, Path.Combine(_root, "gm.dd2vtt"), null, 40);
         Assert.Equal(2, gmVtt.Walls);

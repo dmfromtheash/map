@@ -791,7 +791,7 @@ public static partial class HexLayerRenderer
         }
 
         DrawNotes(canvas, layer, view, viewScale, hexPixels, player, overlay?.Focus);
-        DrawFog(canvas, layer, view, cache, player);
+        DrawFog(canvas, layer, view, cache, player, Math.Max(viewScale, 1e-6));
         DrawParty(canvas, layer, Math.Max(viewScale, 1e-6));
 
         if (overlay is not null && overlay.LayerId == layer.Id)

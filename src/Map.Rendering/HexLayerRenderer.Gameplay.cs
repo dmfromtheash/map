@@ -8,9 +8,14 @@ public static partial class HexLayerRenderer
     private static void DrawParty(SKCanvas canvas, HexLayer layer, double scale)
     {
         var layout = layer.Board.Layout;
-        using var dash = SKPathEffect.CreateDash([(float)(layout.Size * .18), (float)(layout.Size * .12)], 0);
-        using var trail = new SKPaint { IsAntialias = true, Color = SKColor.Parse("#F0BE66"),
-            Style = SKPaintStyle.Stroke, StrokeWidth = (float)Math.Max(1 / scale, layout.Size * .035), PathEffect = dash };
+        // With a painted fog the party is drawn in the same pen: ink, paper and a dotted trail.
+        var inked = FogLook > 0;
+        var trailColor = inked ? SKColor.Parse("#1F2A36") : SKColor.Parse("#F0BE66");
+        using var dash = inked
+            ? SKPathEffect.CreateDash([(float)(layout.Size * .09), (float)(layout.Size * .11)], 0)
+            : SKPathEffect.CreateDash([(float)(layout.Size * .18), (float)(layout.Size * .12)], 0);
+        using var trail = new SKPaint { IsAntialias = true, Color = trailColor, StrokeCap = inked ? SKStrokeCap.Round : SKStrokeCap.Butt,
+            Style = SKPaintStyle.Stroke, StrokeWidth = (float)Math.Max(1 / scale, layout.Size * (inked ? .028 : .035)), PathEffect = dash };
         using var route = new SKPath();
         for (var i = 0; i < layer.Party.History.Count; i++)
         {
@@ -20,7 +25,7 @@ public static partial class HexLayerRenderer
         canvas.DrawPath(route, trail);
         if (layer.Party.Position is not { } h) return;
         var (x, y) = layout.Center(h);
-        using var fill = new SKPaint { IsAntialias = true, Color = SKColor.Parse("#F0BE66") };
+        using var fill = new SKPaint { IsAntialias = true, Color = inked ? SKColor.Parse("#F2E8D2") : SKColor.Parse("#F0BE66") };
         using var rim = new SKPaint { IsAntialias = true, Color = SKColor.Parse("#35291F"), Style = SKPaintStyle.Stroke,
             StrokeWidth = (float)(layout.Size * .045) };
         var radius = (float)(layout.Size * .25);

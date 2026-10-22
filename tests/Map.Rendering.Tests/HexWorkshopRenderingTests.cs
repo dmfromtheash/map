@@ -124,9 +124,11 @@ public sealed class HexWorkshopRenderingTests
                 return total / 25;
             }
 
-            Assert.True(Brightness(gm) > Brightness(player) + 40, $"{Brightness(gm)} / {Brightness(player)}");
+            // The fog is the owner's «Облака» (2026-10-22): the players see a blue-grey mist over the
+            // hex, the game master the land through it.
+            Assert.True(Math.Abs(Brightness(gm) - Brightness(player)) > 30, $"{Brightness(gm)} / {Brightness(player)}");
             var hidden = At(player, layer.Board.Layout, fogged, scale, 0, layer.Board.Layout.Size * 0.5);
-            Assert.True(Math.Abs(hidden.Red - 0x22) < 6 && Math.Abs(hidden.Blue - 0x26) < 6, $"player fog {hidden}");
+            Assert.True(hidden.Blue >= hidden.Red && hidden.Blue > 90 && hidden.Blue < 220, $"player fog {hidden}");
 
             // Kept chunk pictures show the same world as direct drawing.
             var differing = 0;
