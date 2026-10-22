@@ -71,7 +71,7 @@ public static partial class HexJsonExporter
 
                 if (!cell.PointsOfInterest.IsEmpty)
                     item["pointsOfInterest"] = new JsonArray([.. cell.PointsOfInterest.Select(p => (JsonNode)new JsonObject
-                    { ["type"] = p.Type, ["name"] = p.Name, ["playerVisible"] = p.PlayerVisible, ["variant"] = p.Variant })]);
+                    { ["type"] = p.Type, ["name"] = p.Name, ["playerVisible"] = p.PlayerVisible, ["variant"] = p.Variant, ["rumor"] = p.Rumor, ["approximateLabel"] = p.ApproximateLabel })]);
                 if (cell.Region != 0) item["region"] = cell.Region;
                 if (cell.Revealed) item["revealed"] = true;
                 cells.Add(item);
@@ -117,6 +117,9 @@ public static partial class HexJsonExporter
                 if (note.GmText.Length > 0) item["gm"] = note.GmText;
                 if (note.PlayerText.Length > 0) item["players"] = note.PlayerText;
                 if (note.ChildMap is not null) item["childMap"] = note.ChildMap;
+                item["revealCondition"] = note.RevealCondition.ToString();
+                item["manuallyRevealed"] = note.ManuallyRevealed; item["revealDay"] = note.RevealDay;
+                item["rumor"] = note.Rumor; item["approximateLabel"] = note.ApproximateLabel;
                 keys.Add(item);
             }
 
@@ -125,11 +128,19 @@ public static partial class HexJsonExporter
                 ["name"] = layer.Name,
                 ["level"] = layer.Level,
                 ["fog"] = layer.FogEnabled,
+                ["campaignDay"] = layer.CampaignDay,
+                ["party"] = new JsonObject
+                {
+                    ["position"] = layer.Party.Position is { } h ? Position(h) : null,
+                    ["radius"] = layer.Party.SightRadius,
+                    ["history"] = new JsonArray([.. layer.Party.History.Select(h => (JsonNode)Position(h))]),
+                    ["visited"] = new JsonArray([.. layer.Party.Visited.OrderBy(h => h.Q).ThenBy(h => h.R).Select(h => (JsonNode)Position(h))]),
+                },
                 ["travel"] = new JsonObject
                 {
                     ["perHex"] = layer.Travel.DistancePerHex, ["unit"] = layer.Travel.Unit, ["perDay"] = layer.Travel.DistancePerDay,
                 },
-                ["regions"] = new JsonArray([.. layer.Regions.Select(r => (JsonNode)new JsonObject { ["id"] = r.Id, ["name"] = r.Name, ["color"] = r.Color, ["parentRegion"] = r.ParentRegion })]),
+                ["regions"] = new JsonArray([.. layer.Regions.Select(r => (JsonNode)new JsonObject { ["id"] = r.Id, ["name"] = r.Name, ["color"] = r.Color, ["parentRegion"] = r.ParentRegion, ["rumor"] = r.Rumor, ["approximateLabel"] = r.ApproximateLabel })]),
                 ["cells"] = cells,
                 ["paths"] = paths,
                 ["key"] = keys,

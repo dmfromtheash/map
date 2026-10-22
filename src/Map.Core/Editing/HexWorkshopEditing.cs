@@ -193,6 +193,12 @@ public static class HexBoardOps
         {
             Board = board,
             Notes = notes.ToImmutable(),
+            Party = layer.Party with
+            {
+                Position = layer.Party.Position is { } position && Move(position) is { } movedPosition && board.Contains(movedPosition) ? movedPosition : null,
+                History = layer.Party.History.Select(Move).Where(h => h.HasValue && board.Contains(h.Value)).Select(h => h!.Value).ToImmutableList(),
+                Visited = layer.Party.Visited.Select(Move).Where(h => h.HasValue && board.Contains(h.Value)).Select(h => h!.Value).ToImmutableHashSet(),
+            },
             Paths = HexPaths.Remap(layer.Paths, layout, hex => Move(hex) is { } moved && board.Contains(moved) ? moved : null, fillGaps),
         };
     }

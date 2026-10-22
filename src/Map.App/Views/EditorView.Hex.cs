@@ -220,6 +220,7 @@ public sealed partial class EditorView
             (nameof(HexToolMode.Region), "Регионы", MapIcons.HexRegion),
             (nameof(HexToolMode.Path), "Пути", MapIcons.ModePath),
             (nameof(HexToolMode.Fog), "Туман", MapIcons.HexFog),
+            (nameof(HexToolMode.Party), "Партия", MapIcons.HexPlayer),
             (nameof(HexToolMode.Key), "Ключи", MapIcons.HexKey),
             (nameof(HexToolMode.Measure), "Линейка", MapIcons.HexRuler),
         ], key => _editor.HexMode = Enum.Parse<HexToolMode>(key));
@@ -236,6 +237,7 @@ public sealed partial class EditorView
             HexToolMode.Region => "Протягивание добавляет гексы в выбранный регион; границы рисуются сами.",
             HexToolMode.Path => "Протяните путь по гексам. Дорога через реку даёт мост.",
             HexToolMode.Fog => "Протягивание открывает гексы игрокам или снова скрывает. Мастер видит сквозь туман.",
+            HexToolMode.Party => "Щелчок перемещает партию. Маркер можно перетаскивать; каждый шаг раскрывает обзор.",
             HexToolMode.Key => "Щелчок по гексу открывает его ключ.",
             HexToolMode.Measure => "Протяните от гекса к гексу: путь в гексах, милях и днях.",
             _ => "Рамка выделяет гексы, Shift — добавить. Ctrl+C / X / V, Delete, [ ] — поворот вставки, M — отражение.",

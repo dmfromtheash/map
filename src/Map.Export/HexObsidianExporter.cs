@@ -80,6 +80,8 @@ public static class HexObsidianExporter
                         region.AppendLine("Вложенный регион: " + Link(RegionStem(layer, child.Id), child.Name)).AppendLine();
                     foreach (var hex in members) region.AppendLine("- " + HexLink(layer, hex));
                     if (members.Length == 0) region.AppendLine("Нет гексов с содержимым.");
+                    if (layer.Region(id) is { Rumor.Length: > 0 } knowledge)
+                        region.AppendLine().AppendLine("Слух: " + knowledge.Rumor);
                     Save(temporary, RegionStem(layer, id), region);
                     regionCount++;
                     index.AppendLine(CultureInfo.InvariantCulture, $"### {Link(RegionStem(layer, id), name)} ({members.Length})").AppendLine();
@@ -147,7 +149,8 @@ public static class HexObsidianExporter
             text.AppendLine("## Точки интереса").AppendLine();
             foreach (var point in cell.PointsOfInterest)
                 text.AppendLine("- " + Inline(point.Name.Length == 0 ? TileName(point.Type) : point.Name)
-                    + " · " + Inline(TileName(point.Type)) + (players ? "" : point.PlayerVisible ? " · Видна игрокам" : " · Только ведущему"));
+                    + " · " + Inline(TileName(point.Type)) + (players ? "" : point.PlayerVisible ? " · Видна игрокам" : " · Только ведущему")
+                    + (point.Rumor.Length > 0 ? " · Слух: " + point.Rumor : ""));
             text.AppendLine();
         }
         if (!players && !string.IsNullOrWhiteSpace(note?.GmText))

@@ -622,13 +622,15 @@ public sealed partial class EditorViewModel
         }
 
         foreach (var region in layer.Regions)
-            text.AppendLine("- Регион: " + HexRegionHierarchy.Label(layer.Regions, region));
+            text.AppendLine("- Регион: " + HexRegionHierarchy.Label(layer.Regions, region)
+                + (region.Rumor.Length > 0 ? " · Слух: " + region.Rumor : ""));
         foreach (var (hex, cell) in layer.Board.Cells.Where(p => !p.Value.PointsOfInterest.IsEmpty))
         {
             text.AppendLine().AppendLine("## Точки интереса · " + HexLayerRenderer.NumberOf(layer.Board, layer.Board.Layout.ToOffset(hex)));
             foreach (var point in cell.PointsOfInterest)
                 text.AppendLine("- " + point.Name + " · " + (HexStarterTiles.Find(point.Type)?.Name ?? point.Type)
-                    + (playersOnly ? "" : point.PlayerVisible ? " · Видна игрокам" : " · Только ведущему"));
+                    + (playersOnly ? "" : point.PlayerVisible ? " · Видна игрокам" : " · Только ведущему")
+                    + (point.Rumor.Length > 0 ? " · Слух: " + point.Rumor : ""));
         }
         return text.ToString();
     }

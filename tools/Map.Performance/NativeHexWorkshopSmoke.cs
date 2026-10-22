@@ -256,6 +256,7 @@ public sealed partial class RegionalApplication
             .All(l => l.Paths.Count(p => p.BlocksSight && p.BlocksMove && p.BlocksLight) == 1));
 
         await VerifyHexStructureR16();
+        await VerifyHexGameplayR17();
 
         // The world generator through its panel buttons, step by step, on the surface.
         var depthBefore = _editor.Session.UndoDepth;

@@ -418,8 +418,8 @@ public sealed partial class EditorViewModel
         if (_hexPartyDragging && ActiveHexLayer is { } partyLayer)
         {
             var h = partyLayer.Board.Layout.HexAt(worldX, worldY);
-            if (partyLayer.Party.Position is { } last && partyLayer.Board.Contains(h))
-                foreach (var step in HexCoord.Line(last, h).Skip(1)) MoveHexParty(step);
+            if (partyLayer.Party.Position is { } partyLast && partyLayer.Board.Contains(h))
+                foreach (var step in HexCoord.Line(partyLast, h).Skip(1)) MoveHexParty(step);
             return;
         }
         switch (_hexMode)

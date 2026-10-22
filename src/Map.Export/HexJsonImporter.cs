@@ -107,7 +107,8 @@ public static partial class HexJsonExporter
                 if (item["pointsOfInterest"] is JsonArray points)
                     cell = cell.WithPointsOfInterest(points.Select(p => new HexPoi(
                         p!["type"]!.GetValue<string>(), p["name"]?.GetValue<string>() ?? "",
-                        p["playerVisible"]?.GetValue<bool>() ?? true, p["variant"]?.GetValue<int>() ?? 0)));
+                        p["playerVisible"]?.GetValue<bool>() ?? true, p["variant"]?.GetValue<int>() ?? 0)
+                        { Rumor = p["rumor"]?.GetValue<string>() ?? "", ApproximateLabel = p["approximateLabel"]?.GetValue<string>() ?? "" }));
                 cells.Add(new(hex, cell));
             }
 
@@ -147,7 +148,8 @@ public static partial class HexJsonExporter
             var regions = ImmutableList.CreateBuilder<HexRegion>();
             foreach (var item in source["regions"]?.AsArray() ?? [])
             {
-                regions.Add(new HexRegion(item!["id"]!.GetValue<int>(), item["name"]?.GetValue<string>() ?? "", item["color"]!.GetValue<string>()) { ParentRegion = item["parentRegion"]?.GetValue<int>() ?? 0 });
+                regions.Add(new HexRegion(item!["id"]!.GetValue<int>(), item["name"]?.GetValue<string>() ?? "", item["color"]!.GetValue<string>()) { ParentRegion = item["parentRegion"]?.GetValue<int>() ?? 0,
+                    Rumor = item["rumor"]?.GetValue<string>() ?? "", ApproximateLabel = item["approximateLabel"]?.GetValue<string>() ?? "" });
             }
 
             if (regions.Any(r => !HexRegionHierarchy.CanParent(regions, r.Id, r.ParentRegion)))
@@ -158,12 +160,33 @@ public static partial class HexJsonExporter
                 if (At(item?["at"]) is not { } hex) { skippedNotes++; continue; }
                 notes[hex] = new HexNote(item!["title"]?.GetValue<string>() ?? "",
                     Enum.TryParse<HexNoteCategory>(item["category"]?.GetValue<string>(), out var category) ? category : HexNoteCategory.Other,
-                    item["gm"]?.GetValue<string>() ?? "", item["players"]?.GetValue<string>() ?? "", item["childMap"]?.GetValue<string>());
+                    item["gm"]?.GetValue<string>() ?? "", item["players"]?.GetValue<string>() ?? "", item["childMap"]?.GetValue<string>())
+                {
+                    RevealCondition = item["revealCondition"] is null ? RevealCondition.Always
+                        : Enum.Parse<RevealCondition>(item["revealCondition"]!.GetValue<string>()),
+                    ManuallyRevealed = item["manuallyRevealed"]?.GetValue<bool>() ?? false,
+                    RevealDay = item["revealDay"]?.GetValue<int>() ?? 0,
+                    Rumor = item["rumor"]?.GetValue<string>() ?? "", ApproximateLabel = item["approximateLabel"]?.GetValue<string>() ?? "",
+                };
             }
 
+            var campaignDay = source["campaignDay"]?.GetValue<int>() ?? 0;
+            var radius = source["party"]?["radius"]?.GetValue<int>() ?? 1;
+            if (campaignDay < 0 || radius < 0 || radius > HexGameplay.MaxSightRadius
+                || notes.Values.Any(n => !Enum.IsDefined(n.RevealCondition) || n.RevealDay < 0))
+                throw new ArgumentException("Некорректные данные раскрытия или партии.");
+            HexCoord PartyAt(JsonNode? n) => At(n) ?? throw new ArgumentException("Партия за пределами поля.");
             var imported = target with
             {
                 Board = HexBoard.FromCells(board.Layout, board.Columns, board.Rows, cells),
+                CampaignDay = campaignDay,
+                Party = new HexParty
+                {
+                    Position = source["party"]?["position"] is { } position ? PartyAt(position) : null,
+                    SightRadius = radius,
+                    History = (source["party"]?["history"]?.AsArray() ?? []).Select(PartyAt).ToImmutableList(),
+                    Visited = (source["party"]?["visited"]?.AsArray() ?? []).Select(PartyAt).ToImmutableHashSet(),
+                },
                 Paths = paths.ToImmutable(),
                 Regions = regions.ToImmutable(),
                 Notes = notes.ToImmutable(),

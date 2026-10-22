@@ -6,8 +6,8 @@ namespace Map.Persistence;
 
 public static partial class MapProjectStore
 {
-    private static bool NeedsGameplayV20(HexLayer l) => l.CampaignDay != 0 || l.Party != new HexParty()
-        && (l.Party.Position is not null || l.Party.SightRadius != 1 || l.Party.History.Count != 0 || l.Party.Visited.Count != 0)
+    private static bool NeedsGameplayV20(HexLayer l) => l.CampaignDay != 0
+        || l.Party.Position is not null || l.Party.SightRadius != 1 || l.Party.History.Count != 0 || l.Party.Visited.Count != 0
         || l.Notes.Values.Any(n => n.RevealCondition != RevealCondition.Always || n.ManuallyRevealed || n.RevealDay != 0
             || n.Rumor.Length != 0 || n.ApproximateLabel.Length != 0)
         || l.Regions.Any(r => r.Rumor.Length != 0 || r.ApproximateLabel.Length != 0)

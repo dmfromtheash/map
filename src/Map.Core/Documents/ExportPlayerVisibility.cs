@@ -9,7 +9,8 @@ public static class ExportPlayerVisibility
         layer.Board.Contains(hex) && (!layer.FogEnabled || layer.Board[hex]?.Revealed == true);
 
     public static bool NoteVisible(HexLayer layer, HexCoord hex, HexNote note) =>
-        (!string.IsNullOrWhiteSpace(note.PlayerText) || !string.IsNullOrWhiteSpace(note.Rumor))
+        (!string.IsNullOrWhiteSpace(note.PlayerText) || !string.IsNullOrWhiteSpace(note.Rumor)
+            || !string.IsNullOrWhiteSpace(note.ApproximateLabel))
         && HexVisible(layer, hex) && HexGameplay.IsRevealed(layer, hex, note);
 
     public static HexLayer Sanitize(HexLayer layer)
@@ -22,7 +23,7 @@ public static class ExportPlayerVisibility
             .Select(p => new KeyValuePair<HexCoord, HexCell?>(p.Key,
                 p.Value.WithPointsOfInterest(p.Value.PointsOfInterest.Where(point => point.PlayerVisible).Select(point => point with
                 { Name = HexGameplay.PlayerLabel(point.Name, point.ApproximateLabel, point.Rumor, "Неизвестное место"),
-                    ApproximateLabel = "" })))));
+                    ApproximateLabel = HexGameplay.PlayerLabel(point.Name, point.ApproximateLabel, point.Rumor, "Неизвестное место") })))));
         var regions = cells.Cells.Select(p => p.Value.Region).Where(id => id != 0).ToHashSet();
         foreach (var id in regions.ToArray())
         {
@@ -36,10 +37,11 @@ public static class ExportPlayerVisibility
                 .ToImmutableDictionary(p => p.Key, p => p.Value with { GmText = "", ChildMap = null,
                     Title = HexGameplay.PlayerLabel(p.Value.Title, p.Value.ApproximateLabel, p.Value.Rumor, "Слух"),
                     PlayerText = string.IsNullOrWhiteSpace(p.Value.Rumor) ? p.Value.PlayerText : p.Value.Rumor,
-                    Rumor = "", ApproximateLabel = "", RevealCondition = RevealCondition.Always,
+                    Rumor = "", RevealCondition = RevealCondition.Always,
                     ManuallyRevealed = false, RevealDay = 0 }),
             Regions = [.. layer.Regions.Where(r => !layer.FogEnabled || regions.Contains(r.Id)).Select(r => r with
-            { Name = HexGameplay.PlayerLabel(r.Name, r.ApproximateLabel, r.Rumor, "Неизвестный край"), ApproximateLabel = "" })],
+            { Name = HexGameplay.PlayerLabel(r.Name, r.ApproximateLabel, r.Rumor, "Неизвестный край"),
+                ApproximateLabel = HexGameplay.PlayerLabel(r.Name, r.ApproximateLabel, r.Rumor, "Неизвестный край") })],
             Party = new HexParty { Position = layer.Party.Position is { } position && HexVisible(layer, position) ? position : null,
                 History = [] },
             Paths = layer.FogEnabled ? [.. layer.Paths.SelectMany(path => VisibleRuns(layer, path))] : layer.Paths,

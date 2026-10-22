@@ -26,6 +26,7 @@ public sealed class HexPlayerWindow : Window
 {
     private readonly EditorViewModel _editor;
     private readonly HexPlayerCanvas _canvas;
+    private readonly StackPanel _knowledge = new() { Name = "HexPlayerKnowledgeList", Spacing = 10, Margin = new Thickness(14) };
 
     public HexPlayerWindow(EditorViewModel editor)
     {
@@ -54,11 +55,53 @@ public sealed class HexPlayerWindow : Window
                     Padding = new Thickness(12, 8),
                     Child = new StackPanel { Orientation = Avalonia.Layout.Orientation.Horizontal, Spacing = 10, Children = { fit, follow, hint } },
                 }.Classed("surface-raised").Docked(Dock.Top),
+                new ScrollViewer { Name = "HexPlayerKnowledgePanel", Width = 300, Content = _knowledge }.Docked(Dock.Right),
                 _canvas,
             },
         });
         Opened += (_, _) => Dispatcher.UIThread.Post(_canvas.Fit, DispatcherPriority.Loaded);
-        Closed += (_, _) => _canvas.Detach();
+        editor.SceneChanged += RefreshKnowledge;
+        ((INotifyPropertyChanged)editor).PropertyChanged += KnowledgeChanged;
+        RefreshKnowledge(null, EventArgs.Empty);
+        Closed += (_, _) =>
+        {
+            editor.SceneChanged -= RefreshKnowledge;
+            ((INotifyPropertyChanged)editor).PropertyChanged -= KnowledgeChanged;
+            _canvas.Detach();
+        };
+    }
+    private void KnowledgeChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(EditorViewModel.CanUndo) or nameof(EditorViewModel.HexLevel)) RefreshKnowledge(sender, EventArgs.Empty);
+    }
+
+    private void RefreshKnowledge(object? sender, EventArgs e)
+    {
+        _knowledge.Children.Clear();
+        void Add(string text, bool title = false) => _knowledge.Children.Add(new TextBlock
+        { Text = text, TextWrapping = TextWrapping.Wrap, FontWeight = title ? FontWeight.SemiBold : FontWeight.Normal });
+        Add("Карта знаний", true);
+        Add("Известные места и слухи. Сведения могут оказаться неточными.");
+        foreach (var source in _editor.Session.Document.Layers.OfType<HexLayer>().Where(l => l.Visible && l.Level == _editor.HexLevelShown))
+        {
+            var layer = ExportPlayerVisibility.Sanitize(source);
+            foreach (var r in layer.Regions)
+            {
+                Add(r.Name, true);
+                if (r.Rumor.Length > 0) Add("Слух: " + r.Rumor);
+            }
+            foreach (var (hex, note) in layer.Notes.OrderBy(p => layer.Board.Layout.ToOffset(p.Key).Row).ThenBy(p => layer.Board.Layout.ToOffset(p.Key).Column))
+            {
+                Add(HexLayerRenderer.NumberOf(layer.Board, layer.Board.Layout.ToOffset(hex)) + " · " + note.Title, true);
+                Add(note.PlayerText);
+            }
+            foreach (var (_, cell) in layer.Board.Cells)
+                foreach (var p in cell.PointsOfInterest.Where(p => p.Name.Length > 0 || p.Rumor.Length > 0))
+                {
+                    Add(p.Name, true);
+                    if (p.Rumor.Length > 0) Add("Слух: " + p.Rumor);
+                }
+        }
     }
 }
 
@@ -164,6 +207,7 @@ internal sealed class HexPlayerCanvas : Control
             ViewScale = _viewport.Scale * scaling,
             HexChunks = _cache,
             HexPlayerView = true,
+            HexPresentation = HexPresentation.PlayerKnowledge,
             HexLevel = shown,
             VisibleWorld = new WorldBounds(left, top, right, bottom),
             RequestRefinedFrame = () => _dirty = true,
