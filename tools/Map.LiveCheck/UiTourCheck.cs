@@ -120,11 +120,16 @@ internal static class UiTourCheck
                 missing++; return null;
             }
             Thread.Sleep(600);
-            var cards = wizard.FindFirstDescendant(cf => cf.ByAutomationId("WizardCategoryList"))?.FindAllDescendants(cf => cf.ByControlType(ControlType.Button)) ?? [];
-            log($"wizard categories: {cards.Length}");
-            var card = cards.FirstOrDefault(c => c.Name.Contains(category, StringComparison.OrdinalIgnoreCase)) ?? cards.FirstOrDefault();
-            card?.Patterns.Invoke.PatternOrDefault?.Invoke();
-            Thread.Sleep(400);
+            // The category cards are toggle buttons named after the category id (WizardCategoryHex…);
+            // a toggle reacts to its click, so the real mouse picks it.
+            var cardId = category == "Гекс" ? "WizardCategoryHex" : "WizardCategoryStandard";
+            var card = Find(wizard, cardId);
+            log(card is null ? $"MISSING: {cardId}" : $"wizard category: {card.Name}");
+            if (card is not null)
+            {
+                card.Click();
+                Thread.Sleep(500);
+            }
             Shot("wizard-1-" + (category == "Гекс" ? "hex" : "standard"), wizard);
             Press(wizard, "ChooseCategoryButton");
             Thread.Sleep(600);
