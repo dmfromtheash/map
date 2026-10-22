@@ -110,6 +110,12 @@ try
             Shot(main, Path.Combine(outDir, "hover-rest.png"));
             Log($"hover: glided across the canvas {box}");
         }
+        if (Arg("--hex-structure") is not null)
+        {
+            missing += HexStructureCheck.Run(main, outDir, Log, Shot);
+            main.Close();
+            return missing == 0 ? 0 : 2;
+        }
         if (Arg("--hex-paths") is not null)
         {
             foreach (var id in new[] { "HexTabMarkup", "HexModePath", "HexPathSelect_1_Border" })

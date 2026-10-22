@@ -197,6 +197,7 @@ internal sealed class HexBoardDto
     /// <summary>Ints per hex in <see cref="Cells"/>: 6 (v12), or 9 with rotation, region and revealed (v13).</summary>
     [JsonPropertyName("stride")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public int? Stride { get; set; }
     [JsonPropertyName("cells")] public List<int> Cells { get; set; } = [];
+    [JsonPropertyName("pointsOfInterest")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<HexPoiCellDto>? Points { get; set; }
     [JsonPropertyName("grid")] public HexGridDto? Grid { get; set; }
     [JsonPropertyName("paths")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<HexPathDto>? Paths { get; set; }
     [JsonPropertyName("hexRegions")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<HexRegionDto>? Regions { get; set; }
@@ -222,8 +223,24 @@ internal sealed class HexPathDto
     [JsonPropertyName("blocksLight")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public bool? BlocksLight { get; set; }
 }
 
+internal sealed class HexPoiCellDto
+{
+    [JsonPropertyName("column")] public int Column { get; set; }
+    [JsonPropertyName("row")] public int Row { get; set; }
+    [JsonPropertyName("points")] public List<HexPoiDto> Points { get; set; } = [];
+}
+
+internal sealed class HexPoiDto
+{
+    [JsonPropertyName("type")] public string Type { get; set; } = "";
+    [JsonPropertyName("name")] public string Name { get; set; } = "";
+    [JsonPropertyName("playerVisible")] public bool PlayerVisible { get; set; } = true;
+    [JsonPropertyName("variant")] public int Variant { get; set; }
+}
+
 internal sealed class HexRegionDto
 {
+    [JsonPropertyName("parentRegion")] public int ParentRegion { get; set; }
     [JsonPropertyName("id")] public int Id { get; set; }
     [JsonPropertyName("name")] public string? Name { get; set; }
     [JsonPropertyName("color")] public string Color { get; set; } = "";

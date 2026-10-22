@@ -255,6 +255,8 @@ public sealed partial class RegionalApplication
         Check("R01 save/reopen preserves all blocking flags on both levels", reopened.Layers.OfType<HexLayer>()
             .All(l => l.Paths.Count(p => p.BlocksSight && p.BlocksMove && p.BlocksLight) == 1));
 
+        await VerifyHexStructureR16();
+
         // The world generator through its panel buttons, step by step, on the surface.
         var depthBefore = _editor.Session.UndoDepth;
         PressHex(_view, "HexGenAllButton"); await Settle();

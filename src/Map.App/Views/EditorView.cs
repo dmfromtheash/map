@@ -8535,6 +8535,7 @@ public sealed partial class EditorView : UserControl
 
     private void OnEditorChanged(object? sender, PropertyChangedEventArgs e)
     {
+        if (e.PropertyName == nameof(EditorViewModel.HexPresentation)) Canvas.InvalidateVisual();
         // Cursor-only ghost movement is handled by the canvas; it cannot rebuild the tool panel.
         if (e.PropertyName is nameof(EditorViewModel.PendingPlacement) or nameof(EditorViewModel.PlacementPreviewObjects)) return;
         lock (_uiSyncGate)

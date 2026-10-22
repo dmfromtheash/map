@@ -296,6 +296,8 @@ public sealed class RenderOptions
     /// The players' view of a hex map: the fog of war is opaque, only player notes of revealed hexes
     /// show, and no tool overlays are drawn (the player window and the player export).
     /// </summary>
+    public HexPresentation HexPresentation { get; init; }
+
     public bool HexPlayerView { get; init; }
 
     /// <summary>The level of the world shown (hex layers of other levels are left out); null shows every level.</summary>
@@ -1825,7 +1827,7 @@ public static class SceneRenderer
                     using var faint = new SKPaint { Color = SKColors.White.WithAlpha((byte)Math.Round(255 * alpha)) };
                     canvas.SaveLayer(faint);
                     HexLayerRenderer.Draw(canvas, hexLayer, view, options.ViewScale, options.IsExport ? null : options.HexChunks,
-                        options.GpuContext, null, options.IsExport, options.RequestRefinedFrame, null, false, options.HexPlayerView, null);
+                        options.GpuContext, null, options.IsExport, options.RequestRefinedFrame, null, false, options.HexPlayerView || options.HexPresentation == HexPresentation.PlayerKnowledge, null);
                     canvas.Restore();
                     break;
                 }

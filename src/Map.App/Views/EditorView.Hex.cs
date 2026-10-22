@@ -313,6 +313,7 @@ public sealed partial class EditorView
             Children =
             {
                 summary,
+                BuildHexPresentationChoice(),
                 tabs,
                 drawModes,
                 markupModes,
@@ -627,7 +628,10 @@ public sealed partial class EditorView
                     Child = new StackPanel
                     {
                         Spacing = 3,
-                        Children = { row, new TextBlock { Text = $"Гексов: {_editor.HexRegionSize(id)}" }.Classed("faint", "role-caption") },
+                        Children = { row,
+                            new TextBlock { Text = HexRegionHierarchy.Label(regions, region), TextWrapping = TextWrapping.Wrap }.Classed("faint", "role-caption"),
+                            BuildHexParentChoice(region),
+                            new TextBlock { Text = $"Гексов: {_editor.HexRegionSize(id)}" }.Classed("faint", "role-caption") },
                     },
                 });
             }
@@ -792,7 +796,12 @@ public sealed partial class EditorView
         HexSync(() =>
         {
             var note = _editor.HexKeyNote;
-            editor.IsVisible = note is not null;
+            editor.IsVisible = note is not null && _editor.HexPresentation != HexPresentation.PlayerKnowledge;
+            if (_editor.HexPresentation == HexPresentation.PlayerKnowledge)
+            {
+                header.Text = "Ключи ведущего скрыты в представлении знаний игроков.";
+                return;
+            }
             header.Text = note is null ? "Щёлкните по гексу, чтобы открыть его ключ." : $"Гекс {_editor.HexKeyNumber}";
             if (note is null) return;
             title.Text = note.Title;
@@ -800,8 +809,9 @@ public sealed partial class EditorView
             gm.Text = note.GmText;
             players.Text = note.PlayerText;
             child.Text = note.ChildMap is { } map ? "Подкарта: " + map : "Подкарты пока нет.";
-        }, [nameof(EditorViewModel.HexKeyHex), nameof(EditorViewModel.HexKeyNote), nameof(EditorViewModel.HexLevel)]);
+        }, [nameof(EditorViewModel.HexKeyHex), nameof(EditorViewModel.HexKeyNote), nameof(EditorViewModel.HexLevel), nameof(EditorViewModel.HexPresentation)]);
 
+        editor.Children.Add(BuildHexPoiSection());
         editor.Children.Add(title);
         editor.Children.Add(category);
         editor.Children.Add(Ui.Subgroup("Мастеру", gm));
@@ -822,6 +832,7 @@ public sealed partial class EditorView
         object? shown = null;
         HexSync(() =>
         {
+            table.IsVisible = _editor.HexPresentation != HexPresentation.PlayerKnowledge;
             var keys = _editor.HexKeys;
             var signature = string.Join("|", keys.Select(row => row.Number + row.Note.Title + row.Note.Category));
             if (Equals(shown, signature)) return;
@@ -839,7 +850,7 @@ public sealed partial class EditorView
                 button.HorizontalContentAlignment = HorizontalAlignment.Left;
                 table.Children.Add(button);
             }
-        }, [.. DocumentChanged, nameof(EditorViewModel.HexKeys), nameof(EditorViewModel.HexMode)]);
+        }, [.. DocumentChanged, nameof(EditorViewModel.HexKeys), nameof(EditorViewModel.HexMode), nameof(EditorViewModel.HexPresentation)]);
 
         return new StackPanel
         {

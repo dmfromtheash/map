@@ -54,7 +54,7 @@ public static partial class HexJsonExporter
             {
                 var offset = board.Layout.ToOffset(hex);
                 used.Add(cell.Terrain);
-                if (cell.Feature is { } f) used.Add(f);
+                foreach (var point in cell.PointsOfInterest) used.Add(point.Type);
                 var item = new JsonObject
                 {
                     ["at"] = Position(hex),
@@ -69,6 +69,9 @@ public static partial class HexJsonExporter
                     if (cell.FeatureVariant != 0) item["featureVariant"] = cell.FeatureVariant;
                 }
 
+                if (!cell.PointsOfInterest.IsEmpty)
+                    item["pointsOfInterest"] = new JsonArray([.. cell.PointsOfInterest.Select(p => (JsonNode)new JsonObject
+                    { ["type"] = p.Type, ["name"] = p.Name, ["playerVisible"] = p.PlayerVisible, ["variant"] = p.Variant })]);
                 if (cell.Region != 0) item["region"] = cell.Region;
                 if (cell.Revealed) item["revealed"] = true;
                 cells.Add(item);
@@ -126,7 +129,7 @@ public static partial class HexJsonExporter
                 {
                     ["perHex"] = layer.Travel.DistancePerHex, ["unit"] = layer.Travel.Unit, ["perDay"] = layer.Travel.DistancePerDay,
                 },
-                ["regions"] = new JsonArray([.. layer.Regions.Select(r => (JsonNode)new JsonObject { ["id"] = r.Id, ["name"] = r.Name, ["color"] = r.Color })]),
+                ["regions"] = new JsonArray([.. layer.Regions.Select(r => (JsonNode)new JsonObject { ["id"] = r.Id, ["name"] = r.Name, ["color"] = r.Color, ["parentRegion"] = r.ParentRegion })]),
                 ["cells"] = cells,
                 ["paths"] = paths,
                 ["key"] = keys,

@@ -112,6 +112,18 @@ public sealed record HexCell
         return Shared.Count < MaxShared ? Shared.GetOrAdd(cell, cell) : cell;
     }
 
+    public bool Equals(HexCell? other) => other is not null && Terrain == other.Terrain && Variant == other.Variant
+        && Rotation == other.Rotation && Region == other.Region && Revealed == other.Revealed
+        && PointsOfInterest.SequenceEqual(other.PointsOfInterest);
+
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Terrain); hash.Add(Variant); hash.Add(Rotation); hash.Add(Region); hash.Add(Revealed);
+        foreach (var point in PointsOfInterest) hash.Add(point);
+        return hash.ToHashCode();
+    }
+
     /// <summary>a–z, 0–9, '-', '_', '.', '/' - a library-relative name such as <c>starter/forest</c>.</summary>
     public static bool IsValidTileId(string? value)
     {

@@ -652,11 +652,14 @@ public static partial class HexLayerRenderer
     public static void Draw(SKCanvas canvas, HexLayer layer, WorldBounds view, RenderOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
+        var player = options.HexPlayerView || options.HexPresentation == HexPresentation.PlayerKnowledge;
+        if (player) layer = PlayerLayers.GetValue(layer, ExportPlayerVisibility.Sanitize);
         Draw(canvas, layer, view, options.ViewScale, options.HexChunks, options.GpuContext,
-            options.HexPlayerView ? null : options.HexCursor, options.IsExport, options.RequestRefinedFrame,
-            options.Stats, options.HexGestureLive, options.HexPlayerView,
-            options.HexPlayerView ? null : options.HexOverlay, options.IsExport ? null : options.HexSettles,
+            player ? null : options.HexCursor, options.IsExport, options.RequestRefinedFrame,
+            options.Stats, options.HexGestureLive, player,
+            player ? null : options.HexOverlay, options.IsExport || player ? null : options.HexSettles,
             options.HexAmbient && !options.IsExport, options.RequestAmbientFrame);
+        DrawPresentation(canvas, layer, view, options.HexPresentation, options.ViewScale, player);
     }
 
     /// <param name="requestFrame">Asks for another frame when some chunk images are still to be drawn.</param>
@@ -667,6 +670,7 @@ public static partial class HexLayerRenderer
         Action? requestFrame = null, RenderStats? stats = null, bool live = false, bool player = false,
         HexOverlay? overlay = null, HexSettles? settles = null, bool ambient = false, Action? requestAmbientFrame = null)
     {
+        if (player) layer = PlayerLayers.GetValue(layer, ExportPlayerVisibility.Sanitize);
         var board = layer.Board;
         var hexPixels = board.Layout.HexWidth * viewScale;
         // An export far smaller than the board (a library thumbnail of a 512 × 512 board) draws the

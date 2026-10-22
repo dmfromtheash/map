@@ -67,11 +67,17 @@ public static class HexObsidianExporter
                     Property(region, "title", name);
                     Property(region, "layer_id", layer.Id.ToString());
                     region.AppendLine("level: " + Number(layer.Level)).AppendLine("region_id: " + Number(id));
+                    if (layer.Region(id)?.ParentRegion is > 0 and var parentRegionId)
+                        Property(region, "parent_region", Link(RegionStem(layer, parentRegionId), regions[parentRegionId]));
                     Tags(region, ["регион/" + Slug(name)]);
                     region.AppendLine("---").AppendLine().AppendLine("# " + Inline(name)).AppendLine()
                         .AppendLine("[[index|Карта — оглавление]]").AppendLine()
                         .AppendLine("Уровень: " + Number(layer.Level)).AppendLine()
                         .AppendLine("## Гексы").AppendLine();
+                    if (layer.Region(id)?.ParentRegion is > 0 and var parentId)
+                        region.AppendLine("Родитель: " + Link(RegionStem(layer, parentId), regions[parentId])).AppendLine();
+                    foreach (var child in layer.Regions.Where(r => r.ParentRegion == id))
+                        region.AppendLine("Вложенный регион: " + Link(RegionStem(layer, child.Id), child.Name)).AppendLine();
                     foreach (var hex in members) region.AppendLine("- " + HexLink(layer, hex));
                     if (members.Length == 0) region.AppendLine("Нет гексов с содержимым.");
                     Save(temporary, RegionStem(layer, id), region);
@@ -110,7 +116,7 @@ public static class HexObsidianExporter
         var offset = layer.Board.Layout.ToOffset(hex);
         var terrain = cell is null ? "Не задана" : TileName(cell.Terrain);
         var tags = new List<string> { "гекс/" + (cell is null ? "без-местности" : Slug(terrain)), "уровень/" + Number(layer.Level) };
-        if (cell?.Feature is { } feature) tags.Add("надстройка/" + Slug(TileName(feature)));
+        if (cell is not null) foreach (var point in cell.PointsOfInterest) tags.Add("надстройка/" + Slug(TileName(point.Type)));
         if (note is not null) tags.Add("категория/" + Slug(note.Category.ToString()));
         var region = cell is { Region: > 0 } ? cell.Region : 0;
         if (region > 0) tags.Add("регион/" + Slug(regions[region]));
@@ -136,6 +142,14 @@ public static class HexObsidianExporter
             .AppendLine("- Надстройка: " + (cell?.Feature is { } f ? Inline(TileName(f)) : "Нет"))
             .AppendLine("- Регион: " + (region == 0 ? "Нет" : Link(RegionStem(layer, region), regions[region])))
             .AppendLine().AppendLine(string.Join(" ", tags.Select(t => "#" + t))).AppendLine();
+        if (cell is not null && !cell.PointsOfInterest.IsEmpty)
+        {
+            text.AppendLine("## Точки интереса").AppendLine();
+            foreach (var point in cell.PointsOfInterest)
+                text.AppendLine("- " + Inline(point.Name.Length == 0 ? TileName(point.Type) : point.Name)
+                    + " · " + Inline(TileName(point.Type)) + (players ? "" : point.PlayerVisible ? " · Видна игрокам" : " · Только ведущему"));
+            text.AppendLine();
+        }
         if (!players && !string.IsNullOrWhiteSpace(note?.GmText))
             text.AppendLine("## Ведущему").AppendLine().AppendLine(note.GmText.Trim()).AppendLine();
         if (!string.IsNullOrWhiteSpace(note?.PlayerText))

@@ -30,6 +30,9 @@ public static partial class MapProjectStore
         || layers.OfType<ObjectLayer>().Any(l => l.Objects.Any(o => o.Decoration is not null));
 
     private static int SchemaFor(MapDocument document) =>
+        document.Layers.OfType<HexLayer>().Any(NeedsHexStructure)
+        || document.Checkpoints.Any(c => c.Snapshot.Layers.OfType<HexLayer>().Any(NeedsHexStructure))
+            ? MapProjectFormat.HexStructureSchemaVersion :
         HasDecorations(document.Canvas, document.Layers) || document.Checkpoints.Any(c => HasDecorations(c.Snapshot.Canvas, c.Snapshot.Layers))
             ? MapProjectFormat.DecorationsSchemaVersion :
         HasTextPaths(document.Layers) || document.Checkpoints.Any(c => HasTextPaths(c.Snapshot.Layers))
@@ -1809,6 +1812,7 @@ public static partial class MapProjectStore
             Tiles = tiles,
             Stride = wide ? stride : null,
             Cells = cells,
+            Points = WriteHexStructureV18(layer),
             Grid = new HexGridDto
             {
                 Visible = layer.Grid.Visible,
@@ -1833,7 +1837,7 @@ public static partial class MapProjectStore
             })],
             Regions = layer.Regions.IsEmpty ? null : [.. layer.Regions.Select(region => new HexRegionDto
             {
-                Id = region.Id, Name = region.Name, Color = region.Color,
+                Id = region.Id, Name = region.Name, Color = region.Color, ParentRegion = region.ParentRegion,
             })],
             Notes = layer.Notes.IsEmpty ? null : [.. layer.Notes
                 .Select(pair => (Offset: board.Layout.ToOffset(pair.Key), Note: pair.Value))
@@ -1909,7 +1913,7 @@ public static partial class MapProjectStore
             Numbers = dto.Grid.Numbers,
             ShowEmpty = dto.Grid.ShowEmpty,
         };
-        var board = HexBoard.FromCells(layout, dto.Columns, dto.Rows, cells);
+        var board = ReadHexStructureV18(HexBoard.FromCells(layout, dto.Columns, dto.Rows, cells), dto.Points);
         HexCoord At(int column, int row)
         {
             if (column < 0 || column >= dto.Columns || row < 0 || row >= dto.Rows)
@@ -1969,9 +1973,11 @@ public static partial class MapProjectStore
         {
             if (region.Id is < 1 or > HexCell.MaxRegion || regions.Any(r => r.Id == region.Id) || AppearanceColor.Normalize(region.Color) is null)
                 throw new MapProjectCorruptedException($"Hex layer {id} has a damaged region.");
-            regions.Add(new HexRegion(region.Id, region.Name ?? "", region.Color));
+            regions.Add(new HexRegion(region.Id, region.Name ?? "", region.Color) { ParentRegion = region.ParentRegion });
         }
 
+        if (regions.Any(r => !HexRegionHierarchy.CanParent(regions, r.Id, r.ParentRegion)))
+            throw new MapProjectCorruptedException("Цикл или неизвестный родитель региона.");
         var notes = System.Collections.Immutable.ImmutableDictionary.CreateBuilder<HexCoord, HexNote>();
         foreach (var note in dto.Notes ?? [])
         {

@@ -96,14 +96,19 @@ public static partial class HexJsonExporter
                 if (At(item?["at"]) is not { } hex) { outside++; continue; }
                 if (missing) { unknown++; continue; }
                 if (!seen.Add(hex)) { duplicates++; continue; }
-                cells.Add(new(hex, HexCell.Of(
+                var cell = HexCell.Of(
                     item!["terrain"]!.GetValue<string>(),
                     item["variant"]?.GetValue<int>() ?? 0,
                     item["feature"]?.GetValue<string>(),
                     item["featureVariant"]?.GetValue<int>() ?? 0,
                     item["turn"]?.GetValue<int>() ?? 0,
                     item["region"]?.GetValue<int>() ?? 0,
-                    item["revealed"]?.GetValue<bool>() ?? false)));
+                    item["revealed"]?.GetValue<bool>() ?? false);
+                if (item["pointsOfInterest"] is JsonArray points)
+                    cell = cell.WithPointsOfInterest(points.Select(p => new HexPoi(
+                        p!["type"]!.GetValue<string>(), p["name"]?.GetValue<string>() ?? "",
+                        p["playerVisible"]?.GetValue<bool>() ?? true, p["variant"]?.GetValue<int>() ?? 0)));
+                cells.Add(new(hex, cell));
             }
 
             var paths = ImmutableList.CreateBuilder<HexPath>();
@@ -142,9 +147,11 @@ public static partial class HexJsonExporter
             var regions = ImmutableList.CreateBuilder<HexRegion>();
             foreach (var item in source["regions"]?.AsArray() ?? [])
             {
-                regions.Add(new HexRegion(item!["id"]!.GetValue<int>(), item["name"]?.GetValue<string>() ?? "", item["color"]!.GetValue<string>()));
+                regions.Add(new HexRegion(item!["id"]!.GetValue<int>(), item["name"]?.GetValue<string>() ?? "", item["color"]!.GetValue<string>()) { ParentRegion = item["parentRegion"]?.GetValue<int>() ?? 0 });
             }
 
+            if (regions.Any(r => !HexRegionHierarchy.CanParent(regions, r.Id, r.ParentRegion)))
+                throw new ArgumentException("Цикл или неизвестный родитель региона.");
             var notes = ImmutableDictionary.CreateBuilder<HexCoord, HexNote>();
             foreach (var item in source["key"]?.AsArray() ?? [])
             {

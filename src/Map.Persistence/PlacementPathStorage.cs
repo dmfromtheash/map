@@ -17,6 +17,9 @@ public static partial class MapProjectStore
 
     private static void ValidatePathSchema(SceneDto scene, int schema)
     {
+        if (schema < MapProjectFormat.HexStructureSchemaVersion
+            && scene.Layers?.Any(l => l?.Hex?.Points is not null || l?.Hex?.Regions?.Any(r => r.ParentRegion != 0) == true) == true)
+            throw new MapProjectCorruptedException("Список точек и вложенность регионов требуют схему v18.");
         if (schema < MapProjectFormat.HexPathBlockingSchemaVersion
             && scene.Layers?.Any(l => l?.Hex?.Paths?.Any(p => p is not null
                 && (p.BlocksSight.HasValue || p.BlocksMove.HasValue || p.BlocksLight.HasValue)) == true) == true)

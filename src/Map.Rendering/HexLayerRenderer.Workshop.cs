@@ -430,11 +430,22 @@ public static partial class HexLayerRenderer
                 AddLivingIcons(items, board, hex, cell, living);
             }
 
-            if (cell.Feature is { } feature && HexTileArt.Image(feature, cell.FeatureVariant, layout.Orientation) is { } picture)
+            for (var pointIndex = 0; pointIndex < cell.PointsOfInterest.Count; pointIndex++)
             {
+                var point = cell.PointsOfInterest[pointIndex];
+                if (HexTileArt.Image(point.Type, point.Variant, layout.Orientation) is not { } picture) continue;
                 var bounds = layout.Bounds(hex);
-                items.Add(new Standing((float)(layout.Center(hex).Y + layout.Size * 0.45), picture,
-                    new SKRect((float)bounds.Left, (float)bounds.Top, (float)bounds.Right, (float)bounds.Bottom)));
+                var rect = new SKRect((float)bounds.Left, (float)bounds.Top, (float)bounds.Right, (float)bounds.Bottom);
+                if (cell.PointsOfInterest.Count > 1)
+                {
+                    var columns = (int)Math.Ceiling(Math.Sqrt(cell.PointsOfInterest.Count));
+                    var width = rect.Width * 0.8f / columns;
+                    var height = rect.Height * 0.8f / columns;
+                    var left = rect.MidX - width * columns / 2 + pointIndex % columns * width;
+                    var top = rect.MidY - height * columns / 2 + pointIndex / columns * height;
+                    rect = new SKRect(left, top, left + width, top + height);
+                }
+                items.Add(new Standing((float)(layout.Center(hex).Y + layout.Size * 0.45), picture, rect));
             }
 
             // A tall tile is drawn with the ground, but its top rises over the row behind: it goes

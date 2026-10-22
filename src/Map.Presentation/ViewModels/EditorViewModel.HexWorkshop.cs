@@ -147,7 +147,7 @@ public sealed partial class EditorViewModel
     public void RenameHexRegion(int id, string name)
     {
         if (ActiveHexLayer is not { } layer || layer.Region(id) is not { } region || string.IsNullOrWhiteSpace(name) || region.Name == name.Trim()) return;
-        var renamed = new HexRegion(id, name, region.Color);
+        var renamed = new HexRegion(id, name, region.Color) { ParentRegion = region.ParentRegion };
         ExecuteHexLayerEdit("Имя региона", layer, layer with { Regions = layer.Regions.Replace(region, renamed) });
         Raise(nameof(HexRegions));
     }
@@ -166,7 +166,7 @@ public sealed partial class EditorViewModel
         if (ActiveHexLayer is not { } layer || layer.Region(id) is not { } region) return;
         var cleared = layer.Board.Cells.Where(pair => pair.Value.Region == id)
             .Select(pair => new KeyValuePair<HexCoord, HexCell?>(pair.Key, pair.Value.WithRegion(0))).ToList();
-        ExecuteHexLayerEdit("Удалить регион", layer, layer with { Regions = layer.Regions.Remove(region), Board = layer.Board.With(cleared) });
+        ExecuteHexLayerEdit("Удалить регион", layer, layer with { Regions = layer.Regions.Remove(region).Select(r => r.ParentRegion == id ? r with { ParentRegion = region.ParentRegion } : r).ToImmutableList(), Board = layer.Board.With(cleared) });
         if (_hexRegionId == id) _hexRegionId = 0;
         Raise(nameof(HexRegions));
         Raise(nameof(HexRegionId));
@@ -621,6 +621,15 @@ public sealed partial class EditorViewModel
             }
         }
 
+        foreach (var region in layer.Regions)
+            text.AppendLine("- Регион: " + HexRegionHierarchy.Label(layer.Regions, region));
+        foreach (var (hex, cell) in layer.Board.Cells.Where(p => !p.Value.PointsOfInterest.IsEmpty))
+        {
+            text.AppendLine().AppendLine("## Точки интереса · " + HexLayerRenderer.NumberOf(layer.Board, layer.Board.Layout.ToOffset(hex)));
+            foreach (var point in cell.PointsOfInterest)
+                text.AppendLine("- " + point.Name + " · " + (HexStarterTiles.Find(point.Type)?.Name ?? point.Type)
+                    + (playersOnly ? "" : point.PlayerVisible ? " · Видна игрокам" : " · Только ведущему"));
+        }
         return text.ToString();
     }
 
