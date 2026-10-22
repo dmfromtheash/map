@@ -228,7 +228,7 @@ public sealed partial class EditorViewModel
         else
         {
             var road = RoadEditor.NewRoad([point], _newRoadWidth, Services.RegionalMapFactory.IsRegional(Session.Document)
-                ? Services.RegionalMapFactory.RoadStyle : RoadStyle.Country(), EntityNameGenerator.Road(Session.Document));
+                ? Services.RegionalMapFactory.RoadStyle : RoadStyle.Painted(), EntityNameGenerator.Road(Session.Document));
             _roadDraft = road; _roadDraftBranchId = road.Branches[0].Id; _roadDraftHosted = false;
         }
         _roadVertex = 0; RaiseRoadState(); return true;

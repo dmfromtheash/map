@@ -17,6 +17,9 @@ public static partial class MapProjectStore
 
     private static void ValidatePathSchema(SceneDto scene, int schema)
     {
+        if (schema < MapProjectFormat.PaintedRoadsSchemaVersion
+            && scene.Layers?.Any(l => l?.Roads?.Any(r => r is not null && r.NeedsPaintedSchema) == true) == true)
+            throw new MapProjectCorruptedException("Живописные дороги требуют схему v23.");
         if (schema < MapProjectFormat.PaintedRiversSchemaVersion
             && scene.Layers?.Any(l => l?.Rivers?.Any(r => r is not null && r.Style.PaintStrokes > 0) == true) == true)
             throw new MapProjectCorruptedException("Живописные мазки реки требуют схему v22.");

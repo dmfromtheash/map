@@ -6,7 +6,7 @@ namespace Map.Presentation.ViewModels;
 public enum RiverLookPreset { MountainStream, LowlandRiver, WideRiver, InkAtlas, Painted }
 
 /// <summary>Named looks of a road: way of drawing and width together.</summary>
-public enum RoadLookPreset { Trail, CountryRoad, Highway, Painterly }
+public enum RoadLookPreset { Trail, CountryRoad, Highway, Painterly, Painted }
 
 public sealed partial class EditorViewModel
 {
@@ -47,6 +47,7 @@ public sealed partial class EditorViewModel
             RoadLookPreset.Trail => (RoadStyle.Country() with { EdgeBreak = 0.5, RutOpacity = 0, ShoulderOpacity = 0.3 }, 0.55, "Дорога: тропа"),
             RoadLookPreset.Highway => (RoadStyle.PenRuts(), 1.5, "Дорога: тракт"),
             RoadLookPreset.Painterly => (RoadStyle.Painterly(), 1.2, "Дорога: живописный путь"),
+            RoadLookPreset.Painted => (RoadStyle.Painted(), 1.0, "Дорога: как горы владельца"),
             _ => (RoadStyle.Country(), 1.0, "Дорога: просёлок"),
         };
         style = style with

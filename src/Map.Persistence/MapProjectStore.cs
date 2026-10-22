@@ -32,10 +32,15 @@ public static partial class MapProjectStore
     private static bool HasPaintedRivers(IEnumerable<MapLayer> layers) =>
         layers.OfType<ObjectLayer>().Any(l => l.Rivers.Any(r => r.Style.PaintStrokes > 0));
 
+    private static bool HasPaintedRoads(IEnumerable<MapLayer> layers) =>
+        layers.OfType<ObjectLayer>().Any(l => l.Roads.Any(r => r.NeedsPaintedSchema));
+
     private static bool HasAreaRules(IEnumerable<MapLayer> layers) =>
         layers.OfType<ObjectLayer>().Any(l => l.PlacementAreas.Any(a => a.NeedsRulesSchema));
 
     private static int SchemaFor(MapDocument document) =>
+        HasPaintedRoads(document.Layers) || document.Checkpoints.Any(c => HasPaintedRoads(c.Snapshot.Layers))
+            ? MapProjectFormat.PaintedRoadsSchemaVersion :
         HasPaintedRivers(document.Layers) || document.Checkpoints.Any(c => HasPaintedRivers(c.Snapshot.Layers))
             ? MapProjectFormat.PaintedRiversSchemaVersion :
         document.Layers.OfType<HexLayer>().Any(NeedsGameplayV20)

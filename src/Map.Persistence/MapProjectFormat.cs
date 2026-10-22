@@ -70,7 +70,13 @@ public static class MapProjectFormat
     /// </summary>
     public const int PaintedRiversSchemaVersion = 22;
 
-    public const int MaxSupportedSchemaVersion = PaintedRiversSchemaVersion;
+    /// <summary>
+    /// Painted roads (`PaintStrokes` of a road or branch style, the owner's painted look). Roads
+    /// without them keep the older schema.
+    /// </summary>
+    public const int PaintedRoadsSchemaVersion = 23;
+
+    public const int MaxSupportedSchemaVersion = PaintedRoadsSchemaVersion;
 
     /// <summary>
     /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry

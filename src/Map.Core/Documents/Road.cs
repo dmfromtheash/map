@@ -105,6 +105,14 @@ public sealed record RoadStyle
     public double TextureOpacity { get; init; } = 0.45;
     public double TextureScale { get; init; } = MapFillTextures.DefaultGroundScale;
 
+    /// <summary>
+    /// Strength 0..1 of the owner's painted pass (schema v23): form shadow on the side away from a
+    /// north-west light, dry-brush strokes of earth along the way and a heavier ink contour on the
+    /// shadow side. 0 = none, as in every older map.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public double PaintStrokes { get; init; }
+
     /// <summary>«Стена блокирует свет»: the road's axis is a wall in the dd2vtt export (a castle wall drawn as a road).</summary>
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
     public bool BlocksLight { get; init; }
@@ -133,6 +141,21 @@ public sealed record RoadStyle
         StartCap = RoadEndCap.Taper, EndCap = RoadEndCap.Taper,
     };
 
+    /// <summary>
+    /// «Живописная» (2026-10-22): the road in the manner of the owner's hand-painted mountains - a
+    /// pen contour of varying weight in the same slate ink, a muted earth of a limited palette,
+    /// visible dry-brush strokes along the way, the form shadow away from the north-west light.
+    /// </summary>
+    public static RoadStyle Painted() => new()
+    {
+        Drawing = RoadDrawing.PenRuts,
+        SurfaceColor = "#FFD2BC92", ToneColor = "#FFAE9269", ToneVariation = 0.4,
+        ShoulderColor = "#FF9C8A66", ShoulderWidth = 4, ShoulderOpacity = 0.22,
+        EdgeColor = "#FF262A30", EdgeWidth = 1.1, EdgeOpacity = 0.9, EdgeBreak = 0.04,
+        RutColor = "#FF6E5A42", RutOpacity = 0.3, DetailOpacity = 0.45, EdgeRoughness = 0.3,
+        PaintStrokes = 1,
+    };
+
     public static RoadStyle Preset(RoadDrawing drawing) => drawing switch
     {
         RoadDrawing.PenRuts => PenRuts(),
@@ -144,11 +167,11 @@ public sealed record RoadStyle
     {
         if (!Enum.IsDefined(Drawing) || !Enum.IsDefined(StartCap) || !Enum.IsDefined(EndCap)
             || new[] { SurfaceColor, ToneColor, ShoulderColor, EdgeColor, RutColor }.Any(string.IsNullOrWhiteSpace)
-            || new[] { ToneVariation, Opacity, ShoulderWidth, ShoulderOpacity, EdgeWidth, EdgeOpacity, EdgeBreak, RutOpacity, DetailOpacity, EdgeRoughness, TaperLength }
+            || new[] { ToneVariation, Opacity, ShoulderWidth, ShoulderOpacity, EdgeWidth, EdgeOpacity, EdgeBreak, RutOpacity, DetailOpacity, EdgeRoughness, TaperLength, PaintStrokes }
                 .Any(v => !double.IsFinite(v))
             || ToneVariation is < 0 or > 1 || Opacity is < 0 or > 1 || ShoulderWidth is < 0 or > 256 || ShoulderOpacity is < 0 or > 1
             || EdgeWidth is < 0 or > 32 || EdgeOpacity is < 0 or > 1 || EdgeBreak is < 0 or > 1 || RutOpacity is < 0 or > 1
-            || DetailOpacity is < 0 or > 1 || EdgeRoughness is < 0 or > 1 || TaperLength is < 0 or > Road.MaximumWidth
+            || DetailOpacity is < 0 or > 1 || EdgeRoughness is < 0 or > 1 || TaperLength is < 0 or > Road.MaximumWidth || PaintStrokes is < 0 or > 1
             || !MapFillTextures.IsValidId(TextureId) || !MapFillTextures.IsValidOpacity(TextureOpacity) || !MapFillTextures.IsValidScale(TextureScale))
             throw new ArgumentException("Некорректное оформление дороги.");
     }
@@ -223,6 +246,9 @@ public sealed record Road
         get => CrossingOverrides.IsDefaultOrEmpty ? null : [.. CrossingOverrides];
         init => CrossingOverrides = value is null ? [] : [.. value];
     }
+
+    /// <summary>True when the road or one of its branches is drawn in the painted manner (schema v23).</summary>
+    public bool NeedsPaintedSchema => Style.PaintStrokes > 0 || Branches.Any(b => b.Style is { PaintStrokes: > 0 });
 
     /// <summary>True when a crossing kind was chosen by hand (schema v15).</summary>
     public bool NeedsCrossingsSchema => !CrossingOverrides.IsDefaultOrEmpty;

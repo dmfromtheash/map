@@ -279,6 +279,18 @@ public static class RoadRenderer
             canvas.Restore();
         }
 
+        // 6b. The owner's painted manner: form shadow away from the north-west light, dry-brush
+        // strokes of earth along the way and the heavier ink of the contour on the shadow side.
+        if (!fastPreview && set.Branches.Values.Any(g => g.Style.PaintStrokes > 0))
+        {
+            var junctions = Junctions(set);
+            canvas.Save();
+            canvas.ClipPath(entry.Body, SKClipOperation.Intersect, antialias: true);
+            foreach (var geometry in set.Branches.Values)
+                if (geometry.Style.PaintStrokes > 0) DrawPaintedStrokes(canvas, geometry, seed, scale, junctions);
+            canvas.Restore();
+        }
+
         if (fadeEnds) canvas.SaveLayer(SKRect.Inflate(rect, 8, 8), null);
 
         // 7. The edge of the whole outline: a broken line whose weight changes, drawn once
@@ -449,7 +461,9 @@ public static class RoadRenderer
         var branchSeed = unchecked(seed * 977 + geometry.Branch.Id.GetHashCode());
         var pen = style.Drawing == RoadDrawing.PenRuts;
         var length = geometry.Length;
-        var width = Math.Clamp(averageHalf * (pen ? 0.11 : 0.13), 0.5 / scale, pen ? 1.6 : 2.4);
+        // The cap first, then the half-pixel floor: far out the floor can exceed the cap (a pen
+        // road at 1:4 threw here), and a visible track wins over the cap.
+        var width = Math.Max(0.5 / scale, Math.Min(averageHalf * (pen ? 0.11 : 0.13), pen ? 1.6 : 2.4));
         var color = SceneRenderer.ParseColor(style.RutColor).WithAlpha(Alpha(style.RutOpacity));
         using var paint = new SKPaint { Color = color, IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = (float)width, StrokeCap = SKStrokeCap.Round, StrokeJoin = SKStrokeJoin.Round };
         using var second = new SKPaint { Color = color.WithAlpha((byte)(color.Alpha * 0.8)), IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = (float)(width * 0.85), StrokeCap = SKStrokeCap.Round, StrokeJoin = SKStrokeJoin.Round };
@@ -485,8 +499,167 @@ public static class RoadRenderer
         canvas.DrawPath(right, second);
     }
 
+    /// <summary>
+    /// The painted earth of the owner's mountains: a soft shadow down the side away from the
+    /// light (the form), a lit band on the other side, then tapered dry-brush strokes of a darker
+    /// and a lighter earth along the way, and the contour's ink thickened on the shadow side. The
+    /// strokes give way at junctions and ends like the ruts, so a fork never meets in a star.
+    /// </summary>
+    private static void DrawPaintedStrokes(SKCanvas canvas, RoadBranchGeometry geometry, int seed, double scale,
+        List<(double X, double Y, double Reach)> junctions)
+    {
+        var style = geometry.Style;
+        var samples = geometry.Samples;
+        if (samples.Length < 2) return;
+        var half = samples.Average(s => s.HalfWidth);
+        if (half * scale < 2) return;
+        var strength = (float)Math.Clamp(style.PaintStrokes, 0, 1);
+        var branchSeed = unchecked(seed * 389 + geometry.Branch.Id.GetHashCode());
+        var surface = SceneRenderer.ParseColor(style.SurfaceColor);
+        var ink = SceneRenderer.ParseColor(style.EdgeColor);
+        static SKColor Mix(SKColor a, SKColor b, float t) => new(
+            (byte)(a.Red + (b.Red - a.Red) * t), (byte)(a.Green + (b.Green - a.Green) * t), (byte)(a.Blue + (b.Blue - a.Blue) * t));
+        // Tones of the same earth: the shadow leans to the ink (cool slate, as on the mountains),
+        // the light to the paper.
+        var deep = Mix(surface, ink, .5f);
+        var mid = Mix(surface, ink, .22f);
+        var light = Mix(surface, new SKColor(246, 240, 226), .55f);
+
+        // Where the painted marks give way: junctions and ends, as for the ruts.
+        var length = geometry.Length;
+        double quietStart = 0, quietEnd = 0;
+        if (!geometry.Closed)
+        {
+            quietStart = geometry.StartJoin is { } sj ? Math.Max(sj.OtherHalfWidth * 1.4, samples[0].HalfWidth * 1.8) : samples[0].HalfWidth * 0.9;
+            quietEnd = geometry.EndJoin is { } ej ? Math.Max(ej.OtherHalfWidth * 1.4, samples[^1].HalfWidth * 1.8) : samples[^1].HalfWidth * 0.9;
+            if (geometry.StartTaper > 0) quietStart = Math.Max(quietStart, geometry.StartTaper * 0.9);
+            if (geometry.EndTaper > 0) quietEnd = Math.Max(quietEnd, geometry.EndTaper * 0.9);
+        }
+        var nearJunction = new List<(double From, double To)>();
+        foreach (var (x, y, reach) in junctions)
+        {
+            double? from = null, to = null;
+            foreach (var s in samples)
+            {
+                var dx = s.X - x; var dy = s.Y - y;
+                if (dx * dx + dy * dy > reach * reach) continue;
+                from ??= s.Distance; to = s.Distance;
+            }
+            if (from is { } a && to is { } b) nearJunction.Add((a, b));
+        }
+        bool Quiet(double distance) => distance < quietStart || length - distance < quietEnd
+            || nearJunction.Any(stretch => distance >= stretch.From && distance <= stretch.To);
+
+        // Form: shadow on the side away from the light, a lit band on the other.
+        using (var shade = OffsetPath(samples, 0.62, Quiet))
+        using (var shadow = new SKPaint
+        {
+            Color = deep.WithAlpha((byte)(150 * strength)), IsAntialias = true, Style = SKPaintStyle.Stroke,
+            StrokeWidth = (float)(half * 0.8), StrokeCap = SKStrokeCap.Round, StrokeJoin = SKStrokeJoin.Round,
+            MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, (float)Math.Max(0.5, half * 0.25)),
+        })
+            canvas.DrawPath(shade, shadow);
+        using (var lit = OffsetPath(samples, -0.45, Quiet))
+        using (var glow = new SKPaint
+        {
+            Color = light.WithAlpha((byte)(120 * strength)), IsAntialias = true, Style = SKPaintStyle.Stroke,
+            StrokeWidth = (float)(half * 0.55), StrokeCap = SKStrokeCap.Round, StrokeJoin = SKStrokeJoin.Round,
+            MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, (float)Math.Max(0.5, half * 0.3)),
+        })
+            canvas.DrawPath(lit, glow);
+
+        // Dry-brush strokes along the way.
+        // (offset across - positive is the shadow side, tone, alpha, width, dash, gap, phase)
+        (double Offset, SKColor Color, byte Alpha, double Width, double Dash, double Gap, double Phase)[] strokes =
+        [
+            (0.58, deep, 125, 0.15, 3.0, 2.4, 0.0),
+            (0.30, mid, 110, 0.13, 4.4, 3.1, 1.6),
+            (-0.50, light, 150, 0.14, 6.5, 3.4, 0.5),
+            (-0.18, light, 125, 0.10, 4.6, 4.4, 2.8),
+            (0.08, mid, 90, 0.08, 2.6, 5.0, 1.0),
+        ];
+        foreach (var (index, stroke) in strokes.Select((s, i) => (i, s)))
+        {
+            using var path = DashedOffsetPath(samples, stroke.Offset, half * stroke.Dash, half * stroke.Gap, half * stroke.Phase,
+                branchSeed ^ (0x3779 * (index + 1)), Quiet, pen: false, lightRelative: true);
+            using var paint = new SKPaint
+            {
+                Color = stroke.Color.WithAlpha((byte)(stroke.Alpha * strength)), IsAntialias = true, Style = SKPaintStyle.Stroke,
+                StrokeWidth = (float)Math.Max(0.6 / scale, half * stroke.Width), StrokeCap = SKStrokeCap.Round, StrokeJoin = SKStrokeJoin.Round,
+                // A dry brush: the stroke edge breaks up a little instead of being a clean tube.
+                PathEffect = SKPathEffect.CreateDiscrete((float)Math.Max(1.5, half * 0.16), (float)Math.Max(0.2, half * 0.04), (uint)(branchSeed + index)),
+            };
+            canvas.DrawPath(path, paint);
+        }
+
+        // Hatching in the shadow, as on the mountains' shaded faces: short pen strokes slanting
+        // from the shadow rim into the earth, in groups with quiet stretches between them.
+        if (half * scale >= 3)
+        {
+            using var hatch = new SKPath();
+            var spacing = Math.Max(1.6 / scale, half * 0.32);
+            var next = spacing;
+            foreach (var s in samples)
+            {
+                if (s.Distance < next) continue;
+                // Hand spacing, length and slant: no two strokes alike, never a comb.
+                var jitter = RiverGeometry.Noise(branchSeed ^ 0x1F83, s.Distance / spacing * 0.93);
+                var jitter2 = RiverGeometry.Noise(branchSeed ^ 0x5BE0, s.Distance / spacing * 1.37 + 4.1);
+                next = s.Distance + spacing * (0.75 + 0.6 * (0.5 + 0.5 * jitter2));
+                if (Quiet(s.Distance)) continue;
+                var group = RiverGeometry.Noise(branchSeed ^ 0x6A09, s.Distance / (half * 4.5));
+                if (group < 0.05) continue;
+                var side = ShadowSide(s);
+                var nx = -s.TangentY * side; var ny = s.TangentX * side;
+                var reach = s.HalfWidth * (0.3 + 0.25 * (0.5 + 0.5 * group) + 0.15 * jitter);
+                var from = s.HalfWidth * (0.93 + 0.05 * jitter2);
+                var slant = s.HalfWidth * (0.22 + 0.14 * jitter);
+                hatch.MoveTo((float)(s.X + nx * from), (float)(s.Y + ny * from));
+                hatch.LineTo((float)(s.X + nx * (from - reach) + s.TangentX * slant), (float)(s.Y + ny * (from - reach) + s.TangentY * slant));
+            }
+            using var pen = new SKPaint
+            {
+                Color = ink.WithAlpha((byte)(135 * strength)), IsAntialias = true, Style = SKPaintStyle.Stroke,
+                StrokeWidth = (float)Math.Max(0.5 / scale, style.EdgeWidth * 0.6), StrokeCap = SKStrokeCap.Round,
+            };
+            canvas.DrawPath(hatch, pen);
+        }
+
+        // The contour as on the mountains: the ink heavier on the shadow side (the outer half of
+        // this stroke falls outside the body clip, so only a thickening inside the rim shows).
+        if (geometry.Closed) return;
+        using var bank = OffsetPath(samples, 1.0, Quiet);
+        using var heavy = new SKPaint
+        {
+            Color = ink.WithAlpha((byte)(190 * strength)), IsAntialias = true, Style = SKPaintStyle.Stroke,
+            StrokeWidth = (float)Math.Max(0.8 / scale, style.EdgeWidth * 2.2), StrokeJoin = SKStrokeJoin.Round, StrokeCap = SKStrokeCap.Round,
+            PathEffect = SKPathEffect.CreateDiscrete((float)Math.Max(1.5, half * 0.2), (float)Math.Max(0.15, style.EdgeWidth * 0.25), (uint)branchSeed),
+        };
+        canvas.DrawPath(bank, heavy);
+    }
+
+    /// <summary>A line along the branch at a fraction of the half width; positive = the side away from the light.</summary>
+    private static SKPath OffsetPath(RoadSample[] samples, double offsetFraction, Func<double, bool>? quiet = null)
+    {
+        var path = new SKPath();
+        var open = false;
+        foreach (var s in samples)
+        {
+            // Where the branch is quiet (a junction, a free end) the line lifts, so it never
+            // crosses the mouth of a fork.
+            if (quiet?.Invoke(s.Distance) == true) { open = false; continue; }
+            var offset = s.HalfWidth * offsetFraction * ShadowSide(s);
+            var point = new SKPoint((float)(s.X - s.TangentY * offset), (float)(s.Y + s.TangentX * offset));
+            if (open) path.LineTo(point); else { path.MoveTo(point); open = true; }
+        }
+        return path;
+    }
+
+    /// <summary>+1 where the sample's left normal faces away from a north-west light (the shadow side), else -1.</summary>
+    private static double ShadowSide(RoadSample s) => -s.TangentY + s.TangentX >= 0 ? 1 : -1;
+
     private static SKPath DashedOffsetPath(RoadSample[] samples, double offsetFraction, double dash, double gap, double phase, int seed,
-        Func<double, bool> quiet, bool pen)
+        Func<double, bool> quiet, bool pen, bool lightRelative = false)
     {
         var path = new SKPath();
         var period = Math.Max(1e-6, dash + gap);
@@ -501,7 +674,7 @@ public static class RoadRenderer
             var on = position < dash * lengthWobble && !skip && !quiet(s.Distance);
             var nx = -s.TangentY; var ny = s.TangentX;
             var drift = 1 + 0.32 * RiverGeometry.Noise(seed ^ 0x2545, s.Distance / (period * 1.9));
-            var offset = s.HalfWidth * offsetFraction * drift;
+            var offset = s.HalfWidth * offsetFraction * drift * (lightRelative ? ShadowSide(s) : 1);
             var point = new SKPoint((float)(s.X + nx * offset), (float)(s.Y + ny * offset));
             if (on)
             {

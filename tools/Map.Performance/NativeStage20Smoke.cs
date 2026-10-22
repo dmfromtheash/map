@@ -299,6 +299,8 @@ public sealed class Stage20Application : Application
         Require(_editor.Roads.Any(r => r.Id == road.Id), "Undo of the layer move lost the road");
 
         // 10. Presets from the panel change the way of drawing; a branch may keep its own look.
+        // A road drawn in the panel starts in the owner's painted manner (2026-10-22).
+        _report.Checks["new-road-is-painted"] = road.Style == RoadStyle.Painted();
         await Click("RoadToolButton");
         _editor.SelectRoad(road.Id, main.Id); _editor.RoadLevel = RoadSelectionLevel.Road; await Settle();
         await Click("RoadPresetPenRuts");
@@ -312,7 +314,7 @@ public sealed class Stage20Application : Application
         await Click("RoadPresetPainterly");
         var styled = _editor.Roads.Single(r => r.Id == road.Id);
         _report.Checks["own-branch-style-keeps-the-node"] = styled.FindBranch(path.Id)!.Style?.Drawing == RoadDrawing.Painterly
-            && styled.Style.Drawing == RoadDrawing.Country && styled.IsShared(shared)
+            && styled.Style == road.Style && styled.IsShared(shared)
             && styled.FindBranch(main.Id)!.Vertices.SequenceEqual(road.FindBranch(main.Id)!.Vertices);
         using (var mixed = Bitmap(new WorldBounds(movedNode.X - 120, movedNode.Y - 90, movedNode.X + 120, movedNode.Y + 90), 3)) Save(mixed, "path-entry-two-looks-3x");
         await Frame();

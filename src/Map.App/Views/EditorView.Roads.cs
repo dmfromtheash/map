@@ -174,6 +174,7 @@ public sealed partial class EditorView
                 {
                     MaxColumns = 2, MinimumItemWidth = 100, Gap = 4, Children =
                     {
+                        LookButton("RoadLookPainted", "Как горы", "Как горы владельца: контур пером, мазки, тень от света с северо-запада", () => _editor.ApplyRoadLook(RoadLookPreset.Painted)),
                         LookButton("RoadLookTrail", "Тропа", "Узкая, без колеи, прерывистая кромка", () => _editor.ApplyRoadLook(RoadLookPreset.Trail)),
                         LookButton("RoadLookCountryRoad", "Просёлок", "Обычная грунтовая дорога", () => _editor.ApplyRoadLook(RoadLookPreset.CountryRoad)),
                         LookButton("RoadLookHighway", "Тракт", "Широкая, перо и колея", () => _editor.ApplyRoadLook(RoadLookPreset.Highway)),
