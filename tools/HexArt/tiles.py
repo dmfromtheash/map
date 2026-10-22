@@ -759,7 +759,8 @@ TERRAINS = {
     "snow": 3, "canyon": 3, "cliffs": 3, "shallows": 3, "sea": 3, "lake": 3, "peaks": 3, "old-forest": 3, "volcano": 2,
     "live-forest": 3, "live-pines": 3, "live-hills": 3, "live-mountains": 3,
 }
-TALL = {"peaks", "old-forest", "volcano"}
+# Peaks and the old forest stay inside their hex (the owner, 2026-10-22); only the volcano rises over the row behind.
+TALL = {"volcano"}
 FEATURES = {"village": 2, "city": 2, "castle": 2, "port": 2, "camp": 2, "tower": 2, "ruins": 2, "cave": 2, "temple": 2, "mine": 2}
 ICONS = ["Trees", "Pines", "Hills", "Mountains"]
 ICON_VARIANTS = 4

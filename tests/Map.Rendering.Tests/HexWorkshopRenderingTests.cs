@@ -176,10 +176,11 @@ public sealed class HexWorkshopRenderingTests
         var layout = layer.Board.Layout;
         var behind = layout.FromOffset(new HexOffset(1, 0));
         var front = layout.FromOffset(new HexOffset(1, 1));
-        var cells = new Dictionary<HexCoord, HexCell?> { [behind] = HexCell.Of("starter/snow"), [front] = HexCell.Of("starter/peaks") };
+        var cells = new Dictionary<HexCoord, HexCell?> { [behind] = HexCell.Of("starter/snow"), [front] = HexCell.Of("starter/volcano") };
         document = HexPaintCommand.Create("Горы", layer, cells)!.Apply(document);
         using var bitmap = Render(document, 1, null);
-        // The upper part of the snow hex behind is covered by the peaks: grey rock, not snow white.
+        // The upper part of the snow hex behind is covered by the volcano (its cone and smoke), not
+        // snow white. Peaks no longer rise over the row behind (the owner, 2026-10-22); the volcano does.
         var (fx, fy) = layout.Center(front);
         var hits = 0;
         for (var dy = 1.0; dy < 1.5; dy += 0.05)
@@ -326,7 +327,7 @@ public sealed class HexWorkshopRenderingTests
     }
 
     [Fact]
-    public void A_peak_in_front_hides_a_village_in_the_row_behind()
+    public void A_volcano_in_front_hides_a_village_in_the_row_behind()
     {
         static (MapDocument, HexLayer) Board(bool village)
         {
@@ -340,7 +341,7 @@ public sealed class HexWorkshopRenderingTests
                 for (var r = 0; r < 6; r++) cells[layout.FromOffset(new HexOffset(c, r))] = HexCell.Of("starter/grass", 0);
             }
 
-            cells[layout.FromOffset(new HexOffset(2, 3))] = HexCell.Of("starter/peaks", 0);
+            cells[layout.FromOffset(new HexOffset(2, 3))] = HexCell.Of("starter/volcano", 0);
             if (village) cells[layout.FromOffset(new HexOffset(2, 2))] = HexCell.Of("starter/grass", 0).WithFeature("starter/village", 0);
             layer = layer with { Board = layer.Board.With(cells) };
             return (document.WithLayer(layer.Id, _ => layer), layer);
@@ -354,7 +355,7 @@ public sealed class HexWorkshopRenderingTests
         using var b = Render(without, scale, null);
         var layout = layer.Board.Layout;
         var peak = layout.FromOffset(new HexOffset(2, 3));
-        var art = HexTileArt.Image("starter/peaks", 0, HexOrientation.Flat)!;
+        var art = HexTileArt.Image("starter/volcano", 0, HexOrientation.Flat)!;
         using var pixels = SKBitmap.FromImage(art);
         var bounds = layout.Bounds(peak);
         var (_, cy) = layout.Center(peak);
