@@ -162,7 +162,7 @@ public sealed partial class EditorViewModel
                     Nodes = [], Cells = ImmutableDictionary<long, ImmutableArray<PlacementAreaMember>>.Empty,
                     MemberCount = 0, Exclusions = [], OccupiedSlots = [], LayoutVersion = 4,
                     Density = _naturalAreaDensity, SizeVariationPercent = _naturalAreaSizeVariation, Seed = NextGestureSeed(),
-                    Pattern = _naturalAreaPattern, JoinEdges = _naturalAreaJoinEdges, ContentBounds = ReadAreaContentBounds(template.Variants, template.ContentBounds),
+                    Pattern = _naturalAreaPattern, JoinEdges = _naturalAreaJoinEdges, Rules = _naturalAreaRules, ContentBounds = ReadAreaContentBounds(template.Variants, template.ContentBounds),
                     ContentMasks = ReadAreaContentMasks(template.Variants, template.ContentMasks),
                     ScalePercent = settings.ScalePercent, RotationDegrees = settings.RotationDegrees,
                     Sublayer = settings.Sublayer, Opacity = settings.ObjectOpacity, Style = settings.Style ?? template.Style,
@@ -187,7 +187,7 @@ public sealed partial class EditorViewModel
                     Name = NextAreaName(SelectedSet?.Name ?? "ассеты"), AssetSetId = _selectedSetId, LayoutVersion = 4,
                     VariantId = CurrentVariant?.Id, Variants = [.. sources], Request = request,
                     Seed = NextGestureSeed(), Density = _naturalAreaDensity, SizeVariationPercent = _naturalAreaSizeVariation,
-                    Pattern = _naturalAreaPattern, JoinEdges = _naturalAreaJoinEdges, ContentBounds = ReadAreaContentBounds(sources),
+                    Pattern = _naturalAreaPattern, JoinEdges = _naturalAreaJoinEdges, Rules = _naturalAreaRules, ContentBounds = ReadAreaContentBounds(sources),
                     ContentMasks = ReadAreaContentMasks(sources),
                     RotationDegrees = settings.RotationDegrees, ScalePercent = settings.ScalePercent,
                     Sublayer = settings.Sublayer, Opacity = settings.ObjectOpacity,
@@ -481,7 +481,7 @@ public sealed partial class EditorViewModel
     {
         if (SelectedEditableArea is not { LayoutVersion: < 4 } p) return;
         var natural = PlacementAreaPlanner.InitializeComposition(p with { LayoutVersion = 4, OccupiedSlots = [], Density = _naturalAreaDensity,
-            SizeVariationPercent = _naturalAreaSizeVariation, Pattern = _naturalAreaPattern, JoinEdges = _naturalAreaJoinEdges,
+            SizeVariationPercent = _naturalAreaSizeVariation, Pattern = _naturalAreaPattern, JoinEdges = _naturalAreaJoinEdges, Rules = _naturalAreaRules,
             ContentBounds = ReadAreaContentBounds(p.Variants, p.ContentBounds),
             ContentMasks = ReadAreaContentMasks(p.Variants, p.ContentMasks) });
         if (CommitAreaChange(a => a.LayoutVersion < 4 ? natural : null, "Расположить область естественно"))

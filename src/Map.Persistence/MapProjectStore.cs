@@ -29,7 +29,12 @@ public static partial class MapProjectStore
         canvas.Scale is not null
         || layers.OfType<ObjectLayer>().Any(l => l.Objects.Any(o => o.Decoration is not null));
 
+    private static bool HasAreaRules(IEnumerable<MapLayer> layers) =>
+        layers.OfType<ObjectLayer>().Any(l => l.PlacementAreas.Any(a => a.NeedsRulesSchema));
+
     private static int SchemaFor(MapDocument document) =>
+        HasAreaRules(document.Layers) || document.Checkpoints.Any(c => HasAreaRules(c.Snapshot.Layers))
+            ? MapProjectFormat.AreaRulesSchemaVersion :
         document.Layers.OfType<HexLayer>().Any(NeedsHexStructure)
         || document.Checkpoints.Any(c => c.Snapshot.Layers.OfType<HexLayer>().Any(NeedsHexStructure))
             ? MapProjectFormat.HexStructureSchemaVersion :

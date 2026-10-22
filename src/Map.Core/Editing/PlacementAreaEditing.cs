@@ -90,7 +90,7 @@ public static class PlacementAreaPlanner
         && a.ScalePercent == b.ScalePercent && a.Sublayer == b.Sublayer && a.Opacity == b.Opacity
         && a.Name == b.Name && a.LayoutVersion == b.LayoutVersion && a.CompositionOrigin == b.CompositionOrigin
         && a.SizeVariationPercent == b.SizeVariationPercent && a.Pattern == b.Pattern
-        && a.JoinEdges == b.JoinEdges
+        && a.JoinEdges == b.JoinEdges && a.DepthSort == b.DepthSort && Equals(a.Rules, b.Rules)
         && a.CompositionLength == b.CompositionLength && a.CompositionAngleDegrees == b.CompositionAngleDegrees
         && a.ContentBounds.Count == b.ContentBounds.Count && a.ContentBounds.All(kv => b.ContentBounds.TryGetValue(kv.Key, out var value) && value == kv.Value)
         && a.ContentMasks.Count == b.ContentMasks.Count && a.ContentMasks.All(kv => b.ContentMasks.TryGetValue(kv.Key, out var value) && value.Rows.SequenceEqual(kv.Value.Rows))
@@ -281,6 +281,11 @@ public sealed class PlacementAreaCommand : IEditCommand
             var sampler = new PlacementAreaSampler(next, _cancellation);
             var obstacles = next.LayoutVersion == 0 ? null : new PlacementAreaObstacles(document, layer.Id, _id, next.Sublayer, next.LayoutVersion, next);
             var occupied = next.OccupiedSlots.ToBuilder();
+            // R10: rules are a post-filter after spacing, like obstacles, so the slots that stay keep
+            // their places. Their verdict is recomputed for every visited cell.
+            var rules = next.Rules is { Any: true } activeRules ? new PlacementAreaRuleCheck(document, activeRules) : null;
+            var ruleSlots = new HashSet<PlacementAreaSlot>();
+            var visited = new HashSet<long>();
             var cells = (old?.Cells ?? ImmutableDictionary<long, ImmutableArray<PlacementAreaMember>>.Empty).ToBuilder();
             var memberCount = old?.MemberCount ?? 0;
             foreach (var span in spans)
@@ -288,6 +293,7 @@ public sealed class PlacementAreaCommand : IEditCommand
                 {
                     VisitedCells++;
                     var key = new PlacementAreaSlot(x, span.Y, 0).Cell;
+                    visited.Add(key);
                     var previous = cells.TryGetValue(key, out var stored) ? stored : [];
                     var previousIds = previous.Select(m => m.ObjectId).ToHashSet();
                     var members = ImmutableArray.CreateBuilder<PlacementAreaMember>(); var used = new HashSet<ObjectId>();
@@ -296,6 +302,7 @@ public sealed class PlacementAreaCommand : IEditCommand
                     {
                         var item = sampler.Item(slot); var existing = index.FindObject(item.Id);
                         if (obstacles?.Blocks(item) == true) { occupied.Add(slot); continue; }
+                        if (rules?.Blocks(item) == true) { ruleSlots.Add(slot); continue; }
                         members.Add(new(slot, item.Id)); used.Add(item.Id);
                         if (existing is null) additions.Add(item);
                         else if (!previousIds.Contains(item.Id)) throw new InvalidOperationException("Слот области занят посторонним объектом.");
@@ -312,7 +319,9 @@ public sealed class PlacementAreaCommand : IEditCommand
                     }
                     else if (replacements.Count != replacedBefore) ChangedCells++;
                 }
-            next = next with { Cells = cells.ToImmutable(), MemberCount = memberCount, OccupiedSlots = occupied.ToImmutable() };
+            foreach (var kept in (old ?? next).RuleBlocked) if (!visited.Contains(kept.Cell) && rules is not null) ruleSlots.Add(kept);
+            next = next with { Cells = cells.ToImmutable(), MemberCount = memberCount, OccupiedSlots = occupied.ToImmutable(),
+                RuleSlots = ruleSlots.Count == 0 ? null : [.. ruleSlots] };
         }
         var updated = document;
         var known = document.Assets.Select(a => a.Sha256).ToHashSet(StringComparer.OrdinalIgnoreCase);

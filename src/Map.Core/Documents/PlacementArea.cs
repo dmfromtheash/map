@@ -69,6 +69,25 @@ public sealed record PlacementArea
     public int Sublayer { get; init; }
     public double Opacity { get; init; } = 1;
     public StampStyle Style { get; init; } = new("area-template");
+
+    /// <summary>Where the area may put assets (R10, schema v19); null = no rules, as in every older map.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PlacementAreaRules? Rules { get; init; }
+
+    /// <summary>
+    /// Slots the rules removed at the last fill. Unlike <see cref="OccupiedSlots"/> they are
+    /// recomputed on every fill, so switching a rule off brings its assets back exactly where they were.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ImmutableHashSet<PlacementAreaSlot>? RuleSlots { get; init; }
+
+    /// <summary>«Ближние поверх дальних» (R10): objects lower on the map are drawn over the ones above them,
+    /// for any area - before only areas with joined edges sorted so.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool DepthSort { get; init; }
+
+    [JsonIgnore] public ImmutableHashSet<PlacementAreaSlot> RuleBlocked => RuleSlots ?? [];
+    [JsonIgnore] public bool NeedsRulesSchema => Rules is not null || RuleSlots is { Count: > 0 } || DepthSort;
     [JsonIgnore] public IEnumerable<PlacementAreaMember> Members => Cells.Values.SelectMany(c => c);
 
     public void Validate()
@@ -87,6 +106,8 @@ public sealed record PlacementArea
             || Density < 0 || Density >= int.MaxValue || Exclusions.Any(s => s.Ordinal < 0))
             throw new ArgumentException("Плотность области должна быть неотрицательной; связи и исключения — корректными.");
         if (LayoutVersion >= 3 && Density > 100) throw new ArgumentException("Плотность естественной расстановки — от 0 до 100%.");
+        Rules?.Validate();
+        if (RuleBlocked.Any(s => s.Ordinal < 0)) throw new ArgumentException("Некорректные места, снятые правилами области.");
         foreach (var (sha, bounds) in ContentBounds)
         {
             if (!Variants.Any(v => v.Sha256 == sha)) throw new ArgumentException("Границы принадлежат неизвестному изображению области.");
@@ -110,7 +131,7 @@ public sealed record PlacementArea
         foreach (var (key, members) in Cells)
         {
             if (members.IsDefaultOrEmpty || members.Any(m => m is null || m.Slot.Cell != key
-                || m.Slot.Ordinal < 0 || Exclusions.Contains(m.Slot)
+                || m.Slot.Ordinal < 0 || Exclusions.Contains(m.Slot) || RuleBlocked.Contains(m.Slot)
                 || PlacementAreaPlanner.ObjectIdFor(Id, m.Slot) != m.ObjectId || !ids.Add(m.ObjectId)))
                 throw new ArgumentException("Некорректные или повторные связи области.");
             count = checked(count + members.Length);
@@ -130,6 +151,8 @@ public sealed record PlacementArea
             for (var x = span.MinX; x <= span.MaxX; x++)
                 foreach (var slot in sampler.Slots(x, span.Y))
                 {
+                    // A slot the rules removed is not expected; it returns when the rule is switched off.
+                    if (RuleBlocked.Contains(slot)) continue;
                     expected++;
                     if (!ids.Contains(PlacementAreaPlanner.ObjectIdFor(Id, slot)))
                         throw new ArgumentException("Наполнение области не соответствует границе, плотности и исключениям.");

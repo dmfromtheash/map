@@ -50,7 +50,13 @@ public static class MapProjectFormat
     /// </summary>
     public const int HexStructureSchemaVersion = 18;
 
-    public const int MaxSupportedSchemaVersion = HexStructureSchemaVersion;
+    /// <summary>
+    /// The newest schema this build writes and reads: rules of an editable area - not on water, only
+    /// on water, not on roads, only on land - and the places they keep empty (R10). Areas without rules stay older.
+    /// </summary>
+    public const int AreaRulesSchemaVersion = 19;
+
+    public const int MaxSupportedSchemaVersion = AreaRulesSchemaVersion;
 
     /// <summary>
     /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry

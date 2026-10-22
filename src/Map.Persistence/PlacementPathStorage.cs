@@ -17,6 +17,9 @@ public static partial class MapProjectStore
 
     private static void ValidatePathSchema(SceneDto scene, int schema)
     {
+        if (schema < MapProjectFormat.AreaRulesSchemaVersion
+            && scene.Layers?.Any(l => l?.PlacementAreas?.Any(a => a is not null && a.NeedsRulesSchema) == true) == true)
+            throw new MapProjectCorruptedException("Правила областей расстановки требуют схему v19.");
         if (schema < MapProjectFormat.HexStructureSchemaVersion
             && scene.Layers?.Any(l => l?.Hex?.Points is not null || l?.Hex?.Regions?.Any(r => r.ParentRegion != 0) == true) == true)
             throw new MapProjectCorruptedException("Список точек и вложенность регионов требуют схему v18.");

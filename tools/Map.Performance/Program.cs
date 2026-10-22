@@ -59,6 +59,14 @@ else if (options.Profile == "native-giant-export")
 {
     var giant = NativeGiantExport.Run(options); report = giant; gatePassed = giant.GatePassed;
 }
+else if (options.Profile == "native-area-rules")
+{
+    var smoke = NativeAreaRulesSmoke.Run(options); report = smoke; gatePassed = smoke.GatePassed;
+    Console.WriteLine($"native-area-rules: checks={smoke.Checks.Count(c => c.Value)}/{smoke.Checks.Count}, gate={(smoke.GatePassed ? "PASS" : "FAIL")}");
+    foreach (var check in smoke.Checks.Where(c => !c.Value)) Console.WriteLine($"  FAILED {check.Key}");
+    foreach (var note in smoke.Notes) Console.WriteLine($"  {note.Key} = {note.Value}");
+    if (smoke.Failure is not null) Console.WriteLine(smoke.Failure);
+}
 else if (options.Profile == "native-decorations")
 {
     var smoke = NativeDecorationsSmoke.Run(options); report = smoke; gatePassed = smoke.GatePassed;

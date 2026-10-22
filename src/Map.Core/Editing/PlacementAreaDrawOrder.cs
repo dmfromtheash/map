@@ -19,7 +19,7 @@ internal static class PlacementAreaDrawOrder
     private static readonly ConditionalWeakTable<PlacementArea, Index> Cache = new();
     internal static Entry Key(PlacementArea area, SceneObject item)
     { var b = PlacementAreaSampler.VisibleBounds(area, item); return new(b.Bottom, (b.Left + b.Right) / 2, item.Id.Value); }
-    internal static bool Uses(PlacementArea? area) => area is { LayoutVersion: >= 3, JoinEdges: true };
+    internal static bool Uses(PlacementArea? area) => area is { LayoutVersion: >= 3, JoinEdges: true } or { DepthSort: true };
     internal static void Warm(PlacementArea area, IEnumerable<SceneObject> members)
     {
         if (Uses(area)) Cache.GetValue(area, _ => new(members.Select(o => Key(area, o)).ToImmutableSortedSet()));
