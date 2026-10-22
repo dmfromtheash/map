@@ -15,10 +15,10 @@ namespace Map.App.Views;
 public sealed partial class EditorView
 {
     private static readonly (string Key, string Text)[] InkChoices =
-        [("#FF3B2A1A", "Сепия"), ("#FF1E2430", "Чернила"), ("#FF6B4A12", "Золото"), ("#FF6E1E1E", "Киноварь")];
+        [("#FF6B4A12", "Золото"), ("#FF6E1E1E", "Киноварь"), ("#FF3B2A1A", "Сепия"), ("#FF1E2430", "Чернила")];
 
     private static readonly (string Key, string Text)[] PaperChoices =
-        [("#FFF1E3C4", "Пергамент"), ("#FFFFFFFF", "Белая"), ("#00000000", "Без бумаги"), ("#FF2A2118", "Тёмная")];
+        [("#FFF6E7C1", "Светлый пергамент"), ("#FFF1E3C4", "Пергамент"), ("#FFFFFFFF", "Белая"), ("#00000000", "Без бумаги"), ("#FF2A2118", "Тёмная")];
 
     private Control BuildMeasurePanel()
     {

@@ -117,6 +117,24 @@ public sealed record DecorationStyle
 
     public override int GetHashCode() => HashCode.Combine(Kind, Variant, Title, Subtitle, InkColor, PaperColor, Scale, Entries.Count);
 
+    /// <summary>
+    /// The look the owner chose for new decorations (2026-10-22, «вариант 3 · Парадный»): gold ink on
+    /// light parchment, the sixteen-point rose with its tick ring, the framed cartouche titled in
+    /// vermilion and the chequered scale bar.
+    /// </summary>
+    public static DecorationStyle Ceremonial(DecorationKind kind, string title = "") => new()
+    {
+        Kind = kind,
+        Variant = kind == DecorationKind.Compass ? 2 : 0,
+        Title = title,
+        InkColor = kind == DecorationKind.Cartouche ? CeremonialVermilion : CeremonialGold,
+        PaperColor = CeremonialParchment,
+    };
+
+    public const string CeremonialGold = "#FF6B4A12";
+    public const string CeremonialVermilion = "#FF6E1E1E";
+    public const string CeremonialParchment = "#FFF6E7C1";
+
     public static string DefaultName(DecorationKind kind) => kind switch
     {
         DecorationKind.ScaleBar => "Масштабная линейка",

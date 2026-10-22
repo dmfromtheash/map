@@ -31,9 +31,11 @@ public static class MapDecorations
                     DecorationKind.Legend => style with { Entries = legend ??= BuildLegend(document) },
                     _ => style,
                 };
-                if (refreshed.Equals(style)) continue;
+                var height = refreshed.Kind == DecorationKind.Legend ? LegendHeight(item.Width, refreshed.Entries.Count) : item.Height;
+                if (refreshed.Equals(style) && Math.Abs(height - item.Height) < .5) continue;
                 rewritten ??= [.. layer.Objects];
-                rewritten[i] = item with { Decoration = refreshed };
+                rewritten[i] = (Math.Abs(height - item.Height) < .5 ? item : SceneObjectClone.At(item, item.X, item.Y, item.Width, height))
+                    with { Decoration = refreshed };
             }
 
             if (rewritten is null) continue;
@@ -43,6 +45,9 @@ public static class MapDecorations
 
         return layers is null ? document : document.WithLayers(layers);
     }
+
+    /// <summary>A legend is as tall as its lines: a heading and one row per entry, no empty tail.</summary>
+    public static double LegendHeight(double width, int entries) => Math.Round(width * (.3 + .11 * Math.Max(1, entries)), 2);
 
     public static bool HasDecorations(MapDocument document) =>
         document.Layers.OfType<ObjectLayer>().Any(layer => layer.Objects.Any(o => o.Kind == SceneObjectKind.Decoration));

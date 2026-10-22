@@ -188,8 +188,8 @@ public sealed class DecorationsApplication : Application
         _editor.ActiveTool = EditorTool.Select;
         _editor.Session.SelectedObjectId = placed[DecorationKind.Compass].Id; await Settle();
         depth = _editor.Session.UndoDepth;
-        _editor.SetDecorationVariant(2); await Settle();
-        _report.Checks["compass-style-edit"] = _editor.SelectedDecoration?.Variant == 2 && _editor.Session.UndoDepth == depth + 1;
+        _editor.SetDecorationVariant(4); await Settle();
+        _report.Checks["compass-style-edit"] = _editor.SelectedDecoration?.Variant == 4 && _editor.Session.UndoDepth == depth + 1;
         _report.Checks["decoration-block-shown"] = Find<TextBlock>("DecorationInfoText").IsEffectivelyVisible;
         await Frame(); Shot("decorations");
 
@@ -205,7 +205,7 @@ public sealed class DecorationsApplication : Application
             var dark = 0;
             for (var y = (int)cartouche.Y; y < cartouche.Y + cartouche.Height; y++)
             for (var x = (int)cartouche.X; x < cartouche.X + cartouche.Width; x++)
-                if (bitmap.GetPixel(x, y) is var c && c.Red < 90 && c.Green < 70 && c.Blue < 60) dark++;
+                if (bitmap.GetPixel(x, y) is var c && .3 * c.Red + .59 * c.Green + .11 * c.Blue < 110) dark++;
             _report.Notes["export-cartouche-ink-pixels"] = dark.ToString(System.Globalization.CultureInfo.InvariantCulture);
             _report.Checks["export-carries-decorations"] = dark > 500;
         }

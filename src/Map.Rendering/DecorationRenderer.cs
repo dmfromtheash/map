@@ -349,7 +349,7 @@ internal static class DecorationRenderer
         Centered(canvas, heading, rect.MidX, top, headingFont, inkFill);
         top += headingFont.Size * 0.6f;
 
-        var rowHeight = Math.Min((rect.Bottom - pad - top) / rows, rect.Height * 0.12f);
+        var rowHeight = Math.Min((rect.Bottom - pad - top) / rows, rect.Width * 0.11f);
         if (rowHeight <= 0) return;
         using var font = Font(rowHeight * 0.48f);
         if (style.Entries.Count == 0)

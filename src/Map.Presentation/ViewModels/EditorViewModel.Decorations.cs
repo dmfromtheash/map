@@ -68,11 +68,7 @@ public sealed partial class EditorViewModel
             DecorationKind.Cartouche => (unit * 0.36, unit * 0.12),
             _ => (unit * 0.2, unit * 0.28),
         };
-        var style = new DecorationStyle
-        {
-            Kind = kind,
-            Title = kind == DecorationKind.Cartouche ? Session.Document.Title : "",
-        };
+        var style = DecorationStyle.Ceremonial(kind, kind == DecorationKind.Cartouche ? Session.Document.Title : "");
         var item = new SceneObject(ObjectId.New(), SceneObjectKind.Decoration,
             EntityNameGenerator.Object(Session.Document, SceneObjectKind.Decoration, DecorationTitle(kind)),
             cx - width / 2, cy - height / 2, width, height, 0, "#00000000", "#00000000", 0, true, false)

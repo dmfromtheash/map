@@ -40,6 +40,11 @@ public sealed class DecorationEditorTests
         Assert.Equal(kind, added.Decoration!.Kind);
         Assert.Equal(DecorationStyle.DefaultName(kind), added.Name);
         if (kind == DecorationKind.Cartouche) Assert.Equal("Северные земли", added.Decoration.Title);
+        // The owner's choice for new decorations: «Парадный» — gold, vermilion cartouche, 16-point rose.
+        Assert.Equal(kind == DecorationKind.Cartouche ? DecorationStyle.CeremonialVermilion : DecorationStyle.CeremonialGold, added.Decoration.InkColor);
+        Assert.Equal(DecorationStyle.CeremonialParchment, added.Decoration.PaperColor);
+        if (kind == DecorationKind.Compass) Assert.Equal(2, added.Decoration.Variant);
+        if (kind == DecorationKind.Legend) Assert.Equal(MapDecorations.LegendHeight(added.Width, added.Decoration.Entries.Count), added.Height, 1);
         if (kind == DecorationKind.Legend) Assert.Contains(added.Decoration.Entries, e => e.Kind == LegendEntryKind.River);
         Assert.Equal(EditorTool.Select, editor.ActiveTool);
 
