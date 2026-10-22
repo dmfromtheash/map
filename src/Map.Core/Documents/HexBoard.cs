@@ -39,8 +39,8 @@ public sealed record HexCell
 
         Terrain = terrain;
         Variant = variant;
-        Feature = feature;
-        FeatureVariant = feature is null ? 0 : featureVariant;
+        PointsOfInterest = feature is null ? ImmutableList<HexPoi>.Empty
+            : LegacyPoints.GetOrAdd((feature, featureVariant), key => [new HexPoi(key.Item1, variant: key.Item2)]);
         Rotation = ((rotation % 6) + 6) % 6;
         Region = region;
         Revealed = revealed;
@@ -50,9 +50,21 @@ public sealed record HexCell
 
     public int Variant { get; }
 
-    public string? Feature { get; }
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<(string, int), ImmutableList<HexPoi>> LegacyPoints = new();
 
-    public int FeatureVariant { get; }
+    public ImmutableList<HexPoi> PointsOfInterest { get; private init; } = [];
+
+    // Compatibility for existing brushes: the ordered collection is the only stored value.
+    public string? Feature => PointsOfInterest.FirstOrDefault()?.Type;
+
+    public int FeatureVariant => PointsOfInterest.FirstOrDefault()?.Variant ?? 0;
+
+    public HexCell WithPointsOfInterest(IEnumerable<HexPoi> points)
+    {
+        var list = points.ToImmutableList();
+        if (list.Count > 64) throw new ArgumentException("В гексе допускается до 64 точек интереса.");
+        return PointsOfInterest.SequenceEqual(list) ? this : this with { PointsOfInterest = list };
+    }
 
     /// <summary>The terrain picture turned by this many 60° steps clockwise (0..5).</summary>
     public int Rotation { get; }
@@ -67,19 +79,21 @@ public sealed record HexCell
     public bool NeedsWorkshopSchema => Rotation != 0 || Region != 0 || Revealed;
 
     public HexCell WithFeature(string? feature, int featureVariant = 0) =>
-        Of(Terrain, Variant, feature, featureVariant, Rotation, Region, Revealed);
+        WithPointsOfInterest(feature is null ? PointsOfInterest.Skip(1)
+            : PointsOfInterest.IsEmpty ? [new HexPoi(feature, variant: featureVariant)]
+            : PointsOfInterest.SetItem(0, PointsOfInterest[0] with { Type = feature, Variant = featureVariant }));
 
     public HexCell WithTerrain(string terrain, int variant, int rotation) =>
-        Of(terrain, variant, Feature, FeatureVariant, rotation, Region, Revealed);
+        Of(terrain, variant, rotation: rotation, region: Region, revealed: Revealed).WithPointsOfInterest(PointsOfInterest);
 
     public HexCell WithRotation(int rotation) =>
-        Of(Terrain, Variant, Feature, FeatureVariant, rotation, Region, Revealed);
+        Of(Terrain, Variant, rotation: rotation, region: Region, revealed: Revealed).WithPointsOfInterest(PointsOfInterest);
 
     public HexCell WithRegion(int region) =>
-        Of(Terrain, Variant, Feature, FeatureVariant, Rotation, region, Revealed);
+        Of(Terrain, Variant, rotation: Rotation, region: region, revealed: Revealed).WithPointsOfInterest(PointsOfInterest);
 
     public HexCell WithRevealed(bool revealed) =>
-        Of(Terrain, Variant, Feature, FeatureVariant, Rotation, Region, revealed);
+        Of(Terrain, Variant, rotation: Rotation, region: Region, revealed: revealed).WithPointsOfInterest(PointsOfInterest);
 
     /// <summary>Distinct values are few (tiles × variants) while a board holds up to millions of hexes.</summary>
     private const int MaxShared = 1 << 16;

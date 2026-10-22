@@ -17,7 +17,15 @@ public static class ExportPlayerVisibility
         var cells = layer.FogEnabled
             ? HexBoard.FromCells(board.Layout, board.Columns, board.Rows, board.Cells.Where(p => p.Value.Revealed))
             : board;
+        cells = cells.With(cells.Cells.Where(p => p.Value.PointsOfInterest.Any(point => !point.PlayerVisible))
+            .Select(p => new KeyValuePair<HexCoord, HexCell?>(p.Key,
+                p.Value.WithPointsOfInterest(p.Value.PointsOfInterest.Where(point => point.PlayerVisible)))));
         var regions = cells.Cells.Select(p => p.Value.Region).Where(id => id != 0).ToHashSet();
+        foreach (var id in regions.ToArray())
+        {
+            var parent = layer.Region(id)?.ParentRegion ?? 0;
+            while (parent != 0 && regions.Add(parent)) parent = layer.Region(parent)?.ParentRegion ?? 0;
+        }
         return layer with
         {
             Board = cells,

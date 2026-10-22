@@ -187,6 +187,8 @@ public sealed record HexRegion
 
     public int Id { get; }
 
+    public int ParentRegion { get; init; }
+
     public string Name { get; init; }
 
     /// <summary>"#AARRGGBB": the tint of its hexes and the colour of its frontier.</summary>
