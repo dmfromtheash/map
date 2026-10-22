@@ -1094,7 +1094,8 @@ public static partial class HexLayerRenderer
             shape.Whole.Dispose();
         }
 
-        if (overlay.Route is { Count: > 0 } route)
+        DrawJourneyOverlay(canvas, layer, overlay, viewScale);
+        if (overlay.Journeys.Count == 0 && overlay.Route is { Count: > 0 } route)
         {
             using var line = new SKPath();
             for (var i = 0; i < route.Count; i++)

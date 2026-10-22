@@ -243,7 +243,7 @@ public sealed partial class RegionalApplication
         using (var archive = ZipFile.OpenRead(path))
         using (var manifest = JsonDocument.Parse(archive.GetEntry("manifest.json")!.Open()))
         {
-            Check("a workshop map saves blocking flags at schema v14", manifest.RootElement.GetProperty("schemaVersion").GetInt32() == MapProjectFormat.HexPathBlockingSchemaVersion);
+            Check("мастерская сохраняет план путешествия в v21", manifest.RootElement.GetProperty("schemaVersion").GetInt32() == MapProjectFormat.TravelSchemaVersion);
         }
 
         var reopened = MapProjectStore.Open(path).Document;
@@ -267,6 +267,7 @@ public sealed partial class RegionalApplication
         Check("the last step can be dealt again", _editor.Session.UndoDepth == depthBefore + 6);
         _view.Canvas.FitToCanvas(); await Settle(); await Task.Delay(300); await Settle();
         Capture(_view, "workshop-08-generated");
+        await VerifyHexTravelR18();
         _editor.Session.MarkSaved(_editor.Session.CaptureSaveCheckpoint());
     }
 }

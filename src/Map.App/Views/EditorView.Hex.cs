@@ -872,7 +872,7 @@ public sealed partial class EditorView
 
     // ------------------------------------------------------------------ Разметка: ruler
 
-    private Control BuildHexMeasureSection()
+    private Control BuildHexScaleSection()
     {
         static TextBox Box(string name, double width) => new TextBox { Name = name, Width = width, MinWidth = 0 };
         var perHex = Box("HexTravelPerHexBox", 58);
@@ -897,12 +897,12 @@ public sealed partial class EditorView
             }
         }
 
-        var route = new TextBlock { Name = "HexRouteText", TextWrapping = TextWrapping.Wrap, FontWeight = FontWeight.SemiBold };
+        var route = new TextBlock { Name = "HexLegacyRouteText", TextWrapping = TextWrapping.Wrap, FontWeight = FontWeight.SemiBold };
         HexSync(() => route.Text = _editor.HexRoute is { } measured
             ? "Путь: " + measured.Label
             : "Протяните от гекса к гексу.", nameof(EditorViewModel.HexRoute), nameof(EditorViewModel.HexMode));
         var apply = HexCommand("HexTravelApplyButton", "Применить масштаб", MapIcons.Check, Apply);
-        var scaleHint = HexHint("Дорога вдвое быстрее равнины; лес и холмы вдвое, горы и болота втрое медленнее; брод +½ гекса; море пешком не пройти.");
+        var scaleHint = HexHint("Дорога улучшает местность на ступень. Профиль задаёт мили за день; масштаб — расстояние между гексами.");
         return Ui.Category("HexMeasureCategory", "Линейка", "accent-create", new StackPanel
         {
             Spacing = 8,

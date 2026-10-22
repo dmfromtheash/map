@@ -199,6 +199,7 @@ public sealed class HexWorkshopToolsTests
         var editor = HexEditor();
         Fill(editor, "starter/forest");
         editor.SetHexTravel(6, "миль", 24);
+        editor.HexCampaignDay = 90; // Лето: R18 отделяет цену профиля от сезонной распутицы.
         editor.HexMode = HexToolMode.Measure;
         Drag(editor, (2, 2), (10, 2));
         var forest = editor.HexRoute!;
@@ -212,7 +213,7 @@ public sealed class HexWorkshopToolsTests
         Drag(editor, (2, 2), (10, 2));
         editor.HexMode = HexToolMode.Measure;
         Drag(editor, (2, 2), (10, 2));
-        Assert.True(editor.HexRoute!.Days < forest.Days / 3);
+        Assert.Equal(forest.Days / 2, editor.HexRoute!.Days, 6); // Дорога: лес 2 → 1, а не прежние ×0,5 от равнины.
     }
 
     [Fact]

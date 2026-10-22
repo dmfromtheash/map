@@ -9028,6 +9028,7 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     private void AfterEdit(bool geometryOnly = false)
     {
+        RefreshHexJourney();
         if (CollectEditTimings) { LastEditTimings.Add(("after-edit", 0)); }
         Timed("path/area/river/road state", () => { RaisePathState(); RaiseAreaState(); RaiseRiverState(); RaiseRoadState(); });
         _lastCommittedEditUtc = _clock();

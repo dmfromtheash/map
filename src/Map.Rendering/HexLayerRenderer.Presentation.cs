@@ -14,11 +14,17 @@ public static partial class HexLayerRenderer
     {
         var layout = layer.Board.Layout;
         var travel = presentation == HexPresentation.Travel
-            ? new HexTravelPlanner(layer, id => HexStarterTiles.Find(id)?.TravelCost) : null;
+            ? new HexJourneyPlanner(layer, id => HexStarterTiles.Find(id) is { } tile ? tile.TravelCost : 1, id => HexStarterTiles.Find(id)?.IsWater == true) : null;
         using var fill = new SKPaint { IsAntialias = true };
         using var ink = new SKPaint { IsAntialias = true, Color = SKColor.Parse("#302B24") };
         using var halo = new SKPaint { IsAntialias = true, Color = SKColors.White, Style = SKPaintStyle.Stroke, StrokeWidth = 2 };
         using var font = new SKFont(SKTypeface.Default, (float)Math.Clamp(layout.Size * .16, 6, 16));
+        if (presentation == HexPresentation.Travel)
+        {
+            var season = CampaignCalendar.Season(layer.CampaignDay);
+            fill.Color = season == CampaignSeason.Winter ? new SKColor(205, 225, 245, 55) : season is CampaignSeason.Spring or CampaignSeason.Autumn ? new SKColor(110, 135, 160, 22) : SKColors.Transparent;
+            canvas.DrawRect(new SKRect((float)view.Left, (float)view.Top, (float)view.Right, (float)view.Bottom), fill);
+        }
         foreach (var key in layer.Board.ChunksIn(view))
         {
         if (layer.Board.Chunk(key) is not { } chunk) continue;
@@ -47,7 +53,7 @@ public static partial class HexLayerRenderer
             {
                 var costs = hex.Neighbors().Select(from => travel!.StepCost(from, hex)).Where(c => c.HasValue).ToArray();
                 var cost = costs.Length == 0 ? (double?)null : costs.Min();
-                label = cost is null ? "Непроходимо" : $"{cost * layer.Travel.DistancePerHex / layer.Travel.DistancePerDay:0.##} дн.";
+                label = cost is null ? "Непроходимо" : $"{cost:0.##} дн.";
             }
             else if (scale * layout.Size > 28)
                 label = string.Join(" · ", cell.PointsOfInterest.Where(p => !player || p.PlayerVisible).Select(p => p.Name).Where(n => n.Length != 0));

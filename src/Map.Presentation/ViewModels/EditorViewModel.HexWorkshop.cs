@@ -70,6 +70,7 @@ public sealed partial class EditorViewModel
         get
         {
             if (!IsHexWorkshop || ActiveHexLayer is not { } layer) return null;
+            RefreshHexJourney();
             var overlay = new HexOverlay(layer.Id) { Focus = _hexMode == HexToolMode.Key && ActiveTool == EditorTool.Hex ? _hexKeyHex : null };
             if (ActiveTool != EditorTool.Hex) return overlay.Focus is null ? null : overlay;
             if (_hexMode == HexToolMode.Select)
@@ -82,9 +83,10 @@ public sealed partial class EditorViewModel
             }
 
             if (_hexMode == HexToolMode.Path && PathDraft(layer) is { } draft) overlay = overlay with { PathPreview = draft };
-            if (_hexMode == HexToolMode.Measure && _hexRoute is { } route)
+            if (_hexMode == HexToolMode.Measure)
             {
-                overlay = overlay with { Route = route.Hexes, RouteLabel = route.Label };
+                overlay = overlay with { Route = _hexRoute?.Hexes, RouteLabel = _hexRoute?.Label, Journeys = _journeyRoutes, SelectedJourney = _journeySelected,
+                    TravelMode = layer.Journey.Mode, Reach = _journeyReach };
             }
 
             return overlay;
@@ -676,6 +678,17 @@ public sealed partial class EditorViewModel
 
     private bool BeginHexMeasure(HexLayer layer, HexCoord hex)
     {
+        if (_journeyPick is { } from)
+        {
+            _journeyPick = null;
+            SetHexJourney(from ? layer.Journey with { From = hex } : layer.Journey with { To = hex });
+            return false;
+        }
+        for (var i = 0; i < _journeyRoutes.Count; i++)
+        {
+            if (i != _journeySelected && _journeyRoutes[i].Route.Hexes.Contains(hex) && !_journeyRoutes[_journeySelected].Route.Hexes.Contains(hex))
+            { SelectHexJourney(i); return false; }
+        }
         _hexMeasureStart = hex;
         _hexRoute = new HexRoute([hex], 0, 0, 0, layer.Travel.Unit);
         Raise(nameof(HexOverlay));
@@ -698,7 +711,13 @@ public sealed partial class EditorViewModel
         Raise(nameof(HexOverlay));
     }
 
-    private void EndHexMeasure() => Raise(nameof(HexRoute));
+    private void EndHexMeasure()
+    {
+        if (_hexMeasureStart is { } from && _hexRoute is { } route && ActiveHexLayer is { } l)
+            SetHexJourney(l.Journey with { From = from, To = route.Hexes[^1] });
+        _hexMeasureStart = null;
+        Raise(nameof(HexRoute));
+    }
 
     // ------------------------------------------------------------------ selection, clipboard
 

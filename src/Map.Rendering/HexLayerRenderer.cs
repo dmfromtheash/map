@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using Map.Core.Documents;
+using Map.Core.Editing;
 using SkiaSharp;
 
 namespace Map.Rendering;
@@ -55,6 +56,10 @@ public sealed record HexOverlay(LayerId LayerId)
     public IReadOnlyList<HexCoord>? Route { get; init; }
 
     public string? RouteLabel { get; init; }
+    public IReadOnlyList<JourneyRoute> Journeys { get; init; } = [];
+    public int SelectedJourney { get; init; }
+    public TravelMode TravelMode { get; init; }
+    public TravelReach? Reach { get; init; }
 
     public HexCoord? Focus { get; init; }
 }

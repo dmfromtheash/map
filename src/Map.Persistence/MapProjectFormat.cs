@@ -63,10 +63,12 @@ public static class MapProjectFormat
     /// </summary>
     public const int GameplaySchemaVersion = 20;
 
+    public const int TravelSchemaVersion = 21;
+
     /// <summary>
     /// The newest schema this build writes and reads: painted brush strokes inside river water
     /// (`PaintStrokes` of the river style, the owner's painted look). Rivers without them stay older.
-    /// Number 21 is reserved for R18.
+    /// Number 21 is R18 travel.
     /// </summary>
     public const int PaintedRiversSchemaVersion = 22;
 

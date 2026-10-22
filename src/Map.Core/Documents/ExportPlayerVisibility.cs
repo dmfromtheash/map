@@ -33,6 +33,8 @@ public static class ExportPlayerVisibility
         return layer with
         {
             Board = cells,
+            // Таблицы встреч и план ведущего никогда не передаются игрокам.
+            Journey = new HexTravelSettings(),
             Notes = layer.Notes.Where(p => NoteVisible(layer, p.Key, p.Value))
                 .ToImmutableDictionary(p => p.Key, p => p.Value with { GmText = "", ChildMap = null,
                     Title = HexGameplay.PlayerLabel(p.Value.Title, p.Value.ApproximateLabel, p.Value.Rumor, "Слух"),

@@ -193,6 +193,11 @@ public static class HexBoardOps
         {
             Board = board,
             Notes = notes.ToImmutable(),
+            Journey = layer.Journey with
+            {
+                From = layer.Journey.From is { } from && Move(from) is { } newFrom && board.Contains(newFrom) ? newFrom : null,
+                To = layer.Journey.To is { } to && Move(to) is { } newTo && board.Contains(newTo) ? newTo : null,
+            },
             Party = layer.Party with
             {
                 Position = layer.Party.Position is { } position && Move(position) is { } movedPosition && board.Contains(movedPosition) ? movedPosition : null,

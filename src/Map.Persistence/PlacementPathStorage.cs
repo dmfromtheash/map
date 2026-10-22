@@ -25,6 +25,8 @@ public static partial class MapProjectStore
             throw new MapProjectCorruptedException("Живописные мазки реки требуют схему v22.");
         if (scene.Layers?.Any(l => l?.Rivers?.Any(r => r is not null && (!double.IsFinite(r.Style.PaintStrokes) || r.Style.PaintStrokes is < 0 or > 1)) == true) == true)
             throw new MapProjectCorruptedException("Сила мазков реки — от 0 до 1.");
+        if (schema < MapProjectFormat.TravelSchemaVersion && scene.Layers?.Any(l => l?.Hex?.Journey is not null) == true)
+            throw new MapProjectCorruptedException("Путешествия гексов требуют схему v21.");
         if (schema < MapProjectFormat.GameplaySchemaVersion && scene.Layers?.Any(l => l?.Hex?.Gameplay is not null) == true)
             throw new MapProjectCorruptedException("Игровые данные гексов требуют схему v20.");
         if (schema < MapProjectFormat.AreaRulesSchemaVersion
