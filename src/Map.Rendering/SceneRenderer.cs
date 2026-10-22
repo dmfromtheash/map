@@ -4137,6 +4137,11 @@ public static class SceneRenderer
 
         var length = distances[^1];
         if (length <= 0) return;
+        // Cartographic conventions (R07 «Красота», research of labels 2026-10-22): water names lean
+        // in italic; a name on a long line opens its letters out along it, up to about half a letter.
+        var water = along.Target == TextPathTarget.River;
+        var skew = font.SkewX;
+        if (water && Math.Abs(skew) < 1e-3) font.SkewX = -0.2f;
         var glyphs = new string[line.Length];
         var advances = new float[line.Length];
         var total = 0f;
@@ -4145,6 +4150,15 @@ public static class SceneRenderer
             glyphs[i] = line[i].ToString();
             advances[i] = font.MeasureText(glyphs[i]) + (i < line.Length - 1 ? (float)style.LetterSpacing : 0);
             total += advances[i];
+        }
+        if (line.Length > 1 && length > total * 1.6)
+        {
+            var spread = (float)Math.Min((length * 0.62 - total) / (line.Length - 1), style.FontSize * 0.55);
+            if (spread > 0)
+            {
+                for (var i = 0; i < line.Length - 1; i++) advances[i] += spread;
+                total += spread * (line.Length - 1);
+            }
         }
 
         (float X, float Y, float Angle) At(double s)
@@ -4165,20 +4179,43 @@ public static class SceneRenderer
             return ((float)(rect.Left + a.X + (b.X - a.X) * t), (float)(rect.Top + a.Y + (b.Y - a.Y) * t), (float)angle);
         }
 
-        void Run(SKPaint runPaint, float offsetX, float offsetY)
+        // Each glyph turns with the chord across its own width, and never more than 25° from its
+        // neighbour (QGIS / MapLibre keep a maximum angle between letters): a sharp kink in the
+        // line bends the name gently instead of breaking it.
+        var placed = new (float X, float Y, float Angle)[glyphs.Length];
         {
             var cursor = length / 2 - total / 2;
+            const double maxTurn = 25 * Math.PI / 180;
             for (var i = 0; i < glyphs.Length; i++)
             {
-                var (x, y, angle) = At(cursor + advances[i] / 2);
-                canvas.Save();
-                canvas.Translate(x + offsetX, y + offsetY);
-                canvas.RotateRadians(angle);
-                canvas.DrawText(glyphs[i], -advances[i] / 2, 0, SKTextAlign.Left, font, runPaint);
-                canvas.Restore();
+                var middle = cursor + advances[i] / 2;
+                var (x, y, _) = At(middle);
+                var (ax, ay, _) = At(middle - advances[i] * 0.6);
+                var (bx, by, _) = At(middle + advances[i] * 0.6);
+                var angle = Math.Atan2(by - ay, bx - ax);
+                if (i > 0)
+                {
+                    var delta = Math.IEEERemainder(angle - placed[i - 1].Angle, 2 * Math.PI);
+                    angle = placed[i - 1].Angle + Math.Clamp(delta, -maxTurn, maxTurn);
+                }
+                placed[i] = (x, y, (float)angle);
                 cursor += advances[i];
             }
         }
+
+        void Run(SKPaint runPaint, float offsetX, float offsetY)
+        {
+            for (var i = 0; i < glyphs.Length; i++)
+            {
+                var (x, y, angle) = placed[i];
+                canvas.Save();
+                canvas.Translate(x + offsetX, y + offsetY);
+                canvas.RotateRadians(angle);
+                canvas.DrawText(glyphs[i], -(advances[i] - spreadOf(i)) / 2, 0, SKTextAlign.Left, font, runPaint);
+                canvas.Restore();
+            }
+        }
+        float spreadOf(int i) => i < glyphs.Length - 1 ? advances[i] - font.MeasureText(glyphs[i]) - (float)style.LetterSpacing : 0;
 
         if (!options.FastPreview && style.ShadowOpacity > 0)
         {
@@ -4195,18 +4232,23 @@ public static class SceneRenderer
 
         if (!options.FastPreview && style.OutlineWidth > 0)
         {
+            // A soft halo of the paper rather than a hard outline: the name lifts off the line
+            // without a cut-out edge (Tolkien-style atlases, QGIS «buffer» with blur).
             using var outline = new SKPaint
             {
                 Style = SKPaintStyle.Stroke,
-                StrokeWidth = (float)style.OutlineWidth,
+                StrokeWidth = (float)(style.OutlineWidth * 1.4),
+                StrokeJoin = SKStrokeJoin.Round,
                 Color = ParseColor(style.OutlineColor).WithScaledAlpha(objectAlpha),
                 IsAntialias = true,
                 BlendMode = ParseBlend(style.Blend),
+                MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, (float)Math.Max(0.4, style.OutlineWidth * 0.45)),
             };
             Run(outline, 0, 0);
         }
 
         Run(paint, 0, 0);
+        font.SkewX = skew;
     }
 
     private static void DrawTextRun(

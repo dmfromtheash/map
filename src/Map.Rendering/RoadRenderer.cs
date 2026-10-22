@@ -705,7 +705,10 @@ public static class RoadRenderer
     private static void DrawEdge(SKCanvas canvas, SKPath body, RoadStyle style, int seed, double scale, bool fastPreview)
     {
         var width = style.EdgeWidth;
-        if (width * scale < 0.5) width = 0.5 / scale;
+        // A painted road keeps its pen line readable far out (owner 2026-10-22: at 57 % the contour
+        // vanished); older looks keep their half-pixel floor.
+        var floor = style.PaintStrokes > 0 ? 0.9 : 0.5;
+        if (width * scale < floor) width = floor / scale;
         var color = SceneRenderer.ParseColor(style.EdgeColor).WithAlpha(Alpha(style.EdgeOpacity));
         var pen = style.Drawing == RoadDrawing.PenRuts;
         using var ink = new SKPaint { Color = color, IsAntialias = true, Style = SKPaintStyle.Fill };
