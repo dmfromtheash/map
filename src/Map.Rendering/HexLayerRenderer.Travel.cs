@@ -37,7 +37,10 @@ public static partial class HexLayerRenderer
                 if (outer is not null)
                 {
                     var at = outer.OrderBy(p => p.Y).ElementAt(Math.Min(outer.Count - 1, outer.Count / 8));
-                    Badge(band.Day == 1 ? "1 день" : $"{band.Day} дня", at.X, at.Y, SKColor.Parse("#F2F8F3"));
+                    var inset = Math.Min(80 * pixel, layer.Board.PixelWidth / 3);
+                    var labelX = Math.Clamp(at.X, inset, Math.Max(inset, layer.Board.PixelWidth - inset));
+                    var labelY = Math.Clamp(at.Y, 24 * pixel, Math.Max(24 * pixel, layer.Board.PixelHeight - 24 * pixel));
+                    Badge(band.Day == 1 ? "1 день" : $"{band.Day} дня", labelX, labelY, SKColor.Parse("#F2F8F3"));
                 }
             }
         }
@@ -85,7 +88,7 @@ public static partial class HexLayerRenderer
             }
             foreach (var day in journey.Days)
             {
-                var (x, y) = layout.Center(day.Camp); Badge(day.Day.ToString(), x, y, color);
+                var (x, y) = layout.Center(day.Camp); Badge(day.Day.ToString(System.Globalization.CultureInfo.CurrentCulture), x, y, color);
             }
             var start = layout.Center(points[0]); var finish = layout.Center(points[^1]);
             white.Color = SKColors.White; ink.Color = SKColor.Parse("#26394A");

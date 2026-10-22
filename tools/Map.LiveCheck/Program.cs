@@ -112,6 +112,7 @@ try
         }
         if (Arg("--hex-travel") is not null)
         {
+            MoveToSecondaryDisplay(main.Properties.NativeWindowHandle.ValueOrDefault, Log, "DISPLAY1");
             missing += HexTravelCheck.Run(main, outDir, Log, Shot);
             main.Close();
             return missing == 0 ? 0 : 2;
@@ -439,10 +440,12 @@ static extern bool IsWindowVisible(IntPtr window);
 [System.Runtime.InteropServices.DllImport("user32.dll")]
 static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
 
-static void MoveToSecondaryDisplay(IntPtr window, Action<string> log)
+static void MoveToSecondaryDisplay(IntPtr window, Action<string> log, string? preferredDisplay = null)
 {
     if (Environment.GetEnvironmentVariable("MAP_LIVE_PRIMARY") == "1") return;
-    var screen = System.Windows.Forms.Screen.AllScreens.FirstOrDefault(s => !s.Primary);
+    var screen = preferredDisplay is null
+        ? System.Windows.Forms.Screen.AllScreens.FirstOrDefault(s => !s.Primary)
+        : System.Windows.Forms.Screen.AllScreens.FirstOrDefault(s => s.DeviceName.EndsWith(preferredDisplay, StringComparison.OrdinalIgnoreCase));
     if (screen is null || window == IntPtr.Zero) return;
     ShowWindow(window, 9); // restore, so the move is not undone by a maximised state
     var area = screen.WorkingArea;

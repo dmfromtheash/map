@@ -168,7 +168,8 @@ public sealed partial class EditorViewModel
         if (ActiveHexLayer is not { } layer || layer.Region(id) is not { } region) return;
         var cleared = layer.Board.Cells.Where(pair => pair.Value.Region == id)
             .Select(pair => new KeyValuePair<HexCoord, HexCell?>(pair.Key, pair.Value.WithRegion(0))).ToList();
-        ExecuteHexLayerEdit("Удалить регион", layer, layer with { Regions = layer.Regions.Remove(region).Select(r => r.ParentRegion == id ? r with { ParentRegion = region.ParentRegion } : r).ToImmutableList(), Board = layer.Board.With(cleared) });
+        ExecuteHexLayerEdit("Удалить регион", layer, layer with { Regions = layer.Regions.Remove(region).Select(r => r.ParentRegion == id ? r with { ParentRegion = region.ParentRegion } : r).ToImmutableList(), Board = layer.Board.With(cleared),
+            Journey = layer.Journey with { Encounters = layer.Journey.Encounters.RemoveAll(t => t.Region == id) } });
         if (_hexRegionId == id) _hexRegionId = 0;
         Raise(nameof(HexRegions));
         Raise(nameof(HexRegionId));
@@ -651,7 +652,8 @@ public sealed partial class EditorViewModel
 
     // ------------------------------------------------------------------ travel ruler
 
-    public HexTravelScale HexTravel => ActiveHexLayer?.Travel ?? HexTravelScale.Default;
+    public HexTravelScale HexTravel => ActiveHexLayer is { } l
+        ? l.Travel with { DistancePerDay = l.Journey.Profile.MilesPerDay * (l.Travel.Unit == "км" ? 1.609344 : 1) } : HexTravelScale.Default;
 
     /// <summary>The last measured way, if any.</summary>
     public HexRoute? HexRoute => _hexRoute;
@@ -670,8 +672,11 @@ public sealed partial class EditorViewModel
             return;
         }
 
-        if (scale == layer.Travel) return;
-        ExecuteHexLayerEdit("Масштаб пути", layer, layer with { Travel = scale });
+        if (scale == HexTravel) return;
+        var profile = layer.Journey.Profile;
+        var miles = distancePerDay / (unit == "км" ? 1.609344 : 1);
+        ExecuteHexLayerEdit("Масштаб пути", layer, layer with { Travel = scale, Journey = layer.Journey with
+        { Profiles = layer.Journey.Profiles.Replace(profile, profile with { MilesPerDay = miles }) } });
         Raise(nameof(HexTravel));
         if (_hexRoute is not null && _hexMeasureStart is { } start) Measure(layer, start, _hexRoute.Hexes[^1]);
     }
@@ -705,7 +710,7 @@ public sealed partial class EditorViewModel
 
     private void Measure(HexLayer layer, HexCoord start, HexCoord end)
     {
-        _hexRoute = new HexTravelPlanner(layer, TravelCostOf).Route(start, end);
+        _hexRoute = new HexJourneyPlanner(layer, TravelCostOf, id => HexStarterTiles.Find(id)?.IsWater == true).PreviewRoute(start, end);
         StatusDetail = _hexRoute is { } route ? "Путь: " + route.Label : "Сюда пешком не пройти.";
         Raise(nameof(HexRoute));
         Raise(nameof(HexOverlay));
@@ -716,7 +721,10 @@ public sealed partial class EditorViewModel
         if (_hexMeasureStart is { } from && _hexRoute is { } route && ActiveHexLayer is { } l)
             SetHexJourney(l.Journey with { From = from, To = route.Hexes[^1] });
         _hexMeasureStart = null;
+        // Повторный жест с теми же точками не создаёт команду, но возвращает полный расчёт вместо предпросмотра.
+        _hexRoute = _journeyRoutes.ElementAtOrDefault(_journeySelected)?.Route;
         Raise(nameof(HexRoute));
+        Raise(nameof(HexOverlay));
     }
 
     // ------------------------------------------------------------------ selection, clipboard

@@ -88,6 +88,6 @@ public sealed partial class EditorViewModel
         }
         _hexRoute = _journeyRoutes.FirstOrDefault()?.Route;
         foreach (var name in new[] { nameof(HexJourney), nameof(HexJourneyRoutes), nameof(HexJourneyReach), nameof(HexJourneySelected),
-            nameof(HexJourneyDate), nameof(HexJourneySummary), nameof(HexRoute), nameof(HexOverlay), nameof(HexCampaignDay) }) Raise(name);
+            nameof(HexJourneyDate), nameof(HexJourneySummary), nameof(HexTravel), nameof(HexRoute), nameof(HexOverlay), nameof(HexCampaignDay) }) Raise(name);
     }
 }

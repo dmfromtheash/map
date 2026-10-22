@@ -79,6 +79,13 @@ public sealed class HexJourneyPlanner
         var x = Edges(a.Hexes); var y = Edges(b.Hexes);
         return Math.Min(x.Count, y.Count) == 0 ? 1 : x.Intersect(y).Count() / (double)Math.Min(x.Count, y.Count);
     }
+    public HexRoute? PreviewRoute(HexCoord from, HexCoord to)
+    {
+        if (!_layer.Board.Contains(from) || !_layer.Board.Contains(to)) return null;
+        var lower = Math.Min(1, _layer.Journey.Profile.Costs.Values.DefaultIfEmpty(1).Min()) * MilesPerHex / _layer.Journey.Profile.MilesPerDay;
+        var path = HexRouting.FindRoute(from, to, StepCost, lower, 100_000);
+        return path is null ? null : new HexRoute(path, path.Count - 1, (path.Count - 1) * MilesPerHex, HexRouting.CostOf(path, StepCost), "миль");
+    }
     public IReadOnlyList<JourneyRoute> Routes(HexCoord from, HexCoord to)
     {
         if (!_layer.Board.Contains(from) || !_layer.Board.Contains(to)) return [];
@@ -86,7 +93,11 @@ public sealed class HexJourneyPlanner
         var lower = Math.Min(1, _layer.Journey.Profile.Costs.Values.DefaultIfEmpty(1).Min()) * MilesPerHex / _layer.Journey.Profile.MilesPerDay;
         var first = HexRouting.FindRoute(from, to, StepCost, lower, 100_000);
         if (first is null) return [];
-        HexRoute Measure(IReadOnlyList<HexCoord> path) => new(path, path.Count - 1, (path.Count - 1) * MilesPerHex, HexRouting.CostOf(path, StepCost), "миль");
+        HexRoute Measure(IReadOnlyList<HexCoord> path)
+        {
+            var camps = WithCamps(path);
+            return new(camps, camps.Count - 1, (camps.Count - 1) * MilesPerHex, HexRouting.CostOf(camps, StepCost), "миль");
+        }
         var routes = new List<HexRoute> { Measure(first) };
         var penalties = Edges(first).ToDictionary(e => e, _ => 1.0);
         for (var attempt = 0; attempt < 12 && routes.Count < 3; attempt++)
@@ -106,8 +117,49 @@ public sealed class HexJourneyPlanner
         .Count(i => _riverCells.Contains(path[i]) && !_riverCells.Contains(path[i - 1]));
     private string? Place(HexCoord h)
     {
-        var point = _layer.Board[h]?.PointsOfInterest.FirstOrDefault(p => p.Name.Length != 0);
-        return point?.Name ?? (_layer.Notes.TryGetValue(h, out var n) && n.Title.Length != 0 ? n.Title : null);
+        var points = _layer.Board[h]?.PointsOfInterest;
+        var point = points?.FirstOrDefault(p => p.Name.Length != 0) ?? points?.FirstOrDefault();
+        var name = point is null ? null : point.Name.Length != 0 ? point.Name : point.Type.Contains("village", StringComparison.Ordinal) ? "поселение" : "точка интереса";
+        return name ?? (_layer.Notes.TryGetValue(h, out var n) && n.Title.Length != 0 ? n.Title : null);
+    }
+    // Короткий сход с пути к ближайшей стоянке включается в геометрию, мили и время.
+    // На сход и возвращение вместе отводится не больше 10 % дневного запаса.
+    private IReadOnlyList<HexCoord> WithCamps(IReadOnlyList<HexCoord> path)
+    {
+        if (path.Count < 3) return path;
+        var main = path.ToHashSet(); var expanded = new List<HexCoord> { path[0] }; var elapsed = 0.0; var nextNight = 1.0;
+        for (var i = 1; i < path.Count; i++)
+        {
+            elapsed += StepCost(path[i - 1], path[i])!.Value; expanded.Add(path[i]);
+            var boundary = i < path.Count - 1 && (elapsed >= nextNight - 1e-9 || elapsed + StepCost(path[i], path[i + 1]) > nextNight + 1e-9);
+            if (!boundary) continue;
+            nextNight += 1;
+            if (Place(path[i]) is not null) continue;
+            var anchor = path[i]; var costs = new Dictionary<HexCoord, double> { [anchor] = 0 };
+            var previous = new Dictionary<HexCoord, HexCoord>(); var queue = new PriorityQueue<HexCoord, double>(); queue.Enqueue(anchor, 0);
+            HexCoord? camp = null;
+            while (queue.TryDequeue(out var h, out var cost) && costs.Count < 1000)
+            {
+                if (cost > costs[h]) continue;
+                if (!main.Contains(h) && Place(h) is not null) { camp = h; break; }
+                foreach (var n in h.Neighbors())
+                {
+                    if (StepCost(h, n) is not { } step || StepCost(n, h) is null) continue;
+                    var total = cost + step;
+                    if (total > .1 + 1e-9 || costs.TryGetValue(n, out var known) && known <= total) continue;
+                    costs[n] = total; previous[n] = h; queue.Enqueue(n, total);
+                }
+            }
+            if (camp is not { } target) continue;
+            var outward = new List<HexCoord>();
+            for (var h = target; h != anchor; h = previous[h]) outward.Add(h);
+            outward.Reverse(); var detour = new List<HexCoord> { anchor }; detour.AddRange(outward);
+            detour.AddRange(detour.Take(detour.Count - 1).Reverse().ToArray());
+            var extra = HexRouting.CostOf(detour, StepCost);
+            if (extra > .1 + 1e-9 || Math.Abs(elapsed + costs[target] - (nextNight - 1)) > .1 + 1e-9) continue;
+            expanded.AddRange(detour.Skip(1)); elapsed += extra;
+        }
+        return expanded;
     }
     private IReadOnlyList<JourneyDay> Navigate(HexRoute route)
     {

@@ -259,6 +259,9 @@ public sealed partial class RegionalApplication
         await VerifyHexGameplayR17();
 
         // The world generator through its panel buttons, step by step, on the surface.
+        // Случайное зерно иногда не даёт дорог/рек: это корректный мир, но не фикстура шести шагов.
+        _editor.HexGeneratorSettings = new Map.Core.Editing.HexGeneratorSettings
+        { Seed = 9, LandShare = .6, RiversPerThousand = 16, SettlementsPerThousand = 20 };
         var depthBefore = _editor.Session.UndoDepth;
         PressHex(_view, "HexGenAllButton"); await Settle();
         Check("the generator builds a world as six undo steps", _editor.Session.UndoDepth == depthBefore + 6

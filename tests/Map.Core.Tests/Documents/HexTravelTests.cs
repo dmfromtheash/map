@@ -93,6 +93,28 @@ public sealed class HexTravelTests
         Assert.Equal(r.Route.Distance, r.Days.Sum(d => d.Miles));
     }
     [Fact]
+    public void Nearby_offroute_camp_is_included_in_geometry_distance_and_daily_navigation()
+    {
+        var l = Layer(60, 60); var a = new HexCoord(2, 2); var b = new HexCoord(47, 2); var camp = new HexCoord(22, 3);
+        l = l with { Travel = new HexTravelScale(.2), Journey = l.Journey with
+        { Profiles = l.Journey.Profiles.Replace(l.Journey.Profile, l.Journey.Profile with { MilesPerDay = 4 }) },
+            Board = l.Board.With([new(camp, HexCell.Of("grass").WithPointsOfInterest([new HexPoi("village", "Приют")]))]) };
+        var r = Planner(l).Routes(a, b)[0];
+        Assert.Contains(camp, r.Route.Hexes); Assert.Contains(r.Days, d => d.Camp == camp);
+        Assert.True(r.Route.Distance > HexCoord.Distance(a, b) * .2);
+        Assert.Equal(r.Route.Distance, r.Days.Sum(d => d.Miles), 8);
+    }
+    [Fact]
+    public void Journey_endpoints_follow_insertions_and_are_dropped_by_crop()
+    {
+        var l = Layer(); var a = l.Board.Layout.FromOffset(new(2, 2)); var b = l.Board.Layout.FromOffset(new(20, 2));
+        l = l with { Journey = l.Journey with { From = a, To = b } };
+        var moved = HexBoardOps.InsertColumns(l, 1, 2);
+        Assert.Equal(new HexOffset(4, 2), moved.Board.Layout.ToOffset(moved.Journey.From!.Value));
+        var cropped = HexBoardOps.Resize(moved, 10, 10);
+        Assert.NotNull(cropped.Journey.From); Assert.Null(cropped.Journey.To);
+    }
+    [Fact]
     public void Calendar_season_weather_and_encounters_are_stable()
     {
         var l = Layer(); var h = new HexCoord(2, 2); var b = h.Neighbor(0);

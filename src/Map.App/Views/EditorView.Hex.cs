@@ -65,7 +65,7 @@ public sealed partial class EditorView
     {
         HexToolMode.Place => "Поставить", HexToolMode.Fill => "Залить", HexToolMode.Erase => "Стереть",
         HexToolMode.Pick => "Пипетка", HexToolMode.Region => "Регионы", HexToolMode.Path => "Пути",
-        HexToolMode.Party => "Партия", HexToolMode.Fog => "Туман", HexToolMode.Key => "Ключи", HexToolMode.Measure => "Линейка",
+        HexToolMode.Party => "Партия", HexToolMode.Fog => "Туман", HexToolMode.Key => "Ключи", HexToolMode.Measure => "Путешествие",
         _ => "Выделение",
     };
 
@@ -222,7 +222,7 @@ public sealed partial class EditorView
             (nameof(HexToolMode.Fog), "Туман", MapIcons.HexFog),
             (nameof(HexToolMode.Party), "Партия", MapIcons.HexPlayer),
             (nameof(HexToolMode.Key), "Ключи", MapIcons.HexKey),
-            (nameof(HexToolMode.Measure), "Линейка", MapIcons.HexRuler),
+            (nameof(HexToolMode.Measure), "Путь", MapIcons.HexRuler),
         ], key => _editor.HexMode = Enum.Parse<HexToolMode>(key));
         // Selection is the only click mode of «Правка»: the tab itself turns it on.
         var editHead = new Border();

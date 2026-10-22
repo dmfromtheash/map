@@ -18,7 +18,7 @@ public static partial class HexLayerRenderer
         using var fill = new SKPaint { IsAntialias = true };
         using var ink = new SKPaint { IsAntialias = true, Color = SKColor.Parse("#302B24") };
         using var halo = new SKPaint { IsAntialias = true, Color = SKColors.White, Style = SKPaintStyle.Stroke, StrokeWidth = 2 };
-        using var font = new SKFont(SKTypeface.Default, (float)Math.Clamp(layout.Size * .16, 6, 16));
+        using var font = new SKFont(SKTypeface.Default, (float)Math.Clamp(layout.Size * .16, 8 / Math.Max(scale, .001), 14 / Math.Max(scale, .001)));
         if (presentation == HexPresentation.Travel)
         {
             var season = CampaignCalendar.Season(layer.CampaignDay);
@@ -51,6 +51,7 @@ public static partial class HexLayerRenderer
             }
             else if (presentation == HexPresentation.Travel)
             {
+                if (scale * layout.Size < 32) continue;
                 var costs = hex.Neighbors().Select(from => travel!.StepCost(from, hex)).Where(c => c.HasValue).ToArray();
                 var cost = costs.Length == 0 ? (double?)null : costs.Min();
                 label = cost is null ? "Непроходимо" : $"{cost:0.##} дн.";
