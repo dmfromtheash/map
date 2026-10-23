@@ -2329,7 +2329,11 @@ public sealed partial class EditorViewModel : ViewModelBase
             if (!set.VariantIds.Contains(id) || _assetCatalog.FindVariant(id) is not { } variant
                 || _assetCatalog.Find(variant.Sha256) is not { } record) continue;
             var embedded = Session.Document.Assets.Any(a => a.Sha256.Equals(record.Sha256, StringComparison.OrdinalIgnoreCase));
-            if (!embedded && _assetResolver.Check(record) != AssetAvailability.Available) continue;
+            // A card the library already verified in the background is not read and hashed again
+            // on the UI thread: the first pick of a 4096 px mountain spent ~300 ms there (R05,
+            // 2026-10-23). Placing it still resolves and verifies the file before anything is added.
+            if (!embedded && AvailabilityOf(record.Sha256) != AssetAvailability.Available
+                && _assetResolver.Check(record) != AssetAvailability.Available) continue;
             SelectAssetSet(setId, armPlacement: false);
             SelectVariantAt(_selectedSetVariants.ToList().FindIndex(v => v.Id == id), armPlacement);
             return true;

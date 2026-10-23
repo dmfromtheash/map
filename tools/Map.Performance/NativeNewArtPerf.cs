@@ -190,6 +190,10 @@ public sealed partial class PaintPerfApplication
             if (_sets.Count > 0 && Want("place"))
             {
                 _editor.RefreshLibrary(); _view.RefreshLibraryPanel(); await Settle();
+                // A card is picked while it is on screen: the gallery has verified the visible cards' files
+                // in the background by then (RefreshVisibleAvailabilityAsync), as in the real window.
+                _editor.ReportRealizedLibraryRows(Enumerable.Range(0, _editor.LibraryRows.Count));
+                await _editor.RefreshVisibleAvailabilityAsync(); await Settle();
                 var armed = false;
                 await Route("placement-activate" + suffix, 1, _ => armed = _editor.ChooseGalleryVariant(_sets[0].Id, null));
                 _report.Checks["placement/armed" + suffix] = armed;
