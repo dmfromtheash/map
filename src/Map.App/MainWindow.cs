@@ -95,7 +95,7 @@ public sealed class MainWindow : Window
 
         // The build time in the title tells at a glance whether the shortcut starts the newest build.
         var built = File.GetLastWriteTime(typeof(MainWindow).Assembly.Location);
-        Title = $"Map · {AppVersion.Current} · сборка {built:dd.MM HH:mm}";
+        Title = $"Map · {AppVersion.Display} · сборка {built:dd.MM HH:mm}";
         Name = "MainWindow";
         Width = 1024;
         Height = 680;
