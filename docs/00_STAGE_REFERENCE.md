@@ -48,7 +48,7 @@
 | F4 | Push **одной командой на действие** (классификатор блокирует связки): `git push origin codex/stage-18-editable-areas`; затем `git push origin codex/stage-18-editable-areas:main` (fast-forward, `main` = последняя версия) | — |
 | F5 | CI: дождаться `build` (`gh run list --limit 3`, `gh run watch <id> --exit-status`); красная сборка или новые падения в воротах Core/Assets — чинить в этом же этапе | — |
 | F6 | Если менялся код и владелец смотрит через ярлык: `powershell -NoProfile -ExecutionPolicy Bypass -File tools/ai/publish-local-r2r.ps1` при закрытом Map | — |
-| F7 | Новая версия для скачивания: поднять `VersionPrefix` в `Directory.Build.props`, коммит, push, тег `vX.Y.Z` → `release.yml` собирает zip; при сбое `tools/release/publish-release.ps1` + `gh release upload`. `RegionalAtlas` в zip не входит | — |
+| F7 | Новая версия (по решению владельца; правило — шапка `CHANGELOG.md`: этап дорожной карты → MINOR, исправления → PATCH): поднять `VersionPrefix`/`AssemblyVersion`/`FileVersion` в `Directory.Build.props`, раздел `[Unreleased]` в `CHANGELOG.md` переименовать в `[X.Y.Z] — дата`, коммит, push, тег `vX.Y.Z` → `release.yml` собирает zip; при сбое `tools/release/publish-release.ps1` + `gh release upload`. `RegionalAtlas` в zip не входит | — |
 | F8 | Хеши коммитов и ссылка на релиз записаны в журнал этапа и, если меняют состояние, в `docs/STATE.md` | — |
 
 ## H. Стоп-условия: остановиться и спросить владельца
@@ -132,6 +132,12 @@ updater, подпись, новый remote/Project/issue, изменение п�
 
 - `tools/Map.Performance`, `tools/Map.LiveCheck`, тесты не входят в `Map.slnx` — собирать отдельно;
   иначе смоуки бегут на старых DLL.
+- `Map.Presentation.Tests` локально — только последовательно, как в CI:
+  `… -- xUnit.ParallelizeTestCollections=false`. Параллельно 20 тестов экспорта ложно падают за миллисекунды
+  (2026-10-23).
+- Тесты с общим статическим состоянием (счётчики, кэши вроде `LandCliffField`) — в коллекции xUnit с
+  `DisableParallelization = true`; ожидание фоновой задачи — с запасом (30 с), а не 5 с: на CI пул потоков
+  занят (2026-10-23: два флейка, ветка и `main` одного коммита расходились).
 - PowerShell 7 (`pwsh`) на ПК нет; `.ps1` с кириллицей — с BOM; `robocopy` из PowerShell, не из Git Bash;
   bash-heredoc с кириллицей и кавычками ломается — python-скрипты писать файлом.
 - Шумная машина владельца: один код даёт 31–59 FPS; сравнивать медианы A/B; при свободной ОЗУ < 1–2 ГиБ
