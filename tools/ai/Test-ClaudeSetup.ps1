@@ -4,8 +4,8 @@ $ErrorActionPreference = 'Stop'
 if (-not $ProjectRoot) { $ProjectRoot = Join-Path $PSScriptRoot '../..' }
 $context = & (Join-Path $PSScriptRoot 'Get-MapContext.ps1') -ProjectRoot $ProjectRoot
 $root = $context.root
-$required = @('CLAUDE.md', 'docs/ai/CLAUDE_WORKFLOW.md', 'docs/ai/PROMPT_CLAUDE.md',
-    'docs/ai/RESEARCH_AND_REPOSITORIES.md', 'tools/ai/New-ClaudeTask.ps1', 'tools/ai/Get-RepositoryStatus.ps1')
+$required = @('CLAUDE.md', 'AGENTS.md', 'docs/STATE.md', 'docs/00_STAGE_PROTOCOL.md', 'docs/journal/README.md',
+    'docs/ai/CLAUDE_WORKFLOW.md', 'docs/ai/PROMPT_CLAUDE.md', 'tools/ai/New-ClaudeTask.ps1', 'tools/ai/Get-RepositoryStatus.ps1')
 foreach ($path in $required) {
     if (-not (Test-Path -LiteralPath (Join-Path $root $path) -PathType Leaf)) { throw "Missing $path" }
 }
@@ -27,7 +27,7 @@ foreach ($skill in $skills) {
 $mcp = Get-Content -LiteralPath (Join-Path $root '.mcp.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 if ($mcp.mcpServers.'microsoft-learn'.type -ne 'http' -or
     ([uri]$mcp.mcpServers.'microsoft-learn'.url).Host -ne 'learn.microsoft.com') { throw 'Unexpected Learn configuration.' }
-$repos = Get-Content -LiteralPath (Join-Path $root 'docs/ai/repository-candidates.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+$repos = Get-Content -LiteralPath (Join-Path $root 'docs/archive/prompts/repository-candidates.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 if (@($repos.repositories.repository | Select-Object -Unique).Count -ne $repos.repositories.Count) { throw 'Duplicate repositories.' }
 foreach ($repo in $repos.repositories) {
     if ($repo.repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') { throw 'Invalid repository name.' }

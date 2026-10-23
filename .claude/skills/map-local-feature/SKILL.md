@@ -5,13 +5,12 @@ description: Реализация и исправление пользовате
 
 # Пользовательская функция Map
 
-Начни с `CLAUDE.md`, верхнего актуального раздела `docs/STATE_HANDOFF.md` и выбранного
-раздела `docs/06_DEVELOPMENT_ROADMAP.md`. `CODEX.md` содержит общие команды сборки;
-его provider-specific инструменты Claude не получает.
+Начни с `docs/STATE.md` и порученного раздела `docs/ROADMAP_2026-10_PRODUCT.md` (если задача —
+этап дорожной карты). Запиши карточку этапа из `docs/00_STAGE_PROTOCOL.md`, включая список файлов.
 
-Из корня проекта выполни `pwsh -File tools/ai/Get-MapContext.ps1 -AsJson`.
-Сопоставь root/branch/HEAD и dirty paths с поручением. Handoff содержит текущую продуктовую
-папку; не переходи в старый checkout из окружения. Существующий diff прочитай до своей правки.
+Из корня проекта выполни `powershell -NoProfile -ExecutionPolicy Bypass -File tools/ai/Get-MapContext.ps1 -AsJson`.
+Сопоставь root/branch/HEAD и dirty paths с поручением; не переходи в старый checkout
+`C:\Projects\Map`. Существующий diff прочитай до своей правки.
 
 Проследи одну операцию пользователя: ввод → ViewModel/router → undoable команда → документ →
 renderer → save/reopen/export. Выясни, какое звено действительно отсутствует или ошибается.
@@ -25,8 +24,8 @@ renderer → save/reopen/export. Выясни, какое звено дейст�
 - `src/Map.Rendering/SceneRenderer.cs`, `src/Map.Export/` — вид и вывод.
 - `src/Map.Persistence/MapProjectStore.cs` — сохранение и чтение.
 
-Проверяй по `AGENTS.md`: одна Release-сборка при production-изменении, относящийся тестовый
-фильтр при риске регрессии, один короткий native smoke при изменении сценария. Существующий
+Проверяй по `AGENTS.md §Проверка`: одна Release-сборка при production-изменении, относящийся
+тестовый фильтр при риске регрессии, смоук нужного профиля и короткая живая проверка сценария. Существующий
 `tools/Map.Performance/README.md` описывает изолированные окна. Не объявляй старый stage-smoke
 проверкой новой функции, пока в нём нет этой операции. Отсутствие ошибки не доказывает результат.
 
@@ -40,5 +39,5 @@ renderer → save/reopen/export. Выясни, какое звено дейст�
 - Число пройденных тестов не является процентом реализации расширенной дорожной карты.
 
 Для геометрии подключи `map-linked-geometry`; для художественного результата —
-`map-visual-compare`. Итог и оставшееся запиши в существующий handoff. Commit выполняй
-только в пределах явного поручения владельца; подготовка этого навыка не даёт такого разрешения.
+`map-visual-compare`. Итог — запись в `docs/journal`, состояние — в `docs/STATE.md`;
+commit/push — по `AGENTS.md §Git`.

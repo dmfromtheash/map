@@ -6,7 +6,7 @@ param(
 $ErrorActionPreference = 'Stop'
 if (-not $ProjectRoot) { $ProjectRoot = Join-Path $PSScriptRoot '../..' }
 $mapRoot = (Resolve-Path -LiteralPath $ProjectRoot).Path
-foreach ($relative in @('AGENTS.md', 'CLAUDE.md', 'Map.slnx', 'docs/STATE_HANDOFF.md')) {
+foreach ($relative in @('AGENTS.md', 'CLAUDE.md', 'Map.slnx', 'docs/STATE.md')) {
     if (-not (Test-Path -LiteralPath (Join-Path $mapRoot $relative) -PathType Leaf)) {
         throw "Not a Map project root: missing $relative in $mapRoot"
     }
@@ -20,11 +20,16 @@ $gitRoot = [IO.Path]::GetFullPath([string](Read-MapGit @('rev-parse', '--show-to
 if (-not [string]::Equals($gitRoot.TrimEnd('\', '/'), $mapRoot.TrimEnd('\', '/'), [StringComparison]::OrdinalIgnoreCase)) {
     throw 'The selected directory is not the Git root of Map.'
 }
-$handoff = Get-Content -LiteralPath (Join-Path $mapRoot 'docs/STATE_HANDOFF.md') -Raw -Encoding UTF8
-$current = ($handoff -split '(?m)^## HISTORICAL', 2)[0].Trim()
-$heading = [regex]::Match($current, '(?m)^## .+$').Value.Trim()
-$nextAction = [regex]::Match($current, '(?m)^Следующее действие:[\s\S]*?(?=\r?\n\s*\r?\n|\z)').Value.Trim()
-$commands = @('git', 'rg', 'dotnet', 'pwsh', 'claude') | ForEach-Object {
+# docs/STATE.md is the only source of the current state (DEC-054); the journal is history.
+$stateLines = @(Get-Content -LiteralPath (Join-Path $mapRoot 'docs/STATE.md') -Encoding UTF8)
+$state = $stateLines -join "`n"
+$updated = [regex]::Match($state, '(?m)^\*\*Обновлено:\*\*\s*(.+)$').Groups[1].Value.Trim()
+$nextAction = [regex]::Match($state, '(?ms)^## Следующий шаг\s*\n(.*?)(?=^## |\z)').Groups[1].Value.Trim()
+$warnings = @()
+if ($stateLines.Count -gt 60) { $warnings += "docs/STATE.md has $($stateLines.Count) lines (limit 60): rewrite it." }
+if (-not $nextAction) { $warnings += 'docs/STATE.md has no "## Следующий шаг" section.' }
+if ($mapRoot -like 'C:\Projects\Map*') { $warnings += 'C:\Projects\Map is the stale checkout: work in the product worktree from docs/STATE.md.' }
+$commands = @('git', 'rg', 'dotnet', 'powershell', 'claude', 'codex', 'gh') | ForEach-Object {
     $command = Get-Command $_ -ErrorAction SilentlyContinue | Select-Object -First 1
     [pscustomobject]@{ name = $_; available = $null -ne $command }
 }
@@ -34,8 +39,9 @@ $context = [pscustomobject]@{
     head = [string](Read-MapGit @('rev-parse', 'HEAD'))
     changes = @(Read-MapGit @('status', '--porcelain=v1', '--untracked-files=all'))
     recentHistory = @(Read-MapGit @('log', '--all', '-6', '--oneline'))
-    handoffHeading = $heading
+    stateUpdated = $updated
     nextAction = $nextAction
+    warnings = @($warnings)
     tools = @($commands)
 }
 if ($AsJson) { $context | ConvertTo-Json -Depth 5 } else { $context }

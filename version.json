@@ -1,8 +1,0 @@
-{
-  "product": "Map",
-  "version": "0.2.0",
-  "lifecycleStatus": "development",
-  "mapProjectSchema": 4,
-  "assetCatalogSchema": 2,
-  "primaryRuntime": "win-x64"
-}

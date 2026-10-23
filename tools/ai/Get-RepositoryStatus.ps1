@@ -5,7 +5,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 if (-not $ProjectRoot) { $ProjectRoot = Join-Path $PSScriptRoot '../..' }
-$registryPath = Join-Path $ProjectRoot 'docs/ai/repository-candidates.json'
+$registryPath = Join-Path $ProjectRoot 'docs/archive/prompts/repository-candidates.json'
 $registry = Get-Content -LiteralPath $registryPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $records = foreach ($candidate in $registry.repositories) {
     if ($candidate.repository -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {

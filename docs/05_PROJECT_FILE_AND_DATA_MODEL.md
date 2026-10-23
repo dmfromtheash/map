@@ -9,6 +9,40 @@
 - поддержка linked и embedded собственных ассетов;
 - возможность получить диагностику структуры без запуска renderer.
 
+## Таблица схем `.mapproj`
+
+Источник — константы `src/Map.Persistence/MapProjectFormat.cs`. Writer выбирает наименьшую схему,
+достаточную для данных документа и именованных версий; reader принимает v4…`MaxSupportedSchemaVersion`;
+v1–v3 открываются только через migration-copy до v4. Новая схема — следующий свободный номер,
+бронь в `docs/ROADMAP_2026-10_PROGRESS.md`, строка в этой таблице и раздел ниже.
+
+| Схема | Константа | Что добавила | Этап / решение |
+|---|---|---|---|
+| v4 | `SchemaVersion` | базовый контейнер, object chunks | Stage 12D, DEC-022 |
+| v5 | `EditablePathsSchemaVersion` | сохраняемые пути | Stage 17 |
+| v6 | `EditableAreasSchemaVersion` | области | Stage 18 |
+| v7 | `RiversSchemaVersion` | реки | Stage 19 |
+| v8 | `RoadsSchemaVersion` | дороги | Stage 20 |
+| v9 | `LandPaintSchemaVersion` | раскраска Земли | DEC-041 |
+| v10 | `BaseMaterialSchemaVersion` | базовый материал слоя Земли | 2026-10-10, DEC-042 |
+| v11 | `CategoriesSchemaVersion` | категории карт | DEC-047 |
+| v12 | `HexLayersSchemaVersion` | гексовый слой | DEC-048 |
+| v13 | `HexWorkshopSchemaVersion` | гексовая мастерская | DEC-049 |
+| v14 | `HexPathBlockingSchemaVersion` | блокировка гекс-пути | R01 |
+| v15 | `RoadCrossingsSchemaVersion` | мосты и броды | R06 |
+| v16 | `TextPathsSchemaVersion` | подписи вдоль пути | R07 |
+| v17 | `DecorationsSchemaVersion` | украшения, масштаб | R08 |
+| v18 | `HexStructureSchemaVersion` | структура гекса | R16 |
+| v19 | `AreaRulesSchemaVersion` | правила областей расстановки | R10 |
+| v20 | `GameplaySchemaVersion` | игровой слой | R17 |
+| v21 | `TravelSchemaVersion` | путешествия | R18 |
+| v22 | `PaintedRiversSchemaVersion` | живописные реки | 2026-10-22 |
+| v23 | `PaintedRoadsSchemaVersion` | живописные дороги | 2026-10-22 |
+| v24 | `TileSetsSchemaVersion` | свои гекс-комплекты | R15 |
+| v25 | `NaturalRiversSchemaVersion` | «Живая река» | 2026-10-22 |
+| v26 | `AtlasSchemaVersion` | привязка к атласу | R25 |
+| v27 | — | забронирована R10 «Красота» (ветка `claude/r10-beauty`) | не влита |
+
 ## Атлас — schema v26 (R25, 2026-10-22)
 
 Изолированный reader `MapProjectStore.AtlasV26.cs` добавляет необязательный `atlas` в
@@ -295,7 +329,7 @@ perDay}`. Простая гекс-карта без этих конструкц�
 видимость, блокировку, `widthScale` и `seed`. Производные контуры и кэши в файл не записываются.
 Необязательный `surfaceOrder` задаёт порядок ID дорог и воды внутри слоя; порядок по умолчанию
 восстанавливается при отсутствии явной последовательности. Пять дефектов дорог из проверки
-08.09 исправлены по DEC-034; этап остаётся PARTIAL по [handoff](STATE_HANDOFF.md).
+08.09 исправлены по DEC-034; этап оставался PARTIAL (журнал 2026-09).
 Успешный round-trip формата не доказывает полную техническую или художественную приёмку.
 
 Разделы ниже описывают расширения в момент введения соответствующего этапа. Условия выбора
@@ -598,7 +632,7 @@ preview; старые пользовательские имена открыва
 ## Миграции
 
 - базовый контейнер и цель миграции старых файлов — `v4`, расширения конструкций используют
-  v5–v11 по таблице выше; реальные исторические `v1`–`v3` открываются только через
+  v5–v26 по таблице выше; реальные исторические `v1`–`v3` открываются только через
   явную новую migration-copy, schema `v0` в истории проекта нет;
 - обычный v4 open требует явные layer types, обязательные collections, единственный BaseColor и
   canonical independently verified object chunks;

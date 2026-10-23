@@ -12,7 +12,7 @@
 |---|---|---|
 | RES | `docs/research/PRODUCT_IDEAS_RESEARCH_2026-10-21.md` | Сводные чек-листы S1–S24, H1–H21, общее, категории, инновации |
 | AST | `docs/research/2026-10-21-astra-product-research.md` | Независимый отчёт Codex/Astra: доказательства, ссылки на форумы и код |
-| HO | `docs/STATE_HANDOFF.md` (верх) + `docs/00_STAGE_PROTOCOL.md §J` | Открытые долги, давние падения, NOT CHECKED |
+| HO | `docs/STATE.md` + `docs/00_STAGE_REFERENCE.md §J` (до 2026-10-23 — верх `STATE_HANDOFF.md`, теперь `docs/journal/`) | Открытые долги, давние падения, NOT CHECKED |
 
 ### Идентификаторы пунктов (всё, что берётся в работу)
 
