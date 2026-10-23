@@ -174,6 +174,44 @@ public sealed class AssetImageCache : IDisposable
         return image;
     }
 
+    public bool Contains(string key) => _entries.ContainsKey(key);
+
+    /// <summary>
+    /// Takes an image decoded elsewhere (off the render thread, by <see cref="DecodeOwned"/>) from
+    /// these exact bytes. Admission and eviction are those of <see cref="GetEncoded"/>; an image
+    /// the budget cannot hold, or a key that arrived meanwhile, is disposed and null returned.
+    /// </summary>
+    public SKImage? Adopt(string key, byte[] encoded, SKImage image,
+        string? expectedMediaType = null, string? expectedExtension = null)
+    {
+        if (_entries.ContainsKey(key)) { image.Dispose(); return null; }
+        AssetImageMetadata metadata;
+        try
+        {
+            metadata = expectedMediaType is null || expectedExtension is null
+                ? AssetImagePolicy.Inspect(encoded)
+                : AssetImagePolicy.Inspect(encoded, expectedMediaType, expectedExtension);
+        }
+        catch (InvalidDataException) { image.Dispose(); return null; }
+        var incomingResidentBytes = checked(metadata.DecodedBytes + metadata.EncodedBytes);
+        if (incomingResidentBytes > _decodedByteCapacity) { image.Dispose(); return null; }
+        TrimForIncoming(incomingResidentBytes);
+        Misses++;
+        _entries[key] = new Entry
+        {
+            Image = image,
+            DecodedBytes = metadata.DecodedBytes,
+            ResidentBytes = incomingResidentBytes,
+            LastUsed = ++_clock,
+        };
+        DecodedBytes += metadata.DecodedBytes;
+        ResidentBytes += incomingResidentBytes;
+        return image;
+    }
+
+    /// <summary>The decode this cache uses, for a caller that decodes on another thread.</summary>
+    public static SKImage? DecodeOwned(byte[] encoded) => Decode(encoded);
+
     public void Remove(string key)
     {
         if (_entries.Remove(key, out var entry))

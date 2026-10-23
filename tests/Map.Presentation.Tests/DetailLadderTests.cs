@@ -1,6 +1,7 @@
 using Map.Assets;
 using Map.Core.Documents;
 using Map.Presentation.Services;
+using Map.Rendering;
 using SkiaSharp;
 
 namespace Map.Presentation.Tests;
@@ -51,6 +52,32 @@ public sealed class DetailLadderTests : IDisposable
         Assert.Equal(1024, images.TryGetImageForPixelSize(record.Sha256, 1000, 780)!.Width);
         Assert.Equal(4096, images.TryGetImageForPixelSize(record.Sha256, 3000, 2340)!.Width);
         Assert.Equal(256, images.TryGetImageForPixelSize(record.Sha256, 200, 156)!.Width);
+    }
+
+    [Fact]
+    public async Task A_step_the_view_needs_is_decoded_off_the_render_thread_before_it_is_drawn()
+    {
+        // R05 (2026-10-23): the first frame of a closer zoom decoded the larger steps on the
+        // render thread. A missing step is now prepared in the background and reported ready.
+        Directory.CreateDirectory(_root);
+        var source = Path.Combine(_root, "Пик.png");
+        File.WriteAllBytes(source, Picture(4096, 3200));
+        var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        var record = catalog.Import(source, new AssetImportOptions(), DateTimeOffset.UnixEpoch);
+        var document = new MapDocument(DocumentId.New(), "Ladder", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(1024, 1024, "px", "#FFFFFFFF"),
+            [new BaseColorLayer(LayerId.New(), "Base", true, false, 1, "#FFFFFFFF")], []);
+        using var images = new CatalogStampImageSource(catalog, () => document, () => null);
+        IStampImageSource renderer = images;
+
+        foreach (var (width, height, expected) in new[] { (1000.0, 780.0, 1024), (3000.0, 2340.0, 4096) })
+        {
+            var arrived = new SemaphoreSlim(0);
+            Assert.False(renderer.PrepareForPixelSizes([(record.Sha256, width, height)], () => arrived.Release()));
+            Assert.True(await arrived.WaitAsync(TimeSpan.FromSeconds(30)));
+            Assert.True(renderer.PrepareForPixelSizes([(record.Sha256, width, height)], () => { }));
+            Assert.Equal(expected, images.TryGetImageForPixelSize(record.Sha256, width, height)!.Width);
+        }
     }
 
     [Fact]

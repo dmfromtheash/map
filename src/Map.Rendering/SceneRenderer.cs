@@ -13,6 +13,12 @@ public interface IStampImageSource
     /// <summary>The image for the content hash, or null when the asset is missing/not resolved.</summary>
     SKImage? TryGetImage(string sha256);
     SKImage? TryGetImageForPixelSize(string sha256, double width, double height) => TryGetImage(sha256);
+    /// <summary>
+    /// True when every image these stamps sample at their pixel sizes is already decoded. Otherwise
+    /// the missing ones start decoding off the render thread, <paramref name="ready"/> is called as
+    /// each finishes, and the caller keeps drawing what it already has. Called on the render thread.
+    /// </summary>
+    bool PrepareForPixelSizes(IEnumerable<(string Sha256, double Width, double Height)> stamps, Action ready) => true;
 }
 
 /// <summary>The live, uncommitted part of a raster gesture, drawn on top of its layer.</summary>
@@ -3091,8 +3097,11 @@ public static class SceneRenderer
             var bounds = new WorldBounds(x * worldSize, y * worldSize, (x + 1) * worldSize, (y + 1) * worldSize);
             var revision = revisions.Version(x, y, bucket, Expand(bounds, 1 / scale));
             var exactKept = cache.TryGet(layer.Id, x, y, 10000 + bucket, revision, out _);
-            if (!exactKept && fallbackBucket is { } fallback && builtThisFrame > 0
-                && System.Diagnostics.Stopwatch.GetElapsedTime(budgetStarted).TotalMilliseconds > DetailBudgetMilliseconds)
+            // A tile also waits while the images it samples at this zoom are still being decoded
+            // off the render thread; the neighbouring level stands in for it meanwhile.
+            if (!exactKept && fallbackBucket is { } fallback
+                && (builtThisFrame > 0 && System.Diagnostics.Stopwatch.GetElapsedTime(budgetStarted).TotalMilliseconds > DetailBudgetMilliseconds
+                    || !StampImagesReady(layer, bounds, scale, options)))
             {
                 canvas.Save();
                 canvas.ClipRect(ToRect(bounds));
@@ -3171,6 +3180,14 @@ public static class SceneRenderer
 
     /// <summary>Milliseconds of exact object tiles one settled frame builds before deferring the rest.</summary>
     private const double DetailBudgetMilliseconds = 24;
+
+    /// <summary>Whether a tile's stamps can be drawn without decoding on this thread (see <see cref="IStampImageSource.PrepareForPixelSizes"/>).</summary>
+    private static bool StampImagesReady(ObjectLayer layer, WorldBounds bounds, double scale, RenderOptions options) =>
+        options.Stamps is not { } stamps || options.RequestRefinedFrame is not { } ready || stamps.PrepareForPixelSizes(
+            ObjectSpatialIndex.For(layer).Query(Expand(bounds, 1 / scale))
+                .Where(o => o.Visible && o.Stamp is not null)
+                .Select(o => (o.Stamp!.AssetSha256, DetailPixels(o.Width, scale, options), DetailPixels(o.Height, scale, options))),
+            ready);
 
     /// <summary>The nearest zoom bucket whose kept tiles cover the whole view, or null when none does.</summary>
     private static int? NearestKeptBucket(ObjectLayer layer, WorldBounds view, int bucket,
@@ -3669,22 +3686,26 @@ public static class SceneRenderer
         }
         if (sources.Count == 0) return true;
 
+        // One sprite per sampled image, not per object size: stamps of one asset at different
+        // sizes mostly sample the same mip, and every quad stretches its sprite to its own
+        // rectangle anyway. Keyed by size, a map of freely scaled mountains had a sprite per
+        // object, never fit the atlas and fell back to one draw per stamp (R05, 2026-10-23).
         // Shelf packing: tallest sprites first, two transparent pixels around each so bilinear
         // sampling never reads a neighbour. The atlas doubles until everything fits.
-        var keys = sources.Keys.OrderByDescending(key => sources[key].Height).ThenBy(key => sources[key].UniqueId)
-            .ThenBy(key => key.Width).ThenBy(key => key.Height).ToArray();
-        var area = keys.Sum(key => (long)(sources[key].Width + 4) * (sources[key].Height + 4));
+        var sprites = sources.Values.DistinctBy(image => image.UniqueId)
+            .OrderByDescending(image => image.Height).ThenBy(image => image.UniqueId).ToArray();
+        var area = sprites.Sum(image => (long)(image.Width + 4) * (image.Height + 4));
         var side = 256;
         while ((long)side * side < area * 5 / 4 && side < DenseAtlasMaxSide) side *= 2;
-        var slots = new Dictionary<(string Sha, double Width, double Height), int>();
-        var rects = new SKRect[keys.Length];
+        var slots = new Dictionary<uint, int>();
+        var rects = new SKRect[sprites.Length];
         int atlasHeight;
         while (true)
         {
             var x = 2; var y = 2; var shelf = 0; var fits = true;
-            for (var index = 0; index < keys.Length; index++)
+            for (var index = 0; index < sprites.Length; index++)
             {
-                var image = sources[keys[index]];
+                var image = sprites[index];
                 if (x + image.Width + 2 > side) { x = 2; y += shelf + 4; shelf = 0; }
                 if (y + image.Height + 2 > side) { fits = false; break; }
                 rects[index] = new SKRect(x, y, x + image.Width, y + image.Height);
@@ -3694,14 +3715,10 @@ public static class SceneRenderer
             if (side >= DenseAtlasMaxSide) return false;
             side *= 2;
         }
-        for (var index = 0; index < keys.Length; index++) slots.Add(keys[index], index);
+        for (var index = 0; index < sprites.Length; index++) slots.Add(sprites[index].UniqueId, index);
         var hash = 14695981039346656037UL;
-        foreach (var key in keys)
-        {
-            hash = unchecked((hash ^ sources[key].UniqueId) * 1099511628211UL);
-            hash = unchecked((hash ^ (ulong)BitConverter.DoubleToInt64Bits(key.Width)) * 1099511628211UL);
-            hash = unchecked((hash ^ (ulong)BitConverter.DoubleToInt64Bits(key.Height)) * 1099511628211UL);
-        }
+        foreach (var image in sprites)
+            hash = unchecked((hash ^ image.UniqueId) * 1099511628211UL);
         var atlasCache = options.AtlasCache ?? cache;
         var atlas = atlasCache.GetOrCreate(layer, 0, 0, 20000 + bucket, hash, () =>
         {
@@ -3709,8 +3726,8 @@ public static class SceneRenderer
             using var surface = (options.GpuContext is { } gpu
                 ? SKSurface.Create(gpu, false, info) : null) ?? SKSurface.Create(info)!;
             surface.Canvas.Clear(SKColors.Transparent);
-            for (var index = 0; index < keys.Length; index++)
-                StampMipSampling.CopyClamped(surface.Canvas, sources[keys[index]], rects[index]);
+            for (var index = 0; index < sprites.Length; index++)
+                StampMipSampling.CopyClamped(surface.Canvas, sprites[index], rects[index]);
             return surface.Snapshot();
         }).Image;
         using var shader = atlas.ToShader(SKShaderTileMode.Clamp, SKShaderTileMode.Clamp, new SKSamplingOptions(SKFilterMode.Linear));
@@ -3740,7 +3757,7 @@ public static class SceneRenderer
                 positions[vertex + 1] = new((float)(tx + dx), (float)(ty + dy));
                 positions[vertex + 2] = new((float)(tx + dx + hx), (float)(ty + dy + hy));
                 positions[vertex + 3] = new((float)(tx + hx), (float)(ty + hy));
-                var rect = rects[slots[(item.Stamp.AssetSha256, item.Width, item.Height)]];
+                var rect = rects[slots[image.UniqueId]];
                 texture[vertex] = new(rect.Left, rect.Top); texture[vertex + 1] = new(rect.Right, rect.Top);
                 texture[vertex + 2] = new(rect.Right, rect.Bottom); texture[vertex + 3] = new(rect.Left, rect.Bottom);
                 for (var corner = 0; corner < 4; corner++) colors[vertex + corner] = SKColors.White.WithAlpha(Alpha(item.ObjectOpacity));
