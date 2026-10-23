@@ -244,3 +244,8 @@ public sealed class LandCliffRenderingTests
         File.WriteAllBytes(path, data.ToArray());
     }
 }
+
+// Other render tests that draw raised land also compute fields and bump the shared counter, so this
+// collection runs alone, not just one class at a time (CI 2026-10-23: 117 expected, 119 counted).
+[CollectionDefinition("Land cliff fields", DisableParallelization = true)]
+public sealed class LandCliffFieldsCollection;
