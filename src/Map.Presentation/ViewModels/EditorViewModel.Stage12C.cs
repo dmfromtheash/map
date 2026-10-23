@@ -361,24 +361,38 @@ public sealed partial class EditorViewModel
         }
         catch (OperationCanceledException)
         {
-            _exportResultText = "Экспорт отменён. Карта и прежний результат сохранены.";
-            _exportProgressText = "Отменено после безопасной очистки временных данных.";
-            return false;
+            return ExportCancelled();
         }
-        catch (Exception ex) when (ex is InvalidOperationException or ExportOperationException or ExportValidationException
-            or IOException or UnauthorizedAccessException or InvalidDataException)
+        catch (Exception ex) when (IsExportFailure(ex))
         {
-            _exportValidationError = ex.Message;
-            _exportResultText = "Экспорт не завершён. Карта и прежний результат сохранены.";
-            _exportProgressText = "Ошибка экспорта.";
-            _log.Error("Export failed", ex);
-            return false;
+            return ExportFailed(ex, "Export failed");
         }
         finally
         {
             _exportRunning = false;
             RaiseRunState();
         }
+    }
+
+    // Shared by every export run (image, tiles, MBTiles, VTT): the map and the previous result stay intact.
+    private static bool IsExportFailure(Exception ex) =>
+        ex is InvalidOperationException or ExportOperationException or ExportValidationException
+            or IOException or UnauthorizedAccessException or InvalidDataException;
+
+    private bool ExportCancelled()
+    {
+        _exportResultText = "Экспорт отменён. Карта и прежний результат сохранены.";
+        _exportProgressText = "Отменено после безопасной очистки временных данных.";
+        return false;
+    }
+
+    private bool ExportFailed(Exception ex, string logMessage)
+    {
+        _exportValidationError = ex.Message;
+        _exportResultText = "Экспорт не завершён. Карта и прежний результат сохранены.";
+        _exportProgressText = "Ошибка экспорта.";
+        _log.Error(logMessage, ex);
+        return false;
     }
 
     public void CancelExport()
