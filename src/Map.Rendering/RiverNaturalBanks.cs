@@ -142,20 +142,27 @@ internal static class RiverNaturalBanks
             }
             bankRun.Clear(); edgeRun.Clear(); runSide = 0;
         }
-        for (var i = 0; i < samples.Length; i++)
+        // A point bar is a crescent at the apex of a bend, not a stripe along every curve: find the
+        // runs of one bend, then give each a crescent that is fullest at its sharpest point and
+        // thins to nothing at both ends (owner 2026-10-23: the bars looked like thin stripes).
+        foreach (var (from, to, side) in BendRuns(samples, bends, half))
         {
-            var s = samples[i];
-            // A point bar is a crescent at the apex of a bend, not a stripe along every curve.
-            var strength = Math.Clamp((BendStrength(bends[i]) - 0.35) / 0.65, 0, 1);
-            var side = Math.Sign(bends[i]);
-            var none = strength < 0.04 || s.HalfWidth <= 0;
-            if (none || (runSide != 0 && side != runSide)) { Close(); if (none) continue; }
-            runSide = side;
-            var depth = s.HalfWidth * 0.9 * Math.Pow(strength, 0.7) * (0.8 + 0.2 * RiverGeometry.Noise(seed ^ 0x3A1, s.Distance / Math.Max(3, s.HalfWidth)));
-            bankRun.Add(BankPoint(s, side, style, seed, s.HalfWidth * 0.2));
-            edgeRun.Add(BankPoint(s, side, style, seed, -depth));
+            var peak = 0.0;
+            for (var i = from; i <= to; i++) peak = Math.Max(peak, BendStrength(bends[i]));
+            var start = samples[from].Distance; var length = Math.Max(1e-6, samples[to].Distance - start);
+            var reach = Math.Min(1.15, 0.75 + 0.6 * peak); // a gentle bend shelves a third of the bed, a tight one more than half
+            for (var i = from; i <= to; i++)
+            {
+                var s = samples[i];
+                var t = (s.Distance - start) / length;
+                var crescent = Math.Pow(Math.Sin(Math.PI * t), 1.4); // fullest at the apex, long thin horns
+                var depth = s.HalfWidth * reach * crescent
+                    * (0.85 + 0.15 * RiverGeometry.Noise(seed ^ 0x3A1, s.Distance / Math.Max(3, s.HalfWidth)));
+                bankRun.Add(BankPoint(s, side, style, seed, s.HalfWidth * 0.2));
+                edgeRun.Add(BankPoint(s, side, style, seed, s.HalfWidth * 0.2 - Math.Max(depth, s.HalfWidth * 0.2)));
+            }
+            Close();
         }
-        Close();
         if (bars.IsEmpty) return;
         // The waterline of sand is never a smooth curve.
         using (var ragged = SKPathEffect.CreateDiscrete((float)Math.Max(2, half * 0.35), (float)Math.Max(0.3, half * 0.09), (uint)seed))
@@ -187,6 +194,32 @@ internal static class RiverNaturalBanks
         })
             canvas.DrawPath(edges, wet);
         canvas.Restore();
+    }
+
+    /// <summary>
+    /// Stretches of one bend (same sign) that turn enough to build a bar: at least two widths long
+    /// and sharp enough at their peak. Returns sample index ranges and the inner bank's side.
+    /// </summary>
+    private static List<(int From, int To, int Side)> BendRuns(RiverSample[] samples, double[] bends, double half)
+    {
+        var runs = new List<(int, int, int)>();
+        var from = -1; var side = 0; var peak = 0.0;
+        void End(int to)
+        {
+            if (from >= 0 && peak >= 0.3 && samples[to].Distance - samples[from].Distance >= half * 4) runs.Add((from, to, side));
+            from = -1; side = 0; peak = 0;
+        }
+        for (var i = 0; i < samples.Length; i++)
+        {
+            var strength = BendStrength(bends[i]);
+            var sign = Math.Sign(bends[i]);
+            if (strength < 0.12 || samples[i].HalfWidth <= 0 || (from >= 0 && sign != side)) End(Math.Max(0, i - 1));
+            if (strength < 0.12 || samples[i].HalfWidth <= 0) continue;
+            if (from < 0) { from = i; side = sign; }
+            peak = Math.Max(peak, strength);
+        }
+        End(samples.Length - 1);
+        return runs;
     }
 
     /// <summary>No pen line: the edge of the water is a dry-brush stroke - pigment pooled dark at a ragged rim.</summary>

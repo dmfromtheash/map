@@ -31,24 +31,31 @@ public sealed class NaturalRiverBankTests
         Assert.Equal(1, RiverStyle.Natural().BankManner);
     }
 
-    [Fact]
-    public void Sand_bars_lie_inside_the_bends()
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
+    [InlineData(5)]
+    public void Sand_bars_lie_inside_the_bends(int seed)
     {
-        using var bitmap = Render(River(RiverStyle.Natural() with { TextureId = null }), 900, 480, 1);
-        // The bottom of the U (450, 360) turns up: its bar lies above the stream, inside the bend.
+        using var bitmap = Render(River(RiverStyle.Natural() with { TextureId = null }, seed), 900, 480, 1);
+        // The bottom of the U turns up through the node (450, 360): its bar lies above the
+        // centreline, inside the bend. (The old split at y 352 cut through the bar itself, so the
+        // bank's wobble decided the result: 3 failures in 12 random rivers, 2026-10-23.)
         int Sand(int y0, int y1)
         {
             var count = 0;
             for (var y = y0; y < y1; y++)
-                for (var x = 380; x < 520; x++)
+                for (var x = 400; x < 500; x++)
                 {
                     var c = bitmap.GetPixel(x, y);
                     if (Math.Abs(c.Red - 0xC9) < 18 && Math.Abs(c.Green - 0xBF) < 18 && Math.Abs(c.Blue - 0xA3) < 18) count++;
                 }
             return count;
         }
-        var inside = Sand(300, 352);
-        var outside = Sand(352, 420);
+        var inside = Sand(300, 360);
+        var outside = Sand(360, 420);
         Assert.True(inside > 40 && inside > outside * 3, $"sand inside the bend {inside}, outside {outside}");
     }
 
@@ -79,19 +86,15 @@ public sealed class NaturalRiverBankTests
         var river = River(RiverStyle.Natural());
         using (var one = Render(river, 900, 480, 1)) Save(one, folder, "natural-1x.png");
         using (var two = Render(river, 900, 480, 2.2, 230, 120)) Save(two, folder, "natural-2x.png");
+        using (var bend = Render(river, 900, 480, 4, 340, 280)) Save(bend, folder, "natural-4x-bend.png");
     }
 
-    // Bars and reeds are seeded from the river and channel ids; a fresh Guid per run made the
-    // result random (3 of 12 runs below 3:1, 2026-10-23), so the scene is fixed. With these ids the
-    // renderer puts most sand OUTSIDE the U bend (63 inside / 138 outside): a real defect of the
-    // living river, listed in tests/KnownFailures.txt until the bars follow the inner bank.
-    private static readonly Guid RiverId = new("6f1d2c3b-0000-4000-8000-000000000001");
-    private static readonly Guid ChannelId = new("6f1d2c3b-0000-4000-8000-000000000002");
-
-    private static River River(RiverStyle style) => new()
+    // Bars, reeds and bank wobble are seeded from the river and channel ids: fixed ids keep every
+    // run identical, several seeds keep the check honest for other rivers.
+    private static River River(RiverStyle style, int seed = 1) => new()
     {
-        Id = RiverId, Name = "Река", Style = style,
-        Channels = [RiverEditor.NewChannel(Meander, 30) with { Id = ChannelId }],
+        Id = new Guid($"6f1d2c3b-0000-4000-8000-{seed:D12}"), Name = "Река", Style = style,
+        Channels = [RiverEditor.NewChannel(Meander, 30) with { Id = new Guid($"6f1d2c3b-0000-4000-9000-{seed:D12}") }],
     };
 
     private static void Save(SKBitmap bitmap, string folder, string name)
