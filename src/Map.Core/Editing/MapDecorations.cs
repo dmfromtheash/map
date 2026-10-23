@@ -6,7 +6,7 @@ namespace Map.Core.Editing;
 /// Keeps the derived state of cartographic decorations (R08) in step with the map: a scale bar
 /// carries the canvas scale, a legend lists what the map actually uses. Runs after every edit in
 /// <see cref="EditingSession.Execute"/>, like <see cref="TextOnPath.Follow"/>; maps without
-/// decorations pay one scan of their object lists.
+/// decorations pay one scan of each new object list.
 /// </summary>
 public static class MapDecorations
 {
@@ -50,7 +50,16 @@ public static class MapDecorations
     public static double LegendHeight(double width, int entries) => Math.Round(width * (.3 + .11 * Math.Max(1, entries)), 2);
 
     public static bool HasDecorations(MapDocument document) =>
-        document.Layers.OfType<ObjectLayer>().Any(layer => layer.Objects.Any(o => o.Kind == SceneObjectKind.Decoration));
+        document.Layers.OfType<ObjectLayer>().Any(layer => HasDecorations(layer.Objects));
+
+    // Every edit asks this. On a map of 50 000 stamps the scan cost 3-4 ms of each cliff-slider
+    // step although the objects had not changed (R05, 2026-10-23); an object list is immutable,
+    // so its answer is kept for as long as the list itself lives.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<IReadOnlyList<SceneObject>, object> Scanned = [];
+    private static readonly object With = new(), Without = new();
+
+    private static bool HasDecorations(IReadOnlyList<SceneObject> objects) => ReferenceEquals(With,
+        Scanned.GetValue(objects, static list => list.Any(o => o.Kind == SceneObjectKind.Decoration) ? With : Without));
 
     /// <summary>
     /// The legend lines of a map, in the order a reader meets them: land and water first, then
