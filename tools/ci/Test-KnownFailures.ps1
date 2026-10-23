@@ -1,7 +1,8 @@
 ﻿# Test-KnownFailures.ps1 — честный CI для проектов с давними падениями (R00, DEC-052).
 #
 # Назначение: прочитать все *.trx из папки результатов, сравнить упавшие тесты со списком известных
-# падений tests/KnownFailures.txt и вернуть код 1, если упало что-то НЕ из списка. Известные падения,
+# падений tests/KnownFailures.txt и вернуть код 1, если упало что-то НЕ из списка или если какой-то
+# отчёт пуст (0 тестов — проект молча ничего не запустил; 2026-10-23, DEC-054). Известные падения,
 # которые прошли, печатаются как подсказка сократить список. Так Rendering/Persistence/Presentation
 # снова краснят сборку при новой регрессии, а давние падения (протокол §J) её не маскируют.
 #
@@ -57,10 +58,14 @@ $failed = New-Object System.Collections.Generic.List[string]
 $passed = New-Object System.Collections.Generic.HashSet[string]
 $total = 0
 
+$empty = New-Object System.Collections.Generic.List[string]
+
 foreach ($file in $trxFiles) {
     [xml] $doc = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8
     $ns = New-Object System.Xml.XmlNamespaceManager($doc.NameTable)
     $ns.AddNamespace('t', 'http://microsoft.com/schemas/VisualStudio/TeamTest/2010')
+    # A report without results means the project ran nothing: that must not look green.
+    if ($doc.SelectNodes('//t:Results/t:UnitTestResult', $ns).Count -eq 0) { $empty.Add($file.Name) }
 
     # testId → полное имя из определения теста (className + name)
     $names = @{}
@@ -95,7 +100,9 @@ Write-Host ("Tests: {0}; failed: {1} (known {2}, NEW {3}); known entries: {4}; f
 foreach ($n in $knownFailed) { Write-Host "  known: $n" }
 foreach ($n in $fixed) { Write-Host "::notice::known failure now passes, remove from $KnownList : $n" }
 foreach ($n in $new) { Write-Host "::error::NEW failing test (not in $KnownList): $n" }
+foreach ($n in $empty) { Write-Host "::error::test report has no results (0 tests ran): $n" }
 
 if ($new.Count -gt 0) { exit 1 }
+if ($empty.Count -gt 0 -or $total -eq 0) { exit 1 }
 if ($FailOnFixed -and $fixed.Count -gt 0) { exit 1 }
 exit 0
