@@ -13,26 +13,31 @@ public static class AssetCatalogRoots
     public const string TestRootVariable = "MAP_UI_TEST_ASSET_ROOT";
 
     /// <summary>The test root, or null whenever the redirect is not unambiguously requested.</summary>
-    public static string? TestRoot
-    {
-        get
-        {
-            if (!string.Equals(
-                Environment.GetEnvironmentVariable(TestModeVariable), "1", StringComparison.Ordinal))
-            {
-                return null;
-            }
+    public static string? TestRoot => TestRootFrom(Environment.GetEnvironmentVariable);
 
-            var value = Environment.GetEnvironmentVariable(TestRootVariable);
-            return string.IsNullOrWhiteSpace(value) || !Path.IsPathFullyQualified(value)
-                ? null
-                : Path.GetFullPath(value);
-        }
-    }
+    public static string Resolve(string requestedRoot) => Resolve(requestedRoot, Environment.GetEnvironmentVariable);
 
-    public static string Resolve(string requestedRoot)
+    /// <summary>
+    /// The same rule over a given set of variables. Tests use it instead of changing the process
+    /// environment: a test that set these two variables made every catalog opened by a parallel
+    /// test read its root instead (a damaged index once came back Ready in CI, R05 2026-10-23).
+    /// </summary>
+    internal static string Resolve(string requestedRoot, Func<string, string?> environment)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(requestedRoot);
-        return TestRoot ?? Path.GetFullPath(requestedRoot);
+        return TestRootFrom(environment) ?? Path.GetFullPath(requestedRoot);
+    }
+
+    private static string? TestRootFrom(Func<string, string?> environment)
+    {
+        if (!string.Equals(environment(TestModeVariable), "1", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var value = environment(TestRootVariable);
+        return string.IsNullOrWhiteSpace(value) || !Path.IsPathFullyQualified(value)
+            ? null
+            : Path.GetFullPath(value);
     }
 }

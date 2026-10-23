@@ -178,42 +178,23 @@ public sealed class AssetLibraryReliabilityTests : IDisposable
         var requested = Path.Combine(_root, "real");
         var testRoot = Path.Combine(_root, "test-root");
 
-        Assert.Equal(Path.GetFullPath(requested), AssetCatalogRoots.Resolve(requested));
+        // The variables are passed in, never set on the process: other tests open catalogs in
+        // parallel, and a redirected root made one of them read an empty index (Ready, not Damaged).
+        static Func<string, string?> With(params (string Name, string Value)[] variables) =>
+            name => variables.FirstOrDefault(v => v.Name == name).Value;
 
-        using (new EnvironmentScope(AssetCatalogRoots.TestRootVariable, testRoot))
-        {
-            // Without the test-mode switch a stray variable must change nothing.
-            Assert.Equal(Path.GetFullPath(requested), AssetCatalogRoots.Resolve(requested));
+        Assert.Equal(Path.GetFullPath(requested), AssetCatalogRoots.Resolve(requested, With()));
 
-            using (new EnvironmentScope(AssetCatalogRoots.TestModeVariable, "1"))
-            {
-                Assert.Equal(Path.GetFullPath(testRoot), AssetCatalogRoots.Resolve(requested));
-            }
-        }
-
-        using (new EnvironmentScope(AssetCatalogRoots.TestModeVariable, "1"))
-        using (new EnvironmentScope(AssetCatalogRoots.TestRootVariable, "not-absolute"))
-        {
-            Assert.Equal(Path.GetFullPath(requested), AssetCatalogRoots.Resolve(requested));
-        }
+        // Without the test-mode switch a stray variable must change nothing.
+        Assert.Equal(Path.GetFullPath(requested), AssetCatalogRoots.Resolve(requested,
+            With((AssetCatalogRoots.TestRootVariable, testRoot))));
+        Assert.Equal(Path.GetFullPath(testRoot), AssetCatalogRoots.Resolve(requested,
+            With((AssetCatalogRoots.TestRootVariable, testRoot), (AssetCatalogRoots.TestModeVariable, "1"))));
+        Assert.Equal(Path.GetFullPath(requested), AssetCatalogRoots.Resolve(requested,
+            With((AssetCatalogRoots.TestRootVariable, "not-absolute"), (AssetCatalogRoots.TestModeVariable, "1"))));
     }
 
     // ---------------------------------------------------------------- helpers
-
-    private sealed class EnvironmentScope : IDisposable
-    {
-        private readonly string _name;
-        private readonly string? _previous;
-
-        public EnvironmentScope(string name, string? value)
-        {
-            _name = name;
-            _previous = Environment.GetEnvironmentVariable(name);
-            Environment.SetEnvironmentVariable(name, value);
-        }
-
-        public void Dispose() => Environment.SetEnvironmentVariable(_name, _previous);
-    }
 
     private static void Seed(string catalogRoot, int count)
     {
