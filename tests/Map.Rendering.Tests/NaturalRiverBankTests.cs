@@ -81,7 +81,18 @@ public sealed class NaturalRiverBankTests
         using (var two = Render(river, 900, 480, 2.2, 230, 120)) Save(two, folder, "natural-2x.png");
     }
 
-    private static River River(RiverStyle style) => new() { Name = "Река", Style = style, Channels = [RiverEditor.NewChannel(Meander, 30)] };
+    // Bars and reeds are seeded from the river and channel ids; a fresh Guid per run made the
+    // result random (3 of 12 runs below 3:1, 2026-10-23), so the scene is fixed. With these ids the
+    // renderer puts most sand OUTSIDE the U bend (63 inside / 138 outside): a real defect of the
+    // living river, listed in tests/KnownFailures.txt until the bars follow the inner bank.
+    private static readonly Guid RiverId = new("6f1d2c3b-0000-4000-8000-000000000001");
+    private static readonly Guid ChannelId = new("6f1d2c3b-0000-4000-8000-000000000002");
+
+    private static River River(RiverStyle style) => new()
+    {
+        Id = RiverId, Name = "Река", Style = style,
+        Channels = [RiverEditor.NewChannel(Meander, 30) with { Id = ChannelId }],
+    };
 
     private static void Save(SKBitmap bitmap, string folder, string name)
     {
