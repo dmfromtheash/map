@@ -1,0 +1,24 @@
+# Keeps editors and AI tools from changing line endings and encodings (DEC-054).
+# Charset is not forced for *.cs: the code base mixes UTF-8 with and without BOM, and rewriting it
+# would touch hundreds of files. Keep the encoding a file already has.
+root = true
+
+[*]
+end_of_line = crlf
+
+[*.{cs,axaml,csproj,props,targets,slnx}]
+indent_style = space
+indent_size = 4
+
+[*.ps1]
+# Windows PowerShell 5.1 reads Cyrillic correctly only with a BOM.
+charset = utf-8-bom
+indent_style = space
+indent_size = 4
+
+[*.{json,yml,yaml,py}]
+charset = utf-8
+
+[*.{json,yml,yaml}]
+indent_style = space
+indent_size = 2

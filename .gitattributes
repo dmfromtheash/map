@@ -1,0 +1,19 @@
+# Text is stored with LF in Git and checked out with CRLF (the repository already works this way
+# with core.autocrlf=true; this file makes it independent of the local Git setting). DEC-054.
+* text=auto eol=crlf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.gif binary
+*.ico binary
+*.psd binary
+*.ttf binary
+*.otf binary
+*.wav binary
+*.ogg binary
+*.mp3 binary
+*.zip binary
+*.mapproj binary
+*.mbtiles binary
