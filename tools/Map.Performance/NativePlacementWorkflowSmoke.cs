@@ -563,11 +563,12 @@ public sealed class PlacementWorkflowApplication : Application
         Check("variant count expands and stays open", window.IsVisible && Count(editor.Session.Document) == count);
         Capture(window, "gallery");
         Click(window, "GalleryVariant_longv1"); await Task.Delay(100);
-        // One click chooses and keeps the catalog open, like the reference editor; the double
-        // click (or Escape) is what returns to the canvas with the ghost armed.
-        Check("variant image chooses exact variant and keeps the catalog", window.IsVisible
+        // One click puts the asset in the hand: the catalog closes and the ghost is armed on the
+        // map (owner, 2026-10-24; it used to keep the catalog open like the reference editor).
+        Check("variant click arms exact fixed ghost and closes the catalog", !window.IsVisible
             && editor.CurrentVariant?.Id == "longv1" && !editor.RandomVariantAfterPlacement
-            && editor.PendingPlacement is not null && Count(editor.Session.Document) == count);
+            && editor.PendingPlacement is { PointerVisible: true } && Count(editor.Session.Document) == count);
+        _view.OpenAssetCatalog(); await Task.Delay(100);
         var chosenTile = window.GetVisualDescendants().OfType<Button>().First(b => b.Name == "GalleryVariant_longv1");
         chosenTile.RaiseEvent(new TappedEventArgs(InputElement.DoubleTappedEvent, null!)); await Task.Delay(100);
         Check("double click arms exact fixed ghost without click-through", !window.IsVisible
@@ -587,6 +588,12 @@ public sealed class PlacementWorkflowApplication : Application
         Check("Escape preserves previous tool", !window.IsVisible && ReferenceEquals(tool, editor.PendingPlacement));
         _view.OpenAssetCatalog(); await Task.Delay(100);
         Check("search preserved on reopen", search.Text == "Галерея 299" && editor.LibrarySets.Count == 1);
+        // While the chosen set is being organised a click only chooses: the catalog stays.
+        var organization = window.GetVisualDescendants().OfType<Expander>().Single(e => e.Name == "LibraryOrganizationDetails");
+        organization.IsExpanded = true; await Task.Delay(50);
+        Click(window, "GalleryCover_gallerys299");
+        Check("organising keeps the catalog open", window.IsVisible && editor.SelectedSetId == "gallerys299");
+        organization.IsExpanded = false;
         search.Text = ""; await Task.Delay(350);
         var list = window.GetVisualDescendants().OfType<ListBox>().Single(l => l.Name == "LibraryGrid");
         var scroll = list.GetVisualDescendants().OfType<ScrollViewer>().First();
@@ -595,7 +602,7 @@ public sealed class PlacementWorkflowApplication : Application
         var lastCard = list.GetVisualDescendants().OfType<Button>().First(b => b.Name?.StartsWith("GalleryCover_gallerys") == true);
         var expectedId = lastCard.Name!["GalleryCover_".Length..];
         lastCard.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-        Check("scrolled card action matches image identity", editor.SelectedSetId == expectedId);
+        Check("scrolled card action matches image identity", editor.SelectedSetId == expectedId && !window.IsVisible);
         Capture(_view, "editor");
         await _catalog.FlushMetadataAsync(); Check("catalog metadata flushed", _catalog.MetadataSaveError is null);
         SaveProgress();

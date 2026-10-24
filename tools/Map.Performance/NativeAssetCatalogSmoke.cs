@@ -171,11 +171,17 @@ public sealed class AssetCatalogApplication : Application
         _editor.LibraryCollectionId = _catalog.Sets.Single(s => s.Name == "Диагностические варианты").CollectionId;
         _view.RefreshLibraryPanel(); await Settle(); await WaitForThumbnails(window);
 
-        // 3. One click chooses and keeps the window; the side panel already shows the choice.
+        // 3. One click puts the asset in the hand: the catalog closes and the ghost is armed
+        // (owner, 2026-10-24). While the set is being organised a click only chooses.
         var painted = _catalog.Sets.Single(s => s.Name == "Диагностические варианты");
-        var tile = window.GetVisualDescendants().OfType<Button>().First(b => b.Name == "GalleryCover_" + Sanitize(painted.Id));
-        tile.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Settle();
-        Check("one click chooses and keeps the catalog", window.IsVisible && _editor.SelectedSetId == painted.Id && _editor.CurrentVariant is not null);
+        Button Tile() => window.GetVisualDescendants().OfType<Button>().First(b => b.Name == "GalleryCover_" + Sanitize(painted.Id));
+        Tile().RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Settle();
+        Check("one click arms the ghost and closes the catalog", !window.IsVisible && _editor.SelectedSetId == painted.Id
+            && _editor.PendingPlacement is { PointerVisible: true } && _editor.ActiveTool == EditorTool.Stamp);
+        _view.OpenAssetCatalog(); await Settle(); await WaitForThumbnails(window);
+        FindIn<Expander>(window, "LibraryOrganizationDetails").IsExpanded = true; await Settle();
+        Tile().RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Settle();
+        Check("click while organising keeps the catalog", window.IsVisible && _editor.SelectedSetId == painted.Id && _editor.CurrentVariant is not null);
         // The passport of the chosen card, edited in the catalog window: the tool takes it at once.
         var rotationToggle = FindIn<Avalonia.Controls.Primitives.ToggleButton>(window, "PassportRandomRotationToggle");
         rotationToggle.BringIntoView(); await Settle();

@@ -232,6 +232,7 @@ public sealed partial class EditorView
         var managementScroll = new ScrollViewer { MaxHeight = 200, Content = _selectedSetBlock, ClipToBounds = true,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
         var management = Disclosure("LibraryOrganizationDetails", "Организация выбранного набора", managementScroll, expanded: false);
+        _libraryOrganization = management;
         _libraryCountText.VerticalAlignment = VerticalAlignment.Top;
         _libraryCountText.Margin = new Thickness(0, 8, 12, 0);
         _libraryCountText.Classes.Add("faint");
@@ -814,12 +815,23 @@ public sealed partial class EditorView
             tile.PointerEntered += (_, _) => badgeText.Text = (_expandedGallerySets.Contains(cell.Set.SetId) ? "Скрыть " : "Показать ") + count;
             tile.PointerExited += (_, _) => badgeText.Text = count.ToString();
         }
+        tile.AddHandler(PointerPressedEvent, (_, e) => _galleryClickKeepsCatalog = e.KeyModifiers.HasFlag(KeyModifiers.Control),
+            RoutingStrategies.Tunnel, handledEventsToo: true);
         tile.Click += (_, e) =>
         {
             e.Handled = true;
-            // One click chooses and keeps the window: the side panel already shows the choice.
+            var keep = _galleryClickKeepsCatalog || _libraryOrganization?.IsExpanded == true;
+            _galleryClickKeepsCatalog = false;
             _editor.UseSinglePlacementForNewAsset();
             if (!_editor.ChooseGalleryVariant(cell.Set.SetId, cell.Variant?.Id)) return;
+            // A click puts the asset in the hand: the catalog closes and the map takes the
+            // placement (owner, 2026-10-24). Ctrl+click, or a click while the set is being
+            // organised, only chooses and keeps the window.
+            if (!keep)
+            {
+                CloseAssetCatalogAndArmPlacement();
+                return;
+            }
             RefreshGallerySelection();
             RefreshLibraryPanel();
         };

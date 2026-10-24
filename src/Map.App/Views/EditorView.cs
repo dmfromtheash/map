@@ -374,6 +374,8 @@ public sealed partial class EditorView : UserControl
     private ListBox _stampFavoriteStrip = null!;
     private Control? _seriesSpacingControl;
     private bool _assetCatalogAutoCloseForStamp;
+    private Expander? _libraryOrganization;
+    private bool _galleryClickKeepsCatalog;
     private bool _syncingLibrary;
     private readonly ThumbnailCache _thumbnails = new(96);
     private readonly CheckpointPreviewCache _checkpointPreviews = new();
