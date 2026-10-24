@@ -28,7 +28,6 @@ Map — личная нативная офлайн-программа владе
 | `ai/PROMPT_CLAUDE.md`, `ai/PROMPT_CODEX.md` | шаблоны разовой задачи |
 | `ai/CLAUDE_WORKFLOW.md` | выбор модели Claude и вспомогательные скрипты |
 | `ai/MAP_ROADMAP_2026-10_PROMPT.md` | цикл работы по дорожной карте |
-| `ai/MAP_V0_ENGINE_BAKEOFF_PROMPT.md` | промпт текущей следующей сессии (V0 «движок против своего») |
 
 ## Продукт
 
