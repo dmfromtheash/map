@@ -448,8 +448,11 @@ public sealed class HexWorkshopRenderingTests
         await WarmUp();
         using var live1 = Frame(true);
         await Task.Delay(400);
+        // Asked at the moment the frame began: the frame keeps the world alive for 0.1 s from its
+        // own start, and on a 2-core CI runner drawing the frame alone took longer than that.
+        var frameStart = HexChunkCache.Now;
         using var live2 = Frame(true);
-        Assert.True(cache.Alive(HexChunkCache.Now), "a moving world asks for its next frame");
+        Assert.True(cache.Alive(frameStart), "a moving world asks for its next frame");
         if (ReviewFolder is { } folder)
         {
             Directory.CreateDirectory(folder);

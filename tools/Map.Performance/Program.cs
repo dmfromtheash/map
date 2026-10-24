@@ -2,6 +2,13 @@
 using Map.Performance;
 
 var options = PerformanceOptions.Parse(args);
+// MAP_PERF_FREE_MB pins the memory guard to a fixed machine (16 GiB with the given MiB free), so the
+// two sides of an A/B meet the same memory pressure instead of what Windows has free that minute:
+// the cold-pan stall appears only under pressure (2026-10-24).
+if (int.TryParse(Environment.GetEnvironmentVariable("MAP_PERF_FREE_MB"), out var freeMb) && freeMb > 0)
+    Map.Core.Resources.WorkingMemoryBudget.UseFixedSharedMemoryForTests(new(
+        16L * 1024 * Map.Core.Resources.WorkingMemoryBudget.MiB, freeMb * Map.Core.Resources.WorkingMemoryBudget.MiB,
+        512 * Map.Core.Resources.WorkingMemoryBudget.MiB));
 object report;
 bool gatePassed;
 if (options.Profile == "regional-terrain-probe")

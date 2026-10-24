@@ -93,6 +93,16 @@ public sealed partial class PaintPerfApplication : Application
         _catalog = new AssetCatalog(Path.Combine(_workspace, "catalog"));
         _window = new Window { Width = EnvNumber("MAP_PAINT_W", 1440), Height = EnvNumber("MAP_PAINT_H", 900), Title = "Map — paint performance", ShowActivated = false,
             ShowInTaskbar = false, WindowStartupLocation = WindowStartupLocation.Manual, Position = new PixelPoint(-32000, -32000) };
+        // Windows pulled the -32000 window back to 0,0 of the main screen, over the owner's work.
+        // With a second display the measured window opens there; wider than that display it reaches
+        // past its outer edge, never into the main screen (owner, 2026-10-24).
+        if (_window.Screens.All.FirstOrDefault(screen => !screen.IsPrimary) is { } second && _window.Screens.Primary is { } primary)
+        {
+            var widthPx = (int)Math.Ceiling(_window.Width * second.Scaling);
+            // Width is the client area; leave room for the native frame as well.
+            var x = second.Bounds.X < primary.Bounds.X ? second.Bounds.Right - widthPx - 32 : second.Bounds.X;
+            _window.Position = new PixelPoint(x, second.Bounds.Y);
+        }
         _window.Opened += async (_, _) =>
         {
             try { await Execute(); }

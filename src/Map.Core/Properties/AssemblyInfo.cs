@@ -7,3 +7,5 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("Map.Persistence.KillHost")]
 [assembly: InternalsVisibleTo("Map.Presentation.Tests")]
 [assembly: InternalsVisibleTo("Map.Rendering.Tests")]
+// MAP_PERF_FREE_MB: A/B runs of tools/Map.Performance meet the same memory pressure.
+[assembly: InternalsVisibleTo("Map.Performance")]
