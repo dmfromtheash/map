@@ -295,14 +295,29 @@ public static partial class HexPrintExporter
                 pdf.Close();
             }
 
-            File.Move(temporary, path, overwrite: true);
+            WhenReleased(() => File.Move(temporary, path, overwrite: true));
         }
         finally
         {
-            if (File.Exists(temporary)) File.Delete(temporary);
+            if (File.Exists(temporary)) WhenReleased(() => File.Delete(temporary));
         }
 
         return new HexPrintResult(path, columns * rows, keyPages, columns, rows) { OverviewPages = options.IncludeOverview ? 1 : 0 };
+    }
+
+    /// <summary>
+    /// The virus scanner opens a PDF the moment it is closed; a move or delete in that instant fails
+    /// with "used by another process" (1-2 of 773 Presentation tests per run, 2026-10-24). Such a
+    /// file operation is retried for up to a second before the error is let through.
+    /// </summary>
+    private static void WhenReleased(Action operation)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try { operation(); return; }
+            // ERROR_SHARING_VIOLATION (32) or ERROR_LOCK_VIOLATION (33); anything else fails at once.
+            catch (IOException error) when (attempt < 20 && (error.HResult & 0xFFFF) is 32 or 33) { Thread.Sleep(50); }
+        }
     }
 
     /// <summary>The first and last hex number fully on a sheet, for its label.</summary>
