@@ -721,6 +721,7 @@ public static class SceneRenderer
     {
         var stats = options.Stats!;
         var missingBefore = stats.MissingAssets;
+        var pendingBefore = stats.DetailTilesPending;
         var built = false;
         // Everything the layer's pixels are drawn from besides the layer itself: the detail
         // level and per-object effects of the frame, the stamp images, the foreground surface.
@@ -731,7 +732,7 @@ public static class SceneRenderer
         var appended = AppendedObjects(layer, view, options, out var previous);
         var drawn = options.LayerImages!.TryDraw(canvas, layer.Id, parts, options.GpuContext,
             target => { built = true; DrawLayer(target, document, layer, clippingSource, view, options, drawRivers: false); },
-            () => stats.MissingAssets == missingBefore,
+            () => stats.MissingAssets == missingBefore && stats.DetailTilesPending == pendingBefore,
             previous,
             appended is null ? null : target =>
             {
@@ -758,6 +759,7 @@ public static class SceneRenderer
     {
         var stats = options.Stats!;
         var missingBefore = stats.MissingAssets;
+        var pendingBefore = stats.DetailTilesPending;
         var built = false;
         // No scale in the key: within its limits the image of another scale stands in, resampled.
         // The fast flag is in it: the image a wheel zoom built from resampled tiles of a nearby
@@ -766,7 +768,11 @@ public static class SceneRenderer
         object[] parts = [layer, options.LodTier, options.FastPreview, options.FastTerrain, (object?)options.Stamps ?? DBNull.Value,
             (object?)document.StampForeground ?? DBNull.Value, document.Assets];
         var device = canvas.DeviceClipBounds;
-        var margin = Math.Max(device.Width, device.Height) / 4;
+        // Dense layers already reuse world-aligned tiles. Building a widened pan image visits
+        // up to three times as many tiles, exceeding the cache's 16 MiB pressure budget and
+        // evicting the very tiles the next refinement needs in order to finish.
+        var margin = layer.Objects.Count >= DenseTileMinimumObjects && options.ObjectCache is not null
+            && options.RequestRefinedFrame is not null ? 0 : Math.Max(device.Width, device.Height) / 4;
         var drawn = options.LayerImages!.TryDrawPanned(canvas, layer.Id, parts, options.GpuContext, margin,
             (target, world) =>
             {
@@ -774,7 +780,7 @@ public static class SceneRenderer
                 DrawLayer(target, document, layer, clippingSource, new WorldBounds(world.Left, world.Top, world.Right, world.Bottom),
                     options, drawRivers: false);
             },
-            () => stats.MissingAssets == missingBefore, reuseOnly, allowScale: !reuseOnly);
+            () => stats.MissingAssets == missingBefore && stats.DetailTilesPending == pendingBefore, reuseOnly, allowScale: !reuseOnly);
         if (drawn && !built) stats.LayerImagesKept++;
         if (drawn) stats.LayersDrawn++;
         return drawn;
@@ -3051,11 +3057,12 @@ public static class SceneRenderer
             && o.Stamp is { Blur: 0, ShadowOpacity: 0, ClipMaskEnabled: false, Blend: "Normal" };
     }
 
-    private static void DrawDetailedStampTiles(SKCanvas canvas, MapDocument document, ObjectLayer layer, WorldBounds view, RenderOptions options)
+    private static void DrawDetailedStampTiles(SKCanvas canvas, MapDocument document, ObjectLayer layer, WorldBounds view,
+        RenderOptions options, int? prepareBucket = null)
     {
         options.ObjectCache!.BindGpuContext(options.GpuContext?.Handle ?? IntPtr.Zero);
         options.AtlasCache?.BindGpuContext(options.GpuContext?.Handle ?? IntPtr.Zero);
-        var bucket = (int)Math.Ceiling(Math.Log2(options.ViewScale) * 4);
+        var bucket = prepareBucket ?? (int)Math.Ceiling(Math.Log2(options.ViewScale) * 4);
         var scale = Math.Pow(2, bucket / 4d);
         var worldSize = 512 / scale;
         var revisions = RevisionsFor(layer);
@@ -3064,7 +3071,7 @@ public static class SceneRenderer
         // While the camera moves, the tiles of the nearest zoom bucket that are all still kept
         // are drawn resampled instead of building this bucket for every notch of the wheel;
         // the settled frame builds the exact bucket. Like the terrain: same objects, only scaled.
-        if (options.FastTerrain)
+        if (prepareBucket is null && options.FastTerrain)
         {
             if (TryDrawKeptTiles(canvas, layer, view, bucket, revisions, cache, options)) return;
             // Twelve buckets either way: a wheel zoom from a whole-map view to 160 % crosses eight,
@@ -3080,17 +3087,26 @@ public static class SceneRenderer
             }
         }
         using var batchScratch = new StampBatchScratch();
-        // The settled frame after a wheel zoom used to build every tile of the exact bucket at once
-        // (one frame of ~379 ms at 2560×1369 over 50 000 objects). It now builds them under a frame
-        // budget: a tile not built yet shows the kept tiles of the nearest bucket, resampled, and
-        // another frame is requested until the bucket is complete (R05, 2026-10-21). A cold zoom
-        // with nothing kept nearby still builds in full, so no area is ever left blank.
-        // Deferring needs someone to ask for the next frame: without RequestRefinedFrame (tests,
-        // thumbnails) the whole bucket is built now, as before.
-        var fallbackBucket = options.FastTerrain || options.IsExport || options.RequestRefinedFrame is null
-            ? null : NearestKeptBucket(layer, view, bucket, revisions, cache);
+        // Keep a small raster overview of the whole page, using the same stamp evaluator. Unlike
+        // a neighbouring zoom level it also covers tiles first revealed by a pan. Preparing it
+        // only seeds the cache (normally one 514-square tile); it never paints under exact tiles,
+        // which would composite translucent stamps twice. Everything stays on the Skia thread.
+        var canRefine = prepareBucket is null && !options.IsExport && options.RequestRefinedFrame is not null;
+        var page = new WorldBounds(0, 0, document.Canvas.Width, document.Canvas.Height);
+        var fallbackBucket = canRefine ? NearestKeptBucket(layer, view, bucket, revisions, cache) : null;
+        if (canRefine && fallbackBucket is null)
+        {
+            var overviewBucket = (int)Math.Floor(Math.Log2(512d / Math.Max(document.Canvas.Width, document.Canvas.Height)) * 4);
+            if (overviewBucket < bucket)
+            {
+                DrawDetailedStampTiles(canvas, document, layer, page, options, overviewBucket);
+                fallbackBucket = overviewBucket;
+            }
+        }
+        var budgetTiles = canRefine && cache.BeginDetailView(layer.Id, 10000 + bucket, view, worldSize, 514L * 514 * 4);
         var budgetStarted = System.Diagnostics.Stopwatch.GetTimestamp();
         var builtThisFrame = 0;
+        var deferredTiles = 0;
         for (var y = (int)Math.Floor(view.Top / worldSize); y <= (int)Math.Floor(view.Bottom / worldSize); y++)
         for (var x = (int)Math.Floor(view.Left / worldSize); x <= (int)Math.Floor(view.Right / worldSize); x++)
         {
@@ -3100,16 +3116,23 @@ public static class SceneRenderer
             // A tile also waits while the images it samples at this zoom are still being decoded
             // off the render thread; the neighbouring level stands in for it meanwhile.
             if (!exactKept && fallbackBucket is { } fallback
-                && (builtThisFrame > 0 && System.Diagnostics.Stopwatch.GetElapsedTime(budgetStarted).TotalMilliseconds > DetailBudgetMilliseconds
+                && (budgetTiles && builtThisFrame > 0 && System.Diagnostics.Stopwatch.GetElapsedTime(budgetStarted).TotalMilliseconds > DetailBudgetMilliseconds
                     || !StampImagesReady(layer, bounds, scale, options)))
             {
                 canvas.Save();
                 canvas.ClipRect(ToRect(bounds));
-                TryDrawKeptTiles(canvas, layer, bounds, fallback, revisions, cache, options);
+                // A tile may straddle the document boundary; only its part inside the page needs
+                // coverage. If anything was evicted, build exactly rather than leave a hole.
+                var covered = TryIntersect(bounds, page, out var inside)
+                    && TryDrawKeptTiles(canvas, layer, inside, fallback, revisions, cache, options);
                 canvas.Restore();
-                if (options.Stats is { } pending) pending.DetailTilesPending++;
-                options.RequestRefinedFrame?.Invoke();
-                continue;
+                if (covered)
+                {
+                    deferredTiles++;
+                    if (options.Stats is { } pending) pending.DetailTilesPending++;
+                    options.RequestRefinedFrame?.Invoke();
+                    continue;
+                }
             }
             if (!exactKept) builtThisFrame++;
             var objectCount = 0; var culledCount = 0;
@@ -3162,18 +3185,22 @@ public static class SceneRenderer
                 if (options.Stats is { } raster)
                     raster.DetailRasterMilliseconds += System.Diagnostics.Stopwatch.GetElapsedTime(rasterStarted).TotalMilliseconds;
                 return snapshot;
-            }, () => (objectCount, culledCount));
+            }, () => (objectCount, culledCount), fallback: prepareBucket is not null);
             // One pixel of bleed avoids seams from neighboring tiles under fractional pan/zoom.
-            canvas.DrawImage(cached.Image, new SKRect(1, 1, 513, 513),
-                new SKRect((float)bounds.Left, (float)bounds.Top, (float)bounds.Right, (float)bounds.Bottom),
-                new SKSamplingOptions(SKFilterMode.Linear));
-            if (options.Stats is { } stats)
+            if (prepareBucket is null)
             {
-                stats.DrawCalls++; stats.ObjectTilesDrawn++;
-                stats.ObjectsDrawn = drawnBefore + cached.ObjectCount;
-                stats.StampOccludedObjects += cached.CulledCount;
+                canvas.DrawImage(cached.Image, new SKRect(1, 1, 513, 513),
+                    new SKRect((float)bounds.Left, (float)bounds.Top, (float)bounds.Right, (float)bounds.Bottom),
+                    new SKSamplingOptions(SKFilterMode.Linear));
+                if (options.Stats is { } stats)
+                {
+                    stats.DrawCalls++; stats.ObjectTilesDrawn++;
+                    stats.ObjectsDrawn = drawnBefore + cached.ObjectCount;
+                    stats.StampOccludedObjects += cached.CulledCount;
+                }
             }
         }
+        if (canRefine && deferredTiles == 0) cache.CompleteDetailView(layer.Id);
         if (options.Stats is { } finalStats)
         { finalStats.ObjectCacheHits += cache.Hits - hits; finalStats.ObjectCacheMisses += cache.Misses - misses; }
     }
