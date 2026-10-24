@@ -38,6 +38,27 @@ public sealed class StyleMockupDump
             using var plainFrame = Render(document, images);
             using var politicalFrame = Render(Political(document, labels) with { Lighting = null }, images);
 
+            if (Environment.GetEnvironmentVariable("MAP_STYLE_MOCKUPS_V2") == "1")
+            {
+                // Names stay sharp: the map is drawn without them, stylized, and the names go on top.
+                var unlabelled = document.WithLayer(labels, l => l with { Visible = false });
+                using var dayBare = Render(unlabelled with { Lighting = day }, images);
+                using var nightBare = Render(unlabelled with { Lighting = night }, images);
+                using var plainBare = Render(unlabelled, images);
+                var politicalDoc = Political(document, labels);
+                using var politicalBare = Render(politicalDoc.WithLayer(labels, l => l with { Visible = false }), images);
+                using var names = RenderOnly(document, labels, images);
+                using var politicalNames = RenderOnly(politicalDoc, labels, images);
+                foreach (var (name, frame, look) in StrongLooks(dayBare, nightBare, plainBare, politicalBare))
+                {
+                    using var stylizedBare = ApplyStylize(frame, look.Stylize);
+                    using var stylized = Overlay(stylizedBare, ReferenceEquals(frame, politicalBare) ? politicalNames : names);
+                    using var finished = Apply(stylized, look.Finish);
+                    using var data = finished.Encode(SKEncodedImageFormat.Png, 100);
+                    File.WriteAllBytes(Path.Combine(output, name + ".png"), data.ToArray());
+                }
+                return;
+            }
             var styles = new (string Name, SKImage Frame, Finish Finish)[]
             {
                 ("Стиль · Мастерская (как сейчас)", dayFrame, Finish.None),
@@ -156,6 +177,24 @@ public sealed class StyleMockupDump
                 if (any) tiles = tiles.With(new TileKey(tx, ty), bytes);
             }
         return new LandLayer(LayerId.New(), name, true, false, 1, tiles, LandEdgeStyle.SoftWatercolor()) { Level = 1 };
+    }
+
+    /// <summary>Only one layer, on transparency (the names over a stylized map).</summary>
+    private static SKImage RenderOnly(MapDocument document, LayerId keep, Dictionary<string, SKImage> images)
+    {
+        var only = document.WithLayers([.. document.Layers.Select(l => l is BaseColorLayer || l.Id == keep ? l : l with { Visible = false })]) with { Lighting = null };
+        using var surface = SKSurface.Create(new SKImageInfo(W, H))!;
+        surface.Canvas.Clear(SKColors.Transparent);
+        SceneRenderer.Render(surface.Canvas, only, new RenderOptions { Stamps = new Images(images), IsExport = true, IncludeBaseColor = false });
+        return surface.Snapshot();
+    }
+
+    private static SKImage Overlay(SKImage under, SKImage over)
+    {
+        using var surface = SKSurface.Create(new SKImageInfo(W, H))!;
+        surface.Canvas.DrawImage(under, 0, 0);
+        surface.Canvas.DrawImage(over, 0, 0);
+        return surface.Snapshot();
     }
 
     private static SKImage Render(MapDocument document, Dictionary<string, SKImage> images)
@@ -398,6 +437,295 @@ half4 main(float2 p) {
         canvas.DrawText("М", at.X - 21, at.Y + 20, font, letter);
         letter.Color = new SKColor(0xe8, 0x8a, 0x70, 110);
         canvas.DrawText("М", at.X - 23, at.Y + 18, font, letter);
+    }
+
+    // ------------------------------------------------------------------ strong looks (second round)
+
+    /// <summary>The non-photoreal stage: painterly smoothing, palette, ink lines, hatching, print dots, wobble, dither.</summary>
+    private sealed record Stylize(
+        float Kuwahara, float Levels, float[][] Gradient, float GradientAmount, float Saturation,
+        float EdgeInk, float[] InkColor, float EdgeWidth, float Hatch, float HatchSpacing,
+        float Halftone, float Cell, float Wobble, float Dither, float Invert = 0, float Grid = 0,
+        float InkKeep = 0, float Duotone = 0, float[]? Ink2 = null, float Charcoal = 0, float Pixel = 0)
+    {
+        public static float[] Hex(string hex)
+        {
+            var v = Convert.ToInt32(hex.TrimStart('#'), 16);
+            return [((v >> 16) & 255) / 255f, ((v >> 8) & 255) / 255f, (v & 255) / 255f];
+        }
+
+        public static float[][] Ramp(params string[] stops) => [.. stops.Select(Hex)];
+
+        public static Stylize Off => new(0, 0, Ramp("#000000", "#555555", "#aaaaaa", "#ffffff"), 0, 1, 0, Hex("#000000"), 1.5f, 0, 7, 0, 7, 0, 0);
+    }
+
+    private sealed record Look(Stylize Stylize, Finish Finish);
+
+    private static IEnumerable<(string Name, SKImage Frame, Look Look)> StrongLooks(SKImage day, SKImage night, SKImage plain, SKImage political)
+    {
+        // Every style brings the owner's ink lines back over itself (Astra's guard), unless it says otherwise.
+        var o = Stylize.Off with { InkKeep = 0.85f };
+        var ink = Stylize.Hex("#1b1712");
+        var clean = Finish.None;
+        yield return ("Стиль · Мастерская (как сейчас)", day, new(Stylize.Off, clean));
+        // Sumi ink wash: grey-brown ink in four tones, flattened brush areas, strong contour.
+        yield return ("Стиль · Тушь", day, new(o with
+        {
+            Kuwahara = 3, Gradient = Stylize.Ramp("#16130f", "#4d473f", "#a8a090", "#f3eddf"), GradientAmount = 0.95f,
+            EdgeInk = 0.95f, InkColor = ink, EdgeWidth = 1.4f,
+        }, Finish.Ink with { Saturation = 1, Split = 0, Contrast = 1.05f, PaperAmount = 0.7f, Vignette = 0.2f }));
+        // Old map: everything in sepia inks, brown contour, burnt-in edges, foxing.
+        yield return ("Стиль · Старая карта", day, new(o with
+        {
+            Kuwahara = 2, Gradient = Stylize.Ramp("#2a180b", "#714a26", "#c99d63", "#f3e1b6"), GradientAmount = 0.92f,
+            EdgeInk = 0.8f, InkColor = Stylize.Hex("#3a2212"), EdgeWidth = 1.3f,
+        }, Finish.Parchment with { Saturation = 1, Split = 0, PaperAmount = 0.9f, Vignette = 0.55f, Grain = 0.06f }));
+        // Watercolour: wobbly flattened washes, saturated pigment, dark edges, no ink line.
+        yield return ("Стиль · Акварель", day, new(o with
+        {
+            Kuwahara = 4, Wobble = 3, Saturation = 1.9f, Gradient = Stylize.Ramp("#22324f", "#3f6f9a", "#9fc3dc", "#fbf6ec"),
+            GradientAmount = 0.35f, EdgeInk = 0.35f, InkColor = Stylize.Hex("#24344d"), EdgeWidth = 2.2f,
+        }, Finish.Watercolor with { Wash = 2.6f, PaperAmount = 0.7f, Paper = [0.98f, 0.95f, 0.88f], Contrast = 1.12f, Grain = 0.05f }));
+        // Engraving: two-tone ink with hatching by tone, the look of a copper-plate atlas.
+        yield return ("Стиль · Гравюра", day, new(o with
+        {
+            Gradient = Stylize.Ramp("#1a2230", "#55606c", "#c9c3b2", "#f2ecdc"), GradientAmount = 1, Hatch = 1, HatchSpacing = 6,
+            EdgeInk = 0.9f, InkColor = Stylize.Hex("#141a24"), EdgeWidth = 1.2f,
+        }, Finish.Ink with { Saturation = 1, Split = 0, PaperAmount = 0.6f, Vignette = 0.15f, Grain = 0.02f }));
+        // Two-colour print: deep blue and terracotta dot screens on cream, the owner's ink solid.
+        yield return ("Стиль · Двухкрасочная печать", day, new(o with
+        {
+            Gradient = Stylize.Ramp("#000000", "#000000", "#000000", "#f1e7cf"), Duotone = 1, Cell = 6,
+            InkColor = Stylize.Hex("#1f3550"), Ink2 = Stylize.Hex("#c0583a"), InkKeep = 1, EdgeWidth = 1.3f,
+        }, Finish.None with { Paper = [0.96f, 0.92f, 0.82f], PaperAmount = 0.4f, Grain = 0.03f }));
+        // Oil over the drawing: broad painterly masses, rich colour, the ink kept.
+        yield return ("Стиль · Масло", day, new(o with
+        {
+            Kuwahara = 7, Saturation = 1.35f, InkKeep = 0.9f, InkColor = Stylize.Hex("#1d1915"), EdgeWidth = 1.4f,
+        }, Finish.Atlas with { Contrast = 1.15f, Split = 0.3f, ShadowTint = [0.22f, 0.20f, 0.30f], LightTint = [1.0f, 0.93f, 0.80f], PaperAmount = 0.15f, Vignette = 0.25f }));
+        // Charcoal sheet: no colour, velvety streaked shadows, the line kept.
+        yield return ("Стиль · Уголь", day, new(o with
+        {
+            Gradient = Stylize.Ramp("#1a1816", "#1a1816", "#efebe2", "#efebe2"), Charcoal = 1, InkKeep = 1, InkColor = Stylize.Hex("#141210"), EdgeWidth = 1.3f,
+        }, Finish.None with { Paper = [0.95f, 0.94f, 0.90f], PaperAmount = 0.6f, Grain = 0.05f, Vignette = 0.2f, VignetteColor = [0.2f, 0.2f, 0.2f] }));
+        // Ukiyo-e: flat colour fields, bold contour, warm paper.
+        yield return ("Стиль · Укиё-э", day, new(o with
+        {
+            Kuwahara = 5, Gradient = Stylize.Ramp("#1c2440", "#2f5f86", "#d8bf8e", "#f4ead3"), GradientAmount = 0.9f,
+            EdgeInk = 1, InkColor = Stylize.Hex("#1e1a22"), EdgeWidth = 1.8f,
+        }, Finish.Atlas with { Paper = [0.96f, 0.91f, 0.80f], PaperAmount = 0.6f, Split = 0, Saturation = 1.1f, Vignette = 0.12f }));
+        // Blueprint: the drawing as white lines on deep blue, with a grid.
+        yield return ("Стиль · Синька", day, new(o with
+        {
+            Gradient = Stylize.Ramp("#0b2347", "#123766", "#1d4f8c", "#2f66a8"), GradientAmount = 1, Invert = 0,
+            EdgeInk = 1, InkColor = Stylize.Hex("#eaf3ff"), EdgeWidth = 1.3f, Grid = 1,
+        }, clean with { Grain = 0.02f, Vignette = 0.25f, VignetteColor = [0.02f, 0.06f, 0.15f] }));
+        // Moonlight: night in blue-silver tones, lights kept warm.
+        yield return ("Стиль · Лунная ночь", night, new(o with
+        {
+            Kuwahara = 2, Gradient = Stylize.Ramp("#05070f", "#1b2a46", "#5d7aa8", "#d9e6ff"), GradientAmount = 0.55f, Saturation = 0.8f,
+            EdgeInk = 0.5f, InkColor = Stylize.Hex("#04060c"), EdgeWidth = 1.4f,
+        }, Finish.Candles with { Vignette = 0.5f }));
+        // Pocket pixel atlas: coarse blocks, a small palette, ordered dither in the half-tones.
+        yield return ("Стиль · Пиксельный атлас", day, new(o with
+        {
+            Pixel = 4, Gradient = Stylize.Ramp("#1d2433", "#4a6d8c", "#c8b98e", "#f4efe1"), GradientAmount = 0.55f, Levels = 4, Saturation = 1.3f,
+        }, clean));
+        // Frost: icy blue palette, white highlights, blue contour.
+        yield return ("Стиль · Зимний", day, new(o with
+        {
+            Kuwahara = 2, Gradient = Stylize.Ramp("#16253a", "#4f7299", "#b8d2ea", "#f7fbff"), GradientAmount = 0.8f,
+            EdgeInk = 0.6f, InkColor = Stylize.Hex("#1a2c45"), EdgeWidth = 1.4f,
+        }, Finish.Winter with { Saturation = 1, Split = 0, PaperAmount = 0.2f }));
+        yield return ("Вариант · Политическая", political, new(o with
+        {
+            Levels = 5, Saturation = 1.2f, EdgeInk = 0.6f, InkColor = ink, EdgeWidth = 1.3f,
+        }, Finish.Atlas));
+        yield return ("Хендаут · Старый свиток", plain, new(o with
+        {
+            Kuwahara = 2, Gradient = Stylize.Ramp("#2a180b", "#714a26", "#c99d63", "#f3e1b6"), GradientAmount = 0.92f,
+            EdgeInk = 0.8f, InkColor = Stylize.Hex("#3a2212"), EdgeWidth = 1.3f,
+        }, Finish.Scroll with { Saturation = 1, Split = 0 }));
+        yield return ("Хендаут · Пиратская карта", plain, new(o with
+        {
+            Kuwahara = 2, Gradient = Stylize.Ramp("#24140a", "#6a4020", "#c08a50", "#ecd2a0"), GradientAmount = 0.95f,
+            EdgeInk = 0.9f, InkColor = Stylize.Hex("#2c170a"), EdgeWidth = 1.5f,
+        }, Finish.Pirate with { Saturation = 1, Split = 0 }));
+        yield return ("Хендаут · Письмо гонца", plain, new(o with
+        {
+            Gradient = Stylize.Ramp("#3b2a1a", "#7a6248", "#cdb894", "#f2e6cc"), GradientAmount = 0.85f, Hatch = 0.6f, HatchSpacing = 7,
+            EdgeInk = 0.7f, InkColor = Stylize.Hex("#3b2a1a"), EdgeWidth = 1.2f,
+        }, Finish.Letter with { Saturation = 1, Split = 0 }));
+    }
+
+    private const string StylizeSource = """
+uniform shader map;
+uniform float2 size;
+uniform float kuwahara;
+uniform float levels;
+uniform float3 g0; uniform float3 g1; uniform float3 g2; uniform float3 g3;
+uniform float gradient;
+uniform float saturation;
+uniform float edgeInk;
+uniform float3 inkColor;
+uniform float edgeWidth;
+uniform float hatch;
+uniform float hatchSpacing;
+uniform float halftone;
+uniform float cell;
+uniform float wobble;
+uniform float dither;
+uniform float grid;
+uniform float inkKeep;
+uniform float duotone;
+uniform float3 ink2;
+uniform float charcoal;
+uniform float pixel;
+
+float hash(float2 p) { return fract(sin(dot(p, float2(127.1, 311.7))) * 43758.5453); }
+float noise(float2 p) {
+    float2 i = floor(p); float2 f = fract(p);
+    float2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + float2(1, 0)), u.x), mix(hash(i + float2(0, 1)), hash(i + float2(1, 1)), u.x), u.y);
+}
+float lum(float3 c) { return dot(c, float3(0.299, 0.587, 0.114)); }
+
+// Kuwahara: of four square windows around the pixel, the mean of the calmest one.
+float3 kuwa(float2 p, float r) {
+    float3 best = map.eval(p).rgb; float bestVar = 1e9;
+    for (int q = 0; q < 4; q++) {
+        float2 dir = float2(q == 0 || q == 2 ? -1.0 : 1.0, q < 2 ? -1.0 : 1.0);
+        float3 sum = float3(0); float3 sq = float3(0);
+        for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++) {
+            float3 c = map.eval(p + dir * float2(float(x), float(y)) * (r / 3.0)).rgb;
+            sum += c; sq += c * c;
+        }
+        float3 m = sum / 16.0; float3 v = sq / 16.0 - m * m;
+        float vv = v.r + v.g + v.b;
+        if (vv < bestVar) { bestVar = vv; best = m; }
+    }
+    return best;
+}
+
+float3 ramp(float l) {
+    l = clamp(l, 0.0, 1.0) * 3.0;
+    return l < 1.0 ? mix(g0, g1, l) : l < 2.0 ? mix(g1, g2, l - 1.0) : mix(g2, g3, l - 2.0);
+}
+
+half4 main(float2 p) {
+    float a = map.eval(p).a;
+    float3 original = map.eval(p).rgb;
+    float2 w = float2(noise(p / 40.0), noise(p / 40.0 + 17.3)) - 0.5;
+    float2 q = p + wobble * 2.0 * w;
+    // Pocket pixel atlas: sample the centre of a coarse block.
+    if (pixel > 0.0) q = (floor(q / pixel) + 0.5) * pixel;
+    float3 c = kuwahara > 0.0 ? kuwa(q, kuwahara) : map.eval(q).rgb;
+    float l = lum(c);
+    c = mix(float3(l), c, saturation);
+    if (levels > 0.0) { c = floor(c * levels + 0.5) / levels; l = lum(c); }
+    c = mix(c, ramp(l), gradient);
+    // Hatching: three line families darken by tone.
+    if (hatch > 0.0) {
+        float d = 1.0 - l;
+        float s = hatchSpacing;
+        float h1 = smoothstep(0.55, 0.85, abs(fract((p.x + p.y) / s) - 0.5) * 2.0);
+        float h2 = smoothstep(0.55, 0.85, abs(fract((p.x - p.y) / s) - 0.5) * 2.0);
+        float h3 = smoothstep(0.6, 0.9, abs(fract(p.y / (s * 0.7)) - 0.5) * 2.0);
+        float lines = h1 * step(0.25, d) + h2 * step(0.5, d) + h3 * step(0.72, d);
+        c = mix(c, c * 0.25, hatch * clamp(lines, 0.0, 1.0));
+    }
+    // Halftone: rotated dot screen, dot size by darkness.
+    if (halftone > 0.0) {
+        float2 r = float2(p.x * 0.866 - p.y * 0.5, p.x * 0.5 + p.y * 0.866) / cell;
+        float2 f = fract(r) - 0.5;
+        float spot = smoothstep(0.0, 0.08, sqrt((1.0 - l) * 0.5) - length(f));
+        c = mix(c, c * (1.0 - 0.55 * spot) + 0.12 * (1.0 - spot), halftone);
+    }
+    // Ink contour: Sobel on luminance.
+    if (edgeInk > 0.0) {
+        float e = edgeWidth;
+        float tl = lum(map.eval(p + float2(-e, -e)).rgb), t = lum(map.eval(p + float2(0, -e)).rgb), tr = lum(map.eval(p + float2(e, -e)).rgb);
+        float ml = lum(map.eval(p + float2(-e, 0)).rgb), mr = lum(map.eval(p + float2(e, 0)).rgb);
+        float bl = lum(map.eval(p + float2(-e, e)).rgb), b = lum(map.eval(p + float2(0, e)).rgb), br = lum(map.eval(p + float2(e, e)).rgb);
+        float gx = tr + 2.0 * mr + br - tl - 2.0 * ml - bl;
+        float gy = bl + 2.0 * b + br - tl - 2.0 * t - tr;
+        float g = sqrt(gx * gx + gy * gy);
+        c = mix(c, inkColor, edgeInk * smoothstep(0.18, 0.55, g));
+    }
+    // Two-colour print: a dark ink by tone and a warm ink by warmth, each its own dot screen.
+    if (duotone > 0.0) {
+        float d1 = clamp((1.0 - l) * 1.15, 0.0, 1.0);
+        float d2 = clamp((original.r - original.b) * 2.2 + 0.25 * (1.0 - l), 0.0, 1.0);
+        float2 r1 = float2(p.x * 0.966 - p.y * 0.259, p.x * 0.259 + p.y * 0.966) / cell;
+        float2 r2 = float2(p.x * 0.707 + p.y * 0.707, -p.x * 0.707 + p.y * 0.707) / cell;
+        float s1 = smoothstep(0.0, 0.06, sqrt(d1) * 0.62 - length(fract(r1) - 0.5));
+        float s2 = smoothstep(0.0, 0.06, sqrt(d2) * 0.6 - length(fract(r2) - 0.5));
+        float3 printed = g3;
+        printed *= mix(float3(1), ink2, s2 * 0.85);
+        printed *= mix(float3(1), inkColor, s1 * 0.92);
+        c = mix(c, printed, duotone);
+    }
+    // Charcoal: monochrome, streaked grain by darkness, smudged shadows.
+    if (charcoal > 0.0) {
+        float2 sp = float2(p.x * 0.8 + p.y * 0.6, -p.x * 0.6 + p.y * 0.8);
+        float streak = noise(float2(sp.x / 1.6, sp.y / 14.0)) * 0.6 + noise(p / 3.0) * 0.4;
+        float tone = smoothstep(0.15, 0.95, l);
+        float dark = 1.0 - tone;
+        float cover = smoothstep(streak - 0.25, streak + 0.25, dark * 1.15);
+        c = mix(c, mix(g3, g0, cover), charcoal);
+    }
+    // Ordered 4x4 dither to two colours.
+    if (dither > 0.0) {
+        int ix = int(mod(p.x, 4.0)); int iy = int(mod(p.y, 4.0));
+        float m = 0.0;
+        // Bayer 4x4
+        float b0 = (ix == 0 ? (iy == 0 ? 0.0 : iy == 1 ? 12.0 : iy == 2 ? 3.0 : 15.0)
+                 : ix == 1 ? (iy == 0 ? 8.0 : iy == 1 ? 4.0 : iy == 2 ? 11.0 : 7.0)
+                 : ix == 2 ? (iy == 0 ? 2.0 : iy == 1 ? 14.0 : iy == 2 ? 1.0 : 13.0)
+                 : (iy == 0 ? 10.0 : iy == 1 ? 6.0 : iy == 2 ? 9.0 : 5.0));
+        m = (b0 + 0.5) / 16.0;
+        float lit = lum(mix(c, ramp(l), 0.0));
+        c = mix(c, lit > m ? g3 : g0, dither);
+    }
+    // Keep the owner's ink: dark thin strokes of the original come back over the style.
+    if (inkKeep > 0.0) {
+        float lo = lum(original);
+        float around = 0.25 * (lum(map.eval(p + float2(2.5, 0)).rgb) + lum(map.eval(p - float2(2.5, 0)).rgb)
+            + lum(map.eval(p + float2(0, 2.5)).rgb) + lum(map.eval(p - float2(0, 2.5)).rgb));
+        float line = smoothstep(0.42, 0.18, lo) * smoothstep(0.03, 0.14, around - lo);
+        c = mix(c, inkColor * (0.6 + 0.8 * lo), inkKeep * line);
+    }
+    if (grid > 0.0) {
+        float gl = max(1.0 - smoothstep(0.0, 1.2, abs(mod(p.x, 128.0) - 64.0) - 63.0), 1.0 - smoothstep(0.0, 1.2, abs(mod(p.y, 128.0) - 64.0) - 63.0));
+        c = mix(c, inkColor, grid * 0.25 * gl);
+    }
+    return half4(half3(clamp(c, 0.0, 1.0) * a), half(a));
+}
+""";
+
+    private static readonly Lazy<SKRuntimeEffect> StylizeEffect = new(() =>
+        SKRuntimeEffect.CreateShader(StylizeSource, out var errors) ?? throw new InvalidOperationException(errors));
+
+    private static SKImage ApplyStylize(SKImage frame, Stylize s)
+    {
+        using var surface = SKSurface.Create(new SKImageInfo(W, H))!;
+        var builder = new SKRuntimeShaderBuilder(StylizeEffect.Value);
+        using var mapShader = frame.ToShader(SKShaderTileMode.Clamp, SKShaderTileMode.Clamp);
+        builder.Children["map"] = mapShader;
+        builder.Uniforms["size"] = new float[] { W, H };
+        builder.Uniforms["kuwahara"] = s.Kuwahara; builder.Uniforms["levels"] = s.Levels;
+        builder.Uniforms["g0"] = s.Gradient[0]; builder.Uniforms["g1"] = s.Gradient[1];
+        builder.Uniforms["g2"] = s.Gradient[2]; builder.Uniforms["g3"] = s.Gradient[3];
+        builder.Uniforms["gradient"] = s.GradientAmount; builder.Uniforms["saturation"] = s.Saturation;
+        builder.Uniforms["edgeInk"] = s.EdgeInk; builder.Uniforms["inkColor"] = s.InkColor; builder.Uniforms["edgeWidth"] = s.EdgeWidth;
+        builder.Uniforms["hatch"] = s.Hatch; builder.Uniforms["hatchSpacing"] = s.HatchSpacing;
+        builder.Uniforms["halftone"] = s.Halftone; builder.Uniforms["cell"] = s.Cell;
+        builder.Uniforms["wobble"] = s.Wobble; builder.Uniforms["dither"] = s.Dither; builder.Uniforms["grid"] = s.Grid;
+        builder.Uniforms["inkKeep"] = s.InkKeep; builder.Uniforms["duotone"] = s.Duotone; builder.Uniforms["ink2"] = s.Ink2 ?? s.InkColor;
+        builder.Uniforms["charcoal"] = s.Charcoal; builder.Uniforms["pixel"] = s.Pixel;
+        using var shader = builder.Build();
+        using (var paint = new SKPaint { Shader = shader }) surface.Canvas.DrawRect(0, 0, W, H, paint);
+        return surface.Snapshot();
     }
 
     private sealed class Images(Dictionary<string, SKImage> images) : IStampImageSource
