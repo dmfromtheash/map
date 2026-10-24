@@ -198,6 +198,10 @@ public sealed partial class MapCanvasControl : Control
         LayoutUpdated += (_, _) => AnchorTopEdge();
         AutomationProperties.SetAutomationId(this, "MapCanvas");
         AutomationProperties.SetName(this, "Холст карты");
+        // Shape maps of the Свет section are built off the render thread; repaint when one is ready.
+        Action lightMapsReady = () => Avalonia.Threading.Dispatcher.UIThread.Post(QueueVisualInvalidation);
+        Map.Rendering.Lighting.LightMaps.Ready += lightMapsReady;
+        DetachedFromVisualTree += (_, _) => Map.Rendering.Lighting.LightMaps.Ready -= lightMapsReady;
         DetachedFromVisualTree += (_, _) =>
         {
             _input?.Cancel();
@@ -1065,6 +1069,15 @@ public sealed partial class MapCanvasControl : Control
         ApplyDrawModifiers(e.KeyModifiers);
 
         var button = ButtonOf(point);
+        // The Свет tab's "place a light" mode takes the left click before any tool.
+        if (button == CanvasPointerButton.Left && _editor is { LightPlacementArmed: true } lightEditor)
+        {
+            var (worldX, worldY) = lightEditor.Session.Viewport.ScreenToWorld(position.X, position.Y);
+            lightEditor.PlaceLightAt(worldX, worldY);
+            e.Handled = true;
+            QueueVisualInvalidation();
+            return;
+        }
         Apply(
             _input.Press(
                 button,

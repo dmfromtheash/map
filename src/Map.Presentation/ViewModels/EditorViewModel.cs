@@ -4946,6 +4946,10 @@ public sealed partial class EditorViewModel : ViewModelBase
 
             if (ValidAppearancePreview is { } appearancePreview) return appearancePreview;
 
+            // A light slider being dragged shows its value without a history entry.
+            if (ValidLightingPreview is { } lightingPreview && DragPreview is null)
+                return Session.Document with { Lighting = lightingPreview };
+
             if (DragPreview is not { } preview)
             {
                 return Session.Document;

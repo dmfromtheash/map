@@ -33,6 +33,39 @@ internal sealed class ManifestDto
     [JsonPropertyName("atlas")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Map.Core.Documents.AtlasLocator? Atlas { get; set; }
+    [JsonPropertyName("lighting")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public LightingDto? Lighting { get; set; }
+}
+
+/// <summary>Light and time of day of the map (schema v28, DEC-057).</summary>
+internal sealed class LightingDto
+{
+    [JsonPropertyName("enabled")] public bool Enabled { get; set; }
+    [JsonPropertyName("timeOfDay")] public double TimeOfDay { get; set; }
+    [JsonPropertyName("relief")] public LightingEffectDto? Relief { get; set; }
+    [JsonPropertyName("shadows")] public LightingEffectDto? Shadows { get; set; }
+    [JsonPropertyName("fog")] public LightingEffectDto? Fog { get; set; }
+    [JsonPropertyName("lights")] public LightingEffectDto? Lights { get; set; }
+    [JsonPropertyName("color")] public LightingEffectDto? Color { get; set; }
+    [JsonPropertyName("sources")] public List<LightSourceDto>? Sources { get; set; }
+}
+
+internal sealed class LightingEffectDto
+{
+    [JsonPropertyName("enabled")] public bool Enabled { get; set; }
+    [JsonPropertyName("strength")] public double Strength { get; set; }
+}
+
+internal sealed class LightSourceDto
+{
+    [JsonPropertyName("id")] public Guid Id { get; set; }
+    [JsonPropertyName("x")] public double X { get; set; }
+    [JsonPropertyName("y")] public double Y { get; set; }
+    [JsonPropertyName("color")] public string Color { get; set; } = "#ffb866";
+    [JsonPropertyName("radius")] public double Radius { get; set; }
+    [JsonPropertyName("intensity")] public double Intensity { get; set; }
+    [JsonPropertyName("flicker")] public bool Flicker { get; set; }
 }
 
 internal sealed class CanvasDto

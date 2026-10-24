@@ -42,6 +42,8 @@ public static partial class MapProjectStore
         layers.OfType<ObjectLayer>().Any(l => l.PlacementAreas.Any(a => a.NeedsRulesSchema));
 
     private static int SchemaFor(MapDocument document) =>
+        document.Lighting is not null
+            ? MapProjectFormat.LightingSchemaVersion :
         document.Atlas is not null
             ? MapProjectFormat.AtlasSchemaVersion :
         HasNaturalRivers(document.Layers) || document.Checkpoints.Any(c => HasNaturalRivers(c.Snapshot.Layers))
@@ -485,6 +487,7 @@ public static partial class MapProjectStore
             AppVersion = metadata.AppVersion,
             DocumentId = document.Id.ToString(),
             Atlas = document.Atlas,
+            Lighting = ToLightingDto(document.Lighting),
             Title = document.Title,
             CreatedUtc = FormatTimestamp(document.CreatedUtc),
             ModifiedUtc = FormatTimestamp(metadata.ModifiedUtc),
@@ -2362,7 +2365,7 @@ public static partial class MapProjectStore
                         4,
                         tileEntries))
                     : null,
-                category) { Atlas = ReadAtlasV26(manifest) };
+                category) { Atlas = ReadAtlasV26(manifest), Lighting = ReadLightingV28(manifest) };
         }
         catch (Exception ex) when (ex is ArgumentException or FormatException or InvalidOperationException)
         {

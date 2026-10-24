@@ -217,6 +217,8 @@ public sealed class RenderOptions
 {
     /// <summary>Borrowed only during a native frame. Cached detail images remain raster-owned.</summary>
     public GRContext? GpuContext { get; init; }
+    /// <summary>Draws the map without its Свет section (DEC-057) even when the document has one.</summary>
+    public bool DisableLighting { get; init; }
     /// <summary>Object to draw the selection gizmo around, or null. Never set on export paths.</summary>
     public ObjectId? SelectedObjectId { get; init; }
 
@@ -529,11 +531,29 @@ public static class SceneRenderer
         options.Stats?.Reset();
         options.PreviewCache?.Sync(options.Preview);
 
+        // The Свет section (DEC-057) lights the finished map; the editing chrome stays on top, unlit.
+        if (Lighting.LightingRenderer.Applies(document, options))
+        {
+            Lighting.LightingRenderer.Render(canvas, document, options, target => RenderScene(target, document, options, chrome: false));
+            var bounds = new WorldBounds(0, 0, document.Canvas.Width, document.Canvas.Height);
+            canvas.Save();
+            canvas.ClipRect(ToRect(bounds));
+            DrawPlacementPreview(canvas, document, options);
+            DrawSelectionChrome(canvas, document, options);
+            canvas.Restore();
+            DrawBoundaryOverlay(canvas, options.BoundaryOverlay, options.ViewScale);
+            return;
+        }
+        RenderScene(canvas, document, options, chrome: true);
+    }
+
+    private static void RenderScene(SKCanvas canvas, MapDocument document, RenderOptions options, bool chrome)
+    {
         var canvasBounds = new WorldBounds(0, 0, document.Canvas.Width, document.Canvas.Height);
         var requestedView = options.VisibleWorld ?? canvasBounds;
         if (!TryIntersect(requestedView, canvasBounds, out var view))
         {
-            DrawBoundaryOverlay(canvas, options.BoundaryOverlay, options.ViewScale);
+            if (chrome) DrawBoundaryOverlay(canvas, options.BoundaryOverlay, options.ViewScale);
             return;
         }
 
@@ -626,10 +646,13 @@ public static class SceneRenderer
             DrawLayer(canvas, document, layer, clippingSource, view, options, drawRivers: false);
         }
 
-        DrawPlacementPreview(canvas, document, options);
-        DrawSelectionChrome(canvas, document, options);
+        if (chrome)
+        {
+            DrawPlacementPreview(canvas, document, options);
+            DrawSelectionChrome(canvas, document, options);
+        }
         canvas.Restore();
-        DrawBoundaryOverlay(canvas, options.BoundaryOverlay, options.ViewScale);
+        if (chrome) DrawBoundaryOverlay(canvas, options.BoundaryOverlay, options.ViewScale);
     }
 
     /// <summary>

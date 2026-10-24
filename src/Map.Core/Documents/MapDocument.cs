@@ -40,6 +40,7 @@ public sealed record MapDocument
         StampForeground = replaceStampForeground ? revisedStampForeground : source.StampForeground;
         Category = source.Category;
         Atlas = source.Atlas;
+        Lighting = source.Lighting;
     }
 
     public MapDocument(
@@ -255,6 +256,9 @@ public sealed record MapDocument
 
     public DocumentId Id { get; init; }
     public AtlasLocator? Atlas { get; init; }
+
+    /// <summary>Light and time of day (DEC-057), or null when the map has never used the Свет section.</summary>
+    public MapLighting? Lighting { get; init; }
     public string Title { get; init; }
 
     /// <summary>When the document was first created. Supplied by the caller; Core has no clock.</summary>

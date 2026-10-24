@@ -194,6 +194,8 @@ public static class MapIcons
     public static readonly string LineLayers = "M12 3.5 L20.5 8 L12 12.5 L3.5 8 Z M3.5 12 L12 16.5 L20.5 12 M3.5 16 L12 20.5 L20.5 16";
     public static readonly string LineWater = "M12 3.5 C15.6 7.8 18 10.9 18 13.8 A6 6 0 0 1 6 13.8 C6 10.9 8.4 7.8 12 3.5 Z M9.2 14.6 A3 3 0 0 0 11.6 17.2";
     public static readonly string LineOther = "M4 20 L8.5 11 L13 20 Z " + Ring(17, 8, 3.5) + "M4 4.5 H11";
+    /// <summary>The Свет section: a low sun over a ridge line.</summary>
+    public static readonly string LineSun = Ring(12, 10, 3.6) + "M12 2.5 V4.2 M5.2 5.2 L6.4 6.4 M18.8 5.2 L17.6 6.4 M3 10 H4.8 M19.2 10 H21 M3.5 20 L8 15.5 L11 18 L15 13.5 L20.5 20";
     public static readonly string LineReset = "M4.5 5 V9.5 H9 M5 9.2 A7.5 7.5 0 1 1 6.1 16.6";
     public static readonly string LineSparkle = "M12 4 L13.8 8.9 L19 10.5 L13.8 12.2 L12 17 L10.2 12.2 L5 10.5 L10.2 8.9 Z";
     public static readonly string LineTarget = Ring(12, 12, 8) + Ring(12, 12, 3.5) + "M12 2 V5 M12 19 V22 M2 12 H5 M19 12 H22";

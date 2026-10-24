@@ -27,7 +27,7 @@ public sealed partial class EditorView
     private static readonly PanelSection[] StandardSections =
     [
         PanelSection.Land, PanelSection.Water, PanelSection.Assets,
-        PanelSection.Roads, PanelSection.Other, PanelSection.Layers,
+        PanelSection.Roads, PanelSection.Other, PanelSection.Layers, PanelSection.Light,
     ];
 
     // A hex map has no land, water, assets or roads of the standard constructor: its hexes live
@@ -61,12 +61,17 @@ public sealed partial class EditorView
         PanelSection.Assets => MapIcons.LineAssets,
         PanelSection.Roads => MapIcons.LineRoad,
         PanelSection.Other => MapIcons.LineOther,
+        PanelSection.Light => MapIcons.LineSun,
         _ => MapIcons.LineLayers,
     };
 
-    /// <summary>One short word per tab, so all six fit in one row; the tooltip keeps the full name.</summary>
-    private static string SectionShortTitle(PanelSection section) =>
-        section == PanelSection.Water ? "Вода" : ObjectTreeRows.SectionTitle(section);
+    /// <summary>One short word per tab, so all seven fit in one row; the tooltip keeps the full name.</summary>
+    private static string SectionShortTitle(PanelSection section) => section switch
+    {
+        PanelSection.Water => "Вода",
+        PanelSection.Light => "Свет",
+        _ => ObjectTreeRows.SectionTitle(section),
+    };
 
     private static string SectionIcon(PanelSection section) => section switch
     {
@@ -85,6 +90,7 @@ public sealed partial class EditorView
         PanelSection.Assets => "Ассеты, уже размещённые на карте. Новые берутся из каталога ассетов.",
         PanelSection.Roads => "Дорожные сети карты. Строка выделяет сеть; узлы и оформление — в инструменте «Дорога».",
         PanelSection.Other => "Текст, линии, фигуры, композиции и прочие объекты карты.",
+        PanelSection.Light => "Время суток, объём гор, тени, туман, огни и цвет — у каждого свой переключатель и сила.",
         _ => "Настоящий порядок слоёв карты снизу вверх и свойства выбранного слоя. Реки и дороги лежат в слоях объектов.",
     };
 
@@ -108,7 +114,15 @@ public sealed partial class EditorView
                     HorizontalAlignment = HorizontalAlignment.Center,
                     Children =
                     {
-                        new Border { HorizontalAlignment = HorizontalAlignment.Center, Child = MapIcons.Grid24(SectionLineIcon(section), 18) },
+                        // Свет is the map's own category, not a kind of object: its sun is always brass,
+                        // so the tab is found at a glance among the six glyphs (owner 2026-10-24).
+                        new Border
+                        {
+                            HorizontalAlignment = HorizontalAlignment.Center,
+                            Child = section == PanelSection.Light
+                                ? MapIcons.Grid24(SectionLineIcon(section), 20, Application.Current?.FindResource("MapAccentBrush") as IBrush, 1.9)
+                                : MapIcons.Grid24(SectionLineIcon(section), 18),
+                        },
                         new TextBlock { Text = SectionShortTitle(section) },
                     },
                 },
@@ -196,8 +210,15 @@ public sealed partial class EditorView
         }
         // The tabs show only glyphs, so the caption names the open section first.
         _sectionCaption.Text = ObjectTreeRows.SectionTitle(section) + " · " + SectionHint(section);
-        var body = section == PanelSection.Layers ? _layersBody : _objectsBody;
+        var body = section switch
+        {
+            PanelSection.Layers => _layersBody,
+            PanelSection.Light => LightBody(),
+            _ => _objectsBody,
+        };
         if (!ReferenceEquals(_sectionHost.Content, body)) _sectionHost.Content = body;
+        if (section != PanelSection.Light && _editor.LightPlacementArmed) _editor.ArmLightPlacement(false);
+        if (section == PanelSection.Light) SyncLightSection();
         _otherFilterStrip.IsVisible = section == PanelSection.Other;
         var footer = _sectionFooters.GetValueOrDefault(section);
         if (!ReferenceEquals(_sectionFooter.Content, footer)) _sectionFooter.Content = footer;

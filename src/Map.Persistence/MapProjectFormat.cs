@@ -87,7 +87,13 @@ public static class MapProjectFormat
     public const int NaturalRiversSchemaVersion = 25;
 
     public const int AtlasSchemaVersion = 26;
-    public const int MaxSupportedSchemaVersion = AtlasSchemaVersion;
+
+    /// <summary>
+    /// Light and time of day of the map (DEC-057, R09): one manifest block. Documents without it
+    /// keep the older schema. v27 is reserved by R10 (branch claude/r10-beauty, not merged).
+    /// </summary>
+    public const int LightingSchemaVersion = 28;
+    public const int MaxSupportedSchemaVersion = LightingSchemaVersion;
 
     /// <summary>
     /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry
