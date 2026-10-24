@@ -47,7 +47,7 @@ public static class LayerPngExporter
                 // The light (Свет) lights the whole map, not one layer: separate layers stay as painted.
                 var isolated = scene.Document.WithLayers([.. scene.Document.Layers
                     .Where(l => l is BaseColorLayer || l.Id == layer.Id)
-                    .Select(l => l.Id == layer.Id ? l : l with { Visible = false })]) with { Lighting = null };
+                    .Select(l => l.Id == layer.Id ? l : l with { Visible = false })]) with { Lighting = null, Style = null };
                 var plan = exporter.Plan(isolated, pngRequest with
                 {
                     VisibleLayerIds = ImmutableHashSet.Create(layer.Id),

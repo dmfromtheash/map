@@ -19,7 +19,8 @@ public sealed class HexImportCommand : IEditCommand
             throw new InvalidOperationException("Поле импорта превышает допустимый размер холста. Уменьшите размер гекса; карта не изменена.");
         var canvas = before.Canvas.Resized((int)width, (int)height);
         _after = new MapDocument(before.Id, before.Title, before.CreatedUtc, canvas, layers,
-            before.Assets, before.Notes, before.Checkpoints, before.StampForeground, before.Category);
+            before.Assets, before.Notes, before.Checkpoints, before.StampForeground, before.Category)
+        { Atlas = before.Atlas, Lighting = before.Lighting, Style = before.Style };
         MeasuredWorkingBytes = EditCost.BaseBytes + (long)imported.Board.CellCount * 48;
     }
     public string Name => "Импорт JSON гексов";

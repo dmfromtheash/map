@@ -118,7 +118,8 @@ public sealed class HexBoardShapeCommand : IEditCommand
             ? hex with { Name = current.Name, Visible = current.Visible, Locked = current.Locked, Opacity = current.Opacity }
             : layer).ToList();
         return new MapDocument(document.Id, document.Title, document.CreatedUtc, canvas, rewritten,
-            document.Assets, document.Notes, document.Checkpoints, document.StampForeground, document.Category);
+            document.Assets, document.Notes, document.Checkpoints, document.StampForeground, document.Category)
+        { Atlas = document.Atlas, Lighting = document.Lighting, Style = document.Style };
     }
 }
 

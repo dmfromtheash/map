@@ -27,8 +27,8 @@ internal static class InkShader
         _ => new("#121316", "#f2eee3", 1.25f, 0.16f, 4, 1, 6, 0.35f),
     };
 
-    /// <summary>How far, in document pixels, the widest filter of the medium reaches beyond a pixel.</summary>
-    public const float ReachDocumentPixels = 32;
+    /// <summary>How far, in document pixels, the pass samples away from a pixel besides the blurs (bleed drift, contour).</summary>
+    public const float SampleReachDocumentPixels = 9;
 
     public const float SoftSigma = 2.5f;
     public const float WideSigma = 9f;
@@ -40,7 +40,7 @@ uniform shader tensor;
 uniform shader soft;
 uniform shader wide;
 uniform float2 origin;
-uniform float docPerPx;
+uniform float2 docPerPx;
 uniform float pxPerDoc;
 uniform float detail;
 uniform float3 inkColor;
@@ -98,7 +98,8 @@ half4 main(float2 p) {
     // Flow of the forms: the tangent of the smoothed structure tensor (gradients per document pixel).
     float4 t = tensor.eval(p);
     float k2 = pxPerDoc * pxPerDoc;
-    float E = t.r * k2, G = t.g * k2, F = (t.b - 0.5) * k2;
+    // Stored as 0.5 + 0.5 gx gy: the cross term is twice the offset.
+    float E = t.r * k2, G = t.g * k2, F = 2.0 * (t.b - 0.5) * k2;
     float ang = 0.5 * atan(2.0 * F, E - G + 1e-7);
     float2 grad = float2(cos(ang), sin(ang));
     float2 tang = float2(-grad.y, grad.x);
@@ -185,8 +186,10 @@ half4 main(float2 p) {
     float3 col = mix(sheet, sheet * inkColor * 1.05 + inkColor * 0.1, clamp(d, 0.0, 1.0));
     col = mix(col, inkColor, clamp(pen, 0.0, 1.0));
     col = mix(col, inkColor, clamp(line * lines, 0.0, 1.0));
-    col = mix(c0, clamp(col, 0.0, 1.0), strength);
-    return half4(half3(col * src.a), half(src.a));
+    // Premultiplied out: the map's own pixel where the style is weak, the painted colour at the map's coverage where strong
+    // (a transparent export keeps its soft edges; the paper is only the ground the tones were judged on).
+    float3 painted = clamp(col, 0.0, 1.0) * src.a;
+    return half4(half3(mix(src.rgb, painted, strength)), half(src.a));
 }
 """;
 
@@ -220,9 +223,11 @@ half4 main(float2 p) {
 
     /// <summary>
     /// The ink shader over the padded scene image (local coordinates = its pixels). <paramref name="origin"/>
-    /// is the document point of the image's top-left pixel, <paramref name="pxPerDoc"/> the view scale.
+    /// is the document point of the image's top-left pixel, <paramref name="docPerPx"/> document units per pixel on
+    /// each axis, <paramref name="pxPerDoc"/> the (mean) view scale that sizes the marks.
     /// </summary>
-    public static SKShader Build(SKImage map, SKImage tensor, SKImage soft, SKImage wide, SKPoint origin, float pxPerDoc, MapStyle style)
+    public static SKShader Build(SKImage map, SKImage tensor, SKImage soft, SKImage wide, SKPoint origin, SKPoint docPerPx,
+        float pxPerDoc, MapStyle style)
     {
         var medium = For(style.Preset);
         var pen = style.Pen.Effective;
@@ -235,7 +240,7 @@ half4 main(float2 p) {
         builder.Children["map"] = cMap; builder.Children["tensor"] = cTensor;
         builder.Children["soft"] = cSoft; builder.Children["wide"] = cWide;
         builder.Uniforms["origin"] = new[] { origin.X, origin.Y };
-        builder.Uniforms["docPerPx"] = 1 / pxPerDoc;
+        builder.Uniforms["docPerPx"] = new[] { docPerPx.X, docPerPx.Y };
         builder.Uniforms["pxPerDoc"] = pxPerDoc;
         // Grain finer than a device pixel only flickers: it fades to its mean as the view zooms out.
         builder.Uniforms["detail"] = Smoothstep(0.3f, 0.9f, pxPerDoc);

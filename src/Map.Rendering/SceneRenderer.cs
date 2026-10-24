@@ -261,6 +261,12 @@ public sealed class RenderOptions
     public bool DisableStyle { get; init; }
 
     /// <summary>
+    /// Raster pixels per device unit of the style pass: a print page measured in points (PDF) asks for its raster
+    /// resolution (300 dpi = 300/72), so the painted map is not one pixel per point. 1 for screens and images.
+    /// </summary>
+    public double StyleRasterScale { get; init; } = 1;
+
+    /// <summary>
     /// The options of the style's map pass: the same frame, the view widened by the reach of the
     /// medium's filters (so blurs meet across export tiles and the canvas edge).
     /// </summary>
@@ -281,6 +287,9 @@ public sealed class RenderOptions
         copy._layerImages = null;
         copy._stats = null;
         copy._terrain = null;
+        // A river or road being dragged belongs to the painted map: the names pass has none to resolve it against.
+        copy._riverOverrides = null;
+        copy._roadOverrides = null;
         copy._liveSuppressed = true;
         return copy;
     }
@@ -308,12 +317,14 @@ public sealed class RenderOptions
     /// Live river substitutions for an editor gesture, matched by id. A river whose id is not on
     /// any layer is a draft and is drawn on <see cref="RiverPreviewLayerId"/> only.
     /// </summary>
-    public IReadOnlyList<River>? RiverOverrides { get; init; }
+    public IReadOnlyList<River>? RiverOverrides { get => _riverOverrides; init => _riverOverrides = value; }
+    private IReadOnlyList<River>? _riverOverrides;
 
     public LayerId? RiverPreviewLayerId { get; init; }
 
     /// <summary>Live road substitutions for an editor gesture, matched by id; a draft is drawn on <see cref="RoadPreviewLayerId"/> only.</summary>
-    public IReadOnlyList<Road>? RoadOverrides { get; init; }
+    public IReadOnlyList<Road>? RoadOverrides { get => _roadOverrides; init => _roadOverrides = value; }
+    private IReadOnlyList<Road>? _roadOverrides;
 
     public LayerId? RoadPreviewLayerId { get; init; }
 

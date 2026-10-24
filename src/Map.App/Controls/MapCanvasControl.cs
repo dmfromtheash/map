@@ -268,6 +268,8 @@ public sealed partial class MapCanvasControl : Control
         lock (_renderResources.Gate)
         {
             _renderResources.Dispose();
+            // The style's kept view holds the closed map's document and video memory.
+            Map.Rendering.Styles.StyleRenderer.DropKept();
             // Stamp images belong to this editor, and must outlive its last pinned frame.
             (_editor?.StampImages as IDisposable)?.Dispose();
         }

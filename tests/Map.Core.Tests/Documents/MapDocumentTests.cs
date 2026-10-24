@@ -139,6 +139,24 @@ public class MapDocumentTests
     }
 
     [Fact]
+    public void Resizing_the_canvas_keeps_the_style_and_light_and_moves_the_lights()
+    {
+        var style = MapStyle.For(MapStylePreset.InkPenHatching) with { Strength = 0.6 };
+        var torch = new MapLightSource(Guid.NewGuid(), 100, 50, "#ff9a42", 200, 1, true);
+        var document = new MapDocument(
+            DocumentId.New(), "map", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(1024, 768, "px", "#FFFFFFFF"),
+            [Base()]) { Style = style, Lighting = new MapLighting { Sources = [torch] } };
+        // Grow from the bottom-right corner: the content moves right and down by the growth.
+        var plan = Map.Core.Editing.CanvasTransformService.PlanResize(document, 1224, 868, Map.Core.Editing.CanvasAnchor.BottomRight);
+        var resized = Map.Core.Editing.CanvasTransformService.ApplyResize(document, plan);
+        Assert.Same(style, resized.Style);
+        var moved = Assert.Single(resized.Lighting!.Sources);
+        Assert.Equal(100 + plan.OffsetX, moved.X);
+        Assert.Equal(50 + plan.OffsetY, moved.Y);
+    }
+
+    [Fact]
     public void Adding_or_removing_a_layer_keeps_the_light_of_the_map()
     {
         var lighting = new MapLighting { TimeOfDay = 0.5 };

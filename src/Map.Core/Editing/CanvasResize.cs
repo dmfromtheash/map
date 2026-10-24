@@ -183,8 +183,19 @@ public static class CanvasTransformService
                     Tiles = TranslateTiles(foreground.Tiles, plan.OffsetX, plan.OffsetY),
                 }
                 : null,
-            document.Category);
+            document.Category)
+        {
+            // The map-wide sections stay with the map; its lights move with the content.
+            Atlas = document.Atlas,
+            Lighting = ShiftLights(document.Lighting, plan.OffsetX, plan.OffsetY),
+            Style = document.Style,
+        };
     }
+
+    /// <summary>The map's light with its sources moved by the content's offset; null stays null.</summary>
+    internal static MapLighting? ShiftLights(MapLighting? lighting, double dx, double dy) =>
+        lighting is null || (dx == 0 && dy == 0) ? lighting
+            : lighting with { Sources = [.. lighting.Sources.Select(s => s with { X = s.X + dx, Y = s.Y + dy })] };
 
     public static MapDocument ExtractRegion(
         MapDocument source,
@@ -242,7 +253,14 @@ public static class CanvasTransformService
             stampForeground: source.StampForeground is { } foreground
                 ? foreground with { Tiles = ExtractTiles(foreground.Tiles, region) }
                 : null,
-            category: source.Category);
+            category: source.Category)
+        {
+            // A part of the map keeps its look: the light (with the lights inside the part) and the style.
+            Lighting = ShiftLights(source.Lighting, -region.X, -region.Y) is { } light
+                ? light with { Sources = [.. light.Sources.Where(s => s.X >= 0 && s.Y >= 0 && s.X < region.Width && s.Y < region.Height)] }
+                : null,
+            Style = source.Style,
+        };
     }
 
     public static TileMap TranslateTiles(TileMap source, int offsetX, int offsetY) =>

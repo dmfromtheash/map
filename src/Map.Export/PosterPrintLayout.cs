@@ -87,7 +87,7 @@ public static partial class HexPrintExporter
         SceneRenderer.Render(canvas, scene.RenderDocument(), new RenderOptions
         {
             IsExport = true, IncludeBaseColor = true, IncludeExportGrids = options.IncludeGrid,
-            VisibleWorld = new WorldBounds(area.Left, area.Top, area.Right, area.Bottom), ViewScale = scale * 300 / 72, HexPlayerView = scene.Players,
+            VisibleWorld = new WorldBounds(area.Left, area.Top, area.Right, area.Bottom), ViewScale = scale * 300 / 72, StyleRasterScale = 300 / 72.0, HexPlayerView = scene.Players,
             HexLevel = scene.HexLevel, Stamps = stamps, TileCache = tiles,
         });
         canvas.Restore();

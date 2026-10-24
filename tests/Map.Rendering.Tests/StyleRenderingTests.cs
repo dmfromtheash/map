@@ -103,6 +103,50 @@ public sealed class StyleRenderingTests
     }
 
     [Fact]
+    public void Export_tiles_match_the_whole_frame_when_zoomed_in()
+    {
+        using var mountain = Mountain();
+        var document = Scene(MapStyle.For(MapStylePreset.InkWetBrush));
+        // Three device pixels per map pixel: the blurs and the margin grow with the scale.
+        using var whole = Draw(document, mountain, new WorldBounds(150, 100, 320, 228), scale: 3);
+        using var left = Draw(document, mountain, new WorldBounds(150, 100, 235, 228), scale: 3);
+        using var right = Draw(document, mountain, new WorldBounds(235, 100, 320, 228), scale: 3);
+        int off = 0, seam = 0, count = 0;
+        for (var y = 0; y < whole.Height; y++)
+        for (var x = 0; x < whole.Width; x++)
+        {
+            var tile = x < left.Width ? left.GetPixel(x, y) : right.GetPixel(x - left.Width, y);
+            var full = whole.GetPixel(x, y);
+            var d = Math.Max(Math.Abs(tile.Red - full.Red), Math.Max(Math.Abs(tile.Green - full.Green), Math.Abs(tile.Blue - full.Blue)));
+            count++;
+            if (d > 4) { off++; if (Math.Abs(x - left.Width) <= 2) seam++; }
+        }
+        Assert.True(off < count / 500, $"{off} pixels differ");
+        Assert.True(seam <= 3, $"{seam} pixels differ at the seam");
+    }
+
+    [Fact]
+    public void An_export_whose_axes_round_apart_keeps_the_style()
+    {
+        using var mountain = Mountain();
+        using var plain = Draw(Scene(null), mountain, View, scaleY: 0.9995f);
+        using var ink = Draw(Scene(MapStyle.For(MapStylePreset.InkWetBrush)), mountain, View, scaleY: 0.9995f);
+        Assert.True(Chroma(ink, new SKRectI(0, 0, 512, 300)) < Chroma(plain, new SKRectI(0, 0, 512, 300)) / 3);
+    }
+
+    [Fact]
+    public void The_split_is_kept_per_document_and_a_clipped_text_layer_stays_painted()
+    {
+        var document = Scene(MapStyle.For(MapStylePreset.InkWetBrush), withName: true);
+        Assert.Same(StyleRenderer.Split(document).Bare, StyleRenderer.Split(document).Bare);
+        var names = (ObjectLayer)document.Layers[2];
+        var clipped = document.WithLayer(names.Id, l => ((ObjectLayer)l) with { Effects = new LayerEffects { ClippingEnabled = true } });
+        var (bare, rest) = StyleRenderer.Split(clipped);
+        Assert.Null(rest);
+        Assert.Contains(bare.Layers.OfType<ObjectLayer>().SelectMany(l => l.Objects), o => o.Kind == SceneObjectKind.Text);
+    }
+
+    [Fact]
     public void Style_and_light_together_paint_the_lit_map()
     {
         using var mountain = Mountain();
@@ -152,10 +196,13 @@ public sealed class StyleRenderingTests
         return surface.Snapshot().ToRasterImage();
     }
 
-    private static SKBitmap Draw(MapDocument document, SKImage mountain, WorldBounds view, bool export = false)
+    private static SKBitmap Draw(MapDocument document, SKImage mountain, WorldBounds view, bool export = false,
+        float scale = 1, float? scaleY = null)
     {
-        var info = new SKImageInfo((int)(view.Right - view.Left), (int)(view.Bottom - view.Top));
+        var sy = scaleY ?? scale;
+        var info = new SKImageInfo((int)Math.Round((view.Right - view.Left) * scale), (int)Math.Round((view.Bottom - view.Top) * sy));
         using var surface = SKSurface.Create(info)!;
+        surface.Canvas.Scale(scale, sy);
         surface.Canvas.Translate((float)-view.Left, (float)-view.Top);
         SceneRenderer.Render(surface.Canvas, document, new RenderOptions { Stamps = new Images(mountain), IsExport = export, VisibleWorld = view });
         var bitmap = new SKBitmap(info);
