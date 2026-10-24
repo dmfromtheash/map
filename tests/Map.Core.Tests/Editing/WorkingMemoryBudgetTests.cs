@@ -7,6 +7,23 @@ namespace Map.Core.Tests.Editing;
 public sealed class WorkingMemoryBudgetTests
 {
     [Fact]
+    public void Tests_work_on_a_fixed_machine_and_the_guard_still_refuses_on_a_budget_of_its_own()
+    {
+        // The shared budget of a test process does not read the free memory of Windows.
+        var shared = WorkingMemoryBudget.Shared.Snapshot;
+        Assert.Equal(Map.Tests.Shared.FixedWorkingMemory.AvailableBytes, shared.AvailableBytes);
+        Assert.Equal(Map.Tests.Shared.FixedWorkingMemory.PhysicalBytes, shared.PhysicalBytes);
+        Assert.True(WorkingMemoryBudget.Shared.TryReserve(WorkingMemoryBudget.EditReserveBytes, out var edit, out _));
+        edit!.Dispose();
+
+        // The guard itself is unchanged: with 300 MiB free an edit is refused with the message.
+        var tight = new WorkingMemoryBudget(() => new(16L * 1024 * WorkingMemoryBudget.MiB,
+            300 * WorkingMemoryBudget.MiB, 100 * WorkingMemoryBudget.MiB));
+        Assert.False(tight.TryReserve(WorkingMemoryBudget.EditReserveBytes, out _, out var reason));
+        Assert.StartsWith("Недостаточно свободной памяти", reason);
+    }
+
+    [Fact]
     public async Task Render_caches_can_recover_after_memory_returns_without_a_new_edit()
     {
         long available = WorkingMemoryBudget.SmallSystemReserveBytes;

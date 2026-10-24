@@ -30,7 +30,16 @@ public sealed class WorkingMemoryBudget
     // category that demands half a gigabyte of idle RAM.
     public const long TinySystemReserveBytes = 64 * MiB;
     public const long MeasuredReserveFactor = 4;
-    public static WorkingMemoryBudget Shared { get; } = new(ReadSystem);
+    // Shared reads through a replaceable source. Test processes pin it to a fixed machine, so
+    // their results do not follow how much memory Windows happens to have free: with about 2 GB
+    // free 1-19 UI tests were refused (2026-10-23). The program itself never replaces it; the
+    // refusals are tested on budgets of their own.
+    private static Func<WorkingMemorySnapshot> _sharedRead = ReadSystem;
+    public static WorkingMemoryBudget Shared { get; } = new(() => Volatile.Read(ref _sharedRead)());
+
+    /// <summary>Pins <see cref="Shared"/> of a test process to the given machine.</summary>
+    internal static void UseFixedSharedMemoryForTests(WorkingMemorySnapshot snapshot) =>
+        Volatile.Write(ref _sharedRead, () => snapshot);
     private readonly Func<WorkingMemorySnapshot> _read;
     private readonly object _gate = new();
     private long _reserved;

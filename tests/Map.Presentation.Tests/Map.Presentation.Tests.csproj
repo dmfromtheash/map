@@ -28,4 +28,8 @@
     <ProjectReference Include="..\..\src\Map.Platform.Windows\Map.Platform.Windows.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Include="..\Shared\FixedWorkingMemory.cs" Link="Shared\FixedWorkingMemory.cs" />
+  </ItemGroup>
+
 </Project>

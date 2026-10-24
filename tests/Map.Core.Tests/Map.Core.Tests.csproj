@@ -22,4 +22,8 @@
     <ProjectReference Include="..\..\src\Map.Core\Map.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Include="..\Shared\FixedWorkingMemory.cs" Link="Shared\FixedWorkingMemory.cs" />
+  </ItemGroup>
+
 </Project>
