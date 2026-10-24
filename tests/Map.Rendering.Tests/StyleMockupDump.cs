@@ -12,7 +12,7 @@ namespace Map.Rendering.Tests;
 /// watercolour edges, torn or burnt edge, folds) and vector decorations (rhumb lines, dotted route, seal)
 /// make every variant. Skipped otherwise.
 /// </summary>
-public sealed class StyleMockupDump
+public sealed partial class StyleMockupDump
 {
     private const int W = 2560, H = 1440;
 
