@@ -61,6 +61,7 @@ internal static class ShortcutKeyAdapter
             Key.Right => "Right",
             Key.Up => "Up",
             Key.Down => "Down",
+            >= Key.F1 and <= Key.F9 or Key.F11 or Key.F12 => key.ToString(),
             _ => null,
         };
     }

@@ -1,7 +1,9 @@
 using System;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Media;
+using Avalonia.Platform;
 
 namespace Map.App.Services;
 
@@ -10,10 +12,13 @@ namespace Map.App.Services;
 /// about 1920×1080; on a 1440p, ultrawide or 4K monitor the interface grows with the screen
 /// (60 % of the extra size, at most ×1.5) and the user's own scale setting multiplies on top.
 /// The main window follows its own size (MainWindow.UpdateUiScale); every other window gets the
-/// scale of the screen it opens on, its size grown to match and kept inside the working area.
+/// scale of the screen it opens on, its size grown to match; on every screen it is kept inside the working area.
 /// </summary>
 internal static class UiScaling
 {
+    /// <summary>Title bar and borders of a decorated window, in device-independent pixels.</summary>
+    private const double FrameAllowance = 40;
+
     /// <summary>The scale chosen in the settings (1 = 100 %).</summary>
     public static double UserScale { get; set; } = 1;
 
@@ -31,14 +36,34 @@ internal static class UiScaling
     {
         if (window is MainWindow || window.Content is LayoutTransformControl { Name: "UiScaleHost" }) return;
         FollowOwnerScreen(window);
-        if (window.Screens.ScreenFromWindow(window) is not { } screen) return;
+        // The owner's screen decides: right after the move Windows may still report the dialog on
+        // the main screen, and a 2560×1440 area grew the wizard ×1.19 on the 1536×816 laptop.
+        if ((OwnerScreen(window) ?? window.Screens.ScreenFromWindow(window)) is not { } screen) return;
         var area = screen.WorkingArea.ToRect(screen.Scaling);
         var scale = ForSize(area.Width, area.Height);
-        if (Math.Abs(scale - 1) < .01 || window.Content is not Control content) return;
+        if (Math.Abs(scale - 1) >= .01 && window.Content is Control content)
+        {
+            window.Content = null;
+            window.Content = new LayoutTransformControl { Name = "UiScaleHost", LayoutTransform = new ScaleTransform(scale, scale), Child = content };
+        }
+        else scale = 1;
+        // Unscaled dialogs are fitted too: on a 1536×816 laptop area (1920×1080 at 125 %) the
+        // 1080×820 new-map wizard ran past the top and bottom, its buttons under the taskbar.
+        Scale(window, scale, area, screen.Scaling);
+    }
 
-        window.Content = null;
-        window.Content = new LayoutTransformControl { Name = "UiScaleHost", LayoutTransform = new ScaleTransform(scale, scale), Child = content };
-        Scale(window, scale, area);
+    private static Screen? OwnerScreen(Window window) =>
+        Owner(window) is { } owner ? window.Screens.ScreenFromWindow(owner) : null;
+
+    /// <summary>
+    /// The window a dialog belongs to. ShowDialog assigns Owner only after WindowOpened, so at
+    /// that moment it is still null; every dialog of Map is opened from the main window.
+    /// </summary>
+    private static Window? Owner(Window window)
+    {
+        var owner = window.Owner as Window
+            ?? (Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.MainWindow;
+        return owner is not null && owner != window && owner.WindowState != WindowState.Minimized ? owner : null;
     }
 
     /// <summary>
@@ -47,8 +72,7 @@ internal static class UiScaling
     /// </summary>
     private static void FollowOwnerScreen(Window window)
     {
-        if (window.Owner is not Window owner || owner.WindowState == WindowState.Minimized
-            || window.Screens.ScreenFromWindow(owner) is not { } target) return;
+        if (OwnerScreen(window) is not { } target) return;
         if (window.Screens.ScreenFromWindow(window) is { } current && current.Bounds == target.Bounds) return;
         var area = target.WorkingArea;
         var width = (int)Math.Min(area.Width, (double.IsNaN(window.Width) ? window.Bounds.Width : window.Width) * target.Scaling);
@@ -56,26 +80,28 @@ internal static class UiScaling
         window.Position = new PixelPoint(area.X + Math.Max(0, (area.Width - width) / 2), area.Y + Math.Max(0, (area.Height - height) / 2));
     }
 
-    /// <summary>Grows a fixed-size dialog by the same factor, never past the screen, re-centred.</summary>
-    private static void Scale(Window window, double scale, Rect area)
+    /// <summary>Grows a fixed-size dialog by the same factor (1 on small screens), never past the screen, re-centred.</summary>
+    private static void Scale(Window window, double scale, Rect area, double screenScaling)
     {
         if (window.MinWidth > 0) window.MinWidth = Math.Min(window.MinWidth * scale, area.Width);
         if (window.MinHeight > 0) window.MinHeight = Math.Min(window.MinHeight * scale, area.Height);
         if (window.SizeToContent != SizeToContent.Manual || window.WindowState != WindowState.Normal) return;
+        // Height is the client area; the title bar and borders come on top of it and must stay
+        // above the taskbar as well.
         var width = Math.Min(window.Width * scale, area.Width * .96);
-        var height = Math.Min(window.Height * scale, area.Height * .96);
+        var height = Math.Min(window.Height * scale, Math.Min(area.Height * .96, area.Height - FrameAllowance));
         if (double.IsNaN(width) || double.IsNaN(height)) return;
+        if (window.MinHeight > height) window.MinHeight = height;
         window.Width = width;
         window.Height = height;
         if (window.WindowStartupLocation is WindowStartupLocation.CenterOwner or WindowStartupLocation.CenterScreen)
         {
-            var origin = window.Owner is Window owner && owner.WindowState != WindowState.Minimized
-                ? new Point(owner.Position.X / window.Screens.ScreenFromWindow(owner)!.Scaling + owner.Bounds.Width / 2,
-                            owner.Position.Y / window.Screens.ScreenFromWindow(owner)!.Scaling + owner.Bounds.Height / 2)
+            var origin = Owner(window) is { } owner && OwnerScreen(window) is { } ownerScreen
+                ? new Point(owner.Position.X / ownerScreen.Scaling + owner.Bounds.Width / 2,
+                            owner.Position.Y / ownerScreen.Scaling + owner.Bounds.Height / 2)
                 : area.Center;
             var x = Math.Clamp(origin.X - width / 2, area.X, area.Right - width);
-            var y = Math.Clamp(origin.Y - height / 2, area.Y, area.Bottom - height);
-            var screenScaling = window.Screens.ScreenFromWindow(window)!.Scaling;
+            var y = Math.Clamp(origin.Y - (height + FrameAllowance) / 2, area.Y, area.Bottom - height - FrameAllowance);
             window.Position = new PixelPoint((int)(x * screenScaling), (int)(y * screenScaling));
         }
     }

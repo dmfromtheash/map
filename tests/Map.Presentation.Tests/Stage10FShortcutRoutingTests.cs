@@ -5,6 +5,21 @@ namespace Map.Presentation.Tests;
 public sealed class Stage10FShortcutRoutingTests
 {
     [Fact]
+    public void F11SwitchesFullScreenEverywhereAndF10StaysWithWindows()
+    {
+        var shortcuts = new EditorShortcutSettings();
+        Assert.Equal("F11", shortcuts.Get(EditorShortcutSettings.Commands.FullScreen));
+        foreach (var context in new[] { ShortcutContext.Dashboard, ShortcutContext.Editor })
+        {
+            Assert.Equal(EditorShortcutSettings.Commands.FullScreen,
+                shortcuts.Resolve(new ShortcutInput("F11", ShortcutModifiers.None), new HashSet<ShortcutContext> { context }));
+        }
+        Assert.True(ShortcutGesture.TryParse("ctrl+f5", out var gesture));
+        Assert.Equal("Ctrl+F5", gesture.ToString());
+        Assert.False(ShortcutGesture.TryParse("F10", out _));
+    }
+
+    [Fact]
     public void CatalogOpensFromAnyEditorToolAndEnterCompletesCanvasContours()
     {
         var shortcuts = new EditorShortcutSettings();

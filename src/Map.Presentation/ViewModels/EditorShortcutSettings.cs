@@ -51,6 +51,8 @@ public readonly record struct ShortcutGesture(string Key, ShortcutModifiers Modi
         "Space", "Tab", "Enter", "Escape", "Delete", "Backspace",
         "Left", "Right", "Up", "Down",
         "Slash", "Comma", "Period", "Backquote", "LeftBracket", "RightBracket",
+        // F10 is left out: Windows gives it to the window menu.
+        "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F11", "F12",
     };
 
     public static bool TryParse(string? value, out ShortcutGesture gesture)
@@ -150,6 +152,7 @@ public sealed class EditorShortcutSettings
     {
         public const string NewMap = "new-map";
         public const string OpenMap = "open-map";
+        public const string FullScreen = "full-screen";
         public const string Save = "save";
         public const string Undo = "undo";
         public const string Redo = "redo";
@@ -230,6 +233,7 @@ public sealed class EditorShortcutSettings
     [
         D(Commands.NewMap, "Новая карта", "Файл", ShortcutContext.Global, "Ctrl+N", "Создать новую карту"),
         D(Commands.OpenMap, "Открыть карту", "Файл", ShortcutContext.Global, "Ctrl+O", "Открыть файл .mapproj"),
+        D(Commands.FullScreen, "Во весь экран", "Окно", ShortcutContext.Global, "F11", "Переключить полноэкранный режим и обычное окно"),
         D(Commands.Save, "Сохранить", "Файл", ShortcutContext.Editor, "Ctrl+S", "Сохранить открытую карту"),
         D(Commands.Undo, "Отменить", "Правка", ShortcutContext.Editor, "Ctrl+Z", "Отменить последнее изменение"),
         D(Commands.Redo, "Повторить", "Правка", ShortcutContext.Editor, "Ctrl+Shift+Z", "Повторить отменённое изменение"),

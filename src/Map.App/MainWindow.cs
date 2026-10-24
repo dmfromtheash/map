@@ -107,11 +107,13 @@ public sealed class MainWindow : Window
         Content = new LayoutTransformControl { Name = "UiScaleHost", LayoutTransform = _uiScale, Child = _host };
         SizeChanged += (_, _) => UpdateUiScale();
         // Inkarnate's editor owns the whole screen; a 1024×680 window left the map a fraction of
-        // it. Ordinary starts open maximised (Width/Height above remain the restore size).
+        // it. Ordinary starts open full screen - no title bar, above the taskbar, which on a
+        // 1920×1080 laptop at 125 % hid the bottom of the pages. F11 switches to a maximised
+        // window and back (Width/Height above remain the restore size).
         if (!TestMode.StartupSmoke)
         {
             WindowStartupLocation = WindowStartupLocation.CenterScreen;
-            WindowState = WindowState.Maximized;
+            WindowState = WindowState.FullScreen;
             // A test run never opens on the owner's main screen: with a second display it starts there.
             if (TestMode.Enabled && Screens.All.FirstOrDefault(screen => !screen.IsPrimary) is { } second)
             {
@@ -611,6 +613,12 @@ public sealed class MainWindow : Window
         if (command == EditorShortcutSettings.Commands.OpenMap)
         {
             _ = HandleOpenShortcutAsync();
+            return true;
+        }
+
+        if (command == EditorShortcutSettings.Commands.FullScreen)
+        {
+            WindowState = WindowState == WindowState.FullScreen ? WindowState.Maximized : WindowState.FullScreen;
             return true;
         }
 
