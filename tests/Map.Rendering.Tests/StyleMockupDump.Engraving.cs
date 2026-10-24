@@ -34,6 +34,12 @@ public sealed partial class StyleMockupDump
             using var geo = CoastField(landOnly, riverOnly);
             using var mountainsOnWhite = OnWhite(mountains);
             using var tensor = Tensor(mountainsOnWhite);
+            // The mountains are redrawn from their form, not from the painting (owner 2026-10-24): a height field (distance
+            // inward from the silhouette, smoothed), the painting's main lines (what survives a small blur) and its big
+            // faces (a wide blur).
+            using var height = MountainHeight(mountains);
+            using var mainLines = Blurred(mountains, 2f);
+            using var faces = Blurred(mountains, 8f);
 
             var variants = new (string Name, Print Print)[]
             {
@@ -47,7 +53,7 @@ public sealed partial class StyleMockupDump
             {
                 using var surface = SKSurface.Create(new SKImageInfo(W, H))!;
                 var canvas = surface.Canvas;
-                using (var shader = PrintShader(mountains, geo, tensor, print))
+                using (var shader = PrintShader(mountains, geo, tensor, height, mainLines, faces, print))
                 using (var paint = new SKPaint { Shader = shader })
                     canvas.DrawRect(0, 0, W, H, paint);
                 if (print.Variant == 3) DrawGuillocheBorder(canvas);
@@ -67,6 +73,9 @@ public sealed partial class StyleMockupDump
 uniform shader mount;
 uniform shader geo;
 uniform shader tensor;
+uniform shader height;
+uniform shader mlines;
+uniform shader mfaces;
 uniform float variant;
 uniform float2 size;
 uniform float3 paper;
@@ -140,6 +149,14 @@ float crests(float2 p, float cell, float density) {
 
 float3 unpre(float4 c) { return c.a > 0.001 ? c.rgb / c.a : float3(1); }
 float lumAt(float2 p) { float4 c = mount.eval(p); return lum(mix(float3(1), unpre(c), c.a)); }
+float hAt(float2 p) { return height.eval(p).r; }
+float lineLum(float2 p) { float4 c = mlines.eval(p); return lum(mix(float3(1), unpre(c), c.a)); }
+// The silhouette's own rim, `r` pixels wide, inside the mountain.
+float rimAt(float2 p, float r) {
+    float inner = min(min(mount.eval(p + float2(r, 0)).a, mount.eval(p - float2(r, 0)).a),
+                      min(mount.eval(p + float2(0, r)).a, mount.eval(p - float2(0, r)).a));
+    return smoothstep(0.35, 0.65, mount.eval(p).a) * (1.0 - smoothstep(0.35, 0.65, inner));
+}
 
 half4 main(float2 p) {
     float4 g = geo.eval(p);
@@ -161,6 +178,25 @@ half4 main(float2 p) {
     float2 tang = float2(-grad.y, grad.x);
     float wob = noise(p / 23.0) - 0.5;
 
+    // ---- The mountains' form, read without the painting's detail.
+    float sil = smoothstep(0.35, 0.65, ma);
+    float Hh = hAt(p);
+    float2 hg = float2(hAt(p + float2(2, 0)) - hAt(p - float2(2, 0)), hAt(p + float2(0, 2)) - hAt(p - float2(0, 2))) * 0.25;
+    float steep = clamp(length(hg) * 45.0, 0.0, 1.0);
+    float2 down = length(hg) > 1e-5 ? -normalize(hg) : float2(0.0, 1.0);
+    float2 along = float2(-down.y, down.x);
+    float3 nrm = normalize(float3(-hg.x * 60.0, -hg.y * 60.0, 1.0));
+    // Light from the upper left (Imhof): slopes facing it lit, the far ones in shadow.
+    float hill = clamp(dot(nrm, normalize(float3(-0.55, -0.65, 0.55))), 0.0, 1.0);
+    // The painting's big faces (a wide blur) keep each mountain its own light and dark sides.
+    float4 mf = mfaces.eval(p);
+    float broad = lum(mix(float3(1), unpre(mf), mf.a));
+    float shade = clamp(mix(hill, broad * 1.15, 0.45), 0.0, 1.0);
+    // The painting's main lines: only the strong lines that survive a small blur.
+    float l0 = lineLum(p);
+    float l1 = 0.25 * (lineLum(p + float2(3, 0)) + lineLum(p - float2(3, 0)) + lineLum(p + float2(0, 3)) + lineLum(p - float2(0, 3)));
+    float ridge = smoothstep(0.55, 0.32, l0) * smoothstep(0.025, 0.1, l1 - l0) * sil;
+
     float k = 0.0;              // ink coverage, 0 = paper, 1 = full ink
     float3 col = paper;
 
@@ -175,14 +211,14 @@ half4 main(float2 p) {
         k = max(k, shore * isLand * 0.9);
         // River: two bold banks, a blank middle.
         k = max(k, clamp(river * (1.0 - river) * 4.0, 0.0, 1.0));
-        // Mountains: three cuts of tone - left blank, parallel cuts along the form, solid black.
-        float tone = 1.0 - lm;
-        float hatch = screen(dot(p, tang) + 2.0 * wob, 7.0, 0.45, 0.1);
-        float mk = tone < 0.3 ? 0.0 : (tone < 0.62 ? hatch : 1.0);
-        k = mix(k, mk, ma);
-        // Bold keyblock contour: the owner's line, thickened.
-        float bold = smoothstep(0.5, 0.25, min(lumAt(p + float2(1.2, 0)), lumAt(p - float2(1.2, 0)))) * ma;
-        k = max(k, max(contour, bold * smoothstep(0.02, 0.1, around - lo)));
+        // Mountains cut as a woodcutter would: a heavy outline, the lit faces left blank, the shadow faces cut in straight
+        // parallel strokes slanting down to the right (one direction, as on the Chronicle's hills), the deepest shadow
+        // left solid with a few white gouges; the main lines cut bold.
+        float slant = screen(dot(p, normalize(float2(0.62, 1.0))) + 1.5 * wob, 6.5, 0.48, 0.07);
+        float gouged = 1.0 - flicks(p, 13.0, 0.4, 0.75, 1.3, 9.0);
+        float mk = shade > 0.56 ? 0.0 : (shade > 0.3 ? slant : gouged);
+        mk = max(mk, max(rimAt(p, 3.0), smoothstep(0.2, 0.5, ridge)));
+        k = mix(k, mk, sil);
         k = max(k, 1.0 - smoothstep(1.6, 3.2, dc));
         // Uneven inking on the block and wood grain in the solids.
         float grain = noise(float2(p.x / 90.0 + fbm(p / 300.0) * 4.0, p.y / 2.4));
@@ -198,7 +234,7 @@ half4 main(float2 p) {
         float3 tint = float3(1);
         tint = mix(tint, mix(float3(0.55, 0.60, 0.36) * 1.5, float3(0.79, 0.63, 0.31) * 1.25, patch * 0.7), landW * 0.32 * (0.8 + 0.4 * fbm(p / 90.0)));
         tint = mix(tint, float3(0.62, 0.70, 0.72) * 1.35, seaW * 0.45);
-        tint = mix(tint, float3(0.78, 0.33, 0.24) * 1.35, mw * 0.4 * smoothstep(0.4, 0.7, 1.0 - lumAt(p + off)));
+        tint = mix(tint, mix(float3(0.79, 0.63, 0.31) * 1.3, float3(0.55, 0.60, 0.36) * 1.4, smoothstep(0.3, 0.6, hAt(p + off))), mw * 0.45);
         col = mix(paper * tint, ink, clamp(k, 0.0, 1.0));
     } else if (variant < 2.5) {
         // ---- 2. White-line wood engraving (Bewick): the block prints black; the graver cuts white lines - many where light.
@@ -219,13 +255,14 @@ half4 main(float2 p) {
         k *= 1.0 - (1.0 - smoothstep(0.3, 0.9, abs(p.x - size.x * 0.618)));
         // River: cut like the sea, dark with ruled white lines.
         k = mix(k, 1.0 - screen(p.y + 1.5 * wob, 4.2, 0.45, 0.12), smoothstep(0.2, 0.6, river));
-        // Mountains: black block, white lines along the form; more and wider where the painting is light.
-        float lightM = clamp(lm * 1.05 - 0.22, 0.0, 1.0);
-        float cut = screen(dot(p, tang) + 1.4 * wob, 3.6, lightM, 0.1);
-        float cut2 = screen(dot(p, grad), 5.0, lightM - 0.55, 0.1) * step(0.6, lightM);
-        float mk = 1.0 - max(cut, cut2);
-        k = mix(k, mk, ma);
-        k = max(k, contour);
+        // Mountains: the uncut black mass; the graver runs nearly level white lines across it, bowed by the form (they
+        // rise over the shoulders and sag into the hollows), wider on the lit slopes, gone in the shadow, and flicks white
+        // on the lit crests. The silhouette stays black against the paper.
+        float cutW = clamp(shade * 1.05 - 0.2, 0.0, 0.92);
+        float cut = screen(p.y + 34.0 * Hh + 1.2 * wob, 3.8, cutW, 0.08);
+        float crest = smoothstep(0.2, 0.5, ridge) * smoothstep(0.45, 0.7, shade);
+        float mk = 1.0 - max(cut, crest);
+        k = mix(k, mk, sil);
         col = mix(paper, ink, clamp(k, 0.0, 1.0));
     } else if (variant < 3.5) {
         // ---- 3. Steel engraving for an atlas (SDUK, Stieler): waterlining from the coast, then a machine-ruled tint at 45°,
@@ -239,17 +276,16 @@ half4 main(float2 p) {
         k = max(k, st * 0.7);
         k = max(k, clamp(river * (1.0 - river) * 4.0, 0.0, 1.0));
         k = max(k, screen(p.y, 2.6, 0.3, 0.18) * step(0.5, river) * 0.6);
-        // Mountains: Lehmann hachures - short strokes down the slope (along the gradient), side by side along the contour,
-        // in rows, thicker where steeper and darker; the deepest shadows get a fine crossing layer.
-        float tone2 = clamp((1.0 - lm) * 1.1, 0.0, 1.0);
-        float across = dot(p, tang);
-        float alongS = dot(p, grad);
-        float rowH = floor(alongS / 8.0);
-        float hach = screen(across + 1.3 * hash(float2(rowH, 3.0)), 2.4, tone2 * 0.85, 0.15);
-        hach *= smoothstep(0.06, 0.16, abs(fract(alongS / 8.0) - 0.5) * 2.0);
-        float l3 = screen(alongS, 2.6, tone2 - 0.65, 0.15) * step(0.65, tone2);
-        k = mix(k, max(hach, l3), ma);
-        k = max(k, contour);
+        // Mountains as a survey shows relief (Lehmann, Dufour): no outline, only hachures - short strokes falling straight
+        // down the slope from the crest, in rows between contours of the height, thicker where steep and in shadow, almost
+        // none on the lit slopes and the crest itself white.
+        float rowsH = Hh * 11.0;
+        float band = fract(rowsH);
+        float gapRow = smoothstep(0.0, 0.14, band) * smoothstep(1.0, 0.86, band);
+        float w = clamp(0.06 + 0.8 * (1.0 - shade) * (0.35 + 0.65 * steep), 0.0, 0.88);
+        float hach = screen(dot(p, along) + 7.3 * floor(rowsH), 2.3, w, 0.16) * gapRow * smoothstep(0.02, 0.08, steep);
+        float hair = rimAt(p, 1.0) * 0.55;
+        k = mix(k, max(hach, hair), sil);
         k = max(k, 1.0 - smoothstep(0.7, 1.6, dc));
         col = mix(paper, ink, clamp(k, 0.0, 1.0));
     } else if (variant < 4.5) {
@@ -263,8 +299,10 @@ half4 main(float2 p) {
         // Scraped glints on the sea: horizontal-ish streaks the scraper lifted.
         float streak = smoothstep(0.62, 0.8, noise(float2(p.x / 140.0, p.y / 5.0))) * smoothstep(30.0, 90.0, dL);
         tone -= 0.18 * streak * (1.0 - isLand);
-        float mt = clamp(pow(1.0 - lm, 0.85) * 1.05, 0.0, 1.0);
-        tone = mix(tone, mt, ma);
+        // Mountains modelled in tone only: the shadow side rocked deep, the lit side burnished to light, the crest polished
+        // nearly white; no lines but a faint etched outline.
+        float mt = clamp(0.92 - shade * 0.95 + 0.12 * (1.0 - steep) * (1.0 - shade), 0.04, 1.0);
+        tone = mix(tone, mt, sil);
         // The rocker's burr: a dense grain of tiny pits in crossing directions, burnished smooth where light.
         float pits = hash(floor(p / 1.05)) * 0.55 + noise(p / 1.6) * 0.45;
         float rocker = 0.5 + 0.5 * sin((p.x * 0.7 + p.y * 0.7) * 2.2) * sin((p.x * 0.7 - p.y * 0.7) * 2.0);
@@ -273,7 +311,7 @@ half4 main(float2 p) {
         k = mix(k, tone, 0.45);
         // Burnished highlights are polished smooth: no grain left where the tone is light.
         k = mix(tone, k, smoothstep(0.12, 0.35, tone));
-        k = max(k, contour * 0.7);
+        k = max(k, rimAt(p, 1.2) * 0.6);
         k = max(k, (1.0 - smoothstep(0.7, 1.8, dc)) * 0.9);
         col = mix(paper, ink, clamp(k, 0.0, 1.0));
         // Velvet: deep blacks carry a warm brown.
@@ -301,15 +339,16 @@ half4 main(float2 p) {
         k = mix(k, 0.0, (1.0 - smoothstep(2.0, 6.0, dL)) * (1.0 - isLand));
         // River: a bitten line each side.
         k = max(k, clamp(river * (1.0 - river) * 3.6, 0.0, 1.0) * 0.9);
-        // Mountains: etched hatching along the form, the needle's line swelling and blotting where the acid bit too long.
-        float tone = clamp((1.0 - lm) * 1.1, 0.0, 1.0);
-        float bite = 0.85 + 0.35 * noise(p / 6.0);
-        float h1 = screen(dot(p, tang) + 2.5 * wob, 4.6, tone * 0.8 * bite, 0.12);
-        float h2 = screen(dot(p, grad) + 2.5 * wob, 5.4, (tone - 0.45) * bite, 0.12) * step(0.45, tone);
-        float foul = step(0.992, hash(floor(p / 2.0))) * step(0.4, tone);
-        float maq = smoothstep(resin - 0.12, resin + 0.12, tone * 0.5) * 0.5;
-        k = mix(k, max(max(h1, h2), max(foul, maq)), ma);
-        k = max(k, contour);
+        // Mountains as an etcher draws them: an open line drawing - the outline and main lines bitten with the needle -
+        // and the shadow faces laid in aquatint, two stopped-out steps, with a few loose strokes down the darkest slopes.
+        float bite = 0.8 + 0.4 * noise(p / 7.0);
+        float outline = rimAt(p, 1.6 * bite);
+        float lines = smoothstep(0.25, 0.55, ridge * bite);
+        float stage = 0.32 * step(shade, 0.48) + 0.3 * step(shade, 0.26);
+        float maq = smoothstep(resin - 0.07, resin + 0.07, stage * 1.25) * 0.9;
+        float loose = screen(dot(p, along) + 3.0 * wob, 6.0, 0.2 * bite, 0.1) * step(shade, 0.3) * step(0.1, steep);
+        float foul = step(0.993, hash(floor(p / 2.0))) * step(shade, 0.4);
+        k = mix(k, max(max(outline, lines), max(maq, max(loose, foul))), sil);
         k = max(k, 1.0 - smoothstep(1.0, 2.2, dc + 0.8 * wob));
         col = mix(paper, ink, clamp(k, 0.0, 1.0));
         // Plate tone: ink left on the plate, wiped unevenly, darker toward the edges and in streaks.
@@ -338,14 +377,55 @@ half4 main(float2 p) {
     private static readonly Lazy<SKRuntimeEffect> PrintEffect = new(() =>
         SKRuntimeEffect.CreateShader(PrintSource, out var errors) ?? throw new InvalidOperationException(errors));
 
-    private static SKShader PrintShader(SKImage mountains, SKImage geo, SKImage tensor, Print print)
+    /// <summary>
+    /// The height of the painted mountains read from the silhouette alone. They are seen from the side, so a point is
+    /// as high as it is close to the top edge above it: the depth below the silhouette's upper edge in its column (peaks
+    /// high, the foot low), plus a little of the distance inward from any edge so each mountain gets left and right
+    /// faces; smoothed. 1 at a crest, 0 at the foot.
+    /// </summary>
+    private static SKImage MountainHeight(SKImage mountains)
+    {
+        using var bitmap = SKBitmap.FromImage(mountains);
+        var inside = new bool[W * H];
+        for (var y = 0; y < H; y++)
+            for (var x = 0; x < W; x++)
+                inside[y * W + x] = bitmap.GetPixel(x, y).Alpha > 127;
+        var toOutside = Distance(inside, false);
+        // Depth below the upper edge: the run of inside pixels above, in the same column.
+        var depth = new int[W * H];
+        for (var x = 0; x < W; x++)
+        {
+            var run = 0;
+            for (var y = 0; y < H; y++) { run = inside[y * W + x] ? run + 1 : 0; depth[y * W + x] = run; }
+        }
+        using var field = new SKBitmap(new SKImageInfo(W, H, SKColorType.Rgba8888, SKAlphaType.Opaque));
+        for (var y = 0; y < H; y++)
+            for (var x = 0; x < W; x++)
+            {
+                var i = y * W + x;
+                var fromTop = 1 - Math.Clamp(depth[i] / 320.0, 0, 1);
+                var inward = Math.Clamp(Math.Sqrt(toOutside[i]) / 140.0, 0, 1);
+                var h = inside[i] ? 0.72 * fromTop + 0.28 * Math.Pow(inward, 0.7) : 0;
+                var v = (byte)Math.Round(255 * Math.Clamp(h, 0, 1));
+                field.SetPixel(x, y, new SKColor(v, v, v, 255));
+            }
+        using var image = SKImage.FromBitmap(field);
+        return Blurred(image, 9f);
+    }
+
+    private static SKShader PrintShader(SKImage mountains, SKImage geo, SKImage tensor, SKImage height, SKImage mainLines,
+        SKImage faces, Print print)
     {
         var builder = new SKRuntimeShaderBuilder(PrintEffect.Value);
         var linear = new SKSamplingOptions(SKFilterMode.Linear);
         using var cMount = mountains.ToShader(SKShaderTileMode.Clamp, SKShaderTileMode.Clamp);
         using var cGeo = geo.ToShader(SKShaderTileMode.Clamp, SKShaderTileMode.Clamp, linear);
         using var cTensor = tensor.ToShader(SKShaderTileMode.Clamp, SKShaderTileMode.Clamp, linear);
+        using var cHeight = height.ToShader(SKShaderTileMode.Clamp, SKShaderTileMode.Clamp, linear);
+        using var cLines = mainLines.ToShader(SKShaderTileMode.Clamp, SKShaderTileMode.Clamp, linear);
+        using var cFaces = faces.ToShader(SKShaderTileMode.Clamp, SKShaderTileMode.Clamp, linear);
         builder.Children["mount"] = cMount; builder.Children["geo"] = cGeo; builder.Children["tensor"] = cTensor;
+        builder.Children["height"] = cHeight; builder.Children["mlines"] = cLines; builder.Children["mfaces"] = cFaces;
         builder.Uniforms["variant"] = (float)print.Variant;
         builder.Uniforms["size"] = new float[] { W, H };
         builder.Uniforms["paper"] = Stylize.Hex(print.Paper); builder.Uniforms["ink"] = Stylize.Hex(print.Ink);
