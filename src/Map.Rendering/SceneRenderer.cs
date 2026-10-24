@@ -219,6 +219,14 @@ public sealed class RenderOptions
     public GRContext? GpuContext { get; init; }
     /// <summary>Draws the map without its Свет section (DEC-057) even when the document has one.</summary>
     public bool DisableLighting { get; init; }
+
+    /// <summary>
+    /// The clock of flickering torches and fires, in seconds, while the canvas may animate (its
+    /// window in front, touched lately); null keeps every light steady - the export, thumbnails,
+    /// an idle canvas. With it, a lit frame with a flickering light in view asks for the next one
+    /// through <see cref="RequestAmbientFrame"/>.
+    /// </summary>
+    public double? LightAnimationSeconds { get; init; }
     /// <summary>Object to draw the selection gizmo around, or null. Never set on export paths.</summary>
     public ObjectId? SelectedObjectId { get; init; }
 
@@ -544,6 +552,8 @@ public static class SceneRenderer
             DrawBoundaryOverlay(canvas, options.BoundaryOverlay, options.ViewScale);
             return;
         }
+        // The canvas without light gives back the video memory of its kept lit frame.
+        if (options.GpuContext is not null && !options.IsExport) Lighting.LightingRenderer.DropKept();
         RenderScene(canvas, document, options, chrome: true);
     }
 

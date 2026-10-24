@@ -625,6 +625,9 @@ public sealed partial class MapCanvasControl : Control
     /// <summary>After this long without a pointer on the canvas the living hex world rests.</summary>
     private static readonly TimeSpan AmbientRest = TimeSpan.FromMinutes(2);
 
+    /// <summary>The clock of flickering lights (Свет); only its differences matter.</summary>
+    private static readonly Stopwatch LightClock = Stopwatch.StartNew();
+
     /// <summary>The living hex world's next frame, about 24 a second (a frame of every kind before it counts).</summary>
     private void QueueAmbientFrame()
     {
@@ -762,6 +765,8 @@ public sealed partial class MapCanvasControl : Control
                 HexCursor = editor.CanvasWorkflowOpen ? null : editor.HexCursorShown,
                 HexSettles = editor.HexSettlesShown,
                 HexAmbient = hexAmbient && !editor.HasHexGesture,
+                // Torches and fires flicker under the same rule as the living hex world.
+                LightAnimationSeconds = hexAmbient ? LightClock.Elapsed.TotalSeconds : null,
                 HexGestureLive = editor.HasHexGesture,
                 HexOverlay = editor.CanvasWorkflowOpen ? null : editor.HexOverlay,
                 HexLevel = editor.HexLevelShown,

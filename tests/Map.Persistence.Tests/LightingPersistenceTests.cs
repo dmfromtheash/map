@@ -53,6 +53,26 @@ public sealed class LightingPersistenceTests : IDisposable
     }
 
     [Fact]
+    public void A_named_version_keeps_its_light_through_save_and_reopen()
+    {
+        var night = new MapLighting { TimeOfDay = 1, Sources = [new MapLightSource(Guid.NewGuid(), 40, 50, "#ff8a3c", 380, 1.3, true)] };
+        var plain = ProjectFixtures.Document("Версии");
+        var version = new MapCheckpoint(CheckpointId.New(), "Ночь", DateTimeOffset.UnixEpoch,
+            MapCheckpointSnapshot.Capture(plain with { Lighting = night }), ProjectFixtures.PreviewPng());
+        // The map itself is unlit now: the version alone carries the light (and so the schema v28).
+        var document = plain.WithCheckpoints([version]);
+        var path = Path.Combine(_root, "versions.mapproj");
+        MapProjectStore.Save(document, path, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
+
+        var opened = MapProjectStore.Open(path).Document;
+        Assert.Null(opened.Lighting);
+        var kept = Assert.Single(opened.Checkpoints).Snapshot.Lighting!;
+        Assert.Equal(1, kept.TimeOfDay);
+        Assert.Equal(night.Sources[0], Assert.Single(kept.Sources));
+        Assert.Equal(1, Assert.Single(opened.Checkpoints).Snapshot.Materialize(opened.Id).Lighting!.TimeOfDay);
+    }
+
+    [Fact]
     public void A_light_change_is_one_undo_step()
     {
         var document = ProjectFixtures.Document("Отмена");

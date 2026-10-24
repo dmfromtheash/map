@@ -44,9 +44,10 @@ public static class LayerPngExporter
                 // layer from this transient snapshot so such a grid cannot bleed into each PNG.
                 // Keep the mandatory base colour record for material colours, hidden unless it
                 // is the exported layer. The source document and layer records remain immutable.
+                // The light (Свет) lights the whole map, not one layer: separate layers stay as painted.
                 var isolated = scene.Document.WithLayers([.. scene.Document.Layers
                     .Where(l => l is BaseColorLayer || l.Id == layer.Id)
-                    .Select(l => l.Id == layer.Id ? l : l with { Visible = false })]);
+                    .Select(l => l.Id == layer.Id ? l : l with { Visible = false })]) with { Lighting = null };
                 var plan = exporter.Plan(isolated, pngRequest with
                 {
                     VisibleLayerIds = ImmutableHashSet.Create(layer.Id),

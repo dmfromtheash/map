@@ -8,8 +8,7 @@ internal static class LightingShader
 {
     private const string Source = """
 uniform shader scene;
-uniform shader nrm;
-uniform shader data;
+uniform shader shape;
 uniform shader shadowMask;
 uniform shader noiseTex;
 uniform float viewScale;
@@ -34,14 +33,22 @@ float3 toLin(float3 c) { return c * c * (c * 0.2848 + 0.7152); }
 half4 main(float2 p) {
     float4 sc = scene.eval(p);
     if (sc.a <= 0.002) return half4(0.0);
-    float3 base = toLin(clamp(sc.rgb / sc.a, 0.0, 1.0));
-    float4 nn = nrm.eval(p);
+    float3 painted = clamp(sc.rgb / sc.a, 0.0, 1.0);
+    float3 base = toLin(painted);
+    // Shape buffer: normal x, y and relief height of the stamps, coverage in alpha.
+    float4 nn = shape.eval(p);
     float cov = nn.a;
-    float3 n = cov > 0.02 ? normalize(clamp(nn.rgb / cov, 0.0, 1.0) * 2.0 - 1.0) : float3(0.0, 0.0, 1.0);
+    float3 sh = cov > 0.02 ? clamp(nn.rgb / cov, 0.0, 1.0) : float3(0.5, 0.5, 0.0);
+    float2 nxy = sh.xy * 2.0 - 1.0;
+    float3 n = normalize(float3(nxy, sqrt(max(1.0 - dot(nxy, nxy), 0.0))));
     n = normalize(mix(float3(0.0, 0.0, 1.0), n, clamp(cov * 1.5, 0.0, 1.0)));
-    float4 dd = data.eval(p);
-    float mask = cov > 0.02 ? mix(1.0, clamp(dd.r / max(dd.a, 0.001), 0.0, 1.0), clamp(cov * 1.5, 0.0, 1.0)) : 1.0;
-    float height = dd.a > 0.02 ? clamp(dd.g / dd.a, 0.0, 1.0) : 0.0;
+    float height = cov > 0.02 ? sh.z : 0.0;
+    // Light mask: the ink lines and the flat snow apron at the foot keep closer to the painting.
+    float lum = dot(painted, float3(0.299, 0.587, 0.114));
+    float ink = clamp((0.30 - lum) / 0.20, 0.0, 1.0);
+    float apron = clamp(1.0 - height / 0.12, 0.0, 1.0);
+    float own = clamp(0.85 - 0.6 * ink - 0.35 * apron, 0.15, 1.0);
+    float mask = cov > 0.02 ? mix(1.0, own, clamp(cov * 1.5, 0.0, 1.0)) : 1.0;
     float2 w = (p - viewOffset) / viewScale;
 
     // Sun on the normals, relative to flat ground so the day key keeps the painting's brightness.
@@ -102,9 +109,11 @@ half4 main(float2 p) {
     /// <summary>Compiles the shader; null if this Skia cannot (the frame is then drawn unlit).</summary>
     public static bool IsAvailable => Effect.Value is not null;
 
-    public static SKShader? Build(SKImage scene, SKImage normal, SKImage data, SKImage shadow, SKImage noise,
-        SKRectI device, int shadowMargin, SKMatrix view, LightingState state, MapLighting lighting,
-        (float[] Pos, float[] Col, int Count) lights)
+    /// <param name="bufferDevice">Where the shape and shadow buffers were drawn (a kept frame's view).</param>
+    /// <param name="buffers">From those device pixels to this frame's: identity unless the view is moving.</param>
+    public static SKShader? Build(SKImage scene, SKImage shape, SKImage shadow, SKImage noise,
+        SKRectI device, SKRectI bufferDevice, SKMatrix buffers, int shadowMargin, float shadowScale, SKMatrix view,
+        LightingState state, MapLighting lighting, (float[] Pos, float[] Col, int Count) lights)
     {
         if (Effect.Value is not { } effect) return null;
         var nearest = new SKSamplingOptions(SKFilterMode.Nearest, SKMipmapMode.None);
@@ -112,14 +121,15 @@ half4 main(float2 p) {
         var at = SKMatrix.CreateTranslation(device.Left, device.Top);
         var builder = new SKRuntimeShaderBuilder(effect);
         using var cScene = scene.ToShader(SKShaderTileMode.Clamp, SKShaderTileMode.Clamp, nearest, at);
-        using var cNormal = normal.ToShader(SKShaderTileMode.Clamp, SKShaderTileMode.Clamp, nearest, at);
-        using var cData = data.ToShader(SKShaderTileMode.Clamp, SKShaderTileMode.Clamp, nearest, at);
-        using var cShadow = shadow.ToShader(SKShaderTileMode.Clamp, SKShaderTileMode.Clamp, nearest,
-            SKMatrix.CreateTranslation(device.Left - shadowMargin, device.Top - shadowMargin));
+        // Outside a moved kept buffer there is no shape: transparent (flat), not the edge smeared.
+        using var cShape = shape.ToShader(SKShaderTileMode.Decal, SKShaderTileMode.Decal, buffers.IsIdentity ? nearest : linear,
+            SKMatrix.Concat(buffers, SKMatrix.CreateTranslation(bufferDevice.Left, bufferDevice.Top)));
+        using var cShadow = shadow.ToShader(SKShaderTileMode.Decal, SKShaderTileMode.Decal, linear,
+            SKMatrix.Concat(buffers, SKMatrix.Concat(SKMatrix.CreateTranslation(bufferDevice.Left - shadowMargin, bufferDevice.Top - shadowMargin),
+                SKMatrix.CreateScale(shadowScale, shadowScale))));
         using var cNoise = noise.ToShader(SKShaderTileMode.Repeat, SKShaderTileMode.Repeat, linear);
         builder.Children["scene"] = cScene;
-        builder.Children["nrm"] = cNormal;
-        builder.Children["data"] = cData;
+        builder.Children["shape"] = cShape;
         builder.Children["shadowMask"] = cShadow;
         builder.Children["noiseTex"] = cNoise;
         builder.Uniforms["viewScale"] = view.ScaleX;

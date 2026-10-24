@@ -29,6 +29,7 @@ public sealed class MapCheckpointSnapshot
         Notes = new ReadOnlyCollection<MapNote>([.. document.Notes]);
         StampForeground = document.StampForeground;
         Category = document.Category;
+        Lighting = document.Lighting;
     }
 
     public string Title { get; }
@@ -39,6 +40,9 @@ public sealed class MapCheckpointSnapshot
     public IReadOnlyList<MapNote> Notes { get; }
     public StampForegroundSurface? StampForeground { get; }
     public MapCategoryId Category { get; }
+
+    /// <summary>The light and time of day of the version (Свет), or null when it had none.</summary>
+    public MapLighting? Lighting { get; }
 
     public static MapCheckpointSnapshot Capture(MapDocument document)
     {
@@ -62,7 +66,7 @@ public sealed class MapCheckpointSnapshot
             Notes,
             checkpoints,
             StampForeground,
-            Category);
+            Category) { Lighting = Lighting };
 }
 
 /// <summary>One named durable checkpoint with its bounded preview and immutable map snapshot.</summary>

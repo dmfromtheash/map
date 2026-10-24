@@ -137,4 +137,19 @@ public class MapDocumentTests
         Assert.Equal(original, moved);
         Assert.NotSame(original, moved);
     }
+
+    [Fact]
+    public void Adding_or_removing_a_layer_keeps_the_light_of_the_map()
+    {
+        var lighting = new MapLighting { TimeOfDay = 0.5 };
+        var document = new MapDocument(
+            DocumentId.New(), "map", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(1024, 768, "px", "#FFFFFFFF"),
+            [Base()]) { Lighting = lighting };
+        var extra = new ObjectLayer(LayerId.New(), "layer", visible: true, locked: false, opacity: 1.0, [Object()]);
+
+        var added = new Map.Core.Editing.AddLayerCommand(extra).Apply(document);
+        Assert.Same(lighting, added.Lighting);
+        Assert.Same(lighting, document.WithLayers([document.Layers[0]]).Lighting);
+    }
 }

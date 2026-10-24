@@ -870,4 +870,9 @@ internal sealed class CheckpointSnapshotManifestDto
     [JsonPropertyName("sceneSha256")] public string SceneSha256 { get; set; } = "";
     [JsonPropertyName("assetManifestSha256")] public string AssetManifestSha256 { get; set; } = "";
     [JsonPropertyName("previewSha256")] public string PreviewSha256 { get; set; } = "";
+
+    /// <summary>The version's light (schema v28, optional): a named version keeps its time of day.</summary>
+    [JsonPropertyName("lighting")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public LightingDto? Lighting { get; set; }
 }

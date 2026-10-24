@@ -59,8 +59,9 @@ public sealed class LightingRenderingTests
         var view = new WorldBounds(0, 0, 512, 384);
         var evening = new MapLighting { TimeOfDay = 0.5, Fog = new(false, 0), Lights = new(false, 0) };
         var noShadow = evening with { Shadows = new(false, 1) };
-        using var lit = Draw(Scene(evening), mountain, view);
-        using var flat = Draw(Scene(noShadow), mountain, view);
+        // The export waits for the shape maps; the canvas shows a stamp unlit until they are built.
+        using var lit = Draw(Scene(evening), mountain, view, export: true);
+        using var flat = Draw(Scene(noShadow), mountain, view, export: true);
         // Ground just right of the far (east) flank, the evening sun low in the west: shaded, touching the flank.
         Assert.True(Luma(lit.GetPixel(310, 230)) < Luma(flat.GetPixel(310, 230)) - 6,
             $"{Luma(lit.GetPixel(310, 230))} vs {Luma(flat.GetPixel(310, 230))}");
@@ -68,6 +69,31 @@ public sealed class LightingRenderingTests
         Assert.True(Math.Abs(Luma(lit.GetPixel(220, 360)) - Luma(flat.GetPixel(220, 360))) <= 3);
         // Far above the mountain nothing changes.
         Assert.True(Math.Abs(Luma(lit.GetPixel(20, 20)) - Luma(flat.GetPixel(20, 20))) <= 2);
+    }
+
+    [Fact]
+    public void A_torch_flickers_only_on_an_animated_canvas_and_asks_for_frames_only_then()
+    {
+        using var mountain = Mountain();
+        var view = new WorldBounds(0, 0, 512, 384);
+        var torch = new MapLightSource(Guid.NewGuid(), 60, 330, "#ff9a42", 120, 1.1, Flicker: true);
+        var night = Scene(new MapLighting { TimeOfDay = 1, Sources = [torch] });
+        var day = Scene(new MapLighting { TimeOfDay = 0, Sources = [torch] });
+
+        var asked = 0;
+        using var steadyA = Draw(night, mountain, view, seconds: null, ask: () => asked++);
+        using var steadyB = Draw(night, mountain, view, seconds: null, ask: () => asked++);
+        Assert.Equal(0, MaxDiff(steadyA, steadyB));
+        Assert.Equal(0, asked);
+
+        using var early = Draw(night, mountain, view, seconds: 0.10, ask: () => asked++);
+        using var late = Draw(night, mountain, view, seconds: 0.47, ask: () => asked++);
+        Assert.True(Math.Abs(Luma(early.GetPixel(70, 330)) - Luma(late.GetPixel(70, 330))) >= 1, "the torch does not flicker");
+        Assert.Equal(2, asked);
+
+        // By day the torches are out: no animation frames.
+        using var noon = Draw(day, mountain, view, seconds: 0.10, ask: () => asked++);
+        Assert.Equal(2, asked);
     }
 
     [Fact]
@@ -117,12 +143,17 @@ public sealed class LightingRenderingTests
         return surface.Snapshot().ToRasterImage();
     }
 
-    private static SKBitmap Draw(MapDocument document, SKImage mountain, WorldBounds view, bool export = false)
+    private static SKBitmap Draw(MapDocument document, SKImage mountain, WorldBounds view, bool export = false,
+        double? seconds = null, Action? ask = null)
     {
         var info = new SKImageInfo((int)(view.Right - view.Left), (int)(view.Bottom - view.Top));
         using var surface = SKSurface.Create(info)!;
         surface.Canvas.Translate((float)-view.Left, (float)-view.Top);
-        SceneRenderer.Render(surface.Canvas, document, new RenderOptions { Stamps = new Images(mountain), IsExport = export, VisibleWorld = view });
+        SceneRenderer.Render(surface.Canvas, document, new RenderOptions
+        {
+            Stamps = new Images(mountain), IsExport = export, VisibleWorld = view,
+            LightAnimationSeconds = seconds, RequestAmbientFrame = ask,
+        });
         var bitmap = new SKBitmap(info);
         surface.ReadPixels(info, bitmap.GetPixels(), info.RowBytes, 0, 0);
         return bitmap;

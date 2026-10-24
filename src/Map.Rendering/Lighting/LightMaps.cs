@@ -4,9 +4,9 @@ using SkiaSharp;
 namespace Map.Rendering.Lighting;
 
 /// <summary>
-/// Shape maps of a stamp asset for the light pass (DEC-057): a normal map and a data map
-/// (R = how strongly light may change the painting, G = relief height 0..1, A = the asset's
-/// alpha). They are derived from the asset's silhouette, not from the brightness of the
+/// Shape maps of a stamp asset for the light pass (DEC-057): a shape map (R, G = the normal's
+/// x and y, B = relief height 0..1, A = the asset's alpha; premultiplied) and a cast-shadow
+/// sprite. They are derived from the asset's silhouette, not from the brightness of the
 /// painting: a dome over the silhouette, sharpened by the hand-written form descriptions
 /// (peaks, ridges, bowls) for the owner's mountains that have them, plus a faint brush texture.
 /// Built once per asset on the thread pool; the canvas repaints when one is ready
@@ -22,15 +22,63 @@ public static class LightMaps
     /// <summary>Raised on a pool thread when a set finishes; the canvas repaints.</summary>
     public static event Action? Ready;
 
-    public sealed class LightMapSet(SKImage normal, SKImage data, float baseFraction) : IDisposable
+    public sealed class LightMapSet(SKImage normal, SKImage shadow, float baseFraction) : IDisposable
     {
+        /// <summary>Normal x, y and relief height of the asset, premultiplied by its alpha.</summary>
         public SKImage Normal { get; } = normal;
-        public SKImage Data { get; } = data;
+
+        /// <summary>
+        /// The cast-shadow sprite: the silhouette in black, full at the foot and fading toward the
+        /// top (the far end of a long shadow is lighter). Drawn sheared from the foot, one draw
+        /// per stamp at the size of the shape maps instead of the painting's own pixels.
+        /// </summary>
+        public SKImage Shadow { get; } = shadow;
 
         /// <summary>The lowest covered row as a fraction of the asset height: where it stands on the ground.</summary>
         public float BaseFraction { get; } = baseFraction;
 
-        public void Dispose() { Normal.Dispose(); Data.Dispose(); }
+        private GRContext? _context;
+        private (SKImage Normal, SKImage Shadow)? _textures;
+
+        /// <summary>
+        /// The maps as textures of this GPU context with their mip levels, uploaded once per
+        /// context rather than by the draws. The raster images serve the export (no context).
+        /// </summary>
+        public (SKImage Normal, SKImage Shadow) For(GRContext? gpu)
+        {
+            if (gpu is null) return (Normal, Shadow);
+            if (ReferenceEquals(_context, gpu) && _textures is { } kept) return kept;
+            DisposeTextures();
+            var textures = (Upload(Normal, gpu), Upload(Shadow, gpu));
+            _context = gpu;
+            _textures = textures;
+            return textures;
+        }
+
+        private static SKImage Upload(SKImage raster, GRContext gpu) => raster.ToTextureImage(gpu, true) ?? raster;
+
+        private void DisposeTextures()
+        {
+            if (_textures is { } t)
+            {
+                if (!ReferenceEquals(t.Normal, Normal)) t.Normal.Dispose();
+                if (!ReferenceEquals(t.Shadow, Shadow)) t.Shadow.Dispose();
+            }
+            _textures = null;
+            _context = null;
+        }
+
+        public void Dispose() { DisposeTextures(); Normal.Dispose(); Shadow.Dispose(); }
+    }
+
+    /// <summary>Where the shadow fade starts, below the foot, as a fraction of the stamp height.</summary>
+    public const float ShadowFootInset = 0.06f;
+
+    /// <summary>The set when it is already built (or failed: null, <paramref name="known"/> true); no image needed.</summary>
+    public static LightMapSet? TryGetReady(string sha256, out bool known)
+    {
+        known = Sets.TryGetValue(sha256, out var lazy) && lazy.IsValueCreated && lazy.Value.IsCompleted;
+        return known && lazy!.Value.IsCompletedSuccessfully ? lazy.Value.Result : null;
     }
 
     /// <summary>The set if ready; otherwise starts building it and returns null (or waits, when asked).</summary>
@@ -104,10 +152,12 @@ public static class LightMaps
         var hmax = Math.Max(1e-6f, height.Max());
         for (var i = 0; i < n; i++) height[i] /= hmax;
 
-        // Normals (OpenGL: G = up), relief = 0.30 of the width, as in the V0 prototype.
+        // Normals (OpenGL: G = up), relief = 0.30 of the width, as in the V0 prototype; one map
+        // carries the normal's x and y (z follows) and the relief height, so the frame draws every
+        // stamp once. The light mask (ink lines and the flat apron keep closer to the painting)
+        // is read by the light pass from the painting itself and this height.
         var relief = 0.30f * w;
         var normal = new byte[n * 4];
-        var data = new byte[n * 4];
         for (var y = 0; y < h; y++)
         for (var x = 0; x < w; x++)
         {
@@ -117,32 +167,48 @@ public static class LightMaps
             float nx = -gx * relief, ny = gy * relief, nz = 1;
             var len = MathF.Sqrt(nx * nx + ny * ny + nz * nz);
             var i = y * w + x;
-            var a = (byte)Math.Clamp(MathF.Round(alpha[i] * 255), 0, 255);
             normal[i * 4] = ToByte(nx / len * 0.5f + 0.5f);
             normal[i * 4 + 1] = ToByte(ny / len * 0.5f + 0.5f);
-            normal[i * 4 + 2] = ToByte(nz / len * 0.5f + 0.5f);
-            normal[i * 4 + 3] = a;
-            // Light mask: keep the ink lines and the flat snow apron at the foot closer to the painting.
-            var ink = Math.Clamp((0.30f - lum[i]) / 0.20f, 0, 1);
-            var apron = Math.Clamp(1 - height[i] / 0.12f, 0, 1);
-            data[i * 4] = ToByte(Math.Clamp(0.85f - 0.6f * ink - 0.35f * apron, 0.15f, 1));
-            data[i * 4 + 1] = ToByte(height[i]);
-            data[i * 4 + 2] = 0;
-            data[i * 4 + 3] = a;
+            normal[i * 4 + 2] = ToByte(height[i]);
+            normal[i * 4 + 3] = (byte)Math.Clamp(MathF.Round(alpha[i] * 255), 0, 255);
         }
 
         var baseRow = 0;
         for (var y = h - 1; y >= 0 && baseRow == 0; y--)
             for (var x = 0; x < w; x++)
                 if (alpha[y * w + x] > 0.5f) { baseRow = y; break; }
-        return new LightMapSet(Image(normal, w, h), Image(data, w, h), (baseRow + 1f) / h);
+        var baseFraction = (baseRow + 1f) / h;
+
+        // The shadow sprite: black silhouette, full from the shadow's base down, fading to 40/255 at the top.
+        var fadeFrom = (baseFraction - ShadowFootInset) * h;
+        var shadow = new byte[n * 4];
+        for (var y = 0; y < h; y++)
+        {
+            var fade = fadeFrom <= 0 ? 1f : Math.Clamp(40f / 255f + (1 - 40f / 255f) * (y / fadeFrom), 40f / 255f, 1f);
+            for (var x = 0; x < w; x++)
+                shadow[(y * w + x) * 4 + 3] = ToByte(alpha[y * w + x] * fade);
+        }
+        return new LightMapSet(Image(normal, w, h), Image(shadow, w, h), baseFraction);
     }
 
     private static byte ToByte(float v) => (byte)Math.Clamp(MathF.Round(v * 255), 0, 255);
 
+    /// <summary>
+    /// A map as a premultiplied image: the light pass divides the buffers by their alpha anyway,
+    /// and an unpremultiplied texture cost the GPU a conversion on every draw (14 s for a frame
+    /// of 1 500 stamps on the laptop's integrated GPU).
+    /// </summary>
     private static SKImage Image(byte[] px, int w, int h)
     {
-        var info = new SKImageInfo(w, h, SKColorType.Rgba8888, SKAlphaType.Unpremul);
+        for (var i = 0; i < px.Length; i += 4)
+        {
+            var a = px[i + 3];
+            if (a == 255) continue;
+            px[i] = (byte)((px[i] * a + 127) / 255);
+            px[i + 1] = (byte)((px[i + 1] * a + 127) / 255);
+            px[i + 2] = (byte)((px[i + 2] * a + 127) / 255);
+        }
+        var info = new SKImageInfo(w, h, SKColorType.Rgba8888, SKAlphaType.Premul);
         using var data = SKData.CreateCopy(px);
         return SKImage.FromPixels(info, data, w * 4) ?? throw new InvalidOperationException("light map image");
     }

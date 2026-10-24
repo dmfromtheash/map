@@ -42,7 +42,7 @@ public static partial class MapProjectStore
         layers.OfType<ObjectLayer>().Any(l => l.PlacementAreas.Any(a => a.NeedsRulesSchema));
 
     private static int SchemaFor(MapDocument document) =>
-        document.Lighting is not null
+        document.Lighting is not null || document.Checkpoints.Any(c => c.Snapshot.Lighting is not null)
             ? MapProjectFormat.LightingSchemaVersion :
         document.Atlas is not null
             ? MapProjectFormat.AtlasSchemaVersion :
@@ -579,6 +579,7 @@ public static partial class MapProjectStore
                 SceneSha256 = Sha256Hex(sceneBytes),
                 AssetManifestSha256 = Sha256Hex(assetManifestBytes),
                 PreviewSha256 = Sha256Hex(previewBytes),
+                Lighting = ToLightingDto(snapshot.Lighting),
             };
             var snapshotManifestBytes = SerializeJson(snapshotManifest, snapshotManifestEntry);
 
@@ -1390,6 +1391,7 @@ public static partial class MapProjectStore
                     CreatedUtc = snapshotManifest.CreatedUtc,
                     Canvas = snapshotManifest.Canvas,
                     Category = mainManifest.Category,
+                    Lighting = snapshotManifest.Lighting,
                 };
                 var snapshotDocument = ToDomain(
                     domainManifest, scene, objectStorages, assetManifest, tiles, assets,

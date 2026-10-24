@@ -324,8 +324,13 @@ public sealed record MapDocument
         return results;
     }
 
+    /// <summary>New snapshot with another layer list; the map-wide light, atlas place and the rest stay.</summary>
     public MapDocument WithLayers(IReadOnlyList<MapLayer> layers) =>
-        new(Id, Title, CreatedUtc, Canvas, layers, Assets, Notes, Checkpoints, StampForeground, Category);
+        new(Id, Title, CreatedUtc, Canvas, layers, Assets, Notes, Checkpoints, StampForeground, Category)
+        {
+            Atlas = Atlas,
+            Lighting = Lighting,
+        };
 
     public MapDocument WithAssets(IReadOnlyList<MapAssetReference> assets)
     {

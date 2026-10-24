@@ -92,6 +92,12 @@ public sealed partial class PaintPerfApplication
         SetScale(centre, scale);
         _report.Environment["exact/open"] = (await TimedRefined()).ToString("0");
         await Capture("newart-open");
+        if (System.Environment.GetEnvironmentVariable("MAP_NEW_ART_LIGHT") == "1")
+        {
+            await LightingRoutes(centre, scale);
+            _report.Checks["gpu"] = _report.Routes.All(r => r.Gpu);
+            return;
+        }
 
         var passes = int.TryParse(System.Environment.GetEnvironmentVariable("MAP_PAINT_PASSES"), out var p) ? Math.Max(1, p) : 1;
         for (var pass = 0; pass < passes; pass++)

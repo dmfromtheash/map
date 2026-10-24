@@ -94,6 +94,60 @@ public sealed class LightingFrameDump
         foreach (var image in images.Values) image.Dispose();
     }
 
+    /// <summary>
+    /// The owner's choice «бережный / выраженный рельеф» (R09): MAP_LIGHT_RELIEF_FRAMES = output folder,
+    /// MAP_LIGHT_ASSETS as above. The same three mountains at afternoon and evening with gentle relief
+    /// (volume 40 %, shadows 60 %: the painting leads, light only hints the form) and pronounced relief
+    /// (volume and shadows 100 %: Imhof's sculpted slopes), each as a whole frame and a 1:1 close-up
+    /// of the middle mountain. Skipped otherwise.
+    /// </summary>
+    [Fact]
+    public void Dump_the_relief_choice_when_asked()
+    {
+        var output = Environment.GetEnvironmentVariable("MAP_LIGHT_RELIEF_FRAMES");
+        var assets = Environment.GetEnvironmentVariable("MAP_LIGHT_ASSETS");
+        if (string.IsNullOrEmpty(output) || string.IsNullOrEmpty(assets) || !Directory.Exists(assets)) return;
+        Directory.CreateDirectory(output);
+        var images = Directory.GetFiles(assets, "*.png").Take(3)
+            .ToDictionary(f => Path.GetFileNameWithoutExtension(f), f => SKImage.FromEncodedData(f)!);
+        var objects = new List<SceneObject>();
+        var placements = new[] { (560.0, 880.0, 0.76), (1300.0, 760.0, 0.80), (2040.0, 900.0, 0.74) };
+        var i = 0;
+        foreach (var (sha, image) in images)
+        {
+            var (cx, baseY, scale) = placements[i++ % placements.Length];
+            double w = 1024 * scale, h = 1024.0 * image.Height / image.Width * scale;
+            objects.Add(new SceneObject(ObjectId.New(), SceneObjectKind.Stamp, "Mountain", cx - w / 2, baseY - h, w, h, 0,
+                "#FFFFFFFF", "#00000000", 0, true, false) { Stamp = new StampStyle(sha) });
+        }
+        objects = [.. objects.OrderBy(o => o.Y + o.Height)];
+        var torch = new MapLightSource(Guid.NewGuid(), 1180, 1180, "#ff8a3c", 380, 1.3, true);
+        var variants = new (string Name, double Time, LightingEffect Relief, LightingEffect Shadows)[]
+        {
+            ("Бережный · день", 0.2, new(true, 0.4), new(true, 0.6)),
+            ("Выраженный · день", 0.2, new(true, 1.0), new(true, 1.0)),
+            ("Бережный · вечер", 0.5, new(true, 0.4), new(true, 0.6)),
+            ("Выраженный · вечер", 0.5, new(true, 1.0), new(true, 1.0)),
+        };
+        foreach (var (name, time, relief, shadows) in variants)
+        {
+            var document = new MapDocument(DocumentId.New(), "Рельеф", DateTimeOffset.UnixEpoch,
+                new CanvasDefinition(2560, 1440, "px", "#FFB6AE86"),
+                [new BaseColorLayer(LayerId.New(), "Background", true, false, 1, "#FFB6AE86"),
+                 new ObjectLayer(LayerId.New(), "Mountains", true, false, 1, objects)])
+            { Lighting = new MapLighting { TimeOfDay = time, Relief = relief, Shadows = shadows, Sources = [torch] } };
+            using var surface = SKSurface.Create(new SKImageInfo(2560, 1440))!;
+            SceneRenderer.Render(surface.Canvas, document, new RenderOptions { Stamps = new Images(images), IsExport = true });
+            using var shot = surface.Snapshot();
+            using (var data = shot.Encode(SKEncodedImageFormat.Png, 100))
+                File.WriteAllBytes(Path.Combine(output, name + ".png"), data.ToArray());
+            using var crop = shot.Subset(SKRectI.Create(880, 120, 900, 760))!;
+            using (var data = crop.Encode(SKEncodedImageFormat.Png, 100))
+                File.WriteAllBytes(Path.Combine(output, name + " · крупно.png"), data.ToArray());
+        }
+        foreach (var image in images.Values) image.Dispose();
+    }
+
     private sealed class Images(Dictionary<string, SKImage> images) : IStampImageSource
     {
         public SKImage? TryGetImage(string sha256) => images.GetValueOrDefault(sha256);
