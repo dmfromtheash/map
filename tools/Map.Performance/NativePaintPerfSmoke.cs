@@ -103,6 +103,8 @@ public sealed partial class PaintPerfApplication : Application
             var x = second.Bounds.X < primary.Bounds.X ? second.Bounds.Right - widthPx - 32 : second.Bounds.X;
             _window.Position = new PixelPoint(x, second.Bounds.Y);
         }
+        else if (System.Environment.GetEnvironmentVariable("MAP_NEW_ART_STYLE") == "1")
+            throw new InvalidOperationException("BLOCKED: style performance requires a non-primary display; no window was opened.");
         _window.Opened += async (_, _) =>
         {
             try { await Execute(); }
@@ -130,6 +132,16 @@ public sealed partial class PaintPerfApplication : Application
 
     private async Task Execute()
     {
+        if (System.Environment.GetEnvironmentVariable("MAP_NEW_ART_STYLE") == "1")
+        {
+            var primary = _window.Screens.Primary ?? throw new InvalidOperationException("BLOCKED: primary display is unknown.");
+            var area = new PixelRect(_window.Position, new PixelSize(
+                (int)Math.Ceiling(_window.Bounds.Width * _window.RenderScaling) + 16,
+                (int)Math.Ceiling(_window.Bounds.Height * _window.RenderScaling) + 40));
+            if (_window.Screens.ScreenFromWindow(_window)?.IsPrimary != false || area.Intersects(primary.Bounds))
+                throw new InvalidOperationException("BLOCKED: performance window overlaps the primary display.");
+            _report.Checks["non-primary-display"] = true;
+        }
         _report.Environment["os"] = System.Environment.OSVersion.VersionString;
         _report.Environment["cpu-threads"] = System.Environment.ProcessorCount.ToString();
         _report.Environment["render-scaling"] = _window.RenderScaling.ToString("0.###");
