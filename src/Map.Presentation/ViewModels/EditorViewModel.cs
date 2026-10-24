@@ -4950,6 +4950,10 @@ public sealed partial class EditorViewModel : ViewModelBase
             if (ValidLightingPreview is { } lightingPreview && DragPreview is null)
                 return Session.Document with { Lighting = lightingPreview };
 
+            // So does a style slider.
+            if (ValidStylePreview is { } stylePreview && DragPreview is null)
+                return Session.Document with { Style = stylePreview };
+
             if (DragPreview is not { } preview)
             {
                 return Session.Document;

@@ -254,7 +254,36 @@ public sealed class RenderOptions
     /// and raster layers upload only the intersecting tiles - the reason a 131 072-unit map draws
     /// in constant time regardless of how much content lives outside the viewport.
     /// </summary>
-    public WorldBounds? VisibleWorld { get; init; }
+    public WorldBounds? VisibleWorld { get => _visibleWorld; init => _visibleWorld = value; }
+    private WorldBounds? _visibleWorld;
+
+    /// <summary>Draws the map without its style (R09, DEC-059) even when the document has one.</summary>
+    public bool DisableStyle { get; init; }
+
+    /// <summary>
+    /// The options of the style's map pass: the same frame, the view widened by the reach of the
+    /// medium's filters (so blurs meet across export tiles and the canvas edge).
+    /// </summary>
+    internal RenderOptions ForStyleScene(WorldBounds? visible)
+    {
+        var copy = (RenderOptions)MemberwiseClone();
+        copy._visibleWorld = visible;
+        return copy;
+    }
+
+    /// <summary>
+    /// The options of the names drawn sharp over the style: no kept images or statistics of the
+    /// map pass are touched, no live gesture state is drawn twice.
+    /// </summary>
+    internal RenderOptions ForStyleNames()
+    {
+        var copy = (RenderOptions)MemberwiseClone();
+        copy._layerImages = null;
+        copy._stats = null;
+        copy._terrain = null;
+        copy._liveSuppressed = true;
+        return copy;
+    }
 
     /// <summary>
     /// Bounded live object substitutions for an editor gesture. They are evaluated over the
@@ -340,14 +369,16 @@ public sealed class RenderOptions
     /// view. Strokes, placement and drags then cost one image for the entire ground; a change
     /// to any land, river or road, a pan or a zoom rebuilds it.
     /// </summary>
-    public RenderImageCache? Terrain { get; init; }
+    public RenderImageCache? Terrain { get => _terrain; init => _terrain = value; }
+    private RenderImageCache? _terrain;
 
     /// <summary>
     /// Reuse of whole object layers during a stroke or an armed placement, when the frame
     /// repeats the view and the layer is not part of the gesture. Absent (export, tests) every
     /// layer is drawn directly.
     /// </summary>
-    public LayerImageCache? LayerImages { get; init; }
+    public LayerImageCache? LayerImages { get => _layerImages; init => _layerImages = value; }
+    private LayerImageCache? _layerImages;
 
     /// <summary>Optional editor worker for refining an unchanged terrain after a camera move.</summary>
     public TerrainRefinement? TerrainRefinement { get; init; }
@@ -397,7 +428,8 @@ public sealed class RenderOptions
         return copy;
     }
 
-    public RenderStats? Stats { get; init; }
+    public RenderStats? Stats { get => _stats; init => _stats = value; }
+    private RenderStats? _stats;
 
     /// <summary>
     /// A gesture is moving objects or the pointer: per-object effects (blur, shadow, outline of
@@ -539,10 +571,26 @@ public static class SceneRenderer
         options.Stats?.Reset();
         options.PreviewCache?.Sync(options.Preview);
 
-        // The Свет section (DEC-057) lights the finished map; the editing chrome stays on top, unlit.
-        if (Lighting.LightingRenderer.Applies(document, options))
+        // The style (R09) repaints the map without its names, lit or not, and the names go on top
+        // sharp; the Свет section (DEC-057) lights the finished map; the editing chrome stays on top.
+        var styled = Styles.StyleRenderer.Applies(document, options);
+        if (styled || Lighting.LightingRenderer.Applies(document, options))
         {
-            Lighting.LightingRenderer.Render(canvas, document, options, target => RenderScene(target, document, options, chrome: false));
+            if (styled)
+                Styles.StyleRenderer.Render(canvas, document, options,
+                    (target, bare, sceneOptions) =>
+                    {
+                        if (Lighting.LightingRenderer.Applies(bare, sceneOptions))
+                            Lighting.LightingRenderer.Render(target, bare, sceneOptions, t => RenderScene(t, bare, sceneOptions, chrome: false));
+                        else
+                            RenderScene(target, bare, sceneOptions, chrome: false);
+                    },
+                    (target, names, namesOptions) => RenderScene(target, names, namesOptions, chrome: false));
+            else
+            {
+                if (options.GpuContext is not null && !options.IsExport) Styles.StyleRenderer.DropKept();
+                Lighting.LightingRenderer.Render(canvas, document, options, target => RenderScene(target, document, options, chrome: false));
+            }
             var bounds = new WorldBounds(0, 0, document.Canvas.Width, document.Canvas.Height);
             canvas.Save();
             canvas.ClipRect(ToRect(bounds));
@@ -552,8 +600,8 @@ public static class SceneRenderer
             DrawBoundaryOverlay(canvas, options.BoundaryOverlay, options.ViewScale);
             return;
         }
-        // The canvas without light gives back the video memory of its kept lit frame.
-        if (options.GpuContext is not null && !options.IsExport) Lighting.LightingRenderer.DropKept();
+        // The canvas without light or style gives back the video memory of its kept frames.
+        if (options.GpuContext is not null && !options.IsExport) { Lighting.LightingRenderer.DropKept(); Styles.StyleRenderer.DropKept(); }
         RenderScene(canvas, document, options, chrome: true);
     }
 

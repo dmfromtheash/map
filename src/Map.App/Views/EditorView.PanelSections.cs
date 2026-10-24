@@ -27,7 +27,7 @@ public sealed partial class EditorView
     private static readonly PanelSection[] StandardSections =
     [
         PanelSection.Land, PanelSection.Water, PanelSection.Assets,
-        PanelSection.Roads, PanelSection.Other, PanelSection.Layers, PanelSection.Light,
+        PanelSection.Roads, PanelSection.Other, PanelSection.Layers, PanelSection.Light, PanelSection.Styles,
     ];
 
     // A hex map has no land, water, assets or roads of the standard constructor: its hexes live
@@ -62,6 +62,7 @@ public sealed partial class EditorView
         PanelSection.Roads => MapIcons.LineRoad,
         PanelSection.Other => MapIcons.LineOther,
         PanelSection.Light => MapIcons.LineSun,
+        PanelSection.Styles => MapIcons.LinePalette,
         _ => MapIcons.LineLayers,
     };
 
@@ -70,6 +71,7 @@ public sealed partial class EditorView
     {
         PanelSection.Water => "Вода",
         PanelSection.Light => "Свет",
+        PanelSection.Styles => "Стили",
         _ => ObjectTreeRows.SectionTitle(section),
     };
 
@@ -91,6 +93,7 @@ public sealed partial class EditorView
         PanelSection.Roads => "Дорожные сети карты. Строка выделяет сеть; узлы и оформление — в инструменте «Дорога».",
         PanelSection.Other => "Текст, линии, фигуры, композиции и прочие объекты карты.",
         PanelSection.Light => "Время суток, объём гор, тени, туман, огни и цвет — у каждого свой переключатель и сила.",
+        PanelSection.Styles => "Вся карта в другой технике: тушь кистью или пером. Подписи остаются чёткими; у каждого эффекта свой переключатель и сила.",
         _ => "Настоящий порядок слоёв карты снизу вверх и свойства выбранного слоя. Реки и дороги лежат в слоях объектов.",
     };
 
@@ -214,11 +217,13 @@ public sealed partial class EditorView
         {
             PanelSection.Layers => _layersBody,
             PanelSection.Light => LightBody(),
+            PanelSection.Styles => StyleBody(),
             _ => _objectsBody,
         };
         if (!ReferenceEquals(_sectionHost.Content, body)) _sectionHost.Content = body;
         if (section != PanelSection.Light && _editor.LightPlacementArmed) _editor.ArmLightPlacement(false);
         if (section == PanelSection.Light) SyncLightSection();
+        if (section == PanelSection.Styles) SyncStyleSection();
         _otherFilterStrip.IsVisible = section == PanelSection.Other;
         var footer = _sectionFooters.GetValueOrDefault(section);
         if (!ReferenceEquals(_sectionFooter.Content, footer)) _sectionFooter.Content = footer;

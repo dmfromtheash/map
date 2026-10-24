@@ -30,6 +30,7 @@ public sealed class MapCheckpointSnapshot
         StampForeground = document.StampForeground;
         Category = document.Category;
         Lighting = document.Lighting;
+        Style = document.Style;
     }
 
     public string Title { get; }
@@ -43,6 +44,9 @@ public sealed class MapCheckpointSnapshot
 
     /// <summary>The light and time of day of the version (Свет), or null when it had none.</summary>
     public MapLighting? Lighting { get; }
+
+    /// <summary>The style of the version (Стили), or null when it had none.</summary>
+    public MapStyle? Style { get; }
 
     public static MapCheckpointSnapshot Capture(MapDocument document)
     {
@@ -66,7 +70,7 @@ public sealed class MapCheckpointSnapshot
             Notes,
             checkpoints,
             StampForeground,
-            Category) { Lighting = Lighting };
+            Category) { Lighting = Lighting, Style = Style };
 }
 
 /// <summary>One named durable checkpoint with its bounded preview and immutable map snapshot.</summary>

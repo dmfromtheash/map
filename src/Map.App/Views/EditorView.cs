@@ -505,6 +505,7 @@ public sealed partial class EditorView : UserControl
             OnEditorChanged(this, new(nameof(EditorViewModel.Session)));
             // Undo/Redo of a light change brings the Свет tab back in line (not while a slider drags).
             if (_editor.PanelSection == PanelSection.Light) Dispatcher.UIThread.Post(SyncLightSection);
+            if (_editor.PanelSection == PanelSection.Styles) Dispatcher.UIThread.Post(SyncStyleSection);
         };
         _editor.SceneInvalidated += (_, e) => Dispatcher.UIThread.Post(() =>
         {

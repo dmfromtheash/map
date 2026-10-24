@@ -93,7 +93,10 @@ public static class MapProjectFormat
     /// keep the older schema. v27 is reserved by R10 (branch claude/r10-beauty, not merged).
     /// </summary>
     public const int LightingSchemaVersion = 28;
-    public const int MaxSupportedSchemaVersion = LightingSchemaVersion;
+
+    /// <summary>The style of the map (DEC-059, R09): one manifest block. Documents without it keep the older schema.</summary>
+    public const int StyleSchemaVersion = 29;
+    public const int MaxSupportedSchemaVersion = StyleSchemaVersion;
 
     /// <summary>
     /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry

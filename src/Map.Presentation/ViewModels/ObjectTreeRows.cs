@@ -45,6 +45,9 @@ public enum PanelSection
 
     /// <summary>Light and time of day of the whole map (DEC-057): its own category, not a layer setting.</summary>
     Light,
+
+    /// <summary>The style of the whole map (R09, DEC-059): a medium the finished map is painted in.</summary>
+    Styles,
 }
 
 /// <summary>What one row of the objects panel is, for both the view and UI Automation.</summary>
@@ -475,6 +478,7 @@ public static class ObjectTreeRows
         PanelSection.Roads => "Дороги",
         PanelSection.Other => "Прочее",
         PanelSection.Light => "Свет и время суток",
+        PanelSection.Styles => "Стили карты",
         _ => "Слои",
     };
 

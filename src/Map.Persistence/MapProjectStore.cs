@@ -42,6 +42,8 @@ public static partial class MapProjectStore
         layers.OfType<ObjectLayer>().Any(l => l.PlacementAreas.Any(a => a.NeedsRulesSchema));
 
     private static int SchemaFor(MapDocument document) =>
+        document.Style is not null || document.Checkpoints.Any(c => c.Snapshot.Style is not null)
+            ? MapProjectFormat.StyleSchemaVersion :
         document.Lighting is not null || document.Checkpoints.Any(c => c.Snapshot.Lighting is not null)
             ? MapProjectFormat.LightingSchemaVersion :
         document.Atlas is not null
@@ -488,6 +490,7 @@ public static partial class MapProjectStore
             DocumentId = document.Id.ToString(),
             Atlas = document.Atlas,
             Lighting = ToLightingDto(document.Lighting),
+            Style = ToStyleDto(document.Style),
             Title = document.Title,
             CreatedUtc = FormatTimestamp(document.CreatedUtc),
             ModifiedUtc = FormatTimestamp(metadata.ModifiedUtc),
@@ -580,6 +583,7 @@ public static partial class MapProjectStore
                 AssetManifestSha256 = Sha256Hex(assetManifestBytes),
                 PreviewSha256 = Sha256Hex(previewBytes),
                 Lighting = ToLightingDto(snapshot.Lighting),
+                Style = ToStyleDto(snapshot.Style),
             };
             var snapshotManifestBytes = SerializeJson(snapshotManifest, snapshotManifestEntry);
 
@@ -1392,6 +1396,7 @@ public static partial class MapProjectStore
                     Canvas = snapshotManifest.Canvas,
                     Category = mainManifest.Category,
                     Lighting = snapshotManifest.Lighting,
+                    Style = snapshotManifest.Style,
                 };
                 var snapshotDocument = ToDomain(
                     domainManifest, scene, objectStorages, assetManifest, tiles, assets,
@@ -2367,7 +2372,7 @@ public static partial class MapProjectStore
                         4,
                         tileEntries))
                     : null,
-                category) { Atlas = ReadAtlasV26(manifest), Lighting = ReadLightingV28(manifest) };
+                category) { Atlas = ReadAtlasV26(manifest), Lighting = ReadLightingV28(manifest), Style = ReadStyleV29(manifest) };
         }
         catch (Exception ex) when (ex is ArgumentException or FormatException or InvalidOperationException)
         {

@@ -41,6 +41,7 @@ public sealed record MapDocument
         Category = source.Category;
         Atlas = source.Atlas;
         Lighting = source.Lighting;
+        Style = source.Style;
     }
 
     public MapDocument(
@@ -259,6 +260,9 @@ public sealed record MapDocument
 
     /// <summary>Light and time of day (DEC-057), or null when the map has never used the Свет section.</summary>
     public MapLighting? Lighting { get; init; }
+
+    /// <summary>The style of the whole map (R09, DEC-059), or null when the map has never used the Стили section.</summary>
+    public MapStyle? Style { get; init; }
     public string Title { get; init; }
 
     /// <summary>When the document was first created. Supplied by the caller; Core has no clock.</summary>
@@ -324,12 +328,13 @@ public sealed record MapDocument
         return results;
     }
 
-    /// <summary>New snapshot with another layer list; the map-wide light, atlas place and the rest stay.</summary>
+    /// <summary>New snapshot with another layer list; the map-wide light, style, atlas place and the rest stay.</summary>
     public MapDocument WithLayers(IReadOnlyList<MapLayer> layers) =>
         new(Id, Title, CreatedUtc, Canvas, layers, Assets, Notes, Checkpoints, StampForeground, Category)
         {
             Atlas = Atlas,
             Lighting = Lighting,
+            Style = Style,
         };
 
     public MapDocument WithAssets(IReadOnlyList<MapAssetReference> assets)

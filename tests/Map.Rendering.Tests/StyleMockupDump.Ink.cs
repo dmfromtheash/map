@@ -70,6 +70,47 @@ public sealed partial class StyleMockupDump
         }
     }
 
+    /// <summary>
+    /// The three chosen ink styles as Map itself paints them (document style, SceneRenderer), beside
+    /// the mock-ups: MAP_STYLE_INK_APP = output folder. Also a half-scale render, the zoomed-out view.
+    /// </summary>
+    [Fact]
+    public void Dump_ink_styles_from_the_renderer_when_asked()
+    {
+        var output = Environment.GetEnvironmentVariable("MAP_STYLE_INK_APP");
+        var assets = Environment.GetEnvironmentVariable("MAP_LIGHT_ASSETS");
+        if (string.IsNullOrEmpty(output) || string.IsNullOrEmpty(assets) || !Directory.Exists(assets)) return;
+        Directory.CreateDirectory(output);
+        var images = Directory.GetFiles(assets, "*.png").Take(3)
+            .ToDictionary(f => Path.GetFileNameWithoutExtension(f), f => SKImage.FromEncodedData(f)!);
+        try
+        {
+            var (document, _) = Scene(images);
+            foreach (var (name, preset) in new[]
+            {
+                ("Тушь · Суми-э, мокрая кисть", MapStylePreset.InkWetBrush),
+                ("Тушь · Перо, штриховка по форме", MapStylePreset.InkPenHatching),
+                ("Тушь · Перо, пуантилизм", MapStylePreset.InkPenStipple),
+            })
+            {
+                var styled = document with { Style = MapStyle.For(preset) };
+                foreach (var scale in new[] { 1f, 0.5f })
+                {
+                    using var surface = SKSurface.Create(new SKImageInfo((int)(W * scale), (int)(H * scale)))!;
+                    surface.Canvas.Scale(scale);
+                    SceneRenderer.Render(surface.Canvas, styled, new RenderOptions { Stamps = new Images(images), IsExport = true, ViewScale = scale });
+                    using var image = surface.Snapshot();
+                    using var data = image.Encode(SKEncodedImageFormat.Png, 100);
+                    File.WriteAllBytes(Path.Combine(output, name + (scale < 1 ? " · 50 %" : "") + ".png"), data.ToArray());
+                }
+            }
+        }
+        finally
+        {
+            foreach (var image in images.Values) image.Dispose();
+        }
+    }
+
     private static SKImage Blurred(SKImage image, float sigma)
     {
         using var surface = SKSurface.Create(new SKImageInfo(W, H))!;

@@ -36,6 +36,25 @@ internal sealed class ManifestDto
     [JsonPropertyName("lighting")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public LightingDto? Lighting { get; set; }
+    [JsonPropertyName("style")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MapStyleDto? Style { get; set; }
+}
+
+/// <summary>The style of the map (schema v29, DEC-059).</summary>
+internal sealed class MapStyleDto
+{
+    [JsonPropertyName("enabled")] public bool Enabled { get; set; }
+    [JsonPropertyName("preset")] public string Preset { get; set; } = "";
+    [JsonPropertyName("strength")] public double Strength { get; set; }
+    [JsonPropertyName("strokes")] public LightingEffectDto? Strokes { get; set; }
+    [JsonPropertyName("bleed")] public LightingEffectDto? Bleed { get; set; }
+    [JsonPropertyName("edges")] public LightingEffectDto? Edges { get; set; }
+    [JsonPropertyName("dryBrush")] public LightingEffectDto? DryBrush { get; set; }
+    [JsonPropertyName("mist")] public LightingEffectDto? Mist { get; set; }
+    [JsonPropertyName("pen")] public LightingEffectDto? Pen { get; set; }
+    [JsonPropertyName("paper")] public LightingEffectDto? Paper { get; set; }
+    [JsonPropertyName("contour")] public LightingEffectDto? Contour { get; set; }
 }
 
 /// <summary>Light and time of day of the map (schema v28, DEC-057).</summary>
@@ -875,4 +894,9 @@ internal sealed class CheckpointSnapshotManifestDto
     [JsonPropertyName("lighting")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public LightingDto? Lighting { get; set; }
+
+    /// <summary>The version's style (schema v29, optional).</summary>
+    [JsonPropertyName("style")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MapStyleDto? Style { get; set; }
 }
