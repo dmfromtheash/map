@@ -1,4 +1,5 @@
-﻿# What the desktop shortcut "Map — конструктор карт" runs: it starts the owner's local copy in
+﻿# Manual "update if needed, then start" (the desktop shortcut starts Map.App.exe directly since
+# 2026-10-24; the copy is refreshed by publish-local-r2r.ps1 at the end of a session). It starts the owner's local copy in
 # C:\Users\Leshe\Apps\Map and, when anything under src/ (or the root build files) is newer than that
 # copy, republishes it first with publish-local-r2r.ps1, so the shortcut always opens the current code,
 # committed or not. If this worktree is gone, it just starts the copy that is there.

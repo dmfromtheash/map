@@ -1,12 +1,14 @@
 ﻿# Builds the owner's local copy of Map with ReadyToRun (precompiled code: the first frame of a map
 # 1.5 -> 1.0 s, fewer JIT pauses on first actions; measured 2026-10-18) into C:\Users\Leshe\Apps\Map,
-# which the desktop shortcut "Map — конструктор карт" starts via start-map.ps1 (that script calls this
-# one by itself when the code changed). Local use on this PC only: not a release.
+# which the desktop shortcut "Map — конструктор карт" starts directly. Run it at the end of every session
+# that changed code (AGENTS.md); start-map.ps1 remains for a manual "update if needed, then start".
+# Local use on this PC only: not a release.
 # Run after changes, with Map closed:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools/ai/publish-local-r2r.ps1
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $target = 'C:\Users\Leshe\Apps\Map'
+$exe = "$target\Map.App.exe"
 if (Get-Process Map.App -ErrorAction SilentlyContinue) { throw 'Map is running; close it first.' }
 dotnet publish "$root\src\Map.App\Map.App.csproj" -c Release -r win-x64 --self-contained false `
     -p:PublishReadyToRun=true -o $target -nologo -v q
@@ -20,9 +22,11 @@ if (Test-Path $link) {
     $commit = (git -C $root rev-parse --short HEAD).Trim()
     $built = (Get-Item "$target\Map.App.dll").LastWriteTime.ToString('dd.MM HH:mm')
     $shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($link)
-    # The shortcut goes through start-map.ps1, which republishes first when the code is newer.
-    $shortcut.TargetPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
-    $shortcut.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Minimized -File `"$PSScriptRoot\start-map.ps1`""
+    # The shortcut starts the program itself. Going through start-map.ps1 cost about a second on every
+    # start (PowerShell) and a minute after each code change (republish); the copy is now refreshed by
+    # the executor at the end of a session that changed code (owner, 2026-10-24).
+    $shortcut.TargetPath = $exe
+    $shortcut.Arguments = ""
     $shortcut.WorkingDirectory = $target
     $shortcut.IconLocation = "$target\Map.App.exe,0"
     $shortcut.Description = "Map · сборка $built (ускоренная, коммит $commit)"
