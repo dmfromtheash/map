@@ -13,6 +13,10 @@ public static partial class MapProjectStore
         [MapStylePreset.InkPenStipple] = "ink-pen-stipple",
         [MapStylePreset.OldMapBlaeu] = "old-map-blaeu",
         [MapStylePreset.EngravingAquatint] = "engraving-aquatint",
+        [MapStylePreset.WatercolorBigShapes] = "watercolor-big-shapes",
+        [MapStylePreset.UkiyoeSosakuHanga] = "ukiyoe-sosaku-hanga",
+        [MapStylePreset.PrintLetterpress] = "print-letterpress",
+        [MapStylePreset.PrintTintedLithograph] = "print-tinted-lithograph",
     };
 
     private static MapStyleDto? ToStyleDto(MapStyle? style)
@@ -29,6 +33,10 @@ public static partial class MapProjectStore
             Paper = Effect(style.Paper), Contour = Effect(style.Contour),
             Sea = Effect(style.Sea), Coast = Effect(style.Coast), ColourWash = Effect(style.ColourWash),
             Aquatint = Effect(style.Aquatint), Plate = Effect(style.Plate), Border = Effect(style.Border),
+            Granulation = Effect(style.Granulation), Crest = Effect(style.Crest), Gouge = Effect(style.Gouge),
+            SeaCuts = Effect(style.SeaCuts), WoodGrain = Effect(style.WoodGrain), InkSqueeze = Effect(style.InkSqueeze),
+            Starved = Effect(style.Starved), WaterLines = Effect(style.WaterLines), StoneCrayon = Effect(style.StoneCrayon),
+            TintPlate = Effect(style.TintPlate), Scraped = Effect(style.Scraped),
         };
     }
 
@@ -56,6 +64,12 @@ public static partial class MapProjectStore
             Sea = Effect(dto.Sea, defaults.Sea), Coast = Effect(dto.Coast, defaults.Coast),
             ColourWash = Effect(dto.ColourWash, defaults.ColourWash), Aquatint = Effect(dto.Aquatint, defaults.Aquatint),
             Plate = Effect(dto.Plate, defaults.Plate), Border = Effect(dto.Border, defaults.Border),
+            Granulation = Effect(dto.Granulation, defaults.Granulation), Crest = Effect(dto.Crest, defaults.Crest),
+            Gouge = Effect(dto.Gouge, defaults.Gouge), SeaCuts = Effect(dto.SeaCuts, defaults.SeaCuts),
+            WoodGrain = Effect(dto.WoodGrain, defaults.WoodGrain), InkSqueeze = Effect(dto.InkSqueeze, defaults.InkSqueeze),
+            Starved = Effect(dto.Starved, defaults.Starved), WaterLines = Effect(dto.WaterLines, defaults.WaterLines),
+            StoneCrayon = Effect(dto.StoneCrayon, defaults.StoneCrayon), TintPlate = Effect(dto.TintPlate, defaults.TintPlate),
+            Scraped = Effect(dto.Scraped, defaults.Scraped),
         }.Normalized();
     }
 }

@@ -47,10 +47,27 @@ public sealed record MapStyle
     public StyleEffect Aquatint { get; init; } = new(true, 1);
     public StyleEffect Plate { get; init; } = new(true, 1);
     public StyleEffect Border { get; init; } = new(true, 1);
+    public StyleEffect Granulation { get; init; } = new(true, 1);
+    public StyleEffect Crest { get; init; } = new(true, 1);
+    public StyleEffect Gouge { get; init; } = new(true, 1);
+    public StyleEffect SeaCuts { get; init; } = new(true, 1);
+    public StyleEffect WoodGrain { get; init; } = new(true, 1);
+    public StyleEffect InkSqueeze { get; init; } = new(true, 1);
+    public StyleEffect Starved { get; init; } = new(true, 1);
+    public StyleEffect WaterLines { get; init; } = new(true, 1);
+    public StyleEffect StoneCrayon { get; init; } = new(true, 1);
+    public StyleEffect TintPlate { get; init; } = new(true, 1);
+    public StyleEffect Scraped { get; init; } = new(true, 1);
 
     /// <summary>The preset as it comes, every effect at the strength the preset was tuned with.</summary>
     public static MapStyle For(MapStylePreset preset) => preset switch
     {
+        MapStylePreset.WatercolorBigShapes or MapStylePreset.UkiyoeSosakuHanga
+            or MapStylePreset.PrintLetterpress or MapStylePreset.PrintTintedLithograph => new MapStyle
+        {
+            Preset = preset, Bleed = new(true, 1), Edges = new(true, 1),
+            Paper = new(true, 1), Contour = new(true, 1),
+        },
         MapStylePreset.OldMapBlaeu or MapStylePreset.EngravingAquatint => new MapStyle
         {
             Preset = preset,
@@ -75,6 +92,18 @@ public sealed record MapStyle
     /// <summary>The effects a preset actually uses: the panel shows only these.</summary>
     public static IReadOnlyList<StyleEffectKind> EffectsOf(MapStylePreset preset) => preset switch
     {
+        MapStylePreset.WatercolorBigShapes =>
+            [StyleEffectKind.Bleed, StyleEffectKind.Edges, StyleEffectKind.Granulation,
+             StyleEffectKind.Crest, StyleEffectKind.Sea, StyleEffectKind.Paper],
+        MapStylePreset.UkiyoeSosakuHanga =>
+            [StyleEffectKind.Gouge, StyleEffectKind.Contour, StyleEffectKind.SeaCuts,
+             StyleEffectKind.WoodGrain, StyleEffectKind.Paper],
+        MapStylePreset.PrintLetterpress =>
+            [StyleEffectKind.InkSqueeze, StyleEffectKind.Starved, StyleEffectKind.WaterLines,
+             StyleEffectKind.Contour, StyleEffectKind.Paper],
+        MapStylePreset.PrintTintedLithograph =>
+            [StyleEffectKind.StoneCrayon, StyleEffectKind.TintPlate, StyleEffectKind.Scraped,
+             StyleEffectKind.Sea, StyleEffectKind.Contour, StyleEffectKind.Paper],
         MapStylePreset.OldMapBlaeu =>
             [StyleEffectKind.Pen, StyleEffectKind.Contour, StyleEffectKind.ColourWash, StyleEffectKind.Sea,
              StyleEffectKind.Coast, StyleEffectKind.Paper, StyleEffectKind.Plate, StyleEffectKind.Border],
@@ -105,6 +134,17 @@ public sealed record MapStyle
         StyleEffectKind.Aquatint => Aquatint,
         StyleEffectKind.Plate => Plate,
         StyleEffectKind.Border => Border,
+        StyleEffectKind.Granulation => Granulation,
+        StyleEffectKind.Crest => Crest,
+        StyleEffectKind.Gouge => Gouge,
+        StyleEffectKind.SeaCuts => SeaCuts,
+        StyleEffectKind.WoodGrain => WoodGrain,
+        StyleEffectKind.InkSqueeze => InkSqueeze,
+        StyleEffectKind.Starved => Starved,
+        StyleEffectKind.WaterLines => WaterLines,
+        StyleEffectKind.StoneCrayon => StoneCrayon,
+        StyleEffectKind.TintPlate => TintPlate,
+        StyleEffectKind.Scraped => Scraped,
         _ => Contour,
     };
 
@@ -123,6 +163,17 @@ public sealed record MapStyle
         StyleEffectKind.Aquatint => this with { Aquatint = effect },
         StyleEffectKind.Plate => this with { Plate = effect },
         StyleEffectKind.Border => this with { Border = effect },
+        StyleEffectKind.Granulation => this with { Granulation = effect },
+        StyleEffectKind.Crest => this with { Crest = effect },
+        StyleEffectKind.Gouge => this with { Gouge = effect },
+        StyleEffectKind.SeaCuts => this with { SeaCuts = effect },
+        StyleEffectKind.WoodGrain => this with { WoodGrain = effect },
+        StyleEffectKind.InkSqueeze => this with { InkSqueeze = effect },
+        StyleEffectKind.Starved => this with { Starved = effect },
+        StyleEffectKind.WaterLines => this with { WaterLines = effect },
+        StyleEffectKind.StoneCrayon => this with { StoneCrayon = effect },
+        StyleEffectKind.TintPlate => this with { TintPlate = effect },
+        StyleEffectKind.Scraped => this with { Scraped = effect },
         _ => this with { Contour = effect },
     };
 
@@ -135,6 +186,10 @@ public sealed record MapStyle
         Mist = Mist.Normalized(), Pen = Pen.Normalized(), Paper = Paper.Normalized(), Contour = Contour.Normalized(),
         Sea = Sea.Normalized(), Coast = Coast.Normalized(), ColourWash = ColourWash.Normalized(),
         Aquatint = Aquatint.Normalized(), Plate = Plate.Normalized(), Border = Border.Normalized(),
+        Granulation = Granulation.Normalized(), Crest = Crest.Normalized(), Gouge = Gouge.Normalized(),
+        SeaCuts = SeaCuts.Normalized(), WoodGrain = WoodGrain.Normalized(), InkSqueeze = InkSqueeze.Normalized(),
+        Starved = Starved.Normalized(), WaterLines = WaterLines.Normalized(), StoneCrayon = StoneCrayon.Normalized(),
+        TintPlate = TintPlate.Normalized(), Scraped = Scraped.Normalized(),
     };
 }
 
@@ -149,9 +204,17 @@ public enum MapStylePreset
     InkPenStipple = 2,
     OldMapBlaeu = 3,
     EngravingAquatint = 4,
+    WatercolorBigShapes = 5,
+    UkiyoeSosakuHanga = 6,
+    PrintLetterpress = 7,
+    PrintTintedLithograph = 8,
 }
 
-public enum StyleEffectKind { Strokes, Bleed, Edges, DryBrush, Mist, Pen, Paper, Contour, Sea, Coast, ColourWash, Aquatint, Plate, Border }
+public enum StyleEffectKind
+{
+    Strokes, Bleed, Edges, DryBrush, Mist, Pen, Paper, Contour, Sea, Coast, ColourWash, Aquatint, Plate, Border,
+    Granulation, Crest, Gouge, SeaCuts, WoodGrain, InkSqueeze, Starved, WaterLines, StoneCrayon, TintPlate, Scraped,
+}
 
 /// <summary>One effect of a style: its own switch and its own strength (0..1).</summary>
 public sealed record StyleEffect(bool Enabled, double Strength)

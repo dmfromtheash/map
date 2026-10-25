@@ -59,6 +59,17 @@ internal sealed class MapStyleDto
     [JsonPropertyName("coast")] public LightingEffectDto? Coast { get; set; }
     [JsonPropertyName("colourWash")] public LightingEffectDto? ColourWash { get; set; }
     [JsonPropertyName("aquatint")] public LightingEffectDto? Aquatint { get; set; }
+    [JsonPropertyName("granulation")] public LightingEffectDto? Granulation { get; set; }
+    [JsonPropertyName("crest")] public LightingEffectDto? Crest { get; set; }
+    [JsonPropertyName("gouge")] public LightingEffectDto? Gouge { get; set; }
+    [JsonPropertyName("seaCuts")] public LightingEffectDto? SeaCuts { get; set; }
+    [JsonPropertyName("woodGrain")] public LightingEffectDto? WoodGrain { get; set; }
+    [JsonPropertyName("inkSqueeze")] public LightingEffectDto? InkSqueeze { get; set; }
+    [JsonPropertyName("starved")] public LightingEffectDto? Starved { get; set; }
+    [JsonPropertyName("waterLines")] public LightingEffectDto? WaterLines { get; set; }
+    [JsonPropertyName("stoneCrayon")] public LightingEffectDto? StoneCrayon { get; set; }
+    [JsonPropertyName("tintPlate")] public LightingEffectDto? TintPlate { get; set; }
+    [JsonPropertyName("scraped")] public LightingEffectDto? Scraped { get; set; }
     [JsonPropertyName("plate")] public LightingEffectDto? Plate { get; set; }
     [JsonPropertyName("border")] public LightingEffectDto? Border { get; set; }
 }

@@ -63,6 +63,10 @@ public sealed partial class EditorViewModel
 
     public static string PresetTitle(MapStylePreset preset) => preset switch
     {
+        MapStylePreset.WatercolorBigShapes => "Крупные пятна",
+        MapStylePreset.UkiyoeSosakuHanga => "Сосаку-ханга",
+        MapStylePreset.PrintLetterpress => "Высокая печать",
+        MapStylePreset.PrintTintedLithograph => "Литография с тоном",
         MapStylePreset.OldMapBlaeu => "Атлас Блау",
         MapStylePreset.EngravingAquatint => "Офорт с акватинтой",
         MapStylePreset.InkPenHatching => "Перо, штриховка",
@@ -72,6 +76,9 @@ public sealed partial class EditorViewModel
 
     public static string StyleFamilyTitle(MapStylePreset preset) => preset switch
     {
+        MapStylePreset.WatercolorBigShapes => "Акварель",
+        MapStylePreset.UkiyoeSosakuHanga => "Укиё-э",
+        MapStylePreset.PrintLetterpress or MapStylePreset.PrintTintedLithograph => "Печать",
         MapStylePreset.OldMapBlaeu => "Старая карта",
         MapStylePreset.EngravingAquatint => "Гравюра",
         _ => "Тушь",
@@ -79,6 +86,24 @@ public sealed partial class EditorViewModel
 
     public static string StyleEffectTitle(StyleEffectKind kind, MapStylePreset preset = MapStylePreset.InkWetBrush) => kind switch
     {
+        StyleEffectKind.Bleed when preset == MapStylePreset.WatercolorBigShapes => "Мокрая заливка",
+        StyleEffectKind.Edges when preset == MapStylePreset.WatercolorBigShapes => "Засохший край",
+        StyleEffectKind.Sea when preset == MapStylePreset.WatercolorBigShapes => "Море и берег",
+        StyleEffectKind.Sea when preset == MapStylePreset.PrintTintedLithograph => "Море",
+        StyleEffectKind.Contour when preset == MapStylePreset.UkiyoeSosakuHanga => "Контур силуэта",
+        StyleEffectKind.Contour when preset is MapStylePreset.PrintLetterpress or MapStylePreset.PrintTintedLithograph => "Контур",
+        StyleEffectKind.Paper when preset >= MapStylePreset.WatercolorBigShapes => "Бумага",
+        StyleEffectKind.Granulation => "Грануляция",
+        StyleEffectKind.Crest => "Линии гребня",
+        StyleEffectKind.Gouge => "Срезы резца",
+        StyleEffectKind.SeaCuts => "Срезы в море",
+        StyleEffectKind.WoodGrain => "Зерно доски",
+        StyleEffectKind.InkSqueeze => "Выдавленная кромка",
+        StyleEffectKind.Starved => "Голодная середина",
+        StyleEffectKind.WaterLines => "Линии воды",
+        StyleEffectKind.StoneCrayon => "Карандаш по камню",
+        StyleEffectKind.TintPlate => "Тоновая доска",
+        StyleEffectKind.Scraped => "Процарапанные блики",
         StyleEffectKind.Sea => "Рисунок моря",
         StyleEffectKind.Coast => "Линия берега",
         StyleEffectKind.ColourWash => "Ручная раскраска",

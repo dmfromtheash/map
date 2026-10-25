@@ -62,6 +62,10 @@ public sealed partial class EditorView
 
     private static string PresetHint(MapStylePreset preset) => preset switch
     {
+        MapStylePreset.WatercolorBigShapes => "Крупные пятна: три прозрачных тона по сырой бумаге, пигмент у засохшего края и немного линий гребня.",
+        MapStylePreset.UkiyoeSosakuHanga => "Сосаку-ханга: чёрные теневые грани, широкие срезы резца по форме, земляная суша и срезы в море индиго.",
+        MapStylePreset.PrintLetterpress => "Высокая печать: чёрная и красная краски, плотные края пятен и зернистая середина, линии воды у берега.",
+        MapStylePreset.PrintTintedLithograph => "Литография: зернистый карандашный рисунок, тёплый тон доски и процарапанные светлые места.",
         MapStylePreset.OldMapBlaeu => "Атлас Блау: медная гравюра с ручной раскраской, линии моря, зелёная полоса берега, вержированная бумага.",
         MapStylePreset.EngravingAquatint => "Офорт: контур и главные линии иглой, две ступени акватинты на теневых склонах, бистр и тиснение доски.",
         MapStylePreset.InkPenHatching => "Перо по белой бумаге: чёрный контур и штриховка по форме гор, тон — густотой и перекрёстными штрихами.",
@@ -69,8 +73,25 @@ public sealed partial class EditorView
         _ => "Японская мокрая кисть по рисовой бумаге: несколько разбавлений туши, много белой бумаги, растекание, кайма, туман.",
     };
 
-    private static string StyleEffectHint(StyleEffectKind kind) => kind switch
+    private static string StyleEffectHint(StyleEffectKind kind, MapStylePreset preset) => kind switch
     {
+        StyleEffectKind.Bleed when preset == MapStylePreset.WatercolorBigShapes => "Бледная мокрая заливка гор мягко растекается за край рисунка.",
+        StyleEffectKind.Edges when preset == MapStylePreset.WatercolorBigShapes => "Пигмент темнеет у края высохших пятен и светлеет в середине.",
+        StyleEffectKind.Sea when preset == MapStylePreset.WatercolorBigShapes => "Бирюзовое и синее море, тёмная полоса у берега и мягкая заливка рек.",
+        StyleEffectKind.Sea when preset == MapStylePreset.PrintTintedLithograph => "Зернистый карандашный тон моря темнеет вдали от берега.",
+        StyleEffectKind.Contour when preset >= MapStylePreset.UkiyoeSosakuHanga => "Печатный контур силуэта гор, берега и главных линий рисунка.",
+        StyleEffectKind.Paper when preset >= MapStylePreset.WatercolorBigShapes => "Тонкие волокна и зерно бумаги проступают через рисунок.",
+        StyleEffectKind.Granulation => "Пигмент собирается в углублениях бумаги, оставляя зернистый цвет.",
+        StyleEffectKind.Crest => "Несколько прерывистых тёмных линий на главных гребнях гор.",
+        StyleEffectKind.Gouge => "Широкие светлые срезы и короткие V-образные штрихи вдоль граней гор.",
+        StyleEffectKind.SeaCuts => "Длинные светлые срезы на синей доске вдоль берега.",
+        StyleEffectKind.WoodGrain => "Волнистые волокна деревянной доски проступают через краску.",
+        StyleEffectKind.InkSqueeze => "У края красного пятна краска выдавлена в более плотную кромку.",
+        StyleEffectKind.Starved => "В середине плотных пятен меньше краски, и сквозь неё видно зерно бумаги.",
+        StyleEffectKind.WaterLines => "Редкие чёрные линии воды повторяют изгиб берега.",
+        StyleEffectKind.StoneCrayon => "Тон гор складывается из крупинок карандаша на шероховатом камне.",
+        StyleEffectKind.TintPlate => "Тёплая светлая краска второй доски покрывает лист.",
+        StyleEffectKind.Scraped => "Светлые места на вершинах и у берега выскоблены до бумаги.",
         StyleEffectKind.Sea => "Линии моря у Блау; ступени акватинты с белой кромкой у офорта.",
         StyleEffectKind.Coast => "Печатная линия вдоль берега и берегов рек.",
         StyleEffectKind.ColourWash => "Зелёная раскраска у берега, охра на горах, синий цвет рек.",
@@ -91,7 +112,7 @@ public sealed partial class EditorView
     private Control StyleEffectRow(StyleEffectKind kind)
     {
         var name = "Style" + kind;
-        var hint = StyleEffectHint(kind);
+        var hint = StyleEffectHint(kind, _editor.ShownStyle.Preset);
         var toggle = new CheckBox { MinWidth = 0, MinHeight = 24, Padding = new Thickness(6, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center }
             .Named(name + "Toggle");
         ToolTip.SetTip(toggle, hint);
@@ -136,6 +157,9 @@ public sealed partial class EditorView
             var style = _editor.ShownStyle;
             row.IsVisible = MapStyle.EffectsOf(style.Preset).Contains(kind);
             var title = EditorViewModel.StyleEffectTitle(kind, style.Preset);
+            var currentHint = StyleEffectHint(kind, style.Preset);
+            ToolTip.SetTip(toggle, currentHint);
+            ToolTip.SetTip(slider, currentHint + " Перетащите; двойной щелчок — значение стиля.");
             toggle.Content = title;
             AutomationProperties.SetName(toggle, title);
             AutomationProperties.SetName(slider, title + ", сила в процентах");
