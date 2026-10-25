@@ -196,7 +196,7 @@ public static class PlacementAreaPlanner
 
     /// <summary>Exact prediction without retaining the full object list. Caller can cancel stale UI work.</summary>
     public static long Count(PlacementArea area, PlacementAreaObstacles? obstacles = null,
-        WorkingMemoryBudget? memory = null, CancellationToken cancellationToken = default)
+        WorkingMemoryBudget? memory = null, CancellationToken cancellationToken = default, PlacementAreaEcology? ecology = null)
     {
         cancellationToken.ThrowIfCancellationRequested(); area.Validate();
         var spans = PlacementAreaGeometry.Coverage(area.Nodes);
@@ -211,14 +211,16 @@ public static class PlacementAreaPlanner
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 foreach (var slot in sampler.Slots(x, span.Y))
-                    if (obstacles is null || !obstacles.Blocks(sampler.Item(slot))) count++;
+                    if ((obstacles is null || !obstacles.Blocks(sampler.Item(slot)))
+                        && ecology?.Blocks(slot, sampler.Item(slot)) != true) count++;
             }
         return count;
     }
 
     /// <summary>At most 64 concrete stamps, sampled across the changed cells, with bounded candidate work.</summary>
     public static IReadOnlyList<SceneObject> Preview(PlacementArea area, PlacementArea? before = null, int maximum = 64,
-        PlacementAreaObstacles? obstacles = null, WorkingMemoryBudget? memory = null, CancellationToken cancellationToken = default)
+        PlacementAreaObstacles? obstacles = null, WorkingMemoryBudget? memory = null, CancellationToken cancellationToken = default,
+        PlacementAreaEcology? ecology = null)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maximum, 1);
         area.Validate();
@@ -247,7 +249,8 @@ public static class PlacementAreaPlanner
                 var span = spans[si]; var x = span.MinX + (int)(rank - cellStart);
                 foreach (var slot in sampler.PreviewSlots(x, span.Y, 16))
                     if ((before is null || !SameSettings(before, area) || !IncludesGeometry(before, slot))
-                        && (obstacles is null || !obstacles.Blocks(sampler.Item(slot)))) found.Add(sampler.Item(slot));
+                        && (obstacles is null || !obstacles.Blocks(sampler.Item(slot)))
+                        && ecology?.Blocks(slot, sampler.Item(slot)) != true) found.Add(sampler.Item(slot));
             }
             var count = Math.Min(maximum, found.Count);
             var sample = Enumerable.Range(0, count).Select(i => found[count == 1 ? found.Count / 2
@@ -265,7 +268,8 @@ public static class PlacementAreaPlanner
             var span = spans[spanIndex]; var local = rank - start;
             var slot = new PlacementAreaSlot(span.MinX + (int)(local / slots), span.Y, (int)(local % slots));
             if (sampler.Includes(slot) && (before is null || !SameSettings(before, area) || !IncludesGeometry(before, slot))
-                && (obstacles is null || !obstacles.Blocks(sampler.Item(slot)))) accepted.Add(slot);
+                && (obstacles is null || !obstacles.Blocks(sampler.Item(slot)))
+                && ecology?.Blocks(slot, sampler.Item(slot)) != true) accepted.Add(slot);
         }
         var take = Math.Min(maximum, accepted.Count);
         var result = Enumerable.Range(0, take).Select(i => sampler.Item(
@@ -284,6 +288,7 @@ public sealed class PlacementAreaCommand : IEditCommand
     private readonly ObjectId? _detach;
     private readonly bool _bake;
     private readonly CancellationToken _cancellation;
+    private readonly bool? _forestEcology;
     private MapDocument? _before, _after;
     public string Name { get; }
     public int VisitedCells { get; private set; }
@@ -292,11 +297,12 @@ public sealed class PlacementAreaCommand : IEditCommand
 
     public PlacementAreaCommand(LayerId layerId, Guid id, PlacementArea? requested, string name,
         IReadOnlyList<MapAssetReference>? assets = null, ObjectId? detach = null, bool bake = false,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, bool? forestEcology = null)
     {
         _layerId = layerId; _id = id; _requested = requested; Name = name; _assets = assets ?? []; _detach = detach; _bake = bake;
         // Only the first Apply can be cancelled; a completed result is cached and never recomputed.
         _cancellation = cancellationToken;
+        _forestEcology = forestEcology;
     }
 
     public MapDocument Apply(MapDocument document)
@@ -357,6 +363,7 @@ public sealed class PlacementAreaCommand : IEditCommand
             // R10: rules are a post-filter after spacing, like obstacles, so the slots that stay keep
             // their places. Their verdict is recomputed for every visited cell.
             var rules = next.Rules is { Any: true } activeRules ? new PlacementAreaRuleCheck(document, activeRules) : null;
+            var ecology = _forestEcology is { } forest ? new PlacementAreaEcology(document, next, forest) : null;
             var ruleSlots = new HashSet<PlacementAreaSlot>();
             var visited = new HashSet<long>();
             var cells = (old?.Cells ?? ImmutableDictionary<long, ImmutableArray<PlacementAreaMember>>.Empty).ToBuilder();
@@ -375,7 +382,7 @@ public sealed class PlacementAreaCommand : IEditCommand
                     {
                         var item = sampler.Item(slot); var existing = index.FindObject(item.Id);
                         if (obstacles?.Blocks(item) == true) { occupied.Add(slot); continue; }
-                        if (rules?.Blocks(item) == true) { ruleSlots.Add(slot); continue; }
+                        if (rules?.Blocks(item) == true || ecology?.Blocks(slot, item) == true) { ruleSlots.Add(slot); continue; }
                         members.Add(new(slot, item.Id)); used.Add(item.Id);
                         if (existing is null) additions.Add(item);
                         else if (!previousIds.Contains(item.Id)) throw new InvalidOperationException("Слот области занят посторонним объектом.");
@@ -394,7 +401,8 @@ public sealed class PlacementAreaCommand : IEditCommand
                     }
                     else if (replacements.Count != replacedBefore) ChangedCells++;
                 }
-            foreach (var kept in (old ?? next).RuleBlocked) if (!visited.Contains(kept.Cell) && rules is not null) ruleSlots.Add(kept);
+            foreach (var kept in (old ?? next).RuleBlocked)
+                if (!visited.Contains(kept.Cell) && (rules is not null || ecology is not null)) ruleSlots.Add(kept);
             next = next with { Cells = cells.ToImmutable(), MemberCount = memberCount, OccupiedSlots = occupied.ToImmutable(),
                 RuleSlots = ruleSlots.Count == 0 ? null : [.. ruleSlots] };
         }

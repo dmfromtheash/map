@@ -16,6 +16,8 @@ public sealed partial class EditorViewModel
     /// <summary>How many places of the selected area the rules keep empty.</summary>
     public int EditableAreaRuleBlockedCount => DisplayedEditableArea?.RuleBlocked.Count ?? 0;
 
+    public bool EditableAreaUsesEcology => DisplayedEditableArea is { } area && AreaForestEcology(area) is not null;
+
     /// <summary>Land pieces an area can be limited to, in terrain order.</summary>
     public IReadOnlyList<(LayerId Id, string Name)> EditableAreaLandChoices =>
         [.. TerrainOrder.Lands(Session.Document).Select(l => (l.Id, l.Name))];
@@ -59,7 +61,9 @@ public sealed partial class EditorViewModel
     /// <summary>«Пересчитать по карте»: fills the area again after rivers, roads or land were edited.</summary>
     public void RefreshEditableAreaRules()
     {
-        if (SelectedEditableArea is not { Rules: { Any: true } rules }) { StatusDetail = "У области нет включённых правил."; return; }
+        if (SelectedEditableArea is not { } area || area.Rules is not { Any: true } && !EditableAreaUsesEcology)
+        { StatusDetail = "У области нет включённых правил."; return; }
+        var rules = area.Rules ?? new();
         CommitAreaChange(a => a with { Rules = rules with { Revision = rules.Revision + 1 } }, "Пересчитать область по карте");
     }
 

@@ -14,6 +14,42 @@ public sealed record RegionalArtImport(RegionalArtManifest Manifest,
 /// <summary>An explicitly selected, original local pack. Opening a library or an old map never imports it.</summary>
 public static class RegionalArtPack
 {
+    private static AssetRole? RoleForGroup(string group) => group switch
+    {
+        "trees" or "groves" => AssetRole.Tree,
+        "mountains" => AssetRole.Peak,
+        "hills" => AssetRole.Slope,
+        "buildings" or "settlements" => AssetRole.House,
+        "landmarks" => AssetRole.Sign,
+        _ => null,
+    };
+
+    /// <summary>Migration only: identify installed built-in content, never names or owner tags.</summary>
+    public static void AssignDefaultRoles(AssetLibraryDocument document, RegionalArtManifest? manifest = null)
+    {
+        if (manifest is null)
+        {
+            if (!IsAvailable) return;
+            try { manifest = Load(); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { return; }
+        }
+        var variants = document.Variants.ToDictionary(v => v.Id);
+        for (var i = 0; i < document.Sets.Count; i++)
+        {
+            var set = document.Sets[i];
+            if (set.Placement?.Role is not null) continue;
+            var hashes = set.VariantIds.Select(id => variants[id].Sha256).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var group = manifest.Groups.FirstOrDefault(g => hashes.IsSubsetOf(manifest.Assets.Where(a => a.Group == g.Id)
+                .Select(a => a.Sha256).ToHashSet(StringComparer.OrdinalIgnoreCase)));
+            if (group is null || RoleForGroup(group.Id) is not { } role) continue;
+            document.Sets[i] = set with { Placement = DefaultPlacement(set.Placement, role) };
+        }
+    }
+
+    private static AssetPlacementDefaults DefaultPlacement(AssetPlacementDefaults? placement, AssetRole role) =>
+        placement is null ? new() { Role = role, AllowedRotations = [0], DepthSort = true }
+            : placement with { Role = role };
+
     public static string Root => Path.Combine(AppContext.BaseDirectory, "RegionalAtlas");
     public static bool IsAvailable => File.Exists(Path.Combine(Root, "manifest.json"));
     public static RegionalArtManifest Load(string? root = null) =>
@@ -73,6 +109,11 @@ public static class RegionalArtPack
                     var variant = set.VariantIds.Select(catalog.FindVariant).Single(v => v?.Sha256 == item.Sha256)!;
                     catalog.SetVariantPresentation(variant.Id, item.Name, .5, item.AnchorY, item.Width / 256);
                 }
+                set = catalog.FindSet(set.Id)!;
+            }
+            if (set.Placement?.Role is null && RoleForGroup(group.Id) is { } role)
+            {
+                catalog.SetPlacementDefaults(set.Id, DefaultPlacement(set.Placement, role));
                 set = catalog.FindSet(set.Id)!;
             }
             sets.Add(group.Id, set);

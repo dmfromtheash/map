@@ -121,7 +121,7 @@ namespace Map.Core.Editing
         }
 
         /// <summary>A river, a lake, or the open sea - the page where no land lies (on maps that have land).</summary>
-        private bool IsWater(double x, double y)
+        public bool IsWater(double x, double y)
         {
             foreach (var river in _rivers)
             {

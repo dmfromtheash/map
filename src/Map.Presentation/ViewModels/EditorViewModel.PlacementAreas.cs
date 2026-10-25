@@ -193,6 +193,7 @@ public sealed partial class EditorViewModel
                     RotationDegrees = settings.RotationDegrees, ScalePercent = settings.ScalePercent,
                     Sublayer = settings.Sublayer, Opacity = settings.ObjectOpacity,
                     Style = settings.Style ?? new StampStyle(sources[0].Sha256),
+                    DepthSort = _assetCatalog?.FindSet(_selectedSetId ?? "")?.Placement?.DepthSort == true,
                 };
             }
             _areaCreating = true; PendingPlacement = null;
@@ -214,7 +215,7 @@ public sealed partial class EditorViewModel
         if (layer is null) { StatusDetail = NoUsableObjectLayer; return false; }
         var assets = _areaAssets;
         PlacementAreaCommand Command(CancellationToken token) => new(layer.Id, draft.Id, draft, "Создать редактируемую область", assets,
-            cancellationToken: token);
+            cancellationToken: token, forestEcology: AreaForestEcology(draft));
         if (!HasUiContext || create is not null) return CompleteAreaPlacement(Command(default), layer, create, draft.Id);
         if (TryQuickAreaCommand(Command, out var quick)) return CompleteAreaPlacement(quick, layer, create, draft.Id);
         // A large fill is computed in the background; the draft stays on screen until it lands.
@@ -542,8 +543,9 @@ public sealed partial class EditorViewModel
             StatusDetail = EditableAreaPlacementHint; return true;
         }
         if (change(current) is not { } next || next == current) return false;
-        if (!HasUiContext) return RunAreaCommand(new(layer.Id, next.Id, next, name));
-        if (TryQuickAreaCommand(token => new(layer.Id, next.Id, next, name, cancellationToken: token), out var quick))
+        if (!HasUiContext) return RunAreaCommand(new(layer.Id, next.Id, next, name, forestEcology: AreaForestEcology(next)));
+        if (TryQuickAreaCommand(token => new(layer.Id, next.Id, next, name, cancellationToken: token,
+            forestEcology: AreaForestEcology(next)), out var quick))
             return RunAreaCommand(quick);
         _areaQueuedChange = (change, current.Id, name);
         _areaWorkTask = ChangeAreaInBackground();
@@ -562,7 +564,7 @@ public sealed partial class EditorViewModel
                 var area = EditableAreas.FirstOrDefault(a => a.Id == job.AreaId);
                 if (area is null || EditableAreaLayer(area) is not { } layer || job.Change(area) is not { } next || next == area) continue;
                 var document = Session.Document;
-                var command = new PlacementAreaCommand(layer.Id, next.Id, next, job.Name);
+                var command = new PlacementAreaCommand(layer.Id, next.Id, next, job.Name, forestEcology: AreaForestEcology(next));
                 var error = await PrecomputeAreaCommand(command, document);
                 if (generation != _areaWorkGeneration) return;
                 if (error is not null) { StatusDetail = error; continue; }
@@ -570,7 +572,7 @@ public sealed partial class EditorViewModel
                 {
                     // The map changed meanwhile: recompute from the area as it is now.
                     if (EditableAreas.FirstOrDefault(a => a.Id == job.AreaId) is not { } latest || job.Change(latest) is not { } again) continue;
-                    command = new PlacementAreaCommand(layer.Id, again.Id, again, job.Name);
+                    command = new PlacementAreaCommand(layer.Id, again.Id, again, job.Name, forestEcology: AreaForestEcology(again));
                 }
                 RunAreaCommand(command);
             }
@@ -618,7 +620,7 @@ public sealed partial class EditorViewModel
             if (!HasUiContext)
             {
                 (_areaPreviewObjects, _areaOverrides) = ComputeAreaPreview(path, original, _areaDragging, obstacles,
-                    Session.Document, _workingMemory, default);
+                    Session.Document, _workingMemory, default, AreaEcology(path, Session.Document));
                 return;
             }
             // Large areas: the outline follows the pointer at once; the sampled objects follow
@@ -629,7 +631,7 @@ public sealed partial class EditorViewModel
                 try
                 {
                     (_areaPreviewObjects, _areaOverrides) = ComputeAreaPreview(path, original, _areaDragging, obstacles,
-                        Session.Document, _workingMemory, budget.Token);
+                        Session.Document, _workingMemory, budget.Token, AreaEcology(path, Session.Document));
                     return;
                 }
                 catch (OperationCanceledException) { }
@@ -654,9 +656,10 @@ public sealed partial class EditorViewModel
 
     private static (IReadOnlyList<SceneObject> Objects, IReadOnlyList<SceneObject> Overrides) ComputeAreaPreview(
         PlacementArea path, PlacementArea? original, bool dragging, PlacementAreaObstacles? obstacles,
-        MapDocument document, WorkingMemoryBudget memory, CancellationToken token)
+        MapDocument document, WorkingMemoryBudget memory, CancellationToken token, PlacementAreaEcology? ecology)
     {
-        var samples = PlacementAreaPlanner.Preview(path, original, obstacles: obstacles, memory: memory, cancellationToken: token);
+        var samples = PlacementAreaPlanner.Preview(path, original, obstacles: obstacles, memory: memory,
+            cancellationToken: token, ecology: ecology);
         if (!dragging) return (samples, []);
         var index = DocumentRevisionIndex.For(document);
         var overrides = samples.Where(o => index.FindObject(o.Id) is not null).ToArray();
@@ -680,10 +683,11 @@ public sealed partial class EditorViewModel
                 if (_areaDraft is not { Nodes.Length: >= 3 } draft) return;
                 var original = _areaDragging ? _areaOriginal : null; var dragging = _areaDragging;
                 var obstacles = AreaObstacles(draft); var document = Session.Document; var memory = _workingMemory;
+                var ecology = AreaEcology(draft, document);
                 var cancellation = _areaPreviewCancellation = new CancellationTokenSource(); var token = cancellation.Token;
                 try
                 {
-                    var result = await Task.Run(() => ComputeAreaPreview(draft, original, dragging, obstacles, document, memory, token), token);
+                    var result = await Task.Run(() => ComputeAreaPreview(draft, original, dragging, obstacles, document, memory, token, ecology), token);
                     // A result for an older shape of the same draft is still closer than nothing;
                     // the pass for the newest shape is already queued behind it.
                     if (!token.IsCancellationRequested && _areaDraft?.Id == draft.Id && _areaDragging == dragging)
@@ -732,7 +736,8 @@ public sealed partial class EditorViewModel
             // Debounce input and serialize counters. Moving vertices never queues simultaneous
             // full-map counters or publishes the result of an obsolete seed/shape/density.
             await Task.Delay(150, token); await previous; token.ThrowIfCancellationRequested();
-            var count = await Task.Run(() => PlacementAreaPlanner.Count(draft, obstacles, _workingMemory, token), token);
+            var ecology = AreaEcology(draft, Session.Document);
+            var count = await Task.Run(() => PlacementAreaPlanner.Count(draft, obstacles, _workingMemory, token, ecology), token);
             if (!token.IsCancellationRequested && ReferenceEquals(_areaDraft, draft))
             { _areaPredictedCount = count; Raise(nameof(PlannedEditableAreaCount)); Raise(nameof(EditableAreaResult)); }
         }
@@ -770,6 +775,7 @@ public sealed partial class EditorViewModel
         Raise(nameof(PlannedEditableAreaCount)); Raise(nameof(EditableAreaResult));
         Raise(nameof(EditableAreaPattern)); Raise(nameof(EditableAreaPatternHint));
         Raise(nameof(EditableAreaJoinEdges));
+        Raise(nameof(EditableAreaUsesEcology));
         InvalidateScene(EditorChangeReason.CanvasInvalidation);
     }
     private ImmutableDictionary<string, StampContentBounds> ReadAreaContentBounds(IEnumerable<StampVariantSource> variants,

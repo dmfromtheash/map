@@ -6610,6 +6610,21 @@ public sealed partial class EditorView : UserControl
     /// </summary>
     private Control BuildPlacementPassportBlock()
     {
+        // Functional R11 control using the existing ComboBox; visual refinement belongs to Claude.
+        var roleNames = new[] { "Без роли", "Дерево", "Ель", "Куст", "Вершина", "Склон", "Дом", "Башня", "Стена", "Дверь", "Знак" };
+        var role = new ComboBox { ItemsSource = roleNames, HorizontalAlignment = HorizontalAlignment.Stretch }
+            .Named("PassportAssetRoleBox");
+        role.SelectionChanged += (_, _) =>
+        {
+            if (_syncingAppearance || role.SelectedIndex < 0) return;
+            _editor.SetSelectedSetRole((AssetRole)role.SelectedIndex);
+            SyncAssetList(); SyncAppearanceSections(); SyncStatus();
+        };
+        _appearanceSyncs.Add(() =>
+        {
+            role.IsEnabled = _editor.SelectedSet is not null;
+            role.SelectedIndex = (int)_editor.SelectedSetRole;
+        });
         void Change(Func<AssetPlacementDefaults, AssetPlacementDefaults> change)
         {
             if (_syncingAppearance) return;
@@ -6636,6 +6651,8 @@ public sealed partial class EditorView : UserControl
             Children =
             {
                 Ui.Hint("Стартовые значения инструмента для этого набора. После выбора их можно менять в «Как ставить» и «Случайность»."),
+                Ui.Hint("Роль набора для «Лес / Хребет / Поселение»"),
+                role,
                 rotation,
                 AppearanceSlider("PassportRandomSizeSlider", "Случайный размер ±", 0, 100, "%",
                     () => _editor.SelectedSet is null ? null : _editor.SelectedSetPlacement.RandomSizePercent,

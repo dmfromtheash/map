@@ -25,12 +25,24 @@ public sealed partial class EditorViewModel
 
     public bool StartRegionalPlacement(RegionalPlacementMode mode)
     {
-        if (_assetCatalog is null || !RegionalArtPack.IsAvailable) return false;
-        var group = mode switch { RegionalPlacementMode.Ridge => "mountains", RegionalPlacementMode.Settlement => "buildings", _ => "trees" };
-        var hashes = RegionalArtPack.Load().Assets.Where(a => a.Group == group).Select(a => a.Sha256).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var set = _assetCatalog.Sets.FirstOrDefault(s => s.VariantIds.Select(_assetCatalog.RecordForVariant)
-            .OfType<AssetRecord>().Select(r => r.Sha256).ToHashSet(StringComparer.OrdinalIgnoreCase).SetEquals(hashes));
-        if (set is null) { StatusDetail = "Сначала подключите «Тихий атлас» в каталоге. Импорт выполняется только по вашей команде."; return false; }
+        if (_assetCatalog is null || _assetCatalog.Status == AssetLibraryStatus.Damaged) return false;
+        bool Matches(AssetSet s) => !s.Archived && (mode switch
+        {
+            RegionalPlacementMode.Ridge => s.Placement?.Role is AssetRole.Peak or AssetRole.Slope,
+            RegionalPlacementMode.Settlement => s.Placement?.Role is AssetRole.House or AssetRole.Tower,
+            _ => s.Placement?.Role is AssetRole.Tree or AssetRole.Spruce or AssetRole.Bush,
+        });
+        var set = _assetCatalog.Sets.Where(Matches).OrderByDescending(s => s.Id == _selectedSetId).FirstOrDefault();
+        if (set is null)
+        {
+            StatusDetail = mode switch
+            {
+                RegionalPlacementMode.Ridge => "Назначьте своему набору роль «Вершина» или «Склон» в паспорте каталога.",
+                RegionalPlacementMode.Settlement => "Назначьте своему набору роль «Дом» или «Башня» в паспорте каталога.",
+                _ => "Назначьте своему набору роль «Дерево», «Ель» или «Куст» в паспорте каталога.",
+            };
+            return false;
+        }
         CancelAppearanceTransfer(); CancelEditableAreaGesture(); CancelEditablePathGesture();
         _selectedAreaId = null; _selectedPathId = null; _newAreaTemplate = null;
         // The regional preset below is for this construction only: the user's ordinary stamp
@@ -45,18 +57,34 @@ public sealed partial class EditorViewModel
                 && (l.Name==name || l.PlacementAreas.Any(a=>a.AssetSetId==set.Id) || l.PlacementPaths.Any(p=>p.AssetSetId==set.Id)));
             if (layer is not null) _activeLayerId=layer.Id;
         }
-        var width = mode switch { RegionalPlacementMode.Ridge => 230d, RegionalPlacementMode.Settlement => 60d, _ => 46d };
+        var width = 256 * (CurrentVariant?.DefaultScale ?? 1);
+        var rotations = set.Placement?.AllowedRotations ?? [];
+        var rotation = rotations.Count == 0 ? 0 : rotations.MinBy(Math.Abs);
         _stampToolSettings = _stampToolSettings with { ScalePercent = width / DefaultStampReferenceWidth() * 100,
-            RotationDegrees = 0, ObjectOpacity = 1, RandomizeVariant = true, RandomAngleStep = 0,
+            RotationDegrees = rotation, RotationJitterDegrees = 0, SizeJitterPercent = 0,
+            ObjectOpacity = 1, RandomizeVariant = true, RandomAngleStep = 0,
             RandomFlip = false, SeriesSpacingPercent = 62,
             Style = _stampToolSettings.Style is { } s ? s with { ShadowOpacity = 0, Blur = 0, Hue = 0, Saturation = 0, Brightness = 0, Contrast = 0 } : null };
         _naturalAreaDensity = mode == RegionalPlacementMode.Settlement ? 78 : 72;
         _naturalAreaSizeVariation = mode == RegionalPlacementMode.Settlement ? 12 : 28;
-        _naturalAreaPattern = mode == RegionalPlacementMode.Settlement ? PlacementAreaPattern.Groups : PlacementAreaPattern.Masses;
+        _naturalAreaPattern = mode == RegionalPlacementMode.Settlement ? PlacementAreaPattern.Groups
+            : set.Placement?.Role == AssetRole.Slope ? PlacementAreaPattern.Ridge : PlacementAreaPattern.Masses;
         _naturalAreaJoinEdges = mode != RegionalPlacementMode.Settlement;
-        if (mode == RegionalPlacementMode.Ridge) StartEditablePath(); else StartEditableArea();
+        if (mode == RegionalPlacementMode.Ridge && set.Placement?.Role == AssetRole.Peak) StartEditablePath(); else StartEditableArea();
         RaiseStampToolState(); return true;
     }
+
+    private bool? AreaForestEcology(PlacementArea area) =>
+        area.LayoutVersion >= 3 && _assetCatalog?.FindSet(area.AssetSetId ?? "")?.Placement?.Role is { } role
+            ? role switch
+            {
+                AssetRole.Tree or AssetRole.Spruce or AssetRole.Bush => true,
+                AssetRole.Slope => false,
+                _ => (bool?)null,
+            } : null;
+
+    private PlacementAreaEcology? AreaEcology(PlacementArea area, MapDocument document) =>
+        AreaForestEcology(area) is { } forest ? new(document, area, forest) : null;
 
     // Regional tools and selected areas/paths load their own scale, style and density into the
     // shared stamp settings. Without a way back, one «Лес по области» silently rewrote the scale,

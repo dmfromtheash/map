@@ -10,7 +10,7 @@ namespace Map.Assets;
 /// </summary>
 public sealed class AssetLibraryDocument
 {
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
 
     /// <summary>Recent is bounded on purpose: it is a convenience, not a history of the user.</summary>
     public const int MaxRecent = 200;
@@ -57,6 +57,7 @@ public static class AssetLibraryStore
         WriteIndented = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         PropertyNameCaseInsensitive = true,
+        Converters = { new JsonStringEnumConverter<AssetRole>(JsonNamingPolicy.CamelCase, allowIntegerValues: false) },
     };
 
     private static readonly JsonSerializerOptions LegacyOptions = new() { WriteIndented = true };
@@ -114,12 +115,12 @@ public static class AssetLibraryStore
         return kind switch
         {
             JsonValueKind.Array => Migrate(indexPath, bytes, clock),
-            JsonValueKind.Object => LoadV2(bytes),
+            JsonValueKind.Object => LoadVersioned(indexPath, bytes, clock),
             _ => Damaged("Индекс каталога имеет неизвестную структуру."),
         };
     }
 
-    private static AssetLibraryDocument LoadV2(byte[] bytes)
+    private static AssetLibraryDocument LoadVersioned(string indexPath, byte[] bytes, Func<DateTimeOffset> clock)
     {
         AssetLibraryDocument? document;
         try
@@ -142,7 +143,19 @@ public static class AssetLibraryStore
                 $"Индекс каталога сохранён более новой версией программы (schema {document.SchemaVersion}).");
         }
 
-        return Validate(document) is { } reason ? Damaged("Индекс каталога противоречив: " + reason) : document;
+        if (document.SchemaVersion < 2) return Damaged("Неизвестная версия объектного каталога.");
+        if (Validate(document) is { } reason) return Damaged("Индекс каталога противоречив: " + reason);
+        if (document.SchemaVersion < AssetLibraryDocument.CurrentSchemaVersion)
+        {
+            var backup = BackupPath(indexPath, clock(), document.SchemaVersion);
+            RegionalArtPack.AssignDefaultRoles(document);
+            if (!File.Exists(backup)) File.Copy(indexPath, backup, overwrite: false);
+            Save(indexPath, document);
+            TrimBackups(indexPath);
+            document.Status = AssetLibraryStatus.Migrated;
+            document.Diagnostic = $"Каталог обновлён до схемы v3. Прежняя копия сохранена: {Path.GetFileName(backup)}.";
+        }
+        return document;
     }
 
     /// <summary>
@@ -232,6 +245,7 @@ public static class AssetLibraryStore
             }
         }
 
+        RegionalArtPack.AssignDefaultRoles(document);
         if (Validate(document) is { } reason)
         {
             return Damaged("Старый индекс каталога не прошёл проверку: " + reason);
@@ -254,11 +268,11 @@ public static class AssetLibraryStore
         return document;
     }
 
-    private static string BackupPath(string indexPath, DateTimeOffset now)
+    private static string BackupPath(string indexPath, DateTimeOffset now, int version = 1)
     {
         var directory = Path.GetDirectoryName(indexPath)!;
         var stem = Path.GetFileNameWithoutExtension(indexPath);
-        return Path.Combine(directory, $"{stem}.v1.{now.UtcDateTime:yyyyMMddHHmmssfff}.json");
+        return Path.Combine(directory, $"{stem}.v{version}.{now.UtcDateTime:yyyyMMddHHmmssfff}.json");
     }
 
     /// <summary>Appends the singleton set and variant a plain record maps to.</summary>
@@ -431,6 +445,10 @@ public static class AssetLibraryStore
         var variantIds = new HashSet<string>(variants.Count, StringComparer.Ordinal);
         foreach (var variant in variants)
         {
+            if (!double.IsFinite(variant.AnchorX) || !double.IsFinite(variant.AnchorY)
+                || variant.AnchorX is < 0 or > 1 || variant.AnchorY is < 0 or > 1
+                || !double.IsFinite(variant.DefaultScale) || variant.DefaultScale <= 0)
+                return "некорректная опора или условный масштаб варианта";
             if (string.IsNullOrWhiteSpace(variant.Id) || string.IsNullOrWhiteSpace(variant.Label))
             {
                 return "вариант без идентификатора или названия";
@@ -504,6 +522,8 @@ public static class AssetLibraryStore
         var setOfVariant = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var set in sets)
         {
+            if (set.Placement is { } placement && ValidatePlacement(placement) is { } placementReason)
+                return $"паспорт набора «{set.Name}»: {placementReason}";
             if (string.IsNullOrWhiteSpace(set.Id) || string.IsNullOrWhiteSpace(set.Name))
             {
                 return "набор без идентификатора или названия";
@@ -753,10 +773,25 @@ public static class AssetLibraryStore
         }
     }
 
+    public static string? ValidatePlacement(AssetPlacementDefaults placement)
+    {
+        if (placement.Role is { } role && !Enum.IsDefined(role)) return "неизвестная роль";
+        if (placement.AllowedRotations is null || placement.AllowedRotations.Count > 360
+            || placement.AllowedRotations.Any(a => !double.IsFinite(a) || a is < -180 or > 180))
+            return "допустимые повороты — до 360 углов от -180 до 180 градусов";
+        if (placement.HexEdges is null || placement.HexEdges.Count is not (0 or 6)
+            || placement.HexEdges.Any(e => string.IsNullOrWhiteSpace(e) || e.Length > 128))
+            return "края гекса — шесть непустых названий по часовой стрелке или пустой список";
+        if (placement.CollisionFraction is { } fraction && (!double.IsFinite(fraction) || fraction is < .05 or > 1)
+            || !double.IsFinite(placement.RandomSizePercent) || placement.RandomSizePercent is < 0 or > 100)
+            return "некорректные параметры расстановки";
+        return null;
+    }
+
     private static void TrimBackups(string indexPath)
     {
         var directory = Path.GetDirectoryName(indexPath)!;
-        var pattern = Path.GetFileNameWithoutExtension(indexPath) + ".v1.*.json";
+        var pattern = Path.GetFileNameWithoutExtension(indexPath) + ".v?.*.json";
         foreach (var stale in Directory.GetFiles(directory, pattern)
             .OrderByDescending(path => path, StringComparer.Ordinal)
             .Skip(AssetLibraryDocument.MaxBackups))

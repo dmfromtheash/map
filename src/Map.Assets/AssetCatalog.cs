@@ -772,9 +772,13 @@ public sealed class AssetCatalog : IAsyncDisposable
             throw new ArgumentOutOfRangeException(nameof(defaults), "Значения паспорта должны быть числами.");
         var normalized = defaults is null ? null : defaults with
         {
+            AllowedRotations = defaults.AllowedRotations?.ToArray()!,
+            HexEdges = defaults.HexEdges?.ToArray()!,
             CollisionFraction = defaults.CollisionFraction is { } value ? Math.Clamp(value, 0.05, 1) : null,
             RandomSizePercent = Math.Clamp(defaults.RandomSizePercent, 0, 100),
         };
+        if (normalized is not null && AssetLibraryStore.ValidatePlacement(normalized) is { } reason)
+            throw new ArgumentException(reason, nameof(defaults));
         _document.Sets[index] = _document.Sets[index] with
         {
             Placement = normalized == new AssetPlacementDefaults() ? null : normalized,

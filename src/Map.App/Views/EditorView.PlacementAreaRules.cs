@@ -53,7 +53,7 @@ public sealed partial class EditorView
             var rules = Rules();
             margin.IsVisible = rules.AvoidRoads;
             land.IsVisible = rules.OnlyOnLand;
-            refresh.IsVisible = rules.Any && _editor.SelectedEditableArea is not null;
+            refresh.IsVisible = (rules.Any || _editor.EditableAreaUsesEcology) && _editor.SelectedEditableArea is not null;
             syncingLand = true;
             var choices = new[] { new LandChoice(null, "Любая суша") }
                 .Concat(_editor.EditableAreaLandChoices.Select(c => new LandChoice(c.Id, c.Name))).ToArray();
@@ -61,7 +61,9 @@ public sealed partial class EditorView
             land.SelectedItem = choices.FirstOrDefault(c => c.Id == rules.LandLayerId) ?? choices[0];
             syncingLand = false;
             var blocked = _editor.EditableAreaRuleBlockedCount;
-            state.Text = !rules.Any
+            state.Text = _editor.EditableAreaUsesEcology
+                ? $"Экологические правила роли включены. Пустых мест: {blocked}."
+                : !rules.Any
                 ? "Правила выключены: объекты ставятся везде внутри границы."
                 : blocked == 0 ? "Правила включены. Все места области подходят."
                 : $"Правила оставили пустыми мест: {blocked}. Остальные объекты не сдвинуты.";

@@ -11,6 +11,38 @@ namespace Map.Persistence.Tests;
 public sealed class PlacementAreaRulesPersistenceTests
 {
     [Fact]
+    public void Ecological_slots_reopen_without_catalog_metadata_or_a_new_map_schema()
+    {
+        using var workspace = new TempWorkspace();
+        var bytes = ProjectFixtures.PreviewPng(); var sha = Convert.ToHexStringLower(SHA256.HashData(bytes));
+        var asset = new MapAssetReference(sha, "Tree", "image/png", "png", ProjectAssetStorage.Embedded,
+            DateTimeOffset.UnixEpoch, "fixture", "test", bytes);
+        var session = new EditingSession(ProjectFixtures.Document("Ecology"));
+        var layer = session.Document.Layers.OfType<ObjectLayer>().First();
+        var area = new PlacementArea
+        {
+            LayoutVersion = 1, Density = 5, Seed = 18,
+            Nodes = [new(Guid.NewGuid(), 50, 50), new(Guid.NewGuid(), 600, 50), new(Guid.NewGuid(), 600, 400), new(Guid.NewGuid(), 50, 400)],
+            Variants = [new(sha, 32, 32)], Style = new(sha), Request = new() { BaseWidth = 32 },
+        };
+        session.Execute(new PlacementAreaCommand(layer.Id, area.Id, area, "ecology", [asset], forestEcology: true));
+        Assert.Null(session.LastResourceError);
+        var saved = ((ObjectLayer)session.Document.FindLayer(layer.Id)!).PlacementAreas.Single();
+        Assert.NotEmpty(saved.RuleBlocked); Assert.True(saved.MemberCount > 0);
+        var path = workspace.File("ecology.mapproj");
+        MapProjectStore.Save(session.Document, path, ProjectFixtures.Metadata(), bytes);
+        using (var archive = ZipFile.OpenRead(path))
+        using (var manifest = JsonDocument.Parse(archive.GetEntry("manifest.json")!.Open()))
+            Assert.Equal(19, manifest.RootElement.GetProperty("schemaVersion").GetInt32());
+        var reopened = MapProjectStore.Open(path).Document;
+        var actual = ((ObjectLayer)reopened.FindLayer(layer.Id)!).PlacementAreas.Single();
+        actual.ValidateMembers();
+        Assert.Equal(saved.RuleBlocked.OrderBy(s => s.Cell).ThenBy(s => s.Ordinal), actual.RuleBlocked.OrderBy(s => s.Cell).ThenBy(s => s.Ordinal));
+        Assert.Equal(saved.MemberCount, actual.MemberCount);
+        Assert.Equal(((ObjectLayer)session.Document.FindLayer(layer.Id)!).Objects, ((ObjectLayer)reopened.FindLayer(layer.Id)!).Objects);
+    }
+
+    [Fact]
     public void An_area_with_rules_reopens_exactly_in_v19()
     {
         using var workspace = new TempWorkspace();

@@ -6,10 +6,10 @@ namespace Map.Assets;
 /// <summary>How the local library document was loaded. The UI must show these apart.</summary>
 public enum AssetLibraryStatus
 {
-    /// <summary>No index yet, or a healthy schema v2 document.</summary>
+    /// <summary>No index yet, or a healthy current document.</summary>
     Ready = 0,
 
-    /// <summary>A flat schema v1 array was converted to v2 during this open.</summary>
+    /// <summary>An older document was converted during this open.</summary>
     Migrated = 1,
 
     /// <summary>The index could not be parsed. Nothing is written until the user resolves it.</summary>
@@ -80,6 +80,18 @@ public sealed record AssetSet
 /// </summary>
 public sealed record AssetPlacementDefaults
 {
+    /// <summary>Null = not assigned; None = explicitly cleared, including built-in defaults.</summary>
+    public AssetRole? Role { get; init; }
+
+    /// <summary>Degrees in [-180,180]; an empty list allows any rotation. Catalog metadata only.</summary>
+    public IReadOnlyList<double> AllowedRotations { get; init; } = [];
+
+    /// <summary>New areas draw nearer objects over farther ones.</summary>
+    public bool DepthSort { get; init; }
+
+    /// <summary>Empty = no hex contract; otherwise six clockwise edge labels starting at edge 0.</summary>
+    public IReadOnlyList<string> HexEdges { get; init; } = [];
+
     /// <summary>
     /// Side of the no-overlap box as a share of the stamp side (0.05..1); null = 30 %. Smaller
     /// boxes let a scatter pack tighter, larger ones keep pictures further apart.
@@ -97,7 +109,30 @@ public sealed record AssetPlacementDefaults
 
     /// <summary>«Без тени»: the tool starts with the shadow off for this asset.</summary>
     public bool NoShadow { get; init; }
+
+    // JSON materializes IReadOnlyList as List. Passports must still compare by value after a
+    // restart, including the empty default, rather than by the identity of their list objects.
+    public bool Equals(AssetPlacementDefaults? other) => other is not null
+        && Role == other.Role && DepthSort == other.DepthSort && CanFlip == other.CanFlip
+        && RandomRotation == other.RandomRotation && NoShadow == other.NoShadow
+        && CollisionFraction == other.CollisionFraction && RandomSizePercent == other.RandomSizePercent
+        && Same(AllowedRotations, other.AllowedRotations) && Same(HexEdges, other.HexEdges);
+
+    private static bool Same<T>(IReadOnlyList<T>? a, IReadOnlyList<T>? b) =>
+        ReferenceEquals(a, b) || a is not null && b is not null && a.SequenceEqual(b);
+
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(Role); hash.Add(DepthSort); hash.Add(CanFlip); hash.Add(RandomRotation);
+        hash.Add(NoShadow); hash.Add(CollisionFraction); hash.Add(RandomSizePercent);
+        if (AllowedRotations is not null) foreach (var angle in AllowedRotations) hash.Add(angle);
+        if (HexEdges is not null) foreach (var edge in HexEdges) hash.Add(edge, StringComparer.Ordinal);
+        return hash.ToHashCode();
+    }
 }
+
+public enum AssetRole { None, Tree, Spruce, Bush, Peak, Slope, House, Tower, Wall, Door, Sign }
 
 /// <summary>Deterministic identity for content-derived singleton sets and variants.</summary>
 public static class AssetIdentity

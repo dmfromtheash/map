@@ -173,7 +173,7 @@ public sealed class RegionalWorkflowTests
             Assert.Equal(set.Id,again.Sets["trees"].Id);
             var editor=Editor(Document(),catalog);
             Assert.False(editor.CanImportRegionalPack);
-            Assert.False(editor.StartRegionalPlacement(RegionalPlacementMode.Forest));
+            Assert.True(editor.StartRegionalPlacement(RegionalPlacementMode.Forest));
             Assert.Equal(0,editor.Session.UndoDepth);
         }
         finally { if(Directory.Exists(root))Directory.Delete(root,true); }

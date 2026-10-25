@@ -2280,6 +2280,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         Raise(nameof(StampSizeJitterPercent));
         Raise(nameof(StampRandomFlip));
         Raise(nameof(SelectedSetPlacement));
+        Raise(nameof(SelectedSetRole));
         Raise(nameof(SelectedSetCanFlip));
     }
 
@@ -2289,6 +2290,11 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     /// <summary>False when the chosen card's passport forbids mirroring it.</summary>
     public bool SelectedSetCanFlip => SelectedSetPlacement.CanFlip;
+
+    public AssetRole SelectedSetRole => SelectedSetPlacement.Role ?? AssetRole.None;
+
+    public bool SetSelectedSetRole(AssetRole role) =>
+        SetSelectedSetPlacement(p => p with { Role = role });
 
     /// <summary>
     /// Edits the passport of the chosen card in the catalog; the tool takes the new values as its

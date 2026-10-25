@@ -19,7 +19,7 @@ public sealed partial class EditorView
         var choices = new StackPanel { Spacing = 4 };
         foreach (var (mode, name, hint) in new[] {
             (RegionalPlacementMode.Forest,"Лес по области","Задайте границу. Густоту, размеры и опушку можно менять позднее."),
-            (RegionalPlacementMode.Ridge,"Хребет по линии","Обозначьте ось хребта. Узлы и расстояние между горами останутся редактируемыми."),
+            (RegionalPlacementMode.Ridge,"Хребет","Вершины — по редактируемой линии; склоны — область у уже заданных обрывов."),
             (RegionalPlacementMode.Settlement,"Поселение по области","Группы домов со свободными проходами. Каждый дом можно отделить от группы.") })
         {
             var button = Ui.TextButton("Regional" + mode + "Button", name, () =>
@@ -28,11 +28,11 @@ public sealed partial class EditorView
         }
         var section = new Ui.SectionPanel("RegionalModes", "Готовые сцены", new StackPanel { Spacing = 4, Children =
         {
-            Ui.Hint("Строят редактируемую область или путь из комплекта «Тихий атлас»."),
+            Ui.Hint("Строят редактируемую область или путь из ваших наборов с назначенной ролью."),
             choices,
         } }, false);
         section.SetSummary("лес, хребет, поселение");
-        section.IsVisible = _editor.CanImportRegionalPack;
+        section.IsVisible = _editor.IsLibraryAvailable;
         return section;
     }
 
