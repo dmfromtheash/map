@@ -14,7 +14,13 @@ public sealed partial class StyleMockupDump
         if (string.IsNullOrEmpty(output) || string.IsNullOrEmpty(assets)) return;
         Directory.CreateDirectory(output);
         var images = Directory.GetFiles(assets, "*.png").Take(3)
-            .ToDictionary(f => Path.GetFileNameWithoutExtension(f)!, f => SKImage.FromEncodedData(f)!);
+            .ToDictionary(f => Path.GetFileNameWithoutExtension(f)!, f =>
+            {
+                // Keep decoded pixels for repeated mountains; lazy PNGs larger than Skia's
+                // raster cache otherwise get decoded again for each of the 400 placements.
+                using var bitmap = SKBitmap.Decode(f)!;
+                return SKImage.FromBitmap(bitmap);
+            });
         try
         {
             var (reference, _) = Scene(images);
@@ -36,19 +42,20 @@ public sealed partial class StyleMockupDump
             }).OrderBy(o => o.Y + o.Height).ToArray();
             var layer = small.Layers.OfType<ObjectLayer>().Single(l => l.Name == "Горы");
             var big = small.WithLayer(layer.Id, l => ((ObjectLayer)l) with { Objects = objects });
-            foreach (var (tag, document) in new[] { ("small", small), ("big-400", big) })
+            foreach (var (tag, document) in new[] { ("small", small), ("big-400", big), ("reference-scene", reference) })
             {
-            if (Environment.GetEnvironmentVariable("MAP_R09_PRESETS_SCENE") is { Length: > 0 } only && tag != only) continue;
-            foreach (var preset in new[] { MapStylePreset.OldMapBlaeu, MapStylePreset.EngravingAquatint })
-            foreach (var scale in new[] { 1f, 0.5f })
-            {
-                using var surface = SKSurface.Create(new SKImageInfo((int)(W * scale), (int)(H * scale)))!;
-                surface.Canvas.Scale(scale);
-                SceneRenderer.Render(surface.Canvas, document with { Style = MapStyle.For(preset) },
-                    new RenderOptions { Stamps = new Images(images), IsExport = true, ViewScale = scale });
-                using var image = surface.Snapshot();
-                Save(image, $"{preset}-{tag}-{scale * 100:0}.png");
-            }
+                if (Environment.GetEnvironmentVariable("MAP_R09_PRESETS_SCENE") is { Length: > 0 } only && tag != only) continue;
+                foreach (var preset in new[] { MapStylePreset.OldMapBlaeu, MapStylePreset.EngravingAquatint })
+                foreach (var scale in new[] { 1f, 0.5f })
+                {
+                    if (tag == "reference-scene" && scale < 1) continue;
+                    using var surface = SKSurface.Create(new SKImageInfo((int)(W * scale), (int)(H * scale)))!;
+                    surface.Canvas.Scale(scale);
+                    SceneRenderer.Render(surface.Canvas, document with { Style = MapStyle.For(preset) },
+                        new RenderOptions { Stamps = new Images(images), IsExport = true, ViewScale = scale });
+                    using var image = surface.Snapshot();
+                    Save(image, $"{preset}-{tag}-{scale * 100:0}.png");
+                }
             }
             if (Environment.GetEnvironmentVariable("MAP_R09_PRESETS_SCENE") is { Length: > 0 }) return;
             // Exact original selected mockups, for a side-by-side review of the small scene.
