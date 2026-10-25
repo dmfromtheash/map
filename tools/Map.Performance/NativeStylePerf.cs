@@ -7,6 +7,11 @@ public sealed partial class PaintPerfApplication
 {
     private async Task StyleRoutes((double X, double Y) centre, double scale)
     {
+        // Generation/save has already finished; exports may themselves acquire HeavyGate.
+        // Hold the existing cross-process slot for every warm-up and measured style route.
+        using var styleGate = await Map.Core.Resources.WorkingMemoryBudget.Shared.EnterHeavyAsync(reserveBytes:
+            Map.Core.Resources.WorkingMemoryBudget.SmallMeasuredBypassBytes + 1);
+        _report.Environment["heavy-gate"] = "held throughout style routes";
         // W/H still size the window in DIP. Pin this tool's canvas separately to the threshold's
         // device pixels: Windows scaling and editor panels must not change the tested workload.
         var width = (int)EnvNumber("MAP_PAINT_W", 2048);
@@ -21,7 +26,8 @@ public sealed partial class PaintPerfApplication
         _report.Environment["style/stages"] = measure.ToString();
         _report.Environment["style/window"] = $"{_window.Bounds.Width}x{_window.Bounds.Height} DIP at {_window.Position}; scaling={_window.RenderScaling}";
         _report.Environment["style/target-pixels"] = $"{width}x{height}";
-        var presets = new[] { MapStylePreset.InkWetBrush, MapStylePreset.InkPenHatching, MapStylePreset.InkPenStipple };
+        var presets = new[] { MapStylePreset.InkWetBrush, MapStylePreset.InkPenHatching, MapStylePreset.InkPenStipple,
+            MapStylePreset.OldMapBlaeu, MapStylePreset.EngravingAquatint };
         try
         {
             _editor.ChangeLighting("Замер", l => l with { Enabled = false }, true);

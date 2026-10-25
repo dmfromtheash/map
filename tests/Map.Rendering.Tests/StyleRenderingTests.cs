@@ -36,14 +36,17 @@ public sealed class StyleRenderingTests
             $"{Chroma(ink, new SKRectI(0, 0, 512, 300))} vs {Chroma(plain, new SKRectI(0, 0, 512, 300))}");
     }
 
-    [Fact]
-    public void Names_are_drawn_over_the_style_exactly_as_without_it()
+    [Theory]
+    [InlineData(MapStylePreset.InkWetBrush)]
+    [InlineData(MapStylePreset.OldMapBlaeu)]
+    [InlineData(MapStylePreset.EngravingAquatint)]
+    public void Names_are_drawn_over_the_style_exactly_as_without_it(MapStylePreset preset)
     {
         using var mountain = Mountain();
         // A red name on a plain page: with the style the solid insides of its letters keep their own
         // red exactly (the anti-aliased rims blend with whatever lies under them).
         using var plain = Draw(Scene(null, withName: true), mountain, View);
-        using var ink = Draw(Scene(MapStyle.For(MapStylePreset.InkWetBrush), withName: true), mountain, View);
+        using var ink = Draw(Scene(MapStyle.For(preset), withName: true), mountain, View);
         var letters = 0;
         for (var y = 330; y < 380; y++)
         for (var x = 20; x < 300; x++)
@@ -75,6 +78,8 @@ public sealed class StyleRenderingTests
     [Theory]
     [InlineData(MapStylePreset.InkWetBrush)]
     [InlineData(MapStylePreset.InkPenHatching)]
+    [InlineData(MapStylePreset.OldMapBlaeu)]
+    [InlineData(MapStylePreset.EngravingAquatint)]
     public void Export_tiles_match_the_whole_frame(MapStylePreset preset)
     {
         using var mountain = Mountain();
@@ -86,18 +91,21 @@ public sealed class StyleRenderingTests
         // (stamp sampling); the ink's thresholds may lift such a pixel by a few more units. A seam
         // would be a band of differing pixels along x = 256, so: few pixels off by more than 4,
         // none by more than 24, and the column at the seam no worse than the rest.
-        var worst = 0; var off = 0; var seamOff = 0; var count = 0;
+        var worst = 0; var off = 0; var seamOff = 0; var count = 0; var worstAt = "";
         for (var y = 0; y < 384; y++)
         for (var x = 0; x < 512; x++)
         {
             var tile = x < 256 ? left.GetPixel(x, y) : right.GetPixel(x - 256, y);
             var full = whole.GetPixel(x, y);
             var d = Math.Max(Math.Abs(tile.Red - full.Red), Math.Max(Math.Abs(tile.Green - full.Green), Math.Abs(tile.Blue - full.Blue)));
-            worst = Math.Max(worst, d);
+            if (d > worst) { worst = d; worstAt = $"{x},{y}: {full} vs {tile}"; }
             count++;
             if (d > 4) { off++; if (Math.Abs(x - 256) <= 2) seamOff++; }
         }
-        Assert.True(worst <= 24, $"worst {worst}");
+        // Blaeu's hard engraved screen can flip an isolated pixel when the tensor's F16 blur
+        // rounds at a threshold. Bound their count and the seam independently; keep ink's old bound.
+        Assert.True(worst <= (preset == MapStylePreset.OldMapBlaeu ? 180 : 24),
+            $"worst {worst} at {worstAt}; off={off}, seam={seamOff}");
         Assert.True(off < count / 500, $"{off} pixels differ");
         Assert.True(seamOff <= 3, $"{seamOff} pixels differ at the seam");
     }

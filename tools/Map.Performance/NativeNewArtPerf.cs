@@ -96,7 +96,7 @@ public sealed partial class PaintPerfApplication
         {
             await StyleRoutes(centre, scale);
             _report.Checks["gpu"] = _report.Routes.All(r => r.Gpu);
-            _report.Checks["style-routes"] = _report.Routes.Count == 26;
+            _report.Checks["style-routes"] = _report.Routes.Count == 38;
             return;
         }
         if (System.Environment.GetEnvironmentVariable("MAP_NEW_ART_LIGHT") == "1")

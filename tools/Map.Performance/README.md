@@ -1,9 +1,9 @@
 # Map.Performance
 ## Тушь на большой карте (R09, 2026-10-24)
 
-`MAP_NEW_ART_PERF=1 MAP_NEW_ART_STYLE=1` с `--profile native-paint-perf` запускает 26 маршрутов:
+`MAP_NEW_ART_PERF=1 MAP_NEW_ART_STYLE=1` с `--profile native-paint-perf` запускает 38 маршрутов:
 на обзоре (`MAP_PAINT_SCALE`, по умолчанию 0.41) и на 100 % — неподвижный кадр и панорама без стиля,
-с `InkWetBrush`, `InkPenHatching`, `InkPenStipple`, а также мокрая кисть + вечерний свет без огней.
+с `InkWetBrush`, `InkPenHatching`, `InkPenStipple`, `OldMapBlaeu`, `EngravingAquatint`, а также мокрая кисть + вечерний свет без огней.
 Для каждого пресета на обоих масштабах — 50 шагов `SetStyleStrength(..., commit: false)` от 0.02 до 1,
 затем один commit. На маршрут неподвижного кадра/панорамы — 40 входов с интервалом 16 мс;
 медленный рендер может объединять несколько входов в один кадр.
