@@ -725,7 +725,7 @@ internal sealed class StampStyleDto
     public GroundShadowDto? GroundShadow { get; set; }
 }
 
-/// <summary>R10 ground of a placed asset (schema v27).</summary>
+/// <summary>R10 ground of a placed asset (schema v30).</summary>
 internal sealed class GroundShadowDto
 {
     [JsonPropertyName("opacity")] public double Opacity { get; set; }

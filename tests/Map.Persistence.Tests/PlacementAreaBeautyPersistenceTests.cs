@@ -8,20 +8,20 @@ using Map.Persistence.Tests.Support;
 namespace Map.Persistence.Tests;
 
 /// <summary>
-/// R10 «Красота» (schema v27): an area with beauty switches and a painted density brush, a layer
+/// R10 «Красота» (schema v30): an area with beauty switches and a painted density brush, a layer
 /// with «ближние поверх дальних» and the tint and ground of its objects save and reopen exactly;
 /// a map without them keeps its older schema; an older file that claims them is refused.
 /// </summary>
 public sealed class PlacementAreaBeautyPersistenceTests
 {
     [Fact]
-    public void Beauty_density_brush_and_layer_depth_sort_reopen_exactly_in_v27()
+    public void Beauty_density_brush_and_layer_depth_sort_reopen_exactly_in_v30()
     {
         using var workspace = new TempWorkspace();
         var (session, layerId, saved, bytes) = Build(beauty: true);
         var path = workspace.File("beauty.mapproj");
         MapProjectStore.Save(session.Document, path, ProjectFixtures.Metadata(), bytes);
-        Assert.Equal(27, Schema(path));
+        Assert.Equal(30, Schema(path));
 
         var reopened = MapProjectStore.Open(path).Document;
         var layer = (ObjectLayer)reopened.FindLayer(layerId)!;
@@ -44,10 +44,10 @@ public sealed class PlacementAreaBeautyPersistenceTests
         var (session, _, _, bytes) = Build(beauty: false);
         var path = workspace.File("plain.mapproj");
         MapProjectStore.Save(session.Document, path, ProjectFixtures.Metadata(), bytes);
-        Assert.True(Schema(path) < 27);
+        Assert.True(Schema(path) < 30);
         MapProjectStore.Open(path).Document.Layers.OfType<ObjectLayer>().Single(l => !l.PlacementAreas.IsEmpty).PlacementAreas.Single().ValidateMembers();
 
-        // A v27 file rewritten to claim v25 is refused rather than silently read.
+        // A v30 file rewritten to claim v25 is refused rather than silently read.
         var (beautiful, _, _, beautyBytes) = Build(beauty: true);
         var forged = workspace.File("forged.mapproj");
         MapProjectStore.Save(beautiful.Document, forged, ProjectFixtures.Metadata(), beautyBytes);
@@ -59,7 +59,7 @@ public sealed class PlacementAreaBeautyPersistenceTests
             entry.Delete();
             var replaced = archive.CreateEntry("manifest.json");
             using var writer = new StreamWriter(replaced.Open());
-            writer.Write(text.Replace("\"schemaVersion\":27", "\"schemaVersion\":25", StringComparison.Ordinal));
+            writer.Write(text.Replace("\"schemaVersion\":30", "\"schemaVersion\":25", StringComparison.Ordinal));
         }
         Assert.ThrowsAny<Exception>(() => MapProjectStore.Open(forged));
     }

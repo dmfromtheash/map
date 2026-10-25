@@ -42,7 +42,7 @@ public static partial class MapProjectStore
         layers.OfType<ObjectLayer>().Any(l => l.PlacementAreas.Any(a => a.NeedsRulesSchema));
 
     private static int SchemaFor(MapDocument document) =>
-        HasAreaBeautyV27(document.Layers) || document.Checkpoints.Any(c => HasAreaBeautyV27(c.Snapshot.Layers))
+        HasAreaBeautyV30(document.Layers) || document.Checkpoints.Any(c => HasAreaBeautyV30(c.Snapshot.Layers))
             ? MapProjectFormat.AreaBeautySchemaVersion :
         document.Style is not null || document.Checkpoints.Any(c => c.Snapshot.Style is not null)
             ? MapProjectFormat.StyleSchemaVersion :
@@ -767,7 +767,7 @@ public static partial class MapProjectStore
 
             var scene = ParseJson<SceneDto>(sceneBytes, MapProjectFormat.SceneEntry);
             ValidatePathSchema(scene, manifest.SchemaVersion);
-            ValidateAreaBeautySchemaV27(scene, manifest.SchemaVersion);
+            ValidateAreaBeautySchemaV30(scene, manifest.SchemaVersion);
             if (expectedSchemaVersion is >= 2 and <= 3)
             {
                 ValidateV2SceneShape(sceneBytes, MapProjectFormat.SceneEntry);
@@ -1337,7 +1337,7 @@ public static partial class MapProjectStore
                 }
                 var scene = ParseJson<SceneDto>(sceneBytes, sceneEntry);
                 ValidatePathSchema(scene, snapshotManifest.SchemaVersion);
-                ValidateAreaBeautySchemaV27(scene, snapshotManifest.SchemaVersion);
+                ValidateAreaBeautySchemaV30(scene, snapshotManifest.SchemaVersion);
                 if (schemaVersion is >= 2 and <= 3)
                 {
                     ValidateV2SceneShape(sceneBytes, sceneEntry);
@@ -2107,7 +2107,7 @@ public static partial class MapProjectStore
                 Brightness = stamp.Brightness,
                 Contrast = stamp.Contrast,
                 Tint = stamp.Tint,
-                GroundShadow = ToGroundShadowDtoV27(stamp.GroundShadow),
+                GroundShadow = ToGroundShadowDtoV30(stamp.GroundShadow),
             }
             : null,
         Line = sceneObject.Line is { } line ? ToLineDto(line) : null,
@@ -2560,8 +2560,8 @@ public static partial class MapProjectStore
                 Saturation = RequireFinite(stamp.Saturation, "stamp saturation", min: -1, max: 1),
                 Brightness = RequireFinite(stamp.Brightness, "stamp brightness", min: -1, max: 1),
                 Contrast = RequireFinite(stamp.Contrast, "stamp contrast", min: -1, max: 1),
-                Tint = ReadTintV27(stamp.Tint),
-                GroundShadow = ReadGroundShadowV27(stamp.GroundShadow),
+                Tint = ReadTintV30(stamp.Tint),
+                GroundShadow = ReadGroundShadowV30(stamp.GroundShadow),
             }
             : null,
         Line = dto.Line is { } line ? ToLine(line) : null,

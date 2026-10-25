@@ -222,7 +222,7 @@ public sealed class AreaRulesApplication : Application
     /// <summary>
     /// R10 «Красота» (second pass): the block's switches from the panel, one Undo each, objects that
     /// stay keep their centres; a density brush stroke is one Undo step; «ближние поверх дальних» of
-    /// the layer from the layer panel; save → reopen keeps all of it in schema v27.
+    /// the layer from the layer panel; save → reopen keeps all of it in schema v30.
     /// </summary>
     private async Task Beauty()
     {
@@ -275,7 +275,7 @@ public sealed class AreaRulesApplication : Application
         var reopened = MapProjectStore.Open(file).Document;
         var reopenedLayer = reopened.Layers.OfType<ObjectLayer>().Single(l => l.Id == Objects);
         var reopenedArea = reopenedLayer.PlacementAreas.Single();
-        _report.Checks["save-reopen-v27"] = schema == 27 && Equals(reopenedArea.Beauty, Area().Beauty)
+        _report.Checks["save-reopen-v30"] = schema == 30 && Equals(reopenedArea.Beauty, Area().Beauty)
             && Equals(reopenedArea.DensityMask, Area().DensityMask) && reopenedLayer.Effects.DepthSort
             && reopenedArea.MemberCount == Area().MemberCount;
     }

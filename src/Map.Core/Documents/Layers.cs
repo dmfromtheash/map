@@ -38,7 +38,7 @@ public sealed record LayerEffects
     public double ShadowBlur { get; init; }
 
     /// <summary>
-    /// R10 «Ближние поверх дальних» for a whole layer (schema v27): inside each sublayer band the
+    /// R10 «Ближние поверх дальних» for a whole layer (schema v30): inside each sublayer band the
     /// object whose lower edge is lower on the map is drawn over the ones above it. Only the drawing
     /// (and picking) order changes; the stored list order is kept, so switching it off restores it.
     /// </summary>

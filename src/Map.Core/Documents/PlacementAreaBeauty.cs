@@ -4,7 +4,7 @@ using System.Text.Json.Serialization;
 namespace Map.Core.Documents;
 
 /// <summary>
-/// «Красота» of an editable area (R10, schema v27), after Unreal Foliage/PCG, Gaea and Dungeondraft:
+/// «Красота» of an editable area (R10, schema v30), after Unreal Foliage/PCG, Gaea and Dungeondraft:
 /// a soft edge (fewer and smaller objects toward the border), clumps from low-frequency noise,
 /// groves of one kind in patches, a cold contact shadow under every object, a dark underlay under
 /// the mass (a wide soft blot under each object, all drawn before the objects, so a dense group
@@ -92,7 +92,7 @@ public sealed record PlacementAreaBeauty
 }
 
 /// <summary>
-/// The density brush of an area (R10, schema v27): an 8-bit raster over the area in world space.
+/// The density brush of an area (R10, schema v30): an 8-bit raster over the area in world space.
 /// 128 leaves the density as set; 0 empties the place, 255 doubles it. It multiplies the density
 /// a slot is compared with, so - like every other area filter - it removes or returns slots in
 /// place and never moves the ones that stay. Stored deflated, so an untouched brush costs bytes.

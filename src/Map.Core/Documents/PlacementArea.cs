@@ -86,11 +86,11 @@ public sealed record PlacementArea
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool DepthSort { get; init; }
 
-    /// <summary>«Красота» (R10, schema v27); null = none, as in every older map.</summary>
+    /// <summary>«Красота» (R10, schema v30); null = none, as in every older map.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public PlacementAreaBeauty? Beauty { get; init; }
 
-    /// <summary>The density brush (R10, schema v27); null = untouched.</summary>
+    /// <summary>The density brush (R10, schema v30); null = untouched.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public PlacementAreaDensityMask? DensityMask { get; init; }
 
