@@ -27,6 +27,7 @@ public sealed class StylePersistenceTests : IDisposable
     [InlineData(MapStylePreset.OilImpastoRhythm)]
     [InlineData(MapStylePreset.CharcoalVineStump)]
     [InlineData(MapStylePreset.CharcoalHatching)]
+    [InlineData(MapStylePreset.BlueprintSurvey)]
     public void Style_v29_roundtrip_keeps_the_preset_strength_and_every_effect(MapStylePreset preset)
     {
         var style = MapStyle.For(preset) with
@@ -117,6 +118,7 @@ public sealed class StylePersistenceTests : IDisposable
     [InlineData(MapStylePreset.OilImpastoRhythm)]
     [InlineData(MapStylePreset.CharcoalVineStump)]
     [InlineData(MapStylePreset.CharcoalHatching)]
+    [InlineData(MapStylePreset.BlueprintSurvey)]
     public void Missing_new_effects_use_the_approved_preset_defaults(MapStylePreset preset)
     {
         var path = Path.Combine(_root, "defaults.mapproj");
@@ -126,7 +128,7 @@ public sealed class StylePersistenceTests : IDisposable
         RewriteManifest(path, m =>
         {
             foreach (var key in new[] { "sea", "coast", "colourWash", "aquatint", "plate", "border",
-                "granulation", "crest", "gouge", "seaCuts", "woodGrain", "inkSqueeze", "starved", "waterLines", "stoneCrayon", "tintPlate", "scraped", "smudge", "crossHatch" })
+                "granulation", "crest", "gouge", "seaCuts", "woodGrain", "inkSqueeze", "starved", "waterLines", "stoneCrayon", "tintPlate", "scraped", "smudge", "crossHatch", "grid", "formLines" })
                 m["style"]!.AsObject().Remove(key);
         });
         Assert.Equal(style, MapProjectStore.Open(path).Document.Style);

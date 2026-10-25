@@ -11,6 +11,7 @@ public sealed partial class StyleRenderingTests
         MapStylePreset.PrintLetterpress, MapStylePreset.PrintTintedLithograph,
         MapStylePreset.OilAllaPrima, MapStylePreset.OilImpastoRhythm,
         MapStylePreset.CharcoalVineStump, MapStylePreset.CharcoalHatching,
+        MapStylePreset.BlueprintSurvey,
     }.Select(p => new object[] { p });
 
     [Theory]
@@ -19,6 +20,7 @@ public sealed partial class StyleRenderingTests
     [InlineData(MapStylePreset.OilImpastoRhythm)]
     [InlineData(MapStylePreset.CharcoalVineStump)]
     [InlineData(MapStylePreset.CharcoalHatching)]
+    [InlineData(MapStylePreset.BlueprintSurvey)]
     public void Cpu_export_matches_serial_pixels_with_odd_rows_fractional_origin_and_partial_strength(MapStylePreset preset)
     {
         using var mountain = Mountain();

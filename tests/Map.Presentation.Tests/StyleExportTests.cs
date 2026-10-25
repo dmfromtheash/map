@@ -20,6 +20,7 @@ public sealed class StyleExportTests
     [InlineData(MapStylePreset.OilImpastoRhythm)]
     [InlineData(MapStylePreset.CharcoalVineStump)]
     [InlineData(MapStylePreset.CharcoalHatching)]
+    [InlineData(MapStylePreset.BlueprintSurvey)]
     public async Task Png_tiles_and_300_dpi_pdf_keep_the_program_style(MapStylePreset preset)
     {
         var root = Path.Combine(Path.GetTempPath(), "map-r09-export-" + Guid.NewGuid().ToString("N"));

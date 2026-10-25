@@ -35,11 +35,12 @@ public sealed partial class StyleMockupDump
         MapStylePreset[] presets = [MapStylePreset.WatercolorBigShapes,MapStylePreset.UkiyoeSosakuHanga,
             MapStylePreset.PrintLetterpress,MapStylePreset.PrintTintedLithograph,
             MapStylePreset.OilAllaPrima,MapStylePreset.OilImpastoRhythm,
-            MapStylePreset.CharcoalVineStump,MapStylePreset.CharcoalHatching];
+            MapStylePreset.CharcoalVineStump,MapStylePreset.CharcoalHatching,MapStylePreset.BlueprintSurvey];
         // MAP_R09_PAINTER_ONLY = a comma-separated list of preset names, to compare only those.
         if (Environment.GetEnvironmentVariable("MAP_R09_PAINTER_ONLY") is { Length: > 0 } only)
             presets = [.. presets.Where(p => only.Split(',').Contains(p.ToString()))];
         var oils = OilVariants().ToDictionary(v => v.Oil.Variant, v => v.Oil);
+        var blues = BlueprintVariants().ToDictionary(v => v.Blueprint.Variant, v => v.Blueprint);
         var coals = CharcoalVariants().ToDictionary(v => v.Charcoal.Variant, v => v.Charcoal);
         var programOnly = Environment.GetEnvironmentVariable("MAP_R09_PAINTER_PROGRAM_ONLY") == "1";
         try
@@ -86,6 +87,7 @@ public sealed partial class StyleMockupDump
                     using var referenceSurface = SKSurface.Create(new SKImageInfo(W,H))!;
                     using (var shader = preset switch
                     {
+                        MapStylePreset.BlueprintSurvey => BlueprintShader(mountains,wetBig,facets,ca,cb,wetTensor,geo,blues[4],ms),
                         MapStylePreset.CharcoalVineStump => CharcoalShader(mountains,wetBig,facets,ca,cb,wide,wetTensor,geo,flow,coals[1],ms),
                         MapStylePreset.CharcoalHatching => CharcoalShader(mountains,wetBig,facets,ca,cb,wide,wetTensor,geo,flow,coals[2],ms),
                         MapStylePreset.OilAllaPrima =>OilShader(mountains,wetBig,wetFacets,ca,cb,wide,wetTensor,geo,flow,oils[1],ms),

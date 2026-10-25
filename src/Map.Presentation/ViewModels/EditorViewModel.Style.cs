@@ -67,6 +67,7 @@ public sealed partial class EditorViewModel
         MapStylePreset.OilImpastoRhythm => "Ритм импасто",
         MapStylePreset.CharcoalVineStump => "Ивовый уголь",
         MapStylePreset.CharcoalHatching => "Штриховка углём",
+        MapStylePreset.BlueprintSurvey => "Топографическая синька",
         MapStylePreset.WatercolorBigShapes => "Крупные пятна",
         MapStylePreset.UkiyoeSosakuHanga => "Сосаку-ханга",
         MapStylePreset.PrintLetterpress => "Высокая печать",
@@ -82,6 +83,7 @@ public sealed partial class EditorViewModel
     {
         MapStylePreset.OilAllaPrima or MapStylePreset.OilImpastoRhythm => "Масло",
         MapStylePreset.CharcoalVineStump or MapStylePreset.CharcoalHatching => "Уголь",
+        MapStylePreset.BlueprintSurvey => "Синька",
         MapStylePreset.WatercolorBigShapes => "Акварель",
         MapStylePreset.UkiyoeSosakuHanga => "Укиё-э",
         MapStylePreset.PrintLetterpress or MapStylePreset.PrintTintedLithograph => "Печать",
@@ -92,6 +94,11 @@ public sealed partial class EditorViewModel
 
     public static string StyleEffectTitle(StyleEffectKind kind, MapStylePreset preset = MapStylePreset.InkWetBrush) => kind switch
     {
+        StyleEffectKind.Grid => "Координатная сетка",
+        StyleEffectKind.FormLines => "Горизонтали формы",
+        StyleEffectKind.Crest when preset == MapStylePreset.BlueprintSurvey => "Гребни и силуэт",
+        StyleEffectKind.WaterLines when preset == MapStylePreset.BlueprintSurvey => "Линии глубин",
+        StyleEffectKind.Paper when preset == MapStylePreset.BlueprintSurvey => "Пятна на синьке",
         StyleEffectKind.Smudge => "Растушёвка",
         StyleEffectKind.CrossHatch => "Штриховка накрест",
         StyleEffectKind.Strokes when preset == MapStylePreset.CharcoalVineStump => "Штрихи по форме",

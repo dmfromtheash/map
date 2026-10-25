@@ -48,6 +48,7 @@ public sealed partial class StyleRenderingTests
     [InlineData(MapStylePreset.OilImpastoRhythm)]
     [InlineData(MapStylePreset.CharcoalVineStump)]
     [InlineData(MapStylePreset.CharcoalHatching)]
+    [InlineData(MapStylePreset.BlueprintSurvey)]
     public void Names_are_drawn_over_the_style_exactly_as_without_it(MapStylePreset preset)
     {
         using var mountain = Mountain();

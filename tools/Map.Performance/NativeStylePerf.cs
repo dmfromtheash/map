@@ -36,6 +36,9 @@ public sealed partial class PaintPerfApplication
         _report.Environment["style/target-pixels"] = $"{width}x{height}";
         var presets = new[] { MapStylePreset.InkWetBrush, MapStylePreset.InkPenHatching, MapStylePreset.InkPenStipple,
             MapStylePreset.OldMapBlaeu, MapStylePreset.EngravingAquatint };
+        // MAP_NEW_ART_STYLE_PRESETS = comma-separated preset names to measure instead (e.g. the painter, oil and charcoal ones).
+        if (System.Environment.GetEnvironmentVariable("MAP_NEW_ART_STYLE_PRESETS") is { Length: > 0 } chosen)
+            presets = [.. chosen.Split(',', StringSplitOptions.RemoveEmptyEntries).Select(Enum.Parse<MapStylePreset>)];
         try
         {
             _editor.ChangeLighting("Замер", l => l with { Enabled = false }, true);

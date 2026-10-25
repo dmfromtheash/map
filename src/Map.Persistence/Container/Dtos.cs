@@ -75,6 +75,8 @@ internal sealed class MapStyleDto
     [JsonPropertyName("gloss")] public LightingEffectDto? Gloss { get; set; }
     [JsonPropertyName("smudge")] public LightingEffectDto? Smudge { get; set; }
     [JsonPropertyName("crossHatch")] public LightingEffectDto? CrossHatch { get; set; }
+    [JsonPropertyName("grid")] public LightingEffectDto? Grid { get; set; }
+    [JsonPropertyName("formLines")] public LightingEffectDto? FormLines { get; set; }
     [JsonPropertyName("plate")] public LightingEffectDto? Plate { get; set; }
     [JsonPropertyName("border")] public LightingEffectDto? Border { get; set; }
 }

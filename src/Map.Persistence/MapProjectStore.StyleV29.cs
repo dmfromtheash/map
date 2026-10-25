@@ -21,6 +21,7 @@ public static partial class MapProjectStore
         [MapStylePreset.OilImpastoRhythm] = "oil-impasto-rhythm",
         [MapStylePreset.CharcoalVineStump] = "charcoal-vine-stump",
         [MapStylePreset.CharcoalHatching] = "charcoal-hatching",
+        [MapStylePreset.BlueprintSurvey] = "blueprint-survey",
     };
 
     private static MapStyleDto? ToStyleDto(MapStyle? style)
@@ -43,6 +44,7 @@ public static partial class MapProjectStore
             TintPlate = Effect(style.TintPlate), Scraped = Effect(style.Scraped),
             Impasto = Effect(style.Impasto), Imprimatura = Effect(style.Imprimatura), Gloss = Effect(style.Gloss),
             Smudge = Effect(style.Smudge), CrossHatch = Effect(style.CrossHatch),
+            Grid = Effect(style.Grid), FormLines = Effect(style.FormLines),
         };
     }
 
@@ -79,6 +81,7 @@ public static partial class MapProjectStore
             Impasto = Effect(dto.Impasto, defaults.Impasto), Imprimatura = Effect(dto.Imprimatura, defaults.Imprimatura),
             Gloss = Effect(dto.Gloss, defaults.Gloss),
             Smudge = Effect(dto.Smudge, defaults.Smudge), CrossHatch = Effect(dto.CrossHatch, defaults.CrossHatch),
+            Grid = Effect(dto.Grid, defaults.Grid), FormLines = Effect(dto.FormLines, defaults.FormLines),
         }.Normalized();
     }
 }

@@ -74,9 +74,16 @@ public sealed record MapStyle
     /// <summary>Charcoal: the cross layers of hatching in the shadows.</summary>
     public StyleEffect CrossHatch { get; init; } = new(true, 1);
 
+    /// <summary>Blueprint (DEC-067): the surveyor's coordinate grid.</summary>
+    public StyleEffect Grid { get; init; } = new(true, 1);
+
+    /// <summary>Blueprint: the form lines of the mountains (contours of their light and shadow).</summary>
+    public StyleEffect FormLines { get; init; } = new(true, 1);
+
     /// <summary>The preset as it comes, every effect at the strength the preset was tuned with.</summary>
     public static MapStyle For(MapStylePreset preset) => preset switch
     {
+        MapStylePreset.BlueprintSurvey => new MapStyle { Preset = preset, Paper = new(true, 1) },
         MapStylePreset.CharcoalVineStump or MapStylePreset.CharcoalHatching => new MapStyle
         {
             Preset = preset, Strokes = new(true, 1), Paper = new(true, 1), Contour = new(true, 1),
@@ -112,6 +119,9 @@ public sealed record MapStyle
     /// <summary>The effects a preset actually uses: the panel shows only these.</summary>
     public static IReadOnlyList<StyleEffectKind> EffectsOf(MapStylePreset preset) => preset switch
     {
+        MapStylePreset.BlueprintSurvey =>
+            [StyleEffectKind.Grid, StyleEffectKind.FormLines, StyleEffectKind.Crest,
+             StyleEffectKind.WaterLines, StyleEffectKind.Paper],
         MapStylePreset.CharcoalVineStump =>
             [StyleEffectKind.Smudge, StyleEffectKind.Strokes, StyleEffectKind.Crest,
              StyleEffectKind.WaterLines, StyleEffectKind.Paper],
@@ -181,6 +191,8 @@ public sealed record MapStyle
         StyleEffectKind.Gloss => Gloss,
         StyleEffectKind.Smudge => Smudge,
         StyleEffectKind.CrossHatch => CrossHatch,
+        StyleEffectKind.Grid => Grid,
+        StyleEffectKind.FormLines => FormLines,
         _ => Contour,
     };
 
@@ -215,6 +227,8 @@ public sealed record MapStyle
         StyleEffectKind.Gloss => this with { Gloss = effect },
         StyleEffectKind.Smudge => this with { Smudge = effect },
         StyleEffectKind.CrossHatch => this with { CrossHatch = effect },
+        StyleEffectKind.Grid => this with { Grid = effect },
+        StyleEffectKind.FormLines => this with { FormLines = effect },
         _ => this with { Contour = effect },
     };
 
@@ -233,6 +247,7 @@ public sealed record MapStyle
         TintPlate = TintPlate.Normalized(), Scraped = Scraped.Normalized(),
         Impasto = Impasto.Normalized(), Imprimatura = Imprimatura.Normalized(), Gloss = Gloss.Normalized(),
         Smudge = Smudge.Normalized(), CrossHatch = CrossHatch.Normalized(),
+        Grid = Grid.Normalized(), FormLines = FormLines.Normalized(),
     };
 }
 
@@ -255,13 +270,14 @@ public enum MapStylePreset
     OilImpastoRhythm = 10,
     CharcoalVineStump = 11,
     CharcoalHatching = 12,
+    BlueprintSurvey = 13,
 }
 
 public enum StyleEffectKind
 {
     Strokes, Bleed, Edges, DryBrush, Mist, Pen, Paper, Contour, Sea, Coast, ColourWash, Aquatint, Plate, Border,
     Granulation, Crest, Gouge, SeaCuts, WoodGrain, InkSqueeze, Starved, WaterLines, StoneCrayon, TintPlate, Scraped,
-    Impasto, Imprimatura, Gloss, Smudge, CrossHatch,
+    Impasto, Imprimatura, Gloss, Smudge, CrossHatch, Grid, FormLines,
 }
 
 /// <summary>One effect of a style: its own switch and its own strength (0..1).</summary>

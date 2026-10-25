@@ -7,7 +7,7 @@ public static partial class StyleRenderer
 {
     private static bool IsPainter(MapStylePreset preset) => preset is MapStylePreset.WatercolorBigShapes
         or MapStylePreset.UkiyoeSosakuHanga or MapStylePreset.PrintLetterpress or MapStylePreset.PrintTintedLithograph
-        || OilShader.Applies(preset) || CharcoalShader.Applies(preset);
+        || OilShader.Applies(preset) || CharcoalShader.Applies(preset) || BlueprintShader.Applies(preset);
 
     // Both abstractions stay in the view cache: changing any of the four presets or its effects
     // only runs Shade. They use the same camera-follow path as the existing print/ink buffers.

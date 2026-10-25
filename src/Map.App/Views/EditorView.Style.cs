@@ -62,6 +62,7 @@ public sealed partial class EditorView
 
     private static string PresetHint(MapStylePreset preset) => preset switch
     {
+        MapStylePreset.BlueprintSurvey => "Топографическая синька: лист прусской синей, сетка, горы горизонталями формы и линиями гребней, море линиями глубин.",
         MapStylePreset.CharcoalVineStump => "Ивовый уголь: массы гор растушёваны, зерно бумаги в полутонах, свет оставлен бумагой, немного штрихов по форме.",
         MapStylePreset.CharcoalHatching => "Штриховка углём: только линия — по форме, накрест в тени, твёрдый контур; море ровной штриховкой.",
         MapStylePreset.OilAllaPrima => "Алла прима: плоская кисть по плоскостям гор, тёплый свет и холодная тень, тёплый грунт между мазками.",
@@ -79,6 +80,11 @@ public sealed partial class EditorView
 
     private static string StyleEffectHint(StyleEffectKind kind, MapStylePreset preset) => kind switch
     {
+        StyleEffectKind.Grid => "Сетка землемера: крупные клетки и тонкие между ними; на горах бледнее.",
+        StyleEffectKind.FormLines => "Белые линии по светотени горы — как горизонтали на карте, каждая вторая ярче.",
+        StyleEffectKind.Crest when preset == MapStylePreset.BlueprintSurvey => "Жирные белые линии гребней и силуэта гор.",
+        StyleEffectKind.WaterLines when preset == MapStylePreset.BlueprintSurvey => "Линии глубин в море вдоль берега, реже к открытому морю.",
+        StyleEffectKind.Paper when preset == MapStylePreset.BlueprintSurvey => "Неровное покрытие листа синей краской.",
         StyleEffectKind.Smudge => "Мягкий тон, втёртый растушёвкой; уголь наполовину заполняет зерно бумаги.",
         StyleEffectKind.CrossHatch => "Второй и третий слой штриховки накрест в тенях и самых тёмных местах.",
         StyleEffectKind.Strokes when preset is MapStylePreset.CharcoalVineStump or MapStylePreset.CharcoalHatching => "Штрихи по направлению горы; на море — ровные горизонтальные.",
