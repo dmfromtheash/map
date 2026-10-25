@@ -19,6 +19,10 @@ public sealed class StylePersistenceTests : IDisposable
     [InlineData(MapStylePreset.InkPenStipple)]
     [InlineData(MapStylePreset.OldMapBlaeu)]
     [InlineData(MapStylePreset.EngravingAquatint)]
+    [InlineData(MapStylePreset.WatercolorBigShapes)]
+    [InlineData(MapStylePreset.UkiyoeSosakuHanga)]
+    [InlineData(MapStylePreset.PrintLetterpress)]
+    [InlineData(MapStylePreset.PrintTintedLithograph)]
     public void Style_v29_roundtrip_keeps_the_preset_strength_and_every_effect(MapStylePreset preset)
     {
         var style = MapStyle.For(preset) with
@@ -101,6 +105,10 @@ public sealed class StylePersistenceTests : IDisposable
     [Theory]
     [InlineData(MapStylePreset.OldMapBlaeu)]
     [InlineData(MapStylePreset.EngravingAquatint)]
+    [InlineData(MapStylePreset.WatercolorBigShapes)]
+    [InlineData(MapStylePreset.UkiyoeSosakuHanga)]
+    [InlineData(MapStylePreset.PrintLetterpress)]
+    [InlineData(MapStylePreset.PrintTintedLithograph)]
     public void Missing_new_effects_use_the_approved_preset_defaults(MapStylePreset preset)
     {
         var path = Path.Combine(_root, "defaults.mapproj");
@@ -109,7 +117,8 @@ public sealed class StylePersistenceTests : IDisposable
             ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
         RewriteManifest(path, m =>
         {
-            foreach (var key in new[] { "sea", "coast", "colourWash", "aquatint", "plate", "border" })
+            foreach (var key in new[] { "sea", "coast", "colourWash", "aquatint", "plate", "border",
+                "granulation", "crest", "gouge", "seaCuts", "woodGrain", "inkSqueeze", "starved", "waterLines", "stoneCrayon", "tintPlate", "scraped" })
                 m["style"]!.AsObject().Remove(key);
         });
         Assert.Equal(style, MapProjectStore.Open(path).Document.Style);

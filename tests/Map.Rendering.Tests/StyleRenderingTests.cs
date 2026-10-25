@@ -5,7 +5,7 @@ using SkiaSharp;
 namespace Map.Rendering.Tests;
 
 /// <summary>The style of a map (R09, DEC-059): off = the map as it was, ink paints it, names stay sharp, tiles = whole.</summary>
-public sealed class StyleRenderingTests
+public sealed partial class StyleRenderingTests
 {
     private const string Sha = "2222222222222222222222222222222222222222222222222222222222222222";
     private static readonly WorldBounds View = new(0, 0, 512, 384);
@@ -40,6 +40,10 @@ public sealed class StyleRenderingTests
     [InlineData(MapStylePreset.InkWetBrush)]
     [InlineData(MapStylePreset.OldMapBlaeu)]
     [InlineData(MapStylePreset.EngravingAquatint)]
+    [InlineData(MapStylePreset.WatercolorBigShapes)]
+    [InlineData(MapStylePreset.UkiyoeSosakuHanga)]
+    [InlineData(MapStylePreset.PrintLetterpress)]
+    [InlineData(MapStylePreset.PrintTintedLithograph)]
     public void Names_are_drawn_over_the_style_exactly_as_without_it(MapStylePreset preset)
     {
         using var mountain = Mountain();

@@ -12,6 +12,10 @@ public sealed class StyleExportTests
     [Theory]
     [InlineData(MapStylePreset.OldMapBlaeu)]
     [InlineData(MapStylePreset.EngravingAquatint)]
+    [InlineData(MapStylePreset.WatercolorBigShapes)]
+    [InlineData(MapStylePreset.UkiyoeSosakuHanga)]
+    [InlineData(MapStylePreset.PrintLetterpress)]
+    [InlineData(MapStylePreset.PrintTintedLithograph)]
     public async Task Png_tiles_and_300_dpi_pdf_keep_the_program_style(MapStylePreset preset)
     {
         var root = Path.Combine(Path.GetTempPath(), "map-r09-export-" + Guid.NewGuid().ToString("N"));

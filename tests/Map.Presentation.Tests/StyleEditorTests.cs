@@ -9,6 +9,10 @@ public sealed class StyleEditorTests
     [Theory]
     [InlineData(MapStylePreset.OldMapBlaeu)]
     [InlineData(MapStylePreset.EngravingAquatint)]
+    [InlineData(MapStylePreset.WatercolorBigShapes)]
+    [InlineData(MapStylePreset.UkiyoeSosakuHanga)]
+    [InlineData(MapStylePreset.PrintLetterpress)]
+    [InlineData(MapStylePreset.PrintTintedLithograph)]
     public void Preset_and_slider_release_are_each_one_undo_step(MapStylePreset preset)
     {
         var editor = new EditorViewModel(TestData.Document(), null, false,

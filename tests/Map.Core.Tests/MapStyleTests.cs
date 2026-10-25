@@ -7,11 +7,15 @@ public sealed class MapStyleTests
     [Theory]
     [InlineData(MapStylePreset.OldMapBlaeu)]
     [InlineData(MapStylePreset.EngravingAquatint)]
+    [InlineData(MapStylePreset.WatercolorBigShapes)]
+    [InlineData(MapStylePreset.UkiyoeSosakuHanga)]
+    [InlineData(MapStylePreset.PrintLetterpress)]
+    [InlineData(MapStylePreset.PrintTintedLithograph)]
     public void Approved_presets_expose_only_their_own_effects_and_normalize_each_value(MapStylePreset preset)
     {
         var original = MapStyle.For(preset);
         Assert.Equal(preset, original.Normalized().Preset);
-        Assert.DoesNotContain(StyleEffectKind.Bleed, MapStyle.EffectsOf(preset));
+        Assert.Equal(preset == MapStylePreset.WatercolorBigShapes, MapStyle.EffectsOf(preset).Contains(StyleEffectKind.Bleed));
         Assert.DoesNotContain(StyleEffectKind.Mist, MapStyle.EffectsOf(preset));
         foreach (var kind in MapStyle.EffectsOf(preset))
         {
