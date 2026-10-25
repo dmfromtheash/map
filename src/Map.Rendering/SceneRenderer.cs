@@ -261,8 +261,8 @@ public sealed class RenderOptions
     public bool DisableStyle { get; init; }
 
     /// <summary>
-    /// Raster pixels per device unit of the style pass: a print page measured in points (PDF) asks for its raster
-    /// resolution (300 dpi = 300/72), so the painted map is not one pixel per point. 1 for screens and images.
+    /// Additional style raster density. Normally 1, including PDF canvases whose RasterDpi
+    /// already supplies the requested device matrix; custom point-space canvases may ask for more.
     /// </summary>
     public double StyleRasterScale { get; init; } = 1;
 
@@ -270,10 +270,14 @@ public sealed class RenderOptions
     /// The options of the style's map pass: the same frame, the view widened by the reach of the
     /// medium's filters (so blurs meet across export tiles and the canvas edge).
     /// </summary>
-    internal RenderOptions ForStyleScene(WorldBounds? visible)
+    internal RenderOptions ForStyleScene(WorldBounds? visible, bool exactTerrain = false)
     {
         var copy = (RenderOptions)MemberwiseClone();
         copy._visibleWorld = visible;
+        // A style's overscan is a different raster than the viewport terrain cache. The print
+        // pass already needs exact land coverage; finish its scene here instead of repeatedly
+        // invalidating an async viewport refinement with a larger off-screen view.
+        if (exactTerrain) copy._terrain = null;
         return copy;
     }
 

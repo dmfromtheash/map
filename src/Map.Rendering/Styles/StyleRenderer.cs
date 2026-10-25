@@ -17,6 +17,9 @@ public static partial class StyleRenderer
 {
     /// <summary>The blurs stop growing past these radii (device pixels) when zoomed far in: bounded cost and reach.</summary>
     private const float MaxSoftSigma = 24, MaxWideSigma = 64, MaxTensorSigma = 40;
+    // A bounded screen-pixel gutter lets a moving camera sample the previous exact frame.
+    // It is separate from the medium's filter padding and is never allocated for exports.
+    private const int FollowGutter = 512;
 
     internal static bool Applies(MapDocument document, RenderOptions options) =>
         document.Style is { Enabled: true, Strength: > 0 } && !options.DisableStyle;
@@ -38,11 +41,16 @@ public static partial class StyleRenderer
         var (bare, names) = Split(document);
         var gpu = options.IsExport ? null : options.GpuContext;
         var key = KeyFor(bare, options, gpu, m, device, IsPrint(style.Preset));
+        var movingKey = key is null && (options.FastTerrain || options.FastPreview || options.LodTier != RenderLodTier.Exact)
+            ? KeyFor(bare, options, gpu, m, device, IsPrint(style.Preset), moving: true) : null;
+        var candidate = key ?? movingKey;
         var measure = StyleDiagnostics.MeasureStages;
         var sample = new StyleFrameSample { Width = device.Width, Height = device.Height };
         SKImage? painted = null;
-        if (key is not null && Kept is { } kept && kept.Key == key)
+        var destination = SKRect.Create(device.Left, device.Top, device.Width, device.Height);
+        if (key is not null && Kept is { Exact: true } kept && kept.Key == key)
         {
+            destination = PaddedDestination(device, kept.Buffers.Gutter);
             if (kept.Style == style && kept.Painted is { } reuse) { painted = reuse; sample = sample with { Reused = true }; }
             else
             {
@@ -53,19 +61,43 @@ public static partial class StyleRenderer
                 if (painted is not null) { kept.Painted?.Dispose(); kept.Painted = painted; kept.Style = style; }
             }
         }
+        else if (candidate is not null && Kept is { } moving
+            && (movingKey is not null || (moving.Exact && FollowsExactly(moving.Key.Matrix, m)))
+            && (moving.Key with { Matrix = m }) == candidate
+            && TryFollow(moving.Key.Matrix, moving.Key.Device, moving.Buffers.Gutter, m, device, out destination))
+        {
+            // All style buffers, including the painted raster, follow unchanged document content.
+            // The gutter supplies newly exposed pixels; no clamped/stretched edge is ever shown.
+            // Integral pans preserve the raster exactly even after settling. A zoom or fractional
+            // settled pan rebuilds at the new sampling grid, just as a fresh export would.
+            if (moving.Style != style || moving.Painted is null)
+            {
+                var started = measure ? Stage(gpu) : 0;
+                var shaded = Shade(moving.Buffers, style, gpu);
+                if (measure) sample = sample with { ShaderMs = Elapsed(gpu, started) };
+                if (shaded is not null) { moving.Painted?.Dispose(); moving.Painted = shaded; moving.Style = style; }
+            }
+            painted = moving.Painted;
+            sample = sample with { Reused = true, Followed = true };
+        }
         else
         {
             if (gpu is not null) DropKept();
-            var buffers = Buffers(bare, options, gpu, m, device, IsPrint(style.Preset), drawScene, measure, ref sample);
+            var buffers = Buffers(bare, options, gpu, m, device, IsPrint(style.Preset),
+                candidate is not null ? FollowGutter : 0, drawScene, measure, ref sample);
             if (buffers is not null)
             {
+                destination = PaddedDestination(device, buffers.Gutter);
                 var started = measure ? Stage(gpu) : 0;
                 painted = Shade(buffers, style, gpu);
                 if (measure) sample = sample with { ShaderMs = Elapsed(gpu, started) };
                 // A frame still waiting for refined terrain, detail tiles or hex chunks is drawn once and not kept.
-                if (painted is not null && key is not null
-                    && options.Stats is { TerrainRefinementsPending: 0, DetailTilesPending: 0, HexChunksPending: 0 })
-                    Kept = new KeptFrame(key, buffers) { Style = style, Painted = painted };
+                if ((measure || StyleDiagnostics.CollectFrames) && options.Stats is { } stats)
+                    sample = sample with { PendingTerrain = stats.TerrainRefinementsPending, PendingDetails = stats.DetailTilesPending,
+                        PendingHex = stats.HexChunksPending, MissingAssets = stats.MissingAssets };
+                if (painted is not null && candidate is not null
+                    && options.Stats is { TerrainRefinementsPending: 0, DetailTilesPending: 0, HexChunksPending: 0, MissingAssets: 0 })
+                    Kept = new KeptFrame(candidate, buffers) { Style = style, Painted = painted, Exact = key is not null };
                 else buffers.Dispose();
             }
         }
@@ -76,10 +108,11 @@ public static partial class StyleRenderer
         {
             canvas.Save();
             canvas.ResetMatrix();
-            canvas.DrawImage(painted, SKRect.Create(device.Left, device.Top, device.Width, device.Height),
+            canvas.DrawImage(painted, destination,
                 new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear));
             canvas.Restore();
-            if (measure) StyleDiagnostics.Samples.Enqueue(sample with { CompositeMs = Elapsed(gpu, composite) });
+            if (measure || StyleDiagnostics.CollectFrames)
+                StyleDiagnostics.Samples.Enqueue(sample with { CompositeMs = measure ? Elapsed(gpu, composite) : 0 });
         }
         finally
         {
@@ -89,10 +122,10 @@ public static partial class StyleRenderer
     }
 
     /// <summary>The map of one view and the medium's buffers made from it, in the padded raster.</summary>
-    private sealed record FrameBuffers(SKImage Scene, SKImage Tensor, SKImage Soft, SKImage Wide, int Margin,
-        SKPoint Origin, SKPoint DocPerPx, float PxPerDoc, SKSize DocumentSize, PrintBuffers? Print) : IDisposable
+    private sealed record FrameBuffers(SKImage Scene, SKImage? Tensor, SKImage? Soft, SKImage? Wide, int Margin,
+        SKPoint Origin, SKPoint DocPerPx, float PxPerDoc, SKSize DocumentSize, PrintBuffers? Print, int Gutter) : IDisposable
     {
-        public void Dispose() { Scene.Dispose(); Tensor.Dispose(); Soft.Dispose(); Wide.Dispose(); Print?.Dispose(); }
+        public void Dispose() { Scene.Dispose(); Tensor?.Dispose(); Soft?.Dispose(); Wide?.Dispose(); Print?.Dispose(); }
     }
 
     /// <summary>The buffers of the canvas's last view and its painted frame (render thread only).</summary>
@@ -100,6 +133,7 @@ public static partial class StyleRenderer
     {
         public MapStyle? Style { get; set; }
         public SKImage? Painted { get; set; }
+        public bool Exact { get; init; }
     }
 
     /// <summary>What the buffers depend on (the style itself is not part of it).</summary>
@@ -123,10 +157,12 @@ public static partial class StyleRenderer
     /// The key of a view whose buffers may be kept, or null when they are made afresh: the export, a gesture, a moving
     /// camera, a living hex world, a lit map (the Свет section keeps its own frame; a torch flickers every frame).
     /// </summary>
-    private static FrameKey? KeyFor(MapDocument bare, RenderOptions options, GRContext? gpu, SKMatrix m, SKRectI device, bool print)
+    private static FrameKey? KeyFor(MapDocument bare, RenderOptions options, GRContext? gpu, SKMatrix m, SKRectI device,
+        bool print, bool moving = false)
     {
-        if (gpu is null || options.IsExport || options.Stats is null || options.FastTerrain || options.FastPreview
-            || options.LodTier != RenderLodTier.Exact || options.Preview is not null || options.MaskEditLayerId is not null
+        if (gpu is null || options.IsExport || options.Stats is null
+            || (!moving && (options.FastTerrain || options.FastPreview || options.LodTier != RenderLodTier.Exact))
+            || options.Preview is not null || options.MaskEditLayerId is not null
             || options.ObjectOverrides is { Count: > 0 } || options.RiverOverrides is { Count: > 0 } || options.RoadOverrides is { Count: > 0 }
             || options.PlacementPreviewObjects is { Count: > 0 }
             // The canvas asks for ambient frames whenever its window is alive; only a hex world actually changes in them.
@@ -139,10 +175,11 @@ public static partial class StyleRenderer
     }
 
     private static FrameBuffers? Buffers(MapDocument bare, RenderOptions options, GRContext? gpu, SKMatrix m, SKRectI device,
-        bool print, Action<SKCanvas, MapDocument, RenderOptions> drawScene, bool measure, ref StyleFrameSample sample)
+        bool print, int gutter, Action<SKCanvas, MapDocument, RenderOptions> drawScene, bool measure, ref StyleFrameSample sample)
     {
         var stage = measure ? Stage(gpu) : 0;
-        // A print page (PDF, measured in points) is painted at the raster resolution asked for, not one pixel per point.
+        // Extra density for callers with a non-device raster. Native PDF writers already set
+        // RasterDpi=300 (Skia supplies that device matrix), so they and the editor pass 1 here.
         var raster = (float)Math.Clamp(options.StyleRasterScale, 1, 8);
         float sx = m.ScaleX * raster, sy = m.ScaleY * raster;
         var scale = (sx + sy) / 2;
@@ -152,45 +189,50 @@ public static partial class StyleRenderer
         // Coast distances saturate at 255 document pixels in the approved prototypes. An export
         // tile must see that far outside itself, otherwise a nearby off-tile island creates a seam.
         if (print) margin = Math.Max(margin, (int)Math.Ceiling(260 * scale) + 4);
-        int w = (int)Math.Ceiling(device.Width * raster) + 2 * margin, h = (int)Math.Ceiling(device.Height * raster) + 2 * margin;
+        var padding = margin + gutter;
+        int w = (int)Math.Ceiling(device.Width * raster) + 2 * padding, h = (int)Math.Ceiling(device.Height * raster) + 2 * padding;
         // Padded raster pixel (0,0) is device pixel (Left, Top) less the margin, at the raster scale.
-        var toPadded = SKMatrix.Concat(SKMatrix.CreateTranslation(margin, margin),
+        var toPadded = SKMatrix.Concat(SKMatrix.CreateTranslation(padding, padding),
             SKMatrix.Concat(SKMatrix.CreateScale(raster, raster), SKMatrix.CreateTranslation(-device.Left, -device.Top)));
         var paddedMatrix = SKMatrix.Concat(toPadded, m);
         WorldBounds? visible = options.VisibleWorld is { } v
-            ? new WorldBounds(v.Left - margin / sx, v.Top - margin / sy, v.Right + margin / sx, v.Bottom + margin / sy)
+            ? new WorldBounds(v.Left - padding / sx, v.Top - padding / sy, v.Right + padding / sx, v.Bottom + padding / sy)
             : null;
 
         using var sceneSurface = NewSurface(gpu, w, h, SKColorType.Rgba8888);
         if (sceneSurface is null) return null;
         sceneSurface.Canvas.Clear(SKColors.Transparent);
         sceneSurface.Canvas.SetMatrix(paddedMatrix);
-        drawScene(sceneSurface.Canvas, bare, options.ForStyleScene(visible));
+        drawScene(sceneSurface.Canvas, bare, options.ForStyleScene(visible, exactTerrain: print));
         var scene = sceneSurface.Snapshot();
         if (measure) { sample = sample with { SceneMs = Elapsed(gpu, stage) }; stage = Stage(gpu); }
 
-        var tensor = Tensor(scene, gpu, tensorSigma);
+        // Print has its own mountain tensor/line/facet buffers. Do not allocate the unused ink
+        // tensor and scene blurs as well (especially the F16 tensor in the camera gutter).
+        var tensor = print ? null : Tensor(scene, gpu, tensorSigma);
         if (measure) { sample = sample with { TensorMs = Elapsed(gpu, stage) }; stage = Stage(gpu); }
-        var softImage = Blurred(scene, gpu, soft);
+        var softImage = print ? null : Blurred(scene, gpu, soft);
         if (measure) { sample = sample with { SoftMs = Elapsed(gpu, stage) }; stage = Stage(gpu); }
-        var wideImage = Blurred(scene, gpu, wide);
+        var wideImage = print ? null : Blurred(scene, gpu, wide);
         if (measure) sample = sample with { WideMs = Elapsed(gpu, stage) };
-        if (tensor is null || softImage is null || wideImage is null)
+        if (!print && (tensor is null || softImage is null || wideImage is null))
         {
             scene.Dispose(); tensor?.Dispose(); softImage?.Dispose(); wideImage?.Dispose();
             return null;
         }
         // The document point of the padded raster's top-left pixel, and document units per raster pixel on each axis.
         var origin = new SKPoint(-paddedMatrix.TransX / paddedMatrix.ScaleX, -paddedMatrix.TransY / paddedMatrix.ScaleY);
+        var printStarted = measure && print ? Stage(gpu) : 0;
         var printBuffers = print ? BuildPrintBuffers(bare, options, gpu, paddedMatrix, w, h, scale, visible, drawScene) : null;
+        if (measure && print) sample = sample with { PrintMs = Elapsed(gpu, printStarted) };
         if (print && printBuffers is null)
         {
-            scene.Dispose(); tensor.Dispose(); softImage.Dispose(); wideImage.Dispose();
+            scene.Dispose(); tensor?.Dispose(); softImage?.Dispose(); wideImage?.Dispose();
             return null;
         }
         return new FrameBuffers(scene, tensor, softImage, wideImage, margin, origin,
             new SKPoint(1 / paddedMatrix.ScaleX, 1 / paddedMatrix.ScaleY), scale,
-            new SKSize((float)bare.Canvas.Width, (float)bare.Canvas.Height), printBuffers);
+            new SKSize((float)bare.Canvas.Width, (float)bare.Canvas.Height), printBuffers, gutter);
     }
 
     /// <summary>The medium's blur radii at a view scale, bounded when zoomed far in.</summary>
@@ -206,7 +248,7 @@ public static partial class StyleRenderer
         using var shader = buffers.Print is { } p && IsPrint(style.Preset)
             ? PrintShader.Build(buffers.Scene, p.Mountains, p.Geo, p.Tensor, p.Height, p.Lines, p.Faces,
                 buffers.Origin, buffers.DocPerPx, buffers.DocumentSize, style)
-            : InkShader.Build(buffers.Scene, buffers.Tensor, buffers.Soft, buffers.Wide, buffers.Origin,
+            : InkShader.Build(buffers.Scene, buffers.Tensor!, buffers.Soft!, buffers.Wide!, buffers.Origin,
                 buffers.DocPerPx, buffers.PxPerDoc, style);
         using var output = NewSurface(gpu, w, h, SKColorType.Rgba8888);
         if (output is null) return null;

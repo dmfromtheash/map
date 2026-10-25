@@ -1,5 +1,12 @@
 using Map.Core.Documents;
 using Map.Rendering.Styles;
+using Map.Presentation.ViewModels;
+using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
+using Avalonia.Interactivity;
+using Avalonia.VisualTree;
+using Map.Rendering;
+using SkiaSharp;
 
 namespace Map.Performance;
 
@@ -23,6 +30,7 @@ public sealed partial class PaintPerfApplication
         await Settle();
         var measure = System.Environment.GetEnvironmentVariable("MAP_STYLE_STAGES") != "0";
         StyleDiagnostics.MeasureStages = measure;
+        StyleDiagnostics.CollectFrames = true;
         _report.Environment["style/stages"] = measure.ToString();
         _report.Environment["style/window"] = $"{_window.Bounds.Width}x{_window.Bounds.Height} DIP at {_window.Position}; scaling={_window.RenderScaling}";
         _report.Environment["style/target-pixels"] = $"{width}x{height}";
@@ -63,11 +71,78 @@ public sealed partial class PaintPerfApplication
                     ReportStyle(name + "/pan", _editor.Style.Enabled);
                 }
             }
+            // A focused native scenario after measurement (not a UI tour). Only the small map
+            // needs it; measured routes keep exactly the same panel/workload as the baseline.
+            if (EnvNumber("MAP_NEW_ART_OBJECTS", 1500) == 40) await VerifyStylePanel();
         }
         finally
         {
             StyleDiagnostics.MeasureStages = false;
+            StyleDiagnostics.CollectFrames = false;
             StyleDiagnostics.Samples.Clear();
+        }
+    }
+
+    private async Task VerifyStylePanel()
+    {
+        _view.ShowPanelSection(PanelSection.Styles);
+        await Settle();
+        T Find<T>(string name) where T : Control => _view.GetVisualDescendants().OfType<T>().Single(c => c.Name == name);
+        foreach (var preset in new[] { MapStylePreset.OldMapBlaeu, MapStylePreset.EngravingAquatint })
+        {
+            var button = Find<ToggleButton>("StylePreset" + preset);
+            button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            await Settle();
+            var correct = _editor.Style.Preset == preset && button.IsChecked == true;
+            foreach (var kind in Enum.GetValues<StyleEffectKind>())
+                correct &= Find<Grid>("Style" + kind + "Row").IsVisible == MapStyle.EffectsOf(preset).Contains(kind);
+            var toggle = Find<CheckBox>("StyleCoastToggle");
+            toggle.IsChecked = false; toggle.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            correct &= !_editor.Style.Coast.Enabled;
+            _editor.Undo(); await Settle();
+            correct &= _editor.Style.Coast.Enabled && toggle.IsChecked == true;
+            _report.Checks["style-panel/" + preset] = correct;
+            await CompareStyleScreenAndExport(preset);
+        }
+    }
+
+    private async Task CompareStyleScreenAndExport(MapStylePreset preset)
+    {
+        await TimedRefined();
+        using var gpu = await _view.Canvas.CaptureGpuFrameForSmokeAsync();
+        var viewport = _editor.Session.Viewport;
+        var deviceScale = gpu.Width / _view.Canvas.Bounds.Width;
+        var scale = viewport.Scale * deviceScale;
+        using var cpu = SKSurface.Create(new SKImageInfo(gpu.Width, gpu.Height))!;
+        cpu.Canvas.Scale((float)scale);
+        cpu.Canvas.Translate((float)-viewport.OffsetX, (float)-viewport.OffsetY);
+        SceneRenderer.Render(cpu.Canvas, _editor.Session.Document, new RenderOptions
+        {
+            IsExport = true, ViewScale = scale, Stamps = _editor.StampImages,
+            VisibleWorld = new WorldBounds(viewport.OffsetX, viewport.OffsetY,
+                viewport.OffsetX + gpu.Width / scale, viewport.OffsetY + gpu.Height / scale),
+        });
+        using var image = cpu.Snapshot();
+        var a = gpu;
+        using var b = SKBitmap.FromImage(image);
+        long sum = 0; var worst = 0; var samples = 0; var off = 0;
+        for (var y = 0; y < a.Height; y += 2)
+        for (var x = 0; x < a.Width; x += 2)
+        {
+            var p = a.GetPixel(x, y); var q = b.GetPixel(x, y);
+            var dr = Math.Abs(p.Red - q.Red); var dg = Math.Abs(p.Green - q.Green); var db = Math.Abs(p.Blue - q.Blue);
+            var d = Math.Max(dr, Math.Max(dg, db));
+            sum += dr + dg + db; worst = Math.Max(worst, d); samples++; if (d > 8) off++;
+        }
+        _report.Environment["style-screen-export/" + preset] =
+            $"{gpu.Width}x{gpu.Height}; scale={scale:0.###}; mean RGB delta={sum / (3.0 * samples):0.###}; max={worst}; delta>8={off}/{samples}";
+        using var screenImage = SKImage.FromBitmap(gpu);
+        foreach (var (tag, frame) in new[] { ("screen", screenImage), ("export", image) })
+        {
+            var path = Path.ChangeExtension(Options.OutputPath, $".{preset}-{tag}.png");
+            using var data = frame.Encode(SKEncodedImageFormat.Png, 100);
+            File.WriteAllBytes(path, data.ToArray());
+            _report.Frames.Add(path);
         }
     }
 
@@ -75,7 +150,6 @@ public sealed partial class PaintPerfApplication
     {
         var allSamples = StyleDiagnostics.Samples.ToArray();
         StyleDiagnostics.Samples.Clear();
-        if (!StyleDiagnostics.MeasureStages) return;
         // Asset/UI previews also use StyleRenderer. Only the benchmark canvas belongs here.
         var width = (int)EnvNumber("MAP_PAINT_W", 2048);
         var height = (int)EnvNumber("MAP_PAINT_H", 1095);
@@ -87,6 +161,10 @@ public sealed partial class PaintPerfApplication
                 string.Join(',', allSamples.Select(s => $"{s.Width}x{s.Height}").Distinct()));
             return;
         }
+        var reuse = $"reused={samples.Count(s => s.Reused)}/{samples.Length}; followed={samples.Count(s => s.Followed)}/{samples.Length}; " +
+            $"pending terrain/details/hex/missing={samples.Max(s => s.PendingTerrain)}/{samples.Max(s => s.PendingDetails)}/{samples.Max(s => s.PendingHex)}/{samples.Max(s => s.MissingAssets)}";
+        _report.Environment["style-reuse/" + route] = reuse;
+        if (!StyleDiagnostics.MeasureStages) { Console.WriteLine($"    {route} style: {reuse}"); return; }
         static string Stat(IEnumerable<double> values)
         {
             var sorted = values.Order().ToArray();
@@ -94,7 +172,7 @@ public sealed partial class PaintPerfApplication
         }
         var line = $"pass P50/P95/max={Stat(samples.Select(s => s.PassMs))} scene={Stat(samples.Select(s => s.SceneMs))} " +
             $"tensor={Stat(samples.Select(s => s.TensorMs))} soft={Stat(samples.Select(s => s.SoftMs))} " +
-            $"wide={Stat(samples.Select(s => s.WideMs))} shader={Stat(samples.Select(s => s.ShaderMs))} " +
+            $"wide={Stat(samples.Select(s => s.WideMs))} print={Stat(samples.Select(s => s.PrintMs))} shader={Stat(samples.Select(s => s.ShaderMs))} " +
             $"composite={Stat(samples.Select(s => s.CompositeMs))} reused={samples.Count(s => s.Reused)}/{samples.Length} " +
             $"pixels={string.Join(',', samples.Select(s => $"{s.Width}x{s.Height}").Distinct())}";
         _report.Environment["style/" + route] = line;

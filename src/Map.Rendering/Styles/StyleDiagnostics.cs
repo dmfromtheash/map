@@ -9,6 +9,8 @@ namespace Map.Rendering.Styles;
 public static class StyleDiagnostics
 {
     public static bool MeasureStages { get; set; }
+    /// <summary>Collect reuse/follow counters without GPU waits (native FPS profiles).</summary>
+    public static bool CollectFrames { get; set; }
     public static ConcurrentQueue<StyleFrameSample> Samples { get; } = new();
 }
 
@@ -16,5 +18,11 @@ public static class StyleDiagnostics
 public readonly record struct StyleFrameSample(double SceneMs, double TensorMs, double SoftMs,
     double WideMs, double ShaderMs, double CompositeMs, bool Reused, int Width, int Height)
 {
-    public double PassMs => TensorMs + SoftMs + WideMs + ShaderMs + CompositeMs;
+    public bool Followed { get; init; }
+    public double PrintMs { get; init; }
+    public int PendingTerrain { get; init; }
+    public int PendingDetails { get; init; }
+    public int PendingHex { get; init; }
+    public int MissingAssets { get; init; }
+    public double PassMs => TensorMs + SoftMs + WideMs + PrintMs + ShaderMs + CompositeMs;
 }
