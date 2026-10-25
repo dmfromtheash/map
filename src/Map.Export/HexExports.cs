@@ -273,7 +273,8 @@ public static partial class HexPrintExporter
                             IncludeExportGrids = options.IncludeGrid,
                             VisibleWorld = new WorldBounds(view.Left - bleed / scale, view.Top - bleed / scale, view.Right + bleed / scale, view.Bottom + bleed / scale),
                             ViewScale = scale * 300 / 72.0,
-                            StyleRasterScale = 300 / 72.0,
+                            // RasterDpi already supplies the PDF canvas's device-pixel matrix.
+                            StyleRasterScale = 1,
                             HexPlayerView = scene.Players,
                             HexLevel = scene.HexLevel,
                             TileCache = tiles,
