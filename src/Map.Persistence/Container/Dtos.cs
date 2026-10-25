@@ -55,6 +55,12 @@ internal sealed class MapStyleDto
     [JsonPropertyName("pen")] public LightingEffectDto? Pen { get; set; }
     [JsonPropertyName("paper")] public LightingEffectDto? Paper { get; set; }
     [JsonPropertyName("contour")] public LightingEffectDto? Contour { get; set; }
+    [JsonPropertyName("sea")] public LightingEffectDto? Sea { get; set; }
+    [JsonPropertyName("coast")] public LightingEffectDto? Coast { get; set; }
+    [JsonPropertyName("colourWash")] public LightingEffectDto? ColourWash { get; set; }
+    [JsonPropertyName("aquatint")] public LightingEffectDto? Aquatint { get; set; }
+    [JsonPropertyName("plate")] public LightingEffectDto? Plate { get; set; }
+    [JsonPropertyName("border")] public LightingEffectDto? Border { get; set; }
 }
 
 /// <summary>Light and time of day of the map (schema v28, DEC-057).</summary>

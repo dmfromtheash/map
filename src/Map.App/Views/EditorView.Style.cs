@@ -32,18 +32,26 @@ public sealed partial class EditorView
         ToolTip.SetTip(master, "Выключено — карта рисуется как без стиля. Настройки ниже сохраняются.");
 
         var title = new TextBlock { Text = "Стиль карты", FontSize = 17, FontWeight = FontWeight.SemiBold }.Classed("role-title");
-        ToolTip.SetTip(title, "Вся карта в технике туши; подписи остаются чёткими. Каждое изменение — один шаг отмены (Ctrl+Z).");
+        ToolTip.SetTip(title, "Вся карта в выбранной технике; подписи остаются чёткими. Каждое изменение — один шаг отмены (Ctrl+Z).");
 
         var presets = new StackPanel { Spacing = 4 }.Named("StylePresets");
+        var families = new Dictionary<string, StackPanel>();
         foreach (var preset in Enum.GetValues<MapStylePreset>())
         {
+            var family = EditorViewModel.StyleFamilyTitle(preset);
+            if (!families.TryGetValue(family, out var familyPresets))
+            {
+                familyPresets = new StackPanel { Spacing = 4 };
+                families.Add(family, familyPresets);
+                presets.Children.Add(Group(family, familyPresets));
+            }
             var captured = preset;
             var button = new ToggleButton
             {
                 Content = EditorViewModel.PresetTitle(preset), HorizontalAlignment = HorizontalAlignment.Stretch,
                 HorizontalContentAlignment = HorizontalAlignment.Left, Padding = new Thickness(10, 6),
             }.Named("StylePreset" + preset);
-            AutomationProperties.SetName(button, "Применить стиль: тушь, " + EditorViewModel.PresetTitle(preset));
+            AutomationProperties.SetName(button, "Применить стиль: " + family + ", " + EditorViewModel.PresetTitle(preset));
             ToolTip.SetTip(button, PresetHint(preset) + " Щелчок применяет стиль с его настройками — один шаг отмены.");
             button.Click += (_, _) => { _editor.ApplyStylePreset(captured); SyncStyleSection(); };
             _styleSyncs.Add(() =>
@@ -52,13 +60,13 @@ public sealed partial class EditorView
                 button.IsChecked = on;
                 Ui.SetClass(button, "active", on);
             });
-            presets.Children.Add(button);
+            familyPresets.Children.Add(button);
         }
 
         var strength = ValueRow("StyleStrengthSlider", "StyleStrengthBox", null, "Сила стиля", 0, 100, "%",
             () => _editor.ShownStyle.Strength * 100,
             (value, commit) => { _editor.SetStyleStrength(value / 100, commit); if (commit) SyncStyleSection(); },
-            step: 1, defaultValue: 100, description: "100 — вся карта в технике туши, меньше — сквозь тушь проступают цвета карты.");
+            step: 1, defaultValue: 100, description: "100 — вся карта в выбранной технике, меньше — проступают исходные цвета карты.");
 
         var effects = new StackPanel { Spacing = 0 };
         foreach (var kind in Enum.GetValues<StyleEffectKind>())
@@ -71,7 +79,7 @@ public sealed partial class EditorView
             Children =
             {
                 title, master,
-                Group("Тушь", presets),
+                presets,
                 Group("Сила", strength),
                 Group("Эффекты", effects),
             },
@@ -86,6 +94,8 @@ public sealed partial class EditorView
 
     private static string PresetHint(MapStylePreset preset) => preset switch
     {
+        MapStylePreset.OldMapBlaeu => "Атлас Блау: медная гравюра с ручной раскраской, линии моря, зелёная полоса берега, вержированная бумага.",
+        MapStylePreset.EngravingAquatint => "Офорт: контур и главные линии иглой, две ступени акватинты на теневых склонах, бистр и тиснение доски.",
         MapStylePreset.InkPenHatching => "Перо по белой бумаге: чёрный контур и штриховка по форме гор, тон — густотой и перекрёстными штрихами.",
         MapStylePreset.InkPenStipple => "Перо, пуантилизм: тон складывается из точек туши, контур сохраняется.",
         _ => "Японская мокрая кисть по рисовой бумаге: несколько разбавлений туши, много белой бумаги, растекание, кайма, туман.",
@@ -93,6 +103,12 @@ public sealed partial class EditorView
 
     private static string StyleEffectHint(StyleEffectKind kind) => kind switch
     {
+        StyleEffectKind.Sea => "Линии моря у Блау; ступени акватинты с белой кромкой у офорта.",
+        StyleEffectKind.Coast => "Печатная линия вдоль берега и берегов рек.",
+        StyleEffectKind.ColourWash => "Зелёная раскраска у берега, охра на горах, синий цвет рек.",
+        StyleEffectKind.Aquatint => "Две ступени тона с зерном канифоли на теневых гранях гор.",
+        StyleEffectKind.Plate => "След края печатной доски на бумаге.",
+        StyleEffectKind.Border => "Двойная рамка и шкала чёрных и белых делений атласа Блау.",
         StyleEffectKind.Strokes => "Волоски кисти ложатся вдоль склонов и форм карты.",
         StyleEffectKind.Bleed => "Мокрая тушь затекает в волокна бумаги за край мазка.",
         StyleEffectKind.Edges => "Где мокрое пятно высохло, по его краю собралась тёмная кайма пигмента.",

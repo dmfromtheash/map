@@ -41,9 +41,22 @@ public sealed record MapStyle
     /// <summary>The owner's ink contour of the mountains, brought back over the style.</summary>
     public StyleEffect Contour { get; init; } = new(true, 0.9);
 
+    public StyleEffect Sea { get; init; } = new(true, 1);
+    public StyleEffect Coast { get; init; } = new(true, 1);
+    public StyleEffect ColourWash { get; init; } = new(true, 1);
+    public StyleEffect Aquatint { get; init; } = new(true, 1);
+    public StyleEffect Plate { get; init; } = new(true, 1);
+    public StyleEffect Border { get; init; } = new(true, 1);
+
     /// <summary>The preset as it comes, every effect at the strength the preset was tuned with.</summary>
     public static MapStyle For(MapStylePreset preset) => preset switch
     {
+        MapStylePreset.OldMapBlaeu or MapStylePreset.EngravingAquatint => new MapStyle
+        {
+            Preset = preset,
+            Strokes = new(false, 0), Bleed = new(false, 0), Edges = new(false, 0), DryBrush = new(false, 0),
+            Mist = new(false, 0), Pen = new(true, 1), Paper = new(true, 1), Contour = new(true, 1),
+        },
         MapStylePreset.InkPenHatching => new MapStyle
         {
             Preset = preset,
@@ -62,6 +75,12 @@ public sealed record MapStyle
     /// <summary>The effects a preset actually uses: the panel shows only these.</summary>
     public static IReadOnlyList<StyleEffectKind> EffectsOf(MapStylePreset preset) => preset switch
     {
+        MapStylePreset.OldMapBlaeu =>
+            [StyleEffectKind.Pen, StyleEffectKind.Contour, StyleEffectKind.ColourWash, StyleEffectKind.Sea,
+             StyleEffectKind.Coast, StyleEffectKind.Paper, StyleEffectKind.Plate, StyleEffectKind.Border],
+        MapStylePreset.EngravingAquatint =>
+            [StyleEffectKind.Contour, StyleEffectKind.Pen, StyleEffectKind.Aquatint, StyleEffectKind.Sea,
+             StyleEffectKind.Coast, StyleEffectKind.Paper, StyleEffectKind.Plate],
         MapStylePreset.InkPenHatching => [StyleEffectKind.Pen, StyleEffectKind.Paper, StyleEffectKind.Contour],
         MapStylePreset.InkPenStipple => [StyleEffectKind.Pen, StyleEffectKind.Paper, StyleEffectKind.Contour],
         _ =>
@@ -80,6 +99,12 @@ public sealed record MapStyle
         StyleEffectKind.Mist => Mist,
         StyleEffectKind.Pen => Pen,
         StyleEffectKind.Paper => Paper,
+        StyleEffectKind.Sea => Sea,
+        StyleEffectKind.Coast => Coast,
+        StyleEffectKind.ColourWash => ColourWash,
+        StyleEffectKind.Aquatint => Aquatint,
+        StyleEffectKind.Plate => Plate,
+        StyleEffectKind.Border => Border,
         _ => Contour,
     };
 
@@ -92,6 +117,12 @@ public sealed record MapStyle
         StyleEffectKind.Mist => this with { Mist = effect },
         StyleEffectKind.Pen => this with { Pen = effect },
         StyleEffectKind.Paper => this with { Paper = effect },
+        StyleEffectKind.Sea => this with { Sea = effect },
+        StyleEffectKind.Coast => this with { Coast = effect },
+        StyleEffectKind.ColourWash => this with { ColourWash = effect },
+        StyleEffectKind.Aquatint => this with { Aquatint = effect },
+        StyleEffectKind.Plate => this with { Plate = effect },
+        StyleEffectKind.Border => this with { Border = effect },
         _ => this with { Contour = effect },
     };
 
@@ -102,6 +133,8 @@ public sealed record MapStyle
         Strength = MapLighting.Clamp01(Strength),
         Strokes = Strokes.Normalized(), Bleed = Bleed.Normalized(), Edges = Edges.Normalized(), DryBrush = DryBrush.Normalized(),
         Mist = Mist.Normalized(), Pen = Pen.Normalized(), Paper = Paper.Normalized(), Contour = Contour.Normalized(),
+        Sea = Sea.Normalized(), Coast = Coast.Normalized(), ColourWash = ColourWash.Normalized(),
+        Aquatint = Aquatint.Normalized(), Plate = Plate.Normalized(), Border = Border.Normalized(),
     };
 }
 
@@ -114,9 +147,11 @@ public enum MapStylePreset
     InkWetBrush = 0,
     InkPenHatching = 1,
     InkPenStipple = 2,
+    OldMapBlaeu = 3,
+    EngravingAquatint = 4,
 }
 
-public enum StyleEffectKind { Strokes, Bleed, Edges, DryBrush, Mist, Pen, Paper, Contour }
+public enum StyleEffectKind { Strokes, Bleed, Edges, DryBrush, Mist, Pen, Paper, Contour, Sea, Coast, ColourWash, Aquatint, Plate, Border }
 
 /// <summary>One effect of a style: its own switch and its own strength (0..1).</summary>
 public sealed record StyleEffect(bool Enabled, double Strength)

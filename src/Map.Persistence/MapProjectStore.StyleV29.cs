@@ -11,6 +11,8 @@ public static partial class MapProjectStore
         [MapStylePreset.InkWetBrush] = "ink-wet-brush",
         [MapStylePreset.InkPenHatching] = "ink-pen-hatching",
         [MapStylePreset.InkPenStipple] = "ink-pen-stipple",
+        [MapStylePreset.OldMapBlaeu] = "old-map-blaeu",
+        [MapStylePreset.EngravingAquatint] = "engraving-aquatint",
     };
 
     private static MapStyleDto? ToStyleDto(MapStyle? style)
@@ -25,6 +27,8 @@ public static partial class MapProjectStore
             Strokes = Effect(style.Strokes), Bleed = Effect(style.Bleed), Edges = Effect(style.Edges),
             DryBrush = Effect(style.DryBrush), Mist = Effect(style.Mist), Pen = Effect(style.Pen),
             Paper = Effect(style.Paper), Contour = Effect(style.Contour),
+            Sea = Effect(style.Sea), Coast = Effect(style.Coast), ColourWash = Effect(style.ColourWash),
+            Aquatint = Effect(style.Aquatint), Plate = Effect(style.Plate), Border = Effect(style.Border),
         };
     }
 
@@ -49,6 +53,9 @@ public static partial class MapProjectStore
             Edges = Effect(dto.Edges, defaults.Edges), DryBrush = Effect(dto.DryBrush, defaults.DryBrush),
             Mist = Effect(dto.Mist, defaults.Mist), Pen = Effect(dto.Pen, defaults.Pen),
             Paper = Effect(dto.Paper, defaults.Paper), Contour = Effect(dto.Contour, defaults.Contour),
+            Sea = Effect(dto.Sea, defaults.Sea), Coast = Effect(dto.Coast, defaults.Coast),
+            ColourWash = Effect(dto.ColourWash, defaults.ColourWash), Aquatint = Effect(dto.Aquatint, defaults.Aquatint),
+            Plate = Effect(dto.Plate, defaults.Plate), Border = Effect(dto.Border, defaults.Border),
         }.Normalized();
     }
 }

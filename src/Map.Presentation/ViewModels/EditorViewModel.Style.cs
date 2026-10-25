@@ -63,13 +63,32 @@ public sealed partial class EditorViewModel
 
     public static string PresetTitle(MapStylePreset preset) => preset switch
     {
+        MapStylePreset.OldMapBlaeu => "Атлас Блау",
+        MapStylePreset.EngravingAquatint => "Офорт с акватинтой",
         MapStylePreset.InkPenHatching => "Перо, штриховка",
         MapStylePreset.InkPenStipple => "Перо, точки",
         _ => "Суми-э, мокрая кисть",
     };
 
+    public static string StyleFamilyTitle(MapStylePreset preset) => preset switch
+    {
+        MapStylePreset.OldMapBlaeu => "Старая карта",
+        MapStylePreset.EngravingAquatint => "Гравюра",
+        _ => "Тушь",
+    };
+
     public static string StyleEffectTitle(StyleEffectKind kind, MapStylePreset preset = MapStylePreset.InkWetBrush) => kind switch
     {
+        StyleEffectKind.Sea => "Рисунок моря",
+        StyleEffectKind.Coast => "Линия берега",
+        StyleEffectKind.ColourWash => "Ручная раскраска",
+        StyleEffectKind.Aquatint => "Акватинта склонов",
+        StyleEffectKind.Plate => "Тиснение доски",
+        StyleEffectKind.Border => "Рамка атласа",
+        StyleEffectKind.Pen when preset == MapStylePreset.OldMapBlaeu => "Гравированные штрихи",
+        StyleEffectKind.Pen when preset == MapStylePreset.EngravingAquatint => "Свободные штрихи",
+        StyleEffectKind.Contour when preset == MapStylePreset.EngravingAquatint => "Контур и главные линии",
+        StyleEffectKind.Paper when preset is MapStylePreset.OldMapBlaeu or MapStylePreset.EngravingAquatint => "Бумага и следы печати",
         StyleEffectKind.Pen when preset == MapStylePreset.InkPenStipple => "Точки пера",
         StyleEffectKind.Strokes => "Мазки по форме",
         StyleEffectKind.Bleed => "Растекание туши",

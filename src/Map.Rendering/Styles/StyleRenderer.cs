@@ -13,7 +13,7 @@ namespace Map.Rendering.Styles;
 /// of its view while the map and the view stay (a style slider then costs only the paint pass)
 /// and the painted frame while the style stays too; the export paints every tile.
 /// </summary>
-public static class StyleRenderer
+public static partial class StyleRenderer
 {
     /// <summary>The blurs stop growing past these radii (device pixels) when zoomed far in: bounded cost and reach.</summary>
     private const float MaxSoftSigma = 24, MaxWideSigma = 64, MaxTensorSigma = 40;
@@ -37,7 +37,7 @@ public static class StyleRenderer
 
         var (bare, names) = Split(document);
         var gpu = options.IsExport ? null : options.GpuContext;
-        var key = KeyFor(bare, options, gpu, m, device);
+        var key = KeyFor(bare, options, gpu, m, device, IsPrint(style.Preset));
         var measure = StyleDiagnostics.MeasureStages;
         var sample = new StyleFrameSample { Width = device.Width, Height = device.Height };
         SKImage? painted = null;
@@ -48,7 +48,7 @@ public static class StyleRenderer
             {
                 // Only the style changed (a slider, a switch): the buffers of the view stay, the paint pass runs again.
                 var started = measure ? Stage(gpu) : 0;
-                painted = Shade(kept.Buffers, style, gpu, device);
+                painted = Shade(kept.Buffers, style, gpu);
                 if (measure) sample = sample with { ShaderMs = Elapsed(gpu, started) };
                 if (painted is not null) { kept.Painted?.Dispose(); kept.Painted = painted; kept.Style = style; }
             }
@@ -56,11 +56,11 @@ public static class StyleRenderer
         else
         {
             if (gpu is not null) DropKept();
-            var buffers = Buffers(bare, options, gpu, m, device, drawScene, measure, ref sample);
+            var buffers = Buffers(bare, options, gpu, m, device, IsPrint(style.Preset), drawScene, measure, ref sample);
             if (buffers is not null)
             {
                 var started = measure ? Stage(gpu) : 0;
-                painted = Shade(buffers, style, gpu, device);
+                painted = Shade(buffers, style, gpu);
                 if (measure) sample = sample with { ShaderMs = Elapsed(gpu, started) };
                 // A frame still waiting for refined terrain, detail tiles or hex chunks is drawn once and not kept.
                 if (painted is not null && key is not null
@@ -90,9 +90,9 @@ public static class StyleRenderer
 
     /// <summary>The map of one view and the medium's buffers made from it, in the padded raster.</summary>
     private sealed record FrameBuffers(SKImage Scene, SKImage Tensor, SKImage Soft, SKImage Wide, int Margin,
-        SKPoint Origin, SKPoint DocPerPx, float PxPerDoc) : IDisposable
+        SKPoint Origin, SKPoint DocPerPx, float PxPerDoc, SKSize DocumentSize, PrintBuffers? Print) : IDisposable
     {
-        public void Dispose() { Scene.Dispose(); Tensor.Dispose(); Soft.Dispose(); Wide.Dispose(); }
+        public void Dispose() { Scene.Dispose(); Tensor.Dispose(); Soft.Dispose(); Wide.Dispose(); Print?.Dispose(); }
     }
 
     /// <summary>The buffers of the canvas's last view and its painted frame (render thread only).</summary>
@@ -105,7 +105,7 @@ public static class StyleRenderer
     /// <summary>What the buffers depend on (the style itself is not part of it).</summary>
     private sealed record FrameKey(MapDocument Bare, SKMatrix Matrix, SKRectI Device, GRContext Gpu,
         IStampImageSource? Stamps, object? HexCursor, object? HexOverlay, int? HexLevel, int? HexGhostLevel,
-        HexPresentation Presentation, bool HexPlayer);
+        HexPresentation Presentation, bool HexPlayer, bool Print);
 
     private static KeptFrame? Kept;
 
@@ -123,7 +123,7 @@ public static class StyleRenderer
     /// The key of a view whose buffers may be kept, or null when they are made afresh: the export, a gesture, a moving
     /// camera, a living hex world, a lit map (the Свет section keeps its own frame; a torch flickers every frame).
     /// </summary>
-    private static FrameKey? KeyFor(MapDocument bare, RenderOptions options, GRContext? gpu, SKMatrix m, SKRectI device)
+    private static FrameKey? KeyFor(MapDocument bare, RenderOptions options, GRContext? gpu, SKMatrix m, SKRectI device, bool print)
     {
         if (gpu is null || options.IsExport || options.Stats is null || options.FastTerrain || options.FastPreview
             || options.LodTier != RenderLodTier.Exact || options.Preview is not null || options.MaskEditLayerId is not null
@@ -135,11 +135,11 @@ public static class StyleRenderer
             || Lighting.LightingRenderer.Applies(bare, options))
             return null;
         return new FrameKey(bare, m, device, gpu, options.Stamps, options.HexCursor, options.HexOverlay,
-            options.HexLevel, options.HexGhostLevel, options.HexPresentation, options.HexPlayerView);
+            options.HexLevel, options.HexGhostLevel, options.HexPresentation, options.HexPlayerView, print);
     }
 
     private static FrameBuffers? Buffers(MapDocument bare, RenderOptions options, GRContext? gpu, SKMatrix m, SKRectI device,
-        Action<SKCanvas, MapDocument, RenderOptions> drawScene, bool measure, ref StyleFrameSample sample)
+        bool print, Action<SKCanvas, MapDocument, RenderOptions> drawScene, bool measure, ref StyleFrameSample sample)
     {
         var stage = measure ? Stage(gpu) : 0;
         // A print page (PDF, measured in points) is painted at the raster resolution asked for, not one pixel per point.
@@ -149,6 +149,9 @@ public static class StyleRenderer
         var (soft, wide, tensorSigma) = Sigmas(scale);
         // The widest reach: three sigmas of the widest blur, the shifted samples of the bleed and the contour.
         var margin = (int)Math.Ceiling(3 * Math.Max(wide, tensorSigma + 1) + InkShader.SampleReachDocumentPixels * scale) + 4;
+        // Coast distances saturate at 255 document pixels in the approved prototypes. An export
+        // tile must see that far outside itself, otherwise a nearby off-tile island creates a seam.
+        if (print) margin = Math.Max(margin, (int)Math.Ceiling(260 * scale) + 4);
         int w = (int)Math.Ceiling(device.Width * raster) + 2 * margin, h = (int)Math.Ceiling(device.Height * raster) + 2 * margin;
         // Padded raster pixel (0,0) is device pixel (Left, Top) less the margin, at the raster scale.
         var toPadded = SKMatrix.Concat(SKMatrix.CreateTranslation(margin, margin),
@@ -179,8 +182,15 @@ public static class StyleRenderer
         }
         // The document point of the padded raster's top-left pixel, and document units per raster pixel on each axis.
         var origin = new SKPoint(-paddedMatrix.TransX / paddedMatrix.ScaleX, -paddedMatrix.TransY / paddedMatrix.ScaleY);
+        var printBuffers = print ? BuildPrintBuffers(bare, options, gpu, paddedMatrix, w, h, scale, visible, drawScene) : null;
+        if (print && printBuffers is null)
+        {
+            scene.Dispose(); tensor.Dispose(); softImage.Dispose(); wideImage.Dispose();
+            return null;
+        }
         return new FrameBuffers(scene, tensor, softImage, wideImage, margin, origin,
-            new SKPoint(1 / paddedMatrix.ScaleX, 1 / paddedMatrix.ScaleY), scale);
+            new SKPoint(1 / paddedMatrix.ScaleX, 1 / paddedMatrix.ScaleY), scale,
+            new SKSize((float)bare.Canvas.Width, (float)bare.Canvas.Height), printBuffers);
     }
 
     /// <summary>The medium's blur radii at a view scale, bounded when zoomed far in.</summary>
@@ -189,12 +199,15 @@ public static class StyleRenderer
          Math.Min(InkShader.TensorSigma * scale, MaxTensorSigma));
 
     /// <summary>The paint pass over kept or fresh buffers: the frame at its raster size.</summary>
-    private static SKImage? Shade(FrameBuffers buffers, MapStyle style, GRContext? gpu, SKRectI device)
+    private static SKImage? Shade(FrameBuffers buffers, MapStyle style, GRContext? gpu)
     {
         var w = buffers.Scene.Width - 2 * buffers.Margin;
         var h = buffers.Scene.Height - 2 * buffers.Margin;
-        using var shader = InkShader.Build(buffers.Scene, buffers.Tensor, buffers.Soft, buffers.Wide, buffers.Origin,
-            buffers.DocPerPx, buffers.PxPerDoc, style);
+        using var shader = buffers.Print is { } p && IsPrint(style.Preset)
+            ? PrintShader.Build(buffers.Scene, p.Mountains, p.Geo, p.Tensor, p.Height, p.Lines, p.Faces,
+                buffers.Origin, buffers.DocPerPx, buffers.DocumentSize, style)
+            : InkShader.Build(buffers.Scene, buffers.Tensor, buffers.Soft, buffers.Wide, buffers.Origin,
+                buffers.DocPerPx, buffers.PxPerDoc, style);
         using var output = NewSurface(gpu, w, h, SKColorType.Rgba8888);
         if (output is null) return null;
         output.Canvas.Clear(SKColors.Transparent);
