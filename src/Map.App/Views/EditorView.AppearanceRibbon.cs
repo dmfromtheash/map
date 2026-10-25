@@ -225,7 +225,10 @@ public sealed partial class EditorView
                     && LightCards.First(c => c.Key == key).Time is { } t && Math.Abs(lighting.TimeOfDay - t) < 0.02,
                 _ => style.Enabled && "style-" + style.Preset == key,
             };
+            var wasActive = view.Button.Classes.Contains("selected");
             MarkSelected(view.Button, active);
+            // The applied card scrolls into sight, however far along the row it is.
+            if (active && !wasActive) Dispatcher.UIThread.Post(() => view.Button.BringIntoView(), DispatcherPriority.Loaded);
             view.Picture.BorderThickness = new Thickness(active ? 2 : 1);
             view.Picture.BorderBrush = active
                 ? Application.Current?.FindResource("MapAccentBrush") as IBrush

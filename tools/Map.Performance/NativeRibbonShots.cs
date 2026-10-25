@@ -61,6 +61,16 @@ public sealed partial class PaintPerfApplication
         _editor.Undo(); await Settle();
         _report.Checks["ribbon/card-one-undo"] = _editor.Style is not { Enabled: true, Preset: MapStylePreset.OldMapBlaeu } || !undoBefore;
 
+        // Every preset applied from its card, one picture each (the effects column follows the preset).
+        foreach (var preset in Enum.GetValues<MapStylePreset>().Where(p => p > MapStylePreset.EngravingAquatint))
+        {
+            Find<Button>("StylePreset" + preset).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            await Task.Delay(2500);
+            await Shot("ribbon-styles-" + preset);
+            _report.Checks["ribbon/applies-" + preset] = _editor.Style is { Enabled: true } s && s.Preset == preset;
+        }
+        _editor.SetStyleEnabled(false); await Settle();
+
         Find<Button>("RibbonLightTab").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         await WaitPreviews(0);
         Find<Button>("LightCardevening").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
