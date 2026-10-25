@@ -14,6 +14,27 @@ public sealed partial class StyleRenderingTests
     }.Select(p => new object[] { p });
 
     [Theory]
+    [InlineData(MapStylePreset.WatercolorBigShapes)]
+    [InlineData(MapStylePreset.OilAllaPrima)]
+    [InlineData(MapStylePreset.OilImpastoRhythm)]
+    [InlineData(MapStylePreset.CharcoalVineStump)]
+    [InlineData(MapStylePreset.CharcoalHatching)]
+    public void Cpu_export_matches_serial_pixels_with_odd_rows_fractional_origin_and_partial_strength(MapStylePreset preset)
+    {
+        using var mountain = Mountain();
+        var doc = PainterScene(preset) with { Style = MapStyle.For(preset) with { Strength = .63 } };
+        // Odd widths exercise SIMD tail lanes; odd heights include an incomplete final band.
+        // At half scale the frame is still large enough to take the parallel export path.
+        var view = new WorldBounds(-17.25, -23.5, 495.75, 489.5);
+        foreach (var scale in new[] { .5f, 1f, 2f })
+        {
+            using var serial = Draw(doc, mountain, view, scale: scale);
+            using var export = Draw(doc, mountain, view, export: true, scale: scale);
+            Assert.True(serial.GetPixelSpan().SequenceEqual(export.GetPixelSpan()), $"{preset}/{scale}: RGBA bytes changed");
+        }
+    }
+
+    [Theory]
     [MemberData(nameof(PainterPresets))]
     public void Painter_tiles_and_screen_export_agree_at_half_full_and_double_scale(MapStylePreset preset)
     {

@@ -100,8 +100,11 @@ public sealed partial class StyleMockupDump
         var island = Land("Остров", (1280, 760, 1120, 560, 0.08, 7));
         var river = new River
         {
+            // Natural banks use river/channel GUIDs as seeds. Keep independent dump runs comparable.
+            Id = Guid.Parse("09900000-0000-4000-8000-000000000001"),
             Name = "Серебрянка", Style = RiverStyle.Natural() with { TextureId = null }, Level = 1,
-            Channels = [RiverEditor.NewChannel([new(1300, 900), new(1180, 1010), new(1010, 1080), new(820, 1170), new(600, 1260)], 30)],
+            Channels = [RiverEditor.NewChannel([new(1300, 900), new(1180, 1010), new(1010, 1080), new(820, 1170), new(600, 1260)], 30)
+                with { Id = Guid.Parse("09900000-0000-4000-8000-000000000002") }],
         };
         var water = new ObjectLayer(LayerId.New(), "Реки", true, false, 1, []) { Rivers = [river] };
         var objects = new List<SceneObject>();

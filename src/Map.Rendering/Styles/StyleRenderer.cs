@@ -90,7 +90,7 @@ public static partial class StyleRenderer
             {
                 destination = PaddedDestination(device, buffers.Gutter);
                 var started = measure ? Stage(gpu) : 0;
-                painted = Shade(buffers, style, gpu);
+                painted = Shade(buffers, style, gpu, options.IsExport);
                 if (measure) sample = sample with { ShaderMs = Elapsed(gpu, started) };
                 // A frame still waiting for refined terrain, detail tiles or hex chunks is drawn once and not kept.
                 if ((measure || StyleDiagnostics.CollectFrames) && options.Stats is { } stats)
@@ -246,7 +246,7 @@ public static partial class StyleRenderer
          Math.Min(InkShader.TensorSigma * scale, MaxTensorSigma));
 
     /// <summary>The paint pass over kept or fresh buffers: the frame at its raster size.</summary>
-    private static SKImage? Shade(FrameBuffers buffers, MapStyle style, GRContext? gpu)
+    private static SKImage? Shade(FrameBuffers buffers, MapStyle style, GRContext? gpu, bool isExport = false)
     {
         var w = buffers.Scene.Width - 2 * buffers.Margin;
         var h = buffers.Scene.Height - 2 * buffers.Margin;
@@ -265,6 +265,10 @@ public static partial class StyleRenderer
                 buffers.Origin, buffers.DocPerPx, buffers.DocumentSize, style)
             : InkShader.Build(buffers.Scene, buffers.Tensor!, buffers.Soft!, buffers.Wide!, buffers.Origin,
                 buffers.DocPerPx, buffers.PxPerDoc, style);
+        if (isExport && gpu is null && Environment.ProcessorCount > 1 && (long)w * h >= 256 * 256
+            && (style.Preset == MapStylePreset.WatercolorBigShapes || OilShader.Applies(style.Preset)
+                || CharcoalShader.Applies(style.Preset)))
+            return ShadeCpuBands(shader, w, h, buffers.Margin);
         using var output = NewSurface(gpu, w, h, SKColorType.Rgba8888);
         if (output is null) return null;
         output.Canvas.Clear(SKColors.Transparent);
