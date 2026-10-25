@@ -57,6 +57,27 @@ public static partial class StyleRenderer
         var mountains = RenderPart(parts.Mountains);
         using var land = RenderPart(parts.Land);
         using var rivers = RenderPart(parts.Rivers);
+        var geo = BuildCoastField(land, rivers, w, h, scale);
+        using var white = NewSurface(gpu, w, h, SKColorType.Rgba8888)!;
+        white.Canvas.Clear(SKColors.White); white.Canvas.DrawImage(mountains, 0, 0);
+        using var onWhite = white.Snapshot();
+        var tensor = Tensor(onWhite, gpu, Math.Min(5 * scale, MaxTensorSigma));
+        var lines = Blurred(mountains, gpu, Math.Min(2 * scale, MaxSoftSigma));
+        var faces = Blurred(mountains, gpu, Math.Min(8 * scale, MaxWideSigma));
+        using var heightRaw = NewSurface(gpu, w, h, SKColorType.Rgba8888)!;
+        heightRaw.Canvas.Clear(SKColors.Black);
+        heightRaw.Canvas.SetMatrix(matrix);
+        DrawPrintHeights(heightRaw.Canvas, parts.Mountains, options, visible);
+        using var raw = heightRaw.Snapshot();
+        var height = Blurred(raw, gpu, Math.Min(9 * scale, MaxWideSigma));
+        if (tensor is not null && lines is not null && faces is not null && height is not null)
+            return new PrintBuffers(mountains, geo, tensor, height, lines, faces);
+        mountains.Dispose(); geo.Dispose(); tensor?.Dispose(); lines?.Dispose(); faces?.Dispose(); height?.Dispose();
+        return null;
+    }
+
+    private static SKImage BuildCoastField(SKImage land, SKImage rivers, int w, int h, float scale)
+    {
         using var landBitmap = SKBitmap.FromImage(land);
         using var riverBitmap = SKBitmap.FromImage(rivers);
         var landBytes = landBitmap.GetPixelSpan();
@@ -77,23 +98,7 @@ public static partial class StyleRenderer
             geoBytes[i * 4 + 2] = riverBytes[i * 4 + 3];
             geoBytes[i * 4 + 3] = 255;
         }
-        var geo = SKImage.FromBitmap(geoBitmap);
-        using var white = NewSurface(gpu, w, h, SKColorType.Rgba8888)!;
-        white.Canvas.Clear(SKColors.White); white.Canvas.DrawImage(mountains, 0, 0);
-        using var onWhite = white.Snapshot();
-        var tensor = Tensor(onWhite, gpu, Math.Min(5 * scale, MaxTensorSigma));
-        var lines = Blurred(mountains, gpu, Math.Min(2 * scale, MaxSoftSigma));
-        var faces = Blurred(mountains, gpu, Math.Min(8 * scale, MaxWideSigma));
-        using var heightRaw = NewSurface(gpu, w, h, SKColorType.Rgba8888)!;
-        heightRaw.Canvas.Clear(SKColors.Black);
-        heightRaw.Canvas.SetMatrix(matrix);
-        DrawPrintHeights(heightRaw.Canvas, parts.Mountains, options, visible);
-        using var raw = heightRaw.Snapshot();
-        var height = Blurred(raw, gpu, Math.Min(9 * scale, MaxWideSigma));
-        if (tensor is not null && lines is not null && faces is not null && height is not null)
-            return new PrintBuffers(mountains, geo, tensor, height, lines, faces);
-        mountains.Dispose(); geo.Dispose(); tensor?.Dispose(); lines?.Dispose(); faces?.Dispose(); height?.Dispose();
-        return null;
+        return SKImage.FromBitmap(geoBitmap);
     }
 
     private static void DrawPrintHeights(SKCanvas canvas, MapDocument document, RenderOptions options, WorldBounds? visible)

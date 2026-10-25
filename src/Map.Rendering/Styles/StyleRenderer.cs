@@ -40,9 +40,10 @@ public static partial class StyleRenderer
 
         var (bare, names) = Split(document);
         var gpu = options.IsExport ? null : options.GpuContext;
-        var key = KeyFor(bare, options, gpu, m, device, IsPrint(style.Preset));
+        var kind = IsPainter(style.Preset) ? 2 : IsPrint(style.Preset) ? 1 : 0;
+        var key = KeyFor(bare, options, gpu, m, device, kind);
         var movingKey = key is null && (options.FastTerrain || options.FastPreview || options.LodTier != RenderLodTier.Exact)
-            ? KeyFor(bare, options, gpu, m, device, IsPrint(style.Preset), moving: true) : null;
+            ? KeyFor(bare, options, gpu, m, device, kind, moving: true) : null;
         var candidate = key ?? movingKey;
         var measure = StyleDiagnostics.MeasureStages;
         var sample = new StyleFrameSample { Width = device.Width, Height = device.Height };
@@ -83,7 +84,7 @@ public static partial class StyleRenderer
         else
         {
             if (gpu is not null) DropKept();
-            var buffers = Buffers(bare, options, gpu, m, device, IsPrint(style.Preset),
+            var buffers = Buffers(bare, options, gpu, m, device, kind,
                 candidate is not null ? FollowGutter : 0, drawScene, measure, ref sample);
             if (buffers is not null)
             {
@@ -124,9 +125,9 @@ public static partial class StyleRenderer
 
     /// <summary>The map of one view and the medium's buffers made from it, in the padded raster.</summary>
     private sealed record FrameBuffers(SKImage Scene, SKImage? Tensor, SKImage? Soft, SKImage? Wide, int Margin,
-        SKPoint Origin, SKPoint DocPerPx, float PxPerDoc, SKSize DocumentSize, PrintBuffers? Print, int Gutter) : IDisposable
+        SKPoint Origin, SKPoint DocPerPx, float PxPerDoc, SKSize DocumentSize, PrintBuffers? Print, PainterBuffers? Painter, int Gutter) : IDisposable
     {
-        public void Dispose() { Scene.Dispose(); Tensor?.Dispose(); Soft?.Dispose(); Wide?.Dispose(); Print?.Dispose(); }
+        public void Dispose() { Scene.Dispose(); Tensor?.Dispose(); Soft?.Dispose(); Wide?.Dispose(); Print?.Dispose(); Painter?.Dispose(); }
     }
 
     /// <summary>The buffers of the canvas's last view and its painted frame (render thread only).</summary>
@@ -140,7 +141,7 @@ public static partial class StyleRenderer
     /// <summary>What the buffers depend on (the style itself is not part of it).</summary>
     private sealed record FrameKey(MapDocument Bare, SKMatrix Matrix, SKRectI Device, GRContext Gpu,
         IStampImageSource? Stamps, object? HexCursor, object? HexOverlay, int? HexLevel, int? HexGhostLevel,
-        HexPresentation Presentation, bool HexPlayer, bool Print);
+        HexPresentation Presentation, bool HexPlayer, int Kind);
 
     private static KeptFrame? Kept;
 
@@ -159,7 +160,7 @@ public static partial class StyleRenderer
     /// camera, a living hex world, or a lit map with a flickering source. Static lighting belongs to the document key.
     /// </summary>
     private static FrameKey? KeyFor(MapDocument bare, RenderOptions options, GRContext? gpu, SKMatrix m, SKRectI device,
-        bool print, bool moving = false)
+        int kind, bool moving = false)
     {
         if (gpu is null || options.IsExport || options.Stats is null
             || (!moving && (options.FastTerrain || options.FastPreview || options.LodTier != RenderLodTier.Exact))
@@ -172,12 +173,13 @@ public static partial class StyleRenderer
             || HasAnimatedLighting(bare, options))
             return null;
         return new FrameKey(bare, m, device, gpu, options.Stamps, options.HexCursor, options.HexOverlay,
-            options.HexLevel, options.HexGhostLevel, options.HexPresentation, options.HexPlayerView, print);
+            options.HexLevel, options.HexGhostLevel, options.HexPresentation, options.HexPlayerView, kind);
     }
 
     private static FrameBuffers? Buffers(MapDocument bare, RenderOptions options, GRContext? gpu, SKMatrix m, SKRectI device,
-        bool print, int gutter, Action<SKCanvas, MapDocument, RenderOptions> drawScene, bool measure, ref StyleFrameSample sample)
+        int kind, int gutter, Action<SKCanvas, MapDocument, RenderOptions> drawScene, bool measure, ref StyleFrameSample sample)
     {
+        var print = kind != 0;
         var stage = measure ? Stage(gpu) : 0;
         // Extra density for callers with a non-device raster. Native PDF writers already set
         // RasterDpi=300 (Skia supplies that device matrix), so they and the editor pass 1 here.
@@ -225,16 +227,17 @@ public static partial class StyleRenderer
         // The document point of the padded raster's top-left pixel, and document units per raster pixel on each axis.
         var origin = new SKPoint(-paddedMatrix.TransX / paddedMatrix.ScaleX, -paddedMatrix.TransY / paddedMatrix.ScaleY);
         var printStarted = measure && print ? Stage(gpu) : 0;
-        var printBuffers = print ? BuildPrintBuffers(bare, options, gpu, paddedMatrix, w, h, scale, visible, drawScene) : null;
+        var printBuffers = kind == 1 ? BuildPrintBuffers(bare, options, gpu, paddedMatrix, w, h, scale, visible, drawScene) : null;
+        var painterBuffers = kind == 2 ? BuildPainterBuffers(bare, options, gpu, paddedMatrix, w, h, scale, visible, drawScene) : null;
         if (measure && print) sample = sample with { PrintMs = Elapsed(gpu, printStarted) };
-        if (print && printBuffers is null)
+        if (print && printBuffers is null && painterBuffers is null)
         {
             scene.Dispose(); tensor?.Dispose(); softImage?.Dispose(); wideImage?.Dispose();
             return null;
         }
         return new FrameBuffers(scene, tensor, softImage, wideImage, margin, origin,
             new SKPoint(1 / paddedMatrix.ScaleX, 1 / paddedMatrix.ScaleY), scale,
-            new SKSize((float)bare.Canvas.Width, (float)bare.Canvas.Height), printBuffers, gutter);
+            new SKSize((float)bare.Canvas.Width, (float)bare.Canvas.Height), printBuffers, painterBuffers, gutter);
     }
 
     /// <summary>The medium's blur radii at a view scale, bounded when zoomed far in.</summary>
@@ -247,7 +250,11 @@ public static partial class StyleRenderer
     {
         var w = buffers.Scene.Width - 2 * buffers.Margin;
         var h = buffers.Scene.Height - 2 * buffers.Margin;
-        using var shader = buffers.Print is { } p && IsPrint(style.Preset)
+        using var shader = buffers.Painter is { } painter && IsPainter(style.Preset)
+            ? PainterShader.Build(buffers.Scene, painter.WetBig, painter.Big, painter.Facets, painter.Wide,
+                painter.WetFeatures, painter.Features, painter.Direction, painter.Geo, painter.RiverSoft,
+                buffers.Origin, buffers.DocPerPx, style)
+            : buffers.Print is { } p && IsPrint(style.Preset)
             ? PrintShader.Build(buffers.Scene, p.Mountains, p.Geo, p.Tensor, p.Height, p.Lines, p.Faces,
                 buffers.Origin, buffers.DocPerPx, buffers.DocumentSize, style)
             : InkShader.Build(buffers.Scene, buffers.Tensor!, buffers.Soft!, buffers.Wide!, buffers.Origin,
