@@ -21,11 +21,16 @@ internal static class LightingRenderer
     private const float ShadowScale = 2;
     private const int MaxShapeDraws = 1500;
 
+    [ThreadStatic] private static bool _lastFrameComplete;
+    /// <summary>The enclosing style may keep a lit raster only after all of its shape maps are ready.</summary>
+    internal static bool LastFrameComplete => _lastFrameComplete;
+
     public static bool Applies(MapDocument document, RenderOptions options) =>
         document.Lighting is { Enabled: true } && !options.DisableLighting;
 
     public static void Render(SKCanvas canvas, MapDocument document, RenderOptions options, Action<SKCanvas> drawScene)
     {
+        _lastFrameComplete = false;
         var lighting = document.Lighting!;
         var device = canvas.DeviceClipBounds;
         var m = canvas.TotalMatrix;
@@ -82,6 +87,7 @@ internal static class LightingRenderer
                 Kept = frame = built with { Key = key };
         }
         LightingDiagnostics.LastBuffersReused = reused;
+        _lastFrameComplete = frame.Complete;
 
         try
         {

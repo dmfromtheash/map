@@ -96,7 +96,8 @@ public static partial class StyleRenderer
                     sample = sample with { PendingTerrain = stats.TerrainRefinementsPending, PendingDetails = stats.DetailTilesPending,
                         PendingHex = stats.HexChunksPending, MissingAssets = stats.MissingAssets };
                 if (painted is not null && candidate is not null
-                    && options.Stats is { TerrainRefinementsPending: 0, DetailTilesPending: 0, HexChunksPending: 0, MissingAssets: 0 })
+                    && options.Stats is { TerrainRefinementsPending: 0, DetailTilesPending: 0, HexChunksPending: 0, MissingAssets: 0 }
+                    && (!Lighting.LightingRenderer.Applies(bare, options) || Lighting.LightingRenderer.LastFrameComplete))
                     Kept = new KeptFrame(candidate, buffers) { Style = style, Painted = painted, Exact = key is not null };
                 else buffers.Dispose();
             }
@@ -155,7 +156,7 @@ public static partial class StyleRenderer
 
     /// <summary>
     /// The key of a view whose buffers may be kept, or null when they are made afresh: the export, a gesture, a moving
-    /// camera, a living hex world, a lit map (the Свет section keeps its own frame; a torch flickers every frame).
+    /// camera, a living hex world, or a lit map with a flickering source. Static lighting belongs to the document key.
     /// </summary>
     private static FrameKey? KeyFor(MapDocument bare, RenderOptions options, GRContext? gpu, SKMatrix m, SKRectI device,
         bool print, bool moving = false)
@@ -168,7 +169,7 @@ public static partial class StyleRenderer
             // The canvas asks for ambient frames whenever its window is alive; only a hex world actually changes in them.
             || (options.HexAmbient && bare.Layers.Any(l => l is HexLayer))
             || options.HexGestureLive || options.HexSettles is not null
-            || Lighting.LightingRenderer.Applies(bare, options))
+            || HasAnimatedLighting(bare, options))
             return null;
         return new FrameKey(bare, m, device, gpu, options.Stamps, options.HexCursor, options.HexOverlay,
             options.HexLevel, options.HexGhostLevel, options.HexPresentation, options.HexPlayerView, print);
@@ -203,7 +204,8 @@ public static partial class StyleRenderer
         if (sceneSurface is null) return null;
         sceneSurface.Canvas.Clear(SKColors.Transparent);
         sceneSurface.Canvas.SetMatrix(paddedMatrix);
-        drawScene(sceneSurface.Canvas, bare, options.ForStyleScene(visible, exactTerrain: print));
+        drawScene(sceneSurface.Canvas, bare, options.ForStyleScene(visible,
+            exactTerrain: print || (gutter > 0 && Lighting.LightingRenderer.Applies(bare, options))));
         var scene = sceneSurface.Snapshot();
         if (measure) { sample = sample with { SceneMs = Elapsed(gpu, stage) }; stage = Stage(gpu); }
 

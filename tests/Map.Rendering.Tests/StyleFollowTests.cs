@@ -1,5 +1,6 @@
 using Map.Rendering.Styles;
 using SkiaSharp;
+using Map.Core.Documents;
 
 namespace Map.Rendering.Tests;
 
@@ -12,6 +13,24 @@ public sealed class StyleFollowTests
         System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!.CreateDelegate<Follow>();
     private static readonly Func<SKMatrix, SKMatrix, bool> FollowsExactly = typeof(StyleRenderer).GetMethod("FollowsExactly",
         System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!.CreateDelegate<Func<SKMatrix, SKMatrix, bool>>();
+    private static readonly Func<MapDocument, RenderOptions, bool> HasAnimatedLighting = typeof(StyleRenderer).GetMethod("HasAnimatedLighting",
+        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!.CreateDelegate<Func<MapDocument, RenderOptions, bool>>();
+
+    [Fact]
+    public void Static_evening_can_follow_but_a_live_torch_cannot_freeze_in_the_style_cache()
+    {
+        var document = new MapDocument(DocumentId.New(), "Light and style", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(64, 64, "px", "#FFFFFFFF"),
+            [new BaseColorLayer(LayerId.New(), "Page", true, false, 1, "#FFFFFFFF")])
+            { Style = MapStyle.For(MapStylePreset.InkWetBrush), Lighting = new MapLighting { TimeOfDay = .5 } };
+        Assert.False(HasAnimatedLighting(document, new RenderOptions()));
+        var torch = new MapLightSource(Guid.NewGuid(), 32, 32, "#ff9944", 60, 1, true);
+        document = document with { Lighting = document.Lighting with { Sources = [torch] } };
+        Assert.True(HasAnimatedLighting(document, new RenderOptions()));
+        Assert.False(HasAnimatedLighting(document, new RenderOptions { DisableLighting = true }));
+        Assert.False(HasAnimatedLighting(document with { Lighting = document.Lighting with { Sources = [torch with { Flicker = false }] } }, new RenderOptions()));
+        Assert.False(HasAnimatedLighting(document with { Lighting = document.Lighting with { Lights = new LightingEffect(false, 1) } }, new RenderOptions()));
+    }
 
     [Fact]
     public void Pan_and_zoom_follow_document_coordinates_without_exposing_the_buffer_edge()

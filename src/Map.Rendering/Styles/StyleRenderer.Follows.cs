@@ -1,9 +1,15 @@
 using SkiaSharp;
+using Map.Core.Documents;
 
 namespace Map.Rendering.Styles;
 
 public static partial class StyleRenderer
 {
+    internal static bool HasAnimatedLighting(MapDocument document, RenderOptions options) =>
+        Lighting.LightingRenderer.Applies(document, options)
+        && document.Lighting is { Lights.Enabled: true, Lights.Strength: > 0 } light
+        && !light.Sources.IsDefaultOrEmpty && light.Sources.Any(s => s.Flicker && s.Intensity > 0);
+
     internal static bool FollowsExactly(SKMatrix before, SKMatrix current) =>
         before.ScaleX == current.ScaleX && before.ScaleY == current.ScaleY
         && Math.Abs(current.TransX - before.TransX - MathF.Round(current.TransX - before.TransX)) < 0.0001f
