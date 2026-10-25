@@ -31,38 +31,7 @@ public sealed partial class EditorView
             () => _editor.ShownStyle.Enabled, on => { _editor.SetStyleEnabled(on); SyncStyleSection(); });
         ToolTip.SetTip(master, "Выключено — карта рисуется как без стиля. Настройки ниже сохраняются.");
 
-        var title = new TextBlock { Text = "Стиль карты", FontSize = 17, FontWeight = FontWeight.SemiBold }.Classed("role-title");
-        ToolTip.SetTip(title, "Вся карта в выбранной технике; подписи остаются чёткими. Каждое изменение — один шаг отмены (Ctrl+Z).");
-
-        var presets = new StackPanel { Spacing = 4 }.Named("StylePresets");
-        var families = new Dictionary<string, StackPanel>();
-        foreach (var preset in Enum.GetValues<MapStylePreset>())
-        {
-            var family = EditorViewModel.StyleFamilyTitle(preset);
-            if (!families.TryGetValue(family, out var familyPresets))
-            {
-                familyPresets = new StackPanel { Spacing = 4 };
-                families.Add(family, familyPresets);
-                presets.Children.Add(Group(family, familyPresets));
-            }
-            var captured = preset;
-            var button = new ToggleButton
-            {
-                Content = EditorViewModel.PresetTitle(preset), HorizontalAlignment = HorizontalAlignment.Stretch,
-                HorizontalContentAlignment = HorizontalAlignment.Left, Padding = new Thickness(10, 6),
-            }.Named("StylePreset" + preset);
-            AutomationProperties.SetName(button, "Применить стиль: " + family + ", " + EditorViewModel.PresetTitle(preset));
-            ToolTip.SetTip(button, PresetHint(preset) + " Щелчок применяет стиль с его настройками — один шаг отмены.");
-            button.Click += (_, _) => { _editor.ApplyStylePreset(captured); SyncStyleSection(); };
-            _styleSyncs.Add(() =>
-            {
-                var on = _editor.ShownStyle.Enabled && _editor.ShownStyle.Preset == captured;
-                button.IsChecked = on;
-                Ui.SetClass(button, "active", on);
-            });
-            familyPresets.Children.Add(button);
-        }
-
+        // The presets are the ribbon's cards (DEC-064); this column holds the switch, the strength and the effects.
         var strength = ValueRow("StyleStrengthSlider", "StyleStrengthBox", null, "Сила стиля", 0, 100, "%",
             () => _editor.ShownStyle.Strength * 100,
             (value, commit) => { _editor.SetStyleStrength(value / 100, commit); if (commit) SyncStyleSection(); },
@@ -75,11 +44,10 @@ public sealed partial class EditorView
         var body = new StackPanel
         {
             Spacing = 8,
-            Margin = new Thickness(12, 8, 12, 16),
+            Margin = new Thickness(10, 0, 10, 8),
             Children =
             {
-                title, master,
-                presets,
+                master,
                 Group("Сила", strength),
                 Group("Эффекты", effects),
             },
@@ -87,7 +55,7 @@ public sealed partial class EditorView
         _styleSyncs.Add(() =>
         {
             var on = _editor.ShownStyle.Enabled;
-            foreach (var child in body.Children.Skip(3)) child.Opacity = on ? 1 : 0.55;
+            foreach (var child in body.Children.Skip(1)) child.Opacity = on ? 1 : 0.55;
         });
         return new ScrollViewer { Content = body, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled }.Named("StyleSection");
     }
@@ -194,5 +162,6 @@ public sealed partial class EditorView
         if (_styleBody is null) return;
         SyncAppearanceSections();
         foreach (var sync in _styleSyncs) sync();
+        SyncAppearanceRibbon();
     }
 }

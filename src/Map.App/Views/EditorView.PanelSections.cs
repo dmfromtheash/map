@@ -24,10 +24,11 @@ namespace Map.App.Views;
 /// </summary>
 public sealed partial class EditorView
 {
+    // Свет and Стили are not object sections: they live in the ribbon under the map (DEC-064).
     private static readonly PanelSection[] StandardSections =
     [
         PanelSection.Land, PanelSection.Water, PanelSection.Assets,
-        PanelSection.Roads, PanelSection.Other, PanelSection.Layers, PanelSection.Light, PanelSection.Styles,
+        PanelSection.Roads, PanelSection.Other, PanelSection.Layers,
     ];
 
     // A hex map has no land, water, assets or roads of the standard constructor: its hexes live
@@ -193,6 +194,8 @@ public sealed partial class EditorView
     /// </summary>
     public void ShowPanelSection(PanelSection section)
     {
+        // Свет and Стили open their tab of the ribbon; the right panel stays on its object section.
+        if (section is PanelSection.Light or PanelSection.Styles) { ShowAppearanceRibbon(section == PanelSection.Styles); return; }
         var searchChanged = section != _editor.PanelSection && !string.IsNullOrEmpty(_objectSearch.Text);
         _editor.ShowPanelSection(section);
         // The search box follows the view model without a second rebuild through TextChanged.
@@ -221,9 +224,6 @@ public sealed partial class EditorView
             _ => _objectsBody,
         };
         if (!ReferenceEquals(_sectionHost.Content, body)) _sectionHost.Content = body;
-        if (section != PanelSection.Light && _editor.LightPlacementArmed) _editor.ArmLightPlacement(false);
-        if (section == PanelSection.Light) SyncLightSection();
-        if (section == PanelSection.Styles) SyncStyleSection();
         _otherFilterStrip.IsVisible = section == PanelSection.Other;
         var footer = _sectionFooters.GetValueOrDefault(section);
         if (!ReferenceEquals(_sectionFooter.Content, footer)) _sectionFooter.Content = footer;

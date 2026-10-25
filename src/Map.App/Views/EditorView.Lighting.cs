@@ -31,28 +31,6 @@ public sealed partial class EditorView
             () => _editor.ShownLighting.Enabled, on => { _editor.SetLightingEnabled(on); SyncLightSection(); });
         ToolTip.SetTip(master, "Выключено — карта рисуется как без света. Настройки ниже сохраняются.");
 
-        var title = new TextBlock { Text = "Свет и время суток", FontSize = 17, FontWeight = FontWeight.SemiBold }.Classed("role-title");
-        ToolTip.SetTip(title, "Изменения видны сразу; отпустили ползунок — один шаг отмены (Ctrl+Z).");
-
-        // Time of day: three keys as buttons, and the slider between them.
-        var presets = new UniformGrid { Rows = 1, Columns = 3 }.Named("LightTimePresets");
-        foreach (var (name, text, t) in new[] { ("Day", "День", 0.0), ("Evening", "Вечер", 0.5), ("Night", "Ночь", 1.0) })
-        {
-            var button = new ToggleButton
-            {
-                Content = text, HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Center,
-                Margin = new Thickness(0, 0, 4, 0), Padding = new Thickness(2, 5),
-            }.Named("LightTime" + name);
-            AutomationProperties.SetName(button, "Время суток: " + text);
-            button.Click += (_, _) => { _editor.SetTimeOfDay(t, true); SyncLightSection(); };
-            _lightSyncs.Add(() =>
-            {
-                var on = Math.Abs(_editor.ShownLighting.TimeOfDay - t) < 0.02;
-                button.IsChecked = on;
-                Ui.SetClass(button, "active", on);
-            });
-            presets.Children.Add(button);
-        }
         var time = ValueRow("LightTimeSlider", "LightTimeBox", null, "Время суток", 0, 100, "",
             () => _editor.ShownLighting.TimeOfDay * 100,
             (value, commit) => { _editor.SetTimeOfDay(value / 100, commit); if (commit) SyncLightSection(); },
@@ -65,11 +43,12 @@ public sealed partial class EditorView
         var body = new StackPanel
         {
             Spacing = 8,
-            Margin = new Thickness(12, 8, 12, 16),
+            Margin = new Thickness(10, 0, 10, 8),
             Children =
             {
-                title, master,
-                Group("Время суток", presets, time),
+                // День, Вечер and Ночь are the ribbon's cards (DEC-064); the slider sets any time between them.
+                master,
+                Group("Время суток", time),
                 Group("Эффекты", effects),
                 Group("Огни на карте", BuildLightSources()),
             },
@@ -77,7 +56,7 @@ public sealed partial class EditorView
         _lightSyncs.Add(() =>
         {
             var on = _editor.ShownLighting.Enabled;
-            foreach (var child in body.Children.Skip(2)) child.Opacity = on ? 1 : 0.55;
+            foreach (var child in body.Children.Skip(1)) child.Opacity = on ? 1 : 0.55;
         });
         return new ScrollViewer { Content = body, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled }.Named("LightSection");
     }
@@ -237,5 +216,6 @@ public sealed partial class EditorView
         if (_lightBody is null) return;
         SyncAppearanceSections();
         foreach (var sync in _lightSyncs) sync();
+        SyncAppearanceRibbon();
     }
 }
