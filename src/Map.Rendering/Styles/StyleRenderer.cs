@@ -250,7 +250,10 @@ public static partial class StyleRenderer
     {
         var w = buffers.Scene.Width - 2 * buffers.Margin;
         var h = buffers.Scene.Height - 2 * buffers.Margin;
-        using var shader = buffers.Painter is { } oil && OilShader.Applies(style.Preset)
+        using var shader = buffers.Painter is { } coal && CharcoalShader.Applies(style.Preset)
+            ? CharcoalShader.Build(buffers.Scene, coal.WetBig, coal.Facets, coal.WetFeatures, coal.Direction, coal.Geo,
+                buffers.Origin, buffers.DocPerPx, style)
+            : buffers.Painter is { } oil && OilShader.Applies(style.Preset)
             ? OilShader.Build(buffers.Scene, oil.WetBig, oil.Facets, oil.Wide, oil.WetFeatures, oil.Direction, oil.Geo,
                 buffers.Origin, buffers.DocPerPx, style)
             : buffers.Painter is { } painter && IsPainter(style.Preset)

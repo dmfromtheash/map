@@ -24,11 +24,13 @@ public sealed partial class StyleMockupDump
         var timings = new List<string> { "preset,backend,width,height,shader_ms,full_style_pass_ms" };
         MapStylePreset[] presets = [MapStylePreset.WatercolorBigShapes,MapStylePreset.UkiyoeSosakuHanga,
             MapStylePreset.PrintLetterpress,MapStylePreset.PrintTintedLithograph,
-            MapStylePreset.OilAllaPrima,MapStylePreset.OilImpastoRhythm];
+            MapStylePreset.OilAllaPrima,MapStylePreset.OilImpastoRhythm,
+            MapStylePreset.CharcoalVineStump,MapStylePreset.CharcoalHatching];
         // MAP_R09_PAINTER_ONLY = a comma-separated list of preset names, to compare only those.
         if (Environment.GetEnvironmentVariable("MAP_R09_PAINTER_ONLY") is { Length: > 0 } only)
             presets = [.. presets.Where(p => only.Split(',').Contains(p.ToString()))];
         var oils = OilVariants().ToDictionary(v => v.Oil.Variant, v => v.Oil);
+        var coals = CharcoalVariants().ToDictionary(v => v.Charcoal.Variant, v => v.Charcoal);
         try
         {
             foreach (var crowd in new[] { false,true })
@@ -61,7 +63,9 @@ public sealed partial class StyleMockupDump
                     using var referenceSurface = SKSurface.Create(new SKImageInfo(W,H))!;
                     using (var shader = preset switch
                     {
-                        MapStylePreset.OilAllaPrima => OilShader(mountains,wetBig,wetFacets,ca,cb,wide,wetTensor,geo,flow,oils[1],ms),
+                        MapStylePreset.CharcoalVineStump => CharcoalShader(mountains,wetBig,facets,ca,cb,wide,wetTensor,geo,flow,coals[1],ms),
+                        MapStylePreset.CharcoalHatching => CharcoalShader(mountains,wetBig,facets,ca,cb,wide,wetTensor,geo,flow,coals[2],ms),
+                        MapStylePreset.OilAllaPrima =>OilShader(mountains,wetBig,wetFacets,ca,cb,wide,wetTensor,geo,flow,oils[1],ms),
                         MapStylePreset.OilImpastoRhythm => OilShader(mountains,wetBig,wetFacets,ca,cb,wide,wetTensor,geo,flow,oils[5],ms),
                         MapStylePreset.WatercolorBigShapes => WetShader(mountains,wetBig,wetFacets,ca,cb,wide,wetTensor,geo,riverSoft,new(1,"#f9f6ee"),ms),
                         MapStylePreset.UkiyoeSosakuHanga => PrintBlockShader(mountains,big,facets,ca,cb,wide,tensor,geo,rivers,new(5,"#ece2c8"),ms),
@@ -78,7 +82,11 @@ public sealed partial class StyleMockupDump
                         using var expected = rs.Snapshot();
                         using var ps = SKSurface.Create(new SKImageInfo((int)(W*scale),(int)(H*scale)))!;
                         ps.Canvas.Scale(scale);
-                        SceneRenderer.Render(ps.Canvas,doc with { Style = MapStyle.For(preset) },
+                        var programStyle = MapStyle.For(preset);
+                        // MAP_R09_PAINTER_OFF = comma-separated effect kinds to switch off in the program frame (diagnosis).
+                        foreach (var off in (Environment.GetEnvironmentVariable("MAP_R09_PAINTER_OFF") ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries))
+                            programStyle = programStyle.WithEffect(Enum.Parse<StyleEffectKind>(off), new StyleEffect(false, 0));
+                        SceneRenderer.Render(ps.Canvas,doc with { Style = programStyle },
                             new RenderOptions { Stamps = new Images(images), IsExport = true,ViewScale = scale });
                         using var actual = ps.Snapshot();
                         SavePng(expected,$"{preset}-{tag}-{scale*100:0}-mockup.png");

@@ -68,9 +68,19 @@ public sealed record MapStyle
     /// <summary>Oil: the wet highlight on the ridges of the paint.</summary>
     public StyleEffect Gloss { get; init; } = new(true, 1);
 
+    /// <summary>Charcoal (DEC-066): the stump rubbing the masses into soft tone.</summary>
+    public StyleEffect Smudge { get; init; } = new(true, 1);
+
+    /// <summary>Charcoal: the cross layers of hatching in the shadows.</summary>
+    public StyleEffect CrossHatch { get; init; } = new(true, 1);
+
     /// <summary>The preset as it comes, every effect at the strength the preset was tuned with.</summary>
     public static MapStyle For(MapStylePreset preset) => preset switch
     {
+        MapStylePreset.CharcoalVineStump or MapStylePreset.CharcoalHatching => new MapStyle
+        {
+            Preset = preset, Strokes = new(true, 1), Paper = new(true, 1), Contour = new(true, 1),
+        },
         MapStylePreset.WatercolorBigShapes or MapStylePreset.UkiyoeSosakuHanga
             or MapStylePreset.PrintLetterpress or MapStylePreset.PrintTintedLithograph
             or MapStylePreset.OilAllaPrima or MapStylePreset.OilImpastoRhythm => new MapStyle
@@ -102,6 +112,12 @@ public sealed record MapStyle
     /// <summary>The effects a preset actually uses: the panel shows only these.</summary>
     public static IReadOnlyList<StyleEffectKind> EffectsOf(MapStylePreset preset) => preset switch
     {
+        MapStylePreset.CharcoalVineStump =>
+            [StyleEffectKind.Smudge, StyleEffectKind.Strokes, StyleEffectKind.Crest,
+             StyleEffectKind.WaterLines, StyleEffectKind.Paper],
+        MapStylePreset.CharcoalHatching =>
+            [StyleEffectKind.Strokes, StyleEffectKind.CrossHatch, StyleEffectKind.Contour,
+             StyleEffectKind.WaterLines, StyleEffectKind.Paper],
         MapStylePreset.OilAllaPrima =>
             [StyleEffectKind.Impasto, StyleEffectKind.Imprimatura, StyleEffectKind.Gloss,
              StyleEffectKind.Crest, StyleEffectKind.Paper],
@@ -163,6 +179,8 @@ public sealed record MapStyle
         StyleEffectKind.Impasto => Impasto,
         StyleEffectKind.Imprimatura => Imprimatura,
         StyleEffectKind.Gloss => Gloss,
+        StyleEffectKind.Smudge => Smudge,
+        StyleEffectKind.CrossHatch => CrossHatch,
         _ => Contour,
     };
 
@@ -195,6 +213,8 @@ public sealed record MapStyle
         StyleEffectKind.Impasto => this with { Impasto = effect },
         StyleEffectKind.Imprimatura => this with { Imprimatura = effect },
         StyleEffectKind.Gloss => this with { Gloss = effect },
+        StyleEffectKind.Smudge => this with { Smudge = effect },
+        StyleEffectKind.CrossHatch => this with { CrossHatch = effect },
         _ => this with { Contour = effect },
     };
 
@@ -212,6 +232,7 @@ public sealed record MapStyle
         Starved = Starved.Normalized(), WaterLines = WaterLines.Normalized(), StoneCrayon = StoneCrayon.Normalized(),
         TintPlate = TintPlate.Normalized(), Scraped = Scraped.Normalized(),
         Impasto = Impasto.Normalized(), Imprimatura = Imprimatura.Normalized(), Gloss = Gloss.Normalized(),
+        Smudge = Smudge.Normalized(), CrossHatch = CrossHatch.Normalized(),
     };
 }
 
@@ -232,13 +253,15 @@ public enum MapStylePreset
     PrintTintedLithograph = 8,
     OilAllaPrima = 9,
     OilImpastoRhythm = 10,
+    CharcoalVineStump = 11,
+    CharcoalHatching = 12,
 }
 
 public enum StyleEffectKind
 {
     Strokes, Bleed, Edges, DryBrush, Mist, Pen, Paper, Contour, Sea, Coast, ColourWash, Aquatint, Plate, Border,
     Granulation, Crest, Gouge, SeaCuts, WoodGrain, InkSqueeze, Starved, WaterLines, StoneCrayon, TintPlate, Scraped,
-    Impasto, Imprimatura, Gloss,
+    Impasto, Imprimatura, Gloss, Smudge, CrossHatch,
 }
 
 /// <summary>One effect of a style: its own switch and its own strength (0..1).</summary>

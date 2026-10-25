@@ -62,6 +62,8 @@ public sealed partial class EditorView
 
     private static string PresetHint(MapStylePreset preset) => preset switch
     {
+        MapStylePreset.CharcoalVineStump => "Ивовый уголь: массы гор растушёваны, зерно бумаги в полутонах, свет оставлен бумагой, немного штрихов по форме.",
+        MapStylePreset.CharcoalHatching => "Штриховка углём: только линия — по форме, накрест в тени, твёрдый контур; море ровной штриховкой.",
         MapStylePreset.OilAllaPrima => "Алла прима: плоская кисть по плоскостям гор, тёплый свет и холодная тень, тёплый грунт между мазками.",
         MapStylePreset.OilImpastoRhythm => "Ритм импасто: короткие густые штрихи двух оттенков, вдоль берега в море и на суше.",
         MapStylePreset.WatercolorBigShapes => "Крупные пятна: три прозрачных тона по сырой бумаге, пигмент у засохшего края и немного линий гребня.",
@@ -77,6 +79,13 @@ public sealed partial class EditorView
 
     private static string StyleEffectHint(StyleEffectKind kind, MapStylePreset preset) => kind switch
     {
+        StyleEffectKind.Smudge => "Мягкий тон, втёртый растушёвкой; уголь наполовину заполняет зерно бумаги.",
+        StyleEffectKind.CrossHatch => "Второй и третий слой штриховки накрест в тенях и самых тёмных местах.",
+        StyleEffectKind.Strokes when preset is MapStylePreset.CharcoalVineStump or MapStylePreset.CharcoalHatching => "Штрихи по направлению горы; на море — ровные горизонтальные.",
+        StyleEffectKind.Crest when preset == MapStylePreset.CharcoalVineStump => "Прерывистый силуэт, берег и тёмные акценты в глубоких складках.",
+        StyleEffectKind.Contour when preset == MapStylePreset.CharcoalHatching => "Твёрдый прерывистый контур гор, гребней и берега.",
+        StyleEffectKind.WaterLines when preset is MapStylePreset.CharcoalVineStump or MapStylePreset.CharcoalHatching => "Три-четыре линии вдоль берега, бледнее к морю.",
+        StyleEffectKind.Paper when preset is MapStylePreset.CharcoalVineStump or MapStylePreset.CharcoalHatching => "Уголь ложится на бугорки бумаги: при лёгком нажиме видно зерно.",
         StyleEffectKind.Impasto => "Густая краска с гребнями и бороздками щетины, свет с северо-запада.",
         StyleEffectKind.Imprimatura when preset == MapStylePreset.OilImpastoRhythm => "Тёмные бороздки грунта между штрихами.",
         StyleEffectKind.Imprimatura => "Тёплая сиена грунта проглядывает между мазками.",

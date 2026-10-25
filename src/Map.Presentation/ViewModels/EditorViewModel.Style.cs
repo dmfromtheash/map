@@ -65,6 +65,8 @@ public sealed partial class EditorViewModel
     {
         MapStylePreset.OilAllaPrima => "Алла прима",
         MapStylePreset.OilImpastoRhythm => "Ритм импасто",
+        MapStylePreset.CharcoalVineStump => "Ивовый уголь",
+        MapStylePreset.CharcoalHatching => "Штриховка углём",
         MapStylePreset.WatercolorBigShapes => "Крупные пятна",
         MapStylePreset.UkiyoeSosakuHanga => "Сосаку-ханга",
         MapStylePreset.PrintLetterpress => "Высокая печать",
@@ -79,6 +81,7 @@ public sealed partial class EditorViewModel
     public static string StyleFamilyTitle(MapStylePreset preset) => preset switch
     {
         MapStylePreset.OilAllaPrima or MapStylePreset.OilImpastoRhythm => "Масло",
+        MapStylePreset.CharcoalVineStump or MapStylePreset.CharcoalHatching => "Уголь",
         MapStylePreset.WatercolorBigShapes => "Акварель",
         MapStylePreset.UkiyoeSosakuHanga => "Укиё-э",
         MapStylePreset.PrintLetterpress or MapStylePreset.PrintTintedLithograph => "Печать",
@@ -89,6 +92,13 @@ public sealed partial class EditorViewModel
 
     public static string StyleEffectTitle(StyleEffectKind kind, MapStylePreset preset = MapStylePreset.InkWetBrush) => kind switch
     {
+        StyleEffectKind.Smudge => "Растушёвка",
+        StyleEffectKind.CrossHatch => "Штриховка накрест",
+        StyleEffectKind.Strokes when preset == MapStylePreset.CharcoalVineStump => "Штрихи по форме",
+        StyleEffectKind.Strokes when preset == MapStylePreset.CharcoalHatching => "Штриховка по форме",
+        StyleEffectKind.Crest when preset == MapStylePreset.CharcoalVineStump => "Контур и тёмные акценты",
+        StyleEffectKind.WaterLines when preset is MapStylePreset.CharcoalVineStump or MapStylePreset.CharcoalHatching => "Линии воды",
+        StyleEffectKind.Paper when preset is MapStylePreset.CharcoalVineStump or MapStylePreset.CharcoalHatching => "Зерно бумаги",
         StyleEffectKind.Impasto => "Рельеф краски",
         StyleEffectKind.Imprimatura when preset == MapStylePreset.OilImpastoRhythm => "Бороздки между штрихами",
         StyleEffectKind.Imprimatura => "Грунт между мазками",
