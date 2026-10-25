@@ -90,10 +90,11 @@ public sealed partial class PaintPerfApplication
         T Find<T>(string name) where T : Control => _view.GetVisualDescendants().OfType<T>().Single(c => c.Name == name);
         foreach (var preset in new[] { MapStylePreset.OldMapBlaeu, MapStylePreset.EngravingAquatint })
         {
-            var button = Find<ToggleButton>("StylePreset" + preset);
+            // The preset is a card of the ribbon under the map (DEC-064), marked "selected" when applied.
+            var button = Find<Button>("StylePreset" + preset);
             button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             await Settle();
-            var correct = _editor.Style.Preset == preset && button.IsChecked == true;
+            var correct = _editor.Style.Preset == preset && button.Classes.Contains("selected");
             foreach (var kind in Enum.GetValues<StyleEffectKind>())
                 correct &= Find<Grid>("Style" + kind + "Row").IsVisible == MapStyle.EffectsOf(preset).Contains(kind);
             var toggle = Find<CheckBox>("StyleCoastToggle");

@@ -92,6 +92,11 @@ public sealed partial class PaintPerfApplication
         SetScale(centre, scale);
         _report.Environment["exact/open"] = (await TimedRefined()).ToString("0");
         await Capture("newart-open");
+        if (System.Environment.GetEnvironmentVariable("MAP_NEW_ART_RIBBON") == "1")
+        {
+            await RibbonShots();
+            return;
+        }
         if (System.Environment.GetEnvironmentVariable("MAP_NEW_ART_STYLE") == "1")
         {
             await StyleRoutes(centre, scale);

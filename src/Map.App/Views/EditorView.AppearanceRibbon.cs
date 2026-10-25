@@ -40,14 +40,16 @@ public sealed partial class EditorView
     private RibbonTab _ribbonTab;
     private Border _ribbon = null!;
     private Control _ribbonBody = null!;
-    private ToggleButton _ribbonLightTab = null!, _ribbonStyleTab = null!;
+    // Tabs and cards are plain buttons marked by a brass frame: a checked toggle fills with brass and
+    // its faint captions became unreadable on it.
+    private Button _ribbonLightTab = null!, _ribbonStyleTab = null!;
     private TextBlock _ribbonLightState = null!, _ribbonStyleState = null!;
     private StackPanel _ribbonFamilies = null!;
     private StackPanel _ribbonCards = null!;
     private RetainedSlot _ribbonControls = null!;
     private Button _ribbonInspect = null!;
     private string _ribbonFamily = "Все";
-    private readonly Dictionary<string, (ToggleButton Button, Border Picture)> _ribbonCardViews = [];
+    private readonly Dictionary<string, (Button Button, Border Picture)> _ribbonCardViews = [];
     private readonly Dictionary<string, Bitmap> _ribbonPreviews = [];
     private CancellationTokenSource? _ribbonPreviewWork;
     private string _ribbonPreviewSignature = "";
@@ -70,11 +72,12 @@ public sealed partial class EditorView
 
     private Control BuildAppearanceRibbon()
     {
-        ToggleButton Tab(string name, string icon, string title, out TextBlock state, RibbonTab tab)
+        Button Tab(string name, string icon, string title, out TextBlock state, RibbonTab tab)
         {
             state = new TextBlock { VerticalAlignment = VerticalAlignment.Center }.Classed("faint");
-            var button = new ToggleButton
+            var button = new Button
             {
+                BorderThickness = new Thickness(1.5),
                 Padding = new Thickness(9, 3),
                 Content = new StackPanel
                 {
@@ -167,10 +170,8 @@ public sealed partial class EditorView
         _ribbonLightState.Text = lighting.Enabled ? TimeTitle(lighting.TimeOfDay) : "выкл.";
         var style = _editor.ShownStyle;
         _ribbonStyleState.Text = style.Enabled ? EditorViewModel.PresetTitle(style.Preset) : "без стиля";
-        _ribbonLightTab.IsChecked = _ribbonTab == RibbonTab.Light;
-        _ribbonStyleTab.IsChecked = _ribbonTab == RibbonTab.Styles;
-        Ui.SetClass(_ribbonLightTab, "active", _ribbonTab == RibbonTab.Light);
-        Ui.SetClass(_ribbonStyleTab, "active", _ribbonTab == RibbonTab.Styles);
+        MarkSelected(_ribbonLightTab, _ribbonTab == RibbonTab.Light);
+        MarkSelected(_ribbonStyleTab, _ribbonTab == RibbonTab.Styles);
         _ribbonBody.IsVisible = _ribbonTab != RibbonTab.None;
         // Placing lights by click belongs to the open Свет tab.
         if (_ribbonTab != RibbonTab.Light && _editor.LightPlacementArmed) _editor.ArmLightPlacement(false);
@@ -224,8 +225,7 @@ public sealed partial class EditorView
                     && LightCards.First(c => c.Key == key).Time is { } t && Math.Abs(lighting.TimeOfDay - t) < 0.02,
                 _ => style.Enabled && "style-" + style.Preset == key,
             };
-            view.Button.IsChecked = active;
-            Ui.SetClass(view.Button, "active", active);
+            MarkSelected(view.Button, active);
             view.Picture.BorderThickness = new Thickness(active ? 2 : 1);
             view.Picture.BorderBrush = active
                 ? Application.Current?.FindResource("MapAccentBrush") as IBrush
@@ -234,7 +234,16 @@ public sealed partial class EditorView
         }
     }
 
-    private (ToggleButton Button, Border Picture) CardView(string key, string title, string caption)
+    /// <summary>The open tab or the applied card: a brass frame and the class tests read.</summary>
+    private static void MarkSelected(Button button, bool on)
+    {
+        Ui.SetClass(button, "selected", on);
+        button.BorderBrush = on
+            ? Application.Current?.FindResource("MapAccentBrush") as IBrush
+            : Application.Current?.FindResource("MapBorderBrush") as IBrush;
+    }
+
+    private (Button Button, Border Picture) CardView(string key, string title, string caption)
     {
         if (_ribbonCardViews.TryGetValue(key, out var existing)) return existing;
         var picture = new Border
@@ -243,9 +252,9 @@ public sealed partial class EditorView
             ClipToBounds = true, Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255)),
             Child = new TextBlock { Text = "…", HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center }.Classed("faint"),
         };
-        var button = new ToggleButton
+        var button = new Button
         {
-            Tag = key, Padding = new Thickness(4), VerticalAlignment = VerticalAlignment.Top,
+            Tag = key, Padding = new Thickness(4), VerticalAlignment = VerticalAlignment.Top, BorderThickness = new Thickness(1.5),
             Content = new StackPanel
             {
                 Spacing = 3, Width = CardWidth,
@@ -308,10 +317,46 @@ public sealed partial class EditorView
     /// <summary>The world area around the middle of the view that a card of the given size shows.</summary>
     private WorldBounds PreviewArea(int width, int height, double scale)
     {
-        var viewport = _editor.Session.Viewport;
-        var (cx, cy) = viewport.ScreenToWorld(_canvas.Bounds.Width / 2, _canvas.Bounds.Height / 2);
+        var (cx, cy) = PreviewCentre().Centre;
         double w = width / scale, h = height / scale;
         return new WorldBounds(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2);
+    }
+
+    /// <summary>
+    /// What a card looks at: the asset nearest the middle of the view (a style shows itself on a mountain, not on
+    /// empty ground), with a frame a little larger than that asset; the middle of the view when there is none.
+    /// </summary>
+    private ((double X, double Y) Centre, double? Span) PreviewCentre()
+    {
+        var viewport = _editor.Session.Viewport;
+        var (cx, cy) = viewport.ScreenToWorld(_canvas.Bounds.Width / 2, _canvas.Bounds.Height / 2);
+        var (left, top) = viewport.ScreenToWorld(0, 0);
+        var (right, bottom) = viewport.ScreenToWorld(_canvas.Bounds.Width, _canvas.Bounds.Height);
+        SceneObject? best = null;
+        var bestScore = double.MaxValue;
+        foreach (var layer in _editor.Session.Document.Layers.OfType<ObjectLayer>())
+        {
+            if (!layer.Visible) continue;
+            foreach (var o in layer.Objects)
+            {
+                if (o.Kind != SceneObjectKind.Stamp || !o.Visible) continue;
+                double ox = o.X + o.Width / 2, oy = o.Y + o.Height / 2;
+                if (ox < left || ox > right || oy < top || oy > bottom) continue;
+                // Near the middle, and rather a big asset than a pebble.
+                var score = Math.Sqrt((ox - cx) * (ox - cx) + (oy - cy) * (oy - cy)) - 0.5 * Math.Max(o.Width, o.Height);
+                if (score < bestScore) { bestScore = score; best = o; }
+            }
+        }
+        return best is null ? ((cx, cy), null) : ((best.X + best.Width / 2, best.Y + best.Height / 2), 1.35 * Math.Max(best.Width, best.Height * 16 / 9.0));
+    }
+
+    /// <summary>The area and the scale of a preview of the given pixel size: the asset's frame, else the fixed scale.</summary>
+    private (WorldBounds Area, double Scale) PreviewFrame(int width, int height, double fallbackScale)
+    {
+        var (centre, span) = PreviewCentre();
+        var scale = span is { } s ? Math.Clamp(width / s, 0.2, 2.5) : fallbackScale;
+        double w = width / scale, h = height / scale;
+        return (new WorldBounds(centre.X - w / 2, centre.Y - h / 2, centre.X + w / 2, centre.Y + h / 2), scale);
     }
 
     private void QueueRibbonPreviews()
@@ -330,9 +375,9 @@ public sealed partial class EditorView
         if (_ribbonTab == RibbonTab.None || _canvas.Bounds.Width < 1) return;
         var document = _editor.Session.Document;
         var keys = _ribbonCards.Children.OfType<Control>().Select(c => (string)c.Tag!).ToArray();
-        var area = PreviewArea(CardWidth * 2, CardHeight * 2, CardScale * 2);
+        var (area, scale) = PreviewFrame(CardWidth * 2, CardHeight * 2, CardScale * 2);
         // A card is redrawn only when the map, the area or the cards change - not on every sync.
-        var signature = $"{System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(document)}|{area.Left:0}|{area.Top:0}|{string.Join(",", keys)}";
+        var signature = $"{System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(document)}|{area.Left:0}|{area.Top:0}|{scale:0.000}|{string.Join(",", keys)}";
         if (signature == _ribbonPreviewSignature) return;
         _ribbonPreviewSignature = signature;
         _ribbonPreviewWork?.Cancel();
@@ -346,7 +391,7 @@ public sealed partial class EditorView
             {
                 if (token.IsCancellationRequested) return;
                 byte[] pixels;
-                try { pixels = RenderPreviewPixels(cardDocument, area, CardWidth * 2, CardHeight * 2, CardScale * 2, stamps); }
+                try { pixels = RenderPreviewPixels(cardDocument, area, CardWidth * 2, CardHeight * 2, scale, stamps); }
                 catch (Exception) when (!token.IsCancellationRequested) { continue; }
                 Dispatcher.UIThread.Post(() =>
                 {
