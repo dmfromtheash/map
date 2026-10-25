@@ -59,11 +59,21 @@ public sealed record MapStyle
     public StyleEffect TintPlate { get; init; } = new(true, 1);
     public StyleEffect Scraped { get; init; } = new(true, 1);
 
+    /// <summary>Oil (DEC-065): the relief of thick paint, lit from the north-west.</summary>
+    public StyleEffect Impasto { get; init; } = new(true, 1);
+
+    /// <summary>Oil: the ground showing between strokes (warm sienna, or dark grooves between dashes).</summary>
+    public StyleEffect Imprimatura { get; init; } = new(true, 1);
+
+    /// <summary>Oil: the wet highlight on the ridges of the paint.</summary>
+    public StyleEffect Gloss { get; init; } = new(true, 1);
+
     /// <summary>The preset as it comes, every effect at the strength the preset was tuned with.</summary>
     public static MapStyle For(MapStylePreset preset) => preset switch
     {
         MapStylePreset.WatercolorBigShapes or MapStylePreset.UkiyoeSosakuHanga
-            or MapStylePreset.PrintLetterpress or MapStylePreset.PrintTintedLithograph => new MapStyle
+            or MapStylePreset.PrintLetterpress or MapStylePreset.PrintTintedLithograph
+            or MapStylePreset.OilAllaPrima or MapStylePreset.OilImpastoRhythm => new MapStyle
         {
             Preset = preset, Bleed = new(true, 1), Edges = new(true, 1),
             Paper = new(true, 1), Contour = new(true, 1),
@@ -92,6 +102,11 @@ public sealed record MapStyle
     /// <summary>The effects a preset actually uses: the panel shows only these.</summary>
     public static IReadOnlyList<StyleEffectKind> EffectsOf(MapStylePreset preset) => preset switch
     {
+        MapStylePreset.OilAllaPrima =>
+            [StyleEffectKind.Impasto, StyleEffectKind.Imprimatura, StyleEffectKind.Gloss,
+             StyleEffectKind.Crest, StyleEffectKind.Paper],
+        MapStylePreset.OilImpastoRhythm =>
+            [StyleEffectKind.Impasto, StyleEffectKind.Imprimatura, StyleEffectKind.Gloss],
         MapStylePreset.WatercolorBigShapes =>
             [StyleEffectKind.Bleed, StyleEffectKind.Edges, StyleEffectKind.Granulation,
              StyleEffectKind.Crest, StyleEffectKind.Sea, StyleEffectKind.Paper],
@@ -145,6 +160,9 @@ public sealed record MapStyle
         StyleEffectKind.StoneCrayon => StoneCrayon,
         StyleEffectKind.TintPlate => TintPlate,
         StyleEffectKind.Scraped => Scraped,
+        StyleEffectKind.Impasto => Impasto,
+        StyleEffectKind.Imprimatura => Imprimatura,
+        StyleEffectKind.Gloss => Gloss,
         _ => Contour,
     };
 
@@ -174,6 +192,9 @@ public sealed record MapStyle
         StyleEffectKind.StoneCrayon => this with { StoneCrayon = effect },
         StyleEffectKind.TintPlate => this with { TintPlate = effect },
         StyleEffectKind.Scraped => this with { Scraped = effect },
+        StyleEffectKind.Impasto => this with { Impasto = effect },
+        StyleEffectKind.Imprimatura => this with { Imprimatura = effect },
+        StyleEffectKind.Gloss => this with { Gloss = effect },
         _ => this with { Contour = effect },
     };
 
@@ -190,6 +211,7 @@ public sealed record MapStyle
         SeaCuts = SeaCuts.Normalized(), WoodGrain = WoodGrain.Normalized(), InkSqueeze = InkSqueeze.Normalized(),
         Starved = Starved.Normalized(), WaterLines = WaterLines.Normalized(), StoneCrayon = StoneCrayon.Normalized(),
         TintPlate = TintPlate.Normalized(), Scraped = Scraped.Normalized(),
+        Impasto = Impasto.Normalized(), Imprimatura = Imprimatura.Normalized(), Gloss = Gloss.Normalized(),
     };
 }
 
@@ -208,12 +230,15 @@ public enum MapStylePreset
     UkiyoeSosakuHanga = 6,
     PrintLetterpress = 7,
     PrintTintedLithograph = 8,
+    OilAllaPrima = 9,
+    OilImpastoRhythm = 10,
 }
 
 public enum StyleEffectKind
 {
     Strokes, Bleed, Edges, DryBrush, Mist, Pen, Paper, Contour, Sea, Coast, ColourWash, Aquatint, Plate, Border,
     Granulation, Crest, Gouge, SeaCuts, WoodGrain, InkSqueeze, Starved, WaterLines, StoneCrayon, TintPlate, Scraped,
+    Impasto, Imprimatura, Gloss,
 }
 
 /// <summary>One effect of a style: its own switch and its own strength (0..1).</summary>

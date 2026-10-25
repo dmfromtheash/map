@@ -13,6 +13,8 @@ public sealed class StyleEditorTests
     [InlineData(MapStylePreset.UkiyoeSosakuHanga)]
     [InlineData(MapStylePreset.PrintLetterpress)]
     [InlineData(MapStylePreset.PrintTintedLithograph)]
+    [InlineData(MapStylePreset.OilAllaPrima)]
+    [InlineData(MapStylePreset.OilImpastoRhythm)]
     public void Preset_and_slider_release_are_each_one_undo_step(MapStylePreset preset)
     {
         var editor = new EditorViewModel(TestData.Document(), null, false,

@@ -11,6 +11,8 @@ public sealed class MapStyleTests
     [InlineData(MapStylePreset.UkiyoeSosakuHanga)]
     [InlineData(MapStylePreset.PrintLetterpress)]
     [InlineData(MapStylePreset.PrintTintedLithograph)]
+    [InlineData(MapStylePreset.OilAllaPrima)]
+    [InlineData(MapStylePreset.OilImpastoRhythm)]
     public void Approved_presets_expose_only_their_own_effects_and_normalize_each_value(MapStylePreset preset)
     {
         var original = MapStyle.For(preset);

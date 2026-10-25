@@ -9,6 +9,7 @@ public sealed partial class StyleRenderingTests
     {
         MapStylePreset.WatercolorBigShapes, MapStylePreset.UkiyoeSosakuHanga,
         MapStylePreset.PrintLetterpress, MapStylePreset.PrintTintedLithograph,
+        MapStylePreset.OilAllaPrima, MapStylePreset.OilImpastoRhythm,
     }.Select(p => new object[] { p });
 
     [Theory]

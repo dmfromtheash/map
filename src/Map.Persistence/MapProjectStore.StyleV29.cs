@@ -17,6 +17,8 @@ public static partial class MapProjectStore
         [MapStylePreset.UkiyoeSosakuHanga] = "ukiyoe-sosaku-hanga",
         [MapStylePreset.PrintLetterpress] = "print-letterpress",
         [MapStylePreset.PrintTintedLithograph] = "print-tinted-lithograph",
+        [MapStylePreset.OilAllaPrima] = "oil-alla-prima",
+        [MapStylePreset.OilImpastoRhythm] = "oil-impasto-rhythm",
     };
 
     private static MapStyleDto? ToStyleDto(MapStyle? style)
@@ -37,6 +39,7 @@ public static partial class MapProjectStore
             SeaCuts = Effect(style.SeaCuts), WoodGrain = Effect(style.WoodGrain), InkSqueeze = Effect(style.InkSqueeze),
             Starved = Effect(style.Starved), WaterLines = Effect(style.WaterLines), StoneCrayon = Effect(style.StoneCrayon),
             TintPlate = Effect(style.TintPlate), Scraped = Effect(style.Scraped),
+            Impasto = Effect(style.Impasto), Imprimatura = Effect(style.Imprimatura), Gloss = Effect(style.Gloss),
         };
     }
 
@@ -70,6 +73,8 @@ public static partial class MapProjectStore
             Starved = Effect(dto.Starved, defaults.Starved), WaterLines = Effect(dto.WaterLines, defaults.WaterLines),
             StoneCrayon = Effect(dto.StoneCrayon, defaults.StoneCrayon), TintPlate = Effect(dto.TintPlate, defaults.TintPlate),
             Scraped = Effect(dto.Scraped, defaults.Scraped),
+            Impasto = Effect(dto.Impasto, defaults.Impasto), Imprimatura = Effect(dto.Imprimatura, defaults.Imprimatura),
+            Gloss = Effect(dto.Gloss, defaults.Gloss),
         }.Normalized();
     }
 }

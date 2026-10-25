@@ -23,7 +23,12 @@ public sealed partial class StyleMockupDump
         var metrics = new List<string> { "preset,scene,scale,mean_rgb_difference_0_255" };
         var timings = new List<string> { "preset,backend,width,height,shader_ms,full_style_pass_ms" };
         MapStylePreset[] presets = [MapStylePreset.WatercolorBigShapes,MapStylePreset.UkiyoeSosakuHanga,
-            MapStylePreset.PrintLetterpress,MapStylePreset.PrintTintedLithograph];
+            MapStylePreset.PrintLetterpress,MapStylePreset.PrintTintedLithograph,
+            MapStylePreset.OilAllaPrima,MapStylePreset.OilImpastoRhythm];
+        // MAP_R09_PAINTER_ONLY = a comma-separated list of preset names, to compare only those.
+        if (Environment.GetEnvironmentVariable("MAP_R09_PAINTER_ONLY") is { Length: > 0 } only)
+            presets = [.. presets.Where(p => only.Split(',').Contains(p.ToString()))];
+        var oils = OilVariants().ToDictionary(v => v.Oil.Variant, v => v.Oil);
         try
         {
             foreach (var crowd in new[] { false,true })
@@ -50,11 +55,14 @@ public sealed partial class StyleMockupDump
                 using var wide = Blurred(mountains,14*ms);
                 using var tensor = Tensor(big);
                 using var wetTensor = Tensor(wetBig);
+                using var flow = CoastFlow(geo);
                 foreach (var preset in presets)
                 {
                     using var referenceSurface = SKSurface.Create(new SKImageInfo(W,H))!;
                     using (var shader = preset switch
                     {
+                        MapStylePreset.OilAllaPrima => OilShader(mountains,wetBig,wetFacets,ca,cb,wide,wetTensor,geo,flow,oils[1],ms),
+                        MapStylePreset.OilImpastoRhythm => OilShader(mountains,wetBig,wetFacets,ca,cb,wide,wetTensor,geo,flow,oils[5],ms),
                         MapStylePreset.WatercolorBigShapes => WetShader(mountains,wetBig,wetFacets,ca,cb,wide,wetTensor,geo,riverSoft,new(1,"#f9f6ee"),ms),
                         MapStylePreset.UkiyoeSosakuHanga => PrintBlockShader(mountains,big,facets,ca,cb,wide,tensor,geo,rivers,new(5,"#ece2c8"),ms),
                         MapStylePreset.PrintLetterpress => TwoInkShader(mountains,big,facets,ca,cb,wide,tensor,geo,rivers,new(3,"#f1ece0"),ms),
@@ -100,7 +108,8 @@ public sealed partial class StyleMockupDump
                 timings.Add(FormattableString.Invariant($"{preset},{(context is null ? "CPU" : "GPU")},2048,1095,{measurements.Average(s => s.ShaderMs):F3},{measurements.Average(s => s.PassMs):F3}"));
               }
             }
-            Measure(null);
+            // MAP_R09_PAINTER_NOTIME = 1 skips the timings (the CPU pass of the oil presets takes about half a minute a frame).
+            if (Environment.GetEnvironmentVariable("MAP_R09_PAINTER_NOTIME") != "1") Measure(null);
             // No window is created to acquire a GL context. This succeeds only if a windowless
             // current context was provided by the host; normal VSTest has none.
             using var gl = GRGlInterface.Create();

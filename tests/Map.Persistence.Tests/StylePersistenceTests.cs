@@ -23,6 +23,8 @@ public sealed class StylePersistenceTests : IDisposable
     [InlineData(MapStylePreset.UkiyoeSosakuHanga)]
     [InlineData(MapStylePreset.PrintLetterpress)]
     [InlineData(MapStylePreset.PrintTintedLithograph)]
+    [InlineData(MapStylePreset.OilAllaPrima)]
+    [InlineData(MapStylePreset.OilImpastoRhythm)]
     public void Style_v29_roundtrip_keeps_the_preset_strength_and_every_effect(MapStylePreset preset)
     {
         var style = MapStyle.For(preset) with
@@ -30,7 +32,7 @@ public sealed class StylePersistenceTests : IDisposable
             Strength = 0.7, Strokes = new(false, 0.3), Bleed = new(true, 0.45), Mist = new(true, 0.2), Contour = new(false, 0.6),
         };
         foreach (var kind in MapStyle.EffectsOf(preset))
-            style = style.WithEffect(kind, new StyleEffect((int)kind % 2 == 0, 0.21 + (int)kind * 0.03));
+            style = style.WithEffect(kind, new StyleEffect((int)kind % 2 == 0, 0.21 + (int)kind % 25 * 0.03));
         var document = ProjectFixtures.Document("Стиль") with { Style = style, Lighting = new MapLighting { TimeOfDay = 0.5 } };
         var path = Path.Combine(_root, "style.mapproj");
         MapProjectStore.Save(document, path, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
@@ -109,6 +111,8 @@ public sealed class StylePersistenceTests : IDisposable
     [InlineData(MapStylePreset.UkiyoeSosakuHanga)]
     [InlineData(MapStylePreset.PrintLetterpress)]
     [InlineData(MapStylePreset.PrintTintedLithograph)]
+    [InlineData(MapStylePreset.OilAllaPrima)]
+    [InlineData(MapStylePreset.OilImpastoRhythm)]
     public void Missing_new_effects_use_the_approved_preset_defaults(MapStylePreset preset)
     {
         var path = Path.Combine(_root, "defaults.mapproj");

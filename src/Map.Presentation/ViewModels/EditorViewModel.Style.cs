@@ -63,6 +63,8 @@ public sealed partial class EditorViewModel
 
     public static string PresetTitle(MapStylePreset preset) => preset switch
     {
+        MapStylePreset.OilAllaPrima => "Алла прима",
+        MapStylePreset.OilImpastoRhythm => "Ритм импасто",
         MapStylePreset.WatercolorBigShapes => "Крупные пятна",
         MapStylePreset.UkiyoeSosakuHanga => "Сосаку-ханга",
         MapStylePreset.PrintLetterpress => "Высокая печать",
@@ -76,6 +78,7 @@ public sealed partial class EditorViewModel
 
     public static string StyleFamilyTitle(MapStylePreset preset) => preset switch
     {
+        MapStylePreset.OilAllaPrima or MapStylePreset.OilImpastoRhythm => "Масло",
         MapStylePreset.WatercolorBigShapes => "Акварель",
         MapStylePreset.UkiyoeSosakuHanga => "Укиё-э",
         MapStylePreset.PrintLetterpress or MapStylePreset.PrintTintedLithograph => "Печать",
@@ -86,6 +89,12 @@ public sealed partial class EditorViewModel
 
     public static string StyleEffectTitle(StyleEffectKind kind, MapStylePreset preset = MapStylePreset.InkWetBrush) => kind switch
     {
+        StyleEffectKind.Impasto => "Рельеф краски",
+        StyleEffectKind.Imprimatura when preset == MapStylePreset.OilImpastoRhythm => "Бороздки между штрихами",
+        StyleEffectKind.Imprimatura => "Грунт между мазками",
+        StyleEffectKind.Gloss => "Влажный блик",
+        StyleEffectKind.Crest when preset == MapStylePreset.OilAllaPrima => "Тёмные акценты гребней",
+        StyleEffectKind.Paper when preset == MapStylePreset.OilAllaPrima => "Холст",
         StyleEffectKind.Bleed when preset == MapStylePreset.WatercolorBigShapes => "Мокрая заливка",
         StyleEffectKind.Edges when preset == MapStylePreset.WatercolorBigShapes => "Засохший край",
         StyleEffectKind.Sea when preset == MapStylePreset.WatercolorBigShapes => "Море и берег",

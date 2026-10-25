@@ -62,6 +62,8 @@ public sealed partial class EditorView
 
     private static string PresetHint(MapStylePreset preset) => preset switch
     {
+        MapStylePreset.OilAllaPrima => "Алла прима: плоская кисть по плоскостям гор, тёплый свет и холодная тень, тёплый грунт между мазками.",
+        MapStylePreset.OilImpastoRhythm => "Ритм импасто: короткие густые штрихи двух оттенков, вдоль берега в море и на суше.",
         MapStylePreset.WatercolorBigShapes => "Крупные пятна: три прозрачных тона по сырой бумаге, пигмент у засохшего края и немного линий гребня.",
         MapStylePreset.UkiyoeSosakuHanga => "Сосаку-ханга: чёрные теневые грани, широкие срезы резца по форме, земляная суша и срезы в море индиго.",
         MapStylePreset.PrintLetterpress => "Высокая печать: чёрная и красная краски, плотные края пятен и зернистая середина, линии воды у берега.",
@@ -75,6 +77,12 @@ public sealed partial class EditorView
 
     private static string StyleEffectHint(StyleEffectKind kind, MapStylePreset preset) => kind switch
     {
+        StyleEffectKind.Impasto => "Густая краска с гребнями и бороздками щетины, свет с северо-запада.",
+        StyleEffectKind.Imprimatura when preset == MapStylePreset.OilImpastoRhythm => "Тёмные бороздки грунта между штрихами.",
+        StyleEffectKind.Imprimatura => "Тёплая сиена грунта проглядывает между мазками.",
+        StyleEffectKind.Gloss => "Влажный блеск на гребнях краски.",
+        StyleEffectKind.Crest when preset == MapStylePreset.OilAllaPrima => "Несколько тёмных мазков в самых глубоких складках вдоль гребней.",
+        StyleEffectKind.Paper when preset == MapStylePreset.OilAllaPrima => "Переплетение холста видно там, где краска тонкая.",
         StyleEffectKind.Bleed when preset == MapStylePreset.WatercolorBigShapes => "Бледная мокрая заливка гор мягко растекается за край рисунка.",
         StyleEffectKind.Edges when preset == MapStylePreset.WatercolorBigShapes => "Пигмент темнеет у края высохших пятен и светлеет в середине.",
         StyleEffectKind.Sea when preset == MapStylePreset.WatercolorBigShapes => "Бирюзовое и синее море, тёмная полоса у берега и мягкая заливка рек.",

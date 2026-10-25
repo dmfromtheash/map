@@ -70,6 +70,9 @@ internal sealed class MapStyleDto
     [JsonPropertyName("stoneCrayon")] public LightingEffectDto? StoneCrayon { get; set; }
     [JsonPropertyName("tintPlate")] public LightingEffectDto? TintPlate { get; set; }
     [JsonPropertyName("scraped")] public LightingEffectDto? Scraped { get; set; }
+    [JsonPropertyName("impasto")] public LightingEffectDto? Impasto { get; set; }
+    [JsonPropertyName("imprimatura")] public LightingEffectDto? Imprimatura { get; set; }
+    [JsonPropertyName("gloss")] public LightingEffectDto? Gloss { get; set; }
     [JsonPropertyName("plate")] public LightingEffectDto? Plate { get; set; }
     [JsonPropertyName("border")] public LightingEffectDto? Border { get; set; }
 }
