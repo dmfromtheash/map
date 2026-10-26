@@ -169,6 +169,8 @@ public sealed partial class Stage19Application : Application
         { _report.Required = TimelineRequired; _report.Scenario = "timeline"; }
         if (Options.Profile == "native-pointcrawl")
         { _report.Required = PointcrawlRequired; _report.Scenario = "pointcrawl"; }
+        if (Options.Profile == "native-planet")
+        { _report.Required = PlanetRequired; _report.Scenario = "planet"; }
         if (Options.Profile == "native-soft-coast")
         { _report.Required = SoftCoastRequired; _report.Scenario = "soft-coast"; }
         if (Options.Profile == "native-history-memory")
@@ -250,6 +252,7 @@ public sealed partial class Stage19Application : Application
         if (_report.Scenario == "transitions") { await TransitionsOnly(); return; }
         if (_report.Scenario == "timeline") { await TimelineOnly(); return; }
         if (_report.Scenario == "pointcrawl") { await PointcrawlOnly(); return; }
+        if (_report.Scenario == "planet") { await PlanetOnly(); return; }
         if (_report.Scenario == "owner-art") { await OwnerArtOnly(); return; }
         if (_report.Scenario == "history-memory") { await HistoryMemoryOnly(); return; }
         if (_report.Scenario == "panel-shots") { await PanelShotsOnly(); return; }

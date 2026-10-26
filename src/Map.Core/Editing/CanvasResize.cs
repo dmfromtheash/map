@@ -192,6 +192,7 @@ public static class CanvasTransformService
             Labels = document.Labels,
             Fog = ShiftFog(document.Fog, plan.OffsetX, plan.OffsetY),
             Timeline = document.Timeline,
+            Planet = MapPlanet.Fits(plan.Width, plan.Height) ? document.Planet : document.Planet with { Enabled = false },
             // The places of the pointcrawl move with the content.
             Pointcrawl = document.Pointcrawl with { Nodes = [.. document.Pointcrawl.Nodes.Select(n => n with { X = n.X + plan.OffsetX, Y = n.Y + plan.OffsetY })] },
             // Transitions move with the content; ends on other maps stay where they are.

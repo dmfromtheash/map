@@ -58,6 +58,18 @@ public sealed class WaterCliffsPersistenceTests
     }
 
     [Fact]
+    public void The_planet_flag_round_trips_in_v42()
+    {
+        using var workspace = new TempWorkspace();
+        var document = new MapDocument(DocumentId.New(), "Планета", DateTimeOffset.UnixEpoch, new CanvasDefinition(2048, 1024, "px", "#FF8FB0BA"),
+            [new BaseColorLayer(LayerId.New(), "Море", true, false, 1, "#FF8FB0BA")]) { Planet = new MapPlanet { Enabled = true, SeamlessMeridian = false } };
+        var path = workspace.File("planet.mapproj");
+        MapProjectStore.Save(document, path, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
+        Assert.Equal(42, Schema(path));
+        Assert.Equal(new MapPlanet { Enabled = true, SeamlessMeridian = false }, MapProjectStore.Open(path).Document.Planet);
+    }
+
+    [Fact]
     public void The_pointcrawl_round_trips_in_v41()
     {
         using var workspace = new TempWorkspace();

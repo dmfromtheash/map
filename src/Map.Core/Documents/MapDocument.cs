@@ -49,6 +49,7 @@ public sealed record MapDocument
         Transitions = source.Transitions;
         Timeline = source.Timeline;
         Pointcrawl = source.Pointcrawl;
+        Planet = source.Planet;
     }
 
     public MapDocument(
@@ -288,6 +289,9 @@ public sealed record MapDocument
 
     /// <summary>The places and ways of the pointcrawl over the map (R32, schema v41).</summary>
     public MapPointcrawl Pointcrawl { get; init; } = new();
+
+    /// <summary>The map is a whole planet, two to one (R39, schema v42).</summary>
+    public MapPlanet Planet { get; init; } = new();
     public string Title { get; init; }
 
     /// <summary>When the document was first created. Supplied by the caller; Core has no clock.</summary>
@@ -366,6 +370,7 @@ public sealed record MapDocument
             Transitions = Transitions,
             Timeline = Timeline,
             Pointcrawl = Pointcrawl,
+            Planet = Planet,
         };
 
     public MapDocument WithAssets(IReadOnlyList<MapAssetReference> assets)

@@ -266,6 +266,31 @@ public sealed class WaterCliffsWorkflowTests
     }
 
     [Fact]
+    public void Only_a_two_to_one_map_becomes_a_planet_and_a_projection_is_written()
+    {
+        var editor = Editor();
+        editor.SetPlanet(true, true);
+        Assert.False(editor.Planet.Enabled);
+        Assert.Contains("2:1", editor.StatusDetail);
+
+        var planet = new EditorViewModel(new MapDocument(DocumentId.New(), "Планета", DateTimeOffset.UnixEpoch, new CanvasDefinition(1024, 512, "px", "#FF8FB0BA"),
+            [new BaseColorLayer(LayerId.New(), "Море", true, false, 1, "#FF8FB0BA")]),
+            null, false, new FakeProjectStore(), new FakeRecentMaps(), new FakeFilePicker(), new FakePrompts(), new FakeLog());
+        planet.SetPlanet(true, true);
+        Assert.True(planet.Planet.Enabled);
+        var path = Path.Combine(Path.GetTempPath(), "map-planet-" + Guid.NewGuid().ToString("N") + ".png");
+        try
+        {
+            Assert.True(planet.ExportProjectionAsync(path, Map.Export.PlanetProjection.Robinson, 600, 0, 0, 12).GetAwaiter().GetResult());
+            using var written = SkiaSharp.SKBitmap.Decode(path);
+            Assert.Equal(600, written.Width);
+        }
+        finally { if (File.Exists(path)) File.Delete(path); }
+        planet.Undo();
+        Assert.False(planet.Planet.Enabled);
+    }
+
+    [Fact]
     public void A_card_is_made_from_the_selection_bound_linked_and_undone()
     {
         var label = new SceneObject(ObjectId.New(), SceneObjectKind.Text, "Ильград", 100, 100, 120, 40, 0, "#FF20242B", "#FFFFFFFF", 0, true, false)

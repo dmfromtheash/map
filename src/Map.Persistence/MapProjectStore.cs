@@ -57,6 +57,8 @@ public static partial class MapProjectStore
             || l.Objects.Any(o => o.Era is not null || o.MorphKey is not null || o.Political != PoliticalRole.None));
 
     private static int SchemaFor(MapDocument document) =>
+        !document.Planet.IsDefault || document.Checkpoints.Any(c => !c.Snapshot.Planet.IsDefault)
+            ? MapProjectFormat.PlanetSchemaVersion :
         !document.Pointcrawl.IsDefault || document.Checkpoints.Any(c => !c.Snapshot.Pointcrawl.IsDefault)
             ? MapProjectFormat.PointcrawlSchemaVersion :
         HasTimelineV40(document.Timeline, document.Layers) || document.Checkpoints.Any(c => HasTimelineV40(c.Snapshot.Timeline, c.Snapshot.Layers))
@@ -1759,6 +1761,7 @@ public static partial class MapProjectStore
         Transitions = document.Transitions.IsDefaultOrEmpty ? null : [.. document.Transitions],
         Timeline = document.Timeline.IsDefault ? null : document.Timeline,
         Pointcrawl = document.Pointcrawl.IsDefault ? null : document.Pointcrawl,
+        Planet = document.Planet.IsDefault ? null : document.Planet,
         StampForeground = document.StampForeground is { } foreground
             ? new StampForegroundDto { Tiles = ToTileDtos(foreground.Tiles) }
             : null,
@@ -2456,7 +2459,7 @@ public static partial class MapProjectStore
                 category) { Atlas = ReadAtlasV26(manifest), Lighting = ReadLightingV28(manifest), Style = ReadStyleV29(manifest),
                     Entities = ReadEntitiesV36(scene), Labels = ReadLabelsV37(scene), Fog = ReadFogV38(scene),
                     Transitions = ReadTransitionsV39(scene), Timeline = ReadTimelineV40(scene),
-                    Pointcrawl = ReadPointcrawlV41(scene) };
+                    Pointcrawl = ReadPointcrawlV41(scene), Planet = scene.Planet ?? new MapPlanet() };
         }
         catch (Exception ex) when (ex is ArgumentException or FormatException or InvalidOperationException)
         {

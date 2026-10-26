@@ -210,6 +210,10 @@ internal sealed class SceneDto
     [JsonPropertyName("pointcrawl")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Map.Core.Documents.MapPointcrawl? Pointcrawl { get; set; }
+    /// <summary>The map is a whole planet (R39, schema v42).</summary>
+    [JsonPropertyName("planet")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Map.Core.Documents.MapPlanet? Planet { get; set; }
     [JsonPropertyName("stampForeground")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public StampForegroundDto? StampForeground { get; set; }

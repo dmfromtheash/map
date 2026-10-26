@@ -140,6 +140,7 @@ public static class PlayerScene
             Entities = [.. document.Entities.Where(e => e.PlayerVisible)],
             Transitions = [.. document.Transitions.Where(t => fog.Sees(t.From.X, t.From.Y))],
             Timeline = document.Timeline,
+            Planet = document.Planet,
             // The players' pointcrawl: what they have seen, no hidden ways, no master's notes.
             Pointcrawl = PlayersPointcrawl(document.Pointcrawl),
         };

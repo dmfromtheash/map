@@ -23,6 +23,8 @@ public static partial class MapProjectStore
     {
         if (scene.Layers?.Any(l => l?.Sea is not null && l.Type != "BaseColor") == true)
             throw new MapProjectCorruptedException("Стиль моря бывает только у слоя фона.");
+        if (schema < MapProjectFormat.PlanetSchemaVersion && scene.Planet is not null)
+            throw new MapProjectCorruptedException("Карта-планета требует схему v42.");
         if (schema < MapProjectFormat.PointcrawlSchemaVersion && scene.Pointcrawl is not null)
             throw new MapProjectCorruptedException("Пойнткроул требует схему v41.");
         if (schema < MapProjectFormat.TimelineSchemaVersion && (scene.Timeline is not null

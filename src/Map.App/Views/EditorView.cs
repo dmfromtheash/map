@@ -9903,6 +9903,7 @@ public sealed partial class EditorView : UserControl
         Timed("transitions", SyncTransitions);
         Timed("timeline", SyncTimeline);
         Timed("pointcrawl", SyncPointcrawl);
+        Timed("planet", SyncPlanet);
         Timed("checkpoint-list", SyncCheckpointList);
         Timed("canvas-workflow", SyncCanvasWorkflow);
         Timed("quick-bar", SyncQuickBar);

@@ -138,7 +138,10 @@ public static class MapProjectFormat
 
     /// <summary>R32: the pointcrawl over the map.</summary>
     public const int PointcrawlSchemaVersion = 41;
-    public const int MaxSupportedSchemaVersion = PointcrawlSchemaVersion;
+
+    /// <summary>R39: the planet flag (two to one, the seamless meridian).</summary>
+    public const int PlanetSchemaVersion = 42;
+    public const int MaxSupportedSchemaVersion = PlanetSchemaVersion;
 
     /// <summary>
     /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry

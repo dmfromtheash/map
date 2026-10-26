@@ -820,6 +820,38 @@ public sealed partial class MapCanvasControl : Control
                 BoundaryOverlay = editor.CanvasBoundaryOverlay,
             });
             sceneStopwatch.Stop();
+            // R39 «Бесшовный меридиан»: past a side edge of a planet the other side of the world
+            // shows, faint and read-only, so a coast crossing the seam can be matched.
+            if (renderDocument.Planet is { Enabled: true, SeamlessMeridian: true })
+            {
+                var worldWidth = renderDocument.Canvas.Width;
+                var worldHeight = renderDocument.Canvas.Height;
+                foreach (var side in new[] { 1, -1 })
+                {
+                    var (from, to) = side > 0 ? (Math.Max(X, worldWidth), bottomRight.X) : (X, Math.Min(bottomRight.X, 0));
+                    if (to - from < 1) continue;
+                    canvas.Save();
+                    canvas.ClipRect(new SKRect((float)from, 0, (float)to, worldHeight));
+                    canvas.Translate(side * worldWidth, 0);
+                    using (var ghost = new SKPaint { Color = SKColors.White.WithAlpha(150) })
+                    {
+                        canvas.SaveLayer(ghost);
+                        SceneRenderer.Render(canvas, renderDocument, new Map.Rendering.RenderOptions
+                        {
+                            ViewScale = viewport.Scale,
+                            VisibleWorld = new Map.Core.Documents.WorldBounds(from - (side * worldWidth), Y, to - (side * worldWidth), bottomRight.Y),
+                            Stamps = editor.StampImages,
+                            TileCache = tileCache,
+                        });
+                        canvas.Restore();
+                    }
+                    canvas.Restore();
+                }
+                using var seam = new SKPaint { Color = new SKColor(0xD8, 0xB2, 0x6A, 200), IsAntialias = true, Style = SKPaintStyle.Stroke,
+                    StrokeWidth = (float)(1.5 / viewport.Scale), PathEffect = SKPathEffect.CreateDash([(float)(8 / viewport.Scale), (float)(6 / viewport.Scale)], 0) };
+                canvas.DrawLine(0, 0, 0, worldHeight, seam);
+                canvas.DrawLine(worldWidth, 0, worldWidth, worldHeight, seam);
+            }
             if (MeasureGpuFlush && lease.GrContext is { } flushContext)
             {
                 // Diagnostics only: complete this frame's GPU work here so its cost is visible per frame.
