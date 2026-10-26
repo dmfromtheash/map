@@ -8,7 +8,7 @@ public sealed partial class Stage19Application
 {
     private static readonly string[] EntitiesRequired =
     [
-        "card-from-selection", "card-text-and-link", "link-creates-card", "backlink-shown", "note-settings", "resources-disposed",
+        "card-from-selection", "card-text-and-link", "link-creates-card", "backlink-shown", "wiki-preview", "note-settings", "resources-disposed",
     ];
 
     /// <summary>
@@ -37,7 +37,7 @@ public sealed partial class Stage19Application
         _report.Checks["card-from-selection"] = card is { Name: "Ильград" } && card.Bindings.Single().TargetId == label.Id.Value;
 
         var text = Find<TextBox>("EntityMarkdownBox");
-        text.Text = "Столица у реки [[Сельва]]. Здесь заседает **совет**.";
+        text.Text = string.Join(Environment.NewLine, "# Ильград", "Столица у реки [[Сельва]]. Здесь заседает **совет**.", "- рынок по *четвергам*", "- порт", "1. совет", "2. гильдии");
         await Click("SaveEntityButton");
         card = _editor.Entities.Single();
         _report.Checks["card-text-and-link"] = card.LinkedNames().SequenceEqual(["Сельва"]) && Find<Control>("EntityLinks").IsEffectivelyVisible;
@@ -49,6 +49,11 @@ public sealed partial class Stage19Application
         await Frame();
         _report.Screenshot = Path.ChangeExtension(Options.OutputPath, ".png");
         SaveVisual(_report.Screenshot);
+        var wiki = Find<Control>("EntityWikiPreview").GetVisualDescendants().OfType<TextBlock>().ToList();
+        static string Words(TextBlock t) => t.Inlines is { Count: > 0 } inlines ? string.Concat(inlines.OfType<Avalonia.Controls.Documents.Run>().Select(r => r.Text)) : t.Text ?? "";
+        _report.Checks["wiki-preview"] = wiki.Any(t => Words(t) == "Ильград" && t.FontSize >= 18) && wiki.Any(t => t.Text == "Сельва")
+            && wiki.Any(t => t.Inlines?.OfType<Avalonia.Controls.Documents.Run>().Any(r => r.Text == "совет" && r.FontWeight == Avalonia.Media.FontWeight.Bold) == true);
+        PanelAudit.Save(Find<Control>("EntityCard"), Path.Combine(Path.GetDirectoryName(Options.OutputPath)!, Path.GetFileNameWithoutExtension(Options.OutputPath) + "-card.png"));
 
         var note = _editor.AddNoteAt(300, 300);
         _editor.SetNoteWiki(note, null, NoteCategory.Quest, true);

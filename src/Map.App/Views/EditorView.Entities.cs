@@ -71,6 +71,7 @@ public sealed partial class EditorView
         var players = Ui.PropertyToggle("EntityPlayerVisibleToggle", "Видно игрокам");
         ToolTip.SetTip(players, "Без галочки карточка — только для ведущего.");
         var links = new StackPanel { Name = "EntityLinks", Spacing = 2 };
+        var preview = new ContentControl { Name = "EntityWikiPreview" };
         var places = new StackPanel { Name = "EntityBindings", Spacing = 2 };
         var backlinks = new StackPanel { Name = "EntityBacklinks", Spacing = 2 };
         var save = Ui.CommandButton("SaveEntityButton", "Сохранить", MapIcons.Check, () =>
@@ -105,6 +106,7 @@ public sealed partial class EditorView
                 Children =
                 {
                     new DockPanel { Children = { kind.Docked(Dock.Right), name } },
+                    Ui.Subgroup("Просмотр", preview),
                     Ui.Subgroup("Текст", text),
                     Ui.Subgroup("Ссылки", links),
                     Ui.Subgroup("Где на картах", places),
@@ -139,6 +141,7 @@ public sealed partial class EditorView
             if (!name.IsFocused) name.Text = selected.Name;
             kind.SelectedIndex = Array.FindIndex(EntityKinds, k => k.Kind == selected.Kind);
             if (!text.IsFocused) text.Text = selected.Markdown;
+            preview.Content = WikiView.Build(selected.Markdown, OpenEntityByName);
             players.IsChecked = selected.PlayerVisible;
             links.Children.Clear();
             foreach (var linked in selected.LinkedNames())
@@ -178,6 +181,11 @@ public sealed partial class EditorView
             }
             if (backlinks.Children.Count == 0) backlinks.Children.Add(new TextBlock { Text = "Пока никто не ссылается на эту карточку.", TextWrapping = TextWrapping.Wrap }.Classed("faint"));
         }
+        void OpenEntityByName(string linked)
+        {
+            if (MapEntities.Resolve(_editor.Entities, linked) is { } target) { _selectedEntityId = target.Id; SyncEntities(); }
+        }
+        text.TextChanged += (_, _) => { if (text.IsFocused) preview.Content = WikiView.Build(text.Text ?? "", OpenEntityByName); };
         _entitySyncs.Add(Sync);
         Sync();
         return new StackPanel
