@@ -340,6 +340,8 @@ public static class CanvasTransformService
             {
                 GeometryTiles = TransformTiles(land.GeometryTiles, offsetX, offsetY, clip),
                 PaintTiles = TransformTiles(land.PaintTiles, offsetX, offsetY, clip),
+                CliffWallTiles = TransformTiles(land.CliffWallTiles, offsetX, offsetY, clip),
+                CliffBeachTiles = TransformTiles(land.CliffBeachTiles, offsetX, offsetY, clip),
             }).WithMask(mask),
             GridLayer grids => (grids with
             {

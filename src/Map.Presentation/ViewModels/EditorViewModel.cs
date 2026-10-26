@@ -1016,18 +1016,20 @@ public sealed partial class EditorViewModel : ViewModelBase
             LayerId = _activeLayerId ?? default,
             Coverage = _strokeSnapshot?.Coverage ?? _stroke.CommittedCoverage,
             Versions = _strokeSnapshot?.Versions ?? _stroke.CommittedVersions,
-            Color = ActiveTool == EditorTool.Land && !LandPaintMode && ActiveLayer is LandLayer land
+            Color = ActiveTool == EditorTool.Land && LandCliffMaskMode ? CliffMaskPreviewColor
+                : ActiveTool == EditorTool.Land && !LandPaintMode && ActiveLayer is LandLayer land
                 ? land.EdgeStyle.FillColor
                 : _stroke.Settings.Color,
             Opacity = _stroke.Settings.Opacity,
             Eraser = _stroke.Settings.Eraser,
-            PaintSettings = ActiveTool == EditorTool.Mask ? null
+            PaintSettings = ActiveTool == EditorTool.Mask || (ActiveTool == EditorTool.Land && LandCliffMaskMode) ? null
                 : ActiveTool == EditorTool.Land && !LandPaintMode && ActiveLayer is LandLayer previewLand
                     ? _stroke.Settings with { Texture = null, Color = previewLand.EdgeStyle.FillColor }
                     : _stroke.Settings,
             IsMask = ActiveTool == EditorTool.Mask,
             IsStampForeground = _editingStampForeground,
-            IsLandPaint = ActiveTool == EditorTool.Land && LandPaintMode,
+            IsLandPaint = ActiveTool == EditorTool.Land && LandPaintMode && !LandCliffMaskMode,
+            IsCliffMask = ActiveTool == EditorTool.Land && LandCliffMaskMode,
         };
 
     public bool IsEditingStampForeground => _editingStampForeground;
@@ -6810,7 +6812,8 @@ public sealed partial class EditorViewModel : ViewModelBase
         {
             EditorTool.Brush => ((BrushLayer)layer).Tiles,
             EditorTool.Mask => layer.Mask!.Tiles,
-            _ => LandPaintMode ? ((LandLayer)layer).PaintTiles : ((LandLayer)layer).GeometryTiles,
+            _ => LandCliffMaskMode ? CliffMaskTargets((LandLayer)layer).Primary
+                : LandPaintMode ? ((LandLayer)layer).PaintTiles : ((LandLayer)layer).GeometryTiles,
         };
 
         // The stroke's randomness is decided here, BEFORE any command exists: the committed
@@ -6822,9 +6825,12 @@ public sealed partial class EditorViewModel : ViewModelBase
 
         _stroke = new RasterStrokeSession(target,
             ActiveTool == EditorTool.Land
-                ? LandPaintMode ? LandPaintSettings() : LandShapeSettings()
+                ? LandCliffMaskMode ? CliffMaskSettings() : LandPaintMode ? LandPaintSettings() : LandShapeSettings()
                 : BrushSettings);
+        _cliffCompanion = ActiveTool == EditorTool.Land && LandCliffMaskMode
+            ? new RasterStrokeSession(CliffMaskTargets((LandLayer)layer).Companion, CliffMaskSettings()) : null;
         _stroke.AddPoint(worldX, worldY, pressure);
+        _cliffCompanion?.AddPoint(worldX, worldY, pressure);
         PublishStrokeSnapshot();
         InvalidateScene(EditorChangeReason.CanvasInvalidation);
         return true;
@@ -6865,6 +6871,8 @@ public sealed partial class EditorViewModel : ViewModelBase
             case EditorTool.Brush:
             case EditorTool.Mask:
                 return new(worldX, worldY, BrushSettings.Radius, 0, BrushSettings.Eraser || (ActiveTool == EditorTool.Mask && MaskMode == MaskPaintMode.Hide));
+            case EditorTool.Land when LandCliffMaskMode:
+                return new(worldX, worldY, BrushSettings.Radius, 0, LandCliffMaskAction == CliffMaskAction.Erase);
             case EditorTool.Land when LandPaintMode:
                 return new(worldX, worldY, BrushSettings.Radius, 0, LandPaintEraser);
             case EditorTool.Land when !LandDrawsRegion:
@@ -6886,6 +6894,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
 
         _stroke.AddPoint(worldX, worldY, pressure);
+        _cliffCompanion?.AddPoint(worldX, worldY, pressure);
         PublishStrokeSnapshot();
         InvalidateScene(EditorChangeReason.CanvasInvalidation);
     }
@@ -6899,7 +6908,9 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
 
         var stroke = _stroke;
+        var companion = _cliffCompanion;
         _stroke = null;
+        _cliffCompanion = null;
         _strokeSnapshot = null;
         if (stroke.IsEmpty)
         {
@@ -6922,6 +6933,10 @@ public sealed partial class EditorViewModel : ViewModelBase
                 missingTileValue: 255,
                 subtract: MaskMode == MaskPaintMode.Hide));
             Timed("session-execute", () => Session.Execute(new MaskStrokeCommand(activeLayerId.GetValueOrDefault(), Before, After)));
+        }
+        else if (ActiveTool == EditorTool.Land && LandCliffMaskMode && companion is not null)
+        {
+            Timed("session-execute", () => Session.Execute(CommitCliffMask(activeLayerId.GetValueOrDefault(), stroke, companion)));
         }
         else if (ActiveTool == EditorTool.Land && LandPaintMode)
         {
@@ -7044,13 +7059,20 @@ public sealed partial class EditorViewModel : ViewModelBase
         var (before, after) = LandRasterizer.MoveRegion(land.GeometryTiles, region, deltaX, deltaY);
         if (before.Count == 0) return false;
         var geometry = new BrushStrokeCommand(land.Id, before, after, "Move selected land area");
-        if (land.PaintTiles.TileCount == 0) Session.Execute(geometry);
-        else
+        var commands = new List<IEditCommand> { geometry };
+        if (land.PaintTiles.TileCount > 0)
         {
             var (paintBefore, paintAfter) = LandRasterizer.MoveRegion(land.PaintTiles, region, deltaX, deltaY);
-            Session.Execute(new CompositeCommand("Move land with material painting",
-                [geometry, new LandPaintCommand(land.Id, paintBefore, paintAfter, "Move material painting")]));
+            commands.Add(new LandPaintCommand(land.Id, paintBefore, paintAfter, "Move material painting"));
         }
+        if (land.HasCliffMask)
+        {
+            // The cliff mask belongs to the coast it was painted on and travels with it.
+            var (wallBefore, wallAfter) = LandRasterizer.MoveRegion(land.CliffWallTiles, region, deltaX, deltaY);
+            var (beachBefore, beachAfter) = LandRasterizer.MoveRegion(land.CliffBeachTiles, region, deltaX, deltaY);
+            commands.Add(new LandCliffMaskCommand(land.Id, wallBefore, wallAfter, beachBefore, beachAfter, "Move cliff mask"));
+        }
+        Session.Execute(commands.Count == 1 ? geometry : new CompositeCommand("Move land with its painting", commands));
         AfterEdit(); return true;
     }
 
@@ -7058,7 +7080,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     {
         if (ActiveLayer is not LandLayer { Locked: false } land || !land.GeometryTiles.Keys.Any()) return false;
         Session.Execute(UpdateLayerCommand.Replace(land,
-            land with { GeometryTiles = TileMap.Empty(1), PaintTiles = TileMap.Empty(4) }, "Clear land"));
+            land with { GeometryTiles = TileMap.Empty(1), PaintTiles = TileMap.Empty(4), CliffWallTiles = TileMap.Empty(1), CliffBeachTiles = TileMap.Empty(1) }, "Clear land"));
         AfterEdit(); return true;
     }
 
@@ -7142,6 +7164,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         }
 
         _stroke = null;
+        _cliffCompanion = null;
         InvalidateScene(EditorChangeReason.CanvasInvalidation);
     }
 

@@ -24,7 +24,8 @@ public sealed partial class EditorView
     private ToggleButton? _riverSharp, _riverTaper, _riverCutsLand, _riverClipToLand;
     private TextBox? _riverName;
     private TextBlock? _riverSelectionSummary;
-    private System.Collections.Generic.IReadOnlyList<Button>? _riverModeButtons, _riverLevelButtons;
+    private System.Collections.Generic.IReadOnlyList<Button>? _riverModeButtons, _riverLevelButtons, _riverFeatureButtons;
+    private Control? _riverFeatureBlock, _riverDeltaBlock;
     private bool _syncingRivers;
 
     private Control BuildRiverPanel()
@@ -98,6 +99,14 @@ public sealed partial class EditorView
         _riverNodeTension = AppearanceNumberBox("RiverNodeTensionBox", "Кривизна в узле", "%",
             () => _editor.SelectedRiverNodeTensionPercent, _editor.SetSelectedRiverNodeTensionPercent, slider: (0, 250),
             defaultValue: 100, description: "0 % — острый угол, 100 % — обычная плавная кривая, больше — размашистый изгиб.", step: 5);
+        // R12: what the water does at this node, drawn across the channel.
+        var (features, featureButtons) = Ui.Segmented("RiverNodeFeature_",
+            [(nameof(RiverNodeFeature.None), "Нет", null), (nameof(RiverNodeFeature.Waterfall), "Водопад", null),
+             (nameof(RiverNodeFeature.Rapids), "Пороги", null), (nameof(RiverNodeFeature.Ford), "Брод", null)],
+            key => _editor.SetSelectedRiverNodeFeature(Enum.Parse<RiverNodeFeature>(key)));
+        _riverFeatureButtons = featureButtons;
+        ToolTip.SetTip(features, "Что вода делает в этом узле: падает уступом, бурлит на камнях или мелеет так, что можно перейти вброд. Рисуется поперёк русла; само русло не меняется.");
+        _riverFeatureBlock = new StackPanel { Spacing = 2, Children = { new TextBlock { Text = "В узле" }.Classed("role-panel"), features } };
         _riverNodeBlock = Ui.Subgroup("Узел", new StackPanel
         {
             Spacing = 4, Children =
@@ -105,6 +114,7 @@ public sealed partial class EditorView
                 _riverNodeWidth,
                 _riverNodeTension,
                 _riverSharp,
+                _riverFeatureBlock,
                 Ui.TextButton("InsertRiverNodeButton", "Добавить узел на русле", _editor.InsertRiverNode, "compact"),
                 Ui.TextButton("DeleteRiverNodeButton", "Удалить выбранный узел (Delete)", () => _editor.DeleteSelectedRiverNode(), "compact"),
                 Ui.Advanced("RiverNodeAdvanced", new StackPanel
@@ -118,7 +128,7 @@ public sealed partial class EditorView
         _riverDetachSource = Ui.TextButton("DetachRiverSourceButton", "Отделить исток (свободный исток)", _editor.DetachSelectedChannelSource, "compact");
         _riverReverse = Ui.TextButton("ReverseRiverChannelButton", "Развернуть течение", _editor.ReverseSelectedChannel, "compact");
         _riverMeander = Ui.TextButton("MeanderRiverChannelButton", "Показать извилины", _editor.PreviewMeanderOnSelectedChannel, "compact");
-        _riverApplyPreview = Ui.TextButton("ApplyRiverPreviewButton", "Применить извилины", () => _editor.ApplyRiverPreview(), "compact");
+        _riverApplyPreview = Ui.TextButton("ApplyRiverPreviewButton", "Применить предпросмотр", () => _editor.ApplyRiverPreview(), "compact");
         _riverProfileBlock = new StackPanel
         {
             Spacing = 4, Children =
@@ -127,6 +137,19 @@ public sealed partial class EditorView
                     slider: (1, 400), description: "Ширина в первом узле русла. Профиль от истока к устью распределяется по всем узлам."),
                 AppearanceNumberBox("RiverMouthWidthBox", "Ширина у устья", "ед.", () => _editor.SelectedChannelMouthWidth, _editor.SetSelectedChannelMouthWidth,
                     slider: (1, 400), description: "Ширина в последнем узле русла. Ромбы истока и устья перетаскиваются вдоль других русел и берегов озёр."),
+            },
+        };
+        _riverDeltaBlock = new StackPanel
+        {
+            Spacing = 4, Children =
+            {
+                AppearanceNumberBox("RiverDeltaArmsBox", "Рукавов дельты", null, () => _editor.RiverDeltaArms, value => _editor.RiverDeltaArms = (int)Math.Round(value),
+                    slider: (2, 7), defaultValue: 3, description: "Сколько рукавов будет у устья, вместе с самим руслом."),
+                AppearanceNumberBox("RiverDeltaLengthBox", "Длина дельты", "%", () => _editor.RiverDeltaLengthPercent, value => _editor.RiverDeltaLengthPercent = value,
+                    slider: (5, 90), defaultValue: 25, step: 5, description: "На какой доле длины русла от устья рукава расходятся."),
+                AppearanceNumberBox("RiverDeltaSpreadBox", "Веер рукавов", "°", () => _editor.RiverDeltaSpread, value => _editor.RiverDeltaSpread = value,
+                    slider: (10, 150), defaultValue: 70, step: 5, description: "На какой угол расходятся крайние рукава."),
+                Ui.TextButton("PreviewRiverDeltaButton", "Показать дельту", _editor.PreviewDeltaOnSelectedChannel, "compact"),
             },
         };
         _riverChannelBlock = Ui.Subgroup("Русло", new StackPanel
@@ -140,6 +163,7 @@ public sealed partial class EditorView
                 AppearanceNumberBox("RiverMeanderBox", "Извилистость", "%", () => _editor.RiverMeanderPercent, value => _editor.RiverMeanderPercent = value, slider: (1, 100),
                     defaultValue: 20, step: 5, description: "Сколько новых изгибов добавит «Показать извилины». Сначала показывается предпросмотр, затем его можно применить."),
                 _riverMeander,
+                _riverDeltaBlock,
                 _riverApplyPreview,
                 Ui.Advanced("RiverChannelAdvanced", new StackPanel
                 {
@@ -370,6 +394,15 @@ public sealed partial class EditorView
             var lake = _editor.SelectedChannelIsLake;
             _riverNodeBlock!.IsVisible = hasRiver && _editor.IsWaterNodeMode && _editor.SelectedRiverNodeSharp is not null;
             _riverNodeWidth!.IsVisible = !lake;
+            _riverFeatureBlock!.IsVisible = !lake;
+            var feature = _editor.SelectedRiverNodeFeature;
+            foreach (var button in _riverFeatureButtons!)
+            {
+                var active = feature is { } current && button.Name == "RiverNodeFeature_" + current;
+                if (button is ToggleButton toggle) toggle.IsChecked = active;
+                Ui.SetClass(button, "active", active);
+            }
+            _riverDeltaBlock!.IsVisible = _editor.CanBuildDelta;
             _riverSplit!.IsVisible = !lake; _riverSplitOff!.IsVisible = !lake; _riverTrimBefore!.IsVisible = !lake; _riverTrimAfter!.IsVisible = !lake;
             _riverSplit.IsEnabled = _editor.CanSplitSelectedChannel; _riverSplitOff.IsEnabled = _editor.CanSplitSelectedChannel;
             _riverChannelBlock!.IsVisible = hasRiver && _editor.SelectedRiverChannel is not null;

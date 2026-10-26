@@ -1,0 +1,108 @@
+using System.IO.Compression;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using Map.Core.Documents;
+using Map.Core.Editing;
+using Map.Persistence.Tests.Support;
+
+namespace Map.Persistence.Tests;
+
+/// <summary>R12 (schema v32): the cliff light and mask and the river node features survive save and reopen.</summary>
+public sealed class WaterCliffsPersistenceTests
+{
+    private static readonly byte[] Full = Enumerable.Repeat((byte)255, TileMap.TileSize * TileMap.TileSize).ToArray();
+
+    private static int Schema(string path)
+    {
+        using var zip = ZipFile.OpenRead(path);
+        using var json = JsonDocument.Parse(zip.GetEntry("manifest.json")!.Open());
+        return json.RootElement.GetProperty("schemaVersion").GetInt32();
+    }
+
+    private static (MapDocument Document, LandLayer Land, ObjectLayer Objects) Fixture()
+    {
+        var document = ProjectFixtures.Document("R12");
+        var land = new LandLayer(LayerId.New(), "Плато", true, false, 1,
+            TileMap.Empty(1).With(new TileKey(0, 0), Full), new LandEdgeStyle()) { Level = 1 };
+        var objects = document.Layers.OfType<ObjectLayer>().First();
+        return (document with { Layers = [document.Layers[0], land, .. document.Layers.Skip(1)] }, land, objects);
+    }
+
+    [Fact]
+    public void Cliff_light_mask_and_node_features_round_trip_in_v32()
+    {
+        using var workspace = new TempWorkspace();
+        var (document, land, objects) = Fixture();
+        var half = Full.Select((_, i) => i % TileMap.TileSize < 128 ? (byte)255 : (byte)0).ToArray();
+        var masked = land with
+        {
+            EdgeStyle = land.EdgeStyle with { Cliff = land.EdgeStyle.Cliff with { LightAngle = 120 } },
+            CliffWallTiles = TileMap.Empty(1).With(new TileKey(0, 0), half),
+            CliffBeachTiles = TileMap.Empty(1).With(new TileKey(1, 0), Full),
+        };
+        var river = new River { Name = "Река", Channels = [RiverEditor.NewChannel([new(10, 10), new(200, 40), new(400, 60)], 8)] };
+        river = RiverEditor.SetNodeFeature(river, river.Channels[0].Id, 1, RiverNodeFeature.Rapids);
+        document = document.WithLayer(land.Id, _ => masked).WithLayer(objects.Id, _ => objects with { Rivers = [river] });
+        var path = workspace.File("r12.mapproj");
+
+        MapProjectStore.Save(document, path, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
+        Assert.Equal(32, Schema(path));
+        var opened = MapProjectStore.Open(path).Document;
+
+        var actual = (LandLayer)opened.FindLayer(land.Id)!;
+        Assert.Equal(120, actual.EdgeStyle.Cliff.LightAngle);
+        Assert.Equal(half, actual.CliffWallTiles.TryGet(new TileKey(0, 0)));
+        Assert.Equal(Full, actual.CliffBeachTiles.TryGet(new TileKey(1, 0)));
+        Assert.Equal(1, actual.CliffWallTiles.TileCount);
+        Assert.Equal(RiverNodeFeature.Rapids, ((ObjectLayer)opened.FindLayer(objects.Id)!).Rivers.Single().Channels[0].Nodes[1].Feature);
+    }
+
+    [Fact]
+    public void A_map_without_R12_constructs_keeps_its_schema_and_writes_no_feature()
+    {
+        using var workspace = new TempWorkspace();
+        var (document, land, objects) = Fixture();
+        var river = new River { Name = "Река", Channels = [RiverEditor.NewChannel([new(10, 10), new(200, 40)], 8)] };
+        document = document.WithLayer(objects.Id, _ => objects with { Rivers = [river] });
+        var path = workspace.File("old.mapproj");
+        MapProjectStore.Save(document, path, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
+        Assert.True(Schema(path) < 32);
+        using var zip = ZipFile.OpenRead(path);
+        var scene = new StreamReader(zip.GetEntry("scene.json")!.Open()).ReadToEnd();
+        Assert.DoesNotContain("\"Feature\"", scene, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("lightAngle", scene, StringComparison.Ordinal);
+        Assert.DoesNotContain("cliffWallTiles", scene, StringComparison.Ordinal);
+        Assert.Equal(LandCliffStyle.DefaultLightAngle,
+            ((LandLayer)MapProjectStore.Open(path).Document.FindLayer(land.Id)!).EdgeStyle.Cliff.LightAngle);
+    }
+
+    [Fact]
+    public void An_older_schema_carrying_a_node_feature_is_rejected()
+    {
+        using var workspace = new TempWorkspace();
+        var (document, _, objects) = Fixture();
+        var river = new River { Name = "Река", Channels = [RiverEditor.NewChannel([new(10, 10), new(200, 40), new(300, 80)], 8)] };
+        river = RiverEditor.SetNodeFeature(river, river.Channels[0].Id, 1, RiverNodeFeature.Waterfall);
+        document = document.WithLayer(objects.Id, _ => objects with { Rivers = [river] });
+        var path = workspace.File("forged.mapproj");
+        MapProjectStore.Save(document, path, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
+
+        // Forge the manifest down to v31: the feature is still in the scene.
+        var forged = workspace.File("forged-v31.mapproj");
+        using (var source = ZipFile.OpenRead(path))
+        using (var target = ZipFile.Open(forged, ZipArchiveMode.Create))
+            foreach (var entry in source.Entries)
+            {
+                var bytes = new MemoryStream(); using (var input = entry.Open()) input.CopyTo(bytes);
+                var data = bytes.ToArray();
+                if (entry.FullName == "manifest.json")
+                {
+                    var root = JsonNode.Parse(data)!; root["schemaVersion"] = 31;
+                    data = System.Text.Encoding.UTF8.GetBytes(root.ToJsonString());
+                }
+                using var output = target.CreateEntry(entry.FullName).Open(); output.Write(data);
+            }
+        var error = Assert.ThrowsAny<Exception>(() => MapProjectStore.Open(forged));
+        Assert.Contains("v32", error.ToString(), StringComparison.Ordinal);
+    }
+}

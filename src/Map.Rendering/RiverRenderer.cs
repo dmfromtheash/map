@@ -449,6 +449,16 @@ public static class RiverRenderer
             canvas.Restore();
         }
 
+        // Waterfalls, rapids and fords (R12) lie on the water, under the bank line.
+        foreach (var part in parts)
+        {
+            if (fastPreview || !RiverFeatureRenderer.Any(part.Geometry)) continue;
+            canvas.Save();
+            canvas.ClipPath(part.Body, SKClipOperation.Intersect, antialias: true);
+            RiverFeatureRenderer.Draw(canvas, part.Geometry, part.River.Style, scale);
+            canvas.Restore();
+        }
+
         Pass(6);
         if (bank > 0 && !fastPreview && style.BankManner > 0)
         {

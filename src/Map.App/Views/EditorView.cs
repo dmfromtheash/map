@@ -2564,6 +2564,7 @@ public sealed partial class EditorView : UserControl
                     },
                 })),
                 (_landPaintControls = BuildLandPaintPanel()),
+                (_landCliffMaskControls = BuildLandCliffMaskPanel()),
             },
         };
         _landShapeControls!.Classes.Add("tabbed");

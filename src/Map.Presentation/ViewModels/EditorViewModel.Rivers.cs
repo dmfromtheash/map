@@ -639,9 +639,9 @@ public sealed partial class EditorViewModel
         River next;
         try { next = RiverEditor.Meander(river, channel.Id, _riverMeanderPercent / 100, _riverMeanderSeed); }
         catch (InvalidOperationException ex) { StatusDetail = ex.Message; return; }
-        _riverOriginal = river; _riverDraft = next; _riverLayer = layer.Id; _riverPreviewing = true;
+        _riverOriginal = river; _riverDraft = next; _riverLayer = layer.Id; _riverPreviewing = true; _riverPreviewName = "Добавить извилины";
         StatusDetail = $"Предпросмотр извилин: узлов станет {next.FindChannel(channel.Id)!.Nodes.Length} вместо {channel.Nodes.Length}. "
-            + "«Применить извилины» — принять, Esc — отказаться.";
+            + "«Применить предпросмотр» — принять, Esc — отказаться.";
         RaiseRiverState();
     }
 
@@ -649,10 +649,10 @@ public sealed partial class EditorViewModel
     public bool ApplyRiverPreview()
     {
         if (!HasRiverPreview) return false;
-        var draft = _riverDraft!; var layer = _riverLayer;
+        var draft = _riverDraft!; var layer = _riverLayer; var name = _riverPreviewName;
         _riverPreviewing = false;
         CancelRiverGesture();
-        return CommitRiver(draft, "Добавить извилины", layer);
+        return CommitRiver(draft, name, layer);
     }
 
     public void MeanderSelectedChannel() => PreviewMeanderOnSelectedChannel();
@@ -828,6 +828,7 @@ public sealed partial class EditorViewModel
         Raise(nameof(SelectedChannelSourceWidth)); Raise(nameof(SelectedChannelMouthWidth)); Raise(nameof(SelectedChannelIsTributary));
         Raise(nameof(SelectedChannelHasSource)); Raise(nameof(SelectedChannelIsLake)); Raise(nameof(CanSplitSelectedChannel)); Raise(nameof(RiverDrawMode));
         Raise(nameof(SelectedRiverNodeTensionPercent)); Raise(nameof(SelectedChannelTensionPercent)); Raise(nameof(HasRiverPreview));
+        Raise(nameof(SelectedRiverNodeFeature)); Raise(nameof(CanBuildDelta));
         Raise(nameof(RiverTextureId)); Raise(nameof(RiverTextureOpacityPercent)); Raise(nameof(RiverTextureScale));
         Raise(nameof(RiverShallowWidth)); Raise(nameof(RiverShallowColor));
         Raise(nameof(WaterSelectionSummary)); Raise(nameof(SelectedWaterVisible)); Raise(nameof(SelectedWaterLocked));

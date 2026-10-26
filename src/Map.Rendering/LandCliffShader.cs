@@ -30,6 +30,7 @@ uniform float variationLength;
 uniform float gaps;
 uniform float gapLength;
 uniform float lean;
+uniform float lightTurn;
 uniform float facets;
 uniform float facetWidth;
 uniform float facetLines;
@@ -75,6 +76,8 @@ half4 main(float2 p) {
     float4 f = field.eval(p);
     float d = f.r;
     float steps = floor(f.g + 0.5);
+    // «здесь стена» of the cliff mask: the steps carry a quarter, and this stretch has no gap.
+    float forced = step(0.12, f.g - steps);
     float th = f.b;
     if (steps < 0.5 || d <= 0.0 || d > 50000.0) { return half4(0.0); }
 
@@ -92,8 +95,8 @@ half4 main(float2 p) {
     float g = noise2(edge / gapLength + float2(17.31, 5.17));
     float slope = abs(noise2((edge + float2(1.0, 0.0)) / gapLength + float2(17.31, 5.17)) - g) + 1e-5;
     float side = (g - gaps) / slope;                  // world units from the end of the wall
-    if (gaps > 0.001 && side < 0.0) { return half4(0.0); }
-    float taper = gaps > 0.001 ? smoothstep(0.0, stepHeight * 1.6, side) : 1.0;
+    if (gaps > 0.001 && side < 0.0 && forced < 0.5) { return half4(0.0); }
+    float taper = gaps > 0.001 && forced < 0.5 ? smoothstep(0.0, stepHeight * 1.6, side) : 1.0;
 
     // Height of this stretch: rises and falls along the edge, and ragged at the foot.
     float swell = noise2(edge / variationLength + float2(3.7, 11.3));
@@ -127,7 +130,9 @@ half4 main(float2 p) {
     // Faces: the turn of the edge in steps of 30 degrees, and a face every facetWidth along it.
     float binned = floor(th / 0.5236 + 0.5) * 0.5236;
     float facing = mix(th, binned, facets);
-    float lit = clamp(0.55 - 0.5 * sin(facing) + 0.1 * cos(facing), 0.0, 1.0);
+    // The light: turned from the north-west every older map has by lightTurn.
+    float toLight = facing + lightTurn;
+    float lit = clamp(0.55 - 0.5 * sin(toLight) + 0.1 * cos(toLight), 0.0, 1.0);
     float fs = s / facetWidth + 0.45 * noise1(s / (facetWidth * 3.0) + 5.3);
     float fid = floor(fs);
     float within = fs - fid;
@@ -186,7 +191,7 @@ half4 main(float2 p) {
         if (hash2(cell + 7.3) < chance) { ink = max(ink, line(distance, stippleSize * 0.45)); }
     }
     // The side of a wall where it ends in a gap.
-    if (gaps > 0.001) { ink = max(ink, line(side, inkWidth * 0.5) * facetLines); }
+    if (gaps > 0.001 && forced < 0.5) { ink = max(ink, line(side, inkWidth * 0.5) * facetLines); }
     // The foot: an ink line, a fade, or a plain end.
     float alpha = clamp((h - d) / px + 0.5, 0.0, 1.0);
     if (foot < 0.5) { ink = max(ink, line(h - d - inkWidth * 0.5, inkWidth * 0.5)); }
@@ -232,6 +237,7 @@ half4 main(float2 p) {
         builder.Uniforms["gaps"] = (float)style.Gaps;
         builder.Uniforms["gapLength"] = (float)style.GapLength;
         builder.Uniforms["lean"] = (float)style.Lean;
+        builder.Uniforms["lightTurn"] = (float)((style.LightAngle - LandCliffStyle.DefaultLightAngle) * Math.PI / 180);
         builder.Uniforms["facets"] = (float)style.Facets;
         builder.Uniforms["facetWidth"] = (float)style.FacetWidth;
         builder.Uniforms["facetLines"] = (float)style.FacetLines;

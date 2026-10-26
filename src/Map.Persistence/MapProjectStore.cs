@@ -42,6 +42,7 @@ public static partial class MapProjectStore
         layers.OfType<ObjectLayer>().Any(l => l.PlacementAreas.Any(a => a.NeedsRulesSchema));
 
     private static int SchemaFor(MapDocument document) =>
+        HasWaterCliffsV32(document) ? MapProjectFormat.WaterCliffsSchemaVersion :
         HasGenerationV31(document.Layers) || document.Checkpoints.Any(c => HasGenerationV31(c.Snapshot.Layers))
             ? MapProjectFormat.GenerationSchemaVersion :
         HasAreaBeautyV30(document.Layers) || document.Checkpoints.Any(c => HasAreaBeautyV30(c.Snapshot.Layers))
@@ -771,6 +772,7 @@ public static partial class MapProjectStore
             ValidatePathSchema(scene, manifest.SchemaVersion);
             ValidateAreaBeautySchemaV30(scene, manifest.SchemaVersion);
             ValidateGenerationSchemaV31(scene, manifest.SchemaVersion);
+            ValidateWaterCliffsSchemaV32(scene, manifest.SchemaVersion);
             if (expectedSchemaVersion is >= 2 and <= 3)
             {
                 ValidateV2SceneShape(sceneBytes, MapProjectFormat.SceneEntry);
@@ -988,6 +990,10 @@ public static partial class MapProjectStore
             if (layer.LandPaintTiles is not null && layer.Type != "Land")
                 throw new MapProjectCorruptedException("Only land can carry material paint tiles.");
             ReadTileList(layer.LandPaintTiles, entryRoot + MapProjectFormat.LandPaintPrefix, layerId, bytesPerPixel: 4);
+            if ((layer.CliffWallTiles is not null || layer.CliffBeachTiles is not null) && layer.Type != "Land")
+                throw new MapProjectCorruptedException("Only land can carry a cliff mask.");
+            ReadTileList(layer.CliffWallTiles, entryRoot + MapProjectFormat.CliffWallPrefix, layerId, bytesPerPixel: 1);
+            ReadTileList(layer.CliffBeachTiles, entryRoot + MapProjectFormat.CliffBeachPrefix, layerId, bytesPerPixel: 1);
         }
         if (scene.StampForeground is not null && scene.StampForeground.Tiles is null)
         {
@@ -1342,6 +1348,7 @@ public static partial class MapProjectStore
                 ValidatePathSchema(scene, snapshotManifest.SchemaVersion);
                 ValidateAreaBeautySchemaV30(scene, snapshotManifest.SchemaVersion);
                 ValidateGenerationSchemaV31(scene, snapshotManifest.SchemaVersion);
+                ValidateWaterCliffsSchemaV32(scene, snapshotManifest.SchemaVersion);
                 if (schemaVersion is >= 2 and <= 3)
                 {
                     ValidateV2SceneShape(sceneBytes, sceneEntry);
@@ -1762,6 +1769,10 @@ public static partial class MapProjectStore
             LandStyle = layer is LandLayer land ? ToLandStyleDto(land.EdgeStyle) : null,
             LandPaintTiles = layer is LandLayer { PaintTiles.TileCount: > 0 } painted
                 ? ToTileDtos(painted.PaintTiles) : null,
+            CliffWallTiles = layer is LandLayer { CliffWallTiles.TileCount: > 0 } walled
+                ? ToTileDtos(walled.CliffWallTiles) : null,
+            CliffBeachTiles = layer is LandLayer { CliffBeachTiles.TileCount: > 0 } beached
+                ? ToTileDtos(beached.CliffBeachTiles) : null,
             Level = layer is LandLayer { Level: not 0 } leveled ? leveled.Level : null,
             Grids = layer is GridLayer gridLayer
                 ? [.. gridLayer.Grids.Select(ToGridDto)]
@@ -2475,6 +2486,8 @@ public static partial class MapProjectStore
             {
                 Level = TerrainOrder.Clamp(layer.Level ?? 0),
                 PaintTiles = ToTileMap(layer.LandPaintTiles ?? [], entryRoot + MapProjectFormat.LandPaintPrefix, id, 4, tileEntries),
+                CliffWallTiles = ToTileMap(layer.CliffWallTiles ?? [], entryRoot + MapProjectFormat.CliffWallPrefix, id, 1, tileEntries),
+                CliffBeachTiles = ToTileMap(layer.CliffBeachTiles ?? [], entryRoot + MapProjectFormat.CliffBeachPrefix, id, 1, tileEntries),
             },
             "Grid" => new GridLayer(
                 id, name, layer.Visible, layer.Locked, layer.Opacity,
@@ -2891,6 +2904,8 @@ public static partial class MapProjectStore
     private static bool HasInvalidLayerDto(LayerDto? layer) => layer is null
         || layer.Tiles?.Any(static tile => tile is null) == true
         || layer.LandPaintTiles?.Any(static tile => tile is null) == true
+        || layer.CliffWallTiles?.Any(static tile => tile is null) == true
+        || layer.CliffBeachTiles?.Any(static tile => tile is null) == true
         || layer.Mask is { Tiles: null }
         || layer.Mask?.Tiles.Any(static tile => tile is null) == true
         || layer.Grids is null && layer.Type == "Grid"
@@ -2976,6 +2991,7 @@ public static partial class MapProjectStore
             Gaps = style.Cliff.Gaps,
             GapLength = style.Cliff.GapLength,
             Lean = style.Cliff.Lean,
+            LightAngle = style.Cliff.LightAngle == LandCliffStyle.DefaultLightAngle ? null : style.Cliff.LightAngle,
             Facets = style.Cliff.Facets,
             FacetWidth = style.Cliff.FacetWidth,
             FacetLines = style.Cliff.FacetLines,
@@ -3045,6 +3061,7 @@ public static partial class MapProjectStore
                 Gaps = cliff.Gaps is { } gapsValue && double.IsFinite(gapsValue) ? gapsValue : fallback.Gaps,
                 GapLength = cliff.GapLength is { } gapLengthValue && double.IsFinite(gapLengthValue) ? gapLengthValue : fallback.GapLength,
                 Lean = cliff.Lean is { } leanValue && double.IsFinite(leanValue) ? leanValue : fallback.Lean,
+                LightAngle = cliff.LightAngle is { } lightValue && double.IsFinite(lightValue) ? lightValue : fallback.LightAngle,
                 Facets = cliff.Facets is { } facetsValue && double.IsFinite(facetsValue) ? facetsValue : fallback.Facets,
                 FacetWidth = cliff.FacetWidth is { } facetWidthValue && double.IsFinite(facetWidthValue) ? facetWidthValue : fallback.FacetWidth,
                 FacetLines = cliff.FacetLines is { } facetLinesValue && double.IsFinite(facetLinesValue) ? facetLinesValue : fallback.FacetLines,
@@ -3101,6 +3118,12 @@ public static partial class MapProjectStore
                 foreach (var key in paintedLand.PaintTiles.Keys)
                     yield return (TileEntryName(entryRoot + MapProjectFormat.LandPaintPrefix,
                         layer.Id.ToString(), key.X, key.Y), paintedLand.PaintTiles.TryGet(key)!);
+                foreach (var key in paintedLand.CliffWallTiles.Keys)
+                    yield return (TileEntryName(entryRoot + MapProjectFormat.CliffWallPrefix,
+                        layer.Id.ToString(), key.X, key.Y), paintedLand.CliffWallTiles.TryGet(key)!);
+                foreach (var key in paintedLand.CliffBeachTiles.Keys)
+                    yield return (TileEntryName(entryRoot + MapProjectFormat.CliffBeachPrefix,
+                        layer.Id.ToString(), key.X, key.Y), paintedLand.CliffBeachTiles.TryGet(key)!);
             }
         }
 
@@ -3283,7 +3306,7 @@ public static partial class MapProjectStore
 
     private static int TileCount(MapLayer layer) =>
         (layer is IRasterContentLayer raster ? raster.ContentTiles.TileCount : 0)
-        + (layer is LandLayer land ? land.PaintTiles.TileCount : 0);
+        + (layer is LandLayer land ? land.PaintTiles.TileCount + land.CliffWallTiles.TileCount + land.CliffBeachTiles.TileCount : 0);
 
     private static LayerId LegacyBaseLayerId(string documentId)
     {

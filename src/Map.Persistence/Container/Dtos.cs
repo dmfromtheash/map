@@ -239,6 +239,13 @@ internal sealed class LayerDto
     [JsonPropertyName("landPaintTiles")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<TileDto>? LandPaintTiles { get; set; }
+    /// <summary>The cliff mask of a land (R12, schema v32): «здесь стена» and «здесь пляж» coverage.</summary>
+    [JsonPropertyName("cliffWallTiles")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<TileDto>? CliffWallTiles { get; set; }
+    [JsonPropertyName("cliffBeachTiles")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<TileDto>? CliffBeachTiles { get; set; }
     [JsonPropertyName("mask")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public MaskDto? Mask { get; set; }
@@ -487,6 +494,8 @@ internal sealed class LandCliffDto
     [JsonPropertyName("gaps")] public double? Gaps { get; set; }
     [JsonPropertyName("gapLength")] public double? GapLength { get; set; }
     [JsonPropertyName("lean")] public double? Lean { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("lightAngle")] public double? LightAngle { get; set; }
     [JsonPropertyName("facets")] public double? Facets { get; set; }
     [JsonPropertyName("facetWidth")] public double? FacetWidth { get; set; }
     [JsonPropertyName("facetLines")] public double? FacetLines { get; set; }

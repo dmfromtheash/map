@@ -13,13 +13,30 @@ namespace Map.Core.Documents;
 /// course editable without adding control points: shape is changed here, never by subdividing.
 /// </para>
 /// </summary>
-public sealed record RiverNode(Guid Id, double X, double Y, double Width, bool Sharp = false, double Tension = 1)
+public sealed record RiverNode(Guid Id, double X, double Y, double Width, bool Sharp = false, double Tension = 1,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    RiverNodeFeature Feature = RiverNodeFeature.None)
 {
     public const double MinimumTension = 0;
     public const double MaximumTension = 2.5;
 
     /// <summary>The tangent scale actually used by the geometry: a sharp node always reads 0.</summary>
     public double EffectiveTension => Sharp ? 0 : Math.Clamp(Tension, MinimumTension, MaximumTension);
+}
+
+/// <summary>
+/// What the water does at a node (R12, schema v32): it falls over a ledge, runs white over rocks,
+/// or is shallow enough to wade. Drawn across the channel at the node; the course is unchanged.
+/// </summary>
+public enum RiverNodeFeature
+{
+    None = 0,
+    /// <summary>Водопад: the water drops over a ledge across the channel.</summary>
+    Waterfall = 1,
+    /// <summary>Пороги: rocks and broken white water along a short stretch.</summary>
+    Rapids = 2,
+    /// <summary>Брод: a shallow crossing, stones and a pale band across the water.</summary>
+    Ford = 3,
 }
 
 /// <summary>
@@ -200,6 +217,10 @@ public sealed record River
 
     public RiverChannel? FindChannel(Guid id) => Channels.FirstOrDefault(c => c.Id == id);
 
+    /// <summary>True when some node carries a waterfall, rapids or a ford (schema v32).</summary>
+    public bool HasNodeFeatures => !Channels.IsDefault
+        && Channels.Any(c => c is not null && !c.Nodes.IsDefault && c.Nodes.Any(n => n is not null && n.Feature != RiverNodeFeature.None));
+
     /// <summary>Channels whose mouth or source lies on the given channel.</summary>
     public IEnumerable<RiverChannel> AttachedTo(Guid channelId) =>
         Channels.Where(c => c.Mouth?.ParentChannelId == channelId || c.Source?.ParentChannelId == channelId);
@@ -269,7 +290,8 @@ public sealed record River
                     || !double.IsFinite(node.X) || !double.IsFinite(node.Y)
                     || !double.IsFinite(node.Width) || node.Width is < MinimumWidth or > MaximumWidth
                     || !double.IsFinite(node.Tension)
-                    || node.Tension < RiverNode.MinimumTension || node.Tension > RiverNode.MaximumTension)
+                    || node.Tension < RiverNode.MinimumTension || node.Tension > RiverNode.MaximumTension
+                    || !Enum.IsDefined(node.Feature) || (channel.Closed && node.Feature != RiverNodeFeature.None))
                     throw new ArgumentException("Некорректный узел русла.");
             }
             if (channel.Closed && (channel.Mouth is not null || channel.Source is not null))

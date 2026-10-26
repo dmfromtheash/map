@@ -34,6 +34,15 @@ public sealed record LandCliffStyle
     /// <summary>Tilt of the view: the wall drops down and to the right (+) or left (−), −1..1.</summary>
     public double Lean { get; init; }
 
+    /// <summary>
+    /// Where the light comes from, as a compass bearing in degrees (0 north, 90 east, 180 south,
+    /// 270 west; R12). Faces turned towards it are lit, faces turned away are in shade. The default
+    /// 315 is the north-west light every map before R12 was drawn with.
+    /// </summary>
+    public double LightAngle { get; init; } = DefaultLightAngle;
+
+    public const double DefaultLightAngle = 315;
+
     /// <summary>How flat each face is: 0 a smooth turn of the light, 1 hard faces with one tone each.</summary>
     public double Facets { get; init; } = 0.75;
     /// <summary>Typical width of one face along a straight edge, in world units.</summary>
@@ -110,6 +119,7 @@ public sealed record LandCliffStyle
         Gaps = Clamp(Gaps, 0, 0.95, .15),
         GapLength = Clamp(GapLength, 8, 2048, 140),
         Lean = Clamp(Lean, -1, 1, 0),
+        LightAngle = double.IsFinite(LightAngle) ? ((LightAngle % 360) + 360) % 360 : DefaultLightAngle,
         Facets = Clamp(Facets, 0, 1, .75),
         FacetWidth = Clamp(FacetWidth, 3, 512, 22),
         FacetLines = Clamp(FacetLines, 0, 1, .9),

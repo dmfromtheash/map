@@ -131,6 +131,74 @@ public sealed class LandCliffRenderingTests
         Assert.Equal(0, new LandCliffStyle { Height = 0 }.Steps(3, 0));
     }
 
+    [Fact]
+    public void The_light_angle_turns_the_lit_faces_and_the_default_is_the_former_light()
+    {
+        var island = Styled(Land("Остров", 1, (x, y) => Blob(x, y, 384, 230, 250, 150)), Solid);
+        using var before = Render(Document(island));
+        using var same = Render(Document(Styled(island, Solid with { LightAngle = LandCliffStyle.DefaultLightAngle })));
+        AssertSame(before, same);
+        using var east = Render(Document(Styled(island, Solid with { LightAngle = 45 })));
+        var changed = 0;
+        for (var x = 160; x < 610; x += 2)
+            for (var y = 330; y < 420; y += 2)
+                if (before.GetPixel(x, y) != east.GetPixel(x, y)) changed++;
+        Assert.True(changed > 200, $"light from the north-east must relight the faces, {changed} probes changed");
+        Assert.Equal(45, (Solid with { LightAngle = 405 }).Bounded().LightAngle);
+        Assert.Equal(270, (Solid with { LightAngle = -90 }).Bounded().LightAngle);
+        Assert.Equal(LandCliffStyle.DefaultLightAngle, (Solid with { LightAngle = double.NaN }).Bounded().LightAngle);
+    }
+
+    [Fact]
+    public void A_beach_in_the_cliff_mask_removes_the_wall_and_the_rest_keeps_it()
+    {
+        var island = Styled(Land("Остров", 1, (x, y) => Blob(x, y, 384, 230, 250, 150)), Solid);
+        using var flat = Render(Document(island with { Level = 0 }));
+        // «Здесь пляж» over the middle of the southern coast only.
+        var beach = island with { CliffBeachTiles = Coverage((x, y) => x is > 320 and < 450 && y > 330 ? (byte)255 : (byte)0) };
+        using var image = Render(Document(beach));
+        Assert.Equal(flat.GetPixel(384, 395), image.GetPixel(384, 395));
+        Assert.NotEqual(flat.GetPixel(250, 385), image.GetPixel(250, 385));
+    }
+
+    [Fact]
+    public void A_wall_in_the_cliff_mask_stands_in_the_gaps_of_the_style()
+    {
+        var gappy = Solid with { Gaps = .95, GapLength = 40 };
+        var island = Styled(Land("Остров", 1, (x, y) => Blob(x, y, 384, 230, 250, 150)), gappy);
+        using var flat = Render(Document(island with { Level = 0 }));
+        using var gaps = Render(Document(island));
+        using var walled = Render(Document(island with { CliffWallTiles = Coverage((x, y) => y > 300 ? (byte)255 : (byte)0) }));
+        int Wall(SKBitmap image)
+        {
+            var count = 0;
+            for (var x = 200; x < 570; x += 2)
+                if (flat.GetPixel(x, 395) != image.GetPixel(x, 395) || flat.GetPixel(x, 388) != image.GetPixel(x, 388)) count++;
+            return count;
+        }
+        Assert.True(Wall(walled) > Wall(gaps) + 40, $"the masked wall must close the gaps: {Wall(gaps)} -> {Wall(walled)}");
+    }
+
+    private static TileMap Coverage(Func<int, int, byte> coverage)
+    {
+        var tiles = TileMap.Empty(1);
+        for (var ty = 0; ty * TileMap.TileSize < Height; ty++)
+            for (var tx = 0; tx * TileMap.TileSize < Width; tx++)
+            {
+                var bytes = new byte[TileMap.TileSize * TileMap.TileSize];
+                var any = false;
+                for (var y = 0; y < TileMap.TileSize; y++)
+                    for (var x = 0; x < TileMap.TileSize; x++)
+                    {
+                        var value = coverage((tx * TileMap.TileSize) + x, (ty * TileMap.TileSize) + y);
+                        bytes[(y * TileMap.TileSize) + x] = value;
+                        any |= value > 0;
+                    }
+                if (any) tiles = tiles.With(new TileKey(tx, ty), bytes);
+            }
+        return tiles;
+    }
+
     /// <summary>
     /// MAP_CLIFF_PNG=&lt;folder&gt; writes one sheet per ready look - islands, plateaus, a pit and
     /// scattered rocks on parchment, like the owner's tier sheets - for side-by-side comparison.

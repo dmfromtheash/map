@@ -329,6 +329,38 @@ public sealed record LandLayer : MapLayer, IRasterContentLayer
     public LandEdgeStyle EdgeStyle { get; init; }
 
     private TileMap _paintTiles = TileMap.Empty(4);
+    private TileMap _cliffWallTiles = TileMap.Empty(1);
+    private TileMap _cliffBeachTiles = TileMap.Empty(1);
+
+    /// <summary>
+    /// The cliff mask (R12): coverage painted with the «маска обрыва» brush. Where the edge of the
+    /// land lies under «здесь стена» the wall stands even in a gap of the style; where it lies under
+    /// «здесь пляж» the land meets the ground or sea with no wall at all. Unpainted edges follow the
+    /// style. Both are empty in every older map.
+    /// </summary>
+    public TileMap CliffWallTiles
+    {
+        get => _cliffWallTiles;
+        init => _cliffWallTiles = RequireCoverage(value);
+    }
+
+    /// <inheritdoc cref="CliffWallTiles"/>
+    public TileMap CliffBeachTiles
+    {
+        get => _cliffBeachTiles;
+        init => _cliffBeachTiles = RequireCoverage(value);
+    }
+
+    /// <summary>True when the cliff mask holds anything (schema v32).</summary>
+    public bool HasCliffMask => _cliffWallTiles.TileCount > 0 || _cliffBeachTiles.TileCount > 0;
+
+    private static TileMap RequireCoverage(TileMap value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        if (value.BytesPerPixel != 1)
+            throw new ArgumentException("The cliff mask stores single-channel coverage.", nameof(value));
+        return value;
+    }
 
     /// <summary>Premultiplied RGBA material painting, clipped to the current carved land at render time.
     /// Separate from coverage: erasing paint reveals the base material without erasing the coast.</summary>

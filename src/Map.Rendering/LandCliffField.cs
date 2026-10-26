@@ -18,6 +18,8 @@ public sealed class LandCliffField
     public const int Size = 256;
     /// <summary>Depth of a texel no edge lies above within reach.</summary>
     public const float None = 60000f;
+    /// <summary>Added to the steps of a texel whose edge lies under «здесь стена».</summary>
+    public const float ForcedWall = 0.25f;
 
     private LandCliffField(int lod, int fx, int fy, Half[]? texels, WorldBounds? wall, bool[]? blocks, int reachTexels, object[] inputs)
     {
@@ -31,7 +33,11 @@ public sealed class LandCliffField
     public int Lod { get; }
     public int Fx { get; }
     public int Fy { get; }
-    /// <summary>RGBA half floats: depth, steps, facing angle (radians from south), 1. Null when there is no wall.</summary>
+    /// <summary>
+    /// RGBA half floats: depth, steps, facing angle (radians from south), 1. Null when there is no wall.
+    /// Steps carry the cliff mask (R12): an edge under «здесь пляж» has no steps at all, an edge under
+    /// «здесь стена» has <see cref="ForcedWall"/> added, which the shader reads as «no gap here».
+    /// </summary>
     public Half[]? Texels { get; }
     /// <summary>World bounds of every texel that has a wall or its shadow; null when there is none.</summary>
     public WorldBounds? Wall { get; }
@@ -196,6 +202,12 @@ public sealed class LandCliffField
         var list = new List<object> { land.Level, lean };
         foreach (var key in land.GeometryTiles.KeysIntersecting(left * texel, top * texel, right * texel, bottom * texel))
         { list.Add(key); list.Add(land.GeometryTiles.TryGet(key)!); }
+        foreach (var mask in new[] { land.CliffWallTiles, land.CliffBeachTiles })
+        {
+            list.Add(mask.TileCount);
+            foreach (var key in mask.KeysIntersecting(left * texel, top * texel, right * texel, bottom * texel))
+            { list.Add(key); list.Add(mask.TryGet(key)!); }
+        }
         var size = Size * texel;
         foreach (var lower in beneath)
         {
@@ -245,6 +257,10 @@ public sealed class LandCliffField
         // two squares side by side follow the very same rays.
         var depth = new float[width]; var facing = new float[width]; var inside = new bool[width];
         var nextDepth = new float[width]; var nextFacing = new float[width]; var nextInside = new bool[width];
+        // The cliff mask at the edge point each ray hangs from: 0 the style decides, 1 wall, 2 beach.
+        var masked = land.HasCliffMask;
+        var wallMask = new Sampler(land.CliffWallTiles, lod); var beachMask = new Sampler(land.CliffBeachTiles, lod);
+        var mark = new byte[width]; var nextMark = new byte[width];
         Array.Fill(depth, None);
         var texels = new Half[Size * Size * 4];
         var floor = FloorLevels(beneath, lod, fx, fy);
@@ -261,12 +277,12 @@ public sealed class LandCliffField
                 var value = coverage[row * width + column];
                 if (value >= 128)
                 {
-                    nextDepth[column] = 0; nextInside[column] = true; nextFacing[column] = 0;
+                    nextDepth[column] = 0; nextInside[column] = true; nextFacing[column] = 0; nextMark[column] = 0;
                     continue;
                 }
                 nextInside[column] = false;
                 var source = column - shift;
-                if (row == 0 || source < 0 || source >= width) { nextDepth[column] = None; nextFacing[column] = 0; continue; }
+                if (row == 0 || source < 0 || source >= width) { nextDepth[column] = None; nextFacing[column] = 0; nextMark[column] = 0; continue; }
                 if (inside[source])
                 {
                     // The first texel off the land: the edge lies where the coverage crosses one half
@@ -275,17 +291,20 @@ public sealed class LandCliffField
                     var fraction = above == value ? 1f : Math.Clamp((above - 127.5f) / (above - value), 0f, 1f);
                     nextDepth[column] = (1 - fraction) * texel + 0.001f;
                     nextFacing[column] = EdgeFacing(coverage, width, height, source, row - 1);
+                    nextMark[column] = masked ? MaskAt(ref wallMask, ref beachMask, left + source, globalRow - 1) : (byte)0;
                 }
                 else
                 {
                     var carried = depth[source];
                     nextDepth[column] = carried >= limit ? None : carried + texel;
                     nextFacing[column] = facing[source];
+                    nextMark[column] = mark[source];
                 }
             }
             (depth, nextDepth) = (nextDepth, depth);
             (facing, nextFacing) = (nextFacing, facing);
             (inside, nextInside) = (nextInside, inside);
+            (mark, nextMark) = (nextMark, mark);
 
             var y = globalRow - fy * Size;
             if (y < 0) continue;
@@ -294,9 +313,10 @@ public sealed class LandCliffField
                 var column = x + fx * Size - left;
                 var d = depth[column];
                 var steps = floor is null ? land.Level : land.Level - floor[y * Size + x];
+                if (mark[column] == 2) steps = 0;
                 var offset = (y * Size + x) * 4;
                 texels[offset] = (Half)d;
-                texels[offset + 1] = (Half)Math.Max(0, steps);
+                texels[offset + 1] = (Half)(Math.Max(0, steps) + (steps > 0 && mark[column] == 1 ? ForcedWall : 0f));
                 texels[offset + 2] = (Half)facing[column];
                 texels[offset + 3] = (Half)1f;
                 if (d > 0 && d < None && steps > 0)
@@ -313,6 +333,17 @@ public sealed class LandCliffField
                 (fx * Size + maxX + 1) * (double)texel, (fy * Size + maxY + 1) * (double)texel)
             : null;
         return new LandCliffField(lod, fx, fy, any ? texels : null, wall, any ? blocks : null, reachTexels, inputs);
+    }
+
+    /// <summary>
+    /// The cliff mask at a texel of the edge: the paint of either brush covers it at one half or
+    /// more; where both do, the stronger wins and the beach wins a tie.
+    /// </summary>
+    private static byte MaskAt(ref Sampler wall, ref Sampler beach, int texelX, int texelY)
+    {
+        var w = wall.At(texelX, texelY); var b = beach.At(texelX, texelY);
+        if (b >= 128 && b >= w) return 2;
+        return w >= 128 ? (byte)1 : (byte)0;
     }
 
     /// <summary>

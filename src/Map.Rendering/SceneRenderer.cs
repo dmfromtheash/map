@@ -47,6 +47,9 @@ public sealed class StrokePreview
     /// <summary>The preview belongs to the document-owned, map-aligned stamp foreground.</summary>
     public bool IsStampForeground { get; init; }
     public bool IsLandPaint { get; init; }
+
+    /// <summary>A stroke of the «маска обрыва» brush (R12): a tint over the land, not new ground or paint.</summary>
+    public bool IsCliffMask { get; init; }
 }
 
 /// <summary>Per-frame counters. Optional: the editor sets it only when the HUD or a test needs it.</summary>
@@ -428,6 +431,10 @@ public sealed class RenderOptions
     /// <summary>While a mask is being edited its hidden area is tinted red on this layer only.</summary>
     public LayerId? MaskEditLayerId { get => _liveSuppressed ? null : _maskEditLayerId; init => _maskEditLayerId = value; }
     private LayerId? _maskEditLayerId;
+
+    /// <summary>While the «маска обрыва» brush is armed, the painted wall and beach of this land are tinted (R12).</summary>
+    public LayerId? CliffMaskLayerId { get => _liveSuppressed ? null : _cliffMaskLayerId; init => _cliffMaskLayerId = value; }
+    private LayerId? _cliffMaskLayerId;
     private bool _liveSuppressed;
 
     /// <summary>
@@ -437,7 +444,7 @@ public sealed class RenderOptions
     /// </summary>
     internal RenderOptions WithoutLiveState()
     {
-        if (_liveSuppressed || (_preview is null && _maskEditLayerId is null)) return this;
+        if (_liveSuppressed || (_preview is null && _maskEditLayerId is null && _cliffMaskLayerId is null)) return this;
         var copy = (RenderOptions)MemberwiseClone();
         copy._liveSuppressed = true;
         return copy;
@@ -1533,7 +1540,8 @@ public static class SceneRenderer
     private static void DrawTerrainLiveOverlay(SKCanvas canvas, MapDocument document, List<LandLayer> lands,
         WorldBounds view, RenderOptions options)
     {
-        if (options.Preview is { IsMask: false } preview
+        DrawCliffMaskOverlay(canvas, lands, view, options);
+        if (options.Preview is { IsMask: false, IsCliffMask: false } preview
             && lands.FirstOrDefault(land => land.Id == preview.LayerId) is { } land)
         {
             // The stroke joins the land's own group: its opacity and mask apply to the new ground
@@ -1962,7 +1970,7 @@ public static class SceneRenderer
                 break;
         }
 
-        if (includePreview && options.Preview is { } preview && preview.LayerId == layer.Id && !preview.IsMask && !preview.IsLandPaint)
+        if (includePreview && options.Preview is { } preview && preview.LayerId == layer.Id && !preview.IsMask && !preview.IsLandPaint && !preview.IsCliffMask)
         {
             if (layer is LandLayer previewLand && !preview.Eraser && !options.FastTerrain)
                 DrawLandShapePreview(canvas, previewLand, preview, view, options);
@@ -1972,7 +1980,7 @@ public static class SceneRenderer
     }
 
     private static bool HasLandShapePreview(LandLayer land, RenderOptions options) =>
-        options.Preview is { IsMask: false, IsLandPaint: false } preview && preview.LayerId == land.Id;
+        options.Preview is { IsMask: false, IsLandPaint: false, IsCliffMask: false } preview && preview.LayerId == land.Id;
 
     /// <summary>
     /// The live part of a land-shape stroke: the new ground in the land's colour with its
@@ -2326,7 +2334,7 @@ public static class SceneRenderer
         // pan draws the plain fill (FastTerrain) and never enters the cache.
         if (options.StyledLand is { } styled && paintPreview is null && !options.IsExport && !options.FastTerrain)
         {
-            var parts = new List<object> { layer.Id, layer.GeometryTiles, layer.PaintTiles, layer.EdgeStyle, layer.Level };
+            var parts = new List<object> { layer.Id, layer.GeometryTiles, layer.PaintTiles, layer.EdgeStyle, layer.Level, layer.CliffWallTiles, layer.CliffBeachTiles };
             parts.AddRange(beneath);
             foreach (var (owner, river) in cutters)
             {
@@ -3544,6 +3552,44 @@ public static class SceneRenderer
                 stats.MaskTilesDrawn++;
             }
         }
+    }
+
+    /// <summary>
+    /// The cliff mask of the land the brush works on: «здесь стена» in terracotta, «здесь пляж» in
+    /// sand, both light enough to see the coast through, and the live stroke over them.
+    /// </summary>
+    private static void DrawCliffMaskOverlay(SKCanvas canvas, List<LandLayer> lands, WorldBounds view, RenderOptions options)
+    {
+        if (options.CliffMaskLayerId is not { } id || lands.FirstOrDefault(l => l.Id == id) is not { } land) return;
+        var sampling = new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None);
+        foreach (var (tiles, color) in new[] { (land.CliffWallTiles, CliffWallTint), (land.CliffBeachTiles, CliffBeachTint) })
+            foreach (var key in tiles.KeysIntersecting(view.Left, view.Top, view.Right, view.Bottom))
+                if (tiles.TryGet(key) is { } coverage)
+                {
+                    using var image = TintedCoverage(coverage, color);
+                    canvas.DrawImage(image, TileRect(key), sampling);
+                }
+        if (options.Preview is { IsCliffMask: true } preview && preview.LayerId == land.Id)
+            DrawStrokePreview(canvas, preview, view, options);
+    }
+
+    public static readonly SKColor CliffWallTint = new(0xB8, 0x5C, 0x38, 0x70);
+    public static readonly SKColor CliffBeachTint = new(0xE6, 0xCC, 0x7A, 0x80);
+
+    private static SKImage TintedCoverage(byte[] coverage, SKColor color)
+    {
+        var pixels = new byte[TileMap.TileSize * TileMap.TileSize * 4];
+        for (var i = 0; i < coverage.Length; i++)
+        {
+            var c = coverage[i];
+            if (c == 0) continue;
+            var a = c / 255.0 * color.Alpha / 255.0;
+            var o = i * 4;
+            pixels[o] = (byte)Math.Round(color.Red * a); pixels[o + 1] = (byte)Math.Round(color.Green * a);
+            pixels[o + 2] = (byte)Math.Round(color.Blue * a); pixels[o + 3] = (byte)Math.Round(255 * a);
+        }
+        var info = new SKImageInfo(TileMap.TileSize, TileMap.TileSize, SKColorType.Rgba8888, SKAlphaType.Premul);
+        return SKImage.FromPixelCopy(info, pixels, info.RowBytes)!;
     }
 
     private static void DrawMaskOverlay(

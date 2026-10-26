@@ -105,7 +105,13 @@ public static class MapProjectFormat
     public const int AreaBeautySchemaVersion = 30;
 
     public const int GenerationSchemaVersion = 31;
-    public const int MaxSupportedSchemaVersion = GenerationSchemaVersion;
+
+    /// <summary>
+    /// R12 «Вода и обрывы»: the light angle and the mask of the cliffs, river node features
+    /// (waterfall, rapids, ford) and the water style of the sea. Maps without them keep the older schema.
+    /// </summary>
+    public const int WaterCliffsSchemaVersion = 32;
+    public const int MaxSupportedSchemaVersion = WaterCliffsSchemaVersion;
 
     /// <summary>
     /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry
@@ -121,6 +127,8 @@ public static class MapProjectFormat
     public const string PreviewEntry = "preview.png";
     public const string RasterPrefix = "rasters/";
     public const string LandPaintPrefix = "rasters/land-paint/";
+    public const string CliffWallPrefix = "rasters/cliff-wall/";
+    public const string CliffBeachPrefix = "rasters/cliff-beach/";
     public const string MaskPrefix = "masks/";
     public const string AssetPrefix = "assets/";
     public const string ObjectPrefix = "objects/";

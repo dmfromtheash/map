@@ -30,6 +30,97 @@ public static class RiverEditor
         return ReplaceChannel(river, channel with { Nodes = channel.Nodes.SetItem(index, channel.Nodes[index] with { Sharp = sharp }) });
     }
 
+    /// <summary>What the water does at one node: a waterfall, rapids, a ford, or nothing (R12).</summary>
+    public static River SetNodeFeature(River river, Guid channelId, int index, RiverNodeFeature feature)
+    {
+        var channel = Require(river, channelId);
+        if (channel.Closed && feature != RiverNodeFeature.None)
+            throw new InvalidOperationException("У озера нет течения: водопад, пороги и брод ставятся на русло.");
+        return ReplaceChannel(river, channel with { Nodes = channel.Nodes.SetItem(index, channel.Nodes[index] with { Feature = feature }) });
+    }
+
+    public const int MinimumDeltaArms = 2;
+    public const int MaximumDeltaArms = 7;
+
+    /// <summary>
+    /// The «Дельта» macro (R12): the mouth of a channel splits into a fan of arms. The channel itself
+    /// stays one arm; <paramref name="arms"/> − 1 distributaries leave it <paramref name="length"/>
+    /// world units before its mouth and spread over <paramref name="spreadDegrees"/> towards the sea,
+    /// each a little shorter or longer and bent by a deterministic wobble (<paramref name="seed"/>).
+    /// Every arm carries a share of the flow at the split. The mouth must be free (not a tributary)
+    /// and the channel not a lake.
+    /// </summary>
+    public static River Delta(River river, Guid channelId, int arms, double length, double spreadDegrees, int seed)
+    {
+        var channel = Require(river, channelId);
+        if (channel.Closed) throw new InvalidOperationException("У озера нет устья для дельты.");
+        if (channel.Mouth is not null) throw new InvalidOperationException("Дельта строится у свободного устья, а это русло впадает в другое.");
+        arms = Math.Clamp(arms, MinimumDeltaArms, MaximumDeltaArms);
+        spreadDegrees = Math.Clamp(double.IsFinite(spreadDegrees) ? spreadDegrees : 60, 10, 150);
+        var nodes = channel.Nodes;
+        // The split point: walk back from the mouth along the nodes by the asked length, keeping at
+        // least a tenth of the channel above it.
+        var cumulative = new double[nodes.Length];
+        for (var i = 1; i < nodes.Length; i++)
+            cumulative[i] = cumulative[i - 1] + Math.Sqrt(Math.Pow(nodes[i].X - nodes[i - 1].X, 2) + Math.Pow(nodes[i].Y - nodes[i - 1].Y, 2));
+        var total = cumulative[^1];
+        if (total <= 1e-6) throw new InvalidOperationException("Русло слишком короткое для дельты.");
+        length = Math.Clamp(double.IsFinite(length) ? length : total * 0.3, total * 0.05, total * 0.9);
+        var at = total - length;
+        var segment = 0;
+        while (segment < nodes.Length - 2 && cumulative[segment + 1] < at) segment++;
+        var segmentLength = cumulative[segment + 1] - cumulative[segment];
+        var fraction = segmentLength <= 1e-9 ? 0 : Math.Clamp((at - cumulative[segment]) / segmentLength, 0, 1);
+        var a = nodes[segment]; var b = nodes[segment + 1];
+        var splitX = a.X + (b.X - a.X) * fraction; var splitY = a.Y + (b.Y - a.Y) * fraction;
+        var splitWidth = a.Width + (b.Width - a.Width) * fraction;
+        var mouth = nodes[^1];
+        var dirX = mouth.X - splitX; var dirY = mouth.Y - splitY;
+        var reach = Math.Sqrt(dirX * dirX + dirY * dirY);
+        if (reach <= 1e-6) throw new InvalidOperationException("Русло слишком короткое для дельты.");
+        dirX /= reach; dirY /= reach;
+        // Every arm carries a share of the flow: width ~ sqrt(share), as in WidthByFlow.
+        var armWidth = Math.Round(Math.Clamp(splitWidth / Math.Sqrt(arms), River.MinimumWidth, River.MaximumWidth), 2);
+        var mouthWidth = Math.Round(Math.Clamp(armWidth * 0.8, River.MinimumWidth, River.MaximumWidth), 2);
+        var step = spreadDegrees * Math.PI / 180 / (arms - 1);
+        // The channel keeps its own course as the arm at angle 0; the others fan out on both sides.
+        var own = arms / 2;
+        var added = new List<RiverChannel>();
+        for (var k = 0; k < arms; k++)
+        {
+            if (k == own) continue;
+            var angle = (k - own) * step;
+            var armLength = reach * (0.85 + 0.3 * (0.5 + 0.5 * RiverGeometry.Noise(seed ^ (k * 7919), 0.37)));
+            var cos = Math.Cos(angle); var sin = Math.Sin(angle);
+            var ex = dirX * cos - dirY * sin; var ey = dirX * sin + dirY * cos;
+            // One bend in the middle, to the outer side, so the arms do not run as straight spokes.
+            var bend = 0.12 * armLength * (0.6 + 0.4 * RiverGeometry.Noise(seed ^ (k * 104729), 1.91)) * Math.Sign(angle);
+            var start = Math.Max(armWidth, 4);
+            added.Add(new RiverChannel
+            {
+                Name = $"Рукав {added.Count + 1}",
+                Nodes =
+                [
+                    new RiverNode(Guid.NewGuid(), splitX + ex * start, splitY + ey * start, armWidth),
+                    new RiverNode(Guid.NewGuid(), splitX + ex * armLength * 0.5 - ey * bend, splitY + ey * armLength * 0.5 + ex * bend,
+                        Math.Round((armWidth + mouthWidth) / 2, 2)),
+                    new RiverNode(Guid.NewGuid(), splitX + ex * armLength, splitY + ey * armLength, mouthWidth),
+                ],
+                Source = new RiverJunction(channel.Id, a.Id, fraction),
+            });
+        }
+        // The channel narrows after the split: from there it carries one share of the flow.
+        var narrowed = channel with
+        {
+            Nodes = [.. nodes.Select((n, i) => i <= segment ? n : n with
+            {
+                Width = Math.Min(n.Width, i == nodes.Length - 1 ? mouthWidth : armWidth),
+            })],
+        };
+        var result = ReplaceChannel(river, narrowed);
+        return result with { Channels = [.. result.Channels, .. added] };
+    }
+
     /// <summary>Curvature handle of one node: the tangent scale the spline uses there.</summary>
     public static River SetNodeTension(River river, Guid channelId, int index, double tension)
     {

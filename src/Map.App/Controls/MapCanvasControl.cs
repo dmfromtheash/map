@@ -808,8 +808,9 @@ public sealed partial class MapCanvasControl : Control
                 Preview = editor.StrokePreview,
                 PreviewCache = previewCache,
                 MaskEditLayerId = editor.MaskEditLayerId,
+                CliffMaskLayerId = editor.CliffMaskLayerId,
                 Stamps = editor.StampImages,
-                FastPreview = editor.StrokePreview is not { IsLandPaint: true }
+                FastPreview = editor.StrokePreview is not ({ IsLandPaint: true } or { IsCliffMask: true })
                     && (fastPreview || hasLiveObjectPreview || editor.StrokePreview is not null || editor.HasPendingPlacement),
                 FastTerrain = fastTerrain,
                 Stats = renderStats,

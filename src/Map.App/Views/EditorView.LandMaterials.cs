@@ -18,7 +18,7 @@ namespace Map.App.Views;
 
 public sealed partial class EditorView
 {
-    private Control? _landShapeControls, _landPaintControls, _landShapeAdvanced;
+    private Control? _landShapeControls, _landPaintControls, _landShapeAdvanced, _landCliffMaskControls;
     private IReadOnlyList<Button>? _landModeButtons;
     private Window? _materialCatalogWindow;
     private readonly Dictionary<string, Bitmap> _materialPreviewImages = [];
@@ -26,8 +26,14 @@ public sealed partial class EditorView
     private Control BuildLandModePicker()
     {
         var (row, buttons) = Ui.Segmented("LandToolMode",
-            [("Shape", "Форма земли", null), ("Paint", "Раскрасить", null)],
-            key => { _editor.SetLandPaintMode(key == "Paint"); SyncLandMaterialPanel(); });
+            [("Shape", "Форма земли", null), ("Paint", "Раскрасить", null), ("Cliffs", "Маска обрыва", null)],
+            key =>
+            {
+                if (key == "Cliffs") _editor.SetLandCliffMaskMode(true);
+                else { _editor.SetLandPaintMode(key == "Paint"); _editor.SetLandCliffMaskMode(false); }
+                SyncLandMaterialPanel();
+            });
+        ToolTip.SetTip(buttons[2], "Кисть по берегу поднятой земли: где обрыв обязан стоять, а где вместо него пологий пляж.");
         _landModeButtons = buttons;
         return row;
     }
@@ -35,15 +41,57 @@ public sealed partial class EditorView
     private void SyncLandMaterialPanel()
     {
         var paint = _editor.LandPaintMode;
+        var cliffs = _editor.LandCliffMaskMode;
+        var mode = cliffs ? 2 : paint ? 1 : 0;
         if (_landShapeControls is not null) _landShapeControls.IsVisible = !paint;
         if (_landShapeAdvanced is not null) _landShapeAdvanced.IsVisible = !paint;
-        if (_landPaintControls is not null) _landPaintControls.IsVisible = paint;
+        if (_landPaintControls is not null) _landPaintControls.IsVisible = paint && !cliffs;
+        if (_landCliffMaskControls is not null) _landCliffMaskControls.IsVisible = cliffs;
         if (_landModeButtons is not null)
             for (var i = 0; i < _landModeButtons.Count; i++)
             {
-                Ui.SetClass(_landModeButtons[i], "active", (i == 1) == paint);
-                if (_landModeButtons[i] is ToggleButton toggle) toggle.IsChecked = (i == 1) == paint;
+                Ui.SetClass(_landModeButtons[i], "active", i == mode);
+                if (_landModeButtons[i] is ToggleButton toggle) toggle.IsChecked = i == mode;
             }
+    }
+
+    /// <summary>
+    /// R12: the «маска обрыва» brush. Three actions - wall, beach, erase - the brush size and
+    /// softness, and one button that clears the whole mask of the active land.
+    /// </summary>
+    private Control BuildLandCliffMaskPanel()
+    {
+        var (actions, buttons) = Ui.Segmented("LandCliffMaskAction",
+            [(nameof(Map.Presentation.ViewModels.CliffMaskAction.Wall), "Здесь стена", null),
+             (nameof(Map.Presentation.ViewModels.CliffMaskAction.Beach), "Здесь пляж", null),
+             (nameof(Map.Presentation.ViewModels.CliffMaskAction.Erase), "Стереть", null)],
+            key => { _editor.SetLandCliffMaskAction(Enum.Parse<Map.Presentation.ViewModels.CliffMaskAction>(key)); SyncAppearanceSections(); });
+        ToolTip.SetTip(buttons[0], "Обрыв стоит здесь, даже если в стиле на этом месте разрыв.");
+        ToolTip.SetTip(buttons[1], "Здесь нет стены: земля спускается к морю или нижней земле пологим берегом.");
+        ToolTip.SetTip(buttons[2], "Убрать маску: берег снова решает стиль обрыва.");
+        _appearanceSyncs.Add(() =>
+        {
+            var index = (int)_editor.LandCliffMaskAction;
+            for (var i = 0; i < buttons.Count; i++)
+            {
+                Ui.SetClass(buttons[i], "active", i == index);
+                if (buttons[i] is ToggleButton toggle) toggle.IsChecked = i == index;
+            }
+        });
+        return Ui.Category("LandCliffMaskCategory", "Маска обрыва", "accent-create", new StackPanel
+        {
+            Spacing = 7,
+            Children =
+            {
+                Ui.Hint("Проведите кистью по берегу поднятой земли. Кирпичный цвет — здесь обрыв, песочный — пляж. Стена меняется, когда отпускаете кнопку мыши."),
+                actions,
+                AppearanceSlider("LandCliffMaskSizeSlider", "Размер", 1, 256, "ед.", () => _editor.BrushSettings.Radius,
+                    (v, _) => _editor.BrushSettings = _editor.BrushSettings with { Radius = v }),
+                AppearanceSlider("LandCliffMaskSoftnessSlider", "Мягкость", 0, 100, "%", () => _editor.BrushSettings.Softness * 100,
+                    (v, _) => _editor.BrushSettings = _editor.BrushSettings with { Softness = v / 100 }, 5),
+                Ui.TextButton("ClearLandCliffMaskButton", "Очистить маску этой земли", () => { _editor.ClearCliffMask(); Canvas.InvalidateVisual(); }, "compact"),
+            },
+        });
     }
 
     private Control BuildLandPaintPanel()
