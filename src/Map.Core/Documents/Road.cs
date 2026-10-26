@@ -231,6 +231,10 @@ public sealed record Road
     /// <summary>Seed of the drawn details, so a saved road looks the same on every open and in every tile.</summary>
     public int Seed { get; init; }
 
+    /// <summary>Why a generator made this road (R23, schema v31); null for a road drawn by hand.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? GenerationReason { get; init; }
+
     /// <summary>
     /// Kinds chosen by hand for the crossings this road makes over rivers (R06). The crossings
     /// themselves are derived from the geometry (<c>RoadCrossings.Detect</c>); only departures from

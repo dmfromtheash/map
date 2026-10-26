@@ -207,6 +207,10 @@ public sealed record River
     /// <summary>Multiplies every node width, so a whole river can be made wider without retouching nodes.</summary>
     public double WidthScale { get; init; } = 1;
 
+    /// <summary>Why a generator made this river (R23, schema v31); null for a river drawn by hand.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? GenerationReason { get; init; }
+
     /// <summary>
     /// The water's level among the terrain, <see cref="TerrainOrder.MinimumLevel"/> to
     /// <see cref="TerrainOrder.MaximumLevel"/>, like an object's level: land at a higher level
@@ -274,7 +278,7 @@ public sealed record River
     {
         if (Id == Guid.Empty || string.IsNullOrWhiteSpace(Name) || Channels.IsDefault || Channels.IsEmpty
             || Style is null || !double.IsFinite(WidthScale) || WidthScale is < 0.01 or > 100
-            || !TerrainOrder.IsValidLevel(Level))
+            || !TerrainOrder.IsValidLevel(Level) || GenerationReason is { Length: > 240 })
             throw new ArgumentException("Некорректные параметры реки.");
         if (Channels.Any(c => c is null) || Channels.Select(c => c.Id).Distinct().Count() != Channels.Length)
             throw new ArgumentException("Русла реки должны иметь уникальные идентификаторы.");

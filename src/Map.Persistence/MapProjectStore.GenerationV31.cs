@@ -9,7 +9,8 @@ public static partial class MapProjectStore
 {
     private static bool HasGenerationV31(IEnumerable<MapLayer> layers) => layers.OfType<ObjectLayer>().Any(l =>
         l.PlacementAreas.Any(a => a.GenerationProtection is not null || a.GenerationRecipe is not null || a.GenerationProtectionMask is not null)
-        || l.Objects.Any(o => o.GenerationReason is not null)) || layers.OfType<HexLayer>().Any(l =>
+        || l.Objects.Any(o => o.GenerationReason is not null)
+        || l.Rivers.Any(r => r.GenerationReason is not null) || l.Roads.Any(r => r.GenerationReason is not null)) || layers.OfType<HexLayer>().Any(l =>
         l.GenerationRecipe is not null || !l.GenerationProtection.IsEmpty || l.Paths.Any(p => p.GenerationReason is not null)
         || l.Board.Cells.Any(c => c.Value.GenerationReason is not null));
 
@@ -19,7 +20,8 @@ public static partial class MapProjectStore
         if (schema < MapProjectFormat.GenerationSchemaVersion && scene.Layers?.Any(l => l is not null && (
             l.Hex?.Generation is not null || l.Hex?.Paths?.Any(p => p?.GenerationReason is not null) == true
             || l.PlacementAreas?.Any(a => a is not null && (a.GenerationProtection is not null || a.GenerationRecipe is not null || a.GenerationProtectionMask is not null)) == true
-            || l.Objects?.Any(o => o?.GenerationReason is not null) == true)) == true)
+            || l.Objects?.Any(o => o?.GenerationReason is not null) == true
+            || l.Rivers?.Any(r => r?.GenerationReason is not null) == true || l.Roads?.Any(r => r?.GenerationReason is not null) == true)) == true)
             throw new MapProjectCorruptedException("Рецепт, защита и причины генерации требуют v31.");
     }
 
