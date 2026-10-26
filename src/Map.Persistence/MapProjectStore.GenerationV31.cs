@@ -15,9 +15,11 @@ public static partial class MapProjectStore
 
     private static void ValidateGenerationSchemaV31(SceneDto scene, int schema)
     {
-        if (schema < MapProjectFormat.GenerationSchemaVersion && scene.Layers?.Any(l =>
-            l.Hex?.Generation is not null || l.Hex?.Paths?.Any(p => p.GenerationReason is not null) == true
-            || l.PlacementAreas?.Any(a => a.GenerationProtection is not null || a.GenerationRecipe is not null || a.GenerationProtectionMask is not null) == true) == true)
+        // A null layer is reported later as corruption by the layer reader; it must not throw here.
+        if (schema < MapProjectFormat.GenerationSchemaVersion && scene.Layers?.Any(l => l is not null && (
+            l.Hex?.Generation is not null || l.Hex?.Paths?.Any(p => p?.GenerationReason is not null) == true
+            || l.PlacementAreas?.Any(a => a is not null && (a.GenerationProtection is not null || a.GenerationRecipe is not null || a.GenerationProtectionMask is not null)) == true
+            || l.Objects?.Any(o => o?.GenerationReason is not null) == true)) == true)
             throw new MapProjectCorruptedException("Рецепт, защита и причины генерации требуют v31.");
     }
 
