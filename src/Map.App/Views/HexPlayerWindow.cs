@@ -82,6 +82,18 @@ public sealed class HexPlayerWindow : Window
         { Text = text, TextWrapping = TextWrapping.Wrap, FontWeight = title ? FontWeight.SemiBold : FontWeight.Normal });
         Add("Карта знаний", true);
         Add("Известные места и слухи. Сведения могут оказаться неточными.");
+        // R27: a painted map tells the players its notes and cards meant for them, of what they have seen.
+        var players = PlayerScene.Sanitize(_editor.Session.Document);
+        foreach (var note in players.Notes)
+        {
+            Add(note.Title, true);
+            if (note.Markdown.Length > 0) Add(note.Markdown);
+        }
+        foreach (var card in players.Entities)
+        {
+            Add(card.Name + " · " + MapEntities.KindTitle(card.Kind), true);
+            if (card.Markdown.Length > 0) Add(card.Markdown);
+        }
         foreach (var source in _editor.Session.Document.Layers.OfType<HexLayer>().Where(l => l.Visible && l.Level == _editor.HexLevelShown))
         {
             var layer = ExportPlayerVisibility.Sanitize(source);
@@ -113,6 +125,7 @@ internal sealed class HexPlayerCanvas : Control
     private readonly HexChunkCache _cache = new() { BuildInBackground = true };
     private readonly DispatcherTimer _timer;
     private WriteableBitmap? _bitmap;
+    private MapDocument? _source, _players;
     private bool _dirty = true;
     private Point? _drag;
 
@@ -196,7 +209,10 @@ internal sealed class HexPlayerCanvas : Control
         canvas.Scale((float)scaling);
         canvas.Scale((float)_viewport.Scale);
         canvas.Translate((float)-_viewport.OffsetX, (float)-_viewport.OffsetY);
-        var document = _editor.Session.Document;
+        // R27: the players' copy of the map - labels and notes under the fog left out.
+        var source = _editor.Session.Document;
+        if (!ReferenceEquals(source, _source)) { _source = source; _players = PlayerScene.Sanitize(source, sanitizeHex: false); }
+        var document = _players!;
         var (left, top) = _viewport.ScreenToWorld(0, 0);
         var (right, bottom) = _viewport.ScreenToWorld(Bounds.Width, Bounds.Height);
         // Only the hexes and labels of the shown level: notes, the master's drawings and other

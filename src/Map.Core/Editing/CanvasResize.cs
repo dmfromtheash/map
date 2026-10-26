@@ -190,10 +190,29 @@ public static class CanvasTransformService
             Lighting = ShiftLights(document.Lighting, plan.OffsetX, plan.OffsetY),
             Style = document.Style,
             Labels = document.Labels,
+            Fog = ShiftFog(document.Fog, plan.OffsetX, plan.OffsetY),
             // Cards stay with the map; their points move with the content.
             Entities = [.. document.Entities.Select(e => e with { Bindings = [.. e.Bindings.Select(b => b.MapId is null && b.Kind == EntityTargetKind.Point
                 ? b with { X = b.X + plan.OffsetX, Y = b.Y + plan.OffsetY } : b)] })],
         };
+    }
+
+    /// <summary>
+    /// The fog moved with the content when the offset is whole cells; otherwise what was seen can
+    /// not be kept exactly and the fog starts hidden again (still on, nothing revealed).
+    /// </summary>
+    internal static MapFog ShiftFog(MapFog fog, double dx, double dy)
+    {
+        if (fog.Revealed.IsEmpty || (dx == 0 && dy == 0)) return fog;
+        if (dx % MapFog.TileWorld != 0 || dy % MapFog.TileWorld != 0) return MapFogEditor.HideAll(fog);
+        var (sx, sy) = ((int)(dx / MapFog.TileWorld), (int)(dy / MapFog.TileWorld));
+        var builder = System.Collections.Immutable.ImmutableDictionary.CreateBuilder<long, System.Collections.Immutable.ImmutableArray<ulong>>();
+        foreach (var (key, rows) in fog.Revealed)
+        {
+            var (x, y) = MapFog.Unkey(key);
+            if (x + sx >= 0 && y + sy >= 0) builder[MapFog.Key(x + sx, y + sy)] = rows;
+        }
+        return fog with { Revealed = builder.ToImmutable() };
     }
 
     /// <summary>The map's light with its sources moved by the content's offset; null stays null.</summary>

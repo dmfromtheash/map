@@ -23,6 +23,8 @@ public static partial class MapProjectStore
     {
         if (scene.Layers?.Any(l => l?.Sea is not null && l.Type != "BaseColor") == true)
             throw new MapProjectCorruptedException("Стиль моря бывает только у слоя фона.");
+        if (schema < MapProjectFormat.FogSchemaVersion && scene.Fog is not null)
+            throw new MapProjectCorruptedException("Туман войны обычной карты требует схему v38.");
         if (schema < MapProjectFormat.RegionLabelsSchemaVersion && (scene.Labels is not null
             || scene.Layers?.Any(l => l?.Objects?.Any(o => o?.Text is { } t && (t.Region is not null || t.Importance is not null)) == true) == true))
             throw new MapProjectCorruptedException("Подписи областей и важность подписей требуют схему v37.");
@@ -48,6 +50,36 @@ public static partial class MapProjectStore
             if (layer.Sea is not null)
                 throw new MapProjectCorruptedException("Стиль моря требует схему v32.");
         }
+    }
+
+    private static FogDto? ToFogDto(MapFog fog) => fog.IsDefault ? null : new FogDto
+    {
+        Enabled = fog.Enabled,
+        Tiles = [.. fog.Revealed.OrderBy(p => p.Key).Select(p => new FogTileDto
+        {
+            X = MapFog.Unkey(p.Key).X, Y = MapFog.Unkey(p.Key).Y,
+            Rows = p.Value.Length == 0 ? "" : Convert.ToBase64String(System.Runtime.InteropServices.MemoryMarshal.AsBytes(p.Value.AsSpan())),
+        })],
+    };
+
+    /// <summary>The fog of war (R27); none when absent. Every tile 0 or 64 rows, no tile twice.</summary>
+    private static MapFog ReadFogV38(SceneDto scene)
+    {
+        if (scene.Fog is not { } dto) return new MapFog();
+        if (dto.Tiles is null || dto.Tiles.Count > MapFog.MaxTiles) throw new MapProjectCorruptedException("Повреждена маска тумана войны.");
+        var builder = System.Collections.Immutable.ImmutableDictionary.CreateBuilder<long, System.Collections.Immutable.ImmutableArray<ulong>>();
+        foreach (var tile in dto.Tiles)
+        {
+            if (tile is null || tile.X < 0 || tile.Y < 0 || builder.ContainsKey(MapFog.Key(tile.X, tile.Y)))
+                throw new MapProjectCorruptedException("Повреждена маска тумана войны.");
+            if (string.IsNullOrEmpty(tile.Rows)) { builder[MapFog.Key(tile.X, tile.Y)] = []; continue; }
+            byte[] bytes;
+            try { bytes = Convert.FromBase64String(tile.Rows); }
+            catch (FormatException ex) { throw new MapProjectCorruptedException("Повреждена маска тумана войны.", ex); }
+            if (bytes.Length != MapFog.TileCells * sizeof(ulong)) throw new MapProjectCorruptedException("Повреждена маска тумана войны.");
+            builder[MapFog.Key(tile.X, tile.Y)] = [.. System.Runtime.InteropServices.MemoryMarshal.Cast<byte, ulong>(bytes)];
+        }
+        return new MapFog { Enabled = dto.Enabled, Revealed = builder.ToImmutable() };
     }
 
     /// <summary>The label settings of the map (R07b); defaults when absent.</summary>

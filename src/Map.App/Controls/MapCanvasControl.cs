@@ -775,6 +775,8 @@ public sealed partial class MapCanvasControl : Control
                 HexPresentation = editor.HexPresentation,
                 HexGhostLevel = editor.HexGhostLevel,
                 ViewScale = viewport.Scale,
+                FogVeil = editor.FogVeilToDraw,
+                FogOverride = editor.FogStrokePreview,
                 VisibleWorld = new Map.Core.Documents.WorldBounds(
                     X, Y, bottomRight.X, bottomRight.Y),
                 ObjectOverrides = editor.EditableAreaPreviewOverrides ?? editor.EditablePathPreviewOverrides ?? editor.DragPreview?.Proposed,

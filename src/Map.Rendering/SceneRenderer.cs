@@ -363,6 +363,17 @@ public sealed class RenderOptions
 
     public bool HexPlayerView { get; init; }
 
+    /// <summary>
+    /// R27: how much of the fog of war of a painted map the game master sees over the map, 0…1
+    /// (0 - none). The players' view (<see cref="HexPlayerView"/>) always draws it opaque.
+    /// </summary>
+    public double FogVeil { get; init; }
+
+    internal double FogOpacity => HexPlayerView ? 1 : FogVeil;
+
+    /// <summary>The fog of a stroke in progress, drawn instead of the document's until it ends.</summary>
+    public MapFog? FogOverride { get; init; }
+
     /// <summary>The level of the world shown (hex layers of other levels are left out); null shows every level.</summary>
     public int? HexLevel { get; init; }
 
@@ -616,6 +627,7 @@ public static partial class SceneRenderer
             var bounds = new WorldBounds(0, 0, document.Canvas.Width, document.Canvas.Height);
             canvas.Save();
             canvas.ClipRect(ToRect(bounds));
+            FogRenderer.Draw(canvas, document, options.VisibleWorld ?? bounds, options.FogOpacity, options.FogOverride);
             DrawPlacementPreview(canvas, document, options);
             DrawSelectionChrome(canvas, document, options);
             canvas.Restore();
@@ -728,6 +740,7 @@ public static partial class SceneRenderer
 
         if (chrome)
         {
+            FogRenderer.Draw(canvas, document, view, options.FogOpacity, options.FogOverride);
             DrawPlacementPreview(canvas, document, options);
             DrawSelectionChrome(canvas, document, options);
         }

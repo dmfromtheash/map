@@ -126,7 +126,10 @@ public static class MapProjectFormat
 
     /// <summary>R07b: region labels, label importance and the map's label settings.</summary>
     public const int RegionLabelsSchemaVersion = 37;
-    public const int MaxSupportedSchemaVersion = RegionLabelsSchemaVersion;
+
+    /// <summary>R27: the fog of war of a painted map.</summary>
+    public const int FogSchemaVersion = 38;
+    public const int MaxSupportedSchemaVersion = FogSchemaVersion;
 
     /// <summary>
     /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry

@@ -167,6 +167,20 @@ internal sealed class LegendEntryDto
 }
 
 /// <summary>scene.json — layer metadata and v4 object-chunk descriptors.</summary>
+/// <summary>The fog of war (R27): tiles of 64×64 cells; <c>rows</c> is 64 little-endian 64-bit rows in base64, empty for a full tile.</summary>
+internal sealed class FogDto
+{
+    [JsonPropertyName("enabled")] public bool Enabled { get; set; }
+    [JsonPropertyName("tiles")] public List<FogTileDto> Tiles { get; set; } = [];
+}
+
+internal sealed class FogTileDto
+{
+    [JsonPropertyName("x")] public int X { get; set; }
+    [JsonPropertyName("y")] public int Y { get; set; }
+    [JsonPropertyName("rows")] public string Rows { get; set; } = "";
+}
+
 internal sealed class SceneDto
 {
     [JsonPropertyName("documentId")] public string DocumentId { get; set; } = "";
@@ -180,6 +194,10 @@ internal sealed class SceneDto
     [JsonPropertyName("labels")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Map.Core.Documents.LabelSettings? Labels { get; set; }
+    /// <summary>The fog of war of the painted map (R27, schema v38).</summary>
+    [JsonPropertyName("fog")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public FogDto? Fog { get; set; }
     [JsonPropertyName("stampForeground")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public StampForegroundDto? StampForeground { get; set; }

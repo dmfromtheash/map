@@ -127,6 +127,29 @@ public sealed class WaterCliffsWorkflowTests
     }
 
     [Fact]
+    public void The_fog_brush_reveals_along_a_drag_as_one_step_and_only_in_the_notes_tool()
+    {
+        var editor = Editor(new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, []));
+        editor.ActiveTool = EditorTool.Notes;
+        editor.FogBrush = true;
+        Assert.False(editor.BeginFogStroke(100, 100), "the brush waits until the fog is on");
+        editor.SetFogEnabled(true);
+        editor.FogBrushRadius = 40;
+        Assert.True(editor.BeginFogStroke(100, 100));
+        editor.ContinueFogStroke(400, 100);
+        Assert.NotNull(editor.FogStrokePreview);
+        Assert.True(editor.EndFogStroke());
+        Assert.True(editor.Fog.Sees(250, 100));
+        Assert.False(editor.Fog.Sees(250, 300));
+        Assert.True(editor.FogRevealedShare > 0);
+        editor.Undo();
+        Assert.False(editor.Fog.Sees(250, 100));
+        editor.ActiveTool = EditorTool.Select;
+        Assert.False(editor.BeginFogStroke(100, 100));
+        Assert.True(editor.FogVeilToDraw > 0);
+    }
+
+    [Fact]
     public void A_card_is_made_from_the_selection_bound_linked_and_undone()
     {
         var label = new SceneObject(ObjectId.New(), SceneObjectKind.Text, "Ильград", 100, 100, 120, 40, 0, "#FF20242B", "#FFFFFFFF", 0, true, false)

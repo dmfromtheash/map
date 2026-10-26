@@ -39,6 +39,8 @@ public enum CanvasInputGesture
     HexPaint,
     /// <summary>R10: a stroke of the density brush over the selected area.</summary>
     AreaDensity,
+    /// <summary>R27: a stroke of the fog-of-war brush.</summary>
+    FogBrush,
 }
 
 /// <summary>What the hosting control has to do for its UI framework after a routed event.</summary>
@@ -172,6 +174,12 @@ public sealed class CanvasInputRouter
             _editor.BeginMeasure(worldX, worldY);
             _gesture = CanvasInputGesture.Measure;
             return new CanvasInputResult { Handled = true, CapturePointer = true, Invalidate = true };
+        }
+
+        if (_editor.BeginFogStroke(worldX, worldY))
+        {
+            _gesture = CanvasInputGesture.FogBrush;
+            return new CanvasInputResult { Handled = true, Invalidate = true, CapturePointer = true };
         }
 
         if (_editor.BeginAreaDensityStroke(worldX, worldY))
@@ -408,6 +416,9 @@ public sealed class CanvasInputRouter
 
         switch (_gesture)
         {
+            case CanvasInputGesture.FogBrush:
+                _editor.ContinueFogStroke(worldX, worldY);
+                return new CanvasInputResult { Handled = true, Invalidate = true };
             case CanvasInputGesture.AreaDensity:
                 _editor.ContinueAreaDensityStroke(worldX, worldY);
                 return new CanvasInputResult { Handled = true, Invalidate = true };
@@ -494,6 +505,11 @@ public sealed class CanvasInputRouter
         // so two flags left set by a mid-gesture tool switch produced two history entries at once.
         switch (gesture)
         {
+            case CanvasInputGesture.FogBrush:
+                var fogEnd = _editor.Session.Viewport.ScreenToWorld(screenX, screenY);
+                _editor.ContinueFogStroke(fogEnd.X, fogEnd.Y);
+                _editor.EndFogStroke();
+                return new CanvasInputResult { Handled = true, Invalidate = true, ReleasePointer = true };
             case CanvasInputGesture.AreaDensity:
                 var densityEnd = _editor.Session.Viewport.ScreenToWorld(screenX, screenY);
                 _editor.ContinueAreaDensityStroke(densityEnd.X, densityEnd.Y);
@@ -651,6 +667,8 @@ public sealed class CanvasInputRouter
 
         switch (gesture)
         {
+            case CanvasInputGesture.FogBrush:
+                return _editor.CancelFogStroke();
             case CanvasInputGesture.AreaDensity:
                 return _editor.CancelAreaDensityStroke();
             case CanvasInputGesture.PlacementAreaNode:

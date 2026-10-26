@@ -45,6 +45,7 @@ public sealed record MapDocument
         Style = source.Style;
         Entities = source.Entities;
         Labels = source.Labels;
+        Fog = source.Fog;
     }
 
     public MapDocument(
@@ -272,6 +273,9 @@ public sealed record MapDocument
 
     /// <summary>How labels give way by scale and overlap, and keep placement areas clear (R07b, schema v37).</summary>
     public LabelSettings Labels { get; init; } = new();
+
+    /// <summary>The fog of war of the painted map: what the players have seen (R27, schema v38).</summary>
+    public MapFog Fog { get; init; } = new();
     public string Title { get; init; }
 
     /// <summary>When the document was first created. Supplied by the caller; Core has no clock.</summary>
@@ -346,6 +350,7 @@ public sealed record MapDocument
             Style = Style,
             Entities = Entities,
             Labels = Labels,
+            Fog = Fog,
         };
 
     public MapDocument WithAssets(IReadOnlyList<MapAssetReference> assets)

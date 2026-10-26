@@ -58,6 +58,26 @@ public sealed class WaterCliffsPersistenceTests
     }
 
     [Fact]
+    public void The_fog_of_war_round_trips_in_v38()
+    {
+        using var workspace = new TempWorkspace();
+        var (document, _, _) = Fixture();
+        var stroke = Map.Core.Editing.MapFogEditor.Begin(new MapFog { Enabled = true });
+        Map.Core.Editing.MapFogEditor.Dab(stroke, 300, 300, 90, true, document.Canvas.Width, document.Canvas.Height);
+        var fog = Map.Core.Editing.MapFogEditor.Finish(stroke);
+        fog = fog with { Revealed = fog.Revealed.SetItem(MapFog.Key(3, 2), []) };
+        var path = workspace.File("fog.mapproj");
+        MapProjectStore.Save(document with { Fog = fog }, path, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
+        Assert.Equal(38, Schema(path));
+        var opened = MapProjectStore.Open(path).Document.Fog;
+        Assert.True(opened.Enabled);
+        Assert.Equal(fog.Revealed.Count, opened.Revealed.Count);
+        foreach (var (key, rows) in fog.Revealed) Assert.Equal(rows.ToArray(), opened.Revealed[key].ToArray());
+        Assert.True(opened.Sees(300, 300));
+        Assert.False(opened.Sees(450, 300));
+    }
+
+    [Fact]
     public void Region_labels_importance_and_label_settings_round_trip_in_v37()
     {
         using var workspace = new TempWorkspace();

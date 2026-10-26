@@ -553,7 +553,9 @@ public sealed partial class EditorViewModel
             _exportQuality)
         {
             // A hex map exports the level being edited, as the master or as the players see it.
-            Hex = IsHexWorkshop ? new HexExportView(ExportHexPlayers, ExportHexLevel) : null,
+            Hex = IsHexWorkshop ? new HexExportView(ExportHexPlayers, ExportHexLevel)
+                // R27: a painted map with fog exports as the players see it when asked (Заметки → Туман).
+                : Fog.Enabled && ExportFogPlayers ? new HexExportView(true, null) : null,
         };
     }
 

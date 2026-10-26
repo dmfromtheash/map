@@ -6869,6 +6869,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     public Map.Rendering.BrushCursorPreview? BrushCursorAt(double worldX, double worldY)
     {
         if (CanvasWorkflowOpen) return null;
+        if (FogBrushOn) return new(worldX, worldY, FogBrushRadius, 0, !FogReveal);
         switch (ActiveTool)
         {
             case EditorTool.Brush:

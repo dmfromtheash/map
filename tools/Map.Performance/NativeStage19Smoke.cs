@@ -159,6 +159,8 @@ public sealed partial class Stage19Application : Application
         { _report.Required = EntitiesRequired; _report.Scenario = "entities"; }
         if (Options.Profile == "native-region-labels")
         { _report.Required = RegionLabelsRequired; _report.Scenario = "region-labels"; }
+        if (Options.Profile == "native-fog")
+        { _report.Required = FogRequired; _report.Scenario = "fog"; }
         if (Options.Profile == "native-soft-coast")
         { _report.Required = SoftCoastRequired; _report.Scenario = "soft-coast"; }
         if (Options.Profile == "native-history-memory")
@@ -235,6 +237,7 @@ public sealed partial class Stage19Application : Application
         if (_report.Scenario == "geography") { await GeographyOnly(); return; }
         if (_report.Scenario == "entities") { await EntitiesOnly(); return; }
         if (_report.Scenario == "region-labels") { await RegionLabelsOnly(); return; }
+        if (_report.Scenario == "fog") { await FogOnly(); return; }
         if (_report.Scenario == "owner-art") { await OwnerArtOnly(); return; }
         if (_report.Scenario == "history-memory") { await HistoryMemoryOnly(); return; }
         if (_report.Scenario == "panel-shots") { await PanelShotsOnly(); return; }
