@@ -41,6 +41,10 @@ public readonly record struct StampContentBounds(double Left, double Top, double
 /// <summary>Immutable fill inputs and a persistent cell ownership map. Pixels remain shared assets.</summary>
 public sealed record PlacementArea
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ImmutableHashSet<PlacementAreaSlot>? GenerationProtection { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public AreaGenerationRecipe? GenerationRecipe { get; init; }
     public Guid Id { get; init; } = Guid.NewGuid();
     public string Name { get; init; } = "Область";
     public string? AssetSetId { get; init; }
@@ -117,6 +121,10 @@ public sealed record PlacementArea
             throw new ArgumentException("Плотность области должна быть неотрицательной; связи и исключения — корректными.");
         if (LayoutVersion >= 3 && Density > 100) throw new ArgumentException("Плотность естественной расстановки — от 0 до 100%.");
         Rules?.Validate();
+        if (GenerationProtection?.Any(s => s.Ordinal < 0) == true || GenerationRecipe is { AlgorithmVersion: not 1 }
+            || GenerationRecipe is { } recipe && (!double.IsFinite(recipe.Density) || recipe.Density < 0
+                || !Enum.IsDefined(recipe.Pattern) || recipe.LayoutVersion is < 0 or > 4))
+            throw new ArgumentException("Некорректная защита или рецепт генерации области.");
         Beauty?.Validate();
         DensityMask?.Validate();
         if (RuleBlocked.Any(s => s.Ordinal < 0)) throw new ArgumentException("Некорректные места, снятые правилами области.");
@@ -164,11 +172,12 @@ public sealed record PlacementArea
                 foreach (var slot in sampler.Slots(x, span.Y))
                 {
                     // A slot the rules removed is not expected; it returns when the rule is switched off.
-                    if (RuleBlocked.Contains(slot)) continue;
+                    if (RuleBlocked.Contains(slot) || GenerationProtection?.Contains(slot) == true) continue;
                     expected++;
                     if (!ids.Contains(PlacementAreaPlanner.ObjectIdFor(Id, slot)))
                         throw new ArgumentException("Наполнение области не соответствует границе, плотности и исключениям.");
                 }
+        expected += Members.Count(m => GenerationProtection?.Contains(m.Slot) == true);
         if (expected != MemberCount) throw new ArgumentException("Область содержит лишние управляемые объекты.");
     }
 }

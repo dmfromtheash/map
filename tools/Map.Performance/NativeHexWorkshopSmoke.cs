@@ -274,11 +274,11 @@ public sealed partial class RegionalApplication
         _editor.HexGeneratorSettings = new Map.Core.Editing.HexGeneratorSettings
         { Seed = 9, LandShare = .6, RiversPerThousand = 16, SettlementsPerThousand = 20 };
         var depthBefore = _editor.Session.UndoDepth;
-        PressHex(_view, "HexGenAllButton"); await Settle();
-        Check("the generator builds a world as six undo steps", _editor.Session.UndoDepth == depthBefore + 6
+        PressHex(_view, "HexGenAllButton"); await _editor.PendingGeneration; _editor.ApplyGeneration(); await Settle();
+        Check("the generator applies a world as one undo step", _editor.Session.UndoDepth == depthBefore + 1
             && Layer().Board.Cells.Any(p => p.Value.Terrain == "starter/sea") && Layer().Paths.Any(p => p.Kind == HexPathKind.Road));
-        PressHex(_view, "HexGenRerollButton"); await Settle();
-        Check("the last step can be dealt again", _editor.Session.UndoDepth == depthBefore + 6);
+        PressHex(_view, "HexGenRerollButton"); await _editor.PendingGeneration; _editor.ApplyGeneration(); await Settle();
+        Check("the last recipe can be dealt again", _editor.Session.UndoDepth == depthBefore + 2);
         _view.Canvas.FitToCanvas(); await Settle(); await Task.Delay(300); await Settle();
         Capture(_view, "workshop-08-generated");
         await VerifyHexTravelR18();

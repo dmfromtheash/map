@@ -93,12 +93,13 @@ public sealed record HexGeneratorPalette
 public static class HexWorldGenerator
 {
     /// <summary>Runs one step on a layer and returns the new layer (the input is unchanged).</summary>
-    public static HexLayer Run(HexLayer layer, HexGenerationStep step, HexGeneratorSettings settings, HexGeneratorPalette? palette = null)
+    public static HexLayer Run(HexLayer layer, HexGenerationStep step, HexGeneratorSettings settings, HexGeneratorPalette? palette = null, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(layer);
         ArgumentNullException.ThrowIfNull(settings);
         palette ??= new HexGeneratorPalette();
-        var world = new World(layer, settings, palette);
+        cancellationToken.ThrowIfCancellationRequested();
+        var world = new World(layer, settings, palette, cancellationToken);
         return step switch
         {
             HexGenerationStep.Land => world.Land(),
@@ -159,9 +160,11 @@ public static class HexWorldGenerator
         private readonly int _columns;
         private readonly int _rows;
         private double[]? _height;
+        private readonly CancellationToken _cancellation;
 
-        public World(HexLayer layer, HexGeneratorSettings settings, HexGeneratorPalette palette)
+        public World(HexLayer layer, HexGeneratorSettings settings, HexGeneratorPalette palette, CancellationToken cancellation)
         {
+            _cancellation = cancellation;
             _layer = layer;
             _board = layer.Board;
             _settings = settings;
@@ -186,7 +189,7 @@ public static class HexWorldGenerator
             var height = new double[_columns * _rows];
             var scale = 0.9 + 3.2 * Math.Clamp(_settings.Fragmentation, 0, 1);
             var span = Math.Max(_columns, _rows);
-            Parallel.For(0, _rows, row =>
+            Parallel.For(0, _rows, new ParallelOptions { CancellationToken = _cancellation, MaxDegreeOfParallelism = 2 }, row =>
             {
                 for (var column = 0; column < _columns; column++)
                 {
@@ -213,6 +216,7 @@ public static class HexWorldGenerator
             var changes = new List<KeyValuePair<HexCoord, HexCell?>>();
             for (var index = 0; index < _columns * _rows; index++)
             {
+                if ((index & 255) == 0) _cancellation.ThrowIfCancellationRequested();
                 var hex = Hex(index);
                 var current = _board[hex];
                 var after = rewrite(index, hex, current);
@@ -248,6 +252,7 @@ public static class HexWorldGenerator
 
             while (queue.Count > 0)
             {
+                _cancellation.ThrowIfCancellationRequested();
                 var hex = Hex(queue.Dequeue());
                 foreach (var next in hex.Neighbors())
                 {
@@ -276,6 +281,7 @@ public static class HexWorldGenerator
             var land = new List<int>();
             for (var i = 0; i < height.Length; i++)
             {
+                if ((i & 255) == 0) _cancellation.ThrowIfCancellationRequested();
                 var cell = _board[Hex(i)];
                 if (cell is not null && !_palette.IsWater(cell.Terrain)) land.Add(i);
             }
@@ -323,6 +329,7 @@ public static class HexWorldGenerator
 
             while (queue.Count > 0)
             {
+                _cancellation.ThrowIfCancellationRequested();
                 var index = queue.Dequeue();
                 if (distance[index] >= cap - 1) continue;
                 foreach (var next in Hex(index).Neighbors())
@@ -393,6 +400,7 @@ public static class HexWorldGenerator
             var made = 0;
             foreach (var source in sources)
             {
+                _cancellation.ThrowIfCancellationRequested();
                 if (made >= wanted) break;
                 var start = Hex(source);
                 if (used.Contains(start) || start.Neighbors().Any(used.Contains)) continue;
@@ -479,6 +487,7 @@ public static class HexWorldGenerator
             var changes = new Dictionary<HexCoord, HexCell?>();
             foreach (var (index, score) in scores)
             {
+                _cancellation.ThrowIfCancellationRequested();
                 if (placedCount >= wanted || score < 2) break;
                 var hex = Hex(index);
                 var city = cityCount < cities;
@@ -534,6 +543,7 @@ public static class HexWorldGenerator
             var roadHexes = new HashSet<HexCoord>(_layer.Paths.Where(p => p.Kind == HexPathKind.Road).SelectMany(p => p.Hexes));
             double? Step(HexCoord _, HexCoord next)
             {
+                _cancellation.ThrowIfCancellationRequested();
                 if (_board[next] is not { } cell) return null;
                 // Following an existing road is cheap, so roads merge instead of running side by side.
                 return roadHexes.Contains(next) ? 0.4 : Cost(cell.Terrain);
@@ -549,6 +559,7 @@ public static class HexWorldGenerator
             var paths = _layer.Paths.ToBuilder();
             for (var added = 0; added < count; added++)
             {
+                _cancellation.ThrowIfCancellationRequested();
                 var next = -1;
                 for (var i = 0; i < count; i++)
                 {

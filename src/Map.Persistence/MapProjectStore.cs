@@ -42,6 +42,8 @@ public static partial class MapProjectStore
         layers.OfType<ObjectLayer>().Any(l => l.PlacementAreas.Any(a => a.NeedsRulesSchema));
 
     private static int SchemaFor(MapDocument document) =>
+        HasGenerationV31(document.Layers) || document.Checkpoints.Any(c => HasGenerationV31(c.Snapshot.Layers))
+            ? MapProjectFormat.GenerationSchemaVersion :
         HasAreaBeautyV30(document.Layers) || document.Checkpoints.Any(c => HasAreaBeautyV30(c.Snapshot.Layers))
             ? MapProjectFormat.AreaBeautySchemaVersion :
         document.Style is not null || document.Checkpoints.Any(c => c.Snapshot.Style is not null)
@@ -768,6 +770,7 @@ public static partial class MapProjectStore
             var scene = ParseJson<SceneDto>(sceneBytes, MapProjectFormat.SceneEntry);
             ValidatePathSchema(scene, manifest.SchemaVersion);
             ValidateAreaBeautySchemaV30(scene, manifest.SchemaVersion);
+            ValidateGenerationSchemaV31(scene, manifest.SchemaVersion);
             if (expectedSchemaVersion is >= 2 and <= 3)
             {
                 ValidateV2SceneShape(sceneBytes, MapProjectFormat.SceneEntry);
@@ -1338,6 +1341,7 @@ public static partial class MapProjectStore
                 var scene = ParseJson<SceneDto>(sceneBytes, sceneEntry);
                 ValidatePathSchema(scene, snapshotManifest.SchemaVersion);
                 ValidateAreaBeautySchemaV30(scene, snapshotManifest.SchemaVersion);
+                ValidateGenerationSchemaV31(scene, snapshotManifest.SchemaVersion);
                 if (schemaVersion is >= 2 and <= 3)
                 {
                     ValidateV2SceneShape(sceneBytes, sceneEntry);
@@ -1861,6 +1865,7 @@ public static partial class MapProjectStore
             Stride = wide ? stride : null,
             Cells = cells,
             Points = WriteHexStructureV18(layer),
+            Generation = WriteGenerationV31(layer),
             Gameplay = WriteGameplayV20(layer),
             Journey = WriteTravelV21(layer),
             TileSets = WriteTileSetsV24(layer),
@@ -1882,6 +1887,7 @@ public static partial class MapProjectStore
                 Color = path.Color,
                 Name = path.Name.Length == 0 ? null : path.Name,
                 Seed = path.Seed,
+                GenerationReason = path.GenerationReason,
                 BlocksSight = path.BlocksSight != path.LegacyBlocksSight ? path.BlocksSight : null,
                 BlocksMove = path.BlocksMove ? true : null,
                 BlocksLight = path.BlocksLight ? true : null,
@@ -1996,6 +2002,7 @@ public static partial class MapProjectStore
                     paths.Add(new HexPath(new HexPathId(pathId), kind, style, [], [.. vertices], path.Width, path.Color, path.Name ?? "", path.Seed)
                     {
                         BlocksSight = path.BlocksSight ?? (kind == HexPathKind.Border && style == HexRouteStyle.Edges),
+                        GenerationReason = path.GenerationReason,
                         BlocksMove = path.BlocksMove ?? false,
                         BlocksLight = path.BlocksLight ?? false,
                     });
@@ -2008,6 +2015,7 @@ public static partial class MapProjectStore
                     paths.Add(new HexPath(new HexPathId(pathId), kind, style, [.. hexes], [], path.Width, path.Color, path.Name ?? "", path.Seed)
                     {
                         BlocksSight = path.BlocksSight ?? (kind == HexPathKind.Border && style == HexRouteStyle.Edges),
+                        GenerationReason = path.GenerationReason,
                         BlocksMove = path.BlocksMove ?? false,
                         BlocksLight = path.BlocksLight ?? false,
                     });
@@ -2061,7 +2069,7 @@ public static partial class MapProjectStore
             Travel = travel == HexTravelScale.Default ? HexTravelScale.Default : travel,
         }, dto.Gameplay), dto.Journey);
         ReadTileSetsV24(result, dto.TileSets);
-        return result;
+        return ReadGenerationV31(result, dto.Generation);
     }
 
     private static SceneObjectDto ToObjectDto(SceneObject sceneObject) => new()
@@ -2069,6 +2077,7 @@ public static partial class MapProjectStore
         Id = sceneObject.Id.ToString(),
         Kind = sceneObject.Kind.ToString(),
         Name = sceneObject.Name,
+        GenerationReason = sceneObject.GenerationReason,
         X = sceneObject.X,
         Y = sceneObject.Y,
         Width = sceneObject.Width,
@@ -2526,6 +2535,7 @@ public static partial class MapProjectStore
                 $"scene.json holds an out-of-range object sublayer value \"{dto.Sublayer}\"."),
         GroupId = dto.GroupId is null ? null : Guid.ParseExact(dto.GroupId, "D"),
         GroupName = dto.GroupName,
+        GenerationReason = dto.GenerationReason is { Length: > 240 } ? throw new MapProjectCorruptedException("Слишком длинная причина генерации.") : dto.GenerationReason,
         ObjectOpacity = RequireFinite(dto.ObjectOpacity, "object opacity", min: 0, max: 1),
         FillGradient = ToGradient(dto.FillGradient, "object fill gradient"),
         Stamp = dto.Stamp is { } stamp

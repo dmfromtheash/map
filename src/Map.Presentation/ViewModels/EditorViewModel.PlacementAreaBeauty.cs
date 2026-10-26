@@ -129,7 +129,7 @@ public sealed partial class EditorViewModel
     // ---- The density brush ----
 
     /// <summary>Whether a press on the map paints the density of the selected area.</summary>
-    public bool IsAreaDensityBrushActive => _areaDensityBrush && SelectedEditableArea is { LayoutVersion: >= 3 };
+    public bool IsAreaDensityBrushActive => (_areaDensityBrush || _areaProtectionBrush) && SelectedEditableArea is { LayoutVersion: >= 3 };
 
     public PlacementAreaDensityBrushMode AreaDensityBrushMode => _areaDensityMode;
     public double AreaDensityBrushRadius => _areaDensityRadius;
@@ -141,6 +141,7 @@ public sealed partial class EditorViewModel
 
     public void SetAreaDensityBrush(bool active)
     {
+        if (active) _areaProtectionBrush = false;
         if (active && SelectedEditableArea is not { LayoutVersion: >= 3 })
         {
             StatusDetail = SelectedEditableArea is null ? "Выберите область, чтобы рисовать её плотность."
@@ -177,6 +178,7 @@ public sealed partial class EditorViewModel
     public bool BeginAreaDensityStroke(double x, double y)
     {
         if (!IsAreaDensityBrushActive || ActiveTool != EditorTool.Stamp || _areaCreating) return false;
+        if (_areaProtectionBrush) { _areaProtectionStroke = [.. SelectedEditableArea!.GenerationProtection ?? []]; DabAreaProtection(x, y); return true; }
         if (IsEditableAreaBusy) { StatusDetail = EditableAreaPlacementHint; return true; }
         _areaDensityWork = PlacementAreaDensityBrush.Begin(SelectedEditableArea!);
         _areaDensityLast = null;
@@ -192,6 +194,7 @@ public sealed partial class EditorViewModel
 
     public void ContinueAreaDensityStroke(double x, double y)
     {
+        if (_areaProtectionBrush) { DabAreaProtection(x, y); return; }
         AreaDensityBrushPoint = (x, y);
         if (_areaDensityWork is not { } work) return;
         // Dabs a quarter of the radius apart, so a fast stroke stays continuous.
@@ -210,6 +213,7 @@ public sealed partial class EditorViewModel
 
     public bool EndAreaDensityStroke()
     {
+        if (_areaProtectionBrush) return FinishAreaProtection();
         if (_areaDensityWork is not { } work) return false;
         _areaDensityWork = null; _areaDensityLast = null; _areaDensityVersion++;
         var mask = PlacementAreaDensityBrush.Finish(work.Left, work.Top, work.Cell, work.Width, work.Height, work.Values);
@@ -220,6 +224,7 @@ public sealed partial class EditorViewModel
     /// <summary>Esc during a stroke: the stroke is dropped, the area keeps its raster.</summary>
     public bool CancelAreaDensityStroke()
     {
+        if (_areaProtectionStroke is not null) { _areaProtectionStroke = null; return true; }
         if (_areaDensityWork is null) return false;
         _areaDensityWork = null; _areaDensityLast = null; _areaDensityVersion++;
         InvalidateScene(EditorChangeReason.CanvasInvalidation);

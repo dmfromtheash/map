@@ -250,8 +250,8 @@ public sealed partial class EditorViewModel
             // Only Esc or undo abandon a placement the user asked for; a tool switch does not.
             if (generation != _areaWorkGeneration) return;
             if (error is not null) { StatusDetail = error; return; }
-            // Another edit landed meanwhile: rebuild the command against the current map.
-            if (!ReferenceEquals(document, Session.Document)) command = create();
+            if (!ReferenceEquals(document, Session.Document))
+            { StatusDetail = "Карта изменилась во время расчёта области. Повторите «Разместить»."; return; }
             SetAreaBusy(false);
             CompleteAreaPlacement(command, layer, create: null, areaId);
         }
@@ -491,14 +491,13 @@ public sealed partial class EditorViewModel
             SizeVariationPercent = _naturalAreaSizeVariation, Pattern = _naturalAreaPattern, JoinEdges = _naturalAreaJoinEdges, Rules = _naturalAreaRules,
             ContentBounds = ReadAreaContentBounds(p.Variants, p.ContentBounds),
             ContentMasks = ReadAreaContentMasks(p.Variants, p.ContentMasks) });
-        if (CommitAreaChange(a => a.LayoutVersion < 4 ? natural : null, "Расположить область естественно"))
-            StatusDetail = "Рисунок области обновлён. Отделённые объекты сохранены; действие можно отменить.";
+        StartAreaGeneration(_ => natural);
     }
     public void TryAnotherEditableAreaArrangement()
     {
         if (DisplayedEditableArea is not { } p) return;
         if (_areaCreating) { SetEditableAreaSeed(unchecked(p.Seed + 104729)); return; }
-        CommitAreaChange(a => a with { Seed = unchecked(a.Seed + 104729) }, "Изменить seed области");
+        StartAreaGeneration(a => a with { Seed = unchecked(a.Seed + 104729) });
     }
     public void DetachSelectedAreaObject()
     {
@@ -570,9 +569,9 @@ public sealed partial class EditorViewModel
                 if (error is not null) { StatusDetail = error; continue; }
                 if (!ReferenceEquals(document, Session.Document))
                 {
-                    // The map changed meanwhile: recompute from the area as it is now.
-                    if (EditableAreas.FirstOrDefault(a => a.Id == job.AreaId) is not { } latest || job.Change(latest) is not { } again) continue;
-                    command = new PlacementAreaCommand(layer.Id, again.Id, again, job.Name, forestEcology: AreaForestEcology(again));
+                    _areaQueuedChange = null;
+                    StatusDetail = "Карта изменилась во время расчёта области. Повторите изменение или нажмите «Рассчитать выбранную область».";
+                    return;
                 }
                 RunAreaCommand(command);
             }

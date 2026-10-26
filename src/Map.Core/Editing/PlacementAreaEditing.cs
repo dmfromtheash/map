@@ -406,6 +406,8 @@ public sealed class PlacementAreaCommand : IEditCommand
             next = next with { Cells = cells.ToImmutable(), MemberCount = memberCount, OccupiedSlots = occupied.ToImmutable(),
                 RuleSlots = ruleSlots.Count == 0 ? null : [.. ruleSlots] };
         }
+        if (next is not null && _detach is null && !_bake)
+            next = PlacementAreaGenerationProtection.Preserve(old, next, replacements, additions, removals);
         var updated = document;
         var known = document.Assets.Select(a => a.Sha256).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var introduced = _assets.Where(a => known.Add(a.Sha256)).ToArray();

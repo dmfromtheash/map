@@ -193,6 +193,9 @@ public static class HexBoardOps
         return layer with
         {
             Board = board,
+            GenerationProtection = layer.GenerationProtection.Select(Move).Where(h => h is not null && board.Contains(h.Value)).Select(h => h!.Value).ToImmutableHashSet(),
+            GenerationRecipe = layer.GenerationRecipe is not { } recipe ? null : recipe with
+            { Selection = recipe.Selection.Select(Move).Where(h => h is not null && board.Contains(h.Value)).Select(h => h!.Value).ToImmutableHashSet() },
             Notes = notes.ToImmutable(),
             Journey = layer.Journey with
             {
@@ -237,7 +240,7 @@ public static class HexPaths
                     {
                         result.Add(new HexPath(first ? path.Id : HexPathId.New(), path.Kind, path.Style, [], [.. piece],
                             path.Width, path.Color, path.Name, path.Seed)
-                        { BlocksSight = path.BlocksSight, BlocksMove = path.BlocksMove, BlocksLight = path.BlocksLight });
+                        { BlocksSight = path.BlocksSight, BlocksMove = path.BlocksMove, BlocksLight = path.BlocksLight, GenerationReason = path.GenerationReason });
                         first = false;
                     }
 
@@ -273,7 +276,7 @@ public static class HexPaths
                 {
                     result.Add(new HexPath(first ? path.Id : HexPathId.New(), path.Kind, path.Style, [.. hexes], [],
                         path.Width, path.Color, path.Name, path.Seed)
-                        { BlocksSight = path.BlocksSight, BlocksMove = path.BlocksMove, BlocksLight = path.BlocksLight });
+                        { BlocksSight = path.BlocksSight, BlocksMove = path.BlocksMove, BlocksLight = path.BlocksLight, GenerationReason = path.GenerationReason });
                     first = false;
                 }
 

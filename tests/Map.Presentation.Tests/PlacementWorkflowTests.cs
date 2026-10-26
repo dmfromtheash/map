@@ -185,7 +185,7 @@ public sealed class PlacementWorkflowTests : IDisposable
         Assert.Equal(predicted, area.MemberCount); Assert.True(area.JoinEdges);
         Assert.Equal(65, area.Density); Assert.Equal(20, area.SizeVariationPercent); Assert.Equal(7, editor.StampDensity);
         Assert.All(preview, item => Assert.Equal(item, DocumentEditor.FindObject(placed, item.Id)));
-        editor.TryAnotherEditableAreaArrangement(); var changed = editor.Session.Document;
+        editor.TryAnotherEditableAreaArrangement(); await editor.PendingGeneration; Assert.True(editor.ApplyGeneration()); var changed = editor.Session.Document;
         Assert.Equal(2, editor.Session.UndoDepth); Assert.NotEqual(area.Seed, editor.SelectedEditableArea!.Seed);
         editor.Undo(); Assert.Same(placed, editor.Session.Document); editor.Redo(); Assert.Same(changed, editor.Session.Document);
         editor.SetEditableAreaSizeVariation(0);
@@ -202,7 +202,7 @@ public sealed class PlacementWorkflowTests : IDisposable
         editor.Session.Execute(new PlacementAreaCommand(layerId, area.Id, area with { LayoutVersion = 2, Density = 5 }, "legacy fixture"));
         var legacy = editor.Session.Document; editor.SelectEditableArea(area.Id);
         Assert.Same(legacy, editor.Session.Document); Assert.False(editor.UsesNaturalAreaLayout);
-        editor.ArrangeEditableAreaNaturally(); Assert.Equal(4, editor.SelectedEditableArea!.LayoutVersion);
+        editor.ArrangeEditableAreaNaturally(); await editor.PendingGeneration; Assert.True(editor.ApplyGeneration()); Assert.Equal(4, editor.SelectedEditableArea!.LayoutVersion);
         Assert.Equal(65, editor.SelectedEditableArea.Density);
         editor.Undo(); Assert.Same(legacy, editor.Session.Document);
     }

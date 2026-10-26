@@ -226,7 +226,7 @@ public sealed class AreaRulesApplication : Application
     /// </summary>
     private async Task Beauty()
     {
-        _editor.ArrangeEditableAreaNaturally(); await Settle(); await Until(() => !_editor.IsEditableAreaBusy); await Settle();
+        _editor.ArrangeEditableAreaNaturally(); await _editor.PendingGeneration; _editor.ApplyGeneration(); await Settle(); await Until(() => !_editor.IsEditableAreaBusy); await Settle();
         var natural = Stamps();
         _report.Notes["natural"] = N(natural.Count);
         _report.Checks["beauty-block-visible-all-off"] = Area().LayoutVersion == 4

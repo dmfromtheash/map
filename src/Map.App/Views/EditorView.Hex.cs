@@ -66,6 +66,7 @@ public sealed partial class EditorView
         HexToolMode.Place => "Поставить", HexToolMode.Fill => "Залить", HexToolMode.Erase => "Стереть",
         HexToolMode.Pick => "Пипетка", HexToolMode.Region => "Регионы", HexToolMode.Path => "Пути",
         HexToolMode.Party => "Партия", HexToolMode.Fog => "Туман", HexToolMode.Key => "Ключи", HexToolMode.Measure => "Путешествие",
+        HexToolMode.Protect => "Защита",
         _ => "Выделение",
     };
 
@@ -293,7 +294,7 @@ public sealed partial class EditorView
             foreach (var (page, control) in bodies) control.IsVisible = page == _hexPage;
             hint.IsVisible = _hexPage is not (HexPage.World or HexPage.MySets);
             radiusBlock.IsVisible = _hexPage is not (HexPage.World or HexPage.MySets)
-                && mode is HexToolMode.Place or HexToolMode.Erase or HexToolMode.Region or HexToolMode.Fog;
+                && mode is HexToolMode.Place or HexToolMode.Erase or HexToolMode.Region or HexToolMode.Fog or HexToolMode.Protect;
             region.IsVisible = mode == HexToolMode.Region;
             paths.IsVisible = mode == HexToolMode.Path;
             fog.IsVisible = mode == HexToolMode.Fog;
@@ -824,6 +825,11 @@ public sealed partial class EditorView
 
         editor.Children.Add(BuildHexRevealSection());
         editor.Children.Add(BuildHexPoiSection());
+        var generationReason = new TextBlock { Name = "HexGenerationReason", TextWrapping = TextWrapping.Wrap };
+        HexSync(() => generationReason.Text = _editor.HexKeyHex is { } hex && _editor.ActiveHexLayer is { } layer
+            ? (layer.GenerationProtection.Contains(hex) ? "Защищён от генерации. " : "") + layer.Board[hex]?.GenerationReason : "",
+            nameof(EditorViewModel.HexKeyHex), nameof(EditorViewModel.CanUndo));
+        editor.Children.Add(generationReason);
         editor.Children.Add(title);
         editor.Children.Add(category);
         editor.Children.Add(Ui.Subgroup("Мастеру", gm));
@@ -1145,13 +1151,14 @@ public sealed partial class EditorView
             Spacing = 8,
             Children =
             {
-                HexHint("Шаги строятся на том, что уже есть на поле; между ними можно рисовать руками. «Суша и моря» перерисовывает всё поле. Каждый шаг — одна отмена."),
+                HexHint("Расчёт идёт в фоне. Предпросмотр не меняет карту. «Применить» — одна отмена; защита сохраняет гексы и пересекающие её пути."),
                 HexRow("Зерно", seed, HexIcon("HexGenSeedButton", "Случайное зерно", MapIcons.HexDice, _editor.NewHexGeneratorSeed)),
                 Ui.Subgroup("Суша и рельеф", land),
                 Ui.Subgroup("Климат", climate),
                 Ui.Subgroup("Реки и поселения на 1000 гексов", life),
                 Ui.Subgroup("Шаги по порядку", steps),
                 HexGrid(2, all, reroll),
+                BuildGenerationControls(),
             },
         }, expanded: false);
     }

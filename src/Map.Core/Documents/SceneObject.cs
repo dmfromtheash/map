@@ -130,6 +130,7 @@ public sealed record StampGroundShadow(double Opacity, double FootX, double Foot
 /// </summary>
 public sealed record SceneObject
 {
+    public string? GenerationReason { get; init; }
     public SceneObject(
         ObjectId id,
         SceneObjectKind kind,

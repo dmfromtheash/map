@@ -374,6 +374,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     {
         _workingMemory = memory ?? Map.Core.Resources.WorkingMemoryBudget.Shared;
         Session = new EditingSession(document, _workingMemory);
+        _hexGenerator = document.Layers.OfType<HexLayer>().FirstOrDefault()?.GenerationRecipe?.Settings ?? _hexGenerator;
         Session.ResourceAdmissionChanged += (_, _) => Raise(nameof(StatusDetail));
         DocumentPath = documentPath;
         _store = store;
@@ -4950,6 +4951,7 @@ public sealed partial class EditorViewModel : ViewModelBase
                 return resizePreview;
             }
 
+            if (GenerationPreview is { } generationPreview) return generationPreview;
             if (ValidAppearancePreview is { } appearancePreview) return appearancePreview;
 
             // A light slider being dragged shows its value without a history entry.
@@ -10927,6 +10929,7 @@ public sealed partial class EditorViewModel : ViewModelBase
 
         if (allowClose)
         {
+            CancelGeneration();
             CancelPlacement();
         }
         return allowClose;

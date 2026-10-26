@@ -290,6 +290,7 @@ public sealed class Stage18Application : Application
         {
             var old = _editor.Session.Document;
             await Click("NaturalEditableAreaButton");
+            await _editor.PendingGeneration; _editor.ApplyGeneration(); await Settle();
             _report.Checks["legacy-area-upgrades-explicitly"] = _editor.SelectedEditableArea!.LayoutVersion == 4 && CountOverlaps() == 0;
             var packed = _editor.Session.Document; _editor.Undo(); var exact = ReferenceEquals(old, _editor.Session.Document); _editor.Redo();
             _report.Checks["spacing-upgrade-undo-redo"] = exact && ReferenceEquals(packed, _editor.Session.Document);
@@ -467,6 +468,7 @@ public sealed class Stage18Application : Application
         _editor.SelectEditableArea(area.Id); await Settle();
         var beforeUpgrade = _editor.Session.Document;
         await Click("NaturalEditableAreaButton");
+        await _editor.PendingGeneration; _editor.ApplyGeneration(); await Settle();
         var upgraded = _editor.Session.Document;
         _report.Checks["legacy-fill-upgrades-through-visible-button"] = _editor.SelectedEditableArea is { LayoutVersion: 4 }
             && _editor.SelectedEditableArea.MemberCount == _report.NaturalFillCount;
@@ -490,7 +492,7 @@ public sealed class Stage18Application : Application
         _report.Checks["density-keeps-existing-positions-heights-and-origin"] = stable;
         var beforeAnother = _editor.Session.Document; var anotherDepth = _editor.Session.UndoDepth;
         var oldSeed = _editor.SelectedEditableArea!.Seed;
-        await Click("AnotherEditableAreaArrangementButton"); var another = _editor.Session.Document;
+        await Click("AnotherEditableAreaArrangementButton"); await _editor.PendingGeneration; _editor.ApplyGeneration(); await Settle(); var another = _editor.Session.Document;
         _report.Checks["another-pattern-is-one-real-edit"] = _editor.SelectedEditableArea!.Seed != oldSeed && _editor.Session.UndoDepth == anotherDepth + 1;
         _editor.Undo(); var anotherUndo = ReferenceEquals(beforeAnother, _editor.Session.Document); _editor.Redo();
         _report.Checks["another-pattern-undo-redo-exact"] = anotherUndo && ReferenceEquals(another, _editor.Session.Document);

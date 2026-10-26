@@ -199,7 +199,8 @@ public sealed partial class RegionalApplication
         var watch = Stopwatch.StartNew(); string? error = null;
         try { action(); } catch (Exception ex) { error = ex.GetType().Name + ": " + ex.Message; }
         var handler = watch.Elapsed.TotalMilliseconds;
-        await Task.WhenAny(Task.WhenAll(_editor.PendingEditableAreaWork, _editor.PendingEditableAreaPreview), Task.Delay(60000));
+        await Task.WhenAny(Task.WhenAll(_editor.PendingEditableAreaWork, _editor.PendingEditableAreaPreview, _editor.PendingGeneration), Task.Delay(60000));
+        if (_editor.GenerationHasPreview) { ClickName("GenerationApplyButton"); await Settle(); }
         var background = watch.Elapsed.TotalMilliseconds;
         await Frame();
         var frame = watch.Elapsed.TotalMilliseconds;

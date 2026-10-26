@@ -266,6 +266,7 @@ internal sealed class LayerDto
 /// </summary>
 internal sealed class HexBoardDto
 {
+    [JsonPropertyName("generation")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public HexGenerationDto? Generation { get; set; }
     [JsonPropertyName("orientation")] public string Orientation { get; set; } = "flat";
     [JsonPropertyName("size")] public double Size { get; set; }
     [JsonPropertyName("originX")] public double OriginX { get; set; }
@@ -291,6 +292,7 @@ internal sealed class HexBoardDto
 
 internal sealed class HexPathDto
 {
+    [JsonPropertyName("generationReason")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? GenerationReason { get; set; }
     [JsonPropertyName("id")] public string Id { get; set; } = "";
     [JsonPropertyName("kind")] public string Kind { get; set; } = "";
     [JsonPropertyName("style")] public string Style { get; set; } = "";
@@ -525,6 +527,7 @@ internal sealed class TileDto
 
 internal sealed class SceneObjectDto
 {
+    [JsonPropertyName("generationReason")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? GenerationReason { get; set; }
     [JsonPropertyName("id")] public string Id { get; set; } = "";
     [JsonPropertyName("kind")] public string Kind { get; set; } = "";
     [JsonPropertyName("name")] public string Name { get; set; } = "";

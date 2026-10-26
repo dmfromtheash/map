@@ -56,6 +56,7 @@ public readonly record struct HexVertex(HexCoord Hex, int Corner)
 /// </summary>
 public sealed record HexPath
 {
+    public string? GenerationReason { get; init; }
     public const int MaxNodes = 65_536;
 
     public const int MaxNameLength = 120;

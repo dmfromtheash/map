@@ -12,6 +12,13 @@ namespace Map.Core.Documents;
 /// </summary>
 public sealed record HexCell
 {
+    public string? GenerationReason { get; init; }
+    public HexCell WithGenerationReason(string? reason)
+    {
+        var cell = this with { GenerationReason = reason };
+        if (Shared.TryGetValue(cell, out var shared)) return shared;
+        return Shared.Count < MaxShared ? Shared.GetOrAdd(cell, cell) : cell;
+    }
     public const int MaxTileIdLength = 96;
 
     /// <summary>Region ids are 1..MaxRegion; 0 means the hex belongs to no region.</summary>
@@ -87,13 +94,13 @@ public sealed record HexCell
         Of(terrain, variant, rotation: rotation, region: Region, revealed: Revealed).WithPointsOfInterest(PointsOfInterest);
 
     public HexCell WithRotation(int rotation) =>
-        Of(Terrain, Variant, rotation: rotation, region: Region, revealed: Revealed).WithPointsOfInterest(PointsOfInterest);
+        Of(Terrain, Variant, rotation: rotation, region: Region, revealed: Revealed).WithPointsOfInterest(PointsOfInterest) with { GenerationReason = GenerationReason };
 
     public HexCell WithRegion(int region) =>
-        Of(Terrain, Variant, rotation: Rotation, region: region, revealed: Revealed).WithPointsOfInterest(PointsOfInterest);
+        Of(Terrain, Variant, rotation: Rotation, region: region, revealed: Revealed).WithPointsOfInterest(PointsOfInterest) with { GenerationReason = GenerationReason };
 
     public HexCell WithRevealed(bool revealed) =>
-        Of(Terrain, Variant, rotation: Rotation, region: Region, revealed: revealed).WithPointsOfInterest(PointsOfInterest);
+        Of(Terrain, Variant, rotation: Rotation, region: Region, revealed: revealed).WithPointsOfInterest(PointsOfInterest) with { GenerationReason = GenerationReason };
 
     /// <summary>Distinct values are few (tiles × variants) while a board holds up to millions of hexes.</summary>
     private const int MaxShared = 1 << 16;
@@ -114,12 +121,14 @@ public sealed record HexCell
 
     public bool Equals(HexCell? other) => other is not null && Terrain == other.Terrain && Variant == other.Variant
         && Rotation == other.Rotation && Region == other.Region && Revealed == other.Revealed
+        && GenerationReason == other.GenerationReason
         && PointsOfInterest.SequenceEqual(other.PointsOfInterest);
 
     public override int GetHashCode()
     {
         var hash = new HashCode();
         hash.Add(Terrain); hash.Add(Variant); hash.Add(Rotation); hash.Add(Region); hash.Add(Revealed);
+        hash.Add(GenerationReason);
         foreach (var point in PointsOfInterest) hash.Add(point);
         return hash.ToHashCode();
     }
@@ -496,6 +505,8 @@ public sealed record HexGridStyle
 /// </summary>
 public sealed record HexLayer : MapLayer
 {
+    public ImmutableHashSet<HexCoord> GenerationProtection { get; init; } = [];
+    public HexGenerationRecipe? GenerationRecipe { get; init; }
     public HexLayer(LayerId id, string name, bool visible, bool locked, double opacity, HexBoard board, LayerMask? mask = null)
         : base(id, name, visible, locked, opacity)
     {

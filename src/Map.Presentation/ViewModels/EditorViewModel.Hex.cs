@@ -38,6 +38,7 @@ public enum HexToolMode
 
     /// <summary>Selects hexes to copy, move, turn, fill or clear.</summary>
     Select,
+    Protect,
 }
 
 /// <summary>
@@ -338,7 +339,7 @@ public sealed partial class EditorViewModel
             return;
         }
 
-        var hexes = _hexMode is HexToolMode.Place or HexToolMode.Erase or HexToolMode.Region or HexToolMode.Fog
+        var hexes = _hexMode is HexToolMode.Place or HexToolMode.Erase or HexToolMode.Region or HexToolMode.Fog or HexToolMode.Protect
             ? HexEditing.Footprint(layer.Board, center, _hexRadius).ToList()
             : [center];
         _hexCursor = new HexCursorPreview(layer.Id, hexes, _hexMode == HexToolMode.Erase
@@ -476,6 +477,7 @@ public sealed partial class EditorViewModel
             HexToolMode.Erase => $"Стёрто гексов: {count}.",
             HexToolMode.Region => _hexRegionErase ? $"Из регионов убрано гексов: {count}." : $"В регион «{ActiveHexLayer?.Region(_hexRegionId)?.Name}» вошло гексов: {count}.",
             HexToolMode.Fog => _hexFogReveal ? $"Игрокам открыто гексов: {count}." : $"Снова скрыто гексов: {count}.",
+            HexToolMode.Protect => $"Защита от генерации: {count} гексов.",
             _ => _hexMix.Count > 0 ? $"Поставлено гексов смеси: {count}." : $"Поставлено гексов «{HexTile.Name}»: {count}.",
         };
         Raise(nameof(CanUndo));
@@ -485,6 +487,7 @@ public sealed partial class EditorViewModel
     private string HexGestureName => _hexMode switch
     {
         HexToolMode.Erase => "Стереть гексы",
+        HexToolMode.Protect => "Защита от генерации",
         HexToolMode.Region => "Регион гексов",
         HexToolMode.Fog => _hexFogReveal ? "Открыть гексы" : "Скрыть гексы",
         _ => "Поставить гексы",
@@ -512,6 +515,14 @@ public sealed partial class EditorViewModel
 
     private void WriteHexFootprints(HexLayer layer, IEnumerable<HexCoord> centers)
     {
+        if (_hexMode == HexToolMode.Protect)
+        {
+            var hexes = centers.SelectMany(h => HexEditing.Footprint(layer.Board, h, _hexRadius)).ToArray();
+            var protection = GenerationProtectionErase ? layer.GenerationProtection.Except(hexes) : layer.GenerationProtection.Union(hexes);
+            if (protection.SetEquals(layer.GenerationProtection)) return;
+            Session.Execute(new HexLayerEditCommand("Кисть защиты", layer, layer with { GenerationProtection = protection }));
+            _hexGestureTouched.UnionWith(hexes); _hexGestureEntries++; AfterEdit(); return;
+        }
         var after = new Dictionary<HexCoord, HexCell?>();
         var choice = HexChoice;
         foreach (var center in centers)

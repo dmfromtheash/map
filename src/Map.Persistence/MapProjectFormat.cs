@@ -104,7 +104,8 @@ public static class MapProjectFormat
     /// </summary>
     public const int AreaBeautySchemaVersion = 30;
 
-    public const int MaxSupportedSchemaVersion = AreaBeautySchemaVersion;
+    public const int GenerationSchemaVersion = 31;
+    public const int MaxSupportedSchemaVersion = GenerationSchemaVersion;
 
     /// <summary>
     /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry

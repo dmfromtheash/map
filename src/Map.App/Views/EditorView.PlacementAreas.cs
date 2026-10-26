@@ -64,6 +64,7 @@ public sealed partial class EditorView
                 _fillAreaDensityUnits, _fillAreaSizeVariation, _fillAreaJoinEdges, BuildEditableAreaRulesBlock(), BuildEditableAreaBeautyBlock(), _fillAreaAnother,
                 new TextBlock { Text = "Центры внутри границы; края не обрезаются. В предпросмотре до 64 объектов; полный результат — после «Разместить».", TextWrapping = TextWrapping.Wrap }.Classed("faint", "role-caption"),
                 AppearanceNumberBox("EditableAreaSeedBox", "Номер рисунка", null, () => _editor.DisplayedEditableArea?.Seed, _editor.SetEditableAreaSeed),
+                BuildGenerationControls(hex: false),
                 Ui.TextButton("InsertEditableAreaNodeButton", "Добавить вершину на ребре", _editor.InsertEditableAreaNode, "compact"),
                 Ui.TextButton("DeleteEditableAreaNodeButton", "Удалить вершину (в черновике — последнюю)", _editor.DeleteEditableAreaNode, "compact"),
                 Ui.TextButton("SelectAreaObjectButton", "Выбрать объект области", _editor.PickEditableAreaObject, "compact"),
