@@ -12,8 +12,8 @@ public sealed record VttExportResult(string Path, int PixelsPerGrid, int Walls, 
 /// Universal VTT (*.dd2vtt): one JSON file a virtual tabletop opens as a map. It carries the
 /// exported picture as base64 PNG, the grid (<c>resolution</c>), the walls (<c>line_of_sight</c>)
 /// from strokes and roads marked «стена блокирует свет», and the doors (<c>portals</c>) cut into
-/// them. Coordinates are in grid cells from the exported area's top-left corner. Lights are left
-/// empty: Map has no light sources yet.
+/// them, and the lights of the map (<c>lights</c>: position, range to the end of the dim zone, intensity,
+/// colour). Coordinates are in grid cells from the exported area's top-left corner.
 /// </summary>
 public static class UniversalVttExporter
 {
@@ -128,12 +128,37 @@ public static class UniversalVttExporter
         json.WriteString("ambient_light", "ffffffff");
         json.WriteEndObject();
         json.WriteStartArray("lights");
+        foreach (var light in Lights(scene.Document, region))
+        {
+            json.WriteStartObject();
+            Point("position", new VectorPoint(light.X, light.Y));
+            json.WriteNumber("range", Math.Round(light.DimRadius / cell, 4));
+            json.WriteNumber("intensity", Math.Round(light.Intensity, 4));
+            json.WriteString("color", VttColor(light.Color));
+            json.WriteBoolean("shadows", true);
+            json.WriteEndObject();
+        }
         json.WriteEndArray();
         json.WriteBase64String("image", png);
         json.WriteEndObject();
         json.Flush();
         stream.Flush(flushToDisk: true);
         return (walls.Count, doors.Count);
+    }
+
+    /// <summary>The light sources whose light reaches into the exported area; none while the light section is off.</summary>
+    internal static IEnumerable<MapLightSource> Lights(MapDocument document, CanvasRegion region) =>
+        document.Lighting is { Enabled: true } lighting && !lighting.Sources.IsDefaultOrEmpty
+            ? lighting.Sources.Where(s => s.IsValid
+                && s.X + s.DimRadius >= region.X && s.X - s.DimRadius <= region.X + region.Width
+                && s.Y + s.DimRadius >= region.Y && s.Y - s.DimRadius <= region.Y + region.Height)
+            : [];
+
+    /// <summary>"#RRGGBB" or "#AARRGGBB" as the "aarrggbb" a Universal VTT colour is written in.</summary>
+    internal static string VttColor(string color)
+    {
+        var hex = color.TrimStart('#').ToLowerInvariant();
+        return hex.Length switch { 6 => "ff" + hex, 8 => hex, _ => "ffffffff" };
     }
 
     private static bool Inside(WorldBounds bounds, VectorPoint p) =>

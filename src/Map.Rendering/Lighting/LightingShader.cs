@@ -67,9 +67,12 @@ half4 main(float2 p) {
         float2 dv = lp[i].xy - p;
         float d = length(dv);
         float r = lp[i].w;
-        if (float(i) < lightCount && d < r * 1.5) {
+        float rd = lc[i].a;
+        if (float(i) < lightCount && d < max(r * 1.5, rd)) {
             float att = clamp(1.0 - d / r, 0.0, 1.0);
             att = att * sqrt(att);
+            // The dim zone (R14): a low, even light from the bright circle out to its end.
+            if (rd > r) { att += 0.2 * (1.0 - smoothstep(mix(r, rd, 0.6), rd, d)); }
             float3 ld = normalize(float3(dv.x, -dv.y, lp[i].z));
             float ndl = max(dot(n, ld), 0.0);
             float shapeL = mix(1.0, ndl * 1.6, clamp(mask * relight, 0.0, 1.0));

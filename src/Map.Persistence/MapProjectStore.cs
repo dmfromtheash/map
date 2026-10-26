@@ -42,6 +42,8 @@ public static partial class MapProjectStore
         layers.OfType<ObjectLayer>().Any(l => l.PlacementAreas.Any(a => a.NeedsRulesSchema));
 
     private static int SchemaFor(MapDocument document) =>
+        HasLightZonesV33(document.Lighting) || document.Checkpoints.Any(c => HasLightZonesV33(c.Snapshot.Lighting))
+            ? MapProjectFormat.LightZonesSchemaVersion :
         HasWaterCliffsV32(document) ? MapProjectFormat.WaterCliffsSchemaVersion :
         HasGenerationV31(document.Layers) || document.Checkpoints.Any(c => HasGenerationV31(c.Snapshot.Layers))
             ? MapProjectFormat.GenerationSchemaVersion :

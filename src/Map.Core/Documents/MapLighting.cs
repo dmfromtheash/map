@@ -61,6 +61,18 @@ public sealed record MapLightSource(Guid Id, double X, double Y, string Color, d
     public const double MinRadius = 8;
     public const double MaxRadius = 4096;
 
+    public const double MaxDimZone = 2;
+
+    /// <summary>
+    /// The dim zone around the bright circle (R14), as a share of <see cref="Radius"/>, 0..2: the
+    /// light reaches out to <see cref="DimRadius"/> at a low level, the way a virtual tabletop has
+    /// bright and dim light. Zero - every light before R14 - keeps only the bright circle.
+    /// </summary>
+    public double DimZone { get; init; }
+
+    /// <summary>How far the light reaches with its dim zone, in map pixels.</summary>
+    public double DimRadius => Radius * (1 + Math.Clamp(double.IsFinite(DimZone) ? DimZone : 0, 0, MaxDimZone));
+
     public bool IsValid => Id != Guid.Empty && double.IsFinite(X) && double.IsFinite(Y) && double.IsFinite(Radius)
         && double.IsFinite(Intensity) && !string.IsNullOrWhiteSpace(Color);
 
@@ -68,5 +80,6 @@ public sealed record MapLightSource(Guid Id, double X, double Y, string Color, d
     {
         Radius = Math.Clamp(Radius, MinRadius, MaxRadius),
         Intensity = Math.Clamp(Intensity, 0, 2),
+        DimZone = double.IsFinite(DimZone) ? Math.Clamp(DimZone, 0, MaxDimZone) : 0,
     };
 }

@@ -112,6 +112,8 @@ public sealed partial class EditorViewModel
             Lights = l.Lights.Enabled ? l.Lights : l.Lights with { Enabled = true },
             Sources = [.. l.Sources, source],
         }, true);
+        // The light just placed is the one the settings below the list show.
+        _selectedLightId = source.Id; Raise(nameof(SelectedLight));
     }
 
     public void RemoveLight(Guid id) =>

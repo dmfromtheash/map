@@ -452,18 +452,20 @@ internal static class LightingRenderer
         var scale = m.ScaleX;
         var cx = (device.Left + device.Right) / 2f; var cy = (device.Top + device.Bottom) / 2f;
         var chosen = lighting.Sources
-            .Select(s => (Source: s, X: (float)(s.X * scale + m.TransX), Y: (float)(s.Y * scale + m.TransY), R: (float)(s.Radius * scale)))
-            .Where(l => l.X + l.R * 1.5f >= device.Left && l.X - l.R * 1.5f <= device.Right
-                && l.Y + l.R * 1.5f >= device.Top && l.Y - l.R * 1.5f <= device.Bottom && l.R >= 1)
+            .Select(s => (Source: s, X: (float)(s.X * scale + m.TransX), Y: (float)(s.Y * scale + m.TransY), R: (float)(s.Radius * scale),
+                Reach: (float)(Math.Max(s.Radius * 1.5, s.DimRadius) * scale)))
+            .Where(l => l.X + l.Reach >= device.Left && l.X - l.Reach <= device.Right
+                && l.Y + l.Reach >= device.Top && l.Y - l.Reach <= device.Bottom && l.R >= 1)
             .OrderBy(l => (l.X - cx) * (l.X - cx) + (l.Y - cy) * (l.Y - cy))
             .Take(MaxLights).ToList();
         for (var i = 0; i < chosen.Count; i++)
         {
-            var (source, x, y, r) = chosen[i];
+            var (source, x, y, r, _) = chosen[i];
             var c = LightingState.Linear(source.Color);
             var level = state.LightsLevel * source.Intensity * (source.Flicker ? Flicker(source.Id, seconds) : 1);
             pos[i * 4] = x; pos[i * 4 + 1] = y; pos[i * 4 + 2] = (float)(Math.Max(12, source.Radius * 0.12) * scale); pos[i * 4 + 3] = r;
             col[i * 4] = (float)(c.R * level); col[i * 4 + 1] = (float)(c.G * level); col[i * 4 + 2] = (float)(c.B * level);
+            col[i * 4 + 3] = source.DimZone > 0 ? (float)(source.DimRadius * scale) : 0f;
         }
         return (pos, col, chosen.Count);
     }

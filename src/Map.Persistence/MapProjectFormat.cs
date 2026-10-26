@@ -111,7 +111,10 @@ public static class MapProjectFormat
     /// (waterfall, rapids, ford) and the water style of the sea. Maps without them keep the older schema.
     /// </summary>
     public const int WaterCliffsSchemaVersion = 32;
-    public const int MaxSupportedSchemaVersion = WaterCliffsSchemaVersion;
+
+    /// <summary>R14: the dim zone of a light source (manifest lighting). Maps without it keep the older schema.</summary>
+    public const int LightZonesSchemaVersion = 33;
+    public const int MaxSupportedSchemaVersion = LightZonesSchemaVersion;
 
     /// <summary>
     /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry

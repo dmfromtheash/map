@@ -197,17 +197,51 @@ public sealed partial class EditorView
                 var kind = source.Color switch { "#ffc27a" => "окно", "#ff8a3c" => "костёр", _ => "огонь" };
                 var remove = Ui.IconButton("LightRemove" + index, $"Убрать огонь {index}", MapIcons.LineReset,
                     () => { _editor.RemoveLight(captured); SyncLightSection(); });
-                list.Children.Add(new DockPanel
+                // A click on the row chooses the light; its settings open under the list (R14).
+                var pick = new Button
                 {
-                    Children =
-                    {
-                        remove.Docked(Dock.Right),
-                        new TextBlock { Text = $"{index}. {kind} · ({source.X:0}, {source.Y:0})", VerticalAlignment = VerticalAlignment.Center },
-                    },
-                });
+                    Content = $"{index}. {kind} · ({source.X:0}, {source.Y:0})", HorizontalAlignment = HorizontalAlignment.Stretch,
+                    HorizontalContentAlignment = HorizontalAlignment.Left, Padding = new Thickness(4, 2), Background = Brushes.Transparent,
+                }.Named("LightPick" + index);
+                AutomationProperties.SetName(pick, $"Выбрать огонь {index}");
+                pick.Click += (_, _) => { _editor.SelectLight(captured); SyncLightSection(); };
+                MarkSelected(pick, _editor.SelectedLight?.Id == captured);
+                list.Children.Add(new DockPanel { Children = { remove.Docked(Dock.Right), pick } });
             }
         });
-        return new StackPanel { Spacing = 6, Children = { kinds, place, count, list, clear } };
+        return new StackPanel { Spacing = 6, Children = { kinds, place, count, list, BuildSelectedLight(), clear } };
+    }
+
+    /// <summary>
+    /// The chosen light as an object (R14): colour, radius, the dim zone around the bright circle,
+    /// brightness and flicker. A virtual tabletop gets the same light in the dd2vtt export.
+    /// </summary>
+    private Control BuildSelectedLight()
+    {
+        var title = new TextBlock().Classed("role-panel");
+        var colour = AppearanceColorBox("LightColorBox", "Цвет", () => _editor.SelectedLight?.Color,
+            value => { _editor.SetSelectedLightColor(value); SyncLightSection(); });
+        var radius = AppearanceSlider("LightRadiusSlider", "Радиус", MapLightSource.MinRadius, 1200, "ед.",
+            () => _editor.SelectedLight?.Radius, (v, commit) => { _editor.SetSelectedLightRadius(v, commit); if (commit) SyncLightSection(); }, 5,
+            description: "Круг яркого света вокруг огня, в единицах карты.");
+        var dim = AppearanceSlider("LightDimZoneSlider", "Тусклая зона", 0, MapLightSource.MaxDimZone * 100, "%",
+            () => _editor.SelectedLight?.DimZone * 100, (v, commit) => { _editor.SetSelectedLightDimZone(v, commit); if (commit) SyncLightSection(); }, 5,
+            defaultValue: 0, description: "Слабый свет за ярким кругом, в процентах радиуса. Виртуальный стол получает его как тусклый свет.");
+        var bright = AppearanceSlider("LightIntensitySlider", "Яркость", 0, 200, "%",
+            () => _editor.SelectedLight?.Intensity * 100, (v, commit) => { _editor.SetSelectedLightIntensity(v, commit); if (commit) SyncLightSection(); }, 5,
+            description: "Насколько сильно огонь светит.");
+        var flicker = AppearanceToggle("LightFlickerToggle", "Мерцает", () => _editor.SelectedLight?.Flicker,
+            on => { _editor.SetSelectedLightFlicker(on); SyncLightSection(); });
+        var block = new StackPanel { Spacing = 4, Children = { title, colour, radius, dim, bright, flicker } }.Named("SelectedLightBlock");
+        _lightSyncs.Add(() =>
+        {
+            var light = _editor.SelectedLight;
+            block.IsVisible = light is not null;
+            if (light is null) return;
+            var index = _editor.ShownLighting.Sources.IndexOf(light) + 1;
+            title.Text = $"Огонь {index}";
+        });
+        return block;
     }
 
     /// <summary>Brings the Свет tab in line with the document (after an edit, Undo or Redo).</summary>

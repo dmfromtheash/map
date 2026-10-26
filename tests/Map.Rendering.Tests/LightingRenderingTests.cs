@@ -50,6 +50,13 @@ public sealed class LightingRenderingTests
         };
         using var torch = Draw(Scene(lit), mountain, view);
         Assert.True(Luma(torch.GetPixel(70, 330)) > Luma(night.GetPixel(70, 330)) + 30);
+
+        // R14: the dim zone lights a ring beyond the bright circle; the circle itself stays as it was.
+        var zoned = lit with { Sources = [lit.Sources[0] with { DimZone = 1 }] };
+        using var dim = Draw(Scene(zoned), mountain, view);
+        Assert.True(Luma(dim.GetPixel(220, 330)) > Luma(torch.GetPixel(220, 330)) + 8,
+            $"the dim zone reaches past the radius: {Luma(dim.GetPixel(220, 330)):0.0} vs {Luma(torch.GetPixel(220, 330)):0.0}");
+        Assert.True(Math.Abs(Luma(dim.GetPixel(70, 330)) - Luma(torch.GetPixel(70, 330))) < 25, "the bright circle keeps its light");
     }
 
     [Fact]
@@ -80,6 +87,10 @@ public sealed class LightingRenderingTests
         var night = Scene(new MapLighting { TimeOfDay = 1, Sources = [torch] });
         var day = Scene(new MapLighting { TimeOfDay = 0, Sources = [torch] });
 
+        // The mountain's light maps are built in the background for the canvas; an export waits for
+        // them. Built once first, so both steady frames see the same maps (alone, the first frame
+        // had none and the test failed whatever the light did).
+        using (Draw(night, mountain, view, export: true)) { }
         var asked = 0;
         using var steadyA = Draw(night, mountain, view, seconds: null, ask: () => asked++);
         using var steadyB = Draw(night, mountain, view, seconds: null, ask: () => asked++);

@@ -109,6 +109,9 @@ internal sealed class LightSourceDto
     [JsonPropertyName("radius")] public double Radius { get; set; }
     [JsonPropertyName("intensity")] public double Intensity { get; set; }
     [JsonPropertyName("flicker")] public bool Flicker { get; set; }
+    /// <summary>The dim zone of the light as a share of its radius (R14, schema v33); absent = none.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("dim")] public double? Dim { get; set; }
 }
 
 internal sealed class CanvasDto
