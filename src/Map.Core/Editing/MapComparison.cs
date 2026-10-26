@@ -114,15 +114,23 @@ public sealed class MapComparison
 
     private static IEnumerable<T> Layers<T>(MapDocument document, Func<ObjectLayer, IEnumerable<T>> pick) => document.Layers.OfType<ObjectLayer>().SelectMany(pick);
 
-    private static bool SameObject(SceneObject x, SceneObject y) =>
+    /// <summary>The same object by what it shows: place, size, turn, name, text and its look, asset, the nodes of a line or shape.</summary>
+    public static bool SameObject(SceneObject x, SceneObject y) =>
         x.Kind == y.Kind && Near(x.X, y.X) && Near(x.Y, y.Y) && Near(x.Width, y.Width) && Near(x.Height, y.Height) && Near(x.RotationDegrees, y.RotationDegrees)
-        && x.Name == y.Name && x.Visible == y.Visible && x.Text?.Content == y.Text?.Content && x.Stamp?.AssetSha256 == y.Stamp?.AssetSha256
-        && x.FillColor == y.FillColor && x.StrokeColor == y.StrokeColor;
+        && x.Name == y.Name && x.Visible == y.Visible && x.Locked == y.Locked && Equals(x.Text, y.Text) && x.Stamp?.AssetSha256 == y.Stamp?.AssetSha256
+        && x.FillColor == y.FillColor && x.StrokeColor == y.StrokeColor && x.Era == y.Era && x.Political == y.Political && x.MorphKey == y.MorphKey
+        && SameNodes(x.Line?.Nodes, y.Line?.Nodes)
+        && (x.Shape is null) == (y.Shape is null)
+        && (x.Shape is null || (x.Shape.Regions.Count == y.Shape!.Regions.Count && x.Shape.Regions.Zip(y.Shape.Regions).All(p => SameNodes(p.First.Nodes, p.Second.Nodes))
+            && x.Shape.Fill.Color == y.Shape.Fill.Color && Near(x.Shape.Fill.Opacity, y.Shape.Fill.Opacity) && x.Shape.Stroke.Color == y.Shape.Stroke.Color && Near(x.Shape.Stroke.Width, y.Shape.Stroke.Width)));
 
-    private static bool SameRiver(River x, River y) => x.Name == y.Name && x.Channels.Length == y.Channels.Length
+    private static bool SameNodes(IReadOnlyList<VectorNode>? a, IReadOnlyList<VectorNode>? b) =>
+        (a is null && b is null) || (a is not null && b is not null && a.Count == b.Count && a.Zip(b).All(p => Near(p.First.X, p.Second.X) && Near(p.First.Y, p.Second.Y)));
+
+    public static bool SameRiver(River x, River y) => x.Name == y.Name && x.Channels.Length == y.Channels.Length
         && x.Channels.Zip(y.Channels).All(p => p.First.Nodes.Select(n => (n.X, n.Y, n.Width)).SequenceEqual(p.Second.Nodes.Select(n => (n.X, n.Y, n.Width))));
 
-    private static bool SameRoad(Road x, Road y) => x.Name == y.Name
+    public static bool SameRoad(Road x, Road y) => x.Name == y.Name
         && x.Nodes.Select(n => (n.X, n.Y)).SequenceEqual(y.Nodes.Select(n => (n.X, n.Y)));
 
     private static WorldBounds RiverBounds(River river) => Bounds(river.Channels.SelectMany(c => c.Nodes).Select(n => (n.X, n.Y)));

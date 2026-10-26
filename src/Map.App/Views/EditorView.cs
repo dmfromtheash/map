@@ -7887,6 +7887,7 @@ public sealed partial class EditorView : UserControl
                 }.Classed("faint", "role-caption"),
                 new DockPanel { Children = { _checkpointCountText.Docked(Dock.Right), create } },
                 BuildCompareBlock(),
+                BuildPackageBlock(),
                 new Expander { Header = "Ограничения версий", Content = new TextBlock
                 {
                     Name = "CheckpointLimitsText",
@@ -10968,6 +10969,8 @@ public sealed partial class EditorView : UserControl
                 SyncCompareBlock();
             }, "compact");
             ToolTip.SetTip(compare, "Что изменилось с этой версии: итог словами, подсветка на карте, «До / После».");
+            var export = Ui.AsyncButton("ExportChanges_" + checkpoint.Id, "Выгрузить изменения", () => ExportChangesAsync(captured), "compact");
+            ToolTip.SetTip(export, "Файл .mapchanges с тем, что изменилось с этой версии, — для другой копии карты (без сети).");
             var restore = Ui.AsyncButton(
                 "RestoreCheckpoint_" + checkpoint.Id,
                 "Восстановить",
@@ -11027,7 +11030,7 @@ public sealed partial class EditorView : UserControl
                         new Ui.ChoiceGrid
                         {
                             MaxColumns = 3, MaxWidth = 420, HorizontalAlignment = HorizontalAlignment.Left,
-                            Children = { compare, restore, delete },
+                            Children = { compare, export, restore, delete },
                         },
                     },
                 },
