@@ -9,15 +9,15 @@
 - Папка: `C:\Users\Leshe\.codex\worktrees\stage10f-fonts-bindings\Map`; `C:\Projects\Map` — старая, не трогать.
 - Ветка `codex/stage-18-editable-areas`; `main` на GitHub = та же линия (fast-forward). Последний HEAD — `git log -1`.
 - Версия 0.4.0 (тег `v0.4.0`); после неё изменения в `CHANGELOG.md` → `[Unreleased]`.
-  Схема `.mapproj` — v34 (R22 высоты суши; v33 — огни R14; v32 — R12); свободна v35.
-- Тесты: Core 519, Persistence 383, Assets 155 (2026-10-26); Rendering 341, Presentation 785 (2026-10-25; стили — фильтрами).
+  Схема `.mapproj` — v35 (R24 «намеренно»; v34 высоты R22; v33 огни R14; v32 R12); свободна v36.
+- Тесты: Core 522, Persistence 384, Assets 155 (2026-10-26); Rendering 341, Presentation 785 (2026-10-25; стили — фильтрами).
 - Windows запускает `Map.App.exe` и `dotnet.exe` на RTX 3070 (HKCU `UserGpuPreferences`, по «да» владельца 2026-10-26).
 - Map.slnx тестовые проекты **не собирает** — перед `dotnet test --no-build` собрать тестовый проект.
 - Ярлык владельца запускает `C:\Users\Leshe\Apps\Map\Map.App.exe` напрямую; сессия, менявшая код, сама обновляет копию
   (`tools/ai/publish-local-r2r.ps1`) и проверяет ярлык (AGENTS.md §Git).
 
 ## Что готово
-- Дорожная карта 2026-10: **16 из 44** ✅; PARTIAL — R10–R12, R14, R20, R22, R23, R25; R09 🔄 (`docs/ROADMAP_2026-10_PROGRESS.md`). V0 — свой SkiaSharp (DEC-057).
+- Дорожная карта 2026-10: **17 из 44** ✅; PARTIAL — R10–R12, R14, R20, R22, R23, R25; R09 🔄 (`docs/ROADMAP_2026-10_PROGRESS.md`). V0 — свой SkiaSharp (DEC-057).
 - **R20 (Sol):** генерация гексов и перегенерация области в фоне — отмена, превью, «Применить» одной отменой, конфликт
   ревизии, защита, рецепт и причины (v31). Гексы → Мир → Генератор мира. Мастер региона и линейные расстановки — ещё нет.
 - **R12 (Claude):** «Свет с» и кисть «Маска обрыва» (Суша → Маска обрыва); водопад/пороги/брод в узле реки, «Дельта»;
