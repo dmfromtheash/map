@@ -291,6 +291,28 @@ public sealed class WaterCliffsWorkflowTests
     }
 
     [Fact]
+    public void A_sector_is_dressed_systems_set_by_number_imported_and_exported()
+    {
+        var editor = new EditorViewModel(HexMapFactory.Create("Сектор", DateTimeOffset.UnixEpoch, new MapCategoryId("hex"), HexOrientation.Flat, 40, 8, 10, "#FF8FB0BA"),
+            null, false, new FakeProjectStore(), new FakeRecentMaps(), new FakeFilePicker(), new FakePrompts(), new FakeLog());
+        editor.MakeStarSector();
+        Assert.Equal(StarSector.Background, editor.Session.Document.Layers.OfType<BaseColorLayer>().Single().Color);
+        Assert.Equal("пк", editor.SectorLayer!.Travel.Unit);
+        Assert.False(editor.SetSystem("0101", new StarSystem { Uwp = "bad" }));
+        Assert.False(editor.SetSystem("9999", new StarSystem { Uwp = "A788899-C" }));
+        Assert.True(editor.SetSystem("0203", new StarSystem { Name = "Регина", Uwp = "A788899-C" }));
+        Assert.Equal("Регина", editor.SystemAt("0203")!.Name);
+        var text = editor.ExportSectorData();
+        Assert.Contains("0203\tРегина\tA788899-C", text);
+        Assert.Equal(1, editor.ImportSectorData("Hex\tName\tUWP\n0101\tЭфат\tA646930-D\n9999\tДалеко\tA646930-D\n"));
+        Assert.Equal(2, editor.SectorSystems.Count);
+        editor.Undo();
+        Assert.Single(editor.SectorSystems);
+        Assert.True(editor.SetSystem("0203", null));
+        Assert.Empty(editor.SectorSystems);
+    }
+
+    [Fact]
     public void A_card_is_made_from_the_selection_bound_linked_and_undone()
     {
         var label = new SceneObject(ObjectId.New(), SceneObjectKind.Text, "Ильград", 100, 100, 120, 40, 0, "#FF20242B", "#FFFFFFFF", 0, true, false)

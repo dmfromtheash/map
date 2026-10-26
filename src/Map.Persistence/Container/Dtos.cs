@@ -181,6 +181,14 @@ internal sealed class FogTileDto
     [JsonPropertyName("rows")] public string Rows { get; set; } = "";
 }
 
+/// <summary>A star system at a hex (R33).</summary>
+internal sealed class HexSystemDto
+{
+    [JsonPropertyName("column")] public int Column { get; set; }
+    [JsonPropertyName("row")] public int Row { get; set; }
+    [JsonPropertyName("system")] public Map.Core.Documents.StarSystem? System { get; set; }
+}
+
 internal sealed class SceneDto
 {
     [JsonPropertyName("documentId")] public string DocumentId { get; set; } = "";
@@ -357,6 +365,8 @@ internal sealed class HexBoardDto
     [JsonPropertyName("paths")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<HexPathDto>? Paths { get; set; }
     [JsonPropertyName("hexRegions")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<HexRegionDto>? Regions { get; set; }
     [JsonPropertyName("hexKey")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<HexNoteDto>? Notes { get; set; }
+    /// <summary>Star systems of a sector (R33, schema v43).</summary>
+    [JsonPropertyName("systems")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public List<HexSystemDto>? Systems { get; set; }
     [JsonPropertyName("level")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public int? Level { get; set; }
     [JsonPropertyName("fog")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public bool? Fog { get; set; }
     [JsonPropertyName("travel")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public HexTravelDto? Travel { get; set; }

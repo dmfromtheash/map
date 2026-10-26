@@ -528,6 +528,9 @@ public sealed record HexLayer : MapLayer
     /// <summary>The hex key: notes for running a game, by hex.</summary>
     public ImmutableDictionary<HexCoord, HexNote> Notes { get; init; } = ImmutableDictionary<HexCoord, HexNote>.Empty;
 
+    /// <summary>The star systems of a sector (R33, schema v43): UWP, bases, remarks, zone, PBG, allegiance, stars.</summary>
+    public ImmutableDictionary<HexCoord, StarSystem> Systems { get; init; } = ImmutableDictionary<HexCoord, StarSystem>.Empty;
+
     /// <summary>
     /// Which level of the world the layer shows: 0 is the surface, -1 the first level under it,
     /// and so on. The editor shows one level at a time; levels share the grid, so a cave entrance

@@ -35,6 +35,8 @@ public static class ExportPlayerVisibility
             Board = cells,
             // Таблицы встреч и план ведущего никогда не передаются игрокам.
             Journey = new HexTravelSettings(),
+            // R33: systems under the fog stay hidden, the master's notes of a system never leave.
+            Systems = layer.Systems.Where(p => HexVisible(layer, p.Key)).ToImmutableDictionary(p => p.Key, p => p.Value with { Notes = "" }),
             Notes = layer.Notes.Where(p => NoteVisible(layer, p.Key, p.Value))
                 .ToImmutableDictionary(p => p.Key, p => p.Value with { GmText = "", ChildMap = null,
                     Title = HexGameplay.PlayerLabel(p.Value.Title, p.Value.ApproximateLabel, p.Value.Rumor, "Слух"),

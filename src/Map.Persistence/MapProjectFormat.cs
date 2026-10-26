@@ -141,7 +141,10 @@ public static class MapProjectFormat
 
     /// <summary>R39: the planet flag (two to one, the seamless meridian).</summary>
     public const int PlanetSchemaVersion = 42;
-    public const int MaxSupportedSchemaVersion = PlanetSchemaVersion;
+
+    /// <summary>R33: star systems in the hexes of a sector.</summary>
+    public const int StarSectorSchemaVersion = 43;
+    public const int MaxSupportedSchemaVersion = StarSectorSchemaVersion;
 
     /// <summary>
     /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry

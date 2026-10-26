@@ -58,6 +58,22 @@ public sealed class WaterCliffsPersistenceTests
     }
 
     [Fact]
+    public void Star_systems_round_trip_in_v43()
+    {
+        using var workspace = new TempWorkspace();
+        var document = HexMapFactory.Create("Сектор", DateTimeOffset.UnixEpoch, new MapCategoryId("hex"), HexOrientation.Flat, 40, 8, 10, StarSector.Background);
+        var layer = document.Layers.OfType<HexLayer>().Single();
+        var hex = layer.Board.Layout.FromOffset(new HexOffset(2, 3));
+        var system = new StarSystem { Name = "Регина", Uwp = "A788899-C", Bases = "NS", Remarks = "Ri Pa", Zone = TravelZone.Red, Pbg = "703", Allegiance = "ImDd", Stars = "F7 V", Notes = "секрет" };
+        document = document.WithLayer(layer.Id, l => ((HexLayer)l) with { Systems = System.Collections.Immutable.ImmutableDictionary<HexCoord, StarSystem>.Empty.Add(hex, system) });
+        var path = workspace.File("sector.mapproj");
+        MapProjectStore.Save(document, path, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
+        Assert.Equal(43, Schema(path));
+        var read = MapProjectStore.Open(path).Document.Layers.OfType<HexLayer>().Single().Systems;
+        Assert.Equal(system, read[hex]);
+    }
+
+    [Fact]
     public void The_planet_flag_round_trips_in_v42()
     {
         using var workspace = new TempWorkspace();

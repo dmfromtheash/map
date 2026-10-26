@@ -56,7 +56,11 @@ public static partial class MapProjectStore
         !timeline.IsDefault || layers.OfType<ObjectLayer>().Any(l => l.Roads.Any(r => r.Era is not null)
             || l.Objects.Any(o => o.Era is not null || o.MorphKey is not null || o.Political != PoliticalRole.None));
 
+    private static bool HasSystemsV43(IEnumerable<MapLayer> layers) => layers.OfType<HexLayer>().Any(l => !l.Systems.IsEmpty);
+
     private static int SchemaFor(MapDocument document) =>
+        HasSystemsV43(document.Layers) || document.Checkpoints.Any(c => HasSystemsV43(c.Snapshot.Layers))
+            ? MapProjectFormat.StarSectorSchemaVersion :
         !document.Planet.IsDefault || document.Checkpoints.Any(c => !c.Snapshot.Planet.IsDefault)
             ? MapProjectFormat.PlanetSchemaVersion :
         !document.Pointcrawl.IsDefault || document.Checkpoints.Any(c => !c.Snapshot.Pointcrawl.IsDefault)
@@ -1955,6 +1959,10 @@ public static partial class MapProjectStore
             {
                 Id = region.Id, Name = region.Name, Color = region.Color, ParentRegion = region.ParentRegion,
             })],
+            Systems = layer.Systems.IsEmpty ? null : [.. layer.Systems
+                .Select(pair => (Offset: board.Layout.ToOffset(pair.Key), System: pair.Value))
+                .OrderBy(pair => pair.Offset.Row).ThenBy(pair => pair.Offset.Column)
+                .Select(pair => new HexSystemDto { Column = pair.Offset.Column, Row = pair.Offset.Row, System = pair.System })],
             Notes = layer.Notes.IsEmpty ? null : [.. layer.Notes
                 .Select(pair => (Offset: board.Layout.ToOffset(pair.Key), Note: pair.Value))
                 .OrderBy(pair => pair.Offset.Row).ThenBy(pair => pair.Offset.Column)
@@ -2106,6 +2114,15 @@ public static partial class MapProjectStore
             notes[hex] = new HexNote(note.Title ?? "", category, note.GmText ?? "", note.PlayerText ?? "", note.ChildMap);
         }
 
+        var systems = System.Collections.Immutable.ImmutableDictionary.CreateBuilder<HexCoord, StarSystem>();
+        foreach (var entry in dto.Systems ?? [])
+        {
+            var hex = At(entry.Column, entry.Row);
+            if (entry.System is not { IsValid: true } system || systems.ContainsKey(hex))
+                throw new MapProjectCorruptedException($"Hex layer {id} has a damaged star system.");
+            systems[hex] = system;
+        }
+
         HexTravelScale travel;
         try
         {
@@ -2123,6 +2140,7 @@ public static partial class MapProjectStore
             Paths = paths.ToImmutable(),
             Regions = regions.ToImmutable(),
             Notes = notes.ToImmutable(),
+            Systems = systems.ToImmutable(),
             Level = dto.Level is { } level ? Math.Clamp(level, -64, 64) : 0,
             FogEnabled = dto.Fog == true,
             Travel = travel == HexTravelScale.Default ? HexTravelScale.Default : travel,
