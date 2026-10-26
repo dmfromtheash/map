@@ -10,7 +10,7 @@
 - Ветка `codex/stage-18-editable-areas`; `main` на GitHub = та же линия (fast-forward). Последний HEAD — `git log -1`.
 - Версия 0.4.0 (тег `v0.4.0`); после неё изменения в `CHANGELOG.md` → `[Unreleased]`.
   Схема `.mapproj` — v44 (R28 «из родителя»; v43 звёздные системы R33; v42 планета R39; v41 пойнткроул R32); свободна v45.
-- Тесты: Core 550, Persistence 394, Assets 155 (2026-10-26); Rendering 341, Presentation 785 (2026-10-25; стили — фильтрами).
+- Тесты: Core 551, Persistence 394, Assets 155 (2026-10-26); Rendering 341, Presentation 785 (2026-10-25; стили — фильтрами).
 - Windows запускает `Map.App.exe` и `dotnet.exe` на RTX 3070 (HKCU `UserGpuPreferences`, по «да» владельца 2026-10-26).
 - Map.slnx тестовые проекты **не собирает** — перед `dotnet test --no-build` собрать тестовый проект.
 - Ярлык владельца запускает `C:\Users\Leshe\Apps\Map\Map.App.exe` напрямую; сессия, менявшая код, сама обновляет копию
