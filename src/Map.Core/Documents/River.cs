@@ -211,6 +211,10 @@ public sealed record River
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
     public bool GeographyIntentional { get; init; }
 
+    /// <summary>A copy of a river of the parent map (R28, schema v44): where it came from and the shape it had.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public Map.Core.Editing.InheritedFrom? Inherited { get; init; }
+
     /// <summary>Why a generator made this river (R23, schema v31); null for a river drawn by hand.</summary>
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public string? GenerationReason { get; init; }

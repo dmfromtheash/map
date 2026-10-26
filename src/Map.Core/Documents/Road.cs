@@ -235,6 +235,10 @@ public sealed record Road
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
     public bool GeographyIntentional { get; init; }
 
+    /// <summary>A copy of a road of the parent map (R28, schema v44): where it came from and the shape it had.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public Map.Core.Editing.InheritedFrom? Inherited { get; init; }
+
     /// <summary>The years the road exists (R31, schema v40); null - always.</summary>
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public Era? Era { get; init; }

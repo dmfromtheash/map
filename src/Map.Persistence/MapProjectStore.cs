@@ -58,7 +58,12 @@ public static partial class MapProjectStore
 
     private static bool HasSystemsV43(IEnumerable<MapLayer> layers) => layers.OfType<HexLayer>().Any(l => !l.Systems.IsEmpty);
 
+    private static bool HasInheritedV44(IEnumerable<MapLayer> layers) =>
+        layers.OfType<ObjectLayer>().Any(l => l.Roads.Any(r => r.Inherited is not null) || l.Rivers.Any(r => r.Inherited is not null));
+
     private static int SchemaFor(MapDocument document) =>
+        HasInheritedV44(document.Layers) || document.Checkpoints.Any(c => HasInheritedV44(c.Snapshot.Layers))
+            ? MapProjectFormat.InheritedSchemaVersion :
         HasSystemsV43(document.Layers) || document.Checkpoints.Any(c => HasSystemsV43(c.Snapshot.Layers))
             ? MapProjectFormat.StarSectorSchemaVersion :
         !document.Planet.IsDefault || document.Checkpoints.Any(c => !c.Snapshot.Planet.IsDefault)

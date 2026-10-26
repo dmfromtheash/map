@@ -144,7 +144,10 @@ public static class MapProjectFormat
 
     /// <summary>R33: star systems in the hexes of a sector.</summary>
     public const int StarSectorSchemaVersion = 43;
-    public const int MaxSupportedSchemaVersion = StarSectorSchemaVersion;
+
+    /// <summary>R28: rivers and roads copied from the parent map, with their source and shape.</summary>
+    public const int InheritedSchemaVersion = 44;
+    public const int MaxSupportedSchemaVersion = InheritedSchemaVersion;
 
     /// <summary>
     /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry
