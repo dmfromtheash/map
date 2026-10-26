@@ -48,6 +48,7 @@ public sealed record MapDocument
         Fog = source.Fog;
         Transitions = source.Transitions;
         Timeline = source.Timeline;
+        Pointcrawl = source.Pointcrawl;
     }
 
     public MapDocument(
@@ -284,6 +285,9 @@ public sealed record MapDocument
 
     /// <summary>The year shown and the political mode (R31, schema v40).</summary>
     public MapTimeline Timeline { get; init; } = new();
+
+    /// <summary>The places and ways of the pointcrawl over the map (R32, schema v41).</summary>
+    public MapPointcrawl Pointcrawl { get; init; } = new();
     public string Title { get; init; }
 
     /// <summary>When the document was first created. Supplied by the caller; Core has no clock.</summary>
@@ -361,6 +365,7 @@ public sealed record MapDocument
             Fog = Fog,
             Transitions = Transitions,
             Timeline = Timeline,
+            Pointcrawl = Pointcrawl,
         };
 
     public MapDocument WithAssets(IReadOnlyList<MapAssetReference> assets)

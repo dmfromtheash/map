@@ -140,6 +140,19 @@ public static class PlayerScene
             Entities = [.. document.Entities.Where(e => e.PlayerVisible)],
             Transitions = [.. document.Transitions.Where(t => fog.Sees(t.From.X, t.From.Y))],
             Timeline = document.Timeline,
+            // The players' pointcrawl: what they have seen, no hidden ways, no master's notes.
+            Pointcrawl = PlayersPointcrawl(document.Pointcrawl),
+        };
+    }
+
+    private static MapPointcrawl PlayersPointcrawl(MapPointcrawl crawl)
+    {
+        var (nodes, edges) = crawl.ForPlayers();
+        return crawl with
+        {
+            Nodes = [.. nodes.Select(p => p.Known ? p.Node with { Note = "" } : p.Node with { Name = "?", Note = "", EntityId = null })],
+            Edges = [.. edges],
+            FogByVisit = false,
         };
     }
 

@@ -206,6 +206,10 @@ internal sealed class SceneDto
     [JsonPropertyName("timeline")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Map.Core.Documents.MapTimeline? Timeline { get; set; }
+    /// <summary>The places and ways of the pointcrawl (R32, schema v41).</summary>
+    [JsonPropertyName("pointcrawl")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Map.Core.Documents.MapPointcrawl? Pointcrawl { get; set; }
     [JsonPropertyName("stampForeground")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public StampForegroundDto? StampForeground { get; set; }

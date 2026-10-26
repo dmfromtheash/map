@@ -58,6 +58,27 @@ public sealed class WaterCliffsPersistenceTests
     }
 
     [Fact]
+    public void The_pointcrawl_round_trips_in_v41()
+    {
+        using var workspace = new TempWorkspace();
+        var (document, _, _) = Fixture();
+        var (a, b) = (Guid.NewGuid(), Guid.NewGuid());
+        var crawl = new MapPointcrawl
+        {
+            Nodes = [new PointcrawlNode(a, "Деревня", 10, 20) { Visited = true, Note = "Таверна" }, new PointcrawlNode(b, "Руины", 200, 120) { EntityId = Guid.NewGuid() }],
+            Edges = [new PointcrawlEdge(Guid.NewGuid(), a, b) { Hours = 6.5, Danger = 2, Hidden = true, OneWay = true, Name = "Старый тракт" }],
+            FogByVisit = false,
+        };
+        var path = workspace.File("crawl.mapproj");
+        MapProjectStore.Save(document with { Pointcrawl = crawl }, path, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
+        Assert.Equal(41, Schema(path));
+        var read = MapProjectStore.Open(path).Document.Pointcrawl;
+        Assert.Equal(crawl.Nodes.ToArray(), read.Nodes.ToArray());
+        Assert.Equal(crawl.Edges.ToArray(), read.Edges.ToArray());
+        Assert.False(read.FogByVisit);
+    }
+
+    [Fact]
     public void Eras_border_keys_political_roles_and_the_timeline_round_trip_in_v40()
     {
         using var workspace = new TempWorkspace();

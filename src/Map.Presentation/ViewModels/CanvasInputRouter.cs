@@ -206,6 +206,9 @@ public sealed class CanvasInputRouter
             _gesture = _editor.IsDraggingPathNode ? CanvasInputGesture.PlacementPathNode : CanvasInputGesture.None;
             return new CanvasInputResult { Handled = true, Invalidate = true, CapturePointer = _editor.IsDraggingPathNode };
         }
+        // R32: an armed pointcrawl place or way takes the click.
+        if (_editor.PressPointcrawlPick(worldX, worldY))
+            return new CanvasInputResult { Handled = true, Invalidate = true };
         // R29: an armed transition end takes the click.
         if (_editor.PressTransitionPick(worldX, worldY))
             return new CanvasInputResult { Handled = true, Invalidate = true };

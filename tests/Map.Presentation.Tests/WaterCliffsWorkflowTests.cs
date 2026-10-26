@@ -236,6 +236,36 @@ public sealed class WaterCliffsWorkflowTests
     }
 
     [Fact]
+    public void Pointcrawl_places_and_ways_are_put_by_clicks_and_the_key_is_written()
+    {
+        var editor = Editor(new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, []));
+        var router = new CanvasInputRouter(editor);
+        void Click(double x, double y) { var (sx, sy) = editor.Session.Viewport.WorldToScreen(x, y); router.Press(CanvasPointerButton.Left, sx, sy); router.Release(sx, sy); }
+        editor.StartAddPointcrawlPlace(); Click(100, 100);
+        editor.StartAddPointcrawlPlace(); Click(500, 300);
+        Assert.Equal(2, editor.Pointcrawl.Nodes.Length);
+        editor.StartLinkPointcrawl(); Click(102, 98); Click(498, 303);
+        var way = Assert.Single(editor.Pointcrawl.Edges);
+        editor.EditPointcrawlEdge(way.Id, "Тракт", 6, 2, hidden: false, oneWay: true);
+        Assert.Equal(2, editor.Pointcrawl.Edges.Single().Danger);
+        var first = editor.Pointcrawl.Nodes[0];
+        editor.EditPointcrawlNode(first.Id, "Деревня", "Таверна «Якорь»", visited: true, null);
+        editor.DeletePointcrawlNode(first.Id);
+        Assert.Empty(editor.Pointcrawl.Edges);
+        editor.Undo();
+        Assert.Single(editor.Pointcrawl.Edges);
+
+        var path = Path.Combine(Path.GetTempPath(), "map-crawl-" + Guid.NewGuid().ToString("N") + ".pdf");
+        try
+        {
+            var pages = editor.ExportPointcrawlKeyAsync(path, players: true).GetAwaiter().GetResult();
+            Assert.True(pages >= 2);
+            Assert.StartsWith("%PDF", System.Text.Encoding.ASCII.GetString(File.ReadAllBytes(path), 0, 4));
+        }
+        finally { if (File.Exists(path)) File.Delete(path); }
+    }
+
+    [Fact]
     public void A_card_is_made_from_the_selection_bound_linked_and_undone()
     {
         var label = new SceneObject(ObjectId.New(), SceneObjectKind.Text, "Ильград", 100, 100, 120, 40, 0, "#FF20242B", "#FFFFFFFF", 0, true, false)

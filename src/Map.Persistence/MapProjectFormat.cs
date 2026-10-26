@@ -135,7 +135,10 @@ public static class MapProjectFormat
 
     /// <summary>R31: eras of objects and roads, morph keys, political roles and the timeline.</summary>
     public const int TimelineSchemaVersion = 40;
-    public const int MaxSupportedSchemaVersion = TimelineSchemaVersion;
+
+    /// <summary>R32: the pointcrawl over the map.</summary>
+    public const int PointcrawlSchemaVersion = 41;
+    public const int MaxSupportedSchemaVersion = PointcrawlSchemaVersion;
 
     /// <summary>
     /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry
