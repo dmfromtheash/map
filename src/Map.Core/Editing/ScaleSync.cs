@@ -126,6 +126,63 @@ public static class ScaleSync
         return child.WithLayers(layers);
     }
 
+    /// <summary>
+    /// The coast of the parent inside the child's area as the child's land (R28/R35): the parent's
+    /// visible land coverage sampled smoothly into the child's canvas, in the style of the parent's
+    /// topmost land. Null when the area holds no land.
+    /// </summary>
+    public static LandLayer? Coast(MapDocument parent, AtlasTransform transform, int childWidth, int childHeight)
+    {
+        var lands = TerrainOrder.Lands(parent).Where(l => l.Visible && l.Opacity > 0 && l.GeometryTiles.TileCount > 0).ToList();
+        if (lands.Count == 0) return null;
+        double Cover(double x, double y)
+        {
+            // Bilinear over the strongest land at each corner, so a tenfold zoom gives a smooth edge.
+            var (x0, y0) = (Math.Floor(x - .5), Math.Floor(y - .5));
+            var (fx, fy) = (x - .5 - x0, y - .5 - y0);
+            double At(double px, double py) => lands.Max(l => (int)TerrainOrder.CoverageAt(l, px, py) * (TerrainOrder.MaskCoverageAt(l, px, py) / 255.0));
+            var top = (At(x0, y0) * (1 - fx)) + (At(x0 + 1, y0) * fx);
+            var bottom = (At(x0, y0 + 1) * (1 - fx)) + (At(x0 + 1, y0 + 1) * fx);
+            return (top * (1 - fy)) + (bottom * fy);
+        }
+
+        var size = TileMap.TileSize;
+        var tiles = TileMap.Empty(1);
+        var any = false;
+        for (var ty = 0; ty * size < childHeight; ty++)
+        for (var tx = 0; tx * size < childWidth; tx++)
+        {
+            // Open sea under the whole tile: nothing to sample.
+            var (l0, t0) = transform.ToParent(tx * size, ty * size);
+            var (r0, b0) = transform.ToParent((tx + 1) * size, (ty + 1) * size);
+            var (k0x, k0y, k1x, k1y) = ((int)Math.Floor((l0 - 1) / size), (int)Math.Floor((t0 - 1) / size), (int)Math.Floor((r0 + 1) / size), (int)Math.Floor((b0 + 1) / size));
+            if (!lands.Any(l => l.GeometryTiles.Keys.Any(k => k.X >= k0x && k.X <= k1x && k.Y >= k0y && k.Y <= k1y))) continue;
+            var pixels = new byte[size * size];
+            var filled = false;
+            for (var py = 0; py < size; py++)
+            for (var px = 0; px < size; px++)
+            {
+                var (cx, cy) = ((tx * size) + px + .5, (ty * size) + py + .5);
+                if (cx > childWidth || cy > childHeight) continue;
+                var (wx, wy) = transform.ToParent(cx, cy);
+                var value = (byte)Math.Clamp(Math.Round(Cover(wx, wy)), 0, 255);
+                if (value == 0) continue;
+                pixels[(py * size) + px] = value;
+                filled = true;
+            }
+            if (!filled) continue;
+            tiles = tiles.With(new TileKey(tx, ty), pixels);
+            any = true;
+        }
+        if (!any) return null;
+        var style = lands[^1];
+        return style with
+        {
+            Id = LayerId.New(), Name = "Суша · " + LayerName.ToLowerInvariant(), Mask = null, GeometryTiles = tiles,
+            PaintTiles = TileMap.Empty(4), CliffWallTiles = TileMap.Empty(1), CliffBeachTiles = TileMap.Empty(1), ReliefTiles = TileMap.Empty(style.ReliefTiles.BytesPerPixel),
+        };
+    }
+
     private static VectorPoint ToChild(AtlasTransform transform, VectorPoint point)
     {
         var (x, y) = transform.ToChild(point.X, point.Y);

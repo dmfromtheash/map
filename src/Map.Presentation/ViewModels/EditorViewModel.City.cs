@@ -35,7 +35,10 @@ public sealed partial class EditorViewModel
         if (!CitySettings.IsValid) { StatusDetail = "Проверьте параметры города."; return false; }
         var document = Session.Document;
         var size = Math.Min(document.Canvas.Width, document.Canvas.Height);
-        var plan = CityBuilder.Generate(document.Canvas.Width / 2.0, document.Canvas.Height / 2.0, CitySettings with { Radius = Math.Min(CitySettings.Radius, size * .42) });
+        // A city on a shore keeps to its land when rebuilt.
+        var land = TerrainOrder.Lands(document).Where(l => l.Visible).ToList();
+        Func<double, double, bool>? isLand = land.Count == 0 ? null : (x, y) => land.Any(l => TerrainOrder.CoverageAt(l, x, y) >= 128);
+        var plan = CityBuilder.Generate(document.Canvas.Width / 2.0, document.Canvas.Height / 2.0, CitySettings with { Radius = Math.Min(CitySettings.Radius, size * .42), IsLand = isLand });
         var layer = document.Layers.OfType<ObjectLayer>().FirstOrDefault(l => l.Name == "Город");
         var after = (layer ?? new ObjectLayer(LayerId.New(), "Город", true, false, 1, [])) with { Objects = [.. plan.Objects], Roads = [.. plan.Streets] };
         var keyNotes = plan.Key.Select(b => new MapNote(NoteId.New(), $"{b.Number}. {b.Kind}", "", NoteAnchorKind.World, b.X, b.Y)).ToArray();
@@ -94,8 +97,12 @@ public sealed partial class EditorViewModel
             .Where(p => Math.Abs(p.X - area.Left) < 1 || Math.Abs(p.X - area.Right) < 1 || Math.Abs(p.Y - area.Top) < 1 || Math.Abs(p.Y - area.Bottom) < 1)
             .Select(p => Math.Atan2(p.Y - cy, p.X - cx)).Take(8).ToList();
         var name = EntityNameGenerator.PlaceName(parent, LabelPreset.City, (int)(StableSeed(Guid.NewGuid()) & 0x7FFF));
-        var settings = CitySettings with { Name = name, Seed = (int)(StableSeed(Guid.NewGuid()) & 0x7FFF), EntryDirections = entries, Radius = 900 };
-        var child = CityBuilder.NewCityMap(name, 2400, settings, new MapCategoryId(MapCategories.CityValue), _clock());
+        // R35: the shore of the region comes in as the city's land; the town keeps to it, the port goes to the water.
+        var coast = await Task.Run(() => ScaleSync.Coast(parent, region, 2400, 2400));
+        var hasSea = coast is not null && Enumerable.Range(0, 24).Any(i => TerrainOrder.CoverageAt(coast, 100 + (i % 6 * 440), 100 + (i / 6 * 700)) < 128);
+        var sea = parent.Layers.OfType<BaseColorLayer>().FirstOrDefault()?.Color;
+        var settings = CitySettings with { Name = name, Seed = (int)(StableSeed(Guid.NewGuid()) & 0x7FFF), EntryDirections = entries, Radius = 900, Port = CitySettings.Port || hasSea };
+        var child = CityBuilder.NewCityMap(name, 2400, settings, new MapCategoryId(MapCategories.CityValue), _clock(), hasSea ? coast : null, sea);
         child = ScaleSync.Apply(child, ScaleSync.Plan(parent, child, region));
         childPath ??= Path.Combine(Path.GetDirectoryName(DocumentPath)!, SafeProjectFileName(name) + MapProjectFormat.Extension);
         if (File.Exists(childPath)) childPath = Path.Combine(Path.GetDirectoryName(childPath)!, SafeProjectFileName(name) + "-" + Guid.NewGuid().ToString("N")[..6] + MapProjectFormat.Extension);

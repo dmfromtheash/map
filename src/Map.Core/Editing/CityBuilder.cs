@@ -20,6 +20,9 @@ public sealed record CitySettings
     /// <summary>Directions (radians) the main streets should take - the roads coming in from the region.</summary>
     public IReadOnlyList<double> EntryDirections { get; init; } = [];
 
+    /// <summary>Where there is land (R35): blocks, houses, walls and streets keep off the water, the port goes to the shore. Null - land everywhere.</summary>
+    public Func<double, double, bool>? IsLand { get; init; }
+
     public bool IsValid => Radius is >= 150 and <= 20000 && Radials is >= 3 and <= 12 && Rings is >= 1 and <= 6 && Temples is >= 0 and <= 6;
 }
 
@@ -52,6 +55,19 @@ public static class CityBuilder
         double Jitter(double amount) => (random.NextDouble() - .5) * 2 * amount;
         var radius = settings.Radius;
         var square = radius * .11;
+        bool Land(double x, double y) => settings.IsLand?.Invoke(x, y) ?? true;
+        // Only the parts of a street on land stay; a street cut by water becomes its pieces.
+        IEnumerable<List<VectorPoint>> OnLand(IReadOnlyList<VectorPoint> line)
+        {
+            var run = new List<VectorPoint>();
+            foreach (var point in line)
+            {
+                if (Land(point.X, point.Y)) { run.Add(point); continue; }
+                if (run.Count >= 2) yield return run;
+                run = [];
+            }
+            if (run.Count >= 2) yield return run;
+        }
 
         // Main streets: along the incoming roads first, the rest spread evenly with a little wander.
         var angles = settings.EntryDirections.Take(settings.Radials).ToList();
@@ -80,7 +96,8 @@ public static class CityBuilder
                 points.Add(new VectorPoint(cx + (Math.Cos(angle + bend) * r), cy + (Math.Sin(angle + bend) * r)));
             }
             lines.Add([.. points]);
-            streets.Add(RoadEditor.NewRoad(points, 14, RoadStyle.Country(), $"Улица {StreetName(index)}", settings.Seed + index));
+            foreach (var piece in OnLand(points).Take(1))
+                streets.Add(RoadEditor.NewRoad(piece, 14, RoadStyle.Country(), $"Улица {StreetName(index)}", settings.Seed + index));
         }
         for (var ring = 1; ring <= settings.Rings; ring++)
         {
@@ -94,7 +111,9 @@ public static class CityBuilder
             }
             points[^1] = points[0];
             lines.Add([.. points]);
-            streets.Add(RoadEditor.NewRoad(points, ring == settings.Rings ? 11 : 9, RoadStyle.Country(), ring == settings.Rings ? "Кольцевая" : $"{ring}-я Кольцевая", settings.Seed + 100 + ring));
+            var pieceIndex = 0;
+            foreach (var piece in OnLand(points))
+                streets.Add(RoadEditor.NewRoad(piece, ring == settings.Rings ? 11 : 9, RoadStyle.Country(), ring == settings.Rings ? "Кольцевая" : $"{ring}-я Кольцевая", settings.Seed + 100 + ring + (pieceIndex++ * 1000)));
         }
         // The square's edge and the city's edge close the faces.
         var squareRing = Circle(cx, cy, square, 24);
@@ -108,7 +127,8 @@ public static class CityBuilder
         polygonizer.Add(noded);
         var squarePolygon = Factory.CreatePolygon([.. squareRing.Select(p => new Coordinate(p.X, p.Y))]);
         var blocks = polygonizer.GetPolygons().OfType<Polygon>()
-            .Where(p => p.Area > radius * radius * .002 && !squarePolygon.Contains(p.InteriorPoint) && Math.Sqrt(Math.Pow(p.Centroid.X - cx, 2) + Math.Pow(p.Centroid.Y - cy, 2)) < radius)
+            .Where(p => p.Area > radius * radius * .002 && !squarePolygon.Contains(p.InteriorPoint) && Math.Sqrt(Math.Pow(p.Centroid.X - cx, 2) + Math.Pow(p.Centroid.Y - cy, 2)) < radius
+                && Land(p.InteriorPoint.X, p.InteriorPoint.Y))
             .OrderBy(p => Math.Pow(p.Centroid.X - cx, 2) + Math.Pow(p.Centroid.Y - cy, 2)).ToList();
 
         var objects = new List<SceneObject>
@@ -161,7 +181,7 @@ public static class CityBuilder
                     var (hx, hy) = (a.X + (ux * (along + (frontage / 2))) + (nx * (depth / 2 + 2)), a.Y + (uy * (along + (frontage / 2))) + (ny * (depth / 2 + 2)));
                     var rect = Rectangle(hx, hy, frontage - 2, depth, Math.Atan2(uy, ux));
                     var env = Envelope(rect);
-                    if (inner.Contains(Factory.CreatePoint(new Coordinate(hx, hy))) && !placed.Any(p => p.Intersects(env)))
+                    if (inner.Contains(Factory.CreatePoint(new Coordinate(hx, hy))) && rect.All(c => Land(c.X, c.Y)) && !placed.Any(p => p.Intersects(env)))
                     {
                         objects.Add(VectorGeometry.CreateFreeShape(ObjectId.New(), "Дом", rect,
                             new ShapeFillStyle { Color = Roofs[random.Next(Roofs.Length)] }, new VectorStrokeStyle { Color = "#FF2E241C", Width = 1.2 }));
@@ -182,23 +202,53 @@ public static class CityBuilder
             void Flush() { if (run.Count >= 2) objects.Add(VectorGeometry.CreateLine(ObjectId.New(), "Стена", [.. run], new VectorStrokeStyle { Color = "#FF4A4038", Width = 9 })); run.Clear(); }
             foreach (var point in wall)
             {
-                if (gates.Any(g => Math.Sqrt(Math.Pow(g.X - point.X, 2) + Math.Pow(g.Y - point.Y, 2)) < radius * .07)) { Flush(); continue; }
+                if (!Land(point.X, point.Y) || gates.Any(g => Math.Sqrt(Math.Pow(g.X - point.X, 2) + Math.Pow(g.Y - point.Y, 2)) < radius * .07)) { Flush(); continue; }
                 run.Add(point);
             }
             Flush();
             for (var i = 0; i < wall.Length - 1; i += 4)
             {
                 var p = wall[i];
-                if (gates.Any(g => Math.Sqrt(Math.Pow(g.X - p.X, 2) + Math.Pow(g.Y - p.Y, 2)) < radius * .07)) continue;
+                if (!Land(p.X, p.Y) || gates.Any(g => Math.Sqrt(Math.Pow(g.X - p.X, 2) + Math.Pow(g.Y - p.Y, 2)) < radius * .07)) continue;
                 objects.Add(VectorGeometry.CreateShape(ObjectId.New(), "Башня", ShapePrimitiveKind.Ellipse, new WorldBounds(p.X - 11, p.Y - 11, p.X + 11, p.Y + 11),
                     new ShapeFillStyle { Color = "#FF6B6058" }, new VectorStrokeStyle { Color = "#FF2E2620", Width = 2 }));
             }
-            foreach (var gate in gates)
+            foreach (var gate in gates.Where(g => Land(g.X, g.Y)))
                 key.Add(new CityBuilding(key.Count + 1, "Ворота", gate.X, gate.Y));
         }
 
-        // The port: water beyond the side the last main street goes to, with piers.
-        if (settings.Port)
+        // The port on a real shore: piers out into the water where the coast is nearest the middle.
+        if (settings.Port && settings.IsLand is not null && Shore() is { } shore)
+        {
+            for (var p = -2; p <= 2; p++)
+            {
+                var a = shore.Angle + (p * 25 / shore.Distance);
+                var coast = Coast(a) ?? shore.Distance;
+                var (sx, sy) = (cx + (Math.Cos(a) * coast), cy + (Math.Sin(a) * coast));
+                objects.Add(VectorGeometry.CreateFreeShape(ObjectId.New(), "Пирс", Rectangle(sx + (Math.Cos(a) * radius * .05), sy + (Math.Sin(a) * radius * .05), radius * .12, 10, a),
+                    new ShapeFillStyle { Color = "#FF8B6A48" }, new VectorStrokeStyle { Color = "#FF3A2E24", Width = 1.5 }));
+            }
+            key.Add(new CityBuilding(key.Count + 1, "Порт", cx + (Math.Cos(shore.Angle) * shore.Distance), cy + (Math.Sin(shore.Angle) * shore.Distance)));
+        }
+        double? Coast(double angle)
+        {
+            for (var r = square; r <= radius * 1.8; r += radius * .01)
+                if (!Land(cx + (Math.Cos(angle) * r), cy + (Math.Sin(angle) * r))) return r;
+            return null;
+        }
+        (double Angle, double Distance)? Shore()
+        {
+            (double, double)? best = null;
+            for (var d = 0; d < 360; d += 5)
+            {
+                var a = d * Math.PI / 180;
+                if (Coast(a) is { } r && (best is null || r < best.Value.Item2)) best = (a, r);
+            }
+            return best;
+        }
+
+        // The port without a coast: water drawn beyond the side the last main street goes to, with piers.
+        if (settings.Port && settings.IsLand is null)
         {
             var side = angles[^1];
             var (wx, wy) = (Math.Cos(side), Math.Sin(side));
@@ -229,6 +279,7 @@ public static class CityBuilder
             var mid = (a0 + a1) / 2;
             var r = radius * .72;
             var name = i == 0 ? Districts[0] : Districts[(i + settings.Seed) % (Districts.Length - 1) + 1];
+            if (!Land(cx + (Math.Cos(mid) * r), cy + (Math.Sin(mid) * r))) continue;
             objects.Add(Label(name, cx + (Math.Cos(mid) * r), cy + (Math.Sin(mid) * r), LabelPreset.Region, 3));
         }
         objects.Add(Label(settings.Name, cx, cy - (square * .2), LabelPreset.City, 5));
@@ -236,14 +287,24 @@ public static class CityBuilder
         return new CityPlan(streets, [.. blocks.Select(b => (IReadOnlyList<VectorPoint>)[.. b.ExteriorRing.Coordinates.Select(c => new VectorPoint(c.X, c.Y))])], objects, key, houses);
     }
 
-    /// <summary>The city as a new map: paper, its streets and buildings, a note per building of the key.</summary>
-    public static MapDocument NewCityMap(string title, int size, CitySettings settings, MapCategoryId category, DateTimeOffset createdUtc)
+    /// <summary>
+    /// The city as a new map: paper, its streets and buildings, a note per building of the key. With
+    /// <paramref name="coast"/> (R35) the paper is the sea of <paramref name="seaColor"/>, the land lies on it
+    /// and the town keeps to the land.
+    /// </summary>
+    public static MapDocument NewCityMap(string title, int size, CitySettings settings, MapCategoryId category, DateTimeOffset createdUtc,
+        LandLayer? coast = null, string? seaColor = null)
     {
+        if (coast is not null)
+            settings = settings with { IsLand = (x, y) => TerrainOrder.CoverageAt(coast, x, y) >= 128 };
         var plan = Generate(size / 2.0, size / 2.0, settings with { Radius = Math.Min(settings.Radius, size * .42) });
         var objects = new ObjectLayer(LayerId.New(), "Город", true, false, 1, plan.Objects) { Roads = [.. plan.Streets] };
         var notes = plan.Key.Select(b => new MapNote(NoteId.New(), $"{b.Number}. {b.Kind}", "", NoteAnchorKind.World, b.X, b.Y)).ToArray();
-        return new MapDocument(DocumentId.New(), title, createdUtc, new CanvasDefinition(size, size, "px", "#FFEDE3CC"),
-            [new BaseColorLayer(LayerId.New(), "Бумага", true, false, 1, "#FFEDE3CC"), objects], notes: notes, category: category);
+        var ground = coast is null ? "#FFEDE3CC" : seaColor ?? "#FF8FB0BA";
+        List<MapLayer> layers = [new BaseColorLayer(LayerId.New(), coast is null ? "Бумага" : "Море", true, false, 1, ground)];
+        if (coast is not null) layers.Add(coast);
+        layers.Add(objects);
+        return new MapDocument(DocumentId.New(), title, createdUtc, new CanvasDefinition(size, size, "px", ground), layers, notes: notes, category: category);
     }
 
     private static SceneObject Label(string text, double x, double y, LabelPreset preset, int importance)

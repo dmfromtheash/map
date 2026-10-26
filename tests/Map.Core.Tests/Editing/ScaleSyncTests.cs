@@ -81,6 +81,35 @@ public sealed class ScaleSyncTests
         Assert.Equal("starter/sea", right.Terrain);
     }
 
+    [Fact]
+    public void The_coast_comes_into_a_city_and_the_town_keeps_to_the_land()
+    {
+        // Land is the left 256 px of the parent; the city area straddles that shore.
+        var land = LandLayer.CreateEmpty(LayerId.New(), "Суша") with
+        { GeometryTiles = TileMap.Empty(1).With(new TileKey(0, 0), Enumerable.Repeat((byte)255, 256 * 256).ToArray()) };
+        var parent = new MapDocument(DocumentId.New(), "Мир", DateTimeOffset.UnixEpoch, new CanvasDefinition(1024, 1024, "px", "#FF8FB0BA"),
+            [new BaseColorLayer(LayerId.New(), "Море", true, false, 1, "#FF8FB0BA"), land]);
+        var region = new AtlasTransform(100, 20, 200, 200, 2400, 2400);
+        var coast = ScaleSync.Coast(parent, region, 2400, 2400);
+        Assert.NotNull(coast);
+        // The parent's shore at x = 256 is x = (256 - 100) * 12 = 1872 in the child.
+        Assert.Equal(255, TerrainOrder.CoverageAt(coast, 1500, 1200));
+        Assert.Equal(0, TerrainOrder.CoverageAt(coast, 2200, 1200));
+        Assert.InRange(Enumerable.Range(1800, 150).First(x => TerrainOrder.CoverageAt(coast, x, 600) < 128), 1860, 1885);
+        Assert.Null(ScaleSync.Coast(parent, new AtlasTransform(600, 600, 200, 200, 2400, 2400), 2400, 2400));
+
+        var city = CityBuilder.NewCityMap("Пристань", 2400, new CitySettings { Seed = 5, Port = true }, new MapCategoryId("city"), DateTimeOffset.UnixEpoch, coast, "#FF8FB0BA");
+        Assert.Contains(city.Layers, l => l is LandLayer);
+        var objects = city.Layers.OfType<ObjectLayer>().Single().Objects;
+        var houses = objects.Where(o => o.Name == "Дом").ToList();
+        Assert.True(houses.Count > 50);
+        Assert.All(houses, h => Assert.True(h.X + h.Width < 1885, "a house stands in the water"));
+        var piers = objects.Where(o => o.Name == "Пирс").ToList();
+        Assert.NotEmpty(piers);
+        Assert.All(piers, p => Assert.InRange(p.X + (p.Width / 2), 1800, 2100));
+        Assert.DoesNotContain(objects, o => o.Name == "Гавань");
+    }
+
     private static MapDocument Doc(int width, int height, Road? road = null, River? river = null) =>
         new(DocumentId.New(), "Карта", DateTimeOffset.UnixEpoch, new CanvasDefinition(width, height, "px", "#FFFFFFFF"),
             [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFFFFFFF"),
