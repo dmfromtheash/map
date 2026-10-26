@@ -233,6 +233,17 @@ public sealed class WaterCliffsWorkflowTests
         Assert.Equal(1, Shown());
         editor.SetSelectedEra(1300, 1200);
         Assert.Contains("позже", editor.StatusDetail);
+
+        // A river gets its years the same way and is gone after them.
+        var river = new River { Name = "Старица", Channels = [RiverEditor.NewChannel([new(10, 400), new(300, 420)], 8)] };
+        var layer = editor.Session.Document.Layers.OfType<ObjectLayer>().Single();
+        editor.Session.Execute(new RiverCommand(layer.Id, river.Id, river, "Река"));
+        editor.Session.SelectedObjectId = null;
+        editor.SelectRiver(river.Id);
+        Assert.True(editor.HasTimedSelection);
+        editor.SetSelectedEra(null, 850);
+        Assert.Equal(new Era(null, 850), editor.SelectedEra);
+        Assert.Empty(editor.RenderDocument.Layers.OfType<ObjectLayer>().Single().Rivers);
     }
 
     [Fact]

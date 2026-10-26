@@ -88,7 +88,7 @@ public sealed partial class EditorView
                 role,
             },
         };
-        var noSelection = new TextBlock { Text = "Выделите объект, подпись, фигуру или дорогу, чтобы задать её годы.", TextWrapping = TextWrapping.Wrap }.Classed("faint");
+        var noSelection = new TextBlock { Text = "Выделите объект, подпись, фигуру, дорогу или реку, чтобы задать годы.", TextWrapping = TextWrapping.Wrap }.Classed("faint");
 
         var seriesStep = new TextBox { Name = "SeriesStepBox", Width = 60, Text = "10" };
         var seriesSize = new TextBox { Name = "SeriesSizeBox", Width = 70, Text = "1200" };

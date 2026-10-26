@@ -23,6 +23,8 @@ public static partial class MapProjectStore
     {
         if (scene.Layers?.Any(l => l?.Sea is not null && l.Type != "BaseColor") == true)
             throw new MapProjectCorruptedException("Стиль моря бывает только у слоя фона.");
+        if (schema < MapProjectFormat.RiverEraSchemaVersion && scene.Layers?.Any(l => l?.Rivers?.Any(r => r?.Era is not null) == true) == true)
+            throw new MapProjectCorruptedException("Годы рек требуют схему v45.");
         if (schema < MapProjectFormat.InheritedSchemaVersion && scene.Layers?.Any(l => l is not null
             && (l.Roads?.Any(r => r?.Inherited is not null) == true || l.Rivers?.Any(r => r?.Inherited is not null) == true)) == true)
             throw new MapProjectCorruptedException("Реки и дороги из родительской карты требуют схему v44.");

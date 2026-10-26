@@ -69,10 +69,10 @@ public sealed partial class EditorViewModel
 
     // ------------------------------------------------------------------ the selection
 
-    /// <summary>The years of the selected object, or of the selected road.</summary>
-    public Era? SelectedEra => Session.SelectedObject?.Era ?? (Session.SelectedObject is null ? SelectedRoad?.Era : null);
+    /// <summary>The years of the selected object, road or river.</summary>
+    public Era? SelectedEra => Session.SelectedObject?.Era ?? (Session.SelectedObject is null ? SelectedRoad?.Era ?? SelectedRiver?.Era : null);
 
-    public bool HasTimedSelection => Session.SelectedObject is not null || SelectedRoad is not null;
+    public bool HasTimedSelection => Session.SelectedObject is not null || SelectedRoad is not null || SelectedRiver is not null;
 
     public void SetSelectedEra(int? from, int? to)
     {
@@ -92,6 +92,14 @@ public sealed partial class EditorViewModel
             Session.Execute(new RoadCommand(layer.Id, road.Id, after, "Годы дороги"));
             AfterEdit();
             StatusDetail = $"«{road.Name}»: {era?.ToString() ?? "всегда"}.";
+            return;
+        }
+        if (SelectedRiver is { } river && RiverLayerOf(river.Id) is { } riverLayer)
+        {
+            if (river.Era == era) return;
+            Session.Execute(new RiverCommand(riverLayer.Id, river.Id, river with { Era = era }, "Годы реки"));
+            AfterEdit();
+            StatusDetail = $"«{river.Name}»: {era?.ToString() ?? "всегда"}.";
         }
     }
 

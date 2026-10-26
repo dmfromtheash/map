@@ -147,7 +147,10 @@ public static class MapProjectFormat
 
     /// <summary>R28: rivers and roads copied from the parent map, with their source and shape.</summary>
     public const int InheritedSchemaVersion = 44;
-    public const int MaxSupportedSchemaVersion = InheritedSchemaVersion;
+
+    /// <summary>R31: the years a river flows.</summary>
+    public const int RiverEraSchemaVersion = 45;
+    public const int MaxSupportedSchemaVersion = RiverEraSchemaVersion;
 
     /// <summary>
     /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry

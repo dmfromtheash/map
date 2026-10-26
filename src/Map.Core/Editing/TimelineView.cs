@@ -56,10 +56,11 @@ public static class TimelineView
                 items.Add(shown);
             }
             var roads = year is { } y3 ? objects.Roads.Where(r => r.Era is null || r.Era.Contains(y3)).ToArray() : [.. objects.Roads];
-            layerChanged |= roads.Length != objects.Roads.Length;
+            var rivers = year is { } y4 ? objects.Rivers.Where(r => r.Era is null || r.Era.Contains(y4)).ToArray() : [.. objects.Rivers];
+            layerChanged |= roads.Length != objects.Roads.Length || rivers.Length != objects.Rivers.Length;
             if (!layerChanged) return layer;
             changed = true;
-            return objects with { Objects = items, Roads = [.. roads] };
+            return objects with { Objects = items, Roads = [.. roads], Rivers = [.. rivers] };
         }).ToArray();
         return changed ? document.WithLayers(layers) : document;
     }

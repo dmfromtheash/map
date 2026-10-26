@@ -215,6 +215,10 @@ public sealed record River
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public Map.Core.Editing.InheritedFrom? Inherited { get; init; }
 
+    /// <summary>The years the river flows (R31, schema v45); null - always.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public Era? Era { get; init; }
+
     /// <summary>Why a generator made this river (R23, schema v31); null for a river drawn by hand.</summary>
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public string? GenerationReason { get; init; }
@@ -286,7 +290,7 @@ public sealed record River
     {
         if (Id == Guid.Empty || string.IsNullOrWhiteSpace(Name) || Channels.IsDefault || Channels.IsEmpty
             || Style is null || !double.IsFinite(WidthScale) || WidthScale is < 0.01 or > 100
-            || !TerrainOrder.IsValidLevel(Level) || GenerationReason is { Length: > 240 })
+            || !TerrainOrder.IsValidLevel(Level) || GenerationReason is { Length: > 240 } || Era is { IsValid: false })
             throw new ArgumentException("Некорректные параметры реки.");
         if (Channels.Any(c => c is null) || Channels.Select(c => c.Id).Distinct().Count() != Channels.Length)
             throw new ArgumentException("Русла реки должны иметь уникальные идентификаторы.");

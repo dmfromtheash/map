@@ -61,7 +61,11 @@ public static partial class MapProjectStore
     private static bool HasInheritedV44(IEnumerable<MapLayer> layers) =>
         layers.OfType<ObjectLayer>().Any(l => l.Roads.Any(r => r.Inherited is not null) || l.Rivers.Any(r => r.Inherited is not null));
 
+    private static bool HasRiverEraV45(IEnumerable<MapLayer> layers) => layers.OfType<ObjectLayer>().Any(l => l.Rivers.Any(r => r.Era is not null));
+
     private static int SchemaFor(MapDocument document) =>
+        HasRiverEraV45(document.Layers) || document.Checkpoints.Any(c => HasRiverEraV45(c.Snapshot.Layers))
+            ? MapProjectFormat.RiverEraSchemaVersion :
         HasInheritedV44(document.Layers) || document.Checkpoints.Any(c => HasInheritedV44(c.Snapshot.Layers))
             ? MapProjectFormat.InheritedSchemaVersion :
         HasSystemsV43(document.Layers) || document.Checkpoints.Any(c => HasSystemsV43(c.Snapshot.Layers))

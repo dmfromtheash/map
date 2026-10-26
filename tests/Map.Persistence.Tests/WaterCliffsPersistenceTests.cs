@@ -58,6 +58,36 @@ public sealed class WaterCliffsPersistenceTests
     }
 
     [Fact]
+    public void River_years_round_trip_in_v45_and_an_older_schema_refuses_them()
+    {
+        using var workspace = new TempWorkspace();
+        var (document, _, objects) = Fixture();
+        var river = new River { Name = "Старица", Channels = [RiverEditor.NewChannel([new(10, 10), new(200, 40), new(300, 80)], 8)], Era = new Era(null, 1100) };
+        document = document.WithLayer(objects.Id, _ => objects with { Rivers = [river] });
+        var path = workspace.File("river-era.mapproj");
+        MapProjectStore.Save(document, path, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
+        Assert.Equal(45, Schema(path));
+        Assert.Equal(new Era(null, 1100), MapProjectStore.Open(path).Document.Layers.OfType<ObjectLayer>().SelectMany(l => l.Rivers).Single().Era);
+
+        var forged = workspace.File("river-era-v44.mapproj");
+        using (var source = ZipFile.OpenRead(path))
+        using (var target = ZipFile.Open(forged, ZipArchiveMode.Create))
+            foreach (var entry in source.Entries)
+            {
+                var bytes = new MemoryStream(); using (var input = entry.Open()) input.CopyTo(bytes);
+                var data = bytes.ToArray();
+                if (entry.FullName == "manifest.json")
+                {
+                    var root = JsonNode.Parse(data)!; root["schemaVersion"] = 44;
+                    data = System.Text.Encoding.UTF8.GetBytes(root.ToJsonString());
+                }
+                using var output = target.CreateEntry(entry.FullName).Open(); output.Write(data);
+            }
+        var error = Assert.ThrowsAny<Exception>(() => MapProjectStore.Open(forged));
+        Assert.Contains("v45", error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Star_systems_round_trip_in_v43()
     {
         using var workspace = new TempWorkspace();

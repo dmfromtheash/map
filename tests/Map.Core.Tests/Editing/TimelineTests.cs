@@ -24,6 +24,13 @@ public sealed class TimelineTests
         Assert.Same(TimelineView.At(document, 1000, false), TimelineView.At(document, 1000, false));
         Assert.False(new Era(10, 5).IsValid);
         Assert.Equal("812–1040", new Era(812, 1040).ToString());
+
+        // A river that dried up in 950 flows in 900, not in 1000.
+        var river = new River { Name = "Старица", Channels = [RiverEditor.NewChannel([new(10, 400), new(300, 420)], 8)], Era = new Era(null, 950) };
+        var withRiver = document.WithLayers([.. document.Layers.Select(l => l is ObjectLayer o ? o with { Rivers = [river] } : l)]);
+        Assert.Single(TimelineView.At(withRiver, 900, false).Layers.OfType<ObjectLayer>().SelectMany(l => l.Rivers));
+        Assert.Empty(TimelineView.At(withRiver, 1000, false).Layers.OfType<ObjectLayer>().SelectMany(l => l.Rivers));
+        Assert.Throws<ArgumentException>(() => (river with { Era = new Era(10, 5) }).Validate());
     }
 
     [Fact]
