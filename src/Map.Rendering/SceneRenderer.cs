@@ -2325,6 +2325,10 @@ public static class SceneRenderer
         byte[]? coastAlpha = null;
         var fieldWidth = 0; var fieldHeight = 0;
         var fieldRect = SKRect.Empty;
+        // A view larger than the field budget (a big single image) is covered by field tiles: each
+        // computed over its own square plus the reach of the farthest effect, so every pixel sees
+        // the same coast it would see in one field, and drawn only over its own square (R12).
+        List<(SKImage? Outer, SKImage? Inner, SKRect Rect, SKRect Core)>? fieldTiles = null;
         var coverageBounds = ToRect(view);
         IReadOnlyList<TileKey> drawKeys = keys;
 
@@ -2397,7 +2401,19 @@ public static class SceneRenderer
             var rimOverGround = ground.Count > 0 && !options.FastTerrain && !solidInterior;
             if (rimOverGround) canvas.SaveLayer(ToRect(view), null);
 
-            if (useField)
+            if (useField && fieldTiles is not null)
+            {
+                foreach (var tile in fieldTiles)
+                {
+                    if (tile.Outer is not { } outer) continue;
+                    canvas.Save();
+                    canvas.ClipRect(tile.Core);
+                    canvas.DrawImage(outer, tile.Rect, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None));
+                    canvas.Restore();
+                    outer.Dispose();
+                }
+            }
+            else if (useField)
             {
                 using var outer = CoastDistanceField.OuterEffects(
                     coastField!, surfField, fieldWidth, fieldHeight, style, deviceScale, lowersField);
@@ -2497,7 +2513,19 @@ public static class SceneRenderer
                 canvas.Restore();
             }
 
-            if (useField)
+            if (useField && fieldTiles is not null)
+            {
+                foreach (var tile in fieldTiles)
+                {
+                    if (tile.Inner is not { } inner) continue;
+                    canvas.Save();
+                    canvas.ClipRect(tile.Core);
+                    canvas.DrawImage(inner, tile.Rect, new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None));
+                    canvas.Restore();
+                    inner.Dispose();
+                }
+            }
+            else if (useField)
             {
                 using var inner = CoastDistanceField.InnerShadow(
                     coastField!, coastAlpha!, fieldWidth, fieldHeight, style, deviceScale);
@@ -2656,7 +2684,8 @@ public static class SceneRenderer
             var pad = (int)Math.Ceiling(reach * deviceScale) + 2;
             var width = (int)Math.Ceiling((view.Right - view.Left) * deviceScale) + (2 * pad);
             var height = (int)Math.Ceiling((view.Bottom - view.Top) * deviceScale) + (2 * pad);
-            if (width <= 0 || height <= 0 || (long)width * height > CoastDistanceField.PixelBudget) return false;
+            if (width <= 0 || height <= 0) return false;
+            if ((long)width * height > CoastDistanceField.Budget) return TryBuildCoastFieldTiles(pad);
 
             var padded = new WorldBounds(view.Left - (pad / deviceScale), view.Top - (pad / deviceScale),
                 view.Right + (pad / deviceScale), view.Bottom + (pad / deviceScale));
@@ -2683,6 +2712,56 @@ public static class SceneRenderer
             fieldRect = new SKRect((float)padded.Left, (float)padded.Top,
                 (float)(padded.Left + (width / deviceScale)), (float)(padded.Top + (height / deviceScale)));
             return true;
+        }
+
+        // The same field over a grid of squares of the view, each square with the full reach around
+        // it. The finished outer and inner effects of every square are kept as images; the floats
+        // of one square are dropped before the next is computed, so the memory stays that of the
+        // images however large the view is.
+        bool TryBuildCoastFieldTiles(int pad)
+        {
+            var core = CoastDistanceField.TileCore(pad);
+            if (core <= 0) return false;
+            var coreWorld = core / deviceScale;
+            var tiles = new List<(SKImage? Outer, SKImage? Inner, SKRect Rect, SKRect Core)>();
+            for (var top = view.Top; top < view.Bottom; top += coreWorld)
+                for (var left = view.Left; left < view.Right; left += coreWorld)
+                {
+                    var square = new WorldBounds(left, top, Math.Min(left + coreWorld, view.Right), Math.Min(top + coreWorld, view.Bottom));
+                    var width = (int)Math.Ceiling((square.Right - square.Left) * deviceScale) + (2 * pad);
+                    var height = (int)Math.Ceiling((square.Bottom - square.Top) * deviceScale) + (2 * pad);
+                    var padded = new WorldBounds(square.Left - (pad / deviceScale), square.Top - (pad / deviceScale),
+                        square.Right + (pad / deviceScale), square.Bottom + (pad / deviceScale));
+                    var alpha = RasterizeCoverage(padded, width, height, surf: false, CoverageSet.ThisPiece);
+                    if (alpha is null) { Release(tiles); return false; }
+                    var union = blends ? RasterizeCoverage(padded, width, height, surf: false, CoverageSet.WithLowers) : alpha;
+                    if (union is null) { Release(tiles); return false; }
+                    var field = CoastDistanceField.SignedDistance(union, width, height);
+                    float[]? lowers = null, surf = null;
+                    if (blends)
+                    {
+                        var lowersAlpha = RasterizeCoverage(padded, width, height, surf: false, CoverageSet.LowersOnly);
+                        if (lowersAlpha is null) { Release(tiles); return false; }
+                        lowers = CoastDistanceField.SignedDistance(lowersAlpha, width, height);
+                    }
+                    if (cutters.Count > 0 && style.RippleCount > 0 && style.RippleWidth > 0)
+                    {
+                        var surfAlpha = RasterizeCoverage(padded, width, height, surf: true, blends ? CoverageSet.WithLowers : CoverageSet.ThisPiece);
+                        surf = surfAlpha is null ? null : CoastDistanceField.SignedDistance(surfAlpha, width, height);
+                    }
+                    var rect = new SKRect((float)padded.Left, (float)padded.Top,
+                        (float)(padded.Left + (width / deviceScale)), (float)(padded.Top + (height / deviceScale)));
+                    tiles.Add((CoastDistanceField.OuterEffects(field, surf, width, height, style, deviceScale, lowers),
+                        CoastDistanceField.InnerShadow(field, alpha, width, height, style, deviceScale),
+                        rect, ToRect(square)));
+                }
+            fieldTiles = tiles;
+            return true;
+
+            static void Release(List<(SKImage? Outer, SKImage? Inner, SKRect Rect, SKRect Core)> made)
+            {
+                foreach (var (outer, inner, _, _) in made) { outer?.Dispose(); inner?.Dispose(); }
+            }
         }
 
         // The coverage drawn by the ordinary coverage pass into a CPU raster of the padded view;

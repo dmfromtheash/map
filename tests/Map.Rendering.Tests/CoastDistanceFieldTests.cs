@@ -4,6 +4,8 @@ using SkiaSharp;
 namespace Map.Rendering.Tests;
 
 /// <summary>The coast as a distance field: exact distances, and every edge effect where the filter passes put it.</summary>
+// One test lowers the shared field budget: the class runs alone, as the cliff field tests do.
+[Collection("Land cliff fields")]
 public sealed class CoastDistanceFieldTests
 {
     [Fact]
@@ -111,6 +113,53 @@ public sealed class CoastDistanceFieldTests
             var mean = total / (3.0 * count);
             Assert.True(mean < 6, $"mean channel difference {mean:0.0} between the field and the filter passes");
         }
+    }
+
+    [Fact]
+    public void A_view_over_the_field_budget_is_drawn_in_tiles_with_the_same_coast()
+    {
+        // A wavy island over four tiles; the tiled field must draw what one field draws.
+        var coverage = new byte[TileMap.TileSize * TileMap.TileSize];
+        for (var y = 0; y < TileMap.TileSize; y++)
+            for (var x = 0; x < TileMap.TileSize; x++)
+            {
+                var r = Math.Sqrt(Math.Pow(x - 128, 2) + Math.Pow(y - 128, 2));
+                var edge = 80 + 14 * Math.Sin(Math.Atan2(y - 128, x - 128) * 5);
+                coverage[(y * TileMap.TileSize) + x] = (byte)Math.Clamp((edge - r) * 128 + 128, 0, 255);
+            }
+        var style = new LandEdgeStyle
+        {
+            FillColor = "#FF3C8C4C", OutlineColor = "#FF102030", OutlineWidth = 3,
+            RippleColor = "#FF0000FF", RippleWidth = 2, RippleSpacing = 10, RippleCount = 2,
+            OuterShadowOpacity = .5, InnerShadowOpacity = .5, ShadowBlur = 6, ShadowOffsetX = 2, ShadowOffsetY = 3, FillTextureId = null,
+        };
+        var land = new LandLayer(LayerId.New(), "land", true, false, 1, TileMap.Empty(1).With(new TileKey(0, 0), coverage), style);
+        var document = new MapDocument(DocumentId.New(), "land", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(256, 256, "px", "#FFFFFFFF"),
+            [new BaseColorLayer(LayerId.New(), "background", true, false, 1, "#FFFFFFFF"), land]);
+        using var whole = Render(document, new RenderOptions { IsExport = true });
+        var (budget, tile) = (CoastDistanceField.Budget, CoastDistanceField.Tile);
+        try
+        {
+            // The padded view is about 330² pixels: a budget below it and tiles of 200 pixels with
+            // about 80 of reach on each side give a grid of squares of about 40 pixels.
+            CoastDistanceField.Budget = 10_000; CoastDistanceField.Tile = 300;
+            using var tiled = Render(document, new RenderOptions { IsExport = true });
+            CoastDistanceField.Budget = 10_000; CoastDistanceField.Tile = 1;
+            using var filters = Render(document, new RenderOptions { IsExport = true });
+            long total = 0, worst = 0, filterTotal = 0;
+            for (var y = 0; y < 256; y++)
+                for (var x = 0; x < 256; x++)
+                {
+                    var a = whole.GetPixel(x, y); var b = tiled.GetPixel(x, y); var c = filters.GetPixel(x, y);
+                    var d = Math.Abs(a.Red - b.Red) + Math.Abs(a.Green - b.Green) + Math.Abs(a.Blue - b.Blue);
+                    total += d; worst = Math.Max(worst, d);
+                    filterTotal += Math.Abs(a.Red - c.Red) + Math.Abs(a.Green - c.Green) + Math.Abs(a.Blue - c.Blue);
+                }
+            Assert.True(worst <= 12, $"tiles must join without seams: worst pixel differs by {worst}");
+            Assert.True(total < filterTotal / 4, $"the tiled field must match one field far better than the filters: {total} vs {filterTotal}");
+        }
+        finally { (CoastDistanceField.Budget, CoastDistanceField.Tile) = (budget, tile); }
     }
 
     private static SKBitmap Render(MapDocument document, RenderOptions options)

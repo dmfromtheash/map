@@ -5502,17 +5502,17 @@ public sealed partial class EditorView : UserControl
             return field;
         }
 
-        // The look of the land in the order it is read on the map: the ground itself, then the
-        // coast line, the surf beyond it, and the shadows that give the shore its depth. Every
-        // effect is a switch with its own settings; every number is a slider with a box, a unit,
-        // a plain explanation and a way back to the default.
-        return new StackPanel
+        // The look of the land in the order it is read on the map, in two parts (R12, D8): the
+        // «Заливка» - the ground itself - and the «Берег» - the coast line, the surf beyond it,
+        // the shadows that give the shore its depth and the cliffs. Every effect is a switch with
+        // its own settings; every number is a slider with a box, a unit, a plain explanation and a
+        // way back to the default.
+        var fill = Ui.Category("LandFillCategory", "Заливка", "accent-look", new StackPanel
         {
             Spacing = 6,
             Children =
             {
-                row,
-                Ui.Subgroup("Поверхность", new StackPanel
+                new StackPanel
                 {
                     Spacing = 4,
                     Children =
@@ -5536,7 +5536,15 @@ public sealed partial class EditorView : UserControl
                             defaultValue: defaults.FillTextureScale,
                             description: "Размер одной плитки фактуры в единицах карты. Меньше — мельче зерно, больше — крупнее пятна."),
                     },
-                }),
+                },
+            },
+        });
+        var coast = Ui.Category("LandCoastCategory", "Берег", "accent-look", new StackPanel
+        {
+            Spacing = 6,
+            Children =
+            {
+                row,
                 EffectSection("LandOutline", "Контур берега",
                     "Линия по кромке суши со стороны воды — как обводка пером.",
                     () => Style()?.OutlineWidth, defaults.OutlineWidth, v => Set(style => style with { OutlineWidth = v }),
@@ -5603,7 +5611,8 @@ public sealed partial class EditorView : UserControl
                     },
                 }),
             },
-        }.Named("LandLayerBlock");
+        });
+        return new StackPanel { Spacing = 6, Children = { fill, coast } }.Named("LandLayerBlock");
     }
 
     /// <summary>

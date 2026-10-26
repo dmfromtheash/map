@@ -14,8 +14,21 @@ namespace Map.Rendering;
 /// </summary>
 public static class CoastDistanceField
 {
-    /// <summary>Largest view, in pixels, the field is computed for; beyond it the filter passes stay.</summary>
+    /// <summary>Largest view, in pixels, computed as one field; a larger view is computed in tiles of <see cref="TileEdge"/>.</summary>
     public const int PixelBudget = 24_000_000;
+
+    /// <summary>Side, in pixels, of one field tile of a view larger than <see cref="PixelBudget"/>, reach included.</summary>
+    public const int TileEdge = 4096;
+
+    /// <summary>The budget and tile side in use; tests lower them to tile an ordinary view.</summary>
+    public static long Budget { get; set; } = PixelBudget;
+    public static int Tile { get; set; } = TileEdge;
+
+    /// <summary>
+    /// Side of the square a field tile draws for this reach: the tile minus the reach on both
+    /// sides. Zero when the reach leaves too little (the view then keeps the filter passes).
+    /// </summary>
+    public static int TileCore(int pad) => Tile - (2 * pad) is var core && core >= 128 ? core : 0;
 
     /// <summary>Off (MAP_COAST_FIELD=0) returns every coast to the filter passes, for comparison.</summary>
     public static bool Enabled { get; set; } = Environment.GetEnvironmentVariable("MAP_COAST_FIELD") != "0";
