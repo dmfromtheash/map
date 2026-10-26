@@ -3175,10 +3175,11 @@ public static partial class SceneRenderer
             AreaBeautyRenderer.DrawMasses(canvas, ordered, options);
         }
 
+        var hiddenLabels = LabelPriority.Hidden(document, options.ViewScale);
         for (var objectIndex = 0; objectIndex < ordered.Count; objectIndex++)
         {
             var sceneObject = ordered[objectIndex];
-            if (!sceneObject.Visible)
+            if (!sceneObject.Visible || GivesWay(sceneObject, hiddenLabels, options))
             {
                 continue;
             }
@@ -5662,8 +5663,10 @@ public static partial class SceneRenderer
             }
         }
 
+        var hiddenLabels = LabelPriority.Hidden(document, options.ViewScale);
         foreach (var sceneObject in exact.Values.OrderBy(item => item.Sublayer))
         {
+            if (GivesWay(sceneObject, hiddenLabels, options)) continue;
             if (sceneObject.Stamp is { } missing && !colors.ContainsKey(missing.AssetSha256)
                 && Math.Max(sceneObject.Width, sceneObject.Height) * bucketScale < OverviewExactScreenSize)
                 overviewMissing--;
@@ -5686,6 +5689,14 @@ public static partial class SceneRenderer
             stats.ObjectCacheInvalidations += cache.Invalidations - cacheInvalidationsBefore;
         }
     }
+
+    /// <summary>
+    /// R07b: a label hidden at this scale or under a more important one (<see cref="LabelPriority"/>);
+    /// the selected label always shows, so the user can still see what they edit.
+    /// </summary>
+    private static bool GivesWay(SceneObject sceneObject, IReadOnlySet<ObjectId> hiddenLabels, RenderOptions options) =>
+        hiddenLabels.Count > 0 && sceneObject.Kind == SceneObjectKind.Text && hiddenLabels.Contains(sceneObject.Id)
+        && sceneObject.Id != options.SelectedObjectId && options.CoSelectedObjectIds?.Contains(sceneObject.Id) != true;
 
     private static int OverviewZoomBucket(double scale) =>
         (int)Math.Floor(Math.Log2(

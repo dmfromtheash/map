@@ -32,7 +32,7 @@ public sealed partial class EditorViewModel
         AfterEdit();
     }
 
-    /// <summary>What a new card is bound to: the selected object, river or road, else nothing.</summary>
+    /// <summary>What a new card is bound to: the selected object, river, road or placement area, else nothing.</summary>
     private (EntityTargetKind Kind, Guid Id, string Name, double X, double Y)? SelectionTarget()
     {
         if (Session.SelectedObject is { } item)
@@ -41,6 +41,8 @@ public sealed partial class EditorViewModel
             return (EntityTargetKind.River, river.Id, river.Name, node.X, node.Y);
         if (SelectedRoad is { } road && road.Nodes.FirstOrDefault() is { } first)
             return (EntityTargetKind.Road, road.Id, road.Name, first.X, first.Y);
+        if (SelectedEditableArea is { Nodes.Length: > 0 } area)
+            return (EntityTargetKind.Area, area.Id, area.Name, area.Nodes.Average(n => n.X), area.Nodes.Average(n => n.Y));
         return null;
     }
 
@@ -119,6 +121,7 @@ public sealed partial class EditorViewModel
             EntityTargetKind.Road => "дорога",
             EntityTargetKind.Note => "заметка",
             EntityTargetKind.Hex => "гекс",
+            EntityTargetKind.Area => "область",
             _ => "точка",
         };
         return $"{what} {where} ({binding.X:0}, {binding.Y:0})";

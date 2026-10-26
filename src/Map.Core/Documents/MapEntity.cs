@@ -7,7 +7,7 @@ namespace Map.Core.Documents;
 public enum EntityKind { Place, River, Region, Character, Faction, Item, Other }
 
 /// <summary>What an entity is bound to on a map.</summary>
-public enum EntityTargetKind { Object, River, Road, Note, Hex, Point }
+public enum EntityTargetKind { Object, River, Road, Note, Hex, Point, Area }
 
 /// <summary>
 /// One place of an entity on a map (R26): an object, a river, a road, a note, a hex (q, r in X, Y)

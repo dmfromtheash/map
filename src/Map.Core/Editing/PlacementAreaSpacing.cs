@@ -238,12 +238,18 @@ public sealed class PlacementAreaSampler(PlacementArea area, CancellationToken c
 public sealed class PlacementAreaObstacles(MapDocument document, LayerId layerId, Guid areaId, int sublayer, int layoutVersion = 1,
     PlacementArea? area = null)
 {
+    // R07b «Не ставить объекты под подписи»: the boxes of the map's labels, read once per fill.
+    private IReadOnlyList<WorldBounds>? _labels;
+
     public bool Blocks(SceneObject item)
     {
         if (document.FindLayer(layerId) is not ObjectLayer layer) return false;
         // Joining is only between this area's members. Foreign and detached objects remain clear.
         var footprint = area is null || area.LayoutVersion < 3 ? PlacementAreaSampler.Footprint(item, layoutVersion)
             : PlacementAreaSampler.VisibleBounds(area, item);
+        _labels ??= LabelPriority.LabelBounds(document);
+        foreach (var label in _labels)
+            if (label.Intersects(footprint)) return true;
         foreach (var other in ObjectSpatialIndex.For(layer).Query(footprint))
             if (other.Id != item.Id && other.Kind == SceneObjectKind.Stamp && other.Visible && other.Sublayer == sublayer
                 && PlacementAreaOwnership.Owner(document, other.Id)?.Id != areaId

@@ -58,6 +58,32 @@ public sealed class WaterCliffsPersistenceTests
     }
 
     [Fact]
+    public void Region_labels_importance_and_label_settings_round_trip_in_v37()
+    {
+        using var workspace = new TempWorkspace();
+        var (document, _, _) = Fixture();
+        var shape = VectorGeometry.CreateFreeShape(ObjectId.New(), "Долина", [new(10, 10), new(300, 20), new(280, 200), new(20, 180)]);
+        var region = new TextRegionBinding { Target = TextRegionTarget.Shape, TargetId = shape.Id.Value, EntityId = Guid.NewGuid(), OffsetX = 12.5, OffsetY = -40 };
+        var label = new SceneObject(ObjectId.New(), SceneObjectKind.Text, "Долина", 50, 60, 200, 40, 12, "#FF20242B", "#FFFFFFFF", 0, true, false)
+        { Text = new TextStyle { Content = "Долина", Importance = 5, Region = region } };
+        var plain = new SceneObject(ObjectId.New(), SceneObjectKind.Text, "Хутор", 400, 60, 100, 40, 0, "#FF20242B", "#FFFFFFFF", 0, true, false)
+        { Text = new TextStyle { Content = "Хутор", Importance = 1 } };
+        var settings = new LabelSettings { ByScale = true, ResolveOverlaps = true, ClearUnderLabels = true, MinScales = [1, .5, .25, .1, 0] };
+        var labelled = document.WithLayers([.. document.Layers, new ObjectLayer(LayerId.New(), "Подписи", true, false, 1, [shape, label, plain])]) with { Labels = settings };
+        var path = workspace.File("labels.mapproj");
+        MapProjectStore.Save(labelled, path, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
+        Assert.Equal(37, Schema(path));
+        var opened = MapProjectStore.Open(path).Document;
+        Assert.Equal(settings.MinScales.ToArray(), opened.Labels.MinScales.ToArray());
+        Assert.True(opened.Labels.ByScale && opened.Labels.ResolveOverlaps && opened.Labels.ClearUnderLabels);
+        var texts = opened.Layers.OfType<ObjectLayer>().SelectMany(l => l.Objects).Where(o => o.Text is not null).ToDictionary(o => o.Id);
+        Assert.Equal(region, texts[label.Id].Text!.Region);
+        Assert.Equal(5, texts[label.Id].Text!.Importance);
+        Assert.Equal(1, texts[plain.Id].Text!.Importance);
+        Assert.Null(texts[plain.Id].Text!.Region);
+    }
+
+    [Fact]
     public void Cards_and_note_settings_round_trip_in_v36()
     {
         using var workspace = new TempWorkspace();

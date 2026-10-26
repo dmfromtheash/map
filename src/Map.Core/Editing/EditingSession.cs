@@ -219,6 +219,12 @@ public sealed class EditingSession
             command = new TextPathFollowCommand(command, candidate, followed);
             candidate = followed;
         }
+        var regions = RegionLabels.Follow(Document, candidate);
+        if (!ReferenceEquals(regions, candidate))
+        {
+            command = new RegionLabelFollowCommand(command, candidate, regions);
+            candidate = regions;
+        }
         Mark("labels");
         var decorated = MapDecorations.Refresh(candidate);
         if (!ReferenceEquals(decorated, candidate))

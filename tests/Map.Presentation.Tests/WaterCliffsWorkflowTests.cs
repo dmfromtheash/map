@@ -94,6 +94,39 @@ public sealed class WaterCliffsWorkflowTests
     }
 
     [Fact]
+    public void A_region_is_named_from_its_card_inside_the_shape_and_labels_give_way_by_settings()
+    {
+        var shape = VectorGeometry.CreateFreeShape(ObjectId.New(), "Фигура", [new(100, 100), new(900, 140), new(880, 400), new(120, 380)]);
+        var objects = new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, [shape]);
+        var editor = Editor(objects);
+        editor.Session.SelectedObjectId = shape.Id;
+        Assert.True(editor.CanLabelRegion);
+        var card = editor.CreateEntity(EntityKind.Region);
+        editor.EditEntity(card, "Долина Ветров", EntityKind.Region, "", false);
+        editor.Session.SelectedObjectId = shape.Id;
+        Assert.True(editor.AddRegionLabel());
+        var label = editor.Session.SelectedObject!;
+        Assert.Equal("Долина Ветров", label.Text!.Content);
+        Assert.Equal(4, label.Text.Importance);
+        Assert.Equal(card, label.Text.Region!.EntityId);
+        Assert.False(editor.AddRegionLabel(), "a second name for the same figure is refused");
+
+        editor.Session.SelectedObjectId = label.Id;
+        editor.SetLabelImportance(2);
+        Assert.Equal(2, editor.Session.SelectedObject!.Text!.Importance);
+        editor.SetLabelSettings(editor.LabelSettings with { ByScale = true, ResolveOverlaps = true });
+        Assert.True(editor.LabelSettings.ByScale);
+        editor.Undo();
+        Assert.False(editor.LabelSettings.ByScale);
+
+        editor.Session.SelectedObjectId = label.Id;
+        editor.UnbindRegionLabel();
+        Assert.Null(editor.Session.SelectedObject!.Text!.Region);
+        editor.Undo();
+        Assert.True(editor.AddRegionLabelForEntity(card) is false, "the figure already has its name");
+    }
+
+    [Fact]
     public void A_card_is_made_from_the_selection_bound_linked_and_undone()
     {
         var label = new SceneObject(ObjectId.New(), SceneObjectKind.Text, "Ильград", 100, 100, 120, 40, 0, "#FF20242B", "#FFFFFFFF", 0, true, false)

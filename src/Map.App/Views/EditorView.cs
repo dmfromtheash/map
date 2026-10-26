@@ -2005,6 +2005,7 @@ public sealed partial class EditorView : UserControl
             AppearanceToggle("TextInheritToggle", "Синхронизировать с выделенным текстом",
                 () => _editor.TextInheritFromSelection,
                 value => _editor.TextInheritFromSelection = value),
+            BuildLabelSettingsBlock("Tool"),
         },
     };
 
@@ -3980,11 +3981,14 @@ public sealed partial class EditorView : UserControl
         }.Named("ShapeAppearance");
         AutomationProperties.SetName(appearance, "Внешний вид");
 
+        var regionLabel = Ui.TextButton("ShapeRegionLabelButton", "Подписать область", () => { _editor.AddRegionLabel(); SyncContextArea(); }, "compact");
+        ToolTip.SetTip(regionLabel, "Имя встанет внутри фигуры по её длине и пойдёт за контуром; имя берётся из карточки, привязанной к фигуре.");
         return Ui.Section("Фигура", new StackPanel
         {
             Spacing = 5,
             Children =
             {
+                regionLabel,
                 BuildRoomBlock(),
                 AppearanceColorBox("ShapeFillColorBox", "Цвет заливки",
                     () => Fill()?.Color,
@@ -4377,6 +4381,8 @@ public sealed partial class EditorView : UserControl
                 font,
                 BuildLabelPresetBlock(),
                 BuildTextPathBlock(),
+                BuildTextRegionBlock(),
+                BuildLabelSettingsBlock("Text"),
                 appearance,
             },
         };

@@ -123,7 +123,10 @@ public static class MapProjectFormat
 
     /// <summary>R26: the cards of the world and the link, category and visibility of notes.</summary>
     public const int WikiSchemaVersion = 36;
-    public const int MaxSupportedSchemaVersion = WikiSchemaVersion;
+
+    /// <summary>R07b: region labels, label importance and the map's label settings.</summary>
+    public const int RegionLabelsSchemaVersion = 37;
+    public const int MaxSupportedSchemaVersion = RegionLabelsSchemaVersion;
 
     /// <summary>
     /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry

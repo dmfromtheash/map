@@ -44,6 +44,7 @@ public sealed record MapDocument
         Lighting = source.Lighting;
         Style = source.Style;
         Entities = source.Entities;
+        Labels = source.Labels;
     }
 
     public MapDocument(
@@ -268,6 +269,9 @@ public sealed record MapDocument
 
     /// <summary>The cards of the world kept with this map (R26, schema v36): places, rivers, characters, factions.</summary>
     public ImmutableArray<MapEntity> Entities { get; init; } = [];
+
+    /// <summary>How labels give way by scale and overlap, and keep placement areas clear (R07b, schema v37).</summary>
+    public LabelSettings Labels { get; init; } = new();
     public string Title { get; init; }
 
     /// <summary>When the document was first created. Supplied by the caller; Core has no clock.</summary>
@@ -341,6 +345,7 @@ public sealed record MapDocument
             Lighting = Lighting,
             Style = Style,
             Entities = Entities,
+            Labels = Labels,
         };
 
     public MapDocument WithAssets(IReadOnlyList<MapAssetReference> assets)

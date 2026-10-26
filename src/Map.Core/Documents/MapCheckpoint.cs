@@ -32,6 +32,7 @@ public sealed class MapCheckpointSnapshot
         Lighting = document.Lighting;
         Style = document.Style;
         Entities = document.Entities;
+        Labels = document.Labels;
     }
 
     public string Title { get; }
@@ -51,6 +52,9 @@ public sealed class MapCheckpointSnapshot
 
     /// <summary>The cards of the world of the version (R26).</summary>
     public System.Collections.Immutable.ImmutableArray<MapEntity> Entities { get; }
+
+    /// <summary>The label settings of the version (R07b).</summary>
+    public LabelSettings Labels { get; }
 
     public static MapCheckpointSnapshot Capture(MapDocument document)
     {
@@ -74,7 +78,7 @@ public sealed class MapCheckpointSnapshot
             Notes,
             checkpoints,
             StampForeground,
-            Category) { Lighting = Lighting, Style = Style, Entities = Entities };
+            Category) { Lighting = Lighting, Style = Style, Entities = Entities, Labels = Labels };
 }
 
 /// <summary>One named durable checkpoint with its bounded preview and immutable map snapshot.</summary>

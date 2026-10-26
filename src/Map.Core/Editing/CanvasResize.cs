@@ -189,6 +189,7 @@ public static class CanvasTransformService
             Atlas = document.Atlas,
             Lighting = ShiftLights(document.Lighting, plan.OffsetX, plan.OffsetY),
             Style = document.Style,
+            Labels = document.Labels,
             // Cards stay with the map; their points move with the content.
             Entities = [.. document.Entities.Select(e => e with { Bindings = [.. e.Bindings.Select(b => b.MapId is null && b.Kind == EntityTargetKind.Point
                 ? b with { X = b.X + plan.OffsetX, Y = b.Y + plan.OffsetY } : b)] })],

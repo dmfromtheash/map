@@ -84,6 +84,12 @@ public sealed partial class EditorView
             if (_selectedEntityId is { } id) _editor.BindSelectionToEntity(id);
             SyncEntities();
         }, "compact");
+        var regionLabel = Ui.CommandButton("EntityRegionLabelButton", "Подписать область", MapIcons.LineText, () =>
+        {
+            if (_selectedEntityId is { } id) _editor.AddRegionLabelForEntity(id);
+            SyncContextArea();
+        }, "compact");
+        ToolTip.SetTip(regionLabel, "Имя карточки встанет внутри привязанной фигуры или области расстановки и пойдёт за её контуром.");
         var delete = Ui.CommandButton("DeleteEntityButton", "Удалить", MapIcons.Trash, () =>
         {
             if (_selectedEntityId is { } id) { _editor.DeleteEntity(id); _selectedEntityId = null; }
@@ -105,6 +111,7 @@ public sealed partial class EditorView
                     Ui.Subgroup("Упоминают", backlinks),
                     players,
                     new UniformGrid { Rows = 1, Columns = 3, Children = { save, bind, delete } },
+                    regionLabel,
                 },
             },
         };

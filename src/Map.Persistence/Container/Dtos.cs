@@ -176,6 +176,10 @@ internal sealed class SceneDto
     [JsonPropertyName("entities")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<Map.Core.Documents.MapEntity>? Entities { get; set; }
+    /// <summary>How labels give way by scale and overlap (R07b, schema v37).</summary>
+    [JsonPropertyName("labels")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Map.Core.Documents.LabelSettings? Labels { get; set; }
     [JsonPropertyName("stampForeground")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public StampForegroundDto? StampForeground { get; set; }
@@ -702,6 +706,14 @@ internal sealed class TextStyleDto
     [JsonPropertyName("path")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public TextPathDto? Path { get; set; }
+    /// <summary>The region this label names (R07b, schema v37).</summary>
+    [JsonPropertyName("region")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Map.Core.Documents.TextRegionBinding? Region { get; set; }
+    /// <summary>Importance 1…5 (R07b, schema v37); absent means 3.</summary>
+    [JsonPropertyName("importance")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Importance { get; set; }
 }
 
 /// <summary>A label bound to a river, road or hex path (schema v16, R07).</summary>

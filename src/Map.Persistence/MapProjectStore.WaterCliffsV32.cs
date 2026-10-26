@@ -23,6 +23,9 @@ public static partial class MapProjectStore
     {
         if (scene.Layers?.Any(l => l?.Sea is not null && l.Type != "BaseColor") == true)
             throw new MapProjectCorruptedException("Стиль моря бывает только у слоя фона.");
+        if (schema < MapProjectFormat.RegionLabelsSchemaVersion && (scene.Labels is not null
+            || scene.Layers?.Any(l => l?.Objects?.Any(o => o?.Text is { } t && (t.Region is not null || t.Importance is not null)) == true) == true))
+            throw new MapProjectCorruptedException("Подписи областей и важность подписей требуют схему v37.");
         if (schema < MapProjectFormat.WikiSchemaVersion && (scene.Entities is { Count: > 0 }
             || scene.Notes?.Any(n => n is not null && (n.LinkedMap is not null || n.Category is not null || n.PlayerVisible is not null)) == true))
             throw new MapProjectCorruptedException("Карточки сущностей и свойства заметок требуют схему v36.");
@@ -45,6 +48,15 @@ public static partial class MapProjectStore
             if (layer.Sea is not null)
                 throw new MapProjectCorruptedException("Стиль моря требует схему v32.");
         }
+    }
+
+    /// <summary>The label settings of the map (R07b); defaults when absent.</summary>
+    private static LabelSettings ReadLabelsV37(SceneDto scene)
+    {
+        if (scene.Labels is not { } labels) return new LabelSettings();
+        try { labels.Validate(); }
+        catch (ArgumentException ex) { throw new MapProjectCorruptedException("Повреждены настройки подписей.", ex); }
+        return labels;
     }
 
     /// <summary>The cards of the world (R26): every card valid, ids distinct, at most 4096.</summary>

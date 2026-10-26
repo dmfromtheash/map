@@ -49,7 +49,12 @@ public static partial class MapProjectStore
     private static bool HasWikiV36(IReadOnlyList<MapEntity> entities, IEnumerable<MapNote> notes) =>
         entities.Count > 0 || notes.Any(n => n.NeedsWikiSchema);
 
+    private static bool HasLabelsV37(LabelSettings labels, IEnumerable<MapLayer> layers) =>
+        !labels.IsDefault || layers.OfType<ObjectLayer>().Any(l => l.Objects.Any(o => o.Text is { } t && (t.Region is not null || t.Importance != LabelSettings.DefaultImportance)));
+
     private static int SchemaFor(MapDocument document) =>
+        HasLabelsV37(document.Labels, document.Layers) || document.Checkpoints.Any(c => HasLabelsV37(c.Snapshot.Labels, c.Snapshot.Layers))
+            ? MapProjectFormat.RegionLabelsSchemaVersion :
         HasWikiV36(document.Entities, document.Notes) || document.Checkpoints.Any(c => HasWikiV36(c.Snapshot.Entities, c.Snapshot.Notes))
             ? MapProjectFormat.WikiSchemaVersion :
         HasIntentionalV35(document.Layers) || document.Checkpoints.Any(c => HasIntentionalV35(c.Snapshot.Layers))
@@ -1737,6 +1742,7 @@ public static partial class MapProjectStore
         Layers = [.. document.Layers.Select(layer => ToLayerDto(layer, objectChunks))],
         Notes = [.. document.Notes.Select(ToNoteDto)],
         Entities = document.Entities.IsDefaultOrEmpty ? null : [.. document.Entities],
+        Labels = document.Labels.IsDefault ? null : document.Labels,
         StampForeground = document.StampForeground is { } foreground
             ? new StampForegroundDto { Tiles = ToTileDtos(foreground.Tiles) }
             : null,
@@ -2293,6 +2299,8 @@ public static partial class MapProjectStore
             Detached = path.Detached,
             Baseline = [.. path.Baseline.SelectMany(point => new[] { point.X, point.Y })],
         } : null,
+        Region = text.Region,
+        Importance = text.Importance == LabelSettings.DefaultImportance ? null : text.Importance,
     };
 
     private static FilterSettingsDto ToFilterDto(FilterSettings filter) => new()
@@ -2427,7 +2435,7 @@ public static partial class MapProjectStore
                         tileEntries))
                     : null,
                 category) { Atlas = ReadAtlasV26(manifest), Lighting = ReadLightingV28(manifest), Style = ReadStyleV29(manifest),
-                    Entities = ReadEntitiesV36(scene) };
+                    Entities = ReadEntitiesV36(scene), Labels = ReadLabelsV37(scene) };
         }
         catch (Exception ex) when (ex is ArgumentException or FormatException or InvalidOperationException)
         {
@@ -2720,6 +2728,11 @@ public static partial class MapProjectStore
             text.Blur, "text blur", min: 0, max: AppearanceLimits.MaxBlur),
         Blend = RequireBlend(text.Blend, "text blend"),
         Path = text.Path is { } path ? ToTextPath(path) : null,
+        Region = text.Region is null ? null : text.Region.IsValid ? text.Region
+            : throw new MapProjectCorruptedException("Повреждена привязка подписи к области."),
+        Importance = text.Importance is null ? LabelSettings.DefaultImportance
+            : LabelSettings.IsValidImportance(text.Importance.Value) ? text.Importance.Value
+            : throw new MapProjectCorruptedException("Важность подписи — от 1 до 5."),
     };
 
     private static TextPathBinding ToTextPath(TextPathDto path)

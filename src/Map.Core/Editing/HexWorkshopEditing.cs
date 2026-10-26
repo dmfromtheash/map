@@ -119,7 +119,7 @@ public sealed class HexBoardShapeCommand : IEditCommand
             : layer).ToList();
         return new MapDocument(document.Id, document.Title, document.CreatedUtc, canvas, rewritten,
             document.Assets, document.Notes, document.Checkpoints, document.StampForeground, document.Category)
-        { Atlas = document.Atlas, Lighting = document.Lighting, Style = document.Style, Entities = document.Entities };
+        { Atlas = document.Atlas, Lighting = document.Lighting, Style = document.Style, Entities = document.Entities, Labels = document.Labels };
     }
 }
 

@@ -36,6 +36,12 @@ public sealed record TextStyle
 
     /// <summary>Set when the label follows a river, road or hex path (R07); null for free text.</summary>
     public TextPathBinding? Path { get; init; }
+
+    /// <summary>Set when the label names a region and sits inside its figure (R07b); null for free text.</summary>
+    public TextRegionBinding? Region { get; init; }
+
+    /// <summary>How important the label is, 1…5 (R07b): far away only the important ones stay.</summary>
+    public int Importance { get; init; } = LabelSettings.DefaultImportance;
 }
 
 public sealed record MapNote
