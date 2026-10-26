@@ -31,7 +31,7 @@ namespace Map.App.Views;
 /// </summary>
 public sealed partial class EditorView
 {
-    private enum RibbonTab { None, Light, Styles }
+    private enum RibbonTab { None, Light, Styles, Sea }
 
     private const int CardWidth = 150, CardHeight = 84;
     /// <summary>Preview pixels per document pixel: the medium at about the scale it is painted at.</summary>
@@ -42,8 +42,8 @@ public sealed partial class EditorView
     private Control _ribbonBody = null!;
     // Tabs and cards are plain buttons marked by a brass frame: a checked toggle fills with brass and
     // its faint captions became unreadable on it.
-    private Button _ribbonLightTab = null!, _ribbonStyleTab = null!;
-    private TextBlock _ribbonLightState = null!, _ribbonStyleState = null!;
+    private Button _ribbonLightTab = null!, _ribbonStyleTab = null!, _ribbonSeaTab = null!;
+    private TextBlock _ribbonLightState = null!, _ribbonStyleState = null!, _ribbonSeaState = null!;
     private StackPanel _ribbonFamilies = null!;
     private StackPanel _ribbonCards = null!;
     private RetainedSlot _ribbonControls = null!;
@@ -96,6 +96,8 @@ public sealed partial class EditorView
         }
         _ribbonLightTab = Tab("RibbonLightTab", MapIcons.LineSun, "Свет", out _ribbonLightState, RibbonTab.Light);
         _ribbonStyleTab = Tab("RibbonStyleTab", MapIcons.LinePalette, "Стили", out _ribbonStyleState, RibbonTab.Styles);
+        _ribbonSeaTab = Tab("RibbonSeaTab", MapIcons.LineWater, "Море", out _ribbonSeaState, RibbonTab.Sea);
+        ToolTip.SetTip(_ribbonSeaTab, "Как нарисовано открытое море: линии пером, изолинии, рябь штрихом или глубина цветом.");
         ToolTip.SetTip(_ribbonLightTab, "Время суток, объём гор, тени, туман, огни и цвет.");
         ToolTip.SetTip(_ribbonStyleTab, "Вся карта в другой технике. Подписи остаются чёткими.");
 
@@ -120,7 +122,7 @@ public sealed partial class EditorView
             {
                 collapse.Docked(Dock.Right),
                 _ribbonInspect.Docked(Dock.Right),
-                new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Children = { _ribbonLightTab, _ribbonStyleTab, _ribbonFamilies } },
+                new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Children = { _ribbonLightTab, _ribbonStyleTab, _ribbonSeaTab, _ribbonFamilies } },
             },
         };
 
@@ -170,8 +172,10 @@ public sealed partial class EditorView
         _ribbonLightState.Text = lighting.Enabled ? TimeTitle(lighting.TimeOfDay) : "выкл.";
         var style = _editor.ShownStyle;
         _ribbonStyleState.Text = style.Enabled ? EditorViewModel.PresetTitle(style.Preset) : "без стиля";
+        _ribbonSeaState.Text = SeaState(_editor.Sea);
         MarkSelected(_ribbonLightTab, _ribbonTab == RibbonTab.Light);
         MarkSelected(_ribbonStyleTab, _ribbonTab == RibbonTab.Styles);
+        MarkSelected(_ribbonSeaTab, _ribbonTab == RibbonTab.Sea);
         _ribbonBody.IsVisible = _ribbonTab != RibbonTab.None;
         // Placing lights by click belongs to the open Свет tab.
         if (_ribbonTab != RibbonTab.Light && _editor.LightPlacementArmed) _editor.ArmLightPlacement(false);
@@ -186,10 +190,10 @@ public sealed partial class EditorView
         if (_ribbonTab == RibbonTab.None) return;
 
         RebuildRibbonCards();
-        var controls = _ribbonTab == RibbonTab.Styles ? StyleBody() : LightBody();
+        var controls = _ribbonTab switch { RibbonTab.Styles => StyleBody(), RibbonTab.Sea => SeaBody(), _ => LightBody() };
         if (!ReferenceEquals(_ribbonControls.Content, controls)) _ribbonControls.Content = controls;
-        if (_ribbonTab == RibbonTab.Styles) { foreach (var sync in _styleSyncs) sync(); }
-        else { foreach (var sync in _lightSyncs) sync(); }
+        var syncs = _ribbonTab switch { RibbonTab.Styles => _styleSyncs, RibbonTab.Sea => _seaSyncs, _ => _lightSyncs };
+        foreach (var sync in syncs) sync();
         QueueRibbonPreviews();
     }
 
@@ -197,10 +201,13 @@ public sealed partial class EditorView
 
     private void RebuildRibbonCards()
     {
-        var wanted = _ribbonTab == RibbonTab.Styles
-            ? StyleCards.Where(c => _ribbonFamily == "Все" || c.Family == _ribbonFamily || c.Preset is null)
-                .Select(c => (c.Key, c.Title, Caption: c.Preset is null ? "как нарисовано" : c.Family)).ToArray()
-            : LightCards.Select(c => (c.Key, c.Title, Caption: c.Time is null ? "как нарисовано" : "время суток")).ToArray();
+        var wanted = _ribbonTab switch
+        {
+            RibbonTab.Styles => StyleCards.Where(c => _ribbonFamily == "Все" || c.Family == _ribbonFamily || c.Preset is null)
+                .Select(c => (c.Key, c.Title, Caption: c.Preset is null ? "как нарисовано" : c.Family)).ToArray(),
+            RibbonTab.Sea => SeaCards.Select(c => (c.Key, c.Title, Caption: c.Manner is null ? "простой цвет" : "море")).ToArray(),
+            _ => LightCards.Select(c => (c.Key, c.Title, Caption: c.Time is null ? "как нарисовано" : "время суток")).ToArray(),
+        };
         var keys = wanted.Select(w => w.Key).ToArray();
         var shown = _ribbonCards.Children.OfType<Control>().Select(c => c.Tag as string).ToArray();
         if (!shown.SequenceEqual(keys))
@@ -221,6 +228,7 @@ public sealed partial class EditorView
             {
                 "none" => !style.Enabled,
                 "light-off" => !lighting.Enabled,
+                _ when key.StartsWith("sea-", StringComparison.Ordinal) => SeaCardActive(key),
                 _ when key.StartsWith("light-", StringComparison.Ordinal) => lighting.Enabled
                     && LightCards.First(c => c.Key == key).Time is { } t && Math.Abs(lighting.TimeOfDay - t) < 0.02,
                 _ => style.Enabled && "style-" + style.Preset == key,
@@ -274,12 +282,15 @@ public sealed partial class EditorView
         {
             "none" => "StyleNone",
             _ when key.StartsWith("style-", StringComparison.Ordinal) => "StylePreset" + key["style-".Length..],
+            _ when key.StartsWith("sea-", StringComparison.Ordinal) => "SeaCard" + key["sea-".Length..],
             _ => "LightCard" + key["light-".Length..],
         };
         AutomationProperties.SetName(button, title);
         ToolTip.SetTip(button, title + (key.StartsWith("style-", StringComparison.Ordinal)
             ? ". " + PresetHint(Enum.Parse<MapStylePreset>(key["style-".Length..])) + " Щелчок применяет стиль — один шаг отмены."
-            : ". Щелчок применяет — один шаг отмены."));
+            : key.StartsWith("sea-", StringComparison.Ordinal) && key != "sea-none"
+                ? ". " + SeaHint((SeaManner)int.Parse(key["sea-".Length..], System.Globalization.CultureInfo.InvariantCulture)) + " Щелчок применяет — один шаг отмены."
+                : ". Щелчок применяет — один шаг отмены."));
         button.Click += (_, _) => { ApplyRibbonCard(key); SyncAppearanceRibbon(); };
         var view = (button, picture);
         _ribbonCardViews[key] = view;
@@ -288,6 +299,7 @@ public sealed partial class EditorView
 
     private void ApplyRibbonCard(string key)
     {
+        if (key.StartsWith("sea-", StringComparison.Ordinal)) { ApplySeaCard(key); return; }
         if (key == "none") { _editor.SetStyleEnabled(false); return; }
         if (key == "light-off") { _editor.SetLightingEnabled(false); return; }
         if (key.StartsWith("light-", StringComparison.Ordinal))
@@ -304,6 +316,7 @@ public sealed partial class EditorView
     /// <summary>The document a card shows: the open map with that card's style or light.</summary>
     private MapDocument CardDocument(MapDocument document, string key)
     {
+        if (key.StartsWith("sea-", StringComparison.Ordinal)) return SeaCardDocument(document, key);
         if (key == "none") return document with { Style = null };
         if (key == "light-off") return document with { Lighting = null };
         if (key.StartsWith("light-", StringComparison.Ordinal))
@@ -378,7 +391,10 @@ public sealed partial class EditorView
         if (_ribbonTab == RibbonTab.None || _canvas.Bounds.Width < 1) return;
         var document = _editor.Session.Document;
         var keys = _ribbonCards.Children.OfType<Control>().Select(c => (string)c.Tag!).ToArray();
-        var (area, scale) = PreviewFrame(CardWidth * 2, CardHeight * 2, CardScale * 2);
+        // The sea is read along a coast, not on one mountain: its cards show the middle of the view, wider.
+        var (area, scale) = _ribbonTab == RibbonTab.Sea
+            ? (PreviewArea(CardWidth * 2, CardHeight * 2, CardScale * 0.8), CardScale * 0.8)
+            : PreviewFrame(CardWidth * 2, CardHeight * 2, CardScale * 2);
         // A card is redrawn only when the map, the area or the cards change - not on every sync.
         var signature = $"{System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(document)}|{area.Left:0}|{area.Top:0}|{scale:0.000}|{string.Join(",", keys)}";
         if (signature == _ribbonPreviewSignature) return;

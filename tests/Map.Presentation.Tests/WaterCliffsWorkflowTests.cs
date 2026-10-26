@@ -65,6 +65,27 @@ public sealed class WaterCliffsWorkflowTests
     }
 
     [Fact]
+    public void Sea_manner_strength_and_reach_are_undoable_and_keep_each_other()
+    {
+        var editor = Editor();
+        Assert.Null(editor.Sea);
+        editor.ApplySeaManner(SeaManner.DepthBands);
+        Assert.Equal(SeaStyle.For(SeaManner.DepthBands), editor.Sea);
+        editor.SetSeaStrength(40);
+        editor.SetSeaScale(200);
+        editor.ApplySeaManner(SeaManner.Engraved);
+        Assert.Equal(SeaManner.Engraved, editor.Sea!.Manner);
+        Assert.Equal(.4, editor.Sea.Strength, 6);
+        Assert.Equal(2, editor.Sea.Scale, 6);
+        editor.Undo();
+        Assert.Equal(SeaManner.DepthBands, editor.Sea!.Manner);
+        editor.ClearSea();
+        Assert.Null(editor.Sea);
+        editor.Undo();
+        Assert.NotNull(editor.Sea);
+    }
+
+    [Fact]
     public void Node_feature_and_delta_preview_are_undoable_edits_of_the_selected_river()
     {
         var objects = new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, []);

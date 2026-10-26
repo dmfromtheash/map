@@ -121,6 +121,9 @@ public sealed record BaseColorLayer : MapLayer
     /// <summary>World size of one material tile, see <see cref="MapFillTextures"/>.</summary>
     public double TextureScale { get; init; } = MapFillTextures.DefaultWaterScale;
 
+    /// <summary>The style of the open sea around the land (R12, schema v32); null keeps the plain page.</summary>
+    public SeaStyle? Sea { get; init; }
+
     public override LayerMask? Mask
     {
         get => null;

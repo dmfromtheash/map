@@ -1753,6 +1753,7 @@ public static partial class MapProjectStore
             Opacity = layer.Opacity,
             Blend = layer.Blend,
             Color = (layer as BaseColorLayer)?.Color,
+            Sea = layer is BaseColorLayer { Sea: { } sea } ? ToSeaDto(sea) : null,
             BaseMaterial = layer is BaseColorLayer { TextureId: { } baseTexture } textured
                 ? new BaseMaterialDto { TextureId = baseTexture, Opacity = textured.TextureOpacity, Scale = textured.TextureScale }
                 : null,
@@ -2473,9 +2474,9 @@ public static partial class MapProjectStore
                 Roads = layer.Roads is null ? [] : [.. layer.Roads],
                 SurfaceOrder = layer.SurfaceOrder is null ? [] : [.. layer.SurfaceOrder],
             },
-            "BaseColor" => ToBaseMaterial(new BaseColorLayer(
+            "BaseColor" => ReadSeaV32(ToBaseMaterial(new BaseColorLayer(
                 id, name, layer.Visible, layer.Locked, layer.Opacity,
-                RequireString(layer.Color, "base color")), layer.BaseMaterial),
+                RequireString(layer.Color, "base color")), layer.BaseMaterial), layer.Sea),
             "Brush" => new BrushLayer(
                 id, name, layer.Visible, layer.Locked, layer.Opacity,
                 ToTileMap(layer.Tiles ?? [], entryRoot + MapProjectFormat.RasterPrefix, id, 4, tileEntries), mask),

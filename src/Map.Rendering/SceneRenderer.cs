@@ -508,7 +508,7 @@ public sealed record CanvasBoundaryOverlay(
 /// The single scene evaluator: the editor canvas and the thumbnail exporter both go through it,
 /// so what the user sees and what gets stored cannot drift apart. It never mutates the document.
 /// </summary>
-public static class SceneRenderer
+public static partial class SceneRenderer
 {
     private static readonly LayerId StampForegroundLayerId =
         new(new Guid("2e304ada-4a3e-4f2e-896c-c92977b52150"));
@@ -1067,6 +1067,7 @@ public static class SceneRenderer
         List<object> TerrainParts()
         {
             var parts = new List<object>();
+            if (ActiveSea(document, options) is { } sea) parts.Add(sea);
             foreach (var land in lands) parts.Add(land);
             foreach (var surface in Surfaces(document, new WorldBounds(0, 0, document.Canvas.Width, document.Canvas.Height), options))
             {
@@ -1278,7 +1279,8 @@ public static class SceneRenderer
         List<Surface> surfaces, RenderOptions options, Action ready)
     {
         if (!refinement.PreferFullBuild && staleView == view && staleScale == scale
-            && TerrainPatchRegion(changed, lands, surfaces.Any(surface => surface.River is not null), view, scale) is { } region)
+            && TerrainPatchRegion(changed, lands, surfaces.Any(surface => surface.River is not null), view, scale,
+                ActiveSea(document, options)?.Reach ?? 0) is { } region)
         {
             var (renderView, copy, offset) = region;
             return refinement.Queue(parts, view, scale,
@@ -1297,7 +1299,8 @@ public static class SceneRenderer
     /// near their edge sees everything it would see in the whole view.
     /// </summary>
     private static (WorldBounds RenderView, SKRectI Copy, SKPointI Offset)? TerrainPatchRegion(
-        List<(LandLayer Current, LandLayer Before)> changed, List<LandLayer> lands, bool rivers, WorldBounds view, double scale)
+        List<(LandLayer Current, LandLayer Before)> changed, List<LandLayer> lands, bool rivers, WorldBounds view, double scale,
+        double seaReach = 0)
     {
         if (changed.Count == 0) return null;
         double left = double.MaxValue, top = double.MaxValue, right = double.MinValue, bottom = double.MinValue;
@@ -1321,7 +1324,8 @@ public static class SceneRenderer
             var pixel = new WorldBounds(view.Left, view.Top, view.Left + (1 / scale), view.Top + (1 / scale));
             return (pixel, SKRectI.Empty, SKPointI.Empty);
         }
-        var reach = TerrainEffectReach(lands, rivers, scale);
+        // The sea style reads the distance to the nearest shore: an edit changes it that far out.
+        var reach = Math.Max(TerrainEffectReach(lands, rivers, scale), seaReach + (2 / Math.Max(1e-4, scale)));
         var (width, height) = RenderImageCache.SizeOf(view, scale);
         // The copied pixels, in the pixels of the view's image.
         var x0 = Math.Clamp((int)Math.Floor((left - reach - view.Left) * scale), 0, width);
@@ -1604,6 +1608,7 @@ public static class SceneRenderer
     private static void DrawTerrainPasses(SKCanvas canvas, MapDocument document, List<LandLayer> lands,
         List<Surface> surfaces, WorldBounds view, RenderOptions options)
     {
+        DrawSea(canvas, document, lands, view, options);
         var levels = lands.Select(land => land.Level).Concat(surfaces.Select(surface => surface.Level))
             .Distinct().OrderBy(level => level).ToList();
         foreach (var level in levels)
@@ -2149,6 +2154,8 @@ public static class SceneRenderer
         // finished land - an offscreen surface standing in for it.
         var canvas = output;
         var style = layer.EdgeStyle;
+        // A sea style draws the water lines itself; the land's ring surf would draw them twice.
+        if (style.RippleCount > 0 && ActiveSea(document, options) is not null) style = style with { RippleCount = 0 };
         var sampling = options.ViewScale < 0.9
             ? new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear)
             : new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None);
@@ -2338,7 +2345,7 @@ public static class SceneRenderer
         // pan draws the plain fill (FastTerrain) and never enters the cache.
         if (options.StyledLand is { } styled && paintPreview is null && !options.IsExport && !options.FastTerrain)
         {
-            var parts = new List<object> { layer.Id, layer.GeometryTiles, layer.PaintTiles, layer.EdgeStyle, layer.Level, layer.CliffWallTiles, layer.CliffBeachTiles };
+            var parts = new List<object> { layer.Id, layer.GeometryTiles, layer.PaintTiles, layer.EdgeStyle, layer.Level, layer.CliffWallTiles, layer.CliffBeachTiles, ActiveSea(document, options) is not null };
             parts.AddRange(beneath);
             foreach (var (owner, river) in cutters)
             {

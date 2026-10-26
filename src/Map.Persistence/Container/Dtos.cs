@@ -179,6 +179,17 @@ internal sealed class StampForegroundDto
     [JsonPropertyName("tiles")] public List<TileDto> Tiles { get; set; } = [];
 }
 
+internal sealed class SeaDto
+{
+    [JsonPropertyName("manner")] public string Manner { get; set; } = "";
+    [JsonPropertyName("strength")] public double? Strength { get; set; }
+    [JsonPropertyName("scale")] public double? Scale { get; set; }
+    [JsonPropertyName("ink")] public string? Ink { get; set; }
+    [JsonPropertyName("shallow")] public string? Shallow { get; set; }
+    [JsonPropertyName("middle")] public string? Middle { get; set; }
+    [JsonPropertyName("deep")] public string? Deep { get; set; }
+}
+
 internal sealed class BaseMaterialDto
 {
     [JsonPropertyName("textureId")]
@@ -197,6 +208,11 @@ internal sealed class LayerDto
     [JsonPropertyName("baseMaterial")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public BaseMaterialDto? BaseMaterial { get; set; }
+
+    /// <summary>The sea style of the base colour layer (R12, schema v32).</summary>
+    [JsonPropertyName("sea")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SeaDto? Sea { get; set; }
     [JsonPropertyName("placementPaths")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<Map.Core.Documents.PlacementPath>? PlacementPaths { get; set; }

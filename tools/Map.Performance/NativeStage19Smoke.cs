@@ -147,6 +147,8 @@ public sealed partial class Stage19Application : Application
         { _report.Required = OwnerArtRequired; _report.Scenario = "owner-art"; }
         if (Options.Profile == "native-land-cliffs")
         { _report.Required = LandCliffRequired; _report.Scenario = "land-cliffs"; }
+        if (Options.Profile == "native-water-cliffs")
+        { _report.Required = WaterCliffsRequired; _report.Scenario = "water-cliffs"; }
         if (Options.Profile == "native-soft-coast")
         { _report.Required = SoftCoastRequired; _report.Scenario = "soft-coast"; }
         if (Options.Profile == "native-history-memory")
@@ -217,6 +219,7 @@ public sealed partial class Stage19Application : Application
         if (_report.Scenario == "land-materials") { await LandMaterialsOnly(); return; }
         if (_report.Scenario == "soft-coast") { await SoftCoastOnly(); return; }
         if (_report.Scenario == "land-cliffs") { await LandCliffsOnly(); return; }
+        if (_report.Scenario == "water-cliffs") { await WaterCliffsOnly(); return; }
         if (_report.Scenario == "owner-art") { await OwnerArtOnly(); return; }
         if (_report.Scenario == "history-memory") { await HistoryMemoryOnly(); return; }
         if (_report.Scenario == "panel-shots") { await PanelShotsOnly(); return; }
