@@ -631,6 +631,7 @@ public static partial class SceneRenderer
             canvas.Save();
             canvas.ClipRect(ToRect(bounds));
             FogRenderer.Draw(canvas, document, options.VisibleWorld ?? bounds, options.FogOpacity, options.FogOverride);
+            TransitionRenderer.Draw(canvas, document, options);
             DrawChangeMarks(canvas, options);
             DrawPlacementPreview(canvas, document, options);
             DrawSelectionChrome(canvas, document, options);
@@ -745,6 +746,7 @@ public static partial class SceneRenderer
         if (chrome)
         {
             FogRenderer.Draw(canvas, document, view, options.FogOpacity, options.FogOverride);
+            TransitionRenderer.Draw(canvas, document, options);
             DrawChangeMarks(canvas, options);
             DrawPlacementPreview(canvas, document, options);
             DrawSelectionChrome(canvas, document, options);

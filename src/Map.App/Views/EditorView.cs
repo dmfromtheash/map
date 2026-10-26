@@ -7857,7 +7857,8 @@ public sealed partial class EditorView : UserControl
             new Ui.CategoryTab("List", "Все заметки", MapIcons.LineList, listPage, "Поиск и список заметок, новая заметка"),
             new Ui.CategoryTab("Note", "Заметка", MapIcons.LineNotes, _noteSelectionEditor, "Заголовок, текст и действия выбранной заметки", Prefer: true),
             new Ui.CategoryTab("Entities", "Сущности", MapIcons.LineCatalog, BuildEntitiesPage(), "Карточки мира: места, реки, персонажи, фракции"),
-            new Ui.CategoryTab("Fog", "Туман", MapIcons.HexPlayer, BuildFogPage(), "Туман войны: что уже видели игроки; окно игрока"));
+            new Ui.CategoryTab("Fog", "Туман", MapIcons.HexPlayer, BuildFogPage(), "Туман войны: что уже видели игроки; окно игрока"),
+            new Ui.CategoryTab("Transitions", "Переходы", MapIcons.LineRoad, BuildTransitionsPage(), "Лестницы, пещеры, шахты и порталы между уровнями и картами"));
     }
 
     private Control BuildCheckpointsTab()
@@ -9899,6 +9900,7 @@ public sealed partial class EditorView : UserControl
         Timed("entity-list", SyncEntities);
         Timed("fog", SyncFog);
         Timed("compare", SyncCompareBlock);
+        Timed("transitions", SyncTransitions);
         Timed("checkpoint-list", SyncCheckpointList);
         Timed("canvas-workflow", SyncCanvasWorkflow);
         Timed("quick-bar", SyncQuickBar);

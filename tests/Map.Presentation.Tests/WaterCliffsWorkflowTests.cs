@@ -180,6 +180,36 @@ public sealed class WaterCliffsWorkflowTests
     }
 
     [Fact]
+    public void A_transition_is_placed_by_two_clicks_edited_and_undone()
+    {
+        var editor = Editor(new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, []));
+        editor.StartNewTransition(TransitionKind.CaveEntrance);
+        Assert.True(editor.TransitionPickArmed);
+        var router = new CanvasInputRouter(editor);
+        var (sx, sy) = editor.Session.Viewport.WorldToScreen(200, 150);
+        router.Press(CanvasPointerButton.Left, sx, sy);
+        router.Release(sx, sy);
+        var placed = Assert.Single(editor.Transitions);
+        Assert.Equal(200, placed.From.X, 0);
+        Assert.Null(placed.To);
+        Assert.Equal(placed.Id, editor.SelectedTransitionId);
+
+        editor.PickTransitionTarget();
+        var (tx, ty) = editor.Session.Viewport.WorldToScreen(600, 400);
+        router.Press(CanvasPointerButton.Left, tx, ty);
+        router.Release(tx, ty);
+        Assert.Equal(600, editor.Transitions.Single().To!.X, 0);
+        Assert.Contains("на этой карте", editor.TransitionTargetTitle(editor.Transitions.Single()));
+
+        editor.EditTransition(placed.Id, "Пасть дракона", TransitionKind.CaveEntrance, TransitionDirection.Forward, 30);
+        Assert.Equal("Пасть дракона", editor.Transitions.Single().Name);
+        editor.DeleteTransition(placed.Id);
+        Assert.Empty(editor.Transitions);
+        editor.Undo();
+        Assert.Equal(TransitionDirection.Forward, editor.Transitions.Single().Direction);
+    }
+
+    [Fact]
     public void A_card_is_made_from_the_selection_bound_linked_and_undone()
     {
         var label = new SceneObject(ObjectId.New(), SceneObjectKind.Text, "Ильград", 100, 100, 120, 40, 0, "#FF20242B", "#FFFFFFFF", 0, true, false)

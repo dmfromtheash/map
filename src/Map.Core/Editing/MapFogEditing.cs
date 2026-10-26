@@ -138,6 +138,7 @@ public static class PlayerScene
             Labels = document.Labels,
             Fog = fog,
             Entities = [.. document.Entities.Where(e => e.PlayerVisible)],
+            Transitions = [.. document.Transitions.Where(t => fog.Sees(t.From.X, t.From.Y))],
         };
     }
 

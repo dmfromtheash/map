@@ -206,6 +206,9 @@ public sealed class CanvasInputRouter
             _gesture = _editor.IsDraggingPathNode ? CanvasInputGesture.PlacementPathNode : CanvasInputGesture.None;
             return new CanvasInputResult { Handled = true, Invalidate = true, CapturePointer = _editor.IsDraggingPathNode };
         }
+        // R29: an armed transition end takes the click.
+        if (_editor.PressTransitionPick(worldX, worldY))
+            return new CanvasInputResult { Handled = true, Invalidate = true };
         // R24: a point for «Проложить дорогу A→B» or «Река отсюда в море» takes the click first.
         if (_editor.PressGeographyPick(worldX, worldY))
             return new CanvasInputResult { Handled = true, Invalidate = true };

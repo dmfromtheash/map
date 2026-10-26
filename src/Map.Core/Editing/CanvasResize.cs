@@ -191,6 +191,12 @@ public static class CanvasTransformService
             Style = document.Style,
             Labels = document.Labels,
             Fog = ShiftFog(document.Fog, plan.OffsetX, plan.OffsetY),
+            // Transitions move with the content; ends on other maps stay where they are.
+            Transitions = [.. document.Transitions.Select(t => t with
+            {
+                From = t.From with { X = t.From.X + plan.OffsetX, Y = t.From.Y + plan.OffsetY },
+                To = t.To is { MapId: null } to ? to with { X = to.X + plan.OffsetX, Y = to.Y + plan.OffsetY } : t.To,
+            })],
             // Cards stay with the map; their points move with the content.
             Entities = [.. document.Entities.Select(e => e with { Bindings = [.. e.Bindings.Select(b => b.MapId is null && b.Kind == EntityTargetKind.Point
                 ? b with { X = b.X + plan.OffsetX, Y = b.Y + plan.OffsetY } : b)] })],

@@ -58,6 +58,27 @@ public sealed class WaterCliffsPersistenceTests
     }
 
     [Fact]
+    public void Transitions_round_trip_in_v39_and_the_atlas_keeps_world_levels()
+    {
+        using var workspace = new TempWorkspace();
+        var (document, _, _) = Fixture();
+        var other = Guid.NewGuid();
+        var stairs = new MapTransition { Name = "Лестница в склеп", Kind = TransitionKind.Stairs, From = new(null, 40, 50, 0), To = new(other, 300, 200), Direction = TransitionDirection.Forward, CostMinutes = 5 };
+        var path = workspace.File("transitions.mapproj");
+        MapProjectStore.Save(document with { Transitions = [stairs] }, path, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
+        Assert.Equal(39, Schema(path));
+        var read = Assert.Single(MapProjectStore.Open(path).Document.Transitions);
+        Assert.Equal(stairs, read);
+
+        var atlas = new MapAtlas(Guid.NewGuid(), [new AtlasMap(document.Id.Value, "a.mapproj", "Мир"), new AtlasMap(other, "b.mapproj", "Склеп") { Level = WorldLevel.Underdark }], []);
+        var manifest = workspace.File("world.mapatlas");
+        AtlasStore.Save(atlas, manifest);
+        var levels = AtlasStore.Read(manifest).Maps.ToDictionary(m => m.Id, m => m.Level);
+        Assert.Equal(WorldLevel.Surface, levels[document.Id.Value]);
+        Assert.Equal(WorldLevel.Underdark, levels[other]);
+    }
+
+    [Fact]
     public void The_fog_of_war_round_trips_in_v38()
     {
         using var workspace = new TempWorkspace();

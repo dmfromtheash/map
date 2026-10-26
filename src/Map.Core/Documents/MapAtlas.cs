@@ -5,7 +5,12 @@ namespace Map.Core.Documents;
 /// <summary>Locator only. Map identity is the existing, persistent DocumentId.</summary>
 public sealed record AtlasLocator(Guid Id, string File);
 
-public sealed record AtlasMap(Guid Id, string File, string Title);
+public sealed record AtlasMap(Guid Id, string File, string Title)
+{
+    /// <summary>The level of the world of the map (R29): sky, surface or underdark.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public WorldLevel Level { get; init; }
+}
 
 /// <summary>Axis-aligned parent area in pixels; the child uses its full canvas.</summary>
 public sealed record AtlasTransform(double X, double Y, double Width, double Height, double ChildWidth, double ChildHeight)
@@ -28,7 +33,7 @@ public sealed record MapAtlas(Guid Id, ImmutableArray<AtlasMap> Maps, ImmutableA
     {
         if (Format != "map-atlas" || Version != 1 || Id == Guid.Empty || Maps.IsDefault || Links.IsDefault
             || Maps.Length is < 1 or > 4096 || Links.Length > 4096
-            || Maps.Any(m => m is null || m.Id == Guid.Empty || string.IsNullOrWhiteSpace(m.File) || string.IsNullOrWhiteSpace(m.Title))
+            || Maps.Any(m => m is null || m.Id == Guid.Empty || string.IsNullOrWhiteSpace(m.File) || string.IsNullOrWhiteSpace(m.Title) || !Enum.IsDefined(m.Level))
             || Maps.Select(m => m.Id).Distinct().Count() != Maps.Length
             || Maps.Select(m => m.File).Distinct(StringComparer.OrdinalIgnoreCase).Count() != Maps.Length)
             throw new InvalidOperationException("Неверный формат атласа или повторяющиеся карты.");

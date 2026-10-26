@@ -46,6 +46,7 @@ public sealed record MapDocument
         Entities = source.Entities;
         Labels = source.Labels;
         Fog = source.Fog;
+        Transitions = source.Transitions;
     }
 
     public MapDocument(
@@ -276,6 +277,9 @@ public sealed record MapDocument
 
     /// <summary>The fog of war of the painted map: what the players have seen (R27, schema v38).</summary>
     public MapFog Fog { get; init; } = new();
+
+    /// <summary>Stairs, cave mouths, shafts and portals between levels and maps (R29, schema v39).</summary>
+    public ImmutableArray<MapTransition> Transitions { get; init; } = [];
     public string Title { get; init; }
 
     /// <summary>When the document was first created. Supplied by the caller; Core has no clock.</summary>
@@ -351,6 +355,7 @@ public sealed record MapDocument
             Entities = Entities,
             Labels = Labels,
             Fog = Fog,
+            Transitions = Transitions,
         };
 
     public MapDocument WithAssets(IReadOnlyList<MapAssetReference> assets)

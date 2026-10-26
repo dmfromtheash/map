@@ -198,6 +198,10 @@ internal sealed class SceneDto
     [JsonPropertyName("fog")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public FogDto? Fog { get; set; }
+    /// <summary>Stairs, cave mouths, shafts and portals (R29, schema v39).</summary>
+    [JsonPropertyName("transitions")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<Map.Core.Documents.MapTransition>? Transitions { get; set; }
     [JsonPropertyName("stampForeground")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public StampForegroundDto? StampForeground { get; set; }

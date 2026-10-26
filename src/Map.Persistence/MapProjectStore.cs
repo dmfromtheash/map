@@ -53,6 +53,8 @@ public static partial class MapProjectStore
         !labels.IsDefault || layers.OfType<ObjectLayer>().Any(l => l.Objects.Any(o => o.Text is { } t && (t.Region is not null || t.Importance != LabelSettings.DefaultImportance)));
 
     private static int SchemaFor(MapDocument document) =>
+        !document.Transitions.IsDefaultOrEmpty || document.Checkpoints.Any(c => !c.Snapshot.Transitions.IsDefaultOrEmpty)
+            ? MapProjectFormat.TransitionsSchemaVersion :
         !document.Fog.IsDefault || document.Checkpoints.Any(c => !c.Snapshot.Fog.IsDefault)
             ? MapProjectFormat.FogSchemaVersion :
         HasLabelsV37(document.Labels, document.Layers) || document.Checkpoints.Any(c => HasLabelsV37(c.Snapshot.Labels, c.Snapshot.Layers))
@@ -1746,6 +1748,7 @@ public static partial class MapProjectStore
         Entities = document.Entities.IsDefaultOrEmpty ? null : [.. document.Entities],
         Labels = document.Labels.IsDefault ? null : document.Labels,
         Fog = ToFogDto(document.Fog),
+        Transitions = document.Transitions.IsDefaultOrEmpty ? null : [.. document.Transitions],
         StampForeground = document.StampForeground is { } foreground
             ? new StampForegroundDto { Tiles = ToTileDtos(foreground.Tiles) }
             : null,
@@ -2438,7 +2441,8 @@ public static partial class MapProjectStore
                         tileEntries))
                     : null,
                 category) { Atlas = ReadAtlasV26(manifest), Lighting = ReadLightingV28(manifest), Style = ReadStyleV29(manifest),
-                    Entities = ReadEntitiesV36(scene), Labels = ReadLabelsV37(scene), Fog = ReadFogV38(scene) };
+                    Entities = ReadEntitiesV36(scene), Labels = ReadLabelsV37(scene), Fog = ReadFogV38(scene),
+                    Transitions = ReadTransitionsV39(scene) };
         }
         catch (Exception ex) when (ex is ArgumentException or FormatException or InvalidOperationException)
         {

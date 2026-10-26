@@ -23,6 +23,8 @@ public static partial class MapProjectStore
     {
         if (scene.Layers?.Any(l => l?.Sea is not null && l.Type != "BaseColor") == true)
             throw new MapProjectCorruptedException("Стиль моря бывает только у слоя фона.");
+        if (schema < MapProjectFormat.TransitionsSchemaVersion && scene.Transitions is { Count: > 0 })
+            throw new MapProjectCorruptedException("Переходы требуют схему v39.");
         if (schema < MapProjectFormat.FogSchemaVersion && scene.Fog is not null)
             throw new MapProjectCorruptedException("Туман войны обычной карты требует схему v38.");
         if (schema < MapProjectFormat.RegionLabelsSchemaVersion && (scene.Labels is not null
@@ -50,6 +52,17 @@ public static partial class MapProjectStore
             if (layer.Sea is not null)
                 throw new MapProjectCorruptedException("Стиль моря требует схему v32.");
         }
+    }
+
+    /// <summary>The transitions (R29): every one valid, ids distinct, at most 4096.</summary>
+    private static System.Collections.Immutable.ImmutableArray<MapTransition> ReadTransitionsV39(SceneDto scene)
+    {
+        if (scene.Transitions is not { Count: > 0 } list) return [];
+        if (list.Count > Map.Core.Editing.MapTransitions.MaxCount || list.Any(t => t is null) || list.Select(t => t.Id).Distinct().Count() != list.Count)
+            throw new MapProjectCorruptedException("Повреждены переходы.");
+        try { foreach (var transition in list) transition.Validate(); }
+        catch (ArgumentException ex) { throw new MapProjectCorruptedException("Повреждён переход.", ex); }
+        return [.. list];
     }
 
     private static FogDto? ToFogDto(MapFog fog) => fog.IsDefault ? null : new FogDto
