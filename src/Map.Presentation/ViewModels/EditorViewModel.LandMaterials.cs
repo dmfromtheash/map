@@ -22,6 +22,7 @@ public sealed partial class EditorViewModel
     public void SetLandPaintMode(bool paint)
     {
         if (!paint && _landCliffMaskMode) { _landCliffMaskMode = false; Raise(nameof(LandCliffMaskMode)); Raise(nameof(CliffMaskLayerId)); }
+        if (!paint && _landReliefMode) { _landReliefMode = false; Raise(nameof(LandReliefMode)); }
         if (_landPaintMode == paint) return;
         CancelStroke(); CancelLandShapeGesture();
         CanvasGestureCancelled?.Invoke(this, EventArgs.Empty);

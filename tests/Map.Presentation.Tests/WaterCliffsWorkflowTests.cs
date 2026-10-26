@@ -65,6 +65,35 @@ public sealed class WaterCliffsWorkflowTests
     }
 
     [Fact]
+    public void The_relief_brush_raises_the_heights_in_one_undo_step_and_leaves_the_coast()
+    {
+        var land = LandLayer.CreateEmpty(LayerId.New(), "Плато") with
+        { GeometryTiles = TileMap.Empty(1).With(new(0, 0), Enumerable.Repeat((byte)255, 65536).ToArray()) };
+        var editor = Editor(land);
+        var router = new CanvasInputRouter(editor);
+        editor.SelectLayer(land.Id); editor.ActiveTool = EditorTool.Land;
+        editor.SetLandReliefMode(true);
+        Assert.True(editor.LandReliefMode); Assert.False(editor.LandCliffMaskMode);
+        editor.BrushSettings = editor.BrushSettings with { Radius = 30, Softness = .5, Opacity = 1 };
+        editor.Session.Viewport.Set(0, 0, 1);
+        var depth = editor.Session.UndoDepth;
+        router.Press(CanvasPointerButton.Left, 100, 100); router.Move(160, 100);
+        Assert.True(editor.StrokePreview is { IsCliffMask: true });
+        router.Release(160, 100);
+        var raised = Get(editor, land.Id);
+        Assert.Equal(depth + 1, editor.Session.UndoDepth);
+        Assert.Same(land.GeometryTiles, raised.GeometryTiles);
+        Assert.True(Map.Core.Editing.ReliefEditor.HeightAt(raised.ReliefTiles, 130, 100) > 20);
+        editor.Undo();
+        Assert.Equal(0, Get(editor, land.Id).ReliefTiles.TileCount);
+        // Switching to the cliff mask leaves the relief mode; the shape leaves both.
+        editor.SetLandCliffMaskMode(true);
+        Assert.False(editor.LandReliefMode);
+        editor.SetLandPaintMode(false);
+        Assert.False(editor.LandCliffMaskMode);
+    }
+
+    [Fact]
     public void Sea_manner_strength_and_reach_are_undoable_and_keep_each_other()
     {
         var editor = Editor();

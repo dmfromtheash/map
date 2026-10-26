@@ -41,7 +41,11 @@ public static partial class MapProjectStore
     private static bool HasAreaRules(IEnumerable<MapLayer> layers) =>
         layers.OfType<ObjectLayer>().Any(l => l.PlacementAreas.Any(a => a.NeedsRulesSchema));
 
+    private static bool HasReliefV34(IEnumerable<MapLayer> layers) => layers.OfType<LandLayer>().Any(l => l.ReliefTiles.TileCount > 0);
+
     private static int SchemaFor(MapDocument document) =>
+        HasReliefV34(document.Layers) || document.Checkpoints.Any(c => HasReliefV34(c.Snapshot.Layers))
+            ? MapProjectFormat.ReliefSchemaVersion :
         HasLightZonesV33(document.Lighting) || document.Checkpoints.Any(c => HasLightZonesV33(c.Snapshot.Lighting))
             ? MapProjectFormat.LightZonesSchemaVersion :
         HasWaterCliffsV32(document) ? MapProjectFormat.WaterCliffsSchemaVersion :
@@ -996,6 +1000,9 @@ public static partial class MapProjectStore
                 throw new MapProjectCorruptedException("Only land can carry a cliff mask.");
             ReadTileList(layer.CliffWallTiles, entryRoot + MapProjectFormat.CliffWallPrefix, layerId, bytesPerPixel: 1);
             ReadTileList(layer.CliffBeachTiles, entryRoot + MapProjectFormat.CliffBeachPrefix, layerId, bytesPerPixel: 1);
+            if (layer.ReliefTiles is not null && layer.Type != "Land")
+                throw new MapProjectCorruptedException("Only land can carry relief.");
+            ReadTileList(layer.ReliefTiles, entryRoot + MapProjectFormat.ReliefPrefix, layerId, bytesPerPixel: 1);
         }
         if (scene.StampForeground is not null && scene.StampForeground.Tiles is null)
         {
@@ -1776,6 +1783,8 @@ public static partial class MapProjectStore
                 ? ToTileDtos(walled.CliffWallTiles) : null,
             CliffBeachTiles = layer is LandLayer { CliffBeachTiles.TileCount: > 0 } beached
                 ? ToTileDtos(beached.CliffBeachTiles) : null,
+            ReliefTiles = layer is LandLayer { ReliefTiles.TileCount: > 0 } raised
+                ? ToTileDtos(raised.ReliefTiles) : null,
             Level = layer is LandLayer { Level: not 0 } leveled ? leveled.Level : null,
             Grids = layer is GridLayer gridLayer
                 ? [.. gridLayer.Grids.Select(ToGridDto)]
@@ -2491,6 +2500,7 @@ public static partial class MapProjectStore
                 PaintTiles = ToTileMap(layer.LandPaintTiles ?? [], entryRoot + MapProjectFormat.LandPaintPrefix, id, 4, tileEntries),
                 CliffWallTiles = ToTileMap(layer.CliffWallTiles ?? [], entryRoot + MapProjectFormat.CliffWallPrefix, id, 1, tileEntries),
                 CliffBeachTiles = ToTileMap(layer.CliffBeachTiles ?? [], entryRoot + MapProjectFormat.CliffBeachPrefix, id, 1, tileEntries),
+                ReliefTiles = ToTileMap(layer.ReliefTiles ?? [], entryRoot + MapProjectFormat.ReliefPrefix, id, 1, tileEntries),
             },
             "Grid" => new GridLayer(
                 id, name, layer.Visible, layer.Locked, layer.Opacity,
@@ -2909,6 +2919,7 @@ public static partial class MapProjectStore
         || layer.LandPaintTiles?.Any(static tile => tile is null) == true
         || layer.CliffWallTiles?.Any(static tile => tile is null) == true
         || layer.CliffBeachTiles?.Any(static tile => tile is null) == true
+        || layer.ReliefTiles?.Any(static tile => tile is null) == true
         || layer.Mask is { Tiles: null }
         || layer.Mask?.Tiles.Any(static tile => tile is null) == true
         || layer.Grids is null && layer.Type == "Grid"
@@ -2986,6 +2997,10 @@ public static partial class MapProjectStore
         FillTextureId = style.FillTextureId,
         FillTextureOpacity = style.FillTextureId is null ? null : style.FillTextureOpacity,
         FillTextureScale = style.FillTextureId is null ? null : style.FillTextureScale,
+        ReliefShading = style.ReliefShading == new LandEdgeStyle().ReliefShading ? null : style.ReliefShading,
+        ReliefContours = style.ReliefContours == new LandEdgeStyle().ReliefContours ? null : style.ReliefContours,
+        ReliefContourStep = style.ReliefContourStep == new LandEdgeStyle().ReliefContourStep ? null : style.ReliefContourStep,
+        ReliefSteepInk = style.ReliefSteepInk == 0 ? null : style.ReliefSteepInk,
         Cliff = style.Cliff == new LandCliffStyle() ? null : new LandCliffDto
         {
             Height = style.Cliff.Height,
@@ -3049,6 +3064,17 @@ public static partial class MapProjectStore
                 ? textureOpacity : new LandEdgeStyle().FillTextureOpacity,
             FillTextureScale = style.FillTextureScale is { } textureScale && MapFillTextures.IsValidScale(textureScale)
                 ? textureScale : new LandEdgeStyle().FillTextureScale,
+        };
+        // The look of the heights: an unreadable value falls back to the default, like the cliff.
+        static double Bounded(double? value, double minimum, double maximum, double fallback) =>
+            value is { } v && double.IsFinite(v) ? Math.Clamp(v, minimum, maximum) : fallback;
+        var plain = new LandEdgeStyle();
+        result = result with
+        {
+            ReliefShading = Bounded(style.ReliefShading, 0, 1, plain.ReliefShading),
+            ReliefContours = Bounded(style.ReliefContours, 0, 1, plain.ReliefContours),
+            ReliefContourStep = Bounded(style.ReliefContourStep, 4, 64, plain.ReliefContourStep),
+            ReliefSteepInk = Bounded(style.ReliefSteepInk, 0, 1, 0),
         };
         if (style.Cliff is not { } cliff) return result;
         // Out-of-range or unreadable values fall back to the default look instead of failing the
@@ -3127,6 +3153,9 @@ public static partial class MapProjectStore
                 foreach (var key in paintedLand.CliffBeachTiles.Keys)
                     yield return (TileEntryName(entryRoot + MapProjectFormat.CliffBeachPrefix,
                         layer.Id.ToString(), key.X, key.Y), paintedLand.CliffBeachTiles.TryGet(key)!);
+                foreach (var key in paintedLand.ReliefTiles.Keys)
+                    yield return (TileEntryName(entryRoot + MapProjectFormat.ReliefPrefix,
+                        layer.Id.ToString(), key.X, key.Y), paintedLand.ReliefTiles.TryGet(key)!);
             }
         }
 
@@ -3309,7 +3338,7 @@ public static partial class MapProjectStore
 
     private static int TileCount(MapLayer layer) =>
         (layer is IRasterContentLayer raster ? raster.ContentTiles.TileCount : 0)
-        + (layer is LandLayer land ? land.PaintTiles.TileCount + land.CliffWallTiles.TileCount + land.CliffBeachTiles.TileCount : 0);
+        + (layer is LandLayer land ? land.PaintTiles.TileCount + land.CliffWallTiles.TileCount + land.CliffBeachTiles.TileCount + land.ReliefTiles.TileCount : 0);
 
     private static LayerId LegacyBaseLayerId(string documentId)
     {

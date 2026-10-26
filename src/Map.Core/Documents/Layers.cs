@@ -287,6 +287,18 @@ public sealed record LandEdgeStyle
     public double FillTextureOpacity { get; init; } = 0.55;
     public double FillTextureScale { get; init; } = MapFillTextures.DefaultGroundScale;
 
+    /// <summary>How strongly the heights of the land are shaded by the light (R22), 0..1.</summary>
+    public double ReliefShading { get; init; } = 0.6;
+
+    /// <summary>Strength of the height contours (R22), 0..1; 0 draws none.</summary>
+    public double ReliefContours { get; init; } = 0.35;
+
+    /// <summary>Height steps between two contours (R22), 4..64; every fifth contour is heavier.</summary>
+    public double ReliefContourStep { get; init; } = 24;
+
+    /// <summary>Ink hachures where the ground is steep (R22, «обрывы по крутизне»), 0..1; 0 draws none.</summary>
+    public double ReliefSteepInk { get; init; }
+
     /// <summary>
     /// The cliffs of this land (<see cref="LandCliffStyle"/>). Where the land stands above what lies
     /// beneath it - lower land, or the sea at level 0 - its southern edges drop as walls of rock,
@@ -356,6 +368,19 @@ public sealed record LandLayer : MapLayer, IRasterContentLayer
 
     /// <summary>True when the cliff mask holds anything (schema v32).</summary>
     public bool HasCliffMask => _cliffWallTiles.TileCount > 0 || _cliffBeachTiles.TileCount > 0;
+
+    private TileMap _reliefTiles = TileMap.Empty(1);
+
+    /// <summary>
+    /// The heights inside this land (R22, schema v34): one byte per world pixel, 0 the level of the
+    /// land, 255 its highest ground; shaded and contoured by the style («Отмывка», «Изолинии»).
+    /// Empty in every older map.
+    /// </summary>
+    public TileMap ReliefTiles
+    {
+        get => _reliefTiles;
+        init => _reliefTiles = RequireCoverage(value);
+    }
 
     private static TileMap RequireCoverage(TileMap value)
     {

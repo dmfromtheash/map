@@ -114,7 +114,10 @@ public static class MapProjectFormat
 
     /// <summary>R14: the dim zone of a light source (manifest lighting). Maps without it keep the older schema.</summary>
     public const int LightZonesSchemaVersion = 33;
-    public const int MaxSupportedSchemaVersion = LightZonesSchemaVersion;
+
+    /// <summary>R22: the heights of a land (relief tiles). Maps without them keep the older schema.</summary>
+    public const int ReliefSchemaVersion = 34;
+    public const int MaxSupportedSchemaVersion = ReliefSchemaVersion;
 
     /// <summary>
     /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry
@@ -132,6 +135,7 @@ public static class MapProjectFormat
     public const string LandPaintPrefix = "rasters/land-paint/";
     public const string CliffWallPrefix = "rasters/cliff-wall/";
     public const string CliffBeachPrefix = "rasters/cliff-beach/";
+    public const string ReliefPrefix = "rasters/relief/";
     public const string MaskPrefix = "masks/";
     public const string AssetPrefix = "assets/";
     public const string ObjectPrefix = "objects/";

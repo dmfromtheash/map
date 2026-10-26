@@ -1016,20 +1016,22 @@ public sealed partial class EditorViewModel : ViewModelBase
             LayerId = _activeLayerId ?? default,
             Coverage = _strokeSnapshot?.Coverage ?? _stroke.CommittedCoverage,
             Versions = _strokeSnapshot?.Versions ?? _stroke.CommittedVersions,
-            Color = ActiveTool == EditorTool.Land && LandCliffMaskMode ? CliffMaskPreviewColor
+            Color = ActiveTool == EditorTool.Land && LandReliefMode ? ReliefPreviewColor
+                : ActiveTool == EditorTool.Land && LandCliffMaskMode ? CliffMaskPreviewColor
                 : ActiveTool == EditorTool.Land && !LandPaintMode && ActiveLayer is LandLayer land
                 ? land.EdgeStyle.FillColor
                 : _stroke.Settings.Color,
             Opacity = _stroke.Settings.Opacity,
             Eraser = _stroke.Settings.Eraser,
-            PaintSettings = ActiveTool == EditorTool.Mask || (ActiveTool == EditorTool.Land && LandCliffMaskMode) ? null
+            PaintSettings = ActiveTool == EditorTool.Mask || (ActiveTool == EditorTool.Land && (LandCliffMaskMode || LandReliefMode)) ? null
                 : ActiveTool == EditorTool.Land && !LandPaintMode && ActiveLayer is LandLayer previewLand
                     ? _stroke.Settings with { Texture = null, Color = previewLand.EdgeStyle.FillColor }
                     : _stroke.Settings,
             IsMask = ActiveTool == EditorTool.Mask,
             IsStampForeground = _editingStampForeground,
-            IsLandPaint = ActiveTool == EditorTool.Land && LandPaintMode && !LandCliffMaskMode,
-            IsCliffMask = ActiveTool == EditorTool.Land && LandCliffMaskMode,
+            IsLandPaint = ActiveTool == EditorTool.Land && LandPaintMode && !LandCliffMaskMode && !LandReliefMode,
+            // A relief stroke previews as a tint over the land, like the cliff mask.
+            IsCliffMask = ActiveTool == EditorTool.Land && (LandCliffMaskMode || LandReliefMode),
         };
 
     public bool IsEditingStampForeground => _editingStampForeground;
@@ -6812,7 +6814,8 @@ public sealed partial class EditorViewModel : ViewModelBase
         {
             EditorTool.Brush => ((BrushLayer)layer).Tiles,
             EditorTool.Mask => layer.Mask!.Tiles,
-            _ => LandCliffMaskMode ? CliffMaskTargets((LandLayer)layer).Primary
+            _ => LandReliefMode ? ((LandLayer)layer).ReliefTiles
+                : LandCliffMaskMode ? CliffMaskTargets((LandLayer)layer).Primary
                 : LandPaintMode ? ((LandLayer)layer).PaintTiles : ((LandLayer)layer).GeometryTiles,
         };
 
@@ -6825,9 +6828,9 @@ public sealed partial class EditorViewModel : ViewModelBase
 
         _stroke = new RasterStrokeSession(target,
             ActiveTool == EditorTool.Land
-                ? LandCliffMaskMode ? CliffMaskSettings() : LandPaintMode ? LandPaintSettings() : LandShapeSettings()
+                ? LandReliefMode ? ReliefSettings() : LandCliffMaskMode ? CliffMaskSettings() : LandPaintMode ? LandPaintSettings() : LandShapeSettings()
                 : BrushSettings);
-        _cliffCompanion = ActiveTool == EditorTool.Land && LandCliffMaskMode
+        _cliffCompanion = ActiveTool == EditorTool.Land && LandCliffMaskMode && !LandReliefMode
             ? new RasterStrokeSession(CliffMaskTargets((LandLayer)layer).Companion, CliffMaskSettings()) : null;
         _stroke.AddPoint(worldX, worldY, pressure);
         _cliffCompanion?.AddPoint(worldX, worldY, pressure);
@@ -6871,6 +6874,8 @@ public sealed partial class EditorViewModel : ViewModelBase
             case EditorTool.Brush:
             case EditorTool.Mask:
                 return new(worldX, worldY, BrushSettings.Radius, 0, BrushSettings.Eraser || (ActiveTool == EditorTool.Mask && MaskMode == MaskPaintMode.Hide));
+            case EditorTool.Land when LandReliefMode:
+                return new(worldX, worldY, BrushSettings.Radius, 0, LandReliefAction == ReliefAction.Lower);
             case EditorTool.Land when LandCliffMaskMode:
                 return new(worldX, worldY, BrushSettings.Radius, 0, LandCliffMaskAction == CliffMaskAction.Erase);
             case EditorTool.Land when LandPaintMode:
@@ -6933,6 +6938,10 @@ public sealed partial class EditorViewModel : ViewModelBase
                 missingTileValue: 255,
                 subtract: MaskMode == MaskPaintMode.Hide));
             Timed("session-execute", () => Session.Execute(new MaskStrokeCommand(activeLayerId.GetValueOrDefault(), Before, After)));
+        }
+        else if (ActiveTool == EditorTool.Land && LandReliefMode)
+        {
+            Timed("session-execute", () => Session.Execute(CommitRelief(activeLayerId.GetValueOrDefault(), stroke)));
         }
         else if (ActiveTool == EditorTool.Land && LandCliffMaskMode && companion is not null)
         {
@@ -7060,6 +7069,12 @@ public sealed partial class EditorViewModel : ViewModelBase
         if (before.Count == 0) return false;
         var geometry = new BrushStrokeCommand(land.Id, before, after, "Move selected land area");
         var commands = new List<IEditCommand> { geometry };
+        if (land.ReliefTiles.TileCount > 0)
+        {
+            // The heights belong to the ground and travel with it.
+            var (reliefBefore, reliefAfter) = LandRasterizer.MoveRegion(land.ReliefTiles, region, deltaX, deltaY);
+            commands.Add(new LandReliefCommand(land.Id, reliefBefore, reliefAfter, "Move relief"));
+        }
         if (land.PaintTiles.TileCount > 0)
         {
             var (paintBefore, paintAfter) = LandRasterizer.MoveRegion(land.PaintTiles, region, deltaX, deltaY);
@@ -7080,7 +7095,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     {
         if (ActiveLayer is not LandLayer { Locked: false } land || !land.GeometryTiles.Keys.Any()) return false;
         Session.Execute(UpdateLayerCommand.Replace(land,
-            land with { GeometryTiles = TileMap.Empty(1), PaintTiles = TileMap.Empty(4), CliffWallTiles = TileMap.Empty(1), CliffBeachTiles = TileMap.Empty(1) }, "Clear land"));
+            land with { GeometryTiles = TileMap.Empty(1), PaintTiles = TileMap.Empty(4), CliffWallTiles = TileMap.Empty(1), CliffBeachTiles = TileMap.Empty(1), ReliefTiles = TileMap.Empty(1) }, "Clear land"));
         AfterEdit(); return true;
     }
 

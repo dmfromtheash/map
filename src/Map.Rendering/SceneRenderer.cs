@@ -2345,7 +2345,7 @@ public static partial class SceneRenderer
         // pan draws the plain fill (FastTerrain) and never enters the cache.
         if (options.StyledLand is { } styled && paintPreview is null && !options.IsExport && !options.FastTerrain)
         {
-            var parts = new List<object> { layer.Id, layer.GeometryTiles, layer.PaintTiles, layer.EdgeStyle, layer.Level, layer.CliffWallTiles, layer.CliffBeachTiles, ActiveSea(document, options) is not null };
+            var parts = new List<object> { layer.Id, layer.GeometryTiles, layer.PaintTiles, layer.EdgeStyle, layer.Level, layer.CliffWallTiles, layer.CliffBeachTiles, layer.ReliefTiles, ActiveSea(document, options) is not null };
             parts.AddRange(beneath);
             foreach (var (owner, river) in cutters)
             {
@@ -2514,6 +2514,20 @@ public static partial class SceneRenderer
                 using (var keepPaint = new SKPaint { BlendMode = SKBlendMode.DstIn })
                 {
                     canvas.SaveLayer(ToRect(view), keepPaint);
+                    DrawCoverageImages(null);
+                    canvas.Restore();
+                }
+                canvas.Restore();
+            }
+
+            // The heights of the land (R22): shade, contours and hachures, kept inside the coverage.
+            if (layer.ReliefTiles.TileCount > 0 && !options.FastTerrain)
+            {
+                canvas.SaveLayer(ToRect(view), null);
+                DrawRelief(canvas, layer, style, view, deviceScale);
+                using (var keepRelief = new SKPaint { BlendMode = SKBlendMode.DstIn })
+                {
+                    canvas.SaveLayer(ToRect(view), keepRelief);
                     DrawCoverageImages(null);
                     canvas.Restore();
                 }

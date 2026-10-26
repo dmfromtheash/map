@@ -58,6 +58,25 @@ public sealed class WaterCliffsPersistenceTests
     }
 
     [Fact]
+    public void Relief_and_its_look_round_trip_in_v34()
+    {
+        using var workspace = new TempWorkspace();
+        var (document, land, _) = Fixture();
+        var hill = Full.Select((_, i) => (byte)(i % 200)).ToArray();
+        var raised = land with
+        {
+            ReliefTiles = TileMap.Empty(1).With(new TileKey(0, 0), hill),
+            EdgeStyle = land.EdgeStyle with { ReliefShading = .8, ReliefContours = .2, ReliefContourStep = 12, ReliefSteepInk = .5 },
+        };
+        var path = workspace.File("relief.mapproj");
+        MapProjectStore.Save(document.WithLayer(land.Id, _ => raised), path, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
+        Assert.Equal(34, Schema(path));
+        var opened = (LandLayer)MapProjectStore.Open(path).Document.FindLayer(land.Id)!;
+        Assert.Equal(hill, opened.ReliefTiles.TryGet(new TileKey(0, 0)));
+        Assert.Equal(raised.EdgeStyle, opened.EdgeStyle);
+    }
+
+    [Fact]
     public void A_map_without_R12_constructs_keeps_its_schema_and_writes_no_feature()
     {
         using var workspace = new TempWorkspace();

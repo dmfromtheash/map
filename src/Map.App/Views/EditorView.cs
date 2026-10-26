@@ -2565,6 +2565,7 @@ public sealed partial class EditorView : UserControl
                 })),
                 (_landPaintControls = BuildLandPaintPanel()),
                 (_landCliffMaskControls = BuildLandCliffMaskPanel()),
+                (_landReliefControls = BuildLandReliefPanel()),
             },
         };
         _landShapeControls!.Classes.Add("tabbed");
@@ -5537,6 +5538,30 @@ public sealed partial class EditorView : UserControl
                             description: "Размер одной плитки фактуры в единицах карты. Меньше — мельче зерно, больше — крупнее пятна."),
                     },
                 },
+                // R22: how the heights painted with «Суша → Рельеф» are drawn.
+                Ui.Subgroup("Рельеф", new StackPanel
+                {
+                    Spacing = 4,
+                    Children =
+                    {
+                        AppearanceSlider("LandReliefShadingSlider", "Отмывка", 0, 100, "%",
+                            () => Style()?.ReliefShading * 100, (v, _) => Set(style => style with { ReliefShading = v / 100 }), 5,
+                            defaultValue: defaults.ReliefShading * 100,
+                            description: "Тень на склонах, отвёрнутых от света, и немного света на обращённых к нему. Свет — тот же, что у обрывов («Свет с»)."),
+                        AppearanceSlider("LandReliefContoursSlider", "Изолинии", 0, 100, "%",
+                            () => Style()?.ReliefContours * 100, (v, _) => Set(style => style with { ReliefContours = v / 100 }), 5,
+                            defaultValue: defaults.ReliefContours * 100,
+                            description: "Линии равной высоты тушью; каждая пятая жирнее. 0 — без линий."),
+                        AppearanceSlider("LandReliefContourStepSlider", "Шаг изолиний", 4, 64, "",
+                            () => Style()?.ReliefContourStep, (v, _) => Set(style => style with { ReliefContourStep = v }), 1,
+                            defaultValue: defaults.ReliefContourStep,
+                            description: "Через сколько ступеней высоты идёт следующая линия. Меньше — линии гуще."),
+                        AppearanceSlider("LandReliefSteepSlider", "Штрихи на крутизне", 0, 100, "%",
+                            () => Style()?.ReliefSteepInk * 100, (v, _) => Set(style => style with { ReliefSteepInk = v / 100 }), 5,
+                            defaultValue: 0,
+                            description: "Короткие штрихи по линии стока там, где склон крутой, — как обрыв по крутизне."),
+                    },
+                }),
             },
         });
         var coast = Ui.Category("LandCoastCategory", "Берег", "accent-look", new StackPanel

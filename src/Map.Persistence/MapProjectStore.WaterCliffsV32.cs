@@ -23,6 +23,8 @@ public static partial class MapProjectStore
     {
         if (scene.Layers?.Any(l => l?.Sea is not null && l.Type != "BaseColor") == true)
             throw new MapProjectCorruptedException("Стиль моря бывает только у слоя фона.");
+        if (schema < MapProjectFormat.ReliefSchemaVersion && scene.Layers?.Any(l => l?.ReliefTiles is { Count: > 0 }) == true)
+            throw new MapProjectCorruptedException("Рельеф суши требует схему v34.");
         if (schema >= MapProjectFormat.WaterCliffsSchemaVersion || scene.Layers is null) return;
         foreach (var layer in scene.Layers)
         {

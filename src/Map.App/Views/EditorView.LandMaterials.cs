@@ -18,7 +18,7 @@ namespace Map.App.Views;
 
 public sealed partial class EditorView
 {
-    private Control? _landShapeControls, _landPaintControls, _landShapeAdvanced, _landCliffMaskControls;
+    private Control? _landShapeControls, _landPaintControls, _landShapeAdvanced, _landCliffMaskControls, _landReliefControls;
     private IReadOnlyList<Button>? _landModeButtons;
     private Window? _materialCatalogWindow;
     private readonly Dictionary<string, Bitmap> _materialPreviewImages = [];
@@ -26,13 +26,15 @@ public sealed partial class EditorView
     private Control BuildLandModePicker()
     {
         var (row, buttons) = Ui.Segmented("LandToolMode",
-            [("Shape", "Форма земли", null), ("Paint", "Раскрасить", null), ("Cliffs", "Маска обрыва", null)],
+            [("Shape", "Форма земли", null), ("Paint", "Раскрасить", null), ("Cliffs", "Маска обрыва", null), ("Relief", "Рельеф", null)],
             key =>
             {
                 if (key == "Cliffs") _editor.SetLandCliffMaskMode(true);
-                else { _editor.SetLandPaintMode(key == "Paint"); _editor.SetLandCliffMaskMode(false); }
+                else if (key == "Relief") _editor.SetLandReliefMode(true);
+                else { _editor.SetLandPaintMode(key == "Paint"); _editor.SetLandCliffMaskMode(false); _editor.SetLandReliefMode(false); }
                 SyncLandMaterialPanel();
             });
+        ToolTip.SetTip(buttons[3], "Высоты внутри суши: холмы, хребты и долины с отмывкой и изолиниями. Ярусы остаются основой рельефа.");
         ToolTip.SetTip(buttons[2], "Кисть по берегу поднятой земли: где обрыв обязан стоять, а где вместо него пологий пляж.");
         _landModeButtons = buttons;
         return row;
@@ -42,11 +44,13 @@ public sealed partial class EditorView
     {
         var paint = _editor.LandPaintMode;
         var cliffs = _editor.LandCliffMaskMode;
-        var mode = cliffs ? 2 : paint ? 1 : 0;
+        var relief = _editor.LandReliefMode;
+        var mode = relief ? 3 : cliffs ? 2 : paint ? 1 : 0;
         if (_landShapeControls is not null) _landShapeControls.IsVisible = !paint;
         if (_landShapeAdvanced is not null) _landShapeAdvanced.IsVisible = !paint;
-        if (_landPaintControls is not null) _landPaintControls.IsVisible = paint && !cliffs;
+        if (_landPaintControls is not null) _landPaintControls.IsVisible = paint && !cliffs && !relief;
         if (_landCliffMaskControls is not null) _landCliffMaskControls.IsVisible = cliffs;
+        if (_landReliefControls is not null) _landReliefControls.IsVisible = relief;
         if (_landModeButtons is not null)
             for (var i = 0; i < _landModeButtons.Count; i++)
             {
@@ -92,6 +96,67 @@ public sealed partial class EditorView
                 Ui.TextButton("ClearLandCliffMaskButton", "Очистить маску этой земли", () => { _editor.ClearCliffMask(); Canvas.InvalidateVisual(); }, "compact"),
             },
         });
+    }
+
+    /// <summary>
+    /// R22: the «Рельеф» brush - five actions, size, strength and softness - and a heightmap
+    /// picture laid over the canvas. The look of the heights is in Оформление → Заливка.
+    /// </summary>
+    private Control BuildLandReliefPanel()
+    {
+        var (actions, buttons) = Ui.Segmented("LandReliefAction",
+            [(nameof(Map.Core.Editing.ReliefAction.Raise), "Поднять", null), (nameof(Map.Core.Editing.ReliefAction.Lower), "Опустить", null),
+             (nameof(Map.Core.Editing.ReliefAction.Ridge), "Хребет", null), (nameof(Map.Core.Editing.ReliefAction.Smooth), "Сгладить", null),
+             (nameof(Map.Core.Editing.ReliefAction.Erode), "Эрозия", null)],
+            key => { _editor.SetLandReliefAction(Enum.Parse<Map.Core.Editing.ReliefAction>(key)); SyncAppearanceSections(); });
+        ToolTip.SetTip(buttons[2], "Острый гребень вдоль мазка.");
+        ToolTip.SetTip(buttons[3], "Высоты под кистью тянутся к среднему соседей.");
+        ToolTip.SetTip(buttons[4], "Возвышенности изнашиваются неровно: промоины глубже отрогов.");
+        _appearanceSyncs.Add(() =>
+        {
+            var index = (int)_editor.LandReliefAction;
+            for (var i = 0; i < buttons.Count; i++)
+            {
+                Ui.SetClass(buttons[i], "active", i == index);
+                if (buttons[i] is ToggleButton toggle) toggle.IsChecked = i == index;
+            }
+        });
+        var import = Ui.AsyncButton("LandReliefImportButton", "Карта высот из PNG…", ImportReliefAsync, "compact");
+        ToolTip.SetTip(import, "Серая картинка: светлое — высоко, тёмное — низко. Растягивается на весь холст, видна только на суше.");
+        return Ui.Category("LandReliefCategory", "Рельеф", "accent-create", new StackPanel
+        {
+            Spacing = 7,
+            Children =
+            {
+                Ui.Hint("Ведите кистью по суше. Ярусы и обрывы остаются основой; высоты добавляют холмы и долины внутри яруса. Вид — в «Оформление → Заливка»."),
+                actions,
+                AppearanceSlider("LandReliefSizeSlider", "Размер", 1, 256, "ед.", () => _editor.BrushSettings.Radius,
+                    (v, _) => _editor.BrushSettings = _editor.BrushSettings with { Radius = v }),
+                AppearanceSlider("LandReliefStrengthSlider", "Сила", 5, 100, "%", () => _editor.BrushSettings.Opacity * 100,
+                    (v, _) => _editor.BrushSettings = _editor.BrushSettings with { Opacity = v / 100 }, 5),
+                AppearanceSlider("LandReliefSoftnessSlider", "Мягкость", 0, 100, "%", () => _editor.BrushSettings.Softness * 100,
+                    (v, _) => _editor.BrushSettings = _editor.BrushSettings with { Softness = v / 100 }, 5),
+                import,
+                Ui.TextButton("ClearLandReliefButton", "Очистить рельеф этой земли", () => { _editor.ClearRelief(); Canvas.InvalidateVisual(); }, "compact"),
+            },
+        });
+    }
+
+    private async Task ImportReliefAsync()
+    {
+        if (TopLevel.GetTopLevel(this) is not { } top) return;
+        var files = await top.StorageProvider.OpenFilePickerAsync(new Avalonia.Platform.Storage.FilePickerOpenOptions
+        {
+            Title = "Карта высот (PNG)", AllowMultiple = false,
+            FileTypeFilter = [new Avalonia.Platform.Storage.FilePickerFileType("PNG") { Patterns = ["*.png"] }],
+        });
+        if (files.Count == 0 || Avalonia.Platform.Storage.StorageProviderExtensions.TryGetLocalPath(files[0]) is not { } path) return;
+        using var bitmap = SkiaSharp.SKBitmap.Decode(path);
+        if (bitmap is null) { _editor.ReportReliefImportFailure("Не удалось прочитать картинку."); return; }
+        using var grey = new SkiaSharp.SKBitmap(new SkiaSharp.SKImageInfo(bitmap.Width, bitmap.Height, SkiaSharp.SKColorType.Gray8, SkiaSharp.SKAlphaType.Opaque));
+        using (var canvas = new SkiaSharp.SKCanvas(grey)) canvas.DrawBitmap(bitmap, 0, 0);
+        _editor.ImportRelief(grey.GetPixelSpan().ToArray(), bitmap.Width, bitmap.Height);
+        Canvas.InvalidateVisual();
     }
 
     private Control BuildLandPaintPanel()

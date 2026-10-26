@@ -265,6 +265,10 @@ internal sealed class LayerDto
     [JsonPropertyName("cliffBeachTiles")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<TileDto>? CliffBeachTiles { get; set; }
+    /// <summary>The heights of a land (R22, schema v34).</summary>
+    [JsonPropertyName("reliefTiles")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<TileDto>? ReliefTiles { get; set; }
     [JsonPropertyName("mask")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public MaskDto? Mask { get; set; }
@@ -496,6 +500,16 @@ internal sealed class LandStyleDto
     [JsonPropertyName("fillTextureId")] public string? FillTextureId { get; set; }
     [JsonPropertyName("fillTextureOpacity")] public double? FillTextureOpacity { get; set; }
     [JsonPropertyName("fillTextureScale")] public double? FillTextureScale { get; set; }
+
+    // The look of the heights (R22); absent reads as the default look.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("reliefShading")] public double? ReliefShading { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("reliefContours")] public double? ReliefContours { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("reliefContourStep")] public double? ReliefContourStep { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonPropertyName("reliefSteepInk")] public double? ReliefSteepInk { get; set; }
 
     // Written only when the cliff look differs from the default, so an untouched land keeps the
     // bytes it had before cliffs existed; an absent object reads back as the default look.
