@@ -49,6 +49,12 @@ public static class MapCategories
     /// <summary>The token of the hex category written into documents and files.</summary>
     public const string HexValue = "hex";
 
+    /// <summary>The editing surface of the city workshop (R34): the shared editor with the city tools.</summary>
+    public const string CityWorkshop = "city-editor";
+
+    /// <summary>The token of the city category written into documents and files.</summary>
+    public const string CityValue = "city";
+
     public static MapCategoryDefinition Standard { get; } = new(
         MapCategoryId.Standard,
         "Стандартный Конструктор карт",
@@ -100,8 +106,38 @@ public static class MapCategories
         DefaultHeight: 2273,
         Workshop: HexWorkshop);
 
+    /// <summary>
+    /// The city workshop (R34): a town from streets - blocks between them, lots along the fronts,
+    /// houses turned to their street, a wall with towers and gates, squares and districts. A new
+    /// city map starts generated and is then edited by hand with the standard tools.
+    /// </summary>
+    public static MapCategoryDefinition City { get; } = new(
+        new MapCategoryId(CityValue),
+        "Мастерская города",
+        "Город из улиц: кварталы, участки, дома вдоль улиц, стена с башнями и воротами.",
+        "Город начинается с площади: главные улицы расходятся от неё, кольцевые обходят центр, между ними "
+        + "складываются кварталы. Вдоль улиц нарезаются участки, на каждом — дом, повёрнутый к своей улице. "
+        + "Стена с башнями и воротами там, где выходят главные улицы; храмы, гильдия и ратуша на больших "
+        + "центральных кварталах; районы подписаны. Дальше город правится обычными инструментами Map.",
+        [
+            "Главные и кольцевые улицы как редактируемые дороги",
+            "Кварталы, участки и дома вдоль улиц, повёрнутые к ним",
+            "Стена с башнями и воротами, площадь, храмы, гильдия, ратуша",
+            "Районы с подписями и ключ зданий заметками",
+            "Порт с гаванью и пирсами по желанию",
+        ],
+        // ⛳ The card's own artwork waits for the owner; the standard card's picture stands in.
+        ArtworkKey: "map-standard",
+        GalleryKey: "home-atlas",
+        DefaultWidth: 2400,
+        DefaultHeight: 2400,
+        Workshop: CityWorkshop);
+
     /// <summary>In the order the create dialog lists them.</summary>
-    public static IReadOnlyList<MapCategoryDefinition> All { get; } = [Standard, Hex];
+    public static IReadOnlyList<MapCategoryDefinition> All { get; } = [Standard, Hex, City];
+
+    /// <summary>True when the map lives in the city workshop.</summary>
+    public static bool IsCity(MapCategoryId id) => Find(id)?.Workshop == CityWorkshop;
 
     /// <summary>True when the map lives in the hex constructor.</summary>
     public static bool IsHex(MapCategoryId id) => Find(id)?.Workshop == HexWorkshop;

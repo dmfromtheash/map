@@ -313,6 +313,45 @@ public sealed class WaterCliffsWorkflowTests
     }
 
     [Fact]
+    public void A_city_from_a_point_is_a_child_map_with_streets_along_the_roads_and_its_name_on_the_parent()
+    {
+        var store = new FakeProjectStore();
+        var road = RoadEditor.NewRoad([new(0, 500), new(1200, 500)], 12, RoadStyle.Country(), "Тракт");
+        var parentPath = Path.Combine(Path.GetTempPath(), "map-city-" + Guid.NewGuid().ToString("N"), "world.mapproj");
+        var editor = new EditorViewModel(new MapDocument(DocumentId.New(), "Мир", DateTimeOffset.UnixEpoch, new CanvasDefinition(4000, 3000, "px", "#FFFFFFFF"),
+            [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFFFFFFF"), new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, []) { Roads = [road] }]),
+            parentPath, false, store, new FakeRecentMaps(), new FakeFilePicker(), new FakePrompts(), new FakeLog());
+        editor.StartCityFromPoint();
+        Assert.True(editor.CityPickArmed);
+        var path = editor.CreateCityAtAsync(600, 500).GetAwaiter().GetResult();
+        Assert.NotNull(path);
+        var child = store.Saved[path!].Document;
+        Assert.Equal("city", child.Category.Value);
+        Assert.Contains(child.Layers.OfType<ObjectLayer>(), l => l.Name == "Город");
+        // The road crossed the area: carried in, and a main street points along it.
+        Assert.Contains(child.Layers.OfType<ObjectLayer>().SelectMany(l => l.Roads), r => r.Inherited is not null);
+        Assert.Contains(editor.Session.Document.Layers.OfType<ObjectLayer>().SelectMany(l => l.Objects), o => o.Kind == SceneObjectKind.Text && o.Text!.Content == child.Title);
+        if (Directory.Exists(Path.GetDirectoryName(parentPath))) Directory.Delete(Path.GetDirectoryName(parentPath)!, recursive: true);
+    }
+
+    [Fact]
+    public void A_city_map_is_regenerated_as_one_step_keeping_other_layers()
+    {
+        var city = CityBuilder.NewCityMap("Ильград", 2000, new CitySettings { Seed = 5 }, new MapCategoryId("city"), DateTimeOffset.UnixEpoch);
+        var mine = new ObjectLayer(LayerId.New(), "Моё", true, false, 1, []);
+        var editor = new EditorViewModel(city.WithLayers([.. city.Layers, mine]), null, false, new FakeProjectStore(), new FakeRecentMaps(), new FakeFilePicker(), new FakePrompts(), new FakeLog());
+        Assert.True(editor.IsCityWorkshop);
+        var before = editor.Session.Document.Layers.OfType<ObjectLayer>().Single(l => l.Name == "Город").Objects.Count;
+        editor.CitySettings = editor.CitySettings with { Seed = 99, Rings = 2 };
+        Assert.True(editor.RegenerateCity());
+        var after = editor.Session.Document.Layers.OfType<ObjectLayer>().Single(l => l.Name == "Город").Objects.Count;
+        Assert.NotEqual(before, after);
+        Assert.Contains(editor.Session.Document.Layers, l => l.Id == mine.Id);
+        editor.Undo();
+        Assert.Equal(before, editor.Session.Document.Layers.OfType<ObjectLayer>().Single(l => l.Name == "Город").Objects.Count);
+    }
+
+    [Fact]
     public void A_card_is_made_from_the_selection_bound_linked_and_undone()
     {
         var label = new SceneObject(ObjectId.New(), SceneObjectKind.Text, "Ильград", 100, 100, 120, 40, 0, "#FF20242B", "#FFFFFFFF", 0, true, false)

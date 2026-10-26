@@ -9,9 +9,16 @@ namespace Map.Presentation.Tests;
 public class MapCategoryTests
 {
     [Fact]
-    public void The_build_offers_the_standard_and_the_hex_constructors_in_that_order()
+    public void The_build_offers_the_standard_hex_and_city_workshops_in_that_order()
     {
-        Assert.Equal([MapCategories.Standard, MapCategories.Hex], MapCategories.All);
+        Assert.Equal([MapCategories.Standard, MapCategories.Hex, MapCategories.City], MapCategories.All);
+        Assert.Equal("city", MapCategories.City.Id.Value);
+        Assert.True(MapCategories.IsCity(MapCategories.City.Id));
+        Assert.False(MapCategories.IsHex(MapCategories.City.Id));
+        var wizard = new NewMapWizardViewModel { WidthText = "1600", HeightText = "1600", Category = MapCategories.City.Id, Title = "Ильград" };
+        var city = wizard.Create(DateTimeOffset.UnixEpoch)!;
+        Assert.Equal("city", city.Category.Value);
+        Assert.Contains(city.Layers.OfType<ObjectLayer>(), l => l.Name == "Город" && l.Objects.Count > 50);
         var hex = MapCategories.Hex;
         Assert.Equal("hex", hex.Id.Value);
         Assert.Equal(MapCategories.HexWorkshop, hex.Workshop);

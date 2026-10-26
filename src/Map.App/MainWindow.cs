@@ -329,6 +329,8 @@ public sealed class MainWindow : Window
             // The hex constructor runs on the shared editor core; the editor builds its own tool
             // set from the document's category, so the two workshops still never mix.
             case MapCategories.HexWorkshop:
+            // So does the city workshop (R34): the city tools come with the category.
+            case MapCategories.CityWorkshop:
                 ShowEditor(CreateEditor(document, path, startDirty, lastSavedUtc));
                 break;
             default:

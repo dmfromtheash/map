@@ -1,5 +1,6 @@
 using System.Globalization;
 using Map.Core.Documents;
+using Map.Core.Editing;
 using Map.Presentation.Services;
 
 namespace Map.Presentation.ViewModels;
@@ -180,6 +181,10 @@ public sealed class NewMapWizardViewModel : ViewModelBase
         TryParseDimension(WidthText, out var width);
         TryParseDimension(HeightText, out var height);
 
+        // R34: a city map starts generated - streets, blocks, houses, a wall - square on the shorter side.
+        if (MapCategories.IsCity(Category))
+            return CityBuilder.NewCityMap(Title.Trim(), Math.Min(width, height), new CitySettings { Name = Title.Trim(), Seed = StableSeed(Title.Trim()) }, Category, createdUtc);
+
         return new MapDocument(
             DocumentId.New(),
             Title.Trim(),
@@ -192,6 +197,14 @@ public sealed class NewMapWizardViewModel : ViewModelBase
                     LayerId.New(), "Объекты", visible: true, locked: false, opacity: 1.0, []),
             ],
             category: Category);
+    }
+
+    /// <summary>The same title gives the same city on every run (string hashes of .NET change between runs).</summary>
+    private static int StableSeed(string text)
+    {
+        var hash = 2166136261u;
+        foreach (var c in text) hash = (hash ^ c) * 16777619u;
+        return (int)(hash & 0x7FFF);
     }
 
     private bool TryParseHexBoard(out int columns, out int rows, out int size)
