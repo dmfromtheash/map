@@ -776,6 +776,7 @@ public sealed partial class MapCanvasControl : Control
                 HexGhostLevel = editor.HexGhostLevel,
                 ViewScale = viewport.Scale,
                 FogVeil = editor.FogVeilToDraw,
+                ChangeMarks = editor.CompareMarks,
                 FogOverride = editor.FogStrokePreview,
                 VisibleWorld = new Map.Core.Documents.WorldBounds(
                     X, Y, bottomRight.X, bottomRight.Y),

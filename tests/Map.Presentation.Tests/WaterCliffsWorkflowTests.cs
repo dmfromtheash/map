@@ -150,6 +150,36 @@ public sealed class WaterCliffsWorkflowTests
     }
 
     [Fact]
+    public void A_version_is_compared_highlighted_shown_before_read_only_and_follows_edits()
+    {
+        var label = new SceneObject(ObjectId.New(), SceneObjectKind.Text, "Порт", 100, 100, 120, 40, 0, "#FF20242B", "#FFFFFFFF", 0, true, false)
+        { Text = new TextStyle { Content = "Порт" } };
+        var objects = new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, [label]);
+        var editor = Editor(objects);
+        Assert.True(editor.CreateCheckpoint("Версия 01"));
+        var version = editor.Session.Document.Checkpoints.Single().Id;
+        editor.Session.SelectedObjectId = label.Id;
+        editor.SetTextContent("Порт Ветров");
+        Assert.True(editor.CompareWithCheckpoint(version));
+        Assert.Contains(editor.Comparison!.Summary(), line => line.StartsWith("Подписи: изменено 1", StringComparison.Ordinal));
+        Assert.Single(editor.CompareMarks!);
+
+        editor.CompareShowsBefore = true;
+        Assert.Equal("Порт", editor.RenderDocument.Layers.OfType<ObjectLayer>().Single().Objects.Single().Text!.Content);
+        var router = new CanvasInputRouter(editor);
+        router.Press(CanvasPointerButton.Left, 10, 10);
+        Assert.Contains("только просмотр", editor.StatusDetail);
+        editor.CompareShowsBefore = false;
+        Assert.Equal("Порт Ветров", editor.RenderDocument.Layers.OfType<ObjectLayer>().Single().Objects.Single().Text!.Content);
+
+        editor.Session.SelectedObjectId = label.Id;
+        editor.DeleteSelectedObject();
+        Assert.Contains(editor.Comparison!.Summary(), line => line.StartsWith("Подписи: −1", StringComparison.Ordinal));
+        editor.CloseComparison();
+        Assert.Null(editor.CompareMarks);
+    }
+
+    [Fact]
     public void A_card_is_made_from_the_selection_bound_linked_and_undone()
     {
         var label = new SceneObject(ObjectId.New(), SceneObjectKind.Text, "Ильград", 100, 100, 120, 40, 0, "#FF20242B", "#FFFFFFFF", 0, true, false)

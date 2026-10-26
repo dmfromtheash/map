@@ -4955,6 +4955,8 @@ public sealed partial class EditorViewModel : ViewModelBase
                 return resizePreview;
             }
 
+            // R30 «До»: the compared version, read-only.
+            if (CompareShowsBefore && _compareBefore is { } before) return before;
             if (GenerationPreview is { } generationPreview) return generationPreview;
             if (ValidAppearancePreview is { } appearancePreview) return appearancePreview;
 
@@ -9088,6 +9090,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     private void AfterEdit(bool geometryOnly = false)
     {
         RefreshHexJourney();
+        RefreshComparison();
         if (CollectEditTimings) { LastEditTimings.Add(("after-edit", 0)); }
         Timed("path/area/river/road state", () => { RaisePathState(); RaiseAreaState(); RaiseRiverState(); RaiseRoadState(); });
         _lastCommittedEditUtc = _clock();

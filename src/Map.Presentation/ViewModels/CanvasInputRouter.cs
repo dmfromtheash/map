@@ -169,6 +169,13 @@ public sealed class CanvasInputRouter
             return new CanvasInputResult { Handled = true, CapturePointer = capture, Invalidate = true };
         }
 
+        // R30 «До»: the compared version is for looking only.
+        if (_editor.CompareShowsBefore)
+        {
+            _editor.TellCompareIsReadOnly();
+            return new CanvasInputResult { Handled = true };
+        }
+
         if (_editor.ActiveTool == EditorTool.Measure)
         {
             _editor.BeginMeasure(worldX, worldY);

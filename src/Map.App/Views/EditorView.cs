@@ -7885,6 +7885,7 @@ public sealed partial class EditorView : UserControl
                     TextWrapping = TextWrapping.Wrap,
                 }.Classed("faint", "role-caption"),
                 new DockPanel { Children = { _checkpointCountText.Docked(Dock.Right), create } },
+                BuildCompareBlock(),
                 new Expander { Header = "Ограничения версий", Content = new TextBlock
                 {
                     Name = "CheckpointLimitsText",
@@ -9897,6 +9898,7 @@ public sealed partial class EditorView : UserControl
         Timed("note-list", SyncNoteList);
         Timed("entity-list", SyncEntities);
         Timed("fog", SyncFog);
+        Timed("compare", SyncCompareBlock);
         Timed("checkpoint-list", SyncCheckpointList);
         Timed("canvas-workflow", SyncCanvasWorkflow);
         Timed("quick-bar", SyncQuickBar);
@@ -10953,6 +10955,12 @@ public sealed partial class EditorView : UserControl
                 },
                 "compact");
 
+            var compare = Ui.TextButton("CompareCheckpoint_" + checkpoint.Id, "Сравнить", () =>
+            {
+                _editor.CompareWithCheckpoint(captured.Id);
+                SyncCompareBlock();
+            }, "compact");
+            ToolTip.SetTip(compare, "Что изменилось с этой версии: итог словами, подсветка на карте, «До / После».");
             var restore = Ui.AsyncButton(
                 "RestoreCheckpoint_" + checkpoint.Id,
                 "Восстановить",
@@ -11011,8 +11019,8 @@ public sealed partial class EditorView : UserControl
                         renameRow,
                         new Ui.ChoiceGrid
                         {
-                            MaxColumns = 2, MaxWidth = 340, HorizontalAlignment = HorizontalAlignment.Left,
-                            Children = { restore, delete },
+                            MaxColumns = 3, MaxWidth = 420, HorizontalAlignment = HorizontalAlignment.Left,
+                            Children = { compare, restore, delete },
                         },
                     },
                 },

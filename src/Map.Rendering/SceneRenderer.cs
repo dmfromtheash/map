@@ -371,6 +371,9 @@ public sealed class RenderOptions
 
     internal double FogOpacity => HexPlayerView ? 1 : FogVeil;
 
+    /// <summary>R30: places changed since a compared version - kind 0 added, 1 removed, 2 changed.</summary>
+    public IReadOnlyList<(WorldBounds Bounds, int Kind)>? ChangeMarks { get; init; }
+
     /// <summary>The fog of a stroke in progress, drawn instead of the document's until it ends.</summary>
     public MapFog? FogOverride { get; init; }
 
@@ -628,6 +631,7 @@ public static partial class SceneRenderer
             canvas.Save();
             canvas.ClipRect(ToRect(bounds));
             FogRenderer.Draw(canvas, document, options.VisibleWorld ?? bounds, options.FogOpacity, options.FogOverride);
+            DrawChangeMarks(canvas, options);
             DrawPlacementPreview(canvas, document, options);
             DrawSelectionChrome(canvas, document, options);
             canvas.Restore();
@@ -741,6 +745,7 @@ public static partial class SceneRenderer
         if (chrome)
         {
             FogRenderer.Draw(canvas, document, view, options.FogOpacity, options.FogOverride);
+            DrawChangeMarks(canvas, options);
             DrawPlacementPreview(canvas, document, options);
             DrawSelectionChrome(canvas, document, options);
         }
@@ -5700,6 +5705,28 @@ public static partial class SceneRenderer
             stats.ObjectCacheHits += cache.Hits - cacheHitsBefore;
             stats.ObjectCacheMisses += cache.Misses - cacheMissesBefore;
             stats.ObjectCacheInvalidations += cache.Invalidations - cacheInvalidationsBefore;
+        }
+    }
+
+    /// <summary>
+    /// R30: what changed since the compared version - green added, red removed, amber changed - as
+    /// a tinted box with a firm outline a constant two pixels wide on screen.
+    /// </summary>
+    private static void DrawChangeMarks(SKCanvas canvas, RenderOptions options)
+    {
+        if (options.ChangeMarks is not { Count: > 0 } marks) return;
+        var scale = Math.Max(1e-6, options.ViewScale);
+        using var fill = new SKPaint { Style = SKPaintStyle.Fill, IsAntialias = true };
+        using var line = new SKPaint { Style = SKPaintStyle.Stroke, IsAntialias = true, StrokeWidth = (float)(2 / scale) };
+        foreach (var (bounds, kind) in marks)
+        {
+            var colour = kind switch { 0 => new SKColor(0x3F, 0xA3, 0x4D), 1 => new SKColor(0xC8, 0x45, 0x3B), _ => new SKColor(0xD9, 0x9A, 0x2B) };
+            var pad = 6 / scale;
+            var rect = new SKRect((float)(bounds.Left - pad), (float)(bounds.Top - pad), (float)(bounds.Right + pad), (float)(bounds.Bottom + pad));
+            fill.Color = colour.WithAlpha(34);
+            line.Color = colour;
+            canvas.DrawRoundRect(rect, (float)(4 / scale), (float)(4 / scale), fill);
+            canvas.DrawRoundRect(rect, (float)(4 / scale), (float)(4 / scale), line);
         }
     }
 
