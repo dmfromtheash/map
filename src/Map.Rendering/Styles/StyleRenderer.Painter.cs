@@ -41,6 +41,18 @@ public static partial class StyleRenderer
         // Source maps already include their entire blur support. No per-frame Kuwahara/blur.
         var surfaces = Enumerable.Range(0, 7).Select(i => NewSurface(gpu, w, h,
             i >= 4 ? SKColorType.RgbaF16 : SKColorType.Rgba8888)!).ToArray();
+        // The form maps are CPU images; drawn as they are, every stamp uploads them again (F16 ones
+        // converted on the way). On the GPU each source's maps go up once per build.
+        var uploaded = new Dictionary<SKImage, SKImage[]>(ReferenceEqualityComparer.Instance);
+        SKImage[] MapsFor(SKImage source, PainterFormMaps.Set wet, PainterFormMaps.Set block)
+        {
+            if (uploaded.TryGetValue(source, out var known)) return known;
+            SKImage[] maps = [wet.Big, block.Big, block.Facets, block.Wide, wet.Features, block.Features, block.Tensor];
+            if (gpu is not null) maps = [.. maps.Select(m => m.ToTextureImage(gpu) ?? m)];
+            return uploaded[source] = maps;
+        }
+        var drawn = 0;
+        PrebuildFormMaps(parts.Mountains, options);
         try
         {
             foreach (var surface in surfaces)
@@ -64,7 +76,10 @@ public static partial class StyleRenderer
                         || item.Stamp is not { } stamp || options.Stamps?.TryGetImage(stamp.AssetSha256) is not { } source) continue;
                     var wet = PainterFormMaps.Get(source, true);
                     var block = PainterFormMaps.Get(source, false);
-                    SKImage[] maps = [wet.Big, block.Big, block.Facets, block.Wide, wet.Features, block.Features, block.Tensor];
+                    var maps = MapsFor(source, wet, block);
+                    // Skia keeps merging the queued stamp draws into ever larger operations; 1500 queued
+                    // stamps took minutes of CPU at the next flush, 64 at a time take milliseconds.
+                    if (++drawn % 64 == 0) gpu?.Flush();
                     var rect = SKRect.Create((float)item.X, (float)item.Y, (float)item.Width, (float)item.Height);
                     var sx = rect.Width / PainterFormMaps.ReferenceWidth;
                     var sy = rect.Height / (block.Big.Height - 2 * PainterFormMaps.Padding);
@@ -82,7 +97,7 @@ public static partial class StyleRenderer
                         {
                             // Transform the asset's tensor direction into document axes. B carries this
                             // instance's brush scale; support alpha makes the top stamp own its fields.
-                            using var shader = DirectionShader(block, sx, sy, padded, item);
+                            using var shader = DirectionShader(maps[6], maps[3], sx, sy, padded, item);
                             paint.Shader = shader; canvas.DrawRect(padded, paint);
                         }
                         else canvas.DrawImage(maps[i], padded, new SKSamplingOptions(SKFilterMode.Linear), paint);
@@ -94,7 +109,31 @@ public static partial class StyleRenderer
             return new(images[0], images[1], images[2], images[3], images[4], images[5], images[6], geo, riverSoft);
         }
         catch { geo.Dispose(); riverSoft.Dispose(); throw; }
-        finally { foreach (var surface in surfaces) surface.Dispose(); }
+        finally
+        {
+            foreach (var surface in surfaces) surface.Dispose();
+            // Only the uploaded copies belong to this build; the CPU maps stay in PainterFormMaps.
+            if (gpu is not null)
+                foreach (var maps in uploaded.Values) foreach (var map in maps) if (map.IsTextureBacked) map.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// The first painter frame used to build each asset's form maps one after another on the
+    /// render thread (about 4 s per owner mountain). They are CPU-only and independent, so the
+    /// missing ones are built side by side; the maps themselves are unchanged.
+    /// </summary>
+    private static void PrebuildFormMaps(MapDocument mountains, RenderOptions options)
+    {
+        if (options.Stamps is not { } stamps) return;
+        var sources = mountains.Layers.OfType<ObjectLayer>().Where(l => l.Visible)
+            .SelectMany(l => l.Objects).Select(o => o.Stamp?.AssetSha256).OfType<string>()
+            .Distinct(StringComparer.Ordinal).Select(stamps.TryGetImage).OfType<SKImage>()
+            .Where(s => !PainterFormMaps.IsBuilt(s)).ToArray();
+        if (sources.Length < 2) return;
+        Parallel.ForEach(sources.SelectMany(s => new[] { (s, true), (s, false) }),
+            new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount - 1) },
+            pair => PainterFormMaps.Get(pair.Item1, pair.Item2));
     }
 
     private static readonly Lazy<SKRuntimeEffect> DirectionEffect = new(() => PainterFormMaps.Compile("""
@@ -117,11 +156,11 @@ half4 main(float2 p) {
 }
 """));
 
-    private static SKShader DirectionShader(PainterFormMaps.Set maps, float sx, float sy, SKRect rect, SceneObject item)
+    private static SKShader DirectionShader(SKImage tensorMap, SKImage wideMap, float sx, float sy, SKRect rect, SceneObject item)
     {
         var b = new SKRuntimeShaderBuilder(DirectionEffect.Value);
-        using var tensor = maps.Tensor.ToShader(SKShaderTileMode.Decal, SKShaderTileMode.Decal, new SKSamplingOptions(SKFilterMode.Linear));
-        using var wide = maps.Wide.ToShader(SKShaderTileMode.Decal, SKShaderTileMode.Decal, new SKSamplingOptions(SKFilterMode.Linear));
+        using var tensor = tensorMap.ToShader(SKShaderTileMode.Decal, SKShaderTileMode.Decal, new SKSamplingOptions(SKFilterMode.Linear));
+        using var wide = wideMap.ToShader(SKShaderTileMode.Decal, SKShaderTileMode.Decal, new SKSamplingOptions(SKFilterMode.Linear));
         b.Children["tensor"] = tensor; b.Children["wide"] = wide;
         b.Uniforms["offset"] = new[] { rect.Left, rect.Top };
         b.Uniforms["toAsset"] = new[] { 1 / sx, 1 / sy };

@@ -22,6 +22,9 @@ internal sealed class PainterFormMaps
         _block = new(() => Build(source, false));
     }
 
+    internal static bool IsBuilt(SKImage source) =>
+        Cache.TryGetValue(source, out var maps) && maps._wet.IsValueCreated && maps._block.IsValueCreated;
+
     internal static Set Get(SKImage source, bool wet) =>
         wet ? Cache.GetValue(source, s => new(s))._wet.Value : Cache.GetValue(source, s => new(s))._block.Value;
 
