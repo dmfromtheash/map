@@ -38,6 +38,7 @@ public sealed partial class EditorView
         row.Children.Add(Ui.TextButton("TimelineButton", "Время", ShowTimeline, "compact"));
         row.Children.Add(Ui.TextButton("PointcrawlButton", "Пойнткроул", ShowPointcrawl, "compact"));
         row.Children.Add(Ui.TextButton("PlanetButton", "Планета", ShowPlanet, "compact"));
+        row.Children.Add(Ui.TextButton("BookButton", "Книга и язык", ShowBook, "compact"));
         row.Children.Add(Ui.TextButton("AtlasRefreshButton", "Обновить атлас", () => _ = _editor.RefreshAtlasAsync(), "compact"));
         void PositionFrames()
         {
