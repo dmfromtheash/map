@@ -62,10 +62,11 @@ public sealed partial class EditorViewModel
 
     public ArtLanguagePlan PreviewArtLanguage(string collectionId) => PlanArtLanguage(collectionId).Plan;
 
-    public ArtLanguagePlan ChangeArtLanguage(string collectionId)
+    /// <param name="style">R40: a style applied in the same undo step - the language and its look chosen at once.</param>
+    public ArtLanguagePlan ChangeArtLanguage(string collectionId, MapStylePreset? style = null)
     {
         var (moves, plan) = PlanArtLanguage(collectionId);
-        if (moves.Count == 0) { StatusDetail = "Заменять нечего: у ассетов карты нет ролей, которые есть в этом языке."; return plan; }
+        if (moves.Count == 0 && style is null) { StatusDetail = "Заменять нечего: у ассетов карты нет ролей, которые есть в этом языке."; return plan; }
         var steps = new List<IEditCommand>();
         var introduced = new List<MapAssetReference>();
         foreach (var (stamp, record, variant) in moves)
@@ -76,13 +77,21 @@ public sealed partial class EditorViewModel
             if (variant.MaskSha256 is { } maskSha && (mask = ResolveMaskForDocument(maskSha, out _)) is null) continue;
             steps.Add(new ReplaceStampAssetCommand(stamp, reference, record.Height / Math.Max(1.0, record.Width), variant.MaskSha256, mask));
         }
+        var replaced = steps.Count;
+        if (style is { } preset)
+        {
+            var current = Style;
+            var next = (MapStyle.For(preset) with { Strength = current.Enabled && current.Strength > 0 ? current.Strength : 1 }).Normalized();
+            if (Session.Document.Style != next) steps.Add(new SetMapStyleCommand("Стиль «" + PresetTitle(preset) + "»", Session.Document.Style, next));
+        }
         if (steps.Count == 0) return plan with { Replaced = 0 };
-        Session.Execute(new CompositeCommand("Сменить художественный язык", steps));
+        Session.Execute(new CompositeCommand(style is null ? "Сменить художественный язык" : "Сменить язык и стиль", steps));
         AfterEdit();
         InvalidateScene(EditorChangeReason.CanvasInvalidation);
-        StatusDetail = $"Перерисовано ассетов: {steps.Count}." + (plan.InConstructions > 0 ? $" В путях и областях — {plan.InConstructions}: перестройте их с новым набором." : "")
+        Raise(nameof(Style));
+        StatusDetail = $"Перерисовано ассетов: {replaced}." + (style is { } applied ? $" Стиль — «{PresetTitle(applied)}»." : "") + (plan.InConstructions > 0 ? $" В путях и областях — {plan.InConstructions}: перестройте их с новым набором." : "")
             + " Ctrl+Z вернёт прежний язык.";
-        return plan with { Replaced = steps.Count };
+        return plan with { Replaced = replaced };
     }
 
     public static string RoleTitle(AssetRole role) => role switch

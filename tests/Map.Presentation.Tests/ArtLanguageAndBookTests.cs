@@ -59,6 +59,16 @@ public sealed class ArtLanguageAndBookTests : IDisposable
         Assert.Equal(0, editor.PreviewArtLanguage(gravure.Id).Replaced);
         editor.Undo();
         Assert.Equal(before, Stamps());
+
+        // R40: language and style at once, one undo for both.
+        editor.ChangeArtLanguage(gravure.Id, MapStylePreset.EngravingAquatint);
+        Assert.Equal(Sha(treeB.Id), Stamps()[0]);
+        Assert.Equal(MapStylePreset.EngravingAquatint, editor.Style.Preset);
+        Assert.True(editor.Style.Enabled);
+        Assert.Equal(depth + 1, editor.Session.UndoDepth);
+        editor.Undo();
+        Assert.Equal(before, Stamps());
+        Assert.False(editor.Style.Enabled);
     }
 
     [Fact]

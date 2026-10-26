@@ -39,9 +39,13 @@ public sealed partial class EditorView
                 + (plan.WithoutRole > 0 ? $" Без роли: {plan.WithoutRole}." : "");
         }
         languages.SelectionChanged += (_, _) => Preview();
+        var presets = Enum.GetValues<Map.Core.Documents.MapStylePreset>();
+        var style = new ComboBox { Name = "ArtLanguageStyleBox", HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch, SelectedIndex = 0,
+            ItemsSource = new[] { "Стиль не менять" }.Concat(presets.Select(p => "Стиль: " + Map.Presentation.ViewModels.EditorViewModel.PresetTitle(p))).ToArray() };
+        ToolTip.SetTip(style, "Стиль, который придёт вместе с языком: одна отмена вернёт и рисунки, и стиль.");
         var apply = Ui.TextButton("ArtLanguageApplyButton", "Перерисовать карту в этом языке", () =>
         {
-            if (Chosen() is { } id) _editor.ChangeArtLanguage(id);
+            if (Chosen() is { } id) _editor.ChangeArtLanguage(id, style.SelectedIndex > 0 ? presets[style.SelectedIndex - 1] : null);
             Preview();
         }, "accent", "compact");
         ToolTip.SetTip(apply, "Места, размеры и повороты остаются; меняются только рисунки. Ctrl+Z вернёт прежний язык.");
@@ -94,7 +98,7 @@ public sealed partial class EditorView
                     Ui.Subgroup("Художественный язык", new StackPanel { Spacing = 6, Children =
                     {
                         Ui.Hint("Вся карта перерисовывается ассетами тех же ролей из другой коллекции: структура остаётся, меняется рисунок. Стиль отрисовки — во вкладке «Стили» под картой."),
-                        languages, preview, apply,
+                        languages, style, preview, apply,
                     } }),
                     Ui.Subgroup("Моды данными", new StackPanel { Spacing = 6, Children =
                     {
