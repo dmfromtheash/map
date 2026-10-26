@@ -180,7 +180,7 @@ public static class GridSnapService
     private static double Distance(VectorPoint a, VectorPoint b) =>
         Math.Sqrt(Math.Pow(b.X - a.X, 2) + Math.Pow(b.Y - a.Y, 2));
 
-    private static SceneObject Copy(SceneObject source, double x, double y) => new(
+    private static SceneObject Copy(SceneObject source, double x, double y) => new SceneObject(
         source.Id, source.Kind, source.Name, x, y, source.Width, source.Height, source.RotationDegrees,
         source.FillColor, source.StrokeColor, source.StrokeWidth, source.Visible, source.Locked)
     {
@@ -197,7 +197,7 @@ public static class GridSnapService
         Decoration = source.Decoration,
         PlaceholderReason = source.PlaceholderReason,
         OpaquePayload = source.OpaquePayload,
-    };
+    }.KeepingMeaningOf(source);
 }
 
 public sealed class AddNoteCommand(MapNote note) : IEditCommand

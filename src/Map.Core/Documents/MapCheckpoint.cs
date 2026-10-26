@@ -35,6 +35,7 @@ public sealed class MapCheckpointSnapshot
         Labels = document.Labels;
         Fog = document.Fog;
         Transitions = document.Transitions;
+        Timeline = document.Timeline;
     }
 
     public string Title { get; }
@@ -64,6 +65,9 @@ public sealed class MapCheckpointSnapshot
     /// <summary>The transitions of the version (R29).</summary>
     public System.Collections.Immutable.ImmutableArray<MapTransition> Transitions { get; }
 
+    /// <summary>The timeline of the version (R31).</summary>
+    public MapTimeline Timeline { get; }
+
     public static MapCheckpointSnapshot Capture(MapDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
@@ -86,7 +90,7 @@ public sealed class MapCheckpointSnapshot
             Notes,
             checkpoints,
             StampForeground,
-            Category) { Lighting = Lighting, Style = Style, Entities = Entities, Labels = Labels, Fog = Fog, Transitions = Transitions };
+            Category) { Lighting = Lighting, Style = Style, Entities = Entities, Labels = Labels, Fog = Fog, Transitions = Transitions, Timeline = Timeline };
 }
 
 /// <summary>One named durable checkpoint with its bounded preview and immutable map snapshot.</summary>

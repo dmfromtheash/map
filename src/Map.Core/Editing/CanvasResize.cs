@@ -191,6 +191,7 @@ public static class CanvasTransformService
             Style = document.Style,
             Labels = document.Labels,
             Fog = ShiftFog(document.Fog, plan.OffsetX, plan.OffsetY),
+            Timeline = document.Timeline,
             // Transitions move with the content; ends on other maps stay where they are.
             Transitions = [.. document.Transitions.Select(t => t with
             {

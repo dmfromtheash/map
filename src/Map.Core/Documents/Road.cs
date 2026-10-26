@@ -235,6 +235,10 @@ public sealed record Road
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
     public bool GeographyIntentional { get; init; }
 
+    /// <summary>The years the road exists (R31, schema v40); null - always.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public Era? Era { get; init; }
+
     /// <summary>Why a generator made this road (R23, schema v31); null for a road drawn by hand.</summary>
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public string? GenerationReason { get; init; }
@@ -306,7 +310,8 @@ public sealed record Road
     public void Validate()
     {
         if (Id == Guid.Empty || string.IsNullOrWhiteSpace(Name) || Nodes.IsDefault || Branches.IsDefault || Branches.IsEmpty
-            || Style is null || !double.IsFinite(WidthScale) || WidthScale is < 0.01 or > 100 || !TerrainOrder.IsValidLevel(Level))
+            || Style is null || !double.IsFinite(WidthScale) || WidthScale is < 0.01 or > 100 || !TerrainOrder.IsValidLevel(Level)
+            || Era is { IsValid: false })
             throw new ArgumentException("Некорректные параметры дороги.");
         Style.Validate();
         if (!CrossingOverrides.IsDefaultOrEmpty)

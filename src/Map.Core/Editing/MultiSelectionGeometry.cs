@@ -223,7 +223,7 @@ public static class MultiSelectionGeometry
 
     private static SceneObject WithGeometry(
         SceneObject source, double x, double y, double width, double height, double rotation) =>
-        new(
+        new SceneObject(
             source.Id, source.Kind, source.Name,
             x, y, width, height, rotation,
             source.FillColor, source.StrokeColor, source.StrokeWidth,
@@ -242,5 +242,5 @@ public static class MultiSelectionGeometry
             PlaceholderReason = source.PlaceholderReason,
             OpaquePayload = source.OpaquePayload,
             ObjectOpacity = source.ObjectOpacity,
-        };
+        }.KeepingMeaningOf(source);
 }

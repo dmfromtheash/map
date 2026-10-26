@@ -460,7 +460,7 @@ public static class TextOnPath
         Rebuild(label, label.X, label.Y, label.Width, label.Height, text);
 
     private static SceneObject Rebuild(SceneObject source, double x, double y, double width, double height, TextStyle text) =>
-        new(source.Id, source.Kind, source.Name, x, y, width, height, 0,
+        new SceneObject(source.Id, source.Kind, source.Name, x, y, width, height, 0,
             source.FillColor, source.StrokeColor, source.StrokeWidth, source.Visible, source.Locked)
         {
             Sublayer = source.Sublayer,
@@ -469,7 +469,7 @@ public static class TextOnPath
             FillGradient = source.FillGradient,
             Text = text,
             ObjectOpacity = source.ObjectOpacity,
-        };
+        }.KeepingMeaningOf(source);
 }
 
 /// <summary>

@@ -23,6 +23,10 @@ public static partial class MapProjectStore
     {
         if (scene.Layers?.Any(l => l?.Sea is not null && l.Type != "BaseColor") == true)
             throw new MapProjectCorruptedException("Стиль моря бывает только у слоя фона.");
+        if (schema < MapProjectFormat.TimelineSchemaVersion && (scene.Timeline is not null
+            || scene.Layers?.Any(l => l is not null && (l.Objects?.Any(o => o is not null && (o.Era is not null || o.MorphKey is not null || o.Political is not null)) == true
+                || l.Roads?.Any(r => r?.Era is not null) == true)) == true))
+            throw new MapProjectCorruptedException("Эпохи, границы во времени и политическая карта требуют схему v40.");
         if (schema < MapProjectFormat.TransitionsSchemaVersion && scene.Transitions is { Count: > 0 })
             throw new MapProjectCorruptedException("Переходы требуют схему v39.");
         if (schema < MapProjectFormat.FogSchemaVersion && scene.Fog is not null)
@@ -52,6 +56,15 @@ public static partial class MapProjectStore
             if (layer.Sea is not null)
                 throw new MapProjectCorruptedException("Стиль моря требует схему v32.");
         }
+    }
+
+    /// <summary>The timeline (R31); defaults when absent.</summary>
+    private static MapTimeline ReadTimelineV40(SceneDto scene)
+    {
+        if (scene.Timeline is not { } timeline) return new MapTimeline();
+        try { timeline.Validate(); }
+        catch (ArgumentException ex) { throw new MapProjectCorruptedException("Повреждена шкала времени.", ex); }
+        return timeline;
     }
 
     /// <summary>The transitions (R29): every one valid, ids distinct, at most 4096.</summary>

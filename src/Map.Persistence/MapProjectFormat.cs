@@ -132,7 +132,10 @@ public static class MapProjectFormat
 
     /// <summary>R29: transitions between levels and maps.</summary>
     public const int TransitionsSchemaVersion = 39;
-    public const int MaxSupportedSchemaVersion = TransitionsSchemaVersion;
+
+    /// <summary>R31: eras of objects and roads, morph keys, political roles and the timeline.</summary>
+    public const int TimelineSchemaVersion = 40;
+    public const int MaxSupportedSchemaVersion = TimelineSchemaVersion;
 
     /// <summary>
     /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry

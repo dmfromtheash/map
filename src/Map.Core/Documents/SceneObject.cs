@@ -135,6 +135,30 @@ public sealed record SceneObject
     /// <summary>The user means this object as it is (R24, schema v35): the geography check does not report it.</summary>
     public bool GeographyIntentional { get; init; }
 
+    /// <summary>The years the object exists (R31, schema v40); null - always.</summary>
+    public Era? Era { get; init; }
+
+    /// <summary>Shapes with one key are the same border in different eras; the gap between them is blended (R31).</summary>
+    public string? MorphKey { get; init; }
+
+    /// <summary>What a shape is on the political map: a state or disputed land (R31).</summary>
+    public PoliticalRole Political { get; init; }
+
+    /// <summary>
+    /// This object with the meaning of <paramref name="source"/> carried over - era, morph key,
+    /// political role, «намеренно» and the generator's reason. Copies built through the
+    /// constructor (a move, a resize, a snap) call it so those fields survive the edit.
+    /// </summary>
+    public SceneObject KeepingMeaningOf(SceneObject source) =>
+        Era == source.Era && MorphKey == source.MorphKey && Political == source.Political
+            && GeographyIntentional == source.GeographyIntentional && GenerationReason == source.GenerationReason
+            ? this
+            : this with
+            {
+                Era = source.Era, MorphKey = source.MorphKey, Political = source.Political,
+                GeographyIntentional = source.GeographyIntentional, GenerationReason = source.GenerationReason,
+            };
+
     public SceneObject(
         ObjectId id,
         SceneObjectKind kind,

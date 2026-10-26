@@ -352,7 +352,7 @@ public sealed class ShapeBooleanCommand : IEditCommand
             Sublayer = Math.Max(first.Sublayer, second.Sublayer),
             Shape = new ShapeStyle(regions, first.Shape.Fill, first.Shape.Stroke),
             ObjectOpacity = first.ObjectOpacity,
-        };
+        }.KeepingMeaningOf(first);
     }
 
     public static void Validate(IReadOnlyList<ShapeRegion> regions)

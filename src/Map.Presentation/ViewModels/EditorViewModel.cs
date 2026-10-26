@@ -4970,7 +4970,8 @@ public sealed partial class EditorViewModel : ViewModelBase
 
             if (DragPreview is not { } preview)
             {
-                return Session.Document;
+                // R31: the year of the timeline and the political look.
+                return TimelineShown(Session.Document);
             }
 
             var document = Session.Document;
@@ -9252,7 +9253,7 @@ public sealed partial class EditorViewModel : ViewModelBase
 
     private static SceneObject WithGeometry(
         SceneObject source, double x, double y, double width, double height, double rotation) =>
-        new(
+        new SceneObject(
             source.Id, source.Kind, source.Name,
             QuantizeChanged(x, source.X), QuantizeChanged(y, source.Y),
             QuantizeChanged(width, source.Width, size: true),
@@ -9274,7 +9275,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             PlaceholderReason = source.PlaceholderReason,
             OpaquePayload = source.OpaquePayload,
             ObjectOpacity = source.ObjectOpacity,
-        };
+        }.KeepingMeaningOf(source);
 
     private static double QuantizeChanged(double value, double original, bool size = false) =>
         value == original ? original
@@ -9298,7 +9299,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     private static SceneObject CopyObject(
         SceneObject source, bool? visible = null, bool? locked = null,
         string? fillColor = null, string? strokeColor = null, double? strokeWidth = null) =>
-        new(
+        new SceneObject(
             source.Id, source.Kind, source.Name,
             source.X, source.Y, source.Width, source.Height, source.RotationDegrees,
             fillColor ?? source.FillColor, strokeColor ?? source.StrokeColor,
@@ -9318,7 +9319,7 @@ public sealed partial class EditorViewModel : ViewModelBase
             PlaceholderReason = source.PlaceholderReason,
             OpaquePayload = source.OpaquePayload,
             ObjectOpacity = source.ObjectOpacity,
-        };
+        }.KeepingMeaningOf(source);
 
     // ------------------------------------------------- Stage 10D appearance inspector
 

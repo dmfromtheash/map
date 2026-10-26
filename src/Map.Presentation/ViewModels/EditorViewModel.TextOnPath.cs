@@ -93,7 +93,7 @@ public sealed partial class EditorViewModel
             Sublayer = before.Sublayer, GroupId = before.GroupId, GroupName = before.GroupName,
             FillGradient = before.FillGradient, ObjectOpacity = before.ObjectOpacity,
             Text = before.Text! with { Content = name },
-        };
+        }.KeepingMeaningOf(before);
         ReplaceSelected(before, named, "Имя подписи");
         StatusDetail = "Имя: " + name + ".";
         return name;

@@ -422,7 +422,7 @@ public sealed class ReplaceStampAssetCommand : IEditCommand
             Composition = before.Composition,
             PlaceholderReason = before.PlaceholderReason,
             OpaquePayload = before.OpaquePayload,
-        };
+        }.KeepingMeaningOf(before);
     }
 
     public string Name => "Replace stamp asset";

@@ -144,7 +144,7 @@ public static class SelectionHandles
             PlaceholderReason = before.PlaceholderReason,
             OpaquePayload = before.OpaquePayload,
             ObjectOpacity = before.ObjectOpacity,
-        };
+        }.KeepingMeaningOf(before);
     }
 
     /// <summary>
@@ -190,7 +190,7 @@ public static class SelectionHandles
             PlaceholderReason = before.PlaceholderReason,
             OpaquePayload = before.OpaquePayload,
             ObjectOpacity = before.ObjectOpacity,
-        };
+        }.KeepingMeaningOf(before);
     }
 
     private static (double X, double Y) LocalToWorld(SceneObject o, double localX, double localY)

@@ -52,7 +52,13 @@ public static partial class MapProjectStore
     private static bool HasLabelsV37(LabelSettings labels, IEnumerable<MapLayer> layers) =>
         !labels.IsDefault || layers.OfType<ObjectLayer>().Any(l => l.Objects.Any(o => o.Text is { } t && (t.Region is not null || t.Importance != LabelSettings.DefaultImportance)));
 
+    private static bool HasTimelineV40(MapTimeline timeline, IEnumerable<MapLayer> layers) =>
+        !timeline.IsDefault || layers.OfType<ObjectLayer>().Any(l => l.Roads.Any(r => r.Era is not null)
+            || l.Objects.Any(o => o.Era is not null || o.MorphKey is not null || o.Political != PoliticalRole.None));
+
     private static int SchemaFor(MapDocument document) =>
+        HasTimelineV40(document.Timeline, document.Layers) || document.Checkpoints.Any(c => HasTimelineV40(c.Snapshot.Timeline, c.Snapshot.Layers))
+            ? MapProjectFormat.TimelineSchemaVersion :
         !document.Transitions.IsDefaultOrEmpty || document.Checkpoints.Any(c => !c.Snapshot.Transitions.IsDefaultOrEmpty)
             ? MapProjectFormat.TransitionsSchemaVersion :
         !document.Fog.IsDefault || document.Checkpoints.Any(c => !c.Snapshot.Fog.IsDefault)
@@ -1749,6 +1755,7 @@ public static partial class MapProjectStore
         Labels = document.Labels.IsDefault ? null : document.Labels,
         Fog = ToFogDto(document.Fog),
         Transitions = document.Transitions.IsDefaultOrEmpty ? null : [.. document.Transitions],
+        Timeline = document.Timeline.IsDefault ? null : document.Timeline,
         StampForeground = document.StampForeground is { } foreground
             ? new StampForegroundDto { Tiles = ToTileDtos(foreground.Tiles) }
             : null,
@@ -2125,6 +2132,9 @@ public static partial class MapProjectStore
         Name = sceneObject.Name,
         GenerationReason = sceneObject.GenerationReason,
         GeographyIntentional = sceneObject.GeographyIntentional ? true : null,
+        Era = sceneObject.Era,
+        MorphKey = sceneObject.MorphKey,
+        Political = sceneObject.Political == PoliticalRole.None ? null : sceneObject.Political.ToString(),
         X = sceneObject.X,
         Y = sceneObject.Y,
         Width = sceneObject.Width,
@@ -2442,7 +2452,7 @@ public static partial class MapProjectStore
                     : null,
                 category) { Atlas = ReadAtlasV26(manifest), Lighting = ReadLightingV28(manifest), Style = ReadStyleV29(manifest),
                     Entities = ReadEntitiesV36(scene), Labels = ReadLabelsV37(scene), Fog = ReadFogV38(scene),
-                    Transitions = ReadTransitionsV39(scene) };
+                    Transitions = ReadTransitionsV39(scene), Timeline = ReadTimelineV40(scene) };
         }
         catch (Exception ex) when (ex is ArgumentException or FormatException or InvalidOperationException)
         {
@@ -2594,6 +2604,9 @@ public static partial class MapProjectStore
         GroupName = dto.GroupName,
         GenerationReason = dto.GenerationReason is { Length: > 240 } ? throw new MapProjectCorruptedException("Слишком длинная причина генерации.") : dto.GenerationReason,
         GeographyIntentional = dto.GeographyIntentional == true,
+        Era = dto.Era is { IsValid: false } ? throw new MapProjectCorruptedException("Годы объекта: начало позже конца.") : dto.Era,
+        MorphKey = dto.MorphKey is { Length: > 120 } ? throw new MapProjectCorruptedException("Слишком длинный ключ границы.") : dto.MorphKey,
+        Political = dto.Political is null ? PoliticalRole.None : ParseDefined<PoliticalRole>(dto.Political, "political role"),
         ObjectOpacity = RequireFinite(dto.ObjectOpacity, "object opacity", min: 0, max: 1),
         FillGradient = ToGradient(dto.FillGradient, "object fill gradient"),
         Stamp = dto.Stamp is { } stamp

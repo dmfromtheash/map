@@ -150,7 +150,7 @@ public static class RegionLabels
             GenerationReason = label.GenerationReason,
             GeographyIntentional = label.GeographyIntentional,
             Text = text with { Content = content, Region = binding with { Detached = false } },
-        };
+        }.KeepingMeaningOf(label);
     }
 
     /// <summary>The box a label needs: its widest line and its lines, from the font size and spacing.</summary>

@@ -165,6 +165,8 @@ public sealed partial class Stage19Application : Application
         { _report.Required = CompareRequired; _report.Scenario = "compare"; }
         if (Options.Profile == "native-transitions")
         { _report.Required = TransitionsRequired; _report.Scenario = "transitions"; }
+        if (Options.Profile == "native-timeline")
+        { _report.Required = TimelineRequired; _report.Scenario = "timeline"; }
         if (Options.Profile == "native-soft-coast")
         { _report.Required = SoftCoastRequired; _report.Scenario = "soft-coast"; }
         if (Options.Profile == "native-history-memory")
@@ -244,6 +246,7 @@ public sealed partial class Stage19Application : Application
         if (_report.Scenario == "fog") { await FogOnly(); return; }
         if (_report.Scenario == "compare") { await CompareOnly(); return; }
         if (_report.Scenario == "transitions") { await TransitionsOnly(); return; }
+        if (_report.Scenario == "timeline") { await TimelineOnly(); return; }
         if (_report.Scenario == "owner-art") { await OwnerArtOnly(); return; }
         if (_report.Scenario == "history-memory") { await HistoryMemoryOnly(); return; }
         if (_report.Scenario == "panel-shots") { await PanelShotsOnly(); return; }

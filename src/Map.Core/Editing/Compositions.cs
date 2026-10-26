@@ -133,7 +133,7 @@ public static class SceneObjectClone
 
     private static SceneObject Copy(
         SceneObject source, SceneObjectKind kind, double x, double y, double width, double height, string? reason) =>
-        new(source.Id, kind, source.Name, x, y, width, height, source.RotationDegrees,
+        new SceneObject(source.Id, kind, source.Name, x, y, width, height, source.RotationDegrees,
             source.FillColor, source.StrokeColor, source.StrokeWidth, source.Visible, source.Locked)
         {
             Sublayer = source.Sublayer,
@@ -149,7 +149,7 @@ public static class SceneObjectClone
             PlaceholderReason = reason,
             OpaquePayload = kind == SceneObjectKind.Placeholder ? source.OpaquePayload : null,
             ObjectOpacity = source.ObjectOpacity,
-        };
+        }.KeepingMeaningOf(source);
 }
 
 public sealed class ReplaceObjectsWithCompositionCommand : IEditCommand

@@ -58,6 +58,29 @@ public sealed class WaterCliffsPersistenceTests
     }
 
     [Fact]
+    public void Eras_border_keys_political_roles_and_the_timeline_round_trip_in_v40()
+    {
+        using var workspace = new TempWorkspace();
+        var (document, _, _) = Fixture();
+        var state = VectorGeometry.CreateFreeShape(ObjectId.New(), "Королевство", [new(10, 10), new(300, 20), new(280, 200), new(20, 180)])
+            with { Era = new Era(812, null), MorphKey = "kingdom", Political = PoliticalRole.State };
+        var road = RoadEditor.NewRoad([new(0, 10), new(300, 10)], 16, RoadStyle.Country(), "Тракт") with { Era = new Era(null, 1040) };
+        var timeline = new MapTimeline { Enabled = true, Year = 900, First = 800, Last = 1100, PoliticalMode = true };
+        var timed = document.WithLayers([.. document.Layers, new ObjectLayer(LayerId.New(), "Политика", true, false, 1, [state]) { Roads = [road] }]) with { Timeline = timeline };
+        var path = workspace.File("timeline.mapproj");
+        MapProjectStore.Save(timed, path, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
+        Assert.Equal(40, Schema(path));
+        var opened = MapProjectStore.Open(path).Document;
+        Assert.Equal(timeline, opened.Timeline);
+        var layer = opened.Layers.OfType<ObjectLayer>().Single(l => l.Name == "Политика");
+        var shape = layer.Objects.Single();
+        Assert.Equal(new Era(812, null), shape.Era);
+        Assert.Equal("kingdom", shape.MorphKey);
+        Assert.Equal(PoliticalRole.State, shape.Political);
+        Assert.Equal(new Era(null, 1040), layer.Roads.Single().Era);
+    }
+
+    [Fact]
     public void Transitions_round_trip_in_v39_and_the_atlas_keeps_world_levels()
     {
         using var workspace = new TempWorkspace();

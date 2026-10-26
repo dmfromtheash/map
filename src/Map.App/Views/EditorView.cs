@@ -9901,6 +9901,7 @@ public sealed partial class EditorView : UserControl
         Timed("fog", SyncFog);
         Timed("compare", SyncCompareBlock);
         Timed("transitions", SyncTransitions);
+        Timed("timeline", SyncTimeline);
         Timed("checkpoint-list", SyncCheckpointList);
         Timed("canvas-workflow", SyncCanvasWorkflow);
         Timed("quick-bar", SyncQuickBar);

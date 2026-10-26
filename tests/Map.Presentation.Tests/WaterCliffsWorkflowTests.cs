@@ -210,6 +210,32 @@ public sealed class WaterCliffsWorkflowTests
     }
 
     [Fact]
+    public void The_year_slider_previews_while_dragging_and_commits_one_step()
+    {
+        var town = new SceneObject(ObjectId.New(), SceneObjectKind.Text, "Ильград", 100, 100, 120, 40, 0, "#FF20242B", "#FFFFFFFF", 0, true, false)
+        { Text = new TextStyle { Content = "Ильград" } };
+        var editor = Editor(new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, [town]));
+        editor.Session.SelectedObjectId = town.Id;
+        editor.SetSelectedEra(812, 1040);
+        Assert.Equal(new Era(812, 1040), editor.Session.SelectedObject!.Era);
+        editor.SetTimeline(editor.Timeline with { Enabled = true, First = 700, Last = 1200, Year = 900 });
+        int Shown() => editor.RenderDocument.Layers.OfType<ObjectLayer>().Single().Objects.Count;
+        Assert.Equal(1, Shown());
+        var steps = editor.Session.Revision;
+        editor.SetTimelineYear(1100, commit: false);
+        Assert.Equal(0, Shown());
+        Assert.Equal(900, editor.Timeline.Year);
+        Assert.Equal(steps, editor.Session.Revision);
+        editor.SetTimelineYear(1100, commit: true);
+        Assert.Equal(1100, editor.Timeline.Year);
+        editor.Undo();
+        Assert.Equal(900, editor.Timeline.Year);
+        Assert.Equal(1, Shown());
+        editor.SetSelectedEra(1300, 1200);
+        Assert.Contains("позже", editor.StatusDetail);
+    }
+
+    [Fact]
     public void A_card_is_made_from_the_selection_bound_linked_and_undone()
     {
         var label = new SceneObject(ObjectId.New(), SceneObjectKind.Text, "Ильград", 100, 100, 120, 40, 0, "#FF20242B", "#FFFFFFFF", 0, true, false)

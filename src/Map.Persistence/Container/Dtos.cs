@@ -202,6 +202,10 @@ internal sealed class SceneDto
     [JsonPropertyName("transitions")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<Map.Core.Documents.MapTransition>? Transitions { get; set; }
+    /// <summary>The year shown and the political mode (R31, schema v40).</summary>
+    [JsonPropertyName("timeline")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Map.Core.Documents.MapTimeline? Timeline { get; set; }
     [JsonPropertyName("stampForeground")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public StampForegroundDto? StampForeground { get; set; }
@@ -605,6 +609,10 @@ internal sealed class SceneObjectDto
 {
     [JsonPropertyName("generationReason")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? GenerationReason { get; set; }
     [JsonPropertyName("geographyIntentional")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public bool? GeographyIntentional { get; set; }
+    /// <summary>R31 (schema v40): the years the object exists, the morph key of a border and its political role.</summary>
+    [JsonPropertyName("era")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public Map.Core.Documents.Era? Era { get; set; }
+    [JsonPropertyName("morphKey")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? MorphKey { get; set; }
+    [JsonPropertyName("political")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Political { get; set; }
     [JsonPropertyName("id")] public string Id { get; set; } = "";
     [JsonPropertyName("kind")] public string Kind { get; set; } = "";
     [JsonPropertyName("name")] public string Name { get; set; } = "";

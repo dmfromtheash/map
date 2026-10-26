@@ -139,6 +139,7 @@ public static class PlayerScene
             Fog = fog,
             Entities = [.. document.Entities.Where(e => e.PlayerVisible)],
             Transitions = [.. document.Transitions.Where(t => fog.Sees(t.From.X, t.From.Y))],
+            Timeline = document.Timeline,
         };
     }
 

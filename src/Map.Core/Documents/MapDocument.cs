@@ -47,6 +47,7 @@ public sealed record MapDocument
         Labels = source.Labels;
         Fog = source.Fog;
         Transitions = source.Transitions;
+        Timeline = source.Timeline;
     }
 
     public MapDocument(
@@ -280,6 +281,9 @@ public sealed record MapDocument
 
     /// <summary>Stairs, cave mouths, shafts and portals between levels and maps (R29, schema v39).</summary>
     public ImmutableArray<MapTransition> Transitions { get; init; } = [];
+
+    /// <summary>The year shown and the political mode (R31, schema v40).</summary>
+    public MapTimeline Timeline { get; init; } = new();
     public string Title { get; init; }
 
     /// <summary>When the document was first created. Supplied by the caller; Core has no clock.</summary>
@@ -356,6 +360,7 @@ public sealed record MapDocument
             Labels = Labels,
             Fog = Fog,
             Transitions = Transitions,
+            Timeline = Timeline,
         };
 
     public MapDocument WithAssets(IReadOnlyList<MapAssetReference> assets)
