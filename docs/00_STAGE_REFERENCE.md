@@ -106,8 +106,15 @@ REA по файлам игр и чтение React-props Inkarnate.
   - `native-stage17` — нужен настоящий «обычный» фикстурный `.mapproj` (`MAP_STAGE17_FIXTURE`); тестовая карта
     новых ассетов не подходит (`Fixture is not the requested ordinary map`).
   - Требуют `RegionalAtlas` (удалён по DEC-037) или удалённое наполнение: `native-stamp-family`,
-    `native-mountain-foundation`, `native-editor-defaults`, `native-regional*`, «обычный» маршрут `native-paint-perf`
+    `native-mountain-foundation`, `native-editor-defaults`, старые `native-regional*` (кроме
+    `native-regional-roles`), «обычный» маршрут `native-paint-perf`
     (`MAP_REGIONAL_PROJECT`); `native-brush-stress`, `native-placement-workflow` — память.
+  - R11 (2026-10-26): `native-asset-catalog` (45/45, PASS) проверяет роль через `PassportAssetRoleBox`, JSON,
+    повторное открытие и неизменность документа/Undo. Новый `native-regional-roles` использует
+    только свои процедурные PNG (65/65, PASS): все семь ролей леса/хребта/поселения, архив, Undo/Redo,
+    экология воды/обрывов, пересчёт и save→reopen v30. Оба — настоящие окна Avalonia вне экрана,
+    без системного ввода; JSON и 13+7 кадров — `_local/r11-smokes/`. Они не требуют старого комплекта.
+    R11 остаётся PARTIAL до живого просмотра Claude и приёмки владельцем.
   - Помощник `Stage19Application.RevealTab` (общий для stage17/18/19/20, object-workflow) открывает вкладки
     `Reveal:`, переключает область контекста «Объект/Инструмент» (`ContextScopeObject/Tool`) и раскрывает
     свёрнутые секции; новые смоуки используют его, а не прямой `First(c => c.Name == …)`.
