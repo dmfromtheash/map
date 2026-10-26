@@ -127,11 +127,12 @@ public sealed class MapComparison
     private static bool SameNodes(IReadOnlyList<VectorNode>? a, IReadOnlyList<VectorNode>? b) =>
         (a is null && b is null) || (a is not null && b is not null && a.Count == b.Count && a.Zip(b).All(p => Near(p.First.X, p.Second.X) && Near(p.First.Y, p.Second.Y)));
 
-    public static bool SameRiver(River x, River y) => x.Name == y.Name && x.Channels.Length == y.Channels.Length
+    public static bool SameRiver(River x, River y) => x.Name == y.Name && x.Era == y.Era && x.Visible == y.Visible && x.Channels.Length == y.Channels.Length
         && x.Channels.Zip(y.Channels).All(p => p.First.Nodes.Select(n => (n.X, n.Y, n.Width)).SequenceEqual(p.Second.Nodes.Select(n => (n.X, n.Y, n.Width))));
 
-    public static bool SameRoad(Road x, Road y) => x.Name == y.Name
-        && x.Nodes.Select(n => (n.X, n.Y)).SequenceEqual(y.Nodes.Select(n => (n.X, n.Y)));
+    public static bool SameRoad(Road x, Road y) => x.Name == y.Name && x.Era == y.Era && x.Visible == y.Visible && x.Style == y.Style
+        && x.Nodes.Select(n => (n.X, n.Y)).SequenceEqual(y.Nodes.Select(n => (n.X, n.Y)))
+        && x.Branches.SelectMany(b => b.Vertices.Select(v => v.Width)).SequenceEqual(y.Branches.SelectMany(b => b.Vertices.Select(v => v.Width)));
 
     private static WorldBounds RiverBounds(River river) => Bounds(river.Channels.SelectMany(c => c.Nodes).Select(n => (n.X, n.Y)));
     private static WorldBounds RoadBounds(Road road) => Bounds(road.Nodes.Select(n => (n.X, n.Y)));
