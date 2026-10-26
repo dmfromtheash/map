@@ -51,11 +51,9 @@ public static partial class MapProjectStore
         {
             var s = recipe.Settings;
             if (recipe.AlgorithmVersion != 1 || s is null || recipe.Palette is null || recipe.Selection is null
-                || recipe.Steps.IsDefaultOrEmpty || recipe.Steps.Length > 6 || recipe.Steps.Any(s => !Enum.IsDefined(s))
-                || recipe.Selection.Any(h => !layer.Board.Contains(h))
-                || !double.IsFinite(s.LandShare) || !double.IsFinite(s.Fragmentation) || !double.IsFinite(s.Relief)
-                || !double.IsFinite(s.Moisture) || !double.IsFinite(s.Temperature)
-                || !double.IsFinite(s.RiversPerThousand) || !double.IsFinite(s.SettlementsPerThousand))
+                || recipe.Steps.IsDefaultOrEmpty || recipe.Steps.Length > Enum.GetValues<HexGenerationStep>().Length
+                || recipe.Steps.Any(s => !Enum.IsDefined(s))
+                || recipe.Selection.Any(h => !layer.Board.Contains(h)) || !s.IsValid)
                 throw new MapProjectCorruptedException("Повреждён рецепт генерации v31.");
         }
         var changes = new List<KeyValuePair<HexCoord, HexCell?>>();

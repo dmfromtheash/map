@@ -233,6 +233,27 @@ public sealed class HexWorkshopRenderingTests
         File.WriteAllBytes(Path.Combine(folder, $"generated-{orientation.ToString().ToLowerInvariant()}.png"), data.ToArray());
     }
 
+    /// <summary>R21 review: one world per mode with flow rivers and states, written to the review folder.</summary>
+    [Fact]
+    public void Generated_worlds_of_every_mode_for_review()
+    {
+        if (ReviewFolder is not { } folder) return;
+        Directory.CreateDirectory(folder);
+        foreach (var mode in Enum.GetValues<HexWorldMode>())
+        {
+            var document = HexMapFactory.Create("Мир", DateTimeOffset.UnixEpoch, new MapCategoryId("hex"), HexOrientation.Flat, 32, 70, 46, "#FFF2E9DC");
+            var layer = document.Layers.OfType<HexLayer>().Single();
+            var world = HexWorldGenerator.RunAll(layer, new HexGeneratorSettings
+            {
+                Seed = 9, SettlementsPerThousand = 14, RiversPerThousand = 12, LandShare = .55,
+                RiverModel = HexGeneratorSettings.FlowRivers, Mode = mode,
+            });
+            using var bitmap = Render(document.WithLayer(layer.Id, _ => world), 0.45, null);
+            using var data = bitmap.Encode(SKEncodedImageFormat.Png, 100);
+            File.WriteAllBytes(Path.Combine(folder, $"world-{mode.ToString().ToLowerInvariant()}.png"), data.ToArray());
+        }
+    }
+
     [Fact]
     public async Task Pictures_drawn_in_the_background_show_the_same_world_once_they_arrive()
     {

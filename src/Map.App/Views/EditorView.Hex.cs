@@ -1120,6 +1120,8 @@ public sealed partial class EditorView
             {
                 Slider("HexGenMoistureSlider", "Влажность", -100, 100, s => s.Moisture * 100, (s, v) => s with { Moisture = v / 100 }),
                 Slider("HexGenTemperatureSlider", "Тепло", -100, 100, s => s.Temperature * 100, (s, v) => s with { Temperature = v / 100 }),
+                Slider("HexGenLatitudeSpanSlider", "Размах широт", 0, 100, s => s.LatitudeSpan * 100, (s, v) => s with { LatitudeSpan = v / 100 }, "%"),
+                Slider("HexGenLatitudeShiftSlider", "Ближе к полюсу", -100, 100, s => s.LatitudeShift * 100, (s, v) => s with { LatitudeShift = v / 100 }),
             },
         };
         var life = new StackPanel
@@ -1131,6 +1133,30 @@ public sealed partial class EditorView
                 Slider("HexGenTownsSlider", "Поселения", 0, 30, s => s.SettlementsPerThousand, (s, v) => s with { SettlementsPerThousand = v }, "/1000"),
             },
         };
+
+        // R21: the kind of world, an open rim and how rivers are found.
+        var (modeRow, modeButtons) = Ui.Segmented("HexGenMode",
+            [.. Enum.GetValues<HexWorldMode>().Select(m => (m.ToString(), EditorViewModel.HexWorldModeName(m), (string?)null))],
+            key => { if (!_syncingHex) _editor.HexGeneratorSettings = _editor.HexGeneratorSettings with { Mode = Enum.Parse<HexWorldMode>(key) }; });
+        ToolTip.SetTip(modeRow, "Материки и моря; архипелаг — много островов; пустыня — сухо и жарко, мало рек; подземье — пещеры в скале, подземные озёра и реки.");
+        var openEdges = Ui.PropertyToggle("HexGenOpenEdgesToggle", "Суша до краёв карты");
+        ToolTip.SetTip(openEdges, "Без моря по краю: карта — часть большого материка.");
+        openEdges.IsCheckedChanged += (_, _) => { if (!_syncingHex) _editor.HexGeneratorSettings = _editor.HexGeneratorSettings with { OpenEdges = openEdges.IsChecked == true }; };
+        var flow = Ui.PropertyToggle("HexGenFlowRiversToggle", "Реки собирают сток и сливаются");
+        ToolTip.SetTip(flow, "Вода стекает с каждого гекса вниз; крупнейшие потоки становятся реками, притоки впадают в них. Без галочки — каждая река сама по себе, как раньше.");
+        flow.IsCheckedChanged += (_, _) => { if (!_syncingHex) _editor.HexGeneratorSettings = _editor.HexGeneratorSettings with { RiverModel = flow.IsChecked == true ? HexGeneratorSettings.FlowRivers : HexGeneratorSettings.DownhillRivers }; };
+        HexSync(() =>
+        {
+            var settings = _editor.HexGeneratorSettings;
+            foreach (var button in modeButtons)
+            {
+                var on = button.Name == "HexGenMode" + settings.Mode;
+                if (button is ToggleButton toggle) toggle.IsChecked = on;
+                Ui.SetClass(button, "active", on);
+            }
+            openEdges.IsChecked = settings.OpenEdges;
+            flow.IsChecked = settings.RiverModel == HexGeneratorSettings.FlowRivers;
+        }, nameof(EditorViewModel.HexGeneratorSettings));
 
         var steps = HexGrid(2);
         foreach (var step in Enum.GetValues<HexGenerationStep>())
@@ -1153,9 +1179,10 @@ public sealed partial class EditorView
             {
                 HexHint("Расчёт идёт в фоне. Предпросмотр не меняет карту. «Применить» — одна отмена; защита сохраняет гексы и пересекающие её пути."),
                 HexRow("Зерно", seed, HexIcon("HexGenSeedButton", "Случайное зерно", MapIcons.HexDice, _editor.NewHexGeneratorSeed)),
+                Ui.Subgroup("Вид мира", new StackPanel { Spacing = 4, Children = { modeRow, openEdges } }),
                 Ui.Subgroup("Суша и рельеф", land),
                 Ui.Subgroup("Климат", climate),
-                Ui.Subgroup("Реки и поселения на 1000 гексов", life),
+                Ui.Subgroup("Реки и поселения на 1000 гексов", new StackPanel { Spacing = 4, Children = { life, flow } }),
                 Ui.Subgroup("Шаги по порядку", steps),
                 HexGrid(2, all, reroll),
                 BuildGenerationControls(),

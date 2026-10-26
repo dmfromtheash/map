@@ -34,9 +34,21 @@ public sealed partial class EditorView
             panel.Children.Add(Ui.TextButton("GenerationProtectBrushStopButton", "Закончить защиту", () => _editor.SetAreaProtectionBrush(false), "compact"));
         }
         var status = new TextBlock { Name = "GenerationStatus", TextWrapping = Avalonia.Media.TextWrapping.Wrap };
-        void Status() => status.Text = _editor.GenerationConflict ? "Карта изменилась. Требуется пересчёт."
-            : _editor.GenerationBusy ? "Расчёт в фоне…" : _editor.GenerationHasPreview ? "Предпросмотр. Документ ещё не изменён." : "";
-        _editor.PropertyChanged += (_, _) => Status(); Status(); panel.Children.Add(status);
+        var bar = new ProgressBar { Name = "GenerationProgressBar", Minimum = 0, Maximum = 100, Height = 4, IsVisible = false };
+        void Status()
+        {
+            status.Text = _editor.GenerationConflict ? "Карта изменилась. Требуется пересчёт."
+                : _editor.GenerationBusy ? $"Расчёт в фоне… {_editor.GenerationProgress * 100:0} %"
+                : _editor.GenerationHasPreview ? "Предпросмотр. Документ ещё не изменён." : "";
+            bar.IsVisible = _editor.GenerationBusy;
+            bar.Value = _editor.GenerationProgress * 100;
+        }
+        // The worker reports progress from its own thread: the panel reads it while the calculation runs.
+        var timer = new Avalonia.Threading.DispatcherTimer(System.TimeSpan.FromMilliseconds(250), Avalonia.Threading.DispatcherPriority.Background,
+            (_, _) => { if (_editor.GenerationBusy) Status(); });
+        timer.Start();
+        DetachedFromVisualTree += (_, _) => timer.Stop();
+        _editor.PropertyChanged += (_, _) => Status(); Status(); panel.Children.Add(status); panel.Children.Add(bar);
         panel.Children.Add(apply); panel.Children.Add(cancel); panel.Children.Add(recalc);
         return panel;
     }

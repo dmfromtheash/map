@@ -6,7 +6,12 @@ namespace Map.Presentation.ViewModels;
 
 public sealed partial class EditorViewModel
 {
-    private HexGeneratorSettings _hexGenerator = new() { Seed = Environment.TickCount & 0xFFFF };
+    // New worlds use the R21 flow rivers; a recipe read from a file keeps the model it was made with.
+    private HexGeneratorSettings _hexGenerator = new() { Seed = Environment.TickCount & 0xFFFF, RiverModel = HexGeneratorSettings.FlowRivers };
+    private double _generationProgress;
+
+    /// <summary>How far the running calculation is, 0..1 (written by the worker, read by the panel's timer).</summary>
+    public double GenerationProgress => Volatile.Read(ref _generationProgress);
     private readonly BackgroundGeneration _generation = new();
     private Func<Task>? _recalculateGeneration;
     private long _generationUiJob;
@@ -29,7 +34,12 @@ public sealed partial class EditorViewModel
     {
         HexGenerationStep.Land => "Суша и моря", HexGenerationStep.Relief => "Холмы и горы",
         HexGenerationStep.Climate => "Климат и леса", HexGenerationStep.Rivers => "Реки",
-        HexGenerationStep.Settlements => "Поселения", _ => "Дороги",
+        HexGenerationStep.Settlements => "Поселения", HexGenerationStep.States => "Государства", _ => "Дороги",
+    };
+
+    public static string HexWorldModeName(HexWorldMode mode) => mode switch
+    {
+        HexWorldMode.Archipelago => "Архипелаг", HexWorldMode.Desert => "Пустыня", HexWorldMode.Underdark => "Подземье", _ => "Материки",
     };
 
     public void RunHexGeneratorStep(HexGenerationStep step) => StartHexGeneration([step]);
@@ -49,7 +59,8 @@ public sealed partial class EditorViewModel
             if (!_workingMemory.TryReserve(EditCost.BaseBytes + (long)snapshot.Board.Columns * snapshot.Board.Rows * 192,
                 out var reservation, out var reason)) throw new InvalidOperationException(reason);
             using var held = reservation;
-            var after = ControlledHexGeneration.Run(snapshot, recipe, token);
+            Volatile.Write(ref _generationProgress, 0);
+            var after = ControlledHexGeneration.Run(snapshot, recipe, token, p => Volatile.Write(ref _generationProgress, p));
             return new HexLayerEditCommand("Применить генерацию", snapshot, after,
                 EditCost.BaseBytes + (long)after.Board.CellCount * 48);
         });
