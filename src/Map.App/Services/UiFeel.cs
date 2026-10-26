@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.InteropServices;
 
 namespace Map.App.Services;
 
@@ -17,7 +18,28 @@ public static class UiFeel
     private static bool _effects = true;
 
     public static bool SoundsEnabled => _sounds && (!TestMode.Enabled || ForcedInTests);
-    public static bool EffectsEnabled => _effects && (!TestMode.Enabled || ForcedInTests);
+    public static bool EffectsEnabled => _effects && !SystemReducesMotion && (!TestMode.Enabled || ForcedInTests);
+
+    /// <summary>
+    /// R41: Windows «Показывать анимацию в Windows» is off - the person asked the whole system for
+    /// less motion, so the interface keeps still whatever its own switch says. Read on each check,
+    /// so turning it back on in Windows works without a restart.
+    /// </summary>
+    public static bool SystemReducesMotion
+    {
+        get
+        {
+            if (!OperatingSystem.IsWindows()) return false;
+            try { return SystemParametersInfo(GetClientAreaAnimation, 0, out var on, 0) && !on; }
+            catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException) { return false; }
+        }
+    }
+
+    private const uint GetClientAreaAnimation = 0x1042;
+
+    [DllImport("user32.dll", EntryPoint = "SystemParametersInfoW", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SystemParametersInfo(uint action, uint param, [MarshalAs(UnmanagedType.Bool)] out bool value, uint winIni);
 
     /// <summary>The owner's choice for sounds, independent of the test-run gate.</summary>
     public static bool SoundsSetting => _sounds;

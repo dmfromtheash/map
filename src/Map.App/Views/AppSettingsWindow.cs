@@ -181,6 +181,8 @@ public sealed class AppSettingsWindow : Window
         _exportGrid.IsChecked = settings.DefaultExportIncludeGrid;
         _sounds.IsChecked = settings.InterfaceSounds;
         _effects.IsChecked = settings.InterfaceEffects;
+        if (Map.App.Services.UiFeel.SystemReducesMotion)
+            ToolTip.SetTip(_effects, "В Windows выключено «Показывать анимацию» — интерфейс не двигается, пока её не включить там.");
     }
 
     private void Save()
