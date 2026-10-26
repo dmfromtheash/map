@@ -7,11 +7,11 @@ using Map.Persistence.Tests.Support;
 
 namespace Map.Persistence.Tests;
 
-/// <summary>R10: an area with rules takes schema v19 and reopens with the same rules, the same kept-empty places and the same objects.</summary>
+/// <summary>R10/R11: kept-empty places and objects survive legacy v19 and current v30 beauty roundtrips.</summary>
 public sealed class PlacementAreaRulesPersistenceTests
 {
     [Fact]
-    public void Ecological_slots_reopen_without_catalog_metadata_or_a_new_map_schema()
+    public void Ecological_slots_and_beauty_reopen_in_v30_without_catalog_metadata()
     {
         using var workspace = new TempWorkspace();
         var bytes = ProjectFixtures.PreviewPng(); var sha = Convert.ToHexStringLower(SHA256.HashData(bytes));
@@ -19,12 +19,13 @@ public sealed class PlacementAreaRulesPersistenceTests
             DateTimeOffset.UnixEpoch, "fixture", "test", bytes);
         var session = new EditingSession(ProjectFixtures.Document("Ecology"));
         var layer = session.Document.Layers.OfType<ObjectLayer>().First();
-        var area = new PlacementArea
+        var area = PlacementAreaPlanner.InitializeComposition(new PlacementArea
         {
-            LayoutVersion = 1, Density = 5, Seed = 18,
+            LayoutVersion = 4, Density = 80, Seed = 18,
             Nodes = [new(Guid.NewGuid(), 50, 50), new(Guid.NewGuid(), 600, 50), new(Guid.NewGuid(), 600, 400), new(Guid.NewGuid(), 50, 400)],
             Variants = [new(sha, 32, 32)], Style = new(sha), Request = new() { BaseWidth = 32 },
-        };
+            Beauty = PlacementAreaBeauty.ForNewArea(32), DepthSort = true,
+        });
         session.Execute(new PlacementAreaCommand(layer.Id, area.Id, area, "ecology", [asset], forestEcology: true));
         Assert.Null(session.LastResourceError);
         var saved = ((ObjectLayer)session.Document.FindLayer(layer.Id)!).PlacementAreas.Single();
@@ -33,10 +34,11 @@ public sealed class PlacementAreaRulesPersistenceTests
         MapProjectStore.Save(session.Document, path, ProjectFixtures.Metadata(), bytes);
         using (var archive = ZipFile.OpenRead(path))
         using (var manifest = JsonDocument.Parse(archive.GetEntry("manifest.json")!.Open()))
-            Assert.Equal(19, manifest.RootElement.GetProperty("schemaVersion").GetInt32());
+            Assert.Equal(MapProjectFormat.AreaBeautySchemaVersion, manifest.RootElement.GetProperty("schemaVersion").GetInt32());
         var reopened = MapProjectStore.Open(path).Document;
         var actual = ((ObjectLayer)reopened.FindLayer(layer.Id)!).PlacementAreas.Single();
         actual.ValidateMembers();
+        Assert.Equal(saved.Beauty, actual.Beauty); Assert.True(actual.DepthSort);
         Assert.Equal(saved.RuleBlocked.OrderBy(s => s.Cell).ThenBy(s => s.Ordinal), actual.RuleBlocked.OrderBy(s => s.Cell).ThenBy(s => s.Ordinal));
         Assert.Equal(saved.MemberCount, actual.MemberCount);
         Assert.Equal(((ObjectLayer)session.Document.FindLayer(layer.Id)!).Objects, ((ObjectLayer)reopened.FindLayer(layer.Id)!).Objects);

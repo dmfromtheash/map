@@ -57,7 +57,7 @@ public sealed class PlacementAreaEcologyTests
     public void Preview_count_and_command_agree_and_undo_keeps_the_exact_slots()
     {
         var layer = new ObjectLayer(LayerId.New(), "Objects", true, false, 1, []) { Rivers = [River] };
-        var document = Document(layer); var area = Area() with { Density = 72 };
+        var document = Document(layer); var area = Area() with { Density = 72, Beauty = PlacementAreaBeauty.ForNewArea(24) };
         var ecology = new PlacementAreaEcology(document, area, true);
         var count = PlacementAreaPlanner.Count(area, ecology: ecology);
         var preview = PlacementAreaPlanner.Preview(area, ecology: ecology);

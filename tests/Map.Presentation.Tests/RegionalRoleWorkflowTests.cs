@@ -65,6 +65,7 @@ public sealed class RegionalRoleWorkflowTests : IAsyncLifetime
                 Assert.True(editor.AddEditableAreaNode(x, y));
             Assert.True(editor.FinishEditableArea());
             var area = Assert.Single(editor.EditableAreas); area.ValidateMembers(); Assert.True(area.DepthSort);
+            Assert.Equal(PlacementAreaBeauty.ForNewArea(area.Request.BaseWidth, area.Pattern), area.Beauty);
             if (mode == RegionalPlacementMode.Forest) Assert.NotEmpty(area.RuleBlocked);
         }
         Assert.Equal(1, editor.Session.UndoDepth);
@@ -78,7 +79,14 @@ public sealed class RegionalRoleWorkflowTests : IAsyncLifetime
         MapProjectStore.Save(editor.Session.Document, path, new("r11-test", DateTimeOffset.UnixEpoch), File.ReadAllBytes(Path.Combine(_root, "a.png")));
         var reopened = MapProjectStore.Open(path).Document;
         Assert.Equal(placed, Objects(reopened));
-        foreach (var area in reopened.Layers.OfType<ObjectLayer>().SelectMany(l => l.PlacementAreas)) area.ValidateMembers();
+        foreach (var area in reopened.Layers.OfType<ObjectLayer>().SelectMany(l => l.PlacementAreas))
+        {
+            area.ValidateMembers();
+            var saved = editor.EditableAreas.Single(a => a.Id == area.Id);
+            Assert.Equal(saved.Beauty, area.Beauty); Assert.Equal(saved.DepthSort, area.DepthSort);
+            Assert.Equal(saved.RuleBlocked.OrderBy(s => s.Cell).ThenBy(s => s.Ordinal),
+                area.RuleBlocked.OrderBy(s => s.Cell).ThenBy(s => s.Ordinal));
+        }
         foreach (var ridge in reopened.Layers.OfType<ObjectLayer>().SelectMany(l => l.PlacementPaths)) ridge.ValidateMembers();
         var withoutCatalog = new EditorViewModel(reopened, path, false, new FakeProjectStore(), new FakeRecentMaps(),
             new FakeFilePicker(), new FakePrompts(), new FakeLog());
