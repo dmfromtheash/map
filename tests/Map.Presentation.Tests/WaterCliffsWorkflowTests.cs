@@ -94,6 +94,38 @@ public sealed class WaterCliffsWorkflowTests
     }
 
     [Fact]
+    public void A_card_is_made_from_the_selection_bound_linked_and_undone()
+    {
+        var label = new SceneObject(ObjectId.New(), SceneObjectKind.Text, "Ильград", 100, 100, 120, 40, 0, "#FF20242B", "#FFFFFFFF", 0, true, false)
+        { Text = new TextStyle { Content = "Ильград" } };
+        var objects = new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, [label]);
+        var editor = Editor(objects);
+        editor.Session.SelectedObjectId = label.Id;
+        var id = editor.CreateEntity(EntityKind.Place);
+        var card = Assert.Single(editor.Entities);
+        Assert.Equal("Ильград", card.Name);
+        Assert.Equal(EntityTargetKind.Object, card.Bindings.Single().Kind);
+        Assert.Equal(label.Id.Value, card.Bindings.Single().TargetId);
+        Assert.Single(editor.EntitiesOfSelection());
+
+        editor.Session.SelectedObjectId = null;
+        var river = editor.CreateEntity(EntityKind.River);
+        editor.EditEntity(river, "Сельва", EntityKind.River, "Течёт мимо [[Ильград]].", false);
+        Assert.Single(editor.EntityBacklinks(editor.Entities.First(e => e.Id == id)));
+        editor.UnbindEntity(id, 0);
+        Assert.Empty(editor.Entities.First(e => e.Id == id).Bindings);
+        editor.Undo();
+        Assert.Single(editor.Entities.First(e => e.Id == id).Bindings);
+        editor.DeleteEntity(river);
+        Assert.Single(editor.Entities);
+
+        var note = editor.AddNoteAt(10, 10);
+        editor.SetNoteWiki(note, null, NoteCategory.Quest, true);
+        Assert.Equal(NoteCategory.Quest, editor.Notes.Single().Category);
+        Assert.True(editor.Notes.Single().PlayerVisible);
+    }
+
+    [Fact]
     public void Auto_road_and_river_to_sea_take_their_points_from_clicks()
     {
         var island = LandLayer.CreateEmpty(LayerId.New(), "Остров") with

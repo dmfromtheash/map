@@ -23,6 +23,9 @@ public static partial class MapProjectStore
     {
         if (scene.Layers?.Any(l => l?.Sea is not null && l.Type != "BaseColor") == true)
             throw new MapProjectCorruptedException("Стиль моря бывает только у слоя фона.");
+        if (schema < MapProjectFormat.WikiSchemaVersion && (scene.Entities is { Count: > 0 }
+            || scene.Notes?.Any(n => n is not null && (n.LinkedMap is not null || n.Category is not null || n.PlayerVisible is not null)) == true))
+            throw new MapProjectCorruptedException("Карточки сущностей и свойства заметок требуют схему v36.");
         if (schema < MapProjectFormat.IntentionalSchemaVersion && scene.Layers?.Any(l => l is not null && (
             l.Rivers?.Any(r => r is not null && r.GeographyIntentional) == true || l.Roads?.Any(r => r is not null && r.GeographyIntentional) == true
             || l.Objects?.Any(o => o?.GeographyIntentional == true) == true)) == true)
@@ -42,6 +45,17 @@ public static partial class MapProjectStore
             if (layer.Sea is not null)
                 throw new MapProjectCorruptedException("Стиль моря требует схему v32.");
         }
+    }
+
+    /// <summary>The cards of the world (R26): every card valid, ids distinct, at most 4096.</summary>
+    private static System.Collections.Immutable.ImmutableArray<MapEntity> ReadEntitiesV36(SceneDto scene)
+    {
+        if (scene.Entities is not { Count: > 0 } list) return [];
+        if (list.Count > 4096 || list.Any(e => e is null) || list.Select(e => e.Id).Distinct().Count() != list.Count)
+            throw new MapProjectCorruptedException("Повреждены карточки сущностей.");
+        try { foreach (var entity in list) entity.Validate(); }
+        catch (ArgumentException ex) { throw new MapProjectCorruptedException("Повреждена карточка сущности.", ex); }
+        return [.. list];
     }
 
     private static readonly IReadOnlyDictionary<SeaManner, string> SeaMannerNames = new Dictionary<SeaManner, string>

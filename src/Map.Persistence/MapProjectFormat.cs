@@ -120,7 +120,10 @@ public static class MapProjectFormat
 
     /// <summary>R24: a river, road or object marked «намеренно» for the geography check.</summary>
     public const int IntentionalSchemaVersion = 35;
-    public const int MaxSupportedSchemaVersion = IntentionalSchemaVersion;
+
+    /// <summary>R26: the cards of the world and the link, category and visibility of notes.</summary>
+    public const int WikiSchemaVersion = 36;
+    public const int MaxSupportedSchemaVersion = WikiSchemaVersion;
 
     /// <summary>
     /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry

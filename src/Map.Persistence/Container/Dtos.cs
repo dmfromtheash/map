@@ -172,6 +172,10 @@ internal sealed class SceneDto
     [JsonPropertyName("documentId")] public string DocumentId { get; set; } = "";
     [JsonPropertyName("layers")] public List<LayerDto> Layers { get; set; } = [];
     [JsonPropertyName("notes")] public List<NoteDto> Notes { get; set; } = [];
+    /// <summary>The cards of the world (R26, schema v36).</summary>
+    [JsonPropertyName("entities")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<Map.Core.Documents.MapEntity>? Entities { get; set; }
     [JsonPropertyName("stampForeground")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public StampForegroundDto? StampForeground { get; set; }
@@ -478,6 +482,10 @@ internal sealed class NoteDto
     [JsonPropertyName("objectId")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ObjectId { get; set; }
+    // R26 (schema v36): the map a note leads to, its category and whether the players see it.
+    [JsonPropertyName("linkedMap")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public Guid? LinkedMap { get; set; }
+    [JsonPropertyName("category")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Category { get; set; }
+    [JsonPropertyName("playerVisible")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public bool? PlayerVisible { get; set; }
 }
 
 internal sealed class LandStyleDto

@@ -6,6 +6,9 @@ namespace Map.Core.Documents;
 
 public enum TextAlignment { Left, Center, Right }
 public enum NoteAnchorKind { World, Object }
+
+/// <summary>What a note is about (R26), with its own icon in the list.</summary>
+public enum NoteCategory { Other, Place, Encounter, Lore, Quest, Secret }
 public enum GridGeometry { Square, IsometricSquares, HexFlat, HexPointy }
 
 public sealed record TextStyle
@@ -60,6 +63,17 @@ public sealed record MapNote
     public double WorldX { get; init; }
     public double WorldY { get; init; }
     public ObjectId? ObjectId { get; init; }
+
+    /// <summary>A map of the atlas the note leads to (R26, schema v36); null for none.</summary>
+    public Guid? LinkedMap { get; init; }
+
+    public NoteCategory Category { get; init; }
+
+    /// <summary>The players may see the note (exports for players include it); otherwise it is the game master's.</summary>
+    public bool PlayerVisible { get; init; }
+
+    /// <summary>True when the note carries something of R26 (schema v36).</summary>
+    public bool NeedsWikiSchema => LinkedMap is not null || Category != NoteCategory.Other || PlayerVisible;
 
     public bool IsDetached(MapDocument document) => AnchorKind == NoteAnchorKind.Object
         && (ObjectId is null || document.Layers.OfType<ObjectLayer>()

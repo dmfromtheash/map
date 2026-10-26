@@ -58,6 +58,33 @@ public sealed class WaterCliffsPersistenceTests
     }
 
     [Fact]
+    public void Cards_and_note_settings_round_trip_in_v36()
+    {
+        using var workspace = new TempWorkspace();
+        var (document, _, _) = Fixture();
+        var map = Guid.NewGuid();
+        var card = new MapEntity
+        {
+            Name = "Ильград", Kind = EntityKind.Place, Markdown = "Столица у [[Сельва]].", PlayerVisible = true,
+            Bindings = [new EntityBinding(null, EntityTargetKind.Point, Guid.Empty, 10, 20), new EntityBinding(map, EntityTargetKind.Hex, Guid.Empty, 3, -2)],
+        };
+        var note = new MapNote(NoteId.New(), "Вход", "Пещера", NoteAnchorKind.World, 5, 5) { LinkedMap = map, Category = NoteCategory.Secret, PlayerVisible = true };
+        var path = workspace.File("wiki.mapproj");
+        MapProjectStore.Save(document.WithNotes([note]) with { Entities = [card] }, path, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
+        Assert.Equal(36, Schema(path));
+        var opened = MapProjectStore.Open(path).Document;
+        var read = Assert.Single(opened.Entities);
+        Assert.Equal(card.Id, read.Id);
+        Assert.Equal(card.Markdown, read.Markdown);
+        Assert.Equal(card.Bindings.ToArray(), read.Bindings.ToArray());
+        Assert.True(read.PlayerVisible);
+        var readNote = Assert.Single(opened.Notes);
+        Assert.Equal(map, readNote.LinkedMap);
+        Assert.Equal(NoteCategory.Secret, readNote.Category);
+        Assert.True(readNote.PlayerVisible);
+    }
+
+    [Fact]
     public void Intentional_marks_round_trip_in_v35()
     {
         using var workspace = new TempWorkspace();

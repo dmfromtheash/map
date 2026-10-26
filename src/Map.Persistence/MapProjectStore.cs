@@ -46,7 +46,12 @@ public static partial class MapProjectStore
     private static bool HasIntentionalV35(IEnumerable<MapLayer> layers) => layers.OfType<ObjectLayer>().Any(l =>
         l.Rivers.Any(r => r.GeographyIntentional) || l.Roads.Any(r => r.GeographyIntentional) || l.Objects.Any(o => o.GeographyIntentional));
 
+    private static bool HasWikiV36(IReadOnlyList<MapEntity> entities, IEnumerable<MapNote> notes) =>
+        entities.Count > 0 || notes.Any(n => n.NeedsWikiSchema);
+
     private static int SchemaFor(MapDocument document) =>
+        HasWikiV36(document.Entities, document.Notes) || document.Checkpoints.Any(c => HasWikiV36(c.Snapshot.Entities, c.Snapshot.Notes))
+            ? MapProjectFormat.WikiSchemaVersion :
         HasIntentionalV35(document.Layers) || document.Checkpoints.Any(c => HasIntentionalV35(c.Snapshot.Layers))
             ? MapProjectFormat.IntentionalSchemaVersion :
         HasReliefV34(document.Layers) || document.Checkpoints.Any(c => HasReliefV34(c.Snapshot.Layers))
@@ -1731,6 +1736,7 @@ public static partial class MapProjectStore
         DocumentId = document.Id.ToString(),
         Layers = [.. document.Layers.Select(layer => ToLayerDto(layer, objectChunks))],
         Notes = [.. document.Notes.Select(ToNoteDto)],
+        Entities = document.Entities.IsDefaultOrEmpty ? null : [.. document.Entities],
         StampForeground = document.StampForeground is { } foreground
             ? new StampForegroundDto { Tiles = ToTileDtos(foreground.Tiles) }
             : null,
@@ -2180,6 +2186,9 @@ public static partial class MapProjectStore
         WorldX = note.WorldX,
         WorldY = note.WorldY,
         ObjectId = note.ObjectId?.ToString(),
+        LinkedMap = note.LinkedMap,
+        Category = note.Category == NoteCategory.Other ? null : note.Category.ToString(),
+        PlayerVisible = note.PlayerVisible ? true : null,
     };
 
     private static GridDefinitionDto ToGridDto(GridDefinition grid) => new()
@@ -2417,7 +2426,8 @@ public static partial class MapProjectStore
                         4,
                         tileEntries))
                     : null,
-                category) { Atlas = ReadAtlasV26(manifest), Lighting = ReadLightingV28(manifest), Style = ReadStyleV29(manifest) };
+                category) { Atlas = ReadAtlasV26(manifest), Lighting = ReadLightingV28(manifest), Style = ReadStyleV29(manifest),
+                    Entities = ReadEntitiesV36(scene) };
         }
         catch (Exception ex) when (ex is ArgumentException or FormatException or InvalidOperationException)
         {
@@ -2664,7 +2674,12 @@ public static partial class MapProjectStore
         RequireString(note.Title, "note title"), note.Markdown ?? throw new MapProjectCorruptedException("A note has no markdown."),
         ParseDefined<NoteAnchorKind>(note.AnchorKind, "note anchor kind"),
         note.WorldX, note.WorldY,
-        note.ObjectId is null ? null : ObjectId.Parse(note.ObjectId));
+        note.ObjectId is null ? null : ObjectId.Parse(note.ObjectId))
+    {
+        LinkedMap = note.LinkedMap,
+        Category = note.Category is null ? NoteCategory.Other : ParseDefined<NoteCategory>(note.Category, "note category"),
+        PlayerVisible = note.PlayerVisible == true,
+    };
 
     private static GridDefinition ToGrid(GridDefinitionDto grid) => new(
         GridId.Parse(RequireString(grid.Id, "grid id")),

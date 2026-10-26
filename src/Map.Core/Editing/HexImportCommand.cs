@@ -20,7 +20,7 @@ public sealed class HexImportCommand : IEditCommand
         var canvas = before.Canvas.Resized((int)width, (int)height);
         _after = new MapDocument(before.Id, before.Title, before.CreatedUtc, canvas, layers,
             before.Assets, before.Notes, before.Checkpoints, before.StampForeground, before.Category)
-        { Atlas = before.Atlas, Lighting = before.Lighting, Style = before.Style };
+        { Atlas = before.Atlas, Lighting = before.Lighting, Style = before.Style, Entities = before.Entities };
         MeasuredWorkingBytes = EditCost.BaseBytes + (long)imported.Board.CellCount * 48;
     }
     public string Name => "Импорт JSON гексов";

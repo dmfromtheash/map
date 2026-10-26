@@ -7815,6 +7815,7 @@ public sealed partial class EditorView : UserControl
                 new DockPanel { Children = { link.Docked(Dock.Right), linkTarget } },
                 Ui.Subgroup("Текст заметки", _noteMarkdown),
                 Ui.Subgroup("Как выглядит", new Border { Padding = new Thickness(8), Child = preview }.Classed("group")),
+                BuildNoteWiki(),
                 new Avalonia.Controls.Primitives.UniformGrid
                 {
                     Rows = 1, Columns = 3,
@@ -7848,7 +7849,8 @@ public sealed partial class EditorView : UserControl
         // which opens by itself when a note is picked.
         return Ui.CategoryTabs("NotesTabs",
             new Ui.CategoryTab("List", "Все заметки", MapIcons.LineList, listPage, "Поиск и список заметок, новая заметка"),
-            new Ui.CategoryTab("Note", "Заметка", MapIcons.LineNotes, _noteSelectionEditor, "Заголовок, текст и действия выбранной заметки", Prefer: true));
+            new Ui.CategoryTab("Note", "Заметка", MapIcons.LineNotes, _noteSelectionEditor, "Заголовок, текст и действия выбранной заметки", Prefer: true),
+            new Ui.CategoryTab("Entities", "Сущности", MapIcons.LineCatalog, BuildEntitiesPage(), "Карточки мира: места, реки, персонажи, фракции"));
     }
 
     private Control BuildCheckpointsTab()
@@ -9886,6 +9888,7 @@ public sealed partial class EditorView : UserControl
         Timed("object-list", SyncObjectList);
         Timed("asset-list", SyncAssetList);
         Timed("note-list", SyncNoteList);
+        Timed("entity-list", SyncEntities);
         Timed("checkpoint-list", SyncCheckpointList);
         Timed("canvas-workflow", SyncCanvasWorkflow);
         Timed("quick-bar", SyncQuickBar);
@@ -10864,6 +10867,7 @@ public sealed partial class EditorView : UserControl
                     _noteTitle.Text = captured.Title;
                     _noteMarkdown.Text = captured.Markdown;
                     SyncNoteList();
+                    SyncNoteWiki();
                 },
                 note.Title);
 

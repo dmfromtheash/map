@@ -1,4 +1,5 @@
-﻿using System.Collections.ObjectModel;
+﻿using System.Collections.Immutable;
+using System.Collections.ObjectModel;
 
 namespace Map.Core.Documents;
 
@@ -42,6 +43,7 @@ public sealed record MapDocument
         Atlas = source.Atlas;
         Lighting = source.Lighting;
         Style = source.Style;
+        Entities = source.Entities;
     }
 
     public MapDocument(
@@ -263,6 +265,9 @@ public sealed record MapDocument
 
     /// <summary>The style of the whole map (R09, DEC-059), or null when the map has never used the Стили section.</summary>
     public MapStyle? Style { get; init; }
+
+    /// <summary>The cards of the world kept with this map (R26, schema v36): places, rivers, characters, factions.</summary>
+    public ImmutableArray<MapEntity> Entities { get; init; } = [];
     public string Title { get; init; }
 
     /// <summary>When the document was first created. Supplied by the caller; Core has no clock.</summary>
@@ -335,6 +340,7 @@ public sealed record MapDocument
             Atlas = Atlas,
             Lighting = Lighting,
             Style = Style,
+            Entities = Entities,
         };
 
     public MapDocument WithAssets(IReadOnlyList<MapAssetReference> assets)
