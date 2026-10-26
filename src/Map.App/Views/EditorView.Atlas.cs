@@ -34,6 +34,7 @@ public sealed partial class EditorView
         }, "compact");
         row.Children.Add(up); row.Children.Add(crumbs);
         row.Children.Add(Ui.TextButton("AtlasCheckButton", "Проверка атласа", () => _ = ShowAtlasCheckAsync(), "compact"));
+        row.Children.Add(Ui.TextButton("GeographyCheckButton", "Проверка географии", () => ShowGeographyCheck(), "compact"));
         row.Children.Add(Ui.TextButton("AtlasRefreshButton", "Обновить атлас", () => _ = _editor.RefreshAtlasAsync(), "compact"));
         void PositionFrames()
         {
@@ -94,6 +95,52 @@ public sealed partial class EditorView
         Refresh(); _ = _editor.RefreshAtlasAsync();
         return new ScrollViewer { HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
             VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled, Content = row };
+    }
+
+    private Window? _geographyWindow;
+
+    /// <summary>
+    /// R24: what looks wrong in the geography of the map - each finding with «Показать» (the view
+    /// goes there) and «Намеренно» (fantasy on purpose: the check leaves it alone, one undo step).
+    /// </summary>
+    public void ShowGeographyCheck()
+    {
+        if (TopLevel.GetTopLevel(this) is not Window owner) return;
+        if (_geographyWindow is { IsVisible: true }) { _geographyWindow.Activate(); return; }
+        var window = new Window { Name = "GeographyCheckWindow", Title = "Проверка географии", Width = 640, Height = 480,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner };
+        _geographyWindow = window;
+        var summary = new TextBlock { Name = "GeographyCheckSummary", TextWrapping = TextWrapping.Wrap };
+        var issues = new StackPanel { Name = "GeographyCheckIssues", Spacing = 10 };
+        void Inspect()
+        {
+            var results = _editor.CheckGeography();
+            summary.Text = results.IsEmpty ? "Ничего странного не найдено: реки текут вниз, у озёр есть сток, дороги не упираются в обрывы."
+                : $"Найдено: {results.Length}. Это только подсказки — фантастика допустима, отметьте её «намеренно».";
+            issues.Children.Clear();
+            var index = 0;
+            foreach (var issue in results)
+            {
+                index++;
+                var captured = issue;
+                var show = Ui.TextButton("GeographyShow" + index, "Показать", () => { _editor.ShowGeographyIssue(captured); Canvas.InvalidateVisual(); }, "compact");
+                var intentional = Ui.TextButton("GeographyIntentional" + index, "Намеренно", () => { if (_editor.MarkIntentional(captured)) Inspect(); }, "compact");
+                issues.Children.Add(Ui.Subgroup(issue.Message, new StackPanel
+                {
+                    Spacing = 4, Children =
+                    {
+                        new TextBlock { Text = "Что сделать: " + issue.Fix, TextWrapping = TextWrapping.Wrap },
+                        new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Children = { show, intentional } },
+                    },
+                }));
+            }
+        }
+        window.Content = new StackPanel { Margin = new Thickness(16), Spacing = 12, Children = { summary,
+            new ScrollViewer { Content = issues, MaxHeight = 330 },
+            Ui.TextButton("GeographyCheckAgainButton", "Проверить снова", Inspect, "compact"),
+            Ui.TextButton("GeographyCheckCloseButton", "Закрыть", window.Close, "compact") } };
+        window.Closed += (_, _) => { if (ReferenceEquals(_geographyWindow, window)) _geographyWindow = null; };
+        window.Show(owner); Inspect();
     }
 
     public async Task ShowAtlasCheckAsync()

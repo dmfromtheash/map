@@ -23,6 +23,10 @@ public static partial class MapProjectStore
     {
         if (scene.Layers?.Any(l => l?.Sea is not null && l.Type != "BaseColor") == true)
             throw new MapProjectCorruptedException("Стиль моря бывает только у слоя фона.");
+        if (schema < MapProjectFormat.IntentionalSchemaVersion && scene.Layers?.Any(l => l is not null && (
+            l.Rivers?.Any(r => r is not null && r.GeographyIntentional) == true || l.Roads?.Any(r => r is not null && r.GeographyIntentional) == true
+            || l.Objects?.Any(o => o?.GeographyIntentional == true) == true)) == true)
+            throw new MapProjectCorruptedException("Отметка «намеренно» требует схему v35.");
         if (schema < MapProjectFormat.ReliefSchemaVersion && scene.Layers?.Any(l => l?.ReliefTiles is { Count: > 0 }) == true)
             throw new MapProjectCorruptedException("Рельеф суши требует схему v34.");
         if (schema >= MapProjectFormat.WaterCliffsSchemaVersion || scene.Layers is null) return;

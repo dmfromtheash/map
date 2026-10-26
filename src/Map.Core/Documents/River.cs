@@ -207,6 +207,10 @@ public sealed record River
     /// <summary>Multiplies every node width, so a whole river can be made wider without retouching nodes.</summary>
     public double WidthScale { get; init; } = 1;
 
+    /// <summary>The user means this river as it is (R24, schema v35): the geography check does not report it.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public bool GeographyIntentional { get; init; }
+
     /// <summary>Why a generator made this river (R23, schema v31); null for a river drawn by hand.</summary>
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public string? GenerationReason { get; init; }

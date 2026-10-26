@@ -153,6 +153,8 @@ public sealed partial class Stage19Application : Application
         { _report.Required = LightsRequired; _report.Scenario = "lights"; }
         if (Options.Profile == "native-continent-gen")
         { _report.Required = ContinentRequired; _report.Scenario = "continent"; }
+        if (Options.Profile == "native-geography")
+        { _report.Required = GeographyRequired; _report.Scenario = "geography"; }
         if (Options.Profile == "native-soft-coast")
         { _report.Required = SoftCoastRequired; _report.Scenario = "soft-coast"; }
         if (Options.Profile == "native-history-memory")
@@ -226,6 +228,7 @@ public sealed partial class Stage19Application : Application
         if (_report.Scenario == "water-cliffs") { await WaterCliffsOnly(); return; }
         if (_report.Scenario == "lights") { await LightsOnly(); return; }
         if (_report.Scenario == "continent") { await ContinentOnly(); return; }
+        if (_report.Scenario == "geography") { await GeographyOnly(); return; }
         if (_report.Scenario == "owner-art") { await OwnerArtOnly(); return; }
         if (_report.Scenario == "history-memory") { await HistoryMemoryOnly(); return; }
         if (_report.Scenario == "panel-shots") { await PanelShotsOnly(); return; }

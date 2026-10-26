@@ -43,7 +43,12 @@ public static partial class MapProjectStore
 
     private static bool HasReliefV34(IEnumerable<MapLayer> layers) => layers.OfType<LandLayer>().Any(l => l.ReliefTiles.TileCount > 0);
 
+    private static bool HasIntentionalV35(IEnumerable<MapLayer> layers) => layers.OfType<ObjectLayer>().Any(l =>
+        l.Rivers.Any(r => r.GeographyIntentional) || l.Roads.Any(r => r.GeographyIntentional) || l.Objects.Any(o => o.GeographyIntentional));
+
     private static int SchemaFor(MapDocument document) =>
+        HasIntentionalV35(document.Layers) || document.Checkpoints.Any(c => HasIntentionalV35(c.Snapshot.Layers))
+            ? MapProjectFormat.IntentionalSchemaVersion :
         HasReliefV34(document.Layers) || document.Checkpoints.Any(c => HasReliefV34(c.Snapshot.Layers))
             ? MapProjectFormat.ReliefSchemaVersion :
         HasLightZonesV33(document.Lighting) || document.Checkpoints.Any(c => HasLightZonesV33(c.Snapshot.Lighting))
@@ -2101,6 +2106,7 @@ public static partial class MapProjectStore
         Kind = sceneObject.Kind.ToString(),
         Name = sceneObject.Name,
         GenerationReason = sceneObject.GenerationReason,
+        GeographyIntentional = sceneObject.GeographyIntentional ? true : null,
         X = sceneObject.X,
         Y = sceneObject.Y,
         Width = sceneObject.Width,
@@ -2562,6 +2568,7 @@ public static partial class MapProjectStore
         GroupId = dto.GroupId is null ? null : Guid.ParseExact(dto.GroupId, "D"),
         GroupName = dto.GroupName,
         GenerationReason = dto.GenerationReason is { Length: > 240 } ? throw new MapProjectCorruptedException("Слишком длинная причина генерации.") : dto.GenerationReason,
+        GeographyIntentional = dto.GeographyIntentional == true,
         ObjectOpacity = RequireFinite(dto.ObjectOpacity, "object opacity", min: 0, max: 1),
         FillGradient = ToGradient(dto.FillGradient, "object fill gradient"),
         Stamp = dto.Stamp is { } stamp

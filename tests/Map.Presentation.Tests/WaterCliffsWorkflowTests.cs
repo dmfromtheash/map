@@ -94,6 +94,35 @@ public sealed class WaterCliffsWorkflowTests
     }
 
     [Fact]
+    public void Auto_road_and_river_to_sea_take_their_points_from_clicks()
+    {
+        var island = LandLayer.CreateEmpty(LayerId.New(), "Остров") with
+        { GeometryTiles = TileMap.Empty(1).With(new(0, 0), Enumerable.Range(0, 65536).Select(i => (byte)(i % 256 is > 10 and < 245 && i / 256 is > 10 and < 245 ? 255 : 0)).ToArray()) };
+        var objects = new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, []);
+        var editor = Editor(island, objects);
+        var router = new CanvasInputRouter(editor);
+        editor.SelectLayer(objects.Id); editor.ActiveTool = EditorTool.Road;
+        editor.Session.Viewport.Set(0, 0, 1);
+        editor.ArmAutoRoad();
+        Assert.Equal(GeographyPick.RoadFrom, editor.GeographyPick);
+        router.Press(CanvasPointerButton.Left, 40, 40); router.Release(40, 40);
+        Assert.Equal(GeographyPick.RoadTo, editor.GeographyPick);
+        var depth = editor.Session.UndoDepth;
+        router.Press(CanvasPointerButton.Left, 200, 200); router.Release(200, 200);
+        Assert.Equal(GeographyPick.None, editor.GeographyPick);
+        Assert.Equal(depth + 1, editor.Session.UndoDepth);
+        Assert.Single(((ObjectLayer)editor.Session.Document.FindLayer(objects.Id)!).Roads);
+
+        editor.ActiveTool = EditorTool.River;
+        editor.ArmRiverToSea();
+        router.Press(CanvasPointerButton.Left, 120, 120); router.Release(120, 120);
+        var river = Assert.Single(((ObjectLayer)editor.Session.Document.FindLayer(objects.Id)!).Rivers);
+        Assert.True(river.Channels[0].Nodes.Length >= 3);
+        var issues = editor.CheckGeography();
+        Assert.All(issues, i => Assert.NotEqual(river.Id, i.ObjectId));
+    }
+
+    [Fact]
     public void Sea_manner_strength_and_reach_are_undoable_and_keep_each_other()
     {
         var editor = Editor();

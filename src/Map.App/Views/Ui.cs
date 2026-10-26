@@ -41,6 +41,13 @@ public static class Ui
         return control;
     }
 
+    /// <summary>Sets the tooltip and returns the control, for use inside an initializer.</summary>
+    public static T WithTip<T>(this T control, string tip) where T : Control
+    {
+        ToolTip.SetTip(control, tip);
+        return control;
+    }
+
     public static T Classed<T>(this T control, params string[] classes) where T : StyledElement
     {
         foreach (var value in classes)

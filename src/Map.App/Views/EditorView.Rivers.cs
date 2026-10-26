@@ -307,6 +307,8 @@ public sealed partial class EditorView
                         HeroButton("StartRiverButton", "Новая река", "Клики от истока к устью; клик по руслу — приток или рукав",
                             MapIcons.SolidRiver, _editor.StartRiver),
                         Ui.TextButton("StartLakeButton", "Новое озеро", _editor.StartLake, "compact"),
+                        Ui.TextButton("RiverToSeaButton", "Река отсюда в море", _editor.ArmRiverToSea, "compact")
+                            .WithTip("Щёлкните на суше — река сама найдёт путь вниз по склону до моря."),
                         _riverFinish,
                         AppearanceNumberBox("NewRiverWidthBox", "Ширина новых узлов", "ед.", () => _editor.NewRiverWidth, value => _editor.NewRiverWidth = value,
                             slider: (1, 200), defaultValue: 12, description: "Ширина, с которой ставится каждый новый узел реки или озера."),

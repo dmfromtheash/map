@@ -245,6 +245,8 @@ public sealed partial class EditorView
                         modes,
                         HeroButton("StartRoadButton", "Новая дорога", "Клики по холсту; клик по дороге — ветвь от общего узла",
                             MapIcons.SolidRoad, _editor.StartRoad),
+                        Ui.TextButton("AutoRoadButton", "Проложить дорогу A→B", _editor.ArmAutoRoad, "compact")
+                            .WithTip("Два щелчка: откуда и куда. Дорога пойдёт по суше самым лёгким путём — в обход моря, крутых склонов и обрывов."),
                         _roadFinish,
                         AppearanceNumberBox("NewRoadWidthBox", "Ширина новых узлов", "ед.", () => _editor.NewRoadWidth, value => _editor.NewRoadWidth = value),
                         Ui.Hint("Узлы: клики по холсту. Первый клик по дороге — ветвь от общего узла; клик по дороге с узлами в черновике — соединение; клик по первому узлу — замкнуть. Enter — свободный конец, Esc — отмена."),

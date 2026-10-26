@@ -570,6 +570,7 @@ internal sealed class TileDto
 internal sealed class SceneObjectDto
 {
     [JsonPropertyName("generationReason")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? GenerationReason { get; set; }
+    [JsonPropertyName("geographyIntentional")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public bool? GeographyIntentional { get; set; }
     [JsonPropertyName("id")] public string Id { get; set; } = "";
     [JsonPropertyName("kind")] public string Kind { get; set; } = "";
     [JsonPropertyName("name")] public string Name { get; set; } = "";

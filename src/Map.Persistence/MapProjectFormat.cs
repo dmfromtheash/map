@@ -117,7 +117,10 @@ public static class MapProjectFormat
 
     /// <summary>R22: the heights of a land (relief tiles). Maps without them keep the older schema.</summary>
     public const int ReliefSchemaVersion = 34;
-    public const int MaxSupportedSchemaVersion = ReliefSchemaVersion;
+
+    /// <summary>R24: a river, road or object marked «намеренно» for the geography check.</summary>
+    public const int IntentionalSchemaVersion = 35;
+    public const int MaxSupportedSchemaVersion = IntentionalSchemaVersion;
 
     /// <summary>
     /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry

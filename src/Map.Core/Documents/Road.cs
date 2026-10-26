@@ -231,6 +231,10 @@ public sealed record Road
     /// <summary>Seed of the drawn details, so a saved road looks the same on every open and in every tile.</summary>
     public int Seed { get; init; }
 
+    /// <summary>The user means this road as it is (R24, schema v35): the geography check does not report it.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public bool GeographyIntentional { get; init; }
+
     /// <summary>Why a generator made this road (R23, schema v31); null for a road drawn by hand.</summary>
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public string? GenerationReason { get; init; }

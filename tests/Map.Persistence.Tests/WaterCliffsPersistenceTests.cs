@@ -58,6 +58,26 @@ public sealed class WaterCliffsPersistenceTests
     }
 
     [Fact]
+    public void Intentional_marks_round_trip_in_v35()
+    {
+        using var workspace = new TempWorkspace();
+        var (document, _, objects) = Fixture();
+        var river = new River { Name = "Река", Channels = [RiverEditor.NewChannel([new(10, 10), new(200, 40)], 8)], GeographyIntentional = true };
+        var road = RoadEditor.NewRoad([new(10, 100), new(300, 120)], 3) with { GeographyIntentional = true };
+        var label = new SceneObject(ObjectId.New(), SceneObjectKind.Text, "Город", 10, 10, 100, 30, 0, "#FF20242B", "#FFFFFFFF", 0, true, false)
+        { Text = new TextStyle { Content = "Город" }, GeographyIntentional = true };
+        var layer = objects with { Rivers = [river], Roads = [road], Objects = [label] };
+        var path = workspace.File("intent.mapproj");
+        MapProjectStore.Save(document.WithLayers([.. document.Layers.Select(l => l.Id == layer.Id ? layer : l)]), path,
+            ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
+        Assert.Equal(35, Schema(path));
+        var opened = (ObjectLayer)MapProjectStore.Open(path).Document.FindLayer(objects.Id)!;
+        Assert.True(opened.Rivers.Single().GeographyIntentional);
+        Assert.True(opened.Roads.Single().GeographyIntentional);
+        Assert.True(opened.Objects.Single().GeographyIntentional);
+    }
+
+    [Fact]
     public void Relief_and_its_look_round_trip_in_v34()
     {
         using var workspace = new TempWorkspace();

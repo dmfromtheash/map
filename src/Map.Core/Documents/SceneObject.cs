@@ -131,6 +131,10 @@ public sealed record StampGroundShadow(double Opacity, double FootX, double Foot
 public sealed record SceneObject
 {
     public string? GenerationReason { get; init; }
+
+    /// <summary>The user means this object as it is (R24, schema v35): the geography check does not report it.</summary>
+    public bool GeographyIntentional { get; init; }
+
     public SceneObject(
         ObjectId id,
         SceneObjectKind kind,
