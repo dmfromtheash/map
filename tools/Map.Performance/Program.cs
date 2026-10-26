@@ -55,6 +55,13 @@ else if (options.Profile is "native-asset-catalog" or "native-empty-artwork")
     var smoke = NativeAssetCatalogSmoke.Run(options);
     report = smoke; gatePassed = smoke.GatePassed;
 }
+else if (options.Profile == "native-regional-roles")
+{
+    var smoke = NativeRegionalRolesSmoke.Run(options); report = smoke; gatePassed = smoke.GatePassed;
+    Console.WriteLine($"native-regional-roles: checks={smoke.Checks.Count(c => c.Value)}/{smoke.Checks.Count}, gate={(smoke.GatePassed ? "PASS" : "FAIL")}");
+    foreach (var note in smoke.Notes) Console.WriteLine($"  {note.Key} = {note.Value}");
+    if (smoke.Failure is not null) Console.WriteLine(smoke.Failure);
+}
 else if (options.Profile == "native-render-audit")
 {
     var audit = NativeRenderAuditSmoke.Run(options); report = audit; gatePassed = audit.GatePassed;

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json.Nodes;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -24,8 +25,10 @@ internal sealed class NativeAssetCatalogReport
 {
     public string Observation { get; } = "Own native Avalonia window, ShowActivated=false; the real catalog window, the real stamp panel and the production canvas router. No system input.";
     public Dictionary<string, bool> Checks { get; } = [];
+    public List<string> Frames { get; } = [];
+    public int MinimumChecks { get; set; } = 10;
     public string? Failure { get; set; }
-    public bool GatePassed => Failure is null && Checks.Count >= 10 && Checks.Values.All(v => v);
+    public bool GatePassed => Failure is null && Checks.Count >= MinimumChecks && Checks.Values.All(v => v);
 }
 
 /// <summary>
@@ -72,7 +75,8 @@ public sealed class AssetCatalogApplication : Application
     public override void OnFrameworkInitializationCompleted()
     {
         var desktop = (IClassicDesktopStyleApplicationLifetime)ApplicationLifetime!;
-        _workspace = Path.Combine(Path.GetDirectoryName(Options.OutputPath)!, "asset-catalog-native");
+        _report.MinimumChecks = Options.Profile == "native-asset-catalog" ? 45 : 10;
+        _workspace = Path.Combine(Path.GetDirectoryName(Options.OutputPath)!, "asset-catalog-native-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_workspace);
         Environment.SetEnvironmentVariable("MAP_UI_TEST_MODE", "1");
         Environment.SetEnvironmentVariable("MAP_UI_TEST_PROFILE_ROOT", Path.Combine(_workspace, "profile"));
@@ -106,8 +110,17 @@ public sealed class AssetCatalogApplication : Application
             }
             finally
             {
-                _view.CloseAuxiliaryWindowsForSmoke(); _view.Canvas.DisposeRenderCaches();
-                await _catalog.FlushMetadataAsync(); _window.Close(); Completion.TrySetResult(_report); desktop.Shutdown();
+                try
+                {
+                    _view.CloseAuxiliaryWindowsForSmoke(); _view.Canvas.DisposeRenderCaches();
+                    _editor.CancelPlacement();
+                    await _editor.PendingEditableAreaCount; await _editor.PendingEditableAreaPreview; await _editor.PendingEditableAreaWork;
+                    await _catalog.DisposeAsync(); _window.Close();
+                    Directory.Delete(_workspace, recursive: true);
+                    Check("isolated workspace deleted", !Directory.Exists(_workspace));
+                }
+                catch (Exception ex) { _report.Failure ??= ex.ToString(); }
+                Completion.TrySetResult(_report); desktop.Shutdown();
             }
         };
         desktop.MainWindow = _window; base.OnFrameworkInitializationCompleted();
@@ -281,6 +294,68 @@ public sealed class AssetCatalogApplication : Application
         var loaded = preferences.Load();
         Check("gallery starts at defaults after disk reload", loaded.LibraryTileSize == 112 && loaded.LibraryShowNames);
         await CheckTerrain();
+        await CheckRoles(painted.Id);
+    }
+
+    private async Task CheckRoles(string setId)
+    {
+        async Task<ComboBox> OpenPassport(string phase)
+        {
+            _editor.ActiveTool = EditorTool.Stamp;
+            _editor.ClearLibraryFilters(); _view.RefreshLibraryPanel();
+            _view.OpenAssetCatalog(); await Settle();
+            var window = _view.AssetCatalogWindowForSmoke!;
+            FindIn<Expander>(window, "LibraryOrganizationDetails").IsExpanded = true;
+            await Settle(); await WaitForThumbnails(window);
+            var tile = FindIn<Button>(window, "GalleryCover_" + Sanitize(setId));
+            tile.BringIntoView(); await Settle();
+            tile.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Settle();
+            var box = FindIn<ComboBox>(window, "PassportAssetRoleBox");
+            box.BringIntoView(); await Settle();
+            Check("role passport chosen through catalog card " + phase, window.IsVisible && _editor.SelectedSetId == setId
+                && box.IsEffectivelyVisible && box.IsEnabled);
+            return box;
+        }
+
+        string? DiskRole() => JsonNode.Parse(File.ReadAllText(Path.Combine(_catalog.Root, "catalog.json")))!["sets"]!
+            .AsArray().Single(s => s!["id"]!.GetValue<string>() == setId)!["placement"]?["role"]?.GetValue<string>();
+
+        async Task SetRole(ComboBox box, AssetRole role, string diskValue)
+        {
+            var document = _editor.Session.Document;
+            var undo = _editor.Session.UndoDepth; var redo = _editor.Session.RedoDepth; var revision = _editor.Session.Revision;
+            box.SelectedIndex = (int)role; await Settle(); await _catalog.FlushMetadataAsync();
+            Check("role " + diskValue + " saved explicitly in catalog.json", DiskRole() == diskValue
+                && _catalog.FindSet(setId)!.Placement?.Role == role);
+            Check("role " + diskValue + " leaves document and history unchanged", ReferenceEquals(document, _editor.Session.Document)
+                && undo == _editor.Session.UndoDepth && redo == _editor.Session.RedoDepth && revision == _editor.Session.Revision);
+        }
+
+        async Task Reopen()
+        {
+            var document = _editor.Session.Document; var root = _catalog.Root;
+            _view.CloseAuxiliaryWindowsForSmoke(); _view.Canvas.DisposeRenderCaches();
+            _editor.CancelPlacement(); await _catalog.DisposeAsync();
+            _catalog = new AssetCatalog(root);
+            _editor = new EditorViewModel(document, null, false, new ProjectStore(new RecoveryJournal(Path.Combine(_workspace, "role-recovery"))),
+                new LocalRecent(), new LocalPicker(Path.Combine(_workspace, "roles.mapproj")), new LocalPrompts(), new LocalLog(),
+                assetCatalog: _catalog, localPreferences: new EditorLocalPreferences(PrimaryAutosaveEnabled: false));
+            _view = new EditorView(_editor, () => Task.CompletedTask, () => { }, () => { });
+            _window.Content = _view; await Settle();
+        }
+
+        var roleBox = await OpenPassport("initial");
+        await SetRole(roleBox, AssetRole.Tree, "tree");
+        Capture(_view.AssetCatalogWindowForSmoke!, "passport-role-tree");
+        await Reopen(); roleBox = await OpenPassport("tree reopen");
+        Check("new catalog and passport reopen as Tree", roleBox.SelectedIndex == (int)AssetRole.Tree
+            && Equals(roleBox.SelectedItem, "Дерево"));
+        Capture(_view.AssetCatalogWindowForSmoke!, "passport-role-tree-reopened");
+        await SetRole(roleBox, AssetRole.None, "none");
+        await Reopen(); roleBox = await OpenPassport("none reopen");
+        Check("new catalog and passport reopen as explicit None", roleBox.SelectedIndex == (int)AssetRole.None
+            && Equals(roleBox.SelectedItem, "Без роли") && DiskRole() == "none");
+        Capture(_view.AssetCatalogWindowForSmoke!, "passport-role-none-reopened");
     }
 
     private async Task CheckEmptyArtwork()
@@ -429,7 +504,9 @@ public sealed class AssetCatalogApplication : Application
         var width = Math.Max(1, (int)root.Bounds.Width); var height = Math.Max(1, (int)root.Bounds.Height);
         using var image = new RenderTargetBitmap(new PixelSize(width, height));
         image.Render(root);
-        image.Save(Path.ChangeExtension(Options.OutputPath, suffix + ".png"), PngBitmapEncoderOptions.Default);
+        var path = Path.ChangeExtension(Options.OutputPath, suffix + ".png");
+        image.Save(path, PngBitmapEncoderOptions.Default);
+        _report.Frames.Add(path);
     }
 
     private void Check(string key, bool value)
