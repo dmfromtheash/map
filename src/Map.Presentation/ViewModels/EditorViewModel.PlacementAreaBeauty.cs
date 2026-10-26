@@ -178,7 +178,12 @@ public sealed partial class EditorViewModel
     public bool BeginAreaDensityStroke(double x, double y)
     {
         if (!IsAreaDensityBrushActive || ActiveTool != EditorTool.Stamp || _areaCreating) return false;
-        if (_areaProtectionBrush) { _areaProtectionStroke = [.. SelectedEditableArea!.GenerationProtection ?? []]; DabAreaProtection(x, y); return true; }
+        if (_areaProtectionBrush)
+        {
+            _areaProtectionStroke = [.. SelectedEditableArea!.GenerationProtection ?? []];
+            _areaDensityWork = PlacementAreaDensityBrush.Begin(SelectedEditableArea with { DensityMask = SelectedEditableArea.GenerationProtectionMask });
+            _areaDensityLast = null; ContinueAreaDensityStroke(x, y); return true;
+        }
         if (IsEditableAreaBusy) { StatusDetail = EditableAreaPlacementHint; return true; }
         _areaDensityWork = PlacementAreaDensityBrush.Begin(SelectedEditableArea!);
         _areaDensityLast = null;
@@ -194,7 +199,14 @@ public sealed partial class EditorViewModel
 
     public void ContinueAreaDensityStroke(double x, double y)
     {
-        if (_areaProtectionBrush) { DabAreaProtection(x, y); return; }
+        if (_areaProtectionBrush)
+        {
+            var (lastX, lastY) = _areaDensityLast ?? (x, y);
+            var distance = double.Hypot(x - lastX, y - lastY);
+            var count = Math.Max(1, (int)Math.Ceiling(distance / Math.Max(1, _areaDensityRadius / 4)));
+            for (var i = 1; i <= count; i++) DabAreaProtection(lastX + (x - lastX) * i / count, lastY + (y - lastY) * i / count);
+            _areaDensityLast = (x, y); return;
+        }
         AreaDensityBrushPoint = (x, y);
         if (_areaDensityWork is not { } work) return;
         // Dabs a quarter of the radius apart, so a fast stroke stays continuous.
@@ -224,7 +236,7 @@ public sealed partial class EditorViewModel
     /// <summary>Esc during a stroke: the stroke is dropped, the area keeps its raster.</summary>
     public bool CancelAreaDensityStroke()
     {
-        if (_areaProtectionStroke is not null) { _areaProtectionStroke = null; return true; }
+        if (_areaProtectionStroke is not null) { _areaProtectionStroke = null; _areaDensityWork = null; _areaDensityLast = null; return true; }
         if (_areaDensityWork is null) return false;
         _areaDensityWork = null; _areaDensityLast = null; _areaDensityVersion++;
         InvalidateScene(EditorChangeReason.CanvasInvalidation);
@@ -237,6 +249,7 @@ public sealed partial class EditorViewModel
         get
         {
             if (!IsAreaDensityBrushActive || SelectedEditableArea is not { } area) return null;
+            if (_areaProtectionBrush) return new(0, 0, 1, 0, 0, [], 0, area.Nodes);
             if (_areaDensityWork is { } work)
                 return new(work.Left, work.Top, work.Cell, work.Width, work.Height, work.Values, _areaDensityVersion, area.Nodes);
             if (area.DensityMask is { } mask)

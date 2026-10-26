@@ -381,6 +381,8 @@ public sealed class PlacementAreaCommand : IEditCommand
                     foreach (var slot in sampler.Slots(x, span.Y))
                     {
                         var item = sampler.Item(slot); var existing = index.FindObject(item.Id);
+                        if (next.GenerationProtectionMask?.Factor(item.X + item.Width / 2, item.Y + item.Height / 2) < .99
+                            && old?.GenerationProtection?.Contains(slot) != true) { ruleSlots.Add(slot); continue; }
                         if (obstacles?.Blocks(item) == true) { occupied.Add(slot); continue; }
                         if (rules?.Blocks(item) == true || ecology?.Blocks(slot, item) == true) { ruleSlots.Add(slot); continue; }
                         members.Add(new(slot, item.Id)); used.Add(item.Id);

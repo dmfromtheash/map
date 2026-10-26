@@ -38,5 +38,13 @@ public sealed class ControlledAreaGenerationTests
         session.Execute(new PlacementAreaCommand(layer.Id, area.Id, protectedArea with { Density = 0 }, "Density"));
         var zero = (ObjectLayer)session.Document.FindLayer(layer.Id)!;
         Assert.Equal(original, Assert.Single(zero.Objects)); zero.PlacementAreas.Single(a => a.Id == area.Id).ValidateMembers();
+        var empty = protectedArea with { Cells = ImmutableDictionary<long, ImmutableArray<PlacementAreaMember>>.Empty,
+            MemberCount = 0, Density = 0, GenerationProtection = null,
+            GenerationProtectionMask = PlacementAreaDensityMask.Create(0, 0, 8, 64, 64, new byte[64 * 64]) };
+        var emptyDocument = new MapDocument(DocumentId.New(), "Empty protected region", DateTimeOffset.UnixEpoch, document.Canvas,
+            [document.BaseColor, new ObjectLayer(layer.Id, "Objects", true, false, 1, []) { PlacementAreas = [empty] }], document.Assets);
+        var filled = ControlledAreaGeneration.Create(emptyDocument, layer.Id, area.Id, default, parameters: empty with { Density = 80 }).Apply(emptyDocument);
+        var filledLayer = (ObjectLayer)filled.FindLayer(layer.Id)!;
+        Assert.Empty(filledLayer.Objects); filledLayer.PlacementAreas.Single().ValidateMembers();
     }
 }

@@ -45,6 +45,8 @@ public sealed record PlacementArea
     public ImmutableHashSet<PlacementAreaSlot>? GenerationProtection { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public AreaGenerationRecipe? GenerationRecipe { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PlacementAreaDensityMask? GenerationProtectionMask { get; init; }
     public Guid Id { get; init; } = Guid.NewGuid();
     public string Name { get; init; } = "Область";
     public string? AssetSetId { get; init; }
@@ -121,6 +123,7 @@ public sealed record PlacementArea
             throw new ArgumentException("Плотность области должна быть неотрицательной; связи и исключения — корректными.");
         if (LayoutVersion >= 3 && Density > 100) throw new ArgumentException("Плотность естественной расстановки — от 0 до 100%.");
         Rules?.Validate();
+        GenerationProtectionMask?.Validate();
         if (GenerationProtection?.Any(s => s.Ordinal < 0) == true || GenerationRecipe is { AlgorithmVersion: not 1 }
             || GenerationRecipe is { } recipe && (!double.IsFinite(recipe.Density) || recipe.Density < 0
                 || !Enum.IsDefined(recipe.Pattern) || recipe.LayoutVersion is < 0 or > 4))

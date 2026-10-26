@@ -23,7 +23,8 @@ public sealed class GenerationPersistenceTests
         document = new PlacementAreaCommand(layer.Id, area.Id, area, "Create").Apply(document);
         layer = (ObjectLayer)document.FindLayer(layer.Id)!; area = layer.PlacementAreas.Single();
         var slot = area.Members.First().Slot;
-        area = area with { GenerationProtection = [slot] };
+        area = area with { GenerationProtection = [slot],
+            GenerationProtectionMask = PlacementAreaDensityMask.Create(-128, -128, 8, 4, 4, new byte[16]) };
         document = document.WithLayer(layer.Id, _ => layer with { PlacementAreas = [area] });
         document = ControlledAreaGeneration.Create(document, layer.Id, area.Id, default).Apply(document);
         var path = workspace.File("area.mapproj"); MapProjectStore.Save(document, path, ProjectFixtures.Metadata(), png);
@@ -31,6 +32,7 @@ public sealed class GenerationPersistenceTests
         var saved = document.Layers.OfType<ObjectLayer>().Single().PlacementAreas.Single();
         Assert.Equal(saved.GenerationRecipe, actual.PlacementAreas.Single().GenerationRecipe);
         Assert.Contains(slot, actual.PlacementAreas.Single().GenerationProtection!);
+        Assert.Equal(saved.GenerationProtectionMask, actual.PlacementAreas.Single().GenerationProtectionMask);
         Assert.Equal(document.Layers.OfType<ObjectLayer>().Single().Objects.Select(o => (o.Id, o.GenerationReason)), actual.Objects.Select(o => (o.Id, o.GenerationReason)));
     }
 

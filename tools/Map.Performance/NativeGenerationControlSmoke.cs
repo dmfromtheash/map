@@ -179,6 +179,8 @@ public sealed class GenerationControlApplication : Application
         _editor = new EditorViewModel(document, null, false, new ProjectStore(new RecoveryJournal(Path.Combine(_workspace, "recovery-area"))),
             new Recent(), new Picker(Path.Combine(_workspace, "area.mapproj")), new Prompts(), new Log(),
             assetCatalog: _catalog, localPreferences: new EditorLocalPreferences(PrimaryAutosaveEnabled: false));
+        // Decode the fixture before UI and native rendering request the existing image cache concurrently.
+        Check("area-fixture-image-decoded", _editor.StampImages?.TryGetImage(sha) is not null);
         _view = new EditorView(_editor, () => Task.CompletedTask, () => { }, () => { }); _window.Content = _view;
         _editor.ActiveTool = EditorTool.Stamp; _editor.SelectLayer(layer.Id); _editor.SelectEditableArea(area.Id);
         await Settle(); _view.Canvas.FitToCanvas(); await Settle();
@@ -186,9 +188,17 @@ public sealed class GenerationControlApplication : Application
         var member = stored.Members.First(); var item = document.Layers.OfType<ObjectLayer>().Single().Objects.Single(o => o.Id == member.ObjectId);
         Press("GenerationProtectBrushButton");
         _editor.SetAreaDensityBrushRadius(20);
-        var point = _editor.Session.Viewport.WorldToScreen(item.X, item.Y); _view.Canvas.ClickForSmoke(point.X, point.Y);
-        Check("area-protection-real-brush", _editor.SelectedEditableArea!.GenerationProtection?.Contains(member.Slot) == true);
+        var itemX = item.X + item.Width / 2; var itemY = item.Y + item.Height / 2;
+        var point = _editor.Session.Viewport.WorldToScreen(itemX, itemY); _view.Canvas.ClickForSmoke(point.X, point.Y);
+        Check("area-protection-real-brush", _editor.SelectedEditableArea!.GenerationProtection?.Contains(member.Slot) == true
+            && _editor.SelectedEditableArea.GenerationProtectionMask?.Factor(itemX, itemY) < .99);
         Press("GenerationProtectBrushStopButton");
+        _editor.GenerationProtectionErase = true; Press("GenerationProtectBrushButton");
+        _view.Canvas.ClickForSmoke(point.X, point.Y); Press("GenerationProtectBrushStopButton");
+        Check("area-unprotect-clears-space-and-object", _editor.SelectedEditableArea!.GenerationProtection?.Contains(member.Slot) != true
+            && (_editor.SelectedEditableArea.GenerationProtectionMask?.Factor(itemX, itemY) ?? 1) >= .99);
+        _editor.GenerationProtectionErase = false; Press("GenerationProtectBrushButton");
+        _view.Canvas.ClickForSmoke(point.X, point.Y); Press("GenerationProtectBrushStopButton");
         var source = _editor.Session.Document; var depth = _editor.Session.UndoDepth;
         Press("GenerationAreaStartButton"); Press("GenerationCancelButton"); await _editor.PendingGeneration;
         Check("area-cancel-unchanged", ReferenceEquals(source, _editor.Session.Document) && _editor.Session.UndoDepth == depth);
@@ -203,7 +213,8 @@ public sealed class GenerationControlApplication : Application
         Press("SaveButton"); await Until(() => File.Exists(Path.Combine(_workspace, "area.mapproj")) && !_editor.Session.IsDirty, "area save");
         var reopened = MapProjectStore.Open(Path.Combine(_workspace, "area.mapproj")).Document.Layers.OfType<ObjectLayer>().Single();
         Check("area-save-reopen", reopened.PlacementAreas.Single().GenerationProtection?.Contains(member.Slot) == true
-            && reopened.PlacementAreas.Single().GenerationRecipe is not null && reopened.Objects.Any(o => o.GenerationReason is not null));
+            && reopened.PlacementAreas.Single().GenerationRecipe is not null && reopened.Objects.Any(o => o.GenerationReason is not null)
+            && reopened.PlacementAreas.Single().GenerationProtectionMask?.Factor(itemX, itemY) < .99);
         Press("UndoButton"); await Settle();
         Check("area-one-undo-restores-source", _editor.Session.Document.Layers.SequenceEqual(source.Layers));
     }
