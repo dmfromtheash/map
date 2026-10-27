@@ -21,7 +21,16 @@ public sealed partial class EditorViewModel
         var current = Session.Document;
         var version = checkpoint.Snapshot.Materialize(current.Id, current.Checkpoints);
         var package = ChangePackage.Create(version, current, checkpoint.Name, _clock());
-        if (package.Count == 0) { StatusDetail = $"С версии «{checkpoint.Name}» ничего не изменилось — пакет не нужен."; return null; }
+        // R42b: say plainly what changed but does not travel in a package.
+        var left = ChangePackage.NotCarried(version, current);
+        var notCarried = left.Count == 0 ? "" : $" Не вошло в пакет: {string.Join(", ", left)} — пакет переносит только {ChangePackage.Carries}.";
+        if (package.Count == 0)
+        {
+            StatusDetail = left.Count == 0
+                ? $"С версии «{checkpoint.Name}» ничего не изменилось — пакет не нужен."
+                : $"Пакет пуст: с версии «{checkpoint.Name}» изменились только {string.Join(", ", left)}, а пакет переносит {ChangePackage.Carries}.";
+            return null;
+        }
         try
         {
             await Task.Run(() => ChangePackageStore.Save(package, path, _appVersion));
@@ -32,7 +41,7 @@ public sealed partial class EditorViewModel
             _log.Error("CHANGES_EXPORT_FAILED", ex);
             return null;
         }
-        StatusDetail = $"Пакет изменений с версии «{checkpoint.Name}»: {package.Count} шт. — {Path.GetFileName(path)}.";
+        StatusDetail = $"Пакет изменений с версии «{checkpoint.Name}»: {package.Count} шт. — {Path.GetFileName(path)}.{notCarried}";
         return package;
     }
 

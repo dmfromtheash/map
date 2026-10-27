@@ -25,13 +25,60 @@ public sealed record ChangePackage(Guid SourceMap, string SourceTitle, string Ba
         foreach (var (a, b) in Pair(Objects(baseVersion), Objects(current), o => o.Id.Value)) if (a is null || b is null || !MapComparison.SameObject(a, b)) objects.Add((a ?? b)!.Id.Value);
         foreach (var (a, b) in Pair(Rivers(baseVersion), Rivers(current), r => r.Id)) if (a is null || b is null || !MapComparison.SameRiver(a, b)) rivers.Add((a ?? b)!.Id);
         foreach (var (a, b) in Pair(Roads(baseVersion), Roads(current), r => r.Id)) if (a is null || b is null || !MapComparison.SameRoad(a, b)) roads.Add((a ?? b)!.Id);
-        foreach (var (a, b) in Pair(baseVersion.Notes, current.Notes, n => n.Id.Value)) if (a is null || b is null || a.Title != b.Title || a.Markdown != b.Markdown || a.WorldX != b.WorldX || a.WorldY != b.WorldY) notes.Add((a ?? b)!.Id.Value);
-        foreach (var (a, b) in Pair(baseVersion.Entities, current.Entities, e => e.Id)) if (a is null || b is null || a.Name != b.Name || a.Markdown != b.Markdown || !a.Bindings.SequenceEqual(b.Bindings)) cards.Add((a ?? b)!.Id);
+        foreach (var (a, b) in Pair(baseVersion.Notes, current.Notes, n => n.Id.Value)) if (a is null || b is null || !MapComparison.SameNote(a, b)) notes.Add((a ?? b)!.Id.Value);
+        foreach (var (a, b) in Pair(baseVersion.Entities, current.Entities, e => e.Id)) if (a is null || b is null || !MapComparison.SameCard(a, b)) cards.Add((a ?? b)!.Id);
         return new ChangePackage(current.Id.Value, current.Title, baseName, now,
             Slice(baseVersion, objects, rivers, roads, notes, cards), Slice(current, objects, rivers, roads, notes, cards));
     }
 
     public int Count => Kinds().Sum(k => k.Ids.Count);
+
+    /// <summary>What a package carries, in words, for the messages around it.</summary>
+    public const string Carries = "объекты, подписи, реки, дороги, заметки и карточки";
+
+    /// <summary>
+    /// R42b: what changed between the two versions that a package does not carry - the land, the
+    /// hexes, the fog, placement areas and paths - so an empty or partial package can say so.
+    /// </summary>
+    public static IReadOnlyList<string> NotCarried(MapDocument baseVersion, MapDocument current)
+    {
+        var result = new List<string>();
+        var diff = MapComparison.Compare(baseVersion, current);
+        if (diff.LandChanged) result.Add("суша");
+        if (HexesDiffer(baseVersion, current)) result.Add("гексы");
+        if (diff.FogCellsRevealed + diff.FogCellsHidden > 0 || baseVersion.Fog.Enabled != current.Fog.Enabled) result.Add("туман");
+        if (diff.Groups.Any(g => g.Group == MapComparison.Areas) || PathsDiffer(baseVersion, current)) result.Add("области и пути расстановки");
+        return result;
+    }
+
+    private static bool HexesDiffer(MapDocument a, MapDocument b)
+    {
+        var left = a.Layers.OfType<HexLayer>().ToDictionary(l => l.Id);
+        var right = b.Layers.OfType<HexLayer>().ToList();
+        if (left.Count != right.Count) return true;
+        foreach (var layer in right)
+        {
+            if (!left.TryGetValue(layer.Id, out var was)) return true;
+            if (ReferenceEquals(was.Board, layer.Board)) continue;
+            var cells = was.Board.Cells.ToDictionary(c => c.Key, c => c.Value);
+            var count = 0;
+            foreach (var (hex, cell) in layer.Board.Cells)
+            {
+                count++;
+                if (!cells.TryGetValue(hex, out var old) || old.Terrain != cell.Terrain || old.Revealed != cell.Revealed) return true;
+            }
+            if (count != cells.Count) return true;
+        }
+        return false;
+    }
+
+    private static bool PathsDiffer(MapDocument a, MapDocument b)
+    {
+        var left = a.Layers.OfType<ObjectLayer>().SelectMany(l => l.PlacementPaths).ToDictionary(p => p.Id);
+        var right = b.Layers.OfType<ObjectLayer>().SelectMany(l => l.PlacementPaths).ToList();
+        return left.Count != right.Count || right.Any(p => !left.TryGetValue(p.Id, out var was) || !ReferenceEquals(was, p)
+            && (was.AssetSetId != p.AssetSetId || was.VariantId != p.VariantId || !was.Nodes.SequenceEqual(p.Nodes) || !was.Members.SequenceEqual(p.Members)));
+    }
 
     private IEnumerable<(string Kind, HashSet<Guid> Ids)> Kinds()
     {
@@ -110,8 +157,8 @@ public static class ChangePackageMerge
         Add("Объект", ChangePackage.Objects(package.Before), ChangePackage.Objects(package.After), ChangePackage.Objects(target), o => o.Id.Value, o => o.Text?.Content ?? o.Name, MapComparison.SameObject);
         Add("Река", ChangePackage.Rivers(package.Before), ChangePackage.Rivers(package.After), ChangePackage.Rivers(target), r => r.Id, r => r.Name, MapComparison.SameRiver);
         Add("Дорога", ChangePackage.Roads(package.Before), ChangePackage.Roads(package.After), ChangePackage.Roads(target), r => r.Id, r => r.Name, MapComparison.SameRoad);
-        Add("Заметка", package.Before.Notes, package.After.Notes, target.Notes, n => n.Id.Value, n => n.Title, (x, y) => x.Title == y.Title && x.Markdown == y.Markdown && x.WorldX == y.WorldX && x.WorldY == y.WorldY);
-        Add("Карточка", package.Before.Entities, package.After.Entities, target.Entities, e => e.Id, e => e.Name, (x, y) => x.Name == y.Name && x.Markdown == y.Markdown && x.Bindings.SequenceEqual(y.Bindings));
+        Add("Заметка", package.Before.Notes, package.After.Notes, target.Notes, n => n.Id.Value, n => n.Title, MapComparison.SameNote);
+        Add("Карточка", package.Before.Entities, package.After.Entities, target.Entities, e => e.Id, e => e.Name, MapComparison.SameCard);
         return changes;
     }
 

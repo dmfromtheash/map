@@ -405,6 +405,21 @@ public sealed class WaterCliffsWorkflowTests
     }
 
     [Fact]
+    public async Task An_empty_change_package_says_what_changed_but_does_not_travel()
+    {
+        // R42b: only the fog changed since the version - no file, and the message names the fog.
+        var editor = Editor(new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, []));
+        Assert.True(editor.CreateCheckpoint("Версия 01"));
+        editor.SetFogEnabled(true);
+        editor.RevealAllFog();
+        var path = Path.Combine(Path.GetTempPath(), "map-r42b-" + Guid.NewGuid().ToString("N") + ".mapchanges");
+        Assert.Null(await editor.ExportChangesAsync(editor.Session.Document.Checkpoints[0].Id, path));
+        Assert.False(File.Exists(path));
+        Assert.Contains("Пакет пуст", editor.StatusDetail, StringComparison.Ordinal);
+        Assert.Contains("туман", editor.StatusDetail, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void A_card_is_made_from_the_selection_bound_linked_and_undone()
     {
         var label = new SceneObject(ObjectId.New(), SceneObjectKind.Text, "Ильград", 100, 100, 120, 40, 0, "#FF20242B", "#FFFFFFFF", 0, true, false)

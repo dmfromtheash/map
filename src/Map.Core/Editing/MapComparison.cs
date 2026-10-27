@@ -69,8 +69,7 @@ public sealed class MapComparison
         Match(Layers<PlacementArea>(before, l => l.PlacementAreas), Layers<PlacementArea>(after, l => l.PlacementAreas), a => a.Id, _ => Areas, a => a.Name,
             a => Bounds(a.Nodes.Select(n => (n.X, n.Y))), (x, y) => x.Nodes.Select(n => (n.X, n.Y)).SequenceEqual(y.Nodes.Select(n => (n.X, n.Y))) && x.Density == y.Density, changes);
         Match(before.Notes, after.Notes, n => n.Id.Value, _ => Notes, n => n.Title, NoteBounds, SameNote, changes);
-        Match(before.Entities, after.Entities, e => e.Id, _ => Cards, e => e.Name, e => EntityBounds(after, e),
-            (x, y) => x.Name == y.Name && x.Kind == y.Kind && x.Markdown == y.Markdown && x.PlayerVisible == y.PlayerVisible && x.Bindings.SequenceEqual(y.Bindings), changes);
+        Match(before.Entities, after.Entities, e => e.Id, _ => Cards, e => e.Name, e => EntityBounds(after, e), SameCard, changes);
 
         var (revealed, hidden) = HexReveals(before, after);
         var (fogOpened, fogClosed) = FogDifference(before.Fog, after.Fog);
@@ -82,6 +81,10 @@ public sealed class MapComparison
         x.Title == y.Title && x.Markdown == y.Markdown && x.WorldX == y.WorldX && x.WorldY == y.WorldY
         && x.AnchorKind == y.AnchorKind && x.ObjectId == y.ObjectId
         && x.LinkedMap == y.LinkedMap && x.Category == y.Category && x.PlayerVisible == y.PlayerVisible;
+
+    /// <summary>The same card: name, kind, text, places and whether the players see it (R30b).</summary>
+    public static bool SameCard(MapEntity x, MapEntity y) =>
+        x.Name == y.Name && x.Kind == y.Kind && x.Markdown == y.Markdown && x.PlayerVisible == y.PlayerVisible && x.Bindings.SequenceEqual(y.Bindings);
 
     /// <summary>
     /// Fog cells opened and closed between two versions, cell by cell (R30b): moving the opened area
