@@ -305,15 +305,16 @@ public sealed class AssetCatalogApplication : Application
             _editor.ClearLibraryFilters(); _view.RefreshLibraryPanel();
             _view.OpenAssetCatalog(); await Settle();
             var window = _view.AssetCatalogWindowForSmoke!;
-            FindIn<Expander>(window, "LibraryOrganizationDetails").IsExpanded = true;
+            // DEC-070: the passport button on the card, with the organisation still folded (no hidden Ctrl+click rule).
+            FindIn<Expander>(window, "LibraryOrganizationDetails").IsExpanded = false;
             await Settle(); await WaitForThumbnails(window);
             var tile = FindIn<Button>(window, "GalleryCover_" + Sanitize(setId));
             tile.BringIntoView(); await Settle();
-            tile.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Settle();
+            var passport = FindIn<Button>(window, "GalleryPassport_" + Sanitize(setId));
+            passport.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Settle(); await Settle();
             var box = FindIn<ComboBox>(window, "PassportAssetRoleBox");
-            box.BringIntoView(); await Settle();
-            Check("role passport chosen through catalog card " + phase, window.IsVisible && _editor.SelectedSetId == setId
-                && box.IsEffectivelyVisible && box.IsEnabled);
+            Check("role passport opened by the card's passport button " + phase, window.IsVisible && _editor.SelectedSetId == setId
+                && box.IsEffectivelyVisible && box.IsEnabled && ToolTip.GetTip(passport) is string tip && tip.Length > 0);
             return box;
         }
 

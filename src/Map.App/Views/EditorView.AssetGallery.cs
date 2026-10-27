@@ -360,6 +360,25 @@ public sealed partial class EditorView
         foreach (var sync in _quickFilterSyncs) sync();
     }
 
+    /// <summary>
+    /// Chooses the set without closing the catalog, unfolds its organisation and passport and puts the role first in view
+    /// (DEC-070). Nothing on the map changes: the passport belongs to the catalog.
+    /// </summary>
+    private void OpenSetPassport(string setId)
+    {
+        if (!_editor.ChooseGalleryVariant(setId, null)) return;
+        if (_libraryOrganization is not null) _libraryOrganization.IsExpanded = true;
+        _setManagementDetails.IsExpanded = true;
+        RefreshGallerySelection();
+        RefreshLibraryPanel();
+        Dispatcher.UIThread.Post(() =>
+        {
+            var role = _setManagementDetails.GetVisualDescendants().OfType<Control>().FirstOrDefault(c => c.Name == "PassportAssetRoleBox");
+            role?.BringIntoView();
+            role?.Focus();
+        }, DispatcherPriority.Background);
+    }
+
     private static MenuItem MenuEntry(string title, Action action, string? name = null)
     {
         var item = new MenuItem { Header = title };
@@ -804,6 +823,28 @@ public sealed partial class EditorView
                 Text = "★", FontSize = 12, Margin = new Thickness(4, 2, 0, 0), IsHitTestVisible = false,
                 HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top,
             }.Classed("accent"));
+        }
+        if (cell.Variant is null)
+        {
+            // DEC-070: the set's passport (its role for «Лес / Хребет / Поселение») one click from its card; it was
+            // two folded blocks deep and only reachable with Ctrl+click.
+            var passport = new Button
+            {
+                Content = MapIcons.Stroked(MapIcons.LineTarget, 13), Padding = new Thickness(4),
+                HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(0, 3, 3, 0), Opacity = 0,
+            }.Named("GalleryPassport_" + Sanitize(cell.Set.SetId)).Classed("icon-button", "compact");
+            AutomationProperties.SetName(passport, "Паспорт набора " + title);
+            ToolTip.SetTip(passport, "Паспорт набора: роль для «Лес / Хребет / Поселение» и начальные настройки");
+            passport.Click += (_, e) => { e.Handled = true; OpenSetPassport(cell.Set.SetId); };
+            tile.PointerEntered += (_, _) => passport.Opacity = 1;
+            tile.PointerExited += (_, _) => passport.Opacity = 0;
+            passport.GotFocus += (_, _) => passport.Opacity = 1;
+            face.Children.Add(passport);
+            tile.ContextMenu = new ContextMenu
+            {
+                Items = { MenuEntry("Паспорт набора…", () => OpenSetPassport(cell.Set.SetId), "GalleryPassportMenu_" + Sanitize(cell.Set.SetId)) },
+            };
         }
         AutomationProperties.SetName(tile, "Выбрать " + title);
         ToolTip.SetTip(tile, BuildGalleryTooltip(cell));

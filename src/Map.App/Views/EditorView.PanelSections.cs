@@ -170,7 +170,8 @@ public sealed partial class EditorView
             {
                 switcherHost.Docked(Dock.Top),
                 _compactSectionPicker.Docked(Dock.Top),
-                new Border { Padding = new Thickness(12, 0, 12, 4), Child = _sectionCaption, IsVisible = false }.Docked(Dock.Top),
+                // The tabs show glyphs only (their words touched, 2026-10-21); the open section is named here (DEC-070).
+                new Border { Padding = new Thickness(12, 0, 12, 4), Child = _sectionCaption }.Docked(Dock.Top),
                 _sectionHost,
             },
         };

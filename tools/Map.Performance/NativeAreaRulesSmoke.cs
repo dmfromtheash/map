@@ -279,6 +279,17 @@ public sealed class AreaRulesApplication : Application
         _report.Checks["save-reopen-v30"] = schema >= MapProjectFormat.AreaBeautySchemaVersion && Equals(reopenedArea.Beauty, Area().Beauty)
             && Equals(reopenedArea.DensityMask, Area().DensityMask) && reopenedLayer.Effects.DepthSort
             && reopenedArea.MemberCount == Area().MemberCount;
+
+        // DEC-070: from a selected object of the area, one button opens the area on its «Красота» page.
+        await Click("SelectToolButton");
+        _editor.SelectObject(Area().Members.First().ObjectId); await Settle();
+        var link = Find<Button>("SelectionAreaBeautyButton");
+        var linkShown = link.IsEffectivelyVisible && link.Content is string text && text.Contains(Area().Name, StringComparison.Ordinal);
+        await Click("SelectionAreaBeautyButton"); await Settle(); await Settle();
+        _report.Checks["selection-opens-area-beauty"] = linkShown && _editor.SelectedEditableArea?.Id == Area().Id
+            && Find<Avalonia.Controls.Primitives.ToggleButton>("EditableAreaTabsBeauty").IsChecked == true
+            && Find<Control>("EditableAreaSoftEdgeToggle").IsEffectivelyVisible;
+        Shot("selection-area-beauty");
     }
 
     private void Shot(string name)

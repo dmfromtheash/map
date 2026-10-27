@@ -53,27 +53,55 @@ public sealed partial class EditorView
         _fillAreaJoinEdges = AppearanceToggle("EditableAreaJoinEdgesToggle", "Смыкать края",
             () => _editor.EditableAreaJoinEdges, _editor.SetEditableAreaJoinEdges);
         ToolTip.SetTip(_fillAreaJoinEdges, "Небольшое перекрытие крон и подножий. Выключите, чтобы объекты стояли раздельно.");
+        // DEC-070: the area's settings are four pages, not one long scroll — «Красота» was not found under the rules.
+        var arrangement = new StackPanel
+        {
+            Spacing = 6, Children =
+            {
+                _fillAreaNatural, _fillAreaPattern, _fillAreaArrangementHint,
+                AppearanceNumberBox("EditableAreaDensityBox", "Плотность", null, () => _editor.EditableAreaDensity, _editor.SetEditableAreaDensity),
+                _fillAreaDensityUnits, _fillAreaSizeVariation, _fillAreaJoinEdges, _fillAreaAnother,
+                new TextBlock { Text = "Центры внутри границы; края не обрезаются. В предпросмотре до 64 объектов; полный результат — после «Разместить».", TextWrapping = TextWrapping.Wrap }.Classed("faint", "role-caption"),
+                AppearanceNumberBox("EditableAreaSeedBox", "Номер рисунка", null, () => _editor.DisplayedEditableArea?.Seed, _editor.SetEditableAreaSeed),
+                BuildGenerationControls(hex: false),
+            },
+        };
+        var edit = new StackPanel
+        {
+            Spacing = 6, Children =
+            {
+                Ui.TextButton("InsertEditableAreaNodeButton", "Добавить вершину на ребре", _editor.InsertEditableAreaNode, "compact")
+                    .WithTip("Новая точка границы посередине выбранного ребра."),
+                Ui.TextButton("DeleteEditableAreaNodeButton", "Удалить вершину (в черновике — последнюю)", _editor.DeleteEditableAreaNode, "compact")
+                    .WithTip("Убрать выбранную точку границы."),
+                Ui.TextButton("SelectAreaObjectButton", "Выбрать объект области", _editor.PickEditableAreaObject, "compact")
+                    .WithTip("Щёлкните объект области, чтобы править его отдельно."),
+                _fillAreaDetach,
+                Ui.TextButton("ApplyEditableAreaSettingsButton", "Применить параметры ассета к области", _editor.ApplyStampSettingsToEditableArea, "compact")
+                    .WithTip("Размер, поворот и вид из «Как ставить» — всем объектам области."),
+                Ui.TextButton("BakeEditableAreaButton", "Превратить область в обычные объекты", _editor.BakeEditableArea, "compact")
+                    .WithTip("Область исчезнет, объекты останутся и станут независимыми."),
+                Ui.TextButton("DeleteEditableAreaButton", "Удалить область и связанные объекты", _editor.DeleteEditableArea, "compact", "destructive")
+                    .WithTip("Удалить область вместе с её объектами (Ctrl+Z вернёт)."),
+            },
+        };
         _fillAreaPanel = new StackPanel
         {
             Spacing = 6, Children =
             {
                 _fillAreaPicker, _fillAreaSummary,
-                Ui.TextButton("StartEditableAreaButton", "Новая редактируемая область", _editor.StartEditableArea, "compact"),
-                _fillAreaNatural, _fillAreaPattern, _fillAreaArrangementHint,
-                AppearanceNumberBox("EditableAreaDensityBox", "Плотность", null, () => _editor.EditableAreaDensity, _editor.SetEditableAreaDensity),
-                _fillAreaDensityUnits, _fillAreaSizeVariation, _fillAreaJoinEdges, BuildEditableAreaRulesBlock(), BuildEditableAreaBeautyBlock(), _fillAreaAnother,
-                new TextBlock { Text = "Центры внутри границы; края не обрезаются. В предпросмотре до 64 объектов; полный результат — после «Разместить».", TextWrapping = TextWrapping.Wrap }.Classed("faint", "role-caption"),
-                AppearanceNumberBox("EditableAreaSeedBox", "Номер рисунка", null, () => _editor.DisplayedEditableArea?.Seed, _editor.SetEditableAreaSeed),
-                BuildGenerationControls(hex: false),
-                Ui.TextButton("InsertEditableAreaNodeButton", "Добавить вершину на ребре", _editor.InsertEditableAreaNode, "compact"),
-                Ui.TextButton("DeleteEditableAreaNodeButton", "Удалить вершину (в черновике — последнюю)", _editor.DeleteEditableAreaNode, "compact"),
-                Ui.TextButton("SelectAreaObjectButton", "Выбрать объект области", _editor.PickEditableAreaObject, "compact"),
-                _fillAreaDetach,
-                Ui.TextButton("ApplyEditableAreaSettingsButton", "Применить параметры ассета к области", _editor.ApplyStampSettingsToEditableArea, "compact"),
-                Ui.TextButton("BakeEditableAreaButton", "Превратить область в обычные объекты", _editor.BakeEditableArea, "compact"),
-                Ui.TextButton("DeleteEditableAreaButton", "Удалить область и связанные объекты", _editor.DeleteEditableArea, "compact", "destructive"),
+                Ui.TextButton("StartEditableAreaButton", "Новая редактируемая область", _editor.StartEditableArea, "compact")
+                    .WithTip("Обвести на карте участок, который заполнится объектами."),
+                Ui.CategoryTabs("EditableAreaTabs",
+                    new Ui.CategoryTab("Arrangement", "Расстановка", MapIcons.LineLayers, arrangement, "Рисунок, плотность и размеры"),
+                    new Ui.CategoryTab("Rules", "Правила", MapIcons.LineTarget, BuildEditableAreaRulesBlock(), "Где ставить: дороги, вода, суша"),
+                    new Ui.CategoryTab("Beauty", "Красота", MapIcons.LineSparkle, BuildEditableAreaBeautyBlock(), "Мягкий край, кучки, рощи, тень, подложка, цвет"),
+                    new Ui.CategoryTab("Edit", "Правка", MapIcons.ModePath, edit, "Вершины, отдельные объекты, удаление")),
             },
         };
+        _fillAreaDetach.WithTip("Объект перестанет принадлежать области и останется на месте.");
+        _fillAreaNatural.WithTip("Переставить объекты области массивами, как в природе.");
+        _fillAreaAnother.WithTip("Тот же набор, другой случайный рисунок.");
         return _fillAreaPanel;
     }
 

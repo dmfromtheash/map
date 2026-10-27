@@ -652,6 +652,7 @@ public sealed partial class EditorView
             }
 
             SyncLayerAndLevel();
+            SyncAreaLinks();
 
             _kindSlot.Content = KindSection(kind);
             _contextHost.Content = _selectionRoot;
@@ -845,6 +846,45 @@ public sealed partial class EditorView
         Ui.SetValue(_multiVisibilityValue, "Видимость", _editor.SelectionVisibilitySummary);
         Ui.SetValue(_multiLockValue, "Блокировка", _editor.SelectionLockSummary);
         SyncLayerAndLevel();
+        SyncAreaLinks();
+    }
+
+    private readonly List<Button> _areaLinks = [];
+
+    /// <summary>
+    /// DEC-070: selected objects of a placement area lead straight to that area's «Красота» (the owner could not find it
+    /// under the asset tool). Shown only when every selected object belongs to one area.
+    /// </summary>
+    private Button AreaLinkButton(string name)
+    {
+        var button = Ui.TextButton(name, "Область", () =>
+        {
+            if (!_editor.OpenSelectionArea()) return;
+            // The asset tool's panel is mounted by the sync that follows; open its «Красота» page once it is there.
+            Dispatcher.UIThread.Post(() =>
+            {
+                var tab = this.GetVisualDescendants().OfType<Avalonia.Controls.Primitives.ToggleButton>()
+                    .FirstOrDefault(b => b.Name == "EditableAreaTabsBeauty");
+                tab?.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+                tab?.BringIntoView();
+            }, DispatcherPriority.Background);
+        }, "compact", "primary");
+        button.HorizontalAlignment = HorizontalAlignment.Stretch;
+        button.Margin = new Thickness(0, 0, 0, 8);
+        button.IsVisible = false;
+        button.WithTip("Открыть область этих объектов: плотность, правила и «Красота».");
+        _areaLinks.Add(button);
+        return button;
+    }
+
+    private void SyncAreaLinks()
+    {
+        var area = _editor.SelectionArea;
+        foreach (var link in _areaLinks)
+        {
+            link.IsVisible = area is not null;
+            if (area is not null) link.Content = $"Область «{area.Name}» → Красота";
+        }
     }
 
     /// <summary>Both inspector shapes show the same owner layer and level, so both refresh here.</summary>
@@ -887,6 +927,7 @@ public sealed partial class EditorView
             Spacing = 0,
             Children =
             {
+                AreaLinkButton("SelectionAreaBeautyButton"),
                 BuildSelectionCommon(),
                 new Border { Padding = new Thickness(0, 8, 0, 0), Child = _kindSlot },
                 geometry,
@@ -995,6 +1036,7 @@ public sealed partial class EditorView
             Children =
             {
                 multiCount,
+                AreaLinkButton("MultiSelectionAreaBeautyButton"),
                 BuildObjectPrimarySection("Multi"),
                 _groupActionsSection,
                 new Ui.SectionPanel("MultiCommonActions", "Состояние", new StackPanel

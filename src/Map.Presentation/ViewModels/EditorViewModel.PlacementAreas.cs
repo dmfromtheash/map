@@ -302,6 +302,32 @@ public sealed partial class EditorViewModel
         return active;
     }
 
+    /// <summary>
+    /// The placement area every selected object belongs to, or null (DEC-070): from selected mountains the area's
+    /// «Правила» and «Красота» are one click away instead of being found through the asset tool.
+    /// </summary>
+    public PlacementArea? SelectionArea
+    {
+        get
+        {
+            if (Session.SelectedObjectIds.Count == 0) return null;
+            foreach (var area in Session.Document.Layers.OfType<ObjectLayer>().SelectMany(l => l.PlacementAreas))
+            {
+                var members = area.Members.Select(m => m.ObjectId).ToHashSet();
+                if (Session.SelectedObjectIds.All(members.Contains)) return area;
+            }
+            return null;
+        }
+    }
+
+    /// <summary>Opens the area of the selected objects in the asset tool (see <see cref="SelectionArea"/>).</summary>
+    public bool OpenSelectionArea()
+    {
+        if (SelectionArea is not { } area) return false;
+        SelectEditableArea(area.Id);
+        return true;
+    }
+
     public void SelectEditableArea(Guid id)
     {
         CancelPlacement(); CancelEditableAreaGesture(); RememberStampSettingsBeforeConstruction();
