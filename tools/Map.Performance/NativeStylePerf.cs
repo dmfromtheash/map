@@ -51,12 +51,27 @@ public sealed partial class PaintPerfApplication
                     _editor.ApplyStylePreset(preset);
                     _editor.SetStyleStrength(1, commit: true);
                     var name = $"style-{preset}-{tag}";
-                    await ViewRoutes(name);
-                    SetScale(centre, zoom); await TimedRefined();
-                    StyleDiagnostics.Samples.Clear();
-                    // All 50 previews have nonzero strength, so every step exercises the style.
-                    await BurstRoute(name + "/slider", 50, i => _editor.SetStyleStrength((i + 1) / 50.0, commit: false));
-                    ReportStyle(name + "/slider", expected: true);
+                    // R09b: from the preset to the finished styled frame (detail tiles in, frame kept).
+                    SetScale(centre, zoom);
+                    var settle = await StyledSettle();
+                    _report.Environment["style-settle/" + name] = settle;
+                    Console.WriteLine($"    {name} settle: {settle}");
+                    try
+                    {
+                        await ViewRoutes(name);
+                        SetScale(centre, zoom); await TimedRefined();
+                        StyleDiagnostics.Samples.Clear();
+                        // All 50 previews have nonzero strength, so every step exercises the style.
+                        await BurstRoute(name + "/slider", 50, i => _editor.SetStyleStrength((i + 1) / 50.0, commit: false));
+                        ReportStyle(name + "/slider", expected: true);
+                    }
+                    catch (TimeoutException)
+                    {
+                        // A frame slower than the route's minute: say so and go on to the next scale.
+                        _report.Checks["style-routes-in-time/" + name] = false;
+                        Console.WriteLine($"    {name}: routes timed out");
+                        StyleDiagnostics.Samples.Clear();
+                    }
                     _editor.SetStyleStrength(1, commit: true);
                 }
                 _editor.ApplyStylePreset(MapStylePreset.InkWetBrush);
@@ -84,6 +99,47 @@ public sealed partial class PaintPerfApplication
             StyleDiagnostics.CollectFrames = false;
             StyleDiagnostics.Samples.Clear();
         }
+    }
+
+    /// <summary>
+    /// Frames until the styled view is finished: no pending terrain or detail tiles and a style frame taken from the
+    /// kept buffers. Reports the time, the frames on the way and the longest of them (capped at 5 minutes).
+    /// </summary>
+    private async Task<string> StyledSettle()
+    {
+        var canvas = _view.Canvas;
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        var frames = 0; double longest = 0; var done = false; var stages = "";
+        void OnFrame(object? sender, EventArgs e) { frames++; longest = Math.Max(longest, canvas.LastSceneRenderMilliseconds); }
+        canvas.FrameRendered += OnFrame;
+        try
+        {
+            StyleDiagnostics.Samples.Clear();
+            while (watch.Elapsed < TimeSpan.FromMinutes(5))
+            {
+                canvas.InvalidateVisual();
+                await Task.Delay(15);
+                if (!canvas.LastTerrainRefinementPending && !canvas.LastFrameFastTerrain && !canvas.LastDetailTilesPending
+                    && StyleDiagnostics.Samples.Any(s => s.Reused)) { done = true; break; }
+            }
+            // The built (not reused) frames on the way, each as scene/painter-or-print/shader ms.
+            stages = string.Join(' ', StyleDiagnostics.Samples.Where(s => !s.Reused && s.Width > 0)
+                .Select(s => $"{s.SceneMs:0}/{s.PrintMs:0}/{s.ShaderMs:0}"));
+        }
+        finally { canvas.FrameRendered -= OnFrame; StyleDiagnostics.Samples.Clear(); }
+        _report.Checks["style-settle/" + _editor.Style.Preset] = done;
+        // MAP_STYLE_SETTLE_PNG=1: the finished frame as the GPU drew it, for a pixel A/B of two builds.
+        if (done && System.Environment.GetEnvironmentVariable("MAP_STYLE_SETTLE_PNG") == "1")
+        {
+            using var frame = await canvas.CaptureGpuFrameForSmokeAsync();
+            using var image = SKImage.FromBitmap(frame);
+            using var data = image.Encode(SKEncodedImageFormat.Png, 100);
+            var path = Path.ChangeExtension(Options.OutputPath, $".settle-{_editor.Style.Preset}-{_editor.Session.Viewport.Scale:0.###}.png");
+            File.WriteAllBytes(path, data.ToArray());
+            _report.Frames.Add(path);
+        }
+        return $"{(done ? "" : "NOT DONE ")}{watch.Elapsed.TotalMilliseconds:0} ms; frames={frames}; longest scene={longest:0} ms; " +
+            $"built scene/painter/shader ms: {stages}";
     }
 
     private async Task VerifyStylePanel()

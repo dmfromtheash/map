@@ -51,7 +51,6 @@ public static partial class StyleRenderer
             if (gpu is not null) maps = [.. maps.Select(m => m.ToTextureImage(gpu) ?? m)];
             return uploaded[source] = maps;
         }
-        var drawn = 0;
         PrebuildFormMaps(parts.Mountains, options);
         try
         {
@@ -59,6 +58,10 @@ public static partial class StyleRenderer
             {
                 surface.Canvas.Clear(SKColors.Transparent); surface.Canvas.SetMatrix(matrix);
             }
+            // The stamps in drawing order, then one buffer at a time (R09b): consecutive draws of one form map into one
+            // target batch on the GPU, where interleaving the seven targets split every stamp into seven passes. Each
+            // buffer still receives the same draws in the same order.
+            var stamps = new List<(SceneObject Item, StampStyle Stamp, SKImage[] Maps, float Sx, float Sy, SKPoint Mid, SKRect Padded, byte Alpha)>();
             foreach (var layer in parts.Mountains.Layers.OfType<ObjectLayer>())
             {
                 if (!layer.Visible || layer.Opacity <= 0) continue;
@@ -77,32 +80,39 @@ public static partial class StyleRenderer
                     var wet = PainterFormMaps.Get(source, true);
                     var block = PainterFormMaps.Get(source, false);
                     var maps = MapsFor(source, wet, block);
-                    // Skia keeps merging the queued stamp draws into ever larger operations; 1500 queued
-                    // stamps took minutes of CPU at the next flush, 64 at a time take milliseconds.
-                    if (++drawn % 64 == 0) gpu?.Flush();
                     var rect = SKRect.Create((float)item.X, (float)item.Y, (float)item.Width, (float)item.Height);
                     var sx = rect.Width / PainterFormMaps.ReferenceWidth;
                     var sy = rect.Height / (block.Big.Height - 2 * PainterFormMaps.Padding);
                     var padded = SKRect.Create(-rect.Width / 2 - PainterFormMaps.Padding * sx,
                         -rect.Height / 2 - PainterFormMaps.Padding * sy, block.Big.Width * sx, block.Big.Height * sy);
-                    for (var i = 0; i < surfaces.Length; i++)
+                    stamps.Add((item, stamp, maps, sx, sy, new SKPoint(rect.MidX, rect.MidY), padded,
+                        (byte)Math.Clamp(Math.Round(255 * item.ObjectOpacity * layer.Opacity), 0, 255)));
+                }
+            }
+            var sampling = new SKSamplingOptions(SKFilterMode.Linear);
+            using var paint = new SKPaint();
+            for (var i = 0; i < surfaces.Length; i++)
+            {
+                var canvas = surfaces[i].Canvas;
+                var drawn = 0;
+                foreach (var (item, stamp, maps, sx, sy, mid, padded, alpha) in stamps)
+                {
+                    // Skia keeps merging the queued stamp draws into ever larger operations; 1500 queued
+                    // stamps took minutes of CPU at the next flush, a bounded batch takes milliseconds.
+                    if (++drawn % 64 == 0) gpu?.Flush();
+                    canvas.Save(); canvas.Translate(mid.X, mid.Y);
+                    canvas.RotateDegrees((float)item.RotationDegrees);
+                    canvas.Scale(stamp.FlipHorizontal ? -1 : 1, stamp.FlipVertical ? -1 : 1);
+                    paint.Color = SKColors.White.WithAlpha(alpha);
+                    if (i == 6)
                     {
-                        var canvas = surfaces[i].Canvas;
-                        canvas.Save(); canvas.Translate(rect.MidX, rect.MidY);
-                        canvas.RotateDegrees((float)item.RotationDegrees);
-                        canvas.Scale(stamp.FlipHorizontal ? -1 : 1, stamp.FlipVertical ? -1 : 1);
-                        using var paint = new SKPaint { Color = SKColors.White.WithAlpha((byte)Math.Clamp(
-                            Math.Round(255 * item.ObjectOpacity * layer.Opacity), 0, 255)) };
-                        if (i == 6)
-                        {
-                            // Transform the asset's tensor direction into document axes. B carries this
-                            // instance's brush scale; support alpha makes the top stamp own its fields.
-                            using var shader = DirectionShader(maps[6], maps[3], sx, sy, padded, item);
-                            paint.Shader = shader; canvas.DrawRect(padded, paint);
-                        }
-                        else canvas.DrawImage(maps[i], padded, new SKSamplingOptions(SKFilterMode.Linear), paint);
-                        canvas.Restore();
+                        // Transform the asset's tensor direction into document axes. B carries this
+                        // instance's brush scale; support alpha makes the top stamp own its fields.
+                        using var shader = DirectionShader(maps[6], maps[3], sx, sy, padded, item);
+                        paint.Shader = shader; canvas.DrawRect(padded, paint); paint.Shader = null;
                     }
+                    else canvas.DrawImage(maps[i], padded, sampling, paint);
+                    canvas.Restore();
                 }
             }
             var images = surfaces.Select(s => s.Snapshot()).ToArray();

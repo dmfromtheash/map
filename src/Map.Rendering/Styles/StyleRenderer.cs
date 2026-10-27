@@ -83,8 +83,8 @@ public static partial class StyleRenderer
         }
         else
         {
-            if (gpu is not null) DropKept();
-            var buffers = Buffers(bare, options, gpu, m, device, kind,
+            if (gpu is not null) DropKeptFrame();
+            var buffers = Buffers(bare, options, gpu, m, device, kind, candidate,
                 candidate is not null ? FollowGutter : 0, drawScene, measure, ref sample);
             if (buffers is not null)
             {
@@ -99,8 +99,12 @@ public static partial class StyleRenderer
                 if (painted is not null && candidate is not null
                     && options.Stats is { TerrainRefinementsPending: 0, DetailTilesPending: 0, HexChunksPending: 0, MissingAssets: 0 }
                     && (!Lighting.LightingRenderer.Applies(bare, options) || Lighting.LightingRenderer.LastFrameComplete))
+                {
                     Kept = new KeptFrame(candidate, buffers) { Style = style, Painted = painted, Exact = key is not null };
-                else buffers.Dispose();
+                    // The kept frame owns the mountain buffers now.
+                    Pending = null;
+                }
+                else KeepParts(buffers, candidate, bare, options);
             }
         }
         if (painted is null) { drawScene(canvas, document with { Style = null }, options); return; }
@@ -127,7 +131,10 @@ public static partial class StyleRenderer
     private sealed record FrameBuffers(SKImage Scene, SKImage? Tensor, SKImage? Soft, SKImage? Wide, int Margin,
         SKPoint Origin, SKPoint DocPerPx, float PxPerDoc, SKSize DocumentSize, PrintBuffers? Print, PainterBuffers? Painter, int Gutter) : IDisposable
     {
-        public void Dispose() { Scene.Dispose(); Tensor?.Dispose(); Soft?.Dispose(); Wide?.Dispose(); Print?.Dispose(); Painter?.Dispose(); }
+        public void Dispose() { DisposeScene(); Print?.Dispose(); Painter?.Dispose(); }
+
+        /// <summary>Releases everything but the mountain buffers (<see cref="PendingParts"/> keeps those).</summary>
+        public void DisposeScene() { Scene.Dispose(); Tensor?.Dispose(); Soft?.Dispose(); Wide?.Dispose(); }
     }
 
     /// <summary>The buffers of the canvas's last view and its painted frame (render thread only).</summary>
@@ -145,14 +152,81 @@ public static partial class StyleRenderer
 
     private static KeptFrame? Kept;
 
+    /// <summary>
+    /// The mountain buffers of a view whose frame is not kept yet (R09b). While the scene's detail
+    /// tiles arrive a few per frame, the frame is rebuilt each time; the painter and print buffers
+    /// are drawn straight from the stamps and form maps, not from those tiles, so the next frame of
+    /// the same view takes them as they are instead of drawing every mountain seven times again.
+    /// </summary>
+    private sealed record PendingParts(FrameKey Key, int Gutter, PainterBuffers? Painter, PrintBuffers? Print) : IDisposable
+    {
+        public void Dispose() { Painter?.Dispose(); Print?.Dispose(); }
+    }
+
+    private static PendingParts? Pending;
+
     /// <summary>Releases the kept buffers and frame (style off, the view closed, the map closed).</summary>
     public static void DropKept()
+    {
+        DropKeptFrame();
+        var pending = Pending;
+        Pending = null;
+        pending?.Dispose();
+    }
+
+    private static void DropKeptFrame()
     {
         var kept = Kept;
         Kept = null;
         if (kept is null) return;
         kept.Buffers.Dispose();
         kept.Painted?.Dispose();
+    }
+
+    /// <summary>The mountain buffers kept for <paramref name="key"/>, or null (any other ones are released).</summary>
+    private static PendingParts? PartsFor(FrameKey? key, int gutter)
+    {
+        // Exports and other unkeyed frames (possibly off the render thread) never touch the canvas's buffers.
+        if (key is null) return null;
+        var pending = Pending;
+        if (pending is not null && pending.Key == key && pending.Gutter == gutter) return pending;
+        Pending = null;
+        pending?.Dispose();
+        return null;
+    }
+
+    /// <summary>
+    /// Releases a frame that is not kept, but keeps its mountain buffers for the next frame of the same view when
+    /// every stamp they draw was there (a missing image would otherwise stay missing from them).
+    /// </summary>
+    private static void KeepParts(FrameBuffers buffers, FrameKey? key, MapDocument bare, RenderOptions options)
+    {
+        if (key is null) { buffers.Dispose(); return; }
+        if ((buffers.Painter is null && buffers.Print is null) || !StampsReady(bare, options))
+        {
+            if (Pending is { } stale && (ReferenceEquals(stale.Painter, buffers.Painter) || ReferenceEquals(stale.Print, buffers.Print)))
+                Pending = null;
+            buffers.Dispose();
+            return;
+        }
+        if (Pending is not { } same || !ReferenceEquals(same.Painter, buffers.Painter) || !ReferenceEquals(same.Print, buffers.Print))
+        {
+            Pending?.Dispose();
+            Pending = new PendingParts(key, buffers.Gutter, buffers.Painter, buffers.Print);
+        }
+        buffers.DisposeScene();
+    }
+
+    private static bool StampsReady(MapDocument bare, RenderOptions options)
+    {
+        if (options.Stamps is not { } stamps) return false;
+        foreach (var layer in PrintPartsFor(bare).Mountains.Layers.OfType<ObjectLayer>())
+        {
+            if (!layer.Visible) continue;
+            foreach (var item in layer.Objects)
+                if (item.Visible && item.Stamp is { } stamp && stamps.TryGetImage(stamp.AssetSha256) is null) return false;
+        }
+        return true;
     }
 
     /// <summary>
@@ -177,7 +251,8 @@ public static partial class StyleRenderer
     }
 
     private static FrameBuffers? Buffers(MapDocument bare, RenderOptions options, GRContext? gpu, SKMatrix m, SKRectI device,
-        int kind, int gutter, Action<SKCanvas, MapDocument, RenderOptions> drawScene, bool measure, ref StyleFrameSample sample)
+        int kind, FrameKey? candidate, int gutter, Action<SKCanvas, MapDocument, RenderOptions> drawScene, bool measure,
+        ref StyleFrameSample sample)
     {
         var print = kind != 0;
         var stage = measure ? Stage(gpu) : 0;
@@ -227,8 +302,10 @@ public static partial class StyleRenderer
         // The document point of the padded raster's top-left pixel, and document units per raster pixel on each axis.
         var origin = new SKPoint(-paddedMatrix.TransX / paddedMatrix.ScaleX, -paddedMatrix.TransY / paddedMatrix.ScaleY);
         var printStarted = measure && print ? Stage(gpu) : 0;
-        var printBuffers = kind == 1 ? BuildPrintBuffers(bare, options, gpu, paddedMatrix, w, h, scale, visible, drawScene) : null;
-        var painterBuffers = kind == 2 ? BuildPainterBuffers(bare, options, gpu, paddedMatrix, w, h, scale, visible, drawScene) : null;
+        // The same view (the key holds the document, matrix, device and preset kind) draws the same mountain buffers.
+        var parts = print ? PartsFor(candidate, gutter) : null;
+        var printBuffers = kind == 1 ? parts?.Print ?? BuildPrintBuffers(bare, options, gpu, paddedMatrix, w, h, scale, visible, drawScene) : null;
+        var painterBuffers = kind == 2 ? parts?.Painter ?? BuildPainterBuffers(bare, options, gpu, paddedMatrix, w, h, scale, visible, drawScene) : null;
         if (measure && print) sample = sample with { PrintMs = Elapsed(gpu, printStarted) };
         if (print && printBuffers is null && painterBuffers is null)
         {
