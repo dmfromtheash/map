@@ -1,4 +1,6 @@
-﻿using Map.Core.Documents;
+﻿using System.Collections.Immutable;
+using System.Numerics;
+using Map.Core.Documents;
 
 namespace Map.Core.Editing;
 
@@ -15,7 +17,8 @@ public sealed record MapChangeGroup(string Group, int Added, int Removed, int Ch
 /// R30: two versions of a map compared by meaning, not by bytes - what was added, removed or
 /// changed among settlements, labels, objects, rivers, roads, notes and cards, and how many hexes
 /// and fog cells were revealed. Things are matched by id; «changed» means moved, resized, turned,
-/// renamed or redrawn. Each change keeps its place, for the highlight on the canvas.
+/// renamed or redrawn. Each change keeps its place, for the highlight on the canvas. R30b: also what
+/// the players see, a note's link and category, river node features, and fog moved cell by cell.
 /// </summary>
 public sealed class MapComparison
 {
@@ -24,12 +27,14 @@ public sealed class MapComparison
     public int HexesRevealed { get; }
     public int HexesHidden { get; }
     public long FogCellsRevealed { get; }
+    public long FogCellsHidden { get; }
     public bool LandChanged { get; }
 
-    public bool IsEmpty => Changes.Count == 0 && HexesRevealed == 0 && HexesHidden == 0 && FogCellsRevealed == 0 && !LandChanged;
+    public bool IsEmpty => Changes.Count == 0 && HexesRevealed == 0 && HexesHidden == 0 && FogCellsRevealed == 0 && FogCellsHidden == 0 && !LandChanged;
 
-    private MapComparison(List<MapChange> changes, int hexesRevealed, int hexesHidden, long fogCells, bool land)
+    private MapComparison(List<MapChange> changes, int hexesRevealed, int hexesHidden, long fogCells, long fogHidden, bool land)
     {
+        FogCellsHidden = fogHidden;
         Changes = changes;
         Groups = [.. changes.GroupBy(c => c.Group).Select(g => new MapChangeGroup(g.Key,
             g.Count(c => c.Kind == MapChangeKind.Added), g.Count(c => c.Kind == MapChangeKind.Removed), g.Count(c => c.Kind == MapChangeKind.Changed)))
@@ -63,14 +68,43 @@ public sealed class MapComparison
         Match(Layers<Road>(before, l => l.Roads), Layers<Road>(after, l => l.Roads), r => r.Id, _ => Roads, r => r.Name, RoadBounds, SameRoad, changes);
         Match(Layers<PlacementArea>(before, l => l.PlacementAreas), Layers<PlacementArea>(after, l => l.PlacementAreas), a => a.Id, _ => Areas, a => a.Name,
             a => Bounds(a.Nodes.Select(n => (n.X, n.Y))), (x, y) => x.Nodes.Select(n => (n.X, n.Y)).SequenceEqual(y.Nodes.Select(n => (n.X, n.Y))) && x.Density == y.Density, changes);
-        Match(before.Notes, after.Notes, n => n.Id.Value, _ => Notes, n => n.Title, NoteBounds,
-            (x, y) => x.Title == y.Title && x.Markdown == y.Markdown && x.WorldX == y.WorldX && x.WorldY == y.WorldY, changes);
+        Match(before.Notes, after.Notes, n => n.Id.Value, _ => Notes, n => n.Title, NoteBounds, SameNote, changes);
         Match(before.Entities, after.Entities, e => e.Id, _ => Cards, e => e.Name, e => EntityBounds(after, e),
-            (x, y) => x.Name == y.Name && x.Kind == y.Kind && x.Markdown == y.Markdown && x.Bindings.SequenceEqual(y.Bindings), changes);
+            (x, y) => x.Name == y.Name && x.Kind == y.Kind && x.Markdown == y.Markdown && x.PlayerVisible == y.PlayerVisible && x.Bindings.SequenceEqual(y.Bindings), changes);
 
         var (revealed, hidden) = HexReveals(before, after);
-        var fog = Math.Max(0, after.Fog.RevealedCells - before.Fog.RevealedCells);
-        return new MapComparison(changes, revealed, hidden, fog, LandDiffers(before, after));
+        var (fogOpened, fogClosed) = FogDifference(before.Fog, after.Fog);
+        return new MapComparison(changes, revealed, hidden, fogOpened, fogClosed, LandDiffers(before, after));
+    }
+
+    /// <summary>The same note by what it says and does: text, place, anchor, link, category, whether the players see it (R30b).</summary>
+    public static bool SameNote(MapNote x, MapNote y) =>
+        x.Title == y.Title && x.Markdown == y.Markdown && x.WorldX == y.WorldX && x.WorldY == y.WorldY
+        && x.AnchorKind == y.AnchorKind && x.ObjectId == y.ObjectId
+        && x.LinkedMap == y.LinkedMap && x.Category == y.Category && x.PlayerVisible == y.PlayerVisible;
+
+    /// <summary>
+    /// Fog cells opened and closed between two versions, cell by cell (R30b): moving the opened area
+    /// keeps the count the same but is still a change.
+    /// </summary>
+    public static (long Opened, long Closed) FogDifference(MapFog before, MapFog after)
+    {
+        long opened = 0, closed = 0;
+        foreach (var key in before.Revealed.Keys.Union(after.Revealed.Keys))
+        {
+            var was = before.Revealed.TryGetValue(key, out var a) ? a : (ImmutableArray<ulong>?)null;
+            var now = after.Revealed.TryGetValue(key, out var b) ? b : (ImmutableArray<ulong>?)null;
+            for (var row = 0; row < MapFog.TileCells; row++)
+            {
+                var (x, y) = (Row(was, row), Row(now, row));
+                opened += BitOperations.PopCount(y & ~x);
+                closed += BitOperations.PopCount(x & ~y);
+            }
+        }
+        return (opened, closed);
+
+        // A tile stored as an empty array is wholly open; a missing tile is closed.
+        static ulong Row(ImmutableArray<ulong>? rows, int row) => rows is not { } r ? 0 : r.Length == 0 ? ulong.MaxValue : r[row];
     }
 
     /// <summary>The summary in words: «+4 поселения · изменены 2 дороги · раскрыто 12 гексов».</summary>
@@ -88,6 +122,7 @@ public sealed class MapComparison
         if (HexesRevealed > 0) lines.Add($"Раскрыто гексов: {HexesRevealed}");
         if (HexesHidden > 0) lines.Add($"Скрыто гексов: {HexesHidden}");
         if (FogCellsRevealed > 0) lines.Add($"Открыто тумана: {FogCellsRevealed * MapFog.Cell * MapFog.Cell / 1_000_000.0:0.##} Мпкс");
+        if (FogCellsHidden > 0) lines.Add($"Закрыто туманом: {FogCellsHidden * MapFog.Cell * MapFog.Cell / 1_000_000.0:0.##} Мпкс");
         if (LandChanged) lines.Add("Суша перерисована");
         if (lines.Count == 0) lines.Add("Различий нет.");
         return lines;
@@ -127,10 +162,13 @@ public sealed class MapComparison
     private static bool SameNodes(IReadOnlyList<VectorNode>? a, IReadOnlyList<VectorNode>? b) =>
         (a is null && b is null) || (a is not null && b is not null && a.Count == b.Count && a.Zip(b).All(p => Near(p.First.X, p.Second.X) && Near(p.First.Y, p.Second.Y)));
 
-    public static bool SameRiver(River x, River y) => x.Name == y.Name && x.Era == y.Era && x.Visible == y.Visible && x.Channels.Length == y.Channels.Length
-        && x.Channels.Zip(y.Channels).All(p => p.First.Nodes.Select(n => (n.X, n.Y, n.Width)).SequenceEqual(p.Second.Nodes.Select(n => (n.X, n.Y, n.Width))));
+    /// <summary>The same river by its course, widths and the waterfalls, rapids and fords on its nodes (R30b), name, years and visibility.</summary>
+    public static bool SameRiver(River x, River y) => x.Name == y.Name && x.Era == y.Era && x.Visible == y.Visible && Near(x.WidthScale, y.WidthScale)
+        && x.Channels.Length == y.Channels.Length
+        && x.Channels.Zip(y.Channels).All(p => p.First.Nodes.Select(n => (n.X, n.Y, n.Width, n.Sharp, n.Tension, n.Feature))
+            .SequenceEqual(p.Second.Nodes.Select(n => (n.X, n.Y, n.Width, n.Sharp, n.Tension, n.Feature))));
 
-    public static bool SameRoad(Road x, Road y) => x.Name == y.Name && x.Era == y.Era && x.Visible == y.Visible && x.Style == y.Style
+    public static bool SameRoad(Road x, Road y) => x.Name == y.Name && x.Era == y.Era && x.Visible == y.Visible && x.Style == y.Style && Near(x.WidthScale, y.WidthScale)
         && x.Nodes.Select(n => (n.X, n.Y)).SequenceEqual(y.Nodes.Select(n => (n.X, n.Y)))
         && x.Branches.SelectMany(b => b.Vertices.Select(v => v.Width)).SequenceEqual(y.Branches.SelectMany(b => b.Vertices.Select(v => v.Width)));
 

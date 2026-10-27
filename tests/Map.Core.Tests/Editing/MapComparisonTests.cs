@@ -41,6 +41,65 @@ public sealed class MapComparisonTests
         Assert.Equal(["Различий нет."], MapComparison.Compare(before, before).Summary());
     }
 
+    [Fact]
+    public void Note_visibility_link_and_category_are_changes()
+    {
+        // R30b: each of them alone makes a note «changed».
+        var note = new MapNote(NoteId.New(), "Засада", "", NoteAnchorKind.World, 50, 50);
+        var before = Doc([], []).WithNotes([note]);
+        foreach (var edited in new[] { note with { PlayerVisible = true }, note with { LinkedMap = Guid.NewGuid() }, note with { Category = NoteCategory.Quest } })
+        {
+            var diff = MapComparison.Compare(before, before.WithNotes([edited]));
+            Assert.Equal(1, diff.Groups.Single(g => g.Group == MapComparison.Notes).Changed);
+        }
+    }
+
+    [Fact]
+    public void A_card_shown_to_players_is_a_change()
+    {
+        var card = new MapEntity { Name = "Ильград", Kind = EntityKind.Place };
+        var before = Doc([], []) with { Entities = [card] };
+        var diff = MapComparison.Compare(before, before with { Entities = [card with { PlayerVisible = true }] });
+        Assert.Equal(1, diff.Groups.Single(g => g.Group == MapComparison.Cards).Changed);
+    }
+
+    [Fact]
+    public void A_waterfall_a_sharp_bend_or_a_wider_river_is_a_change()
+    {
+        var river = new River { Name = "Сельва", Channels = [RiverEditor.NewChannel([new(0, 0), new(100, 50), new(200, 0)], 8)] };
+        var before = WithRiver(river);
+        var channel = river.Channels[0];
+        River Node(Func<RiverNode, RiverNode> edit) => river with { Channels = [channel with { Nodes = [channel.Nodes[0], edit(channel.Nodes[1]), channel.Nodes[2]] }] };
+        foreach (var edited in new[] { Node(n => n with { Feature = RiverNodeFeature.Waterfall }), Node(n => n with { Sharp = true }), Node(n => n with { Tension = 2 }), river with { WidthScale = 2 } })
+            Assert.Equal(1, MapComparison.Compare(before, WithRiver(edited)).Groups.Single(g => g.Group == MapComparison.Rivers).Changed);
+        Assert.True(MapComparison.Compare(before, WithRiver(river with { Channels = [channel] })).IsEmpty);
+    }
+
+    [Fact]
+    public void Moving_the_opened_fog_with_the_same_number_of_cells_is_a_change()
+    {
+        MapFog Opened(double x)
+        {
+            var stroke = MapFogEditor.Begin(new MapFog { Enabled = true });
+            MapFogEditor.Dab(stroke, x, 500, 100, true, 2048, 2048);
+            return MapFogEditor.Finish(stroke);
+        }
+        var (left, right) = (Opened(400), Opened(1200));
+        Assert.Equal(left.RevealedCells, right.RevealedCells);
+        var diff = MapComparison.Compare(Doc([], []) with { Fog = left }, Doc([], []) with { Fog = right });
+        Assert.False(diff.IsEmpty);
+        Assert.Equal(left.RevealedCells, diff.FogCellsRevealed);
+        Assert.Equal(left.RevealedCells, diff.FogCellsHidden);
+        Assert.Contains(diff.Summary(), line => line.StartsWith("Закрыто туманом", StringComparison.Ordinal));
+        Assert.True(MapComparison.Compare(Doc([], []) with { Fog = left }, Doc([], []) with { Fog = Opened(400) }).IsEmpty);
+    }
+
+    private static MapDocument WithRiver(River river)
+    {
+        var doc = Doc([], []);
+        return doc.WithLayers([.. doc.Layers.Select(l => l is ObjectLayer o ? o with { Rivers = [river] } : l)]);
+    }
+
     private static SceneObject Stamp(string sha, double x, double y) =>
         new SceneObject(ObjectId.New(), SceneObjectKind.Stamp, "s", x, y, 40, 40, 0, "#FFFFFFFF", "#00000000", 0, true, false) { Stamp = new StampStyle(sha) };
 
