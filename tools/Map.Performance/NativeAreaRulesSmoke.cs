@@ -275,7 +275,8 @@ public sealed class AreaRulesApplication : Application
         var reopened = MapProjectStore.Open(file).Document;
         var reopenedLayer = reopened.Layers.OfType<ObjectLayer>().Single(l => l.Id == Objects);
         var reopenedArea = reopenedLayer.PlacementAreas.Single();
-        _report.Checks["save-reopen-v30"] = schema == 30 && Equals(reopenedArea.Beauty, Area().Beauty)
+        // At least v30 («Красота»); since R20 a regenerated area also keeps its recipe, which is v31.
+        _report.Checks["save-reopen-v30"] = schema >= MapProjectFormat.AreaBeautySchemaVersion && Equals(reopenedArea.Beauty, Area().Beauty)
             && Equals(reopenedArea.DensityMask, Area().DensityMask) && reopenedLayer.Effects.DepthSort
             && reopenedArea.MemberCount == Area().MemberCount;
     }
