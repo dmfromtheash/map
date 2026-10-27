@@ -7,7 +7,7 @@ public sealed partial class Stage19Application
 {
     private static readonly string[] CompareRequired =
     [
-        "compare-summary", "compare-marks", "before-shows-version", "after-shows-map", "resources-disposed",
+        "compare-summary", "compare-note-visibility", "compare-moved-fog", "compare-marks", "before-shows-version", "after-shows-map", "resources-disposed",
     ];
 
     /// <summary>
@@ -23,8 +23,16 @@ public sealed partial class Stage19Application
             { Text = LabelPresets.Apply(new TextStyle { Content = text, Alignment = TextAlignment.Center }, LabelPreset.City) };
         var port = label("Порт", 230, 330);
         var objects = new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, [port]);
+        // R30b: a note and an opened patch of fog that later only change in ways the old comparison missed.
+        var note = new MapNote(NoteId.New(), "Засада", "", NoteAnchorKind.World, 400, 300);
+        MapFog Opened(double x)
+        {
+            var stroke = Map.Core.Editing.MapFogEditor.Begin(new MapFog { Enabled = true });
+            Map.Core.Editing.MapFogEditor.Dab(stroke, x, 400, 80, true, 1024, 768);
+            return Map.Core.Editing.MapFogEditor.Finish(stroke);
+        }
         var document = new MapDocument(DocumentId.New(), "Мир", DateTimeOffset.UnixEpoch, new CanvasDefinition(1024, 768, "px", page),
-            [new BaseColorLayer(LayerId.New(), "Море", true, false, 1, page), island, objects]);
+            [new BaseColorLayer(LayerId.New(), "Море", true, false, 1, page), island, objects]).WithNotes([note]) with { Fog = Opened(300) };
         _view.Canvas.DisposeRenderCaches(); OpenEditor(document); await Settle();
         _editor.Session.Viewport.Set(0, 0, 1);
         _editor.CreateCheckpoint("Версия 01"); await Settle();
@@ -32,7 +40,10 @@ public sealed partial class Stage19Application
         _editor.Session.Execute(new Map.Core.Editing.AddObjectCommand(objects.Id, label("Новгород", 620, 420)));
         _editor.Session.SelectedObjectId = port.Id;
         _editor.SetTextContent("Порт Ветров");
-        _editor.Session.SelectedObjectId = null; await Settle();
+        _editor.Session.SelectedObjectId = null;
+        _editor.SetNoteWiki(note.Id, null, NoteCategory.Other, true);
+        _editor.Session.Execute(new Map.Core.Editing.SetFogCommand(_editor.Session.Document.Fog, Opened(700), "Туман"));
+        await Settle();
 
         _view.OpenVersions(); await Settle();
         var versions = _view.VersionsWindowForSmoke ?? throw new InvalidOperationException("Окно версий не открылось.");
@@ -43,7 +54,11 @@ public sealed partial class Stage19Application
         await Press("CompareCheckpoint_" + version);
         var summary = In<StackPanel>("CompareSummary").Children.OfType<TextBlock>().Select(t => t.Text ?? "").ToArray();
         _report.Checks["compare-summary"] = summary.Any(t => t.StartsWith("Подписи: +1, изменено 1", StringComparison.Ordinal));
-        _report.Checks["compare-marks"] = _editor.CompareMarks is { Count: 2 };
+        _report.Checks["compare-note-visibility"] = summary.Any(t => t.StartsWith("Заметки: изменено 1", StringComparison.Ordinal));
+        _report.Checks["compare-moved-fog"] = Opened(300).RevealedCells == Opened(700).RevealedCells
+            && summary.Any(t => t.StartsWith("Открыто тумана", StringComparison.Ordinal)) && summary.Any(t => t.StartsWith("Закрыто туманом", StringComparison.Ordinal));
+        // Two labels and the note.
+        _report.Checks["compare-marks"] = _editor.CompareMarks is { Count: 3 };
         await Frame();
         _report.Screenshot = Path.ChangeExtension(Options.OutputPath, ".png");
         SaveVisual(_report.Screenshot);

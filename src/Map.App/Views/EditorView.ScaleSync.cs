@@ -32,7 +32,7 @@ public sealed partial class EditorView
         apply = Ui.AsyncButton("ScaleSyncApplyButton", "Записать в подкарты", async () =>
         {
             await _editor.ApplyChildSyncAsync(plans);
-            plans = await _editor.PlanChildSyncAsync();
+            plans = await _editor.PlanChildSyncAsync(report: false);
             Fill();
         }, "accent", "compact");
         void Fill()

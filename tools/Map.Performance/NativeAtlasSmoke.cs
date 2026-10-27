@@ -25,6 +25,10 @@ public sealed partial class RegionalApplication
             _window.Content = _view; await _editor.RefreshAtlasAsync(); await Settle(); _view.Canvas.FitToCanvas(); await Settle();
         }
         var parent = PosterStandardFixture() with { Title = "Атлас · мир" };
+        // R28b: a road across the future region, for «Согласование» below.
+        var road = Map.Core.Editing.RoadEditor.NewRoad([new(0, 200), new(640, 200)], 6, RoadStyle.Country(), "Тракт");
+        var firstObjects = parent.Layers.OfType<ObjectLayer>().First();
+        parent = parent.WithLayers([.. parent.Layers.Select(l => l.Id == firstObjects.Id ? firstObjects with { Roads = [road] } : l)]);
         var parentPath = Path.Combine(_workspace, "parent.mapproj");
         MapProjectStore.Save(parent, parentPath, new("r25", DateTimeOffset.UtcNow), Map.Rendering.ThumbnailRenderer.RenderPng(parent));
         await Show(parentPath);
@@ -78,5 +82,51 @@ public sealed partial class RegionalApplication
         _editor.Redo();
         Check("Ссылка гекса повторяется", _editor.ActiveHexLayer!.Notes[targetHex].ChildMap is not null);
         await Show(parentPath);
+        await VerifyScaleSync(Path.Combine(_workspace, "region.mapproj"), road.Id);
+    }
+
+    /// <summary>
+    /// R28b through «Согласование»: «Проверить подкарты» plans the road into the region; the region is then
+    /// saved elsewhere - first with the copy already there and edited by hand (the old plan is refused and the
+    /// file kept), then with a path of its own (the road is written and the path stays).
+    /// </summary>
+    private async Task VerifyScaleSync(string regionPath, Guid roadId)
+    {
+        Click(_view!, "ScaleSyncButton"); await Settle();
+        var window = _window.OwnedWindows.Single(w => w.Name == "ScaleSyncWindow");
+        var regionRoads = () => _store.Open(regionPath).Document.Layers.OfType<ObjectLayer>().SelectMany(l => l.Roads).ToList();
+        async Task Press(string name, Func<bool> done, string what)
+        {
+            Click(window, name);
+            await WaitUntil(done, what); await Task.Delay(300); await Settle();
+        }
+        string Summary() => string.Join(" | ", window.GetVisualDescendants().OfType<TextBlock>().Select(t => t.Text));
+        await Press("ScaleSyncCheckButton", () => Summary().Contains("новых: 1", StringComparison.Ordinal), "План согласования");
+        Check("Согласование: план видит дорогу родителя", Summary().Contains("новых: 1", StringComparison.Ordinal));
+
+        // Elsewhere the copy was already written and then bent by hand; the region saved after the plan.
+        var region = _store.Open(regionPath).Document;
+        var transform = _editor.Atlas!.Links.Single(l => l.Kind == "region").Transform;
+        var synced = Map.Core.Editing.ScaleSync.Apply(region, Map.Core.Editing.ScaleSync.Plan(_editor.Session.Document, region, transform));
+        var copy = synced.Layers.OfType<ObjectLayer>().SelectMany(l => l.Roads).Single(r => r.Inherited?.SourceId == roadId);
+        var bent = synced.WithLayers([.. synced.Layers.Select(l => l is ObjectLayer o
+            ? o with { Roads = [.. o.Roads.Select(r => r.Id == copy.Id ? r with { Nodes = [r.Nodes[0] with { Y = r.Nodes[0].Y + 40 }, .. r.Nodes.Skip(1)] } : r)] } : l)]);
+        MapProjectStore.Save(bent, regionPath, new("r28b", DateTimeOffset.UtcNow), Map.Rendering.ThumbnailRenderer.RenderPng(bent));
+        await Press("ScaleSyncApplyButton", () => _editor.StatusDetail.Contains("изменилось после проверки", StringComparison.Ordinal), "Отказ устаревшего плана");
+        Check("Согласование: устаревший план не записан", _editor.StatusDetail.Contains("изменилось после проверки", StringComparison.Ordinal)
+            && Math.Abs(regionRoads().Single(r => r.Id == copy.Id).Nodes[0].Y - (copy.Nodes[0].Y + 40)) < .01);
+
+        // Back to the region without the copy; checked; then a path drawn there and saved - the road goes in, the path stays.
+        MapProjectStore.Save(region, regionPath, new("r28b", DateTimeOffset.UtcNow), Map.Rendering.ThumbnailRenderer.RenderPng(region));
+        await Press("ScaleSyncCheckButton", () => Summary().Contains("новых: 1", StringComparison.Ordinal), "План по исходной подкарте");
+        var path = Map.Core.Editing.RoadEditor.NewRoad([new(10, 10), new(60, 60)], 3, RoadStyle.Country(), "Тропа");
+        var withPath = region.Layers.OfType<ObjectLayer>().FirstOrDefault() is { } host
+            ? region.WithLayers([.. region.Layers.Select(l => l.Id == host.Id ? host with { Roads = [.. host.Roads, path] } : l)])
+            : region.WithLayers([.. region.Layers, new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, []) { Roads = [path] }]);
+        MapProjectStore.Save(withPath, regionPath, new("r28b", DateTimeOffset.UtcNow), Map.Rendering.ThumbnailRenderer.RenderPng(withPath));
+        await Press("ScaleSyncApplyButton", () => _editor.StatusDetail.StartsWith("Согласовано подкарт: 1", StringComparison.Ordinal), "Запись в подкарту");
+        var written = regionRoads();
+        Check("Согласование: запись не теряет сохранённое после плана", written.Any(r => r.Id == path.Id) && written.Any(r => r.Inherited?.SourceId == roadId));
+        window.Close(); await Settle();
     }
 }

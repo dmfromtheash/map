@@ -6,7 +6,7 @@ namespace Map.Performance;
 
 public sealed partial class Stage19Application
 {
-    private static readonly string[] CityRequired = ["city-opened", "city-regenerated", "city-coast", "resources-disposed"];
+    private static readonly string[] CityRequired = ["city-opened", "city-regenerated", "city-hand-note-kept", "city-coast", "resources-disposed"];
 
     /// <summary>R34/R35: a generated city map opens in the city workshop; «Другой вариант» in the «Город» window rebuilds it. Whole town and a close-up captured.</summary>
     private async Task CityOnly()
@@ -18,6 +18,13 @@ public sealed partial class Stage19Application
         _report.Screenshot = Path.ChangeExtension(Options.OutputPath, ".png");
         SaveVisual(_report.Screenshot);
 
+        // R35b: the user's own empty note named like the key survives «Другой вариант».
+        var mine = new MapNote(NoteId.New(), "1. Храм", "", NoteAnchorKind.World, 300, 300);
+        _editor.Session.Execute(new AddNoteCommand(mine)); await Settle();
+        var keys = _editor.Session.Document.Notes.Count(n => n.Origin == NoteOrigin.CityKey);
+        _editor.Undo(); _editor.Redo(); await Settle();
+        var undoBase = _editor.Session.UndoDepth;
+
         await Click("CityButton"); await Settle();
         var window = _view.GetType().GetField("_cityWindow", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(_view) as Window
             ?? throw new InvalidOperationException("Окно «Город» не открылось.");
@@ -25,7 +32,10 @@ public sealed partial class Stage19Application
         var reseed = Avalonia.LogicalTree.LogicalExtensions.GetLogicalDescendants(window).OfType<Button>().Single(b => b.Name == "CityReseedButton");
         reseed.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent)); await Task.Delay(400); await Settle();
         var after = _editor.Session.Document.Layers.OfType<ObjectLayer>().Single(l => l.Name == "Город").Objects.Count;
-        _report.Checks["city-regenerated"] = after != before && _editor.Session.UndoDepth == 1;
+        _report.Checks["city-regenerated"] = after != before && _editor.Session.UndoDepth == undoBase + 1;
+        var notes = _editor.Session.Document.Notes;
+        _report.Checks["city-hand-note-kept"] = notes.Any(n => n.Id == mine.Id && n.Origin == NoteOrigin.Manual)
+            && notes.Count(n => n.Origin == NoteOrigin.CityKey) == notes.Count - 1 && keys > 0;
         window.Close(); await Settle();
         _editor.Session.Viewport.Set(900, 900, 1.4); await Task.Delay(600); await Settle();
         SaveVisual(Path.Combine(Path.GetDirectoryName(Options.OutputPath)!, Path.GetFileNameWithoutExtension(Options.OutputPath) + "-close.png"));

@@ -6,7 +6,7 @@ namespace Map.Performance;
 
 public sealed partial class Stage19Application
 {
-    private static readonly string[] ChangesRequired = ["changes-exported", "changes-checked", "changes-applied", "changes-undo", "resources-disposed"];
+    private static readonly string[] ChangesRequired = ["changes-exported", "changes-checked", "changes-applied", "changes-undo", "changes-empty-named", "resources-disposed"];
 
     /// <summary>
     /// R42 through «Версии»: a version is taken, a town added and the port renamed, the changes
@@ -64,6 +64,16 @@ public sealed partial class Stage19Application
         _editor.Undo(); await Settle();
         var undone = _editor.Session.Document.Layers.OfType<ObjectLayer>().SelectMany(l => l.Objects).Select(o => o.Text?.Content).ToList();
         _report.Checks["changes-undo"] = undone.SequenceEqual(["Порт Бурь"]);
+
+        // R42b: only the fog changed since a version - no file, and the message names what a package does not carry.
+        _editor.CreateCheckpoint("Только туман"); await Settle();
+        var fogVersion = _editor.Session.Document.Checkpoints.Single(c => c.Name == "Только туман").Id;
+        _editor.SetFogEnabled(true); _editor.RevealAllFog(); await Settle();
+        var emptyPath = Path.Combine(Path.GetDirectoryName(Options.OutputPath)!, "empty" + Map.Persistence.ChangePackageStore.Extension);
+        var empty = await _editor.ExportChangesAsync(fogVersion, emptyPath);
+        _report.Checks["changes-empty-named"] = empty is null && !File.Exists(emptyPath)
+            && _editor.StatusDetail.Contains("Пакет пуст", StringComparison.Ordinal) && _editor.StatusDetail.Contains("туман", StringComparison.Ordinal);
+        Console.WriteLine("R42b: " + _editor.StatusDetail);
         versions.Close(); File.Delete(path);
         await Task.Delay(800); await Frame(); await Settle();
     }

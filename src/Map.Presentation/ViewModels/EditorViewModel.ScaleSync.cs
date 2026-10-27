@@ -18,7 +18,8 @@ public sealed record ChildSync(Guid MapId, string Title, string Path, MapDocumen
 /// </summary>
 public sealed partial class EditorViewModel
 {
-    public async Task<IReadOnlyList<ChildSync>> PlanChildSyncAsync()
+    /// <param name="report">False keeps the status line as it is (the plan made again right after «Записать» must not hide its result).</param>
+    public async Task<IReadOnlyList<ChildSync>> PlanChildSyncAsync(bool report = true)
     {
         if (Atlas is not { } atlas || AtlasPath is not { } manifest) { StatusDetail = "У карты нет подкарт в атласе."; return []; }
         var parent = Session.Document;
@@ -40,7 +41,7 @@ public sealed partial class EditorViewModel
             }
             return (IReadOnlyList<ChildSync>)result;
         });
-        StatusDetail = plans.Count == 0 ? "Подкарт-областей нет." : $"Подкарт: {plans.Count}, с изменениями: {plans.Count(p => p.Plan.Changes > 0)}.";
+        if (report) StatusDetail = plans.Count == 0 ? "Подкарт-областей нет." : $"Подкарт: {plans.Count}, с изменениями: {plans.Count(p => p.Plan.Changes > 0)}.";
         return plans;
     }
 
