@@ -34,6 +34,28 @@ internal static class PanelAudit
     }
 
     /// <summary>
+    /// DEC-070 (owner: «при наводке на каждую кнопочку… выплывал текст что она такое»): every visible button,
+    /// toggle and choice box under <paramref name="root"/> that shows no tooltip, as «Name «label»».
+    /// </summary>
+    public static List<string> MissingTips(Control root)
+    {
+        static string? Label(Control c) => c switch
+        {
+            ContentControl { Content: string s } => s,
+            ContentControl { Content: TextBlock t } => t.Text,
+            ContentControl { Content: Panel p } => p.GetVisualDescendants().OfType<TextBlock>().FirstOrDefault()?.Text,
+            ComboBox box => box.PlaceholderText,
+            _ => null,
+        };
+        return root.GetVisualDescendants().OfType<Control>()
+            // Template parts (scroll and spin arrows) and the headers of folding blocks carry their own words.
+            .Where(c => c is Button or Avalonia.Controls.Primitives.ToggleButton or ComboBox && c.IsEffectivelyVisible
+                && ToolTip.GetTip(c) is null or "" && c.Name is not "ExpanderHeader" && c.Name?.StartsWith("PART_", StringComparison.Ordinal) != true)
+            .Select(c => $"{(string.IsNullOrEmpty(c.Name) ? c.GetType().Name : c.Name)} «{Label(c) ?? "без текста"}»")
+            .Distinct().ToList();
+    }
+
+    /// <summary>
     /// What the user would see as broken in the panel: a control reaching past the panel's edge,
     /// two neighbours in one row or column overlapping, a one-line text or a button label cut.
     /// </summary>

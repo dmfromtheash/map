@@ -20,6 +20,7 @@ public sealed partial class Stage19Application
     {
         var audit = new List<object>();
         var markdown = new StringBuilder("# Аудит раскладки панелей стандартного конструктора\n\n");
+        var noTip = new SortedSet<string>(StringComparer.Ordinal);
 
         async Task Shoot(string tool)
         {
@@ -37,6 +38,7 @@ public sealed partial class Stage19Application
             await Settle(); panel.UpdateLayout();
             PanelAudit.Save(panel, Path.ChangeExtension(Options.OutputPath, $"std-panel-{tool}-open.png"));
             var issues = PanelAudit.Audit(panel);
+            foreach (var tip in PanelAudit.MissingTips(_view)) noTip.Add(tip);
             audit.Add(new { tool, height = Math.Round(opened), unfolded = Math.Round(panel.Bounds.Height), viewport = Math.Round(host.Viewport.Height), folded = folded.Count, issues });
             markdown.AppendLine($"## {tool}: {opened:0} px как открывается, {panel.Bounds.Height:0} px раскрыто ({folded.Count} свёрнутых), видно {host.Viewport.Height:0} px\n");
             foreach (var issue in issues) markdown.AppendLine("- " + issue);
@@ -58,6 +60,7 @@ public sealed partial class Stage19Application
                 var key = tab.Name![(strip.Name!.Length - "Strip".Length)..];
                 PanelAudit.Save(panel, Path.ChangeExtension(Options.OutputPath, $"std-panel-{tool}-tab-{key}.png"));
                 var tabIssues = PanelAudit.Audit(panel);
+                foreach (var tip in PanelAudit.MissingTips(_view)) noTip.Add(tip);
                 audit.Add(new { tool = tool + "/" + key, height = Math.Round(panel.Bounds.Height), unfolded = Math.Round(panel.Bounds.Height), viewport = Math.Round(host.Viewport.Height), folded = inner.Count, issues = tabIssues });
                 markdown.AppendLine($"### {tool} · вкладка {key}: {panel.Bounds.Height:0} px раскрыто\n");
                 foreach (var issue in tabIssues) markdown.AppendLine("- " + issue);
@@ -104,6 +107,10 @@ public sealed partial class Stage19Application
         File.WriteAllText(Path.ChangeExtension(Options.OutputPath, "std-panel-audit.json"),
             JsonSerializer.Serialize(audit, new JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }));
         File.WriteAllText(Path.ChangeExtension(Options.OutputPath, "std-panel-audit.md"), markdown.ToString());
+        // DEC-070: every visible control of the whole window (bars, rail, panels) in all the states above has a tooltip.
+        File.WriteAllLines(Path.ChangeExtension(Options.OutputPath, "std-panel-no-tooltip.txt"), noTip);
+        _report.Checks["every-visible-control-has-tooltip"] = noTip.Count == 0;
+        Console.WriteLine($"controls without tooltip: {noTip.Count}");
         _report.Checks["standard-panel-shots-saved"] = audit.Count >= 14;
     }
 }

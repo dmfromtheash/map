@@ -396,6 +396,9 @@ public sealed partial class EditorView : UserControl
     private int _objectListRebuildCount;
     private readonly HashSet<ObjectId> _objectSelectionSet = [];
 
+    // Once per process, before the first editor: controls without their own tooltip take it from the directory (DEC-070).
+    static EditorView() => UiTips.Install();
+
     public EditorView(
         EditorViewModel editor,
         Func<System.Threading.Tasks.Task> requestBack,
