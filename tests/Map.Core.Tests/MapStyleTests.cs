@@ -16,6 +16,8 @@ public sealed class MapStyleTests
     [InlineData(MapStylePreset.CharcoalVineStump)]
     [InlineData(MapStylePreset.CharcoalHatching)]
     [InlineData(MapStylePreset.BlueprintSurvey)]
+    [InlineData(MapStylePreset.MoonlightHasui)]
+    [InlineData(MapStylePreset.MoonlightPastel)]
     public void Approved_presets_expose_only_their_own_effects_and_normalize_each_value(MapStylePreset preset)
     {
         var original = MapStyle.For(preset);

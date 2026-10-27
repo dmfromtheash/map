@@ -84,6 +84,14 @@ public sealed record MapStyle
     public static MapStyle For(MapStylePreset preset) => preset switch
     {
         MapStylePreset.BlueprintSurvey => new MapStyle { Preset = preset, Paper = new(true, 1) },
+        MapStylePreset.MoonlightHasui => new MapStyle
+        {
+            Preset = preset, Crest = new(true, 1), WoodGrain = new(true, 1), Sea = new(true, 1), WaterLines = new(true, 1),
+        },
+        MapStylePreset.MoonlightPastel => new MapStyle
+        {
+            Preset = preset, Strokes = new(true, 1), Paper = new(true, 1), Coast = new(true, 1), WaterLines = new(true, 1),
+        },
         MapStylePreset.CharcoalVineStump or MapStylePreset.CharcoalHatching => new MapStyle
         {
             Preset = preset, Strokes = new(true, 1), Paper = new(true, 1), Contour = new(true, 1),
@@ -119,6 +127,10 @@ public sealed record MapStyle
     /// <summary>The effects a preset actually uses: the panel shows only these.</summary>
     public static IReadOnlyList<StyleEffectKind> EffectsOf(MapStylePreset preset) => preset switch
     {
+        MapStylePreset.MoonlightHasui =>
+            [StyleEffectKind.Crest, StyleEffectKind.Sea, StyleEffectKind.WaterLines, StyleEffectKind.WoodGrain],
+        MapStylePreset.MoonlightPastel =>
+            [StyleEffectKind.Strokes, StyleEffectKind.Coast, StyleEffectKind.WaterLines, StyleEffectKind.Paper],
         MapStylePreset.BlueprintSurvey =>
             [StyleEffectKind.Grid, StyleEffectKind.FormLines, StyleEffectKind.Crest,
              StyleEffectKind.WaterLines, StyleEffectKind.Paper],
@@ -271,6 +283,8 @@ public enum MapStylePreset
     CharcoalVineStump = 11,
     CharcoalHatching = 12,
     BlueprintSurvey = 13,
+    MoonlightHasui = 14,
+    MoonlightPastel = 15,
 }
 
 public enum StyleEffectKind

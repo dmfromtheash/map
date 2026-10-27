@@ -327,7 +327,10 @@ public static partial class StyleRenderer
     {
         var w = buffers.Scene.Width - 2 * buffers.Margin;
         var h = buffers.Scene.Height - 2 * buffers.Margin;
-        using var shader = buffers.Painter is { } blue && BlueprintShader.Applies(style.Preset)
+        using var shader = buffers.Painter is { } moon && MoonlightShader.Applies(style.Preset)
+            ? MoonlightShader.Build(buffers.Scene, moon.WetBig, moon.Facets, moon.WetFeatures, moon.Direction, moon.Geo,
+                buffers.Origin, buffers.DocPerPx, style)
+            : buffers.Painter is { } blue && BlueprintShader.Applies(style.Preset)
             ? BlueprintShader.Build(buffers.Scene, blue.WetBig, blue.WetFeatures, blue.Geo, buffers.Origin, buffers.DocPerPx, style)
             : buffers.Painter is { } coal && CharcoalShader.Applies(style.Preset)
             ? CharcoalShader.Build(buffers.Scene, coal.WetBig, coal.Facets, coal.WetFeatures, coal.Direction, coal.Geo,
@@ -346,7 +349,8 @@ public static partial class StyleRenderer
                 buffers.DocPerPx, buffers.PxPerDoc, style);
         if (isExport && gpu is null && Environment.ProcessorCount > 1 && (long)w * h >= 256 * 256
             && (style.Preset == MapStylePreset.WatercolorBigShapes || OilShader.Applies(style.Preset)
-                || CharcoalShader.Applies(style.Preset) || BlueprintShader.Applies(style.Preset)))
+                || CharcoalShader.Applies(style.Preset) || BlueprintShader.Applies(style.Preset)
+                || MoonlightShader.Applies(style.Preset)))
             return ShadeCpuBands(shader, w, h, buffers.Margin);
         using var output = NewSurface(gpu, w, h, SKColorType.Rgba8888);
         if (output is null) return null;

@@ -51,7 +51,8 @@ public class NewMapWizardTests
         Assert.Equal(600, document.Canvas.Height);
         Assert.Equal("#FFF2E9DC", document.Canvas.Background);
         Assert.Equal(2, document.Layers.Count);
-        Assert.IsType<BaseColorLayer>(document.Layers[0]);
+        // DEC-069: the sea of a new map is «Рябь штрихом» with its ready colours.
+        Assert.Equal(SeaStyle.For(SeaManner.Engraved), Assert.IsType<BaseColorLayer>(document.Layers[0]).Sea);
         Assert.Empty(document.Layers.OfType<ObjectLayer>().Single().Objects);
         Assert.Equal("", wizard.ValidationError);
     }

@@ -147,7 +147,8 @@ public sealed partial class PaintPerfApplication
         _view.ShowPanelSection(PanelSection.Styles);
         await Settle();
         T Find<T>(string name) where T : Control => _view.GetVisualDescendants().OfType<T>().Single(c => c.Name == name);
-        foreach (var preset in new[] { MapStylePreset.OldMapBlaeu, MapStylePreset.EngravingAquatint })
+        foreach (var preset in new[] { MapStylePreset.OldMapBlaeu, MapStylePreset.EngravingAquatint,
+                     MapStylePreset.MoonlightHasui, MapStylePreset.MoonlightPastel })
         {
             // The preset is a card of the ribbon under the map (DEC-064), marked "selected" when applied.
             var button = Find<Button>("StylePreset" + preset);

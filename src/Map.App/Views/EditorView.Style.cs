@@ -62,6 +62,8 @@ public sealed partial class EditorView
 
     private static string PresetHint(MapStylePreset preset) => preset switch
     {
+        MapStylePreset.MoonlightHasui => "Ночная гравюра Хасуи: горы тремя плоскими ступенями индиго под тёмной ключевой доской, море светлеет к берегу, лунная дорожка.",
+        MapStylePreset.MoonlightPastel => "Пастель на тёмной бумаге: лунный свет положен мелом по плоскостям гор, бумага видна в зерне, меловая линия берега.",
         MapStylePreset.BlueprintSurvey => "Топографическая синька: лист прусской синей, сетка, горы горизонталями формы и линиями гребней, море линиями глубин.",
         MapStylePreset.CharcoalVineStump => "Ивовый уголь: массы гор растушёваны, зерно бумаги в полутонах, свет оставлен бумагой, немного штрихов по форме.",
         MapStylePreset.CharcoalHatching => "Штриховка углём: только линия — по форме, накрест в тени, твёрдый контур; море ровной штриховкой.",
@@ -80,6 +82,13 @@ public sealed partial class EditorView
 
     private static string StyleEffectHint(StyleEffectKind kind, MapStylePreset preset) => kind switch
     {
+        StyleEffectKind.Crest when preset == MapStylePreset.MoonlightHasui => "Тёмный контур гор, гребней и берега, как отпечаток ключевой доски.",
+        StyleEffectKind.Sea when preset == MapStylePreset.MoonlightHasui => "Бокаси: море плавно темнеет от берега к открытой воде.",
+        StyleEffectKind.WaterLines when preset is MapStylePreset.MoonlightHasui or MapStylePreset.MoonlightPastel => "Лунная дорожка на воде и светлые линии вдоль берега.",
+        StyleEffectKind.WoodGrain when preset == MapStylePreset.MoonlightHasui => "Еле заметное волокно деревянной доски в заливках.",
+        StyleEffectKind.Strokes when preset == MapStylePreset.MoonlightPastel => "Мазки мела вдоль формы горы: светлые на освещённых гранях, средние на поворотах.",
+        StyleEffectKind.Coast when preset == MapStylePreset.MoonlightPastel => "Меловая линия берега и освещённого края гор.",
+        StyleEffectKind.Paper when preset == MapStylePreset.MoonlightPastel => "Тёмная бумага проступает в зерне сквозь мел.",
         StyleEffectKind.Grid => "Сетка землемера: крупные клетки и тонкие между ними; на горах бледнее.",
         StyleEffectKind.FormLines => "Белые линии по светотени горы — как горизонтали на карте, каждая вторая ярче.",
         StyleEffectKind.Crest when preset == MapStylePreset.BlueprintSurvey => "Жирные белые линии гребней и силуэта гор.",

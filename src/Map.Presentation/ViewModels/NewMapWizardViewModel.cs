@@ -191,8 +191,9 @@ public sealed class NewMapWizardViewModel : ViewModelBase
             createdUtc,
             new CanvasDefinition(width, height, "px", Background),
             [
+                // DEC-069: a new map's sea is «Рябь штрихом»; it shows once land is painted.
                 new BaseColorLayer(
-                    LayerId.New(), "Цвет фона", visible: true, locked: false, opacity: 1.0, Background),
+                    LayerId.New(), "Цвет фона", visible: true, locked: false, opacity: 1.0, Background) { Sea = SeaStyle.NewMapDefault },
                 new ObjectLayer(
                     LayerId.New(), "Объекты", visible: true, locked: false, opacity: 1.0, []),
             ],

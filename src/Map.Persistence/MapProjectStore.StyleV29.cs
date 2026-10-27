@@ -22,6 +22,8 @@ public static partial class MapProjectStore
         [MapStylePreset.CharcoalVineStump] = "charcoal-vine-stump",
         [MapStylePreset.CharcoalHatching] = "charcoal-hatching",
         [MapStylePreset.BlueprintSurvey] = "blueprint-survey",
+        [MapStylePreset.MoonlightHasui] = "moonlight-hasui",
+        [MapStylePreset.MoonlightPastel] = "moonlight-pastel",
     };
 
     private static MapStyleDto? ToStyleDto(MapStyle? style)

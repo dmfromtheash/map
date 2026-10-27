@@ -68,6 +68,8 @@ public sealed partial class EditorViewModel
         MapStylePreset.CharcoalVineStump => "Ивовый уголь",
         MapStylePreset.CharcoalHatching => "Штриховка углём",
         MapStylePreset.BlueprintSurvey => "Топографическая синька",
+        MapStylePreset.MoonlightHasui => "Ночная гравюра Хасуи",
+        MapStylePreset.MoonlightPastel => "Пастель на тёмной бумаге",
         MapStylePreset.WatercolorBigShapes => "Крупные пятна",
         MapStylePreset.UkiyoeSosakuHanga => "Сосаку-ханга",
         MapStylePreset.PrintLetterpress => "Высокая печать",
@@ -84,6 +86,7 @@ public sealed partial class EditorViewModel
         MapStylePreset.OilAllaPrima or MapStylePreset.OilImpastoRhythm => "Масло",
         MapStylePreset.CharcoalVineStump or MapStylePreset.CharcoalHatching => "Уголь",
         MapStylePreset.BlueprintSurvey => "Синька",
+        MapStylePreset.MoonlightHasui or MapStylePreset.MoonlightPastel => "Лунная ночь",
         MapStylePreset.WatercolorBigShapes => "Акварель",
         MapStylePreset.UkiyoeSosakuHanga => "Укиё-э",
         MapStylePreset.PrintLetterpress or MapStylePreset.PrintTintedLithograph => "Печать",
@@ -94,6 +97,13 @@ public sealed partial class EditorViewModel
 
     public static string StyleEffectTitle(StyleEffectKind kind, MapStylePreset preset = MapStylePreset.InkWetBrush) => kind switch
     {
+        StyleEffectKind.Crest when preset == MapStylePreset.MoonlightHasui => "Ключевая доска",
+        StyleEffectKind.Sea when preset == MapStylePreset.MoonlightHasui => "Бокаси моря",
+        StyleEffectKind.WaterLines when preset is MapStylePreset.MoonlightHasui or MapStylePreset.MoonlightPastel => "Лунная дорожка",
+        StyleEffectKind.WoodGrain when preset == MapStylePreset.MoonlightHasui => "Волокно доски",
+        StyleEffectKind.Strokes when preset == MapStylePreset.MoonlightPastel => "Мел по форме",
+        StyleEffectKind.Coast when preset == MapStylePreset.MoonlightPastel => "Меловой берег",
+        StyleEffectKind.Paper when preset == MapStylePreset.MoonlightPastel => "Зерно бумаги",
         StyleEffectKind.Grid => "Координатная сетка",
         StyleEffectKind.FormLines => "Горизонтали формы",
         StyleEffectKind.Crest when preset == MapStylePreset.BlueprintSurvey => "Гребни и силуэт",

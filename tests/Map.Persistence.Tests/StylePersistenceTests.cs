@@ -28,6 +28,8 @@ public sealed class StylePersistenceTests : IDisposable
     [InlineData(MapStylePreset.CharcoalVineStump)]
     [InlineData(MapStylePreset.CharcoalHatching)]
     [InlineData(MapStylePreset.BlueprintSurvey)]
+    [InlineData(MapStylePreset.MoonlightHasui)]
+    [InlineData(MapStylePreset.MoonlightPastel)]
     public void Style_v29_roundtrip_keeps_the_preset_strength_and_every_effect(MapStylePreset preset)
     {
         var style = MapStyle.For(preset) with
@@ -119,6 +121,8 @@ public sealed class StylePersistenceTests : IDisposable
     [InlineData(MapStylePreset.CharcoalVineStump)]
     [InlineData(MapStylePreset.CharcoalHatching)]
     [InlineData(MapStylePreset.BlueprintSurvey)]
+    [InlineData(MapStylePreset.MoonlightHasui)]
+    [InlineData(MapStylePreset.MoonlightPastel)]
     public void Missing_new_effects_use_the_approved_preset_defaults(MapStylePreset preset)
     {
         var path = Path.Combine(_root, "defaults.mapproj");

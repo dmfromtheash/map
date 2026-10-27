@@ -46,6 +46,11 @@ public sealed record SeaStyle
 
     public double Reach => BaseReach * Math.Clamp(double.IsFinite(Scale) ? Scale : 1, MinimumScale, MaximumScale);
 
+    /// <summary>
+    /// The sea of a new map (DEC-069): «Рябь штрихом». Maps that already exist keep the sea saved in them.
+    /// </summary>
+    public static SeaStyle NewMapDefault => For(SeaManner.Engraved);
+
     /// <summary>The ready look of each manner: the colours chosen with the owner's land (mockups of 2026-10-26).</summary>
     public static SeaStyle For(SeaManner manner) => manner switch
     {

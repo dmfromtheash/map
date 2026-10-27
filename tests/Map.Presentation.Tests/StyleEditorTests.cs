@@ -18,6 +18,8 @@ public sealed class StyleEditorTests
     [InlineData(MapStylePreset.CharcoalVineStump)]
     [InlineData(MapStylePreset.CharcoalHatching)]
     [InlineData(MapStylePreset.BlueprintSurvey)]
+    [InlineData(MapStylePreset.MoonlightHasui)]
+    [InlineData(MapStylePreset.MoonlightPastel)]
     public void Preset_and_slider_release_are_each_one_undo_step(MapStylePreset preset)
     {
         var editor = new EditorViewModel(TestData.Document(), null, false,
