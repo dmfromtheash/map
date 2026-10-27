@@ -10,6 +10,34 @@ namespace Map.Persistence.Tests.Support;
 /// <summary>Schema-v4-aware corruption fixture edits with every enclosing checksum repaired.</summary>
 internal static class ProjectJsonTestMutations
 {
+    /// <summary>Change only the declared schema, repairing the catalog hashes for a snapshot.</summary>
+    public static void RewriteSchemaVersion(string path, int version, Map.Core.Documents.CheckpointId? checkpointId = null)
+    {
+        using var archive = ZipFile.Open(path, ZipArchiveMode.Update);
+        var manifest = ReadObject(archive, MapProjectFormat.ManifestEntry);
+        if (checkpointId is { } id)
+        {
+            var entry = $"{MapProjectFormat.CheckpointPrefix}{id}/manifest.json";
+            var snapshot = ReadObject(archive, entry);
+            snapshot["schemaVersion"] = version;
+            var bytes = JsonSerializer.SerializeToUtf8Bytes(snapshot);
+            Replace(archive, entry, bytes);
+
+            var catalog = ReadObject(archive, MapProjectFormat.CheckpointCatalogEntry);
+            var item = catalog["checkpoints"]!.AsArray().Single(c => c!["id"]!.GetValue<string>() == id.ToString())!;
+            item["snapshotManifestSha256"] = Sha256(bytes);
+            var catalogBytes = JsonSerializer.SerializeToUtf8Bytes(catalog);
+            Replace(archive, MapProjectFormat.CheckpointCatalogEntry, catalogBytes);
+            manifest["checkpointCatalogSha256"] = Sha256(catalogBytes);
+        }
+        else
+        {
+            manifest["schemaVersion"] = version;
+        }
+
+        Replace(archive, MapProjectFormat.ManifestEntry, JsonSerializer.SerializeToUtf8Bytes(manifest));
+    }
+
     public static void RewriteScene(string path, Action<JsonObject> change)
     {
         using var archive = ZipFile.Open(path, ZipArchiveMode.Update);
