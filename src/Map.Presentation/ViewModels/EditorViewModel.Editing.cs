@@ -1795,7 +1795,12 @@ public sealed partial class EditorViewModel
         if (before is null || string.IsNullOrWhiteSpace(title)) return;
         try
         {
-            Session.Execute(new ReplaceNoteCommand(before, before with { Title = title.Trim(), Markdown = markdown }));
+            // A key note of the city the user rewrites becomes theirs: «Перестроить город» keeps it (R35b).
+            var changed = before.Title != title.Trim() || before.Markdown != markdown;
+            Session.Execute(new ReplaceNoteCommand(before, before with
+            {
+                Title = title.Trim(), Markdown = markdown, Origin = changed ? NoteOrigin.Manual : before.Origin,
+            }));
             AfterEdit();
         }
         catch (ArgumentException ex) { StatusDetail = ex.Message; }

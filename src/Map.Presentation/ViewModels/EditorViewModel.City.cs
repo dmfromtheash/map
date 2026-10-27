@@ -41,8 +41,9 @@ public sealed partial class EditorViewModel
         var plan = CityBuilder.Generate(document.Canvas.Width / 2.0, document.Canvas.Height / 2.0, CitySettings with { Radius = Math.Min(CitySettings.Radius, size * .42), IsLand = isLand });
         var layer = document.Layers.OfType<ObjectLayer>().FirstOrDefault(l => l.Name == "Город");
         var after = (layer ?? new ObjectLayer(LayerId.New(), "Город", true, false, 1, [])) with { Objects = [.. plan.Objects], Roads = [.. plan.Streets] };
-        var keyNotes = plan.Key.Select(b => new MapNote(NoteId.New(), $"{b.Number}. {b.Kind}", "", NoteAnchorKind.World, b.X, b.Y)).ToArray();
-        var notes = document.Notes.Where(n => !IsKeyNote(n)).Concat(keyNotes).ToArray();
+        var keyNotes = plan.Key.Select(CityBuilder.KeyNote).ToArray();
+        var marked = document.Notes.Any(n => n.Origin == NoteOrigin.CityKey);
+        var notes = document.Notes.Where(n => !IsKeyNote(n, marked)).Concat(keyNotes).ToArray();
         Session.Execute(new ReplaceCityCommand(layer, after, document.Notes, notes));
         AfterEdit();
         InvalidateScene(EditorChangeReason.CanvasInvalidation);
@@ -50,8 +51,13 @@ public sealed partial class EditorViewModel
         return true;
     }
 
-    private static bool IsKeyNote(MapNote note) =>
-        note.Markdown.Length == 0 && note.Title.IndexOf(". ", StringComparison.Ordinal) is > 0 and < 4 && char.IsDigit(note.Title[0]);
+    /// <summary>
+    /// A note of the generator's key (R35b): marked so. A city saved before the mark (no marked note at all)
+    /// falls back to the old rule - an empty note titled «N. …» - once; the rebuild marks its new key.
+    /// </summary>
+    private static bool IsKeyNote(MapNote note, bool marked) => marked
+        ? note.Origin == NoteOrigin.CityKey
+        : note.Markdown.Length == 0 && note.Title.IndexOf(". ", StringComparison.Ordinal) is > 0 and < 4 && char.IsDigit(note.Title[0]);
 
     /// <summary>The next click on the map makes a city there (a child map in the atlas).</summary>
     public void StartCityFromPoint()

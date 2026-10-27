@@ -88,6 +88,40 @@ public sealed class WaterCliffsPersistenceTests
     }
 
     [Fact]
+    public void A_city_key_note_round_trips_in_v46_and_an_older_schema_refuses_it()
+    {
+        // R35b: the generator's key notes carry their mark; the user's notes stay unmarked and keep the old schema.
+        using var workspace = new TempWorkspace();
+        var city = CityBuilder.NewCityMap("Ильград", 2000, new CitySettings { Seed = 5 }, new MapCategoryId("city"), DateTimeOffset.UnixEpoch);
+        var path = workspace.File("city-key.mapproj");
+        MapProjectStore.Save(city, path, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
+        Assert.Equal(46, Schema(path));
+        Assert.All(MapProjectStore.Open(path).Document.Notes, n => Assert.Equal(NoteOrigin.CityKey, n.Origin));
+
+        var plain = workspace.File("plain.mapproj");
+        var hand = city with { Notes = new System.Collections.ObjectModel.ReadOnlyCollection<MapNote>([.. city.Notes.Select(n => n with { Origin = NoteOrigin.Manual })]) };
+        MapProjectStore.Save(hand, plain, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
+        Assert.True(Schema(plain) < 46);
+
+        var forged = workspace.File("city-key-v45.mapproj");
+        using (var source = ZipFile.OpenRead(path))
+        using (var target = ZipFile.Open(forged, ZipArchiveMode.Create))
+            foreach (var entry in source.Entries)
+            {
+                var bytes = new MemoryStream(); using (var input = entry.Open()) input.CopyTo(bytes);
+                var data = bytes.ToArray();
+                if (entry.FullName == "manifest.json")
+                {
+                    var root = JsonNode.Parse(data)!; root["schemaVersion"] = 45;
+                    data = System.Text.Encoding.UTF8.GetBytes(root.ToJsonString());
+                }
+                using var output = target.CreateEntry(entry.FullName).Open(); output.Write(data);
+            }
+        var error = Assert.ThrowsAny<Exception>(() => MapProjectStore.Open(forged));
+        Assert.Contains("v46", error.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Star_systems_round_trip_in_v43()
     {
         using var workspace = new TempWorkspace();

@@ -363,6 +363,48 @@ public sealed class WaterCliffsWorkflowTests
     }
 
     [Fact]
+    public void Rebuilding_a_city_keeps_an_empty_hand_note_that_looks_like_the_key_and_survives_reopen()
+    {
+        // R35b: the user's own empty note «1. Храм» is not the generator's key, whatever it is called.
+        var root = Path.Combine(Path.GetTempPath(), "map-r35b-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var city = CityBuilder.NewCityMap("Ильград", 2000, new CitySettings { Seed = 5 }, new MapCategoryId("city"), DateTimeOffset.UnixEpoch);
+            var keys = city.Notes.Count;
+            Assert.All(city.Notes, n => Assert.Equal(NoteOrigin.CityKey, n.Origin));
+            var store = new Map.Presentation.Services.ProjectStore(new Map.Persistence.Recovery.RecoveryJournal(Path.Combine(root, "recovery")));
+            var editor = new EditorViewModel(city, null, false, store, new FakeRecentMaps(), new FakeFilePicker(), new FakePrompts(), new FakeLog());
+            var mine = new MapNote(NoteId.New(), "1. Храм", "", NoteAnchorKind.World, 300, 300);
+            editor.Session.Execute(new AddNoteCommand(mine));
+
+            editor.CitySettings = editor.CitySettings with { Seed = 99 };
+            Assert.True(editor.RegenerateCity());
+            var notes = editor.Session.Document.Notes;
+            Assert.Contains(notes, n => n.Id == mine.Id);
+            Assert.Equal(notes.Count - 1, notes.Count(n => n.Origin == NoteOrigin.CityKey));
+            editor.Undo();
+            Assert.Equal(keys + 1, editor.Session.Document.Notes.Count);
+
+            // Saved and opened again, the mark stays: the next rebuild still keeps the note and does not double the key.
+            var path = Path.Combine(root, "city.mapproj");
+            store.Save(editor.Session.Document, path, new("r35b", DateTimeOffset.UtcNow), Map.Rendering.ThumbnailRenderer.RenderPng(editor.Session.Document));
+            var reopened = new EditorViewModel(store.Open(path).Document, path, false, store, new FakeRecentMaps(), new FakeFilePicker(), new FakePrompts(), new FakeLog());
+            Assert.Equal(keys, reopened.Session.Document.Notes.Count(n => n.Origin == NoteOrigin.CityKey));
+            Assert.True(reopened.RegenerateCity());
+            Assert.Single(reopened.Session.Document.Notes, n => n.Id == mine.Id && n.Origin == NoteOrigin.Manual);
+            Assert.Equal(reopened.Session.Document.Notes.Count - 1, reopened.Session.Document.Notes.Count(n => n.Origin == NoteOrigin.CityKey));
+
+            // A key note the user writes into becomes theirs.
+            var key = reopened.Session.Document.Notes.First(n => n.Origin == NoteOrigin.CityKey);
+            reopened.EditNote(key.Id, key.Title, "Здесь живёт настоятель.");
+            Assert.True(reopened.RegenerateCity());
+            Assert.Contains(reopened.Session.Document.Notes, n => n.Id == key.Id);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
     public void A_card_is_made_from_the_selection_bound_linked_and_undone()
     {
         var label = new SceneObject(ObjectId.New(), SceneObjectKind.Text, "Ильград", 100, 100, 120, 40, 0, "#FF20242B", "#FFFFFFFF", 0, true, false)

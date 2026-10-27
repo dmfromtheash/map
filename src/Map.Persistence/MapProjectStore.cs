@@ -63,7 +63,11 @@ public static partial class MapProjectStore
 
     private static bool HasRiverEraV45(IEnumerable<MapLayer> layers) => layers.OfType<ObjectLayer>().Any(l => l.Rivers.Any(r => r.Era is not null));
 
+    private static bool HasNoteOriginV46(IEnumerable<MapNote> notes) => notes.Any(n => n.Origin != NoteOrigin.Manual);
+
     private static int SchemaFor(MapDocument document) =>
+        HasNoteOriginV46(document.Notes) || document.Checkpoints.Any(c => HasNoteOriginV46(c.Snapshot.Notes))
+            ? MapProjectFormat.NoteOriginSchemaVersion :
         HasRiverEraV45(document.Layers) || document.Checkpoints.Any(c => HasRiverEraV45(c.Snapshot.Layers))
             ? MapProjectFormat.RiverEraSchemaVersion :
         HasInheritedV44(document.Layers) || document.Checkpoints.Any(c => HasInheritedV44(c.Snapshot.Layers))
@@ -2244,6 +2248,7 @@ public static partial class MapProjectStore
         LinkedMap = note.LinkedMap,
         Category = note.Category == NoteCategory.Other ? null : note.Category.ToString(),
         PlayerVisible = note.PlayerVisible ? true : null,
+        Origin = note.Origin == NoteOrigin.Manual ? null : note.Origin.ToString(),
     };
 
     private static GridDefinitionDto ToGridDto(GridDefinition grid) => new()
@@ -2741,6 +2746,7 @@ public static partial class MapProjectStore
         LinkedMap = note.LinkedMap,
         Category = note.Category is null ? NoteCategory.Other : ParseDefined<NoteCategory>(note.Category, "note category"),
         PlayerVisible = note.PlayerVisible == true,
+        Origin = note.Origin is null ? NoteOrigin.Manual : ParseDefined<NoteOrigin>(note.Origin, "note origin"),
     };
 
     private static GridDefinition ToGrid(GridDefinitionDto grid) => new(

@@ -150,7 +150,10 @@ public static class MapProjectFormat
 
     /// <summary>R31: the years a river flows.</summary>
     public const int RiverEraSchemaVersion = 45;
-    public const int MaxSupportedSchemaVersion = RiverEraSchemaVersion;
+
+    /// <summary>R35b: a note marked as the city generator's key.</summary>
+    public const int NoteOriginSchemaVersion = 46;
+    public const int MaxSupportedSchemaVersion = NoteOriginSchemaVersion;
 
     /// <summary>
     /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry

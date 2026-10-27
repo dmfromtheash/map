@@ -299,13 +299,17 @@ public static class CityBuilder
             settings = settings with { IsLand = (x, y) => TerrainOrder.CoverageAt(coast, x, y) >= 128 };
         var plan = Generate(size / 2.0, size / 2.0, settings with { Radius = Math.Min(settings.Radius, size * .42) });
         var objects = new ObjectLayer(LayerId.New(), "Город", true, false, 1, plan.Objects) { Roads = [.. plan.Streets] };
-        var notes = plan.Key.Select(b => new MapNote(NoteId.New(), $"{b.Number}. {b.Kind}", "", NoteAnchorKind.World, b.X, b.Y)).ToArray();
+        var notes = plan.Key.Select(KeyNote).ToArray();
         var ground = coast is null ? "#FFEDE3CC" : seaColor ?? "#FF8FB0BA";
         List<MapLayer> layers = [new BaseColorLayer(LayerId.New(), coast is null ? "Бумага" : "Море", true, false, 1, ground)];
         if (coast is not null) layers.Add(coast);
         layers.Add(objects);
         return new MapDocument(DocumentId.New(), title, createdUtc, new CanvasDefinition(size, size, "px", ground), layers, notes: notes, category: category);
     }
+
+    /// <summary>The note of one building of the key, marked as the generator's (R35b) so a rebuild replaces only these.</summary>
+    public static MapNote KeyNote(CityBuilding building) =>
+        new(NoteId.New(), $"{building.Number}. {building.Kind}", "", NoteAnchorKind.World, building.X, building.Y) { Origin = NoteOrigin.CityKey };
 
     private static SceneObject Label(string text, double x, double y, LabelPreset preset, int importance)
     {

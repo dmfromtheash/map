@@ -9,6 +9,9 @@ public enum NoteAnchorKind { World, Object }
 
 /// <summary>What a note is about (R26), with its own icon in the list.</summary>
 public enum NoteCategory { Other, Place, Encounter, Lore, Quest, Secret }
+
+/// <summary>Who made a note (R35b): the user, or the city generator as the key of its buildings.</summary>
+public enum NoteOrigin { Manual, CityKey }
 public enum GridGeometry { Square, IsometricSquares, HexFlat, HexPointy }
 
 public sealed record TextStyle
@@ -77,6 +80,9 @@ public sealed record MapNote
 
     /// <summary>The players may see the note (exports for players include it); otherwise it is the game master's.</summary>
     public bool PlayerVisible { get; init; }
+
+    /// <summary>Who made the note (R35b, schema v46): a key note of the city generator is replaced when the city is rebuilt.</summary>
+    public NoteOrigin Origin { get; init; }
 
     /// <summary>True when the note carries something of R26 (schema v36).</summary>
     public bool NeedsWikiSchema => LinkedMap is not null || Category != NoteCategory.Other || PlayerVisible;

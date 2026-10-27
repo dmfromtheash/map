@@ -534,6 +534,8 @@ internal sealed class NoteDto
     [JsonPropertyName("linkedMap")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public Guid? LinkedMap { get; set; }
     [JsonPropertyName("category")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Category { get; set; }
     [JsonPropertyName("playerVisible")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public bool? PlayerVisible { get; set; }
+    // R35b (schema v46): who made the note; absent for the user's own.
+    [JsonPropertyName("origin")][JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] public string? Origin { get; set; }
 }
 
 internal sealed class LandStyleDto
