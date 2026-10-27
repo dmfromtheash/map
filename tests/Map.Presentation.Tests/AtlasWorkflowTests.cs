@@ -46,6 +46,46 @@ public sealed class AtlasWorkflowTests : IDisposable
     }
 
     [Fact]
+    public async Task Scale_sync_apply_rereads_the_child_and_never_writes_over_a_save_made_after_the_plan()
+    {
+        // R28b: a road of the parent goes into a region child; the child is saved elsewhere between «Проверить» and «Записать».
+        var road = Map.Core.Editing.RoadEditor.NewRoad([new(0, 150), new(640, 150)], 6, RoadStyle.Country(), "Тракт");
+        var source = Document();
+        source = source.WithLayers([.. source.Layers.Select(l => l is ObjectLayer o ? o with { Roads = [road] } : l)]);
+        var parent = PathFor("parent.mapproj"); Write(source, parent);
+        var childPath = PathFor("region.mapproj");
+        var editor = Editor(source, parent, new FakeFilePicker { NextSavePath = childPath });
+        editor.BeginCanvasWorkflow(); editor.SetCanvasWorkflowMode(ResizeRegionMode.Region);
+        editor.RegionXText = "100"; editor.RegionYText = "90"; editor.RegionWidthText = "300"; editor.RegionHeightText = "200"; editor.RegionTitleText = "Регион";
+        Assert.True(await editor.CreateMapFromRegionAsync());
+
+        // A path drawn in the child after the plan stays; the road is still written.
+        var plans = await editor.PlanChildSyncAsync();
+        Assert.Single(Assert.Single(plans).Plan.AddRoads);
+        var child = _store.Open(childPath).Document;
+        var path = Map.Core.Editing.RoadEditor.NewRoad([new(10, 10), new(60, 60)], 3, RoadStyle.Country(), "Тропа");
+        Write(child.WithLayers([.. child.Layers.Select(l => l is ObjectLayer o ? o with { Roads = [path] } : l)]), childPath);
+        Assert.Equal(1, await editor.ApplyChildSyncAsync(plans));
+        var written = _store.Open(childPath).Document;
+        var roads = written.Layers.OfType<ObjectLayer>().SelectMany(l => l.Roads).ToList();
+        Assert.Contains(roads, r => r.Id == path.Id);
+        var copy = Assert.Single(roads, r => r.Inherited is not null);
+
+        // The parent moves the road, the user checks; then the copy is edited by hand and saved: the old plan is refused.
+        var reopened = _store.Open(parent).Document;
+        var moved = road with { Nodes = [.. road.Nodes.Select(n => n with { Y = 170 })] };
+        editor = Editor(reopened.WithLayers([.. reopened.Layers.Select(l => l is ObjectLayer o ? o with { Roads = [moved] } : l)]), parent);
+        await editor.RefreshAtlasAsync();
+        plans = await editor.PlanChildSyncAsync();
+        Assert.Single(Assert.Single(plans).Plan.UpdateRoads);
+        var handEdited = copy with { Nodes = [copy.Nodes[0] with { Y = 40 }, .. copy.Nodes.Skip(1)] };
+        Write(written.WithLayers([.. written.Layers.Select(l => l is ObjectLayer o ? o with { Roads = [.. o.Roads.Select(r => r.Id == copy.Id ? handEdited : r)] } : l)]), childPath);
+        Assert.Equal(0, await editor.ApplyChildSyncAsync(plans));
+        Assert.Contains("изменилось после проверки", editor.StatusDetail, StringComparison.Ordinal);
+        Assert.Equal(40, _store.Open(childPath).Document.Layers.OfType<ObjectLayer>().SelectMany(l => l.Roads).Single(r => r.Id == copy.Id).Nodes[0].Y, 1);
+    }
+
+    [Fact]
     public async Task Atlas_hex_creation_saves_note_and_transform_and_reuses_existing_child()
     {
         var source = HexMapFactory.Create("Гексы", DateTimeOffset.UnixEpoch, new("hex"), HexOrientation.Flat, 40, 8, 8, "#FFFFFFFF");

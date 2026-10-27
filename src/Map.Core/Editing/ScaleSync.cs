@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Map.Core.Documents;
 
 namespace Map.Core.Editing;
@@ -27,6 +28,22 @@ public sealed record ScaleSyncPlan(
         Part(KeptByHand.Count, "правленных вручную (не трогаю)");
         return parts.Count == 0 ? "совпадает с родителем" : string.Join(", ", parts);
     }
+
+    /// <summary>
+    /// True when <paramref name="other"/> would do the same to the child (R28b): the same copies added,
+    /// changed into the same shape, removed and kept. A plan made again after the child was saved
+    /// elsewhere is compared with the one the user saw before anything is written.
+    /// </summary>
+    public bool SameAs(ScaleSyncPlan other) => Key() == other.Key();
+
+    private string Key() => string.Join("|",
+        string.Join(",", AddRoads.Select(r => r.Inherited?.SourceId + ":" + r.Inherited?.Fingerprint).Order()),
+        string.Join(",", UpdateRoads.Select(u => u.Before.Id + ":" + u.After.Inherited?.Fingerprint).Order()),
+        string.Join(",", RemoveRoads.Select(r => r.Id.ToString()).Order()),
+        string.Join(",", AddRivers.Select(r => r.Inherited?.SourceId + ":" + r.Inherited?.Fingerprint).Order()),
+        string.Join(",", UpdateRivers.Select(u => u.Before.Id + ":" + u.After.Inherited?.Fingerprint).Order()),
+        string.Join(",", RemoveRivers.Select(r => r.Id.ToString()).Order()),
+        string.Join(",", KeptByHand.Order()));
 }
 
 /// <summary>
@@ -35,6 +52,8 @@ public sealed record ScaleSyncPlan(
 /// moved and scaled into the child's canvas and marked as inherited with the shape it had. Next time
 /// a changed parent updates its copies - unless the copy was edited by hand in the child: then the
 /// copy is a manual exception and stays. A copy whose source left the area goes away the same way.
+/// R28b: the shape includes widths, look, years and name, not only the points; a road that enters
+/// the area several times keeps every piece as a stretch of one copy.
 /// </summary>
 public static class ScaleSync
 {
@@ -52,22 +71,28 @@ public static class ScaleSync
         var wantedRoads = new HashSet<Guid>();
         foreach (var road in parent.Layers.OfType<ObjectLayer>().SelectMany(l => l.Roads))
         {
-            var pieces = Clip([.. road.Nodes.Select(n => new VectorPoint(n.X, n.Y))], area);
+            var width = Math.Max(1, road.Branches.FirstOrDefault()?.Vertices.FirstOrDefault()?.Width ?? 12) * scale;
+            var pieces = Clip([.. road.Nodes.Select(n => new VectorPoint(n.X, n.Y))], area)
+                .Select(piece => piece.Select(p => ToChild(transform, p)).ToList()).Where(p => p.Count >= 2).ToList();
             if (pieces.Count == 0) continue;
-            var points = pieces.OrderByDescending(p => p.Count).First().Select(p => ToChild(transform, p)).ToList();
-            if (points.Count < 2) continue;
             wantedRoads.Add(road.Id);
-            var fresh = RoadEditor.NewRoad(points, Math.Max(1, road.Branches.FirstOrDefault()?.Vertices.FirstOrDefault()?.Width ?? 12) * scale, road.Style, road.Name, road.Seed)
-                with { Era = road.Era };
+            // Every piece inside the area is a stretch of the one copy, so a road that leaves and comes back is whole.
+            var stretches = pieces.Select(p => RoadEditor.NewRoad(p, width)).ToList();
+            var fresh = RoadEditor.NewRoad(pieces[0], width, road.Style, road.Name, road.Seed) with
+            {
+                Nodes = [.. stretches.SelectMany(s => s.Nodes)],
+                Branches = [.. stretches.Select((s, i) => s.Branches[0] with { Name = "Участок " + (i + 1) })],
+                Era = road.Era, WidthScale = road.WidthScale,
+            };
             fresh = fresh with { Inherited = new InheritedFrom(parent.Id.Value, road.Id, Fingerprint(fresh)) };
             if (childRoads.FirstOrDefault(r => r.Inherited!.SourceId == road.Id) is not { } existing) { addRoads.Add(fresh); continue; }
-            if (Fingerprint(existing) != existing.Inherited!.Fingerprint) { kept.Add("дорога «" + existing.Name + "»"); continue; }
-            if (fresh.Inherited!.Fingerprint != existing.Inherited.Fingerprint || existing.Name != road.Name)
+            if (HandEdited(existing)) { kept.Add("дорога «" + existing.Name + "»"); continue; }
+            if (Outdated(existing, fresh))
                 updateRoads.Add((existing, fresh with { Id = existing.Id }));
         }
         foreach (var gone in childRoads.Where(r => !wantedRoads.Contains(r.Inherited!.SourceId)))
         {
-            if (Fingerprint(gone) != gone.Inherited!.Fingerprint) kept.Add("дорога «" + gone.Name + "»");
+            if (HandEdited(gone)) kept.Add("дорога «" + gone.Name + "»");
             else removeRoads.Add(gone);
         }
 
@@ -88,13 +113,13 @@ public static class ScaleSync
             var fresh = river with { Id = Guid.NewGuid(), Channels = [.. channels], Inherited = null };
             fresh = fresh with { Inherited = new InheritedFrom(parent.Id.Value, river.Id, Fingerprint(fresh)) };
             if (childRivers.FirstOrDefault(r => r.Inherited!.SourceId == river.Id) is not { } existing) { addRivers.Add(fresh); continue; }
-            if (Fingerprint(existing) != existing.Inherited!.Fingerprint) { kept.Add("река «" + existing.Name + "»"); continue; }
-            if (fresh.Inherited!.Fingerprint != existing.Inherited.Fingerprint || existing.Name != river.Name)
+            if (HandEdited(existing)) { kept.Add("река «" + existing.Name + "»"); continue; }
+            if (Outdated(existing, fresh))
                 updateRivers.Add((existing, fresh with { Id = existing.Id }));
         }
         foreach (var gone in childRivers.Where(r => !wantedRivers.Contains(r.Inherited!.SourceId)))
         {
-            if (Fingerprint(gone) != gone.Inherited!.Fingerprint) kept.Add("река «" + gone.Name + "»");
+            if (HandEdited(gone)) kept.Add("река «" + gone.Name + "»");
             else removeRivers.Add(gone);
         }
         return new ScaleSyncPlan(addRoads, updateRoads, removeRoads, addRivers, updateRivers, removeRivers, kept);
@@ -248,16 +273,47 @@ public static class ScaleSync
         return (t0, t1);
     }
 
-    public static string Fingerprint(Road road) => Hash(road.Nodes.Select(n => (n.X, n.Y)));
+    /// <summary>Marks a fingerprint that covers widths, look, years and name (R28b); older ones cover the points only.</summary>
+    private const string FullPrefix = "2:";
 
-    public static string Fingerprint(River river) => Hash(river.Channels.SelectMany(c => c.Nodes).Select(n => (n.X, n.Y)));
+    /// <summary>The copy as it was made: points, widths, look, years and name - any of them changed in the child is a hand edit.</summary>
+    public static string Fingerprint(Road road) => FullPrefix + Hash(road.Nodes.Select(n => (n.X, n.Y)),
+        [road.Name, road.WidthScale, JsonSerializer.Serialize(road.Style), JsonSerializer.Serialize(road.Era),
+         .. road.Branches.Select(b => (b.Closed ? "c" : "o") + string.Join(",", b.Vertices.Select(v => Num(v.Width))) + JsonSerializer.Serialize(b.Style))]);
 
-    private static string Hash(IEnumerable<(double X, double Y)> points)
+    public static string Fingerprint(River river) => FullPrefix + Hash(river.Channels.SelectMany(c => c.Nodes).Select(n => (n.X, n.Y)),
+        [river.Name, river.WidthScale, JsonSerializer.Serialize(river.Style), JsonSerializer.Serialize(river.Era),
+         .. river.Channels.Select(c => c.Name + ":" + string.Join(",", c.Nodes.Select(n => Num(n.Width))))]);
+
+    /// <summary>A copy changed in the child since it was made; a copy saved before R28b is judged by its points only.</summary>
+    private static bool HandEdited(Road copy) => copy.Inherited!.Fingerprint.StartsWith(FullPrefix, StringComparison.Ordinal)
+        ? Fingerprint(copy) != copy.Inherited.Fingerprint
+        : PointsFingerprint(copy.Nodes.Select(n => (n.X, n.Y))) != copy.Inherited.Fingerprint;
+
+    private static bool HandEdited(River copy) => copy.Inherited!.Fingerprint.StartsWith(FullPrefix, StringComparison.Ordinal)
+        ? Fingerprint(copy) != copy.Inherited.Fingerprint
+        : PointsFingerprint(copy.Channels.SelectMany(c => c.Nodes).Select(n => (n.X, n.Y))) != copy.Inherited.Fingerprint;
+
+    /// <summary>The parent's feature no longer matches the untouched copy (an older copy: its points or name).</summary>
+    private static bool Outdated(Road copy, Road fresh) => copy.Inherited!.Fingerprint.StartsWith(FullPrefix, StringComparison.Ordinal)
+        ? fresh.Inherited!.Fingerprint != copy.Inherited.Fingerprint
+        : PointsFingerprint(fresh.Nodes.Select(n => (n.X, n.Y))) != copy.Inherited.Fingerprint || copy.Name != fresh.Name;
+
+    private static bool Outdated(River copy, River fresh) => copy.Inherited!.Fingerprint.StartsWith(FullPrefix, StringComparison.Ordinal)
+        ? fresh.Inherited!.Fingerprint != copy.Inherited.Fingerprint
+        : PointsFingerprint(fresh.Channels.SelectMany(c => c.Nodes).Select(n => (n.X, n.Y))) != copy.Inherited.Fingerprint || copy.Name != fresh.Name;
+
+    private static string PointsFingerprint(IEnumerable<(double X, double Y)> points) => Hash(points);
+
+    private static string Hash(IEnumerable<(double X, double Y)> points, params ReadOnlySpan<object?> extra)
     {
         var text = new StringBuilder();
-        foreach (var (x, y) in points) text.Append(Math.Round(x, 1).ToString(CultureInfo.InvariantCulture)).Append(',').Append(Math.Round(y, 1).ToString(CultureInfo.InvariantCulture)).Append(';');
+        foreach (var (x, y) in points) text.Append(Num(x)).Append(',').Append(Num(y)).Append(';');
+        foreach (var item in extra) text.Append('|').Append(item is double d ? Num(d) : item?.ToString());
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text.ToString())))[..16];
     }
+
+    private static string Num(double value) => Math.Round(value, 1).ToString(CultureInfo.InvariantCulture);
 
     /// <summary>
     /// The terrain of each hex of a hex child taken from the painted parent (R28): water where the

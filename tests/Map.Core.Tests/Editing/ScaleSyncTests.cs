@@ -65,6 +65,57 @@ public sealed class ScaleSyncTests
     }
 
     [Fact]
+    public void A_width_look_or_years_changed_in_the_child_is_a_hand_edit_and_a_parent_width_change_updates()
+    {
+        // R28b: not only moved points make a copy the user's own.
+        var road = RoadEditor.NewRoad([new(0, 350), new(1000, 350)], 12, RoadStyle.Country(), "Тракт");
+        var river = new River { Name = "Сельва", Channels = [RiverEditor.NewChannel([new(400, 0), new(400, 1000)], 8)] };
+        var parent = Doc(1000, 1000, road, river);
+        var child = ScaleSync.Apply(Doc(1600, 1200), ScaleSync.Plan(parent, Doc(1600, 1200), Area));
+        var copy = child.Layers.OfType<ObjectLayer>().SelectMany(l => l.Roads).Single();
+        var riverCopy = child.Layers.OfType<ObjectLayer>().SelectMany(l => l.Rivers).Single();
+
+        // The parent widens both; untouched copies follow.
+        var wideRoad = road with { Branches = [road.Branches[0] with { Vertices = [.. road.Branches[0].Vertices.Select(v => v with { Width = 20 })] }] };
+        var wideRiver = river with { WidthScale = 1.5 };
+        var widened = ScaleSync.Plan(parent.WithLayers(Doc(1000, 1000, wideRoad, wideRiver).Layers), child, Area);
+        Assert.Equal((1, 1, 0), (widened.UpdateRoads.Count, widened.UpdateRivers.Count, widened.KeptByHand.Count));
+
+        // The child widens the road by hand and gives the river years: both stay as they are.
+        var handRoad = copy with { WidthScale = 2 };
+        var handRiver = riverCopy with { Era = new Era(100, 200) };
+        var edited = child.WithLayers([.. child.Layers.Select(l => l is ObjectLayer o
+            ? o with { Roads = [.. o.Roads.Select(r => r.Id == copy.Id ? handRoad : r)], Rivers = [.. o.Rivers.Select(r => r.Id == riverCopy.Id ? handRiver : r)] } : l)]);
+        var plan = ScaleSync.Plan(parent.WithLayers(Doc(1000, 1000, wideRoad, wideRiver).Layers), edited, Area);
+        Assert.Equal(0, plan.Changes);
+        Assert.Equal(2, plan.KeptByHand.Count);
+
+        // A look changed by hand counts too.
+        var styled = child.WithLayers([.. child.Layers.Select(l => l is ObjectLayer o
+            ? o with { Roads = [.. o.Roads.Select(r => r.Id == copy.Id ? r with { Style = RoadStyle.PenRuts() } : r)] } : l)]);
+        Assert.Contains(ScaleSync.Plan(parent, styled, Area).KeptByHand, k => k.Contains("Тракт", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_road_entering_the_child_twice_keeps_both_pieces()
+    {
+        // The road dips into the area, leaves it to the south and comes back: two pieces inside.
+        var road = RoadEditor.NewRoad([new(0, 350), new(300, 350), new(400, 800), new(500, 350), new(1000, 350)], 12, RoadStyle.Country(), "Петля");
+        var parent = Doc(1000, 1000, road);
+        var plan = ScaleSync.Plan(parent, Doc(1600, 1200), Area);
+        var copy = Assert.Single(plan.AddRoads);
+        Assert.Equal(2, copy.Branches.Length);
+        copy.Validate();
+        Assert.Contains(copy.Nodes, n => n.X < 400);
+        Assert.Contains(copy.Nodes, n => n.X > 1200);
+
+        var synced = ScaleSync.Apply(Doc(1600, 1200), plan);
+        Assert.Equal(0, ScaleSync.Plan(parent, synced, Area).Changes);
+        Assert.True(ScaleSync.Plan(parent, Doc(1600, 1200), Area).SameAs(plan));
+        Assert.False(ScaleSync.Plan(parent, synced, Area).SameAs(plan));
+    }
+
+    [Fact]
     public void Hexes_take_the_terrain_painted_under_them()
     {
         // Land on the left half of the parent's area; nothing on the right.

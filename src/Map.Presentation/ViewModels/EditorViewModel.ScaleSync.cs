@@ -8,7 +8,7 @@ using Map.Rendering;
 namespace Map.Presentation.ViewModels;
 
 /// <summary>One child map of the open map and what a sync would do to it (R28).</summary>
-public sealed record ChildSync(Guid MapId, string Title, string Path, MapDocument Child, ScaleSyncPlan Plan);
+public sealed record ChildSync(Guid MapId, string Title, string Path, MapDocument Child, ScaleSyncPlan Plan, AtlasTransform Transform);
 
 /// <summary>
 /// R28: «Согласовать подкарты» - the rivers and roads of the open map carried into its child maps
@@ -33,7 +33,7 @@ public sealed partial class EditorViewModel
                 {
                     var path = AtlasStore.ResolveMap(manifest, map);
                     var child = _store.Open(path).Document;
-                    result.Add(new ChildSync(map.Id, map.Title, path, child, ScaleSync.Plan(parent, child, link.Transform)));
+                    result.Add(new ChildSync(map.Id, map.Title, path, child, ScaleSync.Plan(parent, child, link.Transform), link.Transform));
                 }
                 catch (Exception ex) when (ex is MapProjectException or IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException)
                 { _log.Error("CHILD_SYNC_OPEN_FAILED", ex); }
@@ -44,21 +44,31 @@ public sealed partial class EditorViewModel
         return plans;
     }
 
-    /// <summary>Writes the planned changes into the child files (each child's own undo is its file history).</summary>
+    /// <summary>
+    /// Writes the planned changes into the child files (each child's own undo is its file history).
+    /// R28b: each child is read again first and planned again against the open map; the changes go
+    /// into the file as it is now, and a child whose plan is no longer the one shown is skipped.
+    /// </summary>
     public async Task<int> ApplyChildSyncAsync(IReadOnlyList<ChildSync> plans)
     {
-        var written = 0;
+        var parent = Session.Document;
+        var (written, stale) = (0, new List<string>());
         foreach (var plan in plans.Where(p => p.Plan.Changes > 0))
         {
             try
             {
-                await Task.Run(() =>
+                var saved = await Task.Run(() =>
                 {
-                    var updated = ScaleSync.Apply(plan.Child, plan.Plan);
+                    var current = _store.Open(plan.Path).Document;
+                    var again = ScaleSync.Plan(parent, current, plan.Transform);
+                    if (!again.SameAs(plan.Plan)) return false;
+                    var updated = ScaleSync.Apply(current, again);
                     var preview = ThumbnailRenderer.RenderPng(updated);
                     _store.Save(updated, plan.Path, new SaveMetadata(_appVersion, _clock(), 0), preview);
+                    return true;
                 });
-                written++;
+                if (saved) written++;
+                else stale.Add(plan.Title);
             }
             catch (Exception ex) when (ex is MapProjectException or IOException or UnauthorizedAccessException or InvalidOperationException or ArgumentException)
             {
@@ -67,6 +77,9 @@ public sealed partial class EditorViewModel
             }
         }
         if (written > 0) StatusDetail = $"Согласовано подкарт: {written}. Правленное вручную в подкартах оставлено как было.";
+        if (stale.Count > 0)
+            StatusDetail = (written > 0 ? StatusDetail + " " : "")
+                + $"Не записано — изменилось после проверки: {string.Join(", ", stale.Select(t => "«" + t + "»"))}. Проверьте подкарты ещё раз.";
         return written;
     }
 
