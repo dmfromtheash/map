@@ -167,7 +167,8 @@ public static partial class MapProjectStore
         ZipArchive archive,
         SceneDto scene,
         string entryRoot,
-        bool allowUnknownObjectKinds)
+        bool allowUnknownObjectKinds,
+        int schema)
     {
         var referenced = new HashSet<string>(StringComparer.Ordinal);
         var normalizedLayers = new Dictionary<string, List<ObjectChunkDescriptorDto>>(StringComparer.Ordinal);
@@ -236,6 +237,7 @@ public static partial class MapProjectStore
                     throw new MapProjectCorruptedException(
                         $"Object chunk {descriptor.Entry} has a null or malformed object payload.");
                 }
+                ValidateObjectSchema(dtos, schema);
 
                 var objects = new List<SceneObject>(dtos.Count);
                 WorldBounds? actualBounds = null;

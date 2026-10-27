@@ -848,7 +848,7 @@ public static partial class MapProjectStore
             }
 
             var objectStorages = expectedSchemaVersion == MapProjectFormat.SchemaVersion
-                ? ReadAndValidateObjectChunks(archive, scene, entryRoot: "", allowUnknownObjectKinds)
+                ? ReadAndValidateObjectChunks(archive, scene, entryRoot: "", allowUnknownObjectKinds, manifest.SchemaVersion)
                 : new Dictionary<string, SceneObjectList>(StringComparer.Ordinal);
             var tiles = ReadAndValidateTiles(archive, scene);
             var assets = ReadAndValidateAssets(archive, assetManifest);
@@ -1452,7 +1452,7 @@ public static partial class MapProjectStore
                         * MapProjectFormat.MaxCheckpointPreviewHeight);
 
                 var objectStorages = schemaVersion == MapProjectFormat.SchemaVersion
-                    ? ReadAndValidateObjectChunks(archive, scene, root, allowUnknownObjectKinds)
+                    ? ReadAndValidateObjectChunks(archive, scene, root, allowUnknownObjectKinds, snapshotManifest.SchemaVersion)
                     : new Dictionary<string, SceneObjectList>(StringComparer.Ordinal);
                 var tiles = ReadAndValidateTiles(archive, scene, root);
                 var assets = ReadAndValidateAssets(archive, assetManifest, root);

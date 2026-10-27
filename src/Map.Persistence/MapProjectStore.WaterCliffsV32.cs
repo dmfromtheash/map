@@ -18,6 +18,28 @@ public static partial class MapProjectStore
     private static bool HasWaterCliffsV32(MapDocument document) =>
         HasWaterCliffsV32(document.Layers) || document.Checkpoints.Any(c => HasWaterCliffsV32(c.Snapshot.Layers));
 
+    /// <summary>
+    /// The per-object guards (v31 reasons, v35 «намеренно», v37 label region and importance, v40 years, morph key and
+    /// political role). The scene guards below see only objects written inline in scene.json; a v4+ file keeps its
+    /// objects in chunks, so the chunk reader runs these on every chunk too (R42c).
+    /// </summary>
+    private static void ValidateObjectSchema(IEnumerable<SceneObjectDto?>? objects, int schema)
+    {
+        if (objects is null || schema >= MapProjectFormat.TimelineSchemaVersion) return;
+        foreach (var o in objects)
+        {
+            if (o is null) continue;
+            if (o.Era is not null || o.MorphKey is not null || o.Political is not null)
+                throw new MapProjectCorruptedException("Эпохи, границы во времени и политическая карта требуют схему v40.");
+            if (schema < MapProjectFormat.RegionLabelsSchemaVersion && o.Text is { } t && (t.Region is not null || t.Importance is not null))
+                throw new MapProjectCorruptedException("Подписи областей и важность подписей требуют схему v37.");
+            if (schema < MapProjectFormat.IntentionalSchemaVersion && o.GeographyIntentional == true)
+                throw new MapProjectCorruptedException("Отметка «намеренно» требует схему v35.");
+            if (schema < MapProjectFormat.GenerationSchemaVersion && o.GenerationReason is not null)
+                throw new MapProjectCorruptedException("Рецепт, защита и причины генерации требуют v31.");
+        }
+    }
+
     /// <summary>A file of an older schema may not carry any R12 construct.</summary>
     private static void ValidateWaterCliffsSchemaV32(SceneDto scene, int schema)
     {
