@@ -18,6 +18,8 @@ public static class UiTips
         // top bar and world row
         ["FileMenuButton"] = "Открыть, сохранить как, версии, размер карты, клавиши",
         ["ExportButton"] = "Выгрузить карту картинкой, для печати, VTT или пакетом игрока",
+        ["WorldSectionButton"] = "Атлас, время, планета, город, сектор, пойнткроул и проверки мира",
+        ["WorldSectionCloseButton"] = "Скрыть список «Мир»",
         ["AtlasUpButton"] = "Перейти к родительской карте атласа",
         ["AtlasCheckButton"] = "Найти расхождения между этой картой и её подкартами",
         ["AtlasRefreshButton"] = "Перерисовать превью подкарт на этой карте",

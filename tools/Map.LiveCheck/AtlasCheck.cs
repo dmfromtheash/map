@@ -47,6 +47,8 @@ internal static class AtlasCheck
             // Invoke can still target a peer retained while the parent view is being replaced.
             // Reacquire the visible button and use a real click in our own test window.
             main.Focus(); main.SetForeground(); Thread.Sleep(300);
+            // DEC-070: the atlas check is in «Мир», opened first.
+            Find("WorldSectionButton")!.Click(); Thread.Sleep(300);
             Find("AtlasCheckButton")!.Click(); Thread.Sleep(500);
             // Avalonia can expose a nonmodal owned window below its owner in the UIA tree.
             // It is visible in PrintWindow but absent from both top-level and ModalWindows.

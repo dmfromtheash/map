@@ -10,6 +10,7 @@ using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 using Map.App.Services;
+using Map.Presentation.Services;
 using Map.Presentation.ViewModels;
 
 namespace Map.App.Views;
@@ -19,7 +20,11 @@ public sealed partial class EditorView
     private Window? _atlasCheckWindow;
     private readonly List<Bitmap> _atlasImages = [];
 
-    // R25: functional controls only. The integrator owns the navigation design.
+    private Border _worldSection = null!;
+    private readonly List<Action> _worldSyncs = [];
+
+    // R25 + DEC-070 step 2: the row keeps only «Мир» and the way through the atlas («Наверх», the crumbs); the world
+    // functions moved from a row of bare buttons into the «Мир» list, each with what it does and whether it fits this map.
     private Control BuildAtlasNavigation(Grid canvasHost)
     {
         var row = new StackPanel { Name = "AtlasNavigation", Orientation = Orientation.Horizontal, Spacing = 6 };
@@ -32,18 +37,10 @@ public sealed partial class EditorView
             var trail = _editor.AtlasBreadcrumbs;
             if (trail.Length > 1) _editor.OpenAtlasMap(trail[^2].Id);
         }, "compact");
-        row.Children.Add(up); row.Children.Add(crumbs);
-        row.Children.Add(Ui.TextButton("AtlasCheckButton", "Проверка атласа", () => _ = ShowAtlasCheckAsync(), "compact"));
-        row.Children.Add(Ui.TextButton("GeographyCheckButton", "Проверка географии", () => ShowGeographyCheck(), "compact"));
-        row.Children.Add(Ui.TextButton("TimelineButton", "Время", ShowTimeline, "compact"));
-        row.Children.Add(Ui.TextButton("PointcrawlButton", "Пойнткроул", ShowPointcrawl, "compact"));
-        row.Children.Add(Ui.TextButton("PlanetButton", "Планета", ShowPlanet, "compact"));
-        row.Children.Add(Ui.TextButton("BookButton", "Книга и язык", ShowBook, "compact"));
-        row.Children.Add(Ui.TextButton("StarSectorButton", "Сектор", ShowStarSector, "compact"));
-        row.Children.Add(Ui.TextButton("CityButton", "Город", ShowCity, "compact"));
-        row.Children.Add(Ui.TextButton("IsometricButton", "Изометрия", ShowIsometric, "compact"));
-        row.Children.Add(Ui.TextButton("ScaleSyncButton", "Согласование", ShowScaleSync, "compact"));
-        row.Children.Add(Ui.TextButton("AtlasRefreshButton", "Обновить атлас", () => _ = _editor.RefreshAtlasAsync(), "compact"));
+        _worldSection = BuildWorldSection();
+        canvasHost.Children.Add(_worldSection);
+        var world = Ui.TextButton("WorldSectionButton", "Мир", () => ShowWorldSection(!_worldSection.IsVisible), "compact");
+        row.Children.Add(world); row.Children.Add(up); row.Children.Add(crumbs);
         void PositionFrames()
         {
             foreach (var frame in frames)
@@ -57,6 +54,10 @@ public sealed partial class EditorView
             crumbs.Children.Clear(); overlay.Children.Clear(); frames.Clear();
             foreach (var bitmap in _atlasImages) bitmap.Dispose(); _atlasImages.Clear();
             var trail = _editor.AtlasBreadcrumbs; up.IsEnabled = trail.Length > 1;
+            // A map outside an atlas has no way up and no crumbs worth showing: both stay out of the row.
+            up.IsVisible = trail.Length > 1;
+            crumbs.IsVisible = trail.Length > 1 || _editor.AtlasChildren.Length > 0;
+            if (_worldSection.IsVisible) SyncWorldSection();
             foreach (var map in trail)
             {
                 if (crumbs.Children.Count > 0) crumbs.Children.Add(new TextBlock { Text = " / ", VerticalAlignment = VerticalAlignment.Center });
@@ -105,6 +106,92 @@ public sealed partial class EditorView
             VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled, Content = row };
     }
 
+    /// <summary>
+    /// DEC-070 step 2: «Мир» - the world functions as a signed list over the top left of the map: the name, one line of
+    /// what it does (the same words as its tooltip) and whether it fits this map. A pick closes the list and opens the
+    /// function's own window; nothing here edits the map.
+    /// </summary>
+    private Border BuildWorldSection()
+    {
+        var list = new StackPanel { Spacing = 4 };
+        void Group(string title) => list.Children.Add(new TextBlock { Text = title, Margin = new Thickness(2, list.Children.Count == 0 ? 0 : 8, 0, 2) }.Classed("role-caption", "muted"));
+        void Item(string name, string title, Action open, Func<(bool Fits, string Note)> fit)
+        {
+            var note = new TextBlock { TextWrapping = TextWrapping.Wrap }.Classed("role-caption");
+            var body = new StackPanel { Spacing = 1, Children =
+            {
+                new TextBlock { Text = title, FontWeight = FontWeight.SemiBold },
+                new TextBlock { Text = UiTips.For(name), TextWrapping = TextWrapping.Wrap }.Classed("role-caption", "muted"),
+                note,
+            } };
+            var button = Ui.TextButton(name, title, () => { ShowWorldSection(false); open(); }, "asset-entry");
+            button.Content = body; button.HorizontalAlignment = HorizontalAlignment.Stretch;
+            _worldSyncs.Add(() =>
+            {
+                var (fits, text) = fit();
+                note.Text = text;
+                Ui.SetClass(note, "success", fits); Ui.SetClass(note, "faint", !fits);
+            });
+            list.Children.Add(button);
+        }
+        var document = () => _editor.Session.Document;
+        bool InAtlas() => _editor.AtlasBreadcrumbs.Length > 1 || _editor.AtlasChildren.Length > 0;
+        bool HasChildren() => _editor.AtlasChildren.Length > 0;
+        (bool, string) Always() => (true, "Подходит к этой карте");
+
+        Group("Атлас: карта и её подкарты");
+        Item("AtlasCheckButton", "Проверка атласа", () => _ = ShowAtlasCheckAsync(),
+            () => InAtlas() ? (true, "Подходит: у карты есть связи в атласе") : (false, "Эта карта пока не в атласе — проверять нечего"));
+        Item("ScaleSyncButton", "Согласование", ShowScaleSync,
+            () => HasChildren() ? (true, "Подходит: у карты есть подкарты") : (false, "Нужны подкарты этой карты"));
+        Item("AtlasRefreshButton", "Обновить атлас", () => _ = _editor.RefreshAtlasAsync(),
+            () => HasChildren() ? (true, "Подходит: у карты есть подкарты") : (false, "Нужны подкарты этой карты"));
+        Group("Мир во времени и пространстве");
+        Item("TimelineButton", "Время", ShowTimeline, Always);
+        Item("PlanetButton", "Планета", ShowPlanet, () => Math.Abs(document().Canvas.Width - 2 * document().Canvas.Height) < 1
+            ? (true, "Подходит: карта 2 : 1, как целая планета") : (false, "Лучше для карты мира 2 : 1"));
+        Item("GeographyCheckButton", "Проверка географии", () => ShowGeographyCheck(), () => MapCategories.IsHex(document().Category)
+            ? (false, "Лучше для обычной карты: на гексах рек и дорог линиями почти нет") : (true, "Подходит к этой карте"));
+        Group("Для игры");
+        Item("PointcrawlButton", "Пойнткроул", ShowPointcrawl, Always);
+        Group("Особые виды карты");
+        Item("CityButton", "Город", ShowCity, () => MapCategories.IsCity(document().Category)
+            ? (true, "Подходит: это карта города") : (true, "Здесь — «Город из точки»: новая подкарта-город"));
+        Item("StarSectorButton", "Сектор", ShowStarSector, () => _editor.SectorLayer is not null
+            ? (true, "Подходит: на карте есть гексы") : (false, "Нужна карта с гексами"));
+        Item("IsometricButton", "Изометрия", ShowIsometric, Always);
+        Item("BookButton", "Книга и язык", ShowBook, Always);
+
+        var close = Ui.TextButton("WorldSectionCloseButton", "Закрыть", () => ShowWorldSection(false), "compact");
+        var header = new DockPanel { Children =
+        {
+            close.Docked(Dock.Right),
+            new TextBlock { Text = "Мир", VerticalAlignment = VerticalAlignment.Center }.Classed("role-panel"),
+        } };
+        return new Border
+        {
+            Name = "WorldSection", IsVisible = false, Width = 340, Padding = new Thickness(10),
+            HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(Ui.RailWidth + 4, Ui.FloatingGap, 0, Ui.FloatingGap), ZIndex = 20,
+            Child = new DockPanel { Children =
+            {
+                header.Docked(Dock.Top),
+                new ScrollViewer { Margin = new Thickness(0, 8, 0, 0), Content = list },
+            } },
+        }.Classed("elevated");
+    }
+
+    private void ShowWorldSection(bool show)
+    {
+        if (show) SyncWorldSection();
+        _worldSection.IsVisible = show;
+    }
+
+    private void SyncWorldSection()
+    {
+        foreach (var sync in _worldSyncs) sync();
+    }
+
     private Window? _geographyWindow;
 
     /// <summary>
@@ -117,6 +204,7 @@ public sealed partial class EditorView
         if (_geographyWindow is { IsVisible: true }) { _geographyWindow.Activate(); return; }
         var window = new Window { Name = "GeographyCheckWindow", Title = "Проверка географии", Width = 640, Height = 480,
             WindowStartupLocation = WindowStartupLocation.CenterOwner };
+        if (TestMode.Enabled) PlaceTestWindow(window, owner);
         _geographyWindow = window;
         var summary = new TextBlock { Name = "GeographyCheckSummary", TextWrapping = TextWrapping.Wrap };
         var issues = new StackPanel { Name = "GeographyCheckIssues", Spacing = 10 };
@@ -157,6 +245,7 @@ public sealed partial class EditorView
         if (_atlasCheckWindow is { IsVisible: true }) { _atlasCheckWindow.Activate(); return; }
         var window = new Window { Name = "AtlasCheckWindow", Title = "Проверка атласа", Width = 700, Height = 500,
             WindowStartupLocation = WindowStartupLocation.CenterOwner };
+        if (TestMode.Enabled) PlaceTestWindow(window, owner);
         _atlasCheckWindow = window;
         var summary = new TextBlock { Name = "AtlasCheckSummary", Text = "Проверка карт и ассетов…", TextWrapping = TextWrapping.Wrap };
         var issues = new StackPanel { Name = "AtlasCheckIssues", Spacing = 10 };

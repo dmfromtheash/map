@@ -13,7 +13,7 @@ public sealed partial class Stage19Application
     {
         var document = CityBuilder.NewCityMap("Ильград", 2400, new CitySettings { Name = "Ильград", Seed = 11, Port = true }, new MapCategoryId("city"), DateTimeOffset.UnixEpoch);
         _view.Canvas.DisposeRenderCaches(); OpenEditor(document); await Settle();
-        await Click("IsometricButton"); await Task.Delay(400); await Settle();
+        await Click("WorldSectionButton"); await Click("IsometricButton"); await Task.Delay(400); await Settle();
         var window = _view.GetType().GetField("_isometricWindow", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(_view) as Window
             ?? throw new InvalidOperationException("Окно «Изометрия» не открылось.");
         T In<T>(string name) where T : Control =>

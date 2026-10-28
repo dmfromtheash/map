@@ -60,7 +60,10 @@ public sealed partial class RegionalApplication
         await WaitUntil(() => _editor.Session.Document.Id == parent.Id, "Крошка родителя"); await Settle();
         Check("Крошка открывает родителя", _editor.DocumentPath == parentPath);
         Check("Проверка здорового атласа", (await _editor.CheckAtlasAsync()).IsEmpty);
+        // DEC-070: the world functions live in «Мир», which a user opens first.
+        Click(_view!, "WorldSectionButton"); await Settle();
         Click(_view!, "AtlasCheckButton"); await Settle();
+        Check("Выбор в «Мире» закрывает список", _view!.GetVisualDescendants().OfType<Border>().Single(b => b.Name == "WorldSection").IsVisible == false);
         var checkWindow = _window.OwnedWindows.Single(w => w.Name == "AtlasCheckWindow");
         Check("Окно проверки доступно", checkWindow.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Name == "AtlasCheckSummary" && t.Text!.Contains("Проблем не найдено")));
         Click(checkWindow, "AtlasCheckCloseButton");
@@ -92,6 +95,7 @@ public sealed partial class RegionalApplication
     /// </summary>
     private async Task VerifyScaleSync(string regionPath, Guid roadId)
     {
+        Click(_view!, "WorldSectionButton"); await Settle();
         Click(_view!, "ScaleSyncButton"); await Settle();
         var window = _window.OwnedWindows.Single(w => w.Name == "ScaleSyncWindow");
         var regionRoads = () => _store.Open(regionPath).Document.Layers.OfType<ObjectLayer>().SelectMany(l => l.Roads).ToList();

@@ -19,7 +19,7 @@ public sealed partial class Stage19Application
             [new BaseColorLayer(LayerId.New(), "Море", true, false, 1, page), island, new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, [label])],
             notes: [new MapNote(NoteId.New(), "Таверна", "Хозяин знает всё.", NoteAnchorKind.World, 300, 300)]);
         _view.Canvas.DisposeRenderCaches(); OpenEditor(document); await Settle();
-        await Click("BookButton"); await Task.Delay(300); await Settle();
+        await Click("WorldSectionButton"); await Click("BookButton"); await Task.Delay(300); await Settle();
         var window = _view.GetType().GetField("_bookWindow", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(_view) as Window
             ?? throw new InvalidOperationException("Окно «Книга и язык» не открылось.");
         var names = Avalonia.LogicalTree.LogicalExtensions.GetLogicalDescendants(window).OfType<Control>().Select(c => c.Name).ToHashSet();

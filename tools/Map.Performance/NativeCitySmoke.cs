@@ -25,7 +25,7 @@ public sealed partial class Stage19Application
         _editor.Undo(); _editor.Redo(); await Settle();
         var undoBase = _editor.Session.UndoDepth;
 
-        await Click("CityButton"); await Settle();
+        await Click("WorldSectionButton"); await Click("CityButton"); await Settle();
         var window = _view.GetType().GetField("_cityWindow", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(_view) as Window
             ?? throw new InvalidOperationException("Окно «Город» не открылось.");
         var before = _editor.Session.Document.Layers.OfType<ObjectLayer>().Single(l => l.Name == "Город").Objects.Count;

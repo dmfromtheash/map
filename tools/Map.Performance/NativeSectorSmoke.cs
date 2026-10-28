@@ -12,7 +12,7 @@ public sealed partial class Stage19Application
     {
         var document = HexMapFactory.Create("Сектор Спинворд", DateTimeOffset.UnixEpoch, new MapCategoryId("hex"), HexOrientation.Flat, 46, 8, 10, "#FF8FB0BA");
         _view.Canvas.DisposeRenderCaches(); OpenEditor(document); await Settle();
-        await Click("StarSectorButton"); await Settle();
+        await Click("WorldSectionButton"); await Click("StarSectorButton"); await Settle();
         var window = _view.GetType().GetField("_sectorWindow", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(_view) as Window
             ?? throw new InvalidOperationException("Окно «Звёздный сектор» не открылось.");
         T In<T>(string name) where T : Control =>

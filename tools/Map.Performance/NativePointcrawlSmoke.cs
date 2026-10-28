@@ -26,7 +26,7 @@ public sealed partial class Stage19Application
             [new BaseColorLayer(LayerId.New(), "Море", true, false, 1, page), island, new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, [])]);
         _view.Canvas.DisposeRenderCaches(); OpenEditor(document); await Settle();
         _editor.Session.Viewport.Set(0, 0, 1);
-        await Click("PointcrawlButton"); await Settle();
+        await Click("WorldSectionButton"); await Click("PointcrawlButton"); await Settle();
         var window = _view.GetType().GetField("_pointcrawlWindow", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(_view) as Window
             ?? throw new InvalidOperationException("Окно «Пойнткроул» не открылось.");
         T In<T>(string name) where T : Control =>
