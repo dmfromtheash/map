@@ -397,7 +397,11 @@ public sealed partial class EditorView : UserControl
     private readonly HashSet<ObjectId> _objectSelectionSet = [];
 
     // Once per process, before the first editor: controls without their own tooltip take it from the directory (DEC-070).
-    static EditorView() => UiTips.Install();
+    static EditorView()
+    {
+        UiTips.Install();
+        TestWindows.Guard();
+    }
 
     public EditorView(
         EditorViewModel editor,
@@ -785,6 +789,21 @@ public sealed partial class EditorView : UserControl
             "ExportWorkflowWindow");
     }
 
+    /// <summary>
+    /// Test mode: a window opens where the tested main window is. A smoke's own window waits at -32000, which no
+    /// screen holds, and Windows pulled windows placed there back onto the owner's main screen: they go to the
+    /// second display instead (owner, 2026-10-28).
+    /// </summary>
+    internal static void PlaceTestWindow(Window window, Window? ownerWindow)
+    {
+        window.WindowStartupLocation = WindowStartupLocation.Manual;
+        var position = ownerWindow?.Position ?? new PixelPoint(-32000, -32000);
+        if (ownerWindow?.Screens is { } screens && screens.ScreenFromPoint(position) is null
+            && screens.All.FirstOrDefault(screen => !screen.IsPrimary) is { } second)
+            position = new PixelPoint(second.WorkingArea.X, second.WorkingArea.Y);
+        window.Position = position;
+    }
+
     private Window ShowAuxiliaryWindow(
         Window? existing,
         string title,
@@ -843,8 +862,7 @@ public sealed partial class EditorView : UserControl
         {
             // Where the tested main window is: the live pass puts it on the second display. A window
             // sent to -32000 was pulled back by Windows onto the owner's main screen.
-            window.WindowStartupLocation = WindowStartupLocation.Manual;
-            window.Position = ownerWindow?.Position ?? new PixelPoint(-32000, -32000);
+            PlaceTestWindow(window, ownerWindow);
         }
         else
         {

@@ -83,6 +83,7 @@ public sealed partial class RegionalApplication : Application
         Environment.SetEnvironmentVariable("MAP_UI_TEST_PROFILE_ROOT", Path.Combine(_workspace, "profile"));
         Environment.SetEnvironmentVariable("MAP_UI_TEST_RECOVERY_ROOT", Path.Combine(_workspace, "recovery"));
         Environment.SetEnvironmentVariable("MAP_UI_TEST_SHORTCUT_SETTINGS_PATH", Path.Combine(_workspace, "profile", "shortcuts.json"));
+        Map.App.Services.TestWindows.Guard();
         _catalog = new AssetCatalog(Path.Combine(_workspace, "catalog"));
         _store = new ProjectStore(new RecoveryJournal(Path.Combine(_workspace, "recovery")));
         _picker = new LocalPicker(Path.Combine(_workspace, "Тихий атлас.mapproj"));

@@ -123,6 +123,7 @@ public sealed partial class Stage19Application : Application
         Directory.CreateDirectory(_workspace);
         Environment.SetEnvironmentVariable("MAP_UI_TEST_MODE", "1");
         Environment.SetEnvironmentVariable("MAP_UI_TEST_PROFILE_ROOT", Path.Combine(_workspace, "profile"));
+        Map.App.Services.TestWindows.Guard();
         _window = new Window { Width = 1440, Height = 900, Title = "Map — Stage 19", ShowActivated = false,
             ShowInTaskbar = false, WindowStartupLocation = WindowStartupLocation.Manual, Position = new PixelPoint(-32000, -32000) };
         // The production keyboard path, wired exactly as MainWindow wires it: a real Avalonia key
