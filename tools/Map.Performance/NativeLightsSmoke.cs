@@ -25,7 +25,7 @@ public sealed partial class Stage19Application
         _view.Canvas.DisposeRenderCaches(); OpenEditor(document); await Settle();
         _editor.Session.Viewport.Set(0, 0, 1);
 
-        await Click("RibbonLightTab");
+        await Click("WorkspaceAppearanceTab"); await Click("RibbonLightTab");
         await Click("LightPresetCampfire");
         var place = Find<Avalonia.Controls.Primitives.ToggleButton>("LightPlaceToggle");
         place.IsChecked = true; place.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent)); await Settle();

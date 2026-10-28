@@ -42,6 +42,24 @@ public sealed class ObjectSurfaceAndLevelSliderTests
     // ------------------------------------------------------------------- the rail
 
     [Fact]
+    public void Every_section_offers_selection_and_every_other_tool_lives_in_exactly_one_section()
+    {
+        // DEC-070: «Рисовать · Объекты · Мир · Оформление», as in the chosen layout: assets in Объекты, notes in Мир,
+        // the drawing tools in Рисовать, only selection in Оформление (the ribbon is its tool).
+        var sections = Enum.GetValues<EditorWorkspace>();
+        foreach (var section in sections)
+            Assert.Contains(EditorSurfaceLayout.Rail, entry => entry.Tool == EditorTool.Select && EditorSurfaceLayout.InWorkspace(entry, section));
+        foreach (var entry in EditorSurfaceLayout.Rail.Concat(EditorSurfaceLayout.HexRail).Where(entry => entry.Tool != EditorTool.Select))
+            Assert.Single(sections, section => EditorSurfaceLayout.InWorkspace(entry, section));
+        Assert.Equal(EditorWorkspace.Objects, EditorSurfaceLayout.WorkspaceOf(EditorTool.Stamp));
+        Assert.Equal(EditorWorkspace.World, EditorSurfaceLayout.WorkspaceOf(EditorTool.Notes));
+        Assert.Equal(EditorWorkspace.Draw, EditorSurfaceLayout.WorkspaceOf(EditorTool.Land));
+        Assert.Equal(EditorWorkspace.Draw, EditorSurfaceLayout.WorkspaceOf(EditorTool.Hex));
+        Assert.DoesNotContain(EditorSurfaceLayout.Rail, entry => entry.Tool != EditorTool.Select
+            && EditorSurfaceLayout.InWorkspace(entry, EditorWorkspace.Appearance));
+    }
+
+    [Fact]
     public void The_rail_has_no_separate_stamp_button_and_assets_is_the_only_way_into_placement()
     {
         // "Штамп" used to be a main tool of its own next to the library, so placing a tree had two

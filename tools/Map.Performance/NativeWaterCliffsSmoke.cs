@@ -108,7 +108,7 @@ public sealed partial class Stage19Application
         SaveVisual(Path.ChangeExtension(Options.OutputPath, ".delta.png"));
 
         // The sea: the Море tab of the ribbon, the isobaths card.
-        await Click("RibbonSeaTab");
+        await Click("WorkspaceAppearanceTab"); await Click("RibbonSeaTab");
         await Click("SeaCard2"); await Frame();
         _report.Checks["sea-tab-applies-manner"] = _editor.Sea is { Manner: SeaManner.Isobaths };
         await Task.Delay(800); await Frame();

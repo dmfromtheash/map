@@ -67,6 +67,7 @@ public sealed partial class EditorView
     public void ShowAppearanceRibbon(bool styles)
     {
         _ribbonTab = styles ? RibbonTab.Styles : RibbonTab.Light;
+        if (_workspace != EditorWorkspace.Appearance) ShowWorkspace(EditorWorkspace.Appearance);
         SyncAppearanceRibbon();
     }
 
@@ -152,7 +153,8 @@ public sealed partial class EditorView
             Child = new DockPanel { Children = { header.Docked(Dock.Top), body } },
         }.Named("AppearanceRibbon").Classed("appearance-ribbon");
 
-        _canvas.ViewportChanged += (_, _) => { if (_ribbonTab != RibbonTab.None) QueueRibbonPreviews(); };
+        // A hidden ribbon (another section) renders no card previews.
+        _canvas.ViewportChanged += (_, _) => { if (_ribbonTab != RibbonTab.None && _ribbon.IsVisible) QueueRibbonPreviews(); };
         DetachedFromVisualTree += (_, _) =>
         {
             _ribbonPreviewWork?.Cancel();
@@ -167,7 +169,8 @@ public sealed partial class EditorView
     private void SyncAppearanceRibbon()
     {
         if (_ribbon is null) return;
-        _ribbon.IsVisible = !_isHexWorkshop;
+        // DEC-070: the ribbon belongs to «Оформление»; elsewhere the map gets its height back.
+        _ribbon.IsVisible = !_isHexWorkshop && _workspace == EditorWorkspace.Appearance;
         var lighting = _editor.ShownLighting;
         _ribbonLightState.Text = lighting.Enabled ? TimeTitle(lighting.TimeOfDay) : "выкл.";
         var style = _editor.ShownStyle;

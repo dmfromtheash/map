@@ -3021,5 +3021,95 @@
             <Setter Property="Background" Value="{DynamicResource MapPrimaryFillBrush}" />
             <Setter Property="BoxShadow" Value="inset 0 0 0 1.5 #E7C982, 0 0 10 0 #59E7C982" />
         </Style>
+
+        <!-- DEC-070 (layout 1 of https://claude.ai/artifact/5JTvygDvWMazmUQw2q1d12): the row of sections under the
+             document bar - quiet tabs, the open one a lit card with a brass edge joined to the map below. -->
+        <Style Selector="Border.workspace-row">
+            <Setter Property="Background" Value="#1B1511" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapBorderBrush}" />
+            <Setter Property="BorderThickness" Value="0,0,0,1" />
+            <Setter Property="Padding" Value="12,6,12,0" />
+        </Style>
+        <Style Selector="Button.workspace-tab">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="1,1,1,0" />
+            <Setter Property="CornerRadius" Value="8,8,0,0" />
+            <Setter Property="Padding" Value="18,7" />
+            <Setter Property="FontSize" Value="15" />
+            <Setter Property="Foreground" Value="{DynamicResource MapMutedBrush}" />
+            <Setter Property="VerticalAlignment" Value="Bottom" />
+        </Style>
+        <Style Selector="Button.workspace-tab /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="CornerRadius" Value="8,8,0,0" />
+        </Style>
+        <Style Selector="Button.workspace-tab:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#26E7C982" />
+            <Setter Property="Foreground" Value="#F6E6C2" />
+        </Style>
+        <Style Selector="Button.workspace-tab.active /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#2E241B" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBrush}" />
+            <Setter Property="Foreground" Value="#F6E6C2" />
+        </Style>
+        <Style Selector="Button.workspace-tab.active">
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Foreground" Value="#F6E6C2" />
+        </Style>
+
+        <!-- DEC-070: the rail names its tools. The owner's brass medallions stay (2026-10-21), the name sits under each. -->
+        <Style Selector="Border.rail :is(Button).rail-tool">
+            <Setter Property="Width" Value="64" />
+            <Setter Property="Height" Value="54" />
+            <Setter Property="MinHeight" Value="54" />
+            <Setter Property="Margin" Value="2,1" />
+            <Setter Property="CornerRadius" Value="8" />
+        </Style>
+        <Style Selector="Border.rail :is(Button).rail-tool /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="BoxShadow" Value="0 0 0 0 Transparent" />
+        </Style>
+        <Style Selector="Border.rail :is(Button).rail-tool.active /template/ ContentPresenter#PART_ContentPresenter, Border.rail ToggleButton.rail-tool:checked /template/ ContentPresenter#PART_ContentPresenter, Border.rail ToggleButton.rail-tool:checked:pointerover /template/ ContentPresenter#PART_ContentPresenter, Border.rail :is(Button).rail-tool.active:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BoxShadow" Value="0 0 0 0 Transparent" />
+        </Style>
+        <Style Selector="Border.rail Border.rail-medallion">
+            <Setter Property="Width" Value="32" />
+            <Setter Property="Height" Value="32" />
+            <Setter Property="CornerRadius" Value="16" />
+            <Setter Property="BoxShadow" Value="inset 0 0 0 1 #40C9A15A" />
+        </Style>
+        <Style Selector="Border.rail :is(Button).rail-tool:pointerover Border.rail-medallion">
+            <Setter Property="BoxShadow" Value="inset 0 0 0 1 #C9A15A, 0 0 12 0 #40E7C982" />
+        </Style>
+        <Style Selector="Border.rail ToggleButton.rail-tool:checked Border.rail-medallion, Border.rail :is(Button).rail-tool.active Border.rail-medallion">
+            <Setter Property="Background" Value="{DynamicResource MapPrimaryFillBrush}" />
+            <Setter Property="BoxShadow" Value="inset 0 0 0 1.5 #E7C982, 0 0 10 0 #59E7C982" />
+        </Style>
+        <Style Selector="Border.rail :is(Button).rail-tool TextBlock.rail-caption">
+            <Setter Property="FontSize" Value="10.5" />
+            <Setter Property="Foreground" Value="#C2AE8E" />
+            <Setter Property="HorizontalAlignment" Value="Center" />
+            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+        </Style>
+        <Style Selector="Border.rail ToggleButton.rail-tool:checked TextBlock.rail-caption, Border.rail :is(Button).rail-tool.active TextBlock.rail-caption">
+            <Setter Property="Foreground" Value="#F6E2B0" />
+            <Setter Property="FontWeight" Value="Bold" />
+        </Style>
+        <Style Selector=":is(UserControl).compact-window Border.rail :is(Button).rail-tool">
+            <Setter Property="Width" Value="36" />
+            <Setter Property="Height" Value="36" />
+            <Setter Property="MinHeight" Value="36" />
+        </Style>
+        <Style Selector=":is(UserControl).compact-window Border.rail TextBlock.rail-caption">
+            <Setter Property="IsVisible" Value="False" />
+        </Style>
+        <Style Selector=":is(UserControl).compact-window Border.rail Border.rail-medallion">
+            <Setter Property="Width" Value="28" />
+            <Setter Property="Height" Value="28" />
+            <Setter Property="CornerRadius" Value="14" />
+        </Style>
     </Application.Styles>
 </Application>

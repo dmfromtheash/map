@@ -1130,7 +1130,8 @@ public sealed partial class Stage19Application : Application
             scope.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             root.UpdateLayout();
         }
-        foreach (var ancestor in Avalonia.LogicalTree.LogicalExtensions.GetLogicalAncestors(target).OfType<Control>().Reverse())
+        // DEC-070: a rail tool of another section is itself hidden and tagged with the section tab that shows it.
+        foreach (var ancestor in Avalonia.LogicalTree.LogicalExtensions.GetLogicalAncestors(target).OfType<Control>().Reverse().Append(target))
         {
             if (ancestor.IsVisible || ancestor.Tag is not string tag || !tag.StartsWith("Reveal:", StringComparison.Ordinal)) continue;
             var tab = Avalonia.LogicalTree.LogicalExtensions.GetLogicalDescendants(root).OfType<Button>().FirstOrDefault(b => b.Name == tag["Reveal:".Length..]);

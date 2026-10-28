@@ -23,7 +23,8 @@ public static class Ui
     // Workspace geometry measured in Inkarnate through REA/CDP at 2560×1343 (2026-10-16): a 48 px
     // floating rail of 46×48 tool buttons, a 289 px tool panel that floats over the canvas 12 px
     // below the top bar, a 240 px layer panel. Colours stay Map's own.
-    public const double RailWidth = 48;
+    // DEC-070: 68 px since the rail names its tools under the medallions (48 px before, icons only).
+    public const double RailWidth = 68;
     public const double ContextPanelWidth = 289;
     public const double SidePanelWidth = 240;
     /// <summary>Gap between the top chrome and the floating rail / tool panel.</summary>
@@ -798,6 +799,8 @@ public static class Ui
             Background = Brushes.Transparent,
             IsVisible = false,
         }.Named(name + "Marker");
+        var glyph = MapIcons.Solid24(icon, 17);
+        glyph.HorizontalAlignment = HorizontalAlignment.Center; glyph.VerticalAlignment = VerticalAlignment.Center;
         var body = new StackPanel
         {
             Spacing = 3,
@@ -805,9 +808,9 @@ public static class Ui
             VerticalAlignment = VerticalAlignment.Center,
             Children =
             {
-                // Inkarnate rail: a 24 px solid glyph and no caption; the name and key are in the tooltip.
-                new Border { HorizontalAlignment = HorizontalAlignment.Center, Child = MapIcons.Solid24(icon, 17) },
-                new TextBlock { Text = caption, IsVisible = false }.Classed("rail-caption"),
+                // DEC-070: the brass medallion with the glyph, and the tool's name under it (hidden in a compact window).
+                new Border { HorizontalAlignment = HorizontalAlignment.Center, Child = glyph }.Classed("rail-medallion"),
+                new TextBlock { Text = caption }.Classed("rail-caption"),
             },
         };
         var button = new ToggleButton

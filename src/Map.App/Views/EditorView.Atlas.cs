@@ -39,8 +39,11 @@ public sealed partial class EditorView
         }, "compact");
         _worldSection = BuildWorldSection();
         canvasHost.Children.Add(_worldSection);
-        var world = Ui.TextButton("WorldSectionButton", "Мир", () => ShowWorldSection(!_worldSection.IsVisible), "compact");
-        row.Children.Add(world); row.Children.Add(up); row.Children.Add(crumbs);
+        // DEC-070 step 3: the sections lead the row; the way through the atlas follows them.
+        row.Children.Add(BuildWorkspaceTabs());
+        up.Margin = new Thickness(12, 0, 0, 4); crumbs.Margin = new Thickness(0, 0, 0, 4);
+        up.VerticalAlignment = crumbs.VerticalAlignment = VerticalAlignment.Center;
+        row.Children.Add(up); row.Children.Add(crumbs);
         void PositionFrames()
         {
             foreach (var frame in frames)
@@ -102,8 +105,11 @@ public sealed partial class EditorView
             foreach (var image in _atlasImages) image.Dispose(); _atlasImages.Clear();
         };
         Refresh(); _ = _editor.RefreshAtlasAsync();
-        return new ScrollViewer { HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
-            VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled, Content = row };
+        return new Border
+        {
+            Child = new ScrollViewer { HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
+                VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled, Content = row },
+        }.Classed("workspace-row");
     }
 
     /// <summary>

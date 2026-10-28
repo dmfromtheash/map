@@ -12,6 +12,25 @@ public enum EditorRailEntryKind
     Library,
 }
 
+/// <summary>
+/// DEC-070: the four sections of the editor window. A section only decides which tools the rail offers and which
+/// panels are shown; switching it never touches the document, the history or the active tool.
+/// </summary>
+public enum EditorWorkspace
+{
+    /// <summary>Земля, вода, дороги, линии, фигуры, подписи, кисть, маска (hex: the hex tools and labels).</summary>
+    Draw,
+
+    /// <summary>The catalog and placement: single, series, scatter, path and area.</summary>
+    Objects,
+
+    /// <summary>Notes and the world functions: atlas, time, planet, city, sector, pointcrawl, checks.</summary>
+    World,
+
+    /// <summary>Свет, стили, море: the ribbon under the map.</summary>
+    Appearance,
+}
+
 /// <summary>One button of the tool rail, named the way UI Automation will find it.</summary>
 /// <param name="AutomationId">The control's name, which the native smoke and the tests address.</param>
 /// <param name="Tool">The tool this entry represents while it is active.</param>
@@ -121,6 +140,21 @@ public static class EditorSurfaceLayout
     /// <summary>The rail of a workshop: the hex constructor has its own, every other map the standard one.</summary>
     public static IReadOnlyList<IReadOnlyList<EditorRailEntry>> RailGroupsFor(bool hexWorkshop) =>
         hexWorkshop ? HexRailGroups : RailGroups;
+
+    /// <summary>
+    /// DEC-070: the section a tool belongs to. Selection is offered in every section; the rest live in exactly one,
+    /// so picking a tool by its key opens the section where its button is.
+    /// </summary>
+    public static EditorWorkspace WorkspaceOf(EditorTool tool) => tool switch
+    {
+        EditorTool.Stamp => EditorWorkspace.Objects,
+        EditorTool.Notes => EditorWorkspace.World,
+        _ => EditorWorkspace.Draw,
+    };
+
+    /// <summary>True when a rail entry is shown in a section: selection everywhere, every other tool in its own.</summary>
+    public static bool InWorkspace(EditorRailEntry entry, EditorWorkspace workspace) =>
+        entry.Tool == EditorTool.Select || WorkspaceOf(entry.Tool) == workspace;
 
     /// <summary>True when a tool belongs to the workshop's rail (Stamp counts as the Assets entry).</summary>
     public static bool OffersTool(bool hexWorkshop, EditorTool tool) =>

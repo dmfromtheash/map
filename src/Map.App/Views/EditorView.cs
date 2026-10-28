@@ -456,17 +456,19 @@ public sealed partial class EditorView : UserControl
             Children =
             {
                 topBar.Docked(Dock.Top),
+                // DEC-070: the row of sections, with the way through the atlas, right under the document bar.
+                atlasBar.Docked(Dock.Top),
 
                 // Docked, not floating: the strip takes its own band and the canvas fills what is
                 // left, so it can never cover the map.
                 quickBar.Docked(Dock.Top),
-                atlasBar.Docked(Dock.Top),
                 statusBar.Docked(Dock.Bottom),
                 sidePanel.Docked(Dock.Right),
-                // Свет and Стили: their own ribbon under the map, apart from the object sections (DEC-064).
-                new DockPanel { Children = { BuildAppearanceRibbon().Docked(Dock.Bottom), canvasHost } },
+                // Свет, Стили, Море: their own ribbon under the map (DEC-064), shown in «Оформление» only (DEC-070).
+                new DockPanel { Children = { (_appearanceRibbon = BuildAppearanceRibbon()).Docked(Dock.Bottom), canvasHost } },
             },
         };
+        ShowWorkspace(EditorSurfaceLayout.WorkspaceOf(_editor.ActiveTool));
 
         // Panel widths follow the window, but never from inside the layout pass that reported
         // the new size: widths changed there were ignored, and after narrow -> wide the rail and
@@ -1119,12 +1121,19 @@ public sealed partial class EditorView : UserControl
         {
             if (stack.Children.Count > 0)
             {
-                stack.Children.Add(RailDivider());
+                var divider = RailDivider();
+                _railDividers.Add((divider, [.. group]));
+                stack.Children.Add(divider);
             }
 
             foreach (var entry in group)
             {
-                stack.Children.Add(entry.Kind == EditorRailEntryKind.Library ? Library(entry) : Tool(entry));
+                var button = entry.Kind == EditorRailEntryKind.Library ? Library(entry) : Tool(entry);
+                // DEC-070: the rail shows the tools of the open section, each with its name under the icon. The tag
+                // names the section tab that shows a hidden tool (the same Reveal: route the panel tabs use).
+                _railButtons.Add((entry, button));
+                if (entry.Tool != EditorTool.Select) button.Tag = "Reveal:" + WorkspaceTabName(EditorSurfaceLayout.WorkspaceOf(entry.Tool));
+                stack.Children.Add(button);
             }
         }
 

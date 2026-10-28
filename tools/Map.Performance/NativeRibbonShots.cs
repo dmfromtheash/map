@@ -43,6 +43,8 @@ public sealed partial class PaintPerfApplication
             await Settle();
         }
 
+        // DEC-070: the ribbon stands in «Оформление» only.
+        Find<Button>("WorkspaceAppearanceTab").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         await Shot("ribbon-closed");
         _report.Checks["ribbon/right-panel-without-light-styles"] = !_view.GetVisualDescendants().OfType<Control>()
             .Any(c => c.Name is "PanelSectionLight" or "PanelSectionStyles");
