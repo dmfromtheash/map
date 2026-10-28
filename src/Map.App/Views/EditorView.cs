@@ -449,6 +449,15 @@ public sealed partial class EditorView : UserControl
         // (2026-10-17): the map keeps that space.
         canvasHost.Children.Add(rail);
         canvasHost.Children.Add(contextPanel);
+        // DEC-070 step 4: «Найти действие» over the map, Ctrl+K from anywhere in the editor (also inside a text field).
+        _actionSearch = BuildActionSearch();
+        canvasHost.Children.Add(_actionSearch);
+        AddHandler(KeyDownEvent, (_, e) =>
+        {
+            if (e.Key != Key.K || e.KeyModifiers != KeyModifiers.Control) return;
+            e.Handled = true;
+            if (_actionSearch.IsVisible) HideActionSearch(); else OpenActionSearch();
+        }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
         _canvas.FitInsetLeft = FloatingInsetLeft;
 
         Content = new DockPanel
@@ -1019,7 +1028,7 @@ public sealed partial class EditorView : UserControl
         {
             Orientation = Orientation.Horizontal, Spacing = 14,
             VerticalAlignment = VerticalAlignment.Center,
-            Children = { SoundToggle.Create("EditorSoundButton", withCaption: false), historyActions, viewActions, file, export, _saveButton },
+            Children = { ActionSearchButton(), SoundToggle.Create("EditorSoundButton", withCaption: false), historyActions, viewActions, file, export, _saveButton },
             Margin = new Thickness(24, 0, 0, 0),
         }.Named("EditorHeaderActions");
         // Save and history stay in place; secondary commands retain their labelled menu entry.

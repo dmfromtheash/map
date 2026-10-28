@@ -3111,5 +3111,52 @@
             <Setter Property="Height" Value="28" />
             <Setter Property="CornerRadius" Value="14" />
         </Style>
+
+        <!-- DEC-070 step 4: «Найти действие» - a dark field in the document bar, a palette over the map with a brass
+             edge, the chosen result a lit card; the place it opens glows for a moment. -->
+        <Style Selector="Border.app-bar Button.search-button">
+            <Setter Property="MinWidth" Value="230" />
+            <Setter Property="Padding" Value="12,5" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="Foreground" Value="{DynamicResource MapMutedBrush}" />
+        </Style>
+        <Style Selector="Border.app-bar Button.search-button /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#17120E" />
+            <Setter Property="BorderBrush" Value="#5A4732" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="8" />
+        </Style>
+        <Style Selector="Border.app-bar Button.search-button:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBrush}" />
+            <Setter Property="Background" Value="#17120E" />
+        </Style>
+        <Style Selector="Border.action-search">
+            <Setter Property="Background" Value="#211912" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="12" />
+            <Setter Property="BoxShadow" Value="0 10 40 0 #99000000" />
+        </Style>
+        <Style Selector="Button.search-result">
+            <Setter Property="Padding" Value="10,7" />
+            <Setter Property="CornerRadius" Value="8" />
+        </Style>
+        <Style Selector="Button.search-result /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="8" />
+        </Style>
+        <Style Selector="Button.search-result:pointerover /template/ ContentPresenter#PART_ContentPresenter, Button.search-result.active /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="Background" Value="#3A2D1F" />
+            <Setter Property="BorderBrush" Value="{DynamicResource MapAccentBrush}" />
+        </Style>
+        <Style Selector=":is(Button).search-found /template/ ContentPresenter#PART_ContentPresenter, :is(Button).search-found:pointerover /template/ ContentPresenter#PART_ContentPresenter">
+            <Setter Property="BorderBrush" Value="#E5C25C" />
+            <Setter Property="BorderThickness" Value="2" />
+            <Setter Property="Background" Value="#4E3C25" />
+            <Setter Property="BoxShadow" Value="0 0 16 3 #B3E5C25C" />
+        </Style>
     </Application.Styles>
 </Application>

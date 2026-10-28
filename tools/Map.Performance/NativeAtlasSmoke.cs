@@ -86,6 +86,38 @@ public sealed partial class RegionalApplication
         Check("Ссылка гекса повторяется", _editor.ActiveHexLayer!.Notes[targetHex].ChildMap is not null);
         await Show(parentPath);
         await VerifyScaleSync(Path.Combine(_workspace, "region.mapproj"), road.Id);
+        await VerifyActionSearch();
+    }
+
+    /// <summary>
+    /// DEC-070 step 4: Ctrl+K opens «Найти действие»; «время» + Enter opens «Мир» and lights «Время» there without
+    /// editing the map; «красота» with nothing selected keeps the search open and says what is needed first.
+    /// </summary>
+    private async Task VerifyActionSearch()
+    {
+        T Named<T>(string name) where T : Control => _view!.GetVisualDescendants().OfType<T>().First(c => c.Name == name);
+        var depth = _editor.Session.UndoDepth;
+        _view!.RaiseEvent(new Avalonia.Input.KeyEventArgs { RoutedEvent = Avalonia.Input.InputElement.KeyDownEvent, Key = Avalonia.Input.Key.K,
+            KeyModifiers = Avalonia.Input.KeyModifiers.Control, Source = _view });
+        await Settle();
+        Check("Ctrl+K открывает поиск действий", Named<Border>("ActionSearch").IsVisible);
+        var box = Named<TextBox>("ActionSearchBox");
+        box.Text = "время"; await Settle();
+        Capture(_view, ".action-search");
+        Check("Поиск находит «Время»", Named<Button>("ActionResult0").GetVisualDescendants().OfType<TextBlock>().Any(t => t.Text == "Время"));
+        box.RaiseEvent(new Avalonia.Input.KeyEventArgs { RoutedEvent = Avalonia.Input.InputElement.KeyDownEvent, Key = Avalonia.Input.Key.Enter, Source = box });
+        await Settle(); await Task.Delay(100); await Settle();
+        Capture(_view, ".action-search-found");
+        Check("Enter открывает «Мир» и подсвечивает «Время»", Named<Border>("WorldSection").IsVisible
+            && Named<Button>("TimelineButton").Classes.Contains("search-found") && !Named<Border>("ActionSearch").IsVisible);
+        _view.OpenActionSearch(); box.Text = "красота"; await Settle();
+        box.RaiseEvent(new Avalonia.Input.KeyEventArgs { RoutedEvent = Avalonia.Input.InputElement.KeyDownEvent, Key = Avalonia.Input.Key.Enter, Source = box });
+        await Settle();
+        Check("«Красота» без выделения объясняет, что выделить", Named<Border>("ActionSearch").IsVisible
+            && Named<TextBlock>("ActionSearchHint") is { IsVisible: true, Text: { } hint } && hint.Contains("выделите", StringComparison.Ordinal));
+        box.RaiseEvent(new Avalonia.Input.KeyEventArgs { RoutedEvent = Avalonia.Input.InputElement.KeyDownEvent, Key = Avalonia.Input.Key.Escape, Source = box });
+        await Settle();
+        Check("Поиск не меняет карту", _editor.Session.UndoDepth == depth && !Named<Border>("ActionSearch").IsVisible);
     }
 
     /// <summary>
