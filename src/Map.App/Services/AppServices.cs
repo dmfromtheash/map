@@ -9,6 +9,7 @@ using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using Map.Platform.Windows;
 using Map.Export;
+using Map.App.Views;
 using Map.Presentation.Services;
 
 namespace Map.App.Services;

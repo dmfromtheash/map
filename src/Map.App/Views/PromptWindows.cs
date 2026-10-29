@@ -4,7 +4,7 @@ using Avalonia.Controls;
 using Avalonia.Layout;
 using Map.Presentation.Services;
 
-namespace Map.App.Services;
+namespace Map.App.Views;
 
 /// <summary>Explicit v1 migration choice; cancelling is the safe default.</summary>
 public sealed class MigrationPromptWindow : Window
