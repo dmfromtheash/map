@@ -5,7 +5,7 @@
 
 ```text
 Среда: Claude Code. Модель: [профиль из docs/ai/claude-models.json, сверенный с интерфейсом]
-Рабочая папка: C:\Users\Leshe\.codex\worktrees\stage10f-fonts-bindings\Map
+Рабочая папка: C:\Projects\Map
 
 Цель
 [Один наблюдаемый результат для владельца.]

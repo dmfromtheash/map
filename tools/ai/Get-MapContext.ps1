@@ -24,11 +24,13 @@ if (-not [string]::Equals($gitRoot.TrimEnd('\', '/'), $mapRoot.TrimEnd('\', '/')
 $stateLines = @(Get-Content -LiteralPath (Join-Path $mapRoot 'docs/STATE.md') -Encoding UTF8)
 $state = $stateLines -join "`n"
 $updated = [regex]::Match($state, '(?m)^\*\*Обновлено:\*\*\s*(.+)$').Groups[1].Value.Trim()
-$nextAction = [regex]::Match($state, '(?ms)^## Следующий шаг\s*\n(.*?)(?=^## |\z)').Groups[1].Value.Trim()
+$nextAction = [regex]::Match($state, '(?ms)^## (?:Следующий шаг|Следующая сессия)[^\n]*\n(.*?)(?=^## |\z)').Groups[1].Value.Trim()
 $warnings = @()
 if ($stateLines.Count -gt 60) { $warnings += "docs/STATE.md has $($stateLines.Count) lines (limit 60): rewrite it." }
-if (-not $nextAction) { $warnings += 'docs/STATE.md has no "## Следующий шаг" section.' }
-if ($mapRoot -like 'C:\Projects\Map*') { $warnings += 'C:\Projects\Map is the stale checkout: work in the product worktree from docs/STATE.md.' }
+if (-not $nextAction) { $warnings += 'docs/STATE.md has no "## Следующая сессия" section.' }
+if (-not [string]::Equals($mapRoot.TrimEnd('\', '/'), 'C:\Projects\Map', [StringComparison]::OrdinalIgnoreCase)) {
+    $warnings += "Map works only in C:\Projects\Map (DEC-071); this is $mapRoot - a temporary copy for one task?"
+}
 $commands = @('git', 'rg', 'dotnet', 'powershell', 'claude', 'codex', 'gh') | ForEach-Object {
     $command = Get-Command $_ -ErrorAction SilentlyContinue | Select-Object -First 1
     [pscustomobject]@{ name = $_; available = $null -ne $command }

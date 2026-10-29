@@ -9,8 +9,8 @@ description: Реализация и исправление пользовате
 этап дорожной карты). Запиши карточку этапа из `docs/00_STAGE_PROTOCOL.md`, включая список файлов.
 
 Из корня проекта выполни `powershell -NoProfile -ExecutionPolicy Bypass -File tools/ai/Get-MapContext.ps1 -AsJson`.
-Сопоставь root/branch/HEAD и dirty paths с поручением; не переходи в старый checkout
-`C:\Projects\Map`. Существующий diff прочитай до своей правки.
+Сопоставь root/branch/HEAD и dirty paths с поручением; рабочая папка одна — `C:\Projects\Map`.
+Существующий diff прочитай до своей правки.
 
 Проследи одну операцию пользователя: ввод → ViewModel/router → undoable команда → документ →
 renderer → save/reopen/export. Выясни, какое звено действительно отсутствует или ошибается.
