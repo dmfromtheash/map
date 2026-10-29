@@ -949,8 +949,9 @@ public sealed partial class EditorView : UserControl
 
         _saveButton = Ui.AsyncCommandButton(
             "SaveButton", "Сохранить", MapIcons.Save, () => _editor.SaveAsync(), "primary");
-        _shortcutSettingsButton = Ui.TextButton(
-            "ShortcutSettingsButton", "Сочетания…", requestShortcutSettings, "compact");
+        // Owner's pick (2026-10-29, variant A): a keyboard icon beside the sound toggle, always visible.
+        _shortcutSettingsButton = Ui.IconButton(
+            "ShortcutSettingsButton", "Сочетания клавиш: посмотреть и изменить", MapIcons.Keyboard, requestShortcutSettings);
 
         // A flyout is a logical child of the button that owns it, so the app bar's "every caption
         // in here is light" rule reached inside the file menu and drew its words in #F8F3EB on
@@ -1026,7 +1027,7 @@ public sealed partial class EditorView : UserControl
         {
             Orientation = Orientation.Horizontal, Spacing = 14,
             VerticalAlignment = VerticalAlignment.Center,
-            Children = { ActionSearchButton(), SoundToggle.Create("EditorSoundButton", withCaption: false), historyActions, viewActions, file, export, _saveButton },
+            Children = { ActionSearchButton(), _shortcutSettingsButton, SoundToggle.Create("EditorSoundButton", withCaption: false), historyActions, viewActions, file, export, _saveButton },
             Margin = new Thickness(24, 0, 0, 0),
         }.Named("EditorHeaderActions");
         // Save and history stay in place; secondary commands retain their labelled menu entry.

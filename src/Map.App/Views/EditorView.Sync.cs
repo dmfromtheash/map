@@ -41,7 +41,7 @@ public sealed partial class EditorView
         SetCommandTip(_undoButton, "Отменить", EditorShortcutSettings.Commands.Undo);
         SetCommandTip(_redoButton, "Повторить", EditorShortcutSettings.Commands.Redo);
         SetCommandTip(_saveButton, "Сохранить проект", EditorShortcutSettings.Commands.Save);
-        SetCommandTip(_shortcutSettingsButton, "Настроить сочетания", EditorShortcutSettings.Commands.ShortcutSettings);
+        SetCommandTip(_shortcutSettingsButton, "Сочетания клавиш: посмотреть и изменить",EditorShortcutSettings.Commands.ShortcutSettings);
 
         foreach (var (tool, button) in _toolButtons)
         {

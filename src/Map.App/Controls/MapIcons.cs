@@ -101,6 +101,9 @@ public static class MapIcons
                                "M12 2.6 V5.4 M12 18.6 V21.4 M2.6 12 H5.4 M18.6 12 H21.4 " +
                                "M5.4 5.4 L7.4 7.4 M16.6 16.6 L18.6 18.6 " +
                                "M18.6 5.4 L16.6 7.4 M7.4 16.6 L5.4 18.6";
+    public const string Keyboard = "M4.5 6 H19.5 A2 2 0 0 1 21.5 8 V16 A2 2 0 0 1 19.5 18 H4.5 A2 2 0 0 1 2.5 16 V8 " +
+                                   "A2 2 0 0 1 4.5 6 Z M6 10 H7 M9.5 10 H10.5 M13 10 H14 M16.5 10 H17.5 " +
+                                   "M6 13.5 H7 M17 13.5 H18 M9 13.5 H15";
     public const string Trash = "M4 6.5 H20 M9 6.5 V3.5 H15 V6.5 M6 6.5 L7 20.5 H17 L18 6.5 " +
                                 "M10 10.5 V16.5 M14 10.5 V16.5";
     public const string Duplicate = "M8 8 H20 V20 H8 Z M4.5 16 V4 H16";
