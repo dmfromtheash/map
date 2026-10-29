@@ -126,7 +126,12 @@ public sealed class ExportStampImageSource : IStampImageSource, IDisposable
                 return _cache.GetForPixelSize(sha256 + "@" + level, width, height) ?? step;
         }
 
-        return _cache.GetForPixelSize(sha256, width, height) ?? TryGetOriginal(sha256);
+        if (_cache.GetForPixelSize(sha256, width, height) is { } scaled) return scaled;
+        // The original was evicted or never read: read it, then take the same step a warm cache
+        // gives. The drawn image never depends on what was evicted before, so an export's tiles
+        // look the same in any order (parallel export, owner 2026-10-29: "the pixels must not change").
+        var original = TryGetOriginal(sha256);
+        return original is null ? null : _cache.GetForPixelSize(sha256, width, height) ?? original;
     }
 
     private SKImage? LadderStep(AssetRecord record, int level)

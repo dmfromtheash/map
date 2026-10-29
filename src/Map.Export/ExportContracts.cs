@@ -149,6 +149,12 @@ public sealed class ExportEngineSettings
     public const int DefaultMaxOutputEdge = CanvasDimensionPolicy.Maximum * 8;
 
     public int TileEdge { get; init; } = DefaultTileEdge;
+    /// <summary>Tiles drawn at once. More workers change time only: each tile is drawn exactly as alone.</summary>
+    public int RenderParallelism { get; init; } = Math.Max(1, Environment.ProcessorCount - 2);
+    /// <summary>Blocks of a streamed PNG compressed at once; the pixels are the same as one stream.</summary>
+    public int CompressionParallelism { get; init; } = Math.Max(1, Environment.ProcessorCount - 2);
+    /// <summary>Bound of the immutable stamp copies shared by render workers.</summary>
+    public long ConcurrentStampByteCapacity { get; init; } = ExportParallelResources.StampSnapshotBytes;
     public int TileCacheCapacity { get; init; } = 128;
     public int MaxSingleEdge { get; init; } = DefaultMaxSingleEdge;
     public int MaxOutputEdge { get; init; } = DefaultMaxOutputEdge;

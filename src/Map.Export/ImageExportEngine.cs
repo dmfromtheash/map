@@ -234,10 +234,15 @@ public sealed class ImageExportEngine : IImageExporter
         var tempPath = UniqueSiblingFile(fullPath);
         try
         {
+            using var resources = ExportParallelResources.Acquire(plan, _settings, stamps is not null, snapshot);
+            using var stampSnapshot = resources.RenderWorkers > 1 && stamps is not null
+                ? new ExportStampSnapshot(stamps, _settings.ConcurrentStampByteCapacity) : null;
+            var parallel = resources.RenderWorkers > 1;
             using (var destination = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write,
                 FileShare.None, 65536, FileOptions.SequentialScan))
             using (var png = new StreamingPngWriter(destination, plan.OutputWidth, plan.OutputHeight, opaque,
-                opaque ? System.IO.Compression.CompressionLevel.Optimal : System.IO.Compression.CompressionLevel.Fastest))
+                opaque ? System.IO.Compression.CompressionLevel.Optimal : System.IO.Compression.CompressionLevel.Fastest,
+                resources.CompressionWorkers))
             {
                 var row = new byte[checked(plan.OutputWidth * 4)];
                 var tileIndex = 0;
@@ -245,39 +250,75 @@ public sealed class ImageExportEngine : IImageExporter
                 for (var y = 0; y < plan.OutputHeight; y += plan.RasterTileHeight)
                 {
                     var height = Math.Min(plan.RasterTileHeight, plan.OutputHeight - y);
-                    var band = new List<(FileStream Stream, int RowBytes)>();
+                    var band = new (FileStream? Stream, int RowBytes)[plan.Columns];
+                    Report(progress, ExportPhase.Rendering, .02 + .88 * y / plan.OutputHeight,
+                        $"Отрисовка в полном разрешении: части {tileIndex + 1:N0}–{tileIndex + plan.Columns:N0} из {plan.TileCount:N0}…");
                     try
                     {
-                        for (var x = 0; x < plan.OutputWidth; x += plan.TileEdge)
+                        // Each column of the band is drawn exactly as on the serial route: the same
+                        // tile rectangle, bleed and tile index. Workers only change the order of work.
+                        void RenderColumn(int column, TileImageCache cache, IStampImageSource? source)
                         {
                             cancellationToken.ThrowIfCancellationRequested();
-                            Report(progress, ExportPhase.Rendering,
-                                .02 + .88 * (y + height * .7 * x / plan.OutputWidth) / plan.OutputHeight,
-                                $"Отрисовка в полном разрешении: часть {tileIndex + 1:N0} из {plan.TileCount:N0}…");
+                            var x = column * plan.TileEdge;
+                            if (!parallel)
+                                Report(progress, ExportPhase.Rendering,
+                                    .02 + .88 * (y + height * .7 * x / plan.OutputWidth) / plan.OutputHeight,
+                                    $"Отрисовка в полном разрешении: часть {tileIndex + column + 1:N0} из {plan.TileCount:N0}…");
                             var tile = new PixelRect(x, y, Math.Min(plan.TileEdge, plan.OutputWidth - x), height);
                             using var image = RenderImage(snapshot, plan, tile, plan.OutputWidth, plan.OutputHeight,
-                                plan.EffectBleedPixels, stamps, tileCache, ExportSurfacePurpose.TileWithBleed,
-                                tileIndex++, cancellationToken);
+                                plan.EffectBleedPixels, source, cache, ExportSurfacePurpose.TileWithBleed,
+                                tileIndex + column, cancellationToken);
                             var info = new SKImageInfo(tile.Width, height, SKColorType.Rgba8888, SKAlphaType.Unpremul);
                             using var pixels = new SKBitmap(info);
                             if (!image.ReadPixels(info, pixels.GetPixels(), pixels.RowBytes, 0, 0))
                                 throw new InvalidDataException("Не удалось прочитать пиксели PNG.");
                             // One tile-column file per band. Buffered sequential reads assemble rows;
                             // no full-width/full-height bitmap or memory-mapped full band is allocated.
-                            var scratch = new FileStream(scratchBase + $".{band.Count:D4}.rgba",
+                            var scratch = new FileStream(scratchBase + $".{column:D4}.rgba",
                                 FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None, 65536,
                                 FileOptions.DeleteOnClose | FileOptions.SequentialScan);
-                            band.Add((scratch, checked(tile.Width * 4)));
+                            band[column] = (scratch, checked(tile.Width * 4));
                             scratch.Write(pixels.GetPixelSpan());
                             scratch.Position = 0;
                         }
+                        if (parallel)
+                        {
+                            try
+                            {
+                                Parallel.For(0, plan.Columns,
+                                    new ParallelOptions { MaxDegreeOfParallelism = resources.RenderWorkers, CancellationToken = cancellationToken },
+                                    () => new TileImageCache(_settings.TileCacheCapacity),
+                                    (column, _, cache) => { RenderColumn(column, cache, stampSnapshot ?? stamps); return cache; },
+                                    cache => cache.Dispose());
+                            }
+                            catch (AggregateException ex) when (ex.Flatten().InnerExceptions.All(e => e is ExportStampSnapshot.SnapshotCapacityException))
+                            {
+                                // A map with many assets outgrew the shared copies. Every worker has
+                                // joined: drop this unpublished band and continue on the serial route.
+                                for (var column = 0; column < band.Length; column++) { band[column].Stream?.Dispose(); band[column] = default; }
+                                stampSnapshot?.Dispose();
+                                parallel = false;
+                                for (var column = 0; column < plan.Columns; column++) RenderColumn(column, tileCache, stamps);
+                            }
+                            catch (AggregateException ex)
+                            {
+                                // Surface the worker's own error, as the serial route would.
+                                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(
+                                    ex.Flatten().InnerExceptions.FirstOrDefault(e => e is not OperationCanceledException)
+                                    ?? ex.Flatten().InnerExceptions[0]).Throw();
+                            }
+                        }
+                        else
+                            for (var column = 0; column < plan.Columns; column++) RenderColumn(column, tileCache, stamps);
+                        tileIndex += plan.Columns;
                         for (var line = 0; line < height; line++)
                         {
                             cancellationToken.ThrowIfCancellationRequested();
                             var offset = 0;
                             foreach (var tile in band)
                             {
-                                tile.Stream.ReadExactly(row.AsSpan(offset, tile.RowBytes));
+                                tile.Stream!.ReadExactly(row.AsSpan(offset, tile.RowBytes));
                                 offset += tile.RowBytes;
                             }
                             png.WriteRow(row);
@@ -290,7 +331,7 @@ public sealed class ImageExportEngine : IImageExporter
                     }
                     finally
                     {
-                        foreach (var tile in band) tile.Stream.Dispose();
+                        foreach (var tile in band) tile.Stream?.Dispose();
                     }
                 }
                 cancellationToken.ThrowIfCancellationRequested();
@@ -358,55 +399,85 @@ public sealed class ImageExportEngine : IImageExporter
         }
 
         var tempPath = Path.Combine(parent, $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp");
-        var entries = new List<TilePackageEntry>(plan.TileCount);
+        var entries = new TilePackageEntry[plan.TileCount];
         try
         {
             Directory.CreateDirectory(tempPath);
-            var tileIndex = 0;
-            for (var row = 0; row < plan.Rows; row++)
+            using var resources = ExportParallelResources.Acquire(plan, _settings, stamps is not null, snapshot);
+            using var stampSnapshot = resources.RenderWorkers > 1 && stamps is not null
+                ? new ExportStampSnapshot(stamps, _settings.ConcurrentStampByteCapacity) : null;
+            // Fault-injection runs stop after a given tile, so they keep the one ordered route.
+            var parallel = resources.RenderWorkers > 1 && _settings.FaultInjector is null;
+            var completed = 0;
+            async Task WriteTile(int tileIndex, TileImageCache cache, IStampImageSource? source)
             {
-                for (var column = 0; column < plan.Columns; column++)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    var x = checked(column * plan.TileEdge);
-                    var y = checked(row * plan.TileEdge);
-                    var width = Math.Min(plan.TileEdge, plan.OutputWidth - x);
-                    var height = Math.Min(plan.TileEdge, plan.OutputHeight - y);
-                    var tile = new PixelRect(x, y, width, height);
-                    var start = 0.05 + (0.86 * tileIndex / plan.TileCount);
-                    Report(progress, ExportPhase.Rendering, start,
+                cancellationToken.ThrowIfCancellationRequested();
+                var row = tileIndex / plan.Columns;
+                var column = tileIndex % plan.Columns;
+                var x = checked(column * plan.TileEdge);
+                var y = checked(row * plan.TileEdge);
+                var width = Math.Min(plan.TileEdge, plan.OutputWidth - x);
+                var height = Math.Min(plan.TileEdge, plan.OutputHeight - y);
+                var tile = new PixelRect(x, y, width, height);
+                if (!parallel)
+                    Report(progress, ExportPhase.Rendering, 0.05 + (0.86 * tileIndex / plan.TileCount),
                         $"Рендеринг тайла {tileIndex + 1} из {plan.TileCount}…");
-                    using var bytes = RenderEncoded(
-                        snapshot,
-                        plan,
-                        tile,
-                        plan.OutputWidth,
-                        plan.OutputHeight,
-                        plan.EffectBleedPixels,
-                        plan.Format,
-                        plan.Quality,
-                        stamps,
-                        tileCache,
-                        ExportSurfacePurpose.TileWithBleed,
-                        tileIndex,
-                        cancellationToken);
+                using var bytes = RenderEncoded(
+                    snapshot,
+                    plan,
+                    tile,
+                    plan.OutputWidth,
+                    plan.OutputHeight,
+                    plan.EffectBleedPixels,
+                    plan.Format,
+                    plan.Quality,
+                    source,
+                    cache,
+                    ExportSurfacePurpose.TileWithBleed,
+                    tileIndex,
+                    cancellationToken);
 
-                    var fileName = $"tile-y{row:D4}-x{column:D4}.{Extension(plan.Format)}";
-                    var tilePath = Path.Combine(tempPath, fileName);
-                    Report(progress, ExportPhase.EncodingAndWriting, start + (0.42 / plan.TileCount),
-                        $"Запись тайла {tileIndex + 1} из {plan.TileCount}…");
-                    await WriteAndValidateAsync(
-                        tilePath, bytes, plan.Format, width, height, cancellationToken)
-                        .ConfigureAwait(false);
-                    entries.Add(new TilePackageEntry(fileName, x, y, width, height));
-                    _settings.FaultInjector?.Invoke(ExportFaultPoint.AfterTileWritten);
-                    cancellationToken.ThrowIfCancellationRequested();
-                    tileIndex++;
-                    Report(progress, ExportPhase.EncodingAndWriting,
-                        0.05 + (0.86 * tileIndex / plan.TileCount),
-                        $"Готово тайлов: {tileIndex} из {plan.TileCount}.");
+                var fileName = $"tile-y{row:D4}-x{column:D4}.{Extension(plan.Format)}";
+                var tilePath = Path.Combine(tempPath, fileName);
+                await WriteAndValidateAsync(
+                    tilePath, bytes, plan.Format, width, height, cancellationToken)
+                    .ConfigureAwait(false);
+                entries[tileIndex] = new TilePackageEntry(fileName, x, y, width, height);
+                _settings.FaultInjector?.Invoke(ExportFaultPoint.AfterTileWritten);
+                cancellationToken.ThrowIfCancellationRequested();
+                var done = Interlocked.Increment(ref completed);
+                Report(progress, ExportPhase.EncodingAndWriting,
+                    0.05 + (0.86 * done / plan.TileCount),
+                    $"Готово тайлов: {done} из {plan.TileCount}.");
+            }
+
+            if (parallel)
+            {
+                Report(progress, ExportPhase.Rendering, 0.05, $"Рендеринг пакета: {plan.TileCount:N0} тайлов…");
+                try
+                {
+                    await Parallel.ForEachAsync(Enumerable.Range(0, plan.TileCount),
+                        new ParallelOptions { MaxDegreeOfParallelism = resources.RenderWorkers, CancellationToken = cancellationToken },
+                        async (index, _) =>
+                        {
+                            using var cache = new TileImageCache(_settings.TileCacheCapacity);
+                            await WriteTile(index, cache, stampSnapshot ?? stamps).ConfigureAwait(false);
+                        }).ConfigureAwait(false);
+                }
+                catch (ExportStampSnapshot.SnapshotCapacityException)
+                {
+                    // Every worker has joined. Only this export's unpublished tiles live in the
+                    // temporary folder, so the serial retry cannot touch an earlier result.
+                    foreach (var file in Directory.GetFiles(tempPath)) File.Delete(file);
+                    stampSnapshot?.Dispose();
+                    Array.Clear(entries);
+                    completed = 0;
+                    parallel = false;
                 }
             }
+            if (!parallel)
+                for (var index = 0; index < plan.TileCount; index++)
+                    await WriteTile(index, tileCache, stamps).ConfigureAwait(false);
 
             var manifest = new TilePackageManifest(
                 1,
@@ -500,7 +571,7 @@ public sealed class ImageExportEngine : IImageExporter
         cancellationToken.ThrowIfCancellationRequested();
         var width = checked(pixelRect.Width + (2 * bleed));
         var height = checked(pixelRect.Height + (2 * bleed));
-        _settings.SurfaceAllocated?.Invoke(new ExportSurfaceAllocation(purpose, width, height, tileIndex));
+        SurfaceAllocated(new ExportSurfaceAllocation(purpose, width, height, tileIndex));
         var info = new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Premul);
         using var surface = SKSurface.Create(info)
             ?? throw new OutOfMemoryException($"Не удалось создать поверхность {width}×{height} px.");
@@ -542,7 +613,7 @@ public sealed class ImageExportEngine : IImageExporter
             return surface.Snapshot();
         }
 
-        _settings.SurfaceAllocated?.Invoke(new ExportSurfaceAllocation(
+        SurfaceAllocated(new ExportSurfaceAllocation(
             ExportSurfacePurpose.TileCrop, pixelRect.Width, pixelRect.Height, tileIndex));
         var cropInfo = new SKImageInfo(
             pixelRect.Width, pixelRect.Height, SKColorType.Rgba8888, SKAlphaType.Premul);
@@ -553,6 +624,12 @@ public sealed class ImageExportEngine : IImageExporter
         }
 
         return SKImage.FromBitmap(crop);
+    }
+
+    /// <summary>Diagnostics observers often collect into a plain list; render workers report one at a time.</summary>
+    private void SurfaceAllocated(ExportSurfaceAllocation allocation)
+    {
+        lock (_settings) _settings.SurfaceAllocated?.Invoke(allocation);
     }
 
     private static SKData Encode(SKImage image, ExportImageFormat format, int quality)

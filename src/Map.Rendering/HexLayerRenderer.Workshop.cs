@@ -675,6 +675,10 @@ public static partial class HexLayerRenderer
             }
         }
 
+        // The shape is shared by every render (export tiles draw at once): compute the paths' lazy
+        // state here, so later draws only read finished native paths.
+        foreach (var piece in pieces) _ = (piece.Bounds, piece.IsConvex);
+        _ = whole.IsConvex;
         var b = whole.Bounds;
         var pad = layout.Size * 0.5;
         return new PathShape(layout, [.. pieces], whole, new WorldBounds(b.Left - pad, b.Top - pad, b.Right + pad, b.Bottom + pad));

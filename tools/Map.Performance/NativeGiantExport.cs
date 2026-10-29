@@ -67,7 +67,11 @@ internal static class NativeGiantExport
         report.Map["build-seconds"] = clock.Elapsed.TotalSeconds.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
         Console.WriteLine($"map built in {clock.Elapsed.TotalSeconds:0.0} s: {string.Join(", ", report.Map.Select(p => p.Key + "=" + p.Value))}");
 
-        var engine = new ImageExportEngine();
+        // MAP_EXPORT_WORKERS=1 measures the serial route (one render and one compression worker).
+        var engine = int.TryParse(Environment.GetEnvironmentVariable("MAP_EXPORT_WORKERS"), out var workers) && workers > 0
+            ? new ImageExportEngine(new ExportEngineSettings { RenderParallelism = workers, CompressionParallelism = workers })
+            : new ImageExportEngine();
+        report.Map["export-workers"] = workers > 0 ? workers.ToString(System.Globalization.CultureInfo.InvariantCulture) : "default";
         foreach (var mode in modes)
         {
             var outputMode = mode switch
