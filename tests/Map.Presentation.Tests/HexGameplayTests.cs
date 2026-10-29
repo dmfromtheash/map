@@ -50,7 +50,7 @@ public sealed class HexGameplayTests
         e.SetHexKey(e.HexKeyNote! with { ManuallyRevealed = true });
         e.HexCampaignDay = 14; e.MoveHexParty(h);
         player = new ExportScene(e.Session.Document, recipient: ExportRecipient.Players);
-        var json = HexJsonExporter.ToJson(player).ToJsonString(new() { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+        var json = HexJsonFormat.ToJson(player).ToJsonString(new() { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
         var md = e.HexKeyMarkdown(true);
         var folder = Path.Combine(Path.GetTempPath(), "map-r17-" + Guid.NewGuid());
         try
@@ -66,8 +66,8 @@ public sealed class HexGameplayTests
             }
         }
         finally { if (Directory.Exists(folder)) Directory.Delete(folder, true); }
-        var gmJson = HexJsonExporter.ToJson(e.Session.Document).ToJsonString();
-        var restored = HexJsonExporter.Read(gmJson, e.ActiveHexLayer!);
+        var gmJson = HexJsonFormat.ToJson(e.Session.Document).ToJsonString();
+        var restored = HexJsonFormat.Read(gmJson, e.ActiveHexLayer!);
         Assert.Equal(e.HexKeyNote, restored.Notes[h]); Assert.Equal(e.HexPoints[0], restored.Board[h]!.PointsOfInterest[0]);
         Assert.Equal(e.ActiveHexLayer!.Party.Position, restored.Party.Position); Assert.Equal(14, restored.CampaignDay);
         Assert.Equal("Истинное имя", e.HexKeyNote!.Title);

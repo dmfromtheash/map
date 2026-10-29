@@ -18,7 +18,7 @@ public sealed partial class EditorView
     private async Task ShowHexImportAsync(string json)
     {
         if (TopLevel.GetTopLevel(this) is not Window owner) return;
-        var names = HexJsonExporter.ImportLayerNames(json);
+        var names = HexJsonFormat.ImportLayerNames(json);
         if (names.Count == 0) throw new System.IO.InvalidDataException("В файле нет слоёв гексов.");
         var layers = _editor.Session.Document.Layers.OfType<HexLayer>().Where(l => !l.Locked).ToArray();
         var source = new ComboBox { Name = "HexImportSourceComboBox", ItemsSource = names, SelectedIndex = 0, HorizontalAlignment = HorizontalAlignment.Stretch };

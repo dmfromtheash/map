@@ -79,16 +79,16 @@ public sealed class HexPathBlockingExportTests : IDisposable
         var flags = layer.Paths[0] with { BlocksSight = false, BlocksMove = true, BlocksLight = true };
         document = document.WithLayer(layer.Id, _ => layer with { Paths = [flags] });
         var scene = new ExportScene(document, -1);
-        var json = HexJsonExporter.ToJson(scene);
+        var json = HexJsonFormat.ToJson(scene);
         Assert.Single(json["layers"]!.AsArray());
         Assert.Equal(-1, json["layers"]![0]!["level"]!.GetValue<int>());
-        var imported = HexJsonExporter.Read(json.ToJsonString(), layer);
+        var imported = HexJsonFormat.Read(json.ToJsonString(), layer);
         var path = Assert.Single(imported.Paths);
         Assert.False(path.BlocksSight);
         Assert.True(path.BlocksMove);
         Assert.True(path.BlocksLight);
         var hidden = new ExportScene(document, -1, visibleLayerIds: []);
-        Assert.Empty(HexJsonExporter.ToJson(hidden)["layers"]!.AsArray());
+        Assert.Empty(HexJsonFormat.ToJson(hidden)["layers"]!.AsArray());
     }
 
     private static MapDocument World()

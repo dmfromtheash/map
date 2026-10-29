@@ -36,17 +36,17 @@ public sealed class HexExportTests
         var (document, layer) = World();
         using var folder = new TempFolder();
         var path = Path.Combine(folder.Path, "world.hex.json");
-        HexJsonExporter.Write(document, path);
+        HexJsonFormat.Write(document, path);
         var text = File.ReadAllText(path);
         Assert.Contains("\"format\": \"map-hex-json\"", text);
         Assert.Contains("Башня", text);
         var empty = layer with { Board = HexBoard.FromCells(layer.Board.Layout, layer.Board.Columns, layer.Board.Rows, []), Paths = [], Notes = ImmutableDictionary<HexCoord, HexNote>.Empty, Regions = [] };
-        var back = HexJsonExporter.Read(text, empty);
+        var back = HexJsonFormat.Read(text, empty);
         Assert.Equal(layer.Board.Cells.ToList(), back.Board.Cells.ToList());
         Assert.Equal(layer.Paths.Count, back.Paths.Count);
         Assert.Equal(layer.Regions, back.Regions);
         Assert.Equal(layer.Notes.Values.Single(), back.Notes.Values.Single());
-        Assert.Throws<InvalidDataException>(() => HexJsonExporter.Read("{\"format\":\"other\"}", empty));
+        Assert.Throws<InvalidDataException>(() => HexJsonFormat.Read("{\"format\":\"other\"}", empty));
     }
 
     [Fact]

@@ -158,7 +158,7 @@
 ### R01 — Единый контракт сцены экспорта + VTT-уровни + граница ≠ стена (2/44) — Codex, ветка `codex/roadmap-codex`
 
 - [x] A1–A8, B1–B8 (отчёт Codex, таблица G1 полная: 35 файлов, `EditorViewModel.cs` не тронут, в `EditorView.cs` одна строка)
-- [x] `ExportScene` (Core) используется ImageExportEngine / UniversalVttExporter / HexExports
+- [x] `ExportScene` (Core) используется ImageExportEngine / UniversalVttExporter / HexJsonFormat / HexPrintExporter
 - [x] экспорт уровня −1 не содержит стен уровня 0 (Core `HexExportSceneTests`, два реальных dd2vtt: уровень 0 — 1 082 856 байт, −1 — 218 975)
 - [x] политическая граница без флага не даёт стену (тест); ASSUMPTION — новые границы не блокируют
 - [x] старая карта v13 открывается, её Border+Edges мигрируют в `BlocksSight=true`; v14 пишется только при отличии от дефолтов, включая именованные версии; `docs/05` обновлён (`HexPathBlockingPersistenceTests` 17/17)

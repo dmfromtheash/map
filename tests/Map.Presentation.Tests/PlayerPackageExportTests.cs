@@ -91,8 +91,8 @@ public sealed class PlayerPackageExportTests : IDisposable
             Regions = [new(2, "DIFFERENT hidden region", "#FF00FF00")],
             Paths = layer.Paths.SetItem(1, layer.Paths[1] with { Name = "DIFFERENT", Width = 4 }),
         });
-        Assert.Equal(HexJsonExporter.ToJson(new ExportScene(doc, 0, ExportRecipient.Players)).ToJsonString(),
-            HexJsonExporter.ToJson(new ExportScene(changed, 0, ExportRecipient.Players)).ToJsonString());
+        Assert.Equal(HexJsonFormat.ToJson(new ExportScene(doc, 0, ExportRecipient.Players)).ToJsonString(),
+            HexJsonFormat.ToJson(new ExportScene(changed, 0, ExportRecipient.Players)).ToJsonString());
         var engine = Engine();
         var a = Path.Combine(_root, "a.png");
         var b = Path.Combine(_root, "b.png");

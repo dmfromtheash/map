@@ -22,7 +22,7 @@ public sealed partial class EditorViewModel
             { Level = HexLevels.Min() - 1, Grid = reference.Grid, Travel = reference.Travel };
         try
         {
-            var result = HexJsonExporter.ReadWithReport(json, target, sourceIndex);
+            var result = HexJsonFormat.ReadWithReport(json, target, sourceIndex);
             Session.Execute(new HexImportCommand(Session.Document, result.Layer));
             AfterEdit();
             Raise(nameof(HexLevels));

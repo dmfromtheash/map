@@ -61,7 +61,7 @@ public sealed partial class RegionalApplication
         Check("R17: очистка следа сохраняет знания", Layer().Party.History.Count == 0 && Layer().Party.Visited.Contains(h)
             && ExportPlayerVisibility.Sanitize(Layer()).Notes.ContainsKey(h));
         _editor.Undo(); await Settle();
-        var publicJson = HexJsonExporter.ToJson(new ExportScene(_editor.Session.Document, recipient: ExportRecipient.Players))
+        var publicJson = HexJsonFormat.ToJson(new ExportScene(_editor.Session.Document, recipient: ExportRecipient.Players))
             .ToJsonString(new() { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
         Check("R17: игроку слухи без правды и секретов", publicJson.Contains("Старая обитель") && publicJson.Contains("обитель")
             && !publicJson.Contains("Истинное") && !publicJson.Contains("Истинная") && !publicJson.Contains("Секрет ведущего"));

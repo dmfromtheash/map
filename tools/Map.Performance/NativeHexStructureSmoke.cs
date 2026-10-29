@@ -58,7 +58,7 @@ public sealed partial class RegionalApplication
             Capture(_view, "r16-view-" + i);
         }
         views.SelectedIndex = 0; await Settle();
-        var safeJson = HexJsonExporter.ToJson(new ExportScene(document, recipient: ExportRecipient.Players)).ToJsonString();
+        var safeJson = HexJsonFormat.ToJson(new ExportScene(document, recipient: ExportRecipient.Players)).ToJsonString();
         Check("R16: пакет игрока без скрытой точки", !safeJson.Contains("Скрытый храм", StringComparison.Ordinal));
         var path = Path.Combine(_workspace, "r16-live.mapproj");
         MapProjectStore.Save(document, path, new SaveMetadata("r16", DateTimeOffset.UtcNow), PreviewPng());

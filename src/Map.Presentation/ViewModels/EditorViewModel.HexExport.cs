@@ -110,7 +110,7 @@ public sealed partial class EditorViewModel
         if (string.IsNullOrWhiteSpace(path)) return null;
         try
         {
-            await Task.Run(() => HexJsonExporter.Write(scene, path)).ConfigureAwait(true);
+            await Task.Run(() => HexJsonFormat.Write(scene, path)).ConfigureAwait(true);
             StatusDetail = "JSON карты сохранён: " + path;
             return path;
         }

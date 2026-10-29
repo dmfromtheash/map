@@ -14,7 +14,7 @@ public sealed class HexImportTests
     public void Every_cell_is_imported_or_counted_and_unknown_ids_are_listed()
     {
         var layer = Document().Layers.OfType<HexLayer>().Single();
-        var result = HexJsonExporter.ReadWithReport(Json, layer);
+        var result = HexJsonFormat.ReadWithReport(Json, layer);
         Assert.Equal((16, 11), (result.Layer.Board.Columns, result.Layer.Board.Rows));
         Assert.Equal(1, result.Imported); Assert.Equal(5, result.Skipped);
         Assert.Equal(2, result.Outside); Assert.Equal(2, result.UnknownTiles); Assert.Equal(1, result.Duplicates);
@@ -46,6 +46,6 @@ public sealed class HexImportTests
     public void Invalid_input_has_no_document_change(string json)
     {
         var layer = Document().Layers.OfType<HexLayer>().Single();
-        Assert.Throws<InvalidDataException>(() => HexJsonExporter.ReadWithReport(json, layer));
+        Assert.Throws<InvalidDataException>(() => HexJsonFormat.ReadWithReport(json, layer));
     }
 }

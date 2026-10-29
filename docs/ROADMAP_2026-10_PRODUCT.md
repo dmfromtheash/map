@@ -169,7 +169,7 @@
 #### R01 · Единый контракт сцены экспорта + VTT-уровни + граница ≠ стена
 - **Пункты:** T1, H1, H2.
 - **Что сделать:**
-  1. `ExportScene` (Core или Export): категория, уровень гексов, получатель (Ведущий/Игрок), видимые слои, область. Его используют `ImageExportEngine`, `UniversalVttExporter`/`VttGeometry`, `HexExports`.
+  1. `ExportScene` (Core или Export): категория, уровень гексов, получатель (Ведущий/Игрок), видимые слои, область. Его используют `ImageExportEngine`, `UniversalVttExporter`/`VttGeometry`, `HexJsonFormat / HexPrintExporter`.
   2. `VttGeometry.Collect(scene)` берёт стены только выбранного уровня.
   3. Свойства блокировки у гекс-пути: `BlocksSight`, `BlocksMove`, `BlocksLight`.
      - Миграция старых карт: путь `Border + Edges` → `BlocksSight = true` (поведение сохраняется), но в UI становится видно и переключаемо.

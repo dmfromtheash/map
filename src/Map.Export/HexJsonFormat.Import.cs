@@ -18,7 +18,7 @@ public sealed record HexImportResult(HexLayer Layer, int Imported, int Outside, 
         + (UnknownTileIds.Count > 0 ? " Неизвестные id тайлов: " + string.Join(", ", UnknownTileIds) + "." : "");
 }
 
-public static partial class HexJsonExporter
+public static partial class HexJsonFormat
 {
     public static IReadOnlyList<string> ImportLayerNames(string json)
     {

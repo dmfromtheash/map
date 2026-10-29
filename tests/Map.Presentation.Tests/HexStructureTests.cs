@@ -70,11 +70,11 @@ public sealed class HexStructureTests
         var doc = editor.Session.Document;
         var gm = new ExportScene(doc);
         var player = new ExportScene(doc, recipient: ExportRecipient.Players);
-        var json = HexJsonExporter.ToJson(gm).ToJsonString();
-        var restored = HexJsonExporter.Read(json, editor.ActiveHexLayer!);
+        var json = HexJsonFormat.ToJson(gm).ToJsonString();
+        var restored = HexJsonFormat.Read(json, editor.ActiveHexLayer!);
         Assert.Equal(2, restored.Board[hex]!.PointsOfInterest.Count);
         Assert.Equal(1, restored.Regions[1].ParentRegion);
-        var publicJson = HexJsonExporter.ToJson(player).ToJsonString();
+        var publicJson = HexJsonFormat.ToJson(player).ToJsonString();
         Assert.DoesNotContain("Скрытый храм", publicJson); Assert.DoesNotContain("starter/ruins", publicJson);
         Assert.Single(player.Layers.OfType<HexLayer>().Single().Board[hex]!.PointsOfInterest);
         Assert.Contains("Скрытый храм", editor.HexKeyMarkdown(false));
