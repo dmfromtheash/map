@@ -1,0 +1,111 @@
+{
+  "format": "map-hex-json",
+  "version": 1,
+  "title": "Совместимость 2534315",
+  "board": {
+    "orientation": "pointy (odd rows to the right)",
+    "columns": 4,
+    "rows": 3,
+    "hexSize": 16
+  },
+  "tiles": [
+    {
+      "id": "starter/grass",
+      "name": "Равнина"
+    },
+    {
+      "id": "starter/hills",
+      "name": "Холмы"
+    }
+  ],
+  "layers": [
+    {
+      "name": "Гексы",
+      "level": 0,
+      "fog": true,
+      "campaignDay": 0,
+      "party": {
+        "position": null,
+        "radius": 1,
+        "history": [],
+        "visited": []
+      },
+      "travel": {
+        "perHex": 6,
+        "unit": "миль",
+        "perDay": 24
+      },
+      "regions": [
+        {
+          "id": 1,
+          "name": "Север",
+          "color": "#FF3060B0",
+          "parentRegion": 0,
+          "rumor": "",
+          "approximateLabel": ""
+        }
+      ],
+      "cells": [
+        {
+          "at": [
+            0,
+            0
+          ],
+          "number": "0101",
+          "terrain": "starter/grass",
+          "variant": 1,
+          "turn": 2,
+          "region": 1,
+          "revealed": true
+        },
+        {
+          "at": [
+            1,
+            0
+          ],
+          "number": "0201",
+          "terrain": "starter/hills"
+        }
+      ],
+      "paths": [
+        {
+          "kind": "Road",
+          "route": "Centers",
+          "name": "Дорога",
+          "hexes": [
+            [
+              0,
+              0
+            ],
+            [
+              1,
+              0
+            ]
+          ],
+          "blocksSight": true,
+          "blocksMove": false,
+          "blocksLight": true
+        }
+      ],
+      "key": [
+        {
+          "at": [
+            0,
+            0
+          ],
+          "number": "0101",
+          "title": "Башня",
+          "category": "Landmark",
+          "gm": "Секрет мага",
+          "players": "Высокая башня",
+          "childMap": "tower.mapproj",
+          "revealCondition": "Always",
+          "manuallyRevealed": false,
+          "revealDay": 0,
+          "rumor": "",
+          "approximateLabel": ""
+        }
+      ]
+    }
+  ]
+}

@@ -50,6 +50,35 @@ public sealed class HexExportTests
     }
 
     [Fact]
+    public void Hex_json_from_2534315_reads_and_writes_identical_bytes()
+    {
+        // Produced by the unmodified HexJsonExporter at 2534315 before the type/file rename.
+        using var fixture = typeof(HexExportTests).Assembly.GetManifestResourceStream(
+            "Map.Presentation.Tests.Fixtures.hex-json-2534315.json")!;
+        using var bytes = new MemoryStream();
+        fixture.CopyTo(bytes);
+        var expected = bytes.ToArray();
+        var document = HexMapFactory.Create("Совместимость 2534315", DateTimeOffset.UnixEpoch,
+            new MapCategoryId("hex"), HexOrientation.Pointy, 16, 4, 3, "#FFF2E9DC");
+        var target = document.Layers.OfType<HexLayer>().Single();
+        var result = HexJsonFormat.ReadWithReport(Encoding.UTF8.GetString(expected), target);
+
+        Assert.Equal("map-hex-json", HexJsonFormat.Format);
+        Assert.Equal(1, HexJsonFormat.Version);
+        Assert.Equal(2, result.Imported);
+        Assert.Equal(0, result.Skipped);
+        Assert.Equal(0, result.SkippedPaths);
+        Assert.Equal(0, result.SkippedNotes);
+        Assert.Single(result.Layer.Paths);
+        Assert.Single(result.Layer.Regions);
+        Assert.Equal("Секрет мага", Assert.Single(result.Layer.Notes).Value.GmText);
+        using var folder = new TempFolder();
+        var path = Path.Combine(folder.Path, "compatibility.hex.json");
+        HexJsonFormat.Write(document.WithLayer(target.Id, _ => result.Layer), path);
+        Assert.Equal(expected, File.ReadAllBytes(path));
+    }
+
+    [Fact]
     public void A_print_pdf_holds_one_page_per_sheet_and_the_key()
     {
         var (document, layer) = World();

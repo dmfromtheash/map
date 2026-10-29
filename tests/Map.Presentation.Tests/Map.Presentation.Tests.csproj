@@ -31,6 +31,7 @@
 
   <ItemGroup>
     <Compile Include="..\Shared\FixedWorkingMemory.cs" Link="Shared\FixedWorkingMemory.cs" />
+    <EmbeddedResource Include="Fixtures\hex-json-2534315.json" />
   </ItemGroup>
 
 </Project>
