@@ -290,7 +290,7 @@ public sealed partial class EditorView
         var assign = Ui.TextButton(
             prefix + "AssignClipMaskButton",
             "Назначить маску…",
-            () => _ = AssignClipMaskAsync(),
+            () => UiTasks.Forget(this, AssignClipMaskAsync),
             "compact");
         var remove = Ui.TextButton(
             prefix + "RemoveClipMaskButton",

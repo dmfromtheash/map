@@ -114,6 +114,7 @@ public sealed class FakeLog : IAppLog
 public sealed class FakeRecentMaps : IRecentMaps
 {
     public List<RecentMapItem> Items { get; } = [];
+    public Exception? NextTouchFailure { get; set; }
 
     public IReadOnlyList<RecentMapItem> Load() => [.. Items];
 
@@ -125,6 +126,11 @@ public sealed class FakeRecentMaps : IRecentMaps
         byte[]? thumbnailPng = null,
         string mapType = "Локальная карта")
     {
+        if (NextTouchFailure is { } failure)
+        {
+            NextTouchFailure = null;
+            throw failure;
+        }
         Items.RemoveAll(i => i.Path == path);
         Items.Insert(0, new RecentMapItem(
             path, title, modifiedUtc, IsAvailable: true, mapType, 0, thumbnailPng));

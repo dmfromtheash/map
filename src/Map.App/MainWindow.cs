@@ -71,6 +71,7 @@ public sealed class MainWindow : Window
         _store = store;
         _recent = recent;
         _log = log;
+        UiTasks.SetErrorReporter(this, ReportAsyncError);
         _assets = assets;
         var appSettingsPath = TestMode.Enabled
             ? Path.Combine(AppPaths.ResolveTestProfileRoot(TestMode.ProfileRootOverride), "settings.json")
@@ -227,18 +228,18 @@ public sealed class MainWindow : Window
             requestSecondWindow: OpenSecondWindow,
             requestShortcutSettings: OpenShortcutSettings);
         _editorView.Canvas.PerformanceMode = _appSettings.PerformanceMode;
-        editor.AtlasMapRequested += async (_, path) =>
+        editor.AtlasMapRequested += (_, path) => UiTasks.Forget(this, async () =>
         {
             if (await editor.ConfirmCloseAsync()) await OpenPathAsync(path);
-        };
+        });
         if (editor.IsHexWorkshop)
         {
             editor.HexPlayerViewRequested += (_, _) => new HexPlayerWindow(editor).Show();
-            editor.HexChildMapRequested += async (_, hex) =>
+            editor.HexChildMapRequested += (_, hex) => UiTasks.Forget(this, async () =>
             {
                 // A child map opens in a window of its own, so the parent map stays where it was.
                 if (await editor.PrepareHexChildMapAsync(hex) is { } childPath) OpenInNewWindow(childPath);
-            };
+            });
         }
 
         _host.Content = _editorView;
@@ -267,7 +268,7 @@ public sealed class MainWindow : Window
             Title = $"Map · {AppVersion.Current} · {System.IO.Path.GetFileNameWithoutExtension(path)}",
         };
         window.Show();
-        Avalonia.Threading.Dispatcher.UIThread.Post(() => _ = window.OpenPathAsync(path), Avalonia.Threading.DispatcherPriority.Loaded);
+        Avalonia.Threading.Dispatcher.UIThread.Post(() => UiTasks.Forget(window, () => window.OpenPathAsync(path)), Avalonia.Threading.DispatcherPriority.Loaded);
     }
 
     private void OpenSecondWindow()
@@ -385,9 +386,28 @@ public sealed class MainWindow : Window
 
     private async void OpenAppSettings()
     {
-        var dialog = new AppSettingsWindow(
-            _appSettingsStore, _appSettings, ApplySettings, BuildLocalDiagnostics);
-        await dialog.ShowDialog(this);
+        await UiTasks.RunAsync(this, async () =>
+        {
+            var dialog = new AppSettingsWindow(
+                _appSettingsStore, _appSettings, ApplySettings, BuildLocalDiagnostics);
+            await dialog.ShowDialog(this);
+        });
+    }
+
+    private async void ReportAsyncError(string operation, Exception error)
+    {
+        try
+        {
+            _log.Error($"UI_TASK_FAILED {operation}", error);
+            const string message = "Не удалось выполнить действие. Подробности записаны в журнал диагностики.";
+            if (_editorView is { } view) view.ShowOperationError(message);
+            else await ErrorWindow.ShowAsync(this, "Ошибка действия", message);
+        }
+        catch (Exception reportingError)
+        {
+            // An error dialog or the diagnostics store can fail too; never recurse into reporting.
+            System.Diagnostics.Trace.TraceError($"{operation}: {error}; reporting failed: {reportingError}");
+        }
     }
 
     /// <summary>Map's brass pointer while interface effects are on; the system arrow otherwise.</summary>
@@ -494,7 +514,7 @@ public sealed class MainWindow : Window
             },
         };
         if (TestMode.Enabled) help.Position = new PixelPoint(-32000, -32000);
-        _ = help.ShowDialog(this);
+        UiTasks.Forget(this, () => help.ShowDialog(this));
     }
 
     private Task RestoreAsync(RecoveryCard card)
@@ -535,6 +555,7 @@ public sealed class MainWindow : Window
         {
             await editorView.Editor.TryAutosaveAsync();
         }
+        catch (Exception error) { UiTasks.Report(this, "Autosave tick", error); }
         finally
         {
             _autosaveTickRunning = false;
@@ -553,13 +574,21 @@ public sealed class MainWindow : Window
         }
 
         e.Cancel = true;
-        if (_editorView is null || await _editorView.Editor.ConfirmCloseAsync())
+        try
         {
-            try { await _assets.FlushMetadataAsync(); }
-            catch (IOException error) { _log.Error("CATALOG_METADATA_SAVE_FAILED", error); }
-            _autosaveTimer.Stop();
-            _closeApproved = true;
-            Close();
+            if (_editorView is null || await _editorView.Editor.ConfirmCloseAsync())
+            {
+                try { await _assets.FlushMetadataAsync(); }
+                catch (IOException error) { _log.Error("CATALOG_METADATA_SAVE_FAILED", error); }
+                _autosaveTimer.Stop();
+                _closeApproved = true;
+                Close();
+            }
+        }
+        catch (Exception error)
+        {
+            _closeApproved = false;
+            UiTasks.Report(this, "Closing the editor window", error);
         }
     }
 
@@ -608,13 +637,13 @@ public sealed class MainWindow : Window
     {
         if (command == EditorShortcutSettings.Commands.NewMap)
         {
-            _ = HandleNewShortcutAsync();
+            UiTasks.Forget(this, HandleNewShortcutAsync);
             return true;
         }
 
         if (command == EditorShortcutSettings.Commands.OpenMap)
         {
-            _ = HandleOpenShortcutAsync();
+            UiTasks.Forget(this, HandleOpenShortcutAsync);
             return true;
         }
 
@@ -633,7 +662,7 @@ public sealed class MainWindow : Window
         switch (command)
         {
             case EditorShortcutSettings.Commands.Save:
-                _ = editor.SaveAsync();
+                UiTasks.Forget(this, () => editor.SaveAsync());
                 break;
             case EditorShortcutSettings.Commands.Undo:
                 editor.Undo();
@@ -791,7 +820,7 @@ public sealed class MainWindow : Window
                 editor.SelectAllByFilter();
                 break;
             case EditorShortcutSettings.Commands.Group:
-                _ = view.GroupSelectionInteractiveAsync();
+                UiTasks.Forget(this, view.GroupSelectionInteractiveAsync);
                 break;
             case EditorShortcutSettings.Commands.Ungroup:
                 editor.UngroupSelection();
@@ -938,26 +967,29 @@ public sealed class MainWindow : Window
                 },
             },
         };
-        _ = dialog.ShowDialog(this);
+        UiTasks.Forget(this, () => dialog.ShowDialog(this));
     }
 
     private async void OpenShortcutSettings()
     {
-        var returnFocus = FocusManager?.GetFocusedElement();
-        var dialog = new ShortcutSettingsWindow(
-            _shortcuts,
-            draft =>
-            {
-                var result = _shortcutStore.Save(
-                    draft.GetOverrides(), EditorShortcutSettings.KnownCommandIds);
-                if (!result.Succeeded) return result.Error ?? "Не удалось сохранить сочетания.";
-                _shortcuts.ReplaceWith(draft);
-                _shortcutLoadWarning = null;
-                return null;
-            },
-            _shortcutLoadWarning);
-        await dialog.ShowDialog(this);
-        returnFocus?.Focus();
+        await UiTasks.RunAsync(this, async () =>
+        {
+            var returnFocus = FocusManager?.GetFocusedElement();
+            var dialog = new ShortcutSettingsWindow(
+                _shortcuts,
+                draft =>
+                {
+                    var result = _shortcutStore.Save(
+                        draft.GetOverrides(), EditorShortcutSettings.KnownCommandIds);
+                    if (!result.Succeeded) return result.Error ?? "Не удалось сохранить сочетания.";
+                    _shortcuts.ReplaceWith(draft);
+                    _shortcutLoadWarning = null;
+                    return null;
+                },
+                _shortcutLoadWarning);
+            await dialog.ShowDialog(this);
+            returnFocus?.Focus();
+        });
     }
 
     private static EditorShortcutSettings LoadShortcuts(

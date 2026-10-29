@@ -1206,12 +1206,12 @@ public sealed partial class EditorView
                 players,
                 BuildExportPackagePreview("HexExport"),
                 HexHint("PNG и .dd2vtt для Foundry и Roll20 — кнопка «Экспорт» вверху; рядом с .dd2vtt пишется макрос сетки для Foundry."),
-                HexCommand("HexPrintButton", "PDF для печати…", MapIcons.HexPrint, () => _ = ShowHexPrintAsync(), "accent"),
+                HexCommand("HexPrintButton", "PDF для печати…", MapIcons.HexPrint, () => UiTasks.Forget(this, ShowHexPrintAsync), "accent"),
                 Ui.Subgroup("Файлы", HexGrid(4,
-                    HexTall("HexJsonExportButton", "JSON", MapIcons.HexExport, () => _ = _editor.ExportHexJsonAsync(), "Сохранить карту в JSON…"),
-                    HexTall("HexJsonImportButton", "Из JSON", MapIcons.Import, () => _ = ImportHexJsonAsync(), "Загрузить карту из JSON…"),
-                    HexTall("HexKeyExportButton", "Ключ", MapIcons.LineNotes, () => _ = _editor.ExportHexKeyAsync(false), "Ключ гексов для мастера (Markdown)…"),
-                    HexTall("HexKeyPlayersExportButton", "Игрокам", MapIcons.HexPlayer, () => _ = _editor.ExportHexKeyAsync(true), "Ключ гексов для игроков (Markdown)…"))),
+                    HexTall("HexJsonExportButton", "JSON", MapIcons.HexExport, () => UiTasks.Forget(this, () => _editor.ExportHexJsonAsync()), "Сохранить карту в JSON…"),
+                    HexTall("HexJsonImportButton", "Из JSON", MapIcons.Import, () => UiTasks.Forget(this, ImportHexJsonAsync), "Загрузить карту из JSON…"),
+                    HexTall("HexKeyExportButton", "Ключ", MapIcons.LineNotes, () => UiTasks.Forget(this, () => _editor.ExportHexKeyAsync(false)), "Ключ гексов для мастера (Markdown)…"),
+                    HexTall("HexKeyPlayersExportButton", "Игрокам", MapIcons.HexPlayer, () => UiTasks.Forget(this, () => _editor.ExportHexKeyAsync(true)), "Ключ гексов для игроков (Markdown)…"))),
             },
         }, expanded: false);
     }

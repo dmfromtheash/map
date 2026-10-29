@@ -123,7 +123,7 @@ public static class Ui
     {
         var button = new Button { Content = CommandCaption(text) }.Named(name).Classed(classes);
         AutomationProperties.SetName(button, text);
-        button.Click += async (_, _) => await action();
+        button.Click += (_, _) => UiTasks.Forget(button, () => UiTasks.RunButtonAsync(button, action));
         return button;
     }
 
@@ -138,7 +138,7 @@ public static class Ui
         }.Named(name).Classed(classes);
 
         AutomationProperties.SetName(button, text);
-        button.Click += async (_, _) => await action();
+        button.Click += (_, _) => UiTasks.Forget(button, () => UiTasks.RunButtonAsync(button, action));
         return button;
     }
 

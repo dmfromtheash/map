@@ -39,7 +39,7 @@ public sealed partial class EditorView
         void Add(string title, string path, string words, string? control, Action open, Func<string?>? needs = null) =>
             list.Add(new(title, path, words, control, needs ?? Always, open));
         void Section(EditorWorkspace workspace, string title, string words) =>
-            Add(title, "Раздел «" + title + "»", words, WorkspaceTabName(workspace), () => ShowWorkspace(workspace));
+            Add(title, "Раздел «" + title + "»", words, WorkspaceTabName(workspace), () => ShowWorkspace(workspace, openWorldList: true));
         void Tool(EditorTool tool, string control, string words)
         {
             if (!EditorSurfaceLayout.OffersTool(_isHexWorkshop, tool)) return;
@@ -80,13 +80,13 @@ public sealed partial class EditorView
                 "EditableAreaTabsBeauty", () =>
                 {
                     ShowWorkspace(EditorWorkspace.Objects);
-                    _areaLinks.FirstOrDefault(link => link.IsEffectivelyVisible)?.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    OpenSelectionAreaTab("EditableAreaTabsBeauty");
                 },
                 () => _editor.SelectionArea is null ? "Сначала выделите горы или лес, поставленные областью, — появится кнопка «Область «…» → Красота»." : null);
             Add("Правила области", "Объекты → Область «…» → Правила", "правила вода дороги суша экология", "EditableAreaTabsRules", () =>
                 {
                     ShowWorkspace(EditorWorkspace.Objects);
-                    _areaLinks.FirstOrDefault(link => link.IsEffectivelyVisible)?.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    OpenSelectionAreaTab("EditableAreaTabsRules");
                 },
                 () => _editor.SelectionArea is null ? "Сначала выделите объекты, поставленные областью." : null);
             Add("Паспорт набора и роль", "Объекты → Каталог → значок паспорта на карточке → Роль", "паспорт роль набор дерево ель дом тег",
@@ -109,7 +109,7 @@ public sealed partial class EditorView
         World("IsometricButton", "Изометрия", "изометрия объём 3d вид сбоку");
         World("BookButton", "Книга и язык", "книга атлас художественный язык");
 
-        Add("Экспорт", "Кнопка «Экспорт…» вверху", "экспорт png картинка печать vtt пакет игрока выгрузить", "ExportButton", () => { });
+        Add("Экспорт", "Файл → Экспорт…", "экспорт png картинка печать vtt пакет игрока выгрузить", null, OpenExport);
         Add("Сохранить", "Кнопка «Сохранить» вверху (Ctrl+S)", "сохранить запись файл", "SaveButton", () => { });
         Add("Версии и сравнение", "Файл → Версии…", "версии сравнение откат история изменения", "FileMenuButton", () => { });
         Add("Размер и область карты", "Файл → Размер и область…", "размер холст область обрезать расширить", "FileMenuButton", () => { });

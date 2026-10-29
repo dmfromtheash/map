@@ -407,7 +407,7 @@ public sealed partial class EditorView
         var token = work.Token;
         var stamps = _editor.StampImages;
         var docs = keys.Select(k => (Key: k, Document: CardDocument(document, k))).ToArray();
-        _ = Task.Run(() =>
+        UiTasks.Forget(this, () => Task.Run(() =>
         {
             foreach (var (key, cardDocument) in docs)
             {
@@ -428,7 +428,7 @@ public sealed partial class EditorView
                     }
                 }, DispatcherPriority.Background);
             }
-        }, token);
+        }, token));
     }
 
     /// <summary>One preview, drawn like an export (CPU raster, no editor chrome), as RGBA premultiplied bytes.</summary>
@@ -514,7 +514,7 @@ public sealed partial class EditorView
             title.Text = card.Title + " · " + card.Family;
             status.Text = "Рисуется…";
             foreach (var (button, z) in zoomButtons) { button.IsChecked = Math.Abs(z - zoom) < 1e-6; Ui.SetClass(button, "active", button.IsChecked == true); }
-            _ = Task.Run(() =>
+            UiTasks.Forget(this, () => Task.Run(() =>
             {
                 if (token.IsCancellationRequested) return;
                 var pixels = RenderPreviewPixels(document, area, ViewWidth, ViewHeight, zoom, stamps);
@@ -527,7 +527,7 @@ public sealed partial class EditorView
                     bitmap = next;
                     status.Text = $"Масштаб {zoom * 100:0} % · тяните мышью, колесо — масштаб";
                 });
-            }, token);
+            }, token));
         }
 
         foreach (var z in new[] { 0.5, 1.0, 2.0 })
@@ -598,6 +598,6 @@ public sealed partial class EditorView
         window.KeyDown += (_, e) => { if (e.Key == Key.Escape) { window.Close(); e.Handled = true; } };
         window.Closed += (_, _) => { work?.Cancel(); bitmap?.Dispose(); _styleInspectorWindow = null; };
         Render();
-        _ = window.ShowDialog(owner);
+        UiTasks.Forget(this, () => window.ShowDialog(owner));
     }
 }

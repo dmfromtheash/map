@@ -251,7 +251,7 @@ public sealed partial class DashboardView : UserControl
         AutomationProperties.SetName(create, "Создать новую карту");
         ToolTip.SetTip(create, $"Создать новую карту  ({_shortcuts.Get(EditorShortcutSettings.Commands.NewMap)})");
         ToolTip.SetPlacement(create, PlacementMode.Right);
-        create.Click += async (_, _) => await _newMapRequested();
+        create.Click += (_, _) => UiTasks.Forget(this, _newMapRequested);
 
         var top = new StackPanel
         {
@@ -268,7 +268,7 @@ public sealed partial class DashboardView : UserControl
         };
         if (_templateRequested is not null)
             top.Children.Add(Item("RailTemplateButton", "Шаблоны", "Создать карту из шаблона", MapIcons.SolidTemplate,
-                () => _ = _templateRequested()));
+                () => UiTasks.Forget(this, _templateRequested)));
         top.Children.Add(Item("RailPngButton", "PNG", "Просмотр готовой картинки карты (PNG)", MapIcons.SolidPicture,
             () => PngMapWindow.ShowFor(TopLevel.GetTopLevel(this) as Window)));
 
@@ -885,7 +885,7 @@ public sealed partial class DashboardView : UserControl
                 else if (_dashboard.TotalRecentCount == 0)
                     ShowEmpty(true, MapIcons.NewMap, "Здесь будут ваши карты",
                         "Создайте карту — при сохранении она попадёт в папку библиотеки и всегда будет видна в этом разделе.",
-                        ("Создать карту", () => _ = _newMapRequested()));
+                        ("Создать карту", () => UiTasks.Forget(this, _newMapRequested)));
                 else if (_dashboard.CurrentFolder is not null && string.IsNullOrWhiteSpace(_dashboard.SearchText))
                     ShowEmpty(true, MapIcons.Folder, "В этой папке пока нет карт",
                         "Перенесите сюда карту через меню «⋯» на её карточке.", null);
@@ -965,7 +965,7 @@ public sealed partial class DashboardView : UserControl
         var accessibleName = card.IsAvailable ? $"{card.Title}. Изменена {card.ModifiedUtc.ToLocalTime():g}" : $"{card.Title}. Файл не найден";
         AutomationProperties.SetName(openButton, accessibleName);
         ToolTip.SetTip(openButton, $"{accessibleName}\n{card.Path}");
-        openButton.Click += async (_, _) => await _openRecentRequested(captured);
+        openButton.Click += (_, _) => UiTasks.Forget(this, () => _openRecentRequested(captured));
 
         var overlay = new Grid { RowDefinitions = new RowDefinitions("Auto,*,Auto"), IsHitTestVisible = true }.Classed("library-card-overlay");
         // top row: favourite (left), menu (right)
@@ -997,7 +997,7 @@ public sealed partial class DashboardView : UserControl
                 FontFamily = Display, FontSize = 17, FontWeight = FontWeight.SemiBold, HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center }.Classed("primary", "library-card-open");
             if (!main) HomeButton(open);
-            open.Click += async (_, _) => await _openRecentRequested(captured);
+            open.Click += (_, _) => UiTasks.Forget(this, () => _openRecentRequested(captured));
             Grid.SetRow(open, 1);
             overlay.Children.Add(open);
 
@@ -1055,10 +1055,10 @@ public sealed partial class DashboardView : UserControl
             item.Click += (_, _) => action();
             return item;
         }
-        menu.Items.Add(Entry($"OpenRecentMenu{index}", "Открыть", () => _ = _openRecentRequested(captured), card.IsAvailable));
+        menu.Items.Add(Entry($"OpenRecentMenu{index}", "Открыть", () => UiTasks.Forget(this, () => _openRecentRequested(captured)), card.IsAvailable));
         menu.Items.Add(Entry($"PreviewRecentButton{index}", "Просмотр", () => ShowPreview(captured), card.IsAvailable));
         if (_cloneRequested is not null)
-            menu.Items.Add(Entry($"CloneRecentButton{index}", "Сделать копию", () => _ = _cloneRequested(captured), card.IsAvailable));
+            menu.Items.Add(Entry($"CloneRecentButton{index}", "Сделать копию", () => UiTasks.Forget(this, () => _cloneRequested(captured)), card.IsAvailable));
         if (_dashboard.Library is not null && card.IsAvailable)
         {
             menu.Items.Add(Entry($"FavoriteRecentMenu{index}", card.IsFavorite ? "Убрать из избранного" : "В избранное",
@@ -1083,7 +1083,7 @@ public sealed partial class DashboardView : UserControl
         if (_deleteRequested is not null)
         {
             menu.Items.Add(new Separator());
-            var delete = Entry($"DeleteRecentButton{index}", card.IsAvailable ? "Удалить в Корзину" : "Убрать запись", () => _ = _deleteRequested(captured));
+            var delete = Entry($"DeleteRecentButton{index}", card.IsAvailable ? "Удалить в Корзину" : "Убрать запись", () => UiTasks.Forget(this, () => _deleteRequested(captured)));
             delete.Classes.Add("destructive");
             menu.Items.Add(delete);
         }

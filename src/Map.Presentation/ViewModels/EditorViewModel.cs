@@ -1263,7 +1263,7 @@ public sealed partial class EditorViewModel : ViewModelBase
     private void TouchRecentAfterSave(string path, MapDocument snapshot, SaveMetadata metadata, byte[] preview)
     {
         try { _recent.Touch(path, snapshot.Id.Value, snapshot.Title, metadata.ModifiedUtc, preview); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        catch (Exception ex)
         {
             StatusDetail = "Карта сохранена. Не удалось обновить список недавних карт.";
             _log.Error("RECENT_UPDATE_AFTER_SAVE_FAILED", ex);
@@ -1278,8 +1278,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         if (saveAs || string.IsNullOrEmpty(path))
         {
             path = UiTestFilePaths.MapPath
-                ?? await _filePicker.PickSaveAsync(Session.Document.Title + MapProjectFormat.Extension)
-                    ;
+                ?? await _filePicker.PickSaveAsync(Session.Document.Title + MapProjectFormat.Extension);
             if (string.IsNullOrEmpty(path))
             {
                 return false; // user cancelled; nothing changes
@@ -1297,11 +1296,13 @@ public sealed partial class EditorViewModel : ViewModelBase
             SaveState = SaveState.Saving;
             StatusDetail = "";
 
+            MapDocument savedSnapshot;
+            byte[] thumbnail;
             try
             {
-                var savedSnapshot = AtlasSnapshot(snapshot, path);
+                savedSnapshot = AtlasSnapshot(snapshot, path);
                 using var imageSource = new ExportStampImageSource(snapshot, DocumentPath, _assetCatalog);
-                var thumbnail = await RunResourceOperationAsync(() => Task.Run(() =>
+                thumbnail = await RunResourceOperationAsync(() => Task.Run(() =>
                 {
                     // The thumbnail comes from the same scene evaluator as the canvas, without
                     // selection or any editor chrome.
@@ -1309,27 +1310,6 @@ public sealed partial class EditorViewModel : ViewModelBase
                     _store.Save(savedSnapshot, path!, metadata, thumbnail);
                     return thumbnail;
                 }), reserveBytes: DocumentOperationBytes(snapshot));
-
-                DocumentPath = path;
-                _atlasLocator = savedSnapshot.Atlas;
-                if (_atlasLocator is not null) AtlasPath = AtlasStore.ManifestPath(savedSnapshot, path!);
-                Session.MarkSaved(checkpoint);
-                _primaryAutosaveArmed = true;
-                _lastPrimaryAutosavedDocument = snapshot;
-                _lastPrimarySaveUtc = metadata.ModifiedUtc;
-                SaveState = Session.IsDirty ? SaveState.Unsaved : SaveState.Saved;
-                if (!Session.IsDirty)
-                {
-                    ClearRecoveryAfterProvenSave();
-                }
-                Raise(nameof(DocumentPath));
-                RaiseSessionState();
-                Raise(nameof(PrimaryAutosaveSummary));
-
-                TouchRecentAfterSave(path!, snapshot, metadata, thumbnail);
-                if (_atlasLocator is not null) await RefreshAtlasAsync();
-                _log.Info($"SAVE_SUCCEEDED revision={checkpoint.Revision}");
-                return true;
             }
             catch (MapProjectSaveException ex)
             {
@@ -1349,9 +1329,43 @@ public sealed partial class EditorViewModel : ViewModelBase
                 _log.Error("SAVE_REFUSED", ex);
                 return false;
             }
+            catch (Exception ex)
+            {
+                SaveState = SaveState.SaveFailed;
+                StatusDetail = "Не удалось сохранить файл. Документ остаётся открытым, данные не потеряны.";
+                _log.Error("SAVE_FAILED", ex);
+                return false;
+            }
+
+            DocumentPath = path;
+            _atlasLocator = savedSnapshot.Atlas;
+            if (_atlasLocator is not null) AtlasPath = AtlasStore.ManifestPath(savedSnapshot, path!);
+            Session.MarkSaved(checkpoint);
+            _primaryAutosaveArmed = true;
+            _lastPrimaryAutosavedDocument = snapshot;
+            _lastPrimarySaveUtc = metadata.ModifiedUtc;
+            SaveState = Session.IsDirty ? SaveState.Unsaved : SaveState.Saved;
+            if (!Session.IsDirty) ClearRecoveryAfterProvenSave();
+            Raise(nameof(DocumentPath));
+            RaiseSessionState();
+            Raise(nameof(PrimaryAutosaveSummary));
+
+            TouchRecentAfterSave(path!, snapshot, metadata, thumbnail);
+            try
+            {
+                if (_atlasLocator is not null) await RefreshAtlasAsync();
+            }
+            catch (Exception ex)
+            {
+                StatusDetail = "Карта сохранена. Не удалось обновить атлас.";
+                _log.Error("ATLAS_REFRESH_AFTER_SAVE_FAILED", ex);
+            }
+            _log.Info($"SAVE_SUCCEEDED revision={checkpoint.Revision}");
+            return true;
         }
         finally
         {
+            if (SaveState == SaveState.Saving) SaveState = SaveState.SaveFailed;
             _saveGate.Release();
         }
     }

@@ -16,6 +16,25 @@ public sealed class PlacementAreaBeautyEditorTests
     private static readonly string Sha = new('a', 64);
 
     [Fact]
+    public void Opening_the_selected_objects_area_is_navigation_without_a_document_edit()
+    {
+        var editor = NewEditor();
+        var area = editor.SelectedEditableArea!;
+        editor.ActiveTool = EditorTool.Select;
+        editor.Session.SetSelection([area.Members.First().ObjectId]);
+        var document = editor.Session.Document;
+        var depth = editor.Session.UndoDepth;
+
+        Assert.Equal(area.Id, editor.SelectionArea!.Id);
+        Assert.True(editor.OpenSelectionArea());
+        Assert.Equal(area.Id, editor.SelectedEditableArea!.Id);
+        Assert.Equal(EditorTool.Stamp, editor.ActiveTool);
+        Assert.Same(document, editor.Session.Document);
+        Assert.Equal(depth, editor.Session.UndoDepth);
+        Assert.False(editor.OpenSelectionArea()); // No selected area members remain after navigation.
+    }
+
+    [Fact]
     public void Beauty_switches_are_undoable_steps_and_all_off_stores_nothing()
     {
         var editor = NewEditor();

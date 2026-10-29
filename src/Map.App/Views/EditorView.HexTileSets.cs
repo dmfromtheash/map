@@ -86,7 +86,7 @@ public sealed partial class EditorView
                     }
                     body.Children.Add(Ui.Subgroup(category.Key, grid));
                 }
-                body.Children.Add(Ui.TextButton("HexCheckSet_" + set.Manifest.Id, "Проверка комплекта", () => _ = ShowHexTileSetCheck(set), "compact"));
+                body.Children.Add(Ui.TextButton("HexCheckSet_" + set.Manifest.Id, "Проверка комплекта", () => UiTasks.Forget(this, () => ShowHexTileSetCheck(set)), "compact"));
                 list.Children.Add(Ui.Subgroup(set.Manifest.Name, body));
             }
         }
@@ -95,8 +95,8 @@ public sealed partial class EditorView
         Refresh();
         return new StackPanel { Name = "HexUserSetsPanel", Spacing = 8, Children =
         {
-            Ui.TextButton("HexImportSetButton", "Импортировать комплект…", () => _ = ChooseHexSetFolder(false), "compact"),
-            Ui.TextButton("HexTemplateButton", "Выдать шаблон гекса…", () => _ = ChooseHexSetFolder(true), "compact"),
+            Ui.TextButton("HexImportSetButton", "Импортировать комплект…", () => UiTasks.Forget(this, () => ChooseHexSetFolder(false)), "compact"),
+            Ui.TextButton("HexTemplateButton", "Выдать шаблон гекса…", () => UiTasks.Forget(this, () => ChooseHexSetFolder(true)), "compact"),
             message, list,
         } };
     }

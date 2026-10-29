@@ -58,20 +58,20 @@ public sealed class PngMapWindow : Window
             ImageView,
         } });
         ImageView.ViewChanged += UpdateStatistics;
-        Closed += async (_, _) =>
+        Closed += (_, _) => UiTasks.Forget(this, async () =>
         {
             _closed = true; _cancellation?.Cancel(); ImageView.Dispose();
             var usage = _cacheUsage; _cacheUsage = null;
             try { await ImageView.LoadingTask; }
             finally { usage?.Dispose(); TrimCache(); }
-        };
+        });
     }
 
     public static PngMapWindow ShowFor(Window? owner, string? sourcePath = null)
     {
         var view = new PngMapWindow();
         if (TestMode.Enabled) { view.ShowActivated = false; view.ShowInTaskbar = false; if (owner is not null) view.Position = owner.Position; }
-        if (sourcePath is not null) view.Opened += async (_, _) => await view.OpenImageAsync(sourcePath);
+        if (sourcePath is not null) view.Opened += (_, _) => UiTasks.Forget(view, () => view.OpenImageAsync(sourcePath));
         if (owner is null) view.Show(); else view.Show(owner);
         return view;
     }
@@ -108,7 +108,7 @@ public sealed class PngMapWindow : Window
         }
     }
 
-    private void TrimCache() => _ = Task.Run(() => PngViewCache.TrimWhenIdle(_cacheRoot));
+    private void TrimCache() => UiTasks.Forget(this, () => Task.Run(() => PngViewCache.TrimWhenIdle(_cacheRoot)));
 
     private async Task PickAsync()
     {

@@ -420,7 +420,7 @@ public sealed partial class EditorView : UserControl
             _editor.PanelSection = PanelSection.Layers;
             foreach (var orientation in editor.Session.Document.Layers.OfType<HexLayer>().Select(l => l.Board.Orientation).Distinct())
             {
-                _ = Task.Run(() => Map.Rendering.HexTileArt.Warm(orientation));
+                UiTasks.Forget(this, () => Task.Run(() => Map.Rendering.HexTileArt.Warm(orientation)));
             }
         }
         _thumbnails.OriginalFor = path => _editor.TryDescribeLibraryThumbnail(path, out var original) ? original : null;
@@ -1008,7 +1008,7 @@ public sealed partial class EditorView : UserControl
             Items =
             {
                 Item("Версии…", MapIcons.Versions, OpenVersions),
-                Item("Сохранить как…", MapIcons.Save, () => _ = _editor.SaveAsync(saveAs: true)),
+                Item("Сохранить как…", MapIcons.Save, () => UiTasks.Forget(this, () => _editor.SaveAsync(saveAs: true))),
                 autosaveItem,
                 new Separator(),
                 Item("Размер и область…", MapIcons.ResizeRegion, OpenCanvasWorkflow),
@@ -1187,6 +1187,12 @@ public sealed partial class EditorView : UserControl
     /// The editor's one-line messages ("Ассет выбран…", refusals, errors) appear for a few seconds
     /// over the canvas and leave, instead of a third permanent bottom line that took map height.
     /// </summary>
+    internal void ShowOperationError(string text)
+    {
+        _statusToastText = ""; // Repeated failures must show again after a dismissed toast.
+        ShowStatusToast(text);
+    }
+
     private void ShowStatusToast(string text)
     {
         if (text == _statusToastText) return;

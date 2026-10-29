@@ -841,12 +841,7 @@ public sealed class WizardWindow : Window
                 },
             },
         }.Classed("primary", "wizard-action");
-        create.Click += async (_, _) =>
-        {
-            create.IsEnabled = false;
-            try { await CreateAsync(); }
-            finally { create.IsEnabled = true; }
-        };
+        create.Click += (_, _) => UiTasks.Forget(this, () => UiTasks.RunButtonAsync(create, CreateAsync));
         AutomationProperties.SetName(create, "Создать карту");
         return create;
     }

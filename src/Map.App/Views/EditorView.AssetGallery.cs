@@ -112,9 +112,9 @@ public sealed partial class EditorView
 
         // ---- toolbar
         var uploadMenu = new MenuFlyout();
-        uploadMenu.Items.Add(MenuEntry("Добавить файл…", () => _ = ImportAssetAsync(linked: false), "ImportAssetButton"));
-        uploadMenu.Items.Add(MenuEntry("Добавить набор…", () => _ = ImportAssetSetAsync(), "ImportAssetSetButton"));
-        uploadMenu.Items.Add(MenuEntry("Связать файл…", () => _ = ImportAssetAsync(linked: true), "LinkAssetButton"));
+        uploadMenu.Items.Add(MenuEntry("Добавить файл…", () => UiTasks.Forget(this, () => ImportAssetAsync(linked: false)), "ImportAssetButton"));
+        uploadMenu.Items.Add(MenuEntry("Добавить набор…", () => UiTasks.Forget(this, ImportAssetSetAsync), "ImportAssetSetButton"));
+        uploadMenu.Items.Add(MenuEntry("Связать файл…", () => UiTasks.Forget(this, () => ImportAssetAsync(linked: true)), "LinkAssetButton"));
         var upload = ToolbarButton("LibraryUploadMenu", "Загрузить", MapIcons.Import, "Добавить свои PNG, JPEG, WebP или SVG");
         upload.Flyout = uploadMenu;
 
@@ -189,7 +189,7 @@ public sealed partial class EditorView
             RebuildGalleryRows();
         }, "LibraryCollapseGroupsItem"));
         viewMenu.Items.Add(new Separator());
-        viewMenu.Items.Add(MenuEntry("Загрузить свой ассет…", () => _ = ImportAssetAsync(linked: false), "LibraryUploadItem"));
+        viewMenu.Items.Add(MenuEntry("Загрузить свой ассет…", () => UiTasks.Forget(this, () => ImportAssetAsync(linked: false)), "LibraryUploadItem"));
         var view = new Button { Content = MapIcons.Stroked(MapIcons.Sort, 17), Flyout = viewMenu }.Named("LibraryViewMenu").Classed("icon");
         AutomationProperties.SetName(view, "Вид галереи");
         ToolTip.SetTip(view, "Названия, варианты, группы, загрузка");
@@ -934,22 +934,23 @@ public sealed partial class EditorView
         var range = (_editor.VisibleLibraryTileWindow.FirstIndex, _editor.VisibleLibraryTileWindow.Count);
         if (_reportedLibraryRange == range) return;
         _reportedLibraryRange = range;
-        _ = CheckVisibleAvailabilityAsync();
+        UiTasks.Forget(this, CheckVisibleAvailabilityAsync);
     }
 
     private async void QueueLibrarySearch()
     {
-        _librarySearchCancellation?.Cancel();
-        _librarySearchCancellation?.Dispose();
-        var cancellation = _librarySearchCancellation = new CancellationTokenSource();
         try
         {
+            _librarySearchCancellation?.Cancel();
+            _librarySearchCancellation?.Dispose();
+            var cancellation = _librarySearchCancellation = new CancellationTokenSource();
             SyncTagSuggestions();
             await Task.Delay(140, cancellation.Token);
             await _editor.SearchLibraryAsync((_assetSearch.Text ?? "").Trim(), cancellation.Token);
             if (!cancellation.IsCancellationRequested) SyncAssetList();
         }
         catch (OperationCanceledException) { }
+        catch (Exception error) { UiTasks.Report(this, "Library search", error); }
     }
 
     // ------------------------------------------------------------------ side panel strips

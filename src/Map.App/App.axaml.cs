@@ -53,7 +53,7 @@ public partial class App : Application
                 if (argument.EndsWith(".mapproj", StringComparison.OrdinalIgnoreCase) && File.Exists(argument))
                 {
                     var mapPath = Path.GetFullPath(argument);
-                    mainWindow.Opened += (_, _) => _ = mainWindow.OpenPathAsync(mapPath);
+                    mainWindow.Opened += (_, _) => Views.UiTasks.Forget(mainWindow, () => mainWindow.OpenPathAsync(mapPath));
                     break;
                 }
 

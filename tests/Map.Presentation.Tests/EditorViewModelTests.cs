@@ -11,7 +11,7 @@ public class EditorViewModelTests
 {
     private static (EditorViewModel Editor, FakeProjectStore Store, FakeRecentMaps Recent,
         FakeFilePicker Picker, FakePrompts Prompts) NewEditor(string? path = null, bool startDirty = true,
-            Map.Core.Resources.WorkingMemoryBudget? memory = null)
+            Map.Core.Resources.WorkingMemoryBudget? memory = null, FakeLog? log = null)
     {
         var store = new FakeProjectStore();
         var recent = new FakeRecentMaps();
@@ -20,7 +20,7 @@ public class EditorViewModelTests
 
         var editor = new EditorViewModel(
             TestData.Document(), path, startDirty,
-            store, recent, picker, prompts, new FakeLog(),
+            store, recent, picker, prompts, log ?? new FakeLog(),
             clock: () => new DateTimeOffset(2026, 8, 25, 15, 0, 0, TimeSpan.Zero), memory: memory);
 
         return (editor, store, recent, picker, prompts);
@@ -261,6 +261,111 @@ public class EditorViewModelTests
         // A later retry can still succeed.
         Assert.True(await editor.SaveAsync());
         Assert.Equal(SaveState.Saved, editor.SaveState);
+    }
+
+    [Fact]
+    public async Task Unexpected_save_errors_are_reported_without_stuck_status_or_lost_history_and_can_retry()
+    {
+        var log = new FakeLog();
+        var (editor, store, recent, picker, _) = NewEditor(log: log);
+        picker.NextSavePath = @"C:\maps\unexpected.mapproj";
+        editor.AddObject(SceneObjectKind.Rectangle);
+        var document = editor.Session.Document;
+        var depth = editor.Session.UndoDepth;
+        foreach (var error in new Exception[]
+        {
+            new MapProjectResourceLimitException("too many tiles"),
+            new ArgumentException("thumbnail failed"),
+            new OutOfMemoryException("allocation failed"),
+        })
+        {
+            store.NextSaveFailures.Enqueue(error);
+            Assert.False(await editor.SaveAsync());
+            Assert.Equal(SaveState.SaveFailed, editor.SaveState);
+            Assert.True(editor.Session.IsDirty);
+            Assert.Same(document, editor.Session.Document);
+            Assert.Equal(depth, editor.Session.UndoDepth);
+            Assert.Null(editor.DocumentPath);
+            Assert.Contains("Не удалось сохранить файл", editor.StatusDetail);
+            Assert.Empty(recent.Items);
+            Assert.Equal(0, editor.ActiveResourceOperations);
+        }
+        Assert.Equal(3, log.Lines.Count(line => line == "ERROR SAVE_FAILED"));
+
+        Assert.True(await editor.SaveAsync());
+        Assert.Equal(SaveState.Saved, editor.SaveState);
+        Assert.False(editor.Session.IsDirty);
+    }
+
+    [Fact]
+    public async Task Closing_with_save_keeps_the_document_open_after_an_unexpected_error()
+    {
+        var (editor, store, _, picker, prompts) = NewEditor();
+        picker.NextSavePath = @"C:\maps\close-fail.mapproj";
+        editor.AddObject(SceneObjectKind.Rectangle);
+        prompts.NextCloseChoice = CloseChoice.Save;
+        store.NextSaveFailures.Enqueue(new ArgumentException("bad document"));
+
+        Assert.False(await editor.ConfirmCloseAsync());
+        Assert.True(editor.Session.IsDirty);
+        Assert.Equal(SaveState.SaveFailed, editor.SaveState);
+        Assert.True(await editor.SaveAsync());
+    }
+
+    [Fact]
+    public async Task A_recent_list_failure_after_persistence_does_not_turn_the_saved_file_into_a_failed_save()
+    {
+        var log = new FakeLog();
+        var (editor, store, recent, picker, _) = NewEditor(log: log);
+        picker.NextSavePath = @"C:\maps\saved-with-warning.mapproj";
+        recent.NextTouchFailure = new ArgumentException("recent index broke");
+        editor.AddObject(SceneObjectKind.Rectangle);
+
+        Assert.True(await editor.SaveAsync());
+        Assert.Equal(SaveState.Saved, editor.SaveState);
+        Assert.False(editor.Session.IsDirty);
+        Assert.Single(store.Saved);
+        Assert.Contains("Карта сохранена", editor.StatusDetail);
+        Assert.Contains("ERROR RECENT_UPDATE_AFTER_SAVE_FAILED", log.Lines);
+    }
+
+    [Fact]
+    public void Save_resumes_on_the_callers_synchronization_context()
+    {
+        var (editor, _, _, picker, _) = NewEditor();
+        picker.NextSavePath = @"C:\maps\ui-thread.mapproj";
+        editor.AddObject(SceneObjectKind.Rectangle);
+        var uiThread = Environment.CurrentManagedThreadId;
+        var foreignNotifications = new List<string>();
+        editor.PropertyChanged += (_, e) =>
+        {
+            if (Environment.CurrentManagedThreadId != uiThread) foreignNotifications.Add(e.PropertyName ?? "");
+        };
+        var context = new PumpingSynchronizationContext();
+        var previous = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(context);
+        try
+        {
+            var save = editor.SaveAsync();
+            context.RunUntilCompleted(save);
+            Assert.True(save.Result);
+        }
+        finally { SynchronizationContext.SetSynchronizationContext(previous); }
+        Assert.Equal(SaveState.Saved, editor.SaveState);
+        Assert.Empty(foreignNotifications);
+    }
+
+    private sealed class PumpingSynchronizationContext : SynchronizationContext
+    {
+        private readonly System.Collections.Concurrent.BlockingCollection<(SendOrPostCallback Callback, object? State)> _queue = [];
+        public override void Post(SendOrPostCallback d, object? state) => _queue.Add((d, state));
+        public void RunUntilCompleted(Task task)
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(30);
+            while (!task.IsCompleted && DateTime.UtcNow < deadline)
+                if (_queue.TryTake(out var item, 50)) item.Callback(item.State);
+            Assert.True(task.IsCompleted, "Save did not complete on the caller's context.");
+        }
     }
 
     [Fact]

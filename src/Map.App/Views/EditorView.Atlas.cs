@@ -104,7 +104,7 @@ public sealed partial class EditorView
             _atlasCheckWindow?.Close();
             foreach (var image in _atlasImages) image.Dispose(); _atlasImages.Clear();
         };
-        Refresh(); _ = _editor.RefreshAtlasAsync();
+        Refresh(); UiTasks.Forget(this, _editor.RefreshAtlasAsync);
         return new Border
         {
             Child = new ScrollViewer { HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
@@ -146,11 +146,11 @@ public sealed partial class EditorView
         (bool, string) Always() => (true, "Подходит к этой карте");
 
         Group("Атлас: карта и её подкарты");
-        Item("AtlasCheckButton", "Проверка атласа", () => _ = ShowAtlasCheckAsync(),
+        Item("AtlasCheckButton", "Проверка атласа", () => UiTasks.Forget(this, ShowAtlasCheckAsync),
             () => InAtlas() ? (true, "Подходит: у карты есть связи в атласе") : (false, "Эта карта пока не в атласе — проверять нечего"));
         Item("ScaleSyncButton", "Согласование", ShowScaleSync,
             () => HasChildren() ? (true, "Подходит: у карты есть подкарты") : (false, "Нужны подкарты этой карты"));
-        Item("AtlasRefreshButton", "Обновить атлас", () => _ = _editor.RefreshAtlasAsync(),
+        Item("AtlasRefreshButton", "Обновить атлас", () => UiTasks.Forget(this, _editor.RefreshAtlasAsync),
             () => HasChildren() ? (true, "Подходит: у карты есть подкарты") : (false, "Нужны подкарты этой карты"));
         Group("Мир во времени и пространстве");
         Item("TimelineButton", "Время", ShowTimeline, Always);
@@ -265,7 +265,7 @@ public sealed partial class EditorView
         }
         var body = new StackPanel { Margin = new Thickness(16), Spacing = 12, Children = { summary,
             new ScrollViewer { Content = issues, MaxHeight = 330 },
-            Ui.TextButton("AtlasCheckAgainButton", "Проверить снова", () => _ = Inspect(), "compact"),
+            Ui.TextButton("AtlasCheckAgainButton", "Проверить снова", () => UiTasks.Forget(this, Inspect), "compact"),
             Ui.TextButton("AtlasCheckCloseButton", "Закрыть", window.Close, "compact") } };
         window.Content = body;
         window.Closed += (_, _) => { if (ReferenceEquals(_atlasCheckWindow, window)) _atlasCheckWindow = null; };

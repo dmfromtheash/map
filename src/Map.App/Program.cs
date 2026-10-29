@@ -32,7 +32,9 @@ internal static class Program
         {
             log.Info("Startup.");
             // Best effort recovery of disposable viewing data left by earlier runs or a crash.
-            _ = Task.Run(() => PngViewCache.TrimWhenIdle(Path.Combine(profileRoot, "ImageViewCache")));
+            Views.UiTasks.Forget(
+                () => Task.Run(() => PngViewCache.TrimWhenIdle(Path.Combine(profileRoot, "ImageViewCache"))),
+                (operation, error) => log.Error(operation, error));
             BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
             log.Info("Clean shutdown.");
         }

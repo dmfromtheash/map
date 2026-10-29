@@ -857,24 +857,26 @@ public sealed partial class EditorView
     /// </summary>
     private Button AreaLinkButton(string name)
     {
-        var button = Ui.TextButton(name, "Область", () =>
-        {
-            if (!_editor.OpenSelectionArea()) return;
-            // The asset tool's panel is mounted by the sync that follows; open its «Красота» page once it is there.
-            Dispatcher.UIThread.Post(() =>
-            {
-                var tab = this.GetVisualDescendants().OfType<Avalonia.Controls.Primitives.ToggleButton>()
-                    .FirstOrDefault(b => b.Name == "EditableAreaTabsBeauty");
-                tab?.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
-                tab?.BringIntoView();
-            }, DispatcherPriority.Background);
-        }, "compact", "primary");
+        var button = Ui.TextButton(name, "Область", () => OpenSelectionAreaTab("EditableAreaTabsBeauty"), "compact", "primary");
         button.HorizontalAlignment = HorizontalAlignment.Stretch;
         button.Margin = new Thickness(0, 0, 0, 8);
         button.IsVisible = false;
         button.WithTip("Открыть область этих объектов: плотность, правила и «Красота».");
         _areaLinks.Add(button);
         return button;
+    }
+
+    private void OpenSelectionAreaTab(string tabName)
+    {
+        if (!_editor.OpenSelectionArea()) return;
+        // The asset tool's panel is mounted by the sync that follows; select the requested existing page afterwards.
+        Dispatcher.UIThread.Post(() =>
+        {
+            var tab = this.GetVisualDescendants().OfType<Avalonia.Controls.Primitives.ToggleButton>()
+                .FirstOrDefault(b => b.Name == tabName);
+            tab?.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+            tab?.BringIntoView();
+        }, DispatcherPriority.Background);
     }
 
     private void SyncAreaLinks()
@@ -970,14 +972,14 @@ public sealed partial class EditorView
         {
             if (e.Key == Key.Enter)
             {
-                _ = GroupSelectionInteractiveAsync();
+                UiTasks.Forget(this, GroupSelectionInteractiveAsync);
                 e.Handled = true;
             }
         };
 
         _groupCreateButton = ShortcutTextButton(
             "GroupCreateButton", "Сгруппировать", EditorShortcutSettings.Commands.Group,
-            () => _ = GroupSelectionInteractiveAsync(), "primary", "compact");
+            () => UiTasks.Forget(this, GroupSelectionInteractiveAsync), "primary", "compact");
         _groupRenameButton = Ui.TextButton("GroupRenameButton", "Переименовать группу", () =>
         {
             if (_editor.RenameSelectedGroup(_groupNameBox.Text ?? ""))
@@ -2011,7 +2013,7 @@ public sealed partial class EditorView
         if (_editor.CurrentVariant is { } current
             && _editor.AvailabilityOf(current.Sha256) == AssetAvailability.Unknown)
         {
-            _ = CheckVisibleAvailabilityAsync();
+            UiTasks.Forget(this, CheckVisibleAvailabilityAsync);
         }
     }
 

@@ -1422,7 +1422,7 @@ public sealed partial class EditorView
         }
 
         _reportedLibraryRange = current;
-        _ = CheckVisibleAvailabilityAsync();
+        UiTasks.Forget(this, CheckVisibleAvailabilityAsync);
     }
 
     /// <summary>
@@ -2064,9 +2064,9 @@ public sealed partial class EditorView
                             Ui.TextButton("KeepStampPlaceholderButton", "Оставить заменитель",
                                 _editor.KeepSelectedStampPlaceholder, "compact"),
                             AssetCommand("RepairAssetSourceButton", "Найти исходник…",
-                                () => _ = RepairSelectedAssetAsync(), "compact"),
+                                () => UiTasks.Forget(this, RepairSelectedAssetAsync), "compact"),
                             AssetCommand("RemoveAssetRecordButton", "Удалить из каталога…",
-                                () => _ = RemoveSelectedAssetAsync(), "destructive", "compact"),
+                                () => UiTasks.Forget(this, RemoveSelectedAssetAsync), "destructive", "compact"),
                             AssetCommand("UseAssetStrokeButton", "Использовать для обводки", () =>
                             {
                                 if (_selectedAsset is not null)
@@ -2537,7 +2537,7 @@ public sealed partial class EditorView
             _pending[path] = [target];
             string? original = null;
             if (_rebuilt.Add(path)) original = OriginalFor?.Invoke(path);
-            _ = LoadAsync(path, original);
+            UiTasks.Forget(target, () => LoadAsync(path, original));
         }
 
         private async Task LoadAsync(string path, string? original)

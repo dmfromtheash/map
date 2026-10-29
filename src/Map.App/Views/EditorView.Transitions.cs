@@ -155,12 +155,12 @@ public sealed partial class EditorView
                     var capturedMap = map;
                     var choice = new ComboBox { Name = "AtlasLevel_" + map.Id.ToString("N"), Width = 140, ItemsSource = WorldLevels.Select(MapTransition.LevelTitle).ToArray(),
                         SelectedIndex = Array.IndexOf(WorldLevels, map.Level) };
-                    choice.SelectionChanged += async (_, _) =>
+                    choice.SelectionChanged += (_, _) => UiTasks.Forget(this, async () =>
                     {
                         if (choice.SelectedIndex < 0 || WorldLevels[choice.SelectedIndex] == capturedMap.Level) return;
                         await _editor.SetAtlasMapLevelAsync(capturedMap.Id, WorldLevels[choice.SelectedIndex]);
                         SyncTransitions();
-                    };
+                    });
                     levels.Children.Add(new DockPanel { Children = { choice.Docked(Dock.Right), new TextBlock { Text = map.Title, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis } } });
                 }
         }

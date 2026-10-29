@@ -414,7 +414,7 @@ public sealed partial class EditorView
                         RefreshPresets();
                     }
                 }, "segment"),
-                Ui.TextButton("DeleteBrushPresetButton", "Удалить", async () =>
+                Ui.AsyncButton("DeleteBrushPresetButton", "Удалить", async () =>
                 {
                     if (!TrySelectedPreset(out var preset) || TopLevel.GetTopLevel(this) is not Window owner)
                         return;
