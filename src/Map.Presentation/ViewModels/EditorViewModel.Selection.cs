@@ -345,17 +345,6 @@ public sealed partial class EditorViewModel
         AfterEdit();
     }
 
-    public void ApplyLandShape(LandShapeKind kind)
-    {
-        var centre = Session.Viewport.ScreenToWorld(
-            Session.Viewport.ViewWidth / 2, Session.Viewport.ViewHeight / 2);
-        const double size = 512;
-        var bounds = new WorldBounds(
-            centre.X - (size / 2), centre.Y - (size / 2),
-            centre.X + (size / 2), centre.Y + (size / 2));
-        ApplyLandShape(kind, bounds);
-    }
-
     public bool ApplyLandShape(
         LandShapeKind kind, WorldBounds bounds, IReadOnlyList<LandPoint>? points = null)
     {
@@ -1566,31 +1555,6 @@ public sealed partial class EditorViewModel
             var levels = selected.Select(item => item.Sublayer).Distinct().ToList();
             return levels.Count == 1 ? levels[0].ToString() : "разные";
         }
-    }
-
-    /// <summary>
-    /// Moves the selection to the next compatible object layer, wrapping around. This is the one
-    /// click behind the "Слой" control: the user reads the current layer and steps to another one
-    /// without hunting for a separate dialog.
-    /// </summary>
-    public bool CycleSelectionLayer()
-    {
-        var targets = AvailableObjectLayerTargets;
-        if (targets.Count == 0)
-        {
-            StatusDetail = "Нет другого видимого разблокированного слоя объектов.";
-            return false;
-        }
-
-        if (targets.Count == 1 && targets[0].IsCurrent)
-        {
-            StatusDetail = "Это единственный доступный слой объектов.";
-            return false;
-        }
-
-        var currentIndex = targets.ToList().FindIndex(target => target.IsCurrent);
-        var next = targets[(currentIndex + 1 + targets.Count) % targets.Count];
-        return MoveSelectionToLayer(next.Id);
     }
 
     /// <summary>

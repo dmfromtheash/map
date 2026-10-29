@@ -695,13 +695,6 @@ public sealed partial class EditorViewModel
         return true;
     }
 
-    public void MoveSelectedVectorNode()
-    {
-        if (SelectedVectorNode is { } node)
-            SetSelectedVectorNode(node.X, node.Y, node.Kind, node.ControlInX, node.ControlInY,
-                node.ControlOutX, node.ControlOutY);
-    }
-
     public void ToggleSelectedNodeCurve()
     {
         if (EditableSelection() is not { } before || SelectedVectorNode is not { } node) return;
@@ -1871,23 +1864,6 @@ public sealed partial class EditorViewModel
         }
 
         Session.Execute(UpdateLayerCommand.SetLocked(layer, !layer.Locked));
-        AfterEdit();
-    }
-
-    public void CycleActiveLayerBlend()
-    {
-        if (ActiveLayer is not { } layer)
-        {
-            return;
-        }
-
-        var next = layer.Blend switch
-        {
-            "Normal" => "Multiply",
-            "Multiply" => "Screen",
-            _ => "Normal",
-        };
-        Session.Execute(UpdateLayerCommand.SetBlend(layer, next));
         AfterEdit();
     }
 

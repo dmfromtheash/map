@@ -631,8 +631,6 @@ public sealed class MainWindow : Window
         }
     }
 
-    private IReadOnlySet<ShortcutContext> ActiveShortcutContexts() => EditorKeyRouting.Contexts(_editorView);
-
     private bool ExecuteShortcut(string command, Key sourceKey)
     {
         if (command == EditorShortcutSettings.Commands.NewMap)

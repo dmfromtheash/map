@@ -84,7 +84,6 @@ public static class MapIcons
     public const string Versions = "M12 6 A7 7 0 1 1 5 13 M5 13 H2.5 M5 13 V10.5 M12 9 V13 L15 15";
     public const string ResizeRegion = "M5 7 H16 V17 H5 Z M3 4.5 H18 M3 4.5 L5 3 M3 4.5 L5 6 " +
                                        "M19 5 V19 M19 5 L17.5 7 M19 5 L20.5 7";
-    public const string Help = "M3.5 5.5 C6.5 4.5 9.5 5 12 7 C14.5 5 17.5 4.5 20.5 5.5 V19 C17.5 18 14.5 18.5 12 20 C9.5 18.5 6.5 18 3.5 19 Z M12 7 V20";
 
     // ------------------------------------------------------------------ states
     public const string Eye = "M2.5 12 C 5.5 7.5, 9 5.5, 12 5.5 S 18.5 7.5, 21.5 12 " +
@@ -104,7 +103,6 @@ public static class MapIcons
                                "M18.6 5.4 L16.6 7.4 M7.4 16.6 L5.4 18.6";
     public const string Trash = "M4 6.5 H20 M9 6.5 V3.5 H15 V6.5 M6 6.5 L7 20.5 H17 L18 6.5 " +
                                 "M10 10.5 V16.5 M14 10.5 V16.5";
-    public const string Eraser = "M13.5 3.8 L20.7 11 L12.8 18.9 H6 L2.7 15.6 Z M6.6 10.7 L14.8 18.9";
     public const string Duplicate = "M8 8 H20 V20 H8 Z M4.5 16 V4 H16";
     public const string ArrowUp = "M12 19.5 V4.5 M6 10.5 L12 4.5 L18 10.5";
     public const string ArrowDown = "M12 4.5 V19.5 M6 13.5 L12 19.5 L18 13.5";
@@ -241,10 +239,6 @@ public static class MapIcons
     public static readonly string HexMirror = "M12 3 V21 M9 6.5 L4 17.5 H9 Z M15 6.5 L20 17.5 H15 Z";
     public static readonly string HexTrail = "M4 20 C5.5 17.5 7 16 9 15 M11.5 13.5 C13 12.5 14 11.5 15 10 M16.5 7.5 L18 5 M19.5 3.5 L20 3";
     public static readonly string HexBorder = "M3.5 19 L6.5 15 M8.5 13.5 L11.5 15 M13 13 L15 9 M16.5 7 L20.5 4";
-    public static readonly string HexGrid = "M7 3.5 L11 5.8 V10.3 L7 12.6 L3 10.3 V5.8 Z M17 3.5 L21 5.8 V10.3 L17 12.6 L13 10.3 V5.8 Z " +
-        "M12 11.4 L16 13.7 V18.2 L12 20.5 L8 18.2 V13.7 Z";
-    public static readonly string HexFootprint = "M12 2.5 L20.2 7.2 V16.8 L12 21.5 L3.8 16.8 V7.2 Z M12 8.5 L15 10.2 V13.8 L12 15.5 L9 13.8 V10.2 Z";
-    public static readonly string HexBoard = "M3.5 5 H20.5 V19 H3.5 Z M3.5 9.5 H20.5 M3.5 14.2 H20.5 M9.2 5 V19 M14.8 5 V19";
     public static readonly string HexExport = "M12 14.5 V3.5 M8 7.5 L12 3.5 L16 7.5 M5 12.5 V20 H19 V12.5";
     public static readonly string HexPrint = "M7 9 V3.5 H17 V9 M7 17 H4.5 V9 H19.5 V17 H17 M7 14 H17 V20.5 H7 Z";
     public static readonly string HexCopy = "M8.5 8.5 H19.5 V19.5 H8.5 Z M15.5 8.5 V4.5 H4.5 V15.5 H8.5";
@@ -336,8 +330,6 @@ public static class MapIcons
     public const string Folder = "M3 6 C3 5.4 3.5 5 4 5 H9 L11 7.2 H20 C20.6 7.2 21 7.6 21 8.2 V18 C21 18.6 20.6 19 20 19 H4 C3.4 19 3 18.6 3 18 Z";
     public static readonly SolidGlyph SolidMore = new(
         "M5 10 A2 2 0 1 0 5 14 A2 2 0 1 0 5 10 Z M12 10 A2 2 0 1 0 12 14 A2 2 0 1 0 12 10 Z M19 10 A2 2 0 1 0 19 14 A2 2 0 1 0 19 10 Z");
-    public const string Clock = "M12 3.5 A8.5 8.5 0 1 0 12 20.5 A8.5 8.5 0 1 0 12 3.5 Z M12 7.5 V12 L15 14";
-    public const string Filter = "M3.5 5 H20.5 L14 12.6 V18.5 L10 20 V12.6 Z";
 
     /// <summary>The solid rail glyph of a tool.</summary>
     public static SolidGlyph SolidTool(Map.Presentation.ViewModels.EditorTool tool) => tool switch

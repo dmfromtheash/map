@@ -339,7 +339,6 @@ public sealed partial class EditorView : UserControl
     private readonly TextBlock _libraryDateHint = new() { Name = "LibraryDateHint" };
     private readonly TextBlock _libraryFilterSummary = new() { Name = "LibraryFilterSummary" };
     private readonly TextBlock _variantStateText = new() { Name = "VariantStateText" };
-    private readonly Dictionary<string, List<TileState>> _tileStates = [];
     private Expander _setManagementDetails = null!;
     private Control _selectedSetBlock = null!;
     private Control _stampGestureBlock = null!;
@@ -362,7 +361,6 @@ public sealed partial class EditorView : UserControl
     private TextBlock _stampVariantName = null!;
     private StackPanel _stampAreaControls = null!;
     private (int First, int Count) _reportedLibraryRange = (-1, -1);
-    private int _lastSelectedLibraryRow = -1;
     private ToggleButton _randomFlipToggle = null!;
     private ToggleButton _avoidOverlapToggle = null!;
     private TextBlock _stampToolCurrentText = null!;

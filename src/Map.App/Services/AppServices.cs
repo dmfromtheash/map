@@ -136,9 +136,6 @@ public sealed class DialogPrompts(Window owner) : IUserPrompts
             return result;
         });
 
-    public Task ShowErrorAsync(string title, string message) =>
-        Dispatcher.UIThread.InvokeAsync(() => ErrorWindow.ShowAsync(owner, title, message));
-
     public Task<bool> ConfirmRestoreCheckpointAsync(string checkpointName) =>
         Dispatcher.UIThread.InvokeAsync(() => ConfirmationWindow.ShowAsync(
             owner,

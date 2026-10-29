@@ -1007,7 +1007,6 @@ public sealed class NativeEditorIntegrityApplication : Application
             Task.FromResult(CloseChoice.Cancel);
         public Task<bool> ConfirmRestoreCheckpointAsync(string checkpointName) => Task.FromResult(false);
         public Task<bool> ConfirmDeleteCheckpointAsync(string checkpointName) => Task.FromResult(false);
-        public Task ShowErrorAsync(string title, string message) => Task.CompletedTask;
     }
 
     /// <summary>Only the delete confirmation is accepted, and only for the synthetic ghost card.</summary>
@@ -1020,7 +1019,6 @@ public sealed class NativeEditorIntegrityApplication : Application
             Task.FromResult(CloseChoice.Cancel);
         public Task<bool> ConfirmRestoreCheckpointAsync(string checkpointName) => Task.FromResult(false);
         public Task<bool> ConfirmDeleteCheckpointAsync(string checkpointName) => Task.FromResult(false);
-        public Task ShowErrorAsync(string title, string message) => Task.CompletedTask;
     }
 
     private sealed class SmokeLog : IAppLog

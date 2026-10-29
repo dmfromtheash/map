@@ -22,7 +22,6 @@ public sealed class FakePrompts : IUserPrompts
     public bool NextDeleteCheckpointConfirmation { get; set; }
     public bool NextMigrationConfirmation { get; set; }
     public bool NextDeleteProjectConfirmation { get; set; }
-    public List<string> Errors { get; } = [];
     public int CloseAsked { get; private set; }
     public int RestoreCheckpointAsked { get; private set; }
     public int DeleteCheckpointAsked { get; private set; }
@@ -49,12 +48,6 @@ public sealed class FakePrompts : IUserPrompts
     {
         CloseAsked++;
         return Task.FromResult(NextCloseChoice);
-    }
-
-    public Task ShowErrorAsync(string title, string message)
-    {
-        Errors.Add(message);
-        return Task.CompletedTask;
     }
 
     public Task<bool> ConfirmRestoreCheckpointAsync(string checkpointName)

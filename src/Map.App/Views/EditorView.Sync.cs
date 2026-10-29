@@ -106,31 +106,6 @@ public sealed partial class EditorView
         });
     }
 
-    private WrapPanel ShortcutChipRow(IReadOnlyList<string> commands, string meaning)
-    {
-        var row = new WrapPanel { Orientation = Orientation.Horizontal };
-        _shortcutSurfaceSyncs.Add(() =>
-        {
-            row.Children.Clear();
-            foreach (var command in commands)
-            {
-                var gesture = _editor.Shortcuts.Get(command);
-                if (gesture.Length == 0) continue;
-                var chip = Ui.KeyChip(gesture);
-                chip.Margin = new Thickness(0, 2, 4, 2);
-                row.Children.Add(chip);
-            }
-
-            row.Children.Add(new TextBlock
-            {
-                Text = meaning,
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(2, 0, 0, 0),
-            }.Classed("faint", "role-caption"));
-        });
-        return row;
-    }
-
     private readonly HashSet<string> _pendingUiProperties = [];
     private readonly object _uiSyncGate = new();
     private bool _uiSyncQueued;
@@ -1173,72 +1148,6 @@ public sealed partial class EditorView
         return System.Threading.Tasks.Task.CompletedTask;
     }
 
-    private static async System.Threading.Tasks.Task<string?> AskGroupNameAsync(
-        Window? owner, int objectCount)
-    {
-        var input = new TextBox { Name = "GroupNameInput", MinWidth = 320, MaxLength = 80 };
-        AutomationProperties.SetName(input, "Имя группы");
-
-        var completion = new System.Threading.Tasks.TaskCompletionSource<string?>();
-        var window = new Window
-        {
-            Title = "Имя группы",
-            Name = "GroupNameWindow",
-            SizeToContent = SizeToContent.WidthAndHeight,
-            WindowStartupLocation = WindowStartupLocation.CenterOwner,
-            CanResize = false,
-        };
-
-        var confirm = Ui.TextButton("ConfirmGroupNameButton", "Создать группу", () =>
-        {
-            completion.TrySetResult((input.Text ?? "").Trim());
-            window.Close();
-        });
-        var cancel = Ui.TextButton("CancelGroupNameButton", "Отмена", () =>
-        {
-            completion.TrySetResult(null);
-            window.Close();
-        });
-
-        window.Content = new Border
-        {
-            Padding = new Thickness(18),
-            Child = new StackPanel
-            {
-                Spacing = 12,
-                Children =
-                {
-                    new TextBlock
-                    {
-                        Text = $"В группу войдут: {EditorLabels.Objects(objectCount)}. Как её назвать?",
-                    }.Classed("role-panel"),
-                    input,
-                    new StackPanel
-                    {
-                        Orientation = Orientation.Horizontal,
-                        Spacing = 8,
-                        HorizontalAlignment = HorizontalAlignment.Right,
-                        Children = { cancel, confirm },
-                    },
-                },
-            },
-        };
-
-        window.Closed += (_, _) => completion.TrySetResult(null);
-        window.Opened += (_, _) => input.Focus();
-
-        if (owner is not null)
-        {
-            await window.ShowDialog(owner);
-        }
-        else
-        {
-            window.Show();
-        }
-
-        return await completion.Task;
-    }
-
     private void SyncLandButtons()
     {
         SyncLandMaterialPanel();
@@ -2194,16 +2103,12 @@ public sealed partial class EditorView
         var rows = _editor.LibraryRows;
         if (!ReferenceEquals(_gallerySourceRows, rows))
         {
-            // Rebuilding the source drops the realised containers, so the tiles they registered
-            // are stale: a recycled container would otherwise keep writing into a dead badge.
-            _tileStates.Clear();
             _reportedLibraryRange = (-1, -1);
             _gallerySourceRows = rows;
             RebuildGalleryRows();
         }
 
         _libraryGrid.SelectedIndex = -1;
-        _lastSelectedLibraryRow = _editor.SelectedLibraryRowIndex;
 
         // The grid stays in the accessibility tree even when empty - a control that disappears
         // cannot be found, focused or reported by a screen reader.

@@ -38,8 +38,6 @@ public interface IUserPrompts
     /// file that no longer exists would be a lie.
     /// </summary>
     Task<bool> ConfirmDeleteProjectAsync(string projectTitle, bool fileAlreadyMissing = false);
-
-    Task ShowErrorAsync(string title, string message);
 }
 
 /// <summary>What actually happened to the one explicit path the caller named.</summary>

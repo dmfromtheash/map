@@ -1370,12 +1370,5 @@ public static class Ui
         }.Named(name);
     }
 
-    /// <summary>A key chip used by the tool hint bar.</summary>
-    public static Control KeyChip(string text) => new Border
-    {
-        Child = new TextBlock { Text = text, FontSize = 11 }.Classed("muted"),
-        VerticalAlignment = VerticalAlignment.Center,
-    }.Classed("key");
-
     public static Control Spacer(double height) => new Border { Height = height };
 }

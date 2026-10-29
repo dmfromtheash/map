@@ -534,6 +534,5 @@ public sealed class AssetCatalogApplication : Application
         public Task<bool> ConfirmDeleteCheckpointAsync(string name) => Task.FromResult(false);
         public Task<bool> ConfirmMigrationCopyAsync() => Task.FromResult(false);
         public Task<bool> ConfirmDeleteProjectAsync(string title, bool fileAlreadyMissing = false) => Task.FromResult(false);
-        public Task ShowErrorAsync(string title, string message) => throw new InvalidOperationException(title + ": " + message);
     }
 }

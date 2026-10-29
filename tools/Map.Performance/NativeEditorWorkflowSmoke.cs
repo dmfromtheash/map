@@ -578,7 +578,6 @@ public sealed class NativeEditorWorkflowApplication : Application
             Task.FromResult(CloseChoice.Cancel);
         public Task<bool> ConfirmRestoreCheckpointAsync(string checkpointName) => Task.FromResult(false);
         public Task<bool> ConfirmDeleteCheckpointAsync(string checkpointName) => Task.FromResult(false);
-        public Task ShowErrorAsync(string title, string message) => Task.CompletedTask;
     }
 
     private sealed class SmokeLog : IAppLog
