@@ -21,7 +21,7 @@ using Map.Presentation.ViewModels;
 
 namespace Map.Performance;
 
-internal sealed record NativeStage12DReport(
+internal sealed record NativeProjectFileDiagnosticsReport(
     int SchemaVersion,
     DateTimeOffset RecordedUtc,
     string WindowMode,
@@ -39,9 +39,9 @@ internal sealed record NativeStage12DReport(
     bool GatePassed,
     IReadOnlyList<string> Limitations);
 
-internal static class NativeStage12DSmoke
+internal static class NativeProjectFileDiagnosticsSmoke
 {
-    public static NativeStage12DReport Run(PerformanceOptions options)
+    public static NativeProjectFileDiagnosticsReport Run(PerformanceOptions options)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -50,15 +50,15 @@ internal static class NativeStage12DSmoke
 
         var root = Path.Combine(Path.GetTempPath(), "map-stage12d-smoke", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
-        var fixture = Stage12DSmokeFixture.Create(root);
-        var completion = new TaskCompletionSource<NativeStage12DReport>(
+        var fixture = NativeProjectFileDiagnosticsFixture.Create(root);
+        var completion = new TaskCompletionSource<NativeProjectFileDiagnosticsReport>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var thread = new Thread(() =>
         {
             try
             {
-                NativeStage12DApplication.Configure(fixture, completion);
-                AppBuilder.Configure<NativeStage12DApplication>()
+                NativeProjectFileDiagnosticsApplication.Configure(fixture, completion);
+                AppBuilder.Configure<NativeProjectFileDiagnosticsApplication>()
                     .UsePlatformDetect()
                     .WithInterFont()
                     .StartWithClassicDesktopLifetime([], ShutdownMode.OnExplicitShutdown);
@@ -75,7 +75,7 @@ internal static class NativeStage12DSmoke
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
 
-        NativeStage12DReport report;
+        NativeProjectFileDiagnosticsReport report;
         try
         {
             report = completion.Task.WaitAsync(TimeSpan.FromSeconds(60)).GetAwaiter().GetResult();
@@ -104,14 +104,14 @@ internal static class NativeStage12DSmoke
     }
 }
 
-public sealed class NativeStage12DApplication : Application
+public sealed class NativeProjectFileDiagnosticsApplication : Application
 {
-    private static Stage12DSmokeFixture? _fixture;
-    private static TaskCompletionSource<NativeStage12DReport>? _completion;
+    private static NativeProjectFileDiagnosticsFixture? _fixture;
+    private static TaskCompletionSource<NativeProjectFileDiagnosticsReport>? _completion;
 
     internal static void Configure(
-        Stage12DSmokeFixture fixture,
-        TaskCompletionSource<NativeStage12DReport> completion)
+        NativeProjectFileDiagnosticsFixture fixture,
+        TaskCompletionSource<NativeProjectFileDiagnosticsReport> completion)
     {
         _fixture = fixture;
         _completion = completion;
@@ -175,7 +175,7 @@ public sealed class NativeStage12DApplication : Application
         base.OnFrameworkInitializationCompleted();
     }
 
-    private static async Task<NativeStage12DReport> ExecuteAsync(
+    private static async Task<NativeProjectFileDiagnosticsReport> ExecuteAsync(
         Window window,
         DashboardView view,
         DashboardViewModel dashboard,
@@ -184,7 +184,7 @@ public sealed class NativeStage12DApplication : Application
         SmokeFilePicker picker,
         SmokePrompts prompts,
         SmokeLog log,
-        Stage12DSmokeFixture fixture)
+        NativeProjectFileDiagnosticsFixture fixture)
     {
         view.Refresh();
         await SettleAsync();
@@ -247,7 +247,7 @@ public sealed class NativeStage12DApplication : Application
         await SettleAsync();
         var gate = dashboardVisible && promptVisible && cancelSafe && openedClean && sourceUnchanged
             && corruptionDistinct && resourceDistinct && futureDistinct && responsive;
-        return new NativeStage12DReport(
+        return new NativeProjectFileDiagnosticsReport(
             1,
             DateTimeOffset.UtcNow,
             "real Avalonia/Win32 hidden own-process window; ShowActivated=false; no system input",
@@ -338,14 +338,14 @@ public sealed class NativeStage12DApplication : Application
     }
 }
 
-internal sealed record Stage12DSmokeFixture(
+internal sealed record NativeProjectFileDiagnosticsFixture(
     string LegacySource,
     string Destination,
     string Corrupted,
     string ResourceLimited,
     string Future)
 {
-    public static Stage12DSmokeFixture Create(string root)
+    public static NativeProjectFileDiagnosticsFixture Create(string root)
     {
         var current = Path.Combine(root, "current-v2.mapproj");
         var source = Path.Combine(root, "legacy-v1.mapproj");

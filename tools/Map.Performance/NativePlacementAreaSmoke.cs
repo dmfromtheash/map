@@ -24,7 +24,7 @@ using SkiaSharp;
 
 namespace Map.Performance;
 
-internal sealed class NativeStage18Report
+internal sealed class NativePlacementAreaReport
 {
     public string Observation { get; } = "Own native Avalonia window, ShowActivated=false; scoped control events and production canvas router. File pickers and map reopen use local adapters. No system input. Timing ends at a rendered native canvas frame, not OS scan-out.";
     public Dictionary<string, bool> Checks { get; } = [];
@@ -72,16 +72,16 @@ internal sealed class NativeStage18Report
         && Checks.Count >= (MeasurementRequired && !MeasurementOnly ? 20 : 7) && Checks.Values.All(v => v);
 }
 
-internal static class NativeStage18Smoke
+internal static class NativePlacementAreaSmoke
 {
-    public static NativeStage18Report Run(PerformanceOptions options)
+    public static NativePlacementAreaReport Run(PerformanceOptions options)
     {
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
-        var completion = new TaskCompletionSource<NativeStage18Report>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completion = new TaskCompletionSource<NativePlacementAreaReport>(TaskCreationOptions.RunContinuationsAsynchronously);
         var thread = new Thread(() =>
         {
-            Stage18Application.Options = options; Stage18Application.Completion = completion;
-            try { AppBuilder.Configure<Stage18Application>().UsePlatformDetect().WithInterFont()
+            NativePlacementAreaApplication.Options = options; NativePlacementAreaApplication.Completion = completion;
+            try { AppBuilder.Configure<NativePlacementAreaApplication>().UsePlatformDetect().WithInterFont()
                 .StartWithClassicDesktopLifetime([], ShutdownMode.OnExplicitShutdown); }
             catch (Exception ex) { completion.TrySetException(ex); }
         }) { IsBackground = true };
@@ -90,11 +90,11 @@ internal static class NativeStage18Smoke
     }
 }
 
-public sealed class Stage18Application : Application
+public sealed class NativePlacementAreaApplication : Application
 {
     internal static PerformanceOptions Options = null!;
-    internal static TaskCompletionSource<NativeStage18Report> Completion = null!;
-    private readonly NativeStage18Report _report = new();
+    internal static TaskCompletionSource<NativePlacementAreaReport> Completion = null!;
+    private readonly NativePlacementAreaReport _report = new();
     private string _workspace = "";
     private AssetCatalog _catalog = null!;
     private string? _densitySetId, _treeSetId;
@@ -725,14 +725,14 @@ public sealed class Stage18Application : Application
         _view.Canvas.PressMoveReleaseForSmoke(a.X, a.Y, b.X, b.Y); }
     private T Find<T>(string name) where T : Control
     {
-        Stage19Application.RevealTab(_view, name);
+        NativeEditorScenarioApplication.RevealTab(_view, name);
         if (_view.GetVisualDescendants().OfType<T>().FirstOrDefault(c => c.Name == name) is { } found) return found;
         // The tool's own controls (FutureStamp…) live in the «Инструмент» half of the context area,
         // which a selected area hides behind «Объект» (2026-10-19): switch the way a user would.
         if (_view.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Name == "ContextScopeTool") is { } scope)
         {
             scope.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); _view.UpdateLayout();
-            Stage19Application.RevealTab(_view, name);
+            NativeEditorScenarioApplication.RevealTab(_view, name);
         }
         if (name.StartsWith("FutureStamp", StringComparison.Ordinal)
             && _view.GetVisualDescendants().OfType<T>().All(c => c.Name != name))

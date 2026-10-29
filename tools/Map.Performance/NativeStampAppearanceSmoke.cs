@@ -18,7 +18,7 @@ using SkiaSharp;
 
 namespace Map.Performance;
 
-internal sealed record NativeStage15Report(
+internal sealed record NativeStampAppearanceReport(
     int SchemaVersion,
     DateTimeOffset RecordedUtc,
     string WindowMode,
@@ -38,21 +38,21 @@ internal sealed record NativeStage15Report(
     bool GatePassed,
     IReadOnlyList<string> Limitations);
 
-internal static class NativeStage15Smoke
+internal static class NativeStampAppearanceSmoke
 {
-    public static NativeStage15Report Run(PerformanceOptions options)
+    public static NativeStampAppearanceReport Run(PerformanceOptions options)
     {
         if (!OperatingSystem.IsWindows())
             throw new PlatformNotSupportedException("The Stage 15 native smoke targets Windows.");
 
-        var completion = new TaskCompletionSource<NativeStage15Report>(
+        var completion = new TaskCompletionSource<NativeStampAppearanceReport>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var thread = new Thread(() =>
         {
             try
             {
-                NativeStage15Application.Configure(options, completion);
-                AppBuilder.Configure<NativeStage15Application>()
+                NativeStampAppearanceApplication.Configure(options, completion);
+                AppBuilder.Configure<NativeStampAppearanceApplication>()
                     .UsePlatformDetect()
                     .WithInterFont()
                     .StartWithClassicDesktopLifetime([], ShutdownMode.OnExplicitShutdown);
@@ -79,13 +79,13 @@ internal static class NativeStage15Smoke
     }
 }
 
-public sealed class NativeStage15Application : Application
+public sealed class NativeStampAppearanceApplication : Application
 {
     private static PerformanceOptions? _options;
-    private static TaskCompletionSource<NativeStage15Report>? _completion;
+    private static TaskCompletionSource<NativeStampAppearanceReport>? _completion;
 
     internal static void Configure(
-        PerformanceOptions options, TaskCompletionSource<NativeStage15Report> completion)
+        PerformanceOptions options, TaskCompletionSource<NativeStampAppearanceReport> completion)
     {
         _options = options;
         _completion = completion;
@@ -170,7 +170,7 @@ public sealed class NativeStage15Application : Application
         base.OnFrameworkInitializationCompleted();
     }
 
-    private static async Task<NativeStage15Report> ExecuteAsync(
+    private static async Task<NativeStampAppearanceReport> ExecuteAsync(
         PerformanceOptions options,
         string workspace,
         string savePath,
@@ -407,7 +407,7 @@ public sealed class NativeStage15Application : Application
         var passed = topology && compact && transient && exact && undoRedo && oneSelectedCommand
             && seriesScatter && preferencesReady && bothShadowModes && clipMaskWorked && saveExport
             && resourcesDisposed && File.Exists(screenshotPath) && File.Exists(catalogPanelScreenshotPath);
-        return new NativeStage15Report(
+        return new NativeStampAppearanceReport(
             1, DateTimeOffset.UtcNow,
             "native off-screen own-process window; ShowActivated=false; ShowInTaskbar=false; no system input",
             screenshotPath, topology, compact, transient, exact, undoRedo, oneSelectedCommand,

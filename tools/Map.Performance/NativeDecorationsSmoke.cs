@@ -254,7 +254,7 @@ public sealed class DecorationsApplication : Application
 
     private T Find<T>(string name) where T : Control
     {
-        Stage19Application.RevealTab(_view, name);
+        NativeEditorScenarioApplication.RevealTab(_view, name);
         for (var attempt = 0; attempt < 8; attempt++)
         {
             if (_view.GetVisualDescendants().OfType<T>().FirstOrDefault(c => c.Name == name) is { } found) return found;

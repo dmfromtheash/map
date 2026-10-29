@@ -6,21 +6,21 @@ using Map.Core.Editing;
 
 namespace Map.Performance;
 
-internal sealed record Stage13Fixture(
+internal sealed record LargeMapFixture(
     MapDocument Document,
     ObjectLayer ObjectLayer,
     FixtureManifest Manifest,
     SceneObject PointTarget,
     WorldBounds Marquee);
 
-internal static class Stage13Fixtures
+internal static class LargeMapFixtures
 {
     private const int CanvasSize = 65_536;
     private const int Columns = 256;
     private const double Spacing = 240;
     private const double ObjectSize = 32;
 
-    public static Stage13Fixture Simple(int count, int seed)
+    public static LargeMapFixture Simple(int count, int seed)
     {
         var objects = new SceneObject[count];
         var groupCount = Math.Min(count / 10, 5_000);
@@ -110,7 +110,7 @@ internal static class Stage13Fixtures
             CanvasSize,
             fixtureHash);
 
-        return new Stage13Fixture(
+        return new LargeMapFixture(
             document,
             layer,
             manifest,
@@ -118,7 +118,7 @@ internal static class Stage13Fixtures
             new WorldBounds(0, 0, 1_100, 1_100));
     }
 
-    public static Stage13Fixture Mixed50K(int seed)
+    public static LargeMapFixture Mixed50K(int seed)
     {
         const int count = 50_000;
         var objects = new SceneObject[count];
@@ -303,7 +303,7 @@ internal static class Stage13Fixtures
             MaterializedMaskTileCount = 1,
         };
 
-        return new Stage13Fixture(
+        return new LargeMapFixture(
             document,
             layer,
             manifest,
@@ -311,7 +311,7 @@ internal static class Stage13Fixtures
             new WorldBounds(0, 0, 1_100, 1_100));
     }
 
-    public static Stage13Fixture Mixed50KLarge(int seed, int canvasSize = 131_072)
+    public static LargeMapFixture Mixed50KLarge(int seed, int canvasSize = 131_072)
     {
         var source = Mixed50K(seed);
         var scale = canvasSize / (double)CanvasSize;
@@ -404,7 +404,7 @@ internal static class Stage13Fixtures
             MaterializedMaskTileCount = 2,
         };
 
-        return new Stage13Fixture(
+        return new LargeMapFixture(
             document,
             objectLayer,
             manifest,
@@ -412,7 +412,7 @@ internal static class Stage13Fixtures
             new WorldBounds(0, 0, 2_200, 2_200));
     }
 
-    public static Stage13Fixture SimpleLarge(int count, int seed, int canvasSize = 131_072)
+    public static LargeMapFixture SimpleLarge(int count, int seed, int canvasSize = 131_072)
     {
         var source = Simple(count, seed);
         var document = new MapDocument(
@@ -443,7 +443,7 @@ internal static class Stage13Fixtures
             Hash = fixtureHash,
         };
 
-        return new Stage13Fixture(
+        return new LargeMapFixture(
             document,
             source.ObjectLayer,
             manifest,

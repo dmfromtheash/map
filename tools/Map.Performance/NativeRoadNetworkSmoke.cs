@@ -22,7 +22,7 @@ using SkiaSharp;
 
 namespace Map.Performance;
 
-internal sealed class NativeStage20Report
+internal sealed class NativeRoadNetworkReport
 {
     public string Observation { get; } = "Own native Avalonia window, ShowActivated=false; rail button, panel buttons/boxes and the production canvas router drive the road tool. File pickers and reopen use local adapters. No system input. Screenshots are Avalonia frames and export-path renders of the current document, not OS scan-out.";
     public Dictionary<string, bool> Checks { get; } = [];
@@ -41,16 +41,16 @@ internal sealed class NativeStage20Report
         && Required.Length > 0 && Required.All(name => Checks[name]) && Checks.Values.All(v => v);
 }
 
-internal static class NativeStage20Smoke
+internal static class NativeRoadNetworkSmoke
 {
-    public static NativeStage20Report Run(PerformanceOptions options)
+    public static NativeRoadNetworkReport Run(PerformanceOptions options)
     {
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
-        var completion = new TaskCompletionSource<NativeStage20Report>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completion = new TaskCompletionSource<NativeRoadNetworkReport>(TaskCreationOptions.RunContinuationsAsynchronously);
         var thread = new Thread(() =>
         {
-            Stage20Application.Options = options; Stage20Application.Completion = completion;
-            try { AppBuilder.Configure<Stage20Application>().UsePlatformDetect().WithInterFont()
+            NativeRoadNetworkApplication.Options = options; NativeRoadNetworkApplication.Completion = completion;
+            try { AppBuilder.Configure<NativeRoadNetworkApplication>().UsePlatformDetect().WithInterFont()
                 .StartWithClassicDesktopLifetime([], ShutdownMode.OnExplicitShutdown); }
             catch (Exception ex) { completion.TrySetException(ex); }
         }) { IsBackground = true };
@@ -59,11 +59,11 @@ internal static class NativeStage20Smoke
     }
 }
 
-public sealed class Stage20Application : Application
+public sealed class NativeRoadNetworkApplication : Application
 {
     internal static PerformanceOptions Options = null!;
-    internal static TaskCompletionSource<NativeStage20Report> Completion = null!;
-    private readonly NativeStage20Report _report = new();
+    internal static TaskCompletionSource<NativeRoadNetworkReport> Completion = null!;
+    private readonly NativeRoadNetworkReport _report = new();
     private string _workspace = "";
     private Window _window = null!;
     private EditorView _view = null!;
@@ -436,7 +436,7 @@ public sealed class Stage20Application : Application
         _view.Canvas.PressMoveReleaseForSmoke(a.X, a.Y, b.X, b.Y); }
     private T Find<T>(string name) where T : Control
     {
-        Stage19Application.RevealTab(_view, name);
+        NativeEditorScenarioApplication.RevealTab(_view, name);
         for (var attempt = 0; attempt < 8; attempt++)
         {
             if (_view.GetVisualDescendants().OfType<T>().FirstOrDefault(c => c.Name == name) is { } found) return found;

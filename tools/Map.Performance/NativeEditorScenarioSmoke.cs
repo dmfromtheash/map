@@ -21,7 +21,7 @@ using SkiaSharp;
 
 namespace Map.Performance;
 
-internal sealed class NativeStage19Report
+internal sealed class NativeEditorScenarioReport
 {
     public string Observation { get; } = "Own native Avalonia window, ShowActivated=false; rail button, panel buttons/boxes and the production canvas router drive the river tool. File pickers and reopen use local adapters. No system input. The screenshot is an Avalonia frame, not OS scan-out.";
     public Dictionary<string, bool> Checks { get; } = [];
@@ -53,16 +53,16 @@ internal sealed class NativeStage19Report
         && Required.Length > 0 && Required.All(name => Checks[name]) && Checks.Values.All(v => v);
 }
 
-internal static class NativeStage19Smoke
+internal static class NativeEditorScenarioSmoke
 {
-    public static NativeStage19Report Run(PerformanceOptions options)
+    public static NativeEditorScenarioReport Run(PerformanceOptions options)
     {
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
-        var completion = new TaskCompletionSource<NativeStage19Report>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completion = new TaskCompletionSource<NativeEditorScenarioReport>(TaskCreationOptions.RunContinuationsAsynchronously);
         var thread = new Thread(() =>
         {
-            Stage19Application.Options = options; Stage19Application.Completion = completion;
-            try { AppBuilder.Configure<Stage19Application>().UsePlatformDetect().WithInterFont()
+            NativeEditorScenarioApplication.Options = options; NativeEditorScenarioApplication.Completion = completion;
+            try { AppBuilder.Configure<NativeEditorScenarioApplication>().UsePlatformDetect().WithInterFont()
                 .StartWithClassicDesktopLifetime([], ShutdownMode.OnExplicitShutdown); }
             catch (Exception ex) { completion.TrySetException(ex); }
         }) { IsBackground = true };
@@ -71,11 +71,11 @@ internal static class NativeStage19Smoke
     }
 }
 
-public sealed partial class Stage19Application : Application
+public sealed partial class NativeEditorScenarioApplication : Application
 {
     internal static PerformanceOptions Options = null!;
-    internal static TaskCompletionSource<NativeStage19Report> Completion = null!;
-    private readonly NativeStage19Report _report = new();
+    internal static TaskCompletionSource<NativeEditorScenarioReport> Completion = null!;
+    private readonly NativeEditorScenarioReport _report = new();
     private string _workspace = "";
     private Window _window = null!;
     private EditorView _view = null!;

@@ -64,7 +64,7 @@ internal sealed record NativeLodResult(
     long CacheDisposals,
     bool ResourcesWereBoundedAndDisposed);
 
-internal sealed record NativeStage13AReport(
+internal sealed record NativeLargeMapReport(
     int SchemaVersion,
     DateTimeOffset RecordedUtc,
     PerformanceOptions Options,
@@ -77,23 +77,23 @@ internal sealed record NativeStage13AReport(
     bool GatePassed,
     IReadOnlyList<string> Limitations);
 
-internal static class NativeStage13ASmoke
+internal static class NativeLargeMapSmoke
 {
-    public static NativeStage13AReport Run(PerformanceOptions options)
+    public static NativeLargeMapReport Run(PerformanceOptions options)
     {
         if (!OperatingSystem.IsWindows())
         {
             throw new PlatformNotSupportedException("The native Stage 13A smoke targets Map's Windows desktop runtime.");
         }
 
-        var completion = new TaskCompletionSource<NativeStage13AReport>(
+        var completion = new TaskCompletionSource<NativeLargeMapReport>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var thread = new Thread(() =>
         {
             try
             {
-                NativeSmokeApplication.Configure(options, completion);
-                AppBuilder.Configure<NativeSmokeApplication>()
+                NativeLargeMapApplication.Configure(options, completion);
+                AppBuilder.Configure<NativeLargeMapApplication>()
                     .UsePlatformDetect()
                     .WithInterFont()
                     .StartWithClassicDesktopLifetime([], ShutdownMode.OnExplicitShutdown);
@@ -121,14 +121,14 @@ internal static class NativeStage13ASmoke
     }
 }
 
-public sealed class NativeSmokeApplication : Application
+public sealed class NativeLargeMapApplication : Application
 {
     private static PerformanceOptions? _options;
-    private static TaskCompletionSource<NativeStage13AReport>? _completion;
+    private static TaskCompletionSource<NativeLargeMapReport>? _completion;
 
     internal static void Configure(
         PerformanceOptions options,
-        TaskCompletionSource<NativeStage13AReport> completion)
+        TaskCompletionSource<NativeLargeMapReport> completion)
     {
         _options = options;
         _completion = completion;
@@ -148,9 +148,9 @@ public sealed class NativeSmokeApplication : Application
         desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
         var fixture = _options.Profile switch
         {
-            "native-stage13d" => Stage13Fixtures.Mixed50KLarge(_options.Seed),
-            "native-stage13c" => Stage13Fixtures.Mixed50K(_options.Seed),
-            _ => Stage13Fixtures.Simple(_options.ObjectCount, _options.Seed),
+            "native-stage13d" => LargeMapFixtures.Mixed50KLarge(_options.Seed),
+            "native-stage13c" => LargeMapFixtures.Mixed50K(_options.Seed),
+            _ => LargeMapFixtures.Simple(_options.ObjectCount, _options.Seed),
         };
         var editor = new EditorViewModel(
             fixture.Document,
@@ -198,9 +198,9 @@ public sealed class NativeSmokeApplication : Application
         base.OnFrameworkInitializationCompleted();
     }
 
-    private static async Task<NativeStage13AReport> ExecuteAsync(
+    private static async Task<NativeLargeMapReport> ExecuteAsync(
         PerformanceOptions options,
-        Stage13Fixture fixture,
+        LargeMapFixture fixture,
         EditorViewModel editor,
         EditorView view)
     {
@@ -451,7 +451,7 @@ public sealed class NativeSmokeApplication : Application
                 && lod.ExactRegionExportDecoded
                 && lod.ResourcesWereBoundedAndDisposed);
 
-        return new NativeStage13AReport(
+        return new NativeLargeMapReport(
             SchemaVersion: 1,
             RecordedUtc: DateTimeOffset.UtcNow,
             Options: options,

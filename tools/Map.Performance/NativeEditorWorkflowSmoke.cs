@@ -22,7 +22,7 @@ using SkiaSharp;
 
 namespace Map.Performance;
 
-internal sealed record NativeStage16Report(
+internal sealed record NativeEditorWorkflowReport(
     int SchemaVersion,
     DateTimeOffset RecordedUtc,
     string WindowMode,
@@ -43,21 +43,21 @@ internal sealed record NativeStage16Report(
     bool GatePassed,
     IReadOnlyList<string> Limitations);
 
-internal static class NativeStage16Smoke
+internal static class NativeEditorWorkflowSmoke
 {
-    public static NativeStage16Report Run(PerformanceOptions options)
+    public static NativeEditorWorkflowReport Run(PerformanceOptions options)
     {
         if (!OperatingSystem.IsWindows())
             throw new PlatformNotSupportedException("The Stage 16 native smoke targets Windows.");
 
-        var completion = new TaskCompletionSource<NativeStage16Report>(
+        var completion = new TaskCompletionSource<NativeEditorWorkflowReport>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var thread = new Thread(() =>
         {
             try
             {
-                NativeStage16Application.Configure(options, completion);
-                AppBuilder.Configure<NativeStage16Application>()
+                NativeEditorWorkflowApplication.Configure(options, completion);
+                AppBuilder.Configure<NativeEditorWorkflowApplication>()
                     .UsePlatformDetect()
                     .WithInterFont()
                     .StartWithClassicDesktopLifetime([], ShutdownMode.OnExplicitShutdown);
@@ -84,13 +84,13 @@ internal static class NativeStage16Smoke
     }
 }
 
-public sealed class NativeStage16Application : Application
+public sealed class NativeEditorWorkflowApplication : Application
 {
     private static PerformanceOptions? _options;
-    private static TaskCompletionSource<NativeStage16Report>? _completion;
+    private static TaskCompletionSource<NativeEditorWorkflowReport>? _completion;
 
     internal static void Configure(
-        PerformanceOptions options, TaskCompletionSource<NativeStage16Report> completion)
+        PerformanceOptions options, TaskCompletionSource<NativeEditorWorkflowReport> completion)
     {
         _options = options;
         _completion = completion;
@@ -193,7 +193,7 @@ public sealed class NativeStage16Application : Application
         base.OnFrameworkInitializationCompleted();
     }
 
-    private static async Task<NativeStage16Report> ExecuteAsync(
+    private static async Task<NativeEditorWorkflowReport> ExecuteAsync(
         PerformanceOptions options,
         string workspace,
         string sourcePath,
@@ -466,7 +466,7 @@ public sealed class NativeStage16Application : Application
             && File.Exists(dashboardScreenshot) && File.Exists(wideScreenshot)
             && File.Exists(compactScreenshot);
 
-        return new NativeStage16Report(
+        return new NativeEditorWorkflowReport(
             1,
             DateTimeOffset.UtcNow,
             "native off-screen own-process window; ShowActivated=false; ShowInTaskbar=false; no system input",

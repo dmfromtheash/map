@@ -6,7 +6,7 @@ using Map.Presentation.ViewModels;
 
 namespace Map.Performance;
 
-public sealed partial class Stage19Application
+public sealed partial class NativeEditorScenarioApplication
 {
     private static readonly string[] WaterCliffsRequired =
     [

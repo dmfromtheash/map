@@ -23,7 +23,7 @@ using SkiaSharp;
 
 namespace Map.Performance;
 
-internal sealed class NativeStage17Report
+internal sealed class NativePlacementPathReport
 {
     public string Observation { get; } = "Own native Avalonia window, ShowActivated=false; scoped control events and production canvas router. File pickers and map reopen use local adapters. No system input. Timing ends at a rendered native canvas frame, not OS scan-out.";
     public Dictionary<string, bool> Checks { get; } = [];
@@ -42,16 +42,16 @@ internal sealed class NativeStage17Report
     public bool GatePassed => Failure is null && Checks.Count >= 10 && Checks.Values.All(v => v);
 }
 
-internal static class NativeStage17Smoke
+internal static class NativePlacementPathSmoke
 {
-    public static NativeStage17Report Run(PerformanceOptions options)
+    public static NativePlacementPathReport Run(PerformanceOptions options)
     {
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
-        var completion = new TaskCompletionSource<NativeStage17Report>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completion = new TaskCompletionSource<NativePlacementPathReport>(TaskCreationOptions.RunContinuationsAsynchronously);
         var thread = new Thread(() =>
         {
-            Stage17Application.Options = options; Stage17Application.Completion = completion;
-            try { AppBuilder.Configure<Stage17Application>().UsePlatformDetect().WithInterFont()
+            NativePlacementPathApplication.Options = options; NativePlacementPathApplication.Completion = completion;
+            try { AppBuilder.Configure<NativePlacementPathApplication>().UsePlatformDetect().WithInterFont()
                 .StartWithClassicDesktopLifetime([], ShutdownMode.OnExplicitShutdown); }
             catch (Exception ex) { completion.TrySetException(ex); }
         }) { IsBackground = true };
@@ -60,11 +60,11 @@ internal static class NativeStage17Smoke
     }
 }
 
-public sealed class Stage17Application : Application
+public sealed class NativePlacementPathApplication : Application
 {
     internal static PerformanceOptions Options = null!;
-    internal static TaskCompletionSource<NativeStage17Report> Completion = null!;
-    private readonly NativeStage17Report _report = new();
+    internal static TaskCompletionSource<NativePlacementPathReport> Completion = null!;
+    private readonly NativePlacementPathReport _report = new();
     private string _workspace = "";
     private AssetCatalog _catalog = null!;
     private Window _window = null!;
@@ -339,7 +339,7 @@ public sealed class Stage17Application : Application
         _view.Canvas.PressMoveReleaseForSmoke(a.X, a.Y, b.X, b.Y); }
     private T Find<T>(string name) where T : Control
     {
-        Stage19Application.RevealTab(_view, name);
+        NativeEditorScenarioApplication.RevealTab(_view, name);
         return _view.GetVisualDescendants().OfType<T>().FirstOrDefault(c => c.Name == name)
             ?? throw new InvalidOperationException($"{name} is not in the panel");
     }

@@ -257,7 +257,7 @@ public sealed class GenerationControlApplication : Application
             }
             _view.UpdateLayout();
         }
-        Stage19Application.RevealTab(_view, name);
+        NativeEditorScenarioApplication.RevealTab(_view, name);
         var button = _view.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Name == name && b.IsEffectivelyVisible)
             ?? throw new InvalidOperationException("Control not visible: " + name);
         if (!button.IsEnabled) throw new InvalidOperationException("Control disabled: " + name + " " + _editor.StatusDetail);

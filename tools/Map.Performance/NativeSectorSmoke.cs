@@ -3,7 +3,7 @@ using Map.Core.Documents;
 
 namespace Map.Performance;
 
-public sealed partial class Stage19Application
+public sealed partial class NativeEditorScenarioApplication
 {
     private static readonly string[] SectorRequired = ["sector-dressed", "system-from-window", "sector-imported", "resources-disposed"];
 

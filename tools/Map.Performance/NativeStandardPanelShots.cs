@@ -7,7 +7,7 @@ using Map.Presentation.ViewModels;
 
 namespace Map.Performance;
 
-public sealed partial class Stage19Application
+public sealed partial class NativeEditorScenarioApplication
 {
     /// <summary>
     /// `native-standard-panel-shots`: the tool panel of the standard constructor for every rail tool

@@ -15,7 +15,7 @@ using SkiaSharp;
 
 namespace Map.Performance;
 
-internal sealed record NativeStage14Report(
+internal sealed record NativePlacementAndCheckpointsReport(
     int SchemaVersion,
     DateTimeOffset RecordedUtc,
     string WindowMode,
@@ -38,23 +38,23 @@ internal sealed record NativeStage14Report(
     bool GatePassed,
     IReadOnlyList<string> Limitations);
 
-internal static class NativeStage14Smoke
+internal static class NativePlacementAndCheckpointsSmoke
 {
-    public static NativeStage14Report Run(PerformanceOptions options)
+    public static NativePlacementAndCheckpointsReport Run(PerformanceOptions options)
     {
         if (!OperatingSystem.IsWindows())
         {
             throw new PlatformNotSupportedException("The Stage 14 native smoke targets Windows.");
         }
 
-        var completion = new TaskCompletionSource<NativeStage14Report>(
+        var completion = new TaskCompletionSource<NativePlacementAndCheckpointsReport>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var thread = new Thread(() =>
         {
             try
             {
-                NativeStage14Application.Configure(options, completion);
-                AppBuilder.Configure<NativeStage14Application>()
+                NativePlacementAndCheckpointsApplication.Configure(options, completion);
+                AppBuilder.Configure<NativePlacementAndCheckpointsApplication>()
                     .UsePlatformDetect()
                     .WithInterFont()
                     .StartWithClassicDesktopLifetime([], ShutdownMode.OnExplicitShutdown);
@@ -81,14 +81,14 @@ internal static class NativeStage14Smoke
     }
 }
 
-public sealed class NativeStage14Application : Application
+public sealed class NativePlacementAndCheckpointsApplication : Application
 {
     private static PerformanceOptions? _options;
-    private static TaskCompletionSource<NativeStage14Report>? _completion;
+    private static TaskCompletionSource<NativePlacementAndCheckpointsReport>? _completion;
 
     internal static void Configure(
         PerformanceOptions options,
-        TaskCompletionSource<NativeStage14Report> completion)
+        TaskCompletionSource<NativePlacementAndCheckpointsReport> completion)
     {
         _options = options;
         _completion = completion;
@@ -181,7 +181,7 @@ public sealed class NativeStage14Application : Application
         base.OnFrameworkInitializationCompleted();
     }
 
-    private static async Task<NativeStage14Report> ExecuteAsync(
+    private static async Task<NativePlacementAndCheckpointsReport> ExecuteAsync(
         PerformanceOptions options,
         string workspace,
         string savePath,
@@ -320,7 +320,7 @@ public sealed class NativeStage14Application : Application
             && resourcesDisposed
             && File.Exists(screenshotPath);
 
-        return new NativeStage14Report(
+        return new NativePlacementAndCheckpointsReport(
             1,
             DateTimeOffset.UtcNow,
             "native off-screen own-process window; ShowActivated=false; ShowInTaskbar=false; no system input",

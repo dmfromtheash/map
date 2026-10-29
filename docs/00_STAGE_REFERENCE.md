@@ -115,7 +115,7 @@ REA по файлам игр и чтение React-props Inkarnate.
     экология воды/обрывов, пересчёт и save→reopen v30. Оба — настоящие окна Avalonia вне экрана,
     без системного ввода; JSON и 13+7 кадров — `_local/r11-smokes/`. Они не требуют старого комплекта.
     R11 остаётся PARTIAL до живого просмотра Claude и приёмки владельцем.
-  - Помощник `Stage19Application.RevealTab` (общий для stage17/18/19/20, object-workflow) открывает вкладки
+  - Помощник `NativeEditorScenarioApplication.RevealTab` (общий для stage17/18/19/20, object-workflow) открывает вкладки
     `Reveal:`, переключает область контекста «Объект/Инструмент» (`ContextScopeObject/Tool`) и раскрывает
     свёрнутые секции; новые смоуки используют его, а не прямой `First(c => c.Name == …)`.
   Для окна экспорта живой проход — `Map.LiveCheck --map <файл>`.

@@ -110,19 +110,19 @@ else if (options.Profile == "native-text-on-path")
 }
 else if (options.Profile is "native-stage20" or "native-crossings")
 {
-    var nativeReport = NativeStage20Smoke.Run(options); report = nativeReport; gatePassed = nativeReport.GatePassed;
+    var nativeReport = NativeRoadNetworkSmoke.Run(options); report = nativeReport; gatePassed = nativeReport.GatePassed;
 }
 else if (options.Profile is "native-stage19" or "native-land-materials" or "native-soft-coast" or "native-history-memory" or "native-panel-shots" or "native-standard-panel-shots" or "native-ui-shots" or "native-color-presets" or "native-vtt-export" or "native-grid-types" or "native-versions" or "native-room" or "native-land-cliffs" or "native-water-cliffs" or "native-lights" or "native-continent-gen" or "native-geography" or "native-entities" or "native-region-labels" or "native-fog" or "native-compare" or "native-transitions" or "native-timeline" or "native-pointcrawl" or "native-planet" or "native-book" or "native-sector" or "native-city" or "native-changes" or "native-iso" or "native-owner-art")
 {
-    var nativeReport = NativeStage19Smoke.Run(options); report = nativeReport; gatePassed = nativeReport.GatePassed;
+    var nativeReport = NativeEditorScenarioSmoke.Run(options); report = nativeReport; gatePassed = nativeReport.GatePassed;
 }
 else if (options.Profile == "native-stage18")
 {
-    var nativeReport = NativeStage18Smoke.Run(options); report = nativeReport; gatePassed = nativeReport.GatePassed;
+    var nativeReport = NativePlacementAreaSmoke.Run(options); report = nativeReport; gatePassed = nativeReport.GatePassed;
 }
 else if (options.Profile == "native-stage17")
 {
-    var nativeReport = NativeStage17Smoke.Run(options); report = nativeReport; gatePassed = nativeReport.GatePassed;
+    var nativeReport = NativePlacementPathSmoke.Run(options); report = nativeReport; gatePassed = nativeReport.GatePassed;
 }
 else if (options.Profile is "native-placement-workflow" or "native-placement-baseline" or "native-placement-ux" or "native-placement-overlap")
 {
@@ -156,37 +156,37 @@ else if (options.Profile == "native-object-workflow")
 }
 else if (options.Profile == "native-stage16")
 {
-    var nativeReport = NativeStage16Smoke.Run(options);
+    var nativeReport = NativeEditorWorkflowSmoke.Run(options);
     report = nativeReport;
     gatePassed = nativeReport.GatePassed;
 }
 else if (options.Profile == "native-stage15")
 {
-    var nativeReport = NativeStage15Smoke.Run(options);
+    var nativeReport = NativeStampAppearanceSmoke.Run(options);
     report = nativeReport;
     gatePassed = nativeReport.GatePassed;
 }
 else if (options.Profile == "native-stage14")
 {
-    var nativeReport = NativeStage14Smoke.Run(options);
+    var nativeReport = NativePlacementAndCheckpointsSmoke.Run(options);
     report = nativeReport;
     gatePassed = nativeReport.GatePassed;
 }
 else if (options.Profile == "native-stage12d")
 {
-    var nativeReport = NativeStage12DSmoke.Run(options);
+    var nativeReport = NativeProjectFileDiagnosticsSmoke.Run(options);
     report = nativeReport;
     gatePassed = nativeReport.GatePassed;
 }
 else if (options.Profile is "native-stage13a" or "native-stage13b" or "native-stage13c" or "native-stage13d")
 {
-    var nativeReport = NativeStage13ASmoke.Run(options);
+    var nativeReport = NativeLargeMapSmoke.Run(options);
     report = nativeReport;
     gatePassed = nativeReport.GatePassed;
 }
 else
 {
-    var performanceReport = new Stage13PerformanceRunner(options).Run();
+    var performanceReport = new LargeMapPerformanceRunner(options).Run();
     report = performanceReport;
     gatePassed = performanceReport.GatePassed;
 }
@@ -216,7 +216,7 @@ if (report is PerformanceReport performance)
             $"gate={(profile.Passed ? "PASS" : "FAIL")}");
     }
 }
-else if (report is NativeStage13AReport native)
+else if (report is NativeLargeMapReport native)
 {
     Console.WriteLine(
         $"{options.Profile}: realized max={native.ObjectTree.MaxRealizedRows}, " +
@@ -225,7 +225,7 @@ else if (report is NativeStage13AReport native)
         $"tree rebuilds during pointer updates={native.Drag.PointerMoveTreeRebuilds}, " +
         $"gate={(native.GatePassed ? "PASS" : "FAIL")}");
 }
-else if (report is NativeStage14Report stage14)
+else if (report is NativePlacementAndCheckpointsReport stage14)
 {
     Console.WriteLine(
         $"native-stage14: ghost={stage14.GhostWasVisible}, "
@@ -233,7 +233,7 @@ else if (report is NativeStage14Report stage14)
         + $"primary reopen={stage14.PrimaryAutosaveReopenedLatestRevision}, "
         + $"gate={(stage14.GatePassed ? "PASS" : "FAIL")}");
 }
-else if (report is NativeStage15Report stage15)
+else if (report is NativeStampAppearanceReport stage15)
 {
     Console.WriteLine(
         $"native-stage15: compact={stage15.CompactCatalogReady}, "
@@ -250,7 +250,7 @@ else if (report is NativeEditorIntegrityReport integrity)
 
     Console.WriteLine($"native-editor-integrity: gate={(integrity.GatePassed ? "PASS" : "FAIL")}");
 }
-else if (report is NativeStage16Report stage16)
+else if (report is NativeEditorWorkflowReport stage16)
 {
     Console.WriteLine(
         $"native-stage16: dashboard={stage16.DashboardProjectFlowWorked}, "

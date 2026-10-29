@@ -1139,7 +1139,7 @@ public sealed class NativeObjectWorkflowApplication : Application
         if (root.GetVisualDescendants().OfType<T>().FirstOrDefault(item => item.Name == name) is { } found) return found;
         // Folded sections of the inspector are not templated yet (2026-10-19 panel redesign):
         // open them the way a user would and look again.
-        if (root is Control control) Stage19Application.RevealTab(control, name);
+        if (root is Control control) NativeEditorScenarioApplication.RevealTab(control, name);
         foreach (var folded in root.GetVisualDescendants().OfType<Expander>().Where(e => !e.IsExpanded).ToArray()) folded.IsExpanded = true;
         (root as Control)?.UpdateLayout();
         return root.GetVisualDescendants().OfType<T>().FirstOrDefault(item => item.Name == name);

@@ -11,18 +11,18 @@ using SkiaSharp;
 
 namespace Map.Performance;
 
-internal sealed class Stage13PerformanceRunner
+internal sealed class LargeMapPerformanceRunner
 {
     private static readonly WorldBounds SmallViewport = new(0, 0, 1_920, 1_080);
     private readonly PerformanceOptions _options;
-    private readonly Stage13Fixture _fixture;
+    private readonly LargeMapFixture _fixture;
 
-    public Stage13PerformanceRunner(PerformanceOptions options)
+    public LargeMapPerformanceRunner(PerformanceOptions options)
     {
         _options = options;
         _fixture = options.Profile == "stage13d"
-            ? Stage13Fixtures.Mixed50KLarge(options.Seed)
-            : Stage13Fixtures.Simple(options.ObjectCount, options.Seed);
+            ? LargeMapFixtures.Mixed50KLarge(options.Seed)
+            : LargeMapFixtures.Simple(options.ObjectCount, options.Seed);
     }
 
     public PerformanceReport Run()
@@ -60,16 +60,16 @@ internal sealed class Stage13PerformanceRunner
             "stage13c-baseline" =>
             [
                 MeasureOverview(_fixture, "full-overview-simple-exact", enforceGate: false),
-                MeasureOverview(Stage13Fixtures.Mixed50K(_options.Seed),
+                MeasureOverview(LargeMapFixtures.Mixed50K(_options.Seed),
                     "full-overview-mixed-exact", enforceGate: false),
                 MeasureNormalMixed(enforceGate: false),
                 MeasurePictureReplay(_fixture, "picture-replay-simple"),
-                MeasurePictureReplay(Stage13Fixtures.Mixed50K(_options.Seed), "picture-replay-mixed"),
+                MeasurePictureReplay(LargeMapFixtures.Mixed50K(_options.Seed), "picture-replay-mixed"),
             ],
             "stage13c" =>
             [
                 MeasureOverview(_fixture, "full-overview-simple-lod", enforceGate: true, useLod: true),
-                MeasureOverview(Stage13Fixtures.Mixed50K(_options.Seed),
+                MeasureOverview(LargeMapFixtures.Mixed50K(_options.Seed),
                     "full-overview-mixed-lod", enforceGate: true, useLod: true),
                 MeasureNormalMixed(enforceGate: true),
                 MeasureOverviewInvalidation(),
@@ -84,7 +84,7 @@ internal sealed class Stage13PerformanceRunner
                 MeasureLargeExportPlanning(_fixture),
                 MeasurePersistenceRoundTrip(_fixture, "large-131k-mixed-50k-save-reopen"),
                 MeasurePersistenceRoundTrip(
-                    Stage13Fixtures.SimpleLarge(100_000, _options.Seed),
+                    LargeMapFixtures.SimpleLarge(100_000, _options.Seed),
                     "large-131k-simple-100k-save-reopen"),
                 MeasureTestOnly262K(),
                 MeasureTestOnly262KOverview(),
@@ -307,7 +307,7 @@ internal sealed class Stage13PerformanceRunner
 
     private ProfileResult MeasureColdIndexBuild(bool enforceGate)
     {
-        var stress = Stage13Fixtures.Simple(100_000, _options.Seed);
+        var stress = LargeMapFixtures.Simple(100_000, _options.Seed);
         var layers = Enumerable.Range(0, _options.WarmupIterations + _options.MeasuredIterations)
             .Select(_ => new ObjectLayer(
                 stress.ObjectLayer.Id,
@@ -343,7 +343,7 @@ internal sealed class Stage13PerformanceRunner
 
     private ProfileResult MeasureColdDocumentIndexBuild(bool enforceGate)
     {
-        var stress = Stage13Fixtures.Simple(100_000, _options.Seed);
+        var stress = LargeMapFixtures.Simple(100_000, _options.Seed);
         var documents = Enumerable.Range(0, _options.WarmupIterations + _options.MeasuredIterations)
             .Select(_ => new MapDocument(
                 stress.Document.Id,
@@ -427,7 +427,7 @@ internal sealed class Stage13PerformanceRunner
 
     private ProfileResult MeasureStressEdit(bool enforceGate)
     {
-        var stress = Stage13Fixtures.Simple(100_000, _options.Seed);
+        var stress = LargeMapFixtures.Simple(100_000, _options.Seed);
         var before = stress.PointTarget;
         var after = MultiSelectionGeometry.Translate([before], 1, 0)[0];
         MapDocument? edited = null;
@@ -450,7 +450,7 @@ internal sealed class Stage13PerformanceRunner
     private static double _consume;
 
     private ProfileResult MeasureOverview(
-        Stage13Fixture fixture, string name, bool enforceGate, bool useLod = false)
+        LargeMapFixture fixture, string name, bool enforceGate, bool useLod = false)
     {
         const int width = 1_280;
         const int height = 720;
@@ -516,12 +516,12 @@ internal sealed class Stage13PerformanceRunner
 
     private ProfileResult MeasureNormalMixed(bool enforceGate) =>
         MeasureNormalMixed(
-            Stage13Fixtures.Mixed50K(_options.Seed),
+            LargeMapFixtures.Mixed50K(_options.Seed),
             "normal-zoom-mixed-exact",
             enforceGate);
 
     private ProfileResult MeasureNormalMixed(
-        Stage13Fixture fixture, string name, bool enforceGate)
+        LargeMapFixture fixture, string name, bool enforceGate)
     {
         const int width = 1_280;
         const int height = 720;
@@ -573,7 +573,7 @@ internal sealed class Stage13PerformanceRunner
             });
     }
 
-    private ProfileResult MeasurePictureReplay(Stage13Fixture fixture, string name)
+    private ProfileResult MeasurePictureReplay(LargeMapFixture fixture, string name)
     {
         const int width = 1_280;
         const int height = 720;
@@ -618,7 +618,7 @@ internal sealed class Stage13PerformanceRunner
     {
         const int width = 1_280;
         const int height = 720;
-        var fixture = Stage13Fixtures.Simple(50_000, _options.Seed);
+        var fixture = LargeMapFixtures.Simple(50_000, _options.Seed);
         var scale = Math.Min(
             width / (double)fixture.Manifest.CanvasWidth,
             height / (double)fixture.Manifest.CanvasHeight);
@@ -790,7 +790,7 @@ internal sealed class Stage13PerformanceRunner
     }
 
     private ProfileResult MeasureLargeCanvasInteraction(
-        Stage13Fixture fixture, string name, bool enforceGate)
+        LargeMapFixture fixture, string name, bool enforceGate)
     {
         var fitWasExact = false;
         var roundTripWasExact = false;
@@ -867,7 +867,7 @@ internal sealed class Stage13PerformanceRunner
             });
     }
 
-    private ProfileResult MeasureLargeExportPlanning(Stage13Fixture fixture)
+    private ProfileResult MeasureLargeExportPlanning(LargeMapFixture fixture)
     {
         var exporter = new ImageExportEngine();
         ExportPlan? fullPlan = null;
@@ -942,7 +942,7 @@ internal sealed class Stage13PerformanceRunner
             });
     }
 
-    private ProfileResult MeasurePersistenceRoundTrip(Stage13Fixture fixture, string name)
+    private ProfileResult MeasurePersistenceRoundTrip(LargeMapFixture fixture, string name)
     {
         var outputDirectory = Path.GetDirectoryName(_options.OutputPath)
             ?? Environment.CurrentDirectory;
@@ -1006,7 +1006,7 @@ internal sealed class Stage13PerformanceRunner
     private ProfileResult MeasureTestOnly262K()
     {
         const int testOnlySize = 262_144;
-        var fixture = Stage13Fixtures.Mixed50KLarge(_options.Seed, testOnlySize);
+        var fixture = LargeMapFixtures.Mixed50KLarge(_options.Seed, testOnlySize);
         var publicPolicyStayedAt131K = CanvasDimensionPolicy.Maximum == 131_072
             && !CanvasDimensionPolicy.IsValid(testOnlySize);
         var farKey = TileMap.KeyAt(testOnlySize - 1, testOnlySize - 1);
@@ -1099,7 +1099,7 @@ internal sealed class Stage13PerformanceRunner
     private ProfileResult MeasureTestOnly262KOverview()
     {
         var measured = MeasureOverview(
-            Stage13Fixtures.Mixed50KLarge(_options.Seed, 262_144),
+            LargeMapFixtures.Mixed50KLarge(_options.Seed, 262_144),
             "test-only-262k-overview-lod",
             enforceGate: false,
             useLod: true);
@@ -1132,7 +1132,7 @@ internal sealed class Stage13PerformanceRunner
         }
     }
 
-    private static bool IsExactRoundTrip(Stage13Fixture fixture, MapDocument reopened)
+    private static bool IsExactRoundTrip(LargeMapFixture fixture, MapDocument reopened)
     {
         var source = fixture.Document;
         var target = DocumentEditor.FindObject(reopened, fixture.PointTarget.Id);

@@ -4,7 +4,7 @@ using Map.Core.Editing;
 
 namespace Map.Performance;
 
-public sealed partial class Stage19Application
+public sealed partial class NativeEditorScenarioApplication
 {
     private static readonly string[] CityRequired = ["city-opened", "city-regenerated", "city-hand-note-kept", "city-coast", "resources-disposed"];
 

@@ -16,7 +16,7 @@ internal sealed record HistoryMemoryPoint(
     int TileCache, int ObjectCache, long ObjectCacheBytes, int TerrainImages, int StyledImages, int CarvedLand,
     bool RefinementRunning, string? ResourceError);
 
-public sealed partial class Stage19Application
+public sealed partial class NativeEditorScenarioApplication
 {
     private static readonly string[] HistoryMemoryRequired =
     [
