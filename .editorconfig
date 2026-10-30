@@ -10,6 +10,10 @@ end_of_line = crlf
 indent_style = space
 indent_size = 4
 
+[*.cs]
+# Analyzer packages (DEC-073) report as warnings, never errors (DEC-050): rules whose package default is error.
+dotnet_diagnostic.VSTHRD011.severity = warning
+
 [*.ps1]
 # Windows PowerShell 5.1 reads Cyrillic correctly only with a BOM.
 charset = utf-8-bom

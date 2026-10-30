@@ -15,4 +15,11 @@
     <AnalysisModeDocumentation>None</AnalysisModeDocumentation>
     <AnalysisModeNaming>None</AnalysisModeNaming>
   </PropertyGroup>
+  <!-- Анализаторы-пакеты (DEC-073): только при сборке, в программу не попадают; правила — предупреждения.
+       IDisposableAnalyzers — Skia-объекты после уничтожения / без уничтожения;
+       VS Threading — забытый await, блокировки на async, фоновые задачи. -->
+  <ItemGroup>
+    <PackageReference Include="IDisposableAnalyzers" Version="4.0.8" PrivateAssets="all" IncludeAssets="runtime; build; native; contentfiles; analyzers" />
+    <PackageReference Include="Microsoft.VisualStudio.Threading.Analyzers" Version="18.12.1" PrivateAssets="all" IncludeAssets="runtime; build; native; contentfiles; analyzers" />
+  </ItemGroup>
 </Project>
