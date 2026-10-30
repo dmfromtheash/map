@@ -1112,6 +1112,7 @@ public sealed partial class EditorView : UserControl
                 // DEC-070: the rail shows the tools of the open section, each with its name under the icon. The tag
                 // names the section tab that shows a hidden tool (the same Reveal: route the panel tabs use).
                 _railButtons.Add((entry, button));
+                AttachInsideCard(button, () => ToolCard(entry.Tool), PlacementMode.Right);
                 if (entry.Tool != EditorTool.Select) button.Tag = "Reveal:" + WorkspaceTabName(EditorSurfaceLayout.WorkspaceOf(entry.Tool));
                 stack.Children.Add(button);
             }

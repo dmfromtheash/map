@@ -128,9 +128,16 @@ public sealed partial class EditorView
     private Border BuildWorldSection()
     {
         var list = new StackPanel { Spacing = 4 };
-        void Group(string title) => list.Children.Add(new TextBlock { Text = title, Margin = new Thickness(2, list.Children.Count == 0 ? 0 : 8, 0, 2) }.Classed("role-caption", "muted"));
+        var group = "";
+        void Group(string title)
+        {
+            group = title;
+            list.Children.Add(new TextBlock { Text = title, Margin = new Thickness(2, list.Children.Count == 0 ? 0 : 8, 0, 2) }.Classed("role-caption", "muted"));
+        }
         void Item(string name, string title, Action open, Func<(bool Fits, string Note)> fit)
         {
+            // The «Мир» card lists the same entries with the same «подходит» (DEC-080).
+            _worldEntries.Add((group, name, title, fit));
             var note = new TextBlock { TextWrapping = TextWrapping.Wrap }.Classed("role-caption");
             var body = new StackPanel { Spacing = 1, Children =
             {

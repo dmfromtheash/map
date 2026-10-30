@@ -39,6 +39,7 @@ public sealed partial class EditorView
             button.HorizontalContentAlignment = HorizontalAlignment.Center;
             button.Padding = new Thickness(2, 4);
             button.WithTip(tip);
+            AttachInsideCard(button, () => RightTabCard(tab), PlacementMode.Left);
             _rightTabButtons.Add((tab, button));
             return button;
         }

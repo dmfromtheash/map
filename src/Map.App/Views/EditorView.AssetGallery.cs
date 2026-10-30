@@ -848,7 +848,7 @@ public sealed partial class EditorView
         }
         AutomationProperties.SetName(tile, "Выбрать " + title);
         ToolTip.SetTip(tile, BuildGalleryTooltip(cell));
-        ToolTip.SetShowDelay(tile, 500);
+        ToolTip.SetShowDelay(tile, Ui.TipDelay);
         Ui.SetSelected(tile, GalleryCellSelected(cell));
         if (badgeText is not null)
         {

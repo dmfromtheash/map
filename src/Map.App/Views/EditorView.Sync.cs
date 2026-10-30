@@ -50,7 +50,8 @@ public sealed partial class EditorView
             var text = shortcut.Length > 0 ? $"{title}  ({shortcut})" : title;
             AutomationProperties.SetName(button, title);
             AutomationProperties.SetHelpText(button, text);
-            ToolTip.SetTip(button, text);
+            // The «Внутри» card reads the key each time it opens (DEC-080); only a button without it gets the plain line.
+            if (ToolTip.GetTip(button) is not ToolTip card || !card.Classes.Contains("inside-card")) ToolTip.SetTip(button, text);
         }
 
         if (_previousVariantButton is not null)

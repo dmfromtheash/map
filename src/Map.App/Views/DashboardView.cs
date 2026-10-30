@@ -227,7 +227,7 @@ public sealed partial class DashboardView : UserControl
             AutomationProperties.SetName(button, tip);
             ToolTip.SetTip(button, tip);
             ToolTip.SetPlacement(button, PlacementMode.Right);
-            ToolTip.SetShowDelay(button, 300);
+            ToolTip.SetShowDelay(button, Ui.TipDelay);
             button.Click += (_, _) => action();
             if (section is { } s && button is ToggleButton toggle) _railButtons[s] = toggle;
             return button;

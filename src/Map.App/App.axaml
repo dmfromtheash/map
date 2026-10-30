@@ -1561,6 +1561,13 @@
         <Style Selector="ToolTip TextBlock">
             <Setter Property="Foreground" Value="{DynamicResource MapChromeTextBrush}" />
         </Style>
+        <!-- DEC-080: the «Внутри» card draws its own frame; the tooltip around it is invisible. -->
+        <Style Selector="ToolTip.inside-card">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="MaxWidth" Value="560" />
+        </Style>
 
         <!-- Disabled must read as "not now", never as "not there". The button itself is named as
              well as its presenter: an icon binds to the nearest templated ancestor's Foreground,

@@ -348,6 +348,11 @@ public sealed class AssetCatalogApplication : Application
         var roleBox = await OpenPassport("initial");
         await SetRole(roleBox, AssetRole.Tree, "tree");
         Capture(_view.AssetCatalogWindowForSmoke!, "passport-role-tree");
+        // DEC-070 p. 6: the catalog with its cards and the open passport - every visible control has its line.
+        var noTip = PanelAudit.MissingTips(_view.AssetCatalogWindowForSmoke!);
+        File.WriteAllLines(Path.ChangeExtension(Options.OutputPath, "catalog-no-tooltip.txt"), noTip);
+        foreach (var name in noTip) Console.WriteLine("no tooltip: " + name);
+        Check("every visible catalog control has a tooltip", noTip.Count == 0);
         await Reopen(); roleBox = await OpenPassport("tree reopen");
         Check("new catalog and passport reopen as Tree", roleBox.SelectedIndex == (int)AssetRole.Tree
             && Equals(roleBox.SelectedItem, "Дерево"));

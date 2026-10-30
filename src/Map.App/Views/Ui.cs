@@ -20,6 +20,9 @@ namespace Map.App.Views;
 /// </summary>
 public static class Ui
 {
+    /// <summary>DEC-070 p. 6: every tooltip and «Внутри» card opens after the same 0.4 s.</summary>
+    public const int TipDelay = 400;
+
     // Workspace geometry measured in Inkarnate through REA/CDP at 2560×1343 (2026-10-16): a 48 px
     // floating rail of 46×48 tool buttons, a 289 px tool panel that floats over the canvas 12 px
     // below the top bar, a 240 px layer panel. Colours stay Map's own.
@@ -822,10 +825,10 @@ public static class Ui
         }.Named(name).Classed("tool-button", "rail-tool");
         AutomationProperties.SetName(button, title);
         ToolTip.SetTip(button, shortcut.Length > 0 ? $"{title}  ({shortcut})" : title);
-        // The rail has no captions any more, so its names come out beside the button and fast.
+        // Beside the button, after the one delay every tip has (DEC-070); the editor replaces it with the «Внутри» card.
         ToolTip.SetPlacement(button, PlacementMode.Right);
         ToolTip.SetHorizontalOffset(button, 6);
-        ToolTip.SetShowDelay(button, 250);
+        ToolTip.SetShowDelay(button, TipDelay);
         button.Click += (_, _) =>
         {
             action();
@@ -1164,7 +1167,7 @@ public static class Ui
             Child = MapIcons.Grid24(MapIcons.LineInfo, 14),
         }.Classed("info-glyph");
         ToolTip.SetTip(glyph, text);
-        ToolTip.SetShowDelay(glyph, 150);
+        ToolTip.SetShowDelay(glyph, TipDelay);
         AutomationProperties.SetName(glyph, "Пояснение: " + text);
         return glyph;
     }

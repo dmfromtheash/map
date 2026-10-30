@@ -79,5 +79,10 @@ public sealed partial class PaintPerfApplication
         await Task.Delay(1500);
         await Shot("ribbon-light-evening");
         _report.Checks["ribbon/light-evening"] = _editor.ShownLighting is { Enabled: true } l && Math.Abs(l.TimeOfDay - 0.5) < 0.02;
+        // DEC-070 p. 6: every visible control of the ribbon (and the window around it) has its line.
+        var noTip = PanelAudit.MissingTips(_view);
+        File.WriteAllLines(Path.ChangeExtension(Options.OutputPath, "ribbon-no-tooltip.txt"), noTip);
+        foreach (var name in noTip) Console.WriteLine("no tooltip: " + name);
+        _report.Checks["ribbon/every-visible-control-has-tooltip"] = noTip.Count == 0;
     }
 }

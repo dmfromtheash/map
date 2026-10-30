@@ -37,6 +37,7 @@ public sealed partial class EditorView
         void Tab(EditorWorkspace workspace, string name, string title)
         {
             var tab = Ui.TextButton(name, title, () => ShowWorkspace(workspace, openWorldList: true), "workspace-tab");
+            AttachInsideCard(tab, () => WorkspaceCard(workspace), Avalonia.Controls.PlacementMode.Bottom);
             _workspaceTabs[workspace] = tab;
             row.Children.Add(tab);
         }

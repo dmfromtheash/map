@@ -112,5 +112,28 @@ public sealed partial class NativeEditorScenarioApplication
         _report.Checks["every-visible-control-has-tooltip"] = noTip.Count == 0;
         Console.WriteLine($"controls without tooltip: {noTip.Count}");
         _report.Checks["standard-panel-shots-saved"] = audit.Count >= 14;
+
+        // DEC-080: the «Внутри» card opens on every section tab, the column tabs and the main rail tools, and is drawn.
+        var cards = 0; var badCards = new List<string>();
+        foreach (var name in new[] { "WorkspaceDrawTab", "WorkspaceObjectsTab", "WorldSectionButton", "WorkspaceAppearanceTab",
+                     "RightTabProperties", "RightTabContent", "RightTabLayers",
+                     "SelectToolButton", "LandToolButton", "RiverToolButton", "RoadToolButton", "AssetsLibraryButton" })
+        {
+            var target = Find<Control>(name);
+            if (ToolTip.GetTip(target) is not ToolTip tip || !tip.Classes.Contains("inside-card")) { badCards.Add(name + ": нет карточки"); continue; }
+            ToolTip.SetIsOpen(target, true);
+            for (var i = 0; i < 20 && tip.Content is not Control { Bounds.Width: > 0 }; i++) await Settle();
+            // Drawn, and no taller than the owner's laptop screen (1080 px at 125 % = 864 DIP, minus the bars).
+            if (tip.Content is Border { Name: "InsideCard" } card && card.Bounds is { Width: > 300, Height: > 120 and <= 820 })
+            {
+                PanelAudit.Save(card, Path.ChangeExtension(Options.OutputPath, $"inside-card-{name}.png"));
+                cards++;
+            }
+            else badCards.Add(name + ": карточка не построена");
+            ToolTip.SetIsOpen(target, false); await Settle();
+        }
+        foreach (var bad in badCards) Console.WriteLine("inside card: " + bad);
+        Console.WriteLine($"inside cards drawn: {cards}/12");
+        _report.Checks["inside-card-on-tabs-and-tools"] = badCards.Count == 0;
     }
 }

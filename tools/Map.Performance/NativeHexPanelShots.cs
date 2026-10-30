@@ -56,6 +56,7 @@ public sealed partial class RegionalApplication
         var host = panel.FindAncestorOfType<ScrollViewer>() ?? throw new InvalidOperationException("The hex panel has no scroll viewer.");
         var plate = (Control?)host.GetVisualAncestors().OfType<Border>().FirstOrDefault(c => c.Name == "ContextPanel") ?? host;
         var audit = new List<object>();
+        var noTip = new SortedSet<string>(StringComparer.Ordinal);
         var markdown = new StringBuilder("# Аудит раскладки панели гексов\n\n");
         markdown.AppendLine($"Окно {_window.Width}×{_window.Height}, плашка {plate.Bounds.Width:0}×{plate.Bounds.Height:0}, содержимое панели {panel.Bounds.Width:0} px в ширину.\n");
 
@@ -70,6 +71,7 @@ public sealed partial class RegionalApplication
             Capture(plate, "hex-panel-" + mode.ToLowerInvariant() + "-view");
 
             var issues = AuditPanel(panel);
+            foreach (var tip in PanelAudit.MissingTips(_view)) noTip.Add(tip);
             audit.Add(new { mode, height = Math.Round(panel.Bounds.Height), viewport = Math.Round(host.Viewport.Height), issues });
             markdown.AppendLine($"## {mode}: высота {panel.Bounds.Height:0} px при видимых {host.Viewport.Height:0} px ({panel.Bounds.Height / Math.Max(1, host.Viewport.Height):0.0} экрана)\n");
             foreach (var issue in issues) markdown.AppendLine("- " + issue);
@@ -81,6 +83,10 @@ public sealed partial class RegionalApplication
             JsonSerializer.Serialize(audit, new JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }));
         File.WriteAllText(Path.ChangeExtension(Options.OutputPath, "hex-panel-audit.md"), markdown.ToString());
         Check("the hex panel was shot in every mode", audit.Count == 11);
+        // DEC-070 p. 6: every visible control in every hex mode has its line.
+        File.WriteAllLines(Path.ChangeExtension(Options.OutputPath, "hex-no-tooltip.txt"), noTip);
+        foreach (var name in noTip) Console.WriteLine("no tooltip: " + name);
+        Check("every visible hex control has a tooltip", noTip.Count == 0);
     }
 
     private void SavePanel(Control panel, string name) => PanelAudit.Save(panel, Path.ChangeExtension(Options.OutputPath, name + ".png"));
