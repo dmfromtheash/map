@@ -113,8 +113,8 @@ public sealed class SetFogCommand(MapFog before, MapFog after, string name) : IE
 
 /// <summary>
 /// R27: what the players may receive of a painted map with fog - only the labels and notes they
-/// have seen, only the cards meant for them, no atlas paths. The hex part is sanitized by
-/// <see cref="ExportPlayerVisibility"/>.
+/// have seen, only the cards meant for them and not hidden by the fog (DEC-077), no atlas paths.
+/// The hex part is sanitized by <see cref="ExportPlayerVisibility"/>.
 /// </summary>
 public static class PlayerScene
 {
@@ -131,13 +131,14 @@ public static class PlayerScene
             _ => layer,
         }).ToArray();
         var notes = document.Notes.Where(n => n.PlayerVisible && (n.AnchorKind != NoteAnchorKind.World || fog.Sees(n.WorldX, n.WorldY))).ToArray();
+        var objects = new Lazy<Dictionary<Guid, SceneObject>>(() => ObjectsById(document));
         return new MapDocument(document.Id, document.Title, document.CreatedUtc, document.Canvas, layers, document.Assets, notes, [], document.StampForeground, document.Category)
         {
             Lighting = document.Lighting,
             Style = document.Style,
             Labels = document.Labels,
             Fog = fog,
-            Entities = [.. document.Entities.Where(e => e.PlayerVisible)],
+            Entities = [.. document.Entities.Where(e => e.PlayerVisible && !(fog.Enabled && HiddenByFog(document, e, objects)))],
             Transitions = [.. document.Transitions.Where(t => fog.Sees(t.From.X, t.From.Y))],
             Timeline = document.Timeline,
             Planet = document.Planet,
@@ -158,4 +159,49 @@ public static class PlayerScene
     }
 
     private static bool Seen(MapFog fog, SceneObject label) => fog.Sees(label.X + (label.Width / 2), label.Y + (label.Height / 2));
+
+    /// <summary>
+    /// DEC-077: the card has places on this map and the players have seen none of them yet. A bound object or note
+    /// is looked up where it stands now; a river, road, area or bare point by the point kept with the binding.
+    /// A hex binding holds a cell, not a point, and is left to the hex visibility; a card with no place on this map
+    /// is never hidden by its fog.
+    /// </summary>
+    public static bool HiddenByFog(MapDocument document, MapEntity entity)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(entity);
+        return document.Fog.Enabled && HiddenByFog(document, entity, new Lazy<Dictionary<Guid, SceneObject>>(() => ObjectsById(document)));
+    }
+
+    /// <summary>The cards with «Видно игрокам» that the fog keeps from the players (the line of the export for players).</summary>
+    public static int HiddenByFogCount(MapDocument document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        if (!document.Fog.Enabled) return 0;
+        var objects = new Lazy<Dictionary<Guid, SceneObject>>(() => ObjectsById(document));
+        return document.Entities.Count(e => e.PlayerVisible && HiddenByFog(document, e, objects));
+    }
+
+    private static bool HiddenByFog(MapDocument document, MapEntity entity, Lazy<Dictionary<Guid, SceneObject>> objects)
+    {
+        var places = entity.Bindings.Where(b => (b.MapId is null || b.MapId == document.Id.Value) && b.Kind != EntityTargetKind.Hex).ToList();
+        return places.Count > 0 && !places.Any(b => PlaceSeen(document, objects, b));
+    }
+
+    private static Dictionary<Guid, SceneObject> ObjectsById(MapDocument document)
+    {
+        var result = new Dictionary<Guid, SceneObject>();
+        foreach (var item in document.Layers.OfType<ObjectLayer>().SelectMany(l => l.Objects)) result.TryAdd(item.Id.Value, item);
+        return result;
+    }
+
+    private static bool PlaceSeen(MapDocument document, Lazy<Dictionary<Guid, SceneObject>> objects, EntityBinding binding)
+    {
+        var fog = document.Fog;
+        if (binding.Kind == EntityTargetKind.Object && objects.Value.TryGetValue(binding.TargetId, out var item))
+            return Seen(fog, item);
+        if (binding.Kind == EntityTargetKind.Note && document.Notes.FirstOrDefault(n => n.Id.Value == binding.TargetId) is { AnchorKind: NoteAnchorKind.World } note)
+            return fog.Sees(note.WorldX, note.WorldY);
+        return fog.Sees(binding.X, binding.Y);
+    }
 }

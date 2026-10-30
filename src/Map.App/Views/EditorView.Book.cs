@@ -52,6 +52,14 @@ public sealed partial class EditorView
 
         var master = Ui.AsyncButton("AtlasBookMasterButton", "Книга-атлас для ведущего…", async () => await _editor.PickAndExportAtlasBookAsync(players: false), "compact");
         var players = Ui.AsyncButton("AtlasBookPlayersButton", "Книга-атлас для игроков…", async () => await _editor.PickAndExportAtlasBookAsync(players: true), "compact");
+        // DEC-077: the cards whose places the players have not seen yet stay out of their book.
+        var fogHidden = new TextBlock { Name = "AtlasBookFogHiddenText", TextWrapping = TextWrapping.Wrap }.Classed("faint", "role-caption");
+        _bookSyncs.Add(() =>
+        {
+            var hidden = _editor.CardsHiddenByFog;
+            fogHidden.IsVisible = _editor.Fog.Enabled;
+            fogHidden.Text = $"Скрыто туманом: {hidden} {Map.Presentation.ViewModels.EditorViewModel.CardsWord(hidden)} «Видно игрокам» этой карты — их места ещё не открыты. Откроете туман — попадут в книгу игроков.";
+        });
 
         var mods = new StackPanel { Name = "ModList", Spacing = 6 };
         void ListMods()
@@ -110,6 +118,7 @@ public sealed partial class EditorView
                     {
                         Ui.Hint("Все карты атласа в одном PDF: содержание, лист на карту с отмеченными подкартами («см. с. N»), ключи заметок и карточек, указатель названий. После правок соберите заново."),
                         new Ui.ChoiceGrid { MaxColumns = 2, Children = { master, players } },
+                        fogHidden,
                     } }),
                 },
             },

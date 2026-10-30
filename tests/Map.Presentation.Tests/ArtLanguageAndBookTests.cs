@@ -96,6 +96,60 @@ public sealed class ArtLanguageAndBookTests : IDisposable
         finally { if (File.Exists(path)) File.Delete(path); }
     }
 
+    [Fact]
+    public void Every_map_of_the_book_draws_its_own_embedded_pictures()
+    {
+        // The detail sheet holds one of the owner's mountains embedded in its own file; the parent map has none.
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "Map.slnx"))) root = root.Parent;
+        var bytes = File.ReadAllBytes(Path.Combine(root!.FullName, "tests", "fixtures", "assets", "owner-mountain-02.png"));
+        var sha = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes));
+        var mountain = new MapAssetReference(sha, "Двуглавая гора", "image/png", "png", ProjectAssetStorage.Embedded, DateTimeOffset.UnixEpoch, "test", "Map", bytes);
+        var peak = new SceneObject(ObjectId.New(), SceneObjectKind.Stamp, "Гора", 300, 200, 200, 200, 0, "#FFFFFFFF", "#00000000", 0, true, false)
+        { Stamp = new StampStyle(sha) };
+        MapDocument Doc(string title, SceneObject[] objects, MapAssetReference[] assets) => new(DocumentId.New(), title, DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(1024, 768, "px", "#FFEFE6D2"),
+            [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFEFE6D2"), new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, objects)], assets);
+        var world = Doc("Мир", [], []);
+        var range = Doc("Хребет", [peak], [mountain]);
+        var atlas = new MapAtlas(Guid.NewGuid(), [new AtlasMap(world.Id.Value, "world.mapproj", "Мир"), new AtlasMap(range.Id.Value, "range.mapproj", "Хребет")],
+            [new AtlasLink(world.Id.Value, range.Id.Value, new AtlasTransform(80, 80, 200, 150, 1024, 768), "region")]);
+
+        var asked = new List<(Guid Id, string Title, bool HasMountain)>();
+        var path = Path.Combine(Path.GetTempPath(), "map-book-" + Guid.NewGuid().ToString("N") + ".pdf");
+        try
+        {
+            AtlasBook.Write(path, "Мир", [(world.Id.Value, world), (range.Id.Value, range)], atlas, players: false, (id, document) =>
+            {
+                var source = new Map.Presentation.Services.ExportStampImageSource(document, null, null);
+                asked.Add((id, document.Title, source.TryGetImage(sha) is not null));
+                return source;
+            });
+            Assert.Equal([(world.Id.Value, "Мир", false), (range.Id.Value, "Хребет", true)], asked);
+        }
+        finally { if (File.Exists(path)) File.Delete(path); }
+    }
+
+    [Fact]
+    public void The_players_book_leaves_out_the_cards_under_the_fog_until_it_opens()
+    {
+        // DEC-077: a card meant for the players, bound to a place they have not reached.
+        var card = new MapEntity { Name = "Логово дракона", PlayerVisible = true, Bindings = [new EntityBinding(null, EntityTargetKind.Point, Guid.Empty, 700, 500)] };
+        var island = new MapDocument(DocumentId.New(), "Остров", DateTimeOffset.UnixEpoch, new CanvasDefinition(1024, 768, "px", "#FFEFE6D2"),
+            [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFEFE6D2"), new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, [])])
+        { Fog = new MapFog { Enabled = true }, Entities = [card] };
+        var path = Path.Combine(Path.GetTempPath(), "map-book-" + Guid.NewGuid().ToString("N") + ".pdf");
+        try
+        {
+            // Under the fog: contents and the map, no key and no index. The master's book has both.
+            Assert.Equal(2, AtlasBook.Write(path, "Остров", [(island.Id.Value, island)], null, players: true, stamps: null));
+            Assert.Equal(4, AtlasBook.Write(path, "Остров", [(island.Id.Value, island)], null, players: false, stamps: null));
+            var opened = island with { Fog = Map.Core.Editing.MapFogEditor.RevealAll(island.Fog, 1024, 768) };
+            Assert.Equal(4, AtlasBook.Write(path, "Остров", [(opened.Id.Value, opened)], null, players: true, stamps: null));
+        }
+        finally { if (File.Exists(path)) File.Delete(path); }
+    }
+
     private string Image(string name, SKColor color)
     {
         Directory.CreateDirectory(_root);

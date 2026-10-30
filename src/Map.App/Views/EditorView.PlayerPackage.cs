@@ -102,7 +102,8 @@ public sealed partial class EditorView
             notes.Text = $"Заметки: всего {p.NotesTotal} · в пакете {p.NotesIncluded} · скрыто {p.NotesTotal - p.NotesIncluded}";
             layers.Text = $"Видимых слоёв в пакете: {p.Layers}";
             labels.Text = $"Подписи ключей: всего {p.LabelsTotal} · в пакете {p.LabelsIncluded} · скрыто {p.LabelsTotal - p.LabelsIncluded}";
-            fog.Text = $"Скрыто туманом: {p.FogHexes} гексов, {p.FogNotes} заметок";
+            var cards = _editor.CardsHiddenByFog;
+            fog.Text = $"Скрыто туманом: {p.FogHexes} гексов, {p.FogNotes} заметок, {cards} {EditorViewModel.CardsWord(cards)}";
         }
         HexSync(Sync, [.. DocumentChanged, nameof(EditorViewModel.ExportHexPlayers), nameof(EditorViewModel.ExportHexLevel),
             nameof(EditorViewModel.PlayerPackagePreview)]);

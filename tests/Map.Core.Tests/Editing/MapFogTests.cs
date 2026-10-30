@@ -87,6 +87,53 @@ public sealed class MapFogTests
         Assert.Equal(2, new ExportScene(document).Document.Layers.OfType<ObjectLayer>().Single().Objects.Count);
     }
 
+    [Fact]
+    public void A_card_whose_place_is_under_the_fog_stays_from_the_players_until_the_fog_opens()
+    {
+        // DEC-077: the place decides, not only «Видно игрокам».
+        var lair = Label("Логово", 1500, 1500);
+        var hut = new MapNote(NoteId.New(), "Хижина", "", NoteAnchorKind.World, 1600, 400);
+        MapEntity Card(string name, params EntityBinding[] places) => new() { Name = name, PlayerVisible = true, Bindings = [.. places] };
+        var dragon = Card("Дракон", new EntityBinding(null, EntityTargetKind.Object, lair.Id.Value, 0, 0));
+        var witch = Card("Ведьма", new EntityBinding(null, EntityTargetKind.Note, hut.Id.Value, 0, 0));
+        var spring = Card("Родник", new EntityBinding(null, EntityTargetKind.Point, Guid.Empty, 300, 300));
+        var king = Card("Король");
+        var elsewhere = Card("Посол", new EntityBinding(Guid.NewGuid(), EntityTargetKind.Point, Guid.Empty, 1500, 1500));
+        var secret = new MapEntity { Name = "Заговор", Bindings = [new EntityBinding(null, EntityTargetKind.Point, Guid.Empty, 120, 120)] };
+        var start = MapFogEditor.Begin(new MapFog { Enabled = true });
+        MapFogEditor.Dab(start, 120, 120, 100, reveal: true, 2048, 2048);
+        var document = Document(lair).WithNotes([hut]) with
+        {
+            Fog = MapFogEditor.Finish(start),
+            Entities = [dragon, witch, spring, king, elsewhere, secret],
+        };
+
+        string[] Players(MapDocument d) => [.. new ExportScene(d, recipient: ExportRecipient.Players).Document.Entities.Select(e => e.Name)];
+        // Under the fog: the lair, the hut and the spring. Without a place here: the king and the envoy of another map.
+        Assert.Equal(["Король", "Посол"], Players(document));
+        Assert.Equal(3, PlayerScene.HiddenByFogCount(document));
+        Assert.True(PlayerScene.HiddenByFog(document, dragon));
+        Assert.False(PlayerScene.HiddenByFog(document, king));
+
+        // The players reach the lair and the spring: their cards come back; the witch's hut is still hidden.
+        var walk = MapFogEditor.Begin(document.Fog);
+        MapFogEditor.Dab(walk, 1560, 1520, 120, reveal: true, 2048, 2048);
+        MapFogEditor.Dab(walk, 300, 300, 60, reveal: true, 2048, 2048);
+        var opened = document with { Fog = MapFogEditor.Finish(walk) };
+        Assert.Equal(["Дракон", "Родник", "Король", "Посол"], Players(opened));
+        Assert.Equal(1, PlayerScene.HiddenByFogCount(opened));
+
+        // The object is looked up where it stands now: moved under the fog, the dragon hides again.
+        var moved = opened.WithLayers([.. opened.Layers.Select(l => l is ObjectLayer o
+            ? o with { Objects = [.. o.Objects.Select(x => x.Id == lair.Id ? SceneObjectClone.At(x, 900, 1800) : x)] } : l)]);
+        Assert.DoesNotContain("Дракон", Players(moved));
+
+        // The fog switched off hides nothing; the master always gets every card.
+        Assert.Equal(["Дракон", "Ведьма", "Родник", "Король", "Посол"], Players(document with { Fog = document.Fog with { Enabled = false } }));
+        Assert.Equal(0, PlayerScene.HiddenByFogCount(document with { Fog = document.Fog with { Enabled = false } }));
+        Assert.Equal(6, new ExportScene(document).Document.Entities.Length);
+    }
+
     private static SceneObject Label(string content, double x, double y) =>
         new SceneObject(ObjectId.New(), SceneObjectKind.Text, content, x, y, 120, 40, 0, "#FF20242B", "#FFFFFFFF", 0, true, false)
         { Text = new TextStyle { Content = content } };

@@ -34,7 +34,12 @@ public static class AtlasBook
         return result;
     }
 
-    public static int Write(string path, string title, IReadOnlyList<(Guid Id, MapDocument Document)> maps, MapAtlas? atlas, bool players, IStampImageSource? stamps)
+    /// <param name="stamps">
+    /// The pictures of one map of the book, asked for each page in turn: every map has its own embedded assets and
+    /// project folder. A source that is <see cref="IDisposable"/> is disposed when its page is drawn.
+    /// </param>
+    public static int Write(string path, string title, IReadOnlyList<(Guid Id, MapDocument Document)> maps, MapAtlas? atlas, bool players,
+        Func<Guid, MapDocument, IStampImageSource?>? stamps)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         var scenes = maps.Select(m => (m.Id, Document: players ? PlayerScene.Sanitize(m.Document) : m.Document)).ToList();
@@ -104,10 +109,15 @@ public static class AtlasBook
                     canvas.Save();
                     canvas.Translate(ox, oy);
                     canvas.Scale((float)scale);
-                    SceneRenderer.Render(canvas, document, new RenderOptions
+                    var pictures = stamps?.Invoke(id, maps[i].Document);
+                    try
                     {
-                        IsExport = true, IncludeBaseColor = true, ViewScale = scale * 200 / 72.0, StyleRasterScale = 1, HexPlayerView = players, Stamps = stamps,
-                    });
+                        SceneRenderer.Render(canvas, document, new RenderOptions
+                        {
+                            IsExport = true, IncludeBaseColor = true, ViewScale = scale * 200 / 72.0, StyleRasterScale = 1, HexPlayerView = players, Stamps = pictures,
+                        });
+                    }
+                    finally { (pictures as IDisposable)?.Dispose(); }
                     canvas.Restore();
                     // Detail sheets outlined on their parent with a page reference.
                     if (atlas is not null)
