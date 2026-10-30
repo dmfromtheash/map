@@ -16,4 +16,9 @@
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.13" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- «Открыть карту.html»: Map's own offline viewer for the tile pyramid folder. -->
+    <EmbeddedResource Include="ViewerPage.html" LogicalName="Map.Export.ViewerPage.html" />
+  </ItemGroup>
+
 </Project>

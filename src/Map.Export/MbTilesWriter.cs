@@ -152,7 +152,7 @@ public static class MbTilesWriter
     /// The tile's stored bytes and their content id, or (null, null) for a fully transparent tile.
     /// WebP is decoded back and must give the same straight RGBA as the PNG.
     /// </summary>
-    private static (string? Id, byte[]? Data) Encode(string pngPath, bool webp)
+    internal static (string? Id, byte[]? Data) Encode(string pngPath, bool webp)
     {
         var png = File.ReadAllBytes(pngPath);
         using var pixels = DecodeStraight(png);
@@ -188,7 +188,7 @@ public static class MbTilesWriter
         return bitmap;
     }
 
-    private sealed class WebpNotExactException() : Exception("WebP без потерь не повторил пиксели участка.");
+    internal sealed class WebpNotExactException() : Exception("WebP без потерь не повторил пиксели участка.");
 
     private static (int Columns, int Rows) Grid(PngTilePyramid pyramid, int level)
     {

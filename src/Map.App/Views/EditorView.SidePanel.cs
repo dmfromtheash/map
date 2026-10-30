@@ -2974,6 +2974,8 @@ public sealed partial class EditorView
                     _exportModeButtons, _editor.SetExportOutputMode),
                 Choice("ExportMbTilesButton", "MBTiles", ExportOutputMode.MbTiles,
                     _exportModeButtons, _editor.SetExportOutputMode),
+                Choice("ExportViewerFolderButton", "Папка с просмотром", ExportOutputMode.ViewerFolder,
+                    _exportModeButtons, _editor.SetExportOutputMode),
             },
         };
 

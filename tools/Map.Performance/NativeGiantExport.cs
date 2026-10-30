@@ -12,7 +12,7 @@ namespace Map.Performance;
 /// canvas with a sea, a continent and a raised plateau on the owner's grounds, a river, a road,
 /// labels along both (R07), a country name and MAP_GIANT_OBJECTS (default 40 000) of the owner's
 /// mountains on the land. Exports with the production engine to MAP_GIANT_OUT (a folder, e.g. the
-/// external disk) in MAP_GIANT_MODES (comma list: png, tiles, mbtiles; default png) at
+/// external disk) in MAP_GIANT_MODES (comma list: png, tiles, mbtiles, viewer; default png) at
 /// MAP_GIANT_SCALE (1, 2 or 4; default 1) or MAP_GIANT_EDGE (exact output side in pixels, e.g. 98304 to
 /// fit the download into a size budget) and reports time, size and peak memory per mode.
 /// MAP_OWNER_ART_LIBRARY = a COPY of %LOCALAPPDATA%\Map\Assets (the owner's mountains).
@@ -81,6 +81,7 @@ internal static class NativeGiantExport
             {
                 "tiles" => ExportOutputMode.TilePackage,
                 "mbtiles" => ExportOutputMode.MbTiles,
+                "viewer" => ExportOutputMode.ViewerFolder,
                 _ => ExportOutputMode.SingleImage,
             };
             var edge = exactEdge > 0 ? exactEdge : Size * scale;
@@ -91,6 +92,7 @@ internal static class NativeGiantExport
             {
                 ExportOutputMode.TilePackage => "-tiles",
                 ExportOutputMode.MbTiles => MbTilesWriter.Extension,
+                ExportOutputMode.ViewerFolder => "-viewer",
                 _ => ".png",
             };
             var destination = Path.Combine(output, name);

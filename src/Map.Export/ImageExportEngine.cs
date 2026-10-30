@@ -96,6 +96,9 @@ public sealed class ImageExportEngine : IImageExporter
                 ExportOutputMode.MbTiles => await ExportMbTilesAsync(
                     snapshot, plan, destinationPath, stamps, tileCache, progress, cancellationToken)
                     .ConfigureAwait(false),
+                ExportOutputMode.ViewerFolder => await ExportViewerFolderAsync(
+                    snapshot, plan, destinationPath, stamps, tileCache, progress, cancellationToken)
+                    .ConfigureAwait(false),
                 _ => await ExportTilesAsync(
                     snapshot, plan, destinationPath, stamps, tileCache, progress, cancellationToken)
                     .ConfigureAwait(false),
@@ -166,6 +169,53 @@ public sealed class ImageExportEngine : IImageExporter
         finally
         {
             if (temporary is not null) TryDeleteFile(temporary);
+            TryDeleteDirectory(work);
+        }
+    }
+
+    /// <summary>
+    /// The folder to look at the whole picture (owner, 2026-10-30): the picture is streamed to a
+    /// scratch PNG, cut into the pyramid and written as lossless WebP tiles with «Открыть карту.html»
+    /// into a hidden folder beside the destination, which is then renamed into place.
+    /// </summary>
+    private async Task<ExportResult> ExportViewerFolderAsync(
+        MapDocument snapshot,
+        ExportPlan plan,
+        string destinationPath,
+        IStampImageSource? stamps,
+        TileImageCache tileCache,
+        IProgress<ExportProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        var fullPath = Path.GetFullPath(destinationPath);
+        if (Directory.Exists(fullPath) || File.Exists(fullPath))
+            throw new ExportOperationException("Папка результата уже существует. Выберите новое имя; существующие данные не изменены.");
+        var parent = Path.GetDirectoryName(fullPath);
+        if (string.IsNullOrWhiteSpace(parent) || !Directory.Exists(parent))
+            throw new ExportOperationException("Родительская папка результата не существует. Выберите другую папку.");
+        var work = Path.Combine(MbTilesScratchRoot(parent, (long)plan.OutputWidth * plan.OutputHeight * 4),
+            "." + Path.GetFileName(fullPath) + "." + Guid.NewGuid().ToString("N") + ".tmp");
+        var folder = Path.Combine(parent, "." + Path.GetFileName(fullPath) + "." + Guid.NewGuid().ToString("N") + ".tmp");
+        Directory.CreateDirectory(work);
+        try
+        {
+            var png = Path.Combine(work, "picture.png");
+            await ExportSingleAsync(snapshot, plan with { OutputMode = ExportOutputMode.SingleImage }, png, stamps,
+                tileCache, new ScaledProgress(progress, 0, 0.6), cancellationToken).ConfigureAwait(false);
+            Report(progress, ExportPhase.EncodingAndWriting, 0.6, "Построение пирамиды тайлов…");
+            var pyramid = await PngTilePyramid.OpenUnderHeavyAsync(png, Path.Combine(work, "pyramid"),
+                new ScaledProgress(progress, 0.6, 0.8), cancellationToken, _settings).ConfigureAwait(false);
+            var tiles = ViewerFolderWriter.Write(pyramid, folder, snapshot.Title, cancellationToken,
+                fraction => Report(progress, ExportPhase.Finalizing, 0.8 + fraction * 0.18, "Запись папки с просмотром…"),
+                _settings.CompressionParallelism);
+            _settings.FaultInjector?.Invoke(ExportFaultPoint.BeforeFinalize);
+            Directory.Move(folder, fullPath);
+            Report(progress, ExportPhase.Completed, 1, "Папка с просмотром готова.");
+            return new ExportResult(fullPath, ExportOutputMode.ViewerFolder, tiles + 1);
+        }
+        finally
+        {
+            TryDeleteDirectory(folder);
             TryDeleteDirectory(work);
         }
     }

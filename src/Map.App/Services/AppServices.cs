@@ -264,7 +264,7 @@ public sealed class WindowsFolderLauncher : IFolderLauncher
 {
     public void OpenContainingFolder(string resultPath, ExportOutputMode outputMode)
     {
-        var target = outputMode == ExportOutputMode.TilePackage
+        var target = outputMode is ExportOutputMode.TilePackage or ExportOutputMode.ViewerFolder
             ? resultPath
             : Path.GetDirectoryName(resultPath);
         if (string.IsNullOrWhiteSpace(target) || !Directory.Exists(target))

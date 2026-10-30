@@ -61,6 +61,11 @@ public static partial class ExportPlanner
             throw new ExportValidationException("MBTiles собирается из PNG: выберите формат PNG.");
         }
 
+        if (request.OutputMode == ExportOutputMode.ViewerFolder && request.Format != ExportImageFormat.Png)
+        {
+            throw new ExportValidationException("Папка с просмотром собирается из PNG без потерь: выберите формат PNG.");
+        }
+
         if (request.Format == ExportImageFormat.Jpeg && request.TransparentBackground)
         {
             throw new ExportValidationException(
@@ -76,7 +81,7 @@ public static partial class ExportPlanner
         try
         {
             var streamingPng = request.Format == ExportImageFormat.Png
-                && request.OutputMode is ExportOutputMode.SingleImage or ExportOutputMode.MbTiles;
+                && request.OutputMode is ExportOutputMode.SingleImage or ExportOutputMode.MbTiles or ExportOutputMode.ViewerFolder;
             var tileHeight = streamingPng ? Math.Min(settings.TileEdge, 512) : settings.TileEdge;
             var columns = request.OutputMode == ExportOutputMode.TilePackage || streamingPng
                 ? DivideRoundUp(request.OutputWidth, settings.TileEdge)

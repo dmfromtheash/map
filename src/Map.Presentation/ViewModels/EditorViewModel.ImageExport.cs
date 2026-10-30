@@ -307,6 +307,8 @@ public sealed partial class EditorViewModel
             ExportOutputMode.MbTiles => await _exportDestinationPicker.PickFileAsync(
                 suggestedBase + MbTilesWriter.Extension, "mbtiles", "MBTiles — пирамида тайлов в одном файле")
                 .ConfigureAwait(true),
+            ExportOutputMode.ViewerFolder => await _exportDestinationPicker.PickTilePackageAsync($"{suggestedBase} — просмотр")
+                .ConfigureAwait(true),
             _ => await _exportDestinationPicker.PickTilePackageAsync($"{suggestedBase}-tiles")
                 .ConfigureAwait(true),
         };
@@ -354,6 +356,7 @@ public sealed partial class EditorViewModel
             {
                 ExportOutputMode.SingleImage => $"Готово: {result.DestinationPath}",
                 ExportOutputMode.MbTiles => $"Готов MBTiles ({result.FileCount} тайлов): {result.DestinationPath}",
+                ExportOutputMode.ViewerFolder => $"Готова папка с просмотром: откройте «{ViewerFolderWriter.PageName}» в {result.DestinationPath}",
                 _ => $"Готов пакет ({result.FileCount - 1} тайлов): {result.DestinationPath}",
             };
             _log.Info($"EXPORT_SUCCEEDED mode={result.OutputMode}");
@@ -682,9 +685,13 @@ public sealed partial class EditorViewModel
 
     private static string DescribePlan(ExportPlan plan)
     {
-        var mode = plan.OutputMode == ExportOutputMode.SingleImage
-            ? "один файл"
-            : $"пакет {plan.Columns} × {plan.Rows} ({plan.TileCount} тайлов)";
+        var mode = plan.OutputMode switch
+        {
+            ExportOutputMode.SingleImage => "один файл",
+            ExportOutputMode.MbTiles => "MBTiles, WebP без потерь",
+            ExportOutputMode.ViewerFolder => "папка с просмотром, WebP без потерь",
+            _ => $"пакет {plan.Columns} × {plan.Rows} ({plan.TileCount} тайлов)",
+        };
         var stretch = Math.Abs(
             plan.OutputWidth / (double)plan.OutputHeight
             - plan.SourceRegion.Width / (double)plan.SourceRegion.Height) > 0.0001

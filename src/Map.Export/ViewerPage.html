@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Карта</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #14100b; color: #f0e2c4; font: 14px/1.4 Georgia, "Times New Roman", serif; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+  canvas.dragging { cursor: grabbing; }
+  .panel { position: absolute; background: rgba(28, 21, 14, .88); border: 1px solid #6b4a12; border-radius: 6px; box-shadow: 0 2px 10px rgba(0,0,0,.35); }
+  #info { left: 14px; top: 12px; padding: 8px 12px; max-width: calc(100% - 28px); }
+  #info b { font-weight: normal; font-size: 16px; color: #f7ead0; }
+  #info span { display: block; color: #c9b48f; font-size: 13px; }
+  #tools { right: 14px; top: 12px; display: flex; gap: 6px; padding: 6px; }
+  button { font: inherit; color: #f0e2c4; background: #2a1f14; border: 1px solid #7a5a22; border-radius: 4px; padding: 5px 11px; cursor: pointer; min-width: 34px; }
+  button:hover { background: #3a2a18; border-color: #b58a3a; }
+  button:focus-visible { outline: 2px solid #e2b866; outline-offset: 1px; }
+  #zoom { right: 14px; bottom: 12px; padding: 5px 10px; color: #c9b48f; font-size: 13px; }
+  #help { left: 14px; bottom: 12px; padding: 5px 10px; color: #a8957a; font-size: 12px; }
+  @media (max-width: 640px) { #help { display: none; } }
+</style>
+</head>
+<body>
+<canvas id="view" aria-label="Карта"></canvas>
+<div id="info" class="panel"><b id="title"></b><span id="size"></span></div>
+<div id="tools" class="panel">
+  <button id="out" title="Отдалить (−)" aria-label="Отдалить">−</button>
+  <button id="in" title="Приблизить (+)" aria-label="Приблизить">+</button>
+  <button id="fit" title="Показать всю карту (0)">Вся карта</button>
+  <button id="one" title="Каждый пиксель карты — пиксель экрана (1)">1 : 1</button>
+</div>
+<div id="zoom" class="panel"></div>
+<div id="help" class="panel">Перетаскивание — двигать · колесо — приблизить к курсору · двойной щелчок — ближе</div>
+<script>
+// Map's own viewer for a folder exported by Map: tiles/<level>/<column>_<row>.<format>, level 0 holds every
+// pixel of the map, each next level is half the size. Works from the disk, without the internet.
+const S = /*MAP_SETTINGS*/{};
+const canvas = document.getElementById('view');
+const ctx = canvas.getContext('2d');
+document.title = S.title;
+document.getElementById('title').textContent = S.title;
+document.getElementById('size').textContent =
+  S.width.toLocaleString('ru-RU') + ' × ' + S.height.toLocaleString('ru-RU') + ' px · без потерь';
+
+let dpr = 1, vw = 0, vh = 0;
+let scale = 1, cx = S.width / 2, cy = S.height / 2;   // screen px per map px; map point at the centre
+const tiles = new Map();                                // "level/column_row" -> {img, ok, used}
+let clock = 0, pending = 0, frame = 0;
+
+function resize() {
+  dpr = window.devicePixelRatio || 1;
+  vw = canvas.clientWidth; vh = canvas.clientHeight;
+  canvas.width = Math.round(vw * dpr); canvas.height = Math.round(vh * dpr);
+  draw();
+}
+function fitScale() { return Math.min(vw / S.width, vh / S.height) * 0.96; }
+function clampView() {
+  const min = fitScale() / 2, max = 16;
+  scale = Math.min(max, Math.max(min, scale));
+  cx = Math.min(S.width, Math.max(0, cx)); cy = Math.min(S.height, Math.max(0, cy));
+}
+function levelSize(level) { const d = 2 ** level; return [Math.ceil(S.width / d), Math.ceil(S.height / d)]; }
+
+function tile(level, column, row) {
+  const key = level + '/' + column + '_' + row;
+  let t = tiles.get(key);
+  if (!t) {
+    t = { img: new Image(), ok: false, done: false, used: 0 };
+    t.img.decoding = 'async';
+    t.img.onload = () => { t.ok = true; t.done = true; pending--; request(); };
+    t.img.onerror = () => { t.done = true; pending--; request(); };  // a missing tile is transparent
+    pending++;
+    t.img.src = 'tiles/' + level + '/' + column + '_' + row + '.' + S.format;
+    tiles.set(key, t);
+  }
+  t.used = ++clock;
+  return t;
+}
+
+function drawLevel(level, load) {
+  const d = 2 ** level, edge = S.tile, [lw, lh] = levelSize(level);
+  const left = cx - vw / 2 / scale, top = cy - vh / 2 / scale;
+  const c0 = Math.max(0, Math.floor(left / d / edge)), r0 = Math.max(0, Math.floor(top / d / edge));
+  const c1 = Math.min(Math.ceil(lw / edge) - 1, Math.floor((left + vw / scale) / d / edge));
+  const r1 = Math.min(Math.ceil(lh / edge) - 1, Math.floor((top + vh / scale) / d / edge));
+  let complete = true;
+  for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
+    const key = level + '/' + c + '_' + r;
+    const t = load ? tile(level, c, r) : tiles.get(key);
+    if (!t || !t.done) { complete = false; continue; }
+    if (!t.ok) continue;
+    t.used = ++clock;
+    const x = (c * edge * d - left) * scale, y = (r * edge * d - top) * scale;
+    const w = t.img.naturalWidth * d * scale, h = t.img.naturalHeight * d * scale;
+    // Round edges to device pixels so neighbouring tiles meet without seams.
+    const x0 = Math.round(x * dpr), y0 = Math.round(y * dpr);
+    ctx.drawImage(t.img, x0, y0, Math.round((x + w) * dpr) - x0, Math.round((y + h) * dpr) - y0);
+  }
+  return complete;
+}
+
+function draw() {
+  frame = 0;
+  clampView();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = '#14100b';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.imageSmoothingEnabled = scale * dpr < 2;          // close up: the map's own pixels, not a blur
+  ctx.imageSmoothingQuality = 'high';
+  const wanted = Math.min(S.levels - 1, Math.max(0, Math.floor(Math.log2(1 / (scale * dpr)))));
+  // Coarser levels first, as a stand-in while the sharp tiles arrive.
+  for (let level = S.levels - 1; level > wanted; level--) drawLevel(level, level === S.levels - 1);
+  drawLevel(wanted, true);
+  document.getElementById('zoom').textContent = 'Масштаб ' + Math.round(scale * 100).toLocaleString('ru-RU') + ' %'
+    + (pending > 0 ? ' · загрузка…' : '');
+  forget();
+}
+function request() { if (!frame) frame = requestAnimationFrame(draw); }
+function forget() {
+  if (tiles.size < 700) return;
+  const old = [...tiles.entries()].filter(([, t]) => t.done).sort((a, b) => a[1].used - b[1].used);
+  for (const [key, t] of old.slice(0, tiles.size - 500)) { t.img.src = ''; tiles.delete(key); }
+}
+
+function zoomAt(factor, sx, sy) {
+  const mx = cx + (sx - vw / 2) / scale, my = cy + (sy - vh / 2) / scale;
+  scale *= factor; clampView();
+  cx = mx - (sx - vw / 2) / scale; cy = my - (sy - vh / 2) / scale;
+  request();
+}
+
+let drag = null;
+canvas.addEventListener('pointerdown', e => {
+  drag = { x: e.clientX, y: e.clientY, cx, cy }; canvas.setPointerCapture(e.pointerId); canvas.classList.add('dragging');
+});
+canvas.addEventListener('pointermove', e => {
+  if (!drag) return;
+  cx = drag.cx - (e.clientX - drag.x) / scale; cy = drag.cy - (e.clientY - drag.y) / scale; request();
+});
+const stop = () => { drag = null; canvas.classList.remove('dragging'); };
+canvas.addEventListener('pointerup', stop); canvas.addEventListener('pointercancel', stop);
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const r = canvas.getBoundingClientRect();
+  zoomAt(Math.pow(2, -e.deltaY / (e.deltaMode === 1 ? 6 : 300)), e.clientX - r.left, e.clientY - r.top);
+}, { passive: false });
+canvas.addEventListener('dblclick', e => {
+  const r = canvas.getBoundingClientRect(); zoomAt(e.shiftKey ? 0.5 : 2, e.clientX - r.left, e.clientY - r.top);
+});
+function fit() { scale = fitScale(); cx = S.width / 2; cy = S.height / 2; request(); }
+document.getElementById('in').onclick = () => zoomAt(2, vw / 2, vh / 2);
+document.getElementById('out').onclick = () => zoomAt(0.5, vw / 2, vh / 2);
+document.getElementById('fit').onclick = fit;
+document.getElementById('one').onclick = () => { scale = 1 / dpr; request(); };
+window.addEventListener('keydown', e => {
+  const step = 120 / scale;
+  if (e.key === '+' || e.key === '=') zoomAt(2, vw / 2, vh / 2);
+  else if (e.key === '-') zoomAt(0.5, vw / 2, vh / 2);
+  else if (e.key === '0') fit();
+  else if (e.key === '1') { scale = 1 / dpr; request(); }
+  else if (e.key === 'ArrowLeft') { cx -= step; request(); }
+  else if (e.key === 'ArrowRight') { cx += step; request(); }
+  else if (e.key === 'ArrowUp') { cy -= step; request(); }
+  else if (e.key === 'ArrowDown') { cy += step; request(); }
+});
+window.addEventListener('resize', resize);
+resize(); fit();
+</script>
+</body>
+</html>

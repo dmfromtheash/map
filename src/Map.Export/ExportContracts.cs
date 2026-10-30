@@ -23,6 +23,11 @@ public enum ExportOutputMode
     TilePackage,
     /// <summary>One .mbtiles file with a tile pyramid of the PNG picture (DEC-051).</summary>
     MbTiles,
+    /// <summary>
+    /// A folder to look at the whole picture: a lossless WebP tile pyramid and «Открыть карту.html»,
+    /// an offline page that opens any size instantly in the browser (owner, 2026-10-30).
+    /// </summary>
+    ViewerFolder,
 }
 
 public enum ExportPhase
@@ -97,7 +102,7 @@ public sealed record ExportPlan(
 
     public int TileCount => checked(Columns * Rows);
     public bool IncludesBackground => !TransparentBackground;
-    public bool UsesStreamingPng => Format == ExportImageFormat.Png && OutputMode is ExportOutputMode.SingleImage or ExportOutputMode.MbTiles;
+    public bool UsesStreamingPng => Format == ExportImageFormat.Png && OutputMode is ExportOutputMode.SingleImage or ExportOutputMode.MbTiles or ExportOutputMode.ViewerFolder;
     public int RasterTileHeight => UsesStreamingPng ? Math.Min(TileEdge, 512) : TileEdge;
 
     // A complete sibling result and one temporary row of raw tiles coexist until publication.
