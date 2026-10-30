@@ -1374,13 +1374,12 @@ public sealed partial class EditorView
             });
         }
 
-        // Every value of this block is also in the quick property strip over the canvas, which
-        // is the one place for them now; the block stays built for its syncs but is not shown.
+        // Since plan 1.2 (DEC-070) this is the one place for these values: the quick strip over
+        // the canvas is gone, so the block is open at the top of «Свойства».
         return new Expander
         {
-            Header = "Выделение: общие свойства и порядок", Content = body,
-            IsExpanded = false, HorizontalAlignment = HorizontalAlignment.Stretch,
-            IsVisible = false,
+            Header = "Слой, уровень, масштаб и поворот", Content = body,
+            IsExpanded = true, HorizontalAlignment = HorizontalAlignment.Stretch,
         }.Named(prefix + "PrimarySection");
     }
 
@@ -1397,8 +1396,8 @@ public sealed partial class EditorView
     /// right layer all along - exactly the "пустое поле" the owner reported. This shape paints the
     /// current name itself, so it cannot happen again.
     /// </para>
-    /// One builder serves the quick strip above the canvas and the object panel, so the two can
-    /// never disagree about which layer the selection is in - they are two views of one model.
+    /// One builder serves the single-object and the multi-selection panels, so they can never
+    /// disagree about which layer the selection is in.
     /// </summary>
     private Button BuildOwnerLayerPicker(string prefix)
     {
@@ -1508,7 +1507,6 @@ public sealed partial class EditorView
         }
 
         _levelSyncs.Add(Sync);
-        _quickSyncs.Add(Sync);
         _layerLists[prefix] = list;
         return button;
     }

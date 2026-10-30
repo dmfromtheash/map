@@ -379,10 +379,6 @@ public sealed partial class EditorView : UserControl
     private readonly ThumbnailCache _thumbnails = new(96);
     private readonly CheckpointPreviewCache _checkpointPreviews = new();
     private readonly List<Action> _levelSyncs = [];
-    // The quick strip above the canvas shows the same handful of properties as the object panel.
-    // Both read and write one view model, and both refresh from this one list, so neither can
-    // show a number the other disagrees with.
-    private readonly List<Action> _quickSyncs = [];
     private readonly Dictionary<string, ListBox> _layerLists = [];
     private Button _objectVisibilityValue = null!;
     private Button _objectLockValue = null!;
@@ -426,7 +422,6 @@ public sealed partial class EditorView : UserControl
         Name = "EditorView";
 
         var topBar = BuildTopBar(requestBack, requestSecondWindow, requestShortcutSettings);
-        var quickBar = BuildQuickPropertyBar();
         var rail = BuildToolRail();
         var contextPanel = BuildContextPanel();
         var sidePanel = BuildSidePanel();
@@ -462,10 +457,7 @@ public sealed partial class EditorView : UserControl
                 topBar.Docked(Dock.Top),
                 // DEC-070: the row of sections, with the way through the atlas, right under the document bar.
                 atlasBar.Docked(Dock.Top),
-
-                // Docked, not floating: the strip takes its own band and the canvas fills what is
-                // left, so it can never cover the map.
-                quickBar.Docked(Dock.Top),
+                // The quick property strip that stood here moved into «Свойства» (plan 1.2, DEC-070).
                 statusBar.Docked(Dock.Bottom),
                 // «Свойства · Содержимое · Слои» in one column (DEC-070, owner's pick «Б»).
                 BuildRightColumn(contextPanel, sidePanel).Docked(Dock.Right),

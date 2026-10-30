@@ -461,10 +461,10 @@ public sealed class NativeObjectWorkflowApplication : Application
         int At(string name) => primaryNames.IndexOf(name);
         var objectPanelOpensWithLayerAndLevel = primary is not null
             && At("ObjectOwnerLayerSelector") >= 0
-            && At("ObjectSublayerSlider") >= 0
-            && At("ObjectOwnerLayerSelector") < At("ObjectSublayerSlider")
-            && At("ObjectSublayerSlider") < At("ObjectOpacitySlider")
-            && At("ObjectSublayerSlider") < At("ObjectRotationSlider");
+            && At("ObjectLevelSlider") >= 0
+            && At("ObjectOwnerLayerSelector") < At("ObjectLevelSlider")
+            && At("ObjectLevelSlider") < At("ObjectOpacitySlider")
+            && At("ObjectLevelSlider") < At("ObjectRotationSlider");
 
         var selector = Named<Button>(view, "ObjectOwnerLayerSelector");
         var selectorCaption = Named<TextBlock>(view, "ObjectOwnerLayerCaption");
@@ -489,7 +489,7 @@ public sealed class NativeObjectWorkflowApplication : Application
                 && !target.Display.Contains(target.Id.Value.ToString("D"), StringComparison.OrdinalIgnoreCase))
             && targets.Count(target => target.IsCurrent) == 1;
 
-        var slider = Named<Slider>(view, "ObjectSublayerSlider");
+        var slider = Named<Slider>(view, "ObjectLevelSlider");
         var levelSliderBand = slider is null
             ? "(отсутствует)"
             : $"[{slider.Minimum:0}..{slider.Maximum:0}] шаг {slider.SmallChange:0} snap={slider.IsSnapToTickEnabled}";
@@ -578,31 +578,33 @@ public sealed class NativeObjectWorkflowApplication : Application
         var shapeSlot = Named<Map.App.Controls.RetainedSlot>(view, "SelectionKindSlot");
         var mountedForShape = (shapeSlot?.Content as Control)?.Name;
         var shapeGetsTheSharedBlockWithoutTheBitmapOne = shapePrimary is not null
-            && Named<Slider>(view, "ObjectSublayerSlider") is not null
+            && Named<Slider>(view, "ObjectLevelSlider") is not null
             && Named<Button>(view, "ObjectOwnerLayerSelector") is not null
             && mountedForShape != "StampObjectActions"
             && Named<Button>(view, "StampReplaceAssetButton") is not { IsEffectivelyVisible: true };
         editor.Undo();
         await SettleAsync();
 
-        // ---- 7b2. the quick strip, the layer list and the exact level entry --------------
-        // The strip hides with an empty selection by design, so it is read with one in place.
+        // ---- 7b2. «Свойства»: the layer list and the exact level entry -------------------
+        // Plan 1.2 (DEC-070): the quick strip over the map is gone; the same fields are the
+        // open block at the top of «Свойства». It is read with a selection in place.
         editor.SelectObject(single.Id, additive: false);
         await SettleAsync();
         await NextFrameAsync(view);
-        var quickBar = Named<Control>(view, "QuickPropertyBar");
-        var quickLayer = Named<Button>(view, "QuickOwnerLayerSelector");
-        var quickLayerCaption = Named<TextBlock>(view, "QuickOwnerLayerCaption");
-        var quickLevel = Named<TextBox>(view, "QuickLevelBox");
-        var quickOpacity = Named<TextBox>(view, "QuickOpacityBox");
-        var quickRotation = Named<TextBox>(view, "QuickRotationBox");
-        var quickScale = Named<TextBox>(view, "QuickScaleBox");
+        var quickBar = Named<Control>(view, "ObjectPrimarySection");
+        var quickLayer = Named<Button>(view, "ObjectOwnerLayerSelector");
+        var quickLayerCaption = Named<TextBlock>(view, "ObjectOwnerLayerCaption");
+        var quickLevel = Named<TextBox>(view, "ObjectLevelBox");
+        var quickOpacity = Named<TextBox>(view, "ObjectOpacitySliderBox");
+        var quickRotation = Named<TextBox>(view, "ObjectRotationSliderBox");
+        var quickScale = Named<TextBox>(view, "ObjectScaleSliderBox");
         var quickBarCarriesTheFrequentProperties = quickBar is not null
-            && quickBar.IsVisible
+            && quickBar.IsEffectivelyVisible
             && quickLayer is not null && quickLevel is not null
             && quickOpacity is not null && quickRotation is not null && quickScale is not null
-            // The strip is a band of its own above the canvas, never a floating cover over it.
             && quickBar.Bounds.Height > 0
+            // Nothing stands over the map any more: no strip of its own.
+            && Named<Control>(view, "QuickPropertyBar") is null
             && view.Canvas.Bounds.Height > 0;
 
         editor.SelectObject(single.Id, additive: false);
@@ -632,7 +634,7 @@ public sealed class NativeObjectWorkflowApplication : Application
         var manualLevelEntryRejectsOutOfRange = editor.Session.SelectedObject!.Sublayer
             == EditorViewModel.MaximumSublayer;
 
-        Named<Button>(view, "QuickLevelResetButton")!.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Named<Button>(view, "ObjectLevelResetButton")!.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         await SettleAsync();
         var levelResetReturnsToZero = editor.Session.SelectedObject!.Sublayer == 0
             && quickLevel.Text == "0";
@@ -642,12 +644,12 @@ public sealed class NativeObjectWorkflowApplication : Application
             && low.Text == EditorViewModel.MinimumSublayer.ToString(CultureInfo.InvariantCulture)
             && Named<TextBlock>(view, "ObjectLevelMaximumCaption") is { IsVisible: true } high
             && high.Text == "+" + EditorViewModel.MaximumSublayer.ToString(CultureInfo.InvariantCulture)
-            && Named<Slider>(view, "ObjectSublayerSlider")!.TickPlacement != TickPlacement.None;
+            && Named<Slider>(view, "ObjectLevelSlider")!.TickPlacement != TickPlacement.None;
 
         await NextFrameAsync(view);
-        var quickShot = Path.ChangeExtension(options.OutputPath, ".quickbar.png");
+        var quickShot = Path.ChangeExtension(options.OutputPath, ".properties.png");
         Directory.CreateDirectory(Path.GetDirectoryName(quickShot)!);
-        Capture(view, quickShot, 1_400, 200);
+        Capture(view, quickShot, 1_400, 900);
 
         // ---- 7b3. twenty layers, and the list actually opened ----------------------------
         while (editor.Session.Document.Layers.OfType<ObjectLayer>().Count() < 20)
@@ -671,7 +673,7 @@ public sealed class NativeObjectWorkflowApplication : Application
         (quickLayer!.Flyout as Flyout)?.ShowAt(quickLayer);
         await SettleAsync();
         await NextFrameAsync(view);
-        var openList = view.LayerListForSmoke("Quick");
+        var openList = view.LayerListForSmoke("Object");
         var layerChoices = openList?.ItemsSource?.OfType<ObjectLayerTarget>().ToList() ?? [];
         // A flyout lays out over several passes, and its rows are virtualised: measuring after a
         // single frame reported "no rows" about half the time. Wait for the list to actually exist.
@@ -720,7 +722,7 @@ public sealed class NativeObjectWorkflowApplication : Application
             (quickLayer.Flyout as Flyout)?.ShowAt(quickLayer);
             await SettleAsync();
             await NextFrameAsync(view);
-            openList = view.LayerListForSmoke("Quick");
+            openList = view.LayerListForSmoke("Object");
             var currentChoices = openList?.ItemsSource?.OfType<ObjectLayerTarget>().ToList() ?? [];
             if (openList is null || currentChoices.Count <= pickIndex)
             {
@@ -764,11 +766,14 @@ public sealed class NativeObjectWorkflowApplication : Application
         editor.SelectObject(spread[1].Id, additive: true);
         await SettleAsync();
         await NextFrameAsync(view);
-        var quickBarMixedSelection = $"слой='{quickLayerCaption.Text}' уровень='{quickLevel.Text}'";
+        // Two objects: «Свойства» shows the multi-selection panel with its own copy of the block.
+        var multiLayerCaption = Named<TextBlock>(view, "MultiOwnerLayerCaption");
+        var multiLevel = Named<TextBox>(view, "MultiLevelBox");
+        var quickBarMixedSelection = $"слой='{multiLayerCaption?.Text}' уровень='{multiLevel?.Text}'";
         var quickBarSaysDifferentLayers =
-            string.Equals(quickLayerCaption.Text, "Разные слои", StringComparison.Ordinal)
-            && string.Equals(quickLevel.Text, "разные", StringComparison.Ordinal)
-            && quickLevel.Classes.Contains("mixed");
+            string.Equals(multiLayerCaption?.Text, "Разные слои", StringComparison.Ordinal)
+            && string.Equals(multiLevel?.Text, "разные", StringComparison.Ordinal)
+            && multiLevel!.Classes.Contains("mixed");
 
         // ---- 7b5. no user-facing "штамп" anywhere in the mounted window -------------------
         var stampWords = view.GetVisualDescendants().OfType<TextBlock>()
@@ -899,25 +904,14 @@ public sealed class NativeObjectWorkflowApplication : Application
         window.Height = 640;
         await SettleAsync();
         await NextFrameAsync(view);
-        // Only the captions the strip shows right now: the land group carries captions of its
-        // own that are hidden while an object is selected.
-        var compactCaptions = quickBar?.GetVisualDescendants().OfType<TextBlock>()
-            .Where(item => item.IsEffectivelyVisible
-                && item.Text is "Слой" or "Уровень" or "Масштаб" or "Непрозрачность" or "Поворот")
-            .ToList() ?? [];
-        var horizontalAccess = quickBar?.GetVisualDescendants().OfType<ScrollBar>()
-            .Any(item => item.Orientation == Orientation.Horizontal
-                && item.IsVisible && item.Maximum > item.Minimum) == true;
-        // The strip wraps whole groups onto further lines; a horizontal scrollbar is the other
-        // acceptable way to keep every caption reachable. Either counts, hidden captions do not.
-        var everyCaptionLaidOut = compactCaptions.Count == 5
-            && compactCaptions.All(item => item.IsVisible && item.Bounds.Width >= 24 && item.Bounds.Height > 0);
-        var compactLayoutUsable = quickBar is not null
-            && quickBar.IsVisible
-            && quickBar.Bounds.Height > 0
-            && compactCaptions.Select(item => item.Text).Distinct(StringComparer.Ordinal).Count() == 5
-            && compactCaptions.All(item => item.Bounds.Width >= 24)
-            && (horizontalAccess || everyCaptionLaidOut)
+        // The block of whichever panel «Свойства» shows now (one object or several).
+        Control? Primary() => new[] { "MultiPrimarySection", "ObjectPrimarySection" }
+            .Select(name => Named<Control>(view, name)).FirstOrDefault(item => item is { IsEffectivelyVisible: true });
+        var compactPrimary = Primary();
+        var horizontalAccess = false;
+        var compactLayoutUsable = compactPrimary is not null
+            && compactPrimary.Bounds.Height > 0
+            && compactPrimary.Bounds.Width >= 200
             && view.Canvas.Bounds.Width >= 300
             && view.Canvas.Bounds.Height >= 240;
         Capture(window, compactShot, 960, 640);
@@ -926,8 +920,8 @@ public sealed class NativeObjectWorkflowApplication : Application
         window.Height = 939;
         await SettleAsync();
         await NextFrameAsync(view);
-        var wideLayoutUsable = quickBar is { IsVisible: true }
-            && quickBar.Bounds.Height > 0
+        var wideLayoutUsable = Primary() is { } widePrimary
+            && widePrimary.Bounds.Height > 0
             && view.Canvas.Bounds.Width >= 600
             && view.Canvas.Bounds.Height >= 400;
         var wideAndCompactLayoutsUsable = compactLayoutUsable && wideLayoutUsable;

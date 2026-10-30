@@ -349,7 +349,6 @@ public sealed partial class EditorView
             Ui.SetCommandText(visibility, land is { Visible: false } ? "Показать эту сушу" : "Скрыть эту сушу");
             Ui.SetCommandText(locking, land is { Locked: true } ? "Разблокировать эту сушу" : "Заблокировать эту сушу");
         });
-        foreach (var hidden in new Control[] { level, order, visibility, locking }) hidden.IsVisible = false;
         summary.Classes.Add("faint"); summary.Classes.Add("role-caption");
         return new Border
         {
@@ -383,7 +382,6 @@ public sealed partial class EditorView
             Ui.SetCommandText(visibility, count > 0 && !_editor.SelectedWaterVisible ? "Показать только эту воду" : "Скрыть только эту воду");
             Ui.SetCommandText(locking, count > 0 && _editor.SelectedWaterLocked ? "Разблокировать только эту воду" : "Заблокировать только эту воду");
         });
-        foreach (var hidden in new Control[] { level, order, visibility, locking }) hidden.IsVisible = false;
         // Deleting whole selected networks is not the level-aware delete of the left panel: it stays.
         delete.Classes.Remove("destructive"); delete.Classes.Add("danger-text");
         summary.Classes.Add("faint"); summary.Classes.Add("role-caption");
@@ -419,7 +417,6 @@ public sealed partial class EditorView
             Ui.SetCommandText(visibility, count > 0 && !_editor.SelectedRoadVisible ? "Показать только эту дорогу" : "Скрыть только эту дорогу");
             Ui.SetCommandText(locking, count > 0 && _editor.SelectedRoadLocked ? "Разблокировать только эту дорогу" : "Заблокировать только эту дорогу");
         });
-        foreach (var hidden in new Control[] { level, order, visibility, locking }) hidden.IsVisible = false;
         // Deleting whole selected networks is not the level-aware delete of the left panel: it stays.
         delete.Classes.Remove("destructive"); delete.Classes.Add("danger-text");
         summary.Classes.Add("faint"); summary.Classes.Add("role-caption");

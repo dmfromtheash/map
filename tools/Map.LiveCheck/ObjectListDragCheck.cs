@@ -54,7 +54,7 @@ internal static class ObjectListDragCheck
             if (!centred) Mouse.Click(grab);
             Thread.Sleep(900);
             var baseline = Report("после выбора");
-            string Size() => (Find("QuickWidthBox")?.AsTextBox().Text ?? "") + "/" + (Find("QuickHeightBox")?.AsTextBox().Text ?? "");
+            string Size() => (Find("WidthBox")?.AsTextBox().Text ?? "") + "/" + (Find("HeightBox")?.AsTextBox().Text ?? "");
             var originalSize = Size();
             Check("Список содержит несколько видимых строк", baseline.Height > 80 && baseline.VisibleRows > 1);
             Check("Исходная карта без изменений", Find("UndoButton") is { IsEnabled: false });

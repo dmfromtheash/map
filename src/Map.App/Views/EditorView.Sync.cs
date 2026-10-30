@@ -191,7 +191,7 @@ public sealed partial class EditorView
         {
             Timed("context-area", SyncContextArea);
             Timed("gesture-readout", SyncStampGestureReadout);
-            Timed("quick-bar", SyncQuickBar);
+            Timed("layer-level", SyncLayerAndLevel);
             _deferredPanels &= ~DeferredPanel.Context;
         }
         if (changed.Overlaps([nameof(EditorViewModel.StampToolSettings), nameof(EditorViewModel.CurrentVariant),
@@ -277,7 +277,7 @@ public sealed partial class EditorView
             case DeferredPanel.Context:
                 SyncContextArea();
                 SyncStampGestureReadout();
-                SyncQuickBar();
+                SyncLayerAndLevel();
                 break;
             case DeferredPanel.Side: SyncSidePanels(); break;
             case DeferredPanel.Path: SyncEditablePathPanel(); break;
@@ -552,9 +552,8 @@ public sealed partial class EditorView
         Timed("mask-buttons", SyncMaskModeButtons);
         Timed("layer-blocks", SyncLayerBlocks);
         Timed("appearance", SyncAppearanceSections);
-        // The strip is refreshed on every context change, including "nothing is selected" - the
-        // panel's own refresh only runs while an inspector is mounted.
-        Timed("quick-bar", SyncQuickBar);
+        // Layer and level are refreshed on every context change, including "nothing is selected".
+        Timed("layer-level", SyncLayerAndLevel);
         // A new selection points the panel at the object; a new tool points it at the tool. Both
         // remain reachable afterwards, which is the part the old ActiveTool == Select gate broke.
         var selectionSignature = _editor.SelectionCount > 0
@@ -795,7 +794,7 @@ public sealed partial class EditorView
             Children =
             {
                 _surfaceSelectedText,
-                Ui.Hint("Слой, уровень и порядок — в панели над картой."),
+                Ui.Hint("Уровень, порядок, видимость и блокировка — во вкладке «Содержимое», под списком."),
                 _surfaceSelectedOpen,
             },
         };
@@ -924,11 +923,6 @@ public sealed partial class EditorView
                 BuildSelectionCommon(),
                 new Border { Padding = new Thickness(0, 8, 0, 0), Child = _kindSlot },
                 geometry,
-                new Border
-                {
-                    Padding = new Thickness(0, 10, 0, 4),
-                    Child = Ui.Hint("Слой, уровень, порядок, размер, масштаб, непрозрачность и поворот — в панели над картой."),
-                },
                 _objectDeleteButton,
             },
         };
@@ -1037,7 +1031,6 @@ public sealed partial class EditorView
                     Spacing = 2,
                     Children = { visibilityRow, lockRow },
                 }, true),
-                Ui.Hint("Слой, уровень, порядок, масштаб, непрозрачность и поворот — в панели над картой."),
                 delete,
             },
         };
@@ -1400,7 +1393,7 @@ public sealed partial class EditorView
         Timed("sector", SyncSector);
         Timed("checkpoint-list", SyncCheckpointList);
         Timed("canvas-workflow", SyncCanvasWorkflow);
-        Timed("quick-bar", SyncQuickBar);
+        Timed("layer-level", SyncLayerAndLevel);
     }
 
     /// <summary>Everything a layer row shows, as one string: name, kind, switches, counts, blend and mask state.</summary>
@@ -1667,7 +1660,7 @@ public sealed partial class EditorView
                 _editor.SelectLand(landId);
                 SyncObjectListSelection();
                 SyncContextArea();
-                SyncQuickBar();
+                SyncLayerAndLevel();
             },
             $"Земля «{row.Title}» · уровень {EditorViewModel.FormatSublayer(row.Level)}{states}",
             visible,
