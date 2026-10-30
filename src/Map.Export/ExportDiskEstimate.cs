@@ -29,9 +29,10 @@ internal sealed record ExportDiskEstimate(long ResultBytes, long PngBytes, long 
             var edge = PngTilePyramid.Edge;
             var count = checked(((width + edge - 1L) / edge) * ((height + edge - 1L) / edge));
             tiles += count;
-            // LevelEncoder always writes RGBA, including the opaque route. Count odd/thin
+            // An opaque source gives RGB tiles (LevelEncoder), any other RGBA. Count odd/thin
             // levels exactly (4/3 is only the limiting ratio for a large square).
-            pyramid += checked(CompressedBytes((long)width * height * 4 + height, incompressible) + count * 4096);
+            pyramid += checked(CompressedBytes((long)width * height * (plan.ExpectsOpaquePng ? 3 : 4) + height, incompressible)
+                + count * 4096);
             if (Math.Max(width, height) <= edge) break;
             width = (width + 1) / 2;
             height = (height + 1) / 2;
@@ -44,12 +45,13 @@ internal sealed record ExportDiskEstimate(long ResultBytes, long PngBytes, long 
 
     private static long CompressedBytes(long raw, bool incompressible)
     {
-        // Admission budgets half the RGB/RGBA scanline bytes: 1.5/2 bytes per pixel.
-        // Owner measurements: RGB 0.61 B/px at 131072² and 1.06 B/px at 16384²;
-        // 1.5 B/px leaves at least 41% over those samples, not a guarantee for noise.
-        // Keep a separate incompressible ceiling (deflate expansion + IDAT framing).
-        // Estimates never change compression or pixels; a full disk aborts and cleans scratch.
-        var bytes = incompressible ? raw : (raw + 1) / 2;
+        // Admission budgets 3/8 of the RGB/RGBA scanline bytes: 1.125/1.5 bytes per pixel.
+        // Owner measurements: RGB 0.61 B/px at 131072² and 1.06 B/px at 16384², the worst
+        // sample; half the scanline (1.5 B/px) refused the giant tile export on the owner's
+        // PC (114 GiB asked, about 32 GB used). Not a guarantee for noise: a full disk aborts
+        // and cleans scratch, and the incompressible ceiling (deflate expansion + IDAT framing)
+        // stays separate. Estimates never change compression or pixels.
+        var bytes = incompressible ? raw : (raw * 3 + 7) / 8;
         return checked(bytes + bytes / 1000 + (bytes / 65536 + 1) * 12 + 64);
     }
 }

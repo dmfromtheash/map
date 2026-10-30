@@ -7,8 +7,8 @@ namespace Map.Presentation.Tests;
 public sealed class ExportResourceTests
 {
     [Theory]
-    [InlineData(16_384, 503_801_137L)]
-    [InlineData(131_072, 26_135_902_181L)]
+    [InlineData(16_384, 403_016_696L)]
+    [InlineData(131_072, 19_685_812_725L)]
     public void Opaque_png_budget_uses_rgb_compression_band_and_reserve(int edge, long expected)
     {
         var plan = Plan(edge);
@@ -34,7 +34,7 @@ public sealed class ExportResourceTests
         var plan = engine.Plan(document, Request(16_384) with { TransparentBackground = transparent });
         Assert.Equal(opaque, plan.ExpectsOpaquePng);
         Assert.Equal(opaque, ImageExportEngine.ExpectOpaque(plan.CreateScene(document).RenderDocument(), plan));
-        Assert.Equal(opaque ? 503_801_137L : 638_177_659L, plan.RequiredFreeDiskBytes);
+        Assert.Equal(opaque ? 403_016_696L : 503_799_087L, plan.RequiredFreeDiskBytes);
     }
 
     [Fact]
@@ -46,16 +46,17 @@ public sealed class ExportResourceTests
     }
 
     [Theory]
-    [InlineData(ExportOutputMode.MbTiles, 16_384, 1_978_158_043L)]
-    [InlineData(ExportOutputMode.ViewerFolder, 16_384, 1_978_158_043L)]
-    [InlineData(ExportOutputMode.MbTiles, 131_072, 122_464_742_572L)]
-    public void Pyramid_budget_includes_source_png_rgba_levels_and_sibling_result(
+    [InlineData(ExportOutputMode.MbTiles, 16_384, 1_219_563_319L)]
+    [InlineData(ExportOutputMode.ViewerFolder, 16_384, 1_219_563_319L)]
+    // The measured giant (10.9 GB PNG) fits the owner's 79 GB free disk under this budget.
+    [InlineData(ExportOutputMode.MbTiles, 131_072, 73_874_750_276L)]
+    public void Pyramid_budget_includes_source_png_levels_and_sibling_result(
         ExportOutputMode mode, int edge, long expected)
     {
         var plan = Plan(edge, mode);
         var disk = ExportDiskEstimate.Create(plan);
         Assert.Equal(expected, plan.RequiredFreeDiskBytes);
-        Assert.True(disk.PyramidBytes > (long)edge * edge * 2 * 1.33);
+        Assert.True(disk.PyramidBytes > (long)edge * edge * 1.125 * 1.33);
         Assert.True(disk.ResultBytes > disk.PyramidBytes);
         Assert.Equal(disk.PngBytes + disk.PyramidBytes + disk.ResultBytes + ExportDiskEstimate.ReserveBytes,
             disk.CombinedBytes);
@@ -66,7 +67,7 @@ public sealed class ExportResourceTests
     {
         var plan = new ImageExportEngine().Plan(Document(), Request(2049, ExportOutputMode.MbTiles) with { OutputHeight = 1 });
         var disk = ExportDiskEstimate.Create(plan);
-        Assert.True(disk.PyramidBytes > (2049L + 1025 + 513) * 2 + 6 * 4096);
+        Assert.True(disk.PyramidBytes > (2049L + 1025 + 513) * 9 / 8 + 6 * 4096);
     }
 
     [Theory]
