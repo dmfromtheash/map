@@ -138,8 +138,12 @@ public sealed class ImageExportEngine : IImageExporter
             throw new ExportValidationException("Файл MBTiles должен иметь расширение .mbtiles.");
         var directory = Path.GetDirectoryName(fullPath)
             ?? throw new ExportValidationException("Укажите папку для файла MBTiles.");
-        var work = Path.Combine(directory, "." + Path.GetFileName(fullPath) + "." + Guid.NewGuid().ToString("N") + ".tmp");
+        // The full PNG and its pyramid are scratch: on the local temporary disk when it has room (an
+        // external destination disk then only receives the finished file), next to the result otherwise.
+        var work = Path.Combine(MbTilesScratchRoot(directory, (long)plan.OutputWidth * plan.OutputHeight * 4),
+            "." + Path.GetFileName(fullPath) + "." + Guid.NewGuid().ToString("N") + ".tmp");
         Directory.CreateDirectory(work);
+        string? temporary = null;
         try
         {
             var png = Path.Combine(work, "picture.png");
@@ -148,18 +152,35 @@ public sealed class ImageExportEngine : IImageExporter
             Report(progress, ExportPhase.EncodingAndWriting, 0.6, "Построение пирамиды тайлов…");
             var pyramid = await PngTilePyramid.OpenUnderHeavyAsync(png, Path.Combine(work, "pyramid"),
                 new ScaledProgress(progress, 0.6, 0.85), cancellationToken, _settings).ConfigureAwait(false);
-            var temporary = Path.Combine(work, "result" + MbTilesWriter.Extension);
+            // The finished file is written beside the destination, so the move into place stays on one volume.
+            temporary = UniqueSiblingFile(fullPath);
             var tiles = MbTilesWriter.Write(pyramid, temporary, snapshot.Title, cancellationToken,
-                fraction => Report(progress, ExportPhase.Finalizing, 0.85 + fraction * 0.13, "Запись MBTiles…"));
+                fraction => Report(progress, ExportPhase.Finalizing, 0.85 + fraction * 0.13, "Запись MBTiles…"),
+                _settings.CompressionParallelism);
             _settings.FaultInjector?.Invoke(ExportFaultPoint.BeforeFinalize);
             File.Move(temporary, fullPath, overwrite: true);
+            temporary = null;
             Report(progress, ExportPhase.Completed, 1, "Экспорт завершён.");
             return new ExportResult(fullPath, ExportOutputMode.MbTiles, tiles);
         }
         finally
         {
+            if (temporary is not null) TryDeleteFile(temporary);
             TryDeleteDirectory(work);
         }
+    }
+
+    /// <summary>Local TEMP when it holds <paramref name="scratchBytes"/> plus 2 GiB, else the destination folder.</summary>
+    private static string MbTilesScratchRoot(string destinationDirectory, long scratchBytes)
+    {
+        try
+        {
+            var local = Path.GetTempPath();
+            if (new DriveInfo(Path.GetPathRoot(Path.GetFullPath(local))!).AvailableFreeSpace > scratchBytes + 2L * 1024 * 1024 * 1024)
+                return local;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { }
+        return destinationDirectory;
     }
 
     private sealed class ScaledProgress(IProgress<ExportProgress>? inner, double start, double end) : IProgress<ExportProgress>

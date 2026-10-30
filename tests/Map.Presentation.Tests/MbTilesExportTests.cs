@@ -32,7 +32,7 @@ public sealed class MbTilesExportTests
 
         using var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = destination, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString());
         connection.Open();
-        Assert.Equal("png", Scalar(connection, "SELECT value FROM metadata WHERE name = 'format'"));
+        Assert.Equal("webp", Scalar(connection, "SELECT value FROM metadata WHERE name = 'format'"));
         Assert.Equal("0", Scalar(connection, "SELECT value FROM metadata WHERE name = 'maxzoom'"));
         Assert.Equal("300", Scalar(connection, "SELECT value FROM metadata WHERE name = 'map_width'"));
         Assert.Equal("1", Scalar(connection, "SELECT COUNT(*) FROM tiles"));
@@ -67,6 +67,63 @@ public sealed class MbTilesExportTests
         command.CommandText = "SELECT tile_data FROM tiles WHERE zoom_level = 2 AND tile_column = 0 AND tile_row = 0";
         using var bottom = SKBitmap.Decode((byte[])command.ExecuteScalar()!);
         Assert.Equal((1024, 76), (bottom.Width, bottom.Height));
+        // One flat colour: the four full 1024² tiles of zoom 2 and every other repeat are stored once.
+        Assert.True(int.Parse(Scalar(connection, "SELECT COUNT(*) FROM images")) < 9);
+    }
+
+    [Fact]
+    public async Task Every_full_size_tile_has_exactly_the_pixels_of_the_png_export()
+    {
+        using var temp = new TempFolder();
+        var exporter = new ImageExportEngine();
+        var document = Painted(1500, 1100);
+        var png = Path.Combine(temp.Path, "picture.png");
+        await exporter.ExportAsync(document, exporter.Plan(document, new ExportRequest(
+            ExportImageFormat.Png, ExportAreaMode.WholeCanvas, null, 1500, 1100, ExportOutputMode.SingleImage, false, false)), png, stamps: null);
+        var destination = Path.Combine(temp.Path, "painted.mbtiles");
+        await exporter.ExportAsync(document, exporter.Plan(document, new ExportRequest(
+            ExportImageFormat.Png, ExportAreaMode.WholeCanvas, null, 1500, 1100, ExportOutputMode.MbTiles, false, false)), destination, stamps: null);
+
+        var whole = Straight(File.ReadAllBytes(png));
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = destination, Mode = SqliteOpenMode.ReadOnly, Pooling = false }.ToString());
+        connection.Open();
+        Assert.Equal("webp", Scalar(connection, "SELECT value FROM metadata WHERE name = 'format'"));
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT tile_column, tile_row, tile_data FROM tiles WHERE zoom_level = 1";
+        using var reader = command.ExecuteReader();
+        var tiles = 0;
+        while (reader.Read())
+        {
+            var (column, row) = (reader.GetInt32(0), 1 - reader.GetInt32(1)); // TMS: row 0 is the bottom
+            using var tile = Straight((byte[])reader[2]);
+            for (var y = 0; y < tile.Height; y++)
+                Assert.True(tile.GetPixelSpan().Slice(y * tile.Width * 4, tile.Width * 4).SequenceEqual(
+                    whole.GetPixelSpan().Slice(((row * 1024 + y) * 1500 + column * 1024) * 4, tile.Width * 4)), $"tile {column},{row} row {y}");
+            tiles++;
+        }
+        Assert.Equal(4, tiles);
+    }
+
+    private static SKBitmap Straight(byte[] encoded)
+    {
+        using var codec = SKCodec.Create(new MemoryStream(encoded))!;
+        var info = new SKImageInfo(codec.Info.Width, codec.Info.Height, SKColorType.Rgba8888, SKAlphaType.Unpremul);
+        var bitmap = new SKBitmap(info);
+        Assert.Equal(SKCodecResult.Success, codec.GetPixels(info, bitmap.GetPixels()));
+        return bitmap;
+    }
+
+    /// <summary>Shapes in several colours, so the tiles differ and WebP has real content to keep.</summary>
+    private static MapDocument Painted(int width, int height)
+    {
+        var shapes = Enumerable.Range(0, 60).Select(i => new SceneObject(ObjectId.New(),
+            i % 2 == 0 ? SceneObjectKind.Ellipse : SceneObjectKind.Rectangle, "shape " + i,
+            i * 37 % (width - 120), i * 53 % (height - 120), 60 + i % 7 * 15, 50 + i % 5 * 20, i * 13,
+            $"#FF{i * 41 % 256:X2}{i * 97 % 256:X2}{i * 23 % 256:X2}", "#FF101010", 2, true, false)).ToArray();
+        return new MapDocument(DocumentId.New(), "painted", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(width, height, "px", "#FF7F9FAE"),
+            [new BaseColorLayer(LayerId.New(), "base", true, false, 1, "#FF7F9FAE"),
+             new ObjectLayer(LayerId.New(), "objects", true, false, 1, shapes)]);
     }
 
     private static string Scalar(SqliteConnection connection, string sql)
