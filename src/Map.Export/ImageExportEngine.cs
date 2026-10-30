@@ -489,10 +489,15 @@ public sealed class ImageExportEngine : IImageExporter
                 entries[tileIndex] = new TilePackageEntry(fileName, x, y, width, height);
                 _settings.FaultInjector?.Invoke(ExportFaultPoint.AfterTileWritten);
                 cancellationToken.ThrowIfCancellationRequested();
-                var done = Interlocked.Increment(ref completed);
-                Report(progress, ExportPhase.EncodingAndWriting,
-                    0.05 + (0.86 * done / plan.TileCount),
-                    $"Готово тайлов: {done} из {plan.TileCount}.");
+                // Counted and reported under one lock: two workers otherwise report out of order
+                // and the progress bar steps back («6 из 6» before «5 из 6»).
+                lock (entries)
+                {
+                    var done = ++completed;
+                    Report(progress, ExportPhase.EncodingAndWriting,
+                        0.05 + (0.86 * done / plan.TileCount),
+                        $"Готово тайлов: {done} из {plan.TileCount}.");
+                }
             }
 
             if (parallel)
