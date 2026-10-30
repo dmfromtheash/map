@@ -425,20 +425,7 @@ public sealed class NativeStampAppearanceApplication : Application
     {
         var sourceDirectory = Path.Combine(workspace, "source");
         Directory.CreateDirectory(sourceDirectory);
-        var paths = new List<string>();
-        foreach (var (name, color, width, height) in new[]
-                 { ("tree-a", SKColors.Lime, 64, 48), ("tree-b", SKColors.HotPink, 48, 64) })
-        {
-            var path = Path.Combine(sourceDirectory, name + ".png");
-            using var surface = SKSurface.Create(new SKImageInfo(width, height))!;
-            surface.Canvas.Clear(SKColors.Transparent);
-            using var paint = new SKPaint { Color = color, IsAntialias = true };
-            surface.Canvas.DrawOval(new SKRect(4, 4, width - 4, height - 4), paint);
-            using var image = surface.Snapshot();
-            using var data = image.Encode(SKEncodedImageFormat.Png, 100);
-            File.WriteAllBytes(path, data.ToArray());
-            paths.Add(path);
-        }
+        string[] paths = [OwnerMountainFixtures.Path(1), OwnerMountainFixtures.Path(2)];
         var catalog = new AssetCatalog(Path.Combine(workspace, "catalog"));
         var set = catalog.ImportSet(paths, "Дерево", new AssetImportOptions(), DateTimeOffset.UnixEpoch);
         for (var index = 0; index < set.VariantIds.Count; index++)

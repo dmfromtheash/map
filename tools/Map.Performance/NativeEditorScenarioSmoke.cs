@@ -737,16 +737,10 @@ public sealed partial class NativeEditorScenarioApplication : Application
     /// <summary>A dungeon room made and dressed with the real panel buttons; checked on the canvas.</summary>
     private async Task RoomOnly()
     {
-        // A small own catalog with one red «column» picture, only inside this smoke workspace.
+        // A small own catalog with one of the owner's mountains as the «column», only inside this smoke workspace.
         var catalog = new Map.Assets.AssetCatalog(Path.Combine(_workspace, "catalog"));
         var picture = Path.Combine(_workspace, "Колонна.png");
-        using (var surface = SKSurface.Create(new SKImageInfo(32, 32))!)
-        {
-            surface.Canvas.Clear(new SKColor(220, 30, 30));
-            using var image = surface.Snapshot();
-            using var data = image.Encode(SKEncodedImageFormat.Png, 100);
-            File.WriteAllBytes(picture, data.ToArray());
-        }
+        File.Copy(OwnerMountainFixtures.Path(6), picture, overwrite: true);
         catalog.ImportSet([picture], "Колонна", new Map.Assets.AssetImportOptions(), DateTimeOffset.UnixEpoch);
         OpenEditor(new MapDocument(DocumentId.New(), "Подземелье", DateTimeOffset.UnixEpoch, new CanvasDefinition(1024, 768, "px", "#FF20242B"),
             [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FF20242B"), new ObjectLayer(LayerId.New(), "Комнаты", true, false, 1, [])]),
@@ -780,12 +774,15 @@ public sealed partial class NativeEditorScenarioApplication : Application
         _editor.SelectAssetSet(catalog.Sets[0].Id);
         _editor.CancelPlacement();
         _editor.ActiveTool = EditorTool.Select;
+        // The corner without a cap, read without the selection frame on top: the cap must change it.
+        _editor.Session.SetSelection([]); await Settle(); await Frame();
+        var bareCorner = CanvasPixels([(room.X, room.Y)])[0];
         _editor.SelectObject(room.Id); await Settle();
         await Click("RoomCapsFromAssetButton"); await Frame();
         _report.Checks["caps-from-asset-button"] = _editor.SelectedRoom?.CapAssetSha256 == catalog.Records[0].Sha256;
         _editor.Session.SetSelection([]); await Settle(); await Frame();
         var corner = CanvasPixels([(room.X, room.Y)])[0];
-        _report.Checks["cap-on-canvas"] = corner.Red > 150 && corner.Green < 90;
+        _report.Checks["cap-on-canvas"] = corner != bareCorner && corner.Alpha == 255;
         Console.WriteLine($"room: corner {corner}");
         SaveTall(Path.ChangeExtension(Options.OutputPath, ".room.png"));
 

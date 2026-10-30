@@ -87,7 +87,7 @@ public sealed class NativePlacementPathApplication : Application
         Environment.SetEnvironmentVariable("MAP_UI_TEST_MODE", "1");
         Environment.SetEnvironmentVariable("MAP_UI_TEST_PROFILE_ROOT", Path.Combine(_workspace, "profile"));
         _catalog = new AssetCatalog(Path.Combine(_workspace, "catalog"));
-        _catalog.ImportSet([Path.Combine(Environment.CurrentDirectory, "tests/fixtures/assets/diagnostic-stamp-01.png")],
+        _catalog.ImportSet([OwnerMountainFixtures.Path(1)],
             "Деревья", new(), DateTimeOffset.UnixEpoch);
         _window = new Window { Width = 1440, Height = 900, Title = "Map — Stage 17", ShowActivated = false,
             ShowInTaskbar = false, WindowStartupLocation = WindowStartupLocation.Manual, Position = new PixelPoint(-32000, -32000) };

@@ -127,37 +127,16 @@ public sealed class RegionalRolesApplication : Application
             new CanvasDefinition(1200, 1100, "px", "#FFE9E1CC"), layers);
     }
 
-    // Diagnostic geometry only: no product artwork or external fixtures are installed.
+    // Every role gets one of the owner's mountains (an archived copy is mirrored); each file is distinct.
     private void BuildLibrary()
     {
-        foreach (var role in new[] { AssetRole.Tree, AssetRole.Spruce, AssetRole.Bush, AssetRole.Peak, AssetRole.Slope, AssetRole.House, AssetRole.Tower })
+        byte marker = 0;
+        var roles = new[] { AssetRole.Tree, AssetRole.Spruce, AssetRole.Bush, AssetRole.Peak, AssetRole.Slope, AssetRole.House, AssetRole.Tower };
+        foreach (var role in roles)
         foreach (var archived in new[] { false, true })
         {
             var path = Path.Combine(_workspace, role + (archived ? "-archived" : "") + ".png");
-            using var surface = SKSurface.Create(new SKImageInfo(48, 64))!;
-            var canvas = surface.Canvas; canvas.Clear(SKColors.Transparent);
-            using var paint = new SKPaint { IsAntialias = true, Color = archived ? SKColors.Magenta : role switch
-            {
-                AssetRole.Tree => SKColors.ForestGreen, AssetRole.Spruce => SKColors.Teal, AssetRole.Bush => SKColors.OliveDrab,
-                AssetRole.Peak => SKColors.SlateBlue, AssetRole.Slope => SKColors.Sienna, AssetRole.House => SKColors.OrangeRed,
-                _ => SKColors.SteelBlue,
-            } };
-            void Polygon(params SKPoint[] points)
-            {
-                using var shape = new SKPath(); shape.AddPoly(points, close: true); canvas.DrawPath(shape, paint);
-            }
-            switch (role)
-            {
-                case AssetRole.Tree: canvas.DrawRect(20, 25, 8, 32, paint); canvas.DrawCircle(24, 22, 19, paint); break;
-                case AssetRole.Spruce: canvas.DrawRect(21, 33, 6, 24, paint); Polygon(new(24, 3), new(3, 48), new(45, 48)); break;
-                case AssetRole.Bush: canvas.DrawOval(new SKRect(3, 29, 45, 55), paint); break;
-                case AssetRole.Peak: Polygon(new(3, 56), new(24, 4), new(45, 56)); break;
-                case AssetRole.Slope: Polygon(new(3, 55), new(13, 24), new(34, 38), new(45, 55)); break;
-                case AssetRole.House: canvas.DrawRect(9, 27, 30, 29, paint); Polygon(new(3, 28), new(24, 6), new(45, 28)); break;
-                case AssetRole.Tower: canvas.DrawRect(13, 16, 22, 40, paint); canvas.DrawRect(8, 9, 32, 10, paint); break;
-            }
-            using var image = surface.Snapshot(); using var png = image.Encode(SKEncodedImageFormat.Png, 100);
-            File.WriteAllBytes(path, png.ToArray());
+            OwnerMountainFixtures.WriteDistinct((Array.IndexOf(roles, role) % 6) + 1, path, ++marker, mirror: archived);
             var set = _catalog.ImportSet([path], role + (archived ? " — архив" : " — свой набор"), new(), DateTimeOffset.UnixEpoch);
             _catalog.SetVariantPresentation(set.VariantIds[0], role.ToString(), .5, .85, .09375);
             _catalog.SetPlacementDefaults(set.Id, new() { Role = role, AllowedRotations = [0], CanFlip = false, DepthSort = true });

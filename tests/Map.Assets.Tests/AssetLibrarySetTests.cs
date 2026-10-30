@@ -19,13 +19,13 @@ public sealed class AssetLibrarySetTests : IDisposable
         catalog.Import(Source("alone", SKColors.Coral), new AssetImportOptions(), Stamp(0));
         var set = catalog.ImportSet(
             [.. Enumerable.Range(0, 12).Select(index => Source($"v{index:D2}", Shade(index)))],
-            "Диагностический набор",
-            new AssetImportOptions { Pack = "Диагностика", Tags = ["diagnostic"] },
+            "Мои горы",
+            new AssetImportOptions { Pack = "Горы владельца", Tags = ["горы"] },
             Stamp(1));
 
         Assert.Equal(12, set.VariantIds.Count);
         Assert.Equal(set.VariantIds[0], set.CoverVariantId);
-        Assert.Equal("Диагностический набор", set.Name);
+        Assert.Equal("Мои горы", set.Name);
         Assert.Equal(2, catalog.Sets.Count);
         Assert.Equal(13, catalog.Records.Count);
 

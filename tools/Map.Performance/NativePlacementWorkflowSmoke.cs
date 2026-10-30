@@ -105,8 +105,8 @@ public sealed class PlacementWorkflowApplication : Application
         Environment.SetEnvironmentVariable("MAP_UI_TEST_PROFILE_ROOT", Path.Combine(_workspace, "profile"));
         _catalog = new AssetCatalog(Path.Combine(_workspace, "catalog"));
         _catalog.ImportSet([
-            Path.Combine(Environment.CurrentDirectory, "tests/fixtures/assets/diagnostic-stamp-01.png"),
-            Path.Combine(Environment.CurrentDirectory, "tests/fixtures/assets/diagnostic-stamp-02.png")],
+            OwnerMountainFixtures.Path(1),
+            OwnerMountainFixtures.Path(2)],
             "Дерево", new AssetImportOptions(), DateTimeOffset.UnixEpoch);
         _window = new Window
         {

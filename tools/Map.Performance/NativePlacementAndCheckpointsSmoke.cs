@@ -383,22 +383,9 @@ public sealed class NativePlacementAndCheckpointsApplication : Application
 
     private static AssetCatalog CreateCatalog(string workspace)
     {
-        var sourceDirectory = Path.Combine(workspace, "source");
-        Directory.CreateDirectory(sourceDirectory);
-        var paths = new List<string>();
-        foreach (var (name, color) in new[]
-                 { ("tree-a", SKColors.ForestGreen), ("tree-b", SKColors.OliveDrab) })
-        {
-            var path = Path.Combine(sourceDirectory, name + ".png");
-            using var surface = SKSurface.Create(new SKImageInfo(48, 36))!;
-            surface.Canvas.Clear(color);
-            using var image = surface.Snapshot();
-            using var data = image.Encode(SKEncodedImageFormat.Png, 100);
-            File.WriteAllBytes(path, data.ToArray());
-            paths.Add(path);
-        }
         var catalog = new AssetCatalog(Path.Combine(workspace, "catalog"));
-        catalog.ImportSet(paths, "Дерево", new AssetImportOptions(), DateTimeOffset.UnixEpoch);
+        catalog.ImportSet([OwnerMountainFixtures.Path(1), OwnerMountainFixtures.Path(2)],
+            "Дерево", new AssetImportOptions(), DateTimeOffset.UnixEpoch);
         return catalog;
     }
 

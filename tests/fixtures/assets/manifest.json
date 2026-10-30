@@ -1,250 +1,109 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "assets": [
     {
-      "id": "diagnostic-stamp-01",
-      "fileName": "diagnostic-stamp-01.png",
-      "sha256": "5d56e04dac46164021f79bccabc6636caa6d9c8ebdc30a3d747ebf294bdf6a16",
+      "id": "owner-mountain-01",
+      "fileName": "owner-mountain-01.png",
+      "sha256": "89c2ff3b977a46b5c31b2c866291016738b92899f3d909b3fb357de90ef812d6",
       "width": 512,
       "height": 512,
       "hasAlpha": true,
-      "label": "\u0412\u0430\u0440\u0438\u0430\u043D\u0442 01",
-      "author": "Map project",
-      "license": "CC0-1.0",
-      "generator": "tools/Map.DiagnosticAssets",
+      "label": "Ледяной пик",
+      "author": "Владелец",
+      "source": "content/Owner.Mountains.2026-10-18/source/1.png",
       "tags": [
-        "diagnostic",
-        "stamp"
+        "owner",
+        "mountain"
       ]
     },
     {
-      "id": "diagnostic-stamp-02",
-      "fileName": "diagnostic-stamp-02.png",
-      "sha256": "28a7e92b1130ef2c3e85099f1e4fd749ad27e539c7f053e0d51e3323f397012c",
+      "id": "owner-mountain-02",
+      "fileName": "owner-mountain-02.png",
+      "sha256": "99571a4af17459590084d14bace05a7574f32fc5f68f980bb5cf39967eba8159",
       "width": 512,
       "height": 512,
       "hasAlpha": true,
-      "label": "\u0412\u0430\u0440\u0438\u0430\u043D\u0442 02",
-      "author": "Map project",
-      "license": "CC0-1.0",
-      "generator": "tools/Map.DiagnosticAssets",
+      "label": "Двуглавая гора",
+      "author": "Владелец",
+      "source": "content/Owner.Mountains.2026-10-18/source/2.png",
       "tags": [
-        "diagnostic",
-        "stamp"
+        "owner",
+        "mountain"
       ]
     },
     {
-      "id": "diagnostic-stamp-03",
-      "fileName": "diagnostic-stamp-03.png",
-      "sha256": "ae1bfa9c15c4563f8feba2116aeb599137a5620aebd850643e13ae8995bb472c",
+      "id": "owner-mountain-03",
+      "fileName": "owner-mountain-03.png",
+      "sha256": "a2b647f770fa6aa053a1ab61000b21faf00dc240ca008e23e62c142e6e2c6f7c",
       "width": 512,
       "height": 512,
       "hasAlpha": true,
-      "label": "\u0412\u0430\u0440\u0438\u0430\u043D\u0442 03",
-      "author": "Map project",
-      "license": "CC0-1.0",
-      "generator": "tools/Map.DiagnosticAssets",
+      "label": "Гора с ледником",
+      "author": "Владелец",
+      "source": "content/Owner.Mountains.2026-10-18/source/3.png",
       "tags": [
-        "diagnostic",
-        "stamp"
+        "owner",
+        "mountain"
       ]
     },
     {
-      "id": "diagnostic-stamp-04",
-      "fileName": "diagnostic-stamp-04.png",
-      "sha256": "9f934b976fac4f689d50f67cb25827fe95934cd060fd169c48cb80c59122d138",
+      "id": "owner-mountain-04",
+      "fileName": "owner-mountain-04.png",
+      "sha256": "839c4799afc1bbaeb8798277cbd10f0e5559aa14c3ddb46316fb9bac38153c49",
       "width": 512,
       "height": 512,
       "hasAlpha": true,
-      "label": "\u0412\u0430\u0440\u0438\u0430\u043D\u0442 04",
-      "author": "Map project",
-      "license": "CC0-1.0",
-      "generator": "tools/Map.DiagnosticAssets",
+      "label": "Горная гряда",
+      "author": "Владелец",
+      "source": "content/Owner.Mountains.2026-10-18/source/4.png",
       "tags": [
-        "diagnostic",
-        "stamp"
+        "owner",
+        "mountain"
       ]
     },
     {
-      "id": "diagnostic-stamp-05",
-      "fileName": "diagnostic-stamp-05.png",
-      "sha256": "adc10542cff22afa757d33a1e7b7fbf945cd41f3d9586e47c6a068297e94242d",
+      "id": "owner-mountain-05",
+      "fileName": "owner-mountain-05.png",
+      "sha256": "110d898c2fdca7ba303177369e99df4eecf8127b2175786eaddef9fce2b7c3ab",
       "width": 512,
       "height": 512,
       "hasAlpha": true,
-      "label": "\u0412\u0430\u0440\u0438\u0430\u043D\u0442 05",
-      "author": "Map project",
-      "license": "CC0-1.0",
-      "generator": "tools/Map.DiagnosticAssets",
+      "label": "Ледяные шпили",
+      "author": "Владелец",
+      "source": "content/Owner.Mountains.2026-10-18/source/5.png",
       "tags": [
-        "diagnostic",
-        "stamp"
+        "owner",
+        "mountain"
       ]
     },
     {
-      "id": "diagnostic-stamp-06",
-      "fileName": "diagnostic-stamp-06.png",
-      "sha256": "be0b3053b818fd6d38745567c444871014332a98de9688a0deb70cab7eb9d44f",
+      "id": "owner-mountain-06",
+      "fileName": "owner-mountain-06.png",
+      "sha256": "b72da1dcb8c70115a6f8823845521626eb66d0dbd20e32480bb81cefc274662f",
       "width": 512,
       "height": 512,
       "hasAlpha": true,
-      "label": "\u0412\u0430\u0440\u0438\u0430\u043D\u0442 06",
-      "author": "Map project",
-      "license": "CC0-1.0",
-      "generator": "tools/Map.DiagnosticAssets",
+      "label": "Ледяной клык",
+      "author": "Владелец",
+      "source": "content/Owner.Mountains.2026-10-18/source/6.png",
       "tags": [
-        "diagnostic",
-        "stamp"
-      ]
-    },
-    {
-      "id": "diagnostic-stamp-07",
-      "fileName": "diagnostic-stamp-07.png",
-      "sha256": "a4f66bb9c62a828f388f5ed4bac56f181ba43b06c147b1dd2ce823d1156a13e0",
-      "width": 512,
-      "height": 512,
-      "hasAlpha": true,
-      "label": "\u0412\u0430\u0440\u0438\u0430\u043D\u0442 07",
-      "author": "Map project",
-      "license": "CC0-1.0",
-      "generator": "tools/Map.DiagnosticAssets",
-      "tags": [
-        "diagnostic",
-        "stamp"
-      ]
-    },
-    {
-      "id": "diagnostic-stamp-08",
-      "fileName": "diagnostic-stamp-08.png",
-      "sha256": "78ead351ebd06e5f2f9b14ee9614265cf401e1411b5f54aba8a26af5e36c3311",
-      "width": 512,
-      "height": 512,
-      "hasAlpha": true,
-      "label": "\u0412\u0430\u0440\u0438\u0430\u043D\u0442 08",
-      "author": "Map project",
-      "license": "CC0-1.0",
-      "generator": "tools/Map.DiagnosticAssets",
-      "tags": [
-        "diagnostic",
-        "stamp"
-      ]
-    },
-    {
-      "id": "diagnostic-stamp-09",
-      "fileName": "diagnostic-stamp-09.png",
-      "sha256": "7326a5c79bda403fc2b47b9af6ebc6a0d600759fbd772672265a90e273254071",
-      "width": 512,
-      "height": 512,
-      "hasAlpha": true,
-      "label": "\u0412\u0430\u0440\u0438\u0430\u043D\u0442 09",
-      "author": "Map project",
-      "license": "CC0-1.0",
-      "generator": "tools/Map.DiagnosticAssets",
-      "tags": [
-        "diagnostic",
-        "stamp"
-      ]
-    },
-    {
-      "id": "diagnostic-stamp-10",
-      "fileName": "diagnostic-stamp-10.png",
-      "sha256": "309d807f5a3f5f66e22379ec3967531648029b45939b956d5f455f1a93c87bea",
-      "width": 512,
-      "height": 512,
-      "hasAlpha": true,
-      "label": "\u0412\u0430\u0440\u0438\u0430\u043D\u0442 10",
-      "author": "Map project",
-      "license": "CC0-1.0",
-      "generator": "tools/Map.DiagnosticAssets",
-      "tags": [
-        "diagnostic",
-        "stamp"
-      ]
-    },
-    {
-      "id": "diagnostic-stamp-11",
-      "fileName": "diagnostic-stamp-11.png",
-      "sha256": "9726c9a69d45fc9ad1744bbef9bf4afecac4589298602677340f185a03f897b5",
-      "width": 512,
-      "height": 512,
-      "hasAlpha": true,
-      "label": "\u0412\u0430\u0440\u0438\u0430\u043D\u0442 11",
-      "author": "Map project",
-      "license": "CC0-1.0",
-      "generator": "tools/Map.DiagnosticAssets",
-      "tags": [
-        "diagnostic",
-        "stamp"
-      ]
-    },
-    {
-      "id": "diagnostic-stamp-12",
-      "fileName": "diagnostic-stamp-12.png",
-      "sha256": "40dd7b537e3b05a764e1670bda15be04da15d87d4a65913200c79967c96f3b1a",
-      "width": 512,
-      "height": 512,
-      "hasAlpha": true,
-      "label": "\u0412\u0430\u0440\u0438\u0430\u043D\u0442 12",
-      "author": "Map project",
-      "license": "CC0-1.0",
-      "generator": "tools/Map.DiagnosticAssets",
-      "tags": [
-        "diagnostic",
-        "stamp"
-      ]
-    },
-    {
-      "id": "diagnostic-brush-tip",
-      "fileName": "diagnostic-brush-tip.png",
-      "sha256": "48f0deb4848e39c4b5278f1b9b22f0f565eadd76ef58f72fe15ee99c4a42768a",
-      "width": 256,
-      "height": 256,
-      "hasAlpha": true,
-      "label": "\u0414\u0438\u0430\u0433\u043D\u043E\u0441\u0442\u0438\u0447\u0435\u0441\u043A\u0438\u0439 \u043A\u043E\u043D\u0447\u0438\u043A \u043A\u0438\u0441\u0442\u0438",
-      "author": "Map project",
-      "license": "CC0-1.0",
-      "generator": "tools/Map.DiagnosticAssets",
-      "tags": [
-        "diagnostic",
-        "brush"
+        "owner",
+        "mountain"
       ]
     }
   ],
   "sets": [
     {
-      "id": "diagnostic-stamp-set",
-      "name": "\u0414\u0438\u0430\u0433\u043D\u043E\u0441\u0442\u0438\u0447\u0435\u0441\u043A\u0438\u0439 \u043D\u0430\u0431\u043E\u0440",
+      "id": "owner-mountains-set",
       "variantIds": [
-        "diagnostic-stamp-01",
-        "diagnostic-stamp-02",
-        "diagnostic-stamp-03",
-        "diagnostic-stamp-04",
-        "diagnostic-stamp-05",
-        "diagnostic-stamp-06",
-        "diagnostic-stamp-07",
-        "diagnostic-stamp-08",
-        "diagnostic-stamp-09",
-        "diagnostic-stamp-10",
-        "diagnostic-stamp-11",
-        "diagnostic-stamp-12"
+        "owner-mountain-01",
+        "owner-mountain-02",
+        "owner-mountain-03",
+        "owner-mountain-04",
+        "owner-mountain-05",
+        "owner-mountain-06"
       ],
-      "coverVariantId": "diagnostic-stamp-01",
-      "tags": [
-        "diagnostic",
-        "stamp"
-      ]
-    },
-    {
-      "id": "diagnostic-brush-tip-set",
-      "name": "\u0414\u0438\u0430\u0433\u043D\u043E\u0441\u0442\u0438\u0447\u0435\u0441\u043A\u0438\u0439 \u043A\u043E\u043D\u0447\u0438\u043A \u043A\u0438\u0441\u0442\u0438",
-      "variantIds": [
-        "diagnostic-brush-tip"
-      ],
-      "coverVariantId": "diagnostic-brush-tip",
-      "tags": [
-        "diagnostic",
-        "brush"
-      ]
+      "coverVariantId": "owner-mountain-01"
     }
   ]
 }

@@ -169,10 +169,10 @@ public sealed class NativeEditorIntegrityApplication : Application
             ThumbnailRenderer.RenderPng(document, 160, 100));
         var opened = MapProjectStore.Open(mapPath);
 
-        // A synthetic stamp asset of our own making, imported into a throwaway catalog: the ghost
+        // One of the owner's mountains, imported into a throwaway catalog: the ghost
         // has to show the real picture the user picked, not a placeholder rectangle.
         var catalog = new AssetCatalog(Path.Combine(workspace, "asset-catalog"));
-        var stampPngPath = Path.Combine(workspace, "synthetic-stamp.png");
+        var stampPngPath = Path.Combine(workspace, "owner-mountain.png");
         CreateStampPng(stampPngPath);
         var stampRecord = catalog.Import(stampPngPath, new AssetImportOptions(), DateTimeOffset.UnixEpoch);
 
@@ -957,23 +957,8 @@ public sealed class NativeEditorIntegrityApplication : Application
         await Task.Delay(20);
     }
 
-    /// <summary>A tiny synthetic stamp of our own making; nothing is copied from anywhere.</summary>
-    private static void CreateStampPng(string path)
-    {
-        using var surface = SkiaSharp.SKSurface.Create(new SkiaSharp.SKImageInfo(48, 36))!;
-        surface.Canvas.Clear(SkiaSharp.SKColors.Transparent);
-        using var paint = new SkiaSharp.SKPaint
-        {
-            Color = new SkiaSharp.SKColor(0x8C, 0x62, 0x39),
-            IsAntialias = true,
-        };
-        surface.Canvas.DrawRect(SkiaSharp.SKRect.Create(6, 10, 36, 20), paint);
-        paint.Color = new SkiaSharp.SKColor(0x3E, 0x8E, 0x5A);
-        surface.Canvas.DrawCircle(24, 12, 9, paint);
-        using var image = surface.Snapshot();
-        using var data = image.Encode(SkiaSharp.SKEncodedImageFormat.Png, 100);
-        File.WriteAllBytes(path, data.ToArray());
-    }
+    /// <summary>The stamp is one of the owner's mountains, copied into the throwaway workspace.</summary>
+    private static void CreateStampPng(string path) => File.Copy(OwnerMountainFixtures.Path(3), path, overwrite: true);
 
     private static MapDocument Document()
     {

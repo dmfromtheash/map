@@ -1237,46 +1237,15 @@ public sealed class NativeObjectWorkflowApplication : Application
         new CanvasDefinition(1_600, 1_000, "px", "#FF20242B"),
         [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FF20242B")]);
 
+    // The owner's mountains: a two-variant set and a single one (the names are the smoke's roles).
     private static AssetCatalog CreateCatalog(string workspace)
     {
-        var sourceDirectory = Path.Combine(workspace, "source");
-        Directory.CreateDirectory(sourceDirectory);
-
-        string Draw(string name, SKColor color, int width, int height, bool triangle)
-        {
-            var path = Path.Combine(sourceDirectory, name + ".png");
-            using var surface = SKSurface.Create(new SKImageInfo(width, height))!;
-            surface.Canvas.Clear(SKColors.Transparent);
-            using var paint = new SKPaint { Color = color, IsAntialias = true };
-            if (triangle)
-            {
-                using var mountain = new SKPath();
-                mountain.MoveTo(width / 2f, 4);
-                mountain.LineTo(width - 4, height - 4);
-                mountain.LineTo(4, height - 4);
-                mountain.Close();
-                surface.Canvas.DrawPath(mountain, paint);
-            }
-            else
-            {
-                surface.Canvas.DrawOval(new SKRect(4, 4, width - 4, height - 4), paint);
-            }
-
-            using var image = surface.Snapshot();
-            using var data = image.Encode(SKEncodedImageFormat.Png, 100);
-            File.WriteAllBytes(path, data.ToArray());
-            return path;
-        }
-
         var catalog = new AssetCatalog(Path.Combine(workspace, "catalog"));
         catalog.ImportSet(
-            [
-                Draw("tree-a", SKColors.ForestGreen, 64, 48, triangle: false),
-                Draw("tree-b", SKColors.SeaGreen, 48, 64, triangle: false),
-            ],
+            [OwnerMountainFixtures.Path(1), OwnerMountainFixtures.Path(2)],
             "Дерево", new AssetImportOptions(), DateTimeOffset.UnixEpoch);
         catalog.ImportSet(
-            [Draw("mountain-a", SKColors.SaddleBrown, 72, 56, triangle: true)],
+            [OwnerMountainFixtures.Path(3)],
             "Гора", new AssetImportOptions(), DateTimeOffset.UnixEpoch.AddSeconds(1));
         return catalog;
     }

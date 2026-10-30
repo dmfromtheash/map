@@ -124,10 +124,10 @@ public sealed class NativePlacementAreaApplication : Application
         if (densityAsset is not null)
             _densitySetId = _catalog.ImportSet([densityAsset], "Горы", new(), DateTimeOffset.UnixEpoch).Id;
         else if (_report.MeasurementRequired)
-            _catalog.ImportSet([Path.Combine(Environment.CurrentDirectory, "tests/fixtures/assets/diagnostic-stamp-01.png")],
+            _catalog.ImportSet([OwnerMountainFixtures.Path(1)],
                 "Деревья", new(), DateTimeOffset.UnixEpoch);
         if (Environment.GetEnvironmentVariable("MAP_STAGE18_NATURAL_CHECK") == "1")
-            _treeSetId = _catalog.ImportSet([Path.Combine(Environment.CurrentDirectory, "tests/fixtures/assets/diagnostic-stamp-01.png")],
+            _treeSetId = _catalog.ImportSet([OwnerMountainFixtures.Path(1)],
                 "Деревья", new(), DateTimeOffset.UnixEpoch).Id;
         if (_densitySetId is not null) _catalog.RenameSet(_densitySetId, "Горы");
         if (_treeSetId is not null) _catalog.RenameSet(_treeSetId, "Деревья");
@@ -351,7 +351,7 @@ public sealed class NativePlacementAreaApplication : Application
     }
     private async Task ExecuteNaturalCorrection(string assetPath)
     {
-        var treePath = Path.Combine(Environment.CurrentDirectory, "tests/fixtures/assets/diagnostic-stamp-01.png");
+        var treePath = OwnerMountainFixtures.Path(1);
         var treeHash = SHA256.HashData(File.ReadAllBytes(treePath));
         await Settle();
         _editor.ChooseGalleryVariant(_treeSetId!, null); await Settle();
@@ -672,7 +672,7 @@ public sealed class NativePlacementAreaApplication : Application
         _report.MeasurementPerformed = true;
         Require(_report.FixtureObjects is >= 19000 and <= 21000, "Fixture is not the requested ordinary map");
         _view.Canvas.DisposeRenderCaches();
-        var measurementSet = _catalog.ImportSet([Path.Combine(Environment.CurrentDirectory, "tests/fixtures/assets/diagnostic-stamp-01.png")], "Деревья", new(), DateTimeOffset.UnixEpoch).Id;
+        var measurementSet = _catalog.ImportSet([OwnerMountainFixtures.Path(1)], "Деревья", new(), DateTimeOffset.UnixEpoch).Id;
         OpenEditor(document); _editor.AddObjectLayer();
         _report.Checks["measurement-new-layer-only-in-copy"] = document.FindLayer(_editor.ActiveLayer!.Id) is null;
         _editor.ChooseGalleryVariant(measurementSet, null);

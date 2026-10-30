@@ -615,9 +615,9 @@ public class Stage10DInspectorViewModelTests
 
         var alpha = new byte[16 * 16];
         Array.Fill(alpha, (byte)255);
-        editor.SetBrushTip(new BrushTipShape(16, 16, alpha), "diagnostic-brush-tip");
+        editor.SetBrushTip(new BrushTipShape(16, 16, alpha), "test-brush-tip");
 
-        Assert.Equal("diagnostic-brush-tip", editor.BrushTipName);
+        Assert.Equal("test-brush-tip", editor.BrushTipName);
         Assert.NotNull(editor.BrushSettings.Tip);
 
         editor.ClearBrushTip();

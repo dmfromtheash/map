@@ -32,7 +32,7 @@ internal sealed class NativeAssetCatalogReport
 }
 
 /// <summary>
-/// An empty library first, then explicit imports of existing diagnostic fixtures into its own
+/// An empty library first, then explicit imports of the owner's mountains (<see cref="OwnerMountainFixtures"/>) into its own
 /// isolated catalog. Exercises the real gallery and stamp tool without reinstalling product art.
 /// </summary>
 internal static class NativeAssetCatalogSmoke
@@ -152,16 +152,16 @@ public sealed class AssetCatalogApplication : Application
             return;
         }
 
-        // Test fixtures are deliberately imported only into this isolated smoke catalog.
-        string Fixture(int number) => Path.Combine(Environment.CurrentDirectory, "tests", "fixtures", "assets", $"diagnostic-stamp-{number:00}.png");
-        _catalog.ImportSet([Fixture(1), Fixture(2), Fixture(3)], "Диагностические варианты",
-            new AssetImportOptions { Pack = "Проверка вариантов", Tags = ["Тема/Фигуры"] }, DateTimeOffset.UnixEpoch);
-        var sample4 = _catalog.ImportSet([Fixture(4)], "Диагностический образец 4",
+        // The owner's mountains are imported only into this isolated smoke catalog.
+        static string Fixture(int number) => OwnerMountainFixtures.Path(number);
+        _catalog.ImportSet([Fixture(1), Fixture(2), Fixture(3)], "Мои горы",
+            new AssetImportOptions { Pack = "Проверка вариантов", Tags = ["Тема/Горы"] }, DateTimeOffset.UnixEpoch);
+        var sample4 = _catalog.ImportSet([Fixture(4)], OwnerMountainFixtures.Names[3],
             new AssetImportOptions { Pack = "Проверка одиночных", Tags = ["Тема/Образцы"] }, DateTimeOffset.UnixEpoch);
-        var sample5 = _catalog.ImportSet([Fixture(5)], "Диагностический образец 5",
+        var sample5 = _catalog.ImportSet([Fixture(5)], OwnerMountainFixtures.Names[4],
             new AssetImportOptions { Pack = "Проверка одиночных", Tags = ["Тема/Образцы"] }, DateTimeOffset.UnixEpoch);
         _editor.RefreshLibrary(); _view.RefreshLibraryPanel(); await Settle();
-        Check("explicit diagnostic import creates three sets", _catalog.Records.Count == 5 && _catalog.Sets.Count == 3);
+        Check("explicit owner import creates three sets", _catalog.Records.Count == 5 && _catalog.Sets.Count == 3);
         Check("catalog groups by collection", _editor.LibraryGrouping == AssetGrouping.Collection
             && window.GetVisualDescendants().OfType<Border>().Count(b => b.Name?.StartsWith("LibraryGroupHeader_", StringComparison.Ordinal) == true) >= 2);
         Check("tiles realised and bounded", _view.GalleryRealizedCards is > 0 and < 200);
@@ -178,15 +178,15 @@ public sealed class AssetCatalogApplication : Application
         _editor.LibrarySource = AssetSourceFilter.Mine;
         _editor.SetLibraryTagSelected("Тема/Образцы", true);
         _view.RefreshLibraryPanel(); await Settle();
-        Check("tag filter selects diagnostic samples", _editor.LibrarySets.Count == 2);
+        Check("tag filter selects single samples", _editor.LibrarySets.Count == 2);
         _editor.ClearLibraryFilters();
         _editor.LibraryGrouping = AssetGrouping.Collection;
-        _editor.LibraryCollectionId = _catalog.Sets.Single(s => s.Name == "Диагностические варианты").CollectionId;
+        _editor.LibraryCollectionId = _catalog.Sets.Single(s => s.Name == "Мои горы").CollectionId;
         _view.RefreshLibraryPanel(); await Settle(); await WaitForThumbnails(window);
 
         // 3. One click puts the asset in the hand: the catalog closes and the ghost is armed
         // (owner, 2026-10-24). While the set is being organised a click only chooses.
-        var painted = _catalog.Sets.Single(s => s.Name == "Диагностические варианты");
+        var painted = _catalog.Sets.Single(s => s.Name == "Мои горы");
         Button Tile() => window.GetVisualDescendants().OfType<Button>().First(b => b.Name == "GalleryCover_" + Sanitize(painted.Id));
         Tile().RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Settle();
         Check("one click arms the ghost and closes the catalog", !window.IsVisible && _editor.SelectedSetId == painted.Id
@@ -252,7 +252,7 @@ public sealed class AssetCatalogApplication : Application
         var objects = () => _editor.Session.Document.Layers.OfType<ObjectLayer>().Sum(l => l.Objects.Count);
         _editor.SetStampScalePercent(220, commit: true); await Settle();
         Point(330, 420);
-        Check("diagnostic variant placed", objects() == 1);
+        Check("owner mountain variant placed", objects() == 1);
         _editor.ChooseGalleryVariant(sample4.Id, null); _editor.SetStampScalePercent(140, commit: true); await Settle();
         Point(640, 470); Point(700, 500);
         _editor.ChooseGalleryVariant(sample5.Id, null); _editor.SetStampScalePercent(150, commit: true); await Settle();

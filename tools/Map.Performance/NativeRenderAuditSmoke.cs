@@ -241,11 +241,11 @@ public sealed class RenderAuditApplication : Application
         var baseline = paintDone;
 
         // 3. Objects: arm a stamp, carry the ghost, place with the tool still armed, select, drag.
-        string Fixture(int number) => Path.Combine(Environment.CurrentDirectory, "tests", "fixtures", "assets", $"diagnostic-stamp-{number:00}.png");
-        var set = _catalog.ImportSet([Fixture(4)], "Образец", new AssetImportOptions { Pack = "Аудит" }, DateTimeOffset.UnixEpoch);
-        var second = _catalog.ImportSet([Fixture(5)], "Образец 5", new AssetImportOptions { Pack = "Аудит" }, DateTimeOffset.UnixEpoch);
+        static string Fixture(int number) => OwnerMountainFixtures.Path(number);
+        var set = _catalog.ImportSet([Fixture(4)], OwnerMountainFixtures.Names[3], new AssetImportOptions { Pack = "Аудит" }, DateTimeOffset.UnixEpoch);
+        var second = _catalog.ImportSet([Fixture(5)], OwnerMountainFixtures.Names[4], new AssetImportOptions { Pack = "Аудит" }, DateTimeOffset.UnixEpoch);
         _editor.RefreshLibrary(); _view.RefreshLibraryPanel(); await Settle();
-        Require(_editor.ChooseGalleryVariant(set.Id, null), "The diagnostic set could not be armed: " + _editor.StatusDetail);
+        Require(_editor.ChooseGalleryVariant(set.Id, null), "The owner mountain could not be armed: " + _editor.StatusDetail);
         _editor.SetStampScalePercent(120, commit: true);
         await Warm("stamp-tool");
         MoveScreen(400, 300); await Frame();

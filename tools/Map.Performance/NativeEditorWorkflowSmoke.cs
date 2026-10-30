@@ -243,7 +243,8 @@ public sealed class NativeEditorWorkflowApplication : Application
         var catalog = new AssetCatalog(Path.Combine(workspace, "asset-catalog"));
         var rasterPath = Path.Combine(workspace, "owner-raster.png");
         var svgPath = Path.Combine(workspace, "owner-safe.svg");
-        CreatePng(rasterPath, SKColors.CornflowerBlue);
+        // The raster becomes a brush material below, so it is the owner's opaque snow texture, not a mountain.
+        OwnerMountainFixtures.WriteTexture(rasterPath);
         const string svg = "<svg xmlns='http://www.w3.org/2000/svg' width='40' height='28' viewBox='0 0 40 28'>"
             + "<path d='M2 26 L20 2 L38 26 Z' fill='#779955' stroke='#223311' stroke-width='2'/></svg>";
         File.WriteAllText(svgPath, svg);
@@ -307,6 +308,9 @@ public sealed class NativeEditorWorkflowApplication : Application
         var brushRedo = editor.Session.Redo();
         var brushWorked = material && presetSaved && presetApplied && brushStarted
             && brushTransient && brushCommitted && brushUndo && brushRedo;
+        if (!brushWorked)
+            Console.WriteLine($"brush: material={material} preset={presetSaved}/{presetApplied} started={brushStarted} "
+                + $"transient={brushTransient} committed={brushCommitted} undo={brushUndo} redo={brushRedo} status={editor.StatusDetail}");
 
         editor.SelectLayer(landLayer.Id);
         editor.ActiveTool = EditorTool.Land;
@@ -537,15 +541,6 @@ public sealed class NativeEditorWorkflowApplication : Application
 
     private static int ObjectCount(MapDocument document) =>
         document.Layers.OfType<ObjectLayer>().Sum(layer => layer.Objects.Count);
-
-    private static void CreatePng(string path, SKColor color)
-    {
-        using var surface = SKSurface.Create(new SKImageInfo(48, 36))!;
-        surface.Canvas.Clear(color);
-        using var image = surface.Snapshot();
-        using var data = image.Encode(SKEncodedImageFormat.Png, 100);
-        File.WriteAllBytes(path, data.ToArray());
-    }
 
     private static MapDocument Document()
     {

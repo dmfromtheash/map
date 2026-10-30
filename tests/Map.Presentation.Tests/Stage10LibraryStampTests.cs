@@ -157,7 +157,7 @@ public sealed class Stage10LibraryStampTests : IAsyncLifetime
 
         editor.LibrarySearchText = "";
         editor.LibrarySort = AssetSortOrder.NameAscending;
-        Assert.Equal(["башня", "Диагностический набор"], editor.LibrarySets.Select(item => item.Name));
+        Assert.Equal(["башня", "Мои горы"], editor.LibrarySets.Select(item => item.Name));
 
         editor.LibraryFavoritesOnly = true;
         Assert.Empty(editor.LibrarySets);
@@ -412,7 +412,7 @@ public sealed class Stage10LibraryStampTests : IAsyncLifetime
 
         var set = editor.ImportAssetSet(
             [.. Enumerable.Range(0, 12).Select(index => Source($"v{index:D2}", Shade(index)))],
-            "Диагностический набор");
+            "Мои горы");
 
         Assert.NotNull(set);
         Assert.Equal(12, set!.VariantIds.Count);
@@ -827,7 +827,7 @@ public sealed class Stage10LibraryStampTests : IAsyncLifetime
 
         var headers = editor.LibraryRows.Where(row => row.IsHeader).ToList();
         Assert.Equal(2, headers.Count);
-        Assert.Contains(headers, row => row.Title.Contains("Диагностика", StringComparison.Ordinal));
+        Assert.Contains(headers, row => row.Title.Contains("Горы владельца", StringComparison.Ordinal));
         Assert.Contains(headers, row => row.Title.Contains("Другое", StringComparison.Ordinal));
         Assert.Equal(2, editor.LibraryRows.Count(row => !row.IsHeader));
         Assert.All(headers, row => Assert.Equal(1, row.Count));
@@ -959,13 +959,13 @@ public sealed class Stage10LibraryStampTests : IAsyncLifetime
         ImportTwelve(catalog);
         catalog.Import(Source("вторая", SKColors.Sienna), new AssetImportOptions(), Stamp(7));
         editor.RefreshLibrary();
-        editor.LibrarySearchText = "Диагностический";
+        editor.LibrarySearchText = "горы";
         editor.LibraryFavoritesOnly = true;
         editor.LibraryUntaggedOnly = true;
-        editor.LibraryTag = "diagnostic";
+        editor.LibraryTag = "горы";
         editor.LibraryMediaType = "image/webp";
         editor.LibraryImportedFromText = "1999-01-01";
-        editor.LibraryCollectionId = AssetIdentity.CollectionId("Диагностика");
+        editor.LibraryCollectionId = AssetIdentity.CollectionId("Горы владельца");
         Assert.True(editor.HasActiveLibraryFilters);
         Assert.Empty(editor.LibrarySets);
 
@@ -993,11 +993,11 @@ public sealed class Stage10LibraryStampTests : IAsyncLifetime
         Assert.Equal("Фильтры не заданы", editor.ActiveLibraryFilterSummary);
 
         editor.LibraryFavoritesOnly = true;
-        editor.LibraryTag = "diagnostic";
+        editor.LibraryTag = "горы";
 
         Assert.True(editor.HasActiveLibraryFilters);
         Assert.Contains("избранное", editor.ActiveLibraryFilterSummary, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("diagnostic", editor.ActiveLibraryFilterSummary, StringComparison.Ordinal);
+        Assert.Contains("горы", editor.ActiveLibraryFilterSummary, StringComparison.Ordinal);
     }
 
     // ---------------------------------------------------------------- set management
@@ -1012,7 +1012,7 @@ public sealed class Stage10LibraryStampTests : IAsyncLifetime
 
         Assert.False(editor.RenameSelectedSet("   "));
         Assert.False(editor.RenameSelectedSet(""));
-        Assert.Equal("Диагностический набор", editor.SelectedSet!.Name);
+        Assert.Equal("Мои горы", editor.SelectedSet!.Name);
 
         Assert.True(editor.RenameSelectedSet("  Свой набор  "));
 
@@ -1638,8 +1638,8 @@ public sealed class Stage10LibraryStampTests : IAsyncLifetime
 
     private AssetSet ImportTwelve(AssetCatalog catalog) => catalog.ImportSet(
         [.. Enumerable.Range(0, 12).Select(index => Source($"v{index:D2}", Shade(index)))],
-        "Диагностический набор",
-        new AssetImportOptions { Pack = "Диагностика", Tags = ["diagnostic"] },
+        "Мои горы",
+        new AssetImportOptions { Pack = "Горы владельца", Tags = ["горы"] },
         Stamp(2));
 
     private string Source(string name, SKColor color)

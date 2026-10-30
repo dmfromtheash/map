@@ -249,8 +249,8 @@ public sealed class NativeLargestMapStressApplication : Application
         var repositoryRoot = FindRepositoryRoot(Environment.CurrentDirectory);
         var assetPaths = new[]
         {
-            Path.Combine(repositoryRoot, "tests", "fixtures", "assets", "diagnostic-stamp-01.png"),
-            Path.Combine(repositoryRoot, "tests", "fixtures", "assets", "diagnostic-stamp-02.png"),
+            OwnerMountainFixtures.Path(1, repositoryRoot),
+            OwnerMountainFixtures.Path(2, repositoryRoot),
         };
         var assets = assetPaths.Select(path => editor.ImportAsset(path, linked: false)).ToArray();
         if (assets.Any(asset => asset is null))
