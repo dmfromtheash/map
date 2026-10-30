@@ -87,7 +87,7 @@ public sealed class AssetCatalogApplication : Application
             ShowInTaskbar = false, WindowStartupLocation = WindowStartupLocation.Manual, Position = new PixelPoint(-32000, -32000) };
         var document = new MapDocument(DocumentId.New(), "Каталог ассетов", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(1024, 768, "px", "#FFE9E0C8"),
-            [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFE9E0C8"),
+            [CurrentLook.Page("Фон", "#FFE9E0C8"),
                 new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, [])]);
         if (Options.Profile == "native-empty-artwork")
             document = document with { Layers = document.Layers.Append(
@@ -426,15 +426,15 @@ public sealed class AssetCatalogApplication : Application
         _view.Canvas.DisposeRenderCaches();
         var land = new LandLayer(LayerId.New(), "Верхнее плато", true, false, 1,
             TileMap.Empty(1).With(new TileKey(0, 0), Enumerable.Repeat((byte)255, TileMap.TileSize * TileMap.TileSize).ToArray()),
-            new LandEdgeStyle { FillColor = "#FF829568" }) { Level = 2 };
-        var low = new River { Name = "Нижняя река", Level = 0, Style = new RiverStyle { CutsLand = false, ClipToLand = false },
+            CurrentLook.Land()) { Level = 2 };
+        var low = new River { Name = "Нижняя река", Level = 0, Style = CurrentLook.River() with { CutsLand = false, ClipToLand = false },
             Channels = [RiverEditor.NewChannel([new(40, 128), new(470, 128)], 24)] };
         var high = new River { Name = "Верхняя река", Level = 3, Style = low.Style,
             Channels = [RiverEditor.NewChannel([new(128, 40), new(128, 330)], 24)] };
         var owner = new ObjectLayer(LayerId.New(), "Вода с маской", true, false, .6, []) { Rivers = [high, low] };
         var document = new MapDocument(DocumentId.New(), "Вода и уровни", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(512, 384, "px", "#FFE9E0C8"),
-            [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFE9E0C8"), land, owner]);
+            [CurrentLook.Page("Фон", "#FFE9E0C8"), land, owner]);
         _editor = new EditorViewModel(document, null, false, new ProjectStore(new RecoveryJournal(Path.Combine(_workspace, "terrain-recovery"))),
             new LocalRecent(), new LocalPicker(Path.Combine(_workspace, "terrain.mapproj")), new LocalPrompts(), new LocalLog(),
             assetCatalog: _catalog, localPreferences: new EditorLocalPreferences(PrimaryAutosaveEnabled: false));

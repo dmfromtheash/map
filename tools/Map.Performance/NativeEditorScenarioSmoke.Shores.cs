@@ -10,7 +10,7 @@ public sealed partial class NativeEditorScenarioApplication
 {
     private static readonly string[] ShoreRequired =
     [
-        "texture-free-illustrated-water", "same-level-carves-earth", "higher-water-carves-earth",
+        "new-map-look", "same-level-carves-earth", "higher-water-carves-earth",
         "lower-water-is-covered", "width-rebuilds-banks", "pen-style-from-panel", "style-undo-exact",
         "shore-map-saved-and-reopened", "native-shore-frame", "resources-disposed",
     ];
@@ -25,20 +25,33 @@ public sealed partial class NativeEditorScenarioApplication
         _editor.SelectRiver(river.Id);
         await Click("RiverToolButton");
         var original = _editor.Session.Document;
-        _report.Checks["texture-free-illustrated-water"] = river.Style.TextureId is null
-            && river.Style.CutsLand && river.Style.BankReliefWidth > 0
-            && original.Layers.OfType<LandLayer>().All(l => l.EdgeStyle.FillTextureId is null);
+        _report.Checks["new-map-look"] = river.Style == RiverStyle.Natural() && river.Style.CutsLand
+            && original.Layers.OfType<LandLayer>().All(l => l.EdgeStyle == LandEdgeStyle.SoftWatercolor())
+            && original.Layers[0] is BaseColorLayer { Sea: not null };
 
-        // Hide the paint of the water to prove the earth really is removed at the right levels.
+        // Hide the paint of the water to prove the earth really is removed at the right levels: inside the lake the
+        // map is then the sea under no land at all, or - water below the earth - the land with no river.
         _editor.SetRiverOpacityPercent(0);
+        var noLand = _editor.Session.Document with
+        { Layers = [.. _editor.Session.Document.Layers.Select(l => l is LandLayer land ? land with { Visible = false } : l)] };
+        bool Same(SKBitmap map, SKBitmap reference)
+        {
+            var a = map.GetPixel(645, 180); var b = reference.GetPixel(645, 180);
+            return Math.Abs(a.Red - b.Red) <= 2 && Math.Abs(a.Green - b.Green) <= 2 && Math.Abs(a.Blue - b.Blue) <= 2;
+        }
         using (var equal = ShoreBitmap())
-            _report.Checks["same-level-carves-earth"] = equal.GetPixel(645, 180) == new SKColor(116, 167, 161);
+        using (var sea = ShoreBitmap(document: noLand))
+            _report.Checks["same-level-carves-earth"] = Same(equal, sea);
         _editor.SetSelectedWaterLevel(2);
         using (var above = ShoreBitmap())
-            _report.Checks["higher-water-carves-earth"] = above.GetPixel(645, 180) == new SKColor(116, 167, 161);
+        using (var sea = ShoreBitmap(document: noLand))
+            _report.Checks["higher-water-carves-earth"] = Same(above, sea);
         _editor.SetSelectedWaterLevel(-1);
+        var noRiver = _editor.Session.Document with
+        { Layers = [.. _editor.Session.Document.Layers.Select(l => l is ObjectLayer o ? o with { Rivers = [] } : l)] };
         using (var below = ShoreBitmap())
-            _report.Checks["lower-water-is-covered"] = below.GetPixel(645, 180) == new SKColor(212, 200, 151);
+        using (var land = ShoreBitmap(document: noRiver))
+            _report.Checks["lower-water-is-covered"] = Same(below, land);
         while (_editor.Session.UndoDepth > 0) _editor.Undo();
         _editor.SelectRiver(river.Id);
         using (var normal = ShoreBitmap())
@@ -70,14 +83,14 @@ public sealed partial class NativeEditorScenarioApplication
             && restored.Channels.Select(c => c.Mouth).SequenceEqual(river.Channels.Select(c => c.Mouth));
     }
 
-    private SKBitmap ShoreBitmap(WorldBounds? region = null, double scale = 1)
+    private SKBitmap ShoreBitmap(WorldBounds? region = null, double scale = 1, MapDocument? document = null)
     {
         var view = region ?? new WorldBounds(0, 0, 1024, 768);
         var info = new SKImageInfo((int)((view.Right - view.Left) * scale), (int)((view.Bottom - view.Top) * scale));
         using var surface = SKSurface.Create(info)!;
         surface.Canvas.Scale((float)scale);
         surface.Canvas.Translate((float)-view.Left, (float)-view.Top);
-        SceneRenderer.Render(surface.Canvas, _editor.Session.Document,
+        SceneRenderer.Render(surface.Canvas, document ?? _editor.Session.Document,
             new RenderOptions { IsExport = true, VisibleWorld = view, ViewScale = scale });
         var bitmap = new SKBitmap(info);
         surface.ReadPixels(info, bitmap.GetPixels(), info.RowBytes, 0, 0);
@@ -107,12 +120,7 @@ public sealed partial class NativeEditorScenarioApplication
             }
             land = land.With(new TileKey(tx, ty), coverage);
         }
-        var earth = new LandLayer(LayerId.New(), "Земля · уровень 0", true, false, 1, land, new LandEdgeStyle
-        {
-            FillColor = "#FFD4C897", OutlineColor = "#FF514936", OutlineWidth = 1.2,
-            ShadowBlur = 2, InnerShadowOpacity = .06, OuterShadowOpacity = .08,
-            RippleColor = "#90C5DBCA", RippleCount = 2, RippleSpacing = 5, RippleWidth = .65,
-        });
+        var earth = new LandLayer(LayerId.New(), "Земля · уровень 0", true, false, 1, land, CurrentLook.Land());
         var lake = RiverEditor.NewLake([new(596, 96), new(707, 117), new(738, 186), new(690, 251), new(587, 250), new(540, 179)])
             with { Id = new Guid("83fa519d-f65b-4fca-8f69-32c57a9cae01"), Name = "Верхнее озеро" };
         var main = RiverEditor.NewChannel([new(550, 267), new(493, 330), new(552, 399), new(481, 488), new(526, 604), new(439, 756)], 26)
@@ -132,12 +140,12 @@ public sealed partial class NativeEditorScenarioApplication
         var delta = RiverEditor.NewChannel([new(561, 533), new(636, 597), new(622, 676), new(724, 751)], 19)
             with { Id = new Guid("83fa519d-f65b-4fca-8f69-32c57a9cae06"), Name = "Восточное устье",
                 Source = new RiverJunction(main.Id, main.Nodes[3].Id, .45) };
-        var river = new River { Name = "Озеро, река и дельта", Style = RiverStyle.Illustrated(),
+        var river = new River { Name = "Озеро, река и дельта", Style = CurrentLook.River(),
             Channels = [lake, main, tributary, right, branch, delta] };
         river.Validate();
-        return new MapDocument(DocumentId.New(), "Рисованные реки · без текстур", DateTimeOffset.UnixEpoch,
+        return new MapDocument(DocumentId.New(), "Живые реки", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(1024, 768, "px", "#FF74A7A1"),
-            [new BaseColorLayer(LayerId.New(), "Море", true, false, 1, "#FF74A7A1"), earth,
+            [CurrentLook.Page("Море", "#FF74A7A1"), earth,
                 new ObjectLayer(LayerId.New(), "Реки и озеро", true, false, 1, []) { Rivers = [river] }]);
     }
 }

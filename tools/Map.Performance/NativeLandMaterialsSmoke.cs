@@ -33,7 +33,7 @@ public sealed partial class NativeEditorScenarioApplication
         await using var reviewCatalog = string.IsNullOrWhiteSpace(reviewCatalogRoot) ? null : new AssetCatalog(reviewCatalogRoot);
         var document = new MapDocument(DocumentId.New(), "Акварель · подножие гор — земля и кисти", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(1024, 768, "px", "#FF7C9CA4"),
-            [new BaseColorLayer(LayerId.New(), "Вода", true, false, 1, "#FF7C9CA4")]);
+            [CurrentLook.Page("Вода", "#FF7C9CA4")]);
         _view.Canvas.DisposeRenderCaches(); OpenEditor(document, assetCatalog: reviewCatalog);
         _editor.AddLandLayer(); await Settle();
         var land = (LandLayer)_editor.ActiveLayer!;

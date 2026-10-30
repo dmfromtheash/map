@@ -436,8 +436,9 @@ public sealed class NativeEditorWorkflowApplication : Application
         var export = await exporter.ExportAsync(
             reopened.Document, reopenedPlan, exportPath, editor.StampImages);
         using var exportedBitmap = SKBitmap.Decode(exportPath);
+        // The file is written in the oldest version that holds it: the sea of a new map needs v32.
         var saveExportWorked = saved
-            && MapProjectStore.Inspect(clonePath).SourceSchema == MapProjectFormat.SchemaVersion
+            && MapProjectStore.Inspect(clonePath).SourceSchema >= MapProjectFormat.SchemaVersion
             && beforeSavePreview.PngBytes.SequenceEqual(reopenedPreview.PngBytes)
             && export.FileCount == 1 && exportedBitmap is { Width: 512, Height: 384 };
 
@@ -549,7 +550,7 @@ public sealed class NativeEditorWorkflowApplication : Application
             DocumentId.New(), "Stage 16 smoke", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(1_024, 768, "px", "#FFF3F0E8"),
             [
-                new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFF3F0E8"),
+                CurrentLook.Page("Фон", "#FFF3F0E8"),
                 objectLayer,
                 BrushLayer.CreateEmpty(LayerId.New(), "Кисть"),
                 LandLayer.CreateEmpty(LayerId.New(), "Суша"),

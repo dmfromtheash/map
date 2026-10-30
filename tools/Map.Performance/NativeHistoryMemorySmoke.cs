@@ -32,10 +32,10 @@ public sealed partial class NativeEditorScenarioApplication
         var coverage = Enumerable.Repeat((byte)255, TileMap.TileSize * TileMap.TileSize).ToArray();
         var tiles = TileMap.Empty(1);
         for (var x = 0; x < 16; x++) for (var y = 0; y < 12; y++) tiles = tiles.With(new TileKey(x, y), coverage);
-        var land = new LandLayer(LayerId.New(), "Земля", true, false, 1, tiles, new LandEdgeStyle());
+        var land = new LandLayer(LayerId.New(), "Земля", true, false, 1, tiles, CurrentLook.Land());
         return new MapDocument(DocumentId.New(), "История и память", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(4096, 3072, "px", "#FFEDE3CD"),
-            [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFEDE3CD"), land,
+            [CurrentLook.Page("Фон", "#FFEDE3CD"), land,
                 new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, [])]);
     }
 

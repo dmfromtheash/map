@@ -26,7 +26,7 @@ public sealed partial class NativeEditorScenarioApplication
         var objects = new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, []) { Rivers = [uphill] };
         var document = new MapDocument(DocumentId.New(), "География", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(1024, 768, "px", page),
-            [new BaseColorLayer(LayerId.New(), "Море", true, false, 1, page), island, plateau, objects]);
+            [CurrentLook.Page("Море", page), island, plateau, objects]);
         _view.Canvas.DisposeRenderCaches(); OpenEditor(document); await Settle();
         _editor.Session.Viewport.Set(0, 0, 1);
         _editor.SelectLayer(objects.Id);

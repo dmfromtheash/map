@@ -135,18 +135,17 @@ public sealed class RenderAuditApplication : Application
         var paint = new byte[TileMap.TileSize * TileMap.TileSize * 4];
         for (var y = 60; y < 200; y++) for (var x = 40; x < 220; x++)
         { var o = (y * TileMap.TileSize + x) * 4; paint[o] = 184; paint[o + 1] = 120; paint[o + 2] = 70; paint[o + 3] = 255; }
-        var land = new LandLayer(LayerId.New(), "Земля", true, false, 1, tiles,
-            new LandEdgeStyle { FillColor = "#FF7FA35A", FillTextureId = "owner-snow-drifts", FillTextureOpacity = 0.7, FillTextureScale = 256 })
+        var land = new LandLayer(LayerId.New(), "Земля", true, false, 1, tiles, CurrentLook.Land())
         { PaintTiles = TileMap.Empty(4).With(new TileKey(1, 0), paint) };
         _landId = land.Id;
         var river = new River
         {
-            Name = "Река", Style = RiverStyle.Illustrated() with { TextureId = "water-still", TextureOpacity = 0.5 },
+            Name = "Река", Style = CurrentLook.River(),
             Channels = [RiverEditor.NewChannel([new VectorPoint(120, 60), new VectorPoint(360, 260), new VectorPoint(640, 420), new VectorPoint(900, 680)], 26)],
         };
         var lake = new River
         {
-            Name = "Озеро", Style = RiverStyle.Illustrated(),
+            Name = "Озеро", Style = CurrentLook.River(),
             Channels = [RiverEditor.NewChannel([new VectorPoint(520, 90), new VectorPoint(640, 70), new VectorPoint(690, 150), new VectorPoint(600, 210), new VectorPoint(500, 170)], 20) with { Closed = true }],
         };
         var road = RoadEditor.NewRoad([new(60, 560), new(380, 600), new(700, 540)], 14, RoadStyle.Country(),
@@ -155,7 +154,7 @@ public sealed class RenderAuditApplication : Application
         _waterLayerId = objects.Id;
         return new MapDocument(DocumentId.New(), "Аудит отображения", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(1024, 768, "px", "#FF6E9FBF"),
-            [new BaseColorLayer(LayerId.New(), "Море", true, false, 1, "#FF6E9FBF"), land, objects]);
+            [CurrentLook.Page("Море", "#FF6E9FBF"), land, objects]);
     }
 
     private void OpenEditor(MapDocument document, string? path = null)

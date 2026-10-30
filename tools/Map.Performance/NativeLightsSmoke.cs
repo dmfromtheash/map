@@ -21,7 +21,7 @@ public sealed partial class NativeEditorScenarioApplication
         var island = CliffLand("Остров", 512, 360, 360, 250);
         var document = new MapDocument(DocumentId.New(), "Огни", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(1024, 768, "px", page),
-            [new BaseColorLayer(LayerId.New(), "Море", true, false, 1, page), island]) { Lighting = new MapLighting { TimeOfDay = 1 } };
+            [CurrentLook.Page("Море", page), island]) { Lighting = new MapLighting { TimeOfDay = 1 } };
         _view.Canvas.DisposeRenderCaches(); OpenEditor(document); await Settle();
         _editor.Session.Viewport.Set(0, 0, 1);
 

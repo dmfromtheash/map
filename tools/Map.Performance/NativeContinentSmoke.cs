@@ -24,7 +24,7 @@ public sealed partial class NativeEditorScenarioApplication
         var water = new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, []);
         var document = new MapDocument(DocumentId.New(), "Материк", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(1024, 768, "px", page),
-            [new BaseColorLayer(LayerId.New(), "Море", true, false, 1, page), continent, water]);
+            [CurrentLook.Page("Море", page), continent, water]);
         _view.Canvas.DisposeRenderCaches(); OpenEditor(document); await Settle();
         _editor.Session.Viewport.Set(0, 0, 1);
         await Click("LandToolButton");

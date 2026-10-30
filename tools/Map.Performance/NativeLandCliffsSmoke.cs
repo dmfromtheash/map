@@ -24,13 +24,10 @@ public sealed partial class NativeEditorScenarioApplication
     {
         var sea = "#FF8FB0BA";
         var island = CliffLand("Остров", 512, 360, 360, 250);
-        var plateau = CliffLand("Плато", 470, 320, 160, 105) with
-        {
-            EdgeStyle = LandEdgeStyle.SoftWatercolor() with { FillColor = "#FFC7CB98" },
-        };
+        var plateau = CliffLand("Плато", 470, 320, 160, 105);
         var document = new MapDocument(DocumentId.New(), "Ярусы земли", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(1024, 768, "px", sea),
-            [new BaseColorLayer(LayerId.New(), "Море", true, false, 1, sea), island, plateau]);
+            [CurrentLook.Page("Море", sea), island, plateau]);
         _view.Canvas.DisposeRenderCaches(); OpenEditor(document); await Settle();
         _editor.Session.Viewport.Set(0, 0, 1);
         await Click("LandToolButton");
@@ -110,6 +107,6 @@ public sealed partial class NativeEditorScenarioApplication
                     }
                 if (any) tiles = tiles.With(new TileKey(tx, ty), bytes);
             }
-        return new LandLayer(LayerId.New(), name, true, false, 1, tiles, LandEdgeStyle.SoftWatercolor());
+        return new LandLayer(LayerId.New(), name, true, false, 1, tiles, CurrentLook.Land());
     }
 }

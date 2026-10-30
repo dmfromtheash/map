@@ -115,15 +115,17 @@ public sealed class TextOnPathApplication : Application
     {
         var river = new River
         {
-            Name = "Серебрянка", Style = RiverStyle.Illustrated(),
+            Name = "Серебрянка", Style = CurrentLook.River(),
             Channels = [RiverEditor.NewChannel([new VectorPoint(900, 120), new VectorPoint(620, 260), new VectorPoint(360, 300), new VectorPoint(80, 470)], 18)],
         };
         var road = RoadEditor.NewRoad([new VectorPoint(120, 640), new VectorPoint(480, 600), new VectorPoint(900, 660)], 12, RoadStyle.Country(), "Королевский тракт");
-        var house = new SceneObject(ObjectId.New(), SceneObjectKind.Rectangle, "Дом", 150, 150, 60, 40, 0, "#FF8E6B4E", "#FF3A2A1B", 1.5, true, false);
-        var layer = new ObjectLayer(Objects, "Долина", true, false, 1, [house]) { Rivers = [river], Roads = [road] };
+        // An object of «Прочее» (not an asset): a straight trail in the ink of the owner's mountains.
+        var trail = VectorGeometry.CreateLine(ObjectId.New(), "Тропа", [new VectorPoint(120, 170), new VectorPoint(240, 130)],
+            new VectorStrokeStyle { Color = CurrentLook.MountainInk, Width = 4 });
+        var layer = new ObjectLayer(Objects, "Долина", true, false, 1, [trail]) { Rivers = [river], Roads = [road] };
         return new MapDocument(DocumentId.New(), "Подписи долины", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(1024, 768, "px", "#FFE9E1CC"),
-            [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFE9E1CC"), layer]);
+            [CurrentLook.Page("Фон", "#FFE9E1CC"), layer]);
     }
 
     private void OpenEditor(MapDocument document, string? path = null)
@@ -160,7 +162,7 @@ public sealed class TextOnPathApplication : Application
 
         // 1b. Dragging on the canvas keeps the dragged object's row in the object list — a plain
         // rectangle (control) and the bound label.
-        _report.Checks["list-keeps-dragged-rectangle"] = await DragKeepsRow(_editor.Session.Document.Layers.OfType<ObjectLayer>().SelectMany(l => l.Objects).Single(o => o.Name == "Дом"));
+        _report.Checks["list-keeps-dragged-object"] = await DragKeepsRow(_editor.Session.Document.Layers.OfType<ObjectLayer>().SelectMany(l => l.Objects).Single(o => o.Name == "Тропа"));
         _report.Checks["list-keeps-dragged-label"] = await DragKeepsRow(Label(label.Id));
         label = Label(label.Id);
 
@@ -209,7 +211,8 @@ public sealed class TextOnPathApplication : Application
         _report.Notes["schema"] = schema.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var reopened = MapProjectStore.Open(file).Document;
         var labels = reopened.Layers.OfType<ObjectLayer>().SelectMany(l => l.Objects).Where(o => o.Text?.Path is not null).ToList();
-        _report.Checks["save-reopen-keeps-bindings-v16"] = schema == 16 && labels.Count == 2
+        // Bound labels need v16; the river of a new map needs a later version.
+        _report.Checks["save-reopen-keeps-bindings-v16"] = schema >= 16 && labels.Count == 2
             && labels.Any(l => l.Text!.Path!.Target == TextPathTarget.River) && labels.Any(l => l.Text!.Path!.Target == TextPathTarget.Road);
         _report.Checks["reopened-label-already-laid-out"] = labels.All(l => ReferenceEquals(TextOnPath.Layout(reopened, l), l));
         // One small map stays for the live pass in the real window (Map.App with this file).

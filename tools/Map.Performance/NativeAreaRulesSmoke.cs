@@ -114,32 +114,22 @@ public sealed class AreaRulesApplication : Application
 
     private static MapDocument Valley()
     {
-        using var bitmap = new SKBitmap(32, 32);
-        using (var canvas = new SKCanvas(bitmap))
-        {
-            canvas.Clear(SKColors.Transparent);
-            using var paint = new SKPaint { Color = new SKColor(40, 90, 40), IsAntialias = true };
-            canvas.DrawCircle(16, 14, 12, paint);
-        }
-        using var image = SKImage.FromBitmap(bitmap);
-        using var data = image.Encode(SKEncodedImageFormat.Png, 100);
-        var bytes = data.ToArray();
-        var sha = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes));
-        var asset = new MapAssetReference(sha, "Ель", "image/png", "png", ProjectAssetStorage.Embedded, DateTimeOffset.UnixEpoch, "smoke", "Map", bytes);
-        var river = new River { Name = "Серебрянка", Style = RiverStyle.Illustrated(), Channels = [RiverEditor.NewChannel([new VectorPoint(0, 300), new VectorPoint(1024, 320)], 40)] };
+        var asset = OwnerMountainFixtures.Embedded(1);
+        var sha = asset.Sha256;
+        var river = new River { Name = "Серебрянка", Style = CurrentLook.River(), Channels = [RiverEditor.NewChannel([new VectorPoint(0, 300), new VectorPoint(1024, 320)], 40)] };
         var road = RoadEditor.NewRoad([new VectorPoint(0, 560), new VectorPoint(1024, 540)], 14, RoadStyle.Country(), "Тракт");
         var layer = new ObjectLayer(Objects, "Долина", true, false, 1, []) { Rivers = [river], Roads = [road] };
         var area = new PlacementArea
         {
-            Id = AreaId, Name = "Лес", LayoutVersion = 1, Density = 6, Seed = 5,
+            Id = AreaId, Name = "Горы", LayoutVersion = 1, Density = 6, Seed = 5,
             Nodes = [new(Guid.NewGuid(), 20, 20), new(Guid.NewGuid(), 1000, 20), new(Guid.NewGuid(), 1000, 740), new(Guid.NewGuid(), 20, 740)],
-            Variants = [new(sha, 32, 32)], Style = new(sha), Request = new() { BaseWidth = 24 },
+            Variants = [new(sha, 512, 512)], Style = new(sha), Request = new() { BaseWidth = 24 },
         };
-        var document = new MapDocument(DocumentId.New(), "Лес у реки", DateTimeOffset.UnixEpoch,
+        var document = new MapDocument(DocumentId.New(), "Горы у реки", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(1024, 768, "px", "#FFE9E1CC"),
-            [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFE9E1CC"), layer], [asset]);
+            [CurrentLook.Page("Фон", "#FFE9E1CC"), layer], [asset]);
         var session = new EditingSession(document);
-        session.Execute(new PlacementAreaCommand(Objects, AreaId, area, "Лес"));
+        session.Execute(new PlacementAreaCommand(Objects, AreaId, area, "Горы"));
         return session.Document;
     }
 
@@ -210,7 +200,8 @@ public sealed class AreaRulesApplication : Application
             schema = JsonNode.Parse(stream)!["schemaVersion"]!.GetValue<int>();
         _report.Notes["schema"] = N(schema);
         var reopened = MapProjectStore.Open(file).Document.Layers.OfType<ObjectLayer>().SelectMany(l => l.PlacementAreas).Single();
-        _report.Checks["save-reopen-v19"] = schema == 19 && Equals(reopened.Rules, Area().Rules) && reopened.DepthSort && reopened.MemberCount == Area().MemberCount;
+        // The rules need v19; the river and sea of a new map need a later version, so the file is at least v19.
+        _report.Checks["save-reopen-v19"] = schema >= 19 && Equals(reopened.Rules, Area().Rules) && reopened.DepthSort && reopened.MemberCount == Area().MemberCount;
 
         await Toggle("EditableAreaAvoidRoadsToggle", false);
         await Toggle("EditableAreaAvoidWaterToggle", false);

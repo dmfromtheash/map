@@ -128,31 +128,31 @@ public sealed class NativeRoadNetworkApplication : Application
     }
 
     /// <summary>
-    /// A small settlement made with the existing means: grass land over the whole map, a plateau
-    /// of a higher level in the lower right, a few house rectangles and an illustrated river.
+    /// A small settlement in the look of a new map: land over the whole map, a plateau of a higher level in the lower
+    /// right, a few of the owner's mountains and a «живая» river.
     /// </summary>
     private static MapDocument Settlement()
     {
         var coverage = Enumerable.Repeat((byte)255, TileMap.TileSize * TileMap.TileSize).ToArray();
         var tiles = TileMap.Empty(1);
         for (var x = 0; x < 4; x++) for (var y = 0; y < 3; y++) tiles = tiles.With(new TileKey(x, y), coverage);
-        var grass = new LandLayer(LayerId.New(), "Луг · уровень 0", true, false, 1, tiles,
-            new LandEdgeStyle { FillColor = "#FF9DB36F", OutlineWidth = 0, InnerShadowOpacity = 0, OuterShadowOpacity = 0, RippleCount = 0 });
+        var grass = new LandLayer(LayerId.New(), "Земля · уровень 0", true, false, 1, tiles, CurrentLook.Land());
         var plateau = new LandLayer(LayerId.New(), "Холм · уровень 1", true, false, 1, TileMap.Empty(1).With(new TileKey(3, 2), coverage),
-            new LandEdgeStyle { FillColor = "#FF8AA35E", OutlineColor = "#FF4B5A31", OutlineWidth = 1.5, InnerShadowOpacity = 0.1, OuterShadowOpacity = 0.12, RippleCount = 0 }) { Level = 1 };
-        var houses = new List<SceneObject>();
+            CurrentLook.Land()) { Level = 1 };
+        var mountain = OwnerMountainFixtures.Embedded(4);
+        var peaks = new List<SceneObject>();
         var index = 0;
-        foreach (var (x, y, w, h, angle) in new[] { (150, 330, 46, 34, 8.0), (380, 300, 52, 40, -6.0), (620, 360, 44, 44, 0.0), (330, 470, 40, 30, 14.0), (560, 560, 48, 36, -10.0) })
-            houses.Add(new SceneObject(ObjectId.New(), SceneObjectKind.Rectangle, "Дом " + ++index, x, y, w, h, angle, "#FF8E6B4E", "#FF3A2A1B", 1.5, true, false));
+        foreach (var (x, y, size) in new[] { (150, 310, 52.0), (380, 280, 58.0), (620, 340, 50.0), (330, 450, 46.0), (560, 540, 54.0) })
+            peaks.Add(OwnerMountainFixtures.Stamp(mountain, "Гора " + ++index, x, y, size, size));
         var river = new River
         {
-            Name = "Река", Level = 0, Style = RiverStyle.Illustrated(),
+            Name = "Река", Level = 0, Style = CurrentLook.River(),
             Channels = [RiverEditor.NewChannel([new VectorPoint(860, 10), new VectorPoint(840, 300), new VectorPoint(880, 560), new VectorPoint(850, 760)], 22)],
         };
-        var objects = new ObjectLayer(LayerId.New(), "Поселение", true, false, 1, houses) { Rivers = [river] };
+        var objects = new ObjectLayer(LayerId.New(), "Поселение", true, false, 1, peaks) { Rivers = [river] };
         return new MapDocument(DocumentId.New(), "Дороги поселения", DateTimeOffset.UnixEpoch,
-            new CanvasDefinition(1024, 768, "px", "#FF9DB36F"),
-            [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FF9DB36F"), grass, plateau, objects]);
+            new CanvasDefinition(1024, 768, "px", CurrentLook.PageColor),
+            [CurrentLook.Page("Фон", CurrentLook.PageColor), grass, plateau, objects], [mountain]);
     }
 
     private void OpenEditor(MapDocument document, string? path = null)
@@ -264,9 +264,10 @@ public sealed class NativeRoadNetworkApplication : Application
         // 7. Levels: under the plateau of level 1 the road disappears; at level 1 it lies on it.
         var plateauPoint = RoadGeometry.PointAt(RoadGeometry.Evaluate(road).Branches[road.Branches[2].Id], 1, 0.97); // on the fork, well inside the plateau tile (3,2)
         _editor.SelectRoadOnly(road.Id); _editor.RoadLevel = RoadSelectionLevel.Road;
-        using (var covered = Bitmap()) _report.Checks["road-under-higher-land"] = IsLand(covered.GetPixel((int)plateauPoint.X, (int)plateauPoint.Y));
+        // A road is seen where the map differs from the same map without roads.
+        using (var covered = Bitmap()) _report.Checks["road-under-higher-land"] = Near(covered.GetPixel((int)plateauPoint.X, (int)plateauPoint.Y), WithoutRoads(plateauPoint));
         _editor.SetSelectedRoadLevel(1);
-        using (var lifted = Bitmap()) _report.Checks["road-on-land-of-its-level"] = IsRoad(lifted.GetPixel((int)plateauPoint.X, (int)plateauPoint.Y));
+        using (var lifted = Bitmap()) _report.Checks["road-on-land-of-its-level"] = !Near(lifted.GetPixel((int)plateauPoint.X, (int)plateauPoint.Y), WithoutRoads(plateauPoint));
         _editor.Undo();
 
         // 8. Order with water: the river lies over the road by default; «Наверх» puts the road over it.
@@ -278,10 +279,11 @@ public sealed class NativeRoadNetworkApplication : Application
         _editor.SelectRoadOnly(road.Id); await Settle();
         await Click("RoadCrossingKind0None");
         Require(_editor.SelectedRoadCrossings is [{ Kind: RoadCrossingKind.None }], "Crossing kind «нет» was not applied: " + _editor.StatusDetail);
-        using (var underWater = Bitmap()) _report.Checks["road-under-water-by-default"] = IsWater(underWater.GetPixel((int)crossing.X, (int)crossing.Y));
+        var crossingPoint = new VectorPoint(crossing.X, crossing.Y);
+        using (var underWater = Bitmap()) _report.Checks["road-under-water-by-default"] = Near(underWater.GetPixel((int)crossing.X, (int)crossing.Y), WithoutRoads(crossingPoint));
         _editor.SelectRoadOnly(road.Id);
         Require(_editor.ReorderSelection(1, toExtreme: true), "Reorder refused: " + _editor.StatusDetail);
-        using (var overWater = Bitmap()) _report.Checks["road-over-water-after-order"] = IsRoad(overWater.GetPixel((int)crossing.X, (int)crossing.Y));
+        using (var overWater = Bitmap()) _report.Checks["road-over-water-after-order"] = !Near(overWater.GetPixel((int)crossing.X, (int)crossing.Y), WithoutRoads(crossingPoint));
         _editor.Undo();
         _editor.Undo(); await Settle();
         Require(_editor.SelectedRoadCrossings is [{ Kind: RoadCrossingKind.Bridge }], "Undo did not bring the bridge back");
@@ -349,7 +351,7 @@ public sealed class NativeRoadNetworkApplication : Application
         using (var bitmap = SKBitmap.Decode(_report.Export))
         {
             var onRoad = RoadGeometry.PointAt(RoadGeometry.Evaluate(_editor.Roads.Single(r => r.Id == road.Id)).Branches[main.Id], 2, 0.5);
-            _report.Checks["export-full-size-with-road"] = bitmap is { Width: 1024, Height: 768 } && IsRoad(bitmap.GetPixel((int)onRoad.X, (int)onRoad.Y));
+            _report.Checks["export-full-size-with-road"] = bitmap is { Width: 1024, Height: 768 } && !Near(bitmap.GetPixel((int)onRoad.X, (int)onRoad.Y), WithoutRoads(onRoad));
         }
         _view.CloseAuxiliaryWindowsForSmoke();
 
@@ -384,18 +386,26 @@ public sealed class NativeRoadNetworkApplication : Application
         SaveVisual(Path.ChangeExtension(Options.OutputPath, ".reopened.png"));
     }
 
-    private static bool IsLand(SKColor c) => c.Green > c.Red + 10 && c.Green > c.Blue + 30;
-    private static bool IsRoad(SKColor c) => c.Red >= c.Green - 6 && c.Red > 150 && c.Blue < c.Red;
-    private static bool IsWater(SKColor c) => c.Blue > c.Red + 10 || (c.Green > c.Red + 20 && c.Blue > c.Red + 5);
+    private static bool Near(SKColor a, SKColor b) =>
+        Math.Abs(a.Red - b.Red) <= 3 && Math.Abs(a.Green - b.Green) <= 3 && Math.Abs(a.Blue - b.Blue) <= 3;
 
-    private SKBitmap Bitmap(WorldBounds? region = null, double scale = 1)
+    /// <summary>The pixel at <paramref name="point"/> of the current map with every road taken out.</summary>
+    private SKColor WithoutRoads(VectorPoint point)
+    {
+        var document = _editor.Session.Document with
+        { Layers = [.. _editor.Session.Document.Layers.Select(l => l is ObjectLayer o ? o with { Roads = [] } : l)] };
+        using var bitmap = Bitmap(document: document);
+        return bitmap.GetPixel((int)point.X, (int)point.Y);
+    }
+
+    private SKBitmap Bitmap(WorldBounds? region = null, double scale = 1, MapDocument? document = null)
     {
         var view = region ?? new WorldBounds(0, 0, 1024, 768);
         var info = new SKImageInfo((int)((view.Right - view.Left) * scale), (int)((view.Bottom - view.Top) * scale));
         using var surface = SKSurface.Create(info)!;
         surface.Canvas.Scale((float)scale);
         surface.Canvas.Translate((float)-view.Left, (float)-view.Top);
-        SceneRenderer.Render(surface.Canvas, _editor.Session.Document, new RenderOptions { IsExport = true, VisibleWorld = view, ViewScale = scale });
+        SceneRenderer.Render(surface.Canvas, document ?? _editor.Session.Document, new RenderOptions { IsExport = true, VisibleWorld = view, ViewScale = scale });
         var bitmap = new SKBitmap(info);
         surface.ReadPixels(info, bitmap.GetPixels(), info.RowBytes, 0, 0);
         return bitmap;

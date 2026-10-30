@@ -408,7 +408,7 @@ public sealed class NativePlacementAndCheckpointsApplication : Application
 
     private static SceneObject Rectangle(string name, double x, double y) => new(
         ObjectId.New(), SceneObjectKind.Rectangle, name,
-        x, y, 120, 80, 0, "#FF3E5C76", "#FF10131A", 2, true, false);
+        x, y, 120, 80, 0, CurrentLook.MountainSlate, CurrentLook.MountainInk, 2, true, false);
 
     private sealed class SmokeFilePicker(string path) : IFilePicker
     {

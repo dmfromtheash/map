@@ -20,6 +20,22 @@ internal static class OwnerMountainFixtures
             "tests", "fixtures", "assets", $"owner-mountain-{number:00}.png");
     }
 
+    /// <summary>Mountain 1..6 as an asset embedded in a map a smoke builds itself (the size of the picture is 512 px).</summary>
+    public static Map.Core.Documents.MapAssetReference Embedded(int number)
+    {
+        var bytes = File.ReadAllBytes(Path(number));
+        var sha = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes));
+        return new(sha, Names[number - 1], "image/png", "png", Map.Core.Documents.ProjectAssetStorage.Embedded,
+            DateTimeOffset.UnixEpoch, "smoke", "Map", bytes);
+    }
+
+    /// <summary>A placed mountain of <paramref name="asset"/>: its foot at (x, y + height), as the editor places one.</summary>
+    public static Map.Core.Documents.SceneObject Stamp(Map.Core.Documents.MapAssetReference asset, string name,
+        double x, double y, double width, double height) =>
+        new(Map.Core.Documents.ObjectId.New(), Map.Core.Documents.SceneObjectKind.Stamp, name, x, y, width, height, 0,
+            "#FFFFFFFF", "#00000000", 0, true, false)
+        { Stamp = new Map.Core.Documents.StampStyle(asset.Sha256) { ReferenceWidth = width, ReferenceHeight = height } };
+
     /// <summary>
     /// The owner's seamless snow texture, opaque everywhere: for a smoke that needs a picture as a brush or fill
     /// material, where a mountain's transparent corners would paint nothing.

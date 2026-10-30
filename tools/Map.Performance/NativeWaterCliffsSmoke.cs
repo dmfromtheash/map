@@ -46,13 +46,13 @@ public sealed partial class NativeEditorScenarioApplication
         var island = CliffLand("Остров", 512, 330, 330, 220) with { Level = 1 };
         var river = new River
         {
-            Name = "Река", Style = RiverStyle.Natural(), Level = 1,
+            Name = "Река", Style = CurrentLook.River(), Level = 1,
             Channels = [RiverEditor.NewChannel([new(300, 300), new(420, 340), new(560, 330), new(700, 380), new(900, 470)], 22)],
         };
         var water = new ObjectLayer(LayerId.New(), "Реки", true, false, 1, []) { Rivers = [river] };
         var document = new MapDocument(DocumentId.New(), "Вода и обрывы", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(1024, 768, "px", sea),
-            [new BaseColorLayer(LayerId.New(), "Море", true, false, 1, sea), island, water]);
+            [CurrentLook.Page("Море", sea), island, water]);
         _view.Canvas.DisposeRenderCaches(); OpenEditor(document); await Settle();
         _editor.Session.Viewport.Set(0, 0, 1);
 
@@ -115,7 +115,7 @@ public sealed partial class NativeEditorScenarioApplication
         _report.Screenshot = Path.ChangeExtension(Options.OutputPath, ".png");
         SaveVisual(_report.Screenshot);
         _editor.Undo(); await Settle();
-        _report.Checks["sea-undo"] = _editor.Sea is null;
+        _report.Checks["sea-undo"] = _editor.Sea == SeaStyle.NewMapDefault;
         // The card previews render in the background: the ribbon is closed and the last frame
         // settles before the caches are counted, or a late preview frame refills them.
         await Click("RibbonCollapseButton"); await Task.Delay(1500); await Frame(); await Settle();

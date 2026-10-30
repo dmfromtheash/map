@@ -5,6 +5,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.VisualTree;
 using Map.App.Views;
 using Map.Core.Documents;
+using Map.Core.Editing;
 using Map.Export;
 using Map.Persistence;
 using Map.Presentation.Services;
@@ -91,17 +92,22 @@ public sealed partial class RegionalApplication
 
     private static MapDocument PosterStandardFixture()
     {
-        SceneObject Shape(string name, double x, double y, double w, double h, string color) =>
-            new(ObjectId.New(), SceneObjectKind.Ellipse, name, x, y, w, h, 0, color, "#FF30543C", 2, true, false);
+        var islands = LandLayer.CreateEmpty(LayerId.New(), "Острова");
+        foreach (var bounds in new[] { new WorldBounds(100, 90, 400, 330), new WorldBounds(430, 310, 550, 390) })
+        {
+            var shape = LandRasterizer.ApplyShape(islands.GeometryTiles, new LandShape { Kind = LandShapeKind.Ellipse, Bounds = bounds }, false);
+            islands = islands with { GeometryTiles = islands.GeometryTiles.WithMany(shape.After) };
+        }
+        var mountain = OwnerMountainFixtures.Embedded(2);
         return new(DocumentId.New(), "Берега — постер", DateTimeOffset.UnixEpoch, new CanvasDefinition(640, 480, "px", "#FFFFFFFF"),
         [
-            new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFCAE5F2"),
-            new ObjectLayer(LayerId.New(), "Острова", true, false, 1,
-                [Shape("Большой остров", 100, 90, 300, 240, "#FFBED4A4"), Shape("Малый остров", 430, 310, 120, 80, "#FFBED4A4")]),
-            new ObjectLayer(LayerId.New(), "Поселения", true, false, 1,
-                [Shape("Порт", 210, 260, 14, 14, "#FFBC6143"), Shape("Башня", 450, 330, 12, 12, "#FFBC6143")]),
+            CurrentLook.Page("Фон", "#FFCAE5F2"),
+            islands,
+            new ObjectLayer(LayerId.New(), "Горы", true, false, 1,
+                [OwnerMountainFixtures.Stamp(mountain, "Гора у порта", 190, 220, 48, 48),
+                 OwnerMountainFixtures.Stamp(mountain, "Гора малого острова", 466, 318, 36, 36)]),
             new ObjectLayer(LayerId.New(), "Скрытый", false, false, 1, []),
-        ]);
+        ], [mountain]);
     }
 
     private sealed class PosterDestination(string root, string category) : IExportDestinationPicker

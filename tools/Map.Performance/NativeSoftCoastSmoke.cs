@@ -19,18 +19,10 @@ public sealed partial class NativeEditorScenarioApplication
 
     private async Task SoftCoastOnly()
     {
-        var land = LandLayer.CreateEmpty(LayerId.New(), "Мягкая земля") with
-        {
-            EdgeStyle = new LandEdgeStyle
-            {
-                FillColor = "#FF8CA36B", FillTextureId = "meadow", FillTextureOpacity = .7,
-                FillTextureScale = 128, OutlineWidth = 0, RippleCount = 0,
-                InnerShadowOpacity = 0, OuterShadowOpacity = 0,
-            },
-        };
+        var land = LandLayer.CreateEmpty(LayerId.New(), "Мягкая земля");
         var document = new MapDocument(DocumentId.New(), "Проверка мягкого берега", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(768, 640, "px", "#FFF2E9DB"),
-            [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFF2E9DB"), land,
+            [CurrentLook.Page("Фон", "#FFF2E9DB"), land,
                 new ObjectLayer(LayerId.New(), "Река", true, false, 1, [])]);
         _view.Canvas.DisposeRenderCaches(); OpenEditor(document);
         await Settle();
@@ -45,7 +37,7 @@ public sealed partial class NativeEditorScenarioApplication
 
         await Click("RiverToolButton"); await Click("StartRiverButton");
         Point(465, 30); Point(450, 170); Point(425, 290); Point(360, 390); Point(315, 460); Point(395, 590);
-        await Click("FinishRiverButton"); await Click("RiverIllustratedStyleButton");
+        await Click("FinishRiverButton");
         await Number("RiverSourceWidthBox", "26"); await Number("RiverMouthWidthBox", "30");
         var river = _editor.Rivers.Single();
         _report.MainNodes = river.Channels[0].Nodes.Length;

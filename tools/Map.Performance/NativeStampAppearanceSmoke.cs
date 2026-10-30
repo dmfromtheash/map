@@ -469,7 +469,7 @@ public sealed class NativeStampAppearanceApplication : Application
 
     private static SceneObject Rectangle(string name, double x, double y) => new(
         ObjectId.New(), SceneObjectKind.Rectangle, name,
-        x, y, 130, 90, 0, "#FF3E5C76", "#FF10131A", 2, true, false);
+        x, y, 130, 90, 0, CurrentLook.MountainSlate, CurrentLook.MountainInk, 2, true, false);
 
     private static IReadOnlyList<SceneObject> Objects(EditorViewModel editor) =>
         editor.Session.Document.Layers.OfType<ObjectLayer>().SelectMany(layer => layer.Objects).ToArray();

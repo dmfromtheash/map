@@ -135,7 +135,7 @@ public sealed partial class NativeEditorScenarioApplication : Application
         var document = Options.Profile == "native-history-memory" ? HistoryMemoryDocument()
             : new MapDocument(DocumentId.New(), "Река с притоком", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(1024, 768, "px", "#FFEDE3CD"),
-            [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFEDE3CD"),
+            [CurrentLook.Page("Фон", "#FFEDE3CD"),
                 LandBlock(), new ObjectLayer(LayerId.New(), "Реки", true, false, 1, [])]);
         OpenEditor(document);
         _report.Required = Environment.GetEnvironmentVariable("MAP_STAGE19_LAKE_ONLY") == "1" ? LakeRequired : FullRequired;
@@ -233,7 +233,7 @@ public sealed partial class NativeEditorScenarioApplication : Application
         var coverage = Enumerable.Repeat((byte)255, TileMap.TileSize * TileMap.TileSize).ToArray();
         var tiles = TileMap.Empty(1);
         for (var x = 0; x < 3; x++) for (var y = 0; y < 2; y++) tiles = tiles.With(new TileKey(x, y), coverage);
-        return new LandLayer(LayerId.New(), "Земля", true, false, 1, tiles, new LandEdgeStyle());
+        return new LandLayer(LayerId.New(), "Земля", true, false, 1, tiles, CurrentLook.Land());
     }
 
     private void OpenEditor(MapDocument document, string? path = null, Map.Assets.AssetCatalog? assetCatalog = null)
@@ -366,11 +366,21 @@ public sealed partial class NativeEditorScenarioApplication : Application
             var onLand = RiverGeometry.PointAt(RiverGeometry.Evaluate(_editor.Rivers[0]).Channels[main.Id], 1, 0.5);
             var pixel = bitmap.GetPixel((int)onLand.X, (int)onLand.Y);
             var sea = bitmap.GetPixel(1000, 740);
-            // The main channel ends at (900,600), below the land block: clipped to land, its end is sea.
-            var beyondCoast = bitmap.GetPixel(900, 600);
             _report.Checks["export-full-size-with-river"] = bitmap is { Width: 1024, Height: 768 } && pixel != sea && pixel.Blue > pixel.Red;
-            _report.Checks["river-stops-at-the-coast"] = beyondCoast == sea;
         }
+        // The main channel ends at (900,600), below the land block: clipped to land, its end is the sea - the same
+        // pixel as the map without its rivers (the sea of a new map is drawn in strokes, not one colour).
+        SKColor At(MapDocument document, int x, int y)
+        {
+            using var surface = SKSurface.Create(new SKImageInfo(1024, 768))!;
+            Map.Rendering.SceneRenderer.Render(surface.Canvas, document, new Map.Rendering.RenderOptions { IsExport = true });
+            using var image = surface.Snapshot(); using var raster = SKBitmap.FromImage(image);
+            return raster.GetPixel(x, y);
+        }
+        var withRiver = At(_editor.Session.Document, 900, 600);
+        var withoutRiver = At(_editor.Session.Document with
+        { Layers = [.. _editor.Session.Document.Layers.Select(l => l is ObjectLayer o ? o with { Rivers = [] } : l)] }, 900, 600);
+        _report.Checks["river-stops-at-the-coast"] = withRiver == withoutRiver;
         _view.CloseAuxiliaryWindowsForSmoke();
 
         // A lake from clicks, a tributary that ends on its shore, a distributary that leaves the main
@@ -743,7 +753,7 @@ public sealed partial class NativeEditorScenarioApplication : Application
         File.Copy(OwnerMountainFixtures.Path(6), picture, overwrite: true);
         catalog.ImportSet([picture], "Колонна", new Map.Assets.AssetImportOptions(), DateTimeOffset.UnixEpoch);
         OpenEditor(new MapDocument(DocumentId.New(), "Подземелье", DateTimeOffset.UnixEpoch, new CanvasDefinition(1024, 768, "px", "#FF20242B"),
-            [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FF20242B"), new ObjectLayer(LayerId.New(), "Комнаты", true, false, 1, [])]),
+            [CurrentLook.Page("Фон", "#FF20242B"), new ObjectLayer(LayerId.New(), "Комнаты", true, false, 1, [])]),
             assetCatalog: catalog);
         await Settle(); await Frame();
 

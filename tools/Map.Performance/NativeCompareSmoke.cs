@@ -32,7 +32,7 @@ public sealed partial class NativeEditorScenarioApplication
             return Map.Core.Editing.MapFogEditor.Finish(stroke);
         }
         var document = new MapDocument(DocumentId.New(), "Мир", DateTimeOffset.UnixEpoch, new CanvasDefinition(1024, 768, "px", page),
-            [new BaseColorLayer(LayerId.New(), "Море", true, false, 1, page), island, objects]).WithNotes([note]) with { Fog = Opened(300) };
+            [CurrentLook.Page("Море", page), island, objects]).WithNotes([note]) with { Fog = Opened(300) };
         _view.Canvas.DisposeRenderCaches(); OpenEditor(document); await Settle();
         _editor.Session.Viewport.Set(0, 0, 1);
         _editor.CreateCheckpoint("Версия 01"); await Settle();

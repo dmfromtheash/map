@@ -615,13 +615,7 @@ public sealed class NativePlacementAreaApplication : Application
     private async Task CheckPngCacheLifetime()
     {
         var path = Path.Combine(_workspace, "small-view.png");
-        using (var bitmap = new SKBitmap(40, 30))
-        {
-            bitmap.Erase(SKColors.ForestGreen);
-            using var image = SKImage.FromBitmap(bitmap);
-            using var png = image.Encode(SKEncodedImageFormat.Png, 100);
-            File.WriteAllBytes(path, png.ToArray());
-        }
+        File.Copy(OwnerMountainFixtures.Path(1), path, overwrite: true);
         var original = SHA256.HashData(File.ReadAllBytes(path));
         var cache = Path.Combine(_workspace, "png-cache");
         var viewer = new PngMapWindow(cache) { ShowActivated = false, ShowInTaskbar = false, Position = _window.Position };

@@ -114,13 +114,13 @@ public sealed class RegionalRolesApplication : Application
         for (var y = 0; y < 5; y++)
         for (var x = 0; x < 5; x++)
             tiles = tiles.With(new(x, y), Enumerable.Repeat((byte)255, TileMap.TileSize * TileMap.TileSize).ToArray());
-        var land = new LandLayer(LayerId.New(), "Равнина", true, false, 1, tiles, new() { FillColor = "#FFD4D7B0" });
+        var land = new LandLayer(LayerId.New(), "Равнина", true, false, 1, tiles, CurrentLook.Land());
         var plateau = new LandLayer(LayerId.New(), "Уступ для склона", true, false, 1,
             TileMap.Empty(1).With(new(3, 1), Enumerable.Repeat((byte)255, TileMap.TileSize * TileMap.TileSize).ToArray()),
-            new() { FillColor = "#FFB3B493" }) { Level = 3 };
-        var river = new River { Name = "Исходная река", Style = RiverStyle.Natural(),
+            CurrentLook.Land()) { Level = 3 };
+        var river = new River { Name = "Исходная река", Style = CurrentLook.River(),
             Channels = [RiverEditor.NewChannel([new(350, 0), new(350, 1100)], 60)] };
-        var layers = new List<MapLayer> { new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFE9E1CC"), land };
+        var layers = new List<MapLayer> { CurrentLook.Page("Фон", "#FFE9E1CC"), land };
         if (cliffs) layers.Add(plateau);
         layers.Add(new ObjectLayer(_objects, "Объекты и реки", true, false, 1, []) { Rivers = [river] });
         return new(DocumentId.New(), cliffs ? "R11 — долина" : "R11 — без обрывов", DateTimeOffset.UnixEpoch,
@@ -211,7 +211,7 @@ public sealed class RegionalRolesApplication : Application
         using (var stream = zip.GetEntry("manifest.json")!.Open())
         {
             var schema = JsonNode.Parse(stream)!["schemaVersion"]!.GetValue<int>();
-            _report.Notes["schema"] = schema.ToString(CultureInfo.InvariantCulture); Check("save-current-schema-v30", schema == 30);
+            _report.Notes["schema"] = schema.ToString(CultureInfo.InvariantCulture); Check("save-current-schema-v30", schema >= 30); // roles need v30, the sea of a new map v32
         }
         var saved = Layer(); var reopened = MapProjectStore.Open(file).Document;
         await CloseEditor(); OpenEditor(reopened, file, withCatalog: false); await Settle(); _view.Canvas.FitToCanvas();

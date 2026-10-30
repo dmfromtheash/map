@@ -25,7 +25,7 @@ public sealed partial class NativeEditorScenarioApplication
         var page = "#FF8FB0BA";
         var west = CliffLand("Запад", 140, 300, 260, 220);
         var document = new MapDocument(DocumentId.New(), "Планета", DateTimeOffset.UnixEpoch, new CanvasDefinition(2048, 1024, "px", page),
-            [new BaseColorLayer(LayerId.New(), "Море", true, false, 1, page), west, new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, [])]);
+            [CurrentLook.Page("Море", page), west, new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, [])]);
         _view.Canvas.DisposeRenderCaches(); OpenEditor(document); await Settle();
         await Click("WorldSectionButton"); await Click("PlanetButton"); await Settle();
         var window = _view.GetType().GetField("_planetWindow", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(_view) as Window

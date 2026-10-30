@@ -964,12 +964,12 @@ public sealed class NativeEditorIntegrityApplication : Application
     {
         var existing = new SceneObject(
             ObjectId.New(), SceneObjectKind.Rectangle, "Существующий прямоугольник",
-            700, 480, 160, 120, 0, "#FF8C6239", "#FF3D566E", 2, true, false);
+            700, 480, 160, 120, 0, CurrentLook.MountainSlate, CurrentLook.MountainInk, 2, true, false);
         return new MapDocument(
             DocumentId.New(), "Проверка целостности", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(1_024, 768, "px", "#FFF3F0E8"),
             [
-                new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFF3F0E8"),
+                CurrentLook.Page("Фон", "#FFF3F0E8"),
                 BrushLayer.CreateEmpty(LayerId.New(), "Кисть"),
                 LandLayer.CreateEmpty(LayerId.New(), "Суша"),
                 new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, [existing]),

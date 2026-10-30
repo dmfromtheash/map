@@ -57,7 +57,7 @@ public sealed partial class NativeEditorScenarioApplication
         var sea = "#FF9DB7C2";
         var document = new MapDocument(DocumentId.New(), "Мои горы", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(4096, 2048, "px", sea),
-            [new BaseColorLayer(LayerId.New(), "Море", true, false, 1, sea), new ObjectLayer(LayerId.New(), "Горы", true, false, 1, [.. objects])]);
+            [CurrentLook.Page("Море", sea), new ObjectLayer(LayerId.New(), "Горы", true, false, 1, [.. objects])]);
         _view.Canvas.DisposeRenderCaches(); OpenEditor(document, assetCatalog: catalog); await Settle();
         await Click("LandToolButton"); await Settle();
 

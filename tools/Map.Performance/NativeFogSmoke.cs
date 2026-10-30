@@ -32,7 +32,7 @@ public sealed partial class NativeEditorScenarioApplication
         var tavern = new MapNote(NoteId.New(), "Таверна «Якорь»", "Здесь можно нанять лодку.", NoteAnchorKind.World, 300, 360) { PlayerVisible = true };
         var trap = new MapNote(NoteId.New(), "Засада", "Только для ведущего.", NoteAnchorKind.World, 300, 360);
         var document = new MapDocument(DocumentId.New(), "Мир", DateTimeOffset.UnixEpoch, new CanvasDefinition(1024, 768, "px", page),
-            [new BaseColorLayer(LayerId.New(), "Море", true, false, 1, page), island, objects], notes: [tavern, trap]);
+            [CurrentLook.Page("Море", page), island, objects], notes: [tavern, trap]);
         _view.Canvas.DisposeRenderCaches(); OpenEditor(document); await Settle();
         _editor.Session.Viewport.Set(0, 0, 1);
         _view.OpenNotes(); await Settle();

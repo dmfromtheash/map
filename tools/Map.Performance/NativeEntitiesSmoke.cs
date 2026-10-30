@@ -24,7 +24,7 @@ public sealed partial class NativeEditorScenarioApplication
         { Text = LabelPresets.Apply(new TextStyle { Content = "Ильград", Alignment = TextAlignment.Center }, LabelPreset.City) };
         var objects = new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, [label]);
         var document = new MapDocument(DocumentId.New(), "Мир", DateTimeOffset.UnixEpoch, new CanvasDefinition(1024, 768, "px", page),
-            [new BaseColorLayer(LayerId.New(), "Море", true, false, 1, page), island, objects]);
+            [CurrentLook.Page("Море", page), island, objects]);
         _view.Canvas.DisposeRenderCaches(); OpenEditor(document); await Settle();
         _editor.Session.Viewport.Set(0, 0, 1);
         _editor.Session.SelectedObjectId = label.Id; await Settle();

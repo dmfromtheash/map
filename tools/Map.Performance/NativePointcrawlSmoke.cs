@@ -23,7 +23,7 @@ public sealed partial class NativeEditorScenarioApplication
         var page = "#FF8FB0BA";
         var island = CliffLand("Остров", 512, 384, 460, 320);
         var document = new MapDocument(DocumentId.New(), "Мир", DateTimeOffset.UnixEpoch, new CanvasDefinition(1024, 768, "px", page),
-            [new BaseColorLayer(LayerId.New(), "Море", true, false, 1, page), island, new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, [])]);
+            [CurrentLook.Page("Море", page), island, new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, [])]);
         _view.Canvas.DisposeRenderCaches(); OpenEditor(document); await Settle();
         _editor.Session.Viewport.Set(0, 0, 1);
         await Click("WorldSectionButton"); await Click("PointcrawlButton"); await Settle();

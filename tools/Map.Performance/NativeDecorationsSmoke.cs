@@ -116,14 +116,14 @@ public sealed class DecorationsApplication : Application
     {
         var river = new River
         {
-            Name = "Серебрянка", Style = RiverStyle.Illustrated(),
+            Name = "Серебрянка", Style = CurrentLook.River(),
             Channels = [RiverEditor.NewChannel([new VectorPoint(900, 120), new VectorPoint(620, 260), new VectorPoint(360, 300), new VectorPoint(80, 470)], 18)],
         };
         var road = RoadEditor.NewRoad([new VectorPoint(120, 640), new VectorPoint(480, 600), new VectorPoint(900, 660)], 12, RoadStyle.Country(), "Королевский тракт");
         var layer = new ObjectLayer(Objects, "Долина", true, false, 1, []) { Rivers = [river], Roads = [road] };
         return new MapDocument(DocumentId.New(), "Долина Серебрянки", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(1024, 768, "px", "#FFE9E1CC"),
-            [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFE9E1CC"), layer]);
+            [CurrentLook.Page("Фон", "#FFE9E1CC"), layer]);
     }
 
     private void OpenEditor(MapDocument document, string? path = null)
@@ -222,7 +222,8 @@ public sealed class DecorationsApplication : Application
         _report.Notes["schema"] = schema.ToString(System.Globalization.CultureInfo.InvariantCulture);
         var reopened = MapProjectStore.Open(file).Document;
         var again = reopened.Layers.OfType<ObjectLayer>().SelectMany(l => l.Objects).Where(o => o.Kind == SceneObjectKind.Decoration).ToList();
-        _report.Checks["save-reopen-v17"] = schema == 17 && again.Count == 4 && reopened.Canvas.Scale == new MapScale(0.025, "км")
+        // Decorations need v17; the river of a new map needs a later version.
+        _report.Checks["save-reopen-v17"] = schema >= 17 && again.Count == 4 && reopened.Canvas.Scale == new MapScale(0.025, "км")
             && again.Zip(Decorations()).All(p => Equals(p.First.Decoration, p.Second.Decoration));
         File.Copy(file, Path.ChangeExtension(Options.OutputPath, ".fixture.mapproj"), overwrite: true);
     }

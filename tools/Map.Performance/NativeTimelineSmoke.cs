@@ -24,11 +24,11 @@ public sealed partial class NativeEditorScenarioApplication
         var town = new SceneObject(ObjectId.New(), SceneObjectKind.Text, "Ильград", 300, 300, 160, 44, 0, "#FF20242B", "#FFFFFFFF", 0, true, false)
         { Text = LabelPresets.Apply(new TextStyle { Content = "Ильград", Alignment = TextAlignment.Center }, LabelPreset.City) };
         SceneObject Kingdom(double dx, Era era) => VectorGeometry.CreateFreeShape(ObjectId.New(), "Королевство",
-            [new(250 + dx, 250), new(560 + dx, 230), new(600 + dx, 470), new(280 + dx, 500)], new ShapeFillStyle { Color = "#FF8A5A2B" },
-            new VectorStrokeStyle { Color = "#FF5A3A1B", Width = 3 }) with { Era = era, MorphKey = "kingdom", Political = PoliticalRole.State };
+            [new(250 + dx, 250), new(560 + dx, 230), new(600 + dx, 470), new(280 + dx, 500)], new ShapeFillStyle { Color = CurrentLook.MountainSlate },
+            new VectorStrokeStyle { Color = CurrentLook.MountainInk, Width = 3 }) with { Era = era, MorphKey = "kingdom", Political = PoliticalRole.State };
         var objects = new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, [Kingdom(0, new Era(null, 900)), Kingdom(220, new Era(1000, null)), town]);
         var document = new MapDocument(DocumentId.New(), "Мир", DateTimeOffset.UnixEpoch, new CanvasDefinition(1024, 768, "px", page),
-            [new BaseColorLayer(LayerId.New(), "Море", true, false, 1, page), island, objects]);
+            [CurrentLook.Page("Море", page), island, objects]);
         _view.Canvas.DisposeRenderCaches(); OpenEditor(document); await Settle();
         _editor.Session.Viewport.Set(0, 0, 1);
         await Click("WorldSectionButton"); await Click("TimelineButton"); await Settle();

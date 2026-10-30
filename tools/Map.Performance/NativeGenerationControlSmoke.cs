@@ -162,17 +162,15 @@ public sealed class GenerationControlApplication : Application
 
     private async Task AreaScenario()
     {
-        // A diagnostic square, embedded only in the disposable smoke document.
-        using var surface = SKSurface.Create(new SKImageInfo(32, 32))!; surface.Canvas.Clear(SKColors.Gray);
-        using var encoded = surface.Snapshot().Encode(SKEncodedImageFormat.Png, 100); var png = encoded.ToArray();
-        var sha = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(png));
+        // One of the owner's mountains, embedded only in the disposable smoke document.
+        var mountain = OwnerMountainFixtures.Embedded(1);
+        var sha = mountain.Sha256;
         var layer = new ObjectLayer(LayerId.New(), "Области", true, false, 1, []);
         var document = new MapDocument(DocumentId.New(), "R20 area", DateTimeOffset.UnixEpoch, new(768, 768, "px", "#FFFFFFFF"),
-            [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFFFFFFF"), layer],
-            [new MapAssetReference(sha, "Diagnostic square", "image/png", "png", ProjectAssetStorage.Embedded, DateTimeOffset.UnixEpoch, "Smoke", "Smoke", png)]);
+            [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFFFFFFF"), layer], [mountain]);
         var area = PlacementAreaPlanner.InitializeComposition(new PlacementArea { LayoutVersion = 4, Density = 70, Seed = 5,
             Nodes = [new(Guid.NewGuid(), 40, 40), new(Guid.NewGuid(), 720, 40), new(Guid.NewGuid(), 720, 720), new(Guid.NewGuid(), 40, 720)],
-            Variants = [new(sha, 32, 32)], Style = new(sha), Request = new() { BaseWidth = 40 } });
+            Variants = [new(sha, 512, 512)], Style = new(sha), Request = new() { BaseWidth = 40 } });
         document = new PlacementAreaCommand(layer.Id, area.Id, area, "Fixture").Apply(document);
         _view.Canvas.DisposeRenderCaches(); _view.CloseAuxiliaryWindowsForSmoke();
         _catalog = new AssetCatalog(Path.Combine(_workspace, "catalog"));

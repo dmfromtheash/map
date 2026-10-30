@@ -277,21 +277,20 @@ public sealed class ZoomAssetsApplication : Application
         var full = Enumerable.Repeat((byte)255, TileMap.TileSize * TileMap.TileSize).ToArray();
         var tiles = TileMap.Empty(1);
         for (var x = 1; x < 7; x++) for (var y = 0; y < 4; y++) tiles = tiles.With(new TileKey(x, y), full);
-        var land = new LandLayer(LayerId.New(), "Земля", true, false, 1, tiles,
-            new LandEdgeStyle { FillColor = "#FF7FA35A", FillTextureId = "stone", FillTextureOpacity = 0.7, FillTextureScale = 256, RippleCount = 2 });
+        var land = new LandLayer(LayerId.New(), "Земля", true, false, 1, tiles, CurrentLook.Land());
         var river = new River
         {
-            Name = "Река", Style = RiverStyle.Illustrated() with { TextureId = "water-still", TextureOpacity = 0.5 },
+            Name = "Река", Style = CurrentLook.River(),
             Channels = [RiverEditor.NewChannel([new VectorPoint(300, 40), new VectorPoint(620, 300), new VectorPoint(900, 520), new VectorPoint(1300, 1040)], 26)],
         };
         var creek = new River
         {
-            Name = "Приток", Style = RiverStyle.Illustrated(),
+            Name = "Приток", Style = CurrentLook.River(),
             Channels = [RiverEditor.NewChannel([new VectorPoint(1500, 200), new VectorPoint(1200, 420), new VectorPoint(930, 560)], 14)],
         };
         var lake = new River
         {
-            Name = "Озеро", Style = RiverStyle.Illustrated(),
+            Name = "Озеро", Style = CurrentLook.River(),
             Channels = [RiverEditor.NewChannel([new VectorPoint(1400, 700), new VectorPoint(1560, 680), new VectorPoint(1620, 800), new VectorPoint(1500, 880), new VectorPoint(1380, 820)], 20) with { Closed = true }],
         };
         var road = RoadEditor.NewRoad([new(340, 900), new(700, 760), new(1100, 700), new(1500, 560)], 14, RoadStyle.Country(), "Тракт", seed: 7);
@@ -310,12 +309,12 @@ public sealed class ZoomAssetsApplication : Application
         var layer = new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, objects) { Rivers = [river, creek, lake], Roads = [road, path] };
         return new MapDocument(DocumentId.New(), "Умеренная · земля, реки, дороги, 40 ассетов", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(w, h, "px", "#FF6E9FBF"),
-            [new BaseColorLayer(LayerId.New(), "Море", true, false, 1, "#FF6E9FBF"), land, layer]).WithAssets([.. assets.Values]);
+            [CurrentLook.Page("Море", "#FF6E9FBF"), land, layer]).WithAssets([.. assets.Values]);
     }
 
     /// <summary>
     /// The Max preset (131072²) with land: <paramref name="patches"/> square land masses of
-    /// 16×16 tiles (4096 units) with the stone material, one river across the central mass, and
+    /// 16×16 tiles (4096 units) in the land of a new map, one river across the central mass, and
     /// <paramref name="count"/> stamps clustered near the anchor and spread over the map.
     /// </summary>
     private MapDocument MaxLandScene(int count, int patches, out (double X, double Y) anchor)
@@ -332,12 +331,11 @@ public sealed class ZoomAssetsApplication : Application
             for (var x = 0; x < 16; x++) for (var y = 0; y < 16; y++)
                 changes.Add(new(new TileKey(originX + x, originY + y), full));
         }
-        var land = new LandLayer(LayerId.New(), "Земля", true, false, 1, TileMap.Empty(1).WithMany(changes),
-            new LandEdgeStyle { FillColor = "#FF7FA35A", FillTextureId = "stone", FillTextureOpacity = 0.7, FillTextureScale = 256, RippleCount = 2 });
+        var land = new LandLayer(LayerId.New(), "Земля", true, false, 1, TileMap.Empty(1).WithMany(changes), CurrentLook.Land());
         anchor = (w / 2.0, h / 2.0);
         var river = new River
         {
-            Name = "Река", Style = RiverStyle.Illustrated() with { TextureId = "water-still", TextureOpacity = 0.5 },
+            Name = "Река", Style = CurrentLook.River(),
             Channels = [RiverEditor.NewChannel([new VectorPoint(anchor.X - 2000, anchor.Y - 1900), new VectorPoint(anchor.X - 400, anchor.Y - 300),
                 new VectorPoint(anchor.X + 600, anchor.Y + 500), new VectorPoint(anchor.X + 2100, anchor.Y + 2100)], 40)],
         };
@@ -346,7 +344,7 @@ public sealed class ZoomAssetsApplication : Application
         var layer = new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, objects) { Rivers = [river] };
         return new MapDocument(DocumentId.New(), $"Максимальная · земля {patches}×4096² · {count} ассетов", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(w, h, "px", "#FF6E9FBF"),
-            [new BaseColorLayer(LayerId.New(), "Море", true, false, 1, "#FF6E9FBF"), land, layer]).WithAssets(assets);
+            [CurrentLook.Page("Море", "#FF6E9FBF"), land, layer]).WithAssets(assets);
     }
 
     private List<SceneObject> HugeObjects(int count, int w, int h, (double X, double Y) anchor, Random random)
