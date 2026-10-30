@@ -28,7 +28,9 @@ public sealed class ParallelExportTests
         data.Add("embedded", 1920, 960, true);
         data.Add("hex", 2000, 1500, false);
         // Styled maps keep the serial render (see ExportParallelResources); compression is still parallel.
-        foreach (var map in new[] { "blaeu", "impasto", "moonlight" }) data.Add(map, 2000, 1500, false);
+        // 640×480: at 2000×1500 these three took 7–12 min each and pushed CI past its 40-minute limit;
+        // parallel compression of many blocks is covered by the plain 2000×1500 cases above.
+        foreach (var map in new[] { "blaeu", "impasto", "moonlight" }) data.Add(map, 640, 480, false);
         return data;
     }
 
