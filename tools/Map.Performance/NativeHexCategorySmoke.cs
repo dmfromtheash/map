@@ -31,7 +31,7 @@ public sealed partial class RegionalApplication
         };
         wizard.Show(); await Settle();
         Check("step 1 lists the hex constructor as a second category",
-            wizard.GetVisualDescendants().OfType<ToggleButton>().Any(b => b.Name == "WizardCategoryHex") && MapCategories.All.Count == 2);
+            wizard.GetVisualDescendants().OfType<ToggleButton>().Any(b => b.Name == "WizardCategoryHex") && MapCategories.All.Count >= 2 && MapCategories.All[1] == MapCategories.Hex);
         Click(wizard, "WizardCategoryHex"); await Settle(); Capture(wizard, "hex-01-category");
         Check("choosing the card describes the hex constructor", wizard.SelectedCategory == MapCategories.Hex.Id
             && Text(wizard, "WizardCategoryTitle") == MapCategories.Hex.Title);

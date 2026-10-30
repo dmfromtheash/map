@@ -79,6 +79,7 @@ public sealed partial class MapCanvasControl : Control
     private sealed class CanvasRenderResources
     {
         public object Gate { get; } = new();
+        private long _disposedObjectImages;
         private readonly System.Collections.Generic.Dictionary<int, HexChunkCache> _hexChunks = [];
 
         /// <summary>Kept hex chunk pictures of the current render thread.</summary>
@@ -109,7 +110,7 @@ public sealed partial class MapCanvasControl : Control
         {
             lock (Gate)
             {
-                int tiles = 0, objects = 0; long bytes = 0, disposals = 0;
+                int tiles = 0, objects = 0; long bytes = 0, disposals = _disposedObjectImages;
                 foreach (var context in _contexts.Values)
                 { tiles += context.Tiles.Count; objects += context.Objects.Count; bytes += context.Objects.Bytes; disposals += context.Objects.Disposals; }
                 return (tiles, objects, bytes, disposals);
@@ -121,7 +122,12 @@ public sealed partial class MapCanvasControl : Control
             {
                 foreach (var hex in _hexChunks.Values) hex.Dispose();
                 _hexChunks.Clear();
-                foreach (var context in _contexts.Values) { context.Refinement.Dispose(); context.Tiles.Dispose(); context.Objects.Dispose(); context.Land.Dispose(); context.Styled.Dispose(); context.Terrain.Dispose(); context.Atlases.Dispose(); context.Preview.Dispose(); context.Layers.Dispose(); }
+                foreach (var context in _contexts.Values)
+                {
+                    context.Refinement.Dispose(); context.Tiles.Dispose(); context.Objects.Dispose(); context.Land.Dispose(); context.Styled.Dispose(); context.Terrain.Dispose(); context.Atlases.Dispose(); context.Preview.Dispose(); context.Layers.Dispose();
+                    // Keep the cumulative diagnostic after the contexts themselves are gone.
+                    _disposedObjectImages += context.Objects.Disposals;
+                }
                 _contexts.Clear();
             }
         }

@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -361,6 +361,8 @@ public sealed class RenderAuditApplication : Application
     /// <summary>Finds a control, unfolding collapsed categories the way a user opens them until it exists.</summary>
     private T Find<T>(string name) where T : Control
     {
+        // DEC-078: the section tabs and the properties are pages of one right column; open the page first.
+        NativeEditorScenarioApplication.RevealTab(_view, name);
         for (var attempt = 0; attempt < 8; attempt++)
         {
             if (_view.GetVisualDescendants().OfType<T>().FirstOrDefault(c => c.Name == name) is { } found) return found;
@@ -372,8 +374,11 @@ public sealed class RenderAuditApplication : Application
         throw new InvalidOperationException(name + " is not in the window, even with every section opened");
     }
 
-    private T? TryFind<T>(string name) where T : Control =>
-        _view.GetVisualDescendants().OfType<T>().FirstOrDefault(c => c.Name == name);
+    private T? TryFind<T>(string name) where T : Control
+    {
+        NativeEditorScenarioApplication.RevealTab(_view, name);
+        return _view.GetVisualDescendants().OfType<T>().FirstOrDefault(c => c.Name == name);
+    }
 
     private async Task Press(string name)
     {
@@ -401,11 +406,15 @@ public sealed class RenderAuditApplication : Application
     /// The right panel walked section by section on the mixed map, and the material swatches
     /// read back as pixels: green land makes a grey stone show green; the brush sample stays raw.
     /// </summary>
+    // Свет and Стили are values of PanelSection but live in the ribbon under the map (DEC-064), not in the tabs.
+    private static readonly PanelSection[] SixSections =
+        [PanelSection.Land, PanelSection.Water, PanelSection.Assets, PanelSection.Roads, PanelSection.Other, PanelSection.Layers];
+
     private async Task PanelAndSwatchChecks(Shot baseline)
     {
         _editor.ActiveTool = EditorTool.Select; _editor.Session.ClearSelection(); _editor.ClearWaterSelection();
         await Settle();
-        Check("panel-has-six-sections", Enum.GetValues<PanelSection>().All(s => TryFind<ToggleButton>("PanelSection" + s) is not null));
+        Check("panel-has-six-sections", SixSections.All(s => TryFind<ToggleButton>("PanelSection" + s) is not null));
 
         var rivers = _editor.Rivers; var roads = _editor.Roads;
         var before = _editor.Session.Document; var depth = _editor.Session.UndoDepth;
@@ -419,7 +428,7 @@ public sealed class RenderAuditApplication : Application
         };
         var expectedCounts = new Dictionary<PanelSection, int>
         { [PanelSection.Land] = 1, [PanelSection.Water] = rivers.Count, [PanelSection.Assets] = 2, [PanelSection.Roads] = roads.Count, [PanelSection.Other] = 0 };
-        foreach (var section in Enum.GetValues<PanelSection>())
+        foreach (var section in SixSections)
         {
             await Press("PanelSection" + section); await Frame();
             var rows = _editor.ObjectTree;
@@ -534,22 +543,25 @@ public sealed class RenderAuditApplication : Application
             (byte)Math.Round(baseColor.Green + (material.Green - baseColor.Green) * opacity),
             (byte)Math.Round(baseColor.Blue + (material.Blue - baseColor.Blue) * opacity));
         static bool Near(SKColor actual, SKColor expected, int tolerance) => Distance(actual, expected) <= tolerance;
-        var green = new SKColor(0x7F, 0xA3, 0x5A); var red = new SKColor(0xB0, 0x30, 0x30);
+        // A new map's land lays the material at full strength, which hides the base colour; the
+        // swatch formula is checked at 40 % over the land's own colour (one Undo step, undone below).
+        _editor.SetActiveLandStyle(s => s with { FillTextureOpacity = 0.4 }); await SettlePanels();
+        var green = SKColor.Parse(CurrentLook.Land().FillColor); var red = new SKColor(0xB0, 0x30, 0x30);
         var stone = SwatchOf(Find<Button>("LandTexturePicker_owner-snow-drifts"));
         var greenStone = AverageOf(stone);
-        Note("swatch-green-stone", $"{greenStone} expected {Mix(green, stoneMean, 0.7)} raw {stoneMean}");
-        Check("swatch-shows-green-land-with-stone", Near(greenStone, Mix(green, stoneMean, 0.7), 14) && Distance(greenStone, Mix(green, stoneMean, 0.7)) < Distance(greenStone, stoneMean));
-        _editor.SetActiveLandStyle(s => s with { FillColor = "#FFB03030" }); await Settle(); await Settle();
+        Note("swatch-green-stone", $"{greenStone} expected {Mix(green, stoneMean, 0.4)} raw {stoneMean}");
+        Check("swatch-shows-green-land-with-stone", Near(greenStone, Mix(green, stoneMean, 0.4), 14) && Distance(greenStone, Mix(green, stoneMean, 0.4)) < Distance(greenStone, stoneMean));
+        _editor.SetActiveLandStyle(s => s with { FillColor = "#FFB03030" }); await SettlePanels();
         var redStone = AverageOf(SwatchOf(Find<Button>("LandTexturePicker_owner-snow-drifts")));
-        Note("swatch-red-stone", $"{redStone} expected {Mix(red, stoneMean, 0.7)}");
-        Check("swatch-follows-land-colour", Near(redStone, Mix(red, stoneMean, 0.7), 14));
-        _editor.SetActiveLandStyle(s => s with { FillTextureOpacity = 0.0 }); await Settle(); await Settle();
+        Note("swatch-red-stone", $"{redStone} expected {Mix(red, stoneMean, 0.4)}");
+        Check("swatch-follows-land-colour", Near(redStone, Mix(red, stoneMean, 0.4), 14));
+        _editor.SetActiveLandStyle(s => s with { FillTextureOpacity = 0.0 }); await SettlePanels();
         var flat = AverageOf(SwatchOf(Find<Button>("LandTexturePicker_owner-snow-drifts")));
         Check("swatch-follows-material-strength", Near(flat, red, 4));
-        _editor.Undo(); _editor.Undo(); await Settle(); await Settle();
+        _editor.Undo(); _editor.Undo(); await SettlePanels();
         var back = AverageOf(SwatchOf(Find<Button>("LandTexturePicker_owner-snow-drifts")));
         Note("swatch-after-undo", back.ToString());
-        Check("swatch-follows-undo", Near(back, Mix(green, stoneMean, 0.7), 14));
+        Check("swatch-follows-undo", Near(back, Mix(green, stoneMean, 0.4), 14));
         _editor.SetLandPaintMode(true); _editor.ChooseLandMaterial("owner-snow-drifts"); await Settle();
         var raw = AverageOf(Find<Border>("LandMaterialPreview"));
         Note("brush-raw-stone", $"{raw} tile {stoneMean}");
@@ -564,10 +576,11 @@ public sealed class RenderAuditApplication : Application
         var card = catalog.GetVisualDescendants().OfType<Button>().First(b => b.Name == "MaterialCatalog_owner-snow-drifts");
         var catalogStone = AverageOf(card.GetVisualDescendants().OfType<Border>().First(b => b.Background is ImageBrush));
         Note("catalog-stone", catalogStone.ToString());
-        Check("catalog-swatch-uses-land-colour", Near(catalogStone, Mix(green, stoneMean, 0.7), 14));
+        Check("catalog-swatch-uses-land-colour", Near(catalogStone, Mix(green, stoneMean, 0.4), 14));
         using (var capture = new RenderTargetBitmap(new PixelSize(900, 650)))
         { capture.Render(catalog); using var file = File.Create(Path.ChangeExtension(Options.OutputPath, ".swatches-catalog.png")); capture.Save(file, PngBitmapEncoderOptions.Default); }
         catalog.Close(); await Settle();
+        _editor.Undo(); await SettlePanels(); // the 40 % strength set for the swatch checks
         _editor.ActiveTool = EditorTool.Select; await Settle();
     }
 
@@ -710,6 +723,8 @@ public sealed class RenderAuditApplication : Application
     private void Note(string key, string value) => _report.Notes[key] = value;
 
     private static async Task Settle() { await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Render); await Task.Delay(50); }
+    // After an edit the side and context panels refresh 250 ms after the edits stop (EditorView.DeferPanels).
+    private static async Task SettlePanels() { await Settle(); await Task.Delay(400); await Settle(); await Settle(); }
     private static void Require(bool value, string reason) { if (!value) throw new InvalidOperationException(reason); }
 
     private sealed class LocalPicker(string path) : IFilePicker

@@ -34,6 +34,7 @@ internal sealed record NativeDragResult(
     double InputToRenderP95,
     double InputToRenderMax,
     int PointerMoveTreeRebuilds,
+    int MissingAssets,
     bool PreviewKeptSourceRevision,
     int PreviewProposedObjectCount,
     int IncrementalSpatialOverridesAfterCommit,
@@ -205,7 +206,23 @@ public sealed class NativeLargeMapApplication : Application
         EditorView view)
     {
         view.OpenObjects();
-        view.ShowPanelSection(PanelSection.Other);
+        // Simple fixtures now contain only stamps. Exercise thousands of copies of one
+        // mountain, not the empty Other section or the six collapsed asset-kind rows.
+        var assetCopies = fixture.PointTarget.Kind == SceneObjectKind.Stamp;
+        view.ShowPanelSection(assetCopies ? PanelSection.Assets : PanelSection.Other);
+        var assetKey = ObjectTreeRows.AssetKeyOf(fixture.PointTarget);
+        if (assetCopies)
+        {
+            editor.OpenAssetKind(assetKey);
+            view.ShowPanelSection(PanelSection.Assets);
+        }
+        var listedObjects = fixture.ObjectLayer.Objects.Where(item => assetCopies
+            ? item.Kind == SceneObjectKind.Stamp && ObjectTreeRows.AssetKeyOf(item) == assetKey
+            : item.Kind != SceneObjectKind.Stamp).ToArray();
+        var expectedLogicalRows = assetCopies
+            ? listedObjects.Length + 1 // The asset-kind breadcrumb precedes its copies.
+            : listedObjects.Count(item => item.GroupId is null)
+                + listedObjects.Where(item => item.GroupId is not null).Select(item => item.GroupId).Distinct().Count();
         await SettleAsync();
 
         var logicalRows = view.ObjectListLogicalCount;
@@ -274,6 +291,9 @@ public sealed class NativeLargeMapApplication : Application
         var selectedExactly = gesture == CanvasGesture.Drag
             && editor.Session.SelectedObjectId == target.Id
             && editor.SelectionCount == 1;
+        // Selection follows the object into Assets and opens its kind asynchronously.
+        // Those rebuilds belong to the press, not to subsequent pointer moves.
+        await SettleAsync();
         var rebuildsBeforeMoves = view.ObjectListRebuildCount;
 
         for (var index = 0; index < options.WarmupIterations; index++)
@@ -284,6 +304,7 @@ public sealed class NativeLargeMapApplication : Application
         }
 
         var samples = new List<double>(options.MeasuredIterations);
+        var missingAssets = 0;
         for (var index = 0; index < options.MeasuredIterations; index++)
         {
             var nextX = startX + 4 + index;
@@ -291,6 +312,7 @@ public sealed class NativeLargeMapApplication : Application
             samples.Add(await MeasureNextFrameAsync(
                 view,
                 () => editor.UpdateDragTo(nextX, nextY)));
+            missingAssets = Math.Max(missingAssets, view.Canvas.LastRenderStats.MissingAssets);
         }
         var dragTier = view.Canvas.LastLodTier.ToString();
 
@@ -417,6 +439,7 @@ public sealed class NativeLargeMapApplication : Application
             p95,
             maximum,
             pointerMoveRebuilds,
+            missingAssets,
             previewKeptSourceRevision,
             previewProposedCount,
             incrementalSpatialOverrides,
@@ -425,9 +448,6 @@ public sealed class NativeLargeMapApplication : Application
             commitExact,
             undoExact,
             redoExact);
-        var expectedLogicalRows = fixture.Manifest.ObjectCount
-            - fixture.Manifest.GroupedObjectCount
-            + fixture.Manifest.GroupCount;
         var passed = logicalRows == expectedLogicalRows
             && objectTree.ScrollStayedVirtualized
             && searchRows == 1
@@ -466,18 +486,26 @@ public sealed class NativeLargeMapApplication : Application
             [
                 "The smoke measures own-process interaction-start to completion of the Avalonia Skia scene pass; OS compositor presentation is not observable from the app hook.",
                 "The window is real but off-screen and never activated, so the smoke cannot disturb another foreground application.",
+                "This harness has no asset catalog: StampImages is null, so embedded mountain stamps are missing-asset placeholders. Timings exclude PNG decoding and real mountain rendering; drag.missingAssets records this limitation.",
             ]);
     }
 
     private static async Task<double> MeasureNextFrameAsync(EditorView view, Action interaction)
     {
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        void OnFrame(object? sender, EventArgs args) => completion.TrySetResult();
+        var requested = long.MaxValue;
+        void OnFrame(object? sender, EventArgs args)
+        {
+            // A frame already in flight may precede this interaction, including the warm-up.
+            if (view.Canvas.CompletedSceneRevision >= Volatile.Read(ref requested))
+                completion.TrySetResult();
+        }
         view.Canvas.FrameRendered += OnFrame;
         var stopwatch = Stopwatch.StartNew();
         try
         {
             interaction();
+            Volatile.Write(ref requested, view.Canvas.RequestFrameForSmoke());
             await completion.Task.WaitAsync(TimeSpan.FromSeconds(5));
             stopwatch.Stop();
             return stopwatch.Elapsed.TotalMilliseconds;

@@ -1150,6 +1150,9 @@ public sealed class NativeObjectWorkflowApplication : Application
     /// </summary>
     private static Color? NearestBackground(Visual leaf)
     {
+        // A translucent tint (the header buttons' #22F3E3BF) is not a background of its own: it
+        // is mixed over what lies under it, so collect tints until an opaque colour is reached.
+        var tints = new List<Color>();
         for (var node = leaf.GetVisualParent(); node is not null; node = node.GetVisualParent())
         {
             var brush = node switch
@@ -1160,13 +1163,20 @@ public sealed class NativeObjectWorkflowApplication : Application
                 _ => null,
             };
 
-            if (Resolve(brush) is { } colour)
-            {
-                return colour;
-            }
+            if (Resolve(brush) is not { } colour) continue;
+            if (colour.A < 250) { tints.Add(colour); continue; }
+            for (var i = tints.Count - 1; i >= 0; i--) colour = Over(tints[i], colour);
+            return colour;
         }
 
         return null;
+    }
+
+    private static Color Over(Color top, Color under)
+    {
+        var a = top.A / 255.0;
+        byte Mix(byte t, byte u) => (byte)Math.Round(t * a + u * (1 - a));
+        return Color.FromRgb(Mix(top.R, under.R), Mix(top.G, under.G), Mix(top.B, under.B));
     }
 
     private static double Channel(byte raw)

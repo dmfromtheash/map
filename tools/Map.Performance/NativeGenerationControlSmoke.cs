@@ -112,7 +112,12 @@ public sealed class GenerationControlApplication : Application
     private async Task Execute()
     {
         await Settle(); _editor.ActiveTool = EditorTool.Hex; _view.Canvas.FitToCanvas(); await Settle();
-        Check("own-window-offscreen-not-activated", !_window.ShowActivated && _window.Position.X < -10000 && _window.Position.Y < -10000);
+        _report.Notes["window-position"] = $"{_window.Position.X},{_window.Position.Y} state={_window.WindowState} active={_window.IsActive}";
+        // Owner 2026-10-28 (TestWindows.Guard): a test window is never on the main screen; it fills the second
+        // display when there is one, and stays parked off-screen when there is not.
+        Check("own-window-offscreen-not-activated", !_window.ShowActivated
+            && (_window.Screens.ScreenFromPoint(_window.Position) is { IsPrimary: false }
+                || _window.Position.X < -10000 && _window.Position.Y < -10000));
         _editor.HexGeneratorSettings = new() { Seed = 9 };
         var original = _editor.Session.Document; var depth = _editor.Session.UndoDepth;
         Press("HexGenStepLand"); Check("start-background", _editor.GenerationBusy);

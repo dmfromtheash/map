@@ -192,7 +192,12 @@ public sealed class NativePlacementAreaApplication : Application
     {
         await Settle(); _editor.ChooseGalleryVariant(_catalog.Sets[0].Id, null); await Settle();
         _editor.StampDensity = 3; _editor.SetStampScalePercent(45);
-        await Click("StampModeFillArea"); await Click("StartEditableAreaButton");
+        await Click("StampModeFillArea");
+        // A new area is a v4 «Массивы» fill with «Красота» on: density is a percentage, and a soft
+        // edge refills the whole edge band when a vertex moves (Core: A_moved_vertex_with_a_soft_edge…).
+        // The stable-interior promise below holds without the soft edge, so it is switched off first.
+        _editor.SetEditableAreaSoftEdge(false);
+        await Click("StartEditableAreaButton");
         var before = _editor.Session.Document;
         Point(100, 100); Point(750, 100); Point(750, 600); Point(480, 450); Point(100, 600); await Settle();
         var preview = _editor.PlacementPreviewObjects.ToArray();
@@ -208,8 +213,8 @@ public sealed class NativePlacementAreaApplication : Application
             && _editor.SelectedEditableArea!.Nodes[1].X == 820
             && _editor.SelectedEditableArea.Members.Where(m => DocumentEditor.FindObject(created, m.ObjectId) is not null)
                 .All(m => ReferenceEquals(DocumentEditor.FindObject(created, m.ObjectId), DocumentEditor.FindObject(_editor.Session.Document, m.ObjectId)));
-        await Number("EditableAreaDensityBox", "4");
-        _report.Checks["density-control"] = _editor.SelectedEditableArea!.Density == 4;
+        await Number("EditableAreaDensityBox", "80");
+        _report.Checks["density-control"] = _editor.SelectedEditableArea!.Density == 80;
         var area = _editor.SelectedEditableArea!;
         var ids = area.Members.Select(m => m.ObjectId).ToHashSet();
         var stamp = _editor.Session.Document.Layers.OfType<ObjectLayer>().SelectMany(l => l.Objects).Last(o => ids.Contains(o.Id));
@@ -218,7 +223,7 @@ public sealed class NativePlacementAreaApplication : Application
         Require(_editor.Session.SelectedObjectId == stamp.Id, "Canvas did not select the owned tree");
         await Click("DetachAreaObjectButton");
         var detached = DocumentEditor.FindObject(_editor.Session.Document, stamp.Id)!;
-        Drag(820, 100, 750, 100); Drag(750, 100, 820, 100); await Number("EditableAreaDensityBox", "3");
+        Drag(820, 100, 750, 100); Drag(750, 100, 820, 100); await Number("EditableAreaDensityBox", "70");
         _report.Checks["manual-exclusion-survives-boundary-and-density"] = ReferenceEquals(detached, DocumentEditor.FindObject(_editor.Session.Document, stamp.Id))
             && _editor.SelectedEditableArea!.Exclusions.Contains(member.Slot);
         var after = _editor.Session.Document; _editor.Undo(); _editor.Redo();
@@ -245,13 +250,13 @@ public sealed class NativePlacementAreaApplication : Application
         await _catalog.FlushMetadataAsync();
         _catalog = new AssetCatalog(Path.Combine(_workspace, "empty-catalog-after-reopen"));
         OpenEditor(opened, _report.SavedProject); _editor.SelectEditableArea(savedArea.Id); await Settle();
-        await Number("EditableAreaDensityBox", "4");
+        await Number("EditableAreaDensityBox", "80");
         var scaleControl = Find<Slider>("FutureStampScaleSlider"); scaleControl.BringIntoView(); await Settle();
         Require(scaleControl.IsEffectivelyVisible && scaleControl.IsEnabled, "Saved area scale control is unavailable");
-        scaleControl.Value = 55; await Settle(); await Click("ApplyEditableAreaSettingsButton");
-        _report.Checks["reopen-edit-without-catalog"] = _editor.SelectedEditableArea!.Density == 4
+        await Number("FutureStampScaleSliderBox", "55"); await Click("ApplyEditableAreaSettingsButton");
+        _report.Checks["reopen-edit-without-catalog"] = _editor.SelectedEditableArea!.Density == 80
             && _editor.SelectedEditableArea.ScalePercent == 55 && _catalog.Sets.Count == 0;
-        scaleControl.Value = 60; await Settle();
+        await Number("FutureStampScaleSliderBox", "60");
         await Click("StampCurrentAssetButton"); Point(120, 100); Point(330, 100); Point(330, 300);
         await Click("FinishEditableAreaButton");
         _report.Checks["second-area-from-frozen-card"] = _editor.EditableAreas.Count == 2

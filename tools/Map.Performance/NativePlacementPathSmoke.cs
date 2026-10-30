@@ -170,7 +170,7 @@ public sealed class NativePlacementPathApplication : Application
         var scaleControl = Find<Slider>("FutureStampScaleSlider");
         scaleControl.BringIntoView(); await Settle();
         Require(scaleControl.IsEffectivelyVisible && scaleControl.IsEnabled, "Saved path scale is unavailable without a selected catalog set");
-        scaleControl.Value = 110; await Settle();
+        await Number("FutureStampScaleSliderBox", "110"); // the slider applies on release; its box on Enter
         await Click("ApplyEditablePathSettingsButton");
         _report.Checks["reopened-path-appearance-controls"] = _editor.SelectedEditablePath!.ScalePercent == 110;
         Require(Find<Button>("StampModePath").IsEffectivelyVisible, "Saved path randomization controls are hidden");

@@ -2133,8 +2133,10 @@ public sealed partial class EditorView
                 : null);
         SyncStampResetButton();
         // Without a chosen asset the placement settings have nothing to describe: the panel
-        // says what to do instead of showing sliders at their minimum.
-        var chosen = _editor.CurrentVariant is not null;
+        // says what to do instead of showing sliders at their minimum. A selected area is a chosen
+        // asset too: its card shows its own saved images, so its scale, look and «another area»
+        // stay usable after reopening a map whose images are no longer in the catalog.
+        var chosen = _editor.CurrentVariant is not null || _editor.CurrentAreaSource is not null;
         _stampEmptyState.IsVisible = !chosen;
         _stampCatalogHost.IsVisible = chosen;
         _stampHowSection.IsVisible = chosen;

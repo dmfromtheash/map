@@ -30,7 +30,8 @@ public sealed partial class RegionalApplication
         wizard.Show(); await Settle(); Capture(wizard, "01-category-step");
 
         var cards = wizard.GetVisualDescendants().OfType<ToggleButton>().Where(b => b.Name?.StartsWith("WizardCategory", StringComparison.Ordinal) == true).ToList();
-        Check("step 1 lists exactly the known categories", cards.Count == MapCategories.All.Count && cards.Count == 2);
+        // Three since the city workshop (standard, hex, city); the list itself is the source of truth.
+        Check("step 1 lists exactly the known categories", cards.Count == MapCategories.All.Count);
         Check("the standard constructor is chosen by default", cards[0].Name == "WizardCategoryStandard"
             && cards[0].IsChecked == true && cards[1].IsChecked != true
             && wizard.SelectedCategory == MapCategoryId.Standard && wizard.Step == 1);
@@ -69,7 +70,9 @@ public sealed partial class RegionalApplication
         {
             var root = manifest.RootElement;
             Check("a standard map saves at the pre-category schema without a category field",
-                root.GetProperty("schemaVersion").GetInt32() == MapProjectFormat.SchemaVersion && !root.TryGetProperty("category", out _));
+                // The category itself adds nothing: no field. The version is what the content needs (a new
+                // map's sea is v32), so it is "not below the base schema", not "exactly v4".
+                root.GetProperty("schemaVersion").GetInt32() >= MapProjectFormat.SchemaVersion && !root.TryGetProperty("category", out _));
         }
         var reopened = MapProjectStore.Open(path).Document;
         Check("a standard map opens back as standard", reopened.Category == MapCategoryId.Standard && reopened.Title == document.Title);
