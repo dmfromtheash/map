@@ -3,6 +3,9 @@ using SkiaSharp;
 
 namespace Map.Rendering.Tests;
 
+// The pressure this test creates raises the process-wide ReleaseDerivedCaches, which empties every
+// kept-image cache of tests running beside it (LayerImageCacheTests failed on CI that way).
+[Collection("Memory pressure")]
 public sealed class ColdPanTileTests
 {
     [Theory]
@@ -179,3 +182,6 @@ public sealed class ColdPanTileTests
         }
     }
 }
+
+[CollectionDefinition("Memory pressure", DisableParallelization = true)]
+public sealed class MemoryPressureCollection;
