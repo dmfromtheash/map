@@ -28,7 +28,7 @@ public sealed class Stage13DLargeCanvasExportTests
         Assert.True(giga.EstimatedRawWorkingBytes < 512L * 1024 * 1024);
         var enlarged = exporter.Plan(document, Request(1_048_576, 1_048_576, ExportOutputMode.SingleImage));
         Assert.True(enlarged.EstimatedRawWorkingBytes < 512L * 1024 * 1024);
-        Assert.True(enlarged.RequiredFreeDiskBytes > 4L * 1024 * 1024 * 1024 * 1024);
+        Assert.True(enlarged.RequiredFreeDiskCeilingBytes > 4L * 1024 * 1024 * 1024 * 1024);
         Assert.Throws<ExportValidationException>(() => exporter.Plan(
             document, Request(1_048_577, 16, ExportOutputMode.TilePackage)));
     }

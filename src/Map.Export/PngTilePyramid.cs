@@ -9,7 +9,7 @@ namespace Map.Export;
 public sealed record PngTilePyramid(string DirectoryPath, int Width, int Height, int TileEdge, int Levels)
 {
     private const int Version = 2;
-    private const int Edge = 1024;
+    internal const int Edge = 1024;
     private static readonly SemaphoreSlim BuildGate = new(1, 1);
 
     public (int Width, int Height) LevelSize(int level)

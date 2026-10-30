@@ -112,7 +112,7 @@ public static partial class ExportPlanner
             var estimate = checked(AssetWorkingBytes(document) + tileCacheBytes + (surfaceBytes * 3)
                 + singleOutputBytes + rowBuffers);
 
-            return new ExportPlan(
+            var plan = new ExportPlan(
                 request.Format,
                 region,
                 request.OutputWidth,
@@ -126,6 +126,7 @@ public static partial class ExportPlanner
                 rows,
                 bleed,
                 estimate) { Hex = request.Hex, VisibleLayerIds = request.VisibleLayerIds };
+            return plan with { ExpectsOpaquePng = ImageExportEngine.ExpectOpaque(document, plan) };
         }
         catch (OverflowException ex)
         {

@@ -71,7 +71,8 @@ public sealed class ImageExportEngine : IImageExporter
         snapshot = plan.CreateScene(snapshot).RenderDocument();
         ArgumentException.ThrowIfNullOrWhiteSpace(destinationPath);
         cancellationToken.ThrowIfCancellationRequested();
-        ExportResourceAdmission.Check(plan, destinationPath, _settings);
+        plan = plan with { ExpectsOpaquePng = ExpectOpaque(snapshot, plan) };
+        var disks = ExportResourceAdmission.Check(plan, destinationPath, _settings);
         // The slot is still exclusive across windows, but the reservation is the size of THIS
         // export. A small map used to be refused because the gate always asked for the working set
         // of the largest one.
@@ -91,13 +92,13 @@ public sealed class ImageExportEngine : IImageExporter
             return plan.OutputMode switch
             {
                 ExportOutputMode.SingleImage => await ExportSingleAsync(
-                    snapshot, plan, destinationPath, stamps, tileCache, progress, cancellationToken)
+                    snapshot, plan, destinationPath, stamps, tileCache, progress, disks.RasterRoot, cancellationToken)
                     .ConfigureAwait(false),
                 ExportOutputMode.MbTiles => await ExportMbTilesAsync(
-                    snapshot, plan, destinationPath, stamps, tileCache, progress, cancellationToken)
+                    snapshot, plan, destinationPath, stamps, tileCache, progress, disks, cancellationToken)
                     .ConfigureAwait(false),
                 ExportOutputMode.ViewerFolder => await ExportViewerFolderAsync(
-                    snapshot, plan, destinationPath, stamps, tileCache, progress, cancellationToken)
+                    snapshot, plan, destinationPath, stamps, tileCache, progress, disks, cancellationToken)
                     .ConfigureAwait(false),
                 _ => await ExportTilesAsync(
                     snapshot, plan, destinationPath, stamps, tileCache, progress, cancellationToken)
@@ -123,7 +124,7 @@ public sealed class ImageExportEngine : IImageExporter
     }, cancellationToken);
 
     /// <summary>
-    /// MBTiles (DEC-051): the picture is streamed to a temporary PNG next to the destination, cut
+    /// MBTiles (DEC-051): the picture is streamed to a temporary PNG on the admitted scratch disk, cut
     /// into the viewing pyramid of <see cref="PngTilePyramid"/> and written as one SQLite file,
     /// which is then moved into place. Working memory follows the streaming PNG and the pyramid.
     /// </summary>
@@ -134,6 +135,7 @@ public sealed class ImageExportEngine : IImageExporter
         IStampImageSource? stamps,
         TileImageCache tileCache,
         IProgress<ExportProgress>? progress,
+        ExportResourceAdmission.DiskLocations disks,
         CancellationToken cancellationToken)
     {
         var fullPath = Path.GetFullPath(destinationPath);
@@ -143,7 +145,7 @@ public sealed class ImageExportEngine : IImageExporter
             ?? throw new ExportValidationException("Укажите папку для файла MBTiles.");
         // The full PNG and its pyramid are scratch: on the local temporary disk when it has room (an
         // external destination disk then only receives the finished file), next to the result otherwise.
-        var work = Path.Combine(MbTilesScratchRoot(directory, (long)plan.OutputWidth * plan.OutputHeight * 4),
+        var work = Path.Combine(disks.ScratchRoot,
             "." + Path.GetFileName(fullPath) + "." + Guid.NewGuid().ToString("N") + ".tmp");
         Directory.CreateDirectory(work);
         string? temporary = null;
@@ -151,7 +153,7 @@ public sealed class ImageExportEngine : IImageExporter
         {
             var png = Path.Combine(work, "picture.png");
             await ExportSingleAsync(snapshot, plan with { OutputMode = ExportOutputMode.SingleImage }, png, stamps,
-                tileCache, new ScaledProgress(progress, 0, 0.6), cancellationToken).ConfigureAwait(false);
+                tileCache, new ScaledProgress(progress, 0, 0.6), disks.RasterRoot, cancellationToken).ConfigureAwait(false);
             Report(progress, ExportPhase.EncodingAndWriting, 0.6, "Построение пирамиды тайлов…");
             var pyramid = await PngTilePyramid.OpenUnderHeavyAsync(png, Path.Combine(work, "pyramid"),
                 new ScaledProgress(progress, 0.6, 0.85), cancellationToken, _settings).ConfigureAwait(false);
@@ -185,6 +187,7 @@ public sealed class ImageExportEngine : IImageExporter
         IStampImageSource? stamps,
         TileImageCache tileCache,
         IProgress<ExportProgress>? progress,
+        ExportResourceAdmission.DiskLocations disks,
         CancellationToken cancellationToken)
     {
         var fullPath = Path.GetFullPath(destinationPath);
@@ -193,7 +196,7 @@ public sealed class ImageExportEngine : IImageExporter
         var parent = Path.GetDirectoryName(fullPath);
         if (string.IsNullOrWhiteSpace(parent) || !Directory.Exists(parent))
             throw new ExportOperationException("Родительская папка результата не существует. Выберите другую папку.");
-        var work = Path.Combine(MbTilesScratchRoot(parent, (long)plan.OutputWidth * plan.OutputHeight * 4),
+        var work = Path.Combine(disks.ScratchRoot,
             "." + Path.GetFileName(fullPath) + "." + Guid.NewGuid().ToString("N") + ".tmp");
         var folder = Path.Combine(parent, "." + Path.GetFileName(fullPath) + "." + Guid.NewGuid().ToString("N") + ".tmp");
         Directory.CreateDirectory(work);
@@ -201,7 +204,7 @@ public sealed class ImageExportEngine : IImageExporter
         {
             var png = Path.Combine(work, "picture.png");
             await ExportSingleAsync(snapshot, plan with { OutputMode = ExportOutputMode.SingleImage }, png, stamps,
-                tileCache, new ScaledProgress(progress, 0, 0.6), cancellationToken).ConfigureAwait(false);
+                tileCache, new ScaledProgress(progress, 0, 0.6), disks.RasterRoot, cancellationToken).ConfigureAwait(false);
             Report(progress, ExportPhase.EncodingAndWriting, 0.6, "Построение пирамиды тайлов…");
             var pyramid = await PngTilePyramid.OpenUnderHeavyAsync(png, Path.Combine(work, "pyramid"),
                 new ScaledProgress(progress, 0.6, 0.8), cancellationToken, _settings).ConfigureAwait(false);
@@ -220,19 +223,6 @@ public sealed class ImageExportEngine : IImageExporter
         }
     }
 
-    /// <summary>Local TEMP when it holds <paramref name="scratchBytes"/> plus 2 GiB, else the destination folder.</summary>
-    private static string MbTilesScratchRoot(string destinationDirectory, long scratchBytes)
-    {
-        try
-        {
-            var local = Path.GetTempPath();
-            if (new DriveInfo(Path.GetPathRoot(Path.GetFullPath(local))!).AvailableFreeSpace > scratchBytes + 2L * 1024 * 1024 * 1024)
-                return local;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { }
-        return destinationDirectory;
-    }
-
     private sealed class ScaledProgress(IProgress<ExportProgress>? inner, double start, double end) : IProgress<ExportProgress>
     {
         public void Report(ExportProgress value) =>
@@ -246,6 +236,7 @@ public sealed class ImageExportEngine : IImageExporter
         IStampImageSource? stamps,
         TileImageCache tileCache,
         IProgress<ExportProgress>? progress,
+        string rasterRoot,
         CancellationToken cancellationToken)
     {
         var fullPath = Path.GetFullPath(destinationPath);
@@ -257,11 +248,11 @@ public sealed class ImageExportEngine : IImageExporter
             // opaque after all, the export starts over as RGBA.
             if (ExpectOpaque(snapshot, plan))
             {
-                try { return ExportStreamingPng(snapshot, plan, fullPath, stamps, tileCache, progress, cancellationToken, opaque: true); }
+                try { return ExportStreamingPng(snapshot, plan, fullPath, stamps, tileCache, progress, cancellationToken, rasterRoot, opaque: true); }
                 catch (StreamingPngWriter.NotOpaqueException) { }
             }
 
-            return ExportStreamingPng(snapshot, plan, fullPath, stamps, tileCache, progress, cancellationToken, opaque: false);
+            return ExportStreamingPng(snapshot, plan, fullPath, stamps, tileCache, progress, cancellationToken, rasterRoot, opaque: false);
         }
         Report(progress, ExportPhase.Rendering, 0.08, "Рендеринг изображения…");
         using var bytes = RenderSingleEncoded(snapshot, plan, stamps, tileCache, cancellationToken);
@@ -292,15 +283,16 @@ public sealed class ImageExportEngine : IImageExporter
     }
 
     /// <summary>The page colour is drawn, visible, fully opaque and at full strength: nothing can show through.</summary>
-    private static bool ExpectOpaque(MapDocument snapshot, ExportPlan plan) =>
+    internal static bool ExpectOpaque(MapDocument snapshot, ExportPlan plan) =>
         plan.IncludesBackground
         && snapshot.Layers.Count > 0 && snapshot.Layers[0] is BaseColorLayer { Visible: true, Opacity: >= 1 } page
+        && (plan.VisibleLayerIds is null || plan.VisibleLayerIds.Contains(page.Id))
         && page.Color.Length == 9 && page.Color.StartsWith("#FF", StringComparison.OrdinalIgnoreCase);
 
     private ExportResult ExportStreamingPng(
         MapDocument snapshot, ExportPlan plan, string fullPath, IStampImageSource? stamps,
         TileImageCache tileCache, IProgress<ExportProgress>? progress, CancellationToken cancellationToken,
-        bool opaque)
+        string rasterRoot, bool opaque)
     {
         var tempPath = UniqueSiblingFile(fullPath);
         try
@@ -317,7 +309,7 @@ public sealed class ImageExportEngine : IImageExporter
             {
                 var row = new byte[checked(plan.OutputWidth * 4)];
                 var tileIndex = 0;
-                var scratchBase = ScratchBase(tempPath, (long)plan.OutputWidth * plan.RasterTileHeight * 4);
+                var scratchBase = Path.Combine(rasterRoot, "map-export-" + Guid.NewGuid().ToString("N"));
                 for (var y = 0; y < plan.OutputHeight; y += plan.RasterTileHeight)
                 {
                     var height = Math.Min(plan.RasterTileHeight, plan.OutputHeight - y);
@@ -424,26 +416,6 @@ public sealed class ImageExportEngine : IImageExporter
         }
         Report(progress, ExportPhase.Completed, 1, "PNG в выбранном разрешении сохранён.");
         return new ExportResult(fullPath, ExportOutputMode.SingleImage, 1);
-    }
-
-    /// <summary>
-    /// Where the band's tile columns wait to be assembled into rows. The rows are read back from
-    /// all columns in turn, so on the destination volume - often an external spinning disk - each
-    /// band cost its size twice in seek-bound I/O (a 131072² map: ~137 GB). A local temporary
-    /// folder with room for a few bands is used instead; the destination only when there is none.
-    /// </summary>
-    private static string ScratchBase(string tempPath, long bandBytes)
-    {
-        try
-        {
-            var local = Path.GetTempPath();
-            var free = new DriveInfo(Path.GetPathRoot(Path.GetFullPath(local))!).AvailableFreeSpace;
-            if (free > bandBytes * 4 + 2L * 1024 * 1024 * 1024)
-                return Path.Combine(local, "map-export-" + Guid.NewGuid().ToString("N"));
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException) { }
-
-        return tempPath;
     }
 
     private async Task<ExportResult> ExportTilesAsync(

@@ -86,7 +86,10 @@ public sealed partial class EditorViewModel
     public string ExportEstimateText => _exportEstimateText;
     public string ExportMemoryDetails => CurrentExportPlan is { } plan
         ? $"Оценка памяти экспорта с кэшами изображений: {plan.EstimatedRawWorkingBytes / (1024d * 1024):N0} МиБ. "
-            + $"На диске нужно до {plan.RequiredFreeDiskBytes / (1024d * 1024 * 1024):N2} ГиБ с учётом временной записи; сжатый файл обычно меньше. "
+            + $"Оценка свободного места для результата и временных данных: {plan.RequiredFreeDiskBytes / (1024d * 1024 * 1024):N2} ГиБ с резервом. "
+            + (plan.UsesStreamingPng
+                ? $"Для шума и плохо сжимаемых изображений запас может вырасти до {plan.RequiredFreeDiskCeilingBytes / (1024d * 1024 * 1024):N2} ГиБ. TEMP и папка результата проверяются по дискам; при нехватке места экспорт прервётся, прежний результат сохранится. "
+                : "")
             + "Перед запуском проверяется свободная память с резервом. Память открытой карты и истории не входит в эту оценку."
         : "Выберите допустимые параметры экспорта. Причина отказа показана рядом с командой экспорта.";
     public byte[]? ExportPreviewPng => _exportPreviewPng;

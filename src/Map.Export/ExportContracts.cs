@@ -105,19 +105,18 @@ public sealed record ExportPlan(
     public bool UsesStreamingPng => Format == ExportImageFormat.Png && OutputMode is ExportOutputMode.SingleImage or ExportOutputMode.MbTiles or ExportOutputMode.ViewerFolder;
     public int RasterTileHeight => UsesStreamingPng ? Math.Min(TileEdge, 512) : TileEdge;
 
-    // A complete sibling result and one temporary row of raw tiles coexist until publication.
-    // This is a conservative incompressible-file bound, not a prediction of the compressed size.
-    public long RequiredFreeDiskBytes
-    {
-        get
-        {
-            var raw = checked((long)OutputWidth * OutputHeight * 4 + OutputHeight);
-            return UsesStreamingPng
-                ? checked(raw + raw / 1000 + (raw / 65536 + 1) * 12
-                    + (long)OutputWidth * Math.Min(RasterTileHeight, OutputHeight) * 4 + 16L * 1024 * 1024)
-                : checked((long)OutputWidth * OutputHeight * 8 + 16L * 1024 * 1024);
-        }
-    }
+    public bool ExpectsOpaquePng { get; init; }
+
+    /// <summary>Estimated peak additional space if TEMP and the result share a disk, including scratch.
+    /// Compression is content dependent; this is an admission budget, not a maximum file size.</summary>
+    public long RequiredFreeDiskBytes => UsesStreamingPng
+        ? ExportDiskEstimate.Create(this).CombinedBytes
+        : checked((long)OutputWidth * OutputHeight * 8 + 16L * 1024 * 1024);
+
+    /// <summary>Fallback budget for incompressible pixels, including a possible RGB-to-RGBA retry.</summary>
+    public long RequiredFreeDiskCeilingBytes => UsesStreamingPng
+        ? ExportDiskEstimate.Create(this with { ExpectsOpaquePng = false }, incompressible: true).CombinedBytes
+        : RequiredFreeDiskBytes;
 }
 
 public sealed record ExportProgress(ExportPhase Phase, double Fraction, string Message);
