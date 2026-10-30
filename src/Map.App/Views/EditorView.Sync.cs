@@ -565,7 +565,7 @@ public sealed partial class EditorView
         {
             _lastContextTool = _editor.ActiveTool;
             // Choosing the river or road tool with a river or road already selected (from the
-            // list, or "Изменить в панели слева") opens that selection, not the creation tab.
+            // list, or "Изменить в свойствах") opens that selection, not the creation tab.
             _contextPrefersToolPanel = !RiverRoadHasSelection();
         }
 
@@ -601,10 +601,14 @@ public sealed partial class EditorView
 
         if (scope == EditorContextPanelKind.MultiSelectionInspector)
         {
-            _contextTitle.Text = "Выбрано: " + EditorLabels.Objects(_editor.SelectionCount);
+            // DEC-070 variant 1: the panel says what will change - «Выделено: 3 ассета», «из области расстановки «Ледник»».
+            var count = _editor.SelectionCount;
+            var assets = _editor.Session.SelectedObjects.All(o => o.Kind == SceneObjectKind.Stamp);
+            _contextTitle.Text = "Выделено: " + (assets ? EditorLabels.Assets(count) : EditorLabels.Objects(count));
             _appearanceTransferHost.IsVisible = true;
             SetContextHeader(MapIcons.LineSelect, "", Ui.Scope.Object,
-                EditorLabels.Objects(_editor.SelectionCount) + SelectionLayerSuffix(), null);
+                _editor.SelectionArea is { } owner ? $"из области расстановки «{owner.Name}»"
+                    : EditorLabels.Objects(count) + SelectionLayerSuffix(), null);
             SyncMultiSelectionPanel();
             _contextHost.Content = _multiSelectionRoot;
             return;
@@ -634,8 +638,8 @@ public sealed partial class EditorView
         }
 
         _contextTitle.Text = _editor.ActiveTool != EditorTool.Stamp ? EditorLabels.Tool(_editor.ActiveTool)
-            : _editor.SelectedEditableArea is not null ? "Выбранная область"
-            : _editor.SelectedEditablePath is not null ? "Выбранный путь" : "Ассеты";
+            : _editor.SelectedEditableArea is not null ? "Область расстановки"
+            : _editor.SelectedEditablePath is not null ? "Путь расстановки" : "Новый ассет";
         SyncToolHeader();
         // Copying a look needs something selected to copy from or to: the river and road panels
         // edit a selected surface, every other tool panel has no target, so the footer hides.
@@ -692,20 +696,20 @@ public sealed partial class EditorView
         if (tool == EditorTool.Stamp && _editor.SelectedEditableArea is not null)
         {
             // The asset panel keeps its reset in every state it had it before, area included.
-            SetContextHeader(MapIcons.ModeArea, "", Ui.Scope.Object, "область размещения", _stampResetButton);
+            SetContextHeader(MapIcons.ModeArea, "", Ui.Scope.Object, $"«{_editor.SelectedEditableArea.Name}»", _stampResetButton);
             SyncStampResetButton();
             return;
         }
         if (tool == EditorTool.Stamp && _editor.SelectedEditablePath is not null)
         {
-            SetContextHeader(MapIcons.ModePath, "", Ui.Scope.Object, "путь размещения", _stampResetButton);
+            SetContextHeader(MapIcons.ModePath, "", Ui.Scope.Object, $"«{_editor.SelectedEditablePath.Name}»", _stampResetButton);
             SyncStampResetButton();
             return;
         }
         switch (tool)
         {
             case EditorTool.Stamp:
-                SetContextHeader(icon, key, Ui.Scope.New, ActiveLayerTarget("на слой"), _stampResetButton);
+                SetContextHeader(icon, key, Ui.Scope.New, "следующие размещения · " + ActiveLayerTarget("на слой"), _stampResetButton);
                 SyncStampResetButton();
                 break;
             case EditorTool.River or EditorTool.Road:

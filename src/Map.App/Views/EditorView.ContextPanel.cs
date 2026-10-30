@@ -39,7 +39,7 @@ public sealed partial class EditorView
         BuildSelectionSections();
         BuildContextRoots();
 
-        var collapse = new Button { Content = MapIcons.Grid24(MapIcons.LinePanelLeft, 16) }
+        var collapse = new Button { Content = MapIcons.Grid24(MapIcons.LinePanelRight, 16) }
             .Named("CollapseContextPanelButton").Classed("icon");
         collapse.Click += (_, _) => ToggleContextPanel();
         AutomationProperties.SetName(collapse, "Свернуть или развернуть панель инструмента");
@@ -47,8 +47,7 @@ public sealed partial class EditorView
         _contextTitle.Bind(ToolTip.TipProperty, new Binding(nameof(TextBlock.Text)) { Source = _contextTitle });
         _contextTitle.Classes.Add("panel-title");
         BuildContextSwitch();
-        // Header: what the panel is about (tool or selected object), its key, and on the right the
-        // one panel-wide command the current content offers (the asset panel's "К базовым").
+        // Header: what the panel is about (tool or selected object) and its key - «что сейчас изменится» (DEC-070).
         _contextHeaderTitle = new StackPanel
         {
             Orientation = Orientation.Horizontal,
@@ -61,11 +60,11 @@ public sealed partial class EditorView
             Child = new DockPanel { LastChildFill = true, Children =
             {
                 collapse.Docked(Dock.Right),
-                _contextHeaderAction.Docked(Dock.Right),
                 _contextHeaderTitle,
             } },
         }.Classed("panel-header");
-        // Scope line: whom the settings below act on, in words, with the target layer.
+        // Scope line: whom the settings below act on, in words, with the target layer; on its right the
+        // one panel-wide command, so the title above keeps the whole width of the column.
         _contextScopeTarget.TextTrimming = TextTrimming.CharacterEllipsis;
         _contextScopeTarget.Classes.Add("scope-target");
         _contextScopeLine = new Border
@@ -73,6 +72,7 @@ public sealed partial class EditorView
             Child = new DockPanel { LastChildFill = true, Children =
             {
                 _contextScopeChip.Docked(Dock.Left),
+                _contextHeaderAction.Docked(Dock.Right),
                 _contextScopeTarget,
             } },
         }.Classed("scope-line").Named("ContextScopeLine");

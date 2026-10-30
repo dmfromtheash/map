@@ -1099,7 +1099,7 @@
         <Style Selector="Border.context-panel">
             <Setter Property="Background" Value="{DynamicResource MapPanelBrush}" />
             <Setter Property="BorderBrush" Value="{DynamicResource MapBorderBrush}" />
-            <Setter Property="BorderThickness" Value="0,0,1,0" />
+            <Setter Property="BorderThickness" Value="1,0,0,0" />
         </Style>
         <Style Selector="Border.panel-header">
             <Setter Property="Background" Value="{DynamicResource MapPanelBrush}" />

@@ -365,7 +365,7 @@ public sealed partial class EditorView
             () => { _editor.ToggleSelectedWaterVisible(); RefreshAfterSelectionCommand(); });
         var locking = FooterButton("WaterSectionLock", "Заблокировать только эту воду", MapIcons.Lock,
             () => { _editor.ToggleSelectedWaterLock(); RefreshAfterSelectionCommand(); });
-        var edit = FooterButton("WaterSectionEdit", "Изменить в панели слева", MapIcons.River,
+        var edit = FooterButton("WaterSectionEdit", "Изменить в свойствах", MapIcons.River,
             () => { _editor.ActiveTool = EditorTool.River; SyncContextArea(); });
         var create = FooterButton("WaterSectionCreate", "Новая река или озеро…", MapIcons.River,
             () => { _editor.ClearWaterSelection(); _editor.ActiveTool = EditorTool.River; SyncContextArea(); }, "accent", "create-hero");
@@ -401,7 +401,7 @@ public sealed partial class EditorView
             () => { _editor.ToggleSelectedRoadVisible(); RefreshAfterSelectionCommand(); });
         var locking = FooterButton("RoadSectionLock", "Заблокировать только эту дорогу", MapIcons.Lock,
             () => { _editor.ToggleSelectedRoadLock(); RefreshAfterSelectionCommand(); });
-        var edit = FooterButton("RoadSectionEdit", "Изменить в панели слева", MapIcons.Road,
+        var edit = FooterButton("RoadSectionEdit", "Изменить в свойствах", MapIcons.Road,
             () => { if (_editor.RoadSelectionIds.Count > 0) _editor.SelectRoad(_editor.RoadSelectionIds[0]); else _editor.ActiveTool = EditorTool.Road; SyncContextArea(); });
         var create = FooterButton("RoadSectionCreate", "Новая дорога…", MapIcons.Road,
             () => { _editor.ClearRoadSelection(); _editor.ActiveTool = EditorTool.Road; SyncContextArea(); }, "accent");
@@ -445,7 +445,7 @@ public sealed partial class EditorView
             var stamps = _editor.Layers.OfType<ObjectLayer>().Sum(layer => StampCount(layer.Objects));
             summary.Text = stamps == 0
                 ? "На карте пока нет размещённых ассетов."
-                : $"Размещено: {EditorLabels.AssetCount(stamps)}. Свойства выбранного — в панели слева.";
+                : $"Размещено: {EditorLabels.AssetCount(stamps)}. Свойства выбранного — в колонке свойств рядом.";
         });
         summary.Classes.Add("faint"); summary.Classes.Add("role-caption");
         return new Border { Child = new StackPanel { Spacing = 4, Children = { summary, open } } }

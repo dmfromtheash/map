@@ -432,21 +432,17 @@ public sealed partial class EditorView : UserControl
         var statusBar = BuildStatusBar();
         SyncShortcutSurfaces();
 
-        // Inkarnate's workspace (measured through REA): the canvas runs from the window's left edge
-        // to the layer panel, and the tool rail, the tool panel and the shortcut hint float over it
-        // as separate cards. The map gets the whole width; a card covers it only where it stands.
+        // The canvas runs from the window's left edge to the right column; the tool rail floats over
+        // it as a card. DEC-070 variant 1 (owner, 2026-10-30): the properties - «что сейчас изменится» -
+        // are a column on the right, always in one place, and no longer a card over the map.
         var canvasHost = (Grid)BuildCanvasHost();
         var atlasBar = BuildAtlasNavigation(canvasHost);
         rail.HorizontalAlignment = HorizontalAlignment.Left;
         rail.VerticalAlignment = VerticalAlignment.Top;
         rail.Margin = new Thickness(0, Ui.FloatingGap, 0, Ui.FloatingGap);
-        contextPanel.HorizontalAlignment = HorizontalAlignment.Left;
-        contextPanel.VerticalAlignment = VerticalAlignment.Top;
-        contextPanel.Margin = new Thickness(Ui.RailWidth + 4, Ui.FloatingGap, 0, Ui.FloatingGap);
         // The tool-hint pill at the bottom of the canvas was removed at the owner's request
         // (2026-10-17): the map keeps that space.
         canvasHost.Children.Add(rail);
-        canvasHost.Children.Add(contextPanel);
         // DEC-070 step 4: «Найти действие» over the map, Ctrl+K from anywhere in the editor (also inside a text field).
         _actionSearch = BuildActionSearch();
         canvasHost.Children.Add(_actionSearch);
@@ -471,6 +467,7 @@ public sealed partial class EditorView : UserControl
                 quickBar.Docked(Dock.Top),
                 statusBar.Docked(Dock.Bottom),
                 sidePanel.Docked(Dock.Right),
+                contextPanel.Docked(Dock.Right),
                 // Свет, Стили, Море: their own ribbon under the map (DEC-064), shown in «Оформление» only (DEC-070).
                 new DockPanel { Children = { (_appearanceRibbon = BuildAppearanceRibbon()).Docked(Dock.Bottom), canvasHost } },
             },
@@ -488,7 +485,6 @@ public sealed partial class EditorView : UserControl
             Ui.SetClass(this, "compact-window", compact);
             Ui.SetClass(this, "narrow-window", narrow);
             rail.Width = compact ? 42 : Ui.RailWidth;
-            _contextPanel.Margin = new Thickness((compact ? 42 : Ui.RailWidth) + 4, Ui.FloatingGap, 0, Ui.FloatingGap);
             if (!_contextCollapsed) _contextPanel.Width = narrow ? 248 : Ui.ContextPanelWidth;
             // A narrow window gives the map the width: the map panel folds to its strip of
             // section icons once, and unfolds again when the window grows back.
@@ -656,6 +652,7 @@ public sealed partial class EditorView : UserControl
     public void OpenObjects(bool focusSearch = false)
     {
         _sidePanel.IsVisible = true;
+        _contextPanel.IsVisible = true;
         // The objects live in the section that lists the current selection; with nothing
         // selected the panel opens on the placed assets, the most common thing to look for.
         var section = _editor.SectionForSelection()
@@ -701,12 +698,16 @@ public sealed partial class EditorView : UserControl
         }
     }
 
-    public void ToggleSidePanel() => _sidePanel.IsVisible = !_sidePanel.IsVisible;
+    /// <summary>«/»: the right column - the properties and the map panel - out of the way of the map, and back.</summary>
+    public void ToggleSidePanel()
+    {
+        var show = !(_sidePanel.IsVisible || _contextPanel.IsVisible);
+        _sidePanel.IsVisible = show;
+        _contextPanel.IsVisible = show;
+    }
 
-    /// <summary>How far the floating rail and tool panel reach into the canvas from the left.</summary>
-    private double FloatingInsetLeft() => _contextPanel.IsVisible
-        ? _contextPanel.Margin.Left + _contextPanel.Bounds.Width + 8
-        : Ui.RailWidth + 8;
+    /// <summary>How far the floating rail reaches into the canvas from the left.</summary>
+    private double FloatingInsetLeft() => Ui.RailWidth + 8;
 
     public void ToggleContextPanel()
     {

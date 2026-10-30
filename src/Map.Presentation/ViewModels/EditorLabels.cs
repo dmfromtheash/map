@@ -275,6 +275,10 @@ public static class EditorLabels
     public static string Objects(int count) =>
         $"{count} {Plural(count, "объект", "объекта", "объектов")}";
 
+    /// <summary>Placed assets, counted the way the properties panel heads a selection of them.</summary>
+    public static string Assets(int count) =>
+        $"{count} {Plural(count, "ассет", "ассета", "ассетов")}";
+
     /// <summary>Rivers and lakes of a layer, counted the way the layers panel says it.</summary>
     public static string Waters(int count) =>
         $"{count} {Plural(count, "водоём", "водоёма", "водоёмов")}";
