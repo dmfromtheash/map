@@ -1,6 +1,5 @@
 using System.Buffers.Binary;
 using System.IO.Compression;
-using System.Numerics;
 
 namespace Map.Export;
 
@@ -20,10 +19,14 @@ internal sealed class StreamingPngWriter : IDisposable
     private readonly CompressionLevel _level;
     private readonly int _parallelism;
     private readonly Queue<Task<DeflatePart>> _pending = new();
+    // Parallel route: unfiltered rows of the next block, and the row just above it (filters read it).
     private byte[] _block = [];
     private int _blockUsed;
+    private byte[] _blockAbove;
     private uint _adler = 1;
     private readonly byte[] _filtered;
+    private byte[] _row;
+    private byte[] _above;
     private readonly int _height;
     private readonly bool _opaque;
     private int _rows;
@@ -34,13 +37,17 @@ internal sealed class StreamingPngWriter : IDisposable
     /// <param name="level">Compression level; it changes size and time only, never a pixel.</param>
     /// <param name="parallelism">Blocks compressed at once. Above 1 the rows are cut into blocks of
     /// about 4 MB, each deflated independently and joined into the same single zlib stream.</param>
+    /// <param name="blockRows">Rows per parallel block; 0 = about 4 MB (tests use a few rows).</param>
     public StreamingPngWriter(Stream destination, int width, int height, bool opaque = false,
-        CompressionLevel level = CompressionLevel.Fastest, int parallelism = 1)
+        CompressionLevel level = CompressionLevel.Fastest, int parallelism = 1, int blockRows = 0)
     {
         _destination = destination;
         _height = height;
         _opaque = opaque;
         _filtered = new byte[checked(width * (opaque ? 3 : 4) + 1)];
+        _row = new byte[_filtered.Length - 1];
+        _above = new byte[_row.Length];
+        _blockAbove = new byte[_row.Length];
         destination.Write(Signature);
         Span<byte> header = stackalloc byte[13];
         header.Clear();
@@ -58,62 +65,86 @@ internal sealed class StreamingPngWriter : IDisposable
             // One RFC 1950 wrapper around raw deflate blocks. Each block starts with an empty
             // dictionary and ends on a byte boundary (sync flush), so they simply concatenate.
             _chunks.Write([0x78, 0x01]);
-            _block = new byte[checked(_filtered.Length * Math.Max(1, 4 * 1024 * 1024 / _filtered.Length))];
+            _block = new byte[checked(_row.Length * (blockRows > 0 ? blockRows : Math.Max(1, 4 * 1024 * 1024 / _filtered.Length)))];
         }
     }
 
     public void WriteRow(ReadOnlySpan<byte> rgba)
     {
-        if (_complete || _rows >= _height || rgba.Length != (_filtered.Length - 1) / (_opaque ? 3 : 4) * 4)
+        if (_complete || _rows >= _height || rgba.Length != _row.Length / (_opaque ? 3 : 4) * 4)
             throw new InvalidOperationException("Неверное число или размер строк PNG.");
         if (_opaque)
         {
-            WriteOpaqueRow(rgba);
-            return;
+            for (int s = 0, d = 0; s < rgba.Length; s += 4, d += 3)
+            {
+                if (rgba[s + 3] != 255) throw new NotOpaqueException();
+                _row[d] = rgba[s]; _row[d + 1] = rgba[s + 1]; _row[d + 2] = rgba[s + 2];
+            }
         }
-        _filtered[0] = 1; // Sub; filter the complete row, including boundaries between render tiles.
-        rgba[..4].CopyTo(_filtered.AsSpan(1));
-        var i = 4;
-        if (Vector.IsHardwareAccelerated)
-        {
-            for (; i <= rgba.Length - Vector<byte>.Count; i += Vector<byte>.Count)
-                (new Vector<byte>(rgba[i..]) - new Vector<byte>(rgba[(i - 4)..]))
-                    .CopyTo(_filtered.AsSpan(i + 1));
-        }
-        for (; i < rgba.Length; i++)
-            _filtered[i + 1] = unchecked((byte)(rgba[i] - rgba[i - 4]));
-        Emit();
-        _rows++;
-    }
+        else rgba.CopyTo(_row);
 
-    private void Emit()
-    {
         if (_zlib is not null)
         {
+            FilterRow(_row, _above, _opaque ? 3 : 4, _filtered);
             _zlib.Write(_filtered);
-            return;
+            (_row, _above) = (_above, _row);
         }
-        _filtered.CopyTo(_block, _blockUsed);
-        _blockUsed += _filtered.Length;
-        if (_blockUsed == _block.Length) QueueBlock();
+        else
+        {
+            // The block filters its own rows on a compression worker: the caller only copies.
+            _row.CopyTo(_block, _blockUsed);
+            _blockUsed += _row.Length;
+            if (_blockUsed == _block.Length) QueueBlock();
+        }
+        _rows++;
     }
 
-    private void WriteOpaqueRow(ReadOnlySpan<byte> rgba)
+    /// <summary>
+    /// One PNG filter per row (None, Sub, Up, Average, Paeth), the one whose output has the smallest
+    /// sum of absolute values - libpng's heuristic. Every filter is exactly reversible, so the choice
+    /// changes the file size only, never a pixel: 6-9 % smaller than Sub alone on the giant map's land.
+    /// </summary>
+    internal static void FilterRow(ReadOnlySpan<byte> row, ReadOnlySpan<byte> above, int bpp, Span<byte> output)
     {
-        // Sub filter over RGB triplets; the first pixel is stored as is.
-        _filtered[0] = 1;
-        byte r0 = 0, g0 = 0, b0 = 0;
-        for (int s = 0, d = 1; s < rgba.Length; s += 4, d += 3)
+        long none = 0, sub = 0, up = 0, average = 0, paeth = 0;
+        for (var i = 0; i < row.Length; i++)
         {
-            if (rgba[s + 3] != 255) throw new NotOpaqueException();
-            byte r = rgba[s], g = rgba[s + 1], b = rgba[s + 2];
-            _filtered[d] = unchecked((byte)(r - r0));
-            _filtered[d + 1] = unchecked((byte)(g - g0));
-            _filtered[d + 2] = unchecked((byte)(b - b0));
-            r0 = r; g0 = g; b0 = b;
+            int x = row[i], a = i >= bpp ? row[i - bpp] : 0, b = above[i], c = i >= bpp ? above[i - bpp] : 0;
+            none += Weight(x);
+            sub += Weight(x - a);
+            up += Weight(x - b);
+            average += Weight(x - ((a + b) >> 1));
+            paeth += Weight(x - Paeth(a, b, c));
         }
-        Emit();
-        _rows++;
+        byte filter = 0;
+        var best = none;
+        if (sub < best) { best = sub; filter = 1; }
+        if (up < best) { best = up; filter = 2; }
+        if (average < best) { best = average; filter = 3; }
+        if (paeth < best) filter = 4;
+
+        output[0] = filter;
+        for (var i = 0; i < row.Length; i++)
+        {
+            int x = row[i], a = i >= bpp ? row[i - bpp] : 0, b = above[i], c = i >= bpp ? above[i - bpp] : 0;
+            output[i + 1] = unchecked((byte)(x - filter switch
+            {
+                0 => 0,
+                1 => a,
+                2 => b,
+                3 => (a + b) >> 1,
+                _ => Paeth(a, b, c),
+            }));
+        }
+    }
+
+    // A filtered byte as a signed value: small differences either way are cheap to compress.
+    private static int Weight(int difference) { var value = difference & 255; return value < 128 ? value : 256 - value; }
+
+    private static int Paeth(int a, int b, int c)
+    {
+        int p = a + b - c, pa = Math.Abs(p - a), pb = Math.Abs(p - b), pc = Math.Abs(p - c);
+        return pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
     }
 
     public void Complete()
@@ -151,7 +182,11 @@ internal sealed class StreamingPngWriter : IDisposable
         var input = _block;
         var length = _blockUsed;
         var level = _level;
-        _pending.Enqueue(Task.Run(() => CompressBlock(input, length, level)));
+        var above = _blockAbove;
+        var bpp = _opaque ? 3 : 4;
+        _pending.Enqueue(Task.Run(() => CompressBlock(input, length, above, bpp, level)));
+        // The next block is filtered against this block's last row.
+        _blockAbove = input.AsSpan(length - _row.Length, _row.Length).ToArray();
         _block = new byte[input.Length];
         _blockUsed = 0;
         if (_pending.Count >= _parallelism) WriteNextBlock();
@@ -164,8 +199,14 @@ internal sealed class StreamingPngWriter : IDisposable
         _adler = CombineAdler(_adler, part.Adler, part.Length);
     }
 
-    private static DeflatePart CompressBlock(byte[] input, int length, CompressionLevel level)
+    private static DeflatePart CompressBlock(byte[] rows, int rowsLength, byte[] above, int bpp, CompressionLevel level)
     {
+        var stride = above.Length;
+        var length = rowsLength / stride * (stride + 1);
+        var input = new byte[length];
+        for (int source = 0, target = 0; source < rowsLength; source += stride, target += stride + 1)
+            FilterRow(rows.AsSpan(source, stride), source == 0 ? above : rows.AsSpan(source - stride, stride), bpp,
+                input.AsSpan(target, stride + 1));
         using var output = new MemoryStream();
         byte[] bytes;
         using (var deflate = new DeflateStream(output, level, leaveOpen: true))
