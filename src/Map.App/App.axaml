@@ -2828,17 +2828,6 @@
             <Setter Property="BoxShadow" Value="0 0 0 0 Transparent" />
         </Style>
 
-        <!-- the assets strip: tiny step arrows and reset, quiet until the pointer reaches them -->
-        <Style Selector=":is(Button).strip-step">
-            <Setter Property="Background" Value="#14F3E3BF" />
-            <Setter Property="BorderThickness" Value="0" />
-            <Setter Property="CornerRadius" Value="2" />
-            <Setter Property="MinWidth" Value="0" />
-        </Style>
-        <Style Selector=":is(Button).strip-step /template/ ContentPresenter#PART_ContentPresenter">
-            <Setter Property="BoxShadow" Value="0 0 0 0 Transparent" />
-        </Style>
-
         <!-- ================================================================================
              Library (2026-10-17): Inkarnate's dashboard layout - an 84 px section rail, the
              library toolbar, Maps/Folders/Exports/Favourites tabs and 300x220 map cards whose

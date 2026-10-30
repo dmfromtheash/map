@@ -1087,6 +1087,9 @@ public sealed partial class EditorView
         transform.Children.Add(AppearanceSlider(prefix + "OpacitySlider", "Непрозрачность", 0, 100, "%",
             () => _editor.StampOpacityPercent,
             (value, commit) => _editor.SetStampOpacityPercent(value, commit), 5));
+        // Blend sits with size, turn, level and opacity: the four plus blend were the assets strip over the map,
+        // which is gone (DEC-070), so none of them may end up deeper than it was.
+        transform.Children.Add(BlendChoice(prefix + "BlendChoice", () => Style()?.Blend, _editor.SetStampBlend));
 
         var shadowColor = AppearanceColorBox(
             prefix + "ShadowColorBox", "Цвет тени",
@@ -1129,7 +1132,6 @@ public sealed partial class EditorView
         var looks = new StackPanel { Spacing = 4 };
         looks.Children.Add(shadowState);
         looks.Children.Add(shadowDetails);
-        looks.Children.Add(BlendChoice(prefix + "BlendChoice", () => Style()?.Blend, _editor.SetStampBlend));
         looks.Children.Add(AppearanceSlider(prefix + "BlurSlider", "Размытие", 0, 32, "px",
             () => Style()?.Blur, (v, c) => _editor.SetStampBlur(v, c)));
         looks.Children.Add(Disclosure(prefix + "Geometry", "Маска", BuildStampClipMaskGroup(prefix), false));
@@ -1210,4 +1212,41 @@ public sealed partial class EditorView
         Text = text,
         TextWrapping = TextWrapping.Wrap,
     }.Classed("faint", "role-caption");
+
+    /// <summary>
+    /// The big call to action of a creating tool: a framed, lit, full-width command with a
+    /// solid glyph, a serif title and a one-line hint, so "where do I start" is never a question.
+    /// </summary>
+    private static Button HeroButton(string name, string title, string hint, MapIcons.SolidGlyph glyph, Action action)
+    {
+        var caption = new StackPanel
+        {
+            Spacing = 1,
+            VerticalAlignment = VerticalAlignment.Center,
+            Children =
+            {
+                new TextBlock { Text = title, FontSize = 20, FontWeight = FontWeight.SemiBold }.Classed("hero-title"),
+                new TextBlock { Text = hint, FontSize = 11.5, TextWrapping = TextWrapping.Wrap }.Classed("hero-hint"),
+            },
+        };
+        var button = new Button
+        {
+            Name = name,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            // A grid, not a horizontal stack: the hint gets the remaining width and wraps.
+            Content = new Grid
+            {
+                ColumnDefinitions = new ColumnDefinitions("Auto,*"),
+                ColumnSpacing = 14,
+                Children = { MapIcons.Solid24(glyph, 30), caption },
+            },
+        };
+        Grid.SetColumn(caption, 1);
+        button.Classes.Add("create-hero");
+        AutomationProperties.SetName(button, title);
+        ToolTip.SetTip(button, title + " — " + hint);
+        button.Click += (_, _) => action();
+        return Tactile.Attach(button, ornaments: false);
+    }
 }

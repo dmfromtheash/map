@@ -154,7 +154,6 @@ public sealed partial class EditorView
         var deferPanels = scene && structure == _lastUiStructure;
         _lastUiStructure = structure;
         Timed("status", SyncStatus);
-        Timed("stamp-strip", SyncStampStrip);
         if (deferPanels)
         {
             DeferPanels(DeferredPanel.Path | DeferredPanel.Area | DeferredPanel.River | DeferredPanel.Road

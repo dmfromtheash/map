@@ -1050,7 +1050,6 @@ public sealed partial class EditorView : UserControl
             {
                 primaryActions.Docked(Dock.Right),
                 back.Docked(Dock.Left),
-                BuildStampStrip().Docked(Dock.Left),
                 title,
             },
         };
