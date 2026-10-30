@@ -20,6 +20,17 @@ internal static class LargeMapFixtures
     private const double Spacing = 240;
     private const double ObjectSize = 32;
 
+    /// <summary>The owner's six mountains, embedded in every fixture map (DEC-076, DEC-079): the load is
+    /// his pictures, not the rectangles and ellipses the fixtures drew before 2026-10-30.</summary>
+    private static readonly Lazy<MapAssetReference[]> Mountains =
+        new(() => Enumerable.Range(1, 6).Select(OwnerMountainFixtures.Embedded).ToArray());
+
+    private static SceneObject Mountain(ObjectId id, string name, int index, double x, double y,
+        double width, double height, double rotation) =>
+        new(id, SceneObjectKind.Stamp, name, x, y, width, height, rotation, "#FFFFFFFF", "#00000000", 0,
+            visible: true, locked: false)
+        { Stamp = new StampStyle(Mountains.Value[index % 6].Sha256) { ReferenceWidth = width, ReferenceHeight = height } };
+
     public static LargeMapFixture Simple(int count, int seed)
     {
         var objects = new SceneObject[count];
@@ -39,20 +50,10 @@ internal static class LargeMapFixtures
                 groupName = $"group-{groupIndex:D5}";
             }
 
-            objects[index] = new SceneObject(
+            objects[index] = Mountain(
                 new ObjectId(DeterministicGuid(seed, "object", index)),
-                SceneObjectKind.Rectangle,
-                $"object-{index:D6}",
-                x,
-                y,
-                ObjectSize,
-                ObjectSize,
-                index % 17 == 0 ? 12 : 0,
-                "#FF557799",
-                "#FF112233",
-                1,
-                visible: true,
-                locked: false)
+                $"object-{index:D6}", index, x, y, ObjectSize, ObjectSize,
+                index % 17 == 0 ? 12 : 0) with
             {
                 GroupId = groupId,
                 GroupName = groupName,
@@ -75,14 +76,15 @@ internal static class LargeMapFixtures
             [
                 CurrentLook.Page("background", CurrentLook.PageColor, new LayerId(DeterministicGuid(seed, "layer", 0))),
                 layer,
-            ]);
+            ],
+            Mountains.Value);
 
         var manifestWithoutHash = new
         {
             name = $"simple-{count / 1_000}k",
             seed,
             objectCount = count,
-            rectangleCount = count,
+            ownerMountainCount = count,
             groupCount,
             groupedObjectCount,
             canvasWidth = CanvasSize,
@@ -97,7 +99,7 @@ internal static class LargeMapFixtures
             manifestWithoutHash.name,
             seed,
             count,
-            count,
+            0,
             groupCount,
             groupedObjectCount,
             CanvasSize,
@@ -118,9 +120,7 @@ internal static class LargeMapFixtures
         var objects = new SceneObject[count];
         var kindCounts = new Dictionary<string, int>
         {
-            ["rectangle"] = 20_000,
-            ["ellipse"] = 10_000,
-            ["stamp"] = 8_000,
+            ["stamp"] = 38_000,
             ["text"] = 6_000,
             ["line"] = 4_000,
             ["shape"] = 1_000,
@@ -128,8 +128,6 @@ internal static class LargeMapFixtures
         };
         const int groupCount = 2_500;
         const int groupedObjectCount = 10_000;
-        const string MissingAssetHash =
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
         for (var index = 0; index < count; index++)
         {
@@ -137,8 +135,6 @@ internal static class LargeMapFixtures
             var y = (index / Columns) * Spacing + 24;
             var kind = index switch
             {
-                < 20_000 => SceneObjectKind.Rectangle,
-                < 30_000 => SceneObjectKind.Ellipse,
                 < 38_000 => SceneObjectKind.Stamp,
                 < 44_000 => SceneObjectKind.Text,
                 < 48_000 => SceneObjectKind.Line,
@@ -170,8 +166,10 @@ internal static class LargeMapFixtures
             {
                 SceneObjectKind.Stamp => sceneObject with
                 {
-                    Stamp = new StampStyle(MissingAssetHash)
+                    Stamp = new StampStyle(Mountains.Value[index % 6].Sha256)
                     {
+                        ReferenceWidth = width,
+                        ReferenceHeight = height,
                         Blur = index % 5 == 0 ? 2 : 0,
                         ShadowOpacity = index % 3 == 0 ? 0.35 : 0,
                     },
@@ -229,12 +227,8 @@ internal static class LargeMapFixtures
                         $"composition-{index:D6}",
                         40, 40,
                         [
-                            new SceneObject(
-                                new ObjectId(DeterministicGuid(seed, "mixed-child", index)),
-                                SceneObjectKind.Rectangle,
-                                "child",
-                                4, 4, 32, 32, 0,
-                                "#FF79638E", "#FF2A2130", 1, true, false),
+                            Mountain(new ObjectId(DeterministicGuid(seed, "mixed-child", index)),
+                                "child", index, 4, 4, 32, 32, 0),
                         ]),
                 },
                 _ => sceneObject,
@@ -258,7 +252,8 @@ internal static class LargeMapFixtures
                     new LayerId(DeterministicGuid(seed, "mixed-layer", 2)),
                     "mixed-filter", true, false, 1,
                     new FilterSettings { Saturation = 0.08, Temperature = 0.05 }),
-            ]);
+            ],
+            Mountains.Value);
         var expensiveEffects = objects.Count(item =>
             item.Stamp is { Blur: > 0 } or { ShadowOpacity: > 0 }
             || item.Text is { OutlineWidth: > 0 } or { ShadowOpacity: > 0 }
@@ -283,7 +278,7 @@ internal static class LargeMapFixtures
             manifestWithoutHash.name,
             seed,
             count,
-            kindCounts["rectangle"],
+            0,
             groupCount,
             groupedObjectCount,
             CanvasSize,
@@ -368,7 +363,8 @@ internal static class LargeMapFixtures
                 brush,
                 land,
                 sourceFilter,
-            ]);
+            ],
+            source.Document.Assets);
         var manifestWithoutHash = new
         {
             name = $"mixed-50k-{canvasSize}",

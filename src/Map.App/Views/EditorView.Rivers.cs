@@ -210,18 +210,6 @@ public sealed partial class EditorView
                     {
                         LookButton("RiverLookNatural", "Живая", "Как настоящая река: рваный край сухой кистью, косы на изгибах, тростник", () => _editor.ApplyRiverLook(RiverLookPreset.Natural)),
                         LookButton("RiverLookPainted", "Живописная", "Как горы владельца: контур пером, мазки, тень у южного берега", () => _editor.ApplyRiverLook(RiverLookPreset.Painted)),
-                        LookButton("RiverLookMountainStream", "Горный ручей", "Узкое русло, неровные берега, тонкая отмель", () => _editor.ApplyRiverLook(RiverLookPreset.MountainStream)),
-                        LookButton("RiverLookLowlandRiver", "Равнинная река", "Обычная ширина, спокойные берега", () => _editor.ApplyRiverLook(RiverLookPreset.LowlandRiver)),
-                        LookButton("RiverLookWideRiver", "Широкая река", "Ширина ×1,7, широкая отмель и откос", () => _editor.ApplyRiverLook(RiverLookPreset.WideRiver)),
-                        LookButton("RiverLookInkAtlas", "Атлас пером", "Рисунок пером, ширина не меняется", () => _editor.ApplyRiverLook(RiverLookPreset.InkAtlas)),
-                    },
-                }),
-                Ui.Subgroup("Только рисунок", new StackPanel
-                {
-                    Spacing = 4, Children =
-                    {
-                        Ui.TextButton("RiverIllustratedStyleButton", "Рисованная карта", () => _editor.ApplyIllustratedRiverStyle(false), "compact"),
-                        Ui.TextButton("RiverPenStyleButton", "Атлас пером", () => _editor.ApplyIllustratedRiverStyle(true), "compact"),
                     },
                 }),
                 Ui.Subgroup("Вода", new StackPanel

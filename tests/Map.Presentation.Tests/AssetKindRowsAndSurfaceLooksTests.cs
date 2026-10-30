@@ -82,19 +82,19 @@ public sealed class AssetKindRowsAndSurfaceLooksTests
     }
 
     [Fact]
-    public void A_river_look_changes_style_and_width_in_one_undo_entry()
+    public void A_river_look_changes_the_style_in_one_undo_entry()
     {
         var (editor, _, _, river, _) = NewEditor();
         editor.SelectRiver(river.Id);
         var depth = editor.Session.UndoDepth;
 
-        editor.ApplyRiverLook(RiverLookPreset.WideRiver);
+        editor.ApplyRiverLook(RiverLookPreset.Painted);
 
         Assert.Equal(depth + 1, editor.Session.UndoDepth);
-        Assert.Equal(1.7, editor.SelectedRiver!.WidthScale, 3);
-        Assert.Equal(9, editor.SelectedRiver.Style.ShallowWidth);
+        Assert.Equal(RiverStyle.Painted().WaterColor, editor.SelectedRiver!.Style.WaterColor);
+        Assert.Equal(river.WidthScale, editor.SelectedRiver.WidthScale, 3);
         editor.Undo();
-        Assert.Equal(river.WidthScale, editor.SelectedRiver!.WidthScale, 3);
+        Assert.Equal(river.Style, editor.SelectedRiver!.Style);
     }
 
     [Fact]

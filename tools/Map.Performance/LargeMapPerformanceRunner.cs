@@ -5,6 +5,7 @@ using Map.Core.Documents;
 using Map.Core.Editing;
 using Map.Export;
 using Map.Persistence;
+using Map.Presentation.Services;
 using Map.Presentation.ViewModels;
 using Map.Rendering;
 using SkiaSharp;
@@ -14,6 +15,9 @@ namespace Map.Performance;
 internal sealed class LargeMapPerformanceRunner
 {
     private static readonly WorldBounds SmallViewport = new(0, 0, 1_920, 1_080);
+    // Every fixture embeds the same six owner mountains, so one decoded source serves them all.
+    private static readonly Lazy<ExportStampImageSource> OwnerImages =
+        new(() => new ExportStampImageSource(LargeMapFixtures.Simple(1, 1).Document, null, null));
     private readonly PerformanceOptions _options;
     private readonly LargeMapFixture _fixture;
 
@@ -127,6 +131,7 @@ internal sealed class LargeMapPerformanceRunner
                 VisibleWorld = SmallViewport,
                 ViewScale = 1,
                 Stats = stats,
+                Stamps = OwnerImages.Value,
             });
             surface.Canvas.Flush();
         }
@@ -475,6 +480,7 @@ internal sealed class LargeMapPerformanceRunner
                     0, 0, fixture.Manifest.CanvasWidth, fixture.Manifest.CanvasHeight),
                 ViewScale = scale,
                 Stats = stats,
+                Stamps = OwnerImages.Value,
                 LodTier = useLod ? RenderLodTier.Overview : RenderLodTier.Exact,
                 ObjectCache = objectCache,
                 TileCache = tileCache,
@@ -539,6 +545,7 @@ internal sealed class LargeMapPerformanceRunner
                 VisibleWorld = viewport,
                 ViewScale = 1,
                 Stats = stats,
+                Stamps = OwnerImages.Value,
                 TileCache = tileCache,
             });
             surface.Canvas.Restore();
@@ -588,6 +595,7 @@ internal sealed class LargeMapPerformanceRunner
         recording.Scale((float)scale);
         SceneRenderer.Render(recording, fixture.Document, new RenderOptions
         {
+            Stamps = OwnerImages.Value,
             VisibleWorld = new WorldBounds(
                 0, 0, fixture.Manifest.CanvasWidth, fixture.Manifest.CanvasHeight),
             ViewScale = scale,
@@ -639,6 +647,7 @@ internal sealed class LargeMapPerformanceRunner
                 LodTier = RenderLodTier.Overview,
                 ObjectCache = cache,
                 Stats = stats,
+                Stamps = OwnerImages.Value,
             });
             surface.Canvas.Restore();
             surface.Canvas.Flush();
@@ -1058,7 +1067,7 @@ internal sealed class LargeMapPerformanceRunner
                 && fixture.ObjectLayer.Mask?.Tiles.Contains(new TileKey(0, 0)) == true
                 && fixture.ObjectLayer.Mask?.Tiles.Contains(farKey) == true;
             var preview = exporter.RenderPreviewAsync(
-                    fixture.Document, farExportPlan, stamps: null)
+                    fixture.Document, farExportPlan, stamps: OwnerImages.Value)
                 .GetAwaiter().GetResult();
             using var decoded = SKBitmap.Decode(preview.PngBytes);
             farRegionExportWasExact = decoded is { Width: 128, Height: 128 };

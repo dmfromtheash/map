@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
@@ -115,7 +116,6 @@ public sealed partial class RegionalApplication : Application
         if(Options.Profile=="native-regional-surfaces") { await VerifySurfaceSizes(); return; }
         if(Options.Profile=="native-regional-finish") { await FinishRegion(); return; }
         if(Options.Profile=="native-area-explore") { await ExploreAreas(); return; }
-        if(Options.Profile=="native-asset-opacity") { await VerifyAssetOpacity(); return; }
         if(Options.Profile=="native-editor-defaults") { await VerifyEditorDefaults(); return; }
         if(Options.Profile=="native-map-categories") { await VerifyMapCategories(); return; }
         if(Options.Profile=="native-hex-category") { await VerifyHexCategory(); return; }
@@ -139,83 +139,89 @@ public sealed partial class RegionalApplication : Application
         _view = new EditorView(_editor,()=>Task.CompletedTask,()=>{},()=>{});_window.Content=_view;await Settle();
         _view.OpenAssetCatalog();await Settle();Capture(_view.AssetCatalogWindowForSmoke!,"01c-empty-catalog");
         Check("opening an empty library does not import content",_catalog.Records.Count==0);
-        Click(_view.AssetCatalogWindowForSmoke!,"EmptyLibraryRegionalPackButton");
-        await WaitUntil(()=>_catalog.Records.Count==RegionalArtPack.Load().Assets.Length,"explicit UI pack import");
-        await WaitUntil(()=>_view.AssetCatalogWindowForSmoke!.GetVisualDescendants().OfType<Image>().Count(i=>i.Source is not null)>=7,
-            "catalogue thumbnails after import");
-        await Settle();Capture(_view.AssetCatalogWindowForSmoke!,"01d-imported-catalog");
         _view.CloseAuxiliaryWindowsForSmoke();_view.Canvas.DisposeRenderCaches();
-        var pack = RegionalArtPack.Import(_catalog);
-        var count = _catalog.Records.Count;
-        RegionalArtPack.Import(_catalog);
-        Check("explicit pack import is idempotent", _catalog.Records.Count == count && count == pack.Manifest.Assets.Length);
-        MapDocument document;
-        if(Options.Profile == "native-regional")
-        {
-            var wizard=new WizardWindow(_catalog) { ShowActivated=false,ShowInTaskbar=false,
-                WindowStartupLocation=WindowStartupLocation.Manual,Position=new PixelPoint(-32000,-32000) };
-            wizard.Show();await Settle();Capture(wizard,"02-wizard-category");
-            Click(wizard,"ChooseCategoryButton");await Settle();
-            wizard.GetVisualDescendants().OfType<ComboBox>().Single(c=>c.Name=="WizardStartingPoint").SelectedIndex=1;
-            await Settle();Capture(wizard,"02a-blank-region-choice");
-            wizard.GetVisualDescendants().OfType<ComboBox>().Single(c=>c.Name=="WizardStartingPoint").SelectedIndex=2;
-            await Settle();Capture(wizard,"02-wizard");
-            Click(wizard,"CreateMapButton");
-            var deadline=DateTime.UtcNow.AddMinutes(2);
-            while(wizard.CreatedDocument is null && DateTime.UtcNow<deadline) await Task.Delay(100);
-            document=wizard.CreatedDocument??throw new InvalidOperationException("Wizard did not create the region.");
-            wizard.Close();
-            Check("native wizard creates editable region",document.Layers.OfType<ObjectLayer>().Sum(l=>l.PlacementAreas.Length)>=5);
-        }
-        else document = RegionalMapFactory.ArtStudy(pack, _catalog);
+        // The regional kit is gone (DEC-079): the scenes are built from the owner's mountains, one set per role.
+        BuildOwnerRoleLibrary();
+        var (document, objects) = OwnerValley();
         _editor = new EditorViewModel(document, null, false, _store, _recent, _picker,
             new LocalPrompts(), new LocalLog(), assetCatalog: _catalog,
-            exportDestinationPicker:new ExportPicker(Path.Combine(_workspace,"Долина Листвы.png")),
+            exportDestinationPicker:new ExportPicker(Path.Combine(_workspace,"Долина.png")),
             imageExporter:new ImageExportEngine(),
             localPreferences: new EditorLocalPreferences(PrimaryAutosaveEnabled: false));
         _view = new EditorView(_editor, () => Task.CompletedTask, () => { }, () => { });
-        _window.Content = _view;
+        _window.Content = _view; _editor.SelectLayer(objects);
         await Settle(); _view.Canvas.FitToCanvas();
-        await Settle(); Capture(_view, "02-art-study"); Capture(_view.Canvas, "03-art-canvas");
+        await Settle(); Capture(_view, "02-valley"); Capture(_view.Canvas, "03-valley-canvas");
         _view.OpenAssetCatalog(); await Task.Delay(500); Capture(_view.AssetCatalogWindowForSmoke!, "04-catalog");
         _view.AssetCatalogWindowForSmoke!.Hide();
-        if(Options.Profile=="native-regional")
+        await VerifyRegionalRoutes();
+        document=_editor.Session.Document;
+        _picker.Path=Path.Combine(_workspace,"Долина.mapproj");
+        Click(_view,"SaveButton");
+        await WaitUntil(()=>File.Exists(_picker.Path) && !_editor.Session.IsDirty,"native save");
+        Click(_view,"ExportButton");await _editor.WaitForExportPreviewAsync();await Settle();Capture(_view.ExportWindowForSmoke!,"12-export");
+        Check("export plan ready",_editor.CanStartExport);
+        Check("production image export",await _editor.StartExportAsync());
+        var reopened=MapProjectStore.Open(_picker.Path).Document;
+        Check("reopened objects and groups",reopened.Layers.OfType<ObjectLayer>().Sum(l=>l.Objects.Count)==document.Layers.OfType<ObjectLayer>().Sum(l=>l.Objects.Count)
+            && reopened.Layers.OfType<ObjectLayer>().Sum(l=>l.PlacementAreas.Length)==document.Layers.OfType<ObjectLayer>().Sum(l=>l.PlacementAreas.Length));
+        Check("all images embedded",reopened.Assets.Count>0 && reopened.Assets.All(a=>a.Storage==ProjectAssetStorage.Embedded && a.EmbeddedContent is {Length:>0}));
+        using (var beforeImages = new ExportStampImageSource(document,null,_catalog))
+        using (var afterImages = new ExportStampImageSource(reopened,_picker.Path,null))
+            Check("reopened render equals saved render",ThumbnailRenderer.RenderPng(document,1120,840,beforeImages)
+                .SequenceEqual(ThumbnailRenderer.RenderPng(reopened,1120,840,afterImages)));
+        _view.CloseAuxiliaryWindowsForSmoke();_view.Canvas.DisposeRenderCaches();
+        _editor = new EditorViewModel(reopened,_picker.Path,false,_store,_recent,_picker,new LocalPrompts(),new LocalLog(),
+            assetCatalog:_catalog,localPreferences:new EditorLocalPreferences(PrimaryAutosaveEnabled:false));
+        _view = new EditorView(_editor,()=>Task.CompletedTask,()=>{},()=>{});_window.Content=_view;
+        await Settle();_view.Canvas.FitToCanvas();await Settle();Capture(_view,"13-reopened");
+    }
+
+    // Two of the owner's mountains per role, so the variant switch has somewhere to go.
+    private void BuildOwnerRoleLibrary()
+    {
+        foreach (var (role, first) in new[] { (AssetRole.Tree, 1), (AssetRole.Peak, 3), (AssetRole.House, 5) })
         {
-            await VerifyRegionalRoutes();
-            document=_editor.Session.Document;
-            _picker.Path=Path.Combine(_workspace,"Долина Листвы.mapproj");
-            Click(_view,"SaveButton");
-            await WaitUntil(()=>File.Exists(_picker.Path) && !_editor.Session.IsDirty,"native save");
-            Click(_view,"ExportButton");await _editor.WaitForExportPreviewAsync();await Settle();Capture(_view.ExportWindowForSmoke!,"12-export");
-            Check("export plan ready",_editor.CanStartExport);
-            Check("production image export",await _editor.StartExportAsync());
-            var reopened=MapProjectStore.Open(_picker.Path).Document;
-            Check("reopened objects and groups",reopened.Layers.OfType<ObjectLayer>().Sum(l=>l.Objects.Count)==document.Layers.OfType<ObjectLayer>().Sum(l=>l.Objects.Count)
-                && reopened.Layers.OfType<ObjectLayer>().Sum(l=>l.PlacementAreas.Length)==document.Layers.OfType<ObjectLayer>().Sum(l=>l.PlacementAreas.Length));
-            Check("all images embedded",reopened.Assets.All(a=>a.Storage==ProjectAssetStorage.Embedded && a.EmbeddedContent is {Length:>0}));
-            using (var beforeImages = new ExportStampImageSource(document,null,_catalog))
-            using (var afterImages = new ExportStampImageSource(reopened,_picker.Path,null))
-                Check("reopened render equals saved render",ThumbnailRenderer.RenderPng(document,1120,840,beforeImages)
-                    .SequenceEqual(ThumbnailRenderer.RenderPng(reopened,1120,840,afterImages)));
-            _view.CloseAuxiliaryWindowsForSmoke();_view.Canvas.DisposeRenderCaches();
-            _editor = new EditorViewModel(reopened,_picker.Path,false,_store,_recent,_picker,new LocalPrompts(),new LocalLog(),
-                assetCatalog:_catalog,localPreferences:new EditorLocalPreferences(PrimaryAutosaveEnabled:false));
-            _view = new EditorView(_editor,()=>Task.CompletedTask,()=>{},()=>{});_window.Content=_view;
-            await Settle();_view.Canvas.FitToCanvas();await Settle();Capture(_view,"13-reopened");
-            return;
+            var set = _catalog.ImportSet([OwnerMountainFixtures.Path(first), OwnerMountainFixtures.Path(first + 1)],
+                role + " — свой набор", new AssetImportOptions(), DateTimeOffset.UnixEpoch);
+            foreach (var variant in set.VariantIds) _catalog.SetVariantPresentation(variant, role.ToString(), .5, .85, .25);
+            _catalog.SetPlacementDefaults(set.Id, new() { Role = role, AllowedRotations = [0], CanFlip = false, DepthSort = true });
         }
-        using var images = new ExportStampImageSource(document, null, _catalog);
-        var preview = ThumbnailRenderer.RenderPng(document, 1120, 640, images);
-        File.WriteAllBytes(Path.Combine(_workspace, "art-study.png"), preview);
-        _store.Save(document, _picker.Path, new SaveMetadata("Map regional art study", DateTimeOffset.UtcNow),
-            ThumbnailRenderer.RenderPng(document, stamps: images));
-        Check("art study reopens with all embedded images", MapProjectStore.Open(_picker.Path).Document.Assets.Count == count);
+        Check("owner mountains give three role sets", _catalog.Sets.Count == 3 && _catalog.Sets.All(s => s.VariantIds.Count == 2));
+    }
+
+    // A new map's look (CurrentLook): land, a river, a road with a branch on a shared junction and three captions.
+    private static (MapDocument Document, LayerId Objects) OwnerValley()
+    {
+        var tiles = TileMap.Empty(1);
+        for (var y = 0; y < 12; y++)
+        for (var x = 0; x < 16; x++)
+            tiles = tiles.With(new(x, y), Enumerable.Repeat((byte)255, TileMap.TileSize * TileMap.TileSize).ToArray());
+        var land = new LandLayer(LayerId.New(), "Долина", true, false, 1, tiles, CurrentLook.Land());
+        var river = new River { Name = "Листва", Style = CurrentLook.River(),
+            Channels = [RiverEditor.NewChannel([new(2240, 600), new(2150, 1230), new(1870, 1650), new(1580, 2490)], 30)] };
+        var nodes = new[] { (1150d,1480d),(1510d,1630d),(1820d,1760d),(2160d,1880d),(2630d,2130d),(3060d,2000d),
+            (2290d,1630d),(2540d,1580d),(3100d,1620d) }.Select(p => new RoadNode(Guid.NewGuid(), p.Item1, p.Item2)).ToImmutableArray();
+        RoadBranch Branch(string name, params int[] indices) => new() { Name = name,
+            Vertices = indices.Select(i => new RoadVertex(nodes[i].Id, 14)).ToImmutableArray() };
+        var road = new Road { Name = "Торговый тракт", Seed = 20261030, Nodes = nodes,
+            Branches = [Branch("К морю", 0, 1, 2, 3, 4, 5), Branch("Озёрная ветвь", 3, 6, 7, 8)], Style = RoadStyle.Painted() };
+        var objects = new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, []) { Rivers = [river], Roads = [road] };
+        var labels = new ObjectLayer(LayerId.New(), "Названия", true, false, 1,
+            [RegionalMapFactory.Caption("ДОЛИНА", 140, 135, 1200, 90), RegionalMapFactory.Caption("Серебряный лес", 600, 1560, 900, 52),
+             RegionalMapFactory.Caption("Озёрный посад", 2400, 2260, 900, 40)]);
+        return (new MapDocument(DocumentId.New(), "Долина · горы владельца", DateTimeOffset.UtcNow,
+            new CanvasDefinition(4096, 3072, "px", CurrentLook.PageColor), [CurrentLook.Page("Фон"), land, objects, labels]), objects.Id);
     }
 
     private async Task VerifyRegionalRoutes()
     {
         var view=_view!;
-        _editor.ActiveTool=EditorTool.Stamp;await Settle();Capture(view,"05-creation-panel");
+        _editor.ActiveTool=EditorTool.Stamp;await Settle();
+        // Folded sections keep their buttons out of the visual tree; open them as the user would.
+        foreach(var section in new[]{"RegionalModes","StampRecentSection"}) Find<Expander>(view,section).IsExpanded=true;
+        await Settle();
+        Capture(view,"05-creation-panel");
         var original=_editor.Session.Document;
         Click(view,"RegionalForestButton");await Settle();
         var settings=_editor.StampToolSettings;var variant=_editor.CurrentVariant!.Id;
@@ -229,41 +235,54 @@ public sealed partial class RegionalApplication : Application
         Check("native catalogue search finds current family",_editor.LibrarySets.Any(s=>s.SetId==_editor.SelectedSetId));
         _view.AssetCatalogWindowForSmoke!.GetVisualDescendants().OfType<TextBox>().Single(t=>t.Name=="AssetSearchBox").Text="";
         _view.AssetCatalogWindowForSmoke!.Hide();
-        view.GetVisualDescendants().OfType<Expander>().Single(e=>e.Name=="AppearanceTransferPanel").IsExpanded=true;await Settle();
-        view.GetVisualDescendants().OfType<Expander>().Single(e=>e.Name=="RegionalPresetsPanel").IsExpanded=true;await Settle();
-        view.GetVisualDescendants().OfType<TextBox>().Single(t=>t.Name=="RegionalPresetName").Text="Лес долины";
-        Click(view,"SavePlacementPresetButton");var preset=_editor.RegionalPresets.Single(p=>p.Placement is not null);
-        Click(view,"RegionalRidgeButton");Click(view,"LoadRegionalPresetButton");
-        Check("native placement preset reloads its settings",_editor.StampPlacementMode==StampPlacementMode.FillArea
+        // Since the right column (DEC-078) presets live under «Свойства» of a selected object.
+        var caption=_editor.Session.Document.Layers.OfType<ObjectLayer>().SelectMany(l=>l.Objects).First(o=>o.Text is not null);
+        // The placement stays armed: select an object and press «Объект» in the column.
+        async Task ShowPresets()
+        { _editor.SelectObject(caption.Id);await Settle();Click(view,"ContextScopeObject");await Settle(); }
+        await ShowPresets();
+        Find<Expander>(view,"AppearanceTransferPanel").IsExpanded=true;
+        await WaitUntil(()=>view.GetVisualDescendants().Any(c=>c.Name=="RegionalPresetsPanel"),"presets inside the opened transfer panel");
+        Find<Expander>(view,"RegionalPresetsPanel").IsExpanded=true;
+        await WaitUntil(()=>view.GetVisualDescendants().Any(c=>c.Name=="RegionalPresetName"),"preset name field");
+        Find<TextBox>(view,"RegionalPresetName").Text="Лес долины";        Click(view,"SavePlacementPresetButton");var preset=_editor.RegionalPresets.Single(p=>p.Placement is not null);
+        _editor.DeselectObject();await Settle();Click(view,"RegionalRidgeButton");
+        await ShowPresets();Find<Expander>(view,"RegionalPresetsPanel").IsExpanded=true;await Settle();
+        Click(view,"LoadRegionalPresetButton");        Check("native placement preset reloads its settings",_editor.StampPlacementMode==StampPlacementMode.FillArea
             && _editor.StampToolSettings.ScalePercent==settings.ScalePercent && _editor.SelectedSetId==settings.AssetSetId);
         var nameBox=view.GetVisualDescendants().OfType<TextBox>().Single(t=>t.Name=="RegionalPresetName");nameBox.Text="Лес долины · мой";
         Click(view,"RenameRegionalPresetButton");Check("native preset rename",_editor.RegionalPresets.Single(p=>p.Id==preset.Id).Name==nameBox.Text);
         view.GetVisualDescendants().OfType<Button>().Single(b=>b.Name=="LoadRegionalPresetButton").BringIntoView();
         await Settle();Capture(view,"05b-presets");
-        view.GetVisualDescendants().OfType<Expander>().Single(e=>e.Name=="AppearanceTransferPanel").IsExpanded=false;
-        _editor.CancelPlacement();
-        foreach(var mode in new[]{RegionalPlacementMode.Forest,RegionalPlacementMode.Ridge,RegionalPlacementMode.Settlement})
+        Find<Expander>(view,"AppearanceTransferPanel").IsExpanded=false;
+        _editor.CancelPlacement();_editor.DeselectObject();_editor.ActiveTool=EditorTool.Stamp;await Settle();
+        // Each scene stays on the map (the late edits below work on them), so each has its own place.
+        foreach(var (mode,points) in new[]{
+            (RegionalPlacementMode.Forest,new[]{(600d,600d),(1800d,650d),(1900d,1450d),(700d,1400d)}),
+            (RegionalPlacementMode.Ridge,new[]{(2300d,500d),(2700d,420d),(3100d,520d),(3500d,450d)}),
+            (RegionalPlacementMode.Settlement,new[]{(2400d,2300d),(2900d,2300d),(2900d,2700d),(2400d,2700d)})})
         {
             Click(view,"Regional"+mode+"Button");await Settle();
             var depth=_editor.Session.UndoDepth;
-            foreach(var (x,y) in new[]{(2800d,150d),(3180d,180d),(3160d,400d),(2800d,400d)})
+            foreach(var (x,y) in points)
             { var p=_editor.Session.Viewport.WorldToScreen(x,y);view.Canvas.ClickForSmoke(p.X,p.Y); }
             await Settle(); // allow the real binding to enable its commit button after the last node
             Click(view,mode==RegionalPlacementMode.Ridge?"FinishEditablePathButton":"FinishEditableAreaButton");
-            Check(mode+" finishes",mode==RegionalPlacementMode.Ridge?_editor.SelectedEditablePath is not null:_editor.SelectedEditableArea is not null);
+            await _editor.PendingEditableAreaWork;await Settle();            Check(mode+" finishes",mode==RegionalPlacementMode.Ridge?_editor.SelectedEditablePath is not null:_editor.SelectedEditableArea is not null);
             Check(mode+" contains editable objects", mode==RegionalPlacementMode.Ridge
                 ? _editor.SelectedEditablePath!.Members.Length > 0 : _editor.SelectedEditableArea!.MemberCount > 0);
             await Settle();Capture(view,"06-created-"+mode);
             Check(mode+" one undo",_editor.Session.UndoDepth==depth+1);
             Check(mode+" remembered in recent",view.StampCompactRecentCountForSmoke>0);
-            _editor.Undo();_editor.CancelPlacement();
+            _editor.CancelPlacement();await _editor.PendingEditableAreaWork;
         }
         var area=_editor.EditableAreas.First();_editor.SelectEditableArea(area.Id);await Settle();
         var node=area.Nodes[0];var from=_editor.Session.Viewport.WorldToScreen(node.X,node.Y);
         var to=_editor.Session.Viewport.WorldToScreen(node.X-45,node.Y+24);
         var oldObjects=_editor.Session.Document.Layers.OfType<ObjectLayer>().SelectMany(l=>l.Objects).ToDictionary(o=>o.Id);
-        view.Canvas.PressMoveReleaseForSmoke(from.X,from.Y,to.X,to.Y);await Settle();Capture(view,"07-late-forest-edit");
+        view.Canvas.PressMoveReleaseForSmoke(from.X,from.Y,to.X,to.Y);await _editor.PendingEditableAreaWork;await Settle();Capture(view,"07-late-forest-edit");
         var changed=_editor.Session.Document.Layers.OfType<ObjectLayer>().SelectMany(l=>l.Objects).Count(o=>!oldObjects.TryGetValue(o.Id,out var old)||old!=o);
+        Console.WriteLine($"forest edge: changed {changed} of {oldObjects.Count}");
         Check("local forest edge changes only a fraction",changed>0 && changed<oldObjects.Count/3);
         var edited=_editor.Session.Document;_editor.Undo();_editor.Redo();Check("late edit undo redo exact",ReferenceEquals(edited,_editor.Session.Document));
         var ridge=_editor.EditablePaths.First();_editor.SelectEditablePath(ridge.Id);await Settle();
@@ -282,10 +301,10 @@ public sealed partial class RegionalApplication : Application
             && changedRoad.Branches.SequenceEqual(road.Branches));
         edited=_editor.Session.Document;_editor.Undo();_editor.Redo();Check("road edit undo redo exact",ReferenceEquals(edited,_editor.Session.Document));
         _editor.CancelPlacement();_editor.ActiveTool=EditorTool.Select;
-        view.GetVisualDescendants().OfType<Expander>().Single(e=>e.Name=="AppearanceTransferPanel").IsExpanded=true;
-        await Settle();
         var labels=_editor.Session.Document.Layers.OfType<ObjectLayer>().SelectMany(l=>l.Objects).Where(o=>o.Text is not null).ToArray();
-        _editor.SelectObject(labels[1].Id);Click(view,"CopyAppearanceButton");_editor.SelectObject(labels[2].Id);
+        _editor.SelectObject(labels[1].Id);await Settle();
+        Find<Expander>(view,"AppearanceTransferPanel").IsExpanded=true;await Settle();
+        Click(view,"CopyAppearanceButton");_editor.SelectObject(labels[2].Id);await Settle();
         var before=_editor.Session.Document;Click(view,"PreviewAppearanceButton");await Settle();Capture(view,"08-appearance-preview");
         Check("appearance preview leaves document",ReferenceEquals(before,_editor.Session.Document));
         Click(view,"ApplyAppearanceButton");Check("appearance committed",!ReferenceEquals(before,_editor.Session.Document));
@@ -299,8 +318,12 @@ public sealed partial class RegionalApplication : Application
         Console.WriteLine("Regional stamps: "+_editor.Session.Document.Layers.OfType<ObjectLayer>().Sum(l=>l.Objects.Count(o=>o.Stamp is not null)));
     }
 
+    private static T Find<T>(Control root,string name) where T:Control =>
+        root.GetVisualDescendants().OfType<T>().SingleOrDefault(c=>c.Name==name)
+        ?? throw new InvalidOperationException("Not in the visual tree: "+name);
+
     private static void Click(Control root,string name)
-    { var button=root.GetVisualDescendants().OfType<Button>().Single(b=>b.Name==name);
+    { var button=Find<Button>(root,name);
       // Visible as well as enabled: panels shown once stay in the tree hidden, and a check must
       // not press a button the user cannot see.
       if(!button.IsEffectivelyEnabled || !button.IsEffectivelyVisible)throw new InvalidOperationException("Button not available to the user: "+name);

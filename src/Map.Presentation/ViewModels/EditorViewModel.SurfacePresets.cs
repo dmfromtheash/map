@@ -2,8 +2,9 @@ using Map.Core.Documents;
 
 namespace Map.Presentation.ViewModels;
 
-/// <summary>Named looks of a river: drawing, bank and width together.</summary>
-public enum RiverLookPreset { MountainStream, LowlandRiver, WideRiver, InkAtlas, Painted, Natural }
+/// <summary>Named looks of a river. The older drawn looks (stream, lowland, wide, pen atlas) were
+/// removed by the owner on 2026-10-30 (DEC-079); saved rivers in them still open and draw.</summary>
+public enum RiverLookPreset { Painted, Natural }
 
 /// <summary>Named looks of a road: way of drawing and width together.</summary>
 public enum RoadLookPreset { Trail, CountryRoad, Highway, Painterly, Painted }
@@ -21,14 +22,8 @@ public sealed partial class EditorViewModel
         var keep = river.Style;
         var (style, scale, name) = preset switch
         {
-            RiverLookPreset.MountainStream => (RiverStyle.Illustrated(false) with
-                { EdgeRoughness = 0.55, ShallowWidth = 2, BankReliefWidth = 5, TaperSource = true }, 0.6, "Река: горный ручей"),
-            RiverLookPreset.WideRiver => (RiverStyle.Illustrated(false) with
-                { EdgeRoughness = 0.28, ShallowWidth = 9, BankReliefWidth = 10, TaperSource = true }, 1.7, "Река: широкая"),
-            RiverLookPreset.InkAtlas => (RiverStyle.Illustrated(true), river.WidthScale, "Река: атлас пером"),
             RiverLookPreset.Painted => (RiverStyle.Painted(), river.WidthScale, "Река: живописная"),
-            RiverLookPreset.Natural => (RiverStyle.Natural(), river.WidthScale, "Река: живая"),
-            _ => (RiverStyle.Illustrated(false) with { EdgeRoughness = 0.35, ShallowWidth = 5, TaperSource = true }, 1.0, "Река: равнинная"),
+            _ => (RiverStyle.Natural(), river.WidthScale, "Река: живая"),
         };
         style = style with
         {

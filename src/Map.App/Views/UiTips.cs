@@ -103,8 +103,6 @@ public static class UiTips
         ["WaterLayerPicker"] = "Перенести выбранную воду на другой слой",
         ["WaterSectionCreate"] = "Начать новую реку или озеро",
         ["WaterSectionEdit"] = "Открыть настройки выбранной воды",
-        ["RiverPenStyleButton"] = "Вид реки: тонкие линии пером",
-        ["RiverIllustratedStyleButton"] = "Вид реки: рисованная заливка",
         ["RiverTexturePickerCatalogButton"] = "Выбрать текстуру воды из каталога",
         ["RiverAddLabelButton"] = "Подпись, идущая вдоль русла",
         ["ApplyRiverFlowWidthButton"] = "Ширина растёт от истока к устью по притокам",

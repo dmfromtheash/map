@@ -60,7 +60,9 @@ public sealed partial class RegionalApplication
 
     private async Task VerifyEditorDefaults()
     {
-        RegionalArtPack.Import(_catalog);
+        // The owner's mountains (DEC-076): one set with two variants for the Alt-arrow check.
+        _catalog.ImportSet([OwnerMountainFixtures.Path(1), OwnerMountainFixtures.Path(2)],
+            OwnerMountainFixtures.Names[0], new AssetImportOptions(), DateTimeOffset.UnixEpoch);
         _view = MountDefaultsEditor((MainWindow)_window);
         _editor = _view.Editor;
         await Settle();
@@ -151,8 +153,7 @@ public sealed partial class RegionalApplication
         entry.Focus();
         entry.RaiseEvent(new KeyEventArgs { RoutedEvent = InputElement.KeyDownEvent, Key = NativeKey.Enter });
         Check("Enter in a number field only commits the field", _editor.IsCreatingEditablePath);
-        PressEditorKey(NativeKey.Enter); await Settle();
-        Check("Enter on canvas commits a path", !_editor.IsCreatingEditablePath && _editor.SelectedEditablePath is not null);
+        PressEditorKey(NativeKey.Enter); await Settle();        Check("Enter on canvas commits a path", !_editor.IsCreatingEditablePath && _editor.SelectedEditablePath is not null);
         var completed = _editor.Session.Document;
         PressEditorKey(NativeKey.Z, KeyModifiers.Control);
         Check("Ctrl Z undoes the path", !ReferenceEquals(completed, _editor.Session.Document));

@@ -518,6 +518,7 @@ public sealed partial class EditorView
             key =>
             {
                 _contextPrefersToolPanel = key == "Tool";
+                _contextObjectChosen = key == "Object";
                 SyncContextArea();
             });
 
@@ -564,6 +565,7 @@ public sealed partial class EditorView
         if (_lastContextTool != _editor.ActiveTool)
         {
             _lastContextTool = _editor.ActiveTool;
+            _contextObjectChosen = false;
             // Choosing the river or road tool with a river or road already selected (from the
             // list, or "Изменить в свойствах") opens that selection, not the creation tab.
             _contextPrefersToolPanel = !RiverRoadHasSelection();
@@ -572,6 +574,7 @@ public sealed partial class EditorView
         if (_lastContextSelection != selectionSignature)
         {
             _lastContextSelection = selectionSignature;
+            _contextObjectChosen = false;
             if (selectionSignature is not null)
             {
                 _contextPrefersToolPanel = false;
@@ -590,7 +593,10 @@ public sealed partial class EditorView
             _editor.SelectionCount,
             _editor.SelectionKind is not null,
             _contextPrefersToolPanel);
-        if (_editor.ActiveTool == EditorTool.Stamp && (_editor.SelectedEditablePath is not null || _editor.StampPlacementMode == StampPlacementMode.FillArea))
+        // A path or area being placed keeps the tool tab, unless the user pressed «Объект» for the
+        // selected object: that press must show it (it did nothing before 2026-10-30).
+        if (_editor.ActiveTool == EditorTool.Stamp && (_editor.SelectedEditablePath is not null || _editor.StampPlacementMode == StampPlacementMode.FillArea)
+            && !(_contextObjectChosen && _editor.SelectionKind is not null))
             scope = EditorContextPanelKind.ToolPanel;
         // A river or a road is not a scene object: its panel is the only place its properties live.
         if (_editor.ActiveTool is EditorTool.River or EditorTool.Road)

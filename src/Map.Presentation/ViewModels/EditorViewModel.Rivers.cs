@@ -189,8 +189,7 @@ public sealed partial class EditorViewModel
         {
             _riverStrokeSource = null; _riverStrokeSourceRiver = null;
             _riverDraft = new River { Name = _riverCreatingLake ? EntityNameGenerator.Lake(Session.Document) : EntityNameGenerator.River(Session.Document),
-                Channels = [channel], Style = Services.RegionalMapFactory.IsRegional(Session.Document)
-                    ? Services.RegionalMapFactory.WaterStyle : RiverStyle.Natural() };
+                Channels = [channel], Style = RiverStyle.Natural() };
         }
         _riverNode = 0; RaiseRiverState(); return true;
     }
@@ -713,9 +712,6 @@ public sealed partial class EditorViewModel
     public void SetRiverBankColor(string color) => SetRiverStyle(s => s with { BankColor = AppearanceColor.Normalize(color) ?? s.BankColor }, "Цвет берега");
     public void SetRiverHighlightColor(string color) => SetRiverStyle(s => s with { HighlightColor = AppearanceColor.Normalize(color) ?? s.HighlightColor }, "Цвет бликов");
     public void SetRiverBankWidth(double width) => SetRiverStyle(s => s with { BankWidth = Math.Clamp(width, 0, 64) }, "Толщина берега");
-    public void ApplyIllustratedRiverStyle(bool pen) => SetRiverStyle(s => RiverStyle.Illustrated(pen) with
-    { Opacity = s.Opacity, CutsLand = s.CutsLand, ClipToLand = s.ClipToLand, TaperSource = s.TaperSource, MouthFade = s.MouthFade },
-        pen ? "Река: атлас пером" : "Река: рисованная карта");
     public void SetRiverBankReliefWidth(double width) => SetRiverStyle(s => s with { BankReliefWidth = Math.Clamp(width, 0, 128) }, "Ширина откоса");
     public void SetRiverBankReliefColor(string color) => SetRiverStyle(s => s with { BankReliefColor = AppearanceColor.Normalize(color) ?? s.BankReliefColor }, "Цвет откоса");
     public void SetRiverBankHatchPercent(double percent) => SetRiverStyle(s => s with { BankHatchOpacity = Math.Clamp(percent, 0, 100) / 100 }, "Штриховка берега");

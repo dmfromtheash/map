@@ -186,6 +186,7 @@ public sealed partial class EditorView : UserControl
     private readonly List<ColorField> _colorFields = [];
     private readonly List<Button> _contextSwitchButtons = [];
     private bool _contextPrefersToolPanel;
+    private bool _contextObjectChosen;
     private EditorTool? _lastContextTool;
     private string? _lastContextSelection;
     private readonly Dictionary<EditorTool, Control> _toolPanels = [];

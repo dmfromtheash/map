@@ -19,7 +19,7 @@ else if (options.Profile == "regional-art-probe")
 {
     report = RegionalArtProbe.Run(options); gatePassed = true;
 }
-else if (options.Profile is "native-atlas" or "native-regional-art" or "native-regional" or "native-regional-reopen" or "native-regional-surfaces" or "native-regional-finish" or "native-area-explore" or "native-asset-opacity" or "native-editor-defaults" or "native-map-categories" or "native-hex-category" or "native-hex-workshop" or "native-hex-panel-shots" or "native-player-package" or "native-export-wins" or "native-library-wins" or "native-poster-export")
+else if (options.Profile is "native-atlas" or "native-regional" or "native-regional-reopen" or "native-regional-surfaces" or "native-regional-finish" or "native-area-explore" or "native-editor-defaults" or "native-map-categories" or "native-hex-category" or "native-hex-workshop" or "native-hex-panel-shots" or "native-player-package" or "native-export-wins" or "native-library-wins" or "native-poster-export")
 {
     var smoke = NativeRegionalSmoke.Run(options); report = smoke; gatePassed = smoke.GatePassed;
     if (smoke.Failure is not null) Console.WriteLine(smoke.Failure);
