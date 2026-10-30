@@ -493,20 +493,21 @@ public sealed class ImageExportEngine : IImageExporter
                 if (!parallel)
                     Report(progress, ExportPhase.Rendering, 0.05 + (0.86 * tileIndex / plan.TileCount),
                         $"Рендеринг тайла {tileIndex + 1} из {plan.TileCount}…");
-                using var bytes = RenderEncoded(
+                using var image = RenderImage(
                     snapshot,
                     plan,
                     tile,
                     plan.OutputWidth,
                     plan.OutputHeight,
                     plan.EffectBleedPixels,
-                    plan.Format,
-                    plan.Quality,
                     source,
                     cache,
                     ExportSurfacePurpose.TileWithBleed,
                     tileIndex,
                     cancellationToken);
+                using var bytes = plan.Format == ExportImageFormat.Png
+                    ? EncodePngTile(image, cancellationToken)
+                    : Encode(image, plan.Format, plan.Quality);
 
                 var fileName = $"tile-y{row:D4}-x{column:D4}.{Extension(plan.Format)}";
                 var tilePath = Path.Combine(tempPath, fileName);
@@ -708,6 +709,38 @@ public sealed class ImageExportEngine : IImageExporter
         var data = image.Encode(ToSkiaFormat(format), quality)
             ?? throw new InvalidOperationException($"Кодировщик {FormatName(format)} недоступен.");
         return data;
+    }
+
+    private static SKData EncodePngTile(SKImage image, CancellationToken cancellationToken)
+    {
+        var info = new SKImageInfo(image.Width, image.Height, SKColorType.Rgba8888, SKAlphaType.Unpremul);
+        using var pixels = new SKBitmap(info);
+        if (!image.ReadPixels(info, pixels.GetPixels(), pixels.RowBytes, 0, 0))
+            throw new InvalidDataException("Не удалось прочитать пиксели PNG.");
+        // An opaque tile is written as RGB with per-row filters: the same pixels, smaller. A tile with
+        // any transparency keeps Skia's encoder: its unpremultiplication rounds 130 of the 32 896
+        // colour/alpha pairs one step differently from ReadPixels, and the tiles must not change.
+        using var encoded = new MemoryStream();
+        try { WritePng(); }
+        catch (StreamingPngWriter.NotOpaqueException)
+        {
+            return Encode(image, ExportImageFormat.Png, 100);
+        }
+        return SKData.CreateCopy(encoded.GetBuffer().AsSpan(0, checked((int)encoded.Length)));
+
+        void WritePng()
+        {
+            using var png = new StreamingPngWriter(encoded, info.Width, info.Height, opaque: true,
+                System.IO.Compression.CompressionLevel.Optimal);
+            var rgba = pixels.GetPixelSpan();
+            for (var y = 0; y < info.Height; y++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                png.WriteRow(rgba.Slice(y * pixels.RowBytes, info.Width * 4));
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            png.Complete();
+        }
     }
 
     private static async Task WriteAndValidateAsync(
