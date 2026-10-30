@@ -16,6 +16,9 @@ namespace Map.Performance;
 /// MAP_GIANT_SCALE (1, 2 or 4; default 1) or MAP_GIANT_EDGE (exact output side in pixels, e.g. 98304 to
 /// fit the download into a size budget) and reports time, size and peak memory per mode.
 /// MAP_OWNER_ART_LIBRARY = a COPY of %LOCALAPPDATA%\Map\Assets (the owner's mountains).
+/// MAP_GIANT_VERIFY=1 re-exports each PNG on the one-worker route and compares the unpacked rows
+/// (holds the packed data in memory: for MAP_GIANT_REGION samples and edges up to 16 384).
+/// Every id and seed of the map is fixed, so separate runs give byte-identical rows too.
 /// <code>dotnet tools/Map.Performance/bin/Release/net10.0/win-x64/Map.Performance.dll --profile native-giant-export --output artifacts/giant-export/report.json</code>
 /// </summary>
 internal sealed class NativeGiantExportReport
@@ -118,9 +121,45 @@ internal static class NativeGiantExport
                 ["minutes"] = started.Elapsed.TotalMinutes.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture),
                 ["peak-working-set-mib"] = (peak / (1024 * 1024)).ToString(System.Globalization.CultureInfo.InvariantCulture),
             };
+            // MAP_GIANT_VERIFY=1: draw the same PNG again on the one-worker route and compare the unpacked
+            // rows (repeatability, owner 2026-10-29: "the pixels must not change"). The copy is deleted at once.
+            if (outputMode == ExportOutputMode.SingleImage && Environment.GetEnvironmentVariable("MAP_GIANT_VERIFY") == "1")
+            {
+                var check = Path.Combine(output, "verify-" + name);
+                var serial = new ImageExportEngine(new ExportEngineSettings { RenderParallelism = 1, CompressionParallelism = 1 });
+                using (var again = new ExportStampImageSource(document, null, catalog))
+                    await serial.ExportAsync(document, serial.Plan(document, request), check, again);
+                try { row["same-pixels-as-serial"] = (UnpackedRowsHash(result.DestinationPath) == UnpackedRowsHash(check)) ? "yes" : "NO"; }
+                finally { File.Delete(check); }
+                if (row["same-pixels-as-serial"] != "yes") report.Failure = "The serial and default exports differ in pixels.";
+            }
             report.Exports.Add(row);
             Console.WriteLine("DONE " + string.Join(", ", row.Select(p => p.Key + "=" + p.Value)));
         }
+    }
+
+    /// <summary>SHA-256 of the inflated IDAT stream: filter bytes and rows, independent of how deflate packed them.</summary>
+    private static string UnpackedRowsHash(string png)
+    {
+        using var file = File.OpenRead(png);
+        file.Position = 8;
+        using var idat = new MemoryStream();
+        var header = new byte[8];
+        while (file.Read(header) == 8)
+        {
+            var length = System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(header);
+            if (System.Text.Encoding.ASCII.GetString(header, 4, 4) == "IDAT")
+            {
+                var data = new byte[length];
+                file.ReadExactly(data);
+                idat.Write(data);
+            }
+            else file.Position += length;
+            file.Position += 4;
+        }
+        idat.Position = 0;
+        using var rows = new System.IO.Compression.ZLibStream(idat, System.IO.Compression.CompressionMode.Decompress);
+        return Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(rows));
     }
 
     private static MapDocument Build(AssetRecord[] mountains, int count, NativeGiantExportReport report)
@@ -138,6 +177,14 @@ internal static class NativeGiantExport
             Channels = [RiverEditor.NewChannel([new(c - 30_000, c - 30_000), new(c - 12_000, c - 9_000), new(c - 2_000, c + 6_000), new(c + 14_000, c + 20_000), new(c + 46_000, c + 30_000), new(c + 60_000, c + 31_000)], 420)],
         };
         var road = RoadEditor.NewRoad([new(c - 40_000, c + 12_000), new(c - 15_000, c + 3_000), new(c + 5_000, c + 9_000), new(c + 30_000, c - 4_000)], 160, RoadStyle.Country(), "Королевский тракт");
+        // River and road details are seeded from their ids: fixed ids make every run draw the same
+        // pixels, so two runs (or this map in a test) can be compared byte for byte.
+        var ids = new Random(20261030);
+        Guid Id() { var bytes = new byte[16]; ids.NextBytes(bytes); return new Guid(bytes); }
+        river = river with { Id = Id(), Channels = [.. river.Channels.Select(ch => ch with { Id = Id(), Nodes = [.. ch.Nodes.Select(n => n with { Id = Id() })] })] };
+        road = road with { Id = Id(), Seed = 20261030, Branches = [.. road.Branches.Select(b => b with { Id = Id() })] };
+        land = land with { Id = new LayerId(Id()) };
+        high = high with { Id = new LayerId(Id()) };
 
         var random = new Random(20261021);
         var objects = new List<SceneObject>(count + 3);
@@ -148,19 +195,19 @@ internal static class NativeGiantExport
             var h = w * record.Height / Math.Max(1, record.Width);
             var x = random.NextDouble() * (Size - w); var y = random.NextDouble() * (Size - h);
             if (Value(continent, x + w / 2, y + h * 0.85) < 1) continue;
-            objects.Add(new SceneObject(ObjectId.New(), SceneObjectKind.Stamp, record.DisplayName, x, y, w, h, 0,
+            objects.Add(new SceneObject(new ObjectId(Id()), SceneObjectKind.Stamp, record.DisplayName, x, y, w, h, 0,
                 "#FFFFFFFF", "#00000000", 0, true, false) { Stamp = new StampStyle(record.Sha256) });
         }
 
-        var water = new ObjectLayer(LayerId.New(), "Реки и дороги", true, false, 1, []) { Rivers = [river], Roads = [road] };
-        var art = new ObjectLayer(LayerId.New(), "Горы", true, false, 1, objects);
-        var labels = new ObjectLayer(LayerId.New(), "Подписи", true, false, 1, []);
-        var document = new MapDocument(DocumentId.New(), "Самая большая карта", DateTimeOffset.UnixEpoch,
+        var water = new ObjectLayer(new LayerId(Id()), "Реки и дороги", true, false, 1, []) { Rivers = [river], Roads = [road] };
+        var art = new ObjectLayer(new LayerId(Id()), "Горы", true, false, 1, objects);
+        var labels = new ObjectLayer(new LayerId(Id()), "Подписи", true, false, 1, []);
+        var document = new MapDocument(new DocumentId(Id()), "Самая большая карта", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(Size, Size, "px", "#FF6F9CB4"),
-            [new BaseColorLayer(LayerId.New(), "Море", true, false, 1, "#FF6F9CB4"), land, high, water, art, labels]);
+            [new BaseColorLayer(new LayerId(Id()), "Море", true, false, 1, "#FF6F9CB4"), land, high, water, art, labels]);
 
         SceneObject Label(string content, LabelPreset preset, double size, TextPathBinding? path, double x = 0, double y = 0, double w = 1, double h = 1) =>
-            new(ObjectId.New(), SceneObjectKind.Text, content, x, y, w, h, 0, "#FF20242B", "#FFFFFFFF", 0, true, false)
+            new(new ObjectId(Id()), SceneObjectKind.Text, content, x, y, w, h, 0, "#FF20242B", "#FFFFFFFF", 0, true, false)
             { Text = LabelPresets.Apply(new TextStyle { Content = content, Alignment = TextAlignment.Center }, preset) with { FontSize = size, Path = path } };
         var riverLabel = TextOnPath.Layout(document, Label("Серебрянка", LabelPreset.River, 900,
             new TextPathBinding { Target = TextPathTarget.River, TargetId = river.Id, PartId = river.Channels[0].Id, Position = 0.45, Gap = 200 }));

@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
 using Map.Core.Documents;
+using Map.Core.Editing;
 using Map.Export;
 using Map.Rendering;
 using SkiaSharp;
@@ -27,6 +28,8 @@ public sealed class ParallelExportTests
         data.Add("embedded", 640, 320, false);
         data.Add("embedded", 1920, 960, true);
         data.Add("hex", 2000, 1500, false);
+        // An illustrated river and a road: their banks, reeds and shoulders are seeded per channel and branch.
+        data.Add("water", 2000, 1500, false);
         // Styled maps keep the serial render (see ExportParallelResources); compression is still parallel.
         // 640×480: at 2000×1500 these three took 7–12 min each and pushed CI past its 40-minute limit;
         // parallel compression of many blocks is covered by the plain 2000×1500 cases above.
@@ -119,6 +122,7 @@ public sealed class ParallelExportTests
         "land" => Styled(null),
         "embedded" => Embedded(),
         "hex" => Hex(),
+        "water" => Water(),
         "blaeu" => Styled(MapStylePreset.OldMapBlaeu),
         "impasto" => Styled(MapStylePreset.OilImpastoRhythm),
         _ => Styled(MapStylePreset.MoonlightHasui),
@@ -179,6 +183,20 @@ public sealed class ParallelExportTests
             .Select(p => new KeyValuePair<HexCoord, HexCell?>(At(p.c, p.r), HexCell.Of(p.r % 2 == 0 ? "starter/mountains" : "starter/forest")));
         var full = layer with { Paths = [river, road, trail], Board = layer.Board.With([.. cells]) };
         return document.WithLayers([.. document.Layers.Select(l => l.Id == layer.Id ? full : l)]);
+    }
+
+    /// <summary>The plain land map with an illustrated river and a country road winding across tiles.</summary>
+    private static MapDocument Water()
+    {
+        var river = new River
+        {
+            Name = "Река", Style = RiverStyle.Illustrated(),
+            Channels = [RiverEditor.NewChannel([new(20, 40), new(150, 120), new(260, 200), new(380, 260), new(500, 300)], 14)],
+        };
+        var road = RoadEditor.NewRoad([new(10, 330), new(160, 260), new(300, 300), new(500, 150)], 6, RoadStyle.Country(), "Тракт", seed: 7);
+        var document = Styled(null);
+        var water = new ObjectLayer(LayerId.New(), "Реки и дороги", true, false, 1, []) { Rivers = [river], Roads = [road] };
+        return document.WithLayers([.. document.Layers, water]);
     }
 
     /// <summary>Land with an elliptic coast, shapes and stamps, under a program style or none.</summary>
