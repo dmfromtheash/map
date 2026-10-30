@@ -23,6 +23,47 @@ public sealed class PngTilePyramidTests
     }
 
     [Fact]
+    public async Task Opaque_rgb_tiles_written_on_several_cores_match_rgba_tiles_written_on_one()
+    {
+        using var temp = new Temp();
+        var random = new Random(7);
+        var rows = new byte[1027][];
+        for (var y = 0; y < rows.Length; y++)
+        {
+            rows[y] = new byte[2051 * 4];
+            random.NextBytes(rows[y]);
+            for (var x = 3; x < rows[y].Length; x += 4) rows[y][x] = 255;
+        }
+        string Write(string name, bool opaque)
+        {
+            var path = System.IO.Path.Combine(temp.Path, name);
+            using var file = File.Create(path);
+            using var png = new StreamingPngWriter(file, 2051, rows.Length, opaque);
+            foreach (var row in rows) png.WriteRow(row);
+            png.Complete();
+            return path;
+        }
+        var rgb = await PngTilePyramid.OpenAsync(Write("rgb.png", opaque: true), System.IO.Path.Combine(temp.Path, "rgb"),
+            settings: new ExportEngineSettings { CompressionParallelism = 4 });
+        var rgba = await PngTilePyramid.OpenAsync(Write("rgba.png", opaque: false), System.IO.Path.Combine(temp.Path, "rgba"),
+            settings: new ExportEngineSettings { CompressionParallelism = 1 });
+        Assert.Equal(3, rgb.Levels);
+        for (var level = 0; level < rgb.Levels; level++)
+        {
+            var (width, height) = rgb.LevelSize(level);
+            for (var row = 0; row * 1024 < height; row++)
+            for (var column = 0; column * 1024 < width; column++)
+            {
+                var rgbTile = rgb.CheckTile(level, column, row);
+                Assert.Equal(2, File.ReadAllBytes(rgbTile)[25]);
+                using var a = SKBitmap.Decode(rgbTile);
+                using var b = SKBitmap.Decode(rgba.CheckTile(level, column, row));
+                Assert.Equal(b.Pixels, a.Pixels);
+            }
+        }
+    }
+
+    [Fact]
     public async Task Level_zero_preserves_standard_png_pixels_across_seams_and_odd_edges_and_cache_reopens()
     {
         using var temp = new Temp();

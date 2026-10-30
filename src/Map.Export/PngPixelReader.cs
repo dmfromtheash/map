@@ -12,6 +12,8 @@ internal sealed class PngPixelReader : IDisposable
     private readonly int _channels;
     public int Width { get; }
     public int Height { get; }
+    /// <summary>RGB file: every pixel is opaque.</summary>
+    public bool Opaque => _channels == 3;
 
     public PngPixelReader(string path)
     {

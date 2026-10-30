@@ -128,7 +128,8 @@ public sealed record PngTilePyramid(string DirectoryPath, int Width, int Height,
         Directory.CreateDirectory(temporaryPath);
         try
         {
-            using (var encoder = new LevelEncoder(temporaryPath, source.Width, source.Height, 0))
+            using (var encoder = new LevelEncoder(temporaryPath, source.Width, source.Height, 0, source.Opaque,
+                Math.Max(1, settings.CompressionParallelism)))
             {
                 var rows = 0;
                 source.ReadRows(row =>
@@ -180,21 +181,28 @@ public sealed record PngTilePyramid(string DirectoryPath, int Width, int Height,
 
     private sealed class LevelEncoder : IDisposable
     {
+        // Rows are buffered in small batches; each batch is written to the tile columns on several
+        // cores at once (each tile has its own writer, so the files are the same in any order).
+        private const int Batch = 64;
         private readonly string _directory;
         private readonly int _width, _height;
+        private readonly bool _opaque;
+        private readonly int _workers;
         private readonly LevelEncoder? _next;
-        private readonly byte[] _previous, _reduced;
+        private readonly byte[] _previous, _reduced, _batch;
         private readonly List<(FileStream File, StreamingPngWriter Png, int Bytes)> _writers = [];
-        private int _rows;
+        private int _rows, _batched;
 
-        public LevelEncoder(string root, int width, int height, int level)
+        /// <param name="opaque">The source has no transparency: tiles are RGB (a reduction of opaque pixels is opaque).</param>
+        public LevelEncoder(string root, int width, int height, int level, bool opaque, int workers)
         {
-            _directory = Path.Combine(root, level.ToString());
+            _directory = Path.Combine(root, level.ToString(System.Globalization.CultureInfo.InvariantCulture));
             Directory.CreateDirectory(_directory);
-            _width = width; _height = height;
+            _width = width; _height = height; _opaque = opaque; _workers = workers;
+            _batch = new byte[checked(width * 4 * Batch)];
             if (Math.Max(width, height) > Edge)
             {
-                _next = new(root, (width + 1) / 2, (height + 1) / 2, level + 1);
+                _next = new(root, (width + 1) / 2, (height + 1) / 2, level + 1, opaque, workers);
                 _previous = new byte[width * 4]; _reduced = new byte[((width + 1) / 2) * 4];
             }
             else { _previous = []; _reduced = []; }
@@ -212,16 +220,14 @@ public sealed record PngTilePyramid(string DirectoryPath, int Width, int Height,
                     try
                     {
                         var w = Math.Min(Edge, _width - x);
-                        _writers.Add((file, new StreamingPngWriter(file, w, Math.Min(Edge, _height - _rows)), w * 4));
+                        _writers.Add((file, new StreamingPngWriter(file, w, Math.Min(Edge, _height - _rows), _opaque), w * 4));
                     }
                     catch { file.Dispose(); throw; }
                 }
             }
-            var offset = 0;
-            foreach (var writer in _writers)
-            {
-                writer.Png.WriteRow(row.Slice(offset, writer.Bytes)); offset += writer.Bytes;
-            }
+            row.CopyTo(_batch.AsSpan(_batched * _width * 4));
+            _batched++;
+            if (_batched == Batch || (_rows + 1) % Edge == 0 || _rows + 1 == _height) WriteBatch();
             if (_next is not null)
             {
                 if (_rows % 2 == 0) row.CopyTo(_previous);
@@ -237,6 +243,27 @@ public sealed record PngTilePyramid(string DirectoryPath, int Width, int Height,
                 foreach (var writer in _writers) writer.Png.Complete();
                 CloseWriters();
             }
+        }
+
+        private void WriteBatch()
+        {
+            var rows = _batched;
+            var stride = _width * 4;
+            try
+            {
+                Parallel.For(0, _writers.Count, new ParallelOptions { MaxDegreeOfParallelism = _workers }, column =>
+                {
+                    var (_, png, bytes) = _writers[column];
+                    var offset = column * Edge * 4;
+                    for (var y = 0; y < rows; y++) png.WriteRow(_batch.AsSpan(y * stride + offset, bytes));
+                });
+            }
+            catch (AggregateException ex)
+            {
+                // The callers handle a full disk or a broken file as on the one-thread route.
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex.Flatten().InnerExceptions[0]).Throw();
+            }
+            _batched = 0;
         }
 
         public void Complete()
