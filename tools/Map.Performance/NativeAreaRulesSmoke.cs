@@ -126,8 +126,8 @@ public sealed class AreaRulesApplication : Application
             Variants = [new(sha, 512, 512)], Style = new(sha), Request = new() { BaseWidth = 24 },
         };
         var document = new MapDocument(DocumentId.New(), "Горы у реки", DateTimeOffset.UnixEpoch,
-            new CanvasDefinition(1024, 768, "px", "#FFE9E1CC"),
-            [CurrentLook.Page("Фон", "#FFE9E1CC"), layer], [asset]);
+            new CanvasDefinition(1024, 768, "px", CurrentLook.PageColor),
+            [CurrentLook.Page("Фон"), CurrentLook.LandEverywhere(1024, 768), layer], [asset]);
         var session = new EditingSession(document);
         session.Execute(new PlacementAreaCommand(Objects, AreaId, area, "Горы"));
         return session.Document;
@@ -137,7 +137,11 @@ public sealed class AreaRulesApplication : Application
     {
         _editor = new EditorViewModel(document, path, false, new ProjectStore(new RecoveryJournal(Path.Combine(_workspace, "recovery"))),
             new LocalRecent(), new LocalPicker(Path.Combine(_workspace, "rules.mapproj")), new LocalPrompts(), new LocalLog(),
+            assetCatalog: new Map.Assets.AssetCatalog(Path.Combine(_workspace, "catalog")),
             localPreferences: new EditorLocalPreferences(PrimaryAutosaveEnabled: false));
+        // The owner's mountain is embedded in the map: decode it before the window draws, or the frames show the
+        // «no picture» marker in its place.
+        foreach (var asset in document.Assets) _editor.StampImages?.TryGetImage(asset.Sha256);
         _view = new EditorView(_editor, () => Task.CompletedTask, () => { }, () => { }); _window.Content = _view;
     }
 
@@ -251,6 +255,8 @@ public sealed class AreaRulesApplication : Application
         await Toggle("EditableAreaDensityBrushToggle", false);
 
         _editor.SelectLayer(Objects); await Settle();
+        // The layer's own settings are in the «Слои» tab of the right column (DEC-070 «Б»).
+        _view.SetRightTab(RightColumnTab.Layers); await Settle();
         await Toggle("ObjectLayerDepthSortToggle", true);
         var layer = _editor.Session.Document.Layers.OfType<ObjectLayer>().Single(l => l.Id == Objects);
         _report.Checks["layer-depth-sort"] = layer.Effects.DepthSort;

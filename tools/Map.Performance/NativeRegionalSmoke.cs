@@ -132,8 +132,8 @@ public sealed partial class RegionalApplication : Application
         await Settle(); Capture((Control)_window.Content, "01-dashboard");
         _window.Width=960;_window.Height=640;await Settle();Capture((Control)_window.Content,"01b-dashboard-minimum");
         _window.Width=1440;_window.Height=900;
-        var blank = new MapDocument(DocumentId.New(),"Новая карта",DateTimeOffset.UtcNow,new CanvasDefinition(1024,768,"px","#FFFFFFFF"),
-            [new BaseColorLayer(LayerId.New(),"Фон",true,false,1,"#FFFFFFFF")]);
+        var blank = new MapDocument(DocumentId.New(),"Новая карта",DateTimeOffset.UtcNow,new CanvasDefinition(1024,768,"px",CurrentLook.PageColor),
+            [CurrentLook.Page("Фон")]);
         _editor = new EditorViewModel(blank,null,false,_store,_recent,_picker,new LocalPrompts(),new LocalLog(),assetCatalog:_catalog,
             localPreferences:new EditorLocalPreferences(PrimaryAutosaveEnabled:false));
         _view = new EditorView(_editor,()=>Task.CompletedTask,()=>{},()=>{});_window.Content=_view;await Settle();

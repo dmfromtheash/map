@@ -27,7 +27,7 @@ public sealed partial class PaintPerfApplication
         var sea = "#FF8FB0BA";
         var document = new MapDocument(DocumentId.New(), "Ярусы — замер", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(4096, 3072, "px", sea),
-            [new BaseColorLayer(LayerId.New(), "Море", true, false, 1, sea), island, plateau, ridge]);
+            [CurrentLook.Page("Море", sea), island, plateau, ridge]);
         if (System.Environment.GetEnvironmentVariable("MAP_CLIFF_LOOK") is { Length: > 0 } look)
             _report.Environment["look"] = look;
         OpenEditor(document);

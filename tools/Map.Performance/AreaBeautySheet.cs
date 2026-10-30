@@ -54,11 +54,11 @@ internal static class AreaBeautySheet
         var massifVariants = mountains[..4];
         report.Notes["owner-mountains"] = mountains.Length.ToString();
 
-        var paper = "#FFE4DAC0";
+        var paper = CurrentLook.PageColor;
         var layerId = LayerId.New();
         var document = new MapDocument(DocumentId.New(), "R10 красота", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(2400, 1400, "px", paper),
-            [CurrentLook.Page("Бумага", paper),
+            [CurrentLook.Page("Море"), CurrentLook.LandEverywhere(2400, 1400),
              new ObjectLayer(layerId, "Горы", true, false, 1, [])], [.. assets]);
 
         PlacementArea Area(string name, ImmutableArray<StampVariantSource> variants, double width, double density,

@@ -154,7 +154,7 @@ public sealed partial class RegionalApplication
     {
         const int width = 2000, height = 1400;
         var land = LandLayer.CreateEmpty(LayerId.New(), "Обычная земля Map") with
-        { EdgeStyle = RegionalMapFactory.LandStyle with { OutlineWidth = 0, InnerShadowOpacity = 0, OuterShadowOpacity = 0, RippleCount = 0 } };
+        { EdgeStyle = CurrentLook.Land() };
         var geometry = LandRasterizer.ApplyShape(land.GeometryTiles, new LandShape
         { Kind = LandShapeKind.Polygon, Bounds = new(0, 0, width, height),
             Points = [new(-10,-10),new(width+10,-10),new(width+10,height+10),new(-10,height+10)] }, false);
@@ -180,8 +180,8 @@ public sealed partial class RegionalApplication
             index++;
         }
         return new MapDocument(DocumentId.New(), "Проверка прозрачности ассетов", DateTimeOffset.UtcNow,
-            new CanvasDefinition(width,height,"px","#FF8FB04E"),
-            [new BaseColorLayer(LayerId.New(),"Фон",true,false,1,"#FF8FB04E"),land,
+            new CanvasDefinition(width,height,"px",CurrentLook.PageColor),
+            [CurrentLook.Page("Фон"),land,
              new ObjectLayer(LayerId.New(),"Контрастные подложки",true,false,1,panels),
              new ObjectLayer(LayerId.New(),"Предметы · непрозрачность 100%",true,false,1,subjects)],
             pack.Records.Values.Select(r=>RegionalMapFactory.Reference(r,catalog)).ToArray());

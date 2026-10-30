@@ -23,6 +23,20 @@ internal static class CurrentLook
     public static BaseColorLayer Page(string name, string color, LayerId? id = null) =>
         new(id ?? LayerId.New(), name, true, false, 1, color) { Sea = SeaStyle.NewMapDefault };
 
+    /// <summary>The page of a new map in its own colour - for a map whose old page stood for paper or ground.</summary>
+    public static BaseColorLayer Page(string name = "Цвет фона") => Page(name, PageColor);
+
+    /// <summary>Land of a new map over the whole canvas: valleys, roads and rivers lie on it, not on a bare page.</summary>
+    public static LandLayer LandEverywhere(int width, int height, string name = "Земля")
+    {
+        var full = Enumerable.Repeat((byte)255, TileMap.TileSize * TileMap.TileSize).ToArray();
+        var tiles = TileMap.Empty(1);
+        for (var x = 0; x * TileMap.TileSize < width; x++)
+            for (var y = 0; y * TileMap.TileSize < height; y++)
+                tiles = tiles.With(new TileKey(x, y), full);
+        return new LandLayer(LayerId.New(), name, true, false, 1, tiles, Land());
+    }
+
     /// <summary>The page colour a new map gets (the first choice of the new-map dialog).</summary>
     public const string PageColor = "#FF1E2430";
 

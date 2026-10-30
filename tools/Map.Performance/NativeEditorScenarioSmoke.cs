@@ -134,8 +134,8 @@ public sealed partial class NativeEditorScenarioApplication : Application
             RoutingStrategies.Bubble, handledEventsToo: true);
         var document = Options.Profile == "native-history-memory" ? HistoryMemoryDocument()
             : new MapDocument(DocumentId.New(), "Река с притоком", DateTimeOffset.UnixEpoch,
-            new CanvasDefinition(1024, 768, "px", "#FFEDE3CD"),
-            [CurrentLook.Page("Фон", "#FFEDE3CD"),
+            new CanvasDefinition(1024, 768, "px", CurrentLook.PageColor),
+            [CurrentLook.Page("Фон"),
                 LandBlock(), new ObjectLayer(LayerId.New(), "Реки", true, false, 1, [])]);
         OpenEditor(document);
         _report.Required = Environment.GetEnvironmentVariable("MAP_STAGE19_LAKE_ONLY") == "1" ? LakeRequired : FullRequired;
@@ -1143,6 +1143,15 @@ public sealed partial class NativeEditorScenarioApplication : Application
             if (ancestor.IsVisible || ancestor.Tag is not string tag || !tag.StartsWith("Reveal:", StringComparison.Ordinal)) continue;
             var tab = Avalonia.LogicalTree.LogicalExtensions.GetLogicalDescendants(root).OfType<Button>().FirstOrDefault(b => b.Name == tag["Reveal:".Length..]);
             tab?.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            root.UpdateLayout();
+        }
+        // DEC-070 «Б»: the properties and the map panel are pages of one right column; open the page that holds it.
+        foreach (var (page, button) in new[] { ("ContextPanel", "RightTabProperties"), ("EditorSidePanel", "RightTabContent"), ("EditorSidePanel", "RightTabLayers") })
+        {
+            if (target.IsEffectivelyVisible) break;
+            if (!Avalonia.LogicalTree.LogicalExtensions.GetLogicalAncestors(target).OfType<Control>().Any(a => a.Name == page)) continue;
+            Avalonia.LogicalTree.LogicalExtensions.GetLogicalDescendants(root).OfType<Button>().FirstOrDefault(b => b.Name == button)
+                ?.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             root.UpdateLayout();
         }
     }

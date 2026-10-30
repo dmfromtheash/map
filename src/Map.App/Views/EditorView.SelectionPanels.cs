@@ -57,7 +57,7 @@ public sealed partial class EditorView
                     "SelectionEmptyState",
                     MapIcons.Select,
                     "Ничего не выбрано",
-                    "Щёлкните объект на карте или строку в панели «Карта» справа. Рамкой можно выбрать несколько."),
+                    "Щёлкните объект на карте или строку во вкладке «Содержимое». Рамкой можно выбрать несколько."),
                 new TextBlock { Text = "Начать" }.Classed("faint", "role-caption", "subgroup-title"),
             },
         };

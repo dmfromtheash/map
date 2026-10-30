@@ -99,9 +99,9 @@ public sealed partial class RegionalApplication
             islands = islands with { GeometryTiles = islands.GeometryTiles.WithMany(shape.After) };
         }
         var mountain = OwnerMountainFixtures.Embedded(2);
-        return new(DocumentId.New(), "Берега — постер", DateTimeOffset.UnixEpoch, new CanvasDefinition(640, 480, "px", "#FFFFFFFF"),
+        return new(DocumentId.New(), "Берега — постер", DateTimeOffset.UnixEpoch, new CanvasDefinition(640, 480, "px", CurrentLook.PageColor),
         [
-            CurrentLook.Page("Фон", "#FFCAE5F2"),
+            CurrentLook.Page("Фон"),
             islands,
             new ObjectLayer(LayerId.New(), "Горы", true, false, 1,
                 [OwnerMountainFixtures.Stamp(mountain, "Гора у порта", 190, 220, 48, 48),

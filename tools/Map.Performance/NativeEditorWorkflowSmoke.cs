@@ -500,7 +500,8 @@ public sealed class NativeEditorWorkflowApplication : Application
     {
         var canvas = view.Canvas;
         var context = Find<Control>(view, "ContextPanel");
-        var side = Find<Control>(view, "PanelSectionSwitcher");
+        // DEC-070 «Б»: the map panel is a tab of the right column beside «Свойства»; the tabs row stands for it.
+        var side = Find<Control>(view, "RightColumnTabs");
         var select = Find<Button>(view, "SelectToolButton");
         var canvasReady = canvas.IsVisible && canvas.Bounds.Width >= 120 && canvas.Bounds.Height >= 180;
         var keyboardPath = !string.IsNullOrWhiteSpace(ToolTip.GetTip(select)?.ToString())
@@ -548,9 +549,9 @@ public sealed class NativeEditorWorkflowApplication : Application
         var objectLayer = new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, []);
         return new MapDocument(
             DocumentId.New(), "Stage 16 smoke", DateTimeOffset.UnixEpoch,
-            new CanvasDefinition(1_024, 768, "px", "#FFF3F0E8"),
+            new CanvasDefinition(1_024, 768, "px", CurrentLook.PageColor),
             [
-                CurrentLook.Page("Фон", "#FFF3F0E8"),
+                CurrentLook.Page("Фон"),
                 objectLayer,
                 BrushLayer.CreateEmpty(LayerId.New(), "Кисть"),
                 LandLayer.CreateEmpty(LayerId.New(), "Суша"),

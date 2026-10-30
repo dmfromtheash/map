@@ -203,6 +203,9 @@ public sealed partial class EditorView
         if (searchChanged) _objectSearch.Text = "";
         SyncPanelSection();
         SyncObjectList();
+        // Opened on purpose (a section button, Ctrl+K, «Найти объект»): its page of the right column comes forward.
+        if (!_settingRightTab && _rightColumn is not null)
+            SetRightTab(section == PanelSection.Layers ? RightColumnTab.Layers : RightColumnTab.Content);
     }
 
     private void SyncPanelSection()

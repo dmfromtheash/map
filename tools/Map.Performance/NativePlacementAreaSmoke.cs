@@ -135,8 +135,8 @@ public sealed class NativePlacementAreaApplication : Application
             ShowInTaskbar = false, WindowStartupLocation = WindowStartupLocation.Manual, Position = new PixelPoint(-32000, -32000) };
         var trees = densityAsset is null || Environment.GetEnvironmentVariable("MAP_STAGE18_NATURAL_CHECK") == "1";
         var document = new MapDocument(DocumentId.New(), trees ? "Редактируемая область леса" : "Редактируемая область гор", DateTimeOffset.UnixEpoch,
-            new CanvasDefinition(1024, 768, "px", "#FFF2EAD5"),
-            [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFF2EAD5"),
+            new CanvasDefinition(1024, 768, "px", CurrentLook.PageColor),
+            [CurrentLook.Page("Фон"),
                 new ObjectLayer(LayerId.New(), trees ? "Деревья" : "Горы", true, false, 1, [])]);
         if (!_report.MeasurementRequired && densityAsset is null)
             document = MapProjectStore.Open(Environment.GetEnvironmentVariable("MAP_STAGE18_UI_FIXTURE")
@@ -411,14 +411,14 @@ public sealed class NativePlacementAreaApplication : Application
         _report.Checks["starter-tree-read-only"] = treeHash.SequenceEqual(SHA256.HashData(File.ReadAllBytes(treePath)));
         _view.Canvas.DisposeRenderCaches();
         OpenEditor(new MapDocument(DocumentId.New(), "Естественная расстановка гор", DateTimeOffset.UnixEpoch,
-            new CanvasDefinition(1024, 768, "px", "#FFF2EAD5"),
-            [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFF2EAD5"),
+            new CanvasDefinition(1024, 768, "px", CurrentLook.PageColor),
+            [CurrentLook.Page("Фон"),
                 new ObjectLayer(LayerId.New(), "Горы", true, false, 1, [])]));
         await ExecuteSelectionCorrection(assetPath);
         _view.Canvas.DisposeRenderCaches();
         OpenEditor(new MapDocument(DocumentId.New(), "Хребет по диагональной области", DateTimeOffset.UnixEpoch,
-            new CanvasDefinition(1024, 768, "px", "#FFF2EAD5"),
-            [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFF2EAD5"),
+            new CanvasDefinition(1024, 768, "px", CurrentLook.PageColor),
+            [CurrentLook.Page("Фон"),
                 new ObjectLayer(LayerId.New(), "Горы", true, false, 1, [])]));
         await Settle(); _editor.ChooseGalleryVariant(_densitySetId!, null); await Settle();
         await Click("StampModeFillArea"); Find<Slider>("FutureStampScaleSlider").Value = 40; await Settle();

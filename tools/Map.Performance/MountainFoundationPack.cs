@@ -118,7 +118,6 @@ internal static class MountainFoundationPack
     {
         var samples = pack.Assets.Where(a => a.Style == style.Id).ToArray();
         var first = records[samples[0].Id]; var second = records[samples[1].Id];
-        var background = style.Id switch { "illustrated" => "#FFDDE2CC", "painted" => "#FFE0E5DD", _ => "#FFF0E6D2" };
         var layer = new ObjectLayer(LayerId.New(), "Горная цепь · узлы", true, false, 1, []);
         var objects = new ObjectLayer(LayerId.New(), "Отдельные формы", true, false, 1,
         [Stamp(second, samples[1].Name, 450, style.Id == "painted" ? 550 : 500, samples[1].Width * 1.3),
@@ -127,8 +126,8 @@ internal static class MountainFoundationPack
         var labels = new ObjectLayer(LayerId.New(), "Подписи", true, false, 1,
             [Caption(style.Name, 55, 30, 1080, 32), Caption("Горный перевал", 355, 352, 450, 23)]);
         var document = new MapDocument(DocumentId.New(), "Горы · " + style.Name, DateTimeOffset.UtcNow,
-            new CanvasDefinition(1200, 800, "px", background),
-            [new BaseColorLayer(LayerId.New(), "Цвет основы", true, false, 1, background), layer, objects, labels],
+            new CanvasDefinition(1200, 800, "px", CurrentLook.PageColor),
+            [CurrentLook.Page("Цвет основы"), layer, objects, labels],
             [Reference(first, catalog), Reference(second, catalog)],
             [new MapNote(NoteId.New(), "Как продолжить горный шаблон",
                 "Выберите путь «Горная цепь» и измените его узлы или шаг. Отдельные формы можно двигать и масштабировать. " +
@@ -166,8 +165,8 @@ internal static class MountainFoundationPack
             }
         }
         return new MapDocument(DocumentId.New(), "Горы · сравнение пробных стилей", DateTimeOffset.UtcNow,
-            new CanvasDefinition(canvasWidth, canvasHeight, "px", "#FFF4EFE3"),
-            [new BaseColorLayer(LayerId.New(), "Основа", true, false, 1, "#FFF4EFE3"),
+            new CanvasDefinition(canvasWidth, canvasHeight, "px", CurrentLook.PageColor),
+            [CurrentLook.Page("Основа"),
              new ObjectLayer(LayerId.New(), "Образцы и названия", true, false, 1, items)],
             records.Values.Select(r => Reference(r, catalog)).ToArray());
     }

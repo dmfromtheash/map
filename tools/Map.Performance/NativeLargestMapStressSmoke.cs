@@ -609,17 +609,17 @@ public sealed class NativeLargestMapStressApplication : Application
     private static MapDocument CreateDocument()
     {
         var green = new LandLayer(
-            LayerId.New(), "Зелёная земля", true, false, 1,
-            TileMap.Empty(1), new LandEdgeStyle());
+            LayerId.New(), "Земля", true, false, 1,
+            TileMap.Empty(1), CurrentLook.Land());
         var dry = new LandLayer(
-            LayerId.New(), "Сухая земля", true, false, 1,
-            TileMap.Empty(1), new LandEdgeStyle());
+            LayerId.New(), "Плато", true, false, 1,
+            TileMap.Empty(1), CurrentLook.Land());
         var objects = new ObjectLayer(LayerId.New(), "Ассеты", true, false, 1, []);
         return new MapDocument(
             DocumentId.New(), "Largest map stress", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(CanvasSize, CanvasSize, "px", "#FF304A60"),
             [
-                new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FF304A60"),
+                CurrentLook.Page("Фон", "#FF304A60"),
                 green,
                 dry,
                 objects,

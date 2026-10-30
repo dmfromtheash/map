@@ -47,8 +47,8 @@ public sealed partial class RegionalApplication
     private static EditorView MountDefaultsEditor(MainWindow window)
     {
         var document = new MapDocument(DocumentId.New(), "Проверка клавиш", DateTimeOffset.UtcNow,
-            new CanvasDefinition(1200, 800, "px", "#FFF5F2E8"),
-            [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFF5F2E8"),
+            new CanvasDefinition(1200, 800, "px", CurrentLook.PageColor),
+            [CurrentLook.Page("Фон"),
              new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, [])]);
         // The production window constructs the editor and loads its actual preferences path.
         var flags = BindingFlags.Instance | BindingFlags.NonPublic;

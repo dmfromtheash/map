@@ -73,7 +73,7 @@ public sealed partial class PaintPerfApplication
         var sea = "#FF9DB7C2";
         var document = new MapDocument(DocumentId.New(), "Новые ассеты — замер", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(4096, 3072, "px", sea),
-            [new BaseColorLayer(LayerId.New(), "Море", true, false, 1, sea), plain, drifts, plateau, glacier,
+            [CurrentLook.Page("Море", sea), plain, drifts, plateau, glacier,
              new ObjectLayer(LayerId.New(), "Горы", true, false, 1, [.. objects])]);
         _report.Environment["objects"] = objects.Count.ToString();
         _report.Environment["project"] = "generated: 4 lands on owner grounds, 2 tiers, owner mountains";

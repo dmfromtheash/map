@@ -124,8 +124,8 @@ public sealed class TextOnPathApplication : Application
             new VectorStrokeStyle { Color = CurrentLook.MountainInk, Width = 4 });
         var layer = new ObjectLayer(Objects, "Долина", true, false, 1, [trail]) { Rivers = [river], Roads = [road] };
         return new MapDocument(DocumentId.New(), "Подписи долины", DateTimeOffset.UnixEpoch,
-            new CanvasDefinition(1024, 768, "px", "#FFE9E1CC"),
-            [CurrentLook.Page("Фон", "#FFE9E1CC"), layer]);
+            new CanvasDefinition(1024, 768, "px", CurrentLook.PageColor),
+            [CurrentLook.Page("Фон"), CurrentLook.LandEverywhere(1024, 768), layer]);
     }
 
     private void OpenEditor(MapDocument document, string? path = null)
@@ -228,7 +228,9 @@ public sealed class TextOnPathApplication : Application
         _view.Canvas.PressMoveReleaseForSmoke(a.X, a.Y, a.X, a.Y); await Settle();
         var b = _editor.Session.Viewport.WorldToScreen(centre.X + 40, centre.Y - 30);
         _view.Canvas.PressMoveReleaseForSmoke(a.X, a.Y, b.X, b.Y); await Settle(); await Settle();
-        var list = _view.GetVisualDescendants().OfType<ListBox>().Single(l => l.Name == "ObjectList");
+        // A drag selects the object and the right column shows its «Свойства»; the list is the «Содержимое» tab.
+        _view.SetRightTab(RightColumnTab.Content); await Settle();
+        var list =_view.GetVisualDescendants().OfType<ListBox>().Single(l => l.Name == "ObjectList");
         list.UpdateLayout();
         var rows = list.GetVisualDescendants().OfType<ListBoxItem>()
             .Where(c => c.DataContext is ObjectTreeRow { Object: { } o } && o.Id == item.Id && c.IsEffectivelyVisible && c.Bounds.Height > 1).ToList();

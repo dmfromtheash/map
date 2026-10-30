@@ -34,8 +34,8 @@ public sealed partial class NativeEditorScenarioApplication
         for (var x = 0; x < 16; x++) for (var y = 0; y < 12; y++) tiles = tiles.With(new TileKey(x, y), coverage);
         var land = new LandLayer(LayerId.New(), "Земля", true, false, 1, tiles, CurrentLook.Land());
         return new MapDocument(DocumentId.New(), "История и память", DateTimeOffset.UnixEpoch,
-            new CanvasDefinition(4096, 3072, "px", "#FFEDE3CD"),
-            [CurrentLook.Page("Фон", "#FFEDE3CD"), land,
+            new CanvasDefinition(4096, 3072, "px", CurrentLook.PageColor),
+            [CurrentLook.Page("Фон"), land,
                 new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, [])]);
     }
 
@@ -119,7 +119,7 @@ public sealed partial class NativeEditorScenarioApplication
         _view.CloseAuxiliaryWindowsForSmoke(); _view.Canvas.DisposeRenderCaches();
         _window.Content = null;
         OpenEditor(new MapDocument(DocumentId.New(), "Пусто", DateTimeOffset.UnixEpoch,
-            new CanvasDefinition(256, 256, "px", "#FFEDE3CD"), [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFEDE3CD")]));
+            new CanvasDefinition(256, 256, "px", CurrentLook.PageColor), [CurrentLook.Page("Фон")]));
         await Frame(); await Settle();
         await Observe("closed-and-reopened-empty");
         _report.Checks["closed-editor-collected"] = !weakEditor.IsAlive && !weakView.IsAlive && !weakDocument.IsAlive;

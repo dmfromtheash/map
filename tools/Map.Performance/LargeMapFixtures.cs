@@ -71,15 +71,9 @@ internal static class LargeMapFixtures
             new DocumentId(DeterministicGuid(seed, "document", count)),
             $"simple-{count}",
             DateTimeOffset.UnixEpoch,
-            new CanvasDefinition(CanvasSize, CanvasSize, "px", "#FFFFFFFF"),
+            new CanvasDefinition(CanvasSize, CanvasSize, "px", CurrentLook.PageColor),
             [
-                new BaseColorLayer(
-                    new LayerId(DeterministicGuid(seed, "layer", 0)),
-                    "background",
-                    visible: true,
-                    locked: false,
-                    opacity: 1,
-                    "#FFFFFFFF"),
+                CurrentLook.Page("background", CurrentLook.PageColor, new LayerId(DeterministicGuid(seed, "layer", 0))),
                 layer,
             ]);
 
@@ -256,11 +250,9 @@ internal static class LargeMapFixtures
             new DocumentId(DeterministicGuid(seed, "mixed-document", count)),
             "mixed-50k",
             DateTimeOffset.UnixEpoch,
-            new CanvasDefinition(CanvasSize, CanvasSize, "px", "#FFEEF1F5"),
+            new CanvasDefinition(CanvasSize, CanvasSize, "px", CurrentLook.PageColor),
             [
-                new BaseColorLayer(
-                    new LayerId(DeterministicGuid(seed, "mixed-layer", 0)),
-                    "background", true, false, 1, "#FFEEF1F5"),
+                CurrentLook.Page("background", CurrentLook.PageColor, new LayerId(DeterministicGuid(seed, "mixed-layer", 0))),
                 layer,
                 new FilterLayer(
                     new LayerId(DeterministicGuid(seed, "mixed-layer", 2)),
@@ -362,18 +354,16 @@ internal static class LargeMapFixtures
             false,
             1,
             TileMap.Empty(1).With(landKey, landPixels),
-            new LandEdgeStyle());
+            CurrentLook.Land());
 
         var sourceFilter = source.Document.Layers.OfType<FilterLayer>().Single();
         var document = new MapDocument(
             new DocumentId(DeterministicGuid(seed, "large-document", canvasSize)),
             $"mixed-50k-{canvasSize}",
             DateTimeOffset.UnixEpoch,
-            new CanvasDefinition(canvasSize, canvasSize, "px", "#FFEEF1F5"),
+            new CanvasDefinition(canvasSize, canvasSize, "px", CurrentLook.PageColor),
             [
-                new BaseColorLayer(
-                    new LayerId(DeterministicGuid(seed, "large-layer", 0)),
-                    "background", true, false, 1, "#FFEEF1F5"),
+                CurrentLook.Page("background", CurrentLook.PageColor, new LayerId(DeterministicGuid(seed, "large-layer", 0))),
                 objectLayer,
                 brush,
                 land,

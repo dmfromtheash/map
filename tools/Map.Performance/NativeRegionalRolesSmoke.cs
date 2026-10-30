@@ -120,11 +120,11 @@ public sealed class RegionalRolesApplication : Application
             CurrentLook.Land()) { Level = 3 };
         var river = new River { Name = "Исходная река", Style = CurrentLook.River(),
             Channels = [RiverEditor.NewChannel([new(350, 0), new(350, 1100)], 60)] };
-        var layers = new List<MapLayer> { CurrentLook.Page("Фон", "#FFE9E1CC"), land };
+        var layers = new List<MapLayer> { CurrentLook.Page("Фон"), land };
         if (cliffs) layers.Add(plateau);
         layers.Add(new ObjectLayer(_objects, "Объекты и реки", true, false, 1, []) { Rivers = [river] });
         return new(DocumentId.New(), cliffs ? "R11 — долина" : "R11 — без обрывов", DateTimeOffset.UnixEpoch,
-            new CanvasDefinition(1200, 1100, "px", "#FFE9E1CC"), layers);
+            new CanvasDefinition(1200, 1100, "px", CurrentLook.PageColor), layers);
     }
 
     // Every role gets one of the owner's mountains (an archived copy is mirrored); each file is distinct.

@@ -86,8 +86,8 @@ public sealed class AssetCatalogApplication : Application
         _window = new Window { Width = 1440, Height = 900, Title = "Map — каталог ассетов", ShowActivated = false,
             ShowInTaskbar = false, WindowStartupLocation = WindowStartupLocation.Manual, Position = new PixelPoint(-32000, -32000) };
         var document = new MapDocument(DocumentId.New(), "Каталог ассетов", DateTimeOffset.UnixEpoch,
-            new CanvasDefinition(1024, 768, "px", "#FFE9E0C8"),
-            [CurrentLook.Page("Фон", "#FFE9E0C8"),
+            new CanvasDefinition(1024, 768, "px", CurrentLook.PageColor),
+            [CurrentLook.Page("Фон"),
                 new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, [])]);
         if (Options.Profile == "native-empty-artwork")
             document = document with { Layers = document.Layers.Append(
@@ -433,8 +433,8 @@ public sealed class AssetCatalogApplication : Application
             Channels = [RiverEditor.NewChannel([new(128, 40), new(128, 330)], 24)] };
         var owner = new ObjectLayer(LayerId.New(), "Вода с маской", true, false, .6, []) { Rivers = [high, low] };
         var document = new MapDocument(DocumentId.New(), "Вода и уровни", DateTimeOffset.UnixEpoch,
-            new CanvasDefinition(512, 384, "px", "#FFE9E0C8"),
-            [CurrentLook.Page("Фон", "#FFE9E0C8"), land, owner]);
+            new CanvasDefinition(512, 384, "px", CurrentLook.PageColor),
+            [CurrentLook.Page("Фон"), land, owner]);
         _editor = new EditorViewModel(document, null, false, new ProjectStore(new RecoveryJournal(Path.Combine(_workspace, "terrain-recovery"))),
             new LocalRecent(), new LocalPicker(Path.Combine(_workspace, "terrain.mapproj")), new LocalPrompts(), new LocalLog(),
             assetCatalog: _catalog, localPreferences: new EditorLocalPreferences(PrimaryAutosaveEnabled: false));

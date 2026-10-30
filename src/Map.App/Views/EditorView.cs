@@ -466,8 +466,8 @@ public sealed partial class EditorView : UserControl
                 // left, so it can never cover the map.
                 quickBar.Docked(Dock.Top),
                 statusBar.Docked(Dock.Bottom),
-                sidePanel.Docked(Dock.Right),
-                contextPanel.Docked(Dock.Right),
+                // «Свойства · Содержимое · Слои» in one column (DEC-070, owner's pick «Б»).
+                BuildRightColumn(contextPanel, sidePanel).Docked(Dock.Right),
                 // Свет, Стили, Море: their own ribbon under the map (DEC-064), shown in «Оформление» only (DEC-070).
                 new DockPanel { Children = { (_appearanceRibbon = BuildAppearanceRibbon()).Docked(Dock.Bottom), canvasHost } },
             },
@@ -485,21 +485,8 @@ public sealed partial class EditorView : UserControl
             Ui.SetClass(this, "compact-window", compact);
             Ui.SetClass(this, "narrow-window", narrow);
             rail.Width = compact ? 42 : Ui.RailWidth;
-            if (!_contextCollapsed) _contextPanel.Width = narrow ? 248 : Ui.ContextPanelWidth;
-            // A narrow window gives the map the width: the map panel folds to its strip of
-            // section icons once, and unfolds again when the window grows back.
-            if (narrow && !_sideCollapsed && !_sideAutoCollapsed && !_sideUserOpenedNarrow)
-            {
-                ToggleRightPanel();
-                _sideAutoCollapsed = true;
-            }
-            else if (!narrow && _sideAutoCollapsed)
-            {
-                _sideAutoCollapsed = false;
-                _sideUserOpenedNarrow = false;
-                if (_sideCollapsed) ToggleRightPanel();
-            }
-            if (!_sideCollapsed) _sidePanel.Width = Ui.SidePanelWidth;
+            // «Свойства», «Содержимое» and «Слои» share one column of one width.
+            ApplyRightColumnWidth();
             (Content as Control)?.InvalidateMeasure();
         }
 
@@ -651,8 +638,7 @@ public sealed partial class EditorView : UserControl
 
     public void OpenObjects(bool focusSearch = false)
     {
-        _sidePanel.IsVisible = true;
-        _contextPanel.IsVisible = true;
+        SetRightTab(RightColumnTab.Content);
         // The objects live in the section that lists the current selection; with nothing
         // selected the panel opens on the placed assets, the most common thing to look for.
         var section = _editor.SectionForSelection()
@@ -698,13 +684,8 @@ public sealed partial class EditorView : UserControl
         }
     }
 
-    /// <summary>«/»: the right column - the properties and the map panel - out of the way of the map, and back.</summary>
-    public void ToggleSidePanel()
-    {
-        var show = !(_sidePanel.IsVisible || _contextPanel.IsVisible);
-        _sidePanel.IsVisible = show;
-        _contextPanel.IsVisible = show;
-    }
+    /// <summary>«/»: the right column - «Свойства · Содержимое · Слои» - out of the way of the map, and back.</summary>
+    public void ToggleSidePanel() => _rightColumn.IsVisible = !_rightColumn.IsVisible;
 
     /// <summary>How far the floating rail reaches into the canvas from the left.</summary>
     private double FloatingInsetLeft() => Ui.RailWidth + 8;
@@ -712,13 +693,16 @@ public sealed partial class EditorView : UserControl
     public void ToggleContextPanel()
     {
         _contextCollapsed = !_contextCollapsed;
+        // Folded, the column is a thin strip of «Свойства»; its tabs come back with it.
+        if (_contextCollapsed && _rightTab != RightColumnTab.Properties) SetRightTab(RightColumnTab.Properties);
+        _rightTabsRow.IsVisible = !_contextCollapsed;
         _contextBody.IsVisible = !_contextCollapsed;
         _contextFooter.IsVisible = !_contextCollapsed;
         _contextTitle.IsVisible = !_contextCollapsed;
         _contextHeaderTitle.IsVisible = !_contextCollapsed;
         _contextHeaderAction.IsVisible = !_contextCollapsed;
         _contextScopeLine.IsVisible = !_contextCollapsed && _contextScopeChip.Content is not null;
-        _contextPanel.Width = _contextCollapsed ? 42 : (Classes.Contains("narrow-window") ? 248 : Ui.ContextPanelWidth);
+        ApplyRightColumnWidth();
         _contextSwitch.IsVisible = !_contextCollapsed && (_editor.ActiveTool is EditorTool.River or EditorTool.Road
             ? RiverRoadHasSelection() : EditorContextPanel.ToggleApplies(_editor.SelectionCount));
     }
@@ -729,13 +713,8 @@ public sealed partial class EditorView : UserControl
         _sideBody.IsVisible = !_sideCollapsed;
         _sideTitle.IsVisible = !_sideCollapsed;
         _sideStrip.IsVisible = _sideCollapsed;
-        _sidePanel.Width = _sideCollapsed ? 44 : Ui.SidePanelWidth;
-        // Opening it by hand in a narrow window is the user's choice and is not undone by resizing.
-        if (!_sideCollapsed && Classes.Contains("narrow-window")) _sideUserOpenedNarrow = true;
     }
 
-    private bool _sideAutoCollapsed;
-    private bool _sideUserOpenedNarrow;
     private readonly StackPanel _sideStrip = new() { Name = "SidePanelSectionStrip", Spacing = 4, IsVisible = false,
         HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0, 6, 0, 0) };
 

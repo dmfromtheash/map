@@ -967,9 +967,9 @@ public sealed class NativeEditorIntegrityApplication : Application
             700, 480, 160, 120, 0, CurrentLook.MountainSlate, CurrentLook.MountainInk, 2, true, false);
         return new MapDocument(
             DocumentId.New(), "Проверка целостности", DateTimeOffset.UnixEpoch,
-            new CanvasDefinition(1_024, 768, "px", "#FFF3F0E8"),
+            new CanvasDefinition(1_024, 768, "px", CurrentLook.PageColor),
             [
-                CurrentLook.Page("Фон", "#FFF3F0E8"),
+                CurrentLook.Page("Фон"),
                 BrushLayer.CreateEmpty(LayerId.New(), "Кисть"),
                 LandLayer.CreateEmpty(LayerId.New(), "Суша"),
                 new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, [existing]),

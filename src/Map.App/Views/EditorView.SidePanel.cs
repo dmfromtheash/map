@@ -57,6 +57,8 @@ public sealed partial class EditorView
         collapse.Click += (_, _) => ToggleRightPanel();
         AutomationProperties.SetName(collapse, "Свернуть или развернуть правую рабочую панель");
         ToolTip.SetTip(collapse, "Свернуть или развернуть панель «Карта» (/)");
+        // The panel is a page of the right column now (DEC-070 «Б»): the column folds from «Свойства», «/» hides it.
+        collapse.IsVisible = false;
         // Land, water, assets, roads, the other objects and the layer stack are separate working
         // sections of one panel (see EditorView.PanelSections), not one long mixed list.
         _sideBody = BuildSectionedPanel();

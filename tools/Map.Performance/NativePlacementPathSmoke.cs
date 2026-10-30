@@ -92,8 +92,8 @@ public sealed class NativePlacementPathApplication : Application
         _window = new Window { Width = 1440, Height = 900, Title = "Map — Stage 17", ShowActivated = false,
             ShowInTaskbar = false, WindowStartupLocation = WindowStartupLocation.Manual, Position = new PixelPoint(-32000, -32000) };
         var document = new MapDocument(DocumentId.New(), "Редактируемая лесная тропа", DateTimeOffset.UnixEpoch,
-            new CanvasDefinition(1024, 768, "px", "#FFF2EAD5"),
-            [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFF2EAD5"),
+            new CanvasDefinition(1024, 768, "px", CurrentLook.PageColor),
+            [CurrentLook.Page("Фон"),
                 new ObjectLayer(LayerId.New(), "Деревья", true, false, 1, [])]);
         OpenEditor(document);
         _window.Opened += async (_, _) =>

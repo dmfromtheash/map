@@ -166,8 +166,8 @@ public sealed class GenerationControlApplication : Application
         var mountain = OwnerMountainFixtures.Embedded(1);
         var sha = mountain.Sha256;
         var layer = new ObjectLayer(LayerId.New(), "Области", true, false, 1, []);
-        var document = new MapDocument(DocumentId.New(), "R20 area", DateTimeOffset.UnixEpoch, new(768, 768, "px", "#FFFFFFFF"),
-            [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFFFFFFF"), layer], [mountain]);
+        var document = new MapDocument(DocumentId.New(), "R20 area", DateTimeOffset.UnixEpoch, new(768, 768, "px", CurrentLook.PageColor),
+            [CurrentLook.Page("Фон"), layer], [mountain]);
         var area = PlacementAreaPlanner.InitializeComposition(new PlacementArea { LayoutVersion = 4, Density = 70, Seed = 5,
             Nodes = [new(Guid.NewGuid(), 40, 40), new(Guid.NewGuid(), 720, 40), new(Guid.NewGuid(), 720, 720), new(Guid.NewGuid(), 40, 720)],
             Variants = [new(sha, 512, 512)], Style = new(sha), Request = new() { BaseWidth = 40 } });

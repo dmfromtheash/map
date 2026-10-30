@@ -21,8 +21,8 @@ public sealed partial class NativeEditorScenarioApplication
     {
         var land = LandLayer.CreateEmpty(LayerId.New(), "Мягкая земля");
         var document = new MapDocument(DocumentId.New(), "Проверка мягкого берега", DateTimeOffset.UnixEpoch,
-            new CanvasDefinition(768, 640, "px", "#FFF2E9DB"),
-            [CurrentLook.Page("Фон", "#FFF2E9DB"), land,
+            new CanvasDefinition(768, 640, "px", CurrentLook.PageColor),
+            [CurrentLook.Page("Фон"), land,
                 new ObjectLayer(LayerId.New(), "Река", true, false, 1, [])]);
         _view.Canvas.DisposeRenderCaches(); OpenEditor(document);
         await Settle();

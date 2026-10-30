@@ -11,14 +11,14 @@ public sealed partial class NativeEditorScenarioApplication
     private static readonly string[] ShoreRequired =
     [
         "new-map-look", "same-level-carves-earth", "higher-water-carves-earth",
-        "lower-water-is-covered", "width-rebuilds-banks", "pen-style-from-panel", "style-undo-exact",
+        "lower-water-is-covered", "width-rebuilds-banks", "width-undo-exact",
         "shore-map-saved-and-reopened", "native-shore-frame", "resources-disposed",
     ];
 
     private async Task ShoreOnly()
     {
         _view.Canvas.DisposeRenderCaches();
-        OpenEditor(IllustratedShoreScene());
+        OpenEditor(ShoreScene());
         await Settle();
         _editor.Session.Viewport.Set(0, 0, Math.Min(_view.Canvas.Bounds.Width / 1024, _view.Canvas.Bounds.Height / 768));
         var river = _editor.Rivers.Single();
@@ -61,11 +61,7 @@ public sealed partial class NativeEditorScenarioApplication
             _report.Checks["width-rebuilds-banks"] = normal.Pixels.Zip(wide.Pixels).Count(p => p.First != p.Second) > 3000;
         }
         _editor.Undo();
-        await Click("RiverPenStyleButton");
-        _report.Checks["pen-style-from-panel"] = _editor.SelectedRiver?.Style == RiverStyle.Illustrated(pen: true);
-        using (var pen = ShoreBitmap()) SaveShore(pen, "shore-pen");
-        _editor.Undo();
-        _report.Checks["style-undo-exact"] = ReferenceEquals(original, _editor.Session.Document);
+        _report.Checks["width-undo-exact"] = ReferenceEquals(original, _editor.Session.Document);
         _editor.HandleEscape(); await Frame();
         _report.Checks["native-shore-frame"] = ReferenceEquals(_view.Canvas.LastRenderedDocument, _editor.Session.Document);
         _report.Screenshot = Path.ChangeExtension(Options.OutputPath, ".shore-editor.png");
@@ -105,7 +101,7 @@ public sealed partial class NativeEditorScenarioApplication
         data.SaveTo(file);
     }
 
-    private static MapDocument IllustratedShoreScene()
+    private static MapDocument ShoreScene()
     {
         var land = TileMap.Empty(1);
         for (var ty = 0; ty < 3; ty++) for (var tx = 0; tx < 4; tx++)

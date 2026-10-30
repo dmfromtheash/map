@@ -107,8 +107,16 @@ public sealed partial class EditorView
         Refresh(); UiTasks.Forget(this, _editor.RefreshAtlasAsync);
         return new Border
         {
-            Child = new ScrollViewer { HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
-                VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled, Content = row },
+            Child = new DockPanel
+            {
+                Children =
+                {
+                    // DEC-070 «Б»: «Содержимое» and «Слои» at the right end of the row open those pages of the right column.
+                    BuildRightColumnButtons().Docked(Dock.Right),
+                    new ScrollViewer { HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
+                        VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled, Content = row },
+                },
+            },
         }.Classed("workspace-row");
     }
 

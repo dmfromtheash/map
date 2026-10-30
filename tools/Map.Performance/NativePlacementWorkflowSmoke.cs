@@ -659,8 +659,8 @@ public sealed class PlacementWorkflowApplication : Application
     }
     private static int Count(MapDocument document) => document.Layers.OfType<ObjectLayer>().Sum(l => l.Objects.Count);
     private static MapDocument Document(int size) => new(DocumentId.New(), "Placement scenario", DateTimeOffset.UtcNow,
-        new CanvasDefinition(size, size, "px", "#FFBBD0AD"),
-        [new BaseColorLayer(LayerId.New(), "Фон", true, false, 1, "#FFBBD0AD"),
+        new CanvasDefinition(size, size, "px", CurrentLook.PageColor),
+        [CurrentLook.Page("Фон"),
          new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, [])]);
     private sealed class Recent : IRecentMaps
     {

@@ -575,7 +575,14 @@ public sealed partial class EditorView
             if (selectionSignature is not null)
             {
                 _contextPrefersToolPanel = false;
+                ShowPropertiesForNewSelection();
             }
+        }
+        // A piece of land picked on the map has its state in «Свойства» too (DEC-070 «Б»).
+        if (_lastContextLand != _editor.SelectedLand?.Id)
+        {
+            _lastContextLand = _editor.SelectedLand?.Id;
+            if (_lastContextLand is not null && _editor.SelectionCount == 0) ShowPropertiesForNewSelection();
         }
 
         var scope = EditorContextPanel.Resolve(
