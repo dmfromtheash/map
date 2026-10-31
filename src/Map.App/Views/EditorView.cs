@@ -514,6 +514,11 @@ public sealed partial class EditorView : UserControl
         DetachedFromVisualTree += (_, _) =>
         {
             _closingAuxiliaryWindows = true;
+            // A running timer is held by the dispatcher and holds this view, its editor and the
+            // document: the status toast kept a closed editor alive for its 5-9 s (history-memory).
+            _statusToastTimer?.Stop();
+            _deferredPanelTimer?.Stop();
+            _ribbonPreviewTimer?.Stop();
             foreach (var window in new[]
                      { _assetCatalogWindow, _versionsWindow, _canvasWorkflowWindow, _exportWindow })
             {

@@ -4,6 +4,7 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Fonts.Inter;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using Map.App.Services;
 using Map.App.Views;
 using Map.Assets;
@@ -257,6 +258,15 @@ public sealed class NativeStampAppearanceApplication : Application
             && revisionBefore == editor.Session.Revision
             && undoBefore == editor.Session.UndoDepth;
 
+        // The mask is inside a disclosure on the Properties page of the right column.
+        NativeEditorScenarioApplication.RevealTab(view, "FutureStampLooks");
+        view.GetVisualDescendants().OfType<Expander>()
+            .Single(control => control.Name == "FutureStampLooks").IsExpanded = true;
+        await SettleAsync();
+        var clipDisclosure = view.GetVisualDescendants().OfType<Expander>()
+            .Single(control => control.Name == "FutureStampGeometry");
+        clipDisclosure.IsExpanded = true;
+        await SettleAsync();
         var clipGroupVisible = view.ShowFutureClipMaskForSmoke();
         await SettleAsync();
         await NextFrameAsync(view);
@@ -496,7 +506,9 @@ public sealed class NativeStampAppearanceApplication : Application
     {
         await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Loaded);
         await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Render);
-        await Task.Delay(25);
+        // Production panels refresh 250 ms after the last edit (EditorView.DeferPanels).
+        await Task.Delay(300);
+        await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
     }
 
     private sealed class SmokeFilePicker(string path) : IFilePicker

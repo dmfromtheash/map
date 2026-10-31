@@ -350,6 +350,16 @@ public sealed class PlacementWorkflowApplication : Application
         await completed.Task;
         Check(phase + " count/history", Count(editor.Session.Document) == startCount + count * 1000
             && editor.Session.UndoDepth == startDepth + count);
+        // The object list lives on the «Содержимое» page of the right column (DEC-078); on a hidden
+        // page it realizes no rows at all.
+        // The placed mountains are listed in «Содержимое» → «Ассеты»; the list refreshes 250 ms
+        // after the edits stop (EditorView.DeferPanels).
+        NativeEditorScenarioApplication.RevealTab(_view, "PanelSectionAssets");
+        _view.GetVisualDescendants().OfType<Button>().First(b => b.Name == "PanelSectionAssets")
+            .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        await Task.Delay(350);
+        await Dispatcher.UIThread.InvokeAsync(() => _view.UpdateLayout(), DispatcherPriority.Background);
+        Console.WriteLine($"{phase} object list rows realized: {_view.ObjectListRealizedCount} of {_view.ObjectListLogicalCount}; section {editor.PanelSection}; visible {_view.GetVisualDescendants().OfType<ListBox>().FirstOrDefault(l => l.Name == "ObjectList")?.IsEffectivelyVisible}");
         Check(phase + " virtual rows", _view.ObjectListRealizedCount is > 0 and < 150);
         Check(phase + " unique ids/names", await Task.Run(() =>
         {
@@ -396,11 +406,16 @@ public sealed class PlacementWorkflowApplication : Application
                     _view.UpdateLayout(); _frame.Render(_view);
                 }, DispatcherPriority.Background);
                 var elapsed = watch.Elapsed.TotalMilliseconds;
-                Console.WriteLine($"camera {phase} {label} {i}: {elapsed:F1}ms; scene {_view.Canvas.LastSceneRenderMilliseconds:F1}; drawn {_view.Canvas.LastRenderStats.ObjectsDrawn}; occluded {_view.Canvas.LastRenderStats.StampOccludedObjects}; tiles {_view.Canvas.LastRenderStats.ObjectTilesDrawn}");
+                // The scene pass runs on the render thread after _frame.Render; the checks below
+                // read that frame's result, so wait for it (the measured time above is unchanged).
+                await CompletedFrameAsync();
+                Console.WriteLine($"camera {phase} {label} {i}: {elapsed:F1}ms; scene {_view.Canvas.LastSceneRenderMilliseconds:F1}; drawn {_view.Canvas.LastRenderStats.ObjectsDrawn}; occluded {_view.Canvas.LastRenderStats.StampOccludedObjects}; tiles {_view.Canvas.LastRenderStats.ObjectTilesDrawn}; kept {_view.Canvas.LastRenderStats.LayerImagesKept}; overview {_view.Canvas.LastRenderStats.OverviewObjects}");
                 if (i == 0) _report.CameraMs[phase + " " + label + " cold"] = elapsed;
                 else measurements.Add(elapsed);
                 Check(phase + " " + label + " rendered", ReferenceEquals(_view.Canvas.LastRenderedDocument, _view.Editor.Session.Document)
-                    && _view.Canvas.LastFrameObjectsDrawn > 0);
+                    // A frame may show the object layer from its kept image (LayerImagesKept)
+                    // instead of drawing the objects again; both put the objects on screen.
+                    && (_view.Canvas.LastFrameObjectsDrawn > 0 || _view.Canvas.LastRenderStats.LayerImagesKept > 0));
                 await Task.Delay(20);
             }
             _report.CameraMs[phase + " " + label + " warm-p95"] = P95(measurements);
@@ -617,8 +632,28 @@ public sealed class PlacementWorkflowApplication : Application
         image.Render(root);
         image.Save(Path.ChangeExtension(Options.OutputPath, suffix + ".png"), new PngBitmapEncoderOptions());
     }
+    private async Task CompletedFrameAsync()
+    {
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var requested = long.MaxValue;
+        void OnFrame(object? sender, EventArgs args)
+        {
+            if (_view.Canvas.CompletedSceneRevision >= Volatile.Read(ref requested)) done.TrySetResult();
+        }
+        _view.Canvas.FrameRendered += OnFrame;
+        try
+        {
+            Volatile.Write(ref requested, _view.Canvas.RequestFrameForSmoke());
+            if (_view.Canvas.CompletedSceneRevision >= requested) done.TrySetResult();
+            await done.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        finally { _view.Canvas.FrameRendered -= OnFrame; }
+    }
+
+    /// <summary>A check called for several frames stays false once any of them failed.</summary>
     private void Check(string key, bool value)
     {
+        if (_report.Checks.TryGetValue(key, out var earlier)) value &= earlier;
         _report.Checks[key] = value;
         if (!value) Console.WriteLine("CHECK FAILED: " + key);
     }

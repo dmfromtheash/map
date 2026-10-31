@@ -240,8 +240,11 @@ public sealed class NativeEditorIntegrityApplication : Application
         view.Canvas.ClickForSmoke(Screen(editor, 280, 240).X, Screen(editor, 280, 240).Y);
         await SettleAsync();
         var reselected = editor.Session.SelectedObjectId == shape?.Id;
-        var inspectorShown = Find<Control>(view, "SelectionKindSlot").IsVisible
-            && VisibleInside(Find<Control>(view, "SelectionKindSlot"), view)
+        var inspector = Find<Control>(view, "SelectionKindSlot");
+        inspector.BringIntoView();
+        await SettleAsync();
+        var inspectorShown = inspector.IsEffectivelyVisible
+            && VisibleInside(inspector, view)
             && editor.ActiveTool == EditorTool.Shape;
         var toolPathStillThere = VisibleInside(Find<Button>(view, "ContextScopeTool"), view);
         scenarios["click_selects_the_shape_as_an_object"] = reselected;
@@ -689,6 +692,7 @@ public sealed class NativeEditorIntegrityApplication : Application
         var ramp = Find<GradientRamp>(view, "ShapeGradientRamp");
         var rampIsUsable = ramp.Bounds.Width > 100 && ramp.Bounds.Height >= 30
             && ramp.Stops.Count == 2;
+        notes.Add($"gradient ramp: {ramp.Bounds.Width:0.#}x{ramp.Bounds.Height:0.#}, stops={ramp.Stops.Count}");
 
         var stopColour = view.ColorFieldForSmoke("ShapeGradientStopColorBox");
         stopColour.OpenForSmoke();
@@ -766,12 +770,17 @@ public sealed class NativeEditorIntegrityApplication : Application
         await SettleAsync();
         var wideSettled = await StabiliseLayoutAsync(view);
         var wideModes = AllModesReachable(view, shapeModeNames);
+        Find<Button>(view, "RightTabLayers").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        wideSettled &= await StabiliseLayoutAsync(view);
         var wideLayers = LayerRowsReachable(view, out var wideRowDetail);
         var wideCanvas = view.Canvas.Bounds.Width;
         SaveVisual(view, wideScreenshot, 1_416, 939);
         window.Width = 960; window.Height = 640;
+        Find<Button>(view, "RightTabProperties").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
         var compactSettled = await StabiliseLayoutAsync(view);
         var compactModes = AllModesReachable(view, shapeModeNames);
+        Find<Button>(view, "RightTabLayers").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        compactSettled &= await StabiliseLayoutAsync(view);
         var compactLayers = LayerRowsReachable(view, out var compactRowDetail);
         var compactCanvas = view.Canvas.Bounds.Width;
         SaveVisual(view, compactScreenshot, 960, 640);
@@ -875,6 +884,7 @@ public sealed class NativeEditorIntegrityApplication : Application
             await SettleAsync();
             var signature = string.Join('|', view.GetVisualDescendants().OfType<Control>()
                 .Where(item => item.Name is not null
+                    && item.IsEffectivelyVisible
                     && (item.Name.StartsWith("Layer_", StringComparison.Ordinal)
                         || item.Name.StartsWith("ShapeDrawMode", StringComparison.Ordinal)
                         || item.Name is "ContextPanel" or "EditorSidePanel"))
@@ -937,9 +947,12 @@ public sealed class NativeEditorIntegrityApplication : Application
     private static int ObjectCount(MapDocument document) =>
         document.Layers.OfType<ObjectLayer>().Sum(layer => layer.Objects.Count);
 
-    private static T Find<T>(Control root, string name) where T : Control =>
-        root.GetVisualDescendants().OfType<T>().FirstOrDefault(item => item.Name == name)
-        ?? throw new InvalidOperationException($"The editor integrity smoke did not find {name}.");
+    private static T Find<T>(Control root, string name) where T : Control
+    {
+        NativeEditorScenarioApplication.RevealTab(root, name);
+        return root.GetVisualDescendants().OfType<T>().FirstOrDefault(item => item.Name == name)
+            ?? throw new InvalidOperationException($"The editor integrity smoke did not find {name}.");
+    }
 
     private static void SaveVisual(Control control, string path, int width, int height)
     {
@@ -954,7 +967,9 @@ public sealed class NativeEditorIntegrityApplication : Application
     {
         await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Loaded);
         await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Render);
-        await Task.Delay(20);
+        // Production panels refresh 250 ms after the last edit (EditorView.DeferPanels).
+        await Task.Delay(300);
+        await Dispatcher.UIThread.InvokeAsync(static () => { }, DispatcherPriority.Background);
     }
 
     /// <summary>The stamp is one of the owner's mountains, copied into the throwaway workspace.</summary>
