@@ -75,18 +75,33 @@ public sealed partial class NativeEditorScenarioApplication
 
         var land = _editor.Session.Document.Layers.OfType<LandLayer>().First();
         _editor.SelectLayer(land.Id);
-        await Click("LandToolButton"); await Shoot("land");
+        // The create buttons' pictures are frames of the real map drawn in the background (owner, 2026-10-31: «1 в 1
+        // всё как в настоящем использовании»): wait for them, and check each shows a drawn map, not an empty strip.
+        var drawn = new List<string>();
+        async Task Pictures(string hero)
+        {
+            for (var i = 0; i < 60; i++)
+            {
+                var images = _view.GetVisualDescendants().OfType<Control>().Where(c => c.Name == hero)
+                    .SelectMany(h => h.GetVisualDescendants().OfType<Image>()).ToList();
+                if (images.Count > 0 && images.All(img => img.Source is not null)) { drawn.Add(hero); return; }
+                await Task.Delay(100); await Settle();
+            }
+        }
+        await Click("LandToolButton"); await Pictures("NewLandButtonHero"); await Shoot("land");
         _editor.SetLandPaintMode(true); await Shoot("land-paint");
         _editor.SetLandPaintMode(false); await Settle();
 
-        await Click("RiverToolButton"); await Shoot("river-new");
+        await Click("RiverToolButton"); await Pictures("StartRiverButtonHero"); await Pictures("StartLakeButtonHero"); await Shoot("river-new");
         await Click("StartRiverButton");
         Point(120, 220); Point(380, 320); Point(640, 280); Point(900, 600);
         await Click("FinishRiverButton");
         Point(380, 320); await Settle();
         await Shoot("river");
 
-        await Click("RoadToolButton"); await Shoot("road-new");
+        await Click("RoadToolButton"); await Pictures("StartRoadButtonHero"); await Shoot("road-new");
+        Console.WriteLine("create pictures drawn: " + string.Join(", ", drawn));
+        _report.Checks["create-pictures-drawn"] = drawn.Count == 4;
         await Click("StartRoadButton");
         Point(60, 430); Point(300, 380); Point(520, 470); Point(960, 380);
         await Click("FinishRoadButton");

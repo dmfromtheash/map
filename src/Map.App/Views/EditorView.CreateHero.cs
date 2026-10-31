@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using Avalonia;
 using Avalonia.Animation;
@@ -10,13 +12,15 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Transformation;
 using Avalonia.Styling;
+using Avalonia.Media.Imaging;
+using Avalonia.Threading;
 using Map.App.Controls;
 using Map.App.Services;
+using Map.Presentation.ViewModels;
+using MapDocument = Map.Core.Documents.MapDocument;
+using WorldBounds = Map.Core.Documents.WorldBounds;
 
 namespace Map.App.Views;
-
-/// <summary>What a create button makes: the live picture inside it draws exactly that.</summary>
-internal enum CreateHeroKind { River, Land, Road, Lake }
 
 /// <summary>
 /// The create button of a tool, at the very top of its panel (owner, 2026-10-31, variant 5 with the picture of
@@ -34,11 +38,11 @@ public sealed partial class EditorView
 
     /// <param name="makes">The end of «Нажми сюда, чтобы создать …»; null — the button gets no cloud of its own (a second
     /// create button under the first one, as the lake under the river).</param>
-    private static StackPanel CreateHero(string name, string title, string hint, string? makes, CreateHeroKind kind,
+    private StackPanel CreateHero(string name, string title, string hint, string? makes, CreateDemoKind kind,
         MapIcons.SolidGlyph glyph, Action action)
     {
         var button = HeroButton(name, title, hint, glyph, action);
-        var picture = HeroPicture(kind, out var animate);
+        var picture = DemoPicture(kind, out var animate);
         // The picture sits inside the button above its title: the button says what it does by showing it.
         var content = (Grid)button.Content!;
         button.Content = null; // the grid leaves the button before it joins the new stack
@@ -193,70 +197,68 @@ public sealed partial class EditorView
         }
     }
 
+    private const int DemoFrames = 8;
+    private readonly Dictionary<CreateDemoKind, (string Signature, Bitmap[] Frames)> _demoFrames = [];
+
     /// <summary>
-    /// The small picture of what the button makes, on the paper colour of the owner's maps: the river and the road
-    /// draw themselves along their line, the island grows from a speck. Still (finished) when motion is off.
+    /// The live picture of a create button: frames of the real thing being made (owner, 2026-10-31: «1 в 1 всё как в
+    /// настоящем использовании»), built by <see cref="EditorViewModel.CreateDemoFrame"/> on this map's page, sea, style
+    /// and light and drawn by the program's renderer (<see cref="RenderPreviewPixels"/>). The frames are drawn once in
+    /// the background and again only when what they are drawn with changes; the motion shows a frame every 220 ms, so it
+    /// repaints the window a few times a second, not sixty. Still on the finished frame when motion is off.
     /// </summary>
-    private static Border HeroPicture(CreateHeroKind kind, out Action<CancellationToken> animate)
+    private Border DemoPicture(CreateDemoKind kind, out Action<CancellationToken> animate)
     {
-        var canvas = new Canvas { Width = 300, Height = 80 };
-        Shape line;
-        switch (kind)
-        {
-            case CreateHeroKind.Land:
-                line = new Path
-                {
-                    Data = Geometry.Parse("M50,52 C58,26 96,24 116,16 S178,6 200,24 S250,52 222,64 S150,72 120,68 S44,78 50,52 Z"),
-                    Fill = new SolidColorBrush(Color.Parse("#B9A26E")), Stroke = new SolidColorBrush(Color.Parse("#6B5A35")), StrokeThickness = 3,
-                    RenderTransformOrigin = new RelativePoint(.5, .55, RelativeUnit.Relative),
-                };
-                break;
-            case CreateHeroKind.Lake:
-                line = new Path
-                {
-                    Data = Geometry.Parse("M150,12 C196,10 236,26 232,44 S194,74 150,72 S68,64 70,42 S104,14 150,12 Z"),
-                    Fill = new SolidColorBrush(Color.Parse("#7FB4D3")), Stroke = new SolidColorBrush(Color.Parse("#3A7FAE")), StrokeThickness = 3,
-                    RenderTransformOrigin = new RelativePoint(.5, .5, RelativeUnit.Relative),
-                };
-                break;
-            case CreateHeroKind.Road:
-                line = new Path
-                {
-                    Data = Geometry.Parse("M10,70 L70,46 L130,54 L200,24 L290,14"), Stroke = new SolidColorBrush(Color.Parse("#8A5A2B")),
-                    StrokeThickness = 6, StrokeLineCap = PenLineCap.Round, StrokeJoin = PenLineJoin.Round,
-                };
-                break;
-            default:
-                line = new Path
-                {
-                    Data = Geometry.Parse("M8,18 C60,8 52,56 104,46 S176,24 204,64 S262,58 292,72"), Stroke = new SolidColorBrush(Color.Parse("#3A7FAE")),
-                    StrokeThickness = 7, StrokeLineCap = PenLineCap.Round,
-                };
-                break;
-        }
-        canvas.Children.Add(line);
-        const double length = 70; // the line's length in stroke widths: the dash that uncovers it
-        var grows = kind is CreateHeroKind.Land or CreateHeroKind.Lake; // a shape grows, a line draws itself
-        if (!grows) line.StrokeDashArray = [length, length];
-        animate = token =>
-        {
-            var ease = new CubicEaseInOut();
-            if (grows)
-            {
-                var grow = new ScaleTransform();
-                line.RenderTransform = grow;
-                _ = AnimateAsync(line, ScaleTransform.ScaleXProperty, 3, ease, [(0, .15), (.6, 1), (1, 1)], token);
-                _ = AnimateAsync(line, ScaleTransform.ScaleYProperty, 3, ease, [(0, .15), (.6, 1), (1, 1)], token);
-                _ = AnimateAsync(line, OpacityProperty, 3, ease, [(0, .2), (.6, 1), (1, 1)], token);
-                return;
-            }
-            _ = AnimateAsync(line, Shape.StrokeDashOffsetProperty, 3, ease, [(0, length), (.6, 0), (1, 0)], token);
-        };
-        return new Border
+        var image = new Image { Stretch = Stretch.UniformToFill };
+        var holder = new Border
         {
             Height = 64, CornerRadius = new CornerRadius(8), ClipToBounds = true, IsHitTestVisible = false,
-            Background = new SolidColorBrush(Color.Parse("#E9DCC0")),
-            Child = new Viewbox { Stretch = Stretch.Fill, Child = canvas },
+            Background = new SolidColorBrush(Color.Parse("#1A140E")), Child = image,
         };
+        void Show(Bitmap[] frames) => image.Source = frames[^1];
+        void Prepare()
+        {
+            var signature = _editor.CreateDemoSignature;
+            if (_demoFrames.TryGetValue(kind, out var ready) && ready.Signature == signature) { Show(ready.Frames); return; }
+            // The documents are made on the UI thread from the live map; the pixels are drawn off it.
+            var documents = Enumerable.Range(0, DemoFrames).Select(i => _editor.CreateDemoFrame(kind, i, DemoFrames)).ToArray();
+            var stamps = _editor.StampImages;
+            var area = new WorldBounds(0, 0, EditorViewModel.CreateDemoWidth, EditorViewModel.CreateDemoHeight);
+            UiTasks.Forget(this, () => System.Threading.Tasks.Task.Run(() =>
+            {
+                byte[] Draw(MapDocument d) => RenderPreviewPixels(d, area, EditorViewModel.CreateDemoWidth, EditorViewModel.CreateDemoHeight, 1, stamps);
+                // The finished picture first, so the button shows what it makes at once; the growth follows.
+                var finished = Draw(documents[^1]);
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (_demoFrames.ContainsKey(kind) || image.Source is not null) return;
+                    image.Source = ToBitmap(finished, EditorViewModel.CreateDemoWidth, EditorViewModel.CreateDemoHeight);
+                });
+                var pixels = documents.Take(documents.Length - 1).Select(Draw).Append(finished).ToArray();
+                Dispatcher.UIThread.Post(() =>
+                {
+                    var frames = pixels.Select(p => ToBitmap(p, EditorViewModel.CreateDemoWidth, EditorViewModel.CreateDemoHeight)).ToArray();
+                    if (_demoFrames.Remove(kind, out var old)) foreach (var bitmap in old.Frames) bitmap.Dispose();
+                    _demoFrames[kind] = (signature, frames);
+                    Show(frames);
+                });
+            }));
+        }
+        holder.AttachedToVisualTree += (_, _) => Prepare();
+        animate = token =>
+        {
+            if (!_demoFrames.TryGetValue(kind, out var ready)) return;
+            var frames = ready.Frames;
+            var step = 0;
+            // Eight frames of growth, then the finished map held for four more.
+            var timer = new DispatcherTimer(TimeSpan.FromMilliseconds(220), DispatcherPriority.Background, (_, _) =>
+            {
+                image.Source = frames[Math.Min(step % (DemoFrames + 4), DemoFrames - 1)];
+                step++;
+            });
+            timer.Start();
+            token.Register(() => Dispatcher.UIThread.Post(() => { timer.Stop(); image.Source = frames[^1]; }));
+        };
+        return holder;
     }
 }

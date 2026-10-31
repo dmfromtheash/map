@@ -288,7 +288,7 @@ public sealed partial class EditorView
         // offered while its category is: creation for the tool, the rest for a selected one.
         // The create button stands above everything in the panel (owner, 2026-10-31).
         return WithCreateHero(CreateHero("StartRiverButton", "Новая река", "Клики от истока к устью; клик по руслу — приток или рукав",
-            "реку", CreateHeroKind.River, MapIcons.SolidRiver, _editor.StartRiver), Ui.CategoryTabs("RiverTabs",
+            "реку", CreateDemoKind.River, MapIcons.SolidRiver, _editor.StartRiver), Ui.CategoryTabs("RiverTabs",
             new Ui.CategoryTab("Create", "Создание", MapIcons.LineSparkle, (_riverCreateCategory = Ui.Category("RiverCreateCategory", "Создание", "accent-create", new StackPanel
                 {
                     Spacing = 4, Children =
@@ -296,7 +296,7 @@ public sealed partial class EditorView
                         modes,
                         // A create button like the river's, with its lake filling; no cloud of its own under the river's.
                         CreateHero("StartLakeButton", "Новое озеро", "Клики по берегу; Enter — замкнуть", null,
-                            CreateHeroKind.Lake, MapIcons.SolidRiver, _editor.StartLake),
+                            CreateDemoKind.Lake, MapIcons.SolidRiver, _editor.StartLake),
                         Ui.TextButton("RiverToSeaButton", "Река отсюда в море", _editor.ArmRiverToSea, "compact")
                             .WithTip("Щёлкните на суше — река сама найдёт путь вниз по склону до моря."),
                         _riverFinish,

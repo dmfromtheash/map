@@ -892,7 +892,7 @@ public sealed partial class EditorView
                 }));
         // The create button stands above everything in the panel (owner, 2026-10-31).
         return WithCreateHero(CreateHero("NewLandButton", "Новая земля", "Новый слой суши — затем протяните по холсту",
-            "землю", CreateHeroKind.Land, MapIcons.SolidLand, () =>
+            "землю", CreateDemoKind.Land, MapIcons.SolidLand, () =>
             {
                 _editor.AddLandLayer();
                 _editor.ActiveTool = EditorTool.Land;

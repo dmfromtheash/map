@@ -239,7 +239,7 @@ public sealed partial class EditorView
         // offered while its category is: creation for the tool, the rest for a selected one.
         // The create button stands above everything in the panel (owner, 2026-10-31).
         return WithCreateHero(CreateHero("StartRoadButton", "Новая дорога", "Клики по холсту; клик по дороге — ветвь от общего узла",
-            "дорогу", CreateHeroKind.Road, MapIcons.SolidRoad, _editor.StartRoad), Ui.CategoryTabs("RoadTabs",
+            "дорогу", CreateDemoKind.Road, MapIcons.SolidRoad, _editor.StartRoad), Ui.CategoryTabs("RoadTabs",
             new Ui.CategoryTab("Create", "Создание", MapIcons.LineSparkle, (_roadCreateCategory = Ui.Category("RoadCreateCategory", "Создание", "accent-create", new StackPanel
                 {
                     Spacing = 4, Children =
