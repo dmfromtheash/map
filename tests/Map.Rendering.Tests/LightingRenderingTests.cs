@@ -83,7 +83,10 @@ public sealed class LightingRenderingTests
     {
         using var mountain = Mountain();
         var view = new WorldBounds(0, 0, 512, 384);
-        var torch = new MapLightSource(Guid.NewGuid(), 60, 330, "#ff9a42", 120, 1.1, Flicker: true);
+        // A fixed id: the flicker phase comes from the id, and with a random one about one run in
+        // forty the two moments below happened to be equally bright (CI 2026-10-30). This id's
+        // brightness differs by about 9 % between them.
+        var torch = new MapLightSource(Guid.Parse("11111111-2222-3333-4444-555555555555"), 60, 330, "#ff9a42", 120, 1.1, Flicker: true);
         var night = Scene(new MapLighting { TimeOfDay = 1, Sources = [torch] });
         var day = Scene(new MapLighting { TimeOfDay = 0, Sources = [torch] });
 
