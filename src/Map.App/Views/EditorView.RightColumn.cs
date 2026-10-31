@@ -89,7 +89,7 @@ public sealed partial class EditorView
             _sidePanel.IsVisible = tab is RightColumnTab.Content or RightColumnTab.Layers;
             if (_lookPage is not null) _lookPage.IsVisible = tab == RightColumnTab.Look;
             if (tab == RightColumnTab.Look) { SyncLookPage(); QueueLookPreviews(); }
-            else _editor.PreviewLook(null);
+            else { _lookHoverTimer?.Stop(); _editor.PreviewLook(null); }
             ApplyRightColumnWidth();
             if (tab == RightColumnTab.Layers && _editor.PanelSection != PanelSection.Layers)
                 ShowPanelSection(PanelSection.Layers);

@@ -106,6 +106,11 @@ public sealed partial class PaintPerfApplication
             await RibbonShots();
             return;
         }
+        if (System.Environment.GetEnvironmentVariable("MAP_NEW_ART_LOOK") == "1")
+        {
+            await LookRoutes(centre, scale);
+            return;
+        }
         if (System.Environment.GetEnvironmentVariable("MAP_NEW_ART_STYLE") == "1")
         {
             await StyleRoutes(centre, scale);

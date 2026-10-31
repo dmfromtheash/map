@@ -116,7 +116,7 @@ public sealed partial class EditorView
             Content = page,
         }.Classed("panel");
         _appearanceSyncs.Add(SyncLookPage);
-        _lookPage.DetachedFromVisualTree += (_, _) => _editor.PreviewLook(null);
+        _lookPage.DetachedFromVisualTree += (_, _) => { _lookHoverTimer?.Stop(); _editor.PreviewLook(null); };
         return _lookPage;
     }
 
@@ -146,10 +146,12 @@ public sealed partial class EditorView
         var what = key.StartsWith("style-", StringComparison.Ordinal) ? " " + PresetHint(Enum.Parse<MapStylePreset>(key["style-".Length..]))
             : key.StartsWith("sea-", StringComparison.Ordinal) ? " " + SeaHint((SeaManner)int.Parse(key["sea-".Length..], System.Globalization.CultureInfo.InvariantCulture))
             : "";
-        ToolTip.SetTip(button, title + "." + what + " Наведите — вся карта в этом виде; щелчок — применить (один шаг отмены); ещё щелчок — настройки.");
-        // Pointing tries the look on the whole map; leaving brings the map back.
-        button.PointerEntered += (_, _) => _editor.PreviewLook(LookDocument(key));
-        button.PointerExited += (_, _) => _editor.PreviewLook(null);
+        ToolTip.SetTip(button, title + "." + what + (key.StartsWith("style-", StringComparison.Ordinal)
+            ? " Щелчок — вся карта в этом стиле (Ctrl+Z вернёт); ещё щелчок — настройки."
+            : " Задержите указатель — вся карта в этом виде; щелчок — применить (один шаг отмены); ещё щелчок — настройки."));
+        // Pointing tries the look on the whole map; leaving brings the map back - both after a short rest (HoverLook).
+        button.PointerEntered += (_, _) => HoverLook(key);
+        button.PointerExited += (_, _) => HoverLook(null);
         button.Click += (_, _) =>
         {
             // A second click on the chosen picture opens (or closes) its settings under the part.
@@ -161,8 +163,40 @@ public sealed partial class EditorView
         return button;
     }
 
+    private DispatcherTimer? _lookHoverTimer;
+    private string? _lookHoverKey;
+
+    /// <summary>
+    /// The trial look follows the pointer only once it rests (owner, 2026-10-31: «оно жесть как лагает»). A style shown
+    /// on the whole new-art map took 3,3 s to draw and 1,8 s to take back, so a pointer crossing the pictures queued a
+    /// redraw per picture (12 pictures - the map still 3,3 s later). Now the map changes after 300 ms on one picture; a
+    /// move from picture to picture never draws the plain map in between (it waits 150 ms for the next picture).
+    /// </summary>
+    private void HoverLook(string? key)
+    {
+        // A style is not tried on the whole map: one style frame costs 0,6-1 s even on a map of 40 mountains, built 2-3
+        // times on the way to the finished view, and the first time a style is used up to 16 s (paint-perf
+        // MAP_NEW_ART_STYLE, 2026-10-31). Its picture shows it; a click applies it. Light and sea (40-120 ms) are tried.
+        if (key is not null && (key == "none" || key.StartsWith("style-", StringComparison.Ordinal))) key = null;
+        _lookHoverKey = key;
+        _lookHoverTimer ??= new DispatcherTimer(DispatcherPriority.Input);
+        _lookHoverTimer.Stop();
+        _lookHoverTimer.Interval = TimeSpan.FromMilliseconds(key is null ? 150 : 300);
+        _lookHoverTimer.Tick -= OnLookHoverRested;
+        _lookHoverTimer.Tick += OnLookHoverRested;
+        _lookHoverTimer.Start();
+    }
+
+    private void OnLookHoverRested(object? sender, EventArgs e)
+    {
+        _lookHoverTimer?.Stop();
+        _editor.PreviewLook(_lookHoverKey is { } key ? LookDocument(key) : null);
+    }
+
     private void ApplyLook(string key)
     {
+        _lookHoverTimer?.Stop();
+        _lookHoverKey = null;
         _editor.PreviewLook(null);
         ApplyLookCard(key);
         SyncAppearanceSections();
@@ -258,9 +292,13 @@ public sealed partial class EditorView
     {
         if (_lookPage is null || _canvas.Bounds.Width < 1) return;
         var document = _editor.Session.Document;
-        const int width = CardWidth * 2, height = CardHeight * 2;
-        var (styleArea, styleScale) = PreviewFrame(width, height, CardScale * 2);
-        var seaScale = CardScale * 0.8;
+        // Drawn at twice the picture's own size (72×44 DIP), not the former ribbon card's 150×84: a quarter of the
+        // pixels (the 25 pictures of the new-art map took 32 s of a core and were redrawn after every edit). The same
+        // piece of the map is shown: the scale shrinks with the size.
+        const int width = LookTileWidth * 2, height = LookTileHeight * 2;
+        const double shrink = width / (CardWidth * 2.0);
+        var (styleArea, styleScale) = PreviewFrame(width, height, CardScale * 2 * shrink);
+        var seaScale = CardScale * 0.8 * shrink;
         var seaArea = PreviewArea(width, height, seaScale);
         var signature = $"{System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(document)}|{styleArea.Left:0}|{styleArea.Top:0}|{styleScale:0.000}";
         if (signature == _lookPreviewSignature) return;
@@ -294,6 +332,7 @@ public sealed partial class EditorView
     private void DisposeLookPage()
     {
         _lookPreviewTimer?.Stop();
+        _lookHoverTimer?.Stop();
         _lookPreviewWork?.Cancel();
         foreach (var bitmap in _lookPreviews.Values) bitmap.Dispose();
         _lookPreviews.Clear();
