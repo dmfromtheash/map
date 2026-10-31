@@ -125,10 +125,15 @@ public sealed partial class EditorView
         _ => "Рисовать",
     };
 
+    /// <summary>«Свет», «Стили», «Море» from Ctrl+K: the «Вид» page with that part in sight (owner's pick 2026-10-31).</summary>
     private void ShowAppearanceTab(RibbonTab tab)
     {
         _ribbonTab = tab;
         ShowWorkspace(EditorWorkspace.Appearance);
+        SetRightTab(RightColumnTab.Look);
+        var part = tab switch { RibbonTab.Sea => "LookPart_sea", RibbonTab.Styles => "LookPart_style", _ => "LookPart_light" };
+        if (_lookPage is not null && Avalonia.LogicalTree.LogicalExtensions.GetLogicalDescendants(_lookPage).OfType<Control>().FirstOrDefault(c => c.Name == part) is { } target)
+            Dispatcher.UIThread.Post(() => target.BringIntoView(), DispatcherPriority.Loaded);
     }
 
     // The field-like button of the document bar, as in the chosen layout: «Найти действие   Ctrl+K».

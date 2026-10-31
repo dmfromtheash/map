@@ -38,6 +38,8 @@ public sealed partial class EditorView
     private const double CardScale = 0.6;
 
     private RibbonTab _ribbonTab;
+    // The ribbon is the fine settings now: «Вид» in the right column is the look (owner's pick 2026-10-31).
+    private bool _ribbonFineTune;
     private Border _ribbon = null!;
     private Control _ribbonBody = null!;
     // Tabs and cards are plain buttons marked by a brass frame: a checked toggle fills with brass and
@@ -67,6 +69,7 @@ public sealed partial class EditorView
     public void ShowAppearanceRibbon(bool styles)
     {
         _ribbonTab = styles ? RibbonTab.Styles : RibbonTab.Light;
+        _ribbonFineTune = true;
         if (_workspace != EditorWorkspace.Appearance) ShowWorkspace(EditorWorkspace.Appearance);
         SyncAppearanceRibbon();
     }
@@ -152,6 +155,8 @@ public sealed partial class EditorView
             Background = Application.Current?.FindResource("MapPanelBrush") as IBrush,
             Child = new DockPanel { Children = { header.Docked(Dock.Top), body } },
         }.Named("AppearanceRibbon").Classed("appearance-ribbon");
+        // The ribbon opens from «Вид» → «Настроить» (owner's pick 2026-10-31); a search or a script finds it the same way.
+        _ribbon.Tag = "Reveal:LookFineTuneButton";
 
         // A hidden ribbon (another section) renders no card previews.
         _canvas.ViewportChanged += (_, _) => { if (_ribbonTab != RibbonTab.None && _ribbon.IsVisible) QueueRibbonPreviews(); };
@@ -170,7 +175,7 @@ public sealed partial class EditorView
     {
         if (_ribbon is null) return;
         // DEC-070: the ribbon belongs to «Оформление»; elsewhere the map gets its height back.
-        _ribbon.IsVisible = !_isHexWorkshop && _workspace == EditorWorkspace.Appearance;
+        _ribbon.IsVisible = !_isHexWorkshop && _workspace == EditorWorkspace.Appearance && _ribbonFineTune;
         var lighting = _editor.ShownLighting;
         _ribbonLightState.Text = lighting.Enabled ? TimeTitle(lighting.TimeOfDay) : "выкл.";
         var style = _editor.ShownStyle;

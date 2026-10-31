@@ -10,7 +10,7 @@ using Map.Presentation.ViewModels;
 namespace Map.App.Views;
 
 /// <summary>Which page the right column shows (DEC-070, the owner's pick «Б» of 2026-10-30).</summary>
-public enum RightColumnTab { Properties, Content, Layers }
+public enum RightColumnTab { Properties, Content, Layers, Look }
 
 /// <summary>
 /// DEC-070 variant 1 with the owner's pick «Б» (2026-10-30): the right of the editor is one column with three tabs -
@@ -47,12 +47,13 @@ public sealed partial class EditorView
         {
             Child = new UniformGrid
             {
-                Rows = 1, Columns = 3,
+                Rows = 1, Columns = 4,
                 Children =
                 {
                     Tab(RightColumnTab.Properties, "RightTabProperties", "Свойства", "Что сейчас изменится: выделенное или следующий инструмент."),
                     Tab(RightColumnTab.Content, "RightTabContent", "Содержимое", "Земля, вода, ассеты, дороги и прочее на карте."),
                     Tab(RightColumnTab.Layers, "RightTabLayers", "Слои", "Слои карты снизу вверх и свойства выбранного слоя."),
+                    Tab(RightColumnTab.Look, "RightTabLook", "Вид", "Свет, стиль и море всей карты — картинками."),
                 },
             },
             Padding = new Thickness(0),
@@ -66,7 +67,7 @@ public sealed partial class EditorView
         _rightColumn = new DockPanel
         {
             Name = "RightColumn",
-            Children = { _rightTabsRow.Docked(Dock.Top), new Panel { Children = { contextPanel, sidePanel } } },
+            Children = { _rightTabsRow.Docked(Dock.Top), new Panel { Children = { contextPanel, sidePanel, BuildLookPage() } } },
         };
         _editor.PropertyChanged += OnRightColumnEditorChanged;
         SetRightTab(RightColumnTab.Properties);
@@ -80,12 +81,16 @@ public sealed partial class EditorView
             .WithTip("Открыть справа «Содержимое»: земля, вода, ассеты, дороги и прочее на карте.");
         var layers = Ui.TextButton("RowLayersButton", "Слои", () => SetRightTab(RightColumnTab.Layers), "compact")
             .WithTip("Открыть справа «Слои» карты.");
+        // «Вид» (owner's pick 2026-10-31): light, style and sea of the whole map, one button instead of three tabs.
+        var look = Ui.TextButton("RowLookButton", "Вид", () => SetRightTab(RightColumnTab.Look), "compact")
+            .WithTip("Открыть справа «Вид»: свет, стиль и море всей карты картинками.");
         _rightTabButtons.Add((RightColumnTab.Content, content));
         _rightTabButtons.Add((RightColumnTab.Layers, layers));
+        _rightTabButtons.Add((RightColumnTab.Look, look));
         return new StackPanel
         {
             Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(0, 0, 10, 4), Children = { content, layers },
+            Margin = new Thickness(0, 0, 10, 4), Children = { look, content, layers },
         };
     }
 
@@ -100,7 +105,10 @@ public sealed partial class EditorView
             _rightTab = tab;
             _rightColumn.IsVisible = true;
             _contextPanel.IsVisible = tab == RightColumnTab.Properties;
-            _sidePanel.IsVisible = tab != RightColumnTab.Properties;
+            _sidePanel.IsVisible = tab is RightColumnTab.Content or RightColumnTab.Layers;
+            if (_lookPage is not null) _lookPage.IsVisible = tab == RightColumnTab.Look;
+            if (tab == RightColumnTab.Look) { SyncLookPage(); QueueLookPreviews(); }
+            else _editor.PreviewLook(null);
             ApplyRightColumnWidth();
             if (tab == RightColumnTab.Layers && _editor.PanelSection != PanelSection.Layers)
                 ShowPanelSection(PanelSection.Layers);

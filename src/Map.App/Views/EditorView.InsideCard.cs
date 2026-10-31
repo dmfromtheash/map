@@ -342,6 +342,13 @@ public sealed partial class EditorView
                     new("Заблокированные", N(document.Layers.Count(l => l.Locked), "слой", "слоя", "слоёв")),
                     new("Выбранный", _editor.ActiveLayer?.Name ?? "—")])],
                 [], "Щелчок — открыть вкладку"),
+            RightColumnTab.Look => new("Вид", null, ["Правая колонка", "Вид"],
+                "Свет, стиль и море всей карты: наведите на картинку — карта покажет этот вид, щелчок применит.", ColumnAccent,
+                [new("Сейчас", [
+                    new("Свет", _editor.ShownLighting.Enabled ? TimeTitle(_editor.ShownLighting.TimeOfDay) : "без света"),
+                    new("Стили", _editor.ShownStyle.Enabled ? EditorViewModel.PresetTitle(_editor.ShownStyle.Preset) : "без стиля"),
+                    new("Море", SeaState(_editor.Sea))])],
+                [], "Щелчок — открыть вкладку"),
             _ => new("Свойства", null, ["Правая колонка", "Свойства"],
                 "Что сейчас изменится: выделенное на карте или следующий инструмент.", ColumnAccent,
                 [new("Сейчас здесь", [

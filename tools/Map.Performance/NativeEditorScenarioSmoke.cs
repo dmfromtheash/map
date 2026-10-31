@@ -702,7 +702,18 @@ public sealed partial class NativeEditorScenarioApplication : Application
         _editor.ActiveTool = EditorTool.Stamp; await Settle(); await Frame(); SaveWindow(".stamp.png");
         // The «Оформление» ribbon and the «Мир» section, as the owner sees them, for the next mockups (2026-10-31).
         await Click("SelectToolButton");
-        await Click("WorkspaceAppearanceTab"); await Settle();
+        await Click("WorkspaceAppearanceTab"); await Task.Delay(25000); await Settle(); await Frame();
+        // «Вид» (owner's pick 2026-10-31) opens with «Оформление»; its pictures are drawn by then.
+        _report.Checks["look-page-opens-with-appearance"] = _view.RightTab == RightColumnTab.Look;
+        SaveWindow(".look-page.png");
+        // A click on a style applies it in one undo step; Ctrl+Z brings the map back.
+        var depth = _editor.Session.UndoDepth;
+        await Click("LookCard_style-OldMapBlaeu"); await Settle();
+        _report.Checks["look-click-applies-style"] = _editor.ShownStyle is { Enabled: true, Preset: Map.Core.Documents.MapStylePreset.OldMapBlaeu }
+            && _editor.Session.UndoDepth == depth + 1 && !_editor.LookPreviewShown;
+        _editor.Undo(); await Settle();
+        _report.Checks["look-undo-restores"] = !_editor.ShownStyle.Enabled && _editor.Session.UndoDepth == depth;
+        await Click("LookFineTuneButton"); await Settle();
         foreach (var (tab, suffix) in new[] { ("RibbonLightTab", ".look-light.png"), ("RibbonStyleTab", ".look-styles.png"), ("RibbonSeaTab", ".look-sea.png") })
         {
             RevealTab(_view, tab); await Click(tab); await Task.Delay(tab == "RibbonStyleTab" ? 20000 : 6000); await Settle(); await Frame(); SaveWindow(suffix);

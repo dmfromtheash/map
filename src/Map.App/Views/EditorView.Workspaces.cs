@@ -57,8 +57,12 @@ public sealed partial class EditorView
     /// <summary>Opens a section. Only what is shown changes; a pressed «Мир» also opens its list.</summary>
     public void ShowWorkspace(EditorWorkspace workspace, bool openWorldList = false)
     {
+        var entering = _workspace != workspace;
         _workspace = workspace;
         foreach (var (key, tab) in _workspaceTabs) Ui.SetClass(tab, "active", key == workspace);
+        // «Оформление» opens «Вид» in the right column; the ribbon of fine settings stays closed until asked for.
+        if (workspace != EditorWorkspace.Appearance) _ribbonFineTune = false;
+        else if (entering && !_ribbonFineTune && _rightColumn is not null) SetRightTab(RightColumnTab.Look);
         foreach (var (entry, button) in _railButtons)
             button.IsVisible = EditorSurfaceLayout.InWorkspace(entry, workspace);
         foreach (var (divider, group) in _railDividers)

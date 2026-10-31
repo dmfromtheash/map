@@ -522,6 +522,7 @@ public sealed partial class EditorView : UserControl
             _ribbonPreviewTimer?.Stop();
             foreach (var (_, frames) in _demoFrames.Values) foreach (var bitmap in frames) bitmap.Dispose();
             _demoFrames.Clear();
+            DisposeLookPage();
             foreach (var window in new[]
                      { _assetCatalogWindow, _versionsWindow, _canvasWorkflowWindow, _exportWindow })
             {

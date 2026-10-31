@@ -428,6 +428,8 @@ public sealed partial class EditorViewModel
             if (CompareShowsBefore && _compareBefore is { } before) return before;
             if (GenerationPreview is { } generationPreview) return generationPreview;
             if (ValidAppearancePreview is { } appearancePreview) return appearancePreview;
+            // «Вид»: a light, a style or a sea pointed at, or «Сравнить» held - shown, never stored.
+            if (ValidLookPreview is { } look && DragPreview is null) return look;
 
             // A light slider being dragged shows its value without a history entry.
             if (ValidLightingPreview is { } lightingPreview && DragPreview is null)
