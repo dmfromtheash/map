@@ -61,9 +61,36 @@ public sealed partial class EditorView
         ToolTip.SetPlacement(target, placement);
         target.AddHandler(ToolTip.ToolTipOpeningEvent, (_, e) =>
         {
-            if (model() is { } card) tip.Content = BuildInsideCard(card);
+            if (model() is { } card) tip.Content = FitInsideWindow(BuildInsideCard(card), target, placement);
             else e.Handled = true;
         });
+    }
+
+    /// <summary>
+    /// Keeps the card inside the window (owner, 2026-10-31: «слишком большое и выходит за окна»; the «Мир» card was
+    /// 684×821 DIP under a tab on a 864 DIP laptop screen). The room is measured from the control the card opens at to
+    /// the window's edge; a card that does not fit is scaled down whole, its look and words unchanged.
+    /// </summary>
+    private static Control FitInsideWindow(Control card, Control target, PlacementMode placement)
+    {
+        if (TopLevel.GetTopLevel(target) is not { } top) return card;
+        const double margin = 16;
+        var size = top.ClientSize;
+        var origin = target.TranslatePoint(new Point(0, 0), top) ?? new Point(0, 0);
+        var below = size.Height - (origin.Y + target.Bounds.Height) - margin;
+        var right = size.Width - (origin.X + target.Bounds.Width) - margin;
+        var (maxWidth, maxHeight) = placement switch
+        {
+            PlacementMode.Bottom => (size.Width - 2 * margin, below),
+            PlacementMode.Right => (right, size.Height - 2 * margin),
+            PlacementMode.Left => (origin.X - margin, size.Height - 2 * margin),
+            _ => (size.Width - 2 * margin, size.Height - 2 * margin),
+        };
+        return new Viewbox
+        {
+            Name = "InsideCardFit", Stretch = Stretch.Uniform, StretchDirection = StretchDirection.DownOnly,
+            MaxWidth = Math.Max(240, maxWidth), MaxHeight = Math.Max(200, maxHeight), Child = card,
+        };
     }
 
     // The program's own glyph for each function a card names; a name without one shows its first letter.

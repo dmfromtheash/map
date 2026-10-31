@@ -16,7 +16,7 @@ using Map.App.Services;
 namespace Map.App.Views;
 
 /// <summary>What a create button makes: the live picture inside it draws exactly that.</summary>
-internal enum CreateHeroKind { River, Land, Road }
+internal enum CreateHeroKind { River, Land, Road, Lake }
 
 /// <summary>
 /// The create button of a tool, at the very top of its panel (owner, 2026-10-31, variant 5 with the picture of
@@ -32,7 +32,9 @@ public sealed partial class EditorView
     private static readonly Color HintGold = Color.Parse("#F0D79A");
     private static readonly Color HintInk = Color.Parse("#2A1D0C");
 
-    private static StackPanel CreateHero(string name, string title, string hint, string makes, CreateHeroKind kind,
+    /// <param name="makes">The end of «Нажми сюда, чтобы создать …»; null — the button gets no cloud of its own (a second
+    /// create button under the first one, as the lake under the river).</param>
+    private static StackPanel CreateHero(string name, string title, string hint, string? makes, CreateHeroKind kind,
         MapIcons.SolidGlyph glyph, Action action)
     {
         var button = HeroButton(name, title, hint, glyph, action);
@@ -41,7 +43,20 @@ public sealed partial class EditorView
         var content = (Grid)button.Content!;
         button.Content = null; // the grid leaves the button before it joins the new stack
         button.Content = new StackPanel { Spacing = 8, Children = { picture, content } };
+        return HintAround(name, button, makes is null ? null : "Нажми сюда, чтобы создать " + makes, picture, animate);
+    }
 
+    /// <summary>
+    /// The hint around any create button: the cloud with its «×» (when <paramref name="text"/> is given), the two rings
+    /// and the motion of <paramref name="picture"/>. Everything follows the one switch «Подсказки».
+    /// </summary>
+    private static StackPanel HintAround(string name, Button button, string? text, Control? picture = null,
+        Action<CancellationToken>? animate = null) => HintAround(name, button, text, out _, picture, animate);
+
+    /// <param name="cloudText">The cloud's words, for a button whose action changes (the asset panel's one button).</param>
+    private static StackPanel HintAround(string name, Button button, string? text, out TextBlock cloudText,
+        Control? picture = null, Action<CancellationToken>? animate = null)
+    {
         // A plain mark, not a themed button: the theme's button fill hid the «×» on the gold cloud.
         var close = new Border
         {
@@ -58,9 +73,9 @@ public sealed partial class EditorView
         ToolTip.SetTip(close, "Убрать все подсказки «Нажми сюда». Вернуть: Настройки → Интерфейс → Подсказки.");
         close.PointerReleased += (_, _) => UiFeel.SetHints(false, persist: true);
         close.KeyDown += (_, e) => { if (e.Key is Avalonia.Input.Key.Enter or Avalonia.Input.Key.Space) UiFeel.SetHints(false, persist: true); };
-        var cloudText = new TextBlock
+        cloudText = new TextBlock
         {
-            Text = "Нажми сюда, чтобы создать " + makes, TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center,
+            Name = name + "HintText", Text = text ?? "", TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center,
             FontWeight = FontWeight.Bold, FontSize = 14, Foreground = new SolidColorBrush(HintInk), VerticalAlignment = VerticalAlignment.Center,
         };
         var cloud = new StackPanel
@@ -86,7 +101,7 @@ public sealed partial class EditorView
         Border Ring() => new()
         {
             CornerRadius = new CornerRadius(12), BorderThickness = new Thickness(2), BorderBrush = new SolidColorBrush(HintGold),
-            IsHitTestVisible = false, Opacity = 0, Margin = new Thickness(0, 4, 0, 6),
+            IsHitTestVisible = false, Opacity = 0, Margin = button.Margin, // the ring lies on the button's own edge
         };
         var ring1 = Ring(); var ring2 = Ring();
         var holder = new Grid { Children = { ring1, ring2, button } };
@@ -102,8 +117,8 @@ public sealed partial class EditorView
         void Follow()
         {
             var hints = UiFeel.HintsEnabled;
-            cloud.IsVisible = hints;
-            picture.IsVisible = hints;
+            cloud.IsVisible = hints && text is not null;
+            if (picture is not null) picture.IsVisible = hints;
             Stop();
             if (!hints || !UiFeel.EffectsEnabled || TopLevel.GetTopLevel(hero) is null) return;
             running = new CancellationTokenSource();
@@ -115,7 +130,7 @@ public sealed partial class EditorView
                 _ = AnimateAsync(cloud, TranslateTransform.YProperty, 1.6, new SineEaseInOut(), [(0, 0), (.5, -4), (1, 0)], token);
                 _ = WavesAsync(ring1, TimeSpan.Zero, token);
                 _ = WavesAsync(ring2, TimeSpan.FromSeconds(1), token);
-                animate(token);
+                animate?.Invoke(token);
                 _ = RestAsync(token);
             }
             catch (Exception ex) when (ex is InvalidOperationException or InvalidCastException)
@@ -196,6 +211,14 @@ public sealed partial class EditorView
                     RenderTransformOrigin = new RelativePoint(.5, .55, RelativeUnit.Relative),
                 };
                 break;
+            case CreateHeroKind.Lake:
+                line = new Path
+                {
+                    Data = Geometry.Parse("M150,12 C196,10 236,26 232,44 S194,74 150,72 S68,64 70,42 S104,14 150,12 Z"),
+                    Fill = new SolidColorBrush(Color.Parse("#7FB4D3")), Stroke = new SolidColorBrush(Color.Parse("#3A7FAE")), StrokeThickness = 3,
+                    RenderTransformOrigin = new RelativePoint(.5, .5, RelativeUnit.Relative),
+                };
+                break;
             case CreateHeroKind.Road:
                 line = new Path
                 {
@@ -213,11 +236,12 @@ public sealed partial class EditorView
         }
         canvas.Children.Add(line);
         const double length = 70; // the line's length in stroke widths: the dash that uncovers it
-        if (kind != CreateHeroKind.Land) line.StrokeDashArray = [length, length];
+        var grows = kind is CreateHeroKind.Land or CreateHeroKind.Lake; // a shape grows, a line draws itself
+        if (!grows) line.StrokeDashArray = [length, length];
         animate = token =>
         {
             var ease = new CubicEaseInOut();
-            if (kind == CreateHeroKind.Land)
+            if (grows)
             {
                 var grow = new ScaleTransform();
                 line.RenderTransform = grow;

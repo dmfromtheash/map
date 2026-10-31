@@ -294,7 +294,9 @@ public sealed partial class EditorView
                     Spacing = 4, Children =
                     {
                         modes,
-                        Ui.TextButton("StartLakeButton", "Новое озеро", _editor.StartLake, "compact"),
+                        // A create button like the river's, with its lake filling; no cloud of its own under the river's.
+                        CreateHero("StartLakeButton", "Новое озеро", "Клики по берегу; Enter — замкнуть", null,
+                            CreateHeroKind.Lake, MapIcons.SolidRiver, _editor.StartLake),
                         Ui.TextButton("RiverToSeaButton", "Река отсюда в море", _editor.ArmRiverToSea, "compact")
                             .WithTip("Щёлкните на суше — река сама найдёт путь вниз по склону до моря."),
                         _riverFinish,

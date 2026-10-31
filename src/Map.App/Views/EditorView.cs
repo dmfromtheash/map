@@ -368,6 +368,7 @@ public sealed partial class EditorView : UserControl
     private TextBlock _stampToolAreaText = null!;
     private Image _stampToolThumbnail = null!;
     private Button _stampCurrentAssetButton = null!;
+    private TextBlock? _stampHintText;
     private ListBox _stampVariantStrip = null!;
     private ListBox _stampRecentStrip = null!;
     private ListBox _stampFavoriteStrip = null!;

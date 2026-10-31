@@ -2018,7 +2018,8 @@ public sealed partial class EditorView
                 pager,
                 _stampVariantName,
                 _stampVariantStrip,
-                _stampCurrentAssetButton,
+                // The one button that places the asset, starts an area or a path: the same hint as the create buttons.
+                HintAround("StampCurrentAssetButton", _stampCurrentAssetButton, "Нажми сюда, чтобы поставить ассет", out _stampHintText),
             },
         };
     }
@@ -2117,6 +2118,13 @@ public sealed partial class EditorView
             _ => "Разместить ещё",
         };
         _stampPlaceCaption.Text = currentAction;
+        if (_stampHintText is not null)
+            _stampHintText.Text = "Нажми сюда, чтобы " + _editor.StampPlacementMode switch
+            {
+                StampPlacementMode.Path => "начать путь из ассетов",
+                StampPlacementMode.FillArea => "создать область из ассетов",
+                _ => "поставить ассет на карту",
+            };
         var currentHint = _editor.CurrentVariant is null ? "Сначала выберите ассет в каталоге."
             : $"{currentAction}: {set?.Name} · {_editor.CurrentVariant.Label}";
         AutomationProperties.SetName(_stampCurrentAssetButton, currentHint);

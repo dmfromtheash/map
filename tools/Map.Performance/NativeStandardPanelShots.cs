@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.VisualTree;
 using Map.Core.Documents;
@@ -123,10 +124,19 @@ public sealed partial class NativeEditorScenarioApplication
             if (ToolTip.GetTip(target) is not ToolTip tip || !tip.Classes.Contains("inside-card")) { badCards.Add(name + ": нет карточки"); continue; }
             ToolTip.SetIsOpen(target, true);
             for (var i = 0; i < 20 && tip.Content is not Control { Bounds.Width: > 0 }; i++) await Settle();
-            // Drawn, and no taller than the owner's laptop screen (1080 px at 125 % = 864 DIP, minus the bars).
-            if (tip.Content is Border { Name: "InsideCard" } card && card.Bounds is { Width: > 300, Height: > 120 and <= 820 })
+            // Drawn, and (owner, 2026-10-31: «выходит за окна») shown no larger than the room between the control and the
+            // window's edge: the fit box around the card is what the user sees.
+            if (tip.Content is Viewbox { Name: "InsideCardFit", Child: Border { Name: "InsideCard" } card } fit
+                && card.Bounds is { Width: > 300, Height: > 120 })
             {
-                PanelAudit.Save(card, Path.ChangeExtension(Options.OutputPath, $"inside-card-{name}.png"));
+                var top = TopLevel.GetTopLevel(target)!;
+                var origin = target.TranslatePoint(new Point(0, 0), top) ?? new Point(0, 0);
+                var room = ToolTip.GetPlacement(target) == PlacementMode.Bottom
+                    ? top.ClientSize.Height - (origin.Y + target.Bounds.Height)
+                    : top.ClientSize.Height;
+                Console.WriteLine($"inside card {name}: card {card.Bounds.Width:0}x{card.Bounds.Height:0}, shown {fit.Bounds.Width:0}x{fit.Bounds.Height:0}, room {room:0}");
+                if (fit.Bounds.Height > room || fit.Bounds.Width > top.ClientSize.Width) badCards.Add(name + ": больше окна");
+                PanelAudit.Save(fit, Path.ChangeExtension(Options.OutputPath, $"inside-card-{name}.png"));
                 cards++;
             }
             else badCards.Add(name + ": карточка не построена");
