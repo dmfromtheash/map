@@ -9,6 +9,7 @@ using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
+using Map.App.Controls;
 using Map.App.Services;
 using Map.Presentation.Services;
 using Map.Presentation.ViewModels;
@@ -125,63 +126,119 @@ public sealed partial class EditorView
     /// what it does (the same words as its tooltip) and whether it fits this map. A pick closes the list and opens the
     /// function's own window; nothing here edits the map.
     /// </summary>
+    // «Мир» (owner's pick 2026-10-31, variant 2 of https://claude.ai/artifact/UA3ciWpYB3UVgFbX56uqNo): a question and
+    // four big answers by goal, then the functions of that goal as cards named by what they do (Canva, Earth Studio,
+    // Scratch; a «More» tab is the antipattern). The function opens as before; its button keeps its name.
+    private static readonly (string Name, string Title, string Glyph, string Colour)[] WorldGoals =
+    [
+        ("WorldGoalCheck", "Проверить карту", MapIcons.Check, "#7FD08A"),
+        ("WorldGoalLook", "Посмотреть иначе", MapIcons.Versions, "#6FB3D4"),
+        ("WorldGoalCreate", "Создать что-то большое", MapIcons.Star, "#D4AE62"),
+        ("WorldGoalCollect", "Собрать для игроков", MapIcons.File, "#C58BB5"),
+    ];
+
+    private StackPanel _worldHome = null!;
+    private readonly List<(Control Panel, string Goal)> _worldGoalPanels = [];
+
     private Border BuildWorldSection()
     {
-        var list = new StackPanel { Spacing = 4 };
-        var group = "";
-        void Group(string title)
-        {
-            group = title;
-            list.Children.Add(new TextBlock { Text = title, Margin = new Thickness(2, list.Children.Count == 0 ? 0 : 8, 0, 2) }.Classed("role-caption", "muted"));
-        }
-        void Item(string name, string title, Action open, Func<(bool Fits, string Note)> fit)
+        var groups = WorldGoals.ToDictionary(g => g.Name, g => new StackPanel { Spacing = 6 });
+        var summaries = WorldGoals.ToDictionary(g => g.Name, _ => new List<string>());
+        void Item(string goal, string name, string title, string why, Action open, Func<(bool Fits, string Note)> fit)
         {
             // The «Мир» card lists the same entries with the same «подходит» (DEC-080).
-            _worldEntries.Add((group, name, title, fit));
-            var note = new TextBlock { TextWrapping = TextWrapping.Wrap }.Classed("role-caption");
+            var goalTitle = WorldGoals.First(g => g.Name == goal).Title;
+            _worldEntries.Add((goalTitle, name, title, fit));
+            summaries[goal].Add(title);
+            var note = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 11.5 }.Classed("role-caption");
             var body = new StackPanel { Spacing = 1, Children =
             {
-                new TextBlock { Text = title, FontWeight = FontWeight.SemiBold },
-                new TextBlock { Text = UiTips.For(name), TextWrapping = TextWrapping.Wrap }.Classed("role-caption", "muted"),
+                new TextBlock { Text = title, FontWeight = FontWeight.SemiBold, FontSize = 14 },
+                new TextBlock { Text = why, TextWrapping = TextWrapping.Wrap, FontSize = 12 }.Classed("muted"),
                 note,
             } };
             var button = Ui.TextButton(name, title, () => { ShowWorldSection(false); open(); }, "asset-entry");
             button.Content = body; button.HorizontalAlignment = HorizontalAlignment.Stretch;
+            ToolTip.SetTip(button, UiTips.For(name));
             _worldSyncs.Add(() =>
             {
                 var (fits, text) = fit();
-                note.Text = text;
+                note.Text = fits ? "✓ " + text : text;
                 Ui.SetClass(note, "success", fits); Ui.SetClass(note, "faint", !fits);
             });
-            list.Children.Add(button);
+            groups[goal].Children.Add(button);
         }
         var document = () => _editor.Session.Document;
         bool InAtlas() => _editor.AtlasBreadcrumbs.Length > 1 || _editor.AtlasChildren.Length > 0;
         bool HasChildren() => _editor.AtlasChildren.Length > 0;
         (bool, string) Always() => (true, "Подходит к этой карте");
 
-        Group("Атлас: карта и её подкарты");
-        Item("AtlasCheckButton", "Проверка атласа", () => UiTasks.Forget(this, ShowAtlasCheckAsync),
+        Item("WorldGoalCheck", "GeographyCheckButton", "Найти ошибки", "Реки в гору, дороги в обрыв, поселения без дороги.",
+            () => ShowGeographyCheck(), () => MapCategories.IsHex(document().Category)
+                ? (false, "Лучше для обычной карты: на гексах рек и дорог линиями почти нет") : (true, "Подходит к этой карте"));
+        Item("WorldGoalCheck", "AtlasCheckButton", "Сверить с подкартами", "Где карта и её подкарты расходятся.",
+            () => UiTasks.Forget(this, ShowAtlasCheckAsync),
             () => InAtlas() ? (true, "Подходит: у карты есть связи в атласе") : (false, "Эта карта пока не в атласе — проверять нечего"));
-        Item("ScaleSyncButton", "Согласование", ShowScaleSync,
+        Item("WorldGoalLook", "TimelineButton", "Мир в другой год", "Что было на карте в выбранном году.", ShowTimeline, Always);
+        Item("WorldGoalLook", "PlanetButton", "Карта — целая планета", "Глобус и проекции; левый край сходится с правым.", ShowPlanet,
+            () => Math.Abs(document().Canvas.Width - 2 * document().Canvas.Height) < 1
+                ? (true, "Подходит: карта 2 : 1, как целая планета") : (false, "Лучше для карты мира 2 : 1"));
+        Item("WorldGoalLook", "IsometricButton", "Посмотреть объёмно", "Город в изометрии, с четырёх сторон.", ShowIsometric, Always);
+        Item("WorldGoalCreate", "CityButton", "Построить город", "Улицы, дома и стены одной кнопкой.", ShowCity,
+            () => MapCategories.IsCity(document().Category)
+                ? (true, "Подходит: это карта города") : (true, "Здесь — «Город из точки»: новая подкарта-город"));
+        Item("WorldGoalCreate", "PointcrawlButton", "Места и пути для игры", "Точки и дороги между ними для партии.", ShowPointcrawl, Always);
+        Item("WorldGoalCreate", "StarSectorButton", "Звёздный сектор", "Звёзды и планеты на гексах.", ShowStarSector,
+            () => _editor.SectorLayer is not null ? (true, "Подходит: на карте есть гексы") : (false, "Нужна карта с гексами"));
+        Item("WorldGoalCollect", "BookButton", "Книга для игроков", "Атлас и язык мира одной книгой PDF.", ShowBook, Always);
+        Item("WorldGoalCollect", "ScaleSyncButton", "Перенести реки и дороги", "Между картой и её подкартами.", ShowScaleSync,
             () => HasChildren() ? (true, "Подходит: у карты есть подкарты") : (false, "Нужны подкарты этой карты"));
-        Item("AtlasRefreshButton", "Обновить атлас", () => UiTasks.Forget(this, _editor.RefreshAtlasAsync),
+        Item("WorldGoalCollect", "AtlasRefreshButton", "Обновить картинки подкарт", "Перерисовать маленькие подкарты на этой карте.",
+            () => UiTasks.Forget(this, _editor.RefreshAtlasAsync),
             () => HasChildren() ? (true, "Подходит: у карты есть подкарты") : (false, "Нужны подкарты этой карты"));
-        Group("Мир во времени и пространстве");
-        Item("TimelineButton", "Время", ShowTimeline, Always);
-        Item("PlanetButton", "Планета", ShowPlanet, () => Math.Abs(document().Canvas.Width - 2 * document().Canvas.Height) < 1
-            ? (true, "Подходит: карта 2 : 1, как целая планета") : (false, "Лучше для карты мира 2 : 1"));
-        Item("GeographyCheckButton", "Проверка географии", () => ShowGeographyCheck(), () => MapCategories.IsHex(document().Category)
-            ? (false, "Лучше для обычной карты: на гексах рек и дорог линиями почти нет") : (true, "Подходит к этой карте"));
-        Group("Для игры");
-        Item("PointcrawlButton", "Пойнткроул", ShowPointcrawl, Always);
-        Group("Особые виды карты");
-        Item("CityButton", "Город", ShowCity, () => MapCategories.IsCity(document().Category)
-            ? (true, "Подходит: это карта города") : (true, "Здесь — «Город из точки»: новая подкарта-город"));
-        Item("StarSectorButton", "Сектор", ShowStarSector, () => _editor.SectorLayer is not null
-            ? (true, "Подходит: на карте есть гексы") : (false, "Нужна карта с гексами"));
-        Item("IsometricButton", "Изометрия", ShowIsometric, Always);
-        Item("BookButton", "Книга и язык", ShowBook, Always);
+
+        // The first view: the question and four big answers.
+        _worldHome = new StackPanel { Spacing = 8, Children =
+        {
+            new TextBlock { Text = "Что хочешь сделать?", FontSize = 19, Margin = new Thickness(2, 0, 0, 2) }.Classed("panel-title"),
+        } };
+        foreach (var (goal, title, glyph, colour) in WorldGoals)
+        {
+            var tint = Color.Parse(colour);
+            var mark = new Border
+            {
+                Width = 40, Height = 40, CornerRadius = new CornerRadius(10), VerticalAlignment = VerticalAlignment.Center,
+                Background = new SolidColorBrush(Color.FromArgb(0x33, tint.R, tint.G, tint.B)),
+                Child = Centered(MapIcons.Stroked(glyph, 20, new SolidColorBrush(tint))),
+            };
+            var text = new StackPanel { Spacing = 2, VerticalAlignment = VerticalAlignment.Center, Children =
+            {
+                new TextBlock { Text = title, FontWeight = FontWeight.SemiBold, FontSize = 15 },
+                new TextBlock { Text = string.Join(" · ", summaries[goal]), TextWrapping = TextWrapping.Wrap, FontSize = 11.5 }.Classed("muted"),
+            } };
+            var answer = Ui.TextButton(goal, title, () => ShowWorldGoal(goal), "asset-entry")
+                .WithTip(title + ": " + string.Join(", ", summaries[goal]).ToLowerInvariant() + ". Щелчок — показать эти дела.");
+            answer.Content = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), ColumnSpacing = 10, Children = { mark, text } };
+            Grid.SetColumn(text, 1);
+            answer.HorizontalAlignment = HorizontalAlignment.Stretch;
+            answer.Padding = new Thickness(10);
+            _worldHome.Children.Add(answer);
+
+            // The goal's own view: back to the question, the goal's name, its cards.
+            var back = Ui.TextButton(goal + "Back", "← Что хочешь сделать?", () => ShowWorldGoal(null), "compact");
+            back.HorizontalAlignment = HorizontalAlignment.Left;
+            var panel = new StackPanel
+            {
+                Spacing = 8, IsVisible = false, Tag = "Reveal:" + goal, Name = goal + "Panel",
+                Children =
+                {
+                    back,
+                    new TextBlock { Text = title, FontSize = 18, Foreground = new SolidColorBrush(tint), Margin = new Thickness(2, 0, 0, 0) }.Classed("panel-title"),
+                    groups[goal],
+                },
+            };
+            _worldGoalPanels.Add((panel, goal));
+        }
 
         var close = Ui.TextButton("WorldSectionCloseButton", "Закрыть", () => ShowWorldSection(false), "compact");
         var header = new DockPanel { Children =
@@ -189,6 +246,8 @@ public sealed partial class EditorView
             close.Docked(Dock.Right),
             new TextBlock { Text = "Мир", VerticalAlignment = VerticalAlignment.Center }.Classed("role-panel"),
         } };
+        var pages = new Panel { Children = { _worldHome } };
+        foreach (var (panel, _) in _worldGoalPanels) pages.Children.Add(panel);
         return new Border
         {
             Name = "WorldSection", IsVisible = false, Width = 340, Padding = new Thickness(10),
@@ -197,14 +256,21 @@ public sealed partial class EditorView
             Child = new DockPanel { Children =
             {
                 header.Docked(Dock.Top),
-                new ScrollViewer { Margin = new Thickness(0, 8, 0, 0), Content = list },
+                new ScrollViewer { Margin = new Thickness(0, 8, 0, 0), Content = pages },
             } },
         }.Classed("elevated");
     }
 
+    /// <summary>One goal's cards, or the question again (null).</summary>
+    private void ShowWorldGoal(string? goal)
+    {
+        _worldHome.IsVisible = goal is null;
+        foreach (var (panel, name) in _worldGoalPanels) panel.IsVisible = name == goal;
+    }
+
     private void ShowWorldSection(bool show)
     {
-        if (show) SyncWorldSection();
+        if (show) { SyncWorldSection(); ShowWorldGoal(null); }
         _worldSection.IsVisible = show;
     }
 

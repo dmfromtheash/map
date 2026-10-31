@@ -725,6 +725,11 @@ public sealed partial class NativeEditorScenarioApplication : Application
                         preview.Save(Path.ChangeExtension(Options.OutputPath, $".card-{card.Key}.png"));
         }
         await Click("WorldSectionButton"); await Task.Delay(400); await Settle(); await Frame(); SaveWindow(".world.png");
+        // «Что хочешь сделать?» (owner's pick 2026-10-31): an answer shows that goal's cards; «←» brings the question back.
+        await Click("WorldGoalCreate"); await Settle(); await Frame(); SaveWindow(".world-create.png");
+        _report.Checks["world-goal-shows-its-cards"] = Find<Control>("CityButton").IsEffectivelyVisible && !Find<Control>("WorldGoalCheck").IsEffectivelyVisible;
+        await Click("WorldGoalCreateBack"); await Settle();
+        _report.Checks["world-back-to-question"] = Find<Control>("WorldGoalCheck").IsEffectivelyVisible;
         _report.Checks["ui-shots-saved"] = true;
     }
 
