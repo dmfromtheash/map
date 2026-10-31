@@ -40,7 +40,7 @@ public sealed partial class EditorView
         var revealAll = Ui.TextButton("FogRevealAllButton", "Открыть всё", () => { _editor.RevealAllFog(); SyncFog(); }, "compact");
         var hideAll = Ui.TextButton("FogHideAllButton", "Скрыть всё", () => { _editor.HideAllFog(); SyncFog(); }, "compact");
         var export = Ui.PropertyToggle("FogExportPlayersToggle", "Экспорт картинки — как видят игроки");
-        ToolTip.SetTip(export, "Файл → Экспорт: туман непрозрачен, подписи и заметки под туманом не попадают в файл.");
+        ToolTip.SetTip(export, "«Экспорт…» вверху: туман непрозрачен, подписи и заметки под туманом не попадают в файл.");
         export.IsCheckedChanged += (_, _) => { if (!_syncingFog) _editor.ExportFogPlayers = export.IsChecked == true; };
         var veil = Ui.PropertyToggle("FogVeilToggle", "Показывать туман мне");
         ToolTip.SetTip(veil, "Ведущий видит туман полупрозрачной пеленой; игрокам он непрозрачен.");

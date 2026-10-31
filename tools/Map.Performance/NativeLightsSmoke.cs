@@ -25,7 +25,8 @@ public sealed partial class NativeEditorScenarioApplication
         _view.Canvas.DisposeRenderCaches(); OpenEditor(document); await Settle();
         _editor.Session.Viewport.Set(0, 0, 1);
 
-        await Click("WorkspaceAppearanceTab"); await Click("RibbonLightTab");
+        // The light's settings open under «Свет» of «Вид» (the ribbon under the map is gone, 2026-10-31).
+        await Click("WorkspaceAppearanceTab"); await Click("LookFine_light");
         await Click("LightPresetCampfire");
         var place = Find<Avalonia.Controls.Primitives.ToggleButton>("LightPlaceToggle");
         place.IsChecked = true; place.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent)); await Settle();
@@ -51,6 +52,6 @@ public sealed partial class NativeEditorScenarioApplication
         SaveVisual(_report.Screenshot);
         _editor.Undo(); await Settle();
         _report.Checks["dim-zone-one-undo"] = dimStep && _editor.Session.Document.Lighting!.Sources.Single().DimZone == 0;
-        await Click("RibbonCollapseButton"); await Task.Delay(1500); await Frame(); await Settle();
+        await Click("LookFine_light"); await Task.Delay(1500); await Frame(); await Settle();
     }
 }

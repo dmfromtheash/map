@@ -27,11 +27,8 @@ public sealed partial class EditorView
 
     private Control BuildStyleBody()
     {
-        var master = AppearanceToggle("StyleEnabledToggle", "Стиль карты включён",
-            () => _editor.ShownStyle.Enabled, on => { _editor.SetStyleEnabled(on); SyncStyleSection(); });
-        ToolTip.SetTip(master, "Выключено — карта рисуется как без стиля. Настройки ниже сохраняются.");
-
-        // The presets are the ribbon's cards (DEC-064); this column holds the switch, the strength and the effects.
+        // The presets are the pictures of «Вид»; «Без стиля» above them switches the style off and the picture of that
+        // style switches it back with its settings (DEC-082: no second switch here). This holds the strength and effects.
         var strength = ValueRow("StyleStrengthSlider", "StyleStrengthBox", null, "Сила стиля", 0, 100, "%",
             () => _editor.ShownStyle.Strength * 100,
             (value, commit) => { _editor.SetStyleStrength(value / 100, commit); if (commit) SyncStyleSection(); },
@@ -47,7 +44,6 @@ public sealed partial class EditorView
             Margin = new Thickness(10, 0, 10, 8),
             Children =
             {
-                master,
                 Group("Сила", strength),
                 Group("Эффекты", effects),
             },
@@ -217,7 +213,6 @@ public sealed partial class EditorView
     {
         if (_styleBody is null) return;
         SyncAppearanceSections();
-        foreach (var sync in _styleSyncs) sync();
-        SyncAppearanceRibbon();
+        SyncLookParts();
     }
 }

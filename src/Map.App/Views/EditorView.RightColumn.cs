@@ -14,9 +14,10 @@ public enum RightColumnTab { Properties, Content, Layers, Look }
 
 /// <summary>
 /// DEC-070 variant 1 with the owner's pick «Б» (2026-10-30): the right of the editor is one column with three tabs -
-/// «Свойства» (what will change now), «Содержимое» (land, water, assets, roads, other) and «Слои». «Содержимое» and
-/// «Слои» are also two buttons at the right end of the row of sections. Opening a section of the map panel shows its
-/// tab; selecting something on the map or in the list brings «Свойства» back.
+/// «Свойства» (what will change now), «Содержимое» (land, water, assets, roads, other) and «Слои»; the section
+/// «Оформление» shows its page «Вид» here. Each page has one way in (owner, 2026-10-31: the second copies of these
+/// buttons in the row of sections were removed). Opening a section of the map panel shows its tab; selecting something
+/// on the map or in the list brings «Свойства» back.
 /// </summary>
 public sealed partial class EditorView
 {
@@ -47,13 +48,13 @@ public sealed partial class EditorView
         {
             Child = new UniformGrid
             {
-                Rows = 1, Columns = 4,
+                // «Вид» has no tab: it is the section «Оформление» (owner, 2026-10-31: one function - one place).
+                Rows = 1, Columns = 3,
                 Children =
                 {
                     Tab(RightColumnTab.Properties, "RightTabProperties", "Свойства", "Что сейчас изменится: выделенное или следующий инструмент."),
                     Tab(RightColumnTab.Content, "RightTabContent", "Содержимое", "Земля, вода, ассеты, дороги и прочее на карте."),
                     Tab(RightColumnTab.Layers, "RightTabLayers", "Слои", "Слои карты снизу вверх и свойства выбранного слоя."),
-                    Tab(RightColumnTab.Look, "RightTabLook", "Вид", "Свет, стиль и море всей карты — картинками."),
                 },
             },
             Padding = new Thickness(0),
@@ -72,26 +73,6 @@ public sealed partial class EditorView
         _editor.PropertyChanged += OnRightColumnEditorChanged;
         SetRightTab(RightColumnTab.Properties);
         return _rightColumn;
-    }
-
-    /// <summary>«Содержимое» and «Слои» at the right end of the row of sections.</summary>
-    private Control BuildRightColumnButtons()
-    {
-        var content = Ui.TextButton("RowContentButton", "Содержимое", () => SetRightTab(RightColumnTab.Content), "compact")
-            .WithTip("Открыть справа «Содержимое»: земля, вода, ассеты, дороги и прочее на карте.");
-        var layers = Ui.TextButton("RowLayersButton", "Слои", () => SetRightTab(RightColumnTab.Layers), "compact")
-            .WithTip("Открыть справа «Слои» карты.");
-        // «Вид» (owner's pick 2026-10-31): light, style and sea of the whole map, one button instead of three tabs.
-        var look = Ui.TextButton("RowLookButton", "Вид", () => SetRightTab(RightColumnTab.Look), "compact")
-            .WithTip("Открыть справа «Вид»: свет, стиль и море всей карты картинками.");
-        _rightTabButtons.Add((RightColumnTab.Content, content));
-        _rightTabButtons.Add((RightColumnTab.Layers, layers));
-        _rightTabButtons.Add((RightColumnTab.Look, look));
-        return new StackPanel
-        {
-            Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(0, 0, 10, 4), Children = { look, content, layers },
-        };
     }
 
     /// <summary>Shows a page of the right column; the map panel opens on the section that belongs to it.</summary>

@@ -508,7 +508,7 @@ public sealed class NativeEditorWorkflowApplication : Application
             && !string.IsNullOrWhiteSpace(AutomationProperties.GetName(select));
         return canvasReady && context.IsVisible && context.Bounds.Width > 0
             && side.IsVisible && side.Bounds.Width > 0
-            && view.WorkspaceTabCount == 6
+            && view.WorkspaceTabCount == 5 // «Слои» is the right column's tab, not a sixth section (2026-10-31)
             && select.IsVisible && select.Bounds.Width > 0 && keyboardPath;
     }
 

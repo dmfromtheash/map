@@ -697,10 +697,25 @@ public sealed partial class NativeEditorScenarioApplication : Application
         foreach (var (button, suffix) in new[] { ("LandToolButton", ".land.png"), ("RiverToolButton", ".river.png"),
                      ("RoadToolButton", ".road.png"), ("ShapeToolButton", ".shape.png"), ("TextToolButton", ".text.png"),
                      ("BrushToolButton", ".brush.png") })
-        { await Click(button); await Settle(); await Frame(); SaveWindow(suffix); }
+        {
+            await Click(button); await Settle(); await Frame();
+            // The create buttons' pictures are drawn in the background: wait for them, as a user would see them.
+            if (button is "RiverToolButton" or "RoadToolButton" or "LandToolButton") { await Task.Delay(6000); await Settle(); await Frame(); }
+            SaveWindow(suffix);
+        }
+        // The frames of the create pictures as the program drew them, for mockups built from real pictures.
+        if (_view.GetType().GetField("_demoFrames", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?.GetValue(_view)
+            is System.Collections.IDictionary demos)
+        {
+            // River, lake, land and road: each create picture got its frames.
+            _report.Checks["create-pictures-drawn"] = demos.Count >= 4;
+            foreach (System.Collections.DictionaryEntry demo in demos)
+                if (demo.Value?.GetType().GetField("Item2")?.GetValue(demo.Value) is Avalonia.Media.Imaging.Bitmap[] frames)
+                    for (var i = 0; i < frames.Length; i++) frames[i].Save(Path.ChangeExtension(Options.OutputPath, $".demo-{demo.Key}-{i}.png"));
+        }
         // The assets strip in the top bar shows while the stamp tool is in hand.
         _editor.ActiveTool = EditorTool.Stamp; await Settle(); await Frame(); SaveWindow(".stamp.png");
-        // The «Оформление» ribbon and the «Мир» section, as the owner sees them, for the next mockups (2026-10-31).
+        // «Оформление» with «Вид» and the «Мир» section, as the owner sees them, for the next mockups (2026-10-31).
         await Click("SelectToolButton");
         await Click("WorkspaceAppearanceTab"); await Task.Delay(25000); await Settle(); await Frame();
         // «Вид» (owner's pick 2026-10-31) opens with «Оформление»; its pictures are drawn by then.
@@ -713,17 +728,28 @@ public sealed partial class NativeEditorScenarioApplication : Application
             && _editor.Session.UndoDepth == depth + 1 && !_editor.LookPreviewShown;
         _editor.Undo(); await Settle();
         _report.Checks["look-undo-restores"] = !_editor.ShownStyle.Enabled && _editor.Session.UndoDepth == depth;
-        await Click("LookFineTuneButton"); await Settle();
-        foreach (var (tab, suffix) in new[] { ("RibbonLightTab", ".look-light.png"), ("RibbonStyleTab", ".look-styles.png"), ("RibbonSeaTab", ".look-sea.png") })
+        // One place on the screen for light, style and sea (owner, 2026-10-31): no ribbon under the map, no second
+        // buttons «Вид · Содержимое · Слои» in the row of sections, no «Слои» among the sections of «Содержимое».
+        _report.Checks["no-duplicate-controls"] = !_view.GetVisualDescendants().OfType<Control>().Any(c => c.Name is "AppearanceRibbon"
+            or "RowLookButton" or "RowContentButton" or "RowLayersButton" or "RightTabLook" or "PanelSectionLayers"
+            or "StartAssetsButton" or "StartLandButton" or "StartRiverFromEmptyButton" or "StampEmptyOpenCatalogButton");
+        // Each part's settings open under its pictures, one part at a time.
+        foreach (var (part, suffix) in new[] { ("light", ".look-light.png"), ("style", ".look-styles.png"), ("sea", ".look-sea.png") })
         {
-            RevealTab(_view, tab); await Click(tab); await Task.Delay(tab == "RibbonStyleTab" ? 20000 : 6000); await Settle(); await Frame(); SaveWindow(suffix);
-            // Every card's preview as the program drew it, for mockups built from real pictures (owner, 2026-10-31).
-            if (_view.GetType().GetField("_ribbonPreviews", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?.GetValue(_view)
-                is System.Collections.IDictionary previews)
-                foreach (System.Collections.DictionaryEntry card in previews)
-                    if (card.Value is Avalonia.Media.Imaging.Bitmap preview)
-                        preview.Save(Path.ChangeExtension(Options.OutputPath, $".card-{card.Key}.png"));
+            await Click("LookFine_" + part); await Task.Delay(1500); await Settle(); await Frame(); SaveWindow(suffix);
+            _report.Checks["look-settings-" + part] = Find<Control>("LookFineBody_" + part).IsEffectivelyVisible
+                && new[] { "light", "style", "sea" }.Where(p => p != part).All(p => !Find<Control>("LookFineBody_" + p).IsVisible);
         }
+        await Click("LookFine_sea"); await Settle();
+        // Every picture as the program drew it, for mockups built from real pictures (owner, 2026-10-31).
+        if (_view.GetType().GetField("_lookPreviews", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?.GetValue(_view)
+            is System.Collections.IDictionary previews)
+            foreach (System.Collections.DictionaryEntry card in previews)
+                if (card.Value is Avalonia.Media.Imaging.Bitmap preview)
+                    preview.Save(Path.ChangeExtension(Options.OutputPath, $".card-{card.Key}.png"));
+        // Leaving «Оформление» takes «Вид» away: the right column is back on «Свойства».
+        await Click("WorkspaceDrawTab"); await Settle();
+        _report.Checks["look-leaves-with-appearance"] = _view.RightTab == RightColumnTab.Properties;
         await Click("WorldSectionButton"); await Task.Delay(400); await Settle(); await Frame(); SaveWindow(".world.png");
         // «Что хочешь сделать?» (owner's pick 2026-10-31): an answer shows that goal's cards; «←» brings the question back.
         await Click("WorldGoalCreate"); await Settle(); await Frame(); SaveWindow(".world-create.png");
@@ -787,6 +813,8 @@ public sealed partial class NativeEditorScenarioApplication : Application
             assetCatalog: catalog);
         await Settle(); await Frame();
 
+        // «Новая комната» lives in the panel of «Фигура» (since 2026-10-31).
+        await Click("ShapeToolButton"); await Settle();
         await Click("StartRoomFromEmptyButton"); await Frame();
         var room = _editor.Session.SelectedObject;
         _report.Checks["new-room-button"] = room is { Room: not null, Shape.Stroke.BlocksLight: true } && room.Name == "Комната 1";

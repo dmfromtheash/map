@@ -414,7 +414,10 @@ public sealed class RenderAuditApplication : Application
     {
         _editor.ActiveTool = EditorTool.Select; _editor.Session.ClearSelection(); _editor.ClearWaterSelection();
         await Settle();
-        Check("panel-has-six-sections", SixSections.All(s => TryFind<ToggleButton>("PanelSection" + s) is not null));
+        // Five sections of «Содержимое» and the tab «Слои» of the right column (DEC-082: no second «Слои» button).
+        Check("panel-has-six-sections", SixSections.All(s => s == PanelSection.Layers
+            ? TryFind<Button>("RightTabLayers") is not null && TryFind<ToggleButton>("PanelSectionLayers") is null
+            : TryFind<ToggleButton>("PanelSection" + s) is not null));
 
         var rivers = _editor.Rivers; var roads = _editor.Roads;
         var before = _editor.Session.Document; var depth = _editor.Session.UndoDepth;
@@ -430,7 +433,7 @@ public sealed class RenderAuditApplication : Application
         { [PanelSection.Land] = 1, [PanelSection.Water] = rivers.Count, [PanelSection.Assets] = 2, [PanelSection.Roads] = roads.Count, [PanelSection.Other] = 0 };
         foreach (var section in SixSections)
         {
-            await Press("PanelSection" + section); await Frame();
+            await Press(section == PanelSection.Layers ? "RightTabLayers" : "PanelSection" + section); await Frame();
             var rows = _editor.ObjectTree;
             var realized = section == PanelSection.Layers
                 ? _view.GetVisualDescendants().OfType<ToggleButton>().Count(b => b.Name?.StartsWith("Layer_", StringComparison.Ordinal) == true)
@@ -513,7 +516,7 @@ public sealed class RenderAuditApplication : Application
         Check("row-switch-hides-one-water-only", owner.Visible && owner.Rivers.Single(r => r.Id == lake.Id).Visible == false
             && owner.Rivers.Where(r => r.Id != lake.Id).All(r => r.Visible));
         _editor.Undo(); await Settle();
-        await Press("PanelSectionLayers"); await Settle();
+        await Press("RightTabLayers"); await Settle();
         var layerSwitch = Find<Button>("LayerRowVisibility_" + _waterLayerId);
         Check("layer-switch-names-its-scope", AutomationProperties.GetName(layerSwitch)?.Contains("целиком") == true);
 

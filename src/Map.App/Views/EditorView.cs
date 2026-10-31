@@ -460,10 +460,9 @@ public sealed partial class EditorView : UserControl
                 atlasBar.Docked(Dock.Top),
                 // The quick property strip that stood here moved into «Свойства» (plan 1.2, DEC-070).
                 statusBar.Docked(Dock.Bottom),
-                // «Свойства · Содержимое · Слои» in one column (DEC-070, owner's pick «Б»).
+                // «Свойства · Содержимое · Слои» in one column (DEC-070, owner's pick «Б»); «Оформление» shows «Вид» there.
                 BuildRightColumn(contextPanel, sidePanel).Docked(Dock.Right),
-                // Свет, Стили, Море: their own ribbon under the map (DEC-064), shown in «Оформление» only (DEC-070).
-                new DockPanel { Children = { (_appearanceRibbon = BuildAppearanceRibbon()).Docked(Dock.Bottom), canvasHost } },
+                canvasHost,
             },
         };
         ShowWorkspace(EditorSurfaceLayout.WorkspaceOf(_editor.ActiveTool));
@@ -497,8 +496,8 @@ public sealed partial class EditorView : UserControl
         {
             lock (_uiSyncGate) _sceneSyncPending = true;
             OnEditorChanged(this, new(nameof(EditorViewModel.Session)));
-            // Undo/Redo of a light or style change brings the ribbon back in line (not while a slider drags).
-            Dispatcher.UIThread.Post(SyncAppearanceRibbon);
+            // Undo/Redo of a light or style change brings «Вид» back in line (not while a slider drags).
+            Dispatcher.UIThread.Post(SyncLookParts);
         };
         _editor.SceneInvalidated += (_, e) => Dispatcher.UIThread.Post(() =>
         {
@@ -519,7 +518,6 @@ public sealed partial class EditorView : UserControl
             // document: the status toast kept a closed editor alive for its 5-9 s (history-memory).
             _statusToastTimer?.Stop();
             _deferredPanelTimer?.Stop();
-            _ribbonPreviewTimer?.Stop();
             foreach (var (_, frames) in _demoFrames.Values) foreach (var bitmap in frames) bitmap.Dispose();
             _demoFrames.Clear();
             DisposeLookPage();
@@ -984,6 +982,12 @@ public sealed partial class EditorView : UserControl
             SyncStatus();
         };
 
+        // «Экспорт…» and «Вписать карту в окно» have their own buttons in this bar; the menu shows them only while a
+        // narrow window hides those buttons. «Сочетания клавиш» is the keyboard button of the bar (owner, 2026-10-31:
+        // one function - one place on the screen).
+        var exportItem = Item("Экспорт…", MapIcons.Export, OpenExport);
+        var fitItem = Item("Вписать карту в окно", MapIcons.FitCanvas, _canvas.FitToCanvas);
+        exportItem.IsVisible = fitItem.IsVisible = false;
         var fileMenu = new MenuFlyout
         {
             Items =
@@ -993,11 +997,10 @@ public sealed partial class EditorView : UserControl
                 autosaveItem,
                 new Separator(),
                 Item("Размер и область…", MapIcons.ResizeRegion, OpenCanvasWorkflow),
-                Item("Экспорт…", MapIcons.Export, OpenExport),
+                exportItem,
                 new Separator(),
-                Item("Сочетания клавиш…", MapIcons.Gear, requestShortcutSettings),
                 Item("Открыть второе окно", MapIcons.Window, requestSecondWindow),
-                Item("Вписать карту в окно", MapIcons.FitCanvas, _canvas.FitToCanvas),
+                fitItem,
             },
         };
         var file = Ui.CommandButton("FileMenuButton", "Файл", MapIcons.File, () => { }, "compact");
@@ -1022,6 +1025,7 @@ public sealed partial class EditorView : UserControl
             var narrow = Bounds.Width < 1100;
             export.IsVisible = !narrow;
             viewActions.IsVisible = !narrow;
+            exportItem.IsVisible = fitItem.IsVisible = narrow;
             file.Content = new TextBlock { Text = narrow ? "Файл и вид ▾" : "Файл ▾" };
         };
 

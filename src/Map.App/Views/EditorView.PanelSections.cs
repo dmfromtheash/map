@@ -24,16 +24,17 @@ namespace Map.App.Views;
 /// </summary>
 public sealed partial class EditorView
 {
-    // Свет and Стили are not object sections: they live in the ribbon under the map (DEC-064).
+    // Свет and Стили are not object sections: they live on «Вид» of «Оформление». Слои is a section of its own but has
+    // no button here: the right column's tab «Слои» is its one way in (owner, 2026-10-31: no second copy on screen).
     private static readonly PanelSection[] StandardSections =
     [
         PanelSection.Land, PanelSection.Water, PanelSection.Assets,
-        PanelSection.Roads, PanelSection.Other, PanelSection.Layers,
+        PanelSection.Roads, PanelSection.Other,
     ];
 
     // A hex map has no land, water, assets or roads of the standard constructor: its hexes live
-    // in hex layers (Слои), and labels and notes are its other objects (Прочее).
-    private static readonly PanelSection[] HexSections = [PanelSection.Layers, PanelSection.Other];
+    // in hex layers (the tab «Слои»), and labels and notes are its other objects (Прочее).
+    private static readonly PanelSection[] HexSections = [PanelSection.Other];
 
     private PanelSection[] Sections => _isHexWorkshop ? HexSections : StandardSections;
 

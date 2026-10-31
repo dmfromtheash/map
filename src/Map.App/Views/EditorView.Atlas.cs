@@ -112,8 +112,6 @@ public sealed partial class EditorView
             {
                 Children =
                 {
-                    // DEC-070 «Б»: «Содержимое» and «Слои» at the right end of the row open those pages of the right column.
-                    BuildRightColumnButtons().Docked(Dock.Right),
                     new ScrollViewer { HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
                         VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled, Content = row },
                 },

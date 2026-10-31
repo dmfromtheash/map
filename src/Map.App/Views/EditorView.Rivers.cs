@@ -305,7 +305,7 @@ public sealed partial class EditorView
                         Ui.Hint("Узлы: клики от истока к устью, Enter — свободный конец. Клик по руслу — рукав или приток. Esc — отмена."),
                     },
                 })), "Новая река или озеро и ширина новых узлов"),
-            new Ui.CategoryTab("Select", "Выбор", MapIcons.LineTarget, (_riverSelectCategory = Ui.Category("RiverSelectCategory", "Выбор", "accent-select", _riverSelectionBlock)), "Какую воду и что в ней выделяет щелчок; скрыть, заблокировать, удалить"),
+            new Ui.CategoryTab("Select", "Выделение", MapIcons.LineTarget, (_riverSelectCategory = Ui.Category("RiverSelectCategory", "Выделение", "accent-select", _riverSelectionBlock)), "Какую воду и что в ней выделяет щелчок; скрыть, заблокировать, удалить"),
             new Ui.CategoryTab("Shape", "Форма", MapIcons.ModePath, (_riverShapeCategory = Ui.Category("RiverShapeCategory", "Форма", "accent-shape", new StackPanel
                 {
                     Spacing = 4, Children =
@@ -314,7 +314,7 @@ public sealed partial class EditorView
                         _riverNodeBlock, _riverChannelBlock, _riverFlowBlock,
                     },
                 }, expanded: false)), "Ширина и кривизна узлов, всё русло или участок"),
-            new Ui.CategoryTab("Style", "Вид", MapIcons.LineWater, (_riverStyleCategory = Ui.Category("RiverStyleCategory", "Оформление", "accent-look", new StackPanel
+            new Ui.CategoryTab("Style", "Краски", MapIcons.LineWater, (_riverStyleCategory = Ui.Category("RiverStyleCategory", "Краски", "accent-look", new StackPanel
                 {
                     Spacing = 4, Children =
                     {

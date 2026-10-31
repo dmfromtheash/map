@@ -272,6 +272,9 @@ public sealed partial class EditorView
                 sides,
                 brushWidth,
                 BuildPenPathControls("Shape"),
+                // A dungeon room is a shape with a wall and doors: it lives with the shapes (it stood in the empty
+                // «Выбор» panel beside copies of the rail's buttons, removed 2026-10-31).
+                NewRoomButton("StartRoomFromEmptyButton"),
                 Ui.Section("Новая фигура", new StackPanel
                 {
                     Spacing = 4,
@@ -899,8 +902,9 @@ public sealed partial class EditorView
                 SyncSidePanels();
                 SyncContextArea();
             }), Ui.CategoryTabs("LandTabs",
-            new Ui.CategoryTab("Draw", "Рисовать", MapIcons.LineBrush, drawPage, "Новая земля, форма кисти и раскраска суши материалами"),
-            new Ui.CategoryTab("Style", "Оформление", MapIcons.LinePalette, stylePage, "Цвет и материал выбранной суши, контур, прибой, тени и обрывы"),
+            // Not «Рисовать»/«Оформление»: those are the names of the sections above (owner, 2026-10-31).
+            new Ui.CategoryTab("Draw", "Форма", MapIcons.LineBrush, drawPage, "Новая земля, форма кисти и раскраска суши материалами"),
+            new Ui.CategoryTab("Style", "Краски", MapIcons.LinePalette, stylePage, "Цвет и материал выбранной суши, контур, прибой, тени и обрывы"),
             new Ui.CategoryTab("More", "Ещё", MapIcons.LineGear, morePage, "Точная область, сдвиг и очистка слоя")));
     }
 
@@ -1003,17 +1007,15 @@ public sealed partial class EditorView
         _stampRecentSection = new Ui.SectionPanel("StampRecentSection", "Недавние и избранное", _stampStripsHost, false);
         _stampRecentSection.SetSummary("недавние, ★");
 
-        var openCatalog = Ui.CommandButton("StampEmptyOpenCatalogButton", "Открыть каталог ассетов (F)", MapIcons.Assets,
-            () => OpenAssetCatalog(focusSearch: true), "accent", "compact");
-        openCatalog.HorizontalAlignment = HorizontalAlignment.Stretch;
+        // The catalog opens from the rail's «Ассеты» (or F): the second button «Открыть каталог ассетов» that stood here
+        // was removed (owner, 2026-10-31: one function - one place on the screen).
         _stampEmptyState = new StackPanel
         {
             Spacing = 8,
             Children =
             {
                 Ui.EmptyState("StampEmptyState", MapIcons.ObjectStamp, "Ассет не выбран",
-                    "Выберите дерево, гору или здание в каталоге — затем щёлкните по карте, чтобы поставить."),
-                openCatalog,
+                    "Каталог открывает кнопка «Ассеты» слева (или клавиша F): выберите дерево, гору или здание, затем щёлкните по карте."),
             },
         };
         _stampCatalogHost = new Border { Padding = new Thickness(0, 0, 0, 10), Child = catalog };

@@ -8,8 +8,8 @@ using Map.Presentation.ViewModels;
 namespace Map.App.Views;
 
 /// <summary>
-/// Море in the ribbon under the map (R12): a card per sea style drawn on the open map, and beside
-/// them how strongly the style covers the plain sea and how far from the shore it reaches.
+/// Море of «Вид» (R12): a picture per sea style drawn on the open map, and under them how strongly the style
+/// covers the plain sea and how far from the shore it reaches.
 /// </summary>
 public sealed partial class EditorView
 {
@@ -30,7 +30,7 @@ public sealed partial class EditorView
         var reach = AppearanceSlider("SeaScaleSlider", "Размах", SeaStyle.MinimumScale * 100, SeaStyle.MaximumScale * 100, "%",
             () => _editor.Sea?.Scale * 100, (v, _) => _editor.SetSeaScale(v), 5,
             defaultValue: 100, description: "Как далеко от берега уходят линии и полосы: меньше — для маленьких островов, больше — для материка.");
-        var off = new TextBlock { Text = "Выберите стиль моря слева.", TextWrapping = Avalonia.Media.TextWrapping.Wrap }.Classed("faint");
+        var off = new TextBlock { Text = "Выберите море на картинках выше.", TextWrapping = Avalonia.Media.TextWrapping.Wrap }.Classed("faint");
         _seaSyncs.Add(() =>
         {
             var on = _editor.Sea is not null;
@@ -41,8 +41,6 @@ public sealed partial class EditorView
             Content = new StackPanel { Spacing = 6, Margin = new Avalonia.Thickness(10, 0, 4, 0), Children = { hint, off, strength, reach } },
         }.Named("SeaBody");
     }
-
-    private static string SeaState(SeaStyle? sea) => sea is null ? "без стиля" : EditorViewModel.SeaTitle(sea.Manner);
 
     private static string SeaHint(SeaManner manner) => SeaStyle.Manners.First(m => m.Manner == manner).Description;
 

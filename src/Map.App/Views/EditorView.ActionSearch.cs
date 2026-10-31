@@ -91,10 +91,10 @@ public sealed partial class EditorView
                 () => _editor.SelectionArea is null ? "Сначала выделите объекты, поставленные областью." : null);
             Add("Паспорт набора и роль", "Объекты → Каталог → значок паспорта на карточке → Роль", "паспорт роль набор дерево ель дом тег",
                 null, () => { ShowWorkspace(EditorWorkspace.Objects); OpenAssetCatalog(focusSearch: false); });
-            Add("Свет", "Оформление → Свет", "свет время суток вечер ночь день огни", "RibbonLightTab", () => ShowAppearanceTab(RibbonTab.Light));
-            Add("Стили", "Оформление → Стили", "стиль тушь гравюра акварель уголь синька лунная ночь печать укиё", "RibbonStyleTab",
-                () => ShowAppearanceTab(RibbonTab.Styles));
-            Add("Море", "Оформление → Море", "море вода волны рябь изобаты стиль моря", "RibbonSeaTab", () => ShowAppearanceTab(RibbonTab.Sea));
+            Add("Свет", "Оформление → Свет", "свет время суток вечер ночь день огни", "LookPart_light", () => ShowAppearanceTab(LookPart.Light));
+            Add("Стили", "Оформление → Стиль", "стиль тушь гравюра акварель уголь синька лунная ночь печать укиё", "LookPart_style",
+                () => ShowAppearanceTab(LookPart.Styles));
+            Add("Море", "Оформление → Море", "море вода волны рябь изобаты стиль моря", "LookPart_sea", () => ShowAppearanceTab(LookPart.Sea));
         }
 
         World("AtlasCheckButton", "Проверка атласа", "атлас подкарта проверка связи");
@@ -109,11 +109,11 @@ public sealed partial class EditorView
         World("IsometricButton", "Изометрия", "изометрия объём 3d вид сбоку");
         World("BookButton", "Книга и язык", "книга атлас художественный язык");
 
-        Add("Экспорт", "Файл → Экспорт…", "экспорт png картинка печать vtt пакет игрока выгрузить", null, OpenExport);
+        Add("Экспорт", "Кнопка «Экспорт…» вверху", "экспорт png картинка печать vtt пакет игрока выгрузить", null, OpenExport);
         Add("Сохранить", "Кнопка «Сохранить» вверху (Ctrl+S)", "сохранить запись файл", "SaveButton", () => { });
         Add("Версии и сравнение", "Файл → Версии…", "версии сравнение откат история изменения", "FileMenuButton", () => { });
         Add("Размер и область карты", "Файл → Размер и область…", "размер холст область обрезать расширить", "FileMenuButton", () => { });
-        Add("Сочетания клавиш", "Файл → Сочетания клавиш…", "клавиши сочетания горячие", "FileMenuButton", () => { });
+        Add("Сочетания клавиш", "Кнопка с клавиатурой вверху", "клавиши сочетания горячие", "ShortcutSettingsButton", () => { });
         return list;
     }
 
@@ -126,15 +126,7 @@ public sealed partial class EditorView
     };
 
     /// <summary>«Свет», «Стили», «Море» from Ctrl+K: the «Вид» page with that part in sight (owner's pick 2026-10-31).</summary>
-    private void ShowAppearanceTab(RibbonTab tab)
-    {
-        _ribbonTab = tab;
-        ShowWorkspace(EditorWorkspace.Appearance);
-        SetRightTab(RightColumnTab.Look);
-        var part = tab switch { RibbonTab.Sea => "LookPart_sea", RibbonTab.Styles => "LookPart_style", _ => "LookPart_light" };
-        if (_lookPage is not null && Avalonia.LogicalTree.LogicalExtensions.GetLogicalDescendants(_lookPage).OfType<Control>().FirstOrDefault(c => c.Name == part) is { } target)
-            Dispatcher.UIThread.Post(() => target.BringIntoView(), DispatcherPriority.Loaded);
-    }
+    private void ShowAppearanceTab(LookPart part) => ShowLookPart(part, fine: false);
 
     // The field-like button of the document bar, as in the chosen layout: «Найти действие   Ctrl+K».
     private Button ActionSearchButton()

@@ -289,7 +289,7 @@ public sealed class NativePlacementAndCheckpointsApplication : Application
             && reopened.Layers.OfType<ObjectLayer>().Sum(layer => layer.Objects.Count)
                 == ObjectCount(editor);
 
-        var onlyTwoTabs = view.WorkspaceTabCount == 6; // six working sections since the 2026-09-09 panel rework
+        var onlyTwoTabs = view.WorkspaceTabCount == 5; // five sections; «Слои» is the right column's tab since 2026-10-31
         view.ToggleContextPanel();
         view.ToggleRightPanel();
         var collapsed = view.ContextPanelCollapsed && view.RightPanelCollapsed;

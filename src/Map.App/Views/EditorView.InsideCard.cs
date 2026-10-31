@@ -291,12 +291,12 @@ public sealed partial class EditorView
                 WorldAccent, groups, [], "Щелчок — открыть список", Count(_worldEntries.Count, "функция", "функции", "функций"));
         }
         if (workspace == EditorWorkspace.Appearance)
-            return new(title, null, ["Разделы", title], "Как выглядит вся карта: свет, стиль и море. Лента открывается под картой.",
+            return new(title, null, ["Разделы", title], "Как выглядит вся карта: свет, стиль и море — картинками справа.",
                 AppearanceAccent,
-                [new("Лента под картой", [
+                [new("Справа, страница «Вид»", [
                     new("Свет", "Время суток, огни и тени"), new("Стили", "Вся карта в другой технике"),
-                    new("Море", "Как нарисована вода новых карт")])],
-                [], "Щелчок — открыть ленту");
+                    new("Море", "Как нарисовано открытое море")])],
+                [], "Щелчок — открыть «Вид»");
         var tools = EditorSurfaceLayout.RailGroupsFor(_isHexWorkshop).SelectMany(g => g)
             .Where(e => e.Tool != EditorTool.Select && EditorSurfaceLayout.WorkspaceOf(e.Tool) == workspace)
             .Select(e => new InsideItem(EditorLabels.Tool(e.Tool), ToolWhat(e.Tool), Key: ToolShortcut(e.Tool) is { Length: > 0 } k ? k : null))
@@ -341,13 +341,6 @@ public sealed partial class EditorView
                     new("Скрытые", N(document.Layers.Count(l => !l.Visible), "слой", "слоя", "слоёв")),
                     new("Заблокированные", N(document.Layers.Count(l => l.Locked), "слой", "слоя", "слоёв")),
                     new("Выбранный", _editor.ActiveLayer?.Name ?? "—")])],
-                [], "Щелчок — открыть вкладку"),
-            RightColumnTab.Look => new("Вид", null, ["Правая колонка", "Вид"],
-                "Свет, стиль и море всей карты: наведите на картинку — карта покажет этот вид, щелчок применит.", ColumnAccent,
-                [new("Сейчас", [
-                    new("Свет", _editor.ShownLighting.Enabled ? TimeTitle(_editor.ShownLighting.TimeOfDay) : "без света"),
-                    new("Стили", _editor.ShownStyle.Enabled ? EditorViewModel.PresetTitle(_editor.ShownStyle.Preset) : "без стиля"),
-                    new("Море", SeaState(_editor.Sea))])],
                 [], "Щелчок — открыть вкладку"),
             _ => new("Свойства", null, ["Правая колонка", "Свойства"],
                 "Что сейчас изменится: выделенное на карте или следующий инструмент.", ColumnAccent,

@@ -252,12 +252,12 @@ public sealed partial class EditorView
                         Ui.Hint("Узлы: клики по холсту. Первый клик по дороге — ветвь от общего узла; клик по дороге с узлами в черновике — соединение; клик по первому узлу — замкнуть. Enter — свободный конец, Esc — отмена."),
                     },
                 })), "Новая дорога и ширина новых узлов"),
-            new Ui.CategoryTab("Select", "Выбор", MapIcons.LineTarget, (_roadSelectCategory = Ui.Category("RoadSelectCategory", "Выбор", "accent-select", _roadSelectionBlock)), "Какую дорогу и что в ней выделяет щелчок; скрыть, заблокировать, удалить"),
+            new Ui.CategoryTab("Select", "Выделение", MapIcons.LineTarget, (_roadSelectCategory = Ui.Category("RoadSelectCategory", "Выделение", "accent-select", _roadSelectionBlock)), "Какую дорогу и что в ней выделяет щелчок; скрыть, заблокировать, удалить"),
             new Ui.CategoryTab("Shape", "Форма", MapIcons.ModePath, (_roadShapeCategory = Ui.Category("RoadShapeCategory", "Форма", "accent-shape", new StackPanel
                 {
                     Spacing = 4, Children = { _roadNodeBlock, _roadBranchBlock },
                 }, expanded: false)), "Ширина и кривизна узлов, всё русло или участок"),
-            new Ui.CategoryTab("Style", "Вид", MapIcons.LineRoad, (_roadStyleCategory = Ui.Category("RoadStyleCategory", "Оформление", "accent-look", _roadStyleBlock, expanded: false)), "Материал, цвет, берега и оформление")));
+            new Ui.CategoryTab("Style", "Краски", MapIcons.LineRoad, (_roadStyleCategory = Ui.Category("RoadStyleCategory", "Краски", "accent-look", _roadStyleBlock, expanded: false)), "Материал, цвет, берега и оформление")));
     }
 
     private static RoadEndCap ParseCap(string key) => key switch

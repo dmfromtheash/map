@@ -107,17 +107,17 @@ public sealed partial class NativeEditorScenarioApplication
         _report.Checks["delta-preview-and-apply"] = previewKept && _editor.Rivers.Single().Channels.Length == _editor.RiverDeltaArms;
         SaveVisual(Path.ChangeExtension(Options.OutputPath, ".delta.png"));
 
-        // The sea: the Море tab of the ribbon, the isobaths card.
-        await Click("WorkspaceAppearanceTab"); await Click("RibbonSeaTab");
-        await Click("SeaCard2"); await Frame();
+        // The sea: Море of «Вид» in «Оформление», the isobaths picture.
+        await Click("WorkspaceAppearanceTab");
+        await Click("LookCard_sea-2"); await Frame();
         _report.Checks["sea-tab-applies-manner"] = _editor.Sea is { Manner: SeaManner.Isobaths };
         await Task.Delay(800); await Frame();
         _report.Screenshot = Path.ChangeExtension(Options.OutputPath, ".png");
         SaveVisual(_report.Screenshot);
         _editor.Undo(); await Settle();
         _report.Checks["sea-undo"] = _editor.Sea == SeaStyle.NewMapDefault;
-        // The card previews render in the background: the ribbon is closed and the last frame
-        // settles before the caches are counted, or a late preview frame refills them.
-        await Click("RibbonCollapseButton"); await Task.Delay(1500); await Frame(); await Settle();
+        // The pictures render in the background: «Оформление» is left and the last frame settles before the caches
+        // are counted, or a late picture refills them.
+        await Click("WorkspaceDrawTab"); await Task.Delay(1500); await Frame(); await Settle();
     }
 }

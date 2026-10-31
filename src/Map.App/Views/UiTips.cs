@@ -23,7 +23,7 @@ public static class UiTips
         ["WorkspaceDrawTab"] = "Земля, вода, дороги, линии, фигуры, подписи, кисть и маска",
         ["WorkspaceObjectsTab"] = "Каталог ассетов и расстановка: один, серия, россыпь, путь, область",
         ["WorldSectionButton"] = "Заметки и мир: атлас, время, планета, город, сектор, пойнткроул, проверки",
-        ["WorkspaceAppearanceTab"] = "Свет, стили и море — лента под картой",
+        ["WorkspaceAppearanceTab"] = "Свет, стиль и море всей карты — картинками справа",
         ["WorldSectionCloseButton"] = "Скрыть список «Мир»",
         ["AtlasUpButton"] = "Перейти к родительской карте атласа",
         ["AtlasCheckButton"] = "Найти расхождения между этой картой и её подкартами",
@@ -191,9 +191,6 @@ public static class UiTips
         ["HexJourneyReachBox"] = "Показать, куда отряд дойдёт за 1, 2 и 3 дня",
         ["HexJourneySecretBox"] = "Маршрут виден только ведущему",
         // first steps on an empty map and the light presets
-        ["StartAssetsButton"] = "Открыть каталог и поставить первую гору или другой рисунок",
-        ["StartLandButton"] = "Взять «Землю» и нарисовать первую сушу",
-        ["StartRiverFromEmptyButton"] = "Взять «Реку» и провести первую реку по точкам",
         ["LightPresetTorch"] = "Огонь-факел: маленький тёплый круг света",
         ["LightPresetWindow"] = "Свет из окна: ровный, холодноватый",
         ["LightPresetCampfire"] = "Костёр: большой тёплый круг света с мерцанием",

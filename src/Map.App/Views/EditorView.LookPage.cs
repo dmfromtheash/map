@@ -22,8 +22,10 @@ namespace Map.App.Views;
 /// https://claude.ai/artifact/UA3ciWpYB3UVgFbX56uqNo, after a survey of about a hundred programs): three signed parts,
 /// Свет (four), Стиль (sixteen, four by four, no scrolling) and Море (five), each a picture of this very map drawn by the
 /// program. Pointing at a picture shows the whole map in it; a click applies it (one undo step); a second click on the
-/// chosen one opens its strength; «Сравнить» held shows the map without style and light. The former ribbon stays, for
-/// fine settings, behind «Тонко настроить».
+/// chosen one, or «Настроить» of the part, opens all its settings right under its pictures; «Сравнить» held shows the map
+/// without style and light. This is the only place of these settings: the ribbon under the map that repeated the same
+/// cards was removed (owner, 2026-10-31: «у нас дублируются функции на экране… свет и внизу и сбоку»). The page is the
+/// section «Оформление»; the right column has no tab of its own for it.
 /// </summary>
 public sealed partial class EditorView
 {
@@ -32,7 +34,9 @@ public sealed partial class EditorView
     private Control? _lookPage;
     private readonly Dictionary<string, (Button Button, Border Picture)> _lookTiles = [];
     private readonly Dictionary<string, Bitmap> _lookPreviews = [];
-    private readonly Dictionary<string, Control> _lookStrength = [];
+    private readonly Dictionary<LookPart, RetainedSlot> _lookFine = [];
+    private readonly Dictionary<LookPart, Button> _lookFineButtons = [];
+    private LookPart? _lookFineOpen;
     private readonly Dictionary<string, TextBlock> _lookState = [];
     private DispatcherTimer? _lookPreviewTimer;
     private CancellationTokenSource? _lookPreviewWork;
@@ -47,19 +51,16 @@ public sealed partial class EditorView
         compare.PointerReleased += (_, _) => _editor.PreviewLook(null);
         compare.PointerCaptureLost += (_, _) => _editor.PreviewLook(null);
 
-        var fine = Ui.TextButton("LookFineTuneButton", "Настроить ▸", () => ShowLookFineTune(true), "compact")
-            .WithTip("Тонко настроить: все настройки света, стиля и моря лентой под картой — эффекты стиля, огни, размах моря.");
-
         var header = new Grid
         {
-            ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"), ColumnSpacing = 6, Margin = new Thickness(12, 8, 12, 6),
-            Children = { new TextBlock { Text = "Вся карта", FontSize = 17, VerticalAlignment = VerticalAlignment.Center }.Classed("panel-title"), fine, compare },
+            ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 6, Margin = new Thickness(12, 8, 12, 6),
+            Children = { new TextBlock { Text = "Вся карта", FontSize = 17, VerticalAlignment = VerticalAlignment.Center }.Classed("panel-title"), compare },
         };
-        Grid.SetColumn(fine, 1);
-        Grid.SetColumn(compare, 2);
+        Grid.SetColumn(compare, 1);
 
         Control Part(string group, string icon, string title, string? offKey, string? offTitle, IEnumerable<(string Key, string Title)> cards, int columns)
         {
+            var part = PartOf(group);
             var state = new TextBlock { FontSize = 12, VerticalAlignment = VerticalAlignment.Center }.Classed("faint");
             _lookState[group] = state;
             var head = new DockPanel { LastChildFill = false };
@@ -68,23 +69,34 @@ public sealed partial class EditorView
                 Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center,
                 Children = { MapIcons.Stroked(icon, 14), new TextBlock { Text = title.ToUpperInvariant(), FontSize = 11.5, FontWeight = FontWeight.SemiBold, LetterSpacing = .8 }.Classed("accent-text") },
             }.Docked(Dock.Left));
+            // Every setting of this part opens right under its pictures: one place for the light, one for the style,
+            // one for the sea (owner, 2026-10-31: no second copy of the same cards under the map).
+            var fine = Ui.TextButton("LookFine_" + group, "Настроить", () => ShowLookPart(part, fine: _lookFineOpen != part), "compact")
+                .WithTip("Все настройки: " + title.ToLowerInvariant() + (group switch
+                {
+                    "light" => " — время суток, объём, тени, туман, огни и цвет.",
+                    "style" => " — сила, эффекты и большой осмотр стиля.",
+                    _ => " — сила и размах от берега.",
+                }));
+            _lookFineButtons[part] = fine;
+            head.Children.Add(fine.Docked(Dock.Right));
             if (offKey is not null)
             {
                 var off = Ui.TextButton("LookOff_" + group, offTitle!, () => ApplyLook(offKey), "compact").WithTip(offTitle + " — один шаг отмены.");
+                off.Margin = new Thickness(0, 0, 6, 0);
                 head.Children.Add(off.Docked(Dock.Right));
                 _lookTiles[offKey] = (off, new Border());
             }
-            else head.Children.Add(state.Docked(Dock.Right));
+            else { state.Margin = new Thickness(0, 0, 8, 0); head.Children.Add(state.Docked(Dock.Right)); }
             var grid = new UniformGrid { Columns = columns, HorizontalAlignment = HorizontalAlignment.Left };
             foreach (var (key, cardTitle) in cards) grid.Children.Add(LookTile(group, key, cardTitle));
-            var strength = LookStrengthRow(group);
-            strength.IsVisible = false;
-            _lookStrength[group] = strength;
+            var settings = new RetainedSlot { Name = "LookFineBody_" + group, IsVisible = false };
+            _lookFine[part] = settings;
             return new Border
             {
                 BorderBrush = Application.Current?.FindResource("MapBorderBrush") as IBrush, BorderThickness = new Thickness(0, 1, 0, 0),
                 Padding = new Thickness(12, 9, 12, 10),
-                Child = new StackPanel { Spacing = 7, Children = { head, grid, strength } },
+                Child = new StackPanel { Spacing = 7, Children = { head, grid, settings } },
             }.Named("LookPart_" + group);
         }
 
@@ -130,13 +142,18 @@ public sealed partial class EditorView
             Content = new StackPanel { Spacing = 3, Children = { picture, caption } },
         };
         AutomationProperties.SetName(button, title);
-        ToolTip.SetTip(button, title + ". Наведите — вся карта в этом виде; щелчок — применить (один шаг отмены); ещё щелчок — сила.");
+        // What the style or the sea is, as the ribbon's cards said it, then how the picture works.
+        var what = key.StartsWith("style-", StringComparison.Ordinal) ? " " + PresetHint(Enum.Parse<MapStylePreset>(key["style-".Length..]))
+            : key.StartsWith("sea-", StringComparison.Ordinal) ? " " + SeaHint((SeaManner)int.Parse(key["sea-".Length..], System.Globalization.CultureInfo.InvariantCulture))
+            : "";
+        ToolTip.SetTip(button, title + "." + what + " Наведите — вся карта в этом виде; щелчок — применить (один шаг отмены); ещё щелчок — настройки.");
         // Pointing tries the look on the whole map; leaving brings the map back.
         button.PointerEntered += (_, _) => _editor.PreviewLook(LookDocument(key));
         button.PointerExited += (_, _) => _editor.PreviewLook(null);
         button.Click += (_, _) =>
         {
-            if (LookActive(key) && _lookStrength.TryGetValue(group, out var row)) { row.IsVisible = !row.IsVisible; return; }
+            // A second click on the chosen picture opens (or closes) its settings under the part.
+            if (LookActive(key)) { var part = PartOf(group); ShowLookPart(part, fine: _lookFineOpen != part); return; }
             ApplyLook(key);
         };
         _lookTiles[key] = (button, picture);
@@ -147,24 +164,48 @@ public sealed partial class EditorView
     private void ApplyLook(string key)
     {
         _editor.PreviewLook(null);
-        ApplyRibbonCard(key);
+        ApplyLookCard(key);
         SyncAppearanceSections();
+        SyncLookParts();
     }
 
-    /// <summary>The strength of the chosen look: time of day for the light, strength for the style and the sea.</summary>
-    private Control LookStrengthRow(string group) => group switch
+    private static LookPart PartOf(string group) => group switch { "style" => LookPart.Styles, "sea" => LookPart.Sea, _ => LookPart.Light };
+
+    /// <summary>
+    /// Opens «Оформление» with <paramref name="part"/> in sight; with <paramref name="fine"/> its settings open under its
+    /// pictures (one part at a time), without it they close.
+    /// </summary>
+    private void ShowLookPart(LookPart part, bool fine)
     {
-        "light" => ValueRow("LookLightTimeSlider", "LookLightTimeBox", null, "Время суток", 0, 100, "%",
-            () => _editor.ShownLighting.Enabled ? _editor.ShownLighting.TimeOfDay * 100 : null,
-            (value, commit) => _editor.SetTimeOfDay(value / 100, commit), step: 5,
-            description: "0 — день, 50 — вечер, 100 — ночь."),
-        "style" => ValueRow("LookStyleStrengthSlider", "LookStyleStrengthBox", null, "Сила стиля", 0, 100, "%",
-            () => _editor.ShownStyle.Enabled ? _editor.ShownStyle.Strength * 100 : null,
-            (value, commit) => _editor.SetStyleStrength(value / 100, commit), step: 5, defaultValue: 100),
-        _ => ValueRow("LookSeaStrengthSlider", "LookSeaStrengthBox", null, "Сила моря", 0, 100, "%",
-            () => _editor.Sea is { } sea ? sea.Strength * 100 : null,
-            (value, commit) => { if (commit) _editor.SetSeaStrength(value); }, step: 5, defaultValue: 100),
-    };
+        if (_workspace != EditorWorkspace.Appearance) ShowWorkspace(EditorWorkspace.Appearance);
+        else if (_rightTab != RightColumnTab.Look) SetRightTab(RightColumnTab.Look);
+        _lookFineOpen = fine ? part : null;
+        foreach (var (candidate, slot) in _lookFine)
+        {
+            var open = candidate == _lookFineOpen;
+            if (open && slot.Content is null) slot.Content = candidate switch
+            {
+                LookPart.Styles => new StackPanel
+                {
+                    Spacing = 6,
+                    Children =
+                    {
+                        Ui.CommandButton("RibbonInspectButton", "Осмотреть…", MapIcons.FitCanvas, OpenStyleInspector, "compact")
+                            .WithTip("Большой просмотр стиля на вашей карте: 50, 100 и 200 %, другие стили рядом."),
+                        StyleBody(),
+                    },
+                },
+                LookPart.Sea => SeaBody(),
+                _ => LightBody(),
+            };
+            slot.IsVisible = open;
+            if (_lookFineButtons.TryGetValue(candidate, out var button)) Ui.SetClass(button, "active", open);
+        }
+        SyncLookParts();
+        var target = _lookPage is null ? null : Avalonia.LogicalTree.LogicalExtensions.GetLogicalDescendants(_lookPage).OfType<Control>()
+            .FirstOrDefault(c => c.Name == "LookPart_" + (part switch { LookPart.Styles => "style", LookPart.Sea => "sea", _ => "light" }));
+        if (target is not null) Dispatcher.UIThread.Post(() => target.BringIntoView(), DispatcherPriority.Loaded);
+    }
 
     private MapDocument LookDocument(string key) => CardDocument(_editor.Session.Document, key);
 
@@ -248,15 +289,6 @@ public sealed partial class EditorView
                 }, DispatcherPriority.Background);
             }
         }, token));
-    }
-
-    /// <summary>«Тонко настроить»: the former ribbon under the map with every setting of light, style and sea.</summary>
-    private void ShowLookFineTune(bool on)
-    {
-        _ribbonFineTune = on;
-        if (on && _ribbonTab == RibbonTab.None) _ribbonTab = RibbonTab.Styles;
-        if (on && _workspace != EditorWorkspace.Appearance) ShowWorkspace(EditorWorkspace.Appearance);
-        SyncAppearanceRibbon();
     }
 
     private void DisposeLookPage()

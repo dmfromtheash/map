@@ -27,10 +27,6 @@ public sealed partial class EditorView
 
     private Control BuildLightBody()
     {
-        var master = AppearanceToggle("LightEnabledToggle", "Свет и время суток включены",
-            () => _editor.ShownLighting.Enabled, on => { _editor.SetLightingEnabled(on); SyncLightSection(); });
-        ToolTip.SetTip(master, "Выключено — карта рисуется как без света. Настройки ниже сохраняются.");
-
         var time = ValueRow("LightTimeSlider", "LightTimeBox", null, "Время суток", 0, 100, "",
             () => _editor.ShownLighting.TimeOfDay * 100,
             (value, commit) => { _editor.SetTimeOfDay(value / 100, commit); if (commit) SyncLightSection(); },
@@ -46,8 +42,8 @@ public sealed partial class EditorView
             Margin = new Thickness(10, 0, 10, 8),
             Children =
             {
-                // День, Вечер and Ночь are the ribbon's cards (DEC-064); the slider sets any time between them.
-                master,
+                // «Без света», День, Вечер and Ночь are the pictures of «Вид» above (DEC-082: no second on/off switch
+                // here; a picture or this slider turns the light back on with its effects); the slider sets any time.
                 Group("Время суток", time),
                 Group("Эффекты", effects),
                 Group("Огни на карте", BuildLightSources()),
@@ -249,7 +245,6 @@ public sealed partial class EditorView
     {
         if (_lightBody is null) return;
         SyncAppearanceSections();
-        foreach (var sync in _lightSyncs) sync();
-        SyncAppearanceRibbon();
+        SyncLookParts();
     }
 }

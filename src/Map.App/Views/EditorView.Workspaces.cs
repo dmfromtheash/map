@@ -18,7 +18,6 @@ public sealed partial class EditorView
     private readonly Dictionary<EditorWorkspace, Button> _workspaceTabs = [];
     private readonly List<(EditorRailEntry Entry, Control Button)> _railButtons = [];
     private readonly List<(Control Divider, EditorRailEntry[] Group)> _railDividers = [];
-    private Control? _appearanceRibbon;
 
     public EditorWorkspace Workspace => _workspace;
 
@@ -60,14 +59,18 @@ public sealed partial class EditorView
         var entering = _workspace != workspace;
         _workspace = workspace;
         foreach (var (key, tab) in _workspaceTabs) Ui.SetClass(tab, "active", key == workspace);
-        // «Оформление» opens «Вид» in the right column; the ribbon of fine settings stays closed until asked for.
-        if (workspace != EditorWorkspace.Appearance) _ribbonFineTune = false;
-        else if (entering && !_ribbonFineTune && _rightColumn is not null) SetRightTab(RightColumnTab.Look);
+        // «Оформление» is the page «Вид» of the right column - its only way in; leaving the section takes the page away.
+        if (_rightColumn is not null)
+        {
+            // A press on the tab (openWorldList) brings the page back after «Свойства» or «Содержимое» was opened.
+            if (workspace == EditorWorkspace.Appearance && (entering || openWorldList)) SetRightTab(RightColumnTab.Look);
+            else if (workspace != EditorWorkspace.Appearance && _rightTab == RightColumnTab.Look) SetRightTab(RightColumnTab.Properties);
+        }
         foreach (var (entry, button) in _railButtons)
             button.IsVisible = EditorSurfaceLayout.InWorkspace(entry, workspace);
         foreach (var (divider, group) in _railDividers)
             divider.IsVisible = group.Any(entry => EditorSurfaceLayout.InWorkspace(entry, workspace) && entry.Tool != EditorTool.Select);
-        if (_appearanceRibbon is not null) SyncAppearanceRibbon();
+        if (_lookPage is not null) SyncLookParts();
         if (workspace != EditorWorkspace.World) ShowWorldSection(false);
         else if (openWorldList) ShowWorldSection(true);
     }

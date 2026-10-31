@@ -150,11 +150,11 @@ public sealed partial class PaintPerfApplication
         foreach (var preset in new[] { MapStylePreset.OldMapBlaeu, MapStylePreset.EngravingAquatint,
                      MapStylePreset.MoonlightHasui, MapStylePreset.MoonlightPastel })
         {
-            // The preset is a card of the ribbon under the map (DEC-064), marked "selected" when applied.
-            var button = Find<Button>("StylePreset" + preset);
+            // The preset is a picture of «Вид» in «Оформление», marked "active" when applied; its settings are open under it.
+            var button = Find<Button>("LookCard_style-" + preset);
             button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             await Settle();
-            var correct = _editor.Style.Preset == preset && button.Classes.Contains("selected");
+            var correct = _editor.Style.Preset == preset && button.Classes.Contains("active");
             foreach (var kind in Enum.GetValues<StyleEffectKind>())
                 correct &= Find<Grid>("Style" + kind + "Row").IsVisible == MapStyle.EffectsOf(preset).Contains(kind);
             var toggle = Find<CheckBox>("StyleCoastToggle");

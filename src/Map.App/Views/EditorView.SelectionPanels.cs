@@ -35,19 +35,9 @@ public sealed partial class EditorView
 
     private void BuildSelectionSections()
     {
-        // Empty is a starting point: what to do now, and the three first steps of a map one
-        // click away (the same commands as the rail).
-        Button Start(string name, string text, string icon, EditorTool tool, Action? then = null)
-        {
-            var button = Ui.CommandButton(name, text, icon, () =>
-            {
-                _editor.ActiveTool = tool;
-                then?.Invoke();
-                SyncContextArea();
-            }, "compact");
-            button.HorizontalAlignment = HorizontalAlignment.Stretch;
-            return button;
-        }
+        // Empty says what to do now. The buttons «Поставить ассет», «Нарисовать сушу», «Новая река» that stood here
+        // repeated the rail and the create buttons of the tools (owner, 2026-10-31: «у нас дублируются функции на
+        // экране»); the rail on the left is the one way to a tool.
         _selectionEmpty = new StackPanel
         {
             Spacing = 6,
@@ -57,22 +47,10 @@ public sealed partial class EditorView
                     "SelectionEmptyState",
                     MapIcons.Select,
                     "Ничего не выбрано",
-                    "Щёлкните объект на карте или строку во вкладке «Содержимое». Рамкой можно выбрать несколько."),
-                new TextBlock { Text = "Начать" }.Classed("faint", "role-caption", "subgroup-title"),
+                    "Щёлкните объект на карте или строку во вкладке «Содержимое». Рамкой можно выбрать несколько. "
+                    + "Чтобы рисовать или ставить, возьмите инструмент на полосе слева."),
             },
         };
-        if (_isHexWorkshop)
-        {
-            ((StackPanel)_selectionEmpty).Children.Add(Start("StartHexButton", "Поставить гексы", MapIcons.Hex, EditorTool.Hex));
-            ((StackPanel)_selectionEmpty).Children.Add(Start("StartHexTextButton", "Подписать место", MapIcons.Text, EditorTool.Text));
-        }
-        else
-        {
-            ((StackPanel)_selectionEmpty).Children.Add(Start("StartAssetsButton", "Поставить ассет", MapIcons.Assets, EditorTool.Stamp, () => OpenAssetCatalog(focusSearch: true)));
-            ((StackPanel)_selectionEmpty).Children.Add(Start("StartLandButton", "Нарисовать сушу", MapIcons.Land, EditorTool.Land));
-            ((StackPanel)_selectionEmpty).Children.Add(Start("StartRiverFromEmptyButton", "Новая река", MapIcons.River, EditorTool.River));
-            ((StackPanel)_selectionEmpty).Children.Add(NewRoomButton("StartRoomFromEmptyButton"));
-        }
 
         _inspectorPanel = BuildInspector();
 
