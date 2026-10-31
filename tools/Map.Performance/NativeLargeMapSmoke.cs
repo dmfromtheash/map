@@ -153,6 +153,11 @@ public sealed class NativeLargeMapApplication : Application
             "native-stage13c" => LargeMapFixtures.Mixed50K(_options.Seed),
             _ => LargeMapFixtures.Simple(_options.ObjectCount, _options.Seed),
         };
+        // An empty throwaway catalog, as the program always has one: the stamp images then come
+        // from the owner's mountains embedded in the fixture map (1.5, amendment to DEC-079 p. 4).
+        // Without it StampImages was null and every mountain was a missing-asset placeholder.
+        var catalogRoot = Path.Combine(Path.GetTempPath(), "map-stage13-catalog-" + Guid.NewGuid().ToString("N"));
+        var catalog = new Map.Assets.AssetCatalog(catalogRoot);
         var editor = new EditorViewModel(
             fixture.Document,
             documentPath: null,
@@ -162,7 +167,8 @@ public sealed class NativeLargeMapApplication : Application
             new SmokeFilePicker(),
             new SmokePrompts(),
             new SmokeLog(),
-            availableFontFamilies: ["Arial"]);
+            availableFontFamilies: ["Arial"],
+            assetCatalog: catalog);
         var view = new EditorView(editor, static () => Task.CompletedTask, static () => { }, static () => { });
         var window = new Window
         {
@@ -191,6 +197,8 @@ public sealed class NativeLargeMapApplication : Application
             finally
             {
                 window.Close();
+                await catalog.DisposeAsync();
+                try { Directory.Delete(catalogRoot, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
                 desktop.Shutdown();
             }
         };
@@ -449,6 +457,7 @@ public sealed class NativeLargeMapApplication : Application
             undoExact,
             redoExact);
         var passed = logicalRows == expectedLogicalRows
+            && missingAssets == 0
             && objectTree.ScrollStayedVirtualized
             && searchRows == 1
             && pointerMoveRebuilds == 0
@@ -486,7 +495,7 @@ public sealed class NativeLargeMapApplication : Application
             [
                 "The smoke measures own-process interaction-start to completion of the Avalonia Skia scene pass; OS compositor presentation is not observable from the app hook.",
                 "The window is real but off-screen and never activated, so the smoke cannot disturb another foreground application.",
-                "This harness has no asset catalog: StampImages is null, so embedded mountain stamps are missing-asset placeholders. Timings exclude PNG decoding and real mountain rendering; drag.missingAssets records this limitation.",
+                "The mountains are the owner's six PNGs embedded in the fixture map, decoded through an empty throwaway asset catalog as in the program; drag.missingAssets must be 0.",
             ]);
     }
 

@@ -5644,8 +5644,9 @@ public static partial class SceneRenderer
                     chunkX,
                     chunkY,
                     zoomBucket,
-                    variant.ContentHash,
-                    variant.BuildImage);
+                    // Painted mountains are drawn with the document's stamp foreground.
+                    variant.Painted ? variant.ContentHash ^ (ulong)(document.StampForeground?.GetHashCode() ?? 0) : variant.ContentHash,
+                    () => variant.BuildImage(document.StampForeground, options));
                 canvas.DrawImage(
                     cached.Image,
                     variant.Bounds,
@@ -5833,52 +5834,65 @@ public static partial class SceneRenderer
                 return existing;
             }
 
-            var batches = new List<(SKColor Color, List<SKPoint> Points)>();
+            // In draw order: runs of same-coloured dots, and the small mountains whose look (shadow,
+            // blur, colour) a dot cannot carry, which are painted exactly into the cached chunk once
+            // instead of being drawn on every overview frame (1.5: 17 700 of the owner's mountains
+            // with shadows took 4 s a frame at 50 000).
+            var steps = new List<object>();
             var exact = new List<SceneObject>();
             var hash = 14_695_981_039_346_656_037UL;
             var overviewCount = 0;
             var missingCount = 0;
+            var painted = false;
             foreach (var sceneObject in Objects.Values.OrderBy(o => o.Item.Sublayer).ThenBy(o => o.Order).Select(o => o.Item))
             {
                 hash = HashObject(hash, sceneObject);
-                if (Math.Max(sceneObject.Width, sceneObject.Height) * bucketScale >= OverviewExactScreenSize
-                    || sceneObject.Stamp is { } detailStamp &&
-                    (colors.ContainsKey(detailStamp.AssetSha256) && detailStamp is not
-                        { Blur: 0, ShadowOpacity: 0, ClipMaskEnabled: false, Blend: "Normal", Hue: 0,
-                          Saturation: 0, Brightness: 0, Contrast: 0 }))
+                if (Math.Max(sceneObject.Width, sceneObject.Height) * bucketScale >= OverviewExactScreenSize)
                 {
                     exact.Add(sceneObject);
                     continue;
                 }
 
                 overviewCount++;
+                if (sceneObject.Stamp is { } detailStamp && colors.ContainsKey(detailStamp.AssetSha256) && detailStamp is not
+                        { Blur: 0, ShadowOpacity: 0, ClipMaskEnabled: false, Blend: "Normal", Hue: 0,
+                          Saturation: 0, Brightness: 0, Contrast: 0 })
+                {
+                    steps.Add(sceneObject);
+                    painted = true;
+                    continue;
+                }
+
                 if (sceneObject.Stamp is { } absent && !colors.ContainsKey(absent.AssetSha256)) missingCount++;
                 var color = sceneObject.Stamp is { } stamp && colors.TryGetValue(stamp.AssetSha256, out var tint)
                     ? tint.WithScaledAlpha(Alpha(sceneObject.ObjectOpacity)) : OverviewColor(sceneObject);
                 hash = (hash ^ (uint)color.GetHashCode()) * 1_099_511_628_211UL;
-                if (batches.Count == 0 || batches[^1].Color != color) batches.Add((color, []));
-                var points = batches[^1].Points;
-                points.Add(new SKPoint(
+                if (steps.Count == 0 || steps[^1] is not DotRun run || run.Color != color)
+                    steps.Add(run = new DotRun(color));
+                run.Points.Add(new SKPoint(
                     (float)(sceneObject.X + (sceneObject.Width / 2)),
                     (float)(sceneObject.Y + (sceneObject.Height / 2))));
             }
 
-            var immutableBatches = batches
-                .Select(pair => new OverviewBatch(pair.Color, [.. pair.Points]))
+            var immutableSteps = steps
+                .Select(step => step is DotRun dots ? new OverviewBatch(dots.Color, [.. dots.Points]) : step)
                 .ToArray();
+            // A painted mountain's shadow and blur may reach past the chunk edge.
+            var margin = painted ? (float)(AppearanceLimits.MaxShadowOffset + AppearanceLimits.MaxShadowBlur * 3) : 0f;
             var bounds = new SKRect(
-                (float)(x * OverviewChunkSize),
-                (float)(y * OverviewChunkSize),
-                (float)((x + 1) * OverviewChunkSize),
-                (float)((y + 1) * OverviewChunkSize));
+                (float)(x * OverviewChunkSize) - margin,
+                (float)(y * OverviewChunkSize) - margin,
+                (float)((x + 1) * OverviewChunkSize) + margin,
+                (float)((y + 1) * OverviewChunkSize) + margin);
             var variant = new OverviewVariant(
                 hash,
                 bounds,
                 bucketScale,
-                immutableBatches,
+                immutableSteps,
                 exact,
                 overviewCount,
-                missingCount);
+                missingCount,
+                painted);
             if (_variants.Count >= 4) _variants.Clear();
             _variants.Add((zoomBucket, tintRevision), variant);
             return variant;
@@ -5890,21 +5904,25 @@ public static partial class SceneRenderer
         ulong contentHash,
         SKRect bounds,
         double bucketScale,
-        IReadOnlyList<OverviewBatch> batches,
+        IReadOnlyList<object> steps,
         IReadOnlyList<SceneObject> exactObjects,
         int overviewObjectCount,
-        int missingCount)
+        int missingCount,
+        bool painted)
     {
         public ulong ContentHash { get; } = contentHash;
         public IReadOnlyList<SceneObject> ExactObjects { get; } = exactObjects;
         public int OverviewObjectCount { get; } = overviewObjectCount;
         public int MissingCount { get; } = missingCount;
-        public int BatchCount => batches.Count;
+        public int BatchCount => steps.Count(step => step is OverviewBatch);
+        public bool Painted => painted;
         public SKRect Bounds => bounds;
 
-        public SKImage BuildImage()
+        public SKImage BuildImage(StampForegroundSurface? stampForeground, RenderOptions options)
         {
-            var imageScale = Math.Min(bucketScale, 512.0 / Math.Max(bounds.Width, bounds.Height));
+            // Dots stay legible at half the view's resolution; painted mountains keep the view's own
+            // (the overview is used below scale 0.25, so a chunk is at most 2 048 pixels wide).
+            var imageScale = Math.Min(bucketScale, (painted ? 2048.0 : 512.0) / Math.Max(bounds.Width, bounds.Height));
             var width = Math.Max(1, (int)Math.Ceiling(bounds.Width * imageScale));
             var height = Math.Max(1, (int)Math.Ceiling(bounds.Height * imageScale));
             using var surface = SKSurface.Create(new SKImageInfo(
@@ -5914,8 +5932,15 @@ public static partial class SceneRenderer
             recording.Clear(SKColors.Transparent);
             recording.Scale((float)imageScale);
             recording.Translate(-bounds.Left, -bounds.Top);
-            foreach (var batch in batches)
+            foreach (var step in steps)
             {
+                if (step is SceneObject mountain)
+                {
+                    // A raster surface: the GPU effect path does not apply here.
+                    DrawObject(recording, mountain, stampForeground, options, prepareGpuEffect: false);
+                    continue;
+                }
+                var batch = (OverviewBatch)step;
                 using var paint = new SKPaint
                 {
                     Color = batch.Color,
@@ -5931,6 +5956,13 @@ public static partial class SceneRenderer
     }
 
     private sealed record OverviewBatch(SKColor Color, SKPoint[] Points);
+
+    /// <summary>A run of same-coloured overview dots while a chunk variant is collected.</summary>
+    private sealed class DotRun(SKColor color)
+    {
+        public SKColor Color { get; } = color;
+        public List<SKPoint> Points { get; } = [];
+    }
 
     private static ulong HashObject(ulong hash, SceneObject sceneObject)
     {
