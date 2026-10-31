@@ -1,3 +1,5 @@
+using Map.Core.Documents;
+using Map.Core.Editing;
 using Map.Export;
 
 namespace Map.Presentation.ViewModels;
@@ -8,7 +10,38 @@ namespace Map.Presentation.ViewModels;
 /// </summary>
 public sealed partial class EditorViewModel
 {
-    public IsometricSettings IsometricSettings { get; set; } = new();
+    private double? _isometricHeightPreview;
+
+    /// <summary>The view kept in the map (plan 2.3), with the height a slider drag is showing.</summary>
+    public IsometricSettings IsometricSettings => new()
+    {
+        Turn = Session.Document.Isometric.Turn,
+        HeightScale = _isometricHeightPreview ?? Session.Document.Isometric.HeightScale,
+    };
+
+    /// <summary>The side to look from, one undo step.</summary>
+    public void SetIsometricTurn(int turn) =>
+        ApplyIsometric(Session.Document.Isometric with { Turn = Math.Clamp(turn, 0, 3) });
+
+    /// <summary>
+    /// The heights: while a slider is dragged only the preview follows (<paramref name="commit"/>
+    /// false); letting go stores the value in the map as one undo step.
+    /// </summary>
+    public void SetIsometricHeight(double height, bool commit)
+    {
+        var value = Math.Round(Math.Clamp(height, MapIsometric.MinimumHeight, MapIsometric.MaximumHeight), 2);
+        if (!commit) { _isometricHeightPreview = value; return; }
+        _isometricHeightPreview = null;
+        ApplyIsometric(Session.Document.Isometric with { HeightScale = value });
+    }
+
+    private void ApplyIsometric(MapIsometric after)
+    {
+        var before = Session.Document.Isometric;
+        if (after == before) return;
+        Session.Execute(new SetIsometricCommand(before, after));
+        AfterEdit();
+    }
 
     public byte[] RenderIsometricPreview(int width) =>
         IsometricRenderer.RenderPng(Session.Document, IsometricSettings with { Width = width });

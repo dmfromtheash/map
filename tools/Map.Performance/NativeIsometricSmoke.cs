@@ -6,7 +6,7 @@ namespace Map.Performance;
 
 public sealed partial class NativeEditorScenarioApplication
 {
-    private static readonly string[] IsometricRequired = ["iso-preview", "iso-turned", "resources-disposed"];
+    private static readonly string[] IsometricRequired = ["iso-preview", "iso-turned", "iso-kept-in-map", "resources-disposed"];
 
     /// <summary>R38: a generated town opened, «Изометрия» shows it standing up; «С запада» turns it. The window captured.</summary>
     private async Task IsometricOnly()
@@ -23,6 +23,9 @@ public sealed partial class NativeEditorScenarioApplication
         _report.Checks["iso-preview"] = first is { Size.Width: > 1000 };
         In<Button>("IsometricSide1").RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent)); await Task.Delay(400); await Settle();
         _report.Checks["iso-turned"] = _editor.IsometricSettings.Turn == 1 && !ReferenceEquals(first, In<Image>("IsometricPreview").Source);
+        // Plan 2.3: the side is kept in the map, and the height row is the editor's usual slider with a box.
+        _report.Checks["iso-kept-in-map"] = _editor.Session.Document.Isometric.Turn == 1
+            && In<Slider>("IsometricHeightSlider").Value == 100 && In<TextBox>("IsometricHeightBox").Text == "100";
         _report.Screenshot = Path.ChangeExtension(Options.OutputPath, ".png");
         PanelAudit.Save((Control)window.Content!, _report.Screenshot);
         window.Close();

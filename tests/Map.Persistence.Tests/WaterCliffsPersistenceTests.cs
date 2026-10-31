@@ -150,6 +150,24 @@ public sealed class WaterCliffsPersistenceTests
     }
 
     [Fact]
+    public void The_isometric_view_round_trips_in_v47_and_a_default_view_keeps_the_older_schema()
+    {
+        using var workspace = new TempWorkspace();
+        var plain = new MapDocument(DocumentId.New(), "Город", DateTimeOffset.UnixEpoch, new CanvasDefinition(1024, 768, "px", "#FF8FB0BA"),
+            [new BaseColorLayer(LayerId.New(), "Море", true, false, 1, "#FF8FB0BA")]);
+        var plainPath = workspace.File("plain.mapproj");
+        MapProjectStore.Save(plain, plainPath, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
+        Assert.True(Schema(plainPath) < 47);
+        Assert.True(MapProjectStore.Open(plainPath).Document.Isometric.IsDefault);
+
+        var turned = plain with { Isometric = new MapIsometric { Turn = 2, HeightScale = 1.65 } };
+        var path = workspace.File("isometric.mapproj");
+        MapProjectStore.Save(turned, path, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
+        Assert.Equal(47, Schema(path));
+        Assert.Equal(new MapIsometric { Turn = 2, HeightScale = 1.65 }, MapProjectStore.Open(path).Document.Isometric);
+    }
+
+    [Fact]
     public void The_pointcrawl_round_trips_in_v41()
     {
         using var workspace = new TempWorkspace();

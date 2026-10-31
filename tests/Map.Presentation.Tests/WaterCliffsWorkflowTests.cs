@@ -302,6 +302,32 @@ public sealed class WaterCliffsWorkflowTests
     }
 
     [Fact]
+    public void The_isometric_side_and_height_are_kept_in_the_map_each_as_one_undo_step()
+    {
+        var editor = Editor();
+        var depth = editor.Session.UndoDepth;
+        editor.SetIsometricTurn(3);
+        Assert.Equal(3, editor.Session.Document.Isometric.Turn);
+        Assert.Equal(depth + 1, editor.Session.UndoDepth);
+
+        // A drag only previews; letting go stores the height as one step.
+        editor.SetIsometricHeight(1.4, commit: false);
+        editor.SetIsometricHeight(1.8, commit: false);
+        Assert.Equal(1.8, editor.IsometricSettings.HeightScale);
+        Assert.Equal(1, editor.Session.Document.Isometric.HeightScale);
+        Assert.Equal(depth + 1, editor.Session.UndoDepth);
+        editor.SetIsometricHeight(1.8, commit: true);
+        Assert.Equal(1.8, editor.Session.Document.Isometric.HeightScale);
+        Assert.Equal(depth + 2, editor.Session.UndoDepth);
+
+        editor.Undo();
+        Assert.Equal(1, editor.IsometricSettings.HeightScale);
+        Assert.Equal(3, editor.IsometricSettings.Turn);
+        editor.Undo();
+        Assert.True(editor.Session.Document.Isometric.IsDefault);
+    }
+
+    [Fact]
     public void A_sector_is_dressed_systems_set_by_number_imported_and_exported()
     {
         var editor = new EditorViewModel(HexMapFactory.Create("Сектор", DateTimeOffset.UnixEpoch, new MapCategoryId("hex"), HexOrientation.Flat, 40, 8, 10, "#FF8FB0BA"),

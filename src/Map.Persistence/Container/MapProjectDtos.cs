@@ -222,6 +222,10 @@ internal sealed class SceneDto
     [JsonPropertyName("planet")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Map.Core.Documents.MapPlanet? Planet { get; set; }
+    /// <summary>The side and heights of the isometric view (plan 2.3, schema v47).</summary>
+    [JsonPropertyName("isometric")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Map.Core.Documents.MapIsometric? Isometric { get; set; }
     [JsonPropertyName("stampForeground")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public StampForegroundDto? StampForeground { get; set; }

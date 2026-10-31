@@ -54,6 +54,8 @@ public static partial class MapProjectStore
             throw new MapProjectCorruptedException("Реки и дороги из родительской карты требуют схему v44.");
         if (schema < MapProjectFormat.StarSectorSchemaVersion && scene.Layers?.Any(l => l?.Hex?.Systems is { Count: > 0 }) == true)
             throw new MapProjectCorruptedException("Звёздные системы требуют схему v43.");
+        if (schema < MapProjectFormat.IsometricSchemaVersion && scene.Isometric is not null)
+            throw new MapProjectCorruptedException("Вид в изометрии в карте требует схему v47.");
         if (schema < MapProjectFormat.PlanetSchemaVersion && scene.Planet is not null)
             throw new MapProjectCorruptedException("Карта-планета требует схему v42.");
         if (schema < MapProjectFormat.PointcrawlSchemaVersion && scene.Pointcrawl is not null)

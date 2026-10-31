@@ -66,6 +66,8 @@ public static partial class MapProjectStore
     private static bool HasNoteOriginV46(IEnumerable<MapNote> notes) => notes.Any(n => n.Origin != NoteOrigin.Manual);
 
     private static int SchemaFor(MapDocument document) =>
+        !document.Isometric.IsDefault || document.Checkpoints.Any(c => !c.Snapshot.Isometric.IsDefault)
+            ? MapProjectFormat.IsometricSchemaVersion :
         HasNoteOriginV46(document.Notes) || document.Checkpoints.Any(c => HasNoteOriginV46(c.Snapshot.Notes))
             ? MapProjectFormat.NoteOriginSchemaVersion :
         HasRiverEraV45(document.Layers) || document.Checkpoints.Any(c => HasRiverEraV45(c.Snapshot.Layers))
@@ -1779,6 +1781,7 @@ public static partial class MapProjectStore
         Timeline = document.Timeline.IsDefault ? null : document.Timeline,
         Pointcrawl = document.Pointcrawl.IsDefault ? null : document.Pointcrawl,
         Planet = document.Planet.IsDefault ? null : document.Planet,
+        Isometric = document.Isometric.IsDefault ? null : document.Isometric,
         StampForeground = document.StampForeground is { } foreground
             ? new StampForegroundDto { Tiles = ToTileDtos(foreground.Tiles) }
             : null,
@@ -2491,7 +2494,8 @@ public static partial class MapProjectStore
                 category) { Atlas = ReadAtlasV26(manifest), Lighting = ReadLightingV28(manifest), Style = ReadStyleV29(manifest),
                     Entities = ReadEntitiesV36(scene), Labels = ReadLabelsV37(scene), Fog = ReadFogV38(scene),
                     Transitions = ReadTransitionsV39(scene), Timeline = ReadTimelineV40(scene),
-                    Pointcrawl = ReadPointcrawlV41(scene), Planet = scene.Planet ?? new MapPlanet() };
+                    Pointcrawl = ReadPointcrawlV41(scene), Planet = scene.Planet ?? new MapPlanet(),
+                    Isometric = scene.Isometric ?? new MapIsometric() };
         }
         catch (Exception ex) when (ex is ArgumentException or FormatException or InvalidOperationException)
         {

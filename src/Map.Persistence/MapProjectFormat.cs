@@ -153,7 +153,10 @@ public static class MapProjectFormat
 
     /// <summary>R35b: a note marked as the city generator's key.</summary>
     public const int NoteOriginSchemaVersion = 46;
-    public const int MaxSupportedSchemaVersion = NoteOriginSchemaVersion;
+
+    /// <summary>Plan 2.3: the side and heights of the isometric view kept in the map.</summary>
+    public const int IsometricSchemaVersion = 47;
+    public const int MaxSupportedSchemaVersion = IsometricSchemaVersion;
 
     /// <summary>
     /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry

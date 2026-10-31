@@ -50,6 +50,7 @@ public sealed record MapDocument
         Timeline = source.Timeline;
         Pointcrawl = source.Pointcrawl;
         Planet = source.Planet;
+        Isometric = source.Isometric;
     }
 
     public MapDocument(
@@ -292,6 +293,9 @@ public sealed record MapDocument
 
     /// <summary>The map is a whole planet, two to one (R39, schema v42).</summary>
     public MapPlanet Planet { get; init; } = new();
+
+    /// <summary>The side and heights of the isometric view (R38, plan 2.3, schema v47).</summary>
+    public MapIsometric Isometric { get; init; } = new();
     public string Title { get; init; }
 
     /// <summary>When the document was first created. Supplied by the caller; Core has no clock.</summary>
@@ -371,6 +375,7 @@ public sealed record MapDocument
             Timeline = Timeline,
             Pointcrawl = Pointcrawl,
             Planet = Planet,
+            Isometric = Isometric,
         };
 
     public MapDocument WithAssets(IReadOnlyList<MapAssetReference> assets)
