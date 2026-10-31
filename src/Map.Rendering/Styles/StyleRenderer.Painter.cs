@@ -134,6 +134,39 @@ public static partial class StyleRenderer
     /// render thread (about 4 s per owner mountain). They are CPU-only and independent, so the
     /// missing ones are built side by side; the maps themselves are unchanged.
     /// </summary>
+    /// <summary>
+    /// Builds, off the render thread and before any style is chosen, what the first frame of a style needs per asset:
+    /// the painter form maps (both sets) and the print height map of every mountain of the map. Without it the first
+    /// frame of «Акварель» froze the map for 12,8 s and «Атлас Блау» for 4,5 s (paint-perf MAP_NEW_ART_STYLE,
+    /// 2026-10-31); «Оформление» calls this when it opens. The maps are the same ones the frame would build.
+    /// </summary>
+    public static void PrepareAssets(MapDocument document, IStampImageSource? stamps, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        if (stamps is null) return;
+        var work = new List<Action>();
+        foreach (var sha in document.Layers.OfType<ObjectLayer>().Where(l => l.Visible).SelectMany(l => l.Objects)
+                     .Select(o => o.Stamp?.AssetSha256).OfType<string>().Distinct(StringComparer.Ordinal))
+        {
+            if (token.IsCancellationRequested) return;
+            if (stamps.TryGetImage(sha) is not { } image || image.IsTextureBacked) continue;
+            if (!PainterFormMaps.IsBuilt(image))
+            {
+                work.Add(() => PainterFormMaps.Get(image, true));
+                work.Add(() => PainterFormMaps.Get(image, false));
+            }
+            work.Add(() => PrintHeightMaps.Get(sha, image));
+        }
+        if (work.Count == 0) return;
+        try
+        {
+            // Half the cores: the map, the panels and the pictures of «Вид» keep the rest.
+            Parallel.ForEach(work, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount / 2), CancellationToken = token },
+                step => step());
+        }
+        catch (OperationCanceledException) { }
+    }
+
     private static void PrebuildFormMaps(MapDocument mountains, RenderOptions options)
     {
         if (options.Stamps is not { } stamps) return;

@@ -67,6 +67,17 @@ public sealed partial class PaintPerfApplication
         _report.Environment["look/press-appearance-ms"] = press.Elapsed.TotalMilliseconds.ToString("0");
         var pictures = Stopwatch.StartNew();
         _report.Environment["look/ui-wait-while-pictures"] = await UiWait(TimeSpan.FromSeconds(3));
+        // The first click on a heavy style 3 s after «Оформление» opened: until the styled map is finished.
+        if (System.Environment.GetEnvironmentVariable("MAP_LOOK_FIRST_STYLES") != "0")
+        {
+            foreach (var preset in new[] { MapStylePreset.WatercolorBigShapes, MapStylePreset.OldMapBlaeu, MapStylePreset.CharcoalVineStump })
+            {
+                _editor.ApplyStylePreset(preset);
+                var (first, done) = await UntilShown();
+                _report.Environment["look/first-click/" + preset] = $"first frame {first:0} ms, finished {done:0} ms";
+            }
+            _editor.SetStyleEnabled(false); await UntilShown();
+        }
         await BurstRoute("look/appearance-pan-while-pictures", 40, Pan);
         Button[] Tiles() => [.. _view.GetVisualDescendants().OfType<Button>().Where(b => b.Name?.StartsWith("LookCard_", StringComparison.Ordinal) == true)];
         while (pictures.Elapsed < TimeSpan.FromMinutes(3)

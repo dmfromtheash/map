@@ -276,6 +276,27 @@ public sealed partial class EditorView
         if (_rightTab == RightColumnTab.Look) QueueLookPreviews();
     }
 
+    private CancellationTokenSource? _styleAssetWork;
+    private MapDocument? _styleAssetsFor;
+
+    /// <summary>
+    /// What the first frame of a style needs per mountain (form and height maps) is made in the background as soon as
+    /// «Вид» opens, not on the click: the first «Акварель» froze the map for 12,8 s, «Атлас Блау» for 4,5 s.
+    /// </summary>
+    private void PrepareStyleAssets()
+    {
+        var document = _editor.Session.Document;
+        // The maps belong to the pictures of the mountains, so a new document matters only when its mountains differ;
+        // asking again for a document already prepared costs one pass over its stamps.
+        if (ReferenceEquals(_styleAssetsFor, document) || Environment.GetEnvironmentVariable("MAP_STYLE_PREPARE") == "0") return;
+        _styleAssetsFor = document;
+        _styleAssetWork?.Cancel();
+        var work = _styleAssetWork = new CancellationTokenSource();
+        var token = work.Token;
+        var stamps = _editor.StampImages;
+        UiTasks.Forget(this, () => Task.Run(() => Map.Rendering.Styles.StyleRenderer.PrepareAssets(document, stamps, token), token));
+    }
+
     private void QueueLookPreviews()
     {
         _lookPreviewTimer ??= new DispatcherTimer(TimeSpan.FromMilliseconds(350), DispatcherPriority.Background, (_, _) =>
@@ -334,6 +355,7 @@ public sealed partial class EditorView
         _lookPreviewTimer?.Stop();
         _lookHoverTimer?.Stop();
         _lookPreviewWork?.Cancel();
+        _styleAssetWork?.Cancel();
         foreach (var bitmap in _lookPreviews.Values) bitmap.Dispose();
         _lookPreviews.Clear();
     }
