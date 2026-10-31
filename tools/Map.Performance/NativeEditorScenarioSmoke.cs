@@ -700,6 +700,20 @@ public sealed partial class NativeEditorScenarioApplication : Application
         { await Click(button); await Settle(); await Frame(); SaveWindow(suffix); }
         // The assets strip in the top bar shows while the stamp tool is in hand.
         _editor.ActiveTool = EditorTool.Stamp; await Settle(); await Frame(); SaveWindow(".stamp.png");
+        // The «Оформление» ribbon and the «Мир» section, as the owner sees them, for the next mockups (2026-10-31).
+        await Click("SelectToolButton");
+        await Click("WorkspaceAppearanceTab"); await Settle();
+        foreach (var (tab, suffix) in new[] { ("RibbonLightTab", ".look-light.png"), ("RibbonStyleTab", ".look-styles.png"), ("RibbonSeaTab", ".look-sea.png") })
+        {
+            RevealTab(_view, tab); await Click(tab); await Task.Delay(tab == "RibbonStyleTab" ? 20000 : 6000); await Settle(); await Frame(); SaveWindow(suffix);
+            // Every card's preview as the program drew it, for mockups built from real pictures (owner, 2026-10-31).
+            if (_view.GetType().GetField("_ribbonPreviews", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)?.GetValue(_view)
+                is System.Collections.IDictionary previews)
+                foreach (System.Collections.DictionaryEntry card in previews)
+                    if (card.Value is Avalonia.Media.Imaging.Bitmap preview)
+                        preview.Save(Path.ChangeExtension(Options.OutputPath, $".card-{card.Key}.png"));
+        }
+        await Click("WorldSectionButton"); await Task.Delay(400); await Settle(); await Frame(); SaveWindow(".world.png");
         _report.Checks["ui-shots-saved"] = true;
     }
 
