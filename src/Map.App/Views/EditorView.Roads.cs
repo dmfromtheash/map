@@ -237,14 +237,14 @@ public sealed partial class EditorView
 
         // Four tabs in the order of the work: make it, choose it, shape it, dress it. A tab is
         // offered while its category is: creation for the tool, the rest for a selected one.
-        return Ui.CategoryTabs("RoadTabs",
+        // The create button stands above everything in the panel (owner, 2026-10-31).
+        return WithCreateHero(CreateHero("StartRoadButton", "Новая дорога", "Клики по холсту; клик по дороге — ветвь от общего узла",
+            "дорогу", CreateHeroKind.Road, MapIcons.SolidRoad, _editor.StartRoad), Ui.CategoryTabs("RoadTabs",
             new Ui.CategoryTab("Create", "Создание", MapIcons.LineSparkle, (_roadCreateCategory = Ui.Category("RoadCreateCategory", "Создание", "accent-create", new StackPanel
                 {
                     Spacing = 4, Children =
                     {
                         modes,
-                        HeroButton("StartRoadButton", "Новая дорога", "Клики по холсту; клик по дороге — ветвь от общего узла",
-                            MapIcons.SolidRoad, _editor.StartRoad),
                         Ui.TextButton("AutoRoadButton", "Проложить дорогу A→B", _editor.ArmAutoRoad, "compact")
                             .WithTip("Два щелчка: откуда и куда. Дорога пойдёт по суше самым лёгким путём — в обход моря, крутых склонов и обрывов."),
                         _roadFinish,
@@ -257,7 +257,7 @@ public sealed partial class EditorView
                 {
                     Spacing = 4, Children = { _roadNodeBlock, _roadBranchBlock },
                 }, expanded: false)), "Ширина и кривизна узлов, всё русло или участок"),
-            new Ui.CategoryTab("Style", "Вид", MapIcons.LineRoad, (_roadStyleCategory = Ui.Category("RoadStyleCategory", "Оформление", "accent-look", _roadStyleBlock, expanded: false)), "Материал, цвет, берега и оформление"));
+            new Ui.CategoryTab("Style", "Вид", MapIcons.LineRoad, (_roadStyleCategory = Ui.Category("RoadStyleCategory", "Оформление", "accent-look", _roadStyleBlock, expanded: false)), "Материал, цвет, берега и оформление")));
     }
 
     private static RoadEndCap ParseCap(string key) => key switch

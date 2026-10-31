@@ -832,14 +832,6 @@ public sealed partial class EditorView
                     Spacing = 6,
                     Children =
                     {
-                        HeroButton("NewLandButton", "Новая земля", "Новый слой суши — затем протяните по холсту",
-                            MapIcons.SolidLand, () =>
-                            {
-                                _editor.AddLandLayer();
-                                _editor.ActiveTool = EditorTool.Land;
-                                SyncSidePanels();
-                                SyncContextArea();
-                            }),
                         // The ground is chosen in sight, before the land exists: the next new
                         // land starts with it, and the active land takes it at once.
                         Ui.Subgroup("Текстура земли", BuildFillTexturePicker("NewLandTexturePicker", MapFillTextureKind.Ground,
@@ -898,10 +890,18 @@ public sealed partial class EditorView
                             "destructive", "compact"),
                     },
                 }));
-        return Ui.CategoryTabs("LandTabs",
+        // The create button stands above everything in the panel (owner, 2026-10-31).
+        return WithCreateHero(CreateHero("NewLandButton", "Новая земля", "Новый слой суши — затем протяните по холсту",
+            "землю", CreateHeroKind.Land, MapIcons.SolidLand, () =>
+            {
+                _editor.AddLandLayer();
+                _editor.ActiveTool = EditorTool.Land;
+                SyncSidePanels();
+                SyncContextArea();
+            }), Ui.CategoryTabs("LandTabs",
             new Ui.CategoryTab("Draw", "Рисовать", MapIcons.LineBrush, drawPage, "Новая земля, форма кисти и раскраска суши материалами"),
             new Ui.CategoryTab("Style", "Оформление", MapIcons.LinePalette, stylePage, "Цвет и материал выбранной суши, контур, прибой, тени и обрывы"),
-            new Ui.CategoryTab("More", "Ещё", MapIcons.LineGear, morePage, "Точная область, сдвиг и очистка слоя"));
+            new Ui.CategoryTab("More", "Ещё", MapIcons.LineGear, morePage, "Точная область, сдвиг и очистка слоя")));
     }
 
     /// <summary>

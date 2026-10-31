@@ -32,6 +32,8 @@ public sealed record AppSettings
     public bool InterfaceSounds { get; init; } = true;
     /// <summary>Interface motion: drifting embers, unfolding ornaments, springy press, brass cursor.</summary>
     public bool InterfaceEffects { get; init; } = true;
+    /// <summary>«Нажми сюда…» above the create buttons with a live picture of what they make (owner, 2026-10-31).</summary>
+    public bool CreateHints { get; init; } = true;
 
     public static AppSettings Sanitize(AppSettings? value)
     {

@@ -58,6 +58,25 @@ public static class UiFeel
         Changed?.Invoke();
     }
 
+    private static bool _hints = true;
+
+    /// <summary>
+    /// «Нажми сюда, чтобы создать…» above every create button with a live picture of what it makes
+    /// (owner, 2026-10-31: «должна быть функция отключения всех этих подсказок»). The picture moves
+    /// only while <see cref="EffectsEnabled"/>; switched off, the plain button stays.
+    /// </summary>
+    public static bool HintsEnabled => _hints;
+
+    /// <summary>Saves the hint choice in the app settings; set once by the main window.</summary>
+    public static Action<bool>? PersistHints { get; set; }
+
+    /// <summary>Settings or the «×» of a hint: every create hint follows at once.</summary>
+    public static void SetHints(bool on, bool persist)
+    {
+        if (_hints != on) { _hints = on; Changed?.Invoke(); }
+        if (persist) PersistHints?.Invoke(on);
+    }
+
     /// <summary>The one switch at the top of the window: all interface sounds on or off.</summary>
     public static void SetSounds(bool on)
     {

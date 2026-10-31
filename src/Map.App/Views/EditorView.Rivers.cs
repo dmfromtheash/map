@@ -286,14 +286,14 @@ public sealed partial class EditorView
         // The same four accents and the same order are used by the land panel.
         // Four tabs in the order of the work: make it, choose it, shape it, dress it. A tab is
         // offered while its category is: creation for the tool, the rest for a selected one.
-        return Ui.CategoryTabs("RiverTabs",
+        // The create button stands above everything in the panel (owner, 2026-10-31).
+        return WithCreateHero(CreateHero("StartRiverButton", "Новая река", "Клики от истока к устью; клик по руслу — приток или рукав",
+            "реку", CreateHeroKind.River, MapIcons.SolidRiver, _editor.StartRiver), Ui.CategoryTabs("RiverTabs",
             new Ui.CategoryTab("Create", "Создание", MapIcons.LineSparkle, (_riverCreateCategory = Ui.Category("RiverCreateCategory", "Создание", "accent-create", new StackPanel
                 {
                     Spacing = 4, Children =
                     {
                         modes,
-                        HeroButton("StartRiverButton", "Новая река", "Клики от истока к устью; клик по руслу — приток или рукав",
-                            MapIcons.SolidRiver, _editor.StartRiver),
                         Ui.TextButton("StartLakeButton", "Новое озеро", _editor.StartLake, "compact"),
                         Ui.TextButton("RiverToSeaButton", "Река отсюда в море", _editor.ArmRiverToSea, "compact")
                             .WithTip("Щёлкните на суше — река сама найдёт путь вниз по склону до моря."),
@@ -319,7 +319,7 @@ public sealed partial class EditorView
                         (_riverStyleHint = (TextBlock)Ui.Hint("Выберите реку или озеро в списке выше.").Named("RiverStyleHint")),
                         _riverStyleBlock,
                     },
-                }, expanded: false)), "Материал, цвет, берега и оформление"));
+                }, expanded: false)), "Материал, цвет, берега и оформление")));
     }
 
     private void SyncRiverPanel()

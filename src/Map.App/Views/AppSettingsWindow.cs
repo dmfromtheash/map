@@ -38,6 +38,7 @@ public sealed class AppSettingsWindow : Window
     private readonly CheckBox _exportGrid = new() { Name = "SettingsExportGrid", Content = "Включать сетку по умолчанию" };
     private readonly CheckBox _sounds = new() { Name = "SettingsInterfaceSounds", Content = "Звуки интерфейса: отклик при наведении и нажатии" };
     private readonly CheckBox _effects = new() { Name = "SettingsInterfaceEffects", Content = "Анимация интерфейса: искры, плавные кнопки, латунный курсор" };
+    private readonly CheckBox _hints = new() { Name = "SettingsCreateHints", Content = "Подсказки «Нажми сюда…» с живой картинкой у кнопок создания" };
     private readonly TextBlock _diagnosticsText = new() { Name = "SettingsDiagnostics", TextWrapping = Avalonia.Media.TextWrapping.Wrap };
 
     public AppSettingsWindow(
@@ -120,6 +121,7 @@ public sealed class AppSettingsWindow : Window
                                 Ui.PropertyRow("Тема", _theme, captionWidth: 220),
                                 Ui.PropertyRow("Звук", _sounds, captionWidth: 220),
                                 Ui.PropertyRow("Анимация", _effects, captionWidth: 220),
+                                Ui.PropertyRow("Подсказки", _hints, captionWidth: 220),
                                 new TextBlock
                                 {
                                     Text = "Оформление Map не следует за тёмной темой Windows: "
@@ -181,6 +183,7 @@ public sealed class AppSettingsWindow : Window
         _exportGrid.IsChecked = settings.DefaultExportIncludeGrid;
         _sounds.IsChecked = settings.InterfaceSounds;
         _effects.IsChecked = settings.InterfaceEffects;
+        _hints.IsChecked = settings.CreateHints;
         if (Map.App.Services.UiFeel.SystemReducesMotion)
             ToolTip.SetTip(_effects, "В Windows выключено «Показывать анимацию» — интерфейс не двигается, пока её не включить там.");
     }
@@ -202,6 +205,7 @@ public sealed class AppSettingsWindow : Window
             DefaultExportIncludeGrid = _exportGrid.IsChecked == true,
             InterfaceSounds = _sounds.IsChecked == true,
             InterfaceEffects = _effects.IsChecked == true,
+            CreateHints = _hints.IsChecked == true,
         });
         _apply(saved);
         RefreshDiagnostics();
