@@ -88,7 +88,8 @@ public sealed partial class EditorViewModel
         AfterEdit(); return true;
     }
 
-    public ImmutableArray<GeographyIssue> CheckGeography() => Geography.Inspect(Session.Document);
+    /// <summary>Plan 2.2: towns and villages placed by hand from the catalog are checked like generated ones.</summary>
+    public ImmutableArray<GeographyIssue> CheckGeography() => Geography.Inspect(Session.Document, settlement: IsSettlement);
 
     /// <summary>Marks the object of a finding «намеренно» (one undo step); the check no longer reports it.</summary>
     public bool MarkIntentional(GeographyIssue issue)

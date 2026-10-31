@@ -96,4 +96,27 @@ public sealed class GeographyTests
         Assert.DoesNotContain(spared, i => i.ObjectId == uphill.Id || i.ObjectId == road.Id);
         Assert.Contains(spared, i => i.ObjectId == lake.Id);
     }
+
+    [Fact]
+    public void A_town_placed_by_hand_is_checked_for_a_road_like_a_generated_one()
+    {
+        var (document, _, _, objects) = World();
+        var house = new SceneObject(ObjectId.New(), SceneObjectKind.Stamp, "Деревня", 300, 300, 40, 40, 0,
+            "#FFFFFFFF", "#00000000", 0, true, false) { Stamp = new StampStyle(new string('b', 64)) };
+        var layer = objects with { Objects = [house] };
+        document = document.WithLayers([.. document.Layers.Select(l => l.Id == layer.Id ? layer : l)]);
+
+        // Without knowing the role of the asset the hand-placed house is not a settlement.
+        Assert.DoesNotContain(Geography.Inspect(document), i => i.Kind == GeographyIssueKind.TownWithoutRoad);
+        var isTown = (SceneObject o) => o.Id == house.Id;
+        var issue = Assert.Single(Geography.Inspect(document, settlement: isTown), i => i.Kind == GeographyIssueKind.TownWithoutRoad);
+        Assert.Equal(house.Id.Value, issue.ObjectId);
+
+        // A road reaching it, or «намеренно», ends the finding.
+        var road = RoadEditor.NewRoad([new(150, 320), new(310, 320)], 3);
+        var reached = document.WithLayers([.. document.Layers.Select(l => l.Id == layer.Id ? layer with { Roads = [road] } : l)]);
+        Assert.DoesNotContain(Geography.Inspect(reached, settlement: isTown), i => i.Kind == GeographyIssueKind.TownWithoutRoad);
+        var alone = document.WithLayers([.. document.Layers.Select(l => l.Id == layer.Id ? layer with { Objects = [house with { GeographyIntentional = true }] } : l)]);
+        Assert.DoesNotContain(Geography.Inspect(alone, settlement: isTown), i => i.Kind == GeographyIssueKind.TownWithoutRoad);
+    }
 }

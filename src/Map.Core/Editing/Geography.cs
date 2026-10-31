@@ -145,7 +145,10 @@ public static class Geography
     }
 
     /// <summary>Every finding of the map; objects marked «намеренно» are left out.</summary>
-    public static ImmutableArray<GeographyIssue> Inspect(MapDocument document, CancellationToken cancellation = default)
+    /// <param name="settlement">True for a placed object that is a settlement (the catalog knows the role of its
+    /// asset), as in <see cref="MapComparison.Compare"/>; the continent generator's towns always count.</param>
+    public static ImmutableArray<GeographyIssue> Inspect(MapDocument document, CancellationToken cancellation = default,
+        Func<SceneObject, bool>? settlement = null)
     {
         var probe = new TerrainProbe(document);
         var issues = ImmutableArray.CreateBuilder<GeographyIssue>();
@@ -214,7 +217,8 @@ public static class Geography
             }
         }
         var roadPoints = layers.SelectMany(l => l.Roads).Where(r => r.Visible).SelectMany(r => r.Nodes).Select(n => (n.X, n.Y)).ToList();
-        foreach (var town in layers.SelectMany(l => l.Objects).Where(o => o.GenerationReason == ContinentGenerator.TownReason && !o.GeographyIntentional))
+        foreach (var town in layers.SelectMany(l => l.Objects).Where(o => !o.GeographyIntentional
+                     && (o.GenerationReason == ContinentGenerator.TownReason || settlement?.Invoke(o) == true)))
         {
             var (cx, cy) = (town.X + (town.Width / 2), town.Y + (town.Height / 2));
             var near = roadPoints.Any(p => Math.Sqrt(Math.Pow(p.X - cx, 2) + Math.Pow(p.Y - cy, 2)) < 80);
