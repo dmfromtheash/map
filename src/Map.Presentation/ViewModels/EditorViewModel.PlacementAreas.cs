@@ -176,7 +176,10 @@ public sealed partial class EditorViewModel
                 if (!TryStampInputs(settings with { RandomizeVariant = true }, out var request, out var sources, out var records, out var refusal))
                 { StatusDetail = refusal; return false; }
                 sources = sources.OrderByDescending(s => s.Sha256 == CurrentVariant?.Sha256).ToArray();
-                request = request with { RandomizeVariant = settings.RandomizeVariant };
+                // An area's groves are measured in its stamps' widths, so stamps as big as one placed alone left an
+                // area of a noticeable size with two mountains (audit 2026-11-01, А1.2).
+                request = request with { RandomizeVariant = settings.RandomizeVariant,
+                    BaseWidth = request.BaseWidth * NewMapDefaults.For(Session.Document.Canvas).AreaStampFactor };
                 // Freeze every allowed variant now, including variants this area may not initially use.
                 var variantPlan = sources.Select(s => new StampPlacementItem(s.Sha256, 0, 0, 1, 1, 0, false, false, s.MaskSha256)).ToArray();
                 if (ResolvePlan(variantPlan, records, out var references, out refusal) is null)

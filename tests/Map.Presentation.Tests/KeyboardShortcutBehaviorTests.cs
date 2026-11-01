@@ -79,11 +79,12 @@ public class KeyboardShortcutBehaviorTests
     public void Brush_text_mask_and_grid_adjustments_change_real_editor_state()
     {
         var editor = NewEditor();
+        var radius = editor.BrushSettings.Radius;
 
         editor.AdjustBrushSize(1);
         editor.AdjustBrushOpacity(-1);
         editor.AdjustBrushSoftness(1);
-        Assert.Equal(25, editor.BrushSettings.Radius);
+        Assert.Equal(radius + 1, editor.BrushSettings.Radius);
         Assert.Equal(0.95, editor.BrushSettings.Opacity, 6);
         Assert.Equal(0.55, editor.BrushSettings.Softness, 6);
 

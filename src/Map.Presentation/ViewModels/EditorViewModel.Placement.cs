@@ -1006,7 +1006,7 @@ public sealed partial class EditorViewModel
 
         return settings with
         {
-            ScalePercent = Finite(settings.ScalePercent, 100, 10, 400),
+            ScalePercent = Finite(settings.ScalePercent, 100, 1, 400),
             RotationDegrees = NormalizeUnsignedAngle(Finite(settings.RotationDegrees, 0, -360_000, 360_000)),
             Sublayer = Math.Clamp(settings.Sublayer, -10, 10),
             ObjectOpacity = Finite(settings.ObjectOpacity, 1, 0, 1),
@@ -1267,8 +1267,8 @@ public sealed partial class EditorViewModel
         }
     }
 
-    private double DefaultStampReferenceWidth() =>
-        Math.Max(1, Math.Min(256.0, Session.Document.Canvas.Width / 4.0));
+    // From the canvas's long side (А1.2): the former min(256, width / 4) kept a mountain 256 wide on any canvas.
+    private double DefaultStampReferenceWidth() => NewMapDefaults.For(Session.Document.Canvas).StampWidth;
 
     private double DefaultStampWidth() =>
         DefaultStampReferenceWidth() * _stampToolSettings.ScalePercent / 100.0;

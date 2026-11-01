@@ -60,7 +60,11 @@ public sealed partial class EditorViewModel
         var width = 256 * (CurrentVariant?.DefaultScale ?? 1);
         var rotations = set.Placement?.AllowedRotations ?? [];
         var rotation = rotations.Count == 0 ? 0 : rotations.MinBy(Math.Abs);
-        _stampToolSettings = _stampToolSettings with { ScalePercent = width / DefaultStampReferenceWidth() * 100,
+        // The role sets the object's own width; a forest or settlement is an area, whose stamps are made smaller
+        // (NewMapDefaults.AreaStampFactor), so that is undone here: regional objects keep their width (А1.2).
+        var reference = DefaultStampReferenceWidth()
+            * (mode == RegionalPlacementMode.Ridge ? 1 : NewMapDefaults.For(Session.Document.Canvas).AreaStampFactor);
+        _stampToolSettings = _stampToolSettings with { ScalePercent = width / reference * 100,
             RotationDegrees = rotation, RotationJitterDegrees = 0, SizeJitterPercent = 0,
             ObjectOpacity = 1, RandomizeVariant = true, RandomAngleStep = 0,
             RandomFlip = false, SeriesSpacingPercent = 62,

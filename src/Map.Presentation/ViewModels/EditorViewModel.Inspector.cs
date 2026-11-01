@@ -436,7 +436,9 @@ public sealed partial class EditorViewModel
             return;
         }
 
-        var bounded = Math.Clamp(WholeGeometryValue(percent), 10, 400);
+        // A future asset's 100 % follows the canvas (А1.2: a tenth of the long side on a large map), so its floor is
+        // 1 %: the former 10 % of a 256 reference let a tree be 26 wide on any map. A placed object keeps 10 %.
+        var bounded = Math.Clamp(WholeGeometryValue(percent), IsEditingFutureStamp ? 1 : 10, 400);
         if (IsEditingFutureStamp)
         {
             UpdateStampToolSettings(settings => settings with { ScalePercent = bounded }, commit);

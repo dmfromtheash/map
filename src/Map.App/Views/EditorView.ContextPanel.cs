@@ -1062,7 +1062,7 @@ public sealed partial class EditorView
         } };
 
         var transform = new StackPanel { Spacing = 2 };
-        transform.Children.Add(AppearanceSlider(prefix + "ScaleSlider", "Масштаб", 10, 400, "%",
+        transform.Children.Add(AppearanceSlider(prefix + "ScaleSlider", "Масштаб", 1, 400, "%",
             () => _editor.StampScalePercent,
             (value, commit) => _editor.SetStampScalePercent(value, commit), 5,
             ResetGlyph(prefix + "ScaleResetButton", "Сбросить масштаб к 100 %",

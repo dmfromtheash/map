@@ -414,6 +414,13 @@ public sealed partial class EditorViewModel : ViewModelBase
             ? null
             : new CatalogStampImageSource(assetCatalog, () => Session.Document, () => DocumentPath);
 
+        // The tools start at sizes that fit this canvas (А1.2); what the map already holds is not touched.
+        var defaults = NewMapDefaults.For(document.Canvas);
+        BrushSettings = BrushSettings with { Radius = defaults.LandBrushRadius };
+        _landRoughness = defaults.LandRoughness;
+        NewRiverWidth = defaults.RiverWidth;
+        NewRoadWidth = defaults.RoadWidth;
+
         if (startDirty)
         {
             // A brand-new or recovered document has no durable revision yet.

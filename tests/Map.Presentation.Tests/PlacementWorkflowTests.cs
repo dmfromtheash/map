@@ -262,7 +262,8 @@ public sealed class PlacementWorkflowTests : IDisposable
         const long gib = 1024L * 1024 * 1024;
         var available = 512L * 1024 * 1024;
         var memory = new Map.Core.Resources.WorkingMemoryBudget(() => new(16 * gib, available, 100 * 1024 * 1024));
-        var editor = Editor(out _, memory); editor.StampDensity = 20; editor.SetStampScalePercent(129); editor.StartEditableArea();
+        var editor = Editor(out _, memory); editor.StampDensity = 20;
+        editor.SetStampScalePercent(OldWidthPercent(editor, 129, area: true)); editor.StartEditableArea();
         var original = editor.Session.Document;
         editor.AddEditableAreaNode(100, 100); editor.AddEditableAreaNode(900, 100); editor.AddEditableAreaNode(500, 670);
         Assert.Empty(editor.PlacementPreviewObjects); Assert.True(editor.CanPlaceEditableArea);
@@ -280,7 +281,7 @@ public sealed class PlacementWorkflowTests : IDisposable
     public void Stage17_long_draft_keeps_preview_at_the_new_end_after_the_first_64_stamps()
     {
         var editor = Editor(out _); var router = new CanvasInputRouter(editor);
-        editor.SetStampScalePercent(25);
+        editor.SetStampScalePercent(OldWidthPercent(editor, 25));
         editor.StartEditablePath();
         var before = editor.Session.Document;
         for (var i = 0; i < 10; i++)
@@ -476,6 +477,7 @@ public sealed class PlacementWorkflowTests : IDisposable
     private static SceneObject[] Draw(EditorViewModel editor, double zoom, int events)
     {
         editor.Session.Viewport.Set(0, 0, zoom);
+        editor.SetStampScalePercent(OldWidthPercent(editor, 100));
         editor.StampPlacementMode = StampPlacementMode.Series;
         editor.SetSeriesSpacingPercent(100, true);
         var router = new CanvasInputRouter(editor);
@@ -511,6 +513,16 @@ public sealed class PlacementWorkflowTests : IDisposable
         editor.StampPlacementMode = StampPlacementMode.One;
         return editor;
     }
+    /// <summary>
+    /// The scale that gives the stamp width these tests were written for (256 × percent), now that the default width
+    /// follows the canvas (А1.2); an area's stamps are additionally made smaller by its factor.
+    /// </summary>
+    private static double OldWidthPercent(EditorViewModel editor, double percent, bool area = false)
+    {
+        var defaults = NewMapDefaults.For(editor.Session.Document.Canvas);
+        return percent * 256 / (defaults.StampWidth * (area ? defaults.AreaStampFactor : 1));
+    }
+
     private static SceneObject[] Objects(EditorViewModel editor) => editor.Session.Document.Layers
         .OfType<ObjectLayer>().SelectMany(l => l.Objects).ToArray();
     public void Dispose()

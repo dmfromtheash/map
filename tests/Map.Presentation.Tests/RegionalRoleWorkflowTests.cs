@@ -53,7 +53,10 @@ public sealed class RegionalRoleWorkflowTests : IAsyncLifetime
         Assert.True(editor.SetSelectedSetRole(role));
         Assert.Same(before, editor.Session.Document); Assert.Equal(0, editor.Session.UndoDepth);
         Assert.True(editor.StartRegionalPlacement(mode));
-        Assert.Equal(12.5, editor.StampToolSettings.ScalePercent, 5);
+        // The role's own width (256 × 0.125 = 32) stays, whatever the canvas defaults (А1.2).
+        var defaults = NewMapDefaults.For(editor.Session.Document.Canvas);
+        var reference = defaults.StampWidth * (mode == RegionalPlacementMode.Ridge ? 1 : defaults.AreaStampFactor);
+        Assert.Equal(32, editor.StampToolSettings.ScalePercent * reference / 100, 5);
         if (mode == RegionalPlacementMode.Ridge)
         {
             Assert.True(editor.AddEditablePathNode(200, 200)); Assert.True(editor.AddEditablePathNode(900, 500));
