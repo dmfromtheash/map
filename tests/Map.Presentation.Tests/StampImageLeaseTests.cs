@@ -51,15 +51,20 @@ public sealed class StampImageLeaseTests : IDisposable
         using var _ = images;
         var frameThread = images.BeginFrame()!;
         var drawn = images.TryGetImage(shas[0])!;
-        // Another thread fills the cache past its 64 pictures while this frame still draws «drawn».
-        Task.Run(() =>
+        // Another thread fills the cache past its 64 pictures while this frame still draws «drawn». A thread of its
+        // own: a waited Task.Run may run inline on this very thread, which is the frame's.
+        var loaded = 0;
+        var other = new Thread(() =>
         {
             foreach (var sha in shas.Skip(1))
             {
                 using var lease = images.Lease();
-                Assert.NotNull(lease.TryGetImage(sha));
+                if (lease.TryGetImage(sha) is not null) loaded++;
             }
-        }).GetAwaiter().GetResult();
+        });
+        other.Start();
+        other.Join();
+        Assert.Equal(shas.Length - 1, loaded);
 
         Assert.NotEqual(IntPtr.Zero, drawn.Handle);
         Assert.True(Drawn(drawn));
