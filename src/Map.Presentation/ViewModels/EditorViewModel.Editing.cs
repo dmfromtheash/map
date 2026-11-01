@@ -266,8 +266,8 @@ public sealed partial class EditorViewModel
             _vectorPreviewObjectId = ObjectId.New();
             _vectorPreviewLayerId = layer.Id;
             StatusDetail = ActiveTool == EditorTool.Shape
-                ? "Ставьте узлы фигуры. Клик по первому узлу или Enter — замкнуть, Esc — отмена."
-                : "Ставьте узлы линии. Enter — завершить, Esc — отмена.";
+                ? "Ставьте узлы фигуры. Клик по первому узлу или Enter — замкнуть, Esc — остановиться (нарисованное останется)."
+                : "Ставьте узлы линии. Enter — завершить, Esc — остановиться (нарисованное останется).";
         }
         else
         {

@@ -302,7 +302,7 @@ public sealed partial class EditorView
                         _riverFinish,
                         AppearanceNumberBox("NewRiverWidthBox", "Ширина новых узлов", "ед.", () => _editor.NewRiverWidth, value => _editor.NewRiverWidth = value,
                             slider: (1, 200), defaultValue: 12, description: "Ширина, с которой ставится каждый новый узел реки или озера."),
-                        Ui.Hint("Узлы: клики от истока к устью, Enter — свободный конец. Клик по руслу — рукав или приток. Esc — отмена."),
+                        Ui.Hint("Узлы: клики от истока к устью, Enter — свободный конец. Клик по руслу — рукав или приток. Esc — остановиться, нарисованное останется."),
                     },
                 })), "Новая река или озеро и ширина новых узлов"),
             new Ui.CategoryTab("Select", "Выделение", MapIcons.LineTarget, (_riverSelectCategory = Ui.Category("RiverSelectCategory", "Выделение", "accent-select", _riverSelectionBlock)), "Какую воду и что в ней выделяет щелчок; скрыть, заблокировать, удалить"),

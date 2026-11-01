@@ -112,13 +112,19 @@ public sealed class Stage20RoadWorkflowTests
         editor.Undo();
         Assert.True(editor.Roads[0].IsShared(shared));
 
-        // Escape cancels an unfinished draft without touching the document or the history.
-        var depth = editor.Session.UndoDepth; var current = editor.Session.Document;
+        // DEC-084: Escape stops drawing and keeps the drafted road as one undo step.
+        var depth = editor.Session.UndoDepth; var count = editor.Roads.Count;
         editor.StartRoad(); Click(router, 50, 700); Click(router, 200, 720);
         Assert.True(editor.HasRoadGesture);
         Assert.True(editor.HandleEscape());
         Assert.False(editor.HasRoadGesture); Assert.False(editor.IsCreatingRoad);
-        Assert.Same(current, editor.Session.Document); Assert.Equal(depth, editor.Session.UndoDepth);
+        Assert.Equal(count + 1, editor.Roads.Count); Assert.Equal(depth + 1, editor.Session.UndoDepth);
+
+        // One node is not a road: Escape stops, the document stays as it was.
+        var current = editor.Session.Document;
+        editor.StartRoad(); Click(router, 50, 800);
+        Assert.True(editor.HandleEscape());
+        Assert.False(editor.IsCreatingRoad); Assert.Same(current, editor.Session.Document);
     }
 
     [Fact]

@@ -208,7 +208,7 @@ public sealed class PlacementWorkflowTests : IDisposable
     }
 
     [Fact]
-    public async Task Stage18_counter_drops_obsolete_drafts_and_escape_has_no_history()
+    public async Task Stage18_counter_drops_obsolete_drafts_and_escape_places_the_drawn_area()
     {
         var editor = Editor(out _); editor.SetStampScalePercent(30); editor.StartEditableArea();
         editor.AddEditableAreaNode(100, 100); editor.AddEditableAreaNode(800, 100); editor.AddEditableAreaNode(800, 600);
@@ -218,9 +218,11 @@ public sealed class PlacementWorkflowTests : IDisposable
         await editor.PendingEditableAreaCount;
         Assert.Equal(PlacementAreaPlanner.Count(editor.DisplayedEditableArea!), editor.PlannedEditableAreaCount);
         Assert.Equal(0, editor.Session.UndoDepth); Assert.Same(original, editor.Session.Document);
-        editor.SetEditableAreaDensity(60); editor.HandleEscape(); await editor.PendingEditableAreaCount;
-        Assert.False(editor.HasAreaGesture); Assert.Null(editor.PlannedEditableAreaCount);
-        Assert.DoesNotContain("Подсчёт", editor.EditableAreaResult); Assert.Same(original, editor.Session.Document);
+        // DEC-084: Esc stops drawing and keeps the outlined area - it is placed as one undo step.
+        editor.SetEditableAreaDensity(60); Assert.True(editor.HandleEscape()); await editor.PendingEditableAreaCount;
+        Assert.False(editor.IsCreatingEditableArea); Assert.Single(editor.EditableAreas);
+        Assert.Equal(1, editor.Session.UndoDepth); Assert.Equal(60, editor.EditableAreas[0].Density);
+        editor.Undo(); Assert.Same(original, editor.Session.Document);
     }
 
     [Fact]
@@ -314,6 +316,20 @@ public sealed class PlacementWorkflowTests : IDisposable
             Assert.Equal(i + 1, editor.EditablePaths.Count);
         }
         Assert.Equal(8, editor.Session.UndoDepth);
+    }
+
+    [Fact]
+    public void Escape_stops_drawing_a_path_and_keeps_it_as_one_step()
+    {
+        // DEC-084: Esc while drawing a path finishes it where it is, like «Завершить путь».
+        var editor = Editor(out _); var router = new CanvasInputRouter(editor);
+        editor.StartEditablePath();
+        foreach (var point in new[] { (100, 100), (350, 160), (650, 100) })
+        { router.Press(CanvasPointerButton.Left, point.Item1, point.Item2); router.Release(point.Item1, point.Item2); }
+        Assert.True(editor.HandleEscape());
+        Assert.False(editor.IsCreatingEditablePath);
+        Assert.Equal(1, editor.Session.UndoDepth);
+        Assert.Equal(3, editor.SelectedEditablePath!.Nodes.Length);
     }
 
     [Fact]

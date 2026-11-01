@@ -53,7 +53,7 @@ public sealed partial class EditorViewModel
         CancelEditablePathGesture(); _selectedPathId = null; _pathNode = -1;
         ActiveTool = EditorTool.Stamp; StampPlacementMode = StampPlacementMode.Path;
         ArmStampPlacement();
-        StatusDetail = "Путь: ставьте узлы кликами; «Завершить путь» или Enter — сохранить, Esc — отменить.";
+        StatusDetail = "Путь: ставьте узлы кликами; «Завершить путь» или Enter — сохранить, Esc — остановиться (нарисованное останется).";
         RaisePathState();
     }
 

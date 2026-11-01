@@ -109,7 +109,7 @@ public sealed partial class EditorViewModel
             if (IsEditableAreaBusy) return "Пересчитываю область… Esc или Ctrl+Z отменят пересчёт.";
             if (_areaCreating)
                 return _areaPreviewError ?? (_areaDraft is { Nodes.Length: >= 3 }
-                    ? "Граница готова. Нажмите «Разместить». Enter — разместить · Esc — отменить."
+                    ? "Граница готова. Нажмите «Разместить». Enter или Esc — разместить."
                     : $"Вершин: {_areaDraft?.Nodes.Length ?? 0} из 3. Добавьте вершины кликами по холсту.");
             if (!_areaStartRequested && PendingPlacement is not { Mode: StampPlacementMode.FillArea }
                 && SelectedEditableArea is { } area)
@@ -145,7 +145,7 @@ public sealed partial class EditorViewModel
         DeselectObject();
         ArmStampPlacement();
         _areaStartRequested = true;
-        StatusDetail = "Область: ставьте вершины кликами; «Разместить» внизу панели или Enter — заполнить, Esc — отменить.";
+        StatusDetail = "Область: ставьте вершины кликами; «Разместить» внизу панели или Enter — заполнить, Esc — остановиться (нарисованное останется).";
         RaiseAreaState();
     }
 

@@ -249,7 +249,7 @@ public sealed partial class EditorView
                             .WithTip("Два щелчка: откуда и куда. Дорога пойдёт по суше самым лёгким путём — в обход моря, крутых склонов и обрывов."),
                         _roadFinish,
                         AppearanceNumberBox("NewRoadWidthBox", "Ширина новых узлов", "ед.", () => _editor.NewRoadWidth, value => _editor.NewRoadWidth = value),
-                        Ui.Hint("Узлы: клики по холсту. Первый клик по дороге — ветвь от общего узла; клик по дороге с узлами в черновике — соединение; клик по первому узлу — замкнуть. Enter — свободный конец, Esc — отмена."),
+                        Ui.Hint("Узлы: клики по холсту. Первый клик по дороге — ветвь от общего узла; клик по дороге с узлами в черновике — соединение; клик по первому узлу — замкнуть. Enter или Esc — свободный конец здесь."),
                     },
                 })), "Новая дорога и ширина новых узлов"),
             new Ui.CategoryTab("Select", "Выделение", MapIcons.LineTarget, (_roadSelectCategory = Ui.Category("RoadSelectCategory", "Выделение", "accent-select", _roadSelectionBlock)), "Какую дорогу и что в ней выделяет щелчок; скрыть, заблокировать, удалить"),

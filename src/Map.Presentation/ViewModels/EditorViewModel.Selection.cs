@@ -965,6 +965,10 @@ public sealed partial class EditorViewModel
         if (CancelEditableAreaWork()) { CancelEditableAreaGesture(); CanvasGestureCancelled?.Invoke(this, EventArgs.Empty); return true; }
         if (HasAppearanceTransferPreview)
         { CancelAppearanceTransfer(); StatusDetail = "Предпросмотр оформления отменён."; return true; }
+        if (StopDrawingOnEscape()) return true;
+        if (_cityPick) { CancelCityPick(); StatusDetail = "«Город из точки» отменён."; return true; }
+        if (PointcrawlPickArmed) { CancelPointcrawlPick(); StatusDetail = "Выбор места отменён."; return true; }
+        if (TransitionPickArmed) { CancelTransitionPick(); StatusDetail = "Переход не создан."; return true; }
         if (CancelRoadGesture())
         { CanvasGestureCancelled?.Invoke(this, EventArgs.Empty); StatusDetail = "Правка дороги отменена."; return true; }
         if (CancelRiverGesture())
@@ -1027,6 +1031,36 @@ public sealed partial class EditorViewModel
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// DEC-084: Esc stops drawing and keeps what is already drawn. A river, lake, road, path, area
+    /// or pen line being drawn is finished where it is (as Enter would), a brush stroke keeps its
+    /// painted part. Only a draft too short to be an object (one node) is dropped - there is nothing
+    /// to keep. Edits of existing objects (drags) still go back as before.
+    /// </summary>
+    private bool StopDrawingOnEscape()
+    {
+        bool kept;
+        string what;
+        if (IsCreatingRiver && HasRiverGesture) { what = IsCreatingLake ? "Озеро" : "Река"; kept = FinishRiver(); }
+        else if (IsCreatingRoad && HasRoadGesture) { what = "Дорога"; kept = FinishRoad(); }
+        else if (IsCreatingEditableArea && _areaDraft is not null) { what = "Область"; kept = FinishEditableArea(); }
+        else if (IsCreatingEditablePath && HasPathGesture) { what = "Путь"; kept = FinishEditablePath(); }
+        else if (_penPoints is not null) { what = "Контур"; kept = FinishPenPath(); }
+        else if (_stroke is not null) { what = "Мазок"; EndStroke(); kept = true; }
+        else return false;
+
+        var reason = StatusDetail;
+        if (!kept)
+        {
+            CancelRiverGesture(); CancelRoadGesture(); CancelEditableAreaGesture(); CancelEditablePathGesture(); CancelPenPath();
+        }
+        CanvasGestureCancelled?.Invoke(this, EventArgs.Empty);
+        StatusDetail = kept
+            ? $"{what}: рисование остановлено, нарисованное осталось. Ctrl+Z уберёт его."
+            : $"Рисование остановлено, сохранять нечего. {reason}";
+        return true;
     }
 
     // ---------------------------------------------------------------- marquee

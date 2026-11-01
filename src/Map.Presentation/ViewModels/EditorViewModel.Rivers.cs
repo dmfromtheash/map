@@ -126,12 +126,12 @@ public sealed partial class EditorViewModel
                 var count = _riverDraft?.Channels.FirstOrDefault(c => c.Id == _riverDraftChannelId)?.Nodes.Length ?? 0;
                 if (_riverCreatingLake)
                     return count < 3 ? $"Озеро: узлов {count}. Ставьте вершины по контуру, Enter замкнёт (нужно не меньше трёх)."
-                        : $"Озеро: узлов {count}. Enter — замкнуть, Esc — отменить.";
+                        : $"Озеро: узлов {count}. Enter или Esc — замкнуть.";
                 return count == 0
                     ? (_riverDrawMode == RiverDrawMode.Freehand
                         ? "Протяните русло от истока к устью. Начало на существующем русле — рукав, конец на русле или озере — приток."
                         : "Ставьте узлы кликами от истока к устью. Первый клик по руслу — рукав от него; клик по руслу или озеру с узлами в черновике — приток; Enter — свободный конец.")
-                    : $"Узлов: {count}. Клик по руслу или озеру — впасть; Enter — свободный конец; Esc — отменить.";
+                    : $"Узлов: {count}. Клик по руслу или озеру — впасть; Enter или Esc — свободный конец здесь.";
             }
             if (SelectedRiver is not { } river) return "Выберите реку или озеро на холсте, либо создайте новые.";
             var channel = SelectedRiverChannel;
@@ -152,7 +152,7 @@ public sealed partial class EditorViewModel
         _riverCreating = true; _riverCreatingLake = false; _riverNode = -1;
         StatusDetail = _riverDrawMode == RiverDrawMode.Freehand
             ? "Река: протяните русло по холсту. Начало на русле — рукав, конец на русле или озере — приток."
-            : "Река: ставьте узлы кликами от истока к устью. Клик по руслу — рукав или приток, Enter — свободный конец, Esc — отменить.";
+            : "Река: ставьте узлы кликами от истока к устью. Клик по руслу — рукав или приток, Enter или Esc — свободный конец здесь.";
         RaiseRiverState();
     }
 
@@ -163,8 +163,8 @@ public sealed partial class EditorViewModel
         _riverCreating = true; _riverCreatingLake = true; _riverNode = -1;
         _waterSelection.Clear(); _selectedChannelId = null;
         StatusDetail = _riverDrawMode == RiverDrawMode.Freehand
-            ? "Озеро: обведите берег одним движением — контур замкнётся сам. Esc — отмена."
-            : "Озеро: ставьте вершины по контуру (нужно не меньше трёх), кнопка «Завершить (Enter)» замкнёт контур. Esc — отмена.";
+            ? "Озеро: обведите берег одним движением — контур замкнётся сам. Esc — замкнуть там, где остановились."
+            : "Озеро: ставьте вершины по контуру (нужно не меньше трёх), кнопка «Завершить (Enter)» или Esc замкнёт контур.";
         RaiseWaterState();
     }
 

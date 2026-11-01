@@ -176,16 +176,27 @@ public sealed class Stage19RiverWorkflowTests
     }
 
     [Fact]
-    public void Escape_cancels_a_draft_without_history_and_select_tool_ignores_rivers()
+    public void Escape_stops_drawing_and_keeps_the_drawn_river_and_select_tool_ignores_rivers()
     {
         var (editor, router) = NewEditor();
+        // DEC-084: Esc stops drawing; what is drawn stays, as one undo step.
         editor.StartRiver();
         Click(router, 100, 100); Click(router, 300, 140);
+        Assert.True(editor.HandleEscape());
+        Assert.False(editor.IsCreatingRiver);
+        Assert.Single(editor.Rivers);
+        Assert.Equal(2, editor.Rivers[0].Channels[0].Nodes.Length);
+        Assert.Equal(1, editor.Session.UndoDepth);
+        editor.Undo();
+        Assert.Empty(editor.Rivers);
+
+        // A single node is not a river yet: Esc stops and there is nothing to keep.
+        editor.StartRiver();
+        Click(router, 100, 100);
         var before = editor.Session.Document;
         Assert.True(editor.HandleEscape());
         Assert.False(editor.IsCreatingRiver);
         Assert.Same(before, editor.Session.Document);
-        Assert.Equal(0, editor.Session.UndoDepth);
 
         editor.StartRiver();
         Click(router, 100, 300); Click(router, 500, 320); editor.FinishRiver();

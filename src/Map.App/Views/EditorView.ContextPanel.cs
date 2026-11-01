@@ -158,7 +158,7 @@ public sealed partial class EditorView
             Spacing = 10,
             Children =
             {
-                Explanation("От руки — провести по холсту. По узлам — ставить узлы кликами, Enter завершает, Esc отменяет."),
+                Explanation("От руки — провести по холсту. По узлам — ставить узлы кликами, Enter или Esc завершают на последнем узле."),
                 modes,
                 BuildPenPathControls("Line"),
                 Ui.Section("Новая линия", new StackPanel

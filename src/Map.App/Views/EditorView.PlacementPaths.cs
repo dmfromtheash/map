@@ -33,7 +33,7 @@ public sealed partial class EditorView
                 _pathPicker, _pathSummary,
                 Ui.TextButton("StartEditablePathButton", "Новый редактируемый путь", _editor.StartEditablePath, "compact"),
                 _pathFinish,
-                new TextBlock { Text = "Клики — узлы · Enter — завершить · Esc — отменить. Перетаскивайте круглый узел. Длинный ряд показан выборочно по всей длине. Все объекты появятся после завершения.", TextWrapping = TextWrapping.Wrap }.Classed("faint", "role-caption"),
+                new TextBlock { Text = "Клики — узлы · Enter или Esc — завершить здесь. Перетаскивайте круглый узел. Длинный ряд показан выборочно по всей длине. Все объекты появятся после завершения.", TextWrapping = TextWrapping.Wrap }.Classed("faint", "role-caption"),
                 AppearanceNumberBox("EditablePathSpacingBox", "Шаг", "ед.", () => _editor.DisplayedEditablePath?.Spacing, _editor.SetEditablePathSpacing),
                 AppearanceNumberBox("EditablePathSeedBox", "Рисунок", null, () => _editor.DisplayedEditablePath?.Seed, _editor.SetEditablePathSeed),
                 Ui.TextButton("InsertEditablePathNodeButton", "Добавить узел на сегменте", _editor.InsertEditablePathNode, "compact"),

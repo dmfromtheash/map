@@ -282,6 +282,41 @@ public sealed class EditorGradientAndShapeToolTests
     }
 
     [Fact]
+    public void Escape_stops_the_pen_and_keeps_the_drawn_shape()
+    {
+        // DEC-084: Esc stops drawing; the nodes already placed become the shape, as Enter would.
+        var editor = EditorForDrawing();
+        editor.ActiveTool = EditorTool.Shape;
+        editor.ActiveShapeDrawMode = ShapeDrawMode.Pen;
+        editor.AddPenNode(100, 100);
+        editor.AddPenNode(300, 120);
+        editor.AddPenNode(280, 300);
+
+        Assert.True(editor.HandleEscape());
+
+        Assert.False(editor.PenPathActive);
+        Assert.Equal(1, editor.Session.UndoDepth);
+        Assert.Equal(3, Current(editor).Shape!.Regions[0].Nodes.Count);
+        Assert.Contains("нарисованное осталось", editor.StatusDetail);
+    }
+
+    [Fact]
+    public void Escape_on_a_pen_path_too_short_stops_without_writing()
+    {
+        var editor = EditorForDrawing();
+        editor.ActiveTool = EditorTool.Shape;
+        editor.ActiveShapeDrawMode = ShapeDrawMode.Pen;
+        editor.AddPenNode(100, 100);
+
+        Assert.True(editor.HandleEscape());
+
+        Assert.False(editor.PenPathActive);
+        Assert.Equal(0, editor.Session.UndoDepth);
+        Assert.Empty(editor.PlacementPreviewObjects);
+        Assert.Contains("сохранять нечего", editor.StatusDetail);
+    }
+
+    [Fact]
     public void A_pen_path_too_short_to_be_a_shape_is_refused_and_says_so()
     {
         var editor = EditorForDrawing();
