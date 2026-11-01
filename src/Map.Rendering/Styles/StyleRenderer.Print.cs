@@ -78,6 +78,13 @@ public static partial class StyleRenderer
 
     private static SKImage BuildCoastField(SKImage land, SKImage rivers, int w, int h, float scale)
     {
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        try { return BuildCoastFieldCore(land, rivers, w, h, scale); }
+        finally { StyleDiagnostics.AddCoast(System.Diagnostics.Stopwatch.GetTimestamp() - started); }
+    }
+
+    private static SKImage BuildCoastFieldCore(SKImage land, SKImage rivers, int w, int h, float scale)
+    {
         using var landBitmap = SKBitmap.FromImage(land);
         using var riverBitmap = SKBitmap.FromImage(rivers);
         var landBytes = landBitmap.GetPixelSpan();

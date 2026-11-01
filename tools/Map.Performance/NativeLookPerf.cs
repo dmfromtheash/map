@@ -64,6 +64,8 @@ public sealed partial class PaintPerfApplication
             foreach (var preset in new[] { MapStylePreset.WatercolorBigShapes, MapStylePreset.OldMapBlaeu, MapStylePreset.CharcoalVineStump })
             {
                 Map.Rendering.Styles.StyleDiagnostics.Samples.Clear();
+                var (form0, height0, coast0) = (Map.Rendering.Styles.StyleDiagnostics.FormMapMs,
+                    Map.Rendering.Styles.StyleDiagnostics.HeightMapMs, Map.Rendering.Styles.StyleDiagnostics.CoastMs);
                 Map.Rendering.Styles.StyleDiagnostics.MeasureStages = true;
                 Map.Rendering.Styles.StyleDiagnostics.CollectFrames = true;
                 _editor.ApplyStylePreset(preset);
@@ -77,6 +79,10 @@ public sealed partial class PaintPerfApplication
                     $"soft {s.Sum(x => x.SoftMs):0}, wide {s.Sum(x => x.WideMs):0}, print {s.Sum(x => x.PrintMs):0}, shader {s.Sum(x => x.ShaderMs):0}, " +
                     $"composite {s.Sum(x => x.CompositeMs):0} ms; longest pass {s.Max(x => x.PassMs):0} ms; " +
                     $"pending terrain/details max {s.Max(x => x.PendingTerrain)}/{s.Max(x => x.PendingDetails)}, missing assets max {s.Max(x => x.MissingAssets)}";
+                // Inside «print»: one-time builds (CPU time summed over threads); inside «shader»: the same pass again.
+                _report.Environment[label + preset + "/split"] =
+                    $"form maps {Map.Rendering.Styles.StyleDiagnostics.FormMapMs - form0:0} ms, height maps {Map.Rendering.Styles.StyleDiagnostics.HeightMapMs - height0:0} ms, " +
+                    $"coast fields {Map.Rendering.Styles.StyleDiagnostics.CoastMs - coast0:0} ms (thread time); shader first {s.Sum(x => x.ShaderMs):0} / again {s.Sum(x => x.ShaderRepeatMs):0} ms";
             }
             _editor.SetStyleEnabled(false); await UntilShown();
         }

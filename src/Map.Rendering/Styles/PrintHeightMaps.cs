@@ -13,6 +13,13 @@ internal static class PrintHeightMaps
 
     private static SKImage Build(SKImage source)
     {
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        try { return BuildMap(source); }
+        finally { StyleDiagnostics.AddHeightMap(System.Diagnostics.Stopwatch.GetTimestamp() - started); }
+    }
+
+    private static SKImage BuildMap(SKImage source)
+    {
         // Same recipe as MountainHeight in the approved generator. Work at a bounded asset size;
         // 1024 document pixels is the reference width used to place the mockup's mountains.
         var w = Math.Min(1024, source.Width);

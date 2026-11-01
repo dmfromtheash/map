@@ -91,7 +91,14 @@ public static partial class StyleRenderer
                 destination = PaddedDestination(device, buffers.Gutter);
                 var started = measure ? Stage(gpu) : 0;
                 painted = Shade(buffers, style, gpu, options.IsExport);
-                if (measure) sample = sample with { ShaderMs = Elapsed(gpu, started) };
+                if (measure)
+                {
+                    sample = sample with { ShaderMs = Elapsed(gpu, started) };
+                    // А2 step 2: the same pass again shows what of it is drawing and what was one-time (programs).
+                    var again = Stage(gpu);
+                    Shade(buffers, style, gpu, options.IsExport)?.Dispose();
+                    sample = sample with { ShaderRepeatMs = Elapsed(gpu, again) };
+                }
                 // A frame still waiting for refined terrain, detail tiles or hex chunks is drawn once and not kept.
                 if ((measure || StyleDiagnostics.CollectFrames) && options.Stats is { } stats)
                     sample = sample with { PendingTerrain = stats.TerrainRefinementsPending, PendingDetails = stats.DetailTilesPending,

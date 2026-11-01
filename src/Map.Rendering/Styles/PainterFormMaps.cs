@@ -41,6 +41,13 @@ internal sealed class PainterFormMaps
 
     private static Set Build(SKImage source, bool wet)
     {
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        try { return BuildSet(source, wet); }
+        finally { StyleDiagnostics.AddFormMap(System.Diagnostics.Stopwatch.GetTimestamp() - started); }
+    }
+
+    private static Set BuildSet(SKImage source, bool wet)
+    {
         var height = Math.Max(1, (int)Math.Round(ReferenceWidth * (double)source.Height / source.Width));
         using var surface = SKSurface.Create(new SKImageInfo(ReferenceWidth + 2 * Padding, height + 2 * Padding))!;
         surface.Canvas.Clear(SKColors.Transparent);
