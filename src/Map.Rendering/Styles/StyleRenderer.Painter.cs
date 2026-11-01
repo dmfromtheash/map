@@ -139,6 +139,9 @@ public static partial class StyleRenderer
     /// the painter form maps (both sets) and the print height map of every mountain of the map. Without it the first
     /// frame of «Акварель» froze the map for 12,8 s and «Атлас Блау» for 4,5 s (paint-perf MAP_NEW_ART_STYLE,
     /// 2026-10-31); «Оформление» calls this when it opens. The maps are the same ones the frame would build.
+    /// Each step leases its picture from <paramref name="stamps"/> only while it works (audit 2026-11-01: the pictures
+    /// were taken from the canvas's cache on this thread and could be freed under the work), so at most one picture per
+    /// worker is held, however many mountains the map has.
     /// </summary>
     public static void PrepareAssets(MapDocument document, IStampImageSource? stamps, CancellationToken token)
     {
@@ -148,14 +151,9 @@ public static partial class StyleRenderer
         foreach (var sha in document.Layers.OfType<ObjectLayer>().Where(l => l.Visible).SelectMany(l => l.Objects)
                      .Select(o => o.Stamp?.AssetSha256).OfType<string>().Distinct(StringComparer.Ordinal))
         {
-            if (token.IsCancellationRequested) return;
-            if (stamps.TryGetImage(sha) is not { } image || image.IsTextureBacked) continue;
-            if (!PainterFormMaps.IsBuilt(image))
-            {
-                work.Add(() => PainterFormMaps.Get(image, true));
-                work.Add(() => PainterFormMaps.Get(image, false));
-            }
-            work.Add(() => PrintHeightMaps.Get(sha, image));
+            work.Add(() => WithImage(stamps, sha, image => PainterFormMaps.Get(image, true)));
+            work.Add(() => WithImage(stamps, sha, image => PainterFormMaps.Get(image, false)));
+            work.Add(() => WithImage(stamps, sha, image => PrintHeightMaps.Get(sha, image)));
         }
         if (work.Count == 0) return;
         try
@@ -165,6 +163,12 @@ public static partial class StyleRenderer
                 step => step());
         }
         catch (OperationCanceledException) { }
+    }
+
+    private static void WithImage(IStampImageSource stamps, string sha, Action<SKImage> build)
+    {
+        using var lease = stamps.Lease();
+        if (lease.TryGetImage(sha) is { IsTextureBacked: false } image) build(image);
     }
 
     private static void PrebuildFormMaps(MapDocument mountains, RenderOptions options)

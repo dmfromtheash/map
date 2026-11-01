@@ -1576,8 +1576,9 @@ public sealed partial class EditorViewModel
     public void FlattenSelectedComposition()
     {
         if (EditableSelection() is not { Composition: not null } source) return;
-        var flattened = CompositionFlattener.Flatten(source, StampImages);
-        var hash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(flattened.Png));
+        Map.Rendering.FlattenedComposition flattened;
+        using (var stamps = StampImages?.Lease()) flattened = CompositionFlattener.Flatten(source, stamps);
+        var hash =Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(flattened.Png));
         var provenance = source.Composition!.Assets.Count == 0
             ? "flattened user composition"
             : "flattened composition: " + string.Join(", ", source.Composition.Assets.Select(item => item.Provenance).Distinct());

@@ -19,6 +19,31 @@ public interface IStampImageSource
     /// each finishes, and the caller keeps drawing what it already has. Called on the render thread.
     /// </summary>
     bool PrepareForPixelSizes(IEnumerable<(string Sha256, double Width, double Height)> stamps, Action ready) => true;
+
+    /// <summary>
+    /// A view of this source for work off the render thread (style preparation, previews) or on the UI thread. Every
+    /// image it hands out stays valid until the lease is disposed, whatever the render thread evicts meanwhile, and
+    /// the lease never frees an image the render thread is drawing. A source without its own cache lifetime returns
+    /// a pass-through view.
+    /// </summary>
+    IStampImageLease Lease() => new StampImagePassThrough(this);
+
+    /// <summary>
+    /// Marks one canvas frame on the calling thread: images other threads push out of the cache during it are freed
+    /// only when it ends. Null when the source has nothing to defer.
+    /// </summary>
+    IDisposable? BeginFrame() => null;
+}
+
+/// <summary>See <see cref="IStampImageSource.Lease"/>.</summary>
+public interface IStampImageLease : IStampImageSource, IDisposable;
+
+internal sealed class StampImagePassThrough(IStampImageSource source) : IStampImageLease
+{
+    public SKImage? TryGetImage(string sha256) => source.TryGetImage(sha256);
+    public SKImage? TryGetImageForPixelSize(string sha256, double width, double height) => source.TryGetImageForPixelSize(sha256, width, height);
+    public bool PrepareForPixelSizes(IEnumerable<(string Sha256, double Width, double Height)> stamps, Action ready) => source.PrepareForPixelSizes(stamps, ready);
+    public void Dispose() { }
 }
 
 /// <summary>The live, uncommitted part of a raster gesture, drawn on top of its layer.</summary>

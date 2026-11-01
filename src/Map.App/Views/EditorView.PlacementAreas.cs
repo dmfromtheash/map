@@ -181,7 +181,8 @@ public sealed partial class EditorView
         if (sha != _fillAreaThumbnailHash)
         {
             _fillAreaThumbnail?.Dispose(); _fillAreaThumbnail = null; _fillAreaThumbnailHash = sha;
-            if (sha is not null && _editor.StampImages?.TryGetImageForPixelSize(sha, 64, 64) is { } image)
+            using var stamps = _editor.StampImages?.Lease();
+            if (sha is not null && stamps?.TryGetImageForPixelSize(sha, 64, 64) is { } image)
             {
                 using var data = image.Encode(SkiaSharp.SKEncodedImageFormat.Png, 100);
                 using var stream = data.AsStream();

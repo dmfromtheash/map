@@ -826,7 +826,8 @@ public sealed partial class EditorViewModel
     private StampContentMeasurer.Measurement? ReadAreaContent(string sha)
     {
         if (_areaContentBoundsCache.TryGetValue(sha, out var cached)) return cached;
-        if (StampImages?.TryGetImage(sha) is not { } image) return null;
+        using var stamps = StampImages?.Lease();
+        if (stamps?.TryGetImage(sha) is not { } image) return null;
         // 128 silhouette bytes per source; shared by every stamp and every undo revision.
         if (_areaContentBoundsCache.Count >= 256) _areaContentBoundsCache.Clear();
         return _areaContentBoundsCache[sha] = StampContentMeasurer.Read(image);

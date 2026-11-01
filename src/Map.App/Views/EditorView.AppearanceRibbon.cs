@@ -155,10 +155,14 @@ public sealed partial class EditorView
         return (new WorldBounds(centre.X - w / 2, centre.Y - h / 2, centre.X + w / 2, centre.Y + h / 2), scale);
     }
 
-    /// <summary>One preview, drawn like an export (CPU raster, no editor chrome), as RGBA premultiplied bytes.</summary>
+    /// <summary>
+    /// One preview, drawn like an export (CPU raster, no editor chrome), as RGBA premultiplied bytes. It runs off the
+    /// UI thread, so its pictures are leased from the canvas's source for the time it draws (audit 2026-11-01).
+    /// </summary>
     private static byte[] RenderPreviewPixels(MapDocument document, WorldBounds area, int width, int height, double scale,
-        IStampImageSource? stamps)
+        IStampImageSource? source)
     {
+        using var stamps = source?.Lease();
         var info = new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Premul);
         using var surface = SKSurface.Create(info) ?? throw new InvalidOperationException("No preview surface.");
         var canvas = surface.Canvas;

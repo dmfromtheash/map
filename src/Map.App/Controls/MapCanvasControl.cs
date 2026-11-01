@@ -705,6 +705,8 @@ public sealed partial class MapCanvasControl : Control
         private void RenderFrame(ISkiaSharpApiLeaseFeature feature)
         {
             var (tileCache, objectCache, carvedLandCache, styledLandCache, terrainCache, atlasCache, refinement, previewCache, layerImages) = resources.Current();
+            // Pictures other threads push out of the stamp cache while this frame draws are freed after it.
+            using var stampFrame = editor.StampImages?.BeginFrame();
             tileCache.BeginFrame();
             var overviewFrame = false;
             try

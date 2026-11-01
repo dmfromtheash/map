@@ -22,7 +22,8 @@ public sealed partial class EditorViewModel
         var source = new SceneObject(ObjectId.New(), SceneObjectKind.Composition, title, 0, 0,
             package.Composition.SourceWidth, package.Composition.SourceHeight, 0, "#00000000", "#00000000", 0, true, false)
         { Composition = package.Composition };
-        var flattened = CompositionFlattener.Flatten(source, StampImages);
+        Map.Rendering.FlattenedComposition flattened;
+        using (var stamps = StampImages?.Lease()) flattened = CompositionFlattener.Flatten(source, stamps);
         var folder = Path.Combine(Path.GetTempPath(), "map-asset-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(folder);
         try

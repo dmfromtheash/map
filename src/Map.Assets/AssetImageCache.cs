@@ -22,6 +22,10 @@ public sealed class AssetImageCache : IDisposable
     }
 
     private readonly Dictionary<string, Entry> _entries = new(StringComparer.OrdinalIgnoreCase);
+    // Images another thread is using (a lease of the stamp source): their entry is never evicted, and one removed
+    // while in use waits in _retired. Eviction itself may also be asked to wait (DeferDisposal) — see below.
+    private readonly Dictionary<SKImage, int> _pins = new(ReferenceEqualityComparer.Instance);
+    private readonly List<Entry> _retired = [];
     private readonly int _capacity;
     private readonly long _decodedByteCapacity;
     private readonly Func<byte[], SKImage?> _decode;
@@ -55,6 +59,49 @@ public sealed class AssetImageCache : IDisposable
     public long Hits { get; private set; }
     public long Misses { get; private set; }
     public long Evictions { get; private set; }
+
+    /// <summary>
+    /// While true, an evicted or removed entry is set aside instead of disposed, until <see cref="DisposeRetired"/>:
+    /// the caller is not the thread drawing the cache's images, and that thread may hold the evicted one right now.
+    /// </summary>
+    public bool DeferDisposal { get; set; }
+
+    /// <summary>Entries out of the cache whose images are not yet disposed (pinned or deferred).</summary>
+    public int RetiredCount => _retired.Count;
+
+    /// <summary>Keeps <paramref name="image"/> (an image or mip this cache returned) alive and in the cache until unpinned.</summary>
+    public void Pin(SKImage image) => _pins[image] = _pins.GetValueOrDefault(image) + 1;
+
+    public void Unpin(SKImage image)
+    {
+        if (!_pins.TryGetValue(image, out var count)) return;
+        if (count <= 1) _pins.Remove(image); else _pins[image] = count - 1;
+    }
+
+    /// <summary>Disposes the set-aside entries no one pins any more.</summary>
+    public void DisposeRetired()
+    {
+        for (var i = _retired.Count - 1; i >= 0; i--)
+        {
+            if (IsPinned(_retired[i])) continue;
+            _retired[i].Dispose();
+            _retired.RemoveAt(i);
+        }
+    }
+
+    private bool IsPinned(Entry entry)
+    {
+        if (_pins.Count == 0) return false;
+        if (_pins.ContainsKey(entry.Image)) return true;
+        foreach (var mip in entry.Mips.Values) if (_pins.ContainsKey(mip)) return true;
+        return false;
+    }
+
+    private void Release(Entry entry)
+    {
+        if (DeferDisposal || IsPinned(entry)) _retired.Add(entry);
+        else entry.Dispose();
+    }
 
     public SKImage? Get(string key, string? path)
     {
@@ -218,23 +265,35 @@ public sealed class AssetImageCache : IDisposable
         {
             DecodedBytes -= entry.DecodedBytes;
             ResidentBytes -= entry.ResidentBytes + entry.MipBytes;
-            entry.Dispose();
+            Release(entry);
         }
     }
 
-    /// <summary>Make room before native decode so the configured aggregate is also a peak gate.</summary>
+    /// <summary>
+    /// Make room before native decode so the configured aggregate is also a peak gate. Pinned entries stay; when only
+    /// they are left the cache holds more than its budget until they are released.
+    /// </summary>
     private void TrimForIncoming(long incomingResidentBytes)
     {
         while (_entries.Count >= _capacity
             || ResidentBytes > _decodedByteCapacity - incomingResidentBytes)
         {
-            var oldest = _entries.MinBy(pair => pair.Value.LastUsed);
-            DecodedBytes -= oldest.Value.DecodedBytes;
-            ResidentBytes -= oldest.Value.ResidentBytes + oldest.Value.MipBytes;
-            oldest.Value.Dispose();
-            _entries.Remove(oldest.Key);
+            if (OldestUnpinned(null) is not { } oldest) return;
+            Remove(oldest);
             Evictions++;
         }
+    }
+
+    private string? OldestUnpinned(string? except)
+    {
+        string? key = null; long used = long.MaxValue;
+        foreach (var (candidate, entry) in _entries)
+        {
+            if (entry.LastUsed >= used || except is not null && string.Equals(candidate, except, StringComparison.OrdinalIgnoreCase)
+                || IsPinned(entry)) continue;
+            key = candidate; used = entry.LastUsed;
+        }
+        return key;
     }
 
     /// <summary>Power-of-two minification of an already verified source, charged to the same LRU
@@ -257,10 +316,8 @@ public sealed class AssetImageCache : IDisposable
         // The bitmap and immutable image may overlap during construction.
         while (ResidentBytes + bytes * 2 > _decodedByteCapacity)
         {
-            var candidates = _entries.Where(pair => !string.Equals(pair.Key, key, StringComparison.OrdinalIgnoreCase)).ToArray();
-            if (candidates.Length == 0) return image;
-            var oldest = candidates.MinBy(pair => pair.Value.LastUsed);
-            Remove(oldest.Key); Evictions++;
+            if (OldestUnpinned(key) is not { } oldest) return image;
+            Remove(oldest); Evictions++;
         }
         var source = image;
         for (var n = 1; n <= level; n++)
@@ -295,6 +352,9 @@ public sealed class AssetImageCache : IDisposable
         }
 
         _entries.Clear();
+        foreach (var entry in _retired) entry.Dispose();
+        _retired.Clear();
+        _pins.Clear();
         DecodedBytes = 0;
         ResidentBytes = 0;
     }
