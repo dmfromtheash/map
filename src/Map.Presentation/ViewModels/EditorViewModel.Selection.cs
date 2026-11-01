@@ -47,6 +47,9 @@ public sealed partial class EditorViewModel
             layer => layer is { Visible: true, Locked: false } && FitsRasterTool(layer, tool));
     }
 
+    /// <summary>The layer the active raster tool paints on, for the panel header; null when it has none.</summary>
+    public string? RasterTargetName => RasterTargetLayer(ActiveTool)?.Name;
+
     /// <summary>True when the active tool has somewhere to paint right now.</summary>
     public bool RasterToolReady =>
         ActiveTool is not (EditorTool.Brush or EditorTool.Land or EditorTool.Mask)
@@ -71,11 +74,13 @@ public sealed partial class EditorViewModel
         }
     }
 
-    /// <summary>The label of the panel action that makes the active raster tool usable.</summary>
+    /// <summary>
+    /// The label of the panel action that makes the active raster tool usable. «Земля» has none: its «Новая земля» at
+    /// the top of the panel already makes the layer (DEC-082, one function — one place).
+    /// </summary>
     public string RasterToolFixLabel => ActiveTool switch
     {
         EditorTool.Brush => "Создать слой кисти и продолжить",
-        EditorTool.Land => "Создать слой земли и продолжить",
         EditorTool.Mask => "Добавить маску активному слою",
         _ => "",
     };
@@ -92,7 +97,7 @@ public sealed partial class EditorViewModel
         return tool switch
         {
             EditorTool.Mask => "Ни у одного слоя нет маски. Добавьте маску слою — кнопкой ниже или на вкладке «Слои».",
-            EditorTool.Land => "В карте нет слоя земли. Создайте его кнопкой ниже.",
+            EditorTool.Land => "В карте нет слоя земли. Нажмите «Новая земля» вверху панели.",
             _ => "В карте нет слоя кисти. Создайте его кнопкой ниже.",
         };
     }
@@ -108,10 +113,6 @@ public sealed partial class EditorViewModel
             case EditorTool.Brush:
                 AddBrushLayer();
                 StatusDetail = "Создан слой кисти. Можно рисовать.";
-                return true;
-            case EditorTool.Land:
-                AddLandLayer();
-                StatusDetail = "Создан слой земли. Можно рисовать.";
                 return true;
             case EditorTool.Mask:
                 // A mask belongs to an existing layer, so pick one that can hold it first.

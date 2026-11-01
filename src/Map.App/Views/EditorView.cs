@@ -838,6 +838,7 @@ public sealed partial class EditorView : UserControl
             {
                 e.Cancel = true;
                 window.Hide();
+                if (name == "AssetCatalogWindow") AssetCatalogDismissed();
             }
         };
         if (name == "AssetCatalogWindow") window.KeyDown += (_, e) =>
@@ -845,6 +846,7 @@ public sealed partial class EditorView : UserControl
             if (e.Key != Key.Escape) return;
             e.Handled = true;
             window.Hide();
+            AssetCatalogDismissed();
             _canvas.Focus();
         };
         if (TestMode.Enabled)
@@ -877,6 +879,20 @@ public sealed partial class EditorView : UserControl
             window.Show();
         }
         return window;
+    }
+
+    /// <summary>
+    /// The catalog was closed by its cross or Esc with an asset chosen in «Ассеты»: the next click on the map places it
+    /// (audit 2026-11-01: after choosing a mountain and closing the catalog a click placed nothing until «Разместить
+    /// ещё»). A pending placement, path or area already in progress is left as it is.
+    /// </summary>
+    private void AssetCatalogDismissed()
+    {
+        if (_editor.ActiveTool != EditorTool.Stamp || !_editor.HasChosenAsset || _editor.HasPendingPlacement
+            || _editor.StampPlacementMode is Map.Presentation.ViewModels.StampPlacementMode.Path
+                or Map.Presentation.ViewModels.StampPlacementMode.FillArea) return;
+        _editor.ArmStampPlacement();
+        SyncContextArea();
     }
 
     public void CloseAssetCatalogAndArmPlacement()

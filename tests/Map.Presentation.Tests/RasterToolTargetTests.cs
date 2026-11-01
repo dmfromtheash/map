@@ -34,7 +34,6 @@ public sealed class RasterToolTargetTests
 
     [Theory]
     [InlineData(EditorTool.Brush)]
-    [InlineData(EditorTool.Land)]
     public void The_panel_can_create_the_missing_layer_and_carry_straight_on(EditorTool tool)
     {
         var editor = EditorForNewMap();
@@ -47,6 +46,33 @@ public sealed class RasterToolTargetTests
         editor.ContinueStroke(160, 160);
         editor.EndStroke();
         Assert.Equal(2, editor.Session.UndoDepth); // the new layer, then the stroke
+    }
+
+    [Fact]
+    public void Land_has_one_way_to_make_its_layer_the_new_land_button_and_the_hint_names_it()
+    {
+        // Audit 2026-11-01 (DEC-082): «Новая земля» and «Создать слой земли и продолжить» did the same thing.
+        var editor = EditorForNewMap();
+        editor.ActiveTool = EditorTool.Land;
+
+        Assert.Equal("", editor.RasterToolFixLabel);
+        Assert.False(editor.CreateLayerForActiveTool());
+        Assert.Contains("«Новая земля»", editor.RasterToolHint);
+        Assert.Null(editor.RasterTargetName);
+        editor.AddLandLayer();
+        Assert.NotNull(editor.RasterTargetName);
+    }
+
+    [Fact]
+    public void The_layer_named_for_new_rivers_is_the_object_layer_they_go_to_not_the_active_land()
+    {
+        // Audit 2026-11-01: with «Земля 1» active the river panel said «новые реки на слой „Земля 1“».
+        var editor = EditorForNewMap();
+        editor.AddLandLayer();
+        Assert.IsType<LandLayer>(editor.ActiveLayer);
+
+        var objects = editor.Session.Document.Layers.OfType<ObjectLayer>().Last();
+        Assert.Equal(objects.Name, editor.NewObjectLayerName);
     }
 
     [Fact]

@@ -688,8 +688,9 @@ public sealed partial class EditorView
         _editor.ObjectLayerTargets.FirstOrDefault(target => target.IsCurrent) is { } layer
             ? " · слой «" + layer.Name + "»" : "";
 
-    private string ActiveLayerTarget(string prefix) =>
-        _editor.ActiveLayer is { } layer ? prefix + " «" + layer.Name + "»" : "слой не выбран";
+    /// <summary>Where new objects really go: the open object layer, not whatever layer is active.</summary>
+    private string ObjectLayerTarget(string prefix) =>
+        _editor.NewObjectLayerName is { } name ? prefix + " «" + name + "»" : "все слои объектов скрыты или заблокированы";
 
     private static string ObjectKindIcon(SceneObjectKind kind) => kind switch
     {
@@ -722,20 +723,23 @@ public sealed partial class EditorView
         switch (tool)
         {
             case EditorTool.Stamp:
-                SetContextHeader(icon, key, Ui.Scope.New, "следующие размещения · " + ActiveLayerTarget("на слой"), _stampResetButton);
+                SetContextHeader(icon, key, Ui.Scope.New, "следующие размещения · " + ObjectLayerTarget("на слой"), _stampResetButton);
                 SyncStampResetButton();
                 break;
             case EditorTool.River or EditorTool.Road:
                 var editing = RiverRoadObjectScope();
                 SetContextHeader(icon, key, editing ? Ui.Scope.Object : Ui.Scope.New,
                     editing ? (tool == EditorTool.River ? "выбранная вода" : "выбранная дорога") + SurfaceLayerSuffix()
-                        : ActiveLayerTarget(tool == EditorTool.River ? "новые реки на слой" : "новые дороги на слой"), null);
+                        : ObjectLayerTarget(tool == EditorTool.River ? "новые реки на слой" : "новые дороги на слой"), null);
                 break;
             case EditorTool.Land or EditorTool.Brush or EditorTool.Mask:
-                SetContextHeader(icon, key, Ui.Scope.Layer, ActiveLayerTarget("рисует на"), null);
+                // The layer the stroke really lands on (audit 2026-11-01: «Кисть» said «рисует на „Земля“» above
+                // «В карте нет слоя кисти»).
+                SetContextHeader(icon, key, Ui.Scope.Layer,
+                    _editor.RasterTargetName is { } target ? "рисует на «" + target + "»" : "слоя для рисования нет", null);
                 break;
             case EditorTool.Line or EditorTool.Shape or EditorTool.Text:
-                SetContextHeader(icon, key, Ui.Scope.New, ActiveLayerTarget("на слой"), null);
+                SetContextHeader(icon, key, Ui.Scope.New, ObjectLayerTarget("на слой"), null);
                 break;
             default:
                 SetContextHeader(icon, key, null, "", null);

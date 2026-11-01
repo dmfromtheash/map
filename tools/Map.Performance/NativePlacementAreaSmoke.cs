@@ -197,7 +197,7 @@ public sealed class NativePlacementAreaApplication : Application
         // edge refills the whole edge band when a vertex moves (Core: A_moved_vertex_with_a_soft_edge…).
         // The stable-interior promise below holds without the soft edge, so it is switched off first.
         _editor.SetEditableAreaSoftEdge(false);
-        await Click("StartEditableAreaButton");
+        await Click("StampCurrentAssetButton");
         var before = _editor.Session.Document;
         Point(100, 100); Point(750, 100); Point(750, 600); Point(480, 450); Point(100, 600); await Settle();
         var preview = _editor.PlacementPreviewObjects.ToArray();
@@ -361,7 +361,7 @@ public sealed class NativePlacementAreaApplication : Application
         await Settle();
         _editor.ChooseGalleryVariant(_treeSetId!, null); await Settle();
         await Click("StampModeFillArea"); Find<Slider>("FutureStampScaleSlider").Value = 25; await Settle();
-        await Click("StartEditableAreaButton"); await Number("EditableAreaDensityBox", "100");
+        await Click("StampCurrentAssetButton"); await Number("EditableAreaDensityBox", "100");
         Point(90, 100); Point(950, 100); Point(950, 670); Point(590, 580); Point(330, 690); Point(90, 560);
         await Number("EditableAreaSeedBox", "18");
         var draft = _editor.DisplayedEditableArea!; var untouched = _editor.Session.Document;
@@ -427,7 +427,7 @@ public sealed class NativePlacementAreaApplication : Application
                 new ObjectLayer(LayerId.New(), "Горы", true, false, 1, [])]));
         await Settle(); _editor.ChooseGalleryVariant(_densitySetId!, null); await Settle();
         await Click("StampModeFillArea"); Find<Slider>("FutureStampScaleSlider").Value = 40; await Settle();
-        await Click("StartEditableAreaButton"); await Number("EditableAreaDensityBox", "100");
+        await Click("StampCurrentAssetButton"); await Number("EditableAreaDensityBox", "100");
         Point(120, 570); Point(290, 680); Point(890, 190); Point(710, 75);
         Find<ComboBox>("EditableAreaPatternBox").SelectedIndex = 1; await Settle();
         await Number("EditableAreaSeedBox", "18"); await _editor.PendingEditableAreaCount;
@@ -444,7 +444,7 @@ public sealed class NativePlacementAreaApplication : Application
         await Settle(); _editor.ChooseGalleryVariant(_densitySetId!, null); await Settle();
         await Click("StampModeFillArea");
         Find<Slider>("FutureStampScaleSlider").Value = 32; await Settle();
-        await Click("StartEditableAreaButton");
+        await Click("StampCurrentAssetButton");
         await Number("EditableAreaDensityBox", "100");
         Point(90, 110); Point(950, 110); Point(520, 650);
         Find<ComboBox>("EditableAreaPatternBox").SelectedIndex = 1; await Settle();
@@ -570,7 +570,7 @@ public sealed class NativePlacementAreaApplication : Application
         await Click("StampModeFillArea");
         var scale = Find<Slider>("FutureStampScaleSlider"); scale.BringIntoView(); await Settle(); scale.Value = 129;
         _editor.SetStampRotationDegrees(359); _editor.SetStampSublayer(-1); _editor.SetStampFlip(horizontal: true);
-        await Click("StartEditableAreaButton");
+        await Click("StampCurrentAssetButton");
         await Number("EditableAreaDensityBox", "20");
         var original = _editor.Session.Document;
         var managedBefore = GC.GetTotalMemory(forceFullCollection: true);
@@ -676,7 +676,7 @@ public sealed class NativePlacementAreaApplication : Application
         _report.Checks["measurement-new-layer-only-in-copy"] = document.FindLayer(_editor.ActiveLayer!.Id) is null;
         _editor.ChooseGalleryVariant(measurementSet, null);
         _editor.StampDensity = 3; _editor.SetStampScalePercent(55); _editor.Session.Viewport.Set(0, 0, .35); await Settle();
-        await Click("StampModeFillArea"); await Click("StartEditableAreaButton");
+        await Click("StampModeFillArea"); await Click("StampCurrentAssetButton");
         Point(300, 300); Point(1800, 300); Point(1800, 1600); Point(300, 1600);
         await Click("FinishEditableAreaButton"); await Frame();
         var before = _editor.Session.Document; var beforeArea = _editor.SelectedEditableArea!;

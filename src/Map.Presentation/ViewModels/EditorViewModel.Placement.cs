@@ -395,6 +395,14 @@ public sealed partial class EditorViewModel
         return (created, new AddLayerCommand(created, _activeLayerId));
     }
 
+    /// <summary>
+    /// The layer a new asset, river, road, line, shape or text goes to (<see cref="EnsureObjectLayer"/>), for the panel
+    /// header: the active layer only when it is an open object layer (audit 2026-11-01: the river panel promised
+    /// «Земля 1» while the river went to «Объекты»). Null when every object layer is hidden or locked.
+    /// </summary>
+    public string? NewObjectLayerName =>
+        ActiveObjectLayer()?.Name ?? (HasNoObjectLayer ? EntityNameGenerator.Layer(Session.Document, typeof(ObjectLayer)) : null);
+
     /// <summary>The map has no object layer at all - an unprepared document, not a locked one.</summary>
     private bool HasNoObjectLayer => !Session.Document.Layers.OfType<ObjectLayer>().Any();
 

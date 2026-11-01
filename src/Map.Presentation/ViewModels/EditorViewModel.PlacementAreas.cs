@@ -114,7 +114,7 @@ public sealed partial class EditorViewModel
             if (!_areaStartRequested && PendingPlacement is not { Mode: StampPlacementMode.FillArea }
                 && SelectedEditableArea is { } area)
                 return area.MemberCount > 0
-                    ? $"Размещено объектов: {area.MemberCount}. Границу можно редактировать. Для ещё одной области нажмите «Новая редактируемая область»."
+                    ? $"Размещено объектов: {area.MemberCount}. Границу можно редактировать. Для ещё одной области нажмите «Новая область» на карточке ассета."
                     : area.Density == 0
                         ? "Область создана пустой: плотность равна 0. Увеличьте плотность, чтобы разместить объекты."
                         : "Область создана, но объекты не поместились. Увеличьте область или плотность, уменьшите масштаб либо выберите свободное место.";

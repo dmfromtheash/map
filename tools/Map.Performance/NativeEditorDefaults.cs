@@ -166,7 +166,7 @@ public sealed partial class RegionalApplication
         Check("reset from selected path does not edit placed content", ReferenceEquals(completed, _editor.Session.Document) && NeutralPlacement(_editor));
 
         Click(_view, "StampModeFillArea"); await Settle();
-        Click(_view, "StartEditableAreaButton"); await Settle();
+        Click(_view, "StampCurrentAssetButton"); await Settle();
         _view.Canvas.ClickForSmoke(230, 240); _view.Canvas.ClickForSmoke(410, 240);
         PressEditorKey(NativeKey.Escape);
         Check("Escape cancels an unfinished area without editing the map", !_editor.IsCreatingEditableArea

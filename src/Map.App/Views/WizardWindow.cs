@@ -194,7 +194,9 @@ public sealed class WizardWindow : Window
             ApplyCategoryDefaults();
             // A hex map is a board of hexes: no starting pack and no pixel canvas to choose.
             var hex = MapCategories.IsHex(_category.Id);
-            _startBlock.IsVisible = !hex;
+            // The regional starts need the pack; while it is hidden (RegionalArtPack.IsAvailable) the block and its
+            // description of «Регион» and «Долина» are not shown at all (audit 2026-11-01: a greyed list).
+            _startBlock.IsVisible = !hex && StartingPointsAvailable;
             _sizeBlock.IsVisible = !hex;
             _hexBlock.IsVisible = hex;
             if (hex) _startingPoint.SelectedIndex = 0;
@@ -529,9 +531,11 @@ public sealed class WizardWindow : Window
               + $"от {NewMapWizardViewModel.MinHexSize} до {NewMapWizardViewModel.MaxHexSize} пикселей.";
     }
 
+    private bool StartingPointsAvailable => _catalog is not null && RegionalArtPack.IsAvailable;
+
     private Control BuildStartingPoint()
     {
-        _startingPoint.IsEnabled = _catalog is not null && RegionalArtPack.IsAvailable;
+        _startingPoint.IsEnabled = StartingPointsAvailable;
         _startingPoint.SelectionChanged += (_, _) =>
         {
             if (_backgroundBlock is not null) _backgroundBlock.IsVisible = _startingPoint.SelectedIndex == 0;

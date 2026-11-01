@@ -89,9 +89,9 @@ public sealed partial class EditorView
         {
             Spacing = 6, Children =
             {
+                // A new area starts only from «Новая область» on the asset card above (DEC-082; audit 2026-11-01 found
+                // it three times: there, here as «Новая редактируемая область» and on the «Разместить» button).
                 _fillAreaPicker, _fillAreaSummary,
-                Ui.TextButton("StartEditableAreaButton", "Новая редактируемая область", _editor.StartEditableArea, "compact")
-                    .WithTip("Обвести на карте участок, который заполнится объектами."),
                 Ui.CategoryTabs("EditableAreaTabs",
                     new Ui.CategoryTab("Arrangement", "Расстановка", MapIcons.LineLayers, arrangement, "Рисунок, плотность и размеры"),
                     new Ui.CategoryTab("Rules", "Правила", MapIcons.LineTarget, BuildEditableAreaRulesBlock(), "Где ставить: дороги, вода, суша"),
@@ -107,11 +107,7 @@ public sealed partial class EditorView
 
     private Control BuildEditableAreaPlacementActions()
     {
-        _fillAreaFinish = Ui.TextButton("FinishEditableAreaButton", "Разместить", () =>
-        {
-            if (!_editor.IsCreatingEditableArea && _editor.SelectedEditableArea is not null) _editor.StartEditableArea();
-            else _editor.FinishEditableArea();
-        }, "primary");
+        _fillAreaFinish = Ui.TextButton("FinishEditableAreaButton", "Разместить", () => _editor.FinishEditableArea(), "primary");
         _fillAreaFinish.HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch;
         _fillAreaPlacementHint = new TextBlock { Name = "EditableAreaPlacementHint", TextWrapping = TextWrapping.Wrap }
             .Classed("faint", "role-caption");
@@ -141,9 +137,7 @@ public sealed partial class EditorView
             {
                 _fillAreaPlacementActions.IsVisible = _editor.ActiveTool == Map.Presentation.ViewModels.EditorTool.Stamp
                     && _editor.StampPlacementMode == Map.Presentation.ViewModels.StampPlacementMode.FillArea;
-                var canStart = !_editor.IsCreatingEditableArea && _editor.SelectedEditableArea is not null;
-                _fillAreaFinish!.IsEnabled = _editor.CanPlaceEditableArea || canStart;
-                _fillAreaFinish.Content = canStart ? "Новая область" : "Разместить";
+                _fillAreaFinish!.IsEnabled = _editor.CanPlaceEditableArea;
                 _fillAreaPlacementHint!.Text = _editor.EditableAreaPlacementHint;
                 _fillAreaResult!.Text = _editor.EditableAreaResult;
             }
