@@ -57,10 +57,37 @@ public sealed partial class PaintPerfApplication
             return (first, watch.Elapsed.TotalMilliseconds);
         }
 
+        // А2 step 1: the first frame of each heavy style, split into the style's own stages (StyleDiagnostics) — the
+        // stages wait for the GPU, so their sum is the style's own cost and the rest of the wait is everything else.
+        async Task FirstStyles(string label)
+        {
+            foreach (var preset in new[] { MapStylePreset.WatercolorBigShapes, MapStylePreset.OldMapBlaeu, MapStylePreset.CharcoalVineStump })
+            {
+                Map.Rendering.Styles.StyleDiagnostics.Samples.Clear();
+                Map.Rendering.Styles.StyleDiagnostics.MeasureStages = true;
+                Map.Rendering.Styles.StyleDiagnostics.CollectFrames = true;
+                _editor.ApplyStylePreset(preset);
+                var (first, done) = await UntilShown();
+                Map.Rendering.Styles.StyleDiagnostics.MeasureStages = false;
+                Map.Rendering.Styles.StyleDiagnostics.CollectFrames = false;
+                var s = Map.Rendering.Styles.StyleDiagnostics.Samples.ToArray();
+                _report.Environment[label + preset] = $"first frame {first:0} ms, finished {done:0} ms";
+                _report.Environment[label + preset + "/stages"] = s.Length == 0 ? "no style frames" :
+                    $"frames {s.Length} (reused {s.Count(x => x.Reused)}); sum: scene {s.Sum(x => x.SceneMs):0}, tensor {s.Sum(x => x.TensorMs):0}, " +
+                    $"soft {s.Sum(x => x.SoftMs):0}, wide {s.Sum(x => x.WideMs):0}, print {s.Sum(x => x.PrintMs):0}, shader {s.Sum(x => x.ShaderMs):0}, " +
+                    $"composite {s.Sum(x => x.CompositeMs):0} ms; longest pass {s.Max(x => x.PassMs):0} ms; " +
+                    $"pending terrain/details max {s.Max(x => x.PendingTerrain)}/{s.Max(x => x.PendingDetails)}, missing assets max {s.Max(x => x.MissingAssets)}";
+            }
+            _editor.SetStyleEnabled(false); await UntilShown();
+        }
+
         SetScale(centre, scale); await TimedRefined();
         Press("WorkspaceDrawTab"); await Settle(); await TimedRefined();
         await BurstRoute("look/draw-pan", 40, Pan);
         _report.Environment["look/ui-wait-draw"] = await UiWait(TimeSpan.FromSeconds(2));
+        // MAP_LOOK_CLICK_BEFORE=1: the same clicks before «Оформление» opens — no pictures of «Вид» and no background
+        // preparation compete with the style, so the difference to look/first-click is what they cost.
+        if (System.Environment.GetEnvironmentVariable("MAP_LOOK_CLICK_BEFORE") == "1") await FirstStyles("look/click-before/");
 
         var press = Stopwatch.StartNew();
         Press("WorkspaceAppearanceTab");
@@ -68,16 +95,7 @@ public sealed partial class PaintPerfApplication
         var pictures = Stopwatch.StartNew();
         _report.Environment["look/ui-wait-while-pictures"] = await UiWait(TimeSpan.FromSeconds(3));
         // The first click on a heavy style 3 s after «Оформление» opened: until the styled map is finished.
-        if (System.Environment.GetEnvironmentVariable("MAP_LOOK_FIRST_STYLES") != "0")
-        {
-            foreach (var preset in new[] { MapStylePreset.WatercolorBigShapes, MapStylePreset.OldMapBlaeu, MapStylePreset.CharcoalVineStump })
-            {
-                _editor.ApplyStylePreset(preset);
-                var (first, done) = await UntilShown();
-                _report.Environment["look/first-click/" + preset] = $"first frame {first:0} ms, finished {done:0} ms";
-            }
-            _editor.SetStyleEnabled(false); await UntilShown();
-        }
+        if (System.Environment.GetEnvironmentVariable("MAP_LOOK_FIRST_STYLES") != "0") await FirstStyles("look/first-click/");
         await BurstRoute("look/appearance-pan-while-pictures", 40, Pan);
         Button[] Tiles() => [.. _view.GetVisualDescendants().OfType<Button>().Where(b => b.Name?.StartsWith("LookCard_", StringComparison.Ordinal) == true)];
         while (pictures.Elapsed < TimeSpan.FromMinutes(3)
