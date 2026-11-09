@@ -6,6 +6,21 @@ namespace Map.Presentation.Tests;
 
 public sealed class StyleEditorTests
 {
+    [Fact]
+    public void Moon_scatter_is_one_undo_step_and_the_preset_brings_its_own_back()
+    {
+        var editor = new EditorViewModel(TestData.Document(), null, false,
+            new FakeProjectStore(), new FakeRecentMaps(), new FakeFilePicker(), new FakePrompts(), new FakeLog());
+        editor.ApplyStylePreset(MapStylePreset.MoonlightHasui);
+        var before = editor.Session.Document.Style;
+        Assert.Equal(MoonScatter.OpenWater, before!.MoonScatter);
+        editor.SetStyleMoonScatter(MoonScatter.SwellRidges);
+        Assert.Equal(before with { MoonScatter = MoonScatter.SwellRidges }, editor.Session.Document.Style);
+        editor.Undo(); Assert.Equal(before, editor.Session.Document.Style);
+        editor.Redo(); Assert.Equal(MoonScatter.SwellRidges, editor.Session.Document.Style!.MoonScatter);
+        Assert.Equal(3, MapStyle.MoonScatters.Count);
+    }
+
     [Theory]
     [InlineData(MapStylePreset.OldMapBlaeu)]
     [InlineData(MapStylePreset.EngravingAquatint)]

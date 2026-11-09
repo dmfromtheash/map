@@ -157,7 +157,10 @@ public static class MapProjectFormat
     /// <summary>Plan 2.3: the side and heights of the isometric view kept in the map.</summary>
     public const int IsometricSchemaVersion = 47;
 
-    /// <summary>R12 (2026-11-09): the sea manners the owner chose from the Pinterest study — shore hatch, watercolour halo, surf, ice, shoals.</summary>
+    /// <summary>
+    /// R12 (2026-11-09): the sea manners the owner chose from the Pinterest study — shore hatch, watercolour halo, surf,
+    /// ice, shoals — and the scatter of the moonlight of «Лунная ночь» other than the first.
+    /// </summary>
     public const int SeaMannersSchemaVersion = 48;
     public const int MaxSupportedSchemaVersion = SeaMannersSchemaVersion;
 

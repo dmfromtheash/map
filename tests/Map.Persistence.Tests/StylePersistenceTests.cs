@@ -50,6 +50,22 @@ public sealed class StylePersistenceTests : IDisposable
         Assert.Equal(29, JsonNode.Parse(stream)!["schemaVersion"]!.GetValue<int>());
     }
 
+    [Theory]
+    [InlineData(MoonScatter.OpenWater, 29)]
+    [InlineData(MoonScatter.BrightPools, 48)]
+    [InlineData(MoonScatter.SwellRidges, 48)]
+    public void Moon_scatter_round_trips_and_only_a_chosen_one_raises_the_schema(MoonScatter scatter, int schema)
+    {
+        var style = MapStyle.For(MapStylePreset.MoonlightHasui) with { MoonScatter = scatter };
+        var path = Path.Combine(_root, "moon.mapproj");
+        MapProjectStore.Save(ProjectFixtures.Document("Луна") with { Style = style, Lighting = new MapLighting() }, path,
+            ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
+        Assert.Equal(style, MapProjectStore.Open(path).Document.Style);
+        using var zip = ZipFile.OpenRead(path);
+        using var stream = zip.GetEntry("manifest.json")!.Open();
+        Assert.Equal(schema, JsonNode.Parse(stream)!["schemaVersion"]!.GetValue<int>());
+    }
+
     [Fact]
     public void A_map_without_style_keeps_its_older_schema()
     {

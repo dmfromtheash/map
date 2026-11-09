@@ -26,6 +26,15 @@ public static partial class MapProjectStore
         [MapStylePreset.MoonlightPastel] = "moonlight-pastel",
     };
 
+    private static readonly IReadOnlyDictionary<MoonScatter, string> MoonScatterNames = new Dictionary<MoonScatter, string>
+    {
+        [MoonScatter.OpenWater] = "open-water",
+        [MoonScatter.BrightPools] = "bright-pools",
+        [MoonScatter.SwellRidges] = "swell-ridges",
+    };
+
+    private static bool HasMoonScatterV48(MapStyle? style) => style is { MoonScatter: not MoonScatter.OpenWater };
+
     private static MapStyleDto? ToStyleDto(MapStyle? style)
     {
         if (style is null) return null;
@@ -47,6 +56,7 @@ public static partial class MapProjectStore
             Impasto = Effect(style.Impasto), Imprimatura = Effect(style.Imprimatura), Gloss = Effect(style.Gloss),
             Smudge = Effect(style.Smudge), CrossHatch = Effect(style.CrossHatch),
             Grid = Effect(style.Grid), FormLines = Effect(style.FormLines),
+            MoonScatter = HasMoonScatterV48(style) ? MoonScatterNames[style.MoonScatter] : null,
         };
     }
 
@@ -58,6 +68,15 @@ public static partial class MapProjectStore
         var preset = StylePresetNames.FirstOrDefault(p => p.Value == dto.Preset);
         if (preset.Value is null)
             throw new MapProjectCorruptedException($"Неизвестный стиль карты «{dto.Preset}».");
+        var scatter = MoonScatter.OpenWater;
+        if (dto.MoonScatter is { } scatterName)
+        {
+            if (manifest.SchemaVersion < MapProjectFormat.SeaMannersSchemaVersion)
+                throw new MapProjectCorruptedException("Раскидка лунного света требует схему v48.");
+            var known = MoonScatterNames.FirstOrDefault(p => p.Value == scatterName);
+            if (known.Value is null) throw new MapProjectCorruptedException($"Неизвестная раскидка лунного света «{scatterName}».");
+            scatter = known.Key;
+        }
         // An effect missing from the file takes the preset's own value.
         var defaults = MapStyle.For(preset.Key);
         static StyleEffect Effect(LightingEffectDto? e, StyleEffect fallback) =>
@@ -67,6 +86,7 @@ public static partial class MapProjectStore
             Enabled = dto.Enabled,
             Preset = preset.Key,
             Strength = dto.Strength,
+            MoonScatter = scatter,
             Strokes = Effect(dto.Strokes, defaults.Strokes), Bleed = Effect(dto.Bleed, defaults.Bleed),
             Edges = Effect(dto.Edges, defaults.Edges), DryBrush = Effect(dto.DryBrush, defaults.DryBrush),
             Mist = Effect(dto.Mist, defaults.Mist), Pen = Effect(dto.Pen, defaults.Pen),

@@ -39,6 +39,18 @@ public sealed partial class StyleRenderingTests
     }
 
     [Theory]
+    [InlineData(MapStylePreset.MoonlightHasui)]
+    [InlineData(MapStylePreset.MoonlightPastel)]
+    public void Each_moon_scatter_lays_the_light_on_the_water_differently(MapStylePreset preset)
+    {
+        using var mountain = Mountain();
+        var doc = PainterScene(preset);
+        SKBitmap With(MoonScatter scatter) => Draw(doc with { Style = doc.Style! with { MoonScatter = scatter } }, mountain, View, export: true);
+        using var open = With(MoonScatter.OpenWater); using var pools = With(MoonScatter.BrightPools); using var ridges = With(MoonScatter.SwellRidges);
+        Assert.True(MaxDiff(open, pools) > 8 && MaxDiff(open, ridges) > 8 && MaxDiff(pools, ridges) > 8);
+    }
+
+    [Theory]
     [MemberData(nameof(PainterPresets))]
     public void Painter_tiles_and_screen_export_agree_at_half_full_and_double_scale(MapStylePreset preset)
     {

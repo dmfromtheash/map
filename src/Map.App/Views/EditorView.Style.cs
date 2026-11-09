@@ -38,6 +38,13 @@ public sealed partial class EditorView
         foreach (var kind in Enum.GetValues<StyleEffectKind>())
             effects.Children.Add(StyleEffectRow(kind));
 
+        // «Лунная ночь» only: where the glints lie on the water (the owner's three, DEC-087).
+        var scatter = AppearanceChoice("StyleMoonScatterChoice", "Свет",
+            [.. MapStyle.MoonScatters.Select(m => (m.Scatter.ToString(), m.Title))],
+            () => _editor.ShownStyle.MoonScatter.ToString(),
+            key => { _editor.SetStyleMoonScatter(Enum.Parse<MoonScatter>(key)); SyncStyleSection(); });
+        ToolTip.SetTip(scatter, string.Join(" ", MapStyle.MoonScatters.Select(m => m.Title + ": " + m.Description)));
+        var moon = Group("Лунный свет на воде", scatter);
         var body = new StackPanel
         {
             Spacing = 8,
@@ -45,9 +52,11 @@ public sealed partial class EditorView
             Children =
             {
                 Group("Сила", strength),
+                moon,
                 Group("Эффекты", effects),
             },
         };
+        _styleSyncs.Add(() => moon.IsVisible = _editor.ShownStyle.Preset is MapStylePreset.MoonlightHasui or MapStylePreset.MoonlightPastel);
         _styleSyncs.Add(() =>
         {
             var on = _editor.ShownStyle.Enabled;
@@ -80,7 +89,7 @@ public sealed partial class EditorView
     {
         StyleEffectKind.Crest when preset == MapStylePreset.MoonlightHasui => "Тёмный контур гор, гребней и берега, как отпечаток ключевой доски.",
         StyleEffectKind.Sea when preset == MapStylePreset.MoonlightHasui => "Бокаси: море плавно темнеет от берега к открытой воде.",
-        StyleEffectKind.WaterLines when preset is MapStylePreset.MoonlightHasui or MapStylePreset.MoonlightPastel => "Лунная дорожка на воде и светлые линии вдоль берега.",
+        StyleEffectKind.WaterLines when preset is MapStylePreset.MoonlightHasui or MapStylePreset.MoonlightPastel => "Лунные блики на воде и светлые линии вдоль берега.",
         StyleEffectKind.WoodGrain when preset == MapStylePreset.MoonlightHasui => "Еле заметное волокно деревянной доски в заливках.",
         StyleEffectKind.Strokes when preset == MapStylePreset.MoonlightPastel => "Мазки мела вдоль формы горы: светлые на освещённых гранях, средние на поворотах.",
         StyleEffectKind.Coast when preset == MapStylePreset.MoonlightPastel => "Меловая линия берега и освещённого края гор.",

@@ -80,6 +80,20 @@ public sealed record MapStyle
     /// <summary>Blueprint: the form lines of the mountains (contours of their light and shadow).</summary>
     public StyleEffect FormLines { get; init; } = new(true, 1);
 
+    /// <summary>
+    /// «Лунная ночь» only (owner's choice of 2026-11-09, DEC-087): where on the water the moon's glints gather.
+    /// A map saved with anything but the first needs schema v48.
+    /// </summary>
+    public MoonScatter MoonScatter { get; init; } = MoonScatter.OpenWater;
+
+    /// <summary>The ways to scatter the moonlight, with the names the panel shows.</summary>
+    public static IReadOnlyList<(MoonScatter Scatter, string Title, string Description)> MoonScatters { get; } =
+    [
+        (MoonScatter.OpenWater, "В открытой воде", "У берега тихо, свет играет вдали от суши."),
+        (MoonScatter.BrightPools, "Редкие яркие поляны", "Несколько ярких пятен света, остальная вода тёмная."),
+        (MoonScatter.SwellRidges, "Гряды по волне", "Длинные светлые гряды вдоль волны, несколько на карту."),
+    ];
+
     /// <summary>The preset as it comes, every effect at the strength the preset was tuned with.</summary>
     public static MapStyle For(MapStylePreset preset) => preset switch
     {
@@ -248,6 +262,7 @@ public sealed record MapStyle
     public MapStyle Normalized() => this with
     {
         Preset = Enum.IsDefined(Preset) ? Preset : MapStylePreset.InkWetBrush,
+        MoonScatter = Enum.IsDefined(MoonScatter) ? MoonScatter : MoonScatter.OpenWater,
         Strength = MapLighting.Clamp01(Strength),
         Strokes = Strokes.Normalized(), Bleed = Bleed.Normalized(), Edges = Edges.Normalized(), DryBrush = DryBrush.Normalized(),
         Mist = Mist.Normalized(), Pen = Pen.Normalized(), Paper = Paper.Normalized(), Contour = Contour.Normalized(),
@@ -285,6 +300,17 @@ public enum MapStylePreset
     BlueprintSurvey = 13,
     MoonlightHasui = 14,
     MoonlightPastel = 15,
+}
+
+/// <summary>Where the glints of «Лунная ночь» lie on the water.</summary>
+public enum MoonScatter
+{
+    /// <summary>Calm at the shore, the light plays far from the land.</summary>
+    OpenWater = 0,
+    /// <summary>A few bright pools, the rest of the water dark.</summary>
+    BrightPools = 1,
+    /// <summary>Long pale ridges along the swell.</summary>
+    SwellRidges = 2,
 }
 
 public enum StyleEffectKind

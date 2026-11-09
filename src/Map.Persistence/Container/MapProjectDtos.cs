@@ -79,6 +79,8 @@ internal sealed class MapStyleDto
     [JsonPropertyName("formLines")] public LightingEffectDto? FormLines { get; set; }
     [JsonPropertyName("plate")] public LightingEffectDto? Plate { get; set; }
     [JsonPropertyName("border")] public LightingEffectDto? Border { get; set; }
+    /// <summary>Schema v48: where the moonlight lies on the water; absent = «В открытой воде».</summary>
+    [JsonPropertyName("moonScatter")] public string? MoonScatter { get; set; }
 }
 
 /// <summary>Light and time of day of the map (schema v28, DEC-057).</summary>

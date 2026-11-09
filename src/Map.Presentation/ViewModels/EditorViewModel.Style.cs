@@ -54,6 +54,10 @@ public sealed partial class EditorViewModel
     public void SetStyleStrength(double strength, bool commit) =>
         ChangeStyle("Сила стиля", s => s with { Strength = strength, Enabled = true }, commit);
 
+    /// <summary>«Лунная ночь»: where the moon's glints lie on the water; one Undo step.</summary>
+    public void SetStyleMoonScatter(MoonScatter scatter) =>
+        ChangeStyle("Лунный свет: " + MapStyle.MoonScatters.First(m => m.Scatter == scatter).Title, s => s with { MoonScatter = scatter }, true);
+
     public void SetStyleEffect(StyleEffectKind kind, bool? enabled, double? strength, bool commit) =>
         ChangeStyle(StyleEffectTitle(kind, ShownStyle.Preset), s =>
         {

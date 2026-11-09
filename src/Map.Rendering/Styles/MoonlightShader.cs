@@ -32,6 +32,7 @@ uniform float moonPath;
 uniform float chalk;
 uniform float tooth;
 uniform float shore;
+uniform float moonScatter;
 uniform float3 cGround; uniform float3 cSea; uniform float3 cShadow; uniform float3 cLit; uniform float3 cGlint;
 
 float2 raster(float2 p) { return (p - origin) / docPerPx; }
@@ -77,10 +78,16 @@ half4 paintPixel(float2 pixel) {
     float sea = 1.0 - landF;
     float deep = smoothstep(10.0, 220.0, dL);
 
-    // One path of moonlight across the sea (the moon in the north-west): short level dashes in a broad soft band.
-    float band = 1.0 - smoothstep(0.03, 0.12, abs(fract((p.x * 0.55 + p.y) / 2600.0 + 0.2) - 0.5));
-    float dash = step(0.86, noise(float2(p.x / (14.0 * ms), p.y / (2.2 * ms))));
-    float glint = dash * band * sea * smoothstep(6.0, 30.0, dL) * (0.6 + 0.4 * noise(p / 60.0)) * moonPath;
+    // Moonlight on the water (owner, 2026-11-09: the single band «режет карту на две части»; «более равномерно свет
+    // луны по разным зонам карты»; of six scatters he chose three, DEC-087). The same short level dashes, riding a
+    // slow swell so they lie on the surface; where they gather is the style's MoonScatter.
+    // MoonScatter: 0 far from the land, 1 a few bright pools, 2 long ridges along the swell.
+    float pools = 0.05 + 1.05 * smoothstep(60.0, 220.0, dL) * (0.6 + 0.4 * fbm(p / 300.0 + 3.0));
+    if (moonScatter > 0.5 && moonScatter < 1.5) { pools = 0.04 + 1.5 * smoothstep(0.56, 0.68, fbm(p / 260.0 + 21.0)); }
+    else if (moonScatter > 1.5) { pools = 0.06 + 1.3 * smoothstep(0.55, 0.72, fbm(float2(p.x / 900.0, p.y / 110.0) + 5.0)); }
+    float swell = 2.2 * sin(p.x / 46.0 + 5.0 * fbm(p / 210.0));
+    float dash = step(0.86, noise(float2(p.x / (14.0 * ms), (p.y + swell) / (2.2 * ms))));
+    float glint = dash * pools * sea * (1.0 - massA) * smoothstep(6.0, 30.0, dL) * (0.6 + 0.4 * noise(p / 60.0)) * moonPath;
 
     // Water lines along the shore.
     float gap = 7.0;
@@ -208,6 +215,7 @@ half4 main(float2 pixel) {
         builder.Uniforms["chalk"] = Amount(StyleEffectKind.Strokes);
         builder.Uniforms["tooth"] = Amount(StyleEffectKind.Paper);
         builder.Uniforms["shore"] = Amount(StyleEffectKind.Coast);
+        builder.Uniforms["moonScatter"] = (float)(int)style.MoonScatter;
         builder.Uniforms["cGround"] = Hex(look.Ground); builder.Uniforms["cSea"] = Hex(look.Sea);
         builder.Uniforms["cShadow"] = Hex(look.Shadow); builder.Uniforms["cLit"] = Hex(look.Lit);
         builder.Uniforms["cGlint"] = Hex(look.Glint);

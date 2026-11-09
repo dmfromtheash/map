@@ -70,6 +70,7 @@ public static partial class MapProjectStore
 
     private static int SchemaFor(MapDocument document) =>
         HasSeaMannersV48(document.Layers) || document.Checkpoints.Any(c => HasSeaMannersV48(c.Snapshot.Layers))
+        || HasMoonScatterV48(document.Style) || document.Checkpoints.Any(c => HasMoonScatterV48(c.Snapshot.Style))
             ? MapProjectFormat.SeaMannersSchemaVersion :
         !document.Isometric.IsDefault || document.Checkpoints.Any(c => !c.Snapshot.Isometric.IsDefault)
             ? MapProjectFormat.IsometricSchemaVersion :
