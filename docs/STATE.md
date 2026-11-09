@@ -9,7 +9,8 @@
 - Папка: `C:\Projects\Map` — единственная (DEC-071). Невлитое — ветки `archive/*` без папок.
 - Ветка `codex/stage-18-editable-areas`; `main` на GitHub = та же линия. Push: `git push origin codex/stage-18-editable-areas:main`.
   Последний HEAD — `git log -1`.
-- Версия 0.4.0 (тег `v0.4.0`); дальше — `CHANGELOG.md` → `[Unreleased]`. Теги/релизы — только по поручению.
+- Версия 0.5.0 (тег `v0.5.0`, 2026-11-09, архив с «Установить Map.exe» — `tools/release/setup`); дальше —
+  `CHANGELOG.md` → `[Unreleased]`. Теги/релизы — только по поручению.
   Схема `.mapproj` — **v47**; свободна v48.
 - Map.slnx тестовые проекты **не собирает** — перед `dotnet test --no-build` собрать тестовый проект.
 - Перед смоуками `dotnet build-server shutdown` — сервер сборки держит ~1 ГиБ, защита памяти смоуков иначе срабатывает.
