@@ -35,6 +35,10 @@ internal static class Program
             Views.UiTasks.Forget(
                 () => Task.Run(() => PngViewCache.TrimWhenIdle(Path.Combine(profileRoot, "ImageViewCache"))),
                 (operation, error) => log.Error(operation, error));
+            // The painter form maps of the mountains survive a restart (A2 step 4); stale files are deleted.
+            Views.UiTasks.Forget(
+                () => Task.Run(() => Map.Rendering.Styles.StyleRenderer.UseFormMapCache(Path.Combine(profileRoot, "StyleCache"))),
+                (operation, error) => log.Error(operation, error));
             BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
             log.Info("Clean shutdown.");
         }

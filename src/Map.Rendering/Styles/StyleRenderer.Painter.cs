@@ -165,6 +165,16 @@ public static partial class StyleRenderer
         catch (OperationCanceledException) { }
     }
 
+    /// <summary>
+    /// Keeps the painter form maps of the owner's mountains in <paramref name="folder"/> between runs (A2 step 4) and
+    /// deletes what is no longer current there (another recipe, over the size limit). Null turns the disk cache off.
+    /// </summary>
+    public static void UseFormMapCache(string? folder)
+    {
+        FormMapDiskCache.Folder = folder;
+        FormMapDiskCache.Trim();
+    }
+
     private static void WithImage(IStampImageSource stamps, string sha, Action<SKImage> build)
     {
         using var lease = stamps.Lease();

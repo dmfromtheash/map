@@ -30,6 +30,11 @@ public sealed partial class PaintPerfApplication
         foreach (var file in Directory.GetFiles(library, "*", SearchOption.AllDirectories))
             File.Copy(file, file.Replace(library, root, StringComparison.OrdinalIgnoreCase), true);
         _catalog = new AssetCatalog(root);
+        // As the app does with its profile: form maps on disk. MAP_STYLE_CACHE_DIR keeps them between two runs, so a
+        // second run measures the first styled frame after a restart (A2 step 4); without it the workspace starts empty.
+        var styleCache = System.Environment.GetEnvironmentVariable("MAP_STYLE_CACHE_DIR") ?? Path.Combine(_workspace, "StyleCache");
+        Map.Rendering.Styles.StyleRenderer.UseFormMapCache(styleCache);
+        _report.Environment["style-cache"] = $"{styleCache}: {(Directory.Exists(styleCache) ? Directory.GetFiles(styleCache).Length : 0)} files at start";
         var mountains = _catalog.Records.Where(r => r.Pack == "Мои горы").ToArray();
         if (mountains.Length == 0) throw new InvalidOperationException("The library copy has no «Мои горы».");
         _sets.Clear();

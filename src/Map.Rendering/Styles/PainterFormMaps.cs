@@ -41,10 +41,21 @@ internal sealed class PainterFormMaps
 
     private static Set Build(SKImage source, bool wet)
     {
+        // A2 step 4: a set built once is kept on disk (FormMapDiskCache), so the first styled frame after a restart
+        // reads it instead of building it again (~20 s for 1 500 owner mountains on USER, 2026-11-09).
+        var key = FormMapDiskCache.KeyOf(source, wet);
+        if (key is not null && FormMapDiskCache.TryLoad(key) is { Length: 5 } stored)
+            return new(stored[0], stored[1], stored[2], stored[3], stored[4]);
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
-        try { return BuildSet(source, wet); }
+        Set set;
+        try { set = BuildSet(source, wet); }
         finally { StyleDiagnostics.AddFormMap(System.Diagnostics.Stopwatch.GetTimestamp() - started); }
+        if (key is not null) FormMapDiskCache.Save(key, [set.Big, set.Facets, set.Wide, set.Features, set.Tensor]);
+        return set;
     }
+
+    /// <summary>Bumped whenever <see cref="BuildSet"/> paints different maps: files of another recipe are deleted.</summary>
+    internal const int Recipe = 1;
 
     private static Set BuildSet(SKImage source, bool wet)
     {
