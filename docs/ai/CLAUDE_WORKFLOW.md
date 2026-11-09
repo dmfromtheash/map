@@ -28,7 +28,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/ai/New-ClaudeTask.ps1 
 
 Без `-Stage`/`-Task` берётся «Следующий шаг» из `docs/STATE.md`. `-Stage` — идентификатор этапа
 дорожной карты (`R09`, `R07b`). Готовый промпт прочитать и дополнить последними словами владельца.
-Актуальный промпт сессии — один файл в `docs/ai/`; прежний — в `docs/archive/prompts/`.
+Актуальный промпт сессии — один файл в `docs/ai/`; прежний удаляется.
 
 ## Скрипты
 
@@ -41,7 +41,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/ai/New-ClaudeTask.ps1 
 | `tools/ai/Check-Scope.ps1 -Allowed …` | показывает изменённые файлы вне списка карточки этапа |
 | `tools/ai/New-ClaudeTask.ps1` | печатает промпт сессии (см. выше) |
 | `tools/ai/Test-ClaudeSetup.ps1` | проверяет наличие входных файлов, профилей моделей, навыков, `.mcp.json` |
-| `tools/ai/Get-RepositoryStatus.ps1 -AsJson` | разовый опрос GitHub по архивному списку кандидатов (сеть) |
 | `tools/ai/start-map.ps1` | ярлык владельца: перепубликует Release при новых исходниках и запускает Map |
 | `tools/ai/publish-local-r2r.ps1` | ручная перепубликация ярлыка (Map закрыт) |
 | `tools/ai/live/*` | живые проверки: `mapwin.ps1` (снимок окна), `mapinput.ps1`, RenderDoc, профилировщик VS |

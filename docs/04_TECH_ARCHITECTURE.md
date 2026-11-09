@@ -385,8 +385,7 @@ spatial index, встроенная виртуализация Avalonia и уж�
 (DEC-051) как запасной путь булевых операций: `Map.Core/Geometry/PolygonTopology.cs`,
 `Map.Rendering/RobustPathOps.cs`.
 
-Исторические профили и численные критерии Stage 13 —
-`docs/archive/stages/STAGE_13_LARGE_CANVAS_PERFORMANCE.md`; текущие цели скорости — DEC-035/036.
+Текущие цели скорости — DEC-035/036.
 
 ## Потоки
 

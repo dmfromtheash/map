@@ -29,7 +29,7 @@ description: Геометрия и локальное редактировани
 
 Библиотеки: NetTopologySuite 2.6.0 уже в продукте (DEC-051: `Map.Core/Geometry/PolygonTopology.cs`,
 `Map.Rendering/RobustPathOps.cs` — запасной путь, когда `SKPath.Op` отказывает). Clipper2 и
-LibTessDotNet — только кандидаты (архив `docs/archive/prompts/RESEARCH_AND_REPOSITORIES.md`);
+LibTessDotNet — только кандидаты;
 offset Clipper2 не заменяет модель переменной ширины.
 
 Перед новой зависимостью установи, чего не хватает существующей реализации. Если библиотека
