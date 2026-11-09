@@ -10,7 +10,12 @@ namespace Map.Rendering.Styles;
 /// </summary>
 internal static class PainterShader
 {
-    private const string Source = """
+    // VARIANT is replaced by the variant's number: each variant gets its own program and the compiler drops the
+    // other three branches. One program with a `uniform float variant` took 19 s to build on the first styled frame
+    // (Intel HD 630, 2026-11-01); the GPU compiler pays for all four bodies, five times inlined.
+    private const string VariantLine = "const float variant = VARIANT;";
+
+    internal const string Source = """
 uniform shader scene;
 uniform shader mbig;
 uniform shader mfacet;
@@ -21,7 +26,7 @@ uniform shader geo;
 uniform shader rsoft;
 uniform float2 origin;
 uniform float2 docPerPx;
-uniform float variant;
+const float variant = VARIANT;
 uniform float strength;
 uniform float3 paper;
 uniform float wetWash;
@@ -211,14 +216,29 @@ half4 main(float2 pixel) {
 }
 """;
 
-    private static readonly Lazy<SKRuntimeEffect> Effect = new(() => PainterFormMaps.Compile(Source));
+    private static readonly Lazy<SKRuntimeEffect>[] Effects = Enumerable.Range(1, 4)
+        .Select(v => new Lazy<SKRuntimeEffect>(() => PainterFormMaps.Compile(Source.Replace("VARIANT", v + ".0"))))
+        .ToArray();
+
+    /// <summary>The program with the variant as a uniform, as it was before 2026-11-09 — only for the test that
+    /// proves each specialised program paints the same pixels.</summary>
+    internal static SKRuntimeEffect CompileWithVariantUniform() =>
+        PainterFormMaps.Compile(Source.Replace(VariantLine, "uniform float variant;"));
 
     public static SKShader Build(SKImage scene, SKImage wetBig, SKImage big, SKImage facets, SKImage wide,
         SKImage wetFeatures, SKImage features, SKImage direction, SKImage geo, SKImage riverSoft,
-        SKPoint origin, SKPoint docPerPx, MapStyle style)
+        SKPoint origin, SKPoint docPerPx, MapStyle style, SKRuntimeEffect? effect = null)
     {
         var wet = style.Preset == MapStylePreset.WatercolorBigShapes;
-        var builder = new SKRuntimeShaderBuilder(Effect.Value);
+        var number = style.Preset switch
+        {
+            MapStylePreset.WatercolorBigShapes => 1,
+            MapStylePreset.UkiyoeSosakuHanga => 2,
+            MapStylePreset.PrintLetterpress => 3,
+            _ => 4,
+        };
+        effect ??= Effects[number - 1].Value;
+        var builder = new SKRuntimeShaderBuilder(effect);
         var children = new List<SKShader>();
         void Child(string name, SKImage image)
         {
@@ -230,14 +250,14 @@ half4 main(float2 pixel) {
         Child("geo", geo); Child("rsoft", riverSoft);
         builder.Uniforms["origin"] = new[] { origin.X, origin.Y };
         builder.Uniforms["docPerPx"] = new[] { docPerPx.X, docPerPx.Y };
-        var (variant, paper) = style.Preset switch
+        var paper = number switch
         {
-            MapStylePreset.WatercolorBigShapes => (1f, new[] { 249f, 246f, 238f }),
-            MapStylePreset.UkiyoeSosakuHanga => (2f, new[] { 236f, 226f, 200f }),
-            MapStylePreset.PrintLetterpress => (3f, new[] { 241f, 236f, 224f }),
-            _ => (4f, new[] { 242f, 237f, 226f }),
+            1 => new[] { 249f, 246f, 238f },
+            2 => new[] { 236f, 226f, 200f },
+            3 => new[] { 241f, 236f, 224f },
+            _ => new[] { 242f, 237f, 226f },
         };
-        builder.Uniforms["variant"] = variant;
+        if (effect.Uniforms.Contains("variant")) builder.Uniforms["variant"] = (float)number;
         builder.Uniforms["paper"] = paper.Select(v => v / 255).ToArray();
         builder.Uniforms["strength"] = (float)style.Strength;
         void Amount(string name, StyleEffectKind kind) => builder.Uniforms[name] = (float)style.Effect(kind).Effective;
