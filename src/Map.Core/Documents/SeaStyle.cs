@@ -13,6 +13,16 @@ public enum SeaManner
     DepthBands = 4,
     /// <summary>Глубина цветом и две линии пером.</summary>
     BandsAndLines = 5,
+    /// <summary>Штрих-тень у берега: level pen lines of uneven length hugging the coast; open water stays clear (schema v48).</summary>
+    ShoreHatch = 6,
+    /// <summary>Акварельный ореол: pigment pooled at the shore, running out into light paper (schema v48).</summary>
+    WatercolorHalo = 7,
+    /// <summary>Пена и прибой: a white rim fraying into lace, two fainter surf lines further out (schema v48).</summary>
+    Surf = 8,
+    /// <summary>Лёд: fast ice along the shore, cracked, and floes thinning out into dark water (schema v48).</summary>
+    Ice = 9,
+    /// <summary>Отмели и подводные камни: pale shoals with a dotted edge and dark rocks ringed with surf (schema v48).</summary>
+    Shoals = 10,
 }
 
 /// <summary>
@@ -58,8 +68,14 @@ public sealed record SeaStyle
         SeaManner.Engraved => new() { Manner = manner, Ink = "#FF2C4252", Shallow = "#FF9CB7BD", Middle = "#FF86A4B0", Deep = "#FF7393A5" },
         SeaManner.DepthBands => new() { Manner = manner, Ink = "#FF2E4455", Shallow = "#FF93B0B3", Middle = "#FF7F9FAE", Deep = "#FF587891" },
         SeaManner.BandsAndLines => new() { Manner = manner, Ink = "#FF2E4455", Shallow = "#FF95B2B5", Middle = "#FF84A3B0", Deep = "#FF62829A" },
+        // Owner's choice of 2026-11-09 (page «Вода и обрывы — 10 вариантов»): the colours of «Рябь штрихом».
+        SeaManner.ShoreHatch or SeaManner.WatercolorHalo or SeaManner.Surf or SeaManner.Ice or SeaManner.Shoals =>
+            new() { Manner = manner, Ink = "#FF2C4252", Shallow = "#FF9CB7BD", Middle = "#FF86A4B0", Deep = "#FF7393A5" },
         _ => new() { Manner = SeaManner.PenLines },
     };
+
+    /// <summary>A manner of schema v48: a map with it cannot be opened by a Map that knows only the first five.</summary>
+    public bool NeedsMannersSchema => Manner >= SeaManner.ShoreHatch;
 
     public static IReadOnlyList<(SeaManner Manner, string Title, string Description)> Manners { get; } =
     [
@@ -68,6 +84,11 @@ public sealed record SeaStyle
         (SeaManner.Engraved, "Рябь штрихом", "Короткие горизонтальные штрихи, как на гравюре: у берега гуще, к открытому морю редеют."),
         (SeaManner.DepthBands, "Глубина цветом", "Три спокойные полосы цвета — мелководье, середина, глубина — с мягкими краями акварели."),
         (SeaManner.BandsAndLines, "Цвет и две линии", "Полосы глубины, бледнее, и две линии пером у самого берега."),
+        (SeaManner.ShoreHatch, "Штрих-тень у берега", "Ровные линии пером разной длины прижаты к берегу, как тень суши на воде; открытое море чистое."),
+        (SeaManner.WatercolorHalo, "Акварельный ореол", "Краска густая у берега, растекается и сходит в светлую бумагу; у края — сухой затёк."),
+        (SeaManner.Surf, "Пена и прибой", "Белая кромка пены вдоль берега распадается в кружево; дальше — две прерывистые линии прибоя."),
+        (SeaManner.Ice, "Лёд: припай и льдины", "У берега сплошной лёд с трещинами, дальше льдины, редеющие к тёмной открытой воде."),
+        (SeaManner.Shoals, "Отмели и камни", "Светлые отмели с пунктирным краем и тёмные подводные камни в ободке пены недалеко от берега."),
     ];
 
     /// <summary>This style with every number inside its range and every colour readable.</summary>

@@ -170,6 +170,15 @@ public sealed record LandCliffStyle
     [
         new(OwnerMountainsId, "Как горы", "Как горы владельца: скала в его сине-грифельной гамме, контур пером, штриховка в тени, свет с северо-запада, холодная тень у подножия.",
             OwnerMountains, "#FF1F2A36", 2),
+        new("ice", "Ледяной", "Светлая гранёная стена с пластами льда и редкими прямыми линиями; тень у подножия бирюзовая, как под льдиной.",
+            OwnerMountains with
+            {
+                Height = 36, HeightVariation = .3, Gaps = .08, Facets = 1, FacetWidth = 18, FacetLines = .7,
+                Color = "#FFF3F8FA", ShadeColor = "#FF6FA3B8", Contrast = .7, Wash = .35, RimShadow = .1,
+                Hatching = .25, HatchSpacing = 6, HatchLength = 1, HatchSlant = 0, Strata = 2, InkWidth = 1.1,
+                Foot = CliffFoot.Ink, FootRoughness = .35, FootTicks = 0,
+                BaseShadow = .5, BaseShadowLength = .7, BaseShadowColor = "#FF3F8FA0",
+            }, "#FF1F2A36", 2),
         new("ink-sepia", "Тушь и сепия", "Жирные линии на углах, косая штриховка и сепия, густая под кромкой и тающая книзу (лист «ярусы 2»).",
             new LandCliffStyle(), "#FF1E1710", 2.6),
         new("ink-dots", "Тушь и точки", "Светлые грани в точках, тень под кромкой, волнистый низ с волосками (лист «ярусы 1»).",

@@ -45,6 +45,9 @@ public static partial class MapProjectStore
     {
         if (scene.Layers?.Any(l => l?.Sea is not null && l.Type != "BaseColor") == true)
             throw new MapProjectCorruptedException("Стиль моря бывает только у слоя фона.");
+        if (schema < MapProjectFormat.SeaMannersSchemaVersion && scene.Layers?.Any(l => l?.Sea?.Manner is { } name
+            && SeaMannerNames.FirstOrDefault(p => p.Value == name) is { Value: not null, Key: >= SeaManner.ShoreHatch }) == true)
+            throw new MapProjectCorruptedException("Моря «штрих-тень», «ореол», «пена», «лёд» и «отмели» требуют схему v48.");
         if (schema < MapProjectFormat.NoteOriginSchemaVersion && scene.Notes?.Any(n => n?.Origin is not null) == true)
             throw new MapProjectCorruptedException("Ключ города в заметках требует схему v46.");
         if (schema < MapProjectFormat.RiverEraSchemaVersion && scene.Layers?.Any(l => l?.Rivers?.Any(r => r?.Era is not null) == true) == true)
@@ -181,6 +184,11 @@ public static partial class MapProjectStore
         [SeaManner.Engraved] = "engraved",
         [SeaManner.DepthBands] = "depth-bands",
         [SeaManner.BandsAndLines] = "bands-and-lines",
+        [SeaManner.ShoreHatch] = "shore-hatch",
+        [SeaManner.WatercolorHalo] = "watercolour-halo",
+        [SeaManner.Surf] = "surf",
+        [SeaManner.Ice] = "ice",
+        [SeaManner.Shoals] = "shoals",
     };
 
     private static SeaDto ToSeaDto(SeaStyle sea) => new()

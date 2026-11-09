@@ -37,6 +37,11 @@ public sealed class SeaStyleRenderingTests
     [InlineData(SeaManner.Engraved)]
     [InlineData(SeaManner.DepthBands)]
     [InlineData(SeaManner.BandsAndLines)]
+    [InlineData(SeaManner.ShoreHatch)]
+    [InlineData(SeaManner.WatercolorHalo)]
+    [InlineData(SeaManner.Surf)]
+    [InlineData(SeaManner.Ice)]
+    [InlineData(SeaManner.Shoals)]
     public void Each_manner_changes_the_sea_and_leaves_the_land(SeaManner manner)
     {
         Assert.True(SeaShader.Available, SeaShader.LastError);

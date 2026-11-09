@@ -65,7 +65,12 @@ public static partial class MapProjectStore
 
     private static bool HasNoteOriginV46(IEnumerable<MapNote> notes) => notes.Any(n => n.Origin != NoteOrigin.Manual);
 
+    private static bool HasSeaMannersV48(IEnumerable<MapLayer> layers) =>
+        layers.OfType<BaseColorLayer>().Any(page => page.Sea is { NeedsMannersSchema: true });
+
     private static int SchemaFor(MapDocument document) =>
+        HasSeaMannersV48(document.Layers) || document.Checkpoints.Any(c => HasSeaMannersV48(c.Snapshot.Layers))
+            ? MapProjectFormat.SeaMannersSchemaVersion :
         !document.Isometric.IsDefault || document.Checkpoints.Any(c => !c.Snapshot.Isometric.IsDefault)
             ? MapProjectFormat.IsometricSchemaVersion :
         HasNoteOriginV46(document.Notes) || document.Checkpoints.Any(c => HasNoteOriginV46(c.Snapshot.Notes))

@@ -156,7 +156,10 @@ public static class MapProjectFormat
 
     /// <summary>Plan 2.3: the side and heights of the isometric view kept in the map.</summary>
     public const int IsometricSchemaVersion = 47;
-    public const int MaxSupportedSchemaVersion = IsometricSchemaVersion;
+
+    /// <summary>R12 (2026-11-09): the sea manners the owner chose from the Pinterest study — shore hatch, watercolour halo, surf, ice, shoals.</summary>
+    public const int SeaMannersSchemaVersion = 48;
+    public const int MaxSupportedSchemaVersion = SeaMannersSchemaVersion;
 
     /// <summary>
     /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry

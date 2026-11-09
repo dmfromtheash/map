@@ -29,4 +29,37 @@ public sealed class SeaStylePersistenceTests
         Assert.DoesNotContain("\"sea\"", new StreamReader(plainZip.GetEntry("scene.json")!.Open()).ReadToEnd(), StringComparison.Ordinal);
         Assert.Null(((BaseColorLayer)MapProjectStore.Open(plain).Document.Layers[0]).Sea);
     }
+
+    [Theory]
+    [InlineData(SeaManner.ShoreHatch)]
+    [InlineData(SeaManner.WatercolorHalo)]
+    [InlineData(SeaManner.Surf)]
+    [InlineData(SeaManner.Ice)]
+    [InlineData(SeaManner.Shoals)]
+    public void The_manners_of_2026_11_round_trip_in_v48_and_an_older_schema_may_not_carry_them(SeaManner manner)
+    {
+        using var workspace = new TempWorkspace();
+        var document = ProjectFixtures.Document("Море");
+        var sea = SeaStyle.For(manner) with { Strength = .8, Scale = 2 };
+        var styled = document.WithLayers([(BaseColorLayer)document.Layers[0] with { Sea = sea }, .. document.Layers.Skip(1)]);
+        var path = workspace.File("sea.mapproj");
+        MapProjectStore.Save(styled, path, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
+        using (var zip = ZipFile.OpenRead(path))
+        using (var json = JsonDocument.Parse(zip.GetEntry("manifest.json")!.Open()))
+            Assert.Equal(48, json.RootElement.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(sea, ((BaseColorLayer)MapProjectStore.Open(path).Document.Layers[0]).Sea);
+
+        // The same file relabelled as v47: an older schema with a newer sea is refused, not drawn as something else.
+        using (var zip = ZipFile.Open(path, ZipArchiveMode.Update))
+        {
+            var entry = zip.GetEntry("manifest.json")!;
+            string text;
+            using (var reader = new StreamReader(entry.Open())) text = reader.ReadToEnd();
+            entry.Delete();
+            using var writer = new StreamWriter(zip.CreateEntry("manifest.json").Open());
+            writer.Write(text.Replace("\"schemaVersion\":48", "\"schemaVersion\":47", StringComparison.Ordinal)
+                .Replace("\"schemaVersion\": 48", "\"schemaVersion\": 47", StringComparison.Ordinal));
+        }
+        Assert.ThrowsAny<Exception>(() => MapProjectStore.Open(path));
+    }
 }
