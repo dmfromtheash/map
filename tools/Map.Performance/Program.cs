@@ -85,6 +85,12 @@ else if (options.Profile == "area-beauty-sheet")
     foreach (var note in sheet.Notes) Console.WriteLine($"  {note.Key} = {note.Value}");
     foreach (var image in sheet.Images) Console.WriteLine($"  image {image}");
 }
+else if (options.Profile == "water-variants-sheet")
+{
+    var sheet = WaterVariantsSheet.Run(options); report = sheet; gatePassed = sheet.GatePassed;
+    foreach (var note in sheet.Notes) Console.WriteLine($"  {note.Key} = {note.Value}");
+    foreach (var image in sheet.Images) Console.WriteLine($"  image {image}");
+}
 else if (options.Profile == "native-area-rules")
 {
     var smoke = NativeAreaRulesSmoke.Run(options); report = smoke; gatePassed = smoke.GatePassed;
