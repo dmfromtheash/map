@@ -36,15 +36,37 @@ public sealed class PlacementAreaEcology(MapDocument document, PlacementArea are
         return false;
     }
 
+    /// <summary>Across a rock's reach the painted heights differ by a third of a tier: the same «steep» as the geography check.</summary>
+    public const double SteepRise = 0.33;
+
+    private readonly TerrainProbe _terrain = new(document);
+
     private bool HasCliff(double x, double y, double reach)
     {
         var land = TerrainOrder.LandAt(document, x, y);
-        if (land is null || land.EdgeStyle.Cliff.Height <= 0) return false;
-        for (var i = 0; i < 12; i++)
+        if (land is null) return false;
+        if (land.EdgeStyle.Cliff.Height > 0)
+            for (var i = 0; i < 12; i++)
+            {
+                var angle = i * Math.Tau / 12;
+                var neighbour = TerrainOrder.LandAt(document, x + Math.Cos(angle) * reach, y + Math.Sin(angle) * reach);
+                if (land.Level > (neighbour?.Level ?? 0)) return true;
+            }
+        return IsSteep(land, x, y, reach);
+    }
+
+    // R11c: a steep place of the land's own height field (R22), with no tier edge near. Only heights the owner
+    // painted count: opposite points of the same land, so a tier step with its cliff switched off stays flat.
+    private bool IsSteep(LandLayer land, double x, double y, double reach)
+    {
+        if (land.ReliefTiles.TileCount == 0) return false;
+        for (var i = 0; i < 6; i++)
         {
             var angle = i * Math.Tau / 12;
-            var neighbour = TerrainOrder.LandAt(document, x + Math.Cos(angle) * reach, y + Math.Sin(angle) * reach);
-            if (land.Level > (neighbour?.Level ?? 0)) return true;
+            double dx = Math.Cos(angle) * reach, dy = Math.Sin(angle) * reach;
+            var (near, low) = _terrain.At(x - dx, y - dy);
+            var (far, high) = _terrain.At(x + dx, y + dy);
+            if (ReferenceEquals(near, land) && ReferenceEquals(far, land) && Math.Abs(high - low) >= SteepRise) return true;
         }
         return false;
     }

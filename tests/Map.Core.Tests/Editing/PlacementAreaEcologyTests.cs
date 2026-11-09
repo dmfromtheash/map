@@ -85,4 +85,49 @@ public sealed class PlacementAreaEcologyTests
         Assert.True(new PlacementAreaEcology(Document(land with { EdgeStyle = land.EdgeStyle with { Cliff = land.EdgeStyle.Cliff with { Height = 0 } } }), area, false).Blocks(slot, At(245, 128)));
         Assert.True(new PlacementAreaEcology(Document(), area, false).Blocks(slot, At(245, 128)));
     }
+
+    [Fact]
+    public void Rocks_stand_on_the_steep_part_of_the_painted_heights_and_the_kept_slots_do_not_move()
+    {
+        // One land with no tier edge inside the area: low in the west, high in the east, a ramp of 100 px between.
+        var size = TileMap.TileSize; var count = (1200 / size) + 1;
+        var full = Enumerable.Repeat((byte)255, size * size).ToArray();
+        var geometry = TileMap.Empty(1); var relief = TileMap.Empty(1);
+        for (var ty = 0; ty < count; ty++)
+        for (var tx = 0; tx < count; tx++)
+        {
+            geometry = geometry.With(new(tx, ty), full);
+            var heights = new byte[size * size];
+            for (var py = 0; py < size; py++)
+            for (var px = 0; px < size; px++)
+                heights[(py * size) + px] = (byte)Math.Clamp(((tx * size) + px - 550) * 255 / 100, 0, 255);
+            relief = relief.With(new(tx, ty), heights);
+        }
+        var flat = new LandLayer(LayerId.New(), "Land", true, false, 1, geometry, new());
+        var raised = flat with { ReliefTiles = relief };
+        var area = Area(); var sampler = new PlacementAreaSampler(area);
+        var ecology = new PlacementAreaEcology(Document(raised), area, false);
+        var none = new PlacementAreaEcology(Document(flat), area, false);
+        var slopeTotal = 0; var slopeKept = 0; var flatTotal = 0; var flatKept = 0;
+        var all = new Dictionary<ObjectId, SceneObject>();
+        foreach (var span in PlacementAreaGeometry.Coverage(area.Nodes))
+        for (var x = span.MinX; x <= span.MaxX; x++)
+        foreach (var slot in sampler.Slots(x, span.Y))
+        {
+            var item = sampler.Item(slot); var foot = PlacementAreaRuleCheck.Foot(item);
+            var kept = !ecology.Blocks(slot, item);
+            all[item.Id] = item;
+            Assert.True(none.Blocks(slot, item));
+            if (foot.X is > 575 and < 625) { slopeTotal++; if (kept) slopeKept++; }
+            if (foot.X is < 500 or > 700) { flatTotal++; if (kept) flatKept++; }
+        }
+        Assert.True(slopeTotal > 20 && flatTotal > 100, $"slope={slopeTotal}, flat={flatTotal}");
+        Assert.Equal(slopeTotal, slopeKept);
+        Assert.Equal(0, flatKept);
+
+        // The filter only removes: every rock it keeps is the very object the area places without it.
+        var rocks = PlacementAreaPlanner.Preview(area, ecology: ecology);
+        Assert.NotEmpty(rocks);
+        Assert.All(rocks, rock => Assert.Equal(all[rock.Id], rock));
+    }
 }
