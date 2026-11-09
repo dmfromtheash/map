@@ -208,11 +208,16 @@ half4 paintPixel(float2 pixel) {
 half4 main(float2 pixel) {
     // The mockups' 50% images filter the 100% print. Integrate that same document
     // grain instead of taking every other speck (which aliases the lithographic stone).
-    if (max(docPerPx.x,docPerPx.y) > 1.001) {
-        return (paintPixel(pixel+float2(-0.25,-0.25))+paintPixel(pixel+float2(0.25,-0.25))
-              +paintPixel(pixel+float2(-0.25,0.25))+paintPixel(pixel+float2(0.25,0.25))) * 0.25;
+    // One call site, so the program carries paintPixel once (A2 step 2): four calls were inlined four times.
+    // The sum runs in the order of the former (a+b+c+d)*0.25, so the bytes are the same.
+    bool fine = max(docPerPx.x,docPerPx.y) > 1.001;
+    half4 sum = half4(0);
+    for (int i = 0; i < 4; i++) {
+        if (i > 0 && !fine) { break; }
+        float2 o = fine ? float2(i == 0 || i == 2 ? -0.25 : 0.25, i < 2 ? -0.25 : 0.25) : float2(0);
+        sum += paintPixel(pixel + o);
     }
-    return paintPixel(pixel);
+    return fine ? sum * 0.25 : sum;
 }
 """;
 
