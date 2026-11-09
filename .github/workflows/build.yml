@@ -1,19 +1,27 @@
 name: build
 
-# Independent check of every push: Release build of Map.slnx and the five unit test projects
-# on a clean Windows runner (DEC-050). Native window smokes (tools/Map.Performance) stay local.
-# Map.Core.Tests and Map.Assets.Tests gate the run directly. Rendering, Persistence and Presentation
-# carry long-standing failures (docs/00_STAGE_PROTOCOL.md §J): they run fully, and
-# tools/ci/Test-KnownFailures.ps1 compares the .trx results with tests/KnownFailures.txt — any failure
-# NOT in that list turns the job red (R00, DEC-052). A known failure that starts passing is reported
-# as a notice so the list can be trimmed.
+# Checks on a clean Windows runner (DEC-086, replaces the every-push rule of DEC-050/052).
+# Runs only for code on main: a push to the work branch is the same commit, and a commit that changes
+# only documents, prompts or memory changes nothing to build. Native window smokes, speed and looks
+# stay local (tools/Map.Performance on this PC and on USER).
+#   quick (~5 min) — Release build of Map.slnx and of the smoke tools, Core/Assets/Persistence tests.
+#                    Claude waits for this one before calling the work done.
+#   full (~25 min) — Rendering and Presentation tests. Runs in parallel; looked at before closing a
+#                    package and at the start of the next session. A release tag waits for both.
+# Tests run through tools/ci/Invoke-TestProject.ps1: known-failure list, one retry of up to 3 failed
+# tests (a test passing on retry is a ::warning:: to fix, not red).
 on:
   push:
-    branches: ["**"]
-  pull_request:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+      - 'memory/**'
+      - '.claude/**'
+      - 'tools/ai/**'
+      - '**/*.md'
   workflow_dispatch:
+  workflow_call:
 
-# Least privilege for the job token (R00, agent-security note 2026-10-21): the build only reads the repo.
 permissions:
   contents: read
 
@@ -22,9 +30,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
+  quick:
     runs-on: windows-latest
-    timeout-minutes: 40
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -36,33 +44,51 @@ jobs:
       - name: Build Release (Map.slnx)
         run: dotnet build .\Map.slnx -c Release -nologo
 
-      - name: Unit tests (gate)
+      - name: Build smoke and live-check tools
+        run: |
+          dotnet build .\tools\Map.Performance\Map.Performance.csproj -c Release -nologo
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          dotnet build .\tools\Map.LiveCheck\Map.LiveCheck.csproj -c Release -nologo
+
+      - name: Tests Core, Assets, Persistence
         shell: pwsh
         run: |
-          foreach ($p in 'Map.Core.Tests','Map.Assets.Tests') {
-            dotnet test "tests\$p\$p.csproj" -c Release -nologo --logger "trx;LogFileName=$p.trx" --results-directory artifacts\test-results
+          foreach ($p in 'Map.Core.Tests','Map.Assets.Tests','Map.Persistence.Tests') {
+            powershell -NoProfile -ExecutionPolicy Bypass -File tools/ci/Invoke-TestProject.ps1 -Project $p
             if ($LASTEXITCODE -ne 0) { Write-Host "::error::$p failed"; exit 1 }
           }
-
-      - name: Unit tests (known failures filtered)
-        shell: pwsh
-        run: |
-          foreach ($p in 'Map.Rendering.Tests','Map.Persistence.Tests','Map.Presentation.Tests') {
-            $testSettings = @()
-            if ($p -eq 'Map.Presentation.Tests') { $testSettings = @('--','xUnit.ParallelizeTestCollections=false') }
-            dotnet test "tests\$p\$p.csproj" -c Release -nologo --logger "trx;LogFileName=$p.trx" --results-directory artifacts/test-results @testSettings
-            Write-Host "$p exit code $LASTEXITCODE (judged by Test-KnownFailures)"
-            if (-not (Test-Path -LiteralPath "artifacts/test-results/$p.trx")) {
-              Write-Host "::error::$p did not produce a test report"; exit 1
-            }
-          }
-          powershell -NoProfile -ExecutionPolicy Bypass -File tools/ci/Test-KnownFailures.ps1 -ResultsDir artifacts/test-results -KnownList tests/KnownFailures.txt
-          if ($LASTEXITCODE -ne 0) { Write-Host "::error::new test failures outside tests/KnownFailures.txt"; exit 1 }
 
       - name: Test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-results
+          name: test-results-quick
+          path: artifacts/test-results
+          if-no-files-found: ignore
+
+  full:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: .NET SDK from global.json
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Tests Rendering, Presentation
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools/ci/Invoke-TestProject.ps1 -Project Map.Rendering.Tests
+          $r = $LASTEXITCODE
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools/ci/Invoke-TestProject.ps1 -Project Map.Presentation.Tests -RunSettings 'xUnit.ParallelizeTestCollections=false'
+          if ($r -ne 0 -or $LASTEXITCODE -ne 0) { Write-Host "::error::full tests failed"; exit 1 }
+
+      - name: Test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-full
           path: artifacts/test-results
           if-no-files-found: ignore

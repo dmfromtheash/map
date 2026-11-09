@@ -1,6 +1,6 @@
 name: release
 
-# Pushing a tag v<version> (or running by hand) builds the downloadable zip with
+# Pushing a tag v<version> (or running by hand) runs the build checks, then builds the downloadable zip with
 # tools/release/publish-release.ps1 and attaches it to the GitHub release of that tag (DEC-050).
 on:
   push:
@@ -11,7 +11,12 @@ permissions:
   contents: write
 
 jobs:
+  # The zip people download is built only after the quick and the full checks pass (DEC-086).
+  checks:
+    uses: ./.github/workflows/build.yml
+
   release:
+    needs: checks
     runs-on: windows-latest
     timeout-minutes: 40
     steps:
