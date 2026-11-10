@@ -882,7 +882,10 @@ public static class Ui
             var minimumWidth = Math.Max(MinimumItemWidth, visible.Max(c => c.DesiredSize.Width));
             _columns = Math.Min(visible.Length, Math.Min(MaxColumns,
                 Math.Max(1, (int)Math.Floor((width + Gap) / (minimumWidth + Gap)))));
-            _rowHeights = new double[(visible.Length + _columns - 1) / _columns];
+            // The same number of rows, filled evenly: four choices that fit three in a row stand 2 + 2, not 3 + 1.
+            var rows = (visible.Length + _columns - 1) / _columns;
+            _columns = (visible.Length + rows - 1) / rows;
+            _rowHeights = new double[rows];
             var cellWidth = Math.Max(0, (width - Gap * (_columns - 1)) / _columns);
             for (var i = 0; i < visible.Length; i++)
             {
