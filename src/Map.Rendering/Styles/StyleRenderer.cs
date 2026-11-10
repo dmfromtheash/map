@@ -288,10 +288,19 @@ public static partial class StyleRenderer
         if (sceneSurface is null) return null;
         sceneSurface.Canvas.Clear(SKColors.Transparent);
         sceneSurface.Canvas.SetMatrix(paddedMatrix);
+        var split = measure && options.Stats is { } before
+            ? (before.LandMilliseconds, before.WaterMilliseconds, before.ObjectsMilliseconds, before.TerrainMilliseconds) : default;
         drawScene(sceneSurface.Canvas, bare, options.ForStyleScene(visible,
             exactTerrain: print || (gutter > 0 && Lighting.LightingRenderer.Applies(bare, options))));
         var scene = sceneSurface.Snapshot();
-        if (measure) { sample = sample with { SceneMs = Elapsed(gpu, stage) }; stage = Stage(gpu); }
+        if (measure)
+        {
+            sample = sample with { SceneMs = Elapsed(gpu, stage) };
+            if (options.Stats is { } after)
+                sample = sample with { SceneSplit = $"land {after.LandMilliseconds - split.Item1:0}, water {after.WaterMilliseconds - split.Item2:0}, " +
+                    $"objects {after.ObjectsMilliseconds - split.Item3:0}, terrain {after.TerrainMilliseconds - split.Item4:0}" };
+            stage = Stage(gpu);
+        }
 
         // Print has its own mountain tensor/line/facet buffers. Do not allocate the unused ink
         // tensor and scene blurs as well (especially the F16 tensor in the camera gutter).

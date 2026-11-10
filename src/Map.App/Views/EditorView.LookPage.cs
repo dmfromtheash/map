@@ -299,9 +299,20 @@ public sealed partial class EditorView
 
     private void QueueLookPreviews()
     {
+        // The map changed (a style or a light was chosen): the pictures still being drawn for the old map stop now, so
+        // the map's new frame has the cores; they go on, for what changed only, once that frame is finished.
+        var pause = Environment.GetEnvironmentVariable("MAP_LOOK_PREVIEW_PAUSE") != "0"; // "0": the old way, for the A/B only
+        if (pause && !ReferenceEquals(_lookPreviewFor, _editor.Session.Document))
+        {
+            _lookPreviewWork?.Cancel();
+            _lookPreviewSignature = null;
+        }
         _lookPreviewTimer ??= new DispatcherTimer(TimeSpan.FromMilliseconds(350), DispatcherPriority.Background, (_, _) =>
         {
             _lookPreviewTimer!.Stop();
+            // The pictures wait for the map: drawn while the map's own frame of a just chosen style was built, they
+            // took the cores it needed (11-12 style frames during the first «Акварель», 5 s on DM; R09 А2 step 5).
+            if (Environment.GetEnvironmentVariable("MAP_LOOK_PREVIEW_PAUSE") != "0" && !_canvas.FrameSettled) { _lookPreviewTimer.Start(); return; }
             StartLookPreviews();
         });
         _lookPreviewTimer.Stop();
@@ -323,13 +334,20 @@ public sealed partial class EditorView
         var seaArea = PreviewArea(width, height, seaScale);
         var signature = $"{System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(document)}|{styleArea.Left:0}|{styleArea.Top:0}|{styleScale:0.000}";
         if (signature == _lookPreviewSignature) return;
+        // Another piece of the map or another scale: every picture is drawn again; otherwise only the pictures whose
+        // own map changed (a style click leaves the pictures of the other styles as they are).
+        var area = signature[(signature.IndexOf('|') + 1)..];
+        if (_lookPreviewArea != area) { _lookPreviewArea = area; _lookPreviewDocuments.Clear(); }
         _lookPreviewSignature = signature;
+        _lookPreviewFor = document;
         _lookPreviewWork?.Cancel();
         var work = _lookPreviewWork = new CancellationTokenSource();
         var token = work.Token;
         var stamps = _editor.StampImages;
         var jobs = _lookTiles.Keys.Where(k => k is not ("none" or "sea-none")).Select(k => (Key: k, Document: CardDocument(document, k),
-            Sea: k.StartsWith("sea-", StringComparison.Ordinal))).ToArray();
+            Sea: k.StartsWith("sea-", StringComparison.Ordinal)))
+            .Where(job => !(_lookPreviews.ContainsKey(job.Key) && _lookPreviewDocuments.TryGetValue(job.Key, out var drawn) && SameCard(drawn, job.Document)))
+            .ToArray();
         UiTasks.Forget(this, () => Task.Run(() =>
         {
             foreach (var (key, cardDocument, sea) in jobs)
@@ -344,11 +362,21 @@ public sealed partial class EditorView
                     var bitmap = ToBitmap(pixels, width, height);
                     if (_lookPreviews.Remove(key, out var old)) old.Dispose();
                     _lookPreviews[key] = bitmap;
+                    _lookPreviewDocuments[key] = cardDocument;
                     if (_lookTiles.TryGetValue(key, out var tile)) tile.Picture.Background = new ImageBrush(bitmap) { Stretch = Stretch.UniformToFill };
                 }, DispatcherPriority.Background);
             }
         }, token));
     }
+
+    private readonly Dictionary<string, MapDocument> _lookPreviewDocuments = [];
+    private string? _lookPreviewArea;
+    private MapDocument? _lookPreviewFor;
+
+    /// <summary>Two maps of a picture draw the same: the same layers, style, light and page.</summary>
+    private static bool SameCard(MapDocument drawn, MapDocument wanted) =>
+        ReferenceEquals(drawn.Layers, wanted.Layers) && Equals(drawn.Style, wanted.Style)
+        && Equals(drawn.Lighting, wanted.Lighting) && drawn.Canvas == wanted.Canvas;
 
     private void DisposeLookPage()
     {
@@ -358,5 +386,6 @@ public sealed partial class EditorView
         _styleAssetWork?.Cancel();
         foreach (var bitmap in _lookPreviews.Values) bitmap.Dispose();
         _lookPreviews.Clear();
+        _lookPreviewDocuments.Clear();
     }
 }

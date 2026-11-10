@@ -36,5 +36,7 @@ public readonly record struct StyleFrameSample(double SceneMs, double TensorMs, 
     public int PendingDetails { get; init; }
     public int PendingHex { get; init; }
     public int MissingAssets { get; init; }
+    /// <summary>Inside the scene (R09 А2 step 5): land, water, objects and terrain as the renderer counts them (CPU).</summary>
+    public string? SceneSplit { get; init; }
     public double PassMs => TensorMs + SoftMs + WideMs + PrintMs + ShaderMs + CompositeMs;
 }

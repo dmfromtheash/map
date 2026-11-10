@@ -61,7 +61,11 @@ public sealed partial class PaintPerfApplication
         // stages wait for the GPU, so their sum is the style's own cost and the rest of the wait is everything else.
         async Task FirstStyles(string label)
         {
-            foreach (var preset in new[] { MapStylePreset.WatercolorBigShapes, MapStylePreset.OldMapBlaeu, MapStylePreset.CharcoalVineStump })
+            // MAP_LOOK_ORDER=blaeu: Blaeu first - tells the cost of the first styled frame from the cost of Watercolor.
+            MapStylePreset[] order = System.Environment.GetEnvironmentVariable("MAP_LOOK_ORDER") == "blaeu"
+                ? [MapStylePreset.OldMapBlaeu, MapStylePreset.WatercolorBigShapes, MapStylePreset.CharcoalVineStump]
+                : [MapStylePreset.WatercolorBigShapes, MapStylePreset.OldMapBlaeu, MapStylePreset.CharcoalVineStump];
+            foreach (var preset in order)
             {
                 Map.Rendering.Styles.StyleDiagnostics.Samples.Clear();
                 var (form0, height0, coast0) = (Map.Rendering.Styles.StyleDiagnostics.FormMapMs,
@@ -70,6 +74,8 @@ public sealed partial class PaintPerfApplication
                 Map.Rendering.Styles.StyleDiagnostics.CollectFrames = true;
                 _editor.ApplyStylePreset(preset);
                 var (first, done) = await UntilShown();
+                // MAP_LOOK_CAPTURE=1: the window as shown after the click, to compare A/B pixel for pixel.
+                if (System.Environment.GetEnvironmentVariable("MAP_LOOK_CAPTURE") == "1") await Capture("style-" + preset);
                 Map.Rendering.Styles.StyleDiagnostics.MeasureStages = false;
                 Map.Rendering.Styles.StyleDiagnostics.CollectFrames = false;
                 var s = Map.Rendering.Styles.StyleDiagnostics.Samples.ToArray();
@@ -78,7 +84,8 @@ public sealed partial class PaintPerfApplication
                     $"frames {s.Length} (reused {s.Count(x => x.Reused)}); sum: scene {s.Sum(x => x.SceneMs):0}, tensor {s.Sum(x => x.TensorMs):0}, " +
                     $"soft {s.Sum(x => x.SoftMs):0}, wide {s.Sum(x => x.WideMs):0}, print {s.Sum(x => x.PrintMs):0}, shader {s.Sum(x => x.ShaderMs):0}, " +
                     $"composite {s.Sum(x => x.CompositeMs):0} ms; longest pass {s.Max(x => x.PassMs):0} ms; " +
-                    $"pending terrain/details max {s.Max(x => x.PendingTerrain)}/{s.Max(x => x.PendingDetails)}, missing assets max {s.Max(x => x.MissingAssets)}";
+                    $"pending terrain/details max {s.Max(x => x.PendingTerrain)}/{s.Max(x => x.PendingDetails)}, missing assets max {s.Max(x => x.MissingAssets)}; " +
+                    $"scene split: {string.Join(" | ", s.Where(x => x.SceneSplit is not null).Select(x => x.SceneSplit))}";
                 // Inside «print»: one-time builds (CPU time summed over threads); inside «shader»: the same pass again.
                 _report.Environment[label + preset + "/split"] =
                     $"form maps {Map.Rendering.Styles.StyleDiagnostics.FormMapMs - form0:0} ms, height maps {Map.Rendering.Styles.StyleDiagnostics.HeightMapMs - height0:0} ms, " +

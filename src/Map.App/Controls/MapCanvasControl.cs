@@ -38,6 +38,13 @@ public sealed partial class MapCanvasControl : Control
     }
 
     public long CompletedSceneRevision => System.Threading.Interlocked.Read(ref _completedSceneRevision);
+
+    /// <summary>
+    /// The map on screen is finished: the last requested frame is drawn, with nothing left for a later one. Background
+    /// work that competes with the map (the pictures of «Вид») waits for it (R09 А2 step 5).
+    /// </summary>
+    public bool FrameSettled => CompletedSceneRevision >= System.Threading.Interlocked.Read(ref _sceneRevision)
+        && !LastTerrainRefinementPending && !LastDetailTilesPending && !LastFrameFastTerrain;
     private sealed record GpuCapture(long Revision, System.Threading.Tasks.TaskCompletionSource<SKBitmap> Completion);
     private GpuCapture? _gpuCapture;
 
