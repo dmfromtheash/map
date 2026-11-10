@@ -37,7 +37,7 @@ public sealed partial class EditorView
     private static readonly Color CardBase = Color.Parse("#211912");
     private static readonly Color TileBase = Color.Parse("#241A13");
 
-    private readonly List<(string Group, string Name, string Title, Func<(bool Fits, string Note)> Fit)> _worldEntries = [];
+    private readonly List<(string Group, string Name, string Title, Func<(bool Fits, string Note)> Fit, Action Open)> _worldEntries = [];
 
     private static Color AccentOf(EditorWorkspace workspace) => workspace switch
     {

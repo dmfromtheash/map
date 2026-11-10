@@ -131,8 +131,7 @@ public sealed partial class NativeEditorScenarioApplication
 
         // DEC-080: the «Внутри» card opens on every section tab, the column tabs and the main rail tools, and is drawn.
         var cards = 0; var badCards = new List<string>();
-        foreach (var name in new[] { "WorkspaceDrawTab", "WorkspaceObjectsTab", "WorldSectionButton", "WorkspaceAppearanceTab",
-                     "RightTabProperties", "RightTabContent", "RightTabLayers",
+        foreach (var name in new[] { "RightTabProperties", "RightTabContent", "RightTabLayers",
                      "SelectToolButton", "LandToolButton", "RiverToolButton", "RoadToolButton", "AssetsLibraryButton" })
         {
             var target = Find<Control>(name);
@@ -158,7 +157,43 @@ public sealed partial class NativeEditorScenarioApplication
             ToolTip.SetIsOpen(target, false); await Settle();
         }
         foreach (var bad in badCards) Console.WriteLine("inside card: " + bad);
-        Console.WriteLine($"inside cards drawn: {cards}/12");
-        _report.Checks["inside-card-on-tabs-and-tools"] = badCards.Count == 0;
+        Console.WriteLine($"inside cards drawn: {cards}/8");
+        _report.Checks["inside-card-on-column-tabs-and-tools"] = badCards.Count == 0;
+
+        // DEC-093: a section tab opens its navigation - the list, the show drawn by the renderer, the functions. The
+        // editor gets a catalog of the owner's mountains (DEC-076), which the «Ассеты» show places one by one.
+        var navCatalog = new Map.Assets.AssetCatalog(Path.Combine(_workspace, "nav-catalog"));
+        navCatalog.ImportSet([.. Enumerable.Range(1, 4).Select(i => OwnerMountainFixtures.Path(i))], OwnerMountainFixtures.Names[0],
+            new Map.Assets.AssetImportOptions(), DateTimeOffset.UnixEpoch);
+        OpenEditor(_editor.Session.Document, null, navCatalog); await Settle();
+        var navBad = new List<string>();
+        foreach (var workspace in new[] { EditorWorkspace.Draw, EditorWorkspace.Objects, EditorWorkspace.World, EditorWorkspace.Appearance })
+        {
+            var nav = _view.OpenSectionNavForSmoke(workspace);
+            for (var i = 0; i < 20 && nav is not Control { Bounds.Width: > 0 }; i++) await Settle();
+            if (nav is not Border { Name: "SectionNav" } panel) { navBad.Add(workspace + ": нет панели"); continue; }
+            var rows = panel.GetVisualDescendants().OfType<Button>().Count(b => b.Name?.StartsWith("SectionNavItem_", StringComparison.Ordinal) == true);
+            var chips = panel.GetVisualDescendants().OfType<Button>().Count(b => b.Name?.StartsWith("SectionNavFunction_", StringComparison.Ordinal) == true);
+            // The show is drawn in the background: wait for its first frame where the entry has one.
+            var show = panel.GetVisualDescendants().OfType<Border>().FirstOrDefault(b => b.Name == "SectionNavShow");
+            for (var i = 0; i < 80 && show?.Child is Image { Source: null }; i++) await Task.Delay(100);
+            var showDrawn = show is null || show.Child is Image { Source: not null };
+            var top = TopLevel.GetTopLevel(panel)!;
+            var inside = panel.TranslatePoint(new Point(0, 0), top) is { } at && at.Y + panel.Bounds.Height <= top.ClientSize.Height + 1;
+            Console.WriteLine($"section nav {workspace}: {rows} entries, {chips} functions, show {(show is null ? "none" : showDrawn ? "drawn" : "missing")}, {panel.Bounds.Width:0}x{panel.Bounds.Height:0}");
+            if (rows == 0 || chips == 0 && workspace != EditorWorkspace.World || !showDrawn || !inside) navBad.Add($"{workspace}: {rows}/{chips}/{showDrawn}/{inside}");
+            PanelAudit.Save(panel, Path.ChangeExtension(Options.OutputPath, $"section-nav-{workspace}.png"));
+            _view.CloseSectionNavForSmoke(); await Settle();
+        }
+        // A function chip does what it says: «Земля → Круг» takes the land tool with the ellipse brush.
+        if (_view.OpenSectionNavForSmoke(EditorWorkspace.Draw) is Control drawNav)
+        {
+            await Settle();
+            var circle = drawNav.GetVisualDescendants().OfType<Button>().FirstOrDefault(b => b.Name == "SectionNavFunction_Круг");
+            circle?.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent)); await Settle();
+            if (circle is null || _editor.ActiveTool != EditorTool.Land || _editor.ActiveBrushPreset != BrushPresetKind.Ellipse) navBad.Add("Земля → Круг не сработал");
+        }
+        foreach (var bad in navBad) Console.WriteLine("section nav: " + bad);
+        _report.Checks["section-nav-on-tabs"] = navBad.Count == 0;
     }
 }

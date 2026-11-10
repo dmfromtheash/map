@@ -197,7 +197,7 @@ public sealed partial class NativeEditorScenarioApplication : Application
         if (Options.Profile == "native-color-presets")
         { _report.Required = ColorPresetRequired; _report.Scenario = "color-presets"; _window.Height = 1380; }
         if (Options.Profile == "native-standard-panel-shots")
-        { _report.Required = ["standard-panel-shots-saved"]; _report.Scenario = "standard-panel-shots"; }
+        { _report.Required = ["standard-panel-shots-saved", "section-nav-on-tabs"]; _report.Scenario = "standard-panel-shots"; }
         if (Options.Profile == "native-panel-shots")
         { _report.Required = ["panel-shots-saved"]; _report.Scenario = "panel-shots"; _window.Height = 1380; }
         if (Options.Profile == "native-ui-shots")

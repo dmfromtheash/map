@@ -36,7 +36,8 @@ public sealed partial class EditorView
         void Tab(EditorWorkspace workspace, string name, string title)
         {
             var tab = Ui.TextButton(name, title, () => ShowWorkspace(workspace, openWorldList: true), "workspace-tab");
-            AttachInsideCard(tab, () => WorkspaceCard(workspace), Avalonia.Controls.PlacementMode.Bottom);
+            // Pointing at a section opens its navigation: search, list, the show and the functions (DEC-093).
+            AttachSectionNav(tab, workspace, row);
             _workspaceTabs[workspace] = tab;
             row.Children.Add(tab);
         }

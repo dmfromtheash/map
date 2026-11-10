@@ -50,7 +50,7 @@ internal static class PanelAudit
         return root.GetVisualDescendants().OfType<Control>()
             // Template parts (scroll and spin arrows) and the headers of folding blocks carry their own words.
             .Where(c => c is Button or Avalonia.Controls.Primitives.ToggleButton or ComboBox && c.IsEffectivelyVisible
-                && ToolTip.GetTip(c) is null or "" && c.Name is not "ExpanderHeader" && c.Name?.StartsWith("PART_", StringComparison.Ordinal) != true)
+                && ToolTip.GetTip(c) is null or "" && c.Name is not "ExpanderHeader" && !c.Classes.Contains("section-nav") && c.Name?.StartsWith("PART_", StringComparison.Ordinal) != true)
             .Select(c => $"{(string.IsNullOrEmpty(c.Name) ? c.GetType().Name : c.Name)} «{Label(c) ?? "без текста"}»")
             .Distinct().ToList();
     }

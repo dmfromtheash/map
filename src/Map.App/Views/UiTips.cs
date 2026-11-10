@@ -213,7 +213,8 @@ public static class UiTips
     {
         Control.LoadedEvent.AddClassHandler<Control>((control, _) =>
         {
-            if (ToolTip.GetTip(control) is null && For(control.Name) is { } tip) ToolTip.SetTip(control, tip);
+            // A section tab's explanation is its navigation panel (DEC-093); a tip over it would cover the search field.
+            if (ToolTip.GetTip(control) is null && !control.Classes.Contains("section-nav") && For(control.Name) is { } tip) ToolTip.SetTip(control, tip);
         }, RoutingStrategies.Direct);
     }
 }

@@ -92,11 +92,13 @@ public sealed partial class EditorViewModel
         { Style = document.Style, Lighting = document.Lighting };
     }
 
-    private static LandLayer Land(LandEdgeStyle style, Func<int, int, bool> inside)
+    private static LandLayer Land(LandEdgeStyle style, Func<int, int, bool> inside) => Land(style, inside, CreateDemoWidth, CreateDemoHeight);
+
+    private static LandLayer Land(LandEdgeStyle style, Func<int, int, bool> inside, int width, int height)
     {
         var tiles = TileMap.Empty(1);
-        for (var tx = 0; tx * TileMap.TileSize < CreateDemoWidth; tx++)
-            for (var ty = 0; ty * TileMap.TileSize < CreateDemoHeight; ty++)
+        for (var tx = 0; tx * TileMap.TileSize < width; tx++)
+            for (var ty = 0; ty * TileMap.TileSize < height; ty++)
             {
                 var bytes = new byte[TileMap.TileSize * TileMap.TileSize];
                 var any = false;

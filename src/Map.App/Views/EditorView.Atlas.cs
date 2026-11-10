@@ -90,7 +90,8 @@ public sealed partial class EditorView
                 ToolTip.SetTip(button, "Открыть подкарту: " + child.Map.Title);
                 frames.Add((frame, child.Link.Transform.X, child.Link.Transform.Y)); overlay.Children.Add(frame);
             }
-            ToolTip.SetTip(row, _editor.AtlasMessage); PositionFrames();
+            // On the crumbs only: on the whole row it covered the section navigation under the tabs (DEC-093).
+            ToolTip.SetTip(crumbs, _editor.AtlasMessage); PositionFrames();
         }
         _editor.PropertyChanged += AtlasChanged;
         void AtlasChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -146,7 +147,7 @@ public sealed partial class EditorView
         {
             // The «Мир» card lists the same entries with the same «подходит» (DEC-080).
             var goalTitle = WorldGoals.First(g => g.Name == goal).Title;
-            _worldEntries.Add((goalTitle, name, title, fit));
+            _worldEntries.Add((goalTitle, name, title, fit, open));
             summaries[goal].Add(title);
             var note = new TextBlock { TextWrapping = TextWrapping.Wrap, FontSize = 11.5 }.Classed("role-caption");
             var body = new StackPanel { Spacing = 1, Children =
