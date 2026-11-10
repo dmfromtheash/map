@@ -40,7 +40,8 @@ public sealed class MbTilesExportTests
         command.CommandText = "SELECT tile_data FROM tiles WHERE zoom_level = 0 AND tile_column = 0 AND tile_row = 0";
         var bytes = (byte[])command.ExecuteScalar()!;
         using var tile = SKBitmap.Decode(bytes);
-        Assert.Equal((300, 200), (tile.Width, tile.Height));
+        Assert.Equal((1024, 1024), (tile.Width, tile.Height));
+        Assert.Equal(0, tile.GetPixel(300, 10).Alpha);
         Assert.Equal(SKColor.Parse("#FF182430"), tile.GetPixel(10, 10));
     }
 
@@ -62,11 +63,19 @@ public sealed class MbTilesExportTests
         Assert.Equal("6", Scalar(connection, "SELECT COUNT(*) FROM tiles WHERE zoom_level = 2"));
         Assert.Equal("2", Scalar(connection, "SELECT COUNT(*) FROM tiles WHERE zoom_level = 1"));
         Assert.Equal("1", Scalar(connection, "SELECT COUNT(*) FROM tiles WHERE zoom_level = 0"));
-        // TMS: the bottom row of the picture is tile_row 0; at full zoom it is the shorter row.
+        // TMS counts rows from the bottom of the zoom's world of 2^z rows and the picture sits in its top left corner:
+        // at zoom 2 (4 rows) the picture's rows are tile_row 3 and 2, at zoom 1 (2 rows) row 1, at zoom 0 row 0.
+        Assert.Equal("3", Scalar(connection, "SELECT COUNT(*) FROM tiles WHERE zoom_level = 2 AND tile_row = 3"));
+        Assert.Equal("3", Scalar(connection, "SELECT COUNT(*) FROM tiles WHERE zoom_level = 2 AND tile_row = 2"));
+        Assert.Equal("2", Scalar(connection, "SELECT COUNT(*) FROM tiles WHERE zoom_level = 1 AND tile_row = 1"));
+        Assert.Equal("1", Scalar(connection, "SELECT COUNT(*) FROM tiles WHERE zoom_level = 0 AND tile_row = 0"));
+        // Every tile has the full size; the picture's shorter bottom row is filled out with transparent pixels.
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT tile_data FROM tiles WHERE zoom_level = 2 AND tile_column = 0 AND tile_row = 0";
+        command.CommandText = "SELECT tile_data FROM tiles WHERE zoom_level = 2 AND tile_column = 0 AND tile_row = 2";
         using var bottom = SKBitmap.Decode((byte[])command.ExecuteScalar()!);
-        Assert.Equal((1024, 76), (bottom.Width, bottom.Height));
+        Assert.Equal((1024, 1024), (bottom.Width, bottom.Height));
+        Assert.Equal(255, bottom.GetPixel(10, 75).Alpha);
+        Assert.Equal(0, bottom.GetPixel(10, 76).Alpha);
         // One flat colour: the four full 1024² tiles of zoom 2 and every other repeat are stored once.
         Assert.True(int.Parse(Scalar(connection, "SELECT COUNT(*) FROM images")) < 9);
     }
@@ -96,9 +105,14 @@ public sealed class MbTilesExportTests
         {
             var (column, row) = (reader.GetInt32(0), 1 - reader.GetInt32(1)); // TMS: row 0 is the bottom
             using var tile = Straight((byte[])reader[2]);
-            for (var y = 0; y < tile.Height; y++)
-                Assert.True(tile.GetPixelSpan().Slice(y * tile.Width * 4, tile.Width * 4).SequenceEqual(
-                    whole.GetPixelSpan().Slice(((row * 1024 + y) * 1500 + column * 1024) * 4, tile.Width * 4)), $"tile {column},{row} row {y}");
+            Assert.Equal((1024, 1024), (tile.Width, tile.Height));
+            var (w, h) = (Math.Min(1024, 1500 - column * 1024), Math.Min(1024, 1100 - row * 1024));
+            for (var y = 0; y < h; y++)
+                Assert.True(tile.GetPixelSpan().Slice(y * 1024 * 4, w * 4).SequenceEqual(
+                    whole.GetPixelSpan().Slice(((row * 1024 + y) * 1500 + column * 1024) * 4, w * 4)), $"tile {column},{row} row {y}");
+            // Outside the picture the tile is transparent.
+            if (w < 1024) Assert.Equal(0, tile.GetPixelSpan()[(w * 4) + 3]);
+            if (h < 1024) Assert.Equal(0, tile.GetPixelSpan()[(h * 1024 * 4) + 3]);
             tiles++;
         }
         Assert.Equal(4, tiles);

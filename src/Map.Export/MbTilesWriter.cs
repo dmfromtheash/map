@@ -117,7 +117,7 @@ public static class MbTilesWriter
             {
                 var count = Math.Min(batch.Length, tiles.Count - start);
                 Parallel.For(0, count, new ParallelOptions { MaxDegreeOfParallelism = workers, CancellationToken = cancellationToken },
-                    i => batch[i] = Encode(pyramid.CheckTile(tiles[start + i].Level, tiles[start + i].Column, tiles[start + i].Row), webp));
+                    i => batch[i] = Encode(pyramid.CheckTile(tiles[start + i].Level, tiles[start + i].Column, tiles[start + i].Row), webp, pyramid.TileEdge));
                 for (var i = 0; i < count; i++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -130,10 +130,12 @@ public static class MbTilesWriter
                         imageId.Value = id; imageData.Value = data;
                         image.ExecuteNonQuery();
                     }
-                    var (_, rows) = Grid(pyramid, level);
-                    z.Value = maxZoom - level;
+                    // TMS counts rows from the bottom of the zoom's whole world of 2^z rows; the picture keeps its top
+                    // left corner at the world's top left on every zoom, so the levels lie over one another in a viewer.
+                    var zoom = maxZoom - level;
+                    z.Value = zoom;
                     x.Value = column;
-                    y.Value = rows - 1 - row;
+                    y.Value = (1 << zoom) - 1 - row;
                     mapId.Value = id;
                     map.ExecuteNonQuery();
                     written++;
@@ -152,14 +154,23 @@ public static class MbTilesWriter
     /// The tile's stored bytes and their content id, or (null, null) for a fully transparent tile.
     /// WebP is decoded back and must give the same straight RGBA as the PNG.
     /// </summary>
-    internal static (string? Id, byte[]? Data) Encode(string pngPath, bool webp)
+    /// <param name="tileEdge">The full tile size to fill an edge tile out to; 0 keeps the tile as it is (the viewer folder).</param>
+    internal static (string? Id, byte[]? Data) Encode(string pngPath, bool webp, int tileEdge = 0)
     {
         var png = File.ReadAllBytes(pngPath);
-        using var pixels = DecodeStraight(png);
+        using var pixels = Padded(DecodeStraight(png), tileEdge, out var padded);
         var span = pixels.GetPixelSpan();
         var visible = false;
         for (var i = 3; i < span.Length; i += 4) if (span[i] != 0) { visible = true; break; }
         if (!visible) return (null, null);
+        // A tile at the right or bottom edge of the picture is filled out with transparent pixels: every tile of an
+        // MBTiles file has the same size, or viewers built on GDAL (QGIS) refuse the edge tiles (R14 check 2026-11-10).
+        if (padded && !webp)
+        {
+            using var pixmap = pixels.PeekPixels();
+            using var encoded = pixmap.Encode(SKPngEncoderOptions.Default) ?? throw new InvalidDataException("Участок просмотра не кодируется.");
+            png = encoded.ToArray();
+        }
         byte[] data;
         if (webp)
         {
@@ -186,6 +197,23 @@ public static class MbTilesWriter
             throw new InvalidDataException("Участок просмотра не декодируется.");
         }
         return bitmap;
+    }
+
+    /// <summary>The tile at full <paramref name="edge"/>×<paramref name="edge"/>, the picture in its top left corner.</summary>
+    private static SKBitmap Padded(SKBitmap tile, int edge, out bool padded)
+    {
+        padded = tile.Width < edge || tile.Height < edge;
+        if (!padded) return tile;
+        var full = new SKBitmap(new SKImageInfo(edge, edge, SKColorType.Rgba8888, SKAlphaType.Unpremul));
+        full.Erase(SKColors.Transparent);
+        // Row by row, byte for byte: drawing through a canvas would premultiply and could change a half-transparent pixel.
+        var source = tile.GetPixelSpan().ToArray();
+        var target = full.GetPixels();
+        for (var y = 0; y < tile.Height; y++)
+            System.Runtime.InteropServices.Marshal.Copy(source, y * tile.RowBytes, target + y * full.RowBytes, tile.Width * 4);
+        full.NotifyPixelsChanged();
+        tile.Dispose();
+        return full;
     }
 
     internal sealed class WebpNotExactException() : Exception("WebP без потерь не повторил пиксели участка.");
