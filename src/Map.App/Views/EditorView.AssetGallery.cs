@@ -223,7 +223,7 @@ public sealed partial class EditorView
         var row2 = new WrapPanel
         {
             Orientation = Orientation.Horizontal, ItemSpacing = 8, LineSpacing = 6,
-            Children = { searchHost, upload, RegionalPackButton("ImportRegionalPackButton"), addFilter, _libraryFilterChips, _clearFiltersButton },
+            Children = { searchHost, upload, RegionalPackButton("ImportRegionalPackButton"), addFilter, BuildRoleShelvesToggle(), _libraryFilterChips, _clearFiltersButton },
         };
         _clearFiltersButton.VerticalAlignment = VerticalAlignment.Center;
         var top = new StackPanel { Spacing = 8, Children = { row1, row2, BuildQuickFilters(), _libraryDiagnostic } };
@@ -242,9 +242,11 @@ public sealed partial class EditorView
             Children = { top, new Grid { Name="LibraryCardsHost", Children={_libraryGrid, BuildRegionalLibraryEmpty()} }, bottom } };
         Grid.SetRow(main.Children[1], 1);
         Grid.SetRow(bottom, 2);
-        var body = new Grid { Margin = new Thickness(12), ColumnDefinitions = new ColumnDefinitions("Auto,*"),
-            ColumnSpacing = 12, Children = { navigator, main } };
+        var roleShelves = BuildRoleShelvesPanel();
+        var body = new Grid { Margin = new Thickness(12), ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"),
+            ColumnSpacing = 12, Children = { navigator, main, roleShelves } };
         Grid.SetColumn(main, 1);
+        Grid.SetColumn(roleShelves, 2);
         body.SizeChanged += (_, _) =>
         {
             navigator.Width = body.Bounds.Width < 900 ? 170 : 210;
@@ -373,7 +375,7 @@ public sealed partial class EditorView
         RefreshLibraryPanel();
         Dispatcher.UIThread.Post(() =>
         {
-            var role = _setManagementDetails.GetVisualDescendants().OfType<Control>().FirstOrDefault(c => c.Name == "PassportAssetRoleBox");
+            var role = _setManagementDetails.GetVisualDescendants().OfType<Control>().FirstOrDefault(c => c.Name == "PassportAssetRoleButton");
             role?.BringIntoView();
             role?.Focus();
         }, DispatcherPriority.Background);

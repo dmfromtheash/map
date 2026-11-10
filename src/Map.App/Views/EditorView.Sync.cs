@@ -1924,6 +1924,7 @@ public sealed partial class EditorView
             SyncSelectedSet();
             SyncStampGestureReadout();
             SyncStampToolPanel();
+            SyncRoleShelves();
         }
         finally
         {

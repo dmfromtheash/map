@@ -40,6 +40,29 @@ public sealed class RegionalRoleWorkflowTests : IAsyncLifetime
         return _editor;
     }
 
+    [Fact]
+    public void A_role_is_given_to_any_set_by_its_id_without_touching_the_map_and_every_role_has_a_group()
+    {
+        // R11b «Полки по ролям»: the shelves give a role to a set whether it is the chosen one or not.
+        var editor = Create(); var before = editor.Session.Document; var id = editor.SelectedSetId!;
+        Assert.Equal(AssetRole.None, editor.RoleOfSet(id));
+        Assert.True(editor.SetSetRole(id, AssetRole.Slope));
+        Assert.Equal(AssetRole.Slope, editor.RoleOfSet(id));
+        Assert.Equal(AssetRole.Slope, editor.SelectedSetRole);
+        Assert.Same(before, editor.Session.Document); Assert.Equal(0, editor.Session.UndoDepth);
+        Assert.False(editor.SetSetRole(id, AssetRole.Slope));
+        Assert.False(editor.SetSetRole("no-such-set", AssetRole.Tree));
+        Assert.True(editor.SetSetRole(id, AssetRole.None));
+        Assert.Equal(AssetRole.None, editor.RoleOfSet(id));
+
+        foreach (var role in Enum.GetValues<AssetRole>().Where(r => r != AssetRole.None))
+        {
+            Assert.Single(AssetRoles.Groups, group => group.Roles.Contains(role));
+            Assert.NotEqual("Без роли", AssetRoles.Title(role));
+        }
+        Assert.Equal(["ridge", "forest", "town"], AssetRoles.Groups.Where(g => g.HasTool).Select(g => g.Id));
+    }
+
     [Theory]
     [InlineData(AssetRole.Tree, RegionalPlacementMode.Forest)]
     [InlineData(AssetRole.Spruce, RegionalPlacementMode.Forest)]

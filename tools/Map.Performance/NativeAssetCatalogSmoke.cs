@@ -299,7 +299,7 @@ public sealed class AssetCatalogApplication : Application
 
     private async Task CheckRoles(string setId)
     {
-        async Task<ComboBox> OpenPassport(string phase)
+        async Task<Window> OpenPassport(string phase)
         {
             _editor.ActiveTool = EditorTool.Stamp;
             _editor.ClearLibraryFilters(); _view.RefreshLibraryPanel();
@@ -312,20 +312,40 @@ public sealed class AssetCatalogApplication : Application
             tile.BringIntoView(); await Settle();
             var passport = FindIn<Button>(window, "GalleryPassport_" + Sanitize(setId));
             passport.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Settle(); await Settle();
-            var box = FindIn<ComboBox>(window, "PassportAssetRoleBox");
+            var open = FindIn<Button>(window, "PassportAssetRoleButton");
             Check("role passport opened by the card's passport button " + phase, window.IsVisible && _editor.SelectedSetId == setId
-                && box.IsEffectivelyVisible && box.IsEnabled && ToolTip.GetTip(passport) is string tip && tip.Length > 0);
-            return box;
+                && open.IsEffectivelyVisible && open.IsEnabled && ToolTip.GetTip(passport) is string tip && tip.Length > 0);
+            // R11b: the passport opens «Роли наборов» with this set in hand (or on its shelf).
+            open.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Settle();
+            Check("role shelves opened from the passport " + phase, FindIn<Border>(window, "RoleShelvesPanel").IsEffectivelyVisible);
+            return window;
         }
+
+        string RoleLine(Window window) => FindIn<TextBlock>(window, "PassportAssetRoleText").Text ?? "";
 
         string? DiskRole() => JsonNode.Parse(File.ReadAllText(Path.Combine(_catalog.Root, "catalog.json")))!["sets"]!
             .AsArray().Single(s => s!["id"]!.GetValue<string>() == setId)!["placement"]?["role"]?.GetValue<string>();
 
-        async Task SetRole(ComboBox box, AssetRole role, string diskValue)
+        async Task SetRole(Window window, AssetRole role, string diskValue)
         {
             var document = _editor.Session.Document;
             var undo = _editor.Session.UndoDepth; var redo = _editor.Session.RedoDepth; var revision = _editor.Session.Revision;
-            box.SelectedIndex = (int)role; await Settle(); await _catalog.FlushMetadataAsync();
+            void Press(string name) => FindIn<Button>(window, name).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            if (role == AssetRole.None)
+            {
+                // Off the shelf: a click on the set where it lies.
+                Press("RoleOnShelf_" + Sanitize(setId)); await Settle();
+            }
+            else
+            {
+                // The group is found with the arrows and its tile, the set is taken and put on the shelf of the role.
+                var group = AssetRoles.GroupOf(role)!;
+                while (FindOptional<Button>(window, "RoleGroup_" + group.Id) is null) { Press("RoleGroupsNext"); await Settle(); }
+                Press("RoleGroup_" + group.Id); await Settle();
+                if (FindOptional<Button>(window, "RoleShelf_" + role) is null) { Press("RoleFree_" + Sanitize(setId)); await Settle(); }
+                Press("RoleShelf_" + role); await Settle();
+            }
+            await _catalog.FlushMetadataAsync();
             Check("role " + diskValue + " saved explicitly in catalog.json", DiskRole() == diskValue
                 && _catalog.FindSet(setId)!.Placement?.Role == role);
             Check("role " + diskValue + " leaves document and history unchanged", ReferenceEquals(document, _editor.Session.Document)
@@ -347,6 +367,8 @@ public sealed class AssetCatalogApplication : Application
 
         var roleBox = await OpenPassport("initial");
         await SetRole(roleBox, AssetRole.Tree, "tree");
+        Check("the set lies on the shelf of its role and the passport says so",
+            FindOptional<Button>(roleBox, "RoleOnShelf_" + Sanitize(setId)) is not null && RoleLine(roleBox).Contains("Дерево", StringComparison.Ordinal));
         Capture(_view.AssetCatalogWindowForSmoke!, "passport-role-tree");
         // DEC-070 p. 6: the catalog with its cards and the open passport - every visible control has its line.
         var noTip = PanelAudit.MissingTips(_view.AssetCatalogWindowForSmoke!);
@@ -354,13 +376,14 @@ public sealed class AssetCatalogApplication : Application
         foreach (var name in noTip) Console.WriteLine("no tooltip: " + name);
         Check("every visible catalog control has a tooltip", noTip.Count == 0);
         await Reopen(); roleBox = await OpenPassport("tree reopen");
-        Check("new catalog and passport reopen as Tree", roleBox.SelectedIndex == (int)AssetRole.Tree
-            && Equals(roleBox.SelectedItem, "Дерево"));
+        Check("new catalog and passport reopen as Tree", _editor.SelectedSetRole == AssetRole.Tree
+            && RoleLine(roleBox).Contains("Дерево", StringComparison.Ordinal)
+            && FindOptional<Button>(roleBox, "RoleOnShelf_" + Sanitize(setId)) is not null);
         Capture(_view.AssetCatalogWindowForSmoke!, "passport-role-tree-reopened");
         await SetRole(roleBox, AssetRole.None, "none");
         await Reopen(); roleBox = await OpenPassport("none reopen");
-        Check("new catalog and passport reopen as explicit None", roleBox.SelectedIndex == (int)AssetRole.None
-            && Equals(roleBox.SelectedItem, "Без роли") && DiskRole() == "none");
+        Check("new catalog and passport reopen as explicit None", _editor.SelectedSetRole == AssetRole.None
+            && RoleLine(roleBox) == "Роль: нет" && DiskRole() == "none");
         Capture(_view.AssetCatalogWindowForSmoke!, "passport-role-none-reopened");
     }
 
@@ -464,6 +487,10 @@ public sealed class AssetCatalogApplication : Application
         Check("native undo restores masked water", _editor.SelectedRiver?.Id == high.Id);
         await Rendered(); Capture(_view, "terrain-restored");
     }
+
+    /// <summary>A named control of a window when it is there now; folded sections stay folded.</summary>
+    private static T? FindOptional<T>(Window window, string name) where T : Control =>
+        window.GetVisualDescendants().OfType<T>().FirstOrDefault(c => c.Name == name);
 
     /// <summary>A named control of a window, opening folded sections the way a user would.</summary>
     private static T FindIn<T>(Window window, string name) where T : Control

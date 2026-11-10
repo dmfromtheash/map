@@ -134,6 +134,37 @@ public sealed record AssetPlacementDefaults
 
 public enum AssetRole { None, Tree, Spruce, Bush, Peak, Slope, House, Tower, Wall, Door, Sign }
 
+/// <summary>
+/// Roles that belong together: the ones a tool takes its sets from («Хребет»: peaks and slopes), or a kind of
+/// thing no tool places yet (<see cref="HasTool"/> false) whose role is still kept in the catalog.
+/// </summary>
+public sealed record AssetRoleGroup(string Id, string Title, IReadOnlyList<AssetRole> Roles, bool HasTool);
+
+/// <summary>The groups of roles in the order the catalog shows them (R11b, owner's choice of 2026-11-10), and their names.</summary>
+public static class AssetRoles
+{
+    public static IReadOnlyList<AssetRoleGroup> Groups { get; } =
+    [
+        new("ridge", "Хребет", [AssetRole.Peak, AssetRole.Slope], true),
+        new("forest", "Лес", [AssetRole.Tree, AssetRole.Spruce, AssetRole.Bush], true),
+        new("town", "Поселение", [AssetRole.House, AssetRole.Tower], true),
+        new("signs", "Знаки", [AssetRole.Sign], false),
+        new("walls", "Стены", [AssetRole.Wall], false),
+        new("doors", "Двери", [AssetRole.Door], false),
+    ];
+
+    public static AssetRoleGroup? GroupOf(AssetRole role) => Groups.FirstOrDefault(group => group.Roles.Contains(role));
+
+    public static string Title(AssetRole role) => role switch
+    {
+        AssetRole.Tree => "Дерево", AssetRole.Spruce => "Ель", AssetRole.Bush => "Куст",
+        AssetRole.Peak => "Вершина", AssetRole.Slope => "Склон",
+        AssetRole.House => "Дом", AssetRole.Tower => "Башня",
+        AssetRole.Wall => "Стена", AssetRole.Door => "Дверь", AssetRole.Sign => "Знак",
+        _ => "Без роли",
+    };
+}
+
 /// <summary>Deterministic identity for content-derived singleton sets and variants.</summary>
 public static class AssetIdentity
 {

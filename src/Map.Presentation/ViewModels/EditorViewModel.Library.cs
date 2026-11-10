@@ -1268,6 +1268,26 @@ public sealed partial class EditorViewModel
     public bool SetSelectedSetRole(AssetRole role) =>
         SetSelectedSetPlacement(p => p with { Role = role });
 
+    /// <summary>The role of any set of the catalog; <see cref="AssetRole.None"/> when it has none.</summary>
+    public AssetRole RoleOfSet(string setId) => _assetCatalog?.FindSet(setId)?.Placement?.Role ?? AssetRole.None;
+
+    /// <summary>
+    /// Gives any set of the catalog its role, chosen or not (the shelves of «Роли наборов», R11b). Catalog data only:
+    /// the map and its history do not change. False when the set is unknown, already has this role, or the catalog refused.
+    /// </summary>
+    public bool SetSetRole(string setId, AssetRole role)
+    {
+        if (_assetCatalog?.FindSet(setId) is not { } set) return false;
+        var passport = set.Placement ?? new AssetPlacementDefaults();
+        if ((passport.Role ?? AssetRole.None) == role) return false;
+        if (!MutateSet(() => _assetCatalog.SetPlacementDefaults(setId, passport with { Role = role }))) return false;
+        if (setId == _selectedSetId) { Raise(nameof(SelectedSetPlacement)); Raise(nameof(SelectedSetRole)); }
+        StatusDetail = role == AssetRole.None
+            ? $"Набор «{set.Name}» снят с полки: роли у него больше нет."
+            : $"Набор «{set.Name}» — «{AssetRoles.Title(role)}»: им ставит «{AssetRoles.GroupOf(role)?.Title}».";
+        return true;
+    }
+
     /// <summary>
     /// Edits the passport of the chosen card in the catalog; the tool takes the new values as its
     /// starting point at once. Returns false when nothing is chosen or the catalog refused.

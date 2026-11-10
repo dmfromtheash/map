@@ -195,7 +195,7 @@ public static class UiTips
         ["LightPresetWindow"] = "Свет из окна: ровный, холодноватый",
         ["LightPresetCampfire"] = "Костёр: большой тёплый круг света с мерцанием",
         // catalog passport
-        ["PassportAssetRoleBox"] = "Роль набора: дерево, ель, куст, вершина, склон, дом, башня — по ней ставят лес, хребет и поселение",
+        ["PassportAssetRoleButton"] = "Открыть «Роли наборов»: положить этот набор на полку — по роли им ставят лес, хребет и поселение",
     };
 
     /// <summary>The line for a control name, or null. A key ending in «*» serves every name with that start

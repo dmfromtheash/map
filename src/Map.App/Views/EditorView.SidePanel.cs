@@ -1372,20 +1372,20 @@ public sealed partial class EditorView
     /// </summary>
     private Control BuildPlacementPassportBlock()
     {
-        // Functional R11 control using the existing ComboBox; visual refinement belongs to Claude.
-        var roleNames = new[] { "Без роли", "Дерево", "Ель", "Куст", "Вершина", "Склон", "Дом", "Башня", "Стена", "Дверь", "Знак" };
-        var role = new ComboBox { ItemsSource = roleNames, HorizontalAlignment = HorizontalAlignment.Stretch }
-            .Named("PassportAssetRoleBox");
-        role.SelectionChanged += (_, _) =>
+        // The role is chosen in one place, «Роли наборов» of the catalog (R11b, DEC-082): the passport says what it
+        // is and opens the shelves with this set in hand.
+        var roleText = new TextBlock { VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap }.Named("PassportAssetRoleText");
+        var roleButton = Ui.TextButton("PassportAssetRoleButton", "Роли наборов…", () =>
         {
-            if (_syncingAppearance || role.SelectedIndex < 0) return;
-            _editor.SetSelectedSetRole((AssetRole)role.SelectedIndex);
-            SyncAssetList(); SyncAppearanceSections(); SyncStatus();
-        };
+            if (_editor.SelectedSetId is { } id) ShowRoleShelves(true, id);
+        }, "compact");
+        var role = new DockPanel { LastChildFill = true, Children = { roleButton.Docked(Dock.Right), roleText } };
         _appearanceSyncs.Add(() =>
         {
-            role.IsEnabled = _editor.SelectedSet is not null;
-            role.SelectedIndex = (int)_editor.SelectedSetRole;
+            roleButton.IsEnabled = _editor.SelectedSet is not null;
+            var current = _editor.SelectedSetRole;
+            roleText.Text = current == AssetRole.None ? "Роль: нет"
+                : $"Роль: {AssetRoles.Title(current)} · {AssetRoles.GroupOf(current)?.Title}";
         });
         void Change(Func<AssetPlacementDefaults, AssetPlacementDefaults> change)
         {
