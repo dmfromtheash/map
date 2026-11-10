@@ -48,6 +48,7 @@ v1–v3 открываются только через migration-copy до v4. �
 | v31–v46 | см. `MapProjectFormat.cs` | строки таблицы не перенесены — пакет 2.4 плана | R26–R39, R35b |
 | v47 | `IsometricSchemaVersion` | вид в изометрии хранится в карте | план 2.3, 2026-10-31 |
 | v48 | `SeaMannersSchemaVersion` | моря «штрих-тень у берега», «акварельный ореол», «пена и прибой», «лёд», «отмели и камни» (`shore-hatch`, `watercolour-halo`, `surf`, `ice`, `shoals`); карта с прежними пятью морями остаётся в своей схеме; `style.moonScatter` (`bright-pools`, `swell-ridges`) — раскидка света «Лунной ночи», кроме первой | R12, R09c, DEC-087, DEC-088, 2026-11-09 |
+| v49 | `CliffScreeSchemaVersion` | осыпь у подножия обрыва: `landStyle.cliff.scree` (`two-benches`, `wall-and-bench`, `pen-steps`, `broken-benches`) и `screeWidth`; пишутся только когда осыпь есть; неизвестное имя — ошибка чтения | R12, DEC-090, 2026-11-10 |
 
 ## Вид в изометрии — schema v47 (план 2.3, 2026-10-31)
 
