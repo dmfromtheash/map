@@ -58,7 +58,10 @@ public sealed partial class EditorView
         foreach (var sync in _styleSyncs) sync();
         foreach (var sync in _seaSyncs) sync();
         // Placing lights by click belongs to the open settings of Свет.
-        if (_editor.LightPlacementArmed && !(_workspace == EditorWorkspace.Appearance && _lookFineOpen == LookPart.Light)) _editor.ArmLightPlacement(false);
+        var lightOpen = _workspace == EditorWorkspace.Appearance && _lookFineOpen == LookPart.Light;
+        if (_editor.LightPlacementArmed && !lightOpen) _editor.ArmLightPlacement(false);
+        // The open settings of Свет mark the map's lights; a click on a mark chooses that light (R14).
+        _editor.ShowLightMarkers(lightOpen);
         SyncLookPage();
     }
 

@@ -625,6 +625,44 @@ public sealed partial class MapCanvasControl : Control
             Map.App.Services.UiFeel.EffectsEnabled && TopLevel.GetTopLevel(this) is Window { IsActive: true }
                 && Stopwatch.GetElapsedTime(_lastInput) < AmbientRest,
             () => Avalonia.Threading.Dispatcher.UIThread.Post(QueueAmbientFrame, Avalonia.Threading.DispatcherPriority.Background)));
+        DrawLightMarks(context);
+    }
+
+    /// <summary>How near a click must fall to a light's mark to choose it, in screen pixels.</summary>
+    private const double LightMarkHitRadius = 12;
+
+    /// <summary>
+    /// The marks of the map's lights while the settings of Свет are open (R14): a small ring in the light's own
+    /// colour on each; the chosen one gets an accent ring and its bright circle dashed around it. Drawn over the
+    /// picture in screen pixels, so they never touch the document or the export.
+    /// </summary>
+    private void DrawLightMarks(DrawingContext context)
+    {
+        if (_editor is not { LightMarkersShown: true } editor) return;
+        var sources = editor.ShownLighting.Sources;
+        if (sources.IsDefaultOrEmpty) return;
+        var viewport = editor.Session.Viewport;
+        var selected = editor.SelectedLight?.Id;
+        var accent = Application.Current?.FindResource("MapAccentBrush") as IBrush ?? Brushes.Goldenrod;
+        var outline = new Pen(new SolidColorBrush(Color.FromArgb(200, 20, 22, 26)), 1.5);
+        var accentPen = new Pen(accent, 2.5);
+        var reachPen = new Pen(accent, 1.5, new DashStyle([4, 4], 0));
+        var view = new Rect(0, 0, Bounds.Width, Bounds.Height);
+        foreach (var source in sources)
+        {
+            var (x, y) = viewport.WorldToScreen(source.X, source.Y);
+            var centre = new Point(x, y);
+            var chosen = source.Id == selected;
+            var reach = source.Radius * viewport.Scale;
+            if (!view.Inflate(chosen ? reach + 16 : 16).Contains(centre)) continue;
+            IBrush fill = Color.TryParse(source.Color, out var colour) ? new SolidColorBrush(colour) : Brushes.Orange;
+            if (chosen)
+            {
+                if (reach > 14) context.DrawEllipse(null, reachPen, centre, reach, reach);
+                context.DrawEllipse(null, accentPen, centre, 11, 11);
+            }
+            context.DrawEllipse(fill, outline, centre, 6, 6);
+        }
     }
 
     private Avalonia.Threading.DispatcherTimer? _ambientTimer;
@@ -1122,7 +1160,19 @@ public sealed partial class MapCanvasControl : Control
         ApplyDrawModifiers(e.KeyModifiers);
 
         var button = ButtonOf(point);
-        // The Свет tab's "place a light" mode takes the left click before any tool.
+        // The open settings of Свет take the left click before any tool: a click on a light's mark chooses that
+        // light, and in the "place a light" mode a click elsewhere places a new one.
+        if (button == CanvasPointerButton.Left && _editor is { LightMarkersShown: true } markEditor)
+        {
+            var viewport = markEditor.Session.Viewport;
+            var (worldX, worldY) = viewport.ScreenToWorld(position.X, position.Y);
+            if (markEditor.SelectLightAt(worldX, worldY, LightMarkHitRadius / Math.Max(viewport.Scale, 1e-9)))
+            {
+                e.Handled = true;
+                QueueVisualInvalidation();
+                return;
+            }
+        }
         if (button == CanvasPointerButton.Left && _editor is { LightPlacementArmed: true } lightEditor)
         {
             var (worldX, worldY) = lightEditor.Session.Viewport.ScreenToWorld(position.X, position.Y);

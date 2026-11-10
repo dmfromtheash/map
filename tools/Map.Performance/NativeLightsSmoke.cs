@@ -7,7 +7,8 @@ public sealed partial class NativeEditorScenarioApplication
 {
     private static readonly string[] LightsRequired =
     [
-        "light-placed-and-selected", "light-settings-from-panel", "dim-zone-one-undo", "resources-disposed",
+        "light-placed-and-selected", "light-settings-from-panel", "dim-zone-one-undo", "light-chosen-by-click-on-mark",
+        "light-marks-hidden-when-closed", "resources-disposed",
     ];
 
     /// <summary>
@@ -52,6 +53,17 @@ public sealed partial class NativeEditorScenarioApplication
         SaveVisual(_report.Screenshot);
         _editor.Undo(); await Settle();
         _report.Checks["dim-zone-one-undo"] = dimStep && _editor.Session.Document.Lighting!.Sources.Single().DimZone == 0;
+
+        // A click on a light's mark chooses it (R14, owner 2026-11-10): a second light is placed and chosen, then the
+        // mark of the first is clicked; the canvas makes this call in its own pointer handler, as for placing.
+        _editor.PlaceLightAt(760, 560); await Settle();
+        var marksShown = _editor.LightMarkersShown;
+        var depthBefore = _editor.Session.UndoDepth;
+        var picked = _editor.SelectLightAt(504, 377, 12); await Settle(); await Frame();
+        var title = Find<Avalonia.Controls.StackPanel>("SelectedLightBlock").Children.OfType<Avalonia.Controls.TextBlock>().FirstOrDefault()?.Text;
+        _report.Checks["light-chosen-by-click-on-mark"] = marksShown && picked && _editor.SelectedLight?.Id == light?.Id
+            && title == "Огонь 1" && _editor.Session.UndoDepth == depthBefore && !_editor.SelectLightAt(300, 200, 12);
         await Click("LookFine_light"); await Task.Delay(1500); await Frame(); await Settle();
+        _report.Checks["light-marks-hidden-when-closed"] = !_editor.LightMarkersShown;
     }
 }

@@ -22,6 +22,41 @@ public sealed partial class EditorViewModel
         SceneChanged?.Invoke(this, EventArgs.Empty);
     }
 
+    /// <summary>
+    /// True while the settings of Свет are open: the canvas marks every light of the map, the chosen one brighter,
+    /// and a left click on a mark chooses that light instead of placing a new one or acting with the tool.
+    /// </summary>
+    public bool LightMarkersShown { get; private set; }
+
+    public void ShowLightMarkers(bool shown)
+    {
+        if (LightMarkersShown == shown) return;
+        LightMarkersShown = shown;
+        Raise(nameof(LightMarkersShown));
+        SceneChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>The light whose mark is nearest to a map point, within <paramref name="reach"/> map units; null if none.</summary>
+    public MapLightSource? LightAt(double x, double y, double reach)
+    {
+        MapLightSource? best = null;
+        var bestDistance = double.MaxValue;
+        foreach (var source in ShownLighting.Sources)
+        {
+            var distance = Math.Sqrt((source.X - x) * (source.X - x) + (source.Y - y) * (source.Y - y));
+            if (distance <= reach && distance < bestDistance) (best, bestDistance) = (source, distance);
+        }
+        return best;
+    }
+
+    /// <summary>A click on the canvas with the marks shown: chooses the light under it. False when no mark is there.</summary>
+    public bool SelectLightAt(double x, double y, double reach)
+    {
+        if (!LightMarkersShown || LightAt(x, y, reach) is not { } hit) return false;
+        SelectLight(hit.Id);
+        return true;
+    }
+
     private void ChangeSelectedLight(string name, Func<MapLightSource, MapLightSource> change, bool commit)
     {
         if (_selectedLightId is not { } id) return;
