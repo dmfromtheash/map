@@ -131,6 +131,16 @@ public static partial class StyleRenderer
         {
             if (!ReferenceEquals(painted, Kept?.Painted)) painted.Dispose();
         }
+        // The print and painter styles paint the land from its outline and the mountains from their pictures: the cliff
+        // walls with their scree, and in the painter styles the roads, are drawn over the painted frame, multiplied like
+        // ink on its paper (owner, 2026-11-10: «нужно. и с другими стилями также»).
+        if (kind != 0 && StyleOverlayFor(bare, kind) is { } overlay)
+        {
+            using var multiply = new SKPaint { BlendMode = SKBlendMode.Multiply };
+            canvas.SaveLayer(multiply);
+            drawNames(canvas, overlay, options.ForStyleOverlay());
+            canvas.Restore();
+        }
         if (names is not null) drawNames(canvas, names, options.ForStyleNames());
     }
 

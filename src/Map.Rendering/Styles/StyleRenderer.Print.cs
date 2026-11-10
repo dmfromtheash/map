@@ -18,6 +18,29 @@ public static partial class StyleRenderer
         }
     }
 
+    private static readonly ConditionalWeakTable<MapDocument, StrongBox<MapDocument?>>[] OverlayDocuments = [[], []];
+
+    /// <summary>
+    /// What a print (kind 1) or painter (kind 2) style draws over its painted frame: the raised lands, which in this pass
+    /// draw only their cliff walls and scree, and - for the painter styles, whose buffers hold only the mountains' pictures -
+    /// the roads. No sea, no fills, no objects. Null when the map has neither a raised land nor (painter) a road.
+    /// </summary>
+    private static MapDocument? StyleOverlayFor(MapDocument bare, int kind) => OverlayDocuments[kind - 1].GetValue(bare, d =>
+    {
+        var lands = d.Layers.OfType<LandLayer>().ToList();
+        var raised = lands.Any(land => land.Visible && lands.Any(other => other.Level < land.Level) || land.Level > 0);
+        var roads = kind == 2 && d.Layers.OfType<ObjectLayer>().Any(l => l.Visible && l.Roads.Length > 0);
+        if (!raised && !roads) return new StrongBox<MapDocument?>(null);
+        var layers = d.Layers.Select(l => l switch
+        {
+            LandLayer land => raised ? land : land with { Visible = false },
+            ObjectLayer o => o with { Objects = [], Rivers = [], Roads = roads ? o.Roads : [], PlacementPaths = [], PlacementAreas = [] },
+            BaseColorLayer page => page with { Visible = false, Sea = null },
+            _ => l with { Visible = false },
+        }).ToArray();
+        return new StrongBox<MapDocument?>(d with { Layers = layers, Lighting = null, Style = null });
+    }).Value;
+
     private static bool IsPrint(MapStylePreset preset) => preset is MapStylePreset.OldMapBlaeu or MapStylePreset.EngravingAquatint;
 
     private static PrintParts PrintPartsFor(MapDocument bare) => PrintDocuments.GetValue(bare, static d =>

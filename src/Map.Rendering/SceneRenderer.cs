@@ -313,6 +313,17 @@ public sealed class RenderOptions
     /// The options of the names drawn sharp over the style: no kept images or statistics of the
     /// map pass are touched, no live gesture state is drawn twice.
     /// </summary>
+    /// <summary>Lands draw only their cliff walls and scree (the style overlay, <see cref="ForStyleOverlay"/>).</summary>
+    internal bool LandWallsOnly { get; private set; }
+
+    /// <summary>The options of a style's overlay: as for the names, and lands drawing only their walls.</summary>
+    internal RenderOptions ForStyleOverlay()
+    {
+        var copy = ForStyleNames();
+        copy.LandWallsOnly = true;
+        return copy;
+    }
+
     internal RenderOptions ForStyleNames()
     {
         var copy = (RenderOptions)MemberwiseClone();
@@ -2337,6 +2348,14 @@ public static partial class SceneRenderer
         var carvedRect = new SKRect((float)view.Left, (float)view.Top,
             (float)(view.Left + (carved?.Width ?? 0) / deviceScale),
             (float)(view.Top + (carved?.Height ?? 0) / deviceScale));
+
+        // The pass of a style over its painted frame: the cliff walls and their scree only (owner, 2026-11-10: the
+        // print and painter styles rebuild the land from its outline and lost the walls).
+        if (options.LandWallsOnly)
+        {
+            if (cliffReach > 0 && !solidInterior) DrawCliffs();
+            return;
+        }
 
         // At overview scale the edge effects are below a screen pixel, but each one replays the
         // complete tile set (rings do it several times). Keep the exact style at edit/export zoom
