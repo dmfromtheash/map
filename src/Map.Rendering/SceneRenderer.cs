@@ -2700,16 +2700,17 @@ public static partial class SceneRenderer
             var size = LandCliffField.Size * (double)(1 << lod);
             var pixel = 1 / deviceScale;
             var rimWidth = style.OutlineWidth > 0 ? style.OutlineWidth : 0;
+            var screeReach = cliff.ScreeReach(cliff.Steps(layer.Level, lowestFloor));
             using var paint = new SKPaint { IsAntialias = false };
             for (var fy = (int)Math.Floor(view.Top / size); fy * size < view.Bottom; fy++)
                 for (var fx = (int)Math.Floor(view.Left / size); fx * size < view.Right; fx++)
                 {
                     // Only squares a wall of this land can reach: some of its coverage lies above
                     // them within reach (or beside them, by the lean).
-                    var side = Math.Abs(cliff.Lean) * cliffReach + 2;
+                    var side = Math.Max(Math.Abs(cliff.Lean) * cliffReach, screeReach) + 2;
                     if (!layer.GeometryTiles.KeysIntersecting(fx * size - side, fy * size - cliffReach - 2,
-                            (fx + 1) * size + side, (fy + 1) * size).Any()) continue;
-                    var field = LandCliffField.Get(layer, beneath, cliff.Lean, cliffReach, lod, fx, fy);
+                            (fx + 1) * size + side, (fy + 1) * size + screeReach).Any()) continue;
+                    var field = LandCliffField.Get(layer, beneath, cliff.Lean, cliffReach, lod, fx, fy, screeReach);
                     if (field.Wall is not { } wall || !wall.Intersects(view)) continue;
                     var drawStarted = Stopwatch.GetTimestamp();
                     // At a texel no larger than a device pixel the kept wall image of the square
@@ -2728,7 +2729,9 @@ public static partial class SceneRenderer
                     }
                     using var fieldShader = field.ToShader(out var image);
                     using (image)
-                    using (var shader = LandCliffShader.Create(fieldShader, cliff, style.OutlineColor, rimWidth, pixel))
+                    using (var apronShader = field.ApronShader(out var apronImage))
+                    using (apronImage)
+                    using (var shader = LandCliffShader.Create(fieldShader, apronShader, cliff, style.OutlineColor, rimWidth, pixel))
                     {
                         if (shader is null) return;
                         paint.Shader = shader;

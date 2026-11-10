@@ -69,6 +69,8 @@ public static partial class MapProjectStore
         layers.OfType<BaseColorLayer>().Any(page => page.Sea is { NeedsMannersSchema: true });
 
     private static int SchemaFor(MapDocument document) =>
+        HasCliffScreeV49(document.Layers) || document.Checkpoints.Any(c => HasCliffScreeV49(c.Snapshot.Layers))
+            ? MapProjectFormat.CliffScreeSchemaVersion :
         HasSeaMannersV48(document.Layers) || document.Checkpoints.Any(c => HasSeaMannersV48(c.Snapshot.Layers))
         || HasMoonScatterV48(document.Style) || document.Checkpoints.Any(c => HasMoonScatterV48(c.Snapshot.Style))
             ? MapProjectFormat.SeaMannersSchemaVersion :
@@ -3138,6 +3140,8 @@ public static partial class MapProjectStore
             BaseShadow = style.Cliff.BaseShadow,
             BaseShadowLength = style.Cliff.BaseShadowLength,
             BaseShadowColor = style.Cliff.BaseShadowColor,
+            Scree = style.Cliff.Scree == CliffScree.None ? null : CliffScreeNames[style.Cliff.Scree],
+            ScreeWidth = style.Cliff.Scree == CliffScree.None ? null : style.Cliff.ScreeWidth,
         },
     };
 
@@ -3219,6 +3223,8 @@ public static partial class MapProjectStore
                 BaseShadow = cliff.BaseShadow is { } baseShadowValue && double.IsFinite(baseShadowValue) ? baseShadowValue : fallback.BaseShadow,
                 BaseShadowLength = cliff.BaseShadowLength is { } baseShadowLengthValue && double.IsFinite(baseShadowLengthValue) ? baseShadowLengthValue : fallback.BaseShadowLength,
                 BaseShadowColor = AppearanceColor.Normalize(cliff.BaseShadowColor) ?? fallback.BaseShadowColor,
+                Scree = ReadCliffScreeV49(cliff.Scree),
+                ScreeWidth = cliff.ScreeWidth is { } screeWidthValue && double.IsFinite(screeWidthValue) ? screeWidthValue : fallback.ScreeWidth,
             }.Bounded(),
         };
     }

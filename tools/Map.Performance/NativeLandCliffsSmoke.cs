@@ -10,7 +10,7 @@ public sealed partial class NativeEditorScenarioApplication
     private static readonly string[] LandCliffRequired =
     [
         "no-tier-shows-raise", "raise-creates-tier", "cliff-drawn-below-edge", "look-applied-and-undone",
-        "island-and-plateau-tiers", "resources-disposed",
+        "island-and-plateau-tiers", "scree-chosen-kept-and-undone", "resources-disposed",
     ];
 
     /// <summary>
@@ -57,6 +57,23 @@ public sealed partial class NativeEditorScenarioApplication
         _report.Checks["look-applied-and-undone"] = applied
             && ((LandLayer)_editor.Session.Document.FindLayer(plateau.Id)!).EdgeStyle == before;
 
+        // The slope at the foot (R12): one click is one Undo step, its width slider comes with it, and a ready
+        // look changes the rock but keeps the slope.
+        LandCliffStyle PlateauCliff() => ((LandLayer)_editor.Session.Document.FindLayer(plateau.Id)!).EdgeStyle.Cliff;
+        depth = _editor.Session.UndoDepth;
+        Find<Control>("LandCliffScree_TwoBenches").BringIntoView(); await Settle();
+        var widthHidden = !Find<Control>("LandCliffScreeWidthSlider").IsEffectivelyVisible;
+        await Click("LandCliffScree_TwoBenches"); await Frame();
+        var slope = Pixel(_editor.Session.Document, 470, 450);
+        var chosen = PlateauCliff().Scree == CliffScree.TwoBenches && _editor.Session.UndoDepth == depth + 1
+            && widthHidden && Find<Control>("LandCliffScreeWidthSlider").IsEffectivelyVisible;
+        await Click("LandCliffLook_ink-dots");
+        var kept = PlateauCliff().Scree == CliffScree.TwoBenches;
+        _editor.Undo(); _editor.Undo(); await Settle();
+        _report.Checks["scree-chosen-kept-and-undone"] = chosen && kept
+            && ((LandLayer)_editor.Session.Document.FindLayer(plateau.Id)!).EdgeStyle == before
+            && Pixel(_editor.Session.Document, 470, 450) != slope;
+
         // The island over the sea, the plateau one level above the island.
         _editor.SelectLayer(island.Id); await Settle();
         await Click("LandCliffRaiseButton");
@@ -66,6 +83,11 @@ public sealed partial class NativeEditorScenarioApplication
             ((LandLayer)_editor.Session.Document.FindLayer(plateau.Id)!).Level);
         var shore = Pixel(_editor.Session.Document, 512, 625);
         _report.Checks["island-and-plateau-tiers"] = levels == (1, 2) && shore.Blue > shore.Red;
+        // The picture shows both slopes: benches under the plateau, broken benches where the island meets the sea.
+        await Click("LandCliffScree_TwoBenches");
+        _editor.SelectLayer(island.Id); await Settle();
+        await Click("LandCliffScree_BrokenBenches");
+        _editor.SelectLayer(plateau.Id); await Settle();
         Find<Control>("LandCliffHeightSlider").BringIntoView(); await Settle(); await Frame();
         _report.Screenshot = Path.ChangeExtension(Options.OutputPath, ".png");
         SaveVisual(_report.Screenshot);

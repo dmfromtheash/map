@@ -392,4 +392,51 @@ public sealed class WaterCliffsPersistenceTests
         var error = Assert.ThrowsAny<Exception>(() => MapProjectStore.Open(forged));
         Assert.Contains("v32", error.ToString(), StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void The_scree_of_a_cliff_round_trips_in_v49_and_an_older_schema_or_an_unknown_one_is_refused()
+    {
+        using var workspace = new TempWorkspace();
+        var (document, land, _) = Fixture();
+        foreach (var (kind, _, _) in LandCliffStyle.Screes.Skip(1))
+        {
+            var style = land.EdgeStyle with { Cliff = LandCliffStyle.OwnerMountains with { Scree = kind, ScreeWidth = 1.75 } };
+            var path = workspace.File($"scree-{kind}.mapproj");
+            MapProjectStore.Save(document.WithLayer(land.Id, l => ((LandLayer)l) with { EdgeStyle = style }), path, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
+            Assert.Equal(49, Schema(path));
+            Assert.Equal(style.Cliff, ((LandLayer)MapProjectStore.Open(path).Document.FindLayer(land.Id)!).EdgeStyle.Cliff);
+        }
+
+        // Without scree the map keeps the schema it had and the scene does not mention it, whatever the width says.
+        var plain = workspace.File("no-scree.mapproj");
+        MapProjectStore.Save(document.WithLayer(land.Id, l => ((LandLayer)l) with
+        { EdgeStyle = land.EdgeStyle with { Cliff = LandCliffStyle.OwnerMountains } }), plain, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
+        Assert.True(Schema(plain) < 49);
+        using (var zip = ZipFile.OpenRead(plain))
+            Assert.DoesNotContain("scree", new StreamReader(zip.GetEntry("scene.json")!.Open()).ReadToEnd(), StringComparison.OrdinalIgnoreCase);
+
+        string Forge(string name, Func<string, byte[], byte[]> change)
+        {
+            var forged = workspace.File(name);
+            using var source = ZipFile.OpenRead(workspace.File($"scree-{CliffScree.TwoBenches}.mapproj"));
+            using var target = ZipFile.Open(forged, ZipArchiveMode.Create);
+            foreach (var entry in source.Entries)
+            {
+                var bytes = new MemoryStream(); using (var input = entry.Open()) input.CopyTo(bytes);
+                using var output = target.CreateEntry(entry.FullName).Open(); output.Write(change(entry.FullName, bytes.ToArray()));
+            }
+            return forged;
+        }
+        var older = Forge("scree-v48.mapproj", (name, data) =>
+        {
+            if (name != "manifest.json") return data;
+            var root = JsonNode.Parse(data)!; root["schemaVersion"] = 48;
+            return System.Text.Encoding.UTF8.GetBytes(root.ToJsonString());
+        });
+        Assert.Contains("v49", Assert.ThrowsAny<Exception>(() => MapProjectStore.Open(older)).ToString(), StringComparison.Ordinal);
+        var unknown = Forge("scree-unknown.mapproj", (name, data) => name == "scene.json"
+            ? System.Text.Encoding.UTF8.GetBytes(System.Text.Encoding.UTF8.GetString(data).Replace("two-benches", "fangs", StringComparison.Ordinal))
+            : data);
+        Assert.ThrowsAny<Exception>(() => MapProjectStore.Open(unknown));
+    }
 }

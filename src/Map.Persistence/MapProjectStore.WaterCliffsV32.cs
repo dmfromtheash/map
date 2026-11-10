@@ -15,6 +15,25 @@ public static partial class MapProjectStore
             _ => false,
         });
 
+    private static bool HasCliffScreeV49(IEnumerable<MapLayer> layers) =>
+        layers.OfType<LandLayer>().Any(land => land.EdgeStyle.Cliff.Scree != CliffScree.None);
+
+    private static readonly IReadOnlyDictionary<CliffScree, string> CliffScreeNames = new Dictionary<CliffScree, string>
+    {
+        [CliffScree.TwoBenches] = "two-benches",
+        [CliffScree.WallAndBench] = "wall-and-bench",
+        [CliffScree.PenSteps] = "pen-steps",
+        [CliffScree.BrokenBenches] = "broken-benches",
+    };
+
+    /// <summary>The slope at the foot of a cliff. An unknown name fails the map: it is not a look this Map can draw.</summary>
+    private static CliffScree ReadCliffScreeV49(string? name)
+    {
+        if (name is null) return CliffScree.None;
+        var known = CliffScreeNames.FirstOrDefault(p => p.Value == name);
+        return known.Value is null ? throw new MapProjectCorruptedException($"Неизвестная осыпь обрыва «{name}».") : known.Key;
+    }
+
     private static bool HasWaterCliffsV32(MapDocument document) =>
         HasWaterCliffsV32(document.Layers) || document.Checkpoints.Any(c => HasWaterCliffsV32(c.Snapshot.Layers));
 
@@ -45,6 +64,9 @@ public static partial class MapProjectStore
     {
         if (scene.Layers?.Any(l => l?.Sea is not null && l.Type != "BaseColor") == true)
             throw new MapProjectCorruptedException("Стиль моря бывает только у слоя фона.");
+        if (schema < MapProjectFormat.CliffScreeSchemaVersion && scene.Layers?.Any(l => l?.LandStyle?.Cliff is { } cliff
+            && (cliff.Scree is not null || cliff.ScreeWidth is not null)) == true)
+            throw new MapProjectCorruptedException("Осыпь у подножия обрыва требует схему v49.");
         if (schema < MapProjectFormat.SeaMannersSchemaVersion && scene.Layers?.Any(l => l?.Sea?.Manner is { } name
             && SeaMannerNames.FirstOrDefault(p => p.Value == name) is { Value: not null, Key: >= SeaManner.ShoreHatch }) == true)
             throw new MapProjectCorruptedException("Моря «штрих-тень», «ореол», «пена», «лёд» и «отмели» требуют схему v48.");

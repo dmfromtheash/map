@@ -12,6 +12,25 @@ public enum CliffFoot
 }
 
 /// <summary>
+/// The slope of fallen stone at the foot of a cliff (R12, the owner's choice of 2026-11-10): the wall becomes a
+/// short broken band of rock and a slope with benches runs out from it — over the ground, and differently into
+/// water (a line of surf at the foot, stones standing in the water, a pale shelf under it).
+/// </summary>
+public enum CliffScree
+{
+    /// <summary>The plain wall, no slope.</summary>
+    None = 0,
+    /// <summary>Two uneven benches, each a dark riser under a broken pen line, with stones on them.</summary>
+    TwoBenches = 1,
+    /// <summary>A tall wall and one narrow bench with small stones.</summary>
+    WallAndBench = 2,
+    /// <summary>Three thin steps in pen and shade, no stones.</summary>
+    PenSteps = 3,
+    /// <summary>Benches in pieces: here a step, there none, or set a little off.</summary>
+    BrokenBenches = 4,
+}
+
+/// <summary>
 /// The look of the cliffs of a raised piece of land: the wall of rock below every southern edge
 /// that stands higher than the ground or sea in front of it. The wall is drawn the way the owner's
 /// tier sheets draw it: it is split into faces where the coast turns, each face has its own flat
@@ -100,6 +119,21 @@ public sealed record LandCliffStyle
     /// <summary>Colour of the shadow at the foot.</summary>
     public string BaseShadowColor { get; init; } = "#FF4A3520";
 
+    /// <summary>The slope of fallen stone at the foot; <see cref="CliffScree.None"/> keeps the plain wall.</summary>
+    public CliffScree Scree { get; init; }
+    /// <summary>How far the slope runs out from the rim: 1 is the look as drawn, 0.3..3.</summary>
+    public double ScreeWidth { get; init; } = 1;
+
+    /// <summary>The slopes a cliff can have, in the order the panel shows them.</summary>
+    public static IReadOnlyList<(CliffScree Scree, string Title, string Description)> Screes { get; } =
+    [
+        (CliffScree.None, "Нет", "Обычная стена без осыпи."),
+        (CliffScree.TwoBenches, "Две полки", "Полоса скалы, под ней две неровные ступени с тёмным уступом и рваной линией пером, камни на полках."),
+        (CliffScree.WallAndBench, "Одна полка", "Стена выше и занимает почти весь обрыв, под ней одна узкая полка с мелкими камнями."),
+        (CliffScree.PenSteps, "Три ступени", "Без камней: три тонкие ступени, каждая — линия пером и тень под ней."),
+        (CliffScree.BrokenBenches, "Рваные полки", "Полки кусками: где-то ступень есть, где-то обрывается или смещена."),
+    ];
+
     public const double MaximumHeight = 256;
     public const int MaximumStrata = 8;
 
@@ -108,7 +142,12 @@ public sealed record LandCliffStyle
 
     /// <summary>How far below an edge anything of the cliff can reach for this many steps, in world units.</summary>
     public double Reach(int steps) => steps <= 0 || Height <= 0 ? 0
-        : (Height * steps * (1 + HeightVariation)) + (Height * BaseShadowLength) + (Height * FootTicks * 0.3) + 2;
+        : Math.Max((Height * steps * (1 + HeightVariation)) + (Height * BaseShadowLength) + (Height * FootTicks * 0.3) + 2,
+            ScreeReach(steps));
+
+    /// <summary>How far from an edge, in any direction, the scree of this many steps can lie; 0 without scree.</summary>
+    public double ScreeReach(int steps) => Scree == CliffScree.None || steps <= 0 || Height <= 0 ? 0
+        : (Height * Math.Min(steps, 3) * ScreeWidth * 2.3) + 6;
 
     /// <summary>This style with every number inside its range; colours are kept as they are.</summary>
     public LandCliffStyle Bounded() => this with
@@ -139,6 +178,8 @@ public sealed record LandCliffStyle
         FootTicks = Clamp(FootTicks, 0, 1, 0),
         BaseShadow = Clamp(BaseShadow, 0, 1, .3),
         BaseShadowLength = Clamp(BaseShadowLength, 0.1, 2, .5),
+        Scree = Enum.IsDefined(Scree) ? Scree : CliffScree.None,
+        ScreeWidth = Clamp(ScreeWidth, 0.3, 3, 1),
     };
 
     private static double Clamp(double value, double minimum, double maximum, double fallback) =>

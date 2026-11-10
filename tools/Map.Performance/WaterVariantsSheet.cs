@@ -103,6 +103,19 @@ internal static class WaterVariantsSheet
             Save("cliff-" + look.Id, document, whole, 1200); Save("cliff-" + look.Id + "-zoom", document, wall, 1200);
             expected += 2;
         }
+        // The slopes at the foot of a cliff, on the ground and in the sea.
+        foreach (var (kind, _, _) in LandCliffStyle.Screes.Skip(1))
+        {
+            var scree = (int)kind;
+            var style = LandCliffStyle.OwnerMountains with { Scree = kind };
+            var document = Document(SeaStyle.NewMapDefault, style);
+            // A headland whose wall stands in the sea, to show the scree on water.
+            var cape = Land("Мыс", 1, [(570, 885, 170, 70, .1, 4)], []);
+            document = document with { Layers = [.. document.Layers.Take(3), cape with { EdgeStyle = cape.EdgeStyle with { Cliff = style } }, .. document.Layers.Skip(3)] };
+            Save("scree-" + scree, document, whole, 1200); Save("scree-" + scree + "-zoom", document, wall, 1500);
+            Save("scree-" + scree + "-sea", document, new WorldBounds(370, 780, 770, 1000), 1500);
+            expected += 3;
+        }
         var night = Document(SeaStyle.NewMapDefault) with { Style = MapStyle.For(MapStylePreset.MoonlightHasui) };
         foreach (var (scatter, _, _) in MapStyle.MoonScatters)
         {

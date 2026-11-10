@@ -21,10 +21,21 @@ public sealed class LandCliffField
     /// <summary>Added to the steps of a texel whose edge lies under «здесь стена».</summary>
     public const float ForcedWall = 0.25f;
 
-    private LandCliffField(int lod, int fx, int fy, Half[]? texels, WorldBounds? wall, bool[]? blocks, int reachTexels, object[] inputs)
+    private LandCliffField(int lod, int fx, int fy, Half[]? texels, Half[]? apron, WorldBounds? wall, bool[]? blocks,
+        int reachTexels, int apronTexels, object[] inputs)
     {
-        Lod = lod; Fx = fx; Fy = fy; Texels = texels; Wall = wall; Blocks = blocks; ReachTexels = reachTexels; Inputs = inputs;
+        Lod = lod; Fx = fx; Fy = fy; Texels = texels; Apron = apron; Wall = wall; Blocks = blocks;
+        ReachTexels = reachTexels; ApronTexels = apronTexels; Inputs = inputs;
     }
+
+    /// <summary>
+    /// The ground around the foot, for the scree (R12): RGBA half floats - the true distance to the nearest
+    /// edge of the land in any direction (world units, 0 on the land, <see cref="None"/> out of reach or under
+    /// «здесь пляж»), how much of the texel is open water (1) rather than lower land (0), the way that edge
+    /// faces (radians from south), 1. Null when the look has no scree or the square has no wall.
+    /// </summary>
+    public Half[]? Apron { get; }
+    private int ApronTexels { get; }
 
     /// <summary>Side of the blocks the wall is drawn in, in texels.</summary>
     public const int Block = 16;
@@ -99,7 +110,9 @@ public sealed class LandCliffField
             surface.Canvas.Translate((float)-Left, (float)-Top);
             using (var fieldShader = ToShader(out var image))
             using (image)
-            using (var shader = LandCliffShader.Create(fieldShader, style, rimColor, rimWidth, Texel))
+            using (var apronShader = ApronShader(out var apronImage))
+            using (apronImage)
+            using (var shader = LandCliffShader.Create(fieldShader, apronShader, style, rimColor, rimWidth, Texel))
             {
                 if (shader is null) return null;
                 using var paint = new SKPaint { Shader = shader };
@@ -116,11 +129,23 @@ public sealed class LandCliffField
     }
 
     /// <summary>The field as an image shader in world coordinates, for <see cref="LandCliffShader"/>.</summary>
-    internal SKShader ToShader(out SKImage image)
+    internal SKShader ToShader(out SKImage image) => ToShader(Texels!, out image);
+
+    /// <summary>The ground around the foot as an image shader in world coordinates; null without scree.</summary>
+    internal SKShader? ApronShader(out SKImage? image)
+    {
+        image = null;
+        if (Apron is null) return null;
+        var shader = ToShader(Apron, out var made);
+        image = made;
+        return shader;
+    }
+
+    private SKShader ToShader(Half[] texels, out SKImage image)
     {
         var info = new SKImageInfo(Size, Size, SKColorType.RgbaF16, SKAlphaType.Premul);
         var bytes = new byte[Size * Size * 8];
-        System.Runtime.InteropServices.MemoryMarshal.AsBytes(Texels.AsSpan()).CopyTo(bytes);
+        System.Runtime.InteropServices.MemoryMarshal.AsBytes(texels.AsSpan()).CopyTo(bytes);
         using var data = SKData.CreateCopy(bytes);
         image = SKImage.FromPixels(info, data, info.RowBytes)!;
         var matrix = SKMatrix.CreateScaleTranslation((float)Texel, (float)Texel, (float)Left, (float)Top);
@@ -146,16 +171,18 @@ public sealed class LandCliffField
     /// changed (same coverage tiles, same lower land and levels, same lean, reach at least as far).
     /// </summary>
     public static LandCliffField Get(LandLayer land, IReadOnlyList<LandLayer> beneath, double lean, double reach,
-        int lod, int fx, int fy)
+        int lod, int fx, int fy, double apron = 0)
     {
         var texel = 1 << lod;
         var reachTexels = (int)Math.Ceiling(reach / texel) + 2;
+        var apronTexels = apron > 0 ? (int)Math.Ceiling(apron / texel) + 2 : 0;
         var leanKey = Math.Round(lean, 3);
-        var inputs = InputsOf(land, beneath, leanKey, reachTexels, lod, fx, fy);
+        var inputs = InputsOf(land, beneath, leanKey, reachTexels, apronTexels, lod, fx, fy);
         var key = new Key(land.Id, lod, fx, fy);
         lock (Gate)
         {
             if (Entries.TryGetValue(key, out var node) && node.Value.Field.ReachTexels >= reachTexels
+                && node.Value.Field.ApronTexels == apronTexels
                 && SameInputs(node.Value.Field.Inputs, inputs))
             {
                 Order.Remove(node); Order.AddFirst(node);
@@ -165,7 +192,7 @@ public sealed class LandCliffField
         // A little more reach than asked, so dragging the height slider up does not recompute
         // the field on every step.
         var started = System.Diagnostics.Stopwatch.GetTimestamp();
-        var computed = Compute(land, beneath, leanKey, reachTexels + (reachTexels / 3) + 4, lod, fx, fy, inputs);
+        var computed = Compute(land, beneath, leanKey, reachTexels + (reachTexels / 3) + 4, apronTexels, lod, fx, fy, inputs);
         lock (Gate) ComputeMilliseconds += System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds;
         Interlocked.Increment(ref Computed);
         lock (Gate)
@@ -187,7 +214,7 @@ public sealed class LandCliffField
         lock (Gate) { Entries.Clear(); Order.Clear(); _bytes = 0; }
     }
 
-    private static long Bytes(LandCliffField field) => (field.Texels?.Length ?? 0) * 3L + 256;
+    private static long Bytes(LandCliffField field) => ((field.Texels?.Length ?? 0) * 3L) + ((field.Apron?.Length ?? 0) * 2L) + 256;
 
     /// <summary>
     /// What a field depends on: the coverage tiles of this land in its window (above it, within
@@ -195,11 +222,17 @@ public sealed class LandCliffField
     /// the square itself. Tiles are immutable arrays, so a reference is their identity.
     /// </summary>
     private static object[] InputsOf(LandLayer land, IReadOnlyList<LandLayer> beneath, double lean, int reachTexels,
-        int lod, int fx, int fy)
+        int apronTexels, int lod, int fx, int fy)
     {
         var texel = 1 << lod;
         var (left, top, right, bottom) = Window(lean, reachTexels, lod, fx, fy);
-        var list = new List<object> { land.Level, lean };
+        // The scree looks for the nearest edge all round the square, not only above it.
+        if (apronTexels > 0)
+        {
+            left = Math.Min(left, (fx * Size) - apronTexels); top = Math.Min(top, (fy * Size) - apronTexels);
+            right = Math.Max(right, ((fx + 1) * Size) + apronTexels); bottom = Math.Max(bottom, ((fy + 1) * Size) + apronTexels);
+        }
+        var list = new List<object> { land.Level, lean, apronTexels };
         foreach (var key in land.GeometryTiles.KeysIntersecting(left * texel, top * texel, right * texel, bottom * texel))
         { list.Add(key); list.Add(land.GeometryTiles.TryGet(key)!); }
         foreach (var mask in new[] { land.CliffWallTiles, land.CliffBeachTiles })
@@ -240,7 +273,7 @@ public sealed class LandCliffField
     // ------------------------------------------------------------------ computation
 
     private static LandCliffField Compute(LandLayer land, IReadOnlyList<LandLayer> beneath, double lean, int reachTexels,
-        int lod, int fx, int fy, object[] inputs)
+        int apronTexels, int lod, int fx, int fy, object[] inputs)
     {
         var texel = 1 << lod;
         var (left, top, right, bottom) = Window(lean, reachTexels, lod, fx, fy);
@@ -328,11 +361,128 @@ public sealed class LandCliffField
                 }
             }
         }
+        Half[]? apron = null;
+        if (apronTexels > 0)
+        {
+            apron = ComputeApron(land, beneath, apronTexels, lod, fx, fy);
+            for (var y = 0; y < Size; y++)
+                for (var x = 0; x < Size; x++)
+                {
+                    var e = (float)apron[((y * Size) + x) * 4];
+                    if (e <= 0 || e >= None || (float)texels[(((y * Size) + x) * 4) + 1] < 0.5f) continue;
+                    any = true;
+                    blocks[((y / Block) * Blocks1D) + (x / Block)] = true;
+                    if (x < minX) minX = x; if (x > maxX) maxX = x;
+                    if (y < minY) minY = y; if (y > maxY) maxY = y;
+                }
+        }
         WorldBounds? wall = any
             ? new WorldBounds((fx * Size + minX) * (double)texel, (fy * Size + minY) * (double)texel,
                 (fx * Size + maxX + 1) * (double)texel, (fy * Size + maxY + 1) * (double)texel)
             : null;
-        return new LandCliffField(lod, fx, fy, any ? texels : null, wall, any ? blocks : null, reachTexels, inputs);
+        return new LandCliffField(lod, fx, fy, any ? texels : null, any ? apron : null, wall, any ? blocks : null,
+            reachTexels, apronTexels, inputs);
+    }
+
+    /// <summary>
+    /// The ground round the foot of the land over one square (see <see cref="Apron"/>). The nearest edge is
+    /// found with a two-pass vector distance transform over the square widened by the reach on every side,
+    /// so two squares side by side agree along their seam.
+    /// </summary>
+    private static Half[] ComputeApron(LandLayer land, IReadOnlyList<LandLayer> beneath, int reachTexels, int lod, int fx, int fy)
+    {
+        var texel = 1 << lod;
+        var side = Size + (2 * reachTexels);
+        var x0 = (fx * Size) - reachTexels; var y0 = (fy * Size) - reachTexels;
+        var coverage = new byte[side * side];
+        var sampler = new Sampler(land.GeometryTiles, lod);
+        for (var row = 0; row < side; row++)
+            for (var column = 0; column < side; column++)
+                coverage[(row * side) + column] = sampler.At(x0 + column, y0 + row);
+
+        // Offset from every texel to the nearest texel of the land.
+        const short Far = 16000;
+        var dx = new short[side * side]; var dy = new short[side * side];
+        for (var i = 0; i < coverage.Length; i++) if (coverage[i] < 128) { dx[i] = Far; dy[i] = Far; }
+        void Take(int index, int column, int row, int ox, int oy)
+        {
+            var c = column + ox; var r = row + oy;
+            if (c < 0 || r < 0 || c >= side || r >= side) return;
+            var from = (r * side) + c;
+            if (dx[from] >= Far) return;
+            var cx = dx[from] + ox; var cy = dy[from] + oy;
+            var mine = dx[index] >= Far ? long.MaxValue : ((long)dx[index] * dx[index]) + ((long)dy[index] * dy[index]);
+            if (((long)cx * cx) + ((long)cy * cy) < mine) { dx[index] = (short)cx; dy[index] = (short)cy; }
+        }
+        for (var row = 0; row < side; row++)
+        {
+            for (var column = 0; column < side; column++)
+            {
+                var i = (row * side) + column;
+                Take(i, column, row, -1, 0); Take(i, column, row, 0, -1); Take(i, column, row, -1, -1); Take(i, column, row, 1, -1);
+            }
+            for (var column = side - 1; column >= 0; column--) Take((row * side) + column, column, row, 1, 0);
+        }
+        for (var row = side - 1; row >= 0; row--)
+        {
+            for (var column = side - 1; column >= 0; column--)
+            {
+                var i = (row * side) + column;
+                Take(i, column, row, 1, 0); Take(i, column, row, 0, 1); Take(i, column, row, 1, 1); Take(i, column, row, -1, 1);
+            }
+            for (var column = 0; column < side; column++) Take((row * side) + column, column, row, -1, 0);
+        }
+
+        var lowers = beneath.Where(lower => lower.GeometryTiles.KeysIntersecting(fx * Size * texel, fy * Size * texel,
+            (fx + 1) * Size * texel, (fy + 1) * Size * texel).Any()).Select(lower => new Sampler(lower.GeometryTiles, lod)).ToArray();
+        var masked = land.HasCliffMask;
+        var wallMask = new Sampler(land.CliffWallTiles, lod); var beachMask = new Sampler(land.CliffBeachTiles, lod);
+        var apron = new Half[Size * Size * 4];
+        var limit = (reachTexels - 1) * (float)texel;
+        for (var y = 0; y < Size; y++)
+            for (var x = 0; x < Size; x++)
+            {
+                var column = x + reachTexels; var row = y + reachTexels;
+                var i = (row * side) + column;
+                var distance = None; var facing = 0f;
+                if (coverage[i] >= 128) distance = 0;
+                else if (dx[i] < Far)
+                {
+                    var length = MathF.Sqrt((dx[i] * dx[i]) + (dy[i] * dy[i]));
+                    var siteColumn = column + dx[i]; var siteRow = row + dy[i];
+                    // The edge crosses between the land texel and the next one towards this texel.
+                    var nextColumn = siteColumn - (int)MathF.Round(dx[i] / length); var nextRow = siteRow - (int)MathF.Round(dy[i] / length);
+                    var inside = coverage[(siteRow * side) + siteColumn]; var outside = coverage[(nextRow * side) + nextColumn];
+                    var fraction = inside == outside ? 1f : Math.Clamp((inside - 127.5f) / (inside - outside), 0f, 1f);
+                    var world = (length - fraction) * texel + 0.001f;
+                    var beach = masked && MaskAt(ref wallMask, ref beachMask, x0 + siteColumn, y0 + siteRow) == 2;
+                    if (world < limit && !beach)
+                    {
+                        // Close to the edge the way it faces is read from the coverage (smooth along a raster
+                        // staircase); farther out, from the direction to the nearest point (a fan round a corner).
+                        var edge = EdgeFacing(coverage, side, side, siteColumn, siteRow);
+                        var weight = Math.Clamp((length - 1) / 5f, 0f, 1f);
+                        var nx = (MathF.Sin(edge) * (1 - weight)) + ((-dx[i] / length) * weight);
+                        var ny = (MathF.Cos(edge) * (1 - weight)) + ((-dy[i] / length) * weight);
+                        // Behind an edge that faces away from the viewer nothing of the slope shows. Leaving it
+                        // out also keeps the angle clear of its wrap at due north, which linear filtering
+                        // would turn into a false «south» between two texels.
+                        if (ny > -0.55f * MathF.Sqrt((nx * nx) + (ny * ny)))
+                        {
+                            distance = world;
+                            facing = MathF.Atan2(nx, ny);
+                        }
+                    }
+                }
+                byte ground = 0;
+                for (var l = 0; l < lowers.Length; l++) ground = Math.Max(ground, lowers[l].At((fx * Size) + x, (fy * Size) + y));
+                var offset = ((y * Size) + x) * 4;
+                apron[offset] = (Half)distance;
+                apron[offset + 1] = (Half)(1 - (ground / 255f));
+                apron[offset + 2] = (Half)facing;
+                apron[offset + 3] = (Half)1f;
+            }
+        return apron;
     }
 
     /// <summary>

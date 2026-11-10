@@ -162,7 +162,10 @@ public static class MapProjectFormat
     /// ice, shoals — and the scatter of the moonlight of «Лунная ночь» other than the first.
     /// </summary>
     public const int SeaMannersSchemaVersion = 48;
-    public const int MaxSupportedSchemaVersion = SeaMannersSchemaVersion;
+
+    /// <summary>R12 (2026-11-10): the slope of fallen stone at the foot of a cliff (<c>cliff.scree</c>, <c>cliff.screeWidth</c>).</summary>
+    public const int CliffScreeSchemaVersion = 49;
+    public const int MaxSupportedSchemaVersion = CliffScreeSchemaVersion;
 
     /// <summary>
     /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry

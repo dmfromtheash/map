@@ -199,6 +199,92 @@ public sealed class LandCliffRenderingTests
         return tiles;
     }
 
+    /// <summary>Probes that differ between two pictures in the band below the island's southern edge.</summary>
+    private static int Differing(SKBitmap a, SKBitmap b)
+    {
+        var count = 0;
+        for (var x = 150; x < 620; x += 2)
+            for (var y = 300; y < 470; y += 2)
+                if (a.GetPixel(x, y) != b.GetPixel(x, y)) count++;
+        return count;
+    }
+
+    [Fact]
+    public void A_cliff_without_scree_keeps_its_former_look_and_scree_settings_are_bounded()
+    {
+        var island = Styled(Land("Остров", 1, (x, y) => Blob(x, y, 384, 230, 250, 150)), Solid);
+        using var before = Render(Document(island));
+        using var same = Render(Document(Styled(island, Solid with { Scree = CliffScree.None, ScreeWidth = 2.5 })));
+        AssertSame(before, same);
+        Assert.Equal(CliffScree.None, (Solid with { Scree = (CliffScree)42 }).Bounded().Scree);
+        Assert.Equal(3, (Solid with { ScreeWidth = 99 }).Bounded().ScreeWidth);
+        Assert.Equal(1, (Solid with { ScreeWidth = double.NaN }).Bounded().ScreeWidth);
+        Assert.Equal(0, Solid.ScreeReach(1));
+        Assert.True((Solid with { Scree = CliffScree.TwoBenches }).ScreeReach(1) > 0);
+        Assert.Equal(5, LandCliffStyle.Screes.Count);
+    }
+
+    [Fact]
+    public void Each_scree_draws_its_own_slope_near_the_wall_and_the_same_one_every_time()
+    {
+        var island = Styled(Land("Остров", 1, (x, y) => Blob(x, y, 384, 230, 250, 150)), Solid);
+        using var flat = Render(Document(island with { Level = 0 }));
+        using var wall = Render(Document(island));
+        var pictures = new List<SKBitmap>();
+        try
+        {
+            foreach (var (kind, title, _) in LandCliffStyle.Screes.Skip(1))
+            {
+                var picture = Render(Document(Styled(island, Solid with { Scree = kind })));
+                pictures.Add(picture);
+                Assert.True(Differing(wall, picture) > 300, $"«{title}» must not be the plain wall: {Differing(wall, picture)} probes differ");
+                // Well below the foot the sea is the sea again: the slope stays by the wall.
+                Assert.Equal(flat.GetPixel(384, 490), picture.GetPixel(384, 490));
+                Assert.Equal(flat.GetPixel(384, 40), picture.GetPixel(384, 40));
+                using var again = Render(Document(Styled(island, Solid with { Scree = kind })));
+                AssertSame(picture, again);
+            }
+            for (var i = 0; i < pictures.Count; i++)
+                for (var j = i + 1; j < pictures.Count; j++)
+                    Assert.True(Differing(pictures[i], pictures[j]) > 100, $"slopes {i + 1} and {j + 1} must differ in drawing: {Differing(pictures[i], pictures[j])}");
+        }
+        finally { foreach (var picture in pictures) picture.Dispose(); }
+    }
+
+    [Fact]
+    public void Scree_in_the_sea_has_surf_and_on_the_ground_it_has_none_and_a_wider_one_reaches_farther()
+    {
+        var scree = Solid with { Scree = CliffScree.TwoBenches };
+        static int Surf(SKBitmap image)
+        {
+            var count = 0;
+            for (var x = 250; x < 420; x++)
+                for (var y = 300; y < 420; y++)
+                    if (image.GetPixel(x, y) is { Red: > 205, Green: > 215, Blue: > 215 }) count++;
+            return count;
+        }
+        // The plateau's southern edge lies at y = 300 in the middle column: once over the sea, once over lower land.
+        var plateau = Styled(Land("Плато", 2, (x, y) => Blob(x, y, 330, 210, 140, 90)), scree);
+        using var inSea = Render(Document(plateau));
+        using var seaWall = Render(Document(Styled(plateau, Solid)));
+        Assert.True(Surf(inSea) > Surf(seaWall) + 20, $"surf at the foot in the sea: {Surf(seaWall)} -> {Surf(inSea)}");
+
+        var ground = Land("Остров", 1, (x, y) => Blob(x, y, 384, 260, 330, 210));
+        ground = ground with { EdgeStyle = ground.EdgeStyle with { FillColor = "#FF7A8F6A", FillTextureId = null } };
+        using var onGround = Render(Document(ground, plateau));
+        using var groundWall = Render(Document(ground, Styled(plateau, Solid)));
+        Assert.True(Surf(onGround) <= Surf(groundWall) + 2, $"no surf on the ground: {Surf(groundWall)} -> {Surf(onGround)}");
+
+        using var wide = Render(Document(ground, Styled(plateau, scree with { ScreeWidth = 2.5 })));
+        int Reach(SKBitmap image)
+        {
+            var farthest = 0;
+            for (var y = 300; y < 500; y++) if (image.GetPixel(330, y) != groundWall.GetPixel(330, y)) farthest = y;
+            return farthest;
+        }
+        Assert.True(Reach(wide) > Reach(onGround) + 10, $"a wider scree reaches farther: {Reach(onGround)} -> {Reach(wide)}");
+    }
+
     /// <summary>
     /// MAP_CLIFF_PNG=&lt;folder&gt; writes one sheet per ready look - islands, plateaus, a pit and
     /// scattered rocks on parchment, like the owner's tier sheets - for side-by-side comparison.

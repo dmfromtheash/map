@@ -63,7 +63,8 @@ public sealed partial class EditorView
             {
                 set(current => current with
                 {
-                    Cliff = chosen.Style,
+                    // A ready look changes the rock; the slope at the foot is a choice of its own and stays.
+                    Cliff = chosen.Style with { Scree = current.Cliff.Scree, ScreeWidth = current.Cliff.ScreeWidth },
                     OutlineColor = chosen.Rim ?? current.OutlineColor,
                     OutlineWidth = chosen.RimWidth ?? current.OutlineWidth,
                 });
@@ -80,6 +81,23 @@ public sealed partial class EditorView
             var foot = Cliff()?.Foot;
             foreach (var button in footButtons.OfType<ToggleButton>())
                 button.IsChecked = foot is { } current && button.Name == "LandCliffFoot_" + current;
+        });
+
+        // The slope of fallen stone at the foot: none, or one of the owner's four (R12).
+        var (screeRow, screeButtons) = Ui.Segmented("LandCliffScree_",
+            [.. LandCliffStyle.Screes.Select(s => (s.Scree.ToString(), s.Title, (string?)null))],
+            key => { SetCliff(cliff => cliff with { Scree = Enum.Parse<CliffScree>(key) }); SyncAppearanceSections(); Canvas.InvalidateVisual(); });
+        foreach (var button in screeButtons)
+            ToolTip.SetTip(button, LandCliffStyle.Screes.First(s => "LandCliffScree_" + s.Scree == button.Name).Description);
+        var screeWidth = Slider("LandCliffScreeWidthSlider", "Ширина осыпи", 30, 300, "%", 5,
+            c => c.ScreeWidth, (c, v) => c with { ScreeWidth = v }, 100,
+            "Как далеко откос отходит от стены: 100 % — как нарисовано, меньше — теснее к склону.");
+        _appearanceSyncs.Add(() =>
+        {
+            var scree = Cliff()?.Scree;
+            foreach (var button in screeButtons.OfType<ToggleButton>())
+                button.IsChecked = scree is { } current && button.Name == "LandCliffScree_" + current;
+            screeWidth.IsVisible = scree is not null and not CliffScree.None;
         });
 
         Control Group(string name, string title, bool open, params Control[] children)
@@ -102,6 +120,7 @@ public sealed partial class EditorView
             Children =
             {
                 Ui.Subgroup("Готовый вид", looks),
+                Group("LandCliffScree", "Осыпь у подножия", true, screeRow, screeWidth),
                 Group("LandCliffShape", "Форма", true,
                     Slider("LandCliffHeightSlider", "Высота яруса", 0, LandCliffStyle.MaximumHeight, "ед.", 1,
                         c => c.Height, (c, v) => c with { Height = v }, 1,

@@ -616,6 +616,13 @@ internal sealed class LandCliffDto
     [JsonPropertyName("baseShadow")] public double? BaseShadow { get; set; }
     [JsonPropertyName("baseShadowLength")] public double? BaseShadowLength { get; set; }
     [JsonPropertyName("baseShadowColor")] public string? BaseShadowColor { get; set; }
+    // The slope at the foot (schema v49): written only when the cliff has one.
+    [JsonPropertyName("scree")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Scree { get; set; }
+    [JsonPropertyName("screeWidth")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public double? ScreeWidth { get; set; }
 }
 
 internal sealed class MaskDto
