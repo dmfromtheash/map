@@ -21,20 +21,8 @@ internal static class StylePacksSheet
         public SKImage? TryGetImage(string sha256) => images.GetValueOrDefault(sha256);
     }
 
-    internal sealed record Pack(string Id, string Title, MapStylePreset Style, string CliffLook, CliffScree Scree,
-        RiverStyle River, RoadDrawing Road, SeaManner Sea, string NameColor, string NameOutline);
-
-    internal static IReadOnlyList<Pack> Packs { get; } =
-    [
-        new("ink", "Тушь", MapStylePreset.InkWetBrush, "ink-sepia", CliffScree.TwoBenches, RiverStyle.Illustrated(pen: true),
-            RoadDrawing.PenRuts, SeaManner.PenLines, "#FF1E1B18", "#00000000"),
-        new("parchment", "Пергамент", MapStylePreset.EngravingAquatint, "grey-engraving", CliffScree.WallAndBench, RiverStyle.Illustrated(pen: true),
-            RoadDrawing.Country, SeaManner.Engraved, "#FF5B3A1E", "#00000000"),
-        new("watercolor", "Акварель", MapStylePreset.WatercolorBigShapes, "ice", CliffScree.None, RiverStyle.Painted(),
-            RoadDrawing.Painterly, SeaManner.WatercolorHalo, "#FF3E5566", "#00000000"),
-        new("atlas", "Атлас", MapStylePreset.OldMapBlaeu, "atlas", CliffScree.TwoBenches, RiverStyle.Natural(),
-            RoadDrawing.Country, SeaManner.BandsAndLines, "#FF6B2A1A", "#FFFFFFFF"),
-    ];
+    // The packs themselves live in Core (MapStylePack.Presets, DEC-094); this sheet only draws them.
+    private static IReadOnlyList<MapStylePack> Packs => MapStylePack.Presets;
 
     private const int Width = 1600, Height = 1000;
     private const string SeaColor = "#FF9DB7C2";
@@ -76,31 +64,23 @@ internal static class StylePacksSheet
         VectorPoint[] roadPath = [new(330, 640), new(500, 600), new(680, 640), new(860, 590), new(1060, 620), new(1220, 560)];
         (string Text, double X, double Y, double Size)[] names = [("Северные горы", 560, 120, 46), ("Плато Ветров", 250, 560, 30), ("Ледяная бухта", 940, 930, 30)];
 
-        MapDocument Document(Pack? pack)
+        MapDocument Document(MapStylePack? pack)
         {
-            var river = new River
-            {
-                Name = "Река", Style = pack?.River ?? CurrentLook.River(),
-                Channels = [RiverEditor.NewChannel(riverPath, 16)],
-            };
-            var road = RoadEditor.NewRoad(roadPath, 10, pack is null ? RoadStyle.Painted() : RoadStyle.Preset(pack.Road), "Дорога", seed: 7);
+            var river = new River { Name = "Река", Style = CurrentLook.River(), Channels = [RiverEditor.NewChannel(riverPath, 16)] };
+            var road = RoadEditor.NewRoad(roadPath, 10, RoadStyle.Painted(), "Дорога", seed: 7);
             var labels = names.Select(n => new SceneObject(ObjectId.New(), SceneObjectKind.Text, n.Text, n.X - n.Text.Length * n.Size * .36, n.Y - n.Size,
                 n.Text.Length * n.Size * .72 + n.Size, n.Size * 1.5, 0, "#FF20242B", "#FFFFFFFF", 0, true, false)
             {
                 Text = new TextStyle
                 {
                     Content = n.Text, FontSize = n.Size, RequestedFontFamily = "Cormorant Garamond", FallbackFontFamily = "Georgia",
-                    FontWeight = 700, FillColor = pack?.NameColor ?? "#FF20242B",
-                    OutlineColor = pack?.NameOutline ?? "#00000000", OutlineWidth = pack?.NameOutline is "#FFFFFFFF" ? 3 : 0,
+                    FontWeight = 700, FillColor = "#FF20242B", OutlineColor = "#00000000",
                 },
             });
-            var cliff = pack is null ? null : LandCliffStyle.Looks.First(l => l.Id == pack.CliffLook).Style with { Scree = pack.Scree };
             var objectLayer = new ObjectLayer(LayerId.New(), "Горы", true, false, 1, [.. objects, .. labels]) { Rivers = [river], Roads = [road] };
-            var sea = pack is null ? SeaStyle.NewMapDefault : SeaStyle.For(pack.Sea);
-            return new MapDocument(DocumentId.New(), "Пакеты стиля", DateTimeOffset.UnixEpoch, new CanvasDefinition(Width, Height, "px", SeaColor),
-                [new BaseColorLayer(LayerId.New(), "Море", true, false, 1, SeaColor) { Sea = sea }, plain,
-                 cliff is null ? plateau : plateau with { EdgeStyle = plateau.EdgeStyle with { Cliff = cliff } }, objectLayer], [.. assets])
-            { Style = pack is null ? null : MapStyle.For(pack.Style) with { Enabled = true } };
+            var map = new MapDocument(DocumentId.New(), "Пакеты стиля", DateTimeOffset.UnixEpoch, new CanvasDefinition(Width, Height, "px", SeaColor),
+                [new BaseColorLayer(LayerId.New(), "Море", true, false, 1, SeaColor) { Sea = SeaStyle.NewMapDefault }, plain, plateau, objectLayer], [.. assets]);
+            return pack?.ApplyTo(map) ?? map;
         }
 
         var source = new Images(images);
