@@ -434,9 +434,15 @@ public sealed class WaterCliffsPersistenceTests
             return System.Text.Encoding.UTF8.GetBytes(root.ToJsonString());
         });
         Assert.Contains("v49", Assert.ThrowsAny<Exception>(() => MapProjectStore.Open(older)).ToString(), StringComparison.Ordinal);
-        var unknown = Forge("scree-unknown.mapproj", (name, data) => name == "scene.json"
-            ? System.Text.Encoding.UTF8.GetBytes(System.Text.Encoding.UTF8.GetString(data).Replace("two-benches", "fangs", StringComparison.Ordinal))
-            : data);
-        Assert.ThrowsAny<Exception>(() => MapProjectStore.Open(unknown));
+        // An unknown scree, in a file whose checksums are otherwise right: refused by name, not drawn as something else.
+        var unknown = Forge("scree-unknown.mapproj", (_, data) => data);
+        var renamed = 0;
+        ProjectJsonTestMutations.RewriteScene(unknown, scene =>
+        {
+            foreach (var layer in scene["layers"]!.AsArray())
+                if (layer?["landStyle"]?["cliff"] is { } cliff && cliff["scree"] is not null) { cliff["scree"] = "fangs"; renamed++; }
+        });
+        Assert.Equal(1, renamed);
+        Assert.Contains("fangs", Assert.ThrowsAny<Exception>(() => MapProjectStore.Open(unknown)).ToString(), StringComparison.Ordinal);
     }
 }

@@ -94,7 +94,7 @@ public sealed partial class EditorView
             Add("Свет", "Оформление → Свет", "свет время суток вечер ночь день огни", "LookPart_light", () => ShowAppearanceTab(LookPart.Light));
             Add("Стили", "Оформление → Стиль", "стиль тушь гравюра акварель уголь синька лунная ночь печать укиё", "LookPart_style",
                 () => ShowAppearanceTab(LookPart.Styles));
-            Add("Море", "Оформление → Море", "море вода волны рябь изобаты стиль моря", "LookPart_sea", () => ShowAppearanceTab(LookPart.Sea));
+            Add("Море", "Оформление → Море", "море вода волны рябь стиль моря", "LookPart_sea", () => ShowAppearanceTab(LookPart.Sea));
         }
 
         World("AtlasCheckButton", "Проверка атласа", "атлас подкарта проверка связи");

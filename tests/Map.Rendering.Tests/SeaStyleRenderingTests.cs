@@ -33,7 +33,6 @@ public sealed class SeaStyleRenderingTests
 
     [Theory]
     [InlineData(SeaManner.PenLines)]
-    [InlineData(SeaManner.Isobaths)]
     [InlineData(SeaManner.Engraved)]
     [InlineData(SeaManner.DepthBands)]
     [InlineData(SeaManner.BandsAndLines)]

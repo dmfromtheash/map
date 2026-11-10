@@ -202,7 +202,6 @@ public static partial class MapProjectStore
     private static readonly IReadOnlyDictionary<SeaManner, string> SeaMannerNames = new Dictionary<SeaManner, string>
     {
         [SeaManner.PenLines] = "pen-lines",
-        [SeaManner.Isobaths] = "isobaths",
         [SeaManner.Engraved] = "engraved",
         [SeaManner.DepthBands] = "depth-bands",
         [SeaManner.BandsAndLines] = "bands-and-lines",
@@ -212,6 +211,8 @@ public static partial class MapProjectStore
         [SeaManner.Ice] = "ice",
         [SeaManner.Shoals] = "shoals",
     };
+
+    private const string RemovedIsobathsName = "isobaths";
 
     private static SeaDto ToSeaDto(SeaStyle sea) => new()
     {
@@ -226,6 +227,10 @@ public static partial class MapProjectStore
     private static BaseColorLayer ReadSeaV32(BaseColorLayer page, SeaDto? dto)
     {
         if (dto is null) return page;
+        // «Изолинии» are gone (DEC-091): a map saved with them takes «Рябь штрихом», the sea of new maps, in its
+        // own colours, and keeps the strength and reach it had.
+        if (dto.Manner == RemovedIsobathsName)
+            return page with { Sea = (SeaStyle.NewMapDefault with { Strength = dto.Strength ?? 1, Scale = dto.Scale ?? 1 }).Bounded() };
         var manner = SeaMannerNames.FirstOrDefault(p => p.Value == dto.Manner);
         if (manner.Value is null) throw new MapProjectCorruptedException($"Неизвестный стиль моря «{dto.Manner}».");
         var defaults = SeaStyle.For(manner.Key);

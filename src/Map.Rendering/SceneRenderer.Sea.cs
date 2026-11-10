@@ -139,17 +139,6 @@ half4 main(float2 p) {
         lines = max(lines, penLine(dL, 35.0, 1.1, q, 3.0) * 0.45);
         lines = max(lines, penLine(dL, 55.0, 0.9, q, 4.0) * 0.28);
         col = mix(col, cInk, lines);
-    } else if (manner < 2.5) {
-        col = mix(cShallow, cMiddle, smoothstep(5.0, 120.0, dL));
-        col = mix(col, cDeep, smoothstep(120.0, 250.0, dL));
-        col *= 1.0 + wash * 0.04 + grain * 0.015;
-        float s = dL / 22.0; float k = floor(s + 0.5);
-        float dist = abs(s - k) * 22.0;
-        // Every fourth contour is an index line, drawn heavier.
-        float heavy = step(3.5, mod(k, 4.0) + 0.5);
-        float w = max(mix(0.9, 1.6, heavy), px / scale);
-        float contour = (1.0 - smoothstep(w * 0.5, w * 0.5 + px / scale, dist)) * step(0.5, k) * (1.0 - smoothstep(10.0, 12.0, k));
-        col = mix(col, cInk, contour * mix(0.32, 0.55, heavy));
     } else if (manner < 3.5) {
         col = mix(cShallow, cMiddle, smoothstep(10.0, 110.0, dL));
         col = mix(col, cDeep, smoothstep(110.0, 250.0, dL) * 0.5);

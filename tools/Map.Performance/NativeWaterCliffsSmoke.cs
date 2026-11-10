@@ -107,10 +107,10 @@ public sealed partial class NativeEditorScenarioApplication
         _report.Checks["delta-preview-and-apply"] = previewKept && _editor.Rivers.Single().Channels.Length == _editor.RiverDeltaArms;
         SaveVisual(Path.ChangeExtension(Options.OutputPath, ".delta.png"));
 
-        // The sea: Море of «Вид» in «Оформление», the isobaths picture.
+        // The sea: Море of «Вид» in «Оформление», the picture of depth in colour.
         await Click("WorkspaceAppearanceTab");
-        await Click("LookCard_sea-2"); await Frame();
-        _report.Checks["sea-tab-applies-manner"] = _editor.Sea is { Manner: SeaManner.Isobaths };
+        await Click("LookCard_sea-4"); await Frame();
+        _report.Checks["sea-tab-applies-manner"] = _editor.Sea is { Manner: SeaManner.DepthBands };
         await Task.Delay(800); await Frame();
         _report.Screenshot = Path.ChangeExtension(Options.OutputPath, ".png");
         SaveVisual(_report.Screenshot);

@@ -5,8 +5,7 @@ public enum SeaManner
 {
     /// <summary>Береговые линии пером: broken slate lines along the shore, wider apart and fainter outwards.</summary>
     PenLines = 1,
-    /// <summary>Изолинии глубин: contours at equal steps, every fourth heavier, as on a sea chart.</summary>
-    Isobaths = 2,
+    // 2 was «Изолинии глубин»: removed by the owner on 2026-11-10 (DEC-091); a map saved with it opens as «Рябь штрихом».
     /// <summary>Рябь штрихом: short level strokes, crowded at the shore, thinning out to clear water.</summary>
     Engraved = 3,
     /// <summary>Глубина цветом: three flat watercolour bands, shallow to deep, with wet edges.</summary>
@@ -64,7 +63,6 @@ public sealed record SeaStyle
     /// <summary>The ready look of each manner: the colours chosen with the owner's land (mockups of 2026-10-26).</summary>
     public static SeaStyle For(SeaManner manner) => manner switch
     {
-        SeaManner.Isobaths => new() { Manner = manner, Ink = "#FF34505F", Shallow = "#FF9AB6BB", Middle = "#FF86A5B1", Deep = "#FF6B8CA0" },
         SeaManner.Engraved => new() { Manner = manner, Ink = "#FF2C4252", Shallow = "#FF9CB7BD", Middle = "#FF86A4B0", Deep = "#FF7393A5" },
         SeaManner.DepthBands => new() { Manner = manner, Ink = "#FF2E4455", Shallow = "#FF93B0B3", Middle = "#FF7F9FAE", Deep = "#FF587891" },
         SeaManner.BandsAndLines => new() { Manner = manner, Ink = "#FF2E4455", Shallow = "#FF95B2B5", Middle = "#FF84A3B0", Deep = "#FF62829A" },
@@ -80,7 +78,6 @@ public sealed record SeaStyle
     public static IReadOnlyList<(SeaManner Manner, string Title, string Description)> Manners { get; } =
     [
         (SeaManner.PenLines, "Линии пером", "Четыре прерывистые линии вдоль берега, как обводка гор: у берега плотнее, дальше реже и бледнее."),
-        (SeaManner.Isobaths, "Изолинии", "Линии равной глубины, каждая четвёртая жирнее; дальше от берега вода темнее. Как на морской карте."),
         (SeaManner.Engraved, "Рябь штрихом", "Короткие горизонтальные штрихи, как на гравюре: у берега гуще, к открытому морю редеют."),
         (SeaManner.DepthBands, "Глубина цветом", "Три спокойные полосы цвета — мелководье, середина, глубина — с мягкими краями акварели."),
         (SeaManner.BandsAndLines, "Цвет и две линии", "Полосы глубины, бледнее, и две линии пером у самого берега."),
