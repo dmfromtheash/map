@@ -68,10 +68,10 @@
 - **Кто держит:** `[приёмка владельца]`.
 - **Граф:** `PlacementAreaRules.OnlyOnWater` вызывается из `EditorView.PlacementAreaRules.cs`. `PlacementAreaDensityBrush.Begin` — из `EditorViewModel.PlacementAreaBeauty.cs`. `LayerEffects.DepthSort` — из `EditorView.SidePanel.cs`, `PlacementArea.DepthSort` — из `EditorViewModel.PlacementAreaRules.cs`. Кнопка `SaveSelectionAsAssetButton` есть в `EditorView.SidePanel.cs`. Всё подключено к окну.
 
-### R11 · Роли ассетов — PARTIAL
+### R11 · Роли ассетов — ✅ 2026-11-10 (DEC-092)
 
 - **Сделано:** `catalog.json` v3 с ролями и миграцией. Роль назначается в паспорте набора. «Лес / Хребет / Поселение» работают на своём наборе без `RegionalArtPack`. Экология: опушка, гуще у воды. Смоуки `native-asset-catalog` 46/46 и `native-regional-roles` 65/65.
-- **Не хватает:** R11b — доводка вида выбора роли (сейчас выпадающий список). 2026-11-10: пять живых прототипов на выборе владельца — https://claude.ai/artifact/GjvFN23R7JZUtyzxTC8vgc; затем код и приёмка.
+- **R11b ✅ 2026-11-10 (DEC-092):** владелец выбрал «Полки по ролям»; в каталоге кнопка «Роли» → панель с каруселью групп по три и полками ролей, список в паспорте убран. Смоук `native-asset-catalog` 50/50. Осталась живая приёмка владельцем.
 - **Кто держит:** R11b — `[визуал Claude]` + `[приёмка владельца]`.
 - **R11c ✅ 2026-11-09:** `PlacementAreaEcology.HasCliff` кроме края яруса с обрывом смотрит поле высот земли через `TerrainProbe` (`IsSteep`).
 
