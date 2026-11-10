@@ -403,16 +403,22 @@ public sealed class LandCliffField
         // Offset from every texel to the nearest texel of the land.
         const short Far = 16000;
         var dx = new short[side * side]; var dy = new short[side * side];
-        for (var i = 0; i < coverage.Length; i++) if (coverage[i] < 128) { dx[i] = Far; dy[i] = Far; }
+        var landTexels = 0;
+        for (var i = 0; i < coverage.Length; i++) if (coverage[i] < 128) { dx[i] = Far; dy[i] = Far; } else landTexels++;
+        // No land within reach, or nothing but land: no foot anywhere in the square.
+        if (landTexels == 0 || landTexels == coverage.Length) return EmptyApron(landTexels > 0);
+        // Squared length of the offset kept for every texel; int.MaxValue while none is known.
+        var best = new int[side * side];
+        for (var i = 0; i < best.Length; i++) best[i] = dx[i] >= Far ? int.MaxValue : 0;
         void Take(int index, int column, int row, int ox, int oy)
         {
             var c = column + ox; var r = row + oy;
-            if (c < 0 || r < 0 || c >= side || r >= side) return;
+            if ((uint)c >= (uint)side || (uint)r >= (uint)side) return;
             var from = (r * side) + c;
-            if (dx[from] >= Far) return;
+            if (best[from] == int.MaxValue) return;
             var cx = dx[from] + ox; var cy = dy[from] + oy;
-            var mine = dx[index] >= Far ? long.MaxValue : ((long)dx[index] * dx[index]) + ((long)dy[index] * dy[index]);
-            if (((long)cx * cx) + ((long)cy * cy) < mine) { dx[index] = (short)cx; dy[index] = (short)cy; }
+            var length = (cx * cx) + (cy * cy);
+            if (length < best[index]) { best[index] = length; dx[index] = (short)cx; dy[index] = (short)cy; }
         }
         for (var row = 0; row < side; row++)
         {
@@ -439,6 +445,9 @@ public sealed class LandCliffField
         var wallMask = new Sampler(land.CliffWallTiles, lod); var beachMask = new Sampler(land.CliffBeachTiles, lod);
         var apron = new Half[Size * Size * 4];
         var limit = (reachTexels - 1) * (float)texel;
+        // The way an edge texel faces, read once: every texel down the slope from it asks for the same one.
+        var siteFacing = new float[side * side];
+        Array.Fill(siteFacing, float.NaN);
         for (var y = 0; y < Size; y++)
             for (var x = 0; x < Size; x++)
             {
@@ -460,7 +469,9 @@ public sealed class LandCliffField
                     {
                         // Close to the edge the way it faces is read from the coverage (smooth along a raster
                         // staircase); farther out, from the direction to the nearest point (a fan round a corner).
-                        var edge = EdgeFacing(coverage, side, side, siteColumn, siteRow);
+                        var site = (siteRow * side) + siteColumn;
+                        if (float.IsNaN(siteFacing[site])) siteFacing[site] = EdgeFacing(coverage, side, side, siteColumn, siteRow);
+                        var edge = siteFacing[site];
                         var weight = Math.Clamp((length - 1) / 5f, 0f, 1f);
                         var nx = (MathF.Sin(edge) * (1 - weight)) + ((-dx[i] / length) * weight);
                         var ny = (MathF.Cos(edge) * (1 - weight)) + ((-dy[i] / length) * weight);
@@ -482,6 +493,15 @@ public sealed class LandCliffField
                 apron[offset + 2] = (Half)facing;
                 apron[offset + 3] = (Half)1f;
             }
+        return apron;
+    }
+
+    /// <summary>The ground of a square with no edge within reach: all land (distance 0) or none at all.</summary>
+    private static Half[] EmptyApron(bool land)
+    {
+        var apron = new Half[Size * Size * 4];
+        var distance = (Half)(land ? 0f : None);
+        for (var i = 0; i < apron.Length; i += 4) { apron[i] = distance; apron[i + 1] = (Half)1f; apron[i + 3] = (Half)1f; }
         return apron;
     }
 

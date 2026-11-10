@@ -147,7 +147,7 @@ public sealed record LandCliffStyle
 
     /// <summary>How far from an edge, in any direction, the scree of this many steps can lie; 0 without scree.</summary>
     public double ScreeReach(int steps) => Scree == CliffScree.None || steps <= 0 || Height <= 0 ? 0
-        : (Height * Math.Min(steps, 3) * ScreeWidth * 2.3) + 6;
+        : (Height * (1 + (0.3 * (Math.Min(steps, 3) - 1))) * ScreeWidth * 2.3) + 6;
 
     /// <summary>This style with every number inside its range; colours are kept as they are.</summary>
     public LandCliffStyle Bounded() => this with

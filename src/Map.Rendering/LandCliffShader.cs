@@ -109,6 +109,8 @@ half4 main(float2 p) {
         float wet = smoothstep(0.35, 0.65, ax.g);
         float phi = ax.b;
         float H = stepHeight * min(steps, 3.0);
+        // The slope widens only a little with every further level: a wall of two levels keeps its scree close.
+        float Hs = stepHeight * (1.0 + 0.3 * (min(steps, 3.0) - 1.0));
         float k = stepHeight / 32.0;
 
         // The four slopes of CliffScree: 1 two benches; 2 a taller wall and one bench; 3 three thin steps in pen,
@@ -120,6 +122,8 @@ half4 main(float2 p) {
         else if (scree > 2.5) { share = 0.3; width = 0.95; fillA = 0.88; streaks = 0.25; ledges = 3.0; densA = 0.0; densB = 0.0; tongues = 0.1; }
         else if (scree > 1.5) { share = 0.85; width = 0.85; fillA = 0.8; ledges = 1.0; densA = 0.35; densB = 0.55; }
 
+        // Out of reach of both the band of rock and the longest slope: nothing here, before any noise is read.
+        if (!(walled && d < H * share * 1.7) && !(sloped && e < Hs * screeWidth * 2.2 * 1.4)) { return half4(0.0); }
         float3 light = lightColor.rgb; float3 shade = shadeColor.rgb; float3 inkc = inkColor.rgb;
         float3 foam = float3(0.95, 0.97, 0.97);
         float cl = cos(lightTurn); float sl = sin(lightTurn);
@@ -155,8 +159,10 @@ half4 main(float2 p) {
         if (sloped) {
             float2 nrm = float2(sin(phi), cos(phi));
             float2 rim = p - nrm * e;
-            float W = slopeWidth(p, rim, phi, H, width * screeWidth, tongues, cones);
+            float W = slopeWidth(p, rim, phi, Hs, width * screeWidth, tongues, cones);
             float u = e / max(W, 1e-3);
+            // Past the toe of the slope there is nothing to draw: most of the ground within reach of a wall.
+            if (u < 1.4) {
             float rag = (noise2(p / (H * 0.2)) - 0.5) * 0.35 + (noise2(p / (H * 0.07)) - 0.5) * 0.15;
             float inside = (1.0 - smoothstep(0.6, 1.0, u + rag)) * step(1e-3, W);
 
@@ -203,10 +209,14 @@ half4 main(float2 p) {
             for (int j = 0; j < 2; j++) {
                 float cell = (j == 0 ? cellA : cellB) * k * 1.5;
                 float dens = j == 0 ? densA : densB;
-                float2 g = p / cell + 13.7 * float(j); float2 gi = floor(g); float2 gf = g - gi;
+                // A stone lies within 0.82 of the slope and is at most half a cell wide: farther out, none reaches here.
+                if (dens > 0.001 && e < W * 0.82 + cell * 0.6) {
+                // The nearest stone centre lies in one of the four cells round the nearest cell corner (centres keep
+                // 0.15 of a cell off the cell's sides).
+                float2 g = p / cell + 13.7 * float(j); float2 gi = floor(g - 0.5); float2 gf = g - gi;
                 float f1 = 8.0; float f2 = 8.0; float2 best = float2(0.0); float2 bestCell = float2(0.0);
-                for (int yy = -1; yy <= 1; yy++) {
-                    for (int xx = -1; xx <= 1; xx++) {
+                for (int yy = 0; yy <= 1; yy++) {
+                    for (int xx = 0; xx <= 1; xx++) {
                         float2 o = float2(float(xx), float(yy));
                         float2 r = o + 0.15 + 0.7 * float2(hash2(gi + o), hash2(gi + o + 57.0)) - gf;
                         float dd = dot(r, r);
@@ -219,8 +229,9 @@ half4 main(float2 p) {
                 float4 cx = apron.eval(c);
                 float ec = cx.r; float wetc = step(0.5, cx.g);
                 float2 nc = float2(sin(cx.b), cos(cx.b));
-                float2 rimC = c - nc * ec;
-                float Wc = slopeWidth(c, rimC, cx.b, H, width * screeWidth, tongues, cones);
+                // The width of the slope under the stone, without its tongues and gullies: one noise instead of four,
+                // and the same for every pixel of the stone.
+                float Wc = min(Hs * width * screeWidth * 1.5 * smoothstep(-0.5, 0.3, nc.y) * (0.6 + 0.5 * noise2(c / (Hs * 1.7) + float2(5.0, 9.0))), Hs * screeWidth * 2.2);
                 float uc = ec / max(Wc, 1e-3);
                 float id1 = hash2(bestCell + 13.0); float id2 = hash2(bestCell + 29.0);
                 float id3 = hash2(bestCell + 43.0); float id4 = hash2(bestCell + 71.0);
@@ -229,8 +240,9 @@ half4 main(float2 p) {
                 float bench = fract(uc * (ledges + 1.0) / 0.95);
                 float want = dens * mix(1.0, 0.4, smoothstep(0.25, 0.9, uc)) * (0.35 + 1.4 * smoothstep(0.55, 0.95, bench));
                 want *= 1.0 - 0.45 * wetc;
-                float clear = max(rad * 0.7, wallHeight(float2(c.x, c.y - ec), H, share, cones) * 0.8 * smoothstep(0.0, 0.5, nc.y));
-                if (dens > 0.001 && id1 < want && uc < 0.82 && Wc > 1e-3 && ec > clear && ec < 50000.0) {
+                // Clear of the band of rock: its usual height stands in for the exact one at this spot.
+                if (id1 < want && uc < 0.82 && Wc > 1e-3 && ec < 50000.0
+                    && ec > max(rad * 0.7, H * share * 0.75 * smoothstep(0.0, 0.5, nc.y))) {
                     float2 axis = float2(cos(id2 * 6.2832), sin(id2 * 6.2832));
                     float2 l = float2(dot(r, axis), dot(r, float2(-axis.y, axis.x)) / mix(0.58, 0.92, id4));
                     float an = atan(l.y, l.x);
@@ -252,6 +264,8 @@ half4 main(float2 p) {
                     sc = mix(sc, inkc, clamp(pen, 0.0, 1.0) * inkColor.a);
                     acc = float4(sc, 1.0) * cover + acc * (1.0 - cover);
                 }
+                }
+            }
             }
         }
         return half4(wallOut + acc * (1.0 - wallOut.a));

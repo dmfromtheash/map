@@ -24,10 +24,24 @@ public sealed partial class PaintPerfApplication
             island = island with { Level = 0 }; plateau = plateau with { Level = 0 }; ridge = ridge with { Level = 0 };
             _report.Environment["cliffs"] = "off (all levels 0)";
         }
+        // MAP_CLIFF_SCREE = 1..4: the slope at the foot of every wall (R12).
+        if (int.TryParse(System.Environment.GetEnvironmentVariable("MAP_CLIFF_SCREE"), out var scree) && Enum.IsDefined((CliffScree)scree))
+        {
+            LandLayer With(LandLayer land) => land with { EdgeStyle = land.EdgeStyle with { Cliff = land.EdgeStyle.Cliff with { Scree = (CliffScree)scree } } };
+            island = With(island); plateau = With(plateau); ridge = With(ridge);
+            _report.Environment["scree"] = ((CliffScree)scree).ToString();
+        }
         var sea = "#FF8FB0BA";
+        var page = CurrentLook.Page("Море", sea);
+        // MAP_CLIFF_SEA = name of a sea manner (Surf, Ice, Shoals…): the cost of that sea against the default one.
+        if (Enum.TryParse<SeaManner>(System.Environment.GetEnvironmentVariable("MAP_CLIFF_SEA"), out var manner) && Enum.IsDefined(manner))
+        {
+            page = page with { Sea = SeaStyle.For(manner) };
+            _report.Environment["sea"] = manner.ToString();
+        }
         var document = new MapDocument(DocumentId.New(), "Ярусы — замер", DateTimeOffset.UnixEpoch,
             new CanvasDefinition(4096, 3072, "px", sea),
-            [CurrentLook.Page("Море", sea), island, plateau, ridge]);
+            [page, island, plateau, ridge]);
         if (System.Environment.GetEnvironmentVariable("MAP_CLIFF_LOOK") is { Length: > 0 } look)
             _report.Environment["look"] = look;
         OpenEditor(document);
