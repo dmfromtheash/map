@@ -164,12 +164,32 @@ internal static class NativeGiantExport
         return Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(rows));
     }
 
-    private static MapDocument Build(AssetRecord[] mountains, int count, NativeGiantExportReport report)
+    private const double Centre = Size / 2.0;
+    private static readonly (double Cx, double Cy, double Rx, double Ry, double Wobble, int Lobes)[] Continent =
+        [(Centre, Centre, 50_000, 44_000, 0.12, 7), (Centre - 38_000, Centre + 34_000, 9_000, 7_000, 0.2, 5), (Centre + 41_000, Centre - 36_000, 7_500, 6_000, 0.2, 6)];
+    private static readonly (double Cx, double Cy, double Rx, double Ry, double Wobble, int Lobes)[] Plateau =
+        [(Centre + 9_000, Centre - 6_000, 16_000, 11_000, 0.15, 9)];
+
+    /// <summary>
+    /// Where the shore of the continent (level 0) or of the plateau (level 1) lies along the ray from a point inside
+    /// it in the direction (dx, dy): the coordinate that changes along the ray, found by bisection.
+    /// </summary>
+    internal static double Shore(int level, double x, double y, double dx, double dy)
     {
-        const double c = Size / 2.0;
-        (double Cx, double Cy, double Rx, double Ry, double Wobble, int Lobes)[] continent =
-            [(c, c, 50_000, 44_000, 0.12, 7), (c - 38_000, c + 34_000, 9_000, 7_000, 0.2, 5), (c + 41_000, c - 36_000, 7_500, 6_000, 0.2, 6)];
-        (double Cx, double Cy, double Rx, double Ry, double Wobble, int Lobes)[] plateau = [(c + 9_000, c - 6_000, 16_000, 11_000, 0.15, 9)];
+        var shapes = level == 0 ? Continent : Plateau;
+        double inside = 0, outside = Size;
+        for (var i = 0; i < 40; i++)
+        {
+            var middle = (inside + outside) / 2;
+            if (Value(shapes, x + (dx * middle), y + (dy * middle)) >= 0.5) inside = middle; else outside = middle;
+        }
+        return dx != 0 ? x + (dx * inside) : y + (dy * inside);
+    }
+
+    internal static MapDocument Build(AssetRecord[] mountains, int count, NativeGiantExportReport report)
+    {
+        const double c = Centre;
+        var continent = Continent; var plateau = Plateau;
         var land = Land("Материк", 0, continent, MapFillTextures.OwnerSnow, report);
         var high = Land("Плато", 1, plateau, MapFillTextures.OwnerSnowSparkle, report);
 
