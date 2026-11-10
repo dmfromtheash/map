@@ -92,7 +92,7 @@ public sealed partial class PaintPerfApplication
         await Capture("cliff-after-stroke");
         var (ws, pb) = Memory();
         _report.Environment["working-set-mib"] = ws.ToString(); _report.Environment["private-mib"] = pb.ToString();
-        _report.Environment["cliff-fields"] = $"computed={Map.Rendering.LandCliffField.Computed} compute={Map.Rendering.LandCliffField.ComputeMilliseconds:0} ms draw={Map.Rendering.LandCliffField.DrawMilliseconds:0} ms";
+        _report.Environment["cliff-fields"] = $"computed={Map.Rendering.LandCliffField.Computed} compute={Map.Rendering.LandCliffField.ComputeMilliseconds:0} ms draw={Map.Rendering.LandCliffField.DrawMilliseconds:0} ms prepare (wall clock)={Map.Rendering.LandCliffField.PrepareMilliseconds:0} ms";
         _report.Checks["gpu"] = _report.Routes.All(r => r.Gpu);
         _report.Checks["routes"] = _report.Routes.Count >= 4;
     }

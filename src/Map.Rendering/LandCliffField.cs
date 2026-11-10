@@ -96,6 +96,17 @@ public sealed class LandCliffField
     /// </summary>
     internal SKImage? WallImage(LandCliffStyle style, string rimColor, double rimWidth)
     {
+        if (WallPixels(style, rimColor, rimWidth) is not { } pixels) return null;
+        var info = new SKImageInfo(Size, Size, SKColorType.Rgba8888, SKAlphaType.Premul);
+        using var data = SKData.CreateCopy(pixels);
+        return SKImage.FromPixels(info, data, info.RowBytes);
+    }
+
+    /// <summary>Draws the kept wall of this look now, if it is not drawn yet (any thread); see <see cref="WallImage"/>.</summary>
+    internal void PrepareWall(LandCliffStyle style, string rimColor, double rimWidth) => WallPixels(style, rimColor, rimWidth);
+
+    private byte[]? WallPixels(LandCliffStyle style, string rimColor, double rimWidth)
+    {
         if (Texels is null) return null;
         var key = (style, rimColor, rimWidth);
         byte[]? pixels;
@@ -124,8 +135,7 @@ public sealed class LandCliffField
             pixels = bitmap.GetPixelSpan().ToArray();
             lock (_wallGate) { _wallKey = key; _wallPixels = pixels; }
         }
-        using var data = SKData.CreateCopy(pixels);
-        return SKImage.FromPixels(info, data, info.RowBytes);
+        return pixels;
     }
 
     /// <summary>The field as an image shader in world coordinates, for <see cref="LandCliffShader"/>.</summary>
@@ -165,6 +175,9 @@ public sealed class LandCliffField
     public static int Computed;
     /// <summary>Diagnostics: total time spent computing fields and drawing walls, in milliseconds.</summary>
     public static double ComputeMilliseconds, DrawMilliseconds;
+    /// <summary>Diagnostics: wall clock of the side-by-side preparation of the squares (fields and kept walls).</summary>
+    public static double PrepareMilliseconds;
+    internal static readonly object DrawGate = new();
 
     /// <summary>
     /// The field of one square for this land, from the cache when nothing it was computed from has

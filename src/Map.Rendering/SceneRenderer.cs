@@ -2702,15 +2702,30 @@ public static partial class SceneRenderer
             var rimWidth = style.OutlineWidth > 0 ? style.OutlineWidth : 0;
             var screeReach = cliff.ScreeReach(cliff.Steps(layer.Level, lowestFloor));
             using var paint = new SKPaint { IsAntialias = false };
+            // Only squares a wall of this land can reach: some of its coverage lies above them within reach (or
+            // beside them, by the lean).
+            var squares = new List<(int Fx, int Fy)>();
+            var side = Math.Max(Math.Abs(cliff.Lean) * cliffReach, screeReach) + 2;
             for (var fy = (int)Math.Floor(view.Top / size); fy * size < view.Bottom; fy++)
                 for (var fx = (int)Math.Floor(view.Left / size); fx * size < view.Right; fx++)
+                    if (layer.GeometryTiles.KeysIntersecting(fx * size - side, fy * size - cliffReach - 2,
+                            (fx + 1) * size + side, (fy + 1) * size + screeReach).Any())
+                        squares.Add((fx, fy));
+            // The squares are independent: their fields and kept walls are made side by side on half the cores
+            // (R09 А2: with the scree a square's field took 15 ms and its wall 33 ms, one after another), then drawn
+            // in order exactly as before.
+            var fields = new LandCliffField[squares.Count];
+            var prepareStarted = Stopwatch.GetTimestamp();
+            Parallel.For(0, squares.Count, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount / 2) }, i =>
+            {
+                var made = LandCliffField.Get(layer, beneath, cliff.Lean, cliffReach, lod, squares[i].Fx, squares[i].Fy, screeReach);
+                fields[i] = made;
+                if (made.Wall is { } reach && reach.Intersects(view) && deviceScale * made.Texel <= 1.001)
+                    made.PrepareWall(cliff, style.OutlineColor, rimWidth);
+            });
+            lock (LandCliffField.DrawGate) LandCliffField.PrepareMilliseconds += Stopwatch.GetElapsedTime(prepareStarted).TotalMilliseconds;
+            foreach (var field in fields)
                 {
-                    // Only squares a wall of this land can reach: some of its coverage lies above
-                    // them within reach (or beside them, by the lean).
-                    var side = Math.Max(Math.Abs(cliff.Lean) * cliffReach, screeReach) + 2;
-                    if (!layer.GeometryTiles.KeysIntersecting(fx * size - side, fy * size - cliffReach - 2,
-                            (fx + 1) * size + side, (fy + 1) * size + screeReach).Any()) continue;
-                    var field = LandCliffField.Get(layer, beneath, cliff.Lean, cliffReach, lod, fx, fy, screeReach);
                     if (field.Wall is not { } wall || !wall.Intersects(view)) continue;
                     var drawStarted = Stopwatch.GetTimestamp();
                     // At a texel no larger than a device pixel the kept wall image of the square
