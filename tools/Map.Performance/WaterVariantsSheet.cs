@@ -131,7 +131,7 @@ internal static class WaterVariantsSheet
     }
 
     /// <summary>Land from wobbly ellipses joined together, with bays cut out of them.</summary>
-    private static LandLayer Land(string name, int level,
+    internal static LandLayer Land(string name, int level,
         (double Cx, double Cy, double Rx, double Ry, double Wobble, int Lobes)[] shapes,
         (double Cx, double Cy, double Rx, double Ry, double Wobble, int Lobes)[] cuts)
     {
