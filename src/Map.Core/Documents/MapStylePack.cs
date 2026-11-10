@@ -30,6 +30,49 @@ public sealed record MapStylePack(
 
     public static MapStylePack? Find(string id) => Presets.FirstOrDefault(pack => pack.Id == id);
 
+    /// <summary>The id of the owner's own pack (saved in the profile).</summary>
+    public const string OwnId = "own";
+
+    /// <summary>
+    /// The look of a map as a pack: its style, the cliff of its highest land, its first river, road and named label, and
+    /// the sea of its page; what the map has none of comes from the look of a new map.
+    /// </summary>
+    public static MapStylePack From(MapDocument document, string id, string title)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        var lands = document.Layers.OfType<LandLayer>().ToList();
+        var cliff = lands.OrderByDescending(l => l.Level).FirstOrDefault(l => l.Level > (lands.Count > 0 ? lands.Min(x => x.Level) : 0))?.EdgeStyle.Cliff
+            ?? LandCliffStyle.OwnerMountains;
+        var objects = document.Layers.OfType<ObjectLayer>().ToList();
+        var river = objects.SelectMany(l => l.Rivers).FirstOrDefault()?.Style ?? RiverStyle.Natural();
+        var road = objects.SelectMany(l => l.Roads).FirstOrDefault()?.Style ?? RoadStyle.Painted();
+        var name = objects.SelectMany(l => l.Objects).FirstOrDefault(o => o.Text is not null)?.Text;
+        var sea = document.Layers.OfType<BaseColorLayer>().FirstOrDefault(p => p.Sea is not null)?.Sea ?? SeaStyle.NewMapDefault;
+        return new MapStylePack(id, title, document.Style ?? new MapStyle(), cliff, river, road, sea,
+            name?.FillColor ?? "#FF20242B", name?.OutlineColor ?? "#00000000", name?.OutlineWidth ?? 0);
+    }
+
+    /// <summary>A small map that holds every part of this pack, for a file that <see cref="From"/> reads back.</summary>
+    public MapDocument ToTemplate()
+    {
+        var full = Enumerable.Repeat((byte)255, TileMap.TileSize * TileMap.TileSize).ToArray();
+        var tiles = TileMap.Empty(1).With(new TileKey(0, 0), full);
+        var ground = new LandLayer(LayerId.New(), "Суша", true, false, 1, tiles, LandEdgeStyle.SoftWatercolor());
+        var raised = new LandLayer(LayerId.New(), "Ярус", true, false, 1, tiles, LandEdgeStyle.SoftWatercolor() with { Cliff = Cliff }) { Level = 1 };
+        var river = new River
+        {
+            Name = "Река", Style = River,
+            Channels = [Editing.RiverEditor.NewChannel([new VectorPoint(10, 10), new VectorPoint(200, 200)], 12)],
+        };
+        var road = Editing.RoadEditor.NewRoad([new VectorPoint(20, 240), new VectorPoint(240, 250)], 8, Road, "Дорога", seed: 1);
+        var label = new SceneObject(ObjectId.New(), SceneObjectKind.Text, "Подпись", 10, 10, 120, 30, 0, "#FF20242B", "#FFFFFFFF", 0, true, false)
+        { Text = new TextStyle { Content = "Подпись", FillColor = NameColor, OutlineColor = NameOutline, OutlineWidth = NameOutlineWidth } };
+        return new MapDocument(DocumentId.New(), Title, DateTimeOffset.UnixEpoch, new CanvasDefinition(256, 256, "px", "#FF9DB7C2"),
+            [new BaseColorLayer(LayerId.New(), "Море", true, false, 1, "#FF9DB7C2") { Sea = Sea }, ground, raised,
+             new ObjectLayer(LayerId.New(), "Объекты", true, false, 1, [label]) { Rivers = [river], Roads = [road] }])
+        { Style = Style };
+    }
+
     /// <summary>
     /// The map in this pack. Each land keeps its cliff height and lean (its geometry) and takes the pack's cliff look;
     /// every river and road takes the pack's drawing (a road keeps its end caps and whether it blocks light; its

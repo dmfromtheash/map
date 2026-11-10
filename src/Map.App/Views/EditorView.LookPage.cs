@@ -105,6 +105,7 @@ public sealed partial class EditorView
             Children =
             {
                 header,
+                BuildPackPart(),
                 Part("light", MapIcons.LineSun, "Свет", null, null, LightCards.Select(c => (c.Key, c.Title)), 4),
                 Part("style", MapIcons.LinePalette, "Стиль", "none", "Без стиля", StyleCards.Where(c => c.Preset is not null).Select(c => (c.Key, c.Title)), 4),
                 Part("sea", MapIcons.LineWater, "Море", "sea-none", "Без моря", SeaCards.Where(c => c.Manner is not null).Select(c => (c.Key, c.Title)), 5),
@@ -177,7 +178,7 @@ public sealed partial class EditorView
         // A style is not tried on the whole map: one style frame costs 0,6-1 s even on a map of 40 mountains, built 2-3
         // times on the way to the finished view, and the first time a style is used up to 16 s (paint-perf
         // MAP_NEW_ART_STYLE, 2026-10-31). Its picture shows it; a click applies it. Light and sea (40-120 ms) are tried.
-        if (key is not null && (key == "none" || key.StartsWith("style-", StringComparison.Ordinal))) key = null;
+        if (key is not null && (key == "none" || key.StartsWith("style-", StringComparison.Ordinal) || key.StartsWith(PackPrefix, StringComparison.Ordinal))) key = null;
         _lookHoverKey = key;
         _lookHoverTimer ??= new DispatcherTimer(DispatcherPriority.Input);
         _lookHoverTimer.Stop();
@@ -249,6 +250,7 @@ public sealed partial class EditorView
         var lighting = _editor.ShownLighting;
         return key switch
         {
+            _ when key.StartsWith(PackPrefix, StringComparison.Ordinal) => _editor.ActiveStylePackId == key[PackPrefix.Length..],
             "none" => !style.Enabled,
             "light-off" => !lighting.Enabled,
             _ when key.StartsWith("sea-", StringComparison.Ordinal) => SeaCardActive(key),
@@ -271,6 +273,7 @@ public sealed partial class EditorView
             picture.BorderBrush = on ? accent : line;
             picture.BorderThickness = new Thickness(on ? 2.5 : 1.5);
         }
+        SyncPackState();
         if (_lookState.TryGetValue("light", out var light))
             light.Text = _editor.ShownLighting.Enabled ? TimeTitle(_editor.ShownLighting.TimeOfDay) : "Без света";
         if (_rightTab == RightColumnTab.Look) QueueLookPreviews();

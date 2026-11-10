@@ -78,6 +78,7 @@ public sealed partial class EditorView
 
     private void ApplyLookCard(string key)
     {
+        if (key.StartsWith(PackPrefix, StringComparison.Ordinal)) { if (PackOf(key) is { } pack) _editor.ApplyStylePack(pack); return; }
         if (key.StartsWith("sea-", StringComparison.Ordinal)) { ApplySeaCard(key); return; }
         if (key == "none") { _editor.SetStyleEnabled(false); return; }
         if (key == "light-off") { _editor.SetLightingEnabled(false); return; }
@@ -99,6 +100,7 @@ public sealed partial class EditorView
     /// <summary>The document a card shows: the open map with that card's style or light.</summary>
     private MapDocument CardDocument(MapDocument document, string key)
     {
+        if (key.StartsWith(PackPrefix, StringComparison.Ordinal)) return PackOf(key)?.ApplyTo(document) ?? document;
         if (key.StartsWith("sea-", StringComparison.Ordinal)) return SeaCardDocument(document, key);
         if (key == "none") return document with { Style = null };
         if (key == "light-off") return document with { Lighting = null };

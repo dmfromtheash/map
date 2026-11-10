@@ -195,5 +195,29 @@ public sealed partial class NativeEditorScenarioApplication
         }
         foreach (var bad in navBad) Console.WriteLine("section nav: " + bad);
         _report.Checks["section-nav-on-tabs"] = navBad.Count == 0;
+
+        // DEC-094: «Пакет стиля» on «Вид» - four tiles 2×2, a click puts the map in the pack in one undo step, the
+        // pictures are drawn, and «Сохранить свой» adds «Мой пакет» (kept in this run's workspace).
+        Map.Presentation.ViewModels.EditorViewModel.OwnStylePackPath = Path.Combine(_workspace, "StylePacks", "own.mapproj");
+        _view.ShowWorkspace(EditorWorkspace.Appearance, openWorldList: true); await Settle();
+        var packBad = new List<string>();
+        Button[] PackTiles() => [.. _view.GetVisualDescendants().OfType<Button>().Where(b => b.Name?.StartsWith("StylePack_", StringComparison.Ordinal) == true)];
+        if (PackTiles().Length != 4) packBad.Add($"плиток {PackTiles().Length}");
+        var styleBefore = _editor.Session.Document.Style; var depthBefore = _editor.Session.UndoDepth;
+        PackTiles().FirstOrDefault(b => b.Name == "StylePack_ink")?.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent)); await Settle();
+        if (_editor.ActiveStylePackId != "ink" || _editor.Session.Document.Style?.Preset != MapStylePreset.InkWetBrush || _editor.Session.UndoDepth != depthBefore + 1)
+            packBad.Add("щелчок по «Тушь» не применил пакет одним шагом");
+        // The pictures of the packs are drawn by the program once the map is finished.
+        for (var i = 0; i < 300 && PackTiles().Any(b => b.GetVisualDescendants().OfType<Border>().FirstOrDefault()?.Background is not Avalonia.Media.ImageBrush); i++) await Task.Delay(200);
+        if (PackTiles().Any(b => b.GetVisualDescendants().OfType<Border>().FirstOrDefault()?.Background is not Avalonia.Media.ImageBrush)) packBad.Add("картинки пакетов не нарисованы");
+        var packPart = _view.GetVisualDescendants().OfType<Control>().FirstOrDefault(c => c.Name == "LookPart_pack");
+        if (packPart is not null) PanelAudit.Save(packPart, Path.ChangeExtension(Options.OutputPath, "style-packs.png"));
+        _editor.Undo(); await Settle();
+        if (_editor.Session.Document.Style != styleBefore) packBad.Add("Ctrl+Z не вернул прежний стиль");
+        Find<Button>("StylePackSaveOwn").RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent)); await Settle();
+        if (PackTiles().Length != 5 || !File.Exists(Map.Presentation.ViewModels.EditorViewModel.OwnStylePackPath)) packBad.Add("«Мой пакет» не сохранён");
+        foreach (var bad in packBad) Console.WriteLine("style packs: " + bad);
+        _report.Checks["style-packs-on-look"] = packBad.Count == 0;
+        Map.Presentation.ViewModels.EditorViewModel.OwnStylePackPath = null;
     }
 }

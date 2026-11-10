@@ -40,4 +40,25 @@ public sealed class StylePackPersistenceTests : IDisposable
         Assert.Equal(pack.NameColor, objects.Objects.Single().Text!.FillColor);
         Assert.Equal(pack.NameOutlineWidth, objects.Objects.Single().Text!.OutlineWidth);
     }
+
+    [Fact]
+    public void The_owners_own_pack_comes_back_from_its_file_whole()
+    {
+        var atlas = MapStylePack.Find("atlas")!;
+        // The look of a map the owner tuned: the Atlas pack with a changed cliff colour and sea scale.
+        var own = atlas with
+        {
+            Id = MapStylePack.OwnId, Title = "Мой пакет",
+            Cliff = atlas.Cliff with { Color = "#FFAA8866", Scree = CliffScree.WallAndBench }, Sea = atlas.Sea with { Scale = 1.4 },
+        };
+        var path = Path.Combine(_root, "own.mapproj");
+        MapProjectStore.Save(own.ToTemplate(), path, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
+        var back = MapStylePack.From(MapProjectStore.Open(path).Document, MapStylePack.OwnId, "Мой пакет");
+        Assert.Equal(own.Style, back.Style);
+        Assert.Equal(own.Cliff, back.Cliff);
+        Assert.Equal(own.River, back.River);
+        Assert.Equal(own.Road, back.Road);
+        Assert.Equal(own.Sea, back.Sea);
+        Assert.Equal((own.NameColor, own.NameOutline, own.NameOutlineWidth), (back.NameColor, back.NameOutline, back.NameOutlineWidth));
+    }
 }

@@ -39,6 +39,8 @@ internal static class Program
             Views.UiTasks.Forget(
                 () => Task.Run(() => Map.Rendering.Styles.StyleRenderer.UseFormMapCache(Path.Combine(profileRoot, "StyleCache"))),
                 (operation, error) => log.Error(operation, error));
+            // The owner's own style pack (R09d, DEC-094) lives in the profile as a small map of its own.
+            Map.Presentation.ViewModels.EditorViewModel.OwnStylePackPath = Path.Combine(profileRoot, "StylePacks", "own.mapproj");
             BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
             log.Info("Clean shutdown.");
         }
