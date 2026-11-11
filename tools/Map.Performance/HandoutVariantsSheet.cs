@@ -34,41 +34,669 @@ internal static class HandoutVariantsSheet
         var (document, source, images) = SampleMap();
         int w = (int)(Width * K), h = (int)(Height * K);
         using var map = RenderMap(document, source, w, h);
+        // For the Gemini sheets the sea is the colour of paper: only its strokes stay, no tinted rectangle on the sheet.
+        const string Paper = "#FFFFFFFF";
+        var paperDocument = document.WithLayers([.. document.Layers.Select(l => l is BaseColorLayer b ? b with { Color = Paper, Sea = null } : l)]);
+        using var paperMap = RenderMap(paperDocument, source, w, h, Paper);
         foreach (var image in images.Values) image.Dispose();
 
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(options.OutputPath))!);
-        (string Id, Action<SKCanvas, SKRect, SKImage> Draw)[] looks =
-        [
-            ("found", Found), ("burnt", Burnt), ("scroll", Scroll), ("portolan", Portolan), ("letter", Letter),
-        ];
+        // Gemini Pro sheets (owner's choice 2026-11-11 «оба способа»): blank sheets with their objects, made in the owner's
+        // Chrome in his style and kept outside the repository until he picks; the folder comes from MAP_HANDOUT_GEMINI.
+        var gemini = Environment.GetEnvironmentVariable("MAP_HANDOUT_GEMINI");
+        SKPoint? NoProp(Action<SKCanvas, SKRect, SKImage> draw, SKCanvas c, SKRect r, SKImage m) { draw(c, r, m); return null; }
+        var looks = new List<(string Id, Func<SKCanvas, SKRect, SKImage, SKPoint?> Draw)>
+        {
+            ("found", (c, r, m) => NoProp(Found, c, r, m)),
+            ("burnt", (c, r, m) => NoProp(Burnt, c, r, m)),
+            ("scroll-ink", ScrollInk), ("portolan-ink", PortolanInk), ("letter-ink", LetterInk),
+        };
+        if (gemini is not null)
+            foreach (var g in GeminiSheets)
+                looks.Add(("gemini-" + g.Id, (c, r, m) => Gemini(c, paperMap, Path.Combine(gemini, g.Id + ".jpg"), g)));
         foreach (var (id, draw) in looks)
         {
             using var surface = SKSurface.Create(new SKImageInfo(w + 2 * Margin, h + 2 * Margin));
             var canvas = surface.Canvas;
             canvas.Clear(Table);
             DrawTableGrain(canvas, surface.Canvas.DeviceClipBounds);
-            draw(canvas, new SKRect(Margin, Margin, Margin + w, Margin + h), map);
+            var prop = draw(canvas, new SKRect(Margin, Margin, Margin + w, Margin + h), map);
             using var sheet = surface.Snapshot();
             Save(report, options, "handout-" + id, sheet, 1400, null);
             Save(report, options, "handout-" + id + "-zoom", sheet, 1400, new SKRectI(0, 0, 1400, 875));
             // The look's objects up close: where the seal, the roll end or the rose lies.
-            SKPointI? prop = id switch
-            {
-                "scroll" => new SKPointI(2230, 1580),
-                "portolan" => new SKPointI(1714, 820),
-                "letter" => new SKPointI(2300, 1130),
-                _ => null,
-            };
             if (prop is { } p)
             {
-                int x0 = Math.Clamp(p.X - 450, 0, sheet.Width - 900), y0 = Math.Clamp(p.Y - 280, 0, sheet.Height - 560);
+                int x0 = Math.Clamp((int)p.X - 450, 0, sheet.Width - 900), y0 = Math.Clamp((int)p.Y - 280, 0, sheet.Height - 560);
                 Save(report, options, "handout-" + id + "-prop", sheet, 1400, new SKRectI(x0, y0, x0 + 900, y0 + 560));
             }
-            if (id == "scroll")
-                Save(report, options, "handout-scroll-roll", sheet, 1400, new SKRectI(0, 0, 900, 560));
         }
-        report.GatePassed = report.Images.Count == looks.Length * 2 + 4;
+        report.GatePassed = report.Images.Count >= looks.Count * 2;
         return report;
+    }
+
+    // ------------------------------------------------------------------ Gemini Pro sheets with the map laid on them
+
+    /// <summary>One Gemini sheet: its file id, the blank area for the map (in the image's pixels), where its object lies,
+    /// and an optional band of rows stretched taller (the scroll's open part is too low for a map otherwise).</summary>
+    private sealed record GeminiSheet(string Id, SKRectI Area, SKPointI Prop, (int From, int To, float Factor)? Stretch = null);
+
+    private static readonly GeminiSheet[] GeminiSheets =
+    [
+        new("scroll-a", new SKRectI(393, 458, 2227, 1035), new SKPointI(1939, 1166), (480, 1010, 2f)),
+        new("scroll-b", new SKRectI(616, 354, 2135, 1277), new SKPointI(2100, 1060)),
+        new("portolan-a", new SKRectI(560, 160, 2450, 1480), new SKPointI(1873, 786)),
+        new("portolan-b", new SKRectI(179, 145, 2581, 1380), new SKPointI(560, 1104)),
+        new("letter-a", new SKRectI(352, 117, 1900, 1421), new SKPointI(2208, 773)),
+        new("letter-b", new SKRectI(552, 103, 2222, 1040), new SKPointI(1380, 1214)),
+    ];
+
+    /// <summary>The map laid into the sheet's blank area by Multiply, as ink soaked into it: aged, fading out at the
+    /// area's edge, never over the objects (wax, string, wood - saturated or dark pixels are kept). Then the white
+    /// background is taken away: a flood from the border over light neutral pixels, which keep only their shadow.</summary>
+    private static SKPoint? Gemini(SKCanvas canvas, SKImage map, string path, GeminiSheet sheet)
+    {
+        using var source = SKBitmap.Decode(path);
+        var area = sheet.Area;
+        var prop = sheet.Prop;
+        SKBitmap bitmap;
+        if (sheet.Stretch is { } s)
+        {
+            var extra = (int)((s.To - s.From) * (s.Factor - 1));
+            bitmap = new SKBitmap(source.Width, source.Height + extra);
+            using var bc = new SKCanvas(bitmap);
+            var sampling = new SKSamplingOptions(SKCubicResampler.Mitchell);
+            using var full = SKImage.FromBitmap(source);
+            bc.DrawImage(full, SKRect.Create(0, 0, source.Width, s.From), SKRect.Create(0, 0, source.Width, s.From), sampling, null);
+            bc.DrawImage(full, SKRect.Create(0, s.From, source.Width, s.To - s.From), SKRect.Create(0, s.From, source.Width, (s.To - s.From) * s.Factor), sampling, null);
+            bc.DrawImage(full, SKRect.Create(0, s.To, source.Width, source.Height - s.To), SKRect.Create(0, s.To + extra, source.Width, source.Height - s.To), sampling, null);
+            area = new SKRectI(area.Left, area.Top, area.Right, area.Bottom + extra);
+            if (prop.Y > s.To) prop = new SKPointI(prop.X, prop.Y + extra);
+        }
+        else bitmap = source.Copy();
+
+        int bw = bitmap.Width, bh = bitmap.Height;
+        var pixels = bitmap.Pixels;
+
+        // Where the map may go: inside the fitted map rectangle, fading at its edge, not over objects.
+        var fit = Math.Min(area.Width * .94f / map.Width, area.Height * .94f / map.Height);
+        var place = SKRect.Create(area.MidX - map.Width * fit / 2, area.MidY - map.Height * fit / 2, map.Width * fit, map.Height * fit);
+        var mask = new float[bw * bh];
+        for (var y = (int)place.Top; y < (int)place.Bottom; y++)
+            for (var x = (int)place.Left; x < (int)place.Right; x++)
+            {
+                var c = pixels[y * bw + x];
+                float lum = .3f * c.Red + .59f * c.Green + .11f * c.Blue;
+                var saturated = Math.Clamp((c.Red - c.Blue - 70) / 40f, 0, 1);
+                var green = Math.Clamp((c.Green - c.Red - 10) / 30f, 0, 1);
+                var dark = Math.Clamp((95 - lum) / 40f, 0, 1);
+                var keep = Math.Max(saturated, Math.Max(green, dark));
+                var edge = Math.Min(Math.Min(x - place.Left, place.Right - x), Math.Min(y - place.Top, place.Bottom - y));
+                mask[y * bw + x] = (1 - keep) * Smooth(0, 60, edge);
+            }
+        var maskBytes = new byte[bw * bh * 4];
+        for (var i = 0; i < mask.Length; i++) maskBytes[i * 4 + 3] = (byte)(255 * mask[i]);
+        using var maskData = SKData.CreateCopy(maskBytes);
+        using var maskImage = SKImage.FromPixels(new SKImageInfo(bw, bh, SKColorType.Rgba8888, SKAlphaType.Premul), maskData, bw * 4);
+
+        using var surface = SKSurface.Create(new SKImageInfo(bw, bh, SKColorType.Rgba8888, SKAlphaType.Premul));
+        var sc = surface.Canvas;
+        using (var baseImage = SKImage.FromBitmap(bitmap)) sc.DrawImage(baseImage, 0, 0);
+        using (var multiply = new SKPaint { BlendMode = SKBlendMode.Multiply })
+        {
+            sc.SaveLayer(multiply);
+            sc.Clear(SKColors.White);
+            using (var aged = new SKPaint { ColorFilter = Sepia(.55f) })
+                sc.DrawImage(map, place, new SKSamplingOptions(SKCubicResampler.Mitchell), aged);
+            // Outside the mask the layer must be white (no change under Multiply): draw white through the inverted mask.
+            using (var dstIn = new SKPaint { BlendMode = SKBlendMode.DstIn }) sc.DrawImage(maskImage, 0, 0, dstIn);
+            using (var under = new SKPaint { BlendMode = SKBlendMode.DstOver, Color = SKColors.White }) sc.DrawRect(SKRect.Create(bw, bh), under);
+            sc.Restore();
+        }
+        bitmap.Dispose();
+
+        // The white background off: flood over light, neutral pixels from the border; they keep a shadow's darkness.
+        using var composed = surface.Snapshot();
+        using var result = SKBitmap.FromImage(composed);
+        var px = result.Pixels;
+        var background = new bool[bw * bh];
+        var queue = new Queue<int>();
+        bool Light(SKColor c)
+        {
+            int max = Math.Max(c.Red, Math.Max(c.Green, c.Blue)), min = Math.Min(c.Red, Math.Min(c.Green, c.Blue));
+            return min > 175 && max - min < 16;
+        }
+        for (var x = 0; x < bw; x++) { queue.Enqueue(x); queue.Enqueue((bh - 1) * bw + x); }
+        for (var y = 0; y < bh; y++) { queue.Enqueue(y * bw); queue.Enqueue(y * bw + bw - 1); }
+        while (queue.Count > 0)
+        {
+            var i = queue.Dequeue();
+            if (background[i] || !Light(px[i])) continue;
+            background[i] = true;
+            int x = i % bw, y = i / bw;
+            if (x > 0) queue.Enqueue(i - 1);
+            if (x < bw - 1) queue.Enqueue(i + 1);
+            if (y > 0) queue.Enqueue(i - bw);
+            if (y < bh - 1) queue.Enqueue(i + bw);
+        }
+        var outBytes = new byte[bw * bh * 4];
+        for (var i = 0; i < px.Length; i++)
+        {
+            var c = px[i];
+            // Also near-white pixels the flood could not reach (inside a loop of the cord).
+            if (background[i] || (Math.Min(c.Red, Math.Min(c.Green, c.Blue)) > 232 && Math.Max(c.Red, Math.Max(c.Green, c.Blue)) - Math.Min(c.Red, Math.Min(c.Green, c.Blue)) < 12))
+            {
+                float lum = .3f * c.Red + .59f * c.Green + .11f * c.Blue;
+                outBytes[i * 4 + 3] = (byte)(255 * Math.Clamp((246 - lum) / 90f, 0, .8f));
+                continue;
+            }
+            outBytes[i * 4] = c.Red; outBytes[i * 4 + 1] = c.Green; outBytes[i * 4 + 2] = c.Blue; outBytes[i * 4 + 3] = 255;
+        }
+        using var outData = SKData.CreateCopy(outBytes);
+        using var cut = SKImage.FromPixels(new SKImageInfo(bw, bh, SKColorType.Rgba8888, SKAlphaType.Premul), outData, bw * 4);
+
+        // On the table: as large as fits with a margin.
+        var bounds = canvas.DeviceClipBounds;
+        var scale = Math.Min((bounds.Width - 60f) / bw, (bounds.Height - 60f) / bh);
+        var dest = SKRect.Create(bounds.MidX - bw * scale / 2, bounds.MidY - bh * scale / 2, bw * scale, bh * scale);
+        canvas.DrawImage(cut, dest, new SKSamplingOptions(SKCubicResampler.Mitchell));
+        return new SKPoint(dest.Left + prop.X * scale, dest.Top + prop.Y * scale);
+    }
+
+    // ------------------------------------------------------------------ handout filters built from Gemini layers
+
+    /// <summary>Layers cut from the Gemini sheets (owner 2026-11-11: «с фильтрами а не просто картинки»): objects with
+    /// the background taken away, sliced so their middle stretches to any sheet size, and paper textures. A preset lays
+    /// them over any map: the program's own edge and ageing (accepted in 1 and 2), the texture, the objects.</summary>
+    private sealed class Layers(string folder)
+    {
+        private readonly Dictionary<string, SKBitmap> _sources = [];
+
+        public SKBitmap Source(string id) =>
+            _sources.TryGetValue(id, out var b) ? b : _sources[id] = SKBitmap.Decode(Path.Combine(folder, id + ".jpg"));
+
+        /// <summary>A plain crop (textures).</summary>
+        public SKImage Crop(string id, SKRectI crop)
+        {
+            using var part = new SKBitmap();
+            Source(id).ExtractSubset(part, crop);
+            return SKImage.FromBitmap(part.Copy());
+        }
+
+        /// <summary>An object cut out. Pixels on the white background go by a flood from the crop's border (keeping only
+        /// a shadow's darkness); pixels inside <paramref name="onPaper"/> (crop coordinates) - where the object lies on
+        /// the sheet - keep only what differs from the paper: darker or more coloured.</summary>
+        public SKImage Cut(string id, SKRectI crop, SKRectI? onPaper = null)
+        {
+            var src = Source(id);
+            int w = crop.Width, h = crop.Height;
+            var px = new SKColor[w * h];
+            for (var y = 0; y < h; y++)
+                for (var x = 0; x < w; x++)
+                    px[y * w + x] = src.GetPixel(crop.Left + x, crop.Top + y);
+            static float Lum(SKColor c) => .3f * c.Red + .59f * c.Green + .11f * c.Blue;
+            static int Chroma(SKColor c) => Math.Max(c.Red, Math.Max(c.Green, c.Blue)) - Math.Min(c.Red, Math.Min(c.Green, c.Blue));
+            static bool Light(SKColor c) => Math.Min(c.Red, Math.Min(c.Green, c.Blue)) > 175 && Chroma(c) < 16;
+
+            var background = new bool[w * h];
+            var queue = new Queue<int>();
+            for (var x = 0; x < w; x++) { queue.Enqueue(x); queue.Enqueue((h - 1) * w + x); }
+            for (var y = 0; y < h; y++) { queue.Enqueue(y * w); queue.Enqueue(y * w + w - 1); }
+            while (queue.Count > 0)
+            {
+                var i = queue.Dequeue();
+                int x = i % w, y = i / w;
+                if (background[i] || !Light(px[i]) || (onPaper is { } p0 && p0.Contains(x, y))) continue;
+                background[i] = true;
+                if (x > 0) queue.Enqueue(i - 1);
+                if (x < w - 1) queue.Enqueue(i + 1);
+                if (y > 0) queue.Enqueue(i - w);
+                if (y < h - 1) queue.Enqueue(i + w);
+            }
+            // The paper's own lightness and colour inside the on-paper part (its 70th percentile).
+            float paperLum = 0; var paperChroma = 0;
+            if (onPaper is { } p)
+            {
+                var lums = new List<float>(); var chromas = new List<int>();
+                for (var y = p.Top; y < p.Bottom; y += 2)
+                    for (var x = p.Left; x < p.Right; x += 2) { lums.Add(Lum(px[y * w + x])); chromas.Add(Chroma(px[y * w + x])); }
+                lums.Sort(); chromas.Sort();
+                paperLum = lums[(int)(lums.Count * .7)]; paperChroma = chromas[chromas.Count / 2];
+            }
+            var bytes = new byte[w * h * 4];
+            for (var y = 0; y < h; y++)
+                for (var x = 0; x < w; x++)
+                {
+                    var i = y * w + x; var c = px[i];
+                    float a;
+                    if (onPaper is { } q && q.Contains(x, y))
+                        a = Math.Max(Smooth(paperLum - 30, paperLum - 90, Lum(c)), Smooth(paperChroma + 40, paperChroma + 90, Chroma(c)));
+                    else if (background[i] || (Math.Min(c.Red, Math.Min(c.Green, c.Blue)) > 232 && Chroma(c) < 12))
+                    {
+                        // Only the shadow stays, as black of that darkness.
+                        var s = Math.Clamp((246 - Lum(c)) / 90f, 0, .8f);
+                        bytes[i * 4 + 3] = (byte)(255 * s);
+                        continue;
+                    }
+                    else a = 1;
+                    bytes[i * 4] = (byte)(c.Red * a); bytes[i * 4 + 1] = (byte)(c.Green * a); bytes[i * 4 + 2] = (byte)(c.Blue * a); bytes[i * 4 + 3] = (byte)(255 * a);
+                }
+            using var data = SKData.CreateCopy(bytes);
+            return SKImage.FromPixels(new SKImageInfo(w, h, SKColorType.Rgba8888, SKAlphaType.Premul), data, w * 4);
+        }
+    }
+
+    private static readonly SKSamplingOptions Smooth3 = new(SKCubicResampler.Mitchell);
+
+    /// <summary>An image in three parts along one axis: the ends at their size (scaled), the middle stretched to fill.</summary>
+    private static void ThreeSlice(SKCanvas canvas, SKImage image, SKRect dest, float startCut, float endCut, bool horizontal, float scale)
+    {
+        if (horizontal)
+        {
+            float a = startCut * scale, b = endCut * scale;
+            canvas.DrawImage(image, SKRect.Create(0, 0, startCut, image.Height), SKRect.Create(dest.Left, dest.Top, a, dest.Height), Smooth3, null);
+            canvas.DrawImage(image, SKRect.Create(startCut, 0, image.Width - startCut - endCut, image.Height), SKRect.Create(dest.Left + a, dest.Top, dest.Width - a - b, dest.Height), Smooth3, null);
+            canvas.DrawImage(image, SKRect.Create(image.Width - endCut, 0, endCut, image.Height), SKRect.Create(dest.Right - b, dest.Top, b, dest.Height), Smooth3, null);
+        }
+        else
+        {
+            float a = startCut * scale, b = endCut * scale;
+            canvas.DrawImage(image, SKRect.Create(0, 0, image.Width, startCut), SKRect.Create(dest.Left, dest.Top, dest.Width, a), Smooth3, null);
+            canvas.DrawImage(image, SKRect.Create(0, startCut, image.Width, image.Height - startCut - endCut), SKRect.Create(dest.Left, dest.Top + a, dest.Width, dest.Height - a - b), Smooth3, null);
+            canvas.DrawImage(image, SKRect.Create(0, image.Height - endCut, image.Width, endCut), SKRect.Create(dest.Left, dest.Bottom - b, dest.Width, b), Smooth3, null);
+        }
+    }
+
+    /// <summary>A paper texture laid by Multiply over the sheet, stretched to it.</summary>
+    private static void Texture(SKCanvas canvas, SKImage texture, SKRect r, byte alpha = 255)
+    {
+        using var multiply = new SKPaint { BlendMode = SKBlendMode.Multiply, Color = SKColors.White.WithAlpha(alpha) };
+        canvas.DrawImage(texture, r, Smooth3, multiply);
+    }
+
+    private static void Put(SKCanvas canvas, SKImage sprite, SKPoint centre, float scale) =>
+        canvas.DrawImage(sprite, SKRect.Create(centre.X - sprite.Width * scale / 2, centre.Y - sprite.Height * scale / 2, sprite.Width * scale, sprite.Height * scale), Smooth3);
+
+    private static readonly (string Id, Func<Layers, SKCanvas, SKRect, SKImage, SKPoint?> Preset)[] FilterPresets =
+    [
+        ("scroll-a", ScrollPaperRolls), ("scroll-b", ScrollRods),
+        ("portolan-a", PortolanSkin), ("portolan-b", PortolanEngraved),
+        ("letter-a", LetterRedSeal), ("letter-b", LetterDispatch),
+    ];
+
+    /// <summary>Scroll A: paper rolls top and bottom (3-sliced from Gemini), the red seal with ribbons on the bottom
+    /// roll's right end, the parchment texture over the program's lived sheet.</summary>
+    private static SKPoint? ScrollPaperRolls(Layers layers, SKCanvas canvas, SKRect r, SKImage map)
+    {
+        var random = new Random(91);
+        var sheet = new SKRect(r.Left + 40, r.Top + 60, r.Right - 40, r.Bottom - 110);
+        var scale = .6f;
+        using var texture = layers.Crop("scroll-a", new SKRectI(655, 524, 1965, 996));
+        using var edge = Jagged(sheet, random, amplitude: 4, waves: 26, notches: 3, notchDepth: 12);
+        Sheet(canvas, edge, sheet, map, tone: new SKColor(0xEA, 0xD6, 0xA8), toneAlpha: 40, edgeDark: 120, () => Texture(canvas, texture, sheet),
+            life: new Life(91, Crumple: .35f, CreaseSize: 1.4f, Wear: .3f, Blotch: .6f),
+            mapAt: new SKRect(sheet.Left + 30, sheet.Top + 373 * scale * .4f, sheet.Right - 30, sheet.Bottom - 490 * scale * .62f));
+        using var top = layers.Cut("scroll-a", new SKRectI(262, 79, 2306, 452));
+        using var bottom = layers.Cut("scroll-a", new SKRectI(262, 1020, 2306, 1510));
+        ThreeSlice(canvas, top, SKRect.Create(sheet.Left - 40, sheet.Top - top.Height * scale * .62f, sheet.Width + 80, top.Height * scale), 330, 330, true, scale);
+        var bottomDest = SKRect.Create(sheet.Left - 40, sheet.Bottom - bottom.Height * scale * .28f, sheet.Width + 80, bottom.Height * scale);
+        ThreeSlice(canvas, bottom, bottomDest, 330, 560, true, scale);
+        return new SKPoint(bottomDest.Right - 340 * scale, bottomDest.Top + 220 * scale);
+    }
+
+    /// <summary>Scroll B: dark wooden rods with bronze knobs at the sides (3-sliced along their length), the twine cord,
+    /// the small green seal, the vellum texture.</summary>
+    private static SKPoint? ScrollRods(Layers layers, SKCanvas canvas, SKRect r, SKImage map)
+    {
+        var random = new Random(92);
+        var sheet = new SKRect(r.Left + 220, r.Top + 70, r.Right - 220, r.Bottom - 70);
+        var scale = .62f;
+        using var texture = layers.Crop("scroll-b", new SKRectI(786, 458, 1965, 1179));
+        using var edge = Jagged(sheet, random, amplitude: 6, waves: 22, notches: 5, notchDepth: 16);
+        Sheet(canvas, edge, sheet, map, tone: new SKColor(0xEA, 0xD6, 0xA8), toneAlpha: 30, edgeDark: 140, () => Texture(canvas, texture, sheet),
+            life: new Life(92, Crumple: .3f, CreaseSize: 2f, Wear: .3f, Blotch: .7f),
+            mapAt: new SKRect(sheet.Left + 140, sheet.Top + 30, sheet.Right - 140, sheet.Bottom - 30));
+        using var left = layers.Cut("scroll-b", new SKRectI(183, 79, 616, 1507));
+        using var right = layers.Cut("scroll-b", new SKRectI(2122, 79, 2555, 1507));
+        var top = sheet.Top - 200 * scale * 1.4f; var height = sheet.Height + 2 * 200 * scale * 1.4f;
+        ThreeSlice(canvas, left, SKRect.Create(sheet.Left - left.Width * scale + 120 * scale, top, left.Width * scale, height), 354, 328, false, scale);
+        ThreeSlice(canvas, right, SKRect.Create(sheet.Right - 110 * scale, top, right.Width * scale, height), 354, 328, false, scale);
+        using var seal = layers.Cut("scroll-b", new SKRectI(1890, 1045, 2095, 1250), new SKRectI(0, 0, 205, 205));
+        var at = new SKPoint(sheet.Right - 170, sheet.Bottom - 150);
+        Put(canvas, seal, at, 1.1f);
+        return at;
+    }
+
+    /// <summary>Portolan A: the skin outline from the program, the Gemini chart (rhumb network and the painted rose)
+    /// laid over it as ink by Multiply.</summary>
+    private static SKPoint? PortolanSkin(Layers layers, SKCanvas canvas, SKRect r, SKImage map)
+    {
+        var random = new Random(93);
+        using var edge = Skin(r, random);
+        using var chart = layers.Crop("portolan-a", new SKRectI(590, 197, 2424, 1441));
+        Sheet(canvas, edge, r, map, tone: new SKColor(0xD9, 0xBE, 0x8A), toneAlpha: 30, edgeDark: 170, () => Texture(canvas, chart, r),
+            life: new Life(93, Crumple: .3f, CreaseSize: 2f, Wear: .4f, Blotch: .8f));
+        return new SKPoint(r.Left + r.Width * (1880 - 590) / 1834f, r.Top + r.Height * (786 - 197) / 1244f);
+    }
+
+    /// <summary>Portolan B: the engraved frame with its degree scale (cut as ink and stretched along its sides), the
+    /// engraved rose and the wind head as ink, rhumb lines from the rose, the laid paper texture.</summary>
+    private static SKPoint? PortolanEngraved(Layers layers, SKCanvas canvas, SKRect r, SKImage map)
+    {
+        var random = new Random(94);
+        using var edge = Jagged(r, random, amplitude: 5, waves: 30, notches: 4, notchDepth: 10);
+        using var texture = layers.Crop("portolan-b", new SKRectI(1800, 800, 2500, 1300));
+        var rose = new SKPoint(r.Left + r.Width * .13f, r.Top + r.Height * .79f);
+        Sheet(canvas, edge, r, map, tone: new SKColor(0xEE, 0xE2, 0xC8), toneAlpha: 40, edgeDark: 110, () =>
+        {
+            Texture(canvas, texture, r, 200);
+            using var line = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 1f, Color = Ink.WithAlpha(80), BlendMode = SKBlendMode.Multiply };
+            for (var k = 0; k < 32; k++)
+            {
+                var a = k * MathF.PI / 16;
+                canvas.DrawLine(rose, new SKPoint(rose.X + 5000 * MathF.Cos(a), rose.Y + 5000 * MathF.Sin(a)), line);
+            }
+            // The frame: ink of the whole Gemini sheet's border, stretched along the sides, corners kept.
+            using var frame = layers.Cut("portolan-b", new SKRectI(150, 115, 2600, 1415), new SKRectI(0, 0, 2450, 1300));
+            var inset = new SKRect(r.Left + 30, r.Top + 30, r.Right - 30, r.Bottom - 30);
+            using (var multiply = new SKPaint { BlendMode = SKBlendMode.Multiply })
+            {
+                const int c = 120;
+                var srcX = new[] { 0f, c, frame.Width - c, frame.Width };
+                var srcY = new[] { 0f, c, frame.Height - c, frame.Height };
+                var dstX = new[] { inset.Left, inset.Left + c, inset.Right - c, inset.Right };
+                var dstY = new[] { inset.Top, inset.Top + c, inset.Bottom - c, inset.Bottom };
+                for (var i = 0; i < 3; i++)
+                    for (var j = 0; j < 3; j++)
+                    {
+                        if (i == 1 && j == 1) continue;
+                        canvas.DrawImage(frame, new SKRect(srcX[i], srcY[j], srcX[i + 1], srcY[j + 1]), new SKRect(dstX[i], dstY[j], dstX[i + 1], dstY[j + 1]), Smooth3, multiply);
+                    }
+            }
+            using var roseInk = layers.Cut("portolan-b", new SKRectI(300, 740, 755, 1290), new SKRectI(0, 0, 455, 550));
+            Put(canvas, roseInk, new SKPoint(rose.X, rose.Y - 40), .85f);
+            using var wind = layers.Cut("portolan-b", new SKRectI(2340, 160, 2500, 380), new SKRectI(0, 0, 160, 220));
+            Put(canvas, wind, new SKPoint(r.Right - 200, r.Top + 190), 1.3f);
+        }, life: new Life(94, Crumple: .3f, CreaseSize: 1.6f, Wear: .3f, Blotch: .8f));
+        return rose;
+    }
+
+    /// <summary>Letter A: the cream sheet's texture (its worn creases) over the program's sheet, the broken red seal
+    /// with string and the torn flap at the right edge.</summary>
+    private static SKPoint? LetterRedSeal(Layers layers, SKCanvas canvas, SKRect r, SKImage map)
+    {
+        var random = new Random(95);
+        var sheet = new SKRect(r.Left, r.Top, r.Right - 160, r.Bottom);
+        using var edge = Jagged(sheet, random, amplitude: 1.5, waves: 40, notches: 0, notchDepth: 0);
+        using var texture = layers.Crop("letter-a", new SKRectI(414, 207, 1518, 1380));
+        Sheet(canvas, edge, sheet, map, tone: new SKColor(0xEE, 0xDC, 0xB4), toneAlpha: 30, edgeDark: 70, () => Texture(canvas, texture, sheet),
+            age: .5f, life: new Life(95, Crumple: .25f, CreaseSize: 1.4f, Wear: .2f, Blotch: .35f));
+        // The Gemini sheet's right edge lies at x 2146 of the image, 407 px into this crop.
+        using var seal = layers.Cut("letter-a", new SKRectI(1739, 511, 2608, 1118), new SKRectI(0, 0, 400, 607));
+        var at = new SKPoint(sheet.Right - 407 + seal.Width / 2f, sheet.MidY);
+        Put(canvas, seal, at, 1f);
+        return new SKPoint(sheet.Right, sheet.MidY);
+    }
+
+    /// <summary>Letter B: the grey rag paper's texture, a rough edge with a torn notch at the top, the black seal cut
+    /// through over a leather thong at the bottom, an ink blot with a thumbprint in the corner.</summary>
+    private static SKPoint? LetterDispatch(Layers layers, SKCanvas canvas, SKRect r, SKImage map)
+    {
+        var random = new Random(96);
+        var sheet = new SKRect(r.Left + 30, r.Top + 20, r.Right - 30, r.Bottom - 120);
+        using var outline = Jagged(sheet, random, amplitude: 6, waves: 30, notches: 2, notchDepth: 18);
+        using var notch = Blob(new SKPoint(sheet.MidX - 120, sheet.Top - 10), 70, random);
+        using var edge = outline.Op(notch, SKPathOp.Difference);
+        using var texture = layers.Crop("letter-b", new SKRectI(621, 207, 1932, 966));
+        Sheet(canvas, edge, sheet, map, tone: new SKColor(0xD8, 0xD0, 0xC4), toneAlpha: 30, edgeDark: 170, () => Texture(canvas, texture, sheet),
+            age: .45f, life: new Life(96, Crumple: .45f, CreaseSize: 1.3f, Wear: .3f, Blotch: .6f));
+        // The sheet's bottom edge lies at y 1380 of the image, 373 px into the seal's crop.
+        using var seal = layers.Cut("letter-b", new SKRectI(1187, 1007, 1601, 1435), new SKRectI(0, 0, 414, 373));
+        var at = new SKPoint(sheet.MidX, sheet.Bottom - 373 + seal.Height / 2f);
+        Put(canvas, seal, at, 1f);
+        using var blot = layers.Cut("letter-b", new SKRectI(1973, 83, 2153, 497), new SKRectI(0, 0, 180, 414));
+        canvas.Save(); canvas.ClipPath(edge, antialias: true);
+        Put(canvas, blot, new SKPoint(sheet.Right - 120, sheet.Top + 220), 1f);
+        canvas.Restore();
+        return at;
+    }
+
+    // ------------------------------------------------------------------ Claude's sheets: objects in ink and wash
+
+    private static readonly SKColor Ink = new(0x2A, 0x20, 0x18);
+
+    private static SKPaint Pen(float width, byte alpha, Random random) => new()
+    {
+        IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = width, StrokeCap = SKStrokeCap.Round, StrokeJoin = SKStrokeJoin.Round,
+        Color = Ink.WithAlpha(alpha), PathEffect = SKPathEffect.CreateDiscrete(9, .8f, (uint)random.Next()),
+    };
+
+    /// <summary>A watercolour wash: the colour laid by Multiply, darker towards its edge as a dried wash is, uneven inside.</summary>
+    private static void Wash(SKCanvas canvas, SKPath shape, SKColor color, byte alpha, Random random)
+    {
+        canvas.Save();
+        canvas.ClipPath(shape, antialias: true);
+        using (var fill = new SKPaint { IsAntialias = true, Color = color.WithAlpha(alpha), BlendMode = SKBlendMode.Multiply })
+            canvas.DrawPath(shape, fill);
+        using (var rim = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 7, Color = color.WithAlpha((byte)(alpha * .7f)),
+                   BlendMode = SKBlendMode.Multiply, MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, 3) })
+            canvas.DrawPath(shape, rim);
+        var b = shape.Bounds;
+        using (var grain = Noise(Math.Max(2, (int)b.Width / 4), Math.Max(2, (int)b.Height / 4), random.Next(), .75f))
+        using (var multiply = new SKPaint { BlendMode = SKBlendMode.Multiply })
+            canvas.DrawImage(grain, b, new SKSamplingOptions(SKFilterMode.Linear), multiply);
+        canvas.Restore();
+    }
+
+    /// <summary>Hatching inside a shape: parallel pen lines at an angle, only over the shaded part (the side away from
+    /// the light, given as a half-plane through <paramref name="from"/> towards <paramref name="towards"/>).</summary>
+    private static void Hatch(SKCanvas canvas, SKPath shape, float angle, float spacing, SKPoint from, SKPoint towards, Random random)
+    {
+        canvas.Save();
+        canvas.ClipPath(shape, antialias: true);
+        var b = shape.Bounds;
+        float ux = MathF.Cos(angle), uy = MathF.Sin(angle), nx = -uy, ny = ux;
+        float dx = towards.X - from.X, dy = towards.Y - from.Y, dl = MathF.Sqrt(dx * dx + dy * dy);
+        var reach = MathF.Sqrt(b.Width * b.Width + b.Height * b.Height);
+        using var pen = Pen(1.3f, 170, random);
+        for (var s = -reach; s <= reach; s += spacing)
+        {
+            var cx = b.MidX + nx * s; var cy = b.MidY + ny * s;
+            // Only where the line runs through the shaded side; it thins out toward the light.
+            var t = ((cx - from.X) * dx + (cy - from.Y) * dy) / (dl * dl);
+            if (t < .1f) continue;
+            pen.Color = Ink.WithAlpha((byte)(Math.Clamp(t, 0, 1) * 170));
+            canvas.DrawLine(cx - ux * reach, cy - uy * reach, cx + ux * reach, cy + uy * reach, pen);
+        }
+        canvas.Restore();
+    }
+
+    /// <summary>Scroll in ink: the lived paper, rolls drawn as cylinders in pen line with hatched undersides and a
+    /// spiral at each end, a wax seal in red wash with a pen outline and ribbons.</summary>
+    private static SKPoint? ScrollInk(SKCanvas canvas, SKRect r, SKImage map)
+    {
+        var random = new Random(61);
+        var paper = new SKRect(r.Left + 40, r.Top + 60, r.Right - 40, r.Bottom - 60);
+        using var edge = Jagged(paper, random, amplitude: 4, waves: 30, notches: 3, notchDepth: 14);
+        Sheet(canvas, edge, paper, map, tone: new SKColor(0xEA, 0xD6, 0xA8), toneAlpha: 95, edgeDark: 130, () => { },
+            life: new Life(61, Crumple: .5f, CreaseSize: 1.3f, Wear: .35f, Blotch: .8f));
+        foreach (var y in new[] { paper.Top, paper.Bottom })
+        {
+            var radius = 52f;
+            var body = new SKRect(paper.Left - 30, y - radius, paper.Right + 30, y + radius);
+            using var roll = new SKPath();
+            roll.AddRoundRect(body, radius * .35f, radius);
+            using (var shadow = new SKPaint { IsAntialias = true, Color = new SKColor(0, 0, 0, 90), MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, 10) })
+            { canvas.Save(); canvas.Translate(6, 12); canvas.DrawPath(roll, shadow); canvas.Restore(); }
+            using (var fill = new SKPaint { IsAntialias = true, Color = new SKColor(0xE4, 0xCF, 0x9E) }) canvas.DrawPath(roll, fill);
+            Wash(canvas, roll, new SKColor(0xC8, 0xA8, 0x70), 120, random);
+            Hatch(canvas, roll, -.35f, 6, new SKPoint(body.MidX, body.MidY), new SKPoint(body.MidX, body.Bottom), random);
+            using var pen = Pen(2.4f, 230, random);
+            canvas.DrawPath(roll, pen);
+            // The outer layer's free edge and a few lines of the layers along the roll.
+            using var lip = new SKPath();
+            lip.MoveTo(body.Left + 40, y + radius * .25f);
+            for (var x = body.Left + 40; x < body.Right - 40; x += 60) lip.LineTo(x, y + radius * .25f + (float)(random.NextDouble() - .5) * 6);
+            canvas.DrawPath(lip, Pen(1.6f, 200, random));
+            foreach (var cx in new[] { body.Left + radius * .35f, body.Right - radius * .35f })
+            {
+                using var spiral = new SKPath();
+                for (var t = 0f; t <= 3.5f * MathF.Tau; t += .08f)
+                {
+                    var k = .1f + .9f * t / (3.5f * MathF.Tau);
+                    var p = new SKPoint(cx + radius * .3f * k * MathF.Cos(t), y + radius * .92f * k * MathF.Sin(t));
+                    if (t == 0) spiral.MoveTo(p); else spiral.LineTo(p);
+                }
+                canvas.DrawPath(spiral, Pen(1.5f, 210, random));
+            }
+        }
+        // Seal and ribbons, in wash and pen.
+        var c = new SKPoint(paper.Right - 240, paper.Bottom + 10);
+        foreach (var (dx, len) in new[] { (-60f, 190f), (70f, 170f) })
+        {
+            using var ribbon = new SKPath();
+            ribbon.MoveTo(c.X - 14, c.Y);
+            ribbon.CubicTo(c.X + dx * .3f - 10, c.Y + len * .4f, c.X + dx * .8f - 20, c.Y + len * .6f, c.X + dx - 16, c.Y + len);
+            ribbon.LineTo(c.X + dx, c.Y + len - 18);
+            ribbon.LineTo(c.X + dx + 16, c.Y + len + 4);
+            ribbon.CubicTo(c.X + dx * .8f + 18, c.Y + len * .6f, c.X + dx * .3f + 14, c.Y + len * .4f, c.X + 14, c.Y);
+            ribbon.Close();
+            using (var fill = new SKPaint { IsAntialias = true, Color = new SKColor(0xE8, 0xD8, 0xB8) }) canvas.DrawPath(ribbon, fill);
+            Wash(canvas, ribbon, new SKColor(0x9A, 0x22, 0x1A), 210, random);
+            Hatch(canvas, ribbon, 1.2f, 5, new SKPoint(c.X + dx * .5f, c.Y), new SKPoint(c.X + dx * .5f + 20, c.Y + 10), random);
+            canvas.DrawPath(ribbon, Pen(1.8f, 230, random));
+        }
+        InkSeal(canvas, c, 78, random, broken: false);
+        return c;
+    }
+
+    /// <summary>A wax seal drawn by hand: an uneven blob in red wash, the pressed disc as a second pen ring with hatching
+    /// on its shaded half, a small mountain emblem; or the same cracked in two with crumbs.</summary>
+    private static void InkSeal(SKCanvas canvas, SKPoint c, float radius, Random random, bool broken)
+    {
+        void One(SKPoint at, SKPath? clip)
+        {
+            canvas.Save();
+            if (clip is not null) canvas.ClipPath(clip, antialias: true);
+            using var blob = Blob(at, radius, random);
+            using (var shadow = new SKPaint { IsAntialias = true, Color = new SKColor(0, 0, 0, 80), MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, 6) })
+            { canvas.Save(); canvas.Translate(5, 8); canvas.DrawPath(blob, shadow); canvas.Restore(); }
+            using (var fill = new SKPaint { IsAntialias = true, Color = new SKColor(0xEC, 0xDC, 0xC0) }) canvas.DrawPath(blob, fill);
+            Wash(canvas, blob, new SKColor(0xA0, 0x24, 0x1A), 235, random);
+            using var disc = new SKPath(); disc.AddCircle(at.X, at.Y, radius * .6f);
+            Wash(canvas, disc, new SKColor(0xB0, 0x40, 0x34), 90, random);
+            Hatch(canvas, blob, .8f, 5, at, new SKPoint(at.X + radius, at.Y + radius), random);
+            canvas.DrawPath(blob, Pen(2.4f, 235, random));
+            canvas.DrawPath(disc, Pen(1.8f, 220, random));
+            using var peaks = new SKPath();
+            peaks.MoveTo(at.X - radius * .38f, at.Y + radius * .2f);
+            peaks.LineTo(at.X - radius * .15f, at.Y - radius * .12f); peaks.LineTo(at.X - radius * .02f, at.Y + radius * .04f);
+            peaks.LineTo(at.X + radius * .14f, at.Y - radius * .3f); peaks.LineTo(at.X + radius * .38f, at.Y + radius * .2f);
+            canvas.DrawPath(peaks, Pen(1.8f, 230, random));
+            canvas.Restore();
+        }
+        if (!broken) { One(c, null); return; }
+        var crack = new List<SKPoint>();
+        for (var y = -radius * 1.6f; y <= radius * 1.6f; y += radius * .16f)
+            crack.Add(new SKPoint(c.X + (float)(random.NextDouble() - .5) * radius * .22f + y * .25f, c.Y + y));
+        foreach (var side in new[] { -1f, 1f })
+        {
+            using var half = new SKPath();
+            half.AddPoly([.. crack, new(c.X + side * radius * 3, crack[^1].Y), new(c.X + side * radius * 3, crack[0].Y)]);
+            half.Offset(side * 8, side * -3);
+            One(new SKPoint(c.X + side * 8, c.Y - side * 3), half);
+            using var line = new SKPath(); line.AddPoly([.. crack], close: false); line.Offset(side * 8, side * -3);
+            canvas.Save(); canvas.ClipPath(half, antialias: true);
+            canvas.DrawPath(line, Pen(2f, 230, random));
+            canvas.Restore();
+        }
+        using var crumb = new SKPaint { IsAntialias = true, Color = new SKColor(0x8A, 0x20, 0x18) };
+        for (var k = 0; k < 6; k++)
+        {
+            var p = new SKPoint(c.X + (float)(random.NextDouble() - .3) * radius * 1.6f, c.Y + (float)(random.NextDouble() < .5 ? -1 : 1) * radius * (1.1f + .4f * (float)random.NextDouble()));
+            using var bit = Blob(p, 3 + (float)random.NextDouble() * 3, random);
+            canvas.DrawPath(bit, crumb);
+            canvas.DrawPath(bit, Pen(1f, 200, random));
+        }
+    }
+
+    /// <summary>Portolan in ink: the skin, thin faded rhumbs, the rose drawn in pen and hatching with a light wash.</summary>
+    private static SKPoint? PortolanInk(SKCanvas canvas, SKRect r, SKImage map)
+    {
+        var random = new Random(71);
+        using var edge = Skin(r, random);
+        var centre = new SKPoint(r.Left + r.Width * .7f, r.Top + r.Height * .44f);
+        Sheet(canvas, edge, r, map, tone: new SKColor(0xD9, 0xBE, 0x8A), toneAlpha: 120, edgeDark: 170, () =>
+        {
+            var radius = r.Height * .40f;
+            var hubs = new List<SKPoint> { centre };
+            for (var i = 0; i < 16; i++)
+            {
+                var a = i * MathF.PI / 8 + MathF.PI / 16;
+                hubs.Add(new SKPoint(centre.X + radius * MathF.Cos(a), centre.Y + radius * MathF.Sin(a)));
+            }
+            using var line = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 1f, BlendMode = SKBlendMode.Multiply };
+            foreach (var hub in hubs)
+                for (var k = 0; k < 32; k++)
+                {
+                    var a = k * MathF.PI / 16;
+                    line.Color = k % 4 == 0 ? Ink.WithAlpha(55) : k % 2 == 0 ? new SKColor(0x3C, 0x6A, 0x3A, 50) : new SKColor(0xA0, 0x2C, 0x1E, 50);
+                    canvas.DrawLine(hub, new SKPoint(hub.X + 5000 * MathF.Cos(a), hub.Y + 5000 * MathF.Sin(a)), line);
+                }
+            var rr = 125f;
+            using var ring = new SKPath(); ring.AddCircle(centre.X, centre.Y, rr * 1.05f);
+            using (var paperFill = new SKPaint { IsAntialias = true, Color = new SKColor(0xE6, 0xD2, 0xA2, 235) }) canvas.DrawPath(ring, paperFill);
+            canvas.DrawCircle(centre, rr * 1.05f, Pen(1.6f, 220, random));
+            canvas.DrawCircle(centre, rr * .97f, Pen(1.2f, 200, random));
+            for (var k = 0; k < 32; k++)
+            {
+                var a = -MathF.PI / 2 + k * MathF.PI / 16;
+                var length = rr * (k % 8 == 0 ? .98f : k % 4 == 0 ? .8f : k % 2 == 0 ? .64f : .5f);
+                var half = rr * (k % 8 == 0 ? .14f : k % 4 == 0 ? .11f : k % 2 == 0 ? .08f : .05f);
+                var tip = new SKPoint(centre.X + length * MathF.Cos(a), centre.Y + length * MathF.Sin(a));
+                var sa = new SKPoint(centre.X - MathF.Sin(a) * half, centre.Y + MathF.Cos(a) * half);
+                var sb = new SKPoint(centre.X + MathF.Sin(a) * half, centre.Y - MathF.Cos(a) * half);
+                using var shaded = new SKPath(); shaded.AddPoly([centre, tip, sa]);
+                using var lit = new SKPath(); lit.AddPoly([centre, tip, sb]);
+                using (var fill = new SKPaint { IsAntialias = true, Color = new SKColor(0xEE, 0xE0, 0xBC) }) { canvas.DrawPath(shaded, fill); canvas.DrawPath(lit, fill); }
+                var wash = k % 8 == 0 ? new SKColor(0xB8, 0x8A, 0x3A) : k % 4 == 0 ? new SKColor(0x4A, 0x5A, 0x7A) : k % 2 == 0 ? new SKColor(0x5A, 0x7A, 0x4A) : new SKColor(0xA8, 0x40, 0x30);
+                Wash(canvas, shaded, wash, 150, random);
+                Hatch(canvas, shaded, a + .3f, 3.5f, centre, sa, random);
+                canvas.DrawPath(shaded, Pen(1.2f, 225, random));
+                canvas.DrawPath(lit, Pen(1.2f, 225, random));
+            }
+            canvas.DrawCircle(centre, rr * .1f, Pen(1.4f, 230, random));
+        }, life: new Life(71, Crumple: .35f, CreaseSize: 1.8f, Wear: .45f, Blotch: .9f));
+        return centre;
+    }
+
+    /// <summary>Letter in ink: the lived sheet, the note by hand, a broken seal drawn in pen and wash, a loose string.</summary>
+    private static SKPoint? LetterInk(SKCanvas canvas, SKRect r, SKImage map)
+    {
+        var random = new Random(81);
+        using var edge = Jagged(r, random, amplitude: 1.2, waves: 40, notches: 0, notchDepth: 0);
+        Sheet(canvas, edge, r, map, tone: new SKColor(0xEE, 0xDC, 0xB4), toneAlpha: 100, edgeDark: 80, () =>
+        {
+            using var typeface = SKTypeface.FromFile(Path.Combine(Environment.CurrentDirectory, "src", "Map.App", "Assets", "Fonts", "Cormorant", "CormorantGaramond-MediumItalic.ttf"))
+                ?? SKTypeface.FromFamilyName("Georgia", SKFontStyle.Italic);
+            using var font = new SKFont(typeface, 54);
+            canvas.Save();
+            canvas.RotateDegrees(-2.5f, r.Left + 1250, r.Top + 120);
+            Handwriting(canvas, "До перевала три дня пути.", r.Left + 1250, r.Top + 110, font, random);
+            Handwriting(canvas, "Сжечь по прочтении. — Р.", r.Left + 1290, r.Top + 170, font, random);
+            canvas.Restore();
+        }, age: .55f, life: new Life(81, Crumple: .6f, CreaseSize: 1.2f, Wear: .2f, Blotch: .35f));
+        var c = new SKPoint(r.Right - 140, r.Top + r.Height * .62f);
+        using var stringPath = new SKPath();
+        stringPath.MoveTo(c.X - 20, c.Y + 10);
+        stringPath.CubicTo(c.X - 120, c.Y + 60, c.X - 90, c.Y + 160, c.X - 190, c.Y + 190);
+        stringPath.MoveTo(c.X - 10, c.Y + 20);
+        stringPath.CubicTo(c.X - 60, c.Y + 120, c.X + 10, c.Y + 170, c.X - 40, c.Y + 230);
+        using (var twine = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 7, Color = new SKColor(0xC8, 0xAE, 0x80), StrokeCap = SKStrokeCap.Round })
+            canvas.DrawPath(stringPath, twine);
+        canvas.DrawPath(stringPath, Pen(1.4f, 200, random));
+        InkSeal(canvas, c, 66, random, broken: true);
+        return c;
     }
 
     // ------------------------------------------------------------------ the five looks
@@ -184,8 +812,28 @@ internal static class HandoutVariantsSheet
     // ------------------------------------------------------------------ the sheet
 
     /// <summary>The map clipped to the sheet's edge, on its shadow, aged: paper tone, grain, darker towards the edge.</summary>
-    private static void Sheet(SKCanvas canvas, SKPath edge, SKRect r, SKImage map, SKColor tone, byte toneAlpha, byte edgeDark, Action inside, float age = .6f, Life? life = null)
+    private static void Sheet(SKCanvas canvas, SKPath edge, SKRect r, SKImage map, SKColor tone, byte toneAlpha, byte edgeDark, Action inside, float age = .6f, Life? life = null, SKRect? mapAt = null)
     {
+        if (mapAt is { } at)
+        {
+            // The map fitted into a smaller place (the sheet's objects take the rest): drawn there on paper colour.
+            using var fitted = SKSurface.Create(new SKImageInfo(map.Width, map.Height));
+            fitted.Canvas.Clear(new SKColor(0xF4, 0xEC, 0xDA));
+            var scale = Math.Min(at.Width / map.Width, at.Height / map.Height);
+            var dest = SKRect.Create(at.MidX - map.Width * scale / 2 - Margin, at.MidY - map.Height * scale / 2 - Margin, map.Width * scale, map.Height * scale);
+            // The map soaks into the paper: its rectangle fades out over its last ~60 px.
+            fitted.Canvas.SaveLayer();
+            fitted.Canvas.DrawImage(map, dest, Smooth3);
+            using (var fade = new SKPaint { IsAntialias = true, BlendMode = SKBlendMode.DstIn, MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, 30) })
+            {
+                var inner = dest; inner.Inflate(-55, -55);
+                fitted.Canvas.DrawRoundRect(inner, 60, 60, fade);
+            }
+            fitted.Canvas.Restore();
+            using var image = fitted.Snapshot();
+            Sheet(canvas, edge, r, image, tone, toneAlpha, edgeDark, inside, age, life);
+            return;
+        }
         using (var shadow = new SKPaint { IsAntialias = true, Color = new SKColor(0, 0, 0, 150), MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, 16) })
         {
             canvas.Save(); canvas.Translate(10, 16); canvas.DrawPath(edge, shadow); canvas.Restore();
@@ -1030,10 +1678,10 @@ internal static class HandoutVariantsSheet
         canvas.DrawImage(grain, SKRect.Create(bounds.Width, bounds.Height), new SKSamplingOptions(SKFilterMode.Linear), paint);
     }
 
-    private static SKImage RenderMap(MapDocument document, IStampImageSource source, int width, int height)
+    private static SKImage RenderMap(MapDocument document, IStampImageSource source, int width, int height, string page = SeaColor)
     {
         using var surface = SKSurface.Create(new SKImageInfo(width, height));
-        surface.Canvas.Clear(SKColor.Parse(SeaColor));
+        surface.Canvas.Clear(SKColor.Parse(page));
         surface.Canvas.Scale(K);
         var view = new WorldBounds(0, 0, Width, Height);
         SceneRenderer.Render(surface.Canvas, document, new RenderOptions { IsExport = true, Stamps = source, VisibleWorld = view, ViewScale = K });
