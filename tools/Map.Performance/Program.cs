@@ -96,6 +96,11 @@ else if (options.Profile == "style-packs-sheet")
     var sheet = StylePacksSheet.Run(options); report = sheet; gatePassed = sheet.GatePassed;
     foreach (var image in sheet.Images) Console.WriteLine($"  image {image}");
 }
+else if (options.Profile == "winter-variants-sheet")
+{
+    var sheet = WinterVariantsSheet.Run(options); report = sheet; gatePassed = sheet.GatePassed;
+    foreach (var image in sheet.Images) Console.WriteLine($"  image {image}");
+}
 else if (options.Profile == "handouts")
 {
     var sheet = HandoutSmoke.Run(options); report = sheet; gatePassed = sheet.GatePassed;
