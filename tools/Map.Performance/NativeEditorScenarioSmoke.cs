@@ -67,7 +67,8 @@ internal static class NativeEditorScenarioSmoke
             catch (Exception ex) { completion.TrySetException(ex); }
         }) { IsBackground = true };
         thread.SetApartmentState(ApartmentState.STA); thread.Start();
-        return completion.Task.WaitAsync(TimeSpan.FromMinutes(3)).GetAwaiter().GetResult();
+        // The R09 live pass draws every style and saves five handouts: it needs longer than one scenario.
+        return completion.Task.WaitAsync(TimeSpan.FromMinutes(options.Profile == "native-r09-live" ? 20 : 3)).GetAwaiter().GetResult();
     }
 }
 
@@ -198,6 +199,8 @@ public sealed partial class NativeEditorScenarioApplication : Application
         { _report.Required = ColorPresetRequired; _report.Scenario = "color-presets"; _window.Height = 1380; }
         if (Options.Profile == "native-standard-panel-shots")
         { _report.Required = ["standard-panel-shots-saved", "section-nav-on-tabs", "style-packs-on-look"]; _report.Scenario = "standard-panel-shots"; }
+        if (Options.Profile == "native-r09-live")
+        { _report.Required = ["r09-live-pass"]; _report.Scenario = "r09-live"; }
         if (Options.Profile == "native-panel-shots")
         { _report.Required = ["panel-shots-saved"]; _report.Scenario = "panel-shots"; _window.Height = 1380; }
         if (Options.Profile == "native-ui-shots")
@@ -273,6 +276,7 @@ public sealed partial class NativeEditorScenarioApplication : Application
         if (_report.Scenario == "history-memory") { await HistoryMemoryOnly(); return; }
         if (_report.Scenario == "panel-shots") { await PanelShotsOnly(); return; }
         if (_report.Scenario == "standard-panel-shots") { await StandardPanelShotsOnly(); return; }
+        if (_report.Scenario == "r09-live") { await R09LiveOnly(); return; }
         if (_report.Scenario == "ui-shots") { await UiShotsOnly(); return; }
         if (_report.Scenario == "color-presets") { await ColorPresetsOnly(); return; }
         if (_report.Scenario == "vtt-export") { await VttExportOnly(); return; }
@@ -1232,7 +1236,9 @@ public sealed partial class NativeEditorScenarioApplication : Application
     private sealed class ExportPicker(string path) : IExportDestinationPicker
     { public Task<string?> PickImageAsync(string name, ExportImageFormat format) => Task.FromResult<string?>(path);
         public Task<string?> PickVttAsync(string name) => Task.FromResult<string?>(Path.ChangeExtension(path, ".dd2vtt"));
-        public Task<string?> PickTilePackageAsync(string name) => Task.FromResult<string?>(Path.ChangeExtension(path, null) + "-tiles"); }
+        public Task<string?> PickTilePackageAsync(string name) => Task.FromResult<string?>(Path.ChangeExtension(path, null) + "-tiles");
+        // R09f: «Сохранить хендаут…» asks for a plain file.
+        public Task<string?> PickFileAsync(string suggestedFileName, string extension, string description) => Task.FromResult<string?>(Path.ChangeExtension(path, "." + extension)); }
     private sealed class LocalRecent : IRecentMaps
     { public IReadOnlyList<RecentMapItem> Load() => []; public void Remove(string path) { }
         public void Touch(string path, Guid id, string title, DateTimeOffset date, byte[]? thumbnailPng = null, string mapType = "Локальная карта") { } }

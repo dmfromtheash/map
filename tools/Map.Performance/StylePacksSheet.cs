@@ -27,9 +27,21 @@ internal static class StylePacksSheet
     private const int Width = 1600, Height = 1000;
     private const string SeaColor = "#FF9DB7C2";
 
+    /// <summary>The same small map with the owner's mountains, for the live pass of R09 (`native-r09-live`).</summary>
+    internal static MapDocument DemoMap() => Build().Document(null);
+
     public static AreaBeautySheetReport Run(PerformanceOptions options)
     {
         var report = new AreaBeautySheetReport();
+        var (images, Document) = Build();
+        var source = new Images(images);
+        RunWith(options, report, source, Document);
+        foreach (var image in images.Values) image.Dispose();
+        return report;
+    }
+
+    private static (Dictionary<string, SKImage> Images, Func<MapStylePack?, MapDocument> Document) Build()
+    {
         var images = new Dictionary<string, SKImage>(StringComparer.OrdinalIgnoreCase);
         var assets = new List<MapAssetReference>();
         var shas = new List<string>();
@@ -82,8 +94,11 @@ internal static class StylePacksSheet
                 [new BaseColorLayer(LayerId.New(), "Море", true, false, 1, SeaColor) { Sea = SeaStyle.NewMapDefault }, plain, plateau, objectLayer], [.. assets]);
             return pack?.ApplyTo(map) ?? map;
         }
+        return (images, Document);
+    }
 
-        var source = new Images(images);
+    private static void RunWith(PerformanceOptions options, AreaBeautySheetReport report, Images source, Func<MapStylePack?, MapDocument> Document)
+    {
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(options.OutputPath))!);
         void Save(string key, MapDocument document, WorldBounds view, int width)
         {
@@ -110,8 +125,6 @@ internal static class StylePacksSheet
             Save("pack-" + pack.Id, document, whole, 1200);
             Save("pack-" + pack.Id + "-zoom", document, close, 1200);
         }
-        foreach (var image in images.Values) image.Dispose();
         report.GatePassed = report.Images.Count == 1 + Packs.Count * 2;
-        return report;
     }
 }
