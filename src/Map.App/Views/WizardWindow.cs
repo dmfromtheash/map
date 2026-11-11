@@ -28,7 +28,7 @@ namespace Map.App.Views;
 /// measured in pixels; the raw width and height only appear once "Свой размер" is chosen, which
 /// is also the only way to reach the very large canvases.
 /// </summary>
-public sealed class WizardWindow : Window
+public sealed partial class WizardWindow : Window
 {
     private sealed record SizePreset(string Key, string Title, string Detail, int Width, int Height);
 
@@ -454,7 +454,7 @@ public sealed class WizardWindow : Window
                 Children =
                 {
                     BuildNameBlock(), (_startBlock = BuildStartingPoint()), (_sizeBlock = BuildSizeBlock()),
-                    (_hexBlock = BuildHexBoardBlock()), _backgroundBlock, _backgroundCombo,
+                    (_hexBlock = BuildHexBoardBlock()), _backgroundBlock, _backgroundCombo, BuildHandoutBlock(),
                 },
             },
         },
@@ -910,6 +910,7 @@ public sealed class WizardWindow : Window
 
     private void SyncBackgroundButtons()
     {
+        SyncHandoutButtons();
         foreach (var button in _backgroundButtons)
         {
             var active = button.Name == "WizardBackground" + _wizard.Background.TrimStart('#');

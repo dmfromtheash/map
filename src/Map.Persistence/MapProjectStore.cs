@@ -69,6 +69,8 @@ public static partial class MapProjectStore
         layers.OfType<BaseColorLayer>().Any(page => page.Sea is { NeedsMannersSchema: true });
 
     private static int SchemaFor(MapDocument document) =>
+        document.Handout != MapHandout.None || document.Checkpoints.Any(c => c.Snapshot.Handout != MapHandout.None)
+            ? MapProjectFormat.HandoutSchemaVersion :
         !document.Variants.IsDefault || document.Checkpoints.Any(c => !c.Snapshot.Variants.IsDefault)
             ? MapProjectFormat.VariantsSchemaVersion :
         HasCliffScreeV49(document.Layers) || document.Checkpoints.Any(c => HasCliffScreeV49(c.Snapshot.Layers))
@@ -1793,6 +1795,7 @@ public static partial class MapProjectStore
         Planet = document.Planet.IsDefault ? null : document.Planet,
         Isometric = document.Isometric.IsDefault ? null : document.Isometric,
         Variants = ToVariantsDto(document),
+        Handout = document.Handout == MapHandout.None ? null : MapHandouts.Id(document.Handout),
         StampForeground = document.StampForeground is { } foreground
             ? new StampForegroundDto { Tiles = ToTileDtos(foreground.Tiles) }
             : null,
@@ -2506,7 +2509,8 @@ public static partial class MapProjectStore
                     Entities = ReadEntitiesV36(scene), Labels = ReadLabelsV37(scene), Fog = ReadFogV38(scene),
                     Transitions = ReadTransitionsV39(scene), Timeline = ReadTimelineV40(scene),
                     Pointcrawl = ReadPointcrawlV41(scene), Planet = scene.Planet ?? new MapPlanet(),
-                    Isometric = scene.Isometric ?? new MapIsometric(), Variants = ReadVariantsV50(scene, manifest.SchemaVersion) };
+                    Isometric = scene.Isometric ?? new MapIsometric(), Variants = ReadVariantsV50(scene, manifest.SchemaVersion),
+                    Handout = ReadHandoutV51(scene, manifest.SchemaVersion) };
         }
         catch (Exception ex) when (ex is ArgumentException or FormatException or InvalidOperationException)
         {

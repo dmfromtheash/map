@@ -232,6 +232,10 @@ internal sealed class SceneDto
     [JsonPropertyName("variants")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public MapVariantsDto? Variants { get; set; }
+    /// <summary>The handout of the map (R09f, schema v51): <c>found</c>, <c>burnt</c>, <c>scroll-ink</c>, <c>scroll-bone</c>, <c>portolan-skin</c>.</summary>
+    [JsonPropertyName("handout")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Handout { get; set; }
     [JsonPropertyName("stampForeground")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public StampForegroundDto? StampForeground { get; set; }

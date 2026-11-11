@@ -25,6 +25,7 @@ public sealed class NewMapWizardViewModel : ViewModelBase
     private string _hexColumnsText = "30";
     private string _hexRowsText = "20";
     private string _hexSizeText = "64";
+    private MapHandout _handout = MapHandout.None;
 
     /// <summary>Largest board side the create dialog offers; the format allows more.</summary>
     public const int MaxHexDimension = 1024;
@@ -108,6 +109,23 @@ public sealed class NewMapWizardViewModel : ViewModelBase
         set => SetField(ref _background, value);
     }
 
+    /// <summary>
+    /// The handout the map is made for (R09f): the old sheet it is saved on from «Экспорт». Choosing one on the default dark
+    /// page switches the page to the light paper colour: a sheet takes the map as ink on paper.
+    /// </summary>
+    public MapHandout Handout
+    {
+        get => _handout;
+        set
+        {
+            if (!SetField(ref _handout, value)) return;
+            if (value != MapHandout.None && Background == BackgroundChoices[0]) Background = PaperBackground;
+        }
+    }
+
+    /// <summary>The light paper colour of the page offered with a handout.</summary>
+    public const string PaperBackground = "#FFF2E9DC";
+
     public string ValidationError
     {
         get => _validationError;
@@ -166,6 +184,12 @@ public sealed class NewMapWizardViewModel : ViewModelBase
 
     /// <summary>Builds the blank document, or null when validation fails.</summary>
     public MapDocument? Create(DateTimeOffset createdUtc)
+    {
+        var document = CreateBlank(createdUtc);
+        return document is null || Handout == MapHandout.None ? document : document with { Handout = Handout };
+    }
+
+    private MapDocument? CreateBlank(DateTimeOffset createdUtc)
     {
         if (!Validate())
         {

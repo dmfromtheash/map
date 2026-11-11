@@ -52,6 +52,7 @@ public sealed record MapDocument
         Planet = source.Planet;
         Isometric = source.Isometric;
         Variants = source.Variants;
+        Handout = source.Handout;
     }
 
     public MapDocument(
@@ -300,6 +301,10 @@ public sealed record MapDocument
 
     /// <summary>The named variants of the map - «День», «Ночь», «Политическая» and the owner's own (R09e, schema v50).</summary>
     public MapVariants Variants { get; init; } = new();
+
+    /// <summary>How the map is handed to the players as an old sheet (R09f, schema v51); applied only by the handout export.</summary>
+    public MapHandout Handout { get; init; }
+
     public string Title { get; init; }
 
     /// <summary>When the document was first created. Supplied by the caller; Core has no clock.</summary>
@@ -381,6 +386,7 @@ public sealed record MapDocument
             Planet = Planet,
             Isometric = Isometric,
             Variants = Variants,
+            Handout = Handout,
         };
 
     public MapDocument WithAssets(IReadOnlyList<MapAssetReference> assets)

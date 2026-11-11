@@ -96,9 +96,9 @@ else if (options.Profile == "style-packs-sheet")
     var sheet = StylePacksSheet.Run(options); report = sheet; gatePassed = sheet.GatePassed;
     foreach (var image in sheet.Images) Console.WriteLine($"  image {image}");
 }
-else if (options.Profile == "handout-variants-sheet")
+else if (options.Profile == "handouts")
 {
-    var sheet = HandoutVariantsSheet.Run(options); report = sheet; gatePassed = sheet.GatePassed;
+    var sheet = HandoutSmoke.Run(options); report = sheet; gatePassed = sheet.GatePassed;
     foreach (var image in sheet.Images) Console.WriteLine($"  image {image}");
 }
 else if (options.Profile == "giant-coast-ab")

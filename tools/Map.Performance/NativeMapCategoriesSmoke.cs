@@ -55,6 +55,14 @@ public sealed partial class RegionalApplication
         Check("back returns to the category step", wizard.Step == 1 && Visible(wizard, "ChooseCategoryButton") && !Visible(wizard, "CreateMapButton"));
         Click(wizard, "ChooseCategoryButton"); await Settle();
         wizard.GetVisualDescendants().OfType<TextBox>().Single(t => t.Name == "WizardTitleBox").Text = "Категория · проверка";
+        // R09f: the handout cards of step 2 - six of them, «Без хендаута» chosen; a card click chooses the sheet.
+        var handouts = wizard.GetVisualDescendants().OfType<ToggleButton>().Where(b => b.Name?.StartsWith("WizardHandout", StringComparison.Ordinal) == true).ToList();
+        Check("step 2 offers the handouts with none chosen", handouts.Count == MapHandouts.All.Count
+            && handouts.Single(b => b.Name == "WizardHandoutnone").IsChecked == true);
+        Click(wizard, "WizardHandoutscrollbone"); await Settle();
+        handouts.Single(b => b.Name == "WizardHandoutscrollbone").BringIntoView(); await Settle(); Capture(wizard, "03-handout");
+        Check("a handout card click chooses that sheet only", handouts.Single(b => b.Name == "WizardHandoutscrollbone").IsChecked == true
+            && handouts.Count(b => b.IsChecked == true) == 1);
         Click(wizard, "CreateMapButton");
         var deadline = DateTime.UtcNow.AddSeconds(30);
         while (wizard.CreatedDocument is null && DateTime.UtcNow < deadline) await Task.Delay(50);
@@ -62,6 +70,8 @@ public sealed partial class RegionalApplication
         wizard.Close();
         Check("the created map belongs to the standard category", document.Category == MapCategoryId.Standard
             && document.Category.IsStandard && document.Title == "Категория · проверка");
+        Check("the created map carries the chosen handout on paper", document.Handout == MapHandout.ScrollBone
+            && document.BaseColor.Color == Map.Presentation.ViewModels.NewMapWizardViewModel.PaperBackground);
 
         var path = Path.Combine(_workspace, "category-standard.mapproj");
         MapProjectStore.Save(document, path, new SaveMetadata("smoke", DateTimeOffset.UtcNow), PreviewPng());
@@ -75,7 +85,8 @@ public sealed partial class RegionalApplication
                 root.GetProperty("schemaVersion").GetInt32() >= MapProjectFormat.SchemaVersion && !root.TryGetProperty("category", out _));
         }
         var reopened = MapProjectStore.Open(path).Document;
-        Check("a standard map opens back as standard", reopened.Category == MapCategoryId.Standard && reopened.Title == document.Title);
+        Check("a standard map opens back as standard", reopened.Category == MapCategoryId.Standard && reopened.Title == document.Title
+            && reopened.Handout == MapHandout.ScrollBone);
     }
 
     private static bool Visible(Control root, string name) =>

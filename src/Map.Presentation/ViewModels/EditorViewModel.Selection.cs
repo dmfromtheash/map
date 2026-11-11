@@ -2463,6 +2463,7 @@ public sealed partial class EditorViewModel
         _lastCommittedEditUtc = _clock();
         Timed("save-state", () => SaveState = Session.IsDirty ? SaveState.Unsaved : SaveState.Saved);
         Timed("status", () => StatusDetail = "");
+        Raise(nameof(Handout));
         Timed("canvas-workflow", RefreshCanvasWorkflowAfterDocumentChange);
 
         if (_activeLayerId is null || Session.Document.FindLayer(_activeLayerId.Value) is null)

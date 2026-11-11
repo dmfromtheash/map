@@ -40,6 +40,7 @@ public sealed class MapCheckpointSnapshot
         Planet = document.Planet;
         Isometric = document.Isometric;
         Variants = document.Variants;
+        Handout = document.Handout;
     }
 
     public string Title { get; }
@@ -84,6 +85,9 @@ public sealed class MapCheckpointSnapshot
     /// <summary>The named variants of the version (R09e).</summary>
     public MapVariants Variants { get; }
 
+    /// <summary>The handout of the version (R09f).</summary>
+    public MapHandout Handout { get; }
+
     public static MapCheckpointSnapshot Capture(MapDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
@@ -106,7 +110,7 @@ public sealed class MapCheckpointSnapshot
             Notes,
             checkpoints,
             StampForeground,
-            Category) { Lighting = Lighting, Style = Style, Entities = Entities, Labels = Labels, Fog = Fog, Transitions = Transitions, Timeline = Timeline, Pointcrawl = Pointcrawl, Planet = Planet, Isometric = Isometric, Variants = Variants };
+            Category) { Lighting = Lighting, Style = Style, Entities = Entities, Labels = Labels, Fog = Fog, Transitions = Transitions, Timeline = Timeline, Pointcrawl = Pointcrawl, Planet = Planet, Isometric = Isometric, Variants = Variants, Handout = Handout };
 }
 
 /// <summary>One named durable checkpoint with its bounded preview and immutable map snapshot.</summary>

@@ -3073,6 +3073,7 @@ public sealed partial class EditorView
                 new TextBlock { Text = "Экспорт изображения" }.Classed("role-panel"),
                 BuildExportRecipient(),
                 BuildPosterAndLayersExport(),
+                BuildHandoutExport(),
                 new TextBlock
                 {
                     Text = "Предпросмотр уменьшен для этого окна. Размер готового файла задаётся ниже; заметки и панели редактора в него не попадают.",
