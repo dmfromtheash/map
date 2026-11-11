@@ -24,9 +24,9 @@ internal static class WinterVariantsSheet
     }
 
     private const int Width = 1600, Height = 1000;
-    private const string SeaColor = "#FF9DB7C2";
+    internal const string SeaColor = "#FF9DB7C2";
     private const float K = 1.5f;
-    private const int W = (int)(Width * K), H = (int)(Height * K);
+    internal const int W = (int)(Width * K), H = (int)(Height * K);
 
     /// <summary>What every medium is drawn from.</summary>
     private sealed class Scene
@@ -355,7 +355,7 @@ internal static class WinterVariantsSheet
 
     // ------------------------------------------------------------------ helpers
 
-    private static (float[] R, float[] G, float[] B, float[] A) Channels(SKImage image)
+    internal static (float[] R, float[] G, float[] B, float[] A) Channels(SKImage image)
     {
         var info = new SKImageInfo(W, H, SKColorType.Rgba8888, SKAlphaType.Unpremul);
         using var bitmap = new SKBitmap(info);
@@ -384,7 +384,7 @@ internal static class WinterVariantsSheet
     }
 
     /// <summary>Three box blurs of the given radius (close to a Gaussian).</summary>
-    private static float[] Blur(float[] source, int radius)
+    internal static float[] Blur(float[] source, int radius)
     {
         var a = (float[])source.Clone();
         var b = new float[a.Length];
@@ -415,7 +415,7 @@ internal static class WinterVariantsSheet
     }
 
     /// <summary>Value noise in octaves (cell size, weight), stretched to 0..1.</summary>
-    private static float[] Field(int width, int height, int seed, (int Cell, float Weight)[] octaves)
+    internal static float[] Field(int width, int height, int seed, (int Cell, float Weight)[] octaves)
     {
         var random = new Random(seed);
         var field = new float[width * height];
@@ -475,7 +475,7 @@ internal static class WinterVariantsSheet
         return t * t * (3 - 2 * t);
     }
 
-    private static SKImage RenderMap(MapDocument document, IStampImageSource source, string page)
+    internal static SKImage RenderMap(MapDocument document, IStampImageSource source, string page)
     {
         using var surface = SKSurface.Create(new SKImageInfo(W, H));
         surface.Canvas.Clear(SKColor.Parse(page));
@@ -485,7 +485,7 @@ internal static class WinterVariantsSheet
     }
 
     /// <summary>Only the chosen layers on a transparent sheet (the page hidden); the mountain pass can drop rivers and roads.</summary>
-    private static SKImage RenderLayers(MapDocument document, IStampImageSource source, Func<MapLayer, bool> keep, bool stampsOnly = false)
+    internal static SKImage RenderLayers(MapDocument document, IStampImageSource source, Func<MapLayer, bool> keep, bool stampsOnly = false)
     {
         var only = document.WithLayers([.. document.Layers.Select(l =>
             l is BaseColorLayer ? l with { Visible = false }
@@ -498,7 +498,7 @@ internal static class WinterVariantsSheet
         return surface.Snapshot();
     }
 
-    private static void Save(AreaBeautySheetReport report, PerformanceOptions options, string key, SKImage sheet, int width, SKRectI? crop)
+    internal static void Save(AreaBeautySheetReport report, PerformanceOptions options, string key, SKImage sheet, int width, SKRectI? crop)
     {
         using var part = crop is { } c ? sheet.Subset(c) : null;
         var image = part ?? sheet;
@@ -512,7 +512,7 @@ internal static class WinterVariantsSheet
     }
 
     /// <summary>The sample map: an island with a plateau, a river, a road, the owner's mountains; the names on their own layer.</summary>
-    private static (MapDocument Document, IStampImageSource Source, Dictionary<string, SKImage> Images) SampleMap()
+    internal static (MapDocument Document, IStampImageSource Source, Dictionary<string, SKImage> Images) SampleMap()
     {
         var images = new Dictionary<string, SKImage>(StringComparer.OrdinalIgnoreCase);
         var assets = new List<MapAssetReference>();
