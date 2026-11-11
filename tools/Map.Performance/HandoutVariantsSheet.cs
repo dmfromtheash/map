@@ -65,14 +65,10 @@ internal static class HandoutVariantsSheet
         using var edge = Jagged(r, random, amplitude: 7, waves: 9, notches: 7, notchDepth: 26);
         Sheet(canvas, edge, r, map, tone: new SKColor(0xE6, 0xCF, 0x9E), toneAlpha: 95, edgeDark: 150, () =>
         {
-            Panels(canvas, r, 2, 2);
-            Fold(canvas, new SKPoint(r.MidX, r.Top), new SKPoint(r.MidX, r.Bottom));
-            Fold(canvas, new SKPoint(r.Left, r.MidY), new SKPoint(r.Right, r.MidY));
-            Stain(canvas, new SKPoint(r.Left + r.Width * .78f, r.Top + r.Height * .24f), 95, 6);
-            Stain(canvas, new SKPoint(r.Left + r.Width * .83f, r.Top + r.Height * .30f), 60, 4);
-            Stain(canvas, new SKPoint(r.Left + r.Width * .14f, r.Top + r.Height * .80f), 120, 7);
+            Tide(canvas, new SKPoint(r.Left + r.Width * .78f, r.Top + r.Height * .24f), 95, random);
+            Tide(canvas, new SKPoint(r.Left + r.Width * .14f, r.Top + r.Height * .80f), 130, random);
             Way(canvas, r, [(330, 640), (500, 600), (680, 640), (860, 590), (980, 700), (1010, 840)], (1010, 860));
-        }, age: .7f);
+        }, age: .7f, life: new Life(11, Crumple: 1f, CreaseSize: 1f, Wear: .55f, Blotch: 1f));
     }
 
     /// <summary>Snatched from the fire: a charred, uneven edge with scorch and two burnt holes.</summary>
@@ -117,9 +113,9 @@ internal static class HandoutVariantsSheet
                 };
                 canvas.DrawRect(new SKRect(paper.Left, down ? y : y - 90, paper.Right, down ? y + 90 : y), shade);
             }
-        });
-        Roll(canvas, paper.Left - 26, paper.Right + 26, paper.Top, 46);
-        Roll(canvas, paper.Left - 26, paper.Right + 26, paper.Bottom, 46);
+        }, life: new Life(37, Crumple: .45f, CreaseSize: 1.6f, Wear: .35f, Blotch: .7f));
+        Roll(canvas, paper.Left - 26, paper.Right + 26, paper.Top, 46, random);
+        Roll(canvas, paper.Left - 26, paper.Right + 26, paper.Bottom, 46, random);
         Seal(canvas, new SKPoint(paper.Right - 210, paper.Bottom - 30), 74, random, ribbons: true, broken: false);
     }
 
@@ -148,7 +144,7 @@ internal static class HandoutVariantsSheet
                     canvas.DrawLine(hub, new SKPoint(hub.X + 5000 * MathF.Cos(a), hub.Y + 5000 * MathF.Sin(a)), line);
                 }
             Rose(canvas, centre, 92);
-        });
+        }, life: new Life(41, Crumple: .35f, CreaseSize: 1.8f, Wear: .5f, Blotch: .9f));
     }
 
     /// <summary>A message by courier: a clean sheet folded in three, a broken seal, a note in the margin.</summary>
@@ -156,11 +152,8 @@ internal static class HandoutVariantsSheet
     {
         var random = new Random(53);
         using var edge = Jagged(r, random, amplitude: 1.2, waves: 40, notches: 0, notchDepth: 0);
-        Sheet(canvas, edge, r, map, tone: new SKColor(0xF0, 0xE4, 0xC6), toneAlpha: 70, edgeDark: 70, () =>
+        Sheet(canvas, edge, r, map, tone: new SKColor(0xEE, 0xDC, 0xB4), toneAlpha: 100, edgeDark: 80, () =>
         {
-            Panels(canvas, r, 1, 3);
-            Fold(canvas, new SKPoint(r.Left, r.Top + r.Height / 3), new SKPoint(r.Right, r.Top + r.Height / 3));
-            Fold(canvas, new SKPoint(r.Left, r.Top + r.Height * 2 / 3), new SKPoint(r.Right, r.Top + r.Height * 2 / 3));
             using var typeface = SKTypeface.FromFile(Path.Combine(Environment.CurrentDirectory, "src", "Map.App", "Assets", "Fonts", "Cormorant", "CormorantGaramond-MediumItalic.ttf"))
                 ?? SKTypeface.FromFamilyName("Georgia", SKFontStyle.Italic);
             using var font = new SKFont(typeface, 54);
@@ -170,14 +163,14 @@ internal static class HandoutVariantsSheet
             canvas.DrawText("До перевала три дня пути.", r.Left + 1250, r.Top + 110, font, ink);
             canvas.DrawText("Сжечь по прочтении. — Р.", r.Left + 1290, r.Top + 170, font, ink);
             canvas.Restore();
-        }, age: .4f);
+        }, age: .55f, life: new Life(53, Crumple: .6f, CreaseSize: 1.2f, Wear: .2f, Blotch: .35f));
         Seal(canvas, new SKPoint(r.Right - 150, r.Top + r.Height * 2 / 3), 62, random, ribbons: false, broken: true);
     }
 
     // ------------------------------------------------------------------ the sheet
 
     /// <summary>The map clipped to the sheet's edge, on its shadow, aged: paper tone, grain, darker towards the edge.</summary>
-    private static void Sheet(SKCanvas canvas, SKPath edge, SKRect r, SKImage map, SKColor tone, byte toneAlpha, byte edgeDark, Action inside, float age = .6f)
+    private static void Sheet(SKCanvas canvas, SKPath edge, SKRect r, SKImage map, SKColor tone, byte toneAlpha, byte edgeDark, Action inside, float age = .6f, Life? life = null)
     {
         using (var shadow = new SKPaint { IsAntialias = true, Color = new SKColor(0, 0, 0, 150), MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, 16) })
         {
@@ -187,6 +180,13 @@ internal static class HandoutVariantsSheet
         canvas.ClipPath(edge, antialias: true);
         using (var aged = new SKPaint { ColorFilter = Sepia(age) })
             canvas.DrawImage(map, new SKRect(Margin, Margin, Margin + map.Width, Margin + map.Height), new SKSamplingOptions(SKFilterMode.Linear), aged);
+        if (life is not null)
+        {
+            inside();
+            Lived(canvas, edge, r, tone, toneAlpha, edgeDark, life);
+            canvas.Restore();
+            return;
+        }
         using (var paper = new SKPaint { Color = tone.WithAlpha(toneAlpha), BlendMode = SKBlendMode.Multiply })
             canvas.DrawRect(canvas.LocalClipBounds, paper);
         using (var grain = Noise((int)(r.Width / 3), (int)(r.Height / 3), 7, .80f))
@@ -198,6 +198,216 @@ internal static class HandoutVariantsSheet
         inside();
         canvas.Restore();
     }
+
+    /// <summary>How a sheet lived (Pinterest references, 2026-11-11): crumple strength and crease size, ink worn off in
+    /// patches, brown blotches and foxing. One seed for all of it.</summary>
+    private sealed record Life(int Seed, float Crumple, float CreaseSize, float Wear, float Blotch);
+
+    /// <summary>Ageing as real paper shows it: uneven, in patches - ink worn off, mottled tone, blotches, an edge that darkens
+    /// unevenly, a net of short creases lit softly from the top left (matte: lit sides brighten far less than shaded ones
+    /// darken), foxing spots.</summary>
+    private static void Lived(SKCanvas canvas, SKPath edge, SKRect r, SKColor tone, byte toneAlpha, byte edgeDark, Life life)
+    {
+        int w = (int)(r.Width / 2), h = (int)(r.Height / 2);
+        var sampling = new SKSamplingOptions(SKFilterMode.Linear);
+        var wear = Field(w, h, life.Seed + 1, [(110, .5f), (36, .32f), (10, .18f)]);
+        using (var worn = Tinted(w, h, new SKColor(0xEE, 0xDE, 0xBA), i => Smooth(.62f, .92f, wear[i]) * life.Wear * .55f))
+            canvas.DrawImage(worn, r, sampling);
+        using (var paper = new SKPaint { Color = tone.WithAlpha(toneAlpha), BlendMode = SKBlendMode.Multiply })
+            canvas.DrawRect(canvas.LocalClipBounds, paper);
+        using (var grain = Noise((int)(r.Width / 3), (int)(r.Height / 3), 7, .86f))
+        using (var paint = new SKPaint { BlendMode = SKBlendMode.Multiply })
+            canvas.DrawImage(grain, r, sampling, paint);
+
+        // Blotches: a warped field, so the patches run in uneven tongues rather than round clouds.
+        var a = Field(w, h, life.Seed + 2, [(170, .6f), (55, .4f)]);
+        var b = Field(w, h, life.Seed + 3, [(170, .6f), (55, .4f)]);
+        var c = Field(w, h, life.Seed + 4, [(80, .5f), (24, .3f), (7, .2f)]);
+        var blot = new float[w * h];
+        for (var y = 0; y < h; y++)
+            for (var x = 0; x < w; x++)
+            {
+                var i = y * w + x;
+                var v = Sample(c, w, h, x + 90 * (a[i] - .5f), y + 90 * (b[i] - .5f));
+                // Paper browns most where hands and air reached it: towards the edges.
+                float ex = 2f * x / w - 1, ey = 2f * y / h - 1;
+                var rim = Math.Clamp(ex * ex * ex * ex + ey * ey * ey * ey, 0, 1);
+                blot[i] = (.25f * v + .75f * Smooth(.55f, .85f, v)) * (.35f + .65f * rim) * life.Blotch;
+            }
+        using (var blotches = Tinted(w, h, new SKColor(0x8A, 0x58, 0x22), i => blot[i] * .38f))
+        using (var paint = new SKPaint { BlendMode = SKBlendMode.Multiply })
+            canvas.DrawImage(blotches, r, sampling, paint);
+
+        // The edge darkens unevenly: the dark band masked by a field.
+        var e = Field(w, h, life.Seed + 5, [(130, .6f), (30, .4f)]);
+        using (var layer = new SKPaint { BlendMode = SKBlendMode.Multiply })
+        {
+            canvas.SaveLayer(layer);
+            using (var dark = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 120, Color = new SKColor(0x6E, 0x50, 0x28, edgeDark),
+                       MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, 48) })
+                canvas.DrawPath(edge, dark);
+            using (var mask = Tinted(w, h, SKColors.Black, i => .2f + .8f * Smooth(.3f, .8f, e[i])))
+            using (var dstIn = new SKPaint { BlendMode = SKBlendMode.DstIn })
+                canvas.DrawImage(mask, r, sampling, dstIn);
+            canvas.Restore();
+        }
+
+        if (life.Crumple > 0)
+            using (var crumple = Crumple((int)r.Width, (int)r.Height, life))
+            using (var overlay = new SKPaint { BlendMode = SKBlendMode.Overlay })
+                canvas.DrawImage(crumple, r, sampling, overlay);
+
+        // Foxing: small rust spots in a few loose clusters.
+        var random = new Random(life.Seed + 9);
+        using var spot = new SKPaint { IsAntialias = true, BlendMode = SKBlendMode.Multiply, MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, 1.4f) };
+        for (var k = 0; k < 4; k++)
+        {
+            var centre = new SKPoint(r.Left + (float)random.NextDouble() * r.Width, r.Top + (float)random.NextDouble() * r.Height);
+            var count = (int)(10 * life.Blotch) + 2;
+            for (var j = 0; j < count; j++)
+            {
+                spot.Color = new SKColor(0x8A, 0x4E, 0x1E, (byte)random.Next(40, 120));
+                var p = new SKPoint(centre.X + (float)Gauss(random) * 110, centre.Y + (float)Gauss(random) * 80);
+                canvas.DrawCircle(p, 1.5f + (float)random.NextDouble() * 5, spot);
+            }
+        }
+    }
+
+    /// <summary>A crumpled sheet as a lighting layer for Overlay (grey 0.5 = untouched): long creases right across, chains
+    /// of medium creases turning at random, many small wrinkles; each a ridge or a valley that fades out at its ends.
+    /// The slopes add up into facets; the light is soft and matte.</summary>
+    private static SKImage Crumple(int w, int h, Life life)
+    {
+        var random = new Random(life.Seed + 7);
+        var gx = new float[w * h];
+        var gy = new float[w * h];
+        var size = life.CreaseSize;
+        float Sign() => random.Next(2) == 0 ? -1 : 1;
+        float R() => (float)random.NextDouble();
+
+        void Crease(float px, float py, float angle, float half, float reach, float slope)
+        {
+            float ux = MathF.Cos(angle), uy = MathF.Sin(angle), nx = -uy, ny = ux;
+            var soft = half * .3f + 6;
+            var ext = half + 2.5f * soft;
+            var spanX = MathF.Abs(ux) * ext + MathF.Abs(nx) * reach;
+            var spanY = MathF.Abs(uy) * ext + MathF.Abs(ny) * reach;
+            int x0 = Math.Max(0, (int)(px - spanX)), x1 = Math.Min(w - 1, (int)(px + spanX));
+            int y0 = Math.Max(0, (int)(py - spanY)), y1 = Math.Min(h - 1, (int)(py + spanY));
+            for (var y = y0; y <= y1; y++)
+                for (var x = x0; x <= x1; x++)
+                {
+                    float dx = x - px, dy = y - py, d = dx * nx + dy * ny, ad = MathF.Abs(d);
+                    if (ad >= reach) continue;
+                    var over = MathF.Abs(dx * ux + dy * uy) - half;
+                    var fade = over <= 0 ? 1 : MathF.Exp(-over * over / (soft * soft));
+                    if (fade < .01f) continue;
+                    // Sharp at the crease itself, dying out smoothly towards the reach (no second line there).
+                    var q = 1 - ad / reach;
+                    var k = slope * fade * q * q * (d > 0 ? -1 : 1);
+                    var i = y * w + x;
+                    gx[i] += k * nx; gy[i] += k * ny;
+                }
+        }
+
+        for (var i = 0; i < 4; i++)
+            Crease(R() * w, R() * h, R() * MathF.PI, w * (.2f + .3f * R()), (80 + 80 * R()) * size, (.05f + .05f * R()) * Sign() * life.Crumple);
+        for (var chain = 0; chain < 40; chain++)
+        {
+            float x = R() * w, y = R() * h, angle = R() * MathF.PI;
+            for (var s = 0; s < 6; s++)
+            {
+                var half = (18 + 50 * R()) * size;
+                Crease(x, y, angle, half, (14 + 30 * R()) * size, (.12f + .16f * R()) * Sign() * life.Crumple);
+                x += MathF.Cos(angle) * half * 1.6f; y += MathF.Sin(angle) * half * 1.6f;
+                angle += Sign() * (.5f + .8f * R());
+            }
+        }
+        // Small wrinkles, also chained: a crumple is a connected net of short zigzags, not separate dashes.
+        var wrinkles = (int)(w * (long)h / (32000 * size * size));
+        for (var chain = 0; chain < wrinkles; chain++)
+        {
+            float x = R() * w, y = R() * h, angle = R() * MathF.PI;
+            for (var s = 0; s < 7; s++)
+            {
+                var half = (7 + 18 * R()) * size;
+                Crease(x, y, angle, half, (5 + 9 * R()) * size, (.12f + .16f * R()) * Sign() * life.Crumple);
+                x += MathF.Cos(angle) * half * 1.8f; y += MathF.Sin(angle) * half * 1.8f;
+                angle += Sign() * (.4f + 1f * R());
+            }
+        }
+
+        float lx = -.5f, ly = -.62f, lz = .6f;
+        var ln = MathF.Sqrt(lx * lx + ly * ly + lz * lz); lx /= ln; ly /= ln; lz /= ln;
+        var pixels = new byte[w * h * 4];
+        for (var i = 0; i < w * h; i++)
+        {
+            var v = (-gx[i] * lx - gy[i] * ly + lz) / MathF.Sqrt(gx[i] * gx[i] + gy[i] * gy[i] + 1) / lz;
+            var g = v < 1 ? .5f + .5f * (v - 1) : .5f + .2f * (v - 1);
+            var level = (byte)(255 * Math.Clamp(g, .2f, .8f));
+            pixels[i * 4] = pixels[i * 4 + 1] = pixels[i * 4 + 2] = level; pixels[i * 4 + 3] = 255;
+        }
+        using var data = SKData.CreateCopy(pixels);
+        return SKImage.FromPixels(new SKImageInfo(w, h, SKColorType.Rgba8888, SKAlphaType.Premul), data, w * 4);
+    }
+
+    /// <summary>Value noise in octaves (cell size, weight), stretched to 0..1.</summary>
+    private static float[] Field(int width, int height, int seed, (int Cell, float Weight)[] octaves)
+    {
+        var random = new Random(seed);
+        var field = new float[width * height];
+        foreach (var (cell, weight) in octaves)
+        {
+            int gw = width / cell + 2, gh = height / cell + 2;
+            var grid = new float[gw * gh];
+            for (var i = 0; i < grid.Length; i++) grid[i] = (float)random.NextDouble();
+            for (var y = 0; y < height; y++)
+                for (var x = 0; x < width; x++)
+                {
+                    float fx = (float)x / cell, fy = (float)y / cell;
+                    int ix = (int)fx, iy = (int)fy; float tx = fx - ix, ty = fy - iy;
+                    tx = tx * tx * (3 - 2 * tx); ty = ty * ty * (3 - 2 * ty);
+                    var top = grid[iy * gw + ix] * (1 - tx) + grid[iy * gw + ix + 1] * tx;
+                    var bottom = grid[(iy + 1) * gw + ix] * (1 - tx) + grid[(iy + 1) * gw + ix + 1] * tx;
+                    field[y * width + x] += weight * (top * (1 - ty) + bottom * ty);
+                }
+        }
+        float min = field.Min(), max = field.Max();
+        for (var i = 0; i < field.Length; i++) field[i] = (field[i] - min) / (max - min);
+        return field;
+    }
+
+    private static float Sample(float[] field, int w, int h, float x, float y)
+    {
+        x = Math.Clamp(x, 0, w - 1.001f); y = Math.Clamp(y, 0, h - 1.001f);
+        int ix = (int)x, iy = (int)y; float tx = x - ix, ty = y - iy;
+        var top = field[iy * w + ix] * (1 - tx) + field[iy * w + ix + 1] * tx;
+        var bottom = field[(iy + 1) * w + ix] * (1 - tx) + field[(iy + 1) * w + ix + 1] * tx;
+        return top * (1 - ty) + bottom * ty;
+    }
+
+    /// <summary>One colour with a per-pixel opacity (0..1).</summary>
+    private static SKImage Tinted(int w, int h, SKColor color, Func<int, float> alpha)
+    {
+        var pixels = new byte[w * h * 4];
+        for (var i = 0; i < w * h; i++)
+        {
+            var a = Math.Clamp(alpha(i), 0, 1);
+            pixels[i * 4] = (byte)(color.Red * a); pixels[i * 4 + 1] = (byte)(color.Green * a);
+            pixels[i * 4 + 2] = (byte)(color.Blue * a); pixels[i * 4 + 3] = (byte)(255 * a);
+        }
+        using var data = SKData.CreateCopy(pixels);
+        return SKImage.FromPixels(new SKImageInfo(w, h, SKColorType.Rgba8888, SKAlphaType.Premul), data, w * 4);
+    }
+
+    private static float Smooth(float from, float to, float v)
+    {
+        var t = Math.Clamp((v - from) / (to - from), 0, 1);
+        return t * t * (3 - 2 * t);
+    }
+
+    private static double Gauss(Random random) =>
+        Math.Sqrt(-2 * Math.Log(1 - random.NextDouble())) * Math.Cos(Math.Tau * random.NextDouble());
 
     /// <summary>A rectangle whose edge wavers and has a few tears.</summary>
     private static SKPath Jagged(SKRect r, Random random, double amplitude, int waves, int notches, double notchDepth)
@@ -290,51 +500,21 @@ internal static class HandoutVariantsSheet
 
     // ------------------------------------------------------------------ parts
 
-    /// <summary>The panels between folds differ a little in tone, as paper bent different ways catches light.</summary>
-    private static void Panels(SKCanvas canvas, SKRect r, int columns, int rows)
+    /// <summary>A dried water stain: a pale uneven patch with a thin, broken tide line and a fainter one just inside.</summary>
+    private static void Tide(SKCanvas canvas, SKPoint c, float radius, Random random)
     {
-        var random = new Random(columns * 10 + rows);
-        for (var i = 0; i < columns; i++)
-            for (var j = 0; j < rows; j++)
-            {
-                var cell = new SKRect(r.Left + r.Width * i / columns, r.Top + r.Height * j / rows, r.Left + r.Width * (i + 1) / columns, r.Top + r.Height * (j + 1) / rows);
-                using var paint = new SKPaint
-                {
-                    Shader = SKShader.CreateLinearGradient(new SKPoint(cell.Left, cell.Top), new SKPoint(cell.Right, cell.Bottom),
-                        [new SKColor(0, 0, 0, (byte)random.Next(0, 26)), new SKColor(0, 0, 0, (byte)random.Next(0, 26))], SKShaderTileMode.Clamp),
-                };
-                canvas.DrawRect(cell, paint);
-            }
-    }
-
-    /// <summary>A crease: a soft valley, a dark line in it and a light ridge beside.</summary>
-    private static void Fold(SKCanvas canvas, SKPoint a, SKPoint b)
-    {
-        var dx = b.X - a.X; var dy = b.Y - a.Y; var len = MathF.Sqrt(dx * dx + dy * dy);
-        var nx = -dy / len; var ny = dx / len;
-        using var valley = new SKPaint
-        {
-            Shader = SKShader.CreateLinearGradient(new SKPoint(a.X - nx * 34, a.Y - ny * 34), new SKPoint(a.X + nx * 34, a.Y + ny * 34),
-                [SKColors.Transparent, new SKColor(0x40, 0x2C, 0x14, 70), new SKColor(255, 250, 235, 60), SKColors.Transparent], [0, .48f, .56f, 1], SKShaderTileMode.Clamp),
-        };
-        using var band = new SKPath();
-        band.AddPoly([new(a.X - nx * 34, a.Y - ny * 34), new(b.X - nx * 34, b.Y - ny * 34), new(b.X + nx * 34, b.Y + ny * 34), new(a.X + nx * 34, a.Y + ny * 34)]);
-        canvas.DrawPath(band, valley);
-        using var dark = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 2.2f, Color = new SKColor(0x4A, 0x34, 0x1C, 130), BlendMode = SKBlendMode.Multiply };
-        canvas.DrawLine(a, b, dark);
-        using var light = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 2, Color = new SKColor(255, 252, 240, 110) };
-        canvas.DrawLine(new SKPoint(a.X + nx * 3, a.Y + ny * 3), new SKPoint(b.X + nx * 3, b.Y + ny * 3), light);
-    }
-
-    /// <summary>The ring a wet cup leaves.</summary>
-    private static void Stain(SKCanvas canvas, SKPoint c, float radius, float width)
-    {
-        using var fill = new SKPaint { IsAntialias = true, Color = new SKColor(0x8A, 0x5A, 0x2A, 26), BlendMode = SKBlendMode.Multiply };
-        canvas.DrawCircle(c, radius, fill);
-        using var ring = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = width, Color = new SKColor(0x6B, 0x40, 0x18, 90),
-            BlendMode = SKBlendMode.Multiply, MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, 1.6f) };
-        canvas.DrawCircle(c, radius, ring);
-        canvas.DrawArc(new SKRect(c.X - radius - 9, c.Y - radius - 7, c.X + radius + 9, c.Y + radius + 7), 200, 110, false, ring);
+        using var blot = Blob(c, radius, random);
+        using var fill = new SKPaint { IsAntialias = true, Color = new SKColor(0x9A, 0x6A, 0x30, 24), BlendMode = SKBlendMode.Multiply,
+            MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, 4) };
+        canvas.DrawPath(blot, fill);
+        using var line = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 2.4f, Color = new SKColor(0x6B, 0x40, 0x18, 110),
+            BlendMode = SKBlendMode.Multiply, MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, 1.2f),
+            PathEffect = SKPathEffect.CreateDiscrete(12, 2f, (uint)random.Next()) };
+        canvas.DrawPath(blot, line);
+        using var inner = new SKPath(blot);
+        inner.Transform(SKMatrix.CreateScale(.93f, .9f, c.X, c.Y));
+        line.Color = new SKColor(0x6B, 0x40, 0x18, 50);
+        canvas.DrawPath(inner, line);
     }
 
     /// <summary>A dotted way in red ink through map points (map pixels) ending at an X.</summary>
@@ -357,27 +537,48 @@ internal static class HandoutVariantsSheet
         canvas.DrawLine(x.X - 26, x.Y + 24, x.X + 24, x.Y - 26, cross);
     }
 
-    /// <summary>A rolled end of the scroll: a shaded cylinder with the spiral at both ends.</summary>
-    private static void Roll(SKCanvas canvas, float left, float right, float y, float radius)
+    /// <summary>A rolled end of the scroll, matte: a low-contrast cylinder with grain, the paper's layers showing as faint
+    /// uneven lines along it, and a spiral at each end.</summary>
+    private static void Roll(SKCanvas canvas, float left, float right, float y, float radius, Random random)
     {
         var body = new SKRect(left + radius * .4f, y - radius, right - radius * .4f, y + radius);
-        using (var shadow = new SKPaint { IsAntialias = true, Color = new SKColor(0, 0, 0, 120), MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, 10) })
+        using (var shadow = new SKPaint { IsAntialias = true, Color = new SKColor(0, 0, 0, 110), MaskFilter = SKMaskFilter.CreateBlur(SKBlurStyle.Normal, 10) })
             canvas.DrawRoundRect(new SKRect(body.Left, body.Top + 12, body.Right, body.Bottom + 12), radius, radius, shadow);
+        using var outline = Jagged(body, random, amplitude: 1.5, waves: 40, notches: 0, notchDepth: 0);
+        canvas.Save();
+        canvas.ClipPath(outline, antialias: true);
         using (var paint = new SKPaint
         {
-            IsAntialias = true,
             Shader = SKShader.CreateLinearGradient(new SKPoint(0, body.Top), new SKPoint(0, body.Bottom),
-                [new SKColor(0x8A, 0x66, 0x36), new SKColor(0xF4, 0xE2, 0xB8), new SKColor(0xD6, 0xB8, 0x80), new SKColor(0x6E, 0x4E, 0x26)],
-                [0, .28f, .55f, 1], SKShaderTileMode.Clamp),
+                [new SKColor(0x7E, 0x5E, 0x32), new SKColor(0xC4, 0xA8, 0x74), new SKColor(0xCC, 0xB2, 0x80), new SKColor(0xA8, 0x8A, 0x5C), new SKColor(0x5E, 0x44, 0x22)],
+                [0, .3f, .45f, .7f, 1], SKShaderTileMode.Clamp),
         })
             canvas.DrawRect(body, paint);
+        using (var grain = Noise((int)(body.Width / 3), (int)(body.Height / 3) + 2, random.Next(), .72f))
+        using (var multiply = new SKPaint { BlendMode = SKBlendMode.Multiply })
+            canvas.DrawImage(grain, body, new SKSamplingOptions(SKFilterMode.Linear), multiply);
+        using (var layers = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 1.2f, BlendMode = SKBlendMode.Multiply })
+            for (var k = 0; k < 6; k++)
+            {
+                layers.Color = new SKColor(0x4A, 0x32, 0x16, (byte)random.Next(30, 70));
+                layers.PathEffect = SKPathEffect.CreateDiscrete(30, 1.5f, (uint)random.Next());
+                var ly = body.Top + body.Height * (.15f + .7f * (float)random.NextDouble());
+                canvas.DrawLine(body.Left + (float)random.NextDouble() * 200, ly, body.Right - (float)random.NextDouble() * 200, ly, layers);
+            }
+        canvas.Restore();
         foreach (var x in new[] { body.Left, body.Right })
         {
-            using var end = new SKPaint { IsAntialias = true, Color = new SKColor(0xC8, 0xA8, 0x72) };
+            using var end = new SKPaint { IsAntialias = true, Color = new SKColor(0xB4, 0x96, 0x62) };
             canvas.DrawOval(new SKRect(x - radius * .4f, y - radius, x + radius * .4f, y + radius), end);
-            using var spiral = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 2.4f, Color = new SKColor(0x6A, 0x4A, 0x22, 200) };
-            for (var k = 1; k <= 4; k++)
-                canvas.DrawOval(new SKRect(x - radius * .4f * k / 4.5f, y - radius * k / 4.5f, x + radius * .4f * k / 4.5f, y + radius * k / 4.5f), spiral);
+            using var spiral = new SKPath();
+            for (var t = 0f; t <= 4 * MathF.Tau; t += .05f)
+            {
+                var k = .08f + .92f * t / (4 * MathF.Tau);
+                var p = new SKPoint(x + radius * .4f * k * MathF.Cos(t), y + radius * k * MathF.Sin(t));
+                if (t == 0) spiral.MoveTo(p); else spiral.LineTo(p);
+            }
+            using var ink = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 2, Color = new SKColor(0x5E, 0x44, 0x22, 190) };
+            canvas.DrawPath(spiral, ink);
         }
     }
 
@@ -402,13 +603,20 @@ internal static class HandoutVariantsSheet
             {
                 IsAntialias = true,
                 Shader = SKShader.CreateRadialGradient(new SKPoint(centre.X - radius * .3f, centre.Y - radius * .35f), radius * 1.4f,
-                    [new SKColor(0xD2, 0x3A, 0x2E), new SKColor(0x9C, 0x1A, 0x14), new SKColor(0x5E, 0x0C, 0x0A)], [0, .55f, 1], SKShaderTileMode.Clamp),
+                    [new SKColor(0xA8, 0x2E, 0x24), new SKColor(0x8A, 0x1C, 0x14), new SKColor(0x5E, 0x10, 0x0C)], [0, .6f, 1], SKShaderTileMode.Clamp),
             })
                 canvas.DrawPath(disc, wax);
-            using var pressed = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 5, Color = new SKColor(0x4A, 0x08, 0x06, 200) };
+            // Matte wax: a coarse grain instead of a shine.
+            canvas.Save();
+            canvas.ClipPath(disc, antialias: true);
+            using (var grain = Noise((int)radius, (int)radius, random.Next(), .7f))
+            using (var multiply = new SKPaint { BlendMode = SKBlendMode.Multiply })
+                canvas.DrawImage(grain, new SKRect(centre.X - radius * 1.3f, centre.Y - radius * 1.3f, centre.X + radius * 1.3f, centre.Y + radius * 1.3f),
+                    new SKSamplingOptions(SKFilterMode.Linear), multiply);
+            canvas.Restore();
+            using var pressed = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 5, Color = new SKColor(0x4A, 0x08, 0x06, 200),
+                PathEffect = SKPathEffect.CreateDiscrete(8, 1.2f, (uint)random.Next()) };
             canvas.DrawCircle(centre, radius * .62f, pressed);
-            using var shine = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 2.5f, Color = new SKColor(0xF2, 0x8A, 0x7A, 160) };
-            canvas.DrawArc(new SKRect(centre.X - radius * .62f + 2, centre.Y - radius * .62f + 2, centre.X + radius * .62f + 2, centre.Y + radius * .62f + 2), 200, 120, false, shine);
             using var star = new SKPath();
             for (var i = 0; i < 10; i++)
             {
