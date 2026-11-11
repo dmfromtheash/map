@@ -54,6 +54,11 @@ internal static class HandoutVariantsSheet
         if (gemini is not null)
             foreach (var g in GeminiSheets)
                 looks.Add(("gemini-" + g.Id, (c, r, m) => Gemini(c, paperMap, Path.Combine(gemini, g.Id + ".jpg"), g)));
+        // Sol (GPT-6.1-Sol through Codex, owner 2026-11-11 «сделай варианты где рисует чат жпт 6.1 сол»): same treatment.
+        var sol = Environment.GetEnvironmentVariable("MAP_HANDOUT_SOL");
+        if (sol is not null)
+            foreach (var g in SolSheets)
+                looks.Add(("sol-" + g.Id, (c, r, m) => Gemini(c, paperMap, Path.Combine(sol, g.Id + ".png"), g)));
         foreach (var (id, draw) in looks)
         {
             using var surface = SKSurface.Create(new SKImageInfo(w + 2 * Margin, h + 2 * Margin));
@@ -91,6 +96,16 @@ internal static class HandoutVariantsSheet
         new("letter-b", new SKRectI(552, 103, 2222, 1040), new SKPointI(1380, 1214)),
     ];
 
+    private static readonly GeminiSheet[] SolSheets =
+    [
+        new("scroll-c", new SKRectI(110, 150, 1490, 585), new SKPointI(790, 780), (160, 570, 1.9f)),
+        new("scroll-d", new SKRectI(180, 110, 1500, 870), new SKPointI(1435, 805)),
+        new("portolan-c", new SKRectI(170, 80, 1500, 920), new SKPointI(268, 215)),
+        new("portolan-d", new SKRectI(80, 60, 1520, 900), new SKPointI(1425, 765)),
+        new("letter-c", new SKRectI(60, 40, 1540, 880), new SKPointI(790, 900)),
+        new("letter-d", new SKRectI(80, 60, 1520, 680), new SKPointI(790, 840)),
+    ];
+
     /// <summary>The map laid into the sheet's blank area by Multiply, as ink soaked into it: aged, fading out at the
     /// area's edge, never over the objects (wax, string, wood - saturated or dark pixels are kept). Then the white
     /// background is taken away: a flood from the border over light neutral pixels, which keep only their shadow.</summary>
@@ -122,12 +137,19 @@ internal static class HandoutVariantsSheet
         var fit = Math.Min(area.Width * .94f / map.Width, area.Height * .94f / map.Height);
         var place = SKRect.Create(area.MidX - map.Width * fit / 2, area.MidY - map.Height * fit / 2, map.Width * fit, map.Height * fit);
         var mask = new float[bw * bh];
+        // The paper's own warmth (median red minus blue over the area): objects are what is much warmer than it.
+        var warmth = new List<int>();
+        for (var y = (int)place.Top; y < (int)place.Bottom; y += 4)
+            for (var x = (int)place.Left; x < (int)place.Right; x += 4)
+                warmth.Add(pixels[y * bw + x].Red - pixels[y * bw + x].Blue);
+        warmth.Sort();
+        var paperWarmth = warmth[warmth.Count / 2];
         for (var y = (int)place.Top; y < (int)place.Bottom; y++)
             for (var x = (int)place.Left; x < (int)place.Right; x++)
             {
                 var c = pixels[y * bw + x];
                 float lum = .3f * c.Red + .59f * c.Green + .11f * c.Blue;
-                var saturated = Math.Clamp((c.Red - c.Blue - 70) / 40f, 0, 1);
+                var saturated = Math.Clamp((c.Red - c.Blue - Math.Max(70, paperWarmth + 55)) / 40f, 0, 1);
                 var green = Math.Clamp((c.Green - c.Red - 10) / 30f, 0, 1);
                 var dark = Math.Clamp((95 - lum) / 40f, 0, 1);
                 var keep = Math.Max(saturated, Math.Max(green, dark));
