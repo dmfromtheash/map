@@ -787,7 +787,7 @@ public sealed partial class MapCanvasControl : Control
             var renderDocument = editor.DragPreview is null
                 ? editor.RenderDocument
                 : editor.Session.Document;
-            var hasLiveObjectPreview = editor.DragPreview is not null || editor.HasPendingPlacement || editor.HasPathGesture
+            var hasLiveObjectPreview = editor.DragPreview is not null || editor.HasPendingPlacement || editor.HasPathPreview
                 || editor.HasRiverGesture || editor.HasRoadGesture || editor.IsDraggingRoads;
             var tier = performanceMode == CanvasPerformanceMode.Performance && viewport.Scale < 0.25
                 ? RenderLodTier.Overview

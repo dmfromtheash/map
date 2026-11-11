@@ -278,7 +278,7 @@ public sealed class PlacementWorkflowTests : IDisposable
     }
 
     [Fact]
-    public void Stage17_long_draft_keeps_preview_at_the_new_end_after_the_first_64_stamps()
+    public async Task Stage17_long_draft_keeps_preview_at_the_new_end_after_the_first_64_stamps()
     {
         var editor = Editor(out _); var router = new CanvasInputRouter(editor);
         editor.SetStampScalePercent(OldWidthPercent(editor, 25));
@@ -299,13 +299,14 @@ public sealed class PlacementWorkflowTests : IDisposable
         Assert.Same(before, editor.Session.Document); Assert.Equal(0, editor.Session.UndoDepth);
         var preview = editor.PlacementPreviewObjects.ToArray();
         Assert.True(editor.FinishEditablePath(), editor.StatusDetail);
+        await editor.PendingPathCalculation;
         Assert.True(editor.SelectedEditablePath!.Members.Length > 64);
         foreach (var sample in preview)
             Assert.Equal(sample, Map.Core.Editing.DocumentEditor.FindObject(editor.Session.Document, sample.Id));
     }
 
     [Fact]
-    public void Stage17_eight_separate_paths_have_no_four_path_limit()
+    public async Task Stage17_eight_separate_paths_have_no_four_path_limit()
     {
         var editor = Editor(out _); var router = new CanvasInputRouter(editor);
         for (var i = 0; i < 8; i++)
@@ -314,13 +315,14 @@ public sealed class PlacementWorkflowTests : IDisposable
             router.Press(CanvasPointerButton.Left, 100, 100 + i * 70); router.Release(100, 100 + i * 70);
             router.Press(CanvasPointerButton.Left, 700, 100 + i * 70); router.Release(700, 100 + i * 70);
             Assert.True(editor.FinishEditablePath(), editor.StatusDetail);
+            await editor.PendingPathCalculation;
             Assert.Equal(i + 1, editor.EditablePaths.Count);
         }
         Assert.Equal(8, editor.Session.UndoDepth);
     }
 
     [Fact]
-    public void Escape_stops_drawing_a_path_and_keeps_it_as_one_step()
+    public async Task Escape_stops_drawing_a_path_and_keeps_it_as_one_step()
     {
         // DEC-084: Esc while drawing a path finishes it where it is, like «Завершить путь».
         var editor = Editor(out _); var router = new CanvasInputRouter(editor);
@@ -329,41 +331,43 @@ public sealed class PlacementWorkflowTests : IDisposable
         { router.Press(CanvasPointerButton.Left, point.Item1, point.Item2); router.Release(point.Item1, point.Item2); }
         Assert.True(editor.HandleEscape());
         Assert.False(editor.IsCreatingEditablePath);
+        await editor.PendingPathCalculation;
         Assert.Equal(1, editor.Session.UndoDepth);
         Assert.Equal(3, editor.SelectedEditablePath!.Nodes.Length);
     }
 
     [Fact]
-    public void Stage17_router_creates_edits_cancels_and_detaches_a_saved_path_as_single_gestures()
+    public async Task Stage17_router_creates_edits_cancels_and_detaches_a_saved_path_as_single_gestures()
     {
         var editor = Editor(out _); var router = new CanvasInputRouter(editor);
         editor.StartEditablePath();
         foreach (var point in new[] { (100, 100), (350, 160), (650, 100) })
         { router.Press(CanvasPointerButton.Left, point.Item1, point.Item2); router.Release(point.Item1, point.Item2); }
         Assert.True(editor.HasTransientEditorAction); Assert.Empty(Objects(editor));
-        Assert.True(editor.FinishEditablePath()); Assert.Equal(1, editor.Session.UndoDepth);
+        Assert.True(editor.FinishEditablePath()); await editor.PendingPathCalculation; Assert.Equal(1, editor.Session.UndoDepth);
         var created = editor.Session.Document; var path = editor.SelectedEditablePath!;
         Assert.Equal(3, path.Nodes.Length);
         router.Press(CanvasPointerButton.Left, 350, 160); router.Move(350, 250);
         Assert.Same(created, editor.Session.Document); Assert.True(editor.HandleEscape());
         router.Release(350, 250); Assert.Same(created, editor.Session.Document);
         router.Press(CanvasPointerButton.Left, 350, 160); router.Move(350, 210); router.Release(350, 210);
+        await editor.PendingPathCalculation;
         Assert.Equal(2, editor.Session.UndoDepth); Assert.Equal(210, editor.SelectedEditablePath!.Nodes[1].Y);
-        editor.SetEditablePathSpacing(50);
+        editor.SetEditablePathSpacing(50); await editor.PendingPathCalculation;
         var member = editor.SelectedEditablePath!.Members[1];
         editor.Session.SelectedObjectId = member.ObjectId; editor.DetachSelectedPathObject();
         var detached = editor.Session.Document;
-        editor.SetEditablePathSeed(888);
+        editor.SetEditablePathSeed(888); await editor.PendingPathCalculation;
         Assert.Equal(Map.Core.Editing.DocumentEditor.FindObject(detached, member.ObjectId),
             Map.Core.Editing.DocumentEditor.FindObject(editor.Session.Document, member.ObjectId));
         editor.Undo(); Assert.Same(detached, editor.Session.Document); editor.Redo();
         editor.InsertEditablePathNode();
-        Assert.True(editor.PressEditablePath(225, 155));
+        Assert.True(editor.PressEditablePath(225, 155)); await editor.PendingPathCalculation;
         Assert.Equal(4, editor.SelectedEditablePath!.Nodes.Length);
-        editor.DeleteEditablePathNode(); Assert.Equal(3, editor.SelectedEditablePath!.Nodes.Length);
+        editor.DeleteEditablePathNode(); await editor.PendingPathCalculation; Assert.Equal(3, editor.SelectedEditablePath!.Nodes.Length);
         editor.SelectEditablePath(path.Id);
         editor.SetStampScalePercent(130); editor.SetStampRotationDegrees(25);
-        editor.ApplyStampSettingsToEditablePath();
+        editor.ApplyStampSettingsToEditablePath(); await editor.PendingPathCalculation;
         Assert.Equal(130, editor.SelectedEditablePath!.ScalePercent);
         Assert.Equal(25, editor.SelectedEditablePath.RotationDegrees);
         editor.Undo(); Assert.Equal(100, editor.StampScalePercent);

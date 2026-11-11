@@ -42,7 +42,7 @@ public sealed class BackgroundGeneration : IDisposable
             _worker = worker;
             var result = await worker;
             if (job != _job || source.IsCancellationRequested) return;
-            _command = new GenerationSnapshotCommand(snapshot, result.preview, result.command.MeasuredWorkingBytes);
+            _command = new GenerationSnapshotCommand(result.command.Name, snapshot, result.preview, result.command.MeasuredWorkingBytes);
             Preview = result.preview;
             Conflicted = session.Revision != _revision || !ReferenceEquals(session.Document, snapshot);
         }
@@ -78,9 +78,10 @@ public sealed class BackgroundGeneration : IDisposable
 
     public void Dispose() => Cancel();
 
-    private sealed class GenerationSnapshotCommand(MapDocument before, MapDocument after, long? bytes) : IEditCommand
+    // The history keeps the calculated command's own name («Применить генерацию», «Переместить узел пути»…).
+    private sealed class GenerationSnapshotCommand(string name, MapDocument before, MapDocument after, long? bytes) : IEditCommand
     {
-        public string Name => "Применить генерацию";
+        public string Name => name;
         public long? MeasuredWorkingBytes => bytes;
         // Calculation and validation already finished in the worker. The UI only swaps immutable snapshots.
         public MapDocument Apply(MapDocument document) => ReferenceEquals(document, before) ? after

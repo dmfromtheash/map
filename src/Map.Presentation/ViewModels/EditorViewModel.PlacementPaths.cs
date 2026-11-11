@@ -16,18 +16,25 @@ public sealed partial class EditorViewModel
     private IReadOnlyList<SceneObject> _pathPreviewObjects = [];
     private IReadOnlyList<SceneObject> _pathOverrides = [];
     private long _pathPreviewTotal;
-    public IReadOnlyList<SceneObject>? EditablePathPreviewOverrides => _pathDragging ? _pathOverrides : null;
+    public IReadOnlyList<SceneObject>? EditablePathPreviewOverrides => _pathDragging ? _pathOverrides
+        : _pathPending is not null && _pathPendingOverrides.Count > 0 ? _pathPendingOverrides : null;
+    /// <summary>Quick samples on the canvas: the draft while drawing, the requested path while it is calculated.</summary>
+    internal IReadOnlyList<SceneObject> EditablePathPreviewObjects => _pathDraft is null && _pathPending is not null
+        ? _pathPendingObjects : _pathPreviewObjects;
+    public bool HasPathPreview => _pathDraft is not null || _pathPending is not null;
 
     public IReadOnlyList<PlacementPath> EditablePaths => Session.Document.Layers.OfType<ObjectLayer>()
         .SelectMany(l => l.PlacementPaths).ToArray();
-    public PlacementPath? SelectedEditablePath => Session.Document.Layers.OfType<ObjectLayer>()
-        .SelectMany(l => l.PlacementPaths).FirstOrDefault(p => p.Id == _selectedPathId);
+    /// <summary>The selected path; while its change is calculated, the requested version (the next edit builds on it).</summary>
+    public PlacementPath? SelectedEditablePath => _pathPending is { } pending && pending.Id == _selectedPathId ? pending
+        : Session.Document.Layers.OfType<ObjectLayer>().SelectMany(l => l.PlacementPaths).FirstOrDefault(p => p.Id == _selectedPathId);
     public PlacementPath? DisplayedEditablePath
     {
         get
         {
             // The draft's own step and pattern are what the panel edits while drawing.
             if (_pathDraft is not null) return _pathDraft;
+            if (_pathPending is not null) return _pathPending;
             var selected = SelectedEditablePath;
             return selected is not null && Session.Document.Layers.OfType<ObjectLayer>()
                 .Any(l => l.Visible && l.StateFor(selected.Sublayer).Visible && l.PlacementPaths.Contains(selected))
@@ -41,8 +48,12 @@ public sealed partial class EditorViewModel
     public int LastPathRegeneratedSegments { get; private set; }
     public bool CanDetachPathObject => Session.SelectedObjectId is { } id
         && PlacementPathOwnership.Owner(Session.Document, id) is not null;
-    public string EditablePathSummary => DisplayedEditablePath is { } p
-        ? _pathCreating
+    public string EditablePathSummary => PathCalculationConflict
+        ? "Карта изменилась во время расчёта пути. Изменение не применено."
+        : DisplayedEditablePath is { } p
+        ? _pathDraft is null && _pathPending is not null
+            ? $"{p.Name} · узлов: {p.Nodes.Length} · расчёт в фоне: {PlacementPathPlanner.Count(p)} объектов. Esc — отменить."
+        : _pathCreating
             ? $"{p.Name} · узлов: {p.Nodes.Length} · после завершения: {_pathPreviewTotal} объектов. Предпросмотр: {_pathPreviewObjects.Count} из {_pathPreviewTotal}."
             : $"{p.Name} · узлов: {p.Nodes.Length} · объектов: {p.Members.Length} · исключений: {p.Exclusions.Count}"
         : "Выберите изображение или набор, затем создайте путь кликами по холсту.";
@@ -95,19 +106,29 @@ public sealed partial class EditorViewModel
     {
         if (!_pathCreating || _pathDraft is not { Nodes.Length: >= 2 } draft)
         { StatusDetail = "Для пути нужны хотя бы два разных узла."; return false; }
-        var (layer, create) = EnsureObjectLayer();
-        if (layer is null) { StatusDetail = NoUsableObjectLayer; return false; }
-        var command = new PlacementPathCommand(layer.Id, draft.Id, draft, "Создать редактируемый путь", _pathAssets);
-        var revision = Session.Revision;
-        ExecuteWithOptionalLayer(command, create, command.Name);
-        if (Session.Revision == revision) return false;
-        _selectedPathId = draft.Id; _activeLayerId = layer.Id; _gestureCounter++;
+        if (EnsureObjectLayer().Layer is null) { StatusDetail = NoUsableObjectLayer; return false; }
+        var assets = _pathAssets;
+        // A retry after a conflict asks for the layer again: the map it was chosen on has changed.
+        PathCalculation? Prepare()
+        {
+            var (layer, create) = EnsureObjectLayer();
+            if (layer is null) { StatusDetail = NoUsableObjectLayer; return null; }
+            _activeLayerId = layer.Id;
+            return token =>
+            {
+                var command = new PlacementPathCommand(layer.Id, draft.Id, draft, "Создать редактируемый путь", assets, cancellation: token);
+                return (command, create is null ? command : new CompositeCommand(command.Name, [create, command]));
+            };
+        }
+        var preview = _pathPreviewObjects;
+        _selectedPathId = draft.Id; _gestureCounter++;
         CancelEditablePathGesture(); PendingPlacement = null; Session.ClearSelection();
-        LastPathChangedObjects = command.ChangedObjects; LastPathRegeneratedSegments = command.RegeneratedSegments;
-        if (SelectedEditablePath?.Members.Length > 0) RememberPlacedFamily();
-        AfterEdit(); RaisePathState();
-        StatusDetail = "Путь создан. Перетаскивайте узлы; интервал и рисунок — в настройках пути. Для ручной правки отделите ассет.";
-        return true;
+        return StartPathCalculation(draft, isNew: true, Prepare, preview, [], () =>
+        {
+            if (SelectedEditablePath?.Members.Length > 0) RememberPlacedFamily();
+            AfterEdit();
+            StatusDetail = "Путь создан. Перетаскивайте узлы; интервал и рисунок — в настройках пути. Для ручной правки отделите ассет.";
+        });
     }
 
     public void SelectEditablePath(Guid id)
@@ -179,8 +200,10 @@ public sealed partial class EditorViewModel
     {
         if (!_pathDragging || _pathDraft is not { } draft) return false;
         var changed = _pathOriginal is { } original && !original.Nodes.SequenceEqual(draft.Nodes);
+        // The quick samples of the drag stay on the canvas until the full calculation lands.
+        var (objects, overrides) = (_pathPreviewObjects, _pathOverrides);
         CancelEditablePathGesture();
-        return changed && CommitPathChange(draft, "Переместить узел пути");
+        return changed && CommitPathChange(draft, "Переместить узел пути", objects, overrides);
     }
 
     public void InsertEditablePathNode()
@@ -256,16 +279,32 @@ public sealed partial class EditorViewModel
 
     private ObjectLayer? EditablePathLayer(PlacementPath path)
     {
+        if (_pathPendingNew && _pathPending?.Id == path.Id)
+        { StatusDetail = "Путь ещё рассчитывается. Дождитесь его появления на карте или нажмите Esc."; return null; }
         var layer = Session.Document.Layers.OfType<ObjectLayer>().FirstOrDefault(l => l.PlacementPaths.Any(p => p.Id == path.Id));
         if (layer is not { Visible: true, Locked: false } || layer.StateFor(path.Sublayer) is not { Visible: true, Locked: false })
         { StatusDetail = "Слой пути скрыт или заблокирован."; return null; }
         return layer;
     }
-    private bool CommitPathChange(PlacementPath next, string name)
+    /// <summary>R20: a path change is calculated in the background; it lands as one Ctrl+Z if the map did not change meanwhile.</summary>
+    private bool CommitPathChange(PlacementPath next, string name,
+        IReadOnlyList<SceneObject>? objects = null, IReadOnlyList<SceneObject>? overrides = null)
     {
-        if (EditablePathLayer(next) is not { } layer) return false;
+        if (EditablePathLayer(next) is null) return false;
         if (next == SelectedEditablePath) return false;
-        return RunPathCommand(new(layer.Id, next.Id, next, name));
+        if (objects is null) (objects, overrides) = SplitPathPreview(PlacementPathPlanner.Preview(next));
+        PathCalculation? Prepare()
+        {
+            if (EditablePathLayer(next) is not { } layer) return null;
+            return token => { var command = new PlacementPathCommand(layer.Id, next.Id, next, name, cancellation: token); return (command, command); };
+        }
+        return StartPathCalculation(next, isNew: false, Prepare, objects, overrides ?? [], null);
+    }
+
+    private (IReadOnlyList<SceneObject> Objects, IReadOnlyList<SceneObject> Overrides) SplitPathPreview(IReadOnlyList<SceneObject> samples)
+    {
+        var index = DocumentRevisionIndex.For(Session.Document);
+        return (samples.Where(o => index.FindObject(o.Id) is null).ToArray(), samples.Where(o => index.FindObject(o.Id) is not null).ToArray());
     }
     private bool RunPathCommand(PlacementPathCommand command)
     {
@@ -291,15 +330,14 @@ public sealed partial class EditorViewModel
         _pathPreviewTotal = PlacementPathPlanner.Count(path);
         var samples = PlacementPathPlanner.Preview(path, segments: _pathDragging ? new HashSet<int> { _pathNode - 1, _pathNode } : null);
         if (!_pathDragging) { _pathPreviewObjects = samples; return; }
-        var index = DocumentRevisionIndex.For(Session.Document);
-        _pathOverrides = samples.Where(o => index.FindObject(o.Id) is not null).ToArray();
-        _pathPreviewObjects = samples.Where(o => index.FindObject(o.Id) is null).ToArray();
+        (_pathPreviewObjects, _pathOverrides) = SplitPathPreview(samples);
     }
     private void RaisePathState()
     {
         Raise(nameof(CanUndo)); Raise(nameof(CanRedo));
         Raise(nameof(EditablePaths)); Raise(nameof(SelectedEditablePath)); Raise(nameof(EditablePathSummary));
         Raise(nameof(IsCreatingEditablePath)); Raise(nameof(CanDetachPathObject));
+        Raise(nameof(PathCalculationBusy)); Raise(nameof(PathCalculationConflict));
         InvalidateScene(EditorChangeReason.CanvasInvalidation);
     }
     private static int ClosestPathSegment(PlacementPath path, double x, double y, double tolerance)

@@ -83,7 +83,7 @@ public sealed class RegionalRoleWorkflowTests : IAsyncLifetime
         if (mode == RegionalPlacementMode.Ridge)
         {
             Assert.True(editor.AddEditablePathNode(200, 200)); Assert.True(editor.AddEditablePathNode(900, 500));
-            Assert.True(editor.FinishEditablePath()); Assert.Single(editor.EditablePaths).ValidateMembers();
+            Assert.True(editor.FinishEditablePath()); editor.PendingPathCalculation.GetAwaiter().GetResult(); Assert.Single(editor.EditablePaths).ValidateMembers();
         }
         else
         {

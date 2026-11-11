@@ -364,6 +364,7 @@ public sealed class RegionalRolesApplication : Application
 
     private async Task Idle()
     {
+        await _editor.PendingPathCalculation;
         await _editor.PendingEditableAreaCount; await _editor.PendingEditableAreaPreview; await _editor.PendingEditableAreaWork;
         await Until(() => !_editor.IsEditableAreaBusy, "area work"); await Settle();
     }

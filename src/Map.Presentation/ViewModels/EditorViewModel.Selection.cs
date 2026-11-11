@@ -964,6 +964,7 @@ public sealed partial class EditorViewModel
     public bool HandleEscape()
     {
         if (CancelEditableAreaWork()) { CancelEditableAreaGesture(); CanvasGestureCancelled?.Invoke(this, EventArgs.Empty); return true; }
+        if (PathCalculationBusy && CancelPathCalculation()) return true;
         if (HasAppearanceTransferPreview)
         { CancelAppearanceTransfer(); StatusDetail = "Предпросмотр оформления отменён."; return true; }
         if (StopDrawingOnEscape()) return true;

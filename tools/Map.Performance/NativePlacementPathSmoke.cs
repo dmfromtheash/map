@@ -352,7 +352,8 @@ public sealed class NativePlacementPathApplication : Application
     private void SaveVisual(string path)
     { using var bitmap = new RenderTargetBitmap(new PixelSize(1440, 900)); bitmap.Render(_view);
         using var file = File.Create(path); bitmap.Save(file, PngBitmapEncoderOptions.Default); }
-    private static async Task Settle() { await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Render); await Task.Delay(50); }
+    // R20b: a path change is calculated in the background; settling waits for it to land.
+    private async Task Settle() { await _editor.PendingPathCalculation; await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Render); await Task.Delay(50); }
     private static async Task Until(Func<bool> condition)
     { var watch = Stopwatch.StartNew(); while (!condition()) { if (watch.Elapsed > TimeSpan.FromSeconds(25)) throw new TimeoutException(); await Task.Delay(50); } }
     private static void Require(bool value, string reason) { if (!value) throw new InvalidOperationException(reason); }

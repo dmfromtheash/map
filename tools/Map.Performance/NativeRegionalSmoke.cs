@@ -268,7 +268,7 @@ public sealed partial class RegionalApplication : Application
             { var p=_editor.Session.Viewport.WorldToScreen(x,y);view.Canvas.ClickForSmoke(p.X,p.Y); }
             await Settle(); // allow the real binding to enable its commit button after the last node
             Click(view,mode==RegionalPlacementMode.Ridge?"FinishEditablePathButton":"FinishEditableAreaButton");
-            await _editor.PendingEditableAreaWork;await Settle();            Check(mode+" finishes",mode==RegionalPlacementMode.Ridge?_editor.SelectedEditablePath is not null:_editor.SelectedEditableArea is not null);
+            await _editor.PendingEditableAreaWork;await _editor.PendingPathCalculation;await Settle();            Check(mode+" finishes",mode==RegionalPlacementMode.Ridge?_editor.SelectedEditablePath is not null:_editor.SelectedEditableArea is not null);
             Check(mode+" contains editable objects", mode==RegionalPlacementMode.Ridge
                 ? _editor.SelectedEditablePath!.Members.Length > 0 : _editor.SelectedEditableArea!.MemberCount > 0);
             await Settle();Capture(view,"06-created-"+mode);

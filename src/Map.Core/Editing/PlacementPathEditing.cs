@@ -107,15 +107,18 @@ public sealed class PlacementPathCommand : IEditCommand
     private readonly IReadOnlyList<MapAssetReference> _assets;
     private readonly ObjectId? _detach;
     private readonly bool _bake;
+    private readonly CancellationToken _cancellation;
     private MapDocument? _before, _after;
     public string Name { get; }
     public int RegeneratedSegments { get; private set; }
     public int ChangedObjects { get; private set; }
 
+    /// <param name="cancellation">R20: the background calculation stops a long path between objects.</param>
     public PlacementPathCommand(LayerId layerId, Guid pathId, PlacementPath? requested,
-        string name, IReadOnlyList<MapAssetReference>? assets = null, ObjectId? detach = null, bool bake = false)
+        string name, IReadOnlyList<MapAssetReference>? assets = null, ObjectId? detach = null, bool bake = false,
+        CancellationToken cancellation = default)
     { _layerId = layerId; _pathId = pathId; _requested = requested; Name = name;
-        _assets = assets ?? []; _detach = detach; _bake = bake; }
+        _assets = assets ?? []; _detach = detach; _bake = bake; _cancellation = cancellation; }
 
     public MapDocument Apply(MapDocument document)
     {
@@ -186,6 +189,7 @@ public sealed class PlacementPathCommand : IEditCommand
                 var segmentCount = PlacementPathPlanner.SegmentCount(next, s);
                 for (var k = 0; k < segmentCount; k++)
                 {
+                    if ((k & 511) == 0) _cancellation.ThrowIfCancellationRequested();
                     var slot = new PlacementPathSlot(node.Id, k);
                     if (next.Exclusions.Contains(slot)) continue;
                     var item = PlacementPathPlanner.Item(next, s, k);

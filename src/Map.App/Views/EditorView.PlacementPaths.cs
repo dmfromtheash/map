@@ -12,7 +12,7 @@ public sealed partial class EditorView
     private ComboBox? _pathPicker;
     private TextBlock? _pathSummary;
     private Control? _pathPanel;
-    private Button? _pathFinish, _pathDetach;
+    private Button? _pathFinish, _pathDetach, _pathCalcCancel, _pathRecalc;
     private bool _syncingPaths;
 
     private Control BuildEditablePathPanel()
@@ -26,6 +26,9 @@ public sealed partial class EditorView
         _pathSummary = new TextBlock { Name = "EditablePathSummary", TextWrapping = TextWrapping.Wrap };
         _pathFinish = Ui.TextButton("FinishEditablePathButton", "Завершить путь", () => _editor.FinishEditablePath(), "compact");
         _pathDetach = Ui.TextButton("DetachPathObjectButton", "Отделить выбранный объект", _editor.DetachSelectedPathObject, "compact");
+        // R20b: the full path is calculated in the background; these show only while it runs or after a conflict.
+        _pathCalcCancel = Ui.TextButton("PathCalculationCancelButton", "Отменить расчёт пути", () => _editor.CancelPathCalculation(), "compact");
+        _pathRecalc = Ui.TextButton("PathRecalculateButton", "Пересчитать путь", _editor.RecalculatePath, "compact", "accent");
         _pathPanel = new StackPanel
         {
             Spacing = 6, Children =
@@ -62,6 +65,8 @@ public sealed partial class EditorView
             _stampGestureBlock.IsVisible = _editor.SelectedSet is not null || _editor.SelectedEditablePath is not null || _editor.CurrentAreaSource is not null;
             _pathFinish!.IsVisible = _editor.IsCreatingEditablePath;
             _pathDetach!.IsEnabled = _editor.CanDetachPathObject;
+            _pathCalcCancel!.IsVisible = _editor.PathCalculationBusy;
+            _pathRecalc!.IsVisible = _editor.PathCalculationConflict;
             _pathPanel.IsVisible = _editor.StampPlacementMode == Map.Presentation.ViewModels.StampPlacementMode.Path
                 || _editor.IsCreatingEditablePath || _editor.SelectedEditablePath is not null;
             SyncAppearanceSections();

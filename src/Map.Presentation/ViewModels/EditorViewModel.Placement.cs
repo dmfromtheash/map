@@ -39,7 +39,7 @@ public sealed partial class EditorViewModel
 
     public bool HasPendingPlacement => _pendingPlacement is not null;
 
-    public IReadOnlyList<SceneObject> PlacementPreviewObjects => HasAreaGesture ? _areaPreviewObjects : HasPathGesture ? _pathPreviewObjects
+    public IReadOnlyList<SceneObject> PlacementPreviewObjects => HasAreaGesture ? _areaPreviewObjects : HasPathPreview ? EditablePathPreviewObjects
         : _pendingPlacement is { PointerVisible: true } pending
         ? pending.PreviewObjects
         : _vectorPreviewObject is { } vector ? [vector]

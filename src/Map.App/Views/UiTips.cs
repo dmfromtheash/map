@@ -148,6 +148,8 @@ public static class UiTips
         ["GenerationProtectionEraseToggle"] = "Кисть снимает защиту вместо того, чтобы ставить",
         ["GenerationRecalculateButton"] = "Посчитать заново с теми же настройками",
         ["GenerationSelectionOnlyToggle"] = "Считать только выделенные гексы",
+        ["PathCalculationCancelButton"] = "Остановить расчёт пути; карта не меняется (то же — Esc)",
+        ["PathRecalculateButton"] = "Карта изменилась во время расчёта: посчитать путь заново на текущей карте",
         ["GenerationUnprotectSelectionButton"] = "Снять защиту с выделенных гексов",
         ["HexGenAllButton"] = "Все семь шагов подряд: суша, рельеф, климат, реки, поселения, дороги, государства",
         ["HexGenStepLand"] = "Шаг 1: где суша, а где море",
