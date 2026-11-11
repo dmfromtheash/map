@@ -220,14 +220,14 @@ public sealed partial class NativeEditorScenarioApplication
         _report.Checks["style-packs-on-look"] = packBad.Count == 0;
         Map.Presentation.ViewModels.EditorViewModel.OwnStylePackPath = null;
 
-        // R09e: «Варианты карты» on «Вид» - the starting three as tiles, a click shows the map in «Ночь» in one undo
-        // step, the pictures are drawn, Ctrl+Z goes back to «День», «+ Запомнить» adds a fourth.
+        // R09e: «Варианты карты» on «Вид» - the starting four as tiles (with «Зима», DEC-097), a click shows the map in «Ночь» in one undo
+        // step, the pictures are drawn, Ctrl+Z goes back to «День», «+ Запомнить» adds a fifth.
         var variantBad = new List<string>();
         Button[] VariantTiles() => [.. _view.GetVisualDescendants().OfType<Button>().Where(b => b.Name?.StartsWith("MapVariant_", StringComparison.Ordinal) == true)];
         if (VariantTiles().Length != 0) variantBad.Add($"плиток до создания {VariantTiles().Length}");
         Find<Button>("MapVariantStarters").RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent)); await Settle();
         var variants = _editor.Session.Document.Variants;
-        if (VariantTiles().Length != 3 || variants.Items.Length != 3) variantBad.Add($"после «Создать» плиток {VariantTiles().Length}, вариантов {variants.Items.Length}");
+        if (VariantTiles().Length != 4 || variants.Items.Length != 4) variantBad.Add($"после «Создать» плиток {VariantTiles().Length}, вариантов {variants.Items.Length}");
         var dayId = variants.Items.FirstOrDefault(v => v.Name == "День")?.Id;
         var nightId = variants.Items.FirstOrDefault(v => v.Name == "Ночь")?.Id;
         var variantDepth = _editor.Session.UndoDepth;
@@ -241,7 +241,7 @@ public sealed partial class NativeEditorScenarioApplication
         _editor.Undo(); await Settle();
         if (_editor.Session.Document.Variants.Active != dayId) variantBad.Add("Ctrl+Z не вернул «День»");
         Find<Button>("MapVariantAdd").RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent)); await Settle();
-        if (VariantTiles().Length != 4) variantBad.Add($"после «Запомнить» плиток {VariantTiles().Length}");
+        if (VariantTiles().Length != 5) variantBad.Add($"после «Запомнить» плиток {VariantTiles().Length}");
         foreach (var bad in variantBad) Console.WriteLine("map variants: " + bad);
         _report.Checks["map-variants-on-look"] = variantBad.Count == 0;
     }
