@@ -32,13 +32,13 @@ public sealed partial class EditorView
     {
         var ownBox = box is null;
         box ??= NumberBox(boxName);
-        box.MinWidth = 58; box.Width = 64; box.MinHeight = 26; box.Padding = new Thickness(6, 2);
+        box.MinWidth = 48; box.Width = 52; box.MinHeight = 26; box.Padding = new Thickness(5, 2);
         box.HorizontalContentAlignment = HorizontalAlignment.Right;
         AutomationProperties.SetName(box, unit.Length == 0 ? label : $"{label}, {unit}");
 
         var unitText = new TextBlock
         {
-            Text = unit, VerticalAlignment = VerticalAlignment.Center, MinWidth = unit.Length == 0 ? 0 : 22,
+            Text = unit, VerticalAlignment = VerticalAlignment.Center, MinWidth = 22, // one number column, with or without a unit
             Margin = new Thickness(4, 0, 0, 0),
         }.Classed("faint");
 
@@ -60,7 +60,12 @@ public sealed partial class EditorView
             + $" Перетащите ползунок или введите число в поле; стрелки — шаг {WholeNumber(step):0}, с Shift — ×10; двойной щелчок по ползунку — значение по умолчанию.";
         ToolTip.SetTip(slider, tip);
 
-        var caption = Ui.ParameterLabel(label);
+        // The name alone, no glyph before it: the row reads «Масштаб ─── 120 %» (owner, 2026-11-11, variant 1).
+        var caption = new TextBlock
+        {
+            Text = label, FontSize = label.Length > 16 ? 12 : 13, VerticalAlignment = VerticalAlignment.Center,
+            TextWrapping = TextWrapping.Wrap,
+        }.Classed("muted");
         ToolTip.SetTip(caption, tip);
 
         Button? reset = null;
@@ -169,21 +174,27 @@ public sealed partial class EditorView
             else if (reset is not null) reset.IsVisible = false;
         });
 
-        var header = new DockPanel { LastChildFill = true };
-        if (trailing is not null) header.Children.Add(trailing.Docked(Dock.Right));
-        header.Children.Add(unitText.Docked(Dock.Right));
-        header.Children.Add(box.Docked(Dock.Right));
-        if (reset is not null) header.Children.Add(reset.Docked(Dock.Right));
-        header.Children.Add(readout.Docked(Dock.Right));
+        var right = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        right.Children.Add(readout);
+        // The reset comes and goes with the value; its place stays, so the row never jumps between layouts.
+        if (reset is not null) right.Children.Add(new Border { Width = 26, Child = reset });
+        right.Children.Add(box);
+        right.Children.Add(unitText);
         // The explanation is an "i" beside the name, read on hover: a paragraph under every slider
-        // made the land and river panels five screens long (audit 2026-10-19).
-        header.Children.Add(description is null ? caption : new StackPanel
+        // made the land and river panels five screens long (audit 2026-10-19). A small extra control of
+        // the value (the random turn) stands beside the name too, so the number column stays one width.
+        Control name = caption;
+        if (description is not null || trailing is not null)
         {
-            Orientation = Orientation.Horizontal, Spacing = 5, VerticalAlignment = VerticalAlignment.Center,
-            Children = { caption, Ui.InfoGlyph(description) },
-        });
-
-        return new StackPanel { Margin = new Thickness(0, 2), Children = { header, slider } };
+            var named = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4, VerticalAlignment = VerticalAlignment.Center,
+                Children = { caption } };
+            if (description is not null) named.Children.Add(Ui.InfoGlyph(description));
+            if (trailing is not null) named.Children.Add(trailing);
+            name = named;
+        }
+        // Name, slider and number on one line when the column is wide enough (owner, 2026-11-11, variant 1 of
+        // https://claude.ai/artifact/PNyW4CtTbatoHGn7wESxgn); the slider drops under the name only in a narrow column.
+        return new Ui.ValueLinePanel(name, slider, right) { Margin = new Thickness(0, 1) }.Classed("value-line");
     }
 
     /// <summary>

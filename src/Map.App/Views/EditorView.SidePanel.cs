@@ -226,11 +226,8 @@ public sealed partial class EditorView
                 Spacing = 10,
                 Children =
                 {
-                    new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children =
-                    {
-                        new TextBlock { Text = "Свойства слоя", VerticalAlignment = VerticalAlignment.Center }.Classed("role-panel"),
-                        Ui.ScopeChip(Ui.Scope.Layer),
-                    } },
+                    // The title already says «слоя»: the scope word beside it only repeated it (owner, 2026-11-11).
+                    new TextBlock { Text = "Свойства слоя", VerticalAlignment = VerticalAlignment.Center }.Classed("role-panel"),
                     _noLayerState,
                     _layerIdentity,
                     _layerCommonBlock,
@@ -1669,6 +1666,13 @@ public sealed partial class EditorView
         _placementModeButtons["Area"] = modeButtons[2];
         _placementModeButtons["Path"] = modeButtons[3];
         _placementModeButtons["FillArea"] = modeButtons[4];
+        // Each mode shows on its card how it places (owner, 2026-11-11, variant 1).
+        Explain(modeButtons[0], PanelDemoKind.ModeOne, "Один", "Щелчок ставит один ассет.");
+        Explain(modeButtons[1], PanelDemoKind.ModeSeries, "Серия", "Протяжка ставит ассеты в ряд; расстояние — в настройках серии.");
+        Explain(modeButtons[2], PanelDemoKind.ModeArea, "Россыпь", "Протяжка рассыпает ассеты в круге вокруг курсора.");
+        Explain(modeButtons[3], PanelDemoKind.ModePath, "Путь",
+            "Щелчки ставят узлы, Enter завершает. Ассеты встают вдоль линии; путь правится и после.");
+        Explain(modeButtons[4], PanelDemoKind.ModeFillArea, "Область", "Обведённая область заполняется ассетами.");
 
         var (autoSelect, autoSelectButtons) = Ui.Segmented("PlacementAutoSelect", [
             ("Off", "Не выделять", null),
@@ -1681,7 +1685,8 @@ public sealed partial class EditorView
         _selectAfterPlacementButtons = (autoSelectButtons[0], autoSelectButtons[1]);
         ToolTip.SetTip(autoSelectButtons[0], "Поставленный ассет не выделяется: следующий щелчок сразу ставит ещё один. По умолчанию.");
         ToolTip.SetTip(autoSelectButtons[1], "Поставленное сразу выделяется — можно двигать и менять свойства; инструмент остаётся активным.");
-        _stampAutoSelectRow = Ui.Subgroup("После размещения", autoSelect);
+        _stampAutoSelectRow = Explain(Ui.Subgroup("После размещения", autoSelect), PanelDemoKind.AfterPlacement, "После размещения",
+            "«Выделять» — поставленное сразу выделено для правки. «Не выделять» — следующий щелчок ставит ещё один.");
 
         var randomAngleChoice = AppearanceChoice(
             "RandomAngleStepChoice", "Случайный угол",
@@ -2072,7 +2077,9 @@ public sealed partial class EditorView
     {
         if (_stampResetButton is null || _stampHowSection is null) return;
         var changes = _editor.StampToolChanges;
-        _stampResetCaption.Text = changes.Count == 0 ? "К базовым" : $"К базовым · {changes.Count}";
+        _stampChangesText.Text = changes.Count == 0 ? "Без изменений" : "Изменено: " + string.Join(", ", changes.Select(c => c.Label));
+        Ui.SetClass(_stampChangesText, "faint", changes.Count == 0);
+        _stampChangesText.Foreground = changes.Count == 0 ? null : Application.Current?.FindResource("MapAccentBrush") as IBrush;
         string? Changed(StampSettingGroup group) =>
             string.Join(", ", changes.Where(c => c.Group == group).Select(c => c.Label)) is { Length: > 0 } text ? text : null;
         _stampHowSection.SetSummary(_editor.StampPlacementMode switch

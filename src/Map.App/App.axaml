@@ -2057,43 +2057,23 @@
             <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
 
-        <!-- Scope chips: who a block acts on. Colour always travels with its word. -->
+        <!-- Scope words: who a block acts on, a plain coloured word in the line (owner, 2026-11-11: no pills). -->
         <Style Selector="Border.scope-chip">
-            <Setter Property="CornerRadius" Value="10" />
-            <Setter Property="Padding" Value="6,1,8,1" />
-            <Setter Property="MinHeight" Value="20" />
-            <Setter Property="BorderThickness" Value="1" />
             <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
         <Style Selector="Border.scope-chip TextBlock">
-            <Setter Property="FontSize" Value="11" />
-            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="VerticalAlignment" Value="Center" />
-        </Style>
-        <Style Selector="Border.scope-chip.scope-new">
-            <Setter Property="Background" Value="#3A2D1C" />
-            <Setter Property="BorderBrush" Value="#7A5E36" />
         </Style>
         <Style Selector="Border.scope-chip.scope-new TextBlock">
             <Setter Property="Foreground" Value="#E7C982" />
         </Style>
-        <Style Selector="Border.scope-chip.scope-object">
-            <Setter Property="Background" Value="#1E3328" />
-            <Setter Property="BorderBrush" Value="#3E6B52" />
-        </Style>
         <Style Selector="Border.scope-chip.scope-object TextBlock">
             <Setter Property="Foreground" Value="#9ED4B0" />
         </Style>
-        <Style Selector="Border.scope-chip.scope-layer">
-            <Setter Property="Background" Value="#33223A" />
-            <Setter Property="BorderBrush" Value="#6A4C72" />
-        </Style>
         <Style Selector="Border.scope-chip.scope-layer TextBlock">
             <Setter Property="Foreground" Value="#D6B3DE" />
-        </Style>
-        <Style Selector="Border.scope-chip.scope-tool">
-            <Setter Property="Background" Value="#2A2019" />
-            <Setter Property="BorderBrush" Value="#5A4630" />
         </Style>
         <Style Selector="Border.scope-chip.scope-tool TextBlock">
             <Setter Property="Foreground" Value="#C2AE8E" />

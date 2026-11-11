@@ -173,7 +173,7 @@ public static class Ui
         return button;
     }
 
-    private static TextBlock CommandCaption(string text) => new()
+    internal static TextBlock CommandCaption(string text) => new()
     {
         Text = text, TextWrapping = TextWrapping.Wrap,
         VerticalAlignment = VerticalAlignment.Center,
@@ -555,6 +555,61 @@ public static class Ui
         }
     }
 
+    /// <summary>
+    /// A value row on one line: the name in a fixed column, the slider, then the number and its unit (owner,
+    /// 2026-11-11: labels in columns, not mixed into the controls). A long name or a narrow column puts the slider
+    /// under the name and number instead, so nothing is ever squeezed or overlaps.
+    /// </summary>
+    public sealed class ValueLinePanel : Panel
+    {
+        public const double NameColumn = 104;
+        private const double Gap = 6;
+        private const double MinimumSlider = 80;
+        private readonly Control _name, _slider, _right;
+
+        public ValueLinePanel(Control name, Control slider, Control right)
+        {
+            _name = name; _slider = slider; _right = right;
+            Children.Add(name); Children.Add(slider); Children.Add(right);
+        }
+
+        private bool OneLine(double width) =>
+            _name.DesiredSize.Width <= NameColumn && width - NameColumn - _right.DesiredSize.Width - 2 * Gap >= MinimumSlider;
+
+        protected override Size MeasureOverride(Size availableSize)
+        {
+            var width = double.IsFinite(availableSize.Width) ? availableSize.Width : NameColumn + MinimumSlider + 120;
+            _right.Measure(Size.Infinity);
+            _name.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            if (OneLine(width))
+            {
+                _slider.Measure(new Size(width - NameColumn - _right.DesiredSize.Width - 2 * Gap, double.PositiveInfinity));
+                return new Size(width, Math.Max(_name.DesiredSize.Height, Math.Max(_slider.DesiredSize.Height, _right.DesiredSize.Height)));
+            }
+            _name.Measure(new Size(Math.Max(0, width - _right.DesiredSize.Width - Gap), double.PositiveInfinity));
+            _slider.Measure(new Size(width, double.PositiveInfinity));
+            return new Size(width, Math.Max(_name.DesiredSize.Height, _right.DesiredSize.Height) + _slider.DesiredSize.Height);
+        }
+
+        protected override Size ArrangeOverride(Size finalSize)
+        {
+            var w = finalSize.Width; var rightWidth = _right.DesiredSize.Width;
+            if (OneLine(w))
+            {
+                var h = finalSize.Height;
+                _name.Arrange(new Rect(0, 0, NameColumn, h));
+                _slider.Arrange(new Rect(NameColumn + Gap, 0, Math.Max(0, w - NameColumn - rightWidth - 2 * Gap), h));
+                _right.Arrange(new Rect(w - rightWidth, 0, rightWidth, h));
+                return finalSize;
+            }
+            var top = Math.Max(_name.DesiredSize.Height, _right.DesiredSize.Height);
+            _name.Arrange(new Rect(0, 0, Math.Max(0, w - rightWidth - Gap), top));
+            _right.Arrange(new Rect(w - rightWidth, 0, rightWidth, top));
+            _slider.Arrange(new Rect(0, top, w, Math.Max(0, finalSize.Height - top)));
+            return finalSize;
+        }
+    }
+
     /// <summary>A named slider with a live readout, used by every tool parameter.</summary>
     public static Control SliderRow(
         string name, string label, double minimum, double maximum, double value,
@@ -698,25 +753,30 @@ public static class Ui
     /// <summary>Who a block acts on. The four kinds keep one colour each, always with the word.</summary>
     public enum Scope { New, Object, Layer, Tool }
 
+    /// <summary>The word of a scope as it reads inside a sentence or at the right of a section title.</summary>
+    public static string ScopeWord(Scope scope) => scope switch
+    {
+        Scope.New => "для новых",
+        Scope.Object => "выделенное",
+        Scope.Layer => "слой",
+        _ => "инструмент",
+    };
+
+    /// <summary>
+    /// Whom a block acts on, as a plain coloured word (owner, 2026-11-11, variant 1 of
+    /// https://claude.ai/artifact/PNyW4CtTbatoHGn7wESxgn): no pill, no icon - the labels read as text in the row.
+    /// </summary>
     public static Border ScopeChip(Scope scope, string? text = null)
     {
-        var (css, icon, word, colour) = scope switch
+        var (css, word) = scope switch
         {
-            Scope.New => ("scope-new", MapIcons.LineSparkle, "Для новых", "#E7C982"),
-            Scope.Object => ("scope-object", MapIcons.LineTarget, "Выделенное", "#9ED4B0"),
-            Scope.Layer => ("scope-layer", MapIcons.LineLayers, "Слой", "#D6B3DE"),
-            _ => ("scope-tool", MapIcons.LineWand, "Инструмент", "#C2AE8E"),
+            Scope.New => ("scope-new", "Для новых"),
+            Scope.Object => ("scope-object", "Выделенное"),
+            Scope.Layer => ("scope-layer", "Слой"),
+            _ => ("scope-tool", "Инструмент"),
         };
         var label = new TextBlock { Text = text ?? word };
-        var chip = new Border
-        {
-            Child = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                Spacing = 4,
-                Children = { MapIcons.Grid24(icon, 12, new SolidColorBrush(Color.Parse(colour)), 2.2), label },
-            },
-        }.Classed("scope-chip", css);
+        var chip = new Border { Child = label }.Classed("scope-chip", css);
         AutomationProperties.SetName(chip, "Область действия: " + label.Text);
         ToolTip.SetTip(chip, scope switch
         {
@@ -740,6 +800,7 @@ public static class Ui
         private readonly Avalonia.Controls.Shapes.Ellipse _dot = new Avalonia.Controls.Shapes.Ellipse { IsVisible = false }.Classed("change-dot");
         private string _summaryText = "";
         private string? _changeText;
+        private string _openText = "";
 
         protected override Type StyleKeyOverride => typeof(Expander);
 
@@ -748,7 +809,9 @@ public static class Ui
             var titleText = new TextBlock { Text = title, VerticalAlignment = VerticalAlignment.Center,
                 TextTrimming = TextTrimming.CharacterEllipsis }.Classed("role-panel");
             var left = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, Children = { titleText } };
-            if (scope is { } kind) left.Children.Add(ScopeChip(kind));
+            // Whom the section acts on is one plain word at the right of the open title, where the folded
+            // section shows its summary (owner, 2026-11-11: no pills mixed into the titles).
+            if (scope is { } kind) _openText = ScopeWord(kind);
             left.Children.Add(_dot);
             left.Children.Add(_change);
             _summary.Margin = new Thickness(8, 0, 0, 0);
@@ -769,6 +832,9 @@ public static class Ui
 
         public void SetSummary(string text) { _summaryText = text; Refresh(); }
 
+        /// <summary>The faint words at the right of the open title (the path's «6 узлов · 42 объекта»).</summary>
+        public void SetOpenText(string text) { _openText = text; Refresh(); }
+
         /// <summary>Null or empty: nothing inside differs from the base values.</summary>
         public void SetChange(string? text) { _changeText = string.IsNullOrWhiteSpace(text) ? null : text; Refresh(); }
 
@@ -778,8 +844,8 @@ public static class Ui
             _dot.IsVisible = _changeText is not null;
             _change.Text = folded ? _changeText ?? "" : "";
             _change.IsVisible = folded && _changeText is not null;
-            _summary.Text = _summaryText;
-            _summary.IsVisible = folded && _changeText is null && _summaryText.Length > 0;
+            _summary.Text = folded ? _summaryText : _openText;
+            _summary.IsVisible = folded ? _changeText is null && _summaryText.Length > 0 : _openText.Length > 0;
             var tip = _changeText is null ? _summaryText : "Изменено: " + _changeText;
             if (tip.Length > 0) ToolTip.SetTip(this, tip);
         }

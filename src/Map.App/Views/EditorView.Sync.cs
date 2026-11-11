@@ -515,7 +515,7 @@ public sealed partial class EditorView
     {
         var (control, buttons) = Ui.Segmented(
             "ContextScope",
-            [("Object", "Объект", null), ("Tool", "Инструмент", null)],
+            [("Object", "Выделенное", null), ("Tool", "Инструмент", null)],
             key =>
             {
                 _contextPrefersToolPanel = key == "Tool";
@@ -525,6 +525,12 @@ public sealed partial class EditorView
 
         _contextSwitchButtons.AddRange(buttons);
         _contextSwitch = control;
+        // In the asset tool the two halves show on their cards whom they change (owner, 2026-11-11, variant 1).
+        bool AssetTool() => _editor.ActiveTool == EditorTool.Stamp;
+        Explain(buttons[0], PanelDemoKind.ScopeSelected, "Выделенное",
+            "Правки меняют выделенный объект, путь или область: для пути — шаг, рисунок, узлы.", AssetTool);
+        Explain(buttons[1], PanelDemoKind.ScopeNew, "Для новых",
+            "Правки действуют на следующие размещения. Стоящие на карте объекты не меняются.", AssetTool);
     }
 
     /// <summary>
@@ -611,6 +617,15 @@ public sealed partial class EditorView
         Ui.SetSelected(_contextSwitchButtons[1], !objectTab);
         SyncSurfaceScope();
         ToolTip.SetTip(_contextSwitchButtons[1], "Настройки: " + EditorLabels.Tool(_editor.ActiveTool));
+        // The two halves say whom they act on: the selected thing, or the next ones a creating tool makes
+        // (owner, 2026-11-11, variant 1: «Выделенное / Для новых»).
+        var toolWord = _editor.ActiveTool is EditorTool.Stamp or EditorTool.Line or EditorTool.Shape or EditorTool.Text
+            or EditorTool.River or EditorTool.Road ? "Для новых" : "Инструмент";
+        if (_contextSwitchButtons[1].Content is not TextBlock { } shown || shown.Text != toolWord)
+        {
+            _contextSwitchButtons[1].Content = Ui.CommandCaption(toolWord);
+            AutomationProperties.SetName(_contextSwitchButtons[1], toolWord);
+        }
 
         if (scope == EditorContextPanelKind.MultiSelectionInspector)
         {
@@ -678,7 +693,8 @@ public sealed partial class EditorView
         if (_contextKey.Child is TextBlock keyText) keyText.Text = key;
         _contextKey.IsVisible = key.Length > 0;
         _contextScopeChip.Content = scope is { } kind ? Ui.ScopeChip(kind) : null;
-        _contextScopeTarget.Text = target;
+        // One sentence: «Для новых · на слой «Объекты»» - the coloured word, then where (owner, 2026-11-11).
+        _contextScopeTarget.Text = scope is not null && target.Length > 0 ? "· " + target : target;
         ToolTip.SetTip(_contextScopeTarget, target);
         _contextScopeLine.IsVisible = !_contextCollapsed && scope is not null;
         _contextHeaderAction.Content = action;
@@ -710,20 +726,21 @@ public sealed partial class EditorView
         if (tool == EditorTool.Stamp && _editor.SelectedEditableArea is not null)
         {
             // The asset panel keeps its reset in every state it had it before, area included.
-            SetContextHeader(MapIcons.ModeArea, "", Ui.Scope.Object, $"«{_editor.SelectedEditableArea.Name}»", _stampResetButton);
+            // The reset lives in the panel's last row «Изменено: … · Сбросить», not in this line (owner, 2026-11-11).
+            SetContextHeader(MapIcons.ModeArea, "", Ui.Scope.Object, $"«{_editor.SelectedEditableArea.Name}»", null);
             SyncStampResetButton();
             return;
         }
         if (tool == EditorTool.Stamp && _editor.SelectedEditablePath is not null)
         {
-            SetContextHeader(MapIcons.ModePath, "", Ui.Scope.Object, $"«{_editor.SelectedEditablePath.Name}»", _stampResetButton);
+            SetContextHeader(MapIcons.ModePath, "", Ui.Scope.Object, $"«{_editor.SelectedEditablePath.Name}»", null);
             SyncStampResetButton();
             return;
         }
         switch (tool)
         {
             case EditorTool.Stamp:
-                SetContextHeader(icon, key, Ui.Scope.New, "следующие размещения · " + ObjectLayerTarget("на слой"), _stampResetButton);
+                SetContextHeader(icon, key, Ui.Scope.New, "следующие размещения · " + ObjectLayerTarget("на слой"), null);
                 SyncStampResetButton();
                 break;
             case EditorTool.River or EditorTool.Road:

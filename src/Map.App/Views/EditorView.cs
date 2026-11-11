@@ -346,6 +346,7 @@ public sealed partial class EditorView : UserControl
     private Control _stampPlacementOptions = null!;
     private Button _stampResetButton = null!;
     private TextBlock _stampResetCaption = null!;
+    private TextBlock _stampChangesText = null!;
     private Ui.SectionPanel _stampHowSection = null!, _stampNextSection = null!, _stampLookSection = null!,
         _stampRandomSection = null!, _stampRecentSection = null!;
     private Control _stampStripsHost = null!;
@@ -520,6 +521,7 @@ public sealed partial class EditorView : UserControl
             _deferredPanelTimer?.Stop();
             foreach (var (_, frames) in _demoFrames.Values) foreach (var bitmap in frames) bitmap.Dispose();
             _demoFrames.Clear();
+            DisposeExplainFrames();
             DisposeLookPage();
             foreach (var window in new[]
                      { _assetCatalogWindow, _versionsWindow, _canvasWorkflowWindow, _exportWindow })

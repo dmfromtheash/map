@@ -76,7 +76,7 @@ public sealed partial class EditorView
                 _contextScopeTarget,
             } },
         }.Classed("scope-line").Named("ContextScopeLine");
-        _contextScopeTarget.Margin = new Thickness(8, 0, 0, 0);
+        _contextScopeTarget.Margin = new Thickness(6, 0, 0, 0);
 
         _contextBody = new ScrollViewer
         {
@@ -980,9 +980,9 @@ public sealed partial class EditorView
         _stampToolAreaText = area;
         _stampGestureBlock = BuildStampGestureBlock();
 
-        // "К базовым" is a quiet header command, not the loudest button of the panel: it restores
-        // the base placement settings (same command as before) and shows how many differ now.
-        _stampResetCaption = new TextBlock { Text = "К базовым", VerticalAlignment = VerticalAlignment.Center };
+        // The reset closes the settings as one row «Изменено: масштаб, поворот · Сбросить» (owner, 2026-11-11,
+        // variant 1): what differs is named in words, the quiet command beside it restores the base settings.
+        _stampResetCaption = new TextBlock { Text = "Сбросить", VerticalAlignment = VerticalAlignment.Center };
         _stampResetButton = new Button
         {
             Content = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 5, Children =
@@ -999,6 +999,14 @@ public sealed partial class EditorView
         AutomationProperties.SetName(_stampResetButton, "Отменить до базовых настроек");
         ToolTip.SetTip(_stampResetButton, "Отменить до базовых настроек: вернуть исходные параметры размещения текущего ассета. "
             + "Черновик размещения отменяется, выбранное изображение и завершённые объекты карты сохраняются.");
+        _stampChangesText = new TextBlock { Name = "StampChangesText", VerticalAlignment = VerticalAlignment.Center,
+            TextWrapping = TextWrapping.Wrap, FontSize = 12 };
+        var changesRow = Explain(new Border
+        {
+            BorderBrush = new SolidColorBrush(Color.Parse("#3C2E22")), BorderThickness = new Thickness(0, 1, 0, 0),
+            Padding = new Thickness(0, 6, 0, 4),
+            Child = new DockPanel { Children = { _stampResetButton.Docked(Dock.Right), _stampChangesText } },
+        }, PanelDemoKind.Reset, "Сбросить", "Настройки ассета возвращаются к исходным. Поставленное на карте не меняется.");
 
         var catalog = BuildCompactStampCatalog();
         _stampHowSection = new Ui.SectionPanel("StampPlacementSection", "Как ставить",
@@ -1030,6 +1038,7 @@ public sealed partial class EditorView
                 BuildEditableAreaPanel(),
                 BuildEditablePathPanel(),
                 future,
+                changesRow,
                 _stampRandomSection,
                 _stampRecentSection,
                 BuildRegionalModes(),
@@ -1049,46 +1058,44 @@ public sealed partial class EditorView
         StampStyle? Style() => _editor.StampPanelStyle;
 
         _randomRotationToggle = new ToggleButton { Content = MapIcons.Stroked(MapIcons.Rotate, 14), Width = 26, Height = 26, MinHeight = 26,
-            Padding = new Thickness(0), Margin = new Thickness(4, 0, 0, 0) }.Named("RandomRotationToggle").Classed("segment");
+            Padding = new Thickness(0), Margin = new Thickness(2, 0, 0, 0) }.Named("RandomRotationToggle").Classed("segment");
         _randomRotationToggle.Click += (_, _) =>
         {
             _editor.StampRandomAngle = !_editor.StampRandomAngle;
             SyncAssetList();
         };
-        var rotationTrailing = new StackPanel { Orientation = Orientation.Horizontal, Children =
-        {
-            ResetGlyph(prefix + "RotationResetButton", "Сбросить поворот", () => _editor.SetStampRotationDegrees(0)),
-            _randomRotationToggle,
-        } };
+        ToolTip.SetTip(_randomRotationToggle, "Случайный поворот каждого нового ассета");
+        AutomationProperties.SetName(_randomRotationToggle, "Случайный поворот");
 
+        // The resets are the rows' own: shown only while the value differs from 100 % and 0° (owner, 2026-11-11).
+        // Each row shows on its card what it changes, drawn with the chosen asset (owner, 2026-11-11, variant 1).
         var transform = new StackPanel { Spacing = 2 };
-        transform.Children.Add(AppearanceSlider(prefix + "ScaleSlider", "Масштаб", 1, 400, "%",
+        transform.Children.Add(Explain(AppearanceSlider(prefix + "ScaleSlider", "Масштаб", 1, 400, "%",
             () => _editor.StampScalePercent,
-            (value, commit) => _editor.SetStampScalePercent(value, commit), 5,
-            ResetGlyph(prefix + "ScaleResetButton", "Сбросить масштаб к 100 %",
-                () => _editor.SetStampScalePercent(100))));
-        transform.Children.Add(AppearanceSlider(prefix + "RotationSlider", "Поворот", 0, 359, "°",
+            (value, commit) => _editor.SetStampScalePercent(value, commit), 5, defaultValue: 100),
+            PanelDemoKind.Scale, "Масштаб", "Размер следующих ассетов. 100 % — исходный размер."));
+        transform.Children.Add(Explain(AppearanceSlider(prefix + "RotationSlider", "Поворот", 0, 359, "°",
             () => _editor.StampRotationDegrees,
-            (value, commit) => _editor.SetStampRotationDegrees(value, commit), 1, rotationTrailing));
-        transform.Children.Add(AppearanceSlider(prefix + "SublayerSlider", "Уровень",
+            (value, commit) => _editor.SetStampRotationDegrees(value, commit), 1, _randomRotationToggle, defaultValue: 0),
+            PanelDemoKind.Rotation, "Поворот", "Поворот следующих ассетов, 0–359°. Значок у названия — случайный поворот каждого."));
+        transform.Children.Add(Explain(AppearanceSlider(prefix + "SublayerSlider", "Уровень",
             EditorViewModel.MinimumSublayer, EditorViewModel.MaximumSublayer, "",
             () => _editor.StampSublayer,
-            (value, commit) => _editor.SetStampSublayer((int)Math.Round(value), commit)));
-        var flips = new Ui.ChoiceGrid
-        {
-            MaxColumns = 2, MinimumItemWidth = 96, Gap = 4,
-            Children =
-            {
-                AppearanceToggle(prefix + "FlipHorizontalToggle", "Отразить ↔",
-                    () => Style()?.FlipHorizontal, value => _editor.SetStampFlip(horizontal: value)),
-                AppearanceToggle(prefix + "FlipVerticalToggle", "Отразить ↕",
-                    () => Style()?.FlipVertical, value => _editor.SetStampFlip(vertical: value)),
-            },
-        };
-        transform.Children.Add(flips);
-        transform.Children.Add(AppearanceSlider(prefix + "OpacitySlider", "Непрозрачность", 0, 100, "%",
+            (value, commit) => _editor.SetStampSublayer((int)Math.Round(value), commit), defaultValue: 0),
+            PanelDemoKind.Sublayer, "Уровень", "Что рисуется поверх на одном слое: больший уровень — выше. От −10 до +10."));
+        var flipHorizontal = AppearanceToggle(prefix + "FlipHorizontalToggle", "↔",
+            () => Style()?.FlipHorizontal, value => _editor.SetStampFlip(horizontal: value));
+        var flipVertical = AppearanceToggle(prefix + "FlipVerticalToggle", "↕",
+            () => Style()?.FlipVertical, value => _editor.SetStampFlip(vertical: value));
+        AutomationProperties.SetName(flipHorizontal, "Отразить ↔");
+        AutomationProperties.SetName(flipVertical, "Отразить ↕");
+        transform.Children.Add(Explain(Ui.PropertyRow("Отражение",
+            new Avalonia.Controls.Primitives.UniformGrid { Columns = 2, Children = { flipHorizontal, flipVertical } }),
+            PanelDemoKind.Flip, "Отражение", "Зеркально по горизонтали (↔) или по вертикали (↕)."));
+        transform.Children.Add(Explain(AppearanceSlider(prefix + "OpacitySlider", "Непрозрачность", 0, 100, "%",
             () => _editor.StampOpacityPercent,
-            (value, commit) => _editor.SetStampOpacityPercent(value, commit), 5));
+            (value, commit) => _editor.SetStampOpacityPercent(value, commit), 5, defaultValue: 100),
+            PanelDemoKind.Opacity, "Непрозрачность", "Меньше — сквозь ассет видна карта под ним."));
         // Blend sits with size, turn, level and opacity: the four plus blend were the assets strip over the map,
         // which is gone (DEC-070), so none of them may end up deeper than it was.
         transform.Children.Add(BlendChoice(prefix + "BlendChoice", () => Style()?.Blend, _editor.SetStampBlend));
