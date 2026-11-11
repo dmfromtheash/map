@@ -11,7 +11,11 @@ if (int.TryParse(Environment.GetEnvironmentVariable("MAP_PERF_FREE_MB"), out var
         512 * Map.Core.Resources.WorkingMemoryBudget.MiB));
 object report;
 bool gatePassed;
-if (options.Profile == "regional-terrain-probe")
+if (options.Profile == "hex-world-1024")
+{
+    report = HexWorld1024Probe.Run(); gatePassed = true;
+}
+else if (options.Profile == "regional-terrain-probe")
 {
     report = RegionalTerrainProbe.Run(); gatePassed = true;
 }
