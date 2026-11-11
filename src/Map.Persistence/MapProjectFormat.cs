@@ -165,7 +165,10 @@ public static class MapProjectFormat
 
     /// <summary>R12 (2026-11-10): the slope of fallen stone at the foot of a cliff (<c>cliff.scree</c>, <c>cliff.screeWidth</c>).</summary>
     public const int CliffScreeSchemaVersion = 49;
-    public const int MaxSupportedSchemaVersion = CliffScreeSchemaVersion;
+
+    /// <summary>R09e (2026-11-11): the named variants of the map — shown layers, style, light, political mode (<c>scene.variants</c>).</summary>
+    public const int VariantsSchemaVersion = 50;
+    public const int MaxSupportedSchemaVersion = VariantsSchemaVersion;
 
     /// <summary>
     /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry

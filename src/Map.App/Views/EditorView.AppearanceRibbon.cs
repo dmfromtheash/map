@@ -79,6 +79,7 @@ public sealed partial class EditorView
     private void ApplyLookCard(string key)
     {
         if (key.StartsWith(PackPrefix, StringComparison.Ordinal)) { if (PackOf(key) is { } pack) _editor.ApplyStylePack(pack); return; }
+        if (key.StartsWith(VariantPrefix, StringComparison.Ordinal)) { _editor.SwitchMapVariant(VariantOf(key)); return; }
         if (key.StartsWith("sea-", StringComparison.Ordinal)) { ApplySeaCard(key); return; }
         if (key == "none") { _editor.SetStyleEnabled(false); return; }
         if (key == "light-off") { _editor.SetLightingEnabled(false); return; }
@@ -101,6 +102,7 @@ public sealed partial class EditorView
     private MapDocument CardDocument(MapDocument document, string key)
     {
         if (key.StartsWith(PackPrefix, StringComparison.Ordinal)) return PackOf(key)?.ApplyTo(document) ?? document;
+        if (key.StartsWith(VariantPrefix, StringComparison.Ordinal)) return Map.Presentation.ViewModels.EditorViewModel.VariantPreview(document, VariantOf(key));
         if (key.StartsWith("sea-", StringComparison.Ordinal)) return SeaCardDocument(document, key);
         if (key == "none") return document with { Style = null };
         if (key == "light-off") return document with { Lighting = null };

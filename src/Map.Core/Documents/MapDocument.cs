@@ -51,6 +51,7 @@ public sealed record MapDocument
         Pointcrawl = source.Pointcrawl;
         Planet = source.Planet;
         Isometric = source.Isometric;
+        Variants = source.Variants;
     }
 
     public MapDocument(
@@ -296,6 +297,9 @@ public sealed record MapDocument
 
     /// <summary>The side and heights of the isometric view (R38, plan 2.3, schema v47).</summary>
     public MapIsometric Isometric { get; init; } = new();
+
+    /// <summary>The named variants of the map - «День», «Ночь», «Политическая» and the owner's own (R09e, schema v50).</summary>
+    public MapVariants Variants { get; init; } = new();
     public string Title { get; init; }
 
     /// <summary>When the document was first created. Supplied by the caller; Core has no clock.</summary>
@@ -376,6 +380,7 @@ public sealed record MapDocument
             Pointcrawl = Pointcrawl,
             Planet = Planet,
             Isometric = Isometric,
+            Variants = Variants,
         };
 
     public MapDocument WithAssets(IReadOnlyList<MapAssetReference> assets)

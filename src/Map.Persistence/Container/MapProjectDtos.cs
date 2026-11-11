@@ -228,9 +228,37 @@ internal sealed class SceneDto
     [JsonPropertyName("isometric")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Map.Core.Documents.MapIsometric? Isometric { get; set; }
+    /// <summary>The named variants of the map and the chosen one (R09e, schema v50).</summary>
+    [JsonPropertyName("variants")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MapVariantsDto? Variants { get; set; }
     [JsonPropertyName("stampForeground")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public StampForegroundDto? StampForeground { get; set; }
+}
+
+/// <summary>The named variants of a map (R09e, schema v50).</summary>
+internal sealed class MapVariantsDto
+{
+    [JsonPropertyName("active")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? Active { get; set; }
+    [JsonPropertyName("items")] public List<MapVariantDto> Items { get; set; } = [];
+}
+
+/// <summary>One variant: the hidden layers, the style, the light without fires, the political mode.</summary>
+internal sealed class MapVariantDto
+{
+    [JsonPropertyName("id")] public Guid Id { get; set; }
+    [JsonPropertyName("name")] public string Name { get; set; } = "";
+    [JsonPropertyName("hidden")] public List<string> Hidden { get; set; } = [];
+    [JsonPropertyName("style")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public MapStyleDto? Style { get; set; }
+    [JsonPropertyName("lighting")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public LightingDto? Lighting { get; set; }
+    [JsonPropertyName("political")] public bool Political { get; set; }
 }
 
 internal sealed class StampForegroundDto

@@ -105,6 +105,7 @@ public sealed partial class EditorView
             Children =
             {
                 header,
+                BuildVariantPart(),
                 BuildPackPart(),
                 Part("light", MapIcons.LineSun, "Свет", null, null, LightCards.Select(c => (c.Key, c.Title)), 4),
                 Part("style", MapIcons.LinePalette, "Стиль", "none", "Без стиля", StyleCards.Where(c => c.Preset is not null).Select(c => (c.Key, c.Title)), 4),
@@ -178,7 +179,8 @@ public sealed partial class EditorView
         // A style is not tried on the whole map: one style frame costs 0,6-1 s even on a map of 40 mountains, built 2-3
         // times on the way to the finished view, and the first time a style is used up to 16 s (paint-perf
         // MAP_NEW_ART_STYLE, 2026-10-31). Its picture shows it; a click applies it. Light and sea (40-120 ms) are tried.
-        if (key is not null && (key == "none" || key.StartsWith("style-", StringComparison.Ordinal) || key.StartsWith(PackPrefix, StringComparison.Ordinal))) key = null;
+        if (key is not null && (key == "none" || key.StartsWith("style-", StringComparison.Ordinal) || key.StartsWith(PackPrefix, StringComparison.Ordinal)
+            || key.StartsWith(VariantPrefix, StringComparison.Ordinal))) key = null;
         _lookHoverKey = key;
         _lookHoverTimer ??= new DispatcherTimer(DispatcherPriority.Input);
         _lookHoverTimer.Stop();
@@ -251,6 +253,7 @@ public sealed partial class EditorView
         return key switch
         {
             _ when key.StartsWith(PackPrefix, StringComparison.Ordinal) => _editor.ActiveStylePackId == key[PackPrefix.Length..],
+            _ when key.StartsWith(VariantPrefix, StringComparison.Ordinal) => _editor.Session.Document.Variants.Active == VariantOf(key),
             "none" => !style.Enabled,
             "light-off" => !lighting.Enabled,
             _ when key.StartsWith("sea-", StringComparison.Ordinal) => SeaCardActive(key),
@@ -264,6 +267,7 @@ public sealed partial class EditorView
     private void SyncLookPage()
     {
         if (_lookPage is null) return;
+        SyncVariantPart();
         var accent = Application.Current?.FindResource("MapAccentBrush") as IBrush;
         var line = Application.Current?.FindResource("MapBorderBrush") as IBrush;
         foreach (var (key, (button, picture)) in _lookTiles)
@@ -379,7 +383,7 @@ public sealed partial class EditorView
     /// <summary>Two maps of a picture draw the same: the same layers, style, light and page.</summary>
     private static bool SameCard(MapDocument drawn, MapDocument wanted) =>
         ReferenceEquals(drawn.Layers, wanted.Layers) && Equals(drawn.Style, wanted.Style)
-        && Equals(drawn.Lighting, wanted.Lighting) && drawn.Canvas == wanted.Canvas;
+        && Equals(drawn.Lighting, wanted.Lighting) && drawn.Canvas == wanted.Canvas && drawn.Timeline == wanted.Timeline;
 
     private void DisposeLookPage()
     {
