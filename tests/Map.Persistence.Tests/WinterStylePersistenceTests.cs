@@ -28,6 +28,18 @@ public sealed class WinterStylePersistenceTests : IDisposable
         Assert.Equal(MapProjectFormat.WinterSchemaVersion, SchemaOf(path));
     }
 
+    [Theory]
+    [InlineData(MapStylePreset.PixelFantasy16)]
+    [InlineData(MapStylePreset.PixelHandheld)]
+    public void A_pixel_style_survives_save_and_reopen_in_schema_53(MapStylePreset preset)
+    {
+        var style = MapStyle.For(preset) with { Strength = .9 };
+        var path = Path.Combine(_root, preset + ".mapproj");
+        MapProjectStore.Save(Map() with { Style = style }, path, ProjectFixtures.Metadata(), ProjectFixtures.PreviewPng());
+        Assert.Equal(style, MapProjectStore.Open(path).Document.Style);
+        Assert.Equal(MapProjectFormat.PixelSchemaVersion, SchemaOf(path));
+    }
+
     [Fact]
     public void The_winter_variant_alone_raises_the_schema_and_comes_back()
     {

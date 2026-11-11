@@ -67,14 +67,14 @@ internal static class WinterVariantsSheet
             Save(report, options, "winter-" + id + "-zoom", sheet, 1400, new SKRectI(380, 170, 1780, 1045));
         }
         // The chosen looks as the program's own styles (DEC-097): the same map with the style on, through the export renderer.
-        foreach (var preset in new[] { MapStylePreset.WinterEngraving, MapStylePreset.WinterBlizzard, MapStylePreset.WinterWoodblock })
+        foreach (var preset in new[] { MapStylePreset.WinterEngraving, MapStylePreset.WinterBlizzard, MapStylePreset.WinterWoodblock, MapStylePreset.PixelFantasy16, MapStylePreset.PixelHandheld })
         {
             var styled = document with { Style = MapStyle.For(preset) with { Enabled = true } };
             using var sheet = RenderMap(styled, source, SeaColor);
             Save(report, options, "style-" + preset, sheet, 1400, null);
             Save(report, options, "style-" + preset + "-zoom", sheet, 1400, new SKRectI(380, 170, 1780, 1045));
         }
-        report.GatePassed = report.Images.Count == looks.Length * 2 + 6;
+        report.GatePassed = report.Images.Count == looks.Length * 2 + 10;
         foreach (var image in images.Values) image.Dispose();
         return report;
     }

@@ -13,6 +13,7 @@ public sealed partial class StyleRenderingTests
         MapStylePreset.CharcoalVineStump, MapStylePreset.CharcoalHatching,
         MapStylePreset.BlueprintSurvey, MapStylePreset.MoonlightHasui, MapStylePreset.MoonlightPastel,
         MapStylePreset.WinterEngraving, MapStylePreset.WinterBlizzard, MapStylePreset.WinterWoodblock,
+        MapStylePreset.PixelFantasy16, MapStylePreset.PixelHandheld,
     }.Select(p => new object[] { p });
 
     [Theory]
@@ -27,6 +28,8 @@ public sealed partial class StyleRenderingTests
     [InlineData(MapStylePreset.WinterEngraving)]
     [InlineData(MapStylePreset.WinterBlizzard)]
     [InlineData(MapStylePreset.WinterWoodblock)]
+    [InlineData(MapStylePreset.PixelFantasy16)]
+    [InlineData(MapStylePreset.PixelHandheld)]
     public void Cpu_export_matches_serial_pixels_with_odd_rows_fractional_origin_and_partial_strength(MapStylePreset preset)
     {
         using var mountain = Mountain();

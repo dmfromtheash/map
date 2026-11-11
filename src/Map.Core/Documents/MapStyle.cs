@@ -98,6 +98,11 @@ public sealed record MapStyle
     public static MapStyle For(MapStylePreset preset) => preset switch
     {
         MapStylePreset.BlueprintSurvey => new MapStyle { Preset = preset, Paper = new(true, 1) },
+        MapStylePreset.PixelFantasy16 => new MapStyle
+        {
+            Preset = preset, Contour = new(true, 1), Granulation = new(true, 1), WaterLines = new(true, 1),
+        },
+        MapStylePreset.PixelHandheld => new MapStyle { Preset = preset, Contour = new(true, 1), Granulation = new(true, 1) },
         MapStylePreset.WinterEngraving => new MapStyle
         {
             Preset = preset, Pen = new(true, 1), CrossHatch = new(true, 1), Contour = new(true, 1), Sea = new(true, 1), Paper = new(true, 1),
@@ -158,6 +163,8 @@ public sealed record MapStyle
             [StyleEffectKind.Crest, StyleEffectKind.Sea, StyleEffectKind.WaterLines, StyleEffectKind.WoodGrain],
         MapStylePreset.MoonlightPastel =>
             [StyleEffectKind.Strokes, StyleEffectKind.Coast, StyleEffectKind.WaterLines, StyleEffectKind.Paper],
+        MapStylePreset.PixelFantasy16 => [StyleEffectKind.Contour, StyleEffectKind.Granulation, StyleEffectKind.WaterLines],
+        MapStylePreset.PixelHandheld => [StyleEffectKind.Contour, StyleEffectKind.Granulation],
         MapStylePreset.WinterEngraving =>
             [StyleEffectKind.Pen, StyleEffectKind.CrossHatch, StyleEffectKind.Contour, StyleEffectKind.Sea, StyleEffectKind.Paper],
         MapStylePreset.WinterBlizzard =>
@@ -326,6 +333,10 @@ public enum MapStylePreset
     WinterBlizzard = 17,
     /// <summary>«Зима»: «Японская гравюра зимой».</summary>
     WinterWoodblock = 18,
+    /// <summary>«Пиксельный атлас» (DEC-098): «Фэнтези, 16 цветов».</summary>
+    PixelFantasy16 = 19,
+    /// <summary>«Пиксельный атлас»: «Карманная консоль».</summary>
+    PixelHandheld = 20,
 }
 
 /// <summary>Where the glints of «Лунная ночь» lie on the water.</summary>

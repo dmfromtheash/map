@@ -135,7 +135,7 @@ public static partial class StyleRenderer
         // The print and painter styles paint the land from its outline and the mountains from their pictures: the cliff
         // walls with their scree, and in the painter styles the roads, are drawn over the painted frame, multiplied like
         // ink on its paper (owner, 2026-11-10: «нужно. и с другими стилями также»).
-        if (kind != 0 && StyleOverlayFor(bare, kind) is { } overlay)
+        if (kind != 0 && !PixelShader.Applies(style.Preset) && StyleOverlayFor(bare, kind) is { } overlay)
         {
             // «Зима»: the walls and roads take the medium's ink, and only their dark parts (the snow stays white).
             using var ink = WinterShader.Applies(style.Preset) ? WinterShader.OverlayInk(style.Preset) : null;
@@ -356,7 +356,9 @@ public static partial class StyleRenderer
     {
         var w = buffers.Scene.Width - 2 * buffers.Margin;
         var h = buffers.Scene.Height - 2 * buffers.Margin;
-        using var shader = buffers.Painter is { } winter && WinterShader.Applies(style.Preset)
+        using var shader = buffers.Painter is { } pixels && PixelShader.Applies(style.Preset)
+            ? PixelShader.Build(buffers.Scene, pixels.WetBig, pixels.Geo, buffers.Origin, buffers.DocPerPx, buffers.DocumentSize, style)
+            : buffers.Painter is { } winter && WinterShader.Applies(style.Preset)
             ? WinterShader.Build(buffers.Scene, winter.WetBig, winter.Geo, buffers.Origin, buffers.DocPerPx, buffers.DocumentSize, style)
             : buffers.Painter is { } moon && MoonlightShader.Applies(style.Preset)
             ? MoonlightShader.Build(buffers.Scene, moon.WetBig, moon.Facets, moon.WetFeatures, moon.Direction, moon.Geo,
@@ -381,7 +383,7 @@ public static partial class StyleRenderer
         if (isExport && gpu is null && Environment.ProcessorCount > 1 && (long)w * h >= 256 * 256
             && (style.Preset == MapStylePreset.WatercolorBigShapes || OilShader.Applies(style.Preset)
                 || CharcoalShader.Applies(style.Preset) || BlueprintShader.Applies(style.Preset)
-                || MoonlightShader.Applies(style.Preset) || WinterShader.Applies(style.Preset)))
+                || MoonlightShader.Applies(style.Preset) || WinterShader.Applies(style.Preset) || PixelShader.Applies(style.Preset)))
             return ShadeCpuBands(shader, w, h, buffers.Margin);
         using var output = NewSurface(gpu, w, h, SKColorType.Rgba8888);
         if (output is null) return null;

@@ -75,6 +75,8 @@ public sealed partial class EditorViewModel
         MapStylePreset.MoonlightHasui => "Ночная гравюра Хасуи",
         MapStylePreset.MoonlightPastel => "Пастель на тёмной бумаге",
         MapStylePreset.WinterEngraving => "Гравюра по снегу",
+        MapStylePreset.PixelFantasy16 => "Фэнтези, 16 цветов",
+        MapStylePreset.PixelHandheld => "Карманная консоль",
         MapStylePreset.WinterBlizzard => "Акварель метели",
         MapStylePreset.WinterWoodblock => "Японская гравюра зимой",
         MapStylePreset.WatercolorBigShapes => "Крупные пятна",
@@ -95,6 +97,7 @@ public sealed partial class EditorViewModel
         MapStylePreset.BlueprintSurvey => "Синька",
         MapStylePreset.MoonlightHasui or MapStylePreset.MoonlightPastel => "Лунная ночь",
         MapStylePreset.WinterEngraving or MapStylePreset.WinterBlizzard or MapStylePreset.WinterWoodblock => "Зима",
+        MapStylePreset.PixelFantasy16 or MapStylePreset.PixelHandheld => "Пиксельный атлас",
         MapStylePreset.WatercolorBigShapes => "Акварель",
         MapStylePreset.UkiyoeSosakuHanga => "Укиё-э",
         MapStylePreset.PrintLetterpress or MapStylePreset.PrintTintedLithograph => "Печать",
@@ -106,6 +109,9 @@ public sealed partial class EditorViewModel
     public static string StyleEffectTitle(StyleEffectKind kind, MapStylePreset preset = MapStylePreset.InkWetBrush) => kind switch
     {
         StyleEffectKind.Crest when preset == MapStylePreset.MoonlightHasui => "Ключевая доска",
+        StyleEffectKind.Contour when preset is MapStylePreset.PixelFantasy16 or MapStylePreset.PixelHandheld => "Контур",
+        StyleEffectKind.Granulation when preset is MapStylePreset.PixelFantasy16 or MapStylePreset.PixelHandheld => "Шахматные переходы",
+        StyleEffectKind.WaterLines when preset == MapStylePreset.PixelFantasy16 => "Волны",
         StyleEffectKind.Pen when preset == MapStylePreset.WinterEngraving => "Линии резца",
         StyleEffectKind.CrossHatch when preset == MapStylePreset.WinterEngraving => "Штриховка накрест",
         StyleEffectKind.Contour when preset == MapStylePreset.WinterEngraving => "Контур гор и берега",

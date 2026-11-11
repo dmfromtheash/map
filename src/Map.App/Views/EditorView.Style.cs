@@ -67,6 +67,8 @@ public sealed partial class EditorView
 
     private static string PresetHint(MapStylePreset preset) => preset switch
     {
+        MapStylePreset.PixelFantasy16 => "Фэнтези, 16 цветов: карта на сетке крупных пикселей, шестнадцать цветов, шахматные переходы, тёмный контур суши и гор, значки волн.",
+        MapStylePreset.PixelHandheld => "Карманная консоль: карта на сетке крупных пикселей в четырёх оттенках зелёного, самый тёмный — контур.",
         MapStylePreset.WinterEngraving => "Гравюра по снегу: снег — белая бумага, тень — холодные синие линии, на горах по склонам, накрест в темноте; море замёрзло: припай и льдины.",
         MapStylePreset.WinterBlizzard => "Акварель метели: три холодные заливки с каймой, дымка позёмки, снежинки и полосы ветра; море замёрзло.",
         MapStylePreset.WinterWoodblock => "Японская гравюра зимой: три плоские доски под ключевой линией, волокно дерева, море темнеет кверху, крупные хлопья.",
@@ -90,6 +92,9 @@ public sealed partial class EditorView
 
     private static string StyleEffectHint(StyleEffectKind kind, MapStylePreset preset) => kind switch
     {
+        StyleEffectKind.Contour when preset is MapStylePreset.PixelFantasy16 or MapStylePreset.PixelHandheld => "Тёмная обводка в пиксель вокруг суши и каждой горы.",
+        StyleEffectKind.Granulation when preset is MapStylePreset.PixelFantasy16 or MapStylePreset.PixelHandheld => "Переходы между цветами шахматным узором пикселей.",
+        StyleEffectKind.WaterLines when preset == MapStylePreset.PixelFantasy16 => "Значки волн на открытом море.",
         StyleEffectKind.Pen when preset == MapStylePreset.WinterEngraving => "Линии тени: чем темнее место, тем толще линия.",
         StyleEffectKind.CrossHatch when preset == MapStylePreset.WinterEngraving => "Второй ряд линий накрест в самых тёмных местах.",
         StyleEffectKind.Contour when preset == MapStylePreset.WinterEngraving => "Твёрдая линия вокруг гор и вдоль берега.",

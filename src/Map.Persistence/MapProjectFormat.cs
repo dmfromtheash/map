@@ -173,7 +173,10 @@ public static class MapProjectFormat
 
     /// <summary>R09 (2026-11-11): the «Зима» styles <c>winter-engraving</c>, <c>winter-blizzard</c>, <c>winter-woodblock</c>.</summary>
     public const int WinterSchemaVersion = 52;
-    public const int MaxSupportedSchemaVersion = WinterSchemaVersion;
+
+    /// <summary>R09 (2026-11-11): the «Пиксельный атлас» styles <c>pixel-fantasy16</c>, <c>pixel-handheld</c>.</summary>
+    public const int PixelSchemaVersion = 53;
+    public const int MaxSupportedSchemaVersion = PixelSchemaVersion;
 
     /// <summary>
     /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry

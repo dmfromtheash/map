@@ -27,6 +27,8 @@ public static partial class MapProjectStore
         [MapStylePreset.WinterEngraving] = "winter-engraving",
         [MapStylePreset.WinterBlizzard] = "winter-blizzard",
         [MapStylePreset.WinterWoodblock] = "winter-woodblock",
+        [MapStylePreset.PixelFantasy16] = "pixel-fantasy16",
+        [MapStylePreset.PixelHandheld] = "pixel-handheld",
     };
 
     private static readonly IReadOnlyDictionary<MoonScatter, string> MoonScatterNames = new Dictionary<MoonScatter, string>
@@ -44,6 +46,12 @@ public static partial class MapProjectStore
 
     private static bool HasWinterV52(MapStyle? style, MapVariants variants) =>
         HasWinterV52(style) || variants.Items.Any(v => HasWinterV52(v.Style));
+
+    /// <summary>The «Пиксельный атлас» styles need schema v53.</summary>
+    private static bool HasPixelV53(MapStyle? style) => style is { Preset: MapStylePreset.PixelFantasy16 or MapStylePreset.PixelHandheld };
+
+    private static bool HasPixelV53(MapStyle? style, MapVariants variants) =>
+        HasPixelV53(style) || variants.Items.Any(v => HasPixelV53(v.Style));
 
     private static MapStyleDto? ToStyleDto(MapStyle? style)
     {
