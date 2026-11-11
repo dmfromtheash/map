@@ -17,7 +17,7 @@ namespace Map.App.Views;
 /// правки сам»): every named variant of the map as a picture of this map in it, drawn by the program like every picture
 /// of the page; a click shows the map in the variant (one undo step). While a variant is chosen, the light, the style
 /// and the shown layers set on the map belong to it. Under the tiles: the name of the chosen variant, «+ Запомнить» and,
-/// on a map without variants, the starting three «День», «Ночь», «Политическая».
+/// on a map without variants, the starting four «День», «Ночь», «Зима», «Политическая».
 /// </summary>
 public sealed partial class EditorView
 {
@@ -57,12 +57,12 @@ public sealed partial class EditorView
         _variantName.KeyDown += (_, e) => { if (e.Key == Key.Enter) { CommitName(); e.Handled = true; } };
         _variantName.LostFocus += (_, _) => CommitName();
 
-        _variantStarters = Ui.TextButton("MapVariantStarters", "Создать «День», «Ночь», «Политическая»", () =>
+        _variantStarters = Ui.TextButton("MapVariantStarters", "Создать «День», «Ночь», «Зима», «Политическая»", () =>
         {
             if (_editor.AddStarterMapVariants()) AfterVariantsChanged();
         }, "compact");
         _variantStarters.HorizontalAlignment = HorizontalAlignment.Stretch;
-        _variantStarters.WithTip("Три варианта из вида этой карты: «День» — свет днём, «Ночь» — свет ночью, «Политическая» — политический режим без стиля и света. Ctrl+Z уберёт их.");
+        _variantStarters.WithTip("Четыре варианта из вида этой карты: «День» — свет днём, «Ночь» — свет ночью, «Зима» — стиль «Гравюра по снегу», «Политическая» — политический режим без стиля и света. Ctrl+Z уберёт их.");
         var add = Ui.TextButton("MapVariantAdd", "+ Запомнить текущий вид как вариант", () =>
         {
             if (_editor.AddMapVariant()) AfterVariantsChanged();

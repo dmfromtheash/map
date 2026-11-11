@@ -67,6 +67,9 @@ public sealed partial class EditorView
 
     private static string PresetHint(MapStylePreset preset) => preset switch
     {
+        MapStylePreset.WinterEngraving => "Гравюра по снегу: снег — белая бумага, тень — холодные синие линии, на горах по склонам, накрест в темноте; море замёрзло: припай и льдины.",
+        MapStylePreset.WinterBlizzard => "Акварель метели: три холодные заливки с каймой, дымка позёмки, снежинки и полосы ветра; море замёрзло.",
+        MapStylePreset.WinterWoodblock => "Японская гравюра зимой: три плоские доски под ключевой линией, волокно дерева, море темнеет кверху, крупные хлопья.",
         MapStylePreset.MoonlightHasui => "Ночная гравюра Хасуи: горы тремя плоскими ступенями индиго под тёмной ключевой доской, море светлеет к берегу, лунная дорожка.",
         MapStylePreset.MoonlightPastel => "Пастель на тёмной бумаге: лунный свет положен мелом по плоскостям гор, бумага видна в зерне, меловая линия берега.",
         MapStylePreset.BlueprintSurvey => "Топографическая синька: лист прусской синей, сетка, горы горизонталями формы и линиями гребней, море линиями глубин.",
@@ -87,6 +90,19 @@ public sealed partial class EditorView
 
     private static string StyleEffectHint(StyleEffectKind kind, MapStylePreset preset) => kind switch
     {
+        StyleEffectKind.Pen when preset == MapStylePreset.WinterEngraving => "Линии тени: чем темнее место, тем толще линия.",
+        StyleEffectKind.CrossHatch when preset == MapStylePreset.WinterEngraving => "Второй ряд линий накрест в самых тёмных местах.",
+        StyleEffectKind.Contour when preset == MapStylePreset.WinterEngraving => "Твёрдая линия вокруг гор и вдоль берега.",
+        StyleEffectKind.Sea when preset is MapStylePreset.WinterEngraving or MapStylePreset.WinterBlizzard or MapStylePreset.WinterWoodblock => "Припай с трещинами у берега и льдины, редеющие к открытой воде.",
+        StyleEffectKind.Paper when preset is MapStylePreset.WinterEngraving or MapStylePreset.WinterBlizzard => "Зерно бумаги на снегу.",
+        StyleEffectKind.Edges when preset == MapStylePreset.WinterBlizzard => "Тёмная кайма у края каждой заливки.",
+        StyleEffectKind.Granulation when preset == MapStylePreset.WinterBlizzard => "Пигмент оседает в зерне бумаги.",
+        StyleEffectKind.Mist when preset == MapStylePreset.WinterBlizzard => "Белая дымка позёмки пятнами по карте.",
+        StyleEffectKind.Strokes when preset == MapStylePreset.WinterBlizzard => "Летящие снежинки и косые полосы ветра.",
+        StyleEffectKind.Crest when preset == MapStylePreset.WinterWoodblock => "Тёмная контурная линия гор и берега.",
+        StyleEffectKind.WoodGrain when preset == MapStylePreset.WinterWoodblock => "Волокно деревянной доски в заливках.",
+        StyleEffectKind.Strokes when preset == MapStylePreset.WinterWoodblock => "Крупные хлопья снега поверх карты.",
+        StyleEffectKind.Coast when preset == MapStylePreset.WinterWoodblock => "Бокаси: море темнеет к верху карты.",
         StyleEffectKind.Crest when preset == MapStylePreset.MoonlightHasui => "Тёмный контур гор, гребней и берега, как отпечаток ключевой доски.",
         StyleEffectKind.Sea when preset == MapStylePreset.MoonlightHasui => "Бокаси: море плавно темнеет от берега к открытой воде.",
         StyleEffectKind.WaterLines when preset is MapStylePreset.MoonlightHasui or MapStylePreset.MoonlightPastel => "Лунные блики на воде и светлые линии вдоль берега.",

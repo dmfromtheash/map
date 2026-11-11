@@ -4,7 +4,7 @@ namespace Map.Core.Editing;
 
 /// <summary>
 /// The named variants of a map (R09e): capture the map's look as a variant, put the map into a variant, make the
-/// starting three «День», «Ночь» and «Политическая». Each change is one undo step (<see cref="MapVariantCommand"/>).
+/// starting four «День», «Ночь», «Зима» and «Политическая». Each change is one undo step (<see cref="MapVariantCommand"/>).
 /// </summary>
 public static class MapVariantEditing
 {
@@ -83,26 +83,33 @@ public static class MapVariantEditing
 
     /// <summary>
     /// The starting variants from the map's look: «День» (the style, light by day), «Ночь» (the style, light at night),
-    /// «Политическая» (the political mode, no style and no light). The map is shown in «День».
+    /// «Зима» (the style «Гравюра по снегу», light by day; DEC-097), «Политическая» (the political mode, no style and no
+    /// light). The map is shown in «День».
     /// </summary>
     public static MapDocument AddStarters(MapDocument document, Func<Guid> newId)
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(newId);
         var variants = Current(document);
-        if (variants.Items.Length + 3 > MapVariants.MaxCount)
+        if (variants.Items.Length + 4 > MapVariants.MaxCount)
             throw new InvalidOperationException($"Вариантов карты не больше {MapVariants.MaxCount}.");
         var look = Capture(document, Guid.Empty, "Вид");
         var light = look.Lighting ?? new MapLighting();
         var day = look with { Id = newId(), Name = "День", Lighting = light with { Enabled = true, TimeOfDay = DayTime }, PoliticalMode = false };
         var night = look with { Id = newId(), Name = "Ночь", Lighting = light with { Enabled = true, TimeOfDay = NightTime }, PoliticalMode = false };
+        var winter = look with
+        {
+            Id = newId(), Name = "Зима", PoliticalMode = false,
+            Style = MapStyle.For(MapStylePreset.WinterEngraving) with { Enabled = true, Strength = look.Style is { Enabled: true } s ? s.Strength : 1 },
+            Lighting = light with { Enabled = true, TimeOfDay = DayTime },
+        };
         var political = look with
         {
             Id = newId(), Name = "Политическая", PoliticalMode = true,
             Style = look.Style is { } style ? style with { Enabled = false } : null,
             Lighting = look.Lighting is { } own ? own with { Enabled = false } : null,
         };
-        var added = variants with { Items = [.. variants.Items, day, night, political], Active = day.Id };
+        var added = variants with { Items = [.. variants.Items, day, night, winter, political], Active = day.Id };
         added.Validate();
         return WithLook(document, day) with { Variants = added };
     }

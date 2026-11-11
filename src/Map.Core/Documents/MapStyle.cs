@@ -98,6 +98,19 @@ public sealed record MapStyle
     public static MapStyle For(MapStylePreset preset) => preset switch
     {
         MapStylePreset.BlueprintSurvey => new MapStyle { Preset = preset, Paper = new(true, 1) },
+        MapStylePreset.WinterEngraving => new MapStyle
+        {
+            Preset = preset, Pen = new(true, 1), CrossHatch = new(true, 1), Contour = new(true, 1), Sea = new(true, 1), Paper = new(true, 1),
+        },
+        MapStylePreset.WinterBlizzard => new MapStyle
+        {
+            Preset = preset, Edges = new(true, 1), Granulation = new(true, 1), Mist = new(true, 1), Strokes = new(true, 1),
+            Sea = new(true, 1), Paper = new(true, 1),
+        },
+        MapStylePreset.WinterWoodblock => new MapStyle
+        {
+            Preset = preset, Crest = new(true, 1), WoodGrain = new(true, 1), Strokes = new(true, 1), Sea = new(true, 1), Coast = new(true, 1),
+        },
         MapStylePreset.MoonlightHasui => new MapStyle
         {
             Preset = preset, Crest = new(true, 1), WoodGrain = new(true, 1), Sea = new(true, 1), WaterLines = new(true, 1),
@@ -145,6 +158,13 @@ public sealed record MapStyle
             [StyleEffectKind.Crest, StyleEffectKind.Sea, StyleEffectKind.WaterLines, StyleEffectKind.WoodGrain],
         MapStylePreset.MoonlightPastel =>
             [StyleEffectKind.Strokes, StyleEffectKind.Coast, StyleEffectKind.WaterLines, StyleEffectKind.Paper],
+        MapStylePreset.WinterEngraving =>
+            [StyleEffectKind.Pen, StyleEffectKind.CrossHatch, StyleEffectKind.Contour, StyleEffectKind.Sea, StyleEffectKind.Paper],
+        MapStylePreset.WinterBlizzard =>
+            [StyleEffectKind.Edges, StyleEffectKind.Granulation, StyleEffectKind.Mist, StyleEffectKind.Strokes,
+             StyleEffectKind.Sea, StyleEffectKind.Paper],
+        MapStylePreset.WinterWoodblock =>
+            [StyleEffectKind.Crest, StyleEffectKind.WoodGrain, StyleEffectKind.Strokes, StyleEffectKind.Sea, StyleEffectKind.Coast],
         MapStylePreset.BlueprintSurvey =>
             [StyleEffectKind.Grid, StyleEffectKind.FormLines, StyleEffectKind.Crest,
              StyleEffectKind.WaterLines, StyleEffectKind.Paper],
@@ -300,6 +320,12 @@ public enum MapStylePreset
     BlueprintSurvey = 13,
     MoonlightHasui = 14,
     MoonlightPastel = 15,
+    /// <summary>«Зима» (DEC-097): «Гравюра по снегу».</summary>
+    WinterEngraving = 16,
+    /// <summary>«Зима»: «Акварель метели».</summary>
+    WinterBlizzard = 17,
+    /// <summary>«Зима»: «Японская гравюра зимой».</summary>
+    WinterWoodblock = 18,
 }
 
 /// <summary>Where the glints of «Лунная ночь» lie on the water.</summary>

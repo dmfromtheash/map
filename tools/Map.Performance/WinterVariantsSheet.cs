@@ -45,7 +45,6 @@ internal static class WinterVariantsSheet
         var (document, source, images) = SampleMap();
         var scene = Prepare(document, source);
         using var names = RenderLayers(document, source, l => l.Name == "Подписи");
-        foreach (var image in images.Values) image.Dispose();
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(options.OutputPath))!);
 
         var looks = new (string Id, Func<Scene, float[]> Paint, Action<SKCanvas>? Over)[]
@@ -67,7 +66,16 @@ internal static class WinterVariantsSheet
             Save(report, options, "winter-" + id, sheet, 1400, null);
             Save(report, options, "winter-" + id + "-zoom", sheet, 1400, new SKRectI(380, 170, 1780, 1045));
         }
-        report.GatePassed = report.Images.Count == looks.Length * 2;
+        // The chosen looks as the program's own styles (DEC-097): the same map with the style on, through the export renderer.
+        foreach (var preset in new[] { MapStylePreset.WinterEngraving, MapStylePreset.WinterBlizzard, MapStylePreset.WinterWoodblock })
+        {
+            var styled = document with { Style = MapStyle.For(preset) with { Enabled = true } };
+            using var sheet = RenderMap(styled, source, SeaColor);
+            Save(report, options, "style-" + preset, sheet, 1400, null);
+            Save(report, options, "style-" + preset + "-zoom", sheet, 1400, new SKRectI(380, 170, 1780, 1045));
+        }
+        report.GatePassed = report.Images.Count == looks.Length * 2 + 6;
+        foreach (var image in images.Values) image.Dispose();
         return report;
     }
 

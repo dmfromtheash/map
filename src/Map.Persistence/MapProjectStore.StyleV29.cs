@@ -24,6 +24,9 @@ public static partial class MapProjectStore
         [MapStylePreset.BlueprintSurvey] = "blueprint-survey",
         [MapStylePreset.MoonlightHasui] = "moonlight-hasui",
         [MapStylePreset.MoonlightPastel] = "moonlight-pastel",
+        [MapStylePreset.WinterEngraving] = "winter-engraving",
+        [MapStylePreset.WinterBlizzard] = "winter-blizzard",
+        [MapStylePreset.WinterWoodblock] = "winter-woodblock",
     };
 
     private static readonly IReadOnlyDictionary<MoonScatter, string> MoonScatterNames = new Dictionary<MoonScatter, string>
@@ -34,6 +37,13 @@ public static partial class MapProjectStore
     };
 
     private static bool HasMoonScatterV48(MapStyle? style) => style is { MoonScatter: not MoonScatter.OpenWater };
+
+    /// <summary>The «Зима» styles need schema v52: an older reader does not know their names.</summary>
+    private static bool HasWinterV52(MapStyle? style) =>
+        style is { Preset: MapStylePreset.WinterEngraving or MapStylePreset.WinterBlizzard or MapStylePreset.WinterWoodblock };
+
+    private static bool HasWinterV52(MapStyle? style, MapVariants variants) =>
+        HasWinterV52(style) || variants.Items.Any(v => HasWinterV52(v.Style));
 
     private static MapStyleDto? ToStyleDto(MapStyle? style)
     {

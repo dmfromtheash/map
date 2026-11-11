@@ -39,7 +39,7 @@ public sealed class MapVariantTests
         Assert.True(editor.AddStarterMapVariants());
         Assert.Equal(depth + 1, editor.Session.UndoDepth);
         var document = editor.Session.Document;
-        Assert.Equal(["День", "Ночь", "Политическая"], document.Variants.Items.Select(v => v.Name));
+        Assert.Equal(["День", "Ночь", "Зима", "Политическая"], document.Variants.Items.Select(v => v.Name));
         Assert.Equal(IdOf(editor, "День"), document.Variants.Active);
         Assert.Equal(MapVariantEditing.DayTime, document.Lighting!.TimeOfDay);
         Assert.Equal(before.Style, document.Style);

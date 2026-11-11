@@ -51,6 +51,7 @@ v1–v3 открываются только через migration-copy до v4. �
 | v49 | `CliffScreeSchemaVersion` | осыпь у подножия обрыва: `landStyle.cliff.scree` (`two-benches`, `wall-and-bench`, `pen-steps`, `broken-benches`) и `screeWidth`; пишутся только когда осыпь есть; неизвестное имя — ошибка чтения | R12, DEC-090, 2026-11-10 |
 | v50 | `VariantsSchemaVersion` | именованные варианты карты `scene.variants`: `active` и до 12 `items` (`id`, `name` до 60 знаков, `hidden` — скрытые слои, `style`, `lighting` без огней, `political`); выбранный пишется с видом карты на момент сохранения; пишется только когда варианты есть | R09e, DEC-095, 2026-11-11 |
 | v51 | `HandoutSchemaVersion` | хендаут карты `scene.handout`: `found`, `burnt`, `scroll-ink`, `scroll-bone`, `portolan-skin`; пишется только когда выбран; неизвестное имя — ошибка чтения | R09f, DEC-096, 2026-11-11 |
+| v52 | `WinterSchemaVersion` | стили «Зима» `style.preset`: `winter-engraving`, `winter-blizzard`, `winter-woodblock` — в стиле карты, варианте или версии | R09, DEC-097, 2026-11-11 |
 
 ## Вид в изометрии — schema v47 (план 2.3, 2026-10-31)
 

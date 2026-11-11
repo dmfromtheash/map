@@ -69,6 +69,8 @@ public static partial class MapProjectStore
         layers.OfType<BaseColorLayer>().Any(page => page.Sea is { NeedsMannersSchema: true });
 
     private static int SchemaFor(MapDocument document) =>
+        HasWinterV52(document.Style, document.Variants) || document.Checkpoints.Any(c => HasWinterV52(c.Snapshot.Style, c.Snapshot.Variants))
+            ? MapProjectFormat.WinterSchemaVersion :
         document.Handout != MapHandout.None || document.Checkpoints.Any(c => c.Snapshot.Handout != MapHandout.None)
             ? MapProjectFormat.HandoutSchemaVersion :
         !document.Variants.IsDefault || document.Checkpoints.Any(c => !c.Snapshot.Variants.IsDefault)

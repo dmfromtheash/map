@@ -45,7 +45,7 @@ public sealed partial class EditorViewModel
         return true;
     }
 
-    /// <summary>Adds «День», «Ночь» and «Политическая» made from the look of the map, and shows «День».</summary>
+    /// <summary>Adds «День», «Ночь», «Зима» and «Политическая» made from the look of the map, and shows «День».</summary>
     public bool AddStarterMapVariants()
     {
         if (Session.Document.Variants.Items.Length + 3 > MapVariants.MaxCount)
@@ -53,8 +53,8 @@ public sealed partial class EditorViewModel
             StatusDetail = $"Вариантов карты не больше {MapVariants.MaxCount}.";
             return false;
         }
-        if (!ExecuteVariants("Варианты «День», «Ночь», «Политическая»", MapVariantEditing.AddStarters(Session.Document, Guid.NewGuid))) return false;
-        StatusDetail = "Добавлены варианты «День», «Ночь» и «Политическая»; показан «День».";
+        if (!ExecuteVariants("Варианты «День», «Ночь», «Зима», «Политическая»", MapVariantEditing.AddStarters(Session.Document, Guid.NewGuid))) return false;
+        StatusDetail = "Добавлены варианты «День», «Ночь», «Зима» и «Политическая»; показан «День».";
         return true;
     }
 

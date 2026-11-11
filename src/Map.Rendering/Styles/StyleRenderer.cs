@@ -39,6 +39,7 @@ public static partial class StyleRenderer
         }
 
         var (bare, names) = Split(document);
+        if (WinterShader.Applies(style.Preset)) bare = WinterShader.Frozen(bare);
         var gpu = options.IsExport ? null : options.GpuContext;
         var kind = IsPainter(style.Preset) ? 2 : IsPrint(style.Preset) ? 1 : 0;
         var key = KeyFor(bare, options, gpu, m, device, kind);
@@ -136,7 +137,9 @@ public static partial class StyleRenderer
         // ink on its paper (owner, 2026-11-10: «нужно. и с другими стилями также»).
         if (kind != 0 && StyleOverlayFor(bare, kind) is { } overlay)
         {
-            using var multiply = new SKPaint { BlendMode = SKBlendMode.Multiply };
+            // «Зима»: the walls and roads take the medium's ink, and only their dark parts (the snow stays white).
+            using var ink = WinterShader.Applies(style.Preset) ? WinterShader.OverlayInk(style.Preset) : null;
+            using var multiply = new SKPaint { BlendMode = SKBlendMode.Multiply, ColorFilter = ink };
             canvas.SaveLayer(multiply);
             drawNames(canvas, overlay, options.ForStyleOverlay());
             canvas.Restore();
@@ -353,7 +356,9 @@ public static partial class StyleRenderer
     {
         var w = buffers.Scene.Width - 2 * buffers.Margin;
         var h = buffers.Scene.Height - 2 * buffers.Margin;
-        using var shader = buffers.Painter is { } moon && MoonlightShader.Applies(style.Preset)
+        using var shader = buffers.Painter is { } winter && WinterShader.Applies(style.Preset)
+            ? WinterShader.Build(buffers.Scene, winter.WetBig, winter.Geo, buffers.Origin, buffers.DocPerPx, buffers.DocumentSize, style)
+            : buffers.Painter is { } moon && MoonlightShader.Applies(style.Preset)
             ? MoonlightShader.Build(buffers.Scene, moon.WetBig, moon.Facets, moon.WetFeatures, moon.Direction, moon.Geo,
                 buffers.Origin, buffers.DocPerPx, style)
             : buffers.Painter is { } blue && BlueprintShader.Applies(style.Preset)
@@ -376,7 +381,7 @@ public static partial class StyleRenderer
         if (isExport && gpu is null && Environment.ProcessorCount > 1 && (long)w * h >= 256 * 256
             && (style.Preset == MapStylePreset.WatercolorBigShapes || OilShader.Applies(style.Preset)
                 || CharcoalShader.Applies(style.Preset) || BlueprintShader.Applies(style.Preset)
-                || MoonlightShader.Applies(style.Preset)))
+                || MoonlightShader.Applies(style.Preset) || WinterShader.Applies(style.Preset)))
             return ShadeCpuBands(shader, w, h, buffers.Margin);
         using var output = NewSurface(gpu, w, h, SKColorType.Rgba8888);
         if (output is null) return null;

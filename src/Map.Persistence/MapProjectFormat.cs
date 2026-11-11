@@ -170,7 +170,10 @@ public static class MapProjectFormat
     public const int VariantsSchemaVersion = 50;
     /// <summary>R09f (2026-11-11): the handout of the map — the old sheet it is exported on (<c>scene.handout</c>).</summary>
     public const int HandoutSchemaVersion = 51;
-    public const int MaxSupportedSchemaVersion = HandoutSchemaVersion;
+
+    /// <summary>R09 (2026-11-11): the «Зима» styles <c>winter-engraving</c>, <c>winter-blizzard</c>, <c>winter-woodblock</c>.</summary>
+    public const int WinterSchemaVersion = 52;
+    public const int MaxSupportedSchemaVersion = WinterSchemaVersion;
 
     /// <summary>
     /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry
