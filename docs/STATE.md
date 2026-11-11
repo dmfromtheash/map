@@ -13,7 +13,7 @@
 - CI (DEC-086): только `main` с кодом; ждать `quick` (~5 мин), `full` (~25 мин) — до закрытия пакета.
 - Map.slnx тестовые проекты **не собирает** — `dotnet test` без `--no-build` или собрать тестовый проект.
 - Перед смоуками `dotnet build-server shutdown`. Память DM: при открытом браузере свободно ~6–8 ГБ — тяжёлые прогоны по одному.
-- Копия владельца `C:\Users\Leshe\Apps\Map` — `tools/ai/publish-local-r2r.ps1` при закрытой Map (обновлена 10.11 14:32, `4761a4d`).
+- Копия владельца `C:\Users\Leshe\Apps\Map` — `tools/ai/publish-local-r2r.ps1` при закрытой Map (обновлена 11.11 22:34, `9c952bc`).
 - **Sol, Astra, ChatGPT** — каждый раз спросить владельца (DEC-089). 11.11 Sol рисовал листы хендаутов; экран — только фон.
 - **Ноутбук USER** (`user1`, DEC-083) — замеры и живые проверки только по слову владельца.
 - Листы вариантов рендером программы: `--profile water-variants-sheet`, `--profile style-packs-sheet`; хендауты — `--profile handouts`; зима — `--profile winter-variants-sheet`.
