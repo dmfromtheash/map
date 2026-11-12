@@ -22,7 +22,8 @@ public sealed class PanelDemoTests : IDisposable
         editor.SetStampScalePercent(130, true);
         var before = editor.Session.Document; var depth = editor.Session.UndoDepth;
         var sha = editor.CurrentVariant!.Sha256;
-        foreach (var kind in Enum.GetValues<PanelDemoKind>())
+        // The generation panels' cards are made by GenerationDemos (their own test below), not by the asset panel's PanelDemo.
+        foreach (var kind in Enum.GetValues<PanelDemoKind>().Where(k => !k.IsGeneration()))
         {
             for (var frame = 0; frame < 10; frame++)
             {
@@ -36,6 +37,23 @@ public sealed class PanelDemoTests : IDisposable
         }
         Assert.Same(before, editor.Session.Document);
         Assert.Equal(depth, editor.Session.UndoDepth);
+    }
+
+    [Fact]
+    public void Every_generation_card_of_the_hex_world_and_continent_has_ten_frames_and_leaves_the_map_alone()
+    {
+        var editor = Editor(withAsset: true);
+        var before = editor.Session.Document;
+        foreach (var kind in Enum.GetValues<PanelDemoKind>().Where(k => k.IsGeneration() && !k.IsArea()))
+        {
+            var work = editor.GenerationDemo(kind, out var signature);
+            Assert.NotNull(work);
+            Assert.False(string.IsNullOrEmpty(signature));
+            var frames = work!();
+            Assert.Equal(GenerationDemos.Frames, frames.Count);
+            Assert.All(frames, f => Assert.True(f.View.Right > f.View.Left && f.View.Bottom > f.View.Top));
+        }
+        Assert.Same(before, editor.Session.Document);
     }
 
     [Fact]
