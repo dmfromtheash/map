@@ -438,8 +438,9 @@ public sealed class AssetCatalogApplication : Application
         var expectedGroundCards = MapFillTextures.Of(MapFillTextureKind.Ground)
             .Where(t => MapTextureLibrary.Image(t.Id) is not null).Select(t => "MaterialCatalog_" + t.Id).ToHashSet();
         Check("material catalog shows only available content", dialog.IsVisible
-            && expectedGroundCards.SetEquals(dialog.GetVisualDescendants().OfType<WrapPanel>()
-                .Single(t => t.Name == "MaterialCatalogTiles").Children.Select(c => c.Name)));
+            && expectedGroundCards.SetEquals(dialog.GetVisualDescendants().OfType<StackPanel>()
+                .Single(t => t.Name == "MaterialCatalogTiles").Children.OfType<WrapPanel>()
+                .SelectMany(row => row.Children).Select(c => c.Name)));
         Capture(dialog, "empty-materials-catalog");
         dialog.Close();
 

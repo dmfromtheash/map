@@ -10,14 +10,19 @@ internal sealed record PerformanceOptions(
     int MeasuredIterations,
     string OutputPath)
 {
+    public IReadOnlyList<string> Catalogs { get; init; } = [];
+    public bool DryRun { get; init; }
+
     public static PerformanceOptions Parse(string[] args)
     {
         var profile = "stage13a";
-        var objectCount = 50_000;
+        int? requestedObjectCount = null;
         var seed = 13_013;
         var warmup = 1;
         var iterations = 5;
         string? output = null;
+        var catalogs = new List<string>();
+        var dryRun = false;
 
         for (var index = 0; index < args.Length; index++)
         {
@@ -37,7 +42,7 @@ internal sealed record PerformanceOptions(
                     profile = Value("--profile");
                     break;
                 case "--object-count":
-                    objectCount = int.Parse(Value("--object-count"), CultureInfo.InvariantCulture);
+                    requestedObjectCount = int.Parse(Value("--object-count"), CultureInfo.InvariantCulture);
                     break;
                 case "--seed":
                     seed = int.Parse(Value("--seed"), CultureInfo.InvariantCulture);
@@ -51,12 +56,23 @@ internal sealed record PerformanceOptions(
                 case "--output":
                     output = Value("--output");
                     break;
+                case "--catalogs":
+                    var selected = Value("--catalogs").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+                    if (selected.Length == 0) throw new ArgumentException("--catalogs: список каталогов пуст.");
+                    catalogs.AddRange(selected);
+                    break;
+                case "--dry-run":
+                    dryRun = true;
+                    break;
                 default:
                     throw new ArgumentException($"Unknown option: {args[index]}");
             }
         }
 
         var normalizedProfile = profile.Trim().ToLowerInvariant();
+        if (normalizedProfile != "drive-library" && (catalogs.Count > 0 || dryRun))
+            throw new ArgumentException("--catalogs и --dry-run доступны только для drive-library.");
+        var objectCount = requestedObjectCount ?? (normalizedProfile == "drive-library" ? 100 : 50_000);
         var isLargestMapStress = normalizedProfile is
             "native-largest-map-stress" or "native-largest-map-assets-only";
         var minimumObjectCount = isLargestMapStress ? 4 : 1;
@@ -83,7 +99,9 @@ internal sealed record PerformanceOptions(
             FindRepositoryRoot(Environment.CurrentDirectory),
             "tmp",
             "performance",
-            $"stage13-{profile}-{objectCount}-{DateTime.UtcNow:yyyyMMdd-HHmmss}.json");
+            normalizedProfile == "drive-library"
+                ? $"stage13-{profile}-{objectCount}-{DateTime.UtcNow:yyyyMMdd-HHmmss}-{Guid.NewGuid():N}.json"
+                : $"stage13-{profile}-{objectCount}-{DateTime.UtcNow:yyyyMMdd-HHmmss}.json");
 
         return new PerformanceOptions(
             normalizedProfile,
@@ -91,7 +109,11 @@ internal sealed record PerformanceOptions(
             seed,
             warmup,
             iterations,
-            Path.GetFullPath(output));
+            Path.GetFullPath(output))
+        {
+            Catalogs = [.. catalogs.Distinct(StringComparer.OrdinalIgnoreCase)],
+            DryRun = dryRun,
+        };
     }
 
     private static string FindRepositoryRoot(string start)

@@ -102,11 +102,22 @@ else if (options.Profile == "generation-cards-sheet")
 }
 else if (options.Profile == "drive-library")
 {
-    var batch = DriveLibraryBatch.Run(options); report = batch; gatePassed = batch.GatePassed;
-    Console.WriteLine($"  batch {batch.Batch}: {batch.Sets.Count} sets, {batch.Files} files, passed {batch.Sets.Count(s => s.Passed)}");
-    foreach (var note in batch.Notes) Console.WriteLine($"  {note.Key} = {note.Value}");
-    foreach (var set in batch.Sets.Where(s => !s.Passed)) Console.WriteLine($"  FAIL {set.Key}: found={set.Found} read={set.Readable}/{set.Variants} thumbs={set.Thumbnails} drawn={set.Drawn}");
-    foreach (var image in batch.Images) Console.WriteLine($"  image {image}");
+    var batches = DriveLibraryBatch.Run(options); report = batches; gatePassed = batches.All(batch => batch.GatePassed);
+    foreach (var batch in batches)
+    {
+        Console.WriteLine($"  {batch.Catalog}, пакет {batch.Batch}: наборов {batch.Sets.Count}, файлов {batch.Files}, проверено {batch.Sets.Count(s => s.Passed)}{(batch.DryRun ? " (план)" : "")}");
+        foreach (var note in batch.Notes) Console.WriteLine($"  {note.Key} = {note.Value}");
+        if (batch.DryRun)
+            foreach (var set in batch.Sets)
+            {
+                Console.WriteLine($"  {set.Key}: {set.Name}");
+                foreach (var input in set.Inputs) Console.WriteLine($"    {input}");
+            }
+        foreach (var failure in batch.Failures) Console.WriteLine($"  ОШИБКА {failure}");
+        foreach (var image in batch.Images) Console.WriteLine($"  image {image}");
+    }
+    // A dry run has no report file, state migration, marker update, or other writes.
+    if (options.DryRun) return gatePassed ? 0 : 2;
 }
 else if (options.Profile == "style-packs-sheet")
 {
