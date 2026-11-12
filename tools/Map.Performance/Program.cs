@@ -95,6 +95,11 @@ else if (options.Profile == "water-variants-sheet")
     foreach (var note in sheet.Notes) Console.WriteLine($"  {note.Key} = {note.Value}");
     foreach (var image in sheet.Images) Console.WriteLine($"  image {image}");
 }
+else if (options.Profile == "generation-cards-sheet")
+{
+    var sheet = GenerationCardsSheet.Run(options); report = sheet; gatePassed = sheet.GatePassed;
+    foreach (var note in sheet.Notes) Console.WriteLine($"  {note.Key} = {note.Value}");
+}
 else if (options.Profile == "style-packs-sheet")
 {
     var sheet = StylePacksSheet.Run(options); report = sheet; gatePassed = sheet.GatePassed;
