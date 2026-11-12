@@ -12,10 +12,22 @@
 «всё внутри пространства, не выходило за пределы», «ничего случайно не закрой и не удали вне рабочего процесса»,
 «постоянно следи за маком, он часто виснет; если есть проблемы — пиши мне». Отчёт о процентах — по просьбе.
 
-## Что работает в фоне (FACT на 22:11 12.11; могло завершиться или упасть — проверь)
+## ВСЁ ОСТАНОВЛЕНО (владелец, 12.11 22:40) — запустить заново после проверок входа
+Остановлено штатно: подача, Mac-обработчик (STOP, последнее готовое задание забрано), ПК-апскейл (процессы и пул; папка
+партии `work\upscale2-*` удалена, `.tmp` нет). На Mac в очереди одно непереданное задание `j1794515916210` (READY) —
+подача подхватит его сама. Агенты Sol на Mac все закончили. **Итог: 12 323/39 081 (31,5 %): ПК 8 471, Mac 3 852.**
+Порядок запуска: (1) ПК-апскейл `start-process cmd /c H:\MapLibrary\pipeline\start_upscale.cmd` (скрыто);
+(2) Mac: ssh → `source ~/MapWork/env.sh` → проверить версии (`python -c "import PIL,numpy,scipy;print(…)"` = 12.2.0,
+2.5.1, 1.18.0) и md5 `~/MapWork/upscale/finish_asset.py` = `H:\MapLibrary\pipeline\finish_asset.py` → запустить
+обработчик (команда ниже); (3) подача `start-process cmd /c H:\MapLibrary\pipeline\start_mac_feeder.cmd` (скрыто);
+(4) через 2–3 мин — первая строка `ok N bad M` в `mac_feeder.log` и новые строки в `upscale.log`.
+
+## Как устроен апскейл на двух узлах
 - **ПК-апскейл:** `H:\MapLibrary\pipeline\start_upscale.cmd` → `sol\sol1\run_upscale2.py` (процессы `py`/`python`
   `run_upscale2` + `realesrgan-ncnn-vulkan`), лог `H:\MapLibrary\upscale.log`, журнал `upscaled\manifest.jsonl`.
   Идёт с НАЧАЛА `lists\all.txt`, ≈1 800 файлов/ч. Упал — перезапусти тем же `.cmd` (готовое не переделывается).
+  Останавливать: процессы `run_upscale2`, `realesrgan-ncnn-vulkan` и пул `python -c "from multiprocessing…"` с родителем
+  `run_upscale2` (иначе 6 процессов пула остаются); затем удалить `work\upscale2-*` (временные PNG партии, ~1,4 ГБ).
 - **Подача на Mac (ПК):** `pipeline\start_mac_feeder.cmd` → `mac_feeder.py` (один процесс, замок `work\mac_feeder.lock`),
   лог `H:\MapLibrary\mac_feeder.log`. Берёт файлы с КОНЦА списка, шлёт задания по 60, забирает WebP, сверяет SHA и
   размер, пишет `upscaled\manifest-mac.jsonl` / `failed-mac.jsonl`. Брак переотправляется только при перезапуске.
@@ -27,8 +39,8 @@
   (`pgrep -f "^python mac_worker.py"`), НЕ по `pgrep -f mac_worker.py` (найдёт саму команду). Запуск:
   `cd ~/MapWork/upscale && nohup caffeinate -is python mac_worker.py 6 >> worker.out 2>&1 < /dev/null &`.
 - Ход: `py -3.13 H:\MapLibrary\sol\sol1\progress.py` (только ПК) + число `ok` в `manifest-mac.jsonl` (уникальные rel).
-  На 22:11: ПК 7 598, Mac 2 312, вместе 9 910/39 081 (25 %). Mac: 3 000–4 000/ч на мелких превью (их 8 825 в конце
-  списка), ≈540/ч на обычных. Общий конец ≈ через 10 ч от 22:00 12.11.
+  Скорость: ПК ≈1 800/ч; Mac 3 000–4 000/ч на мелких превью (в конце списка их осталось ~4 000), ≈540/ч на обычных.
+  Остаток 26 758 файлов ≈ 11–12 ч на двух узлах.
 
 ## Mac — пространство `~/MapWork` (DEC-104)
 - Всё внутри: `env.sh` (PATH, uv, кэши, TMPDIR), `.venv` (Python 3.13.7, numpy 2.5.1, scipy 1.18.0, Pillow 12.2.0 —
