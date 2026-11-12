@@ -81,6 +81,44 @@ internal static class AreaBeautySheet
             return area;
         }
 
+        // MAP_AREA_VARIANTS=range|massif (G1): six seeds of one pattern side by side, to judge variety against the references.
+        if (Environment.GetEnvironmentVariable("MAP_AREA_VARIANTS") is "range" or "massif" && layout5)
+        {
+            var isRange = Environment.GetEnvironmentVariable("MAP_AREA_VARIANTS") == "range";
+            const int cw = 1500, ch = 900;
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(options.OutputPath))!);
+            using var sheet = SKSurface.Create(new SKImageInfo(cw * 3 / 2, ch * 2 / 2));
+            sheet.Canvas.Clear(SKColor.Parse(paper));
+            var stamps = new Images(images);
+            for (var i = 0; i < 6; i++)
+            {
+                var id = LayerId.New();
+                var doc = new MapDocument(DocumentId.New(), "G1", DateTimeOffset.UnixEpoch, new CanvasDefinition(cw, ch, "px", paper),
+                    [CurrentLook.Page("Море"), CurrentLook.LandEverywhere(cw, ch), new ObjectLayer(id, "Горы", true, false, 1, [])], [.. assets]);
+                var seed = 1000 + i * 7919;
+                var a = isRange
+                    ? Area("Хребет", mountains, 170, 85, 30, PlacementAreaPattern.Ridge, true, seed,
+                        (80, 250), (700, 120), (1420, 260), (1430, 680), (760, 800), (90, 660))
+                    : Area("Массив", massifVariants, 150, 80, 30, PlacementAreaPattern.Peaks, true, seed,
+                        (120, 120), (1380, 140), (1420, 780), (100, 790));
+                doc = new PlacementAreaCommand(id, a.Id, a, a.Name).Apply(doc);
+                var c = sheet.Canvas; c.Save();
+                c.Translate(i % 3 * cw / 2f, i / 3 * ch / 2f); c.Scale(.5f);
+                c.ClipRect(new SKRect(0, 0, cw, ch));
+                SceneRenderer.Render(c, doc, new RenderOptions { IsExport = true, Stamps = stamps, VisibleWorld = new WorldBounds(0, 0, cw, ch), ViewScale = .5 });
+                using var ink = new SKPaint { Color = SKColors.Black, IsAntialias = true };
+                using var font = new SKFont(SKTypeface.Default, 34);
+                c.DrawText($"seed {seed}", 20, 50, font, ink);
+                c.Restore();
+            }
+            var path = Path.ChangeExtension(options.OutputPath, $".{(isRange ? "ranges" : "massifs")}.png");
+            using (var image = sheet.Snapshot()) using (var data = image.Encode(SKEncodedImageFormat.Png, 90)) using (var output = File.Create(path)) data.SaveTo(output);
+            report.Images.Add(path);
+            foreach (var image in images.Values) image.Dispose();
+            report.GatePassed = true;
+            return report;
+        }
+
         // MAP_AREA_LAYOUT=5 (G1, 2026-11-12): the same areas in layout 5 — the range in size classes, the massif as «Горный массив».
         var massif = layout5
             ? Area("Массив владельца", massifVariants, 150, 70, 30, PlacementAreaPattern.Peaks, true, 9127,

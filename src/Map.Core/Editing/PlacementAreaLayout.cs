@@ -210,7 +210,8 @@ internal sealed class PlacementAreaLayout
     // massifs of short ranges, each a dominant peak with satellites. The class of a peak follows its place in the
     // range, not chance. Density adds them in that order: spine, shoulders, parallel ranges, foothills.
 
-    private const double Big = 1, Mid = .62, Hill = .34;
+    // Measured on the references: heights about 1 : 0.52–0.62 : 0.29–0.34.
+    private const double Big = 1, Mid = .56, Hill = .3;
 
     /// <summary>A peak of class <paramref name="tier"/>; the size variation only jitters within the class.</summary>
     private void Put(int cellX, int cellY, List<PlacementAreaComposition.Sample> result,
@@ -226,127 +227,181 @@ internal sealed class PlacementAreaLayout
         result.Add(new(true, scale, priority, Math.Clamp(activation, 1, 100), point));
     }
 
-    private void Range(int cellX, int cellY, List<PlacementAreaComposition.Sample> result)
-    {
-        var origin = _area.CompositionOrigin;
-        double w = _width, h = _height;
-        var centerX = cellX * 100 + 50 - origin.X; var centerY = cellY * 100 + 50 - origin.Y;
-        var projected = centerX * _cos + centerY * _sin;
-        var step = w * .55;
-        var reach = 72 + w * 2.0;
-        var first = (int)Math.Floor((projected - reach) / step) - 1;
-        var last = (int)Math.Ceiling((projected + reach) / step) + 1;
-        void At(double u, double v, double tier, double activation, int role, int column, int row, uint salt) =>
-            Put(cellX, cellY, result, origin.X + u * _cos - v * _sin, origin.Y + u * _sin + v * _cos, tier, activation, role, column, row, salt);
+    /// <summary>
+    /// A range as reference maps draw it: a band of mountains along a smooth axis, packed so each nearer peak hides the
+    /// foot of the one behind. A peak's class follows its place in the band — big on the crest in the middle of the
+    /// length, mid on the flanks and toward the ends, hills at the band's edge and beyond it in loose groups. The seed
+    /// chooses the range's character: the axis an arc, an S, a wave or a kinked line; the band broad or narrow; 0–3
+    /// spurs branching at 30–60°; how many big peaks the crest carries; a lower parallel ridge beyond a valley or not.
+    /// </summary>
+    private void Range(int cellX, int cellY, List<PlacementAreaComposition.Sample> result) =>
+        Range(cellX, cellY, result, _area.CompositionOrigin, _cos, _sin, _halfLength, 0, false);
 
-        for (var k = first; k <= last; k++)
+    /// <param name="id">One range of a massif's knot (0 for a range area): its own character and random draws.</param>
+    /// <param name="knot">Part of a massif: no parallel ridge, at most one spur — the other ranges of the knot are its neighbours.</param>
+    private void Range(int cellX, int cellY, List<PlacementAreaComposition.Sample> result,
+        VectorPoint origin, double axisCos, double axisSin, double length, int id, bool knot)
+    {
+        double w = _width, h = _height;
+        double Pick(uint salt) => Draw(id, 0, 500 + salt);
+        var seedPart = id * 977;
+        var shape = (int)(Pick(1) * 4);                       // 0 arc, 1 S, 2 wave, 3 kink
+        var bend = (Pick(2) < .5 ? -1 : 1) * (.08 + .12 * Pick(3)) * length;
+        // Half-width of the band at its middle; a massif's arms are narrower ridges, or the knot becomes a blanket.
+        var broad = h * (1.0 + .8 * Pick(4)) * (knot ? (id == 1 ? .8 : .6) : 1);
+        var crest = .55 + .3 * Pick(5);                       // share of the middle that carries big peaks
+        // 1–3 summits rise above the crest; 0–2 passes cut it, where the range drops to hills (a road's way across).
+        var summits = Enumerable.Range(0, 1 + (int)(Pick(15) * 2.99)).Select(i => (Pick(60 + (uint)i) - .5) * 1.1 * length).ToArray();
+        var passes = Enumerable.Range(0, Pick(16) < .45 ? 0 : Pick(17) < .7 ? 1 : 2).Select(i => (Pick(70 + (uint)i) - .5) * 1.4 * length)
+            .Where(p => summits.All(s => Math.Abs(p - s) > w * 1.2)).ToArray();
+        double Axis(double u)
         {
-            // The spine: big peaks every other step in the middle, mid ones between, hills where the range ends.
-            var u = (k + .2 * (Draw(k, 0, 101) - .5)) * step;
-            var end = Math.Abs(u) / _halfLength;
-            if (end > 1.12) continue;
-            var central = Math.Clamp(1 - Math.Pow(end, 1.7), 0, 1);
-            // The middle of the range is a continuous chain of big peaks, each overlapping the next; toward the ends mid
-            // peaks, then hills. Now and then a mid peak breaks the chain, so the crest steps up and down.
-            var tier = end > 1 ? Hill : central > .5 ? (Draw(k, 0, 102) < .82 ? Big : Mid) : central > .18 ? Mid : Hill;
-            // Each peak shifts to the other side of the spine (the ridgeline zigzags behind them); a smaller peak comes
-            // forward of its bigger neighbours, its tip against their feet — behind them it would be hidden.
-            var side = tier == Big ? ((k & 1) == 0 ? -1 : 1) : 1;
-            var v = Spine(u) + side * (tier == Big ? .1 + .12 * Draw(k, 0, 103) : .16 + .14 * Draw(k, 0, 103)) * h;
-            At(u, v, tier, tier == Big ? 2 + 14 * Draw(k, 0, 104) : tier == Mid ? 10 + 22 * Draw(k, 0, 104) : 40 + 30 * Draw(k, 0, 104), 0, k, 0, 1);
-            for (var s = -1; s <= 1; s += 2)
+            var t = Math.Clamp(u / length, -1.2, 1.2);
+            return shape switch
             {
-                // Shoulders one class lower on both flanks; then a group of 1–4 hills at the foot.
-                if (Draw(k, s, 105) < .1 || tier == Hill && Draw(k, s, 105) < .5) continue;
-                // The front shoulder stands at the foot; the back one steps aside so its tip shows past the slope.
-                var su = s > 0 ? u + (Draw(k, s, 106) - .5) * .7 * w
-                    : u + (Draw(k, s, 106) < .5 ? -1 : 1) * (.42 + .2 * Draw(k, s, 117)) * w;
-                var sv = v + s * (s > 0 ? .36 + .14 * Draw(k, s, 107) : .2 + .1 * Draw(k, s, 107)) * h * (tier == Big ? 1 : .75);
-                var shoulder = tier == Big ? Mid : Hill;
-                At(su, sv, shoulder, 22 + 26 * Draw(k, s, 108), 1, k, s, 2);
-                // A big peak has a second, lower shoulder further out: the range is broad in its middle.
-                if (tier == Big && Draw(k, s, 117) < .7)
-                    At(su + (Draw(k, s, 118) - .5) * .5 * w, sv + s * (.3 + .1 * Draw(k, s, 119)) * h, Hill * 1.15,
-                        38 + 20 * Draw(k, s, 120), 2, k, s * 2, 6);
-                if (Draw(k, s, 109) < .2) continue;
-                // «Go crazy on the smaller hills»: groups of 2–5 at the foot, of uneven sizes.
-                var count = 2 + (int)(Draw(k, s, 110) * 3.99);
-                var fu = su + (Draw(k, s, 111) - .5) * .8 * w;
-                var fv = sv + s * (.28 + .22 * Draw(k, s, 112)) * h * (shoulder == Mid ? 1 : .75);
-                for (var i = 0; i < count; i++)
-                    At(fu + (i - (count - 1) / 2.0) * .32 * w + (Draw(k, s * (i + 3), 113) - .5) * .15 * w,
-                        fv + s * (Draw(k, s * (i + 3), 114) - .5) * .3 * h, Hill * (.75 + .35 * Draw(k, s * (i + 3), 115)),
-                        52 + 44 * Draw(k, s * (i + 3), 116), 3, k, s * (i + 3), 3);
-            }
-            // A lower parallel range on each side, beyond a valley, shifted along the axis (en échelon).
-            for (var p = -1; p <= 1; p += 2)
+                0 => bend * (1 - t * t),
+                1 => bend * Math.Sin(Math.PI * t),
+                2 => .6 * bend * Math.Sin(2.2 * Math.PI * t + Pick(6) * Math.Tau),
+                _ => bend * (t < Pick(7) - .5 ? (t + 1) / (Pick(7) + .5) : (1 - t) / (1.5 - Pick(7))) - .4 * bend,
+            };
+        }
+        double Width(double u)
+        {
+            var t = Math.Abs(u) / length;
+            // Broad in the middle, tapering in steps to both ends; a slow wobble breaks its symmetry.
+            return t >= 1.1 ? 0 : broad * Math.Pow(Math.Max(0, 1 - t * t / 1.21), .7) * (1 + .18 * Math.Sin(u / (w * 1.7) + Pick(8) * Math.Tau));
+        }
+        var centerX = cellX * 100 + 50 - origin.X; var centerY = cellY * 100 + 50 - origin.Y;
+        var projected = centerX * axisCos + centerY * axisSin;
+        void World(double u, double v, out double x, out double y) { x = origin.X + u * axisCos - v * axisSin; y = origin.Y + u * axisSin + v * axisCos; }
+
+        Band(projected, 72 + w * 1.5, 0, Axis, Width, length, crest, true, seedPart, 0);
+        // Spurs: shorter, narrower bands branching from the crest at 30–60°, mid peaks at the root, hills at the tip.
+        var spurs = knot ? (int)(Pick(9) * 1.6) : (int)(Pick(9) * 3.4);
+        for (var i = 0; i < spurs; i++)
+        {
+            var rootU = (Pick(20 + (uint)i) - .5) * 1.3 * length;
+            var side = Pick(30 + (uint)i) < .5 ? -1 : 1;
+            var angle = side * (30 + 30 * Pick(40 + (uint)i)) * Math.PI / 180 * (Pick(45 + (uint)i) < .5 ? 1 : -1);
+            var spurLength = (.25 + .2 * Pick(50 + (uint)i)) * length;
+            var spurWidth = broad * (.45 + .15 * Pick(55 + (uint)i));
+            double sx = Math.Cos(angle), sy = Math.Sin(angle);
+            var rootV = Axis(rootU);
+            SpurBand(rootU, rootV, sx, sy, spurLength, spurWidth, 1 + i + id * 13);
+        }
+        // A lower parallel ridge beyond a valley, shifted along the axis (en échelon), in half the ranges.
+        if (!knot && Pick(11) < .55)
+        {
+            var side = Pick(12) < .5 ? -1 : 1;
+            var offset = side * (broad * 2.0 + h * .5);
+            var shift = (Pick(13) - .5) * length * .8;
+            var half = length * (.4 + .2 * Pick(14));
+            Band(projected - shift, 72 + w * 1.5, 0, u => .5 * Axis(u + shift) + offset, u => .55 * Width(u * length / half), half, 0, false, seedPart + 4, shift);
+        }
+
+        // Rows of the band, back to front, every row offset by half a step; positions jitter so no row reads as a line.
+        void Band(double around, double reach, double unused, Func<double, double> axis, Func<double, double> width, double half,
+            double crestShare, bool main, int part, double shift)
+        {
+            var rowStep = h * .34;
+            var rows = (int)Math.Ceiling(broad * 1.6 / rowStep) + 1;
+            for (var r = -rows; r <= rows; r++)
             {
-                var shift = p * _halfLength * (.18 + .12 * Draw(p, 0, 121));
-                var half = _halfLength * (.5 + .15 * Draw(p, 0, 123));
-                var pu = (k + .5 + .25 * (Draw(k, p * 9, 124) - .5)) * step;
-                var pe = Math.Abs(pu - shift) / half;
-                if (pe > 1) continue;
-                var pc = 1 - Math.Pow(pe, 1.6);
-                var ptier = pc > .45 && (k & 1) == 0 ? Mid : Hill;
-                var pv = .7 * Spine(pu) + p * (1.45 + .25 * Draw(p, 0, 122)) * h + ((k & 1) == 0 ? .1 : -.1) * h;
-                At(pu, pv, ptier, ptier == Mid ? 34 + 26 * Draw(k, p * 9, 125) : 60 + 30 * Draw(k, p * 9, 125), 2, k, p * 9, 4);
-                if (ptier == Mid && Draw(k, p * 9, 126) > .5)
-                    At(pu + (Draw(k, p * 9, 127) - .5) * .6 * w, pv + p * (.4 + .3 * Draw(k, p * 9, 128)) * h, Hill,
-                        72 + 26 * Draw(k, p * 9, 129), 3, k, p * 9, 5);
+                var v0 = r * rowStep;
+                var d0 = Math.Abs(v0) / broad;
+                // The step follows the class this row mostly gets: big peaks need room, hills pack close.
+                var step = w * (d0 < .3 ? .52 : d0 < .7 ? .42 : .26);
+                var phase = Draw(r, part, 130);
+                var first = (int)Math.Floor((around - reach) / step) - 1;
+                var last = (int)Math.Ceiling((around + reach) / step) + 1;
+                for (var k = first; k <= last; k++)
+                {
+                    var u = (k + phase + .35 * (Draw(k, r * 7 + part, 131) - .5)) * step;
+                    var local = u;
+                    var bw = width(local);
+                    var v = v0 + (Draw(k, r * 7 + part, 132) - .5) * .22 * h;
+                    var d = bw <= 0 ? 9 : Math.Abs(v) / bw;
+                    var along = Math.Abs(local) / half;
+                    var central = Math.Clamp(1 - Math.Pow(along, 1.6), 0, 1);
+                    // Outside the band: only a loose fringe of hills in small groups.
+                    if (d > 1)
+                    {
+                        if (d > 1.7 || Draw(k, r * 7 + part, 133) > .3 - .3 * (d - 1)) continue;
+                        Place(u + shift, axis(local) + v, Hill * (.7 + .3 * Draw(k, r * 7 + part, 134)), 70 + 28 * Draw(k, r * 7 + part, 135), 3, k, r * 7 + part, 7);
+                        continue;
+                    }
+                    double tier;
+                    var summit = main ? summits.Min(s => Math.Abs(local - s)) : double.MaxValue;
+                    var pass = main && passes.Length > 0 ? passes.Min(p => Math.Abs(local - p)) : double.MaxValue;
+                    if (pass < w * .5) { if (d < .5 || Draw(k, r * 7 + part, 139) < .5) continue; tier = Hill * .9; }
+                    else if (main && d < .3 && summit < w * .4) tier = Big * 1.15;
+                    else if (main && d < .32 && central > 1 - crestShare && Draw(k, r * 7 + part, 136) < .85) tier = Big * (pass < w * 1.1 ? .8 : .94);
+                    else if (d < .72 && central > .2) tier = Mid * (1 - .25 * Math.Max(0, d - .4));
+                    else tier = Hill * (1.15 - .3 * d);
+                    // A few flank peaks stay out: the slopes show between them, as on drawn ranges.
+                    if (tier is >= .4 and < .9 && Draw(k, r * 7 + part, 129) < .18) continue;
+                    // Thin the band toward its edge so the outline stays ragged, never a filled polygon.
+                    if (d > .6 && Draw(k, r * 7 + part, 137) < (d - .6) * .9) continue;
+                    var activation = tier >= .9 ? 2 + 18 * (1 - central) + 6 * Draw(k, r * 7 + part, 138)
+                        : tier >= .4 ? 16 + 34 * d + 10 * (1 - central) + 8 * Draw(k, r * 7 + part, 138)
+                        : 44 + 40 * d + 12 * Draw(k, r * 7 + part, 138);
+                    Place(u + shift, axis(local) + v, tier, activation, tier >= .9 ? 0 : tier >= .4 ? 1 : 2, k, r * 7 + part, 8);
+                }
             }
+        }
+
+        void SpurBand(double rootU, double rootV, double sx, double sy, double spurLength, double spurWidth, int part)
+        {
+            var rowStep = h * .34;
+            var rows = (int)Math.Ceiling(spurWidth / rowStep);
+            for (var r = -rows; r <= rows; r++)
+            {
+                var step = w * .3;
+                var count = (int)Math.Ceiling(spurLength / step);
+                for (var k = 1; k <= count; k++)
+                {
+                    var s = (k + .3 * (Draw(k, r * 7 + part * 31, 140) - .5)) * step;
+                    var taper = 1 - s / spurLength;
+                    var bw = spurWidth * Math.Sqrt(Math.Max(0, taper));
+                    var q = r * rowStep + (Draw(k, r * 7 + part * 31, 141) - .5) * .2 * h;
+                    if (bw <= 0 || Math.Abs(q) > bw) continue;
+                    var d = Math.Abs(q) / bw;
+                    if (d > .6 && Draw(k, r * 7 + part * 31, 142) < (d - .6)) continue;
+                    var tier = taper > .55 && d < .4 ? Mid * (.8 + .2 * taper) : Hill * (.8 + .4 * taper);
+                    Place(rootU + s * sx - q * sy, rootV + s * sy + q * sx, tier,
+                        tier >= .4 ? 24 + 30 * (1 - taper) + 8 * d : 46 + 40 * (1 - taper) + 10 * d, tier >= .4 ? 1 : 2, k, r * 7 + part * 31, 9);
+                }
+            }
+        }
+
+        void Place(double u, double v, double tier, double activation, int role, int column, int row, uint salt)
+        {
+            World(u, v, out var x, out var y);
+            Put(cellX, cellY, result, x, y, tier, activation, role, column, row, salt);
         }
     }
 
+    /// <summary>
+    /// A mountain massif as reference maps draw it: not scattered islands but a knot of ranges — a main range through the
+    /// middle and 1–3 side ranges branching from it at 40–75°, each a full range (crest, flanks, hills, summits,
+    /// passes) with its own character. Where they meet the massif is highest; between their arms lie valleys.
+    /// </summary>
     private void Massif(int cellX, int cellY, List<PlacementAreaComposition.Sample> result)
     {
         var origin = _area.CompositionOrigin;
-        double w = _width, h = _height;
-        var gx = w * 2.5; var gy = h * 1.8;
-        var lx = cellX * 100 + 50 - origin.X; var ly = cellY * 100 + 50 - origin.Y;
-        var reach = 72 + w * 2.2;
-        for (var row = (int)Math.Floor((ly - reach) / gy) - 1; row <= (int)Math.Ceiling((ly + reach) / gy) + 1; row++)
-        for (var col = (int)Math.Floor((lx - reach) / gx) - 1; col <= (int)Math.Ceiling((lx + reach) / gx) + 1; col++)
+        var length = _halfLength;
+        Range(cellX, cellY, result, origin, _cos, _sin, length * (.7 + .15 * Draw(9, 9, 600)), 1, true);
+        var arms = 1 + (int)(Draw(9, 9, 601) * 2.99);
+        for (var i = 0; i < arms; i++)
         {
-            // Some cluster sites stay empty: valleys and passes between the short ranges.
-            if (Draw(col, row, 203) < .1) continue;
-            var cx = (col + .5 * (row & 1) + .5 * (Draw(col, row, 201) - .5)) * gx;
-            var cy = (row + .45 * (Draw(col, row, 202) - .5)) * gy;
-            var strength = .35 + .65 * Draw(col, row, 205);
-            var angle = (Draw(col, row, 204) - .5) * .9;
-            double cos = Math.Cos(angle), sin = Math.Sin(angle);
-            var count = 4 + (int)(Draw(col, row, 206) * 3.99);
-            var salt = 0u;
-            void At(double x, double y, double tier, double activation, int role) =>
-                Put(cellX, cellY, result, origin.X + x, origin.Y + y, tier, activation, role, col, row, ++salt * 17);
-            for (var i = 0; i < count; i++)
-            {
-                // A short range: the dominant peak in its middle, smaller ones toward its ends.
-                var t = i - (count - 1) / 2.0;
-                var along = t * .46 * w * (1 + .12 * Draw(col, row, 210 + (uint)i));
-                var tier = Math.Abs(t) < .6 ? (strength > .55 ? Big : Mid) : Math.Abs(t) < 1.6 ? Mid : Math.Abs(t) < 2.6 ? Mid * .8 : Hill;
-                // The dominant peak stands back; the smaller ones of its range come forward to its feet.
-                var across = (Math.Abs(t) < .6 ? -.1 : .12 + .1 * Math.Abs(t)) * h + (Draw(col, row, 220 + (uint)i) - .5) * .1 * h;
-                At(cx + along * cos - across * sin, cy + along * sin + across * cos, tier,
-                    tier == Big ? 3 + 20 * (1 - strength) : tier == Mid ? 14 + 26 * (1 - strength) + 6 * Math.Abs(t) : 42 + 20 * Draw(col, row, 230 + (uint)i), Math.Abs(t) < .6 ? 0 : 1);
-            }
-            var satellites = 4 + (int)(Draw(col, row, 207) * 4.99);
-            for (var j = 0; j < satellites; j++)
-            {
-                // Satellites around the range, flattened in depth as the 3/4 view sees the ground.
-                // In front and to the sides: a satellite behind the range would only show its tip, if anything.
-                var a = (-.15 + 1.3 * Draw(col, row, 240 + (uint)j)) * Math.PI;
-                var r = (.4 + .5 * Draw(col, row, 250 + (uint)j)) * w;
-                At(cx + Math.Cos(a) * r * 1.2, cy + Math.Sin(a) * r * .6 * h / w, r < .7 * w ? Mid * .8 : Hill * 1.1,
-                    34 + 40 * Draw(col, row, 260 + (uint)j), 2);
-            }
-            var foothills = 3 + (int)(Draw(col, row, 208) * 4.99);
-            for (var j = 0; j < foothills; j++)
-            {
-                var a = Draw(col, row, 270 + (uint)j) * Math.Tau;
-                var r = (1.0 + .45 * Draw(col, row, 280 + (uint)j)) * w;
-                At(cx + Math.Cos(a) * r, cy + Math.Sin(a) * r * .6 * h / w, Hill * (.8 + .25 * Draw(col, row, 290 + (uint)j)),
-                    66 + 32 * Draw(col, row, 295 + (uint)j), 3);
-            }
+            var at = (Draw(i, 9, 602) - .5) * 1.0 * length;
+            var turn = (Draw(i, 9, 603) < .5 ? -1 : 1) * (40 + 35 * Draw(i, 9, 604)) * Math.PI / 180;
+            var armLength = (.32 + .22 * Draw(i, 9, 605)) * length;
+            double c = Math.Cos(Math.Atan2(_sin, _cos) + turn), s = Math.Sin(Math.Atan2(_sin, _cos) + turn);
+            // The arm starts on the main range and runs outward: its own middle lies one arm-length from the root.
+            var root = new VectorPoint(origin.X + at * _cos, origin.Y + at * _sin);
+            var middle = new VectorPoint(root.X + c * armLength * .9, root.Y + s * armLength * .9);
+            Range(cellX, cellY, result, middle, c, s, armLength, 2 + i, true);
         }
     }
 
