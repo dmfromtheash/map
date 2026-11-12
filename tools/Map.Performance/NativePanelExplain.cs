@@ -40,13 +40,13 @@ public sealed partial class NativeEditorScenarioApplication
             bitmap.Save(file, PngBitmapEncoderOptions.Default);
         }
 
-        async Task Cards(string stage)
+        async Task Cards(string stage, Func<PanelDemoKind, bool>? only = null)
         {
             var seen = new HashSet<PanelDemoKind>();
             foreach (var (target, kind, title) in _view.ExplainedForSmoke.ToArray())
             {
                 // A section hidden since the list was read (the deferred panel refresh) has nothing to explain.
-                if (!target.IsEffectivelyVisible || !seen.Add(kind)) continue;
+                if (!target.IsEffectivelyVisible || only?.Invoke(kind) == false || !seen.Add(kind)) continue;
                 target.BringIntoView(); await Settle();
                 var watch = Stopwatch.StartNew();
                 _view.ShowExplainForSmoke(target);
@@ -99,6 +99,60 @@ public sealed partial class NativeEditorScenarioApplication
         // The path's randomness lives in «Как ставить»: it stays open with a selected path (native-stage17).
         _report.Checks["how-kept-for-selected-path"] = _view.GetVisualDescendants().OfType<Control>()
             .FirstOrDefault(c => c.Name == "StampModePath") is { IsEffectivelyVisible: true };
+
+        // 3. One object selected with the asset tool: the switch «Выделенное / Для новых» shows, and its two halves
+        //    have their cards (the switch is hidden with nothing selected, so stages 1-2 never reach them).
+        var someObject = _editor.Session.Document.Layers.OfType<Map.Core.Documents.ObjectLayer>().SelectMany(l => l.Objects).First();
+        _editor.SelectObject(someObject.Id); await Settle();
+        if (_editor.ActiveTool != Map.Presentation.ViewModels.EditorTool.Stamp) { _editor.ActiveTool = Map.Presentation.ViewModels.EditorTool.Stamp; await Settle(); }
+        await Task.Delay(300); await Settle();
+        panel.InvalidateMeasure(); await Settle();
+        Picture(panel, "panel-selected");
+        var scopeKinds = _view.ExplainedForSmoke.Where(e => e.Kind is PanelDemoKind.ScopeSelected or PanelDemoKind.ScopeNew).Select(e => e.Kind).ToHashSet();
+        Console.WriteLine($"explain: selection {_editor.SelectionCount}, tool {_editor.ActiveTool}, scope cards {string.Join(", ", scopeKinds)}");
+        _report.Checks["scope-cards-with-selection"] = scopeKinds.SetEquals([PanelDemoKind.ScopeSelected, PanelDemoKind.ScopeNew]);
+        await Cards("selected", k => k is PanelDemoKind.ScopeSelected or PanelDemoKind.ScopeNew);
+
+        // 4. A narrow window (right column 280 px, «narrow-window»): no row runs into another, and a value row whose
+        //    slider does not fit beside its name puts the slider under it.
+        _editor.Session.ClearSelection(); await Settle();
+        _window.Width = 1000; await Task.Delay(300); await Settle();
+        panel.InvalidateMeasure(); await Settle();
+        Console.WriteLine($"explain: narrow {_view.Classes.Contains("narrow-window")}, panel {panel.Bounds.Width:0} px");
+        Picture(panel, "panel-narrow");
+        var overlaps = new List<string>();
+        var under = 0;
+        foreach (var row in panel.GetVisualDescendants().OfType<Map.App.Views.Ui.ValueLinePanel>().Where(r => r.IsEffectivelyVisible))
+        {
+            var parts = row.Children.Where(c => c.IsVisible && c.Bounds.Width > 0 && c.Bounds.Height > 0).ToArray();
+            for (var i = 0; i < parts.Length; i++)
+                for (var j = i + 1; j < parts.Length; j++)
+                    if (parts[i].Bounds.Intersect(parts[j].Bounds) is { Width: > 1, Height: > 1 }) overlaps.Add($"строка {row.Children[0]}: части наезжают");
+            if (row.Children.Count == 3 && row.Children[1].Bounds.Top >= row.Children[0].Bounds.Bottom - 1) under++;
+        }
+        // Only what is in view: text scrolled under the panel's header is clipped there, not overlapping it.
+        Rect InView(Control c)
+        {
+            var rect = new Rect(c.TranslatePoint(new Point(0, 0), panel)!.Value, c.Bounds.Size);
+            foreach (var sv in c.GetVisualAncestors().OfType<ScrollViewer>())
+                rect = rect.Intersect(new Rect(sv.TranslatePoint(new Point(0, 0), panel)!.Value, sv.Bounds.Size));
+            return rect;
+        }
+        var texts = panel.GetVisualDescendants().OfType<TextBlock>()
+            .Where(t => t.IsEffectivelyVisible && t.Bounds.Width > 1 && t.Bounds.Height > 1 && !string.IsNullOrEmpty(t.Text))
+            .Select(t => (t.Text, Rect: InView(t), Block: t)).Where(t => t.Rect.Width > 1 && t.Rect.Height > 1).ToArray();
+        for (var i = 0; i < texts.Length; i++)
+            for (var j = i + 1; j < texts.Length; j++)
+                if (texts[i].Rect.Intersect(texts[j].Rect) is { Width: > 2, Height: > 2 }) overlaps.Add($"«{texts[i].Text}» и «{texts[j].Text}»");
+        // A caption cut by its box («Новый пут») is as bad as one running into another.
+        foreach (var (text, _, block) in texts)
+            if (block.TextLayout.TextLines.Any(l => l.HasCollapsed) || block.TextLayout.Width > block.Bounds.Width + 1)
+                overlaps.Add($"«{text}» обрезано ({block.TextLayout.Width:0} > {block.Bounds.Width:0} px)");
+        foreach (var line in overlaps.Distinct().Take(20)) Console.WriteLine("explain narrow: " + line);
+        Console.WriteLine($"explain narrow: {texts.Length} строк текста, ползунков под названием {under}, наездов {overlaps.Count}");
+        _report.Checks["narrow-window-280"] = _view.Classes.Contains("narrow-window") && panel.Bounds.Width <= 282;
+        _report.Checks["narrow-no-overlap"] = overlaps.Count == 0;
+        _report.Checks["narrow-slider-under-name"] = under > 0;
 
         foreach (var line in bad) Console.WriteLine("explain: " + line);
         File.WriteAllLines(Path.ChangeExtension(Options.OutputPath, "explain-timings.txt"), times);

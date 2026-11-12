@@ -204,7 +204,8 @@ public sealed partial class NativeEditorScenarioApplication : Application
         if (Options.Profile == "native-panel-explain")
         {
             _report.Required = ["explain-cards", "value-row-one-line", "scope-words-no-pill", "path-made",
-                "path-calculation-buttons-in-panel", "how-kept-for-selected-path", "path-numbers-compact"];
+                "path-calculation-buttons-in-panel", "how-kept-for-selected-path", "path-numbers-compact",
+                "scope-cards-with-selection", "narrow-window-280", "narrow-no-overlap", "narrow-slider-under-name"];
             _report.Scenario = "panel-explain"; _window.Height = 1300;
         }
         if (Options.Profile == "native-panel-shots")
