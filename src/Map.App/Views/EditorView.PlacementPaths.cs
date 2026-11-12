@@ -75,7 +75,8 @@ public sealed partial class EditorView
 
         _pathDetach = PathAction("DetachPathObjectButton", "Отделить", GlyphDetach, _editor.DetachSelectedPathObject,
             PanelDemoKind.Detach, "Отделить выбранный объект", "Выбранный ассет становится обычным объектом и больше не следует за путём.");
-        var actions = new UniformGrid { Columns = 4, Children =
+        // Four in a row; in the narrow column (280 px) three, so no caption is cut («Применить» needs its whole width).
+        var actions = new Ui.ChoiceGrid { MaxColumns = 4, MinimumItemWidth = 52, Gap = 4, Children =
         {
             PathAction("StartEditablePathButton", "Новый путь", GlyphNewPath, _editor.StartEditablePath,
                 PanelDemoKind.ModePath, "Новый путь", "Щелчки по карте ставят узлы, Enter завершает, Esc останавливает — нарисованное остаётся."),
@@ -118,7 +119,7 @@ public sealed partial class EditorView
                 new TextBlock { Text = caption, FontSize = 10.5, TextAlignment = Avalonia.Media.TextAlignment.Center, HorizontalAlignment = HorizontalAlignment.Center },
             } },
             HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Center,
-            MinHeight = 44, Padding = new Thickness(2, 4), Margin = new Thickness(0, 0, 4, 4),
+            MinHeight = 44, Padding = new Thickness(2, 4),
         }.Named(name).Classed("compact");
         if (danger) button.Classes.Add("destructive");
         AutomationProperties.SetName(button, title);
