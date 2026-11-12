@@ -25,7 +25,8 @@
     (лог `worker.log`), журнал `upscaled/manifest-mac.jsonl`, брак `failed-mac.jsonl`.
   - Ход: `py -3.13 H:\MapLibrary\sol\sol1\progress.py` (только ПК) + ok в `manifest-mac.jsonl`.
 - **Залито:** textures 430; battlemaps-classic, fantasy-battlemaps-1, fantasy-battlemaps-2 — по 2 сотни. Листы всех — чисто;
-  живьём №1 трёх каталогов ✅, **№2 трёх каталогов вживую не проверены**.
+  живьём все 6 сотен ✅ (найдены все наборы, по 10 на карту, 399 %, Undo → 0). Память тестовой Map — плато ~1,27 ГБ
+  (кэши картинок 256+256 МБ, куча .NET ~255 МБ) — не утечка.
 - Сборщик: `dotnet run --project tools\Map.Performance -c Release --no-build -- --profile drive-library --catalogs <к> --object-count 100`.
   Перед ним `pipeline\plan.py` (применяет `plan/fixes`). Живой проход: `sol\sol7\live_batch2.ps1 -ProcessId <pid> -Batch <n> -Catalog <к>`.
 - 5 вариантов вкладки «Ассеты»: https://claude.ai/artifact/QLqMBYQoWEwpfEEdWzdun1 — **отложено**.
