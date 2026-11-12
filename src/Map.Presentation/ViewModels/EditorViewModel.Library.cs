@@ -9,6 +9,16 @@ using Map.Rendering;
 
 namespace Map.Presentation.ViewModels;
 
+/// <summary>The single texture use assigned to a library card in its passport.</summary>
+public enum PassportTextureKind
+{
+    None,
+    Ground,
+    Water,
+    Floor,
+    Paint,
+}
+
 public sealed partial class EditorViewModel
 {
     // ================================================================ local library
@@ -1274,6 +1284,53 @@ public sealed partial class EditorViewModel
 
     public bool SetSelectedSetRole(AssetRole role) =>
         SetSelectedSetPlacement(p => p with { Role = role });
+
+    /// <summary>The card's texture tag; legacy «Текстура» means ground, as in the fill pickers.</summary>
+    public PassportTextureKind SelectedSetTextureKind
+    {
+        get
+        {
+            if (_selectedSetId is not { } id || _assetCatalog?.FindSet(id) is not { } set)
+                return PassportTextureKind.None;
+            var kind = LibraryFillTextures.KindOf(set.Tags, out var floor, out var paint);
+            return kind == MapFillTextureKind.Water ? PassportTextureKind.Water
+                : floor ? PassportTextureKind.Floor
+                : paint ? PassportTextureKind.Paint
+                : kind == MapFillTextureKind.Ground ? PassportTextureKind.Ground : PassportTextureKind.None;
+        }
+    }
+
+    /// <summary>Replaces texture tags with one use (or none), keeping other tags and the map's history.</summary>
+    public bool SetSelectedSetTextureKind(PassportTextureKind kind)
+    {
+        var textureTag = kind switch
+        {
+            PassportTextureKind.None => null,
+            PassportTextureKind.Ground => LibraryFillTextures.GroundTag,
+            PassportTextureKind.Water => LibraryFillTextures.WaterTag,
+            PassportTextureKind.Floor => LibraryFillTextures.FloorTag,
+            PassportTextureKind.Paint => LibraryFillTextures.PaintTag,
+            _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Неизвестное назначение текстуры."),
+        };
+        if (_selectedSetId is not { } id || _assetCatalog?.FindSet(id) is not { } set)
+        {
+            StatusDetail = "Сначала выберите набор в библиотеке.";
+            return false;
+        }
+        var tags = set.Tags.Where(tag =>
+        {
+            var mark = tag.Trim();
+            return !mark.Equals(LibraryFillTextures.Tag, StringComparison.OrdinalIgnoreCase)
+                && !mark.StartsWith(LibraryFillTextures.Tag + "/", StringComparison.OrdinalIgnoreCase);
+        }).ToList();
+        if (textureTag is not null) tags.Add(textureTag);
+        if (set.Tags.SequenceEqual(tags, StringComparer.Ordinal)) return false;
+        if (!MutateSet(() => _assetCatalog.SetTags(id, tags))) return false;
+        Raise(nameof(SelectedSetTextureKind));
+        Raise(nameof(LibraryTextures));
+        StatusDetail = textureTag is null ? "Назначение текстуры снято." : "Назначение текстуры сохранено.";
+        return true;
+    }
 
     /// <summary>The role of any set of the catalog; <see cref="AssetRole.None"/> when it has none.</summary>
     public AssetRole RoleOfSet(string setId) => _assetCatalog?.FindSet(setId)?.Placement?.Role ?? AssetRole.None;

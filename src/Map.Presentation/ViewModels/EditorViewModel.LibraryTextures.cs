@@ -49,7 +49,8 @@ public static class LibraryFillTextures
             {
                 if (catalog.FindVariant(variantId) is not { } variant || catalog.Find(variant.Sha256) is not { } record
                     || !Drawable.Contains(record.MediaType, StringComparer.OrdinalIgnoreCase)
-                    || KindOf(set.Tags.Concat(record.Tags), out var floor, out var paint) is not { } kind
+                    // The card's tags decide (the passport edits them); record tags are a copy made at import.
+                    || KindOf(set.Tags, out var floor, out var paint) is not { } kind
                     || !seen.Add(record.Sha256)) continue;
                 var group = catalog.MountOfSet(set.Id) is null && record.Pack == OwnPack ? MapFillTextures.LibraryGroup : record.Pack;
                 if (floor) group += " · пол";
@@ -91,13 +92,17 @@ public sealed partial class EditorViewModel
     private IReadOnlyList<LibraryFillTexture> _libraryTextures = [];
     private (long Metadata, long Content, int Mounts) _libraryTexturesRevision = (-1, -1, -1);
 
+    /// <summary>Metadata changes and drive replacements invalidate the material pickers too.</summary>
+    public (long Metadata, long Content, int Mounts) FillTextureRevision => _assetCatalog is { } catalog
+        ? (catalog.MetadataRevision, catalog.ContentRevision, catalog.Mounts.Count) : (-1, -1, -1);
+
     /// <summary>Tiling textures of the asset library (and attached drive libraries), after the built-in ones in the pickers.</summary>
     public IReadOnlyList<LibraryFillTexture> LibraryTextures
     {
         get
         {
             if (_assetCatalog is not { } catalog) return [];
-            var revision = (catalog.MetadataRevision, catalog.ContentRevision, catalog.Mounts.Count);
+            var revision = FillTextureRevision;
             if (revision != _libraryTexturesRevision)
             {
                 _libraryTextures = LibraryFillTextures.List(catalog);
@@ -126,6 +131,14 @@ public sealed partial class EditorViewModel
             ?? Session.Document.Assets.FirstOrDefault(asset => asset.Sha256 == sha)?.DisplayName
             ?? MapFillTextures.LibraryTitle;
     }
+
+    /// <summary>
+    /// Catalog preview of the exact fill picture, including a mounted drive. Picker previews
+    /// never fall back to reading the original or the map's full-size embedded copy.
+    /// </summary>
+    public string? FillTextureThumbnailPath(string? id) =>
+        MapFillTextures.AssetSha256(id) is { } sha && _assetCatalog?.Find(sha) is { } record
+            && _assetCatalog.TryThumbnailPath(record, out var path) ? path : null;
 
     /// <summary>The bytes of a library texture: the copy the map carries first, then the library (or its drive).</summary>
     public byte[]? FillTextureBytes(string sha256)

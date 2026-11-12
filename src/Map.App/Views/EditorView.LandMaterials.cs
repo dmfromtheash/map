@@ -11,6 +11,7 @@ using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
+using Map.Assets;
 using Map.Core.Documents;
 using Map.Rendering;
 
@@ -21,6 +22,7 @@ public sealed partial class EditorView
     private Control? _landShapeControls, _landPaintControls, _landShapeAdvanced, _landCliffMaskControls, _landReliefControls;
     private IReadOnlyList<Button>? _landModeButtons;
     private Window? _materialCatalogWindow;
+    private Action? _refreshMaterialCatalog;
     private readonly Dictionary<string, Bitmap> _materialPreviewImages = [];
 
     private Control BuildLandModePicker()
@@ -284,20 +286,24 @@ public sealed partial class EditorView
     private const int MaterialPreviewHeight = 160;
 
     /// <summary>
-    /// A material as it will look in its context: the base colour first, then the material by
-    /// <see cref="MapTextureLibrary.DrawFill"/> at the context's strength and world scale, at a
-    /// zoom of 100 %. One bitmap per material and context, bounded.
+    /// A material in its context at 100 % zoom. Library swatches use only catalog thumbnails;
+    /// opening a picker must not populate the renderer's full-size texture cache.
     /// </summary>
     private IBrush? MaterialPreviewBrush(string? id, MaterialPreviewContext context)
     {
-        if (id is null || MapTextureLibrary.Image(id) is null) return null;
+        if (id is null) return null;
         var key = id + "|" + context.Signature;
         if (!_materialPreviewImages.TryGetValue(key, out var bitmap))
         {
+            var library = MapFillTextures.IsAssetId(id);
+            using var thumbnail = library ? MaterialThumbnail(_editor.FillTextureThumbnailPath(id)) : null;
+            var image = library ? thumbnail : MapTextureLibrary.Image(id);
+            if (image is null) return null;
             if (_materialPreviewImages.Count >= 96)
             {
-                foreach (var stale in _materialPreviewImages.Values) stale.Dispose();
-                _materialPreviewImages.Clear();
+                // As in ThumbnailCache, an evicted bitmap may still belong to a recorded draw.
+                // Drop our reference; Avalonia releases it once that draw is gone.
+                _materialPreviewImages.Remove(_materialPreviewImages.Keys.First());
             }
             using var surface = SkiaSharp.SKSurface.Create(new SkiaSharp.SKImageInfo(
                 MaterialPreviewWidth, MaterialPreviewHeight, SkiaSharp.SKColorType.Rgba8888, SkiaSharp.SKAlphaType.Premul));
@@ -309,7 +315,15 @@ public sealed partial class EditorView
                 using var fill = new SkiaSharp.SKPaint { Color = SkiaSharp.SKColor.TryParse(baseColor, out var parsed) ? parsed : SkiaSharp.SKColors.Transparent };
                 canvas.DrawRect(area, fill);
             }
-            MapTextureLibrary.DrawFill(canvas, id, context.Scale, context.Raw ? 1 : context.Opacity, area);
+            var scale = (float)(Math.Clamp(context.Scale, MapFillTextures.MinimumScale, MapFillTextures.MaximumScale) / image.Width);
+            var mode = MapFillTextures.Find(id)!.MirrorRepeat ? SkiaSharp.SKShaderTileMode.Mirror : SkiaSharp.SKShaderTileMode.Repeat;
+            using (var shader = image.ToShader(mode, mode,
+                new SkiaSharp.SKSamplingOptions(SkiaSharp.SKFilterMode.Linear, SkiaSharp.SKMipmapMode.Linear), SkiaSharp.SKMatrix.CreateScale(scale, scale)))
+            using (var paint = new SkiaSharp.SKPaint
+            {
+                Shader = shader, IsAntialias = true,
+                Color = SkiaSharp.SKColors.White.WithAlpha((byte)Math.Clamp(Math.Round((context.Raw ? 1 : context.Opacity) * 255), 0, 255)),
+            }) canvas.DrawRect(area, paint);
             // The pixels go to Avalonia as they are: a PNG round trip per swatch was more than
             // half of the swatch cost, paid for every material picker while the editor opens.
             using var pixels = surface.PeekPixels();
@@ -319,6 +333,29 @@ public sealed partial class EditorView
         }
         return new ImageBrush(bitmap) { Stretch = Stretch.UniformToFill };
     }
+
+    private static SkiaSharp.SKImage? MaterialThumbnail(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return null;
+        try
+        {
+            using var stream = File.OpenRead(path);
+            using var codec = SkiaSharp.SKCodec.Create(stream);
+            // Check the header before allocating pixels. A missing or malformed thumbnail
+            // stays unavailable; neither a large file nor an original is decoded instead.
+            if (codec is null || codec.Info.Width <= 0 || codec.Info.Height <= 0
+                || codec.Info.Width > AssetCatalog.ThumbnailSize || codec.Info.Height > AssetCatalog.ThumbnailSize) return null;
+            using var pixels = SkiaSharp.SKBitmap.Decode(codec);
+            return pixels is null ? null : SkiaSharp.SKImage.FromBitmap(pixels);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return null;
+        }
+    }
+
+    private static string MaterialButtonName(string prefix, string? id) => prefix + "_" +
+        (MapFillTextures.AssetSha256(id) is { } sha ? "asset_" + sha[..16] : id ?? "none");
 
     private async Task OpenMaterialCatalog(MapFillTextureKind kind, string? current, Action<string?> choose,
         Func<MaterialPreviewContext> context)
@@ -331,7 +368,7 @@ public sealed partial class EditorView
             Name = "MaterialCatalogGroups", ItemsSource = new[] { "Все материалы" }.Concat(all.Select(t => t.Group).Distinct()).ToArray(),
             SelectedIndex = 0,
         }.Classed("material-groups");
-        var tiles = new WrapPanel { Name = "MaterialCatalogTiles", Orientation = Orientation.Horizontal };
+        var tiles = new StackPanel { Name = "MaterialCatalogTiles", Spacing = 12 };
         var empty = new TextBlock { Name = "MaterialCatalogEmpty", Text = all.Length == 0
             ? "Материалы пока не добавлены. Можно использовать обычную цветную заливку."
             : "Ничего не найдено. Измените название или выберите другую группу.", TextWrapping = TextWrapping.Wrap };
@@ -352,29 +389,48 @@ public sealed partial class EditorView
             var found = all.Where(t => (group is null or "Все материалы" || t.Group == group)
                 && (t.Title.Contains(query, StringComparison.OrdinalIgnoreCase) || t.Group.Contains(query, StringComparison.OrdinalIgnoreCase))).ToArray();
             var preview = context();
-            foreach (var material in found)
+            foreach (var section in found.GroupBy(material => material.Group))
             {
-                var image = TextureSwatch(material.Id, material.Title, preview); image.Width = 140; image.Height = 96;
-                var label = new TextBlock { Text = material.Title, TextWrapping = TextWrapping.Wrap, MaxWidth = 140 };
-                var card = new Button
+                tiles.Children.Add(new TextBlock { Text = section.Key }.Classed("faint", "role-caption"));
+                var row = new WrapPanel { Orientation = Orientation.Horizontal };
+                tiles.Children.Add(row);
+                foreach (var material in section)
                 {
-                    Name = "MaterialCatalog_" + material.Id, Width = 156, Height = 150,
-                    Margin = new Thickness(0, 0, 10, 10), Padding = new Thickness(6),
-                    Content = new StackPanel { Spacing = 5, Children = { image, label } },
-                    HorizontalContentAlignment = HorizontalAlignment.Left,
-                }.Classed("swatch");
-                AutomationProperties.SetName(card, material.Title);
-                Ui.SetClass(card, "active", material.Id == current);
-                card.Click += (_, _) => { choose(material.Id); SyncAppearanceSections(); Canvas.InvalidateVisual(); window.Close(); };
-                tiles.Children.Add(card);
+                    var image = TextureSwatch(material.Id, material.Title, preview); image.Width = 140; image.Height = 96;
+                    var label = new TextBlock { Text = material.Title, TextWrapping = TextWrapping.Wrap, MaxWidth = 140 };
+                    var card = new Button
+                    {
+                        Name = MaterialButtonName("MaterialCatalog", material.Id), Width = 156, Height = 150,
+                        Margin = new Thickness(0, 0, 10, 10), Padding = new Thickness(6),
+                        Content = new StackPanel { Spacing = 5, Children = { image, label } },
+                        HorizontalContentAlignment = HorizontalAlignment.Left,
+                    }.Classed("swatch");
+                    AutomationProperties.SetName(card, material.Title);
+                    Ui.SetClass(card, "active", material.Id == current);
+                    card.Click += (_, _) => { choose(material.Id); SyncAppearanceSections(); Canvas.InvalidateVisual(); window.Close(); };
+                    row.Children.Add(card);
+                }
             }
             empty.IsVisible = found.Length == 0;
-            count.Text = all.Length == 0 ? "Материалов: 0" : $"Материалов: {found.Length} · Авторские покрытия Map · " + (preview.Raw
+            empty.Text = all.Length == 0 ? "Материалы пока не добавлены. Можно использовать обычную цветную заливку."
+                : "Ничего не найдено. Измените название или выберите другую группу.";
+            var mine = found.Count(material => MapFillTextures.IsAssetId(material.Id));
+            count.Text = $"Покрытия: Map {found.Length - mine} · мои {mine} · " + (preview.Raw
                 ? "образцы показаны как кисть кладёт материал"
                 : kind == MapFillTextureKind.Ground ? "образцы с действующим цветом и силой материала" : "образцы с действующим цветом воды");
         }
         search.TextChanged += (_, _) => Populate();
         groups.SelectionChanged += (_, _) => Populate();
+        void RefreshCatalog()
+        {
+            all = _editor.FillTextureChoices(kind).ToArray();
+            var selected = groups.SelectedItem as string;
+            var titles = new[] { "Все материалы" }.Concat(all.Select(texture => texture.Group).Distinct()).ToArray();
+            groups.ItemsSource = titles;
+            groups.SelectedItem = selected is not null && titles.Contains(selected) ? selected : titles[0];
+            Populate();
+        }
+        _refreshMaterialCatalog = RefreshCatalog;
         var content = new Grid { ColumnDefinitions = new ColumnDefinitions("180,*"), RowDefinitions = new RowDefinitions("Auto,*,Auto"), ColumnSpacing = 16, RowSpacing = 12 };
         var heading = new TextBlock { Text = window.Title, FontSize = 22 };
         Grid.SetColumnSpan(heading, 2); content.Children.Add(heading);
@@ -389,7 +445,7 @@ public sealed partial class EditorView
         Grid.SetRow(close, 2); content.Children.Add(close);
         window.Content = new Border { Padding = new Thickness(20), Child = content };
         window.KeyDown += (_, e) => { if (e.Key == Key.Escape) { window.Close(); e.Handled = true; } };
-        window.Closed += (_, _) => _materialCatalogWindow = null;
+        window.Closed += (_, _) => { _materialCatalogWindow = null; _refreshMaterialCatalog = null; };
         Populate();
         await window.ShowDialog(owner);
     }

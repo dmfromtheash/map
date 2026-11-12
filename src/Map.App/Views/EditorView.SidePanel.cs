@@ -637,11 +637,11 @@ public sealed partial class EditorView
     {
         // Map's own materials, then library textures of this kind; the row keeps the first few,
         // the catalog below lists them all by group.
-        var choices = _editor.FillTextureChoices(kind).Take(InlineFillTextureLimit).ToArray();
-        var offered = choices.Length;
+        var offered = 0;
         // «нет» and every material in one row while they fit: the cells narrow a little instead of
         // leaving one swatch alone, stretched across a second row.
-        var grid = new Ui.ChoiceGrid { MaxColumns = Math.Max(4, offered + 1), MinimumItemWidth = offered + 1 > 4 ? 40 : 52, Gap = 6 }.Named(name);
+        Ui.ChoiceGrid grid = null!;
+        var row = new Border();
         var buttons = new List<(Button Button, string? Id)>();
         var preview = context();
         void Add(string? id, string title)
@@ -650,7 +650,7 @@ public sealed partial class EditorView
             if (offered + 1 > 4) swatch.Width = 36;
             var button = new Button
             {
-                Name = name + "_" + (id ?? "none"),
+                Name = MaterialButtonName(name, id),
                 Content = swatch,
                 Padding = new Thickness(2),
             }.Classed("swatch");
@@ -662,9 +662,21 @@ public sealed partial class EditorView
             grid.Children.Add(button);
         }
 
-        Add(null, "Без материала");
-        foreach (var texture in choices) Add(texture.Id, texture.Title);
-        _textureSwatchGroups.Add(new TextureSwatchGroup(grid, buttons, current, context) { LastSignature = preview.Signature });
+        void RefreshChoices()
+        {
+            foreach (var (button, _) in buttons) _textureSwatchBorders.Remove(button);
+            buttons.Clear();
+            var choices = _editor.FillTextureChoices(kind).Take(InlineFillTextureLimit).ToArray();
+            offered = choices.Length;
+            grid = new Ui.ChoiceGrid { MaxColumns = Math.Max(4, offered + 1), MinimumItemWidth = offered + 1 > 4 ? 40 : 52, Gap = 6 }.Named(name);
+            row.Child = grid;
+            preview = context();
+            Add(null, "Без материала");
+            foreach (var texture in choices) Add(texture.Id, texture.Title);
+        }
+        RefreshChoices();
+        _textureSwatchGroups.Add(new TextureSwatchGroup(buttons, current, context, RefreshChoices) { LastSignature = preview.Signature });
+        ObserveTextureLibrary();
         var caption = new TextBlock { Text = "Материал" }.Classed("faint", "role-caption");
         // The caption says what the swatches are mixed with, so a grey stone that shows green
         // is understood as green land with stone grain, not as a wrong picture.
@@ -680,32 +692,26 @@ public sealed partial class EditorView
             Children =
             {
                 caption,
-                grid,
+                row,
                 Ui.AsyncButton(name + "CatalogButton", "Каталог материалов…",
                     () => OpenMaterialCatalog(kind, current(), choose, context), "compact"),
             },
         };
     }
 
-    /// <summary>A small preview of one material in its context, drawn by the renderer's own fill call.</summary>
+    /// <summary>A small contextual preview. Pixels are requested only when the swatch is in view.</summary>
     private Border TextureSwatch(string? id, string title, MaterialPreviewContext context)
     {
-        var border = new Border
+        Border border = id is null ? new Border() : new MaterialSwatch(preview => MaterialPreviewBrush(id, preview), context);
+        border.Width = 46;
+        border.Height = 34;
+        border.CornerRadius = new CornerRadius(4);
+        border.BorderThickness = new Thickness(1);
+        border.BorderBrush = new SolidColorBrush(Color.FromArgb(90, 255, 255, 255));
+        border.ClipToBounds = true;
+        border.Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
+        if (id is null)
         {
-            Width = 46,
-            Height = 34,
-            CornerRadius = new CornerRadius(4),
-            BorderThickness = new Thickness(1),
-            BorderBrush = new SolidColorBrush(Color.FromArgb(90, 255, 255, 255)),
-            ClipToBounds = true,
-        };
-        if (MaterialPreviewBrush(id, context) is { } previewBrush)
-        {
-            border.Background = previewBrush;
-        }
-        else
-        {
-            border.Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
             border.Child = new TextBlock
             {
                 Text = "нет",
@@ -717,15 +723,83 @@ public sealed partial class EditorView
         return border;
     }
 
+    private sealed class MaterialSwatch : Border
+    {
+        private readonly MaterialSwatchImage _image;
+        public MaterialPreviewContext PreviewContext
+        {
+            get => _image.PreviewContext;
+            set { _image.PreviewContext = value; _image.InvalidateVisual(); }
+        }
+
+        public MaterialSwatch(Func<MaterialPreviewContext, IBrush?> preview, MaterialPreviewContext context)
+        {
+            _image = new MaterialSwatchImage(preview, context);
+            Child = _image;
+        }
+    }
+
+    private sealed class MaterialSwatchImage : Control
+    {
+        private readonly Func<MaterialPreviewContext, IBrush?> _preview;
+        private bool _inViewport;
+        public MaterialPreviewContext PreviewContext { get; set; }
+
+        public MaterialSwatchImage(Func<MaterialPreviewContext, IBrush?> preview, MaterialPreviewContext context)
+        {
+            _preview = preview;
+            PreviewContext = context;
+            EffectiveViewportChanged += (_, e) =>
+            {
+                _inViewport = e.EffectiveViewport.Intersects(new Rect(Bounds.Size));
+                InvalidateVisual();
+            };
+        }
+
+        public override void Render(DrawingContext context)
+        {
+            base.Render(context);
+            if (_inViewport && _preview(PreviewContext) is { } brush)
+                context.DrawRectangle(brush, null, new Rect(Bounds.Size), 3, 3);
+        }
+    }
+
     private sealed record TextureSwatchGroup(
-        Ui.ChoiceGrid Grid, List<(Button Button, string? Id)> Buttons, Func<string?> Current,
-        Func<MaterialPreviewContext> Context)
+        List<(Button Button, string? Id)> Buttons, Func<string?> Current,
+        Func<MaterialPreviewContext> Context, Action RefreshChoices)
     {
         public string LastSignature { get; set; } = "";
     }
 
     private readonly List<TextureSwatchGroup> _textureSwatchGroups = [];
     private readonly Dictionary<Button, Border> _textureSwatchBorders = [];
+    private (long Metadata, long Content, int Mounts) _texturePickerRevision = (-1, -1, -1);
+    private bool _observingTextureLibrary, _textureLibraryRefreshQueued;
+
+    private void ObserveTextureLibrary()
+    {
+        if (_observingTextureLibrary) return;
+        _observingTextureLibrary = true;
+        _texturePickerRevision = _editor.FillTextureRevision;
+        _editor.PropertyChanged += OnTextureLibraryChanged;
+        DetachedFromVisualTree += (_, _) =>
+        {
+            _editor.PropertyChanged -= OnTextureLibraryChanged;
+            _observingTextureLibrary = false;
+        };
+    }
+
+    private void OnTextureLibraryChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (_textureLibraryRefreshQueued || _texturePickerRevision == _editor.FillTextureRevision) return;
+        _textureLibraryRefreshQueued = true;
+        Dispatcher.UIThread.Post(() =>
+        {
+            _textureLibraryRefreshQueued = false;
+            if (!_observingTextureLibrary) return;
+            SyncTextureSwatches();
+        }, DispatcherPriority.Background);
+    }
 
     /// <summary>
     /// Marks the swatch the current style actually uses, and repaints every swatch of a picker
@@ -734,6 +808,14 @@ public sealed partial class EditorView
     /// </summary>
     private void SyncTextureSwatches()
     {
+        if (_texturePickerRevision != _editor.FillTextureRevision)
+        {
+            _texturePickerRevision = _editor.FillTextureRevision;
+            // Recorded draws may still reference the old images, just as in ThumbnailCache.
+            _materialPreviewImages.Clear();
+            foreach (var group in _textureSwatchGroups) group.RefreshChoices();
+            _refreshMaterialCatalog?.Invoke();
+        }
         foreach (var group in _textureSwatchGroups)
         {
             var selected = group.Current();
@@ -745,7 +827,11 @@ public sealed partial class EditorView
                 var active = string.Equals(id, selected, StringComparison.Ordinal);
                 Ui.SetClass(button, "active", active);
                 if (!_textureSwatchBorders.TryGetValue(button, out var swatch)) continue;
-                if (repaint && id is not null && MaterialPreviewBrush(id, context) is { } brush) swatch.Background = brush;
+                if (repaint && swatch is MaterialSwatch material)
+                {
+                    material.PreviewContext = context;
+                    material.InvalidateVisual();
+                }
                 swatch.BorderThickness = new Thickness(active ? 2.5 : 1);
                 swatch.BorderBrush = new SolidColorBrush(active
                     ? Color.FromArgb(255, 0xE7, 0xC9, 0x82)
@@ -1416,6 +1502,7 @@ public sealed partial class EditorView
                 Ui.Hint("Стартовые значения инструмента для этого набора. После выбора их можно менять в «Как ставить» и «Случайность»."),
                 Ui.Hint("Роль набора для «Лес / Хребет / Поселение»"),
                 role,
+                BuildPassportTextureKindChoice(),
                 rotation,
                 AppearanceSlider("PassportRandomSizeSlider", "Случайный размер ±", 0, 100, "%",
                     () => _editor.SelectedSet is null ? null : _editor.SelectedSetPlacement.RandomSizePercent,
@@ -1582,6 +1669,7 @@ public sealed partial class EditorView
                         },
                     },
                     _selectedSetNameText,
+                    BuildPassportDetailText(),
                     _assetSelectionText,
                     _variantStateText,
                     new DockPanel
