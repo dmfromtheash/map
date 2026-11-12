@@ -9,7 +9,7 @@ namespace Map.Assets;
 /// image. Content identity is the SHA-256; a logical <see cref="AssetSet"/> orders the variants
 /// that name it.
 /// </summary>
-public sealed class AssetCatalog : IAsyncDisposable
+public sealed partial class AssetCatalog : IAsyncDisposable
 {
     public const int MaxImageDimension = AssetImagePolicy.MaxDimension;
     public const long MaxEncodedBytes = AssetImagePolicy.MaxEncodedBytes;
@@ -26,10 +26,15 @@ public sealed class AssetCatalog : IAsyncDisposable
     public async Task FlushMetadataAsync()
     {
         // Drive catalogs flush too: a recent use picked just before closing Map must reach the drive.
-        foreach (var mount in _mounts.ToArray())
+        foreach (var mount in Mounts)
         {
             try { await mount.FlushMetadataAsync(); }
             catch (IOException) { } // a drive pulled out: its own index keeps the last saved state
+            finally
+            {
+                // A rollback on the drive must invalidate the parent's view/revisions too.
+                if (RefreshMount(mount)) { MetadataRevision++; ContentRevision++; }
+            }
         }
 
         try { await _metadataWriter.FlushAsync(); }
@@ -37,16 +42,23 @@ public sealed class AssetCatalog : IAsyncDisposable
         {
             if (_metadataWriter.LastSaved is { } saved)
             {
+                var before = _snapshot.Own;
                 _document = CopyDocument(saved);
                 Reindex(); CaptureMetadataBase(); MetadataRevision++;
+                if (!ReferenceEquals(before.BySha, _snapshot.Own.BySha)
+                    || !ReferenceEquals(before.ByVariant, _snapshot.Own.ByVariant)
+                    || !ReferenceEquals(before.BySet, _snapshot.Own.BySet)) ContentRevision++;
             }
             throw;
         }
     }
     public ValueTask DisposeAsync() => new(FlushMetadataAsync());
-    private Dictionary<string, AssetRecord> _bySha = new(StringComparer.OrdinalIgnoreCase);
-    private Dictionary<string, AssetVariant> _byVariantId = new(StringComparer.Ordinal);
-    private Dictionary<string, AssetSet> _bySetId = new(StringComparer.Ordinal);
+    // One publication contains every lookup and its routing information. Published layers are
+    // never edited: the UI owns a private candidate while renderer threads keep the old snapshot.
+    private volatile CatalogSnapshot _snapshot = CatalogSnapshot.Empty;
+    private LayeredIndex<AssetRecord> _bySha => _snapshot.BySha;
+    private LayeredIndex<AssetVariant> _byVariantId => _snapshot.ByVariant;
+    private LayeredIndex<AssetSet> _bySetId => _snapshot.BySet;
 
     public AssetCatalog(string root)
         : this(root, null)
@@ -65,6 +77,7 @@ public sealed class AssetCatalog : IAsyncDisposable
     private AssetCatalog(string root, Func<DateTimeOffset>? clock, bool mounted)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
+        _isMounted = mounted;
         _root = mounted ? Path.GetFullPath(root) : AssetCatalogRoots.Resolve(root);
         _indexPath = Path.Combine(_root, "catalog.json");
         _clock = clock ?? (static () => DateTimeOffset.UtcNow);
@@ -87,6 +100,9 @@ public sealed class AssetCatalog : IAsyncDisposable
 
     private volatile IndexStamp? _indexStamp;
 
+    /// <summary>True for a drive library attached to the owner's catalog.</summary>
+    private readonly bool _isMounted;
+
     /// <summary>
     /// True when catalog.json on disk is no longer the file this catalog read or last wrote: another
     /// program (the drive-library builder) changed it. Such a catalog is reopened, never written over.
@@ -95,32 +111,30 @@ public sealed class AssetCatalog : IAsyncDisposable
 
     public string Root => _root;
 
-    private AssetCatalog(AssetCatalog source, AssetLibraryDocument snapshot)
+    private AssetCatalog(AssetCatalog source, CatalogSnapshot snapshot)
     {
         _root = source._root;
         _indexPath = source._indexPath;
         _clock = source._clock;
         _metadataWriter = source._metadataWriter;
-        _document = snapshot;
-        Reindex();
+        _document = snapshot.Own.Document;
+        _snapshot = snapshot;
     }
 
     public Task<AssetQueryResult> QueryAsync(AssetQuery query, CancellationToken cancellationToken)
     {
         // The query copy sees the owner's library and every mounted drive library as one list;
         // it never writes, so the merged snapshot is never persisted anywhere.
-        var snapshot = _mounts.Count == 0
-            ? MetadataSnapshot()
-            : Merge(MetadataSnapshot(), _mounts.Select(mount => mount.MetadataSnapshot()));
-        return Task.Run(() => new AssetCatalog(this, snapshot).Query(query, cancellationToken), cancellationToken);
+        var snapshot = _snapshot;
+        return Task.Run(() => new AssetCatalog(this, snapshot).QueryCore(query, cancellationToken), cancellationToken);
     }
 
-    public AssetLibraryStatus Status => _document.Status;
+    public AssetLibraryStatus Status => _snapshot.Own.Document.Status;
 
     /// <summary>Why the library is not Ready; empty when it is.</summary>
-    public string Diagnostic => _document.Diagnostic;
+    public string Diagnostic => _snapshot.Own.Document.Diagnostic;
 
-    public int SchemaVersion => _document.SchemaVersion;
+    public int SchemaVersion => _snapshot.Own.Document.SchemaVersion;
 
     // Reads see the owner's library and every mounted drive library together (_view); writes go
     // to the catalog that owns the card, so a drive library is never copied into the owner's index.
@@ -136,22 +150,18 @@ public sealed class AssetCatalog : IAsyncDisposable
 
     // ---------------------------------------------------------------- mounted drive libraries
 
-    private readonly List<AssetCatalog> _mounts = [];
-    private AssetLibraryDocument _view = new();
-    private Dictionary<string, AssetCatalog> _mountBySha = new(StringComparer.OrdinalIgnoreCase);
-    private Dictionary<string, AssetCatalog> _mountByVariant = new(StringComparer.Ordinal);
-    private Dictionary<string, AssetCatalog> _mountBySet = new(StringComparer.Ordinal);
+    private AssetLibraryDocument _view => _snapshot.View;
 
     /// <summary>Catalogs of the drive libraries attached right now, in mount order.</summary>
-    public IReadOnlyList<AssetCatalog> Mounts => _mounts;
+    public IReadOnlyList<AssetCatalog> Mounts => _snapshot.Mounts;
 
     /// <summary>The drive library a card comes from; null for the owner's own library.</summary>
     public AssetCatalog? MountOfSet(string setId) =>
-        setId is not null && _mountBySet.TryGetValue(setId, out var mount) ? mount : null;
+        _snapshot.MountForSet(setId);
 
     /// <summary>The folder that holds this record's files (the owner's library or its drive library).</summary>
     public string RootFor(AssetRecord record) =>
-        record is not null && _mountBySha.TryGetValue(record.Sha256, out var mount) ? mount._root : _root;
+        record is not null && _snapshot.MountForRecord(record.Sha256) is { } mount ? mount._root : _root;
 
     /// <summary>
     /// Attaches exactly these catalog folders (drive libraries); folders no longer listed are
@@ -163,7 +173,7 @@ public sealed class AssetCatalog : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(catalogRoots);
         var wanted = WantedRoots(catalogRoots);
         if (SameMounts(wanted)) return;
-        var kept = _mounts.ToDictionary(mount => mount._root, StringComparer.OrdinalIgnoreCase);
+        var kept = Mounts.ToDictionary(mount => mount._root, StringComparer.OrdinalIgnoreCase);
         AttachMounts(wanted.Select(root => kept.GetValueOrDefault(root) ?? OpenMounted(root)).OfType<AssetCatalog>().ToList());
     }
 
@@ -194,15 +204,15 @@ public sealed class AssetCatalog : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(mounts);
         var next = mounts.Where(mount => mount is not null && !string.Equals(mount._root, _root, StringComparison.OrdinalIgnoreCase))
             .DistinctBy(mount => mount._root, StringComparer.OrdinalIgnoreCase).ToList();
-        if (next.Select(mount => mount._root).SequenceEqual(_mounts.Select(mount => mount._root), StringComparer.OrdinalIgnoreCase)
-            && next.Zip(_mounts).All(pair => ReferenceEquals(pair.First, pair.Second))) return;
+        var previous = Mounts;
+        if (next.Select(mount => mount._root).SequenceEqual(previous.Select(mount => mount._root), StringComparer.OrdinalIgnoreCase)
+            && next.Zip(previous).All(pair => ReferenceEquals(pair.First, pair.Second))) return;
         var stay = next.ToHashSet();
         // Detached libraries finish their pending writes in the background; their drive may already be gone.
-        foreach (var gone in _mounts.Where(mount => !stay.Contains(mount)))
+        foreach (var gone in previous.Where(mount => !stay.Contains(mount)))
             _ = gone.FlushMetadataAsync().ContinueWith(static task => _ = task.Exception, TaskScheduler.Default);
-        _mounts.Clear();
-        _mounts.AddRange(next);
-        Reindex();
+        _snapshot = new CatalogSnapshot(_snapshot.Own,
+            next.Select(mount => new MountedLayer(mount, mount._snapshot.Own)).ToArray());
         MetadataRevision++;
         ContentRevision++;
         MountsChanged?.Invoke(this, EventArgs.Empty);
@@ -218,31 +228,31 @@ public sealed class AssetCatalog : IAsyncDisposable
         .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 
     private bool SameMounts(List<string> wanted) =>
-        wanted.SequenceEqual(_mounts.Select(mount => mount._root), StringComparer.OrdinalIgnoreCase);
+        wanted.SequenceEqual(Mounts.Select(mount => mount._root), StringComparer.OrdinalIgnoreCase);
 
-    private void AfterMountChange(bool content = true)
+    private void AfterMountChange(AssetCatalog mount, bool content = true)
     {
-        Reindex();
+        RefreshMount(mount);
         MetadataRevision++;
         if (content) ContentRevision++;
     }
 
     private bool TryRouteSet(string setId, Action<AssetCatalog> change, bool content = true)
     {
-        if (setId is null || !_mountBySet.TryGetValue(setId, out var mount)) return false;
-        return Route(mount, change, content, () => _mountBySet.GetValueOrDefault(setId));
+        if (_snapshot.MountForSet(setId) is not { } mount) return false;
+        return Route(mount, change, content, () => _snapshot.MountForSet(setId));
     }
 
     private bool TryRouteVariant(string variantId, Action<AssetCatalog> change)
     {
-        if (variantId is null || !_mountByVariant.TryGetValue(variantId, out var mount)) return false;
-        return Route(mount, change, true, () => _mountByVariant.GetValueOrDefault(variantId));
+        if (_snapshot.MountForVariant(variantId) is not { } mount) return false;
+        return Route(mount, change, true, () => _snapshot.MountForVariant(variantId));
     }
 
     private bool TryRouteRecord(string sha256, Action<AssetCatalog> change)
     {
-        if (sha256 is null || !_mountBySha.TryGetValue(sha256, out var mount)) return false;
-        return Route(mount, change, true, () => _mountBySha.GetValueOrDefault(sha256));
+        if (_snapshot.MountForRecord(sha256) is not { } mount) return false;
+        return Route(mount, change, true, () => _snapshot.MountForRecord(sha256));
     }
 
     /// <summary>
@@ -254,16 +264,15 @@ public sealed class AssetCatalog : IAsyncDisposable
     {
         if (mount.ChangedOnDisk && OpenMounted(mount._root) is { } fresh)
         {
-            _mounts[_mounts.IndexOf(mount)] = fresh;
-            Reindex();
+            RefreshMount(mount, fresh);
             MetadataRevision++;
             ContentRevision++;
             mount = again() ?? fresh;
-            if (!ReferenceEquals(mount, fresh) && !_mounts.Contains(mount)) return false;
+            if (!ReferenceEquals(mount, fresh) && !Mounts.Contains(mount)) return false;
         }
 
         change(mount);
-        AfterMountChange(content);
+        AfterMountChange(mount, content);
         return true;
     }
 
@@ -313,20 +322,29 @@ public sealed class AssetCatalog : IAsyncDisposable
             return null;
         }
 
-        var variantIds = _view.Variants
+        var snapshot = _snapshot;
+        var variantIds = snapshot.View.Variants
             .Where(variant => string.Equals(variant.Sha256, sha256, StringComparison.OrdinalIgnoreCase))
             .Select(variant => variant.Id)
             .ToHashSet(StringComparer.Ordinal);
         return variantIds.Count == 0
             ? null
-            : _view.Sets.FirstOrDefault(set => set.VariantIds.Any(variantIds.Contains));
+            : snapshot.View.Sets.FirstOrDefault(set => set.VariantIds.Any(variantIds.Contains));
     }
 
-    public AssetRecord? RecordForVariant(string variantId) =>
-        FindVariant(variantId) is { } variant ? Find(variant.Sha256) : null;
+    public AssetRecord? RecordForVariant(string variantId)
+    {
+        var snapshot = _snapshot;
+        return snapshot.ByVariant.TryGetValue(variantId, out var variant)
+            && snapshot.BySha.TryGetValue(variant.Sha256, out var record) ? record : null;
+    }
 
-    public AssetRecord? MaskRecordForVariant(string variantId) =>
-        FindVariant(variantId)?.MaskSha256 is { } maskSha ? Find(maskSha) : null;
+    public AssetRecord? MaskRecordForVariant(string variantId)
+    {
+        var snapshot = _snapshot;
+        return snapshot.ByVariant.TryGetValue(variantId, out var variant) && variant.MaskSha256 is { } sha
+            && snapshot.BySha.TryGetValue(sha, out var record) ? record : null;
+    }
 
     // ---------------------------------------------------------------- import
 
@@ -418,7 +436,7 @@ public sealed class AssetCatalog : IAsyncDisposable
             var id = AssetIdentity.SetIdForKey(item.StableKey);
             var index = _document.Sets.FindIndex(set => set.Id == id);
             var variantIds = index >= 0 ? [.. _document.Sets[index].VariantIds] : new List<string>();
-            var known = variantIds.Select(v => _byVariantId.TryGetValue(v, out var variant) ? variant.Sha256 : "")
+            var known = variantIds.Select(v => ImportVariant(v)?.Sha256 ?? "")
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
             if (string.IsNullOrWhiteSpace(item.Name) || item.Labels.Any(string.IsNullOrWhiteSpace))
                 throw new ArgumentException($"Набор «{item.StableKey}»: пустое имя или подпись варианта.", nameof(items));
@@ -432,7 +450,7 @@ public sealed class AssetCatalog : IAsyncDisposable
                 {
                     var variant = new AssetVariant { Id = variantId, Sha256 = record.Sha256, Label = item.Labels[i].Trim() };
                     _document.Variants.Add(variant);
-                    _byVariantId[variantId] = variant;
+                    _activeMutation!.Variants[variantId] = variant;
                 }
 
                 variantIds.Add(variantId);
@@ -511,7 +529,7 @@ public sealed class AssetCatalog : IAsyncDisposable
         var sha256 = Convert.ToHexStringLower(SHA256.HashData(bytes));
         // Only the owner's own records are reused: equal bytes on an attached drive are not stored
         // here, and a card must never point at content that disappears with the drive.
-        if (_bySha.TryGetValue(sha256, out var existing) && !_mountBySha.ContainsKey(sha256))
+        if (ImportRecord(sha256) is { } existing)
         {
             return existing;
         }
@@ -571,8 +589,7 @@ public sealed class AssetCatalog : IAsyncDisposable
         };
 
         _document.Records.Add(record);
-        _bySha[sha256] = record;
-        _mountBySha.Remove(sha256);
+        _activeMutation!.Records[sha256] = record;
         return record;
     }
 
@@ -615,6 +632,9 @@ public sealed class AssetCatalog : IAsyncDisposable
     /// no original is opened, so this stays metadata-only at ten thousand sets.
     /// </summary>
     public AssetQueryResult Query(AssetQuery query, CancellationToken cancellationToken = default)
+        => new AssetCatalog(this, _snapshot).QueryCore(query, cancellationToken);
+
+    private AssetQueryResult QueryCore(AssetQuery query, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(query);
         var recentOrder = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
@@ -1038,7 +1058,10 @@ public sealed class AssetCatalog : IAsyncDisposable
         SaveIndex();
     }
 
-    /// <summary>Favorite belongs to the logical card, so the whole set is marked at once.</summary>
+    /// <summary>
+    /// Favorite belongs to the logical card. Visible immediately; await FlushMetadataAsync to
+    /// ensure persistence and observe a write failure, just as for recent selections.
+    /// </summary>
     public void SetSetFavorite(string setId, bool favorite)
     {
         if (TryRouteSet(setId, mount => mount.SetSetFavorite(setId, favorite))) return;
@@ -1056,7 +1079,10 @@ public sealed class AssetCatalog : IAsyncDisposable
             }
         }
 
-        SaveIndex();
+        // In the owner's library a favourite is on disk when the call returns (the index is small).
+        // A drive library's index holds thousands of cards: its write goes through the serial writer
+        // like recent uses, so a click does not freeze the window; Map flushes it on exit.
+        SaveIndex(wait: !_isMounted);
     }
 
     /// <summary>
@@ -1198,6 +1224,7 @@ public sealed class AssetCatalog : IAsyncDisposable
             return;
         }
 
+        _document = CopyRecentDocument(_document);
         _document.Recent.RemoveAll(entry => string.Equals(entry.SetId, setId, StringComparison.Ordinal));
         _document.Recent.Insert(0, new AssetRecentEntry
         {
@@ -1222,21 +1249,17 @@ public sealed class AssetCatalog : IAsyncDisposable
         if (Status == AssetLibraryStatus.Damaged || FindSet(setId) is not { } set
             || !set.VariantIds.Contains(variantId, StringComparer.Ordinal)
             || CurrentVariantOf(setId) == variantId) return;
+        _document = CopyRecentDocument(_document);
         _document.CurrentVariantBySet[setId] = variantId;
         SyncRecentView();
         _metadataWriter.Enqueue(MetadataSnapshot());
     }
 
-    /// <summary>The combined view copies the recent list and remembered variants: keep it current without a full rebuild.</summary>
+    /// <summary>Publish recent state with the same content indexes; existing query snapshots stay unchanged.</summary>
     private void SyncRecentView()
     {
-        if (ReferenceEquals(_view, _document)) return;
-        _view.Recent = [.. _document.Recent.Concat(_mounts.SelectMany(mount => mount._document.Recent))
-            .OrderByDescending(entry => entry.UsedUtc)];
-        var current = new Dictionary<string, string>(_document.CurrentVariantBySet);
-        foreach (var mount in _mounts)
-            foreach (var pair in mount._document.CurrentVariantBySet) current.TryAdd(pair.Key, pair.Value);
-        _view.CurrentVariantBySet = current;
+        var snapshot = _snapshot;
+        _snapshot = new(new CatalogLayer(CopyRecentDocument(_document), snapshot.Own), snapshot.Mounted);
     }
 
     /// <summary>Replaces the flat record list; used by fixtures and by profile generators.</summary>
@@ -1284,7 +1307,7 @@ public sealed class AssetCatalog : IAsyncDisposable
             throw new ArgumentException("Библиотека противоречива: " + reason, nameof(document));
         }
 
-        _document = document;
+        _document = CopyDocument(document);
         _document.Status = AssetLibraryStatus.Ready;
         SaveIndex();
     }
@@ -1304,7 +1327,7 @@ public sealed class AssetCatalog : IAsyncDisposable
     public AssetPayloadResolution ReadVerified(AssetRecord record)
     {
         ArgumentNullException.ThrowIfNull(record);
-        if (_mountBySha.TryGetValue(record.Sha256, out var mount)) return mount.ReadVerified(record);
+        if (_snapshot.MountForRecord(record.Sha256) is { } mount) return mount.ReadVerified(record);
         var path = record.StoredRelativePath is { } stored
             ? ResolveCatalogRelative(stored, "originals")
             : record.LinkedPath;
@@ -1435,7 +1458,7 @@ public sealed class AssetCatalog : IAsyncDisposable
     }
 
     public string ThumbnailPath(AssetRecord record) =>
-        _mountBySha.TryGetValue(record.Sha256, out var mount)
+        _snapshot.MountForRecord(record.Sha256) is { } mount
             ? mount.ThumbnailPath(record)
             : ResolveCatalogRelative(record.ThumbnailRelativePath, "thumbnails");
 
@@ -1510,47 +1533,48 @@ public sealed class AssetCatalog : IAsyncDisposable
         Sets = [.. document.Sets], Recent = [.. document.Recent], CurrentVariantBySet = new(document.CurrentVariantBySet),
     };
 
+    private static AssetLibraryDocument CopyRecentDocument(AssetLibraryDocument document) => new()
+    {
+        SchemaVersion = document.SchemaVersion, Status = document.Status, Diagnostic = document.Diagnostic,
+        Records = document.Records, Variants = document.Variants, Collections = document.Collections,
+        Sets = document.Sets, Recent = [.. document.Recent], CurrentVariantBySet = new(document.CurrentVariantBySet),
+    };
+
     private sealed class CatalogMutation : IDisposable
     {
         private readonly AssetCatalog _owner;
         private readonly AssetLibraryDocument _before;
         private readonly CatalogMutation? _parent;
+        public Dictionary<string, AssetRecord> Records { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, AssetVariant> Variants { get; } = new(StringComparer.Ordinal);
         public bool Published { get; set; }
         public CatalogMutation(AssetCatalog owner)
         {
             _owner = owner; _before = owner._document; _parent = owner._activeMutation;
             owner._document = CopyDocument(_before); owner._activeMutation = this;
-            owner.Reindex();
         }
         public void Dispose()
         {
-            if (!Published) { _owner._document = _before; _owner.Reindex(); }
+            if (!Published) _owner._document = _before;
             _owner._activeMutation = _parent;
         }
     }
 
-    private void SaveIndex()
+    private void SaveIndex(bool wait = true)
     {
         RequireWritable();
-        // Do not publish candidate indexes/revisions or replace the shared metadata base until
-        // the serial writer has validated, read back and atomically published this candidate.
+        // Content changes wait for atomic persistence before publication. Coalesced metadata
+        // (favorite) publishes immediately; FlushMetadataAsync restores LastSaved on failure.
         var candidate = CopyDocument(_document);
         _metadataWriter.Enqueue(candidate);
-        _metadataWriter.FlushAsync().GetAwaiter().GetResult();
+        if (wait) _metadataWriter.FlushAsync().GetAwaiter().GetResult();
         Reindex();
         CaptureMetadataBase();
         MetadataRevision++;
         ContentRevision++;
         if (_activeMutation is { } mutation) mutation.Published = true;
     }
-    private void CaptureMetadataBase() => _metadataBase = new AssetLibraryDocument
-    {
-        Records = [.. _document.Records.Select(record => record with { Tags = record.Tags.ToArray() })],
-        Variants = [.. _document.Variants],
-        Collections = [.. _document.Collections],
-        Sets = [.. _document.Sets.Select(set => set with
-            { VariantIds = set.VariantIds.ToArray(), Tags = set.Tags.ToArray() })],
-    };
+    private void CaptureMetadataBase() => _metadataBase = _snapshot.Own.Document;
 
     private AssetLibraryDocument MetadataSnapshot() => new()
     {
@@ -1561,32 +1585,8 @@ public sealed class AssetCatalog : IAsyncDisposable
 
     private void Reindex()
     {
-        _view = _mounts.Count == 0 ? _document : Merge(_document, _mounts.Select(mount => mount._document));
-        _bySha = _view.Records
-            .GroupBy(record => record.Sha256, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
-        _byVariantId = _view.Variants
-            .GroupBy(variant => variant.Id, StringComparer.Ordinal)
-            .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
-        _bySetId = _view.Sets
-            .GroupBy(set => set.Id, StringComparer.Ordinal)
-            .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
-        _mountBySha = new(StringComparer.OrdinalIgnoreCase);
-        _mountByVariant = new(StringComparer.Ordinal);
-        _mountBySet = new(StringComparer.Ordinal);
-        if (_mounts.Count == 0) return;
-        var ownSha = _document.Records.Select(r => r.Sha256).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var ownVariants = _document.Variants.Select(v => v.Id).ToHashSet(StringComparer.Ordinal);
-        var ownSets = _document.Sets.Select(s => s.Id).ToHashSet(StringComparer.Ordinal);
-        foreach (var mount in _mounts)
-        {
-            foreach (var record in mount._document.Records)
-                if (!ownSha.Contains(record.Sha256)) _mountBySha.TryAdd(record.Sha256, mount);
-            foreach (var variant in mount._document.Variants)
-                if (!ownVariants.Contains(variant.Id)) _mountByVariant.TryAdd(variant.Id, mount);
-            foreach (var set in mount._document.Sets)
-                if (!ownSets.Contains(set.Id)) _mountBySet.TryAdd(set.Id, mount);
-        }
+        var snapshot = _snapshot;
+        _snapshot = new(new CatalogLayer(CopyDocument(_document), snapshot.Own), snapshot.Mounted);
     }
 
     private string ResolveCatalogRelative(string relative, string requiredTopLevel)
