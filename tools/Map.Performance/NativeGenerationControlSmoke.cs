@@ -161,6 +161,12 @@ public sealed class GenerationControlApplication : Application
         Press("UndoButton"); await Settle();
         Check("recalculated-undo-restores-protected-source", Layer.Board.CellCount == 0 && Layer.GenerationProtection.Contains(h));
         await Shot("undo");
+        // Variant 7 «Плитки-значки» (owner, 2026-11-12): every tile of the generator opens its card of ten real frames.
+        Check("tiles-protected-count", _view.GetVisualDescendants().OfType<TextBlock>().Any(t => t.Name == "GenerationProtectedCount" && t.Text?.Contains("гекс", StringComparison.Ordinal) == true));
+        await GenerationCards("hex", "HexGenAllButton", "HexGeneratorCategory", 18);
+        _editor.ActiveTool = EditorTool.Land; await Settle();
+        await GenerationCards("continent", "ContinentAllButton", "LandContinentCategory", 10);
+        _editor.ActiveTool = EditorTool.Hex; await Settle();
         await AreaScenario();
         await Task.Run(Measure1024);
     }
@@ -220,6 +226,64 @@ public sealed class GenerationControlApplication : Application
             && reopened.PlacementAreas.Single().GenerationProtectionMask?.Factor(itemX, itemY) < .99);
         Press("UndoButton"); await Settle();
         Check("area-one-undo-restores-source", _editor.Session.Document.Layers.SequenceEqual(source.Layers));
+        await GenerationCards("area", "GenerationAreaStartButton", "GenerationAreaControls", 7);
+    }
+
+    /// <summary>Opens the card of every generation tile shown with <paramref name="anchor"/> and waits for its ten frames.</summary>
+    private async Task GenerationCards(string stage, string anchor, string container, int expected)
+    {
+        Reveal(anchor); await Settle();
+        var seen = new HashSet<PanelDemoKind>(); var bad = new List<string>(); var times = new List<string>();
+        // Built panels of other tools stay in the tree: only the tiles inside this panel's own section count.
+        bool Inside(Control c) => Avalonia.LogicalTree.LogicalExtensions.GetLogicalAncestors(c).OfType<Control>().Any(a => a.Name == container);
+        foreach (var (target, kind, title) in _view.ExplainedForSmoke.Where(e => e.Kind.IsGeneration() && Inside(e.Target)).ToArray())
+        {
+            if (!target.IsEffectivelyVisible || !seen.Add(kind)) continue;
+            target.BringIntoView(); await Settle();
+            var watch = Stopwatch.StartNew();
+            _view.ShowExplainForSmoke(target);
+            while (!_view.ExplainReadyForSmoke(kind) && watch.Elapsed < TimeSpan.FromSeconds(60)) { await Task.Delay(50); await Settle(); }
+            var (shown, frames, open) = _view.ExplainStateForSmoke;
+            times.Add($"{kind} {watch.ElapsedMilliseconds} ms");
+            Console.WriteLine($"card {stage}/{kind} «{title}»: {watch.ElapsedMilliseconds} ms, frames {frames}, open {open}");
+            if (shown != kind || frames != 10 || !open)
+            {
+                // Why: the frames' own calculation, outside the card.
+                string why;
+                try { why = _editor.GenerationDemo(kind, out string _) is { } work ? $"{work().Count} frames made directly" : "nothing to show"; }
+                catch (Exception ex) { why = ex.GetType().Name + ": " + ex.Message; }
+                Console.WriteLine($"card {stage}/{kind}: {why}");
+                bad.Add($"{kind}: frames {frames}, open {open}, {why}");
+            }
+            else if (_view.ExplainCardForSmoke is { } card)
+            {
+                _view.ShowExplainFrameForSmoke(6); await Settle();
+                var size = card.Bounds.Size;
+                using var bitmap = new RenderTargetBitmap(new PixelSize((int)Math.Ceiling(size.Width), (int)Math.Ceiling(size.Height)));
+                bitmap.Render(card);
+                var path = Path.ChangeExtension(Options.OutputPath, $".card-{stage}-{kind}.png");
+                bitmap.Save(path, PngBitmapEncoderOptions.Default); _report.Frames.Add(path);
+            }
+            _view.HideExplainForSmoke(); await Settle();
+        }
+        _report.Notes["cards-" + stage] = string.Join("; ", times) + (bad.Count > 0 ? " | " + string.Join("; ", bad) : "");
+        Check("cards-" + stage, seen.Count == expected && bad.Count == 0);
+    }
+
+    private void Reveal(string name)
+    {
+        var target = Avalonia.LogicalTree.LogicalExtensions.GetLogicalDescendants(_view).OfType<Control>().FirstOrDefault(c => c.Name == name);
+        if (target is not null)
+            foreach (var ancestor in Avalonia.LogicalTree.LogicalExtensions.GetLogicalAncestors(target).OfType<Control>().Reverse())
+            {
+                if (ancestor.Tag is string tag && tag.StartsWith("HexReveal:", StringComparison.Ordinal))
+                    Avalonia.LogicalTree.LogicalExtensions.GetLogicalDescendants(_view).OfType<Button>()
+                        .FirstOrDefault(b => b.Name == tag["HexReveal:".Length..])?.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                if (ancestor is Expander expander) expander.IsExpanded = true;
+            }
+        _view.UpdateLayout();
+        NativeEditorScenarioApplication.RevealTab(_view, name);
+        _view.UpdateLayout();
     }
 
     private void Measure1024()

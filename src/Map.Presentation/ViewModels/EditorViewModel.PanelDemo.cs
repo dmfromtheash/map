@@ -11,6 +11,15 @@ public enum PanelDemoKind
     Scale, Rotation, Sublayer, Flip, Opacity,
     Spacing, Seed, AddNode, DeleteNode, PickObject, Detach, ApplyToPath, Bake, DeletePath,
     Reset,
+
+    // The generation panels (variant 7, 2026-11-12): frames by GenerationDemos, not by PanelDemo. Order matters there.
+    GenHexLand, GenHexRelief, GenHexClimate, GenHexRivers, GenHexSettlements, GenHexRoads, GenHexStates,
+    GenHexAll, GenHexReroll, GenHexSeed,
+    GenHexProtectBrush, GenHexProtectErase, GenHexProtectSelection, GenHexUnprotectSelection, GenHexSelectionOnly,
+    GenApply, GenCancel, GenRecalculate,
+    GenContinentHeights, GenContinentErosion, GenContinentClimate, GenContinentRivers, GenContinentSettlements,
+    GenContinentAll, GenContinentSeed,
+    GenAreaProtectBrush, GenAreaProtectErase, GenAreaProtectStop, GenAreaStart,
 }
 
 /// <summary>

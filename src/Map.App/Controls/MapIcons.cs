@@ -249,6 +249,46 @@ public static class MapIcons
     public static readonly string HexPaste = "M8.5 4.5 H5.5 V20.5 H18.5 V4.5 H15.5 M8.5 3 H15.5 V6.5 H8.5 Z M9 11.5 H15 M9 15 H15";
     public static readonly string HexPlayer = "M2.5 12 C5 7.5 8.3 5.5 12 5.5 C15.7 5.5 19 7.5 21.5 12 C19 16.5 15.7 18.5 12 18.5 C8.3 18.5 5 16.5 2.5 12 Z " + Ring(12, 12, 3);
 
+    // Generation panels (owner, 2026-11-12, variant 7 «Плитки-значки» of https://claude.ai/artifact/2JRg4noKtdLyhPGW4N5Xki):
+    // the drawing says what the item does; a dashed hex is the selected hexes, a shield is protection from the calculation.
+    public static readonly string GenLand = "M5 13.5 C5 9.5 8 7 11 8 C14 9 14.2 5 17.2 6.8 C20.2 8.6 19.2 12.8 17.2 14 C15.2 15.2 13 14.2 11 15.6 C9 17 5 17.5 5 13.5 Z " +
+        "M2 20.5 C3.5 19.5 5 19.5 6.5 20.5 C8 21.5 9.5 21.5 11 20.5 M13 20.5 C14.5 19.5 16 19.5 17.5 20.5 C19 21.5 20.5 21.5 22 20.5";
+    public static readonly string GenRelief = "M2 20 L8.5 9 L12 14.5 L15 10 L22 20 Z M6.6 12.2 L8.5 13.5 L10.1 11.8";
+    public static readonly string GenErosion = "M2 19.5 L9 8 L13 13 L16 10 L22 19.5 M9.4 11.5 C10.6 14 8.8 16 10 19.5 M15.6 13.5 C16.4 15.5 15.4 17 16.2 19.5";
+    public static readonly string GenClimate = "M12 3 L16.5 9.5 H13.8 L17.8 15.5 H6.2 L10.2 9.5 H7.5 Z M12 15.5 V21";
+    public static readonly string GenRivers = "M4 3 C6 6 9 7 9 10.2 C9 13.4 6 14.2 7.8 17 C9.6 19.8 14 20.2 16 21 M19.5 4 C18.5 7.2 15 8.4 9.2 10.6";
+    public static readonly string GenSettlements = "M3.5 20 V13 L8 9.5 L12.5 13 V20 M14.5 20 V8.5 H16 V6.5 H18 V8.5 H19.5 V20 M2 20 H22 M7 20 V17 H9 V20";
+    public static readonly string GenRoads = Ring(5, 19, 2) + Ring(19, 5, 2) + "M6.8 17.3 L8.4 16 M9.6 14.6 L10.6 12.8 M11.8 11.2 L13.6 10.2 M15 9.5 L16.6 8.4";
+    public static readonly string GenStates = "M5 21 V3.5 M5 4 H17.5 L14.7 8 L17.5 12 H5";
+    public static readonly string GenAll = "M3 6 L10 12 L3 18 Z M11 6 L18 12 L11 18 Z M21 5 V19";
+    public static readonly string GenReroll = "M19.5 12.5 A7.5 7.5 0 1 1 17 6.6 M19 3 V7.5 H14.5 M10.5 10.2 L12.5 9 V15.5";
+    private const string GenShield = "M12 7.5 L15.5 8.8 V11.7 C15.5 14.1 13.9 15.7 12 16.7 C10.1 15.7 8.5 14.1 8.5 11.7 V8.8 Z ";
+    public static readonly string GenProtectBrush = "M19.5 3 L12.5 10 M10.6 9 L14 12.4 M11.4 11.6 C9.4 11 7.6 12 7.1 13.9 C6.6 15.8 5.6 17 3.5 17.6 " +
+        "C5.9 19.6 9.8 19.1 11.3 16.8 C12.8 14.5 12.4 12.6 11.4 11.6 Z M18 13.2 L21 14.3 V16.7 C21 18.7 19.6 20 18 20.9 C16.4 20 15 18.7 15 16.7 V14.3 Z";
+    public static readonly string GenProtectErase = "M4 16 L12.5 7.5 L18.5 13.5 L14 18 H6 Z M9 11 L15 17 M14 20.5 H21";
+    public static readonly string GenProtectStop = "M19.5 3 L12.5 10 M10.6 9 L14 12.4 M11.4 11.6 C9.4 11 7.6 12 7.1 13.9 C6.6 15.8 5.6 17 3.5 17.6 " +
+        "C5.9 19.6 9.8 19.1 11.3 16.8 C12.8 14.5 12.4 12.6 11.4 11.6 Z M15.5 15 L20.5 20 M20.5 15 L15.5 20";
+    public static readonly string GenProtectSelection = DashedHex() + GenShield;
+    public static readonly string GenUnprotectSelection = DashedHex() + GenShield + "M7.5 16.5 L16.5 7.5";
+    public static readonly string GenSelectionOnly = DashedHex() + "M12 8.5 L15 10.25 V13.75 L12 15.5 L9 13.75 V10.25 Z";
+    public static readonly string GenArea = "M4 7 L11 3.5 L20 7.5 L18 18.5 L7 20 Z M8.5 14.5 L10.5 11 L12.5 14.5 M12 14.5 L14 10.5 L16 14.5";
+    public static readonly string GenApply = "M4 12.5 L9 17.5 L20 6.5";
+    public static readonly string GenCancel = "M6 6 L18 18 M18 6 L6 18";
+    public static readonly string GenRecalculate = "M19.5 9 A8 8 0 0 0 5 7.5 M4.5 3.5 V7.5 H8.5 M4.5 15 A8 8 0 0 0 19 16.5 M19.5 20.5 V16.5 H15.5";
+
+    /// <summary>A hex drawn as six strokes with gaps at the corners: the selection's dashed outline.</summary>
+    private static string DashedHex()
+    {
+        (double X, double Y)[] c = [(12, 2.5), (20.2, 7.25), (20.2, 16.75), (12, 21.5), (3.8, 16.75), (3.8, 7.25)];
+        var s = new System.Text.StringBuilder();
+        for (var k = 0; k < 6; k++)
+        {
+            var (ax, ay) = c[k]; var (bx, by) = c[(k + 1) % 6];
+            s.Append(System.Globalization.CultureInfo.InvariantCulture, $"M{ax + (bx - ax) * .18:0.##} {ay + (by - ay) * .18:0.##} L{ax + (bx - ax) * .82:0.##} {ay + (by - ay) * .82:0.##} ");
+        }
+        return s.ToString();
+    }
+
     // ------------------------------------------- solid set (Inkarnate parity 2026-10-16)
     // REA showed Inkarnate's rail as 24 px solid glyphs that read at a glance; Map's 1.6 px outlines
     // at 21 px looked faint on the dark rail. These are Map's own drawings on the same 24-unit

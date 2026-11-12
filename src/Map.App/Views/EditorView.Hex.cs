@@ -1088,7 +1088,7 @@ public sealed partial class EditorView
 
     private Control BuildHexGeneratorSection()
     {
-        var seed = new TextBox { Name = "HexGeneratorSeedBox", Width = 96, MinWidth = 0 };
+        var seed = new TextBox { Name = "HexGeneratorSeedBox", MinWidth = 0 };
         HexSync(() => seed.Text = _editor.HexGeneratorSettings.Seed.ToString(CultureInfo.InvariantCulture), nameof(EditorViewModel.HexGeneratorSettings));
         seed.LostFocus += (_, _) =>
         {
@@ -1158,33 +1158,38 @@ public sealed partial class EditorView
             flow.IsChecked = settings.RiverModel == HexGeneratorSettings.FlowRivers;
         }, nameof(EditorViewModel.HexGeneratorSettings));
 
-        var steps = HexGrid(2);
+        // Variant 7 «Плитки-значки» (owner, 2026-11-12): the steps are tiles four in a row, the whole world the eighth.
+        var steps = FixedTiles(4);
         foreach (var step in Enum.GetValues<HexGenerationStep>())
         {
             var value = step;
-            var button = Ui.TextButton("HexGenStep" + step, $"{(int)step + 1}. {EditorViewModel.HexGenerationStepName(step)}",
-                () => _editor.RunHexGeneratorStep(value), "compact");
-            button.HorizontalAlignment = HorizontalAlignment.Stretch;
-            steps.Children.Add(button);
+            var (kind, card) = HexStepCard(step);
+            steps.Children.Add(Explain(GenerationTile("HexGenStep" + step, HexStepShort(step), HexStepIcon(step), () => _editor.RunHexGeneratorStep(value),
+                $"шаг {(int)step + 1}", $"{(int)step + 1}. {EditorViewModel.HexGenerationStepName(step)}"),
+                kind, $"{(int)step + 1}. {EditorViewModel.HexGenerationStepName(step)}", card));
         }
+        var all = Explain(GenerationTile("HexGenAllButton", "Мир целиком", MapIcons.GenAll, _editor.RunHexGeneratorAll, "шаги 1–7", "Создать мир целиком"),
+            PanelDemoKind.GenHexAll, "Создать мир целиком", "Семь шагов по порядку с одним зерном: один предпросмотр, «Применить» — одна отмена.");
+        Lit(all);
+        steps.Children.Add(all);
 
-        var reroll = HexCommand("HexGenRerollButton", "Перебросить шаг", MapIcons.LineReset, _editor.RerollHexGeneratorStep);
-        ToolTip.SetTip(reroll, "Отменить последний шаг генератора и сделать его заново с другим случаем.");
+        var reroll = Explain(HexCommand("HexGenRerollButton", "Перебросить шаг", MapIcons.GenReroll, _editor.RerollHexGeneratorStep),
+            PanelDemoKind.GenHexReroll, "Перебросить шаг", "Последний шаг заново со следующим зерном; шаги до него не меняются.");
         HexSync(() => reroll.IsEnabled = _editor.HexCanRerollGenerator, [.. DocumentChanged, nameof(EditorViewModel.HexCanRerollGenerator)]);
-        var all = HexCommand("HexGenAllButton", "Создать мир целиком", MapIcons.LineSparkle, _editor.RunHexGeneratorAll, "accent");
+        var dice = Explain(HexIcon("HexGenSeedButton", "Случайное зерно", MapIcons.HexDice, _editor.NewHexGeneratorSeed),
+            PanelDemoKind.GenHexSeed, "Случайное зерно", "Другое зерно — другой мир при тех же настройках; то же зерно — тот же мир.");
         return Ui.Category("HexGeneratorCategory", "Генератор мира", "accent-create", new StackPanel
         {
             Spacing = 8,
             Children =
             {
                 HexHint("Расчёт идёт в фоне. Предпросмотр не меняет карту. «Применить» — одна отмена; защита сохраняет гексы и пересекающие её пути."),
-                HexRow("Зерно", seed, HexIcon("HexGenSeedButton", "Случайное зерно", MapIcons.HexDice, _editor.NewHexGeneratorSeed)),
                 Ui.Subgroup("Вид мира", new StackPanel { Spacing = 4, Children = { modeRow, openEdges } }),
                 Ui.Subgroup("Суша и рельеф", land),
                 Ui.Subgroup("Климат", climate),
                 Ui.Subgroup("Реки и поселения на 1000 гексов", new StackPanel { Spacing = 4, Children = { life, flow } }),
                 Ui.Subgroup("Шаги по порядку", steps),
-                HexGrid(2, all, reroll),
+                SeedRow(seed, dice, reroll),
                 BuildGenerationControls(),
             },
         }, expanded: false);

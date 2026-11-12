@@ -24,6 +24,12 @@ public sealed partial class EditorViewModel
     public bool HexCanRerollGenerator => ActiveHexLayer?.GenerationRecipe is not null && !GenerationBusy;
     public MapDocument? GenerationPreview => GenerationConflict ? null : _generation.Preview;
 
+    /// <summary>What the running or previewed calculation makes: a step's name, «Мир целиком», «Весь материк», «Область».</summary>
+    public string GenerationWhat { get; private set; } = "";
+
+    /// <summary>How many hexes of the active board the generator leaves as they are.</summary>
+    public int HexProtectedCount => ActiveHexLayer?.GenerationProtection.Count ?? 0;
+
     public HexGeneratorSettings HexGeneratorSettings
     {
         get => _hexGenerator;
@@ -50,6 +56,7 @@ public sealed partial class EditorViewModel
         if (ActiveHexLayer is not { } layer) return;
         if (GenerationSelectionOnly && _hexSelection.Count == 0)
         { StatusDetail = "Сначала выделите гексы на вкладке «Правка»."; return; }
+        GenerationWhat = steps.Length == 1 ? HexGenerationStepName(steps[0]) : "Мир целиком";
         var recipe = new HexGenerationRecipe { Settings = _hexGenerator, Steps = steps,
             Selection = GenerationSelectionOnly ? _hexSelection.ToImmutableHashSet() : [] };
         _recalculateGeneration = () => { StartHexGeneration(steps); return PendingGeneration; };

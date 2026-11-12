@@ -54,8 +54,12 @@ public sealed partial class EditorView
     public Control? ExplainCardForSmoke => _explainPopup?.Child;
 
     /// <summary>Smoke hook: whether the frames of <paramref name="kind"/> for the current settings are drawn.</summary>
-    public bool ExplainReadyForSmoke(PanelDemoKind kind) =>
-        _explainFrames.TryGetValue(kind, out var f) && f.Signature == _editor.PanelDemoSignature;
+    public bool ExplainReadyForSmoke(PanelDemoKind kind)
+    {
+        var signature = _editor.PanelDemoSignature;
+        if (kind.IsGeneration()) _editor.GenerationDemo(kind, out signature);
+        return _explainFrames.TryGetValue(kind, out var f) && f.Signature == signature;
+    }
 
     public void HideExplainForSmoke() => HideExplain();
 
@@ -153,8 +157,42 @@ public sealed partial class EditorView
         _explainTimer?.Stop();
         var generation = ++_explainGeneration;
         var signature = _editor.PanelDemoSignature;
+        Func<IReadOnlyList<GenerationDemoFrame>>? generationFrames = null;
+        if (kind.IsGeneration()) generationFrames = _editor.GenerationDemo(kind, out signature);
         if (_explainFrames.TryGetValue(kind, out var ready) && ready.Signature == signature)
         { Animate(ready.Frames, ready.Marks, ready.View); return; }
+        if (kind.IsGeneration())
+        {
+            // The generation cards draw their marks into the picture; their documents are made off the UI thread too.
+            _explainMarks.Show(null, 1, default);
+            if (generationFrames is null) { _explainImage.Source = null; return; }
+            int gw = ExplainWidth * 2, gh = ExplainHeight * 2;
+            var source = _editor.StampImages;
+            var none = Enumerable.Repeat(new PanelDemoMarks([], 1, [], null, false, null), ExplainFrames).ToArray();
+            UiTasks.Forget(this, () => System.Threading.Tasks.Task.Run(() =>
+            {
+                var demo = generationFrames();
+                var pixels = demo.Select(f =>
+                {
+                    var info = new SkiaSharp.SKImageInfo(gw, gh, SkiaSharp.SKColorType.Rgba8888, SkiaSharp.SKAlphaType.Premul);
+                    using var surface = SkiaSharp.SKSurface.Create(info) ?? throw new InvalidOperationException("No card surface.");
+                    GenerationDemoPainter.Paint(surface.Canvas, f, gw, gh, source);
+                    surface.Canvas.Flush();
+                    var bytes = new byte[info.BytesSize];
+                    using var pixmap = surface.PeekPixels();
+                    System.Runtime.InteropServices.Marshal.Copy(pixmap.GetPixels(), bytes, 0, bytes.Length);
+                    return bytes;
+                }).ToArray();
+                Dispatcher.UIThread.Post(() =>
+                {
+                    var bitmaps = pixels.Select(p => ToBitmap(p, gw, gh)).ToArray();
+                    if (_explainFrames.Remove(kind, out var old)) foreach (var bitmap in old.Frames) bitmap.Dispose();
+                    _explainFrames[kind] = (signature, bitmaps, none, default);
+                    if (generation == _explainGeneration) Animate(bitmaps, none, default);
+                });
+            }));
+            return;
+        }
 
         // The documents are made on the UI thread from the live panel; the pixels are drawn off it.
         var frames = Enumerable.Range(0, ExplainFrames).Select(i => _editor.PanelDemo(kind, i, ExplainFrames)).ToArray();

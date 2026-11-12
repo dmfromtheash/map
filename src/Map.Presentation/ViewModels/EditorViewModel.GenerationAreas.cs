@@ -15,9 +15,12 @@ public sealed partial class EditorViewModel
         if (area is null || EditableAreaLayer(area) is not { } layer || IsEditableAreaBusy) return;
         var parameters = change?.Invoke(area) ?? area;
         var ecology = AreaForestEcology(parameters);
+        GenerationWhat = "Область";
         _recalculateGeneration = () => { StartAreaGeneration(change, area.Id); return PendingGeneration; };
         PendingGeneration = CalculateGenerationAsync((document, token) => ControlledAreaGeneration.Create(document, layer.Id, area.Id, token, ecology, parameters));
     }
+
+    public bool AreaProtectionBrushActive => _areaProtectionBrush;
 
     public void SetAreaProtectionBrush(bool active)
     {

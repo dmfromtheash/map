@@ -39,6 +39,7 @@ public sealed partial class EditorViewModel
         { StatusDetail = "Выберите слой суши с нарисованной землёй: материк строится из неё."; return; }
         var settings = _continent;
         var landId = land.Id;
+        GenerationWhat = steps.Count == 1 ? ContinentStepName(steps[0]) : "Весь материк";
         _recalculateGeneration = () => { StartContinent(steps); return PendingGeneration; };
         PendingGeneration = CalculateGenerationAsync((document, token) =>
         {
