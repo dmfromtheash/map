@@ -44,7 +44,8 @@ public sealed partial class EditorView
             () => _editor.EditableAreaSizeVariation, _editor.SetEditableAreaSizeVariation);
         _fillAreaPattern = new ComboBox { Name = "EditableAreaPatternBox", HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch,
             ItemsSource = new[] { new PatternChoice(PlacementAreaPattern.Masses, "Массивы"),
-                new PatternChoice(PlacementAreaPattern.Ridge, "Гряда"), new PatternChoice(PlacementAreaPattern.Groups, "Группы"),
+                new PatternChoice(PlacementAreaPattern.Ridge, "Гряда"), new PatternChoice(PlacementAreaPattern.Peaks, "Горный массив"),
+                new PatternChoice(PlacementAreaPattern.Groups, "Группы"),
                 new PatternChoice(PlacementAreaPattern.Clearings, "Вокруг просветов") } };
         _fillAreaPattern.SelectionChanged += (_, _) =>
         {

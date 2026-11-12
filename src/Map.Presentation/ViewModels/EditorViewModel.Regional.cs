@@ -72,7 +72,9 @@ public sealed partial class EditorViewModel
         _naturalAreaDensity = mode == RegionalPlacementMode.Settlement ? 78 : 72;
         _naturalAreaSizeVariation = mode == RegionalPlacementMode.Settlement ? 12 : 28;
         _naturalAreaPattern = mode == RegionalPlacementMode.Settlement ? PlacementAreaPattern.Groups
-            : set.Placement?.Role == AssetRole.Slope ? PlacementAreaPattern.Ridge : PlacementAreaPattern.Masses;
+            : set.Placement?.Role == AssetRole.Slope ? PlacementAreaPattern.Ridge
+            // G1: mountains in an area are a massif of ranges, not a lattice of equal peaks.
+            : set.Placement?.Role == AssetRole.Peak ? PlacementAreaPattern.Peaks : PlacementAreaPattern.Masses;
         _naturalAreaJoinEdges = mode != RegionalPlacementMode.Settlement;
         if (mode == RegionalPlacementMode.Ridge && set.Placement?.Role == AssetRole.Peak) StartEditablePath(); else StartEditableArea();
         RaiseStampToolState(); return true;

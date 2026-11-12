@@ -176,7 +176,10 @@ public static class MapProjectFormat
 
     /// <summary>R09 (2026-11-11): the «Пиксельный атлас» styles <c>pixel-fantasy16</c>, <c>pixel-handheld</c>.</summary>
     public const int PixelSchemaVersion = 53;
-    public const int MaxSupportedSchemaVersion = PixelSchemaVersion;
+
+    /// <summary>G1 (2026-11-12): area layout 5 — mountains in size classes along ranges, the «Горный массив» pattern.</summary>
+    public const int AreaRangeSchemaVersion = 54;
+    public const int MaxSupportedSchemaVersion = AreaRangeSchemaVersion;
 
     /// <summary>
     /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry

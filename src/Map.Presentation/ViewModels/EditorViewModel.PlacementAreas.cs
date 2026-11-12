@@ -64,6 +64,7 @@ public sealed partial class EditorViewModel
             var pattern = density == 0 ? "пустая область" : EditableAreaPattern switch
             {
                 PlacementAreaPattern.Ridge => density <= 40 ? "основные вершины" : density <= 75 ? "гряда и ответвления" : "гряда с предгорьями",
+                PlacementAreaPattern.Peaks => density <= 40 ? "главные хребты" : density <= 75 ? "хребты и склоны" : "хребты, склоны и холмы",
                 PlacementAreaPattern.Groups => density <= 40 ? "небольшие группы" : density <= 75 ? "группы с просветами" : "плотные отдельные группы",
                 PlacementAreaPattern.Clearings => "группы вокруг свободных дворов и проходов",
                 _ => density <= 40 ? "ядра массивов" : density <= 75 ? "массивы с просветами" : "массивы с неровной опушкой",
@@ -78,7 +79,8 @@ public sealed partial class EditorViewModel
     public bool EditableAreaJoinEdges => DisplayedEditableArea?.JoinEdges ?? _naturalAreaJoinEdges;
     public string EditableAreaPatternHint => EditableAreaPattern switch
     {
-        PlacementAreaPattern.Ridge => "Извилистая гряда: крупные вершины вдоль хребта, меньшие по бокам и на ответвлениях.",
+        PlacementAreaPattern.Ridge => "Хребет: большие вершины — цепью по гребню в середине, средние — на склонах и к концам, холмы — по краю. Номер рисунка меняет форму: дуга, волна, отроги, перевалы.",
+        PlacementAreaPattern.Peaks => "Горный массив: главный хребет и 1–3 ветви от него, у каждой свой гребень; между ветвями долины, по краям холмы.",
         PlacementAreaPattern.Groups => "Отдельные плотные группы: крупные объекты внутри, мелкие по краям, свободные проходы между группами.",
         PlacementAreaPattern.Clearings => "Объекты вокруг свободных дворов и проходов. Для домов и лагерей отключите «Смыкать края»; для растительности можно оставить включённым.",
         _ => "Связные массивы: плотная середина, неровный край и просветы. Подходит для лесов и больших скоплений.",
@@ -160,7 +162,7 @@ public sealed partial class EditorViewModel
             {
                 _areaDraft = template with { Id = Guid.NewGuid(), Name = NextAreaName(template.Name.Split(" · ", 2).Last()),
                     Nodes = [], Cells = ImmutableDictionary<long, ImmutableArray<PlacementAreaMember>>.Empty,
-                    MemberCount = 0, Exclusions = [], OccupiedSlots = [], LayoutVersion = 4,
+                    MemberCount = 0, Exclusions = [], OccupiedSlots = [], LayoutVersion = PlacementArea.LatestLayoutVersion,
                     Density = _naturalAreaDensity, SizeVariationPercent = _naturalAreaSizeVariation, Seed = NextGestureSeed(),
                     Pattern = _naturalAreaPattern, JoinEdges = _naturalAreaJoinEdges, Rules = _naturalAreaRules, ContentBounds = ReadAreaContentBounds(template.Variants, template.ContentBounds),
                     ContentMasks = ReadAreaContentMasks(template.Variants, template.ContentMasks),
@@ -187,7 +189,7 @@ public sealed partial class EditorViewModel
                 _areaAssets = references; _areaLayer = ActiveObjectLayer()?.Id;
                 _areaDraft = new PlacementArea
                 {
-                    Name = NextAreaName(SelectedSet?.Name ?? "ассеты"), AssetSetId = _selectedSetId, LayoutVersion = 4,
+                    Name = NextAreaName(SelectedSet?.Name ?? "ассеты"), AssetSetId = _selectedSetId, LayoutVersion = PlacementArea.LatestLayoutVersion,
                     VariantId = CurrentVariant?.Id, Variants = [.. sources], Request = request,
                     Seed = NextGestureSeed(), Density = _naturalAreaDensity, SizeVariationPercent = _naturalAreaSizeVariation,
                     Pattern = _naturalAreaPattern, JoinEdges = _naturalAreaJoinEdges, Rules = _naturalAreaRules, ContentBounds = ReadAreaContentBounds(sources),
@@ -477,12 +479,12 @@ public sealed partial class EditorViewModel
         if (_areaCreating && _areaDraft is { } draft)
         {
             // Untouched «Красота» of a draft follows its pattern (a ridge gets no soft edge or clumps).
-            _areaDraft = draft with { Pattern = value, LayoutVersion = 4,
+            _areaDraft = draft with { Pattern = value, LayoutVersion = PlacementArea.LatestLayoutVersion,
                 Beauty = _naturalAreaBeauty is null ? NewAreaBeauty(draft.Request.BaseWidth) : draft.Beauty };
             UpdateAreaPreview(); RaiseAreaState();
         }
         else if (SelectedEditableArea is not null)
-            CommitAreaChange(a => a with { Pattern = value, LayoutVersion = 4 }, "Изменить рисунок области");
+            CommitAreaChange(a => a with { Pattern = value, LayoutVersion = PlacementArea.LatestLayoutVersion }, "Изменить рисунок области");
         else RaiseAreaState();
     }
     public void SetEditableAreaJoinEdges(bool value)
@@ -516,7 +518,7 @@ public sealed partial class EditorViewModel
     public void ArrangeEditableAreaNaturally()
     {
         if (SelectedEditableArea is not { LayoutVersion: < 4 } p) return;
-        var natural = PlacementAreaPlanner.InitializeComposition(p with { LayoutVersion = 4, OccupiedSlots = [], Density = _naturalAreaDensity,
+        var natural = PlacementAreaPlanner.InitializeComposition(p with { LayoutVersion = PlacementArea.LatestLayoutVersion, OccupiedSlots = [], Density = _naturalAreaDensity,
             SizeVariationPercent = _naturalAreaSizeVariation, Pattern = _naturalAreaPattern, JoinEdges = _naturalAreaJoinEdges, Rules = _naturalAreaRules,
             ContentBounds = ReadAreaContentBounds(p.Variants, p.ContentBounds),
             ContentMasks = ReadAreaContentMasks(p.Variants, p.ContentMasks) });

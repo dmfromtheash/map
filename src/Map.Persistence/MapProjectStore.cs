@@ -69,6 +69,8 @@ public static partial class MapProjectStore
         layers.OfType<BaseColorLayer>().Any(page => page.Sea is { NeedsMannersSchema: true });
 
     private static int SchemaFor(MapDocument document) =>
+        HasAreaRangeV54(document.Layers) || document.Checkpoints.Any(c => HasAreaRangeV54(c.Snapshot.Layers))
+            ? MapProjectFormat.AreaRangeSchemaVersion :
         HasPixelV53(document.Style, document.Variants) || document.Checkpoints.Any(c => HasPixelV53(c.Snapshot.Style, c.Snapshot.Variants))
             ? MapProjectFormat.PixelSchemaVersion :
         HasWinterV52(document.Style, document.Variants) || document.Checkpoints.Any(c => HasWinterV52(c.Snapshot.Style, c.Snapshot.Variants))
@@ -841,6 +843,7 @@ public static partial class MapProjectStore
             var scene = ParseJson<SceneDto>(sceneBytes, MapProjectFormat.SceneEntry);
             ValidatePathSchema(scene, manifest.SchemaVersion);
             ValidateAreaBeautySchemaV30(scene, manifest.SchemaVersion);
+            ValidateAreaRangeSchemaV54(scene, manifest.SchemaVersion);
             ValidateGenerationSchemaV31(scene, manifest.SchemaVersion);
             ValidateWaterCliffsSchemaV32(scene, manifest.SchemaVersion);
             if (expectedSchemaVersion is >= 2 and <= 3)
@@ -1420,6 +1423,7 @@ public static partial class MapProjectStore
                 var scene = ParseJson<SceneDto>(sceneBytes, sceneEntry);
                 ValidatePathSchema(scene, snapshotManifest.SchemaVersion);
                 ValidateAreaBeautySchemaV30(scene, snapshotManifest.SchemaVersion);
+                ValidateAreaRangeSchemaV54(scene, snapshotManifest.SchemaVersion);
                 ValidateGenerationSchemaV31(scene, snapshotManifest.SchemaVersion);
                 ValidateWaterCliffsSchemaV32(scene, snapshotManifest.SchemaVersion);
                 if (schemaVersion is >= 2 and <= 3)

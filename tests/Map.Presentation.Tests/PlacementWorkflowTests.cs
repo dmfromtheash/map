@@ -136,7 +136,7 @@ public sealed class PlacementWorkflowTests : IDisposable
         Assert.Equal(1, editor.Session.UndoDepth);
         foreach (var item in preview) Assert.Equal(item, Map.Core.Editing.DocumentEditor.FindObject(editor.Session.Document, item.Id));
         var created = editor.Session.Document; var area = editor.SelectedEditableArea!;
-        Assert.Equal(4, area.LayoutVersion);
+        Assert.Equal(PlacementArea.LatestLayoutVersion, area.LayoutVersion);
         router.Press(CanvasPointerButton.Left, 800, 100); router.Move(700, 150);
         Assert.Same(created, editor.Session.Document); editor.HandleEscape(); router.Release(700, 150);
         Assert.Same(created, editor.Session.Document);
@@ -202,7 +202,7 @@ public sealed class PlacementWorkflowTests : IDisposable
         editor.Session.Execute(new PlacementAreaCommand(layerId, area.Id, area with { LayoutVersion = 2, Density = 5 }, "legacy fixture"));
         var legacy = editor.Session.Document; editor.SelectEditableArea(area.Id);
         Assert.Same(legacy, editor.Session.Document); Assert.False(editor.UsesNaturalAreaLayout);
-        editor.ArrangeEditableAreaNaturally(); await editor.PendingGeneration; Assert.True(editor.ApplyGeneration()); Assert.Equal(4, editor.SelectedEditableArea!.LayoutVersion);
+        editor.ArrangeEditableAreaNaturally(); await editor.PendingGeneration; Assert.True(editor.ApplyGeneration()); Assert.Equal(PlacementArea.LatestLayoutVersion, editor.SelectedEditableArea!.LayoutVersion);
         Assert.Equal(65, editor.SelectedEditableArea.Density);
         editor.Undo(); Assert.Same(legacy, editor.Session.Document);
     }
