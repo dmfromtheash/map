@@ -42,14 +42,30 @@ internal sealed class DriveLibrarySetCheck
 internal static class DriveLibraryBatch
 {
     private sealed record PlanSet(string Key, string Catalog, string Name, string One, string Use,
-        List<string> Collection, List<string> Tags, List<string> Files, bool Ready, List<int> Factor);
+        List<string> Collection, List<string> Tags, List<string> Files, bool Ready, List<int> Factor,
+        string? Detail = null, bool Named = false);
 
     private sealed class State
     {
         public List<string> Imported { get; set; } = [];
         public List<string> Checked { get; set; } = [];
+        /// <summary>Checked sets that already carry the names reworked from the pictures.</summary>
+        public List<string> Renamed { get; set; } = [];
         public int Batches { get; set; }
     }
+
+    private static AssetSetImport ToImport(PlanSet set, string upscaled, bool overwriteNames) => new()
+    {
+        StableKey = set.Key, Name = set.Name, Detail = set.Detail, OverwriteNames = overwriteNames,
+        CollectionPath = set.Collection, Tags = set.Tags,
+        Paths = [.. set.Files.Select(file => Path.Combine(upscaled, Path.ChangeExtension(file, ".webp")))],
+        Labels = [.. set.Files.Select((_, i) => set.Files.Count == 1 ? set.One : $"{set.One} {i + 1}")],
+        Provenance = new AssetProvenance
+        {
+            Source = "owner-refs (test), upscaled x2/x4 Real-ESRGAN", Author = "",
+            LicenseStatus = AssetLicenseStatus.Unknown, CommercialUseAllowed = false,
+        },
+    };
 
     private static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true, WriteIndented = true };
     private const string Paper = "#FFEFE6D2";
@@ -62,38 +78,45 @@ internal static class DriveLibraryBatch
         Directory.CreateDirectory(Path.GetDirectoryName(statePath)!);
         var state = File.Exists(statePath) ? JsonSerializer.Deserialize<State>(File.ReadAllBytes(statePath), Json)! : new State();
         var done = state.Checked.ToHashSet(StringComparer.Ordinal);
+        var upscaledRoot = Path.Combine(library, "upscaled");
 
-        // The next sets whose every file is upscaled and verified; unclassified names wait for their Russian names.
+        // Sets checked before their pictures were looked at get the reworked names once (no new files).
+        var renamed = state.Renamed.ToHashSet(StringComparer.Ordinal);
+        var rename = plan.Where(s => s.Named && done.Contains(s.Key) && !renamed.Contains(s.Key)).ToList();
+        foreach (var group in rename.GroupBy(s => s.Catalog))
+        {
+            var catalog = new AssetCatalog(Path.Combine(library, group.Key));
+            catalog.ImportSets([.. group.Select(set => ToImport(set, upscaledRoot, overwriteNames: true))], DateTimeOffset.UtcNow);
+            catalog.FlushMetadataAsync().GetAwaiter().GetResult();
+        }
+        state.Renamed.AddRange(rename.Select(s => s.Key));
+
+        // The next sets whose every file is upscaled and verified and whose pictures were looked at.
         var batch = new List<PlanSet>();
         foreach (var set in plan)
         {
-            if (done.Contains(set.Key) || !set.Ready || set.Tags.Contains("Не разобрано")) continue;
+            if (done.Contains(set.Key) || !set.Ready || !set.Named || set.Tags.Contains("Не разобрано")) continue;
             batch.Add(set);
             if (batch.Sum(s => s.Files.Count) >= options.ObjectCount) break;
         }
 
         var report = new DriveLibraryReport { Batch = state.Batches + 1, Files = batch.Sum(s => s.Files.Count) };
-        if (batch.Count == 0) { report.Notes["result"] = "nothing ready"; report.GatePassed = true; return report; }
+        report.Notes["renamed earlier sets"] = rename.Count.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        if (batch.Count == 0)
+        {
+            File.WriteAllBytes(statePath, JsonSerializer.SerializeToUtf8Bytes(state, Json));
+            report.Notes["result"] = "nothing ready"; report.GatePassed = true; return report;
+        }
 
         // 1. Import with the program's own catalog code into one catalog per pack on the drive.
-        var upscaled = Path.Combine(library, "upscaled");
         var stamp = DateTimeOffset.UtcNow;
         foreach (var group in batch.GroupBy(s => s.Catalog))
         {
             var catalog = new AssetCatalog(Path.Combine(library, group.Key));
-            catalog.ImportSets([.. group.Select(set => new AssetSetImport
-            {
-                StableKey = set.Key, Name = set.Name, CollectionPath = set.Collection, Tags = set.Tags,
-                Paths = [.. set.Files.Select(file => Path.Combine(upscaled, Path.ChangeExtension(file, ".webp")))],
-                Labels = [.. set.Files.Select((_, i) => set.Files.Count == 1 ? set.One : $"{set.One} {i + 1}")],
-                Provenance = new AssetProvenance
-                {
-                    Source = "owner-refs (test), upscaled x2/x4 Real-ESRGAN", Author = "",
-                    LicenseStatus = AssetLicenseStatus.Unknown, CommercialUseAllowed = false,
-                },
-            })], stamp);
+            catalog.ImportSets([.. group.Select(set => ToImport(set, upscaledRoot, overwriteNames: false))], stamp);
             catalog.FlushMetadataAsync().GetAwaiter().GetResult();
         }
+        state.Renamed.AddRange(batch.Where(s => s.Named).Select(s => s.Key));
 
         var catalogs = Directory.GetDirectories(library).Where(dir => File.Exists(Path.Combine(dir, "catalog.json")))
             .Select(Path.GetFileName).Order(StringComparer.Ordinal).ToList();
@@ -223,7 +246,7 @@ internal static class DriveLibraryBatch
         c2.Clear(new SKColor(46, 40, 34));
         using var font = new SKFont(SKTypeface.FromFamilyName("Segoe UI"), 17);
         using var text = new SKPaint { Color = check.Passed ? new SKColor(236, 226, 200) : new SKColor(255, 120, 100), IsAntialias = true };
-        c2.DrawText($"{(check.Passed ? "✓" : "✗")} {set.Name}  ·  {set.Catalog}  ·  вариантов {check.Variants}  ·  ×{factor}  ·  {check.Sizes}", 8, 21, font, text);
+        c2.DrawText($"{(check.Passed ? "✓" : "✗")} {set.Name}  —  {set.Detail ?? "без подробности"}  ·  {set.Catalog}  ·  вариантов {check.Variants}  ·  ×{factor}", 8, 21, font, text);
         if (catalog.TryThumbnailPath(records[0], out var thumbPath) && thumbPath is not null && File.Exists(thumbPath))
         {
             using var thumb = SKBitmap.Decode(thumbPath);
