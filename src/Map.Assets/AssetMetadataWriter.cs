@@ -10,6 +10,9 @@ internal sealed class AssetMetadataWriter(string path, AssetLibraryDocument? ini
     private Exception? _error;
     private AssetLibraryDocument? _lastSaved = initial;
     public string? Error { get { lock (_gate) return _error?.Message; } }
+
+    /// <summary>Called on the writer thread after each successful save.</summary>
+    public Action? Saved { get; set; }
     public AssetLibraryDocument? LastSaved { get { lock (_gate) return _lastSaved; } }
 
     public void Enqueue(AssetLibraryDocument snapshot)
@@ -39,7 +42,7 @@ internal sealed class AssetMetadataWriter(string path, AssetLibraryDocument? ini
             AssetLibraryDocument snapshot;
             lock (_gate) { snapshot = _pending!; _pending = null; }
             Exception? failure = null;
-            try { AssetLibraryStore.Save(path, snapshot); }
+            try { AssetLibraryStore.Save(path, snapshot); Saved?.Invoke(); }
             catch (Exception error) { failure = error; }
             lock (_gate)
             {

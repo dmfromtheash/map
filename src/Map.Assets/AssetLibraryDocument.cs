@@ -55,6 +55,9 @@ public static class AssetLibraryStore
     internal static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
+        // Russian names are written as UTF-8, not as six-byte \uXXXX escapes: a drive library of
+        // thousands of named cards stays well inside the load budget (AssetLibraryJsonBudget).
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         PropertyNameCaseInsensitive = true,
         Converters = { new JsonStringEnumConverter<AssetRole>(JsonNamingPolicy.CamelCase, allowIntegerValues: false) },
@@ -744,7 +747,10 @@ public static class AssetLibraryStore
         var directory = Path.GetDirectoryName(indexPath)!;
         Directory.CreateDirectory(directory);
         var temp = indexPath + ".tmp-" + Guid.NewGuid().ToString("N");
-        File.WriteAllBytes(temp, JsonSerializer.SerializeToUtf8Bytes(document, JsonOptions));
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(document, JsonOptions);
+        // An index the next start would refuse as over budget must not replace a readable one.
+        AssetLibraryJsonBudget.Validate(bytes);
+        File.WriteAllBytes(temp, bytes);
 
         // The candidate is read back before it is allowed to replace the live index: a truncated
         // or unreadable temp file must never become the only copy the user has.

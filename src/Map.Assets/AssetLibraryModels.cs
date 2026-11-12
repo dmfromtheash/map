@@ -190,6 +190,9 @@ public static class AssetIdentity
     public static string VariantIdForSet(string setId, string sha256) =>
         VariantPrefix + Digest("variant:" + setId + ":" + Normalize(sha256));
 
+    /// <summary>A set prepared by a builder (a drive library) keeps one id however often it is rebuilt.</summary>
+    public static string SetIdForKey(string stableKey) => SetPrefix + Digest("set-key:" + (stableKey ?? "").Trim());
+
     public static string CollectionId(string name) => "col-" + Digest("collection:" + name.Trim().ToLowerInvariant());
 
     private static string Normalize(string sha256) => (sha256 ?? "").Trim().ToLowerInvariant();

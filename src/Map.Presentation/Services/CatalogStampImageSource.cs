@@ -40,6 +40,20 @@ public sealed class CatalogStampImageSource(
     /// resident. The full master is decoded only by <see cref="TryGetImageForPixelSize"/> when a
     /// close view needs more pixels than that step holds.
     /// </summary>
+    /// <summary>
+    /// A drive library was attached or removed: pictures that were missing while the drive was
+    /// away are looked for again, and paths resolved on a previous drive are not reused.
+    /// </summary>
+    public void ForgetMissing()
+    {
+        lock (_gate)
+        {
+            _missingSteps.Clear();
+            _decodeFailed.Clear();
+            _resolved.Clear();
+        }
+    }
+
     public SKImage? TryGetImage(string sha256)
     {
         lock (_gate)

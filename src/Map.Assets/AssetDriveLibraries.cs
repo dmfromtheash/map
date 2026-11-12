@@ -84,7 +84,8 @@ public static class AssetDriveLibraries
         foreach (var drive in DriveInfo.GetDrives())
         {
             bool ready;
-            try { ready = drive.IsReady && drive.DriveType is DriveType.Fixed or DriveType.Removable; }
+            // The type first: a dead network share or an empty optical drive must not stall the scan.
+            try { ready = drive.DriveType is DriveType.Fixed or DriveType.Removable && drive.IsReady; }
             catch (IOException) { ready = false; }
             if (ready) yield return drive.RootDirectory.FullName;
         }

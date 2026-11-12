@@ -44,6 +44,19 @@ public sealed record AssetRecord
     public required string ThumbnailRelativePath { get; init; }
 }
 
+/// <summary>One logical set for <see cref="AssetCatalog.ImportSets"/>: files with their variant labels, in order.</summary>
+public sealed record AssetSetImport
+{
+    public required string StableKey { get; init; }
+    public required string Name { get; init; }
+    public required IReadOnlyList<string> Paths { get; init; }
+    public required IReadOnlyList<string> Labels { get; init; }
+    public IReadOnlyList<string> CollectionPath { get; init; } = [];
+    public IReadOnlyList<string> Tags { get; init; } = [];
+    public AssetProvenance Provenance { get; init; } = new();
+    public AssetPlacementDefaults? Placement { get; init; }
+}
+
 public sealed record AssetImportOptions
 {
     public bool Linked { get; init; }

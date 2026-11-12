@@ -25,6 +25,13 @@ public sealed class AssetCatalog : IAsyncDisposable
     public string? MetadataSaveError => _metadataWriter.Error;
     public async Task FlushMetadataAsync()
     {
+        // Drive catalogs flush too: a recent use picked just before closing Map must reach the drive.
+        foreach (var mount in _mounts.ToArray())
+        {
+            try { await mount.FlushMetadataAsync(); }
+            catch (IOException) { } // a drive pulled out: its own index keeps the last saved state
+        }
+
         try { await _metadataWriter.FlushAsync(); }
         catch
         {
@@ -62,10 +69,29 @@ public sealed class AssetCatalog : IAsyncDisposable
         _indexPath = Path.Combine(_root, "catalog.json");
         _clock = clock ?? (static () => DateTimeOffset.UtcNow);
         _document = AssetLibraryStore.Load(_indexPath, _clock);
+        _indexStamp = IndexStamp.Of(_indexPath);
         _metadataWriter = new AssetMetadataWriter(_indexPath, CopyDocument(_document));
+        _metadataWriter.Saved = () => _indexStamp = IndexStamp.Of(_indexPath);
         Reindex();
         CaptureMetadataBase();
     }
+
+    private sealed record IndexStamp(long Length, DateTime WriteUtc)
+    {
+        public static IndexStamp? Of(string path)
+        {
+            try { var file = new FileInfo(path); return file.Exists ? new(file.Length, file.LastWriteTimeUtc) : null; }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return null; }
+        }
+    }
+
+    private volatile IndexStamp? _indexStamp;
+
+    /// <summary>
+    /// True when catalog.json on disk is no longer the file this catalog read or last wrote: another
+    /// program (the drive-library builder) changed it. Such a catalog is reopened, never written over.
+    /// </summary>
+    public bool ChangedOnDisk => IndexStamp.Of(_indexPath) is { } now && now != _indexStamp;
 
     public string Root => _root;
 
@@ -204,24 +230,40 @@ public sealed class AssetCatalog : IAsyncDisposable
     private bool TryRouteSet(string setId, Action<AssetCatalog> change, bool content = true)
     {
         if (setId is null || !_mountBySet.TryGetValue(setId, out var mount)) return false;
-        change(mount);
-        AfterMountChange(content);
-        return true;
+        return Route(mount, change, content, () => _mountBySet.GetValueOrDefault(setId));
     }
 
     private bool TryRouteVariant(string variantId, Action<AssetCatalog> change)
     {
         if (variantId is null || !_mountByVariant.TryGetValue(variantId, out var mount)) return false;
-        change(mount);
-        AfterMountChange();
-        return true;
+        return Route(mount, change, true, () => _mountByVariant.GetValueOrDefault(variantId));
     }
 
     private bool TryRouteRecord(string sha256, Action<AssetCatalog> change)
     {
         if (sha256 is null || !_mountBySha.TryGetValue(sha256, out var mount)) return false;
+        return Route(mount, change, true, () => _mountBySha.GetValueOrDefault(sha256));
+    }
+
+    /// <summary>
+    /// Applies a change to the drive catalog that owns the card. When that drive's index was changed
+    /// by someone else since it was read (the library builder added sets), it is reopened first,
+    /// so the write starts from the newest file instead of putting an old copy back.
+    /// </summary>
+    private bool Route(AssetCatalog mount, Action<AssetCatalog> change, bool content, Func<AssetCatalog?> again)
+    {
+        if (mount.ChangedOnDisk && OpenMounted(mount._root) is { } fresh)
+        {
+            _mounts[_mounts.IndexOf(mount)] = fresh;
+            Reindex();
+            MetadataRevision++;
+            ContentRevision++;
+            mount = again() ?? fresh;
+            if (!ReferenceEquals(mount, fresh) && !_mounts.Contains(mount)) return false;
+        }
+
         change(mount);
-        AfterMountChange();
+        AfterMountChange(content);
         return true;
     }
 
@@ -351,6 +393,86 @@ public sealed class AssetCatalog : IAsyncDisposable
         SaveIndex();
         return result;
     }
+    /// <summary>
+    /// Many prepared sets in one index write (a drive library is built in batches of thousands of
+    /// files; one write per set would rewrite a large index thousands of times). A set is found
+    /// again by its <see cref="AssetSetImport.StableKey"/>, so running the same batch twice, or a
+    /// batch that continues a set, appends only the variants that are new. Collections are nested
+    /// by <see cref="AssetSetImport.CollectionPath"/>.
+    /// </summary>
+    public IReadOnlyList<AssetSet> ImportSets(IReadOnlyList<AssetSetImport> items, DateTimeOffset importedUtc)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+        using var mutation = BeginMutation();
+        var result = new List<AssetSet>(items.Count);
+        foreach (var item in items)
+        {
+            if (item.Paths.Count == 0 || item.Paths.Count != item.Labels.Count)
+                throw new ArgumentException($"Набор «{item.Name}»: число файлов и подписей не совпадает.", nameof(items));
+            var collection = EnsureCollectionPath(item.CollectionPath);
+            var options = new AssetImportOptions
+            {
+                Pack = item.CollectionPath.Count > 0 ? string.Join(" / ", item.CollectionPath) : "",
+                Tags = item.Tags, Provenance = item.Provenance,
+            };
+            var id = AssetIdentity.SetIdForKey(item.StableKey);
+            var index = _document.Sets.FindIndex(set => set.Id == id);
+            var variantIds = index >= 0 ? [.. _document.Sets[index].VariantIds] : new List<string>();
+            var known = variantIds.Select(v => _byVariantId.TryGetValue(v, out var variant) ? variant.Sha256 : "")
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (string.IsNullOrWhiteSpace(item.Name) || item.Labels.Any(string.IsNullOrWhiteSpace))
+                throw new ArgumentException($"Набор «{item.StableKey}»: пустое имя или подпись варианта.", nameof(items));
+            for (var i = 0; i < item.Paths.Count; i++)
+            {
+                var record = ImportContent(item.Paths[i], options, importedUtc);
+                if (!known.Add(record.Sha256)) continue;
+                var variantId = AssetIdentity.VariantIdForSet(id, record.Sha256);
+                // A variant detached from the set earlier keeps its record: it is reused, never added twice.
+                if (!_document.Variants.Any(v => v.Id == variantId))
+                {
+                    var variant = new AssetVariant { Id = variantId, Sha256 = record.Sha256, Label = item.Labels[i].Trim() };
+                    _document.Variants.Add(variant);
+                    _byVariantId[variantId] = variant;
+                }
+
+                variantIds.Add(variantId);
+            }
+
+            // A rerun or a continued set only adds variants; names, tags and folders edited in Map stay.
+            var set = index >= 0
+                ? _document.Sets[index] with { VariantIds = variantIds }
+                : new AssetSet
+                {
+                    Id = id, Name = item.Name.Trim(), VariantIds = variantIds, CoverVariantId = variantIds[0],
+                    CollectionId = collection, Tags = [.. item.Tags.Distinct(StringComparer.OrdinalIgnoreCase)], ImportedUtc = importedUtc,
+                    Placement = item.Placement,
+                };
+            if (index >= 0) _document.Sets[index] = set; else _document.Sets.Add(set);
+            result.Add(set);
+        }
+
+        SaveIndex();
+        return result;
+    }
+
+    private string? EnsureCollectionPath(IReadOnlyList<string> path)
+    {
+        string? parent = null;
+        var prefix = "";
+        foreach (var raw in path)
+        {
+            var name = raw.Trim();
+            if (name.Length == 0) continue;
+            prefix = prefix.Length == 0 ? name : prefix + " / " + name;
+            var id = AssetIdentity.CollectionId(prefix);
+            if (!_document.Collections.Any(item => item.Id == id))
+                _document.Collections.Add(new AssetCollection { Id = id, Name = name, ParentId = parent, Order = _document.Collections.Count });
+            parent = id;
+        }
+
+        return parent;
+    }
+
     /// <summary>Validates, stores and thumbnails one file. Identical bytes reuse the record.</summary>
     private AssetRecord ImportContent(string sourcePath, AssetImportOptions options, DateTimeOffset importedUtc)
     {
@@ -1076,6 +1198,7 @@ public sealed class AssetCatalog : IAsyncDisposable
         _document.CurrentVariantBySet[setId] = variantId;
         if (_document.Recent.Count > AssetLibraryDocument.MaxRecent)
             _document.Recent.RemoveRange(AssetLibraryDocument.MaxRecent, _document.Recent.Count - AssetLibraryDocument.MaxRecent);
+        SyncRecentView();
         MetadataRevision++;
         _metadataWriter.Enqueue(MetadataSnapshot());
     }
@@ -1090,7 +1213,20 @@ public sealed class AssetCatalog : IAsyncDisposable
             || !set.VariantIds.Contains(variantId, StringComparer.Ordinal)
             || CurrentVariantOf(setId) == variantId) return;
         _document.CurrentVariantBySet[setId] = variantId;
+        SyncRecentView();
         _metadataWriter.Enqueue(MetadataSnapshot());
+    }
+
+    /// <summary>The combined view copies the recent list and remembered variants: keep it current without a full rebuild.</summary>
+    private void SyncRecentView()
+    {
+        if (ReferenceEquals(_view, _document)) return;
+        _view.Recent = [.. _document.Recent.Concat(_mounts.SelectMany(mount => mount._document.Recent))
+            .OrderByDescending(entry => entry.UsedUtc)];
+        var current = new Dictionary<string, string>(_document.CurrentVariantBySet);
+        foreach (var mount in _mounts)
+            foreach (var pair in mount._document.CurrentVariantBySet) current.TryAdd(pair.Key, pair.Value);
+        _view.CurrentVariantBySet = current;
     }
 
     /// <summary>Replaces the flat record list; used by fixtures and by profile generators.</summary>

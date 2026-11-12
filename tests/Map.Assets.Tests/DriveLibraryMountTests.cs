@@ -129,6 +129,60 @@ public sealed class DriveLibraryMountTests : IDisposable
         Assert.NotNull(own.Find(record.Sha256));
     }
 
+    [Fact]
+    public async Task A_drive_index_changed_by_the_builder_is_reopened_before_a_card_edit_writes_it()
+    {
+        var (_, catalogRoot, driveSet) = MakeDrive();
+        await using var own = new AssetCatalog(Path.Combine(_temp, "own"));
+        own.SetMounts([catalogRoot]);
+        Assert.False(own.Mounts[0].ChangedOnDisk);
+
+        // The builder adds a set while Map has the drive attached.
+        var builder = new AssetCatalog(catalogRoot);
+        builder.ImportSets([new AssetSetImport
+        {
+            StableKey = "test|later", Name = "Позже добавленные", Paths = [Fixture(4)], Labels = ["Гора"],
+            CollectionPath = ["Тестовое", "Природа", "Горы"], Tags = ["Тестовое"],
+        }], Stamp(9));
+        await builder.FlushMetadataAsync();
+        Assert.True(own.Mounts[0].ChangedOnDisk);
+
+        own.SetSetFavorite(driveSet.Id, true);
+        await own.FlushMetadataAsync();
+
+        // The edit landed and the builder's set survived instead of being written over by the old copy.
+        var reread = new AssetCatalog(catalogRoot);
+        Assert.True(reread.FindSet(driveSet.Id)!.Favorite);
+        Assert.NotNull(reread.FindSet(AssetIdentity.SetIdForKey("test|later")));
+        Assert.NotNull(own.FindSet(AssetIdentity.SetIdForKey("test|later")));
+    }
+
+    [Fact]
+    public void ImportSets_reruns_add_only_new_variants_and_keep_names_edited_in_Map()
+    {
+        var root = Path.Combine(_temp, "bulk");
+        var catalog = new AssetCatalog(root);
+        AssetSetImport Item(params int[] fixtures) => new()
+        {
+            StableKey = "fantasy|OBJ:Mountains", Name = "Горы", Paths = [.. fixtures.Select(Fixture)],
+            Labels = [.. fixtures.Select(i => $"Гора {i}")], CollectionPath = ["Тестовое", "Природа", "Горы"], Tags = ["Тестовое", "Место/Горы"],
+        };
+
+        var first = catalog.ImportSets([Item(1, 2)], Stamp(1)).Single();
+        catalog.RenameSet(first.Id, "Мои горы");
+        var second = catalog.ImportSets([Item(1, 2, 3)], Stamp(2)).Single();
+        var third = catalog.ImportSets([Item(1, 2, 3)], Stamp(3)).Single();
+
+        Assert.Equal(first.Id, second.Id);
+        Assert.Equal(3, third.VariantIds.Count);
+        Assert.Equal("Мои горы", catalog.FindSet(first.Id)!.Name);
+        Assert.Equal(3, catalog.Variants.Count);
+        var tree = catalog.CollectionTree();
+        Assert.Equal("Тестовое", tree.Single().Name);
+        Assert.Equal("Горы", tree.Single().Children.Single().Children.Single().Name);
+        Assert.Contains("Мои горы", File.ReadAllText(Path.Combine(root, "catalog.json"))); // UTF-8, not \u escapes
+    }
+
     public void Dispose()
     {
         try { Directory.Delete(_temp, recursive: true); }

@@ -388,7 +388,18 @@ public sealed partial class EditorViewModel : ViewModelBase
             ?? "0.0.0";
         _assetCatalog = assetCatalog;
         // A drive library attached or removed while the editor is open shows up in «Ассеты» at once.
-        if (assetCatalog is not null) assetCatalog.MountsChanged += (_, _) => RefreshLibrary();
+        // Weak: the catalog lives for the whole session, an editor only while its map is open.
+        if (assetCatalog is not null)
+        {
+            var self = new WeakReference<EditorViewModel>(this);
+            EventHandler? handler = null;
+            handler = (_, _) =>
+            {
+                if (self.TryGetTarget(out var editor)) editor.OnDriveLibrariesChanged();
+                else assetCatalog.MountsChanged -= handler;
+            };
+            assetCatalog.MountsChanged += handler;
+        }
         _brushPresetStore = assetCatalog is null ? null : new BrushPresetStore(assetCatalog.Root);
         _brushPresets = _brushPresetStore?.Load() ?? [];
         _imageExporter = imageExporter ?? new ImageExportEngine();

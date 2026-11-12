@@ -100,6 +100,14 @@ else if (options.Profile == "generation-cards-sheet")
     var sheet = GenerationCardsSheet.Run(options); report = sheet; gatePassed = sheet.GatePassed;
     foreach (var note in sheet.Notes) Console.WriteLine($"  {note.Key} = {note.Value}");
 }
+else if (options.Profile == "drive-library")
+{
+    var batch = DriveLibraryBatch.Run(options); report = batch; gatePassed = batch.GatePassed;
+    Console.WriteLine($"  batch {batch.Batch}: {batch.Sets.Count} sets, {batch.Files} files, passed {batch.Sets.Count(s => s.Passed)}");
+    foreach (var note in batch.Notes) Console.WriteLine($"  {note.Key} = {note.Value}");
+    foreach (var set in batch.Sets.Where(s => !s.Passed)) Console.WriteLine($"  FAIL {set.Key}: found={set.Found} read={set.Readable}/{set.Variants} thumbs={set.Thumbnails} drawn={set.Drawn}");
+    foreach (var image in batch.Images) Console.WriteLine($"  image {image}");
+}
 else if (options.Profile == "style-packs-sheet")
 {
     var sheet = StylePacksSheet.Run(options); report = sheet; gatePassed = sheet.GatePassed;

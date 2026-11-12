@@ -217,6 +217,13 @@ public sealed partial class EditorViewModel
     }
 
     /// <summary>Re-runs the current query. Metadata only: no original image is opened here.</summary>
+    /// <summary>A drive library was attached or removed: its cards appear or go, its pictures are looked for again.</summary>
+    private void OnDriveLibrariesChanged()
+    {
+        (StampImages as CatalogStampImageSource)?.ForgetMissing();
+        RefreshLibrary();
+    }
+
     public void RefreshLibrary()
     {
         _libraryQueryVersion++;
