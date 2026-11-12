@@ -21,7 +21,7 @@ internal sealed class PlacementAreaLayout
     {
         _area = area;
         (_width, _height) = Dimensions(area);
-        _groundOffset = area.ContentMasks.Count > 0 && area.Pattern == PlacementAreaPattern.Ridge
+        _groundOffset = area.ContentMasks.Count > 0 && area.Pattern is PlacementAreaPattern.Ridge or PlacementAreaPattern.Peaks
             ? area.Variants.Average(v => area.Request.BaseWidth * v.PixelHeight / v.PixelWidth
                 * (area.ContentBounds.GetValueOrDefault(v.Sha256, StampContentBounds.Full).Bottom - .5)) : 0;
         var maxScale = PlacementAreaComposition.MaximumScale(area);
@@ -72,7 +72,9 @@ internal sealed class PlacementAreaLayout
         var key = new PlacementAreaSlot(cellX, cellY, 0).Cell;
         if (_cells.TryGetValue(key, out var cached)) return cached;
         var result = new List<PlacementAreaComposition.Sample>();
-        if (_area.Pattern == PlacementAreaPattern.Ridge) Ridge(cellX, cellY, result);
+        if (_area.Pattern == PlacementAreaPattern.Peaks) Massif(cellX, cellY, result);
+        else if (_area.Pattern == PlacementAreaPattern.Ridge && _area.LayoutVersion >= 5) Range(cellX, cellY, result);
+        else if (_area.Pattern == PlacementAreaPattern.Ridge) Ridge(cellX, cellY, result);
         else Groves(cellX, cellY, result);
         // Stable local addresses are independent of density, polygon vertices and exclusions.
         var positions = result.OrderBy(p => p.Priority).ThenBy(p => p.Point!.Value.Y).ThenBy(p => p.Point!.Value.X).ToArray();
@@ -198,6 +200,152 @@ internal sealed class PlacementAreaLayout
                 Add(cellX, cellY, result, origin.X + u * _cos - v * _sin,
                     origin.Y + u * _sin + v * _cos, -.25 - .65 * t,
                     30 + 50 * t, 3, i, branch * 7);
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ layout 5 (G1, 2026-11-12)
+    // Mountains in size classes, as ~1 800 reference maps place them: big peaks along a smooth spine, never on its
+    // edge; mid peaks between and beside them; hills at the foot and the ends; a lower parallel range beyond a valley;
+    // massifs of short ranges, each a dominant peak with satellites. The class of a peak follows its place in the
+    // range, not chance. Density adds them in that order: spine, shoulders, parallel ranges, foothills.
+
+    private const double Big = 1, Mid = .62, Hill = .34;
+
+    /// <summary>A peak of class <paramref name="tier"/>; the size variation only jitters within the class.</summary>
+    private void Put(int cellX, int cellY, List<PlacementAreaComposition.Sample> result,
+        double x, double y, double tier, double activation, int role, int column, int row, uint salt)
+    {
+        var jitter = _area.SizeVariationPercent / 100 * .5 * (2 * Draw(column, row, 300 + salt) - 1);
+        var scale = Math.Max(.2, tier * (1 + jitter));
+        // The stored point is the image centre; the ground line stays where a full-size peak would stand.
+        var point = new VectorPoint(Math.Round(x), Math.Round(y + (1 - scale) * _groundOffset));
+        if (PlacementAreaGeometry.Cell(point.X) != cellX || PlacementAreaGeometry.Cell(point.Y) != cellY) return;
+        // Bigger classes claim their place first: a hill never pushes a peak out of the range.
+        var priority = (ulong)((role + .6 * (1 - Math.Min(1, tier)) + .4 * Draw(column, row, 400 + salt)) * (ulong.MaxValue / 8d));
+        result.Add(new(true, scale, priority, Math.Clamp(activation, 1, 100), point));
+    }
+
+    private void Range(int cellX, int cellY, List<PlacementAreaComposition.Sample> result)
+    {
+        var origin = _area.CompositionOrigin;
+        double w = _width, h = _height;
+        var centerX = cellX * 100 + 50 - origin.X; var centerY = cellY * 100 + 50 - origin.Y;
+        var projected = centerX * _cos + centerY * _sin;
+        var step = w * .55;
+        var reach = 72 + w * 2.0;
+        var first = (int)Math.Floor((projected - reach) / step) - 1;
+        var last = (int)Math.Ceiling((projected + reach) / step) + 1;
+        void At(double u, double v, double tier, double activation, int role, int column, int row, uint salt) =>
+            Put(cellX, cellY, result, origin.X + u * _cos - v * _sin, origin.Y + u * _sin + v * _cos, tier, activation, role, column, row, salt);
+
+        for (var k = first; k <= last; k++)
+        {
+            // The spine: big peaks every other step in the middle, mid ones between, hills where the range ends.
+            var u = (k + .2 * (Draw(k, 0, 101) - .5)) * step;
+            var end = Math.Abs(u) / _halfLength;
+            if (end > 1.12) continue;
+            var central = Math.Clamp(1 - Math.Pow(end, 1.7), 0, 1);
+            // The middle of the range is a continuous chain of big peaks, each overlapping the next; toward the ends mid
+            // peaks, then hills. Now and then a mid peak breaks the chain, so the crest steps up and down.
+            var tier = end > 1 ? Hill : central > .5 ? (Draw(k, 0, 102) < .82 ? Big : Mid) : central > .18 ? Mid : Hill;
+            // Each peak shifts to the other side of the spine (the ridgeline zigzags behind them); a smaller peak comes
+            // forward of its bigger neighbours, its tip against their feet — behind them it would be hidden.
+            var side = tier == Big ? ((k & 1) == 0 ? -1 : 1) : 1;
+            var v = Spine(u) + side * (tier == Big ? .1 + .12 * Draw(k, 0, 103) : .16 + .14 * Draw(k, 0, 103)) * h;
+            At(u, v, tier, tier == Big ? 2 + 14 * Draw(k, 0, 104) : tier == Mid ? 10 + 22 * Draw(k, 0, 104) : 40 + 30 * Draw(k, 0, 104), 0, k, 0, 1);
+            for (var s = -1; s <= 1; s += 2)
+            {
+                // Shoulders one class lower on both flanks; then a group of 1–4 hills at the foot.
+                if (Draw(k, s, 105) < .1 || tier == Hill && Draw(k, s, 105) < .5) continue;
+                // The front shoulder stands at the foot; the back one steps aside so its tip shows past the slope.
+                var su = s > 0 ? u + (Draw(k, s, 106) - .5) * .7 * w
+                    : u + (Draw(k, s, 106) < .5 ? -1 : 1) * (.42 + .2 * Draw(k, s, 117)) * w;
+                var sv = v + s * (s > 0 ? .36 + .14 * Draw(k, s, 107) : .2 + .1 * Draw(k, s, 107)) * h * (tier == Big ? 1 : .75);
+                var shoulder = tier == Big ? Mid : Hill;
+                At(su, sv, shoulder, 22 + 26 * Draw(k, s, 108), 1, k, s, 2);
+                // A big peak has a second, lower shoulder further out: the range is broad in its middle.
+                if (tier == Big && Draw(k, s, 117) < .7)
+                    At(su + (Draw(k, s, 118) - .5) * .5 * w, sv + s * (.3 + .1 * Draw(k, s, 119)) * h, Hill * 1.15,
+                        38 + 20 * Draw(k, s, 120), 2, k, s * 2, 6);
+                if (Draw(k, s, 109) < .2) continue;
+                // «Go crazy on the smaller hills»: groups of 2–5 at the foot, of uneven sizes.
+                var count = 2 + (int)(Draw(k, s, 110) * 3.99);
+                var fu = su + (Draw(k, s, 111) - .5) * .8 * w;
+                var fv = sv + s * (.28 + .22 * Draw(k, s, 112)) * h * (shoulder == Mid ? 1 : .75);
+                for (var i = 0; i < count; i++)
+                    At(fu + (i - (count - 1) / 2.0) * .32 * w + (Draw(k, s * (i + 3), 113) - .5) * .15 * w,
+                        fv + s * (Draw(k, s * (i + 3), 114) - .5) * .3 * h, Hill * (.75 + .35 * Draw(k, s * (i + 3), 115)),
+                        52 + 44 * Draw(k, s * (i + 3), 116), 3, k, s * (i + 3), 3);
+            }
+            // A lower parallel range on each side, beyond a valley, shifted along the axis (en échelon).
+            for (var p = -1; p <= 1; p += 2)
+            {
+                var shift = p * _halfLength * (.18 + .12 * Draw(p, 0, 121));
+                var half = _halfLength * (.5 + .15 * Draw(p, 0, 123));
+                var pu = (k + .5 + .25 * (Draw(k, p * 9, 124) - .5)) * step;
+                var pe = Math.Abs(pu - shift) / half;
+                if (pe > 1) continue;
+                var pc = 1 - Math.Pow(pe, 1.6);
+                var ptier = pc > .45 && (k & 1) == 0 ? Mid : Hill;
+                var pv = .7 * Spine(pu) + p * (1.45 + .25 * Draw(p, 0, 122)) * h + ((k & 1) == 0 ? .1 : -.1) * h;
+                At(pu, pv, ptier, ptier == Mid ? 34 + 26 * Draw(k, p * 9, 125) : 60 + 30 * Draw(k, p * 9, 125), 2, k, p * 9, 4);
+                if (ptier == Mid && Draw(k, p * 9, 126) > .5)
+                    At(pu + (Draw(k, p * 9, 127) - .5) * .6 * w, pv + p * (.4 + .3 * Draw(k, p * 9, 128)) * h, Hill,
+                        72 + 26 * Draw(k, p * 9, 129), 3, k, p * 9, 5);
+            }
+        }
+    }
+
+    private void Massif(int cellX, int cellY, List<PlacementAreaComposition.Sample> result)
+    {
+        var origin = _area.CompositionOrigin;
+        double w = _width, h = _height;
+        var gx = w * 2.5; var gy = h * 1.8;
+        var lx = cellX * 100 + 50 - origin.X; var ly = cellY * 100 + 50 - origin.Y;
+        var reach = 72 + w * 2.2;
+        for (var row = (int)Math.Floor((ly - reach) / gy) - 1; row <= (int)Math.Ceiling((ly + reach) / gy) + 1; row++)
+        for (var col = (int)Math.Floor((lx - reach) / gx) - 1; col <= (int)Math.Ceiling((lx + reach) / gx) + 1; col++)
+        {
+            // Some cluster sites stay empty: valleys and passes between the short ranges.
+            if (Draw(col, row, 203) < .1) continue;
+            var cx = (col + .5 * (row & 1) + .5 * (Draw(col, row, 201) - .5)) * gx;
+            var cy = (row + .45 * (Draw(col, row, 202) - .5)) * gy;
+            var strength = .35 + .65 * Draw(col, row, 205);
+            var angle = (Draw(col, row, 204) - .5) * .9;
+            double cos = Math.Cos(angle), sin = Math.Sin(angle);
+            var count = 4 + (int)(Draw(col, row, 206) * 3.99);
+            var salt = 0u;
+            void At(double x, double y, double tier, double activation, int role) =>
+                Put(cellX, cellY, result, origin.X + x, origin.Y + y, tier, activation, role, col, row, ++salt * 17);
+            for (var i = 0; i < count; i++)
+            {
+                // A short range: the dominant peak in its middle, smaller ones toward its ends.
+                var t = i - (count - 1) / 2.0;
+                var along = t * .46 * w * (1 + .12 * Draw(col, row, 210 + (uint)i));
+                var tier = Math.Abs(t) < .6 ? (strength > .55 ? Big : Mid) : Math.Abs(t) < 1.6 ? Mid : Math.Abs(t) < 2.6 ? Mid * .8 : Hill;
+                // The dominant peak stands back; the smaller ones of its range come forward to its feet.
+                var across = (Math.Abs(t) < .6 ? -.1 : .12 + .1 * Math.Abs(t)) * h + (Draw(col, row, 220 + (uint)i) - .5) * .1 * h;
+                At(cx + along * cos - across * sin, cy + along * sin + across * cos, tier,
+                    tier == Big ? 3 + 20 * (1 - strength) : tier == Mid ? 14 + 26 * (1 - strength) + 6 * Math.Abs(t) : 42 + 20 * Draw(col, row, 230 + (uint)i), Math.Abs(t) < .6 ? 0 : 1);
+            }
+            var satellites = 4 + (int)(Draw(col, row, 207) * 4.99);
+            for (var j = 0; j < satellites; j++)
+            {
+                // Satellites around the range, flattened in depth as the 3/4 view sees the ground.
+                // In front and to the sides: a satellite behind the range would only show its tip, if anything.
+                var a = (-.15 + 1.3 * Draw(col, row, 240 + (uint)j)) * Math.PI;
+                var r = (.4 + .5 * Draw(col, row, 250 + (uint)j)) * w;
+                At(cx + Math.Cos(a) * r * 1.2, cy + Math.Sin(a) * r * .6 * h / w, r < .7 * w ? Mid * .8 : Hill * 1.1,
+                    34 + 40 * Draw(col, row, 260 + (uint)j), 2);
+            }
+            var foothills = 3 + (int)(Draw(col, row, 208) * 4.99);
+            for (var j = 0; j < foothills; j++)
+            {
+                var a = Draw(col, row, 270 + (uint)j) * Math.Tau;
+                var r = (1.0 + .45 * Draw(col, row, 280 + (uint)j)) * w;
+                At(cx + Math.Cos(a) * r, cy + Math.Sin(a) * r * .6 * h / w, Hill * (.8 + .25 * Draw(col, row, 290 + (uint)j)),
+                    66 + 32 * Draw(col, row, 295 + (uint)j), 3);
             }
         }
     }

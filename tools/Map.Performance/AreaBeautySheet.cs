@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Security.Cryptography;
 using Map.Core.Documents;
 using Map.Core.Editing;
@@ -35,6 +35,7 @@ internal static class AreaBeautySheet
     {
         var report = new AreaBeautySheetReport();
         var beauty = Environment.GetEnvironmentVariable("MAP_AREA_BEAUTY") == "1";
+        var layout5 = Environment.GetEnvironmentVariable("MAP_AREA_LAYOUT") == "5";
         report.Notes["beauty"] = beauty ? "on" : "off";
         var images = new Dictionary<string, SKImage>(StringComparer.OrdinalIgnoreCase);
         var assets = new List<MapAssetReference>();
@@ -67,7 +68,7 @@ internal static class AreaBeautySheet
             var measures = variants.ToDictionary(v => v.Sha256, v => StampContentMeasurer.Read(images[v.Sha256]));
             var area = new PlacementArea
             {
-                Name = name, LayoutVersion = 4, Pattern = pattern, JoinEdges = join, Density = density,
+                Name = name, LayoutVersion = layout5 ? PlacementArea.LatestLayoutVersion : 4, Pattern = pattern, JoinEdges = join, Density = density,
                 SizeVariationPercent = variation, Seed = seed, Variants = variants,
                 Nodes = [.. points.Select(p => new PlacementPathNode(Guid.NewGuid(), p.X, p.Y))],
                 Request = new() { BaseWidth = width, RandomizeVariant = true },
@@ -80,14 +81,38 @@ internal static class AreaBeautySheet
             return area;
         }
 
-        var massif = Area("Массив владельца", massifVariants, 70, 70, 50, PlacementAreaPattern.Masses, true, 9127,
+        // MAP_AREA_LAYOUT=5 (G1, 2026-11-12): the same areas in layout 5 — the range in size classes, the massif as «Горный массив».
+        var massif = layout5
+            ? Area("Массив владельца", massifVariants, 150, 70, 30, PlacementAreaPattern.Peaks, true, 9127,
+                (90, 230), (520, 140), (980, 260), (1190, 560), (1120, 980), (820, 1230), (420, 1190), (150, 900), (60, 560))
+            : Area("Массив владельца", massifVariants, 70, 70, 50, PlacementAreaPattern.Masses, true, 9127,
             (90, 230), (520, 140), (980, 260), (1190, 560), (1120, 980), (820, 1230), (420, 1190), (150, 900), (60, 560));
         document = new PlacementAreaCommand(layerId, massif.Id, massif, massif.Name).Apply(document);
-        var range = Area("Хребет владельца", mountains, 230, 70, 30, PlacementAreaPattern.Ridge, true, 4411,
+        var rangeDensity = double.TryParse(Environment.GetEnvironmentVariable("MAP_AREA_DENSITY"), out var d) ? d : 70;
+        var range = Area("Хребет владельца", mountains, 230, rangeDensity, 30, PlacementAreaPattern.Ridge, true, 4411,
             (1330, 420), (1820, 250), (2330, 380), (2350, 720), (1900, 900), (1450, 1100), (1300, 820));
         document = new PlacementAreaCommand(layerId, range.Id, range, range.Name).Apply(document);
         var layer = (ObjectLayer)document.FindLayer(layerId)!;
         report.Notes["objects"] = layer.Objects.Count.ToString();
+        // How the arrangement thins: candidates of the layout, those density admits, and those spacing keeps.
+        foreach (var area in new[] { massif, range })
+        {
+            var full = area with { Density = 100 };
+            var layout = new PlacementAreaLayout(area);
+            int candidates = 0, admitted = 0;
+            foreach (var span in PlacementAreaGeometry.Coverage(area.Nodes))
+                for (var x = span.MinX; x <= span.MaxX; x++)
+                    foreach (var sample in layout.Cell(x, span.Y))
+                    { candidates++; if (sample.Activation <= area.Density) admitted++; }
+            int kept = 0, keptFull = 0;
+            var sampler = new PlacementAreaSampler(area); var samplerFull = new PlacementAreaSampler(full);
+            foreach (var span in PlacementAreaGeometry.Coverage(area.Nodes))
+                for (var x = span.MinX; x <= span.MaxX; x++)
+                { kept += sampler.Slots(x, span.Y).Count(); keptFull += samplerFull.Slots(x, span.Y).Count(); }
+            var probe = PlacementAreaPlanner.Item(area, new PlacementAreaSlot(PlacementAreaGeometry.Coverage(area.Nodes)[0].MinX, PlacementAreaGeometry.Coverage(area.Nodes)[0].Y, 0));
+            var silhouette = PlacementAreaSilhouette.Create(area, probe, PlacementAreaSampler.VisibleBounds(area, probe)) is not null;
+            report.Notes["thinning-" + area.Name] = $"candidates {candidates}, admitted {admitted}, kept {kept}, kept at 100 % {keptFull}, silhouettes {silhouette}";
+        }
 
         var source = new Images(images);
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(options.OutputPath))!);

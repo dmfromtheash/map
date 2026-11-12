@@ -65,7 +65,8 @@ public sealed record PlacementAreaBeauty
     public static PlacementAreaBeauty ForNewArea(double baseWidth, PlacementAreaPattern pattern = PlacementAreaPattern.Masses)
     {
         var width = double.IsFinite(baseWidth) && baseWidth > 0 ? baseWidth : 96;
-        var groves = pattern != PlacementAreaPattern.Ridge;
+        // «Горный массив» (G1) builds its own clusters, valleys and foothill fade: clumps and a soft edge would thin them twice.
+        var groves = pattern is not (PlacementAreaPattern.Ridge or PlacementAreaPattern.Peaks);
         return new()
         {
             SoftEdge = groves, EdgeWidth = Math.Clamp(Math.Round(width * 2), 20, MaxEdgeWidth),

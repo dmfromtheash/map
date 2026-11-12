@@ -11,7 +11,9 @@ public readonly record struct PlacementAreaSlot(int X, int Y, int Ordinal)
 }
 public sealed record PlacementAreaMember(PlacementAreaSlot Slot, ObjectId ObjectId);
 
-public enum PlacementAreaPattern { Masses, Ridge, Groups, Clearings }
+/// <remarks><see cref="Peaks"/> (G1, 2026-11-12, layout 5 only): a mountain massif of short ranges, each a dominant peak
+/// with smaller ones and satellites, foothills between them.</remarks>
+public enum PlacementAreaPattern { Masses, Ridge, Groups, Clearings, Peaks }
 
 /// <summary>A small shared silhouette, frozen per source image, not per placed object.</summary>
 public sealed record StampContentMask(ImmutableArray<uint> Rows)
@@ -102,6 +104,11 @@ public sealed record PlacementArea
 
     [JsonIgnore] public bool NeedsBeautySchema => Beauty is not null || DensityMask is not null;
 
+    /// <summary>The newest arrangement, G1 (schema v54): mountains in size classes along ranges, and the «Горный массив» pattern.</summary>
+    public const int LatestLayoutVersion = 5;
+    [JsonIgnore] public bool NeedsRangeSchema => LayoutVersion >= 5 || Pattern == PlacementAreaPattern.Peaks
+        || GenerationRecipe is { } r && (r.LayoutVersion >= 5 || r.Pattern == PlacementAreaPattern.Peaks);
+
     [JsonIgnore] public ImmutableHashSet<PlacementAreaSlot> RuleBlocked => RuleSlots ?? [];
     [JsonIgnore] public bool NeedsRulesSchema => Rules is not null || RuleSlots is { Count: > 0 } || DepthSort;
     [JsonIgnore] public IEnumerable<PlacementAreaMember> Members => Cells.Values.SelectMany(c => c);
@@ -112,7 +119,8 @@ public sealed record PlacementArea
         new PlacementPath { Id = Id, Name = Name, Nodes = Nodes, Variants = Variants, Request = Request,
             RotationDegrees = RotationDegrees, ScalePercent = ScalePercent, Sublayer = Sublayer,
             Opacity = Opacity, Style = Style }.Validate();
-        if (Cells is null || Exclusions is null || OccupiedSlots is null || ContentBounds is null || ContentMasks is null || LayoutVersion is < 0 or > 4
+        if (Cells is null || Exclusions is null || OccupiedSlots is null || ContentBounds is null || ContentMasks is null || LayoutVersion is < 0 or > LatestLayoutVersion
+            || Pattern == PlacementAreaPattern.Peaks && LayoutVersion < 5
             || !double.IsFinite(CompositionOrigin.X) || !double.IsFinite(CompositionOrigin.Y)
             || !double.IsFinite(CompositionLength) || CompositionLength < 0 || CompositionLength > CanvasDimensionPolicy.Maximum * 2d
             || !double.IsFinite(CompositionAngleDegrees) || CompositionAngleDegrees is < -180 or > 180 || !Enum.IsDefined(Pattern)
@@ -126,7 +134,7 @@ public sealed record PlacementArea
         GenerationProtectionMask?.Validate();
         if (GenerationProtection?.Any(s => s.Ordinal < 0) == true || GenerationRecipe is { AlgorithmVersion: not 1 }
             || GenerationRecipe is { } recipe && (!double.IsFinite(recipe.Density) || recipe.Density < 0
-                || !Enum.IsDefined(recipe.Pattern) || recipe.LayoutVersion is < 0 or > 4))
+                || !Enum.IsDefined(recipe.Pattern) || recipe.LayoutVersion is < 0 or > LatestLayoutVersion))
             throw new ArgumentException("Некорректная защита или рецепт генерации области.");
         Beauty?.Validate();
         DensityMask?.Validate();
