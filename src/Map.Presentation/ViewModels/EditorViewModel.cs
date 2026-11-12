@@ -387,6 +387,8 @@ public sealed partial class EditorViewModel : ViewModelBase
             ?? typeof(EditorViewModel).Assembly.GetName().Version?.ToString(3)
             ?? "0.0.0";
         _assetCatalog = assetCatalog;
+        // A drive library attached or removed while the editor is open shows up in «Ассеты» at once.
+        if (assetCatalog is not null) assetCatalog.MountsChanged += (_, _) => RefreshLibrary();
         _brushPresetStore = assetCatalog is null ? null : new BrushPresetStore(assetCatalog.Root);
         _brushPresets = _brushPresetStore?.Load() ?? [];
         _imageExporter = imageExporter ?? new ImageExportEngine();

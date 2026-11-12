@@ -15,6 +15,7 @@ public sealed class ExportStampImageSource : IStampImageSource, IDisposable
     private readonly string? _projectPath;
     private readonly string? _catalogRoot;
     private readonly IReadOnlyDictionary<string, AssetRecord> _catalogRecords;
+    private readonly Dictionary<string, string> _rootBySha;
     // The export draws every copy of an asset across the whole map, tile after tile: when the
     // decoded originals do not fit, each tile decodes them again (a 131072² map of the owner's
     // 4096 px mountains spent more than half its time in SKCodec.GetPixels with the editor's
@@ -39,6 +40,12 @@ public sealed class ExportStampImageSource : IStampImageSource, IDisposable
             .GroupBy(record => record.Sha256, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase)
             ?? new Dictionary<string, AssetRecord>(StringComparer.OrdinalIgnoreCase);
+        // Frozen with the records: a picture from an attached drive library reads its ladder there.
+        _rootBySha = catalog is null || catalog.Mounts.Count == 0
+            ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            : _catalogRecords.Values.Select(record => (record.Sha256, Root: catalog.RootFor(record)))
+                .Where(pair => !string.Equals(pair.Root, _catalogRoot, StringComparison.OrdinalIgnoreCase))
+                .ToDictionary(pair => pair.Sha256, pair => pair.Root, StringComparer.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -65,7 +72,7 @@ public sealed class ExportStampImageSource : IStampImageSource, IDisposable
             string? path = null;
             if (record.StoredRelativePath is { } stored)
             {
-                TryResolveCatalogOriginal(_catalogRoot, stored, out path);
+                TryResolveCatalogOriginal(_rootBySha.TryGetValue(sha256, out var mounted) ? mounted : _catalogRoot, stored, out path);
             }
             else
             {
@@ -139,7 +146,8 @@ public sealed class ExportStampImageSource : IStampImageSource, IDisposable
         var key = record.Sha256 + "@" + level;
         if (_cache.Get(key, null) is { } held) return held;
         if (_missingSteps.Contains(key)) return null;
-        if (AssetCatalog.TryDetailLevelPath(_catalogRoot!, record, level, out var path) && _cache.Get(key, path) is { } image)
+        var root = _rootBySha.TryGetValue(record.Sha256, out var mounted) ? mounted : _catalogRoot!;
+        if (AssetCatalog.TryDetailLevelPath(root, record, level, out var path) && _cache.Get(key, path) is { } image)
             return image;
         _missingSteps.Add(key);
         return null;

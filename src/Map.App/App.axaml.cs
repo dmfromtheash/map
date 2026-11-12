@@ -36,6 +36,11 @@ public partial class App : Application
                 appSettings.LibraryRoot ?? Path.Combine(profileRoot, "Assets"));
             // The owner starts the artwork library from scratch. Opening Map never seeds assets;
             // new content enters the existing catalog through an explicit import.
+            // Libraries on external drives are attached (not imported) while their drive is
+            // connected. Isolated test profiles never scan the owner's drives.
+            if (TestMode.Enabled && Environment.GetEnvironmentVariable(AssetDriveLibraries.RootsVariable) is null)
+                Environment.SetEnvironmentVariable(AssetDriveLibraries.DisableVariable, "1");
+            new Services.DriveLibraryWatcher(assetCatalog).Start();
 
             var mainWindow = new MainWindow(
                 new ProjectStore(journal),
