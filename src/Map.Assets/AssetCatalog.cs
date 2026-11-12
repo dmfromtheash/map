@@ -440,10 +440,16 @@ public sealed class AssetCatalog : IAsyncDisposable
 
             // A rerun or a continued set only adds variants; names, tags and folders edited in Map stay.
             var set = index >= 0
-                ? _document.Sets[index] with { VariantIds = variantIds }
+                ? item.OverwriteNames
+                    ? _document.Sets[index] with
+                    {
+                        VariantIds = variantIds, Name = item.Name.Trim(), Detail = Clean(item.Detail), CollectionId = collection,
+                        Tags = [.. item.Tags.Distinct(StringComparer.OrdinalIgnoreCase)],
+                    }
+                    : _document.Sets[index] with { VariantIds = variantIds }
                 : new AssetSet
                 {
-                    Id = id, Name = item.Name.Trim(), VariantIds = variantIds, CoverVariantId = variantIds[0],
+                    Id = id, Name = item.Name.Trim(), Detail = Clean(item.Detail), VariantIds = variantIds, CoverVariantId = variantIds[0],
                     CollectionId = collection, Tags = [.. item.Tags.Distinct(StringComparer.OrdinalIgnoreCase)], ImportedUtc = importedUtc,
                     Placement = item.Placement,
                 };
@@ -454,6 +460,8 @@ public sealed class AssetCatalog : IAsyncDisposable
         SaveIndex();
         return result;
     }
+
+    private static string? Clean(string? text) => string.IsNullOrWhiteSpace(text) ? null : text.Trim();
 
     private string? EnsureCollectionPath(IReadOnlyList<string> path)
     {
@@ -704,6 +712,7 @@ public sealed class AssetCatalog : IAsyncDisposable
     private bool Matches(AssetSet set, AssetSetSummary summary, string text)
     {
         if (set.Name.Contains(text, StringComparison.OrdinalIgnoreCase)
+            || set.Detail?.Contains(text, StringComparison.OrdinalIgnoreCase) == true
             || set.Tags.Any(tag => tag.Contains(text, StringComparison.OrdinalIgnoreCase)))
         {
             return true;
@@ -830,6 +839,7 @@ public sealed class AssetCatalog : IAsyncDisposable
         {
             SetId = set.Id,
             Name = set.Name,
+            Detail = set.Detail,
             VariantCount = set.VariantIds.Count,
             CoverVariantId = cover.Id,
             CoverSha256 = cover.Sha256,

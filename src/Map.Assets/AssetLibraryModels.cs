@@ -55,6 +55,14 @@ public sealed record AssetSet
 {
     public required string Id { get; init; }
     public required string Name { get; init; }
+
+    /// <summary>
+    /// The second line of a card: what exactly is drawn and how («очертание дома · контур тушью · план сверху»).
+    /// The name stays short for search; the search matches both. Absent in older catalogs.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? Detail { get; init; }
+
     public IReadOnlyList<string> VariantIds { get; init; } = [];
     public required string CoverVariantId { get; init; }
     public string? CollectionId { get; init; }

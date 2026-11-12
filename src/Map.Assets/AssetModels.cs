@@ -49,6 +49,10 @@ public sealed record AssetSetImport
 {
     public required string StableKey { get; init; }
     public required string Name { get; init; }
+    public string? Detail { get; init; }
+
+    /// <summary>The builder renames a set it created (names were reworked after looking at the pictures).</summary>
+    public bool OverwriteNames { get; init; }
     public required IReadOnlyList<string> Paths { get; init; }
     public required IReadOnlyList<string> Labels { get; init; }
     public IReadOnlyList<string> CollectionPath { get; init; } = [];

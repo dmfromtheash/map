@@ -67,6 +67,8 @@ public sealed record AssetSetSummary
 {
     public required string SetId { get; init; }
     public required string Name { get; init; }
+    /// <summary>The card's second line (what exactly is drawn and how), when the set has one.</summary>
+    public string? Detail { get; init; }
     public required int VariantCount { get; init; }
     public required string CoverVariantId { get; init; }
     public required string CoverSha256 { get; init; }
