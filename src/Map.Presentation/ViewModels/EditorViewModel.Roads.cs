@@ -1062,7 +1062,7 @@ public sealed partial class EditorViewModel
     public void SetRoadTaperLength(double length) => SetRoadStyle(s => s with { TaperLength = Math.Clamp(length, 0, Road.MaximumWidth) }, "Длина затухания");
 
     public void SetRoadTexture(string? id) => SetRoadStyle(
-        s => s with { TextureId = MapFillTextures.Find(id) is { Kind: MapFillTextureKind.Ground } ground ? ground.Id : null },
+        s => s with { TextureId = MapFillTextures.Accepts(id, MapFillTextureKind.Ground) ? id : null },
         id is null ? "Убрать материал дороги" : "Материал дороги");
     public void SetRoadTextureOpacityPercent(double percent) => SetRoadStyle(s => s with { TextureOpacity = Math.Clamp(percent, 0, 100) / 100 }, "Сила материала дороги");
     public void SetRoadTextureScale(double scale) => SetRoadStyle(

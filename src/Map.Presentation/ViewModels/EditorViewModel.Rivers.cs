@@ -727,9 +727,9 @@ public sealed partial class EditorViewModel
     public double? RiverShallowWidth => SelectedRiver?.Style.ShallowWidth;
     public string? RiverShallowColor => SelectedRiver?.Style.ShallowColor;
 
-    /// <summary>Picks one of Map's own water materials, or none for a flat fill.</summary>
+    /// <summary>Picks one of Map's own water materials or a library texture, or none for a flat fill.</summary>
     public void SetRiverTexture(string? id) => SetRiverStyle(
-        s => s with { TextureId = MapFillTextures.Find(id) is { Kind: MapFillTextureKind.Water } water ? water.Id : null },
+        s => s with { TextureId = MapFillTextures.Accepts(id, MapFillTextureKind.Water) ? id : null },
         id is null ? "Убрать текстуру воды" : "Текстура воды");
 
     public void SetRiverTextureOpacityPercent(double percent) =>

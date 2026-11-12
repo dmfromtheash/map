@@ -426,6 +426,7 @@ public sealed partial class EditorViewModel : ViewModelBase
         StampImages = assetCatalog is null
             ? null
             : new CatalogStampImageSource(assetCatalog, () => Session.Document, () => DocumentPath);
+        AttachLibraryTextures();
 
         // The tools start at sizes that fit this canvas (А1.2); what the map already holds is not touched.
         var defaults = NewMapDefaults.For(document.Canvas);

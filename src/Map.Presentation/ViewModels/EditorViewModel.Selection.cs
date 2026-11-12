@@ -478,8 +478,8 @@ public sealed partial class EditorViewModel
             RippleWidth = Math.Clamp(proposed.RippleWidth, 0, 32),
             RippleSpacing = Math.Clamp(proposed.RippleSpacing, 1, 128),
             RippleCount = Math.Clamp(proposed.RippleCount, 0, 12),
-            FillTextureId = MapFillTextures.Find(proposed.FillTextureId) is { Kind: MapFillTextureKind.Ground } ground
-                ? ground.Id : null,
+            FillTextureId = MapFillTextures.Accepts(proposed.FillTextureId, MapFillTextureKind.Ground)
+                ? proposed.FillTextureId : null,
             FillTextureOpacity = Math.Clamp(proposed.FillTextureOpacity, 0, 1),
             FillTextureScale = Math.Clamp(proposed.FillTextureScale, MapFillTextures.MinimumScale, MapFillTextures.MaximumScale),
             Cliff = (proposed.Cliff with
@@ -522,7 +522,7 @@ public sealed partial class EditorViewModel
     /// </summary>
     public bool SetBaseMaterial(string? textureId)
     {
-        if (textureId is not null && (MapFillTextures.Find(textureId) is not { Kind: MapFillTextureKind.Water }
+        if (textureId is not null && (!MapFillTextures.Accepts(textureId, MapFillTextureKind.Water)
             || Map.Rendering.MapTextureLibrary.Image(textureId) is null))
             return false;
         var layer = Session.Document.BaseColor;

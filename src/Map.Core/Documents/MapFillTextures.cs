@@ -8,7 +8,7 @@ public enum MapFillTextureKind
     Water,
 }
 
-/// <summary>One built-in fill texture: an identity the document stores and a name the user sees.</summary>
+/// <summary>One fill texture: an identity the document stores and a name the user sees.</summary>
 public sealed record MapFillTexture(string Id, string Title, MapFillTextureKind Kind, string Group = "", bool MirrorRepeat = false);
 
 /// <summary>
@@ -66,7 +66,40 @@ public static class MapFillTextures
         [.. All.Where(texture => texture.Kind == kind)];
 
     public static MapFillTexture? Find(string? id) =>
-        string.IsNullOrWhiteSpace(id) ? null : All.FirstOrDefault(texture => texture.Id == id);
+        string.IsNullOrWhiteSpace(id) ? null
+        : IsAssetId(id) ? new MapFillTexture(id, LibraryTitle, MapFillTextureKind.Ground, LibraryGroup)
+        : All.FirstOrDefault(texture => texture.Id == id);
+
+    /// <summary>
+    /// A tiling texture from the user's asset library: <c>asset:</c> and the content SHA-256 in
+    /// lower-case hex. The document stores only this id - never a path or a drive letter - and
+    /// carries the bytes as an embedded <see cref="MapAssetReference"/> of the same hash, so the map
+    /// still draws when the library (or the drive it lives on) is not there.
+    /// </summary>
+    public const string AssetPrefix = "asset:";
+    public const string LibraryTitle = "Текстура из библиотеки";
+    public const string LibraryGroup = "Мои текстуры";
+
+    public static string AssetId(string sha256)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sha256);
+        var id = AssetPrefix + sha256.ToLowerInvariant();
+        return IsAssetId(id) ? id : throw new ArgumentException("A library texture is named by a SHA-256 hex string.", nameof(sha256));
+    }
+
+    public static bool IsAssetId(string? id) =>
+        id is { Length: 70 } && id.StartsWith(AssetPrefix, StringComparison.Ordinal)
+        && id.AsSpan(AssetPrefix.Length).IndexOfAnyExcept("0123456789abcdef") < 0;
+
+    /// <summary>The content hash of a library texture id, or null for a built-in or absent one.</summary>
+    public static string? AssetSha256(string? id) => IsAssetId(id) ? id![AssetPrefix.Length..] : null;
+
+    /// <summary>
+    /// Whether a picker of this kind may store the id: a built-in texture of the same kind, or any
+    /// library texture (its kind comes from the library tags, which the document does not keep).
+    /// </summary>
+    public static bool Accepts(string? id, MapFillTextureKind kind) =>
+        IsAssetId(id) || Find(id) is { } texture && texture.Kind == kind;
 
     /// <summary>Smallest and largest world size of one texture tile, in canvas units.</summary>
     public const double MinimumScale = 16;
@@ -74,7 +107,7 @@ public static class MapFillTextures
     public const double DefaultGroundScale = 320;
     public const double DefaultWaterScale = 160;
 
-    /// <summary>An id is valid when it is absent (plain fill) or names a built-in texture.</summary>
+    /// <summary>An id is valid when it is absent (plain fill), names a built-in texture or a library one.</summary>
     public static bool IsValidId(string? id) => string.IsNullOrWhiteSpace(id) || Find(id) is not null;
 
     public static bool IsValidScale(double scale) =>

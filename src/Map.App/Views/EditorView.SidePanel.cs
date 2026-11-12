@@ -629,11 +629,16 @@ public sealed partial class EditorView
     /// One row of material swatches plus "без материала". The swatch is the tile itself, so what
     /// the user picks is what the map gets, and only materials of the right kind are offered.
     /// </summary>
+    private const int InlineFillTextureLimit = 11;
+
     private Control BuildFillTexturePicker(
         string name, MapFillTextureKind kind, Func<string?> current, Action<string?> choose,
         Func<MaterialPreviewContext> context, string? fixedCaption = null)
     {
-        var offered = MapFillTextures.Of(kind).Count(texture => Map.Rendering.MapTextureLibrary.Image(texture.Id) is not null);
+        // Map's own materials, then library textures of this kind; the row keeps the first few,
+        // the catalog below lists them all by group.
+        var choices = _editor.FillTextureChoices(kind).Take(InlineFillTextureLimit).ToArray();
+        var offered = choices.Length;
         // «нет» and every material in one row while they fit: the cells narrow a little instead of
         // leaving one swatch alone, stretched across a second row.
         var grid = new Ui.ChoiceGrid { MaxColumns = Math.Max(4, offered + 1), MinimumItemWidth = offered + 1 > 4 ? 40 : 52, Gap = 6 }.Named(name);
@@ -658,8 +663,7 @@ public sealed partial class EditorView
         }
 
         Add(null, "Без материала");
-        foreach (var texture in MapFillTextures.Of(kind))
-            if (Map.Rendering.MapTextureLibrary.Image(texture.Id) is not null) Add(texture.Id, texture.Title);
+        foreach (var texture in choices) Add(texture.Id, texture.Title);
         _textureSwatchGroups.Add(new TextureSwatchGroup(grid, buttons, current, context) { LastSignature = preview.Signature });
         var caption = new TextBlock { Text = "Материал" }.Classed("faint", "role-caption");
         // The caption says what the swatches are mixed with, so a grey stone that shows green

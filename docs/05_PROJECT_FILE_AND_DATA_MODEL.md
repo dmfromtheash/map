@@ -53,6 +53,7 @@ v1–v3 открываются только через migration-copy до v4. �
 | v51 | `HandoutSchemaVersion` | хендаут карты `scene.handout`: `found`, `burnt`, `scroll-ink`, `scroll-bone`, `portolan-skin`; пишется только когда выбран; неизвестное имя — ошибка чтения | R09f, DEC-096, 2026-11-11 |
 | v52 | `WinterSchemaVersion` | стили «Зима» `style.preset`: `winter-engraving`, `winter-blizzard`, `winter-woodblock` — в стиле карты, варианте или версии | R09, DEC-097, 2026-11-11 |
 | v53 | `PixelSchemaVersion` | стили «Пиксельный атлас» `style.preset`: `pixel-fantasy16`, `pixel-handheld` — в стиле карты, варианте или версии | R09, DEC-098, 2026-11-11 |
+| v55 | `LibraryTextureSchemaVersion` | текстура из библиотеки ассетов `asset:<sha256>` (64 строчные hex) в прежних полях текстуры: `baseMaterial.textureId`, `landStyle.fillTextureId`, `style.textureId` реки, дороги и её участка; байты — обычный встроенный ассет того же hash в `asset-manifest.json`, путь и буква диска не пишутся; карта без такой текстуры остаётся в своей схеме; `asset:` в файле схемы ниже v55 — ошибка чтения | 2026-11-12 |
 
 ## Вид в изометрии — schema v47 (план 2.3, 2026-10-31)
 

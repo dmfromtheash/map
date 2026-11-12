@@ -179,7 +179,13 @@ public static class MapProjectFormat
 
     /// <summary>G1 (2026-11-12): area layout 5 — mountains in size classes along ranges, the «Горный массив» pattern.</summary>
     public const int AreaRangeSchemaVersion = 54;
-    public const int MaxSupportedSchemaVersion = AreaRangeSchemaVersion;
+
+    /// <summary>
+    /// 2026-11-12: a fill texture from the asset library (<c>asset:&lt;sha256&gt;</c>) on land, water, a road or the
+    /// sea; its bytes travel in the map as an embedded asset of the same hash.
+    /// </summary>
+    public const int LibraryTextureSchemaVersion = 55;
+    public const int MaxSupportedSchemaVersion = LibraryTextureSchemaVersion;
 
     /// <summary>
     /// Schemas v5–v13 share the v4 container and differ only by the constructs they may carry

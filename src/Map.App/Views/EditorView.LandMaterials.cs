@@ -164,8 +164,7 @@ public sealed partial class EditorView
         var (actions, buttons) = Ui.Segmented("LandPaintAction",
             [("Texture", "Материал", null), ("Color", "Цвет", null), ("Erase", "Ластик", null)],
             key => { _editor.SetLandPaintAction(key); SyncAppearanceSections(); });
-        buttons[0].IsEnabled = MapFillTextures.Of(MapFillTextureKind.Ground)
-            .Any(texture => MapTextureLibrary.Image(texture.Id) is not null);
+        buttons[0].IsEnabled = _editor.FillTextureChoices(MapFillTextureKind.Ground).Count > 0;
         // The brush lays the raw tile down as paint: no land colour takes part, so the sample
         // shows the material itself at the brush's own scale.
         MaterialPreviewContext BrushContext() => MaterialPreviewContext.RawTexture(_editor.LandMaterialScale);
@@ -200,7 +199,7 @@ public sealed partial class EditorView
             if (lastMaterial != materialSignature)
             {
                 lastMaterial = materialSignature;
-                title.Text = MapFillTextures.Find(_editor.LandMaterialId)?.Title ?? "Материалы пока не добавлены";
+                title.Text = _editor.FillTextureTitle(_editor.LandMaterialId) ?? "Материалы пока не добавлены";
                 sample.Background = MaterialPreviewBrush(_editor.LandMaterialId, brushContext);
             }
             var signature = string.Join("|", _editor.RecentLandMaterials) + "|" + brushContext.Signature;
@@ -210,8 +209,8 @@ public sealed partial class EditorView
             {
                 var swatch = TextureSwatch(id, "", brushContext); swatch.Width = 30; swatch.Height = 28;
                 var button = new Button { Name = "LandRecent_" + id, Content = swatch, Padding = new Thickness(2) }.Classed("swatch");
-                AutomationProperties.SetName(button, MapFillTextures.Find(id)?.Title ?? id);
-                ToolTip.SetTip(button, MapFillTextures.Find(id)?.Title ?? id);
+                AutomationProperties.SetName(button, _editor.FillTextureTitle(id) ?? id);
+                ToolTip.SetTip(button, _editor.FillTextureTitle(id) ?? id);
                 button.Click += (_, _) => { _editor.ChooseLandMaterial(id); SyncAppearanceSections(); };
                 recent.Children.Add(button);
             }
@@ -325,7 +324,7 @@ public sealed partial class EditorView
         Func<MaterialPreviewContext> context)
     {
         if (_materialCatalogWindow is not null || TopLevel.GetTopLevel(this) is not Window owner) return;
-        var all = MapFillTextures.Of(kind).Where(t => MapTextureLibrary.Image(t.Id) is not null).ToArray();
+        var all = _editor.FillTextureChoices(kind).ToArray();
         var search = new TextBox { Name = "MaterialCatalogSearch", PlaceholderText = "Найти материал…" };
         var groups = new ListBox
         {

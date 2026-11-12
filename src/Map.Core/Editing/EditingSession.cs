@@ -176,6 +176,13 @@ public sealed class EditingSession
     /// <summary>Diagnostics for the native profiles: receives the duration of each step of <see cref="Execute"/>. Never set in the product.</summary>
     public static Action<string, double>? StepTimed { get; set; }
 
+    /// <summary>
+    /// Supplies the embedded asset behind a library fill texture (<c>asset:</c> id) by its hash, or
+    /// null when the library cannot. Set by the editor; after every edit the session copies the
+    /// textures the document names but does not carry yet into it, in the same undo step.
+    /// </summary>
+    public Func<string, MapAssetReference?>? FillTextureAssetSource { get; set; }
+
     public void Execute(IEditCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -213,6 +220,15 @@ public sealed class EditingSession
         if (command is not PlacementAreaCommand && !PlacementAreaOwnership.Allows(Document, candidate, out var areaReason))
         { LastResourceError = areaReason; ResourceAdmissionChanged?.Invoke(this, EventArgs.Empty); return; }
         Mark("ownership");
+        if (FillTextureAssetSource is { } textureSource)
+        {
+            var embedded = FillTextureAssets.Embed(candidate, textureSource, out var added);
+            if (added.Count > 0)
+            {
+                command = new FillTextureEmbedCommand(command, added);
+                candidate = embedded;
+            }
+        }
         var followed = TextOnPath.Follow(Document, candidate);
         if (!ReferenceEquals(followed, candidate))
         {

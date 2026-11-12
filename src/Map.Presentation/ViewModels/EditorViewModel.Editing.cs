@@ -1122,7 +1122,7 @@ public sealed partial class EditorViewModel
     /// </summary>
     public bool ChooseLandTexture(string? id)
     {
-        if (id is not null && MapFillTextures.Find(id) is not { Kind: MapFillTextureKind.Ground }) return false;
+        if (id is not null && !MapFillTextures.Accepts(id, MapFillTextureKind.Ground)) return false;
         NewLandTextureId = id;
         return SetActiveLandStyle(style => WithGroundTexture(style, id));
     }

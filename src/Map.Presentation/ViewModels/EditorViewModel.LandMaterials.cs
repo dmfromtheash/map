@@ -63,15 +63,14 @@ public sealed partial class EditorViewModel
 
     public bool ChooseLandMaterial(string id)
     {
-        if (MapFillTextures.Find(id) is not { Kind: MapFillTextureKind.Ground } material
-            || MapTextureLibrary.Image(id) is null) return false;
+        if (!MapFillTextures.Accepts(id, MapFillTextureKind.Ground) || MapTextureLibrary.Image(id) is null) return false;
         CancelStroke(); CanvasGestureCancelled?.Invoke(this, EventArgs.Empty);
         LandMaterialId = id;
         LandPaintWithColor = false; LandPaintEraser = false;
         _recentLandMaterials.Remove(id); _recentLandMaterials.Insert(0, id);
         if (_recentLandMaterials.Count > 6) _recentLandMaterials.RemoveAt(6);
         Raise(nameof(LandMaterialId)); Raise(nameof(RecentLandMaterials));
-        StatusDetail = $"Материал кисти: {material.Title}.";
+        StatusDetail = $"Материал кисти: {FillTextureTitle(id)}.";
         SceneChanged?.Invoke(this, EventArgs.Empty);
         return true;
     }

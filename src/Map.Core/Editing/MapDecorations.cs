@@ -77,10 +77,10 @@ public static class MapDecorations
         }
 
         foreach (var water in document.Layers.OfType<BaseColorLayer>().Where(l => l.Visible))
-            Add(new LegendEntry(LegendEntryKind.Water, MapFillTextures.Find(water.TextureId)?.Title ?? "Вода", water.Color));
+            Add(new LegendEntry(LegendEntryKind.Water, TextureTitle(document, water.TextureId) ?? "Вода", water.Color));
         foreach (var land in document.Layers.OfType<LandLayer>().Where(l => l.Visible && l.GeometryTiles.TileCount > 0))
             Add(new LegendEntry(LegendEntryKind.Land,
-                MapFillTextures.Find(land.EdgeStyle.FillTextureId)?.Title ?? land.Name, land.EdgeStyle.FillColor));
+                TextureTitle(document, land.EdgeStyle.FillTextureId) ?? land.Name, land.EdgeStyle.FillColor));
 
         var objectLayers = document.Layers.OfType<ObjectLayer>().Where(l => l.Visible).ToArray();
         foreach (var river in objectLayers.SelectMany(l => l.Rivers).Where(r => r.Visible))
@@ -107,6 +107,12 @@ public static class MapDecorations
 
         return entries;
     }
+
+    /// <summary>A library texture is named after the picture the map carries; a built-in one by its title.</summary>
+    private static string? TextureTitle(MapDocument document, string? id) =>
+        MapFillTextures.AssetSha256(id) is { } sha
+            ? document.Assets.FirstOrDefault(asset => asset.Sha256 == sha)?.DisplayName ?? MapFillTextures.LibraryTitle
+            : MapFillTextures.Find(id)?.Title;
 
     public static string RoadLabel(RoadDrawing drawing) => drawing switch
     {
