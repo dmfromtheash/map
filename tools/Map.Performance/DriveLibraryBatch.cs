@@ -43,7 +43,10 @@ internal static class DriveLibraryBatch
 {
     private sealed record PlanSet(string Key, string Catalog, string Name, string One, string Use,
         List<string> Collection, List<string> Tags, List<string> Files, bool Ready, List<int> Factor,
-        string? Detail = null, bool Named = false);
+        string? Detail = null, bool Named = false, string? Source = null);
+
+    /// <summary>The owner's reference folder: textures are imported from their originals (already 2048-4096 px).</summary>
+    private const string RefsRoot = @"C:\Users\Leshe\Pictures\refs";
 
     private sealed class State
     {
@@ -58,7 +61,9 @@ internal static class DriveLibraryBatch
     {
         StableKey = set.Key, Name = set.Name, Detail = set.Detail, OverwriteNames = overwriteNames,
         CollectionPath = set.Collection, Tags = set.Tags,
-        Paths = [.. set.Files.Select(file => Path.Combine(upscaled, Path.ChangeExtension(file, ".webp")))],
+        Paths = [.. set.Files.Select(file => set.Source == "refs"
+            ? Path.Combine(RefsRoot, file)
+            : Path.Combine(upscaled, Path.ChangeExtension(file, ".webp")))],
         Labels = [.. set.Files.Select((_, i) => set.Files.Count == 1 ? set.One : $"{set.One} {i + 1}")],
         Provenance = new AssetProvenance
         {
