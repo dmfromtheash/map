@@ -1783,7 +1783,10 @@ public sealed partial class EditorView
     {
         _objectSelectionSet.Clear();
         _objectSelectionSet.UnionWith(_editor.Session.SelectedObjectIds);
+        _selectedAssetKeys = ObjectTreeRows.SelectedAssetKeys(_editor.Session.Document, _objectSelectionSet);
     }
+
+    private HashSet<string> _selectedAssetKeys = new(StringComparer.Ordinal);
 
     private bool IsObjectTreeRowSelected(ObjectTreeRow row) => row.Kind switch
     {
@@ -1799,7 +1802,7 @@ public sealed partial class EditorView
         ObjectTreeRowKind.Land =>
             row.LandId is { } landId && _editor.SelectedLand?.Id == landId,
         ObjectTreeRowKind.AssetKind =>
-            row.MemberIds is { Count: > 0 } kindMembers && kindMembers.Any(_objectSelectionSet.Contains),
+            row.AssetKey is { } key && _selectedAssetKeys.Contains(key),
         _ => false,
     };
 

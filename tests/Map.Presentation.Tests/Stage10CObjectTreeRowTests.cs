@@ -189,7 +189,8 @@ public class Stage10CObjectTreeRowTests
         var stamps = ObjectTreeRows.Build(document, "", ObjectTypeFilter.Stamps, null, []);
         Assert.Single(stamps);
         Assert.Equal(ObjectTreeRowKind.AssetKind, stamps[0].Kind);
-        Assert.Contains(stamp.Id, stamps[0].MemberIds!);
+        Assert.Null(stamps[0].MemberIds);
+        Assert.Contains(ObjectTreeRows.AssetMembers(document, stamps[0].AssetKey!), member => member.Id == stamp.Id);
 
         var texts = ObjectTreeRows.Build(document, "", ObjectTypeFilter.Text, null, []);
         Assert.Equal(2, texts.Count);

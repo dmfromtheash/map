@@ -742,11 +742,11 @@ public sealed partial class EditorViewModel
         {
             // An asset-kind row stands for all its copies: Ctrl+A over the Assets list still
             // selects every placed asset the list holds.
-            if (row.Kind == ObjectTreeRowKind.AssetKind && row.MemberIds is { } kindMembers)
+            if (row.Kind == ObjectTreeRowKind.AssetKind && row.AssetKey is { } assetKey)
             {
                 // A closed group stays atomic here too: a copy that belongs to a group brings
                 // the whole group along, or stays out when any member is unavailable (R04).
-                foreach (var memberId in kindMembers)
+                foreach (var memberId in ObjectTreeRows.AssetMembers(Session.Document, assetKey).Select(member => member.Id))
                 {
                     if (!availableIds.Contains(memberId) || matching.Contains(memberId)) continue;
                     if (DocumentEditor.FindObject(Session.Document, memberId) is { GroupId: { } memberGroup })

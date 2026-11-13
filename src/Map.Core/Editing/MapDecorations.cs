@@ -6,7 +6,7 @@ namespace Map.Core.Editing;
 /// Keeps the derived state of cartographic decorations (R08) in step with the map: a scale bar
 /// carries the canvas scale, a legend lists what the map actually uses. Runs after every edit in
 /// <see cref="EditingSession.Execute"/>, like <see cref="TextOnPath.Follow"/>; maps without
-/// decorations pay one scan of each new object list.
+/// decorations share a delta-maintained empty set across edits.
 /// </summary>
 public static class MapDecorations
 {
@@ -16,14 +16,12 @@ public static class MapDecorations
         ArgumentNullException.ThrowIfNull(document);
         if (!HasDecorations(document)) return document;
         IReadOnlyList<LegendEntry>? legend = null;
-        List<MapLayer>? layers = null;
+        var replacements = new List<SceneObject>();
         for (var index = 0; index < document.Layers.Count; index++)
         {
             if (document.Layers[index] is not ObjectLayer layer) continue;
-            SceneObject[]? rewritten = null;
-            for (var i = 0; i < layer.Objects.Count; i++)
+            foreach (var item in BoundObjectIndex.For(layer).Decorations.Values)
             {
-                var item = layer.Objects[i];
                 if (item.Kind != SceneObjectKind.Decoration || item.Decoration is not { } style) continue;
                 var refreshed = style.Kind switch
                 {
@@ -33,33 +31,19 @@ public static class MapDecorations
                 };
                 var height = refreshed.Kind == DecorationKind.Legend ? LegendHeight(item.Width, refreshed.Entries.Count) : item.Height;
                 if (refreshed.Equals(style) && Math.Abs(height - item.Height) < .5) continue;
-                rewritten ??= [.. layer.Objects];
-                rewritten[i] = (Math.Abs(height - item.Height) < .5 ? item : SceneObjectClone.At(item, item.X, item.Y, item.Width, height))
-                    with { Decoration = refreshed };
+                replacements.Add((Math.Abs(height - item.Height) < .5 ? item : SceneObjectClone.At(item, item.X, item.Y, item.Width, height))
+                    with { Decoration = refreshed });
             }
-
-            if (rewritten is null) continue;
-            layers ??= [.. document.Layers];
-            layers[index] = layer with { Objects = rewritten };
         }
 
-        return layers is null ? document : document.WithLayers(layers);
+        return replacements.Count == 0 ? document : DocumentEditor.ReplaceObjects(document, replacements);
     }
 
     /// <summary>A legend is as tall as its lines: a heading and one row per entry, no empty tail.</summary>
     public static double LegendHeight(double width, int entries) => Math.Round(width * (.3 + .11 * Math.Max(1, entries)), 2);
 
     public static bool HasDecorations(MapDocument document) =>
-        document.Layers.OfType<ObjectLayer>().Any(layer => HasDecorations(layer.Objects));
-
-    // Every edit asks this. On a map of 50 000 stamps the scan cost 3-4 ms of each cliff-slider
-    // step although the objects had not changed (R05, 2026-10-23); an object list is immutable,
-    // so its answer is kept for as long as the list itself lives.
-    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<IReadOnlyList<SceneObject>, object> Scanned = [];
-    private static readonly object With = new(), Without = new();
-
-    private static bool HasDecorations(IReadOnlyList<SceneObject> objects) => ReferenceEquals(With,
-        Scanned.GetValue(objects, static list => list.Any(o => o.Kind == SceneObjectKind.Decoration) ? With : Without));
+        document.Layers.OfType<ObjectLayer>().Any(layer => BoundObjectIndex.For(layer).Decorations.Count > 0);
 
     /// <summary>
     /// The legend lines of a map, in the order a reader meets them: land and water first, then
@@ -161,8 +145,8 @@ public sealed class DecorationRefreshCommand : IEditCommand
         foreach (var layer in refreshed.Layers.OfType<ObjectLayer>())
         {
             if (edited.FindLayer(layer.Id) is not ObjectLayer previous || ReferenceEquals(previous.Objects, layer.Objects)) continue;
-            var before = previous.Objects.Where(o => o.Kind == SceneObjectKind.Decoration).ToDictionary(o => o.Id);
-            foreach (var item in layer.Objects)
+            var before = BoundObjectIndex.For(previous).Decorations;
+            foreach (var item in BoundObjectIndex.ChangedLabels(previous, layer, BoundObjectIndex.For(layer).Decorations))
                 if (item.Kind == SceneObjectKind.Decoration && before.TryGetValue(item.Id, out var was) && !ReferenceEquals(was, item))
                     changes.Add((layer.Id, was, item));
         }
@@ -177,16 +161,8 @@ public sealed class DecorationRefreshCommand : IEditCommand
 
     private MapDocument Replace(MapDocument document, bool after)
     {
-        var result = document;
-        foreach (var group in _changes.GroupBy(change => change.Layer))
-        {
-            var map = group.ToDictionary(change => change.Before.Id, change => after ? change.After : change.Before);
-            result = result.WithLayer(group.Key, layer => layer is ObjectLayer objects
-                ? objects with { Objects = [.. objects.Objects.Select(item => map.TryGetValue(item.Id, out var swap) ? swap : item)] }
-                : layer);
-        }
-
-        return result;
+        return _changes.Count == 0 ? document : DocumentEditor.ReplaceObjects(document,
+            _changes.Select(change => after ? change.After : change.Before).ToArray());
     }
 }
 
