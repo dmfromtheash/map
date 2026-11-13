@@ -2,6 +2,9 @@
 using Map.Performance;
 
 var options = PerformanceOptions.Parse(args);
+// Native hosts bypass Map.App.Program; explicitly opt their editor instances into the
+// same profile-owned derived cache when a run supplies it. Never infer a library write path.
+Map.Presentation.ViewModels.EditorViewModel.DerivedAssetCacheRoot = Environment.GetEnvironmentVariable("MAP_PERF_DERIVED_ROOT");
 // MAP_PERF_FREE_MB pins the memory guard to a fixed machine (16 GiB with the given MiB free), so the
 // two sides of an A/B meet the same memory pressure instead of what Windows has free that minute:
 // the cold-pan stall appears only under pressure (2026-10-24).

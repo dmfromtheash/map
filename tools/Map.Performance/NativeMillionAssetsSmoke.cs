@@ -70,13 +70,31 @@ public sealed partial class ZoomAssetsApplication
         var open = Stopwatch.StartNew();
         OpenEditor(document);
         await Route(scenario, "open-first-frame", 1, _ => _view.Canvas.FitToCanvas());
+        if (System.Environment.GetEnvironmentVariable("MAP_PERF_CAPTURE_PROGRESSIVE") == "1")
+            await MillionCapture(kind + "-first-progressive");
+        await Settled(scenario.Routes[^1]);
+        if (System.Environment.GetEnvironmentVariable("MAP_PERF_DERIVED_ROOT") is not null)
+        {
+            if (_editor.StampImages is Map.Presentation.Services.CatalogStampImageSource prepared)
+            {
+                _report.Environment["derived-disk-hits"] = prepared.DerivedStatistics.DiskHits.ToString();
+                _report.Environment["derived-builds"] = prepared.DerivedStatistics.Builds.ToString();
+            }
+        }
         scenario.OpenToExactTerrainMs = open.Elapsed.TotalMilliseconds;
         if (kind == "style") { _editor.ApplyStylePreset(MapStylePreset.WatercolorBigShapes); await Step(() => { }); }
         await MillionCapture(kind + "-fit"); Checkpoint();
+        if (System.Environment.GetEnvironmentVariable("MAP_MILLION_FIRST_ONLY") == "1")
+        {
+            _report.Environment["scope"] = "diagnostic first frame only; pan/zoom/edit routes NOT CHECKED";
+            _report.Checks["first-frame-gpu"] = _view.Canvas.LastFrameHadGpuContext;
+            await Finish(scenario); Checkpoint(); return;
+        }
         var fit = _editor.Session.Viewport.Scale;
         foreach (var scale in new[] { .25, 1d, 4d })
         {
             await Route(scenario, "scale-" + scale, 1, _ => SetScale(anchor, scale));
+            Checkpoint(); // Preserve the completed cold-zoom measurement even if the following burst times out.
             await BurstRoute(scenario, "pan-" + (scale * 100), 120, i => _view.Canvas.PanByScreenDeltaForSmoke(i < 60 ? -3 : 3, 0));
             await MillionCapture(kind + "-" + (scale * 100)); Checkpoint();
         }
@@ -84,6 +102,26 @@ public sealed partial class ZoomAssetsApplication
         var notches = (int)Math.Ceiling(Math.Log(16 / fit) / Math.Log(1.15));
         await BurstRoute(scenario, "wheel-to-1600", notches, _ => ZoomAt(anchor, 1.15)); Checkpoint();
         await BurstRoute(scenario, "wheel-to-fit", notches, _ => ZoomAt(anchor, 1 / 1.15)); Checkpoint();
+        if (System.Environment.GetEnvironmentVariable("MAP_PERF_LONG_ZOOM") == "1")
+        {
+            var duration = Stopwatch.StartNew();
+            var cycles = 0;
+            _report.Environment["long-zoom-start-working-set-mib"] = Memory().WorkingSet.ToString();
+            // Same real wheel input and settled-frame gate as the short route. Per-route
+            // snapshots retain resident bytes, pending requests, GC and process working set.
+            while (duration.Elapsed < TimeSpan.FromMinutes(10))
+            {
+                cycles++;
+                await BurstRoute(scenario, $"wheel-long-{cycles}-in", notches, _ => ZoomAt(anchor, 1.15));
+                await BurstRoute(scenario, $"wheel-long-{cycles}-out", notches, _ => ZoomAt(anchor, 1 / 1.15));
+                _report.Environment["long-zoom-elapsed-ms"] = duration.Elapsed.TotalMilliseconds.ToString("F1");
+                Checkpoint();
+            }
+            _report.Environment["long-zoom-cycles"] = cycles.ToString();
+            _report.Environment["long-zoom-end-working-set-mib"] = Memory().WorkingSet.ToString();
+            _report.Checks["long-zoom-ten-minutes"] = duration.Elapsed >= TimeSpan.FromMinutes(10);
+            await MillionCapture(kind + "-long-zoom");
+        }
         await Route(scenario, "select", 1, _ => { SetScale(anchor, 1); var p = _editor.Session.Viewport.WorldToScreen(anchor.X, anchor.Y); _view.Canvas.ClickForSmoke(p.X, p.Y); });
         _report.Checks["selected"] = _editor.Session.SelectedObject is not null;
         var selected = _editor.Session.SelectedObject;
@@ -119,6 +157,8 @@ public sealed partial class ZoomAssetsApplication
         var folder = System.Environment.GetEnvironmentVariable("MAP_PERF_SHOTS") ?? Path.GetDirectoryName(Options.OutputPath)!;
         Directory.CreateDirectory(folder);
         using var bitmap = await _view.Canvas.CaptureGpuFrameForSmokeAsync();
+        _report.Checks["settled-capture/" + name] = !_view.Canvas.LastTerrainRefinementPending
+            && !_view.Canvas.LastFrameFastTerrain && _view.Canvas.LastRenderStats.DetailTilesPending == 0;
         using var png = bitmap.Encode(SKEncodedImageFormat.Png, 100);
         var path = Path.Combine(folder, name + "-gpu.png");
         using (var file = File.Create(path)) png.SaveTo(file);
