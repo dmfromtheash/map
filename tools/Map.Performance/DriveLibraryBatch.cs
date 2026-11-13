@@ -82,6 +82,7 @@ internal static class DriveLibraryBatch
     private static readonly JsonSerializerOptions Json = new() { PropertyNameCaseInsensitive = true, WriteIndented = true };
     // The page of a new map (DEC-078), not the old light paper.
     private const string Paper = CurrentLook.PageColor;
+    private const string LightPaper = "#FFE8E0D0";
 
     public static IReadOnlyList<DriveLibraryReport> Run(PerformanceOptions options)
     {
@@ -411,6 +412,35 @@ internal static class DriveLibraryBatch
     private static bool BatchError(Exception error) => error is IOException or UnauthorizedAccessException
         or InvalidOperationException or ArgumentException or NotSupportedException or JsonException or InvalidDataException;
 
+    /// <summary>The stamp alone on <paramref name="paper"/>, scaled so its smaller side is ≥ 16 px (larger ≤ 4096):
+    /// more than 0.5 % of its box differs from the paper by more than 24 (sum of RGB).</summary>
+    private static bool DrawnAlone(SceneObject o, string paper, CatalogStampImageSource images)
+    {
+        var scale = Math.Min(Math.Max(1, 16 / Math.Min(o.Width, o.Height)), 4096 / Math.Max(o.Width, o.Height));
+        var w = Math.Max(1, (int)Math.Ceiling(o.Width * scale)); var h = Math.Max(1, (int)Math.Ceiling(o.Height * scale));
+        var alone = new SceneObject(ObjectId.New(), SceneObjectKind.Stamp, o.Name, 0, 0, w, h, 0,
+            "#FFFFFFFF", "#00000000", 0, true, false) { Stamp = o.Stamp };
+        var document = new MapDocument(DocumentId.New(), "Один", DateTimeOffset.UnixEpoch, new CanvasDefinition(w, h, "px", paper),
+            [new BaseColorLayer(LayerId.New(), "Бумага", true, false, 1, paper), new ObjectLayer(LayerId.New(), "Ассеты", true, false, 1, [alone])], []);
+        using var bitmap = new SKBitmap(w, h);
+        using (var canvas = new SKCanvas(bitmap))
+        {
+            canvas.Clear(SKColor.Parse(paper));
+            SceneRenderer.Render(canvas, document, new RenderOptions { IsExport = false, Stamps = images, VisibleWorld = new WorldBounds(0, 0, w, h), ViewScale = 1 });
+        }
+        var p = SKColor.Parse(paper);
+        var changed = 0; var total = 0;
+        var step = Math.Min(w, h) < 48 ? 1 : 3;
+        for (var y = 0; y < h; y += step)
+            for (var x = 0; x < w; x += step)
+            {
+                total++;
+                var c = bitmap.GetPixel(x, y);
+                if (Math.Abs(c.Red - p.Red) + Math.Abs(c.Green - p.Green) + Math.Abs(c.Blue - p.Blue) > 24) changed++;
+            }
+        return total > 0 && changed > total / 200;
+    }
+
     /// <summary>One sheet row: the drive preview, the variants at 25 % and 100 %, and the cover at 400 %.</summary>
     private static SKImage RenderRow(PlanSet set, List<AssetRecord> records, AssetCatalog catalog, CatalogStampImageSource images, DriveLibrarySetCheck check)
     {
@@ -452,24 +482,11 @@ internal static class DriveLibraryBatch
         var cx = cover.X + cover.Width / 2; var cy = cover.Y + cover.Height / 2;
         using var close = Render(new WorldBounds(cx - 37.5, cy - 37.5, cx + 37.5, cy + 37.5), 4.0);
 
-        // Drawn = the stamp changed the paper inside its own box at 100 %.
-        var paper = SKColor.Parse(Paper);
+        // Drawn = the stamp changes the paper. Each variant is rendered alone, its smaller side at least 16 px (a
+        // 10×2048 stair is 0.9 px wide in its sheet cell, a 2048×34 wave 3 px high), on the dark page and on a light
+        // paper (black smoke is invisible on the dark page): visible on either counts.
         foreach (var o in objects)
-        {
-            var changed = 0; var total = 0;
-            // A thin strip (e.g. «Pond Waves» 2048×34 fits a 180-unit cell as 180×3) is missed by a 3-px stride that
-            // lands only on its edge row: sample every pixel of every row it touches.
-            var step = Math.Min(o.Width, o.Height) < 12 ? 1 : 3;
-            for (var py = (int)Math.Floor(o.Y); py < (int)Math.Ceiling(o.Y + o.Height); py += step)
-                for (var px = (int)Math.Floor(o.X); px < (int)Math.Ceiling(o.X + o.Width); px += step)
-                {
-                    if (px < 0 || py < 0 || px >= normal.Width || py >= normal.Height) continue;
-                    total++;
-                    var c = normal.GetPixel(px, py);
-                    if (Math.Abs(c.Red - paper.Red) + Math.Abs(c.Green - paper.Green) + Math.Abs(c.Blue - paper.Blue) > 24) changed++;
-                }
-            if (total > 0 && changed > total / 200) check.Drawn++;
-        }
+            if (DrawnAlone(o, Paper, images) || DrawnAlone(o, LightPaper, images)) check.Drawn++;
 
         var info = new SKImageInfo(Thumb + Strip + Close + 40, Height + Label);
         using var surface = SKSurface.Create(info);

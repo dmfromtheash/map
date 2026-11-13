@@ -9,6 +9,8 @@ Set-Location C:\Projects\Map
 "start $(Get-Date -f s) commit $(git rev-parse --short HEAD)" | Out-File $Log -Append -Encoding utf8
 $b = dotnet build tools\Map.Performance\Map.Performance.csproj -c Release --nologo -v q 2>&1
 ($b | Select-String 'Build succeeded| error ' | Select-Object -Last 2) | Out-File $Log -Append -Encoding utf8
+# A failed build must not pour with the previous binary (13.11: a broken check change ran the old one).
+if ($LASTEXITCODE -ne 0) { "BUILD FAILED - nothing poured $(Get-Date -f s)" | Out-File $Log -Append -Encoding utf8; exit 1 }
 $Catalogs = @($Catalogs | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 if (-not $Catalogs) {
   # ConvertFrom-Json of Windows PowerShell 5.1 cannot read the large plan: list catalogs with Python.
