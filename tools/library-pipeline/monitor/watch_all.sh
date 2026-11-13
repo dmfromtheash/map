@@ -15,16 +15,18 @@ while [ $(date +%s) -lt $end ]; do
     f=$(memory_pressure | tail -1 | grep -oE "[0-9]+"); [ "${f:-100}" -lt 20 ] && echo "MAC_LOW_MEMORY ${f}%"; true
   ' < /dev/null 2>&1) || m="MAC_SSH_FAILED $m"
   bad="$bad$m"
-  fl=$(( $(date +%s) - $(stat -c %Y /h/MapLibrary/mac_feeder.log) )); [ $fl -gt 600 ] && bad="$bad
+  fl=$(( $(date +%s) - $(stat -c %Y /h/MapLibrary/mac_feeder.log) )); [ $fl -gt 2400 ] && bad="$bad
 PC_FEEDER_LOG_STALE ${fl}s $(tail -1 /h/MapLibrary/mac_feeder.log)"
   [ "$(tail -3 /h/MapLibrary/mac_feeder.log | grep -c 'retry later')" -ge 3 ] && bad="$bad
 PC_FEEDER_RETRY_LOOP $(tail -1 /h/MapLibrary/mac_feeder.log)"
   g=$(powershell.exe -NoProfile -Command "@(Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='nvlddmkm'; StartTime=(Get-Date).AddMinutes(-6)} -ErrorAction SilentlyContinue).Count" 2>/dev/null | tr -d '\r')
   [ "${g:-0}" -gt 0 ] && bad="$bad
 PC_GPU_DRIVER_ERRORS ${g} in 6 min (nvlddmkm); $(tail -1 /h/MapLibrary/upscale.log)"
-  ul=$(( $(date +%s) - $(stat -c %Y /h/MapLibrary/upscale.log) )); [ $ul -gt 900 ] && bad="$bad
+  # The PC upscale may be paused on purpose (owner 13.11: the GPU rests): only a running one can be stale.
+  pcup=$(powershell.exe -NoProfile -Command "@(Get-CimInstance Win32_Process | ? { \$_.Name -match '^python' -and \$_.CommandLine -match 'run_upscale2' }).Count" 2>/dev/null | tr -d '\r')
+  ul=$(( $(date +%s) - $(stat -c %Y /h/MapLibrary/upscale.log) )); [ "${pcup:-0}" -gt 0 ] && [ $ul -gt 900 ] && bad="$bad
 PC_UPSCALE_LOG_STALE ${ul}s"
-  u=$($R "& C:\Users\Leshe\.map-remote\r.ps1 '\$age=[int]((Get-Date)-(Get-Item D:\MapChecks\codex.log).LastWriteTime).TotalSeconds; \$st=(Get-ScheduledTask MapSolChecks -ErrorAction SilentlyContinue).State; \$done=Test-Path D:\MapChecks\last.txt; \$p=Get-Process Map.App,Map.Performance -ErrorAction SilentlyContinue | % { \$_.ProcessName+\"=\"+[int]((Get-Date)-\$_.StartTime).TotalMinutes+\"min\" }; \$fr=[int]((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory/1KB); \"USER age=\$age task=\$st done=\$done free=\${fr}MB procs=\$(\$p -join \",\")\"' 2>\$null" 2>/dev/null | tr -d '\r' | grep USER)
+  u=$($R "& C:\Users\Leshe\.map-remote\r.ps1 '\$age=[int]((Get-Date)-(Get-Item D:\MapChecks\astra\codex.log).LastWriteTime).TotalSeconds; \$st=(Get-ScheduledTask MapAstra -ErrorAction SilentlyContinue).State; \$done=Test-Path D:\MapChecks\astra\last.txt; \$p=Get-Process Map.App,Map.Performance -ErrorAction SilentlyContinue | % { \$_.ProcessName+\"=\"+[int]((Get-Date)-\$_.StartTime).TotalMinutes+\"min\" }; \$fr=[int]((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory/1KB); \"USER age=\$age task=\$st done=\$done free=\${fr}MB procs=\$(\$p -join \",\")\"' 2>\$null" 2>/dev/null | tr -d '\r' | grep USER)
   [ -z "$u" ] && bad="$bad
 USER_SSH_FAILED"
   if [ -n "$u" ]; then
