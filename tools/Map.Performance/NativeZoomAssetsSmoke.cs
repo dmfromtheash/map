@@ -188,7 +188,20 @@ public sealed partial class ZoomAssetsApplication : Application
         _catalog = new AssetCatalog(Path.Combine(_workspace, "catalog"));
         _window = new Window { Width = 1440, Height = 900, Title = "Map — zoom/assets performance", ShowActivated = false,
             ShowInTaskbar = false, WindowStartupLocation = WindowStartupLocation.Manual, Position = new PixelPoint(-32000, -32000) };
-        if (Options.Profile == "native-million-assets") { _window.Position = new PixelPoint(0, 0); _window.ShowInTaskbar = true; }
+        if (Options.Profile == "native-million-assets")
+        {
+            // Choose the test display before the desktop lifetime shows the window.
+            // A later move still flashes over the owner's primary-screen work.
+            if (_window.Screens.All.FirstOrDefault(screen => !screen.IsPrimary) is { } second)
+            {
+                _window.Width = Math.Min(_window.Width, Math.Max(1, second.WorkingArea.Width / second.Scaling - 32));
+                _window.Height = Math.Min(_window.Height, Math.Max(1, second.WorkingArea.Height / second.Scaling - 64));
+                _window.Position = new PixelPoint(second.WorkingArea.X, second.WorkingArea.Y);
+                _window.WindowState = WindowState.Maximized;
+            }
+            else _window.Position = new PixelPoint(0, 0);
+            _window.ShowInTaskbar = true;
+        }
         _window.Opened += async (_, _) =>
         {
             try { await Execute(); }
