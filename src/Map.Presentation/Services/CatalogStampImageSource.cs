@@ -27,6 +27,12 @@ public sealed class CatalogStampImageSource(
     private readonly Dictionary<string, long> _pixelRetryAt = new(StringComparer.OrdinalIgnoreCase);
     private long _sourceRevision;
     public long SourceRevision => Interlocked.Read(ref _sourceRevision);
+    // A background lease can resolve between the render-thread lookup and its state read.
+    // This is the result of the immediately preceding lookup on this thread, not global state.
+    [ThreadStatic] private static bool _lastImageRequestPending;
+    public bool LastImageRequestPending { get => _lastImageRequestPending; private set => _lastImageRequestPending = value; }
+    private long _unresolvedRequestVersion;
+    public long UnresolvedRequestVersion => _unresolvedRequestVersion;
     public bool ImageRequestsPending { get { lock (_gate) return !_disposed && _latePixels.Count > 0; } }
     public (long DiskHits, long Builds, long DiskBytes, long DiskEvictions, int MetadataEntries, int PendingMips, long DiscardedMips) DerivedStatistics
         => (_derived?.DiskHits ?? 0, _derived?.Builds ?? 0, _derived?.DiskBytes ?? 0,
@@ -185,16 +191,19 @@ public sealed class CatalogStampImageSource(
 
     private SKImage? WorkingImage(string sha256)
     {
+        LastImageRequestPending = false;
         if (!_planning && _derived is not null && _frameThread == Environment.CurrentManagedThreadId
             && catalog.Find(sha256) is { } record)
         {
             var step = AssetCatalog.DetailLadderDepth(record.Width, record.Height) > 0 ? 1 : 0;
             var key = new StampDerivedAssetStore.PixelKey(sha256.ToLowerInvariant(), step, 0);
             var ready = ReadyPixels(key);
+            if (ready is null) _unresolvedRequestVersion++;
             if (ready is null && !_decodeFailed.Contains(PixelName(key)))
             {
                 _latePixels.Add(key);
                 if (QueuePixels(key, _derivedReady ?? (() => { }))) _latePixels.Remove(key);
+                LastImageRequestPending = !_decodeFailed.Contains(PixelName(key));
             }
             return ready;
         }
@@ -364,24 +373,30 @@ public sealed class CatalogStampImageSource(
             SKImage? At(int level)
             {
                 var step = Math.Min(depth, level);
-                return ReadyPixels(new(wanted.Sha, step, level - step));
+                var key = new StampDerivedAssetStore.PixelKey(wanted.Sha, step, level - step);
+                if (ReadyPixels(key) is not { } image) return null;
+                var name = PixelName(key);
+                return _samples.GetFallbackImage(name) ?? _cache.GetFallbackImage(name) ?? image;
             }
         }
     }
 
     private SKImage? ForPixelSize(string sha256, double width, double height)
     {
+        LastImageRequestPending = false;
         if (!_planning && _derived is not null && _frameThread == Environment.CurrentManagedThreadId
             && catalog.Find(sha256) is { } recordForFrame)
         {
             var key = PixelKey(recordForFrame, width, height);
             var ready = ReadyPixels(key);
+            if (ready is null) _unresolvedRequestVersion++;
             if (ready is null && !_decodeFailed.Contains(PixelName(key)))
             {
                 // Float geometry/rotation may cross a mip boundary that the double-sized
                 // preflight did not request. Do not declare its resident fallback final.
                 if (!_wantedMips.Contains(key)) _latePixels.Add(key);
                 if (QueuePixels(key, _derivedReady ?? (() => { }))) _latePixels.Remove(key);
+                LastImageRequestPending = !_decodeFailed.Contains(PixelName(key));
             }
             return ready;
         }
@@ -483,8 +498,7 @@ public sealed class CatalogStampImageSource(
             _frameThread = 0;
             // A late request can still be waiting for metadata when the camera leaves it;
             // then no pixel task exists to deliver a cancellation back to BeginFrame.
-            if (_latePixels.RemoveWhere(key => !_wantedMips.Contains(key)) > 0)
-                Interlocked.Increment(ref _sourceRevision);
+            _latePixels.RemoveWhere(key => !_wantedMips.Contains(key));
             _derived?.CancelUnwantedPixels(_wantedMips);
             if (_disposed) { DisposeIfUnused(); return; }
             _cache.DeferDisposal = false;
@@ -751,8 +765,8 @@ public sealed class CatalogStampImageSource(
             _samples.AdoptPixels(key, SKImage.FromBitmap(bitmap));
         }
         else if (mip is not { Cancelled: true }) FailedPixels(key);
-        // Also discard a cached intermediate tile when its late request was cancelled.
-        if (_latePixels.Remove(pixel)) Interlocked.Increment(ref _sourceRevision);
+        // Provisional pixels are not retained by the renderer. Arrivals never invalidate unrelated resources.
+        _latePixels.Remove(pixel);
         _derivedNotifications.Remove(key);
     }
 

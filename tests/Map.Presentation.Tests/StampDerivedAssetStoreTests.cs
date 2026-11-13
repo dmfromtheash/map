@@ -319,14 +319,45 @@ public sealed class StampDerivedAssetStoreTests : IDisposable
             Assert.Null(source.TryGetImageForPixelSize(record.Sha256, 64, 64));
             var pending = source.DerivedStatistics.PendingMips;
             Assert.Equal(1, pending);
-            Assert.Same(small, source.TryGetReadyImageForPixelSize(record.Sha256, 64, 64));
+            var fallback = source.TryGetReadyImageForPixelSize(record.Sha256, 64, 64);
+            Assert.NotNull(fallback);
+            Assert.NotSame(small, fallback);
+            Assert.Same(fallback, source.TryGetReadyImageForPixelSize(record.Sha256, 64, 64));
+            using var smallPixels = SKBitmap.FromImage(small);
+            using var fallbackPixels = SKBitmap.FromImage(fallback);
+            Assert.Equal(smallPixels.Bytes, fallbackPixels.Bytes);
             Assert.Equal(pending, source.DerivedStatistics.PendingMips);
             Assert.True(source.ImageRequestsPending);
+            Assert.True(source.LastImageRequestPending);
+            Exception? backgroundFailure = null;
+            var background = new Thread(() =>
+            {
+                try
+                {
+                    using var lease = source.Lease();
+                    Assert.NotNull(lease.TryGetImageForPixelSize(record.Sha256, 16, 16));
+                }
+                catch (Exception ex) { backgroundFailure = ex; }
+            });
+            background.Start();
+            Assert.True(background.Join(TimeSpan.FromSeconds(10)));
+            Assert.Null(backgroundFailure);
+            Assert.True(source.LastImageRequestPending); // The background lease cannot overwrite this thread's result.
         }
         Assert.Equal(0, source.Timings.LoadCalls);
         Assert.Equal(0, source.SourceRevision);
         using (source.BeginFrame()) { } // Camera left that requested size.
         Assert.False(source.ImageRequestsPending);
+        Assert.Equal(0, source.SourceRevision);
+        ready = false;
+        deadline = DateTime.UtcNow.AddSeconds(30);
+        while (!ready && DateTime.UtcNow < deadline)
+        {
+            using (source.BeginFrame()) ready = source.TryGetImageForPixelSize(record.Sha256, 64, 64) is not null;
+            if (!ready) await Task.Delay(10);
+        }
+        Assert.True(ready);
+        Assert.Equal(0, source.SourceRevision); // A late arrival cannot discard unrelated scene caches.
         source.ForgetMissing();
         Assert.False(source.ImageRequestsPending);
     }

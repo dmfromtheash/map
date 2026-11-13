@@ -160,7 +160,8 @@ public sealed class ObjectOverviewCache : IDisposable
         ulong contentHash,
         Func<SKImage> build,
         Func<(int Objects, int Culled)>? objectCounts = null,
-        bool fallback = false)
+        bool fallback = false,
+        Func<bool>? keep = null)
     {
         ArgumentNullException.ThrowIfNull(build);
         EnsureOwnerThread();
@@ -179,6 +180,14 @@ public sealed class ObjectOverviewCache : IDisposable
         // Build first: an append may copy the previous tile, and a failed build must leave it usable.
         Misses++;
         var image = build();
+        if (keep?.Invoke() == false)
+        {
+            // Draw this provisional image once, then release it with the frame. It must not
+            // become a completed tile, an append base, or a neighbouring zoom fallback.
+            _retired.Add(image);
+            var transientCounts = objectCounts?.Invoke() ?? default;
+            return new(image, false, false, transientCounts.Objects, transientCounts.Culled);
+        }
         var invalidated = false;
         if (_latest.TryGetValue(logical, out var staleKey) && staleKey != key)
         {

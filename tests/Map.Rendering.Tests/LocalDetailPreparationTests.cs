@@ -10,6 +10,53 @@ public sealed class LocalDetailPreparationTests
     private static readonly string Far = new('b', 64);
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void A_preparing_stamp_is_not_a_missing_file_and_its_tile_is_not_retained(bool shadow)
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "Map.slnx"))) root = root.Parent;
+        using var image = SKImage.FromEncodedData(Path.Combine(root!.FullName, "tests", "fixtures", "assets", "owner-mountain-01.png"));
+        var source = new PreparingWithoutFallback(image);
+        var stamp = new SceneObject(ObjectId.New(), SceneObjectKind.Stamp, "Owner mountain", 16, 16, 96, 96,
+            0, "#FFFFFFFF", "#00000000", 0, true, false)
+            { Stamp = new StampStyle(Near) { ShadowOpacity = shadow ? .5 : 0 } };
+        var layer = new ObjectLayer(LayerId.New(), "Mountains", true, false, 1, [stamp]);
+        var document = new MapDocument(DocumentId.New(), "Preparation", DateTimeOffset.UnixEpoch,
+            new CanvasDefinition(128, 128, "px", "#FFFFFFFF"),
+            [new BaseColorLayer(LayerId.New(), "Page", true, false, 1, "#FFFFFFFF"), layer]);
+        using var cache = new ObjectOverviewCache();
+        cache.BeginFrame();
+        var stats = new RenderStats();
+        SKImage Build()
+        {
+            using var surface = SKSurface.Create(new SKImageInfo(128, 128));
+            SceneRenderer.Render(surface.Canvas, document, new RenderOptions { Stamps = source, Stats = stats });
+            return surface.Snapshot();
+        }
+        var temporary = cache.GetOrCreate(layer.Id, 0, 0, 0, 1, Build, keep: () => stats.UnresolvedImages == 0);
+        Assert.Equal(0, stats.MissingAssets);
+        Assert.True(stats.DetailTilesPending > 0);
+        Assert.False(cache.TryGet(layer.Id, 0, 0, 0, 1, out _));
+        cache.EndFrame();
+        Assert.Equal(IntPtr.Zero, temporary.Image.Handle);
+        source.Ready = true;
+        cache.BeginFrame();
+        cache.GetOrCreate(layer.Id, 0, 0, 0, 1, Build, keep: () => stats.UnresolvedImages == 0);
+        Assert.Equal(0, stats.DetailTilesPending);
+        Assert.True(cache.TryGet(layer.Id, 0, 0, 0, 1, out _));
+        cache.EndFrame();
+    }
+
+    private sealed class PreparingWithoutFallback(SKImage image) : IStampImageSource
+    {
+        public bool Ready { get; set; }
+        public bool LastImageRequestPending => !Ready;
+        public SKImage? TryGetImage(string sha256) => Ready ? image : null;
+        public SKImage? TryGetReadyImageForPixelSize(string sha256, double width, double height) => null;
+    }
+
+    [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]
     [InlineData(false, true)]
@@ -58,7 +105,9 @@ public sealed class LocalDetailPreparationTests
         var pending = new RenderStats();
         var partial = Draw(pending, true);
         Assert.True(pending.DetailTilesPending > 0);
-        Assert.True(requested > 0);
+        // Planned work requests refinement immediately; a late lookup relies on its worker
+        // completion notification instead of continuously requesting frames while it waits.
+        if (!lateRequest) Assert.True(requested > 0);
         Assert.Equal(0, layers.Count);
         Assert.Contains(source.Requested, request => request.Sha256 == Near && request.Width == 32 && request.Height == 32);
         source.Ready = true;

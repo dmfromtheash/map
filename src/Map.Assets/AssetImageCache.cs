@@ -13,9 +13,11 @@ public sealed class AssetImageCache : IDisposable
         public required long ResidentBytes { get; init; }
         public long LastUsed { get; set; }
         public Dictionary<int, SKImage> Mips { get; } = [];
+        public SKImage? FallbackImage { get; set; }
         public long MipBytes { get; set; }
         public void Dispose()
         {
+            FallbackImage?.Dispose();
             foreach (var image in Mips.Values) image.Dispose();
             Image.Dispose();
         }
@@ -69,6 +71,15 @@ public sealed class AssetImageCache : IDisposable
     /// <summary>Entries out of the cache whose images are not yet disposed (pinned or deferred).</summary>
     public int RetiredCount => _retired.Count;
 
+    /// <summary>A stable separate raster identity for provisional draws; shares this entry's immutable pixels.</summary>
+    public SKImage? GetFallbackImage(string key)
+    {
+        if (!_entries.TryGetValue(key, out var entry)) return null;
+        if (entry.FallbackImage is not null) return entry.FallbackImage;
+        using var pixels = entry.Image.PeekPixels();
+        return pixels is null ? entry.Image : entry.FallbackImage = SKImage.FromPixels(pixels);
+    }
+
     /// <summary>Keeps <paramref name="image"/> (an image or mip this cache returned) alive and in the cache until unpinned.</summary>
     public void Pin(SKImage image) => _pins[image] = _pins.GetValueOrDefault(image) + 1;
 
@@ -93,6 +104,7 @@ public sealed class AssetImageCache : IDisposable
     {
         if (_pins.Count == 0) return false;
         if (_pins.ContainsKey(entry.Image)) return true;
+        if (entry.FallbackImage is { } fallback && _pins.ContainsKey(fallback)) return true;
         foreach (var mip in entry.Mips.Values) if (_pins.ContainsKey(mip)) return true;
         return false;
     }
