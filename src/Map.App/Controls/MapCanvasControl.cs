@@ -846,9 +846,12 @@ public sealed partial class MapCanvasControl : Control
             var terrainHitsBefore = terrainCache.Hits;
             var terrainMissesBefore = terrainCache.Misses;
             var cameraFrames = resources.CameraFrames();
+            // Fog is a scalar; CompareMarks returns a new immutable value snapshot. No view
+            // collection used by this identity is mutated in place by the editor.
             cameraFrames.SetIdentity(renderDocument, lease.GrContext?.Handle ?? IntPtr.Zero,
                 editor.HexPresentation, editor.HexLevelShown, editor.HexGhostLevel, editor.FogVeilToDraw, editor.CompareMarks,
-                editor.CanvasBoundaryOverlay, editor.MaskEditLayerId, editor.CliffMaskLayerId);
+                editor.CanvasBoundaryOverlay, editor.MaskEditLayerId, editor.CliffMaskLayerId,
+                editor.StampImages?.MissingRevision ?? 0L);
             var cameraEligible = Environment.GetEnvironmentVariable("MAP_PERF_CAMERA_FRAMES") != "0"
                 && lease.GrContext is not null && lease.SkSurface is not null
                 && !hasLiveObjectPreview && editor.StrokePreview is null && !editor.CanvasWorkflowOpen
@@ -941,10 +944,14 @@ public sealed partial class MapCanvasControl : Control
                 BoundaryOverlay = editor.CanvasBoundaryOverlay,
             });
             if (!reusedCamera && cameraEligible && !movingNow && !fastTerrain && !fastPreview
-                && renderStats.MissingAssets == 0 && renderStats.DetailTilesPending == 0
+                && renderStats.UnresolvedImages == 0 && renderStats.DetailTilesPending == 0
                 && renderStats.TerrainRefinementsPending == 0 && renderStats.HexChunksPending == 0
                 && editor.StampImages?.ImageRequestsPending != true)
+            {
+                var rejected = cameraFrames.CapturesRejectedByBudget;
                 cameraFrames.Capture(lease.SkSurface!, canvas, page);
+                renderStats.CameraCapturesRejectedByBudget = cameraFrames.CapturesRejectedByBudget > rejected ? 1 : 0;
+            }
             sceneStopwatch.Stop();
             // R39 «Бесшовный меридиан»: past a side edge of a planet the other side of the world
             // shows, faint and read-only, so a coast crossing the seam can be matched.

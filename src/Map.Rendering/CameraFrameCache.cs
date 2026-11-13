@@ -21,8 +21,10 @@ public sealed class CameraFrameCache : IDisposable
     private nint _context;
     public long Bytes => (_wide?.Bytes ?? 0) + (_detail?.Bytes ?? 0);
     public int Count => (_wide is null ? 0 : 1) + (_detail is null ? 0 : 1);
+    public long CapturesRejectedByBudget { get; private set; }
 
-    public CameraFrameCache(long budget = 64L * 1024 * 1024) => _budget = budget;
+    // Two 4K half-float views fit. Smaller windows retain only their actual image bytes.
+    public CameraFrameCache(long budget = 128L * 1024 * 1024) => _budget = budget;
 
     /// <summary>Document reference, non-document view state and GPU context must all match.</summary>
     public void SetIdentity(object document, nint context, params object?[] state)
@@ -44,11 +46,15 @@ public sealed class CameraFrameCache : IDisposable
             Math.Max(clip.Top, (int)Math.Floor(device.Top)), Math.Min(clip.Right, (int)Math.Ceiling(device.Right)),
             Math.Min(clip.Bottom, (int)Math.Ceiling(device.Bottom)));
         if (pixels.Width <= 0 || pixels.Height <= 0) return false;
-        // Half-float is the largest canvas format used here; count it even on 8888 surfaces.
-        var bytes = (long)pixels.Width * pixels.Height * 8;
-        if (bytes > _budget / 2) return false;
+        // Reject before allocation using the largest Avalonia canvas format (half-float).
+        // Charge the real snapshot format after capture; no pixel readback is needed.
+        if ((long)pixels.Width * pixels.Height * 8 > _budget / 2)
+        { CapturesRejectedByBudget++; return false; }
         var image = surface.Snapshot(pixels);
         if (image is null) return false;
+        var bytes = (long)image.Width * image.Height * image.Info.BytesPerPixel;
+        if (bytes > _budget / 2)
+        { image.Dispose(); CapturesRejectedByBudget++; return false; }
         var frame = new Frame(image, inverse.MapRect(new SKRect(pixels.Left, pixels.Top, pixels.Right, pixels.Bottom)), bytes);
         if (_wide is null || Contains(frame.World, _wide.World))
         {

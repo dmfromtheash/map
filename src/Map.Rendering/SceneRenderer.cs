@@ -12,6 +12,10 @@ public interface IStampImageSource
 {
     /// <summary>Changes only when backing files become unavailable or are replaced.</summary>
     long SourceRevision => 0;
+    /// <summary>Changes only after a cacheable missing asset is successfully read again.</summary>
+    long MissingRevision => 0;
+    bool LastImageRequestCacheableMissing => false;
+    bool IsMissingCacheable(string sha256) => false;
     /// <summary>Late requests beyond the size preflight still need refinement.</summary>
     bool ImageRequestsPending => false;
     /// <summary>The immediately preceding image lookup is still preparing, rather than a missing file.</summary>
@@ -57,6 +61,9 @@ public interface IStampImageLease : IStampImageSource, IDisposable;
 internal sealed class StampImagePassThrough(IStampImageSource source) : IStampImageLease
 {
     public long SourceRevision => source.SourceRevision;
+    public long MissingRevision => source.MissingRevision;
+    public bool LastImageRequestCacheableMissing => source.LastImageRequestCacheableMissing;
+    public bool IsMissingCacheable(string sha256) => source.IsMissingCacheable(sha256);
     public bool ImageRequestsPending => source.ImageRequestsPending;
     public bool LastImageRequestPending => source.LastImageRequestPending;
     public long UnresolvedRequestVersion => source.UnresolvedRequestVersion;
@@ -102,6 +109,7 @@ public sealed class StrokePreview
 public sealed class RenderStats
 {
     public int CameraFramesReused { get; set; }
+    public int CameraCapturesRejectedByBudget { get; set; }
     public int UnresolvedImages { get; set; }
     public int LayersDrawn { get; set; }
     public int ObjectCandidates { get; set; }
@@ -167,6 +175,7 @@ public sealed class RenderStats
     public void Reset()
     {
         CameraFramesReused = 0;
+        CameraCapturesRejectedByBudget = 0;
         UnresolvedImages = 0;
         LayersDrawn = 0;
         ObjectCandidates = 0;
