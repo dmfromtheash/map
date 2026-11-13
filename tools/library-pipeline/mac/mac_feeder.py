@@ -74,6 +74,20 @@ def ok_set(path):
     return done
 
 
+def rejected_set(path):
+    rejected = set()
+    if path.exists():
+        for line in path.open(encoding='utf-8-sig'):
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            msg = str(r.get('msg', '')) if isinstance(r, dict) else ''
+            if isinstance(r, dict) and r.get('ok') is False and not msg.startswith(('ERR', 'PC check')):
+                rejected.add(key(r['rel']))
+    return rejected - ok_set(path)
+
+
 def append(path, row):
     with path.open('a', encoding='utf-8') as f:
         f.write(json.dumps(row, ensure_ascii=False) + '\n')
@@ -182,7 +196,9 @@ def main():
     msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
 
     rels = [l.strip() for l in (LIB / 'lists/all.txt').open(encoding='utf-8-sig') if l.strip()]
-    done = ok_set(MAN_PC) | ok_set(MAN_MAC)
+    # A quality rejection on the Mac is final for the same recipe (13.11: ~1 600 shop previews were sent again after
+    # every restart and failed again); errors of transfer or of the PC check are tried again.
+    done = ok_set(MAN_PC) | ok_set(MAN_MAC) | rejected_set(MAN_MAC)
     queue = [r for r in reversed(rels) if key(r) not in done and (REFS / r).is_file()]
     if a.limit is not None:
         queue = queue[:a.limit]
