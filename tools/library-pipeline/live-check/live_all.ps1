@@ -44,16 +44,42 @@ public static class LJ { public delegate bool P(IntPtr h, IntPtr l);
     Start-Sleep -Milliseconds 250
   }
 }
+# start_test_map's Map inherits the script's stdout: reading it through a pipe would wait for Map to exit (13.11 hang).
+# Output goes to a file through cmd, and only the starter process is awaited.
+function Start-TestMap {
+  $o = Join-Path $env:TEMP ('map-live-start-' + [guid]::NewGuid().ToString('N') + '.txt')
+  $p = Start-Process cmd -ArgumentList '/c', "powershell -NoProfile -ExecutionPolicy Bypass -File `"$Lib\pipeline\start_test_map.ps1`" > `"$o`" 2>&1" -WindowStyle Hidden -PassThru
+  $p.WaitForExit()
+  $id = 0; [void][int]::TryParse(((Get-Content $o -EA 0 | Where-Object { $_ -match '^\d+$' } | Select-Object -Last 1) -as [string]), [ref]$id)
+  Remove-Item $o -Force -EA 0
+  return $id
+}
+Add-Type @'
+using System; using System.Runtime.InteropServices;
+public static class LR { public delegate bool P(IntPtr h, IntPtr l);
+ [DllImport("user32.dll")] public static extern bool EnumWindows(P p, IntPtr l);
+ [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+ [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+ [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+ [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd); }
+'@
+# A minimized test window is rejected by live_batch2: restore it without taking focus (SW_SHOWNOACTIVATE = 4 keeps
+# the maximized laptop-display placement it had).
+function Restore-TestMap([int]$id) {
+  [LR]::EnumWindows({ param($h, $l) $p = 0; [void][LR]::GetWindowThreadProcessId($h, [ref]$p)
+    if ($p -eq $id -and [LR]::IsIconic($h)) { [void][LR]::ShowWindow($h, 4); Say "restored minimized test window pid $id" }; $true }, [IntPtr]::Zero) | Out-Null
+}
 $total = 0; $passed = 0; $failed = @()
 foreach ($cat in $Catalogs) {
   $batches = @(Get-ChildItem "$Checks\$cat" -Filter 'batch-*.json' -EA 0 | Sort-Object Name | Where-Object {
     $r = Get-Content $_.FullName -Raw -Encoding UTF8 | ConvertFrom-Json; $r.Files -gt 0 } |
     ForEach-Object { [int]($_.BaseName -replace 'batch-', '') } | Where-Object { -not $done["$cat|$_"] })
   if (-not $batches) { Say "$cat nothing to do"; continue }
-  $mapPid = [int](powershell -NoProfile -ExecutionPolicy Bypass -File "$Lib\pipeline\start_test_map.ps1" | Select-Object -Last 1)
+  $mapPid = Start-TestMap
   Say "$cat Map pid $mapPid batches $($batches.Count)"
   foreach ($b in $batches) {
-    if (-not (Get-Process -Id $mapPid -EA 0)) { Say "$cat Map exited, restart"; $mapPid = [int](powershell -NoProfile -ExecutionPolicy Bypass -File "$Lib\pipeline\start_test_map.ps1" | Select-Object -Last 1) }
+    if (-not $mapPid -or -not (Get-Process -Id $mapPid -EA 0)) { Say "$cat Map exited, restart"; $mapPid = Start-TestMap }
+    Restore-TestMap $mapPid
     $t = Get-Date
     $out = powershell -NoProfile -ExecutionPolicy Bypass -File "$Sol7\live_batch2.ps1" -ProcessId $mapPid -Batch $b -Catalog $cat -Place $Place 2>&1
     $code = $LASTEXITCODE
@@ -69,5 +95,6 @@ foreach ($cat in $Catalogs) {
 }
 Stop-Job $watch; Remove-Job $watch -Force
 Remove-Item (Join-Path $env:TEMP 'map-live-profile') -Recurse -Force -EA 0
+Remove-Item (Join-Path $env:TEMP 'map-live-start-*.txt') -Force -EA 0
 $main = @(Get-Content $Log -EA 0 | Select-String 'MAIN-DISPLAY').Count
 Say "DONE total $total passed $passed failed $($failed.Count) [$($failed -join ' ')] main-display-lines $main"
