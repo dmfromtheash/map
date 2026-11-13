@@ -11,6 +11,43 @@ public sealed class StampDerivedAssetStoreTests : IDisposable
     private readonly string _root = Path.Combine(Path.GetTempPath(), "map-derived-tests", Guid.NewGuid().ToString("N"));
 
     [Fact]
+    public async Task Overview_revision_notifies_for_each_asset_and_is_stable_without_arrivals()
+    {
+        await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));
+        var records = new[] { ImportOwner(catalog, 1), ImportOwner(catalog, 2) };
+        await using var store = new StampDerivedAssetStore(catalog, Path.Combine(_root, "derived"));
+        var notifications = 0;
+        store.OverviewChanged = () => Interlocked.Increment(ref notifications);
+        foreach (var record in records)
+        {
+            var before = store.OverviewColorRevision;
+            var notified = Volatile.Read(ref notifications);
+            // A missing/failure completion also changes overview state and must notify.
+            await store.Request(record.Sha256).WaitAsync(TimeSpan.FromSeconds(30));
+            // Completion continuations may resume just before the worker publishes its notice.
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while ((store.OverviewColorRevision <= before || Volatile.Read(ref notifications) <= notified)
+                && DateTime.UtcNow < deadline) await Task.Delay(1);
+            Assert.True(store.OverviewColorRevision > before);
+            Assert.True(Volatile.Read(ref notifications) > notified);
+        }
+        // A source invalidated by its watcher can cancel the later header; each asset's
+        // completed preview still has to publish a notification of its own.
+        Assert.True(Volatile.Read(ref notifications) >= records.Length);
+        // An idle store has no file watchers or workers that can invalidate this assertion.
+        await using var idle = new StampDerivedAssetStore(catalog, Path.Combine(_root, "idle"));
+        var stable = idle.OverviewColorRevision;
+        foreach (var record in records)
+        {
+            Assert.Null(idle.TryReady(record.Sha256));
+            Assert.Null(idle.TryPreview(record.Sha256));
+        }
+        Assert.Equal(stable, idle.OverviewColorRevision);
+        idle.Forget();
+        Assert.True(idle.OverviewColorRevision > stable);
+    }
+
+    [Fact]
     public async Task Persisted_owner_overview_and_each_small_mip_equal_the_previous_pixels()
     {
         await using var catalog = new AssetCatalog(Path.Combine(_root, "catalog"));

@@ -37,7 +37,11 @@ public sealed class CatalogStampImageSource(
     private Action? _derivedReady;
     public void SetFrameReady(Action ready)
     {
-        lock (_gate) { _derivedReady = ready; if (_derived is not null) _derived.SourceChanged = ready; }
+        lock (_gate)
+        {
+            _derivedReady = ready;
+            if (_derived is not null) { _derived.SourceChanged = ready; _derived.OverviewChanged = ready; }
+        }
     }
     private readonly HashSet<StampDerivedAssetStore.PixelKey> _wantedMips = [];
     private readonly HashSet<StampDerivedAssetStore.PixelKey> _latePixels = [];
@@ -45,6 +49,7 @@ public sealed class CatalogStampImageSource(
     private readonly Dictionary<string, int> _pixelFailures = new(StringComparer.OrdinalIgnoreCase);
     private long _sourceRevision;
     public long SourceRevision => Interlocked.Read(ref _sourceRevision);
+    public long? OverviewColorRevision => _derived?.OverviewColorRevision;
     // A background lease can resolve between the render-thread lookup and its state read.
     // This is the result of the immediately preceding lookup on this thread, not global state.
     [ThreadStatic] private static bool _lastImageRequestPending;
@@ -75,6 +80,7 @@ public sealed class CatalogStampImageSource(
     {
         if (_derived is null) return true;
         _derived.SourceChanged = ready;
+        _derived.OverviewChanged = ready;
         string[] shas;
         lock (_gate)
         {

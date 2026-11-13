@@ -16,6 +16,8 @@ public interface IStampImageSource
     long MissingRevision => 0;
     bool LastImageRequestCacheableMissing => false;
     bool IsMissingCacheable(string sha256) => false;
+    /// <summary>Changes after overview metadata/preview arrivals. Null keeps polling legacy sources.</summary>
+    long? OverviewColorRevision => null;
     /// <summary>Late requests beyond the size preflight still need refinement.</summary>
     bool ImageRequestsPending => false;
     /// <summary>The immediately preceding image lookup is still preparing, rather than a missing file.</summary>
@@ -127,6 +129,8 @@ public sealed class RenderStats
     public int ExactObjects { get; set; }
     public int OverviewObjects { get; set; }
     public int OverviewChunks { get; set; }
+    public int OverviewVariantBuilds { get; set; }
+    public double OverviewRefinementMilliseconds { get; set; }
     public int OverviewBatches { get; set; }
     public int DrawCalls { get; set; }
     public int StampAtlasBatches { get; set; }
@@ -190,6 +194,8 @@ public sealed class RenderStats
         ExactObjects = 0;
         OverviewObjects = 0;
         OverviewChunks = 0;
+        OverviewVariantBuilds = 0;
+        OverviewRefinementMilliseconds = 0;
         OverviewBatches = 0;
         DrawCalls = 0;
         StampAtlasBatches = 0;
@@ -5810,28 +5816,25 @@ public static partial class SceneRenderer
     {
         var cache = options.ObjectCache!;
         var plan = OverviewPlans.GetValue(layer, static current => new ObjectOverviewPlan(current));
-        // A document may retain references after objects were removed. Preparing their colors
-        // can decode a whole library while this layer contains only a few stamps.
         // A deferred local detail seed only needs colors in its visible region. Asking a
         // legacy image source for every distant color can itself decode the whole library.
-        var localAssets = fallbackScale is { } localScale
-            ? ObjectSpatialIndex.For(layer).Query(Expand(view, 1 / Math.Max(.001, localScale)))
-                .Where(item => item.Stamp is not null).Select(item => item.Stamp!.AssetSha256).ToHashSet(StringComparer.Ordinal)
-            : null;
-        var assets = document.Assets.Where(asset => plan.UsesAsset(asset.Sha256)
-            && (localAssets is null || localAssets.Contains(asset.Sha256))).ToArray();
-        if (options.RequestRefinedFrame is { } ready && options.Stamps is { } source
-            && !source.PrepareOverview(assets.Select(asset => asset.Sha256), ready)
-            && options.Stats is { } pendingStats) pendingStats.DetailTilesPending++;
-        var colors = new Dictionary<string, SKColor>(StringComparer.Ordinal);
-        var colorSignature = new HashCode();
-        foreach (var asset in assets)
+        // It gets its own small palette, so it does not thrash the layer's cached one.
+        OverviewPalette palette;
+        if (fallbackScale is { } localScale)
         {
-            if (options.Stamps?.TryGetOverviewColor(asset.Sha256) is not { } color) continue;
-            colors[asset.Sha256] = color;
-            colorSignature.Add(asset.Sha256); colorSignature.Add(color);
+            var localAssets = ObjectSpatialIndex.For(layer).Query(Expand(view, 1 / Math.Max(.001, localScale)))
+                .Where(item => item.Stamp is not null).Select(item => item.Stamp!.AssetSha256).ToHashSet(StringComparer.Ordinal);
+            var shas = document.Assets.Where(asset => plan.UsesAsset(asset.Sha256) && localAssets.Contains(asset.Sha256))
+                .Select(asset => asset.Sha256).ToArray();
+            if (options.RequestRefinedFrame is { } ready && options.Stamps is { } source
+                && !source.PrepareOverview(shas, ready)
+                && options.Stats is { } pendingStats) pendingStats.DetailTilesPending++;
+            var local = ImmutableDictionary.CreateBuilder<string, SKColor>(StringComparer.Ordinal);
+            foreach (var sha in shas)
+                if (options.Stamps?.TryGetOverviewColor(sha) is { } color) local[sha] = color;
+            palette = new OverviewPalette(local.ToImmutable());
         }
-        var tintRevision = colorSignature.ToHashCode();
+        else palette = plan.GetPalette(document.Assets, options);
         var zoomBucket = OverviewZoomBucket(fallbackScale ?? options.ViewScale);
         var bucketScale = Math.Pow(2, zoomBucket / 4.0);
         var minX = (int)Math.Floor(view.Left / OverviewChunkSize);
@@ -5847,35 +5850,89 @@ public static partial class SceneRenderer
         var overviewBatches = 0;
         var overviewMissing = 0;
 
-        for (var chunkY = minY; chunkY <= maxY; chunkY++)
+        // Prepare centre-first, then composite in the original row order: painted margins
+        // can overlap. The cache retains the variant together with its old raster, including
+        // its bounds and exact objects, even when another render context advances the plan.
+        cache.BeginOverviewPass();
+        var visible = new List<(int X, int Y, OverviewChunk Chunk)>();
+        for (var y = minY; y <= maxY; y++)
+            for (var x = minX; x <= maxX; x++)
+                if (plan.TryGetChunk(x, y, out var chunk)) visible.Add((x, y, chunk));
+        var drawn = new Dictionary<(int, int), (OverviewVariant Variant, ObjectOverviewCacheResult Cached)>();
+        // Pin all resident images before any build can evict a deferred chunk's fallback.
+        foreach (var item in visible)
+            cache.TryGetPreviousOverview(layer.Id, item.X, item.Y, zoomBucket, out _, out _);
+        var centreX = (view.Left + view.Right) / (2 * OverviewChunkSize) - .5;
+        var centreY = (view.Top + view.Bottom) / (2 * OverviewChunkSize) - .5;
+        var deferred = false;
+        foreach (var item in visible.OrderBy(item =>
+            Math.Pow(item.X - centreX, 2) + Math.Pow(item.Y - centreY, 2)))
         {
-            for (var chunkX = minX; chunkX <= maxX; chunkX++)
+            // Checking a new palette can itself be expensive when every chunk uses a
+            // large part of the library. Include that work in the same refinement budget.
+            var paletteKnown = item.Chunk.TryGetTintRevision(palette, out var tintRevision);
+            var variant = paletteKnown ? item.Chunk.FindVariant(zoomBucket, tintRevision) : null;
+            ulong ImageHash(OverviewVariant value) => value.Painted
+                ? value.ContentHash ^ (ulong)(document.StampForeground?.GetHashCode() ?? 0) : value.ContentHash;
+            if (variant is not null && cache.TryGet(layer.Id, item.X, item.Y, zoomBucket, ImageHash(variant), out _))
             {
-                if (!plan.TryGetVariant(chunkX, chunkY, zoomBucket, bucketScale, colors, tintRevision, out var variant))
+                drawn[(item.X, item.Y)] = (variant, cache.GetOrCreateOverview(layer.Id, item.X, item.Y,
+                    zoomBucket, ImageHash(variant), variant, document.StampForeground, options));
+                continue;
+            }
+            if (options.RequestRefinedFrame is null || cache.CanBuildOverview)
+            {
+                var started = Stopwatch.GetTimestamp();
+                try
                 {
-                    continue;
+                    if (!paletteKnown)
+                    {
+                        tintRevision = item.Chunk.GetTintRevision(palette);
+                        variant = item.Chunk.FindVariant(zoomBucket, tintRevision);
+                    }
+                    if (variant is null)
+                    {
+                        variant = item.Chunk.GetVariant(zoomBucket, bucketScale, palette.Colors, tintRevision);
+                        if (options.Stats is { } buildStats) buildStats.OverviewVariantBuilds++;
+                    }
+                    drawn[(item.X, item.Y)] = (variant, cache.GetOrCreateOverview(layer.Id, item.X, item.Y,
+                        zoomBucket, ImageHash(variant), variant, document.StampForeground, options));
                 }
+                finally
+                {
+                    var elapsed = cache.RecordOverviewBuild(started);
+                    if (options.Stats is { } buildTiming) buildTiming.OverviewRefinementMilliseconds += elapsed;
+                }
+            }
+            else
+            {
+                deferred = true;
+                if (cache.TryGetPreviousOverview(layer.Id, item.X, item.Y, zoomBucket, out var previous, out var cached))
+                    drawn[(item.X, item.Y)] = (previous, cached);
+            }
+        }
+        if (deferred)
+        {
+            if (options.Stats is { } pending) pending.DetailTilesPending++;
+            options.RequestRefinedFrame?.Invoke();
+        }
 
-                overviewChunks++;
-                overviewObjects += variant.OverviewObjectCount;
-                overviewBatches += variant.BatchCount;
-                overviewMissing += variant.MissingCount;
-                var cached = cache.GetOrCreate(
-                    layer.Id,
-                    chunkX,
-                    chunkY,
-                    zoomBucket,
-                    // Painted mountains are drawn with the document's stamp foreground.
-                    variant.Painted ? variant.ContentHash ^ (ulong)(document.StampForeground?.GetHashCode() ?? 0) : variant.ContentHash,
-                    () => variant.BuildImage(document.StampForeground, options));
-                canvas.DrawImage(
-                    cached.Image,
-                    variant.Bounds,
-                    new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None));
-                foreach (var sceneObject in variant.ExactObjects)
-                {
-                    if (SceneGeometry.BoundsOf(sceneObject).Intersects(view)) exact.TryAdd(sceneObject.Id, sceneObject);
-                }
+        foreach (var item in visible)
+        {
+            if (!drawn.TryGetValue((item.X, item.Y), out var drawing)) continue;
+            var (variant, cached) = drawing;
+
+            overviewChunks++;
+            overviewObjects += variant.OverviewObjectCount;
+            overviewBatches += variant.BatchCount;
+            overviewMissing += variant.MissingCount;
+            canvas.DrawImage(
+                cached.Image,
+                variant.Bounds,
+                new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None));
+            foreach (var sceneObject in variant.ExactObjects)
+            {
+                if (SceneGeometry.BoundsOf(sceneObject).Intersects(view)) exact.TryAdd(sceneObject.Id, sceneObject);
             }
         }
 
@@ -5927,7 +5984,7 @@ public static partial class SceneRenderer
         foreach (var sceneObject in exact.Values.OrderBy(item => item.Sublayer))
         {
             if (GivesWay(sceneObject, hiddenLabels, options)) continue;
-            if (sceneObject.Stamp is { } missing && !colors.ContainsKey(missing.AssetSha256)
+            if (sceneObject.Stamp is { } missing && !palette.Colors.ContainsKey(missing.AssetSha256)
                 && Math.Max(sceneObject.Width, sceneObject.Height) * bucketScale < OverviewExactScreenSize)
                 overviewMissing--;
             DrawObject(canvas, sceneObject, document.StampForeground, options);
@@ -5992,7 +6049,15 @@ public static partial class SceneRenderer
         private readonly ImmutableDictionary<string, int> _assetCounts;
         private readonly bool _compacted;
 
+        private readonly ConditionalWeakTable<IStampImageSource, OverviewColors> _colors = [];
+
         public bool UsesAsset(string sha) => _assetCounts.ContainsKey(sha);
+
+        public OverviewPalette GetPalette(IReadOnlyList<MapAssetReference> assets, RenderOptions options)
+        {
+            if (options.Stamps is not { } source) return OverviewPalette.Empty;
+            return _colors.GetValue(source, static _ => new()).Get(assets, _assetCounts, source, options);
+        }
 
         public ObjectOverviewPlan(ObjectLayer layer)
         {
@@ -6063,23 +6128,108 @@ public static partial class SceneRenderer
             ((int)Math.Floor((item.X + item.Width / 2) / OverviewChunkSize),
              (int)Math.Floor((item.Y + item.Height / 2) / OverviewChunkSize));
 
-        public bool TryGetVariant(int chunkX, int chunkY, int zoomBucket, double bucketScale,
-            IReadOnlyDictionary<string, SKColor> colors, int tintRevision, out OverviewVariant variant)
+        public bool TryGetChunk(int x, int y, out OverviewChunk chunk) => _chunks.TryGetValue((x, y), out chunk!);
+    }
+
+    private sealed class OverviewPalette(ImmutableDictionary<string, SKColor> colors)
+    {
+        public static readonly OverviewPalette Empty = new(ImmutableDictionary<string, SKColor>.Empty);
+        public ImmutableDictionary<string, SKColor> Colors { get; } = colors;
+    }
+
+    private sealed class OverviewColors
+    {
+        private IReadOnlyList<MapAssetReference>? _assets;
+        private string[] _used = [];
+        private long? _revision;
+        private long _sourceRevision;
+        private bool _pending;
+        private OverviewPalette _palette = OverviewPalette.Empty;
+
+        public OverviewPalette Get(IReadOnlyList<MapAssetReference> assets,
+            IReadOnlyDictionary<string, int> used, IStampImageSource source, RenderOptions options)
         {
-            if (!_chunks.TryGetValue((chunkX, chunkY), out var chunk)) { variant = null!; return false; }
-            variant = chunk.GetVariant(zoomBucket, bucketScale, colors, tintRevision);
-            return true;
+            lock (this)
+            {
+                // Read before requesting/sampling: a worker completing during this scan must
+                // still be observed next frame. Legacy sources without a revision keep polling.
+                var revision = source.OverviewColorRevision;
+                var sourceRevision = source.SourceRevision;
+                var assetsChanged = !ReferenceEquals(_assets, assets);
+                if (assetsChanged)
+                {
+                    _assets = assets;
+                    _used = assets.Where(a => used.ContainsKey(a.Sha256)).Select(a => a.Sha256).ToArray();
+                }
+                if (assetsChanged || revision is null || _revision != revision || _sourceRevision != sourceRevision)
+                {
+                    _pending = options.RequestRefinedFrame is { } ready && !source.PrepareOverview(_used, ready);
+                    // Share unchanged palette branches: off-screen chunks may still refer to
+                    // an older snapshot while a long cold library continues to arrive.
+                    var colors = _palette.Colors.ToBuilder();
+                    if (assetsChanged)
+                    {
+                        var present = _used.ToHashSet(StringComparer.Ordinal);
+                        foreach (var sha in colors.Keys.Where(sha => !present.Contains(sha)).ToArray()) colors.Remove(sha);
+                    }
+                    foreach (var sha in _used)
+                        if (source.TryGetOverviewColor(sha) is { } color) colors[sha] = color;
+                        else colors.Remove(sha);
+                    var snapshot = colors.ToImmutable();
+                    if (!ReferenceEquals(snapshot, _palette.Colors)) _palette = new(snapshot);
+                    _revision = revision;
+                    _sourceRevision = sourceRevision;
+                }
+                if (_pending && options.Stats is { } pending) pending.DetailTilesPending++;
+                return _palette;
+            }
         }
     }
 
     private sealed class OverviewChunk(int x, int y, ImmutableDictionary<ObjectId, (long Order, SceneObject Item)> objects)
     {
-        private readonly Dictionary<(int Zoom, int Tints), OverviewVariant> _variants = [];
+        private readonly Dictionary<(int Zoom, ulong Tints), OverviewVariant> _variants = [];
+        private readonly Dictionary<int, Queue<ulong>> _variantOrder = [];
+        private readonly string[] _assets = objects.Values.Where(o => o.Item.Stamp is not null)
+            .Select(o => o.Item.Stamp!.AssetSha256).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+        private OverviewPalette? _palette;
+        private ulong _tintRevision;
+
+        public bool TryGetTintRevision(OverviewPalette palette, out ulong revision)
+        {
+            lock (_variants)
+            {
+                revision = _tintRevision;
+                return ReferenceEquals(_palette, palette);
+            }
+        }
+
+        public ulong GetTintRevision(OverviewPalette palette)
+        {
+            lock (_variants)
+            {
+                if (ReferenceEquals(_palette, palette)) return _tintRevision;
+                var hash = 14_695_981_039_346_656_037UL;
+                foreach (var sha in _assets)
+                {
+                    var present = palette.Colors.TryGetValue(sha, out var color);
+                    hash = (hash ^ (present ? 1UL : 0UL)) * 1_099_511_628_211UL;
+                    hash = (hash ^ (uint)color) * 1_099_511_628_211UL;
+                }
+                _palette = palette;
+                return _tintRevision = hash;
+            }
+        }
+
+        public OverviewVariant? FindVariant(int zoomBucket, ulong tintRevision)
+        {
+            lock (_variants) return _variants.GetValueOrDefault((zoomBucket, tintRevision));
+        }
 
         public ImmutableDictionary<ObjectId, (long Order, SceneObject Item)> Objects { get; } = objects;
 
         public OverviewVariant GetVariant(int zoomBucket, double bucketScale,
-            IReadOnlyDictionary<string, SKColor> colors, int tintRevision)
+            IReadOnlyDictionary<string, SKColor> colors, ulong tintRevision)
         {
             lock (_variants) return Build();
 
@@ -6150,13 +6300,20 @@ public static partial class SceneRenderer
                 missingCount,
                 painted);
             if (_variants.Count >= 4) _variants.Clear();
+            // At most two variants per zoom (the layer palette and a local seed palette may alternate):
+            // during a cold library every arriving colour makes a new palette, and keeping each old one
+            // grew a chunk without bound. The previous raster that still stands in for this chunk is held
+            // by ObjectOverviewCache together with its own variant reference.
+            if (!_variantOrder.TryGetValue(zoomBucket, out var order)) _variantOrder[zoomBucket] = order = new();
+            order.Enqueue(tintRevision);
+            while (order.Count > 2) _variants.Remove((zoomBucket, order.Dequeue()));
             _variants.Add((zoomBucket, tintRevision), variant);
             return variant;
             }
         }
     }
 
-    private sealed class OverviewVariant(
+    internal sealed class OverviewVariant(
         ulong contentHash,
         SKRect bounds,
         double bucketScale,

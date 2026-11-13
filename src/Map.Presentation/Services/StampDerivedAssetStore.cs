@@ -52,6 +52,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
     private readonly Dictionary<string, FileSystemWatcher> _watchers = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, byte> _invalidated = new(StringComparer.OrdinalIgnoreCase);
     public Action? SourceChanged { get; set; }
+    public Action? OverviewChanged { get; set; }
     public string[] TakeInvalidated()
     {
         var keys = _invalidated.Keys.ToArray();
@@ -61,6 +62,14 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
     private volatile bool _disposed;
     private long _generation;
     public long Generation => Interlocked.Read(ref _generation);
+    private long _overviewColorRevision;
+    public long OverviewColorRevision => Interlocked.Read(ref _overviewColorRevision);
+
+    private void OverviewColorChanged()
+    {
+        Interlocked.Increment(ref _overviewColorRevision);
+        OverviewChanged?.Invoke();
+    }
     public long DiskHits => Interlocked.Read(ref _diskHits);
     public long Builds => Interlocked.Read(ref _builds);
     public long DiskBytes => Interlocked.Read(ref _diskBytes);
@@ -186,6 +195,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             _requests.Clear(); _previews.Clear(); _completedHeaders.Clear(); _failedHeaders.Clear();
             _quietMissing.Clear();
             _portableTrust.Clear(); _rejectedPortable.Clear();
+            Interlocked.Increment(ref _overviewColorRevision);
             foreach (var request in _mips.Values) Retire(request);
             _mips.Clear();
             Volatile.Write(ref _journalPixels, 0);
@@ -228,6 +238,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             }
         }
         completion.TrySetResult(header);
+        OverviewColorChanged();
     }
 
     public Task<Mip> RequestMip(Header header, int level) => RequestPixels(header, 0, level);
@@ -390,6 +401,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             }
             catch (Exception ex) { ReportFailure("metadata " + sha, ex); }
             previewCompletion.TrySetResult(preview);
+            OverviewColorChanged();
             if (_disposed || held is not null) CompleteHeader(sha, completion, held);
             else
             {
@@ -489,6 +501,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             if (quiet) return;
             _invalidated[sha] = 0;
         }
+        Interlocked.Increment(ref _overviewColorRevision);
         SourceChanged?.Invoke();
     }
 
@@ -797,7 +810,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             _disposed = true; _stop.Cancel(); _queue.Writer.TryComplete();
             Forget();
             lock (_watchers) { foreach (var watcher in _watchers.Values) watcher.Dispose(); _watchers.Clear(); }
-            _watchedFiles.Clear(); SourceChanged = null;
+            _watchedFiles.Clear(); SourceChanged = null; OverviewChanged = null;
             var retiring = _retirements.ToArray();
             // Dispose is nonblocking for the UI. Async disposal/Completion lets tests and
             // profile cleanup await all file handles and native buffers before removing them.

@@ -33,10 +33,12 @@ public sealed class ObjectOverviewCache : IDisposable
         public int ObjectCount { get; init; }
         public int CulledCount { get; init; }
         public bool Fallback { get; set; }
+        public SceneRenderer.OverviewVariant? Overview { get; set; }
     }
 
     private readonly Dictionary<Key, Entry> _entries = [];
     private readonly Dictionary<LogicalKey, Key> _latest = [];
+    private readonly Dictionary<(LayerId Layer, int X, int Y), HashSet<int>> _overviewZooms = [];
     private readonly int _itemBudget;
     private readonly long _byteBudget;
     private long _clock;
@@ -50,6 +52,67 @@ public sealed class ObjectOverviewCache : IDisposable
     private long _frame;
     private bool _disposeRequested;
     private IntPtr _gpuContext;
+    private readonly double _overviewBuildBudgetMilliseconds;
+    private double _overviewBuildMilliseconds;
+    private int _overviewBuilds;
+
+    internal void BeginOverviewPass()
+    {
+        if (!_frameOpen) { _overviewBuildMilliseconds = 0; _overviewBuilds = 0; }
+    }
+
+    // One indivisible chunk is allowed to make progress even if it alone exceeds the budget.
+    internal bool CanBuildOverview => _overviewBuilds == 0 || _overviewBuildMilliseconds < _overviewBuildBudgetMilliseconds;
+
+    internal double RecordOverviewBuild(long started)
+    {
+        _overviewBuilds++;
+        var elapsed = System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        _overviewBuildMilliseconds += elapsed;
+        return elapsed;
+    }
+
+    internal ObjectOverviewCacheResult GetOrCreateOverview(LayerId layer, int x, int y, int zoom, ulong hash,
+        SceneRenderer.OverviewVariant variant, StampForegroundSurface? foreground, RenderOptions options)
+    {
+        var result = GetOrCreate(layer, x, y, zoom, hash, () => variant.BuildImage(foreground, options));
+        if (_entries.TryGetValue(new(new(layer, x, y, zoom), hash), out var entry))
+        {
+            entry.Overview = variant;
+            if (!_overviewZooms.TryGetValue((layer, x, y), out var levels)) _overviewZooms[(layer, x, y)] = levels = [];
+            levels.Add(zoom);
+        }
+        return result;
+    }
+
+    internal bool TryGetPreviousOverview(LayerId layer, int x, int y, int zoom,
+        out SceneRenderer.OverviewVariant variant, out ObjectOverviewCacheResult result)
+    {
+        EnsureOwnerThread();
+        Key? retained = _latest.TryGetValue(new(layer, x, y, zoom), out var exact)
+            && _entries[exact].Overview is not null ? exact : null;
+        if (retained is null && _overviewZooms.TryGetValue((layer, x, y), out var levels))
+        {
+            // A zoom step must not erase a resident chunk while its new bucket waits.
+            var distance = long.MaxValue;
+            foreach (var level in levels)
+            {
+                var delta = Math.Abs((long)level - zoom);
+                if (delta < distance) { retained = _latest[new(layer, x, y, level)]; distance = delta; }
+            }
+        }
+        if (retained is { } key && _entries.TryGetValue(key, out var entry) && entry.Overview is { } previous)
+        {
+            entry.LastUsed = ++_clock;
+            if (_frameOpen) _framePins.Add(key);
+            variant = previous;
+            result = new(entry.Image, true, false);
+            return true;
+        }
+        variant = null!;
+        result = default;
+        return false;
+    }
 
     /// <summary>Texture-backed entries belong to one Skia context, even on the same render thread.</summary>
     public void BindGpuContext(IntPtr context)
@@ -67,6 +130,8 @@ public sealed class ObjectOverviewCache : IDisposable
         if (_frameOpen) throw new InvalidOperationException("An overview frame is already open.");
         _frameOpen = true;
         _frame++;
+        _overviewBuildMilliseconds = 0;
+        _overviewBuilds = 0;
         _framePins.Clear();
         // A neighbouring level can serve this frame and be evicted by the new detail it
         // builds. Keep the page fallback available too, even before that frame needs it.
@@ -87,10 +152,13 @@ public sealed class ObjectOverviewCache : IDisposable
     }
 
     public ObjectOverviewCache(int itemBudget = 1_024, long byteBudget = 64L * 1024 * 1024,
-        Map.Core.Resources.WorkingMemoryBudget? memoryBudget = null)
+        Map.Core.Resources.WorkingMemoryBudget? memoryBudget = null, double overviewBuildBudgetMilliseconds = 4)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(itemBudget);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(byteBudget);
+        if (!double.IsFinite(overviewBuildBudgetMilliseconds) || overviewBuildBudgetMilliseconds < 0)
+            throw new ArgumentOutOfRangeException(nameof(overviewBuildBudgetMilliseconds));
+        _overviewBuildBudgetMilliseconds = overviewBuildBudgetMilliseconds;
         _itemBudget = itemBudget;
         _byteBudget = byteBudget;
         _memory = memoryBudget ?? Map.Core.Resources.WorkingMemoryBudget.Shared;
@@ -256,6 +324,12 @@ public sealed class ObjectOverviewCache : IDisposable
         if (_latest.TryGetValue(key.Logical, out var latest) && latest == key)
         {
             _latest.Remove(key.Logical);
+            var location = (key.Logical.Layer, key.Logical.ChunkX, key.Logical.ChunkY);
+            if (entry.Overview is not null && _overviewZooms.TryGetValue(location, out var levels))
+            {
+                levels.Remove(key.Logical.ZoomBucket);
+                if (levels.Count == 0) _overviewZooms.Remove(location);
+            }
         }
         Bytes -= entry.Bytes;
         if (_frameOpen) _retired.Add(entry.Image);
@@ -281,6 +355,7 @@ public sealed class ObjectOverviewCache : IDisposable
         foreach (var image in _retired) { image.Dispose(); Disposals++; }
         _retired.Clear();
         _latest.Clear();
+        _overviewZooms.Clear();
         _refiningViews.Clear();
         Bytes = 0;
         _ownerThread = null;
