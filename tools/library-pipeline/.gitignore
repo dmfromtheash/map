@@ -1,0 +1,5 @@
+# Outputs if a script is run from the repository instead of its deployed copy
+live-check/live/
+live-check/selftest-summary.json
+live-check/user/pour_files.txt
+upscale/test-*/

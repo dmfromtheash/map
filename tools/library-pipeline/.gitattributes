@@ -1,0 +1,2 @@
+# Shell scripts run on the Mac (bash): LF in the working copy too, otherwise bash fails on CR.
+*.sh text eol=lf
