@@ -10,6 +10,7 @@ namespace Map.App;
 
 internal static class Program
 {
+    internal static Map.Presentation.Services.PerformanceJournal? PerformanceJournal { get; private set; }
     [STAThread]
     public static void Main(string[] args)
     {
@@ -20,6 +21,8 @@ internal static class Program
             ? AppPaths.ResolveTestProfileRoot(testProfileRoot)
             : AppPaths.Root;
         var log = new DiagnosticsLog(Path.Combine(profileRoot, "Diagnostics"));
+        using var performanceJournal = new Map.Presentation.Services.PerformanceJournal(profileRoot);
+        PerformanceJournal = performanceJournal;
         Map.Presentation.ViewModels.EditorViewModel.DerivedAssetCacheRoot = Path.Combine(profileRoot, "cache", "derived");
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>
             log.Error("Unhandled exception", e.ExceptionObject as Exception);

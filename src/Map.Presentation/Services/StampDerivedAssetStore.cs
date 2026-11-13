@@ -67,6 +67,10 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
     public long DiskEvictions => Interlocked.Read(ref _diskEvictions);
     public int MetadataEntries => _requests.Count;
     public int PendingMips => _mips.Count;
+    private int _journalMetadata, _journalBuilds, _journalPixels;
+    // Lock-free observation for the frame journal; metadata/build counts include active work.
+    public (int Metadata, int Builds, int Pixels) PerformanceQueueLengths =>
+        (Volatile.Read(ref _journalMetadata), Volatile.Read(ref _journalBuilds), Volatile.Read(ref _journalPixels));
     private long _diskBytes, _diskEvictions;
     private long _diskHits, _builds;
     public readonly record struct PixelKey(string Sha, int Step, int Level);
@@ -153,8 +157,9 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             _requests[sha] = completion;
             var preview = new TaskCompletionSource<SKColor?>(TaskCreationOptions.RunContinuationsAsynchronously);
             _previews[sha] = preview;
+            Interlocked.Increment(ref _journalMetadata);
             if (!_queue.Writer.TryWrite((sha, completion, preview)))
-            { completion.TrySetResult(null); preview.TrySetResult(null); }
+            { Interlocked.Decrement(ref _journalMetadata); completion.TrySetResult(null); preview.TrySetResult(null); }
             return completion.Task;
         }
     }
@@ -183,6 +188,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             _portableTrust.Clear(); _rejectedPortable.Clear();
             foreach (var request in _mips.Values) Retire(request);
             _mips.Clear();
+            Volatile.Write(ref _journalPixels, 0);
             SignalCapacity();
         }
     }
@@ -248,6 +254,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             var request = new MipRequest(CancellationTokenSource.CreateLinkedTokenSource(_stop.Token));
             request.Task = Task.Run(() => ReadRequestedMip(header, key, request));
             _mips[key] = request;
+            Interlocked.Increment(ref _journalPixels);
             task = request.Task;
             return true;
         }
@@ -343,6 +350,7 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             mip = null;
             if (!_mips.TryGetValue(key, out var request) || !request.Task.IsCompletedSuccessfully) return false;
             if (!_mips.TryRemove(key, out request)) return false;
+            Interlocked.Decrement(ref _journalPixels);
             SignalCapacity();
             mip = request.Task.Result;
             if (mip.Reserved) _mipSlots.Release();
@@ -359,6 +367,8 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
     {
         await foreach (var (sha, completion, previewCompletion) in _queue.Reader.ReadAllAsync().ConfigureAwait(false))
         {
+            try
+            {
             if (!IsCurrent(sha, completion)) { completion.TrySetResult(null); previewCompletion.TrySetResult(null); continue; }
             Header? held = null; SKColor? preview = null;
             try
@@ -381,7 +391,14 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             catch (Exception ex) { ReportFailure("metadata " + sha, ex); }
             previewCompletion.TrySetResult(preview);
             if (_disposed || held is not null) CompleteHeader(sha, completion, held);
-            else if (!_buildQueue.Writer.TryWrite((sha, completion))) CompleteHeader(sha, completion, null);
+            else
+            {
+                Interlocked.Increment(ref _journalBuilds);
+                if (!_buildQueue.Writer.TryWrite((sha, completion)))
+                { Interlocked.Decrement(ref _journalBuilds); CompleteHeader(sha, completion, null); }
+            }
+            }
+            finally { Interlocked.Decrement(ref _journalMetadata); }
         }
         _buildQueue.Writer.TryComplete();
     }
@@ -390,11 +407,15 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
     {
         await foreach (var (sha, completion) in _buildQueue.Reader.ReadAllAsync().ConfigureAwait(false))
         {
+            try
+            {
             if (!IsCurrent(sha, completion)) { completion.TrySetResult(null); continue; }
             Header? result = null;
             try { if (!_disposed) result = LoadOrBuild(sha); }
             catch (Exception ex) { ReportFailure("build " + sha, ex); }
             CompleteHeader(sha, completion, result);
+            }
+            finally { Interlocked.Decrement(ref _journalBuilds); }
         }
     }
 
@@ -462,7 +483,8 @@ public sealed partial class StampDerivedAssetStore : IDisposable, IAsyncDisposab
             if (!quiet) _failedHeaders.TryRemove(sha, out _);
             if (cancelPixels)
                 foreach (var key in _mips.Keys.Where(key => string.Equals(key.Sha, sha, StringComparison.OrdinalIgnoreCase)))
-                    if (_mips.TryRemove(key, out var request)) Retire(request);
+                    if (_mips.TryRemove(key, out var request))
+                    { Interlocked.Decrement(ref _journalPixels); Retire(request); }
             SignalCapacity();
             if (quiet) return;
             _invalidated[sha] = 0;

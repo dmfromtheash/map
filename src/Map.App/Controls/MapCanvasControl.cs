@@ -211,8 +211,9 @@ public sealed partial class MapCanvasControl : Control
     private Avalonia.Threading.DispatcherTimer? _settleTimer;
 
     /// <summary>The camera moved through the wheel or a pan: mark the motion and schedule the settled frame.</summary>
-    private void NoteCameraMotion()
+    private void NoteCameraMotion(bool pan = false)
     {
+        _journalCameraGesture = pan ? Map.Presentation.Services.PerformanceGesture.Pan : Map.Presentation.Services.PerformanceGesture.Zoom;
         _lastCameraMotion = Stopwatch.GetTimestamp();
         _settleTimer ??= new Avalonia.Threading.DispatcherTimer(CameraSettle + TimeSpan.FromMilliseconds(15),
             Avalonia.Threading.DispatcherPriority.Render, (_, _) => { _settleTimer!.Stop(); QueueVisualInvalidation(); });
@@ -338,7 +339,7 @@ public sealed partial class MapCanvasControl : Control
         }
 
         _editor.Session.Viewport.PanByScreenDelta(dx, dy);
-        NoteCameraMotion();
+        NoteCameraMotion(pan: true);
         ViewportChanged?.Invoke(this, EventArgs.Empty);
         QueueVisualInvalidation();
     }
@@ -475,7 +476,7 @@ public sealed partial class MapCanvasControl : Control
 
         if (result.ViewportChanged)
         {
-            NoteCameraMotion();
+            NoteCameraMotion(pan: _input is { ActiveGesture: CanvasInputGesture.Pan });
             ViewportChanged?.Invoke(this, EventArgs.Empty);
         }
 
@@ -663,6 +664,7 @@ public sealed partial class MapCanvasControl : Control
                 LastRenderedDocument = document;
                 System.Threading.Interlocked.Exchange(ref _completedSceneRevision, sceneRevision);
                 RecordStatisticsFrame(requestedFrame, elapsedMilliseconds);
+                RecordPerformanceFrame();
                 TraceFrame(elapsedMilliseconds, tier, fastTerrain, _renderStats, System.Threading.Interlocked.Read(ref _requestedFrame), requestedFrame);
                 FrameRendered?.Invoke(this, EventArgs.Empty);
             },

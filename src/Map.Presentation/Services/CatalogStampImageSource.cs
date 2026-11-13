@@ -52,6 +52,19 @@ public sealed class CatalogStampImageSource(
     private long _unresolvedRequestVersion;
     public long UnresolvedRequestVersion => _unresolvedRequestVersion;
     public bool ImageRequestsPending { get { lock (_gate) return !_disposed && _latePixels.Count > 0; } }
+    /// <summary>Never waits for a loader/lease. A false result means the journal should keep its previous snapshot.</summary>
+    public bool TryReadPerformanceQueues(out PerformanceQueues queues)
+    {
+        queues = default;
+        if (!Monitor.TryEnter(_gate)) return false;
+        try
+        {
+            var derived = _derived?.PerformanceQueueLengths ?? default;
+            queues = new(derived.Metadata, derived.Builds, derived.Pixels, _decoding.Count, _latePixels.Count);
+            return true;
+        }
+        finally { Monitor.Exit(_gate); }
+    }
     public (long DiskHits, long Builds, long DiskBytes, long DiskEvictions, int MetadataEntries, int PendingMips, long DiscardedMips) DerivedStatistics
         => (_derived?.DiskHits ?? 0, _derived?.Builds ?? 0, _derived?.DiskBytes ?? 0,
             _derived?.DiskEvictions ?? 0, _derived?.MetadataEntries ?? 0, _derived?.PendingMips ?? 0, _derived?.DiscardedMips ?? 0);
