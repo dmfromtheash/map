@@ -72,7 +72,7 @@
 - Вкладка «Ассеты» (5 вариантов, отложено). Решения по split/seams2/search/qa — `docs/library/AGENTS_RESULTS.md`.
 
 ## Уборка (своё)
-- USER: `D:\MapChecks\profiles\*`, `D:\MapChecks\astra\profiles\*` (Astra не смогла удалить — защита), `C:\Users\user1\MapProbe`.
+- USER: временные профили и `MapProbe` удалены 13.11 (21,6 МБ); профили новых прогонов Astra — удалять после них.
   Копию библиотеки `D:\MapLibrary` на USER удалить, когда Astra закончит (владелец разрешил «после проверок»).
 - Mac: агентские папки `~/MapWork/agents/*` — результаты; удалять только по «да».
 
