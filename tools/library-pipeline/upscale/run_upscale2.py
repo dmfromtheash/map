@@ -45,6 +45,7 @@ class Config:
     grain: float | None = None
     rerun: bool = False
     cycle_small: bool = False
+    cycle_all: bool = False
 
     @property
     def manifest(self):
@@ -171,7 +172,8 @@ def finish_one(root, rel, i, bdir, config):
         os.close(fd)
         normal_grain = 0.15 if rel.startswith('Battlemaps Classic') else 0.6
         grain = normal_grain if config.grain is None else min(config.grain, normal_grain)
-        cycle = recipe.refs2_cycle(rel, src.size) or (config.cycle_small and max(src.size) <= 256)
+        cycle = (config.cycle_all or recipe.refs2_cycle(rel, src.size)
+                 or (config.cycle_small and max(src.size) <= 256))
         finish_options = {'cycle_rgb': True} if cycle else {}
         size = recipe.finish(src, Path(bdir) / 'a' / f'{i}.png', Path(bdir) / 'b' / f'{i}.png',
                              temp_path, factor, wa=config.anime_weight, grain_k=grain, **finish_options)
@@ -337,6 +339,8 @@ def parser(description=__doc__):
     p.add_argument('--workers', type=int, default=6, help='CPU finish processes (default: 6)')
     p.add_argument('--batch', type=int, default=120, help='files per GPU batch (default: 120)')
     p.add_argument('--library-root', type=Path, default=LIB, help='output/work root, for isolated runs')
+    p.add_argument('--cycle-rgb', action='store_true',
+                   help='colour-check recipe (DEC-108) for every listed file: reruns of colour rejections')
     return p
 
 
@@ -369,7 +373,7 @@ def select_rels(args, done):
 
 def main(argv=None):
     args = options(parser(), argv)
-    config = Config(args.library_root, args.workers, args.batch, args.delete_source)
+    config = Config(args.library_root, args.workers, args.batch, args.delete_source, cycle_all=args.cycle_rgb)
     with WriterLock(config.library):
         done = done_set(config.manifest)
         mac = config.library / 'upscaled/manifest-mac.jsonl'

@@ -457,8 +457,11 @@ internal static class DriveLibraryBatch
         foreach (var o in objects)
         {
             var changed = 0; var total = 0;
-            for (var py = (int)o.Y; py < (int)(o.Y + o.Height); py += 3)
-                for (var px = (int)o.X; px < (int)(o.X + o.Width); px += 3)
+            // A thin strip (e.g. «Pond Waves» 2048×34 fits a 180-unit cell as 180×3) is missed by a 3-px stride that
+            // lands only on its edge row: sample every pixel of every row it touches.
+            var step = Math.Min(o.Width, o.Height) < 12 ? 1 : 3;
+            for (var py = (int)Math.Floor(o.Y); py < (int)Math.Ceiling(o.Y + o.Height); py += step)
+                for (var px = (int)Math.Floor(o.X); px < (int)Math.Ceiling(o.X + o.Width); px += step)
                 {
                     if (px < 0 || py < 0 || px >= normal.Width || py >= normal.Height) continue;
                     total++;
