@@ -103,9 +103,12 @@ internal static class LightingRenderer
             using var shader = LightingShader.Build(scene, frame.Shape, shadow, NoiseTexture.Image, device,
                 frame.Key?.Device ?? device, buffers, ShadowMargin, ShadowScale, m, state, lighting,
                 Lights(lighting, state, m, device, options.LightAnimationSeconds));
-            if (shader is null) { canvas.Save(); canvas.ResetMatrix(); canvas.DrawImage(scene, device.Left, device.Top); canvas.Restore(); return; }
+            // The lit frame belongs inside the map: the light pass must not tint the workspace around it.
+            var mapRect = SKRect.Create(0, 0, (float)document.Canvas.Width, (float)document.Canvas.Height);
+            if (shader is null) { canvas.Save(); canvas.ClipRect(mapRect); canvas.ResetMatrix(); canvas.DrawImage(scene, device.Left, device.Top); canvas.Restore(); return; }
             using var final = new SKPaint { Shader = shader };
             canvas.Save();
+            canvas.ClipRect(mapRect);
             canvas.ResetMatrix();
             canvas.DrawRect(SKRect.Create(device.Left, device.Top, device.Width, device.Height), final);
             canvas.Restore();

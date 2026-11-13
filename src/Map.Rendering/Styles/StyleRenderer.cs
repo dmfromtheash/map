@@ -121,6 +121,9 @@ public static partial class StyleRenderer
         try
         {
             canvas.Save();
+            // The medium paints its paper wherever the scene is empty, the workspace around the map too: zoomed out, the
+            // map lost its edge in one endless style (owner, 2026-11-12). The frame belongs inside the map, like the scene.
+            canvas.ClipRect(SKRect.Create(0, 0, (float)document.Canvas.Width, (float)document.Canvas.Height));
             canvas.ResetMatrix();
             canvas.DrawImage(painted, destination,
                 new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.Linear));

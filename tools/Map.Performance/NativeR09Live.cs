@@ -25,9 +25,18 @@ public sealed partial class NativeEditorScenarioApplication
         catalog.ImportSet([.. Enumerable.Range(1, 6).Select(i => OwnerMountainFixtures.Path(i))], OwnerMountainFixtures.Names[0],
             new Map.Assets.AssetImportOptions(), DateTimeOffset.UnixEpoch);
         OpenEditor(StylePacksSheet.DemoMap(), null, catalog); await Settle();
-        _editor.Session.Viewport.Set(0, 0, Math.Min(_view.Canvas.Bounds.Width / 1600, _view.Canvas.Bounds.Height / 1000));
+        // MAP_R09_ZOOMED_OUT=1: the map far away in the middle of the workspace (owner, 2026-11-12: zoomed out, some styles
+        // hid the canvas edge), only the style pictures and packs; the edge is read from each frame.
+        var zoomedOut = Environment.GetEnvironmentVariable("MAP_R09_ZOOMED_OUT") == "1";
+        var fit = Math.Min(_view.Canvas.Bounds.Width / 1600, _view.Canvas.Bounds.Height / 1000);
+        var viewScale = zoomedOut ? fit * 0.45 : fit;
+        var (originX, originY) = zoomedOut
+            ? ((1600 - (_view.Canvas.Bounds.Width / viewScale)) / 2, (1000 - (_view.Canvas.Bounds.Height / viewScale)) / 2)
+            : (0.0, 0.0);
+        _editor.Session.Viewport.Set(originX, originY, viewScale);
         var bad = new List<string>();
         var timings = new List<string>();
+        SKColor[]? workspace = null;
 
         async Task<double> Shot(string key)
         {
@@ -43,6 +52,16 @@ public sealed partial class NativeEditorScenarioApplication
                 catch (TimeoutException) { await Settle(); }
             if (captured is null) { bad.Add(key + ": кадр не снят"); return settled; }
             using var bitmap = captured;
+            if (zoomedOut)
+            {
+                // The four corners of the frame are workspace: they must look as they do without any style.
+                SKColor[] corners = [bitmap.GetPixel(4, 4), bitmap.GetPixel(bitmap.Width - 5, 4),
+                    bitmap.GetPixel(4, bitmap.Height - 5), bitmap.GetPixel(bitmap.Width - 5, bitmap.Height - 5)];
+                workspace ??= corners;
+                var worst = corners.Zip(workspace, (a, b) => Math.Max(Math.Abs(a.Red - b.Red), Math.Max(Math.Abs(a.Green - b.Green), Math.Abs(a.Blue - b.Blue)))).Max();
+                Console.WriteLine($"r09 {key}: workspace corners differ by {worst}");
+                if (worst > 6) bad.Add($"{key}: рабочая область вокруг карты закрашена (разница {worst})");
+            }
             using var image = SKImage.FromBitmap(bitmap);
             using var data = image.Encode(SKEncodedImageFormat.Jpeg, 88);
             var path = Path.ChangeExtension(Options.OutputPath, $"r09-{key}.jpg");
@@ -59,7 +78,7 @@ public sealed partial class NativeEditorScenarioApplication
         await Shot("plain");
         // MAP_R09_HANDOUTS_ONLY=1 repeats only the handouts.
         if (Environment.GetEnvironmentVariable("MAP_R09_HANDOUTS_ONLY") != "1") await Look();
-        await Handouts();
+        if (!zoomedOut) await Handouts();
         foreach (var line in bad) Console.WriteLine("r09: " + line);
         File.WriteAllLines(Path.ChangeExtension(Options.OutputPath, "r09-timings.txt"), timings);
         _report.Checks["r09-live-pass"] = bad.Count == 0;
@@ -82,7 +101,9 @@ public sealed partial class NativeEditorScenarioApplication
                 bad.Add($"{preset}: щелчок не дал стиль одним шагом");
             await Shot("style-" + preset);
             _editor.Undo(); await Settle();
-            if (!ReferenceEquals(_editor.Session.Document, plain)) bad.Add($"{preset}: Ctrl+Z не вернул карту");
+            // Undo of a style is a new record with the old style and the very same layers (SetMapStyleCommand.Revert).
+            var back = _editor.Session.Document;
+            if (back.Style != plain.Style || !back.Layers.SequenceEqual(plain.Layers)) bad.Add($"{preset}: Ctrl+Z не вернул карту");
         }
 
         // The four style packs.
@@ -95,6 +116,7 @@ public sealed partial class NativeEditorScenarioApplication
             _editor.Undo(); await Settle();
         }
 
+        if (zoomedOut) return;
         // The starting map variants, «Зима» among them.
         Press(Find<Button>("MapVariantStarters")); await Settle();
         foreach (var variant in _editor.Session.Document.Variants.Items.ToArray())
